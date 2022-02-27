@@ -71,7 +71,7 @@ struct rowcol {
             self->_keyCommands = nil;
         });
     }];
-    [prefs observe:@[@"fontFamily", @"fontSize", @"theme"]
+    [prefs observe:@[@"colorScheme", @"fontFamily", @"fontSize", @"theme"]
            options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self _updateStyle];
@@ -168,12 +168,15 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
     UserPreferences *prefs = [UserPreferences shared];
     if (_overrideFontSize == prefs.fontSize.doubleValue)
         _overrideFontSize = 0;
-    id themeInfo = @{
+    NSMutableDictionary<NSString *, id> *themeInfo = [@{
         @"fontFamily": prefs.fontFamily,
         @"fontSize": @(self.effectiveFontSize),
-        @"foregroundColor": [self cssColor:prefs.theme.foregroundColor],
-        @"backgroundColor": [self cssColor:prefs.theme.backgroundColor],
-    };
+        @"foregroundColor": prefs.palette.foregroundColor,
+        @"backgroundColor": prefs.palette.backgroundColor,
+    } mutableCopy];
+    if (prefs.palette.colorPaletteOverrides) {
+        themeInfo[@"colorPaletteOverrides"] = prefs.palette.colorPaletteOverrides;
+    }
     NSString *json = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:themeInfo options:0 error:nil] encoding:NSUTF8StringEncoding];
     [self.terminal.webView evaluateJavaScript:[NSString stringWithFormat:@"exports.updateStyle(%@)", json] completionHandler:^(id result, NSError *error){
         [self updateFloatingCursorSensitivity];
@@ -265,7 +268,14 @@ static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight",
 }
 
 - (void)setKeyboardAppearance:(UIKeyboardAppearance)keyboardAppearance {
+    BOOL needsFirstResponderDance = self.isFirstResponder && _keyboardAppearance != keyboardAppearance;
+    if (needsFirstResponderDance) {
+        [self resignFirstResponder];
+    }
     _keyboardAppearance = keyboardAppearance;
+    if (needsFirstResponderDance) {
+        [self becomeFirstResponder];
+    }
     if (keyboardAppearance == UIKeyboardAppearanceLight) {
         self.scrollbarView.indicatorStyle = UIScrollViewIndicatorStyleBlack;
     } else {

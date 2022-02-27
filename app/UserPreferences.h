@@ -6,6 +6,7 @@
 //
 
 #import <Foundation/Foundation.h>
+#import "Theme.h"
 
 typedef NS_ENUM(NSInteger, CapsLockMapping) {
     __CapsLockMapFirst = 0,
@@ -22,23 +23,16 @@ typedef enum : NSUInteger {
     __OptionMapLast,
 } OptionMapping;
 
+typedef NS_ENUM(NSInteger, ColorScheme) {
+    __ColorSchemeFirst = 0,
+    ColorSchemeMatchSystem = 0,
+    ColorSchemeAlwaysLight,
+    ColorSchemeAlwaysDark,
+    __ColorSchemeLast,
+};
+
 NS_ASSUME_NONNULL_BEGIN
 
-@interface Theme : NSObject
-
-- (instancetype)initWithProperties:(NSDictionary<NSString *, id> *)props;
-- (NSDictionary<NSString *, id> *)properties;
-
-+ (instancetype)presetThemeNamed:(NSString *)name;
-+ (NSArray<NSString *> *)presetNames;
-- (NSString *)presetName;
-
-@property (nonatomic, readonly) UIColor *foregroundColor;
-@property (nonatomic, readonly) UIColor *backgroundColor;
-@property (readonly) UIKeyboardAppearance keyboardAppearance;
-@property (readonly) UIStatusBarStyle statusBarStyle;
-
-@end
 extern NSString *const kThemeForegroundColor;
 extern NSString *const kThemeBackgroundColor;
 
@@ -51,9 +45,16 @@ extern NSString *const kThemeBackgroundColor;
 @property BOOL overrideControlSpace;
 @property BOOL hideStatusBar;
 @property (nonatomic) Theme *theme;
+@property (nonatomic) Palette *palette;
 @property BOOL shouldDisableDimming;
-@property NSString *fontFamily;
+@property (null_resettable) NSString *fontFamily;
+@property (readonly) NSString *fontFamilyUserFacingName;
 @property NSNumber *fontSize;
+@property ColorScheme colorScheme;
+@property (readonly) BOOL requestingDarkAppearance;
+@property (readonly) UIUserInterfaceStyle userInterfaceStyle API_AVAILABLE(ios(12.0));
+@property (readonly) UIKeyboardAppearance keyboardAppearance;
+@property (readonly) UIStatusBarStyle statusBarStyle;
 @property NSArray<NSString *> *launchCommand;
 @property NSArray<NSString *> *bootCommand;
 

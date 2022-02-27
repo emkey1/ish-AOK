@@ -7,26 +7,28 @@
 
 #import "AboutAppearanceViewController.h"
 #import "FontPickerViewController.h"
+#import "TerminalView.h"
+#import "ThemesViewController.h"
 #import "UserPreferences.h"
 #import "NSObject+SaneKVO.h"
 
 @interface AboutAppearanceViewController ()
-
+@property (strong, nonatomic) IBOutlet UISwitch *hideStatusBar;
 @property UIFontPickerViewController *fontPicker API_AVAILABLE(ios(13));
-
 @end
 
 @implementation AboutAppearanceViewController
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    [UserPreferences.shared observe:@[@"theme", @"fontSize", @"fontFamily", @"hideStatusBar"]
+    [UserPreferences.shared observe:@[@"theme", @"fontSize", @"fontFamily", @"colorScheme", @"hideStatusBar"]
                             options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self.tableView reloadData];
             [self setNeedsStatusBarAppearanceUpdate];
         });
     }];
+    self.hideStatusBar.on = UserPreferences.shared.hideStatusBar;
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -47,10 +49,11 @@
 #pragma mark - Table view data source
 
 enum {
-    ThemeNameSection,
-    StatusBarSection,
-    FontSection,
     PreviewSection,
+    MainSection,
+    ColorSchemeSection,
+    CursorSection,
+    StatusBarSection,
     NumberOfSections,
 };
 
@@ -60,9 +63,10 @@ enum {
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     switch (section) {
-        case ThemeNameSection: return Theme.presetNames.count;
-        case FontSection: return 2;
-        case PreviewSection: return 1;
+        case PreviewSection: return 2;
+        case MainSection: return 3;
+        case ColorSchemeSection: return 3;
+        case CursorSection: return 2;
         case StatusBarSection: return 1;
         default: NSAssert(NO, @"unhandled section"); return 0;
     }
@@ -70,22 +74,27 @@ enum {
 
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     switch (section) {
-        case ThemeNameSection: return @"Theme";
         case PreviewSection: return @"Preview";
+        case ColorSchemeSection: return @"Color Scheme";
+        case CursorSection: return @"Cursor";
         case StatusBarSection: return @"Status Bar";
         default: return nil;
     }
 }
 
-- (Theme *)_themeForRow:(NSUInteger)row {
-    return [Theme presetThemeNamed:Theme.presetNames[row]];
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    switch (section) {
+        case PreviewSection: return @"Change the color scheme used for the preview.";
+        default: return nil;
+    }
 }
 
 - (NSString *)reuseIdentifierForIndexPath:(NSIndexPath *)indexPath {
     switch (indexPath.section) {
-        case ThemeNameSection: return @"Theme Name";
-        case FontSection: return @[@"Font", @"Font Size"][indexPath.row];
-        case PreviewSection: return @"Preview";
+        case PreviewSection: return @[@"Preview", @"Color Scheme Preview"][indexPath.row];
+        case MainSection: return @[@"Theme Name", @"Font", @"Font Size"][indexPath.row];
+        case ColorSchemeSection: return @"Color Scheme";
+        case CursorSection: return @[@"Cursor Style", @"Blink Cursor"][indexPath.row];
         case StatusBarSection: return @"Status Bar";
         default: return nil;
     }
@@ -96,41 +105,49 @@ enum {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:[self reuseIdentifierForIndexPath:indexPath] forIndexPath:indexPath];
     
     switch (indexPath.section) {
-        case ThemeNameSection:
-            cell.textLabel.text = Theme.presetNames[indexPath.row];
-            if ([prefs.theme isEqual:[self _themeForRow:indexPath.row]]) {
-                cell.accessoryType = UITableViewCellAccessoryCheckmark;
-            } else {
-                cell.accessoryType = UITableViewCellAccessoryNone;
-            }
-            break;
-            
-        case FontSection:
-            if (indexPath.row == 0) {
-                cell.detailTextLabel.text = UserPreferences.shared.fontFamilyUserFacingName;
-            } else if (indexPath.row == 1) {
-                UserPreferences *prefs = [UserPreferences shared];
-                UILabel *label = [cell viewWithTag:1];
-                UIStepper *stepper = [cell viewWithTag:2];
-                label.text = prefs.fontSize.stringValue;
-                stepper.value = prefs.fontSize.doubleValue;
-            }
-            break;
-            
         case PreviewSection:
-            cell.backgroundColor = prefs.theme.backgroundColor;
-            cell.textLabel.textColor = prefs.theme.foregroundColor;
-            cell.textLabel.font = [UIFont fontWithName:UserPreferences.shared.fontFamily size:prefs.fontSize.doubleValue];
-            cell.textLabel.text = [NSString stringWithFormat:@"%@:~# ps aux", [UIDevice currentDevice].name];
-            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            if (indexPath.row == 0) {
+                TerminalView *terminalView = [cell viewWithTag:1];
+            }
+            break;
+            
+        case MainSection:
+            switch (indexPath.row) {
+                case 0:
+                    cell.detailTextLabel.text = UserPreferences.shared.theme.name;
+                    break;
+                case 1:
+                    cell.detailTextLabel.text = UserPreferences.shared.fontFamilyUserFacingName;
+                    cell.detailTextLabel.font = [UIFont fontWithName:UserPreferences.shared.fontFamily size:cell.detailTextLabel.font.pointSize];
+                    break;
+                case 2: {
+                    UserPreferences *prefs = [UserPreferences shared];
+                    UILabel *label = [cell viewWithTag:1];
+                    UIStepper *stepper = [cell viewWithTag:2];
+                    label.text = prefs.fontSize.stringValue;
+                    stepper.value = prefs.fontSize.doubleValue;
+                    break;
+                }
+            }
+            break;
+            
+        case ColorSchemeSection:
+            switch (indexPath.row) {
+                case 0:
+                    cell.textLabel.text = @"Match System";
+                    break;
+                case 1:
+                    cell.textLabel.text = @"Light";
+                    break;
+                case 2:
+                    cell.textLabel.text = @"Dark";
+                    break;
+            }
+            cell.accessoryType = indexPath.row == UserPreferences.shared.colorScheme ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
             break;
         
         case StatusBarSection:
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
-            UISwitch *statusBarToggle = [[UISwitch alloc] initWithFrame:CGRectZero];
-            cell.accessoryView = statusBarToggle;
-            statusBarToggle.on = prefs.hideStatusBar;
-            [statusBarToggle addTarget:self action:@selector(hideStatusBarChanged:) forControlEvents:UIControlEventValueChanged];
             break;
     }
     
@@ -141,12 +158,20 @@ enum {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     
     switch (indexPath.section) {
-        case ThemeNameSection:
-            UserPreferences.shared.theme = [self _themeForRow:indexPath.row];
+        case MainSection:
+            switch (indexPath.row) {
+                case 0: { // theme
+                    ThemesViewController *themesViewController = [self.storyboard instantiateViewControllerWithIdentifier:@"Themes"];
+                    [self.navigationController pushViewController:themesViewController animated:YES];
+                    break;
+                }
+                case 1: // font family
+                    [self selectFont:nil];
+                    break;
+            }
             break;
-        case FontSection:
-            if (indexPath.row == 0) // font family
-                [self selectFont:nil];
+        case ColorSchemeSection:
+            [UserPreferences.shared setColorScheme:indexPath.row];
     }
 }
 
@@ -174,7 +199,7 @@ enum {
     UserPreferences.shared.fontSize = @((int) sender.value);
 }
 
-- (void) hideStatusBarChanged:(UISwitch *)sender {
+- (IBAction)hideStatusBarChanged:(UISwitch *)sender {
     UserPreferences.shared.hideStatusBar = sender.on;
     [self setNeedsStatusBarAppearanceUpdate];
 }
