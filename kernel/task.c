@@ -4,13 +4,11 @@
 #include <string.h>
 #include "kernel/calls.h"
 #include "kernel/task.h"
-#include "kernel/task.h"
 #include "kernel/resource_locking.h"
 #include "emu/memory.h"
 #include "emu/tlb.h"
 #include "platform/platform.h"
 #include "util/sync.h"
-#include <pthread.h>
 #include <libkern/OSAtomic.h>
 #include <os/proc.h>
 
@@ -27,7 +25,6 @@ int iOSMajorRelease;
 bool doEnableMulticore; // Enable multicore if toggled, should default to false
 bool isGlibC = false; // Try to guess if we're running a non musl distro.  -mke
 bool doEnableExtraLocking; // Enable extra locking if toggled, should default to true
-unsigned doLockSleepNanoseconds; // How many nanoseconds should __lock() sleep between retries
 
 __thread struct task *current;
 
@@ -42,7 +39,7 @@ static bool pid_empty(struct pid *pid) {
 }
 
 struct pid *pid_get(dword_t id) {
-    if (id > sizeof(pids)/sizeof(pids[0]))
+    if (id >= sizeof(pids)/sizeof(pids[0]))
         return NULL;
     struct pid *pid = &pids[id];
     if (pid_empty(pid))

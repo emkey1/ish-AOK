@@ -205,7 +205,6 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
             modify_critical_region_counter(current, 1, __FILE__, __LINE__);
             dword_t return_val;
             return_val = futex_wait(uaddr, val, timeout_or_val2 ? &timeout : NULL);
-            modify_critical_region_counter(current, -1, __FILE__, __LINE__);
             return return_val;
         case FUTEX_WAKE_:
             STRACE("futex(FUTEX_WAKE, %#x, %d)", uaddr, val);
