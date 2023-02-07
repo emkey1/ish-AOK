@@ -49,8 +49,8 @@ static void ios_handle_exit(struct task *task, int code) {
         printk("ERROR: Insane PID in ios_handle_exit(%d)\n", task->pid);
         return;
     }
-    if (task->parent != NULL && task->parent->parent != NULL)
-        return;
+   // if (task->parent != NULL && task->parent->parent != NULL) // Commented out 06 Feb 2023 for testing.  -mke
+    //    return;
     // pid should be saved now since task would be freed
     pid_t pid = task->pid;
  //   if(pids_lock.pid == pid)
