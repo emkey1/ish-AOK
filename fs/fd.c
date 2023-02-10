@@ -3,6 +3,7 @@
 #include "debug.h"
 #include "kernel/calls.h"
 #include "kernel/resource.h"
+#include "kernel/resource_locking.h"
 #include "kernel/fs.h"
 #include "fs/poll.h"
 #include "fs/fd.h"
@@ -78,6 +79,7 @@ static int fdtable_close(struct fdtable *table, fd_t f);
 void fdtable_release(struct fdtable *table) {
     // mkefee
     lock(&table->lock, 0);
+    modify_critical_region_counter(current, 2, __FILE__, __LINE__);
     if (--table->refcount == 0) {
         for (fd_t f = 0; (unsigned) f < table->size; f++) {
             fdtable_close(table, f);
@@ -89,6 +91,7 @@ void fdtable_release(struct fdtable *table) {
     } else {
         unlock(&table->lock);
     }
+    modify_critical_region_counter(current, -2, __FILE__, __LINE__);
 }
 
 static int fdtable_resize(struct fdtable *table, unsigned size) {

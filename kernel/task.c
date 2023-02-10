@@ -161,8 +161,8 @@ struct task *task_create_(struct task *parent) {
 }
 
 void task_destroy(struct task *task) {
-   // if(!pthread_mutex_trylock(&task->death_lock))
-    //   return; // Task is already in the process of being deleted, most likely by do_exit().  -mke
+    if(!pthread_mutex_trylock(&task->death_lock))
+       return; // Task is already in the process of being deleted, most likely by do_exit().  -mke
     
     task->exiting = true;
     

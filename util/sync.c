@@ -34,7 +34,6 @@ static bool is_signal_pending(lock_t *lock) {
 }
 
 void modify_critical_region_counter(struct task *task, int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { // value Should only be -1 or 1.  -mke
-    
     if(!doEnableExtraLocking) // If they want to fly by the seat of their pants...  -mke
         return;
 
@@ -48,12 +47,12 @@ void modify_critical_region_counter(struct task *task, int value, __attribute__(
         return;
     }
     
-    if(task->pid > 9) // Bad things happen if this is enabled for low number tasks.  For reasons I do not understand.  -mke
+    if(task->pid < 9) // Bad things happen if this is enabled for low number tasks.  For reasons I do not understand.  -mke
         return;
     
     pthread_mutex_lock(&task->critical_region.lock);
     
-    if(((task->critical_region.count + value) < 0) && (task->pid > 9)) { // Prevent our unsigned value attempting to go negative.  -mke
+    if((task->critical_region.count + value) < 0) { // Prevent our unsigned value attempting to go negative.  -mke
     //if(!task->critical_region.count && (value < 0)) { // Prevent our unsigned value attempting to go negative.  -mke
         printk("ERROR: Attempt to decrement critical_region count to be negative, ignoring(%s:%d) (%d - %d) (%s:%d)\n", task->comm, task->pid, task->critical_region.count, value, file, line);
         return;

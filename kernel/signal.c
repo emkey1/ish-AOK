@@ -100,11 +100,11 @@ retry:
 }
 
 void deliver_signal(struct task *task, int sig, struct siginfo_ info) {
-    ////modify_critical_region_counter(task, 1, __FILE__, __LINE__); // Doesn't work.  -mke
+    ////odify_critical_region_counter(task, 1, __FILE__, __LINE__); // Doesn't work.  -mke
     lock(&task->sighand->lock, 0);
     deliver_signal_unlocked(task, sig, info);
     unlock(&task->sighand->lock);
-    ////modify_critical_region_counter(task, -1, __FILE__, __LINE__);
+    ////odify_critical_region_counter(task, -1, __FILE__, __LINE__);
 }
 
 void send_signal(struct task *task, int sig, struct siginfo_ info) {
@@ -119,12 +119,14 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
         
         
     //critical_region_count_increase(task);
+    modify_critical_region_counter(task, 1, __FILE__, __LINE__);
     struct sighand *sighand = task->sighand;
     lock(&sighand->lock, 0);
-    if ((signal_action(sighand, sig) != SIGNAL_IGNORE) && (task->pid <= MAX_PID)) { // Deal with normal and crazy.  -mke
+    if ((signal_action(sighand, sig) != SIGNAL_IGNORE) && (task->pid <= MAX_PID) && ( sig >= 1)) { // Deal with normal and crazy.  -mke
         deliver_signal_unlocked(task, sig, info);
     }
     unlock(&sighand->lock);
+    modify_critical_region_counter(task, -1, __FILE__, __LINE__);
 
     if (sig == SIGCONT_ || sig == SIGKILL_) {
         lock(&task->group->lock, 0);
@@ -368,10 +370,10 @@ void receive_signals() {  // Should this function have a check for critical_regi
         int sig = sigqueue->info.sig;
         if (sigset_has(blocked, sig))
             continue;
-        //modify_critical_region_counter(current, 1, __FILE__, __LINE__);
+        //odify_critical_region_counter(current, 1, __FILE__, __LINE__);
         list_remove(&sigqueue->queue);
         sigset_del(&current->pending, sig);
-        //modify_critical_region_counter(current, -1, __FILE__, __LINE__);
+        //odify_critical_region_counter(current, -1, __FILE__, __LINE__);
 
         if (current->ptrace.traced && sig != SIGKILL_) {
             // This notifies the parent, goes to sleep, and waits for the

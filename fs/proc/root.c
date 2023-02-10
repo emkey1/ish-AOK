@@ -299,7 +299,7 @@ static bool proc_root_readdir(struct proc_entry *UNUSED(entry), unsigned long *i
         }
         *next_entry = (struct proc_entry) {&proc_pid, .pid = pid};
         *index = pid + PROC_ROOT_LEN;
-        //modify_critical_region_counter(current, -1, __FILE__, __LINE__);
+        //odify_critical_region_counter(current, -1, __FILE__, __LINE__);
         return true;
     }
 
