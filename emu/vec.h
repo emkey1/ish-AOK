@@ -24,11 +24,6 @@ void vec_shiftl_q64(NO_CPU, const union mm_reg *src, union mm_reg *dst);
 void vec_shiftr_w64(NO_CPU, const union mm_reg *src, union mm_reg *dst);
 void vec_shiftr_d64(NO_CPU, const union mm_reg *src, union mm_reg *dst);
 void vec_shiftr_q64(NO_CPU, const union mm_reg *src, union mm_reg *dst);
-void vec_shiftl_q128(NO_CPU, union xmm_reg *amount, union xmm_reg *dst);
-void vec_shiftr_q128(NO_CPU, union xmm_reg *amount, union xmm_reg *dst);
-
-void vec_imm_shiftl_q64(NO_CPU, const uint8_t amount, union mm_reg *dst);
-void vec_imm_shiftr_q64(NO_CPU, const uint8_t amount, union mm_reg *dst);
 void vec_shiftrs_w64(NO_CPU, const union mm_reg *src, union mm_reg *dst);
 void vec_shiftrs_d64(NO_CPU, const union mm_reg *src, union mm_reg *dst);
 
@@ -196,8 +191,6 @@ void vec_compares_gtb128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
 void vec_compares_gtw128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
 void vec_compares_gtd128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
 
-void vec_movl_pd128(NO_CPU, const union xmm_reg *src, union xmm_reg *dst);
-void vec_movl_mem_pd128(NO_CPU, const union xmm_reg *src, uint64_t *dst);
 void vec_movl_p64(NO_CPU, const uint64_t *src, union xmm_reg *dst);
 void vec_movl_pm64(NO_CPU, const union xmm_reg *src, uint64_t *dst);
 void vec_movh_p64(NO_CPU, const uint64_t *src, union xmm_reg *dst);
