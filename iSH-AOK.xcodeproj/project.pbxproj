@@ -2506,9 +2506,9 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = BB0B85A42586F1CB00208600 /* ProjectDebug.xcconfig */;
 			buildSettings = {
-				CURRENT_PROJECT_VERSION = 451;
 				DEAD_CODE_STRIPPING = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 12.0;
+				CURRENT_PROJECT_VERSION = 453;
 			};
 			name = "Debug-ApplePleaseFixFB19282108";
 		};
@@ -2516,10 +2516,10 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = BB0B85A52586F1E100208600 /* ProjectRelease.xcconfig */;
 			buildSettings = {
-				CURRENT_PROJECT_VERSION = 451;
 				DEAD_CODE_STRIPPING = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 12.0;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				CURRENT_PROJECT_VERSION = 453;
 			};
 			name = Release;
 		};
@@ -2578,9 +2578,9 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = BB28C7532689522C00BDC834 /* ProjectDebugLinux.xcconfig */;
 			buildSettings = {
-				CURRENT_PROJECT_VERSION = 451;
 				DEAD_CODE_STRIPPING = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 12.0;
+				CURRENT_PROJECT_VERSION = 453;
 			};
 			name = DebugLinux;
 		};
@@ -2616,7 +2616,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 432;
+				CURRENT_PROJECT_VERSION = 451;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
 				PRODUCT_NAME = "iSH-AOK";
@@ -2872,7 +2872,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 432;
+				CURRENT_PROJECT_VERSION = 451;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
 				PRODUCT_NAME = "iSH-AOK";
@@ -2886,7 +2886,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 432;
+				CURRENT_PROJECT_VERSION = 451;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
 				PRODUCT_NAME = "iSH-AOK";
@@ -2898,10 +2898,10 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = BB28C7522689522700BDC834 /* ProjectReleaseLinux.xcconfig */;
 			buildSettings = {
-				CURRENT_PROJECT_VERSION = 451;
 				DEAD_CODE_STRIPPING = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 12.0;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				CURRENT_PROJECT_VERSION = 453;
 			};
 			name = ReleaseLinux;
 		};
@@ -2936,7 +2936,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 432;
+				CURRENT_PROJECT_VERSION = 451;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
 				PRODUCT_NAME = "iSH-AOK";
