@@ -112,7 +112,9 @@ static int proc_show_stat(struct proc_entry *UNUSED(entry), struct proc_data *bu
     struct uptime_info uptime_info = get_uptime();
     unsigned uptime = uptime_info.uptime_ticks;
     
-    proc_printf(buf, "cpu  %"PRIu64" %"PRIu64" %"PRIu64" %"PRIu64" 0 0 0 0\n", total_usage.user_ticks, total_usage.nice_ticks, total_usage.system_ticks, total_usage.idle_ticks);
+    proc_printf(buf, "cpu  %"PRIu64" %"PRIu64" %"PRIu64" %"PRIu64" 0 0 0 0 0 0\n", total_usage.user_ticks, total_usage.nice_ticks, total_usage.system_ticks, total_usage.idle_ticks);
+    
+    proc_printf(buf, "intr 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n");
     
     int err = get_per_cpu_usage(&per_cpu_usage);
     if (!err) {
@@ -129,6 +131,7 @@ static int proc_show_stat(struct proc_entry *UNUSED(entry), struct proc_data *bu
     proc_printf(buf, "processes %d\n", alive_task_count);
     proc_printf(buf, "procs_running %d\n", alive_task_count - blocked_task_count);
     proc_printf(buf, "procs_blocked %d\n", blocked_task_count);
+    proc_printf(buf, "softirq 0 0 0 0 0 0 0 0 0 0 0\n");
     
     return 0;
 }
