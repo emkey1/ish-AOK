@@ -88,9 +88,11 @@ dword_t get_count_of_blocked_tasks() {
 
 void zero_critical_regions_count(void) { // If doEnableExtraLocking is changed to false, we need to zero out critical_region.count for active processes
     struct pid *pid_entry;
+    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
     list_for_each_entry(&alive_pids_list, pid_entry, alive) {
         pid_entry->task->critical_region.count = 0;  // Bad things happen if this isn't done.  -mke
     }
+    unlock_pids(&pids_lock);
 }
 
 dword_t get_count_of_alive_tasks() {
@@ -273,7 +275,7 @@ static void *task_thread(void *task) {
     
     current = task;
     
-    current->critical_region.count = 0; // Is this needed?  -mke
+    //current->critical_region.count = 0; // Is this needed?  -mke
     
     update_thread_name();
     

@@ -33,6 +33,28 @@ static bool is_signal_pending(lock_t *lock) {
     return pending;
 }
 
+char* remove_substring(const char* remove, char* text) {
+    size_t remove_len = strlen(remove);
+    char* result = malloc(strlen(text) + 1);
+    char* dest = result;
+
+    if (!result) {
+        return NULL; // Memory allocation failed
+    }
+
+    while (*text) {
+        if (strncmp(text, remove, remove_len) == 0) {
+            text += remove_len; // Skip over the removed substring
+        } else {
+            *dest++ = *text++; // Copy the current character to the result
+        }
+    }
+
+    *dest = '\0'; // Null-terminate the result string
+
+    return result;
+}
+
 void modify_critical_region_counter(struct task *task, int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { // value Should only be -1 or 1.  -mke
     if(!doEnableExtraLocking) // If they want to fly by the seat of their pants...  -mke
         return;
@@ -53,18 +75,23 @@ void modify_critical_region_counter(struct task *task, int value, __attribute__(
     pthread_mutex_lock(&task->critical_region.lock);
     
     if((task->critical_region.count + value) < 0) { // Prevent our unsigned value attempting to go negative.  -mke
-        printk("ERROR: Attempt to decrement critical_region count to be negative, ignoring(%s:%d) (%d - %d) (%s:%d)\n", task->comm, task->pid, task->critical_region.count, value, file, line);
+        const char* remove = "../../../../../../../../../git/iSH-AOK/";
+        char *str_one = remove_substring(remove, file);
+        printk("ERROR: Attempt to decrement critical_region count to be negative, ignoring(%s:%d) (%d - %d) (%s:%d)\n", task->comm, task->pid, task->critical_region.count, value, str_one, line);
         return;
     }
     
     
-    /* if((strcmp(task->comm, "easter_egg") == 0) && ( !noprintk)) { // Extra logging for the some command
+    if((strcmp(task->comm, "mt") == 0) && ( !noprintk)) { // Extra logging for the some command
+        const char* remove = "../../../../../../../../../git/iSH-AOK/";
+        char *str_one = remove_substring(remove, file);
         noprintk = 1; // Avoid recursive logging -mke
-        printk("INFO: MCRC(%d(%s):%s:%d:%d:%d)\n", task->pid, task->comm, file, line, value, task->critical_region.count + value);
+        printk("INFO: MCRC(%d(%s):%s:%d:%d:%d)\n", task->pid, task->comm, str_one, line, value, task->critical_region.count + value);
         noprintk = 0;
-    } */
+    }
     
     task->critical_region.count = task->critical_region.count + value;
+    task->critical_region.last_pid = task->pid;
         
     pthread_mutex_unlock(&task->critical_region.lock);
 }

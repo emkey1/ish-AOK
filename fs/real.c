@@ -98,17 +98,17 @@ static void copy_stat(struct statbuf *fake_stat, struct stat *real_stat) {
     fake_stat->size = real_stat->st_size;
     fake_stat->blksize = real_stat->st_blksize;
     fake_stat->blocks = real_stat->st_blocks;
-    fake_stat->atime = real_stat->st_atime;
-    fake_stat->mtime = real_stat->st_mtime;
-    fake_stat->ctime = real_stat->st_ctime;
+    fake_stat->atime = (dword_t)real_stat->st_atime;
+    fake_stat->mtime = (dword_t)real_stat->st_mtime;
+    fake_stat->ctime = (dword_t)real_stat->st_ctime;
 #if __APPLE__
 #define TIMESPEC(x) st_##x##timespec
 #elif __linux__
 #define TIMESPEC(x) st_##x##tim
 #endif
-    fake_stat->atime_nsec = real_stat->TIMESPEC(a).tv_nsec;
-    fake_stat->mtime_nsec = real_stat->TIMESPEC(m).tv_nsec;
-    fake_stat->ctime_nsec = real_stat->TIMESPEC(c).tv_nsec;
+    fake_stat->atime_nsec = (int)real_stat->TIMESPEC(a).tv_nsec;
+    fake_stat->mtime_nsec = (int)real_stat->TIMESPEC(m).tv_nsec;
+    fake_stat->ctime_nsec = (int)real_stat->TIMESPEC(c).tv_nsec;
 #undef TIMESPEC
 }
 

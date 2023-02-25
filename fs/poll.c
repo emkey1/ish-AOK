@@ -332,8 +332,8 @@ void poll_destroy(struct poll *poll) {
     struct poll_fd *tmp;
     
     //while(critical_region_count(current)) {
-    //    nanosleep(&lock_pause, NULL);
-    //}
+     //   nanosleep(&lock_pause, NULL);
+   // }
     list_for_each_entry_safe(&poll->poll_fds, poll_fd, tmp, fds) {
         lock(&poll_fd->fd->poll_lock, 0);
         list_remove(&poll_fd->polls);

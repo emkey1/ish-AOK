@@ -79,8 +79,8 @@ static int fdtable_close(struct fdtable *table, fd_t f);
 void fdtable_release(struct fdtable *table) {
     // mkefee
     lock(&table->lock, 0);
-    modify_critical_region_counter(current, 2, __FILE__, __LINE__);
     if (--table->refcount == 0) {
+        modify_critical_region_counter(current, 2, __FILE__, __LINE__);
         for (fd_t f = 0; (unsigned) f < table->size; f++) {
             fdtable_close(table, f);
         }
@@ -88,10 +88,10 @@ void fdtable_release(struct fdtable *table) {
         free(table->cloexec);
         unlock(&table->lock);
         free(table);
+        modify_critical_region_counter(current, -2, __FILE__, __LINE__);
     } else {
         unlock(&table->lock);
     }
-    modify_critical_region_counter(current, -2, __FILE__, __LINE__);
 }
 
 static int fdtable_resize(struct fdtable *table, unsigned size) {

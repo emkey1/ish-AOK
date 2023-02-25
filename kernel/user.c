@@ -8,20 +8,17 @@ extern pthread_mutex_t extra_lock;
 static int __user_read_task(struct task *task, addr_t addr, void *buf, size_t count) {
     char *cbuf = (char *) buf;
     addr_t p = addr;
-    ////odify_critical_region_counter(task, 1, __FILE__, __LINE__); // Everyone who calls this function sets alrady
     while (p < addr + count) {
         addr_t chunk_end = (PAGE(p) + 1) << PAGE_BITS;
         if (chunk_end > addr + count)
             chunk_end = addr + count;
         const char *ptr = mem_ptr(task->mem, p, MEM_READ);
         if (ptr == NULL) {
-            // //odify_critical_region_counter(task, -1, __FILE__, __LINE__);
             return 1;
 	}
         memcpy(&cbuf[p - addr], ptr, chunk_end - p);
         p = chunk_end;
     }
-    ////odify_critical_region_counter(task, -1, __FILE__, __LINE__);
     return 0;
 }
 
@@ -53,9 +50,7 @@ static int __user_write_task(struct task *task, addr_t addr, const void *buf, si
 int user_read_task(struct task *task, addr_t addr, void *buf, size_t count) {
     read_lock(&task->mem->lock, __FILE__, __LINE__);
 
-    //odify_critical_region_counter(task, 1, __FILE__, __LINE__);
     int res = __user_read_task(task, addr, buf, count);
-    //odify_critical_region_counter(task, -1, __FILE__, __LINE__);
 
     read_unlock(&task->mem->lock, __FILE__, __LINE__);
     return res;
@@ -84,12 +79,9 @@ int user_write(addr_t addr, const void *buf, size_t count) {
 }
 
 int user_read_string(addr_t addr, char *buf, size_t max) {
-    ////odify_critical_region_counter(current, 1, __FILE__, __LINE__);
     if (addr == 0) {
-        ////odify_critical_region_counter(current, -1, __FILE__, __LINE__);
         return 1;
     }
-    //odify_critical_region_counter(current, 1, __FILE__, __LINE__);
     read_lock(&current->mem->lock, __FILE__, __LINE__);
     size_t i = 0;
     while (i < max) {
@@ -102,14 +94,11 @@ int user_read_string(addr_t addr, char *buf, size_t max) {
         i++;
     }
     read_unlock(&current->mem->lock, __FILE__, __LINE__);
-    //odify_critical_region_counter(current, -1, __FILE__, __LINE__);
     return 0;
 }
 
 int user_write_string(addr_t addr, const char *buf) {
-    ////odify_critical_region_counter(current, 1, __FILE__, __LINE__);
     if (addr == 0) {
-        ////odify_critical_region_counter(current, -1, __FILE__, __LINE__);
         return 1;
     }
     read_lock(&current->mem->lock, __FILE__, __LINE__);
@@ -119,10 +108,8 @@ int user_write_string(addr_t addr, const char *buf) {
             read_unlock(&current->mem->lock, __FILE__, __LINE__);
             return 1;
         }
-        //odify_critical_region_counter(current, -1, __FILE__, __LINE__);
         i++;
     } while (buf[i - 1] != '\0');
     read_unlock(&current->mem->lock, __FILE__, __LINE__);
-    ////odify_critical_region_counter(current, -1, __FILE__, __LINE__);
     return 0;
 }

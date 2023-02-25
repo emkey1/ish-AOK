@@ -118,7 +118,6 @@ static inline void atomic_l_unlockf(void) {
     modify_locks_held_count_wrapper(-1);
     modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
     //STRACE("atomic_l_unlockf()\n");
-  //odify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
 }
 
 static inline void threaded_lock(pthread_mutex_t *lock, int log_lock) {
@@ -147,6 +146,8 @@ static inline void threaded_lock(pthread_mutex_t *lock, int log_lock) {
 
 static inline void complex_lockt(lock_t *lock, int log_lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
     // "Advanced" locking for some things.  pids_lock for instance
+    if(log_lock)
+        return;
     if(lock->pid == current_pid())
         return; //  Stupid?  Minimizes deadlocks, but... -mke
     unsigned int count = 0;
@@ -169,7 +170,6 @@ static inline void complex_lockt(lock_t *lock, int log_lock, __attribute__((unus
     }
     
     modify_locks_held_count_wrapper(1);
-    //odify_critical_region_counter_wrapper(-1,__FILE__, __LINE__);
     
     if(count > count_max * .90) {
         if(!log_lock)
@@ -221,14 +221,12 @@ static inline void unlock_pids(lock_t *lock) {
 }
 
 static inline void unlock(lock_t *lock) {
-    //odify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     
     lock->owner = zero_init(pthread_t);
     pthread_mutex_unlock(&lock->m);
     lock->pid = -1; //
     lock->comm[0] = 0;
     modify_locks_held_count_wrapper(-1);
-    //odify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
     
 #if LOCK_DEBUG
     assert(lock->debug.initialized);
@@ -352,14 +350,12 @@ static inline void loop_lock_write(wrlock_t *lock, const char *file, int line) {
 }
 
 static inline void _read_unlock(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
-    //odify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     if(lock->val <= 0) {
         printk("ERROR: read_unlock(%x) error(PID: %d Process: %s count %d) (%s:%d)\n",lock, current_pid(), current_comm(), lock->val, file, line);
         lock->val = 0;
         lock->pid = -1;
         lock->comm[0] = 0;
         modify_locks_held_count_wrapper(-1);
-        //odify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
         //STRACE("read_unlock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
         return;
     }
@@ -369,11 +365,9 @@ static inline void _read_unlock(wrlock_t *lock, __attribute__((unused)) const ch
     lock->val--;
     modify_locks_held_count_wrapper(-1);
     //STRACE("read_unlock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
-    //odify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
 }
 
 static inline void read_unlock(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
-    //odify_critical_region_counter_wrapper(1,__FILE__, __LINE__);
     if(lock->pid != current_pid() && (lock->pid != -1)) {
         atomic_l_lockf("r_unlock\0", __FILE__, __LINE__);
         _read_unlock(lock, file, line);
@@ -383,11 +377,9 @@ static inline void read_unlock(wrlock_t *lock, __attribute__((unused)) const cha
     }
     if(lock->pid != current_pid() && (lock->pid != -1))
         atomic_l_unlockf();
-    //odify_critical_region_counter_wrapper(-1,__FILE__, __LINE__);
 }
 
 static inline void _write_unlock(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
-    //odify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     if(pthread_rwlock_unlock(&lock->l) != 0)
         printk("URGENT: write_unlock(%x:%d) error(PID: %d Process: %s) (%s:%d)\n", lock, lock->val, current_pid(), current_comm(), file, line);
     if(lock->val != -1) {
@@ -400,7 +392,6 @@ static inline void _write_unlock(wrlock_t *lock, __attribute__((unused)) const c
     //STRACE("write_unlock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
     lock->file = NULL;
     modify_locks_held_count_wrapper(-1);
-    //odify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
 }
 
 static inline void write_unlock(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { // Wrap it.  External calls lock, internal calls using _write_unlock() don't -mke
@@ -412,7 +403,6 @@ static inline void write_unlock(wrlock_t *lock, __attribute__((unused)) const ch
 
 static inline void __write_lock(wrlock_t *lock, const char *file, int line) { // Write lock
     loop_lock_write(lock, file, line);
-    //odify_critical_region_counter_wrapper(1,__FILE__, __LINE__);
     //pthread_rwlock_rdlock(&lock->l);
 
     // assert(lock->val == 0);
@@ -423,7 +413,6 @@ static inline void __write_lock(wrlock_t *lock, const char *file, int line) { //
     if(lock->pid > 9)
         strncpy((char *)lock->comm, current_comm(), 16);
     //STRACE("write_lock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
-    //odify_critical_region_counter_wrapper(-1,__FILE__, __LINE__);
 }
 
 static inline void _write_lock(wrlock_t *lock, const char *file, int line) {
@@ -433,7 +422,6 @@ static inline void _write_lock(wrlock_t *lock, const char *file, int line) {
 }
 
 static inline int trylockw(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
-    //odify_critical_region_counter_wrapper(1,__FILE__, __LINE__);
     atomic_l_lockf("trylockw\0", __FILE__, __LINE__);
     int status = pthread_rwlock_trywrlock(&lock->l);
     atomic_l_unlockf();
@@ -449,7 +437,6 @@ static inline int trylockw(wrlock_t *lock, __attribute__((unused)) const char *f
         modify_locks_held_count_wrapper(1);
         //STRACE("trylockw(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
         
-        //odify_critical_region_counter_wrapper(-1,__FILE__, __LINE__);
         lock->pid = current_pid();
         strncpy(lock->comm, current_comm(), 16);
     }
@@ -459,7 +446,6 @@ static inline int trylockw(wrlock_t *lock, __attribute__((unused)) const char *f
 #define trylockw(lock) trylockw(lock, __FILE__, __LINE__)
 
 static inline int trylock(lock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
-    //odify_critical_region_counter_wrapper(1,__FILE__, __LINE__);
     atomic_l_lockf("trylock\0", __FILE__, __LINE__);
     int status = pthread_mutex_trylock(&lock->m);
     atomic_l_unlockf();
@@ -474,7 +460,6 @@ static inline int trylock(lock_t *lock, __attribute__((unused)) const char *file
     if((!status) && (current_pid() > 10)) {// iSH-AOK crashes if low number processes are not excluded.  Might be able to go lower then 10?  -mke
         modify_locks_held_count_wrapper(1);
         
-        //odify_critical_region_counter_wrapper(-1,__FILE__, __LINE__);
         //STRACE("trylock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
         lock->pid = current_pid();
         strncpy(lock->comm, current_comm(), 16);
@@ -624,13 +609,11 @@ static inline void write_unlock_and_destroy(wrlock_t *lock) {
 }
 
 static inline void read_unlock_and_destroy(wrlock_t *lock) {
-    //odify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     atomic_l_lockf("ruad_lock", __FILE__, __LINE__);
     if(trylockw(lock)) // It should be locked, but just in case.  Likely masking underlying issue.  -mke
         _read_unlock(lock, __FILE__, __LINE__);
     _lock_destroy(lock);
     atomic_l_unlockf();
-    //odify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
 }
 
 

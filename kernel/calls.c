@@ -325,17 +325,13 @@ SYS_EPOLL_PWAIT2                 = 441
 #define NUM_SYSCALLS (sizeof(syscall_table) / sizeof(syscall_table[0]))
 
 void handle_interrupt(int interrupt) {
-    ///odify_critical_region_counter(current, 1, __FILE__, __LINE__);
     struct cpu_state *cpu = &current->cpu;
-    ////odify_critical_region_counter(current, -1, __FILE__, __LINE__);
     if (interrupt == INT_SYSCALL) { // Flag as critical?  -mke MKEMKEMKE
         unsigned syscall_num = cpu->eax;
         if (syscall_num >= NUM_SYSCALLS) {
             printk("ERROR: %d(%s) missing syscall %d\n", current->pid, current->comm, syscall_num);
             
-            ////odify_critical_region_counter(current, 1, __FILE__, __LINE__);
             deliver_signal(current, SIGSYS_, SIGINFO_NIL);
-            ////odify_critical_region_counter(current, -1, __FILE__, __LINE__);
         } else if (syscall_table[syscall_num] == NULL) {
             printk("WARNING:(PID: %d(%s)) stub syscall %d\n", current->pid, current->comm, syscall_num);
             syscall_stub();
@@ -350,9 +346,7 @@ void handle_interrupt(int interrupt) {
             lock(&current->ptrace.lock, 0);
             if (current->ptrace.stop_at_syscall) {
                 
-                ////odify_critical_region_counter(current, 1, __FILE__, __LINE__);
                 send_signal(current, SIGTRAP_, SIGINFO_NIL);
-                ////odify_critical_region_counter(current, -1, __FILE__, __LINE__);
                 
                 unlock(&current->ptrace.lock);
                 receive_signals();
@@ -377,11 +371,9 @@ void handle_interrupt(int interrupt) {
         }
     } else if (interrupt == INT_GPF) {
         // some page faults, such as stack growing or CoW clones, are handled by mem_ptr
-        ////odify_critical_region_counter(current, 1, __FILE__, __LINE__);
         read_lock(&current->mem->lock, __FILE__, __LINE__);
         void *ptr = mem_ptr(current->mem, cpu->segfault_addr, cpu->segfault_was_write ? MEM_WRITE : MEM_READ);
         read_unlock(&current->mem->lock, __FILE__, __LINE__);
-        ////odify_critical_region_counter(current, -1, __FILE__, __LINE__);
         if (ptr == NULL) {
             printk("ERROR: %d(%s) page fault on 0x%x at 0x%x\n", current->pid, current->comm, cpu->segfault_addr, cpu->eip);
             struct siginfo_ info = {
@@ -425,12 +417,10 @@ void handle_interrupt(int interrupt) {
     }
     receive_signals();
     struct tgroup *group = current->group;
-    ////odify_critical_region_counter(current, 1, __FILE__, __LINE__);
     lock(&group->lock, 0);
     while (group->stopped)
         wait_for_ignore_signals(&group->stopped_cond, &group->lock, NULL);
     unlock(&group->lock);
-    ////odify_critical_region_counter(current, -1, __FILE__, __LINE__);
 }
 
 void dump_maps(void) {

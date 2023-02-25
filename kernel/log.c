@@ -122,11 +122,9 @@ static int do_syslog(int type, addr_t buf_addr, int_t len) {
     }
 }
 int_t sys_syslog(int_t type, addr_t buf_addr, int_t len) {
-    ////odify_critical_region_counter(current, 1, __FILE__, __LINE__);
     lock(&log_lock, 0);
     int retval = do_syslog(type, buf_addr, len);
     unlock(&log_lock);
-    ////odify_critical_region_counter(current, -1, __FILE__, __LINE__);
     return retval;
 }
 
@@ -139,24 +137,6 @@ static void log_buf_append(const char *msg) {
 
 static void log_line(const char *line);
 
-/* static void output_line(const char *line) {
-    time_t t=time(NULL);
-    char* c_time_string;
-    c_time_string = ctime(&t);
-    c_time_string[strcspn(c_time_string, "\n")] = 0;  // Remove trailing newline
-    //double tstamp = difftime(t, (time_t) 0);
-    int mybuff_size = 512;
-    char tmpbuff[mybuff_size];
-    //sprintf(tmpbuff, "[   %f] %s", tstamp, line);
-    sprintf(tmpbuff, "[   %s] %s", c_time_string, line);
-    // send it to stdout or wherever
-    if(strcmp(tmpbuff, "") != 0) { // Don't log empty string
-        log_line(tmpbuff);
-        // add it to the circular buffer
-        log_buf_append(tmpbuff);
-        log_buf_append("\n");
-    }
-} */
 static void output_line(const char *line) {
      time_t t = time(NULL);
      char* c_time_string = ctime(&t);
