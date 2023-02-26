@@ -74,7 +74,6 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
         task->files = fdtable_copy(task->files);
         if (IS_ERR(task->files)) {
             err = (int)PTR_ERR(task->files);
-            modify_critical_region_counter(task, -1, __FILE__, __LINE__);
             goto fail_free_mem;
         }
         modify_critical_region_counter(task, -1, __FILE__, __LINE__);
@@ -140,6 +139,7 @@ fail_free_files:
     fdtable_release(task->files);
 fail_free_mem:
     mm_release(task->mm);
+    modify_critical_region_counter(task, -1, __FILE__, __LINE__);
     return err;
 }
 

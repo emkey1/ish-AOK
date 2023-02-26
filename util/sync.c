@@ -78,11 +78,12 @@ void modify_critical_region_counter(struct task *task, int value, __attribute__(
         const char* remove = "../../../../../../../../../git/iSH-AOK/";
         char *str_one = remove_substring(remove, file);
         printk("ERROR: Attempt to decrement critical_region count to be negative, ignoring(%s:%d) (%d - %d) (%s:%d)\n", task->comm, task->pid, task->critical_region.count, value, str_one, line);
+        free(str_one);
         return;
     }
     
     
-    if((strcmp(task->comm, "mt") == 0) && ( !noprintk)) { // Extra logging for the some command
+    if((strcmp(task->comm, "traceme") == 0) && ( !noprintk)) { // Extra logging for the some command
         const char* remove = "../../../../../../../../../git/iSH-AOK/";
         char *str_one = remove_substring(remove, file);
         noprintk = 1; // Avoid recursive logging -mke
@@ -259,7 +260,7 @@ unsigned locks_held_count(struct task *task) {
     return tmp;
 }
 
-unsigned locks_held_count_wrapper() { // sync.h can't know about the definition of struct due to recursive include files.  -mke
+unsigned locks_held_count_wrapper(void) {
     if(current != NULL)
         return(locks_held_count(current));
     return 0;

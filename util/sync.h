@@ -191,7 +191,7 @@ static inline void complex_lockt(lock_t *lock, int log_lock, __attribute__((unus
 }
 
 static inline void __lock(lock_t *lock, int log_lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
-    modify_critical_region_counter_wrapper(1,__FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(1,__FILE__, __LINE__);
     if(!log_lock) {
         pthread_mutex_lock(&lock->m);
         modify_locks_held_count_wrapper(1);
@@ -206,7 +206,7 @@ static inline void __lock(lock_t *lock, int log_lock, __attribute__((unused)) co
         lock->uid = current_uid();
         strncpy(lock->comm, current_comm(), 16);
     }
-    modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
     return;
 }
 
@@ -255,7 +255,7 @@ static inline void _write_unlock(wrlock_t *lock, const char*, int);
 static inline void write_unlock_and_destroy(wrlock_t *lock);
 
 static inline void loop_lock_read(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
-    modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     modify_locks_held_count_wrapper(1); // No, it hasn't been granted yet, but since it can take some time, we set it here to avoid problems.  -mke
     unsigned count = 0;
     int random_wait = WAIT_SLEEP + rand() % WAIT_SLEEP/4; // Try read locks more frequently -mke
@@ -297,11 +297,11 @@ static inline void loop_lock_read(wrlock_t *lock, __attribute__((unused)) const 
 //    if(lock->favor_read > 24)
 //        lock->favor_read = lock->favor_read - 25;
     
-    modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
 }
 
 static inline void loop_lock_write(wrlock_t *lock, const char *file, int line) {
-    modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     modify_locks_held_count_wrapper(1);  // Set this here to avoid problems elsewhere in the complicated webs of execution
     unsigned count = 0;
     
@@ -346,7 +346,7 @@ static inline void loop_lock_write(wrlock_t *lock, const char *file, int line) {
         atomic_l_lockf("llw\0", __FILE__, __LINE__);
     }
     
-    modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
 }
 
 static inline void _read_unlock(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
@@ -545,7 +545,7 @@ static inline void lock_destroy(wrlock_t *lock) {
 
 static inline void _read_lock(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
     loop_lock_read(lock, file, line);
-    modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     //pthread_rwlock_rdlock(&lock->l);
     // assert(lock->val >= 0);  //  If it isn't >= zero we have a problem since that means there is a write lock somehow.  -mke
     if(lock->val) {
@@ -560,7 +560,7 @@ static inline void _read_lock(wrlock_t *lock, __attribute__((unused)) const char
     if(lock->val > 1000) { // We likely have a problem.
         printk("WARNING: _read_lock(%x) has 1000+ pending read locks.  (File: %s, Line: %d) Breaking likely deadlock/process corruption(PID: %d Process: %s.\n", lock, lock->file, lock->line,lock->pid, lock->comm);
         read_unlock_and_destroy(lock);
-        modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
+        //modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
         //STRACE("read_lock(%d, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
         return;
     }
@@ -569,7 +569,7 @@ static inline void _read_lock(wrlock_t *lock, __attribute__((unused)) const char
     if(lock->pid > 9)
         strncpy((char *)lock->comm, current_comm(), 16);
     //strncpy(lock->comm, current_comm(), 16);
-    modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
     //STRACE("read_lock(%d, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
 }
 
@@ -582,30 +582,30 @@ static inline void read_lock(wrlock_t *lock, __attribute__((unused)) const char 
 #define write_lock(lock) _write_lock(lock, __FILE__, __LINE__)
 
 static inline void read_to_write_lock(wrlock_t *lock) {  // Try to atomically swap a RO lock to a Write lock.  -mke
-    modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     atomic_l_lockf("rtw_lock\0", __FILE__, __LINE__);
     _read_unlock(lock, __FILE__, __LINE__);
     __write_lock(lock, __FILE__, __LINE__);
     atomic_l_unlockf();
-    modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
 }
 
 static inline void write_to_read_lock(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { // Try to atomically swap a Write lock to a RO lock.  -mke
-    modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     atomic_l_lockf("wtr_lock\0", __FILE__, __LINE__);
     _write_unlock(lock, file, line);
     _read_lock(lock, file, line);
     atomic_l_unlockf();
-    modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
 }
 
 static inline void write_unlock_and_destroy(wrlock_t *lock) {
-    modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     atomic_l_lockf("wuad_lock\0", __FILE__, __LINE__);
     _write_unlock(lock, __FILE__, __LINE__);
     _lock_destroy(lock);
     atomic_l_unlockf();
-    modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
+    //modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
 }
 
 static inline void read_unlock_and_destroy(wrlock_t *lock) {

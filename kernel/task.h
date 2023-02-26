@@ -228,10 +228,12 @@ void update_thread_name(void);
 __attribute__((always_inline)) inline int task_may_block_start(void) {
     //modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     current->io_block = 1;
+    //modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
     return 0;
 }
 
 __attribute__((always_inline)) inline int task_may_block_end(void) {
+    //modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     current->io_block = 0;
     //modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
     return 0;

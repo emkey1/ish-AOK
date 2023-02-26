@@ -107,23 +107,22 @@ void deliver_signal(struct task *task, int sig, struct siginfo_ info) {
 
 void send_signal(struct task *task, int sig, struct siginfo_ info) {
     // signal zero is for testing whether a process exists
-    if(task->exiting)
-        return;  // I'm not sure this is correct.  -mke
+    if((task->exiting) || (sig == 0) || (task->zombie))
+        return;  // I'm not sure including 'exiting' is correct.  -mke
     
-    if(sig == 0)
-        return;
-    if(task->zombie)
-        return;
+//    if(sig == 0)
+//        return;
+//    if(task->zombie)
+//        return;
         
         
-    //critical_region_count_increase(task);
-    modify_critical_region_counter(task, 1, __FILE__, __LINE__);
+    //modify_critical_region_counter(task, 1, __FILE__, __LINE__); // This breaks things.  -mke
     struct sighand *sighand = task->sighand;
     lock(&sighand->lock, 0);
     if ((signal_action(sighand, sig) != SIGNAL_IGNORE) && (task->pid <= MAX_PID) && ( sig >= 1)) { // Deal with normal and crazy.  -mke
         deliver_signal_unlocked(task, sig, info);
     }
-    modify_critical_region_counter(task, -1, __FILE__, __LINE__);
+    //modify_critical_region_counter(task, -1, __FILE__, __LINE__);
     unlock(&sighand->lock);
 
     if (sig == SIGCONT_ || sig == SIGKILL_) {
@@ -133,7 +132,6 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
         unlock(&task->group->lock);
     }
     
-    //critical_region_count_decrease(task);
 }
 
 bool try_self_signal(int sig) {

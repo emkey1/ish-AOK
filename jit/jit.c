@@ -217,7 +217,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         size_t cache_index = jit_cache_hash(ip);
         struct jit_block *block = cache[cache_index];
         if (block == NULL || block->addr != ip) {
-            //modify_critical_region_counter(current, 1, __FILE__, __LINE__); // testing -mke
+            modify_critical_region_counter(current, 1, __FILE__, __LINE__); // testing -mke
             lock(&jit->lock, 0);
             block = jit_lookup(jit, ip);
             if (block == NULL) {
@@ -228,7 +228,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             }
             cache[cache_index] = block;
             unlock(&jit->lock);
-            //modify_critical_region_counter(current, -1, __FILE__, __LINE__);
+            modify_critical_region_counter(current, -1, __FILE__, __LINE__);
         }
         struct jit_block *last_block = frame->last_block;
         if (last_block != NULL &&
@@ -293,7 +293,7 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     if (cpu->poked_ptr == NULL)
         cpu->poked_ptr = &cpu->_poked;
     tlb_refresh(tlb, cpu->mmu);
-    int interrupt = (cpu->tf ? cpu_single_step : cpu_step_to_interrupt)(cpu, tlb); // Crashed here 26 Jul 2022, 27 Aug 2022. -mke
+    int interrupt = (cpu->tf ? cpu_single_step : cpu_step_to_interrupt)(cpu, tlb); // Crashed here 26 Jul 2022, 27 Aug 2022. 25 Feb 2023 -mke
     cpu->trapno = interrupt;
 
     struct jit *jit = cpu->mmu->jit;
