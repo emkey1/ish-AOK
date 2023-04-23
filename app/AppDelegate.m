@@ -276,14 +276,15 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
         [UIView setAnimationsEnabled:NO];
 
 #if !ISH_LINUX
-    self.ishVersion = [NSString stringWithFormat:@"iSH-AOK %@ (%@)",
+    NSString *ishVersion = [NSString stringWithFormat:@"iSH-AOK %@ (%@)",
                          [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
                          [NSBundle.mainBundle objectForInfoDictionaryKey:(NSString *) kCFBundleVersionKey]];
     extern const char *proc_ish_version;
     proc_ish_version = strdup(ishVersion.UTF8String);
     // this defaults key is set when taking app store screenshots
     extern const char *uname_hostname_override;
-    uname_hostname_override = self.unameHostname.UTF8String;
+    //uname_hostname_override = self.unameHostname.UTF8String;
+    NSString *hostnameOverride = [NSUserDefaults.standardUserDefaults stringForKey:@"hostnameOverride"];
     extern bool doEnableMulticore;
     extern bool doEnableExtraLocking;
     extern unsigned doLockSleepNanoseconds;

@@ -2531,7 +2531,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 482;
+				CURRENT_PROJECT_VERSION = 484;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2557,7 +2557,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 482;
+				CURRENT_PROJECT_VERSION = 484;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2592,7 +2592,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 482;
+				CURRENT_PROJECT_VERSION = 484;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2640,7 +2640,7 @@
 				CODE_SIGN_ENTITLEMENTS = app/FileProvider/iSHFileProvider.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 482;
+				CURRENT_PROJECT_VERSION = 484;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				INFOPLIST_FILE = app/FileProvider/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK.FileProvider";
@@ -2751,7 +2751,7 @@
 				CODE_SIGN_ENTITLEMENTS = app/FileProvider/iSHFileProvider.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 482;
+				CURRENT_PROJECT_VERSION = 484;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				INFOPLIST_FILE = app/FileProvider/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK.FileProvider";
@@ -2769,7 +2769,7 @@
 				CODE_SIGN_ENTITLEMENTS = iSHFileProviderRelease.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 482;
+				CURRENT_PROJECT_VERSION = 484;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				INFOPLIST_FILE = app/FileProvider/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK.FileProvider";
@@ -2913,7 +2913,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 482;
+				CURRENT_PROJECT_VERSION = 484;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2960,7 +2960,7 @@
 				CODE_SIGN_ENTITLEMENTS = app/FileProvider/iSHFileProvider.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 482;
+				CURRENT_PROJECT_VERSION = 484;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				INFOPLIST_FILE = app/FileProvider/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK.FileProvider";
