@@ -107,7 +107,6 @@
 		5D8ACEFA284BF122003C50D3 /* net.c in Sources */ = {isa = PBXBuildFile; fileRef = 5D8ACEF9284BF122003C50D3 /* net.c */; };
 		5D8ACEFD284CE096003C50D3 /* sys.c in Sources */ = {isa = PBXBuildFile; fileRef = 5D8ACEFC284CE096003C50D3 /* sys.c */; };
 		5D8ACEFE284CE096003C50D3 /* sys.c in Sources */ = {isa = PBXBuildFile; fileRef = 5D8ACEFC284CE096003C50D3 /* sys.c */; };
-		5D9897D028B6B953003D3670 /* AppStore.xcconfig in Resources */ = {isa = PBXBuildFile; fileRef = 5D9897CE28B6B953003D3670 /* AppStore.xcconfig */; };
 		BB0F552E239F8A790032A2A1 /* Icons.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB0F552D239F8A790032A2A1 /* Icons.plist */; };
 		BB10E5C9248DBAAC009C7A74 /* libarchive.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BB10E5C8248DBAA1009C7A74 /* libarchive.a */; platformFilter = ios; };
 		BB10E5D0248DC21D009C7A74 /* Roots.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BB10E5CF248DC21D009C7A74 /* Roots.storyboard */; };
@@ -1615,8 +1614,9 @@
 		BB792B461F96D8E000FFB7A4 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
+				BuildIndependentTargetsInParallel = YES;
 				CLASSPREFIX = "";
-				LastUpgradeCheck = 1410;
+				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					497F6CE3254E5E4C00C82F46 = {
 						CreatedOnToolsVersion = 12.2;
@@ -1761,7 +1761,6 @@
 				BB38599827BCEE6B000A1082 /* metal.png in Resources */,
 				BB2B4DAD231D998300CB578B /* term.js in Resources */,
 				BB38599A27BCEE6B000A1082 /* is.png in Resources */,
-				5D9897D028B6B953003D3670 /* AppStore.xcconfig in Resources */,
 				BB38599E27BCEE6B000A1082 /* circular.png in Resources */,
 				BB38599F27BCEE6B000A1082 /* icon1337.png in Resources */,
 				BB3859A127BCEE6B000A1082 /* iinhash.png in Resources */,

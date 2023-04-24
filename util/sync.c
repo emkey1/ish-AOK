@@ -33,7 +33,7 @@ static bool is_signal_pending(lock_t *lock) {
     return pending;
 }
 
-char* remove_substring(const char* remove, const char* text) {
+char* remove_substring(char* remove, const char* text) {
     size_t remove_len = strlen(remove);
     char* result = malloc(strlen(text) + 1);
     char* dest = result;
@@ -251,7 +251,7 @@ unsigned critical_region_count(struct task *task) {
     return tmp;
 }
 
-unsigned critical_region_count_wrapper() { // sync.h can't know about the definition of struct due to recursive include files.  -mke
+int critical_region_count_wrapper(void) { // sync.h can't know about the definition of struct due to recursive include files.  -mke
     return(critical_region_count(current));
 }
 

@@ -19,7 +19,7 @@
 extern int current_pid(void);
 extern int current_uid(void);
 extern char* current_comm(void);
-extern unsigned critical_region_count_wrapper(void);
+extern int critical_region_count_wrapper(void);
 extern void modify_critical_region_counter_wrapper(int, const char*, int);
 extern unsigned locks_held_count_wrapper(void);
 extern void modify_locks_held_count_wrapper(int);
@@ -619,7 +619,7 @@ static inline void read_unlock_and_destroy(wrlock_t *lock) {
 
 extern __thread sigjmp_buf unwind_buf;
 extern __thread bool should_unwind;
-static inline int sigunwind_start() {
+static inline int sigunwind_start(void) {
     if (sigsetjmp(unwind_buf, 1)) {
         should_unwind = false;
         return 1;
@@ -629,7 +629,7 @@ static inline int sigunwind_start() {
     }
 }
 
-static inline void sigunwind_end() {
+static inline void sigunwind_end(void) {
     should_unwind = false;
 }
 
