@@ -33,7 +33,7 @@ static bool is_signal_pending(lock_t *lock) {
     return pending;
 }
 
-char* remove_substring(const char* remove, char* text) {
+char* remove_substring(const char* remove, const char* text) {
     size_t remove_len = strlen(remove);
     char* result = malloc(strlen(text) + 1);
     char* dest = result;
@@ -75,8 +75,9 @@ void modify_critical_region_counter(struct task *task, int value, __attribute__(
     pthread_mutex_lock(&task->critical_region.lock);
     
     if((task->critical_region.count + value) < 0) { // Prevent our unsigned value attempting to go negative.  -mke
-        const char* remove = "../../../../../../../../../git/iSH-AOK/";
-        char *str_one = remove_substring(remove, file);
+        char* remove = malloc(sizeof("../../../../../../../../../git/iSH-AOK/"));
+        //const char* remove = "../../../../../../../../../git/iSH-AOK/";
+        char *str_one = malloc(sizeof(remove_substring(remove, file)));
         printk("ERROR: Attempt to decrement critical_region count to be negative, ignoring(%s:%d) (%d - %d) (%s:%d)\n", task->comm, task->pid, task->critical_region.count, value, str_one, line);
         free(str_one);
         return;
@@ -84,8 +85,11 @@ void modify_critical_region_counter(struct task *task, int value, __attribute__(
     
     
     if((strcmp(task->comm, "traceme") == 0) && ( !noprintk)) { // Extra logging for the some command
-        const char* remove = "../../../../../../../../../git/iSH-AOK/";
-        char *str_one = remove_substring(remove, file);
+        char* remove = malloc(sizeof("../../../../../../../../../git/iSH-AOK/"));
+        //const char* remove = "../../../../../../../../../git/iSH-AOK/";
+        char *str_one = malloc(sizeof(remove_substring(remove, file)));
+        //const char* remove = "../../../../../../../../../git/iSH-AOK/";
+        //char *str_one = remove_substring(remove, file);
         noprintk = 1; // Avoid recursive logging -mke
         printk("INFO: MCRC(%d(%s):%s:%d:%d:%d)\n", task->pid, task->comm, str_one, line, value, task->critical_region.count + value);
         noprintk = 0;
