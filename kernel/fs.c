@@ -81,7 +81,7 @@ fd_t sys_openat(fd_t at_f, addr_t path_addr, dword_t flags, mode_t_ mode) {
     struct fd *at = at_fd(at_f);
     if (at == NULL)
         return _EBADF;
-    struct fd *fd;
+    struct fd *fd = NULL;
     TASK_MAY_BLOCK {
         fd = generic_openat(at, path, flags, mode);
     }

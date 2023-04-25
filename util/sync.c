@@ -161,7 +161,7 @@ int wait_for_ignore_signals(cond_t *cond, lock_t *lock, struct timespec *timeout
         trigger_time.tv_sec = 15;
         trigger_time.tv_nsec = 0;
         lock->wait4 = true;
-        unsigned count = 0;
+        //unsigned count = 0;
         
         if(current->uid == 501) {  // This is here for testing of the process lockup issue.  -mke
             rc = pthread_cond_timedwait_relative_np(&cond->cond, &lock->m, &trigger_time);
