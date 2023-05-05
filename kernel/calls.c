@@ -323,6 +323,8 @@ SYS_EPOLL_PWAIT2                 = 441
 
 #define NUM_SYSCALLS (sizeof(syscall_table) / sizeof(syscall_table[0]))
 
+void dump_stack(int lines);
+
 void handle_interrupt(int interrupt) {
     ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
     struct cpu_state *cpu = &current->cpu;
@@ -388,6 +390,7 @@ void handle_interrupt(int interrupt) {
                 .fault.addr = cpu->segfault_addr,
             };
             current->zombie = true; // Lets see if this helps with page faults never exiting.  -mke
+            dump_stack(8);
             deliver_signal(current, SIGSEGV_, info);
         }
     } else if (interrupt == INT_UNDEFINED) {
@@ -399,6 +402,7 @@ void handle_interrupt(int interrupt) {
             printk("%02x ", b);
         }
         printk("\n");
+        dump_stack(8);
         struct siginfo_ info = {
             .code = SI_KERNEL_,
             .fault.addr = cpu->eip,
@@ -449,16 +453,24 @@ void dump_maps(void) {
     free(orig_data);
 }
 
-void dump_stack(int lines) {
-    printk("WARNING: stack at %x, base at %x, ip at %x\n", current->cpu.esp, current->cpu.ebp, current->cpu.eip);
-    for (int i = 0; i < lines*8; i++) {
-        dword_t stackword;
-        if (user_get(current->cpu.esp + (i * 4), stackword))
+void dump_mem(addr_t start, uint_t len) {
+    const int width = 8;
+    for (addr_t addr = start; addr < start + len; addr += sizeof(dword_t)) {
+        unsigned from_left = (addr - start) / sizeof(dword_t) % width;
+        if (from_left == 0)
+            printk("%08x: ", addr);
+        dword_t word;
+        if (user_get(addr, word))
             break;
-        printk("%08x ", stackword);
-        if (i % 8 == 7)
+        printk("%08x ", word);
+        if (from_left == width - 1)
             printk("\n");
     }
+}
+
+void dump_stack(int lines) {
+    printk("stack at %x, base at %x, ip at %x\n", current->cpu.esp, current->cpu.ebp, current->cpu.eip);
+    dump_mem(current->cpu.esp, lines * sizeof(dword_t) * 8);
 }
 
 // TODO find a home for this
