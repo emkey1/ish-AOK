@@ -7,10 +7,12 @@
 
 #import <UIKit/UIKit.h>
 #import "AppDelegate.h"
+#import "ExceptionExfiltrator.h"
 
 extern void run_at_boot(void);
 
 int main(int argc, char * argv[]) {
+    NSSetUncaughtExceptionHandler(iSHExceptionHandler);
     @autoreleasepool {
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
