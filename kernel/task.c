@@ -64,14 +64,14 @@ struct task *pid_get_task(dword_t id) {
     return task;
 }
 
-struct pid *pid_get_last_allocated() {
+struct pid *pid_get_last_allocated(void) {
     if (!last_allocated_pid) {
         return NULL;
     }
     return pid_get(last_allocated_pid);
 }
 
-dword_t get_count_of_blocked_tasks() {
+dword_t get_count_of_blocked_tasks(void) {
     modify_critical_region_counter(current, 1, __FILE__, __LINE__);
     dword_t res = 0;
     struct pid *pid_entry;
@@ -93,7 +93,7 @@ void zero_critical_regions_count(void) { // If doEnableExtraLocking is changed t
     }
 }
 
-dword_t get_count_of_alive_tasks() {
+dword_t get_count_of_alive_tasks(void) {
     complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
     dword_t res = 0;
     struct list *item;
@@ -239,7 +239,7 @@ void run_at_boot(void) {  // Stuff we run only once, at boot time.
 
 }
 
-void task_run_current() {
+void task_run_current(void) {
     struct cpu_state *cpu = &current->cpu;
     struct tlb tlb = {};
     tlb_refresh(&tlb, &current->mem->mmu);
@@ -282,7 +282,7 @@ static void *task_thread(void *task) {
 }
 
 static pthread_attr_t task_thread_attr;
-__attribute__((constructor)) static void create_attr() {
+__attribute__((constructor)) static void create_attr(void) {
     pthread_attr_init(&task_thread_attr);
     pthread_attr_setdetachstate(&task_thread_attr, PTHREAD_CREATE_DETACHED);
 }
@@ -292,13 +292,13 @@ void task_start(struct task *task) {
         die("could not create thread");
 }
 
-int_t sys_sched_yield() {
+int_t sys_sched_yield(void) {
     STRACE("sched_yield()");
     sched_yield();
     return 0;
 }
 
-void update_thread_name() {
+void update_thread_name(void) {
     char name[16]; // As long as Linux will let us make this
     snprintf(name, sizeof(name), "-%d", current->pid);
     size_t pid_width = strlen(name);

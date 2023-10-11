@@ -256,100 +256,53 @@ static inline void _read_unlock(wrlock_t *lock, const char*, int);
 static inline void _write_unlock(wrlock_t *lock, const char*, int);
 static inline void write_unlock_and_destroy(wrlock_t *lock);
 
-static inline void loop_lock_read(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
-    modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
-    modify_locks_held_count_wrapper(1); // No, it hasn't been granted yet, but since it can take some time, we set it here to avoid problems.  -mke
-    unsigned count = 0;
-    int random_wait = WAIT_SLEEP + rand() % WAIT_SLEEP/4; // Try read locks more frequently -mke
-    struct timespec lock_pause = {0 /*secs*/, random_wait /*nanosecs*/};
-    long count_max = (WAIT_MAX_UPPER - random_wait);  // As sleep time increases, decrease acceptable loops.  -mke
-    while(pthread_rwlock_tryrdlock(&lock->l)) {
-        count++;
-        if(count > count_max) {
-            // For now, print error and reset count.  --mke
-            printk("ERROR: loop_lock_read(%x) tries exceeded %d, dealing with likely deadlock.(Lock held by PID: %d Process: %s) (%s:%d)\n", lock, count_max, lock->pid, lock->comm, file, line);
-            count = 0;
-        
-            if(pid_get((dword_t)lock->pid) == NULL) {  // Oops, a task exited without clearing lock. BAD!  -mke
-                printk("ERROR: loop_lock_read(%x) locking PID(%d) is gone for task %s\n", lock, lock->pid, lock->comm);
-                //pthread_rwlock_unlock(&lock->l);
-               // lock->pid = current_pid();
-            } else {
-                printk("ERROR: loop_lock_read(%x) locking PID(%d), %s is apparently wedged\n", lock, lock->pid, lock->comm);
-                //pthread_rwlock_unlock(&lock->l);
-                //lock->pid = current_pid();
-            }
-            
-            if(lock->val > 1) {
-                lock->val--; // Subtract one, as dead task must have heald a read lock, right?  -mke
-            } else if(lock->val == 1) {
-                _read_unlock(lock, __FILE__, __LINE__);
-            } else if(lock->val < 0) {
-                _write_unlock(lock, __FILE__, __LINE__);
-            } else {
-                // Weird, there is no lock?
-            }
-        }
-        
-        atomic_l_unlockf(); // Need to give others a chance.  Though this likely isn't good enough.  -mke
-        nanosleep(&lock_pause, NULL);
-        atomic_l_lockf("ll_read\0", __FILE__, __LINE__);
+static inline void handle_lock_error(wrlock_t *lock, const char *file, int line, const char *func) {
+    printk("ERROR: %s(%x) tries exceeded %d, dealing with likely deadlock. (Lock held by PID: %d Process: %s) (%s:%d)\n",
+           func, lock, WAIT_MAX_UPPER, lock->pid, lock->comm, file, line);
+    
+    if(pid_get((dword_t)lock->pid) == NULL) {
+        printk("ERROR: %s(%x) locking PID(%d) is gone for task %s\n", func, lock, lock->pid, lock->comm);
+        pthread_rwlock_unlock(&lock->l);
+    } else {
+        printk("ERROR: %s(%x) locking PID(%d), %s is apparently wedged\n", func, lock, lock->pid, lock->comm);
+        pthread_rwlock_unlock(&lock->l);
     }
     
-//    if(lock->favor_read > 24)
-//        lock->favor_read = lock->favor_read - 25;
-    
-    modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
+    if(lock->val > 1) {
+        lock->val--;
+    } else if(lock->val == 1) {
+        _read_unlock(lock, __FILE__, __LINE__);
+    } else if(lock->val < 0) {
+        _write_unlock(lock, __FILE__, __LINE__);
+    }
 }
 
-static inline void loop_lock_write(wrlock_t *lock, const char *file, int line) {
+static inline void loop_lock_generic(wrlock_t *lock, const char *file, int line, int is_write) {
     modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
-    modify_locks_held_count_wrapper(1);  // Set this here to avoid problems elsewhere in the complicated webs of execution
-    unsigned count = 0;
+    modify_locks_held_count_wrapper(1);
     
-    int random_wait = WAIT_SLEEP + rand() % 100;
-    struct timespec lock_pause = {0 /*secs*/, random_wait /*nanosecs*/};
-    long count_max = (WAIT_MAX_UPPER - random_wait);  // As sleep time increases, decrease acceptable loops.  -mke
-    if(count_max < 25000)
-        count_max = 25000; // Set a minimum value.  -mke
+    unsigned count = 0;
+    int random_wait = is_write ? WAIT_SLEEP + rand() % 100 : WAIT_SLEEP + rand() % WAIT_SLEEP/4;
+    struct timespec lock_pause = {0, random_wait};
+    long count_max = (WAIT_MAX_UPPER - random_wait);
+    count_max = (is_write && count_max < 25000) ? 25000 : count_max;
 
-    while(pthread_rwlock_trywrlock(&lock->l)) {
+    while((is_write ? pthread_rwlock_trywrlock(&lock->l) : pthread_rwlock_tryrdlock(&lock->l))) {
         count++;
         if(count > count_max) {
-            // For now, print error and reset count.  --mke
-            printk("ERROR: loop_lock_write(%x) tries exceeded %d, dealing with likely deadlock.(Lock held by PID: %d Process: %s) (%s:%d)\n", lock, count_max, lock->pid, lock->comm, file, line);
+            handle_lock_error(lock, file, line, is_write ? "loop_lock_write" : "loop_lock_read");
             count = 0;
-        
-            if(pid_get((dword_t)lock->pid) == NULL) {  // Oops, a task exited without clearing lock. BAD!  -mke
-                printk("ERROR: loop_lock_write(%x:%d) locking PID(%d) is gone for task %s\n", lock, lock->val, lock->pid, lock->comm);
-                pthread_rwlock_unlock(&lock->l);
-                //lock->pid = current_pid();
-            } else {
-                printk("ERROR: loop_lock_write(%x:%d) locking PID(%d), %s is apparently wedged\n", lock, lock->val, lock->pid, lock->comm);
-                pthread_rwlock_unlock(&lock->l);
-                //lock->pid = current_pid();
-            }
-            
-            if(lock->val > 1) {
-                lock->val--; // Subtract one, as dead task must have heald a read lock, right?  -mke
-                modify_locks_held_count_wrapper(-1);  // I'm thinking this is correct, but may be wrong.  -mke
-                                                      //  _read_unlock and _write_unlock decrement for the other cases
-            } else if(lock->val == 1) {
-                _read_unlock(lock, __FILE__, __LINE__);
-            } else if(lock->val < 0) {
-                _write_unlock(lock, __FILE__, __LINE__);
-            } else {
-                // Weird, there is no lock?
-            }
         }
-        
-        atomic_l_unlockf(); // Need to give others a chance.  Though this likely isn't good enough.  -mke
+        atomic_l_unlockf();
         nanosleep(&lock_pause, NULL);
-        atomic_l_lockf("llw\0", __FILE__, __LINE__);
+        atomic_l_lockf(is_write ? "llw\0" : "ll_read\0", __FILE__, __LINE__);
     }
     
     modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
 }
+
+#define loop_lock_read(lock, file, line) loop_lock_generic(lock, file, line, 0)
+#define loop_lock_write(lock, file, line) loop_lock_generic(lock, file, line, 1)
 
 static inline void _read_unlock(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
     //modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
