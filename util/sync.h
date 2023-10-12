@@ -145,47 +145,60 @@ static inline void threaded_lock(pthread_mutex_t *lock, int log_lock) {
     modify_locks_held_count_wrapper(1);
 }
 
-static inline void complex_lockt(lock_t *lock, int log_lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
-    // "Advanced" locking for some things.  pids_lock for instance
-    if(lock->pid == current_pid())
-        return; //  Stupid?  Minimizes deadlocks, but... -mke
+static inline void complex_lockt(lock_t *lock, int log_lock, const char *file, int line) {
+    // Return early if the current process already holds the lock.
+    if (lock->pid == current_pid()) {
+        return; // Minimizes deadlocks
+    }
+
     unsigned int count = 0;
     int random_wait = WAIT_SLEEP + rand() % WAIT_SLEEP;
-    struct timespec lock_pause = {0 /*secs*/, random_wait /*nanosecs*/};
-    long count_max = (WAIT_MAX_UPPER - random_wait);  // As sleep time increases, decrease acceptable loops.  -mke
+    struct timespec lock_pause = {0, random_wait};
+    long count_max = WAIT_MAX_UPPER - random_wait;  // As sleep time increases, decrease acceptable loops.
     
-    while((pthread_mutex_trylock(&lock->m))) {
-        count++;
+    while (pthread_mutex_trylock(&lock->m)) {
         nanosleep(&lock_pause, NULL);
-        if(count > count_max) {
-            if(!log_lock) {
-                printk("ERROR: Possible deadlock(complex_lockt(%x), aborted lock attempt(PID: %d Process: %s) (Previously Owned:%s:%d) (Called By:%s:%d)\n", lock->m, current_pid(), current_comm(), lock->comm, lock->pid, file, line);
-                pthread_mutex_unlock(&lock->m);
+        count++;
+        
+        // Handle deadlock potential
+        if (count > count_max) {
+            if (!log_lock) {
+                printk("ERROR: Possible deadlock(complex_lockt(%x), aborted lock attempt (PID: %d Process: %s) (Previously Owned: %s:%d) (Called By: %s:%d)\n",
+                       &lock->m, current_pid(), current_comm(), lock->comm, lock->pid, file, line);
+                //pthread_mutex_unlock(&lock->m);
                 modify_locks_held_count_wrapper(-1);
             }
             return;
         }
-        // Loop until lock works.  Maybe this will help make the multithreading work? -mke
-    }
-    
-    modify_locks_held_count_wrapper(1);
-    //modify_critical_region_counter_wrapper(-1,__FILE__, __LINE__);
-    
-    if(count > count_max * .90) {
-        if(!log_lock)
-           printk("Warning: large lock attempt count (%d)(complex_lockt(%x), aborted lock attempt(PID: %d Process: %s) (Previously Owned:%s:%d) (Called By:%s:%d)\n", count, lock->m, current_pid(), current_comm(), lock->comm, lock->pid, file, line);
     }
 
+    // Verification: Check if the lock was successfully attained.
+    if (pthread_mutex_trylock(&lock->m) == 0) {
+        printk("ERROR: Failed to obtain lock in complex_lockt(%x). (Called By: %s:%d)\n", &lock->m, file, line);
+        pthread_mutex_unlock(&lock->m);
+        return;
+    }
+
+    // Log if close to a deadlock situation
+    if (count > count_max * 0.90 && !log_lock) {
+        printk("Warning: Large lock attempt count (%d) (complex_lockt(%x), lock attempt (PID: %d Process: %s) (Previously Owned: %s:%d) (Called By: %s:%d)\n",
+               count, &lock->m, current_pid(), current_comm(), lock->comm, lock->pid, file, line);
+    }
+
+    // Update lock details
     lock->owner = pthread_self();
     lock->pid = current_pid();
     lock->uid = current_uid();
-    strncpy(lock->comm, current_comm(), 16);
+    strncpy(lock->comm, current_comm(), 15); // Ensuring NULL termination
+    lock->comm[15] = '\0';
+
+    modify_locks_held_count_wrapper(1);
+
 #if LOCK_DEBUG
     assert(lock->debug.initialized);
     assert(!lock->debug.file && "Attempting to recursively lock");
     lock->debug.file = file;
     lock->debug.line = line;
-    extern int current_pid(void);
     lock->debug.pid = current_pid();
 #endif
 }
@@ -212,16 +225,18 @@ static inline void __lock(lock_t *lock, int log_lock, __attribute__((unused)) co
 
 #define lock(lock, log_lock) __lock(lock, log_lock, __FILE__, __LINE__)
 
-static inline void unlock_pids(lock_t *lock) {
-    lock->owner = zero_init(pthread_t);
-    pthread_mutex_unlock(&lock->m);
-    lock->pid = -1; //
-    lock->comm[0] = 0;
-    //modify_locks_held_count_wrapper(-1);
-}
-
 static inline void unlock(lock_t *lock) {
     //modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
+    
+    if (lock->pid != current_pid()) {
+        printk("WARNING: Process with PID %d trying to unlock a lock owned by PID %d\n", current_pid(), lock->pid);
+//        return; // Return early or handle the discrepancy in another manner if required
+    }
+    if (pthread_mutex_trylock(&lock->m) == 0) {
+        printk("WARNING: Process with PID %d trying to unlock an already unlocked lock\n", current_pid());
+        //pthread_mutex_unlock(&lock->m);  // unlock it again
+        return;
+    }
     
     lock->owner = zero_init(pthread_t);
     pthread_mutex_unlock(&lock->m);

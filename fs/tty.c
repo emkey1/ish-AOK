@@ -147,7 +147,7 @@ int tty_open(struct tty *tty, struct fd *fd) {
         if (tty->session == 0 && current->group->sid == current->pid)
             tty_set_controlling(current->group, tty);
         unlock(&tty->lock);
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
     }
 
     return 0;
@@ -443,12 +443,12 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
     complex_lockt(&pids_lock, 1, __FILE__, __LINE__); // MKEMKE
     lock(&tty->lock, 0);
     if (tty->hung_up) {
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
         goto error;
     }
 
     pid_t_ current_pgid = current->group->pgid;
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
     err = tty_signal_if_background(tty, current_pgid, SIGTTIN_);
     if (err < 0)
         goto error;
@@ -653,7 +653,7 @@ static int tiocsctty(struct tty *tty, int force) {
 
     tty_set_controlling(current->group, tty);
 out:
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
     return err;
 }
 
@@ -743,7 +743,7 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
             complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
             lock(&tty->lock, 0);
             pid_t_ sid = current->group->sid;
-            unlock_pids(&pids_lock);
+            unlock(&pids_lock);
             if (!tty_is_current(tty) || sid != tty->session) {
                 err = _ENOTTY;
                 break;

@@ -634,7 +634,7 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
             .kill.pid = current->pid,
             .kill.uid = current->uid,
         });
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
     }
 
     return 0;

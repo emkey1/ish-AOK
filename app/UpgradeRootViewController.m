@@ -32,7 +32,7 @@
 
     complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
     current = pid_get_task(1); // pray
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
     self.terminal = [Terminal createPseudoTerminal:&self->_tty];
     current = NULL;
     
@@ -76,7 +76,7 @@
     } else {
         complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
         current = pid_get_task(1); // pray
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
         FsUpdateRepositories();
         current = NULL;
         [self showAlertWithTitle:@"Upgrade succeeded" message:@""];

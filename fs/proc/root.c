@@ -333,7 +333,7 @@ static bool proc_root_readdir(struct proc_entry *UNUSED(entry), unsigned long *i
         do {
             pid++;
         } while (pid <= MAX_PID && pid_get_task(pid) == NULL);
-        //unlock_pids(&pids_lock);
+        //unlock(&pids_lock);
         modify_critical_region_counter(current, -1, __FILE__, __LINE__);
         if (pid > MAX_PID) {
             return false;

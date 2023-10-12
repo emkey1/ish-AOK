@@ -410,14 +410,14 @@ void handle_interrupt(int interrupt) {
             .sig = SIGTRAP_,
             .code = SI_KERNEL_,
         });
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
     } else if (interrupt == INT_DEBUG) {
         complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
         send_signal(current, SIGTRAP_, (struct siginfo_) {
             .sig = SIGTRAP_,
             .code = TRAP_TRACE_,
         });
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
     } else if (interrupt != INT_TIMER) {
         printk("WARNING: %d(%s) unhandled interrupt %d\n", current->pid, current->comm, interrupt);
         sys_exit(interrupt);

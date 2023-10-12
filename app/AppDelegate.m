@@ -56,7 +56,7 @@ static void ios_handle_exit(struct task *task, int code) {
     // pid should be saved now since task would be freed
     pid_t pid = task->pid;
  //   if(pids_lock.pid == pid)
-  //      unlock_pids(&pids_lock);
+  //      unlock(&pids_lock);
 //    while((critical_region_count(task)) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
 //        nanosleep(&lock_pause, NULL);
 //    }

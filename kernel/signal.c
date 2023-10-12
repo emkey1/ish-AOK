@@ -153,14 +153,14 @@ int send_group_signal(dword_t pgid, int sig, struct siginfo_ info) {
     complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
     struct pid *pid = pid_get(pgid);
     if (pid == NULL) {
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
         return _ESRCH;
     }
     struct tgroup *tgroup;
     list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
         send_signal(tgroup->leader, sig, info);
     }
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
     return 0;
 }
 
@@ -397,7 +397,7 @@ void receive_signals() {  // Should this function have a check for critical_regi
             notify(&current->parent->group->child_exit);
             // TODO add siginfo
             send_signal(current->parent, current->group->leader->exit_signal, SIGINFO_NIL);
-            unlock_pids(&pids_lock);
+            unlock(&pids_lock);
         }
     }
 }
@@ -749,7 +749,7 @@ static int kill_task(struct task *task, dword_t sig) {
 static int kill_group(pid_t_ pgid, dword_t sig) {
     struct pid *pid = pid_get(pgid);
     if (pid == NULL) {
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
         return _ESRCH;
     }
     struct tgroup *tgroup;
@@ -796,20 +796,20 @@ static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid) {
     } else {
         struct task *task = pid_get_task(pid);
         if (task == NULL) {
-            unlock_pids(&pids_lock);
+            unlock(&pids_lock);
             return _ESRCH;
         }
 
         // If tgid is nonzero, it must be correct
         if (tgid != 0 && task->tgid != tgid) {
-            unlock_pids(&pids_lock);
+            unlock(&pids_lock);
             return _ESRCH;
         }
 
         err = kill_task(task, sig);
     }
 
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
     return err;
 }
 
