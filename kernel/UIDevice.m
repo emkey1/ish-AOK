@@ -44,8 +44,6 @@ char* printUIDevice(void);
     [result appendFormat:@"OS Version: %@\n", device.systemVersion];
     [result appendFormat:@"Device Orientation: %@\n", text];
     [result appendFormat:@"Battery Monitoring Enabled: %@\n", device.isBatteryMonitoringEnabled ? @"YES" : @"NO"];
-    [result appendFormat:@"Battery State: %ld\n", (long)device.batteryState];
-    [result appendFormat:@"Battery Level: %f\n", device.batteryLevel];
     
     return result;
 }

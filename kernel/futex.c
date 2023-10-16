@@ -57,7 +57,7 @@ struct futex_wait {
 static lock_t futex_lock = LOCK_INITIALIZER;
 static struct list futex_hash[FUTEX_HASH_SIZE];
 
-static void __attribute__((constructor)) init_futex_hash() {
+static void __attribute__((constructor)) init_futex_hash(void) {
     for (int i = 0; i < FUTEX_HASH_SIZE; i++)
         list_init(&futex_hash[i]);
 }
@@ -202,18 +202,11 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
     switch (op & FUTEX_CMD_MASK_) {
         case FUTEX_WAIT_:
             STRACE("futex(FUTEX_WAIT, %#x, %d, 0x%x {%ds %dns}) = ...\n", uaddr, val, timeout_or_val2, timeout.tv_sec, timeout.tv_nsec);
-           // if(!doEnableMulticore) {
-           //     struct timespec mytime;  // Do evil stuff because it makes iSH-AOK work better. (I think) -mke
-           //     mytime.tv_sec = 2;
-          //      mytime.tv_nsec = 0;
-           //     return futex_wait(uaddr, val, &mytime);
-           // } else {
             modify_critical_region_counter(current, 1, __FILE__, __LINE__);
             dword_t return_val;
             return_val = futex_wait(uaddr, val, timeout_or_val2 ? &timeout : NULL);
             modify_critical_region_counter(current, -1, __FILE__, __LINE__);
             return return_val;
-           // }
         case FUTEX_WAKE_:
             STRACE("futex(FUTEX_WAKE, %#x, %d)", uaddr, val);
             return futex_wakelike(op & FUTEX_CMD_MASK_, uaddr, val, 0, 0);
@@ -263,7 +256,6 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
     }
     STRACE("futex(%#x, %d, %d, timeout=%#x, %#x, %d) ", uaddr, op, val, timeout_or_val2, uaddr2, val3);
     FIXME("Unsupported futex(%#x, %d, %d, timeout=%#x, %#x, %d) ", uaddr, op, val, timeout_or_val2, uaddr2, val3);
-    //FIXME("unsupported futex operation %d", op);
     return _ENOSYS;
 }
 

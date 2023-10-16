@@ -29,14 +29,14 @@ struct exec_args {
 };
 
 static inline dword_t align_stack(dword_t sp);
-static inline ssize_t user_strlen(dword_t p);
+static inline ssize_t user_strlen(size_t p);
 static inline int user_memset(addr_t start, byte_t val, dword_t len);
 static inline dword_t copy_string(dword_t sp, const char *string);
 static inline dword_t args_copy(dword_t sp, struct exec_args args);
 static size_t args_size(struct exec_args args);
 
 static int read_header(struct fd *fd, struct elf_header *header) {
-    int err;
+    ssize_t err;
     if (fd->ops->lseek(fd, 0, SEEK_SET))
         return _EIO;
     if ((err = fd->ops->read(fd, header, sizeof(*header))) != sizeof(*header)) {
@@ -146,8 +146,8 @@ static addr_t find_hole_for_elf(struct elf_header *header, struct prg_header *ph
     return pt_find_hole(current->mem, size) << PAGE_BITS;
 }
 
-static int elf_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
-    int err = 0;
+static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
+    intptr_t err = 0;
 
     // read the headers
     struct elf_header header;
@@ -458,7 +458,7 @@ static inline dword_t args_copy(addr_t sp, struct exec_args args) {
     return sp;
 }
 
-static inline ssize_t user_strlen(addr_t p) {
+static inline ssize_t user_strlen(size_t p) {
     size_t i = 0;
     char c;
     do {
@@ -489,7 +489,7 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     if (fd->ops->lseek(fd, 0, SEEK_SET))
         return _EIO;
     char header[128];
-    int size = fd->ops->read(fd, header, sizeof(header) - 1);
+    ssize_t size = fd->ops->read(fd, header, sizeof(header) - 1);
     if (size < 0)
         return _EIO;
     header[size] = '\0';
@@ -678,12 +678,12 @@ static ssize_t user_read_string_array(addr_t addr, char *buf, size_t max) {
     return i;
 }
 
-dword_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
+ssize_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
     char filename[MAX_PATH];
     if (user_read_string(filename_addr, filename, sizeof(filename)))
         return _EFAULT;
 
-    int err = _ENOMEM;
+    ssize_t err = _ENOMEM;
     char *argv = malloc(ARGV_MAX);
     if (argv == NULL)
         goto err_free_argv;
