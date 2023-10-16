@@ -155,7 +155,7 @@ static bool proc_ish_defaults_readdir(struct proc_entry *entry, unsigned long *i
     return true;
 }
 
-char *get_ip_str(const struct sockaddr *sa, char *s, size_t maxlen) {
+char *get_ip_str(const struct sockaddr *sa, char *s, socklen_t maxlen) {
     switch(sa->sa_family) {
         case AF_INET:
             inet_ntop(AF_INET, &(((struct sockaddr_in *)sa)->sin_addr), s, maxlen);
