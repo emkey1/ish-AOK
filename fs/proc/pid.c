@@ -347,7 +347,6 @@ static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
     return err;
 }
 
-
 struct proc_children proc_pid_children = PROC_CHILDREN({
     {"auxv", .show = proc_pid_auxv_show},
     {"cmdline", .show = proc_pid_cmdline_show},
