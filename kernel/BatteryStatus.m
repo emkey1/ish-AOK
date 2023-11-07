@@ -15,6 +15,7 @@ char* printBatteryStatus(void) {
 
     float batteryLevel = device.batteryLevel;
     UIDeviceBatteryState batteryState = device.batteryState;
+    BOOL lowPowerModeEnabled = [[NSProcessInfo processInfo] isLowPowerModeEnabled];
 
     NSString *stateString = @"";
     switch (batteryState) {
@@ -34,8 +35,10 @@ char* printBatteryStatus(void) {
 
     NSString *formattedOutput = [NSString stringWithFormat:
                                  @"battery_level: %.2f\n"
-                                 "battery_state: %@\n",
-                                 batteryLevel * 100, stateString];
+                                 "battery_state: %@\n"
+                                 "low_power_mode: %@\n"
+                                 "battery_health: %.2f\n",
+                                 batteryLevel * 100, stateString, lowPowerModeEnabled ? @"Enabled" : @"Disabled", batteryLevel * 100];
 
-        return (char *)[formattedOutput UTF8String];
+    return (char *)[formattedOutput UTF8String];
 }

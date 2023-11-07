@@ -45,7 +45,6 @@ void jit_free(struct jit *jit) {
         }
     }
     jit_free_jetsam(jit);
-    unlock(&jit->lock);
     free(jit->page_hash);
     free(jit->hash);
     write_lock(&jit->jetsam_lock);
@@ -305,7 +304,6 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     if (cpu->poked_ptr == NULL)
         cpu->poked_ptr = &cpu->_poked;
     tlb_refresh(tlb, cpu->mmu);
-    //////modify_critical_region_counter(current, 1);
     int interrupt = (cpu->tf ? cpu_single_step : cpu_step_to_interrupt)(cpu, tlb); // Crashed here 26 Jul 2022, 27 Aug 2022. -mke
     cpu->trapno = interrupt;
 
@@ -327,7 +325,6 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         return interrupt;
     }
     unlock(&jit->lock);
-    //////modify_critical_region_counter(current, -1);
 
     return interrupt;
 }

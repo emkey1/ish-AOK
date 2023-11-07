@@ -272,7 +272,7 @@ syscall_t syscall_table[] = {
     [384] = (syscall_t) sys_arch_prctl,
     //[403] = (syscall_t) sys_clock_gettime, // clock_gettime64
     [406] = (syscall_t) syscall_stub, // clock_getres_time64
-    //[407] = (syscall_t) sys_clock_nanosleep_time64, // clock_nanosleep_time64
+    [407] = (syscall_t) sys_clock_nanosleep_time64, // clock_nanosleep_time64
     [424] = (syscall_t) syscall_stub, // pidfd_send_signal?
     //[412] = (syscall_t) sys_utimensat, // utimensat_time64
     [436] = (syscall_t) syscall_stub,
@@ -410,14 +410,14 @@ void handle_interrupt(int interrupt) {
             .sig = SIGTRAP_,
             .code = SI_KERNEL_,
         });
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
     } else if (interrupt == INT_DEBUG) {
         complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
         send_signal(current, SIGTRAP_, (struct siginfo_) {
             .sig = SIGTRAP_,
             .code = TRAP_TRACE_,
         });
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
     } else if (interrupt != INT_TIMER) {
         printk("WARNING: %d(%s) unhandled interrupt %d\n", current->pid, current->comm, interrupt);
         sys_exit(interrupt);

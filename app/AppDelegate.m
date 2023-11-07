@@ -56,7 +56,7 @@ static void ios_handle_exit(struct task *task, int code) {
     // pid should be saved now since task would be freed
     pid_t pid = task->pid;
  //   if(pids_lock.pid == pid)
-  //      unlock_pids(&pids_lock);
+  //      unlock(&pids_lock);
 //    while((critical_region_count(task)) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
 //        nanosleep(&lock_pause, NULL);
 //    }
@@ -87,11 +87,11 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
 
 @implementation AppDelegate
 
-- (int)boot {
+- (intptr_t)boot {
 #if !ISH_LINUX
     NSURL *root = [Roots.instance rootUrl:Roots.instance.defaultRoot];
 
-    int err = mount_root(&fakefs, [root URLByAppendingPathComponent:@"data"].fileSystemRepresentation);
+    intptr_t err = mount_root(&fakefs, [root URLByAppendingPathComponent:@"data"].fileSystemRepresentation);
     if (err < 0)
         return err;
 
@@ -116,7 +116,8 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
     generic_mknodat(AT_PWD, "/dev/tty7", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 7));
 
     generic_mknodat(AT_PWD, "/dev/tty", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR));
-    generic_mknodat(AT_PWD, "/dev/console", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_CONSOLE_MINOR));
+    generic_mknodat(AT_PWD, "/dev/console", S_IFCHR|0222, dev_make(136, 0));
+    // generic_mknodat(AT_PWD, "/dev/console", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_CONSOLE_MINOR));
     generic_mknodat(AT_PWD, "/dev/ptmx", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR));
 
     generic_mknodat(AT_PWD, "/dev/null", S_IFCHR|0777, dev_make(MEM_MAJOR, DEV_NULL_MINOR));

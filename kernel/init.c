@@ -88,7 +88,7 @@ static struct task *construct_task(struct task *parent) {
     return task;
 }
 
-int become_first_process(void) {
+intptr_t become_first_process(void) {
     // now seems like a nice time
     establish_signal_handlers();
 
@@ -101,7 +101,7 @@ int become_first_process(void) {
     return 0;
 }
 
-int become_new_init_child(void) {
+intptr_t become_new_init_child(void) {
     // locking? who needs locking?!
     struct task *init = pid_get_task(1);
     assert(init != NULL);
@@ -158,7 +158,7 @@ static struct fd *open_fd_from_actual_fd(int fd_no) {
     return fd;
 }
 
-int create_piped_stdio() {
+int create_piped_stdio(void) {
     if (!(current->files->files[0] = open_fd_from_actual_fd(STDIN_FILENO))) {
         return -1;
     }
