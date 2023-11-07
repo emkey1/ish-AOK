@@ -86,11 +86,11 @@
 }
 #endif
 
-- (int)startUpgrade {
+- (intptr_t)startUpgrade {
     if (self.upgradePid != 0)
         return _EEXIST;
 #if !ISH_LINUX
-    int err = become_new_init_child();
+    intptr_t err = become_new_init_child();
     if (err < 0)
         return err;
     FsUpdateOnlyRepositoriesFile();
@@ -114,7 +114,7 @@
     self.upgradeButton.enabled = NO;
     [self setDismissable:NO];
     [self printToTerminal:@"\r\n"];
-    int err = [self startUpgrade];
+    intptr_t err = [self startUpgrade];
     if (err < 0) {
         [self showAlertWithTitle:@"Failed to start upgrade" message:@"error %d", err];
     }

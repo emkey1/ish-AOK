@@ -13,7 +13,7 @@
 - (void)exitApp;
 
 #if !ISH_LINUX
-+ (int)bootError;
++ (intptr_t)bootError;
 #endif
 
 + (void)maybePresentStartupMessageOnViewController:(UIViewController *)vc;

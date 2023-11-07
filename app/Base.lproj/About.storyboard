@@ -18,7 +18,7 @@
                         <rect key="frame" x="0.0" y="0.0" width="320" height="568"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <color key="backgroundColor" systemColor="groupTableViewBackgroundColor"/>
-                        <label key="tableFooterView" opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="iSH unknown (Build unknown)" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="Xil-tm-WGD" userLabel="versionLabel">
+                        <label key="tableFooterView" opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="iSH-AOK unknown (Build unknown)" textAlignment="center" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="Xil-tm-WGD" userLabel="versionLabel">
                             <rect key="frame" x="0.0" y="856.5" width="320" height="44"/>
                             <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                             <fontDescription key="fontDescription" type="system" pointSize="16"/>
@@ -26,7 +26,7 @@
                             <nil key="highlightedColor"/>
                         </label>
                         <sections>
-                            <tableViewSection footerTitle="When this option is enabled, the screen will not dim when iSH is in the foreground." id="tuR-Og-SE8">
+                            <tableViewSection footerTitle="When this option is enabled, the screen will not dim when iSH-AOK is in the foreground." id="tuR-Og-SE8">
                                 <cells>
                                     <tableViewCell clipsSubviews="YES" contentMode="scaleToFill" preservesSuperviewLayoutMargins="YES" selectionStyle="default" accessoryType="disclosureIndicator" indentationWidth="10" textLabel="1Co-nG-Sij" style="IBUITableViewCellStyleDefault" id="dqn-Cd-cNm" userLabel="Theme">
                                         <rect key="frame" x="0.0" y="18" width="320" height="43.5"/>
@@ -95,23 +95,25 @@
                                             <rect key="frame" x="0.0" y="0.0" width="320" height="43.5"/>
                                             <autoresizingMask key="autoresizingMask"/>
                                             <subviews>
+                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" insetsLayoutMarginsFromSafeArea="NO" text="Keep Screen Turned On" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="Iov-xn-a0L">
+                                                    <rect key="frame" x="16" y="11.5" width="181" height="21"/>
+                                                    <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                                                    <nil key="textColor"/>
+                                                    <nil key="highlightedColor"/>
+                                                </label>
                                                 <switch opaque="NO" contentMode="scaleToFill" horizontalHuggingPriority="750" verticalHuggingPriority="750" contentHorizontalAlignment="center" contentVerticalAlignment="center" on="YES" translatesAutoresizingMaskIntoConstraints="NO" id="cPj-sQ-qsh">
                                                     <rect key="frame" x="255" y="6.5" width="51" height="31"/>
                                                     <connections>
                                                         <action selector="disableDimmingChanged:" destination="yJz-O7-jlW" eventType="valueChanged" id="usF-cn-Kbp"/>
                                                     </connections>
                                                 </switch>
-                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" fixedFrame="YES" insetsLayoutMarginsFromSafeArea="NO" text="Keep Screen Turned On" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="I1C-6M-82V">
-                                                    <rect key="frame" x="16" y="11" width="181" height="21"/>
-                                                    <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                                                    <fontDescription key="fontDescription" type="system" pointSize="17"/>
-                                                    <nil key="textColor"/>
-                                                    <nil key="highlightedColor"/>
-                                                </label>
                                             </subviews>
                                             <constraints>
+                                                <constraint firstItem="cPj-sQ-qsh" firstAttribute="leading" relation="greaterThanOrEqual" secondItem="Iov-xn-a0L" secondAttribute="trailing" constant="8" symbolic="YES" id="9uc-hi-DmQ"/>
+                                                <constraint firstItem="Iov-xn-a0L" firstAttribute="leading" secondItem="6Sy-Y9-UdH" secondAttribute="leadingMargin" id="aLB-ta-oqS"/>
                                                 <constraint firstItem="cPj-sQ-qsh" firstAttribute="centerY" secondItem="6Sy-Y9-UdH" secondAttribute="centerY" id="eCa-AP-AqQ"/>
                                                 <constraint firstAttribute="trailingMargin" secondItem="cPj-sQ-qsh" secondAttribute="trailing" id="jaj-Bb-Tg1"/>
+                                                <constraint firstItem="Iov-xn-a0L" firstAttribute="centerY" secondItem="6Sy-Y9-UdH" secondAttribute="centerY" id="sI8-H8-9M6"/>
                                             </constraints>
                                         </tableViewCellContentView>
                                     </tableViewCell>
@@ -240,7 +242,7 @@
                                             <autoresizingMask key="autoresizingMask"/>
                                             <subviews>
                                                 <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" insetsLayoutMarginsFromSafeArea="NO" text="@emkey1 on Twitter" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="wyO-AY-ccm">
-                                                    <rect key="frame" x="16" y="0.0" width="269.5" height="44"/>
+                                                    <rect key="frame" x="16" y="0.0" width="269.5" height="43.5"/>
                                                     <autoresizingMask key="autoresizingMask"/>
                                                     <fontDescription key="fontDescription" type="system" pointSize="17"/>
                                                     <nil key="textColor"/>
@@ -260,6 +262,7 @@
                                             <rect key="frame" x="0.0" y="0.0" width="320" height="43.5"/>
                                             <autoresizingMask key="autoresizingMask"/>
                                             <subviews>
+                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" horizontalHuggingPriority="1000" insetsLayoutMarginsFromSafeArea="NO" text="Launch cmd" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="G8D-8d-aOp">
                                                     <rect key="frame" x="16" y="11.5" width="94" height="21"/>
                                                     <fontDescription key="fontDescription" type="system" pointSize="17"/>
                                                     <nil key="textColor"/>
@@ -274,12 +277,6 @@
                                                         <action selector="textBoxSubmit:" destination="yJz-O7-jlW" eventType="primaryActionTriggered" id="Dyo-E6-Kdv"/>
                                                     </connections>
                                                 </textField>
-                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" horizontalHuggingPriority="1000" ambiguous="YES" insetsLayoutMarginsFromSafeArea="NO" text="Launch cmd" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="G8D-8d-aOp">
-                                                    <rect key="frame" x="16" y="11.5" width="94" height="21"/>
-                                                    <fontDescription key="fontDescription" type="system" pointSize="17"/>
-                                                    <nil key="textColor"/>
-                                                    <nil key="highlightedColor"/>
-                                                </label>
                                             </subviews>
                                             <constraints>
                                                 <constraint firstAttribute="trailingMargin" secondItem="gDx-hv-hhV" secondAttribute="trailing" id="D9N-xY-fFU"/>
@@ -297,6 +294,7 @@
                                             <rect key="frame" x="0.0" y="0.0" width="320" height="43.5"/>
                                             <autoresizingMask key="autoresizingMask"/>
                                             <subviews>
+                                                <label opaque="NO" multipleTouchEnabled="YES" contentMode="left" horizontalHuggingPriority="1000" insetsLayoutMarginsFromSafeArea="NO" text="Boot cmd" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="Ivg-bB-NKL">
                                                     <rect key="frame" x="16" y="11.5" width="74" height="21"/>
                                                     <fontDescription key="fontDescription" type="system" pointSize="17"/>
                                                     <nil key="textColor"/>
@@ -619,7 +617,7 @@
                                     <size key="footerReferenceSize" width="50" height="50"/>
                                     <inset key="sectionInset" minX="30" minY="30" maxX="30" maxY="30"/>
                                     <userDefinedRuntimeAttributes>
-                                        <userDefinedRuntimeAttribute type="boolean" keyPath="sectionFootersPinToVisibleBounds" value="YES"/>
+                                        <userDefinedRuntimeAttribute type="boolean" keyPath="sectionFootersPinToVisibleBounds" value="NO"/>
                                     </userDefinedRuntimeAttributes>
                                 </collectionViewFlowLayout>
                                 <cells>
@@ -683,7 +681,7 @@
                                                 <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                                                 <subviews>
                                                     <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="E9e-hb-zQw">
-                                                        <rect key="frame" x="8" y="8" width="304" height="34"/>
+                                                        <rect key="frame" x="0.0" y="0.0" width="320" height="50"/>
                                                         <state key="normal" title="Submit your own icon!"/>
                                                         <connections>
                                                             <action selector="openSubmissions:" destination="cfv-rk-mN1" eventType="primaryActionTriggered" id="d9r-k6-6Vz"/>
@@ -691,10 +689,10 @@
                                                     </button>
                                                 </subviews>
                                                 <constraints>
-                                                    <constraint firstItem="E9e-hb-zQw" firstAttribute="leading" secondItem="qL6-vf-qc3" secondAttribute="leading" constant="8" id="07g-r1-yQe"/>
-                                                    <constraint firstAttribute="bottom" secondItem="E9e-hb-zQw" secondAttribute="bottom" constant="8" id="1Nw-tH-oGL"/>
-                                                    <constraint firstAttribute="trailing" secondItem="E9e-hb-zQw" secondAttribute="trailing" constant="8" id="Mr4-0C-09T"/>
-                                                    <constraint firstItem="E9e-hb-zQw" firstAttribute="top" secondItem="qL6-vf-qc3" secondAttribute="top" constant="8" id="wcu-3V-6BT"/>
+                                                    <constraint firstItem="E9e-hb-zQw" firstAttribute="leading" secondItem="qL6-vf-qc3" secondAttribute="leading" id="07g-r1-yQe"/>
+                                                    <constraint firstAttribute="bottom" secondItem="E9e-hb-zQw" secondAttribute="bottom" id="1Nw-tH-oGL"/>
+                                                    <constraint firstAttribute="trailing" secondItem="E9e-hb-zQw" secondAttribute="trailing" id="Mr4-0C-09T"/>
+                                                    <constraint firstItem="E9e-hb-zQw" firstAttribute="top" secondItem="qL6-vf-qc3" secondAttribute="top" id="wcu-3V-6BT"/>
                                                 </constraints>
                                             </view>
                                             <blurEffect style="regular"/>
@@ -719,7 +717,7 @@
                             <constraint firstItem="wGQ-0K-Rcg" firstAttribute="top" secondItem="G6v-G0-r5a" secondAttribute="top" id="ECg-8n-6xl"/>
                             <constraint firstItem="wGQ-0K-Rcg" firstAttribute="trailing" secondItem="G6v-G0-r5a" secondAttribute="trailing" id="JXu-0v-zd6"/>
                             <constraint firstItem="wGQ-0K-Rcg" firstAttribute="leading" secondItem="G6v-G0-r5a" secondAttribute="leading" id="o7s-il-U4s"/>
-                            <constraint firstItem="G6v-G0-r5a" firstAttribute="bottom" secondItem="wGQ-0K-Rcg" secondAttribute="bottom" id="pTK-0F-HyJ"/>
+                            <constraint firstAttribute="bottom" secondItem="wGQ-0K-Rcg" secondAttribute="bottom" id="pTK-0F-HyJ"/>
                         </constraints>
                     </view>
                     <navigationItem key="navigationItem" title="App Icon" id="5QX-R3-V8P"/>

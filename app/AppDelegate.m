@@ -82,7 +82,7 @@ void ReportPanic(const char *message) {
 }
 #endif
 
-static int bootError;
+static intptr_t bootError;
 static NSString *const kSkipStartupMessage = @"Skip Startup Message";
 
 @implementation AppDelegate
@@ -237,7 +237,7 @@ void SyncHostname(void) {
 #endif
 }
 
-+ (int)bootError {
++ (intptr_t)bootError {
     return bootError;
 }
 
