@@ -50,13 +50,46 @@ static struct rlimit_ init_rlimits[16] = {
     [RLIMIT_RTTIME_]     = {RLIM_INFINITY_, RLIM_INFINITY_},
 };
 
+static int kill_task(struct task *task, dword_t sig) {
+    //while((critical_region_count(task) >1) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
+   //     nanosleep(&lock_pause, NULL);
+    //}
+    if (!superuser() &&
+            current->uid != task->uid &&
+            current->uid != task->suid &&
+            current->euid != task->uid &&
+            current->euid != task->suid)
+        return _EPERM;
+    struct siginfo_ info = {
+        .code = SI_USER_,
+        .kill.pid = current->pid,
+        .kill.uid = current->uid,
+    };
+    //while((critical_region_count(task)) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
+    //    nanosleep(&lock_pause, NULL);
+    //}
+    send_signal(task, sig, info);
+    return 0;
+}
+
 // TODO error propagation
 static struct task *construct_task(struct task *parent) {
     struct task *task = task_create_(parent);
+    if (task == NULL) {
+        // Handle task creation error
+        return NULL;
+    }
 
     //atomic_thread_fence(__ATOMIC_SEQ_CST);
     
     struct tgroup *group = malloc(sizeof(struct tgroup));
+    if (group == NULL) {
+        // Handle memory allocation failure
+        // Clean up the previously allocated 'task'
+        kill_task(task, SIGTERM_); // Cleanup
+        return NULL;
+    }
+    
     *group = (struct tgroup) {};
     list_init(&group->threads);
     lock_init(&group->lock, "construct_task\0");

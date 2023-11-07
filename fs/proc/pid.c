@@ -108,6 +108,7 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     proc_printf(buf, "%lu ", 0l); // nswap
     proc_printf(buf, "%lu ", 0l); // cnswap
     proc_printf(buf, "%d", task->exit_signal);
+    proc_printf(buf, "%d", 0); // processor
     // that's enough for now
     proc_printf(buf, "\n");
     
