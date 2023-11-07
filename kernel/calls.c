@@ -350,11 +350,7 @@ void handle_interrupt(int interrupt) {
             }
             lock(&current->ptrace.lock, 0);
             if (current->ptrace.stop_at_syscall) {
-                
-                ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
                 send_signal(current, SIGTRAP_, SIGINFO_NIL);
-                ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-                
                 unlock(&current->ptrace.lock);
                 receive_signals();
                 lock(&current->ptrace.lock, 0);
