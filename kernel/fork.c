@@ -104,7 +104,7 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
     }
     list_add(&task->group->threads, &task->group_links);
     unlock(&old_group->lock);
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
 
     if (flags & CLONE_SETTLS_) {
         err = task_set_thread_area(task, tls_addr);
@@ -162,7 +162,7 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
         // could cause leaks
         complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
         task_destroy(task);
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
         
         return err;
     }

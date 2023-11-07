@@ -64,14 +64,14 @@ struct task *pid_get_task(dword_t id) {
     return task;
 }
 
-struct pid *pid_get_last_allocated() {
+struct pid *pid_get_last_allocated(void) {
     if (!last_allocated_pid) {
         return NULL;
     }
     return pid_get(last_allocated_pid);
 }
 
-dword_t get_count_of_blocked_tasks() {
+dword_t get_count_of_blocked_tasks(void) {
     modify_critical_region_counter(current, 1, __FILE__, __LINE__);
     dword_t res = 0;
     struct pid *pid_entry;
@@ -82,7 +82,7 @@ dword_t get_count_of_blocked_tasks() {
         }
     }
     modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
     return res;
 }
 
@@ -93,14 +93,14 @@ void zero_critical_regions_count(void) { // If doEnableExtraLocking is changed t
     }
 }
 
-dword_t get_count_of_alive_tasks() {
+dword_t get_count_of_alive_tasks(void) {
     complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
     dword_t res = 0;
     struct list *item;
     list_for_each(&alive_pids_list, item) {
         res++;
     }
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
     return res;
 }
 
@@ -118,7 +118,7 @@ struct task *task_create_(struct task *parent) {
 
     struct task *task = malloc(sizeof(struct task));
     if (task == NULL) {
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
         return NULL;
     }
     *task = (struct task) {};
@@ -135,7 +135,7 @@ struct task *task_create_(struct task *parent) {
         task->parent = parent;
         list_add(&parent->children, &task->siblings);
     }
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
 
     task->pending = 0;
     list_init(&task->queue);
@@ -212,7 +212,7 @@ void task_destroy(struct task *task) {
     }
     
     if(Ishould)
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
     
     free(task);
 }
@@ -239,7 +239,7 @@ void run_at_boot(void) {  // Stuff we run only once, at boot time.
 
 }
 
-void task_run_current() {
+void task_run_current(void) {
     struct cpu_state *cpu = &current->cpu;
     struct tlb tlb = {};
     tlb_refresh(&tlb, &current->mem->mmu);
@@ -248,7 +248,7 @@ void task_run_current() {
         read_lock(&current->mem->lock, __FILE__, __LINE__);
         
         if(!doEnableMulticore) {
-            threaded_lock(&multicore_lock, 1);
+            pthread_mutex_lock(&multicore_lock);
         }
         
         int interrupt = cpu_run_to_interrupt(cpu, &tlb);
@@ -282,7 +282,7 @@ static void *task_thread(void *task) {
 }
 
 static pthread_attr_t task_thread_attr;
-__attribute__((constructor)) static void create_attr() {
+__attribute__((constructor)) static void create_attr(void) {
     pthread_attr_init(&task_thread_attr);
     pthread_attr_setdetachstate(&task_thread_attr, PTHREAD_CREATE_DETACHED);
 }
@@ -292,13 +292,13 @@ void task_start(struct task *task) {
         die("could not create thread");
 }
 
-int_t sys_sched_yield() {
+int_t sys_sched_yield(void) {
     STRACE("sched_yield()");
     sched_yield();
     return 0;
 }
 
-void update_thread_name() {
+void update_thread_name(void) {
     char name[16]; // As long as Linux will let us make this
     snprintf(name, sizeof(name), "-%d", current->pid);
     size_t pid_width = strlen(name);

@@ -31,7 +31,7 @@ static lock_t log_lock = LOCK_INITIALIZER;
 #define SYSLOG_ACTION_SIZE_UNREAD_ 9
 #define SYSLOG_ACTION_SIZE_BUFFER_ 10
 
-static int syslog_read(addr_t buf_addr, int_t len, int flags) {
+static size_t syslog_read(addr_t buf_addr, size_t len, int flags) {
     if (len < 0)
         return _EINVAL;
     if (flags & FIFO_LAST) {
@@ -48,7 +48,6 @@ static int syslog_read(addr_t buf_addr, int_t len, int flags) {
     // Keep printing tokens while one of the
     // delimiters present
     addr_t pointer = buf_addr; // Where we are in the buffer
-    unsigned count = 1;
     char *token = strtok(buf, "\n"); // Get the first line
     
     if(user_write(pointer, "\n", 1)) { // Positive return value = fail
@@ -78,10 +77,6 @@ static int syslog_read(addr_t buf_addr, int_t len, int flags) {
         } else {
             token = NULL;
         }
-           
-        //if(count > 12000)
-        //    token = NULL; // We're going to overrun something.  Need to fix this, but for now, just abort.  -mke
-        count++;
     }
 
     free(buf);
@@ -89,8 +84,8 @@ static int syslog_read(addr_t buf_addr, int_t len, int flags) {
     return len;
 }
 
-static int do_syslog(int type, addr_t buf_addr, int_t len) {
-    int res;
+static size_t do_syslog(int type, addr_t buf_addr, int_t len) {
+    size_t res;
     switch (type) {
         case SYSLOG_ACTION_READ_:
             return syslog_read(buf_addr, len, 0);
@@ -121,10 +116,10 @@ static int do_syslog(int type, addr_t buf_addr, int_t len) {
             return _EINVAL;
     }
 }
-int_t sys_syslog(int_t type, addr_t buf_addr, int_t len) {
+size_t sys_syslog(int_t type, addr_t buf_addr, int_t len) {
     ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
     lock(&log_lock, 0);
-    int retval = do_syslog(type, buf_addr, len);
+    size_t retval = do_syslog(type, buf_addr, len);
     unlock(&log_lock);
     ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
     return retval;
@@ -231,7 +226,7 @@ void die(const char *msg, ...) {
     char buf[4096];
     vsprintf(buf, msg, args);
     die_handler(buf);
-    abort();
+    abort();  
     va_end(args);
 }
 

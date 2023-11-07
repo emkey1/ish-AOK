@@ -2,8 +2,7 @@
 #define TIME_H
 #include "misc.h"
 
-//dword_t sys_clock_nanosleep_time64(const struct timespec *req, struct timespec *rem);
-dword_t sys_clock_nanosleep_time64(int fuck, int it, const struct timespec *all, const struct timespec *i, const struct timespec *req);
+dword_t sys_clock_nanosleep_time64(int clock_id, int flags, const struct timespec *req, struct timespec *rem);
 dword_t sys_clock_gettime64(dword_t clock, struct timespec *tp);
 dword_t sys_time(addr_t time_out);
 dword_t sys_stime(addr_t time);

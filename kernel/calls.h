@@ -32,7 +32,7 @@ int must_check user_write_string(addr_t addr, const char *buf);
 dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t ctid);
 dword_t sys_fork(void);
 dword_t sys_vfork(void);
-dword_t sys_execve(addr_t file, addr_t argv, addr_t envp);
+ssize_t sys_execve(addr_t file, addr_t argv, addr_t envp);
 int do_execve(const char *file, size_t argc, const char *argv, const char *envp);
 dword_t sys_exit(dword_t status);
 noreturn void do_exit(int status);
@@ -258,7 +258,7 @@ int_t sys_get_robust_list(pid_t_ pid, addr_t robust_list_ptr, addr_t len_ptr);
 
 // misc
 dword_t sys_getrandom(addr_t buf_addr, dword_t len, dword_t flags);
-int_t sys_syslog(int_t type, addr_t buf_addr, int_t len);
+size_t sys_syslog(int_t type, addr_t buf_addr, int_t len);
 int_t sys_ipc(uint_t call, int_t first, int_t second, int_t third, addr_t ptr, int_t fifth);
 
 typedef int (*syscall_t)(dword_t, dword_t, dword_t, dword_t, dword_t, dword_t);
