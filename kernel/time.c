@@ -270,7 +270,7 @@ static void posix_timer_callback(struct posix_timer *timer) {
         .timer.overrun = 0,
         .timer.value = timer->sig_value,
     };
-    lock(&pids_lock);
+    lock(&pids_lock,0);
     struct task *thread = pid_get_task(timer->thread_pid);
     // TODO: solve pid reuse. currently we have two ways of referring to a task: pid_t_ and struct task *. pids get reused. task struct pointers get freed on exit or reap. need a third option for cases like this, like a refcount layer.
     if (thread != NULL)
@@ -294,7 +294,7 @@ int_t sys_timer_create(dword_t clock, addr_t sigevent_addr, addr_t timer_addr) {
         return _EINVAL;
 
     if (sigev.method == SIGEV_THREAD_ID_) {
-        lock(&pids_lock);
+        lock(&pids_lock,0);
         if (pid_get_task(sigev.tid) == NULL)
             return _EINVAL;
         unlock(&pids_lock);
