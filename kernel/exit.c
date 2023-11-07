@@ -238,7 +238,7 @@ noreturn void do_exit_group(int status) {
     unlock(&pids_lock);
     modify_critical_region_counter(current, -1, __FILE__, __LINE__);
     unlock(&group->lock);
-    if(current->pid <= MAX_PID) // abort if crazy.  -mke
+    //if(current->pid <= MAX_PID) // abort if crazy.  -mke
         do_exit(status);
 }
 

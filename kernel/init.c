@@ -19,7 +19,7 @@ int mount_root(const struct fs_ops *fs, const char *source) {
     return 0;
 }
 
-static void establish_signal_handlers() {
+static void establish_signal_handlers(void) {
     extern void sigusr1_handler(int sig);
     struct sigaction sigact;
     sigact.sa_handler = sigusr1_handler;
