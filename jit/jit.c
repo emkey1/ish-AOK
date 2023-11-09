@@ -19,12 +19,14 @@ static void jit_resize_hash(struct jit *jit, size_t new_size);
 
 struct jit *jit_new(struct mmu *mmu) {
     struct jit *jit = calloc(1, sizeof(struct jit));
+    lock(&jit->lock, 0);
     jit->mmu = mmu;
     jit_resize_hash(jit, JIT_INITIAL_HASH_SIZE);
     jit->page_hash = calloc(JIT_PAGE_HASH_SIZE, sizeof(*jit->page_hash));
     list_init(&jit->jetsam);
     lock_init(&jit->lock, "jit_new\0");
     wrlock_init(&jit->jetsam_lock);
+    unlock(&jit->lock);
     return jit;
 }
 
@@ -36,6 +38,7 @@ void jit_free(struct jit *jit) {
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
     }
+    lock(&jit->lock, 0);
     for (size_t i = 0; i < jit->hash_size; i++) {
         struct jit_block *block, *tmp;
         if (list_null(&jit->hash[i]))
@@ -48,6 +51,7 @@ void jit_free(struct jit *jit) {
     free(jit->page_hash);
     free(jit->hash);
     write_lock(&jit->jetsam_lock);
+    unlock(&jit->lock);
     free(jit);
 }
 
@@ -249,9 +253,9 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                     if (last_block->jump_ip[i] != NULL &&
                             (*last_block->jump_ip[i] & 0xffffffff) == block->addr) {
                         *last_block->jump_ip[i] = (unsigned long) block->code;
-			//modify_critical_region_counter(current, 1, __FILE__, __LINE__);
+			modify_critical_region_counter(current, 1, __FILE__, __LINE__);
                         list_add(&block->jumps_from[i], &last_block->jumps_from_links[i]);
-			//modify_critical_region_counter(current, -1, __FILE__, __LINE__);
+			modify_critical_region_counter(current, -1, __FILE__, __LINE__);
                     }
                 }
             }

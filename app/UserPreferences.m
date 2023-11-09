@@ -42,7 +42,6 @@ NSDictionary<NSString *, NSString *> *friendlyPreferenceReverseMapping;
 NSDictionary<NSString *, NSString *> *kvoProperties;
 
 extern bool doEnableMulticore;
-extern unsigned doLockSleepNanoseconds;
 static NSString *const kSystemMonospacedFontName = @"ui-monospace";
 
 @interface UserPreferences ()

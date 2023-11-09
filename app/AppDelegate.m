@@ -291,7 +291,6 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     extern const char *uname_hostname_override;
     extern bool doEnableMulticore;
     extern bool doEnableExtraLocking;
-    extern unsigned doLockSleepNanoseconds;
     extern pthread_mutex_t multicore_lock;
     extern pthread_mutex_t extra_lock;
     NSString *hostnameOverride = [NSUserDefaults.standardUserDefaults stringForKey:@"hostnameOverride"];
@@ -322,13 +321,6 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
             pthread_mutex_unlock(&extra_lock); // Be sure not to leave around orphan lock
         });
     }];
- //   [UserPreferences.shared observe:@[@"shouldLockSleepNanoseconds"] options:NSKeyValueObservingOptionInitial
-  //                            owner:self usingBlock:^(typeof(self) self) {
-   //     dispatch_async(dispatch_get_main_queue(), ^{
-  //          doLockSleepNanoseconds = UserPreferences.shared.shouldLockSleepNanoseconds;
-  //          pthread_mutex_unlock(&extra_lock); // Be sure not to leave around orphan lock
-  //      });
-  //  }];
     
         // This code is IPv4 and IPv6 aware: see https://developer.apple.com/library/archive/samplecode/Reachability/Listings/ReadMe_md.html.
     struct sockaddr_in address = {

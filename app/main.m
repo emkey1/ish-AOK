@@ -19,7 +19,7 @@ void disable_app_nap(void) {
 
 int main(int argc, char * argv[]) {
     @autoreleasepool {
-        disable_app_nap();  // No napping I say. -mke
+        //disable_app_nap();  // No napping I say. -mke
         run_at_boot();
         return UIApplicationMain(argc, argv, nil, NSStringFromClass([AppDelegate class]));
     }
