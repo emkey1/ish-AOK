@@ -158,60 +158,42 @@ struct task *task_create_(struct task *parent) {
     return task;
 }
 
+// We consolidate the check for whether the task is in a critical section,
+// holds locks, or has pending signals into a single function.
+bool should_wait(struct task *t) {
+    return critical_region_count(t) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
+}
+
 void task_destroy(struct task *task) {
-   // if(!pthread_mutex_trylock(&task->death_lock))
-    //   return; // Task is already in the process of being deleted, most likely by do_exit().  -mke
-    
     task->exiting = true;
     
-    bool signal_pending = !!(current->pending & ~current->blocked);
-    int count = -4000; // Maybe this is more efficient? -mke
-    while(((critical_region_count(task) > 1) || (locks_held_count(task)) || (signal_pending)) && (count < 1)) { // Wait for now, task is in one or more critical sections, and/or has locks
-        nanosleep(&lock_pause, NULL);
-        signal_pending = !!(current->blocked);
+    // We use a single loop to wait for the task to be ready to destroy.
+    // This loop replaces all the similar while-loops in the original code.
+    int count = -4000; // Counter to limit the number of times we check.
+    while (should_wait(task) && count < 0) {
+        nanosleep(&lock_pause, NULL); // Sleep for a defined amount of time.
         count++;
-    }
-
-    bool Ishould = false;
-    if(!trylock(&pids_lock)) {  // Just in case, be sure pids_lock is set.  -mke
-        
-        // Multiple threads in the same process tend to cause deadlocks when locking pids_lock.  So we skip the second attempt to lock pids_lock by the same pid.  Which
-        // sometimes causes pids_lock not to be set.  We lock it here, and then unlock below.  -mke
-       //printk("WARNING: pids_lock was not set (Me: %d:%s) (Current: %d:%s) (Last: %d:%s)\n", task->pid, task->comm, current->pid, current->comm, pids_lock.pid, pids_lock.comm);
-       Ishould = true;
     }
     
-    signal_pending = !!(current->pending & ~current->blocked);
-    count = -4000;
-    while(((critical_region_count(task) > 1) || (locks_held_count(task)) || (signal_pending)) && (count < 0)) { // Wait for now, task is in one or more critical sections, and/or has locks
-        nanosleep(&lock_pause, NULL);
-        signal_pending = !!(current->blocked);
-        count++;
+    // Now we lock the pids_lock if it's not already locked by this task.
+    // The trylock prevents deadlocks by avoiding locking if this thread already has the lock.
+    bool locked_pids_lock = false;
+    if (!trylock(&pids_lock)) {
+        locked_pids_lock = true;
     }
+
+    // Remove the task from the sibling and alive lists.
     list_remove(&task->siblings);
     struct pid *pid = pid_get(task->pid);
     pid->task = NULL;
-    
-    signal_pending = !!(current->pending & ~current->blocked);
-    count = -4000;
-    while(((critical_region_count(task) > 1) || (locks_held_count(task)) || (signal_pending)) && (count < 0)) { // Wait for now, task is in one or more critical sections, and/or has locks
-        nanosleep(&lock_pause, NULL);
-        signal_pending = !!(current->blocked);
-        count++;
-    }
     list_remove(&pid->alive);
-    
-    signal_pending = !!(current->pending & ~current->blocked);
-    count = -4000;
-    while(((critical_region_count(task) > 1) || (locks_held_count(task)) || (signal_pending)) && (count < 0)) { // Wait for now, task is in one or more critical sections, and/or has locks
-        nanosleep(&lock_pause, NULL);
-        signal_pending = !!(current->blocked); // Be less stringent -mke
-        count++;
-    }
-    
-    if(Ishould)
+
+    // Unlock pids_lock if we were the one who locked it.
+    if (locked_pids_lock) {
         unlock(&pids_lock);
-    
+    }
+
+    // Free the task's resources.
     free(task);
 }
 

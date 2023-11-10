@@ -161,7 +161,7 @@ int tty_open(struct tty *tty, struct fd *fd) {
     return 0;
 }
 
-static int tty_device_open(int major, int minor, struct fd *fd) {
+static intptr_t tty_device_open(int major, int minor, struct fd *fd) {
     struct tty *tty;
     if (major == TTY_ALTERNATE_MAJOR) {
         if (minor == DEV_TTY_MINOR) {
@@ -297,7 +297,7 @@ ssize_t tty_input(struct tty *tty, const char *input, size_t size, bool blocking
                 // FIXME ECHOE and ECHOK are supposed to enable these
                 // ECHOKE enables erasing the line instead of echoing the kill char and outputting a newline
                 echo = lflags & ECHOK_;
-                int count = tty->bufsize;
+                ssize_t count = tty->bufsize;
                 if (ch == cc[VERASE_] && tty->bufsize > 0) {
                     echo = lflags & ECHOE_;
                     count = 1;
@@ -669,10 +669,10 @@ static int tiocgpgrp(struct tty *tty, pid_t_ *fg_group) {
     int err = 0;
     struct tty *slave = get_slave_side_tty(tty);
     if (slave != tty) {
-        lock(&slave->lock);
+        lock(&slave->lock,0);
     }
 
-    if (tty == slave && !tty_is_current(slave) || slave->fg_group == 0) {
+    if (tty == slave && (!tty_is_current(slave) || slave->fg_group == 0)) {
         err = _ENOTTY;
         goto error_no_ctrl_tty;
     }
