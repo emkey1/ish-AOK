@@ -113,7 +113,7 @@ struct tty {
     // A flag is a marker indicating the end of a canonical mode input. Flags
     // are created by EOL and EOF characters. You can't backspace past a flag.
     bool buf_flag[TTY_BUF_SIZE];
-    size_t bufsize;
+    dword_t bufsize;
     uint8_t packet_flags;
     cond_t produced;
     cond_t consumed;
