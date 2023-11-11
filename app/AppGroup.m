@@ -34,67 +34,72 @@ struct cs_entitlements {
 };
 
 static NSDictionary *AppEntitlements(void) {
-    static NSDictionary *entitlements;
-    if (entitlements != nil)
-        return entitlements;
-    
-    // Inspired by codesign.c in Darwin sources for Security.framework
-    
-    const struct mach_header_64 *header = &_mh_execute_header;
-    
-    // Simulator executables have fake entitlements in the code signature. The real entitlements can be found in an __entitlements section.
-    size_t entitlements_size;
-    char *entitlements_data = (char *) getsectiondata(header, "__TEXT", "__entitlements", &entitlements_size);
-    if (entitlements_data != NULL) {
-        NSData *data = [NSData dataWithBytesNoCopy:entitlements_data
-                                            length:entitlements_size
-                                      freeWhenDone:NO];
-        return entitlements = [NSPropertyListSerialization propertyListWithData:data
-                                                                        options:NSPropertyListImmutable
-                                                                         format:nil
-                                                                          error:nil];
-    }
-    
-    // Find the LC_CODE_SIGNATURE
-    struct load_command *lc = (void *) (header + 1);
-    struct linkedit_data_command *cs_lc = NULL;
-    for (uint32_t i = 0; i < header->ncmds; i++) {
-        if (lc->cmd == LC_CODE_SIGNATURE) {
-            cs_lc = (void *) lc;
-            break;
+    static NSDictionary *entitlements = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        const struct mach_header_64 *header = &_mh_execute_header;
+        
+        // Check for entitlements in the __entitlements section (common in simulators)
+        size_t entitlements_size;
+        char *entitlements_data = (char *) getsectiondata(header, "__TEXT", "__entitlements", &entitlements_size);
+        if (entitlements_data != NULL) {
+            NSData *data = [NSData dataWithBytesNoCopy:entitlements_data length:entitlements_size freeWhenDone:NO];
+            NSError *error = nil;
+            entitlements = [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:nil error:&error];
+            if (entitlements == nil) {
+                NSLog(@"Failed to parse entitlements: %@", error);
+                return;
+            }
+            return;
         }
-        lc = (void *) ((char *) lc + lc->cmdsize);
-    }
-    if (cs_lc == NULL)
-        return nil;
+        
+        // Code for fetching entitlements from the code signature
+        struct load_command *lc = (void *) (header + 1);
+        struct linkedit_data_command *cs_lc = NULL;
+        for (uint32_t i = 0; i < header->ncmds; i++) {
+            if (lc->cmd == LC_CODE_SIGNATURE) {
+                cs_lc = (void *) lc;
+                break;
+            }
+            lc = (void *) ((char *) lc + lc->cmdsize);
+        }
+        if (cs_lc == NULL)
+            return;
 
-    // Read the code signature off disk, as it's apparently not loaded into memory
-    NSFileHandle *fileHandle = [NSFileHandle fileHandleForReadingFromURL:NSBundle.mainBundle.executableURL error:nil];
-    if (fileHandle == nil)
-        return nil;
-    [fileHandle seekToFileOffset:cs_lc->dataoff];
-    NSData *csData = [fileHandle readDataOfLength:cs_lc->datasize];
-    [fileHandle closeFile];
-    const struct cs_superblob *cs = csData.bytes;
-    if (ntohl(cs->magic) != CSMAGIC_EMBEDDED_SIGNATURE)
-        return nil;
-    
-    // Find the entitlements in the code signature
-    NSData *entitlementsData = nil;
-    for (uint32_t i = 0; i < ntohl(cs->count); i++) {
-        struct cs_entitlements *ents = (void *) ((char *) cs + ntohl(cs->index[i].offset));
-        if (ntohl(ents->magic) == CSMAGIC_EMBEDDED_ENTITLEMENTS) {
-            entitlementsData = [NSData dataWithBytes:ents->entitlements
-                                              length:ntohl(ents->length) - offsetof(struct cs_entitlements, entitlements)];
+        NSFileHandle *fileHandle = [NSFileHandle fileHandleForReadingFromURL:NSBundle.mainBundle.executableURL error:nil];
+        if (fileHandle == nil)
+            return;
+        [fileHandle seekToFileOffset:cs_lc->dataoff];
+        NSData *csData = [fileHandle readDataOfLength:cs_lc->datasize];
+        [fileHandle closeFile];
+        const struct cs_superblob *cs = csData.bytes;
+        if (ntohl(cs->magic) != CSMAGIC_EMBEDDED_SIGNATURE)
+            return;
+
+        NSData *entitlementsData = nil;
+        for (uint32_t i = 0; i < ntohl(cs->count); i++) {
+            struct cs_entitlements *ents = (void *) ((char *) cs + ntohl(cs->index[i].offset));
+
+            // Read the magic number in a way that does not assume alignment
+            uint32_t magic;
+            memcpy(&magic, &ents->magic, sizeof(uint32_t));
+            if (ntohl(ents->magic) == CSMAGIC_EMBEDDED_ENTITLEMENTS) {
+                entitlementsData = [NSData dataWithBytes:ents->entitlements length:ntohl(ents->length) - offsetof(struct cs_entitlements, entitlements)];
+                break; // Entitlements found
+            }
         }
-    }
-    if (entitlementsData == nil)
-        return nil;
-    
-    return entitlements = [NSPropertyListSerialization propertyListWithData:entitlementsData
-                                                                    options:NSPropertyListImmutable
-                                                                     format:nil
-                                                                      error:nil];
+        
+        if (entitlementsData == nil)
+            return;
+
+        NSError *serializationError = nil;
+        entitlements = [NSPropertyListSerialization propertyListWithData:entitlementsData options:NSPropertyListImmutable format:nil error:&serializationError];
+        if (entitlements == nil) {
+            NSLog(@"Failed to parse entitlements: %@", serializationError);
+            return;
+        }
+    });
+    return entitlements;
 }
 
 NSArray<NSString *> *CurrentAppGroups(void) {

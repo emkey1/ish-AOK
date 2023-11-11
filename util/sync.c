@@ -208,7 +208,7 @@ unsigned critical_region_count(struct task *task) {
     return tmp;
 }
 
-unsigned critical_region_count_wrapper() { // sync.h can't know about the definition of struct due to recursive include files.  -mke
+unsigned critical_region_count_wrapper(void) { // sync.h can't know about the definition of struct due to recursive include files.  -mke
     return(critical_region_count(current));
 }
 
@@ -234,7 +234,7 @@ unsigned locks_held_count(struct task *task) {
     return tmp;
 }
 
-unsigned locks_held_count_wrapper() { // sync.h can't know about the definition of struct due to recursive include files.  -mke
+unsigned locks_held_count_wrapper(void) { // sync.h can't know about the definition of struct due to recursive include files.  -mke
     if(current != NULL)
         return(locks_held_count(current));
     return 0;
