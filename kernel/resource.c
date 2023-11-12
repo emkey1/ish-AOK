@@ -204,6 +204,8 @@ dword_t sys_getrusage(dword_t who, addr_t rusage_addr) {
 
 int_t sys_sched_getaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) {
     STRACE("sched_getaffinity(%d, %d, %#x)", pid, cpusetsize, cpuset_addr);
+
+    // Handle pid check separately for clarity
     if (pid != 0) {
         complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
         struct task *task = pid_get_task(pid);
@@ -212,18 +214,28 @@ int_t sys_sched_getaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) 
             return _ESRCH;
     }
 
+    // Get the number of online processors
     unsigned cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    char cpuset[cpus / 8 + 1];
-    if (cpusetsize < sizeof(cpuset))
+    // Calculate the size of the cpuset
+    size_t cpusetSize = cpus / 8 + 1;
+    if (cpusetsize < cpusetSize)
         return _EINVAL;
-    memset(cpuset, 0, sizeof(cpuset));
+
+    char cpuset[cpusetSize];
+    memset(cpuset, 0, cpusetSize);
+
+    // Set bits for each CPU
     for (unsigned i = 0; i < cpus; i++)
         bit_set(i, cpuset);
-    if (user_write(cpuset_addr, cpuset, sizeof(cpuset)))
+
+    // Write to user space, handle error separately
+    if (user_write(cpuset_addr, cpuset, cpusetSize))
         return _EFAULT;
-    // return the number of bytes written
-    return sizeof(cpuset);
+
+    // Return the number of bytes written
+    return cpusetSize;
 }
+
 int_t sys_sched_setaffinity(pid_t_ UNUSED(pid), dword_t UNUSED(cpusetsize), addr_t UNUSED(cpuset_addr)) {
     // meh
     return 0;
