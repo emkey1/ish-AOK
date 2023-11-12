@@ -30,8 +30,6 @@ struct jit *jit_new(struct mmu *mmu) {
     return jit;
 }
 
-
-
 void jit_free(struct jit *jit) {
     bool signal_pending = !!(current->pending & ~current->blocked);
     while((critical_region_count(current) > 2) || (locks_held_count(current)) || (current->process_info_being_read) || (signal_pending)) { // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
@@ -166,21 +164,16 @@ static void jit_block_disconnect(struct jit *jit, struct jit_block *block) {
     }
     list_remove(&block->chain);
     for (int i = 0; i <= 1; i++) {
-        ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
         list_remove(&block->page[i]);
         list_remove_safe(&block->jumps_from_links[i]);
-        ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
 
         struct jit_block *prev_block, *tmp;
         
-        ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
         list_for_each_entry_safe(&block->jumps_from[i], prev_block, tmp, jumps_from_links[i]) {
             if (prev_block->jump_ip[i] != NULL)
                 *prev_block->jump_ip[i] = prev_block->old_jump_ip[i]; // Crashed here June 12 2022, 19 Nov 2022
             list_remove(&prev_block->jumps_from_links[i]);
         }
-        
-        ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
     }
 }
 
