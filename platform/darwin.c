@@ -10,7 +10,6 @@
 typedef double CFTimeInterval;
 
 extern bool doEnableMulticore;
-extern bool BOOTING; // Is iSH-AOK currently booting?  -mke
 
 struct cpu_usage get_total_cpu_usage(void) {
     host_cpu_load_info_data_t load;
@@ -100,7 +99,7 @@ struct uptime_info get_uptime(void) {
 int get_cpu_count(void) {
      int ncpu;
      size_t size = sizeof(int);
-     if((!doEnableMulticore) && (!BOOTING))
+     if((!doEnableMulticore))
          ncpu = 1; // Return one when Multicore is disabled -mke
      else
          sysctlbyname("hw.ncpu", &ncpu, &size, NULL, 0);

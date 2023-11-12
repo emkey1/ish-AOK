@@ -19,7 +19,6 @@ lock_t atomic_l_lock;
 pthread_mutex_t wait_for_lock = PTHREAD_MUTEX_INITIALIZER;
 time_t boot_time;  // Store the boot time.  -mke
 
-bool BOOTING = true;
 int iOSMajorRelease;
 
 bool doEnableMulticore; // Enable multicore if toggled, should default to false
@@ -211,8 +210,6 @@ void run_at_boot(void) {  // Stuff we run only once, at boot time.
          
     boot_time = time(NULL);
     //printk("Seconds since January 1, 1970 = %ld\n", boot_time);
-    BOOTING = false;
-
 }
 
 void task_run_current(void) {
@@ -284,10 +281,6 @@ void update_thread_name(void) {
     // Create the thread name with PID
     //result = snprintf(name, sizeof(name) - 1, "%s-%d", current->comm, current->pid);
     result = snprintf(name, sizeof(name) - 1, "%.7s-%d", current->comm, current->pid);
-    int fuck = current->pid;
-    char fuckyou[16];
-    memset(fuckyou, 0, sizeof(fuckyou));
-    strcpy(fuckyou, name);
 
     // Check if the output was truncated
     if (result >= sizeof(name)) {

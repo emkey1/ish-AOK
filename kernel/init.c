@@ -51,9 +51,6 @@ static struct rlimit_ init_rlimits[16] = {
 };
 
 static int kill_task(struct task *task, dword_t sig) {
-    //while((critical_region_count(task) >1) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
-   //     nanosleep(&lock_pause, NULL);
-    //}
     if (!superuser() &&
             current->uid != task->uid &&
             current->uid != task->suid &&
@@ -65,9 +62,6 @@ static int kill_task(struct task *task, dword_t sig) {
         .kill.pid = current->pid,
         .kill.uid = current->uid,
     };
-    //while((critical_region_count(task)) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
-    //    nanosleep(&lock_pause, NULL);
-    //}
     send_signal(task, sig, info);
     return 0;
 }

@@ -12,7 +12,11 @@ extern void run_at_boot(void);
 
 int main(int argc, char * argv[]) {
     @autoreleasepool {
-        run_at_boot();
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            run_at_boot();
+        });
+
         int retVal = 0;
         @try {
             // Your existing setup code here

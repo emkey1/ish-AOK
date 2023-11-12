@@ -215,9 +215,9 @@ int_t sys_sched_getaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) 
     }
 
     // Get the number of online processors
-    unsigned cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    long cpus = sysconf(_SC_NPROCESSORS_ONLN);
     // Calculate the size of the cpuset
-    size_t cpusetSize = cpus / 8 + 1;
+    long cpusetSize = cpus / 8 + 1;
     if (cpusetsize < cpusetSize)
         return _EINVAL;
 
@@ -233,7 +233,7 @@ int_t sys_sched_getaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) 
         return _EFAULT;
 
     // Return the number of bytes written
-    return cpusetSize;
+    return (int_t)cpusetSize;
 }
 
 int_t sys_sched_setaffinity(pid_t_ UNUSED(pid), dword_t UNUSED(cpusetsize), addr_t UNUSED(cpuset_addr)) {
@@ -242,8 +242,11 @@ int_t sys_sched_setaffinity(pid_t_ UNUSED(pid), dword_t UNUSED(cpusetsize), addr
 }
 
 int_t sys_getpriority(int_t which, pid_t_ who) {
+    // Since changing process priority is not supported in iOS,
+    // this function can return a default priority value.
+    // The default nice value in Linux ranges from -20 (highest priority) to 19 (lowest priority).
     STRACE("getpriority(%d, %d)", which, who);
-    return 20;
+    return 0;
 }
 int_t sys_setpriority(int_t which, pid_t_ who, int_t prio) {
     STRACE("setpriority(%d, %d, %d)", which, who, prio);
