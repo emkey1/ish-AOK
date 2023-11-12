@@ -275,11 +275,27 @@ int_t sys_sched_yield(void) {
 }
 
 void update_thread_name(void) {
-    char name[16]; // As long as Linux will let us make this
-    snprintf(name, sizeof(name), "-%d", current->pid);
-    size_t pid_width = strlen(name);
-    size_t name_width = snprintf(name, sizeof(name), "%s", current->comm);
-    sprintf(name + (name_width < sizeof(name) - 1 - pid_width ? name_width : sizeof(name) - 1 - pid_width), "-%d", current->pid);
+    char name[16]; // Maximum length for thread names in many systems, including Linux
+    int result;
+
+    // Ensure that the name buffer is always null-terminated
+    memset(name, 0, sizeof(name));
+
+    // Create the thread name with PID
+    //result = snprintf(name, sizeof(name) - 1, "%s-%d", current->comm, current->pid);
+    result = snprintf(name, sizeof(name) - 1, "%.7s-%d", current->comm, current->pid);
+    int fuck = current->pid;
+    char fuckyou[16];
+    memset(fuckyou, 0, sizeof(fuckyou));
+    strcpy(fuckyou, name);
+
+    // Check if the output was truncated
+    if (result >= sizeof(name)) {
+        // Handle truncation (e.g., by logging, adjusting the name format, etc.)
+        // For this example, we just log a warning
+        printk("WARNING: Thread name truncated in update_thread_name(%s).\n", name);
+    }
+
 #if __APPLE__
     pthread_setname_np(name);
 #else
