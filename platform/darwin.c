@@ -63,21 +63,27 @@ CFTimeInterval getSystemUptime(void) {
 }
 
 struct uptime_info get_uptime(void) {
-    uint64_t kern_boottime[2];
+    struct timeval kern_boottime;
     size_t size = sizeof(kern_boottime);
-    sysctlbyname("kern.boottime", &kern_boottime, &size, NULL, 0);
+    if (sysctlbyname("kern.boottime", &kern_boottime, &size, NULL, 0) != 0) {
+        printk("ERROR: in sysctlbyname(kern.boottime) call\n");
+    }
     struct timeval now;
-    gettimeofday(&now, NULL);
-    extern time_t boot_time;
+    if (gettimeofday(&now, NULL) != 0) {
+        printk("ERROR: in gettimeofday() call\n");
+    }
+    extern time_t boot_time;  // Consider passing this as an argument
 
     struct {
         uint32_t ldavg[3];
         long scale;
     } vm_loadavg;
     size = sizeof(vm_loadavg);
-    sysctlbyname("vm.loadavg", &vm_loadavg, &size, NULL, 0);
+    if (sysctlbyname("vm.loadavg", &vm_loadavg, &size, NULL, 0) != 0) {
+        printk("ERROR: in sysctlbyname(vm.loadavg) call\n");
+    }
 
-    // linux wants the scale to be 16 bits
+    // Adjust the scale of load averages
     for (int i = 0; i < 3; i++) {
         if (FSHIFT < 16)
             vm_loadavg.ldavg[i] <<= 16 - FSHIFT;
@@ -86,8 +92,7 @@ struct uptime_info get_uptime(void) {
     }
 
     struct uptime_info uptime = {
-        //.uptime_ticks = now.tv_sec - kern_boottime[0],
-        .uptime_ticks = (now.tv_sec - boot_time) * 100, // Note that busybox uptime doesn't like the multiplier.  -mke
+        .uptime_ticks = (now.tv_sec - boot_time) * 100, // Ensure this calculation is as intended
         .load_1m = vm_loadavg.ldavg[0],
         .load_5m = vm_loadavg.ldavg[1],
         .load_15m = vm_loadavg.ldavg[2],
