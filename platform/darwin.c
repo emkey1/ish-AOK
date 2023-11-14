@@ -88,7 +88,6 @@ struct uptime_info get_uptime(void) {
     struct uptime_info uptime = {
         //.uptime_ticks = now.tv_sec - kern_boottime[0],
         .uptime_ticks = (now.tv_sec - boot_time) * 100, // Note that busybox uptime doesn't like the multiplier.  -mke
-        //.uptime_ticks = getSystemUptime() * 100, // This works but shouldn't.  -mke
         .load_1m = vm_loadavg.ldavg[0],
         .load_5m = vm_loadavg.ldavg[1],
         .load_15m = vm_loadavg.ldavg[2],
@@ -99,10 +98,7 @@ struct uptime_info get_uptime(void) {
 int get_cpu_count(void) {
      int ncpu;
      size_t size = sizeof(int);
-     if((!doEnableMulticore))
-         ncpu = 1; // Return one when Multicore is disabled -mke
-     else
-         sysctlbyname("hw.ncpu", &ncpu, &size, NULL, 0);
+     sysctlbyname("hw.ncpu", &ncpu, &size, NULL, 0);
      return ncpu;
 }
 
@@ -119,6 +115,7 @@ int get_per_cpu_usage(struct cpu_usage** cpus_usage) {
     
     struct cpu_usage* cpus_load_data = (struct cpu_usage*)calloc(ncpu, sizeof(struct cpu_usage));
     if (!cpus_load_data) {
+        munmap(sys_load_data, vm_page_size);
         return _ENOMEM;
     }
     

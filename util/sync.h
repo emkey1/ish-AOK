@@ -53,7 +53,14 @@ typedef struct {
 extern lock_t atomic_l_lock; // Used to make all lock operations atomic, even read->write and right->read -mke
 
 static inline void lock_init(lock_t *lock, char lname[16]) {
-    pthread_mutex_init(&lock->m, NULL);
+    int ret = pthread_mutex_init(&lock->m, NULL);
+    if (ret != 0) {
+        // Handle the error according to your application's needs
+        printk("ERROR: Failed to initialize mutex: %s:(%s)\n", lname, strerror(ret));
+        // Depending on how critical this failure is, you might choose to exit, return, or take other actions.
+        return;
+    }
+    
     if(lname != NULL) {
         strncpy(lock->lname, lname, 16);
     } else {
