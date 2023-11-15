@@ -19,6 +19,11 @@ static void jit_resize_hash(struct jit *jit, size_t new_size);
 
 struct jit *jit_new(struct mmu *mmu) {
     struct jit *jit = calloc(1, sizeof(struct jit));
+    if (!jit) {
+        // Handle allocation failure
+        printk("ERROR: Failed to allocate memory for JIT\n");
+        return NULL;
+    }
     lock(&jit->lock, 0);
     jit->mmu = mmu;
     jit_resize_hash(jit, JIT_INITIAL_HASH_SIZE);
@@ -31,6 +36,8 @@ struct jit *jit_new(struct mmu *mmu) {
 }
 
 void jit_free(struct jit *jit) {
+    if (!jit) return;
+
     bool signal_pending = !!(current->pending & ~current->blocked);
     while((critical_region_count(current) > 2) || (locks_held_count(current)) || (current->process_info_being_read) || (signal_pending)) { // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
