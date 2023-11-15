@@ -410,9 +410,8 @@ void handle_interrupt(int interrupt) {
             });
             unlock(&pids_lock);
             break;
-            // Assuming INT_TIMER is another defined interrupt
         case INT_TIMER:
-            // Handling code for timer interrupt, if needed
+            printk("WARNING: Unimplimented Timer interrupt\n");
             break;
         default:
             printk("WARNING: %d(%s) unhandled interrupt %d\n", current->pid, current->comm, interrupt);
