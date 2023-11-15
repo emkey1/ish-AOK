@@ -379,7 +379,10 @@ void handle_illegal_instruction_interrupt(struct cpu_state *cpu) {
     deliver_signal(current, SIGILL_, info);
 }
 
-// Other helper functions for breakpoint, debug, etc. interrupts...
+void handle_timer_interrupt(struct cpu_state *cpu) {
+    // For now we just return.
+    return;
+}
 
 void handle_interrupt(int interrupt) {
     struct cpu_state *cpu = &current->cpu;
@@ -411,7 +414,7 @@ void handle_interrupt(int interrupt) {
             unlock(&pids_lock);
             break;
         case INT_TIMER:
-            printk("WARNING: Unimplimented Timer interrupt\n");
+            handle_timer_interrupt(cpu); // Just a stub for now
             break;
         default:
             printk("WARNING: %d(%s) unhandled interrupt %d\n", current->pid, current->comm, interrupt);
