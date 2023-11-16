@@ -1,9 +1,16 @@
 #ifndef TIME_H
 #define TIME_H
 #include "misc.h"
+#include <sys/poll.h>
 
-dword_t sys_clock_nanosleep_time64(int clock_id, int flags, const struct timespec *req, struct timespec *rem);
-dword_t sys_clock_gettime64(dword_t clock, struct timespec *tp);
+struct timespec64 {
+    int64_t tv_sec;  // seconds
+    long tv_nsec;    // nanoseconds
+};
+
+dword_t sys_ppoll_time64(struct pollfd *fds, nfds_t nfds, const struct timespec64 *timeout_ts64);
+dword_t sys_clock_nanosleep_time64(int clock_id, int flags, dword_t req_val, dword_t rem_val);
+dword_t sys_clock_gettime64(dword_t clock, addr_t tp);
 dword_t sys_time(addr_t time_out);
 dword_t sys_stime(addr_t time);
 #define CLOCK_REALTIME_ 0

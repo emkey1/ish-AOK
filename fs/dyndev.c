@@ -80,13 +80,31 @@ static int rtc_open(int major, int minor, struct fd *fd) {
     return dyn_open(DEV_BLOCK, major, minor, fd);
 }
 
-struct tm rtc_read(struct tm *timeinfo) {
-    time_t rawtime;
-    //struct tm timeinfo;
+struct rtc_time {
+    int tm_sec;   /* seconds */
+    int tm_min;   /* minutes */
+    int tm_hour;  /* hours */
+    int tm_mday;  /* day of the month */
+    int tm_mon;   /* month */
+    int tm_year;  /* year */
+};
 
-    time ( &rawtime );
-    timeinfo = localtime ( &rawtime );
-    return *timeinfo;
+struct rtc_time rtc_read(struct tm *timeinfo) {
+    time_t now;
+    struct tm *tm_now;
+    struct rtc_time emulatedRTC;
+
+    time(&now);
+    tm_now = localtime(&now);
+
+    emulatedRTC.tm_sec = tm_now->tm_sec;
+    emulatedRTC.tm_min = tm_now->tm_min;
+    emulatedRTC.tm_hour = tm_now->tm_hour;
+    emulatedRTC.tm_mday = tm_now->tm_mday;
+    emulatedRTC.tm_mon = tm_now->tm_mon;  // Note: Month in struct tm is 0 to 11
+    emulatedRTC.tm_year = tm_now->tm_year + 1900; // tm_year is years since 1900
+
+    return emulatedRTC;
 }
 
 struct dev_ops dyn_dev_char = {

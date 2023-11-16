@@ -12,6 +12,7 @@
 #include "kernel/time.h"
 #include "kernel/resource_locking.h"
 #include "fs/poll.h"
+#include <sys/poll.h>
 
 static int clockid_to_real(uint_t clock, clockid_t *real) {
     switch (clock) {
@@ -47,12 +48,44 @@ static struct itimerspec_ timer_spec_from_real(struct timer_spec spec) {
 #include <time.h>
 #include <sys/syscall.h>
 
-dword_t sys_clock_nanosleep_time64(int clock_id, int flags, const struct timespec *req, struct timespec *rem) {
-    return nanosleep(req, rem);
+dword_t sys_clock_nanosleep_time64(int clock_id, int flags, dword_t req_val, dword_t rem_val) {
+    struct timespec req;
+    struct timespec rem;
+
+    // Cast the received values to timespec structures
+    memcpy(&req, &req_val, sizeof(req));
+    memcpy(&rem, &rem_val, sizeof(rem));
+
+    // Call nanosleep with pointers to the local timespec structures
+    dword_t result = nanosleep(&req, &rem);
+
+    return result;
 }
 
-dword_t sys_clock_gettime64(dword_t clock, struct timespec *tp) {
-    return clock_gettime(clock, tp);
+dword_t sys_ppoll_time64(struct pollfd *fds, nfds_t nfds, const struct timespec64 *timeout_ts64) {
+    // Convert timespec64 to timespec for nanosleep
+    struct timespec timeout;
+    if (timeout_ts64) {
+        timeout.tv_sec = (time_t)timeout_ts64->tv_sec;
+        timeout.tv_nsec = timeout_ts64->tv_nsec;
+    }
+    
+    return 0;
+
+    // Use poll for file descriptor monitoring
+    dword_t timeout_ms = (timeout_ts64) ? (timeout.tv_sec * 1000 + timeout.tv_nsec / 1000000) : -1;
+    dword_t result = poll(fds, nfds, timeout_ms);
+
+    if (result == -1) {
+        return -errno;
+    }
+
+    // If poll times out, emulate the behavior of ppoll with nanosleep
+    if (result == 0 && timeout_ts64) {
+        nanosleep(&timeout, NULL);
+    }
+
+    return result;
 }
 
 dword_t sys_time(addr_t time_out) {
@@ -92,6 +125,37 @@ dword_t sys_clock_gettime(dword_t clock, addr_t tp) {
     STRACE(" {%lds %ldns}", t.sec, t.nsec);
     return 0;
 }
+
+dword_t sys_clock_gettime64(dword_t clock, addr_t tp) {
+    STRACE("clock_gettime64(%d, 0x%x)", clock, tp);
+
+    struct timespec ts;
+    if (clock == CLOCK_PROCESS_CPUTIME_ID_) {
+        // FIXME this is thread usage, not process usage
+        struct rusage_ rusage = rusage_get_current();
+        ts.tv_sec = rusage.utime.sec;
+        ts.tv_nsec = rusage.utime.usec * 1000;
+    } else {
+        clockid_t clock_id;
+        if (clockid_to_real(clock, &clock_id)) return _EINVAL;
+        int err = clock_gettime(clock_id, &ts);
+        if (err < 0)
+            return errno_map();
+    }
+    struct timespec64_ {
+        int64_t sec;  // Use 64-bit type for seconds
+        int64_t nsec; // Use 64-bit type for nanoseconds, assuming timespec64_ is defined
+    } t;
+    
+    t.sec = ts.tv_sec;  // No need to cast to 64-bit type as tv_sec is already time_t which is 64-bit on most systems
+    t.nsec = ts.tv_nsec;
+    
+    if (user_put(tp, t))
+        return _EFAULT;
+    STRACE(" {%ld s %ld ns}", (long)t.sec, (long)t.nsec);
+    return 0;
+}
+
 
 dword_t sys_clock_getres(dword_t clock, addr_t res_addr) {
     STRACE("clock_getres(%d, %#x)", clock, res_addr);

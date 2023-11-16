@@ -42,7 +42,7 @@ static inline dev_t_ dev_fake_from_real(dev_t dev) {
 struct dev_ops {
     int (*open)(int major, int minor, struct fd *fd);
     struct fd_ops fd;
-    struct tm (*read)(struct tm *);
+    struct rtc_time (*read)(struct tm *);
 };
 
 extern struct dev_ops *block_devs[];
