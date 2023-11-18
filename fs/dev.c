@@ -15,7 +15,7 @@ struct dev_ops *char_devs[256] = {
     [TTY_ALTERNATE_MAJOR] = &tty_dev,
     [TTY_PSEUDO_MASTER_MAJOR] = &tty_dev,
     [TTY_PSEUDO_SLAVE_MAJOR] = &tty_dev,
-  
+ //   [DEV_RTC_MAJOR] = &rtc_dev_char,
     [DYN_DEV_MAJOR] = &dyn_dev_char,
 };
 

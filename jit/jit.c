@@ -253,9 +253,9 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                     if (last_block->jump_ip[i] != NULL &&
                             (*last_block->jump_ip[i] & 0xffffffff) == block->addr) {
                         *last_block->jump_ip[i] = (unsigned long) block->code;
-			modify_critical_region_counter(current, 1, __FILE__, __LINE__);
+			//modify_critical_region_counter(current, 1, __FILE__, __LINE__);
                         list_add(&block->jumps_from[i], &last_block->jumps_from_links[i]);
-			modify_critical_region_counter(current, -1, __FILE__, __LINE__);
+			//modify_critical_region_counter(current, -1, __FILE__, __LINE__);
                     }
                 }
             }

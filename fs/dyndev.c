@@ -56,7 +56,7 @@ static intptr_t dyn_open(int type, int major, int minor, struct fd *fd) {
     // it's safe to access devs without locking (read-only)
     
     if(major == DEV_RTC_MAJOR) {
-        return rtc_dev.open(major, minor, fd); // This should be dead code.  Leaving for now to test.  -mke
+        //return rtc_dev_char(major, minor, fd);
     } else {
         struct dev_ops *ops = dyn_info_char.devs[minor];
         if (ops == NULL) {
@@ -69,6 +69,8 @@ static intptr_t dyn_open(int type, int major, int minor, struct fd *fd) {
             return 0;
         return ops->open(major, minor, fd);
     }
+    
+    return 0;
 }
 
 static intptr_t dyn_open_char(int major, int minor, struct fd *fd) {
@@ -89,7 +91,7 @@ struct rtc_time {
     int tm_year;  /* year */
 };
 
-ssize_t rtc_read(void *buf, size_t count) {
+intptr_t rtc_dev(void *buf, size_t count) {
     if (count < sizeof(struct rtc_time)) {
         errno = EFAULT;
         return -1;
@@ -117,7 +119,6 @@ struct dev_ops dyn_dev_char = {
     .open = dyn_open_char,
 };
 
-struct dev_rtc rtc_dev = {
-    .open = rtc_open,
-    .read = rtc_read,
+struct dev_ops rtc_dev_char = {
+    .open = rtc_dev,
 };
