@@ -69,6 +69,21 @@ static void ios_handle_exit(struct task *task, int code) {
     });
 }
 
+const char* getCurrentTimestamp(void);
+
+const char* getCurrentTimestamp(void) {
+    NSDate *currentDate = [NSDate date];
+    NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
+    [dateFormatter setDateFormat:@"yyyy-MM-dd_HH:mm:ss"];
+    NSString *timestamp = [dateFormatter stringFromDate:currentDate];
+
+    // Prepending "/tmp/" to the timestamp
+    NSString *prefixedTimestamp = [NSString stringWithFormat:@"/tmp/%@", timestamp];
+
+    // Convert to const char* and return
+    return [prefixedTimestamp UTF8String];
+}
+
 // Put the abort message in the thread name so it gets included in the crash dump
 static void ios_handle_die(const char *msg) {
     char name[17];
@@ -89,6 +104,7 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
 
 - (intptr_t)boot {
 #if !ISH_LINUX
+    
     NSURL *root = [Roots.instance rootUrl:Roots.instance.defaultRoot];
 
     intptr_t err = mount_root(&fakefs, [root URLByAppendingPathComponent:@"data"].fileSystemRepresentation);
@@ -130,6 +146,14 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
     
     // Permissions on / have been broken for a while, let's fix them
     generic_setattrat(AT_PWD, "/", (struct attr) {.type = attr_mode, .mode = 0755}, false);
+    
+    // Create a unique directory in /tmp and link to /var/run
+    const char *timestamp = getCurrentTimestamp();
+    generic_mkdirat(AT_PWD, timestamp, 0755);
+    generic_unlinkat(AT_PWD, "/var/run");
+    generic_symlinkat(timestamp, AT_PWD, "/var/run");
+    //generic_unlinkat(<#struct fd *at#>, <#const char *path#>)
+    //generic_mkdirat(<#struct fd *at#>, <#const char *path#>, <#mode_t_ mode#>)
     
     // Register clipboard device driver and create device node for it
     err = dyn_dev_register(&clipboard_dev, DEV_CHAR, DYN_DEV_MAJOR, DEV_CLIPBOARD_MINOR);
