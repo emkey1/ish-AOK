@@ -14,4 +14,4 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-char* printBatteryStatus(void);
+char* printBatteryStatus(int type);
