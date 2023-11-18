@@ -10,6 +10,7 @@
 #import "CurrentRoot.h"
 #import "AppGroup.h"
 #import "UserPreferences.h"
+#import "iOSFS.h"
 #import "UIApplication+OpenURL.h"
 #import "NSObject+SaneKVO.h"
 
@@ -31,6 +32,7 @@
 @property (weak, nonatomic) IBOutlet UILabel *upgradeApkLabel;
 @property (weak, nonatomic) IBOutlet UIView *upgradeApkBadge;
 @property (weak, nonatomic) IBOutlet UITableViewCell *exportContainerCell;
+@property (weak, nonatomic) IBOutlet UITableViewCell *resetMountsCell;
 
 @property (weak, nonatomic) IBOutlet UILabel *versionLabel;
 
@@ -113,6 +115,8 @@
         [NSFileManager.defaultManager copyItemAtURL:[container URLByAppendingPathComponent:@"roots"]
                                               toURL:[documents URLByAppendingPathComponent:@"roots copy"]
                                               error:nil];
+    } else if (cell == self.resetMountsCell) {
+        iosfs_clear_all_bookmarks();
     }
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
 }

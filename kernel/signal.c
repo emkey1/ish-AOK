@@ -153,14 +153,14 @@ int send_group_signal(dword_t pgid, int sig, struct siginfo_ info) {
     complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
     struct pid *pid = pid_get(pgid);
     if (pid == NULL) {
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
         return _ESRCH;
     }
     struct tgroup *tgroup;
     list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
         send_signal(tgroup->leader, sig, info);
     }
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
     return 0;
 }
 
@@ -343,7 +343,7 @@ void signal_delivery_stop(int sig, struct siginfo_ *info) {
     lock(&current->sighand->lock, 0);
 }
 
-void receive_signals() {  // Should this function have a check for critical_region_count? -mke
+void receive_signals(void) {  // Should this function have a check for critical_region_count? -mke
     //nanosleep(&lock_pause, NULL);
     lock(&current->group->lock, 0);
     bool was_stopped = current->group->stopped;
@@ -397,7 +397,7 @@ void receive_signals() {  // Should this function have a check for critical_regi
             notify(&current->parent->group->child_exit);
             // TODO add siginfo
             send_signal(current->parent, current->group->leader->exit_signal, SIGINFO_NIL);
-            unlock_pids(&pids_lock);
+            unlock(&pids_lock);
         }
     }
 }
@@ -419,7 +419,7 @@ static void restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cp
     cpu->eflags = (context->flags & USE_FLAGS) | (cpu->eflags & ~USE_FLAGS);
 }
 
-dword_t sys_rt_sigreturn() {
+dword_t sys_rt_sigreturn(void) {
     struct cpu_state *cpu = &current->cpu;
     struct rt_sigframe_ frame;
     // esp points past the first field of the frame
@@ -441,7 +441,7 @@ dword_t sys_rt_sigreturn() {
     return cpu->eax;
 }
 
-dword_t sys_sigreturn() {
+dword_t sys_sigreturn(void) {
     struct cpu_state *cpu = &current->cpu;
     struct sigframe_ frame;
     // esp points past the first two fields of the frame
@@ -458,7 +458,7 @@ dword_t sys_sigreturn() {
     return cpu->eax;
 }
 
-struct sighand *sighand_new() {
+struct sighand *sighand_new(void) {
     struct sighand *sighand = malloc(sizeof(struct sighand));
     if (sighand == NULL)
         return NULL;
@@ -560,7 +560,7 @@ dword_t sys_rt_sigprocmask(dword_t how, addr_t set_addr, addr_t oldset_addr, dwo
     if (size != sizeof(sigset_t_))
         return _EINVAL;
 
-    sigset_t_ set;
+    sigset_t_ set = 0;
     if (set_addr != 0)
         if (user_get(set_addr, set))
             return _EFAULT;
@@ -661,7 +661,7 @@ int_t sys_rt_sigsuspend(addr_t mask_addr, uint_t size) {
     return _EINTR;
 }
 
-int_t sys_pause() {
+int_t sys_pause(void) {
     lock(&current->sighand->lock, 0);
     TASK_MAY_BLOCK {
         while (wait_for(&current->pause, &current->sighand->lock, NULL) != _EINTR)
@@ -690,7 +690,7 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
     lock(&current->sighand->lock, 0);
     assert(current->waiting == 0);
     current->waiting = set;
-    int err;
+    int err = 0;
     TASK_MAY_BLOCK {
         do {
             err = wait_for(&current->pause, &current->sighand->lock, timeout_addr == 0 ? NULL : &timeout);
@@ -712,6 +712,7 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
             break;
         }
     }
+    unlock(&current->sighand->lock);
     if (!found)
         return _EINTR;
     struct siginfo_ info = sigqueue->info;
@@ -719,7 +720,6 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
     if (info_addr != 0)
         if (user_put(info_addr, info))
             return _EFAULT;
-    unlock(&current->sighand->lock);
     STRACE("done sigtimedwait = %d\n", info.sig);
     return info.sig;
 }
@@ -749,7 +749,7 @@ static int kill_task(struct task *task, dword_t sig) {
 static int kill_group(pid_t_ pgid, dword_t sig) {
     struct pid *pid = pid_get(pgid);
     if (pid == NULL) {
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
         return _ESRCH;
     }
     struct tgroup *tgroup;
@@ -796,20 +796,20 @@ static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid) {
     } else {
         struct task *task = pid_get_task(pid);
         if (task == NULL) {
-            unlock_pids(&pids_lock);
+            unlock(&pids_lock);
             return _ESRCH;
         }
 
         // If tgid is nonzero, it must be correct
         if (tgid != 0 && task->tgid != tgid) {
-            unlock_pids(&pids_lock);
+            unlock(&pids_lock);
             return _ESRCH;
         }
 
         err = kill_task(task, sig);
     }
 
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
     return err;
 }
 

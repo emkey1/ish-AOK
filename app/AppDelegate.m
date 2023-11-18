@@ -56,7 +56,7 @@ static void ios_handle_exit(struct task *task, int code) {
     // pid should be saved now since task would be freed
     pid_t pid = task->pid;
  //   if(pids_lock.pid == pid)
-  //      unlock_pids(&pids_lock);
+  //      unlock(&pids_lock);
 //    while((critical_region_count(task)) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
 //        nanosleep(&lock_pause, NULL);
 //    }
@@ -82,16 +82,16 @@ void ReportPanic(const char *message) {
 }
 #endif
 
-static int bootError;
+static intptr_t bootError;
 static NSString *const kSkipStartupMessage = @"Skip Startup Message";
 
 @implementation AppDelegate
 
-- (int)boot {
+- (intptr_t)boot {
 #if !ISH_LINUX
     NSURL *root = [Roots.instance rootUrl:Roots.instance.defaultRoot];
 
-    int err = mount_root(&fakefs, [root URLByAppendingPathComponent:@"data"].fileSystemRepresentation);
+    intptr_t err = mount_root(&fakefs, [root URLByAppendingPathComponent:@"data"].fileSystemRepresentation);
     if (err < 0)
         return err;
 
@@ -116,6 +116,7 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
     generic_mknodat(AT_PWD, "/dev/tty7", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 7));
 
     generic_mknodat(AT_PWD, "/dev/tty", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR));
+    //generic_mknodat(AT_PWD, "/dev/console", S_IFCHR|0222, dev_make(136, 0));
     generic_mknodat(AT_PWD, "/dev/console", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_CONSOLE_MINOR));
     generic_mknodat(AT_PWD, "/dev/ptmx", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR));
 
@@ -141,8 +142,9 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
     if (err != 0)
         return err;
     generic_mknodat(AT_PWD, "/dev/location", S_IFCHR|0666, dev_make(DYN_DEV_MAJOR, DEV_LOCATION_MINOR));
-    //generic_mknodat(AT_PWD, "/dev/rtc0", S_IFCHR|0666, dev_make(DEV_RTC_MAJOR, DEV_RTC_MINOR));
-    //generic_mknodat(AT_PWD, "/dev/rtc", S_IFCHR|0666, dev_make(DEV_RTC_MAJOR, DEV_RTC_MINOR)); // Technically this should be a link to /dev/rtc0, but I don't want to wrestle with that right now. -mke
+    // The following does nothing for now.  Placeholder
+    generic_mknodat(AT_PWD, "/dev/rtc0", S_IFCHR|0666, dev_make(DEV_RTC_MAJOR, DEV_RTC_MINOR));
+    generic_symlinkat("/dev/rtc0", AT_PWD, "/dev/rtc");
 
     do_mount(&procfs, "proc", "/proc", "", 0);
     do_mount(&devptsfs, "devpts", "/dev/pts", "", 0);
@@ -236,7 +238,7 @@ void SyncHostname(void) {
 #endif
 }
 
-+ (int)bootError {
++ (intptr_t)bootError {
     return bootError;
 }
 
@@ -290,7 +292,6 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
     extern const char *uname_hostname_override;
     extern bool doEnableMulticore;
     extern bool doEnableExtraLocking;
-    extern unsigned doLockSleepNanoseconds;
     extern pthread_mutex_t multicore_lock;
     extern pthread_mutex_t extra_lock;
     NSString *hostnameOverride = [NSUserDefaults.standardUserDefaults stringForKey:@"hostnameOverride"];
@@ -321,13 +322,6 @@ void NetworkReachabilityCallback(SCNetworkReachabilityRef target, SCNetworkReach
             pthread_mutex_unlock(&extra_lock); // Be sure not to leave around orphan lock
         });
     }];
- //   [UserPreferences.shared observe:@[@"shouldLockSleepNanoseconds"] options:NSKeyValueObservingOptionInitial
-  //                            owner:self usingBlock:^(typeof(self) self) {
-   //     dispatch_async(dispatch_get_main_queue(), ^{
-  //          doLockSleepNanoseconds = UserPreferences.shared.shouldLockSleepNanoseconds;
-  //          pthread_mutex_unlock(&extra_lock); // Be sure not to leave around orphan lock
-  //      });
-  //  }];
     
         // This code is IPv4 and IPv6 aware: see https://developer.apple.com/library/archive/samplecode/Reachability/Listings/ReadMe_md.html.
     struct sockaddr_in address = {

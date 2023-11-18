@@ -127,12 +127,12 @@ dword_t sys_membarrier(dword_t cmd, dword_t flags, dword_t cpuid) {
     STRACE("membarrier(0x%x, 0x%x, 0x%x)", cmd, flags, cpuid);
     switch (cmd) {
         case MEMBARRIER_CMD_QUERY:
-            //return MEMBARRIER_SUPPORTS_ALL;
-            errno = ENOSYS;
-            return -1;
+            return MEMBARRIER_SUPPORTS_ALL;
+            //errno = ENOSYS;
+            //return -1;
         default:
-            atomic_thread_fence(__ATOMIC_SEQ_CST);
-            __asm__ __volatile__("" : : : "memory");
+	 __atomic_thread_fence(__ATOMIC_SEQ_CST);
+            // __asm__ __volatile__("" : : : "memory");
     }
     return 0;
 }

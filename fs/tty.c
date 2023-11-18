@@ -80,6 +80,14 @@ struct tty *tty_get(struct tty_driver *driver, int type, int num) {
     return tty;
 }
 
+static struct tty *get_slave_side_tty(struct tty *tty) {
+  if (tty->type == TTY_PSEUDO_MASTER_MAJOR) {
+      return tty->pty.other;
+  } else {
+      return tty;
+  }
+}
+
 static void tty_poll_wakeup(struct tty *tty, int events) {
     unlock(&tty->lock);
     struct fd *fd;
@@ -147,13 +155,13 @@ int tty_open(struct tty *tty, struct fd *fd) {
         if (tty->session == 0 && current->group->sid == current->pid)
             tty_set_controlling(current->group, tty);
         unlock(&tty->lock);
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
     }
 
     return 0;
 }
 
-static int tty_device_open(int major, int minor, struct fd *fd) {
+static intptr_t tty_device_open(int major, int minor, struct fd *fd) {
     struct tty *tty;
     if (major == TTY_ALTERNATE_MAJOR) {
         if (minor == DEV_TTY_MINOR) {
@@ -289,7 +297,7 @@ ssize_t tty_input(struct tty *tty, const char *input, size_t size, bool blocking
                 // FIXME ECHOE and ECHOK are supposed to enable these
                 // ECHOKE enables erasing the line instead of echoing the kill char and outputting a newline
                 echo = lflags & ECHOK_;
-                int count = tty->bufsize;
+                ssize_t count = tty->bufsize;
                 if (ch == cc[VERASE_] && tty->bufsize > 0) {
                     echo = lflags & ECHOE_;
                     count = 1;
@@ -443,12 +451,12 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
     complex_lockt(&pids_lock, 1, __FILE__, __LINE__); // MKEMKE
     lock(&tty->lock, 0);
     if (tty->hung_up) {
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
         goto error;
     }
 
     pid_t_ current_pgid = current->group->pgid;
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
     err = tty_signal_if_background(tty, current_pgid, SIGTTIN_);
     if (err < 0)
         goto error;
@@ -605,7 +613,7 @@ static ssize_t tty_ioctl_size(int cmd) {
             return sizeof(struct termios_);
         case TIOCGWINSZ_: case TIOCSWINSZ_:
             return sizeof(struct winsize_);
-        case TIOCGPRGP_: case TIOCSPGRP_:
+        case TIOCGPGRP_: case TIOCSPGRP_:
         case TIOCSPTLCK_: case TIOCGPTN_:
         case TIOCPKT_: case TIOCGPKT_:
         case FIONREAD_:
@@ -653,7 +661,27 @@ static int tiocsctty(struct tty *tty, int force) {
 
     tty_set_controlling(current->group, tty);
 out:
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
+    return err;
+}
+
+static int tiocgpgrp(struct tty *tty, pid_t_ *fg_group) {
+    int err = 0;
+    struct tty *slave = get_slave_side_tty(tty);
+    if (slave != tty) {
+        lock(&slave->lock,0);
+    }
+
+    if (tty == slave && (!tty_is_current(slave) || slave->fg_group == 0)) {
+        err = _ENOTTY;
+        goto error_no_ctrl_tty;
+    }
+    *fg_group = slave->fg_group;
+    STRACE("tty group = %d\n", slave->fg_group);
+
+error_no_ctrl_tty:
+    if (slave != tty)
+        unlock(&slave->lock);
     return err;
 }
 
@@ -730,20 +758,17 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
             err = tiocsctty(tty, (uintptr_t) arg);
             break;
 
-        case TIOCGPRGP_:
-            if (!tty_is_current(tty) || tty->fg_group == 0) {
-                err = _ENOTTY;
-                break;
-            }
-            STRACE("tty group = %d\n", tty->fg_group);
-            *(dword_t *) arg = tty->fg_group; break;
+        case TIOCGPGRP_:
+            err = tiocgpgrp(tty, (pid_t_ *) arg);
+            break;
+
         case TIOCSPGRP_:
             // see "aaaaaaaa" comment above
             unlock(&tty->lock);
             complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
             lock(&tty->lock, 0);
             pid_t_ sid = current->group->sid;
-            unlock_pids(&pids_lock);
+            unlock(&pids_lock);
             if (!tty_is_current(tty) || sid != tty->session) {
                 err = _ENOTTY;
                 break;

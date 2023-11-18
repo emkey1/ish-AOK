@@ -84,12 +84,9 @@ int user_write(addr_t addr, const void *buf, size_t count) {
 }
 
 int user_read_string(addr_t addr, char *buf, size_t max) {
-    ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
     if (addr == 0) {
-        ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
         return 1;
     }
-    //modify_critical_region_counter(current, 1, __FILE__, __LINE__);
     read_lock(&current->mem->lock, __FILE__, __LINE__);
     size_t i = 0;
     while (i < max) {
@@ -102,7 +99,6 @@ int user_read_string(addr_t addr, char *buf, size_t max) {
         i++;
     }
     read_unlock(&current->mem->lock, __FILE__, __LINE__);
-    //modify_critical_region_counter(current, -1, __FILE__, __LINE__);
     return 0;
 }
 

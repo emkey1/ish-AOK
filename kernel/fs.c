@@ -808,6 +808,21 @@ static dword_t sys_utime_common(fd_t at_f, addr_t path_addr, struct timespec ati
     return generic_utime(at, path_addr != 0 ? path : ".", atime, mtime, follow_links);
 }
 
+dword_t sys_utimensat64(fd_t at_f, addr_t path_addr, addr_t times_addr, dword_t flags) {
+    struct timespec atime;
+    struct timespec mtime;
+    if (times_addr == 0) {
+        atime = mtime = timespec_now(CLOCK_REALTIME);
+    } else {
+        struct timespec_ times[2];
+        if (user_get(times_addr, times))
+            return _EFAULT;
+        atime = convert_timespec(times[0]);
+        mtime = convert_timespec(times[1]);
+    }
+    return sys_utime_common(at_f, path_addr, atime, mtime, flags);
+}
+
 dword_t sys_utimensat(fd_t at_f, addr_t path_addr, addr_t times_addr, dword_t flags) {
     struct timespec atime;
     struct timespec mtime;

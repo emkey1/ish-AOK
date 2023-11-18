@@ -137,14 +137,17 @@ dword_t sys_prlimit64(pid_t_ pid, dword_t resource, addr_t new_limit_addr, addr_
     return 0;
 }
 
-struct rusage_ rusage_get_current() {
-    // only the time fields are currently implemented
+struct rusage_ rusage_get_current(void) {
     struct rusage_ rusage;
-    ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
+    memset(&rusage, 0, sizeof(rusage));
+
 #if __linux__
     struct rusage usage;
-    int err = getrusage(RUSAGE_THREAD, &usage);
-    assert(err == 0);
+    if (getrusage(RUSAGE_THREAD, &usage) != 0) {
+        // Handle error appropriately, e.g., log an error or set default values
+        perror("getrusage failed");
+        return rusage;
+    }
     rusage.utime.sec = usage.ru_utime.tv_sec;
     rusage.utime.usec = usage.ru_utime.tv_usec;
     rusage.stime.sec = usage.ru_stime.tv_sec;
@@ -152,15 +155,19 @@ struct rusage_ rusage_get_current() {
 #elif __APPLE__
     thread_basic_info_data_t info;
     mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
-    thread_info(mach_thread_self(), THREAD_BASIC_INFO, (thread_info_t) &info, &count);
+    if (thread_info(mach_thread_self(), THREAD_BASIC_INFO, (thread_info_t) &info, &count) != KERN_SUCCESS) {
+        // Handle error appropriately
+        printk("ERROR: thread_info failed (rusage_get_current()\n");
+        return rusage;
+    }
     rusage.utime.sec = info.user_time.seconds;
     rusage.utime.usec = info.user_time.microseconds;
     rusage.stime.sec = info.system_time.seconds;
     rusage.stime.usec = info.system_time.microseconds;
 #endif
-    ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
     return rusage;
 }
+
 
 static void timeval_add(struct timeval_ *dst, struct timeval_ *src) {
     dst->sec += src->sec;
@@ -197,34 +204,49 @@ dword_t sys_getrusage(dword_t who, addr_t rusage_addr) {
 
 int_t sys_sched_getaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) {
     STRACE("sched_getaffinity(%d, %d, %#x)", pid, cpusetsize, cpuset_addr);
+
+    // Handle pid check separately for clarity
     if (pid != 0) {
         complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
         struct task *task = pid_get_task(pid);
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
         if (task == NULL)
             return _ESRCH;
     }
 
-    unsigned cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    char cpuset[cpus / 8 + 1];
-    if (cpusetsize < sizeof(cpuset))
+    // Get the number of online processors
+    long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    // Calculate the size of the cpuset
+    long cpusetSize = cpus / 8 + 1;
+    if (cpusetsize < cpusetSize)
         return _EINVAL;
-    memset(cpuset, 0, sizeof(cpuset));
+
+    char cpuset[cpusetSize];
+    memset(cpuset, 0, cpusetSize);
+
+    // Set bits for each CPU
     for (unsigned i = 0; i < cpus; i++)
         bit_set(i, cpuset);
-    if (user_write(cpuset_addr, cpuset, sizeof(cpuset)))
+
+    // Write to user space, handle error separately
+    if (user_write(cpuset_addr, cpuset, cpusetSize))
         return _EFAULT;
-    // return the number of bytes written
-    return sizeof(cpuset);
+
+    // Return the number of bytes written
+    return (int_t)cpusetSize;
 }
+
 int_t sys_sched_setaffinity(pid_t_ UNUSED(pid), dword_t UNUSED(cpusetsize), addr_t UNUSED(cpuset_addr)) {
     // meh
     return 0;
 }
 
 int_t sys_getpriority(int_t which, pid_t_ who) {
+    // Since changing process priority is not supported in iOS,
+    // this function can return a default priority value.
+    // The default nice value in Linux ranges from -20 (highest priority) to 19 (lowest priority).
     STRACE("getpriority(%d, %d)", which, who);
-    return 20;
+    return 0;
 }
 int_t sys_setpriority(int_t which, pid_t_ who, int_t prio) {
     STRACE("setpriority(%d, %d, %d)", which, who, prio);

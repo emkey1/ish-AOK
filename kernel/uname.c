@@ -15,7 +15,9 @@ char *uname_hostname_override = NULL;
 
 void do_uname(struct uname *uts) {
     struct utsname real_uname;
-    uname(&real_uname);
+    if (uname(&real_uname) < 0) {
+        printk("ERROR: uname failed\n");
+    }
     char *hostname = real_uname.nodename;
     if (uname_hostname_override)
         hostname = uname_hostname_override;
@@ -23,17 +25,27 @@ void do_uname(struct uname *uts) {
     // Get current date and format it in a sane way.  -mke
     char build_date[100];
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    strftime(build_date, sizeof(build_date)-1, "%Y-%m-%d %H:%M", t);
+    if (now == (time_t)-1) {
+        printk("ERROR: time failed\n");
+    }
 
-    static const struct uname u = {
-        .arch = "i686",
-        .domain = "(none)",
-        .release = "4.20.69-ish_aok",
-        .system = "Linux"
-    };
-    *uts = u; // Implicit memcpy
-    strcpy(uts->hostname, hostname);
+    struct tm *t = localtime(&now);
+    if (t == NULL) {
+        printk("ERROR: localtime failed\n");
+    }
+
+    if (strftime(build_date, sizeof(build_date), "%Y-%m-%d %H:%M", t) == 0) {
+        printk("ERROR: strftime failed\n");
+    }
+
+    const char *uname_version = "iSH-AOK"; // Version should be defined or externally managed
+
+    // Fill the uname structure
+    strncpy(uts->arch, "i686", sizeof(uts->arch));
+    strncpy(uts->domain, "(none)", sizeof(uts->domain));
+    strncpy(uts->release, "4.20.69-ish_aok", sizeof(uts->release));
+    strncpy(uts->system, "Linux", sizeof(uts->system));
+    snprintf(uts->hostname, sizeof(uts->hostname), "%s", hostname);
     snprintf(uts->version, sizeof(uts->version), "%s %s", uname_version, build_date);
 }
 
@@ -46,21 +58,32 @@ dword_t sys_uname(addr_t uts_addr) {
 }
 
 dword_t sys_sethostname(addr_t hostname_addr, dword_t hostname_len) {
-    if(current->uid != 0) {
+    if (current->uid != 0) {
         return _EPERM;
-    } else {
-        free(uname_hostname_override);
-        uname_hostname_override = malloc(hostname_len + 1);
-        int result = 0;
-        // user_read(addr, &(var), sizeof(var))
-        result = user_read(hostname_addr, uname_hostname_override, hostname_len + 1);
-            
+    }
+    
+    char *new_hostname = malloc(hostname_len + 1);
+    if (new_hostname == NULL) {
+        // Handle allocation failure
+        return _ENOMEM;
+    }
+    
+    int result = user_read(hostname_addr, new_hostname, hostname_len);
+    if (result != 0) {
+        free(new_hostname);
+        // Handle read failure
         return result;
     }
+    new_hostname[hostname_len] = '\0'; // Null-terminate the string
+
+    free(uname_hostname_override);
+    uname_hostname_override = new_hostname;
+    
+    return 0;
 }
 
 #if __APPLE__
-static uint64_t get_total_ram() {
+static uint64_t get_total_ram(void) {
     uint64_t total_ram;
     sysctl((int []) {CTL_DEBUG, HW_PHYSMEM}, 2, &total_ram, NULL, NULL, 0);
     return total_ram;

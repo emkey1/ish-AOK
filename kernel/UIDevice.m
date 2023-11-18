@@ -16,23 +16,34 @@ char* printUIDevice(void);
 
 @implementation MyDeviceUtil
 
+
 + (NSString*) getAllDeviceInfo {
     UIDevice *device = [UIDevice currentDevice];
+    NSString *text = @"";
+    switch (device.orientation) {
+        case UIDeviceOrientationPortrait:
+            text = @"Portrait";
+            break;
+        case UIDeviceOrientationPortraitUpsideDown:
+            text = @"PortraitUpsideDown";
+            break;
+        case UIDeviceOrientationLandscapeLeft:
+            text = @"LandscapeLeft";
+            break;
+        case UIDeviceOrientationLandscapeRight:
+            text = @"LandscapeRight";
+            break;
+        default:
+            text = @"Unknown";
+            break;
+    }
     NSMutableString *result = [[NSMutableString alloc] init];
     
     [result appendFormat:@"Model: %@\n", device.name];
-//    [result appendFormat:@"Model: %@\n", device.model];
-//    [result appendFormat:@"Localized Model: %@\n", device.localizedModel];
     [result appendFormat:@"OS Name: %@\n", device.systemName];
     [result appendFormat:@"OS Version: %@\n", device.systemVersion];
-//    [result appendFormat:@"Identifier For Vendor: %@\n", device.identifierForVendor.UUIDString];
-//    [result appendFormat:@"Multitasking Supported: %@\n", device.isMultitaskingSupported ? @"YES" : @"NO"];
-//    [result appendFormat:@"User Interface Idiom: %ld\n", (long)device.userInterfaceIdiom];
-//    [result appendFormat:@"Battery Monitoring Enabled: %@\n", device.isBatteryMonitoringEnabled ? @"YES" : @"NO"];
-//    [result appendFormat:@"Battery State: %ld\n", (long)device.batteryState];
-//    [result appendFormat:@"Battery Level: %f\n", device.batteryLevel];
-//    [result appendFormat:@"Proximity Monitoring Enabled: %@\n", device.isProximityMonitoringEnabled ? @"YES" : @"NO"];
-//    [result appendFormat:@"Proximity State: %@\n", device.proximityState ? @"YES" : @"NO"];
+    [result appendFormat:@"Device Orientation: %@\n", text];
+    [result appendFormat:@"Battery Monitoring Enabled: %@\n", device.isBatteryMonitoringEnabled ? @"YES" : @"NO"];
     
     return result;
 }

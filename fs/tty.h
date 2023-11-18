@@ -66,7 +66,7 @@ struct termios_ {
 #define TCSETSF_ 0x5404
 #define TCFLSH_ 0x540b
 #define TIOCSCTTY_ 0x540e
-#define TIOCGPRGP_ 0x540f
+#define TIOCGPGRP_ 0x540f
 #define TIOCSPGRP_ 0x5410
 #define TIOCGWINSZ_ 0x5413
 #define TIOCSWINSZ_ 0x5414
@@ -113,7 +113,7 @@ struct tty {
     // A flag is a marker indicating the end of a canonical mode input. Flags
     // are created by EOL and EOF characters. You can't backspace past a flag.
     bool buf_flag[TTY_BUF_SIZE];
-    size_t bufsize;
+    dword_t bufsize;
     uint8_t packet_flags;
     cond_t produced;
     cond_t consumed;

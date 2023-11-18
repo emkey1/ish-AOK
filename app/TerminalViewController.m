@@ -60,14 +60,14 @@
     [super viewDidLoad];
 
 #if !ISH_LINUX
-    int bootError = [AppDelegate bootError];
+    intptr_t bootError = [AppDelegate bootError];
     if (bootError < 0) {
         NSString *message = [NSString stringWithFormat:@"could not boot"];
-        NSString *subtitle = [NSString stringWithFormat:@"error code %d", bootError];
+        NSString *subtitle = [NSString stringWithFormat:@"error code %ld", bootError];
         if (bootError == _EINVAL)
             subtitle = [subtitle stringByAppendingString:@"\n(try reinstalling the app, see release notes for details)"];
         [self showMessage:message subtitle:subtitle];
-        NSLog(@"boot failed with code %d", bootError);
+        NSLog(@"boot failed with code %ld", bootError);
     }
 #endif
 
@@ -150,10 +150,10 @@
 }
 
 - (void)startNewSession {
-    int err = [self startSession];
+    intptr_t err = [self startSession];
     if (err < 0) {
         [self showMessage:@"could not start session"
-                 subtitle:[NSString stringWithFormat:@"error code %d", err]];
+                 subtitle:[NSString stringWithFormat:@"error code %ld", err]];
     }
 }
 
@@ -167,11 +167,11 @@
     return self.terminal.uuid;
 }
 
-- (int)startSession {
+- (intptr_t)startSession {
     NSArray<NSString *> *command = UserPreferences.shared.launchCommand;
 
 #if !ISH_LINUX
-    int err = become_new_init_child();
+    intptr_t err = become_new_init_child();
     if (err < 0)
         return err;
     struct tty *tty;

@@ -42,7 +42,6 @@ NSDictionary<NSString *, NSString *> *friendlyPreferenceReverseMapping;
 NSDictionary<NSString *, NSString *> *kvoProperties;
 
 extern bool doEnableMulticore;
-extern unsigned doLockSleepNanoseconds;
 static NSString *const kSystemMonospacedFontName = @"ui-monospace";
 
 @interface UserPreferences ()
@@ -458,7 +457,7 @@ bool (*remove_user_default)(const char *name);
     if(doEnableExtraLocking == true) {  // This needs to be the opposite of what you would expect because of reasons.  -mke
         complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
         zero_critical_regions_count();
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
     }
     return [*value isKindOfClass:NSNumber.class];
 }

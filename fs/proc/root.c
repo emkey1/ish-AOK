@@ -186,11 +186,11 @@ DirectMap2M:      940032 kB
 DirectMap1G:           0 kB
 */
     struct mem_usage usage = get_mem_usage();
-    show_kb(buf, "Buffers:        ", 0);
-    show_kb(buf, "Cached:         ", usage.cached);
     show_kb(buf, "MemTotal:       ", usage.total);
     show_kb(buf, "MemFree:        ", usage.free);
     show_kb(buf, "MemAvailable:   ", usage.available);
+    show_kb(buf, "Buffers:        ", 0);
+    show_kb(buf, "Cached:         ", usage.cached);
     show_kb(buf, "MemShared:      ", usage.free);
     show_kb(buf, "Active:         ", usage.active);
     show_kb(buf, "Inactive:       ", usage.inactive);
@@ -333,7 +333,7 @@ static bool proc_root_readdir(struct proc_entry *UNUSED(entry), unsigned long *i
         do {
             pid++;
         } while (pid <= MAX_PID && pid_get_task(pid) == NULL);
-        //unlock_pids(&pids_lock);
+        //unlock(&pids_lock);
         modify_critical_region_counter(current, -1, __FILE__, __LINE__);
         if (pid > MAX_PID) {
             return false;

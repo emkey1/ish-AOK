@@ -270,11 +270,12 @@ syscall_t syscall_table[] = {
     [377] = (syscall_t) sys_copy_file_range,
     [383] = (syscall_t) syscall_stub_silent, // statx
     [384] = (syscall_t) sys_arch_prctl,
-    //[403] = (syscall_t) sys_clock_gettime, // clock_gettime64
+    [403] = (syscall_t) sys_clock_gettime64, // clock_gettime64
     [406] = (syscall_t) syscall_stub, // clock_getres_time64
-    //[407] = (syscall_t) sys_clock_nanosleep_time64, // clock_nanosleep_time64
+    [407] = (syscall_t) sys_clock_nanosleep_time64, // clock_nanosleep_time64
+    [412] = (syscall_t) sys_utimensat64, // utimensat_time64
+    [414] = (syscall_t) sys_ppoll_time64,
     [424] = (syscall_t) syscall_stub, // pidfd_send_signal?
-    //[412] = (syscall_t) sys_utimensat, // utimensat_time64
     [436] = (syscall_t) syscall_stub,
     [439] = (syscall_t) sys_faccessat, // faccessat2
 };
@@ -323,114 +324,113 @@ SYS_EPOLL_PWAIT2                 = 441
 
 #define NUM_SYSCALLS (sizeof(syscall_table) / sizeof(syscall_table[0]))
 
-void handle_interrupt(int interrupt) {
-    ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
-    struct cpu_state *cpu = &current->cpu;
-    ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-    if (interrupt == INT_SYSCALL) { // Flag as critical?  -mke MKEMKEMKE
-        unsigned syscall_num = cpu->eax;
-        if (syscall_num >= NUM_SYSCALLS) {
-            printk("ERROR: %d(%s) missing syscall %d\n", current->pid, current->comm, syscall_num);
-            
-            ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
-            deliver_signal(current, SIGSYS_, SIGINFO_NIL);
-            ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-        } else if (syscall_table[syscall_num] == NULL) {
-            printk("WARNING:(PID: %d(%s)) stub syscall %d\n", current->pid, current->comm, syscall_num);
-            syscall_stub();
-        } else {
-            if (syscall_table[syscall_num] == (syscall_t) syscall_stub) {
-                printk("WARNING:(PID: %d(%s)) stub syscall %d\n", current->pid, current->comm, syscall_num);
-            }
-            if (syscall_table[syscall_num] == (syscall_t) syscall_stub_silent) {
-                // Fail silently
-                //printk("WARNING:(PID: %d(%s)) silent stub syscall %d\n", current->pid, current->comm, syscall_num);
-            }
-            lock(&current->ptrace.lock, 0);
-            if (current->ptrace.stop_at_syscall) {
-                
-                ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
-                send_signal(current, SIGTRAP_, SIGINFO_NIL);
-                ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-                
-                unlock(&current->ptrace.lock);
-                receive_signals();
-                lock(&current->ptrace.lock, 0);
-                current->ptrace.stop_at_syscall = false;
-            }
-            unlock(&current->ptrace.lock);
-            STRACE("%d(%s) %d:%d call %-3d ", current->pid, current->comm, current->critical_region.count, current->locks_held.count, syscall_num);
-            int result = syscall_table[syscall_num](cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
-            STRACE(" = 0x%x\n", result);
-            cpu->eax = result;
-            lock(&current->ptrace.lock, 0);
-            if (current->ptrace.stop_at_syscall) {
-                current->ptrace.syscall = syscall_num;
-                send_signal(current, SIGTRAP_, SIGINFO_NIL);
-                unlock(&current->ptrace.lock);
-                receive_signals();
-                lock(&current->ptrace.lock, 0);
-                current->ptrace.stop_at_syscall = false;
-            }
-            unlock(&current->ptrace.lock);
-        }
-    } else if (interrupt == INT_GPF) {
-        // some page faults, such as stack growing or CoW clones, are handled by mem_ptr
-        ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
-        read_lock(&current->mem->lock, __FILE__, __LINE__);
-        void *ptr = mem_ptr(current->mem, cpu->segfault_addr, cpu->segfault_was_write ? MEM_WRITE : MEM_READ);
-        read_unlock(&current->mem->lock, __FILE__, __LINE__);
-        ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-        if (ptr == NULL) {
-            printk("ERROR: %d(%s) page fault on 0x%x at 0x%x\n", current->pid, current->comm, cpu->segfault_addr, cpu->eip);
-            struct siginfo_ info = {
-                .code = mem_segv_reason(current->mem, cpu->segfault_addr),
-                .fault.addr = cpu->segfault_addr,
-            };
-            current->zombie = true; // Lets see if this helps with page faults never exiting.  -mke
-            deliver_signal(current, SIGSEGV_, info);
-        }
-    } else if (interrupt == INT_UNDEFINED) {
-        printk("ERROR: %d(%s) illegal instruction at 0x%x: ", current->pid, current->comm, cpu->eip);
-        for (int i = 0; i < 8; i++) {
-            uint8_t b;
-            if (user_get(cpu->eip + i, b))
-                break;
-            printk("%02x ", b);
-        }
-        printk("\n");
-        struct siginfo_ info = {
-            .code = SI_KERNEL_,
-            .fault.addr = cpu->eip,
-        };
-        deliver_signal(current, SIGILL_, info);
-    } else if (interrupt == INT_BREAKPOINT) {
-        complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
-        send_signal(current, SIGTRAP_, (struct siginfo_) {
-            .sig = SIGTRAP_,
-            .code = SI_KERNEL_,
-        });
-        unlock_pids(&pids_lock);
-    } else if (interrupt == INT_DEBUG) {
-        complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
-        send_signal(current, SIGTRAP_, (struct siginfo_) {
-            .sig = SIGTRAP_,
-            .code = TRAP_TRACE_,
-        });
-        unlock_pids(&pids_lock);
-    } else if (interrupt != INT_TIMER) {
-        printk("WARNING: %d(%s) unhandled interrupt %d\n", current->pid, current->comm, interrupt);
-        sys_exit(interrupt);
+void dump_stack(int lines);
+
+void handle_syscall_interrupt(struct cpu_state *cpu) {
+    unsigned syscall_num = cpu->eax;
+    if (syscall_num >= NUM_SYSCALLS) {
+        printk("ERROR: %d(%s) missing syscall %d\n", current->pid, current->comm, syscall_num);
+        deliver_signal(current, SIGSYS_, SIGINFO_NIL);
+        return;
     }
+
+    if (syscall_table[syscall_num] == NULL) {
+        printk("WARNING: (PID: %d(%s)) stub syscall %d\n", current->pid, current->comm, syscall_num);
+        syscall_stub();
+        return;
+    }
+
+    STRACE("%d(%s) %d:%d call %-3d ", current->pid, current->comm, current->critical_region.count, current->locks_held.count, syscall_num);
+    int result = syscall_table[syscall_num](cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
+    STRACE(" = 0x%x\n", result);
+    cpu->eax = result;
+}
+
+void handle_page_fault_interrupt(struct cpu_state *cpu) {
+    read_lock(&current->mem->lock, __FILE__, __LINE__);
+    void *ptr = mem_ptr(current->mem, cpu->segfault_addr, cpu->segfault_was_write ? MEM_WRITE : MEM_READ);
+    read_unlock(&current->mem->lock, __FILE__, __LINE__);
+
+    if (ptr == NULL) {
+        printk("ERROR: %d(%s) page fault on 0x%x at 0x%x\n", current->pid, current->comm, cpu->segfault_addr, cpu->eip);
+        struct siginfo_ info = {
+            .code = mem_segv_reason(current->mem, cpu->segfault_addr),
+            .fault.addr = cpu->segfault_addr,
+        };
+        current->zombie = true;
+        dump_stack(8);
+        deliver_signal(current, SIGSEGV_, info);
+    }
+}
+
+void handle_illegal_instruction_interrupt(struct cpu_state *cpu) {
+    printk("ERROR: %d(%s) illegal instruction at 0x%x: ", current->pid, current->comm, cpu->eip);
+    for (int i = 0; i < 8; i++) {
+        uint8_t b;
+        if (user_get(cpu->eip + i, b))
+            break;
+        printk("%02x ", b);
+    }
+    printk("\n");
+    dump_stack(8);
+    struct siginfo_ info = {
+        .code = SI_KERNEL_,
+        .fault.addr = cpu->eip,
+    };
+    deliver_signal(current, SIGILL_, info);
+}
+
+void handle_timer_interrupt(struct cpu_state *cpu) {
+    // For now we just return.
+    return;
+}
+
+void handle_interrupt(int interrupt) {
+    struct cpu_state *cpu = &current->cpu;
+
+    switch (interrupt) {
+        case INT_SYSCALL:
+            handle_syscall_interrupt(cpu);
+            break;
+        case INT_GPF:
+            handle_page_fault_interrupt(cpu);
+            break;
+        case INT_UNDEFINED:
+            handle_illegal_instruction_interrupt(cpu);
+            break;
+        case INT_BREAKPOINT:
+            complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+            send_signal(current, SIGTRAP_, (struct siginfo_) {
+                .sig = SIGTRAP_,
+                .code = SI_KERNEL_,
+            });
+            unlock(&pids_lock);
+            break;
+        case INT_DEBUG:
+            complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+            send_signal(current, SIGTRAP_, (struct siginfo_) {
+                .sig = SIGTRAP_,
+                .code = TRAP_TRACE_,
+            });
+            unlock(&pids_lock);
+            break;
+        case INT_TIMER:
+            handle_timer_interrupt(cpu); // Just a stub for now
+            break;
+        default:
+            printk("WARNING: %d(%s) unhandled interrupt %d\n", current->pid, current->comm, interrupt);
+            sys_exit(interrupt);
+            break;
+    }
+    // The common logic to be executed after handling any interrupt
     receive_signals();
     struct tgroup *group = current->group;
-    ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
     lock(&group->lock, 0);
     while (group->stopped)
         wait_for_ignore_signals(&group->stopped_cond, &group->lock, NULL);
     unlock(&group->lock);
-    ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
 }
+
 
 void dump_maps(void) {
     extern void proc_maps_dump(struct task *task, struct proc_data *buf);
@@ -449,16 +449,41 @@ void dump_maps(void) {
     free(orig_data);
 }
 
-void dump_stack(int lines) {
-    printk("WARNING: stack at %x, base at %x, ip at %x\n", current->cpu.esp, current->cpu.ebp, current->cpu.eip);
-    for (int i = 0; i < lines*8; i++) {
-        dword_t stackword;
-        if (user_get(current->cpu.esp + (i * 4), stackword))
+void dump_mem(addr_t start, uint_t len) {
+    const int width = 8;
+    if (len == 0) {
+        printk("ERROR: No memory to dump\n");
+        return;
+    }
+
+    for (addr_t addr = start; addr < start + len; addr += sizeof(dword_t)) {
+        unsigned from_left = (addr - start) / sizeof(dword_t) % width;
+        if (from_left == 0)
+            printk("%08x: ", addr);
+
+        dword_t word;
+        if (user_get(addr, word)) {
+            printk("ERROR: Unable to read memory at address %08x\n", addr);
             break;
-        printk("%08x ", stackword);
-        if (i % 8 == 7)
+        }
+        printk("%08x ", word);
+
+        if (from_left == width - 1)
             printk("\n");
     }
+}
+
+void dump_stack(int lines) {
+    printk("stack at %x, base at %x, ip at %x\n", current->cpu.esp, current->cpu.ebp, current->cpu.eip);
+    if (lines <= 0) {
+        printk("ERROR: Invalid number of lines specified for stack dump\n");
+        return;
+    }
+    // Ensure lines is within a reasonable limit to prevent excessive output
+    const int max_lines = 20;
+    lines = (lines > max_lines) ? max_lines : lines;
+
+    dump_mem(current->cpu.esp, lines * sizeof(dword_t) * 8);
 }
 
 // TODO find a home for this

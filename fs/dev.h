@@ -33,16 +33,15 @@ static inline dev_t_ dev_fake_from_real(dev_t dev) {
 #define DEV_BLOCK 0
 #define DEV_CHAR 1
 
-//struct dev_rtc {
-//    int (*open)(int major, int minor, struct fd *fd);
-//    int (*close)(int major, int minor, struct fd *fd);
-//    struct tm (*read)(struct tm *);
-//};
+struct dev_rtc {
+    intptr_t (*open)(int major, int minor, struct fd *fd);
+    int (*close)(int major, int minor, struct fd *fd);
+    ssize_t (*read)(void *buf, size_t count);
+};
 
 struct dev_ops {
-    int (*open)(int major, int minor, struct fd *fd);
+    intptr_t (*open)(int major, int minor, struct fd *fd);
     struct fd_ops fd;
-    struct tm (*read)(struct tm *);
 };
 
 extern struct dev_ops *block_devs[];

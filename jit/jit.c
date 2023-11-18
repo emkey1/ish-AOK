@@ -19,23 +19,31 @@ static void jit_resize_hash(struct jit *jit, size_t new_size);
 
 struct jit *jit_new(struct mmu *mmu) {
     struct jit *jit = calloc(1, sizeof(struct jit));
+    if (!jit) {
+        // Handle allocation failure
+        printk("ERROR: Failed to allocate memory for JIT\n");
+        return NULL;
+    }
+    lock(&jit->lock, 0);
     jit->mmu = mmu;
     jit_resize_hash(jit, JIT_INITIAL_HASH_SIZE);
     jit->page_hash = calloc(JIT_PAGE_HASH_SIZE, sizeof(*jit->page_hash));
     list_init(&jit->jetsam);
     lock_init(&jit->lock, "jit_new\0");
     wrlock_init(&jit->jetsam_lock);
+    unlock(&jit->lock);
     return jit;
 }
 
-
-
 void jit_free(struct jit *jit) {
+    if (!jit) return;
+
     bool signal_pending = !!(current->pending & ~current->blocked);
     while((critical_region_count(current) > 2) || (locks_held_count(current)) || (current->process_info_being_read) || (signal_pending)) { // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
     }
+    lock(&jit->lock, 0);
     for (size_t i = 0; i < jit->hash_size; i++) {
         struct jit_block *block, *tmp;
         if (list_null(&jit->hash[i]))
@@ -45,10 +53,10 @@ void jit_free(struct jit *jit) {
         }
     }
     jit_free_jetsam(jit);
-    unlock(&jit->lock);
     free(jit->page_hash);
     free(jit->hash);
     write_lock(&jit->jetsam_lock);
+    unlock(&jit->lock);
     free(jit);
 }
 
@@ -163,21 +171,16 @@ static void jit_block_disconnect(struct jit *jit, struct jit_block *block) {
     }
     list_remove(&block->chain);
     for (int i = 0; i <= 1; i++) {
-        ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
         list_remove(&block->page[i]);
         list_remove_safe(&block->jumps_from_links[i]);
-        ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
 
         struct jit_block *prev_block, *tmp;
         
-        ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
         list_for_each_entry_safe(&block->jumps_from[i], prev_block, tmp, jumps_from_links[i]) {
             if (prev_block->jump_ip[i] != NULL)
                 *prev_block->jump_ip[i] = prev_block->old_jump_ip[i]; // Crashed here June 12 2022, 19 Nov 2022
             list_remove(&prev_block->jumps_from_links[i]);
         }
-        
-        ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
     }
 }
 
@@ -305,7 +308,6 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     if (cpu->poked_ptr == NULL)
         cpu->poked_ptr = &cpu->_poked;
     tlb_refresh(tlb, cpu->mmu);
-    //////modify_critical_region_counter(current, 1);
     int interrupt = (cpu->tf ? cpu_single_step : cpu_step_to_interrupt)(cpu, tlb); // Crashed here 26 Jul 2022, 27 Aug 2022. -mke
     cpu->trapno = interrupt;
 
@@ -327,7 +329,6 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         return interrupt;
     }
     unlock(&jit->lock);
-    //////modify_critical_region_counter(current, -1);
 
     return interrupt;
 }

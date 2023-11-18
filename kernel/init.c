@@ -19,7 +19,7 @@ int mount_root(const struct fs_ops *fs, const char *source) {
     return 0;
 }
 
-static void establish_signal_handlers() {
+static void establish_signal_handlers(void) {
     extern void sigusr1_handler(int sig);
     struct sigaction sigact;
     sigact.sa_handler = sigusr1_handler;
@@ -50,13 +50,40 @@ static struct rlimit_ init_rlimits[16] = {
     [RLIMIT_RTTIME_]     = {RLIM_INFINITY_, RLIM_INFINITY_},
 };
 
+static int kill_task(struct task *task, dword_t sig) {
+    if (!superuser() &&
+            current->uid != task->uid &&
+            current->uid != task->suid &&
+            current->euid != task->uid &&
+            current->euid != task->suid)
+        return _EPERM;
+    struct siginfo_ info = {
+        .code = SI_USER_,
+        .kill.pid = current->pid,
+        .kill.uid = current->uid,
+    };
+    send_signal(task, sig, info);
+    return 0;
+}
+
 // TODO error propagation
 static struct task *construct_task(struct task *parent) {
     struct task *task = task_create_(parent);
+    if (task == NULL) {
+        // Handle task creation error
+        return NULL;
+    }
 
     //atomic_thread_fence(__ATOMIC_SEQ_CST);
     
     struct tgroup *group = malloc(sizeof(struct tgroup));
+    if (group == NULL) {
+        // Handle memory allocation failure
+        // Clean up the previously allocated 'task'
+        kill_task(task, SIGTERM_); // Cleanup
+        return NULL;
+    }
+    
     *group = (struct tgroup) {};
     list_init(&group->threads);
     lock_init(&group->lock, "construct_task\0");
@@ -88,7 +115,7 @@ static struct task *construct_task(struct task *parent) {
     return task;
 }
 
-int become_first_process(void) {
+intptr_t become_first_process(void) {
     // now seems like a nice time
     establish_signal_handlers();
 
@@ -101,7 +128,7 @@ int become_first_process(void) {
     return 0;
 }
 
-int become_new_init_child(void) {
+intptr_t become_new_init_child(void) {
     // locking? who needs locking?!
     struct task *init = pid_get_task(1);
     assert(init != NULL);
@@ -158,7 +185,7 @@ static struct fd *open_fd_from_actual_fd(int fd_no) {
     return fd;
 }
 
-int create_piped_stdio() {
+int create_piped_stdio(void) {
     if (!(current->files->files[0] = open_fd_from_actual_fd(STDIN_FILENO))) {
         return -1;
     }

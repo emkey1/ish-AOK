@@ -23,11 +23,11 @@ static struct task *proc_get_task(struct proc_entry *entry) {
     complex_lockt(&pids_lock, 1, __FILE__, __LINE__);
     struct task *task = pid_get_task(entry->pid);
     if (task == NULL)
-        unlock_pids(&pids_lock);
+        unlock(&pids_lock);
     return task;
 }
 static void proc_put_task(struct task *UNUSED(task)) {
-    unlock_pids(&pids_lock);
+    unlock(&pids_lock);
 }
 
 static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
@@ -108,6 +108,7 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     proc_printf(buf, "%lu ", 0l); // nswap
     proc_printf(buf, "%lu ", 0l); // cnswap
     proc_printf(buf, "%d", task->exit_signal);
+    proc_printf(buf, "%d", 0); // processor
     // that's enough for now
     proc_printf(buf, "\n");
     
@@ -346,7 +347,6 @@ static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
     proc_put_task(task);
     return err;
 }
-
 
 struct proc_children proc_pid_children = PROC_CHILDREN({
     {"auxv", .show = proc_pid_auxv_show},
