@@ -162,10 +162,10 @@ static inline void complex_lockt(lock_t *lock, int log_lock, __attribute__((unus
     }
 
     lock->owner = pthread_self();
-    lock->pid = current_pid();
-    lock->uid = current_uid();
-    strncpy(lock->comm, current_comm(), sizeof(lock->comm) - 1);
-    lock->comm[sizeof(lock->comm) - 1] = '\0';  // Null-terminate just in case
+    //lock->pid = current_pid();
+    //lock->uid = current_uid();
+    //strncpy(lock->comm, current_comm(), sizeof(lock->comm) - 1);
+    //lock->comm[sizeof(lock->comm) - 1] = '\0';  // Null-terminate just in case
 }
 
 static inline void __lock(lock_t *lock, int log_lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
@@ -174,16 +174,16 @@ static inline void __lock(lock_t *lock, int log_lock, __attribute__((unused)) co
         pthread_mutex_lock(&lock->m);
         modify_locks_held_count_wrapper(1);
         lock->owner = pthread_self();
-        lock->pid = current_pid();
-        lock->uid = current_uid();
-        strncpy(lock->comm, current_comm(), 16);
+        //lock->pid = current_pid();
+        //lock->uid = current_uid();
+        //strncpy(lock->comm, current_comm(), 16);
         modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
     } else {
         pthread_mutex_lock(&lock->m);
         lock->owner = pthread_self();
-        lock->pid = current_pid();
-        lock->uid = current_uid();
-        strncpy(lock->comm, current_comm(), 16);
+        //lock->pid = current_pid();
+        //lock->uid = current_uid();
+        //strncpy(lock->comm, current_comm(), 16);
     }
     return;
 }

@@ -27,6 +27,7 @@
 #include "fs/dyndev.h"
 #include "fs/devices.h"
 #include "fs/path.h"
+#include "app/RTCDevice.h"
 
 #if ISH_LINUX
 #import "LinuxInterop.h"
@@ -173,7 +174,11 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
     if (err != 0)
         return err;
     generic_mknodat(AT_PWD, "/dev/location", S_IFCHR|0666, dev_make(DYN_DEV_MAJOR, DEV_LOCATION_MINOR));
-    // The following does nothing for now.  Placeholder
+    
+    // Emulate a RTC, read time only
+    err = dyn_dev_register(&rtc_dev, DEV_CHAR, DEV_RTC_MAJOR, DEV_RTC_MINOR);
+    if (err != 0)
+        return err;
     generic_mknodat(AT_PWD, "/dev/rtc0", S_IFCHR|0666, dev_make(DEV_RTC_MAJOR, DEV_RTC_MINOR));
     generic_symlinkat("/dev/rtc0", AT_PWD, "/dev/rtc");
 
