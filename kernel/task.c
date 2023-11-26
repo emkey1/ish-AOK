@@ -197,8 +197,13 @@ void task_destroy(struct task *task, int caller) {
         unlock(&pids_lock);
     }
 
+retry:
     // Free the task's resources.
-    free(task);
+    if (!critical_region_count(task)) {
+        free(task);
+    } else {
+        goto retry;
+    }
 }
 
 void run_at_boot(void) {  // Stuff we run only once, at boot time.

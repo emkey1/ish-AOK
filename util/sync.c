@@ -63,6 +63,9 @@ void modify_critical_region_counter(struct task *task, int value, __attribute__(
         printk("ERROR: Attempt to decrement critical_region count to be negative, ignoring(%s:%d) (%d - %d) (%s:%d)\n", task->comm, task->pid, task->critical_region.count, value, file, line);
         if(ilocked == true)
             unlock(&task->general_lock);
+        
+        pthread_mutex_unlock(&task->critical_region.lock);
+        
         return;
     }
     
@@ -209,11 +212,11 @@ void sigusr1_handler(void) {
 // Because sometimes we can't #include "kernel/task.h" -mke
 unsigned critical_region_count(struct task *task) {
     unsigned tmp = 0;
-//    pthread_mutex_lock(task->critical_region.lock); // This would make more
+    pthread_mutex_lock(&task->critical_region.lock); // This would make more
     tmp = task->critical_region.count;
     if(tmp > 1000)  // Not likely
         tmp = 0;
- //   pthread_mutex_unlock(task->critical_region.lock);
+    pthread_mutex_unlock(&task->critical_region.lock);
 
     return tmp;
 }
