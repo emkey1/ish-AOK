@@ -48,7 +48,7 @@ static struct itimerspec_ timer_spec_from_real(struct timer_spec spec) {
 #include <time.h>
 #include <sys/syscall.h>
 
-dword_t sys_clock_nanosleep_time64(int clock_id, int flags, dword_t req_val, dword_t rem_val) {
+dword_t sys_clock_nanosleep_time64(__attribute__((unused)) int clock_id, __attribute__((unused)) int flags, dword_t req_val, dword_t rem_val) {
     struct timespec req;
     struct timespec rem;
 

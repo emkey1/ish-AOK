@@ -34,7 +34,7 @@ static inline dev_t_ dev_fake_from_real(dev_t dev) {
 #define DEV_CHAR 1
 
 struct dev_ops {
-    intptr_t (*open)(int major, int minor, struct fd *fd);
+    int (*open)(int major, int minor, struct fd *fd);
     struct fd_ops fd;
 };
 

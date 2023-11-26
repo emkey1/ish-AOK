@@ -200,7 +200,7 @@ static int futex_cmp_requeue(addr_t uaddr1, dword_t val, addr_t uaddr2, dword_t 
         err = _EAGAIN;
     } else {
         struct futex_wait *wait, *tmp_wait;
-        int requeued = 0;
+        dword_t requeued = 0;
         list_for_each_entry_safe(&futex1->queue, wait, tmp_wait, queue) {
             if (requeued >= val2) {
                 break;

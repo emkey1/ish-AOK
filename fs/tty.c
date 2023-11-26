@@ -161,7 +161,7 @@ int tty_open(struct tty *tty, struct fd *fd) {
     return 0;
 }
 
-static intptr_t tty_device_open(int major, int minor, struct fd *fd) {
+static int tty_device_open(int major, int minor, struct fd *fd) {
     struct tty *tty;
     if (major == TTY_ALTERNATE_MAJOR) {
         if (minor == DEV_TTY_MINOR) {
@@ -189,7 +189,7 @@ static intptr_t tty_device_open(int major, int minor, struct fd *fd) {
         assert(driver != NULL);
         tty = tty_get(driver, major, minor);
         if (IS_ERR(tty))
-            return PTR_ERR(tty);
+            return (int)PTR_ERR(tty);
     }
 
     if (tty->driver->ops->open) {

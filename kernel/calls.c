@@ -380,7 +380,7 @@ void handle_illegal_instruction_interrupt(struct cpu_state *cpu) {
     deliver_signal(current, SIGILL_, info);
 }
 
-void handle_timer_interrupt(struct cpu_state *cpu) {
+void handle_timer_interrupt(__attribute__((unused)) struct cpu_state *cpu) {
     // For now we just return.
     return;
 }

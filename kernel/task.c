@@ -283,7 +283,7 @@ void update_thread_name(void) {
     result = snprintf(name, sizeof(name) - 1, "%.7s-%d", current->comm, current->pid);
 
     // Check if the output was truncated
-    if (result >= sizeof(name)) {
+    if (result >= (int)sizeof(name)) {
         // Handle truncation (e.g., by logging, adjusting the name format, etc.)
         // For this example, we just log a warning
         printk("WARNING: Thread name truncated in update_thread_name(%s).\n", name);

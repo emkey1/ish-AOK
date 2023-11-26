@@ -85,7 +85,7 @@ static size_t syslog_read(addr_t buf_addr, size_t len, int flags) {
 }
 
 static size_t do_syslog(int type, addr_t buf_addr, int_t len) {
-    size_t res;
+    int res;
     switch (type) {
         case SYSLOG_ACTION_READ_:
             return syslog_read(buf_addr, len, 0);
@@ -93,7 +93,7 @@ static size_t do_syslog(int type, addr_t buf_addr, int_t len) {
             return syslog_read(buf_addr, len, FIFO_LAST | FIFO_PEEK);
 
         case SYSLOG_ACTION_READ_CLEAR_:
-            res = syslog_read(buf_addr, len, FIFO_LAST | FIFO_PEEK);
+            res = (int)syslog_read(buf_addr, len, FIFO_LAST | FIFO_PEEK);
             if (res < 0)
                 return res;
             fallthrough;
