@@ -9,7 +9,7 @@
 // BatteryStatus.m
 #import "BatteryStatus.h"
 
-char* printBatteryStatus(void) {
+char* printBatteryStatus(int type) {
     UIDevice *device = [UIDevice currentDevice];
     device.batteryMonitoringEnabled = YES;
 
@@ -33,12 +33,24 @@ char* printBatteryStatus(void) {
             break;
     }
 
-    NSString *formattedOutput = [NSString stringWithFormat:
-                                 @"battery_level: %.2f\n"
-                                 "battery_state: %@\n"
-                                 "low_power_mode: %@\n"
-                                 "battery_health: %.2f\n",
-                                 batteryLevel * 100, stateString, lowPowerModeEnabled ? @"Enabled" : @"Disabled", batteryLevel * 100];
+    if(type == 3) {
+        NSString *formattedOutput = [NSString stringWithFormat:
+                                     @"battery_level: %.2f\n"
+                                     "battery_state: %@\n"
+                                     "low_power_mode: %@\n"
+                                     "battery_health: %.2f\n",
+                                     batteryLevel * 100, stateString, lowPowerModeEnabled ? @"Enabled" : @"Disabled", batteryLevel * 100];
+        return (char *)[formattedOutput UTF8String];
+    } else if(type == 2) { // Capacity
+        NSString *formattedOutput = [NSString stringWithFormat:
+                                     @"%.2f\n", batteryLevel * 100];
+        return (char *)[formattedOutput UTF8String];
+    } else if (type == 1) { // Status
+        NSString *formattedOutput = [NSString stringWithFormat:
+                                     @"%@\n", stateString];
+        return (char *)[formattedOutput UTF8String];
+    }
+    
+    return NULL;
 
-    return (char *)[formattedOutput UTF8String];
 }

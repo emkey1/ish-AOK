@@ -26,7 +26,7 @@ int dyn_dev_register(struct dev_ops *ops, int type, int major, int minor) {
     if (minor < 0 || minor > MAX_MINOR) {
         return _EINVAL;
     }
-    if (major != DYN_DEV_MAJOR) {
+    if ((major != DYN_DEV_MAJOR) && (major != DEV_RTC_MAJOR)) {
         return _EINVAL;
     }
     if (ops == NULL) {

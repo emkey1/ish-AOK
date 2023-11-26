@@ -107,6 +107,9 @@
 		5D8ACEFA284BF122003C50D3 /* net.c in Sources */ = {isa = PBXBuildFile; fileRef = 5D8ACEF9284BF122003C50D3 /* net.c */; };
 		5D8ACEFD284CE096003C50D3 /* sys.c in Sources */ = {isa = PBXBuildFile; fileRef = 5D8ACEFC284CE096003C50D3 /* sys.c */; };
 		5D8ACEFE284CE096003C50D3 /* sys.c in Sources */ = {isa = PBXBuildFile; fileRef = 5D8ACEFC284CE096003C50D3 /* sys.c */; };
+		5D8CFA852B1198B300D50E57 /* RTCDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 5D8CFA842B1198B300D50E57 /* RTCDevice.m */; };
+		5D8CFA862B1198B300D50E57 /* RTCDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 5D8CFA842B1198B300D50E57 /* RTCDevice.m */; };
+		5D8CFA872B1198B300D50E57 /* RTCDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 5D8CFA842B1198B300D50E57 /* RTCDevice.m */; };
 		5D9897D028B6B953003D3670 /* AppStore.xcconfig in Resources */ = {isa = PBXBuildFile; fileRef = 5D9897CE28B6B953003D3670 /* AppStore.xcconfig */; };
 		5DA0A8342AAE21D000397280 /* BatteryStatus.m in Sources */ = {isa = PBXBuildFile; fileRef = 5DA0A8332AAE21D000397280 /* BatteryStatus.m */; };
 		5DD383EB2AAE33330013A847 /* UIDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 5DD383EA2AAE33330013A847 /* UIDevice.m */; };
@@ -589,6 +592,8 @@
 		5D8ACEFC284CE096003C50D3 /* sys.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = sys.c; sourceTree = "<group>"; };
 		5D8C94D3287E53AD0095EDEE /* fp_sync.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = fp_sync.c; sourceTree = "<group>"; };
 		5D8CEFF92894C81400D24ED8 /* resource_locking.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = resource_locking.h; sourceTree = "<group>"; };
+		5D8CFA842B1198B300D50E57 /* RTCDevice.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RTCDevice.m; sourceTree = "<group>"; };
+		5D8CFA882B1198DB00D50E57 /* RTCDevice.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RTCDevice.h; sourceTree = "<group>"; };
 		5D9897CE28B6B953003D3670 /* AppStore.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; path = AppStore.xcconfig; sourceTree = "<group>"; };
 		5D9897CF28B6B953003D3670 /* ViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ViewController.h; sourceTree = "<group>"; };
 		5DA0A8332AAE21D000397280 /* BatteryStatus.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = BatteryStatus.m; sourceTree = "<group>"; };
@@ -1090,6 +1095,8 @@
 				BB88F4A4215476BA00A341FD /* iSH.entitlements */,
 				BB88F4912154760800A341FD /* FileProvider */,
 				BB41591D255EF9E300E0950C /* UITests */,
+				5D8CFA842B1198B300D50E57 /* RTCDevice.m */,
+				5D8CFA882B1198DB00D50E57 /* RTCDevice.h */,
 			);
 			path = app;
 			sourceTree = "<group>";
@@ -2122,6 +2129,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5DA0A8342AAE21D000397280 /* BatteryStatus.m in Sources */,
+				5D8CFA852B1198B300D50E57 /* RTCDevice.m in Sources */,
 				5DD383EB2AAE33330013A847 /* UIDevice.m in Sources */,
 				BB28C7BB268975AE00BDC834 /* LocationDevice.m in Sources */,
 				5D8ACEFD284CE096003C50D3 /* sys.c in Sources */,
@@ -2147,6 +2155,7 @@
 				BB88F49A2154760800A341FD /* FileProviderEnumerator.m in Sources */,
 				BBBFE94921C5CFF100509DD5 /* NSError+ISHErrno.m in Sources */,
 				BB9C7B87240A2B1E00F5D4F0 /* AppGroup.m in Sources */,
+				5D8CFA872B1198B300D50E57 /* RTCDevice.m in Sources */,
 				BB88F4942154760800A341FD /* FileProviderExtension.m in Sources */,
 				BB88F4972154760800A341FD /* FileProviderItem.m in Sources */,
 			);
@@ -2172,6 +2181,7 @@
 				BB28C79226896B1F00BDC834 /* AboutAppearanceViewController.m in Sources */,
 				BB28C79326896B1F00BDC834 /* AltIconViewController.m in Sources */,
 				491B31E62883BF22008EEFB0 /* ThemeViewController.m in Sources */,
+				5D8CFA862B1198B300D50E57 /* RTCDevice.m in Sources */,
 				BB28C7B226896C4600BDC834 /* main.m in Sources */,
 				496C7AB227CC697E005D7613 /* Theme.m in Sources */,
 				BB28C79426896B1F00BDC834 /* AboutNavigationController.m in Sources */,
@@ -2545,7 +2555,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2571,7 +2581,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2606,7 +2616,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2630,7 +2640,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
@@ -2655,7 +2665,7 @@
 				CODE_SIGN_ENTITLEMENTS = app/FileProvider/iSHFileProvider.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				INFOPLIST_FILE = app/FileProvider/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK.FileProvider";
@@ -2766,7 +2776,7 @@
 				CODE_SIGN_ENTITLEMENTS = app/FileProvider/iSHFileProvider.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				INFOPLIST_FILE = app/FileProvider/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK.FileProvider";
@@ -2784,7 +2794,7 @@
 				CODE_SIGN_ENTITLEMENTS = iSHFileProviderRelease.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				INFOPLIST_FILE = app/FileProvider/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK.FileProvider";
@@ -2887,7 +2897,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
@@ -2902,7 +2912,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
@@ -2930,7 +2940,7 @@
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -2953,7 +2963,7 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				MARKETING_VERSION = 1.3;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
@@ -2978,7 +2988,7 @@
 				CODE_SIGN_ENTITLEMENTS = app/FileProvider/iSHFileProvider.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 501;
+				CURRENT_PROJECT_VERSION = 502;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;
 				INFOPLIST_FILE = app/FileProvider/Info.plist;
 				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK.FileProvider";

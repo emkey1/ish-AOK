@@ -27,6 +27,7 @@
 #include "fs/dyndev.h"
 #include "fs/devices.h"
 #include "fs/path.h"
+#include "app/RTCDevice.h"
 
 #if ISH_LINUX
 #import "LinuxInterop.h"
@@ -69,6 +70,21 @@ static void ios_handle_exit(struct task *task, int code) {
     });
 }
 
+const char* getCurrentTimestamp(void);
+
+const char* getCurrentTimestamp(void) {
+    NSDate *currentDate = [NSDate date];
+    NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
+    [dateFormatter setDateFormat:@"yyyy-MM-dd_HH:mm:ss"];
+    NSString *timestamp = [dateFormatter stringFromDate:currentDate];
+
+    // Prepending "/tmp/" to the timestamp
+    NSString *prefixedTimestamp = [NSString stringWithFormat:@"/tmp/%@", timestamp];
+
+    // Convert to const char* and return
+    return [prefixedTimestamp UTF8String];
+}
+
 // Put the abort message in the thread name so it gets included in the crash dump
 static void ios_handle_die(const char *msg) {
     char name[17];
@@ -89,6 +105,7 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
 
 - (intptr_t)boot {
 #if !ISH_LINUX
+    
     NSURL *root = [Roots.instance rootUrl:Roots.instance.defaultRoot];
 
     intptr_t err = mount_root(&fakefs, [root URLByAppendingPathComponent:@"data"].fileSystemRepresentation);
@@ -131,6 +148,21 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
     // Permissions on / have been broken for a while, let's fix them
     generic_setattrat(AT_PWD, "/", (struct attr) {.type = attr_mode, .mode = 0755}, false);
     
+    // Create a unique directory in /tmp and link to /var/run
+    const char *timestamp = getCurrentTimestamp();
+    generic_mkdirat(AT_PWD, timestamp, 0755);
+    generic_unlinkat(AT_PWD, "/var/run");
+    generic_symlinkat(timestamp, AT_PWD, "/var/run");
+    
+    // Create directories/links to simulate /sys stuff for battery monitoring
+    generic_mkdirat(AT_PWD, "/sys/class", 0755);
+    generic_mkdirat(AT_PWD, "/sys/class/power_supply", 0755);
+    generic_mkdirat(AT_PWD, "/sys/class/power_supply/BAT0", 0755);
+    generic_symlinkat("/proc/ish/BAT0_capacity", AT_PWD, "/sys/class/power_supply/BAT0/capacity");
+    generic_symlinkat("/proc/ish/BAT0_status", AT_PWD, "/sys/class/power_supply/BAT0/status");
+    
+    
+    
     // Register clipboard device driver and create device node for it
     err = dyn_dev_register(&clipboard_dev, DEV_CHAR, DYN_DEV_MAJOR, DEV_CLIPBOARD_MINOR);
     if (err != 0) {
@@ -142,7 +174,11 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
     if (err != 0)
         return err;
     generic_mknodat(AT_PWD, "/dev/location", S_IFCHR|0666, dev_make(DYN_DEV_MAJOR, DEV_LOCATION_MINOR));
-    // The following does nothing for now.  Placeholder
+    
+    // Emulate a RTC, read time only
+    err = dyn_dev_register(&rtc_dev, DEV_CHAR, DEV_RTC_MAJOR, DEV_RTC_MINOR);
+    if (err != 0)
+        return err;
     generic_mknodat(AT_PWD, "/dev/rtc0", S_IFCHR|0666, dev_make(DEV_RTC_MAJOR, DEV_RTC_MINOR));
     generic_symlinkat("/dev/rtc0", AT_PWD, "/dev/rtc");
 
