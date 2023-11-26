@@ -44,14 +44,17 @@
 static void ios_handle_exit(struct task *task, int code) {
     // we are interested in init and in children of init
     // this is called with pids_lock as an implementation side effect, please do not cite as an example of good API design
+    lock(&task->general_lock, 0);
     complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
     if(task->pid > MAX_PID) {// Corruption
         printk("ERROR: Insane PID in ios_handle_exit(%d)\n", task->pid);
         unlock(&pids_lock);
+        unlock(&task->general_lock);
         return;
     }
     if (task->parent != NULL && task->parent->parent != NULL) {
         unlock(&pids_lock);
+        unlock(&task->general_lock);
         return;
     }
     // pid should be saved now since task would be freed
@@ -62,6 +65,7 @@ static void ios_handle_exit(struct task *task, int code) {
 //        nanosleep(&lock_pause, NULL);
 //    }
     unlock(&pids_lock);
+    unlock(&task->general_lock);
     dispatch_async(dispatch_get_main_queue(), ^{
         [[NSNotificationCenter defaultCenter] postNotificationName:ProcessExitedNotification
                                                             object:nil

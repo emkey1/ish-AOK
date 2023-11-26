@@ -60,6 +60,8 @@ noreturn void do_exit(int status) {
        
     current->exiting = true;
     
+    lock(&current->general_lock, 0);
+    
     bool signal_pending = !!(current->pending & ~current->blocked);
     // has to happen before mm_release
     
@@ -170,6 +172,7 @@ noreturn void do_exit(int status) {
     if (exit_tgroup(current)) {
         // notify parent that we died
         struct task *parent = leader->parent;
+        lock(&parent->general_lock, 0);
         if (parent == NULL) {
             // init died
             halt_system();
@@ -188,16 +191,23 @@ noreturn void do_exit(int status) {
                 send_signal(parent, leader->exit_signal, info);
         }
         
+        
         if (exit_hook != NULL)
             exit_hook(current, status);
+        
+        unlock(&parent->general_lock);
     }
 
     modify_critical_region_counter(current, -1, __FILE__, __LINE__);
     vfork_notify(current);
-    if(current != leader) 
-        task_destroy(current);
+    if(current != leader) {
+        task_destroy(current, 1);
+    } else {
+        unlock(&current->general_lock);
+    }
     
     unlock(&pids_lock);
+    
     //atomic_l_unlockf();
 
 EXIT:pthread_exit(NULL);
@@ -223,14 +233,10 @@ noreturn void do_exit_group(int status) {
         modify_locks_held_count(current, tmpvar); // Reset to zero -mke
     }
     
-    //while((critical_region_count(current))) { // Wait for now, task is in one or more critical sections, and/or has locks
-     //   nanosleep(&lock_pause, NULL);
-   // }
     modify_critical_region_counter(current, 1, __FILE__, __LINE__);
     list_for_each_entry(&group->threads, task, group_links) {
         task->exiting = true;
         deliver_signal(task, SIGKILL_, SIGINFO_NIL);
-        //printk("INFO: Killing %s(%d)\n", current->comm, current->pid);
         task->group->stopped = false;
         notify(&task->group->stopped_cond);
     }
@@ -286,15 +292,7 @@ dword_t sys_exit_group(dword_t status) {
 static bool reap_if_zombie(struct task *task, struct siginfo_ *info_out, struct rusage_ *rusage_out, int options) {
     if (!task->zombie)
         return false;
-    bool signal_pending = !!(task->pending & ~task->blocked);
-    while(((signal_pending) ||
-           (critical_region_count(task) > 1) ||
-           (locks_held_count(task))) &&
-           (task->pid > 10)) {
-        nanosleep(&lock_pause, NULL);
-        signal_pending = !!(task->pending & ~task->blocked);
-    }
-    complex_lockt(&task->group->lock, 0, __FILE__, __LINE__);
+    lock(&task->group->lock, 0);
 
     dword_t exit_code = task->exit_code;
     if (task->group->doing_group_exit)
@@ -317,65 +315,15 @@ static bool reap_if_zombie(struct task *task, struct siginfo_ *info_out, struct 
         return true;
 
     // tear down group
-   // lock(&pids_lock); //mkemkemke  Doesn't work
-    //if(doEnableExtraLocking) //mke Doesn't work
-     //   extra_lockf(task->pid);
-    
-    signal_pending = !!(task->pending & ~task->blocked);
-    while(((signal_pending) ||
-           (critical_region_count(task) > 1) ||
-           (locks_held_count(task))) &&
-           (task->pid > 10)) {
-        nanosleep(&lock_pause, NULL);
-        signal_pending = !!(task->pending & ~task->blocked);
-    }
     cond_destroy(&task->group->child_exit);
-    
-    signal_pending = !!(task->pending & ~task->blocked);
-    while(((signal_pending) ||
-           (critical_region_count(task) > 1) ||
-           (locks_held_count(task))) &&
-           (task->pid > 10)) {
-        nanosleep(&lock_pause, NULL);
-        signal_pending = !!(task->pending & ~task->blocked);
-    }
     task_leave_session(task);
-    
-    signal_pending = !!(task->pending & ~task->blocked);
-    while(((signal_pending) ||
-           (critical_region_count(task) > 1) ||
-           (locks_held_count(task))) &&
-           (task->pid > 10)) {
-        nanosleep(&lock_pause, NULL);
-        signal_pending = !!(task->pending & ~task->blocked);
-    }
     list_remove(&task->group->pgroup);
-    
-    signal_pending = !!(task->pending & ~task->blocked);
-    while(((signal_pending) ||
-           (critical_region_count(task) > 1) ||
-           (locks_held_count(task))) &&
-           (task->pid > 10)) {
-        nanosleep(&lock_pause, NULL);
-        signal_pending = !!(task->pending & ~task->blocked);
-    }
     free(task->group);
-    
-    signal_pending = !!(task->pending & ~task->blocked);
-    while(((signal_pending) ||
-           (critical_region_count(task) > 1) ||
-           (locks_held_count(task))) &&
-           (task->pid > 10)) {
-        nanosleep(&lock_pause, NULL);
-        signal_pending = !!(task->pending & ~task->blocked);
-    }
-    // &pids_lock is locked already at this point
-    //complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
-    task_destroy(task);
-    //unlock(&pids_lock);
-    
+
+    task_destroy(task, 2);
     return true;
 }
+
 
 static bool notify_if_stopped(struct task *task, struct siginfo_ *info_out) {
     complex_lockt(&task->group->lock, 0, __FILE__, __LINE__);
@@ -391,13 +339,9 @@ static bool notify_if_stopped(struct task *task, struct siginfo_ *info_out) {
 
 static bool reap_if_needed(struct task *task, struct siginfo_ *info_out, struct rusage_ *rusage_out, int options) {
     assert(task_is_leader(task));
-    //if(doEnableExtraLocking)
-    //    pthread_mutex_lock(&extra_lock);
     if ((options & WUNTRACED_ && notify_if_stopped(task, info_out)) ||
         (options & WEXITED_ && reap_if_zombie(task, info_out, rusage_out, options))) {
         info_out->sig = SIGCHLD_;
-     //   if(doEnableExtraLocking)
-       //     pthread_mutex_unlock(&extra_lock);
         return true;
     }
     lock(&task->ptrace.lock, 0);
@@ -408,13 +352,9 @@ static bool reap_if_needed(struct task *task, struct siginfo_ *info_out, struct 
         info_out->child.status = /* task->ptrace.trap_event << 16 |*/ task->ptrace.signal << 8 | 0x7f;
         task->ptrace.signal = 0;
         unlock(&task->ptrace.lock);
-        //if(doEnableExtraLocking)
-         //   pthread_mutex_unlock(&extra_lock);
         return true;
     }
     unlock(&task->ptrace.lock);
-    //if(doEnableExtraLocking)
-     //   pthread_mutex_unlock(&extra_lock);
     return false;
 }
 

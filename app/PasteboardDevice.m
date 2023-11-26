@@ -223,7 +223,7 @@ static int clipboard_close(clip_fd *fd) {
     return 0;
 }
 
-static intptr_t clipboard_open(int major, int minor, clip_fd *fd) {
+static int clipboard_open(int major, int minor, clip_fd *fd) {
     // Zero fd_priv data
     memset(&fd_priv(fd), 0, sizeof(fd_priv(fd)));
 

@@ -72,7 +72,7 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
     } else {
         task->files = fdtable_copy(task->files);
         if (IS_ERR(task->files)) {
-            err = PTR_ERR(task->files);
+            err = (int)PTR_ERR(task->files);
             goto fail_free_mem;
         }
     }
@@ -161,7 +161,7 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
         // FIXME: task_destroy doesn't free all aspects of the task, which
         // could cause leaks
         complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
-        task_destroy(task);
+        task_destroy(task, 3);
         unlock(&pids_lock);
         
         return err;
@@ -201,11 +201,11 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
     return pid;
 }
 
-dword_t sys_fork() {
+dword_t sys_fork(void) {
     return sys_clone(SIGCHLD_, 0, 0, 0, 0);
 }
 
-dword_t sys_vfork() {
+dword_t sys_vfork(void) {
     return sys_clone(CLONE_VFORK_ | CLONE_VM_ | SIGCHLD_, 0, 0, 0, 0);
 }
 

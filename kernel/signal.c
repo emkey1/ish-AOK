@@ -82,7 +82,7 @@ retry:
         lock(&task->waiting_cond_lock, 0);
         if (task->waiting_cond != NULL) {
             bool mine = false;
-            if (trylock(task->waiting_lock) == EBUSY) {
+            if (trylock(task->waiting_lock) == _EBUSY) {
                 if (pthread_equal(task->waiting_lock->owner, pthread_self()))
                     mine = true;
                 if (!mine) {

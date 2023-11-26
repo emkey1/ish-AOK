@@ -401,7 +401,7 @@ int mem_segv_reason(struct mem *mem, addr_t addr) {
 }
 
 size_t real_page_size;
-__attribute__((constructor)) static void get_real_page_size() {
+__attribute__((constructor)) static void get_real_page_size(void) {
     real_page_size = sysconf(_SC_PAGESIZE);
 }
 

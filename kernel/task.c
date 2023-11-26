@@ -163,8 +163,13 @@ bool should_wait(struct task *t) {
     return critical_region_count(t) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
 }
 
-void task_destroy(struct task *task) {
-    task->exiting = true;
+void task_destroy(struct task *task, int caller) {
+    if(trylock(&task->general_lock) == (_EBUSY)) { // Get it if a lock does not exist
+        task->exiting = true;
+        lock(&task->general_lock, 0);
+    }
+    
+    printk("TD(%s:%d): Called by %d\n", task->comm, task->pid, caller);
     
     // We use a single loop to wait for the task to be ready to destroy.
     // This loop replaces all the similar while-loops in the original code.

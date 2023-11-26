@@ -126,7 +126,7 @@ static inline void task_set_mm(struct task *task, struct mm *mm) {
 // Ends with an underscore because there's a mach function by the same name
 struct task *task_create_(struct task *parent);
 // Removes the process from the process table and frees it. Must be called with pids_lock.
-void task_destroy(struct task *task);
+void task_destroy(struct task *task, int caller);
 
 // misc
 void vfork_notify(struct task *task);

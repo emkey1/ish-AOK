@@ -477,7 +477,7 @@ static inline int user_memset(addr_t start, byte_t val, dword_t len) {
 }
 
 static int format_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
-    int err = elf_exec(fd, file, argv, envp);
+    int err = (int)elf_exec(fd, file, argv, envp);
     if (err != _ENOEXEC)
         return err;
     // other formats would go here
@@ -557,7 +557,7 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
 
     struct fd *interpreter_fd = generic_open(interpreter, O_RDONLY_, 0);
     if (IS_ERR(interpreter_fd))
-        return PTR_ERR(interpreter_fd);
+        return (int)PTR_ERR(interpreter_fd);
     int err = format_exec(interpreter_fd, interpreter, new_argv, envp);
     fd_close(interpreter_fd);
     return err;
@@ -566,7 +566,7 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
 int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) {
     struct fd *fd = generic_open(file, O_RDONLY, 0);
     if (IS_ERR(fd))
-        return PTR_ERR(fd);
+        return (int)PTR_ERR(fd);
 
     struct statbuf stat;
     int err = fd->mount->fs->fstat(fd, &stat);

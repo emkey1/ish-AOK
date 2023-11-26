@@ -36,6 +36,8 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
         return _ESRCH;
         
     ////modify_critical_region_counter(task, 1, __FILE__, __LINE__);
+    if(!strcmp(task->general_lock.lname, "task_creat_gen")) // Work around.  Sometimes the general lock is locked when it shouldn't be
+        unlock(&task->general_lock);
     lock(&task->general_lock, 0);
     lock(&task->group->lock, 0);
     // lock(&task->sighand->lock); //mkemke.  Evil, but I'm tired of trying to track down why this is getting munged for now.

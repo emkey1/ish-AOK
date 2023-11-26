@@ -91,6 +91,7 @@
       buildConfiguration = "Debug-ApplePleaseFixFB19282108"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      enableAddressSanitizer = "YES"
       enableASanStackUseAfterReturn = "YES"
       enableUBSanitizer = "YES"
       launchStyle = "0"
