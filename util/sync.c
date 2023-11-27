@@ -53,13 +53,9 @@ void modify_critical_region_counter(struct task *task, int value, __attribute__(
         ilocked = true; // Make sure this is locked, and unlock it later if we had to lock it.
     }
     
-   // if(task->pid > 9) // Bad things happen if this is enabled for low number tasks.  For reasons I do not understand.  -mke
-    //    return;
-    
     pthread_mutex_lock(&task->critical_region.lock);
     
     if(((task->critical_region.count + value) < 0) && (task->pid > 9)) { // Prevent our unsigned value attempting to go negative.  -mke
-    //if(!task->critical_region.count && (value < 0)) { // Prevent our unsigned value attempting to go negative.  -mke
         printk("ERROR: Attempt to decrement critical_region count to be negative, ignoring(%s:%d) (%d - %d) (%s:%d)\n", task->comm, task->pid, task->critical_region.count, value, file, line);
         if(ilocked == true)
             unlock(&task->general_lock);
@@ -70,12 +66,6 @@ void modify_critical_region_counter(struct task *task, int value, __attribute__(
     }
     
     
-    /* if((strcmp(task->comm, "easter_egg") == 0) && ( !noprintk)) { // Extra logging for the some command
-        noprintk = 1; // Avoid recursive logging -mke
-        printk("INFO: MCRC(%d(%s):%s:%d:%d:%d)\n", task->pid, task->comm, file, line, value, task->critical_region.count + value);
-        noprintk = 0;
-    } */
-    
     task->critical_region.count = task->critical_region.count + value;
         
     pthread_mutex_unlock(&task->critical_region.lock);
@@ -84,7 +74,8 @@ void modify_critical_region_counter(struct task *task, int value, __attribute__(
         unlock(&task->general_lock);
 }
 
-void modify_critical_region_counter_wrapper(int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { // sync.h can't know about the definition of task struct due to recursive include files.  -mke
+void modify_critical_region_counter_wrapper(int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { 
+    // sync.h can't know about the definition of task struct due to recursive include files.  -mke
     if((current != NULL) && (doEnableExtraLocking))
         modify_critical_region_counter(current, value, file, line);
     
@@ -214,8 +205,8 @@ unsigned critical_region_count(struct task *task) {
     unsigned tmp = 0;
     pthread_mutex_lock(&task->critical_region.lock); // This would make more
     tmp = task->critical_region.count;
-    if(tmp > 1000)  // Not likely
-        tmp = 0;
+ //   if(tmp > 1000)  // Not likely
+ //       tmp = 0;
     pthread_mutex_unlock(&task->critical_region.lock);
 
     return tmp;

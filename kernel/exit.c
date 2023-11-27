@@ -198,8 +198,8 @@ noreturn void do_exit(int status) {
         unlock(&parent->general_lock);
     }
 
-    modify_critical_region_counter(current, -1, __FILE__, __LINE__);
     vfork_notify(current);
+    modify_critical_region_counter(current, -1, __FILE__, __LINE__);
     if(current != leader) {
         task_destroy(current, 1);
     } else {

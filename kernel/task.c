@@ -169,7 +169,7 @@ void task_destroy(struct task *task, int caller) {
         lock(&task->general_lock, 0);
     }
     
-    printk("TD(%s:%d): Called by %d\n", task->comm, task->pid, caller);
+    //printk("TD(%s:%d): Called by %d\n", task->comm, task->pid, caller);
     
     // We use a single loop to wait for the task to be ready to destroy.
     // This loop replaces all the similar while-loops in the original code.

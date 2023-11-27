@@ -49,7 +49,8 @@ static void ios_handle_exit(struct task *task, int code) {
     if(task->pid > MAX_PID) {// Corruption
         printk("ERROR: Insane PID in ios_handle_exit(%d)\n", task->pid);
         unlock(&pids_lock);
-        unlock(&task->general_lock);
+        // No reason to unlock the task, it has already been freed. :-(
+        //unlock(&task->general_lock);
         return;
     }
     if (task->parent != NULL && task->parent->parent != NULL) {
