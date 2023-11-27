@@ -301,10 +301,10 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
     switch (op & FUTEX_CMD_MASK_) {
         case FUTEX_WAIT_:
             STRACE("futex(FUTEX_WAIT, %#x, %d, 0x%x {%ds %dns}) = ...\n", uaddr, val, timeout_or_val2, timeout.tv_sec, timeout.tv_nsec);
-            modify_critical_region_counter(current, 1, __FILE__, __LINE__);
+            modify_critical_region_count(current, 1, __FILE__, __LINE__);
             dword_t return_val;
             return_val = futex_wait(uaddr, val, timeout_or_val2 ? &timeout : NULL);
-            modify_critical_region_counter(current, -1, __FILE__, __LINE__);
+            modify_critical_region_count(current, -1, __FILE__, __LINE__);
             return return_val;
         case FUTEX_WAKE_:
             STRACE("futex(FUTEX_WAKE, %#x, %d)", uaddr, val);

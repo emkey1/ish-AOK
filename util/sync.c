@@ -33,7 +33,7 @@ static bool is_signal_pending(lock_t *lock) {
     return pending;
 }
 
-void modify_critical_region_counter(struct task *task, int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { // value Should only be -1 or 1.  -mke
+void modify_critical_region_count(struct task *task, int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { // value Should only be -1 or 1.  -mke
     
     if(!doEnableExtraLocking) {// If they want to fly by the seat of their pants...  -mke
         return;
@@ -49,7 +49,7 @@ void modify_critical_region_counter(struct task *task, int value, __attribute__(
     
     bool ilocked = false;
     
-    if (trylocknl(&task->general_lock) != _EBUSY) {
+    if (trylocknl(&task->general_lock, task->comm, task->pid) != _EBUSY) {
         ilocked = true; // Make sure this is locked, and unlock it later if we had to lock it.
     }
     
@@ -74,10 +74,10 @@ void modify_critical_region_counter(struct task *task, int value, __attribute__(
         unlock(&task->general_lock);
 }
 
-void modify_critical_region_counter_wrapper(int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { 
+void modify_critical_region_count_wrapper(int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { 
     // sync.h can't know about the definition of task struct due to recursive include files.  -mke
     if((current != NULL) && (doEnableExtraLocking))
-        modify_critical_region_counter(current, value, file, line);
+        modify_critical_region_count(current, value, file, line);
     
     return;
 }

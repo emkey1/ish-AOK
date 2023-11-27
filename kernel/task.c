@@ -69,7 +69,7 @@ struct pid *pid_get_last_allocated(void) {
 }
 
 dword_t get_count_of_blocked_tasks(void) {
-    modify_critical_region_counter(current, 1, __FILE__, __LINE__);
+    modify_critical_region_count(current, 1, __FILE__, __LINE__);
     dword_t res = 0;
     struct pid *pid_entry;
     complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
@@ -78,7 +78,7 @@ dword_t get_count_of_blocked_tasks(void) {
             res++;
         }
     }
-    modify_critical_region_counter(current, -1, __FILE__, __LINE__);
+    modify_critical_region_count(current, -1, __FILE__, __LINE__);
     unlock(&pids_lock);
     return res;
 }

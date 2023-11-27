@@ -35,7 +35,7 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     if ((task == NULL) || (task->exiting == true))
         return _ESRCH;
         
-    ////modify_critical_region_counter(task, 1, __FILE__, __LINE__);
+    ////mofify_critical_region_counter(task, 1, __FILE__, __LINE__);
     if(!strcmp(task->general_lock.lname, "task_creat_gen")) // Work around.  Sometimes the general lock is locked when it shouldn't be
         unlock(&task->general_lock);
     lock(&task->general_lock, 0);
@@ -117,7 +117,7 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     //unlock(&task->sighand->lock);
     unlock(&task->group->lock);
     unlock(&task->general_lock);
-    ////modify_critical_region_counter(task, -1, __FILE__, __LINE__);
+    ////mofify_critical_region_counter(task, -1, __FILE__, __LINE__);
     proc_put_task(task);
     return 0;
 }
@@ -167,7 +167,7 @@ static int proc_pid_cmdline_show(struct proc_entry *entry, struct proc_data *buf
     if ((task == NULL) || (task->exiting == true))
         return _ESRCH;
     
-    ////modify_critical_region_counter(task, 1, __FILE__, __LINE__);
+    ////mofify_critical_region_counter(task, 1, __FILE__, __LINE__);
     
     int err = 0;
     lock(&task->general_lock, 0);
