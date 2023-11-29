@@ -87,9 +87,9 @@ void jit_invalidate_page(struct jit *jit, page_t page) {
     while(critical_region_count(current) > 4) { // It's all a bit magic, but I think this is doing something useful.  -mke
         nanosleep(&lock_pause, NULL);
     }
-    //mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
+ //   mofify_critical_region_count(current, 1, __FILE__, __LINE__);
     jit_invalidate_range(jit, page, page + 1);
-    //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
+ //   mofify_critical_region_count(current, -1, __FILE__, __LINE__);
 }
 
 void jit_invalidate_all(struct jit *jit) {
@@ -185,20 +185,11 @@ static void jit_block_disconnect(struct jit *jit, struct jit_block *block) {
 }
 
 static void jit_block_free(struct jit *jit, struct jit_block *block) {
-   // critical_region_count_increase(current);
     jit_block_disconnect(jit, block);
     free(block);
-    //critical_region_count_decrease(current);
 }
 
 static void jit_free_jetsam(struct jit *jit) {
-   /* if(!strcmp(current->comm, "go")) {
-        // Sleep for a bit if this is go.  Kludge alert.  -mke
-        struct timespec wait;
-        wait.tv_sec = 3; // Be anal and set both to zero.  -mke
-        wait.tv_nsec = 0;
-        nanosleep(&wait, NULL);
-    } */
     struct jit_block *block, *tmp;
     list_for_each_entry_safe(&jit->jetsam, block, tmp, jetsam) {
         list_remove(&block->jetsam);
@@ -227,7 +218,6 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         addr_t ip = frame->cpu.eip;
         size_t cache_index = jit_cache_hash(ip);
         struct jit_block *block = cache[cache_index];
-        //////mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
         if (block == NULL || block->addr != ip) {
             lock(&jit->lock, 0);
             block = jit_lookup(jit, ip);
@@ -240,7 +230,6 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             cache[cache_index] = block;
             unlock(&jit->lock);
         }
-        //////mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
         struct jit_block *last_block = frame->last_block;
         if (last_block != NULL &&
                 (last_block->jump_ip[0] != NULL ||
@@ -253,17 +242,13 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                     if (last_block->jump_ip[i] != NULL &&
                             (*last_block->jump_ip[i] & 0xffffffff) == block->addr) {
                         *last_block->jump_ip[i] = (unsigned long) block->code;
-			//mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
                         list_add(&block->jumps_from[i], &last_block->jumps_from_links[i]);
-			//mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
                     }
                 }
             }
 
             unlock(&jit->lock);
         }
-        
-        //////mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
         
         frame->last_block = block;
 

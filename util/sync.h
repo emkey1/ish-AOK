@@ -113,7 +113,6 @@ static inline void atomic_l_lockf(char lname[16], int skiplog, const char *file,
     if(!doEnableExtraLocking)
         return;
     int res = 0;
-   // mofify_critical_region_counter_wrapper(1, file, line);
     if(atomic_l_lock.pid > 0) {
         if(current_pid() != atomic_l_lock.pid) { // Potential deadlock situation.  Also weird.  --mke
             res = pthread_mutex_lock(&atomic_l_lock.m);
@@ -132,15 +131,12 @@ static inline void atomic_l_lockf(char lname[16], int skiplog, const char *file,
     }
     
     //STRACE("atomic_l_lockf(%d)\n", count); // This is too verbose most of the time
-    
-    // mofify_critical_region_counter_wrapper(-1, file, line);
 }
 
 static inline void atomic_l_unlockf(void) {
     if(!doEnableExtraLocking)
         return;
     int res = 0;
-    //mofify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
     strncpy((char *)&atomic_l_lock.lname,"\0", 1);
     res = pthread_mutex_unlock(&atomic_l_lock.m);
     if(res) {
@@ -150,9 +146,7 @@ static inline void atomic_l_unlockf(void) {
     }
     
     modify_locks_held_count_wrapper(-1);
-    //mofify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
     //STRACE("atomic_l_unlockf()\n");
-  //  mofify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
 }
 
 static inline void complex_lockt(lock_t *lock, int log_lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
@@ -360,7 +354,6 @@ static inline void _write_lock(wrlock_t *lock, const char *file, int line) {
 }
 
 static inline int trylockw(wrlock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
-    //mofify_critical_region_counter_wrapper(1,__FILE__, __LINE__);
     atomic_l_lockf("trylockw\0", 0, __FILE__, __LINE__);
     int status = pthread_rwlock_trywrlock(&lock->l);
     atomic_l_unlockf();
@@ -384,7 +377,6 @@ static inline int trylockw(wrlock_t *lock, __attribute__((unused)) const char *f
 #define trylockw(lock) trylockw(lock, __FILE__, __LINE__)
 
 static inline int trylock(lock_t *lock, __attribute__((unused)) const char *file, __attribute__((unused)) int line) {
-    //mofify_critical_region_counter_wrapper(1,__FILE__, __LINE__);
     atomic_l_lockf("trylock\0", 0, __FILE__, __LINE__);
     int status = pthread_mutex_trylock(&lock->m);
     atomic_l_unlockf();

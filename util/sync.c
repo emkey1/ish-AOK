@@ -34,6 +34,7 @@ static bool is_signal_pending(lock_t *lock) {
 }
 
 void modify_critical_region_count(struct task *task, int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { // value Should only be -1 or 1.  -mke
+   // return;
     
     if(!doEnableExtraLocking) {// If they want to fly by the seat of their pants...  -mke
         return;
@@ -202,11 +203,13 @@ void sigusr1_handler(void) {
 
 // Because sometimes we can't #include "kernel/task.h" -mke
 unsigned critical_region_count(struct task *task) {
+   // return 0;
     unsigned tmp = 0;
     pthread_mutex_lock(&task->critical_region.lock); // This would make more
     tmp = task->critical_region.count;
- //   if(tmp > 1000)  // Not likely
- //       tmp = 0;
+    //printk("%d:%d\n", task, tmp);
+    if(tmp > 1000)  // Not likely
+        tmp = 0;
     pthread_mutex_unlock(&task->critical_region.lock);
 
     return tmp;

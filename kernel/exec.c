@@ -109,12 +109,10 @@ static int load_entry(struct prg_header ph, addr_t bias, struct fd *fd) {
         if (tail_size != 0) {
             // Unlock and lock the mem because the user functions must be
             // called without locking mem.
-            //mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
 	    if(trylockw(&current->mem->lock)) //  Test to see if it is actually locked.  This is likely masking an underlying problem.  -mke
                 write_unlock(&current->mem->lock, __FILE__, __LINE__);
             user_memset(file_end, 0, tail_size);
             write_lock(&current->mem->lock);
-            //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
         }
         if (tail_size > bss_size)
             tail_size = bss_size;

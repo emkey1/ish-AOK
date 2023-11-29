@@ -357,7 +357,6 @@ void handle_page_fault_interrupt(struct cpu_state *cpu) {
             .code = mem_segv_reason(current->mem, cpu->segfault_addr),
             .fault.addr = cpu->segfault_addr,
         };
-        //current->zombie = true;
         dump_stack(8);
         deliver_signal(current, SIGSEGV_, info);
     }

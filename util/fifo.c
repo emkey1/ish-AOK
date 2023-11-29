@@ -11,9 +11,7 @@ void fifo_init(struct fifo *fifo, size_t capacity) {
 }
 
 void fifo_destroy(struct fifo *fifo) {
-    ////mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
     free(fifo->buf);
-    ////mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
 }
 
 size_t fifo_capacity(struct fifo *fifo) {
@@ -67,7 +65,5 @@ int fifo_read(struct fifo *fifo, void *buf, size_t size, int flags) {
 }
 
 void fifo_flush(struct fifo *fifo) {
-    ////mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
     fifo->size = 0;
-    ////mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
 }

@@ -100,25 +100,18 @@ retry:
 }
 
 void deliver_signal(struct task *task, int sig, struct siginfo_ info) {
-    ////mofify_critical_region_counter(task, 1, __FILE__, __LINE__); // Doesn't work.  -mke
     lock(&task->sighand->lock, 0);
     deliver_signal_unlocked(task, sig, info);
     unlock(&task->sighand->lock);
-    ////mofify_critical_region_counter(task, -1, __FILE__, __LINE__);
 }
 
 void send_signal(struct task *task, int sig, struct siginfo_ info) {
     // signal zero is for testing whether a process exists
-    if(task->exiting)
-        return;  // I'm not sure this is correct.  -mke
-    
-    if(sig == 0)
+    if (sig == 0)
         return;
-    if(task->zombie)
+    if (task->zombie || task->exiting)
         return;
         
-        
-    //critical_region_count_increase(task);
     struct sighand *sighand = task->sighand;
     lock(&sighand->lock, 0);
     if ((signal_action(sighand, sig) != SIGNAL_IGNORE) && (task->pid <= MAX_PID)) { // Deal with normal and crazy.  -mke
@@ -132,8 +125,6 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
         notify(&task->group->stopped_cond);
         unlock(&task->group->lock);
     }
-    
-    //critical_region_count_decrease(task);
 }
 
 bool try_self_signal(int sig) {
@@ -368,10 +359,8 @@ void receive_signals(void) {  // Should this function have a check for critical_
         int sig = sigqueue->info.sig;
         if (sigset_has(blocked, sig))
             continue;
-        //mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
         list_remove(&sigqueue->queue);
         sigset_del(&current->pending, sig);
-        //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
 
         if (current->ptrace.traced && sig != SIGKILL_) {
             // This notifies the parent, goes to sleep, and waits for the
@@ -725,9 +714,7 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
 }
 
 static int kill_task(struct task *task, dword_t sig) {
-    //while((critical_region_count(task) >1) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
-   //     nanosleep(&lock_pause, NULL);
-    //}
+    // FIXME: Need to check references to kernel here to be sure they are zero
     if (!superuser() &&
             current->uid != task->uid &&
             current->uid != task->suid &&
@@ -739,9 +726,7 @@ static int kill_task(struct task *task, dword_t sig) {
         .kill.pid = current->pid,
         .kill.uid = current->uid,
     };
-    //while((critical_region_count(task)) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
-    //    nanosleep(&lock_pause, NULL);
-    //}
+    
     send_signal(task, sig, info);
     return 0;
 }

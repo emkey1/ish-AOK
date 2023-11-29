@@ -67,8 +67,6 @@ void mem_destroy(struct mem *mem) {
             free(mem->pgdir[i]);
     }
 
-    //mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
-
     do {
         nanosleep(&lock_pause, NULL);
     } while((critical_region_count(current) > 1) && (current->pid > 1) ); // Wait for now, task is in one or more critical sections
@@ -78,8 +76,6 @@ void mem_destroy(struct mem *mem) {
     mem->pgdir = NULL; //mkemkemke Trying something here
     
     write_unlock_and_destroy(&mem->lock);
-    
-    //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
     
 }
 
@@ -97,34 +93,26 @@ static struct pt_entry *mem_pt_new(struct mem *mem, page_t page) {
 
 struct pt_entry *mem_pt(struct mem *mem, page_t page) {
 
-    //mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
-
     if (mem->pgdir[PGDIR_TOP(page)] != NULL) { // Check if defined.  Likely still leaves a potential race condition as no locking currently. -MKE FIXME
         struct pt_entry *pgdir = mem->pgdir[PGDIR_TOP(page)];
         if (pgdir == NULL) {
-            //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
             return NULL;
         }
         
         struct pt_entry *entry = &pgdir[PGDIR_BOTTOM(page)];
         if (entry->data == NULL) {
-            //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
             return NULL;
         }
         
-        //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
         return entry;
     } else {
         mem->pgdir[PGDIR_TOP(page)] = NULL;
-        //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
         return NULL;
     }
     
-    //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
 }
 
 static void mem_pt_del(struct mem *mem, page_t page) {
-    //mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
     struct pt_entry *entry = mem_pt(mem, page);
     if (entry != NULL) {
          while(critical_region_count(current) > 4) { // mark
@@ -132,17 +120,14 @@ static void mem_pt_del(struct mem *mem, page_t page) {
         }
         entry->data = NULL;
     }
-    //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
 }
 
 void mem_next_page(struct mem *mem, page_t *page) {
     (*page)++;
     if (*page >= MEM_PAGES)
         return;
-    //mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
     while (*page < MEM_PAGES && mem->pgdir[PGDIR_TOP(*page)] == NULL)
         *page = (*page - PGDIR_BOTTOM(*page)) + MEM_PGDIR_SIZE;
-    //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
 }
 
 page_t pt_find_hole(struct mem *mem, pages_t size) {
@@ -346,8 +331,6 @@ void *mem_ptr(struct mem *mem, addr_t addr, int type) {
         if (type != MEM_WRITE_PTRACE && !(entry->flags & P_WRITE))
             return NULL;
         
-        ////mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
-        
         if (type == MEM_WRITE_PTRACE) {
             // TODO: Is P_WRITE really correct? The page shouldn't be writable without ptrace.
             entry->flags |= P_WRITE | P_COW;
@@ -361,11 +344,9 @@ void *mem_ptr(struct mem *mem, addr_t addr, int type) {
         
         if (entry->flags & P_COW) {
             lock(&current->general_lock, 0);  // prevent elf_exec from doing mm_release while we are in flight?  -mke
-            //mofify_critical_region_counter(current, 1, __FILE__, __LINE__);
             read_to_write_lock(&mem->lock);
             void *copy = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
             void *data = (char *) entry->data->data + entry->offset;
-            //mofify_critical_region_counter(current, -1, __FILE__, __LINE__);
 
             // copy/paste from above
             modify_critical_region_count(current, 1,__FILE__, __LINE__);
