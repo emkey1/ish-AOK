@@ -17,7 +17,7 @@ extern const char extra_lock_comm;
 static void halt_system(void);
 
 static bool exit_tgroup(struct task *task) {
-    while((critical_region_count(task) > 2) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
+    while((task_reference_count(task) > 2) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
         nanosleep(&lock_pause, NULL);
     }
     struct tgroup *group = task->group;
@@ -65,9 +65,8 @@ noreturn void do_exit(int status) {
     bool signal_pending = !!(current->pending & ~current->blocked);
     // has to happen before mm_release
     
-    while((critical_region_count(current) > 1) ||
+    while((task_reference_count(current) > 1) ||
           (locks_held_count(current)) ||
-          (current->process_info_being_read) ||
           (signal_pending)) { // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
@@ -83,17 +82,15 @@ noreturn void do_exit(int status) {
     do {
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
-    } while((critical_region_count(current) > 1) ||
+    } while((task_reference_count(current) > 1) ||
             (locks_held_count(current)) ||
-            (current->process_info_being_read) ||
             (signal_pending)); // Wait for now, task is in one or more critical
     mm_release(current->mm);
     current->mm = NULL;
     
     signal_pending = !!(current->pending & ~current->blocked);
-    while((critical_region_count(current) > 1) ||
+    while((task_reference_count(current) > 1) ||
           (locks_held_count(current)) ||
-          (current->process_info_being_read) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
@@ -101,9 +98,8 @@ noreturn void do_exit(int status) {
     fdtable_release(current->files);
     current->files = NULL;
     
-    while((critical_region_count(current) > 1) ||
+    while((task_reference_count(current) > 1) ||
           (locks_held_count(current)) ||
-          (current->process_info_being_read) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
@@ -114,9 +110,8 @@ noreturn void do_exit(int status) {
     // sighand must be released below so it can be protected by pids_lock
     // since it can be accessed by other threads
 
-    while((critical_region_count(current) > 1) ||
+    while((task_reference_count(current) > 1) ||
           (locks_held_count(current)) ||
-          (current->process_info_being_read) ||
           (signal_pending)) { // Wait for now, task is in one or more critical// Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
@@ -130,13 +125,12 @@ noreturn void do_exit(int status) {
     unlock(&current->group->lock);
 
     // the actual freeing needs pids_lock
-    modify_critical_region_count(current, 1, __FILE__, __LINE__);
+    task_ref_count(current, 1, __FILE__, __LINE__);
     complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
     // release the sighand
     signal_pending = !!(current->pending & ~current->blocked);
-    while((critical_region_count(current) > 2) ||
+    while((task_reference_count(current) > 2) ||
           (locks_held_count(current)) ||
-          (current->process_info_being_read) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
@@ -161,9 +155,8 @@ noreturn void do_exit(int status) {
     
     signal_pending = !!(current->pending & ~current->blocked);
     
-    while((critical_region_count(current) > 2) ||
+    while((task_reference_count(current) > 2) ||
           (locks_held_count(current)) ||
-          (current->process_info_being_read) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
@@ -199,7 +192,7 @@ noreturn void do_exit(int status) {
     }
 
     vfork_notify(current);
-    modify_critical_region_count(current, -1, __FILE__, __LINE__);
+    task_ref_count(current, -1, __FILE__, __LINE__);
     if(current != leader) {
         task_destroy(current, 1);
     } else {
@@ -233,7 +226,7 @@ noreturn void do_exit_group(int status) {
         modify_locks_held_count(current, tmpvar); // Reset to zero -mke
     }
     
-    modify_critical_region_count(current, 1, __FILE__, __LINE__);
+    task_ref_count(current, 1, __FILE__, __LINE__);
     list_for_each_entry(&group->threads, task, group_links) {
         task->exiting = true;
         deliver_signal(task, SIGKILL_, SIGINFO_NIL);
@@ -242,7 +235,7 @@ noreturn void do_exit_group(int status) {
     }
 
     unlock(&pids_lock);
-    modify_critical_region_count(current, -1, __FILE__, __LINE__);
+    task_ref_count(current, -1, __FILE__, __LINE__);
     unlock(&group->lock);
     //if(current->pid <= MAX_PID) // abort if crazy.  -mke
         do_exit(status);
@@ -365,7 +358,7 @@ int do_wait(int idtype, pid_t_ id, struct siginfo_ *info, struct rusage_ *rusage
         return _EINVAL;
 
     complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
-    modify_critical_region_count(current, 1, __FILE__, __LINE__);
+    task_ref_count(current, 1, __FILE__, __LINE__);
     int err;
     bool got_signal = false;
 
@@ -425,12 +418,12 @@ retry:
 
     info->sig = SIGCHLD_;
 found_something:
-    modify_critical_region_count(current, -1, __FILE__, __LINE__);
+    task_ref_count(current, -1, __FILE__, __LINE__);
     unlock(&pids_lock);
     return 0;
 
 error:
-    modify_critical_region_count(current, -1, __FILE__, __LINE__);
+    task_ref_count(current, -1, __FILE__, __LINE__);
     unlock(&pids_lock);
     return err;
 }

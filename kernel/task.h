@@ -19,14 +19,13 @@ struct task {
     pthread_t thread;
     uint64_t threadid;
 
-    bool process_info_being_read; // Set when something like ps, top, etc wants to access task info. -mke
-
     pthread_mutex_t death_lock; // Set when process is about to be reaped.  Immediately cease all activity on this task.  -mke
     
     struct {
         pthread_mutex_t lock;
-        int count; // If positive, don't delete yet, wait_to_delete -mke
-    } critical_region;
+        int count; // If positive, don't delete yet, wait_to_delete 
+        bool ready_to_be_freed; // Should be false initially
+    } reference;
     
     struct {
         pthread_mutex_t lock;
@@ -226,14 +225,14 @@ void update_thread_name(void);
 // of functions which can block the task, we mark our task as blocked and
 // unblock it after the function is executed.
 __attribute__((always_inline)) inline int task_may_block_start(void) {
-    modify_critical_region_count_wrapper(1, __FILE__, __LINE__);
+            task_ref_count_wrapper(1, __FILE__, __LINE__);
     current->io_block = 1;
     return 0;
 }
 
 __attribute__((always_inline)) inline int task_may_block_end(void) {
     current->io_block = 0;
-    modify_critical_region_count_wrapper(-1, __FILE__, __LINE__);
+            task_ref_count_wrapper(-1, __FILE__, __LINE__);
     return 0;
 }
 

@@ -20,6 +20,11 @@ struct mem {
     struct jit *jit;
 #endif
     struct mmu mmu;
+    struct {
+        pthread_mutex_t lock;
+        int count; // If positive, don't delete yet, wait_to_delete
+        bool ready_to_be_freed; // Should be false initially
+    } reference;
 
     wrlock_t lock;
 };

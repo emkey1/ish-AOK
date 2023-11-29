@@ -135,7 +135,7 @@ static int proc_pid_auxv_show(struct proc_entry *entry, struct proc_data *buf) {
     struct task *task = proc_get_task(entry);
     if ((task == NULL) || (task->exiting == true))
         return _ESRCH;
-    task->process_info_being_read = true;
+    // FIXME: Increment task->reference.count
     int err = 0;
     lock(&task->general_lock, 0);
     if (task->mm == NULL)
@@ -153,8 +153,8 @@ static int proc_pid_auxv_show(struct proc_entry *entry, struct proc_data *buf) {
 
 out_free_task:
     unlock(&task->general_lock);
-    task->process_info_being_read = false;
     proc_put_task(task);
+    // FIXME: Decrement task->reference.count
     return err;
 }
 

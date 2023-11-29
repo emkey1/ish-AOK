@@ -331,7 +331,7 @@ void poll_destroy(struct poll *poll) {
     struct poll_fd *poll_fd;
     struct poll_fd *tmp;
     
-    while(critical_region_count(current)) {
+    while(task_reference_count(current)) {
         nanosleep(&lock_pause, NULL);
     }
     list_for_each_entry_safe(&poll->poll_fds, poll_fd, tmp, fds) {
@@ -342,12 +342,12 @@ void poll_destroy(struct poll *poll) {
         free(poll_fd);
     }
           
-    while(critical_region_count(current)) {
+    while(task_reference_count(current)) {
         nanosleep(&lock_pause, NULL);
     }
     
     list_for_each_entry_safe(&poll->pollfd_freelist, poll_fd, tmp, fds) {
-        while(critical_region_count(current)) {
+        while(task_reference_count(current)) {
             nanosleep(&lock_pause, NULL);
         }
         list_remove(&poll_fd->fds);

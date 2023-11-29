@@ -45,12 +45,13 @@ void mm_release(struct mm *mm) {
     if (--mm->refcount == 0) {
         if (mm->exefile != NULL)
             fd_close(mm->exefile);
-        while((critical_region_count(current) > 1) || (current->process_info_being_read)) { // Wait for now, task is in one or more critical sections
+        while(task_reference_count(current)) {  // FIXME: Should be locking current->reference.lock and updating
+                                               // current->reference.count before mem_destroy
             nanosleep(&lock_pause, NULL);
         }
         
         mem_destroy(&mm->mem);
-        while((critical_region_count(current) > 1) || (current->process_info_being_read)) { // Wait for now, task is in one or more critical sections
+        while(task_reference_count(current)) {  //FIXME: Should now unlock after mem_destroy
             nanosleep(&lock_pause, NULL);
         }
         free(mm);
@@ -181,7 +182,7 @@ int_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) {
 
     // shrinking always works
     if (new_pages <= old_pages) {
-        while(critical_region_count(current)) {
+        while(task_reference_count(current)) {
             nanosleep(&lock_pause, NULL);
         }
         int err = pt_unmap(current->mem, PAGE(addr) + new_pages, old_pages - new_pages);

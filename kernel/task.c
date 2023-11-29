@@ -69,7 +69,7 @@ struct pid *pid_get_last_allocated(void) {
 }
 
 dword_t get_count_of_blocked_tasks(void) {
-    modify_critical_region_count(current, 1, __FILE__, __LINE__);
+    task_ref_count(current, 1, __FILE__, __LINE__);
     dword_t res = 0;
     struct pid *pid_entry;
     complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
@@ -78,7 +78,7 @@ dword_t get_count_of_blocked_tasks(void) {
             res++;
         }
     }
-    modify_critical_region_count(current, -1, __FILE__, __LINE__);
+    task_ref_count(current, -1, __FILE__, __LINE__);
     unlock(&pids_lock);
     return res;
 }
@@ -86,7 +86,7 @@ dword_t get_count_of_blocked_tasks(void) {
 void zero_critical_regions_count(void) { // If doEnableExtraLocking is changed to false, we need to zero out critical_region.count for active processes
     struct pid *pid_entry;
     list_for_each_entry(&alive_pids_list, pid_entry, alive) {
-        pid_entry->task->critical_region.count = 0;  // Bad things happen if this isn't done.  -mke
+        pid_entry->task->reference.count = 0;  // Bad things happen if this isn't done.  -mke
     }
 }
 
@@ -153,14 +153,15 @@ struct task *task_create_(struct task *parent) {
     cond_init(&task->ptrace.cond);
     
     task->locks_held.count = 0; // counter used to keep track of pending locks associated with task.  Do not delete when locks are present.  -mke
-    task->critical_region.count = 0; // counter used to delay task deletion if positive.  --mke
+    task->reference.count = 0; // counter used to delay task deletion if positive.  --mke
+    task->reference.ready_to_be_freed = false;
     return task;
 }
 
 // We consolidate the check for whether the task is in a critical section,
 // holds locks, or has pending signals into a single function.
 bool should_wait(struct task *t) {
-    return critical_region_count(t) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
+    return task_reference_count(t) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
 }
 
 void task_destroy(struct task *task, int caller) {
@@ -199,7 +200,7 @@ void task_destroy(struct task *task, int caller) {
 
 retry:
     // Free the task's resources.
-    if (!critical_region_count(task)) {
+    if (!task_reference_count(task)) {
         free(task);
     } else {
         goto retry;
@@ -255,8 +256,6 @@ void task_run_current(void) {
 static void *task_thread(void *task) {
     
     current = task;
-    
-    current->critical_region.count = 0; // Is this needed?  -mke
     
     update_thread_name();
     

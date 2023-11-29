@@ -33,9 +33,8 @@ static bool is_signal_pending(lock_t *lock) {
     return pending;
 }
 
-void modify_critical_region_count(struct task *task, int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { // value Should only be -1 or 1.  -mke
-   // return;
-    
+void task_ref_count(struct task *task, int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { // value Should only be -1 or 1.  -mke
+    // Keep track of how many threads are referencing this task
     if(!doEnableExtraLocking) {// If they want to fly by the seat of their pants...  -mke
         return;
     }
@@ -54,31 +53,31 @@ void modify_critical_region_count(struct task *task, int value, __attribute__((u
         ilocked = true; // Make sure this is locked, and unlock it later if we had to lock it.
     }
     
-    pthread_mutex_lock(&task->critical_region.lock);
+    pthread_mutex_lock(&task->reference.lock);
     
-    if(((task->critical_region.count + value) < 0) && (task->pid > 9)) { // Prevent our unsigned value attempting to go negative.  -mke
-        printk("ERROR: Attempt to decrement critical_region count to be negative, ignoring(%s:%d) (%d - %d) (%s:%d)\n", task->comm, task->pid, task->critical_region.count, value, file, line);
+    if(((task->reference.count + value) < 0) && (task->pid > 9)) { // Prevent our unsigned value attempting to go negative.  -mke
+        printk("ERROR: Attempt to decrement task reference count to be negative, ignoring(%s:%d) (%d - %d) (%s:%d)\n", task->comm, task->pid, task->reference.count, value, file, line);
         if(ilocked == true)
             unlock(&task->general_lock);
         
-        pthread_mutex_unlock(&task->critical_region.lock);
+        pthread_mutex_unlock(&task->reference.lock);
         
         return;
     }
     
     
-    task->critical_region.count = task->critical_region.count + value;
+    task->reference.count = task->reference.count + value;
         
-    pthread_mutex_unlock(&task->critical_region.lock);
+    pthread_mutex_unlock(&task->reference.lock);
     
     if(ilocked == true)
         unlock(&task->general_lock);
 }
 
-void modify_critical_region_count_wrapper(int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { 
+void task_ref_count_wrapper(int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { 
     // sync.h can't know about the definition of task struct due to recursive include files.  -mke
     if((current != NULL) && (doEnableExtraLocking))
-        modify_critical_region_count(current, value, file, line);
+        task_ref_count(current, value, file, line);
     
     return;
 }
@@ -202,21 +201,19 @@ void sigusr1_handler(void) {
 }
 
 // Because sometimes we can't #include "kernel/task.h" -mke
-unsigned critical_region_count(struct task *task) {
-   // return 0;
+unsigned task_reference_count(struct task *task) {
     unsigned tmp = 0;
-    pthread_mutex_lock(&task->critical_region.lock); // This would make more
-    tmp = task->critical_region.count;
-    //printk("%d:%d\n", task, tmp);
-    if(tmp > 1000)  // Not likely
+    pthread_mutex_lock(&task->reference.lock); // This would make more
+    tmp = task->reference.count;
+    if(tmp > 1000)  // Work around brain damage.  Remove when said brain damage is fixed
         tmp = 0;
-    pthread_mutex_unlock(&task->critical_region.lock);
+    pthread_mutex_unlock(&task->reference.lock);
 
     return tmp;
 }
 
-unsigned critical_region_count_wrapper(void) { // sync.h can't know about the definition of struct due to recursive include files.  -mke
-    return(critical_region_count(current));
+unsigned task_reference_count_wrapper(void) { // sync.h can't know about the definition of struct due to recursive include files.  -mke
+    return(task_reference_count(current));
 }
 
 bool current_is_valid(void) {
