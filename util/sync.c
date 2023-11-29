@@ -33,7 +33,7 @@ static bool is_signal_pending(lock_t *lock) {
     return pending;
 }
 
-void task_ref_count(struct task *task, int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { // value Should only be -1 or 1.  -mke
+void task_ref_cnt_mod(struct task *task, int value) { // value Should only be -1 or 1.  -mke
     // Keep track of how many threads are referencing this task
     if(!doEnableExtraLocking) {// If they want to fly by the seat of their pants...  -mke
         return;
@@ -56,7 +56,7 @@ void task_ref_count(struct task *task, int value, __attribute__((unused)) const 
     pthread_mutex_lock(&task->reference.lock);
     
     if(((task->reference.count + value) < 0) && (task->pid > 9)) { // Prevent our unsigned value attempting to go negative.  -mke
-        printk("ERROR: Attempt to decrement task reference count to be negative, ignoring(%s:%d) (%d - %d) (%s:%d)\n", task->comm, task->pid, task->reference.count, value, file, line);
+        printk("ERROR: Attempt to decrement task reference count to be negative, ignoring(%s:%d) (%d - %d)\n", task->comm, task->pid, task->reference.count, value);
         if(ilocked == true)
             unlock(&task->general_lock);
         
@@ -74,12 +74,55 @@ void task_ref_count(struct task *task, int value, __attribute__((unused)) const 
         unlock(&task->general_lock);
 }
 
-void task_ref_count_wrapper(int value, __attribute__((unused)) const char *file, __attribute__((unused)) int line) { 
+void task_ref_cnt_mod_wrapper(int value) {
     // sync.h can't know about the definition of task struct due to recursive include files.  -mke
     if((current != NULL) && (doEnableExtraLocking))
-        task_ref_count(current, value, file, line);
+        task_ref_cnt_mod(current, value);
     
     return;
+}
+
+int task_ref_cnt_val(struct task *task) {
+    pthread_mutex_lock(&task->reference.lock);
+    int cnt = task->reference.count;
+    pthread_mutex_unlock(&task->reference.lock);
+    return cnt;
+}
+
+int task_ref_cnt_val_wrapper(void) {
+    return(task_ref_cnt_val(current));
+}
+
+void mem_ref_cnt_mod(struct mem *mem, int value) { // value Should only be -1 or 1.  -mke
+    // Keep track of how many threads are referencing this task
+    if(!doEnableExtraLocking) {// If they want to fly by the seat of their pants...  -mke
+        return;
+    }
+    
+    if(mem == NULL) {
+            return;
+    }
+    
+    pthread_mutex_lock(&mem->reference.lock);
+    
+    if(((mem->reference.count + value) < 0)) { // Prevent our unsigned value attempting to go negative.  -mke
+        printk("ERROR: Attempt to decrement mem reference count to be negative, ignoring(%d:%d)\n", mem->reference.count, value);
+        pthread_mutex_unlock(&mem->reference.lock);
+        
+        return;
+    }
+    
+    
+    mem->reference.count = mem->reference.count + value;
+        
+    pthread_mutex_unlock(&mem->reference.lock);
+}
+
+int mem_ref_cnt_val(struct mem *mem) {
+    pthread_mutex_lock(&mem->reference.lock);
+    int cnt = mem->reference.count;
+    pthread_mutex_unlock(&mem->reference.lock);
+    return cnt;
 }
 
 void modify_locks_held_count(struct task *task, int value) { // value Should only be -1 or 1.  -mke
@@ -201,7 +244,7 @@ void sigusr1_handler(void) {
 }
 
 // Because sometimes we can't #include "kernel/task.h" -mke
-unsigned task_reference_count(struct task *task) {
+unsigned task_ref_cnt_mod(struct task *task) {
     unsigned tmp = 0;
     pthread_mutex_lock(&task->reference.lock); // This would make more
     tmp = task->reference.count;
@@ -212,8 +255,8 @@ unsigned task_reference_count(struct task *task) {
     return tmp;
 }
 
-unsigned task_reference_count_wrapper(void) { // sync.h can't know about the definition of struct due to recursive include files.  -mke
-    return(task_reference_count(current));
+void task_ref_cnt_mod_wrapper(int, const char*, int) { // sync.h can't know about the definition of struct due to recursive include files.  -mke
+    return(task_ref_count(current, ));
 }
 
 bool current_is_valid(void) {

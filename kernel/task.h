@@ -11,6 +11,7 @@
 #include "util/list.h"
 #include "util/timer.h"
 #include "util/sync.h"
+#include "kernel/resource_locking.h"
 
 struct task {
     struct cpu_state cpu;
@@ -204,7 +205,6 @@ struct task *pid_get_task_zombie(dword_t id); // don't return null if the task e
 
 dword_t get_count_of_blocked_tasks(void);
 dword_t get_count_of_alive_tasks(void);
-void zero_critical_regions_count(void);
 
 #define MAX_PID (1 << 15) // oughta be enough
 
@@ -225,14 +225,14 @@ void update_thread_name(void);
 // of functions which can block the task, we mark our task as blocked and
 // unblock it after the function is executed.
 __attribute__((always_inline)) inline int task_may_block_start(void) {
-            task_ref_count_wrapper(1, __FILE__, __LINE__);
+    task_ref_cnt_mod_wrapper(1);
     current->io_block = 1;
     return 0;
 }
 
 __attribute__((always_inline)) inline int task_may_block_end(void) {
     current->io_block = 0;
-            task_ref_count_wrapper(-1, __FILE__, __LINE__);
+    task_ref_cnt_mod_wrapper(-1);
     return 0;
 }
 

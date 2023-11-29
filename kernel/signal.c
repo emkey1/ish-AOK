@@ -466,7 +466,7 @@ struct sighand *sighand_copy(struct sighand *sighand) {
 }
 
 void sighand_release(struct sighand *sighand) {
-    while(task_reference_count(current) > 2) { // Wait for now, task is in one or more critical sections
+    while(task_ref_cnt_val(current) > 2) { // Wait for now, task is in one or more critical sections
         nanosleep(&lock_pause, NULL);
     }
     if (--sighand->refcount == 0) {
@@ -739,7 +739,7 @@ static int kill_group(pid_t_ pgid, dword_t sig) {
     }
     struct tgroup *tgroup;
     int err = _EPERM;
-    while((task_reference_count(current)) || (locks_held_count(current))) { // Wait for now, task is in one or more critical sections, and/or has locks
+    while((task_ref_cnt_val(current)) || (locks_held_count(current))) { // Wait for now, task is in one or more critical sections, and/or has locks
         nanosleep(&lock_pause, NULL);
     }
     list_for_each_entry(&pid->pgroup, tgroup, pgroup) {

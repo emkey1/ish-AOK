@@ -455,9 +455,9 @@ bool (*remove_user_default)(const char *name);
 - (BOOL)validateShouldEnableExtraLocking:(id *)value error:(NSError **)error {
     // Should set task->critical_region.count to 0 for all active processes when this is set to false.  Otherwise stuff blows up.  -mke
     if(doEnableExtraLocking == true) {  // This needs to be the opposite of what you would expect because of reasons.  -mke
-        complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
-        zero_critical_regions_count();
-        unlock(&pids_lock);
+//        complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+ //       zero_critical_regions_count();
+  //      unlock(&pids_lock);
     }
     return [*value isKindOfClass:NSNumber.class];
 }

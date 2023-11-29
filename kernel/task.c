@@ -69,7 +69,7 @@ struct pid *pid_get_last_allocated(void) {
 }
 
 dword_t get_count_of_blocked_tasks(void) {
-    task_ref_count(current, 1, __FILE__, __LINE__);
+    task_ref_cnt_mod(current, 1);
     dword_t res = 0;
     struct pid *pid_entry;
     complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
@@ -78,16 +78,9 @@ dword_t get_count_of_blocked_tasks(void) {
             res++;
         }
     }
-    task_ref_count(current, -1, __FILE__, __LINE__);
+    task_ref_cnt_mod(current, -1);
     unlock(&pids_lock);
     return res;
-}
-
-void zero_critical_regions_count(void) { // If doEnableExtraLocking is changed to false, we need to zero out critical_region.count for active processes
-    struct pid *pid_entry;
-    list_for_each_entry(&alive_pids_list, pid_entry, alive) {
-        pid_entry->task->reference.count = 0;  // Bad things happen if this isn't done.  -mke
-    }
 }
 
 dword_t get_count_of_alive_tasks(void) {
@@ -161,7 +154,7 @@ struct task *task_create_(struct task *parent) {
 // We consolidate the check for whether the task is in a critical section,
 // holds locks, or has pending signals into a single function.
 bool should_wait(struct task *t) {
-    return task_reference_count(t) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
+    return task_ref_cnt_val(t) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
 }
 
 void task_destroy(struct task *task, int caller) {
@@ -200,7 +193,7 @@ void task_destroy(struct task *task, int caller) {
 
 retry:
     // Free the task's resources.
-    if (!task_reference_count(task)) {
+    if (!task_ref_cnt_val(task)) {
         free(task);
     } else {
         goto retry;

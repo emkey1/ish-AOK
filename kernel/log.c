@@ -230,56 +230,56 @@ void die(const char *msg, ...) {
 
 // fun little utility function
 int current_pid(void) {
-    task_ref_count(current, 1, __FILE__, __LINE__);
+    task_ref_cnt_mod(current, 1);
     if(current != NULL) {
         if (current->exiting != true) {
-            task_ref_count(current, -1, __FILE__, __LINE__);
+            task_ref_cnt_mod(current, -1)
             return current->pid;
         } else {
-            task_ref_count(current, -1, __FILE__, __LINE__);
+            task_ref_cnt_mod(current, -1);
             return -1;
         }
     }
     
-    task_ref_count(current, -1, __FILE__, __LINE__);
+    task_ref_cnt_mod(current, -1);
     return -1;
 }
 
 int current_uid(void) {
-    task_ref_count(current, 1, __FILE__, __LINE__);
+    task_ref_cnt_mod(current, 1);
     if(current != NULL) {
         if (current->exiting != true) {
-            task_ref_count(current, -1, __FILE__, __LINE__);
+            task_ref_cnt_mod(current);
             return current->uid;
         } else {
-            task_ref_count(current, -1, __FILE__, __LINE__);
+            task_ref_cnt_mod(current);
             return -1;
         }
     }
     
-    task_ref_count(current, -1, __FILE__, __LINE__);
+    task_ref_cnt_mod(current, -1);
     return -1;
 }
 
 char * current_comm(void) {
     static char comm[16];
-    task_ref_count(current, 1, __FILE__, __LINE__);
+    task_ref_cnt_mod(current, 1);
     if(current != NULL) {
         if(strcmp(current->comm, "")) {
             strncpy(comm, current->comm, 16);
         } else {
-            task_ref_count(current, -1, __FILE__, __LINE__);
+            task_ref_cnt_mod(current);
             return "";
         }
         if (current->exiting != true) {
-            task_ref_count(current, -1, __FILE__, __LINE__);
+            task_ref_cnt_mod(current);
             return comm;
         } else {
-            task_ref_count(current, -1, __FILE__, __LINE__);
+            task_ref_cnt_mod(current);
             return "";
         }
     }
-    task_ref_count(current, -1, __FILE__, __LINE__);
+    task_ref_cnt_mod(current, -1);
     
     return "";
 }
