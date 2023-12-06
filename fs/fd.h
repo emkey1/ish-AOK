@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include "emu/memory.h"
 #include "util/list.h"
+#include "util/ro_locks.h"
 #include "util/sync.h"
 #include "util/bits.h"
 #include "fs/stat.h"

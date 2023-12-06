@@ -28,6 +28,7 @@
 #include "fs/devices.h"
 #include "fs/path.h"
 #include "app/RTCDevice.h"
+#include "util/sync.h"
 
 #if ISH_LINUX
 #import "LinuxInterop.h"
@@ -45,7 +46,7 @@ static void ios_handle_exit(struct task *task, int code) {
     // we are interested in init and in children of init
     // this is called with pids_lock as an implementation side effect, please do not cite as an example of good API design
     lock(&task->general_lock, 0);
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     if(task->pid > MAX_PID) {// Corruption
         printk("ERROR: Insane PID in ios_handle_exit(%d)\n", task->pid);
         unlock(&pids_lock);
@@ -71,16 +72,13 @@ static void ios_handle_exit(struct task *task, int code) {
     });
 }
 
-const char* getCurrentTimestamp(void);
-
-const char* getCurrentTimestamp(void) {
+const char* getRenameRunDirString(void) {
     NSDate *currentDate = [NSDate date];
     NSDateFormatter *dateFormatter = [[NSDateFormatter alloc] init];
-    [dateFormatter setDateFormat:@"yyyy-MM-dd_HH:mm:ss"];
+    [dateFormatter setDateFormat:@"yyyy-MM-dd_HH-mm-ss"];
     NSString *timestamp = [dateFormatter stringFromDate:currentDate];
 
-    // Prepending "/tmp/" to the timestamp
-    NSString *prefixedTimestamp = [NSString stringWithFormat:@"/tmp/%@", timestamp];
+    NSString *prefixedTimestamp = [NSString stringWithFormat:@"/tmp/old-run/%@", timestamp];
 
     // Convert to const char* and return
     return [prefixedTimestamp UTF8String];
@@ -149,11 +147,13 @@ static NSString *const kSkipStartupMessage = @"Skip Startup Message";
     // Permissions on / have been broken for a while, let's fix them
     generic_setattrat(AT_PWD, "/", (struct attr) {.type = attr_mode, .mode = 0755}, false);
     
-    // Create a unique directory in /tmp and link to /var/run
-    const char *timestamp = getCurrentTimestamp();
-    generic_mkdirat(AT_PWD, timestamp, 0755);
+    // mv current /run to /tmp/run-old/[timestamp], create new /run and link to /var/run
+    generic_mkdirat(AT_PWD, "/tmp/old-run", 0755);
+    const char *rename = getRenameRunDirString();
+    generic_renameat(AT_PWD, "/run", AT_PWD, rename);
+    generic_mkdirat(AT_PWD, "/run", 0755);
     generic_unlinkat(AT_PWD, "/var/run");
-    generic_symlinkat(timestamp, AT_PWD, "/var/run");
+    generic_symlinkat("/run", AT_PWD, "/var/run");
     
     // Create directories/links to simulate /sys stuff for battery monitoring
     generic_mkdirat(AT_PWD, "/sys/class", 0755);

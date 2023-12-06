@@ -4,6 +4,7 @@
 #include "misc.h"
 #include "util/list.h"
 #include "util/sync.h"
+#include <stdatomic.h>
 struct task;
 
 typedef qword_t sigset_t_;

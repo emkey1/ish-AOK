@@ -4,7 +4,6 @@
 #include <string.h>
 #include "kernel/calls.h"
 #include "kernel/task.h"
-#include "kernel/resource_locking.h"
 #include "emu/memory.h"
 #include "emu/tlb.h"
 #include "platform/platform.h"
@@ -15,7 +14,7 @@
 pthread_mutex_t multicore_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t extra_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t delay_lock = PTHREAD_MUTEX_INITIALIZER;
-lock_t atomic_l_lock;
+extern lock_t atomic_l_lock;
 pthread_mutex_t wait_for_lock = PTHREAD_MUTEX_INITIALIZER;
 time_t boot_time;  // Store the boot time.  -mke
 
@@ -72,7 +71,7 @@ dword_t get_count_of_blocked_tasks(void) {
     task_ref_cnt_mod(current, 1);
     dword_t res = 0;
     struct pid *pid_entry;
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     list_for_each_entry(&alive_pids_list, pid_entry, alive) {
         if (pid_entry->task->io_block) {
             res++;
@@ -84,7 +83,7 @@ dword_t get_count_of_blocked_tasks(void) {
 }
 
 dword_t get_count_of_alive_tasks(void) {
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     dword_t res = 0;
     struct list *item;
     list_for_each(&alive_pids_list, item) {
@@ -95,7 +94,7 @@ dword_t get_count_of_alive_tasks(void) {
 }
 
 struct task *task_create_(struct task *parent) {
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     do {
         last_allocated_pid++;
         if (last_allocated_pid > MAX_PID) last_allocated_pid = 1;
@@ -154,7 +153,7 @@ struct task *task_create_(struct task *parent) {
 // We consolidate the check for whether the task is in a critical section,
 // holds locks, or has pending signals into a single function.
 bool should_wait(struct task *t) {
-    return task_ref_cnt_val(t) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
+    return task_ref_cnt_get(t) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
 }
 
 void task_destroy(struct task *task, int caller) {
@@ -193,7 +192,7 @@ void task_destroy(struct task *task, int caller) {
 
 retry:
     // Free the task's resources.
-    if (!task_ref_cnt_val(task)) {
+    if (!task_ref_cnt_get(task)) {
         free(task);
     } else {
         goto retry;
@@ -222,7 +221,7 @@ void task_run_current(void) {
     tlb_refresh(&tlb, &current->mem->mmu);
     
     while (true) {
-        read_lock(&current->mem->lock, __FILE__, __LINE__);
+        read_lock(&current->mem->lock);
         
         if(!doEnableMulticore) {
             pthread_mutex_lock(&multicore_lock);
@@ -230,7 +229,7 @@ void task_run_current(void) {
         
         int interrupt = cpu_run_to_interrupt(cpu, &tlb);
         
-        read_unlock(&current->mem->lock, __FILE__, __LINE__);
+        read_unlock(&current->mem->lock);
         
         if(!doEnableMulticore)
             pthread_mutex_unlock(&multicore_lock);
@@ -296,4 +295,113 @@ void update_thread_name(void) {
 #else
     pthread_setname_np(pthread_self(), name);
 #endif
+}
+
+void task_ref_cnt_mod(struct task *task, int value) { // value Should only be -1 or 1.  -mke
+    // Keep track of how many threads are referencing this task
+    if(!doEnableExtraLocking) {// If they want to fly by the seat of their pants...  -mke
+        return;
+    }
+    
+    if(task == NULL) {
+        if(current != NULL) {
+            task = current;
+        } else {
+            return;
+        }
+    }
+    
+    bool ilocked = false;
+    
+    if (trylocknl(&task->general_lock, task->comm, task->pid) != _EBUSY) {
+        ilocked = true; // Make sure this is locked, and unlock it later if we had to lock it.
+    }
+    
+    pthread_mutex_lock(&task->reference.lock);
+    
+    if(((task->reference.count + value) < 0) && (task->pid > 9)) { // Prevent our unsigned value attempting to go negative.  -mke
+        printk("ERROR: Attempt to decrement task reference count to be negative, ignoring(%s:%d) (%d - %d)\n", task->comm, task->pid, task->reference.count, value);
+        if(ilocked == true)
+            unlock(&task->general_lock);
+        
+        pthread_mutex_unlock(&task->reference.lock);
+        
+        return;
+    }
+    
+    
+    task->reference.count = task->reference.count + value;
+        
+    pthread_mutex_unlock(&task->reference.lock);
+    
+    if(ilocked == true)
+        unlock(&task->general_lock);
+}
+
+void task_ref_cnt_mod_wrapper(int value) {
+    // sync.h can't know about the definition of task struct due to recursive include files.  -mke
+    if((current != NULL) && (doEnableExtraLocking))
+        task_ref_cnt_mod(current, value);
+    
+    return;
+}
+
+void modify_locks_held_count(struct task *task, int value) { // value Should only be -1 or 1.  -mke
+    if((task == NULL) && (current != NULL)) {
+        task = current;
+    } else {
+        return;
+    }
+    
+    pthread_mutex_lock(&task->locks_held.lock);
+    if((task->locks_held.count + value < 0) && task->pid > 9) {
+     //  if((task->pid > 2) && (!strcmp(task->comm, "init")))  // Why ask why?  -mke
+            printk("ERROR: Attempt to decrement locks_held count below zero, ignoring\n");
+        return;
+    }
+    task->locks_held.count = task->locks_held.count + value;
+    pthread_mutex_unlock(&task->locks_held.lock);
+}
+
+unsigned task_ref_cnt_get(struct task *task) {
+    unsigned tmp = 0;
+    pthread_mutex_lock(&task->reference.lock); // This would make more
+    tmp = task->reference.count;
+    if(tmp > 1000)  // Work around brain damage.  Remove when said brain damage is fixed
+        tmp = 0;
+    pthread_mutex_unlock(&task->reference.lock);
+
+    return tmp;
+}
+
+unsigned task_ref_cnt_get_wrapper(void) { 
+    return(task_ref_cnt_get(current));
+}
+
+bool current_is_valid(void) {
+    if(current != NULL)
+        return true;
+    
+    return false;
+}
+
+unsigned locks_held_count(struct task *task) {
+   // return 0; // Short circuit for now
+    if(task->pid < 10)  // Here be monsters.  -mke
+        return 0;
+    if(task->locks_held.count > 0) {
+        return(task->locks_held.count -1);
+    }
+    unsigned tmp = 0;
+    pthread_mutex_lock(&task->locks_held.lock);
+    tmp = task->locks_held.count;
+    pthread_mutex_unlock(&task->locks_held.lock);
+
+    return tmp;
+}
+
+void modify_locks_held_count_wrapper(int value) { // sync.h can't know about the definition of struct due to recursive include files.  -mke
+    if(current != NULL)
+        modify_locks_held_count(current, value);
+    return;
 }

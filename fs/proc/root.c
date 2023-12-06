@@ -3,7 +3,6 @@
 #include <string.h>
 #include "kernel/calls.h"
 #include "kernel/task.h"
-#include "kernel/resource_locking.h"
 #include "fs/proc.h"
 #include "fs/proc/net.h"
 #include "platform/platform.h"

@@ -12,6 +12,7 @@
 #include "fs/devices.h"
 #include "fs/tty.h"
 #include "fs/devices.h"
+#include "util/ro_locks.h"
 
 extern struct tty_driver ios_pty_driver;
 

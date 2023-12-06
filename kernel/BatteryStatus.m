@@ -18,12 +18,13 @@ char* printBatteryStatus(int type) {
     BOOL lowPowerModeEnabled = [[NSProcessInfo processInfo] isLowPowerModeEnabled];
 
     NSString *stateString = @"";
+    // Charging, Discharging, Full, Unknown, or Not charging.
     switch (batteryState) {
         case UIDeviceBatteryStateUnknown:
             stateString = @"Unknown";
             break;
         case UIDeviceBatteryStateUnplugged:
-            stateString = @"Unplugged";
+            stateString = @"Discharging";
             break;
         case UIDeviceBatteryStateCharging:
             stateString = @"Charging";
@@ -31,15 +32,17 @@ char* printBatteryStatus(int type) {
         case UIDeviceBatteryStateFull:
             stateString = @"Full";
             break;
+        default:
+            stateString = @"Not Available"; // Handle any unexpected cases
+            break;
     }
 
     if(type == 3) {
         NSString *formattedOutput = [NSString stringWithFormat:
                                      @"battery_level: %.2f\n"
                                      "battery_state: %@\n"
-                                     "low_power_mode: %@\n"
-                                     "battery_health: %.2f\n",
-                                     batteryLevel * 100, stateString, lowPowerModeEnabled ? @"Enabled" : @"Disabled", batteryLevel * 100];
+                                     "low_power_mode: %@\n",
+                                     batteryLevel * 100, stateString, lowPowerModeEnabled ? @"Enabled" : @"Disabled"];
         return (char *)[formattedOutput UTF8String];
     } else if(type == 2) { // Capacity
         NSString *formattedOutput = [NSString stringWithFormat:

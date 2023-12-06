@@ -10,7 +10,6 @@
 #include "util/sync.h"
 #include "util/fifo.h"
 #include "kernel/task.h"
-#include "kernel/resource_locking.h"
 #include "misc.h"
 
 #define LOG_BUF_SHIFT 20
@@ -132,24 +131,6 @@ static void log_buf_append(const char *msg) {
 
 static void log_line(const char *line);
 
-/* static void output_line(const char *line) {
-    time_t t=time(NULL);
-    char* c_time_string;
-    c_time_string = ctime(&t);
-    c_time_string[strcspn(c_time_string, "\n")] = 0;  // Remove trailing newline
-    //double tstamp = difftime(t, (time_t) 0);
-    int mybuff_size = 512;
-    char tmpbuff[mybuff_size];
-    //sprintf(tmpbuff, "[   %f] %s", tstamp, line);
-    sprintf(tmpbuff, "[   %s] %s", c_time_string, line);
-    // send it to stdout or wherever
-    if(strcmp(tmpbuff, "") != 0) { // Don't log empty string
-        log_line(tmpbuff);
-        // add it to the circular buffer
-        log_buf_append(tmpbuff);
-        log_buf_append("\n");
-    }
-} */
 static void output_line(const char *line) {
      time_t t = time(NULL);
      char* c_time_string = ctime(&t);
@@ -178,7 +159,7 @@ void ish_vprintk(const char *msg, va_list args) {
     buf_size += vsprintf(buf + buf_size, msg, args);
 
     // output up to the last newline, leave the rest in the buffer
-    complex_lockt(&log_lock, 1, __FILE__, __LINE__);
+    complex_lockt(&log_lock, 1);
     char *b = buf;
     char *p;
     while ((p = strchr(b, '\n')) != NULL) {
@@ -229,11 +210,11 @@ void die(const char *msg, ...) {
 }
 
 // fun little utility function
-int current_pid(void) {
+inline int current_pid(void) {
     task_ref_cnt_mod(current, 1);
     if(current != NULL) {
         if (current->exiting != true) {
-            task_ref_cnt_mod(current, -1)
+            task_ref_cnt_mod(current, -1);
             return current->pid;
         } else {
             task_ref_cnt_mod(current, -1);
@@ -245,14 +226,14 @@ int current_pid(void) {
     return -1;
 }
 
-int current_uid(void) {
+inline int current_uid(void) {
     task_ref_cnt_mod(current, 1);
     if(current != NULL) {
         if (current->exiting != true) {
-            task_ref_cnt_mod(current);
+            task_ref_cnt_mod(current, -1);
             return current->uid;
         } else {
-            task_ref_cnt_mod(current);
+            task_ref_cnt_mod(current, -1);
             return -1;
         }
     }
@@ -261,21 +242,21 @@ int current_uid(void) {
     return -1;
 }
 
-char * current_comm(void) {
+inline char * current_comm(void) {
     static char comm[16];
     task_ref_cnt_mod(current, 1);
     if(current != NULL) {
         if(strcmp(current->comm, "")) {
             strncpy(comm, current->comm, 16);
         } else {
-            task_ref_cnt_mod(current);
+            task_ref_cnt_mod(current, -1);
             return "";
         }
         if (current->exiting != true) {
-            task_ref_cnt_mod(current);
+            task_ref_cnt_mod(current, -1);
             return comm;
         } else {
-            task_ref_cnt_mod(current);
+            task_ref_cnt_mod(current, -1);
             return "";
         }
     }

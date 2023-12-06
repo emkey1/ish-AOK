@@ -5,7 +5,7 @@
 #include "emu/memory.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
-#include "kernel/resource_locking.h"
+#include "util/sync.h"
 
 extern bool isGlibC;
 
@@ -347,9 +347,9 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
 }
 
 void handle_page_fault_interrupt(struct cpu_state *cpu) {
-    read_lock(&current->mem->lock, __FILE__, __LINE__);
+    read_lock(&current->mem->lock);
     void *ptr = mem_ptr(current->mem, cpu->segfault_addr, cpu->segfault_was_write ? MEM_WRITE : MEM_READ);
-    read_unlock(&current->mem->lock, __FILE__, __LINE__);
+    read_unlock(&current->mem->lock);
 
     if (ptr == NULL) {
         printk("ERROR: %d(%s) page fault on 0x%x at 0x%x\n", current->pid, current->comm, cpu->segfault_addr, cpu->eip);
@@ -398,7 +398,7 @@ void handle_interrupt(int interrupt) {
             handle_illegal_instruction_interrupt(cpu);
             break;
         case INT_BREAKPOINT:
-            complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+            complex_lockt(&pids_lock, 0);
             send_signal(current, SIGTRAP_, (struct siginfo_) {
                 .sig = SIGTRAP_,
                 .code = SI_KERNEL_,
@@ -406,7 +406,7 @@ void handle_interrupt(int interrupt) {
             unlock(&pids_lock);
             break;
         case INT_DEBUG:
-            complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+            complex_lockt(&pids_lock, 0);
             send_signal(current, SIGTRAP_, (struct siginfo_) {
                 .sig = SIGTRAP_,
                 .code = TRAP_TRACE_,

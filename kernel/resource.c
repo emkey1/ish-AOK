@@ -12,7 +12,7 @@
 #include <limits.h>
 #include <string.h>
 #include "kernel/calls.h"
-#include "kernel/resource_locking.h"
+#include "util/sync.h"
 
 static bool resource_valid(int resource) {
     return resource >= 0 && resource < RLIMIT_NLIMITS_;
@@ -207,7 +207,7 @@ int_t sys_sched_getaffinity(pid_t_ pid, dword_t cpusetsize, addr_t cpuset_addr) 
 
     // Handle pid check separately for clarity
     if (pid != 0) {
-        complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+        complex_lockt(&pids_lock, 0);
         struct task *task = pid_get_task(pid);
         unlock(&pids_lock);
         if (task == NULL)

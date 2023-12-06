@@ -1,6 +1,5 @@
 #include <string.h>
 #include "kernel/calls.h"
-#include "kernel/resource_locking.h"
 
 extern bool doEnableExtraLocking;
 extern pthread_mutex_t extra_lock;
@@ -48,11 +47,11 @@ static int __user_write_task(struct task *task, addr_t addr, const void *buf, si
 }
 
 int user_read_task(struct task *task, addr_t addr, void *buf, size_t count) {
-    read_lock(&task->mem->lock, __FILE__, __LINE__);
+    read_lock(&task->mem->lock);
 
     int res = __user_read_task(task, addr, buf, count);
 
-    read_unlock(&task->mem->lock, __FILE__, __LINE__);
+    read_unlock(&task->mem->lock);
     return res;
 }
 
@@ -61,16 +60,16 @@ int user_read(addr_t addr, void *buf, size_t count) {
 }
 
 int user_write_task(struct task *task, addr_t addr, const void *buf, size_t count) {
-    read_lock(&task->mem->lock, __FILE__, __LINE__);
+    read_lock(&task->mem->lock);
     int res = __user_write_task(task, addr, buf, count, false);
-    read_unlock(&task->mem->lock, __FILE__, __LINE__);
+    read_unlock(&task->mem->lock);
     return res;
 }
 
 int user_write_task_ptrace(struct task *task, addr_t addr, const void *buf, size_t count) {
-    read_lock(&task->mem->lock, __FILE__, __LINE__);
+    read_lock(&task->mem->lock);
     int res = __user_write_task(task, addr, buf, count, true);
-    read_unlock(&task->mem->lock, __FILE__, __LINE__);
+    read_unlock(&task->mem->lock);
     return res;
 }
 
@@ -82,18 +81,18 @@ int user_read_string(addr_t addr, char *buf, size_t max) {
     if (addr == 0) {
         return 1;
     }
-    read_lock(&current->mem->lock, __FILE__, __LINE__);
+    read_lock(&current->mem->lock);
     size_t i = 0;
     while (i < max) {
         if (__user_read_task(current, addr + i, &buf[i], sizeof(buf[i])), false) {
-            read_unlock(&current->mem->lock, __FILE__, __LINE__);
+            read_unlock(&current->mem->lock);
             return 1;
         }
         if (buf[i] == '\0')
             break;
         i++;
     }
-    read_unlock(&current->mem->lock, __FILE__, __LINE__);
+    read_unlock(&current->mem->lock);
     return 0;
 }
 
@@ -101,15 +100,15 @@ int user_write_string(addr_t addr, const char *buf) {
     if (addr == 0) {
         return 1;
     }
-    read_lock(&current->mem->lock, __FILE__, __LINE__);
+    read_lock(&current->mem->lock);
     size_t i = 0;
     do {
         if (__user_write_task(current, addr + i, &buf[i], sizeof(buf[i]), false)) {
-            read_unlock(&current->mem->lock, __FILE__, __LINE__);
+            read_unlock(&current->mem->lock);
             return 1;
         }
         i++;
     } while (buf[i - 1] != '\0');
-    read_unlock(&current->mem->lock, __FILE__, __LINE__);
+    read_unlock(&current->mem->lock);
     return 0;
 }

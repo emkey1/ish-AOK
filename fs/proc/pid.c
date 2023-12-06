@@ -7,7 +7,6 @@
 #include "fs/tty.h"
 #include "kernel/fs.h"
 #include "kernel/vdso.h"
-#include "kernel/resource_locking.h"
 #include "util/sync.h"
 
 extern pthread_mutex_t extra_lock;
@@ -20,7 +19,7 @@ static void proc_pid_getname(struct proc_entry *entry, char *buf) {
 }
 
 static struct task *proc_get_task(struct proc_entry *entry) {
-    complex_lockt(&pids_lock, 1, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 1);
     struct task *task = pid_get_task(entry->pid);
     if (task == NULL)
         unlock(&pids_lock);
@@ -193,7 +192,7 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
     if (mem == NULL)
         return;
 
-    read_lock(&mem->lock, __FILE__, __LINE__);
+    read_lock(&mem->lock);
     page_t page = 0;
     while (page < MEM_PAGES) {
         // find a region
@@ -240,7 +239,7 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
                 0, // inode
                 path);
     }
-    read_unlock(&mem->lock, __FILE__, __LINE__);
+    read_unlock(&mem->lock);
 }
 
 static int proc_pid_maps_show(struct proc_entry *entry, struct proc_data *buf) {
@@ -338,7 +337,7 @@ static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
-    complex_lockt(&task->fs->lock, 0, __FILE__, __LINE__);
+    complex_lockt(&task->fs->lock, 0);
 
     int err = generic_getpath(task->fs->pwd, buf);
     unlock(&task->fs->lock);

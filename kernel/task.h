@@ -9,9 +9,10 @@
 #include "kernel/resource.h"
 #include "fs/sockrestart.h"
 #include "util/list.h"
-#include "util/timer.h"
 #include "util/sync.h"
-#include "kernel/resource_locking.h"
+#include "util/timer.h"
+
+extern void task_ref_cnt_mod_wrapper(int value);
 
 struct task {
     struct cpu_state cpu;
@@ -237,5 +238,13 @@ __attribute__((always_inline)) inline int task_may_block_end(void) {
 }
 
 #define TASK_MAY_BLOCK for (int i = task_may_block_start(); i < 1; task_may_block_end(), i++)
+
+void task_ref_cnt_mod(struct task *task, int value);
+void task_ref_cnt_mod_wrapper(int value);
+unsigned task_ref_cnt_get(struct task *task);
+unsigned task_ref_cnt_get_wrapper(void);
+void modify_locks_held_count(struct task *task, int value);
+void modify_locks_held_count_wrapper(int value);
+unsigned locks_held_count(struct task *task);
 
 #endif

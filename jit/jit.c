@@ -6,9 +6,9 @@
 #include "emu/cpu.h"
 #include "emu/memory.h"
 #include "emu/interrupt.h"
-#include "util/list.h"
 #include "kernel/task.h"
-#include "kernel/resource_locking.h"
+#include "util/list.h"
+#include "util/sync.h"
 
 extern int current_pid(void);
 
@@ -39,7 +39,7 @@ void jit_free(struct jit *jit) {
     if (!jit) return;
 
     bool signal_pending = !!(current->pending & ~current->blocked);
-    while((task_ref_cnt_val(current) > 2) || (locks_held_count(current)) || (signal_pending)) { // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
+    while((task_ref_cnt_get(current) > 2) || (locks_held_count(current)) || (signal_pending)) { // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
     }
@@ -84,7 +84,7 @@ void jit_invalidate_range(struct jit *jit, page_t start, page_t end) {
 }
 
 void jit_invalidate_page(struct jit *jit, page_t page) {
-    while(task_ref_cnt_val(current) > 4) { // It's all a bit magic, but I think this is doing something useful.  -mke
+    while(task_ref_cnt_get(current) > 4) { // It's all a bit magic, but I think this is doing something useful.  -mke
         nanosleep(&lock_pause, NULL);
     }
  //   mofify_critical_region_count(current, 1, __FILE__, __LINE__);
@@ -205,7 +205,7 @@ static inline size_t jit_cache_hash(addr_t ip) {
 
 static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     struct jit *jit = cpu->mmu->jit;
-    read_lock(&jit->jetsam_lock, __FILE__, __LINE__);
+    read_lock(&jit->jetsam_lock);
 
     struct jit_block **cache = calloc(JIT_CACHE_SIZE, sizeof(*cache));
     struct jit_frame *frame = malloc(sizeof(struct jit_frame));
@@ -267,7 +267,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
 
     free(frame);
     free(cache);
-    read_unlock(&jit->jetsam_lock, __FILE__, __LINE__);
+    read_unlock(&jit->jetsam_lock);
     return interrupt;
 
 }
@@ -305,11 +305,11 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         unlock(&jit->lock);
         write_lock(&jit->jetsam_lock);
         lock(&jit->lock, 0);
-        while(task_ref_cnt_mod(current) > 3) {// Yes, this is weird.  It might not work, but I'm trying.  -mke
+        while(task_ref_cnt_get(current) > 3) {// Yes, this is weird.  It might not work, but I'm trying.  -mke
             nanosleep(&lock_pause, NULL);          // Yes, this has triggered at least once.  Is it doing any good though? -mke
         }
         jit_free_jetsam(jit);
-        write_unlock(&jit->jetsam_lock, __FILE__, __LINE__);
+        write_unlock(&jit->jetsam_lock);
         unlock(&jit->lock);
         return interrupt;
     }

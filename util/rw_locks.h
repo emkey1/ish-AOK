@@ -5,12 +5,6 @@
 //  Created by Michael Miller on 11/29/23.
 //
 
-#ifndef rw_locks_h
-#define rw_locks_h
-
-
-#endif /* rw_locks_h */
-
 #ifndef RW_LOCK_H
 #define RW_LOCK_H
 
@@ -29,14 +23,21 @@ typedef struct {
 } wrlock_t;
 
 void wrlock_init(wrlock_t *lock);
-void read_lock(wrlock_t *lock, const char *file, int line);
-void write_lock(wrlock_t *lock, const char *file, int line);
-void read_unlock(wrlock_t *lock, const char *file, int line);
-void write_unlock(wrlock_t *lock, const char *file, int line);
+void read_lock(wrlock_t *lock);
+void write_lock(wrlock_t *lock);
+void read_unlock(wrlock_t *lock);
+void write_unlock(wrlock_t *lock);
 void read_to_write_lock(wrlock_t *lock);
-void write_to_read_lock(wrlock_t *lock, const char *file, int line);
+void write_to_read_lock(wrlock_t *lock);
 void write_unlock_and_destroy(wrlock_t *lock);
 void read_unlock_and_destroy(wrlock_t *lock);
-void lock_destroy(wrlock_t *lock);
+void read_to_write_lock(wrlock_t *lock);
+void read_unlock_and_destroy(wrlock_t *lock);
+// void lock_destroy(wrlock_t *lock); // Not used outside of rw_locks.c, no need to be exposed
+void handle_lock_error(wrlock_t *lock, const char *func);
+int trylockw(wrlock_t *lock);
+
+#define loop_lock_read(lock) loop_lock_generic(lock, 0)
+#define loop_lock_write(lock) loop_lock_generic(lock, 1)
 
 #endif // RW_LOCK_H

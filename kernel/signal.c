@@ -5,8 +5,8 @@
 #include "kernel/signal.h"
 #include "kernel/task.h"
 #include "kernel/vdso.h"
-#include "kernel/resource_locking.h"
 #include "emu/interrupt.h"
+#include "util/sync.h"
 
 #if is_gcc(9)
 #pragma GCC diagnostic ignored "-Waddress-of-packed-member"
@@ -141,7 +141,7 @@ bool try_self_signal(int sig) {
 }
 
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info) {
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     struct pid *pid = pid_get(pgid);
     if (pid == NULL) {
         unlock(&pids_lock);
@@ -382,7 +382,7 @@ void receive_signals(void) {  // Should this function have a check for critical_
         bool now_stopped = current->group->stopped;
         unlock(&current->group->lock);
         if (now_stopped) {
-            complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+            complex_lockt(&pids_lock, 0);
             notify(&current->parent->group->child_exit);
             // TODO add siginfo
             send_signal(current->parent, current->group->leader->exit_signal, SIGINFO_NIL);
@@ -466,7 +466,7 @@ struct sighand *sighand_copy(struct sighand *sighand) {
 }
 
 void sighand_release(struct sighand *sighand) {
-    while(task_ref_cnt_val(current) > 2) { // Wait for now, task is in one or more critical sections
+    while(task_ref_cnt_get(current) > 2) { // Wait for now, task is in one or more critical sections
         nanosleep(&lock_pause, NULL);
     }
     if (--sighand->refcount == 0) {
@@ -739,7 +739,7 @@ static int kill_group(pid_t_ pgid, dword_t sig) {
     }
     struct tgroup *tgroup;
     int err = _EPERM;
-    while((task_ref_cnt_val(current)) || (locks_held_count(current))) { // Wait for now, task is in one or more critical sections, and/or has locks
+    while((task_ref_cnt_get(current)) || (locks_held_count(current))) { // Wait for now, task is in one or more critical sections, and/or has locks
         nanosleep(&lock_pause, NULL);
     }
     list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
@@ -772,7 +772,7 @@ static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid) {
         pid = -current->group->pgid;
 
     int err;
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
 
     if (pid == -1) {
         err = kill_everything(sig);

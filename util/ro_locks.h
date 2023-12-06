@@ -4,15 +4,12 @@
 //
 //  Created by Michael Miller on 11/29/23.
 //
-
-#ifndef ro_locks_h
-#define ro_locks_h
-
-
-#endif /* ro_locks_h */
+#ifndef RO_LOCKS_H
+#define RO_LOCKS_H
 
 #include <pthread.h>
 #include <stdbool.h>
+#include <util/sync.h>
 
 typedef struct {
     pthread_mutex_t m;
@@ -32,13 +29,18 @@ typedef struct {
 #endif
 } lock_t;
 
+
 void lock_init(lock_t *lock, char lname[16]);
 void unlock(lock_t *lock);
-void atomic_l_lockf(char lname[16], int skiplog, const char *file, int line);
+void atomic_l_lockf(char lname[16], int skiplog);
+void mylock(lock_t *lock, int log_lock);
 void atomic_l_unlockf(void);
-void complex_lockt(lock_t *lock, int log_lock, const char *file, int line);
-int trylock(lock_t *lock, const char *file, int line);
-int trylocknl(lock_t *lock, char *comm, int pid, const char *file, int line);
+void complex_lockt(lock_t *lock, int log_lock);
+int trylock(lock_t *lock);
+int trylocknl(lock_t *lock, char *comm, int pid);
 
-#endif // RO_LOCK_H
+#define lock(lock, log_lock) mylock(lock, log_lock)
+//#define trylock(lock) trylock(lock, __FILE__, __LINE__)
+//#define trylocknl(lock, comm, pid) trylocknl(lock, comm, pid, __FILE__, __LINE__)
 
+#endif

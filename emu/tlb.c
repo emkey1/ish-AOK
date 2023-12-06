@@ -2,7 +2,6 @@
 #include "emu/tlb.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
-#include "kernel/resource_locking.h"
 
 void tlb_refresh(struct tlb *tlb, struct mmu *mmu) {
     if (tlb->mmu == mmu && tlb->mem_changes == mmu->changes) {

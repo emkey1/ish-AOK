@@ -7,7 +7,6 @@
 
 #import "UserPreferences.h"
 #import "fs/proc/ish.h"
-#include "sync.h"
 #include "task.h"
 
 // Stuff to allow for cleaning up when doEnableExtraLocking is disabled.  -mke

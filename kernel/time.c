@@ -10,7 +10,6 @@
 #include "kernel/errno.h"
 #include "kernel/resource.h"
 #include "kernel/time.h"
-#include "kernel/resource_locking.h"
 #include "fs/poll.h"
 #include <sys/poll.h>
 

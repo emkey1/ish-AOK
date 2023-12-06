@@ -18,7 +18,7 @@ static void handler(int signo, siginfo_t *sigaction, void *context) {
     signal(signo, SIG_DFL);
 }
 
-static void gen_exception() {
+static void gen_exception(void) {
     printk("WARNING: gen_exception in.\n");
     *(int *)0 = 0;
     printk("WARNING: gen_exception out.\n");
