@@ -153,7 +153,7 @@ struct task *task_create_(struct task *parent) {
 // We consolidate the check for whether the task is in a critical section,
 // holds locks, or has pending signals into a single function.
 bool should_wait(struct task *t) {
-    return task_ref_cnt_get(t) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
+    return task_ref_cnt_get(t, 0) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
 }
 
 void task_destroy(struct task *task, int caller) {
@@ -192,7 +192,7 @@ void task_destroy(struct task *task, int caller) {
 
 retry:
     // Free the task's resources.
-    if (!task_ref_cnt_get(task)) {
+    if (!task_ref_cnt_get(task, 0)) {
         free(task);
     } else {
         goto retry;
@@ -363,7 +363,8 @@ void modify_locks_held_count(struct task *task, int value) { // value Should onl
     pthread_mutex_unlock(&task->locks_held.lock);
 }
 
-unsigned task_ref_cnt_get(struct task *task) {
+//
+unsigned task_ref_cnt_get(struct task *task, unsigned lock_if_zero) {
     unsigned tmp = 0;
     pthread_mutex_lock(&task->reference.lock); // This would make more
     tmp = task->reference.count;
@@ -372,10 +373,6 @@ unsigned task_ref_cnt_get(struct task *task) {
     pthread_mutex_unlock(&task->reference.lock);
 
     return tmp;
-}
-
-unsigned task_ref_cnt_get_wrapper(void) { 
-    return(task_ref_cnt_get(current));
 }
 
 bool current_is_valid(void) {

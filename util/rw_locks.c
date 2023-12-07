@@ -151,12 +151,12 @@ void wrlock_init(wrlock_t *lock) {
 }
 
 void _lock_destroy(wrlock_t *lock) {
-    while((task_ref_cnt_get(current) > 1) && (current_pid() != 1)) { // Wait for now, task is in one or more critical sections
+    while((task_ref_cnt_get(current, 0) > 1) && (current_pid() != 1)) { // Wait for now, task is in one or more critical sections
         nanosleep(&lock_pause, NULL);
     }
 #ifdef JUSTLOG
     if (pthread_rwlock_destroy(&lock->l) != 0) {
-        printk("URGENT: lock_destroy(%x) on active lock. (PID: %d Process: %s Critical Region Count: %d)\n",&lock->l, current_pid(), current_comm(),task_ref_cnt_get(current));
+        printk("URGENT: lock_destroy(%x) on active lock. (PID: %d Process: %s Critical Region Count: %d)\n",&lock->l, current_pid(), current_comm(),task_ref_cnt_get(current, 0));
     }
 #else
     if (pthread_rwlock_destroy(&lock->l) != 0) __builtin_trap();
@@ -164,7 +164,7 @@ void _lock_destroy(wrlock_t *lock) {
 }
 
 void lock_destroy(wrlock_t *lock) {
-    while((task_ref_cnt_get(current) > 1) && (current_pid() != 1)) { // Wait for now, task is in one or more critical sections
+    while((task_ref_cnt_get(current, 0) > 1) && (current_pid() != 1)) { // Wait for now, task is in one or more critical sections
         nanosleep(&lock_pause, NULL);
     }
     

@@ -1,5 +1,6 @@
 #ifndef JIT_H
 #define JIT_H
+#define ENGINE_JIT 1
 #include "misc.h"
 #include "emu/mmu.h"
 #include "util/list.h"

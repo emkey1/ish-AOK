@@ -40,6 +40,9 @@ void mem_init(struct mem *mem) {
 #endif
     mem->mmu.changes = 0;
     wrlock_init(&mem->lock);
+    mem->reference.count = 0;
+    mem->reference.ready_to_be_freed = false;
+    wrlock_init(&mem->reference.lock);
 }
 
 void mem_destroy(struct mem *mem) {
@@ -48,8 +51,9 @@ void mem_destroy(struct mem *mem) {
         nanosleep(&lock_pause, NULL);
     }
     pt_unmap_always(mem, 0, MEM_PAGES);
+
 #if ENGINE_JIT
-    while((task_ref_cnt_get(current)) && (current->pid > 1) ){ // Wait for now, task is in one or more critical sections, and/or has locks
+    while((task_ref_cnt_get(current, 1)) && (current->pid > 1) ){ // Wait for now, task is in one or more critical sections, and/or has locks
         nanosleep(&lock_pause, NULL);
     }
     jit_free(mem->mmu.jit);
@@ -108,7 +112,7 @@ struct pt_entry *mem_pt(struct mem *mem, page_t page) {
 static void mem_pt_del(struct mem *mem, page_t page) {
     struct pt_entry *entry = mem_pt(mem, page);
     if (entry != NULL) {
-         while(task_ref_cnt_get(current) > 4) { // mark
+         while(task_ref_cnt_get(current, 0) > 4) { // mark
              nanosleep(&lock_pause, NULL);
         }
         entry->data = NULL;
@@ -189,7 +193,7 @@ int pt_unmap(struct mem *mem, page_t start, pages_t pages) {
 
 int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
     for (page_t page = start; page < start + pages; mem_next_page(mem, &page)) {
-        while(task_ref_cnt_get(current) >3) {
+        while(task_ref_cnt_get(current, 0) >3) {
             nanosleep(&lock_pause, NULL);
         }
         struct pt_entry *pt = mem_pt(mem, page);
@@ -203,7 +207,7 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
         if (--data->refcount == 0) {
             // vdso wasn't allocated with mmap, it's just in our data segment
             if (data->data != vdso_data) {
-                while(task_ref_cnt_get(current) > 3) {
+                while(task_ref_cnt_get(current, 0) > 3) {
                     nanosleep(&lock_pause, NULL);
                 }
                 int err = munmap(data->data, data->size);
@@ -251,7 +255,7 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
 }
 
 int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t pages) {
-    while(task_ref_cnt_get(current)) { // Wait for now, task is in one or more critical sections
+    while(task_ref_cnt_get(current, 0)) { // Wait for now, task is in one or more critical sections
         nanosleep(&lock_pause, NULL);
     }
     for (page_t page = start; page < start + pages; mem_next_page(src, &page)) {
@@ -268,7 +272,7 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
         dst_entry->offset = entry->offset;
         dst_entry->flags = entry->flags;
     }
-    while(task_ref_cnt_get(current)) { // Wait for now, task is in one or more critical sections
+    while(task_ref_cnt_get(current, 0)) { // Wait for now, task is in one or more critical sections
         nanosleep(&lock_pause, NULL);
     }
     mem_changed(src);
@@ -345,7 +349,7 @@ void *mem_ptr(struct mem *mem, addr_t addr, int type) {
             mem_ref_cnt_mod(mem, 1);
             //read_to_write_lock(&mem->lock);
             memcpy(copy, data, PAGE_SIZE);  //mkemkemke  Crashes here a lot when running both the go and parallel make test. 01 June 2022
-            task_ref_cnt_mod(current, -1);
+            mem_ref_cnt_mod(mem, -1);
             pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW);
             unlock(&current->general_lock);
             write_to_read_lock(&mem->lock);

@@ -241,8 +241,7 @@ __attribute__((always_inline)) inline int task_may_block_end(void) {
 
 void task_ref_cnt_mod(struct task *task, int value);
 void task_ref_cnt_mod_wrapper(int value);
-unsigned task_ref_cnt_get(struct task *task);
-unsigned task_ref_cnt_get_wrapper(void);
+unsigned task_ref_cnt_get(struct task *task, unsigned lock_if_zero);
 void modify_locks_held_count(struct task *task, int value);
 void modify_locks_held_count_wrapper(int value);
 unsigned locks_held_count(struct task *task);

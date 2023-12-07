@@ -18,7 +18,7 @@ extern const char extra_lock_comm;
 static void halt_system(void);
 
 static bool exit_tgroup(struct task *task) {
-    while((task_ref_cnt_get(task) > 2) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
+    while((task_ref_cnt_get(task, 0) > 2) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
         nanosleep(&lock_pause, NULL);
     }
     struct tgroup *group = task->group;
@@ -66,7 +66,7 @@ noreturn void do_exit(int status) {
     bool signal_pending = !!(current->pending & ~current->blocked);
     // has to happen before mm_release
     
-    while((task_ref_cnt_get(current) > 1) ||
+    while((task_ref_cnt_get(current, 0) > 1) ||
           (locks_held_count(current)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
@@ -83,14 +83,14 @@ noreturn void do_exit(int status) {
     do {
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
-    } while((task_ref_cnt_get(current) > 1) ||
+    } while((task_ref_cnt_get(current, 0) > 1) ||
             (locks_held_count(current)) ||
             (signal_pending)); // Wait for now, task is in one or more critical
     mm_release(current->mm);
     current->mm = NULL;
     
     signal_pending = !!(current->pending & ~current->blocked);
-    while((task_ref_cnt_get(current) > 1) ||
+    while((task_ref_cnt_get(current, 0) > 1) ||
           (locks_held_count(current)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
@@ -99,7 +99,7 @@ noreturn void do_exit(int status) {
     fdtable_release(current->files);
     current->files = NULL;
     
-    while((task_ref_cnt_get(current) > 1) ||
+    while((task_ref_cnt_get(current, 0) > 1) ||
           (locks_held_count(current)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
@@ -111,7 +111,7 @@ noreturn void do_exit(int status) {
     // sighand must be released below so it can be protected by pids_lock
     // since it can be accessed by other threads
 
-    while((task_ref_cnt_get(current) > 1) ||
+    while((task_ref_cnt_get(current, 0) > 1) ||
           (locks_held_count(current)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical// Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
@@ -130,7 +130,7 @@ noreturn void do_exit(int status) {
     complex_lockt(&pids_lock, 0);
     // release the sighand
     signal_pending = !!(current->pending & ~current->blocked);
-    while((task_ref_cnt_get(current) > 2) ||
+    while((task_ref_cnt_get(current, 0) > 2) ||
           (locks_held_count(current)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
@@ -156,7 +156,7 @@ noreturn void do_exit(int status) {
     
     signal_pending = !!(current->pending & ~current->blocked);
     
-    while((task_ref_cnt_get(current) > 2) ||
+    while((task_ref_cnt_get(current, 0) > 2) ||
           (locks_held_count(current)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
