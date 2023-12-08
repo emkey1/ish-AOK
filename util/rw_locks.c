@@ -20,7 +20,7 @@ bool current_is_valid(void);
 // it to prefer writers. not worrying about anything else right now.
 
 void loop_lock_generic(wrlock_t *lock, int is_write) {
-            task_ref_cnt_mod_wrapper(1);
+    task_ref_cnt_mod(current, 1);
     modify_locks_held_count_wrapper(1);
 
     unsigned count = 0;
@@ -40,14 +40,14 @@ void loop_lock_generic(wrlock_t *lock, int is_write) {
         atomic_l_lockf(is_write ? "llw\0" : "ll_read\0", 0);
     }
 
-            task_ref_cnt_mod_wrapper(-1);
+            task_ref_cnt_mod(current, -1);
 }
 
 
 
 void _read_lock(wrlock_t *lock) {
+    task_ref_cnt_mod(current, 1);
     loop_lock_read(lock);
-    task_ref_cnt_mod_wrapper(1);
     //pthread_rwlock_rdlock(&lock->l);
     // assert(lock->val >= 0);  //  If it isn't >= zero we have a problem since that means there is a write lock somehow.  -mke
     if(lock->val) {
@@ -62,7 +62,7 @@ void _read_lock(wrlock_t *lock) {
     if(lock->val > 1000) { // We likely have a problem.
         printk("WARNING: _read_lock(%x) has 1000+ pending read locks.  (File: %s, Line: %d) Breaking likely deadlock/process corruption(PID: %d Process: %s.\n", lock, lock->file, lock->line,lock->pid, lock->comm);
         read_unlock_and_destroy(lock);
-                task_ref_cnt_mod_wrapper(-1);
+        task_ref_cnt_mod(current, -1);
         //STRACE("read_lock(%d, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
         return;
     }
@@ -70,7 +70,7 @@ void _read_lock(wrlock_t *lock) {
     lock->pid = current_pid();
     if(lock->pid > 9)
         strncpy((char *)lock->comm, current_comm(), 16);
-            task_ref_cnt_mod_wrapper(-1);
+            task_ref_cnt_mod(current, -1);
     //STRACE("read_lock(%d, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
 }
 
@@ -151,9 +151,6 @@ void wrlock_init(wrlock_t *lock) {
 }
 
 void _lock_destroy(wrlock_t *lock) {
-    while((task_ref_cnt_get(current, 0) > 1) && (current_pid() != 1)) { // Wait for now, task is in one or more critical sections
-        nanosleep(&lock_pause, NULL);
-    }
 #ifdef JUSTLOG
     if (pthread_rwlock_destroy(&lock->l) != 0) {
         printk("URGENT: lock_destroy(%x) on active lock. (PID: %d Process: %s Critical Region Count: %d)\n",&lock->l, current_pid(), current_comm(),task_ref_cnt_get(current, 0));
@@ -214,36 +211,37 @@ void handle_lock_error(wrlock_t *lock, const char *func) {
 }
 
 void read_to_write_lock(wrlock_t *lock) {  // Try to atomically swap a RO lock to a Write lock.  -mke
-            task_ref_cnt_mod_wrapper(1);
+    task_ref_cnt_mod(current, 1);
     atomic_l_lockf("rtw_lock\0", 0);
     _read_unlock(lock);
     _write_lock(lock);
     atomic_l_unlockf();
-    task_ref_cnt_mod_wrapper(-1);
+    task_ref_cnt_mod(current, -1);
 }
 
 void write_to_read_lock(wrlock_t *lock) { // Try to atomically swap a Write lock to a RO lock.  -mke
-            task_ref_cnt_mod_wrapper(1);
+    task_ref_cnt_mod(current, 1);
     atomic_l_lockf("wtr_lock\0", 0);
     _write_unlock(lock);
     _read_lock(lock);
     atomic_l_unlockf();
-    task_ref_cnt_mod_wrapper(-1);
+    task_ref_cnt_mod(current, -1);
 }
 
 void write_unlock_and_destroy(wrlock_t *lock) {
-            task_ref_cnt_mod_wrapper(1);
+    task_ref_cnt_mod(current, 1);
     atomic_l_lockf("wuad_lock\0", 0);
     _write_unlock(lock);
     _lock_destroy(lock);
     atomic_l_unlockf();
-    task_ref_cnt_mod_wrapper(-1);
+    task_ref_cnt_mod(current, -1);
 }
 
 void read_unlock_and_destroy(wrlock_t *lock) {
     atomic_l_lockf("ruad_lock", 0);
     if(trylockw(lock)) // It should be locked, but just in case.  Likely masking underlying issue.  -mke
         _read_unlock(lock);
+    
     _lock_destroy(lock);
     atomic_l_unlockf();
 }

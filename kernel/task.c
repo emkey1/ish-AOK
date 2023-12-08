@@ -79,7 +79,7 @@ struct pid *pid_get_last_allocated(void) {
 }
 
 dword_t get_count_of_blocked_tasks(void) {
-    task_ref_cnt_mod(current, 1);
+    // task_ref_cnt_mod(current, 1);  // Not needed?
     dword_t res = 0;
     struct pid *pid_entry;
     complex_lockt(&pids_lock, 0);
@@ -88,7 +88,7 @@ dword_t get_count_of_blocked_tasks(void) {
             res++;
         }
     }
-    task_ref_cnt_mod(current, -1);
+    // task_ref_cnt_mod(current, -1);
     unlock(&pids_lock);
     return res;
 }
@@ -201,7 +201,7 @@ void task_destroy(struct task *task, int caller) {
         unlock(&pids_lock);
     }
     
-    if (task_ref_cnt_get(task, 1)) {
+    if (task_ref_cnt_get(task, 1)) { // Check to see if another thread is accessing this process.  If yes, note that and defer freeing it
         struct task_pending_deletion *pd = malloc(sizeof(struct task_pending_deletion));
         if (pd) {
             task->reference.ready_to_be_freed = true;
@@ -212,7 +212,7 @@ void task_destroy(struct task *task, int caller) {
             list_add(&tasks_pending_deletion_queue, &pd->list);
             pthread_mutex_unlock(&tasks_pending_deletion_lock);
         }
-        // Lets cleanup any pending deletions here for now
+        // Lets cleanup any expired pending deletions here for now
         cleanup_pending_deletions();
         return;
     } else {
@@ -225,7 +225,7 @@ void cleanup_pending_deletions(void) {
     pthread_mutex_lock(&tasks_pending_deletion_lock);
     struct task_pending_deletion *pd, *tmp;
     list_for_each_entry_safe(&tasks_pending_deletion_queue, pd, tmp, list) {
-        if (difftime(time(NULL), pd->added_time) >= GRACE_PERIOD) { // Delete reaped tasks older than
+        if ((difftime(time(NULL), pd->added_time) >= GRACE_PERIOD) && !! (!pd->task->reference.count)) { // Delete reaped tasks old and no longer referenced
             if (task_ref_cnt_get(pd->task, 0) == 0) {
                 free(pd->task);
                 list_remove(&pd->list);
@@ -258,6 +258,7 @@ void task_run_current(void) {
     tlb_refresh(&tlb, &current->mem->mmu);
     
     while (true) {
+        task_ref_cnt_mod(current, 1);
         read_lock(&current->mem->lock);
         
         if(!doEnableMulticore) {
@@ -279,6 +280,8 @@ void task_run_current(void) {
         } else {
             handle_interrupt(interrupt);
         }
+        
+        task_ref_cnt_mod(current, -1);
     }
 }
 
@@ -336,7 +339,7 @@ void update_thread_name(void) {
 
 void task_ref_cnt_mod(struct task *task, int value) { // value Should only be -1 or 1.  -mke
     // Keep track of how many threads are referencing this task
-    if(!doEnableExtraLocking) {// If they want to fly by the seat of their pants...  -mke
+    if(!doEnableExtraLocking) { // If they want to fly by the seat of their pants...  -mke
         return;
     }
     

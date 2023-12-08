@@ -91,14 +91,14 @@ void mylock(lock_t *lock, int log_lock) {
        unlock(lock);
     
     if(!log_lock) {
-                task_ref_cnt_mod_wrapper(1);
+        // task_ref_cnt_mod_wrapper(1);
         pthread_mutex_lock(&lock->m);
         modify_locks_held_count_wrapper(1);
         lock->owner = pthread_self();
         lock->pid = current_pid();
         lock->uid = current_uid();
         strlcpy(lock->comm, current_comm(), 16);
-                task_ref_cnt_mod_wrapper(-1);
+        // task_ref_cnt_mod_wrapper(-1);
     } else {
         pthread_mutex_lock(&lock->m);
         lock->owner = pthread_self();

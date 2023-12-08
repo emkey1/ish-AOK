@@ -19,6 +19,11 @@ typedef struct {
     char comm[16];
     char lname[16];
     bool wait4;
+    struct {
+        pthread_mutex_t lock;
+        int count; // If positive, don't delete yet, wait_to_delete
+        bool ready_to_be_freed; // Should be false initially
+    } reference;
 #if LOCK_DEBUG
     struct lock_debug {
         const char *file;

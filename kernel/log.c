@@ -221,7 +221,7 @@ inline int current_pid(void) {
             return -1;
         }
     }
-    
+    // This should never happen
     task_ref_cnt_mod(current, -1);
     return -1;
 }
@@ -237,7 +237,7 @@ inline int current_uid(void) {
             return -1;
         }
     }
-    
+    // This should never happen
     task_ref_cnt_mod(current, -1);
     return -1;
 }
@@ -252,6 +252,7 @@ inline char * current_comm(void) {
             task_ref_cnt_mod(current, -1);
             return "";
         }
+        
         if (current->exiting != true) {
             task_ref_cnt_mod(current, -1);
             return comm;
@@ -260,8 +261,8 @@ inline char * current_comm(void) {
             return "";
         }
     }
-    task_ref_cnt_mod(current, -1);
     
+    task_ref_cnt_mod(current, -1);
     return "";
 }
 

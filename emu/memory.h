@@ -108,7 +108,7 @@ int mem_segv_reason(struct mem *mem, addr_t addr);
 
 // Reference counting is important
 void mem_ref_cnt_mod(struct mem *mem, int value);
-int mem_ref_cnt_val_get(struct mem *mem);
+int mem_ref_cnt_get(struct mem *mem);
 
 extern size_t real_page_size;
 

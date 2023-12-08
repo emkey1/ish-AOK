@@ -136,12 +136,13 @@ noreturn void do_exit(int status) {
     complex_lockt(&pids_lock, 0);
     // release the sighand
     signal_pending = !!(current->pending & ~current->blocked);
-    while((task_ref_cnt_get(current, 0) > 2) ||
+    while((task_ref_cnt_get(current, 0) > 2) || // We added one to the task reference count above, thus the check is 2, in case any other thread is accessing.
           (locks_held_count(current)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
     }
+    
     sighand_release(current->sighand);
     current->sighand = NULL;
     struct sigqueue *sigqueue, *sigqueue_tmp;
@@ -149,11 +150,13 @@ noreturn void do_exit(int status) {
         list_remove(&sigqueue->queue);
         free(sigqueue);
     }
+    
     struct task *leader = current->group->leader;
 
     // reparent children
     struct task *new_parent = find_new_parent(current);
     struct task *child, *tmp;
+    
     list_for_each_entry_safe(&current->children, child, tmp, siblings) {
         child->parent = new_parent;
         list_remove(&child->siblings);
@@ -179,7 +182,7 @@ noreturn void do_exit(int status) {
         } else {
             leader->zombie = true;
             notify(&parent->group->child_exit);
-            struct siginfo_ info = {
+            struct siginfo_ info = { //mkemkemke  This is interesting.  Need to think about possibilities.  TODO
                 .code = SI_KERNEL_,
                 .child.pid = current->pid,
                 .child.uid = current->uid,
@@ -191,7 +194,6 @@ noreturn void do_exit(int status) {
                 send_signal(parent, leader->exit_signal, info);
         }
         
-        
         if (exit_hook != NULL)
             exit_hook(current, status);
         
@@ -199,17 +201,17 @@ noreturn void do_exit(int status) {
     }
 
     vfork_notify(current);
-    task_ref_cnt_mod(current, -1);
+    
     if(current != leader) {
+        task_ref_cnt_mod(current, -1);
         task_destroy(current, 1);
     } else {
         unlock(&current->general_lock);
+        task_ref_cnt_mod(current, -1);
     }
     
     unlock(&pids_lock);
     
-    //atomic_l_unlockf();
-
 EXIT:pthread_exit(NULL);
 }
 
@@ -244,10 +246,13 @@ noreturn void do_exit_group(int status) {
     }
 
     unlock(&pids_lock);
-    task_ref_cnt_mod(current, -1);
     unlock(&group->lock);
-    //if(current->pid <= MAX_PID) // abort if crazy.  -mke
+    task_ref_cnt_mod(current, -1);
+    if(current->pid <= MAX_PID) // abort if crazy.  -mke
         do_exit(status);
+    
+    unlock(&pids_lock);  // Shouldn't get here
+    pthread_exit(NULL);
 }
 
 // always called from init process. Intended to be called when the init process exits.

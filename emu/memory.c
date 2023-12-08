@@ -47,13 +47,13 @@ void mem_init(struct mem *mem) {
 
 void mem_destroy(struct mem *mem) {
     write_lock(&mem->lock);
-    while((mem_ref_cnt_val_get(mem)) && (current->pid > 1) ){ 
+    while((mem_ref_cnt_get(mem)) && (current->pid > 1) ){ 
         nanosleep(&lock_pause, NULL);
     }
     pt_unmap_always(mem, 0, MEM_PAGES);
 
 #if ENGINE_JIT
-    while((task_ref_cnt_get(current, 1)) && (current->pid > 1) ){ // Wait for now, task is in one or more critical sections, and/or has locks
+    while((mem_ref_cnt_get(current)) && (current->pid > 1) ){ // Wait for now, task is in one or more critical sections, and/or has locks
         nanosleep(&lock_pause, NULL);
     }
     jit_free(mem->mmu.jit);
@@ -61,7 +61,7 @@ void mem_destroy(struct mem *mem) {
     for (int i = 0; i < MEM_PGDIR_SIZE; i++) {
         do {
             nanosleep(&lock_pause, NULL);
-        } while(mem_ref_cnt_val_get(mem));
+        } while(mem_ref_cnt_get(mem));
         
         
         if (mem->pgdir[i] != NULL)
@@ -112,7 +112,7 @@ struct pt_entry *mem_pt(struct mem *mem, page_t page) {
 static void mem_pt_del(struct mem *mem, page_t page) {
     struct pt_entry *entry = mem_pt(mem, page);
     if (entry != NULL) {
-         while(task_ref_cnt_get(current, 0) > 4) { // mark
+         while(mem_ref_cnt_get(mem)) { // Don't delete if memory is in use
              nanosleep(&lock_pause, NULL);
         }
         entry->data = NULL;
@@ -255,7 +255,7 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
 }
 
 int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t pages) {
-    while(task_ref_cnt_get(current, 0)) { // Wait for now, task is in one or more critical sections
+    while(task_ref_cnt_get(current, 0) > 1) { // Will be at least 1, anything higher means another thread is accessing
         nanosleep(&lock_pause, NULL);
     }
     for (page_t page = start; page < start + pages; mem_next_page(src, &page)) {
@@ -272,7 +272,7 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
         dst_entry->offset = entry->offset;
         dst_entry->flags = entry->flags;
     }
-    while(task_ref_cnt_get(current, 0)) { // Wait for now, task is in one or more critical sections
+    while(task_ref_cnt_get(current, 0) > 1) { // Wait for now, task is in one or more critical sections
         nanosleep(&lock_pause, NULL);
     }
     mem_changed(src);
@@ -347,7 +347,6 @@ void *mem_ptr(struct mem *mem, addr_t addr, int type) {
 
             // copy/paste from above
             mem_ref_cnt_mod(mem, 1);
-            //read_to_write_lock(&mem->lock);
             memcpy(copy, data, PAGE_SIZE);  //mkemkemke  Crashes here a lot when running both the go and parallel make test. 01 June 2022
             mem_ref_cnt_mod(mem, -1);
             pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW);
@@ -438,7 +437,7 @@ void mem_ref_cnt_mod(struct mem *mem, int value) { // value Should only be -1 or
     pthread_mutex_unlock(&mem->reference.lock);
 }
 
-int mem_ref_cnt_val_get(struct mem *mem) {
+int mem_ref_cnt_get(struct mem *mem) {
     pthread_mutex_lock(&mem->reference.lock);
     int cnt = mem->reference.count;
     pthread_mutex_unlock(&mem->reference.lock);

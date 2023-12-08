@@ -45,15 +45,16 @@ void mm_release(struct mm *mm) {
     if (--mm->refcount == 0) {
         if (mm->exefile != NULL)
             fd_close(mm->exefile);
-        while(task_ref_cnt_get(current, 1)) {  // FIXME: Should be locking current->reference.lock and updating
+        while(mem_ref_cnt_get(&mm->mem) ) {  // FIXME: Should be locking current->reference.lock and updating
                                                // current->reference.count before mem_destroy
             nanosleep(&lock_pause, NULL);
         }
         
         mem_destroy(&mm->mem);
-        while(task_ref_cnt_get(current, 1)) {  //FIXME: Should now unlock after mem_destroy
+        while(task_ref_cnt_get(current, 1) > 1) {  //FIXME: Should now unlock after mem_destroy
             nanosleep(&lock_pause, NULL);
         }
+        
         free(mm);
     }
 }
