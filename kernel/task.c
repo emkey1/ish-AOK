@@ -11,12 +11,17 @@
 #include <libkern/OSAtomic.h>
 #include <os/proc.h>
 
+#define GRACE_PERIOD 2 // How long we want to deallocate tasks that have exited
+
 pthread_mutex_t multicore_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t extra_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t delay_lock = PTHREAD_MUTEX_INITIALIZER;
 extern lock_t atomic_l_lock;
 pthread_mutex_t wait_for_lock = PTHREAD_MUTEX_INITIALIZER;
 time_t boot_time;  // Store the boot time.  -mke
+
+struct list tasks_pending_deletion_queue;
+pthread_mutex_t tasks_pending_deletion_lock = PTHREAD_MUTEX_INITIALIZER;
 
 int iOSMajorRelease;
 
@@ -31,6 +36,12 @@ static struct pid pids[MAX_PID + 1] = {};
 lock_t pids_lock;
 lock_t block_lock;
 struct list alive_pids_list;
+
+void init_pending_queues(void) {
+// Initialize the pending deletion queues.  Tasks, memory and file descriptors (eventually)
+    list_init(&tasks_pending_deletion_queue);
+    
+}
 
 static bool pid_empty(struct pid *pid) {
     return pid->task == NULL && list_empty(&pid->session) && list_empty(&pid->pgroup);
@@ -189,14 +200,40 @@ void task_destroy(struct task *task, int caller) {
     if (locked_pids_lock) {
         unlock(&pids_lock);
     }
-
-retry:
-    // Free the task's resources.
-    if (!task_ref_cnt_get(task, 0)) {
-        free(task);
+    
+    if (task_ref_cnt_get(task, 1)) {
+        struct task_pending_deletion *pd = malloc(sizeof(struct task_pending_deletion));
+        if (pd) {
+            task->reference.ready_to_be_freed = true;
+            pd->task = task;
+            pd->added_time = time(NULL);
+            list_init(&pd->list);
+            pthread_mutex_lock(&tasks_pending_deletion_lock);
+            list_add(&tasks_pending_deletion_queue, &pd->list);
+            pthread_mutex_unlock(&tasks_pending_deletion_lock);
+        }
+        // Lets cleanup any pending deletions here for now
+        cleanup_pending_deletions();
+        return;
     } else {
-        goto retry;
+        free(task);
     }
+}
+
+// Cleanup function to delete tasks after the grace period
+void cleanup_pending_deletions(void) {
+    pthread_mutex_lock(&tasks_pending_deletion_lock);
+    struct task_pending_deletion *pd, *tmp;
+    list_for_each_entry_safe(&tasks_pending_deletion_queue, pd, tmp, list) {
+        if (difftime(time(NULL), pd->added_time) >= GRACE_PERIOD) { // Delete reaped tasks older than
+            if (task_ref_cnt_get(pd->task, 0) == 0) {
+                free(pd->task);
+                list_remove(&pd->list);
+                free(pd);
+            }
+        }
+    }
+    pthread_mutex_unlock(&tasks_pending_deletion_lock);
 }
 
 void run_at_boot(void) {  // Stuff we run only once, at boot time.

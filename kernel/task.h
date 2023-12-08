@@ -14,6 +14,17 @@
 
 extern void task_ref_cnt_mod_wrapper(int value);
 
+// Define a structure for the pending deletion queue
+struct task_pending_deletion {
+    struct task *task;
+    time_t added_time; // Timestamp when the task was added to the queue
+    struct list list; // For linking in the pending deletion list
+};
+
+// Global list of tasks pending deletion
+extern struct list tasks_pending_deletion_queue;
+extern pthread_mutex_t tasks_pending_deletion_lock;
+
 struct task {
     struct cpu_state cpu;
     struct mm *mm; // locked by general_lock
@@ -21,8 +32,6 @@ struct task {
     pthread_t thread;
     uint64_t threadid;
 
-    pthread_mutex_t death_lock; // Set when process is about to be reaped.  Immediately cease all activity on this task.  -mke
-    
     struct {
         pthread_mutex_t lock;
         int count; // If positive, don't delete yet, wait_to_delete 
@@ -245,5 +254,7 @@ unsigned task_ref_cnt_get(struct task *task, unsigned lock_if_zero);
 void modify_locks_held_count(struct task *task, int value);
 void modify_locks_held_count_wrapper(int value);
 unsigned locks_held_count(struct task *task);
+void init_pending_queues(void);
+void cleanup_pending_deletions(void);
 
 #endif

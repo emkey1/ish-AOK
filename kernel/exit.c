@@ -17,6 +17,8 @@ extern const char extra_lock_comm;
 
 static void halt_system(void);
 
+// Checks if a task's thread group can be exited by waiting for the task's reference count
+// to drop and checking if it holds any locks.
 static bool exit_tgroup(struct task *task) {
     while((task_ref_cnt_get(task, 0) > 2) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
         nanosleep(&lock_pause, NULL);
@@ -39,8 +41,11 @@ static bool exit_tgroup(struct task *task) {
     return group_dead;
 }
 
+// A function pointer that can be assigned to a cleanup function to be called upon task exit.
 void (*exit_hook)(struct task *task, int code) = NULL;
 
+// Finds a new parent for the children of a task that is exiting. If no suitable parent
+// is found within the task's group, it returns the 'init' task.
 static struct task *find_new_parent(struct task *task) {
     struct task *new_parent;
     list_for_each_entry(&task->group->threads, new_parent, group_links) {
@@ -50,10 +55,11 @@ static struct task *find_new_parent(struct task *task) {
     return pid_get_task(1);
 }
 
+// Handles the termination of the current task. It releases resources, notifies the parent,
+// and re-parents any children. It ensures the task is not in a critical section and that
+// all locks are released before proceeding.  At least in theory
 noreturn void do_exit(int status) {
-    //atomic_l_lockf(0,__FILE__, __LINE__);
-   // pthread_mutex_lock(&current->death_lock);
-    if(!pthread_mutex_trylock(&current->death_lock)) {
+    if(current->reference.ready_to_be_freed) {
         goto EXIT;
     } else {
         //nanosleep(&lock_pause, NULL); // Stupid place holder
@@ -207,6 +213,8 @@ noreturn void do_exit(int status) {
 EXIT:pthread_exit(NULL);
 }
 
+// Exits all tasks in the current task's thread group and then calls do_exit to terminate
+// the current task itself.
 noreturn void do_exit_group(int status) {
     struct tgroup *group = current->group;
     complex_lockt(&pids_lock, 0);
@@ -242,7 +250,7 @@ noreturn void do_exit_group(int status) {
         do_exit(status);
 }
 
-// always called from init process
+// always called from init process. Intended to be called when the init process exits.
 static void halt_system(void) {
     // brutally murder everything
     // which will leave everything in an inconsistent state. I will solve this problem later.

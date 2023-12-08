@@ -120,6 +120,8 @@ intptr_t become_first_process(void) {
     establish_signal_handlers();
 
     list_init(&alive_pids_list);
+    init_pending_queues(); // Initialize pending queus
+
     struct task *task = construct_task(NULL);
     if (IS_ERR(task))
         return PTR_ERR(task);

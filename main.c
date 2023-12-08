@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <unistd.h>
+#include "util/list.h"
 
 #include <mach/task.h>
 #include <mach/mach_init.h>
@@ -62,6 +63,6 @@ int main(int argc, char *const argv[]) {
     pthread_t id;
     pthread_create(&id, NULL, gen_exception_thread, NULL);
     pthread_join(id, NULL);
-
+    
     task_run_current();
 }
