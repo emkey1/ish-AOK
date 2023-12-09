@@ -214,8 +214,9 @@ inline int current_pid(void) {
     task_ref_cnt_mod(current, 1);
     if(current != NULL) {
         if (current->exiting != true) {
+            int tmp = current->pid;
             task_ref_cnt_mod(current, -1);
-            return current->pid;
+            return tmp;
         } else {
             task_ref_cnt_mod(current, -1);
             return -1;
@@ -230,8 +231,9 @@ inline int current_uid(void) {
     task_ref_cnt_mod(current, 1);
     if(current != NULL) {
         if (current->exiting != true) {
+            int tmp = current->uid;
             task_ref_cnt_mod(current, -1);
-            return current->uid;
+            return tmp;
         } else {
             task_ref_cnt_mod(current, -1);
             return -1;

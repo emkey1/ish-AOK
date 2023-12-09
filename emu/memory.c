@@ -193,7 +193,7 @@ int pt_unmap(struct mem *mem, page_t start, pages_t pages) {
 
 int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
     for (page_t page = start; page < start + pages; mem_next_page(mem, &page)) {
-        while(task_ref_cnt_get(current, 0) >3) {
+        while(mem_ref_cnt_get(mem) > 1) { // Being 1 is normal as pt_copy_on_write() increments the ref count
             nanosleep(&lock_pause, NULL);
         }
         struct pt_entry *pt = mem_pt(mem, page);
@@ -207,7 +207,7 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
         if (--data->refcount == 0) {
             // vdso wasn't allocated with mmap, it's just in our data segment
             if (data->data != vdso_data) {
-                while(task_ref_cnt_get(current, 0) > 3) {
+                while(mem_ref_cnt_get(mem)) {
                     nanosleep(&lock_pause, NULL);
                 }
                 int err = munmap(data->data, data->size);
@@ -255,9 +255,8 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
 }
 
 int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t pages) {
-    while(task_ref_cnt_get(current, 0) > 1) { // Will be at least 1, anything higher means another thread is accessing
-        nanosleep(&lock_pause, NULL);
-    }
+    mem_ref_cnt_mod(src, 1);
+    mem_ref_cnt_mod(dst, 1);
     for (page_t page = start; page < start + pages; mem_next_page(src, &page)) {
         struct pt_entry *entry = mem_pt(src, page);
         if (entry == NULL)
@@ -272,11 +271,11 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
         dst_entry->offset = entry->offset;
         dst_entry->flags = entry->flags;
     }
-    while(task_ref_cnt_get(current, 0) > 1) { // Wait for now, task is in one or more critical sections
-        nanosleep(&lock_pause, NULL);
-    }
     mem_changed(src);
     mem_changed(dst);
+    mem_ref_cnt_mod(src, -1);
+    mem_ref_cnt_mod(dst, -1);
+    
     return 0;
 }
 

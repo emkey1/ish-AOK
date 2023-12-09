@@ -169,8 +169,8 @@ bool should_wait(struct task *t) {
 
 void task_destroy(struct task *task, int caller) {
     if(trylock(&task->general_lock) == (_EBUSY)) { // Get it if a lock does not exist
-        task->exiting = true;
         lock(&task->general_lock, 0);
+        task->exiting = true;
     }
     
     //printk("TD(%s:%d): Called by %d\n", task->comm, task->pid, caller);
@@ -258,8 +258,8 @@ void task_run_current(void) {
     tlb_refresh(&tlb, &current->mem->mmu);
     
     while (true) {
-        task_ref_cnt_mod(current, 1);
         read_lock(&current->mem->lock);
+        task_ref_cnt_mod(current, 1);
         
         if(!doEnableMulticore) {
             pthread_mutex_lock(&multicore_lock);
@@ -368,7 +368,6 @@ void task_ref_cnt_mod(struct task *task, int value) { // value Should only be -1
         
         return;
     }
-    
     
     task->reference.count = task->reference.count + value;
         

@@ -29,6 +29,12 @@ struct jit {
     struct {
         struct list blocks[2];
     } *page_hash;
+    
+    struct {
+        pthread_mutex_t lock;
+        int count; // If positive, don't delete yet, wait_to_delete
+        bool ready_to_be_freed; // Should be false initially
+    } reference;
 
     lock_t lock;
     wrlock_t jetsam_lock;

@@ -102,6 +102,7 @@ static int load_entry(struct prg_header ph, addr_t bias, struct fd *fd) {
         // of the load entry or the end of the page, whichever comes first
         addr_t file_end = addr + filesize;
         dword_t tail_size = PAGE_SIZE - PGOFFSET(file_end);
+        
         if (tail_size == PAGE_SIZE)
             // if you can calculate tail_size better and not have to do this please let me know
             tail_size = 0;
@@ -109,20 +110,26 @@ static int load_entry(struct prg_header ph, addr_t bias, struct fd *fd) {
         if (tail_size != 0) {
             // Unlock and lock the mem because the user functions must be
             // called without locking mem.
-	    if(trylockw(&current->mem->lock)) //  Test to see if it is actually locked.  This is likely masking an underlying problem.  -mke
+	        if(trylockw(&current->mem->lock)) //  Test to see if it is actually locked.  This is likely masking an underlying problem.  -mke
                 write_unlock(&current->mem->lock);
+            
+            mem_ref_cnt_mod(current->mem, 1);
             user_memset(file_end, 0, tail_size);
             write_lock(&current->mem->lock);
+            mem_ref_cnt_mod(current->mem, -1);
         }
         if (tail_size > bss_size)
             tail_size = bss_size;
 
         // then map the pages from after the file mapping up to and including the end of bss
         if (bss_size - tail_size != 0)
-            if ((err = pt_map_nothing(current->mem, PAGE_ROUND_UP(addr + filesize),
-                    PAGE_ROUND_UP(bss_size - tail_size), flags)) < 0)
-                return err;
+                
+        if ((err = pt_map_nothing(current->mem, PAGE_ROUND_UP(addr + filesize),
+            PAGE_ROUND_UP(bss_size - tail_size), flags)) < 0)
+                
+        return err;
     }
+    
     return 0;
 }
 

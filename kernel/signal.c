@@ -466,9 +466,9 @@ struct sighand *sighand_copy(struct sighand *sighand) {
 }
 
 void sighand_release(struct sighand *sighand) {
-    while(task_ref_cnt_get(current, 0) > 2) { // Wait for now, task is in one or more critical sections
-        nanosleep(&lock_pause, NULL);
-    }
+   // while(task_ref_cnt_get(current, 0) > 1) { // Wait for now, task is in one or more critical sections
+   //     nanosleep(&lock_pause, NULL);
+   // }
     if (--sighand->refcount == 0) {
         free(sighand);
     }
