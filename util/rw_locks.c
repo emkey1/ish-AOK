@@ -9,9 +9,6 @@
 #include "util/sync.h"
 
 // The following are in log.c.  There should probably be in a log.h that gets included instead.
-extern int current_pid(void);
-extern int current_uid(void);
-extern char* current_comm(void);
 bool current_is_valid(void);
 
 // this is a read-write lock that prefers writers, i.e. if there are any
@@ -67,7 +64,7 @@ void _read_lock(wrlock_t *lock) {
         return;
     }
     
-    lock->pid = current_pid();
+    lock->pid = current_pid(current);
     if(lock->pid > 9)
         strncpy((char *)lock->comm, current_comm(), 16);
             task_ref_cnt_mod(current, -1);
@@ -82,7 +79,7 @@ void read_lock(wrlock_t *lock) { // Wrapper so that external calls lock, interna
 
 void _read_unlock(wrlock_t *lock) {
     if(lock->val <= 0) {
-        printk("ERROR: read_unlock(%x) error(PID: %d Process: %s count %d) (%s:%d)\n",lock, current_pid(), current_comm(), lock->val);
+        printk("ERROR: read_unlock(%x) error(PID: %d Process: %s count %d) (%s:%d)\n",lock, current_pid(current), current_comm(), lock->val);
         lock->val = 0;
         lock->pid = -1;
         lock->comm[0] = 0;
@@ -92,29 +89,29 @@ void _read_unlock(wrlock_t *lock) {
     }
     assert(lock->val > 0);
     if (pthread_rwlock_unlock(&lock->l) != 0)
-        printk("URGENT: read_unlock(%x) error(PID: %d Process: %s)\n", lock, current_pid(), current_comm());
+        printk("URGENT: read_unlock(%x) error(PID: %d Process: %s)\n", lock, current_pid(current), current_comm());
     lock->val--;
     modify_locks_held_count_wrapper(-1);
     //STRACE("read_unlock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
 }
 
 void read_unlock(wrlock_t *lock) {
-    if(lock->pid != current_pid() && (lock->pid != -1)) {
+    if(lock->pid != current_pid(current) && (lock->pid != -1)) {
         atomic_l_lockf("r_unlock\0", 0);
         _read_unlock(lock);
     } else { // We can unlock our own lock without additional locking.  -mke
         _read_unlock(lock);
         return;
     }
-    if(lock->pid != current_pid() && (lock->pid != -1))
+    if(lock->pid != current_pid(current) && (lock->pid != -1))
         atomic_l_unlockf();
 }
 
 void _write_unlock(wrlock_t *lock) {
     if(pthread_rwlock_unlock(&lock->l) != 0)
-        printk("URGENT: write_unlock(%x:%d) error(PID: %d Process: %s) \n", lock, lock->val, current_pid(), current_comm());
+        printk("URGENT: write_unlock(%x:%d) error(PID: %d Process: %s) \n", lock, lock->val, current_pid(current), current_comm());
     if(lock->val != -1) {
-        printk("ERROR: write_unlock(%x) on lock with val of %d (PID: %d Process: %s )\n", lock, lock->val, current_pid(), current_comm());
+        printk("ERROR: write_unlock(%x) on lock with val of %d (PID: %d Process: %s )\n", lock, lock->val, current_pid(current), current_comm());
     }
     //assert(lock->val == -1);
     lock->val = lock->line = lock->pid = 0;
@@ -142,7 +139,7 @@ void wrlock_init(wrlock_t *lock) {
 #endif
 #ifdef JUSTLOG
     if (pthread_rwlock_init(&lock->l, pattr))
-        printk("URGENT: wrlock_init() error(PID: %d Process: %s)\n",current_pid(), current_comm());
+        printk("URGENT: wrlock_init() error(PID: %d Process: %s)\n",current_pid(current), current_comm());
 #else
     if (pthread_rwlock_init(&lock->l, pattr)) __builtin_trap();
 #endif
@@ -153,7 +150,7 @@ void wrlock_init(wrlock_t *lock) {
 void _lock_destroy(wrlock_t *lock) {
 #ifdef JUSTLOG
     if (pthread_rwlock_destroy(&lock->l) != 0) {
-        printk("URGENT: lock_destroy(%x) on active lock. (PID: %d Process: %s Critical Region Count: %d)\n",&lock->l, current_pid(), current_comm(),task_ref_cnt_get(current, 0));
+        printk("URGENT: lock_destroy(%x) on active lock. (PID: %d Process: %s Critical Region Count: %d)\n",&lock->l, current_pid(current), current_comm(),task_ref_cnt_get(current, 0));
     }
 #else
     if (pthread_rwlock_destroy(&lock->l) != 0) __builtin_trap();
@@ -161,7 +158,7 @@ void _lock_destroy(wrlock_t *lock) {
 }
 
 void lock_destroy(wrlock_t *lock) {
-    while((task_ref_cnt_get(current, 0) > 1) && (current_pid() != 1)) { // Wait for now, task is in one or more critical sections
+    while((task_ref_cnt_get(current, 0) > 1) && (current_pid(current) != 1)) { // Wait for now, task is in one or more critical sections
         nanosleep(&lock_pause, NULL);
     }
     
@@ -177,7 +174,7 @@ void _write_lock(wrlock_t *lock) { // Write lock
     lock->val = -1;
   //  lock->file = file;
   //  lock->line = line;
-    lock->pid = current_pid();
+    lock->pid = current_pid(current);
     if(lock->pid > 9)
         strncpy((char *)lock->comm, current_comm(), 16);
     //STRACE("write_lock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
@@ -254,14 +251,14 @@ int trylockw(wrlock_t *lock) {
     if (!status) {
         lock->debug.file = file;
         lock->debug.line = line;
-        extern int current_pid(void);
-        lock->debug.pid = current_pid();
+        extern int current_pid(current);
+        lock->debug.pid = current_pid(current);
     }
 #endif
     if(status == 0) {
         modify_locks_held_count_wrapper(1);
         //STRACE("trylockw(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
-        lock->pid = current_pid();
+        lock->pid = current_pid(current);
         strncpy(lock->comm, current_comm(), 16);
     }
     return status;

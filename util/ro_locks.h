@@ -34,7 +34,6 @@ typedef struct {
 #endif
 } lock_t;
 
-
 void lock_init(lock_t *lock, char lname[16]);
 void unlock(lock_t *lock);
 void atomic_l_lockf(char lname[16], int skiplog);

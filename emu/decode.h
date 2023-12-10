@@ -2,6 +2,7 @@
 #include "emu/cpu.h"
 #include "emu/modrm.h"
 #include "emu/interrupt.h"
+#include "kernel/task.h"
 
 #undef oz
 #define oz OP_SIZE
@@ -13,9 +14,10 @@
 #undef DEFAULT_CHANNEL
 #define DEFAULT_CHANNEL instr
 #define TRACEI(msg, ...) TRACE(msg "\t", ##__VA_ARGS__)
-extern int current_pid(void);
-extern char* curent_comm(void);
-#define TRACEIP() TRACE("%d %08x\t", current_pid(), state->ip)
+//extern int current_pid(struct task *task);
+//extern char* curent_comm(void);
+//#define TRACEIP() TRACE("%d %08x\t", current_pid(current), state->ip)
+//#define TRACEIP() TRACE("%d %08x\t", current_pid(), state->ip)
 
 // this will be the next PyEval_EvalFrameEx
 __no_instrument DECODER_RET glue(DECODER_NAME, OP_SIZE)(DECODER_ARGS) {
@@ -34,7 +36,7 @@ __no_instrument DECODER_RET glue(DECODER_NAME, OP_SIZE)(DECODER_ARGS) {
 #define READMODRM_NOMEM READMODRM; if (modrm.type != modrm_reg) UNDEFINED
 
 restart:
-    TRACEIP();
+   // TRACEIP(current);
     READINSN;
     switch (insn) {
 #define MAKE_OP(x, OP, op) \

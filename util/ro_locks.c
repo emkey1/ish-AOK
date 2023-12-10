@@ -10,12 +10,10 @@
 #include "debug.h"
 #include "kernel/errno.h"
 #include "kernel/task.h"
+#include "kernel/log.h"
 #include "util/sync.h"
 
 // The following are in log.c.  There should probably be in a log.h that gets included instead.
-extern int current_pid(void);
-extern int current_uid(void);
-extern char* current_comm(void);
 bool current_is_valid(void);
 
 // Lock to lock locks.  Used to assure transition between RO<->RW is automic for RW locks
@@ -69,11 +67,11 @@ void atomic_l_lockf(char lname[16], int skiplog) {
         return;
     int res = 0;
     if(atomic_l_lock.pid > 0) {
-        if(current_pid() != atomic_l_lock.pid) { // Potential deadlock situation.  Also weird.  --mke
+        if(current_pid(current) != atomic_l_lock.pid) { // Potential deadlock situation.  Also weird.  --mke
             res = pthread_mutex_lock(&atomic_l_lock.m);
-            atomic_l_lock.pid = current_pid();
+            atomic_l_lock.pid = current_pid(current);
         } else if(!skiplog) {
-            printk("WARNING: Odd attempt by process (%s:%d) to attain same locking lock twice.  Ignoring\n", current_comm(), current_pid());
+            printk("WARNING: Odd attempt by process (%s:%d) to attain same locking lock twice.  Ignoring\n", current_comm(), current_pid(current));
             res = 0;
         }
     }
@@ -95,14 +93,14 @@ void mylock(lock_t *lock, int log_lock) {
         pthread_mutex_lock(&lock->m);
         modify_locks_held_count_wrapper(1);
         lock->owner = pthread_self();
-        lock->pid = current_pid();
+        lock->pid = current_pid(current);
         lock->uid = current_uid();
         strlcpy(lock->comm, current_comm(), 16);
         // task_ref_cnt_mod_wrapper(-1);
     } else {
         pthread_mutex_lock(&lock->m);
         lock->owner = pthread_self();
-        lock->pid = current_pid();
+        lock->pid = current_pid(current);
         lock->uid = current_uid();
         strncpy(lock->comm, current_comm(), 16);
     }
@@ -125,7 +123,7 @@ void atomic_l_unlockf(void) {
 }
 
 void complex_lockt(lock_t *lock, int log_lock) {
-    if (lock->pid == current_pid())
+    if (lock->pid == current_pid(current))
         return;
 
     unsigned int count = 0;
@@ -141,7 +139,7 @@ void complex_lockt(lock_t *lock, int log_lock) {
         if (count > count_max) {
             if (!log_lock) {
                 printk("ERROR: Possible deadlock, aborted lock attempt(PID: %d Process: %s) (Previously Owned:%s:%d)\n",
-                       current_pid(), current_comm(), lock->comm, lock->pid);
+                       current_pid(current), current_comm(), lock->comm, lock->pid);
                 pthread_mutex_unlock(&lock->m);
                 modify_locks_held_count_wrapper(-1);
             }
@@ -154,11 +152,11 @@ void complex_lockt(lock_t *lock, int log_lock) {
     if (count > count_max * 0.90) {
         if (!log_lock)
             printk("Warning: large lock attempt count (%d), aborted lock attempt(PID: %d Process: %s) (Previously Owned:%s:%d) \n",
-                   count, current_pid(), current_comm(), lock->comm, lock->pid);
+                   count, current_pid(current), current_comm(), lock->comm, lock->pid);
     }
 
     lock->owner = pthread_self();
-    lock->pid = current_pid();
+    lock->pid = current_pid(current);
     lock->uid = current_uid();
     strncpy(lock->comm, current_comm(), sizeof(lock->comm) - 1);
     lock->comm[sizeof(lock->comm) - 1] = '\0';  // Null-terminate just in case
@@ -172,15 +170,15 @@ int trylock(lock_t *lock) {
     if (!status) {
         lock->debug.file = file;
         lock->debug.line = line;
-        extern int current_pid(void);
-        lock->debug.pid = current_pid();
+        extern int current_pid(struct task *task);
+        lock->debug.pid = current_pid(current);
     }
 #endif
-    if((!status) && (current_pid() > 10)) {// iSH-AOK crashes if low number processes are not excluded.  Might be able to go lower then 10?  -mke
+    if((!status) && (current_pid(current) > 10)) {// iSH-AOK crashes if low number processes are not excluded.  Might be able to go lower then 10?  -mke
         modify_locks_held_count_wrapper(1);
         
         //STRACE("trylock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
-        lock->pid = current_pid();
+        lock->pid = current_pid(current);
         strncpy(lock->comm, current_comm(), 16);
     }
     return status;
@@ -193,8 +191,8 @@ int trylocknl(lock_t *lock, char *comm, int pid) {
     if (!status) {
         lock->debug.file = file;
         lock->debug.line = line;
-        extern int current_pid(void);
-        lock->debug.pid = current_pid();
+        extern int current_pid(current);
+        lock->debug.pid = current_pid(current);
     }
 #endif
     if(!status) {// iSH-AOK crashes if low number processes are not excluded.  Might be able to go lower then 10?  -mke

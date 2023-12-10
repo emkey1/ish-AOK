@@ -2,6 +2,7 @@
 #define TIME_H
 #include "misc.h"
 #include <sys/poll.h>
+#include "kernel/fs.h"
 
 struct timespec64 {
     int64_t tv_sec;  // seconds

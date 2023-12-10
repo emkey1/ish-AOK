@@ -92,6 +92,7 @@ noreturn void do_exit(int status) {
     } while((task_ref_cnt_get(current, 0) > 1) ||
             (locks_held_count(current)) ||
             (signal_pending)); // Wait for now, task is in one or more critical
+    complex_lockt(&pids_lock, 0);
     mm_release(current->mm);
     current->mm = NULL;
     
@@ -133,7 +134,6 @@ noreturn void do_exit(int status) {
 
     // the actual freeing needs pids_lock
     task_ref_cnt_mod(current, 1);
-    complex_lockt(&pids_lock, 0);
     // release the sighand
     signal_pending = !!(current->pending & ~current->blocked);
     while((task_ref_cnt_get(current, 0) > 2) || // We added one to the task reference count above, thus the check is 2, in case any other thread is accessing.

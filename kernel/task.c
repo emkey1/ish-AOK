@@ -441,3 +441,62 @@ void modify_locks_held_count_wrapper(int value) { // sync.h can't know about the
         modify_locks_held_count(current, value);
     return;
 }
+
+// fun little utility function
+int current_pid(struct task *task) {
+    task_ref_cnt_mod(current, 1);
+    if(current != NULL) {
+        if (current->exiting != true) {
+            int tmp = current->pid;
+            task_ref_cnt_mod(current, -1);
+            return tmp;
+        } else {
+            task_ref_cnt_mod(current, -1);
+            return -1;
+        }
+    }
+    // This should never happen
+    task_ref_cnt_mod(current, -1);
+    return -1;
+}
+
+int current_uid(void) {
+    task_ref_cnt_mod(current, 1);
+    if(current != NULL) {
+        if (current->exiting != true) {
+            int tmp = current->uid;
+            task_ref_cnt_mod(current, -1);
+            return tmp;
+        } else {
+            task_ref_cnt_mod(current, -1);
+            return -1;
+        }
+    }
+    // This should never happen
+    task_ref_cnt_mod(current, -1);
+    return -1;
+}
+
+char * current_comm(void) {
+    static char comm[16];
+    task_ref_cnt_mod(current, 1);
+    if(current != NULL) {
+        if(strcmp(current->comm, "")) {
+            strncpy(comm, current->comm, 16);
+        } else {
+            task_ref_cnt_mod(current, -1);
+            return "";
+        }
+        
+        if (current->exiting != true) {
+            task_ref_cnt_mod(current, -1);
+            return comm;
+        } else {
+            task_ref_cnt_mod(current, -1);
+            return "";
+        }
+    }
+    
+    task_ref_cnt_mod(current, -1);
+    return "";
+}

@@ -9,8 +9,8 @@
 #include "kernel/resource.h"
 #include "fs/sockrestart.h"
 #include "util/list.h"
-#include "util/sync.h"
 #include "util/timer.h"
+#include "util/sync.h"
 
 extern void task_ref_cnt_mod_wrapper(int value);
 
@@ -256,5 +256,10 @@ void modify_locks_held_count_wrapper(int value);
 unsigned locks_held_count(struct task *task);
 void init_pending_queues(void);
 void cleanup_pending_deletions(void);
+
+bool current_is_valid(void);
+int current_pid(struct task *task);
+int current_uid(void);
+char * current_comm(void);
 
 #endif

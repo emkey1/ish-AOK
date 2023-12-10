@@ -17,10 +17,6 @@
 #define LOCK_DEBUG 0
 
 // The following are in log.c.  There should probably be in a log.h that gets included instead.
-extern int current_pid(void);
-extern int current_uid(void);
-extern char* current_comm(void);
-bool current_is_valid(void);
 
 unsigned locks_held_count_wrapper(void);
 

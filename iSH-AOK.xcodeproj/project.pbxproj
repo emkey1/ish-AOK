@@ -595,6 +595,7 @@
 		5D59DADA2B17999500FA995C /* rw_locks.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = rw_locks.h; sourceTree = "<group>"; };
 		5D59DADB2B179A2300FA995C /* ro_locks.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ro_locks.c; sourceTree = "<group>"; };
 		5D59DAE32B17EB1600FA995C /* rw_locks.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = rw_locks.c; sourceTree = "<group>"; };
+		5D84E3102B2614D700F56951 /* log.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = log.h; sourceTree = "<group>"; };
 		5D8ACEF9284BF122003C50D3 /* net.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = net.c; sourceTree = "<group>"; };
 		5D8ACEFB284CE096003C50D3 /* sys.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = sys.h; sourceTree = "<group>"; };
 		5D8ACEFC284CE096003C50D3 /* sys.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = sys.c; sourceTree = "<group>"; };
@@ -1167,6 +1168,7 @@
 				497F6C97254E5C9800C82F46 /* init.h */,
 				497F6C7A254E5C9700C82F46 /* ipc.c */,
 				497F6C83254E5C9700C82F46 /* log.c */,
+				5D84E3102B2614D700F56951 /* log.h */,
 				497F6C85254E5C9700C82F46 /* misc.c */,
 				497F6C77254E5C9700C82F46 /* mm.h */,
 				497F6C9D254E5C9800C82F46 /* mmap.c */,
