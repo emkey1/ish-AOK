@@ -84,12 +84,11 @@ void jit_invalidate_range(struct jit *jit, page_t start, page_t end) {
 }
 
 void jit_invalidate_page(struct jit *jit, page_t page) {
-    while(task_ref_cnt_get(current, 0) > 4) { // It's all a bit magic, but I think this is doing something useful.  -mke
-        nanosleep(&lock_pause, NULL);
-    }
- //   mofify_critical_region_count(current, 1, __FILE__, __LINE__);
+    int tmp = task_ref_cnt_get(current, 0);
+    //while(task_ref_cnt_get(current, 0) > 4) { // It's all a bit magic, but I think this is doing something useful.  -mke
+    //    nanosleep(&lock_pause, NULL);
+    //}
     jit_invalidate_range(jit, page, page + 1);
- //   mofify_critical_region_count(current, -1, __FILE__, __LINE__);
 }
 
 void jit_invalidate_all(struct jit *jit) {

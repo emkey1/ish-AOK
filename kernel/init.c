@@ -125,7 +125,7 @@ intptr_t become_first_process(void) {
     struct task *task = construct_task(NULL);
     if (IS_ERR(task))
         return PTR_ERR(task);
-
+    //task_ref_cnt_mod(task, 1);
     current = task;
     return 0;
 }

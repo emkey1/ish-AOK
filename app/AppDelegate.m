@@ -47,16 +47,16 @@ static void ios_handle_exit(struct task *task, int code) {
     // this is called with pids_lock as an implementation side effect, please do not cite as an example of good API design
     task_ref_cnt_mod(task, 1);
     lock(&task->general_lock, 0);
-    complex_lockt(&pids_lock, 0);
+    // complex_lockt(&pids_lock, 0);
     if(task->pid > MAX_PID) {// Corruption
         printk("ERROR: Insane PID in ios_handle_exit(%d)\n", task->pid);
-        unlock(&pids_lock);
+      //  unlock(&pids_lock);
         // No reason to unlock the task, it has already been freed. :-(
         //unlock(&task->general_lock);
         return;
     }
     if (task->parent != NULL && task->parent->parent != NULL) {
-        unlock(&pids_lock);
+       // unlock(&pids_lock);
         unlock(&task->general_lock);
         task_ref_cnt_mod(task, 1);
         return;
@@ -64,7 +64,7 @@ static void ios_handle_exit(struct task *task, int code) {
     // pid should be saved now since task would be freed
     pid_t pid = task->pid;
     
-    unlock(&pids_lock);
+    //unlock(&pids_lock);
     unlock(&task->general_lock);
     task_ref_cnt_mod(task, 1);
     dispatch_async(dispatch_get_main_queue(), ^{

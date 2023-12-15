@@ -51,7 +51,7 @@ void mm_release(struct mm *mm) {
         }
         
         mem_destroy(&mm->mem);
-        while(task_ref_cnt_get(current, 1) > 1) {  //FIXME: Should now unlock after mem_destroy
+        while(task_ref_cnt_get(current, 1) > 2) {  //FIXME: Should now unlock after mem_destroy
             nanosleep(&lock_pause, NULL);
         }
         

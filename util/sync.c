@@ -67,10 +67,11 @@ int wait_for_ignore_signals(cond_t *cond, lock_t *lock, struct timespec *timeout
         
         if(current->uid == 501) {  // This is here for testing of the process lockup issue.  -mke
             rc = pthread_cond_timedwait_relative_np(&cond->cond, &lock->m, &trigger_time);
-            //if((rc == ETIMEDOUT) && current->parent != NULL) {
+            // if((rc == ETIMEDOUT) && current->parent != NULL) {
             if(rc == ETIMEDOUT) {
                 if(current->children.next != NULL) {
                     notify(cond);  // This is a terrible hack that seems to avoid processes getting stuck.
+                    // return 0;
                 }
             }
             

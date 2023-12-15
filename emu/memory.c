@@ -42,7 +42,10 @@ void mem_init(struct mem *mem) {
     wrlock_init(&mem->lock);
     mem->reference.count = 0;
     mem->reference.ready_to_be_freed = false;
-    wrlock_init(&mem->reference.lock);
+    int rc = pthread_mutex_init(&mem->reference.lock, NULL);
+    if (rc != 0) {
+        // Handle error
+    }
 }
 
 void mem_destroy(struct mem *mem) {
@@ -53,7 +56,7 @@ void mem_destroy(struct mem *mem) {
     pt_unmap_always(mem, 0, MEM_PAGES);
 
 #if ENGINE_JIT
-    while((mem_ref_cnt_get(current)) && (current->pid > 1) ){ // Wait for now, task is in one or more critical sections, and/or has locks
+    while((mem_ref_cnt_get(mem)) && (current->pid > 1) ){ // Wait for now, task is in one or more critical sections, and/or has locks
         nanosleep(&lock_pause, NULL);
     }
     jit_free(mem->mmu.jit);
@@ -112,7 +115,7 @@ struct pt_entry *mem_pt(struct mem *mem, page_t page) {
 static void mem_pt_del(struct mem *mem, page_t page) {
     struct pt_entry *entry = mem_pt(mem, page);
     if (entry != NULL) {
-         while(mem_ref_cnt_get(mem)) { // Don't delete if memory is in use
+         while(mem_ref_cnt_get(mem) > 1) { // Don't delete if memory is in use
              nanosleep(&lock_pause, NULL);
         }
         entry->data = NULL;
@@ -207,7 +210,7 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
         if (--data->refcount == 0) {
             // vdso wasn't allocated with mmap, it's just in our data segment
             if (data->data != vdso_data) {
-                while(mem_ref_cnt_get(mem)) {
+                while(mem_ref_cnt_get(mem) > 1) {
                     nanosleep(&lock_pause, NULL);
                 }
                 int err = munmap(data->data, data->size);

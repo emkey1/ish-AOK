@@ -258,8 +258,63 @@ void init_pending_queues(void);
 void cleanup_pending_deletions(void);
 
 bool current_is_valid(void);
-int current_pid(struct task *task);
-int current_uid(void);
-char * current_comm(void);
+// fun little utility function
+static inline int current_pid(struct task *task) {
+    task_ref_cnt_mod(task, 10);
+    if(task != NULL) {
+        if (task->exiting != true) {
+            int tmp = task->pid;
+            task_ref_cnt_mod(task, -10);
+            return tmp;
+        } else {
+            task_ref_cnt_mod(task, -10);
+            return -1;
+        }
+    }
+    // This should never happen
+    task_ref_cnt_mod(task, -10);
+    return -1;
+}
+
+static inline int current_uid(struct task *task) {
+    task_ref_cnt_mod(task, 1);
+    if(task != NULL) {
+        if (task->exiting != true) {
+            int tmp = task->uid;
+            task_ref_cnt_mod(task, -1);
+            return tmp;
+        } else {
+            task_ref_cnt_mod(task, -1);
+            return -1;
+        }
+    }
+    // This should never happen
+    task_ref_cnt_mod(task, -1);
+    return -1;
+}
+
+static inline char * current_comm(struct task *task) {
+    static char comm[16];
+    task_ref_cnt_mod(task, 1);
+    if(task != NULL) {
+        if(strcmp(task->comm, "")) {
+            strncpy(comm, task->comm, 16);
+        } else {
+            task_ref_cnt_mod(task, -1);
+            return "";
+        }
+        
+        if (task->exiting != true) {
+            task_ref_cnt_mod(task, -1);
+            return comm;
+        } else {
+            task_ref_cnt_mod(task, -1);
+            return "";
+        }
+    }
+    
+    task_ref_cnt_mod(task, -1);
+    return "";
+}
 
 #endif

@@ -78,8 +78,8 @@ extern int log_override;
 extern void (*die_handler)(const char *msg);
 _Noreturn void die(const char *msg, ...);
 
-// #define STRACE(msg, ...) TRACE_(strace, msg, ##__VA_ARGS__)
-#define STRACE(fmt, ...) printk(fmt, ##__VA_ARGS__)
+#define STRACE(msg, ...) TRACE_(strace, msg, ##__VA_ARGS__)
+// #define STRACE(fmt, ...) printk(fmt, ##__VA_ARGS__)
 
 #if defined(__i386__) || defined(__x86_64__)
 #define debugger __asm__("int3")

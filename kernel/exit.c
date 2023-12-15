@@ -58,27 +58,25 @@ static struct task *find_new_parent(struct task *task) {
 // Handles the termination of the current task. It releases resources, notifies the parent,
 // and re-parents any children. It ensures the task is not in a critical section and that
 // all locks are released before proceeding.  At least in theory
-noreturn void do_exit(int status) {
-    if(current->reference.ready_to_be_freed) {
+noreturn void do_exit(struct task *task, int status) {
+    if(task->reference.ready_to_be_freed) {
         goto EXIT;
     } else {
-        //nanosleep(&lock_pause, NULL); // Stupid place holder
+        task->exiting = true;
     }
-       
-    current->exiting = true;
     
-    lock(&current->general_lock, 0);
+    lock(&task->general_lock, 0);
     
-    bool signal_pending = !!(current->pending & ~current->blocked);
+    bool signal_pending = !!(task->pending & ~task->blocked);
     // has to happen before mm_release
     
-    while((task_ref_cnt_get(current, 0) > 1) ||
-          (locks_held_count(current)) ||
+    while((task_ref_cnt_get(task, 0) > 2) ||
+          (locks_held_count(task)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
-        signal_pending = !!(current->pending & ~current->blocked);
+        signal_pending = !!(task->pending & ~task->blocked);
     }
-    addr_t clear_tid = current->clear_tid;
+    addr_t clear_tid = task->clear_tid;
     if (clear_tid) {
         pid_t_ zero = 0;
         if (user_put(clear_tid, zero) == 0)
@@ -88,91 +86,92 @@ noreturn void do_exit(int status) {
     // release all our resources
     do {
         nanosleep(&lock_pause, NULL);
-        signal_pending = !!(current->pending & ~current->blocked);
-    } while((task_ref_cnt_get(current, 0) > 1) ||
-            (locks_held_count(current)) ||
+        signal_pending = !!(task->pending & ~task->blocked);
+        int tmp = task_ref_cnt_get(task, 0);
+        nanosleep(&lock_pause, NULL);
+    } while((task_ref_cnt_get(task, 0) > 2) ||
+            (locks_held_count(task)) ||
             (signal_pending)); // Wait for now, task is in one or more critical
     complex_lockt(&pids_lock, 0);
-    mm_release(current->mm);
-    current->mm = NULL;
+    mm_release(task->mm);
+    task->mm = NULL;
     
-    signal_pending = !!(current->pending & ~current->blocked);
-    while((task_ref_cnt_get(current, 0) > 1) ||
-          (locks_held_count(current)) ||
+    signal_pending = !!(task->pending & ~task->blocked);
+    while((task_ref_cnt_get(task, 0) > 2) ||
+          (locks_held_count(task)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
-        signal_pending = !!(current->pending & ~current->blocked);
+        signal_pending = !!(task->pending & ~task->blocked);
     }
-    fdtable_release(current->files);
-    current->files = NULL;
+    fdtable_release(task->files);
+    task->files = NULL;
     
-    while((task_ref_cnt_get(current, 0) > 1) ||
-          (locks_held_count(current)) ||
+    while((task_ref_cnt_get(task, 0) > 2) ||
+          (locks_held_count(task)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
-        signal_pending = !!(current->pending & ~current->blocked);
+        signal_pending = !!(task->pending & ~task->blocked);
     }
-    fs_info_release(current->fs);
-    current->fs = NULL;
-    signal_pending = !!(current->pending & ~current->blocked);
+    fs_info_release(task->fs);
+    task->fs = NULL;
+    signal_pending = !!(task->pending & ~task->blocked);
     // sighand must be released below so it can be protected by pids_lock
     // since it can be accessed by other threads
 
-    while((task_ref_cnt_get(current, 0) > 1) ||
-          (locks_held_count(current)) ||
+    while((task_ref_cnt_get(task, 0) > 2) ||
+          (locks_held_count(task)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical// Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
-        signal_pending = !!(current->pending & ~current->blocked);
+        signal_pending = !!(task->pending & ~task->blocked);
     }
     // save things that our parent might be interested in
-    current->exit_code = status; // FIXME locking
+    task->exit_code = status; // FIXME locking
     struct rusage_ rusage = rusage_get_current();
-    lock(&current->group->lock, 0);
-    rusage_add(&current->group->rusage, &rusage);
-    struct rusage_ group_rusage = current->group->rusage;
-    unlock(&current->group->lock);
+    lock(&task->group->lock, 0);
+    rusage_add(&task->group->rusage, &rusage);
+    struct rusage_ group_rusage = task->group->rusage;
+    unlock(&task->group->lock);
 
     // the actual freeing needs pids_lock
-    task_ref_cnt_mod(current, 1);
     // release the sighand
-    signal_pending = !!(current->pending & ~current->blocked);
-    while((task_ref_cnt_get(current, 0) > 2) || // We added one to the task reference count above, thus the check is 2, in case any other thread is accessing.
-          (locks_held_count(current)) ||
+    signal_pending = !!(task->pending & ~task->blocked);
+    while((task_ref_cnt_get(task, 0) > 2) || // We added one to the task reference count above, thus the check is 2, in case any other thread is accessing.
+          (locks_held_count(task)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
-        signal_pending = !!(current->pending & ~current->blocked);
+        signal_pending = !!(task->pending & ~task->blocked);
     }
     
-    sighand_release(current->sighand);
-    current->sighand = NULL;
+    sighand_release(task->sighand);
+    task->sighand = NULL;
     struct sigqueue *sigqueue, *sigqueue_tmp;
-    list_for_each_entry_safe(&current->queue, sigqueue, sigqueue_tmp, queue) {
+    list_for_each_entry_safe(&task->queue, sigqueue, sigqueue_tmp, queue) {
         list_remove(&sigqueue->queue);
         free(sigqueue);
     }
     
-    struct task *leader = current->group->leader;
+    struct task *leader = task->group->leader;
 
     // reparent children
-    struct task *new_parent = find_new_parent(current);
+    struct task *new_parent = find_new_parent(task);
     struct task *child, *tmp;
     
-    list_for_each_entry_safe(&current->children, child, tmp, siblings) {
+    list_for_each_entry_safe(&task->children, child, tmp, siblings) {
         child->parent = new_parent;
         list_remove(&child->siblings);
         list_add(&new_parent->children, &child->siblings);
     }
     
-    signal_pending = !!(current->pending & ~current->blocked);
+    signal_pending = !!(task->pending & ~task->blocked);
     
-    while((task_ref_cnt_get(current, 0) > 2) ||
-          (locks_held_count(current)) ||
+    while((task_ref_cnt_get(task, 0) > 2) ||
+          (locks_held_count(task)) ||
           (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
-        signal_pending = !!(current->pending & ~current->blocked);
+        signal_pending = !!(task->pending & ~task->blocked);
     }
     
-    if (exit_tgroup(current)) {
+    if (exit_tgroup(task)) {
         // notify parent that we died
         struct task *parent = leader->parent;
         lock(&parent->general_lock, 0);
@@ -184,9 +183,9 @@ noreturn void do_exit(int status) {
             notify(&parent->group->child_exit);
             struct siginfo_ info = { //mkemkemke  This is interesting.  Need to think about possibilities.  TODO
                 .code = SI_KERNEL_,
-                .child.pid = current->pid,
-                .child.uid = current->uid,
-                .child.status = current->exit_code,
+                .child.pid = task->pid,
+                .child.uid = task->uid,
+                .child.status = task->exit_code,
                 .child.utime = clock_from_timeval(group_rusage.utime),
                 .child.stime = clock_from_timeval(group_rusage.stime),
             };
@@ -195,19 +194,17 @@ noreturn void do_exit(int status) {
         }
         
         if (exit_hook != NULL)
-            exit_hook(current, status);
+            exit_hook(task, status);
         
         unlock(&parent->general_lock);
     }
 
-    vfork_notify(current);
+    vfork_notify(task);
     
-    if(current != leader) {
-        task_ref_cnt_mod(current, -1);
-        task_destroy(current, 1);
+    if(task != leader) {
+        task_destroy(task, 1);
     } else {
-        unlock(&current->general_lock);
-        task_ref_cnt_mod(current, -1);
+        unlock(&task->general_lock);
     }
     
     unlock(&pids_lock);
@@ -247,10 +244,11 @@ noreturn void do_exit_group(int status) {
 
     unlock(&pids_lock);
     unlock(&group->lock);
-    task_ref_cnt_mod(current, -1);
+    struct task *foo = current; // debugging
     if(current->pid <= MAX_PID) // abort if crazy.  -mke
-        do_exit(status);
+        do_exit(current, status);
     
+    task_ref_cnt_mod(current, -1);
     unlock(&pids_lock);  // Shouldn't get here
     pthread_exit(NULL);
 }
@@ -276,7 +274,7 @@ static void halt_system(void) {
 
 dword_t sys_exit(dword_t status) {
     STRACE("exit(%d)\n", status);
-    do_exit(status << 8);
+    do_exit(current, status << 8);
 }
 
 dword_t sys_exit_group(dword_t status) {

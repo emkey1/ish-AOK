@@ -11,6 +11,7 @@ extern bool isGlibC;
 
 dword_t syscall_stub(void) {
     STRACE("syscall_stub()");
+    // I should probably do a prink here.  Not sure why I removed it
     return _ENOSYS;
 }
 dword_t syscall_stub_silent(void) {
