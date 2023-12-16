@@ -13,7 +13,6 @@
 #include "kernel/errno.h"
 #include "kernel/log.h"
 #include "pthread.h"
-//#include "util/sync.h"
 
 extern void modify_locks_held_count_wrapper(int value);
 extern void task_ref_cnt_mod_wrapper(int value);
