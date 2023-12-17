@@ -11,7 +11,9 @@ static int __user_read_task(struct task *task, addr_t addr, void *buf, size_t co
         addr_t chunk_end = (PAGE(p) + 1) << PAGE_BITS;
         if (chunk_end > addr + count)
             chunk_end = addr + count;
+  
         const char *ptr = mem_ptr(task->mem, p, MEM_READ);
+        
         if (ptr == NULL) {
             return 1;
 	}
@@ -47,11 +49,12 @@ static int __user_write_task(struct task *task, addr_t addr, const void *buf, si
 }
 
 int user_read_task(struct task *task, addr_t addr, void *buf, size_t count) {
+    mem_ref_cnt_mod(task->mem, 1);
     read_lock(&task->mem->lock);
-
     int res = __user_read_task(task, addr, buf, count);
 
     read_unlock(&task->mem->lock);
+    mem_ref_cnt_mod(task->mem, -1);
     return res;
 }
 

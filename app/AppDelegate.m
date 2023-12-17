@@ -58,7 +58,7 @@ static void ios_handle_exit(struct task *task, int code) {
     if (task->parent != NULL && task->parent->parent != NULL) {
        // unlock(&pids_lock);
         unlock(&task->general_lock);
-        task_ref_cnt_mod(task, 1);
+        task_ref_cnt_mod(task, -1);
         return;
     }
     // pid should be saved now since task would be freed
@@ -66,7 +66,7 @@ static void ios_handle_exit(struct task *task, int code) {
     
     //unlock(&pids_lock);
     unlock(&task->general_lock);
-    task_ref_cnt_mod(task, 1);
+    task_ref_cnt_mod(task, -1);
     dispatch_async(dispatch_get_main_queue(), ^{
         [[NSNotificationCenter defaultCenter] postNotificationName:ProcessExitedNotification
                                                             object:nil
