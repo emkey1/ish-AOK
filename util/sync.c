@@ -123,11 +123,6 @@ void notify_once(cond_t *cond) {
 __thread sigjmp_buf unwind_buf;
 __thread bool should_unwind = false;
 
-unsigned locks_held_count_wrapper(void) { // sync.h can't know about the definition of struct due to recursive include files.  -mke
-    if(current != NULL)
-        return(locks_held_count(current));
-    return 0;
-}
 
 void sigusr1_handler(int sig) {
     if (should_unwind) {

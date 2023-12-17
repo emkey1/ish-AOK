@@ -16,8 +16,8 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
-extern void modify_locks_held_count_wrapper(int value);
-extern void task_ref_cnt_mod_wrapper(int value);
+//extern void modify_locks_held_count_wrapper(int value);
+//extern void task_ref_cnt_mod_wrapper(int value);
 
 #define loop_lock_read(lock) loop_lock_generic(lock, 0)
 #define loop_lock_write(lock) loop_lock_generic(lock, 1)
