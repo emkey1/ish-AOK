@@ -182,8 +182,9 @@ int_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags) {
     pages_t new_pages = PAGE(new_len);
 
     // shrinking always works
+    int tmp = current->mem->reference.count; // Debugging
     if (new_pages <= old_pages) {
-        while(task_ref_cnt_get(current, 0)) {
+        while(task_ref_cnt_get(current, 0) > 1) { // Sometimes this is one.  Figure out if this is OK.  FIXME
             nanosleep(&lock_pause, NULL);
         }
         int err = pt_unmap(current->mem, PAGE(addr) + new_pages, old_pages - new_pages);
