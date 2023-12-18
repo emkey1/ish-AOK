@@ -330,7 +330,8 @@ void poll_destroy(struct poll *poll) {
     struct poll_fd *poll_fd;
     struct poll_fd *tmp;
     
-    while(task_ref_cnt_get(current, 0) > 1) {
+    int fug = current->reference.count; // Debugging.  Xcode 15.1 can't 'decode' 'current' or any of its components.  :-(
+    while(task_ref_cnt_get(current, 0) > 2) {
         nanosleep(&lock_pause, NULL);
     }
     list_for_each_entry_safe(&poll->poll_fds, poll_fd, tmp, fds) {

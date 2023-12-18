@@ -12,9 +12,7 @@
 #include "util/timer.h"
 #include "util/sync.h"
 
-// extern void task_ref_cnt_mod_wrapper(int value);
-
-void task_ref_cnt_mod_wrapper(int value);
+extern inline void task_ref_cnt_mod(struct task *task, int value);
 
 // Define a structure for the pending deletion queue
 struct task_pending_deletion {
@@ -237,80 +235,22 @@ void update_thread_name(void);
 // of functions which can block the task, we mark our task as blocked and
 // unblock it after the function is executed.
 __attribute__((always_inline)) inline int task_may_block_start(void) {
-    task_ref_cnt_mod_wrapper(1);
+    task_ref_cnt_mod(current, 1);
     current->io_block = 1;
     return 0;
 }
 
 __attribute__((always_inline)) inline int task_may_block_end(void) {
     current->io_block = 0;
-    task_ref_cnt_mod_wrapper(-1);
+    task_ref_cnt_mod(current, -1);
     return 0;
 }
 
 #define TASK_MAY_BLOCK for (int i = task_may_block_start(); i < 1; task_may_block_end(), i++)
 
-void modify_locks_held_count_wrapper(int value);
 void init_pending_queues(void);
 void cleanup_pending_deletions(void);
 
-static inline void task_ref_cnt_mod(struct task *task, int value) { // value Should only be -1 or 1.  -mke
-    // Keep track of how many threads are referencing this task
-    if(!doEnableExtraLocking) { // If they want to fly by the seat of their pants...  -mke
-        return;
-    }
-    
-    if(task == NULL) {
-        if(current != NULL) {
-            task = current;
-        } else {
-            return;
-        }
-    }
-    
-    bool ilocked = false;
-    
-    if (trylocknl(&task->general_lock, task->comm, task->pid) != _EBUSY) {
-        ilocked = true; // Make sure this is locked, and unlock it later if we had to lock it.
-    }
-    
-    pthread_mutex_lock(&task->reference.lock);
-    
-    if(((task->reference.count + value) < 0) && (task->pid > 9)) { // Prevent our unsigned value attempting to go negative.  -mke
-        printk("ERROR: Attempt to decrement task reference count to be negative, ignoring(%s:%d) (%d - %d)\n", task->comm, task->pid, task->reference.count, value);
-        if(ilocked == true)
-            unlock(&task->general_lock);
-        
-        pthread_mutex_unlock(&task->reference.lock);
-        
-        return;
-    }
-    
-    task->reference.count = task->reference.count + value;
-        
-    pthread_mutex_unlock(&task->reference.lock);
-    
-    if(ilocked == true)
-        unlock(&task->general_lock);
-}
-
-
-static inline void modify_locks_held_count(struct task *task, int value) { // value Should only be -1 or 1.  -mke
-    if((task == NULL) && (current != NULL)) {
-        task = current;
-    } else {
-        return;
-    }
-    
-    pthread_mutex_lock(&task->locks_held.lock);
-    if((task->locks_held.count + value < 0) && task->pid > 9) {
-     //  if((task->pid > 2) && (!strcmp(task->comm, "init")))  // Why ask why?  -mke
-            printk("ERROR: Attempt to decrement locks_held count below zero, ignoring\n");
-        return;
-    }
-    task->locks_held.count = task->locks_held.count + value;
-    pthread_mutex_unlock(&task->locks_held.lock);
-}
 
 //
 static inline unsigned task_ref_cnt_get(struct task *task, unsigned lock_if_zero) {

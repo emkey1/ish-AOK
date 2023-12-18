@@ -14,8 +14,10 @@
 #include "kernel/log.h"
 #include "pthread.h"
 
-extern void modify_locks_held_count_wrapper(int value);
-extern void task_ref_cnt_mod_wrapper(int value);
+extern __thread struct task *current;
+
+extern inline void modify_locks_held_count(struct task *task, int value);
+extern inline void task_ref_cnt_mod(struct task *task, int value);
 
 typedef struct {
     pthread_mutex_t m;
@@ -51,7 +53,7 @@ static inline void unlock(lock_t *lock) {
     lock->owner = zero_init(pthread_t);
     lock->pid = -1; //
     lock->comm[0] = 0;
-    modify_locks_held_count_wrapper(-1);
+    modify_locks_held_count(current, -1);
     pthread_mutex_unlock(&lock->m);
     
 #if LOCK_DEBUG
@@ -79,7 +81,7 @@ static inline void atomic_l_lockf(char lname[16], int skiplog) {
     if(!res) {
       //  strlcpy((char *)&atomic_l_lock.comm, current_comm(current), 16);
         strlcpy((char *)&atomic_l_lock.lname, lname, 16);
-        modify_locks_held_count_wrapper(1);
+        modify_locks_held_count(current, 1);
     } else if (!skiplog) {
         printk("Error on locking lock (%s) Called from %s:%d\n", lname);
     }
@@ -89,10 +91,10 @@ static inline void mylock(lock_t *lock, int log_lock) {
     // struct task *foo = current; // Debugging
     if(!strcmp(lock->lname, "task_creat_gen")) // kluge.  This means the lock is new, and SHOULD be unlocked
        unlock(lock);
-    task_ref_cnt_mod_wrapper(1);
+    task_ref_cnt_mod(current, 1);
     pthread_mutex_lock(&lock->m);
     if(!log_lock) {
-        modify_locks_held_count_wrapper(1);
+        modify_locks_held_count(current, 1);
     }
     lock->owner = pthread_self();
     //lock->pid = current_pid(current);
@@ -102,7 +104,7 @@ static inline void mylock(lock_t *lock, int log_lock) {
     } else {
         strncpy(lock->comm, current_comm(current), 16);
     } */
-    task_ref_cnt_mod_wrapper(-1);
+    task_ref_cnt_mod(current, -1);
     return;
 }
 
@@ -118,7 +120,7 @@ static inline void atomic_l_unlockf(void) {
         atomic_l_lock.pid = -1; // Reset
     }
     
-    modify_locks_held_count_wrapper(-1);
+    modify_locks_held_count(current, -1);
 }
 
 static inline void complex_lockt(lock_t *lock, int log_lock) {
@@ -140,13 +142,13 @@ static inline void complex_lockt(lock_t *lock, int log_lock) {
                // printk("ERROR: Possible deadlock, aborted lock attempt(PID: %d Process: %s) (Previously Owned:%s:%d)\n",
                //        current_pid(current), current_comm(current), lock->comm, lock->pid);
                 pthread_mutex_unlock(&lock->m);
-                modify_locks_held_count_wrapper(-1);
+                modify_locks_held_count(current, -1);
             }
             return;
         }
     }
 
-    modify_locks_held_count_wrapper(1);
+    modify_locks_held_count(current, 1);
 
   /*  if (count > count_max * 0.90) {
         if (!log_lock)
@@ -174,7 +176,7 @@ static inline int trylock(lock_t *lock) {
     }
 #endif
    // if((!status) && (current_pid(current) > 10)) {// iSH-AOK crashes if low number processes are not excluded.  Might be able to go lower then 10?  -mke
-        modify_locks_held_count_wrapper(1);
+        modify_locks_held_count(current, 1);
         
         //STRACE("trylock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
     //    lock->pid = current_pid(current);
@@ -195,7 +197,7 @@ static inline int trylocknl(lock_t *lock, char *comm, int pid) {
     }
 #endif
     if(!status) {// iSH-AOK crashes if low number processes are not excluded.  Might be able to go lower then 10?  -mke
-        modify_locks_held_count_wrapper(1);
+        modify_locks_held_count(current, 1);
         
         //STRACE("trylock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
         lock->pid = pid;

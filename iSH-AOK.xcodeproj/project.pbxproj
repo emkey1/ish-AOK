@@ -114,7 +114,6 @@
 		5D8CFA852B1198B300D50E57 /* RTCDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 5D8CFA842B1198B300D50E57 /* RTCDevice.m */; };
 		5D8CFA862B1198B300D50E57 /* RTCDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 5D8CFA842B1198B300D50E57 /* RTCDevice.m */; };
 		5D8CFA872B1198B300D50E57 /* RTCDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 5D8CFA842B1198B300D50E57 /* RTCDevice.m */; };
-		5D9897D028B6B953003D3670 /* AppStore.xcconfig in Resources */ = {isa = PBXBuildFile; fileRef = 5D9897CE28B6B953003D3670 /* AppStore.xcconfig */; };
 		5DA0A8342AAE21D000397280 /* BatteryStatus.m in Sources */ = {isa = PBXBuildFile; fileRef = 5DA0A8332AAE21D000397280 /* BatteryStatus.m */; };
 		5DD383EB2AAE33330013A847 /* UIDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 5DD383EA2AAE33330013A847 /* UIDevice.m */; };
 		BB0F552E239F8A790032A2A1 /* Icons.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB0F552D239F8A790032A2A1 /* Icons.plist */; };
@@ -1646,8 +1645,9 @@
 		BB792B461F96D8E000FFB7A4 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
+				BuildIndependentTargetsInParallel = YES;
 				CLASSPREFIX = "";
-				LastUpgradeCheck = 1410;
+				LastUpgradeCheck = 1510;
 				TargetAttributes = {
 					497F6CE3254E5E4C00C82F46 = {
 						CreatedOnToolsVersion = 12.2;
@@ -1792,7 +1792,6 @@
 				BB38599827BCEE6B000A1082 /* metal.png in Resources */,
 				BB2B4DAD231D998300CB578B /* term.js in Resources */,
 				BB38599A27BCEE6B000A1082 /* is.png in Resources */,
-				5D9897D028B6B953003D3670 /* AppStore.xcconfig in Resources */,
 				BB38599E27BCEE6B000A1082 /* circular.png in Resources */,
 				BB38599F27BCEE6B000A1082 /* icon1337.png in Resources */,
 				BB3859A127BCEE6B000A1082 /* iinhash.png in Resources */,

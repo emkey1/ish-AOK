@@ -16,6 +16,8 @@
 #include "fs/path.h"
 #include "fs/real.h"
 
+extern inline void task_ref_cnt_mod(struct task *task, int value);
+
 const NSFileCoordinatorWritingOptions NSFileCoordinatorWritingForCreating = NSFileCoordinatorWritingForMerging;
 
 @interface DirectoryPicker : NSObject <UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate>
@@ -240,7 +242,7 @@ static struct fd *iosfs_open(struct mount *mount, const char *path, int flags, i
         __block NSError *error = nil;
         __block struct fd *fd;
         __block dispatch_semaphore_t file_opened = dispatch_semaphore_create(0);
-                task_ref_cnt_mod_wrapper(1);
+                task_ref_cnt_mod(current, 1);
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^(void){
             void (^operation)(NSURL *url) = ^(NSURL *url) {
                 fd = realfs_open(mount, path_for_url_in_mount(mount, url, path), flags, mode);
@@ -266,7 +268,7 @@ static struct fd *iosfs_open(struct mount *mount, const char *path, int flags, i
             }
             [coordinator coordinateReadingItemAtURL:url options:options error:&error byAccessor:operation];
         });
-                task_ref_cnt_mod_wrapper(-1);
+                task_ref_cnt_mod(current, -1);
         
         dispatch_semaphore_wait(file_opened, DISPATCH_TIME_FOREVER);
 
