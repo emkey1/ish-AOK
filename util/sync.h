@@ -39,6 +39,11 @@ extern lock_t atomic_l_lock; // Used to make all lock operations atomic, even re
 
 typedef struct {
     pthread_cond_t cond;
+    struct {
+        pthread_mutex_t lock;
+        int count; // If positive, don't delete yet, wait_to_delete
+        bool ready_to_be_freed; // Should be false initially
+    } reference;
 } cond_t;
 
 #define COND_INITIALIZER ((cond_t) {PTHREAD_COND_INITIALIZER})

@@ -212,13 +212,14 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     // general_lock protects current->mm. otherwise procfs might read the
     // pointer before it's released and then try to lock it after it's
     // released.
-    lock(&current->general_lock, 0);
-    mm_release(current->mm);
-    task_set_mm(current, mm_new());
-    unlock(&current->general_lock);
-    write_lock(&current->mem->lock);
+    struct task* save = current;
+    lock(&save->general_lock, 0);
+    mm_release(save->mm);
+    task_set_mm(save, mm_new());
+    unlock(&save->general_lock);
+    write_lock(&save->mem->lock);
 
-    current->mm->exefile = fd_retain(fd);
+    save->mm->exefile = fd_retain(fd);
 
     addr_t load_addr = 0; // used for AX_PHDR
     bool load_addr_set = false;
@@ -248,8 +249,8 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
 
         // we have to know where the brk starts
         addr_t brk = bias + ph[i].vaddr + ph[i].memsize;
-        if (brk > current->mm->start_brk)
-            current->mm->start_brk = current->mm->brk = BYTES_ROUND_UP(brk);
+        if (brk > save->mm->start_brk)
+            save->mm->start_brk = save->mm->brk = BYTES_ROUND_UP(brk);
     }
 
     addr_t entry = bias + header.entry_point;
@@ -273,31 +274,31 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     // FIXME disgusting hack: musl's dynamic linker has a one-page hole, and
     // I'd rather not put the vdso in that hole. so find a two-page hole and
     // add one.
-    page_t vdso_page = pt_find_hole(current->mem, vdso_pages + 1);
+    page_t vdso_page = pt_find_hole(save->mem, vdso_pages + 1);
     if (vdso_page == BAD_PAGE)
         goto beyond_hope;
     vdso_page += 1;
-    if ((err = pt_map(current->mem, vdso_page, vdso_pages, (void *) vdso_data, 0, 0)) < 0)
+    if ((err = pt_map(save->mem, vdso_page, vdso_pages, (void *) vdso_data, 0, 0)) < 0)
         goto beyond_hope;
-    mem_pt(current->mem, vdso_page)->data->name = "[vdso]";
-    current->mm->vdso = vdso_page << PAGE_BITS;
-    addr_t vdso_entry = current->mm->vdso + ((struct elf_header *) vdso_data)->entry_point;
+    mem_pt(save->mem, vdso_page)->data->name = "[vdso]";
+    save->mm->vdso = vdso_page << PAGE_BITS;
+    addr_t vdso_entry = save->mm->vdso + ((struct elf_header *) vdso_data)->entry_point;
 
     // map 3 empty "vvar" pages to satisfy ptraceomatic
-    page_t vvar_page = pt_find_hole(current->mem, VVAR_PAGES);
+    page_t vvar_page = pt_find_hole(save->mem, VVAR_PAGES);
     if (vvar_page == BAD_PAGE)
         goto beyond_hope;
-    if ((err = pt_map_nothing(current->mem, vvar_page, VVAR_PAGES, 0)) < 0)
+    if ((err = pt_map_nothing(save->mem, vvar_page, VVAR_PAGES, 0)) < 0)
         goto beyond_hope;
-    mem_pt(current->mem, vvar_page)->data->name = "[vvar]";
+    mem_pt(save->mem, vvar_page)->data->name = "[vvar]";
 
     // STACK TIME!
 
     // allocate 1 page of stack at 0xffffd, and let it grow down
-    if ((err = pt_map_nothing(current->mem, 0xffffd, 1, P_WRITE | P_GROWSDOWN)) < 0)
+    if ((err = pt_map_nothing(save->mem, 0xffffd, 1, P_WRITE | P_GROWSDOWN)) < 0)
         goto beyond_hope;
     // that was the last memory mapping
-    write_unlock(&current->mem->lock);
+    write_unlock(&save->mem->lock);
     dword_t sp = 0xffffe000;
     // on 32-bit linux, there's 4 empty bytes at the very bottom of the stack.
     // on 64-bit linux, there's 8. make ptraceomatic happy. (a major theme in this file)
@@ -312,11 +313,11 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     addr_t envp_addr = sp = args_copy(sp, envp);
     if (sp == 0)
         goto beyond_hope;
-    current->mm->argv_end = sp;
+    save->mm->argv_end = sp;
     addr_t argv_addr = sp = args_copy(sp, argv);
     if (sp == 0)
         goto beyond_hope;
-    current->mm->argv_start = sp;
+    save->mm->argv_start = sp;
     sp = align_stack(sp);
 
     addr_t platform_addr = sp = copy_string(sp, "i686");
@@ -336,7 +337,7 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     // declare elf aux now so we can know how big it is
     struct aux_ent aux[] = {
         {AX_SYSINFO, vdso_entry},
-        {AX_SYSINFO_EHDR, current->mm->vdso},
+        {AX_SYSINFO_EHDR, save->mm->vdso},
         {AX_HWCAP, 0x00000000}, // suck that
         {AX_PAGESZ, PAGE_SIZE},
         {AX_CLKTCK, 0x64},
@@ -390,30 +391,30 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     p += sizeof(dword_t); // null terminator
 
     // copy auxv
-    current->mm->auxv_start = p;
+    save->mm->auxv_start = p;
     if (user_put(p, aux))
         goto beyond_hope;
     p += sizeof(aux);
-    current->mm->auxv_end = p;
+    save->mm->auxv_end = p;
 
-    current->mm->stack_start = sp;
-    current->cpu.esp = sp;
-    current->cpu.eip = entry;
-    current->cpu.fcw = 0x37f;
+    save->mm->stack_start = sp;
+    save->cpu.esp = sp;
+    save->cpu.eip = entry;
+    save->cpu.fcw = 0x37f;
 
     // This code was written when I discovered that the glibc entry point
     // interprets edx as the address of a function to call on exit, as
     // specified in the ABI. This register is normally set by the dynamic
     // linker, so everything works fine until you run a static executable.
-    current->cpu.eax = 0;
-    current->cpu.ebx = 0;
-    current->cpu.ecx = 0;
-    current->cpu.edx = 0;
-    current->cpu.esi = 0;
-    current->cpu.edi = 0;
-    current->cpu.ebp = 0;
-    collapse_flags(&current->cpu);
-    current->cpu.eflags = 0;
+    save->cpu.eax = 0;
+    save->cpu.ebx = 0;
+    save->cpu.ecx = 0;
+    save->cpu.edx = 0;
+    save->cpu.esi = 0;
+    save->cpu.edi = 0;
+    save->cpu.ebp = 0;
+    collapse_flags(&save->cpu);
+    save->cpu.eflags = 0;
 
     err = 0;
 out_free_interp:
@@ -429,7 +430,7 @@ out_free_ph:
 
 beyond_hope:
     // TODO force sigsegv
-    write_unlock(&current->mem->lock);
+    write_unlock(&save->mem->lock);
     goto out_free_interp;
 }
 

@@ -198,6 +198,7 @@ struct task *task_create_(struct task *parent) {
     task->locks_held.count = 0; // counter used to keep track of pending locks associated with task.  Do not delete when locks are present.  -mke
     task->reference.count = 0; // counter used to delay task deletion if positive.  --mke
     task->reference.ready_to_be_freed = false;
+    pthread_mutex_init(&task->reference.lock, NULL);
     return task;
 }
 
@@ -293,13 +294,14 @@ void run_at_boot(void) {  // Stuff we run only once, at boot time.
 }
 
 void task_run_current(void) {
-    struct cpu_state *cpu = &current->cpu;
+    struct task* save = current; // Because I kinda suspect that current gets messed up sometimes
+    struct cpu_state *cpu = &save->cpu;
     struct tlb tlb = {};
-    tlb_refresh(&tlb, &current->mem->mmu);
+    tlb_refresh(&tlb, &save->mem->mmu);
     
     while (true) {
-        read_lock(&current->mem->lock);
-        task_ref_cnt_mod(current, 1);
+        read_lock(&save->mem->lock);
+        task_ref_cnt_mod(save, 1);
         
         if(!doEnableMulticore) {
             pthread_mutex_lock(&multicore_lock);
@@ -307,21 +309,21 @@ void task_run_current(void) {
         
         int interrupt = cpu_run_to_interrupt(cpu, &tlb);
         
-        read_unlock(&current->mem->lock);
+        read_unlock(&save->mem->lock);
         
         if(!doEnableMulticore)
             pthread_mutex_unlock(&multicore_lock);
  
         //struct timespec while_pause = {0 /*secs*/, WAIT_SLEEP /*nanosecs*/};
-        if(current->parent != NULL) {
-            current->parent->group->group_count_in_int++; // Keep track of how many children the parent has
+        if(save->parent != NULL) {
+            save->parent->group->group_count_in_int++; // Keep track of how many children the parent has
             handle_interrupt(interrupt);
-            current->parent->group->group_count_in_int--;
+            save->parent->group->group_count_in_int--;
         } else {
             handle_interrupt(interrupt);
         }
         
-        task_ref_cnt_mod(current, -1);
+        task_ref_cnt_mod(save, -1);
     }
 }
 
@@ -386,8 +388,7 @@ inline void modify_locks_held_count(struct task *task, int value) { // value Sho
     
     pthread_mutex_lock(&task->locks_held.lock);
     if((task->locks_held.count + value < 0) && task->pid > 9) {
-     //  if((task->pid > 2) && (!strcmp(task->comm, "init")))  // Why ask why?  -mke
-            printk("ERROR: Attempt to decrement locks_held count below zero, ignoring\n");
+        printk("ERROR: Attempt to decrement locks_held count below zero, ignoring\n");
         return;
     }
     task->locks_held.count = task->locks_held.count + value;

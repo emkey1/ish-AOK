@@ -11,13 +11,20 @@ extern bool doEnableExtraLocking;
 extern pthread_mutex_t wait_for_lock; // Synchroniztion lock
 
 void cond_init(cond_t *cond) {
-    pthread_condattr_t attr;
-    pthread_condattr_init(&attr);
+    pthread_condattr_t cond_attr;
+    pthread_condattr_init(&cond_attr);
 #if __linux__
-    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
 #endif
-    pthread_cond_init(&cond->cond, &attr);
+    pthread_cond_init(&cond->cond, &cond_attr);
+    pthread_condattr_destroy(&cond_attr); // Clean up the condition variable attribute
+
+    // Initialize the mutex without specific attributes
+    pthread_mutex_init(&cond->reference.lock, NULL);
+
+    cond->reference.count = 0;
 }
+
 void cond_destroy(cond_t *cond) {
     pthread_cond_destroy(&cond->cond);
 }
@@ -59,7 +66,7 @@ int wait_for_ignore_signals(cond_t *cond, lock_t *lock, struct timespec *timeout
     struct lock_debug lock_tmp = lock->debug;
     lock->debug = (struct lock_debug) { .initialized = lock->debug.initialized };
 #endif
-    if (!timeout) { // We timeout anyway after fifteen seconds.  It appears the process wakes up briefly before returning here if there is nothing else pending.  This is kluge.  -mke
+    if (!timeout) { // We timeout anyway after fifteen seconds.  It appears the process wakes up briefly before returning here if there is nothing else pending.  This is KLUGE.  -mke
         struct timespec trigger_time;
         trigger_time.tv_sec = 15;
         trigger_time.tv_nsec = 0;

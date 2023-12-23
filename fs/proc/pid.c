@@ -23,10 +23,12 @@ static struct task *proc_get_task(struct proc_entry *entry) {
     struct task *task = pid_get_task(entry->pid);
     if (task == NULL)
         unlock(&pids_lock);
+    //task_ref_cnt_mod(task, 1);
     return task;
 }
-static void proc_put_task(struct task *UNUSED(task)) {
+static void proc_put_task(struct task *task) {
     unlock(&pids_lock);
+    //task_ref_cnt_mod(task, -1);
 }
 
 static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
@@ -307,10 +309,12 @@ static int proc_pid_fd_readlink(struct proc_entry *entry, char *buf) {
 
 static int proc_pid_exe_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
+  //  task->mm->exefile->refcount++;  // Always note interest as soon as possible
     if ((task == NULL) || task->exiting == true)
         return _ESRCH;
     lock(&task->general_lock, 0);
     int err = generic_getpath(task->mm->exefile, buf);
+   // task->mm->exefile->refcount--;
     unlock(&task->general_lock);
     proc_put_task(task);
     return err;

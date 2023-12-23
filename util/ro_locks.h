@@ -13,6 +13,7 @@
 #include "kernel/errno.h"
 #include "kernel/log.h"
 #include "pthread.h"
+#include <time.h>  // For timespec and clock_gettime
 
 extern __thread struct task *current;
 
@@ -20,24 +21,25 @@ extern inline void modify_locks_held_count(struct task *task, int value);
 extern inline void task_ref_cnt_mod(struct task *task, int value);
 
 typedef struct {
-    pthread_mutex_t m;
-    pthread_t owner;
-    int pid;
-    int uid;
-    char comm[16];
-    char lname[16];
-    bool wait4;
+    pthread_mutex_t m;            // Mutex for the lock
+    pthread_cond_t cond;          // Condition variable for timeout
+    pthread_t owner;              // Thread ID of the owner
+    int pid;                      // Process ID of the owner
+    int uid;                      // User ID of the owner
+    char comm[16];                // Command name associated with the owner
+    char lname[16];               // Name of the lock (for debugging/logging)
+    bool wait4;                   // Flag to indicate if the lock is in use
     struct {
-        pthread_mutex_t lock;
-        int count; // If positive, don't delete yet, wait_to_delete
-        bool ready_to_be_freed; // Should be false initially
+        pthread_mutex_t lock;     // Additional lock for reference management
+        int count;                // Reference count
+        bool ready_to_be_freed;   // Flag to indicate if the object is ready to be freed
     } reference;
 #if LOCK_DEBUG
     struct lock_debug {
-        const char *file;
-        int line;
-        int pid;
-        bool initialized;
+        const char *file;         // File where the lock was acquired (for debugging)
+        int line;                 // Line number where the lock was acquired (for debugging)
+        int pid;                  // Process ID when the lock was acquired (for debugging)
+        bool initialized;         // Flag to indicate if the lock is initialized (for debugging)
     } debug;
 #endif
 } lock_t;
@@ -49,10 +51,15 @@ void lock_init(lock_t *lock, char lname[16]);
 
 static inline void unlock(lock_t *lock) {
     //pid_t pid = current_pid();
-    
+
     lock->owner = zero_init(pthread_t);
     lock->pid = -1; //
     lock->comm[0] = 0;
+    
+  /*  lock->wait4 = false;
+    pthread_cond_signal(&lock->cond);
+    pthread_mutex_unlock(&lock->m);
+  */
     modify_locks_held_count(current, -1);
     pthread_mutex_unlock(&lock->m);
     
@@ -106,6 +113,34 @@ static inline void mylock(lock_t *lock, int log_lock) {
     } */
     task_ref_cnt_mod(current, -1);
     return;
+}
+
+#define LOCK_TIMEOUT_SECONDS 5
+
+static inline int mylock_with_timeout(lock_t *lock, int log_lock) {
+    struct timespec timeout;
+    clock_gettime(CLOCK_REALTIME, &timeout);
+    timeout.tv_sec += LOCK_TIMEOUT_SECONDS;
+
+    pthread_mutex_lock(&lock->m);
+    while (lock->wait4) {
+        int res = pthread_cond_timedwait(&lock->cond, &lock->m, &timeout);
+        if (res == ETIMEDOUT) {
+            // Handle timeout: unlock mutex and return error code
+            pthread_mutex_unlock(&lock->m);
+            printk("ERROR: lock(%d) timeout\n", lock);
+            return ETIMEDOUT;
+        }
+    }
+    lock->wait4 = true;
+    pthread_mutex_unlock(&lock->m);
+
+    // Rest of the locking logic
+    task_ref_cnt_mod(current, 1);
+    lock->owner = pthread_self();
+    task_ref_cnt_mod(current, -1);
+
+    return 0; // Success
 }
 
 static inline void atomic_l_unlockf(void) {
@@ -206,8 +241,11 @@ static inline int trylocknl(lock_t *lock, char *comm, int pid) {
     return status;
 }
 
+//#define complex_lockt(lock, log_lock) mylock_with_timeout(lock, log_lock)  // Lets try simplifying locking for now
+//#define complex_lockt(lock, log_lock) mylock(lock, log_lock)  // Lets try simplifying locking for now
 
 #define lock(lock, log_lock) mylock(lock, log_lock)
+//#define lock(lock, log_lock) mylock_with_timeout(lock, log_lock)
 //#define trylock(lock) trylock(lock, __FILE__, __LINE__)
 //#define trylocknl(lock, comm, pid) trylocknl(lock, comm, pid, __FILE__, __LINE__)
 
