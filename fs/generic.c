@@ -104,16 +104,20 @@ struct fd *generic_open(const char *path, int flags, int mode) {
 }
 
 int generic_getpath(struct fd *fd, char *buf) {
-    int err = fd->mount->fs->getpath(fd, buf);
-    if (err < 0)
-        return err;
-    if (strlen(buf) + strlen(fd->mount->point) >= MAX_PATH)
-        return _ENAMETOOLONG;
-    memmove(buf + strlen(fd->mount->point), buf, strlen(buf) + 1);
-    memcpy(buf, fd->mount->point, strlen(fd->mount->point));
-    if (buf[0] == '\0')
-        memcpy(buf, "/", 2);
-    return 0;
+    if(fd->ops != NULL) {
+        int err = fd->mount->fs->getpath(fd, buf);
+        if (err < 0)
+            return err;
+        if (strlen(buf) + strlen(fd->mount->point) >= MAX_PATH)
+            return _ENAMETOOLONG;
+        memmove(buf + strlen(fd->mount->point), buf, strlen(buf) + 1);
+        memcpy(buf, fd->mount->point, strlen(fd->mount->point));
+        if (buf[0] == '\0')
+            memcpy(buf, "/", 2);
+        return 0;
+    } else {
+        return -EBADF;
+    }
 }
 
 int generic_accessat(struct fd *dirfd, const char *path_raw, int mode) {

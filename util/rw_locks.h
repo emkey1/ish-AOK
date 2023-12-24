@@ -82,7 +82,7 @@ static inline void _write_unlock(wrlock_t *lock) {
         printk("URGENT: write_unlock(%x:%d) error on unlock\n", lock, lock->val);
     if(lock->val != -1) {
         //printk("ERROR: write_unlock(%x) on lock with val of %d (PID: %d Process: %s )\n", lock, lock->val, current_pid(current), current_comm(current));
-        printk("ERROR: write_unlock(%x) on lock with val of %d\n", lock, lock->val);
+        // printk("ERROR: write_unlock(%x) on lock with val of %d\n", lock, lock->val);  // Comment out for now.  Much noise, little impact (So far as I can tell)
     }
     //assert(lock->val == -1);
     lock->val = lock->line = lock->pid = 0;
