@@ -12,6 +12,19 @@
 #include "util/timer.h"
 #include "util/sync.h"
 
+extern inline void task_ref_cnt_mod(struct task *task, int value);
+
+// Define a structure for the pending deletion queue
+struct task_pending_deletion {
+    struct task *task;
+    time_t added_time; // Timestamp when the task was added to the queue
+    struct list list; // For linking in the pending deletion list
+};
+
+// Global list of tasks pending deletion
+extern struct list tasks_pending_deletion_queue;
+extern pthread_mutex_t tasks_pending_deletion_lock;
+
 struct task {
     struct cpu_state cpu;
     struct mm *mm; // locked by general_lock
@@ -19,14 +32,11 @@ struct task {
     pthread_t thread;
     uint64_t threadid;
 
-    bool process_info_being_read; // Set when something like ps, top, etc wants to access task info. -mke
-
-    pthread_mutex_t death_lock; // Set when process is about to be reaped.  Immediately cease all activity on this task.  -mke
-    
     struct {
         pthread_mutex_t lock;
-        int count; // If positive, don't delete yet, wait_to_delete -mke
-    } critical_region;
+        int count; // If positive, don't delete yet, wait_to_delete 
+        bool ready_to_be_freed; // Should be false initially
+    } reference;
     
     struct {
         pthread_mutex_t lock;
@@ -126,7 +136,7 @@ static inline void task_set_mm(struct task *task, struct mm *mm) {
 // Ends with an underscore because there's a mach function by the same name
 struct task *task_create_(struct task *parent);
 // Removes the process from the process table and frees it. Must be called with pids_lock.
-void task_destroy(struct task *task);
+void task_destroy(struct task *task, int caller);
 
 // misc
 void vfork_notify(struct task *task);
@@ -205,7 +215,6 @@ struct task *pid_get_task_zombie(dword_t id); // don't return null if the task e
 
 dword_t get_count_of_blocked_tasks(void);
 dword_t get_count_of_alive_tasks(void);
-void zero_critical_regions_count(void);
 
 #define MAX_PID (1 << 15) // oughta be enough
 
@@ -226,17 +235,110 @@ void update_thread_name(void);
 // of functions which can block the task, we mark our task as blocked and
 // unblock it after the function is executed.
 __attribute__((always_inline)) inline int task_may_block_start(void) {
-    modify_critical_region_counter_wrapper(1, __FILE__, __LINE__);
+    task_ref_cnt_mod(current, 1);
     current->io_block = 1;
     return 0;
 }
 
 __attribute__((always_inline)) inline int task_may_block_end(void) {
     current->io_block = 0;
-    modify_critical_region_counter_wrapper(-1, __FILE__, __LINE__);
+    task_ref_cnt_mod(current, -1);
     return 0;
 }
 
 #define TASK_MAY_BLOCK for (int i = task_may_block_start(); i < 1; task_may_block_end(), i++)
+
+void init_pending_queues(void);
+void cleanup_pending_deletions(void);
+
+
+//
+static inline unsigned task_ref_cnt_get(struct task *task, unsigned lock_if_zero) {
+    unsigned tmp = 0;
+    pthread_mutex_lock(&task->reference.lock); // This would make more
+    tmp = task->reference.count;
+    if(tmp > 1000)  // Work around brain damage.  Remove when said brain damage is fixed
+        tmp = 0;
+    pthread_mutex_unlock(&task->reference.lock);
+
+    return tmp;
+}
+
+
+static inline unsigned locks_held_count(struct task *task) {
+   // return 0; // Short circuit for now
+    if(task->pid < 10)  // Here be monsters.  -mke
+        return 0;
+    if(task->locks_held.count > 0) {
+        return(task->locks_held.count -1);
+    }
+    unsigned tmp = 0;
+    pthread_mutex_lock(&task->locks_held.lock);
+    tmp = task->locks_held.count;
+    pthread_mutex_unlock(&task->locks_held.lock);
+
+    return tmp;
+}
+
+
+bool current_is_valid(void);
+// fun little utility function
+static inline int current_pid(struct task *task) {
+    task_ref_cnt_mod(task, 10);
+    if(task != NULL) {
+        if (task->exiting != true) {
+            int tmp = task->pid;
+            task_ref_cnt_mod(task, -10);
+            return tmp;
+        } else {
+            task_ref_cnt_mod(task, -10);
+            return -1;
+        }
+    }
+    // This should never happen
+    task_ref_cnt_mod(task, -10);
+    return -1;
+}
+
+static inline int current_uid(struct task *task) {
+    task_ref_cnt_mod(task, 1);
+    if(task != NULL) {
+        if (task->exiting != true) {
+            int tmp = task->uid;
+            task_ref_cnt_mod(task, -1);
+            return tmp;
+        } else {
+            task_ref_cnt_mod(task, -1);
+            return -1;
+        }
+    }
+    // This should never happen
+    task_ref_cnt_mod(task, -1);
+    return -1;
+}
+
+static inline char * current_comm(struct task *task) {
+    static char comm[16];
+    task_ref_cnt_mod(task, 1);
+    if(task != NULL) {
+        if(strcmp(task->comm, "")) {
+            strncpy(comm, task->comm, 16);
+        } else {
+            task_ref_cnt_mod(task, -1);
+            return "";
+        }
+        
+        if (task->exiting != true) {
+            task_ref_cnt_mod(task, -1);
+            return comm;
+        } else {
+            task_ref_cnt_mod(task, -1);
+            return "";
+        }
+    }
+    
+    task_ref_cnt_mod(task, -1);
+    return "";
+}
 
 #endif

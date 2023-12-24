@@ -5,6 +5,7 @@
 #include "fs/poll.h"
 #include "fs/tty.h"
 #include "fs/devices.h"
+#include "util/sync.h"
 
 extern struct tty_driver pty_master;
 extern struct tty_driver pty_slave;
@@ -150,7 +151,7 @@ int tty_open(struct tty *tty, struct fd *fd) {
         // Make this our controlling terminal if:
         // - the terminal doesn't already have a session
         // - we're a session leader
-        complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+        complex_lockt(&pids_lock, 0);
         lock(&tty->lock, 0);
         if (tty->session == 0 && current->group->sid == current->pid)
             tty_set_controlling(current->group, tty);
@@ -161,7 +162,7 @@ int tty_open(struct tty *tty, struct fd *fd) {
     return 0;
 }
 
-static intptr_t tty_device_open(int major, int minor, struct fd *fd) {
+static int tty_device_open(int major, int minor, struct fd *fd) {
     struct tty *tty;
     if (major == TTY_ALTERNATE_MAJOR) {
         if (minor == DEV_TTY_MINOR) {
@@ -189,7 +190,7 @@ static intptr_t tty_device_open(int major, int minor, struct fd *fd) {
         assert(driver != NULL);
         tty = tty_get(driver, major, minor);
         if (IS_ERR(tty))
-            return PTR_ERR(tty);
+            return (int)PTR_ERR(tty);
     }
 
     if (tty->driver->ops->open) {
@@ -448,7 +449,7 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
 
     int err = 0;
     struct tty *tty = fd->tty;
-    complex_lockt(&pids_lock, 1, __FILE__, __LINE__); // MKEMKE
+    complex_lockt(&pids_lock, 1); // MKEMKE
     lock(&tty->lock, 0);
     if (tty->hung_up) {
         unlock(&pids_lock);
@@ -629,7 +630,7 @@ static int tiocsctty(struct tty *tty, int force) {
     unlock(&tty->lock); //aaaaaaaa
     // it's safe because literally nothing happens between that unlock and the last lock, and repulsive for the same reason
     // locking is ***hard**
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     lock(&tty->lock, 0);
     // do nothing if this is already our controlling tty
     if (current->group->sid == current->pid && current->group->sid == tty->session)
@@ -765,7 +766,7 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
         case TIOCSPGRP_:
             // see "aaaaaaaa" comment above
             unlock(&tty->lock);
-            complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+            complex_lockt(&pids_lock, 0);
             lock(&tty->lock, 0);
             pid_t_ sid = current->group->sid;
             unlock(&pids_lock);

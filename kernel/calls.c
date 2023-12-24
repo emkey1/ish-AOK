@@ -5,12 +5,13 @@
 #include "emu/memory.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
-#include "kernel/resource_locking.h"
+#include "util/sync.h"
 
 extern bool isGlibC;
 
 dword_t syscall_stub(void) {
     STRACE("syscall_stub()");
+    // I should probably do a prink here.  Not sure why I removed it
     return _ENOSYS;
 }
 dword_t syscall_stub_silent(void) {
@@ -340,16 +341,16 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
         return;
     }
 
-    STRACE("%d(%s) %d:%d call %-3d ", current->pid, current->comm, current->critical_region.count, current->locks_held.count, syscall_num);
+    STRACE("%d(%s) %d:%d call %-3d ", current->pid, current->comm, current->reference.count, current->locks_held.count, syscall_num);
     int result = syscall_table[syscall_num](cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
     STRACE(" = 0x%x\n", result);
     cpu->eax = result;
 }
 
 void handle_page_fault_interrupt(struct cpu_state *cpu) {
-    read_lock(&current->mem->lock, __FILE__, __LINE__);
+    read_lock(&current->mem->lock);
     void *ptr = mem_ptr(current->mem, cpu->segfault_addr, cpu->segfault_was_write ? MEM_WRITE : MEM_READ);
-    read_unlock(&current->mem->lock, __FILE__, __LINE__);
+    read_unlock(&current->mem->lock);
 
     if (ptr == NULL) {
         printk("ERROR: %d(%s) page fault on 0x%x at 0x%x\n", current->pid, current->comm, cpu->segfault_addr, cpu->eip);
@@ -357,7 +358,6 @@ void handle_page_fault_interrupt(struct cpu_state *cpu) {
             .code = mem_segv_reason(current->mem, cpu->segfault_addr),
             .fault.addr = cpu->segfault_addr,
         };
-        current->zombie = true;
         dump_stack(8);
         deliver_signal(current, SIGSEGV_, info);
     }
@@ -380,7 +380,7 @@ void handle_illegal_instruction_interrupt(struct cpu_state *cpu) {
     deliver_signal(current, SIGILL_, info);
 }
 
-void handle_timer_interrupt(struct cpu_state *cpu) {
+void handle_timer_interrupt(__attribute__((unused)) struct cpu_state *cpu) {
     // For now we just return.
     return;
 }
@@ -399,7 +399,7 @@ void handle_interrupt(int interrupt) {
             handle_illegal_instruction_interrupt(cpu);
             break;
         case INT_BREAKPOINT:
-            complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+            complex_lockt(&pids_lock, 0);
             send_signal(current, SIGTRAP_, (struct siginfo_) {
                 .sig = SIGTRAP_,
                 .code = SI_KERNEL_,
@@ -407,7 +407,7 @@ void handle_interrupt(int interrupt) {
             unlock(&pids_lock);
             break;
         case INT_DEBUG:
-            complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+            complex_lockt(&pids_lock, 0);
             send_signal(current, SIGTRAP_, (struct siginfo_) {
                 .sig = SIGTRAP_,
                 .code = TRAP_TRACE_,

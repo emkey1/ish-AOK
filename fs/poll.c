@@ -7,7 +7,6 @@
 #include "util/list.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
-#include "kernel/resource_locking.h"
 #include "fs/fd.h"
 #include "fs/poll.h"
 #include "fs/real.h"
@@ -38,7 +37,7 @@ static int real_poll_update(struct real_poll *real, int fd, int types, void *dat
 
 // lock order: fd, then poll
 
-struct poll *poll_create() {
+struct poll *poll_create(void) {
     struct poll *poll = malloc(sizeof(struct poll));
     if (poll == NULL)
         return ERR_PTR(_ENOMEM);
@@ -331,7 +330,8 @@ void poll_destroy(struct poll *poll) {
     struct poll_fd *poll_fd;
     struct poll_fd *tmp;
     
-    while(critical_region_count(current)) {
+    int fug = current->reference.count; // Debugging.  Xcode 15.1 can't 'decode' 'current' or any of its components.  :-(
+    while(task_ref_cnt_get(current, 0) > 2) {
         nanosleep(&lock_pause, NULL);
     }
     list_for_each_entry_safe(&poll->poll_fds, poll_fd, tmp, fds) {
@@ -342,12 +342,12 @@ void poll_destroy(struct poll *poll) {
         free(poll_fd);
     }
           
-    while(critical_region_count(current)) {
+    while(task_ref_cnt_get(current, 0) > 1) {
         nanosleep(&lock_pause, NULL);
     }
     
     list_for_each_entry_safe(&poll->pollfd_freelist, poll_fd, tmp, fds) {
-        while(critical_region_count(current)) {
+        while(task_ref_cnt_get(current, 0)) {
             nanosleep(&lock_pause, NULL);
         }
         list_remove(&poll_fd->fds);

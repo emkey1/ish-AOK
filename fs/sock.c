@@ -79,7 +79,7 @@ static struct fd *sock_getfd(fd_t sock_fd) {
     return sock;
 }
 
-static uint32_t unix_socket_next_id() {
+static uint32_t unix_socket_next_id(void) {
     static uint32_t next_id = 0;
     static lock_t next_id_lock = LOCK_INITIALIZER;
     lock(&next_id_lock, 0);

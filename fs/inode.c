@@ -8,7 +8,6 @@ lock_t inodes_lock = LOCK_INITIALIZER;
 #define INODES_HASH_SIZE (1 << 10)
 static struct list inodes_hash[INODES_HASH_SIZE];
 
-int current_pid(void);
 
 static struct inode_data *inode_get_data(struct mount *mount, ino_t ino) {
     int index = ino % INODES_HASH_SIZE;

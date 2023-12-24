@@ -1,11 +1,11 @@
 #include "debug.h"
 #include "kernel/task.h"
 #include "fs/fd.h"
-#include "kernel/calls.h"
 #include "fs/tty.h"
+#include "kernel/calls.h"
 #include "kernel/mm.h"
 #include "kernel/ptrace.h"
-#include "kernel/resource_locking.h"
+#include "util/sync.h"
 
 #define CSIGNAL_ 0x000000ff
 #define CLONE_VM_ 0x00000100
@@ -72,7 +72,7 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
     } else {
         task->files = fdtable_copy(task->files);
         if (IS_ERR(task->files)) {
-            err = PTR_ERR(task->files);
+            err = (int)PTR_ERR(task->files);
             goto fail_free_mem;
         }
     }
@@ -95,7 +95,7 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
     }
 
     struct tgroup *old_group = task->group;
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     lock(&old_group->lock, 0);
     if (!(flags & CLONE_THREAD_)) {
         task->group = tgroup_copy(old_group);
@@ -127,7 +127,7 @@ static int copy_task(struct task *task, dword_t flags, addr_t stack, addr_t ptid
     return 0;
 
 fail_free_sighand:
-    while(critical_region_count(task)) { // Wait for now, task is in one or more critical sections
+    while(task_ref_cnt_get(task, 0)) { // Wait for now, task is in one or more critical sections
         nanosleep(&lock_pause, NULL);
     }
     sighand_release(task->sighand);
@@ -160,8 +160,8 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
         // some other thread could get a pointer to the task.
         // FIXME: task_destroy doesn't free all aspects of the task, which
         // could cause leaks
-        complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
-        task_destroy(task);
+        complex_lockt(&pids_lock, 0);
+        task_destroy(task, 3);
         unlock(&pids_lock);
         
         return err;
@@ -201,11 +201,11 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
     return pid;
 }
 
-dword_t sys_fork() {
+dword_t sys_fork(void) {
     return sys_clone(SIGCHLD_, 0, 0, 0, 0);
 }
 
-dword_t sys_vfork() {
+dword_t sys_vfork(void) {
     return sys_clone(CLONE_VFORK_ | CLONE_VM_ | SIGCHLD_, 0, 0, 0, 0);
 }
 

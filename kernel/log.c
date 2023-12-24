@@ -10,7 +10,6 @@
 #include "util/sync.h"
 #include "util/fifo.h"
 #include "kernel/task.h"
-#include "kernel/resource_locking.h"
 #include "misc.h"
 
 #define LOG_BUF_SHIFT 20
@@ -85,7 +84,7 @@ static size_t syslog_read(addr_t buf_addr, size_t len, int flags) {
 }
 
 static size_t do_syslog(int type, addr_t buf_addr, int_t len) {
-    size_t res;
+    int res;
     switch (type) {
         case SYSLOG_ACTION_READ_:
             return syslog_read(buf_addr, len, 0);
@@ -93,7 +92,7 @@ static size_t do_syslog(int type, addr_t buf_addr, int_t len) {
             return syslog_read(buf_addr, len, FIFO_LAST | FIFO_PEEK);
 
         case SYSLOG_ACTION_READ_CLEAR_:
-            res = syslog_read(buf_addr, len, FIFO_LAST | FIFO_PEEK);
+            res = (int)syslog_read(buf_addr, len, FIFO_LAST | FIFO_PEEK);
             if (res < 0)
                 return res;
             fallthrough;
@@ -117,11 +116,9 @@ static size_t do_syslog(int type, addr_t buf_addr, int_t len) {
     }
 }
 size_t sys_syslog(int_t type, addr_t buf_addr, int_t len) {
-    ////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
     lock(&log_lock, 0);
     size_t retval = do_syslog(type, buf_addr, len);
     unlock(&log_lock);
-    ////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
     return retval;
 }
 
@@ -134,24 +131,6 @@ static void log_buf_append(const char *msg) {
 
 static void log_line(const char *line);
 
-/* static void output_line(const char *line) {
-    time_t t=time(NULL);
-    char* c_time_string;
-    c_time_string = ctime(&t);
-    c_time_string[strcspn(c_time_string, "\n")] = 0;  // Remove trailing newline
-    //double tstamp = difftime(t, (time_t) 0);
-    int mybuff_size = 512;
-    char tmpbuff[mybuff_size];
-    //sprintf(tmpbuff, "[   %f] %s", tstamp, line);
-    sprintf(tmpbuff, "[   %s] %s", c_time_string, line);
-    // send it to stdout or wherever
-    if(strcmp(tmpbuff, "") != 0) { // Don't log empty string
-        log_line(tmpbuff);
-        // add it to the circular buffer
-        log_buf_append(tmpbuff);
-        log_buf_append("\n");
-    }
-} */
 static void output_line(const char *line) {
      time_t t = time(NULL);
      char* c_time_string = ctime(&t);
@@ -180,7 +159,7 @@ void ish_vprintk(const char *msg, va_list args) {
     buf_size += vsprintf(buf + buf_size, msg, args);
 
     // output up to the last newline, leave the rest in the buffer
-    complex_lockt(&log_lock, 1, __FILE__, __LINE__);
+    complex_lockt(&log_lock, 1);
     char *b = buf;
     char *p;
     while ((p = strchr(b, '\n')) != NULL) {
@@ -229,56 +208,3 @@ void die(const char *msg, ...) {
     abort();  
     va_end(args);
 }
-
-// fun little utility function
-int current_pid(void) {
-    modify_critical_region_counter(current, 1, __FILE__, __LINE__);
-    if(current != NULL) {
-        if (current->exiting != true) {
-            modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-            return current->pid;
-        } else {
-            modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-            return -1;
-        }
-    }
-    
-    modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-    return -1;
-}
-
-int current_uid(void) {
-    modify_critical_region_counter(current, 1, __FILE__, __LINE__);
-    if(current != NULL) {
-        if (current->exiting != true) {
-            modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-            return current->uid;
-        } else {
-            modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-            return -1;
-        }
-    }
-    
-    modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-    return -1;
-}
-
-char * current_comm(void) {
-    static char comm[16];
-    if(current != NULL) {
-        if(strcmp(current->comm, "")) {
-            strncpy(comm, current->comm, 16);
-        } else {
-            return "";
-        }
-        if (current->exiting != true) {
-            return comm;
-        } else {
-            return "";
-        }
-    }
-    
-    return "";
-}
-
-

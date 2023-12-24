@@ -40,11 +40,14 @@ static int adhoc_fsetattr(struct fd *fd, struct attr attr) {
 }
 
 static int adhoc_getpath(struct fd *fd, char *buf) {
+    // Need to specify max path size
     const char *type = "unknown"; // TODO allow this to be customized
+    size_t buf_size = 4096; // A size that should be sufficient for the formatted string
+
     if (fd->stat.inode == 0)
-        sprintf(buf, "anon_inode:[%s]", type);
+        snprintf(buf, buf_size, "anon_inode:[%s]", type);
     else
-        sprintf(buf, "%s:[%lu]", type, (unsigned long) fd->stat.inode);
+        snprintf(buf, buf_size, "%s:[%lu]", type, (unsigned long) fd->stat.inode);
     return 0;
 }
 

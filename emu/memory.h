@@ -20,6 +20,11 @@ struct mem {
     struct jit *jit;
 #endif
     struct mmu mmu;
+    struct {
+        pthread_mutex_t lock;
+        int count; // If positive, don't delete yet, wait_to_delete
+        bool ready_to_be_freed; // Should be false initially
+    } reference;
 
     wrlock_t lock;
 };
@@ -100,6 +105,10 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
 // Must call with mem read-locked.
 void *mem_ptr(struct mem *mem, addr_t addr, int type);
 int mem_segv_reason(struct mem *mem, addr_t addr);
+
+// Reference counting is important
+void mem_ref_cnt_mod(struct mem *mem, int value);
+int mem_ref_cnt_get(struct mem *mem);
 
 extern size_t real_page_size;
 

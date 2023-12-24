@@ -6,11 +6,11 @@
 #include "emu/cpu.h"
 #include "emu/memory.h"
 #include "emu/interrupt.h"
-#include "util/list.h"
 #include "kernel/task.h"
-#include "kernel/resource_locking.h"
+#include "util/list.h"
+#include "util/sync.h"
 
-extern int current_pid(void);
+extern int current_pid(struct task *task);
 
 static void jit_block_disconnect(struct jit *jit, struct jit_block *block);
 static void jit_block_free(struct jit *jit, struct jit_block *block);
@@ -39,7 +39,7 @@ void jit_free(struct jit *jit) {
     if (!jit) return;
 
     bool signal_pending = !!(current->pending & ~current->blocked);
-    while((critical_region_count(current) > 2) || (locks_held_count(current)) || (current->process_info_being_read) || (signal_pending)) { // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
+    while((task_ref_cnt_get(current, 0) > 2) || (locks_held_count(current)) || (signal_pending)) { // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(current->pending & ~current->blocked);
     }
@@ -84,12 +84,11 @@ void jit_invalidate_range(struct jit *jit, page_t start, page_t end) {
 }
 
 void jit_invalidate_page(struct jit *jit, page_t page) {
-    while(critical_region_count(current) > 4) { // It's all a bit magic, but I think this is doing something useful.  -mke
-        nanosleep(&lock_pause, NULL);
-    }
-    //modify_critical_region_counter(current, 1, __FILE__, __LINE__);
+    int tmp = task_ref_cnt_get(current, 0);
+    //while(task_ref_cnt_get(current, 0) > 4) { // It's all a bit magic, but I think this is doing something useful.  -mke
+    //    nanosleep(&lock_pause, NULL);
+    //}
     jit_invalidate_range(jit, page, page + 1);
-    //modify_critical_region_counter(current, -1, __FILE__, __LINE__);
 }
 
 void jit_invalidate_all(struct jit *jit) {
@@ -97,7 +96,7 @@ void jit_invalidate_all(struct jit *jit) {
 }
 
 static void jit_resize_hash(struct jit *jit, size_t new_size) {
-    TRACE_(verbose, "%d resizing hash to %lu, using %lu bytes for gadgets\n", current_pid(), new_size, jit->mem_used);
+    TRACE_(verbose, "%d resizing hash to %lu, using %lu bytes for gadgets\n", current_pid(current), new_size, jit->mem_used);
     struct list *new_hash = calloc(new_size, sizeof(struct list));
     for (size_t i = 0; i < jit->hash_size; i++) {
         if (list_null(&jit->hash[i]))
@@ -140,7 +139,7 @@ static struct jit_block *jit_lookup(struct jit *jit, addr_t addr) {
 
 static struct jit_block *jit_block_compile(addr_t ip, struct tlb *tlb) {
     struct gen_state state;
-    TRACE("%d %08x --- compiling:\n", current_pid(), ip);
+    TRACE("%d %08x --- compiling:\n", current_pid(current), ip);
     
     gen_start(ip, &state);
     while (true) {
@@ -185,20 +184,11 @@ static void jit_block_disconnect(struct jit *jit, struct jit_block *block) {
 }
 
 static void jit_block_free(struct jit *jit, struct jit_block *block) {
-   // critical_region_count_increase(current);
     jit_block_disconnect(jit, block);
     free(block);
-    //critical_region_count_decrease(current);
 }
 
 static void jit_free_jetsam(struct jit *jit) {
-   /* if(!strcmp(current->comm, "go")) {
-        // Sleep for a bit if this is go.  Kludge alert.  -mke
-        struct timespec wait;
-        wait.tv_sec = 3; // Be anal and set both to zero.  -mke
-        wait.tv_nsec = 0;
-        nanosleep(&wait, NULL);
-    } */
     struct jit_block *block, *tmp;
     list_for_each_entry_safe(&jit->jetsam, block, tmp, jetsam) {
         list_remove(&block->jetsam);
@@ -214,7 +204,7 @@ static inline size_t jit_cache_hash(addr_t ip) {
 
 static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     struct jit *jit = cpu->mmu->jit;
-    read_lock(&jit->jetsam_lock, __FILE__, __LINE__);
+    read_lock(&jit->jetsam_lock);
 
     struct jit_block **cache = calloc(JIT_CACHE_SIZE, sizeof(*cache));
     struct jit_frame *frame = malloc(sizeof(struct jit_frame));
@@ -227,7 +217,6 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         addr_t ip = frame->cpu.eip;
         size_t cache_index = jit_cache_hash(ip);
         struct jit_block *block = cache[cache_index];
-        //////modify_critical_region_counter(current, 1, __FILE__, __LINE__);
         if (block == NULL || block->addr != ip) {
             lock(&jit->lock, 0);
             block = jit_lookup(jit, ip);
@@ -235,12 +224,11 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                 block = jit_block_compile(ip, tlb);
                 jit_insert(jit, block);
             } else {
-                TRACE("%d %08x --- missed cache\n", current_pid(), ip);
+                TRACE("%d %08x --- missed cache\n", current_pid(current), ip);
             }
             cache[cache_index] = block;
             unlock(&jit->lock);
         }
-        //////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
         struct jit_block *last_block = frame->last_block;
         if (last_block != NULL &&
                 (last_block->jump_ip[0] != NULL ||
@@ -253,9 +241,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
                     if (last_block->jump_ip[i] != NULL &&
                             (*last_block->jump_ip[i] & 0xffffffff) == block->addr) {
                         *last_block->jump_ip[i] = (unsigned long) block->code;
-			//modify_critical_region_counter(current, 1, __FILE__, __LINE__);
                         list_add(&block->jumps_from[i], &last_block->jumps_from_links[i]);
-			//modify_critical_region_counter(current, -1, __FILE__, __LINE__);
                     }
                 }
             }
@@ -263,14 +249,12 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             unlock(&jit->lock);
         }
         
-        //////modify_critical_region_counter(current, -1, __FILE__, __LINE__);
-        
         frame->last_block = block;
 
         // block may be jetsam, but that's ok, because it can't be freed until
         // every thread on this jit is not executing anything
 
-        TRACE("%d %08x --- cycle %ld\n", current_pid(), ip, frame->cpu.cycle);
+        TRACE("%d %08x --- cycle %ld\n", current_pid(current), ip, frame->cpu.cycle);
 
         interrupt = jit_enter(block, frame, tlb);
         if (interrupt == INT_NONE && __atomic_exchange_n(cpu->poked_ptr, false, __ATOMIC_SEQ_CST))
@@ -282,7 +266,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
 
     free(frame);
     free(cache);
-    read_unlock(&jit->jetsam_lock, __FILE__, __LINE__);
+    read_unlock(&jit->jetsam_lock);
     return interrupt;
 
 }
@@ -320,11 +304,11 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         unlock(&jit->lock);
         write_lock(&jit->jetsam_lock);
         lock(&jit->lock, 0);
-        while(critical_region_count(current) > 3) {// Yes, this is weird.  It might not work, but I'm trying.  -mke
+        while(task_ref_cnt_get(current, 0) > 3) {// Yes, this is weird.  It might not work, but I'm trying.  -mke
             nanosleep(&lock_pause, NULL);          // Yes, this has triggered at least once.  Is it doing any good though? -mke
         }
         jit_free_jetsam(jit);
-        write_unlock(&jit->jetsam_lock, __FILE__, __LINE__);
+        write_unlock(&jit->jetsam_lock);
         unlock(&jit->lock);
         return interrupt;
     }

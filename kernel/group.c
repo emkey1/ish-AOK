@@ -1,4 +1,5 @@
 #include "util/list.h"
+#include "util/sync.h"
 #include "kernel/calls.h"
 #include "kernel/task.h"
 #include "fs/tty.h"
@@ -10,7 +11,7 @@ dword_t sys_setpgid(pid_t_ id, pid_t_ pgid) {
         id = current->pid;
     if (pgid == 0)
         pgid = id;
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     struct pid *pid = pid_get(id);
     err = _ESRCH;
     if (pid == NULL)
@@ -55,13 +56,13 @@ out:
     return err;
 }
 
-dword_t sys_setpgrp() {
+dword_t sys_setpgrp(void) {
     return sys_setpgid(0, 0);
 }
 
 pid_t_ sys_getpgid(pid_t_ pid) {
     STRACE("getpgid(%d)", pid);
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     struct task *task = current;
     if (pid != 0)
         task = pid_get_task(pid);
@@ -73,7 +74,7 @@ pid_t_ sys_getpgid(pid_t_ pid) {
     unlock(&pids_lock);
     return pid;
 }
-pid_t_ sys_getpgrp() {
+pid_t_ sys_getpgrp(void) {
     return sys_getpgid(0);
 }
 
@@ -95,7 +96,7 @@ void task_leave_session(struct task *task) {
 }
 
 pid_t_ task_setsid(struct task *task) {
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     struct tgroup *group = task->group;
     pid_t_ new_sid = group->leader->pid;
     if (group->pgid == new_sid || group->sid == new_sid) {
@@ -116,14 +117,14 @@ pid_t_ task_setsid(struct task *task) {
     return new_sid;
 }
 
-dword_t sys_setsid() {
+dword_t sys_setsid(void) {
     STRACE("setsid()");
     return task_setsid(current);
 }
 
-dword_t sys_getsid() {
+dword_t sys_getsid(void) {
     STRACE("getsid()");
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock,0);
     pid_t_ sid = current->group->sid;
     unlock(&pids_lock);
     return sid;

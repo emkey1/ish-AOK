@@ -5,7 +5,6 @@
 #include "kernel/errno.h"
 #include "kernel/task.h"
 #include "kernel/fs.h"
-#include "kernel/resource_locking.h"
 #include "fs/fd.h"
 #include "fs/path.h"
 #include "fs/dev.h"

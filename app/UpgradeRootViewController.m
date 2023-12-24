@@ -12,6 +12,7 @@
 #include "kernel/calls.h"
 #include "kernel/init.h"
 #include "fs/devices.h"
+#include "util/sync.h"
 
 @interface UpgradeRootViewController ()
 
@@ -30,7 +31,7 @@
 #if !ISH_LINUX
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(processExited:) name:ProcessExitedNotification object:nil];
 
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     current = pid_get_task(1); // pray
     unlock(&pids_lock);
     self.terminal = [Terminal createPseudoTerminal:&self->_tty];
@@ -74,7 +75,7 @@
     if (code != 0) {
         [self showAlertWithTitle:@"Upgrade failed" message:@"exit status %d", code];
     } else {
-        complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+        complex_lockt(&pids_lock, 0);
         current = pid_get_task(1); // pray
         unlock(&pids_lock);
         FsUpdateRepositories();

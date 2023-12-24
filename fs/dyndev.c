@@ -50,7 +50,7 @@ int dyn_dev_register(struct dev_ops *ops, int type, int major, int minor) {
     return 0;
 }
 
-static intptr_t dyn_open(int type, int major, int minor, struct fd *fd) {
+static int dyn_open(int type, int major, int minor, struct fd *fd) {
     assert((type == DEV_CHAR) || (type == DEV_BLOCK));
     assert(major == DYN_DEV_MAJOR || major == DEV_RTC_MAJOR); // mkemkemke
     // it's safe to access devs without locking (read-only)
@@ -73,52 +73,11 @@ static intptr_t dyn_open(int type, int major, int minor, struct fd *fd) {
     return 0;
 }
 
-static intptr_t dyn_open_char(int major, int minor, struct fd *fd) {
+static int dyn_open_char(int major, int minor, struct fd *fd) {
     return dyn_open(DEV_CHAR, major, minor, fd);
-}
-
-static intptr_t rtc_open(int major, int minor, struct fd *fd) {
-    //return &(intptr_t)(major, minor, fd);
-    return (intptr_t)fd;
-}
-
-struct rtc_time {
-    int tm_sec;   /* seconds */
-    int tm_min;   /* minutes */
-    int tm_hour;  /* hours */
-    int tm_mday;  /* day of the month */
-    int tm_mon;   /* month */
-    int tm_year;  /* year */
-};
-
-intptr_t rtc_dev(void *buf, size_t count) {
-    if (count < sizeof(struct rtc_time)) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    time_t now;
-    struct tm *tm_now;
-    struct rtc_time emulatedRTC;
-
-    time(&now);
-    tm_now = localtime(&now);
-
-    emulatedRTC.tm_sec = tm_now->tm_sec;
-    emulatedRTC.tm_min = tm_now->tm_min;
-    emulatedRTC.tm_hour = tm_now->tm_hour;
-    emulatedRTC.tm_mday = tm_now->tm_mday;
-    emulatedRTC.tm_mon = tm_now->tm_mon;
-    emulatedRTC.tm_year = tm_now->tm_year + 1900;
-
-    memcpy(buf, &emulatedRTC, sizeof(emulatedRTC));
-    return sizeof(emulatedRTC);
 }
 
 struct dev_ops dyn_dev_char = {
     .open = dyn_open_char,
 };
 
-struct dev_ops rtc_dev_char = {
-    .open = rtc_dev,
-};

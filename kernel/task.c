@@ -4,7 +4,6 @@
 #include <string.h>
 #include "kernel/calls.h"
 #include "kernel/task.h"
-#include "kernel/resource_locking.h"
 #include "emu/memory.h"
 #include "emu/tlb.h"
 #include "platform/platform.h"
@@ -12,12 +11,17 @@
 #include <libkern/OSAtomic.h>
 #include <os/proc.h>
 
+#define GRACE_PERIOD 2 // How long we want to deallocate tasks that have exited
+
 pthread_mutex_t multicore_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t extra_lock = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t delay_lock = PTHREAD_MUTEX_INITIALIZER;
-lock_t atomic_l_lock;
+extern lock_t atomic_l_lock;
 pthread_mutex_t wait_for_lock = PTHREAD_MUTEX_INITIALIZER;
 time_t boot_time;  // Store the boot time.  -mke
+
+struct list tasks_pending_deletion_queue;
+pthread_mutex_t tasks_pending_deletion_lock = PTHREAD_MUTEX_INITIALIZER;
 
 int iOSMajorRelease;
 
@@ -32,6 +36,12 @@ static struct pid pids[MAX_PID + 1] = {};
 lock_t pids_lock;
 lock_t block_lock;
 struct list alive_pids_list;
+
+void init_pending_queues(void) {
+// Initialize the pending deletion queues.  Tasks, memory and file descriptors (eventually)
+    list_init(&tasks_pending_deletion_queue);
+    
+}
 
 static bool pid_empty(struct pid *pid) {
     return pid->task == NULL && list_empty(&pid->session) && list_empty(&pid->pgroup);
@@ -68,30 +78,63 @@ struct pid *pid_get_last_allocated(void) {
     return pid_get(last_allocated_pid);
 }
 
+inline void task_ref_cnt_mod(struct task *task, int value) { // value Should only be -1 or 1.  -mke
+    // Keep track of how many threads are referencing this task
+    if(!doEnableExtraLocking) { // If they want to fly by the seat of their pants...  -mke
+        return;
+    }
+    
+    if(task == NULL) {
+        if(current != NULL) {
+            task = current;
+        } else {
+            return;
+        }
+    }
+    
+    bool ilocked = false;
+    
+    if (trylocknl(&task->general_lock, task->comm, task->pid) != _EBUSY) {
+        ilocked = true; // Make sure this is locked, and unlock it later if we had to lock it.
+    }
+    
+    pthread_mutex_lock(&task->reference.lock);
+    
+    if(((task->reference.count + value) < 0) && (task->pid > 9)) { // Prevent our unsigned value attempting to go negative.  -mke
+        printk("ERROR: Attempt to decrement task reference count to be negative, ignoring(%s:%d) (%d - %d)\n", task->comm, task->pid, task->reference.count, value);
+        if(ilocked == true)
+            unlock(&task->general_lock);
+        
+        pthread_mutex_unlock(&task->reference.lock);
+        
+        return;
+    }
+    
+    task->reference.count = task->reference.count + value;
+        
+    pthread_mutex_unlock(&task->reference.lock);
+    
+    if(ilocked == true)
+        unlock(&task->general_lock);
+}
+
 dword_t get_count_of_blocked_tasks(void) {
-    modify_critical_region_counter(current, 1, __FILE__, __LINE__);
+    // task_ref_cnt_mod(current, 1);  // Not needed?
     dword_t res = 0;
     struct pid *pid_entry;
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     list_for_each_entry(&alive_pids_list, pid_entry, alive) {
         if (pid_entry->task->io_block) {
             res++;
         }
     }
-    modify_critical_region_counter(current, -1, __FILE__, __LINE__);
+    // task_ref_cnt_mod(current, -1);
     unlock(&pids_lock);
     return res;
 }
 
-void zero_critical_regions_count(void) { // If doEnableExtraLocking is changed to false, we need to zero out critical_region.count for active processes
-    struct pid *pid_entry;
-    list_for_each_entry(&alive_pids_list, pid_entry, alive) {
-        pid_entry->task->critical_region.count = 0;  // Bad things happen if this isn't done.  -mke
-    }
-}
-
 dword_t get_count_of_alive_tasks(void) {
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     dword_t res = 0;
     struct list *item;
     list_for_each(&alive_pids_list, item) {
@@ -102,7 +145,7 @@ dword_t get_count_of_alive_tasks(void) {
 }
 
 struct task *task_create_(struct task *parent) {
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock, 0);
     do {
         last_allocated_pid++;
         if (last_allocated_pid > MAX_PID) last_allocated_pid = 1;
@@ -153,18 +196,25 @@ struct task *task_create_(struct task *parent) {
     cond_init(&task->ptrace.cond);
     
     task->locks_held.count = 0; // counter used to keep track of pending locks associated with task.  Do not delete when locks are present.  -mke
-    task->critical_region.count = 0; // counter used to delay task deletion if positive.  --mke
+    task->reference.count = 0; // counter used to delay task deletion if positive.  --mke
+    task->reference.ready_to_be_freed = false;
+    pthread_mutex_init(&task->reference.lock, NULL);
     return task;
 }
 
 // We consolidate the check for whether the task is in a critical section,
 // holds locks, or has pending signals into a single function.
 bool should_wait(struct task *t) {
-    return critical_region_count(t) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
+    return task_ref_cnt_get(t, 0) > 1 || locks_held_count(t) || !!(t->pending & ~t->blocked);
 }
 
-void task_destroy(struct task *task) {
-    task->exiting = true;
+void task_destroy(struct task *task, int caller) {
+    if(trylock(&task->general_lock) == (_EBUSY)) { // Get it if a lock does not exist
+        lock(&task->general_lock, 0);
+        task->exiting = true;
+    }
+    
+    //printk("TD(%s:%d): Called by %d\n", task->comm, task->pid, caller);
     
     // We use a single loop to wait for the task to be ready to destroy.
     // This loop replaces all the similar while-loops in the original code.
@@ -191,9 +241,40 @@ void task_destroy(struct task *task) {
     if (locked_pids_lock) {
         unlock(&pids_lock);
     }
+    
+    if (task_ref_cnt_get(task, 1)) { // Check to see if another thread is accessing this process.  If yes, note that and defer freeing it
+        struct task_pending_deletion *pd = malloc(sizeof(struct task_pending_deletion));
+        if (pd) {
+            task->reference.ready_to_be_freed = true;
+            pd->task = task;
+            pd->added_time = time(NULL);
+            list_init(&pd->list);
+            pthread_mutex_lock(&tasks_pending_deletion_lock);
+            list_add(&tasks_pending_deletion_queue, &pd->list);
+            pthread_mutex_unlock(&tasks_pending_deletion_lock);
+        }
+        // Lets cleanup any expired pending deletions here for now
+        cleanup_pending_deletions();
+        return;
+    } else {
+        free(task);
+    }
+}
 
-    // Free the task's resources.
-    free(task);
+// Cleanup function to delete tasks after the grace period
+void cleanup_pending_deletions(void) {
+    pthread_mutex_lock(&tasks_pending_deletion_lock);
+    struct task_pending_deletion *pd, *tmp;
+    list_for_each_entry_safe(&tasks_pending_deletion_queue, pd, tmp, list) {
+        if ((difftime(time(NULL), pd->added_time) >= GRACE_PERIOD) && !! (!pd->task->reference.count)) { // Delete reaped tasks old and no longer referenced
+            if (task_ref_cnt_get(pd->task, 0) == 0) {
+                free(pd->task);
+                list_remove(&pd->list);
+                free(pd);
+            }
+        }
+    }
+    pthread_mutex_unlock(&tasks_pending_deletion_lock);
 }
 
 void run_at_boot(void) {  // Stuff we run only once, at boot time.
@@ -213,12 +294,14 @@ void run_at_boot(void) {  // Stuff we run only once, at boot time.
 }
 
 void task_run_current(void) {
-    struct cpu_state *cpu = &current->cpu;
+    struct task* save = current; // Because I kinda suspect that current gets messed up sometimes
+    struct cpu_state *cpu = &save->cpu;
     struct tlb tlb = {};
-    tlb_refresh(&tlb, &current->mem->mmu);
+    tlb_refresh(&tlb, &save->mem->mmu);
     
     while (true) {
-        read_lock(&current->mem->lock, __FILE__, __LINE__);
+        read_lock(&save->mem->lock);
+        task_ref_cnt_mod(save, 1);
         
         if(!doEnableMulticore) {
             pthread_mutex_lock(&multicore_lock);
@@ -226,27 +309,27 @@ void task_run_current(void) {
         
         int interrupt = cpu_run_to_interrupt(cpu, &tlb);
         
-        read_unlock(&current->mem->lock, __FILE__, __LINE__);
+        read_unlock(&save->mem->lock);
         
         if(!doEnableMulticore)
             pthread_mutex_unlock(&multicore_lock);
  
         //struct timespec while_pause = {0 /*secs*/, WAIT_SLEEP /*nanosecs*/};
-        if(current->parent != NULL) {
-            current->parent->group->group_count_in_int++; // Keep track of how many children the parent has
+        if(save->parent != NULL) {
+            save->parent->group->group_count_in_int++; // Keep track of how many children the parent has
             handle_interrupt(interrupt);
-            current->parent->group->group_count_in_int--;
+            save->parent->group->group_count_in_int--;
         } else {
             handle_interrupt(interrupt);
         }
+        
+        task_ref_cnt_mod(save, -1);
     }
 }
 
 static void *task_thread(void *task) {
     
     current = task;
-    
-    current->critical_region.count = 0; // Is this needed?  -mke
     
     update_thread_name();
     
@@ -283,7 +366,7 @@ void update_thread_name(void) {
     result = snprintf(name, sizeof(name) - 1, "%.7s-%d", current->comm, current->pid);
 
     // Check if the output was truncated
-    if (result >= sizeof(name)) {
+    if (result >= (int)sizeof(name)) {
         // Handle truncation (e.g., by logging, adjusting the name format, etc.)
         // For this example, we just log a warning
         printk("WARNING: Thread name truncated in update_thread_name(%s).\n", name);
@@ -295,3 +378,27 @@ void update_thread_name(void) {
     pthread_setname_np(pthread_self(), name);
 #endif
 }
+
+inline void modify_locks_held_count(struct task *task, int value) { // value Should only be -1 or 1.  -mke
+    if((task == NULL) && (current != NULL)) {
+        task = current;
+    } else {
+        return;
+    }
+    
+    pthread_mutex_lock(&task->locks_held.lock);
+    if((task->locks_held.count + value < 0) && task->pid > 9) {
+        printk("ERROR: Attempt to decrement locks_held count below zero, ignoring\n");
+        return;
+    }
+    task->locks_held.count = task->locks_held.count + value;
+    pthread_mutex_unlock(&task->locks_held.lock);
+}
+
+bool current_is_valid(void) {
+    if(current != NULL)
+        return true;
+    
+    return false;
+}
+

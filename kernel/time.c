@@ -10,7 +10,6 @@
 #include "kernel/errno.h"
 #include "kernel/resource.h"
 #include "kernel/time.h"
-#include "kernel/resource_locking.h"
 #include "fs/poll.h"
 #include <sys/poll.h>
 
@@ -48,7 +47,7 @@ static struct itimerspec_ timer_spec_from_real(struct timer_spec spec) {
 #include <time.h>
 #include <sys/syscall.h>
 
-dword_t sys_clock_nanosleep_time64(int clock_id, int flags, dword_t req_val, dword_t rem_val) {
+dword_t sys_clock_nanosleep_time64(__attribute__((unused)) int clock_id, __attribute__((unused)) int flags, dword_t req_val, dword_t rem_val) {
     struct timespec req;
     struct timespec rem;
 
@@ -182,9 +181,7 @@ static void itimer_notify(struct task *task) {
     struct siginfo_ info = {
         .code = SI_TIMER_,
     };
-    ////modify_critical_region_counter(task, 1, __FILE__, __LINE__);
     send_signal(task, SIGALRM_, info);
-    ////modify_critical_region_counter(task, -1, __FILE__, __LINE__);
 }
 
 static long itimer_set(struct tgroup *group, int which, struct timer_spec spec, struct timer_spec *old_spec) {

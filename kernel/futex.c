@@ -1,7 +1,7 @@
 #include "kernel/calls.h"
-#include "kernel/resource_locking.h"
 #include <pthread.h>
 #include "futex.h"
+#include "util/sync.h"
 // Apple doesn't implement futex, so we have to fake it
 #define FUTEX_WAIT_ 0
 #define FUTEX_WAKE_ 1
@@ -115,9 +115,9 @@ static void futex_put(struct futex *futex) {
 
 static int futex_load(struct futex *futex, dword_t *out) {
     assert(futex->mem == current->mem);
-    read_lock(&current->mem->lock, __FILE__, __LINE__);
+    read_lock(&current->mem->lock);
     dword_t *ptr = mem_ptr(current->mem, futex->addr, MEM_READ);
-    read_unlock(&current->mem->lock, __FILE__, __LINE__);
+    read_unlock(&current->mem->lock);
     if (ptr == NULL)
         return 1;
     *out = *ptr;
@@ -200,7 +200,7 @@ static int futex_cmp_requeue(addr_t uaddr1, dword_t val, addr_t uaddr2, dword_t 
         err = _EAGAIN;
     } else {
         struct futex_wait *wait, *tmp_wait;
-        int requeued = 0;
+        dword_t requeued = 0;
         list_for_each_entry_safe(&futex1->queue, wait, tmp_wait, queue) {
             if (requeued >= val2) {
                 break;
@@ -301,10 +301,8 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
     switch (op & FUTEX_CMD_MASK_) {
         case FUTEX_WAIT_:
             STRACE("futex(FUTEX_WAIT, %#x, %d, 0x%x {%ds %dns}) = ...\n", uaddr, val, timeout_or_val2, timeout.tv_sec, timeout.tv_nsec);
-            modify_critical_region_counter(current, 1, __FILE__, __LINE__);
             dword_t return_val;
             return_val = futex_wait(uaddr, val, timeout_or_val2 ? &timeout : NULL);
-            modify_critical_region_counter(current, -1, __FILE__, __LINE__);
             return return_val;
         case FUTEX_WAKE_:
             STRACE("futex(FUTEX_WAKE, %#x, %d)", uaddr, val);
@@ -373,7 +371,7 @@ int_t sys_set_robust_list(addr_t robust_list, dword_t len) {
 int_t sys_get_robust_list(pid_t_ pid, addr_t robust_list_ptr, addr_t len_ptr) {
     STRACE("get_robust_list(%d, %#x, %#x)", pid, robust_list_ptr, len_ptr);
 
-    complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
+    complex_lockt(&pids_lock,0);
     struct task *task = pid_get_task(pid);
     unlock(&pids_lock);
     if (task != current)

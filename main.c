@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <unistd.h>
+#include "util/list.h"
 
 #include <mach/task.h>
 #include <mach/mach_init.h>
@@ -18,7 +19,7 @@ static void handler(int signo, siginfo_t *sigaction, void *context) {
     signal(signo, SIG_DFL);
 }
 
-static void gen_exception() {
+static void gen_exception(void) {
     printk("WARNING: gen_exception in.\n");
     *(int *)0 = 0;
     printk("WARNING: gen_exception out.\n");
@@ -62,6 +63,6 @@ int main(int argc, char *const argv[]) {
     pthread_t id;
     pthread_create(&id, NULL, gen_exception_thread, NULL);
     pthread_join(id, NULL);
-
+    
     task_run_current();
 }
