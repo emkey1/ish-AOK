@@ -49,6 +49,7 @@ int fd_close(struct fd *fd) {
         if (fd->mount)
             mount_release(fd->mount);
         free(fd);
+//        fd = NULL; // KLUGE?
     }
     return err;
 }
@@ -161,7 +162,7 @@ struct fd *f_get(fd_t f) {
 static fd_t f_install_start(struct fd *fd, fd_t start) {
     assert(start >= 0);
     struct fdtable *table = current->files;
-    unsigned size = rlimit(RLIMIT_NOFILE_);
+    unsigned size = (unsigned)rlimit(RLIMIT_NOFILE_);
     if (size > table->size)
         size = table->size;
 
@@ -341,8 +342,8 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg) {
             if (err >= 0) {
                 flock32.type = flock.type;
                 flock32.whence = flock.whence;
-                flock32.start = flock.start;
-                flock32.len = flock.len;
+                flock32.start = (unsigned)flock.start;
+                flock32.len = (unsigned)flock.len;
                 flock32.pid = flock.pid;
                 if (user_write(arg, &flock32, sizeof(flock32)))
                     return _EFAULT;
