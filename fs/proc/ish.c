@@ -26,6 +26,8 @@ bool (*set_user_default)(const char *name, char *buffer, size_t size);
 bool (*remove_user_default)(const char *name);
 char *(*get_documents_directory)(void);
 
+extern char* printHostInfo(void);
+
 static int proc_ish_show_colors(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     proc_printf(buf,
                 "\x1B[30m" "iSH" "\x1B[39m "
@@ -297,6 +299,11 @@ static int proc_ish_show_uidevice(struct proc_entry *UNUSED(entry), struct proc_
     return 0;
 }
 
+static int proc_ish_show_host_info(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "%s", printHostInfo());
+    return 0;
+}
+
 struct proc_children proc_ish_children = PROC_CHILDREN({
     {"BAT0", .show = proc_ish_show_battery},
     {"BAT0_capacity", .show = proc_ish_show_battery_capacity},
@@ -306,6 +313,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {".defaults", S_IFDIR, .readdir = proc_ish_underlying_defaults_readdir},
     {"defaults", S_IFDIR, .readdir = proc_ish_defaults_readdir},
     {"documents", .show = proc_ish_show_documents},
+    {"host_info", .show = proc_ish_show_host_info},  // Add host hardware related information
     {"ips", .show = proc_ish_show_ips},
     {"version", .show = proc_ish_show_version},
 });

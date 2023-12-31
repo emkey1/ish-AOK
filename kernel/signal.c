@@ -334,8 +334,7 @@ void signal_delivery_stop(int sig, struct siginfo_ *info) {
     lock(&current->sighand->lock, 0);
 }
 
-void receive_signals(void) {  // Should this function have a check for critical_region_count? -mke
-    //nanosleep(&lock_pause, NULL);
+void receive_signals(void) {  
     lock(&current->group->lock, 0);
     bool was_stopped = current->group->stopped;
     unlock(&current->group->lock);
@@ -739,7 +738,8 @@ static int kill_group(pid_t_ pgid, dword_t sig) {
     }
     struct tgroup *tgroup;
     int err = _EPERM;
-    while((task_ref_cnt_get(current, 0)) || (locks_held_count(current))) { // Wait for now, task is in one or more critical sections, and/or has locks
+    struct task* foo = current; // Debugging
+    while((task_ref_cnt_get(current, 0) > 1) || (locks_held_count(current))) { // Wait for now, task is in one or more critical sections, and/or has locks
         nanosleep(&lock_pause, NULL);
     }
     list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
