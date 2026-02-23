@@ -224,21 +224,6 @@ static int tmpfs_mount(struct mount *mount) {
     return 0;
 }
 
-#if 0
-// This is the only place where a tmpfs directory tree is recursively freed.
-static void tmpfs_unmount_tree(struct tmp_inode *tree) {
-    assert(refcount_get(tree) == 1); // otherwise mount_remove should have returned EBUSY
-    if (S_ISDIR(tree->stat.mode)) {
-        struct tmp_dirent *dirent, *tmp;
-        list_for_each_entry_safe(&tree->dir.entries, dirent, tmp, dir) {
-            if (dirent->inode != NULL)
-                tmpfs_unmount_tree(dirent->inode);
-            tmp_dirent_release(dirent);
-        }
-    }
-    tmp_inode_release(tree);
-}
-#endif
 
 static int tmpfs_umount(struct mount *UNUSED(mount)) {
     // big fat fuckin TODO
