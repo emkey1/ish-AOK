@@ -191,6 +191,13 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     db_check_error(fs);
     sqlite3_finalize(statement);
 
+    // synchronous=NORMAL is safe in WAL mode, and much faster
+    statement = db_prepare(fs, "pragma synchronous=NORMAL");
+    db_check_error(fs);
+    sqlite3_step(statement);
+    db_check_error(fs);
+    sqlite3_finalize(statement);
+
     statement = db_prepare(fs, "pragma foreign_keys=true");
     db_check_error(fs);
     sqlite3_step(statement);
