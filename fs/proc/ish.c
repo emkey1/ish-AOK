@@ -2,6 +2,7 @@
 #include "fs/proc/ish.h"
 #include "fs/proc/net.h"
 #include "kernel/errno.h"
+#include "kernel/fs.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -79,7 +80,7 @@ static void proc_ish_defaults_getname(struct proc_entry *entry, char *buf) {
 
 static int proc_ish_defaults_readlink(struct proc_entry *entry, char *buf) {
     char *name = get_underlying_name(entry->name);
-    sprintf(buf, "../.defaults/%s", name);
+    snprintf(buf, MAX_PATH, "../.defaults/%s", name);
     free(name);
     return 0;
 }
