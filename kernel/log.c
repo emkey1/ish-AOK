@@ -152,11 +152,19 @@ static void output_line(const char *line) {
 
 void ish_vprintk(const char *msg, va_list args) {
     // format the message
-    // I'm trusting you to not pass an absurdly long message
     static __thread char buf[16384] = "";
     static __thread size_t buf_size = 0;
-    
-    buf_size += vsprintf(buf + buf_size, msg, args);
+
+    size_t available = sizeof(buf) - buf_size;
+    if (available > 0) {
+        int ret = vsnprintf(buf + buf_size, available, msg, args);
+        if (ret > 0) {
+            if ((size_t)ret >= available)
+                buf_size = sizeof(buf) - 1;
+            else
+                buf_size += ret;
+        }
+    }
 
     // output up to the last newline, leave the rest in the buffer
     complex_lockt(&log_lock, 1);
@@ -169,6 +177,14 @@ void ish_vprintk(const char *msg, va_list args) {
         buf_size -= p + 1 - b;
         b = p + 1;
     }
+
+    if (buf_size >= sizeof(buf) - 1) {
+        output_line(b);
+        buf_size = 0;
+        b = buf + sizeof(buf) - 1;
+        buf[0] = '\0';
+    }
+
     unlock(&log_lock);
     memmove(buf, b, strlen(b) + 1);
 }
@@ -203,7 +219,7 @@ void die(const char *msg, ...) {
     va_list args;
     va_start(args, msg);
     char buf[4096];
-    vsprintf(buf, msg, args);
+    vsnprintf(buf, sizeof(buf), msg, args);
     die_handler(buf);
     abort();  
     va_end(args);
