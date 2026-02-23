@@ -186,15 +186,16 @@ static int fakefs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev
 
 static int fakefs_stat(struct mount *mount, const char *path, struct statbuf *fake_stat) {
     struct fakefs_db *fs = &mount->fakefs;
-    db_begin(fs);
+    sqlite3_mutex_enter(fs->lock);
     struct ish_stat ishstat;
     ino_t inode;
     if (!path_read_stat(fs, path, &ishstat, &inode)) {
-        db_rollback(fs);
+        sqlite3_mutex_leave(fs->lock);
         return _ENOENT;
     }
+    sqlite3_mutex_leave(fs->lock);
+
     int err = realfs.stat(mount, path, fake_stat);
-    db_commit(fs);
     if (err < 0)
         return err;
     fake_stat->inode = inode;
@@ -210,10 +211,10 @@ static int fakefs_fstat(struct fd *fd, struct statbuf *fake_stat) {
     int err = realfs.fstat(fd, fake_stat);
     if (err < 0)
         return err;
-    db_begin(fs);
+    sqlite3_mutex_enter(fs->lock);
     struct ish_stat ishstat;
     inode_read_stat(fs, fd->fake_inode, &ishstat);
-    db_commit(fs);
+    sqlite3_mutex_leave(fs->lock);
     fake_stat->inode = fd->fake_inode;
     fake_stat->mode = ishstat.mode;
     fake_stat->uid = ishstat.uid;
