@@ -95,7 +95,7 @@ int user_read_string(addr_t addr, char *buf, size_t max) {
     read_lock(&current->mem->lock);
     size_t i = 0;
     while (i < max) {
-        if (__user_read_task(current, addr + i, &buf[i], sizeof(buf[i])), false) {
+        if (__user_read_task(current, addr + i, &buf[i], sizeof(buf[i]))) {
             read_unlock(&current->mem->lock);
             return 1;
         }
