@@ -74,18 +74,18 @@ extern UIAccessibilityTraits UIAccessibilityTraitToggle;
 - (void)setSelected:(BOOL)selected {
     [super setSelected:selected];
     [self chooseBackground];
+    if (self.toggleable) {
+        if (selected) {
+            self.accessibilityTraits |= UIAccessibilityTraitSelected;
+        } else {
+            self.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+        }
+    }
 }
 
 - (void)setKeyAppearance:(UIKeyboardAppearance)keyAppearance {
     _keyAppearance = keyAppearance;
     [self chooseBackground];
-}
-
-- (NSString *)accessibilityValue {
-    if (self.toggleable) {
-        return self.selected ? @"1" : @"0";
-    }
-    return nil;
 }
 
 @end
