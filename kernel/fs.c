@@ -9,6 +9,8 @@
 #include "fs/path.h"
 #include "fs/dev.h"
 
+#define MAX_RW_COUNT (16 * 1024 * 1024)
+
 extern bool doEnableExtraLocking;
 extern pthread_mutex_t extra_lock;
 extern bool isGlibC;
@@ -112,6 +114,8 @@ dword_t sys_readlinkat(fd_t at_f, addr_t path_addr, addr_t buf_addr, dword_t buf
     struct fd *at = at_fd(at_f);
     if (at == NULL)
         return _EBADF;
+    if (bufsize > MAX_PATH)
+        bufsize = MAX_PATH;
     char buf[bufsize];
     ssize_t size = generic_readlinkat(at, path, buf, bufsize);
     if (size >= 0) {
@@ -256,6 +260,8 @@ static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
 
 dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
     STRACE("read(%d, 0x%x, %d)", fd_no, buf_addr, size);
+    if (size > MAX_RW_COUNT)
+        size = MAX_RW_COUNT;
     char *buf = (char *) malloc(size);
     if (buf == NULL)
         return _ENOMEM;
@@ -295,6 +301,8 @@ static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
 
 dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
     // FIXME this is a DOS vector, should ideally use vectorized I/O
+    if (size > MAX_RW_COUNT)
+        size = MAX_RW_COUNT;
     char *buf = malloc(size);
     if (buf == NULL)
         return _ENOMEM;
@@ -351,6 +359,8 @@ dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     if (IS_ERR(iovec))
         return PTR_ERR(iovec);
     size_t io_size = iovec_size(iovec, iovec_count);
+    if (io_size > MAX_RW_COUNT)
+        io_size = MAX_RW_COUNT;
     char *buf = malloc(io_size);
     if (buf == NULL) {
         free(iovec);
@@ -365,15 +375,21 @@ dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
 
     size_t offset = 0;
     for (unsigned i = 0; i < iovec_count; i++) {
-        size_t print_size = iovec[i].len;
+        size_t len = iovec[i].len;
+        if (offset >= res)
+            break;
+        if (offset + len > res)
+            len = res - offset;
+
+        size_t print_size = len;
         if (print_size > 100) print_size = 100;
         STRACE(" {\"%.*s\", %u}", print_size, buf + offset, iovec[i].len);
 
-        if (user_write(iovec[i].base, buf + offset, iovec[i].len)) {
+        if (user_write(iovec[i].base, buf + offset, len)) {
             res = _EFAULT;
             goto error;
         }
-        offset += iovec[i].len;
+        offset += len;
     }
 
 error:
@@ -388,6 +404,8 @@ dword_t sys_writev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     if (IS_ERR(iovec))
         return PTR_ERR(iovec);
     size_t io_size = iovec_size(iovec, iovec_count);
+    if (io_size > MAX_RW_COUNT)
+        io_size = MAX_RW_COUNT;
     char *buf = malloc(io_size);
     if (buf == NULL) {
         free(iovec);
@@ -397,18 +415,24 @@ dword_t sys_writev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     ssize_t res = 0;
     size_t offset = 0;
     for (unsigned i = 0; i < iovec_count; i++) {
-        if (user_read(iovec[i].base, buf + offset, iovec[i].len)) {
+        if (offset >= io_size)
+            break;
+        size_t copy_len = iovec[i].len;
+        if (offset + copy_len > io_size)
+            copy_len = io_size - offset;
+
+        if (user_read(iovec[i].base, buf + offset, copy_len)) {
             res = _EFAULT;
             goto error;
         }
 
-        size_t print_size = iovec[i].len;
+        size_t print_size = copy_len;
         if (print_size > 100) print_size = 100;
         STRACE(" {\"%.*s\", %u}", print_size, buf + offset, iovec[i].len);
-        offset += iovec[i].len;
+        offset += copy_len;
     }
     TASK_MAY_BLOCK {
-        res = sys_write_buf(fd_no, buf, io_size);
+        res = sys_write_buf(fd_no, buf, offset);
     }
 error:
     free(buf);
@@ -451,6 +475,8 @@ dword_t sys_lseek(fd_t f, dword_t off, dword_t whence) {
 
 dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     STRACE("pread(%d, 0x%x, %d, %d)", f, buf_addr, size, off);
+    if (size > MAX_RW_COUNT)
+        size = MAX_RW_COUNT;
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
@@ -490,6 +516,8 @@ out:
 
 dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     STRACE("pwrite(%d, 0x%x, %d, %d)", f, buf_addr, size, off);
+    if (size > MAX_RW_COUNT)
+        size = MAX_RW_COUNT;
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
