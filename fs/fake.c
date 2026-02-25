@@ -317,6 +317,15 @@ static ssize_t fakefs_readlink(struct mount *mount, const char *path, char *buf,
     return err;
 }
 
+static void fakefs_readdir_begin(struct fd *fd) {
+    struct fakefs_db *fs = &fd->mount->fakefs;
+    db_begin(fs);
+}
+static void fakefs_readdir_end(struct fd *fd) {
+    struct fakefs_db *fs = &fd->mount->fakefs;
+    db_commit(fs);
+}
+
 static int fakefs_readdir(struct fd *fd, struct dir_entry *entry) {
     assert(fd->ops == &fakefs_fdops);
     int res;
@@ -353,6 +362,8 @@ static struct fd_ops fakefs_fdops;
 static void __attribute__((constructor)) init_fake_fdops() {
     fakefs_fdops = realfs_fdops;
     fakefs_fdops.readdir = fakefs_readdir;
+    fakefs_fdops.readdir_begin = fakefs_readdir_begin;
+    fakefs_fdops.readdir_end = fakefs_readdir_end;
 }
 
 static int fakefs_mount(struct mount *mount) {

@@ -141,6 +141,10 @@ struct fd_ops {
     // Reads a directory entry from the stream
     // required for directories
     int (*readdir)(struct fd *fd, struct dir_entry *entry);
+    // Called before a sequence of readdir calls
+    void (*readdir_begin)(struct fd *fd);
+    // Called after a sequence of readdir calls
+    void (*readdir_end)(struct fd *fd);
     // Return an opaque value representing the current point in the directory stream
     // optional, fd->offset will be used instead
     unsigned long (*telldir)(struct fd *fd);

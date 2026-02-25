@@ -42,15 +42,22 @@ void db_exec_reset(struct fakefs_db *fs, sqlite3_stmt *stmt) {
 
 void db_begin(struct fakefs_db *fs) {
     sqlite3_mutex_enter(fs->lock);
-    db_exec_reset(fs, fs->stmt.begin);
+    if (fs->transaction_depth++ == 0)
+        db_exec_reset(fs, fs->stmt.begin);
 }
 void db_commit(struct fakefs_db *fs) {
-    db_exec_reset(fs, fs->stmt.commit);
+    if (--fs->transaction_depth == 0)
+        db_exec_reset(fs, fs->stmt.commit);
     sqlite3_mutex_leave(fs->lock);
 }
 void db_rollback(struct fakefs_db *fs) {
-    db_exec_reset(fs, fs->stmt.rollback);
-    sqlite3_mutex_leave(fs->lock);
+    if (fs->transaction_depth > 0) {
+        db_exec_reset(fs, fs->stmt.rollback);
+        while (fs->transaction_depth > 0) {
+            fs->transaction_depth--;
+            sqlite3_mutex_leave(fs->lock);
+        }
+    }
 }
 
 static void bind_path(sqlite3_stmt *stmt, int i, const char *path) {
@@ -248,7 +255,8 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     db_check_error(fs);
     sqlite3_finalize(statement);
 
-    fs->lock = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST);
+    fs->transaction_depth = 0;
+    fs->lock = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
     fs->stmt.begin = db_prepare(fs, "begin");
     fs->stmt.commit = db_prepare(fs, "commit");
     fs->stmt.rollback = db_prepare(fs, "rollback");
