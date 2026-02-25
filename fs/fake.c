@@ -339,9 +339,10 @@ retry:
     }
 
     struct fakefs_db *fs = &fd->mount->fakefs;
-    db_begin(fs);
+    // Optimization: Use mutex directly to avoid transaction overhead for read-only lookup
+    sqlite3_mutex_enter(fs->lock);
     entry->inode = path_get_inode(fs, entry_path);
-    db_commit(fs);
+    sqlite3_mutex_leave(fs->lock);
     // it's quite possible that due to some mishap there's no metadata for this file
     // so just skip this entry, instead of crashing the program, so there's hope for recovery
     if (entry->inode == 0)

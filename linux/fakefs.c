@@ -412,14 +412,16 @@ static int fakefs_iterate(struct file *file, struct dir_context *ctx) {
         } else if (strcmp(ent.name, "..") == 0) {
             ent.ino = d_inode(file->f_path.dentry->d_parent)->i_ino;
         } else {
-            db_begin(&info->db);
             const size_t namelen = strlen(ent.name) + 1;
             if (dir_path_len + 1 + namelen > PATH_MAX)
                 continue; // a
+
+            // Optimization: Use mutex directly to avoid transaction overhead for read-only lookup
+            sqlite3_mutex_enter(info->db.lock);
             dir_path[dir_path_len] = '/';
             memcpy(&dir_path[dir_path_len + 1], ent.name, namelen);
             ent.ino = path_get_inode(&info->db, dir_path);
-            db_commit(&info->db);
+            sqlite3_mutex_leave(info->db.lock);
         }
         if (!dir_emit(ctx, ent.name, strlen(ent.name), ent.ino, ent.type))
             break;
