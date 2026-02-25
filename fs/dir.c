@@ -68,6 +68,9 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
 
     dword_t orig_count = count;
 
+    if (fd->ops->readdir_begin)
+        fd->ops->readdir_begin(fd);
+
     long ptr;
     int err;
     int printed = 0;
@@ -78,7 +81,7 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
         struct dir_entry entry;
         err = fd->ops->readdir(fd, &entry);
         if (err < 0)
-            return err;
+            goto out;
         if (err == 0)
             break;
 
@@ -98,14 +101,21 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
 
         if (reclen > count)
             break;
-        if (user_write(dirents, dirent_data, reclen))
-            return _EFAULT;
+        if (user_write(dirents, dirent_data, reclen)) {
+            err = _EFAULT;
+            goto out;
+        }
         dirents += reclen;
         count -= reclen;
     }
 
     fd_seekdir(fd, ptr);
-    return orig_count - count;
+    err = orig_count - count;
+
+out:
+    if (fd->ops->readdir_end)
+        fd->ops->readdir_end(fd);
+    return err;
 }
 
 int_t sys_getdents(fd_t f, addr_t dirents, uint_t count) {
