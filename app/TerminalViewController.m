@@ -104,22 +104,22 @@
     // SF Symbols is cool
     if (@available(iOS 13, *)) {
         [self.infoButton setImage:[UIImage systemImageNamed:@"gear"] forState:UIControlStateNormal];
-        self.infoButton.accessibilityLabel = @"Settings";
         [self.pasteButton setImage:[UIImage systemImageNamed:@"doc.on.clipboard"] forState:UIControlStateNormal];
-        self.pasteButton.accessibilityLabel = @"Paste";
         [self.hideKeyboardButton setImage:[UIImage systemImageNamed:@"keyboard.chevron.compact.down"] forState:UIControlStateNormal];
-        self.hideKeyboardButton.accessibilityLabel = @"Hide Keyboard";
         
         [self.tabKey setTitle:nil forState:UIControlStateNormal];
         [self.tabKey setImage:[UIImage systemImageNamed:@"arrow.right.to.line.alt"] forState:UIControlStateNormal];
-        self.tabKey.accessibilityLabel = @"Tab";
         [self.controlKey setTitle:nil forState:UIControlStateNormal];
         [self.controlKey setImage:[UIImage systemImageNamed:@"control"] forState:UIControlStateNormal];
-        self.controlKey.accessibilityLabel = @"Control";
         [self.escapeKey setTitle:nil forState:UIControlStateNormal];
         [self.escapeKey setImage:[UIImage systemImageNamed:@"escape"] forState:UIControlStateNormal];
-        self.escapeKey.accessibilityLabel = @"Escape";
     }
+    self.infoButton.accessibilityLabel = @"Settings";
+    self.pasteButton.accessibilityLabel = @"Paste";
+    self.hideKeyboardButton.accessibilityLabel = @"Hide Keyboard";
+    self.tabKey.accessibilityLabel = @"Tab";
+    self.controlKey.accessibilityLabel = @"Control";
+    self.escapeKey.accessibilityLabel = @"Escape";
     
     [UserPreferences.shared observe:@[@"hideStatusBar"] options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
