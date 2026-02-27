@@ -1,6 +1,7 @@
 #include <stdarg.h>
 #include <limits.h>
 #include <string.h>
+#include <stdlib.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -318,10 +319,26 @@ static ssize_t fakefs_readlink(struct mount *mount, const char *path, char *buf,
 }
 
 static void fakefs_readdir_begin(struct fd *fd) {
+    // Optimization: Cache the directory path to avoid re-calculating it
+    // for every entry in fakefs_readdir.
+    // realfs_getpath can be expensive (syscalls, string ops).
+    char *path = malloc(MAX_PATH + 1);
+    if (path) {
+        if (realfs_getpath(fd, path) < 0) {
+            free(path);
+            path = NULL;
+        }
+    }
+    fd->fs_data = path;
     struct fakefs_db *fs = &fd->mount->fakefs;
     db_begin(fs);
 }
 static void fakefs_readdir_end(struct fd *fd) {
+    // Clean up the cached path
+    if (fd->fs_data) {
+        free(fd->fs_data);
+        fd->fs_data = NULL;
+    }
     struct fakefs_db *fs = &fd->mount->fakefs;
     db_commit(fs);
 }
@@ -336,7 +353,12 @@ retry:
 
     // this is annoying
     char entry_path[MAX_PATH + 1];
-    realfs_getpath(fd, entry_path);
+    // Use the cached path if available to save a syscall
+    if (fd->fs_data) {
+        strcpy(entry_path, (char *) fd->fs_data);
+    } else {
+        realfs_getpath(fd, entry_path);
+    }
     if (strcmp(entry->name, "..") == 0) {
         if (strcmp(entry_path, "") != 0) {
             *strrchr(entry_path, '/') = '\0';
