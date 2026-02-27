@@ -343,6 +343,8 @@ retry:
         }
     } else if (strcmp(entry->name, ".") != 0) {
         // god I don't know what to do if this would overflow
+        if (strlen(entry_path) + 1 + strlen(entry->name) >= sizeof(entry_path))
+            goto retry;
         strcat(entry_path, "/");
         strcat(entry_path, entry->name);
     }
