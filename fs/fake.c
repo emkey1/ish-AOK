@@ -342,7 +342,8 @@ retry:
             *strrchr(entry_path, '/') = '\0';
         }
     } else if (strcmp(entry->name, ".") != 0) {
-        // god I don't know what to do if this would overflow
+        if (strlen(entry_path) + 1 + strlen(entry->name) >= MAX_PATH)
+            goto retry;
         strcat(entry_path, "/");
         strcat(entry_path, entry->name);
     }
