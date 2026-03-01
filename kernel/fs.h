@@ -72,6 +72,7 @@ int access_check(struct statbuf *stat, int check);
 
 struct mount {
     const char *point;
+    size_t point_len;
     const char *source;
     const char *info;
     int flags;

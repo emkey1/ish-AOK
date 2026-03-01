@@ -13,7 +13,7 @@
 struct mount *find_mount_and_trim_path(char *path) {
     struct mount *mount = mount_find(path);
     char *dst = path;
-    const char *src = path + strlen(mount->point);
+    const char *src = path + mount->point_len;
     while (*src != '\0')
         *dst++ = *src++;
     *dst = '\0';
@@ -108,10 +108,12 @@ int generic_getpath(struct fd *fd, char *buf) {
         int err = fd->mount->fs->getpath(fd, buf);
         if (err < 0)
             return err;
-        if (strlen(buf) + strlen(fd->mount->point) >= MAX_PATH)
+        size_t point_len = fd->mount->point_len;
+        size_t buf_len = strlen(buf);
+        if (buf_len + point_len >= MAX_PATH)
             return _ENAMETOOLONG;
-        memmove(buf + strlen(fd->mount->point), buf, strlen(buf) + 1);
-        memcpy(buf, fd->mount->point, strlen(fd->mount->point));
+        memmove(buf + point_len, buf, buf_len + 1);
+        memcpy(buf, fd->mount->point, point_len);
         if (buf[0] == '\0')
             memcpy(buf, "/", 2);
         return 0;
