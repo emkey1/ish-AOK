@@ -87,6 +87,8 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
                 char *expanded_path = possible_symlink;
                 strcpy(expanded_path, out);
                 if (strcmp(p, "") != 0) {
+                    if (strlen(expanded_path) + 1 + strlen(p) >= MAX_PATH)
+                        return _ENAMETOOLONG;
                     strcat(expanded_path, "/");
                     strcat(expanded_path, p);
                 }
