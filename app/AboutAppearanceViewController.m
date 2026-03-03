@@ -218,7 +218,13 @@ enum {
                     cell.textLabel.text = @"Dark";
                     break;
             }
-            cell.accessoryType = indexPath.row == UserPreferences.shared.colorScheme ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+            if (indexPath.row == UserPreferences.shared.colorScheme) {
+                cell.accessoryType = UITableViewCellAccessoryCheckmark;
+                cell.accessibilityTraits |= UIAccessibilityTraitSelected;
+            } else {
+                cell.accessoryType = UITableViewCellAccessoryNone;
+                cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+            }
             break;
             
         case CursorSection:
