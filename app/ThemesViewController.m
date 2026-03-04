@@ -172,7 +172,13 @@ enum {
     }
     
     cell.textLabel.text = theme.name;
-    cell.accessoryType = [theme.name isEqualToString:self->_theme.name] && (!self->_preferUserTheme || indexPath.section == UserSection) ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+    BOOL selected = [theme.name isEqualToString:self->_theme.name] && (!self->_preferUserTheme || indexPath.section == UserSection);
+    cell.accessoryType = selected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+    if (selected) {
+        cell.accessibilityTraits |= UIAccessibilityTraitSelected;
+    } else {
+        cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+    }
     cell.textLabel.enabled = ![theme.name isEqualToString:self->_theme.name] || indexPath.section != DefaultSection || !self->_preferUserTheme;
     cell.editingAccessoryType = UITableViewCellAccessoryDisclosureIndicator;
     

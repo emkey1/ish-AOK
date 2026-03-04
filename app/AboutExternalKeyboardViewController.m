@@ -54,10 +54,14 @@ const int kCapsLockMappingSection = 0;
 }
 
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (indexPath.section == kCapsLockMappingSection && cell.tag == UserPreferences.shared.capsLockMapping)
+    BOOL selected = indexPath.section == kCapsLockMappingSection && cell.tag == UserPreferences.shared.capsLockMapping;
+    if (selected) {
         cell.accessoryType = UITableViewCellAccessoryCheckmark;
-    else
+        cell.accessibilityTraits |= UIAccessibilityTraitSelected;
+    } else {
         cell.accessoryType = UITableViewCellAccessoryNone;
+        cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+    }
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {

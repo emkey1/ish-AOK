@@ -206,7 +206,7 @@ enum {
             }
             break;
             
-        case ColorSchemeSection:
+        case ColorSchemeSection: {
             switch (indexPath.row) {
                 case 0:
                     cell.textLabel.text = @"Match System";
@@ -218,8 +218,15 @@ enum {
                     cell.textLabel.text = @"Dark";
                     break;
             }
-            cell.accessoryType = indexPath.row == UserPreferences.shared.colorScheme ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+            BOOL selected = indexPath.row == UserPreferences.shared.colorScheme;
+            cell.accessoryType = selected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+            if (selected) {
+                cell.accessibilityTraits |= UIAccessibilityTraitSelected;
+            } else {
+                cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+            }
             break;
+        }
             
         case CursorSection:
         case StatusBarSection:

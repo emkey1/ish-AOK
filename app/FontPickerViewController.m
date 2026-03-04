@@ -39,8 +39,13 @@
     cell.textLabel.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleBody] scaledFontForFont:font];
     cell.textLabel.adjustsFontForContentSizeCategory = YES;
     cell.textLabel.text = family;
-    if ([family isEqualToString:UserPreferences.shared.fontFamily])
-        cell.accessoryType = UITableViewCellAccessoryCheckmark;
+    BOOL selected = [family isEqualToString:UserPreferences.shared.fontFamily];
+    cell.accessoryType = selected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+    if (selected) {
+        cell.accessibilityTraits |= UIAccessibilityTraitSelected;
+    } else {
+        cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+    }
     return cell;
 }
 
