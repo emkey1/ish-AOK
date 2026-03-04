@@ -93,15 +93,32 @@ int user_read_string(addr_t addr, char *buf, size_t max) {
         return 1;
     }
     read_lock(&current->mem->lock);
+    addr_t p = addr;
     size_t i = 0;
     while (i < max) {
-        if (__user_read_task(current, addr + i, &buf[i], sizeof(buf[i]))) {
+        addr_t chunk_end = (PAGE(p) + 1) << PAGE_BITS;
+        size_t chunk_max = max - i;
+        if (chunk_end > p + chunk_max)
+            chunk_end = p + chunk_max;
+
+        const char *ptr = mem_ptr(current->mem, p, MEM_READ);
+        if (ptr == NULL) {
             read_unlock(&current->mem->lock);
             return 1;
         }
-        if (buf[i] == '\0')
-            break;
-        i++;
+
+        size_t chunk_len = chunk_end - p;
+        const char *null_pos = memchr(ptr, '\0', chunk_len);
+        if (null_pos != NULL) {
+            size_t copy_len = null_pos - ptr + 1;
+            memcpy(&buf[i], ptr, copy_len);
+            read_unlock(&current->mem->lock);
+            return 0;
+        }
+
+        memcpy(&buf[i], ptr, chunk_len);
+        i += chunk_len;
+        p += chunk_len;
     }
     read_unlock(&current->mem->lock);
     return 0;
@@ -112,14 +129,28 @@ int user_write_string(addr_t addr, const char *buf) {
         return 1;
     }
     read_lock(&current->mem->lock);
+    addr_t p = addr;
+    size_t len = strlen(buf) + 1; // +1 for null terminator
     size_t i = 0;
-    do {
-        if (__user_write_task(current, addr + i, &buf[i], sizeof(buf[i]), false)) {
+
+    while (i < len) {
+        addr_t chunk_end = (PAGE(p) + 1) << PAGE_BITS;
+        size_t chunk_max = len - i;
+        if (chunk_end > p + chunk_max)
+            chunk_end = p + chunk_max;
+
+        char *ptr = mem_ptr(current->mem, p, MEM_WRITE);
+        if (ptr == NULL) {
             read_unlock(&current->mem->lock);
             return 1;
         }
-        i++;
-    } while (buf[i - 1] != '\0');
+
+        size_t chunk_len = chunk_end - p;
+        memcpy(ptr, &buf[i], chunk_len);
+
+        i += chunk_len;
+        p += chunk_len;
+    }
     read_unlock(&current->mem->lock);
     return 0;
 }
