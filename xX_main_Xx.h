@@ -99,6 +99,8 @@ static inline int xX_main_Xx(int argc, char *const argv[], const char *envp) {
     size_t p = 0;
     while (i < argc) {
         const size_t arg_len = strlen(argv[i]) + 1;
+        if (p + arg_len > sizeof(argv_copy) - 1)
+            return _E2BIG;
         memcpy(&argv_copy[p], argv[i], arg_len);
         p += arg_len;
         i++;
