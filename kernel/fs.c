@@ -643,19 +643,14 @@ dword_t sys_getcwd(addr_t buf_addr, dword_t size) {
     if (err < 0)
         return err;
 
-    if (strlen(pwd) + 1 > size)
+    size_t pwd_len = strlen(pwd) + 1;
+    if (pwd_len > size)
         return _ERANGE;
-    size = strlen(pwd) + 1;
-    char *buf = malloc(size);
-    if (buf == NULL)
-        return _ENOMEM;
-    strcpy(buf, pwd);
-    STRACE(" \"%.*s\"", size, buf);
-    dword_t res = size;
-    if (user_write(buf_addr, buf, size))
-        res = _EFAULT;
-    free(buf);
-    return res;
+
+    STRACE(" \"%.*s\"", (int)pwd_len, pwd);
+    if (user_write(buf_addr, pwd, pwd_len))
+        return _EFAULT;
+    return pwd_len;
 }
 
 static struct fd *open_dir(const char *path) {
