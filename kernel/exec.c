@@ -544,7 +544,9 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     if (args_rest_size + extra_args_size >= ARGV_MAX)
         return _E2BIG;
 
-    char new_argv_buf[ARGV_MAX];
+    char *new_argv_buf = malloc(ARGV_MAX);
+    if (new_argv_buf == NULL)
+        return _ENOMEM;
     struct exec_args new_argv = {.args = new_argv_buf};
     size_t n = 0;
     strcpy(new_argv_buf, interpreter);
@@ -562,10 +564,13 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     new_argv.count += argv_rest.count;
 
     struct fd *interpreter_fd = generic_open(interpreter, O_RDONLY_, 0);
-    if (IS_ERR(interpreter_fd))
+    if (IS_ERR(interpreter_fd)) {
+        free(new_argv_buf);
         return (int)PTR_ERR(interpreter_fd);
+    }
     int err = format_exec(interpreter_fd, interpreter, new_argv, envp);
     fd_close(interpreter_fd);
+    free(new_argv_buf);
     return err;
 }
 
