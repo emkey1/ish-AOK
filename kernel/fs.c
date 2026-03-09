@@ -646,15 +646,13 @@ dword_t sys_getcwd(addr_t buf_addr, dword_t size) {
     if (strlen(pwd) + 1 > size)
         return _ERANGE;
     size = strlen(pwd) + 1;
-    char *buf = malloc(size);
-    if (buf == NULL)
-        return _ENOMEM;
-    strcpy(buf, pwd);
-    STRACE(" \"%.*s\"", size, buf);
+
+    // ⚡ Bolt: Removed redundant malloc/strcpy/free. `pwd` is already
+    // safely allocated on the stack (MAX_PATH + 1 size) and contains the string.
+    STRACE(" \"%.*s\"", size, pwd);
     dword_t res = size;
-    if (user_write(buf_addr, buf, size))
+    if (user_write(buf_addr, pwd, size))
         res = _EFAULT;
-    free(buf);
     return res;
 }
 
