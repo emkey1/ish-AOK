@@ -7,3 +7,8 @@
 **Vulnerability:** `user_read_string` contained a logic error where the return value of `__user_read_task` was discarded using the comma operator with `false` (`func(), false`), causing the error check to always fail (i.e., assume success).
 **Learning:** The comma operator can be dangerous when used in conditional statements, especially if it looks like a function argument or a typo. It can silently suppress error checks.
 **Prevention:** Always verify argument counts and parenthesis matching. Use static analysis tools that might catch "statement has no effect" or "comma operator used in if condition".
+
+## $(date +%Y-%m-%d) - Fix stack buffer overflow in `xX_main_Xx.h`
+**Vulnerability:** A `memcpy` call in `xX_main_Xx` was copying command line arguments into a fixed 4096 byte stack buffer `argv_copy` without checking the remaining buffer space. If the arguments were larger than 4096 bytes, a stack buffer overflow would occur.
+**Learning:** Command-line argument copying in `xX_main_Xx.h` into the `argv_copy` stack buffer requires explicit bounds checking against its 4096-byte limit to prevent stack buffer overflows from `argv`.
+**Prevention:** Always verify `len < max_size` when appending or copying dynamically sized strings to static buffers. Return standard error code like `_E2BIG` (Argument list too long) when boundaries are exceeded.
