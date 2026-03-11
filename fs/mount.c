@@ -44,7 +44,9 @@ struct mount *mount_find(char *path) {
     struct mount *mount = NULL;
     assert(!list_empty(&mounts)); // this would mean there's no root FS mounted
     list_for_each_entry(&mounts, mount, mounts) {
-        size_t n = strlen(mount->point);
+        // Bolt ⚡: use cached mount->point_len instead of strlen(mount->point) inside loop
+        // to avoid O(N^2) evaluation over multiple iterations
+        size_t n = mount->point_len;
         if (strncmp(path, mount->point, n) == 0 && (path[n] == '/' || path[n] == '\0'))
             break;
     }
@@ -90,7 +92,8 @@ int do_mount(const struct fs_ops *fs, const char *source, const char *point, con
     // the list must stay in descending order of mount point length
     struct mount *mount;
     list_for_each_entry(&mounts, mount, mounts) {
-        if (strlen(mount->point) <= strlen(new_mount->point))
+        // Bolt ⚡: use cached point_len instead of strlen() to avoid redundant traversals
+        if (mount->point_len <= new_mount->point_len)
             break;
     }
     list_add_before(&mount->mounts, &new_mount->mounts);
