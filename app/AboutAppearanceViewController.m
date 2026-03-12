@@ -219,6 +219,11 @@ enum {
                     break;
             }
             cell.accessoryType = indexPath.row == UserPreferences.shared.colorScheme ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+            if (cell.accessoryType == UITableViewCellAccessoryCheckmark) {
+                cell.accessibilityTraits |= UIAccessibilityTraitSelected;
+            } else {
+                cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+            }
             break;
             
         case CursorSection:
