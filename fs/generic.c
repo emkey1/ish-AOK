@@ -22,8 +22,10 @@ struct mount *find_mount_and_trim_path(char *path) {
 
 bool contains_mount_point(const char *path) {
     struct mount *mount;
+    // Bolt: Hoist strlen(path) outside the loop to avoid O(N) performance
+    // degradation during list traversals where N is number of mounts.
+    int n = strlen(path);
     list_for_each_entry(&mounts, mount, mounts) {
-        int n = strlen(path);
         if (strncmp(path, mount->point, n) == 0 &&
                 (mount->point[n] == '\0' || mount->point[n] == '/'))
             return true;
