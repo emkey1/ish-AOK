@@ -7,3 +7,8 @@
 **Vulnerability:** `user_read_string` contained a logic error where the return value of `__user_read_task` was discarded using the comma operator with `false` (`func(), false`), causing the error check to always fail (i.e., assume success).
 **Learning:** The comma operator can be dangerous when used in conditional statements, especially if it looks like a function argument or a typo. It can silently suppress error checks.
 **Prevention:** Always verify argument counts and parenthesis matching. Use static analysis tools that might catch "statement has no effect" or "comma operator used in if condition".
+
+## 2024-05-18 - Fix stack buffer overflow in argv copy
+**Vulnerability:** In `xX_main_Xx.h`, command-line arguments (`argv`) were iteratively copied into a fixed-size 4096-byte stack-allocated buffer (`argv_copy`) using a `while` loop, without verifying if the accumulated argument size exceeded the buffer's capacity. This lack of bounds checking could lead to a stack buffer overflow.
+**Learning:** Stack buffers used for collecting sequential user input or dynamic variables require explicit bounds checking at each iteration to ensure the total size does not exceed the buffer limits, avoiding potential memory corruption and control flow hijacking.
+**Prevention:** Always track the current offset and enforce bounds checks (e.g., `if (p + arg_len > sizeof(argv_copy) - 1)`) within loops that accumulate variable-length string data into fixed-size stack buffers. Return appropriate system error codes like `_E2BIG` when limits are exceeded.
