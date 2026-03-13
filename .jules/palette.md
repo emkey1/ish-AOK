@@ -5,3 +5,6 @@
 ## 2024-05-24 - Accessibility Availability Checks
 **Learning:** Accessibility properties like `accessibilityLabel` are often available in earlier iOS versions than visual features like SF Symbols. Wrapping them in `@available` checks for visual features unnecessarily restricts accessibility on older OS versions.
 **Action:** Separate accessibility configuration from version-specific visual setup to ensure broader support.
+## 2026-03-13 - Table Cell Selection State Accessibility
+**Learning:** When using `UITableViewCellAccessoryCheckmark` to indicate selection, VoiceOver users will not be informed of the state change. `UIAccessibilityTraitSelected` must be manually toggled.
+**Action:** Always manually toggle `UIAccessibilityTraitSelected` alongside checkmark accessory types on table cells.
