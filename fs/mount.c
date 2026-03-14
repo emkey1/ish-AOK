@@ -127,10 +127,15 @@ int do_umount(const char *point) {
 
 // FIXME: this is shit
 bool mount_param_flag(const char *info, const char *flag) {
+    size_t flag_len = strlen(flag);
     while (*info != '\0') {
-        if (strncmp(info, flag, strlen(flag)) == 0)
-            return true;
+        if (strncmp(info, flag, flag_len) == 0) {
+            // ensure it's a full word match, not a prefix match (e.g. "ro" shouldn't match "rootfs")
+            if (info[flag_len] == ',' || info[flag_len] == '\0')
+                return true;
+        }
         info += strcspn(info, ",");
+        if (*info == ',') info++; // skip the comma
     }
     return false;
 }

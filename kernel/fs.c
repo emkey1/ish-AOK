@@ -643,9 +643,10 @@ dword_t sys_getcwd(addr_t buf_addr, dword_t size) {
     if (err < 0)
         return err;
 
-    if (strlen(pwd) + 1 > size)
+    size_t pwd_len = strlen(pwd);
+    if (pwd_len + 1 > size)
         return _ERANGE;
-    size = strlen(pwd) + 1;
+    size = pwd_len + 1;
     char *buf = malloc(size);
     if (buf == NULL)
         return _ENOMEM;

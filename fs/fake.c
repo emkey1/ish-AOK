@@ -365,10 +365,12 @@ retry:
         }
     } else if (strcmp(entry->name, ".") != 0) {
         // god I don't know what to do if this would overflow
-        if (strlen(entry_path) + 1 + strlen(entry->name) >= sizeof(entry_path))
+        size_t path_len = strlen(entry_path);
+        size_t name_len = strlen(entry->name);
+        if (path_len + 1 + name_len >= sizeof(entry_path))
             goto retry;
-        strcat(entry_path, "/");
-        strcat(entry_path, entry->name);
+        entry_path[path_len] = '/';
+        memcpy(entry_path + path_len + 1, entry->name, name_len + 1);
     }
 
     struct fakefs_db *fs = &fd->mount->fakefs;

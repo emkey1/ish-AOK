@@ -85,12 +85,13 @@ int_t sys_getdents_common(fd_t f, addr_t dirents, dword_t count,
         if (err == 0)
             break;
 
-        size_t max_reclen = sizeof(struct linux_dirent64_) + strlen(entry.name) + 4;
+        const char *name = entry.name;
+        size_t namelen = strlen(name);
+        size_t max_reclen = sizeof(struct linux_dirent64_) + namelen + 4;
         char dirent_data[max_reclen];
         dirent_data[0] = 0;
         ino_t inode = entry.inode;
         off_t_ offset = fd_telldir(fd);
-        const char *name = entry.name;
         int type = 0;
         size_t reclen = fill_dirent(dirent_data, inode, offset, name, type);
         if (printed < 20) {
