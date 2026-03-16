@@ -263,7 +263,7 @@ dword_t sys_read(fd_t fd_no, addr_t buf_addr, dword_t size) {
     if (size > MAX_RW_COUNT)
         size = MAX_RW_COUNT;
 
-    char stack_buf[256];
+    char stack_buf[256] __attribute__((aligned(16)));
     char *buf = stack_buf;
     if (size > sizeof(stack_buf)) {
         buf = (char *) malloc(size);
@@ -309,7 +309,7 @@ dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
     if (size > MAX_RW_COUNT)
         size = MAX_RW_COUNT;
 
-    char stack_buf[256];
+    char stack_buf[256] __attribute__((aligned(16)));
     char *buf = stack_buf;
     if (size > sizeof(stack_buf)) {
         buf = malloc(size);
@@ -372,10 +372,14 @@ dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     size_t io_size = iovec_size(iovec, iovec_count);
     if (io_size > MAX_RW_COUNT)
         io_size = MAX_RW_COUNT;
-    char *buf = malloc(io_size);
-    if (buf == NULL) {
-        free(iovec);
-        return _ENOMEM;
+    char stack_buf[256] __attribute__((aligned(16)));
+    char *buf = stack_buf;
+    if (io_size > sizeof(stack_buf)) {
+        buf = malloc(io_size);
+        if (buf == NULL) {
+            free(iovec);
+            return _ENOMEM;
+        }
     }
     ssize_t res = 0;
     TASK_MAY_BLOCK {
@@ -404,7 +408,7 @@ dword_t sys_readv(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     }
 
 error:
-    free(buf);
+    if (buf != stack_buf) free(buf);
     free(iovec);
     return res;
 }
@@ -417,10 +421,14 @@ dword_t sys_writev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
     size_t io_size = iovec_size(iovec, iovec_count);
     if (io_size > MAX_RW_COUNT)
         io_size = MAX_RW_COUNT;
-    char *buf = malloc(io_size);
-    if (buf == NULL) {
-        free(iovec);
-        return _ENOMEM;
+    char stack_buf[256] __attribute__((aligned(16)));
+    char *buf = stack_buf;
+    if (io_size > sizeof(stack_buf)) {
+        buf = malloc(io_size);
+        if (buf == NULL) {
+            free(iovec);
+            return _ENOMEM;
+        }
     }
 
     ssize_t res = 0;
@@ -446,7 +454,7 @@ dword_t sys_writev(fd_t fd_no, addr_t iovec_addr, dword_t iovec_count) {
         res = sys_write_buf(fd_no, buf, offset);
     }
 error:
-    free(buf);
+    if (buf != stack_buf) free(buf);
     free(iovec);
     return res;
 }
@@ -492,7 +500,7 @@ dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     if (fd == NULL)
         return _EBADF;
 
-    char stack_buf[256];
+    char stack_buf[256] __attribute__((aligned(16)));
     char *buf = stack_buf;
     if (size >= sizeof(stack_buf)) {
         buf = malloc(size+1);
@@ -539,7 +547,7 @@ dword_t sys_pwrite(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
     if (fd == NULL)
         return _EBADF;
 
-    char stack_buf[256];
+    char stack_buf[256] __attribute__((aligned(16)));
     char *buf = stack_buf;
     if (size >= sizeof(stack_buf)) {
         buf = malloc(size+1);
