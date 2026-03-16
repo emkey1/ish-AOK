@@ -7,3 +7,8 @@
 **Vulnerability:** `user_read_string` contained a logic error where the return value of `__user_read_task` was discarded using the comma operator with `false` (`func(), false`), causing the error check to always fail (i.e., assume success).
 **Learning:** The comma operator can be dangerous when used in conditional statements, especially if it looks like a function argument or a typo. It can silently suppress error checks.
 **Prevention:** Always verify argument counts and parenthesis matching. Use static analysis tools that might catch "statement has no effect" or "comma operator used in if condition".
+
+## 2026-02-24 - Kernel Stack DoS via Large Stack Allocations
+**Vulnerability:** A local variable `char new_argv_buf[ARGV_MAX];` allocated 128KB on the kernel stack in `shebang_exec` (`kernel/exec.c`). Given strict kernel stack limits, an attacker could trigger a stack overflow by executing a shebang script, leading to a Denial of Service (DoS) or potential arbitrary code execution within the kernel environment.
+**Learning:** Massive constants like `ARGV_MAX` (128KB) should never be used to allocate arrays on the stack due to tight stack limitations, even for short-lived operations.
+**Prevention:** Large buffers must be dynamically allocated on the heap using `malloc()` with proper `NULL` checks, and they must be freed on all execution paths to prevent memory leaks while avoiding stack overflow DoS vulnerabilities.
