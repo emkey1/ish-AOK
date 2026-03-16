@@ -5,3 +5,7 @@
 ## 2024-05-24 - Accessibility Availability Checks
 **Learning:** Accessibility properties like `accessibilityLabel` are often available in earlier iOS versions than visual features like SF Symbols. Wrapping them in `@available` checks for visual features unnecessarily restricts accessibility on older OS versions.
 **Action:** Separate accessibility configuration from version-specific visual setup to ensure broader support.
+
+## 2026-03-16 - UITableViewCell Accessibility and Reuse
+**Learning:** When reusing `UITableViewCell` instances, it is critical to explicitly reset accessibility traits (like `UIAccessibilityTraitSelected`) and visual states (like `accessoryType`) for unselected cells, otherwise VoiceOver and the visual UI will announce/show incorrect states on recycled cells.
+**Action:** Always provide an `else` block to clear selection state (`accessoryType = UITableViewCellAccessoryNone` and `traits &= ~UIAccessibilityTraitSelected`) when configuring recycled table view cells.
