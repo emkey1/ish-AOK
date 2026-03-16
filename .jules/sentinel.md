@@ -7,3 +7,11 @@
 **Vulnerability:** `user_read_string` contained a logic error where the return value of `__user_read_task` was discarded using the comma operator with `false` (`func(), false`), causing the error check to always fail (i.e., assume success).
 **Learning:** The comma operator can be dangerous when used in conditional statements, especially if it looks like a function argument or a typo. It can silently suppress error checks.
 **Prevention:** Always verify argument counts and parenthesis matching. Use static analysis tools that might catch "statement has no effect" or "comma operator used in if condition".
+
+## 2024-05-23 - Buffer Overflow in boot_command_line assignment
+**Vulnerability:**
+The `boot_command_line` buffer could be overflowed in `app/LinuxInterop.c` via unbounded `strcpy` when executing `actuate_kernel(cmdline)`, and in `linux/main.c` via unbounded `strcat` when parsing arguments.
+**Learning:**
+Always use bounding functions (`strncpy` or `strncat`) when interacting with `boot_command_line` buffer or other static arrays to prevent buffer overflows that could lead to malicious code execution or kernel crash.
+**Prevention:**
+Enforce strict bounds checking. `strncpy(dest, src, sizeof(dest) - 1); dest[sizeof(dest) - 1] = '\0';` and `strncat(dest, src, sizeof(dest) - strlen(dest) - 1);` should be used instead of their unbounded counterparts.

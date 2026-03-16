@@ -28,7 +28,8 @@
 extern void run_kernel(void);
 
 void actuate_kernel(const char *cmdline) {
-    strcpy(boot_command_line, cmdline);
+    strncpy(boot_command_line, cmdline, sizeof(boot_command_line) - 1);
+    boot_command_line[sizeof(boot_command_line) - 1] = '\0';
     run_kernel();
 }
 

@@ -10,8 +10,8 @@ int main(int argc, const char *argv[])
 	int i;
 	for (i = 1; i < argc; i++) {
 		if (i > 1)
-			strcat(boot_command_line, " ");
-		strcat(boot_command_line, argv[i]);
+			strncat(boot_command_line, " ", sizeof(boot_command_line) - strlen(boot_command_line) - 1);
+		strncat(boot_command_line, argv[i], sizeof(boot_command_line) - strlen(boot_command_line) - 1);
 	}
 	run_kernel();
 	for (;;) host_pause();
