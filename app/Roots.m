@@ -126,6 +126,24 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
         *should_cancel = true;
 }
 
+static NSError *errorForFakefsError(struct fakefsify_error fs_err) {
+    if (fs_err.type == ERR_CANCELLED) {
+        free(fs_err.message);
+        return nil;
+    }
+
+    NSString *domain = NSPOSIXErrorDomain;
+    if (fs_err.type == ERR_SQLITE)
+        domain = @"SQLite";
+
+    NSError *err = [NSError errorWithDomain:domain
+                                       code:fs_err.code
+                                   userInfo:@{NSLocalizedDescriptionKey:
+                                                  [NSString stringWithFormat:@"%s, line %d", fs_err.message, fs_err.line]}];
+    free(fs_err.message);
+    return err;
+}
+
 - (BOOL)importRootFromArchive:(NSURL *)archive name:(NSString *)name error:(NSError **)error progressReporter:(id<ProgressReporter> _Nullable)progress {
     NSAssert(![self.roots containsObject:name], @"root already exists: %@", name);
     struct fakefsify_error fs_err;
@@ -137,16 +155,9 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
     if (!fakefs_import(archive.fileSystemRepresentation,
                        tempDestination.fileSystemRepresentation,
                        &fs_err, (struct progress) {(__bridge void *) progress, root_progress_callback})) {
-        NSString *domain = NSPOSIXErrorDomain;
-        if (fs_err.type == ERR_SQLITE)
-            domain = @"SQLite";
-        *error = [NSError errorWithDomain:domain
-                                     code:fs_err.code
-                                 userInfo:@{NSLocalizedDescriptionKey:
-                                                [NSString stringWithFormat:@"%s, line %d", fs_err.message, fs_err.line]}];
-        if (fs_err.type == ERR_CANCELLED)
-            *error = nil;
-        free(fs_err.message);
+        NSError *err = errorForFakefsError(fs_err);
+        if (error)
+            *error = err;
         [NSFileManager.defaultManager removeItemAtURL:tempDestination error:nil];
         return NO;
     }
@@ -169,16 +180,9 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
     if (!fakefs_export([self rootUrl:name].fileSystemRepresentation,
                        archive.fileSystemRepresentation,
                        &fs_err, (struct progress) {(__bridge void *) progress, root_progress_callback})) {
-        // TODO: dedup with above method
-        NSString *domain = NSPOSIXErrorDomain;
-        if (fs_err.type == ERR_SQLITE)
-            domain = @"SQLite";
-        *error = [NSError errorWithDomain:domain
-                                     code:fs_err.code
-                                 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:fs_err.message]}];
-        if (fs_err.type == ERR_CANCELLED)
-            *error = nil;
-        free(fs_err.message);
+        NSError *err = errorForFakefsError(fs_err);
+        if (error)
+            *error = err;
         return NO;
     }
     return YES;
