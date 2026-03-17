@@ -44,7 +44,8 @@ struct mount *mount_find(char *path) {
     struct mount *mount = NULL;
     assert(!list_empty(&mounts)); // this would mean there's no root FS mounted
     list_for_each_entry(&mounts, mount, mounts) {
-        size_t n = strlen(mount->point);
+        // Optimization: Use cached point_len instead of strlen(mount->point)
+        size_t n = mount->point_len;
         if (strncmp(path, mount->point, n) == 0 && (path[n] == '/' || path[n] == '\0'))
             break;
     }
@@ -90,7 +91,8 @@ int do_mount(const struct fs_ops *fs, const char *source, const char *point, con
     // the list must stay in descending order of mount point length
     struct mount *mount;
     list_for_each_entry(&mounts, mount, mounts) {
-        if (strlen(mount->point) <= strlen(new_mount->point))
+        // Optimization: Use cached point_len to avoid O(N) calculations in list traversal
+        if (mount->point_len <= new_mount->point_len)
             break;
     }
     list_add_before(&mount->mounts, &new_mount->mounts);
@@ -127,10 +129,15 @@ int do_umount(const char *point) {
 
 // FIXME: this is shit
 bool mount_param_flag(const char *info, const char *flag) {
+    // Optimization: Hoist strlen(flag) to avoid recalculating it inside the loop
+    size_t flag_len = strlen(flag);
     while (*info != '\0') {
-        if (strncmp(info, flag, strlen(flag)) == 0)
+        // Corrected logic: Verify exact prefix match and then properly advance past the comma
+        if (strncmp(info, flag, flag_len) == 0 && (info[flag_len] == ',' || info[flag_len] == '\0'))
             return true;
         info += strcspn(info, ",");
+        if (*info == ',')
+            info++;
     }
     return false;
 }
