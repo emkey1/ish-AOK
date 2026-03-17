@@ -131,6 +131,7 @@
     self.authorButton.titleLabel.adjustsFontForContentSizeCategory = YES;
 
     self.isAccessibilityElement = YES;
+    self.accessibilityTraits |= UIAccessibilityTraitButton;
     self.accessibilityCustomActions = @[[[UIAccessibilityCustomAction alloc] initWithName:@"Open link" target:self selector:@selector(openSource:)]];
 }
 
@@ -148,7 +149,11 @@
 - (void)setSelected:(BOOL)selected {
     [super setSelected:selected];
     self.checkboxImageView.hidden = !selected;
-    self.accessibilityTraits = selected ? UIAccessibilityTraitSelected : 0;
+    if (selected) {
+        self.accessibilityTraits |= UIAccessibilityTraitSelected;
+    } else {
+        self.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+    }
 }
 
 @end
