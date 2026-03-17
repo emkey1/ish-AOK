@@ -15,7 +15,9 @@ int_t sys_prctl(dword_t option, uint_t arg2, uint_t UNUSED(arg3), uint_t UNUSED(
                 return _EFAULT;
             name[sizeof(name) - 1] = '\0';
             STRACE("prctl(PRCTL_SET_NAME, \"%s\")", name);
-            strcpy(current->comm, name);
+            lock(&current->general_lock, 0);
+            strncpy(current->comm, name, sizeof(current->comm));
+            unlock(&current->general_lock);
             return 0;
         }
         default:
