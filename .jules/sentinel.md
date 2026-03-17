@@ -12,3 +12,8 @@
 **Vulnerability:** A local variable `char new_argv_buf[ARGV_MAX];` allocated 128KB on the kernel stack in `shebang_exec` (`kernel/exec.c`). Given strict kernel stack limits, an attacker could trigger a stack overflow by executing a shebang script, leading to a Denial of Service (DoS) or potential arbitrary code execution within the kernel environment.
 **Learning:** Massive constants like `ARGV_MAX` (128KB) should never be used to allocate arrays on the stack due to tight stack limitations, even for short-lived operations.
 **Prevention:** Large buffers must be dynamically allocated on the heap using `malloc()` with proper `NULL` checks, and they must be freed on all execution paths to prevent memory leaks while avoiding stack overflow DoS vulnerabilities.
+
+## 2026-03-17 - Thread Name Data Race and Unprotected Write
+**Vulnerability:** In `kernel/misc.c`, the `sys_prctl` syscall updated `current->comm` (the thread name) via `strcpy` without holding the necessary lock (`current->general_lock`), which could lead to data races with concurrent readers.
+**Learning:** Thread name updates must always be protected by the `general_lock` and should ideally use bounded copy functions like `strncpy` for defense-in-depth, even if the input string is known to be null-terminated.
+**Prevention:** Ensure that access to `current->comm` is properly synchronized across all syscalls and kernel paths. Use `strncpy` to prevent accidental buffer overflows if the target buffer size ever changes.
