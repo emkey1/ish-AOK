@@ -17,3 +17,8 @@
 **Vulnerability:** In `kernel/misc.c`, the `sys_prctl` syscall updated `current->comm` (the thread name) via `strcpy` without holding the necessary lock (`current->general_lock`), which could lead to data races with concurrent readers.
 **Learning:** Thread name updates must always be protected by the `general_lock` and should ideally use bounded copy functions like `strncpy` for defense-in-depth, even if the input string is known to be null-terminated.
 **Prevention:** Ensure that access to `current->comm` is properly synchronized across all syscalls and kernel paths. Use `strncpy` to prevent accidental buffer overflows if the target buffer size ever changes.
+
+## 2026-03-24 - Buffer Overflow in get_filesystems
+**Vulnerability:** The `get_filesystems` function in `fs/mount.c` used a fixed-size buffer (`calloc(MAX_FILESYSTEMS * 50)`) and consecutive `strcat` calls. If the names of registered filesystems were large enough, this would result in a heap buffer overflow.
+**Learning:** Fixed-size buffers with string concatenations in a loop are inherently prone to overflows, especially if the loop iterations or string lengths can grow over time. Even if seemingly "reasonable", they are fragile and create technical debt.
+**Prevention:** Use a two-pass approach for dynamic string accumulation: first, iterate to calculate the exact total length required; second, allocate the exact memory (`malloc` with a `NULL` check) and populate it (e.g., using pointer advancement and `memcpy`). This eliminates `strcat` entirely and ensures memory safety without arbitrary limitations.
