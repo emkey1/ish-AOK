@@ -9,3 +9,7 @@
 ## 2024-05-26 - Redundant string operations in VFS loops
 **Learning:** Functions like `strlen()` are frequently re-evaluated inside VFS list traversals (e.g., `list_for_each_entry` in `fs/mount.c` and `fs/generic.c`), causing unnecessary O(N) recalculations for loop-invariant variables. Some structures like `struct mount` already cache string lengths (e.g., `point_len`), but these are sometimes ignored in favor of re-running `strlen()`.
 **Action:** When working on VFS path matching or list traversals, hoist loop-invariant `strlen()` calls outside loops, and always utilize pre-cached lengths in structs (like `mount->point_len`) to prevent performance degradation during deep traversals.
+
+## 2026-03-18 - Optimize string concatenation in fakefs_readdir
+**Learning:** In performance-critical VFS loops like fakefs_readdir, using strcat causes O(N) recalculations of string length. Since the lengths of the directory path and entry name are already known or computed for bounds checking, they can be reused to perform direct array assignment and memcpy.
+**Action:** Replace O(N) strcat calls with direct array assignment (e.g., path[len] = '/') and memcpy() using pre-calculated string lengths to prevent performance degradation during directory traversal.
