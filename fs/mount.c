@@ -24,16 +24,33 @@ void fs_register(const struct fs_ops *fs) {
 }
 
 char * get_filesystems(void) {
-    char *fs_list = calloc(MAX_FILESYSTEMS * 50, sizeof(char)); // Reasonable assumption?
     unsigned int i;
+    size_t total_len = 0;
 
+    // Pass 1: Calculate the exact length required
     for (i = 0; i < MAX_FILESYSTEMS; i++) {
         if (filesystems[i] != NULL) {
-            fs_list = strcat(fs_list, "nodev    ");
-            fs_list = strcat(fs_list, filesystems[i]->name);
-            fs_list = strcat(fs_list, "\n");
+            total_len += strlen("nodev    ") + strlen(filesystems[i]->name) + 1; // +1 for newline
         }
     }
+
+    // Pass 2: Allocate and populate the buffer
+    char *fs_list = malloc(total_len + 1); // +1 for null terminator
+    if (fs_list == NULL)
+        return NULL;
+
+    char *ptr = fs_list;
+    for (i = 0; i < MAX_FILESYSTEMS; i++) {
+        if (filesystems[i] != NULL) {
+            size_t name_len = strlen(filesystems[i]->name);
+            memcpy(ptr, "nodev    ", 9);
+            ptr += 9;
+            memcpy(ptr, filesystems[i]->name, name_len);
+            ptr += name_len;
+            *ptr++ = '\n';
+        }
+    }
+    *ptr = '\0';
 
     return fs_list;
 }
