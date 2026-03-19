@@ -13,3 +13,7 @@
 ## 2026-03-18 - Optimize string concatenation in fakefs_readdir
 **Learning:** In performance-critical VFS loops like fakefs_readdir, using strcat causes O(N) recalculations of string length. Since the lengths of the directory path and entry name are already known or computed for bounds checking, they can be reused to perform direct array assignment and memcpy.
 **Action:** Replace O(N) strcat calls with direct array assignment (e.g., path[len] = '/') and memcpy() using pre-calculated string lengths to prevent performance degradation during directory traversal.
+
+## 2026-03-22 - Optimize single-character NSString creation
+**Learning:** In `app/TerminalView.m`, the `addKeys:withModifiers:` method is a performance bottleneck for input processing. The method historically used `[NSString stringWithFormat:@"%c", keys[i]]` inside a loop, which is computationally expensive because it involves format string parsing and dynamic evaluation for every character.
+**Action:** Replace the expensive `stringWithFormat:` call with `[[NSString alloc] initWithBytes:&keys[i] length:1 encoding:NSUTF8StringEncoding]` (with a fallback to `stringWithFormat:` for invalid UTF-8 sequences) for direct byte-to-string mapping, significantly speeding up key binding initialization during the application's startup and layout phases.

@@ -591,7 +591,14 @@ static const char *metaKeys = "abcdefghijklmnopqrstuvwxyz0123456789-=[]\\;',./";
 
 - (void)addKeys:(const char *)keys withModifiers:(UIKeyModifierFlags)modifiers {
     for (size_t i = 0; keys[i] != '\0'; i++) {
-        [self addKey:[NSString stringWithFormat:@"%c", keys[i]] withModifiers:modifiers];
+        // Bolt: Optimize single-character NSString creation.
+        // initWithBytes is significantly faster than parsing a format string
+        // via stringWithFormat: in a tight initialization loop.
+        NSString *keyStr = [[NSString alloc] initWithBytes:&keys[i] length:1 encoding:NSUTF8StringEncoding];
+        if (!keyStr) {
+            keyStr = [NSString stringWithFormat:@"%c", keys[i]];
+        }
+        [self addKey:keyStr withModifiers:modifiers];
     }
 }
 
