@@ -22,3 +22,8 @@
 **Vulnerability:** The `get_filesystems` function in `fs/mount.c` used a fixed-size buffer (`calloc(MAX_FILESYSTEMS * 50)`) and consecutive `strcat` calls. If the names of registered filesystems were large enough, this would result in a heap buffer overflow.
 **Learning:** Fixed-size buffers with string concatenations in a loop are inherently prone to overflows, especially if the loop iterations or string lengths can grow over time. Even if seemingly "reasonable", they are fragile and create technical debt.
 **Prevention:** Use a two-pass approach for dynamic string accumulation: first, iterate to calculate the exact total length required; second, allocate the exact memory (`malloc` with a `NULL` check) and populate it (e.g., using pointer advancement and `memcpy`). This eliminates `strcat` entirely and ensures memory safety without arbitrary limitations.
+
+## 2026-03-24 - Buffer Overflow in Command Line Arguments Copy
+**Vulnerability:** In `xX_main_Xx.h`, the array `argv_copy` was statically sized at 4096 bytes. The arguments loop used `memcpy` to copy user-supplied inputs from `argv` directly into `argv_copy` based strictly on `strlen(argv[i])` without ensuring the total size remained within 4096 bytes. This allowed a stack buffer overflow by passing large command-line arguments.
+**Learning:** Hardcoded stack buffer limits with unchecked string accumulations are a critical vulnerability vector, especially for command-line arguments which are easily controlled by external actors.
+**Prevention:** Always implement explicit bounds checking before performing string copies or concatenations into stack-allocated buffers. Return appropriate errors (e.g., `_E2BIG`) if the boundary is exceeded.
