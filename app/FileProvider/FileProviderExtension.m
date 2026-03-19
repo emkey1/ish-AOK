@@ -413,12 +413,7 @@
         if (inode == 0)
             continue;
 
-        // TODO: make this a function in fake-db.c
-        db_begin(&_mount.db);
-        sqlite3_bind_int64(_mount.db.stmt.inode_read_stat, 1, inode);
-        BOOL exists = db_exec(&_mount.db, _mount.db.stmt.inode_read_stat);
-        db_reset(&_mount.db, _mount.db.stmt.inode_read_stat);
-        db_rollback(&_mount.db);
+        BOOL exists = inode_exists(&_mount.db, inode);
 
         if (!exists) {
             NSLog(@"removing dead inode %llu", inode);

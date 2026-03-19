@@ -97,6 +97,15 @@ inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     return inode;
 }
 
+bool inode_exists(struct fakefs_db *fs, inode_t inode) {
+    db_begin(fs);
+    sqlite3_bind_int64(fs->stmt.inode_read_stat, 1, inode);
+    bool exists = db_exec(fs, fs->stmt.inode_read_stat);
+    db_reset(fs, fs->stmt.inode_read_stat);
+    db_rollback(fs);
+    return exists;
+}
+
 void inode_read_stat(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat) {
     // select stat from stats where inode = ?
     sqlite3_bind_int64(fs->stmt.inode_read_stat, 1, inode);
