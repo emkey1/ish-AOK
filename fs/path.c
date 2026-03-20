@@ -19,9 +19,12 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
         return _ENOENT;
 
     if (at_path != NULL && strcmp(at_path, "/") != 0) {
-        strcpy(o, at_path);
-        n -= strlen(at_path);
-        o += strlen(at_path);
+        // Bolt: Hoist strlen() and replace strcpy/strlen/strlen with memcpy
+        // to avoid multiple O(N) traversals of the same string.
+        size_t at_path_len = strlen(at_path);
+        memcpy(o, at_path, at_path_len + 1);
+        n -= at_path_len;
+        o += at_path_len;
     }
 
     while (*p == '/')
@@ -85,12 +88,16 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
                 if (*c == '/')
                     memmove(out, c, strlen(c) + 1);
                 char *expanded_path = possible_symlink;
-                strcpy(expanded_path, out);
-                if (strcmp(p, "") != 0) {
-                    if (strlen(expanded_path) + 1 + strlen(p) >= MAX_PATH)
+                // Bolt: Optimize string concatenation by tracking lengths and using
+                // memcpy instead of multiple strcat calls which cause O(N^2) behavior.
+                size_t out_len = strlen(out);
+                memcpy(expanded_path, out, out_len + 1);
+                if (*p != '\0') {
+                    size_t p_len = strlen(p);
+                    if (out_len + 1 + p_len >= MAX_PATH)
                         return _ENAMETOOLONG;
-                    strcat(expanded_path, "/");
-                    strcat(expanded_path, p);
+                    expanded_path[out_len] = '/';
+                    memcpy(expanded_path + out_len + 1, p, p_len + 1);
                 }
                 return __path_normalize(NULL, expanded_path, out, flags, levels + 1);
             }
