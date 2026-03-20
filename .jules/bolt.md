@@ -17,3 +17,6 @@
 ## 2026-03-22 - Optimize single-character NSString creation
 **Learning:** In `app/TerminalView.m`, the `addKeys:withModifiers:` method is a performance bottleneck for input processing. The method historically used `[NSString stringWithFormat:@"%c", keys[i]]` inside a loop, which is computationally expensive because it involves format string parsing and dynamic evaluation for every character.
 **Action:** Replace the expensive `stringWithFormat:` call with `[[NSString alloc] initWithBytes:&keys[i] length:1 encoding:NSUTF8StringEncoding]` (with a fallback to `stringWithFormat:` for invalid UTF-8 sequences) for direct byte-to-string mapping, significantly speeding up key binding initialization during the application's startup and layout phases.
+## 2026-03-23 - Avoid strcat in __path_normalize
+**Learning:** In `__path_normalize` (`fs/path.c`), using `strcat` when computing symlink resolutions causes O(N) calculations, and calling `strlen` repeatedly on unchanged source strings incurs unnecessary overhead.
+**Action:** Replace `strcpy` and `strcat` with explicit length calculations and `memcpy`. Hoist `strlen` calls outside of paths that evaluate the same variable multiple times.
