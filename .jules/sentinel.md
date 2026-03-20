@@ -27,3 +27,8 @@
 **Vulnerability:** In `xX_main_Xx.h`, the array `argv_copy` was statically sized at 4096 bytes. The arguments loop used `memcpy` to copy user-supplied inputs from `argv` directly into `argv_copy` based strictly on `strlen(argv[i])` without ensuring the total size remained within 4096 bytes. This allowed a stack buffer overflow by passing large command-line arguments.
 **Learning:** Hardcoded stack buffer limits with unchecked string accumulations are a critical vulnerability vector, especially for command-line arguments which are easily controlled by external actors.
 **Prevention:** Always implement explicit bounds checking before performing string copies or concatenations into stack-allocated buffers. Return appropriate errors (e.g., `_E2BIG`) if the boundary is exceeded.
+
+## 2026-03-25 - Buffer Overflow in getpath format
+**Vulnerability:** `fs/real.c` used a 20-byte buffer for formatting `/proc/self/fd/%d`, but the path prefix is 14 bytes and a 32-bit signed int can be 11 bytes, requiring at least 26 bytes. This allows a stack buffer overflow for very large file descriptors.
+**Learning:** Hardcoded buffer sizes for path formatting often fail to account for the maximum string length of integers.
+**Prevention:** Always allocate at least 32 bytes for paths containing PIDs or FDs, and consider using `snprintf` to avoid overflow entirely.
