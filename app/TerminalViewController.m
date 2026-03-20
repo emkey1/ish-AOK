@@ -115,11 +115,17 @@
         [self.escapeKey setImage:[UIImage systemImageNamed:@"escape"] forState:UIControlStateNormal];
     }
     self.infoButton.accessibilityLabel = @"Settings";
+    self.infoButton.accessibilityHint = @"Opens the application settings.";
     self.pasteButton.accessibilityLabel = @"Paste";
+    self.pasteButton.accessibilityHint = @"Pastes text from the clipboard.";
     self.hideKeyboardButton.accessibilityLabel = @"Hide Keyboard";
+    self.hideKeyboardButton.accessibilityHint = @"Dismisses the on-screen keyboard.";
     self.tabKey.accessibilityLabel = @"Tab";
+    self.tabKey.accessibilityHint = @"Sends a tab character.";
     self.controlKey.accessibilityLabel = @"Control";
+    self.controlKey.accessibilityHint = @"Toggles the control key modifier.";
     self.escapeKey.accessibilityLabel = @"Escape";
+    self.escapeKey.accessibilityHint = @"Sends an escape character.";
     
     [UserPreferences.shared observe:@[@"hideStatusBar"] options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
