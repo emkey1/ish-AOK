@@ -21,8 +21,8 @@
 
 static int getpath(int fd, char *buf) {
 #if defined(__linux__)
-    char proc_fd[20];
-    sprintf(proc_fd, "/proc/self/fd/%d", fd);
+    char proc_fd[32];
+    snprintf(proc_fd, sizeof(proc_fd), "/proc/self/fd/%d", fd);
     ssize_t size = readlink(proc_fd, buf, MAX_PATH - 1);
     if (size >= 0)
         buf[size] = '\0';
