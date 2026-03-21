@@ -20,3 +20,6 @@
 ## 2026-03-23 - Avoid strcat in __path_normalize
 **Learning:** In `__path_normalize` (`fs/path.c`), using `strcat` when computing symlink resolutions causes O(N) calculations, and calling `strlen` repeatedly on unchanged source strings incurs unnecessary overhead.
 **Action:** Replace `strcpy` and `strcat` with explicit length calculations and `memcpy`. Hoist `strlen` calls outside of paths that evaluate the same variable multiple times.
+## 2026-03-24 - Optimize dynamic string construction
+**Learning:** In `fs/proc/ish.c`, the `parse_if_flags` function used `strcat` to append strings dynamically, which causes O(N) traversal to find the end of the string for every append.
+**Action:** Replace `strcat` in dynamic string construction with `memcpy` using pre-calculated string lengths. By keeping track of the current string length `len`, appending becomes an O(1) operation.
