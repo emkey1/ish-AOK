@@ -180,6 +180,8 @@ char *get_ip_str(const struct sockaddr *sa, char *s, socklen_t maxlen) {
 #include <stdlib.h>
 #include <net/if.h>  // for the IFF_* flags
 
+#define FLAG_MAP_ENTRY(f, s) { f, s, sizeof(s) - 1 }
+
 char *parse_if_flags(int flags) {
     int first = 1;
     char *build_string = malloc(200);
@@ -188,34 +190,36 @@ char *parse_if_flags(int flags) {
         return NULL; // Allocation failed
     }
     
-    build_string[0] = '\0'; // Initialize the string
-    
     struct {
         int flag;
         const char *str;
+        size_t len;
     } flag_str_map[] = {
-        {IFF_UP, "UP"},
-        {IFF_BROADCAST, "BROADCAST"},
-        {IFF_DEBUG, "DEBUG"},
-        {IFF_LOOPBACK, "LOOPBACK"},
-        {IFF_POINTOPOINT, "POINTOPOINT"},
-        {IFF_NOTRAILERS, "NOTRAILERS"},
-        {IFF_RUNNING, "RUNNING"},
-        {IFF_NOARP, "NOARP"},
-        {IFF_PROMISC, "PROMISC"},
-        {IFF_ALLMULTI, "ALLMULTI"},
-        {IFF_MULTICAST, "MULTICAST"},
+        FLAG_MAP_ENTRY(IFF_UP, "UP"),
+        FLAG_MAP_ENTRY(IFF_BROADCAST, "BROADCAST"),
+        FLAG_MAP_ENTRY(IFF_DEBUG, "DEBUG"),
+        FLAG_MAP_ENTRY(IFF_LOOPBACK, "LOOPBACK"),
+        FLAG_MAP_ENTRY(IFF_POINTOPOINT, "POINTOPOINT"),
+        FLAG_MAP_ENTRY(IFF_NOTRAILERS, "NOTRAILERS"),
+        FLAG_MAP_ENTRY(IFF_RUNNING, "RUNNING"),
+        FLAG_MAP_ENTRY(IFF_NOARP, "NOARP"),
+        FLAG_MAP_ENTRY(IFF_PROMISC, "PROMISC"),
+        FLAG_MAP_ENTRY(IFF_ALLMULTI, "ALLMULTI"),
+        FLAG_MAP_ENTRY(IFF_MULTICAST, "MULTICAST"),
     };
 
+    size_t len = 0;
     for (int i = 0; i < sizeof(flag_str_map)/sizeof(flag_str_map[0]); ++i) {
         if (flags & flag_str_map[i].flag) {
             if (!first) {
-                strcat(build_string, ",");
+                build_string[len++] = ',';
             }
-            strcat(build_string, flag_str_map[i].str);
+            memcpy(build_string + len, flag_str_map[i].str, flag_str_map[i].len);
+            len += flag_str_map[i].len;
             first = 0;
         }
     }
+    build_string[len] = '\0';
 
     return build_string;
 }
@@ -253,8 +257,14 @@ static int proc_ish_show_ips(struct proc_entry *UNUSED(entry), struct proc_data 
             }
 
             char int_flags[250];
-            strncpy(int_flags, parse_if_flags(cursor->ifa_flags), sizeof(int_flags));
-            int_flags[sizeof(int_flags) - 1] = '\0';
+            char *parsed_flags = parse_if_flags(cursor->ifa_flags);
+            if (parsed_flags) {
+                strncpy(int_flags, parsed_flags, sizeof(int_flags));
+                int_flags[sizeof(int_flags) - 1] = '\0';
+                free(parsed_flags);
+            } else {
+                int_flags[0] = '\0';
+            }
             
             proc_printf(buf, "%-10.10s   %-40s   %-40s   %-8s  %-60s\n",
                         cursor->ifa_name,
