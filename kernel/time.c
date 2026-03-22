@@ -11,6 +11,7 @@
 #include "kernel/resource.h"
 #include "kernel/time.h"
 #include "fs/poll.h"
+#include "util/timer.h"
 #include <sys/poll.h>
 
 static int clockid_to_real(uint_t clock, clockid_t *real) {
@@ -44,21 +45,93 @@ static struct itimerspec_ timer_spec_from_real(struct timer_spec spec) {
     return itspec;
 };
 
-#include <time.h>
-#include <sys/syscall.h>
+#define TIMER_ABSTIME_ (1 << 0)
 
-dword_t sys_clock_nanosleep_time64(__attribute__((unused)) int clock_id, __attribute__((unused)) int flags, dword_t req_val, dword_t rem_val) {
-    struct timespec req;
-    struct timespec rem;
+static int timespec_is_valid(struct timespec ts) {
+    return ts.tv_sec >= 0 && ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000;
+}
 
-    // Cast the received values to timespec structures
-    memcpy(&req, &req_val, sizeof(req));
-    memcpy(&rem, &rem_val, sizeof(rem));
+static struct timespec timespec_from_guest(struct timespec_ ts) {
+    return (struct timespec) {
+        .tv_sec = ts.sec,
+        .tv_nsec = ts.nsec,
+    };
+}
 
-    // Call nanosleep with pointers to the local timespec structures
-    dword_t result = nanosleep(&req, &rem);
+static struct timespec timespec_from_guest64(struct timespec64_ ts) {
+    return (struct timespec) {
+        .tv_sec = ts.sec,
+        .tv_nsec = ts.nsec,
+    };
+}
 
-    return result;
+static struct timespec_ timespec_to_guest(struct timespec ts) {
+    return (struct timespec_) {
+        .sec = (dword_t) ts.tv_sec,
+        .nsec = (dword_t) ts.tv_nsec,
+    };
+}
+
+static struct timespec64_ timespec_to_guest64(struct timespec ts) {
+    return (struct timespec64_) {
+        .sec = ts.tv_sec,
+        .nsec = ts.tv_nsec,
+    };
+}
+
+static dword_t clock_nanosleep_common(dword_t clock, int_t flags, struct timespec req,
+        addr_t rem_addr, bool rem_time64) {
+    clockid_t clock_id;
+    if (clockid_to_real(clock, &clock_id))
+        return _EINVAL;
+    if (flags & ~TIMER_ABSTIME_)
+        return _EINVAL;
+    if (!timespec_is_valid(req))
+        return _EINVAL;
+
+    struct timespec rem = {0};
+    if (flags & TIMER_ABSTIME_) {
+        req = timespec_subtract(req, timespec_now(clock_id));
+        if (!timespec_positive(req))
+            return 0;
+    }
+
+    int res;
+    TASK_MAY_BLOCK {
+        res = nanosleep(&req, &rem);
+    }
+    if (res < 0)
+        return errno_map();
+
+    if (rem_addr != 0 && !(flags & TIMER_ABSTIME_)) {
+        if (rem_time64) {
+            struct timespec64_ rem_ts = timespec_to_guest64(rem);
+            if (user_put(rem_addr, rem_ts))
+                return _EFAULT;
+        } else {
+            struct timespec_ rem_ts = timespec_to_guest(rem);
+            if (user_put(rem_addr, rem_ts))
+                return _EFAULT;
+        }
+    }
+    return 0;
+}
+
+dword_t sys_clock_nanosleep(dword_t clock_id, int_t flags, addr_t req_addr, addr_t rem_addr) {
+    struct timespec_ req_ts;
+    if (user_get(req_addr, req_ts))
+        return _EFAULT;
+    STRACE("clock_nanosleep(%d, %#x, {%u, %u}, %#x)", clock_id, flags, req_ts.sec, req_ts.nsec, rem_addr);
+    return clock_nanosleep_common(clock_id, flags, timespec_from_guest(req_ts), rem_addr, false);
+}
+
+dword_t sys_clock_nanosleep_time64(dword_t clock_id, int_t flags, addr_t req_addr, addr_t rem_addr) {
+    struct timespec64_ req_ts;
+    if (user_get(req_addr, req_ts))
+        return _EFAULT;
+    STRACE("clock_nanosleep_time64(%d, %#x, {%lld, %lld}, %#x)", clock_id, flags,
+            (long long) req_ts.sec, (long long) req_ts.nsec, rem_addr);
+    return clock_nanosleep_common(clock_id, flags, timespec_from_guest64(req_ts), rem_addr, true);
 }
 
 dword_t sys_ppoll_time64(struct pollfd *fds, nfds_t nfds, const struct timespec64 *timeout_ts64) {
@@ -115,9 +188,7 @@ dword_t sys_clock_gettime(dword_t clock, addr_t tp) {
         if (err < 0)
             return errno_map();
     }
-    struct timespec_ t;
-    t.sec = (dword_t)ts.tv_sec;
-    t.nsec = (dword_t)ts.tv_nsec;
+    struct timespec_ t = timespec_to_guest(ts);
     
     if (user_put(tp, t))
         return _EFAULT;
@@ -141,13 +212,7 @@ dword_t sys_clock_gettime64(dword_t clock, addr_t tp) {
         if (err < 0)
             return errno_map();
     }
-    struct timespec64_ {
-        int64_t sec;  // Use 64-bit type for seconds
-        int64_t nsec; // Use 64-bit type for nanoseconds, assuming timespec64_ is defined
-    } t;
-    
-    t.sec = ts.tv_sec;  // No need to cast to 64-bit type as tv_sec is already time_t which is 64-bit on most systems
-    t.nsec = ts.tv_nsec;
+    struct timespec64_ t = timespec_to_guest64(ts);
     
     if (user_put(tp, t))
         return _EFAULT;
@@ -165,9 +230,23 @@ dword_t sys_clock_getres(dword_t clock, addr_t res_addr) {
     int err = clock_getres(clock_id, &res);
     if (err < 0)
         return errno_map();
-    struct timespec_ t;
-    t.sec = (dword_t)res.tv_sec;
-    t.nsec = (dword_t)res.tv_nsec;
+    struct timespec_ t = timespec_to_guest(res);
+    if (user_put(res_addr, t))
+        return _EFAULT;
+    return 0;
+}
+
+dword_t sys_clock_getres_time64(dword_t clock, addr_t res_addr) {
+    STRACE("clock_getres_time64(%d, %#x)", clock, res_addr);
+    clockid_t clock_id;
+    if (clockid_to_real(clock, &clock_id))
+        return _EINVAL;
+
+    struct timespec res;
+    int err = clock_getres(clock_id, &res);
+    if (err < 0)
+        return errno_map();
+    struct timespec64_ t = timespec_to_guest64(res);
     if (user_put(res_addr, t))
         return _EFAULT;
     return 0;
@@ -393,8 +472,6 @@ int_t sys_timer_create(dword_t clock, addr_t sigevent_addr, addr_t timer_addr) {
     unlock(&group->lock);
     return 0;
 }
-
-#define TIMER_ABSTIME_ (1 << 0)
 
 int_t sys_timer_settime(dword_t timer_id, int_t flags, addr_t new_value_addr, addr_t old_value_addr) {
     STRACE("timer_settime(%d, %d, %#x, %#x)", timer_id, flags, new_value_addr, old_value_addr);

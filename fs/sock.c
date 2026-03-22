@@ -687,6 +687,12 @@ int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
     // IP_MTU_DISCOVER has no equivalent on Darwin
     if (level == IPPROTO_IP && option == IP_MTU_DISCOVER_)
         return 0;
+    // Modern glibc enables asynchronous ICMP reporting for DNS sockets and
+    // treats failure here as fatal. Darwin has no Linux error-queue equivalent,
+    // so accept the option as a no-op instead of returning EINVAL.
+    if ((level == IPPROTO_IP && option == IP_RECVERR_) ||
+            (level == IPPROTO_IPV6 && option == IPV6_RECVERR_))
+        return 0;
     // TCP_CONGESTION also has no equivalent on Darwin
 #if defined(__APPLE__)
     if (level == IPPROTO_TCP && option == TCP_CONGESTION_) {
@@ -1117,6 +1123,28 @@ struct mmsghdr_ {
     uint_t len;
 };
 
+int_t sys_recvmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags, addr_t UNUSED(timeout_addr)) {
+    int num_received = 0;
+    int recv_flags = flags;
+    for (unsigned i = 0; i < vec_len; i++) {
+        addr_t msghdr = msg_vec + i * sizeof(struct mmsghdr_);
+        int_t res = sys_recvmsg(sock_fd, msghdr, recv_flags);
+        if (res >= 0) {
+            addr_t msg_len_addr = msghdr + offsetof(struct mmsghdr_, len);
+            if (user_put(msg_len_addr, res))
+                res = _EFAULT;
+        }
+        if (res < 0) {
+            if (num_received > 0)
+                break;
+            return res;
+        }
+        num_received++;
+        recv_flags |= MSG_DONTWAIT_;
+    }
+    return num_received;
+}
+
 int_t sys_sendmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags) {
     int num_sent = 0;
     for (unsigned i = 0; i < vec_len; i++) {
@@ -1233,7 +1261,7 @@ static struct socket_call {
     {(syscall_t) sys_sendmsg, 3},
     {(syscall_t) sys_recvmsg, 3},
     {NULL}, // accept4 (18)
-    {NULL}, // recvmmsg
+    {(syscall_t) sys_recvmmsg, 5},
     {(syscall_t) sys_sendmmsg, 4},
 };
 

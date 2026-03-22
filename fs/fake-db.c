@@ -42,22 +42,15 @@ void db_exec_reset(struct fakefs_db *fs, sqlite3_stmt *stmt) {
 
 void db_begin(struct fakefs_db *fs) {
     sqlite3_mutex_enter(fs->lock);
-    if (fs->transaction_depth++ == 0)
-        db_exec_reset(fs, fs->stmt.begin);
+    db_exec_reset(fs, fs->stmt.begin);
 }
 void db_commit(struct fakefs_db *fs) {
-    if (--fs->transaction_depth == 0)
-        db_exec_reset(fs, fs->stmt.commit);
+    db_exec_reset(fs, fs->stmt.commit);
     sqlite3_mutex_leave(fs->lock);
 }
 void db_rollback(struct fakefs_db *fs) {
-    if (fs->transaction_depth > 0) {
-        db_exec_reset(fs, fs->stmt.rollback);
-        while (fs->transaction_depth > 0) {
-            fs->transaction_depth--;
-            sqlite3_mutex_leave(fs->lock);
-        }
-    }
+    db_exec_reset(fs, fs->stmt.rollback);
+    sqlite3_mutex_leave(fs->lock);
 }
 
 static void bind_path(sqlite3_stmt *stmt, int i, const char *path) {
@@ -98,11 +91,11 @@ inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *sta
 }
 
 bool inode_exists(struct fakefs_db *fs, inode_t inode) {
-    db_begin(fs);
+    sqlite3_mutex_enter(fs->lock);
     sqlite3_bind_int64(fs->stmt.inode_read_stat, 1, inode);
     bool exists = db_exec(fs, fs->stmt.inode_read_stat);
     db_reset(fs, fs->stmt.inode_read_stat);
-    db_rollback(fs);
+    sqlite3_mutex_leave(fs->lock);
     return exists;
 }
 
@@ -264,8 +257,7 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     db_check_error(fs);
     sqlite3_finalize(statement);
 
-    fs->transaction_depth = 0;
-    fs->lock = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
+    fs->lock = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST);
     fs->stmt.begin = db_prepare(fs, "begin");
     fs->stmt.commit = db_prepare(fs, "commit");
     fs->stmt.rollback = db_prepare(fs, "rollback");

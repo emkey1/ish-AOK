@@ -10,7 +10,8 @@ struct timespec64 {
 };
 
 dword_t sys_ppoll_time64(struct pollfd *fds, nfds_t nfds, const struct timespec64 *timeout_ts64);
-dword_t sys_clock_nanosleep_time64(int clock_id, int flags, dword_t req_val, dword_t rem_val);
+dword_t sys_clock_nanosleep(dword_t clock_id, int_t flags, addr_t req_addr, addr_t rem_addr);
+dword_t sys_clock_nanosleep_time64(dword_t clock_id, int_t flags, addr_t req_addr, addr_t rem_addr);
 dword_t sys_clock_gettime64(dword_t clock, addr_t tp);
 dword_t sys_time(addr_t time_out);
 dword_t sys_stime(addr_t time);
@@ -21,6 +22,7 @@ dword_t sys_stime(addr_t time);
 dword_t sys_clock_gettime(dword_t clock, addr_t tp);
 dword_t sys_clock_settime(dword_t clock, addr_t tp);
 dword_t sys_clock_getres(dword_t clock, addr_t res_addr);
+dword_t sys_clock_getres_time64(dword_t clock, addr_t res_addr);
 
 struct timeval_ {
     dword_t sec;
@@ -29,6 +31,10 @@ struct timeval_ {
 struct timespec_ {
     dword_t sec;
     dword_t nsec;
+};
+struct timespec64_ {
+    int64_t sec;
+    int64_t nsec;
 };
 struct timezone_ {
     dword_t minuteswest;

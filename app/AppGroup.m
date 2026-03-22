@@ -7,10 +7,9 @@
 
 #import "AppGroup.h"
 #import <Foundation/Foundation.h>
-#import <mach-o/ldsyms.h>
+#import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <mach-o/getsect.h>
-#import <dlfcn.h>
 
 #define CSMAGIC_EMBEDDED_SIGNATURE 0xfade0cc0
 #define CSMAGIC_EMBEDDED_ENTITLEMENTS 0xfade7171
@@ -33,11 +32,30 @@ struct cs_entitlements {
     char entitlements[];
 };
 
+static const struct mach_header_64 *MainExecutableHeader(void) {
+    NSString *expectedPath = NSBundle.mainBundle.executablePath.stringByResolvingSymlinksInPath;
+    if (expectedPath == nil)
+        return NULL;
+
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+        const char *imageName = _dyld_get_image_name(i);
+        if (imageName == NULL)
+            continue;
+        NSString *loadedPath = [[NSString stringWithUTF8String:imageName] stringByResolvingSymlinksInPath];
+        if ([loadedPath isEqualToString:expectedPath])
+            return (const struct mach_header_64 *) _dyld_get_image_header(i);
+    }
+
+    return (const struct mach_header_64 *) _dyld_get_image_header(0);
+}
+
 static NSDictionary *AppEntitlements(void) {
     static NSDictionary *entitlements = nil;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        const struct mach_header_64 *header = &_mh_execute_header;
+        const struct mach_header_64 *header = MainExecutableHeader();
+        if (header == NULL)
+            return;
         
         // Check for entitlements in the __entitlements section (common in simulators)
         size_t entitlements_size;
@@ -72,19 +90,29 @@ static NSDictionary *AppEntitlements(void) {
         [fileHandle seekToFileOffset:cs_lc->dataoff];
         NSData *csData = [fileHandle readDataOfLength:cs_lc->datasize];
         [fileHandle closeFile];
+        if (csData.length < sizeof(struct cs_superblob))
+            return;
         const struct cs_superblob *cs = csData.bytes;
         if (ntohl(cs->magic) != CSMAGIC_EMBEDDED_SIGNATURE)
             return;
 
         NSData *entitlementsData = nil;
         for (uint32_t i = 0; i < ntohl(cs->count); i++) {
-            struct cs_entitlements *ents = (void *) ((char *) cs + ntohl(cs->index[i].offset));
+            size_t blob_offset = ntohl(cs->index[i].offset);
+            if (blob_offset > csData.length || csData.length - blob_offset < sizeof(struct cs_entitlements))
+                return;
+            struct cs_entitlements *ents = (void *) ((char *) cs + blob_offset);
 
             // Read the magic number in a way that does not assume alignment
             uint32_t magic;
             memcpy(&magic, &ents->magic, sizeof(uint32_t));
-            if (ntohl(ents->magic) == CSMAGIC_EMBEDDED_ENTITLEMENTS) {
-                entitlementsData = [NSData dataWithBytes:ents->entitlements length:ntohl(ents->length) - offsetof(struct cs_entitlements, entitlements)];
+            uint32_t length;
+            memcpy(&length, &ents->length, sizeof(uint32_t));
+            length = ntohl(length);
+            if (length < offsetof(struct cs_entitlements, entitlements) || blob_offset + length > csData.length)
+                return;
+            if (ntohl(magic) == CSMAGIC_EMBEDDED_ENTITLEMENTS) {
+                entitlementsData = [NSData dataWithBytes:ents->entitlements length:length - offsetof(struct cs_entitlements, entitlements)];
                 break; // Entitlements found
             }
         }

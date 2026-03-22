@@ -271,9 +271,18 @@ void SyncHostname(void) {
     
     current = pid_get_task(1);
     struct fd *fd = generic_open("/etc/resolv.conf", O_WRONLY_ | O_CREAT_ | O_TRUNC_, 0666);
+    if (IS_ERR(fd) && PTR_ERR(fd) == _ENOENT) {
+        // Newer roots often ship /etc/resolv.conf as a symlink into /run.
+        // If that target tree does not exist in the guest, replace the symlink
+        // with a plain file so libc can still resolve names.
+        generic_unlinkat(AT_PWD, "/etc/resolv.conf");
+        fd = generic_open("/etc/resolv.conf", O_WRONLY_ | O_CREAT_ | O_TRUNC_, 0666);
+    }
     if (!IS_ERR(fd)) {
         fd->ops->write(fd, resolvConf.UTF8String, [resolvConf lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
         fd_close(fd);
+    } else {
+        NSLog(@"failed to write /etc/resolv.conf: %d", PTR_ERR(fd));
     }
 #endif
 }

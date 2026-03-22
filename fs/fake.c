@@ -1,7 +1,6 @@
 #include <stdarg.h>
 #include <limits.h>
 #include <string.h>
-#include <stdlib.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -318,31 +317,6 @@ static ssize_t fakefs_readlink(struct mount *mount, const char *path, char *buf,
     return err;
 }
 
-static void fakefs_readdir_begin(struct fd *fd) {
-    // Optimization: Cache the directory path to avoid re-calculating it
-    // for every entry in fakefs_readdir.
-    // realfs_getpath can be expensive (syscalls, string ops).
-    char *path = malloc(MAX_PATH + 1);
-    if (path) {
-        if (realfs_getpath(fd, path) < 0) {
-            free(path);
-            path = NULL;
-        }
-    }
-    fd->fs_data = path;
-    struct fakefs_db *fs = &fd->mount->fakefs;
-    db_begin(fs);
-}
-static void fakefs_readdir_end(struct fd *fd) {
-    // Clean up the cached path
-    if (fd->fs_data) {
-        free(fd->fs_data);
-        fd->fs_data = NULL;
-    }
-    struct fakefs_db *fs = &fd->mount->fakefs;
-    db_commit(fs);
-}
-
 static int fakefs_readdir(struct fd *fd, struct dir_entry *entry) {
     assert(fd->ops == &fakefs_fdops);
     int res;
@@ -353,12 +327,7 @@ retry:
 
     // this is annoying
     char entry_path[MAX_PATH + 1];
-    // Use the cached path if available to save a syscall
-    if (fd->fs_data) {
-        strcpy(entry_path, (char *) fd->fs_data);
-    } else {
-        realfs_getpath(fd, entry_path);
-    }
+    realfs_getpath(fd, entry_path);
     if (strcmp(entry->name, "..") == 0) {
         if (strcmp(entry_path, "") != 0) {
             *strrchr(entry_path, '/') = '\0';
@@ -374,10 +343,9 @@ retry:
     }
 
     struct fakefs_db *fs = &fd->mount->fakefs;
-    // Optimization: Use mutex directly to avoid transaction overhead for read-only lookup
-    sqlite3_mutex_enter(fs->lock);
+    db_begin(fs);
     entry->inode = path_get_inode(fs, entry_path);
-    sqlite3_mutex_leave(fs->lock);
+    db_commit(fs);
     // it's quite possible that due to some mishap there's no metadata for this file
     // so just skip this entry, instead of crashing the program, so there's hope for recovery
     if (entry->inode == 0)
@@ -389,8 +357,6 @@ static struct fd_ops fakefs_fdops;
 static void __attribute__((constructor)) init_fake_fdops() {
     fakefs_fdops = realfs_fdops;
     fakefs_fdops.readdir = fakefs_readdir;
-    fakefs_fdops.readdir_begin = fakefs_readdir_begin;
-    fakefs_fdops.readdir_end = fakefs_readdir_end;
 }
 
 static int fakefs_mount(struct mount *mount) {

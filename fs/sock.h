@@ -26,6 +26,7 @@ int_t sys_setsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_a
 int_t sys_getsockopt(fd_t sock_fd, dword_t level, dword_t option, addr_t value_addr, dword_t len_addr);
 int_t sys_sendmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags);
 int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags);
+int_t sys_recvmmsg(fd_t sock_fd, addr_t msgvec_addr, uint_t msgvec_len, int_t flags, addr_t timeout_addr);
 int_t sys_sendmmsg(fd_t sock_fd, addr_t msgvec_addr, uint_t msgvec_len, int_t flags);
 
 #define SOCKADDR_DATA_MAX 108
@@ -190,6 +191,7 @@ static inline int sock_flags_from_real(int real) {
 #define IP_HDRINCL_ 3
 #define IP_RETOPTS_ 7
 #define IP_MTU_DISCOVER_ 10
+#define IP_RECVERR_ 11
 #define IP_RECVTTL_ 12
 #define IP_RECVTOS_ 13
 #define TCP_NODELAY_ 1
@@ -197,6 +199,7 @@ static inline int sock_flags_from_real(int real) {
 #define TCP_INFO_ 11
 #define TCP_CONGESTION_ 13
 #define IPV6_UNICAST_HOPS_ 16
+#define IPV6_RECVERR_ 25
 #define IPV6_V6ONLY_ 26
 #define IPV6_TCLASS_ 67
 #define ICMP6_FILTER_ 1

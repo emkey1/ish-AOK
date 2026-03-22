@@ -24,7 +24,6 @@ struct fakefs_db {
         sqlite3_stmt *try_cleanup_inode;
     } stmt;
     sqlite3_mutex *lock;
-    int transaction_depth;
 };
 
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd);
