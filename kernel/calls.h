@@ -30,6 +30,8 @@ int must_check user_write_string(addr_t addr, const char *buf);
 
 // process lifecycle
 dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t ctid);
+dword_t sys_clone3(addr_t uargs_addr, dword_t size);
+dword_t sys_unshare(dword_t flags);
 dword_t sys_fork(void);
 dword_t sys_vfork(void);
 ssize_t sys_execve(addr_t file, addr_t argv, addr_t envp);
@@ -102,15 +104,22 @@ struct pollfd_ {
 dword_t sys_poll(addr_t fds, dword_t nfds, int_t timeout);
 dword_t sys_select(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t exceptfds_addr, addr_t timeout_addr);
 dword_t sys_pselect(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t exceptfds_addr, addr_t timeout_addr, addr_t sigmask_addr);
+dword_t sys_pselect_time64(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t exceptfds_addr, addr_t timeout_addr, addr_t sigmask_addr);
 dword_t sys_ppoll(addr_t fds, dword_t nfds, addr_t timeout_addr, addr_t sigmask_addr, dword_t sigsetsize);
 fd_t sys_epoll_create(int_t flags);
 fd_t sys_epoll_create0(void);
 int_t sys_epoll_ctl(fd_t epoll, int_t op, fd_t fd, addr_t event_addr);
 int_t sys_epoll_wait(fd_t epoll, addr_t events_addr, int_t max_events, int_t timeout);
 int_t sys_epoll_pwait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t timeout, addr_t sigmask_addr, dword_t sigsetsize);
+int_t sys_epoll_pwait2(fd_t epoll_f, addr_t events_addr, int_t max_events, addr_t timeout_addr, addr_t sigmask_addr, dword_t sigsetsize);
 
 int_t sys_eventfd2(uint_t initval, int_t flags);
 int_t sys_eventfd(uint_t initval);
+int_t sys_inotify_init(void);
+int_t sys_inotify_init1(int_t flags);
+int_t sys_inotify_add_watch(fd_t fd, addr_t pathname_addr, uint_t mask);
+int_t sys_inotify_rm_watch(fd_t fd, int_t wd);
+int_t sys_memfd_create(addr_t name_addr, uint_t flags);
 
 // file management
 fd_t sys_open(addr_t path_addr, dword_t flags, mode_t_ mode);
@@ -266,6 +275,7 @@ dword_t sys_sysinfo(addr_t info_addr);
 
 // futexes
 dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2, addr_t uaddr2, dword_t val3);
+dword_t sys_futex_time64(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2, addr_t uaddr2, dword_t val3);
 int_t sys_set_robust_list(addr_t robust_list, dword_t len);
 int_t sys_get_robust_list(pid_t_ pid, addr_t robust_list_ptr, addr_t len_ptr);
 

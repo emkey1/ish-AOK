@@ -1,10 +1,12 @@
 #include "debug.h"
+#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include "kernel/calls.h"
 #include "kernel/errno.h"
 #include "kernel/task.h"
 #include "kernel/fs.h"
+#include "kernel/inotify.h"
 #include "fs/fd.h"
 #include "fs/path.h"
 #include "fs/dev.h"
@@ -299,6 +301,22 @@ dword_t sys_mknod(addr_t path_addr, mode_t_ mode, dev_t_ dev) {
     return sys_mknodat(AT_FDCWD_, path_addr, mode, dev);
 }
 
+static bool apt_trace_describe_fd(struct fd *fd, char *desc, size_t size, bool *interesting) {
+    *interesting = false;
+    if (fd->mount != NULL && fd->mount->fs != NULL && fd->mount->fs->getpath != NULL) {
+        if (generic_getpath(fd, desc) == 0) {
+            if (strncmp(desc, "anon_inode:", strlen("anon_inode:")) == 0)
+                *interesting = true;
+            return true;
+        }
+    }
+    snprintf(desc, size, "type=%#x real=%d mode=%#x mount=%p",
+        fd->type, fd->real_fd, fd->stat.mode, (void *) fd->mount);
+    if (fd->mount == NULL || S_ISFIFO(fd->type) || S_ISSOCK(fd->type))
+        *interesting = true;
+    return false;
+}
+
 static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
@@ -318,10 +336,41 @@ static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
         return _EBADF;
     }
 
+    if (res < 0 && (strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "http") == 0)) {
+        char desc[MAX_PATH];
+        bool interesting = false;
+        apt_trace_describe_fd(fd, desc, sizeof(desc), &interesting);
+        if (interesting || (strcmp(current->comm, "http") == 0 && fd_no <= 2))
+            printk("APTTRACE read_err pid=%d comm=%s fd=%d desc=%s err=%zd\n",
+                current->pid, current->comm, fd_no, desc, res);
+    }
+
     if (res >= 0) {
         size_t print_size = res;
         if (print_size > 100) print_size = 100;
         STRACE(" \"%.*s\"", print_size, buf);
+        if (strcmp(current->comm, "http") == 0 && fd_no == 0) {
+            if (res == 0)
+                printk("APTTRACE read0 pid=%d eof\n", current->pid);
+            else
+                printk("APTTRACE read0 pid=%d len=%zd head=\"%.*s\"\n",
+                    current->pid, res, (int) print_size, (char *) buf);
+        }
+        if (strcmp(current->comm, "apt") == 0 && fd_no > 2) {
+            char desc[MAX_PATH];
+            bool interesting = false;
+            apt_trace_describe_fd(fd, desc, sizeof(desc), &interesting);
+            if (interesting) {
+                if (res == 0) {
+                    current->apt_parent_trace_remaining = 256;
+                    printk("APTTRACE apt_read pid=%d fd=%d desc=%s eof\n", current->pid, fd_no, desc);
+                    printk("APTTRACE apt_trace_arm pid=%d fd=%d remaining=%u\n",
+                        current->pid, fd_no, current->apt_parent_trace_remaining);
+                } else
+                    printk("APTTRACE apt_read pid=%d fd=%d desc=%s len=%zd head=\"%.*s\"\n",
+                        current->pid, fd_no, desc, res, (int) print_size, (char *) buf);
+            }
+        }
     }
     return res;
 }
@@ -368,6 +417,45 @@ static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
         }
     } else {
         return _EBADF;
+    }
+    if (res < 0 && (strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "http") == 0)) {
+        char desc[MAX_PATH];
+        bool interesting = false;
+        apt_trace_describe_fd(fd, desc, sizeof(desc), &interesting);
+        if (interesting || (strcmp(current->comm, "http") == 0 && fd_no <= 2))
+            printk("APTTRACE write_err pid=%d comm=%s fd=%d desc=%s err=%zd\n",
+                current->pid, current->comm, fd_no, desc, res);
+    }
+    if (res >= 0 && strcmp(current->comm, "http") == 0 && (fd_no == 1 || fd_no == 2)) {
+        size_t print_size = res;
+        if (print_size > 100) print_size = 100;
+        printk("APTTRACE write%d pid=%d len=%zd head=\"%.*s\"\n",
+            fd_no, current->pid, res, (int) print_size, (char *) buf);
+    }
+    if (res >= 0 && strcmp(current->comm, "apt") == 0 && (fd_no == 1 || fd_no == 2)) {
+        char desc[MAX_PATH];
+        bool interesting = false;
+        apt_trace_describe_fd(fd, desc, sizeof(desc), &interesting);
+        size_t print_size = res;
+        if (print_size > 120) print_size = 120;
+        printk("APTTRACE apt_stdio_write pid=%d fd=%d desc=%s len=%zd head=\"%.*s\"\n",
+            current->pid, fd_no, desc, res, (int) print_size, (char *) buf);
+    }
+    if (res >= 0 && strcmp(current->comm, "apt") == 0 && fd_no > 2) {
+        char desc[MAX_PATH];
+        bool interesting = false;
+        apt_trace_describe_fd(fd, desc, sizeof(desc), &interesting);
+        if (interesting) {
+            size_t print_size = res;
+            if (print_size > 100) print_size = 100;
+            printk("APTTRACE apt_write pid=%d fd=%d desc=%s len=%zd head=\"%.*s\"\n",
+                current->pid, fd_no, desc, res, (int) print_size, (char *) buf);
+        }
+    }
+    if (res > 0) {
+        char path[MAX_PATH];
+        if (generic_getpath(fd, path) == 0)
+            inotify_notify_modify(path);
     }
     return res;
 }
@@ -1002,7 +1090,17 @@ dword_t sys_utime(addr_t path_addr, addr_t times_addr) {
 static int generic_fsetattr(struct fd *fd, struct attr attr) {
     if (fd->mount->fs->fsetattr == NULL)
         return _EPERM;
-    return fd->mount->fs->fsetattr(fd, attr);
+    int err = fd->mount->fs->fsetattr(fd, attr);
+    if (err >= 0) {
+        char path[MAX_PATH];
+        if (generic_getpath(fd, path) == 0) {
+            if (attr.type == attr_size)
+                inotify_notify_modify(path);
+            else
+                inotify_notify_attrib(path);
+        }
+    }
+    return err;
 }
 
 dword_t sys_fchmod(fd_t f, dword_t mode) {

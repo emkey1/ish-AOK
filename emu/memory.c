@@ -50,23 +50,12 @@ void mem_init(struct mem *mem) {
 
 void mem_destroy(struct mem *mem) {
     write_lock(&mem->lock);
-    while((mem_ref_cnt_get(mem)) && (current->pid > 1) ){ 
-        nanosleep(&lock_pause, NULL);
-    }
     pt_unmap_always(mem, 0, MEM_PAGES);
 
 #if ENGINE_JIT
-    while((mem_ref_cnt_get(mem)) && (current->pid > 1) ){ // Wait for now, task is in one or more critical sections, and/or has locks
-        nanosleep(&lock_pause, NULL);
-    }
     jit_free(mem->mmu.jit);
 #endif
     for (int i = 0; i < MEM_PGDIR_SIZE; i++) {
-        do {
-            nanosleep(&lock_pause, NULL);
-        } while(mem_ref_cnt_get(mem));
-        
-        
         if (mem->pgdir[i] != NULL)
             free(mem->pgdir[i]);
     }
@@ -115,9 +104,6 @@ struct pt_entry *mem_pt(struct mem *mem, page_t page) {
 static void mem_pt_del(struct mem *mem, page_t page) {
     struct pt_entry *entry = mem_pt(mem, page);
     if (entry != NULL) {
-         while(mem_ref_cnt_get(mem) > 1) { // Don't delete if memory is in use
-             nanosleep(&lock_pause, NULL);
-        }
         entry->data = NULL;
     }
 }
@@ -196,9 +182,6 @@ int pt_unmap(struct mem *mem, page_t start, pages_t pages) {
 
 int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
     for (page_t page = start; page < start + pages; mem_next_page(mem, &page)) {
-        while(mem_ref_cnt_get(mem) > 1) { // Being 1 is normal as pt_copy_on_write() increments the ref count
-            nanosleep(&lock_pause, NULL);
-        }
         struct pt_entry *pt = mem_pt(mem, page);
         if (pt == NULL)
             continue;
@@ -210,9 +193,6 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
         if (--data->refcount == 0) {
             // vdso wasn't allocated with mmap, it's just in our data segment
             if (data->data != vdso_data) {
-                while(mem_ref_cnt_get(mem) > 1) {
-                    nanosleep(&lock_pause, NULL);
-                }
                 int err = munmap(data->data, data->size);
                 if (err != 0)
                     die("munmap(%p, %lu) failed: %s", data->data, data->size, strerror(errno));
@@ -429,7 +409,6 @@ void mem_ref_cnt_mod(struct mem *mem, int value) { // value Should only be -1 or
     if(((mem->reference.count + value) < 0)) { // Prevent our unsigned value attempting to go negative.  -mke
         printk("ERROR: Attempt to decrement mem reference count to be negative, ignoring(%d:%d)\n", mem->reference.count, value);
         pthread_mutex_unlock(&mem->reference.lock);
-        
         return;
     }
     

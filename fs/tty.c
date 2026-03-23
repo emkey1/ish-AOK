@@ -256,6 +256,8 @@ static bool tty_send_input_signal(struct tty *tty, char ch, sigset_t_ *queue) {
         return false;
 
     if (tty->fg_group != 0) {
+        printk("APTTRACE tty_input_signal ch=%#x sig=%d fg_group=%d type=%d num=%d lflags=%#x\n",
+            (unsigned char) ch, sig, tty->fg_group, tty->type, tty->num, tty->termios.lflags);
         if (!(tty->termios.lflags & NOFLSH_))
             tty->bufsize = 0;
         sigset_add(queue, sig);
@@ -381,8 +383,12 @@ no_special:
 
     if (fg_group != 0) {
         for (int sig = 1; sig < NUM_SIGS; sig++) {
-            if (sigset_has(queue, sig))
+            if (sigset_has(queue, sig)) {
+                if (sig == SIGINT_)
+                    printk("APTTRACE tty_flush_signal fg_group=%d sig=%d type=%d num=%d\n",
+                        fg_group, sig, tty->type, tty->num);
                 send_group_signal(fg_group, sig, SIGINFO_NIL);
+            }
         }
     }
 
@@ -794,9 +800,26 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
 }
 
 void tty_set_winsize(struct tty *tty, struct winsize_ winsize) {
+    if (winsize.row == 0 || winsize.col == 0)
+        return;
+    if (tty->winsize.row == winsize.row &&
+            tty->winsize.col == winsize.col &&
+            tty->winsize.xpixel == winsize.xpixel &&
+            tty->winsize.ypixel == winsize.ypixel)
+        return;
     tty->winsize = winsize;
-    if (tty->fg_group != 0)
-        send_group_signal(tty->fg_group, SIGWINCH_, SIGINFO_NIL);
+    if (tty->fg_group == 0)
+        return;
+    if (pthread_mutex_trylock(&pids_lock.m) != 0)
+        return;
+    struct pid *pid = pid_get(tty->fg_group);
+    if (pid != NULL) {
+        struct tgroup *tgroup;
+        list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
+            send_signal(tgroup->leader, SIGWINCH_, SIGINFO_NIL);
+        }
+    }
+    pthread_mutex_unlock(&pids_lock.m);
 }
 
 void tty_hangup(struct tty *tty) {

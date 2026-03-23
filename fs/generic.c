@@ -8,6 +8,7 @@
 #include "fs/inode.h"
 #include "fs/path.h"
 #include "fs/dev.h"
+#include "kernel/inotify.h"
 #include "kernel/task.h"
 #include "kernel/errno.h"
 
@@ -89,6 +90,13 @@ struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mo
     if (err < 0)
         return ERR_PTR(err);
     struct mount *mount = find_mount_and_trim_path(path);
+    bool created = false;
+    if (flags & O_CREAT_) {
+        struct statbuf existing;
+        int stat_err = mount->fs->stat(mount, path, &existing);
+        if (stat_err == _ENOENT)
+            created = true;
+    }
     lock(&inodes_lock, 0); // TODO: don't do this
     struct fd *fd = mount->fs->open(mount, path, flags, mode);
     if (IS_ERR(fd)) {
@@ -139,6 +147,9 @@ struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mo
     err = _ENOTDIR;
     if (!S_ISDIR(fd->type) && flags & O_DIRECTORY_)
         goto error;
+    inotify_notify_open(path);
+    if (created)
+        inotify_notify_create(path, S_ISDIR(fd->type));
     return fd;
 
 error:
@@ -216,6 +227,8 @@ int generic_unlinkat(struct fd *at, const char *path_raw) {
     if (mount->fs->unlink)
         err = mount->fs->unlink(mount, path);
     mount_release(mount);
+    if (err >= 0)
+        inotify_notify_delete(path, false);
     return err;
 }
 
@@ -232,14 +245,21 @@ int generic_renameat(struct fd *src_at, const char *src_raw, struct fd *dst_at, 
         return _EBUSY;
     struct mount *mount = find_mount_and_trim_path(src);
     struct mount *dst_mount = find_mount_and_trim_path(dst);
+    bool is_dir = false;
     if (mount != dst_mount)
         err = _EXDEV;
     else if (mount->fs->rename == NULL)
         err = _EPERM;
-    else
+    else {
+        struct statbuf stat;
+        if (mount->fs->stat(mount, src, &stat) >= 0)
+            is_dir = S_ISDIR(stat.mode);
         err = mount->fs->rename(mount, src, dst);
+    }
     mount_release(mount);
     mount_release(dst_mount);
+    if (err >= 0)
+        inotify_notify_move(src, dst, is_dir);
     return err;
 }
 
@@ -253,6 +273,8 @@ int generic_symlinkat(const char *target, struct fd *at, const char *link_raw) {
     if (mount->fs->symlink)
         err = mount->fs->symlink(mount, target, link);
     mount_release(mount);
+    if (err >= 0)
+        inotify_notify_create(link, false);
     return err;
 }
 
@@ -271,6 +293,8 @@ int generic_mknodat(struct fd *at, const char *path_raw, mode_t_ mode, dev_t_ de
     if (mount->fs->mknod)
         err = mount->fs->mknod(mount, path, mode, dev);
     mount_release(mount);
+    if (err >= 0)
+        inotify_notify_create(path, false);
     return err;
 }
 
@@ -284,6 +308,12 @@ int generic_setattrat(struct fd *at, const char *path_raw, struct attr attr, boo
     if (mount->fs->setattr)
         err = mount->fs->setattr(mount, path, attr);
     mount_release(mount);
+    if (err >= 0) {
+        if (attr.type == attr_size)
+            inotify_notify_modify(path);
+        else
+            inotify_notify_attrib(path);
+    }
     return err;
 }
 
@@ -323,6 +353,8 @@ int generic_mkdirat(struct fd *at, const char *path_raw, mode_t_ mode) {
     if (mount->fs->mkdir)
         err = mount->fs->mkdir(mount, path, mode);
     mount_release(mount);
+    if (err >= 0)
+        inotify_notify_create(path, true);
     return err;
 }
 
@@ -338,6 +370,8 @@ int generic_rmdirat(struct fd *at, const char *path_raw) {
     if (mount->fs->rmdir)
         err = mount->fs->rmdir(mount, path);
     mount_release(mount);
+    if (err >= 0)
+        inotify_notify_delete(path, true);
     return err;
 }
 

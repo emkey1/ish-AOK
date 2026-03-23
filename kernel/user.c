@@ -49,12 +49,9 @@ static int __user_write_task(struct task *task, addr_t addr, const void *buf, si
 }
 
 int user_read_task(struct task *task, addr_t addr, void *buf, size_t count) {
-    mem_ref_cnt_mod(task->mem, 10); // Try a large number.  Oddly ends up being zero sometimes when _user_read_task() is invoked below
     read_lock(&task->mem->lock);
     int res = __user_read_task(task, addr, buf, count);
-
     read_unlock(&task->mem->lock);
-    mem_ref_cnt_mod(task->mem, -10);
     return res;
 }
 

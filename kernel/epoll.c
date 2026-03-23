@@ -76,19 +76,13 @@ static int epoll_callback(void *context, int types, union poll_fd_info info) {
     return 1;
 }
 
-int_t sys_epoll_wait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t timeout) {
-    STRACE("epoll_wait(%d, %#x, %d, %d)", epoll_f, events_addr, max_events, timeout);
+static int epoll_wait_common(fd_t epoll_f, addr_t events_addr, int_t max_events, struct timespec *timeout_ts_ptr) {
     struct fd *epoll = f_get(epoll_f);
     if (epoll == NULL)
         return _EBADF;
     if (epoll->ops != &epoll_ops)
         return _EINVAL;
 
-    struct timespec timeout_ts;
-    if (timeout >= 0) {
-        timeout_ts.tv_sec = timeout / 1000;
-        timeout_ts.tv_nsec = (timeout % 1000) * 1000000;
-    }
     if (max_events <= 0)
         return _EINVAL;
     struct epoll_event_ events[max_events];
@@ -102,7 +96,7 @@ int_t sys_epoll_wait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t t
         mytime.tv_nsec = 0;
         res = poll_wait(epoll->epollfd.poll, epoll_callback, &context, &mytime); // This is arguably evil, but it makes go work much better and I haven't found a downside yet.  -mke
     } else {
-        res = poll_wait(epoll->epollfd.poll, epoll_callback, &context, timeout < 0 ? NULL : &timeout_ts);
+        res = poll_wait(epoll->epollfd.poll, epoll_callback, &context, timeout_ts_ptr);
     }
     STRACE("%d end epoll_wait", current->pid);
     if (res >= 0) {
@@ -115,17 +109,73 @@ int_t sys_epoll_wait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t t
     return res;
 }
 
+int_t sys_epoll_wait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t timeout) {
+    STRACE("epoll_wait(%d, %#x, %d, %d)", epoll_f, events_addr, max_events, timeout);
+    struct timespec timeout_ts;
+    struct timespec *timeout_ts_ptr = NULL;
+    if (timeout >= 0) {
+        timeout_ts.tv_sec = timeout / 1000;
+        timeout_ts.tv_nsec = (timeout % 1000) * 1000000;
+        timeout_ts_ptr = &timeout_ts;
+    }
+    return epoll_wait_common(epoll_f, events_addr, max_events, timeout_ts_ptr);
+}
+
 int_t sys_epoll_pwait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t timeout, addr_t sigmask_addr, dword_t sigsetsize) {
     sigset_t_ mask;
+    bool restore_mask = false;
     if (sigmask_addr != 0) {
         if (sigsetsize != sizeof(sigset_t_))
             return _EINVAL;
         if (user_get(sigmask_addr, mask))
             return _EFAULT;
         sigmask_set_temp(mask);
+        restore_mask = true;
     }
 
-    return sys_epoll_wait(epoll_f, events_addr, max_events, timeout);
+    struct timespec timeout_ts;
+    struct timespec *timeout_ts_ptr = NULL;
+    if (timeout >= 0) {
+        timeout_ts.tv_sec = timeout / 1000;
+        timeout_ts.tv_nsec = (timeout % 1000) * 1000000;
+        timeout_ts_ptr = &timeout_ts;
+    }
+
+    int_t res = epoll_wait_common(epoll_f, events_addr, max_events, timeout_ts_ptr);
+    if (restore_mask)
+        sigmask_clear_temp();
+    return res;
+}
+
+int_t sys_epoll_pwait2(fd_t epoll_f, addr_t events_addr, int_t max_events, addr_t timeout_addr, addr_t sigmask_addr, dword_t sigsetsize) {
+    sigset_t_ mask;
+    bool restore_mask = false;
+    if (sigmask_addr != 0) {
+        if (sigsetsize != sizeof(sigset_t_))
+            return _EINVAL;
+        if (user_get(sigmask_addr, mask))
+            return _EFAULT;
+        sigmask_set_temp(mask);
+        restore_mask = true;
+    }
+
+    struct timespec timeout_ts;
+    struct timespec *timeout_ts_ptr = NULL;
+    if (timeout_addr != 0) {
+        struct timespec64_ timeout_ts64;
+        if (user_get(timeout_addr, timeout_ts64))
+            return _EFAULT;
+        timeout_ts.tv_sec = timeout_ts64.sec;
+        timeout_ts.tv_nsec = timeout_ts64.nsec;
+        if (timeout_ts.tv_sec < 0 || timeout_ts.tv_nsec < 0 || timeout_ts.tv_nsec >= 1000000000)
+            return _EINVAL;
+        timeout_ts_ptr = &timeout_ts;
+    }
+
+    int_t res = epoll_wait_common(epoll_f, events_addr, max_events, timeout_ts_ptr);
+    if (restore_mask)
+        sigmask_clear_temp();
+    return res;
 }
 
 static int epoll_close(struct fd *fd) {

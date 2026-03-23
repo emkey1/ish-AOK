@@ -1,9 +1,86 @@
+#include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "debug.h"
 #include "kernel/fs.h"
+#include "kernel/time.h"
 #include "fs/fd.h"
 #include "fs/poll.h"
 #include "kernel/calls.h"
+
+static bool apt_trace_describe_fd(struct fd *fd, char *desc, size_t size, bool *interesting) {
+    *interesting = false;
+    if (fd != NULL && fd->mount != NULL && fd->mount->fs != NULL && fd->mount->fs->getpath != NULL) {
+        if (generic_getpath(fd, desc) == 0) {
+            if (strncmp(desc, "anon_inode:", strlen("anon_inode:")) == 0)
+                *interesting = true;
+            return true;
+        }
+    }
+    if (fd == NULL) {
+        snprintf(desc, size, "<closed>");
+        return false;
+    }
+    snprintf(desc, size, "type=%#x real=%d mode=%#x mount=%p",
+        fd->type, fd->real_fd, fd->stat.mode, (void *) fd->mount);
+    if (fd->mount == NULL || S_ISFIFO(fd->type) || S_ISSOCK(fd->type))
+        *interesting = true;
+    return false;
+}
+
+static void apt_trace_poll_snapshot(const char *phase, struct pollfd_ *polls, struct fd **files,
+        dword_t nfds, int value) {
+    if (strcmp(current->comm, "apt") != 0)
+        return;
+    for (unsigned i = 0; i < nfds; i++) {
+        bool interesting = false;
+        char desc[MAX_PATH];
+        apt_trace_describe_fd(files != NULL ? files[i] : NULL, desc, sizeof(desc), &interesting);
+        if (!interesting && strcmp(phase, "end") != 0)
+            continue;
+        if (!interesting && polls[i].revents == 0)
+            continue;
+        printk("APTTRACE apt_poll pid=%d phase=%s value=%d idx=%u fd=%d events=%#x revents=%#x desc=%s\n",
+            current->pid, phase, value, i, polls[i].fd, polls[i].events, polls[i].revents, desc);
+    }
+}
+
+static void apt_trace_select_snapshot(const char *phase, fd_t nfds,
+        char *watch_readfds, char *watch_writefds, char *watch_exceptfds,
+        char *ready_readfds, char *ready_writefds, char *ready_exceptfds,
+        struct fd **files, int value) {
+    if (strcmp(current->comm, "apt") != 0)
+        return;
+    for (fd_t i = 0; i < nfds; i++) {
+        bool watch_read = watch_readfds != NULL && bit_test(i, watch_readfds);
+        bool watch_write = watch_writefds != NULL && bit_test(i, watch_writefds);
+        bool watch_except = watch_exceptfds != NULL && bit_test(i, watch_exceptfds);
+        if (!watch_read && !watch_write && !watch_except)
+            continue;
+
+        bool ready_read = ready_readfds != NULL && bit_test(i, ready_readfds);
+        bool ready_write = ready_writefds != NULL && bit_test(i, ready_writefds);
+        bool ready_except = ready_exceptfds != NULL && bit_test(i, ready_exceptfds);
+
+        bool interesting = false;
+        char desc[MAX_PATH];
+        apt_trace_describe_fd(files != NULL ? files[i] : NULL, desc, sizeof(desc), &interesting);
+        if (!interesting && strcmp(phase, "end") != 0)
+            continue;
+        if (!interesting && !ready_read && !ready_write && !ready_except)
+            continue;
+
+        printk("APTTRACE apt_select pid=%d phase=%s value=%d fd=%d watch=%c%c%c ready=%c%c%c desc=%s\n",
+            current->pid, phase, value, i,
+            watch_read ? 'r' : '-',
+            watch_write ? 'w' : '-',
+            watch_except ? 'x' : '-',
+            ready_read ? 'r' : '-',
+            ready_write ? 'w' : '-',
+            ready_except ? 'x' : '-',
+            desc);
+    }
+}
 
 static int user_read_or_zero(addr_t addr, void *data, size_t size) {
     if (addr == 0)
@@ -33,7 +110,13 @@ static int select_event_callback(void *context, int types, union poll_fd_info in
         return 0;
     return 1;
 }
-dword_t sys_select(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t exceptfds_addr, addr_t timeout_addr) {
+
+static bool select_timeout_valid(struct timespec timeout_ts) {
+    return timeout_ts.tv_sec >= 0 && timeout_ts.tv_nsec >= 0 && timeout_ts.tv_nsec < 1000000000;
+}
+
+static dword_t sys_select_common(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr,
+        addr_t exceptfds_addr, const struct timespec *timeout_ts_ptr) {
     size_t fdset_size = BITS_SIZE(nfds);
     char readfds[fdset_size];
     if (user_read_or_zero(readfds_addr, readfds, fdset_size))
@@ -44,25 +127,26 @@ dword_t sys_select(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t 
     char exceptfds[fdset_size];
     if (user_read_or_zero(exceptfds_addr, exceptfds, fdset_size))
         return _EFAULT;
+    char watch_readfds[fdset_size];
+    memcpy(watch_readfds, readfds, fdset_size);
+    char watch_writefds[fdset_size];
+    memcpy(watch_writefds, writefds, fdset_size);
+    char watch_exceptfds[fdset_size];
+    memcpy(watch_exceptfds, exceptfds, fdset_size);
 
     struct timespec timeout_ts = {};
-    if (timeout_addr != 0) {
-        struct timeval_ timeout_timeval;
-        if (user_get(timeout_addr, timeout_timeval))
-            return _EFAULT;
-        timeout_ts.tv_sec = timeout_timeval.sec;
-        timeout_ts.tv_nsec = timeout_timeval.usec * 1000;
-    }
-    // Emacs likes to pass invalid timeout values
-    timeout_ts = timespec_normalize(timeout_ts);
+    if (timeout_ts_ptr != NULL)
+        timeout_ts = *timeout_ts_ptr;
 
-    STRACE("select(%d, 0x%x, 0x%x, 0x%x, 0x%x {%lds %ldns}) ",
+    STRACE("select(%d, 0x%x, 0x%x, 0x%x, %s{%lds %ldns}) ",
             nfds, readfds_addr, writefds_addr, exceptfds_addr,
-            timeout_addr, timeout_ts.tv_sec, timeout_ts.tv_nsec);
+            timeout_ts_ptr == NULL ? "NULL " : "", timeout_ts.tv_sec, timeout_ts.tv_nsec);
 
     struct poll *poll = poll_create();
     if (IS_ERR(poll))
         return PTR_ERR(poll);
+    struct fd *files[nfds];
+    memset(files, 0, sizeof(files));
 
     for (fd_t i = 0; i < nfds; i++) {
         int events = 0;
@@ -82,10 +166,14 @@ dword_t sys_select(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t 
                 poll_destroy(poll);
                 return _EBADF;
             }
+            files[i] = fd;
             poll_add_fd(poll, fd, events, (union poll_fd_info) i);
         }
     }
     STRACE("...\n");
+    apt_trace_select_snapshot("begin", nfds,
+        watch_readfds, watch_writefds, watch_exceptfds,
+        NULL, NULL, NULL, files, 0);
 
     memset(readfds, 0, fdset_size);
     memset(writefds, 0, fdset_size);
@@ -93,8 +181,11 @@ dword_t sys_select(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t 
     struct select_context context = {readfds, writefds, exceptfds};
     int err = 0;
     TASK_MAY_BLOCK {
-        err = poll_wait(poll, select_event_callback, &context, timeout_addr == 0 ? NULL : &timeout_ts);
+        err = poll_wait(poll, select_event_callback, &context, timeout_ts_ptr == NULL ? NULL : &timeout_ts);
     }
+    apt_trace_select_snapshot("end", nfds,
+        watch_readfds, watch_writefds, watch_exceptfds,
+        readfds, writefds, exceptfds, files, err);
     STRACE("%d end select ", current->pid);
     for (fd_t i = 0; i < nfds; i++) {
         if (bit_test(i, readfds) || bit_test(i, writefds) || bit_test(i, exceptfds)) {
@@ -115,6 +206,22 @@ dword_t sys_select(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t 
     if (exceptfds_addr && user_write(exceptfds_addr, exceptfds, fdset_size))
         return _EFAULT;
     return err;
+}
+
+dword_t sys_select(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t exceptfds_addr, addr_t timeout_addr) {
+    struct timespec timeout_ts = {};
+    const struct timespec *timeout_ts_ptr = NULL;
+    if (timeout_addr != 0) {
+        struct timeval_ timeout_timeval;
+        if (user_get(timeout_addr, timeout_timeval))
+            return _EFAULT;
+        timeout_ts.tv_sec = timeout_timeval.sec;
+        timeout_ts.tv_nsec = timeout_timeval.usec * 1000;
+        // Keep historical select() behavior and normalize invalid timeval input.
+        timeout_ts = timespec_normalize(timeout_ts);
+        timeout_ts_ptr = &timeout_ts;
+    }
+    return sys_select_common(nfds, readfds_addr, writefds_addr, exceptfds_addr, timeout_ts_ptr);
 }
 
 struct poll_context {
@@ -159,6 +266,7 @@ dword_t sys_poll(addr_t fds, dword_t nfds, int_t timeout) {
         // clear revents, which is reused to mark whether a pollfd has been added or not
         polls[i].revents = 0;
     }
+    apt_trace_poll_snapshot("begin", polls, files, nfds, timeout);
 
     // convert polls array into poll_add_fd calls
     // FIXME this is quadratic
@@ -198,6 +306,7 @@ dword_t sys_poll(addr_t fds, dword_t nfds, int_t timeout) {
     TASK_MAY_BLOCK {
         res = poll_wait(poll, poll_event_callback, &context, timeout < 0 ? NULL : &timeout_ts);
     }
+    apt_trace_poll_snapshot("end", polls, files, nfds, res);
     while(task_ref_cnt_get(current, 0) > 1) { // Wait for now, task is in one or more critical sections
         nanosleep(&lock_pause, NULL);
     }
@@ -221,20 +330,81 @@ dword_t sys_pselect(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t
     struct {
         addr_t mask_addr;
         dword_t mask_size;
-    } sigmask;
-    if (user_get(sigmask_addr, sigmask))
-        return _EFAULT;
+    } sigmask = {};
+    if (sigmask_addr != 0) {
+        if (user_get(sigmask_addr, sigmask))
+            return _EFAULT;
+    }
     sigset_t_ mask;
+    struct timespec timeout_ts = {};
+    const struct timespec *timeout_ts_ptr = NULL;
 
+    if (timeout_addr != 0) {
+        struct timespec_ timeout_timespec;
+        if (user_get(timeout_addr, timeout_timespec))
+            return _EFAULT;
+        timeout_ts.tv_sec = timeout_timespec.sec;
+        timeout_ts.tv_nsec = timeout_timespec.nsec;
+        if (!select_timeout_valid(timeout_ts))
+            return _EINVAL;
+        timeout_ts_ptr = &timeout_ts;
+    }
+
+    bool restore_mask = false;
     if (sigmask.mask_addr != 0) {
         if (sigmask.mask_size != sizeof(sigset_t_))
             return _EINVAL;
         if (user_get(sigmask.mask_addr, mask))
             return _EFAULT;
         sigmask_set_temp(mask);
+        restore_mask = true;
     }
 
-    return sys_select(nfds, readfds_addr, writefds_addr, exceptfds_addr, timeout_addr);
+    dword_t res = sys_select_common(nfds, readfds_addr, writefds_addr, exceptfds_addr, timeout_ts_ptr);
+    if (restore_mask)
+        sigmask_clear_temp();
+    return res;
+}
+
+dword_t sys_pselect_time64(fd_t nfds, addr_t readfds_addr, addr_t writefds_addr, addr_t exceptfds_addr,
+        addr_t timeout_addr, addr_t sigmask_addr) {
+    struct {
+        addr_t mask_addr;
+        dword_t mask_size;
+    } sigmask = {};
+    if (sigmask_addr != 0) {
+        if (user_get(sigmask_addr, sigmask))
+            return _EFAULT;
+    }
+    sigset_t_ mask;
+    struct timespec timeout_ts = {};
+    const struct timespec *timeout_ts_ptr = NULL;
+
+    if (timeout_addr != 0) {
+        struct timespec64_ timeout_timespec;
+        if (user_get(timeout_addr, timeout_timespec))
+            return _EFAULT;
+        timeout_ts.tv_sec = timeout_timespec.sec;
+        timeout_ts.tv_nsec = timeout_timespec.nsec;
+        if (!select_timeout_valid(timeout_ts))
+            return _EINVAL;
+        timeout_ts_ptr = &timeout_ts;
+    }
+
+    bool restore_mask = false;
+    if (sigmask.mask_addr != 0) {
+        if (sigmask.mask_size != sizeof(sigset_t_))
+            return _EINVAL;
+        if (user_get(sigmask.mask_addr, mask))
+            return _EFAULT;
+        sigmask_set_temp(mask);
+        restore_mask = true;
+    }
+
+    dword_t res = sys_select_common(nfds, readfds_addr, writefds_addr, exceptfds_addr, timeout_ts_ptr);
+    if (restore_mask)
+        sigmask_clear_temp();
+    return res;
 }
 
 dword_t sys_ppoll(addr_t fds, dword_t nfds, addr_t timeout_addr, addr_t sigmask_addr, dword_t sigsetsize) {
@@ -247,13 +417,18 @@ dword_t sys_ppoll(addr_t fds, dword_t nfds, addr_t timeout_addr, addr_t sigmask_
     }
 
     sigset_t_ mask;
+    bool restore_mask = false;
     if (sigmask_addr != 0) {
         if (sigsetsize != sizeof(sigset_t_))
             return _EINVAL;
         if (user_get(sigmask_addr, mask))
             return _EFAULT;
         sigmask_set_temp(mask);
+        restore_mask = true;
     }
 
-    return sys_poll(fds, nfds, timeout);
+    dword_t res = sys_poll(fds, nfds, timeout);
+    if (restore_mask)
+        sigmask_clear_temp();
+    return res;
 }

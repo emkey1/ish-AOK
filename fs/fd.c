@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "debug.h"
 #include "kernel/calls.h"
 #include "kernel/resource.h"
@@ -7,6 +8,76 @@
 #include "fs/poll.h"
 #include "fs/fd.h"
 #include "fs/inode.h"
+
+int fd_getflags(struct fd *fd);
+
+static bool apt_trace_describe_fd(struct fd *fd, char *desc, size_t size, bool *interesting) {
+    *interesting = false;
+    if (fd != NULL && fd->mount != NULL && fd->mount->fs != NULL && fd->mount->fs->getpath != NULL) {
+        if (generic_getpath(fd, desc) == 0) {
+            if (strncmp(desc, "anon_inode:", strlen("anon_inode:")) == 0)
+                *interesting = true;
+            return true;
+        }
+    }
+    if (fd == NULL) {
+        snprintf(desc, size, "<closed>");
+        return false;
+    }
+    snprintf(desc, size, "type=%#x real=%d mode=%#x mount=%p",
+        fd->type, fd->real_fd, fd->stat.mode, (void *) fd->mount);
+    if (fd->mount == NULL || S_ISFIFO(fd->type) || S_ISSOCK(fd->type))
+        *interesting = true;
+    return false;
+}
+
+static bool apt_trace_should_log_fd(fd_t fd_no, struct fd *fd) {
+    if (strcmp(current->comm, "apt") != 0 && strcmp(current->comm, "http") != 0)
+        return false;
+    bool interesting = false;
+    char desc[MAX_PATH];
+    apt_trace_describe_fd(fd, desc, sizeof(desc), &interesting);
+    if (strcmp(current->comm, "apt") == 0)
+        return interesting;
+    return fd_no <= 2 || interesting;
+}
+
+static void apt_trace_maybe_arm_parent(const char *reason, fd_t fd_no, struct fd *fd) {
+    if (strcmp(current->comm, "apt") != 0)
+        return;
+    bool interesting = false;
+    char desc[MAX_PATH];
+    apt_trace_describe_fd(fd, desc, sizeof(desc), &interesting);
+    if (!interesting)
+        return;
+    if (current->apt_parent_trace_remaining >= 64)
+        return;
+    current->apt_parent_trace_remaining = 128;
+    printk("APTTRACE parent_trace_arm pid=%d reason=%s fd=%d desc=%s remaining=%u\n",
+        current->pid, reason, fd_no, desc, current->apt_parent_trace_remaining);
+}
+
+static void apt_trace_log_fd_action(const char *action, fd_t fd_no, struct fd *fd) {
+    if (!apt_trace_should_log_fd(fd_no, fd))
+        return;
+    bool interesting = false;
+    char desc[MAX_PATH];
+    apt_trace_describe_fd(fd, desc, sizeof(desc), &interesting);
+    printk("APTTRACE fd_%s pid=%d comm=%s fd=%d desc=%s flags=%#x\n",
+        action, current->pid, current->comm, fd_no, desc, fd != NULL ? fd_getflags(fd) : 0);
+    apt_trace_maybe_arm_parent(action, fd_no, fd);
+}
+
+static void apt_trace_log_dup_action(const char *action, fd_t src, fd_t dst, struct fd *fd, bool cloexec) {
+    if (!apt_trace_should_log_fd(src, fd) && !apt_trace_should_log_fd(dst, fd))
+        return;
+    bool interesting = false;
+    char desc[MAX_PATH];
+    apt_trace_describe_fd(fd, desc, sizeof(desc), &interesting);
+    printk("APTTRACE fd_%s pid=%d comm=%s src=%d dst=%d cloexec=%d desc=%s flags=%#x\n",
+        action, current->pid, current->comm, src, dst, cloexec, desc, fd != NULL ? fd_getflags(fd) : 0);
+    apt_trace_maybe_arm_parent(action, dst, fd);
+}
 
 struct fd *fd_create(const struct fd_ops *ops) {
     struct fd *fd = malloc(sizeof(struct fd));
@@ -137,7 +208,7 @@ struct fdtable *fdtable_copy(struct fdtable *table) {
     return new_table;
 }
 
-static int fdtable_unshare_current(void) {
+int fdtable_unshare_current(void) {
     struct fdtable *table = current->files;
     if (table->refcount == 1)
         return 0;
@@ -232,6 +303,9 @@ int f_close(fd_t f) {
 
 dword_t sys_close(fd_t f) {
     STRACE("close(%d)", f);
+    struct fd *fd = f_get(f);
+    if (fd != NULL)
+        apt_trace_log_fd_action("close", f, fd);
     return f_close(f);
 }
 
@@ -266,7 +340,10 @@ dword_t sys_dup(fd_t f) {
     if (fd == NULL)
         return _EBADF;
     fd->refcount++;
-    return f_install(fd, 0);
+    fd_t new_f = f_install(fd, 0);
+    if (new_f >= 0)
+        apt_trace_log_dup_action("dup", f, new_f, fd, false);
+    return new_f;
 }
 
 dword_t sys_dup3(fd_t f, fd_t new_f, int_t flags) {
@@ -297,6 +374,7 @@ dword_t sys_dup3(fd_t f, fd_t new_f, int_t flags) {
     if (flags & O_CLOEXEC_)
         bit_set(new_f, table->cloexec);
     unlock(&table->lock);
+    apt_trace_log_dup_action("dup3", f, new_f, fd, (flags & O_CLOEXEC_) != 0);
     return new_f;
 }
 
@@ -314,6 +392,10 @@ dword_t sys_dup2(fd_t f, fd_t new_f) {
 
 dword_t sys_close_range(dword_t first, dword_t last, dword_t flags) {
     STRACE("close_range(%u, %u, %#x)", first, last, flags);
+    if (strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "http") == 0) {
+        printk("APTTRACE close_range pid=%d comm=%s first=%u last=%u flags=%#x\n",
+            current->pid, current->comm, first, last, flags);
+    }
     if (flags & ~(CLOSE_RANGE_UNSHARE_ | CLOSE_RANGE_CLOEXEC_))
         return _EINVAL;
     if (last < first)
@@ -339,6 +421,11 @@ dword_t sys_close_range(dword_t first, dword_t last, dword_t flags) {
     for (fd_t f = (fd_t) first; (unsigned) f <= end; f++) {
         if (table->files[f] == NULL)
             continue;
+        if (strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "http") == 0) {
+            printk("APTTRACE close_range_fd pid=%d comm=%s fd=%d action=%s\n",
+                current->pid, current->comm, f,
+                (flags & CLOSE_RANGE_CLOEXEC_) ? "cloexec" : "close");
+        }
         if (flags & CLOSE_RANGE_CLOEXEC_)
             bit_set(f, table->cloexec);
         else
@@ -375,14 +462,19 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg) {
         case F_DUPFD_:
             STRACE("fcntl(%d, F_DUPFD, %d)", f, arg);
             fd->refcount++;
-            return f_install_start(fd, arg);
+            new_f = f_install_start(fd, arg);
+            if (new_f >= 0)
+                apt_trace_log_dup_action("fcntl_dupfd", f, new_f, fd, false);
+            return new_f;
 
         case F_DUPFD_CLOEXEC_:
             STRACE("fcntl(%d, F_DUPFD_CLOEXEC, %d)", f, arg);
             fd->refcount++;
             new_f = f_install_start(fd, arg);
-            if (new_f >= 0)
+            if (new_f >= 0) {
                 bit_set(new_f, table->cloexec);
+                apt_trace_log_dup_action("fcntl_dupfd_cloexec", f, new_f, fd, true);
+            }
             return new_f;
 
         case F_GETFD_:
@@ -394,6 +486,7 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg) {
                 bit_set(f, table->cloexec);
             else
                 bit_clear(f, table->cloexec);
+            apt_trace_log_fd_action((arg & 1) ? "setfd_cloexec" : "setfd_clear", f, fd);
             return 0;
 
         case F_GETFL_:
@@ -401,7 +494,10 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg) {
             return fd_getflags(fd);
         case F_SETFL_:
             STRACE("fcntl(%d, F_SETFL, %#x)", f, arg);
-            return fd_setflags(fd, arg);
+            err = fd_setflags(fd, arg);
+            if (err >= 0)
+                apt_trace_log_fd_action("setfl", f, fd);
+            return err;
 
         case F_GETLK_:
             STRACE("fcntl(%d, F_GETLK, %#x)", f, arg);

@@ -164,24 +164,39 @@ struct task *task_create_(struct task *parent) {
     *task = (struct task) {};
     if (parent != NULL)
         *task = *parent;
+    if (parent != NULL &&
+            (strcmp(parent->comm, "apt") == 0 || strcmp(parent->comm, "sudo") == 0) &&
+            parent->pending != 0) {
+        printk("APTTRACE clone_inherit parent_pid=%d comm=%s pending=%#llx blocked=%#llx saved=%#llx has_saved=%d\n",
+            parent->pid, parent->comm,
+            (unsigned long long) parent->pending,
+            (unsigned long long) parent->blocked,
+            (unsigned long long) parent->saved_mask,
+            parent->has_saved_mask);
+    }
 
     task->pid = pid->id;
-    pid->task = task;
-    list_add(&alive_pids_list, &pid->alive);
-
     list_init(&task->children);
     list_init(&task->siblings);
+    task->pending = 0;
+    task->waiting = 0;
+    list_init(&task->queue);
+    task->saved_mask = 0;
+    task->has_saved_mask = false;
+    task->clear_tid = 0;
+    task->robust_list = 0;
+    task->did_exec = false;
+    task->apt_parent_trace_remaining = 0;
+    task->apt_syscall_trace_remaining = 0;
+
+    pid->task = task;
+    list_add(&alive_pids_list, &pid->alive);
     if (parent != NULL) {
         task->parent = parent;
         list_add(&parent->children, &task->siblings);
     }
     unlock(&pids_lock);
 
-    task->pending = 0;
-    list_init(&task->queue);
-    task->clear_tid = 0;
-    task->robust_list = 0;
-    task->did_exec = false;
     lock_init(&task->general_lock, "task_creat_gen\0");
 
     task->sockrestart = (struct task_sockrestart) {};
@@ -302,17 +317,10 @@ void task_run_current(void) {
     while (true) {
         read_lock(&save->mem->lock);
         task_ref_cnt_mod(save, 1);
-        
-        if(!doEnableMulticore) {
-            pthread_mutex_lock(&multicore_lock);
-        }
-        
+
         int interrupt = cpu_run_to_interrupt(cpu, &tlb);
-        
+
         read_unlock(&save->mem->lock);
-        
-        if(!doEnableMulticore)
-            pthread_mutex_unlock(&multicore_lock);
  
         //struct timespec while_pause = {0 /*secs*/, WAIT_SLEEP /*nanosecs*/};
         if(save->parent != NULL) {
@@ -401,4 +409,3 @@ bool current_is_valid(void) {
     
     return false;
 }
-

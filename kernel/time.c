@@ -12,6 +12,7 @@
 #include "kernel/time.h"
 #include "fs/poll.h"
 #include "util/timer.h"
+#include <limits.h>
 #include <sys/poll.h>
 
 static int clockid_to_real(uint_t clock, clockid_t *real) {
@@ -41,6 +42,26 @@ static struct itimerspec_ timer_spec_from_real(struct timer_spec spec) {
         .value.nsec = (dword_t)spec.value.tv_nsec,
         .interval.sec = (dword_t)spec.interval.tv_sec,
         .interval.nsec = (dword_t)spec.interval.tv_nsec,
+    };
+    return itspec;
+};
+
+static struct timer_spec timer_spec_to_real64(struct itimerspec64_ itspec) {
+    struct timer_spec spec = {
+        .value.tv_sec = itspec.value.sec,
+        .value.tv_nsec = itspec.value.nsec,
+        .interval.tv_sec = itspec.interval.sec,
+        .interval.tv_nsec = itspec.interval.nsec,
+    };
+    return spec;
+};
+
+static struct itimerspec64_ timer_spec_from_real64(struct timer_spec spec) {
+    struct itimerspec64_ itspec = {
+        .value.sec = spec.value.tv_sec,
+        .value.nsec = spec.value.tv_nsec,
+        .interval.sec = spec.interval.tv_sec,
+        .interval.nsec = spec.interval.tv_nsec,
     };
     return itspec;
 };
@@ -134,30 +155,34 @@ dword_t sys_clock_nanosleep_time64(dword_t clock_id, int_t flags, addr_t req_add
     return clock_nanosleep_common(clock_id, flags, timespec_from_guest64(req_ts), rem_addr, true);
 }
 
-dword_t sys_ppoll_time64(struct pollfd *fds, nfds_t nfds, const struct timespec64 *timeout_ts64) {
-    // Convert timespec64 to timespec for nanosleep
-    struct timespec timeout;
-    if (timeout_ts64) {
-        timeout.tv_sec = (time_t)timeout_ts64->tv_sec;
-        timeout.tv_nsec = timeout_ts64->tv_nsec;
-    }
-    
-    return 0;
+dword_t sys_ppoll_time64(addr_t fds, dword_t nfds, addr_t timeout_addr, addr_t sigmask_addr, dword_t sigsetsize) {
+    int timeout = -1;
+    if (timeout_addr != 0) {
+        struct timespec64_ timeout_timespec;
+        if (user_get(timeout_addr, timeout_timespec))
+            return _EFAULT;
+        if (timeout_timespec.sec < 0 || timeout_timespec.nsec < 0 || timeout_timespec.nsec >= 1000000000)
+            return _EINVAL;
 
-    // Use poll for file descriptor monitoring
-    dword_t timeout_ms = (timeout_ts64) ? (timeout.tv_sec * 1000 + timeout.tv_nsec / 1000000) : -1;
-    dword_t result = poll(fds, nfds, timeout_ms);
-
-    if (result == -1) {
-        return -errno;
+        int64_t timeout_ms = timeout_timespec.sec * 1000 + timeout_timespec.nsec / 1000000;
+        timeout = timeout_ms > INT_MAX ? INT_MAX : (int) timeout_ms;
     }
 
-    // If poll times out, emulate the behavior of ppoll with nanosleep
-    if (result == 0 && timeout_ts64) {
-        nanosleep(&timeout, NULL);
+    sigset_t_ mask;
+    bool restore_mask = false;
+    if (sigmask_addr != 0) {
+        if (sigsetsize != sizeof(sigset_t_))
+            return _EINVAL;
+        if (user_get(sigmask_addr, mask))
+            return _EFAULT;
+        sigmask_set_temp(mask);
+        restore_mask = true;
     }
 
-    return result;
+    dword_t res = sys_poll(fds, nfds, timeout);
+    if (restore_mask)
+        sigmask_clear_temp();
+    return res;
 }
 
 dword_t sys_time(addr_t time_out) {
@@ -253,6 +278,10 @@ dword_t sys_clock_getres_time64(dword_t clock, addr_t res_addr) {
 }
 
 dword_t sys_clock_settime(dword_t UNUSED(clock), addr_t UNUSED(tp)) {
+    return _EPERM;
+}
+
+dword_t sys_clock_settime64(dword_t UNUSED(clock), addr_t UNUSED(tp)) {
     return _EPERM;
 }
 
@@ -473,17 +502,84 @@ int_t sys_timer_create(dword_t clock, addr_t sigevent_addr, addr_t timer_addr) {
     return 0;
 }
 
-int_t sys_timer_settime(dword_t timer_id, int_t flags, addr_t new_value_addr, addr_t old_value_addr) {
-    STRACE("timer_settime(%d, %d, %#x, %#x)", timer_id, flags, new_value_addr, old_value_addr);
-    struct itimerspec_ value;
-    if (user_get(new_value_addr, value))
-        return _EFAULT;
-    if (timer_id > TIMERS_MAX)
+static int_t sys_timer_gettime_common(dword_t timer_id, addr_t curr_value_addr, bool time64) {
+    STRACE("timer_gettime(%d, %#x)", timer_id, curr_value_addr);
+    if (timer_id >= TIMERS_MAX)
         return _EINVAL;
 
     lock(&current->group->lock, 0);
     struct posix_timer *timer = &current->group->posix_timers[timer_id];
-    struct timer_spec spec = timer_spec_to_real(value);
+    if (timer->timer == NULL) {
+        unlock(&current->group->lock);
+        return _EINVAL;
+    }
+
+    struct timer_spec spec = {};
+    lock(&timer->timer->lock, 0);
+    spec.interval = timer->timer->interval;
+    if (timer->timer->active) {
+        struct timespec remaining = timespec_subtract(timer->timer->end,
+            timespec_now(timer->timer->clockid));
+        if (timespec_positive(remaining))
+            spec.value = remaining;
+    }
+    unlock(&timer->timer->lock);
+    unlock(&current->group->lock);
+
+    if (!time64) {
+        struct itimerspec_ value = timer_spec_from_real(spec);
+        if (user_put(curr_value_addr, value))
+            return _EFAULT;
+    } else {
+        struct itimerspec64_ value = timer_spec_from_real64(spec);
+        if (user_put(curr_value_addr, value))
+            return _EFAULT;
+    }
+    return 0;
+}
+
+int_t sys_timer_gettime(dword_t timer_id, addr_t curr_value_addr) {
+    return sys_timer_gettime_common(timer_id, curr_value_addr, false);
+}
+
+int_t sys_timer_getoverrun(dword_t timer_id) {
+    if (timer_id >= TIMERS_MAX)
+        return _EINVAL;
+
+    lock(&current->group->lock, 0);
+    struct posix_timer *timer = &current->group->posix_timers[timer_id];
+    bool valid = timer->timer != NULL;
+    unlock(&current->group->lock);
+    if (!valid)
+        return _EINVAL;
+    return 0;
+}
+
+static int_t sys_timer_settime_common(dword_t timer_id, int_t flags, addr_t new_value_addr, addr_t old_value_addr,
+        bool time64) {
+    STRACE("timer_settime(%d, %d, %#x, %#x)", timer_id, flags, new_value_addr, old_value_addr);
+    if (timer_id >= TIMERS_MAX)
+        return _EINVAL;
+
+    struct timer_spec spec;
+    if (!time64) {
+        struct itimerspec_ value;
+        if (user_get(new_value_addr, value))
+            return _EFAULT;
+        spec = timer_spec_to_real(value);
+    } else {
+        struct itimerspec64_ value;
+        if (user_get(new_value_addr, value))
+            return _EFAULT;
+        spec = timer_spec_to_real64(value);
+    }
+
+    lock(&current->group->lock, 0);
+    struct posix_timer *timer = &current->group->posix_timers[timer_id];
+    if (timer->timer == NULL) {
+        unlock(&current->group->lock);
+        return _EINVAL;
+    }
     struct timer_spec old_spec;
     if (flags & TIMER_ABSTIME_) {
         struct timespec now = timespec_now(timer->timer->clockid);
@@ -495,11 +591,29 @@ int_t sys_timer_settime(dword_t timer_id, int_t flags, addr_t new_value_addr, ad
         return err;
 
     if (old_value_addr) {
-        struct itimerspec_ old_value = timer_spec_from_real(old_spec);
-        if (user_put(old_value_addr, old_value))
-            return _EFAULT;
+        if (!time64) {
+            struct itimerspec_ old_value = timer_spec_from_real(old_spec);
+            if (user_put(old_value_addr, old_value))
+                return _EFAULT;
+        } else {
+            struct itimerspec64_ old_value = timer_spec_from_real64(old_spec);
+            if (user_put(old_value_addr, old_value))
+                return _EFAULT;
+        }
     }
     return 0;
+}
+
+int_t sys_timer_settime(dword_t timer_id, int_t flags, addr_t new_value_addr, addr_t old_value_addr) {
+    return sys_timer_settime_common(timer_id, flags, new_value_addr, old_value_addr, false);
+}
+
+int_t sys_timer_settime64(dword_t timer_id, int_t flags, addr_t new_value_addr, addr_t old_value_addr) {
+    return sys_timer_settime_common(timer_id, flags, new_value_addr, old_value_addr, true);
+}
+
+int_t sys_timer_gettime64(dword_t timer_id, addr_t curr_value_addr) {
+    return sys_timer_gettime_common(timer_id, curr_value_addr, true);
 }
 
 int_t sys_timer_delete(dword_t timer_id) {
@@ -539,19 +653,51 @@ fd_t sys_timerfd_create(int_t clockid, int_t flags) {
     return f_install(fd, flags);
 }
 
-int_t sys_timerfd_settime(fd_t f, int_t flags, addr_t new_value_addr, addr_t old_value_addr) {
-    STRACE("timerfd_settime(%d, %d, %#x, %#x)", f, flags, new_value_addr, old_value_addr);
-    if (flags & ~(TIMER_ABSTIME_))
-        return _EINVAL;
+static int timerfd_lookup(fd_t f, struct fd **fd_out) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
     if (fd->ops != &timerfd_ops)
         return _EINVAL;
-    struct itimerspec_ value;
-    if (user_get(new_value_addr, value))
-        return _EFAULT;
-    struct timer_spec spec = timer_spec_to_real(value);
+    *fd_out = fd;
+    return 0;
+}
+
+static struct timer_spec timerfd_current_spec(struct fd *fd) {
+    struct timer_spec spec = {};
+    lock(&fd->timerfd.timer->lock, 0);
+    spec.interval = fd->timerfd.timer->interval;
+    if (fd->timerfd.timer->active) {
+        struct timespec remaining = timespec_subtract(fd->timerfd.timer->end,
+            timespec_now(fd->timerfd.timer->clockid));
+        if (timespec_positive(remaining))
+            spec.value = remaining;
+    }
+    unlock(&fd->timerfd.timer->lock);
+    return spec;
+}
+
+static int_t sys_timerfd_settime_common(fd_t f, int_t flags, addr_t new_value_addr, addr_t old_value_addr,
+        bool time64) {
+    STRACE("timerfd_settime(%d, %d, %#x, %#x)", f, flags, new_value_addr, old_value_addr);
+    if (flags & ~(TIMER_ABSTIME_))
+        return _EINVAL;
+    struct fd *fd;
+    int err = timerfd_lookup(f, &fd);
+    if (err < 0)
+        return err;
+    struct timer_spec spec;
+    if (!time64) {
+        struct itimerspec_ value;
+        if (user_get(new_value_addr, value))
+            return _EFAULT;
+        spec = timer_spec_to_real(value);
+    } else {
+        struct itimerspec64_ value;
+        if (user_get(new_value_addr, value))
+            return _EFAULT;
+        spec = timer_spec_to_real64(value);
+    }
     struct timer_spec old_spec;
     if (flags & TIMER_ABSTIME_) {
         struct timespec now = timespec_now(fd->timerfd.timer->clockid);
@@ -559,18 +705,59 @@ int_t sys_timerfd_settime(fd_t f, int_t flags, addr_t new_value_addr, addr_t old
     }
 
     lock(&fd->lock, 0);
-    int err = timer_set(fd->timerfd.timer, spec, &old_spec);
+    err = timer_set(fd->timerfd.timer, spec, &old_spec);
     unlock(&fd->lock);
     if (err < 0)
         return err;
 
     if (old_value_addr) {
-        struct itimerspec_ old_value = timer_spec_from_real(old_spec);
-        if (user_put(old_value_addr, old_value))
-            return _EFAULT;
+        if (!time64) {
+            struct itimerspec_ old_value = timer_spec_from_real(old_spec);
+            if (user_put(old_value_addr, old_value))
+                return _EFAULT;
+        } else {
+            struct itimerspec64_ old_value = timer_spec_from_real64(old_spec);
+            if (user_put(old_value_addr, old_value))
+                return _EFAULT;
+        }
     }
 
     return 0;
+}
+
+int_t sys_timerfd_settime(fd_t f, int_t flags, addr_t new_value_addr, addr_t old_value_addr) {
+    return sys_timerfd_settime_common(f, flags, new_value_addr, old_value_addr, false);
+}
+
+int_t sys_timerfd_settime64(fd_t f, int_t flags, addr_t new_value_addr, addr_t old_value_addr) {
+    return sys_timerfd_settime_common(f, flags, new_value_addr, old_value_addr, true);
+}
+
+static int_t sys_timerfd_gettime_common(fd_t f, addr_t curr_value_addr, bool time64) {
+    STRACE("timerfd_gettime(%d, %#x)", f, curr_value_addr);
+    struct fd *fd;
+    int err = timerfd_lookup(f, &fd);
+    if (err < 0)
+        return err;
+    struct timer_spec spec = timerfd_current_spec(fd);
+    if (!time64) {
+        struct itimerspec_ value = timer_spec_from_real(spec);
+        if (user_put(curr_value_addr, value))
+            return _EFAULT;
+    } else {
+        struct itimerspec64_ value = timer_spec_from_real64(spec);
+        if (user_put(curr_value_addr, value))
+            return _EFAULT;
+    }
+    return 0;
+}
+
+int_t sys_timerfd_gettime(fd_t f, addr_t curr_value_addr) {
+    return sys_timerfd_gettime_common(f, curr_value_addr, false);
+}
+
+int_t sys_timerfd_gettime64(fd_t f, addr_t curr_value_addr) {
+    return sys_timerfd_gettime_common(f, curr_value_addr, true);
 }
 
 static ssize_t timerfd_read(struct fd *fd, void *buf, size_t bufsize) {

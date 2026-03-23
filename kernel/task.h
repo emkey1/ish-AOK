@@ -116,6 +116,11 @@ struct task {
 
     struct task_sockrestart sockrestart;
 
+    // Temporary debug state for tracing the parent-side apt decision path.
+    unsigned apt_parent_trace_remaining;
+    // Temporary debug state for tracing early syscalls in apt helper processes.
+    unsigned apt_syscall_trace_remaining;
+
     // current condition/lock, so it can be notified in case of a signal
     cond_t *waiting_cond;
     lock_t *waiting_lock;

@@ -9,10 +9,11 @@ struct timespec64 {
     long tv_nsec;    // nanoseconds
 };
 
-dword_t sys_ppoll_time64(struct pollfd *fds, nfds_t nfds, const struct timespec64 *timeout_ts64);
+dword_t sys_ppoll_time64(addr_t fds, dword_t nfds, addr_t timeout_addr, addr_t sigmask_addr, dword_t sigsetsize);
 dword_t sys_clock_nanosleep(dword_t clock_id, int_t flags, addr_t req_addr, addr_t rem_addr);
 dword_t sys_clock_nanosleep_time64(dword_t clock_id, int_t flags, addr_t req_addr, addr_t rem_addr);
 dword_t sys_clock_gettime64(dword_t clock, addr_t tp);
+dword_t sys_clock_settime64(dword_t clock, addr_t tp);
 dword_t sys_time(addr_t time_out);
 dword_t sys_stime(addr_t time);
 #define CLOCK_REALTIME_ 0
@@ -57,6 +58,10 @@ struct itimerspec_ {
     struct timespec_ interval;
     struct timespec_ value;
 };
+struct itimerspec64_ {
+    struct timespec64_ interval;
+    struct timespec64_ value;
+};
 
 struct tms_ {
     clock_t_ tms_utime;  /* user time */
@@ -68,10 +73,17 @@ struct tms_ {
 long sys_setitimer(int_t which, addr_t new_val, addr_t old_val);
 long sys_alarm(uint_t seconds);
 int_t sys_timer_create(dword_t clock, addr_t sigevent_addr, addr_t timer_addr);
+int_t sys_timer_gettime(dword_t timer_id, addr_t curr_value_addr);
+int_t sys_timer_getoverrun(dword_t timer_id);
 int_t sys_timer_settime(dword_t timer, int_t flags, addr_t new_value_addr, addr_t old_value_addr);
+int_t sys_timer_gettime64(dword_t timer_id, addr_t curr_value_addr);
+int_t sys_timer_settime64(dword_t timer, int_t flags, addr_t new_value_addr, addr_t old_value_addr);
 int_t sys_timer_delete(dword_t timer_id);
 fd_t sys_timerfd_create(int_t clockid, int_t flags);
+int_t sys_timerfd_gettime(fd_t f, addr_t curr_value_addr);
 int_t sys_timerfd_settime(fd_t f, int_t flags, addr_t new_value_addr, addr_t old_value_addr);
+int_t sys_timerfd_gettime64(fd_t f, addr_t curr_value_addr);
+int_t sys_timerfd_settime64(fd_t f, int_t flags, addr_t new_value_addr, addr_t old_value_addr);
 
 dword_t sys_times(addr_t tbuf);
 dword_t sys_nanosleep(addr_t req, addr_t rem);

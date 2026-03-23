@@ -194,6 +194,8 @@ syscall_t syscall_table[] = {
     [258] = (syscall_t) sys_set_tid_address,
     [259] = (syscall_t) sys_timer_create,
     [260] = (syscall_t) sys_timer_settime,
+    [261] = (syscall_t) sys_timer_gettime,
+    [262] = (syscall_t) sys_timer_getoverrun,
     [263] = (syscall_t) sys_timer_delete,
     [264] = (syscall_t) sys_clock_settime,
     [265] = (syscall_t) sys_clock_gettime,
@@ -211,7 +213,9 @@ syscall_t syscall_table[] = {
     [288] = (syscall_t) sys_keyctl,
     [289] = (syscall_t) sys_ioprio_set,
     [290] = (syscall_t) sys_ioprio_get,
-    [291] = (syscall_t) syscall_stub, // inotify_init
+    [291] = (syscall_t) sys_inotify_init,
+    [292] = (syscall_t) sys_inotify_add_watch,
+    [293] = (syscall_t) sys_inotify_rm_watch,
     [295] = (syscall_t) sys_openat,
     [296] = (syscall_t) sys_mkdirat,
     [297] = (syscall_t) sys_mknodat,
@@ -226,7 +230,7 @@ syscall_t syscall_table[] = {
     [307] = (syscall_t) sys_faccessat,
     [308] = (syscall_t) sys_pselect,
     [309] = (syscall_t) sys_ppoll,
-    [310] = (syscall_t) syscall_stub, // unshare
+    [310] = (syscall_t) sys_unshare,
     [311] = (syscall_t) sys_set_robust_list,
     [312] = (syscall_t) sys_get_robust_list,
     [313] = (syscall_t) sys_splice,
@@ -234,35 +238,36 @@ syscall_t syscall_table[] = {
     [318] = (syscall_t) syscall_success_stub, // getcpu
     [319] = (syscall_t) sys_epoll_pwait,
     [320] = (syscall_t) sys_utimensat,
-    [321] = (syscall_t) syscall_stub, // signalfd
+    [321] = (syscall_t) sys_signalfd,
     [322] = (syscall_t) sys_timerfd_create,
     [323] = (syscall_t) sys_eventfd,
     [324] = (syscall_t) sys_fallocate,
     [325] = (syscall_t) sys_timerfd_settime,
-    [327] = (syscall_t) syscall_stub, // signalfd4
+    [326] = (syscall_t) sys_timerfd_gettime,
+    [327] = (syscall_t) sys_signalfd4,
     [328] = (syscall_t) sys_eventfd2,
     [329] = (syscall_t) sys_epoll_create,
     [330] = (syscall_t) sys_dup3,
     [331] = (syscall_t) sys_pipe2,
-    [332] = (syscall_t) syscall_stub, // inotify_init1
+    [332] = (syscall_t) sys_inotify_init1,
     [336] = (syscall_t) syscall_stub, // perf_event_open
     [337] = (syscall_t) sys_recvmmsg,
     [340] = (syscall_t) sys_prlimit64,
-    [341] = (syscall_t) syscall_stub, // signalfd4
+    [341] = (syscall_t) sys_signalfd4,
     [345] = (syscall_t) sys_sendmmsg,
     [347] = (syscall_t) syscall_stub, // process_vm_readv
     [352] = (syscall_t) syscall_stub, // sched_getattr
     [353] = (syscall_t) sys_renameat2,
     [354] = (syscall_t) syscall_stub, //seccomp
     [355] = (syscall_t) sys_getrandom,
-    [356] = (syscall_t) syscall_stub, // memfd_create
+    [356] = (syscall_t) sys_memfd_create,
     [358] = (syscall_t) sys_execveat,
     [359] = (syscall_t) sys_socket,
     [360] = (syscall_t) sys_socketpair,
     [361] = (syscall_t) sys_bind,
     [362] = (syscall_t) sys_connect,
     [363] = (syscall_t) sys_listen,
-    [364] = (syscall_t) syscall_stub_silent, // accept4
+    [364] = (syscall_t) sys_accept4,
     [365] = (syscall_t) sys_getsockopt,
     [366] = (syscall_t) sys_setsockopt,
     [367] = (syscall_t) sys_getsockname,
@@ -278,15 +283,25 @@ syscall_t syscall_table[] = {
     [384] = (syscall_t) sys_arch_prctl,
     [386] = (syscall_t) sys_rseq,
     [403] = (syscall_t) sys_clock_gettime64, // clock_gettime64
+    [404] = (syscall_t) sys_clock_settime64, // clock_settime64
     [406] = (syscall_t) sys_clock_getres_time64, // clock_getres_time64
     [407] = (syscall_t) sys_clock_nanosleep_time64, // clock_nanosleep_time64
+    [408] = (syscall_t) sys_timer_gettime64, // timer_gettime64
+    [409] = (syscall_t) sys_timer_settime64, // timer_settime64
+    [410] = (syscall_t) sys_timerfd_gettime64, // timerfd_gettime64
+    [411] = (syscall_t) sys_timerfd_settime64, // timerfd_settime64
     [412] = (syscall_t) sys_utimensat64, // utimensat_time64
+    [413] = (syscall_t) sys_pselect_time64, // pselect6_time64
     [414] = (syscall_t) sys_ppoll_time64,
+    [417] = (syscall_t) sys_recvmmsg_time64, // recvmmsg_time64
+    [421] = (syscall_t) sys_rt_sigtimedwait_time64, // rt_sigtimedwait_time64
+    [422] = (syscall_t) sys_futex_time64, // futex_time64
     [424] = (syscall_t) syscall_stub, // pidfd_send_signal?
-    [435] = (syscall_t) syscall_stub, // clone3
+    [435] = (syscall_t) sys_clone3, // clone3
     [436] = (syscall_t) sys_close_range,
     [437] = (syscall_t) sys_openat2,
     [439] = (syscall_t) sys_faccessat, // faccessat2
+    [441] = (syscall_t) sys_epoll_pwait2, // epoll_pwait2
 };
 /*
 SYS_MSGRCV                       = 401
@@ -345,6 +360,26 @@ static void log_stub_syscall(struct cpu_state *cpu, unsigned syscall_num, const 
         cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp, cpu->eip);
 }
 
+static bool should_trace_apt_task_syscalls(void) {
+    if (current == NULL)
+        return false;
+    if (current->apt_syscall_trace_remaining == 0)
+        return false;
+    current->apt_syscall_trace_remaining--;
+    return true;
+}
+
+static bool should_trace_apt_parent_syscalls(void) {
+    if (current == NULL)
+        return false;
+    if (strcmp(current->comm, "apt") != 0)
+        return false;
+    if (current->apt_parent_trace_remaining == 0)
+        return false;
+    current->apt_parent_trace_remaining--;
+    return true;
+}
+
 void handle_syscall_interrupt(struct cpu_state *cpu) {
     unsigned syscall_num = cpu->eax;
     if (syscall_num >= NUM_SYSCALLS) {
@@ -363,8 +398,24 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
         log_stub_syscall(cpu, syscall_num, "stub");
 
     STRACE("%d(%s) %d:%d call %-3d ", current->pid, current->comm, current->reference.count, current->locks_held.count, syscall_num);
+    bool trace_apt_task = should_trace_apt_task_syscalls();
+    bool trace_apt_parent = should_trace_apt_parent_syscalls();
+    bool trace_apt_child = current != NULL &&
+        current->parent != NULL &&
+        !current->did_exec &&
+        (strcmp(current->parent->comm, "apt") == 0 || strcmp(current->parent->comm, "sudo") == 0);
+    const char *trace_role = trace_apt_parent ? "parent" :
+        (trace_apt_child ? "child" :
+        (strcmp(current->comm, "http") == 0 ? "method" : "task"));
+    if (trace_apt_task || trace_apt_parent)
+        printk("APTTRACE syscall pid=%d role=%s nr=%u args=%#x,%#x,%#x,%#x,%#x,%#x\n",
+            current->pid, trace_role, syscall_num,
+            cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
     int result = syscall(cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
     STRACE(" = 0x%x\n", result);
+    if (trace_apt_task || trace_apt_parent)
+        printk("APTTRACE result pid=%d role=%s nr=%u ret=%#x\n",
+            current->pid, trace_role, syscall_num, result);
     cpu->eax = result;
 }
 

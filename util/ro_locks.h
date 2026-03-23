@@ -173,13 +173,11 @@ static inline void complex_lockt(lock_t *lock, int log_lock) {
             // Handle error
         }
         if (count > count_max) {
-            if (!log_lock) {
-               // printk("ERROR: Possible deadlock, aborted lock attempt(PID: %d Process: %s) (Previously Owned:%s:%d)\n",
-               //        current_pid(current), current_comm(current), lock->comm, lock->pid);
-                pthread_mutex_unlock(&lock->m);
-                modify_locks_held_count(current, -1);
-            }
-            return;
+            if (!log_lock)
+                printk("WARNING: lock contention exceeded retry budget for %s, blocking instead of forcing unlock\n",
+                    lock->lname);
+            pthread_mutex_lock(&lock->m);
+            break;
         }
     }
 
@@ -210,13 +208,9 @@ static inline int trylock(lock_t *lock) {
         lock->debug.pid = current_pid(current);
     }
 #endif
-   // if((!status) && (current_pid(current) > 10)) {// iSH-AOK crashes if low number processes are not excluded.  Might be able to go lower then 10?  -mke
+    if (!status) {
         modify_locks_held_count(current, 1);
-        
-        //STRACE("trylock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
-    //    lock->pid = current_pid(current);
-        //strncpy(lock->comm, current_comm(current), 16);
-   // }
+    }
     return status;
 }
 

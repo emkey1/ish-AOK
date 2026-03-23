@@ -184,6 +184,7 @@ struct fdtable {
 struct fdtable *fdtable_new(int size);
 void fdtable_release(struct fdtable *table);
 struct fdtable *fdtable_copy(struct fdtable *table);
+int fdtable_unshare_current(void);
 void fdtable_free(struct fdtable *table);
 void fdtable_do_cloexec(struct fdtable *table);
 struct fd *fdtable_get(struct fdtable *table, fd_t f);

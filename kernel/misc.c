@@ -2,7 +2,11 @@
 #include "kernel/calls.h"
 
 #define PRCTL_SET_KEEPCAPS_ 8
+#define PRCTL_GET_SECCOMP_ 21
+#define PRCTL_SET_SECCOMP_ 22
 #define PRCTL_SET_NAME_ 15
+#define PRCTL_SET_NO_NEW_PRIVS_ 38
+#define PRCTL_GET_NO_NEW_PRIVS_ 39
 
 #define KEYCTL_GET_KEYRING_ID_ 0
 #define KEYCTL_JOIN_SESSION_KEYRING_ 1
@@ -13,6 +17,15 @@ int_t sys_prctl(dword_t option, uint_t arg2, uint_t UNUSED(arg3), uint_t UNUSED(
     switch (option) {
         case PRCTL_SET_KEEPCAPS_:
             // stub
+            return 0;
+        case PRCTL_GET_SECCOMP_:
+            // Report "disabled" rather than erroring out during helper setup.
+            return 0;
+        case PRCTL_SET_SECCOMP_:
+            // Compatibility stub: userland may try to sandbox helpers.
+            // Pretend success instead of returning EINVAL, which newer apt
+            // treats as a startup failure.
+            STRACE("prctl(PR_SET_SECCOMP, %#x)", arg2);
             return 0;
         case PRCTL_SET_NAME_: {
             char name[16];
@@ -25,6 +38,11 @@ int_t sys_prctl(dword_t option, uint_t arg2, uint_t UNUSED(arg3), uint_t UNUSED(
             unlock(&current->general_lock);
             return 0;
         }
+        case PRCTL_SET_NO_NEW_PRIVS_:
+            STRACE("prctl(PR_SET_NO_NEW_PRIVS, %#x)", arg2);
+            return 0;
+        case PRCTL_GET_NO_NEW_PRIVS_:
+            return 0;
         default:
             STRACE("prctl(%#x)", option);
             return _EINVAL;

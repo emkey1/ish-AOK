@@ -179,6 +179,13 @@ dword_t sys_fstat64(fd_t fd_no, addr_t statbuf_addr) {
     int err = fd->mount->fs->fstat(fd, &stat);
     if (err < 0)
         return err;
+    if (strcmp(current->comm, "http") == 0 && (fd_no == 0 || fd_no == 1 || fd_no == 2)) {
+        printk("APTTRACE fstat64 pid=%d fd=%d mode=%#x dev=%#llx ino=%#llx size=%#llx blksize=%u blocks=%#llx\n",
+            current->pid, fd_no, stat.mode,
+            (unsigned long long) stat.dev, (unsigned long long) stat.inode,
+            (unsigned long long) stat.size, stat.blksize,
+            (unsigned long long) stat.blocks);
+    }
     struct newstat64 newstat = stat_convert_newstat64(stat);
     if (user_put(statbuf_addr, newstat))
         return _EFAULT;
@@ -224,6 +231,13 @@ dword_t sys_fstat(fd_t fd_no, addr_t statbuf_addr) {
     int err = fd->mount->fs->fstat(fd, &stat);
     if (err < 0)
         return err;
+    if (strcmp(current->comm, "http") == 0 && (fd_no == 0 || fd_no == 1 || fd_no == 2)) {
+        printk("APTTRACE fstat pid=%d fd=%d mode=%#x dev=%#llx ino=%#llx size=%#llx blksize=%u blocks=%#llx\n",
+            current->pid, fd_no, stat.mode,
+            (unsigned long long) stat.dev, (unsigned long long) stat.inode,
+            (unsigned long long) stat.size, stat.blksize,
+            (unsigned long long) stat.blocks);
+    }
     struct newstat newstat;
     err = stat_convert_newstat(stat, &newstat);
     if (err < 0)

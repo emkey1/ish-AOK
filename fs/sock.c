@@ -401,6 +401,13 @@ int_t sys_listen(fd_t sock_fd, int_t backlog) {
 
 int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
     STRACE("accept(%d, 0x%x, 0x%x)", sock_fd, sockaddr_addr, sockaddr_len_addr);
+    return sys_accept4(sock_fd, sockaddr_addr, sockaddr_len_addr, 0);
+}
+
+int_t sys_accept4(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr, int_t flags) {
+    STRACE("accept4(%d, 0x%x, 0x%x, %#x)", sock_fd, sockaddr_addr, sockaddr_len_addr, flags);
+    if (flags & ~(O_CLOEXEC_ | O_NONBLOCK_))
+        return _EINVAL;
     struct fd *sock = sock_getfd(sock_fd);
     if (sock == NULL)
         return _EBADF;
@@ -434,7 +441,7 @@ int_t sys_accept(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_addr) {
     }
 
     fd_t client_f = sock_fd_create(client,
-            sock->socket.domain, sock->socket.type, sock->socket.protocol);
+            sock->socket.domain, sock->socket.type | flags, sock->socket.protocol);
     if (client_f < 0)
         close(client);
 
@@ -535,7 +542,7 @@ int_t sys_socketpair(dword_t domain, dword_t type, dword_t protocol, addr_t sock
         return _EINVAL;
 
     int sockets[2];
-    int err = socketpair(domain, type, protocol, sockets);
+    int err = socketpair(real_domain, real_type, protocol, sockets);
     if (err < 0)
         return errno_map();
 
@@ -1150,6 +1157,10 @@ int_t sys_recvmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags, ad
     return num_received;
 }
 
+int_t sys_recvmmsg_time64(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags, addr_t timeout_addr) {
+    return sys_recvmmsg(sock_fd, msg_vec, vec_len, flags, timeout_addr);
+}
+
 int_t sys_sendmmsg(fd_t sock_fd, addr_t msg_vec, uint_t vec_len, int_t flags) {
     int num_sent = 0;
     for (unsigned i = 0; i < vec_len; i++) {
@@ -1265,7 +1276,7 @@ static struct socket_call {
     {(syscall_t) sys_getsockopt, 5},
     {(syscall_t) sys_sendmsg, 3},
     {(syscall_t) sys_recvmsg, 3},
-    {NULL}, // accept4 (18)
+    {(syscall_t) sys_accept4, 4},
     {(syscall_t) sys_recvmmsg, 5},
     {(syscall_t) sys_sendmmsg, 4},
 };

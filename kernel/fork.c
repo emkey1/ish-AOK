@@ -12,6 +12,7 @@
 #define CLONE_FS_ 0x00000200
 #define CLONE_FILES_ 0x00000400
 #define CLONE_SIGHAND_ 0x00000800
+#define CLONE_PIDFD_ 0x00001000
 #define CLONE_PTRACE_ 0x00002000
 #define CLONE_VFORK_ 0x00004000
 #define CLONE_PARENT_ 0x00008000
@@ -142,6 +143,10 @@ fail_free_mem:
 
 dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t ctid) {
     STRACE("clone(0x%x, 0x%x, 0x%x, 0x%x, 0x%x)", flags, stack, ptid, tls, ctid);
+    if (strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "sudo") == 0) {
+        printk("APTTRACE clone parent_pid=%d comm=%s flags=%#x stack=%#x ptid=%#x tls=%#x ctid=%#x\n",
+            current->pid, current->comm, flags, stack, ptid, tls, ctid);
+    }
     if (flags & ~CSIGNAL_ & ~IMPLEMENTED_FLAGS) {
         FIXME("unimplemented clone flags 0x%x", flags & ~CSIGNAL_ & ~IMPLEMENTED_FLAGS);
         return _EINVAL;
@@ -178,6 +183,17 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
 
     // task might be destroyed by the time we finish, so save the pid
     pid_t pid = task->pid;
+    if ((strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "sudo") == 0) &&
+            (flags & CLONE_VFORK_)) {
+        printk("APTTRACE vfork child pid=%d parent_pid=%d shared_vm=%d\n",
+            pid, current->pid, !!(flags & CLONE_VM_));
+    }
+    if ((strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "sudo") == 0) &&
+            !(flags & CLONE_THREAD_)) {
+        task->apt_syscall_trace_remaining = 24;
+        printk("APTTRACE child_trace_arm pid=%d parent_pid=%d flags=%#x remaining=%u\n",
+            pid, current->pid, flags, task->apt_syscall_trace_remaining);
+    }
 
     if (current->ptrace.traced) {
         current->ptrace.trap_event = PTRACE_EVENT_FORK_;
@@ -192,6 +208,8 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
             // FIXME this should stop waiting if a fatal signal is received
             wait_for_ignore_signals(&vfork.cond, &vfork.lock, NULL);
         unlock(&vfork.lock);
+        if (strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "sudo") == 0)
+            printk("APTTRACE vfork parent_resume parent_pid=%d child_pid=%d\n", current->pid, pid);
         lock(&task->general_lock, 0);
         task->vfork = NULL;
         unlock(&task->general_lock);
@@ -199,6 +217,91 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
     }
 
     return pid;
+}
+
+struct clone_args_ {
+    qword_t flags;
+    qword_t pidfd;
+    qword_t child_tid;
+    qword_t parent_tid;
+    qword_t exit_signal;
+    qword_t stack;
+    qword_t stack_size;
+    qword_t tls;
+    qword_t set_tid;
+    qword_t set_tid_size;
+    qword_t cgroup;
+};
+
+dword_t sys_clone3(addr_t uargs_addr, dword_t size) {
+    STRACE("clone3(%#x, %u)", uargs_addr, size);
+
+    struct clone_args_ args = {};
+    if (size < offsetof(struct clone_args_, tls) + sizeof(args.tls))
+        return _EINVAL;
+    if (user_read(uargs_addr, &args, size < sizeof(args) ? size : sizeof(args)))
+        return _EFAULT;
+
+    if ((args.flags >> 32) != 0)
+        return _ENOSYS;
+    if (args.pidfd != 0 || args.set_tid != 0 || args.set_tid_size != 0 || args.cgroup != 0)
+        return _ENOSYS;
+
+    dword_t flags = (dword_t) args.flags;
+    dword_t exit_signal = (dword_t) args.exit_signal;
+    if ((args.exit_signal >> 32) != 0)
+        return _EINVAL;
+    if ((flags & CSIGNAL_) != 0 && (flags & CSIGNAL_) != exit_signal)
+        return _EINVAL;
+    flags = (flags & ~CSIGNAL_) | exit_signal;
+
+    if (flags & CLONE_PIDFD_)
+        return _ENOSYS;
+
+    if ((args.child_tid >> 32) != 0 || (args.parent_tid >> 32) != 0 || (args.tls >> 32) != 0)
+        return _EINVAL;
+
+    qword_t child_stack = args.stack;
+    if (child_stack != 0 && args.stack_size != 0)
+        child_stack += args.stack_size;
+    if ((child_stack >> 32) != 0)
+        return _EINVAL;
+
+    return sys_clone(flags, (addr_t) child_stack, (addr_t) args.parent_tid,
+        (addr_t) args.tls, (addr_t) args.child_tid);
+}
+
+dword_t sys_unshare(dword_t flags) {
+    STRACE("unshare(%#x)", flags);
+
+    const dword_t supported = CLONE_FILES_ | CLONE_FS_ | CLONE_SYSVSEM_;
+    const dword_t known_unsupported = CLONE_VM_ | CLONE_SIGHAND_ | CLONE_THREAD_ |
+        CLONE_NEWNS_ | CLONE_NEWCGROUP_ | CLONE_NEWUTS_ | CLONE_NEWIPC_ |
+        CLONE_NEWUSER_ | CLONE_NEWPID_ | CLONE_NEWNET_ | CLONE_IO_;
+    const dword_t known = supported | known_unsupported;
+
+    if (flags & ~known)
+        return _EINVAL;
+    if (flags & known_unsupported)
+        return _ENOSYS;
+
+    if (flags & CLONE_FILES_) {
+        int err = fdtable_unshare_current();
+        if (err < 0)
+            return err;
+    }
+
+    if ((flags & CLONE_FS_) && current->fs->refcount != 1) {
+        struct fs_info *old_fs = current->fs;
+        struct fs_info *new_fs = fs_info_copy(old_fs);
+        if (new_fs == NULL)
+            return _ENOMEM;
+        current->fs = new_fs;
+        fs_info_release(old_fs);
+    }
+
+    // SysV semaphore undo lists are not modeled separately, so treat this as a no-op.
+    return 0;
 }
 
 dword_t sys_fork(void) {

@@ -1,8 +1,10 @@
 #include "debug.h"
 #include <string.h>
 #include <signal.h>
+#include "fs/poll.h"
 #include "kernel/calls.h"
 #include "kernel/signal.h"
+#include "kernel/time.h"
 #include "kernel/task.h"
 #include "kernel/vdso.h"
 #include "emu/interrupt.h"
@@ -17,6 +19,39 @@ int fxsave_extra = 0;
 static void sigmask_set(sigset_t_ set);
 static void altstack_to_user(struct sighand *sighand, struct stack_t_ *user_stack);
 static bool is_on_altstack(dword_t sp, struct sighand *sighand);
+static void signalfd_wakeup_task(struct task *task, int sig);
+static struct fd_ops signalfd_ops;
+
+struct signalfd_state {
+    sigset_t_ mask;
+};
+
+struct signalfd_siginfo_ {
+    dword_t signo;
+    sdword_t sig_errno;
+    sdword_t code;
+    dword_t pid;
+    dword_t uid;
+    sdword_t fd;
+    dword_t tid;
+    dword_t band;
+    dword_t overrun;
+    dword_t trapno;
+    sdword_t status;
+    sdword_t sig_int;
+    qword_t sig_ptr;
+    qword_t utime;
+    qword_t stime;
+    qword_t addr;
+    word_t addr_lsb;
+    word_t __pad2;
+    sdword_t syscall;
+    qword_t call_addr;
+    dword_t arch;
+    byte_t __pad[28];
+} __attribute__((packed));
+
+static_assert(sizeof(struct signalfd_siginfo_) == 128, "signalfd siginfo layout mismatch");
 
 static int signal_is_blockable(int sig) {
     return sig != SIGKILL_ && sig != SIGSTOP_;
@@ -28,6 +63,22 @@ static int signal_is_blockable(int sig) {
 #define SIGNAL_KILL 1
 #define SIGNAL_CALL_HANDLER 2
 #define SIGNAL_STOP 3
+
+static bool is_apt_trace_comm(const char *comm) {
+    return strcmp(comm, "apt") == 0 ||
+        strcmp(comm, "sudo") == 0 ||
+        strcmp(comm, "http") == 0;
+}
+
+static bool should_trace_apt_signal_task(struct task *task) {
+    if (task == NULL)
+        return false;
+    if (is_apt_trace_comm(task->comm))
+        return true;
+    if (task->parent != NULL && is_apt_trace_comm(task->parent->comm))
+        return true;
+    return false;
+}
 
 static int signal_action(struct sighand *sighand, int sig) {
     if (signal_is_blockable(sig)) {
@@ -67,6 +118,7 @@ static void deliver_signal_unlocked(struct task *task, int sig, struct siginfo_ 
     sigqueue->info = info;
     sigqueue->info.sig = sig;
     list_add_tail(&task->queue, &sigqueue->queue);
+    signalfd_wakeup_task(task, sig);
 
     if (sigset_has(task->blocked & ~task->waiting, sig) && signal_is_blockable(sig))
         return;
@@ -100,9 +152,167 @@ retry:
 }
 
 void deliver_signal(struct task *task, int sig, struct siginfo_ info) {
+    if (should_trace_apt_signal_task(task) &&
+            sig != SIGCHLD_ && sig != SIGWINCH_ && sig != SIGURG_) {
+        const char *sender_comm = current != NULL ? current->comm : "<none>";
+        int sender_pid = current != NULL ? current->pid : -1;
+        printk("APTTRACE signal sender_pid=%d sender_comm=%s target_pid=%d target_comm=%s did_exec=%d sig=%d code=%d\n",
+            sender_pid, sender_comm, task->pid, task->comm, task->did_exec, sig, info.code);
+    }
     lock(&task->sighand->lock, 0);
     deliver_signal_unlocked(task, sig, info);
     unlock(&task->sighand->lock);
+}
+
+static bool signalfd_take_next_locked(struct task *task, sigset_t_ mask, struct siginfo_ *info_out) {
+    struct sigqueue *sigqueue;
+    list_for_each_entry(&task->queue, sigqueue, queue) {
+        if (!sigset_has(mask, sigqueue->info.sig))
+            continue;
+        *info_out = sigqueue->info;
+        list_remove(&sigqueue->queue);
+        sigset_del(&task->pending, sigqueue->info.sig);
+        free(sigqueue);
+        return true;
+    }
+    return false;
+}
+
+static void signalfd_info_from_siginfo(struct signalfd_siginfo_ *out, struct siginfo_ *info) {
+    memset(out, 0, sizeof(*out));
+    out->signo = info->sig;
+    out->sig_errno = info->sig_errno;
+    out->code = info->code;
+    out->pid = info->kill.pid;
+    out->uid = info->kill.uid;
+    out->status = info->child.status;
+    out->sig_int = info->timer.value.sv_int;
+    out->sig_ptr = info->timer.value.sv_ptr;
+    out->utime = info->child.utime;
+    out->stime = info->child.stime;
+    out->addr = info->fault.addr;
+    out->overrun = info->timer.overrun;
+    out->tid = info->timer.timer;
+    out->fd = -1;
+    out->syscall = info->sigsys.syscall;
+    out->call_addr = info->sigsys.addr;
+}
+
+static void signalfd_wakeup_task(struct task *task, int sig) {
+    if (task == NULL || task->files == NULL)
+        return;
+
+    lock(&task->files->lock, 0);
+    for (fd_t fd_no = 0; (unsigned) fd_no < task->files->size; fd_no++) {
+        struct fd *fd = fdtable_get(task->files, fd_no);
+        if (fd == NULL || fd->ops != &signalfd_ops || fd->data == NULL)
+            continue;
+        struct signalfd_state *state = fd->data;
+        if (!sigset_has(state->mask, sig))
+            continue;
+        notify(&fd->cond);
+        poll_wakeup(fd, POLL_READ);
+    }
+    unlock(&task->files->lock);
+}
+
+static int signalfd_poll(struct fd *fd) {
+    struct signalfd_state *state = fd->data;
+    if (state == NULL)
+        return POLL_ERR;
+
+    lock(&current->sighand->lock, 0);
+    struct sigqueue *sigqueue;
+    list_for_each_entry(&current->queue, sigqueue, queue) {
+        if (sigset_has(state->mask, sigqueue->info.sig)) {
+            unlock(&current->sighand->lock);
+            return POLL_READ;
+        }
+    }
+    unlock(&current->sighand->lock);
+    return 0;
+}
+
+static ssize_t signalfd_read(struct fd *fd, void *buf, size_t bufsize) {
+    struct signalfd_state *state = fd->data;
+    if (state == NULL)
+        return _EINVAL;
+    if (bufsize < sizeof(struct signalfd_siginfo_))
+        return _EINVAL;
+
+    size_t max_infos = bufsize / sizeof(struct signalfd_siginfo_);
+    size_t count = 0;
+    lock(&current->sighand->lock, 0);
+    while (count == 0) {
+        while (count < max_infos) {
+            struct siginfo_ info;
+            if (!signalfd_take_next_locked(current, state->mask, &info))
+                break;
+            signalfd_info_from_siginfo(&((struct signalfd_siginfo_ *) buf)[count], &info);
+            count++;
+        }
+        if (count != 0)
+            break;
+        if (fd->flags & O_NONBLOCK_) {
+            unlock(&current->sighand->lock);
+            return _EAGAIN;
+        }
+        int err = wait_for(&current->pause, &current->sighand->lock, NULL);
+        if (err != 0) {
+            unlock(&current->sighand->lock);
+            return err;
+        }
+    }
+    unlock(&current->sighand->lock);
+    return count * sizeof(struct signalfd_siginfo_);
+}
+
+static int signalfd_close(struct fd *fd) {
+    free(fd->data);
+    fd->data = NULL;
+    return 0;
+}
+
+static struct fd_ops signalfd_ops = {
+    .read = signalfd_read,
+    .poll = signalfd_poll,
+    .close = signalfd_close,
+};
+
+int_t sys_signalfd4(int_t fd_no, addr_t mask_addr, dword_t sigsetsize, int_t flags) {
+    if (sigsetsize != sizeof(sigset_t_))
+        return _EINVAL;
+    if (flags & ~(O_CLOEXEC_ | O_NONBLOCK_))
+        return _EINVAL;
+
+    sigset_t_ mask;
+    if (user_get(mask_addr, mask))
+        return _EFAULT;
+    mask &= ~UNBLOCKABLE_MASK;
+
+    if (fd_no != -1) {
+        struct fd *fd = f_get(fd_no);
+        if (fd == NULL || fd->ops != &signalfd_ops || fd->data == NULL)
+            return _EINVAL;
+        ((struct signalfd_state *) fd->data)->mask = mask;
+        return fd_no;
+    }
+
+    struct fd *fd = adhoc_fd_create(&signalfd_ops);
+    if (fd == NULL)
+        return _ENOMEM;
+    struct signalfd_state *state = malloc(sizeof(*state));
+    if (state == NULL) {
+        fd_close(fd);
+        return _ENOMEM;
+    }
+    *state = (struct signalfd_state) {.mask = mask};
+    fd->data = state;
+    return f_install(fd, flags);
+}
+
+int_t sys_signalfd(int_t fd, addr_t mask_addr, dword_t sigsetsize) {
+    return sys_signalfd4(fd, mask_addr, sigsetsize, 0);
 }
 
 void send_signal(struct task *task, int sig, struct siginfo_ info) {
@@ -111,6 +321,13 @@ void send_signal(struct task *task, int sig, struct siginfo_ info) {
         return;
     if (task->zombie || task->exiting)
         return;
+
+    if (sig == SIGINT_ && should_trace_apt_signal_task(task)) {
+        const char *sender_comm = current != NULL ? current->comm : "<none>";
+        int sender_pid = current != NULL ? current->pid : -1;
+        printk("APTTRACE send_signal sender_pid=%d sender_comm=%s target_pid=%d target_comm=%s did_exec=%d code=%d\n",
+            sender_pid, sender_comm, task->pid, task->comm, task->did_exec, info.code);
+    }
         
     struct sighand *sighand = task->sighand;
     lock(&sighand->lock, 0);
@@ -141,6 +358,12 @@ bool try_self_signal(int sig) {
 }
 
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info) {
+    if (sig == SIGINT_) {
+        const char *sender_comm = current != NULL ? current->comm : "<none>";
+        int sender_pid = current != NULL ? current->pid : -1;
+        printk("APTTRACE send_group_signal sender_pid=%d sender_comm=%s pgid=%d code=%d\n",
+            sender_pid, sender_comm, pgid, info.code);
+    }
     complex_lockt(&pids_lock, 0);
     struct pid *pid = pid_get(pgid);
     if (pid == NULL) {
@@ -226,6 +449,9 @@ static void setup_rt_sigframe(struct siginfo_ *info, struct rt_sigframe_ *frame)
 static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
     int sig = info->sig;
     STRACE("%d receiving signal %d\n", current->pid, sig);
+    if (should_trace_apt_signal_task(current) && sig == SIGINT_)
+        printk("APTTRACE receive_signal pid=%d comm=%s did_exec=%d sig=%d action=%d\n",
+            current->pid, current->comm, current->did_exec, sig, signal_action(sighand, sig));
 
     switch (signal_action(sighand, sig)) {
         case SIGNAL_IGNORE:
@@ -360,6 +586,9 @@ void receive_signals(void) {
             continue;
         list_remove(&sigqueue->queue);
         sigset_del(&current->pending, sig);
+        if (should_trace_apt_signal_task(current) && sig == SIGINT_)
+            printk("APTTRACE dequeue_signal pid=%d comm=%s did_exec=%d sig=%d blocked=%#llx\n",
+                current->pid, current->comm, current->did_exec, sig, (unsigned long long) blocked);
 
         if (current->ptrace.traced && sig != SIGKILL_) {
             // This notifies the parent, goes to sleep, and waits for the
@@ -532,6 +761,15 @@ void sigmask_set_temp(sigset_t_ mask) {
     unlock(&current->sighand->lock);
 }
 
+void sigmask_clear_temp(void) {
+    lock(&current->sighand->lock, 0);
+    if (current->has_saved_mask) {
+        current->blocked = current->saved_mask;
+        current->has_saved_mask = false;
+    }
+    unlock(&current->sighand->lock);
+}
+
 static int do_sigprocmask(dword_t how, sigset_t_ set) {
     if (how == SIG_BLOCK_)
         sigmask_set(current->blocked | set);
@@ -659,7 +897,8 @@ int_t sys_pause(void) {
     return _EINTR;
 }
 
-int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr, uint_t set_size) {
+static int_t sys_rt_sigtimedwait_common(addr_t set_addr, addr_t info_addr, addr_t timeout_addr, uint_t set_size,
+        bool timeout_time64) {
     if (set_size != sizeof(sigset_t_))
         return _EINVAL;
     sigset_t_ set;
@@ -667,11 +906,21 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
         return _EFAULT;
     struct timespec timeout;
     if (timeout_addr != 0) {
-        struct timespec_ fake_timeout;
-        if (user_get(timeout_addr, fake_timeout))
-            return _EFAULT;
-        timeout.tv_sec = fake_timeout.sec;
-        timeout.tv_nsec = fake_timeout.nsec;
+        if (timeout_time64) {
+            struct timespec64_ fake_timeout;
+            if (user_get(timeout_addr, fake_timeout))
+                return _EFAULT;
+            timeout.tv_sec = fake_timeout.sec;
+            timeout.tv_nsec = fake_timeout.nsec;
+        } else {
+            struct timespec_ fake_timeout;
+            if (user_get(timeout_addr, fake_timeout))
+                return _EFAULT;
+            timeout.tv_sec = fake_timeout.sec;
+            timeout.tv_nsec = fake_timeout.nsec;
+        }
+        if (timeout.tv_sec < 0 || timeout.tv_nsec < 0 || timeout.tv_nsec >= 1000000000)
+            return _EINVAL;
     }
     STRACE("sigtimedwait(%#llx, %#x, %#x) = ...\n", (long long) set, info_addr, timeout_addr);
 
@@ -710,6 +959,14 @@ int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr
             return _EFAULT;
     STRACE("done sigtimedwait = %d\n", info.sig);
     return info.sig;
+}
+
+int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr, uint_t set_size) {
+    return sys_rt_sigtimedwait_common(set_addr, info_addr, timeout_addr, set_size, false);
+}
+
+int_t sys_rt_sigtimedwait_time64(addr_t set_addr, addr_t info_addr, addr_t timeout_addr, uint_t set_size) {
+    return sys_rt_sigtimedwait_common(set_addr, info_addr, timeout_addr, set_size, true);
 }
 
 static int kill_task(struct task *task, dword_t sig) {
@@ -799,15 +1056,21 @@ static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid) {
 }
 
 dword_t sys_kill(pid_t_ pid, dword_t sig) {
+    if (strcmp(current->comm, "apt") == 0 && sig == SIGINT_)
+        printk("APTTRACE sys_kill pid=%d target=%d sig=%u\n", current->pid, pid, sig);
     return do_kill(pid, sig, 0);
 }
 dword_t sys_tgkill(pid_t_ tgid, pid_t_ tid, dword_t sig) {
     if (tid <= 0 || tgid <= 0)
         return _EINVAL;
+    if (strcmp(current->comm, "apt") == 0 && sig == SIGINT_)
+        printk("APTTRACE sys_tgkill pid=%d tgid=%d tid=%d sig=%u\n", current->pid, tgid, tid, sig);
     return do_kill(tid, sig, tgid);
 }
 dword_t sys_tkill(pid_t_ tid, dword_t sig) {
     if (tid <= 0)
         return _EINVAL;
+    if (strcmp(current->comm, "apt") == 0 && sig == SIGINT_)
+        printk("APTTRACE sys_tkill pid=%d tid=%d sig=%u\n", current->pid, tid, sig);
     return do_kill(tid, sig, 0);
 }

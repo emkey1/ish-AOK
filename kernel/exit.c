@@ -17,6 +17,13 @@ extern const char extra_lock_comm;
 
 static void halt_system(void);
 
+static bool should_trace_apt_method_task(struct task *task) {
+    if (task == NULL || !task->did_exec || task->parent == NULL)
+        return false;
+    return strcmp(task->parent->comm, "apt") == 0 ||
+        strcmp(task->comm, "http") == 0;
+}
+
 // Checks if a task's thread group can be exited by waiting for the task's reference count
 // to drop and checking if it holds any locks.
 static bool exit_tgroup(struct task *task) {
@@ -59,6 +66,9 @@ static struct task *find_new_parent(struct task *task) {
 // and re-parents any children. It ensures the task is not in a critical section and that
 // all locks are released before proceeding.  At least in theory
 noreturn void do_exit(struct task *task, int status) {
+    if (should_trace_apt_method_task(task))
+        printk("APTTRACE exit pid=%d comm=%s status=%#x exiting=%d zombie=%d\n",
+            task->pid, task->comm, status, task->exiting, task->zombie);
     if(task->reference.ready_to_be_freed) {
         goto EXIT;
     } else {
@@ -274,11 +284,15 @@ static void halt_system(void) {
 
 dword_t sys_exit(dword_t status) {
     STRACE("exit(%d)\n", status);
+    if (strcmp(current->comm, "http") == 0)
+        printk("APTTRACE sys_exit pid=%d status=%#x\n", current->pid, status);
     do_exit(current, status << 8);
 }
 
 dword_t sys_exit_group(dword_t status) {
     STRACE("exit_group(%d)\n", status);
+    if (strcmp(current->comm, "http") == 0)
+        printk("APTTRACE sys_exit_group pid=%d status=%#x\n", current->pid, status);
     do_exit_group(status << 8);
 }
 

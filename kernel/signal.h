@@ -136,6 +136,8 @@ int send_group_signal(dword_t pgid, int sig, struct siginfo_ info);
 void receive_signals(void);
 // set the signal mask, restore it to what it was before on the next receive_signals call
 void sigmask_set_temp(sigset_t_ mask);
+// restore a temporary signal mask immediately
+void sigmask_clear_temp(void);
 
 struct sighand {
     atomic_uint refcount;
@@ -188,6 +190,9 @@ dword_t sys_sigaltstack(addr_t ss, addr_t old_ss);
 int_t sys_rt_sigsuspend(addr_t mask_addr, uint_t size);
 int_t sys_pause(void);
 int_t sys_rt_sigtimedwait(addr_t set_addr, addr_t info_addr, addr_t timeout_addr, uint_t set_size);
+int_t sys_rt_sigtimedwait_time64(addr_t set_addr, addr_t info_addr, addr_t timeout_addr, uint_t set_size);
+int_t sys_signalfd(int_t fd, addr_t mask_addr, dword_t sigsetsize);
+int_t sys_signalfd4(int_t fd, addr_t mask_addr, dword_t sigsetsize, int_t flags);
 
 dword_t sys_kill(pid_t_ pid, dword_t sig);
 dword_t sys_tkill(pid_t_ tid, dword_t sig);

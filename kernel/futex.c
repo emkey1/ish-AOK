@@ -1,6 +1,7 @@
 #include "kernel/calls.h"
 #include <pthread.h>
 #include "futex.h"
+#include "kernel/time.h"
 #include "util/timer.h"
 #include "util/sync.h"
 // Apple doesn't implement futex, so we have to fake it
@@ -156,6 +157,25 @@ static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
     return futex_wait_masked(uaddr, val, timeout, ~0u);
 }
 
+static int futex_read_timeout(addr_t timeout_addr, bool time64, struct timespec *timeout) {
+    if (!time64) {
+        struct timespec_ timeout_guest;
+        if (user_get(timeout_addr, timeout_guest))
+            return _EFAULT;
+        timeout->tv_sec = timeout_guest.sec;
+        timeout->tv_nsec = timeout_guest.nsec;
+    } else {
+        struct timespec64_ timeout_guest;
+        if (user_get(timeout_addr, timeout_guest))
+            return _EFAULT;
+        timeout->tv_sec = timeout_guest.sec;
+        timeout->tv_nsec = timeout_guest.nsec;
+    }
+    if (timeout->tv_sec < 0 || timeout->tv_nsec < 0 || timeout->tv_nsec >= 1000000000)
+        return _EINVAL;
+    return 0;
+}
+
 static int futex_wakelike(int op, addr_t uaddr, dword_t wake_max, dword_t requeue_max, addr_t requeue_addr, dword_t wake_mask) {
     struct futex *futex = futex_get(uaddr);
 
@@ -295,17 +315,16 @@ static int futex_cmp_requeue_pi(addr_t uaddr1, dword_t val, addr_t uaddr2, dword
     return err;
 }
 
-dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2, addr_t uaddr2, dword_t val3) {
+dword_t sys_futex_common(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
+        addr_t uaddr2, dword_t val3, bool timeout_time64) {
     if (!(op & FUTEX_PRIVATE_FLAG_)) {
         STRACE("!FUTEX_PRIVATE ");
     }
     struct timespec timeout = {0};
     if (((op & FUTEX_CMD_MASK_) == FUTEX_WAIT_ || (op & FUTEX_CMD_MASK_) == FUTEX_WAIT_BITSET_) && timeout_or_val2) {
-        struct timespec_ timeout_;
-        if (user_get(timeout_or_val2, timeout_))
-            return _EFAULT;
-        timeout.tv_sec = timeout_.sec;
-        timeout.tv_nsec = timeout_.nsec;
+        int err = futex_read_timeout(timeout_or_val2, timeout_time64, &timeout);
+        if (err < 0)
+            return err;
         if ((op & FUTEX_CMD_MASK_) == FUTEX_WAIT_BITSET_) {
             clockid_t clock = (op & FUTEX_CLOCK_REALTIME_) ? CLOCK_REALTIME : CLOCK_MONOTONIC;
             timeout = timespec_subtract(timeout, timespec_now(clock));
@@ -370,6 +389,14 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
     STRACE("futex(%#x, %d, %d, timeout=%#x, %#x, %d) ", uaddr, op, val, timeout_or_val2, uaddr2, val3);
     FIXME("Unsupported futex(%#x, %d, %d, timeout=%#x, %#x, %d) ", uaddr, op, val, timeout_or_val2, uaddr2, val3);
     return _ENOSYS;
+}
+
+dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2, addr_t uaddr2, dword_t val3) {
+    return sys_futex_common(uaddr, op, val, timeout_or_val2, uaddr2, val3, false);
+}
+
+dword_t sys_futex_time64(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2, addr_t uaddr2, dword_t val3) {
+    return sys_futex_common(uaddr, op, val, timeout_or_val2, uaddr2, val3, true);
 }
 
 struct robust_list_head_ {
