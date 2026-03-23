@@ -66,27 +66,9 @@ int wait_for_ignore_signals(cond_t *cond, lock_t *lock, struct timespec *timeout
     struct lock_debug lock_tmp = lock->debug;
     lock->debug = (struct lock_debug) { .initialized = lock->debug.initialized };
 #endif
-    if (!timeout) { // We timeout anyway after fifteen seconds.  It appears the process wakes up briefly before returning here if there is nothing else pending.  This is KLUGE.  -mke
-        struct timespec trigger_time;
-        trigger_time.tv_sec = 15;
-        trigger_time.tv_nsec = 0;
+    if (!timeout) {
         lock->wait4 = true;
-        
-        if(current->uid == 501) {  // This is here for testing of the process lockup issue.  -mke
-            rc = pthread_cond_timedwait_relative_np(&cond->cond, &lock->m, &trigger_time);
-            // if((rc == ETIMEDOUT) && current->parent != NULL) {
-            if(rc == ETIMEDOUT) {
-                if(current->children.next != NULL) {
-                    notify(cond);  // This is a terrible hack that seems to avoid processes getting stuck.
-                    // return 0;
-                }
-            }
-            
-            rc = 0;
-            
-        } else {
-            pthread_cond_wait(&cond->cond, &lock->m);
-        }
+        pthread_cond_wait(&cond->cond, &lock->m);
     } else {
 #if __linux__
         struct timespec abs_timeout;
@@ -163,4 +145,3 @@ void sigusr1_handler(int sig) {
         }
     }
 #endif
-

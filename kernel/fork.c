@@ -143,10 +143,6 @@ fail_free_mem:
 
 dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t ctid) {
     STRACE("clone(0x%x, 0x%x, 0x%x, 0x%x, 0x%x)", flags, stack, ptid, tls, ctid);
-    if (strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "sudo") == 0) {
-        printk("APTTRACE clone parent_pid=%d comm=%s flags=%#x stack=%#x ptid=%#x tls=%#x ctid=%#x\n",
-            current->pid, current->comm, flags, stack, ptid, tls, ctid);
-    }
     if (flags & ~CSIGNAL_ & ~IMPLEMENTED_FLAGS) {
         FIXME("unimplemented clone flags 0x%x", flags & ~CSIGNAL_ & ~IMPLEMENTED_FLAGS);
         return _EINVAL;
@@ -183,18 +179,6 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
 
     // task might be destroyed by the time we finish, so save the pid
     pid_t pid = task->pid;
-    if ((strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "sudo") == 0) &&
-            (flags & CLONE_VFORK_)) {
-        printk("APTTRACE vfork child pid=%d parent_pid=%d shared_vm=%d\n",
-            pid, current->pid, !!(flags & CLONE_VM_));
-    }
-    if ((strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "sudo") == 0) &&
-            !(flags & CLONE_THREAD_)) {
-        task->apt_syscall_trace_remaining = 24;
-        printk("APTTRACE child_trace_arm pid=%d parent_pid=%d flags=%#x remaining=%u\n",
-            pid, current->pid, flags, task->apt_syscall_trace_remaining);
-    }
-
     if (current->ptrace.traced) {
         current->ptrace.trap_event = PTRACE_EVENT_FORK_;
         send_signal(current, SIGTRAP_, SIGINFO_NIL);
@@ -208,8 +192,6 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
             // FIXME this should stop waiting if a fatal signal is received
             wait_for_ignore_signals(&vfork.cond, &vfork.lock, NULL);
         unlock(&vfork.lock);
-        if (strcmp(current->comm, "apt") == 0 || strcmp(current->comm, "sudo") == 0)
-            printk("APTTRACE vfork parent_resume parent_pid=%d child_pid=%d\n", current->pid, pid);
         lock(&task->general_lock, 0);
         task->vfork = NULL;
         unlock(&task->general_lock);
@@ -313,12 +295,18 @@ dword_t sys_vfork(void) {
 }
 
 void vfork_notify(struct task *task) {
-    lock(&task->general_lock, 0);
-    if ((task->vfork) && task->pid <= MAX_PID) { // If task->pid is large, badness.  -mke
-        lock(&task->vfork->lock, 0);
-        task->vfork->done = true;
-        notify(&task->vfork->cond);
-        unlock(&task->vfork->lock);
-    }
-    unlock(&task->general_lock);
+    if (task == NULL || task->pid > MAX_PID)
+        return;
+
+    // Callers already own the task lifetime here, and do_exit() can invoke us
+    // while still holding task->general_lock. Re-locking it here self-deadlocks
+    // the exiting task and wedges any later pids_lock users behind it.
+    struct vfork_info *vfork = task->vfork;
+    if (vfork == NULL)
+        return;
+
+    lock(&vfork->lock, 0);
+    vfork->done = true;
+    notify(&vfork->cond);
+    unlock(&vfork->lock);
 }

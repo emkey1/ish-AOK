@@ -61,23 +61,23 @@ int user_read(addr_t addr, void *buf, size_t count) {
 
 int user_write_task(struct task *task, addr_t addr, const void *buf, size_t count) {
     read_lock(&task->mem->lock);
-    task_ref_cnt_mod(current, 1);
-    mem_ref_cnt_mod(current->mem, 1);
+    task_ref_cnt_mod(task, 1);
+    mem_ref_cnt_mod(task->mem, 1);
     int res = __user_write_task(task, addr, buf, count, false);
     read_unlock(&task->mem->lock);
-    task_ref_cnt_mod(current, -1);
-    mem_ref_cnt_mod(current->mem, -1);
+    task_ref_cnt_mod(task, -1);
+    mem_ref_cnt_mod(task->mem, -1);
     return res;
 }
 
 int user_write_task_ptrace(struct task *task, addr_t addr, const void *buf, size_t count) {
     read_lock(&task->mem->lock);
-    task_ref_cnt_mod(current, 1);
-    mem_ref_cnt_mod(current->mem, 1);
+    task_ref_cnt_mod(task, 1);
+    mem_ref_cnt_mod(task->mem, 1);
     int res = __user_write_task(task, addr, buf, count, true);
     read_unlock(&task->mem->lock);
-    task_ref_cnt_mod(current, -1);
-    mem_ref_cnt_mod(current->mem, -1);
+    task_ref_cnt_mod(task, -1);
+    mem_ref_cnt_mod(task->mem, -1);
     return res;
 }
 

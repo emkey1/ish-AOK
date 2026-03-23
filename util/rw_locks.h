@@ -101,9 +101,6 @@ static inline void write_unlock(wrlock_t *lock) { // Wrap it.  External calls lo
 }
 
 static inline void loop_lock_generic(wrlock_t *lock, int is_write) {
-    task_ref_cnt_mod(current, 1);
-    //modify_locks_held_count(current, 1);
-
     int random_wait = is_write ? WAIT_SLEEP + rand() % 100 : WAIT_SLEEP + rand() % WAIT_SLEEP/4;
     struct timespec lock_pause = {0, random_wait};
 
@@ -113,11 +110,9 @@ static inline void loop_lock_generic(wrlock_t *lock, int is_write) {
         atomic_l_lockf(is_write ? "llw\0" : "ll_read\0", 0);
     }
 
-    task_ref_cnt_mod(current, -1);
 }
 
 static inline void _read_lock(wrlock_t *lock) {
-    task_ref_cnt_mod(current, 1);
     loop_lock_read(lock);
     //pthread_rwlock_rdlock(&lock->l);
     // assert(lock->val >= 0);  //  If it isn't >= zero we have a problem since that means there is a write lock somehow.  -mke
@@ -133,7 +128,6 @@ static inline void _read_lock(wrlock_t *lock) {
     if(lock->val > 1000) { // We likely have a problem.
         printk("WARNING: _read_lock(%x) has 1000+ pending read locks.  (File: %s, Line: %d) Breaking likely deadlock/process corruption(PID: %d Process: %s.\n", lock, lock->file, lock->line,lock->pid, lock->comm);
         read_unlock_and_destroy(lock);
-        task_ref_cnt_mod(current, -1);
         //STRACE("read_lock(%d, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
         return;
     }
@@ -141,7 +135,6 @@ static inline void _read_lock(wrlock_t *lock) {
     /* lock->pid = current_pid(current);
     if(lock->pid > 9)
         strncpy((char *)lock->comm, current_comm(current), 16); */
-            task_ref_cnt_mod(current, -1);
     //STRACE("read_lock(%d, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
 }
 
@@ -173,30 +166,24 @@ static inline void write_lock(wrlock_t *lock) {
 
 
 static inline void read_to_write_lock(wrlock_t *lock) {  // Try to atomically swap a RO lock to a Write lock.  -mke
-    task_ref_cnt_mod(current, 1);
     atomic_l_lockf("rtw_lock\0", 0);
     _read_unlock(lock);
     _write_lock(lock);
     atomic_l_unlockf();
-    task_ref_cnt_mod(current, -1);
 }
 
 static inline void write_to_read_lock(wrlock_t *lock) { // Try to atomically swap a Write lock to a RO lock.  -mke
-    task_ref_cnt_mod(current, 1);
     atomic_l_lockf("wtr_lock\0", 0);
     _write_unlock(lock);
     _read_lock(lock);
     atomic_l_unlockf();
-    task_ref_cnt_mod(current, -1);
 }
 
 static inline void write_unlock_and_destroy(wrlock_t *lock) {
-    task_ref_cnt_mod(current, 1);
     atomic_l_lockf("wuad_lock\0", 0);
     _write_unlock(lock);
     _lock_destroy(lock);
     atomic_l_unlockf();
-    task_ref_cnt_mod(current, -1);
 }
 
 static inline void read_unlock_and_destroy(wrlock_t *lock) {

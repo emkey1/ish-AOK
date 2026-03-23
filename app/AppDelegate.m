@@ -45,28 +45,24 @@
 static void ios_handle_exit(struct task *task, int code) {
     // we are interested in init and in children of init
     // this is called with pids_lock as an implementation side effect, please do not cite as an example of good API design
-    task_ref_cnt_mod(task, 1);
-    lock(&task->general_lock, 0);
-    // complex_lockt(&pids_lock, 0);
-    if(task->pid > MAX_PID) {// Corruption
+    if (task == NULL)
+        return;
+
+    if (task->pid > MAX_PID) { // Corruption
         printk("ERROR: Insane PID in ios_handle_exit(%d)\n", task->pid);
-      //  unlock(&pids_lock);
-        // No reason to unlock the task, it has already been freed. :-(
-        //unlock(&task->general_lock);
         return;
     }
-    if (task->parent != NULL && task->parent->parent != NULL) {
-       // unlock(&pids_lock);
-        unlock(&task->general_lock);
-        task_ref_cnt_mod(task, -1);
+
+    // The exit hook runs under pids_lock, and for the leader exit path the task's
+    // general_lock is still held by do_exit(). Taking it again here deadlocks the
+    // exiting thread and wedges any later task creation behind pids_lock.
+    bool should_notify = task->parent == NULL || task->parent->parent == NULL;
+    if (!should_notify)
         return;
-    }
+
     // pid should be saved now since task would be freed
     pid_t pid = task->pid;
-    
-    //unlock(&pids_lock);
-    unlock(&task->general_lock);
-    task_ref_cnt_mod(task, -1);
+
     dispatch_async(dispatch_get_main_queue(), ^{
         [[NSNotificationCenter defaultCenter] postNotificationName:ProcessExitedNotification
                                                             object:nil

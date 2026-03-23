@@ -123,14 +123,12 @@ int_t sys_epoll_wait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t t
 
 int_t sys_epoll_pwait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t timeout, addr_t sigmask_addr, dword_t sigsetsize) {
     sigset_t_ mask;
-    bool restore_mask = false;
     if (sigmask_addr != 0) {
         if (sigsetsize != sizeof(sigset_t_))
             return _EINVAL;
         if (user_get(sigmask_addr, mask))
             return _EFAULT;
         sigmask_set_temp(mask);
-        restore_mask = true;
     }
 
     struct timespec timeout_ts;
@@ -141,22 +139,17 @@ int_t sys_epoll_pwait(fd_t epoll_f, addr_t events_addr, int_t max_events, int_t 
         timeout_ts_ptr = &timeout_ts;
     }
 
-    int_t res = epoll_wait_common(epoll_f, events_addr, max_events, timeout_ts_ptr);
-    if (restore_mask)
-        sigmask_clear_temp();
-    return res;
+    return epoll_wait_common(epoll_f, events_addr, max_events, timeout_ts_ptr);
 }
 
 int_t sys_epoll_pwait2(fd_t epoll_f, addr_t events_addr, int_t max_events, addr_t timeout_addr, addr_t sigmask_addr, dword_t sigsetsize) {
     sigset_t_ mask;
-    bool restore_mask = false;
     if (sigmask_addr != 0) {
         if (sigsetsize != sizeof(sigset_t_))
             return _EINVAL;
         if (user_get(sigmask_addr, mask))
             return _EFAULT;
         sigmask_set_temp(mask);
-        restore_mask = true;
     }
 
     struct timespec timeout_ts;
@@ -172,10 +165,7 @@ int_t sys_epoll_pwait2(fd_t epoll_f, addr_t events_addr, int_t max_events, addr_
         timeout_ts_ptr = &timeout_ts;
     }
 
-    int_t res = epoll_wait_common(epoll_f, events_addr, max_events, timeout_ts_ptr);
-    if (restore_mask)
-        sigmask_clear_temp();
-    return res;
+    return epoll_wait_common(epoll_f, events_addr, max_events, timeout_ts_ptr);
 }
 
 static int epoll_close(struct fd *fd) {

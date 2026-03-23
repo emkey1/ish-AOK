@@ -116,11 +116,6 @@ struct task {
 
     struct task_sockrestart sockrestart;
 
-    // Temporary debug state for tracing the parent-side apt decision path.
-    unsigned apt_parent_trace_remaining;
-    // Temporary debug state for tracing early syscalls in apt helper processes.
-    unsigned apt_syscall_trace_remaining;
-
     // current condition/lock, so it can be notified in case of a signal
     cond_t *waiting_cond;
     lock_t *waiting_lock;
@@ -241,14 +236,12 @@ void update_thread_name(void);
 // of functions which can block the task, we mark our task as blocked and
 // unblock it after the function is executed.
 __attribute__((always_inline)) inline int task_may_block_start(void) {
-    task_ref_cnt_mod(current, 1);
     current->io_block = 1;
     return 0;
 }
 
 __attribute__((always_inline)) inline int task_may_block_end(void) {
     current->io_block = 0;
-    task_ref_cnt_mod(current, -1);
     return 0;
 }
 
@@ -290,61 +283,24 @@ static inline unsigned locks_held_count(struct task *task) {
 bool current_is_valid(void);
 // fun little utility function
 static inline int current_pid(struct task *task) {
-    task_ref_cnt_mod(task, 10);
-    if(task != NULL) {
-        if (task->exiting != true) {
-            int tmp = task->pid;
-            task_ref_cnt_mod(task, -10);
-            return tmp;
-        } else {
-            task_ref_cnt_mod(task, -10);
-            return -1;
-        }
-    }
-    // This should never happen
-    task_ref_cnt_mod(task, -10);
-    return -1;
+    if (task == NULL || task->exiting)
+        return -1;
+    return task->pid;
 }
 
 static inline int current_uid(struct task *task) {
-    task_ref_cnt_mod(task, 1);
-    if(task != NULL) {
-        if (task->exiting != true) {
-            int tmp = task->uid;
-            task_ref_cnt_mod(task, -1);
-            return tmp;
-        } else {
-            task_ref_cnt_mod(task, -1);
-            return -1;
-        }
-    }
-    // This should never happen
-    task_ref_cnt_mod(task, -1);
-    return -1;
+    if (task == NULL || task->exiting)
+        return -1;
+    return task->uid;
 }
 
 static inline char * current_comm(struct task *task) {
     static char comm[16];
-    task_ref_cnt_mod(task, 1);
-    if(task != NULL) {
-        if(strcmp(task->comm, "")) {
-            strncpy(comm, task->comm, 16);
-        } else {
-            task_ref_cnt_mod(task, -1);
-            return "";
-        }
-        
-        if (task->exiting != true) {
-            task_ref_cnt_mod(task, -1);
-            return comm;
-        } else {
-            task_ref_cnt_mod(task, -1);
-            return "";
-        }
-    }
-    
-    task_ref_cnt_mod(task, -1);
-    return "";
+    if (task == NULL || task->exiting || task->comm[0] == '\0')
+        return "";
+    strncpy(comm, task->comm, sizeof(comm));
+    comm[sizeof(comm) - 1] = '\0';
+    return comm;
 }
 
 #endif

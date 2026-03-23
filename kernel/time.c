@@ -169,20 +169,15 @@ dword_t sys_ppoll_time64(addr_t fds, dword_t nfds, addr_t timeout_addr, addr_t s
     }
 
     sigset_t_ mask;
-    bool restore_mask = false;
     if (sigmask_addr != 0) {
         if (sigsetsize != sizeof(sigset_t_))
             return _EINVAL;
         if (user_get(sigmask_addr, mask))
             return _EFAULT;
         sigmask_set_temp(mask);
-        restore_mask = true;
     }
 
-    dword_t res = sys_poll(fds, nfds, timeout);
-    if (restore_mask)
-        sigmask_clear_temp();
-    return res;
+    return sys_poll(fds, nfds, timeout);
 }
 
 dword_t sys_time(addr_t time_out) {

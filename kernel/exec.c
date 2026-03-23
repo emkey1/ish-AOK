@@ -39,37 +39,6 @@ static size_t args_size(struct exec_args args);
 static ssize_t read_execve_user_args(addr_t argv_addr, addr_t envp_addr, ssize_t *argc_out,
         char **argv_out, char **envp_out);
 
-static bool should_trace_apt_method_path(const char *file) {
-    return strncmp(file, "/usr/lib/apt/methods/", strlen("/usr/lib/apt/methods/")) == 0;
-}
-
-static void trace_apt_method_fds(const char *file) {
-    if (!should_trace_apt_method_path(file))
-        return;
-    struct fdtable *table = current->files;
-    lock(&table->lock, 0);
-    printk("APTTRACE fds pid=%d file=%s:", current->pid, file);
-    for (fd_t f = 0; (unsigned) f < table->size && f < 8; f++) {
-        struct fd *fd = table->files[f];
-        if (fd == NULL)
-            continue;
-        printk(" fd=%d", f);
-        if (bit_test(f, table->cloexec))
-            printk("(cloexec)");
-        if (fd->mount != NULL && fd->mount->fs != NULL && fd->mount->fs->getpath != NULL) {
-            char path[MAX_PATH];
-            if (generic_getpath(fd, path) == 0)
-                printk("{path=%s}", path);
-            else
-                printk("{type=%#x real=%d}", fd->type, fd->real_fd);
-        } else {
-            printk("{type=%#x real=%d mode=%#x}", fd->type, fd->real_fd, fd->stat.mode);
-        }
-    }
-    printk("\n");
-    unlock(&table->lock);
-}
-
 static int read_header(struct fd *fd, struct elf_header *header) {
     ssize_t err;
     if (fd->ops->lseek(fd, 0, SEEK_SET))
@@ -145,8 +114,7 @@ static int load_entry(struct prg_header ph, addr_t bias, struct fd *fd) {
         if (tail_size != 0) {
             // Unlock and lock the mem because the user functions must be
             // called without locking mem.
-	        if(trylockw(&current->mem->lock)) //  Test to see if it is actually locked.  This is likely masking an underlying problem.  -mke
-                write_unlock(&current->mem->lock);
+            write_unlock(&current->mem->lock);
             
             mem_ref_cnt_mod(current->mem, 1);
             user_memset(file_end, 0, tail_size);
@@ -611,26 +579,18 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
 
 int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) {
     struct fd *fd = generic_open(file, O_RDONLY, 0);
-    if (IS_ERR(fd)) {
-        int err = (int) PTR_ERR(fd);
-        if (should_trace_apt_method_path(file))
-            printk("APTTRACE exec open fail pid=%d file=%s err=%d\n", current->pid, file, -err);
-        return err;
-    }
+    if (IS_ERR(fd))
+        return (int) PTR_ERR(fd);
 
     struct statbuf stat;
     int err = fd->mount->fs->fstat(fd, &stat);
     if (err < 0) {
-        if (should_trace_apt_method_path(file))
-            printk("APTTRACE exec fstat fail pid=%d file=%s err=%d\n", current->pid, file, -err);
         fd_close(fd);
         return err;
     }
 
     // if nobody has permission to execute, it should be safe to not execute
     if (!(stat.mode & 0111)) {
-        if (should_trace_apt_method_path(file))
-            printk("APTTRACE exec denied pid=%d file=%s mode=%#x\n", current->pid, file, stat.mode);
         fd_close(fd);
         return _EACCES;
     }
@@ -639,11 +599,8 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     if (err == _ENOEXEC)
         err = shebang_exec(fd, file, argv, envp);
     fd_close(fd);
-    if (err < 0) {
-        if (should_trace_apt_method_path(file))
-            printk("APTTRACE exec format fail pid=%d file=%s err=%d\n", current->pid, file, -err);
+    if (err < 0)
         return err;
-    }
 
     // setuid/setgid
     if (stat.mode & S_ISUID) {
@@ -668,13 +625,6 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     unlock(&current->general_lock);
 
     update_thread_name();
-    if (should_trace_apt_method_path(file)) {
-        current->apt_syscall_trace_remaining = 64;
-        printk("APTTRACE exec ok pid=%d file=%s comm=%s\n", current->pid, file, current->comm);
-        printk("APTTRACE method_trace_arm pid=%d remaining=%u\n",
-            current->pid, current->apt_syscall_trace_remaining);
-    }
-    trace_apt_method_fds(file);
 
     // cloexec
     // consider putting this in fd.c?

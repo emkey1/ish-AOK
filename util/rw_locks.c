@@ -18,6 +18,7 @@ bool current_is_valid(void);
 
 
 void wrlock_init(wrlock_t *lock) {
+    memset(lock, 0, sizeof(*lock));
     pthread_rwlockattr_t *pattr = NULL;
 #if defined(__GLIBC__)
     pthread_rwlockattr_t attr;
@@ -31,8 +32,11 @@ void wrlock_init(wrlock_t *lock) {
 #else
     if (pthread_rwlock_init(&lock->l, pattr)) __builtin_trap();
 #endif
-    lock->val = lock->line = lock->pid = 0;
+    lock->val = lock->line = 0;
+    lock->pid = -1;
     lock->file = NULL;
+    lock->comm[0] = 0;
+    lock->lname[0] = 0;
 }
 
 void _lock_destroy(wrlock_t *lock) {
@@ -57,4 +61,3 @@ void lock_destroy(wrlock_t *lock) {
 }
 
 //#define trylockw(lock) trylockw(lock, __FILE__, __LINE__)
-

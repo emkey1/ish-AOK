@@ -17,19 +17,9 @@ extern const char extra_lock_comm;
 
 static void halt_system(void);
 
-static bool should_trace_apt_method_task(struct task *task) {
-    if (task == NULL || !task->did_exec || task->parent == NULL)
-        return false;
-    return strcmp(task->parent->comm, "apt") == 0 ||
-        strcmp(task->comm, "http") == 0;
-}
-
-// Checks if a task's thread group can be exited by waiting for the task's reference count
-// to drop and checking if it holds any locks.
+// Removes a task from its thread group. The caller is responsible for ensuring
+// the task is quiescent before taking pids_lock and calling this helper.
 static bool exit_tgroup(struct task *task) {
-    while((task_ref_cnt_get(task, 0) > 2) || (locks_held_count(task))) { // Wait for now, task is in one or more critical sections, and/or has locks
-        nanosleep(&lock_pause, NULL);
-    }
     struct tgroup *group = task->group;
     list_remove(&task->group_links);
     bool group_dead = list_empty(&group->threads);
@@ -66,9 +56,6 @@ static struct task *find_new_parent(struct task *task) {
 // and re-parents any children. It ensures the task is not in a critical section and that
 // all locks are released before proceeding.  At least in theory
 noreturn void do_exit(struct task *task, int status) {
-    if (should_trace_apt_method_task(task))
-        printk("APTTRACE exit pid=%d comm=%s status=%#x exiting=%d zombie=%d\n",
-            task->pid, task->comm, status, task->exiting, task->zombie);
     if(task->reference.ready_to_be_freed) {
         goto EXIT;
     } else {
@@ -102,7 +89,6 @@ noreturn void do_exit(struct task *task, int status) {
     } while((task_ref_cnt_get(task, 0) > 2) ||
             (locks_held_count(task)) ||
             (signal_pending)); // Wait for now, task is in one or more critical
-    complex_lockt(&pids_lock, 0);
     mm_release(task->mm);
     task->mm = NULL;
     
@@ -151,7 +137,12 @@ noreturn void do_exit(struct task *task, int status) {
         nanosleep(&lock_pause, NULL);
         signal_pending = !!(task->pending & ~task->blocked);
     }
-    
+
+    // Only hold pids_lock for the process-tree and thread-group teardown below.
+    // Holding it across mm/files/fs release and the wait loops above wedges task
+    // creation and other global process operations behind a slow exit path.
+    complex_lockt(&pids_lock, 0);
+
     sighand_release(task->sighand);
     task->sighand = NULL;
     struct sigqueue *sigqueue, *sigqueue_tmp;
@@ -171,24 +162,14 @@ noreturn void do_exit(struct task *task, int status) {
         list_remove(&child->siblings);
         list_add(&new_parent->children, &child->siblings);
     }
-    
-    signal_pending = !!(task->pending & ~task->blocked);
-    
-    while((task_ref_cnt_get(task, 0) > 2) ||
-          (locks_held_count(task)) ||
-          (signal_pending)) { // Wait for now, task is in one or more critical // Wait for now, task is in one or more critical sections, and/or has locks, or signals in flight
-        nanosleep(&lock_pause, NULL);
-        signal_pending = !!(task->pending & ~task->blocked);
-    }
-    
     if (exit_tgroup(task)) {
         // notify parent that we died
         struct task *parent = leader->parent;
-        lock(&parent->general_lock, 0);
         if (parent == NULL) {
             // init died
             halt_system();
         } else {
+            lock(&parent->general_lock, 0);
             leader->zombie = true;
             notify(&parent->group->child_exit);
             struct siginfo_ info = { //mkemkemke  This is interesting.  Need to think about possibilities.  TODO
@@ -205,8 +186,9 @@ noreturn void do_exit(struct task *task, int status) {
         
         if (exit_hook != NULL)
             exit_hook(task, status);
-        
-        unlock(&parent->general_lock);
+
+        if (parent != NULL)
+            unlock(&parent->general_lock);
     }
 
     vfork_notify(task);
@@ -246,15 +228,15 @@ noreturn void do_exit_group(int status) {
     
     task_ref_cnt_mod(current, 1);
     list_for_each_entry(&group->threads, task, group_links) {
-        task->exiting = true;
-        deliver_signal(task, SIGKILL_, SIGINFO_NIL);
-        task->group->stopped = false;
-        notify(&task->group->stopped_cond);
+        if (task != current) {
+            deliver_signal(task, SIGKILL_, SIGINFO_NIL);
+            task->group->stopped = false;
+            notify(&task->group->stopped_cond);
+        }
     }
 
     unlock(&pids_lock);
     unlock(&group->lock);
-    struct task *foo = current; // debugging
     if(current->pid <= MAX_PID) // abort if crazy.  -mke
         do_exit(current, status);
     
@@ -284,15 +266,11 @@ static void halt_system(void) {
 
 dword_t sys_exit(dword_t status) {
     STRACE("exit(%d)\n", status);
-    if (strcmp(current->comm, "http") == 0)
-        printk("APTTRACE sys_exit pid=%d status=%#x\n", current->pid, status);
     do_exit(current, status << 8);
 }
 
 dword_t sys_exit_group(dword_t status) {
     STRACE("exit_group(%d)\n", status);
-    if (strcmp(current->comm, "http") == 0)
-        printk("APTTRACE sys_exit_group pid=%d status=%#x\n", current->pid, status);
     do_exit_group(status << 8);
 }
 
@@ -384,7 +362,6 @@ int do_wait(int idtype, pid_t_ id, struct siginfo_ *info, struct rusage_ *rusage
         return _EINVAL;
 
     complex_lockt(&pids_lock, 0);
-    task_ref_cnt_mod(current, 1);
     int err;
     bool got_signal = false;
 
@@ -444,12 +421,10 @@ retry:
 
     info->sig = SIGCHLD_;
 found_something:
-    task_ref_cnt_mod(current, -1);
     unlock(&pids_lock);
     return 0;
 
 error:
-    task_ref_cnt_mod(current, -1);
     unlock(&pids_lock);
     return err;
 }

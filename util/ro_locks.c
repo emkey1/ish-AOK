@@ -22,6 +22,7 @@ lock_t atomic_l_lock;
 // Function signatures and placeholders for implementation
 
 void lock_init(lock_t *lock, char lname[16]) {
+    memset(lock, 0, sizeof(*lock));
     int ret = pthread_mutex_init(&lock->m, NULL);
   //  pthread_cond_init(&lock->cond, NULL);
     if (ret != 0) {
@@ -37,12 +38,13 @@ void lock_init(lock_t *lock, char lname[16]) {
         strncpy(lock->lname, "WTF", 16);
     }
     lock->wait4 = false;
+    lock->pid = -1;
+    lock->uid = -1;
+    lock->owner = zero_init(pthread_t);
 #if LOCK_DEBUG
     lock->debug = (struct lock_debug) {
         .initialized = true,
     };
 #endif
     lock->comm[0] = 0;
-    lock->uid = -1;
 }
-

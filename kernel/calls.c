@@ -360,24 +360,8 @@ static void log_stub_syscall(struct cpu_state *cpu, unsigned syscall_num, const 
         cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp, cpu->eip);
 }
 
-static bool should_trace_apt_task_syscalls(void) {
-    if (current == NULL)
-        return false;
-    if (current->apt_syscall_trace_remaining == 0)
-        return false;
-    current->apt_syscall_trace_remaining--;
-    return true;
-}
-
-static bool should_trace_apt_parent_syscalls(void) {
-    if (current == NULL)
-        return false;
-    if (strcmp(current->comm, "apt") != 0)
-        return false;
-    if (current->apt_parent_trace_remaining == 0)
-        return false;
-    current->apt_parent_trace_remaining--;
-    return true;
+static bool should_trace_startpar_syscalls(void) {
+    return current != NULL && strcmp(current->comm, "startpar") == 0;
 }
 
 void handle_syscall_interrupt(struct cpu_state *cpu) {
@@ -397,25 +381,18 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
     if (syscall_is_logged_stub(syscall))
         log_stub_syscall(cpu, syscall_num, "stub");
 
+    if (should_trace_startpar_syscalls()) {
+        printk("TRACE: startpar(%d) syscall=%u args=%#x,%#x,%#x,%#x,%#x,%#x ip=%#x\n",
+            current->pid, syscall_num,
+            cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp, cpu->eip);
+    }
     STRACE("%d(%s) %d:%d call %-3d ", current->pid, current->comm, current->reference.count, current->locks_held.count, syscall_num);
-    bool trace_apt_task = should_trace_apt_task_syscalls();
-    bool trace_apt_parent = should_trace_apt_parent_syscalls();
-    bool trace_apt_child = current != NULL &&
-        current->parent != NULL &&
-        !current->did_exec &&
-        (strcmp(current->parent->comm, "apt") == 0 || strcmp(current->parent->comm, "sudo") == 0);
-    const char *trace_role = trace_apt_parent ? "parent" :
-        (trace_apt_child ? "child" :
-        (strcmp(current->comm, "http") == 0 ? "method" : "task"));
-    if (trace_apt_task || trace_apt_parent)
-        printk("APTTRACE syscall pid=%d role=%s nr=%u args=%#x,%#x,%#x,%#x,%#x,%#x\n",
-            current->pid, trace_role, syscall_num,
-            cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
     int result = syscall(cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
     STRACE(" = 0x%x\n", result);
-    if (trace_apt_task || trace_apt_parent)
-        printk("APTTRACE result pid=%d role=%s nr=%u ret=%#x\n",
-            current->pid, trace_role, syscall_num, result);
+    if (should_trace_startpar_syscalls()) {
+        printk("TRACE: startpar(%d) syscall=%u result=%#x next_ip=%#x\n",
+            current->pid, syscall_num, result, cpu->eip);
+    }
     cpu->eax = result;
 }
 

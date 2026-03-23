@@ -21,23 +21,23 @@ static void proc_pid_getname(struct proc_entry *entry, char *buf) {
 static struct task *proc_get_task(struct proc_entry *entry) {
     complex_lockt(&pids_lock, 1);
     struct task *task = pid_get_task(entry->pid);
-    if (task == NULL)
-        unlock(&pids_lock);
-    //task_ref_cnt_mod(task, 1);
+    if (task != NULL)
+        task_ref_cnt_mod(task, 1);
+    unlock(&pids_lock);
     return task;
 }
 static void proc_put_task(struct task *task) {
-    unlock(&pids_lock);
-    //task_ref_cnt_mod(task, -1);
+    if (task != NULL)
+        task_ref_cnt_mod(task, -1);
 }
 
 static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     struct task *task = proc_get_task(entry);
-    if ((task == NULL) || (task->exiting == true))
+    if ((task == NULL) || (task->exiting == true)) {
+        proc_put_task(task);
         return _ESRCH;
+    }
         
-    if(!strcmp(task->general_lock.lname, "task_creat_gen")) // Work around.  Sometimes the general lock is locked when it shouldn't be
-        unlock(&task->general_lock);
     lock(&task->general_lock, 0);
     lock(&task->group->lock, 0);
     // lock(&task->sighand->lock); //mkemke.  Evil, but I'm tired of trying to track down why this is getting munged for now.
@@ -134,8 +134,10 @@ static int proc_pid_statm_show(struct proc_entry *UNUSED(entry), struct proc_dat
 
 static int proc_pid_auxv_show(struct proc_entry *entry, struct proc_data *buf) {
     struct task *task = proc_get_task(entry);
-    if ((task == NULL) || (task->exiting == true))
+    if ((task == NULL) || (task->exiting == true)) {
+        proc_put_task(task);
         return _ESRCH;
+    }
     // FIXME: Increment task->reference.count
     int err = 0;
     lock(&task->general_lock, 0);
@@ -160,11 +162,11 @@ out_free_task:
 }
 
 static int proc_pid_cmdline_show(struct proc_entry *entry, struct proc_data *buf) {
-    //struct task *task = proc_get_task(entry);
-    struct task *task = pid_get_task(entry->pid);
-    
-    if ((task == NULL) || (task->exiting == true))
+    struct task *task = proc_get_task(entry);
+    if ((task == NULL) || (task->exiting == true)) {
+        proc_put_task(task);
         return _ESRCH;
+    }
     
     int err = 0;
     lock(&task->general_lock, 0);
@@ -184,8 +186,7 @@ static int proc_pid_cmdline_show(struct proc_entry *entry, struct proc_data *buf
     
 out_free_task:
     unlock(&task->general_lock);
-    //proc_put_task(task);
-    
+    proc_put_task(task);
     return err;
 }
 
@@ -246,8 +247,10 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
 
 static int proc_pid_maps_show(struct proc_entry *entry, struct proc_data *buf) {
     struct task *task = proc_get_task(entry);
-    if ((task == NULL) || (task->exiting == true))
+    if ((task == NULL) || (task->exiting == true)) {
+        proc_put_task(task);
         return _ESRCH;
+    }
     proc_maps_dump(task, buf);
     proc_put_task(task);
     return 0;
@@ -257,6 +260,10 @@ static ssize_t proc_pid_mem_pread(struct proc_entry *entry, struct proc_data *bu
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
+    if (task->mem == NULL) {
+        proc_put_task(task);
+        return _ESRCH;
+    }
     int result = user_read_task(task, (addr_t)offset, buf->data, buf->size);
     proc_put_task(task);
     return result ? -1 : buf->size;
@@ -266,6 +273,10 @@ static ssize_t proc_pid_mem_pwrite(struct proc_entry *entry, struct proc_data *b
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
+    if (task->mem == NULL) {
+        proc_put_task(task);
+        return _ESRCH;
+    }
     int result = user_write_task_ptrace(task, (addr_t)offset, buf->data, buf->size);
     proc_put_task(task);
     return result ? -1 : buf->size;
@@ -276,8 +287,10 @@ static struct proc_dir_entry proc_pid_fd;
 
 static bool proc_pid_fd_readdir(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry) {
     struct task *task = proc_get_task(entry);
-    if ((task == NULL) || (task->exiting == true)) 
+    if ((task == NULL) || (task->exiting == true) || task->files == NULL) {
+        proc_put_task(task);
         return _ESRCH;
+    }
     lock(&task->files->lock, 0);
     while (*index < task->files->size && task->files->files[*index] == NULL)
         (*index)++;
@@ -295,13 +308,13 @@ static void proc_pid_fd_getname(struct proc_entry *entry, char *buf) {
 
 static int proc_pid_fd_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
-    if ((task == NULL) || (task->exiting == true)) {
+    if ((task == NULL) || (task->exiting == true) || task->files == NULL) {
         proc_put_task(task);
         return _ESRCH;
     }
     lock(&task->files->lock, 0);
     struct fd *fd = fdtable_get(task->files, entry->fd);
-    int err = generic_getpath(fd, buf);
+    int err = fd == NULL ? _ENOENT : generic_getpath(fd, buf);
     unlock(&task->files->lock);
     proc_put_task(task);
     return err;
@@ -310,8 +323,10 @@ static int proc_pid_fd_readlink(struct proc_entry *entry, char *buf) {
 static int proc_pid_exe_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
   //  task->mm->exefile->refcount++;  // Always note interest as soon as possible
-    if ((task == NULL) || task->exiting == true)
+    if ((task == NULL) || task->exiting == true || task->mm == NULL || task->mm->exefile == NULL) {
+        proc_put_task(task);
         return _ESRCH;
+    }
     lock(&task->general_lock, 0);
     int err = generic_getpath(task->mm->exefile, buf);
    // task->mm->exefile->refcount--;
@@ -339,8 +354,10 @@ static bool proc_pid_task_readdir(struct proc_entry *entry, unsigned long *index
 
 static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
-    if (task == NULL)
+    if (task == NULL || task->fs == NULL) {
+        proc_put_task(task);
         return _ESRCH;
+    }
     complex_lockt(&task->fs->lock, 0);
 
     int err = generic_getpath(task->fs->pwd, buf);
@@ -351,8 +368,10 @@ static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
 
 static int proc_pid_root_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
-    if (task == NULL)
+    if (task == NULL || task->fs == NULL) {
+        proc_put_task(task);
         return _ESRCH;
+    }
     complex_lockt(&task->fs->lock, 0);
 
     int err = generic_getpath(task->fs->root, buf);

@@ -95,10 +95,6 @@ static inline void atomic_l_lockf(char lname[16], int skiplog) {
 }
 
 static inline void mylock(lock_t *lock, int log_lock) {
-    // struct task *foo = current; // Debugging
-    if(!strcmp(lock->lname, "task_creat_gen")) // kluge.  This means the lock is new, and SHOULD be unlocked
-       unlock(lock);
-    task_ref_cnt_mod(current, 1);
     pthread_mutex_lock(&lock->m);
     if(!log_lock) {
         modify_locks_held_count(current, 1);
@@ -111,7 +107,6 @@ static inline void mylock(lock_t *lock, int log_lock) {
     } else {
         strncpy(lock->comm, current_comm(current), 16);
     } */
-    task_ref_cnt_mod(current, -1);
     return;
 }
 
@@ -136,9 +131,7 @@ static inline int mylock_with_timeout(lock_t *lock, int log_lock) {
     pthread_mutex_unlock(&lock->m);
 
     // Rest of the locking logic
-    task_ref_cnt_mod(current, 1);
     lock->owner = pthread_self();
-    task_ref_cnt_mod(current, -1);
 
     return 0; // Success
 }

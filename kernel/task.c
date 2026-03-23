@@ -10,6 +10,7 @@
 #include "util/sync.h"
 #include <libkern/OSAtomic.h>
 #include <os/proc.h>
+#include <dlfcn.h>
 
 #define GRACE_PERIOD 2 // How long we want to deallocate tasks that have exited
 
@@ -91,31 +92,26 @@ inline void task_ref_cnt_mod(struct task *task, int value) { // value Should onl
             return;
         }
     }
-    
-    bool ilocked = false;
-    
-    if (trylocknl(&task->general_lock, task->comm, task->pid) != _EBUSY) {
-        ilocked = true; // Make sure this is locked, and unlock it later if we had to lock it.
-    }
-    
+
     pthread_mutex_lock(&task->reference.lock);
     
     if(((task->reference.count + value) < 0) && (task->pid > 9)) { // Prevent our unsigned value attempting to go negative.  -mke
-        printk("ERROR: Attempt to decrement task reference count to be negative, ignoring(%s:%d) (%d - %d)\n", task->comm, task->pid, task->reference.count, value);
-        if(ilocked == true)
-            unlock(&task->general_lock);
-        
+        void *caller = __builtin_return_address(0);
+        Dl_info caller_info = {};
+        const char *caller_name = "?";
+        ptrdiff_t caller_offset = 0;
+        if (caller != NULL && dladdr(caller, &caller_info) != 0 && caller_info.dli_sname != NULL) {
+            caller_name = caller_info.dli_sname;
+            caller_offset = (char *) caller - (char *) caller_info.dli_saddr;
+        }
+        printk("ERROR: Attempt to decrement task reference count to be negative, ignoring(%s:%d) (%d - %d) caller=%s+%td addr=%p\n",
+               task->comm, task->pid, task->reference.count, value, caller_name, caller_offset, caller);
         pthread_mutex_unlock(&task->reference.lock);
-        
         return;
     }
     
     task->reference.count = task->reference.count + value;
-        
     pthread_mutex_unlock(&task->reference.lock);
-    
-    if(ilocked == true)
-        unlock(&task->general_lock);
 }
 
 dword_t get_count_of_blocked_tasks(void) {
@@ -164,18 +160,8 @@ struct task *task_create_(struct task *parent) {
     *task = (struct task) {};
     if (parent != NULL)
         *task = *parent;
-    if (parent != NULL &&
-            (strcmp(parent->comm, "apt") == 0 || strcmp(parent->comm, "sudo") == 0) &&
-            parent->pending != 0) {
-        printk("APTTRACE clone_inherit parent_pid=%d comm=%s pending=%#llx blocked=%#llx saved=%#llx has_saved=%d\n",
-            parent->pid, parent->comm,
-            (unsigned long long) parent->pending,
-            (unsigned long long) parent->blocked,
-            (unsigned long long) parent->saved_mask,
-            parent->has_saved_mask);
-    }
-
     task->pid = pid->id;
+    list_init(&task->group_links);
     list_init(&task->children);
     list_init(&task->siblings);
     task->pending = 0;
@@ -186,16 +172,12 @@ struct task *task_create_(struct task *parent) {
     task->clear_tid = 0;
     task->robust_list = 0;
     task->did_exec = false;
-    task->apt_parent_trace_remaining = 0;
-    task->apt_syscall_trace_remaining = 0;
-
-    pid->task = task;
-    list_add(&alive_pids_list, &pid->alive);
-    if (parent != NULL) {
-        task->parent = parent;
-        list_add(&parent->children, &task->siblings);
-    }
-    unlock(&pids_lock);
+    task->exit_code = 0;
+    task->zombie = false;
+    task->exiting = false;
+    task->io_block = false;
+    task->vfork = NULL;
+    task->exit_signal = 0;
 
     lock_init(&task->general_lock, "task_creat_gen\0");
 
@@ -207,13 +189,23 @@ struct task *task_create_(struct task *parent) {
     lock_init(&task->waiting_cond_lock, "task_creat_wait\0");
     cond_init(&task->pause);
 
+    task->ptrace = (typeof(task->ptrace)) {};
     lock_init(&task->ptrace.lock, "task_creat_ptr\0");
     cond_init(&task->ptrace.cond);
-    
-    task->locks_held.count = 0; // counter used to keep track of pending locks associated with task.  Do not delete when locks are present.  -mke
-    task->reference.count = 0; // counter used to delay task deletion if positive.  --mke
+
+    task->locks_held.count = 0;
+    pthread_mutex_init(&task->locks_held.lock, NULL);
+    task->reference.count = 0;
     task->reference.ready_to_be_freed = false;
     pthread_mutex_init(&task->reference.lock, NULL);
+
+    pid->task = task;
+    list_add(&alive_pids_list, &pid->alive);
+    if (parent != NULL) {
+        task->parent = parent;
+        list_add(&parent->children, &task->siblings);
+    }
+    unlock(&pids_lock);
     return task;
 }
 
@@ -224,10 +216,7 @@ bool should_wait(struct task *t) {
 }
 
 void task_destroy(struct task *task, int caller) {
-    if(trylock(&task->general_lock) == (_EBUSY)) { // Get it if a lock does not exist
-        lock(&task->general_lock, 0);
-        task->exiting = true;
-    }
+    task->exiting = true;
     
     //printk("TD(%s:%d): Called by %d\n", task->comm, task->pid, caller);
     
@@ -239,23 +228,11 @@ void task_destroy(struct task *task, int caller) {
         count++;
     }
     
-    // Now we lock the pids_lock if it's not already locked by this task.
-    // The trylock prevents deadlocks by avoiding locking if this thread already has the lock.
-    bool locked_pids_lock = false;
-    if (!trylock(&pids_lock)) {
-        locked_pids_lock = true;
-    }
-
     // Remove the task from the sibling and alive lists.
     list_remove(&task->siblings);
     struct pid *pid = pid_get(task->pid);
     pid->task = NULL;
     list_remove(&pid->alive);
-
-    // Unlock pids_lock if we were the one who locked it.
-    if (locked_pids_lock) {
-        unlock(&pids_lock);
-    }
     
     if (task_ref_cnt_get(task, 1)) { // Check to see if another thread is accessing this process.  If yes, note that and defer freeing it
         struct task_pending_deletion *pd = malloc(sizeof(struct task_pending_deletion));
@@ -316,7 +293,6 @@ void task_run_current(void) {
     
     while (true) {
         read_lock(&save->mem->lock);
-        task_ref_cnt_mod(save, 1);
 
         int interrupt = cpu_run_to_interrupt(cpu, &tlb);
 
@@ -330,8 +306,6 @@ void task_run_current(void) {
         } else {
             handle_interrupt(interrupt);
         }
-        
-        task_ref_cnt_mod(save, -1);
     }
 }
 
@@ -388,15 +362,16 @@ void update_thread_name(void) {
 }
 
 inline void modify_locks_held_count(struct task *task, int value) { // value Should only be -1 or 1.  -mke
-    if((task == NULL) && (current != NULL)) {
+    if ((task == NULL) && (current != NULL)) {
         task = current;
-    } else {
+    } else if (task == NULL) {
         return;
     }
     
     pthread_mutex_lock(&task->locks_held.lock);
     if((task->locks_held.count + value < 0) && task->pid > 9) {
         printk("ERROR: Attempt to decrement locks_held count below zero, ignoring\n");
+        pthread_mutex_unlock(&task->locks_held.lock);
         return;
     }
     task->locks_held.count = task->locks_held.count + value;
