@@ -32,9 +32,9 @@ int access_check(struct statbuf *stat, int check) {
     if (superuser()) return 0;
     if (check == 0) return 0;
     // Align check with the correct bits in mode
-    if (current->euid == stat->uid) {
+    if (current->fsuid == stat->uid) {
         check <<= 6;
-    } else if (current->egid == stat->gid) {
+    } else if (current->fsgid == stat->gid) {
         check <<= 3;
     }
     if (!(stat->mode & check))
@@ -45,6 +45,14 @@ int access_check(struct statbuf *stat, int check) {
 // TODO ENAMETOOLONG
 
 #define AT_EACCESS_ 0x200
+#define FACCESSAT_ALLOWED_FLAGS_ (AT_EACCESS_ | AT_SYMLINK_NOFOLLOW_ | AT_EMPTY_PATH_)
+
+struct open_how_ {
+    qword_t flags;
+    qword_t mode;
+    qword_t resolve;
+};
+
 dword_t sys_access(addr_t path_addr, dword_t mode) {
     return sys_faccessat(AT_FDCWD_, path_addr, mode, 0);
 }
@@ -57,16 +65,41 @@ dword_t sys_faccessat(fd_t at_f, addr_t path_addr, mode_t_ mode, dword_t flags) 
         return _EBADF;
     STRACE("faccessat(%d, \"%s\", 0x%x, %d)", at_f, path, mode, flags);
 
-    if (flags & AT_EACCESS_)
-        return generic_accessat(at, path, mode);
+    if (flags & ~FACCESSAT_ALLOWED_FLAGS_)
+        return _EINVAL;
 
-    uid_t_ uid_tmp = current->euid;
-    uid_t_ gid_tmp = current->egid;
-    current->euid = current->uid;
-    current->egid = current->gid;
-    int err = generic_accessat(at, path, mode);
-    current->euid = uid_tmp;
-    current->egid = gid_tmp;
+    int stat_flags = 0;
+    if (flags & AT_SYMLINK_NOFOLLOW_)
+        stat_flags |= AT_SYMLINK_NOFOLLOW_;
+    if (flags & AT_EMPTY_PATH_)
+        stat_flags |= AT_EMPTY_PATH_;
+
+    if (flags & AT_EACCESS_) {
+        if (stat_flags != 0) {
+            struct statbuf stat = {};
+            int err = generic_statat(at, path, &stat, stat_flags);
+            if (err < 0)
+                return err;
+            return access_check(&stat, mode);
+        }
+        return generic_accessat(at, path, mode);
+    }
+
+    uid_t_ uid_tmp = current->fsuid;
+    uid_t_ gid_tmp = current->fsgid;
+    current->fsuid = current->uid;
+    current->fsgid = current->gid;
+    int err;
+    if (stat_flags != 0) {
+        struct statbuf stat = {};
+        err = generic_statat(at, path, &stat, stat_flags);
+        if (err >= 0)
+            err = access_check(&stat, mode);
+    } else {
+        err = generic_accessat(at, path, mode);
+    }
+    current->fsuid = uid_tmp;
+    current->fsgid = gid_tmp;
     return err;
 }
 
@@ -93,6 +126,41 @@ fd_t sys_openat(fd_t at_f, addr_t path_addr, dword_t flags, mode_t_ mode) {
 
 fd_t sys_open(addr_t path_addr, dword_t flags, mode_t_ mode) {
     return sys_openat(AT_FDCWD_, path_addr, flags, mode);
+}
+
+fd_t sys_openat2(fd_t at_f, addr_t path_addr, addr_t how_addr, dword_t size) {
+    STRACE("openat2(%d, %#x, %#x, %u)", at_f, path_addr, how_addr, size);
+
+    if (size < sizeof(struct open_how_))
+        return _EINVAL;
+
+    struct open_how_ how = {};
+    if (user_read(how_addr, &how, sizeof(how)))
+        return _EFAULT;
+
+    if (size > sizeof(how)) {
+        char extra[64];
+        size_t offset = sizeof(how);
+        while (offset < size) {
+            size_t chunk = sizeof(extra);
+            if (chunk > size - offset)
+                chunk = size - offset;
+            if (user_read(how_addr + offset, extra, chunk))
+                return _EFAULT;
+            for (size_t i = 0; i < chunk; i++) {
+                if (extra[i] != 0)
+                    return _E2BIG;
+            }
+            offset += chunk;
+        }
+    }
+
+    if ((how.flags >> 32) != 0 || (how.mode >> 32) != 0)
+        return _EINVAL;
+    if (how.resolve != 0)
+        return _EINVAL;
+
+    return sys_openat(at_f, path_addr, (dword_t) how.flags, (mode_t_) how.mode);
 }
 
 fd_t sys_creat(addr_t path_addr, mode_t_ mode) {

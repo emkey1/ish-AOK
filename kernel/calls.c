@@ -11,7 +11,6 @@ extern bool isGlibC;
 
 dword_t syscall_stub(void) {
     STRACE("syscall_stub()");
-    // I should probably do a prink here.  Not sure why I removed it
     return _ENOSYS;
 }
 dword_t syscall_stub_silent(void) {
@@ -99,6 +98,9 @@ syscall_t syscall_table[] = {
     [102] = (syscall_t) sys_socketcall,
     [103] = (syscall_t) sys_syslog,
     [104] = (syscall_t) sys_setitimer,
+    [106] = (syscall_t) sys_stat,
+    [107] = (syscall_t) sys_lstat,
+    [108] = (syscall_t) sys_fstat,
     [114] = (syscall_t) sys_wait4,
     [116] = (syscall_t) sys_sysinfo,
     [117] = (syscall_t) sys_ipc,
@@ -170,7 +172,8 @@ syscall_t syscall_table[] = {
     [212] = (syscall_t) sys_chown32,
     [213] = (syscall_t) sys_setuid,
     [214] = (syscall_t) sys_setgid,
-    [216] = (syscall_t) syscall_stub, // setfsgid32
+    [215] = (syscall_t) sys_setfsuid,
+    [216] = (syscall_t) sys_setfsgid,
     [219] = (syscall_t) sys_madvise,
     [220] = (syscall_t) sys_getdents64,
     [221] = (syscall_t) sys_fcntl,
@@ -205,7 +208,7 @@ syscall_t syscall_table[] = {
     [275] = (syscall_t) sys_get_mempolicy,
     [276] = (syscall_t) sys_set_mempolicy,
     [284] = (syscall_t) sys_waitid,
-    [288] = (syscall_t) syscall_stub, // sys_keyctl
+    [288] = (syscall_t) sys_keyctl,
     [289] = (syscall_t) sys_ioprio_set,
     [290] = (syscall_t) sys_ioprio_get,
     [291] = (syscall_t) syscall_stub, // inotify_init
@@ -253,6 +256,7 @@ syscall_t syscall_table[] = {
     [354] = (syscall_t) syscall_stub, //seccomp
     [355] = (syscall_t) sys_getrandom,
     [356] = (syscall_t) syscall_stub, // memfd_create
+    [358] = (syscall_t) sys_execveat,
     [359] = (syscall_t) sys_socket,
     [360] = (syscall_t) sys_socketpair,
     [361] = (syscall_t) sys_bind,
@@ -270,15 +274,18 @@ syscall_t syscall_table[] = {
     [373] = (syscall_t) sys_shutdown,
     [375] = (syscall_t) sys_membarrier, // membarrier
     [377] = (syscall_t) sys_copy_file_range,
-    [383] = (syscall_t) syscall_stub_silent, // statx
+    [383] = (syscall_t) sys_statx,
     [384] = (syscall_t) sys_arch_prctl,
+    [386] = (syscall_t) sys_rseq,
     [403] = (syscall_t) sys_clock_gettime64, // clock_gettime64
     [406] = (syscall_t) sys_clock_getres_time64, // clock_getres_time64
     [407] = (syscall_t) sys_clock_nanosleep_time64, // clock_nanosleep_time64
     [412] = (syscall_t) sys_utimensat64, // utimensat_time64
     [414] = (syscall_t) sys_ppoll_time64,
     [424] = (syscall_t) syscall_stub, // pidfd_send_signal?
-    [436] = (syscall_t) syscall_stub,
+    [435] = (syscall_t) syscall_stub, // clone3
+    [436] = (syscall_t) sys_close_range,
+    [437] = (syscall_t) sys_openat2,
     [439] = (syscall_t) sys_faccessat, // faccessat2
 };
 /*
@@ -328,6 +335,16 @@ SYS_EPOLL_PWAIT2                 = 441
 
 void dump_stack(int lines);
 
+static bool syscall_is_logged_stub(syscall_t syscall) {
+    return syscall == (syscall_t) syscall_stub;
+}
+
+static void log_stub_syscall(struct cpu_state *cpu, unsigned syscall_num, const char *kind) {
+    printk("WARNING: (PID: %d(%s)) %s syscall %u args=%#x,%#x,%#x,%#x,%#x,%#x ip=%#x\n",
+        current->pid, current->comm, kind, syscall_num,
+        cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp, cpu->eip);
+}
+
 void handle_syscall_interrupt(struct cpu_state *cpu) {
     unsigned syscall_num = cpu->eax;
     if (syscall_num >= NUM_SYSCALLS) {
@@ -336,14 +353,17 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
         return;
     }
 
-    if (syscall_table[syscall_num] == NULL) {
-        printk("WARNING: (PID: %d(%s)) stub syscall %d\n", current->pid, current->comm, syscall_num);
-        syscall_stub();
+    syscall_t syscall = syscall_table[syscall_num];
+    if (syscall == NULL) {
+        log_stub_syscall(cpu, syscall_num, "missing");
+        cpu->eax = syscall_stub();
         return;
     }
+    if (syscall_is_logged_stub(syscall))
+        log_stub_syscall(cpu, syscall_num, "stub");
 
     STRACE("%d(%s) %d:%d call %-3d ", current->pid, current->comm, current->reference.count, current->locks_held.count, syscall_num);
-    int result = syscall_table[syscall_num](cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
+    int result = syscall(cpu->ebx, cpu->ecx, cpu->edx, cpu->esi, cpu->edi, cpu->ebp);
     STRACE(" = 0x%x\n", result);
     cpu->eax = result;
 }
@@ -381,6 +401,26 @@ void handle_illegal_instruction_interrupt(struct cpu_state *cpu) {
     deliver_signal(current, SIGILL_, info);
 }
 
+static void handle_privileged_instruction_interrupt(struct cpu_state *cpu) {
+    printk("ERROR: %d(%s) privileged instruction at 0x%x: ", current->pid, current->comm, cpu->eip);
+    for (int i = 0; i < 8; i++) {
+        uint8_t b;
+        if (user_get(cpu->eip + i, b))
+            break;
+        printk("%02x ", b);
+    }
+    printk("\n");
+    dump_stack(8);
+    cpu->trapno = INT_GPF;
+    cpu->segfault_addr = 0;
+    cpu->segfault_was_write = false;
+    struct siginfo_ info = {
+        .code = SI_KERNEL_,
+        .fault.addr = cpu->eip,
+    };
+    deliver_signal(current, SIGSEGV_, info);
+}
+
 void handle_timer_interrupt(__attribute__((unused)) struct cpu_state *cpu) {
     // For now we just return.
     return;
@@ -398,6 +438,9 @@ void handle_interrupt(int interrupt) {
             break;
         case INT_UNDEFINED:
             handle_illegal_instruction_interrupt(cpu);
+            break;
+        case INT_PRIV:
+            handle_privileged_instruction_interrupt(cpu);
             break;
         case INT_BREAKPOINT:
             complex_lockt(&pids_lock, 0);

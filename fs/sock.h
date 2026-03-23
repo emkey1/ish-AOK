@@ -180,6 +180,7 @@ static inline int sock_flags_from_real(int real) {
 #define SO_RCVBUF_ 8
 #define SO_KEEPALIVE_ 9
 #define SO_LINGER_ 13
+#define SO_REUSEPORT_ 15
 #define SO_PEERCRED_ 17
 #define SO_TIMESTAMP_ 29
 #define SO_PROTOCOL_ 38
@@ -198,6 +199,7 @@ static inline int sock_flags_from_real(int real) {
 #define TCP_DEFER_ACCEPT_ 9
 #define TCP_INFO_ 11
 #define TCP_CONGESTION_ 13
+#define IPV6_MTU_ 24
 #define IPV6_UNICAST_HOPS_ 16
 #define IPV6_RECVERR_ 25
 #define IPV6_V6ONLY_ 26

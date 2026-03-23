@@ -159,23 +159,21 @@ bool mount_param_flag(const char *info, const char *flag) {
     return false;
 }
 
-#define MS_SUPPORTED (MS_READONLY_|MS_NOSUID_|MS_NODEV_|MS_NOEXEC_|MS_SILENT_)
+#define MS_SUPPORTED (MS_READONLY_|MS_NOSUID_|MS_NODEV_|MS_NOEXEC_|MS_REMOUNT_|MS_SILENT_)
 #define MS_FLAGS (MS_READONLY_|MS_NOSUID_|MS_NODEV_|MS_NOEXEC_)
 
 dword_t sys_mount(addr_t source_addr, addr_t point_addr, addr_t type_addr, dword_t flags, addr_t data_addr) {
-    char source[MAX_PATH];
-    if (user_read_string(source_addr, source, sizeof(source)))
+    char source[MAX_PATH] = "";
+    if (source_addr != 0 && user_read_string(source_addr, source, sizeof(source)))
         return _EFAULT;
     char point_raw[MAX_PATH];
     if (user_read_string(point_addr, point_raw, sizeof(point_raw)))
         return _EFAULT;
-    char data[MAX_PATH];
-    if (data_addr != 0) {
-        if (user_read_string(data_addr, data, sizeof(data)))
-            return _EFAULT;
-    }
-    char type[100];
-    if (user_read_string(type_addr, type, sizeof(type)))
+    char data[MAX_PATH] = "";
+    if (data_addr != 0 && user_read_string(data_addr, data, sizeof(data)))
+        return _EFAULT;
+    char type[100] = "";
+    if (type_addr != 0 && user_read_string(type_addr, type, sizeof(type)))
         return _EFAULT;
     STRACE("mount(\"%s\", \"%s\", \"%s\", %#x, \"%s\")", source, point_raw, type, flags, data_addr != 0 ? data : NULL);
 
@@ -207,6 +205,20 @@ dword_t sys_mount(addr_t source_addr, addr_t point_addr, addr_t type_addr, dword
         return err;
 
     lock(&mounts_lock, 0);
+    if (flags & MS_REMOUNT_) {
+        struct mount *mount;
+        bool found = false;
+        list_for_each_entry(&mounts, mount, mounts) {
+            if (strcmp(point, mount->point) == 0) {
+                mount->flags = (mount->flags & ~MS_FLAGS) | (flags & MS_FLAGS);
+                found = true;
+                break;
+            }
+        }
+        unlock(&mounts_lock);
+        return found ? 0 : _EINVAL;
+    }
+
     err = do_mount(fs, source, point, data, flags & MS_FLAGS);
     unlock(&mounts_lock);
     return err;

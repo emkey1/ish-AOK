@@ -13,3 +13,6 @@
 #define INT_GPF 13
 #define INT_TIMER 32
 #define INT_SYSCALL 0x80
+// Synthetic interrupt used for privileged instructions that should fault in
+// userspace as #GP but are not memory faults.
+#define INT_PRIV 0x100

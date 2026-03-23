@@ -9,11 +9,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "debug.h"
 #include "misc.h"
 #include "kernel/calls.h"
 #include "kernel/random.h"
 #include "kernel/errno.h"
 #include "fs/fd.h"
+#include "fs/path.h"
 #include "kernel/elf.h"
 #include "kernel/vdso.h"
 #include "tools/ptraceomatic-config.h"
@@ -34,6 +36,8 @@ static inline int user_memset(addr_t start, byte_t val, dword_t len);
 static inline dword_t copy_string(dword_t sp, const char *string);
 static inline dword_t args_copy(dword_t sp, struct exec_args args);
 static size_t args_size(struct exec_args args);
+static ssize_t read_execve_user_args(addr_t argv_addr, addr_t envp_addr, ssize_t *argc_out,
+        char **argv_out, char **envp_out);
 
 static int read_header(struct fd *fd, struct elf_header *header) {
     ssize_t err;
@@ -603,10 +607,12 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     if (stat.mode & S_ISUID) {
         current->suid = current->euid;
         current->euid = stat.uid;
+        current->fsuid = current->euid;
     }
     if (stat.mode & S_ISGID) {
         current->sgid = current->egid;
         current->egid = stat.gid;
+        current->fsgid = current->egid;
     }
 
     // save current->comm
@@ -694,28 +700,12 @@ ssize_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
     if (user_read_string(filename_addr, filename, sizeof(filename)))
         return _EFAULT;
 
-    ssize_t err = _ENOMEM;
-    char *argv = malloc(ARGV_MAX);
-    if (argv == NULL)
-        goto err_free_argv;
-    ssize_t argc = user_read_string_array(argv_addr, argv, ARGV_MAX);
-    if (argc < 0) {
-        err = argc;
-        goto err_free_argv;
-    }
-
-    char *envp = malloc(ARGV_MAX);
-    if (envp == NULL)
-        goto err_free_envp;
-    if (envp_addr != 0) {
-        err = user_read_string_array(envp_addr, envp, ARGV_MAX);
-        if (err < 0)
-            goto err_free_envp;
-    } else {
-        // Do not take advantage of this nonstandard and nonportable misfeature!
-        // - Michael Kerrisk, execve(2)
-        envp[0] = envp[1] = '\0';
-    }
+    ssize_t argc;
+    char *argv = NULL;
+    char *envp = NULL;
+    ssize_t err = read_execve_user_args(argv_addr, envp_addr, &argc, &argv, &envp);
+    if (err < 0)
+        return err;
 
     STRACE("execve(\"%.1000s\", {", filename);
     const char *args = argv;
@@ -733,9 +723,94 @@ ssize_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
 
     err = do_execve(filename, argc, argv, envp);
 
-err_free_envp:
     free(envp);
-err_free_argv:
     free(argv);
     return err;
+}
+
+ssize_t sys_execveat(fd_t dirfd, addr_t filename_addr, addr_t argv_addr, addr_t envp_addr, int_t flags) {
+    if (flags & ~(AT_EMPTY_PATH_ | AT_SYMLINK_NOFOLLOW_))
+        return _EINVAL;
+
+    char filename[MAX_PATH] = "";
+    if (filename_addr != 0 && user_read_string(filename_addr, filename, sizeof(filename)))
+        return _EFAULT;
+
+    ssize_t argc;
+    char *argv = NULL;
+    char *envp = NULL;
+    ssize_t err = read_execve_user_args(argv_addr, envp_addr, &argc, &argv, &envp);
+    if (err < 0)
+        return err;
+
+    char resolved[MAX_PATH];
+    if (filename[0] == '\0') {
+        if (!(flags & AT_EMPTY_PATH_)) {
+            err = _ENOENT;
+            goto out_free_args;
+        }
+        struct fd *fd = (dirfd == AT_FDCWD_) ? AT_PWD : f_get(dirfd);
+        if (fd == NULL) {
+            err = _EBADF;
+            goto out_free_args;
+        }
+        err = generic_getpath(fd, resolved);
+        if (err < 0)
+            goto out_free_args;
+    } else if (filename[0] == '/') {
+        strcpy(resolved, filename);
+    } else {
+        struct fd *at = (dirfd == AT_FDCWD_) ? AT_PWD : f_get(dirfd);
+        if (at == NULL) {
+            err = _EBADF;
+            goto out_free_args;
+        }
+        err = path_normalize(at, filename, resolved,
+                (flags & AT_SYMLINK_NOFOLLOW_) ? N_SYMLINK_NOFOLLOW : N_SYMLINK_FOLLOW);
+        if (err < 0)
+            goto out_free_args;
+    }
+
+    STRACE("execveat(%d, \"%s\", ..., %#x)", dirfd, filename, flags);
+    err = do_execve(resolved, argc, argv, envp);
+
+out_free_args:
+    free(envp);
+    free(argv);
+    return err;
+}
+
+static ssize_t read_execve_user_args(addr_t argv_addr, addr_t envp_addr, ssize_t *argc_out,
+        char **argv_out, char **envp_out) {
+    char *argv = malloc(ARGV_MAX);
+    if (argv == NULL)
+        return _ENOMEM;
+    ssize_t argc = user_read_string_array(argv_addr, argv, ARGV_MAX);
+    if (argc < 0) {
+        free(argv);
+        return argc;
+    }
+
+    char *envp = malloc(ARGV_MAX);
+    if (envp == NULL) {
+        free(argv);
+        return _ENOMEM;
+    }
+    if (envp_addr != 0) {
+        ssize_t err = user_read_string_array(envp_addr, envp, ARGV_MAX);
+        if (err < 0) {
+            free(envp);
+            free(argv);
+            return err;
+        }
+    } else {
+        // Do not take advantage of this nonstandard and nonportable misfeature!
+        // - Michael Kerrisk, execve(2)
+        envp[0] = envp[1] = '\0';
+    }
+
+    *argc_out = argc;
+    *argv_out = argv;
+    *envp_out = envp;
+    return 0;
 }

@@ -33,6 +33,7 @@ dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t c
 dword_t sys_fork(void);
 dword_t sys_vfork(void);
 ssize_t sys_execve(addr_t file, addr_t argv, addr_t envp);
+ssize_t sys_execveat(fd_t dirfd, addr_t file, addr_t argv, addr_t envp, int_t flags);
 int do_execve(const char *file, size_t argc, const char *argv, const char *envp);
 dword_t sys_exit(dword_t status);
 noreturn void do_exit(struct task *task, int status);
@@ -87,6 +88,7 @@ dword_t sys_fcntl32(fd_t fd, dword_t cmd, dword_t arg);
 dword_t sys_dup(fd_t fd);
 dword_t sys_dup2(fd_t fd, fd_t new_fd);
 dword_t sys_dup3(fd_t f, fd_t new_f, int_t flags);
+dword_t sys_close_range(dword_t first, dword_t last, dword_t flags);
 dword_t sys_close(fd_t fd);
 dword_t sys_fsync(fd_t f);
 dword_t sys_flock(fd_t fd, dword_t operation);
@@ -114,6 +116,7 @@ int_t sys_eventfd(uint_t initval);
 fd_t sys_open(addr_t path_addr, dword_t flags, mode_t_ mode);
 fd_t sys_creat(addr_t path_addr, mode_t_ mode);
 fd_t sys_openat(fd_t at, addr_t path_addr, dword_t flags, mode_t_ mode);
+fd_t sys_openat2(fd_t at, addr_t path_addr, addr_t how_addr, dword_t size);
 dword_t sys_close(fd_t fd);
 dword_t sys_link(addr_t src_addr, addr_t dst_addr);
 dword_t sys_linkat(fd_t src_at_f, addr_t src_addr, fd_t dst_at_f, addr_t dst_addr);
@@ -137,6 +140,10 @@ dword_t sys_stat64(addr_t path_addr, addr_t statbuf_addr);
 dword_t sys_lstat64(addr_t path_addr, addr_t statbuf_addr);
 dword_t sys_fstat64(fd_t fd_no, addr_t statbuf_addr);
 dword_t sys_fstatat64(fd_t at, addr_t path_addr, addr_t statbuf_addr, dword_t flags);
+dword_t sys_stat(addr_t path_addr, addr_t statbuf_addr);
+dword_t sys_lstat(addr_t path_addr, addr_t statbuf_addr);
+dword_t sys_fstat(fd_t fd_no, addr_t statbuf_addr);
+dword_t sys_statx(fd_t at_f, addr_t path_addr, dword_t flags, dword_t mask, addr_t statxbuf_addr);
 dword_t sys_fchmod(fd_t f, dword_t mode);
 dword_t sys_fchmodat(fd_t at_f, addr_t path_addr, dword_t mode);
 dword_t sys_chmod(addr_t path_addr, dword_t mode);
@@ -171,6 +178,7 @@ dword_t sys_fstatfs64(fd_t f, addr_t buf_addr);
 #define MS_NOSUID_ (1 << 1)
 #define MS_NODEV_ (1 << 2)
 #define MS_NOEXEC_ (1 << 3)
+#define MS_REMOUNT_ (1 << 5)
 #define MS_SILENT_ (1 << 15)
 dword_t sys_mount(addr_t source_addr, addr_t target_addr, addr_t type_addr, dword_t flags, addr_t data_addr);
 dword_t sys_umount2(addr_t target_addr, dword_t flags);
@@ -199,12 +207,15 @@ dword_t sys_setresuid(uid_t_ ruid, uid_t_ euid, uid_t_ suid);
 dword_t sys_setresgid(uid_t_ rgid, uid_t_ egid, uid_t_ sgid);
 int_t sys_setreuid(uid_t_ ruid, uid_t_ euid);
 int_t sys_setregid(uid_t_ rgid, uid_t_ egid);
+uid_t_ sys_setfsuid(uid_t_ uid);
+uid_t_ sys_setfsgid(uid_t_ gid);
 int_t sys_getresuid(addr_t ruid_addr, addr_t euid_addr, addr_t suid_addr);
 int_t sys_getresgid(addr_t rgid_addr, addr_t egid_addr, addr_t sgid_addr);
 int_t sys_getgroups(dword_t size, addr_t list);
 int_t sys_setgroups(dword_t size, addr_t list);
 int_t sys_capget(addr_t header_addr, addr_t data_addr);
 int_t sys_capset(addr_t header_addr, addr_t data_addr);
+int_t sys_keyctl(dword_t cmd, dword_t arg2, dword_t arg3, dword_t arg4, dword_t arg5);
 dword_t sys_getcwd(addr_t buf_addr, dword_t size);
 dword_t sys_chdir(addr_t path_addr);
 dword_t sys_chroot(addr_t path_addr);
@@ -219,6 +230,7 @@ dword_t sys_getsid(void);
 int_t sys_sched_yield(void);
 int_t sys_prctl(dword_t option, uint_t arg2, uint_t arg3, uint_t arg4, uint_t arg5);
 int_t sys_arch_prctl(int_t code, addr_t addr);
+int_t sys_rseq(addr_t rseq_addr, dword_t rseq_len, dword_t flags, dword_t sig);
 int_t sys_reboot(int_t magic, int_t magic2, int_t cmd);
 
 // system information

@@ -104,30 +104,16 @@ static inline void loop_lock_generic(wrlock_t *lock, int is_write) {
     task_ref_cnt_mod(current, 1);
     //modify_locks_held_count(current, 1);
 
-    unsigned count = 0;
     int random_wait = is_write ? WAIT_SLEEP + rand() % 100 : WAIT_SLEEP + rand() % WAIT_SLEEP/4;
     struct timespec lock_pause = {0, random_wait};
-    long count_max = (WAIT_MAX_UPPER - random_wait);
-    count_max = (is_write && count_max < 25000) ? 25000 : count_max;
 
     while((is_write ? pthread_rwlock_trywrlock(&lock->l) : pthread_rwlock_tryrdlock(&lock->l))) {
-        count++;
-        if(count > count_max) {
-            if(lock->val > 1) {
-                lock->val--;
-            } else if(lock->val == 1) {
-                _read_unlock(lock);
-            } else if(lock->val < 0) {
-                _write_unlock(lock);
-            }
-            count = 0;
-        }
         atomic_l_unlockf();
         nanosleep(&lock_pause, NULL);
         atomic_l_lockf(is_write ? "llw\0" : "ll_read\0", 0);
     }
 
-            task_ref_cnt_mod(current, -1);
+    task_ref_cnt_mod(current, -1);
 }
 
 static inline void _read_lock(wrlock_t *lock) {

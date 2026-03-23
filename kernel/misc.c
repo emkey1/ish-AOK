@@ -4,6 +4,11 @@
 #define PRCTL_SET_KEEPCAPS_ 8
 #define PRCTL_SET_NAME_ 15
 
+#define KEYCTL_GET_KEYRING_ID_ 0
+#define KEYCTL_JOIN_SESSION_KEYRING_ 1
+#define KEYCTL_SETPERM_ 5
+#define KEYCTL_SESSION_TO_PARENT_ 18
+
 int_t sys_prctl(dword_t option, uint_t arg2, uint_t UNUSED(arg3), uint_t UNUSED(arg4), uint_t UNUSED(arg5)) {
     switch (option) {
         case PRCTL_SET_KEEPCAPS_:
@@ -29,6 +34,28 @@ int_t sys_prctl(dword_t option, uint_t arg2, uint_t UNUSED(arg3), uint_t UNUSED(
 int_t sys_arch_prctl(int_t code, addr_t addr) {
     STRACE("arch_prctl(%#x, %#x)", code, addr);
     return _EINVAL;
+}
+
+int_t sys_rseq(addr_t rseq_addr, dword_t rseq_len, dword_t flags, dword_t sig) {
+    STRACE("rseq(%#x, %u, %#x, %#x)", rseq_addr, rseq_len, flags, sig);
+    // Deliberately report rseq as unsupported. Modern glibc falls back cleanly
+    // on ENOSYS, but a fake success here would expose an ABI we do not emulate.
+    return _ENOSYS;
+}
+
+int_t sys_keyctl(dword_t cmd, dword_t arg2, dword_t arg3, dword_t arg4, dword_t arg5) {
+    STRACE("keyctl(%u, %#x, %#x, %#x, %#x)", cmd, arg2, arg3, arg4, arg5);
+    switch (cmd) {
+        case KEYCTL_GET_KEYRING_ID_:
+            return 1;
+        case KEYCTL_JOIN_SESSION_KEYRING_:
+            return 1;
+        case KEYCTL_SETPERM_:
+        case KEYCTL_SESSION_TO_PARENT_:
+            return 0;
+        default:
+            return _ENOSYS;
+    }
 }
 
 #define REBOOT_MAGIC1 0xfee1dead

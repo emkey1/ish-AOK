@@ -349,6 +349,18 @@ static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
     return err;
 }
 
+static int proc_pid_root_readlink(struct proc_entry *entry, char *buf) {
+    struct task *task = proc_get_task(entry);
+    if (task == NULL)
+        return _ESRCH;
+    complex_lockt(&task->fs->lock, 0);
+
+    int err = generic_getpath(task->fs->root, buf);
+    unlock(&task->fs->lock);
+    proc_put_task(task);
+    return err;
+}
+
 struct proc_children proc_pid_children = PROC_CHILDREN({
     {"auxv", .show = proc_pid_auxv_show},
     {"cmdline", .show = proc_pid_cmdline_show},
@@ -357,6 +369,7 @@ struct proc_children proc_pid_children = PROC_CHILDREN({
     {"fd", S_IFDIR, .readdir = proc_pid_fd_readdir},
     {"maps", .show = proc_pid_maps_show},
     {"mem", .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite},
+    {"root", S_IFLNK, .readlink = proc_pid_root_readlink},
     {"stat", .show = proc_pid_stat_show},
     {"statm", .show = proc_pid_statm_show},
     {"task", S_IFDIR, .readdir = proc_pid_task_readdir},

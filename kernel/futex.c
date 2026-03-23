@@ -1,6 +1,7 @@
 #include "kernel/calls.h"
 #include <pthread.h>
 #include "futex.h"
+#include "util/timer.h"
 #include "util/sync.h"
 // Apple doesn't implement futex, so we have to fake it
 #define FUTEX_WAIT_ 0
@@ -51,6 +52,7 @@ struct futex_wait {
     cond_t cond;
     struct futex *futex; // The futex on which the thread is waiting
     pthread_t thread;    // The thread that is waiting
+    dword_t bitset;      // Match mask for FUTEX_WAIT_BITSET / WAKE_BITSET
     struct list queue;   // For linking in the futex's queue
 };
 
@@ -124,7 +126,7 @@ static int futex_load(struct futex *futex, dword_t *out) {
     return 0;
 }
 
-static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
+static int futex_wait_masked(addr_t uaddr, dword_t val, struct timespec *timeout, dword_t bitset) {
     struct futex *futex = futex_get(uaddr);
     int err = 0;
     dword_t tmp;
@@ -136,6 +138,8 @@ static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
         struct futex_wait wait;
         wait.cond = COND_INITIALIZER;
         wait.futex = futex;
+        wait.thread = pthread_self();
+        wait.bitset = bitset;
         list_add_tail(&futex->queue, &wait.queue);
         TASK_MAY_BLOCK {
             err = wait_for(&wait.cond, &futex_lock, timeout);
@@ -148,7 +152,11 @@ static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
     return err;
 }
 
-static int futex_wakelike(int op, addr_t uaddr, dword_t wake_max, dword_t requeue_max, addr_t requeue_addr) {
+static int futex_wait(addr_t uaddr, dword_t val, struct timespec *timeout) {
+    return futex_wait_masked(uaddr, val, timeout, ~0u);
+}
+
+static int futex_wakelike(int op, addr_t uaddr, dword_t wake_max, dword_t requeue_max, addr_t requeue_addr, dword_t wake_mask) {
     struct futex *futex = futex_get(uaddr);
 
     struct futex_wait *wait, *tmp;
@@ -156,6 +164,8 @@ static int futex_wakelike(int op, addr_t uaddr, dword_t wake_max, dword_t requeu
     list_for_each_entry_safe(&futex->queue, wait, tmp, queue) {
         if (woken >= wake_max)
             break;
+        if ((wait->bitset & wake_mask) == 0)
+            continue;
         notify(&wait->cond);
         list_remove(&wait->queue);
         woken++;
@@ -185,7 +195,7 @@ static int futex_wakelike(int op, addr_t uaddr, dword_t wake_max, dword_t requeu
 }
 
 int futex_wake(addr_t uaddr, dword_t wake_max) {
-    return futex_wakelike(FUTEX_WAKE_, uaddr, wake_max, 0, 0);
+    return futex_wakelike(FUTEX_WAKE_, uaddr, wake_max, 0, 0, ~0u);
 }
 
 static int futex_cmp_requeue(addr_t uaddr1, dword_t val, addr_t uaddr2, dword_t val2, dword_t val3) {
@@ -290,12 +300,18 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
         STRACE("!FUTEX_PRIVATE ");
     }
     struct timespec timeout = {0};
-    if ((op & FUTEX_CMD_MASK_) == FUTEX_WAIT_ && timeout_or_val2) {
+    if (((op & FUTEX_CMD_MASK_) == FUTEX_WAIT_ || (op & FUTEX_CMD_MASK_) == FUTEX_WAIT_BITSET_) && timeout_or_val2) {
         struct timespec_ timeout_;
         if (user_get(timeout_or_val2, timeout_))
             return _EFAULT;
         timeout.tv_sec = timeout_.sec;
         timeout.tv_nsec = timeout_.nsec;
+        if ((op & FUTEX_CMD_MASK_) == FUTEX_WAIT_BITSET_) {
+            clockid_t clock = (op & FUTEX_CLOCK_REALTIME_) ? CLOCK_REALTIME : CLOCK_MONOTONIC;
+            timeout = timespec_subtract(timeout, timespec_now(clock));
+            if (!timespec_positive(timeout))
+                return _ETIMEDOUT;
+        }
     }
     
     switch (op & FUTEX_CMD_MASK_) {
@@ -306,10 +322,10 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
             return return_val;
         case FUTEX_WAKE_:
             STRACE("futex(FUTEX_WAKE, %#x, %d)", uaddr, val);
-            return futex_wakelike(op & FUTEX_CMD_MASK_, uaddr, val, 0, 0);
+            return futex_wakelike(op & FUTEX_CMD_MASK_, uaddr, val, 0, 0, ~0u);
         case FUTEX_REQUEUE_:
             STRACE("futex(FUTEX_REQUEUE, %#x, %d, %#x)", uaddr, val, uaddr2);
-            return futex_wakelike(op & FUTEX_CMD_MASK_, uaddr, val, timeout_or_val2, uaddr2);
+            return futex_wakelike(op & FUTEX_CMD_MASK_, uaddr, val, timeout_or_val2, uaddr2, ~0u);
         case FUTEX_FD_: // Deprecated, little need to support
             STRACE("Unimplemented futex(FUTEX_FD, %#x, %d, %#x)", uaddr, val, uaddr2);
             FIXME("Unsupported futex(%#x, %d, %d, timeout=%#x, %#x, %d) (FUTEX_FD) ", uaddr, op, val, timeout_or_val2, uaddr2, val3);
@@ -334,13 +350,15 @@ dword_t sys_futex(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_or_val2,
             FIXME("Unsupported futex FUTEX_TRYLOCK_PI(%#x, %d, %d, timeout=%#x, %#x, %d) (FUTEX_TRYLOCK_PI) ", uaddr, op, val, timeout_or_val2, uaddr2, val3);
             return _ENOSYS;
         case FUTEX_WAIT_BITSET_:
-            STRACE("Unimplemented futex(FUTEX_WAIT_BITSET, %#x, %d, %#x)", uaddr, val, uaddr2);
-            FIXME("Unsupported futex FUTEX_WAIT_BITSET(%#x, %d, %d, timeout=%#x, %#x, %d) (FUTEX_WAIT_BITSET) ", uaddr, op, val, timeout_or_val2, uaddr2, val3);
-            return _ENOSYS;
+            STRACE("futex(FUTEX_WAIT_BITSET, %#x, %d, timeout=%#x, bitset=%#x)", uaddr, val, timeout_or_val2, val3);
+            if (val3 == 0)
+                return _EINVAL;
+            return futex_wait_masked(uaddr, val, timeout_or_val2 ? &timeout : NULL, val3);
         case FUTEX_WAKE_BITSET_:
-            STRACE("Unimplemented futex(FUTEX_WAKE_BITSET, %#x, %d, %#x)", uaddr, val, uaddr2);
-            FIXME("Unsupported futex FUTEX_WAKE_BITSET(%#x, %d, %d, timeout=%#x, %#x, %d) (FUTEX_WAKE_BITSET) ", uaddr, op, val, timeout_or_val2, uaddr2, val3);
-            return _ENOSYS;
+            STRACE("futex(FUTEX_WAKE_BITSET, %#x, %d, bitset=%#x)", uaddr, val, val3);
+            if (val3 == 0)
+                return _EINVAL;
+            return futex_wakelike(op & FUTEX_CMD_MASK_, uaddr, val, 0, 0, val3);
         case FUTEX_WAIT_REQUEUE_PI_:
             STRACE("Unimplemented futex(FUTEX_WAIT_REQUEUE_PI, %#x, %d, %#x)", uaddr, val, uaddr2);
             FIXME("Unsupported futex FUTEX_WAIT_REQUEUE_PI(%#x, %d, %d, timeout=%#x, %#x, %d) (FUTEX_WAIT_REQUEUE_PI) ", uaddr, op, val, timeout_or_val2, uaddr2, val3);

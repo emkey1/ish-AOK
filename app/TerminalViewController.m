@@ -45,6 +45,9 @@
 @property (weak, nonatomic) IBOutlet UIButton *infoButton;
 @property (weak, nonatomic) IBOutlet UIButton *pasteButton;
 @property (weak, nonatomic) IBOutlet UIButton *hideKeyboardButton;
+@property (strong, nonatomic) UIButton *floatingSettingsButton;
+@property (strong, nonatomic) UIView *floatingSettingsBadge;
+@property (strong, nonatomic) NSLayoutConstraint *floatingSettingsBottomConstraint;
 
 @property int sessionPid;
 @property (nonatomic) Terminal *sessionTerminal;
@@ -90,6 +93,7 @@
 
 
     [self _updateStyleFromPreferences:NO];
+    [self _installFloatingSettingsButton];
     
     if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
         [self.bar removeArrangedSubview:self.hideKeyboardButton];
@@ -139,6 +143,67 @@
         });
     }];
     [self _updateBadge];
+}
+
+- (void)_installFloatingSettingsButton {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    button.hidden = YES;
+    button.accessibilityLabel = @"Settings";
+    button.accessibilityHint = @"Opens the application settings.";
+    button.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
+    button.layer.cornerRadius = 22;
+    button.layer.masksToBounds = NO;
+    button.layer.shadowColor = UIColor.blackColor.CGColor;
+    button.layer.shadowOpacity = 0.2;
+    button.layer.shadowRadius = 8;
+    button.layer.shadowOffset = CGSizeMake(0, 2);
+    if (@available(iOS 13, *)) {
+        UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold];
+        UIImage *image = [UIImage systemImageNamed:@"gearshape.fill" withConfiguration:config];
+        [button setImage:image forState:UIControlStateNormal];
+    } else {
+        [button setTitle:@"⚙︎" forState:UIControlStateNormal];
+        button.titleLabel.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
+    }
+    [button addTarget:self action:@selector(showAbout:) forControlEvents:UIControlEventPrimaryActionTriggered];
+    [self.view addSubview:button];
+    self.floatingSettingsButton = button;
+
+    UIView *badge = [[UIView alloc] init];
+    badge.translatesAutoresizingMaskIntoConstraints = NO;
+    badge.hidden = YES;
+    if (@available(iOS 13, *)) {
+        badge.backgroundColor = UIColor.systemRedColor;
+    } else {
+        badge.backgroundColor = UIColor.redColor;
+    }
+    badge.layer.cornerRadius = 5;
+    [button addSubview:badge];
+    self.floatingSettingsBadge = badge;
+
+    self.floatingSettingsBottomConstraint = [button.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-12];
+    [NSLayoutConstraint activateConstraints:@[
+        [button.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
+        self.floatingSettingsBottomConstraint,
+        [button.widthAnchor constraintEqualToConstant:44],
+        [button.heightAnchor constraintEqualToConstant:44],
+        [badge.widthAnchor constraintEqualToConstant:10],
+        [badge.heightAnchor constraintEqualToConstant:10],
+        [badge.topAnchor constraintEqualToAnchor:button.topAnchor constant:5],
+        [badge.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-5],
+    ]];
+}
+
+- (BOOL)_shouldShowFloatingSettingsButton {
+    return self.termView.inputAccessoryView == nil;
+}
+
+- (void)_updateFloatingSettingsButtonVisibility {
+    BOOL visible = [self _shouldShowFloatingSettingsButton];
+    self.floatingSettingsButton.hidden = !visible;
+    self.floatingSettingsButton.userInteractionEnabled = visible;
+    self.floatingSettingsBottomConstraint.constant = -12;
 }
 
 - (void)awakeFromNib {
@@ -304,13 +369,21 @@
         for (UIControl *control in self.barControls) {
             control.tintColor = tintColor;
         }
+        self.floatingSettingsButton.tintColor = tintColor;
+        self.floatingSettingsButton.backgroundColor = keyAppearance == UIKeyboardAppearanceLight ?
+            [UIColor colorWithWhite:1 alpha:0.78] :
+            [UIColor colorWithWhite:0 alpha:0.45];
     }];
     UIView *oldBarView = self.termView.inputAccessoryView;
-    if (UserPreferences.shared.hideExtraKeysWithExternalKeyboard && self.hasExternalKeyboard) {
+    BOOL hideAccessoryBar = self.hasExternalKeyboard &&
+        (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ||
+         UserPreferences.shared.hideExtraKeysWithExternalKeyboard);
+    if (hideAccessoryBar) {
         self.termView.inputAccessoryView = nil;
     } else {
         self.termView.inputAccessoryView = self.barView;
     }
+    [self _updateFloatingSettingsButtonVisibility];
     if (self.termView.inputAccessoryView != oldBarView && self.termView.isFirstResponder) {
         dispatch_async(dispatch_get_main_queue(), ^{
             self.ignoreKeyboardMotion = YES; // avoid infinite recursion
@@ -324,7 +397,9 @@
 }
 
 - (void)_updateBadge {
-    self.settingsBadge.hidden = !FsNeedsRepositoryUpdate();
+    BOOL showBadge = FsNeedsRepositoryUpdate();
+    self.settingsBadge.hidden = !showBadge;
+    self.floatingSettingsBadge.hidden = !showBadge;
 }
 
 - (UIStatusBarStyle)preferredStatusBarStyle {
@@ -335,12 +410,43 @@
     return UserPreferences.shared.hideStatusBar;
 }
 
+- (void)viewSafeAreaInsetsDidChange {
+    [super viewSafeAreaInsetsDidChange];
+
+    CGFloat statusBarHeight = 0;
+    if (@available(iOS 13.0, *)) {
+        statusBarHeight = self.view.window.windowScene.statusBarManager.statusBarFrame.size.height;
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        statusBarHeight = UIApplication.sharedApplication.statusBarFrame.size.height;
+#pragma clang diagnostic pop
+    }
+
+    CGFloat baseTopInset = MAX(0, self.view.safeAreaInsets.top - self.additionalSafeAreaInsets.top);
+    UIEdgeInsets extraInsets = self.additionalSafeAreaInsets;
+    extraInsets.top = MAX(0, statusBarHeight - baseTopInset);
+    if (!UIEdgeInsetsEqualToEdgeInsets(self.additionalSafeAreaInsets, extraInsets)) {
+        self.additionalSafeAreaInsets = extraInsets;
+    }
+
+    if (self.hasExternalKeyboard) {
+        self.bottomConstraint.constant = self.view.safeAreaInsets.bottom;
+    }
+    [self _updateFloatingSettingsButtonVisibility];
+}
+
 - (void)keyboardDidSomething:(NSNotification *)notification {
     if (self.ignoreKeyboardMotion)
         return;
 
     CGRect screenKeyboardFrame = [notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
-    UIScreen *screen = UIScreen.mainScreen;
+    UIScreen *screen;
+    if (@available(iOS 13.0, *)) {
+        screen = self.view.window.windowScene.screen ?: UIScreen.mainScreen;
+    } else {
+        screen = UIScreen.mainScreen;
+    }
     // notification.object is nil before iOS 16.1 and the correct UIScreen after iOS 16.1
     if (notification.object != nil)
         screen = notification.object;
@@ -351,16 +457,20 @@
     keyboardFrame = intersection;
     NSLog(@"%@ %@", notification.name, @(keyboardFrame));
     self.hasExternalKeyboard = keyboardFrame.size.height < 100;
-    CGFloat pad = CGRectGetMaxY(self.view.bounds) - CGRectGetMinY(keyboardFrame);
-    // The keyboard appears to be undocked. This means it can either be split or
-    // truly floating. In the former case we want to keep the pad, but in the
-    // latter we should fall back to the input accessory view instead of the
-    // keyboard.
-    if (pad != keyboardFrame.size.height && keyboardFrame.size.width != UIScreen.mainScreen.bounds.size.width) {
-        pad = MAX(self.view.safeAreaInsets.bottom, self.termView.inputAccessoryView.frame.size.height);
+    CGFloat pad = self.view.safeAreaInsets.bottom;
+    if (!self.hasExternalKeyboard) {
+        pad = CGRectGetMaxY(self.view.bounds) - CGRectGetMinY(keyboardFrame);
+        // The keyboard appears to be undocked. This means it can either be split or
+        // truly floating. In the former case we want to keep the pad, but in the
+        // latter we should fall back to the input accessory view instead of the
+        // keyboard.
+        if (pad != keyboardFrame.size.height && keyboardFrame.size.width != screen.bounds.size.width) {
+            pad = MAX(self.view.safeAreaInsets.bottom, self.termView.inputAccessoryView.frame.size.height);
+        }
     }
     // NSLog(@"pad %f", pad);
     self.bottomConstraint.constant = pad;
+    [self _updateFloatingSettingsButtonVisibility];
 
     BOOL initialLayout = self.termView.needsUpdateConstraints;
     [self.view setNeedsUpdateConstraints];

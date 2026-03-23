@@ -80,12 +80,14 @@ bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     return exists;
 }
 inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat) {
-    // insert into stats (stat) values (?)
-    sqlite3_bind_blob(fs->stmt.path_create_stat, 1, stat, sizeof(*stat), SQLITE_TRANSIENT);
+    inode_t inode = fs->next_inode++;
+    // insert into stats (inode, stat) values (?, ?)
+    sqlite3_bind_int64(fs->stmt.path_create_stat, 1, inode);
+    sqlite3_bind_blob(fs->stmt.path_create_stat, 2, stat, sizeof(*stat), SQLITE_TRANSIENT);
     db_exec_reset(fs, fs->stmt.path_create_stat);
-    inode_t inode = sqlite3_last_insert_rowid(fs->db);
-    // insert or replace into paths values (?, last_insert_rowid())
+    // insert or replace into paths values (?, ?)
     bind_path(fs->stmt.path_create_path, 1, path);
+    sqlite3_bind_int64(fs->stmt.path_create_path, 2, inode);
     db_exec_reset(fs, fs->stmt.path_create_path);
     return inode;
 }
@@ -179,6 +181,28 @@ static void sqlite_func_change_prefix(sqlite3_context *context, int argc, sqlite
     sqlite3_result_blob(context, out_blob, out_size, sqlite3_free);
 }
 
+static bool fakefs_inode_namespace_needs_compaction(struct fakefs_db *fs) {
+    sqlite3_stmt *statement = db_prepare(fs, "select max(inode) from stats");
+    bool needs_compaction = false;
+    if (sqlite3_step(statement) == SQLITE_ROW && sqlite3_column_type(statement, 0) != SQLITE_NULL) {
+        uint64_t max_inode = (uint64_t) sqlite3_column_int64(statement, 0);
+        needs_compaction = max_inode > UINT32_MAX;
+    }
+    sqlite3_finalize(statement);
+    return needs_compaction;
+}
+
+static inode_t fakefs_next_inode_init(struct fakefs_db *fs) {
+    sqlite3_stmt *statement = db_prepare(fs, "select coalesce(max(inode), 0) from stats");
+    inode_t next_inode = 1;
+    if (sqlite3_step(statement) == SQLITE_ROW)
+        next_inode = (inode_t) sqlite3_column_int64(statement, 0) + 1;
+    sqlite3_finalize(statement);
+    if (next_inode == 0 || next_inode > UINT32_MAX)
+        next_inode = 1;
+    return next_inode;
+}
+
 extern int fakefs_rebuild(struct fakefs_db *fs, int root_fd);
 extern int fakefs_migrate(struct fakefs_db *fs, int root_fd);
 
@@ -242,6 +266,12 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     if (statement != NULL)
         sqlite3_finalize(statement);
 
+    if (fakefs_inode_namespace_needs_compaction(fs)) {
+        int err = fakefs_rebuild(fs, root_fd);
+        if (err < 0)
+            return err;
+    }
+
     // save current inode
     statement = db_prepare(fs, "update meta set db_inode = ?");
     sqlite3_bind_int64(statement, 1, (int64_t) db_inode);
@@ -257,14 +287,15 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     db_check_error(fs);
     sqlite3_finalize(statement);
 
+    fs->next_inode = fakefs_next_inode_init(fs);
     fs->lock = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST);
     fs->stmt.begin = db_prepare(fs, "begin");
     fs->stmt.commit = db_prepare(fs, "commit");
     fs->stmt.rollback = db_prepare(fs, "rollback");
     fs->stmt.path_get_inode = db_prepare(fs, "select inode from paths where path = ?");
     fs->stmt.path_read_stat = db_prepare(fs, "select inode, stat from stats natural join paths where path = ?");
-    fs->stmt.path_create_stat = db_prepare(fs, "insert into stats (stat) values (?)");
-    fs->stmt.path_create_path = db_prepare(fs, "insert or replace into paths values (?, last_insert_rowid())");
+    fs->stmt.path_create_stat = db_prepare(fs, "insert into stats (inode, stat) values (?, ?)");
+    fs->stmt.path_create_path = db_prepare(fs, "insert or replace into paths values (?, ?)");
     fs->stmt.inode_read_stat = db_prepare(fs, "select stat from stats where inode = ?");
     fs->stmt.inode_write_stat = db_prepare(fs, "update stats set stat = ? where inode = ?");
     fs->stmt.path_link = db_prepare(fs, "insert or replace into paths (path, inode) values (?, ?)");

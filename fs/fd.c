@@ -137,6 +137,19 @@ struct fdtable *fdtable_copy(struct fdtable *table) {
     return new_table;
 }
 
+static int fdtable_unshare_current(void) {
+    struct fdtable *table = current->files;
+    if (table->refcount == 1)
+        return 0;
+
+    struct fdtable *new_table = fdtable_copy(table);
+    if (IS_ERR(new_table))
+        return (int) PTR_ERR(new_table);
+    current->files = new_table;
+    fdtable_release(table);
+    return 0;
+}
+
 static int fdtable_expand(struct fdtable *table, fd_t max) {
     unsigned size = max + 1;
     if (size > rlimit(RLIMIT_NOFILE_))
@@ -147,7 +160,7 @@ static int fdtable_expand(struct fdtable *table, fd_t max) {
 }
 
 struct fd *fdtable_get(struct fdtable *table, fd_t f) {
-    if (f < 0 || (unsigned) f >= current->files->size)
+    if (f < 0 || (unsigned) f >= table->size)
         return NULL;
     return table->files[f];
 }
@@ -244,6 +257,8 @@ void fdtable_do_cloexec(struct fdtable *table) {
 #define F_SETLKW64_ 14
 
 #define F_DUPFD_CLOEXEC_ 1030
+#define CLOSE_RANGE_UNSHARE_ (1U << 1)
+#define CLOSE_RANGE_CLOEXEC_ (1U << 2)
 
 dword_t sys_dup(fd_t f) {
     STRACE("dup(%d)", f);
@@ -256,23 +271,81 @@ dword_t sys_dup(fd_t f) {
 
 dword_t sys_dup3(fd_t f, fd_t new_f, int_t flags) {
     STRACE("dup3(%d, %d, %d)", f, new_f, flags);
-    struct fdtable *table = current->files;
-    struct fd *fd = f_get(f);
-    if (fd == NULL)
+    if (flags & ~O_CLOEXEC_)
+        return _EINVAL;
+    if (new_f < 0)
         return _EBADF;
+    if (f == new_f)
+        return _EINVAL;
+    struct fdtable *table = current->files;
+    lock(&table->lock, 0);
+    struct fd *fd = fdtable_get(table, f);
+    if (fd == NULL) {
+        unlock(&table->lock);
+        return _EBADF;
+    }
     int err = fdtable_expand(table, new_f);
-    if (err < 0)
+    if (err < 0) {
+        unlock(&table->lock);
         return err;
+    }
     fd_retain(fd);
-    f_close(new_f);
+    if (table->files[new_f] != NULL)
+        fdtable_close(table, new_f);
     table->files[new_f] = fd;
+    bit_clear(new_f, table->cloexec);
     if (flags & O_CLOEXEC_)
         bit_set(new_f, table->cloexec);
+    unlock(&table->lock);
     return new_f;
 }
 
 dword_t sys_dup2(fd_t f, fd_t new_f) {
+    if (new_f < 0)
+        return _EBADF;
+    if (f == new_f) {
+        struct fd *fd = f_get(f);
+        if (fd == NULL)
+            return _EBADF;
+        return new_f;
+    }
     return sys_dup3(f, new_f, 0);
+}
+
+dword_t sys_close_range(dword_t first, dword_t last, dword_t flags) {
+    STRACE("close_range(%u, %u, %#x)", first, last, flags);
+    if (flags & ~(CLOSE_RANGE_UNSHARE_ | CLOSE_RANGE_CLOEXEC_))
+        return _EINVAL;
+    if (last < first)
+        return _EINVAL;
+
+    if (flags & CLOSE_RANGE_UNSHARE_) {
+        int err = fdtable_unshare_current();
+        if (err < 0)
+            return err;
+    }
+
+    struct fdtable *table = current->files;
+    lock(&table->lock, 0);
+    if (table->size == 0 || first >= table->size) {
+        unlock(&table->lock);
+        return 0;
+    }
+
+    unsigned end = last;
+    if (end >= table->size)
+        end = table->size - 1;
+
+    for (fd_t f = (fd_t) first; (unsigned) f <= end; f++) {
+        if (table->files[f] == NULL)
+            continue;
+        if (flags & CLOSE_RANGE_CLOEXEC_)
+            bit_set(f, table->cloexec);
+        else
+            fdtable_close(table, f);
+    }
+    unlock(&table->lock);
+    return 0;
 }
 
 int fd_getflags(struct fd *fd) {
@@ -308,7 +381,8 @@ dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg) {
             STRACE("fcntl(%d, F_DUPFD_CLOEXEC, %d)", f, arg);
             fd->refcount++;
             new_f = f_install_start(fd, arg);
-            bit_set(new_f, table->cloexec);
+            if (new_f >= 0)
+                bit_set(new_f, table->cloexec);
             return new_f;
 
         case F_GETFD_:

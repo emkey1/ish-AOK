@@ -46,6 +46,7 @@ struct attr {
 
 #define AT_EMPTY_PATH_ 0x1000
 #define AT_SYMLINK_NOFOLLOW_ 0x100
+#define AT_NO_AUTOMOUNT_ 0x800
 
 struct fd *generic_open(const char *path, int flags, int mode);
 struct fd *generic_openat(struct fd *at, const char *path, int flags, int mode);

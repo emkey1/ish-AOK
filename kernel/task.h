@@ -51,6 +51,7 @@ struct task {
     uid_t_ uid, gid;
     uid_t_ euid, egid;
     uid_t_ suid, sgid;
+    uid_t_ fsuid, fsgid;
 #define MAX_GROUPS 32
     unsigned ngroups;
     uid_t_ groups[MAX_GROUPS];

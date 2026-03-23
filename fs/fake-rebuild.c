@@ -25,6 +25,7 @@
 // ad hoc hashtable
 struct entry {
     ino_t inode;
+    ino_t compact_inode;
     char *path;
     struct list chain;
 };
@@ -44,6 +45,7 @@ int fakefs_rebuild(struct fakefs_db *fs, int root_fd) {
     sqlite3_stmt *read_stat = PREPARE("select stat from stats_old where inode = ?");
     sqlite3_stmt *write_path = PREPARE("insert into paths (path, inode) values (?, ?)");
     sqlite3_stmt *write_stat = PREPARE("replace into stats (inode, stat) values (?, ?)");
+    inode_t next_inode = 1;
 
     struct list hashtable[2000];
 #define HASH_SIZE (sizeof(hashtable)/sizeof(hashtable[0]))
@@ -65,19 +67,23 @@ int fakefs_rebuild(struct fakefs_db *fs, int root_fd) {
         struct list *bucket = &hashtable[inode % HASH_SIZE];
         struct entry *entry;
         bool found = false;
+        ino_t compact_inode = 0;
         list_for_each_entry(bucket, entry, chain) {
             if (entry->inode == inode) {
                 unlinkat(root_fd, fix_path(path), 0);
                 linkat(root_fd, fix_path(entry->path), root_fd, fix_path(path), 0);
                 found = true;
+                compact_inode = entry->compact_inode;
                 break;
             }
         }
         if (!found) {
             entry = malloc(sizeof(struct entry));
             entry->inode = inode;
+            entry->compact_inode = next_inode++;
             entry->path = strdup(path);
             list_add(bucket, &entry->chain);
+            compact_inode = entry->compact_inode;
         }
 
         // extract the stat so we can copy it
@@ -90,12 +96,12 @@ int fakefs_rebuild(struct fakefs_db *fs, int root_fd) {
         size_t stat_data_size = sqlite3_column_bytes(read_stat, 0);
 
         // store all the information in the new database
-        err = sqlite3_bind_int64(write_stat, 1, real_inode); CHECK_ERR();
+        err = sqlite3_bind_int64(write_stat, 1, compact_inode); CHECK_ERR();
         err = sqlite3_bind_blob(write_stat, 2, stat_data, stat_data_size, SQLITE_TRANSIENT); CHECK_ERR();
         STEP(write_stat);
         RESET(write_stat);
         err = sqlite3_bind_blob(write_path, 1, path, strlen(path), SQLITE_TRANSIENT); CHECK_ERR();
-        err = sqlite3_bind_int64(write_path, 2, real_inode); CHECK_ERR();
+        err = sqlite3_bind_int64(write_path, 2, compact_inode); CHECK_ERR();
         STEP(write_path);
         RESET(write_path);
 

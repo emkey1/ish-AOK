@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
@@ -9,6 +10,47 @@
 #include "fs/dev.h"
 #include "kernel/task.h"
 #include "kernel/errno.h"
+
+static struct fd *procfd_openat(struct fd *at, const char *path_raw) {
+    char path[MAX_PATH];
+    int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW);
+    if (err < 0)
+        return NULL;
+
+    struct mount *mount = find_mount_and_trim_path(path);
+    if (mount->fs != &procfs) {
+        mount_release(mount);
+        return NULL;
+    }
+
+    int pid;
+    int fd_no;
+    int n = 0;
+    if (sscanf(path, "/%d/fd/%d%n", &pid, &fd_no, &n) != 2 || path[n] != '\0') {
+        mount_release(mount);
+        return NULL;
+    }
+    mount_release(mount);
+
+    complex_lockt(&pids_lock, 0);
+    struct task *task = pid_get_task(pid);
+    if (task == NULL || task->exiting) {
+        unlock(&pids_lock);
+        return ERR_PTR(_ENOENT);
+    }
+
+    lock(&task->files->lock, 0);
+    struct fd *fd = fdtable_get(task->files, fd_no);
+    if (fd == NULL) {
+        unlock(&task->files->lock);
+        unlock(&pids_lock);
+        return ERR_PTR(_ENOENT);
+    }
+    fd = fd_retain(fd);
+    unlock(&task->files->lock);
+    unlock(&pids_lock);
+    return fd;
+}
 
 struct mount *find_mount_and_trim_path(char *path) {
     struct mount *mount = mount_find(path);
@@ -35,6 +77,10 @@ bool contains_mount_point(const char *path) {
 struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mode) {
     if (flags & O_RDWR_ && flags & O_WRONLY_)
         return ERR_PTR(_EINVAL);
+
+    struct fd *procfd = procfd_openat(at, path_raw);
+    if (procfd != NULL)
+        return procfd;
 
     // TODO really, really, seriously reconsider what I'm doing with the strings
     char path[MAX_PATH];

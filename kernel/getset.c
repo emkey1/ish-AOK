@@ -50,6 +50,7 @@ int_t sys_setuid(uid_t_ uid) {
             return _EPERM;
     }
     current->euid = uid;
+    current->fsuid = uid;
     return 0;
 }
 
@@ -70,6 +71,8 @@ dword_t sys_setresuid(uid_t_ ruid, uid_t_ euid, uid_t_ suid) {
         current->euid = euid;
     if (suid != (uid_t) -1)
         current->suid = suid;
+    if (euid != (uid_t) -1)
+        current->fsuid = euid;
     return 0;
 }
 
@@ -86,6 +89,16 @@ int_t sys_getresuid(addr_t ruid_addr, addr_t euid_addr, addr_t suid_addr) {
 
 int_t sys_setreuid(uid_t_ ruid, uid_t_ euid) {
     return sys_setresuid(ruid, euid, -1);
+}
+
+uid_t_ sys_setfsuid(uid_t_ uid) {
+    uid_t_ old = current->fsuid;
+    STRACE("setfsuid(%d)", uid);
+    if (uid == (uid_t_) -1)
+        return old;
+    if (superuser() || uid == current->uid || uid == current->euid || uid == current->suid)
+        current->fsuid = uid;
+    return old;
 }
 
 dword_t sys_getgid32(void) {
@@ -115,6 +128,7 @@ int_t sys_setgid(uid_t_ gid) {
             return _EPERM;
     }
     current->egid = gid;
+    current->fsgid = gid;
     return 0;
 }
 
@@ -135,6 +149,8 @@ dword_t sys_setresgid(uid_t_ rgid, uid_t_ egid, uid_t_ sgid) {
         current->egid = egid;
     if (sgid != (uid_t) -1)
         current->sgid = sgid;
+    if (egid != (uid_t) -1)
+        current->fsgid = egid;
     return 0;
 }
 
@@ -151,6 +167,16 @@ int_t sys_getresgid(addr_t rgid_addr, addr_t egid_addr, addr_t sgid_addr) {
 
 int_t sys_setregid(uid_t_ rgid, uid_t_ egid) {
     return sys_setresgid(rgid, egid, -1);
+}
+
+uid_t_ sys_setfsgid(uid_t_ gid) {
+    uid_t_ old = current->fsgid;
+    STRACE("setfsgid(%d)", gid);
+    if (gid == (uid_t_) -1)
+        return old;
+    if (superuser() || gid == current->gid || gid == current->egid || gid == current->sgid)
+        current->fsgid = gid;
+    return old;
 }
 
 int_t sys_getgroups(dword_t size, addr_t list) {

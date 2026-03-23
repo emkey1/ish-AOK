@@ -5,8 +5,11 @@
 #include "fs/fix_path.h"
 #include "misc.h"
 
+typedef uint64_t inode_t;
+
 struct fakefs_db {
     sqlite3 *db;
+    inode_t next_inode;
     struct {
         sqlite3_stmt *begin;
         sqlite3_stmt *commit;
@@ -43,8 +46,6 @@ struct ish_stat {
     uint32_t gid;
     uint32_t rdev;
 };
-
-typedef uint64_t inode_t;
 
 inode_t path_get_inode(struct fakefs_db *fs, const char *path);
 bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *stat, uint64_t *inode);

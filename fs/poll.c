@@ -329,11 +329,7 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
 void poll_destroy(struct poll *poll) {
     struct poll_fd *poll_fd;
     struct poll_fd *tmp;
-    
-    int fug = current->reference.count; // Debugging.  Xcode 15.1 can't 'decode' 'current' or any of its components.  :-(
-    while(task_ref_cnt_get(current, 0) > 2) {
-        nanosleep(&lock_pause, NULL);
-    }
+
     list_for_each_entry_safe(&poll->poll_fds, poll_fd, tmp, fds) {
         lock(&poll_fd->fd->poll_lock, 0);
         list_remove(&poll_fd->polls);
@@ -341,15 +337,8 @@ void poll_destroy(struct poll *poll) {
         unlock(&poll_fd->fd->poll_lock);
         free(poll_fd);
     }
-          
-    while(task_ref_cnt_get(current, 0) > 1) {
-        nanosleep(&lock_pause, NULL);
-    }
-    
+
     list_for_each_entry_safe(&poll->pollfd_freelist, poll_fd, tmp, fds) {
-        while(task_ref_cnt_get(current, 0)) {
-            nanosleep(&lock_pause, NULL);
-        }
         list_remove(&poll_fd->fds);
         free(poll_fd);
     }
@@ -452,4 +441,3 @@ static int rpe_events(struct real_poll_event *rpe) {
 static void real_poll_close(struct real_poll *real) {
     close(real->fd);
 }
-

@@ -1350,6 +1350,9 @@ restart:
             }
             break;
 
+        case 0xf4: TRACEI("hlt");
+                   return INT_PRIV;
+
 #define GRP3(val,z) \
     switch (modrm.opcode) { \
         case 0: \

@@ -184,6 +184,7 @@ static struct fd *open_fd_from_actual_fd(int fd_no) {
     }
     fd->real_fd = fd_no;
     fd->dir = NULL;
+    realfs_fstat(fd, &fd->stat);
     return fd;
 }
 

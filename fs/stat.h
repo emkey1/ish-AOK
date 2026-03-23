@@ -58,15 +58,15 @@ struct newstat {
 
 struct newstat64 {
     qword_t dev;
-    dword_t _pad1;
-    dword_t fucked_ino;
+    char pad0[4];
+    dword_t __st_ino;
     dword_t mode;
     dword_t nlink;
     dword_t uid;
     dword_t gid;
     qword_t rdev;
-    dword_t _pad2;
-    qword_t size;
+    char pad3[4];
+    sqword_t size;
     dword_t blksize;
     qword_t blocks;
     dword_t atime;
@@ -76,6 +76,39 @@ struct newstat64 {
     dword_t ctime;
     dword_t ctime_nsec;
     qword_t ino;
+} __attribute__((packed));
+
+struct statx_timestamp_ {
+    sqword_t tv_sec;
+    dword_t tv_nsec;
+    sdword_t __reserved;
+} __attribute__((packed));
+
+struct statx_ {
+    dword_t stx_mask;
+    dword_t stx_blksize;
+    qword_t stx_attributes;
+    dword_t stx_nlink;
+    dword_t stx_uid;
+    dword_t stx_gid;
+    word_t stx_mode;
+    word_t __spare0;
+    qword_t stx_ino;
+    qword_t stx_size;
+    qword_t stx_blocks;
+    qword_t stx_attributes_mask;
+    struct statx_timestamp_ stx_atime;
+    struct statx_timestamp_ stx_btime;
+    struct statx_timestamp_ stx_ctime;
+    struct statx_timestamp_ stx_mtime;
+    dword_t stx_rdev_major;
+    dword_t stx_rdev_minor;
+    dword_t stx_dev_major;
+    dword_t stx_dev_minor;
+    qword_t stx_mnt_id;
+    dword_t stx_dio_mem_align;
+    dword_t stx_dio_offset_align;
+    qword_t __spare3[12];
 } __attribute__((packed));
 
 struct statfsbuf {
