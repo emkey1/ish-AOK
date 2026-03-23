@@ -23,3 +23,7 @@
 ## 2026-03-24 - Optimize dynamic string construction
 **Learning:** In `fs/proc/ish.c`, the `parse_if_flags` function used `strcat` to append strings dynamically, which causes O(N) traversal to find the end of the string for every append.
 **Action:** Replace `strcat` in dynamic string construction with `memcpy` using pre-calculated string lengths. By keeping track of the current string length `len`, appending becomes an O(1) operation.
+
+## 2026-03-24 - Avoid strcpy in path_normalize
+**Learning:** In `__path_normalize` (`fs/path.c`), using `strcpy` to copy the constructed path `out` causes an unnecessary O(N) calculation to find the null terminator, when the exact length is already known by pointer arithmetic `o - out` where `o` is the pointer to the end of `out`.
+**Action:** Replace `strcpy` with `memcpy` using pre-calculated string lengths. By taking advantage of existing pointer tracking, the copy becomes an O(1) time operation (excluding the copy itself), avoiding redundant full-string traversal.
