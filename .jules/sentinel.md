@@ -32,3 +32,8 @@
 **Vulnerability:** `fs/real.c` used a 20-byte buffer for formatting `/proc/self/fd/%d`, but the path prefix is 14 bytes and a 32-bit signed int can be 11 bytes, requiring at least 26 bytes. This allows a stack buffer overflow for very large file descriptors.
 **Learning:** Hardcoded buffer sizes for path formatting often fail to account for the maximum string length of integers.
 **Prevention:** Always allocate at least 32 bytes for paths containing PIDs or FDs, and consider using `snprintf` to avoid overflow entirely.
+
+## 2026-03-24 - Buffer Overflow in TERM Environment Variable Copy
+**Vulnerability:** A local variable `char envp[100] = {0};` allocated 100 bytes on the kernel stack in `main.c` and `tools/ptraceomatic.c`. The `TERM` environment variable was copied into this stack buffer using `strcpy`. Since environment variables are user-controlled, an excessively long `TERM` value would trigger a stack buffer overflow.
+**Learning:** Hardcoded stack buffer limits with unchecked string copies (`strcpy`) are a critical vulnerability vector, especially for environment variables which are easily controlled by external actors.
+**Prevention:** Always implement explicit bounds checking before performing string copies into stack-allocated buffers. Alternatively, dynamically allocate memory using `malloc()` with proper size calculation and a `NULL` check, then format safely with `snprintf()`, and finally free the memory when it's no longer needed.

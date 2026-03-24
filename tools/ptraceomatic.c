@@ -459,10 +459,24 @@ static void prepare_tracee(int pid) {
 }
 
 int main(int argc, char *const argv[]) {
-    char envp[100] = {0};
-    if (getenv("TERM"))
-        strcpy(envp, getenv("TERM") - strlen("TERM") - 1);
+    char *envp = malloc(1);
+    if (envp) {
+        envp[0] = '\0';
+    }
+    if (getenv("TERM")) {
+        const char *term = getenv("TERM");
+        size_t len = strlen("TERM=") + strlen(term) + 2;
+        char *new_envp = malloc(len);
+        if (new_envp) {
+            snprintf(new_envp, len, "TERM=%s", term);
+            new_envp[len - 1] = '\0';
+            if (envp) free(envp);
+            envp = new_envp;
+        }
+    }
     int err = xX_main_Xx(argc, argv, envp);
+    if (envp)
+        free(envp);
     if (err < 0) {
         fprintf(stderr, "%s\n", strerror(-err));
         return err;
