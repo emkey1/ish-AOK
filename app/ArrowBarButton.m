@@ -62,7 +62,7 @@ static CGPoint anchors[] = {
     return YES;
 }
 - (UIAccessibilityTraits)accessibilityTraits {
-    return UIAccessibilityTraitAdjustable;
+    return [super accessibilityTraits] | UIAccessibilityTraitAdjustable;
 }
 - (NSString *)accessibilityLabel {
     return self.accessibilityUpDown ? @"Arrow Keys Up or Down" : @"Arrow Keys Left or Right";
