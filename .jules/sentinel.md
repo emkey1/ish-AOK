@@ -32,3 +32,7 @@
 **Vulnerability:** `fs/real.c` used a 20-byte buffer for formatting `/proc/self/fd/%d`, but the path prefix is 14 bytes and a 32-bit signed int can be 11 bytes, requiring at least 26 bytes. This allows a stack buffer overflow for very large file descriptors.
 **Learning:** Hardcoded buffer sizes for path formatting often fail to account for the maximum string length of integers.
 **Prevention:** Always allocate at least 32 bytes for paths containing PIDs or FDs, and consider using `snprintf` to avoid overflow entirely.
+## $(date +%Y-%m-%d) - Replace unsafe strcpy calls with strncpy in fs/tmp.c
+**Vulnerability:** Unbounded string copies (`strcpy`) writing to fixed-size char arrays (`char name[MAX_NAME + 1]`) in `fs/tmp.c`.
+**Learning:** Legacy VFS and temporary filesystem code often lacks explicit bounds checking, relying on higher-level path validation. This creates defense-in-depth vulnerabilities if `MAX_NAME` bounds are ever exceeded.
+**Prevention:** Always use `strncpy` and manually ensure null-termination for fixed-size string arrays in the kernel, regardless of upstream path validation.

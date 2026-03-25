@@ -102,7 +102,8 @@ static int tmpfs_dir_link(struct tmp_dirent *dir, const char *name, struct tmp_i
     }
 
     tmp_dirent_init(new_dirent);
-    strcpy(new_dirent->name, name);
+    strncpy(new_dirent->name, name, sizeof(new_dirent->name) - 1);
+    new_dirent->name[sizeof(new_dirent->name) - 1] = '\0';
     new_dirent->inode = tmp_inode_retain(child);
     new_dirent->index = dir->next_index++;
     new_dirent->parent = tmp_dirent_retain(dir);
@@ -448,7 +449,8 @@ static int tmpfs_readdir(struct fd *fd, struct dir_entry *entry) {
     tmpfs_fd_seekdir(fd, next_dirent);
 
     entry->inode = dirent->inode->stat.inode;
-    strcpy(entry->name, dirent->name);
+    strncpy(entry->name, dirent->name, sizeof(entry->name) - 1);
+    entry->name[sizeof(entry->name) - 1] = '\0';
     res = 1;
 
 out:
