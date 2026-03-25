@@ -32,3 +32,8 @@
 **Vulnerability:** `fs/real.c` used a 20-byte buffer for formatting `/proc/self/fd/%d`, but the path prefix is 14 bytes and a 32-bit signed int can be 11 bytes, requiring at least 26 bytes. This allows a stack buffer overflow for very large file descriptors.
 **Learning:** Hardcoded buffer sizes for path formatting often fail to account for the maximum string length of integers.
 **Prevention:** Always allocate at least 32 bytes for paths containing PIDs or FDs, and consider using `snprintf` to avoid overflow entirely.
+
+## 2026-03-25 - Buffer Overflow in Environment Variable Setup
+**Vulnerability:** A static stack buffer (`char envp[100] = {0};`) was used to construct the `TERM` environment variable in `main.c` and `tools/ptraceomatic.c`. A malicious user or system configuration could supply a `TERM` string larger than 99 characters, causing `strcpy` to overflow the stack buffer, leading to memory corruption, denial of service, or potential arbitrary code execution.
+**Learning:** Even simple setup code running early in the application lifecycle can introduce critical vulnerabilities if stack-allocated buffers are copied into using unbounded functions like `strcpy`. The iSH kernel also requires these environment buffers to be double-null terminated.
+**Prevention:** Always use dynamic allocation (`malloc` or `realloc`) for user- or environment-controlled inputs and format strings safely using `snprintf`. Remember to include proper cleanup (e.g. `free(envp)`) to avoid memory leaks. Ensure that kernel requirements, like double-null termination, are explicitly managed.

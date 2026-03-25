@@ -31,10 +31,23 @@ void *gen_exception_thread(void *parg) {
 }
 
 int main(int argc, char *const argv[]) {
-    char envp[100] = {0};
-    if (getenv("TERM"))
-        strcpy(envp, getenv("TERM") - strlen("TERM") - 1);
+    char *envp = malloc(1);
+    if (envp) envp[0] = '\0';
+
+    char *term = getenv("TERM");
+    if (term) {
+        size_t len = strlen("TERM=") + strlen(term) + 2; // +1 for null, +1 for double null (iSH requires double null terminated environment strings)
+        char *new_envp = realloc(envp, len);
+        if (new_envp) {
+            envp = new_envp;
+            snprintf(envp, len, "TERM=%s", term);
+            envp[len - 1] = '\0'; // ensure double null termination
+        }
+    }
+
     int err = xX_main_Xx(argc, argv, envp);
+    free(envp);
+
     if (err < 0) {
         fprintf(stderr, "xX_main_Xx: %s\n", strerror(-err));
         return err;
