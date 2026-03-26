@@ -36,3 +36,8 @@
 **Vulnerability:** Unbounded string copies (`strcpy`) writing to fixed-size char arrays (`char name[MAX_NAME + 1]`) in `fs/tmp.c`.
 **Learning:** Legacy VFS and temporary filesystem code often lacks explicit bounds checking, relying on higher-level path validation. This creates defense-in-depth vulnerabilities if `MAX_NAME` bounds are ever exceeded.
 **Prevention:** Always use `strncpy` and manually ensure null-termination for fixed-size string arrays in the kernel, regardless of upstream path validation.
+
+## $(date +%Y-%m-%d) - Buffer Overflow in Environment Variables Initialization
+**Vulnerability:** The `envp` buffer in `main.c` and `tools/ptraceomatic.c` was allocated as a fixed-size stack array (`char envp[100]`). Unbounded use of `strcpy` to copy the `TERM` environment variable into this buffer allowed a stack buffer overflow if the variable exceeded the allocated size.
+**Learning:** Fixed-size buffers combined with `strcpy` for handling environment variables present a significant security risk, as the environment can be trivially controlled by the user or upstream process.
+**Prevention:** Environment variables and other dynamically sized inputs must be dynamically allocated using `malloc`, constructed using `snprintf` to ensure bounds limits, and properly null-terminated. Allocated memory should always be freed (`free(envp)`) on exit paths to prevent memory leaks.

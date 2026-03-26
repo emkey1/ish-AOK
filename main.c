@@ -31,10 +31,27 @@ void *gen_exception_thread(void *parg) {
 }
 
 int main(int argc, char *const argv[]) {
-    char envp[100] = {0};
-    if (getenv("TERM"))
-        strcpy(envp, getenv("TERM") - strlen("TERM") - 1);
+    char *envp = NULL;
+    char *term = getenv("TERM");
+    if (term) {
+        size_t envp_len = strlen("TERM=") + strlen(term) + 2;
+        envp = malloc(envp_len);
+        if (envp) {
+            snprintf(envp, envp_len, "TERM=%s", term);
+            envp[envp_len - 1] = '\0';
+        }
+    } else {
+        envp = malloc(1);
+        if (envp) envp[0] = '\0';
+    }
+    if (!envp) {
+        fprintf(stderr, "xX_main_Xx: %s\n", strerror(ENOMEM));
+        return -ENOMEM;
+    }
+
     int err = xX_main_Xx(argc, argv, envp);
+    free(envp);
+
     if (err < 0) {
         fprintf(stderr, "xX_main_Xx: %s\n", strerror(-err));
         return err;
