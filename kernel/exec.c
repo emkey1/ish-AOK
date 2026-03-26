@@ -541,9 +541,15 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
         .args = argv.args + strlen(argv.args) + 1,
     };
     size_t args_rest_size = args_size(argv_rest);
-    size_t extra_args_size = strlen(interpreter) + 1 + strlen(file) + 1;
+
+    // Bolt: Cache lengths to avoid redundant O(N) traversals
+    size_t interpreter_len = strlen(interpreter);
+    size_t file_len = strlen(file);
+    size_t argument_len = argument ? strlen(argument) : 0;
+
+    size_t extra_args_size = interpreter_len + 1 + file_len + 1;
     if (argument)
-        extra_args_size += strlen(argument) + 1;
+        extra_args_size += argument_len + 1;
     if (args_rest_size + extra_args_size >= ARGV_MAX)
         return _E2BIG;
 
@@ -552,16 +558,18 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
         return _ENOMEM;
     struct exec_args new_argv = {.args = new_argv_buf};
     size_t n = 0;
-    strcpy(new_argv_buf, interpreter);
+
+    // Bolt: Use memcpy with cached lengths instead of strcpy + strlen
+    memcpy(new_argv_buf, interpreter, interpreter_len + 1);
     new_argv.count++;
-    n += strlen(interpreter) + 1;
+    n += interpreter_len + 1;
     if (argument) {
-        strcpy(new_argv_buf + n, argument);
+        memcpy(new_argv_buf + n, argument, argument_len + 1);
         new_argv.count++;
-        n += strlen(argument) + 1;
+        n += argument_len + 1;
     }
-    strcpy(new_argv_buf + n, file);
-    n += strlen(file) + 1;
+    memcpy(new_argv_buf + n, file, file_len + 1);
+    n += file_len + 1;
     new_argv.count++;
     memcpy(new_argv_buf + n, argv_rest.args, args_rest_size);
     new_argv.count += argv_rest.count;
