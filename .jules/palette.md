@@ -17,3 +17,7 @@
 ## 2024-05-27 - Overriding accessibilityTraits Getter Destructively
 **Learning:** When creating custom accessible controls by subclassing existing ones, completely overriding the `accessibilityTraits` getter (e.g., `return UIAccessibilityTraitAdjustable;`) destructively removes inherent superclass traits (such as `UIAccessibilityTraitButton`).
 **Action:** Always use a bitwise OR with `[super accessibilityTraits]` (e.g., `return [super accessibilityTraits] | UIAccessibilityTraitAdjustable;`) when overriding the `accessibilityTraits` getter to preserve necessary inherited traits.
+
+## 2024-05-28 - UITableViewCell Default State Accessibility
+**Learning:** When using different reuse identifiers for default/selected states (e.g., "Default Root" vs "Root"), the dequeued cells still need explicit accessibility traits to communicate their status to VoiceOver users.
+**Action:** Always explicitly add `UIAccessibilityTraitSelected` for the default/selected state cell and clear it for others.
