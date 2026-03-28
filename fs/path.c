@@ -72,7 +72,9 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
             // passed to the next path_normalize call
             char possible_symlink[MAX_PATH];
             *o = '\0';
-            strcpy(possible_symlink, out);
+            // Bolt: o already points to the null terminator of out, so (o - out) is the length.
+            // Using memcpy avoids the O(N) redundant string traversal in strcpy.
+            memcpy(possible_symlink, out, (o - out) + 1);
             struct mount *mount = find_mount_and_trim_path(possible_symlink);
             assert(path_is_normalized(possible_symlink));
             int res = _EINVAL;
