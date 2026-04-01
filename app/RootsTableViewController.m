@@ -72,10 +72,16 @@
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     NSString *ident = @"Root";
-    if ([Roots.instance.roots[indexPath.row] isEqual:Roots.instance.defaultRoot])
+    BOOL isDefault = [Roots.instance.roots[indexPath.row] isEqual:Roots.instance.defaultRoot];
+    if (isDefault)
         ident = @"Default Root";
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:ident forIndexPath:indexPath];
     cell.textLabel.text = Roots.instance.roots[indexPath.row];
+    if (isDefault) {
+        cell.accessibilityTraits |= UIAccessibilityTraitSelected;
+    } else {
+        cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+    }
     return cell;
 }
 
