@@ -19,7 +19,7 @@ extern dword_t extra_lock_pid;
 extern const char extra_lock_comm;
 
 static void proc_pid_getname(struct proc_entry *entry, char *buf) {
-    sprintf(buf, "%d", entry->pid);
+    snprintf(buf, MAX_NAME, "%d", entry->pid);
 }
 
 static char proc_task_state_char(struct task *task) {
@@ -503,7 +503,7 @@ static bool proc_pid_fd_readdir(struct proc_entry *entry, unsigned long *index, 
 }
 
 static void proc_pid_fd_getname(struct proc_entry *entry, char *buf) {
-    sprintf(buf, "%d", entry->fd);
+    snprintf(buf, MAX_NAME, "%d", entry->fd);
 }
 
 static bool proc_pid_fdinfo_readdir(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry) {
@@ -574,11 +574,11 @@ static int proc_pid_exe_readlink(struct proc_entry *entry, char *buf) {
 }
 
 static void proc_pid_task_getname(struct proc_entry *entry, char *buf) {
-    sprintf(buf, "%d", entry->pid);
+    snprintf(buf, MAX_NAME, "%d", entry->pid);
 }
 
 static int proc_pid_task_readlink(struct proc_entry *entry, char *buf) {
-    sprintf(buf, "/proc/%d", entry->pid);
+    snprintf(buf, MAX_PATH, "/proc/%d", entry->pid);
     return 0;
 }
 

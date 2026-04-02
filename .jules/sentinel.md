@@ -32,7 +32,7 @@
 **Vulnerability:** `fs/real.c` used a 20-byte buffer for formatting `/proc/self/fd/%d`, but the path prefix is 14 bytes and a 32-bit signed int can be 11 bytes, requiring at least 26 bytes. This allows a stack buffer overflow for very large file descriptors.
 **Learning:** Hardcoded buffer sizes for path formatting often fail to account for the maximum string length of integers.
 **Prevention:** Always allocate at least 32 bytes for paths containing PIDs or FDs, and consider using `snprintf` to avoid overflow entirely.
-## $(date +%Y-%m-%d) - Replace unsafe strcpy calls with strncpy in fs/tmp.c
+## 2026-04-02 - Replace unsafe strcpy calls with strncpy in fs/tmp.c
 **Vulnerability:** Unbounded string copies (`strcpy`) writing to fixed-size char arrays (`char name[MAX_NAME + 1]`) in `fs/tmp.c`.
 **Learning:** Legacy VFS and temporary filesystem code often lacks explicit bounds checking, relying on higher-level path validation. This creates defense-in-depth vulnerabilities if `MAX_NAME` bounds are ever exceeded.
 **Prevention:** Always use `strncpy` and manually ensure null-termination for fixed-size string arrays in the kernel, regardless of upstream path validation.
@@ -40,3 +40,7 @@
 **Vulnerability:** A fixed-size stack buffer (`char envp[100]`) in `main.c` and `tools/ptraceomatic.c` was vulnerable to a buffer overflow when constructing the `TERM` environment variable. A user could trigger a Denial of Service (DoS) or stack corruption by supplying a `TERM` string exceeding the 100-character stack limit.
 **Learning:** Hardcoding stack buffer limits for dynamically sized user inputs (like environment variables) creates critical security risks and should be dynamically allocated instead.
 **Prevention:** Always use safe construction methods (e.g. `snprintf` with `malloc`) when passing dynamically-sized string inputs into kernel or environment initialization bounds, verifying explicitly free routines.
+## 2026-04-02 - Replace unsafe sprintf with bounded snprintf
+**Vulnerability:** Unbounded string formatting (`sprintf`) writing to path/name buffers in `fs/proc/pid.c` and `fs/proc/root.c`.
+**Learning:** Even when buffer sizes (`MAX_NAME`, `MAX_PATH`) currently exceed the length of the formatted string (like a 32-bit integer PID), using `sprintf` constitutes a defense-in-depth vulnerability if the macros or data types change over time.
+**Prevention:** Across the codebase, prioritize bounded string functions like `snprintf` over `sprintf` for all dynamic string constructions to enforce limits.
