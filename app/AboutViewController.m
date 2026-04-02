@@ -42,6 +42,8 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    self.launchCommandField.accessibilityLabel = @"Launch Command";
+    self.bootCommandField.accessibilityLabel = @"Boot Command";
     [self _updateUI];
     if (self.recoveryMode) {
         self.includeDebugPanel = YES;

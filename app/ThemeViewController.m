@@ -68,20 +68,26 @@ struct PaletteTextFields {
     self.navigationItem.title = self.theme.name;
     
     _nameTextField = [self detailTextFieldWithText:_theme.name monospaced: NO];
+    _nameTextField.accessibilityLabel = @"Theme Name";
     _singlePaletteSwitch = [UISwitch new];
     _singlePaletteSwitch.on = self.theme.lightPalette == self.theme.darkPalette;
     [_singlePaletteSwitch addTarget:self action:@selector(singlePaletteChanged:) forControlEvents:UIControlEventValueChanged];
     
     for (int i = 0; i < sizeof(_paletteTextFields) / sizeof(*_paletteTextFields); ++i) {
         Palette *palette = i ? self.theme.darkPalette : self.theme.lightPalette;
+        NSString *prefix = i ? @"Dark Palette " : @"Light Palette ";
         _paletteTextFields[i].foregroundTextField = [self detailTextFieldWithText:palette.foregroundColor monospaced:YES];
+        _paletteTextFields[i].foregroundTextField.accessibilityLabel = [prefix stringByAppendingString:@"Foreground Color"];
         _paletteTextFields[i].backgroundTextField = [self detailTextFieldWithText:palette.backgroundColor monospaced:YES];
+        _paletteTextFields[i].backgroundTextField.accessibilityLabel = [prefix stringByAppendingString:@"Background Color"];
         _paletteTextFields[i].cursorTextField = [self detailTextFieldWithText:palette.cursorColor monospaced:YES];
+        _paletteTextFields[i].cursorTextField.accessibilityLabel = [prefix stringByAppendingString:@"Cursor Color"];
         NSMutableArray<UITextField *> *textFields = [NSMutableArray new];
         for (int j = 0; j < COLORS; ++j) {
             UITextField *textField = [self detailTextFieldWithText:palette.colorPaletteOverrides ? palette.colorPaletteOverrides[j] : nil monospaced: YES];
             textField.autocorrectionType = UITextAutocorrectionTypeNo;
             textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+            textField.accessibilityLabel = [prefix stringByAppendingString:colorNames[j]];
             [textFields addObject:textField];
         }
         _paletteTextFields[i].colorTextFields = textFields;

@@ -142,6 +142,7 @@
     self.navigationItem.title = self.rootName;
     self.nameField.enabled = !self.isDefaultRoot;
     self.nameField.clearButtonMode = self.isDefaultRoot ? UITextFieldViewModeNever : UITextFieldViewModeAlways;
+    self.nameField.accessibilityLabel = @"Filesystem Name";
     self.deleteLabel.enabled = !self.isDefaultRoot;
     self.deleteCell.selectionStyle = !self.isDefaultRoot ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
     [self.tableView reloadData];
@@ -166,6 +167,21 @@
 
 - (BOOL)isDefaultRoot {
     return [self.rootName isEqualToString:Roots.instance.defaultRoot];
+}
+
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (indexPath.section == 0 && (indexPath.row == 1 || indexPath.row == 2)) {
+        cell.accessibilityTraits |= UIAccessibilityTraitButton;
+    } else if (indexPath.section == 1 && indexPath.row == 0) {
+        cell.accessibilityTraits |= UIAccessibilityTraitButton;
+    } else if (indexPath.section == 2 && indexPath.row == 0) {
+        cell.accessibilityTraits |= UIAccessibilityTraitButton;
+        if (self.isDefaultRoot) {
+            cell.accessibilityTraits |= UIAccessibilityTraitNotEnabled;
+        } else {
+            cell.accessibilityTraits &= ~UIAccessibilityTraitNotEnabled;
+        }
+    }
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
