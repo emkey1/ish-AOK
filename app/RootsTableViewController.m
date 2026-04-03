@@ -76,6 +76,11 @@
         ident = @"Default Root";
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:ident forIndexPath:indexPath];
     cell.textLabel.text = Roots.instance.roots[indexPath.row];
+    if ([Roots.instance.roots[indexPath.row] isEqual:Roots.instance.defaultRoot]) {
+        cell.accessibilityTraits |= UIAccessibilityTraitSelected;
+    } else {
+        cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+    }
     return cell;
 }
 
@@ -142,6 +147,7 @@
     self.navigationItem.title = self.rootName;
     self.nameField.enabled = !self.isDefaultRoot;
     self.nameField.clearButtonMode = self.isDefaultRoot ? UITextFieldViewModeNever : UITextFieldViewModeAlways;
+    self.nameField.accessibilityLabel = @"Filesystem Name";
     self.deleteLabel.enabled = !self.isDefaultRoot;
     self.deleteCell.selectionStyle = !self.isDefaultRoot ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
     [self.tableView reloadData];
@@ -174,6 +180,21 @@
             return @"This filesystem can't be deleted because it's currently mounted as the root.";
     }
     return [super tableView:tableView titleForFooterInSection:section];
+}
+
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (indexPath.section == 0 && indexPath.row > 0) { // Browse Files, Export
+        cell.accessibilityTraits |= UIAccessibilityTraitButton;
+    } else if (indexPath.section == 1) { // Boot
+        cell.accessibilityTraits |= UIAccessibilityTraitButton;
+    } else if (indexPath.section == 2) { // Delete
+        cell.accessibilityTraits |= UIAccessibilityTraitButton;
+        if (self.isDefaultRoot) {
+            cell.accessibilityTraits |= UIAccessibilityTraitNotEnabled;
+        } else {
+            cell.accessibilityTraits &= ~UIAccessibilityTraitNotEnabled;
+        }
+    }
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
