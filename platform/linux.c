@@ -10,11 +10,14 @@
 static void read_proc_line(const char *file, const char *name, char *buf) {
     FILE *f = fopen(file, "r");
     if (f == NULL) ERRNO_DIE(file);
+    // Bolt Optimization: Cache strlen(name) outside the loop to prevent O(N) recalculation
+    // on every iteration while reading the /proc file.
+    size_t name_len = strlen(name);
     do {
         fgets(buf, 1234, f);
         if (feof(f))
             die("could not find proc line %s", name);
-    } while (!(strncmp(name, buf, strlen(name)) == 0 && buf[strlen(name)] == ' '));
+    } while (!(strncmp(name, buf, name_len) == 0 && buf[name_len] == ' '));
     fclose(f);
 }
 
