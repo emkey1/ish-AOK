@@ -17,7 +17,7 @@ static int proc_lookup(const char *path, struct proc_entry *entry) {
 
         unsigned long index = 0;
         struct proc_entry next_entry = {0};
-        char entry_name[MAX_NAME];
+        char entry_name[MAX_NAME + 1];
         while (proc_dir_read(entry, &index, &next_entry)) {
             // tack on some dynamically generated attributes
             if (next_entry.meta->parent == NULL)
@@ -63,7 +63,7 @@ static int proc_getpath(struct fd *fd, char *buf) {
     p[0] = '\0';
     struct proc_entry entry = fd->proc.entry;
     while (entry.meta != &proc_root) {
-        char component[MAX_NAME];
+        char component[MAX_NAME + 1];
         proc_entry_getname(&entry, component);
         size_t component_len = strlen(component) + 1; // plus one for the slash
         p -= component_len;

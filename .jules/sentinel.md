@@ -40,3 +40,7 @@
 **Vulnerability:** A fixed-size stack buffer (`char envp[100]`) in `main.c` and `tools/ptraceomatic.c` was vulnerable to a buffer overflow when constructing the `TERM` environment variable. A user could trigger a Denial of Service (DoS) or stack corruption by supplying a `TERM` string exceeding the 100-character stack limit.
 **Learning:** Hardcoding stack buffer limits for dynamically sized user inputs (like environment variables) creates critical security risks and should be dynamically allocated instead.
 **Prevention:** Always use safe construction methods (e.g. `snprintf` with `malloc`) when passing dynamically-sized string inputs into kernel or environment initialization bounds, verifying explicitly free routines.
+## 2024-04-04 - Off-by-one Stack Buffer Overflow in procfs path handling
+**Vulnerability:** Fixed-size buffers `char entry_name[MAX_NAME];` and `char component[MAX_NAME];` in `fs/proc.c` lacked space for a null terminator, potentially causing off-by-one stack buffer overflows when handling maximum length names.
+**Learning:** Arrays intended to store up to `MAX_NAME` characters must always be allocated with `MAX_NAME + 1` to accommodate the null terminator.
+**Prevention:** Audit all stack-allocated path buffers to ensure they use `MAX_NAME + 1`. Use bounded string operations for copying names.
