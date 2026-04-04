@@ -28,6 +28,7 @@
 
 - (void)viewDidLoad {
     self.titleLabel.text = self.title;
+    self.cancelButton.accessibilityHint = @"Cancels the current operation.";
     if (@available(iOS 13, *)) {
         self.backdrop.effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial];
     }
