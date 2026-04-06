@@ -17,3 +17,7 @@
 ## 2024-05-27 - Overriding accessibilityTraits Getter Destructively
 **Learning:** When creating custom accessible controls by subclassing existing ones, completely overriding the `accessibilityTraits` getter (e.g., `return UIAccessibilityTraitAdjustable;`) destructively removes inherent superclass traits (such as `UIAccessibilityTraitButton`).
 **Action:** Always use a bitwise OR with `[super accessibilityTraits]` (e.g., `return [super accessibilityTraits] | UIAccessibilityTraitAdjustable;`) when overriding the `accessibilityTraits` getter to preserve necessary inherited traits.
+
+## 2026-04-06 - Exposing Visual Badge State to Screen Readers
+**Learning:** Visual badges (like red dots indicating updates) are completely invisible to VoiceOver users unless explicitly exposed. Modifying a button's `accessibilityValue` to reflect the badge state ensures screen reader users receive the same notifications as sighted users without cluttering the main label.
+**Action:** Whenever implementing a visual badge on a control, always update the control's `accessibilityValue` to announce the badge's presence and meaning.
