@@ -72,10 +72,16 @@
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     NSString *ident = @"Root";
-    if ([Roots.instance.roots[indexPath.row] isEqual:Roots.instance.defaultRoot])
+    BOOL isDefault = [Roots.instance.roots[indexPath.row] isEqual:Roots.instance.defaultRoot];
+    if (isDefault)
         ident = @"Default Root";
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:ident forIndexPath:indexPath];
     cell.textLabel.text = Roots.instance.roots[indexPath.row];
+    if (isDefault) {
+        cell.accessibilityTraits |= UIAccessibilityTraitSelected;
+    } else {
+        cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+    }
     return cell;
 }
 
@@ -133,6 +139,11 @@
 
 @implementation RootDetailViewController
 
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.nameField.accessibilityLabel = @"Name";
+}
+
 - (void)viewWillAppear:(BOOL)animated {
     self.nameField.text = self.rootName;
     [self update];
@@ -166,6 +177,21 @@
 
 - (BOOL)isDefaultRoot {
     return [self.rootName isEqualToString:Roots.instance.defaultRoot];
+}
+
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (cell == self.deleteCell) {
+        cell.accessibilityTraits |= UIAccessibilityTraitButton;
+        if (self.isDefaultRoot) {
+            cell.accessibilityTraits |= UIAccessibilityTraitNotEnabled;
+        } else {
+            cell.accessibilityTraits &= ~UIAccessibilityTraitNotEnabled;
+        }
+    } else if ((indexPath.section == 0 && indexPath.row == 1) ||
+               (indexPath.section == 0 && indexPath.row == 2) ||
+               (indexPath.section == 1 && indexPath.row == 0)) {
+        cell.accessibilityTraits |= UIAccessibilityTraitButton;
+    }
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {

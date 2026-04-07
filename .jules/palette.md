@@ -17,3 +17,7 @@
 ## 2024-05-27 - Overriding accessibilityTraits Getter Destructively
 **Learning:** When creating custom accessible controls by subclassing existing ones, completely overriding the `accessibilityTraits` getter (e.g., `return UIAccessibilityTraitAdjustable;`) destructively removes inherent superclass traits (such as `UIAccessibilityTraitButton`).
 **Action:** Always use a bitwise OR with `[super accessibilityTraits]` (e.g., `return [super accessibilityTraits] | UIAccessibilityTraitAdjustable;`) when overriding the `accessibilityTraits` getter to preserve necessary inherited traits.
+
+## 2024-05-28 - Action Cells and Text Field Accessibility
+**Learning:** Static `UITableViewCell` instances used as action buttons do not inherently possess `UIAccessibilityTraitButton`, and screen readers will not announce them as buttons. In addition, standalone `UITextField`s in cells require explicit `accessibilityLabel`s for robust context.
+**Action:** Always explicitly add `UIAccessibilityTraitButton` (e.g., via `tableView:willDisplayCell:forRowAtIndexPath:`) to action cells, set `accessibilityLabel`s for `UITextField`s, and manage traits for disabled states (e.g., `UIAccessibilityTraitNotEnabled`).
