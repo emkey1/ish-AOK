@@ -40,3 +40,8 @@
 **Vulnerability:** A fixed-size stack buffer (`char envp[100]`) in `main.c` and `tools/ptraceomatic.c` was vulnerable to a buffer overflow when constructing the `TERM` environment variable. A user could trigger a Denial of Service (DoS) or stack corruption by supplying a `TERM` string exceeding the 100-character stack limit.
 **Learning:** Hardcoding stack buffer limits for dynamically sized user inputs (like environment variables) creates critical security risks and should be dynamically allocated instead.
 **Prevention:** Always use safe construction methods (e.g. `snprintf` with `malloc`) when passing dynamically-sized string inputs into kernel or environment initialization bounds, verifying explicitly free routines.
+
+## 2026-03-27 - Buffer Overflow in realfs_readdir
+**Vulnerability:** Unbounded string copies (`strcpy`) writing to fixed-size char arrays (`char name[NAME_MAX + 1]`) in `fs/real.c` when reading directory entries from the host filesystem.
+**Learning:** Data crossing the boundary from the host OS into the emulator (e.g., host filesystem directory names) must be explicitly bounds-checked against internal emulator limits (like `NAME_MAX`), as host limits may exceed them and cause buffer overflows.
+**Prevention:** Always use `strlcpy` for safe, null-terminated string copies into fixed-size buffers, especially when handling data from the host filesystem or other external boundaries.
