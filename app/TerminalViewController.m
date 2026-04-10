@@ -653,6 +653,9 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     BOOL showBadge = FsNeedsRepositoryUpdate();
     self.settingsBadge.hidden = !showBadge;
     self.floatingSettingsBadge.hidden = !showBadge;
+    NSString *accessibilityValue = showBadge ? @"Update available" : nil;
+    self.infoButton.accessibilityValue = accessibilityValue;
+    self.floatingSettingsButton.accessibilityValue = accessibilityValue;
 }
 
 - (UIStatusBarStyle)preferredStatusBarStyle {

@@ -21,3 +21,7 @@
 ## 2024-05-28 - Exposing Visual Badges to Screen Readers
 **Learning:** Visual indicators, such as a red badge signaling an available update, are invisible to screen readers unless their state is programmatically exposed.
 **Action:** When adding or updating visual badges on UI elements, always set a corresponding descriptive `accessibilityValue` (e.g., `@"Update available"`) on the element or its parent container when the badge is visible, and clear it (`nil`) when the badge is hidden, avoiding cluttering the main `accessibilityLabel`.
+
+## 2024-05-29 - Exposing Settings Badge State
+**Learning:** In the Terminal view, the visual settings badge (indicating an available update) was not exposed to screen readers.
+**Action:** Always update the `accessibilityValue` of buttons dynamically when adding visual indicators to ensure screen readers announce the state correctly.
