@@ -96,12 +96,12 @@ static dword_t inotify_name_len(const char *name) {
 static void inotify_parent_and_name(const char *path, char *parent, const char **name_out) {
     const char *slash = strrchr(path, '/');
     if (slash == NULL) {
-        strcpy(parent, "/");
+        strlcpy(parent, "/", MAX_PATH);
         *name_out = path;
         return;
     }
     if (slash == path) {
-        strcpy(parent, "/");
+        strlcpy(parent, "/", MAX_PATH);
         *name_out = slash + 1;
         return;
     }

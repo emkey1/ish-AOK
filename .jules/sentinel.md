@@ -40,3 +40,7 @@
 **Vulnerability:** A fixed-size stack buffer (`char envp[100]`) in `main.c` and `tools/ptraceomatic.c` was vulnerable to a buffer overflow when constructing the `TERM` environment variable. A user could trigger a Denial of Service (DoS) or stack corruption by supplying a `TERM` string exceeding the 100-character stack limit.
 **Learning:** Hardcoding stack buffer limits for dynamically sized user inputs (like environment variables) creates critical security risks and should be dynamically allocated instead.
 **Prevention:** Always use safe construction methods (e.g. `snprintf` with `malloc`) when passing dynamically-sized string inputs into kernel or environment initialization bounds, verifying explicitly free routines.
+## 2026-03-27 - Buffer Overflow in Unsafe strcpy usages
+**Vulnerability:** Unbounded string copies (`strcpy`) writing to fixed-size buffers like `resolved[MAX_PATH]` in `kernel/exec.c`, `parent` array in `kernel/inotify.c`, and `entry->name` in `fs/real.c` / `fs/aok.c`.
+**Learning:** Legacy system code uses unsafe `strcpy`, leaving the system prone to buffer overflows when external inputs exceed bounded constraints.
+**Prevention:** Replace all `strcpy` calls with boundary-aware functions like `strlcpy` and pass the exact bounds when writing to fixed-size array boundaries.

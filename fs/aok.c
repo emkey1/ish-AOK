@@ -276,7 +276,7 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
     }
 
     entry->inode = aokfs_node_inode(child);
-    strcpy(entry->name, aokfs_node_basename(child));
+    strlcpy(entry->name, aokfs_node_basename(child), sizeof(entry->name));
     return 1;
 }
 

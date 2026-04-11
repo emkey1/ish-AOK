@@ -877,7 +877,7 @@ ssize_t sys_execveat(fd_t dirfd, addr_t filename_addr, addr_t argv_addr, addr_t 
         if (err < 0)
             goto out_free_args;
     } else if (filename[0] == '/') {
-        strcpy(resolved, filename);
+        strlcpy(resolved, filename, sizeof(resolved));
     } else {
         struct fd *at = (dirfd == AT_FDCWD_) ? AT_PWD : f_get(dirfd);
         if (at == NULL) {
