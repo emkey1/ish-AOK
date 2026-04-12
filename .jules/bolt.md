@@ -23,3 +23,6 @@
 ## 2026-03-24 - Optimize dynamic string construction
 **Learning:** In `fs/proc/ish.c`, the `parse_if_flags` function used `strcat` to append strings dynamically, which causes O(N) traversal to find the end of the string for every append.
 **Action:** Replace `strcat` in dynamic string construction with `memcpy` using pre-calculated string lengths. By keeping track of the current string length `len`, appending becomes an O(1) operation.
+## 2026-04-12 - Optimize backward string construction length calculation
+**Learning:** In VFS `getpath` implementations (e.g., `tmpfs_getpath` in `fs/tmp.c`), paths are constructed by prepending components starting from the end of a fixed-size buffer (`buf + MAX_PATH - 1`). Using `strlen(p)` to determine the final length before copying it out causes an unnecessary O(N) string traversal when the exact length is already mathematically known.
+**Action:** When a string is constructed backwards from a known end pointer, calculate its length in O(1) time using pointer arithmetic (e.g., `buf + MAX_PATH - p`) instead of `strlen(p)`.
