@@ -21,3 +21,7 @@
 ## 2024-05-28 - Exposing Visual Badges to Screen Readers
 **Learning:** Visual indicators, such as a red badge signaling an available update, are invisible to screen readers unless their state is programmatically exposed.
 **Action:** When adding or updating visual badges on UI elements, always set a corresponding descriptive `accessibilityValue` (e.g., `@"Update available"`) on the element or its parent container when the badge is visible, and clear it (`nil`) when the badge is hidden, avoiding cluttering the main `accessibilityLabel`.
+
+## 2024-05-29 - UITableViewCell Selection Accessibility for Active States
+**Learning:** When managing selection state for reused `UITableViewCell`s (e.g., in `cellForRowAtIndexPath:`), relying on visual indicators or reuse identifiers is insufficient for VoiceOver and leads to incorrect traits when cells are recycled.
+**Action:** Always explicitly set (`|= UIAccessibilityTraitSelected`) or clear (`&= ~UIAccessibilityTraitSelected`) the trait based on the cell's active state to ensure VoiceOver correctly announces the selection.
