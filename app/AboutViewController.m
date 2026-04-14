@@ -238,7 +238,9 @@ UIViewController *ISHCreateDiagnosticsViewController(void) {
     self.initialWindowCell.textLabel.text = @"Startup Mode";
     self.initialWindowCell.detailTextLabel.text = [self _initialWindowTitle];
     self.launchCommandField.text = [UserPreferences.shared.launchCommand componentsJoinedByString:@" "];
+    self.launchCommandField.accessibilityLabel = @"Launch Command";
     self.bootCommandField.text = [UserPreferences.shared.bootCommand componentsJoinedByString:@" "];
+    self.bootCommandField.accessibilityLabel = @"Boot Command";
 
     self.upgradeApkCell.userInteractionEnabled = FsNeedsRepositoryUpdate();
     self.upgradeApkLabel.enabled = FsNeedsRepositoryUpdate();
@@ -271,6 +273,12 @@ UIViewController *ISHCreateDiagnosticsViewController(void) {
         iosfs_clear_all_bookmarks();
     }
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
+}
+
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (cell == self.sendFeedback || cell == self.diagnosticsCell || cell == self.initialWindowCell || cell == self.openGithub || cell == self.openDiscord || cell == self.exportContainerCell || cell == self.resetMountsCell) {
+        cell.accessibilityTraits |= UIAccessibilityTraitButton;
+    }
 }
 
 - (NSString *)_initialWindowPreferenceValue {
