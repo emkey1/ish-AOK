@@ -21,3 +21,6 @@
 ## 2024-05-28 - Exposing Visual Badges to Screen Readers
 **Learning:** Visual indicators, such as a red badge signaling an available update, are invisible to screen readers unless their state is programmatically exposed.
 **Action:** When adding or updating visual badges on UI elements, always set a corresponding descriptive `accessibilityValue` (e.g., `@"Update available"`) on the element or its parent container when the badge is visible, and clear it (`nil`) when the badge is hidden, avoiding cluttering the main `accessibilityLabel`.
+## 2026-04-16 - Add UIAccessibilityTraitButton to interactive table cells
+**Learning:** Static `UITableViewCell`s acting as actions in iOS Settings screens (like sending feedback, resetting mounts) do not inherently communicate their actionability to screen readers. Relying solely on `didSelectRowAtIndexPath` logic leaves VoiceOver users uninformed.
+**Action:** When adding rows that act as buttons, always implement `tableView:willDisplayCell:forRowAtIndexPath:` to explicitly set `cell.accessibilityTraits |= UIAccessibilityTraitButton;`.
