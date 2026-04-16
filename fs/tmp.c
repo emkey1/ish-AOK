@@ -590,7 +590,8 @@ static int tmpfs_getpath(struct fd *fd, char *buf) {
         memcpy(&p[1], dirent->name, name_len);
         dirent = dirent->parent;
     }
-    memmove(buf, p, strlen(p) + 1);
+    size_t p_len = (buf + MAX_PATH - 1) - p;
+    memmove(buf, p, p_len + 1);
     return 0;
 }
 

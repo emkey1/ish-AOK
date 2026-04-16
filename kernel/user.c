@@ -1,3 +1,4 @@
+#include <sys/uio.h>
 #include <string.h>
 #include "kernel/calls.h"
 
