@@ -238,7 +238,9 @@ UIViewController *ISHCreateDiagnosticsViewController(void) {
     self.initialWindowCell.textLabel.text = @"Startup Mode";
     self.initialWindowCell.detailTextLabel.text = [self _initialWindowTitle];
     self.launchCommandField.text = [UserPreferences.shared.launchCommand componentsJoinedByString:@" "];
+    self.launchCommandField.accessibilityLabel = @"Launch command";
     self.bootCommandField.text = [UserPreferences.shared.bootCommand componentsJoinedByString:@" "];
+    self.bootCommandField.accessibilityLabel = @"Boot command";
 
     self.upgradeApkCell.userInteractionEnabled = FsNeedsRepositoryUpdate();
     self.upgradeApkLabel.enabled = FsNeedsRepositoryUpdate();
