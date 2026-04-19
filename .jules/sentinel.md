@@ -40,3 +40,7 @@
 **Vulnerability:** A fixed-size stack buffer (`char envp[100]`) in `main.c` and `tools/ptraceomatic.c` was vulnerable to a buffer overflow when constructing the `TERM` environment variable. A user could trigger a Denial of Service (DoS) or stack corruption by supplying a `TERM` string exceeding the 100-character stack limit.
 **Learning:** Hardcoding stack buffer limits for dynamically sized user inputs (like environment variables) creates critical security risks and should be dynamically allocated instead.
 **Prevention:** Always use safe construction methods (e.g. `snprintf` with `malloc`) when passing dynamically-sized string inputs into kernel or environment initialization bounds, verifying explicitly free routines.
+## $(date +%Y-%m-%d) - Replace unsafe strcpy calls with strncpy in filesystem readdir operations
+**Vulnerability:** Unbounded string copies (`strcpy`) writing to fixed-size char arrays (`char name[NAME_MAX + 1]`) in `fs/real.c` and `fs/aok.c` during `readdir` operations.
+**Learning:** Legacy VFS and specific filesystem code often lacks explicit bounds checking, relying on higher-level path validation or assuming external sources (like host filesystems or AOK node basenames) will respect internal `NAME_MAX` limits. This creates defense-in-depth vulnerabilities if `NAME_MAX` bounds are ever exceeded by the source data.
+**Prevention:** Always use `strncpy` and manually ensure null-termination for fixed-size string arrays in the kernel, regardless of upstream path validation or source assumptions.
