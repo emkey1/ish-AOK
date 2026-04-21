@@ -289,10 +289,20 @@
     }
 
     NSString *ident = @"Root";
-    if ([Roots.instance.roots[indexPath.row] isEqual:Roots.instance.defaultRoot])
+    if ([Roots.instance.roots[indexPath.row] isEqual:Roots.instance.defaultRoot]) {
         ident = @"Default Root";
+    }
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:ident forIndexPath:indexPath];
     cell.textLabel.text = Roots.instance.roots[indexPath.row];
+    if (self.choosesRootOnSelection) {
+        if ([Roots.instance.roots[indexPath.row] isEqual:Roots.instance.defaultRoot]) {
+            cell.accessoryType = UITableViewCellAccessoryCheckmark;
+            cell.accessibilityTraits |= UIAccessibilityTraitSelected;
+        } else {
+            cell.accessoryType = UITableViewCellAccessoryNone;
+            cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+        }
+    }
     return cell;
 }
 

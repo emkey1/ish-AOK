@@ -809,6 +809,8 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     BOOL showBadge = FsNeedsRepositoryUpdate();
     self.settingsBadge.hidden = !showBadge;
     self.floatingSettingsBadge.hidden = !showBadge;
+    self.infoButton.accessibilityValue = showBadge ? @"Update available" : nil;
+    self.floatingSettingsButton.accessibilityValue = showBadge ? @"Update available" : nil;
 }
 
 - (UIStatusBarStyle)preferredStatusBarStyle {
