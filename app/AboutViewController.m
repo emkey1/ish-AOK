@@ -171,6 +171,9 @@ UIViewController *ISHCreateDiagnosticsViewController(void) {
                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
                           [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"]];
 
+    self.launchCommandField.accessibilityLabel = @"Launch Command";
+    self.bootCommandField.accessibilityLabel = @"Boot Command";
+
     [UserPreferences.shared observe:@[@"capsLockMapping", @"fontSize", @"launchCommand", @"bootCommand", @"shouldLockSleepNanoseconds"]
                             options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
