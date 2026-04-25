@@ -23,3 +23,6 @@
 ## 2026-03-24 - Optimize dynamic string construction
 **Learning:** In `fs/proc/ish.c`, the `parse_if_flags` function used `strcat` to append strings dynamically, which causes O(N) traversal to find the end of the string for every append.
 **Action:** Replace `strcat` in dynamic string construction with `memcpy` using pre-calculated string lengths. By keeping track of the current string length `len`, appending becomes an O(1) operation.
+## 2026-03-25 - Avoid redundant strlen in read_proc_line
+**Learning:** In `platform/linux.c`, `read_proc_line` uses a `while` loop that continuously recalculates `strlen(name)` on every single line read from a `/proc` file.
+**Action:** Cache the result of `strlen(name)` outside of the loop to prevent O(N) recalculations, saving unnecessary operations during file parsing.
