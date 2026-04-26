@@ -273,6 +273,12 @@ UIViewController *ISHCreateDiagnosticsViewController(void) {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
 }
 
+- (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (cell == self.sendFeedback || cell == self.diagnosticsCell || cell == self.initialWindowCell || cell == self.openGithub || cell == self.openDiscord || cell == self.exportContainerCell || cell == self.resetMountsCell) {
+        cell.accessibilityTraits |= UIAccessibilityTraitButton;
+    }
+}
+
 - (NSString *)_initialWindowPreferenceValue {
     NSString *value = [NSUserDefaults.standardUserDefaults stringForKey:kPreferenceInitialWindowKey];
     if ([value isEqualToString:ISHInitialWindowWorkspaceValue])
