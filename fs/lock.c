@@ -197,7 +197,7 @@ static int flock_from_file_lock(struct file_lock *lock, struct flock_ *flock) {
     else
         flock->len = 0;
     flock->pid = lock->pid;
-    strncpy(lock->comm, flock->comm, 16);
+    strncpy(flock->comm, lock->comm, sizeof(flock->comm));
     return 0;
 }
 

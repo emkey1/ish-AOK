@@ -40,3 +40,8 @@
 **Vulnerability:** A fixed-size stack buffer (`char envp[100]`) in `main.c` and `tools/ptraceomatic.c` was vulnerable to a buffer overflow when constructing the `TERM` environment variable. A user could trigger a Denial of Service (DoS) or stack corruption by supplying a `TERM` string exceeding the 100-character stack limit.
 **Learning:** Hardcoding stack buffer limits for dynamically sized user inputs (like environment variables) creates critical security risks and should be dynamically allocated instead.
 **Prevention:** Always use safe construction methods (e.g. `snprintf` with `malloc`) when passing dynamically-sized string inputs into kernel or environment initialization bounds, verifying explicitly free routines.
+
+## 2026-03-27 - Kernel Memory Overwrite via Reversed strncpy in F_GETLK
+**Vulnerability:** In `flock_from_file_lock` (`fs/lock.c`), `strncpy(lock->comm, flock->comm, 16)` copied data from the user-controlled `struct flock_` back into the kernel's internal `struct file_lock`, instead of the other way around. Since the destination was kernel memory and the source was user-controlled, this was an arbitrary kernel memory overwrite vulnerability.
+**Learning:** Reversing the arguments of `strncpy` when syncing kernel state to user-facing structures allows attackers to corrupt internal kernel metadata.
+**Prevention:** String copies must strictly flow from kernel to user when populating user-facing structures. Always verify parameter order and use `sizeof(destination)` instead of hardcoded lengths.
