@@ -23,3 +23,6 @@
 ## 2026-03-24 - Optimize dynamic string construction
 **Learning:** In `fs/proc/ish.c`, the `parse_if_flags` function used `strcat` to append strings dynamically, which causes O(N) traversal to find the end of the string for every append.
 **Action:** Replace `strcat` in dynamic string construction with `memcpy` using pre-calculated string lengths. By keeping track of the current string length `len`, appending becomes an O(1) operation.
+## 2024-05-27 - Optimize getdents by avoiding redundant strlen calculations
+**Learning:** In `fs/dir.c`, the `sys_getdents_common` function iterates over directory entries and calls a `fill_dirent` function pointer. This caused `strlen` to be called twice per entry: once in `sys_getdents_common` to calculate the allocation size and again inside the `fill_dirent` implementations (`fill_dirent_32`, `fill_dirent_64`). This incurs redundant O(N) operations in a hot path.
+**Action:** When a string length is already computed or known by a caller (like for bounds checking or allocation sizing), pass that length explicitly to the callee as a parameter (e.g. adding `namelen` to `fill_dirent`) rather than recalculating it with `strlen()` inside the inner functions.
