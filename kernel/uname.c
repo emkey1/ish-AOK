@@ -71,7 +71,7 @@ dword_t sys_uname(addr_t uts_addr) {
 dword_t sys_sethostname(addr_t hostname_addr, dword_t hostname_len) {
     struct uname uts;
 
-    if (current->uid != 0) {
+    if (!superuser()) {
         return _EPERM;
     }
 

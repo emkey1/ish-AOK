@@ -40,3 +40,7 @@
 **Vulnerability:** A fixed-size stack buffer (`char envp[100]`) in `main.c` and `tools/ptraceomatic.c` was vulnerable to a buffer overflow when constructing the `TERM` environment variable. A user could trigger a Denial of Service (DoS) or stack corruption by supplying a `TERM` string exceeding the 100-character stack limit.
 **Learning:** Hardcoding stack buffer limits for dynamically sized user inputs (like environment variables) creates critical security risks and should be dynamically allocated instead.
 **Prevention:** Always use safe construction methods (e.g. `snprintf` with `malloc`) when passing dynamically-sized string inputs into kernel or environment initialization bounds, verifying explicitly free routines.
+## 2024-05-02 - Privilege Escalation via Direct UID Checks
+**Vulnerability:** In `kernel/uname.c`, the `sys_sethostname` syscall checked for privilege using `current->uid != 0` instead of evaluating the effective user ID (`euid`). This incorrect direct `uid` check allowed processes that have dropped effective privileges (but retained a real `uid` of 0) to bypass security checks and improperly alter the system hostname.
+**Learning:** Legacy direct `uid` checks do not accurately reflect the current privilege level of a task and can lead to authorization bypasses when `uid` and `euid` diverge.
+**Prevention:** Always use the `superuser()` macro for privilege checks in the iSH kernel to properly validate the effective user ID (`current->euid == 0`).
