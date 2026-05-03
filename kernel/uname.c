@@ -1,6 +1,7 @@
 #include <sys/utsname.h>
 #include <string.h>
 #include "kernel/calls.h"
+#include "kernel/task.h"
 #include "platform/platform.h"
 
 #if __linux__
@@ -71,7 +72,7 @@ dword_t sys_uname(addr_t uts_addr) {
 dword_t sys_sethostname(addr_t hostname_addr, dword_t hostname_len) {
     struct uname uts;
 
-    if (current->uid != 0) {
+    if (!superuser()) {
         return _EPERM;
     }
 

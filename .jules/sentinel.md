@@ -40,3 +40,8 @@
 **Vulnerability:** A fixed-size stack buffer (`char envp[100]`) in `main.c` and `tools/ptraceomatic.c` was vulnerable to a buffer overflow when constructing the `TERM` environment variable. A user could trigger a Denial of Service (DoS) or stack corruption by supplying a `TERM` string exceeding the 100-character stack limit.
 **Learning:** Hardcoding stack buffer limits for dynamically sized user inputs (like environment variables) creates critical security risks and should be dynamically allocated instead.
 **Prevention:** Always use safe construction methods (e.g. `snprintf` with `malloc`) when passing dynamically-sized string inputs into kernel or environment initialization bounds, verifying explicitly free routines.
+
+## 2026-03-27 - Privilege Escalation via Legacy UID Check
+**Vulnerability:** `sys_sethostname` used a direct check against `current->uid != 0` instead of `current->euid` (or the `superuser()` macro). This allows potential bypasses when dealing with setuid executables, breaking the kernel's authorization model.
+**Learning:** Legacy explicit checks against `current->uid` instead of `current->euid` ignore privilege escalation mechanisms like `setuid`.
+**Prevention:** Always use the `superuser()` macro (defined in `kernel/task.h`) for kernel privilege checks, which correctly evaluates the effective user ID (`current->euid == 0`).
