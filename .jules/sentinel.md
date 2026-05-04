@@ -40,3 +40,8 @@
 **Vulnerability:** A fixed-size stack buffer (`char envp[100]`) in `main.c` and `tools/ptraceomatic.c` was vulnerable to a buffer overflow when constructing the `TERM` environment variable. A user could trigger a Denial of Service (DoS) or stack corruption by supplying a `TERM` string exceeding the 100-character stack limit.
 **Learning:** Hardcoding stack buffer limits for dynamically sized user inputs (like environment variables) creates critical security risks and should be dynamically allocated instead.
 **Prevention:** Always use safe construction methods (e.g. `snprintf` with `malloc`) when passing dynamically-sized string inputs into kernel or environment initialization bounds, verifying explicitly free routines.
+
+## 2026-03-27 - Incorrect Privilege Check in sethostname
+**Vulnerability:** The `sys_sethostname_guest` syscall used `current->uid != 0` instead of the `superuser()` macro to check for root privileges. This checks the real UID instead of the effective UID (`current->euid`), potentially allowing privilege escalation if a task has an effective UID of 0 but a non-zero real UID.
+**Learning:** All root privilege checks in the kernel must use the `superuser()` macro, which correctly checks `current->euid == 0`.
+**Prevention:** Avoid direct comparisons against `current->uid` for privilege checks. Use established macros like `superuser()` or check capabilities explicitly.
