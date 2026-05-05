@@ -21,3 +21,7 @@
 ## 2024-05-28 - Exposing Visual Badges to Screen Readers
 **Learning:** Visual indicators, such as a red badge signaling an available update, are invisible to screen readers unless their state is programmatically exposed.
 **Action:** When adding or updating visual badges on UI elements, always set a corresponding descriptive `accessibilityValue` (e.g., `@"Update available"`) on the element or its parent container when the badge is visible, and clear it (`nil`) when the badge is hidden, avoiding cluttering the main `accessibilityLabel`.
+
+## 2024-06-15 - Dock Tile Button Selection Accessibility
+**Learning:** Dock tile buttons function as tabs for workspace windows. Without `UIAccessibilityTraitSelected`, screen reader users cannot easily determine the active (frontmost) window from the dock.
+**Action:** Explicitly set or clear `UIAccessibilityTraitSelected` using bitwise operators based on the `frontmost` state for dock tile buttons.
