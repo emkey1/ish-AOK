@@ -83,7 +83,7 @@ dword_t sys_sethostname(addr_t hostname_addr, dword_t hostname_len) {
 dword_t sys_sethostname_guest(guest_addr_t hostname_addr, dword_t hostname_len) {
     struct uname uts;
 
-    if (current->uid != 0) {
+    if (!superuser()) {
         return _EPERM;
     }
 
