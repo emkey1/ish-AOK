@@ -6443,6 +6443,11 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
             ? [theme[@"accent"] colorWithAlphaComponent:0.16]
             : [theme[@"cardAlt"] colorWithAlphaComponent:0.94];
         button.layer.borderColor = (current ? theme[@"accentAlt"] : theme[@"stroke"]).CGColor;
+        if (current) {
+            button.accessibilityTraits |= UIAccessibilityTraitSelected;
+        } else {
+            button.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+        }
         UIImageView *previewView = _previewImageViewsByIdentifier[identifier];
         CGSize previewSize = previewView.bounds.size;
         if (previewSize.width < 24 || previewSize.height < 24)
@@ -6990,6 +6995,11 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
             : [theme[@"cardAlt"] colorWithAlphaComponent:0.92];
         button.layer.borderColor = (selected ? theme[@"accentAlt"] : theme[@"stroke"]).CGColor;
         [button setTitleColor:(selected ? theme[@"accent"] : theme[@"primary"]) forState:UIControlStateNormal];
+        if (selected) {
+            button.accessibilityTraits |= UIAccessibilityTraitSelected;
+        } else {
+            button.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+        }
     }
     _addressContainerView.backgroundColor = [theme[@"backgroundTop"] colorWithAlphaComponent:0.18];
     _addressContainerView.layer.borderColor = theme[@"stroke"].CGColor;
