@@ -21,3 +21,6 @@
 ## 2024-05-28 - Exposing Visual Badges to Screen Readers
 **Learning:** Visual indicators, such as a red badge signaling an available update, are invisible to screen readers unless their state is programmatically exposed.
 **Action:** When adding or updating visual badges on UI elements, always set a corresponding descriptive `accessibilityValue` (e.g., `@"Update available"`) on the element or its parent container when the badge is visible, and clear it (`nil`) when the badge is hidden, avoiding cluttering the main `accessibilityLabel`.
+## 2024-05-29 - Accessibility Traits Check
+**Learning:** Returning "1" or "0" for `accessibilityValue` on toggle buttons is confusing for screen reader users. Also dynamically applied styles (e.g. `workspaceApplyTheme`) and selected states should always dynamically set/unset `UIAccessibilityTraitSelected` for accessibility users.
+**Action:** Always dynamically add/remove `UIAccessibilityTraitSelected` for controls that indicate active/selected state visually in iOS apps.
