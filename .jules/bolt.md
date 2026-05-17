@@ -27,3 +27,6 @@
 ## 2026-03-25 - Hoist string length calculations in VFS inner functions
 **Learning:** In `fs/dir.c`, `sys_getdents_common` repeatedly called `strlen` inside a directory traversal loop, both directly and indirectly via callback functions (`fill_dirent`). This caused redundant O(N) traversals per entry, scaling poorly for large directories.
 **Action:** When a string's length is already known or can be hoisted outside an inner callback, pass the length as a parameter (e.g., `namelen` in `fill_dirent`) rather than recalculating it internally.
+## 2026-03-25 - Avoid recalculating string length in tmpfs_getpath
+**Learning:** In `fs/tmp.c`, `tmpfs_getpath` repeatedly appended path components from a bottom-up directory traversal, and then called `strlen(p)` to find the total length for the final `memmove`. This forces an unnecessary O(N) string traversal when the component lengths are already known and accumulated during the loop.
+**Action:** Replace `strlen(p)` with a running `total_len` counter in `tmpfs_getpath` that accumulates the lengths of the directory components to prevent redundant string traversals.
