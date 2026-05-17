@@ -6990,6 +6990,11 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
             : [theme[@"cardAlt"] colorWithAlphaComponent:0.92];
         button.layer.borderColor = (selected ? theme[@"accentAlt"] : theme[@"stroke"]).CGColor;
         [button setTitleColor:(selected ? theme[@"accent"] : theme[@"primary"]) forState:UIControlStateNormal];
+        if (selected) {
+            button.accessibilityTraits |= UIAccessibilityTraitSelected;
+        } else {
+            button.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+        }
     }
     _addressContainerView.backgroundColor = [theme[@"backgroundTop"] colorWithAlphaComponent:0.18];
     _addressContainerView.layer.borderColor = theme[@"stroke"].CGColor;

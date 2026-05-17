@@ -21,3 +21,7 @@
 ## 2024-05-28 - Exposing Visual Badges to Screen Readers
 **Learning:** Visual indicators, such as a red badge signaling an available update, are invisible to screen readers unless their state is programmatically exposed.
 **Action:** When adding or updating visual badges on UI elements, always set a corresponding descriptive `accessibilityValue` (e.g., `@"Update available"`) on the element or its parent container when the badge is visible, and clear it (`nil`) when the badge is hidden, avoiding cluttering the main `accessibilityLabel`.
+
+## 2024-05-29 - Explicit Accessibility Traits for Dynamic Styling
+**Learning:** When dynamically changing the visual appearance of selection elements (like themes, tabs, or workspaces) using background colors or borders, the selected state remains invisible to VoiceOver users unless explicitly communicated.
+**Action:** Always dynamically apply `UIAccessibilityTraitSelected` (`|=`) to active selection buttons and clear it (`&= ~`) for inactive ones concurrently with visual styling updates (e.g., in `workspaceApplyTheme`).
