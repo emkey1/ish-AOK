@@ -21,3 +21,6 @@
 ## 2024-05-28 - Exposing Visual Badges to Screen Readers
 **Learning:** Visual indicators, such as a red badge signaling an available update, are invisible to screen readers unless their state is programmatically exposed.
 **Action:** When adding or updating visual badges on UI elements, always set a corresponding descriptive `accessibilityValue` (e.g., `@"Update available"`) on the element or its parent container when the badge is visible, and clear it (`nil`) when the badge is hidden, avoiding cluttering the main `accessibilityLabel`.
+## 2024-05-29 - Close Button Accessibility
+**Learning:** Icon-only buttons or buttons with non-standard text (like "×") need descriptive `accessibilityLabel` properties so that VoiceOver announces them correctly instead of reading out the symbol or character literally.
+**Action:** Always add an `accessibilityLabel` to buttons whose visual text or icon isn't sufficiently descriptive for a screen reader.
