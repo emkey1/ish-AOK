@@ -32,7 +32,7 @@
 **Vulnerability:** `fs/real.c` used a 20-byte buffer for formatting `/proc/self/fd/%d`, but the path prefix is 14 bytes and a 32-bit signed int can be 11 bytes, requiring at least 26 bytes. This allows a stack buffer overflow for very large file descriptors.
 **Learning:** Hardcoded buffer sizes for path formatting often fail to account for the maximum string length of integers.
 **Prevention:** Always allocate at least 32 bytes for paths containing PIDs or FDs, and consider using `snprintf` to avoid overflow entirely.
-## $(date +%Y-%m-%d) - Replace unsafe strcpy calls with strncpy in fs/tmp.c
+## 2026-05-20 - Replace unsafe strcpy calls with strncpy in fs/tmp.c
 **Vulnerability:** Unbounded string copies (`strcpy`) writing to fixed-size char arrays (`char name[MAX_NAME + 1]`) in `fs/tmp.c`.
 **Learning:** Legacy VFS and temporary filesystem code often lacks explicit bounds checking, relying on higher-level path validation. This creates defense-in-depth vulnerabilities if `MAX_NAME` bounds are ever exceeded.
 **Prevention:** Always use `strncpy` and manually ensure null-termination for fixed-size string arrays in the kernel, regardless of upstream path validation.
@@ -40,3 +40,7 @@
 **Vulnerability:** A fixed-size stack buffer (`char envp[100]`) in `main.c` and `tools/ptraceomatic.c` was vulnerable to a buffer overflow when constructing the `TERM` environment variable. A user could trigger a Denial of Service (DoS) or stack corruption by supplying a `TERM` string exceeding the 100-character stack limit.
 **Learning:** Hardcoding stack buffer limits for dynamically sized user inputs (like environment variables) creates critical security risks and should be dynamically allocated instead.
 **Prevention:** Always use safe construction methods (e.g. `snprintf` with `malloc`) when passing dynamically-sized string inputs into kernel or environment initialization bounds, verifying explicitly free routines.
+## 2026-05-20 - Buffer Overflow Risk in PID Path Formatting
+**Vulnerability:** Fixed-size buffers (`char maps_file[32]`) were populated using `sprintf` without bounds checking in `tools/vdso-transplant.c` and `tools/ptutil.c` when constructing paths like `/proc/%d/maps`.
+**Learning:** Even though `pid_t` typically fits within standard limits, relying on `sprintf` into fixed-size stack arrays without explicit bounds checking is an insecure pattern prone to regressions.
+**Prevention:** Always use `snprintf` with `sizeof(buffer)` for dynamically generated paths to enforce hard limits and prevent silent buffer overflows.
