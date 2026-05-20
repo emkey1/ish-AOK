@@ -226,6 +226,7 @@ static CGRect ISHWorkspaceRectWithRoundedOriginPreservingSize(CGRect frame) {
     self.closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.closeButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.closeButton setTitle:@"×" forState:UIControlStateNormal];
+    self.closeButton.accessibilityLabel = @"Close";
     self.closeButton.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
     self.closeButton.hidden = !showsCloseButton;
     self.closeButton.alpha = showsCloseButton ? 1.0 : 0.0;
@@ -6650,7 +6651,9 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     _homeButton = [self browserButtonWithTitle:@"Home" action:@selector(goHome:)];
     _goButton = [self browserButtonWithTitle:@"Go" action:@selector(commitAddress:)];
     _addTabButton = [self browserButtonWithTitle:@"+" action:@selector(addTab:)];
+    _addTabButton.accessibilityLabel = @"New Tab";
     _closeTabButton = [self browserButtonWithTitle:@"×" action:@selector(closeCurrentTab:)];
+    _closeTabButton.accessibilityLabel = @"Close Tab";
     UILongPressGestureRecognizer *homeLongPressRecognizer =
         [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleHomeButtonLongPress:)];
     homeLongPressRecognizer.minimumPressDuration = 0.35;
