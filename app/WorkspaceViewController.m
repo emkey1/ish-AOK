@@ -5153,6 +5153,11 @@ NSString *ISHWorkspaceToolIdentifierForViewController(UIViewController *viewCont
         button.layer.shadowOpacity = selected ? 0.35 : 0.0;
         button.layer.shadowRadius = selected ? 10.0 : 0.0;
         button.layer.shadowOffset = CGSizeMake(0, 0);
+        if (selected) {
+            button.accessibilityTraits |= UIAccessibilityTraitSelected;
+        } else {
+            button.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+        }
         _themePreviewImageViewsByIdentifier[identifier].layer.borderColor =
             (selected ? theme[@"accentAlt"] : theme[@"stroke"]).CGColor;
         _themeTitleLabelsByIdentifier[identifier].textColor = selected ? theme[@"card"] : theme[@"primary"];
