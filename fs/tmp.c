@@ -581,17 +581,19 @@ static int tmpfs_getpath(struct fd *fd, char *buf) {
     struct tmp_dirent *dirent = fd->tmpfs.dirent;
     struct tmp_dirent *root_dirent = fd->mount->data;
     char *p = buf + MAX_PATH - 1;
+    size_t n = 0;
     *p = '\0';
     while (dirent != root_dirent) {
         size_t name_len = strlen(dirent->name);
         p -= name_len + 1;
         if (p < buf)
             return _ENAMETOOLONG;
+        n += name_len + 1;
         p[0] = '/';
         memcpy(&p[1], dirent->name, name_len);
         dirent = dirent->parent;
     }
-    memmove(buf, p, strlen(p) + 1);
+    memmove(buf, p, n + 1);
     return 0;
 }
 
