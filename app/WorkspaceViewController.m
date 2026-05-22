@@ -226,6 +226,7 @@ static CGRect ISHWorkspaceRectWithRoundedOriginPreservingSize(CGRect frame) {
     self.closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.closeButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.closeButton setTitle:@"×" forState:UIControlStateNormal];
+    self.closeButton.accessibilityLabel = @"Close";
     self.closeButton.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
     self.closeButton.hidden = !showsCloseButton;
     self.closeButton.alpha = showsCloseButton ? 1.0 : 0.0;
