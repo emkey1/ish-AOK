@@ -225,6 +225,8 @@ static CGRect ISHWorkspaceRectWithRoundedOriginPreservingSize(CGRect frame) {
 
     self.closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.closeButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.closeButton.accessibilityLabel = @"Close window";
+    self.closeButton.accessibilityHint = @"Closes this workspace window.";
     [self.closeButton setTitle:@"×" forState:UIControlStateNormal];
     self.closeButton.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
     self.closeButton.hidden = !showsCloseButton;
@@ -236,6 +238,7 @@ static CGRect ISHWorkspaceRectWithRoundedOriginPreservingSize(CGRect frame) {
 
     self.utilityButton = [UIButton buttonWithType:UIButtonTypeSystem];
     self.utilityButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.utilityButton.accessibilityLabel = @"Window options";
     self.utilityButton.hidden = YES;
     self.utilityButton.alpha = 0.0;
     self.utilityButton.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.82];
