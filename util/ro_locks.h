@@ -10,6 +10,7 @@
 #include <strings.h>
 #include "misc.h"
 #include "debug.h"
+#include <string.h>
 #include "kernel/errno.h"
 #include "kernel/log.h"
 #include "pthread.h"
