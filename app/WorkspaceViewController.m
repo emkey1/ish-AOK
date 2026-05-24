@@ -227,6 +227,7 @@ static CGRect ISHWorkspaceRectWithRoundedOriginPreservingSize(CGRect frame) {
     self.closeButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.closeButton setTitle:@"×" forState:UIControlStateNormal];
     self.closeButton.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    self.closeButton.accessibilityLabel = @"Close";
     self.closeButton.hidden = !showsCloseButton;
     self.closeButton.alpha = showsCloseButton ? 1.0 : 0.0;
     self.closeButton.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.82];
@@ -6482,6 +6483,19 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
 - (UIButton *)browserButtonWithTitle:(NSString *)title action:(SEL)action {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.translatesAutoresizingMaskIntoConstraints = NO;
+    if ([title isEqualToString:@"<"]) {
+        button.accessibilityLabel = @"Back";
+    } else if ([title isEqualToString:@">"]) {
+        button.accessibilityLabel = @"Forward";
+    } else if ([title isEqualToString:@"R"]) {
+        button.accessibilityLabel = @"Reload";
+    } else if ([title isEqualToString:@"+"]) {
+        button.accessibilityLabel = @"New Tab";
+    } else if ([title isEqualToString:@"×"]) {
+        button.accessibilityLabel = @"Close Tab";
+    } else {
+        button.accessibilityLabel = title;
+    }
     button.layer.cornerRadius = 10.0;
     button.layer.borderWidth = 1.0;
     button.titleLabel.font = [UIFont systemFontOfSize:ISHWorkspaceThemeFontSize(UIFontTextStyleFootnote)
@@ -6798,6 +6812,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     _closeTabButton.enabled = _tabWebViews.count > 1;
     _closeTabButton.alpha = _closeTabButton.enabled ? 1.0 : 0.42;
     [_reloadButton setTitle:(currentWebView.loading ? @"X" : @"R") forState:UIControlStateNormal];
+    _reloadButton.accessibilityLabel = currentWebView.loading ? @"Stop Loading" : @"Reload";
     _progressView.hidden = !currentWebView.loading && currentWebView.estimatedProgress >= 0.999;
     _progressView.alpha = _progressView.hidden ? 0.0 : 1.0;
     if (!_addressField.isFirstResponder) {
