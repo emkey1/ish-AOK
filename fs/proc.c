@@ -69,7 +69,6 @@ static struct fd *proc_open(struct mount *UNUSED(mount), const char *path, int U
 
 static int proc_getpath(struct fd *fd, char *buf) {
     char *p = buf + MAX_PATH - 1;
-    size_t n = 0;
     p[0] = '\0';
     struct proc_entry entry = fd->proc.entry;
     while (entry.meta != &proc_root) {
@@ -81,13 +80,12 @@ static int proc_getpath(struct fd *fd, char *buf) {
         if ((size_t) (p - buf) < component_len)
             return _ENAMETOOLONG;
         p -= component_len;
-        n += component_len;
         *p = '/';
         memcpy(p + 1, component, component_len - 1);
         entry.meta = entry.parent;
         entry.parent = entry.meta != NULL ? entry.meta->parent : NULL;
     }
-    memmove(buf, p, n + 1); // plus one for the null
+    memmove(buf, p, (buf + MAX_PATH) - p); // plus one for the null
     return 0;
 }
 
