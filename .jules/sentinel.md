@@ -40,3 +40,7 @@
 **Vulnerability:** A fixed-size stack buffer (`char envp[100]`) in `main.c` and `tools/ptraceomatic.c` was vulnerable to a buffer overflow when constructing the `TERM` environment variable. A user could trigger a Denial of Service (DoS) or stack corruption by supplying a `TERM` string exceeding the 100-character stack limit.
 **Learning:** Hardcoding stack buffer limits for dynamically sized user inputs (like environment variables) creates critical security risks and should be dynamically allocated instead.
 **Prevention:** Always use safe construction methods (e.g. `snprintf` with `malloc`) when passing dynamically-sized string inputs into kernel or environment initialization bounds, verifying explicitly free routines.
+## 2026-05-25 - Buffer Overflows from sprintf
+**Vulnerability:** Unbounded string copies via `sprintf` in multiple components (like `emu/regid.h`, `fs/pty.c`, `fs/proc/pid.c`, `fs/proc/root.c`, `fs/sock.c`, `tools/ptutil.c`, and `tools/vdso-transplant.c`) when writing to fixed-size char arrays.
+**Learning:** The usage of `sprintf` without length bounds check can lead to buffer overflows when dynamically generating strings from potentially uncontrolled input (e.g. process IDs or string templates). This continues to be a systemic issue resulting in technical debt.
+**Prevention:** Always replace `sprintf` with `snprintf` and provide the correct buffer size to ensure memory safety bounds checking. Always verify bounds explicitly.

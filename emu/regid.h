@@ -60,7 +60,7 @@ struct regptr {
 };
 static __attribute__((unused)) const char *regptr_name(struct regptr regptr) {
     static char buf[15];
-    sprintf(buf, "%s/%s/%s",
+    snprintf(buf, sizeof(buf), "%s/%s/%s",
             regid8_name(regptr.reg8_id),
             regid16_name(regptr.reg16_id),
             regid32_name(regptr.reg32_id));

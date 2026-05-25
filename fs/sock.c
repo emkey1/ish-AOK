@@ -2064,7 +2064,8 @@ static int sockaddr_read_bind(guest_addr_t sockaddr_addr, void *sockaddr, uint_t
             }
 
             struct sockaddr_un *real_addr_un = sockaddr;
-            size_t path_len = sprintf(real_addr_un->sun_path, "%s.%u", sock_tmp_prefix, socket_id);
+            size_t path_len = snprintf(real_addr_un->sun_path, sizeof(real_addr_un->sun_path), "%s.%u", sock_tmp_prefix, socket_id);
+            if (path_len >= sizeof(real_addr_un->sun_path)) return _ENAMETOOLONG;
 #ifdef __APPLE__
             real_addr_un->sun_len = offsetof(struct sockaddr_un, sun_path) + path_len;
 #endif
