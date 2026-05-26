@@ -55,7 +55,7 @@ int start_tracee(int at, const char *path, char *const argv[], char *const envp[
 
 int open_mem(int pid) {
     char filename[1024];
-    sprintf(filename, "/proc/%d/mem", pid);
+    snprintf(filename, sizeof(filename), "/proc/%d/mem", pid);
     return trycall(open(filename, O_RDWR), "open mem");
 }
 
