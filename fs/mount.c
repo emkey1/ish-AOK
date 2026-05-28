@@ -105,6 +105,7 @@ int do_mount(const struct fs_ops *fs, const char *source, const char *point, con
     new_mount->point = strdup(point);
     new_mount->point_len = strlen(point);
     new_mount->source = strdup(source);
+    new_mount->source_len = strlen(source);
     new_mount->info = strdup(info);
     new_mount->flags = flags;
     new_mount->fs = fs;

@@ -591,7 +591,8 @@ static int tmpfs_getpath(struct fd *fd, char *buf) {
         memcpy(&p[1], dirent->name, name_len);
         dirent = dirent->parent;
     }
-    memmove(buf, p, strlen(p) + 1);
+    // Bolt: eliminate redundant O(N) string traversal by calculating length via pointer arithmetic
+    memmove(buf, p, (buf + MAX_PATH) - p);
     return 0;
 }
 

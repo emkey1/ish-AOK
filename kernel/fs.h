@@ -76,6 +76,7 @@ struct mount {
     const char *point;
     size_t point_len;
     const char *source;
+    size_t source_len;
     const char *info;
     int flags;
     const struct fs_ops *fs;

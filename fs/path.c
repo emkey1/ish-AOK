@@ -87,12 +87,16 @@ static int __path_normalize(const char *at_path, const char *path, char *out, in
                 // readlink does not null terminate
                 c[res] = '\0';
                 // if we should restart from the root, copy down
-                if (*c == '/')
-                    memmove(out, c, strlen(c) + 1);
+                size_t out_len;
+                if (*c == '/') {
+                    memmove(out, c, res + 1);
+                    out_len = res;
+                } else {
+                    out_len = (c - out) + res;
+                }
                 char *expanded_path = possible_symlink;
                 // Bolt: Optimize string concatenation by tracking lengths and using
                 // memcpy instead of multiple strcat calls which cause O(N^2) behavior.
-                size_t out_len = strlen(out);
                 memcpy(expanded_path, out, out_len + 1);
                 if (*p != '\0') {
                     size_t p_len = strlen(p);

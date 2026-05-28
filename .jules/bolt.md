@@ -27,3 +27,6 @@
 ## 2026-03-25 - Hoist string length calculations in VFS inner functions
 **Learning:** In `fs/dir.c`, `sys_getdents_common` repeatedly called `strlen` inside a directory traversal loop, both directly and indirectly via callback functions (`fill_dirent`). This caused redundant O(N) traversals per entry, scaling poorly for large directories.
 **Action:** When a string's length is already known or can be hoisted outside an inner callback, pass the length as a parameter (e.g., `namelen` in `fill_dirent`) rather than recalculating it internally.
+## 2026-03-25 - Avoid strlen inside VFS path creation loops
+**Learning:** In VFS path building loops (`fs/proc.c`, `fs/tmp.c`), using `strlen(p)` multiple times where `p` is calculated by pointer arithmetic on the backward-growing buffer, or simply iterating the whole length again inside a loop, causes O(N) operations where `N` is bounded by `MAX_PATH`.
+**Action:** When calculating string length of backward-built path segments, use pointer arithmetic to directly pass string length to functions like `memmove()`, avoiding redundant `strlen()` calls. Similarly, pre-calculate lengths or use lengths provided directly by structures when concatenating strings, avoiding O(N^2) path building algorithms.
