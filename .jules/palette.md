@@ -21,3 +21,11 @@
 ## 2024-05-28 - Exposing Visual Badges to Screen Readers
 **Learning:** Visual indicators, such as a red badge signaling an available update, are invisible to screen readers unless their state is programmatically exposed.
 **Action:** When adding or updating visual badges on UI elements, always set a corresponding descriptive `accessibilityValue` (e.g., `@"Update available"`) on the element or its parent container when the badge is visible, and clear it (`nil`) when the badge is hidden, avoiding cluttering the main `accessibilityLabel`.
+
+## 2024-05-29 - Accessibility Labels for Textual Icon Buttons
+**Learning:** Icon-only buttons or buttons using non-standard textual symbols (e.g., '×' for close) are read literally by screen readers (e.g., "multiplication sign").
+**Action:** Always provide an explicit `accessibilityLabel` (e.g., @"Close") for buttons relying on textual symbols for icons to ensure VoiceOver announces their function correctly.
+
+## 2024-05-30 - Dynamic Accessibility Labels for State-Changing Buttons
+**Learning:** When a button dynamically changes its visual icon and function based on state (e.g., a "Reload" button turning into a "Stop" ("X") button while loading), its `accessibilityLabel` must also be dynamically updated to reflect the new state. Otherwise, VoiceOver will continue reading the original label, causing confusion about the button's current action.
+**Action:** Always dynamically update the `accessibilityLabel` concurrently with any dynamic changes to a button's visual title/icon when its primary action changes based on state (e.g., `_reloadButton.accessibilityLabel = loading ? @"Stop" : @"Reload"`).
