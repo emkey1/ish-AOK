@@ -6645,12 +6645,17 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     [_toolbarCard addSubview:controlsRow];
 
     _backButton = [self browserButtonWithTitle:@"<" action:@selector(goBack:)];
+    _backButton.accessibilityLabel = @"Back";
     _forwardButton = [self browserButtonWithTitle:@">" action:@selector(goForward:)];
+    _forwardButton.accessibilityLabel = @"Forward";
     _reloadButton = [self browserButtonWithTitle:@"R" action:@selector(reloadOrStop:)];
+    _reloadButton.accessibilityLabel = @"Reload page";
     _homeButton = [self browserButtonWithTitle:@"Home" action:@selector(goHome:)];
     _goButton = [self browserButtonWithTitle:@"Go" action:@selector(commitAddress:)];
     _addTabButton = [self browserButtonWithTitle:@"+" action:@selector(addTab:)];
+    _addTabButton.accessibilityLabel = @"New tab";
     _closeTabButton = [self browserButtonWithTitle:@"×" action:@selector(closeCurrentTab:)];
+    _closeTabButton.accessibilityLabel = @"Close tab";
     UILongPressGestureRecognizer *homeLongPressRecognizer =
         [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleHomeButtonLongPress:)];
     homeLongPressRecognizer.minimumPressDuration = 0.35;
@@ -6798,6 +6803,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     _closeTabButton.enabled = _tabWebViews.count > 1;
     _closeTabButton.alpha = _closeTabButton.enabled ? 1.0 : 0.42;
     [_reloadButton setTitle:(currentWebView.loading ? @"X" : @"R") forState:UIControlStateNormal];
+    _reloadButton.accessibilityLabel = currentWebView.loading ? @"Stop loading" : @"Reload page";
     _progressView.hidden = !currentWebView.loading && currentWebView.estimatedProgress >= 0.999;
     _progressView.alpha = _progressView.hidden ? 0.0 : 1.0;
     if (!_addressField.isFirstResponder) {
