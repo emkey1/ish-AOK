@@ -6456,6 +6456,11 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
             ? [theme[@"accent"] colorWithAlphaComponent:0.16]
             : [theme[@"cardAlt"] colorWithAlphaComponent:0.94];
         button.layer.borderColor = (current ? theme[@"accentAlt"] : theme[@"stroke"]).CGColor;
+        if (current) {
+            button.accessibilityTraits |= UIAccessibilityTraitSelected;
+        } else {
+            button.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+        }
         UIImageView *previewView = _previewImageViewsByIdentifier[identifier];
         CGSize previewSize = previewView.bounds.size;
         if (previewSize.width < 24 || previewSize.height < 24)
