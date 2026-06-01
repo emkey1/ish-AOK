@@ -40,8 +40,8 @@ static void aux_write(int pid, int type, dword_t value) {
 
 void transplant_vdso(int pid, const void *new_vdso, size_t new_vdso_size) {
     // get the vdso address and size from /proc/pid/maps
-    char maps_file[32];
-    sprintf(maps_file, "/proc/%d/maps", pid);
+    char maps_file[64];
+    snprintf(maps_file, sizeof(maps_file), "/proc/%d/maps", pid);
     FILE *maps = fopen(maps_file, "r");
 
     char line[256];

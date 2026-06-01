@@ -203,7 +203,7 @@ static int devpts_getpath(struct fd *fd, char *buf) {
     if (fd->devpts.num == -1)
         memcpy(buf, "", 1);
     else
-        sprintf(buf, "/%d", fd->devpts.num);
+        snprintf(buf, MAX_PATH, "/%d", fd->devpts.num);
     return 0;
 }
 
@@ -295,7 +295,7 @@ static int devpts_readdir(struct fd *fd, struct dir_entry *entry) {
     if (pty_num >= MAX_PTYS)
         return 0;
     fd->offset = pty_num + 1;
-    sprintf(entry->name, "%d", pty_num);
+    snprintf(entry->name, sizeof(entry->name), "%d", pty_num);
     entry->inode = pty_num + 3;
     entry->type = DT_CHR;
    // if (minor == DEV_PTMX_MINOR) 

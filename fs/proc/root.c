@@ -352,7 +352,7 @@ static int proc_show_loadavg(struct proc_entry *UNUSED(entry), struct proc_data 
 }
 
 static int proc_readlink_self(struct proc_entry *UNUSED(entry), char *buf) {
-    sprintf(buf, "%d/", current->pid);
+    snprintf(buf, MAX_PATH, "%d/", current->pid);
     return 0;
 }
 
@@ -868,7 +868,7 @@ static int sysfs_getpath(struct fd *fd, char *buf) {
             strcpy(buf, "/devices/system/cpu/offline");
             break;
         case sysfs_cpu_dir:
-            sprintf(buf, "/devices/system/cpu/cpu%d", node.cpu);
+            snprintf(buf, MAX_PATH, "/devices/system/cpu/cpu%d", node.cpu);
             break;
     }
     return 0;
