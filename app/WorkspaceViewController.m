@@ -231,6 +231,7 @@ static CGRect ISHWorkspaceRectWithRoundedOriginPreservingSize(CGRect frame) {
     self.closeButton.alpha = showsCloseButton ? 1.0 : 0.0;
     self.closeButton.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.82];
     self.closeButton.layer.cornerRadius = ISHWorkspaceWindowButtonSize * 0.5;
+    self.closeButton.accessibilityLabel = @"Close Window";
     [self.closeButton addTarget:self action:@selector(closePressed:) forControlEvents:UIControlEventTouchUpInside];
     [self.titleBarView addSubview:self.closeButton];
 
@@ -389,6 +390,7 @@ static CGRect ISHWorkspaceRectWithRoundedOriginPreservingSize(CGRect frame) {
     self.utilityHandler = handler;
     BOOL visible = title.length > 0 && handler != nil;
     [self.utilityButton setTitle:title forState:UIControlStateNormal];
+    self.utilityButton.accessibilityLabel = title;
     self.utilityButton.hidden = !visible;
     self.utilityButton.alpha = visible ? 1.0 : 0.0;
 }
