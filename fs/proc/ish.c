@@ -163,7 +163,8 @@ static int proc_ish_update_i386_no_cache_comm(struct proc_entry *UNUSED(entry), 
 }
 
 static void proc_ish_defaults_getname(struct proc_entry *entry, char *buf) {
-    strcpy(buf, entry->name);
+    strncpy(buf, entry->name, MAX_NAME);
+    buf[MAX_NAME] = '\0';
 }
 
 static int proc_ish_defaults_readlink(struct proc_entry *entry, char *buf) {
