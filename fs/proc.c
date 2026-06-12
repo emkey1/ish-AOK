@@ -249,8 +249,10 @@ static ssize_t proc_readlink(struct mount *UNUSED(mount), const char *path, char
     proc_entry_cleanup(&entry);
     if (err < 0)
         return err;
-    if (bufsize > strlen(target))
-        bufsize = strlen(target);
+
+    size_t target_len = strlen(target);
+    if (bufsize > target_len)
+        bufsize = target_len;
     memcpy(buf, target, bufsize);
     return bufsize;
 }
