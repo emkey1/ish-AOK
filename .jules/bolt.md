@@ -33,3 +33,6 @@
 ## 2026-03-27 - Hoist string length calculations in sys_getcwd_common
 **Learning:** In `kernel/fs.c`, `sys_getcwd_common` repeatedly called `strlen(pwd)` to determine the length of the current working directory string. This caused unnecessary O(N) traversals per operation, scaling poorly for long paths.
 **Action:** When a string's length needs to be used multiple times in an inner function, compute the length once and cache it in a variable (`pwd_len`) rather than recalculating it internally.
+## 2026-06-16 - Prevent O(N) Recalculations with strcat
+**Learning:** Using `strcat` repeatedly for dynamic string concatenation (e.g., building `boot_command_line` or accumulating deduped cgroup controllers) causes O(N^2) complexity due to redundant string length recalculations on each append.
+**Action:** Replace `strcat` with direct memory manipulation using `memcpy` and track the accumulated string length explicitly in a variable (`len`). This reduces concatenation complexity to O(1) per append, significantly improving performance for repeated operations.
