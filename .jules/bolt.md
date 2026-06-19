@@ -33,3 +33,6 @@
 ## 2026-03-27 - Hoist string length calculations in sys_getcwd_common
 **Learning:** In `kernel/fs.c`, `sys_getcwd_common` repeatedly called `strlen(pwd)` to determine the length of the current working directory string. This caused unnecessary O(N) traversals per operation, scaling poorly for long paths.
 **Action:** When a string's length needs to be used multiple times in an inner function, compute the length once and cache it in a variable (`pwd_len`) rather than recalculating it internally.
+## 2026-06-19 - Optimize dynamic string concatenation in main.c and proc cgroups
+**Learning:** In `linux/main.c` (`boot_command_line` building) and `fs/proc/pid.c` (`proc_pid_cgroup_show` loop), using `strcat` within loops causes O(N^2) complexity because the string needs to be traversed from the start each time to find the null terminator.
+**Action:** Replaced `strcat` with explicit length tracking and `memcpy`, changing the string concatenation complexity from O(N^2) to O(N).
