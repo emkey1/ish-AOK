@@ -25,3 +25,7 @@
 ## 2024-06-03 - Dynamic Accessibility Labels for State-Changing Buttons
 **Learning:** In iOS UI development, when a single button dynamically changes its visual icon and primary function based on state (e.g., setting a new title or action dynamically), its `accessibilityLabel` must be dynamically updated alongside the visual change to accurately describe the current actionable state to VoiceOver users.
 **Action:** When updating a button's visual representation (e.g., via `setTitle:`), ensure you also dynamically update `accessibilityLabel` to match the new state or function.
+
+## 2024-06-04 - Explicit Labels for Implicitly Grouped UI Controls
+**Learning:** In iOS UI development, interactive input elements like `UITextField` that lack adjacent visible textual labels (such as a browser address bar) must have an explicitly set `accessibilityLabel` to ensure VoiceOver users can clearly identify their purpose, even if placeholder text exists. Additionally, ensuring all controls in a toolbar (like 'Home' and 'Go' buttons) have `accessibilityLabel`s ensures a consistent experience for screen reader users.
+**Action:** When adding or modifying unlabeled input fields or icon/text buttons in toolbars, always set a clear `accessibilityLabel` property.
