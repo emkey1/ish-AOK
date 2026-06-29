@@ -8967,7 +8967,6 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     _addressField.translatesAutoresizingMaskIntoConstraints = NO;
     _addressField.delegate = self;
     _addressField.clearButtonMode = UITextFieldViewModeWhileEditing;
-    _addressField.accessibilityLabel = @"Address and Search";
     _addressField.returnKeyType = UIReturnKeyGo;
     _addressField.autocapitalizationType = UITextAutocapitalizationTypeNone;
     _addressField.autocorrectionType = UITextAutocorrectionTypeNo;
