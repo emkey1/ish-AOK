@@ -1289,6 +1289,7 @@ static NSAttributedString *ISHLLMAttributedStringFromMarkdown(NSString *markdown
     _promptField.borderStyle = UITextBorderStyleRoundedRect;
     _promptField.placeholder = @"Ask the configured model";
     _promptField.returnKeyType = UIReturnKeySend;
+    _promptField.accessibilityLabel = @"Ask the configured model";
     _promptField.autocorrectionType = UITextAutocorrectionTypeDefault;
     _promptField.delegate = self;
     [inputBar addSubview:_promptField];
