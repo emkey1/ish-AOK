@@ -8460,6 +8460,11 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     jump.layer.borderColor = (theme[@"stroke"] ?: [UIColor colorWithWhite:0.5 alpha:0.35]).CGColor;
     jump.backgroundColor = active ? [accent colorWithAlphaComponent:0.22] : nil;
     [jump setTitle:[NSString stringWithFormat:@"Desktop %ld", (long)(index + 1)] forState:UIControlStateNormal];
+    if (active) {
+        jump.accessibilityTraits |= UIAccessibilityTraitSelected;
+    } else {
+        jump.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+    }
     [jump setTitleColor:active ? accent : (theme[@"primary"] ?: UIColor.darkTextColor) forState:UIControlStateNormal];
     [jump.heightAnchor constraintEqualToConstant:ISHWorkspaceUsesPhoneLayout() ? 30.0 : 38.0].active = YES;
     [jump addTarget:self action:@selector(jumpToDesktopFromApplet:) forControlEvents:UIControlEventTouchUpInside];
