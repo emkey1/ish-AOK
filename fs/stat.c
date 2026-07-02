@@ -59,7 +59,7 @@ static bool ldconfig_trace_enabled(void) {
 }
 
 static bool dpkg_stat_trace_path(const char *path) {
-    return path != NULL && strncmp(path, "/var/lib/dpkg/", strlen("/var/lib/dpkg/")) == 0;
+    return path != NULL && strncmp(path, "/var/lib/dpkg/", 14) == 0;
 }
 
 static bool ldconfig_trace_path(const char *path) {

@@ -286,12 +286,16 @@ static dword_t sys_faccessat_common(fd_t at_f, guest_addr_t path_addr, mode_t_ m
         return _EBADF;
     STRACE("faccessat(%d, \"%s\", 0x%x, %d)", at_f, path, mode, flags);
 
-    bool trace_dpkg = getenv("ISH_TRACE_DPKG_STAT") != NULL &&
+    static int trace_dpkg_enabled = -1;
+    if (trace_dpkg_enabled < 0)
+        trace_dpkg_enabled = getenv("ISH_TRACE_DPKG_STAT") != NULL ? 1 : 0;
+
+    bool trace_dpkg = trace_dpkg_enabled &&
         current != NULL &&
         (strncmp(current->comm, "dpkg", 4) == 0 ||
          strcmp(current->comm, "apt") == 0 ||
          strcmp(current->comm, "apt-get") == 0) &&
-        strncmp(path, "/var/lib/dpkg/", strlen("/var/lib/dpkg/")) == 0;
+        strncmp(path, "/var/lib/dpkg/", 14) == 0;
 
     if (flags & ~FACCESSAT_ALLOWED_FLAGS_)
         return _EINVAL;
