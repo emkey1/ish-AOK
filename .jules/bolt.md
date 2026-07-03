@@ -33,3 +33,7 @@
 ## 2026-03-27 - Hoist string length calculations in sys_getcwd_common
 **Learning:** In `kernel/fs.c`, `sys_getcwd_common` repeatedly called `strlen(pwd)` to determine the length of the current working directory string. This caused unnecessary O(N) traversals per operation, scaling poorly for long paths.
 **Action:** When a string's length needs to be used multiple times in an inner function, compute the length once and cache it in a variable (`pwd_len`) rather than recalculating it internally.
+
+## 2026-07-03 - Optimize strcat to memcpy with length tracking
+**Learning:** Using `strcat` repeatedly inside loops for dynamic string accumulation (e.g., in `linux/main.c` and `fs/proc/pid.c`) causes O(N^2) time complexity because `strcat` traverses the entire accumulated string every time to find the null terminator.
+**Action:** Replace repeated `strcat` calls inside loops with `memcpy` and a running length tracker variable (`len`). This reduces the time complexity to O(N) while maintaining safety, but remember to declare new tracking variables at the top of their scope to preserve C89 compatibility.
