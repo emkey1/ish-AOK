@@ -26,6 +26,8 @@ struct task_pending_deletion {
 extern struct list tasks_pending_deletion_queue;
 extern pthread_mutex_t tasks_pending_deletion_lock;
 
+struct futex; // opaque; defined in kernel/futex.c (see futex_restart_futex below)
+
 struct task {
     enum guest_abi abi;
     struct cpu_state cpu;
@@ -156,6 +158,17 @@ struct task {
     lock_t waiting_cond_lock;
     bool wait_interrupted;
     bool restart_interrupted_syscall;
+
+    // SA_RESTART futex lost-wake fix (kernel/futex.c): when a FUTEX_WAIT is
+    // interrupted by a signal whose handler restarts the syscall, the waiter
+    // dequeues but PINS the futex here (the held ref keeps the object -- and
+    // its wake_seq counter -- alive) and snapshots wake_seq. If a FUTEX_WAKE
+    // bumps wake_seq while the waiter is off-queue during the handler + SVC
+    // restart, the restarted wait honors it as a wake instead of losing it.
+    // NULL when nothing is parked. Manipulated only under futex_lock.
+    struct futex *futex_restart_futex;
+    guest_addr_t futex_restart_uaddr;
+    uint64_t futex_restart_wake_seq;
 
     // Write-end of the notify pipe of the poll the task is currently blocked in
     // (poll_wait), or -1. A thread blocked in real_poll_wait (kevent/epoll_wait)

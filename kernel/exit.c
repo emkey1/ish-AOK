@@ -231,6 +231,10 @@ noreturn void do_exit(struct task *task, int status) {
         if (user_put(clear_tid, zero) == 0)
             futex_wake(clear_tid, 1);
     }
+    // Drop any futex pinned across an SA_RESTART restart window (rare: exiting
+    // mid-restart). Must run before mm_release, since a private futex holds a
+    // ref keyed on this task's mem. No-op unless a wait was parked.
+    futex_release_restart_park();
 
     // release all our resources
     // mm_release can walk fd/inode teardown and therefore take inodes_lock.

@@ -48,6 +48,12 @@ struct futex {
     uintptr_t shared_key;
     struct list queue;
     struct list chain; // locked by futex_hash_lock
+    // Monotonic wake counter, bumped by every FUTEX_WAKE-like op on this futex
+    // (under futex_lock). Used by the SA_RESTART lost-wake fix: a waiter that
+    // dequeues for a signal restart snapshots this and, on restart re-entry,
+    // treats an advance as "a wake arrived while I was off-queue". Only
+    // meaningful while the object is pinned across the restart window.
+    uint64_t wake_seq;
 };
 
 struct futex_wait {
@@ -111,6 +117,7 @@ static struct futex *futex_get_unlocked(guest_addr_t addr, dword_t op) {
     futex->mem = shared_key != 0 ? NULL : current->mem;
     futex->addr = key_addr;
     futex->shared_key = shared_key;
+    futex->wake_seq = 0;
     list_init(&futex->queue);
     list_add(bucket, &futex->chain);
     return futex;
@@ -178,9 +185,127 @@ static bool futex_wait_has_pending_signal(void) {
     return pending;
 }
 
+// ---------------------------------------------------------------------------
+// SA_RESTART lost-wake diagnostic ring (enable with ISH_TRACE_FUTEX=1).
+//
+// The futex_core "signal restart" failure is load-dependent and does NOT
+// reproduce on the macOS CLI, so it must be observed on-device -- but a
+// per-op printk perturbs the timing and hides the race (observer effect).
+// This ring records events into a fixed array behind an atomic index (no I/O
+// on the hot path) and only printk-dumps when a long-timeout FUTEX_WAIT (the
+// restart's fresh >=1s deadline) hits ETIMEDOUT -- i.e. after the race is
+// already lost, so there is zero observer effect on the race itself.
+// ---------------------------------------------------------------------------
+enum futex_ev_kind { FUTEX_EV_ENTER, FUTEX_EV_EXIT, FUTEX_EV_WAKE, FUTEX_EV_PARK, FUTEX_EV_RESUME };
+struct futex_ev {
+    uint32_t ms;
+    int32_t tid;
+    uint64_t uaddr;
+    int32_t arg;
+    uint8_t kind;
+};
+#define FUTEX_EV_RING 64
+static struct futex_ev futex_ev_ring[FUTEX_EV_RING];
+static unsigned futex_ev_idx; // plain; accessed only via __atomic_* builtins
+
+static bool futex_tracing(void) {
+    static int enabled = -1;
+    int v = __atomic_load_n(&enabled, __ATOMIC_RELAXED);
+    if (v < 0) {
+        v = getenv("ISH_TRACE_FUTEX") != NULL;
+        __atomic_store_n(&enabled, v, __ATOMIC_RELAXED);
+    }
+    return v != 0;
+}
+
+static void futex_trace(enum futex_ev_kind kind, guest_addr_t uaddr, int arg) {
+    if (!futex_tracing())
+        return;
+    struct timespec ts = timespec_now(CLOCK_MONOTONIC);
+    unsigned i = __atomic_fetch_add(&futex_ev_idx, 1, __ATOMIC_RELAXED) % FUTEX_EV_RING;
+    futex_ev_ring[i] = (struct futex_ev){
+        .ms = (uint32_t) (ts.tv_sec * 1000 + ts.tv_nsec / 1000000),
+        .tid = current != NULL ? current->pid : -1,
+        .uaddr = uaddr,
+        .arg = arg,
+        .kind = (uint8_t) kind,
+    };
+}
+
+static void futex_trace_dump(guest_addr_t uaddr) {
+    if (!futex_tracing())
+        return;
+    static const char *const names[] = {"ENTER", "EXIT ", "WAKE ", "PARK ", "RESUM"};
+    unsigned end = __atomic_load_n(&futex_ev_idx, __ATOMIC_RELAXED);
+    printk("[futex-trace] tid=%d long-wait ETIMEDOUT uaddr=%#llx -- last %d events (oldest first):\n",
+           current != NULL ? current->pid : -1, (unsigned long long) uaddr, FUTEX_EV_RING);
+    for (unsigned k = 0; k < FUTEX_EV_RING; k++) {
+        struct futex_ev *e = &futex_ev_ring[(end + k) % FUTEX_EV_RING];
+        if (e->ms == 0 && e->tid == 0)
+            continue;
+        printk("  %ums tid=%d %s uaddr=%#llx arg=%d\n",
+               e->ms, e->tid, names[e->kind < 5 ? e->kind : 0],
+               (unsigned long long) e->uaddr, e->arg);
+    }
+}
+
+// Drop the pinned ref from a parked restart wait, if any (see the
+// futex_restart_* fields in struct task). The _locked variant runs with
+// futex_lock held; futex_release_restart_park() takes it. Safe when nothing is
+// parked. A missed cleanup only leaks one pinned futex object (bounded --
+// wake_seq keeps counting harmlessly) and is never a correctness problem: the
+// pinned wait is NOT on any queue, so it can neither be woken nor steal a wake.
+static void futex_clear_restart_park_locked(void) {
+    if (current->futex_restart_futex != NULL) {
+        futex_put_unlocked(current->futex_restart_futex);
+        current->futex_restart_futex = NULL;
+    }
+}
+void futex_release_restart_park(void) {
+    if (current == NULL || current->futex_restart_futex == NULL)
+        return;
+    lock(&futex_lock, 0);
+    futex_clear_restart_park_locked();
+    unlock(&futex_lock);
+}
+
 static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct timespec *timeout, dword_t bitset) {
     struct futex *futex = futex_get(uaddr, op);
+    if (futex == NULL)
+        return _ENOMEM; // futex_get already released futex_lock on alloc failure
     int err = 0;
+    futex_trace(FUTEX_EV_ENTER, uaddr, (int) val);
+
+    // SA_RESTART resume: a prior interrupted wait on this same futex parked it
+    // (see the park block at the end of this function) -- the object stayed
+    // pinned via a held ref, so its wake_seq survived while we ran the signal
+    // handler and re-executed the syscall off-queue. futex_get above found
+    // that same object and took a *second* ref; drop the redundant one. If
+    // wake_seq advanced meanwhile, a FUTEX_WAKE fired for us during the window
+    // and would otherwise have been lost -- honor it now. (FUTEX_WAIT is
+    // permitted to wake spuriously, so this can never fabricate a stolen wake
+    // for another waiter: the wake still dequeued only truly-queued waiters.)
+    if (current->futex_restart_futex != NULL) {
+        if (current->futex_restart_futex == futex) {
+            futex_put_unlocked(futex); // drop the redundant get ref; the pinned ref remains
+            uint64_t parked_seq = current->futex_restart_wake_seq;
+            current->futex_restart_futex = NULL; // consume the park; `futex` is now our ref
+            if (futex->wake_seq != parked_seq) {
+                futex_trace(FUTEX_EV_RESUME, uaddr, 1);
+                futex_put(futex); // release the pinned ref + unlock
+                return 0; // woken by a FUTEX_WAKE during the restart window
+            }
+            futex_trace(FUTEX_EV_RESUME, uaddr, 0);
+            // No wake arrived while parked: re-validate the word and re-block
+            // below, reusing the pinned ref (still held, futex_lock still ours).
+        } else {
+            // The park is for a different futex -- a nested futex called from a
+            // signal handler, or a prior EINTR that did not restart to this
+            // address. Drop its pinned ref before proceeding.
+            futex_clear_restart_park_locked();
+        }
+    }
+
     dword_t tmp;
     if (futex_load(uaddr, &tmp))
         err = _EFAULT;
@@ -207,6 +332,12 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
                 remaining = timespec_subtract(deadline, timespec_now(CLOCK_MONOTONIC));
                 if (!timespec_positive(remaining)) {
                     err = futex_wait_has_pending_signal() ? _EINTR : _ETIMEDOUT;
+                    // A long-timeout wait (the SA_RESTART restart re-blocks for
+                    // the guest's full timeout, typically >=1s) that reaches its
+                    // deadline is the lost-wake symptom -- dump the ring here,
+                    // after the race is already decided (zero observer effect).
+                    if (err == _ETIMEDOUT && timeout->tv_sec >= 1)
+                        futex_trace_dump(uaddr);
                     break;
                 }
                 if (remaining.tv_sec > wait_slice.tv_sec ||
@@ -247,8 +378,29 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
         }
         futex = wait.futex;
         list_remove_safe(&wait.queue);
+
+        if (err == _EINTR) {
+            // The wait was interrupted by a signal that may restart the syscall
+            // (SA_RESTART). Park across the restart: keep this futex PINNED (do
+            // NOT drop the ref) so its wake_seq survives while we are off-queue
+            // running the handler + re-executing the syscall, and snapshot
+            // wake_seq now. We still hold futex_lock and have already dequeued,
+            // so no FUTEX_WAKE can slip in between the dequeue and this
+            // snapshot. On the restart, the resume block above compares the
+            // snapshot: an advance means a wake fired for us during the window
+            // (recovered instead of lost). If the syscall does NOT restart,
+            // sys_futex_common drops the park via futex_release_restart_park().
+            current->futex_restart_futex = futex;
+            current->futex_restart_uaddr = uaddr;
+            current->futex_restart_wake_seq = futex->wake_seq;
+            futex_trace(FUTEX_EV_PARK, uaddr, 0);
+            unlock(&futex_lock); // release the lock but KEEP the pinned ref
+            STRACE("%d park futex(FUTEX_WAIT) for restart", current->pid);
+            return _EINTR;
+        }
     }
     futex_put(futex);
+    futex_trace(FUTEX_EV_EXIT, uaddr, err);
     STRACE("%d end futex(FUTEX_WAIT)", current->pid);
     return err;
 }
@@ -275,6 +427,15 @@ static int futex_read_timeout(guest_addr_t timeout_addr, bool time64, struct tim
 static int futex_wakelike(int op, guest_addr_t uaddr, dword_t wake_max, dword_t requeue_max,
         guest_addr_t requeue_addr, dword_t wake_mask) {
     struct futex *futex = futex_get(uaddr, op);
+    if (futex == NULL)
+        return 0; // alloc failure: no futex exists, so nothing is queued to wake
+
+    // Advance the wake counter (under futex_lock) BEFORE walking the queue, so
+    // a waiter that dequeued for an SA_RESTART restart and is momentarily
+    // off-queue can detect on resume that a wake fired for this futex during
+    // its restart window (see futex_wait_masked). Only meaningful while such a
+    // waiter keeps the object pinned; otherwise it is a harmless counter bump.
+    futex->wake_seq++;
 
     struct futex_wait *wait, *tmp;
     unsigned woken = 0;
@@ -307,6 +468,7 @@ static int futex_wakelike(int op, guest_addr_t uaddr, dword_t wake_max, dword_t 
         woken += requeued;
     }
 
+    futex_trace(FUTEX_EV_WAKE, uaddr, (int) woken);
     futex_put(futex);
     return woken;
 }
@@ -437,8 +599,11 @@ dword_t sys_futex_common(guest_addr_t uaddr, dword_t op, dword_t val, guest_addr
             STRACE("futex(FUTEX_WAIT, %#x, %d, 0x%x {%ds %dns}) = ...\n", uaddr, val, timeout_or_val2, timeout.tv_sec, timeout.tv_nsec);
             dword_t return_val;
             return_val = futex_wait_masked(uaddr, op, val, timeout_or_val2 ? &timeout : NULL, ~0u);
-            if ((int) return_val == _EINTR && signal_should_restart_syscall())
-                return _ERESTART;
+            if ((int) return_val == _EINTR) {
+                if (signal_should_restart_syscall())
+                    return _ERESTART; // keep the parked wait; the restart resumes it
+                futex_release_restart_park(); // EINTR to the guest, no restart: drop the park
+            }
             return return_val;
         case FUTEX_WAKE_:
             STRACE("futex(FUTEX_WAKE, %#x, %d)", uaddr, val);
@@ -475,8 +640,11 @@ dword_t sys_futex_common(guest_addr_t uaddr, dword_t op, dword_t val, guest_addr
                 return _EINVAL;
             {
                 dword_t return_val = futex_wait_masked(uaddr, op, val, timeout_or_val2 ? &timeout : NULL, val3);
-                if ((int) return_val == _EINTR && signal_should_restart_syscall())
-                    return _ERESTART;
+                if ((int) return_val == _EINTR) {
+                    if (signal_should_restart_syscall())
+                        return _ERESTART; // keep the parked wait; the restart resumes it
+                    futex_release_restart_park(); // EINTR to the guest, no restart: drop the park
+                }
                 return return_val;
             }
         case FUTEX_WAKE_BITSET_:
