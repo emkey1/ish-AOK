@@ -1065,13 +1065,8 @@ void mem_coredump(struct mem *mem, const char *file) {
 }
 
 void mem_ref_cnt_mod(struct mem *mem, int value) { // value should only be -1 or 1.
-    // Keep track of how many threads are referencing this mem. Maintained
-    // unconditionally (see task_ref_cnt_mod): mm_release gates teardown on
-    // this count, and the old doEnableExtraLocking preference could be
-    // toggled mid-run, leaving the count permanently imbalanced.
-    if(mem == NULL) {
-            return;
-    }
+    if (mem == NULL)
+        return;
 
     if (value != 1 && value != -1) {
         printk("ERROR: invalid mem refcount delta %d\n", value);
@@ -1079,27 +1074,32 @@ void mem_ref_cnt_mod(struct mem *mem, int value) { // value should only be -1 or
     }
 
     int old_count = atomic_load_explicit(&mem->reference.count, memory_order_relaxed);
-    do {
-        if((old_count + value) < 0) { // Prevent the count from going negative.
+    for (;;) {
+        int new_count = old_count + value;
+        if (new_count < 0) {
             void *caller = __builtin_return_address(0);
             Dl_info caller_info = {};
             const char *caller_name = "?";
             ptrdiff_t caller_offset = 0;
             if (caller != NULL && dladdr(caller, &caller_info) != 0 && caller_info.dli_sname != NULL) {
                 caller_name = caller_info.dli_sname;
-                caller_offset = (char *) caller - (char *) caller_info.dli_saddr;
+                caller_offset = (char *) caller - (char *) caller_info->dli_saddr;
             }
             printk("ERROR: Attempt to decrement mem reference count to be negative, ignoring(%d:%d) caller=%s+%td addr=%p mem=%p\n",
                    old_count, value, caller_name, caller_offset, caller, mem);
             return;
         }
-    } while (!atomic_compare_exchange_weak_explicit(&mem->reference.count, &old_count, old_count + value,
-                                                    memory_order_acq_rel, memory_order_relaxed));
+        if (atomic_compare_exchange_weak_explicit(&mem->reference.count, &old_count, new_count,
+                                                   memory_order_acq_rel, memory_order_relaxed))
+            return;
+    }
 }
 
 int mem_ref_cnt_get(struct mem *mem) {
-    int cnt = atomic_load_explicit(&mem->reference.count, memory_order_acquire);
-    if((cnt < 0) || ( cnt > 1000)) // Stupid kluge while I fix this brain damage
+    if (mem == NULL)
+        return 0;
+    int cnt = (int) atomic_load_explicit(&mem->reference.count, memory_order_relaxed);
+    if ((cnt < 0) || (cnt > 1000))
         cnt = 0;
     return cnt;
 }
