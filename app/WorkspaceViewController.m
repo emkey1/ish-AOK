@@ -8971,6 +8971,8 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     _addressField.autocapitalizationType = UITextAutocapitalizationTypeNone;
     _addressField.autocorrectionType = UITextAutocorrectionTypeNo;
     _addressField.spellCheckingType = UITextSpellCheckingTypeNo;
+    _addressField.accessibilityLabel = @"Address bar";
+    _addressField.accessibilityLabel = @"Address bar";
     if (@available(iOS 11.0, *)) {
         _addressField.smartDashesType = UITextSmartDashesTypeNo;
         _addressField.smartQuotesType = UITextSmartQuotesTypeNo;
