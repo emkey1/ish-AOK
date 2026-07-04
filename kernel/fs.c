@@ -286,12 +286,20 @@ static dword_t sys_faccessat_common(fd_t at_f, guest_addr_t path_addr, mode_t_ m
         return _EBADF;
     STRACE("faccessat(%d, \"%s\", 0x%x, %d)", at_f, path, mode, flags);
 
-    bool trace_dpkg = getenv("ISH_TRACE_DPKG_STAT") != NULL &&
+    // ⚡ Bolt: Cache the environment lookup to avoid an expensive getenv()
+    // call on every single faccessat execution (a hot path).
+    static int trace_dpkg_env = -1;
+    if (trace_dpkg_env == -1)
+        trace_dpkg_env = getenv("ISH_TRACE_DPKG_STAT") != NULL;
+
+    // ⚡ Bolt: Use sizeof() instead of strlen() for string literal
+    // to avoid O(N) string traversal at runtime.
+    bool trace_dpkg = trace_dpkg_env &&
         current != NULL &&
         (strncmp(current->comm, "dpkg", 4) == 0 ||
          strcmp(current->comm, "apt") == 0 ||
          strcmp(current->comm, "apt-get") == 0) &&
-        strncmp(path, "/var/lib/dpkg/", strlen("/var/lib/dpkg/")) == 0;
+        strncmp(path, "/var/lib/dpkg/", sizeof("/var/lib/dpkg/") - 1) == 0;
 
     if (flags & ~FACCESSAT_ALLOWED_FLAGS_)
         return _EINVAL;
