@@ -11276,6 +11276,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         _addressField.smartQuotesType = UITextSmartQuotesTypeNo;
         _addressField.smartInsertDeleteType = UITextSmartInsertDeleteTypeNo;
     }
+    _addressField.accessibilityLabel = @"Address";
     [_addressContainerView addSubview:_addressField];
 
     _progressView = [self workspaceThemeProgressView];
