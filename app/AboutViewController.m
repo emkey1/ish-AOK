@@ -1292,6 +1292,7 @@ static NSAttributedString *ISHLLMAttributedStringFromMarkdown(NSString *markdown
     _promptField.returnKeyType = UIReturnKeySend;
     _promptField.autocorrectionType = UITextAutocorrectionTypeDefault;
     _promptField.delegate = self;
+    _promptField.accessibilityLabel = @"Prompt input";
     [inputBar addSubview:_promptField];
 
     _sendButton = [UIButton buttonWithType:UIButtonTypeSystem];
