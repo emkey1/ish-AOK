@@ -563,6 +563,7 @@ static int proc_pid_cgroup_show(struct proc_entry *UNUSED(entry), struct proc_da
     // ENODATA ("Cannot determine cgroup we are running in").
     int next_id = 1;
     char seen[512] = "|";
+    size_t seen_len = 1; // Length of seen
     struct mount *mount;
     list_for_each_entry(&mounts, mount, mounts) {
         if (strcmp(mount->fs->name, "cgroup") != 0)
@@ -582,8 +583,10 @@ static int proc_pid_cgroup_show(struct proc_entry *UNUSED(entry), struct proc_da
         key[n + 1] = '\0';
         if (strstr(seen, key) != NULL)
             continue;
-        if (strlen(seen) + n + 1 < sizeof(seen))
-            strcat(seen, key);
+        if (seen_len + n + 1 < sizeof(seen)) {
+            memcpy(seen + seen_len, key, n + 2);
+            seen_len += n + 1;
+        }
         proc_printf(buf, "%d:%s:/\n", next_id++, controller);
     }
     proc_printf(buf, "0::/\n");
