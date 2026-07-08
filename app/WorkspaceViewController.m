@@ -11667,7 +11667,8 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     _closeTabButton.enabled = _tabWebViews.count > 1;
     _closeTabButton.alpha = _closeTabButton.enabled ? 1.0 : 0.42;
     [_reloadButton setTitle:(currentWebView.loading ? @"X" : @"R") forState:UIControlStateNormal];
-    _reloadButton.accessibilityLabel = currentWebView.loading ? @"Stop" : @"Reload";
+    NSString *reloadLabel = currentWebView.loading ? @"Stop loading" : @"Reload";
+    _reloadButton.accessibilityLabel = reloadLabel;
     _progressView.hidden = !currentWebView.loading && currentWebView.estimatedProgress >= 0.999;
     _progressView.alpha = _progressView.hidden ? 0.0 : 1.0;
     if (!_addressField.isFirstResponder) {
