@@ -33,6 +33,3 @@
 ## 2026-03-27 - Hoist string length calculations in sys_getcwd_common
 **Learning:** In `kernel/fs.c`, `sys_getcwd_common` repeatedly called `strlen(pwd)` to determine the length of the current working directory string. This caused unnecessary O(N) traversals per operation, scaling poorly for long paths.
 **Action:** When a string's length needs to be used multiple times in an inner function, compute the length once and cache it in a variable (`pwd_len`) rather than recalculating it internally.
-## 2026-03-29 - Optimize cgroup hierarchy deduplication
-**Learning:** In `fs/proc/pid.c`, string tracking for deduplicated cgroup hierarchies used `strcat` into a `seen` buffer, resulting in repeated O(N) operations.
-**Action:** Replace `strcat` with explicit tracking of the length of the string buffer (`seen_len`) and `memcpy` to append to the end of the string.
