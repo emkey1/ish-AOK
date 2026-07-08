@@ -33,3 +33,10 @@
 ## 2026-03-27 - Hoist string length calculations in sys_getcwd_common
 **Learning:** In `kernel/fs.c`, `sys_getcwd_common` repeatedly called `strlen(pwd)` to determine the length of the current working directory string. This caused unnecessary O(N) traversals per operation, scaling poorly for long paths.
 **Action:** When a string's length needs to be used multiple times in an inner function, compute the length once and cache it in a variable (`pwd_len`) rather than recalculating it internally.
+## 2026-03-31 - Rejecting duplicate strcat -> memcpy fixes
+**Learning:** The optimization of replacing `strcat` with `memcpy` and length tracking in `proc_pid_cgroup_show` and `boot_command_line` has already been comprehensively addressed in PR #454.
+**Action:** Do not submit further duplicate PRs for this specific `strcat` optimization pattern in these files, as it creates unnecessary PR churn and will be rejected as a subset of existing work.
+
+## 2026-03-31 - Rejecting duplicate strcat -> memcpy fixes
+**Learning:** The optimization of replacing `strcat` with `memcpy` and length tracking in `proc_pid_cgroup_show` and `boot_command_line` has already been comprehensively addressed in PR #454.
+**Action:** Do not submit further duplicate PRs for this specific `strcat` optimization pattern in these files, as it creates unnecessary PR churn and will be rejected as a subset of existing work.
