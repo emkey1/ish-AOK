@@ -35,6 +35,14 @@ struct gen_state {
     uint8_t amd64_fallback_opcode;
     uint8_t amd64_fallback_op2;
     uint8_t amd64_fallback_flags;
+    // x86 cmp/test + jcc fusion (gen.c gen_try_fuse_jcc): stream size
+    // right after the last 32-bit CMP/TEST finished emitting its flag-op
+    // gadget, and which family it was. A position mismatch at the jcc
+    // site (anything else emitted in between) invalidates automatically;
+    // gen_start must zero these (uninitialized-flag bug class, see
+    // gen_start's comment).
+    unsigned x86_fuse_end;
+    int x86_fuse_op; // 0 = none, 1 = sub (cmp), 2 = and (test)
     struct jit_block *block;
     unsigned size;
     unsigned capacity;

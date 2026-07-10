@@ -467,6 +467,8 @@ bool gen_start(guest_addr_t addr, struct gen_state *state) {
     state->amd64_fallback_opcode = 0;
     state->amd64_fallback_op2 = 0;
     state->amd64_fallback_flags = 0;
+    state->x86_fuse_end = 0; // same uninitialized-flag bug class as arm64 above
+    state->x86_fuse_op = 0;
     state->capacity = JIT_BLOCK_INITIAL_CAPACITY;
     state->size = 0;
     state->ip = addr;
@@ -1180,6 +1182,22 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         uint64_t target = is_adrp
             ? (state->arm64_orig_ip & ~(uint64_t) 0xfff) + ((uint64_t) imm << 12)
             : state->arm64_orig_ip + (uint64_t) imm;
+        // adrp+add page-address formation: `adrp rd, X; add rd, rd, #lo`
+        // completes the target at compile time, so fold the pair into the
+        // one adr gadget (measured 1.8-3.8% of static instructions on
+        // Alpine aarch64 busybox/musl). Same consumption rules as the
+        // other fusions here: page budget checked, and a jump landing on
+        // the consumed add just compiles it as its own block. rd==31 is
+        // excluded: ADR's 31 is XZR but ADD-immediate's is SP, and the
+        // fold's same-register requirement would conflate them.
+        uint32_t next;
+        if (rd != 31 && gen_arm64_fits_block(state, state->arm64_ip + 4) &&
+                tlb_read(tlb, state->arm64_ip, &next, sizeof(next)) &&
+                (next & 0xffc00000) == 0x91000000 && // ADD Xd, Xn, #imm12 (sf=1, no S, shift 0)
+                (next & 0x1f) == rd && ((next >> 5) & 0x1f) == rd) {
+            target += (next >> 10) & 0xfff;
+            state->arm64_ip += 4;
+        }
         gen(state, (unsigned long) gadget_arm64_adr);
         gen(state, (rd & 0x1f) | ((target & 0xffffffffffffULL) << 8));
         return 1;
@@ -9429,6 +9447,60 @@ static inline int sz(int size) {
     }
 }
 
+// x86 cmp/test + jcc fusion. The CMP/TEST macros note the stream position
+// right after their flag-op gadget; if the very next thing emitted is a
+// jcc (nothing in between moved state->size), the op gadget is rewritten
+// in place to its fused twin from gadgets-aarch64/math.S, which deposits
+// the identical lazy-flag state and then branches on live host flags:
+// [load][sub32_imm][imm] + [jmp_z][to][else] becomes
+// [load][fused_cmp32_z_imm][imm][to][else] -- one dispatch and no
+// CPU_res/CPU_cf reload in do_jump. Measured on Alpine i386/amd64
+// binaries: 93-95% of jcc directly follow their flag setter.
+// Zero-emission instructions between the pair (mov reg,same-reg) don't
+// defeat the position check and are flag-transparent, so fusing across
+// them is still exact.
+static inline void gen_note_flag_op_fuse(struct gen_state *state, int size, int op) {
+    state->x86_fuse_op = size == 32 ? op : 0;
+    state->x86_fuse_end = state->size;
+}
+
+static inline bool gen_try_fuse_jcc(struct gen_state *state, int cond) {
+#if defined(__aarch64__)
+    if (state->x86_fuse_op == 0 || state->x86_fuse_end != state->size)
+        return false;
+    extern gadget_t sub_gadgets[], and_gadgets[];
+    extern gadget_t fused_cmp32_gadgets[], fused_test32_gadgets[];
+    gadget_t *ops = state->x86_fuse_op == 1 ? sub_gadgets : and_gadgets;
+    gadget_t *fused = state->x86_fuse_op == 1 ? fused_cmp32_gadgets : fused_test32_gadgets;
+    // The op gadget is the last word (reg source) or second-to-last
+    // (imm/mem source, which trail one operand word). Identify the source
+    // form by pointer-matching against the op's own gadget table; only a
+    // CMP/TEST can end an instruction with a bare flag-op gadget (every
+    // other ALU form stores its result afterwards).
+    for (unsigned trailing = 0; trailing <= 1; trailing++) {
+        if (state->size < trailing + 1)
+            break;
+        unsigned slot = state->size - 1 - trailing;
+        unsigned long g = state->block->code[slot];
+        for (int arg = 0; arg < arg_count; arg++) {
+            if ((unsigned long) ops[size_32 * arg_count + arg] != g)
+                continue;
+            bool has_trailing = arg == arg_imm || arg == arg_mem;
+            if (has_trailing != (trailing == 1))
+                continue;
+            gadget_t f = fused[cond * arg_count + arg];
+            if (f == NULL)
+                return false; // no fused form (parity, test+jb, ...)
+            state->block->code[slot] = (unsigned long) f;
+            return true;
+        }
+    }
+#else
+    (void) state; (void) cond;
+#endif
+    return false;
+}
+
 bool gen_addr(struct gen_state *state, struct modrm *modrm, bool seg_tls) {
     if (modrm->base == reg_none)
         gg(addr_none, modrm->offset);
@@ -9540,8 +9612,8 @@ static inline bool gen_mov(struct gen_state *state, enum arg src, enum arg dst, 
 #define AND(src, dst,z) los(and, src, dst, z)
 #define SUB(src, dst,z) los(sub, src, dst, z)
 #define XOR(src, dst,z) los(xor, src, dst, z)
-#define CMP(src, dst,z) lo(sub, src, dst, z)
-#define TEST(src, dst,z) lo(and, src, dst, z)
+#define CMP(src, dst,z) lo(sub, src, dst, z); gen_note_flag_op_fuse(state, z, 1)
+#define TEST(src, dst,z) lo(and, src, dst, z); gen_note_flag_op_fuse(state, z, 2)
 #define NOT(val,z) load(val,z); gz(not, z); store(val,z)
 #define NEG(val,z) imm = 0; load(imm,z); op(sub, val,z); store(val,z)
 
@@ -9563,7 +9635,10 @@ static inline bool gen_mov(struct gen_state *state, enum arg src, enum arg dst, 
 #define JMP(loc) load(loc, OP_SIZE); g(jmp_indir); end_block = true
 #define JMP_REL(off) gg(jmp, fake_ip + off); jump_ips(-1, 0); end_block = true
 #define JCXZ_REL(off) ggg(jcxz, fake_ip + off, fake_ip); jump_ips(-2, -1); end_block = true
-#define jcc(cc, to, else) gagg(jmp, cond_##cc, to, else); jump_ips(-2, -1); end_block = true
+#define jcc(cc, to, otherwise) do { \
+    if (gen_try_fuse_jcc(state, cond_##cc)) { GEN(to); GEN(otherwise); } \
+    else { gagg(jmp, cond_##cc, to, otherwise); } \
+    jump_ips(-2, -1); end_block = true; } while (0)
 #define J_REL(cc, off)  jcc(cc, fake_ip + off, fake_ip)
 #define JN_REL(cc, off) jcc(cc, fake_ip, fake_ip + off)
 

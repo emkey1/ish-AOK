@@ -4739,3 +4739,107 @@ amd64_v_unpck unpckhps, zip2, 4s
     amd64_vwrite_done 8, movlp_store
     gret 3
     amd64_vwrite_bullshit 8, movlp_store
+
+# ---- Fused cmp/test + jcc ------------------------------------------------
+#
+# One gadget replacing the [sub32/and32 op][jmp_<cond>] pair that gen.c
+# emits for a 32-bit cmp/test immediately followed by a jcc (gen.c's
+# gen_try_fuse_jcc rewrites the op gadget in place; the branch then tests
+# LIVE host flags instead of re-deriving the condition from the lazy
+# CPU_res/CPU_cf/CPU_of state that do_jump reads).
+#
+# Contract (matches the unfused pair exactly):
+#  - The full lazy-flag state is still deposited via the same do_op guts
+#    (op1/op2+AF_OPS, eager CF/OF, res+ZF/SF/PF_RES): one x86 cmp can feed
+#    MULTIPLE jcc (cmp; je; jl), and the second jcc lands in the
+#    fall-through block reading CPU state. Anything after do_op here must
+#    not clobber NZCV (cset/strb/str/ldr/orr don't; movs/uxts at size 32
+#    are plain mov).
+#  - Stream layout mirrors the unfused forms: reg form [gadget][to][else],
+#    imm/mem forms [gadget][imm-or-orig_ip][to][else]; taken target first,
+#    exactly like jmp_<cond>, so JN_REL's swapped-target negation and the
+#    frontend's jump_ip chaining/patching work unchanged.
+#  - sub family host-cond mapping is the AArch64 unsigned/signed compare
+#    correspondence (x86 CF = borrow = host C clear).
+#  - and (test) family: x86 test sets CF=OF=0, so the branch re-tests the
+#    result with tst (Z/N live, C=V=0). Only conditions expressible under
+#    C=V=0 are stamped; jb/jae/jo/jno/jp after test stay unfused (gen.c
+#    finds a NULL array slot and declines).
+#  - p (parity) has no host flag: never stamped, never fused.
+
+.macro fused_jcc_tail bcond, off
+    b\bcond 1f
+    ldr _ip, [_ip, \off+8]
+    b jit_ret_chain
+1:
+    ldr _ip, [_ip, \off]
+    b jit_ret_chain
+.endm
+
+.macro fused_flagop_reg name, armop, cond, bcond, reg, hostreg, retest
+    .gadget fused_\name\()32_\cond\()_reg_\reg
+        do_op \armop, 32, \hostreg
+        .ifnb \retest
+            tst _tmp, _tmp
+        .endif
+        fused_jcc_tail \bcond, 0
+.endm
+
+.macro fused_flagop_family name, armop, cond, bcond, retest
+    .gadget fused_\name\()32_\cond\()_imm
+        ldr w8, [_ip]
+        do_op \armop, 32, w8
+        .ifnb \retest
+            tst _tmp, _tmp
+        .endif
+        fused_jcc_tail \bcond, 8
+    fused_flagop_reg \name, \armop, \cond, \bcond, a, eax, \retest
+    fused_flagop_reg \name, \armop, \cond, \bcond, c, ecx, \retest
+    fused_flagop_reg \name, \armop, \cond, \bcond, d, edx, \retest
+    fused_flagop_reg \name, \armop, \cond, \bcond, b, ebx, \retest
+    fused_flagop_reg \name, \armop, \cond, \bcond, sp, esp, \retest
+    fused_flagop_reg \name, \armop, \cond, \bcond, bp, ebp, \retest
+    fused_flagop_reg \name, \armop, \cond, \bcond, si, esi, \retest
+    fused_flagop_reg \name, \armop, \cond, \bcond, di, edi, \retest
+    .gadget fused_\name\()32_\cond\()_mem
+        read_prep 32, fused_\name\()32_\cond\()_mem
+        ldr w8, [_xaddr]
+        do_op \armop, 32, w8
+        .ifnb \retest
+            tst _tmp, _tmp
+        .endif
+        fused_jcc_tail \bcond, 8
+        read_bullshit 32, fused_\name\()32_\cond\()_mem
+.endm
+
+fused_flagop_family cmp, sub, o, vs
+fused_flagop_family cmp, sub, c, cc
+fused_flagop_family cmp, sub, z, eq
+fused_flagop_family cmp, sub, cz, ls
+fused_flagop_family cmp, sub, s, mi
+fused_flagop_family cmp, sub, sxo, lt
+fused_flagop_family cmp, sub, sxoz, le
+
+fused_flagop_family test, and, z, eq, retest
+fused_flagop_family test, and, cz, eq, retest
+fused_flagop_family test, and, s, mi, retest
+fused_flagop_family test, and, sxo, mi, retest
+fused_flagop_family test, and, sxoz, le, retest
+
+# cond-major [cond_count][arg_count] arrays, same arg layout as the op
+# gadget tables; missing entries (parity, and-family jb/jae/jo, addr/gs)
+# resolve to 0 and gen.c declines the fusion.
+# (COND_LIST lives in control.S, a different translation unit -- an
+# unexpanded name here would silently produce a 12-entry all-zero array
+# that gen.c indexes out of bounds, so define it locally, same order.)
+#define COND_LIST o,c,z,cz,s,p,sxo,sxoz
+_gadget_array_start fused_cmp32
+    .irp cond, COND_LIST
+        gadgets fused_cmp32_\cond, GADGET_LIST
+    .endr
+    .popsection
+_gadget_array_start fused_test32
+    .irp cond, COND_LIST
+        gadgets fused_test32_\cond, GADGET_LIST
+    .endr
+    .popsection
