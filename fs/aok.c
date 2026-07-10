@@ -40,6 +40,9 @@ enum aokfs_node_kind {
     // dirs above, but rooted at /tools/ktop/ against the *tools* generated
     // table (manifest names like "ktop/ktop.c" become paths under /tools/ktop/).
     aokfs_tools_ktop_dir,
+    // /docs is flat (no subdirectories) -- same generated-table pattern as
+    // /tools, minus the ktop-style subdirectory case.
+    aokfs_docs_dir,
 };
 
 static enum aokfs_node_kind aokfs_decode_node(void *fs_data) {
@@ -58,20 +61,28 @@ static void *aokfs_encode_node(enum aokfs_node_kind node) {
 // changing) embedded sources are picked up automatically.
 #include "aok_generated_tests.inc"
 #include "aok_generated_tools.inc"
+#include "aok_generated_docs.inc"
 #define AOKFS_GEN_BASE 0x10000
 #define AOKFS_GEN_TOOLS_BASE 0x20000
+#define AOKFS_GEN_DOCS_BASE 0x30000
 static bool aokfs_node_is_gen_tools(enum aokfs_node_kind node) {
     return (unsigned) node >= AOKFS_GEN_TOOLS_BASE &&
         (unsigned) node < AOKFS_GEN_TOOLS_BASE + AOKFS_GEN_FILE_COUNT_tools;
 }
+static bool aokfs_node_is_gen_docs(enum aokfs_node_kind node) {
+    return (unsigned) node >= AOKFS_GEN_DOCS_BASE &&
+        (unsigned) node < AOKFS_GEN_DOCS_BASE + AOKFS_GEN_FILE_COUNT_docs;
+}
 static bool aokfs_node_is_gen(enum aokfs_node_kind node) {
     return ((unsigned) node >= AOKFS_GEN_BASE &&
             (unsigned) node < AOKFS_GEN_BASE + AOKFS_GEN_FILE_COUNT) ||
-        aokfs_node_is_gen_tools(node);
+        aokfs_node_is_gen_tools(node) || aokfs_node_is_gen_docs(node);
 }
 static const struct aokfs_gen_file *aokfs_gen_entry(enum aokfs_node_kind node) {
     if (aokfs_node_is_gen_tools(node))
         return &aokfs_gen_files_tools[(unsigned) node - AOKFS_GEN_TOOLS_BASE];
+    if (aokfs_node_is_gen_docs(node))
+        return &aokfs_gen_files_docs[(unsigned) node - AOKFS_GEN_DOCS_BASE];
     return &aokfs_gen_files[(unsigned) node - AOKFS_GEN_BASE];
 }
 
@@ -86,7 +97,8 @@ static bool aokfs_node_is_dir(enum aokfs_node_kind node) {
         node == aokfs_tests_audio_dir ||
         node == aokfs_tests_x86_dir ||
         node == aokfs_tests_arm64_dir ||
-        node == aokfs_tools_ktop_dir;
+        node == aokfs_tools_ktop_dir ||
+        node == aokfs_docs_dir;
 }
 
 static bool aokfs_node_is_symlink(enum aokfs_node_kind node) {
@@ -161,6 +173,8 @@ static const char *aokfs_node_path(enum aokfs_node_kind node) {
             return "/tests/audio/test-tone-48k-s16le-stereo.raw";
         case aokfs_audio_wav:
             return "/tests/audio/test-tone-48k-s16le-stereo.wav";
+        case aokfs_docs_dir:
+            return "/docs";
     }
     return "";
 }
@@ -193,6 +207,7 @@ static bool aokfs_lookup_node(const char *path, enum aokfs_node_kind *node_out) 
         aokfs_tests_audio_dir,
         aokfs_audio_raw,
         aokfs_audio_wav,
+        aokfs_docs_dir,
     };
 
     for (size_t i = 0; i < sizeof(nodes) / sizeof(nodes[0]); i++) {
@@ -213,6 +228,13 @@ static bool aokfs_lookup_node(const char *path, enum aokfs_node_kind *node_out) 
     for (size_t i = 0; i < AOKFS_GEN_FILE_COUNT_tools; i++) {
         if (strcmp(path, aokfs_gen_files_tools[i].path) == 0) {
             *node_out = (enum aokfs_node_kind) (AOKFS_GEN_TOOLS_BASE + i);
+            return true;
+        }
+    }
+    // Generated /docs/* files.
+    for (size_t i = 0; i < AOKFS_GEN_FILE_COUNT_docs; i++) {
+        if (strcmp(path, aokfs_gen_files_docs[i].path) == 0) {
+            *node_out = (enum aokfs_node_kind) (AOKFS_GEN_DOCS_BASE + i);
             return true;
         }
     }
@@ -627,6 +649,7 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
                 case 4: child = aokfs_fixes_dir; break;
                 case 5: child = aokfs_tests_dir; break;
                 case 6: child = aokfs_tools_dir; break;
+                case 7: child = aokfs_docs_dir; break;
                 default: return 0;
             }
             break;
@@ -699,6 +722,15 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
             }
             if (!found)
                 return 0;
+            break;
+        }
+        case aokfs_docs_dir: {
+            // Flat: no subdirectories under /docs, so this is just the
+            // generated-table scan, no prefix-skipping ktop-style logic.
+            size_t want = (size_t) fd->offset++;
+            if (want >= AOKFS_GEN_FILE_COUNT_docs)
+                return 0;
+            child = (enum aokfs_node_kind) (AOKFS_GEN_DOCS_BASE + want);
             break;
         }
         case aokfs_tests_dir:

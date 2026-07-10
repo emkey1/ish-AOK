@@ -5404,6 +5404,29 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         return 1;
     }
 
+    case RISCV64_OP_CUSTOM0: case RISCV64_OP_CUSTOM1:
+    case RISCV64_OP_CUSTOM2: case RISCV64_OP_CUSTOM3: {
+        // Vendor/user extension hook (riscv64_guest_plan.md patch 5b,
+        // jit/riscv64_vendor_ext.c). These four opcodes are permanently
+        // reserved by the ISA for non-standard use, so consulting a
+        // registry here can never shadow a real instruction — see that
+        // file's header for the full design and /AOK/docs for the
+        // walkthrough. Off by default; falls through to the normal
+        // undefined-instruction path (SIGILL) on no match or when disabled,
+        // exactly like any other unimplemented encoding.
+        extern bool riscv64_vendor_ext_enabled(void);
+        extern const char *riscv64_vendor_ext_lookup(uint32_t insn);
+        extern void riscv64_vendor_ext_dispatch(struct cpu_state *cpu, unsigned long arg);
+        if (riscv64_vendor_ext_enabled() && riscv64_vendor_ext_lookup(insn) != NULL) {
+            extern void gadget_riscv64_call_helper(void);
+            gen(state, (unsigned long) gadget_riscv64_call_helper);
+            gen(state, (unsigned long) riscv64_vendor_ext_dispatch);
+            gen(state, (unsigned long) insn);
+            return 1;
+        }
+        return gen_riscv64_undefined(state, insn);
+    }
+
     case RISCV64_OP_SYSTEM:
         if (insn == 0x00000073) { // ecall
             extern void gadget_riscv64_ecall(void);

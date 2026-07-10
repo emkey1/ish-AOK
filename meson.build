@@ -128,6 +128,22 @@ aok_generated_tools = custom_target('aok_generated_tools',
               meson.current_source_dir() / 'opt' / 'AOK' / 'tools', '@OUTPUT@',
               '/tools', '_tools'])
 
+# Same mechanism for the /AOK/docs table, from fs/aok-docs.manifest with
+# sources under opt/AOK/docs/. Files are served read-only at /AOK/docs/<name>.
+aok_doc_srcs = []
+foreach line : fs_mod.read('fs/aok-docs.manifest').strip().split('\n')
+    entry = line.strip()
+    if entry != '' and not entry.startswith('#')
+        aok_doc_srcs += files('opt/AOK/docs' / entry.split()[0])
+    endif
+endforeach
+aok_generated_docs = custom_target('aok_generated_docs',
+    output: 'aok_generated_docs.inc',
+    input: [files('tools/gen-aokfs.py', 'fs/aok-docs.manifest')] + aok_doc_srcs,
+    command: [python, '@INPUT0@', '@INPUT1@',
+              meson.current_source_dir() / 'opt' / 'AOK' / 'docs', '@OUTPUT@',
+              '/docs', '_docs'])
+
 emu_src = [
     'emu/tlb.c',
     'emu/fpu.c',
@@ -138,6 +154,7 @@ emu_src = [
     'jit/jit.c',
     'jit/gen.c',
     'jit/helpers.c',
+    'jit/riscv64_vendor_ext.c', # portable C, inert unless gen_step_riscv64 ever runs
 ]
 gadgets = 'jit/gadgets-' + jit_cpu_family # resolved at the top of this file
 emu_src += [
@@ -229,7 +246,7 @@ if get_option('kernel') == 'ish'
 
         'kernel/fs.c',
         'kernel/fs_info.c',
-        'fs/aok.c', aok_generated_tests, aok_generated_tools,
+        'fs/aok.c', aok_generated_tests, aok_generated_tools, aok_generated_docs,
         'fs/mount.c',
         'fs/fd.c',
         'fs/inode.c',

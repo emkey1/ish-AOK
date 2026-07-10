@@ -1,0 +1,7 @@
+# Files exposed read-only at /AOK/docs, embedded into the kernel by
+# tools/gen-aokfs.py at build time (see meson.build / fs/aok.c).
+#
+# One path per line, relative to opt/AOK/docs/. Blank lines and lines
+# starting with # are ignored.
+
+riscv64-vendor-extensions.md
