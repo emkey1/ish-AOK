@@ -4843,3 +4843,121 @@ _gadget_array_start fused_test32
         gadgets fused_test32_\cond, GADGET_LIST
     .endr
     .popsection
+
+# ---- amd64 fused cmp + jcc -----------------------------------------------
+#
+# Twins of amd64_cached_arith_reg_imm (op==7) / amd64_cached_arith_reg_reg
+# (opcode 0x38-0x3b) that branch instead of falling through to the next
+# dispatch: gen.c's amd64 jcc emitter rewrites the cmp gadget in place
+# (jit/gen.c gen_amd64_try_fuse_jcc) when the jcc immediately follows.
+# The full EAGER flag state is still deposited via the same
+# amd64_cached_set_addsub_flags (later blocks re-read eflags), which
+# clobbers NZCV -- so the tail tests the still-live cf (w14), of (w16)
+# and result (x15, upper bits clean in the 32-bit path) instead of host
+# flags. Stream: [gadget][packed]([imm])[taken][else]; the gadget stores
+# CPU_amd64_rip/eip and exits via jit_ret exactly like amd64_jcc_<cond>
+# (no chaining on amd64). Parity has no cheap live-register form and is
+# never fused (NULL table slot in gen.c).
+
+.macro amd64_fused_cc_tail cond, sbit, toff
+    .ifc \cond,o
+        cbnz w16, 8101f
+    .endif
+    .ifc \cond,c
+        cbnz w14, 8101f
+    .endif
+    .ifc \cond,z
+        cbz x15, 8101f
+    .endif
+    .ifc \cond,cz
+        cbnz w14, 8101f
+        cbz x15, 8101f
+    .endif
+    .ifc \cond,s
+        tbnz x15, \sbit, 8101f
+    .endif
+    .ifc \cond,sxo
+        ubfx x12, x15, \sbit, 1
+        cmp w12, w16
+        b.ne 8101f
+    .endif
+    .ifc \cond,sxoz
+        cbz x15, 8101f
+        ubfx x12, x15, \sbit, 1
+        cmp w12, w16
+        b.ne 8101f
+    .endif
+    ldr x10, [_ip, \toff+8]
+    b 8102f
+8101:
+    ldr x10, [_ip, \toff]
+8102:
+    str x10, [_cpu, CPU_amd64_rip]
+    str w10, [_cpu, CPU_eip]
+    b jit_ret
+.endm
+
+.macro amd64_fused_cmp_ri cond
+    .gadget amd64_fused_cmp_ri_\cond
+        ldr x8, [_ip]
+        ldr x10, [_ip, 8]
+        ubfx x11, x8, 12, 4
+        ubfx x12, x8, 16, 7
+        amd64_cached_read x11, x13
+        cmp x12, 64
+        b.eq 8103f
+        mov w13, w13
+        mov w10, w10
+        subs w15, w13, w10
+        cset w14, cc
+        cset w16, vs
+        mov w15, w15
+        amd64_cached_set_addsub_flags 31
+        amd64_fused_cc_tail \cond, 31, 16
+8103:
+        subs x15, x13, x10
+        cset w14, cc
+        cset w16, vs
+        amd64_cached_set_addsub_flags 63
+        amd64_fused_cc_tail \cond, 63, 16
+.endm
+
+.macro amd64_fused_cmp_rr cond
+    .gadget amd64_fused_cmp_rr_\cond
+        ldr x8, [_ip]
+        and x9, x8, 0xff
+        ubfx x10, x8, 8, 4
+        ubfx x11, x8, 12, 4
+        ubfx x12, x8, 16, 7
+        mov x0, x12
+        tst x9, 2
+        b.ne 8104f
+        amd64_cached_read x11, x13
+        amd64_cached_read x10, x10
+        b 8105f
+8104:
+        amd64_cached_read x10, x13
+        amd64_cached_read x11, x10
+8105:
+        cmp x0, 64
+        b.eq 8106f
+        mov w13, w13
+        mov w10, w10
+        subs w15, w13, w10
+        cset w14, cc
+        cset w16, vs
+        mov w15, w15
+        amd64_cached_set_addsub_flags 31
+        amd64_fused_cc_tail \cond, 31, 8
+8106:
+        subs x15, x13, x10
+        cset w14, cc
+        cset w16, vs
+        amd64_cached_set_addsub_flags 63
+        amd64_fused_cc_tail \cond, 63, 8
+.endm
+
+.irp cond, o,c,z,cz,s,sxo,sxoz
+    amd64_fused_cmp_ri \cond
+    amd64_fused_cmp_rr \cond
+.endr

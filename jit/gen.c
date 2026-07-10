@@ -389,6 +389,61 @@ static void gen_amd64_jmp_rel(struct gen_state *state, guest_addr_t target_ip) {
 #endif
 }
 
+// amd64 cmp+jcc fusion: the cached cmp emitters note their stream position
+// (x86_fuse_op 3 = reg_imm form, 4 = reg_reg form; same fields the i386
+// fusion uses, reset by any other emission via the position check). When
+// the jcc immediately follows, rewrite the cmp gadget in place to its
+// fused twin (math.S amd64_fused_cmp_*), which deposits the identical
+// eager flag state and then branches on the still-live cf/of/result
+// registers -- one dispatch and no eflags reload. If the register cache
+// is dirty, the flush gadget must run BEFORE the fused cmp+branch (the
+// branch ends the block; a flush emitted after it never runs on the taken
+// path) -- rewind the cmp words, emit the flush, re-emit. Runtime-safe:
+// the store-back doesn't disturb the host cache registers the cmp reads.
+static bool gen_amd64_try_fuse_jcc(struct gen_state *state, unsigned cc) {
+#if defined(__aarch64__)
+    extern void gadget_amd64_fused_cmp_ri_o(void), gadget_amd64_fused_cmp_ri_c(void),
+            gadget_amd64_fused_cmp_ri_z(void), gadget_amd64_fused_cmp_ri_cz(void),
+            gadget_amd64_fused_cmp_ri_s(void), gadget_amd64_fused_cmp_ri_sxo(void),
+            gadget_amd64_fused_cmp_ri_sxoz(void);
+    extern void gadget_amd64_fused_cmp_rr_o(void), gadget_amd64_fused_cmp_rr_c(void),
+            gadget_amd64_fused_cmp_rr_z(void), gadget_amd64_fused_cmp_rr_cz(void),
+            gadget_amd64_fused_cmp_rr_s(void), gadget_amd64_fused_cmp_rr_sxo(void),
+            gadget_amd64_fused_cmp_rr_sxoz(void);
+    static void (* const ri[8])(void) = {
+        gadget_amd64_fused_cmp_ri_o, gadget_amd64_fused_cmp_ri_c,
+        gadget_amd64_fused_cmp_ri_z, gadget_amd64_fused_cmp_ri_cz,
+        gadget_amd64_fused_cmp_ri_s, NULL /* parity */,
+        gadget_amd64_fused_cmp_ri_sxo, gadget_amd64_fused_cmp_ri_sxoz,
+    };
+    static void (* const rr[8])(void) = {
+        gadget_amd64_fused_cmp_rr_o, gadget_amd64_fused_cmp_rr_c,
+        gadget_amd64_fused_cmp_rr_z, gadget_amd64_fused_cmp_rr_cz,
+        gadget_amd64_fused_cmp_rr_s, NULL /* parity */,
+        gadget_amd64_fused_cmp_rr_sxo, gadget_amd64_fused_cmp_rr_sxoz,
+    };
+    if (state->x86_fuse_op < 3 || state->x86_fuse_end != state->size)
+        return false;
+    void (*fused)(void) = (state->x86_fuse_op == 3 ? ri : rr)[(cc >> 1) & 7];
+    if (fused == NULL)
+        return false;
+    unsigned nops = state->x86_fuse_op == 3 ? 2 : 1; // operand words after the gadget
+    unsigned slot = state->size - 1 - nops;
+    unsigned long saved[2];
+    for (unsigned i = 0; i < nops; i++)
+        saved[i] = state->block->code[slot + 1 + i];
+    state->size = slot;
+    gen_amd64_flush_reg_cache(state);
+    gen(state, (unsigned long) fused);
+    for (unsigned i = 0; i < nops; i++)
+        gen(state, saved[i]);
+    return true;
+#else
+    (void) state; (void) cc;
+    return false;
+#endif
+}
+
 // Emit a native amd64 conditional jump. The 16 x86 condition codes map onto the
 // 8 do_jump base conditions (base = cc>>1) plus a swap of the two targets for the
 // negated (odd) codes. The gadget evaluates the condition from the eager eflags,
@@ -408,6 +463,12 @@ static void gen_amd64_jcc(struct gen_state *state, unsigned cc,
         gadget_amd64_jcc_s, gadget_amd64_jcc_p, gadget_amd64_jcc_sxo, gadget_amd64_jcc_sxoz,
     };
     bool swap = cc & 1;
+    if (gen_amd64_try_fuse_jcc(state, cc)) {
+        state->amd64_deferred_rip_valid = false;
+        gen(state, (unsigned long) (swap ? next_ip : target_ip));   // taken
+        gen(state, (unsigned long) (swap ? target_ip : next_ip));   // else
+        return;
+    }
     gen_amd64_flush_reg_cache(state);
     state->amd64_deferred_rip_valid = false;
     gen(state, (unsigned long) gadgets[(cc >> 1) & 7]);
@@ -8296,6 +8357,10 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 gen(state, value);
                 if (group != 7)
                     gen_amd64_mark_reg_cache_dirty(state);
+                else { // cmp: fusable with a directly-following jcc
+                    state->x86_fuse_op = 3;
+                    state->x86_fuse_end = state->size;
+                }
                 gen_amd64_defer_rip(state, next_ip);
                 return true;
             }
@@ -8681,6 +8746,10 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                     gen(state, packed);
                     if (insn.opcode < 0x38)
                         gen_amd64_mark_reg_cache_dirty(state);
+                    else { // cmp: fusable with a directly-following jcc
+                        state->x86_fuse_op = 4;
+                        state->x86_fuse_end = state->size;
+                    }
                     gen_amd64_defer_rip(state, next_ip);
                     return true;
                 }
