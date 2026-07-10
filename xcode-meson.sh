@@ -195,6 +195,14 @@ EOF
     if [[ $CONFIGURATION == Release ]]; then
         buildtype=debugoptimized
     fi
+    # Debug-config builds compile the emulator core at -O0, which taxes the
+    # C-heavy paths hard (measured: amd64 gzip 2.1x slower than at -O2; the
+    # whole cross-arch benchmark ranking shifts). Set ISH_MESON_BUILDTYPE
+    # (in iSH.xcconfig or the scheme environment) to override without
+    # switching Xcode configurations: debugoptimized = -O2 + debug info.
+    if [[ -n "${ISH_MESON_BUILDTYPE:-}" ]]; then
+        buildtype=$ISH_MESON_BUILDTYPE
+    fi
     b_sanitize=none
     if [[ -n "${ENABLE_ADDRESS_SANITIZER:-}" ]]; then
         b_sanitize=address

@@ -1990,7 +1990,11 @@ static int cpu_step_to_interrupt_amd64_frontend(struct cpu_state *cpu, struct tl
                 block->used > 3 ? block->code[3] : 0,
                 (unsigned long) amd64_step_to_interrupt_jit);
         {
-            bool cc1_trace = amd64_cc1_jit_trace_enabled();
+            // Gate on the debug master switch like the i386 frontend
+            // (3558ee46): amd64_cc1_jit_trace_enabled is an out-of-line
+            // call in the per-block hot loop and showed up at ~2% in a
+            // gzip profile.
+            bool cc1_trace = amd64_frontend_debug_active() && amd64_cc1_jit_trace_enabled();
             struct cpu_state before_block_cpu;
             if (cc1_trace)
                 before_block_cpu = frame->cpu;
