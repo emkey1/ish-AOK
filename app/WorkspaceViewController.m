@@ -10067,6 +10067,25 @@ static UIColor *ISHAudioHexColor(uint32_t hex) {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.translatesAutoresizingMaskIntoConstraints = NO;
     button.tintColor = tint;
+
+    NSString *accessibilityLabel = text;
+    if ([text isEqualToString:@"M"]) {
+        accessibilityLabel = @"Menu";
+    } else if ([text isEqualToString:@"|<"]) {
+        accessibilityLabel = @"Previous Track";
+    } else if ([text isEqualToString:@">|"]) {
+        accessibilityLabel = @"Next Track";
+    } else if ([text isEqualToString:@"VOL"]) {
+        accessibilityLabel = @"Volume";
+    } else if ([text isEqualToString:@">"]) {
+        accessibilityLabel = @"Play/Pause";
+    } else if ([text isEqualToString:@"S"]) {
+        accessibilityLabel = @"Shuffle";
+    } else if ([text isEqualToString:@"R"]) {
+        accessibilityLabel = @"Repeat";
+    }
+    button.accessibilityLabel = accessibilityLabel;
+
     BOOL haveSymbol = NO;
     if (symbol != nil) {
         if (@available(iOS 13.0, *)) {

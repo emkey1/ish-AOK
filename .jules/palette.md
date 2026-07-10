@@ -29,3 +29,7 @@
 ## 2024-06-04 - Explicit Labels for Implicitly Grouped UI Controls
 **Learning:** In iOS UI development, interactive input elements like `UITextField` that lack adjacent visible textual labels (such as a browser address bar) must have an explicitly set `accessibilityLabel` to ensure VoiceOver users can clearly identify their purpose, even if placeholder text exists. Additionally, ensuring all controls in a toolbar (like 'Home' and 'Go' buttons) have `accessibilityLabel`s ensures a consistent experience for screen reader users.
 **Action:** When adding or modifying unlabeled input fields or icon/text buttons in toolbars, always set a clear `accessibilityLabel` property.
+
+## 2024-06-05 - Accessibility Labels for Factory-Generated Buttons
+**Learning:** When using a factory method to generate icon-only buttons with fallback text strings (like "M", "|<", ">|"), setting `accessibilityLabel` equal to the abbreviated fallback text does not provide enough context for VoiceOver users.
+**Action:** In button generation methods, expand abbreviated text placeholders into clear, descriptive `accessibilityLabel` values (e.g., mapping "M" to "Menu", ">|" to "Next Track") so VoiceOver users understand the button's purpose without relying on visual context.
