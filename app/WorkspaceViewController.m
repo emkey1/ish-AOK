@@ -11682,6 +11682,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     _reloadButton.accessibilityHint = @"Touch and hold to open the current page in Safari.";
     _homeButton = [self browserButtonWithTitle:@"Home" action:@selector(goHome:)];
     _homeButton.accessibilityLabel = @"Home";
+    _homeButton.accessibilityHint = @"Opens the home page. Touch and hold to change the home page.";
     _bookmarkButton = [self browserButtonWithTitle:@"☆" action:@selector(toggleBookmark:)];
     _bookmarkButton.accessibilityLabel = @"Bookmark";
     _bookmarkButton.accessibilityHint = @"Toggles a bookmark for the current page. Touch and hold to view bookmarks.";
