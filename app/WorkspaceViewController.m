@@ -3485,6 +3485,7 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     self.dockUtilsButton = [self workspaceDockTileButtonWithTitle:@"Utils"
                                                          selector:@selector(toggleClockFromDock:)
                                                        identifier:@"utils"];
+    self.dockUtilsButton.accessibilityHint = @"Touch and hold for utility options.";
     UILongPressGestureRecognizer *utilsLongPressRecognizer =
         [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleUtilsDockLongPress:)];
     utilsLongPressRecognizer.minimumPressDuration = 0.25;
@@ -3492,6 +3493,7 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     self.dockTerminalButton = [self workspaceDockTileButtonWithTitle:@"Terminal"
                                                             selector:@selector(openOrFocusTerminalFromDock:)
                                                           identifier:ISHWorkspaceTerminalRoleSessionShell];
+    self.dockTerminalButton.accessibilityHint = @"Touch and hold for terminal options.";
     UILongPressGestureRecognizer *terminalLongPressRecognizer =
         [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleTerminalDockLongPress:)];
     terminalLongPressRecognizer.minimumPressDuration = 0.25;
