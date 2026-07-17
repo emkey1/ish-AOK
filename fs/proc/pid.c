@@ -666,7 +666,8 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
             static const char s[] = "[stack]";
             memcpy(path, s, sizeof(s));
         } else if (data->name != NULL) {
-            strcpy(path, data->name);
+            strncpy(path, data->name, sizeof(path) - 1);
+            path[sizeof(path) - 1] = '\0';
         } else if (data->fd != NULL) {
             generic_getpath(start_pt->data->fd, path);
         }
@@ -848,7 +849,8 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
             static const char s[] = "[stack]";
             memcpy(path, s, sizeof(s));
         } else if (data->name != NULL) {
-            strcpy(path, data->name);
+            strncpy(path, data->name, sizeof(path) - 1);
+            path[sizeof(path) - 1] = '\0';
         } else if (data->fd != NULL) {
             generic_getpath(data->fd, path);
         }
