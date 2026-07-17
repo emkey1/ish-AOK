@@ -1843,8 +1843,8 @@ static syscall_t arm64_syscall_table[463] = {
     [280] = (syscall_t) syscall_stub, // bpf
     [282] = (syscall_t) syscall_stub, // userfaultfd
     [284] = (syscall_t) syscall_stub, // mlock2
-    [286] = (syscall_t) syscall_stub, // preadv2
-    [287] = (syscall_t) syscall_stub, // pwritev2
+    [286] = (syscall_t) sys_preadv2_guest, // preadv2
+    [287] = (syscall_t) sys_pwritev2_guest, // pwritev2
     [288] = (syscall_t) syscall_stub, // pkey_mprotect
     [289] = (syscall_t) syscall_stub, // pkey_alloc
     [290] = (syscall_t) syscall_stub, // pkey_free
@@ -2540,6 +2540,15 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 265: // open_by_handle_at
     case 277: // seccomp
         result = _EOPNOTSUPP; break;
+    // preadv2/pwritev2: iov pointer and offset are full 64-bit values that
+    // trip the legacy marshal's dword-fit check (SIGSYS). Route natively,
+    // same pattern as the amd64 intercept in handle_amd64_native_memory_syscall.
+    case 286: // preadv2(fd, iov, iovcnt, offset, flags)
+        result = (dword_t) sys_preadv2_guest((fd_t) raw_args[0], raw_args[1],
+                     (dword_t) raw_args[2], (off_t_) raw_args[3], (uint_t) raw_args[4]); break;
+    case 287: // pwritev2(fd, iov, iovcnt, offset, flags)
+        result = (dword_t) sys_pwritev2_guest((fd_t) raw_args[0], raw_args[1],
+                      (dword_t) raw_args[2], (off_t_) raw_args[3], (uint_t) raw_args[4]); break;
     // clean ENOSYS: known syscalls with no implementation; native so
     // 64-bit pointer args never trip the legacy-marshal validation
     case 0: case 1: case 2: case 3: case 4: case 18: case 41: case 42:
@@ -2550,8 +2559,8 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 192: case 193: case 217: case 218: case 224:
     case 225: case 234: case 238: case 239: case 241: case 262:
     case 263: case 268: case 271: case 272: case 273:
-    case 274: case 275: case 280: case 282: case 284: case 286:
-    case 287: case 288: case 289: case 290: case 294:
+    case 274: case 275: case 280: case 282: case 284:
+    case 288: case 289: case 290: case 294:
     case 425: case 426: case 427: case 438: case 440:
     case 449: // futex_waitv
         result = _ENOSYS; break;
@@ -3829,6 +3838,9 @@ static unsigned arm64_syscall_legacy_arg_count(qword_t syscall_num) {
     case 424: // pidfd_send_signal(pidfd, sig, info, flags) -- info is ignored
               // (UNUSED, never dereferenced), so the raw pointer arg is safe here
         return 4;
+    case 286: // preadv2(fd, iov, iovcnt, offset, flags)
+    case 287: // pwritev2(fd, iov, iovcnt, offset, flags)
+        return 5;
     default:
         return 6;
     }
