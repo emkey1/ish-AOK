@@ -1108,6 +1108,7 @@ static syscall_t i386_syscall_table[] = {
     [341] = (syscall_t) syscall_eopnotsupp_stub, // name_to_handle_at
     [342] = (syscall_t) syscall_eopnotsupp_stub, // open_by_handle_at
     [343] = (syscall_t) sys_clock_adjtime, // clock_adjtime (EPERM: iSH can't slew the iOS clock)
+    [344] = (syscall_t) sys_syncfs,
     [345] = (syscall_t) sys_sendmmsg,
     [347] = (syscall_t) sys_process_vm_readv,
     [352] = (syscall_t) syscall_stub, // sched_getattr
@@ -1508,6 +1509,7 @@ static syscall_t amd64_syscall_table[463] = {
     [303] = (syscall_t) syscall_eopnotsupp_stub, // name_to_handle_at
     [304] = (syscall_t) syscall_eopnotsupp_stub, // open_by_handle_at
     [305] = (syscall_t) sys_clock_adjtime_amd64, // clock_adjtime (EPERM; full-width read-state TODO)
+    [306] = (syscall_t) sys_syncfs,
     [307] = (syscall_t) sys_sendmmsg_amd64,
     [309] = (syscall_t) syscall_success_stub, // getcpu
     [310] = (syscall_t) sys_process_vm_readv,
@@ -1829,7 +1831,7 @@ static syscall_t arm64_syscall_table[463] = {
     [264] = (syscall_t) syscall_stub_silent, // name_to_handle_at
     [265] = (syscall_t) syscall_stub_silent, // open_by_handle_at
     [266] = (syscall_t) syscall_stub_silent, // clock_adjtime
-    [267] = (syscall_t) syscall_stub, // syncfs
+    [267] = (syscall_t) sys_syncfs,
     [268] = (syscall_t) syscall_stub, // setns
     [270] = (syscall_t) syscall_stub_silent, // process_vm_readv
     [271] = (syscall_t) syscall_stub, // process_vm_writev
@@ -2547,7 +2549,7 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 186: case 187: case 188: case 189: case 190: case 191:
     case 192: case 193: case 217: case 218: case 224:
     case 225: case 234: case 238: case 239: case 241: case 262:
-    case 263: case 267: case 268: case 271: case 272: case 273:
+    case 263: case 268: case 271: case 272: case 273:
     case 274: case 275: case 280: case 282: case 284: case 286:
     case 287: case 288: case 289: case 290: case 294:
     case 425: case 426: case 427: case 438: case 440:
@@ -3414,6 +3416,7 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
     case 146: // sched_get_priority_max(policy)
     case 147: // sched_get_priority_min(policy)
     case 213: // epoll_create(size) -- handler ignores size
+    case 306: // syncfs(fd) -- single fd arg; upper regs are garbage
         return 1;
     case 277: // sync_file_range -- success stub ignores all args
         return 0;
@@ -3771,6 +3774,7 @@ static unsigned arm64_syscall_legacy_arg_count(qword_t syscall_num) {
     case 57:  // close
     case 82:  // fsync
     case 83:  // fdatasync
+    case 267: // syncfs(fd) -- single fd arg; upper regs are caller garbage
     case 92:  // personality
     case 93:  // exit
     case 94:  // exit_group

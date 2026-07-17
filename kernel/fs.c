@@ -2373,6 +2373,13 @@ dword_t sys_fsync(fd_t f) {
     return err;
 }
 
+dword_t sys_syncfs(fd_t f) {
+    struct fd *fd = f_get(f);
+    if (fd == NULL)
+        return _EBADF;
+    return 0;
+}
+
 // a few stubs
 // Read one chunk into a host buffer for the sendfile()/copy_file_range() engine.
 // If off != NULL the read happens at *off without disturbing the fd's own file

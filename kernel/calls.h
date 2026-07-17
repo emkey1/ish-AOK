@@ -159,6 +159,7 @@ dword_t sys_dup3(fd_t f, fd_t new_f, int_t flags);
 dword_t sys_close_range(dword_t first, dword_t last, dword_t flags);
 dword_t sys_close(fd_t fd);
 dword_t sys_fsync(fd_t f);
+dword_t sys_syncfs(fd_t f);
 dword_t sys_flock(fd_t fd, dword_t operation);
 int_t sys_pipe(guest_addr_t pipe_addr);
 int_t sys_pipe2(guest_addr_t pipe_addr, int_t flags);
