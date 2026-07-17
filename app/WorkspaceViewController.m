@@ -3502,6 +3502,7 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     self.dockUtilsButton = [self workspaceDockTileButtonWithTitle:@"Utils"
                                                          selector:@selector(toggleClockFromDock:)
                                                        identifier:@"utils"];
+    self.dockUtilsButton.accessibilityHint = @"Touch and hold to show utilities menu.";
     UILongPressGestureRecognizer *utilsLongPressRecognizer =
         [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleUtilsDockLongPress:)];
     utilsLongPressRecognizer.minimumPressDuration = 0.25;
@@ -3509,6 +3510,7 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     self.dockTerminalButton = [self workspaceDockTileButtonWithTitle:@"Terminal"
                                                             selector:@selector(openOrFocusTerminalFromDock:)
                                                           identifier:ISHWorkspaceTerminalRoleSessionShell];
+    self.dockTerminalButton.accessibilityHint = @"Touch and hold to show terminal options.";
     UILongPressGestureRecognizer *terminalLongPressRecognizer =
         [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleTerminalDockLongPress:)];
     terminalLongPressRecognizer.minimumPressDuration = 0.25;
@@ -11145,6 +11147,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     button.layer.borderWidth = 1;
     [button.heightAnchor constraintEqualToConstant:(ISHWorkspaceUsesPhoneLayout() ? 54.0 : 62.0)].active = YES;
     [button addTarget:self action:@selector(focusWorkspaceSceneButton:) forControlEvents:UIControlEventTouchUpInside];
+    button.accessibilityHint = @"Touch and hold for workspace options.";
     UILongPressGestureRecognizer *longPressRecognizer =
         [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleWorkspaceSceneButtonLongPress:)];
     longPressRecognizer.minimumPressDuration = 0.35;
@@ -11764,6 +11767,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     _reloadButton.accessibilityHint = @"Touch and hold to open the current page in Safari.";
     _homeButton = [self browserButtonWithTitle:@"Home" action:@selector(goHome:)];
     _homeButton.accessibilityLabel = @"Home";
+    _homeButton.accessibilityHint = @"Touch and hold to set the home page.";
     _bookmarkButton = [self browserButtonWithTitle:@"☆" action:@selector(toggleBookmark:)];
     _bookmarkButton.accessibilityLabel = @"Bookmark";
     _bookmarkButton.accessibilityHint = @"Toggles a bookmark for the current page. Touch and hold to view bookmarks.";
