@@ -11794,6 +11794,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     _goButton.accessibilityLabel = @"Go";
     _addTabButton = [self browserButtonWithTitle:@"+" action:@selector(addTab:)];
     _addTabButton.accessibilityLabel = @"Add Tab";
+    _addTabButton.accessibilityHint = @"Touch and hold to reopen closed tabs.";
     _closeTabButton = [self browserButtonWithTitle:@"×" action:@selector(closeCurrentTab:)];
     _closeTabButton.accessibilityLabel = @"Close Tab";
     UILongPressGestureRecognizer *homeLongPressRecognizer =

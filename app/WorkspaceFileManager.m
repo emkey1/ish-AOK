@@ -279,9 +279,13 @@ static NSString *ISHHomeDirectoryForUID(NSData *passwdData, uid_t targetUID) {
     [self.toolContentView addSubview:_toolbarView];
 
     _backButton = [self toolbarIconButtonNamed:@"chevron.left" action:@selector(navigateBack)];
+    _backButton.accessibilityLabel = @"Back";
     _forwardButton = [self toolbarIconButtonNamed:@"chevron.right" action:@selector(navigateForward)];
+    _forwardButton.accessibilityLabel = @"Forward";
     _upButton = [self toolbarIconButtonNamed:@"arrow.up" action:@selector(navigateUp)];
+    _upButton.accessibilityLabel = @"Up";
     _moreButton = [self toolbarIconButtonNamed:@"ellipsis.circle" action:nil];
+    _moreButton.accessibilityLabel = @"More Actions";
     _moreButton.showsMenuAsPrimaryAction = YES;
 
     // Finder-style breadcrumb: one button per path component inside a

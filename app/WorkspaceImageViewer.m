@@ -112,7 +112,9 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
     [self.toolContentView addSubview:_toolbarView];
 
     _prevButton = [self toolbarIconButtonNamed:@"chevron.left" action:@selector(navigatePrev)];
+    _prevButton.accessibilityLabel = @"Previous Image";
     _nextButton = [self toolbarIconButtonNamed:@"chevron.right" action:@selector(navigateNext)];
+    _nextButton.accessibilityLabel = @"Next Image";
     _prevButton.enabled = NO;
     _nextButton.enabled = NO;
 
@@ -132,8 +134,10 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
     [self updateZoomToggleTitle];
 
     _shareButton = [self toolbarIconButtonNamed:@"square.and.arrow.up" action:@selector(shareCurrentImage)];
+    _shareButton.accessibilityLabel = @"Share";
     _shareButton.enabled = NO;
     _reloadButton = [self toolbarIconButtonNamed:@"arrow.clockwise" action:@selector(reload)];
+    _reloadButton.accessibilityLabel = @"Reload";
     _reloadButton.enabled = NO;
 
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[

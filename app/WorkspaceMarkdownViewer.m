@@ -51,6 +51,7 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
     [self.toolContentView addSubview:_toolbarView];
 
     _backButton = [self toolbarIconButtonNamed:@"chevron.left" action:@selector(navigateBack)];
+    _backButton.accessibilityLabel = @"Back";
     _backButton.enabled = NO;
 
     _titleLabel = [UILabel new];
@@ -62,8 +63,10 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
     [_titleLabel setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
 
     _editButton = [self toolbarIconButtonNamed:@"pencil" action:@selector(openInMotePad)];
+    _editButton.accessibilityLabel = @"Edit";
     _editButton.enabled = NO;
     _reloadButton = [self toolbarIconButtonNamed:@"arrow.clockwise" action:@selector(reload)];
+    _reloadButton.accessibilityLabel = @"Reload";
     _reloadButton.enabled = NO;
 
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[_backButton, _titleLabel, _editButton, _reloadButton]];
