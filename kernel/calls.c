@@ -1783,8 +1783,8 @@ static syscall_t arm64_syscall_table[463] = {
     [41] = (syscall_t) syscall_stub, // pivot_root
     [42] = (syscall_t) syscall_stub, // nfsservctl
     [60] = (syscall_t) syscall_stub, // quotactl
-    [69] = (syscall_t) syscall_stub_silent, // preadv
-    [70] = (syscall_t) syscall_stub_silent, // pwritev
+    [69] = (syscall_t) sys_preadv_guest, // preadv
+    [70] = (syscall_t) sys_pwritev_guest, // pwritev
     [74] = (syscall_t) syscall_stub_silent, // signalfd4
     [75] = (syscall_t) syscall_stub, // vmsplice
     [77] = (syscall_t) syscall_stub, // tee
@@ -1793,12 +1793,12 @@ static syscall_t arm64_syscall_table[463] = {
     [104] = (syscall_t) syscall_stub, // kexec_load
     [105] = (syscall_t) syscall_stub, // init_module
     [106] = (syscall_t) syscall_stub, // delete_module
-    [118] = (syscall_t) syscall_stub, // sched_setparam
-    [127] = (syscall_t) syscall_stub, // sched_rr_get_interval
+    [118] = (syscall_t) sys_sched_setparam, // sched_setparam
+    [127] = (syscall_t) sys_sched_rr_get_interval, // sched_rr_get_interval
     [128] = (syscall_t) syscall_stub, // restart_syscall
-    [162] = (syscall_t) syscall_stub, // setdomainname
+    [162] = (syscall_t) sys_setdomainname, // setdomainname
     [168] = (syscall_t) syscall_stub_silent, // getcpu
-    [171] = (syscall_t) syscall_stub, // adjtimex
+    [171] = (syscall_t) sys_adjtimex, // adjtimex
     [180] = (syscall_t) syscall_stub, // mq_open
     [181] = (syscall_t) syscall_stub, // mq_unlink
     [182] = (syscall_t) syscall_stub, // mq_timedsend
@@ -2514,8 +2514,8 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 223: result = 0; break; // fadvise64: advisory, ignored (64-bit off/len args)
     // -- OpenMinis-parity sweep (see the table comment) --
     // real implementations
-    case 69: result = (dword_t) sys_preadv_guest((fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2], (off_t_) (raw_args[3] | (raw_args[4] << 32))); break; // preadv (lo/hi offset words per kernel ABI)
-    case 70: result = (dword_t) sys_pwritev_guest((fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2], (off_t_) (raw_args[3] | (raw_args[4] << 32))); break; // pwritev
+    case 69: result = (dword_t) sys_preadv_guest((fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2], (off_t_) raw_args[3]); break; // preadv (arm64: 64-bit offset in single register)
+    case 70: result = (dword_t) sys_pwritev_guest((fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2], (off_t_) raw_args[3]); break; // pwritev (arm64: 64-bit offset in single register)
     case 74: result = (dword_t) sys_signalfd4_guest((int_t) raw_args[0], raw_args[1], (dword_t) raw_args[2], (int_t) raw_args[3]); break; // signalfd4
     case 236: result = (dword_t) sys_get_mempolicy_guest(raw_args[0], raw_args[1], raw_args[2], raw_args[3], raw_args[4]); break; // get_mempolicy
     case 237: result = (dword_t) sys_set_mempolicy_guest((int) raw_args[0], raw_args[1], raw_args[2]); break; // set_mempolicy
@@ -2526,6 +2526,11 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 283: result = (dword_t) sys_membarrier((dword_t) raw_args[0], (dword_t) raw_args[1], 0); break; // membarrier (2-arg base ABI; 3rd reg is caller garbage)
     case 293: result = (dword_t) sys_rseq_guest(raw_args[0], (dword_t) raw_args[1], (dword_t) raw_args[2], (dword_t) raw_args[3]); break; // rseq
     case 452: result = (dword_t) sys_fchmodat2_guest((fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2], (dword_t) raw_args[3]); break; // fchmodat2 (tar)
+    case 118: result = (dword_t) sys_sched_setparam_guest((pid_t_) raw_args[0], raw_args[1]); break; // sched_setparam
+    case 121: result = (dword_t) sys_sched_getparam_guest((pid_t_) raw_args[0], raw_args[1]); break; // sched_getparam
+    case 127: result = (dword_t) sys_sched_rr_get_interval_guest((pid_t_) raw_args[0], raw_args[1]); break; // sched_rr_get_interval
+    case 162: result = (dword_t) sys_setdomainname_guest(raw_args[0], (dword_t) raw_args[1]); break; // setdomainname
+    case 171: result = (dword_t) sys_adjtimex_guest(raw_args[0]); break; // adjtimex
     // advisory no-ops (amd64 parity)
     case 58:  // vhangup (0 args; the table stub predates marshal validation,
               // which SIGSYSed it on garbage arg registers — sendfile_vhangup
@@ -2544,7 +2549,7 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     // 64-bit pointer args never trip the legacy-marshal validation
     case 0: case 1: case 2: case 3: case 4: case 18: case 41: case 42:
     case 60: case 75: case 77: case 89: case 104: case 105: case 106:
-    case 118: case 127: case 128: case 162: case 171:
+    case 128:
     case 180: case 181: case 182: case 183: case 184: case 185:
     case 186: case 187: case 188: case 189: case 190: case 191:
     case 192: case 193: case 217: case 218: case 224:

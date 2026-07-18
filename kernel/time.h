@@ -151,5 +151,8 @@ dword_t sys_gettimeofday_amd64(addr_t tv, addr_t tz);
 dword_t sys_gettimeofday_amd64_guest(guest_addr_t tv, guest_addr_t tz);
 dword_t sys_settimeofday(addr_t tv, addr_t tz);
 
+dword_t sys_adjtimex(addr_t tx_addr);
+dword_t sys_adjtimex_guest(guest_addr_t tx_addr);
+
 
 #endif

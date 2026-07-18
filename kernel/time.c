@@ -1096,6 +1096,19 @@ dword_t sys_settimeofday(addr_t UNUSED(tv), addr_t UNUSED(tz)) {
     return _EPERM;
 }
 
+dword_t sys_adjtimex(addr_t tx_addr) {
+    return sys_adjtimex_guest(tx_addr);
+}
+
+dword_t sys_adjtimex_guest(guest_addr_t tx_addr) {
+    uint32_t modes;
+    if (user_get(tx_addr, modes))
+        return _EFAULT;
+    if (modes != 0)
+        return _EPERM;
+    return clock_adjtime_read(tx_addr, guest_abi_is_64bit(current->abi));
+}
+
 static void posix_timer_callback(struct posix_timer *timer) {
     if (timer->tgroup == NULL)
         return;

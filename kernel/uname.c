@@ -10,6 +10,7 @@
 
 const char *uname_version = "iSH-AOK";
 char *uname_hostname_override = NULL;
+char *uname_domainname_override = NULL;
 
 void get_current_hostname(char *hostname, size_t size) {
     if (uname_hostname_override != NULL && uname_hostname_override[0] != '\0') {
@@ -57,7 +58,10 @@ void do_uname(struct uname *uts) {
     if (current != NULL)
         machine = task_abi_desc(current).uname_machine;
     strncpy(uts->arch, machine, sizeof(uts->arch));
-    strncpy(uts->domain, "(none)", sizeof(uts->domain));
+    if (uname_domainname_override != NULL && uname_domainname_override[0] != '\0')
+        snprintf(uts->domain, sizeof(uts->domain), "%s", uname_domainname_override);
+    else
+        strncpy(uts->domain, "(none)", sizeof(uts->domain));
     strncpy(uts->release, "4.20.69-ish_aok", sizeof(uts->release));
     strncpy(uts->system, "Linux", sizeof(uts->system));
     snprintf(uts->hostname, sizeof(uts->hostname), "%s", hostname);
@@ -100,8 +104,7 @@ dword_t sys_sethostname_guest(guest_addr_t hostname_addr, dword_t hostname_len) 
     int result = user_read(hostname_addr, new_hostname, hostname_len);
     if (result != 0) {
         free(new_hostname);
-        // Handle read failure
-        return result;
+        return _EFAULT;
     }
     new_hostname[hostname_len] = '\0'; // Null-terminate the string
 
@@ -110,6 +113,30 @@ dword_t sys_sethostname_guest(guest_addr_t hostname_addr, dword_t hostname_len) 
 
     return 0;
 }
+
+dword_t sys_setdomainname(addr_t domainname_addr, dword_t domainname_len) {
+    return sys_setdomainname_guest(domainname_addr, domainname_len);
+}
+
+dword_t sys_setdomainname_guest(guest_addr_t domainname_addr, dword_t domainname_len) {
+    if (!superuser())
+        return _EPERM;
+    if (domainname_len >= UNAME_LENGTH)
+        return _EINVAL;
+    char *new_domainname = malloc(domainname_len + 1);
+    if (new_domainname == NULL)
+        return _ENOMEM;
+    int result = user_read(domainname_addr, new_domainname, domainname_len);
+    if (result != 0) {
+        free(new_domainname);
+        return _EFAULT;
+    }
+    new_domainname[domainname_len] = '\0';
+    free(uname_domainname_override);
+    uname_domainname_override = new_domainname;
+    return 0;
+}
+
 
 #if __APPLE__
 static void sysinfo_specific(struct sys_info *info) {

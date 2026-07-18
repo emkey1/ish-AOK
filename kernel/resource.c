@@ -421,13 +421,60 @@ int_t sys_sched_getparam(pid_t_ pid, addr_t param_addr) {
     return sys_sched_getparam_guest(pid, param_addr);
 }
 
-int_t sys_sched_getparam_guest(pid_t_ UNUSED(pid), guest_addr_t param_addr) {
+int_t sys_sched_getparam_guest(pid_t_ pid, guest_addr_t param_addr) {
+    if (pid != 0) {
+        struct task *task = pid_get_task_ref(pid);
+        if (task == NULL)
+            return _ESRCH;
+        task_ref_cnt_mod(task, -1);
+    }
+    // iSH only supports SCHED_OTHER (priority 0)
     int_t sched_priority = 0;
     if (user_put(param_addr, sched_priority))
         return _EFAULT;
     return 0;
 }
 #define SCHED_OTHER_ 0
+
+int_t sys_sched_setparam(pid_t_ pid, addr_t param_addr) {
+    return sys_sched_setparam_guest(pid, param_addr);
+}
+
+int_t sys_sched_setparam_guest(pid_t_ pid, guest_addr_t param_addr) {
+    int_t sched_priority;
+    if (user_get(param_addr, sched_priority))
+        return _EFAULT;
+    // iSH only supports SCHED_OTHER (policy 0), and Linux returns EINVAL for
+    // any non-zero priority on SCHED_OTHER tasks.
+    if (sched_priority != 0)
+        return _EINVAL;
+    return 0;
+}
+
+int_t sys_sched_rr_get_interval(pid_t_ pid, addr_t tp_addr) {
+    return sys_sched_rr_get_interval_guest(pid, tp_addr);
+}
+
+int_t sys_sched_rr_get_interval_guest(pid_t_ pid, guest_addr_t tp_addr) {
+    if (pid != 0) {
+        struct task *task = pid_get_task_ref(pid);
+        if (task == NULL)
+            return _ESRCH;
+        task_ref_cnt_mod(task, -1);
+    }
+    // Default RR quantum is 100ms (same as Linux SCHED_RR default)
+    if (guest_abi_is_64bit(current->abi)) {
+        struct timespec64_ tp = { .sec = 0, .nsec = 100000000 };
+        if (user_put(tp_addr, tp))
+            return _EFAULT;
+    } else {
+        struct timespec_ tp = { .sec = 0, .nsec = 100000000 };
+        if (user_put(tp_addr, tp))
+            return _EFAULT;
+    }
+    return 0;
+}
+
 int_t sys_sched_getscheduler(pid_t_ UNUSED(pid)) {
     return SCHED_OTHER_;
 }

@@ -468,6 +468,8 @@ dword_t sys_uname(addr_t uts_addr);
 dword_t sys_uname_guest(guest_addr_t uts_addr);
 dword_t sys_sethostname(addr_t hostname_addr, dword_t hostname_len);
 dword_t sys_sethostname_guest(guest_addr_t hostname_addr, dword_t hostname_len);
+dword_t sys_setdomainname(addr_t domainname_addr, dword_t domainname_len);
+dword_t sys_setdomainname_guest(guest_addr_t domainname_addr, dword_t domainname_len);
 
 struct sys_info {
     dword_t uptime;
