@@ -338,8 +338,6 @@ int access_check(struct statbuf *stat, int check) {
     return 0;
 }
 
-// TODO ENAMETOOLONG
-
 #define AT_EACCESS_ 0x200
 #define FACCESSAT_ALLOWED_FLAGS_ (AT_EACCESS_ | AT_SYMLINK_NOFOLLOW_ | AT_EMPTY_PATH_)
 #define FCHMODAT2_ALLOWED_FLAGS_ (AT_SYMLINK_NOFOLLOW_ | AT_EMPTY_PATH_)
