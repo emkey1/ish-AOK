@@ -436,10 +436,12 @@ fused_table arm64_fused_subsi32_table, fused_subsi32
     ldr x15, [x14, x10, lsl #3]  // load Rn
     \andop \r16, \r15, \r11      // ands Xd, Xn, #imm
     store_flags
+    mrs x8, nzcv                 // save ANDS flags (x8 free after param load)
     cmp x9, #31
     b.eq 1f                       // TST: skip store
     str x16, [x14, x9, lsl #3]   // store result
-1:  b.\cc 2f
+1:  msr nzcv, x8                 // restore ANDS flags for branch
+    b.\cc 2f
     ldr _ip, [_ip, #8]
     b arm64_branch_dispatch
 2:  ldr _ip, [_ip]
@@ -458,10 +460,12 @@ fused_table arm64_fused_subsi32_table, fused_subsi32
     ldr x13, [x14, x12, lsl #3]  // load Rm
     \andop \r16, \r15, \r13      // ands Xd, Xn, Xm
     store_flags
+    mrs x8, nzcv                 // save ANDS flags (x8 free after param load)
     cmp x9, #31
     b.eq 1f                       // TST: skip store
     str x16, [x14, x9, lsl #3]   // store result
-1:  b.\cc 2f
+1:  msr nzcv, x8                 // restore ANDS flags for branch
+    b.\cc 2f
     ldr _ip, [_ip, #8]
     b arm64_branch_dispatch
 2:  ldr _ip, [_ip]
