@@ -1401,6 +1401,24 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         if ((!sf && N != 0) || !arm64_decode_bitmask_imm(N, imms, immr, sf, &imm)) {
             return gen_arm64_undefined(state);
         }
+        if (opc == 3) { // ANDS: try single-gadget fusion with following B.cond
+            extern void *const arm64_fused_andsi64_table[14];
+            extern void *const arm64_fused_andsi32_table[14];
+            uint64_t taken, fallthrough;
+            void *fused = gen_arm64_peek_bcond(state, tlb,
+                    sf ? arm64_fused_andsi64_table : arm64_fused_andsi32_table,
+                    &taken, &fallthrough);
+            if (fused != NULL) {
+                gen(state, (unsigned long) fused);
+                gen(state, rd | ((uint64_t) rn << 8));
+                gen(state, imm);
+                gen(state, taken | 0x8000000000000000ULL);
+                state->jump_ip[0] = state->size - 1;
+                gen(state, fallthrough | 0x8000000000000000ULL);
+                state->jump_ip[1] = state->size - 1;
+                return 0; // the fused pair ends the block
+            }
+        }
         gen(state, (unsigned long) gadget_arm64_logical_imm);
         gen(state, rd | ((uint64_t) rn << 8) | ((uint64_t) opc << 16) | ((uint64_t) sf << 24));
         gen(state, imm);
@@ -1444,6 +1462,23 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
                 return 1;
             }
             if (rn != 31 && rm != 31) {
+                if (opc == 3) { // ANDS: try single-gadget fusion with following B.cond
+                    extern void *const arm64_fused_andsr64_table[14];
+                    extern void *const arm64_fused_andsr32_table[14];
+                    uint64_t taken, fallthrough;
+                    void *fused = gen_arm64_peek_bcond(state, tlb,
+                            sf ? arm64_fused_andsr64_table : arm64_fused_andsr32_table,
+                            &taken, &fallthrough);
+                    if (fused != NULL) {
+                        gen(state, (unsigned long) fused);
+                        gen(state, rd | ((uint64_t) rn << 8) | ((uint64_t) rm << 16));
+                        gen(state, taken | 0x8000000000000000ULL);
+                        state->jump_ip[0] = state->size - 1;
+                        gen(state, fallthrough | 0x8000000000000000ULL);
+                        state->jump_ip[1] = state->size - 1;
+                        return 0; // the fused pair ends the block
+                    }
+                }
                 static void *const t[4][2] = { // [opc][sf]
                     {(void *) gadget_arm64_andr_fast32, (void *) gadget_arm64_andr_fast64},
                     {(void *) gadget_arm64_orrr_fast32, (void *) gadget_arm64_orrr_fast64},

@@ -327,6 +327,8 @@ bcond_gadget bcond_le, le
 //   fused_cmpi:  [gadget][rn][imm][taken][fallthrough]
 //   fused_cmpr:  [gadget][rn | rm<<8][taken][fallthrough]
 //   fused_subsi: [gadget][rd | rn<<8][imm][taken][fallthrough]
+//   fused_andsi: [gadget][rd | rn<<8][imm][taken][fallthrough]
+//   fused_andsr: [gadget][rd | rn<<8 | rm<<16][taken][fallthrough]
 
 .macro fused_cmpi name, cmpop, zr, r15, r11, cc
 .gadget \name
@@ -414,6 +416,65 @@ fused_table arm64_fused_subsi64_table, fused_subsi64
 fused_table arm64_fused_subsi32_table, fused_subsi32
 .text
 
+// ---- ANDS + branch fusion ------------------------------------------------
+// ANDS+B.cond is the highest-impact missing fusion: 8-15% of branches.
+// Same savings as fused_subsi (skip NZCV reload) plus eliminates the
+// store_flags → load_flags pair that would otherwise bridge two gadgets.
+//
+// Stream:
+//   fused_andsi: [gadget][rd | rn<<8][imm][taken][fallthrough]
+//   fused_andsr: [gadget][rd | rn<<8 | rm<<16][taken][fallthrough]
+
+.macro fused_andsi name, andop, r16, r15, r11, cc
+.gadget \name
+    ldr x8, [_ip]
+    ldr x11, [_ip, #8]
+    add _ip, _ip, #16
+    and x9, x8, #0x1f          // rd
+    ubfx x10, x8, #8, #5       // rn
+    add x14, _cpu, #CPU_x0
+    ldr x15, [x14, x10, lsl #3]  // load Rn
+    \andop \r16, \r15, \r11      // ands Xd, Xn, #imm
+    store_flags
+    cmp x9, #31
+    b.eq 1f                       // TST: skip store
+    str x16, [x14, x9, lsl #3]   // store result
+1:  b.\cc 2f
+    ldr _ip, [_ip, #8]
+    b arm64_branch_dispatch
+2:  ldr _ip, [_ip]
+    b arm64_branch_dispatch
+.endm
+
+.macro fused_andsr name, andop, r16, r15, r13, cc
+.gadget \name
+    ldr x8, [_ip]
+    add _ip, _ip, #8
+    and x9, x8, #0x1f          // rd
+    ubfx x10, x8, #8, #5       // rn
+    ubfx x12, x8, #16, #5      // rm
+    add x14, _cpu, #CPU_x0
+    ldr x15, [x14, x10, lsl #3]  // load Rn
+    ldr x13, [x14, x12, lsl #3]  // load Rm
+    \andop \r16, \r15, \r13      // ands Xd, Xn, Xm
+    store_flags
+    cmp x9, #31
+    b.eq 1f                       // TST: skip store
+    str x16, [x14, x9, lsl #3]   // store result
+1:  b.\cc 2f
+    ldr _ip, [_ip, #8]
+    b arm64_branch_dispatch
+2:  ldr _ip, [_ip]
+    b arm64_branch_dispatch
+.endm
+
+.irp cc, CC_LIST
+fused_andsi fused_andsi64_\cc, ands, x16, x15, x11, \cc
+fused_andsi fused_andsi32_\cc, ands, w16, w15, w11, \cc
+fused_andsr fused_andsr64_\cc, ands, x16, x15, x13, \cc
+fused_andsr fused_andsr32_\cc, ands, w16, w15, w13, \cc
+.endr
+
 // ---- Load + compare + branch fusion --------------------------------------
 // The -O0 loop-exit idiom: `ldr Xt,[B,#o]; [movz/movk Xc, folded away by
 // gen.c into a preceding mov_const]; cmp Rn, Rm; b.cond` — three or more
@@ -461,4 +522,8 @@ fused_ldcmpr fused_ldcmpr32_\cc, 32, w17, wzr, w15, w13, \cc
 .data
 fused_table arm64_fused_ldcmpr64_table, fused_ldcmpr64
 fused_table arm64_fused_ldcmpr32_table, fused_ldcmpr32
+fused_table arm64_fused_andsi64_table, fused_andsi64
+fused_table arm64_fused_andsi32_table, fused_andsi32
+fused_table arm64_fused_andsr64_table, fused_andsr64
+fused_table arm64_fused_andsr32_table, fused_andsr32
 .text
