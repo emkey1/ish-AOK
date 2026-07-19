@@ -1490,6 +1490,28 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
                 return 1;
             }
         }
+        // TST (ANDS XZR, Xn, Xm) register form: same fused_andsr gadgets
+        // as the rd!=31 path above — they already handle rd=31 by skipping
+        // the result store. TST+B.cond is common (bitmask/pointer-tag
+        // checks) and currently falls through to the two-dispatch generic.
+        if (imm6 == 0 && N == 0 && rd == 31 && opc == 3
+                && rn != 31 && rm != 31) {
+            extern void *const arm64_fused_andsr64_table[14];
+            extern void *const arm64_fused_andsr32_table[14];
+            uint64_t taken, fallthrough;
+            void *fused = gen_arm64_peek_bcond(state, tlb,
+                    sf ? arm64_fused_andsr64_table : arm64_fused_andsr32_table,
+                    &taken, &fallthrough);
+            if (fused != NULL) {
+                gen(state, (unsigned long) fused);
+                gen(state, rd | ((uint64_t) rn << 8) | ((uint64_t) rm << 16));
+                gen(state, taken | 0x8000000000000000ULL);
+                state->jump_ip[0] = state->size - 1;
+                gen(state, fallthrough | 0x8000000000000000ULL);
+                state->jump_ip[1] = state->size - 1;
+                return 0;
+            }
+        }
         uint64_t params = rd | ((uint64_t) rn << 5) | ((uint64_t) rm << 10)
             | ((uint64_t) shift_type << 15) | ((uint64_t) imm6 << 17)
             | ((uint64_t) sf << 23) | ((uint64_t) opc << 24) | ((uint64_t) N << 26);
