@@ -510,9 +510,16 @@ static dword_t sys_clone_common(dword_t flags, guest_addr_t stack, guest_addr_t 
 
     if (flags & CLONE_VFORK_) {
         lock(&vfork.lock, 0);
-        while (!vfork.done)
-            // FIXME this should stop waiting if a fatal signal is received
+        while (!vfork.done) {
+            // Break out of the vfork wait if a signal is pending —
+            // same check as futex_wait_has_pending_signal().
+            lock(&current->sighand->lock, 0);
+            bool pending = !!((current->pending | current->sighand->pending) & ~current->blocked);
+            unlock(&current->sighand->lock);
+            if (pending)
+                break;
             wait_for_ignore_signals(&vfork.cond, &vfork.lock, NULL);
+        }
         unlock(&vfork.lock);
         lock(&task->general_lock, 0);
         task->vfork = NULL;
