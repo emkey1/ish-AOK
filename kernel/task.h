@@ -188,8 +188,10 @@ struct task {
     // re-poke, same recovery contract as the io_block skip.
     _Atomic bool quiesce_parked;
 
-    // this structure is allocated on the stack of the parent's clone() call
+    // Heap-allocated, shared between parent and child via refcount.
+    // Parent holds one ref, vfork_notify holds one; last to release frees.
     struct vfork_info {
+        atomic_int refcount;
         bool done;
         cond_t cond;
         lock_t lock;

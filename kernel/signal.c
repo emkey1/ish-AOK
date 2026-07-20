@@ -455,12 +455,7 @@ static bool signal_is_synchronous_trap(int sig) {
     }
 }
 
-#define SIGNAL_IGNORE 0
-#define SIGNAL_KILL 1
-#define SIGNAL_CALL_HANDLER 2
-#define SIGNAL_STOP 3
-
-static int signal_action(struct sighand *sighand, int sig) {
+int signal_action(struct sighand *sighand, int sig) {
     if (signal_is_blockable(sig)) {
         struct sigaction_ *action = &sighand->action[sig];
         if(sig > 63)

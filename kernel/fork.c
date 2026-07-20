@@ -446,12 +446,18 @@ static dword_t sys_clone_common(dword_t flags, guest_addr_t stack, guest_addr_t 
         // Same rule: the child returns 0 from clone in a0.
         task->cpu.riscv64_regs[riscv64_a0] = 0;
 
-    struct vfork_info vfork;
+    struct vfork_info *vfork = NULL;
     if (flags & CLONE_VFORK_) {
-        lock_init(&vfork.lock, "sys_clone\0");
-        cond_init(&vfork.cond);
-        vfork.done = false;
-        task->vfork = &vfork;
+        vfork = malloc(sizeof(struct vfork_info));
+        if (vfork == NULL) {
+            task_never_ran_destroy(task);
+            return _ENOMEM;
+        }
+        lock_init(&vfork->lock, "sys_clone\0");
+        cond_init(&vfork->cond);
+        vfork->done = false;
+        atomic_init(&vfork->refcount, 2); // parent + child
+        task->vfork = vfork;
     }
 
     // task might be destroyed by the time we finish, so save the pid
@@ -492,8 +498,11 @@ static dword_t sys_clone_common(dword_t flags, guest_addr_t stack, guest_addr_t 
         // ghost task linked in the pid table and thread-group lists.)
         task->vfork = NULL;
         task_never_ran_destroy(task);
-        if (flags & CLONE_VFORK_)
-            cond_destroy(&vfork.cond);
+        if (flags & CLONE_VFORK_) {
+            cond_destroy(&vfork->cond);
+            if (atomic_fetch_sub_explicit(&vfork->refcount, 1, memory_order_release) == 1)
+                free(vfork);
+        }
         return _EAGAIN;
     }
     if (trace_child)
@@ -509,15 +518,38 @@ static dword_t sys_clone_common(dword_t flags, guest_addr_t stack, guest_addr_t 
     }
 
     if (flags & CLONE_VFORK_) {
-        lock(&vfork.lock, 0);
-        while (!vfork.done)
-            // FIXME this should stop waiting if a fatal signal is received
-            wait_for_ignore_signals(&vfork.cond, &vfork.lock, NULL);
-        unlock(&vfork.lock);
+        bool fatal = false;
+        lock(&vfork->lock, 0);
+        while (!vfork->done) {
+            // Only break on fatal signals (default-terminate, no handler).
+            // Non-fatal signals must not interrupt vfork — the parent and
+            // child share the stack, so returning early would corrupt it.
+            lock(&current->sighand->lock, 0);
+            sigset_t_ pending = current->pending | current->sighand->pending;
+            pending &= ~current->blocked;
+            for (int sig = 1; sig <= 63 && !fatal; sig++) {
+                if (sigset_has(pending, sig)) {
+                    if (signal_action(current->sighand, sig) == SIGNAL_KILL)
+                        fatal = true;
+                }
+            }
+            unlock(&current->sighand->lock);
+            if (fatal)
+                break;
+            wait_for_ignore_signals(&vfork->cond, &vfork->lock, NULL);
+        }
+        unlock(&vfork->lock);
+
+        if (fatal)
+            send_signal(task, SIGKILL, SIGINFO_NIL);
+
         lock(&task->general_lock, 0);
         task->vfork = NULL;
         unlock(&task->general_lock);
-        cond_destroy(&vfork.cond);
+        if (atomic_fetch_sub_explicit(&vfork->refcount, 1, memory_order_release) == 1) {
+            cond_destroy(&vfork->cond);
+            free(vfork);
+        }
     }
 
     return pid;
@@ -639,4 +671,11 @@ void vfork_notify(struct task *task) {
     vfork->done = true;
     notify(&vfork->cond);
     unlock(&vfork->lock);
+
+    // Release child's refcount. If parent already cleared task->vfork and
+    // released its ref, this is the last ref — free the struct.
+    if (atomic_fetch_sub_explicit(&vfork->refcount, 1, memory_order_release) == 1) {
+        cond_destroy(&vfork->cond);
+        free(vfork);
+    }
 }

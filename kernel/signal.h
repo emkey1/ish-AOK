@@ -13,6 +13,14 @@ typedef qword_t sigset_t_;
 #define SIG_DFL_ 0
 #define SIG_IGN_ 1
 
+#define SIGNAL_IGNORE 0
+#define SIGNAL_KILL 1
+#define SIGNAL_CALL_HANDLER 2
+#define SIGNAL_STOP 3
+
+struct sighand;
+int signal_action(struct sighand *sighand, int sig);
+
 #define SA_SIGINFO_ 4
 #define SA_ONSTACK_ 0x08000000
 #define SA_RESTART_ 0x10000000
