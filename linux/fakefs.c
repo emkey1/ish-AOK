@@ -407,12 +407,13 @@ static int fakefs_iterate(struct file *file, struct dir_context *ctx) {
         if (res <= 0)
             break;
         // Get the inode number by constructing the file path and looking it up in the database
-        if (strcmp(ent.name, ".") == 0) {
+        size_t namelen_no_null = strlen(ent.name);
+        if (namelen_no_null == 1 && ent.name[0] == '.') {
             ent.ino = file->f_inode->i_ino;
-        } else if (strcmp(ent.name, "..") == 0) {
+        } else if (namelen_no_null == 2 && ent.name[0] == '.' && ent.name[1] == '.') {
             ent.ino = d_inode(file->f_path.dentry->d_parent)->i_ino;
         } else {
-            const size_t namelen = strlen(ent.name) + 1;
+            const size_t namelen = namelen_no_null + 1;
             if (dir_path_len + 1 + namelen > PATH_MAX)
                 continue; // a
 
@@ -423,7 +424,7 @@ static int fakefs_iterate(struct file *file, struct dir_context *ctx) {
             ent.ino = path_get_inode(&info->db, dir_path);
             sqlite3_mutex_leave(info->db.lock);
         }
-        if (!dir_emit(ctx, ent.name, strlen(ent.name), ent.ino, ent.type))
+        if (!dir_emit(ctx, ent.name, namelen_no_null, ent.ino, ent.type))
             break;
         ctx->pos = host_telldir(dir) + 1;
     }
