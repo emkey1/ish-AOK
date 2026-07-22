@@ -406,24 +406,25 @@ static int fakefs_iterate(struct file *file, struct dir_context *ctx) {
         res = host_readdir(dir, &ent);
         if (res <= 0)
             break;
+        size_t name_len = strlen(ent.name);
+
         // Get the inode number by constructing the file path and looking it up in the database
-        if (strcmp(ent.name, ".") == 0) {
+        if (name_len == 1 && ent.name[0] == '.') {
             ent.ino = file->f_inode->i_ino;
-        } else if (strcmp(ent.name, "..") == 0) {
+        } else if (name_len == 2 && ent.name[0] == '.' && ent.name[1] == '.') {
             ent.ino = d_inode(file->f_path.dentry->d_parent)->i_ino;
         } else {
-            const size_t namelen = strlen(ent.name) + 1;
-            if (dir_path_len + 1 + namelen > PATH_MAX)
+            if (dir_path_len + 1 + name_len + 1 > PATH_MAX)
                 continue; // a
 
             // Optimization: Use mutex directly to avoid transaction overhead for read-only lookup
             sqlite3_mutex_enter(info->db.lock);
             dir_path[dir_path_len] = '/';
-            memcpy(&dir_path[dir_path_len + 1], ent.name, namelen);
+            memcpy(&dir_path[dir_path_len + 1], ent.name, name_len + 1);
             ent.ino = path_get_inode(&info->db, dir_path);
             sqlite3_mutex_leave(info->db.lock);
         }
-        if (!dir_emit(ctx, ent.name, strlen(ent.name), ent.ino, ent.type))
+        if (!dir_emit(ctx, ent.name, name_len, ent.ino, ent.type))
             break;
         ctx->pos = host_telldir(dir) + 1;
     }
