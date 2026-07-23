@@ -579,7 +579,9 @@ static int aokfs_fstat(struct fd *fd, struct statbuf *stat) {
 }
 
 static int aokfs_getpath(struct fd *fd, char *buf) {
-    strcpy(buf, aokfs_node_path(aokfs_decode_node(fd->fs_data)));
+    const char *path = aokfs_node_path(aokfs_decode_node(fd->fs_data));
+    strncpy(buf, path, MAX_PATH - 1);
+    buf[MAX_PATH - 1] = '\0';
     return 0;
 }
 
@@ -798,7 +800,8 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
 
     entry->inode = aokfs_node_inode(child);
     entry->type = dir_entry_type_for_mode(aokfs_node_mode(child));
-    strcpy(entry->name, aokfs_node_basename(child));
+    strncpy(entry->name, aokfs_node_basename(child), sizeof(entry->name) - 1);
+    entry->name[sizeof(entry->name) - 1] = '\0';
     return 1;
 }
 
