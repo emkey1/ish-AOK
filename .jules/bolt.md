@@ -33,3 +33,6 @@
 ## 2026-03-27 - Hoist string length calculations in sys_getcwd_common
 **Learning:** In `kernel/fs.c`, `sys_getcwd_common` repeatedly called `strlen(pwd)` to determine the length of the current working directory string. This caused unnecessary O(N) traversals per operation, scaling poorly for long paths.
 **Action:** When a string's length needs to be used multiple times in an inner function, compute the length once and cache it in a variable (`pwd_len`) rather than recalculating it internally.
+## 2026-03-28 - Optimize finding the last slash in a path
+**Learning:** In `fs/generic.c`, finding the last slash in a path by iterating over the string character by character (using `strlen` and a `for` loop) is an inefficient O(N) operation compared to optimized library functions like `strrchr`, which are often vectorized.
+**Action:** Replace manual character-by-character loops for finding the last character with `strrchr` and pointer arithmetic to significantly improve performance, especially for long path strings.

@@ -344,11 +344,11 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
             // prefix), so strip the final component to get the parent.
             {
                 char parent[MAX_PATH];
-                size_t len = strlen(path);
                 size_t last_slash = 0;
-                for (size_t i = 0; i < len; i++)
-                    if (path[i] == '/')
-                        last_slash = i;
+                char *slash = strrchr(path, '/');
+                if (slash != NULL) {
+                    last_slash = (size_t)(slash - path);
+                }
                 if (last_slash == 0)
                     // Root directory: this codebase's mount-relative
                     // representation of the root is "" (see
