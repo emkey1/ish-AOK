@@ -175,6 +175,17 @@ static inline size_t fiber_cache_hash(addr_t ip) {
     return (ip ^ (ip >> 12)) % FIBER_CACHE_SIZE;
 }
 
+// Copy the fiber frame's working cpu_state back out to the task's cpu_state,
+// preserving the live poke flag. cpu->poked_ptr points at cpu->_poked, but the
+// frame holds a whole-struct snapshot taken when the fiber was entered, so a
+// plain `*cpu = frame->cpu` writes that snapshot's stale _poked over the real
+// flag -- discarding a poke that arrived while the fiber was running.
+static inline void frame_sync_out(struct cpu_state *cpu, struct fiber_frame *frame) {
+    bool poked = __atomic_load_n(cpu->poked_ptr, __ATOMIC_SEQ_CST);
+    *cpu = frame->cpu;
+    __atomic_store_n(cpu->poked_ptr, poked, __ATOMIC_SEQ_CST);
+}
+
 static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     struct asbestos *asbestos = cpu->mmu->asbestos;
     read_wrlock(&asbestos->jetsam_lock);
@@ -233,7 +244,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             interrupt = INT_TIMER;
         if (interrupt == INT_NONE && ++frame->cpu.cycle % (1 << 10) == 0)
             interrupt = INT_TIMER;
-        *cpu = frame->cpu;
+        frame_sync_out(cpu, frame);
     }
 
     free(frame);
