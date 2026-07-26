@@ -96,12 +96,18 @@ static int proc_refresh_data(struct fd *fd) {
         return _EISDIR;
     assert(S_ISREG(mode));
 
+    struct proc_entry *entry = &fd->proc.entry;
+    // Entries backed by pread/pwrite (/proc/<pid>/mem) have no show function
+    // and nothing to buffer, so there is nothing to refresh. proc_seek gets
+    // here for them, and calling through the NULL show pointer crashes.
+    if (entry->meta->show == NULL)
+        return 0;
+
     if (fd->proc.data.data == NULL) {
         fd->proc.data.capacity = 4096;
         fd->proc.data.data = malloc(fd->proc.data.capacity); // default size
     }
     fd->proc.data.size = 0;
-    struct proc_entry *entry = &fd->proc.entry;
     int err = entry->meta->show(entry, &fd->proc.data);
     if (err < 0)
         return err;
