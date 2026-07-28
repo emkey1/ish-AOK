@@ -438,7 +438,7 @@ static const NSInteger kMaximumTerminalFontSize = 72;
         [self.escapeKey setImage:[UIImage systemImageNamed:@"escape"] forState:UIControlStateNormal];
     }
     self.infoButton.accessibilityLabel = @"Settings";
-    self.infoButton.accessibilityHint = @"Opens the application settings. Touch and hold to switch terminals.";
+    self.infoButton.accessibilityHint = @"Opens the application settings.";
     self.pasteButton.accessibilityLabel = @"Paste";
     self.pasteButton.accessibilityHint = @"Pastes text from the clipboard.";
     self.hideKeyboardButton.accessibilityLabel = @"Hide Keyboard";
@@ -499,7 +499,7 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     button.translatesAutoresizingMaskIntoConstraints = NO;
     button.hidden = YES;
     button.accessibilityLabel = @"Settings";
-    button.accessibilityHint = @"Opens the application settings. Touch and hold to switch terminals.";
+    button.accessibilityHint = @"Opens the application settings.";
     button.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
     button.layer.cornerRadius = 22;
     button.layer.masksToBounds = NO;
@@ -784,6 +784,12 @@ static const NSInteger kMaximumTerminalFontSize = 72;
                                                       action:@selector(showTerminalSwitcher:)];
     recognizer.minimumPressDuration = 0.5;
     [view addGestureRecognizer:recognizer];
+    if ([view respondsToSelector:@selector(setAccessibilityHint:)]) {
+        NSString *existingHint = view.accessibilityHint;
+        if (existingHint == nil || ![existingHint containsString:@"Touch and hold to switch terminals."]) {
+            view.accessibilityHint = existingHint ? [existingHint stringByAppendingString:@" Touch and hold to switch terminals."] : @"Touch and hold to switch terminals.";
+        }
+    }
 }
 
 - (void)_installTerminalStartupOverlay {
