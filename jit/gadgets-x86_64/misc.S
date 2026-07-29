@@ -49,8 +49,8 @@
     movb %r15b, CPU_eflags(%_cpu)
 .endm
 
-.macro do_cmpxchg size, s, ss
-    .gadget xgetbv
+
+.gadget xgetbv
     # same frame as cpuid: ecx in, eax/edx out
     push %rsi
     push %rdi
@@ -81,23 +81,6 @@
     pop %rsi
     gret
 
-.macro cmpxchg_set_flags
-    setf_oc
-    # god help us
-    setp %r10b
-    seta %r13b
-    setz %r14b
-    sets %r15b
-    shlb DOLLAR(2), %r10b
-    shlb DOLLAR(4), %r13b
-    shlb DOLLAR(6), %r14b
-    shlb DOLLAR(7), %r15b
-    orb %r10b, %r15b
-    orb %r13b, %r15b
-    orb %r14b, %r15b
-    andl $~(PF_RES|ZF_RES|SF_RES|AF_OPS), CPU_flags_res(%_cpu)
-    movb %r15b, CPU_eflags(%_cpu)
-.endm
 
 .macro do_cmpxchg size, s, ss
     .gadget cmpxchg\size\()_mem

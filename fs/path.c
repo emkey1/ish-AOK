@@ -219,10 +219,8 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
             return 0;
         }
         size_t last_slash = 0;
-        // ⚡ Bolt: Optimize finding the last slash by iterating backward from len
-        // instead of forward from 0. This reduces an O(N) traversal of the entire
-        // path string (where N is the length) to O(K) where K is the length of
-        // the final component, which is typically much smaller.
+        // Scan backward and stop at the first slash: only the final component is
+        // traversed, rather than the whole path.
         for (size_t i = len; i > 0; i--) {
             if (out[i - 1] == '/') {
                 last_slash = i - 1;
