@@ -43,6 +43,29 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (instancetype)initWithFrame:(CGRect)frameRect;
 
+#pragma mark - External display mirroring
+
+// A second view on another screen showing the same framebuffer. Unlike the
+// terminal, this view can't simply move: it IS the touch surface that
+// generates the RFB pointer events, so it stays on the device and the mirror
+// renders alongside it.
+//
+// The mirror does no protocol I/O at all -- it never reads the client's
+// framebuffer and never acknowledges. That contract is deliberate: the read/
+// acknowledge pair is what gates the next update onto the wire, so a second
+// acknowledger would let the client start overwriting the buffer while the
+// other view was still uploading from it. Instead the mirror draws the
+// source's already-uploaded MTLTexture, which is safe to share because both
+// views render on the same MTLDevice.
+- (instancetype)initWithFrame:(CGRect)frameRect mirroringSourceView:(DisplayRFBView *)sourceView;
+
+@property (nonatomic, weak, nullable, readonly) DisplayRFBView *mirrorSourceView; // set on the mirror
+@property (nonatomic, weak, nullable) DisplayRFBView *mirrorView;                 // set on the source
+
+// Re-place the cursor overlay against this view's current bounds. Called on
+// the mirror by the source, whose pointer position it shares.
+- (void)repositionCursor;
+
 // Forward DisplayRFBClientDelegate's cursor callback here. Renders the
 // cursor as a small overlay positioned at the last coordinates sent via
 // touch input (RFB doesn't push cursor position, only shape/hotspot).

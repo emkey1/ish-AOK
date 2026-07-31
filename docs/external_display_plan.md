@@ -162,6 +162,38 @@ needs an answer, not just the full-screen terminal.
   terminal's own background, and a dark theme under a light system appearance
   (or the reverse) rendered them nearly invisible.
 
+## Wayland: mirrored, not relocated
+
+The Wayland display can't use the terminal's trick. Its `DisplayRFBView` is
+*also* the touch surface that generates the RFB pointer events (touches are
+scaled from the view's bounds into framebuffer coordinates), so it has to stay
+where the fingers are. Instead a second `DisplayRFBView` on the external screen
+renders the same framebuffer:
+
+- The mirror does **no protocol I/O**. It never reads the client's framebuffer
+  and never acknowledges — the read/acknowledge pair is what gates the next
+  update onto the wire, so a second acknowledger would let the client overwrite
+  the buffer while the other view was still uploading from it. It draws the
+  source's already-uploaded `MTLTexture`, which is legal to share because it is
+  created with the source's `MTLDevice`.
+- The source draws the mirror **synchronously**, not via `setNeedsDisplay`.
+  Both views sample one texture, and the acknowledge has already released the
+  client to send the next update: a mirror waiting for its own vsync sampled a
+  texture that was already part-way into the following frame, which tore
+  visibly on a full-framebuffer update.
+- The cursor is an overlay positioned from the pointer events we send (RFB
+  never pushes position). The mirror keeps the position in *framebuffer*
+  coordinates so it can scale into its own, differently sized, bounds.
+- `SetDesktopSize` follows the external display while mirroring: it is the
+  screen being looked at, and following a portrait phone instead would hand a
+  720x1280 desktop to a 16:9 display.
+
+Both surfaces are found and driven through one `ISHExternalDisplayContent`
+protocol, so the scene delegate doesn't care which it got. Bringing a different
+capable Workspace window to the front moves the display to it — handled on the
+next runloop turn, because the Workspace posts that from inside its own window
+setup and re-parenting views there made a freshly opened window close itself.
+
 ## Out of scope
 
 - Interactive external displays (the non-interactive role is what iOS gives

@@ -74,6 +74,10 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     UIView *_Nullable _accessoryStrip;
     NSLayoutConstraint *_Nullable _accessoryStripZeroHeightConstraint;
     DisplayRFBView *_displayView;
+    // The mirror on an external display, and the container it was put in (kept
+    // so a departing external scene can prove the mirror is still its own).
+    DisplayRFBView *_Nullable _externalMirrorView;
+    __weak UIView *_Nullable _externalHostView;
     // Two alternate top constraints for _displayView, swapped by
     // -_updateMaximizeScreenSpaceLayout: the normal one sits below the
     // toolbar card (safe-area-relative, like the toolbar itself); the
@@ -447,10 +451,71 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
 // per-orientation size makes no sense. Harmless when unsupported
 // server-side: no confirmation rect ever arrives and everything stays as-is.
 - (void)_requestDesktopSizeForViewSize:(CGSize)size {
-    if (!self.standaloneMode || _rfbClient == nil)
+    if (_rfbClient == nil)
+        return;
+    // While mirroring, the external display is the screen that matters: it is
+    // the one being looked at, and it is almost always landscape. Following
+    // the device instead would hand a 720x1280 desktop to a 16:9 display and
+    // stretch it grotesquely. (This also makes the request meaningful for a
+    // Workspace applet window, where a per-orientation size otherwise makes no
+    // sense and is skipped.)
+    CGSize mirrorSize = _externalMirrorView.bounds.size;
+    if (mirrorSize.width > 0 && mirrorSize.height > 0)
+        size = mirrorSize;
+    else if (!self.standaloneMode)
         return;
     BOOL landscape = size.width >= size.height;
     [_rfbClient requestDesktopSizeWidth:(landscape ? 1280 : 720) height:(landscape ? 720 : 1280)];
+}
+
+#pragma mark - ISHExternalDisplayContent
+
+- (BOOL)relocateContentToExternalView:(UIView *)hostView {
+    if (hostView == nil)
+        return NO;
+    [self loadViewIfNeeded];
+    // Nothing worth showing until the RFB session is actually up -- the caller
+    // leaves the display idle and asks again once it is.
+    if (_rfbClient == nil || _displayView.rfbClient == nil)
+        return NO;
+    if (_externalMirrorView != nil && _externalHostView == hostView)
+        return YES;
+    [self restoreContentFromExternalView:_externalHostView];
+
+    DisplayRFBView *mirror = [[DisplayRFBView alloc] initWithFrame:hostView.bounds
+                                              mirroringSourceView:self.displayView];
+    [hostView addSubview:mirror];
+    [NSLayoutConstraint activateConstraints:@[
+        [mirror.leadingAnchor constraintEqualToAnchor:hostView.leadingAnchor],
+        [mirror.trailingAnchor constraintEqualToAnchor:hostView.trailingAnchor],
+        [mirror.topAnchor constraintEqualToAnchor:hostView.topAnchor],
+        [mirror.bottomAnchor constraintEqualToAnchor:hostView.bottomAnchor],
+    ]];
+    [hostView layoutIfNeeded];
+    _externalMirrorView = mirror;
+    _externalHostView = hostView;
+    self.displayView.mirrorView = mirror;
+    // The compositor output follows the external display now, and the mirror
+    // needs a first frame: nothing else will redraw it until the guest happens
+    // to repaint.
+    [self _requestDesktopSizeForViewSize:hostView.bounds.size];
+    [_displayView setNeedsDisplay];
+    return YES;
+}
+
+- (void)restoreContentFromExternalView:(UIView *)hostView {
+    if (_externalMirrorView == nil || _externalHostView != hostView)
+        return;
+    _displayView.mirrorView = nil;
+    [_externalMirrorView removeFromSuperview];
+    _externalMirrorView = nil;
+    _externalHostView = nil;
+    // Back to sizing the desktop for the device.
+    [self _requestDesktopSizeForViewSize:self.view.bounds.size];
+}
+
+- (BOOL)rendersOnExternalDisplay {
+    return _externalMirrorView != nil;
 }
 
 - (void)dealloc {
@@ -919,6 +984,10 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     // rather than waiting for the next physical rotation.
     [self _requestDesktopSizeForViewSize:self.view.bounds.size];
     [self _autoShowKeyboardIfAppropriate];
+    // An external display may already be attached and sitting idle -- there was
+    // nothing to mirror until this connect landed.
+    [NSNotificationCenter.defaultCenter postNotificationName:ISHExternalDisplayContentDidBecomeAvailableNotification
+                                                      object:self];
 }
 
 // Mirrors TerminalViewController's -viewDidLoad/-focusTerminal gating on

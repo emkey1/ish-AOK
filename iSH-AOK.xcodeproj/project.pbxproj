@@ -823,6 +823,7 @@
 		BBC8298624EE5853009D042C /* metal.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = metal.png; sourceTree = "<group>"; };
 		BBCC9D942365430800424C83 /* SceneDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SceneDelegate.h; sourceTree = "<group>"; };
 		C0A000540254000100000001 /* ExternalDisplaySceneDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ExternalDisplaySceneDelegate.h; sourceTree = "<group>"; };
+		C0A000540254000100000004 /* ISHExternalDisplayContent.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ISHExternalDisplayContent.h; sourceTree = "<group>"; };
 		C0A000540254000100000002 /* ExternalDisplaySceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ExternalDisplaySceneDelegate.m; sourceTree = "<group>"; };
 		BBCC9D952365430800424C83 /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
 		BBCED895255BB65A00CA0701 /* NSObject+SaneKVO.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "NSObject+SaneKVO.h"; sourceTree = "<group>"; };
@@ -1224,6 +1225,7 @@
 				BBCC9D942365430800424C83 /* SceneDelegate.h */,
 				BBCC9D952365430800424C83 /* SceneDelegate.m */,
 				C0A000540254000100000001 /* ExternalDisplaySceneDelegate.h */,
+				C0A000540254000100000004 /* ISHExternalDisplayContent.h */,
 				C0A000540254000100000002 /* ExternalDisplaySceneDelegate.m */,
 				C0A000032E00000300000002 /* WorkspaceViewController.h */,
 				C0A000032E00000300000003 /* WorkspaceViewController.m */,

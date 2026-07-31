@@ -251,8 +251,6 @@ static NSArray<NSString *> *ISHSessionCommandWithFallback(NSArray<NSString *> *c
 
 @end
 
-NSString *const ISHTerminalViewControllerDidAttachTerminalNotification = @"ISHTerminalViewControllerDidAttachTerminal";
-
 @implementation TerminalViewController
 
 static const NSInteger kMinimumTerminalFontSize = 1;
@@ -345,7 +343,7 @@ static const NSInteger kMaximumTerminalFontSize = 72;
                                             @"type": @(_terminal.type),
                                             @"number": @(_terminal.number)}];
     self.termView.terminal = _terminal;
-    [NSNotificationCenter.defaultCenter postNotificationName:ISHTerminalViewControllerDidAttachTerminalNotification
+    [NSNotificationCenter.defaultCenter postNotificationName:ISHExternalDisplayContentDidBecomeAvailableNotification
                                                       object:self];
 }
 
@@ -1815,7 +1813,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
 
 #pragma mark External display
 
-- (BOOL)relocateTerminalContentToExternalView:(UIView *)hostView {
+- (BOOL)relocateContentToExternalView:(UIView *)hostView {
     if (hostView == nil)
         return NO;
     [self loadViewIfNeeded];
@@ -1827,7 +1825,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     return YES;
 }
 
-- (void)restoreTerminalContentFromExternalView:(UIView *)hostView {
+- (void)restoreContentFromExternalView:(UIView *)hostView {
     if (!self.isViewLoaded)
         return;
     [self.termView restoreContentFromView:hostView];

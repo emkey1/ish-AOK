@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import "ISHExternalDisplayContent.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -82,11 +83,12 @@ extern NSString *_Nullable ISHWorkspaceToolIdentifierForViewController(UIViewCon
 // through -- see -runLauncherShortcutWithCommand:title: in the .m.
 - (void)launchTerminalWithCommand:(NSString *)command title:(nullable NSString *)title;
 
-// The terminal in the frontmost desktop terminal window, or nil when the
-// desktop has none open. Workspace terminals are children of contained window
-// views rather than a scene's root view controller, so an external display has
-// no other way to find one.
-@property (nonatomic, readonly, nullable) TerminalViewController *frontmostHostedTerminalViewController;
+// The frontmost desktop window whose content can drive an external display (a
+// terminal window, or the Wayland Display applet), or nil when the desktop has
+// none open. Workspace tools are children of contained window views rather
+// than a scene's root view controller, so an external display has no other way
+// to find one.
+@property (nonatomic, readonly, nullable) id<ISHExternalDisplayContent> frontmostExternalDisplayContent;
 
 @end
 

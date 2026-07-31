@@ -7,10 +7,13 @@
 #import "Diagnostics.h"
 #import "NSObject+SaneKVO.h"
 #import "SceneDelegate.h"
+#import "ISHExternalDisplayContent.h"
 #import "TerminalViewController.h"
 #import "Theme.h"
 #import "UserPreferences.h"
 #import "WorkspaceViewController.h"
+
+NSString *const ISHExternalDisplayContentDidBecomeAvailableNotification = @"ISHExternalDisplayContentDidBecomeAvailable";
 
 // Hosts the relocated webView and reports when that content comes or goes. The
 // webView can leave without anyone telling us -- closing a Workspace terminal
@@ -45,44 +48,44 @@
 
 @interface ExternalDisplaySceneDelegate ()
 
-// The controller whose rendering we borrowed, so the right one gets it back on
+// The surface whose rendering we borrowed, so the right one gets it back on
 // disconnect even if the foreground scene has changed in the meantime. Weak:
-// if its scene goes away first, TerminalView's own teardown detaches the
-// webView and there is nothing left for us to restore.
-@property (weak, nonatomic) TerminalViewController *hostedTerminalViewController;
-@property (nonatomic) ISHExternalDisplayContainerView *terminalContainerView;
+// if its scene goes away first, the surface's own teardown detaches its content
+// and there is nothing left for us to restore.
+@property (weak, nonatomic) id<ISHExternalDisplayContent> hostedContent;
+@property (nonatomic) ISHExternalDisplayContainerView *contentContainerView;
 @property (nonatomic) UILabel *idleLabel;
 
 @end
 
 @implementation ExternalDisplaySceneDelegate
 
-// The terminal a window is showing, whether it is the window's own root or a
-// terminal hosted in the frontmost Workspace desktop window. Workspace never
+// What a window is showing that can drive an external display: the window's own
+// root, or the frontmost capable window on a Workspace desktop. Workspace never
 // sets currentTerminalViewController (its root is never a TerminalViewController),
 // so without this branch a Workspace user gets an idle external display.
-static TerminalViewController *ISHTerminalViewControllerForWindow(UIWindow *window) {
-    if ([window.rootViewController isKindOfClass:TerminalViewController.class])
-        return (TerminalViewController *) window.rootViewController;
+static id<ISHExternalDisplayContent> ISHExternalDisplayContentForWindow(UIWindow *window) {
+    if ([window.rootViewController conformsToProtocol:@protocol(ISHExternalDisplayContent)])
+        return (id<ISHExternalDisplayContent>) window.rootViewController;
     WorkspaceViewController *workspace = ISHWorkspaceViewControllerForViewController(window.rootViewController);
-    return workspace.frontmostHostedTerminalViewController;
+    return workspace.frontmostExternalDisplayContent;
 }
 
-// The terminal to show over there: whatever the user is actually looking at,
-// then progressively weaker guesses. Asking what's frontmost first matters
-// because the Workspace is often *presented over* a terminal scene -- consulting
+// What to show over there: whatever the user is actually looking at, then
+// progressively weaker guesses. Asking what's frontmost first matters because
+// the Workspace is often *presented over* a terminal scene -- consulting
 // currentTerminalViewController first would hand the display a terminal that is
-// covered up, and leave the Workspace terminal the user just opened rendering in
-// a postage-stamp window on the phone.
-static TerminalViewController *ISHTerminalViewControllerForExternalDisplay(void) {
-
+// covered up, and leave the Workspace window the user just opened rendering in a
+// postage-stamp on the phone.
+static id<ISHExternalDisplayContent> ISHContentForExternalDisplay(void) {
     UIViewController *frontmost = ISHActivePresentationViewController();
-    TerminalViewController *workspaceTerminal =
-        ISHWorkspaceViewControllerForViewController(frontmost).frontmostHostedTerminalViewController;
-    if (workspaceTerminal != nil)
-        return workspaceTerminal;
-    if ([frontmost isKindOfClass:TerminalViewController.class])
-        return (TerminalViewController *) frontmost;
+    id<ISHExternalDisplayContent> workspaceContent =
+        ISHWorkspaceViewControllerForViewController(frontmost).frontmostExternalDisplayContent;
+    if (workspaceContent != nil)
+        return workspaceContent;
+    // A standalone Wayland Display is the scene's root, so it lands here.
+    if ([frontmost conformsToProtocol:@protocol(ISHExternalDisplayContent)])
+        return (id<ISHExternalDisplayContent>) frontmost;
 
     // Nothing frontmost to go on -- the external scene can connect while the app
     // is in the background, when no scene has reported itself active.
@@ -92,9 +95,9 @@ static TerminalViewController *ISHTerminalViewControllerForExternalDisplay(void)
         if (![scene isKindOfClass:UIWindowScene.class])
             continue;
         for (UIWindow *window in ((UIWindowScene *) scene).windows) {
-            TerminalViewController *terminalViewController = ISHTerminalViewControllerForWindow(window);
-            if (terminalViewController != nil)
-                return terminalViewController;
+            id<ISHExternalDisplayContent> content = ISHExternalDisplayContentForWindow(window);
+            if (content != nil)
+                return content;
         }
     }
     return nil;
@@ -132,7 +135,7 @@ static TerminalViewController *ISHTerminalViewControllerForExternalDisplay(void)
         [container.topAnchor constraintEqualToAnchor:rootViewController.view.topAnchor],
         [container.bottomAnchor constraintEqualToAnchor:rootViewController.view.bottomAnchor],
     ]];
-    self.terminalContainerView = container;
+    self.contentContainerView = container;
     [self installIdleLabelInContainer:container];
     window.rootViewController = rootViewController;
     self.window = window;
@@ -152,10 +155,10 @@ static TerminalViewController *ISHTerminalViewControllerForExternalDisplay(void)
     window.hidden = NO;
 
     [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(terminalDidAttach:)
-                                               name:ISHTerminalViewControllerDidAttachTerminalNotification
+                                           selector:@selector(contentDidBecomeAvailable:)
+                                               name:ISHExternalDisplayContentDidBecomeAvailableNotification
                                              object:nil];
-    [self attachTerminalIfPossible];
+    [self attachContentIfPossible];
 }
 
 - (void)windowScene:(UIWindowScene *)windowScene
@@ -163,47 +166,59 @@ didUpdateCoordinateSpace:(id<UICoordinateSpace>)previousCoordinateSpace
 interfaceOrientation:(UIInterfaceOrientation)previousInterfaceOrientation
    traitCollection:(UITraitCollection *)previousTraitCollection {
     self.window.frame = windowScene.coordinateSpace.bounds;
-    // The container (and the webView autoresized inside it) follows the window,
-    // so hterm re-lays out and the new rows/cols reach the tty on their own.
+    // The container -- and whatever content is inside it -- follows the window,
+    // so a relocated terminal re-lays out and its new rows/cols reach the tty on
+    // their own. (A mirrored Wayland desktop keeps its requested size: every
+    // external display mode is landscape, so a mode change never flips the
+    // orientation the compositor was asked for.)
 }
 
 - (void)sceneDidDisconnect:(UIScene *)scene {
     [ISHDiagnosticsStore recordBreadcrumb:@"externalDisplay.didDisconnect"
                                   details:@{@"session": scene.session.persistentIdentifier ?: @"",
-                                            @"hadTerminal": self.hostedTerminalViewController != nil ? @"yes" : @"no"}];
+                                            @"hadContent": self.hostedContent != nil ? @"yes" : @"no"}];
     [NSNotificationCenter.defaultCenter removeObserver:self
-                                                  name:ISHTerminalViewControllerDidAttachTerminalNotification
+                                                  name:ISHExternalDisplayContentDidBecomeAvailableNotification
                                                 object:nil];
-    [self.hostedTerminalViewController restoreTerminalContentFromExternalView:self.terminalContainerView];
-    self.hostedTerminalViewController = nil;
-    self.terminalContainerView = nil;
+    [self.hostedContent restoreContentFromExternalView:self.contentContainerView];
+    self.hostedContent = nil;
+    self.contentContainerView = nil;
     self.window = nil;
 }
 
-- (void)terminalDidAttach:(__unused NSNotification *)notification {
-    // A session appeared after we connected (the usual order at cold launch, and
-    // what happens when the user starts a new session while plugged in).
-    [self attachTerminalIfPossible];
+- (void)contentDidBecomeAvailable:(__unused NSNotification *)notification {
+    // Something to show appeared after we connected -- the usual order at cold
+    // launch, and what happens when the user starts a session or opens the
+    // Wayland display while already plugged in.
+    //
+    // Deferred to the next runloop turn rather than handled inline: posters
+    // include the Workspace's became-frontmost hook, which runs in the middle
+    // of its own window setup. Re-parenting views and tearing down the previous
+    // surface from inside that left a freshly opened Wayland window closing
+    // itself immediately. Nothing here is time-critical.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self attachContentIfPossible];
+    });
 }
 
-- (void)attachTerminalIfPossible {
-    if (self.terminalContainerView == nil)
+- (void)attachContentIfPossible {
+    if (self.contentContainerView == nil)
         return;
-    TerminalViewController *vc = ISHTerminalViewControllerForExternalDisplay();
-    if (vc == nil)
+    id<ISHExternalDisplayContent> content = ISHContentForExternalDisplay();
+    if (content == nil)
         return;
     // Already showing this controller: nothing to do. A *different* controller
     // becoming frontmost does take the display over, which is what makes
     // switching sessions or windows behave the way the user expects.
-    if (vc == self.hostedTerminalViewController && vc.rendersOnExternalDisplay)
+    if (content == self.hostedContent && content.rendersOnExternalDisplay)
         return;
-    if (self.hostedTerminalViewController != nil && self.hostedTerminalViewController != vc)
-        [self.hostedTerminalViewController restoreTerminalContentFromExternalView:self.terminalContainerView];
-    if (![vc relocateTerminalContentToExternalView:self.terminalContainerView])
+    if (self.hostedContent != nil && self.hostedContent != content)
+        [self.hostedContent restoreContentFromExternalView:self.contentContainerView];
+    if (![content relocateContentToExternalView:self.contentContainerView])
         return;
-    self.hostedTerminalViewController = vc;
-    [ISHDiagnosticsStore recordBreadcrumb:@"externalDisplay.attachedTerminal"
-                                  details:@{@"size": NSStringFromCGSize(self.terminalContainerView.bounds.size)}];
+    self.hostedContent = content;
+    [ISHDiagnosticsStore recordBreadcrumb:@"externalDisplay.attachedContent"
+                                  details:@{@"size": NSStringFromCGSize(self.contentContainerView.bounds.size)}];
 }
 
 - (void)installIdleLabelInContainer:(UIView *)container {
@@ -234,12 +249,12 @@ interfaceOrientation:(UIInterfaceOrientation)previousInterfaceOrientation
     // (its Workspace window was closed, say). If another one is open, take it
     // over rather than sitting idle.
     if (!self.idleLabel.isHidden)
-        [self attachTerminalIfPossible];
+        [self attachContentIfPossible];
 }
 
 - (void)updateIdleMessage {
     BOOL hasContent = NO;
-    for (UIView *subview in self.terminalContainerView.subviews) {
+    for (UIView *subview in self.contentContainerView.subviews) {
         if (subview != self.idleLabel) {
             hasContent = YES;
             break;
@@ -252,7 +267,7 @@ interfaceOrientation:(UIInterfaceOrientation)previousInterfaceOrientation
     Palette *palette = UserPreferences.shared.palette;
     UIColor *background = [[UIColor alloc] ish_initWithHexString:palette.backgroundColor];
     self.window.backgroundColor = background ?: UIColor.blackColor;
-    self.terminalContainerView.backgroundColor = background ?: UIColor.blackColor;
+    self.contentContainerView.backgroundColor = background ?: UIColor.blackColor;
     // Not a system label colour: this window has no relation to the system's
     // light/dark trait, and the terminal palette can be dark under a light
     // trait (or the reverse), which left the message barely legible against
