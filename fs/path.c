@@ -219,14 +219,9 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
             return 0;
         }
         size_t last_slash = 0;
-        // Bolt: Optimize finding the last slash by scanning backward instead of forward.
-        // Impact: Avoids unnecessary iterations on long paths, yielding O(1) performance in the best case.
-        for (size_t i = len; i > 0; i--) {
-            if (out[i - 1] == '/') {
-                last_slash = i - 1;
-                break;
-            }
-        }
+        for (size_t i = 0; i < len; i++)
+            if (out[i] == '/')
+                last_slash = i;
         if (last_slash == 0) {
             // parent is the filesystem root, e.g. creating "/foo". The
             // mount-relative representation of the root used throughout this

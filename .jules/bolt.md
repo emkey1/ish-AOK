@@ -36,3 +36,7 @@
 ## 2026-03-28 - Optimize finding the last slash in a path
 **Learning:** In `fs/generic.c`, finding the last slash in a path by iterating over the string character by character (using `strlen` and a `for` loop) is an inefficient O(N) operation compared to optimized library functions like `strrchr`, which are often vectorized.
 **Action:** Replace manual character-by-character loops for finding the last character with `strrchr` and pointer arithmetic to significantly improve performance, especially for long path strings.
+
+## 2026-03-29 - Avoid premature micro-optimizations on cold paths
+**Learning:** Replacing a forward scan loop with a backward scan loop to find the last slash in `path_normalize` (`fs/path.c`) provides no measurable performance benefit because the scan runs only for `N_PARENT_DIR_WRITE` checks, which are immediately followed by an expensive `stat()` on the parent directory.
+**Action:** Do not micro-optimize string scans on cold paths that are dominated by subsequent heavy syscalls or filesystem operations. If refactoring such a path, prioritize readability (e.g., using `strrchr` instead of a manual loop) rather than claiming non-existent performance wins.
