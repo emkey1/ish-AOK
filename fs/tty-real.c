@@ -37,7 +37,11 @@ static void *real_tty_read_thread(void *_tty) {
 }
 
 static struct termios_ termios_from_real(struct termios real) {
-    struct termios_ fake = {};
+    // The host's c_cflag is not translated: iSH models no baud rate or
+    // character size, and BSD keeps the speed in a separate c_ospeed field
+    // rather than in CBAUD. Seed the same nominal default a fresh tty gets,
+    // because leaving it zero would read back as B0, meaning "hang up".
+    struct termios_ fake = { .cflags = B38400_ | CS8_ | CREAD_ | HUPCL_ };
 #define FLAG(t, x) \
     if (real.c_##t##flag & x) \
         fake.t##flags |= x##_

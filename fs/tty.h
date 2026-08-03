@@ -60,6 +60,22 @@ struct termios_ {
 #define ONOCR_ (1 << 4)
 #define ONLRET_ (1 << 5)
 
+// c_cflag bits, from Linux's asm-generic/termbits.h. iSH's ttys have no real
+// line discipline hardware, so none of this changes how a tty behaves -- but
+// guests read the bits back and forward them over the wire, and the baud rate
+// is not cosmetic: cfgetospeed() returns c_cflag & CBAUD, and B0 means "hang
+// up the line".
+#define CBAUD_ 0010017
+#define B0_ 0000000
+#define B38400_ 0000017
+#define CSIZE_ 0000060
+#define CS8_ 0000060
+#define CREAD_ 0000200
+// Note the kernel's termbits header spells these in hex: HUPCL is 0x400,
+// i.e. 0002000, and 0000400 is PARENB.
+#define PARENB_ 0000400
+#define HUPCL_ 0002000
+
 #define TCGETS_ 0x5401
 #define TCSETS_ 0x5402
 #define TCSETSW_ 0x5403

@@ -35,7 +35,16 @@ struct tty *tty_alloc(struct tty_driver *driver, int type, int num) {
 
     tty->termios.iflags = ICRNL_ | IXON_;
     tty->termios.oflags = OPOST_ | ONLCR_;
-    tty->termios.cflags = 0;
+    // Linux keeps this per driver rather than using one value everywhere:
+    // drivers/tty/vt/vt.c takes tty_std_termios as-is for the console, which
+    // includes HUPCL, while drivers/tty/pty.c overrides c_cflag to
+    // B38400|CS8|CREAD for both the master and the slave. Key off the device
+    // type rather than the driver identity: the app drives its terminals
+    // through a tty_driver of its own, but pty_open_fake registers them under
+    // TTY_PSEUDO_SLAVE_MAJOR, so to the guest they are pty slaves.
+    tty->termios.cflags = B38400_ | CS8_ | CREAD_;
+    if (type != TTY_PSEUDO_MASTER_MAJOR && type != TTY_PSEUDO_SLAVE_MAJOR)
+        tty->termios.cflags |= HUPCL_;
     tty->termios.lflags = ISIG_ | ICANON_ | ECHO_ | ECHOE_ | ECHOK_ | ECHOCTL_ | ECHOKE_ | IEXTEN_;
     // from include/asm-generic/termios.h
     memcpy(tty->termios.cc, "\003\034\177\025\004\0\1\0\021\023\032\0\022\017\027\026\0\0\0", 19);
