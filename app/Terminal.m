@@ -500,13 +500,12 @@ static void NotifyTerminalRegistryChanged(void) {
             return;
         int cols = dimensions[0].intValue;
         int rows = dimensions[1].intValue;
-        // Snapshot the back-pointer once. ios_tty_cleanup clears it from the
-        // emulator thread, so re-reading self.tty for each use means the NULL
-        // check guards nothing: the pointer could still be live here and NULL
-        // by the time it is passed to tty_set_winsize, which then dereferences
-        // it at offsetof(struct tty, winsize).
+        // Read the unowned back-pointer once. ios_tty_cleanup clears it from
+        // the emulator thread, so re-reading self.tty for each use means the
+        // NULL check guards nothing: the pointer could still be live here and
+        // NULL by the time it is used.
         //
-        // Snapshot rather than holding @synchronized(self) across tty->lock:
+        // Read it rather than holding @synchronized(self) across tty->lock:
         // tty_release calls ops->cleanup (-> setTty: -> @synchronized(self))
         // with tty->lock already held, so taking those two in the other order
         // here would be an AB-BA deadlock.
@@ -517,9 +516,19 @@ static void NotifyTerminalRegistryChanged(void) {
         if (tty == NULL)
             return;
 #if !ISH_LINUX
+        // Not enough on its own: tty_release frees the struct, so even a
+        // correctly-read pointer can go stale before it is dereferenced. Re-find
+        // the tty under ttys_lock -- the lock that free is required to hold --
+        // and hold a reference for as long as it is used. The value read above
+        // is passed only as an identity token (compared, never dereferenced),
+        // so a recycled pty number can't point this at another terminal's tty.
+        tty = tty_lookup_ref(self.type, self.number, tty);
+        if (tty == NULL)
+            return;
         lock(&tty->lock, 0);
         tty_set_winsize(tty, (struct winsize_) {.col = cols, .row = rows});
         unlock(&tty->lock);
+        tty_put(tty);
 #else
         async_do_in_workqueue(^{
             tty->ops->resize(tty, cols, rows);
@@ -595,7 +604,11 @@ static void NotifyTerminalRegistryChanged(void) {
 #endif
 
 - (void)sendInput:(NSData *)input {
-    if (self.tty == NULL)
+    tty_t tty;
+    @synchronized (self) {
+        tty = self->_tty;
+    }
+    if (tty == NULL)
         return;
     if (input.length > 0) {
         uint8_t first = ((const uint8_t *) input.bytes)[0];
@@ -604,7 +617,14 @@ static void NotifyTerminalRegistryChanged(void) {
                                      @"firstByte": [NSString stringWithFormat:@"%#x", first]}];
     }
 #if !ISH_LINUX
-    tty_input(self.tty, input.bytes, input.length, 0);
+    // Hold a reference across tty_input rather than dereferencing the unowned
+    // back-pointer, which tty_release can free between the check above and the
+    // call (see -syncWindowSize). A reference rather than holding ttys_lock
+    // across the call: this runs for every keystroke, and tty_input does line
+    // discipline and signal delivery.
+    tty = tty_lookup_ref(self.type, self.number, tty);
+    if (tty != NULL)
+        tty_input(tty, input.bytes, input.length, 0);
 #else
     async_do_in_workqueue(^{
         NSData *inputRef = input;
@@ -615,6 +635,12 @@ static void NotifyTerminalRegistryChanged(void) {
         [self.webView evaluateJavaScript:@"exports.setUserGesture()" completionHandler:nil];
         [self.scrollToBottomTask schedule];
     }
+#if !ISH_LINUX
+    // Last, and after every use of self: if this drops the final reference,
+    // tty_release runs ios_tty_cleanup, whose CFBridgingRelease releases the
+    // tty's own strong reference to this Terminal.
+    tty_put(tty);
+#endif
 }
 
 - (void)requestRefresh {
@@ -849,7 +875,16 @@ static void NotifyTerminalRegistryChanged(void) {
 }
 
 - (void)destroy {
-    tty_t tty = self.tty;
+    tty_t tty;
+    @synchronized (self) {
+        tty = self->_tty;
+    }
+#if !ISH_LINUX
+    // Own a reference for as long as this method touches the tty. Everything
+    // below dereferences it, and tty_release can free it concurrently -- see
+    // -syncWindowSize for why the unowned back-pointer alone isn't enough.
+    tty = tty_lookup_ref(self.type, self.number, tty);
+#endif
     NSString *reason = self.pendingDestroyReason ?: @"unspecified";
     self.pendingDestroyReason = nil;
     NSMutableDictionary<NSString *, id> *details = [NSMutableDictionary dictionaryWithDictionary:@{
@@ -885,6 +920,13 @@ static void NotifyTerminalRegistryChanged(void) {
             [terminalsByUUID removeObjectForKey:self.uuid];
     }
     NotifyTerminalRegistryChanged();
+#if !ISH_LINUX
+    // Drop the reference taken above, last and after every use of self: if this
+    // drops the final reference, tty_release runs ios_tty_cleanup, whose
+    // CFBridgingRelease releases the tty's own strong reference to this
+    // Terminal -- which for a terminal being destroyed may well be the last one.
+    tty_put(tty);
+#endif
 }
 
 + (void)initialize {

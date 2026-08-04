@@ -175,6 +175,39 @@ static void tty_set_controlling_locked(struct tgroup *group, struct tty *tty) {
     }
 }
 
+struct tty *tty_lookup_ref(int type, int num, struct tty *expected) {
+    if (type < 0 || type > 255 || num < 0)
+        return NULL;
+    lock(&ttys_lock, 0);
+    struct tty *tty = NULL;
+    struct tty_driver *driver = tty_drivers[type];
+    if (driver != NULL && (unsigned) num < driver->limit) {
+        tty = driver->ttys[num];
+        // pty_reserve_next parks a 1 in the slot to reserve the number before
+        // there is a tty there (see tty_get)
+        if (tty == (void *) 1)
+            tty = NULL;
+        // Compare only -- `expected` may already be freed.
+        if (tty != NULL && expected != NULL && tty != expected)
+            tty = NULL;
+    }
+    if (tty != NULL) {
+        lock(&tty->lock, 0);
+        tty->refcount++;
+        unlock(&tty->lock);
+    }
+    unlock(&ttys_lock);
+    return tty;
+}
+
+void tty_put(struct tty *tty) {
+    if (tty == NULL)
+        return;
+    lock(&ttys_lock, 0);
+    tty_release(tty);
+    unlock(&ttys_lock);
+}
+
 // by default, /dev/console is /dev/tty1
 int console_major = TTY_CONSOLE_MAJOR;
 int console_minor = 1;

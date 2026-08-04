@@ -210,6 +210,25 @@ int tty_open(struct tty *tty, struct fd *fd);
 extern lock_t ttys_lock;
 void tty_release(struct tty *tty); // must be called with ttys_lock
 
+// Take a reference to an already-registered tty, found by device id, without
+// creating one and without the caller needing to already hold a reference.
+//
+// This exists for the iOS app: a Terminal keeps only an unowned back-pointer to
+// its tty, which tty_release frees out from under it (that free runs with
+// ttys_lock held, which is exactly what makes the lookup here safe). Doing the
+// lookup and the refcount bump under ttys_lock means the struct cannot be freed
+// between finding it and using it, so callers get a pointer that stays valid
+// until they tty_put() it.
+//
+// `expected`, when non-NULL, must match the registered tty or the lookup fails.
+// It is only ever compared, never dereferenced, so a caller may pass a stale
+// pointer safely -- that is the point: it keeps a recycled device number from
+// silently handing back some *other* terminal's tty.
+struct tty *tty_lookup_ref(int type, int num, struct tty *expected);
+// Drop a reference taken by tty_lookup_ref. Takes ttys_lock itself, so unlike
+// tty_release it must be called WITHOUT it.
+void tty_put(struct tty *tty);
+
 extern struct dev_ops tty_dev;
 extern struct dev_ops ptmx_dev;
 
