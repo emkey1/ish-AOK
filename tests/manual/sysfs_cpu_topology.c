@@ -409,12 +409,21 @@ static void test_agrees_with_cpuinfo(const struct cpuset *online) {
         return;
     }
     int processors = 0;
+    int harts = 0;
     char line[512];
     while (fgets(line, sizeof(line), f) != NULL) {
-        if (strncmp(line, "processor", 9) == 0 || strncmp(line, "hart", 4) == 0)
+        if (strncmp(line, "processor", 9) == 0)
             processors++;
+        else if (strncmp(line, "hart", 4) == 0)
+            harts++;
     }
     fclose(f);
+    // riscv64 emits BOTH a "processor" and a "hart" line per CPU -- that is the
+    // real riscv kernel's format, and iSH matches it -- so counting either kind
+    // as a CPU counts every riscv64 CPU twice. Count processors, falling back to
+    // harts only for a kernel that omits the processor line entirely.
+    if (processors == 0)
+        processors = harts;
     checkf(processors == online->count,
            "/proc/cpuinfo lists %d CPUs and sysfs online lists %d",
            processors, online->count);
