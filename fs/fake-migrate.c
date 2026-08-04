@@ -73,8 +73,107 @@ static char *fake_path_identity(const char *path, char *buf, unsigned long bufsi
     return buf;
 }
 
-// Find the on-disk name (into name_out) of the directory entry matching name
-// case-insensitively (ASCII). Returns true if found.
+// One directory's entry names, held across consecutive rows of the migration
+// query.
+//
+// Each escaped path used to cost a full readdir of its parent, so the pass was
+// O(escaped paths x entries in their directory): a single directory with a few
+// thousand escape-needing names (any uppercase letter or byte >= 0x80 qualifies,
+// so this is ordinary content, not exotic filenames) took millions of dirent
+// comparisons and thousands of getdirentries syscalls. Boot runs this inside
+// mount_root on the main thread, so on a large filesystem RunningBoard killed
+// the app before it finished (0xdead10cc, thread 0 in readdir under
+// find_ondisk_name).
+//
+// The query is "order by path", so every path in a directory arrives in one
+// consecutive run: caching just the most recent directory turns that into one
+// readdir per directory.
+struct migrate_dir_cache {
+    char dir[MAX_PATH + 1];
+    bool loaded;
+    // Set only when the listing is known to hold every entry. A partial listing
+    // must never be consulted: a miss on a name that is really there sends the
+    // caller down the twin-fallback path and it hardlinks a file it should have
+    // renamed. On a short read we fall back to re-reading the directory.
+    bool complete;
+    char **names;
+    size_t count;
+    size_t cap;
+};
+
+static void dir_cache_reset(struct migrate_dir_cache *cache) {
+    for (size_t i = 0; i < cache->count; i++)
+        free(cache->names[i]);
+    free(cache->names);
+    cache->names = NULL;
+    cache->count = cache->cap = 0;
+    cache->loaded = false;
+    cache->complete = false;
+}
+
+// Load host_dir's entry names, reusing the cache when it is already the
+// directory we want. Returns false only if the directory can't be read.
+static bool dir_cache_load(struct migrate_dir_cache *cache, int root_fd, const char *host_dir) {
+    if (cache->loaded && strcmp(cache->dir, host_dir) == 0)
+        return true;
+    dir_cache_reset(cache);
+    if (strlen(host_dir) >= sizeof(cache->dir))
+        return false;
+
+    int dirfd = openat(root_fd, host_dir[0] == '\0' ? "." : host_dir, O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0)
+        return false;
+    DIR *dir = fdopendir(dirfd);
+    if (dir == NULL) {
+        close(dirfd);
+        return false;
+    }
+    bool complete = true;
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (cache->count == cache->cap) {
+            size_t cap = cache->cap == 0 ? 64 : cache->cap * 2;
+            char **names = realloc(cache->names, cap * sizeof(*names));
+            if (names == NULL) {
+                complete = false;
+                break;
+            }
+            cache->names = names;
+            cache->cap = cap;
+        }
+        char *name = strdup(ent->d_name);
+        if (name == NULL) {
+            complete = false;
+            break;
+        }
+        cache->names[cache->count++] = name;
+    }
+    closedir(dir);
+    strcpy(cache->dir, host_dir);
+    cache->loaded = true;
+    cache->complete = complete;
+    return true;
+}
+
+// Find the on-disk name (into name_out) of the cached entry matching name
+// case-insensitively (ASCII). Returns true if found. Scans in readdir order and
+// returns the first match, exactly as the per-call readdir it replaces did --
+// which case-twin wins must not change.
+static bool dir_cache_find(const struct migrate_dir_cache *cache, const char *name, char *name_out, size_t name_out_size) {
+    for (size_t i = 0; i < cache->count; i++) {
+        if (strcasecmp(cache->names[i], name) == 0) {
+            size_t len = strlen(cache->names[i]);
+            if (len >= name_out_size)
+                return false;
+            memcpy(name_out, cache->names[i], len + 1);
+            return true;
+        }
+    }
+    return false;
+}
+
+// The original per-call directory scan, kept for the case where the listing
+// couldn't be held in memory.
 static bool find_ondisk_name(int root_fd, const char *host_dir, const char *name, char *name_out, size_t name_out_size) {
     int dirfd = openat(root_fd, host_dir[0] == '\0' ? "." : host_dir, O_RDONLY | O_DIRECTORY);
     if (dirfd < 0)
@@ -98,6 +197,35 @@ static bool find_ondisk_name(int root_fd, const char *host_dir, const char *name
     }
     closedir(dir);
     return found;
+}
+
+// Resolve through the cached listing when it is known complete, and otherwise
+// by re-reading the directory, so a short listing costs speed and never
+// correctness.
+static bool lookup_ondisk_name(struct migrate_dir_cache *cache, int root_fd, const char *host_dir, const char *name, char *name_out, size_t name_out_size) {
+    if (dir_cache_load(cache, root_fd, host_dir) && cache->complete)
+        return dir_cache_find(cache, name, name_out, name_out_size);
+    return find_ondisk_name(root_fd, host_dir, name, name_out, name_out_size);
+}
+
+// Keep the listing honest after the pass renames an entry in it. Without this a
+// later case-twin in the same directory would match the name we just moved away
+// and be misclassified as sharing a host file with it.
+static void dir_cache_note_rename(struct migrate_dir_cache *cache, const char *from, const char *to) {
+    for (size_t i = 0; i < cache->count; i++) {
+        if (strcmp(cache->names[i], from) != 0)
+            continue;
+        char *name = strdup(to);
+        if (name == NULL) {
+            // Can't record it; drop the whole listing rather than leave a stale
+            // name behind, and the next lookup re-reads the directory.
+            dir_cache_reset(cache);
+            return;
+        }
+        free(cache->names[i]);
+        cache->names[i] = name;
+        return;
+    }
 }
 
 // Give a collision twin its own host entry under host_dst: the equivalent-
@@ -124,6 +252,7 @@ static void migrate_host_names(struct fakefs_db *fs, int root_fd,
         printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
         return;
     }
+    struct migrate_dir_cache cache = {0};
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const void *path_blob = sqlite3_column_blob(stmt, 0);
         int path_len = sqlite3_column_bytes(stmt, 0);
@@ -168,7 +297,7 @@ static void migrate_host_names(struct fakefs_db *fs, int root_fd,
         // name to tell those apart (and to detect an already-migrated entry
         // after an interrupted run).
         char ondisk[NAME_MAX + 1];
-        if (!find_ondisk_name(root_fd, host_dir, src_base, ondisk, sizeof(ondisk))) {
+        if (!lookup_ondisk_name(&cache, root_fd, host_dir, src_base, ondisk, sizeof(ondisk))) {
             struct stat st;
             if (fstatat(root_fd, host_dst, &st, AT_SYMLINK_NOFOLLOW) == 0)
                 continue; // already migrated (resumed run)
@@ -190,6 +319,8 @@ static void migrate_host_names(struct fakefs_db *fs, int root_fd,
             // The normal case: the file is really ours; move it.
             if (renameat(root_fd, host_src, root_fd, host_dst) < 0)
                 printk("fakefs migrate: rename %s -> %s failed: %d\n", host_src, host_dst, errno);
+            else
+                dir_cache_note_rename(&cache, src_base, host_base);
             continue;
         }
 
@@ -202,6 +333,7 @@ static void migrate_host_names(struct fakefs_db *fs, int root_fd,
         }
         migrate_twin_fallback(root_fd, host_src, host_dst, &st);
     }
+    dir_cache_reset(&cache);
     sqlite3_finalize(stmt);
 }
 
