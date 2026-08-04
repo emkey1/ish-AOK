@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
     if (geteuid() != 0) {
         // Creating and moving a mount needs privilege, so unprivileged this can
         // only ever report EACCES from FSCONFIG_CMD_CREATE. Skip rather than
-        // fail: the iSH suite runs as uid 0, and failing here reads like a real
+        // fail: the iSH-AOK suite runs as uid 0, and failing here reads like a real
         // mount-API regression when it is just the account it was launched under.
         printf("fsopen_move_mount: SKIP (not privileged: euid=%d)\n", (int) geteuid());
         return 0;

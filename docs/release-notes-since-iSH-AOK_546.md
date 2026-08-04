@@ -157,7 +157,7 @@ product bugs:
   enough that a starvation bug under saturation cannot be fully excluded.
 - **External display support is not in this release.** See below.
 - `^C`/`^Z` can echo as a placeholder glyph rather than `^C`/`^Z` on a tty whose
-  `echoctl` is off. iSH seeds `ECHOCTL` on and echoes correctly in both modes --
+  `echoctl` is off. iSH-AOK seeds `ECHOCTL` on and echoes correctly in both modes --
   verified directly against the line discipline -- so this is the login path in
   that particular root clearing it. `stty echoctl` restores it. Not a regression:
   the tty work this release changed `cflags` only, never `lflags`.
