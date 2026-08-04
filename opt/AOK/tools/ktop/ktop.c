@@ -138,6 +138,19 @@ static const char *detect_arch(pid_t pid) {
 
 // ---- /proc/<pid>/stat parsing ---------------------------------------------
 
+// /proc/<pid>/cmdline and the comm field carry whatever bytes the process chose
+// to put there. A raw newline ends the row in the middle of the table and a
+// carriage return rewrites it from column 0, so one process with either in its
+// argv corrupts the whole display until the next full redraw. Map every control
+// byte to a space, which is what top does.
+static void sanitize_display(char *s) {
+    for (; *s != '\0'; s++) {
+        unsigned char c = (unsigned char) *s;
+        if (c < 0x20 || c == 0x7f)
+            *s = ' ';
+    }
+}
+
 // Reads one process's fields we need. /proc/<pid>/stat's 2nd field (comm) is
 // the only one that can contain spaces or parens, so we locate it by the
 // *last* ')' on the line rather than naive whitespace splitting.
@@ -163,6 +176,7 @@ static bool read_proc_stat(pid_t pid, struct proc_sample *out) {
         comm_len = sizeof(out->comm) - 1;
     memcpy(out->comm, lparen + 1, comm_len);
     out->comm[comm_len] = '\0';
+    sanitize_display(out->comm);
 
     out->pid = pid;
 
@@ -247,6 +261,13 @@ static uid_t read_proc_uid(pid_t pid) {
     return uid;
 }
 
+// Width of everything to the left of the Command column. Kept in one place so
+// the header and the rows agree on where Command starts and how wide it is.
+static int command_column_start(void) {
+    return 6 + 1 + 8 + 1 + 3 + 1 + 3 + 1 + 7 + 1 + 7 + 1 + 1 + 1
+         + 7 + 1 + 5 + 1 + 5 + 1 + 8 + 1;
+}
+
 static void read_proc_cmdline(pid_t pid, char *buf, size_t bufsize) {
     buf[0] = '\0';
     char path[64];
@@ -267,6 +288,7 @@ static void read_proc_cmdline(pid_t pid, char *buf, size_t bufsize) {
             buf[i] = ' ';
     }
     buf[n] = '\0';
+    sanitize_display(buf);
     // Trim trailing separator-turned-space noise.
     while (n > 0 && (buf[n - 1] == ' ' || buf[n - 1] == '\0'))
         buf[--n] = '\0';
@@ -812,9 +834,7 @@ static void draw_column_header(int cols) {
            sort_mode == SORT_MEM ? C_HDR_SORT : "", "%MEM", C_RESET, C_HDR,
            sort_mode == SORT_TIME ? C_HDR_SORT : "", "TIME+", C_RESET, C_HDR);
     // Pad "Command" out to the full width so the green bar spans the line.
-    int used = 6 + 1 + 8 + 1 + 3 + 1 + 3 + 1 + 7 + 1 + 7 + 1 + 1 + 1
-             + 7 + 1 + 5 + 1 + 5 + 1 + 8 + 1;
-    int rest = cols - used;
+    int rest = cols - command_column_start();
     if (rest < 7)
         rest = 7;
     printf("%-*.*s%s\n", rest, rest, "Command", C_RESET);
@@ -908,13 +928,21 @@ static void draw_interactive(struct proc_sample *procs, int n,
         const char *cmd = (show_cmdline && procs[i].cmdline[0] != '\0')
             ? procs[i].cmdline : procs[i].comm;
 
+        // Truncate the command to the column the header reserved for it. The
+        // whole-line clamp below is not enough on its own: a command longer
+        // than the line buffer would otherwise be cut at an arbitrary point,
+        // and the selected row's padding is computed from this length.
+        int cmd_width = cols - command_column_start();
+        if (cmd_width < 7)
+            cmd_width = 7;
+
         char line[512];
         int len = snprintf(line, sizeof(line),
-                           "%6d %-8.8s %3ld %3ld %7s %7s %1s %-7s %5.1f %5.1f %8s %s",
+                           "%6d %-8.8s %3ld %3ld %7s %7s %1s %-7s %5.1f %5.1f %8s %.*s",
                            (int) procs[i].pid, userbuf,
                            procs[i].priority, procs[i].nice,
                            virt, res, state, procs[i].arch,
-                           cpu_pct, mem_pct, timebuf, cmd);
+                           cpu_pct, mem_pct, timebuf, cmd_width, cmd);
         if (len > cols)
             len = cols;
         if (i == selected)
