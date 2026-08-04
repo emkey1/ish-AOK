@@ -24,6 +24,14 @@
 
 int main(int argc, char **argv) {
     test_init(argc, argv);
+    if (geteuid() != 0) {
+        // Changing a file's owner needs privilege, so unprivileged this can only
+        // ever report EPERM. Skip rather than fail: the iSH suite runs as uid 0,
+        // and failing here reads like a real AT_EMPTY_PATH regression when it is
+        // just the account the suite was launched under.
+        printf("at_empty_path: SKIP (not privileged: euid=%d)\n", (int) geteuid());
+        return 0;
+    }
     const char *path = "/tmp/at_empty_path.dat";
     unlink(path);
 
