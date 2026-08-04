@@ -4,6 +4,10 @@
 #include <stdint.h>
 
 char *printHostInfo(void);
+// Identifies the build itself, for uname -v. On iOS that is the app's version
+// and build number ("1.3 (546)"), which is what tells you which build a device
+// is actually running; elsewhere it is the compile timestamp. Caller frees.
+char *copyBuildVersion(void);
 char *copyHostArchitecture(void);
 char *copyHostMachineIdentifier(void);
 char *copyHostDeviceName(void);

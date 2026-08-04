@@ -2,6 +2,7 @@
 #include <string.h>
 #include "kernel/calls.h"
 #include "kernel/uts.h"
+#include "kernel/hostinfo.h"
 #include "task.h"
 #include "platform/platform.h"
 
@@ -100,21 +101,12 @@ void do_uname(struct uname *uts) {
     char hostname[sizeof(uts->hostname)];
     get_current_hostname(hostname, sizeof(hostname));
     
-    // Get current date and format it in a sane way.
-    char build_date[100];
-    time_t now = time(NULL);
-    if (now == (time_t)-1) {
-        printk("ERROR: time failed\n");
-    }
-
-    struct tm *t = localtime(&now);
-    if (t == NULL) {
-        printk("ERROR: localtime failed\n");
-    }
-
-    if (strftime(build_date, sizeof(build_date), "%Y-%m-%d %H:%M", t) == 0) {
-        printk("ERROR: strftime failed\n");
-    }
+    // uname -v is a build identifier: on Linux it is what tells you which
+    // kernel build you are running. This used to format time(NULL), so it
+    // reported the current clock as if it were a build date and moved every
+    // time you asked -- useless for the one thing it is for, and actively
+    // misleading when working out which build a device has installed.
+    char *build_version = copyBuildVersion();
 
     const char *uname_version = "iSH-AOK"; // Version should be defined or externally managed
 
@@ -133,7 +125,8 @@ void do_uname(struct uname *uts) {
     strncpy(uts->release, "5.20.66-ish_aok", sizeof(uts->release));
     strncpy(uts->system, "Linux", sizeof(uts->system));
     snprintf(uts->hostname, sizeof(uts->hostname), "%s", hostname);
-    snprintf(uts->version, sizeof(uts->version), "%s %s", uname_version, build_date);
+    snprintf(uts->version, sizeof(uts->version), "%s %s", uname_version, build_version);
+    free(build_version);
 }
 
 dword_t sys_uname(addr_t uts_addr) {

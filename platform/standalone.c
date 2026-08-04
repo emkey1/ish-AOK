@@ -40,6 +40,13 @@ static char *dup_or_unknown(const char *value) {
     return strdup(value);
 }
 
+char *copyBuildVersion(void) {
+    // No app bundle out here, so the compile timestamp is the best available
+    // identifier. Note it is this file's compile time: it moves whenever
+    // standalone.c is rebuilt, which for a release build is the whole tree.
+    return strdup(__DATE__ " " __TIME__);
+}
+
 char *copyHostArchitecture(void) {
     struct utsname uts;
     if (uname(&uts) == 0)

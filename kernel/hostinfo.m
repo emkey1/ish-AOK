@@ -590,6 +590,19 @@ char* printHostInfo(void) {
     return cString;
 }
 
+char *copyBuildVersion(void) {
+    NSBundle *bundle = [NSBundle mainBundle];
+    NSString *shortVersion = [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+    NSString *build = [bundle objectForInfoDictionaryKey:@"CFBundleVersion"];
+    if (shortVersion.length > 0 && build.length > 0)
+        return strdup([[NSString stringWithFormat:@"%@ (%@)", shortVersion, build] UTF8String]);
+    if (build.length > 0)
+        return strdup([build UTF8String]);
+    if (shortVersion.length > 0)
+        return strdup([shortVersion UTF8String]);
+    return strdup(__DATE__ " " __TIME__);
+}
+
 char *copyHostArchitecture(void) {
     const char *archName = NULL;
     const NXArchInfo *archInfo = NXGetLocalArchInfo();
