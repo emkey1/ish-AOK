@@ -164,7 +164,6 @@
 		BB28C79A26896B1F00BDC834 /* Terminal.m in Sources */ = {isa = PBXBuildFile; fileRef = BB0FC5911F980A6B00803272 /* Terminal.m */; };
 		BB28C79B26896B1F00BDC834 /* FontPickerViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BB101B372364CF57000A93BC /* FontPickerViewController.m */; };
 		BB28C79D26896B1F00BDC834 /* SceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = BBCC9D952365430800424C83 /* SceneDelegate.m */; };
-		C0A000540254000100000003 /* ExternalDisplaySceneDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A000540254000100000002 /* ExternalDisplaySceneDelegate.m */; };
 		BB28C79E26896B1F00BDC834 /* AboutExternalKeyboardViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BB82A7FC21B4C2E8006AA5FD /* AboutExternalKeyboardViewController.m */; };
 		BB28C79F26896B1F00BDC834 /* PassthroughView.m in Sources */ = {isa = PBXBuildFile; fileRef = BB149E7F256DC97C00F57815 /* PassthroughView.m */; };
 		BB28C7A026896B1F00BDC834 /* UserPreferences.m in Sources */ = {isa = PBXBuildFile; fileRef = 8632A7BE219A59FB00F02325 /* UserPreferences.m */; };
@@ -822,8 +821,6 @@
 		BBC8298024EDACBB009D042C /* iinhash.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = iinhash.png; sourceTree = "<group>"; };
 		BBC8298624EE5853009D042C /* metal.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = metal.png; sourceTree = "<group>"; };
 		BBCC9D942365430800424C83 /* SceneDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SceneDelegate.h; sourceTree = "<group>"; };
-		C0A000540254000100000001 /* ExternalDisplaySceneDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ExternalDisplaySceneDelegate.h; sourceTree = "<group>"; };
-		C0A000540254000100000002 /* ExternalDisplaySceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ExternalDisplaySceneDelegate.m; sourceTree = "<group>"; };
 		BBCC9D952365430800424C83 /* SceneDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SceneDelegate.m; sourceTree = "<group>"; };
 		BBCED895255BB65A00CA0701 /* NSObject+SaneKVO.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "NSObject+SaneKVO.h"; sourceTree = "<group>"; };
 		BBCED896255BB65A00CA0701 /* NSObject+SaneKVO.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "NSObject+SaneKVO.m"; sourceTree = "<group>"; };
@@ -1223,8 +1220,6 @@
 				BB565EA32734F1FB00C93EAE /* CurrentRoot.m */,
 				BBCC9D942365430800424C83 /* SceneDelegate.h */,
 				BBCC9D952365430800424C83 /* SceneDelegate.m */,
-				C0A000540254000100000001 /* ExternalDisplaySceneDelegate.h */,
-				C0A000540254000100000002 /* ExternalDisplaySceneDelegate.m */,
 				C0A000032E00000300000002 /* WorkspaceViewController.h */,
 				C0A000032E00000300000003 /* WorkspaceViewController.m */,
 				BB792B561F96D90D00FFB7A4 /* TerminalViewController.h */,
@@ -2553,7 +2548,6 @@
 				BB28C79B26896B1F00BDC834 /* FontPickerViewController.m in Sources */,
 				BBC3863E276817A900CC8C2E /* UpgradeRootViewController.m in Sources */,
 				BB28C79D26896B1F00BDC834 /* SceneDelegate.m in Sources */,
-				C0A000540254000100000003 /* ExternalDisplaySceneDelegate.m in Sources */,
 				5D7E7E152B1FD4890087F2E0 /* ro_locks.c in Sources */,
 				BB28C79E26896B1F00BDC834 /* AboutExternalKeyboardViewController.m in Sources */,
 				BB28C79F26896B1F00BDC834 /* PassthroughView.m in Sources */,

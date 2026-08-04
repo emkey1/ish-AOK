@@ -251,8 +251,6 @@ static NSArray<NSString *> *ISHSessionCommandWithFallback(NSArray<NSString *> *c
 
 @end
 
-NSString *const ISHTerminalViewControllerDidAttachTerminalNotification = @"ISHTerminalViewControllerDidAttachTerminal";
-
 @implementation TerminalViewController
 
 static const NSInteger kMinimumTerminalFontSize = 1;
@@ -345,8 +343,6 @@ static const NSInteger kMaximumTerminalFontSize = 72;
                                             @"type": @(_terminal.type),
                                             @"number": @(_terminal.number)}];
     self.termView.terminal = _terminal;
-    [NSNotificationCenter.defaultCenter postNotificationName:ISHTerminalViewControllerDidAttachTerminalNotification
-                                                      object:self];
 }
 
 - (void)focusTerminal {
@@ -1815,30 +1811,6 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     }
     self.termView.overrideFontSize = 0;
     UserPreferences.shared.fontSize = @(clampedFontSize);
-}
-
-#pragma mark External display
-
-- (BOOL)relocateTerminalContentToExternalView:(UIView *)hostView {
-    if (hostView == nil)
-        return NO;
-    [self loadViewIfNeeded];
-    // Nothing to hand over until a session has attached a terminal; the caller
-    // retries when one appears.
-    if (self.termView.terminal == nil)
-        return NO;
-    [self.termView relocateContentToView:hostView];
-    return YES;
-}
-
-- (void)restoreTerminalContentFromExternalView:(UIView *)hostView {
-    if (!self.isViewLoaded)
-        return;
-    [self.termView restoreContentFromView:hostView];
-}
-
-- (BOOL)rendersOnExternalDisplay {
-    return self.isViewLoaded && self.termView.rendersOnExternalDisplay;
 }
 
 - (NSArray<UIKeyCommand *> *)keyCommands {

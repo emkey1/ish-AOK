@@ -14,11 +14,6 @@ typedef NS_ENUM(NSInteger, ISHFreshSessionTerminalDisplayMode) {
     ISHFreshSessionTerminalDisplayModeSystemConsole,
 };
 
-// Posted (object: the controller) whenever a controller attaches a terminal to
-// its view. An external display scene can connect before any session exists, so
-// it listens for this to know when there is finally something to relocate.
-extern NSString *const ISHTerminalViewControllerDidAttachTerminalNotification;
-
 @interface TerminalViewController : UIViewController
 
 @property (nonatomic) Terminal *terminal;
@@ -53,15 +48,6 @@ extern NSString *const ISHTerminalViewControllerDidAttachTerminalNotification;
 // host when its window is closed via the × so the shell doesn't keep running headless. Safe to
 // call repeatedly; a no-op once the session is already gone.
 - (void)disposeSessionForWorkspaceClose;
-
-// External display support. Relocating hands the terminal's rendering to a view
-// living on the external screen; this controller keeps the keyboard, the
-// accessory bar and first responder, so input is unaffected. Returns NO if
-// there is nothing to relocate (no terminal attached yet), which lets the
-// external scene retry once a session exists.
-- (BOOL)relocateTerminalContentToExternalView:(UIView *)hostView;
-- (void)restoreTerminalContentFromExternalView:(UIView *)hostView;
-@property (readonly, nonatomic) BOOL rendersOnExternalDisplay;
 
 @end
 

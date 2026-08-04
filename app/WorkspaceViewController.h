@@ -42,7 +42,6 @@ extern NSString *_Nullable ISHWorkspaceToolIdentifierForViewController(UIViewCon
 @end
 
 @class WorkspaceViewController;
-@class TerminalViewController;
 
 // Base class for every Workspace applet's content view controller. Provides a
 // themed background, `toolContentView` (the safe-area-inset area a subclass
@@ -82,17 +81,6 @@ extern NSString *_Nullable ISHWorkspaceToolIdentifierForViewController(UIViewCon
 // through -- see -runLauncherShortcutWithCommand:title: in the .m.
 - (void)launchTerminalWithCommand:(NSString *)command title:(nullable NSString *)title;
 
-// The terminal in the frontmost desktop terminal window, or nil when the
-// desktop has none open. Workspace terminals are children of contained window
-// views rather than a scene's root view controller, so an external display has
-// no other way to find one.
-@property (nonatomic, readonly, nullable) TerminalViewController *frontmostHostedTerminalViewController;
-
 @end
-
-// The Workspace controller inside `viewController`'s navigation/presentation
-// chain, or nil. Handles the usual shape -- a UINavigationController whose top
-// view controller is the Workspace.
-extern WorkspaceViewController *_Nullable ISHWorkspaceViewControllerForViewController(UIViewController *_Nullable viewController);
 
 NS_ASSUME_NONNULL_END

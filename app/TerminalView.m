@@ -40,8 +40,6 @@ struct rowcol {
 @property (nonatomic) NSMutableArray *functionKeys;
 @property ScrollbarView *scrollbarView;
 @property (nonatomic) BOOL terminalFocused;
-@property (weak, nonatomic) UIView *externalHostView;
-@property (nonatomic) UILabel *externalDisplayPlaceholder;
 
 @property (nullable) NSString *markedText;
 @property (nullable) NSString *selectedText;
@@ -146,26 +144,13 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
     [self installTerminalView];
 }
 
-// Where the webView currently belongs: the external display's container while
-// the terminal is relocated there, the local scrollbar view otherwise. Both are
-// legal hosts, so the install/uninstall assertions below check against this
-// rather than against scrollbarView directly.
-- (UIView *)contentHostView {
-    return self.externalHostView ?: self.scrollbarView;
-}
-
-- (BOOL)rendersOnExternalDisplay {
-    return self.externalHostView != nil;
-}
-
 - (void)installTerminalView {
-    UIView *host = self.contentHostView;
     UIView *superview = self.terminal.webView.superview;
     if (superview != nil) {
-        NSAssert(superview == host, @"installing terminal that is already installed elsewhere");
+        NSAssert(superview == self.scrollbarView, @"installing terminal that is already installed elsewhere");
         ISHRecordTerminalViewEvent(@"terminalView.install.skip", self.terminal,
                                    @{@"reason": @"already-installed",
-                                     @"sameSuperview": superview == host ? @"yes" : @"no"} );
+                                     @"sameSuperview": superview == self.scrollbarView ? @"yes" : @"no"} );
         return;
     }
 
@@ -181,17 +166,13 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
     for (int i = 0; i < sizeof(HANDLERS)/sizeof(HANDLERS[0]); i++) {
         [webView.configuration.userContentController addScriptMessageHandler:handler name:HANDLERS[i]];
     }
-    webView.frame = host.bounds;
+    webView.frame = self.bounds;
     self.opaque = webView.opaque = NO;
     webView.backgroundColor = UIColor.clearColor;
     webView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
-    // Only the local host doubles as the scroll container. On the external
-    // display the webView must not be dragged around by contentOffset, but the
-    // scrollbar view stays live on the device so its scroll gestures still
-    // reach the terminal through the newScrollTop handler below.
-    self.scrollbarView.contentView = host == self.scrollbarView ? webView : nil;
-    [host addSubview:webView];
+    self.scrollbarView.contentView = webView;
+    [self.scrollbarView addSubview:webView];
     [self syncTerminalFocus];
     [self.terminal requestRefresh];
     ISHRecordTerminalViewEvent(@"terminalView.install.end", _terminal, nil);
@@ -200,7 +181,7 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
 - (void)uninstallTerminalView {
     // remove old terminal
     UIView *superview = _terminal.webView.superview;
-    if (superview != self.contentHostView) {
+    if (superview != self.scrollbarView) {
         NSAssert(superview == nil, @"uninstalling terminal that is installed elsewhere");
         ISHRecordTerminalViewEvent(@"terminalView.uninstall.skip", _terminal,
                                    @{@"reason": superview == nil ? @"already-detached" : @"installed-elsewhere"} );
@@ -217,85 +198,10 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
     ISHRecordTerminalViewEvent(@"terminalView.uninstall.end", _terminal, nil);
 }
 
-#pragma mark External display
-
-- (void)relocateContentToView:(UIView *)hostView {
-    NSAssert(NSThread.isMainThread, @"This method needs to be called on the main thread");
-    if (hostView == nil || hostView == self.externalHostView)
-        return;
-    // The webView takes the host's bounds on install, so make sure the host has
-    // settled at its real size first.
-    [hostView layoutIfNeeded];
-    [self _moveContentToHostView:hostView];
-    [self _showExternalDisplayPlaceholder:YES];
-}
-
-- (void)restoreContentFromView:(UIView *)hostView {
-    NSAssert(NSThread.isMainThread, @"This method needs to be called on the main thread");
-    if (self.externalHostView == nil || self.externalHostView != hostView)
-        return;
-    [self _moveContentToHostView:nil];
-    [self _showExternalDisplayPlaceholder:NO];
-}
-
-- (void)_moveContentToHostView:(UIView *)hostView {
-    // Take the webView out of the old host before the host changes, so the
-    // uninstall path still recognises where it is installed.
-    BOOL wasInstalled = _terminal != nil && _terminal.webView.superview == self.contentHostView;
-    if (wasInstalled)
-        [self uninstallTerminalView];
-    self.externalHostView = hostView;
-    ISHRecordTerminalViewEvent(@"terminalView.relocate", _terminal,
-                               @{@"destination": hostView != nil ? @"external" : @"local",
-                                 @"wasInstalled": wasInstalled ? @"yes" : @"no"} );
-    if (_terminal != nil && (wasInstalled || _terminal.loaded))
-        [self installTerminalView];
-    // The tty size follows the webView: hterm reports its new geometry through
-    // onTerminalResize once the re-parented webView lays out, and Terminal
-    // pushes that to the winsize. Nothing here needs to compute rows/cols.
-}
-
-- (void)_showExternalDisplayPlaceholder:(BOOL)visible {
-    if (!visible) {
-        [self.externalDisplayPlaceholder removeFromSuperview];
-        self.externalDisplayPlaceholder = nil;
-        return;
-    }
-    if (self.externalDisplayPlaceholder != nil)
-        return;
-    UILabel *label = [[UILabel alloc] initWithFrame:self.bounds];
-    label.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    label.textAlignment = NSTextAlignmentCenter;
-    label.numberOfLines = 0;
-    label.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    label.text = @"Showing on external display.\nKeep typing here.";
-    [self _updatePlaceholderColor];
-    // Below the scrollbar view, which stays on top so its scroll gestures keep
-    // driving the terminal that is now rendering elsewhere.
-    [self insertSubview:label atIndex:0];
-    self.externalDisplayPlaceholder = label;
-}
-
-// Sits on the terminal's own background, so it has to be coloured from the
-// palette rather than a system label colour -- a dark theme under a light
-// system appearance (or the reverse) rendered it nearly invisible.
-- (void)_updatePlaceholderColor {
-    if (self.externalDisplayPlaceholder == nil)
-        return;
-    UserPreferences *prefs = UserPreferences.shared;
-    Palette *palette = prefs.palette;
-    if (self.overrideAppearance != OverrideAppearanceNone) {
-        palette = self.overrideAppearance == OverrideAppearanceLight ? prefs.theme.lightPalette : prefs.theme.darkPalette;
-    }
-    UIColor *foreground = [[UIColor alloc] ish_initWithHexString:palette.foregroundColor];
-    self.externalDisplayPlaceholder.textColor = [foreground ?: UIColor.grayColor colorWithAlphaComponent:0.65];
-}
-
 #pragma mark Styling
 
 - (void)_updateStyle {
     NSAssert(NSThread.isMainThread, @"This method needs to be called on the main thread");
-    [self _updatePlaceholderColor]; // tracks the theme even while the terminal is away
     if (!self.terminal.loaded)
         return;
     UserPreferences *prefs = [UserPreferences shared];

@@ -87,17 +87,6 @@
 					<string>Terminal</string>
 				</dict>
 			</array>
-			<key>UIWindowSceneSessionRoleExternalDisplayNonInteractive</key>
-			<array>
-				<dict>
-					<key>UISceneClassName</key>
-					<string>UIWindowScene</string>
-					<key>UISceneConfigurationName</key>
-					<string>External Display</string>
-					<key>UISceneDelegateClassName</key>
-					<string>ExternalDisplaySceneDelegate</string>
-				</dict>
-			</array>
 		</dict>
 	</dict>
 	<key>UIBackgroundModes</key>

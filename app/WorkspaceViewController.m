@@ -2550,15 +2550,6 @@ static UIViewController *ISHCreateWorkspaceToolViewController(NSString *toolIden
     return nil;
 }
 
-WorkspaceViewController *ISHWorkspaceViewControllerForViewController(UIViewController *viewController) {
-    UIViewController *candidate = viewController;
-    if ([candidate isKindOfClass:UINavigationController.class])
-        candidate = ((UINavigationController *) candidate).topViewController ?: candidate;
-    if ([candidate isKindOfClass:WorkspaceViewController.class])
-        return (WorkspaceViewController *) candidate;
-    return nil;
-}
-
 NSString *ISHWorkspaceToolIdentifierForViewController(UIViewController *viewController) {
     if ([viewController isKindOfClass:NSClassFromString(@"LLMClientViewController")])
         return ISHWorkspaceToolLLMIdentifier;
@@ -3770,10 +3761,6 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
         return windowView;
     }
     return nil;
-}
-
-- (TerminalViewController *)frontmostHostedTerminalViewController {
-    return [self frontmostDesktopTerminalWindow].hostedTerminalViewController;
 }
 
 - (ISHWorkspaceContainedWindowView *)desktopWindowForToolIdentifier:(NSString *)toolIdentifier {

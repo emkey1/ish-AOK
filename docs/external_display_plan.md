@@ -116,54 +116,49 @@ types on the phone; output renders on the big screen.
 - Scene lifecycle: the external scene can connect before *or* after the
   terminal scene, and can disconnect while the app is backgrounded.
 
-## Implementation notes
-
-Implemented as designed (`ExternalDisplaySceneDelegate`, `TerminalView`'s
-external-host mode, the plist entry, the device-side placeholder). Two things
-turned out differently from the plan:
-
-- **Sizing needed no new code.** hterm re-lays out when the webView's frame
-  changes and reports the new geometry through `onTerminalResize`, which
-  `Terminal syncWindowSize` already pushes to the winsize. Re-parenting the
-  webView is enough; `stty size` follows the external display and comes back
-  when it is unplugged.
-- **The external container must be constrained, not autoresized.** Sizing it
-  from `rootViewController.view.bounds` before the window adopts the controller
-  bakes in a placeholder size, which showed up as the terminal rendering into a
-  720x480 corner of a 1080p display.
-
-Also worth knowing: iOS can stand up a replacement external scene *before*
-tearing the old one down when the display renegotiates its mode, so the restore
-path is keyed on the host view (`restoreContentFromView:`) rather than
-unconditionally pulling the terminal back to the device.
-
-## Workspace, and the idle display
-
-Declaring the external-display scene is app-wide: iOS stops mirroring the
-device whether or not the app has anything to put over there. So every mode
-needs an answer, not just the full-screen terminal.
-
-- **Workspace** hands over the frontmost desktop terminal window. Its terminals
-  are children of contained window views rather than a scene's root view
-  controller, so `WorkspaceViewController` exposes
-  `frontmostHostedTerminalViewController` for the lookup to find.
-- The lookup asks **what is frontmost first** (`ISHActivePresentationViewController`)
-  and only then falls back to `currentTerminalViewController`. Workspace is
-  usually *presented over* a terminal scene, so consulting the global first
-  handed the display a terminal that was covered up while the Workspace
-  terminal stayed in its postage-stamp window.
-- When there is nothing to hand over -- a Workspace desktop with no terminal
-  window, or the standalone Wayland Display -- the display shows an idle
-  message rather than an unexplained blank field. It comes back on its own when
-  the content leaves, and the display re-attaches to another terminal if one is
-  open.
-- Text on both the idle message and the device-side placeholder is coloured
-  from the **palette foreground**, not a system label colour: these sit on the
-  terminal's own background, and a dark theme under a light system appearance
-  (or the reverse) rendered them nearly invisible.
-
 ## Out of scope
 
 - Interactive external displays (the non-interactive role is what iOS gives
   for this hardware path).
 - Changing Stage Manager behaviour, which already works.
+
+## Status: implemented, then pulled from release 546
+
+The implementation (`57380ba6`, `cc0b5b21`) was reverted before tagging 546. It
+worked, but device testing on an M4 iPad with a real monitor found it conflicts
+with how iPadOS already uses an external display, and the conflict looked worse
+than the feature was worth shipping unresolved.
+
+Observed on hardware, in Workspace mode:
+
+- the app would not open on the external display at all;
+- it could be dragged there, but resized to a portrait-iPad shape unless full
+  screen;
+- opening a second iSH-AOK window on the built-in display dragged the external
+  one back to the internal display;
+- opening a terminal applet while the app was on the external display disturbed
+  the primary display.
+
+**The likely cause, not yet proven.** 545 declared no external-display scene at
+all, so an iPad got plain Stage Manager behaviour: drag the window across and
+use it. `57380ba6` added a
+`UIWindowSceneSessionRoleExternalDisplayNonInteractive` scene, and iPadOS
+routing the external screen to that non-interactive scene would explain every
+symptom above. That is a hypothesis; the clean way to confirm it is to build
+current `working` with **only** the Info.plist scene entry removed and see
+whether Stage Manager behaves normally again.
+
+The last symptom is definitely ours and is by design:
+`ISHTerminalViewControllerForExternalDisplay()` deliberately re-parents the
+frontmost Workspace-hosted terminal onto the external display, so with the app
+already on that display it pulls the terminal out of the window the user is
+looking at.
+
+**Shape of a fix, for next time.** The two models (second-screen output vs.
+Stage Manager window placement) need to not fight. Options, roughly in order of
+preference: don't claim the screen when an interactive scene already occupies
+it; put it behind a Settings toggle; or restrict it to iPhone, where
+multi-display Stage Manager is not a factor.
+
+To resume, revert the reverts -- the code is intact in history at `57380ba6`
+and `cc0b5b21`.
