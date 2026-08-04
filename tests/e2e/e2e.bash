@@ -50,6 +50,17 @@ done
 
 ISH="./build/ish -f $FS"
 
+# Setup installs a toolchain (build-base, python) on top of the Alpine
+# minirootfs, and most tests compile something. Keying "is it set up?" purely on
+# the directory existing means an image whose apk step never landed is skipped
+# forever after: every compile-based test then fails with a bare
+# "gcc: not found", which reads as a product bug rather than a broken fixture.
+# Treat a missing toolchain as "not set up" and re-provision.
+if [ -d "$FS" ] && [ ! -e "$FS/data/usr/bin/gcc" ]; then
+    echo "### Existing test file system at $FS has no toolchain (apk step never completed); re-provisioning."
+    rm -rf "$FS"
+fi
+
 if [ ! -d "$FS" ]; then
     if [ "$YES_MODE" = "true" ]; then
         INSTALL="Yes";
