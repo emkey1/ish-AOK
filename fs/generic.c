@@ -407,7 +407,8 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
     // /run/dbus never saw the bus socket appear. Same pattern in every
     // generic_* below that notifies.
     char guest_path[MAX_PATH];
-    strcpy(guest_path, path);
+    strncpy(guest_path, path, sizeof(guest_path) - 1);
+    guest_path[sizeof(guest_path) - 1] = '\0';
     // A trailing slash demands a directory; open() must not create through it.
     size_t raw_len = strlen(path_raw);
     bool trailing_slash = raw_len > 0 && path_raw[raw_len - 1] == '/';
