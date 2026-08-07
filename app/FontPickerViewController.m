@@ -12,10 +12,11 @@
 
 // UIFontPickerViewController can only filter on UIFontDescriptorTraitMonoSpace, and a
 // font that skips that trait is simply absent from it with no way to override. That
-// hides fonts the terminal handles fine: a Nerd Font's non-Mono variant carries
-// double-width icon glyphs on purpose, so it stops advertising fixed pitch even though
-// its ASCII still sits on one grid. Hence our own list, which measures the glyphs
-// rather than taking the metadata's word for it.
+// hides fonts the terminal handles fine: CaskaydiaCove Nerd Font clears
+// post.isFixedPitch where its Mono sibling sets it, so CoreText withholds the trait
+// even though every ASCII glyph -- and its powerline icons besides -- sits on one
+// shared advance. Hence our own list, which measures the glyphs rather than taking the
+// metadata's word for it.
 
 // The characters a terminal actually tiles. A font that draws these at one shared
 // advance will line up, whatever it claims about itself.
