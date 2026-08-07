@@ -16,7 +16,6 @@
 @property (strong, nonatomic) IBOutlet UISwitch *blinkCursor;
 @property (strong, nonatomic) IBOutlet UISegmentedControl *cursorStyle;
 @property (strong, nonatomic) IBOutlet UISwitch *hideStatusBar;
-@property UIFontPickerViewController *fontPicker API_AVAILABLE(ios(13));
 @end
 
 char *previewString = "# cat /proc/ish/colors\r\n"
@@ -86,18 +85,10 @@ char *previewString = "# cat /proc/ish/colors\r\n"
 }
 
 - (void)viewDidAppear:(BOOL)animated {
-    if (@available(iOS 13, *)) {
-        // Initialize the font picker ASAP, as it takes about a quarter second to initialize (XPC crap) and appears invisible until then.
-        // Re-initialize it after navigating away from it, to reset the table view highlight.
-        UIFontPickerViewControllerConfiguration *config = [UIFontPickerViewControllerConfiguration new];
-        config.filteredTraits = UIFontDescriptorTraitMonoSpace;
-        self.fontPicker = [[UIFontPickerViewController alloc] initWithConfiguration:config];
-        // Prevent the font picker from resizing the popup when it appears
-        self.fontPicker.preferredContentSize = CGSizeZero;
-        self.fontPicker.navigationItem.title = @"Font";
-        self.fontPicker.delegate = self;
-        self.fontPicker.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Reset" style:UIBarButtonItemStylePlain target:self action:@selector(resetFont:)];
-    }
+    [super viewDidAppear:animated];
+    // Get the cost of faulting in every installed font out of the way now, so pushing
+    // the font picker doesn't stall.
+    [FontPickerViewController prewarm];
 }
 
 #pragma mark - Table view data source
@@ -344,26 +335,7 @@ enum {
 }
 
 - (void)selectFont:(id)sender {
-    if (@available(iOS 13, *)) {
-        [self.navigationController pushViewController:self.fontPicker animated:YES];
-        return;
-    }
-
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    FontPickerViewController *fontPicker = [self.storyboard instantiateViewControllerWithIdentifier:@"FontPicker"];
-#pragma clang diagnostic pop
-    [self.navigationController pushViewController:fontPicker animated:YES];
-}
-
-- (void)fontPickerViewControllerDidPickFont:(UIFontPickerViewController *)viewController API_AVAILABLE(ios(13.0)) {
-    UserPreferences.shared.fontFamily = viewController.selectedFontDescriptor.fontAttributes[UIFontDescriptorFamilyAttribute];
-    [self.navigationController popToViewController:self animated:YES];
-}
-
-- (IBAction)resetFont:(UIBarButtonItem *)sender API_AVAILABLE(ios(13)) {
-    UserPreferences.shared.fontFamily = nil;
-    [self.navigationController popToViewController:self animated:YES];
+    [self.navigationController pushViewController:[FontPickerViewController new] animated:YES];
 }
 
 - (IBAction)fontSizeChanged:(UIStepper *)sender {

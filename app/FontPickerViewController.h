@@ -9,8 +9,11 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-NS_CLASS_DEPRECATED_IOS(10_0, 12_0, "UIFontPickerViewController is better")
 @interface FontPickerViewController : UITableViewController
+
+// First touch of every installed font is what makes building the list expensive.
+// Call this ahead of time to get that out of the way off the main thread.
++ (void)prewarm;
 
 @end
 
