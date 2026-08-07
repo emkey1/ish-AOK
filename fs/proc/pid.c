@@ -210,7 +210,9 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     // program reads this using read-like syscall, so we are in blocking area,
     // which means its io_block is set to true. When a proc reads an
     // information about itself, but it shouldn't be marked as blocked.
-    parent_pid = task->parent ? task->parent->pid : 0;
+    // Parent PROCESS, not the forking thread: Linux's task_ppid_nr() is
+    // task_tgid_nr(real_parent). See sys_getppid() for why ->pid is wrong here.
+    parent_pid = task->parent ? task->parent->tgid : 0;
     thread_count = list_size(&task->group->threads);
     pending = task->pending;
     blocked = task->blocked;
@@ -500,8 +502,9 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     sigset_t_ blocked = 0;
     unsigned long thread_count = 0;
     complex_lockt(&pids_lock, 0);
+    // PPid is the parent PROCESS (task_tgid_nr(real_parent)), see sys_getppid().
     if (task->parent != NULL)
-        ppid = task->parent->pid;
+        ppid = task->parent->tgid;
     zombie = task->zombie;
     io_block = task->io_block;
     pending = task->pending;

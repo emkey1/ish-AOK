@@ -2850,7 +2850,9 @@ static int netlink_taskstats_fill(pid_t_ id, bool tgid, struct taskstats_ *ts) {
         ts->ac_pid = task->pid;
     }
     ts->version = TASKSTATS_VERSION_;
-    ts->ac_ppid = task->parent != NULL ? task->parent->pid : 0;
+    // Parent PROCESS: Linux's bacct_add_tsk uses task_tgid_nr_ns(real_parent).
+    // See sys_getppid() for why ->pid is wrong here.
+    ts->ac_ppid = task->parent != NULL ? task->parent->tgid : 0;
     ts->ac_uid = task->uid;
     ts->ac_gid = task->gid;
     // comm changes only at exec/prctl and is fixed-size; an unlocked copy can

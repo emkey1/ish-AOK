@@ -105,8 +105,23 @@ pid_t_ sys_getppid(void) {
     STRACE("getppid()");
     pid_t_ ppid;
     complex_lockt(&pids_lock, 0);
+    // The parent PROCESS, i.e. the parent's tgid -- Linux returns
+    // task_tgid_vnr(real_parent). `parent` points at the specific task that
+    // forked us, which for a fork from a non-leader thread is NOT the group
+    // leader, and `->pid` there is that thread's tid (the value sys_gettid
+    // returns), not a process id at all.
+    //
+    // Getting this wrong is invisible while the forking task is its group's
+    // leader, which is every shell and most single-threaded programs. It broke
+    // Go outright: syscall.forkAndExecInChild, with SysProcAttr.Pdeathsig set,
+    // captures getpid() in the parent and then has the child check
+    // `getppid() != ppid` as "my parent already died" and kill itself with
+    // Pdeathsig. Go runs the fork on whatever thread the runtime scheduled, so
+    // on a non-leader the check misfired and the child SIGTERMed itself before
+    // reaching execve -- surfacing only as os/exec's "signal: terminated", with
+    // no error from the command, because the command never ran (GH #523, yay).
     if (current->parent != NULL)
-        ppid = current->parent->pid;
+        ppid = current->parent->tgid;
     else
         ppid = 0;
     unlock(&pids_lock);
