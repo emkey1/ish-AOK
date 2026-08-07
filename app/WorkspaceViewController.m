@@ -12165,7 +12165,15 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
 
 - (void)updateBookmarkButtonState {
     NSString *url = [self currentBrowserWebView].URL.absoluteString;
-    [_bookmarkButton setTitle:ISHWorkspaceBrowserIsBookmarked(url) ? @"★" : @"☆" forState:UIControlStateNormal];
+    BOOL isBookmarked = ISHWorkspaceBrowserIsBookmarked(url);
+    [_bookmarkButton setTitle:isBookmarked ? @"★" : @"☆" forState:UIControlStateNormal];
+    if (isBookmarked) {
+        _bookmarkButton.accessibilityTraits |= UIAccessibilityTraitSelected;
+        _bookmarkButton.accessibilityValue = @"Bookmarked";
+    } else {
+        _bookmarkButton.accessibilityTraits &= ~UIAccessibilityTraitSelected;
+        _bookmarkButton.accessibilityValue = @"Not bookmarked";
+    }
 }
 
 - (void)handleBookmarkButtonLongPress:(UILongPressGestureRecognizer *)recognizer {
