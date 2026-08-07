@@ -114,8 +114,12 @@ static void fork_and_probe(struct result *out) {
         syscall(SYS_prctl, PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);
         pid_t seen = raw_getppid();
         (void) !write(fd[1], &seen, sizeof seen);
-        // Stay alive briefly so the parent can read our procfs entries.
-        usleep(400 * 1000);
+        // Stay alive so the forking task can read our procfs entries. Scaled
+        // by ISH_TEST_WATCHDOG_SCALE for the same reason the watchdogs are:
+        // under the release procedure's 4-way concurrent multi-arch run, a
+        // normally-instant read can stretch by orders of magnitude, and if it
+        // landed after we exited the reads would see a reparented child.
+        usleep(400 * 1000 * test_watchdog_secs(1));
         _exit(0);
     }
     close(fd[1]);
