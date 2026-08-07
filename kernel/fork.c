@@ -388,6 +388,20 @@ static void clone_flag_names(dword_t flags, char *buf, size_t bufsize) {
         snprintf(buf + len, bufsize - len, "%s%#x", len ? "|" : "", flags);
 }
 
+// Drop one reference to a vfork_info, destroying it on the last one.
+//
+// acq_rel rather than release: a release-only decrement gives the thread that
+// happens to perform the final decrement no happens-before edge with the other
+// side's decrement, so it could destroy the struct without observing that
+// side's writes to it. That matters more than usual here because the object
+// being freed contains the mutex both sides were using.
+static void vfork_info_release(struct vfork_info *vfork) {
+    if (atomic_fetch_sub_explicit(&vfork->refcount, 1, memory_order_acq_rel) == 1) {
+        cond_destroy(&vfork->cond);
+        free(vfork);
+    }
+}
+
 static dword_t sys_clone_common(dword_t flags, guest_addr_t stack, guest_addr_t ptid,
         guest_addr_t tls, guest_addr_t ctid) {
     STRACE("clone(0x%x, 0x%x, 0x%x, 0x%x, 0x%x)", flags, stack, ptid, tls, ctid);
@@ -475,12 +489,21 @@ static dword_t sys_clone_common(dword_t flags, guest_addr_t stack, guest_addr_t 
         // Same rule: the child returns 0 from clone in a0.
         task->cpu.riscv64_regs[riscv64_a0] = 0;
 
-    struct vfork_info vfork;
+    struct vfork_info *vfork = NULL;
     if (flags & CLONE_VFORK_) {
-        lock_init(&vfork.lock, "sys_clone\0");
-        cond_init(&vfork.cond);
-        vfork.done = false;
-        task->vfork = &vfork;
+        vfork = malloc(sizeof(struct vfork_info));
+        if (vfork == NULL) {
+            task_never_ran_destroy(task);
+            return _ENOMEM;
+        }
+        lock_init(&vfork->lock, "sys_clone\0");
+        cond_init(&vfork->cond);
+        vfork->done = false;
+        // One reference for us, one for the child; the child's is released by
+        // vfork_notify() at its exec or exit. See struct vfork_info in task.h
+        // for why this cannot be a stack allocation.
+        atomic_init(&vfork->refcount, 2);
+        task->vfork = vfork;
     }
 
     // task might be destroyed by the time we finish, so save the pid
@@ -521,8 +544,14 @@ static dword_t sys_clone_common(dword_t flags, guest_addr_t stack, guest_addr_t 
         // ghost task linked in the pid table and thread-group lists.)
         task->vfork = NULL;
         task_never_ran_destroy(task);
-        if (flags & CLONE_VFORK_)
-            cond_destroy(&vfork.cond);
+        if (flags & CLONE_VFORK_) {
+            // Sole owner: the child never ran, so it will never reach
+            // vfork_notify() to release the reference taken on its behalf.
+            // Going through vfork_info_release() here would leave the count at
+            // 1 and leak the allocation.
+            cond_destroy(&vfork->cond);
+            free(vfork);
+        }
         return _EAGAIN;
     }
     if (trace_child)
@@ -538,15 +567,53 @@ static dword_t sys_clone_common(dword_t flags, guest_addr_t stack, guest_addr_t 
     }
 
     if (flags & CLONE_VFORK_) {
-        lock(&vfork.lock, 0);
-        while (!vfork.done)
-            // FIXME this should stop waiting if a fatal signal is received
-            wait_for_ignore_signals(&vfork.cond, &vfork.lock, NULL);
-        unlock(&vfork.lock);
-        lock(&task->general_lock, 0);
-        task->vfork = NULL;
-        unlock(&task->general_lock);
-        cond_destroy(&vfork.cond);
+        // Linux makes this wait killable but not interruptible, and the
+        // distinction is load-bearing: until the child execs or _exits it is
+        // running on the parent's stack, so a parent that stopped waiting and
+        // resumed guest code would execute over frames the child is still
+        // using. Only a signal that will terminate us qualifies, and after one
+        // of those we run no guest instructions at all -- handle_interrupt()
+        // calls receive_signals() before the JIT is re-entered.
+        bool fatal = false;
+        lock(&vfork->lock, 0);
+        while (!vfork->done) {
+            lock(&current->sighand->lock, 0);
+            sigset_t_ pending = current->pending | current->sighand->pending;
+            pending &= ~current->blocked;
+            // sigset_has() asserts 1 <= sig < NUM_SIGS (64), so this covers
+            // every signal that can be represented in the mask.
+            for (int sig = 1; sig <= 63 && !fatal; sig++) {
+                if (sigset_has(pending, sig) &&
+                        signal_action(current->sighand, sig) == SIGNAL_KILL)
+                    fatal = true;
+            }
+            unlock(&current->sighand->lock);
+            if (fatal)
+                break;
+            // send_signal() wakes even an ignore-signals wait, through
+            // task->waiting_cond, so a signal that arrives mid-wait gets the
+            // scan above re-run rather than sitting unnoticed until the child
+            // finishes.
+            wait_for_ignore_signals(&vfork->cond, &vfork->lock, NULL);
+        }
+        unlock(&vfork->lock);
+
+        // Deliberately NOT clearing task->vfork: that is the only handle the
+        // child has on this struct, and on the fatal path above the child is
+        // still running and has not released its reference yet. Clearing it
+        // here would strand that reference and leak the allocation in exactly
+        // the case this wait exists to handle. The stack-allocated version had
+        // to unhook it because the struct died with this frame; the heap
+        // allocation is what lifts that requirement.
+        //
+        // We also leave the child alone. Linux does not kill a vfork child
+        // whose parent takes a fatal signal -- the child runs on to its exec or
+        // _exit with the shared mm kept alive by its own reference, which is
+        // equally true here (mem is refcounted). Killing it would additionally
+        // be racy: the child may have already completed its execve and be
+        // blocked on vfork->lock on its way to setting done, in which case it
+        // no longer shares our stack and is a legitimately running new program.
+        vfork_info_release(vfork);
     }
 
     return pid;
@@ -755,8 +822,14 @@ void vfork_notify(struct task *task) {
 
     // Callers already own the task lifetime here, and do_exit() can invoke us
     // while still holding task->general_lock. Re-locking it here self-deadlocks
-    // the exiting task and wedges any later pids_lock users behind it.
-    struct vfork_info *vfork = task->vfork;
+    // the exiting task and wedges any later pids_lock users behind it. So the
+    // handle is claimed with an exchange instead of under a lock.
+    //
+    // Claiming it (rather than just reading it) is what makes us idempotent,
+    // which is required: a vfork child that execs and later exits calls us
+    // TWICE, from exec.c and then from exit.c, and must release the child's
+    // single reference exactly once.
+    struct vfork_info *vfork = atomic_exchange(&task->vfork, NULL);
     if (vfork == NULL)
         return;
 
@@ -764,4 +837,6 @@ void vfork_notify(struct task *task) {
     vfork->done = true;
     notify(&vfork->cond);
     unlock(&vfork->lock);
+
+    vfork_info_release(vfork);
 }

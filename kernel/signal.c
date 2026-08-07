@@ -455,12 +455,9 @@ static bool signal_is_synchronous_trap(int sig) {
     }
 }
 
-#define SIGNAL_IGNORE 0
-#define SIGNAL_KILL 1
-#define SIGNAL_CALL_HANDLER 2
-#define SIGNAL_STOP 3
-
-static int signal_action(struct sighand *sighand, int sig) {
+// SIGNAL_* and this prototype live in signal.h: sys_clone_common's vfork wait
+// needs to classify a pending signal too.
+int signal_action(struct sighand *sighand, int sig) {
     if (signal_is_blockable(sig)) {
         struct sigaction_ *action = &sighand->action[sig];
         if(sig > 63)

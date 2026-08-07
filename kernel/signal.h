@@ -243,6 +243,16 @@ struct sighand *sighand_new(void);
 struct sighand *sighand_copy(struct sighand *sighand);
 void sighand_retain(struct sighand *sighand);
 void sighand_release(struct sighand *sighand);
+
+// What would happen if `sig` were delivered to a task using this sighand, given
+// its current disposition. Callers must hold sighand->lock. Exported for
+// sys_clone_common's vfork wait, which has to tell a signal that will terminate
+// the task from one it could return from.
+#define SIGNAL_IGNORE 0
+#define SIGNAL_KILL 1
+#define SIGNAL_CALL_HANDLER 2
+#define SIGNAL_STOP 3
+int signal_action(struct sighand *sighand, int sig);
 void deliver_signal_with_sighand(struct task *task, struct sighand *sighand, int sig, struct siginfo_ info);
 struct tgroup;
 // Deliver a process-directed signal to a thread group: enqueues into the

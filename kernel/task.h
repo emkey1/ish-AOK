@@ -218,12 +218,22 @@ struct task {
     // re-poke, same recovery contract as the io_block skip.
     _Atomic bool quiesce_parked;
 
-    // this structure is allocated on the stack of the parent's clone() call
+    // Heap-allocated and refcounted, one reference for each side. It used to
+    // live on the stack of the parent's clone() call, which is only safe while
+    // the parent is guaranteed to outlive the child's use of it -- and it is
+    // not: a fatal signal stops the parent waiting and it returns while the
+    // child is still running and still due to touch this struct at its next
+    // exec or exit. The last side to release frees it (vfork_info_release).
+    //
+    // Atomic because vfork_notify() claims it with an exchange rather than
+    // under a lock: do_exit() calls in holding task->general_lock, so this
+    // cannot be a lock-protected field. See vfork_notify().
     struct vfork_info {
+        atomic_int refcount;
         bool done;
         cond_t cond;
         lock_t lock;
-    } *vfork;
+    } *_Atomic vfork;
     int exit_signal;
 
     // lock for anything that needs locking but is not covered by some other lock
