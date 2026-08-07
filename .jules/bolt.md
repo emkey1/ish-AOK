@@ -36,3 +36,7 @@
 ## 2026-03-28 - Optimize finding the last slash in a path
 **Learning:** In `fs/generic.c`, finding the last slash in a path by iterating over the string character by character (using `strlen` and a `for` loop) is an inefficient O(N) operation compared to optimized library functions like `strrchr`, which are often vectorized.
 **Action:** Replace manual character-by-character loops for finding the last character with `strrchr` and pointer arithmetic to significantly improve performance, especially for long path strings.
+
+## 2026-08-07 - Avoid strcmp for empty string checks
+**Learning:** In VFS hot loops (like `fakefs_readdir`), checking if a string is empty using `strcmp(str, "") != 0` introduces unnecessary overhead by calling a string comparison function.
+**Action:** Replace `strcmp(str, "") != 0` and `strcmp(str, "") == 0` with direct character checks `str[0] != '\0'` and `str[0] == '\0'`. This converts the check to an O(1) array access, which is measurably faster and idiomatic C.
