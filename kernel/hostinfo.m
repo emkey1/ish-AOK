@@ -594,13 +594,43 @@ char *copyBuildVersion(void) {
     NSBundle *bundle = [NSBundle mainBundle];
     NSString *shortVersion = [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
     NSString *build = [bundle objectForInfoDictionaryKey:@"CFBundleVersion"];
-    if (shortVersion.length > 0 && build.length > 0)
-        return strdup([[NSString stringWithFormat:@"%@ (%@)", shortVersion, build] UTF8String]);
-    if (build.length > 0)
-        return strdup([build UTF8String]);
+
+    // The bundle version alone is not enough to identify a build. It is
+    // hand-maintained and routinely not bumped between development builds, so
+    // two devices reporting "1.3 (546)" can be running binaries weeks apart --
+    // which defeats the one question `uname -v` exists to answer, and makes
+    // "does this device have that fix?" unanswerable during testing.
+    //
+    // The executable's own timestamp does move every time a new build is
+    // installed, so report it too. Deliberately not __DATE__/__TIME__ here:
+    // that is this file's *compile* time and an incremental build that
+    // relinks without recompiling hostinfo.m would report a stale one.
+    NSString *built = nil;
+    NSString *executable = [bundle executablePath];
+    if (executable != nil) {
+        NSDictionary<NSFileAttributeKey, id> *attrs =
+            [[NSFileManager defaultManager] attributesOfItemAtPath:executable error:NULL];
+        NSDate *mtime = attrs[NSFileModificationDate];
+        if (mtime != nil) {
+            NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+            // Fixed POSIX locale: this is a machine-comparable stamp, not
+            // something to localize.
+            fmt.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+            fmt.dateFormat = @"yyyy-MM-dd HH:mm";
+            built = [fmt stringFromDate:mtime];
+        }
+    }
+
+    NSMutableString *out = [NSMutableString string];
     if (shortVersion.length > 0)
-        return strdup([shortVersion UTF8String]);
-    return strdup(__DATE__ " " __TIME__);
+        [out appendString:shortVersion];
+    if (build.length > 0)
+        [out appendString:out.length > 0 ? [NSString stringWithFormat:@" (%@)", build] : build];
+    if (built != nil)
+        [out appendString:[NSString stringWithFormat:@"%@built %@", out.length > 0 ? @" " : @"", built]];
+    if (out.length == 0)
+        [out appendString:[NSString stringWithUTF8String:__DATE__ " " __TIME__]];
+    return strdup([out UTF8String]);
 }
 
 char *copyHostArchitecture(void) {

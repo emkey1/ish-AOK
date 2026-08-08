@@ -1,11 +1,15 @@
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include "kernel/calls.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
+#include "kernel/hostinfo.h"
 #include "fs/fd.h"
 
 #define AOKFS_MAGIC 0x414f4b31
@@ -283,6 +287,17 @@ static const char *aokfs_symlink_target(enum aokfs_node_kind node, size_t *size_
     }
 }
 
+// Backing store for /AOK/VERSION, filled on first read (see the comment at its
+// declaration below). Kept out here so the once-callback can reach it.
+static char aokfs_version_text[128];
+
+static void aokfs_init_version(void) {
+    char *build = copyBuildVersion();
+    snprintf(aokfs_version_text, sizeof(aokfs_version_text), "iSH-AOK %s\n",
+            build != NULL ? build : "unknown");
+    free(build);
+}
+
 static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *size_out) {
     if (aokfs_node_is_gen(node)) {
         const struct aokfs_gen_file *g = aokfs_gen_entry(node);
@@ -298,7 +313,13 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
         "survive root switches. /AOK/persist is host-backed (visible outside iSH-AOK,\n"
         "but does not preserve Linux ownership or device nodes); /AOK/fakefs preserves\n"
         "full Linux metadata (uid/gid, permissions, device nodes, hardlinks).\n";
-    static const char version[] = "iSH-AOK\n";
+    // /AOK/version is the documented build identifier, so it carries exactly
+    // what `uname -v` reports -- including the build timestamp, because the
+    // hand-maintained version number is routinely not bumped between builds
+    // and cannot on its own tell you which binary a device is running.
+    // Filled once into a static buffer: this function hands back a pointer and
+    // a length, and stat and read have to agree on that length.
+    static pthread_once_t version_once = PTHREAD_ONCE_INIT;
     static const char fixes_devuan_readme[] =
         "pkcsslotd init fix\n"
         "\n"
@@ -478,8 +499,9 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
             *size_out = sizeof(readme) - 1;
             return readme;
         case aokfs_version:
-            *size_out = sizeof(version) - 1;
-            return version;
+            pthread_once(&version_once, aokfs_init_version);
+            *size_out = strlen(aokfs_version_text);
+            return aokfs_version_text;
         case aokfs_fixes_devuan_readme:
             *size_out = sizeof(fixes_devuan_readme) - 1;
             return fixes_devuan_readme;

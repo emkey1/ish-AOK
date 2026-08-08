@@ -1,13 +1,16 @@
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <sys/utsname.h>
 
 #ifdef __APPLE__
 #include <sys/sysctl.h>
+#include <mach-o/dyld.h>
 #endif
 
 #include "fs/dev.h"
@@ -41,9 +44,32 @@ static char *dup_or_unknown(const char *value) {
 }
 
 char *copyBuildVersion(void) {
-    // No app bundle out here, so the compile timestamp is the best available
-    // identifier. Note it is this file's compile time: it moves whenever
-    // standalone.c is rebuilt, which for a release build is the whole tree.
+    // The binary's own timestamp, not __DATE__/__TIME__. The latter is *this
+    // file's* compile time, and an incremental build that relinks without
+    // recompiling standalone.c reports a stale one -- exactly the failure this
+    // identifier exists to prevent. The executable's mtime moves on every
+    // relink, so it always describes the binary you are actually running.
+    char path[4096];
+    const char *executable = NULL;
+#if defined(__APPLE__)
+    uint32_t size = sizeof(path);
+    if (_NSGetExecutablePath(path, &size) == 0)
+        executable = path;
+#else
+    ssize_t n = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (n > 0) {
+        path[n] = '\0';
+        executable = path;
+    }
+#endif
+    struct stat st;
+    if (executable != NULL && stat(executable, &st) == 0) {
+        struct tm tm;
+        char stamp[64];
+        if (localtime_r(&st.st_mtime, &tm) != NULL &&
+                strftime(stamp, sizeof(stamp), "built %Y-%m-%d %H:%M", &tm) > 0)
+            return strdup(stamp);
+    }
     return strdup(__DATE__ " " __TIME__);
 }
 
