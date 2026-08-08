@@ -43,7 +43,7 @@ static char *dup_or_unknown(const char *value) {
     return strdup(value);
 }
 
-char *copyBuildVersion(void) {
+time_t buildTimestamp(void) {
     // The binary's own timestamp, not __DATE__/__TIME__. The latter is *this
     // file's* compile time, and an incremental build that relinks without
     // recompiling standalone.c reports a stale one -- exactly the failure this
@@ -63,14 +63,21 @@ char *copyBuildVersion(void) {
     }
 #endif
     struct stat st;
-    if (executable != NULL && stat(executable, &st) == 0) {
+    if (executable != NULL && stat(executable, &st) == 0)
+        return st.st_mtime;
+    return 0;
+}
+
+char *copyBuildVersion(void) {
+    time_t built = buildTimestamp();
+    if (built != 0) {
         struct tm tm;
         char stamp[64];
         // UTC, not local time: the point of this stamp is comparing builds
         // across machines, and they do not agree on a timezone. Formatting
         // locally made two iPads running binaries a minute apart report stamps
         // eight hours apart.
-        if (gmtime_r(&st.st_mtime, &tm) != NULL &&
+        if (gmtime_r(&built, &tm) != NULL &&
                 strftime(stamp, sizeof(stamp), "built %Y-%m-%d %H:%MZ", &tm) > 0)
             return strdup(stamp);
     }

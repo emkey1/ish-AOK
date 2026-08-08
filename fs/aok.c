@@ -551,6 +551,29 @@ static int aokfs_open_backing_file(struct mount *mount, enum aokfs_node_kind nod
     return open(path, O_RDONLY);
 }
 
+// Timestamp for everything aokfs synthesizes. Its content -- the inline files,
+// the generated /tests, /tools and /docs tables, and the directories holding
+// them -- is compiled into the binary, so the build is genuinely when it last
+// changed, and it is the same stamp uname -v and /AOK/VERSION report (see
+// kernel/hostinfo.h), which is what lets `ls -l /AOK` corroborate them.
+//
+// Not doing this at all is what the fs used to do: the whole tree reported
+// mtime 0, and `ls -alt /AOK/docs` printed "Dec 31 1969" for every entry.
+static time_t aokfs_build_time;
+static void aokfs_init_build_time(void) {
+    aokfs_build_time = buildTimestamp();
+    // Only if the host won't stat its own executable, which shouldn't happen.
+    // Anything plausible beats falling back to 0, which is the bug being fixed.
+    if (aokfs_build_time == 0)
+        aokfs_build_time = time(NULL);
+}
+
+static time_t aokfs_default_time(void) {
+    static pthread_once_t build_time_once = PTHREAD_ONCE_INIT;
+    pthread_once(&build_time_once, aokfs_init_build_time);
+    return aokfs_build_time;
+}
+
 static int aokfs_inline_stat(enum aokfs_node_kind node, struct statbuf *stat) {
     size_t size = 0;
     if (aokfs_node_is_symlink(node))
@@ -578,6 +601,20 @@ static int aokfs_host_stat(struct mount *mount, enum aokfs_node_kind node, struc
     stat->size = host_stat.st_size;
     stat->blksize = host_stat.st_blksize;
     stat->blocks = host_stat.st_blocks;
+    // These three are real files in the app bundle, so they have real times --
+    // report them instead of the build stamp the caller filled in.
+    stat->atime = host_stat.st_atime;
+    stat->mtime = host_stat.st_mtime;
+    stat->ctime = host_stat.st_ctime;
+#if __APPLE__
+#define TIMESPEC(x) st_##x##timespec
+#elif __linux__
+#define TIMESPEC(x) st_##x##tim
+#endif
+    stat->atime_nsec = host_stat.TIMESPEC(a).tv_nsec;
+    stat->mtime_nsec = host_stat.TIMESPEC(m).tv_nsec;
+    stat->ctime_nsec = host_stat.TIMESPEC(c).tv_nsec;
+#undef TIMESPEC
     return 0;
 }
 
@@ -586,6 +623,10 @@ static int aokfs_stat_common(struct mount *mount, enum aokfs_node_kind node, str
     stat->inode = aokfs_node_inode(node);
     stat->mode = aokfs_node_mode(node);
     stat->nlink = aokfs_node_is_dir(node) ? 2 : 1;
+    // Before the directory return below, so directories, inline files,
+    // generated files and the symlink all get it; aokfs_host_stat overwrites
+    // it for the three nodes that have a real file behind them.
+    stat->atime = stat->mtime = stat->ctime = aokfs_default_time();
 
     if (aokfs_node_is_dir(node)) {
         stat->blksize = 4096;

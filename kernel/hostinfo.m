@@ -590,6 +590,22 @@ char* printHostInfo(void) {
     return cString;
 }
 
+time_t buildTimestamp(void) {
+    // The executable's own timestamp moves every time a new build is
+    // installed. Deliberately not __DATE__/__TIME__: that is this file's
+    // *compile* time and an incremental build that relinks without
+    // recompiling hostinfo.m would report a stale one.
+    NSString *executable = [[NSBundle mainBundle] executablePath];
+    if (executable == nil)
+        return 0;
+    NSDictionary<NSFileAttributeKey, id> *attrs =
+        [[NSFileManager defaultManager] attributesOfItemAtPath:executable error:NULL];
+    NSDate *mtime = attrs[NSFileModificationDate];
+    if (mtime == nil)
+        return 0;
+    return (time_t) [mtime timeIntervalSince1970];
+}
+
 char *copyBuildVersion(void) {
     NSBundle *bundle = [NSBundle mainBundle];
     NSString *shortVersion = [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
@@ -599,31 +615,22 @@ char *copyBuildVersion(void) {
     // hand-maintained and routinely not bumped between development builds, so
     // two devices reporting "1.3 (546)" can be running binaries weeks apart --
     // which defeats the one question `uname -v` exists to answer, and makes
-    // "does this device have that fix?" unanswerable during testing.
-    //
-    // The executable's own timestamp does move every time a new build is
-    // installed, so report it too. Deliberately not __DATE__/__TIME__ here:
-    // that is this file's *compile* time and an incremental build that
-    // relinks without recompiling hostinfo.m would report a stale one.
+    // "does this device have that fix?" unanswerable during testing. The build
+    // timestamp does move, so report it too.
     NSString *built = nil;
-    NSString *executable = [bundle executablePath];
-    if (executable != nil) {
-        NSDictionary<NSFileAttributeKey, id> *attrs =
-            [[NSFileManager defaultManager] attributesOfItemAtPath:executable error:NULL];
-        NSDate *mtime = attrs[NSFileModificationDate];
-        if (mtime != nil) {
-            NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
-            // Fixed POSIX locale and UTC: this is a machine-comparable stamp,
-            // not something to localize. UTC specifically because the point is
-            // comparing builds ACROSS devices, and devices do not agree on a
-            // timezone -- formatting locally made two iPads running binaries
-            // one minute apart report stamps eight hours apart, which is
-            // exactly the confusion this is supposed to remove.
-            fmt.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-            fmt.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
-            fmt.dateFormat = @"yyyy-MM-dd HH:mm'Z'";
-            built = [fmt stringFromDate:mtime];
-        }
+    time_t stamp = buildTimestamp();
+    if (stamp != 0) {
+        NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+        // Fixed POSIX locale and UTC: this is a machine-comparable stamp,
+        // not something to localize. UTC specifically because the point is
+        // comparing builds ACROSS devices, and devices do not agree on a
+        // timezone -- formatting locally made two iPads running binaries
+        // one minute apart report stamps eight hours apart, which is
+        // exactly the confusion this is supposed to remove.
+        fmt.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+        fmt.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
+        fmt.dateFormat = @"yyyy-MM-dd HH:mm'Z'";
+        built = [fmt stringFromDate:[NSDate dateWithTimeIntervalSince1970:stamp]];
     }
 
     NSMutableString *out = [NSMutableString string];
