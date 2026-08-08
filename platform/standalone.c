@@ -66,8 +66,12 @@ char *copyBuildVersion(void) {
     if (executable != NULL && stat(executable, &st) == 0) {
         struct tm tm;
         char stamp[64];
-        if (localtime_r(&st.st_mtime, &tm) != NULL &&
-                strftime(stamp, sizeof(stamp), "built %Y-%m-%d %H:%M", &tm) > 0)
+        // UTC, not local time: the point of this stamp is comparing builds
+        // across machines, and they do not agree on a timezone. Formatting
+        // locally made two iPads running binaries a minute apart report stamps
+        // eight hours apart.
+        if (gmtime_r(&st.st_mtime, &tm) != NULL &&
+                strftime(stamp, sizeof(stamp), "built %Y-%m-%d %H:%MZ", &tm) > 0)
             return strdup(stamp);
     }
     return strdup(__DATE__ " " __TIME__);

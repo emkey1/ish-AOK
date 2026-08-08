@@ -613,10 +613,15 @@ char *copyBuildVersion(void) {
         NSDate *mtime = attrs[NSFileModificationDate];
         if (mtime != nil) {
             NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
-            // Fixed POSIX locale: this is a machine-comparable stamp, not
-            // something to localize.
+            // Fixed POSIX locale and UTC: this is a machine-comparable stamp,
+            // not something to localize. UTC specifically because the point is
+            // comparing builds ACROSS devices, and devices do not agree on a
+            // timezone -- formatting locally made two iPads running binaries
+            // one minute apart report stamps eight hours apart, which is
+            // exactly the confusion this is supposed to remove.
             fmt.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-            fmt.dateFormat = @"yyyy-MM-dd HH:mm";
+            fmt.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
+            fmt.dateFormat = @"yyyy-MM-dd HH:mm'Z'";
             built = [fmt stringFromDate:mtime];
         }
     }
