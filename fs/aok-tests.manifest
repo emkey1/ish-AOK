@@ -74,6 +74,8 @@ mount_flags.c
 clone_error_cleanup.c
 uts_namespace.c
 posix_timer_fork.c
+vfork_fatal_signal.c
+getppid_thread.c
 concurrent_exec_tlb.c
 random_seed.c
 getrusage_group.c
