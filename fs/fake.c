@@ -748,7 +748,7 @@ retry:
     // Cache strlen to avoid redundant calculations in bounds checking and loops
     size_t name_len = strlen(entry->name);
     if (name_len == 2 && entry->name[0] == '.' && entry->name[1] == '.') {
-        if (strcmp(entry_path, "") != 0) {
+        if (entry_path[0] != '\0') {
             *strrchr(entry_path, '/') = '\0';
         }
     } else if (!(name_len == 1 && entry->name[0] == '.')) {

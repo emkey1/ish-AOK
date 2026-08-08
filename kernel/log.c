@@ -156,7 +156,7 @@ static void output_line(const char *line) {
          tmpbuff[sizeof(tmpbuff) - 1] = '\0';
      }
     // send it to stdout or wherever
-    if(strcmp(tmpbuff, "") != 0) { // Don't log empty string
+    if(tmpbuff[0] != '\0') { // Don't log empty string
         log_line(tmpbuff);
         // add it to the circular buffer
         log_buf_append(tmpbuff);
@@ -219,7 +219,7 @@ static void log_line(const char *line) {
 #elif LOG_HANDLER_NSLOG
 static void log_line(const char *line) {
     extern void NSLog(CFStringRef msg, ...);
-    if(strcmp(line, "") != 0) // Don't log empty string
+    if(line[0] != '\0') // Don't log empty string
         NSLog(CFSTR("%s"), line);
 }
 #endif

@@ -204,7 +204,7 @@ bool fakefs_import(const char *archive_path, const char *fs, struct fakefsify_er
         }
         if (!progress_update(&p, (double) archive_filter_bytes(archive, -1) / archive_bytes, entry_path))
             CANCEL();
-        if (strcmp(entry_path, "") == 0)
+        if (entry_path[0] == '\0')
             archive_has_root = true;
 
         host_path_buf host_entry_path;

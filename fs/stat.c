@@ -323,7 +323,7 @@ int generic_statat_full(struct fd *at, const char *path_raw, struct statbuf *sta
     // of treating the sentinel as a real fd to fstat -- fd->mount or
     // fd->ops on AT_PWD wraps (mod 2^64) to a low, easily-reached address
     // and previously crashed with SIGSEGV during Arch aarch64 boot.
-    if (empty_path && (strcmp(path_raw, "") == 0) && at != AT_PWD) {
+    if (empty_path && (path_raw[0] == '\0') && at != AT_PWD) {
         if (mnt_id) {
             struct mount *at_mount = fd_is_opath_link(at) ? opath_link_get_mount(at) : at->mount;
             if (at_mount != NULL)
@@ -332,7 +332,7 @@ int generic_statat_full(struct fd *at, const char *path_raw, struct statbuf *sta
         return generic_fstat(at, stat);
     } else {
         const char *resolve_path =
-            (empty_path && at == AT_PWD && strcmp(path_raw, "") == 0) ? "." : path_raw;
+            (empty_path && at == AT_PWD && path_raw[0] == '\0') ? "." : path_raw;
         // A plain stat() (not lstat()) following the final symlink of a
         // /proc/PID/fd/N entry needs procfd_statat's special handling, not
         // the generic symlink chase -- see its doc comment. lstat()
@@ -635,7 +635,7 @@ static dword_t sys_statx_guest_abi(fd_t at_f, guest_addr_t path_addr, dword_t fl
     // seeing ENOSYS here and using fstatat64 instead; enabling broad i386
     // statx support regressed dpkg existence checks on APFS-backed roots.
     if (abi == GUEST_ABI_I386) {
-        bool empty_path = (flags & AT_EMPTY_PATH_) && strcmp(path, "") == 0;
+        bool empty_path = (flags & AT_EMPTY_PATH_) && path[0] == '\0';
         if (!(empty_path && at_f == 0))
             return _ENOSYS;
     }

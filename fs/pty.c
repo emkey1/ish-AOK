@@ -171,7 +171,7 @@ static bool devpts_pty_exists(int pty_num) {
 // this has a slightly weird error returning convention
 // I'm lucky that ENOENT is -2 and not -1
 static int devpts_get_pty_num(const char *path) {
-    if (strcmp(path, "") == 0)
+    if (path[0] == '\0')
         return -1; // root
     if (path[0] != '/' || path[1] == '\0' || strchr(path + 1, '/') != NULL)
         return _ENOENT;
