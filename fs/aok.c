@@ -46,6 +46,13 @@ enum aokfs_node_kind {
     // pixman-accelerator LD_PRELOAD shim source + build script; manifest
     // names like "pixman/ish_pixman_shim.c" become paths under /tools/pixman/).
     aokfs_tools_pixman_dir,
+    // Same again, rooted at /tools/crypto/ (the crypto-accelerator OpenSSL
+    // provider source + its installer). A manifest entry alone is not enough
+    // for a subdirectory: adding one means adding a node here and listing it
+    // in aokfs_node_is_dir, aokfs_node_path, aokfs_lookup_node, and the
+    // /tools readdir below, or the files exist in the table but nothing can
+    // reach them.
+    aokfs_tools_crypto_dir,
     // /docs is flat (no subdirectories) -- same generated-table pattern as
     // /tools, minus the ktop-style subdirectory case.
     aokfs_docs_dir,
@@ -107,6 +114,7 @@ static bool aokfs_node_is_dir(enum aokfs_node_kind node) {
         node == aokfs_tests_riscv64_dir ||
         node == aokfs_tools_ktop_dir ||
         node == aokfs_tools_pixman_dir ||
+        node == aokfs_tools_crypto_dir ||
         node == aokfs_docs_dir;
 }
 
@@ -182,6 +190,8 @@ static const char *aokfs_node_path(enum aokfs_node_kind node) {
             return "/tools/ktop";
         case aokfs_tools_pixman_dir:
             return "/tools/pixman";
+        case aokfs_tools_crypto_dir:
+            return "/tools/crypto";
         case aokfs_tests_audio_dir:
             return "/tests/audio";
         case aokfs_audio_raw:
@@ -222,6 +232,7 @@ static bool aokfs_lookup_node(const char *path, enum aokfs_node_kind *node_out) 
         aokfs_tools_setup_ish_benchmark,
         aokfs_tools_ktop_dir,
         aokfs_tools_pixman_dir,
+        aokfs_tools_crypto_dir,
         aokfs_tests_audio_dir,
         aokfs_audio_raw,
         aokfs_audio_wav,
@@ -692,29 +703,25 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
             }
             break;
         case aokfs_tools_dir: {
-            // The two bundled tool entries and the ktop/pixman subdirectories
-            // first, then generated /tools/* files that belong directly to
-            // /tools (one path component past the prefix -- ktop's and
-            // pixman's own files live under their own /tools/<name>/ node and
-            // are only reachable through it).
+            // The two bundled tool entries and the ktop/pixman/crypto
+            // subdirectories first, then generated /tools/* files that belong
+            // directly to /tools (one path component past the prefix -- the
+            // subdirectories' own files live under their /tools/<name>/ node
+            // and are only reachable through it).
+            static const enum aokfs_node_kind tools_fixed[] = {
+                aokfs_tools_ish_benchmark,
+                aokfs_tools_setup_ish_benchmark,
+                aokfs_tools_ktop_dir,
+                aokfs_tools_pixman_dir,
+                aokfs_tools_crypto_dir,
+            };
+            size_t nfixed = sizeof(tools_fixed) / sizeof(tools_fixed[0]);
             size_t want = (size_t) fd->offset++;
-            if (want == 0) {
-                child = aokfs_tools_ish_benchmark;
+            if (want < nfixed) {
+                child = tools_fixed[want];
                 break;
             }
-            if (want == 1) {
-                child = aokfs_tools_setup_ish_benchmark;
-                break;
-            }
-            if (want == 2) {
-                child = aokfs_tools_ktop_dir;
-                break;
-            }
-            if (want == 3) {
-                child = aokfs_tools_pixman_dir;
-                break;
-            }
-            size_t skip = want - 4;
+            size_t skip = want - nfixed;
             const char *prefix = "/tools/";
             size_t plen = strlen(prefix);
             size_t seen = 0;
@@ -733,35 +740,21 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
                 return 0;
             break;
         }
-        case aokfs_tools_ktop_dir: {
-            const char *prefix = "/tools/ktop/";
-            size_t plen = strlen(prefix);
+        case aokfs_tools_ktop_dir:
+        case aokfs_tools_pixman_dir:
+        case aokfs_tools_crypto_dir: {
+            // One /tools/<name>/ subdirectory: the same generated-table scan
+            // /tools itself does, but rooted at this node's own path, so a new
+            // subdirectory needs no code here beyond its case label.
+            const char *base = aokfs_node_path(node);
+            size_t blen = strlen(base);
             size_t want = (size_t) fd->offset++;
             size_t seen = 0;
             bool found = false;
             for (size_t i = 0; i < AOKFS_GEN_FILE_COUNT_tools; i++) {
                 const char *p = aokfs_gen_files_tools[i].path;
-                if (strncmp(p, prefix, plen) != 0 || strchr(p + plen, '/') != NULL)
-                    continue;
-                if (seen++ == want) {
-                    child = (enum aokfs_node_kind) (AOKFS_GEN_TOOLS_BASE + i);
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-                return 0;
-            break;
-        }
-        case aokfs_tools_pixman_dir: {
-            const char *prefix = "/tools/pixman/";
-            size_t plen = strlen(prefix);
-            size_t want = (size_t) fd->offset++;
-            size_t seen = 0;
-            bool found = false;
-            for (size_t i = 0; i < AOKFS_GEN_FILE_COUNT_tools; i++) {
-                const char *p = aokfs_gen_files_tools[i].path;
-                if (strncmp(p, prefix, plen) != 0 || strchr(p + plen, '/') != NULL)
+                if (strncmp(p, base, blen) != 0 || p[blen] != '/' ||
+                        strchr(p + blen + 1, '/') != NULL)
                     continue;
                 if (seen++ == want) {
                     child = (enum aokfs_node_kind) (AOKFS_GEN_TOOLS_BASE + i);
