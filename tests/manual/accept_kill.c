@@ -38,15 +38,29 @@
 // failure. Survivors are rescued with a real connection so an unfixed A/B run
 // does not strand unkillable listeners.
 //
-// A/B: the unfixed build fails 3/3 on the CLI and fails on the device
-// (aarch64 Devuan, iSH-AOK 546), in every case losing both SIGKILL and
-// SIGTERM at the zero-delay trial, which is the window itself; the fixed
-// build passes 120/120 trials on the CLI. Two verifications are still
-// outstanding: the fixed build has not run on device (546 is unfixed there,
-// so re-run a literal `nc -l -p 9999` plus kill -9, and a long-park kill,
-// once a fixed build deploys), and the real-Linux oracle run has not happened
-// (mint was unreachable). Both are expected green -- on real Linux a task in
-// accept() has always died immediately on SIGKILL.
+// There are TWO distinct defects here and this covers both. The first fix was
+// verified green by the sequential sweep alone, and the organic `nc -l`
+// symptom still reproduced on a device build carrying it -- see the parallel
+// round below for the second defect, which is the one that actually mattered.
+//
+// A/B: fully unfixed fails the sequential sweep 3/3 on the CLI and on the
+// device (aarch64 Devuan, iSH-AOK 546), always losing both SIGKILL and SIGTERM
+// at the zero-delay trial, which is the window itself. With ONLY the
+// window-race fix the sweep passes but the parallel round fails immediately
+// (7 of 8 survive SIGKILL, 5 of 8 SIGTERM). With both fixes this passes
+// repeatedly, and an 8-way parallel stress is 0 wedged across 20 rounds.
+//
+// Outstanding: the notify-pipe fix is CLI-verified only, not yet run on
+// device, and the real-Linux oracle run has not happened (mint unreachable).
+// Both expected green -- on real Linux a task in accept() has always died
+// immediately on SIGKILL.
+//
+// Known still-broken, deliberately NOT covered here: the same wake loss kills
+// tasks parked in recv()/send(), which block directly in the host
+// recvmsg/sendmsg (verified: 8 tasks parked in recv, all SIGKILLed, 7 of 8
+// survive on both AF_UNIX and TCP). A notify pipe cannot be added to a
+// blocking recvmsg; those paths need this one's nonblocking-plus-poll
+// conversion, so they are separate work with their own test.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <netinet/in.h>

@@ -4400,25 +4400,27 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
         // A SIGUSR1 poke alone is NOT enough to wake this sleep. SIGUSR1 does
         // not queue and doubles as the TLB/quiesce shootdown poke, and a poke
         // aimed at a thread already blocked inside the host poll() is simply
-        // never delivered: measured here with N tasks parked in accept(2) and
-        // all SIGKILLed, every pthread_kill returned 0 to a distinct, correct,
+        // never delivered: measured with N tasks parked in accept(2) and all
+        // SIGKILLed, every pthread_kill returned 0 to a distinct, correct,
         // started thread, yet only the first one or two ever ran the handler
-        // and the rest slept on with SIGKILL pending. That is why nothing else
-        // in the tree relies on the poke alone -- fs/poll.c publishes this
-        // same non-lossy notify pipe, and fs/real.c falls back on a 100ms
-        // timeout. Publishing the pipe lets deliver_signal's existing
-        // poll_notify_poke() tear this wait out even when the poke is lost.
-        // An idle listener still sleeps indefinitely (no periodic wakeups).
+        // and the rest slept on with SIGKILL pending. fs/poll.c already
+        // defends against this with the non-lossy notify pipe published below,
+        // and fs/real.c with a 100ms timeout. Publishing the pipe lets
+        // deliver_signal's existing poll_notify_poke() tear this wait out even
+        // when the poke is lost, with no periodic wakeups, so an idle listener
+        // still sleeps indefinitely.
+        //
+        // NOT a general fix for the bug class: sys_recvfrom_common and the
+        // send path still block directly in the host recvmsg/sendmsg with only
+        // the poke to escape, and wedge identically (verified: 8 tasks parked
+        // in recv(), all SIGKILLed, 7 of 8 survive on both AF_UNIX and TCP).
+        // A pipe fd cannot be added to a blocking recvmsg; those need this
+        // path's nonblocking-plus-poll conversion. socket_wait_ready()'s
+        // infinite poll wants the same pipe treatment.
+        //
+        // Created lazily: a guest-O_NONBLOCK accept breaks at the first EAGAIN
+        // below and must not pay for a pipe it will never wait on.
         int notify_pipe[2] = {-1, -1};
-        if (pipe(notify_pipe) == 0) {
-            fcntl(notify_pipe[0], F_SETFL, O_NONBLOCK);
-            fcntl(notify_pipe[1], F_SETFL, O_NONBLOCK);
-            // Same lock deliver_signal_unlocked_locked reads the fd under, so
-            // it can never observe a closed one (cleared below before close).
-            lock(&current->sighand->lock, 0);
-            current->poll_notify_fd = notify_pipe[1];
-            unlock(&current->sighand->lock);
-        }
 
         // sockrestart_end_listen_wait() and friends take locks that can
         // clobber errno, so the errno to report is carried in fail_errno and
@@ -4449,6 +4451,16 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
                     if (remaining_ms <= 0)
                         break; // timeout expired: EAGAIN, matching Linux
                     poll_timeout = remaining_ms > INT_MAX ? INT_MAX : (int) remaining_ms;
+                }
+                if (notify_pipe[0] < 0 && pipe(notify_pipe) == 0) {
+                    fcntl(notify_pipe[0], F_SETFL, O_NONBLOCK);
+                    fcntl(notify_pipe[1], F_SETFL, O_NONBLOCK);
+                    // Same lock deliver_signal_unlocked_locked reads the fd
+                    // under, so it can never observe a closed or reused one
+                    // (cleared below before close).
+                    lock(&current->sighand->lock, 0);
+                    current->poll_notify_fd = notify_pipe[1];
+                    unlock(&current->sighand->lock);
                 }
                 struct pollfd pfd[2];
                 int npfd = 1;

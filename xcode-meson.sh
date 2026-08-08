@@ -190,16 +190,25 @@ EOF
     cd "$meson_dir"
     config=$(meson introspect --buildoptions)
 
-    buildtype=debug
+    # Optimized in BOTH Xcode configurations. This used to follow
+    # $CONFIGURATION, so a Debug build compiled the emulator core at -O0, and
+    # an -O0 emulator is not "a bit slower" -- it silently invalidates any
+    # measurement taken on it. It has cost us twice now: amd64 gzip ran 2.1x
+    # slower than at -O2 and reordered the whole cross-arch benchmark ranking,
+    # and later a full round of crypto-accelerator benchmarking concluded the
+    # accelerator was a net loss when the real finding was that -O0 cost it
+    # 14x (AES-256-GCM: 53.6 MB/s at -O0 against 770.8 at -O2, on identical
+    # hardware and source).
+    #
+    # debugoptimized is -O2 *with* debug info, and b_ndebug stays false so
+    # assertions remain live, so this keeps almost all of the debugging value.
+    buildtype=debugoptimized
     b_ndebug=false
-    if [[ $CONFIGURATION == Release ]]; then
-        buildtype=debugoptimized
-    fi
-    # Debug-config builds compile the emulator core at -O0, which taxes the
-    # C-heavy paths hard (measured: amd64 gzip 2.1x slower than at -O2; the
-    # whole cross-arch benchmark ranking shifts). Set ISH_MESON_BUILDTYPE
-    # (in iSH.xcconfig or the scheme environment) to override without
-    # switching Xcode configurations: debugoptimized = -O2 + debug info.
+    # Opt in to an unoptimized build when you genuinely need one -- single
+    # stepping the emulator core, or chasing something optimizer-dependent:
+    #   ISH_MESON_BUILDTYPE=debug   (in iSH.xcconfig or the scheme environment)
+    # uname -v reports " unoptimized" whenever this is in effect, so a build
+    # that is slow for this reason says so rather than being mistaken for data.
     if [[ -n "${ISH_MESON_BUILDTYPE:-}" ]]; then
         buildtype=$ISH_MESON_BUILDTYPE
     fi

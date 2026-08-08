@@ -293,8 +293,8 @@ static char aokfs_version_text[128];
 
 static void aokfs_init_version(void) {
     char *build = copyBuildVersion();
-    snprintf(aokfs_version_text, sizeof(aokfs_version_text), "iSH-AOK %s\n",
-            build != NULL ? build : "unknown");
+    snprintf(aokfs_version_text, sizeof(aokfs_version_text), "iSH-AOK %s%s\n",
+            build != NULL ? build : "unknown", ISH_BUILD_OPT_SUFFIX);
     free(build);
 }
 

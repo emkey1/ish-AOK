@@ -9,6 +9,22 @@ char *printHostInfo(void);
 // and build number ("1.3 (546)"), which is what tells you which build a device
 // is actually running; elsewhere it is the compile timestamp. Caller frees.
 char *copyBuildVersion(void);
+
+// Appended to the build identifier when the emulator was compiled without
+// optimization. Worth reporting because an unoptimized build is not "a bit
+// slower": it changed the crypto accelerator's throughput by 13x and silently
+// invalidated a full round of benchmarking, which read as "the accelerator is
+// a net loss" when the real finding was "this is a debug build".
+//
+// Only meaningful in files the *emulator's* build system compiles (meson
+// builds libish.a, and xcode-meson.sh selects buildtype=debug unless the Xcode
+// configuration is Release). Do not use it from app-target sources: those are
+// compiled by Xcode with its own flags and would report a different answer.
+#ifdef __OPTIMIZE__
+#define ISH_BUILD_OPT_SUFFIX ""
+#else
+#define ISH_BUILD_OPT_SUFFIX " unoptimized"
+#endif
 // The same build stamp copyBuildVersion() formats, as a time_t: the running
 // executable's own mtime, which moves on every relink. 0 if the host won't say.
 // aokfs uses it as the mtime of everything it synthesizes (see fs/aok.c), so
