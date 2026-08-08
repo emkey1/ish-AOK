@@ -5,6 +5,12 @@ host-native instead: the guest asks the emulator to do the work through a
 private syscall, and the emulator runs it at full host speed. On an A10X iPad
 that takes ChaCha20 from about 8.8 MB/s to about 19 MB/s.
 
+**Read the measurements section before you enable this.** The syscall has a
+fixed per-call cost that the accelerator cannot amortise at TLS and ssh record
+sizes, so it only pays off where the emulated cipher is slower than that cost.
+That is true of ChaCha20 on an old device and false almost everywhere else:
+measured on an M4 iPad it makes AES-256-GCM transfers roughly half as fast.
+
 Nothing uses it automatically. Two pieces have to be in place:
 
 1. **The toggle**, in iSH-AOK Settings, called *Enable Crypto Accel*. This
@@ -23,10 +29,10 @@ sudo sh /AOK/tools/crypto/install-crypto-accel.sh
 ```
 
 That builds the provider from source in your root, installs it where OpenSSL
-looks for modules, wires it into `openssl.cnf`, and then proves it worked by
-timing ChaCha20 with and without it. If the two timings come back equal, the
-provider loaded but declined, which almost always means the Settings toggle is
-off.
+looks for modules, wires it into `openssl.cnf`, and then reports which
+algorithms it took over and how they time with and without it. If it lists no
+algorithms, the provider loaded but declined, which almost always means the
+Settings toggle is off.
 
 It needs a C compiler and the OpenSSL development headers:
 
@@ -49,17 +55,26 @@ listeners to accelerate new connections.
 openssl list -providers
 ```
 
-Both `default` and `ish` should be listed. Then compare directly:
+Both `default` and `ish` should be listed. Then ask which algorithms it
+actually took over, which is the reliable check:
 
 ```sh
-openssl speed -evp chacha20 -seconds 3
+openssl list -cipher-algorithms | grep '@ ish'
 ```
 
-against the same command with the provider bypassed:
+You should see `ChaCha20` and `AES-256-GCM`. An empty list means the provider
+loaded and declined everything: check the Settings toggle.
+
+You can also compare timings:
 
 ```sh
-OPENSSL_CONF=/dev/null openssl speed -evp chacha20 -seconds 3
+openssl speed -evp aes-256-gcm -seconds 3
+OPENSSL_CONF=/dev/null openssl speed -evp aes-256-gcm -seconds 3
 ```
+
+but treat those numbers as a rough hint only. `openssl speed` measures guest
+CPU time, and CPU-time accounting under emulation is not accurate enough to
+trust for small differences.
 
 To confirm ssh specifically is picking it up, look for the module inside a live
 session process:
@@ -72,14 +87,27 @@ grep -l ish.so /proc/*/maps
 
 | Algorithm | Accelerated | Used by |
 |---|---|---|
+| AES-256-GCM | yes | TLS (https), ssh with `-c aes256-gcm@openssh.com` |
 | ChaCha20 (raw stream) | yes | ssh, scp, sftp |
 | ChaCha20-Poly1305 (AEAD) | no, see below | TLS (https) |
-| AES, everything else | no | TLS, disk tools |
+| Everything else | no | disk tools |
 
-ssh is the case that pays off, because OpenSSH's default cipher,
-`chacha20-poly1305@openssh.com`, computes its stream with libcrypto's raw
+The two are probed independently, because the host can have the instructions
+for one and not the other, and neither is ever withheld on account of the
+other.
+
+ssh's default is the case ChaCha20 pays off for, because OpenSSH's
+`chacha20-poly1305@openssh.com` computes its stream with libcrypto's raw
 ChaCha20 and does the Poly1305 authentication in its own code. The raw stream
 is the accelerated half.
+
+**AES-256-GCM is accelerated as a whole AEAD**, which is what https uses. It
+covers the three call sequences real consumers drive an AEAD through: the
+generic one that TLS 1.3 uses, OpenSSH's, and TLS 1.2's (which asks the cipher
+to handle the record framing itself). Anything outside those fails loudly
+rather than producing wrong bytes -- notably a message larger than 4 MiB or
+more than 4096 bytes of associated data in one operation, neither of which any
+TLS or ssh record comes close to, and a tag shorter than the full 16 bytes.
 
 **ChaCha20-Poly1305 as a single AEAD is deliberately not registered.** The
 implementation does not reproduce the call sequence OpenSSL's TLS record layer
@@ -117,30 +145,51 @@ the default provider and takes the RNG down with it. The stock config warns
 about this in a comment, and the installer edits the existing sections in place
 to avoid it.
 
-## Worth measuring before you rely on it
+## Measure before you enable it: it is often a loss
 
-On an A10X iPad, pushing a 64 MiB file with `scp`:
+Measured on two devices, same source, 64 MiB `scp`, cipher pinned, arms
+interleaved, median of 3:
 
-| cipher | accelerated | MB/s |
-|---|---|---|
-| chacha20-poly1305 | no | 3.47 |
-| chacha20-poly1305 | yes | 4.70 |
-| aes256-gcm | no | 8.07 |
+| cipher | A10X stock | A10X accel | M4 stock | M4 accel |
+|---|---|---|---|---|
+| chacha20-poly1305 | 4.11 | **5.53** (1.35x) | **32.36** | 29.82 (0.92x) |
+| aes256-gcm | **9.58** | 9.31 (0.97x) | **50.72** | 28.07 (0.55x) |
 
-The accelerator is a real gain for ssh, but on that hardware **AES-256-GCM is
-faster than accelerated ChaCha20 even with no accelerator at all**, because the
-guest advertises the ARMv8 crypto instructions and the JIT maps them
-efficiently. OpenSSH prefers ChaCha20 by default, so the stock configuration
-picks the slower option. If throughput is what you care about:
+(A10X = iPad Pro 12.9" 2nd gen over Lightning; M4 = iPad Pro 11" over USB-C.)
 
-```sh
-scp -c aes256-gcm@openssh.com bigfile user@host:/path
-```
+**The accelerator is syscall-bound, not crypto-bound.** The host runs
+AES-256-GCM at about 742 MB/s, but a syscall per 16 KiB record delivers only
+24 MB/s on the A10X and 54 MB/s on the M4. Almost none of the cost is the
+cipher; it is the round trip and the walk over guest memory. That ceiling is
+itself emulated, so it scales with the device.
 
-or put `Ciphers aes256-gcm@openssh.com` in `~/.ssh/config`. Measure on your own
-device before assuming either result carries over: the numbers above are one
-ten-year-old iPad over one link, and the transfer was partly limited by the
-link itself (about 14.9 MB/s with no encryption at all).
+Which gives a simple rule: **acceleration wins only when the guest's emulated
+cipher is slower than the accelerator's ceiling on that device.**
+
+| case | emulated | accel ceiling | outcome |
+|---|---|---|---|
+| A10X chacha20 | 8.9 | 21.9 | win, 2.1x |
+| A10X aes-256-gcm | 22.5 | 24.3 | wash |
+| M4 chacha20 | 126 | 98.7 | loss |
+| M4 aes-256-gcm | 255 | 54.0 | heavy loss |
+
+Only the slowest cipher on the oldest device wins. Anything that already runs
+fast is made slower.
+
+So, concretely:
+
+- **The fastest setup on both devices is `aes256-gcm` with the accelerator
+  off** (9.58 MB/s on the A10X, 50.72 on the M4). Put
+  `Ciphers aes256-gcm@openssh.com` in `~/.ssh/config`, or pass
+  `scp -c aes256-gcm@openssh.com`.
+- **On modern hardware, leave the accelerator off.** On the M4 it costs 8% on
+  ChaCha20 and 45% on AES-256-GCM.
+- It is worth enabling on an old device that must use ChaCha20, and not much
+  else.
+
+Measure on your own hardware before trusting any of this: these are two iPads
+over two links, and the rule above predicts the sign of the result better than
+the numbers themselves transfer.
 
 ## Files
 
