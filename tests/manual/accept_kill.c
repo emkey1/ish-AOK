@@ -38,9 +38,15 @@
 // failure. Survivors are rescued with a real connection so an unfixed A/B run
 // does not strand unkillable listeners.
 //
-// A/B on the device (aarch64 Devuan, iSH-AOK 546): unfixed wedges within a
-// sweep, fixed passes. Also passes on real Linux (mint oracle), where a task
-// in accept() has always died instantly on SIGKILL.
+// A/B: the unfixed build fails 3/3 on the CLI and fails on the device
+// (aarch64 Devuan, iSH-AOK 546), in every case losing both SIGKILL and
+// SIGTERM at the zero-delay trial, which is the window itself; the fixed
+// build passes 120/120 trials on the CLI. Two verifications are still
+// outstanding: the fixed build has not run on device (546 is unfixed there,
+// so re-run a literal `nc -l -p 9999` plus kill -9, and a long-park kill,
+// once a fixed build deploys), and the real-Linux oracle run has not happened
+// (mint was unreachable). Both are expected green -- on real Linux a task in
+// accept() has always died immediately on SIGKILL.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <netinet/in.h>
