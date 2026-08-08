@@ -196,6 +196,78 @@ static void test_fatal_signal_sweep(int sig, const char *label) {
     test_logf("%s: %d trials, all died\n", label, KILL_TRIALS);
 }
 
+// Second defect, and the one a sequential sweep cannot see: N tasks parked in
+// accept(2) at once, all killed together. A SIGUSR1 poke aimed at a thread
+// that is ALREADY blocked inside the host poll() is simply never delivered.
+// Measured with 8 parked tasks: every pthread_kill returned 0 to a distinct,
+// correct, started thread, yet only the first one or two ever ran the handler
+// and the other six slept on with SIGKILL pending, permanently deaf. That is
+// why nothing else in the tree trusts the poke alone: fs/poll.c publishes a
+// non-lossy notify pipe and fs/real.c falls back on a 100ms timeout. The
+// accept wait now publishes the same pipe, so deliver_signal's existing
+// poll_notify_poke() tears it out even when the poke is lost.
+//
+// One task at a time never reproduces this -- the single sweep above passes on
+// a build carrying only the window-race fix -- so the parallel round is not
+// redundant coverage, it is the only coverage for this half.
+#define PARALLEL_KIDS 8
+#define PARALLEL_ROUNDS 3
+
+static void test_parallel_fatal_signal(int sig, const char *label) {
+    for (int r = 0; r < PARALLEL_ROUNDS; r++) {
+        pid_t kids[PARALLEL_KIDS];
+        uint16_t ports[PARALLEL_KIDS];
+        int fd[PARALLEL_KIDS][2];
+        int started = 0;
+
+        for (int i = 0; i < PARALLEL_KIDS; i++) {
+            if (pipe(fd[i]) < 0)
+                break;
+            pid_t p = fork();
+            if (p < 0) { close(fd[i][0]); close(fd[i][1]); break; }
+            if (p == 0) {
+                close(fd[i][0]);
+                child_park_in_accept(fd[i][1]);
+                _exit(0);
+            }
+            close(fd[i][1]);
+            kids[i] = p;
+            started++;
+        }
+        if (started == 0) {
+            failf("parallel-fork", (uint64_t) errno, 0, 0, 0, 0, 0);
+            return;
+        }
+        // Every child must be parked before any of them is signalled.
+        for (int i = 0; i < started; i++) {
+            if (read(fd[i][0], &ports[i], sizeof ports[i]) != (ssize_t) sizeof ports[i])
+                ports[i] = 0;
+            close(fd[i][0]);
+        }
+        usleep(200 * 1000);
+        for (int i = 0; i < started; i++)
+            kill(kids[i], sig);
+
+        int survivors = 0;
+        for (int i = 0; i < started; i++) {
+            if (reap_within(kids[i], test_watchdog_secs(5)))
+                continue;
+            survivors++;
+            // Recover so a failing A/B run leaves no unkillable listeners.
+            rescue_connect(ports[i]);
+            reap_within(kids[i], test_watchdog_secs(5));
+        }
+        if (survivors != 0) {
+            printf("FAIL %s round %d: %d of %d parked tasks survived %s\n",
+                   label, r, survivors, started,
+                   sig == SIGKILL ? "SIGKILL" : "the fatal signal");
+            failures_total++;
+            return;
+        }
+        test_logf("  %s round %d: all %d died\n", label, r, started);
+    }
+}
+
 // The fix must not break accept() itself: a real connection is still accepted.
 static void test_accept_still_works(void) {
     int fd[2];
@@ -252,6 +324,8 @@ int main(int argc, char **argv) {
     test_accept_still_works();
     test_fatal_signal_sweep(SIGKILL, "sigkill-in-accept");
     test_fatal_signal_sweep(SIGTERM, "sigterm-in-accept");
+    test_parallel_fatal_signal(SIGKILL, "parallel-sigkill-in-accept");
+    test_parallel_fatal_signal(SIGTERM, "parallel-sigterm-in-accept");
 
     return finish_suite("accept_kill");
 }

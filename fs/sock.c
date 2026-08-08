@@ -4397,6 +4397,29 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
             }
         }
 
+        // A SIGUSR1 poke alone is NOT enough to wake this sleep. SIGUSR1 does
+        // not queue and doubles as the TLB/quiesce shootdown poke, and a poke
+        // aimed at a thread already blocked inside the host poll() is simply
+        // never delivered: measured here with N tasks parked in accept(2) and
+        // all SIGKILLed, every pthread_kill returned 0 to a distinct, correct,
+        // started thread, yet only the first one or two ever ran the handler
+        // and the rest slept on with SIGKILL pending. That is why nothing else
+        // in the tree relies on the poke alone -- fs/poll.c publishes this
+        // same non-lossy notify pipe, and fs/real.c falls back on a 100ms
+        // timeout. Publishing the pipe lets deliver_signal's existing
+        // poll_notify_poke() tear this wait out even when the poke is lost.
+        // An idle listener still sleeps indefinitely (no periodic wakeups).
+        int notify_pipe[2] = {-1, -1};
+        if (pipe(notify_pipe) == 0) {
+            fcntl(notify_pipe[0], F_SETFL, O_NONBLOCK);
+            fcntl(notify_pipe[1], F_SETFL, O_NONBLOCK);
+            // Same lock deliver_signal_unlocked_locked reads the fd under, so
+            // it can never observe a closed one (cleared below before close).
+            lock(&current->sighand->lock, 0);
+            current->poll_notify_fd = notify_pipe[1];
+            unlock(&current->sighand->lock);
+        }
+
         // sockrestart_end_listen_wait() and friends take locks that can
         // clobber errno, so the errno to report is carried in fail_errno and
         // restored just before errno_map() below.
@@ -4427,7 +4450,13 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
                         break; // timeout expired: EAGAIN, matching Linux
                     poll_timeout = remaining_ms > INT_MAX ? INT_MAX : (int) remaining_ms;
                 }
-                struct pollfd pfd = { .fd = sock->real_fd, .events = POLLIN };
+                struct pollfd pfd[2];
+                int npfd = 1;
+                pfd[0] = (struct pollfd) { .fd = sock->real_fd, .events = POLLIN };
+                if (notify_pipe[0] >= 0) {
+                    pfd[1] = (struct pollfd) { .fd = notify_pipe[0], .events = POLLIN };
+                    npfd = 2;
+                }
                 sockrestart_begin_listen_wait(sock);
                 // Sleep under the same discipline as socket_wait_ready() and
                 // fs/poll.c: block SIGUSR1, arm the sigunwind point, re-check
@@ -4453,11 +4482,21 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
                     poll_errno = EINTR;
                 } else {
                     errno = 0;
-                    nready = poll(&pfd, 1, poll_timeout);
+                    nready = poll(pfd, npfd, poll_timeout);
                     poll_errno = errno;
                     socket_blocking_syscall_end();
                 }
                 sockrestart_end_listen_wait(sock);
+                // Drain the notify pipe so a single poke does not leave the
+                // next poll instantly readable and spin the retry loop. The
+                // wake itself needs no interpretation: the retry re-runs the
+                // accept and then socket_blocking_syscall_begin's pre-sleep
+                // pending check, which is what actually reports the signal.
+                if (npfd == 2 && nready > 0 && (pfd[1].revents & POLLIN)) {
+                    char drain[64];
+                    while (read(notify_pipe[0], drain, sizeof drain) > 0)
+                        continue;
+                }
                 bool resumed = sockrestart_should_restart_listen_wait(1);
                 if (nready < 0 && poll_errno == EINTR &&
                         !resumed && socket_guest_signal_pending()) {
@@ -4479,6 +4518,16 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
                 retry = resumed || !socket_guest_signal_pending();
             }
         } while (retry);
+        // Unpublish before closing so a concurrent deliver_signal (which reads
+        // the fd under sighand->lock) can never poke a closed or reused fd.
+        // Done before restoring fail_errno: lock() can clobber errno.
+        if (notify_pipe[0] >= 0) {
+            lock(&current->sighand->lock, 0);
+            current->poll_notify_fd = -1;
+            unlock(&current->sighand->lock);
+            close(notify_pipe[0]);
+            close(notify_pipe[1]);
+        }
         if (client < 0)
             errno = fail_errno;
     }
