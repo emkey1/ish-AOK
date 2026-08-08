@@ -107,6 +107,7 @@ prctl_capbset_drop.c
 oom_score_adj.c
 sysv_ipc.c
 accept_rcvtimeo.c
+accept_kill.c
 epoll_dup_add.c
 inotify_mount_paths.c
 procfd_reopen.c

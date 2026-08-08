@@ -4429,9 +4429,34 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
                 }
                 struct pollfd pfd = { .fd = sock->real_fd, .events = POLLIN };
                 sockrestart_begin_listen_wait(sock);
-                errno = 0;
-                int nready = poll(&pfd, 1, poll_timeout);
-                int poll_errno = errno;
+                // Sleep under the same discipline as socket_wait_ready() and
+                // fs/poll.c: block SIGUSR1, arm the sigunwind point, re-check
+                // for an already-pending guest signal, then force-unblock and
+                // wait. This was the one blocking wait in the tree that just
+                // called the host poll() bare, which is wrong twice over.
+                // Nothing guaranteed SIGUSR1 was unblocked in the host mask
+                // (guest sigprocmask only moves the guest mask -- the reason
+                // poll.c:746 and socket_blocking_syscall_begin force-unblock),
+                // and with no unwind point armed the wake depended entirely on
+                // the host poll() returning EINTR. Worse, the pending check and
+                // the sleep were not atomic: a poke landing between the
+                // accept() EAGAIN above and this poll() ran a handler that did
+                // nothing, and the task then slept forever with SIGKILL already
+                // pending -- permanently deaf, since further kills only re-sent
+                // the same lost poke. `nc -l -p N` survived kill -9 this way
+                // (only an incoming connection could still wake it). Same bug
+                // class as the raw host write in fs/real.c's realfs_wait_writable.
+                sigset_t oldmask;
+                int nready, poll_errno;
+                if (!socket_blocking_syscall_begin(&oldmask)) {
+                    nready = -1;
+                    poll_errno = EINTR;
+                } else {
+                    errno = 0;
+                    nready = poll(&pfd, 1, poll_timeout);
+                    poll_errno = errno;
+                    socket_blocking_syscall_end();
+                }
                 sockrestart_end_listen_wait(sock);
                 bool resumed = sockrestart_should_restart_listen_wait(1);
                 if (nready < 0 && poll_errno == EINTR &&
