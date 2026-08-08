@@ -362,6 +362,9 @@ static const OSSL_PARAM *cp_gettable_params(void *p) { (void) p; return cp_getta
 static const OSSL_PARAM *cp_gettable_ctx_params(void *c, void *p) { (void) c; (void) p; return cp_gettable_ctx; }
 static const OSSL_PARAM *cp_settable_ctx_params(void *c, void *p) { (void) c; (void) p; return cp_settable_ctx; }
 
+// Kept compiled (so it cannot rot) but unreferenced unless the AEAD is
+// re-registered above; see the comment on ish_ciphers[].
+__attribute__((unused))
 static const OSSL_DISPATCH cp_functions[] = {
     { OSSL_FUNC_CIPHER_NEWCTX, (void (*)(void)) cp_newctx },
     { OSSL_FUNC_CIPHER_FREECTX, (void (*)(void)) cp_freectx },
@@ -381,7 +384,24 @@ static const OSSL_DISPATCH cp_functions[] = {
 
 static const OSSL_ALGORITHM ish_ciphers[] = {
     { "ChaCha20", "provider=ish", cc_functions, "iSH-accelerated ChaCha20" },
+    // ChaCha20-Poly1305 is deliberately NOT registered. OpenSSL's TLS record
+    // layer drives the AEAD through a call sequence this implementation does
+    // not reproduce, and the result is a bad record MAC rather than a clean
+    // decline -- so every TLS 1.3 connection negotiating
+    // TLS_CHACHA20_POLY1305_SHA256 fails outright. Measured on an A10X device:
+    // registered, a local s_server/s_client handshake dies with "decryption
+    // failed or bad record mac"; dropped, the same handshake succeeds. Nothing
+    // is lost for ssh/scp, which use the raw stream cipher above (EVP_chacha20,
+    // via OpenSSH's cipher-chachapoly-libcrypto) and still measure 19 MB/s
+    // accelerated against 8.8 MB/s software. Since a provider is selected by
+    // property and cannot fall back once chosen, "register it and hope callers
+    // stay inside the supported pattern" is not a safe option: the unsupported
+    // pattern here is the system's TLS. Re-register only when the TLS AEAD
+    // surface is implemented and an s_client handshake passes.
+    // Build with -DISH_PROVIDER_ENABLE_AEAD to opt back in for that work.
+#ifdef ISH_PROVIDER_ENABLE_AEAD
     { "ChaCha20-Poly1305", "provider=ish", cp_functions, "iSH-accelerated ChaCha20-Poly1305" },
+#endif
     { NULL, NULL, NULL, NULL }
 };
 static const OSSL_ALGORITHM ish_ciphers_none[] = { { NULL, NULL, NULL, NULL } };
