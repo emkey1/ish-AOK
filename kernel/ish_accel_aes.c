@@ -240,10 +240,17 @@ void ish_aes256_gcm_update(struct ish_aes_gcm_stream *sp, const uint8_t *in,
         return;
     g->data_len += len;
 
-    // Decrypt authenticates the ciphertext, which is the input; encrypt
-    // authenticates the ciphertext it just produced, which is the output.
-    const uint8_t *ghash_src = g->is_open ? in : out;
-    size_t ghash_len = len;
+    // Decrypt authenticates the ciphertext, which is the input, so it has to
+    // be absorbed BEFORE the keystream XOR runs: callers routinely decrypt in
+    // place (in == out), and both of OpenSSL's TLS record layers do, so
+    // deferring this would GHASH the plaintext the XOR just wrote over it and
+    // reject every record. Encrypt authenticates the ciphertext it produces,
+    // so that direction absorbs after the XOR. Same ordering as the ChaCha
+    // AEAD's ish_aead_update().
+    const uint8_t *ct_out = out;   // encrypt: where the ciphertext will land
+    size_t ct_len = len;
+    if (g->is_open)
+        ghash_bytes(g, in, len);
 
     // Finish any keystream left over from a previous partial span first, so a
     // caller may hand us spans of any length.
@@ -267,7 +274,8 @@ void ish_aes256_gcm_update(struct ish_aes_gcm_stream *sp, const uint8_t *in,
         g->ks_left = 16 - len;
     }
 
-    ghash_bytes(g, ghash_src, ghash_len);
+    if (!g->is_open)
+        ghash_bytes(g, ct_out, ct_len);
 }
 
 static int ct_eq16(const uint8_t *a, const uint8_t *b) {

@@ -167,10 +167,19 @@ static void test_multipage(void) {
     check(aead(&r) == 0, "multi-page open succeeds");
     check(memcmp(back, in, len) == 0, "multi-page round trip is exact");
 
-    // In-place is the shape a provider is most likely to use.
+    // In-place is the shape a provider is most likely to use -- both of
+    // OpenSSL's TLS record layers cipher records in place, in both directions.
     fill_req(&r, OP_SEAL, in, len, in, tag, aad, sizeof(aad));
     check(aead(&r) == 0, "in-place seal succeeds");
     check(memcmp(in, out, len) == 0, "in-place seal matches the out-of-place result");
+
+    // In-place open is the half that discriminates: GHASH covers the
+    // CIPHERTEXT, so absorbing it after the keystream XOR authenticates the
+    // plaintext the XOR just wrote over the input, and every record is
+    // rejected. `in` currently holds the ciphertext from the seal above.
+    fill_req(&r, OP_OPEN, in, len, in, tag, aad, sizeof(aad));
+    check(aead(&r) == 0, "in-place open accepts its own tag");
+    check(memcmp(back, in, len) == 0, "in-place open recovers the plaintext");
 
     free(in); free(out); free(back);
 }

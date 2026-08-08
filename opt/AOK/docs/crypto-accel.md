@@ -83,7 +83,10 @@ grep -l ish.so /proc/*/maps
 
 ## What is accelerated
 
-| Algorithm | Accelerated | Used by |
+"Accelerated" here means "routed through the syscall", not "made faster" --
+which of these is actually a win depends on the device, and often it is not.
+
+| Algorithm | Routed through the accelerator | Used by |
 |---|---|---|
 | AES-256-GCM | yes | TLS (https), ssh with `-c aes256-gcm@openssh.com` |
 | ChaCha20 (raw stream) | yes | ssh, scp, sftp |

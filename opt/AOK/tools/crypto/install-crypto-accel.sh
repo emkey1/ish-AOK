@@ -312,21 +312,36 @@ say ""
 say "verifying ..."
 OPENSSL_CONF="$CNF" openssl list -providers 2>/dev/null | sed 's/^/  /'
 
-# A speed delta is the only proof that matters: the provider can load happily
-# and still decline every algorithm if the toggle is off.
+# Which algorithms the provider actually took on. ChaCha20 and AES-256-GCM are
+# probed independently (the host can have one and not the other), so this is
+# the crisp answer to "did it work" -- an empty list means the provider loaded
+# and then declined everything.
+say ""
+say "algorithms taken over by the accelerator:"
+offered=$(OPENSSL_CONF="$CNF" openssl list -cipher-algorithms 2>/dev/null | grep '@ ish' || true)
+if [ -n "$offered" ]; then
+    printf '%s\n' "$offered" | sed 's/^ */  /'
+else
+    say "  (none -- the provider loaded but declined every algorithm)"
+    say "  Check that 'Enable Crypto Accel' is on in iSH-AOK Settings."
+fi
+
+# A speed delta is the other half of the proof. Note that openssl speed times
+# with guest CPU-time accounting, which is unreliable under emulation: treat a
+# small or noisy delta as inconclusive and trust the list above.
 BASE_CNF="$WORK/base.cnf"
 strip_config "$CNF" "$BASE_CNF"
-before=$(OPENSSL_CONF="$BASE_CNF" openssl speed -evp chacha20 -seconds 1 2>/dev/null | awk '/^ChaCha20/ {print $NF}')
-after=$(OPENSSL_CONF="$CNF"      openssl speed -evp chacha20 -seconds 1 2>/dev/null | awk '/^ChaCha20/ {print $NF}')
-if [ -n "$before" ] && [ -n "$after" ]; then
-    say ""
-    say "ChaCha20 at 16 KiB blocks:"
-    say "  without accelerator: $before"
-    say "  with accelerator:    $after"
-    say ""
-    say "If those two numbers are the same, the provider loaded but declined:"
-    say "check that 'Enable Crypto Accel' is on in iSH-AOK Settings."
-fi
+for alg in chacha20 aes-256-gcm; do
+    printf '%s\n' "$offered" | grep -qi "${alg%%-*}" || continue
+    before=$(OPENSSL_CONF="$BASE_CNF" openssl speed -evp "$alg" -seconds 1 2>/dev/null | awk 'NF>2 && $1 !~ /^(type|The|version|built|options|CPUINFO)/ {print $NF}' | tail -1)
+    after=$(OPENSSL_CONF="$CNF"       openssl speed -evp "$alg" -seconds 1 2>/dev/null | awk 'NF>2 && $1 !~ /^(type|The|version|built|options|CPUINFO)/ {print $NF}' | tail -1)
+    if [ -n "$before" ] && [ -n "$after" ]; then
+        say ""
+        say "$alg at 16 KiB blocks:"
+        say "  without accelerator: $before"
+        say "  with accelerator:    $after"
+    fi
+done
 
 say ""
 say "Done. Programs pick this up when they next start, so restart long-running"
