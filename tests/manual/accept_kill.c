@@ -55,12 +55,11 @@
 // Both expected green -- on real Linux a task in accept() has always died
 // immediately on SIGKILL.
 //
-// Known still-broken, deliberately NOT covered here: the same wake loss kills
-// tasks parked in recv()/send(), which block directly in the host
-// recvmsg/sendmsg (verified: 8 tasks parked in recv, all SIGKILLed, 7 of 8
-// survive on both AF_UNIX and TCP). A notify pipe cannot be added to a
-// blocking recvmsg; those paths need this one's nonblocking-plus-poll
-// conversion, so they are separate work with their own test.
+// The rest of the bug class -- tasks parked in recv()/send(), which used to
+// block directly in the host recvmsg/sendmsg where a notify pipe cannot be
+// added to the wait at all -- is fixed separately and covered by
+// socket_kill.c, which converts those paths to the same nonblocking-plus-poll
+// shape used here.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <netinet/in.h>

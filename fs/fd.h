@@ -90,6 +90,14 @@ struct fd {
             bool reuseaddr;
             bool reuseport;
             bool listening; // listen() called: SO_ACCEPTCONN (Darwin can't report it)
+            // The host description is kept nonblocking whenever a guest call
+            // that may block has run on it, so no guest task can ever wedge
+            // unkillably inside a host recvmsg/sendmsg (fs/sock.c
+            // socket_force_host_nonblock; the guest's own O_NONBLOCK lives in
+            // fd->flags and is what sock_getflags reports). Cached to keep the
+            // I/O fast path off fcntl; cleared by anything that writes the host
+            // flags behind our back, which makes the next call re-force.
+            bool host_nonblock;
             // SO_ERROR is read-and-clear at the host level: the first getsockopt()
             // to observe a nonzero value resets it to 0 for every later reader.
             // iSH's own internal readiness probes (see socket_tcp_connect_write_ready

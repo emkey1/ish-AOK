@@ -1935,26 +1935,210 @@ static void socket_blocking_syscall_end(void) {
     sigunwind_end();
 }
 
-static int socket_wait_ready(struct fd *sock, short events) {
-    struct pollfd pfd = {
-        .fd = sock->real_fd,
-        .events = events | POLLERR | POLLHUP,
-    };
-    for (;;) {
-        sigset_t oldmask;
-        if (!socket_blocking_syscall_begin(&oldmask))
-            return errno_map();
-        errno = 0;
-        int wait_res = poll(&pfd, 1, -1);
-        socket_blocking_syscall_end();
-        if (wait_res > 0)
-            return 0;
-        if (wait_res == 0)
-            continue;
-        if (errno == EINTR && !socket_guest_signal_pending())
-            continue;
-        return errno_map();
+// Keep the host description nonblocking so no guest task can ever park inside
+// a host recvmsg/sendmsg/read/write, where nothing can reach it: a SIGUSR1
+// poke aimed at a thread already blocked in a host wait is simply never
+// delivered (see the long comment in socket_wait_ready). Every blocking-mode
+// socket call therefore runs the host call nonblocking and does its waiting in
+// socket_wait_ready(), which sleeps in a poll() that a signal can tear apart.
+//
+// The flag is a property of the open file description, so this deliberately
+// diverges from the guest's O_NONBLOCK; fd->flags carries the guest's own and
+// sock_getflags() reports that one, so the divergence is invisible. Same
+// treatment sys_accept4_common gives listening sockets. Cached because this
+// sits on the I/O fast path: the cache is cleared by sock_setflags() and by
+// sys_connect_common()'s host-flag restore, the two places that write the host
+// flags behind our back, so the next call re-forces.
+static void socket_force_host_nonblock(struct fd *sock) {
+    if (sock->socket.host_nonblock || sock->real_fd < 0)
+        return;
+    int host_fl = fcntl(sock->real_fd, F_GETFL, 0);
+    if (host_fl < 0)
+        return;
+    if (!(host_fl & O_NONBLOCK) &&
+            fcntl(sock->real_fd, F_SETFL, host_fl | O_NONBLOCK) < 0)
+        return;
+    sock->socket.host_nonblock = true;
+}
+
+// SO_RCVTIMEO/SO_SNDTIMEO used to be enforced by the host kernel, because the
+// host call was the blocking one. Now that the wait is emulated, so is the
+// timeout. Linux's is a budget for time spent *waiting* within one syscall
+// rather than a per-wait limit, so the caller owns this state and passes the
+// same one to every wait the call makes: a MSG_WAITALL recv that wakes ten
+// times still gets a single deadline. Resolved lazily on the first wait, which
+// keeps the getsockopt off the path of a call that never blocks.
+struct socket_io_wait {
+    bool resolved;
+    bool has_deadline;
+    struct timespec deadline;
+};
+
+static void socket_io_wait_resolve(struct socket_io_wait *wait, struct fd *sock, short events) {
+    wait->resolved = true;
+    wait->has_deadline = false;
+    if (sock->real_fd < 0)
+        return;
+    struct timeval timeo = {0, 0};
+    socklen_t timeo_len = sizeof(timeo);
+    if (getsockopt(sock->real_fd, SOL_SOCKET,
+                   (events & POLLOUT) ? SO_SNDTIMEO : SO_RCVTIMEO,
+                   &timeo, &timeo_len) < 0)
+        return;
+    if (timeo.tv_sec == 0 && timeo.tv_usec == 0)
+        return;
+    wait->deadline = timespec_now(CLOCK_MONOTONIC);
+    wait->deadline.tv_sec += timeo.tv_sec;
+    wait->deadline.tv_nsec += (long) timeo.tv_usec * 1000;
+    if (wait->deadline.tv_nsec >= 1000000000L) {
+        wait->deadline.tv_sec++;
+        wait->deadline.tv_nsec -= 1000000000L;
     }
+    wait->has_deadline = true;
+}
+
+// The one place a guest socket call sleeps. `wait` carries the SO_RCVTIMEO/
+// SO_SNDTIMEO budget for the whole syscall; pass NULL from iSH's own internal
+// handshakes, which must not inherit a guest's timeout.
+//
+// A SIGUSR1 poke alone is NOT enough to wake this sleep. SIGUSR1 does not
+// queue and doubles as the TLB/quiesce shootdown poke, and a poke aimed at a
+// thread already blocked inside a host wait is simply never delivered:
+// measured with N tasks parked in recv(), all SIGKILLed, every pthread_kill
+// returned 0 to a distinct, correct, started thread, each parked with SIGUSR1
+// unblocked and its sigunwind point armed, yet only the first one or two ever
+// ran the handler and the rest slept on with SIGKILL pending -- permanently
+// deaf, since further kills only re-sent the same lost poke. Parallelism is
+// the trigger: one task at a time always wakes, so a sequential test passes
+// vacuously. fs/poll.c defends against this with the non-lossy notify pipe
+// published below, and fs/real.c with a 100ms timeout; a periodic wakeup is
+// the wrong trade here, since a blocked recv() on an idle connection is the
+// common case and should cost nothing until something happens.
+static int socket_wait_ready(struct fd *sock, short events, struct socket_io_wait *wait) {
+    if (wait != NULL && !wait->resolved)
+        socket_io_wait_resolve(wait, sock, events);
+
+    // Created lazily, and only here: a call that never has to sleep must not
+    // pay for a pipe it will never wait on.
+    int notify_pipe[2] = {-1, -1};
+    int err = 0;
+    for (;;) {
+        int timeout = -1;
+        if (wait != NULL && wait->has_deadline) {
+            struct timespec now = timespec_now(CLOCK_MONOTONIC);
+            long long remaining_ms =
+                (long long) (wait->deadline.tv_sec - now.tv_sec) * 1000 +
+                (wait->deadline.tv_nsec - now.tv_nsec) / 1000000;
+            if (remaining_ms <= 0) {
+                err = _EAGAIN; // timeout expired, matching Linux
+                break;
+            }
+            timeout = remaining_ms > INT_MAX ? INT_MAX : (int) remaining_ms;
+        }
+        if (notify_pipe[0] < 0 && pipe(notify_pipe) == 0) {
+            fcntl(notify_pipe[0], F_SETFL, O_NONBLOCK);
+            fcntl(notify_pipe[1], F_SETFL, O_NONBLOCK);
+            // Same lock deliver_signal_unlocked_locked reads the fd under, so
+            // it can never observe a closed or reused one (cleared below
+            // before close).
+            lock(&current->sighand->lock, 0);
+            current->poll_notify_fd = notify_pipe[1];
+            unlock(&current->sighand->lock);
+        }
+        struct pollfd pfd[2];
+        int npfd = 1;
+        pfd[0] = (struct pollfd) {
+            .fd = sock->real_fd,
+            .events = events | POLLERR | POLLHUP,
+        };
+        if (notify_pipe[0] >= 0) {
+            pfd[1] = (struct pollfd) {.fd = notify_pipe[0], .events = POLLIN};
+            npfd = 2;
+        }
+        sigset_t oldmask;
+        int wait_res, wait_errno;
+        if (!socket_blocking_syscall_begin(&oldmask)) {
+            wait_res = -1;
+            wait_errno = EINTR;
+        } else {
+            errno = 0;
+            wait_res = poll(pfd, npfd, timeout);
+            wait_errno = errno;
+            socket_blocking_syscall_end();
+        }
+        // Drain the notify pipe so one poke does not leave every later poll
+        // instantly readable and spin this loop. The wake needs no
+        // interpretation of its own: what reports the signal is the pending
+        // check below, and what reports readiness is the socket's revents.
+        if (npfd == 2 && wait_res > 0 && (pfd[1].revents & POLLIN)) {
+            char drain[64];
+            while (read(notify_pipe[0], drain, sizeof drain) > 0)
+                continue;
+        }
+        if (wait_res > 0 && pfd[0].revents != 0)
+            break; // ready (or error/hangup): the caller retries the I/O
+        if (wait_res == 0) {
+            if (wait != NULL && wait->has_deadline) {
+                err = _EAGAIN;
+                break;
+            }
+            continue; // no deadline was armed, so this cannot happen; re-poll
+        }
+        if (wait_res < 0 && wait_errno != EINTR) {
+            errno = wait_errno;
+            err = errno_map();
+            break;
+        }
+        // EINTR, or woken by the notify pipe alone. A real pending guest
+        // signal MUST surface as EINTR so the guest can run its handler; a
+        // purely spurious poke (a TLB-shootdown SIGUSR1, or a notify for a
+        // signal this task has blocked) just re-enters the wait.
+        if (socket_guest_signal_pending()) {
+            err = _EINTR;
+            break;
+        }
+    }
+    // Unpublish before closing so a concurrent deliver_signal (which reads the
+    // fd under sighand->lock) can never poke a closed or reused fd. Done
+    // before any errno the caller cares about is restored: lock() clobbers it.
+    if (notify_pipe[0] >= 0) {
+        lock(&current->sighand->lock, 0);
+        current->poll_notify_fd = -1;
+        unlock(&current->sighand->lock);
+        close(notify_pipe[0]);
+        close(notify_pipe[1]);
+    }
+    // Every caller's error path distinguishes an already-mapped negative code
+    // from a raw host failure by testing errno == 0, so leave it that way: the
+    // codes returned here are mapped (or synthesized, for a deadline that
+    // expired), and the poll/drain/close/lock above all clobber errno.
+    errno = 0;
+    return err;
+}
+
+// Advance a scratch copy of an iovec array past `consumed` bytes. The copy is
+// mandatory: free_msghdr_iov() frees each iov_base, and an advanced base is an
+// interior pointer.
+static void socket_iov_advance(struct iovec *iov, int *iovlen, size_t consumed) {
+    int i = 0;
+    while (consumed > 0 && i < *iovlen) {
+        size_t chunk = iov[i].iov_len < consumed ? iov[i].iov_len : consumed;
+        iov[i].iov_base = (char *) iov[i].iov_base + chunk;
+        iov[i].iov_len -= chunk;
+        consumed -= chunk;
+        if (iov[i].iov_len == 0)
+            i++;
+    }
+    *iovlen -= i;
+    if (i > 0 && *iovlen > 0)
+        memmove(iov, iov + i, (size_t) *iovlen * sizeof(*iov));
+}
+
+// Only a byte stream can deliver half a request. Datagram and seqpacket sends
+// are all-or-nothing and MSG_WAITALL is a no-op on them, so they only ever
+// retry on EAGAIN.
+static bool socket_is_stream(struct fd *sock) {
+    return sock->socket.type == SOCK_STREAM_;
 }
 
 #if defined(__APPLE__)
@@ -3391,19 +3575,22 @@ static int unix_socket_send_peer_token(struct fd *sock) {
         return _ENOMEM;
     size_t sent = 0;
     const char *buf = (const char *) &cookie;
+    socket_force_host_nonblock(sock);
     while (sent < sizeof(cookie)) {
         ssize_t res = 0;
         TASK_MAY_BLOCK {
             while (1) {
                 errno = 0;
-                res = write(sock->real_fd, buf + sent, sizeof(sock) - sent);
+                res = write(sock->real_fd, buf + sent, sizeof(cookie) - sent);
                 if (res >= 0)
                     break;
                 if (socket_should_retry_io_eintr(sock, 0))
                     continue;
                 if ((errno == EAGAIN || errno == EWOULDBLOCK) &&
                         socket_call_is_blocking(sock, 0)) {
-                    int wait_err = socket_wait_ready(sock, POLLOUT);
+                    // NULL: iSH's own handshake, not a guest call, so it must
+                    // not inherit the guest's SO_SNDTIMEO.
+                    int wait_err = socket_wait_ready(sock, POLLOUT, NULL);
                     if (wait_err < 0) {
                         res = wait_err;
                         break;
@@ -3437,6 +3624,7 @@ static int unix_socket_finish_peer(struct fd *sock) {
         // -read offset bookkeeping is needed (or possible).
         uint64_t cookie = 0;
         ssize_t res = 0;
+        socket_force_host_nonblock(sock);
         for (;;) {
             TASK_MAY_BLOCK {
                 while (1) {
@@ -3450,7 +3638,7 @@ static int unix_socket_finish_peer(struct fd *sock) {
                         continue;
                     }
                     if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        int wait_err = socket_wait_ready(sock, POLLIN);
+                        int wait_err = socket_wait_ready(sock, POLLIN, NULL);
                         if (wait_err < 0) {
                             res = wait_err;
                             break;
@@ -3467,7 +3655,7 @@ static int unix_socket_finish_peer(struct fd *sock) {
             if ((size_t) res >= sizeof(cookie))
                 break;
             // Fewer than 8 bytes available yet: wait for more, then re-peek.
-            int wait_err = socket_wait_ready(sock, POLLIN);
+            int wait_err = socket_wait_ready(sock, POLLIN, NULL);
             if (wait_err < 0)
                 return wait_err;
         }
@@ -4198,8 +4386,14 @@ static int_t sys_connect_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t
     }
 
     err = connect(sock->real_fd, (void *) &sockaddr, sockaddr_len);
-    if (forced_nonblocking_connect)
+    if (forced_nonblocking_connect) {
         (void) fcntl(sock->real_fd, F_SETFL, saved_host_flags);
+        // This restore only runs when the host flags had no O_NONBLOCK to
+        // begin with, so it cannot be undoing socket_force_host_nonblock() --
+        // but it is a host-flag write, so drop the cache rather than reason
+        // about it from a distance.
+        sock->socket.host_nonblock = false;
+    }
     if (err < 0) {
         int mapped_err = errno_map();
         if ((mapped_err == _EINPROGRESS || mapped_err == _EALREADY) &&
@@ -4410,13 +4604,12 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
         // when the poke is lost, with no periodic wakeups, so an idle listener
         // still sleeps indefinitely.
         //
-        // NOT a general fix for the bug class: sys_recvfrom_common and the
-        // send path still block directly in the host recvmsg/sendmsg with only
-        // the poke to escape, and wedge identically (verified: 8 tasks parked
-        // in recv(), all SIGKILLed, 7 of 8 survive on both AF_UNIX and TCP).
-        // A pipe fd cannot be added to a blocking recvmsg; those need this
-        // path's nonblocking-plus-poll conversion. socket_wait_ready()'s
-        // infinite poll wants the same pipe treatment.
+        // The rest of the bug class -- the recv and send paths, which blocked
+        // directly in the host recvmsg/sendmsg, and socket_wait_ready()'s
+        // infinite poll -- got the same treatment afterwards: the host
+        // description is kept nonblocking (socket_force_host_nonblock) so all
+        // of them wait in socket_wait_ready, which publishes this same pipe.
+        // See socket_kill.c.
         //
         // Created lazily: a guest-O_NONBLOCK accept breaks at the first EAGAIN
         // below and must not pay for a pipe it will never wait on.
@@ -4954,30 +5147,59 @@ static int_t sys_sendto_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t l
         }
     }
     ssize_t res = 0;
+    // A blocking send on a byte stream does not return until the whole request
+    // is queued. The host used to run that loop for us; now that the host call
+    // is nonblocking so a fatal signal can reach this task, the loop is ours.
+    // Only streams: a datagram send is all-or-nothing.
+    bool send_all = socket_call_is_blocking(sock, real_flags) && socket_is_stream(sock);
+    size_t sent = 0;
+    struct socket_io_wait wait = {};
+    socket_force_host_nonblock(sock);
     TASK_MAY_BLOCK {
         while (1) {
             errno = 0;
             if (unix_dgram) {
                 res = sendmsg(sock->real_fd, &dgram_msg, real_flags);
             } else if (sockaddr_addr == 0) {
-                res = send(sock->real_fd, buffer, len, real_flags);
+                res = send(sock->real_fd, buffer + sent, len - sent, real_flags);
             } else {
-                res = sendto(sock->real_fd, buffer, len, real_flags,
+                res = sendto(sock->real_fd, buffer + sent, len - sent, real_flags,
                              (void *) &sockaddr, sockaddr_len);
             }
-            if (res >= 0)
-                break;
+            if (res >= 0) {
+                if (!send_all)
+                    break;
+                sent += (size_t) res;
+                if (res == 0 || sent >= len) {
+                    res = (ssize_t) sent;
+                    break;
+                }
+                int wait_err = socket_wait_ready(sock, POLLOUT, &wait);
+                if (wait_err < 0) {
+                    res = (ssize_t) sent; // interrupted mid-send: partial count
+                    break;
+                }
+                continue;
+            }
             if (socket_should_retry_io_eintr(sock, real_flags))
                 continue;
             if (socket_should_retry_io_eagain(sock, real_flags)) {
-                int wait_err = socket_wait_ready(sock, POLLOUT);
+                int wait_err = socket_wait_ready(sock, POLLOUT, &wait);
                 if (wait_err < 0) {
+                    if (sent > 0) {
+                        res = (ssize_t) sent;
+                        break;
+                    }
                     res = wait_err;
                     errno = 0;
                     break;
                 }
                 continue;
             }
+            // Linux reports the bytes that did get through and leaves the
+            // error to be rediscovered by the next call.
+            if (sent > 0)
+                res = (ssize_t) sent;
             break;
         }
     }
@@ -5115,6 +5337,18 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
         return (int_t) netlink_res;
     }
     ssize_t res = 0;
+    // MSG_WAITALL must not be handed to a nonblocking host socket: Darwin
+    // returns EAGAIN rather than a short read when it cannot fill the buffer
+    // (measured), so passing it through would spin forever on a stream that
+    // never delivers the whole request. Accumulate here instead. Streams in
+    // blocking mode only, which is everywhere Linux honors the flag at all.
+    bool waitall = (real_flags & MSG_WAITALL) &&
+        socket_call_is_blocking(sock, real_flags) && socket_is_stream(sock);
+    bool waitall_peek = waitall && (real_flags & MSG_PEEK);
+    int host_flags = waitall ? (real_flags & ~MSG_WAITALL) : real_flags;
+    size_t got = 0;
+    struct socket_io_wait wait = {};
+    socket_force_host_nonblock(sock);
     TASK_MAY_BLOCK {
         while (1) {
             sigset_t oldmask;
@@ -5125,26 +5359,56 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
             }
             errno = 0;
             if (sockaddr_addr == 0 && sockaddr_len_addr == 0) {
-                res = recv(sock->real_fd, buffer, recv_cap, real_flags);
+                res = recv(sock->real_fd, buffer + got, recv_cap - got, host_flags);
             } else {
-                res = recvfrom(sock->real_fd, buffer, recv_cap, real_flags,
+                res = recvfrom(sock->real_fd, buffer + got, recv_cap - got, host_flags,
                                sockaddr_addr != 0 ? (void *) sockaddr : NULL,
                                sockaddr_len_addr != 0 ? &sockaddr_len : NULL);
             }
             socket_blocking_syscall_end();
-            if (res >= 0)
-                break;
+            if (res >= 0) {
+                if (!waitall)
+                    break;
+                if (waitall_peek) {
+                    // A peek always reads from the front of the stream, so
+                    // there is nothing to accumulate: re-peek the whole
+                    // request until it is all there (or the peer hangs up).
+                    if (res == 0 || (size_t) res >= len)
+                        break;
+                } else {
+                    got += (size_t) res;
+                    if (res == 0 || got >= len) {
+                        res = (ssize_t) got;
+                        break;
+                    }
+                }
+                int wait_err = socket_wait_ready(sock, POLLIN, &wait);
+                if (wait_err < 0) {
+                    // Interrupted or timed out part way: hand back what
+                    // arrived. Only an empty result may report the error.
+                    if (!waitall_peek)
+                        res = (ssize_t) got;
+                    break;
+                }
+                continue;
+            }
             if (socket_should_retry_io_eintr(sock, real_flags))
                 continue;
             if (socket_should_retry_io_eagain(sock, real_flags)) {
-                int wait_err = socket_wait_ready(sock, POLLIN);
+                int wait_err = socket_wait_ready(sock, POLLIN, &wait);
                 if (wait_err < 0) {
+                    if (got > 0) {
+                        res = (ssize_t) got;
+                        break;
+                    }
                     res = wait_err;
                     errno = 0;
                     break;
                 }
                 continue;
             }
+            if (got > 0)
+                res = (ssize_t) got;
             break;
         }
     }
@@ -6551,25 +6815,74 @@ static int_t sys_sendmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
         host_send_msg.msg_iovlen = msg.msg_iovlen + 1;
     }
     ssize_t send_res = 0;
+    // See the sendto path: a blocking stream send has to transmit the whole
+    // request, and with the host call now nonblocking that loop is ours.
+    bool send_all = !unix_dgram_send &&
+        socket_call_is_blocking(sock, real_flags) && socket_is_stream(sock);
+    size_t send_total = 0;
+    struct iovec *resume_iov = NULL;
+    int resume_iovlen = 0;
+    struct msghdr resume_msg = {};
+    struct socket_io_wait wait = {};
+    socket_force_host_nonblock(sock);
     TASK_MAY_BLOCK {
         while (1) {
             errno = 0;
-            send_res = sendmsg(sock->real_fd, unix_dgram_send ? &host_send_msg : &msg, real_flags);
-            if (send_res >= 0)
-                break;
-            if (socket_should_retry_io_eintr(sock, real_flags))
-                continue;
-            if (socket_should_retry_io_eagain(sock, real_flags)) {
-                int wait_err = socket_wait_ready(sock, POLLOUT);
+            struct msghdr *host_msg = unix_dgram_send ? &host_send_msg : &msg;
+            if (resume_iov != NULL)
+                host_msg = &resume_msg;
+            send_res = sendmsg(sock->real_fd, host_msg, real_flags);
+            if (send_res >= 0) {
+                if (!send_all)
+                    break;
+                send_total += (size_t) send_res;
+                if (send_res == 0 || send_total >= requested) {
+                    send_res = (ssize_t) send_total;
+                    break;
+                }
+                if (resume_iov == NULL) {
+                    resume_iov = malloc((size_t) msg.msg_iovlen * sizeof(*resume_iov));
+                    if (resume_iov == NULL) {
+                        send_res = (ssize_t) send_total;
+                        break;
+                    }
+                    memcpy(resume_iov, msg.msg_iov, (size_t) msg.msg_iovlen * sizeof(*resume_iov));
+                    resume_iovlen = (int) msg.msg_iovlen;
+                    resume_msg = msg;
+                    // Any control data went out with the bytes already sent;
+                    // repeating it on the continuation would hand the peer a
+                    // second copy of the SCM_RIGHTS parcel.
+                    resume_msg.msg_control = NULL;
+                    resume_msg.msg_controllen = 0;
+                    socket_iov_advance(resume_iov, &resume_iovlen, send_total);
+                } else {
+                    socket_iov_advance(resume_iov, &resume_iovlen, (size_t) send_res);
+                }
+                resume_msg.msg_iov = resume_iov;
+                resume_msg.msg_iovlen = resume_iovlen;
+                int wait_err = socket_wait_ready(sock, POLLOUT, &wait);
                 if (wait_err < 0) {
-                    send_res = wait_err;
+                    send_res = (ssize_t) send_total;
                     break;
                 }
                 continue;
             }
+            if (socket_should_retry_io_eintr(sock, real_flags))
+                continue;
+            if (socket_should_retry_io_eagain(sock, real_flags)) {
+                int wait_err = socket_wait_ready(sock, POLLOUT, &wait);
+                if (wait_err < 0) {
+                    send_res = send_total > 0 ? (ssize_t) send_total : wait_err;
+                    break;
+                }
+                continue;
+            }
+            if (send_total > 0)
+                send_res = (ssize_t) send_total;
             break;
         }
     }
+    free(resume_iov);
     free(dgram_iov);
     if (unix_dgram_send && send_res >= (ssize_t) sizeof(dgram_hdr))
         send_res -= sizeof(dgram_hdr);
@@ -6996,6 +7309,19 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
     }
     struct msghdr *host_msg = unix_dgram ? &host_recv_msg : &msg;
     ssize_t res = 0;
+    // See the recvfrom path for why MSG_WAITALL cannot reach a nonblocking
+    // host socket. Same emulation, over the iovec array instead of a buffer.
+    size_t recv_requested = sock_iov_requested(msg.msg_iov, msg.msg_iovlen);
+    bool waitall = (real_flags & MSG_WAITALL) && !unix_dgram &&
+        socket_call_is_blocking(sock, real_flags) && socket_is_stream(sock);
+    bool waitall_peek = waitall && (real_flags & MSG_PEEK);
+    int host_flags = waitall ? (real_flags & ~MSG_WAITALL) : real_flags;
+    size_t got = 0;
+    struct iovec *resume_iov = NULL;
+    int resume_iovlen = 0;
+    struct msghdr resume_msg = {};
+    struct socket_io_wait wait = {};
+    socket_force_host_nonblock(sock);
     TASK_MAY_BLOCK {
         bool use_ipv6_errqueue =
             (flags & MSG_ERRQUEUE_) &&
@@ -7010,27 +7336,73 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
                 break;
             }
             errno = 0;
+            struct msghdr *attempt = resume_iov != NULL ? &resume_msg : host_msg;
             if (use_ipv6_errqueue)
-                res = recvmsg_ipv6_errqueue(sock, host_msg, real_flags);
+                res = recvmsg_ipv6_errqueue(sock, attempt, host_flags);
             else
-                res = recvmsg(sock->real_fd, host_msg, real_flags);
+                res = recvmsg(sock->real_fd, attempt, host_flags);
             socket_blocking_syscall_end();
-            if (res >= 0)
-                break;
+            if (res >= 0) {
+                if (!waitall)
+                    break;
+                if (waitall_peek) {
+                    // Nothing to accumulate: a peek re-reads from the front.
+                    if (res == 0 || (size_t) res >= recv_requested)
+                        break;
+                } else {
+                    got += (size_t) res;
+                    if (res == 0 || got >= recv_requested) {
+                        res = (ssize_t) got;
+                        break;
+                    }
+                    if (resume_iov == NULL) {
+                        resume_iov = malloc((size_t) msg.msg_iovlen * sizeof(*resume_iov));
+                        if (resume_iov == NULL) {
+                            res = (ssize_t) got;
+                            break;
+                        }
+                        memcpy(resume_iov, msg.msg_iov,
+                               (size_t) msg.msg_iovlen * sizeof(*resume_iov));
+                        resume_iovlen = (int) msg.msg_iovlen;
+                        resume_msg = *host_msg;
+                        // The name and control buffers were filled by the
+                        // first chunk; a continuation must not overwrite them.
+                        resume_msg.msg_name = NULL;
+                        resume_msg.msg_namelen = 0;
+                        resume_msg.msg_control = NULL;
+                        resume_msg.msg_controllen = 0;
+                        socket_iov_advance(resume_iov, &resume_iovlen, got);
+                    } else {
+                        socket_iov_advance(resume_iov, &resume_iovlen, (size_t) res);
+                    }
+                    resume_msg.msg_iov = resume_iov;
+                    resume_msg.msg_iovlen = resume_iovlen;
+                }
+                int wait_err = socket_wait_ready(sock, POLLIN, &wait);
+                if (wait_err < 0) {
+                    if (!waitall_peek)
+                        res = (ssize_t) got;
+                    break;
+                }
+                continue;
+            }
             if (socket_should_retry_io_eintr(sock, real_flags))
                 continue;
             if (socket_should_retry_io_eagain(sock, real_flags)) {
-                int wait_err = socket_wait_ready(sock, POLLIN);
+                int wait_err = socket_wait_ready(sock, POLLIN, &wait);
                 if (wait_err < 0) {
-                    res = wait_err;
+                    res = got > 0 ? (ssize_t) got : wait_err;
                     errno = 0;
                     break;
                 }
                 continue;
             }
+            if (got > 0)
+                res = (ssize_t) got;
             break;
         }
     }
+    free(resume_iov);
     bool have_dgram_cred = false;
     struct scm *dgram_scm = NULL;
     if (unix_dgram) {
@@ -7532,6 +7904,8 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
     };
     struct msghdr dgram_msg = {.msg_iov = dgram_iov, .msg_iovlen = 2};
     ssize_t res = 0;
+    struct socket_io_wait wait = {};
+    socket_force_host_nonblock(fd);
     TASK_MAY_BLOCK {
         while (1) {
             errno = 0;
@@ -7545,7 +7919,7 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
                 continue;
             if ((errno == EAGAIN || errno == EWOULDBLOCK) &&
                     socket_call_is_blocking(fd, 0)) {
-                int wait_err = socket_wait_ready(fd, POLLIN);
+                int wait_err = socket_wait_ready(fd, POLLIN, &wait);
                 if (wait_err < 0) {
                     res = wait_err;
                     errno = 0;
@@ -7626,26 +8000,49 @@ static ssize_t sock_write(struct fd *fd, const void *buf, size_t size) {
         dgram_msg.msg_iovlen = 2;
     }
     ssize_t res = 0;
+    // Plain write(2) on a socket is how most guests actually send, and a
+    // blocking one must not come back short. See the sendto path: the host
+    // call is nonblocking now so a fatal signal can reach a parked task, which
+    // makes finishing the request our job.
+    bool send_all = !unix_dgram && socket_call_is_blocking(fd, 0) && socket_is_stream(fd);
+    size_t sent = 0;
+    struct socket_io_wait wait = {};
+    socket_force_host_nonblock(fd);
     TASK_MAY_BLOCK {
         while (1) {
             errno = 0;
             if (unix_dgram)
                 res = sendmsg(fd->real_fd, &dgram_msg, 0);
             else
-                res = write(fd->real_fd, buf, size);
-            if (res >= 0)
-                break;
+                res = write(fd->real_fd, (const char *) buf + sent, size - sent);
+            if (res >= 0) {
+                if (!send_all)
+                    break;
+                sent += (size_t) res;
+                if (res == 0 || sent >= size) {
+                    res = (ssize_t) sent;
+                    break;
+                }
+                int wait_err = socket_wait_ready(fd, POLLOUT, &wait);
+                if (wait_err < 0) {
+                    res = (ssize_t) sent;
+                    break;
+                }
+                continue;
+            }
             if (socket_should_retry_io_eintr(fd, 0))
                 continue;
             if ((errno == EAGAIN || errno == EWOULDBLOCK) &&
                     socket_call_is_blocking(fd, 0)) {
-                int wait_err = socket_wait_ready(fd, POLLOUT);
+                int wait_err = socket_wait_ready(fd, POLLOUT, &wait);
                 if (wait_err < 0) {
-                    res = wait_err;
+                    res = sent > 0 ? (ssize_t) sent : wait_err;
                     goto out_write;
                 }
                 continue;
             }
+            if (sent > 0)
+                res = (ssize_t) sent;
             break;
         }
     }
@@ -7778,6 +8175,12 @@ static int sock_setflags(struct fd *fd, dword_t flags) {
         fd->flags = (fd->flags & ~(O_APPEND_ | O_NONBLOCK_)) | (flags & (O_APPEND_ | O_NONBLOCK_));
         return 0;
     }
+    // The single choke point for guest F_SETFL and FIONBIO (kernel/fs.c
+    // set_nonblock routes through fd_setflags), and realfs_setflags writes the
+    // guest's flags straight onto the host description -- which drops the
+    // O_NONBLOCK socket_force_host_nonblock() put there. Drop the cache with
+    // it so the next call that can block re-forces.
+    fd->socket.host_nonblock = false;
     return realfs_setflags(fd, flags);
 }
 
