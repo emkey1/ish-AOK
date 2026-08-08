@@ -37,6 +37,25 @@ static bool accel_ready(void) {
     return accel_selftest_ok;
 }
 
+// AES-256-GCM is a separate capability with its own self-test: it needs host
+// AES/PMULL instructions, so it can be absent on a build host where ChaCha20
+// is fine. Kept independent so a guest asking for one is never refused because
+// the other is unavailable.
+static bool accel_aes_selftest_ok = false;
+static pthread_once_t accel_aes_selftest_once = PTHREAD_ONCE_INIT;
+
+static void run_accel_aes_selftest(void) {
+    accel_aes_selftest_ok = ish_aes_gcm_available() && ish_accel_aes_selftest();
+    if (!accel_aes_selftest_ok)
+        printk("ish-accel: AES-256-GCM unavailable (no host AES instructions "
+                "or self-test failed); guests will use their own\n");
+}
+
+static bool accel_aes_ready(void) {
+    pthread_once(&accel_aes_selftest_once, run_accel_aes_selftest);
+    return accel_aes_selftest_ok;
+}
+
 void ish_accel_init(void) {
     (void) accel_ready();
 }
@@ -57,7 +76,17 @@ struct ish_aead_req {
     uint64_t tag;    // 16 bytes: written (seal) or read (open)
 };
 
-enum { ISH_AEAD_ALG_CHACHA20_POLY1305 = 0, ISH_AEAD_ALG_CHACHA20 = 1 };
+enum {
+    ISH_AEAD_ALG_CHACHA20_POLY1305 = 0,
+    ISH_AEAD_ALG_CHACHA20 = 1,
+    ISH_AEAD_ALG_AES256_GCM = 2,
+};
+
+// op 0=seal, 1=open, 2=raw stream (back-compat), 3=tag/MAC only, 4=query.
+// The query op touches none of the request's pointers, so a provider can ask
+// "is this algorithm accelerated here?" without arranging valid buffers, and
+// gets _EOPNOTSUPP rather than a confusing fault when the answer is no.
+enum { ISH_AEAD_OP_QUERY = 4 };
 
 // Per-span callback for user_transform_two: feed one page-span through the
 // streaming cipher (keystream + Poly1305 state carry across calls).
@@ -74,6 +103,11 @@ static void ish_chacha_span(const void *in_host, void *out_host, size_t span, vo
 static void ish_mac_span(const void *host, size_t span, void *ctx) {
     ish_aead_mac_update((struct ish_aead_mac *) ctx, (const uint8_t *) host, span);
 }
+// Same, for AES-256-GCM (counter position and GHASH block carry across spans).
+static void ish_aes_span(const void *in_host, void *out_host, size_t span, void *ctx) {
+    ish_aes256_gcm_update((struct ish_aes_gcm_stream *) ctx,
+            (const uint8_t *) in_host, (uint8_t *) out_host, span);
+}
 // Bound per-call sizes so a bogus request can't drive a huge host malloc.
 // SSH records are <= ~256 KiB; anything larger just falls back to the guest.
 #define ISH_AEAD_MAX_IN   (4u << 20)   // 4 MiB
@@ -82,19 +116,30 @@ static void ish_mac_span(const void *host, size_t span, void *ctx) {
 // Returns 0 on success, or a negative guest errno. _ENOSYS signals "not
 // available" so a caller/provider falls back to its own software path.
 dword_t sys_ish_aead_guest(guest_addr_t req_addr) {
-    if (!doEnableCryptoAccel || !accel_ready())
+    if (!doEnableCryptoAccel)
         return _ENOSYS;
 
     struct ish_aead_req req;
     if (user_read(req_addr, &req, sizeof(req)))
         return _EFAULT;
     // alg 0 = ChaCha20-Poly1305 AEAD (op 0=seal, 1=open, 3=tag/MAC-only);
-    // alg 1 = raw ChaCha20 stream (op ignored). op 2 also selects the raw
-    // stream for back-compat.
-    bool raw_stream = (req.alg == ISH_AEAD_ALG_CHACHA20) || req.op == 2;
+    // alg 1 = raw ChaCha20 stream (op ignored); alg 2 = AES-256-GCM (op 0/1).
+    // op 2 also selects the raw stream for back-compat.
+    bool is_aes = req.alg == ISH_AEAD_ALG_AES256_GCM;
+    bool raw_stream = (req.alg == ISH_AEAD_ALG_CHACHA20) || (!is_aes && req.op == 2);
     bool mac_only = (req.alg == ISH_AEAD_ALG_CHACHA20_POLY1305) && req.op == 3;
-    if (req.alg != ISH_AEAD_ALG_CHACHA20_POLY1305 && req.alg != ISH_AEAD_ALG_CHACHA20)
+    if (req.alg != ISH_AEAD_ALG_CHACHA20_POLY1305 &&
+            req.alg != ISH_AEAD_ALG_CHACHA20 && !is_aes)
         return _EOPNOTSUPP;
+
+    // Per-algorithm availability. Answering the query op here keeps it free of
+    // any buffer access, so a provider can ask before it has a request set up.
+    bool ready = is_aes ? accel_aes_ready() : accel_ready();
+    if (req.op == ISH_AEAD_OP_QUERY)
+        return ready ? 0 : _EOPNOTSUPP;
+    if (!ready)
+        return is_aes ? _EOPNOTSUPP : _ENOSYS;
+
     if (!raw_stream && !mac_only && req.op > 1)
         return _EINVAL;
     if (req.inlen > ISH_AEAD_MAX_IN || req.aadlen > ISH_AEAD_MAX_AAD)
@@ -128,6 +173,38 @@ dword_t sys_ish_aead_guest(guest_addr_t req_addr) {
     if (req.aadlen && user_read(req.aad, scratch_aad, req.aadlen)) {
         memset(key, 0, sizeof(key));
         return _EFAULT;
+    }
+
+    if (is_aes) {
+        // AES-256-GCM. Same zero-copy shape as the ChaCha AEAD below: the
+        // data is transformed straight over guest memory a page-span at a
+        // time, with the counter and GHASH state carrying across spans.
+        dword_t aret = 0;
+        struct ish_aes_gcm_stream st;
+        ish_aes256_gcm_begin(&st, key, nonce, scratch_aad, req.aadlen, (int) req.op);
+        if (req.inlen &&
+                user_transform_two(req.in, req.out, req.inlen, ish_aes_span, &st)) {
+            aret = _EFAULT;
+            goto aes_out;
+        }
+        if (req.op == 0) { // seal
+            ish_aes256_gcm_finish(&st, NULL, tag);
+            if (user_write(req.tag, tag, sizeof(tag)))
+                aret = _EFAULT;
+        } else { // open
+            if (user_read(req.tag, tag, sizeof(tag))) { aret = _EFAULT; goto aes_out; }
+            if (ish_aes256_gcm_finish(&st, tag, NULL) != 0) {
+                // Same rule as the ChaCha AEAD: open decrypted eagerly, so the
+                // guest must not be left holding unauthenticated plaintext.
+                if (req.inlen)
+                    user_zero(req.out, req.inlen);
+                aret = _EBADMSG;
+            }
+        }
+    aes_out:
+        memset(key, 0, sizeof(key));
+        memset(&st, 0, sizeof(st)); // holds the key schedule and GHASH state
+        return aret;
     }
 
     if (mac_only) {

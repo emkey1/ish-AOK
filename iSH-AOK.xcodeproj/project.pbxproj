@@ -114,6 +114,7 @@
 		4B1EA0012F53100100000001 /* hle.c in Sources */ = {isa = PBXBuildFile; fileRef = 4B1EA0012F53100100000002 /* hle.c */; };
 		4B1EA0022F53200100000001 /* ish_accel_crypto.c in Sources */ = {isa = PBXBuildFile; fileRef = 4B1EA0022F53200100000002 /* ish_accel_crypto.c */; };
 		4B1EA0032F53200100000001 /* ish_accel.c in Sources */ = {isa = PBXBuildFile; fileRef = 4B1EA0032F53200100000002 /* ish_accel.c */; };
+		4B1EA0042F53200100000001 /* ish_accel_aes.c in Sources */ = {isa = PBXBuildFile; fileRef = 4B1EA0042F53200100000002 /* ish_accel_aes.c */; };
 		54D528EF4254773BF6EDC8AB /* WorkspaceImageViewer.m in Sources */ = {isa = PBXBuildFile; fileRef = 8C79AE703940107B279572E7 /* WorkspaceImageViewer.m */; };
 		5C673E18D378FA13A793371F /* MotePadDocumentStore.m in Sources */ = {isa = PBXBuildFile; fileRef = 4EB3F3EC2B21C7D6F418D1C2 /* MotePadDocumentStore.m */; };
 		5D4E7DF82B1E68EB006BA7D4 /* ro_locks.c in Sources */ = {isa = PBXBuildFile; fileRef = 5D59DADB2B179A2300FA995C /* ro_locks.c */; };
@@ -658,6 +659,7 @@
 		4B1EA0012F53100100000002 /* hle.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = hle.c; sourceTree = "<group>"; };
 		4B1EA0022F53200100000002 /* ish_accel_crypto.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = ish_accel_crypto.c; sourceTree = "<group>"; };
 		4B1EA0032F53200100000002 /* ish_accel.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = ish_accel.c; sourceTree = "<group>"; };
+		4B1EA0042F53200100000002 /* ish_accel_aes.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = ish_accel_aes.c; sourceTree = "<group>"; };
 		4B1EA0012F53100100000003 /* hle-table.inc */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "hle-table.inc"; sourceTree = "<group>"; };
 		4EB3F3EC2B21C7D6F418D1C2 /* MotePadDocumentStore.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = MotePadDocumentStore.m; sourceTree = "<group>"; };
 		56027C3DBA1338FABD4FD61A /* MotePadDocumentStore.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = MotePadDocumentStore.h; sourceTree = "<group>"; };
@@ -1333,6 +1335,7 @@
 				497F6C9F254E5C9800C82F46 /* calls.c */,
 				4B1EA0022F53200100000002 /* ish_accel_crypto.c */,
 				4B1EA0032F53200100000002 /* ish_accel.c */,
+				4B1EA0042F53200100000002 /* ish_accel_aes.c */,
 				5DABED372B41E2150078F3FB /* hostinfo.m */,
 				497F6C7B254E5C9700C82F46 /* calls.h */,
 				497F6C82254E5C9700C82F46 /* elf.h */,
@@ -2406,6 +2409,7 @@
 				497F6D1C254E5EA600C82F46 /* calls.c in Sources */,
 				4B1EA0022F53200100000001 /* ish_accel_crypto.c in Sources */,
 				4B1EA0032F53200100000001 /* ish_accel.c in Sources */,
+				4B1EA0042F53200100000001 /* ish_accel_aes.c in Sources */,
 				497F6D1D254E5EA600C82F46 /* epoll.c in Sources */,
 				497F6D1E254E5EA600C82F46 /* errno.c in Sources */,
 				497F6D1F254E5EA600C82F46 /* eventfd.c in Sources */,

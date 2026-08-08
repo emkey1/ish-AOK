@@ -63,4 +63,32 @@ int ish_aead_finish(struct ish_aead_stream *s, const uint8_t *tag_in, uint8_t *t
 // true on success. Called once before the accelerator is enabled.
 _Bool ish_accel_crypto_selftest(void);
 
+// ---- AES-256-GCM (kernel/ish_accel_aes.c) ---------------------------------
+// Hardware-only: implemented with the host's AES and carry-less-multiply
+// instructions, because the alternative fast enough to be worth a syscall is a
+// table-driven AES, which leaks key material through the data cache. Where the
+// host lacks them ish_aes_gcm_available() returns false and callers must not
+// use the rest of this section; the guest keeps using its own AES.
+_Bool ish_aes_gcm_available(void);
+
+struct ish_aes_gcm_stream { _Alignas(16) unsigned char opaque[512]; };
+
+// Same shape as the ChaCha20-Poly1305 streaming AEAD above. nonce is the
+// 12-byte GCM IV (the only length wired up; J0 is then IV||1). is_open: 0 =
+// seal (in=pt, out=ct), 1 = open (in=ct, out=pt). aad is consumed up front.
+void ish_aes256_gcm_begin(struct ish_aes_gcm_stream *s, const uint8_t key[32],
+        const uint8_t nonce[12], const uint8_t *aad, size_t aadlen, int is_open);
+// Spans of any length; the counter position and GHASH block carry across
+// calls. For open, out receives plaintext eagerly -- the caller MUST discard
+// or zero it if finish() fails.
+void ish_aes256_gcm_update(struct ish_aes_gcm_stream *s, const uint8_t *in,
+        uint8_t *out, size_t len);
+// seal: writes the 16-byte tag to tag_out. open: returns 0 iff tag_in matches
+// (constant-time), else -1.
+int ish_aes256_gcm_finish(struct ish_aes_gcm_stream *s, const uint8_t *tag_in,
+        uint8_t *tag_out);
+
+// Validates against NIST AES-256-GCM vectors. False if unavailable or wrong.
+_Bool ish_accel_aes_selftest(void);
+
 #endif
