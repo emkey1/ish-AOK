@@ -86,16 +86,10 @@
     ldr _ip, [_ip]
     b jit_ret_chain
 .gadget amd64_jmp
+    # target word is bit-63 tagged; amd64_branch_dispatch (below, after
+    # the jcc family) handles tagged-exit vs patched-chain uniformly.
     ldr _ip, [_ip]
-    cmp _ip, 0
-    b.lt 1f
-    b jit_ret_chain
-1:
-    lsl x8, _ip, 1
-    lsr x8, x8, 1
-    str x8, [_cpu, CPU_amd64_rip]
-    str w8, [_cpu, CPU_eip]
-    b jit_ret_chain
+    b amd64_branch_dispatch
 .gadget jcxz
     cbnz ecx, 1f
     ldr _ip, [_ip]
@@ -289,23 +283,69 @@
     .endif
 .endm
 
-# amd64 conditional jumps (0x70-0x7f, 0x0f 80-8f). The target is a 64-bit guest
-# rip, so set CPU_amd64_rip/CPU_eip and exit to the main loop (no static link --
-# same as the bridge, minus the gadget->C->gadget round-trip). gen.c emits
-# operand 0 = taken target, operand 1 = else (swapped for negated condition
-# codes). Uses only label 1.
+# amd64 block-chaining dispatch, the riscv64_branch_dispatch design with
+# this guest's 64-bit rip fields. Branch gadgets load the chosen target
+# word into _ip and jump here. Unchained words carry bit 63 (gen.c tags
+# them); the frontend patches a matching word to the successor block's
+# host code pointer (bit 63 clear), after which execution continues
+# straight into the next block without returning to C. The chain budget
+# (jit_frame.chain_budget, reset to 8192 per jit_enter) plus the poke
+# check keep chained loops from starving jetsam/quiesce waiters -- the
+# same rules that make backward edges safe on the arm64/riscv64 engines.
+# (The old forward-chaining experiment measured no win on a -O0 build,
+# where the C loop body dwarfed the round trip; at -O2 the round trip
+# dominated an amd64 gzip profile.)
+.global amd64_branch_dispatch
+amd64_branch_dispatch:
+    tbz _ip, 63, amd64_chain
+    and x8, _ip, 0x7fffffffffffffff
+    str x8, [_cpu, CPU_amd64_rip]
+    str w8, [_cpu, CPU_eip]
+    b jit_ret
+amd64_chain:
+    ldr x8, [_cpu, CPU_poked_ptr]
+    ldrb w8, [x8]
+    cbnz w8, amd64_chain_poked
+    ldr x8, [_cpu, LOCAL_chain_budget]
+    subs x8, x8, 1
+    str x8, [_cpu, LOCAL_chain_budget]
+    b.le amd64_chain_poked
+    sub x8, _ip, JIT_BLOCK_code
+    str x8, [_cpu, LOCAL_last_block]
+    # Publish the entered block's guest rip before running its gadgets. The C
+    # frontend loop guarantees CPU_amd64_rip == block->addr on entry to every
+    # block, and this engine -- unlike the fully-translated arm64/riscv64 ones
+    # this design was lifted from -- has gadgets that RE-DECODE their own
+    # instruction out of guest memory at that rip: the helper-call gadgets
+    # (amd64_jit_ff_group and its siblings in emu/amd64_interp.c) walk prefixes
+    # with amd64_fetch_u8, which fetches at CPU_amd64_rip and advances it. A
+    # chained entry that left rip stale therefore decoded whatever instruction
+    # rip happened to point at -- musl's __init_libc basename loop chains
+    # `incq %rax; movzbl -1(%rax),%ecx; cmp; je` to `test; jne` and back, so
+    # the ff-group helper re-entered with rip still on the movzbl, fetched its
+    # 0f opcode, and took `if (byte != 0xff) return INT_UNDEFINED` -> SIGILL on
+    # the first chained iteration of every static amd64 binary.
+    ldr x8, [x8, JIT_BLOCK_addr]
+    str x8, [_cpu, CPU_amd64_rip]
+    str w8, [_cpu, CPU_eip]
+    gret
+amd64_chain_poked:
+    ldur x8, [_ip, (JIT_BLOCK_addr - JIT_BLOCK_code)]
+    str x8, [_cpu, CPU_amd64_rip]
+    str w8, [_cpu, CPU_eip]
+    b jit_ret
+
+# amd64 conditional jumps (0x70-0x7f, 0x0f 80-8f). gen.c emits operand 0 =
+# taken target, operand 1 = else (swapped for negated condition codes),
+# both bit-63 tagged for the chaining dispatch above. Uses only label 1.
 .irp cond, COND_LIST
     .gadget amd64_jcc_\cond
         amd64_do_jump \cond, 1f
-        ldr x10, [_ip, 8]
-        str x10, [_cpu, CPU_amd64_rip]
-        str w10, [_cpu, CPU_eip]
-        b jit_ret
+        ldr _ip, [_ip, 8]
+        b amd64_branch_dispatch
     1:
-        ldr x10, [_ip]
-        str x10, [_cpu, CPU_amd64_rip]
-        str w10, [_cpu, CPU_eip]
-        b jit_ret
+        ldr _ip, [_ip]
+        b amd64_branch_dispatch
 .endr
 
 # amd64 LOOP (0xe2) / LOOPE/LOOPZ (0xe1) / LOOPNE/LOOPNZ (0xe0), no address-size prefix

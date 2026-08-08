@@ -319,6 +319,20 @@ static inline __attribute__((always_inline)) bool amd64_jit_debug_enabled(void) 
     return enabled == 1;
 }
 
+// ISH_AMD64_NOCHAIN=1: leave the amd64 frontend's branch words unpatched, so
+// every block boundary round-trips to C instead of dispatching through
+// amd64_chain. Bisection hatch for suspected chaining bugs -- the tagging and
+// amd64_branch_dispatch paths still run, so it isolates the patch itself.
+// Cached like the gates above: the check sits in the frontend's per-block
+// patch loop, where a live getenv() would be a strlen-ing library call on the
+// hot path.
+static inline __attribute__((always_inline)) bool amd64_jit_chaining_enabled(void) {
+    static int enabled = -1;
+    if (enabled == -1)
+        enabled = getenv("ISH_AMD64_NOCHAIN") == NULL ? 1 : 0;
+    return enabled == 1;
+}
+
 // Single cached gate for the per-block debug machinery in the amd64 frontend
 // (force-interp ranges, cc1 JIT trace). All off by default; when so, the frontend
 // skips amd64_cc1_force_interp_block() and the cc1 cpu_state snapshot entirely
@@ -2605,6 +2619,38 @@ rearm_amd64:
             ret = cpu_run_to_interrupt_amd64(cpu, tlb);
             break;
         }
+        // Block chaining, the riscv64/arm64 frontend design: patch the
+        // previous block's tagged branch words (bit 63 set, low 48 bits =
+        // target rip) to this block's code so the branch gadget continues
+        // through amd64_branch_dispatch without returning here. Both
+        // forward AND backward edges: amd64_chain enforces the per-entry
+        // chain budget, so chained loops still surface for jetsam/pokes.
+        // (The earlier forward-only experiment measured no win on a -O0
+        // build; at -O2 this round trip dominated the gzip profile.)
+        {
+            struct jit_block *last_block = frame->last_block;
+            if (last_block != NULL &&
+                    (last_block->jump_ip[0] != NULL ||
+                     last_block->jump_ip[1] != NULL)) {
+                jit_crash_track_mutex_lock(&jit->lock);
+                if (!last_block->is_jetsam && !block->is_jetsam) {
+                    for (int i = 0; i <= 1; i++) {
+                        if (amd64_jit_chaining_enabled() &&
+                                last_block->jump_ip[i] != NULL &&
+                                (*last_block->jump_ip[i] >> 63) != 0 &&
+                                (*last_block->jump_ip[i] & 0xffffffffffffULL) == block->addr) {
+                            __atomic_store_n(last_block->jump_ip[i],
+                                    (unsigned long) block->code, __ATOMIC_RELEASE);
+                            list_add(&block->jumps_from[i], &last_block->jumps_from_links[i]);
+                        }
+                    }
+                }
+                jit_crash_track_mutex_unlock(&jit->lock);
+            }
+        }
+        frame->last_block = block;
+        frame->chain_budget = 8192; // see jit_frame.chain_budget
+
         amd64_jit_debug("frontend exec block ip=%llx end=%llx",
                 (unsigned long long) ip,
                 (unsigned long long) block->end_addr);
@@ -2648,7 +2694,9 @@ rearm_amd64:
                 frame->cpu.trapno,
                 interrupt);
         frame->cpu.eip = (dword_t) frame->cpu.amd64_rip;
-        frame->last_block = NULL;
+        // frame->last_block stays set: C set it to the entered block and
+        // amd64_chain updates LOCAL_last_block as it links through blocks,
+        // so the patch loop above sees the true predecessor next iteration.
         if (interrupt != INT_NONE) {
             jit_frame_sync_out(cpu, frame);
             ret = interrupt;

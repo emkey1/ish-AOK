@@ -471,15 +471,21 @@ static void gen_amd64_jcc(struct gen_state *state, unsigned cc,
     bool swap = cc & 1;
     if (gen_amd64_try_fuse_jcc(state, cc)) {
         state->amd64_deferred_rip_valid = false;
-        gen(state, (unsigned long) (swap ? next_ip : target_ip));   // taken
-        gen(state, (unsigned long) (swap ? target_ip : next_ip));   // else
+        // bit-63 tagged for amd64_branch_dispatch; the frontend patches a
+        // matching word to the successor block's code (block chaining).
+        gen(state, (unsigned long) ((swap ? next_ip : target_ip) | (1ull << 63)));
+        state->jump_ip[0] = state->size - 1;
+        gen(state, (unsigned long) ((swap ? target_ip : next_ip) | (1ull << 63)));
+        state->jump_ip[1] = state->size - 1;
         return;
     }
     gen_amd64_flush_reg_cache(state);
     state->amd64_deferred_rip_valid = false;
     gen(state, (unsigned long) gadgets[(cc >> 1) & 7]);
-    gen(state, (unsigned long) (swap ? next_ip : target_ip));   // operand 0: taken
-    gen(state, (unsigned long) (swap ? target_ip : next_ip));   // operand 1: else
+    gen(state, (unsigned long) ((swap ? next_ip : target_ip) | (1ull << 63)));   // taken
+    state->jump_ip[0] = state->size - 1;
+    gen(state, (unsigned long) ((swap ? target_ip : next_ip) | (1ull << 63)));   // else
+    state->jump_ip[1] = state->size - 1;
 #else
     (void) state; (void) cc; (void) target_ip; (void) next_ip;
 #endif

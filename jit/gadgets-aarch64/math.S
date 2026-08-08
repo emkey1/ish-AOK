@@ -5060,10 +5060,11 @@ _gadget_array_start fused_test32
 # amd64_cached_set_addsub_flags (later blocks re-read eflags), which
 # clobbers NZCV -- so the tail tests the still-live cf (w14), of (w16)
 # and result (x15, upper bits clean in the 32-bit path) instead of host
-# flags. Stream: [gadget][packed]([imm])[taken][else]; the gadget stores
-# CPU_amd64_rip/eip and exits via jit_ret exactly like amd64_jcc_<cond>
-# (no chaining on amd64). Parity has no cheap live-register form and is
-# never fused (NULL table slot in gen.c).
+# flags. Stream: [gadget][packed]([imm])[taken][else]; the gadget loads the
+# chosen word into _ip and hands off to amd64_branch_dispatch exactly like
+# amd64_jcc_<cond>, so a fused tail chains (or exits) on the same terms as
+# an unfused one. Parity has no cheap live-register form and is never fused
+# (NULL table slot in gen.c).
 
 .macro amd64_fused_cc_tail cond, sbit, toff
     .ifc \cond,o
@@ -5093,14 +5094,11 @@ _gadget_array_start fused_test32
         cmp w12, w16
         b.ne 8101f
     .endif
-    ldr x10, [_ip, \toff+8]
-    b 8102f
+    ldr _ip, [_ip, \toff+8]
+    b amd64_branch_dispatch
 8101:
-    ldr x10, [_ip, \toff]
-8102:
-    str x10, [_cpu, CPU_amd64_rip]
-    str w10, [_cpu, CPU_eip]
-    b jit_ret
+    ldr _ip, [_ip, \toff]
+    b amd64_branch_dispatch
 .endm
 
 .macro amd64_fused_cmp_ri cond
