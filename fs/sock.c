@@ -594,6 +594,30 @@ static uint32_t netlink_linux_if_flags(unsigned host_flags) {
     if (host_flags & IFF_MULTICAST)
         linux_flags |= IFF_MULTICAST_LINUX_;
 #endif
+    // A Linux netdev never has an empty flag word: every device type's setup
+    // routine sets something, so even a fully-down device carries at least
+    // BROADCAST|MULTICAST (ethernet) or NOARP (tunnels). Darwin does have
+    // flagless interfaces -- `ifconfig stf0` (the 6to4 tunnel, present on
+    // macOS AND iOS) prints literally "flags=0<>" -- and passing that zero
+    // through synthesizes a link that cannot exist on Linux.
+    //
+    // systemd-networkd then SIGABRTs the moment it sees one. link_update_flags()
+    // (networkd-link.c) early-returns when the incoming flags and operstate both
+    // match what the Link already holds; a freshly allocated Link is zeroed, so
+    // flags==0 plus operstate==IF_OPER_UNKNOWN(0) compares equal on the very
+    // first RTM_NEWLINK and the function returns BEFORE calling
+    // link_update_operstate(). link->carrier_state is left at 0
+    // (LINK_OPERSTATE_MISSING), which is one of the two holes in
+    // link_carrier_state_table[], so link_carrier_state_to_string() returns NULL
+    // and link_save()'s assert(carrier_state) aborts -- taking down networkd on
+    // every restart ("Failed to start Network Configuration" in a tight loop).
+    //
+    // NOARP is the honest floor: it asserts only that the link does no ARP,
+    // which is trivially true of one advertising neither broadcast nor
+    // multicast, and it is exactly what Linux reports for its own counterpart
+    // of this device (`sit0` is "<NOARP>").
+    if (linux_flags == 0)
+        linux_flags = IFF_NOARP_LINUX_;
     return linux_flags;
 }
 

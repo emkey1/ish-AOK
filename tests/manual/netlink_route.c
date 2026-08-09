@@ -26,6 +26,9 @@
  *     link_address_update_rtnl() read of it is required, ENODATA on miss)
  *   - no link reports IFF_RUNNING without IFF_LOWER_UP (Linux never does;
  *     resolved's link_relevant() insists on UP|LOWER_UP)
+ *   - no link reports an empty flag word (Linux never does either; Darwin's
+ *     6to4 tunnel stf0 is "flags=0<>" on macOS and iOS, and forwarding that
+ *     zero SIGABRTs systemd-networkd -- see the comment at the check)
  *
  * Exits 0 and prints "netlink_route: PASS" on success.
  */
@@ -218,6 +221,7 @@ static void run_dump(enum io_method m, int req_type, int expect_new) {
     int saw_done = 0, saw_err = 0, saw_new = 0, batches = 0;
     int done_multi = 0, parts_not_multi = 0;
     int addrs_missing_ifa_flags = 0, links_running_not_lower_up = 0;
+    int links_zero_flags = 0;
     arm_alarm(5);
     for (int guard = 0; guard < 64 && !saw_done && !alarm_fired; guard++) {
         errno = 0;
@@ -259,6 +263,21 @@ static void run_dump(enum io_method m, int req_type, int expect_new) {
                     struct nl_ifinfomsg *ifi = NL_DATA(nlh);
                     if ((ifi->ifi_flags & IFF_RUNNING_) && !(ifi->ifi_flags & IFF_LOWER_UP_))
                         links_running_not_lower_up++;
+                    /* No Linux netdev has an empty flag word -- every device
+                     * type's setup sets something, so even a down device shows
+                     * BROADCAST|MULTICAST or (tunnels, e.g. sit0) NOARP. Darwin
+                     * does have flagless interfaces: `ifconfig stf0`, the 6to4
+                     * tunnel present on macOS and iOS alike, prints "flags=0<>".
+                     * Passing that zero through SIGABRTs systemd-networkd on
+                     * sight: link_update_flags() early-returns when the incoming
+                     * flags and operstate both equal what the freshly-zeroed
+                     * Link already holds, so link_update_operstate() never runs,
+                     * link->carrier_state stays at LINK_OPERSTATE_MISSING (a
+                     * NULL hole in link_carrier_state_table[]), and link_save()'s
+                     * assert(carrier_state) fires. Restart= then crash-loops it
+                     * ("Failed to start Network Configuration", forever). */
+                    if (ifi->ifi_flags == 0)
+                        links_zero_flags++;
                 }
             }
         }
@@ -282,6 +301,8 @@ static void run_dump(enum io_method m, int req_type, int expect_new) {
     if (expect_new == RTM_NEWLINK_) {
         snprintf(lab, sizeof lab, "%s.running_implies_lower_up", mn);
         check(lab, links_running_not_lower_up, 0);
+        snprintf(lab, sizeof lab, "%s.no_zero_flag_links", mn);
+        check(lab, links_zero_flags, 0);
     }
     /* Every system has a loopback link, so a link dump must yield >= 1 entry. */
     if (expect_new == RTM_NEWLINK_) {
