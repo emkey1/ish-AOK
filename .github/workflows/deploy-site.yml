@@ -4,6 +4,11 @@ on:
 
 jobs:
   deploy:
+    # Fires on any release event, including one created by the dev-IPA workflow,
+    # so a foreign repo running our workflows also fires this. It has no secret
+    # there and just fails noisily (observed 2026-08-09). Same guard as
+    # build-ktop.yml.
+    if: github.repository == 'emkey1/ish-AOK'
     runs-on: ubuntu-latest
     steps:
     - name: Trigger Deploy

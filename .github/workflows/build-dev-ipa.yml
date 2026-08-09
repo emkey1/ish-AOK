@@ -14,6 +14,13 @@ permissions:
 
 jobs:
   build:
+    # This job publishes a signed-app-sized IPA under the dev-latest release, so
+    # it must only ever run in this repository. A checkout whose origin has been
+    # repointed elsewhere still pushes `working`, and without this guard the
+    # foreign repo runs THIS workflow and publishes an iSH-AOK build under
+    # someone else's name (happened 2026-08-07: a 40 MB iSH-AOK IPA appeared as
+    # a public prerelease on an unrelated project). Same guard as build-ktop.yml.
+    if: github.repository == 'emkey1/ish-AOK'
     runs-on: macos-15
     timeout-minutes: 90
     steps:
