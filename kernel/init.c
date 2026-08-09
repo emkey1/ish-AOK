@@ -82,6 +82,22 @@ static struct task *construct_task(struct task *parent) {
         return NULL;
     }
 
+    // task_create_ only ALIASES a parent's uts_ns: with no parent it retains
+    // init_uts_ns itself, but with one it copies the pointer out of the parent
+    // struct and leaves the reference to copy_task, which is on the fork path
+    // and never runs here. Every other refcounted field the parent copy brought
+    // along is replaced with a fresh object below (mm_new, sighand_new,
+    // fdtable_new, fs_info_new), so uts_ns was the only one left owning nothing
+    // while do_exit still released it. Each become_new_init_child task therefore
+    // decremented a reference it never took, and since every terminal session,
+    // the display applet and the root upgrader all come through here, two
+    // session exits were enough to drive init_uts_ns to zero and call free() on
+    // a static: "pointer being freed was not allocated", SIGABRT out of
+    // do_exit. Sharing the parent's UTS namespace is the right semantic (Linux
+    // only gives a new one for CLONE_NEWUTS), so take the reference for it.
+    if (parent != NULL)
+        uts_ns_retain(task->uts_ns);
+
     //atomic_thread_fence(__ATOMIC_SEQ_CST);
     
     struct tgroup *group = malloc(sizeof(struct tgroup));

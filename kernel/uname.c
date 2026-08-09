@@ -32,8 +32,10 @@ void uts_ns_release(struct uts_namespace *ns) {
     lock(&ns->lock, 0);
     bool dead = --ns->refcount == 0;
     unlock(&ns->lock);
-    // init_uts_ns is static and holds a reference that is never dropped, so
-    // it can never reach zero here.
+    // init_uts_ns is static and holds a reference that is never dropped, so it
+    // can never reach zero here -- provided every task that points at it took a
+    // reference. construct_task() used to inherit the pointer without one; see
+    // the comment there.
     if (dead)
         free(ns);
 }
