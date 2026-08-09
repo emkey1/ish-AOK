@@ -264,6 +264,22 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     db_check_error(fs);
     sqlite3_finalize(statement);
 
+    // Bound the WAL. The default journal_size_limit is -1, which means a
+    // checkpoint RESETS the WAL but never shrinks it, so it grows to its
+    // high-water mark and stays there. That matters because sqlite3_close()
+    // checkpoints the whole WAL back into the database on the last connection,
+    // and on iOS that close happens as the process is being suspended: a large
+    // WAL turns it into slow I/O performed while still holding the database
+    // lock, which is exactly what RunningBoard kills with 0xdead10cc (seen in
+    // the File Provider extension, whose crash stacks sat in sqlite3WalClose ->
+    // sqlite3WalCheckpoint -> unixWrite/unixTruncate). Truncating at each
+    // checkpoint keeps that final close cheap.
+    statement = db_prepare(fs, "pragma journal_size_limit=1048576");
+    db_check_error(fs);
+    sqlite3_step(statement);
+    db_check_error(fs);
+    sqlite3_finalize(statement);
+
     statement = db_prepare(fs, "pragma foreign_keys=true");
     db_check_error(fs);
     sqlite3_step(statement);

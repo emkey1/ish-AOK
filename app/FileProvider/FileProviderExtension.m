@@ -12,6 +12,24 @@
 #import "../AppGroup.h"
 #include "fs/fake-db.h"
 #include "fs/fake-path.h"
+#import <os/log.h>
+
+// The extension's breadcrumbs go to a JSON file in the app group container and
+// every write there is passed error:nil, so a failure is completely silent --
+// and in practice no breadcrumbs file has been observed on device at all. The
+// mount open/close pair is the part worth being able to see from the outside
+// (it is what decides whether a database is still open at suspension, which is
+// what RunningBoard kills with 0xdead10cc), and both are rare enough to log
+// unconditionally. Visible in Console.app with subsystem app.ish.iSH-AOK,
+// category fileprovider.
+os_log_t ISHFileProviderLog(void) {
+    static os_log_t log;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        log = os_log_create("app.ish.iSH-AOK", "fileprovider");
+    });
+    return log;
+}
 
 NSString *ISHHostPathForGuestPath(NSString *path) {
     const char *guest = path.fileSystemRepresentation;
@@ -315,7 +333,23 @@ static NSURL *ISHFileProviderPersistMetadataURL(void) {
 // One open fakefs mount per installed root, opened lazily. Replaces the old
 // single-mount-per-domain model now that one domain hosts every root.
 @property (nonatomic) NSMutableDictionary<NSString *, ISHFileProviderMount *> *mountsByRoot;
+// Bumped on every mount access; the idle-close block only fires if its own
+// generation is still current, so a later access silently cancels an earlier
+// pending close without needing a cancellable timer.
+@property (nonatomic) uint64_t mountIdleGeneration;
 @end
+
+// How long the mount cache may sit unused before its databases are closed.
+// This exists to move the close OFF the suspension path. NSFileProviderExtension
+// has no invalidate hook and iOS does not tell us when we are about to be
+// suspended, so previously the only fake_db_deinit was -[ISHFileProviderMount
+// dealloc] at process teardown. sqlite3_close() checkpoints the entire WAL back
+// into the database on the last connection, and doing that while being suspended
+// (still holding the database lock) is what RunningBoard kills with 0xdead10cc:
+// every one of build 546's crash reports had a thread inside sqlite3WalClose.
+// Closing while we are still running and untimed makes that checkpoint free of
+// any deadline.
+static const NSTimeInterval kISHFileProviderMountIdleSeconds = 3.0;
 
 @implementation FileProviderExtension
 
@@ -328,6 +362,7 @@ static NSURL *ISHFileProviderPersistMetadataURL(void) {
     @synchronized (self) {
         if (self.mountsByRoot == nil)
             self.mountsByRoot = [NSMutableDictionary dictionary];
+        [self scheduleMountIdleCloseLocked];
         ISHFileProviderMount *mountOwner = self.mountsByRoot[rootName];
         if (mountOwner != nil)
             return mountOwner;
@@ -347,8 +382,47 @@ static NSURL *ISHFileProviderPersistMetadataURL(void) {
         NSMutableDictionary<NSString *, id> *details = ISHFileProviderDetails(rootName);
         details[@"duration_ms"] = ISHFileProviderDurationMilliseconds(start);
         ISHFileProviderRecordBreadcrumb(@"fileprovider.mount.create.end", details);
+        os_log(ISHFileProviderLog(), "mount opened for root %{public}@ (%{public}lu open)",
+               rootName, (unsigned long) self.mountsByRoot.count);
         return mountOwner;
     }
+}
+
+// Caller must hold @synchronized (self).
+- (void)scheduleMountIdleCloseLocked {
+    uint64_t generation = ++_mountIdleGeneration;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (kISHFileProviderMountIdleSeconds * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        [self closeIdleMountsForGeneration:generation];
+    });
+}
+
+- (void)closeIdleMountsForGeneration:(uint64_t)generation {
+    NSArray<ISHFileProviderMount *> *closing = nil;
+    @synchronized (self) {
+        // A later access bumped the generation, so that access owns the next
+        // close and this one is stale.
+        if (generation != self.mountIdleGeneration)
+            return;
+        if (self.mountsByRoot.count == 0)
+            return;
+        closing = self.mountsByRoot.allValues;
+        [self.mountsByRoot removeAllObjects];
+    }
+
+    // Dropping the cache's reference is not necessarily the last one: an
+    // in-flight operation holds its ISHFileProviderMount as a strong local, and
+    // a live FileProviderItem retains its mountOwner. Those keep the database
+    // open until they are done with it, which is what makes closing here safe.
+    // Whichever reference goes last runs -dealloc -> fake_db_deinit, and that
+    // must not happen under our lock, so `closing` is released after leaving it.
+    NSMutableDictionary<NSString *, id> *details = ISHFileProviderDetails(nil);
+    details[@"mounts"] = @(closing.count);
+    ISHFileProviderRecordBreadcrumb(@"fileprovider.mount.idle_close", details);
+    os_log(ISHFileProviderLog(), "idle close: dropping %{public}lu mount(s) after %{public}.1fs idle",
+           (unsigned long) closing.count, kISHFileProviderMountIdleSeconds);
+    closing = nil;
+    os_log(ISHFileProviderLog(), "idle close: done, databases released");
 }
 
 - (NSArray<NSString *> *)installedRootNames {

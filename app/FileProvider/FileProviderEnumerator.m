@@ -199,6 +199,18 @@ static NSNumber *ISHFileProviderEnumeratorDurationMilliseconds(NSTimeInterval st
 }
 
 - (void)invalidate {
+    // The system is done with this enumerator. Release the item, because a
+    // FileProviderItem retains its mountOwner and therefore holds the fakefs
+    // database open: while any enumerator lives, the extension's idle close has
+    // nothing it can actually close, and the database survives until process
+    // teardown, where sqlite3_close()'s WAL checkpoint runs into suspension and
+    // earns a 0xdead10cc kill. This was an empty stub before, which is why the
+    // mounts stayed open for the extension's whole lifetime.
+    //
+    // Safe even if the system ignores its own "no further calls" contract:
+    // -enumerateItemsForObserver:startingAtPage: already treats a nil item as
+    // the empty working set, and -enumerateChangesForObserver: never reads it.
+    self.item = nil;
 }
 
 @end
