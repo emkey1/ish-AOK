@@ -12,7 +12,10 @@ permissions:
 
 jobs:
   build:
-    if: github.repository == 'emkey1/ish-AOK'
+    # Commits the rebuilt binaries back to the repo it runs in, which is fine in
+    # a fork, so match on repository NAME like the other guards rather than
+    # pinning the owner. See build-dev-ipa.yml for the reasoning.
+    if: endsWith(github.repository, '/ish-AOK')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

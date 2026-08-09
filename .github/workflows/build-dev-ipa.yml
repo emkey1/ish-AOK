@@ -14,13 +14,18 @@ permissions:
 
 jobs:
   build:
-    # This job publishes a signed-app-sized IPA under the dev-latest release, so
-    # it must only ever run in this repository. A checkout whose origin has been
-    # repointed elsewhere still pushes `working`, and without this guard the
-    # foreign repo runs THIS workflow and publishes an iSH-AOK build under
-    # someone else's name (happened 2026-08-07: a 40 MB iSH-AOK IPA appeared as
-    # a public prerelease on an unrelated project). Same guard as build-ktop.yml.
-    if: github.repository == 'emkey1/ish-AOK'
+    # This job publishes an IPA under the dev-latest release, so it must only run
+    # in an iSH-AOK repository. A checkout whose origin has been repointed at an
+    # unrelated project still pushes `working`, and without this guard that repo
+    # runs THIS workflow and publishes an iSH-AOK build under someone else's name
+    # (happened 2026-08-07: a 40 MB iSH-AOK IPA appeared as a public prerelease
+    # on an unrelated project).
+    #
+    # Matched on repository NAME, not owner/name, so a fork still builds its own
+    # dev IPAs. That is the whole point: the failure mode being prevented is the
+    # tree landing in a DIFFERENTLY NAMED repo, which a fork is not. The trailing
+    # slash matters, it stops `owner/not-ish-AOK` from matching.
+    if: endsWith(github.repository, '/ish-AOK')
     runs-on: macos-15
     timeout-minutes: 90
     steps:

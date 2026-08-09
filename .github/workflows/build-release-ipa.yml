@@ -19,10 +19,11 @@ permissions:
 jobs:
   build:
     # Publishes the numbered build release, and prunes old ones (KEEP_RELEASES),
-    # so it must only ever run in this repository: pushing the tags to a repo
+    # so it must only run in an iSH-AOK repository: pushing the tags to a repo
     # whose origin was misconfigured would both publish our IPA there and start
-    # deleting that repo's releases. Same guard as build-ktop.yml.
-    if: github.repository == 'emkey1/ish-AOK'
+    # deleting that repo's releases. Name-matched so forks still work, see
+    # build-dev-ipa.yml for the reasoning.
+    if: endsWith(github.repository, '/ish-AOK')
     runs-on: macos-15
     timeout-minutes: 90
     steps:
