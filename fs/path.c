@@ -15,7 +15,7 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
     *o = '\0';
     int n = MAX_PATH - 1;
 
-    if (strcmp(path, "") == 0)
+    if (path[0] == '\0')
         return _ENOENT;
 
     if (at_path != NULL && strcmp(at_path, "/") != 0) {
@@ -152,7 +152,7 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
     // returns EBADF; don't abort the whole emulator (stress-ng --dir passed one).
     if (at == NULL)
         return _EBADF;
-    if (strcmp(path, "") == 0)
+    if (path[0] == '\0')
         return _ENOENT;
     if (current == NULL || current->fs == NULL)
         return _ENOENT;
