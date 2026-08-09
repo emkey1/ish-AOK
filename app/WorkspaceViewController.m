@@ -12167,9 +12167,16 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     NSString *url = [self currentBrowserWebView].URL.absoluteString;
     BOOL isBookmarked = ISHWorkspaceBrowserIsBookmarked(url);
     [_bookmarkButton setTitle:isBookmarked ? @"★" : @"☆" forState:UIControlStateNormal];
+    // accessibilityLabel is "Bookmark", which overrides the star title, so
+    // VoiceOver never speaks the glyph and the state has to be carried some
+    // other way. It reads label, value, traits, hint. UIAccessibilityTraitSelected
+    // announces "Selected" when set and says nothing at all when it is not, so
+    // the two states need different treatment: the trait covers bookmarked on
+    // its own (a value there would just repeat it), while not-bookmarked has no
+    // announcement unless the value supplies one.
     if (isBookmarked) {
         _bookmarkButton.accessibilityTraits |= UIAccessibilityTraitSelected;
-        _bookmarkButton.accessibilityValue = @"Bookmarked";
+        _bookmarkButton.accessibilityValue = nil;
     } else {
         _bookmarkButton.accessibilityTraits &= ~UIAccessibilityTraitSelected;
         _bookmarkButton.accessibilityValue = @"Not bookmarked";
