@@ -12169,10 +12169,8 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     [_bookmarkButton setTitle:isBookmarked ? @"★" : @"☆" forState:UIControlStateNormal];
     if (isBookmarked) {
         _bookmarkButton.accessibilityTraits |= UIAccessibilityTraitSelected;
-        _bookmarkButton.accessibilityValue = @"Bookmarked";
     } else {
         _bookmarkButton.accessibilityTraits &= ~UIAccessibilityTraitSelected;
-        _bookmarkButton.accessibilityValue = @"Not bookmarked";
     }
 }
 
