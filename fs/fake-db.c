@@ -1,5 +1,7 @@
 #include <string.h>
 #include <sys/stat.h>
+#include <pthread.h>
+#include <time.h>
 #include "kernel/errno.h"
 #include "debug.h"
 #include "misc.h"
@@ -41,12 +43,74 @@ void db_exec_reset(struct fakefs_db *fs, sqlite3_stmt *stmt) {
     db_reset(fs, stmt);
 }
 
+// Suspension quiesce gate; see the contract in fake-db.h. Deliberately raw
+// pthread primitives rather than the emulator's lock_t/cond_t: the quiescing
+// side runs on the host UI thread, where `current` is NULL and the
+// task-aware interruptible waits do not apply.
+static pthread_mutex_t quiesce_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t quiesce_cond = PTHREAD_COND_INITIALIZER;
+static bool quiesce_requested = false;
+static unsigned transactions_in_flight = 0;
+
+// Must be called before taking fs->lock, so a task parked here owns nothing.
+static void transaction_enter(void) {
+    pthread_mutex_lock(&quiesce_mutex);
+    while (quiesce_requested)
+        pthread_cond_wait(&quiesce_cond, &quiesce_mutex);
+    transactions_in_flight++;
+    pthread_mutex_unlock(&quiesce_mutex);
+}
+
+static void transaction_leave(void) {
+    pthread_mutex_lock(&quiesce_mutex);
+    if (transactions_in_flight > 0)
+        transactions_in_flight--;
+    if (transactions_in_flight == 0)
+        pthread_cond_broadcast(&quiesce_cond);
+    pthread_mutex_unlock(&quiesce_mutex);
+}
+
+bool fakefs_quiesce_begin(unsigned timeout_ms, unsigned *still_in_flight) {
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += timeout_ms / 1000;
+    deadline.tv_nsec += (long) (timeout_ms % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec++;
+        deadline.tv_nsec -= 1000000000L;
+    }
+
+    pthread_mutex_lock(&quiesce_mutex);
+    quiesce_requested = true;
+    int err = 0;
+    while (transactions_in_flight > 0 && err == 0)
+        err = pthread_cond_timedwait(&quiesce_cond, &quiesce_mutex, &deadline);
+    unsigned remaining = transactions_in_flight;
+    pthread_mutex_unlock(&quiesce_mutex);
+
+    if (still_in_flight != NULL)
+        *still_in_flight = remaining;
+    // A straggler is possible and must not hang the caller: a transaction can
+    // stay open across a blocking host operation (opening a FIFO with no peer,
+    // say), and the caller is running out its own suspension deadline.
+    return remaining == 0;
+}
+
+void fakefs_quiesce_end(void) {
+    pthread_mutex_lock(&quiesce_mutex);
+    quiesce_requested = false;
+    pthread_cond_broadcast(&quiesce_cond);
+    pthread_mutex_unlock(&quiesce_mutex);
+}
+
 void db_begin_read(struct fakefs_db *fs) {
+    transaction_enter();
     sqlite3_mutex_enter(fs->lock);
     db_exec_reset(fs, fs->stmt.begin_deferred);
 }
 
 void db_begin_write(struct fakefs_db *fs) {
+    transaction_enter();
     sqlite3_mutex_enter(fs->lock);
     db_exec_reset(fs, fs->stmt.begin_immediate);
 }
@@ -54,10 +118,12 @@ void db_begin_write(struct fakefs_db *fs) {
 void db_commit(struct fakefs_db *fs) {
     db_exec_reset(fs, fs->stmt.commit);
     sqlite3_mutex_leave(fs->lock);
+    transaction_leave();
 }
 void db_rollback(struct fakefs_db *fs) {
     db_exec_reset(fs, fs->stmt.rollback);
     sqlite3_mutex_leave(fs->lock);
+    transaction_leave();
 }
 
 static void bind_path(sqlite3_stmt *stmt, int i, const char *path) {

@@ -45,3 +45,18 @@ extern NSString *const ProcessExitedNotification;
 #else
 extern NSString *const KernelPanicNotification;
 #endif
+
+// Suspension handling for the fakefs; implemented in AppDelegate.m.
+//
+// These must be driven from the SCENE delegate. This app adopts UIScene, and
+// UIKit does not call applicationDidEnterBackground: / willEnterForeground: on
+// the application delegate in a scene-based app, so hanging the work off those
+// leaves it silently never running.
+//
+// EnterBackground takes a background-task assertion whose expiration handler is
+// the closest thing iOS gives to an "about to be suspended" signal, and that is
+// where the fakefs is quiesced so no SQLite lock is held across suspension
+// (RUNNINGBOARD 0xdead10cc). EnterForeground lifts the gate. Both are safe to
+// call repeatedly.
+void ISHSuspendGuardEnterBackground(void);
+void ISHSuspendGuardEnterForeground(void);

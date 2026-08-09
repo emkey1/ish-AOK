@@ -7,9 +7,22 @@
 
 #import <Foundation/Foundation.h>
 #import <CoreLocation/CoreLocation.h>
+#include <stdatomic.h>
 #include "kernel/fs.h"
 #include "fs/dev.h"
 #include "util/sync.h"
+#import "LocationDevice.h"
+
+// Whether background location updates are actually running; see the contract in
+// LocationDevice.h. Kept as a plain flag rather than asking CLLocationManager,
+// because the question is not "is location authorized" but "is this app being
+// kept alive in the background right now", and only an active
+// startUpdatingLocation does that.
+static atomic_bool location_updates_running = false;
+
+bool ISHLocationKeepsAppAlive(void) {
+    return atomic_load(&location_updates_running);
+}
 
 @interface LocationTracker : NSObject <CLLocationManagerDelegate>
 
@@ -52,6 +65,7 @@ BOOL CLIsAuthorized(CLAuthorizationStatus status) {
         self.locationManager.allowsBackgroundLocationUpdates = YES;
         if (CLIsAuthorized([CLLocationManager authorizationStatus])) {
             [self.locationManager startUpdatingLocation];
+            atomic_store(&location_updates_running, true);
             [self.locationManager requestLocation];
         } else {
             [self.locationManager requestAlwaysAuthorization];
@@ -76,6 +90,7 @@ BOOL CLIsAuthorized(CLAuthorizationStatus status) {
 
 - (void)dealloc {
     [self.locationManager stopUpdatingLocation];
+    atomic_store(&location_updates_running, false);
     cond_destroy(&_updateCond);
 }
 
@@ -96,6 +111,7 @@ BOOL CLIsAuthorized(CLAuthorizationStatus status) {
     if (status == kCLAuthorizationStatusAuthorizedAlways || status == kCLAuthorizationStatusAuthorizedWhenInUse) {
         NSLog(@"got auth, starting updates");
         [manager startUpdatingLocation];
+        atomic_store(&location_updates_running, true);
     }
 }
 

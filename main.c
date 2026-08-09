@@ -267,6 +267,23 @@ static void setup_host_mounts(void) {
     }
 }
 
+// Dev harness for the fakefs suspension quiesce gate (ISH_TEST_QUIESCE), run
+// alongside ISH_TEST_GUEST_CMD so there is real transaction traffic to drain.
+static void *quiesce_test_thread(void *arg) {
+    (void) arg;
+    // Let the guest get going and open some transactions first.
+    usleep(300 * 1000);
+    unsigned straggling = 0;
+    bool drained = fakefs_quiesce_begin(2000, &straggling);
+    fprintf(stderr, "[quiesce] engaged: drained=%d straggling=%u\n", drained, straggling);
+    // Hold it briefly: guest tasks wanting a transaction must park, not spin or
+    // deadlock, and must not be holding fs->lock while they wait.
+    usleep(500 * 1000);
+    fakefs_quiesce_end();
+    fprintf(stderr, "[quiesce] lifted\n");
+    return NULL;
+}
+
 int main(int argc, char *const argv[]) {
     run_at_boot();
     configure_standalone_i386_safety(argc, argv);
@@ -357,8 +374,20 @@ int main(int argc, char *const argv[]) {
     // e.g. ISH_TEST_GUEST_CMD='echo out; echo err >&2; exit 7' ./ish -f alpinex86 /bin/sh
     const char *test_cmd = getenv("ISH_TEST_GUEST_CMD");
     if (test_cmd != NULL) {
+        // With ISH_TEST_QUIESCE set, exercise the suspension quiesce gate
+        // against the guest command's live filesystem traffic: engage it while
+        // transactions are in flight, confirm the drain reaches zero, then lift
+        // it and confirm the guest still finishes. A deadlock or a lost wakeup
+        // shows up as this never completing. See fs/fake-db.h.
+        pthread_t quiesce_thread;
+        bool quiesce_test = getenv("ISH_TEST_QUIESCE") != NULL;
+        if (quiesce_test)
+            pthread_create(&quiesce_thread, NULL, quiesce_test_thread, NULL);
+
         struct guest_command_result r;
         int rc = run_guest_command_capture(test_cmd, NULL, 10000, 0, &r);
+        if (quiesce_test)
+            pthread_join(quiesce_thread, NULL);
         fprintf(stderr,
                 "[guest-cmd] rc=%d launched=%d exited=%d code=%d sig=%d timed_out=%d truncated=%d len=%zu\n",
                 rc, r.launched, r.exited, r.exit_code, r.term_signal,

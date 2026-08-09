@@ -525,4 +525,24 @@ static void ConfigureTerminalViewController(SceneDelegate *delegate, TerminalVie
     }
 }
 
+- (void)sceneDidEnterBackground:(UIScene *)scene {
+    [ISHDiagnosticsStore recordBreadcrumb:@"scene.didEnterBackground"
+                                  details:@{@"session": scene.session.persistentIdentifier ?: @""}];
+    // The app supports multiple scenes, and the PROCESS is only heading for
+    // suspension once every one of them is in the background. Arming the
+    // suspend guard while another window is still frontmost would quiesce the
+    // filesystem out from under a live session.
+    for (UIScene *other in UIApplication.sharedApplication.connectedScenes) {
+        if (other.activationState != UISceneActivationStateBackground)
+            return;
+    }
+    ISHSuspendGuardEnterBackground();
+}
+
+- (void)sceneWillEnterForeground:(UIScene *)scene {
+    [ISHDiagnosticsStore recordBreadcrumb:@"scene.willEnterForeground"
+                                  details:@{@"session": scene.session.persistentIdentifier ?: @""}];
+    ISHSuspendGuardEnterForeground();
+}
+
 @end

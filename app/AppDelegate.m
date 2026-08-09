@@ -52,6 +52,52 @@
 #include "fs/tty.h"
 #include "app/RTCDevice.h"
 #include "util/sync.h"
+#include "app/LocationDevice.h"
+#include "fs/fake-db.h"
+#import <os/log.h>
+#import <os/lock.h>
+
+// Visible in Console.app with subsystem app.ish.iSH-AOK, category suspend.
+static os_log_t ISHSuspendLog(void) {
+    static os_log_t log;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ log = os_log_create("app.ish.iSH-AOK", "suspend"); });
+    return log;
+}
+
+// Runs `work` holding a background-task assertion, so iOS does not suspend us
+// partway through. Used for the boot mount phase: a fakefs mount opens a SQLite
+// connection and can run a whole migration pass, and being suspended inside one
+// is fatal (RUNNINGBOARD 0xdead10cc, "suspended while holding a file lock").
+// Ten of the field reports are exactly that, killed 1 to 2 seconds after launch
+// with a thread in fakefs_mount -> fake_db_init or in fakefs_migrate.
+// Safe against the block's early returns, since the assertion is ended after
+// `work` returns however it returns.
+static void ISHRunHoldingBackgroundAssertion(NSString *name, void (^work)(void)) {
+    UIApplication *app = UIApplication.sharedApplication;
+    __block UIBackgroundTaskIdentifier task = UIBackgroundTaskInvalid;
+    __block os_unfair_lock taskLock = OS_UNFAIR_LOCK_INIT;
+    void (^endTask)(void) = ^{
+        os_unfair_lock_lock(&taskLock);
+        UIBackgroundTaskIdentifier claimed = task;
+        task = UIBackgroundTaskInvalid;
+        os_unfair_lock_unlock(&taskLock);
+        if (claimed != UIBackgroundTaskInvalid)
+            [app endBackgroundTask:claimed];
+    };
+    task = [app beginBackgroundTaskWithName:name expirationHandler:endTask];
+    work();
+    endTask();
+}
+
+// Dispatches boot work to a background queue while holding an assertion, so the
+// mount cannot be interrupted by suspension. Replaces a bare dispatch_async;
+// the block body is unchanged.
+static void ISHDispatchBootWork(NSString *name, void (^work)(void)) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        ISHRunHoldingBackgroundAssertion(name, work);
+    });
+}
 
 #if ISH_LINUX
 #import "LinuxInterop.h"
@@ -2437,7 +2483,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
     }
     EnsureCharacterDevice("/dev/clipboard", S_IFCHR|0666, dev_make(DYN_DEV_MAJOR, DEV_CLIPBOARD_MINOR));
     
-    err = dyn_dev_register(&location_dev, DEV_CHAR, DYN_DEV_MAJOR, DEV_LOCATION_MINOR);
+    err = dyn_dev_register((struct dev_ops *) &location_dev, DEV_CHAR, DYN_DEV_MAJOR, DEV_LOCATION_MINOR);
     if (err != 0) {
         return RecordBootFailure(err,
                                  @"boot.device.location.failed",
@@ -2546,7 +2592,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                 NSLog(@"Could not mount /AOK/roots: %d", rootsMountErr);
             } else {
                 NSOrderedSet<NSString *> *otherRootNames = Roots.instance.roots;
-                dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                ISHDispatchBootWork(@"boot.secondary-mounts", ^{
                     for (NSString *otherRootName in otherRootNames) {
                         if ([otherRootName isEqualToString:defaultRoot])
                             continue;
@@ -2602,7 +2648,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
     // touching the same SQLite db mid-setup.
     NSURL *sharedFakefsURL = AOKSharedFakefsDirectoryURL();
     if (sharedFakefsURL != nil) {
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        ISHDispatchBootWork(@"boot.shared-fakefs-mount", ^{
             int fakefsLockFd = ISHAppGroupTryAcquireNamedLock(@"fakefs", @"shared", YES, nil);
             if (fakefsLockFd < 0) {
                 [ISHDiagnosticsStore recordLaunchStage:@"boot.fakefs.busy"];
@@ -3529,11 +3575,74 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
     });
 }
 
+// Assertion held from backgrounding until either suspension is imminent (its
+// expiration handler fires) or we come back to the foreground.
+// Held rather than compared against UIBackgroundTaskInvalid, which is a const
+// variable and so cannot initialize a static.
+static UIBackgroundTaskIdentifier suspendGuardTask;
+static bool suspendGuardHeld = false;
+
+static void ISHEndSuspendGuard(void) {
+    if (!suspendGuardHeld)
+        return;
+    UIBackgroundTaskIdentifier claimed = suspendGuardTask;
+    suspendGuardHeld = false;
+    [UIApplication.sharedApplication endBackgroundTask:claimed];
+}
+
+// Driven from the SCENE delegate; see the note in AppDelegate.h for why it
+// cannot live in applicationDidEnterBackground:.
+void ISHSuspendGuardEnterBackground(void) {
+    UIApplication *application = UIApplication.sharedApplication;
+    // A fakefs transaction holds a SQLite file lock for its whole duration, and
+    // iOS kills a process suspended while holding one (RUNNINGBOARD
+    // 0xdead10cc). Backgrounding does not tell us when suspension will land, so
+    // take an assertion: its expiration handler is iOS telling us the extra
+    // time is up, which is the closest thing to an "about to be suspended"
+    // signal, and that is where we get the filesystem to a lock-free state.
+    // Arm once. Every scene reports its own transition, so with more than one
+    // window they all observe "everything is backgrounded" and all call in
+    // here; without this each would take an assertion and only the last would
+    // be tracked, leaking the earlier ones (observed on device as the whole
+    // background/quiesce sequence logged twice).
+    if (suspendGuardHeld)
+        return;
+    suspendGuardHeld = true;
+    os_log(ISHSuspendLog(), "backgrounded, holding assertion until suspension is imminent");
+    suspendGuardTask = [application beginBackgroundTaskWithName:@"fakefs-quiesce" expirationHandler:^{
+        // Only quiesce if nothing is keeping us alive. With background location
+        // updates running the app genuinely keeps executing and is NOT about to
+        // be suspended, so freezing guest filesystem I/O here would stall
+        // long-running background work for no reason -- and this assertion
+        // expires on its own schedule regardless of that.
+        if (ISHLocationKeepsAppAlive()) {
+            os_log(ISHSuspendLog(), "assertion expired, still kept alive by location updates; not quiescing");
+        } else {
+            unsigned stragglers = 0;
+            bool drained = fakefs_quiesce_begin(2000, &stragglers);
+            os_log(ISHSuspendLog(), "quiesced for suspension: drained=%{public}d straggling=%{public}u",
+                   drained, stragglers);
+            [ISHDiagnosticsStore recordBreadcrumb:@"application.fakefsQuiesced"
+                                          details:@{@"drained": @(drained), @"straggling": @(stragglers)}];
+        }
+        ISHEndSuspendGuard();
+    }];
+}
+
+void ISHSuspendGuardEnterForeground(void) {
+    // Lift the gate before anything else: guest tasks may be parked on it.
+    fakefs_quiesce_end();
+    ISHEndSuspendGuard();
+}
+
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     [ISHDiagnosticsStore recordBreadcrumb:@"application.didEnterBackground"
                                   details:@{@"exiting": @(self.exiting)}];
     if (self.exiting)
         exit(0);
+    // No suspend-guard work here on purpose: this app adopts UIScene, so UIKit
+    // never calls this method and anything hung off it would silently not run.
+    // SceneDelegate's sceneDidEnterBackground: drives it instead.
 }
 
 - (void)applicationWillEnterForeground:(UIApplication *)application {
