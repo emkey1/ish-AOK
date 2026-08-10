@@ -316,7 +316,9 @@ static void gen(struct gen_state *state, unsigned long thing) {
                 sizeof(struct jit_block) + state->capacity * sizeof(unsigned long));
         if (bigger_block == NULL) {
             if (state->oom_active)
-                longjmp(state->oom_recovery, 1);
+                // _longjmp to match the _setjmp in jit_block_compile_common:
+                // no signal-mask restore, hence no sigprocmask syscall.
+                _longjmp(state->oom_recovery, 1);
             die("out of memory while jitting");
         }
         state->block = bigger_block;

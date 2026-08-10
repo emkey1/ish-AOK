@@ -1157,7 +1157,15 @@ static struct jit_block *jit_block_compile_common(guest_addr_t ip, struct tlb *t
     if (!started)
         return NULL;
     state.oom_active = true;
-    if (setjmp(state.oom_recovery) != 0) {
+    // _setjmp, not setjmp: on Darwin (BSD semantics, unlike glibc) plain
+    // setjmp/longjmp save and restore the signal mask, which is a real
+    // sigprocmask SYSCALL -- and this runs once per block compilation, so a
+    // translation-heavy guest pays it constantly. It showed up as
+    // cpu_step_to_interrupt -> setjmp -> sigprocmask in a gcc-compile profile.
+    // Nothing between here and gen()'s longjmp touches the signal mask (this
+    // region is pure decode plus realloc), so there is no mask to preserve.
+    // Same reasoning as the crash-unwind sigsetjmp's savemask=0 below.
+    if (_setjmp(state.oom_recovery) != 0) {
         // OOM hit during compilation; free the partial block and signal failure
         free(state.block);
         return NULL;
@@ -2103,7 +2111,15 @@ static int cpu_single_step_arm64(struct cpu_state *cpu, struct tlb *tlb) {
     if (!gen_start_arm64(cpu->arm64_pc, &state))
         return INT_GPF; // OOM allocating the block
     state.oom_active = true;
-    if (setjmp(state.oom_recovery) != 0) {
+    // _setjmp, not setjmp: on Darwin (BSD semantics, unlike glibc) plain
+    // setjmp/longjmp save and restore the signal mask, which is a real
+    // sigprocmask SYSCALL -- and this runs once per block compilation, so a
+    // translation-heavy guest pays it constantly. It showed up as
+    // cpu_step_to_interrupt -> setjmp -> sigprocmask in a gcc-compile profile.
+    // Nothing between here and gen()'s longjmp touches the signal mask (this
+    // region is pure decode plus realloc), so there is no mask to preserve.
+    // Same reasoning as the crash-unwind sigsetjmp's savemask=0 below.
+    if (_setjmp(state.oom_recovery) != 0) {
         free(state.block);
         return INT_GPF;
     }
