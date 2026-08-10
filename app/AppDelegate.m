@@ -3577,6 +3577,12 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
 
 // Assertion held from backgrounding until either suspension is imminent (its
 // expiration handler fires) or we come back to the foreground.
+// Longest the fakefs gate may stay engaged while the process is still running.
+// Comfortably covers the gap between the assertion expiring and iOS actually
+// suspending us, without leaving a still-running app with a frozen guest
+// filesystem. See the dispatch_after in the expiration handler.
+static const NSTimeInterval kISHQuiesceMaxHoldSeconds = 5.0;
+
 // Held rather than compared against UIBackgroundTaskInvalid, which is a const
 // variable and so cannot initialize a static.
 static UIBackgroundTaskIdentifier suspendGuardTask;
@@ -3624,6 +3630,27 @@ void ISHSuspendGuardEnterBackground(void) {
                    drained, stragglers);
             [ISHDiagnosticsStore recordBreadcrumb:@"application.fakefsQuiesced"
                                           details:@{@"drained": @(drained), @"straggling": @(stragglers)}];
+
+            // Never hold the gate open indefinitely.
+            //
+            // If iOS really does suspend us, this block cannot run until we
+            // resume, so the filesystem stays quiesced across the suspension --
+            // which is the whole point, and nothing is executing meanwhile
+            // anyway. But if iOS does NOT suspend us (something else is keeping
+            // the app alive, or it simply grants more time), then waiting for
+            // -sceneWillEnterForeground: to lift the gate freezes the guest
+            // filesystem for as long as the app sits in the background. That is
+            // not a subtle degradation: an incoming ssh session gets accepted
+            // and then blocks before it can reach a shell, because fork, exec,
+            // PAM and the home directory all need a fakefs transaction, so the
+            // device silently stops serving while looking perfectly healthy.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                         (int64_t) (kISHQuiesceMaxHoldSeconds * NSEC_PER_SEC)),
+                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                fakefs_quiesce_end();
+                os_log(ISHSuspendLog(), "still running after %{public}.0fs backgrounded; gate lifted",
+                       kISHQuiesceMaxHoldSeconds);
+            });
         }
         ISHEndSuspendGuard();
     }];
