@@ -37,9 +37,20 @@ _addr   .req x7
 // -Darm64_gret option; see the measurements and rationale there. Short version:
 // dmb is the default because ldar costs ~1.7x on ARMv8.0 while only buying ~6%
 // on Apple Silicon. Keep in sync if entry.S's contract changes.
-// NOTE: the riscv64 guest has not been re-measured on ARMv8.0 itself (no
-// riscv64 root on the A9), but this dispatcher was a verbatim copy of the arm64
-// one and the cost being measured is the host instruction, not the guest ISA.
+// ⚠ MEASURED, and it does NOT match the arm64 result: the riscv64 guest is
+// INSENSITIVE to this choice. A9 iPad, sh-loop 20k, same two builds, both
+// verified from `uname -v` and from the disassembled dispatch tail:
+//     riscv64   9998ms (dmb)  vs 10065ms (ldar)  -- flat, 0.7%
+//     arm64     3089ms (dmb)  vs  5394ms (ldar)  -- 1.75x
+// So the "it is a verbatim copy of the arm64 dispatcher, therefore it must
+// benefit the same" reasoning that first landed this was wrong, and is recorded
+// here because it is an inviting mistake: the instruction really is identical,
+// but this engine is ~3.2x slower per unit of guest work than the arm64 one, so
+// dispatch is a much smaller share of its time and the per-dispatch cost is
+// diluted to nothing. Kept on dmb anyway -- it measures the same either way on
+// ARMv8.0, and keeping both engines on one setting means one code path.
+// If riscv64 dispatch ever gets cheap enough to matter, re-measure rather than
+// assuming it now tracks arm64.
 .macro gret pop=0
 #if defined(ISH_ARM64_GRET_LDAR)
 .if \pop != 0
