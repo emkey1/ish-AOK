@@ -113,10 +113,27 @@ static int type_mismatch(void) {
     return 0;
 }
 
+// Seconds of NO PROGRESS that counts as a deadlock. The check loop re-arms the
+// alarm as it advances (see WATCHDOG_REARM_EVERY), so this is a stall detector,
+// not a total-runtime budget.
+//
+// It used to be a flat alarm(120) covering the whole run, which made the test
+// fail by construction on slow hardware: TOTAL_CHECKS is a FIXED count and every
+// check is several fakefs operations, i.e. SQLite plus its per-transaction fcntl,
+// so a device merely being slow blew the deadline with nothing wrong. That is
+// exactly what happened on an A9 iPad (2 cores, 2GB): 3 for 3 "watchdog timeout
+// (possible deadlock)" while the process was demonstrably in state R with CPU
+// time still accumulating, i.e. grinding, not stuck. A regression gate that
+// false-fails on the oldest supported hardware is worse than no gate, because
+// the failure looks exactly like the deadlock it is meant to catch.
+#define WATCHDOG_STALL_SECS 60
+#define WATCHDOG_REARM_EVERY 64
+
 static void on_alarm(int sig) {
     (void) sig;
     // Guard against a latent deadlock in the locking fix: fail loudly with a
-    // clear marker instead of hanging the regression run forever.
+    // clear marker instead of hanging the regression run forever. Reaching here
+    // now means the check loop made NO progress for WATCHDOG_STALL_SECS.
     const char msg[] = "fakefs_type_race: FAIL watchdog timeout (possible deadlock)\n";
     ssize_t res = write(2, msg, sizeof(msg) - 1);
     (void) res;
@@ -126,7 +143,7 @@ static void on_alarm(int sig) {
 int main(int argc, char **argv) {
     test_init(argc, argv);
     signal(SIGALRM, on_alarm);
-    alarm(120);
+    alarm(WATCHDOG_STALL_SECS);
 
     snprintf(g_path, sizeof(g_path), "%s/fakefs_type_race.%d",
              getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", (int) getpid());
@@ -149,6 +166,12 @@ int main(int argc, char **argv) {
     // things, restarting them fresh only when a candidate mismatch needs to
     // be isolated and verified.
     for (int i = 0; i < TOTAL_CHECKS; i++) {
+        // Re-arm the stall watchdog as we advance, so the deadline tracks
+        // progress rather than total runtime. A genuine deadlock stops
+        // advancing and the alarm then fires WATCHDOG_STALL_SECS later; a
+        // merely slow device keeps pushing it out and still completes.
+        if (i % WATCHDOG_REARM_EVERY == 0)
+            alarm(WATCHDOG_STALL_SECS);
         if (!type_mismatch())
             continue;
 
