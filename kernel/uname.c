@@ -127,8 +127,8 @@ void do_uname(struct uname *uts) {
     strncpy(uts->release, "5.20.66-ish_aok", sizeof(uts->release));
     strncpy(uts->system, "Linux", sizeof(uts->system));
     snprintf(uts->hostname, sizeof(uts->hostname), "%s", hostname);
-    snprintf(uts->version, sizeof(uts->version), "%s %s%s", uname_version, build_version,
-            ISH_BUILD_OPT_SUFFIX);
+    snprintf(uts->version, sizeof(uts->version), "%s %s%s%s", uname_version, build_version,
+            ISH_BUILD_OPT_SUFFIX, ISH_BUILD_GRET_SUFFIX);
     free(build_version);
 }
 

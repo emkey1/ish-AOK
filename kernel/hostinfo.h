@@ -25,6 +25,18 @@ char *copyBuildVersion(void);
 #else
 #define ISH_BUILD_OPT_SUFFIX " unoptimized"
 #endif
+
+// Same idea, same reason, for the arm64-guest gadget dispatch mode selected by
+// -Darm64_gret (see jit/guest-arm64/gadgets.h). A build whose dispatch
+// instruction you cannot see makes a dispatch A/B unfalsifiable: a flat result
+// is then indistinguishable from "the option never took effect", which is
+// exactly the ambiguity this suffix exists to remove. Empty for the 'ldar'
+// default so normal builds read unchanged, following ISH_BUILD_OPT_SUFFIX.
+#if defined(ISH_ARM64_GRET_DMB)
+#define ISH_BUILD_GRET_SUFFIX " gret=dmb"
+#else
+#define ISH_BUILD_GRET_SUFFIX ""
+#endif
 // The same build stamp copyBuildVersion() formats, as a time_t: the running
 // executable's own mtime, which moves on every relink. 0 if the host won't say.
 // aokfs uses it as the mtime of everything it synthesizes (see fs/aok.c), so
