@@ -65,8 +65,23 @@
     // check write_wanted before linking, same as jit_ret_chain does
     ldr x9, [_cpu, CPU_poked_ptr]
     ldrb w9, [x9]
-    cbz w9, 3f
-    b poke
+    cbnz w9, 4f
+    # Same per-entry chain budget jit_ret_chain enforces. The ret cache is a
+    # second path that dispatches straight into another block without going
+    # through C, and a return edge to a lower guest address is itself a
+    # backward edge -- so once the frontend links backward jumps, a cycle can
+    # be formed that routes through here. Decrementing the shared budget keeps
+    # the "returns to C every few thousand dispatches" guarantee airtight for
+    # every chained path, not just the jump ones. x9 is dead after the poke
+    # check above; x8 is only live on the 1: (cache-miss) path.
+    ldr x9, [_cpu, LOCAL_chain_budget]
+    subs x9, x9, 1
+    str x9, [_cpu, LOCAL_chain_budget]
+    b.gt 3f
+    # Both exits share the one unconditional branch: a conditional branch
+    # cannot reach `poke`, which is external to this file (same constraint the
+    # null-gadget check in entry.S's gret macro works around).
+4:  b poke
 3:
     sub x8, _ip, JIT_BLOCK_code
     str x8, [_cpu, LOCAL_last_block]

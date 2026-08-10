@@ -58,6 +58,15 @@
     movq 24(%_ip), %_ip
     btq $63, %_ip
     jc 1f
+    // Shared chain budget, same reasoning as jit_ret_chain: the ret cache is a
+    // second path that dispatches straight into another block, and a return to
+    // a lower guest address is itself a backward edge, so a cycle can route
+    // through here once the frontend links backward jumps. NOTE: unlike the
+    // aarch64 host's ret path this one has never had a write_wanted/poke check;
+    // that asymmetry is pre-existing and left alone here, but the budget below
+    // restores the bound (expiry exits to C, where pokes are serviced).
+    decq LOCAL_chain_budget(%_cpu)
+    jle poke
     leaq -JIT_BLOCK_code(%_ip), %r15
     movq %r15, LOCAL_last_block(%_cpu)
     gret

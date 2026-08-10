@@ -333,6 +333,43 @@ static inline __attribute__((always_inline)) bool amd64_jit_chaining_enabled(voi
     return enabled == 1;
 }
 
+// Bisection hatches for the i386 frontend's block linking, mirroring
+// ISH_AMD64_NOCHAIN above. Cached, because the checks sit in the per-block
+// link loop where a live getenv() would be a strlen-ing library call on the
+// hot path.
+//   ISH_I386_NOCHAIN=1     -- link nothing; every block boundary round-trips
+//                             to C (isolates chaining as a whole).
+//   ISH_I386_NOBACKCHAIN=1 -- link forward edges only, the pre-2026-08
+//                             behaviour (isolates backward-edge linking).
+static inline __attribute__((always_inline)) bool i386_jit_chaining_enabled(void) {
+    static int enabled = -1;
+    if (enabled == -1)
+        enabled = getenv("ISH_I386_NOCHAIN") == NULL ? 1 : 0;
+    return enabled == 1;
+}
+
+static inline __attribute__((always_inline)) bool i386_jit_back_chaining_enabled(void) {
+    static int enabled = -1;
+    if (enabled == -1)
+        enabled = getenv("ISH_I386_NOBACKCHAIN") == NULL ? 1 : 0;
+    return enabled == 1;
+}
+
+// ISH_I386_CHAIN_MAX=N: patch at most N backward edges, then stop. Counted
+// bisect for a suspected bad backward link -- the amd64 chaining postmortem
+// credits exactly this knob with naming the failing edge quickly.
+static long i386_back_chain_budget_remaining(void) {
+    static long limit = -2; // -2 = unread, -1 = unlimited
+    if (limit == -2) {
+        const char *v = getenv("ISH_I386_CHAIN_MAX");
+        limit = v != NULL ? strtol(v, NULL, 0) : -1;
+    }
+    if (limit < 0)
+        return 1; // unlimited
+    static _Atomic long used = 0;
+    return atomic_fetch_add(&used, 1) < limit ? 1 : 0;
+}
+
 // Single cached gate for the per-block debug machinery in the amd64 frontend
 // (force-interp ranges, cc1 JIT trace). All off by default; when so, the frontend
 // skips amd64_cc1_force_interp_block() and the cc1 cpu_state snapshot entirely
@@ -1581,7 +1618,7 @@ rearm_i386:
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
             last_block_cleanup_seq = atomic_load_explicit(&jit->cleanup_seq, memory_order_relaxed);
         }
-        if (last_block != NULL &&
+        if (last_block != NULL && i386_jit_chaining_enabled() &&
                 (last_block->jump_ip[0] != NULL ||
                  last_block->jump_ip[1] != NULL)) {
             lock(&jit->lock, 0);
@@ -1591,13 +1628,26 @@ rearm_i386:
                 for (int i = 0; i <= 1; i++) {
                     if (last_block->jump_ip[i] != NULL &&
                             (*last_block->jump_ip[i] & 0xffffffff) == block->addr) {
-                        // Don't link backward jumps (target addr < source block addr).
-                        // Backward edges form loop cycles that cause jit_enter to run
-                        // indefinitely without returning to C, which prevents the cycle
-                        // counter from firing and starves jetsam_lock write waiters.
-                        // Unlinked backward jumps exit via jit_ret each iteration,
-                        // allowing the cycle counter and poke checks to fire normally.
-                        if (block->addr <= last_block->addr)
+                        // Backward edges (target addr <= source block addr) ARE
+                        // linked, as the arm64/riscv64/amd64 engines already do.
+                        // The old objection -- a chained loop never returns to C,
+                        // so the cycle counter never fires and jetsam_lock write
+                        // waiters starve -- is answered by the per-entry chain
+                        // budget (jit_frame.chain_budget, reset below before every
+                        // jit_enter, decremented by jit_ret_chain and the ret
+                        // gadget's return-cache path, exiting to C on expiry).
+                        //
+                        // This matters more than a forward-edge win: an UNLINKED
+                        // backward edge did not merely round-trip to C, it re-took
+                        // jit->lock here on every single loop iteration only to
+                        // rediscover the edge and refuse it. A pure-compute guest
+                        // loop showed pthread_mutex_lock/unlock and
+                        // modify_locks_held_count in its profile for that reason.
+                        // The == case is the self-loop (`1: dec; jnz 1b`), the
+                        // hottest pattern of all, so it is linked too.
+                        if (block->addr <= last_block->addr &&
+                                (!i386_jit_back_chaining_enabled() ||
+                                 !i386_back_chain_budget_remaining()))
                             continue;
                         // Use store-release so that block->code[] writes from
                         // compilation are visible to any thread that reads this
@@ -1658,6 +1708,7 @@ rearm_i386:
             before_block_cpu = frame->cpu;
         if (force_block_boundary_break)
             __atomic_store_n(cpu->poked_ptr, true, __ATOMIC_SEQ_CST);
+        frame->chain_budget = 8192; // see jit_frame.chain_budget
         interrupt = jit_enter(block, frame, tlb);
         // Use load (not exchange) so we don't clear write_wanted — only the
         // write-lock holder should clear it after jetsam cleanup completes.
@@ -1929,11 +1980,13 @@ rearm_arm64:
                     if (last_block->jump_ip[i] != NULL &&
                             (*last_block->jump_ip[i] >> 63) != 0 &&
                             (*last_block->jump_ip[i] & 0xffffffffffffULL) == block->addr) {
-                        // Backward edges (loops) ARE linked here, unlike the
-                        // i386/amd64 loops: arm64_chain enforces a per-entry
-                        // chain budget (jit_frame.chain_budget), so a chained
-                        // loop returns to C every few thousand dispatches and
-                        // cannot starve jetsam writers or the cycle counter.
+                        // Backward edges (loops) ARE linked here: this engine's
+                        // chain gadget enforces a per-entry chain budget
+                        // (jit_frame.chain_budget), so a chained loop returns
+                        // to C every few thousand dispatches and cannot starve
+                        // jetsam writers or the cycle counter. Every guest
+                        // engine now follows this rule -- amd64 since 4c279c9c
+                        // and i386 since jit_ret_chain gained the same budget.
                         __atomic_store_n(last_block->jump_ip[i], (unsigned long) block->code, __ATOMIC_RELEASE);
                         list_add(&block->jumps_from[i], &last_block->jumps_from_links[i]);
                     }
@@ -2288,11 +2341,13 @@ rearm_riscv64:
                     if (last_block->jump_ip[i] != NULL &&
                             (*last_block->jump_ip[i] >> 63) != 0 &&
                             (*last_block->jump_ip[i] & 0xffffffffffffULL) == block->addr) {
-                        // Backward edges (loops) ARE linked here, unlike the
-                        // i386/amd64 loops: arm64_chain enforces a per-entry
-                        // chain budget (jit_frame.chain_budget), so a chained
-                        // loop returns to C every few thousand dispatches and
-                        // cannot starve jetsam writers or the cycle counter.
+                        // Backward edges (loops) ARE linked here: this engine's
+                        // chain gadget enforces a per-entry chain budget
+                        // (jit_frame.chain_budget), so a chained loop returns
+                        // to C every few thousand dispatches and cannot starve
+                        // jetsam writers or the cycle counter. Every guest
+                        // engine now follows this rule -- amd64 since 4c279c9c
+                        // and i386 since jit_ret_chain gained the same budget.
                         __atomic_store_n(last_block->jump_ip[i], (unsigned long) block->code, __ATOMIC_RELEASE);
                         list_add(&block->jumps_from[i], &last_block->jumps_from_links[i]);
                     }

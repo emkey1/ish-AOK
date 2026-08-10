@@ -25,6 +25,16 @@ jit_ret_chain:
     ldrb w8, [x8]
     cmp w8, 0
     b.ne poke
+    # Per-entry chain budget (jit_frame.chain_budget, reset to 8192 by the
+    # frontend before every jit_enter), decremented per chained dispatch and
+    # exiting to C on expiry. This is what makes BACKWARD edges safe to link:
+    # a chained loop returns to C every few thousand dispatches, so the cycle
+    # counter still fires and jetsam_lock/quiesce write waiters cannot starve.
+    # Same rule the amd64/arm64/riscv64 chain paths already use.
+    ldr x8, [_cpu, LOCAL_chain_budget]
+    subs x8, x8, 1
+    str x8, [_cpu, LOCAL_chain_budget]
+    b.le poke
     sub x8, _ip, JIT_BLOCK_code
     str x8, [_cpu, LOCAL_last_block]
     gret
