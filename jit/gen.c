@@ -10118,11 +10118,81 @@ bool gen_addr(struct gen_state *state, struct modrm *modrm, bool seg_tls) {
 }
 #define g_addr() gen_addr(state, &modrm, seg_tls)
 
+// Fold the address computation into the memory-operand gadget, replacing
+//     [addr_<base>][disp]  [<op>32_mem][orig_ip]
+// with
+//     [fused_<op>32_mem_<base>][disp][orig_ip]
+// one word shorter and, the point of the exercise, one gadget dispatch shorter.
+// The fused gadgets live in jit/gadgets-aarch64/memory.S and branch into the
+// unmodified op body, so semantics come from the same code either way.
+//
+// Declines to the unfused path for anything the simple form cannot express: a
+// scaled index (which needs its own si gadget), a TLS segment (needs seg_gs), a
+// non-32-bit operand, and the no-base form (that is addr_none, whose whole body
+// is the displacement). On a real gcc compile 81.3% of memory operands emitted
+// are the fusable shape, and load/store are 74% of those.
+//
+// The op is identified by pointer-matching the caller's table, the same trick
+// gen_try_fuse_jcc uses. Note gen_op has already been handed the UNADJUSTED
+// table base here, before the size stride is applied.
+static inline bool gen_try_fuse_addr(struct gen_state *state, gadget_t *table,
+        struct modrm *modrm, int size, bool seg_tls) {
+#if defined(__aarch64__)
+    // ISH_NO_ADDR_FUSE=1 emits the old two-gadget form, so the fusion can be
+    // A/B'd and bisected from one binary. Cached: this sits in the per-operand
+    // translation path.
+    static int fuse_enabled = -1;
+    if (fuse_enabled == -1)
+        fuse_enabled = getenv("ISH_NO_ADDR_FUSE") == NULL ? 1 : 0;
+    if (!fuse_enabled)
+        return false;
+    if (seg_tls)
+        return false;
+    if (modrm->type == modrm_mem_si)
+        return false;
+    if (modrm->base == reg_none || modrm->base >= reg_count)
+        return false;
+    extern gadget_t load_gadgets[], store_gadgets[];
+    extern gadget_t fused_load8_mem_gadgets[], fused_load16_mem_gadgets[],
+                    fused_load32_mem_gadgets[];
+    extern gadget_t fused_store8_mem_gadgets[], fused_store16_mem_gadgets[],
+                    fused_store32_mem_gadgets[];
+    gadget_t *fused = NULL;
+    if (table == load_gadgets) {
+        switch (size) {
+            case size_8:  fused = fused_load8_mem_gadgets; break;
+            case size_16: fused = fused_load16_mem_gadgets; break;
+            case size_32: fused = fused_load32_mem_gadgets; break;
+        }
+    } else if (table == store_gadgets) {
+        switch (size) {
+            case size_8:  fused = fused_store8_mem_gadgets; break;
+            case size_16: fused = fused_store16_mem_gadgets; break;
+            case size_32: fused = fused_store32_mem_gadgets; break;
+        }
+    }
+    if (fused == NULL)
+        return false;
+    // A missing entry is a NULL from the .gadget_list filler, not a bug: fall
+    // back rather than emitting a null gadget pointer.
+    if (fused[modrm->base] == NULL)
+        return false;
+    GEN(fused[modrm->base]);
+    GEN(modrm->offset);
+    GEN(state->orig_ip | state->orig_ip_extra);
+    return true;
+#else
+    (void) state; (void) table; (void) modrm; (void) size; (void) seg_tls;
+    return false;
+#endif
+}
+
 // this really wants to use all the locals of the decoder, which we can do
 // really nicely in gcc using nested functions, but that won't work in clang,
 // so we explicitly pass 500 arguments. sorry for the mess
 static inline bool gen_op(struct gen_state *state, gadget_t *gadgets, enum arg arg, struct modrm *modrm, uint64_t *imm, int size, bool seg_tls, dword_t addr_offset) {
     size = sz(size);
+    gadget_t *table = gadgets; // unadjusted base, for the fusion's op identification
     gadgets = gadgets + size * arg_count;
 
     switch (arg) {
@@ -10150,6 +10220,10 @@ static inline bool gen_op(struct gen_state *state, gadget_t *gadgets, enum arg a
         UNDEFINED;
     }
     if (arg == arg_mem || arg == arg_addr) {
+        // arg_mem only: arg_addr wants the address itself as the value, and has
+        // no [orig_ip] word, so the fused layout does not apply to it.
+        if (arg == arg_mem && gen_try_fuse_addr(state, table, modrm, size, seg_tls))
+            return true;
         if (!gen_addr(state, modrm, seg_tls))
             return false;
     }

@@ -30,6 +30,109 @@
     gret 1
 .gadget_list addr, REG_LIST
 
+# Address-computation FUSED into the memory-operand load/store, saving one whole
+# gadget dispatch per memory operand. Emitted by gen_try_fuse_addr() in
+# jit/gen.c; see there for when it declines. addr_* was 20% of all gadget samples
+# in two different profiles (992/4969 on a real gcc compile), and it does two
+# instructions of work behind a full gret, so the dispatch cost more than the
+# work.
+#
+# The stream goes from
+#     [addr_<base>][disp]  [<op>32_mem][orig_ip]     4 words, 2 dispatches
+# to
+#     [fused_<op>32_mem_<base>][disp][orig_ip]       3 words, 1 dispatch
+#
+# The trick that makes this cheap and safe is the tail: rather than duplicating
+# the op's body (which would need its own read_prep/read_bullshit label ids and
+# is where a copied gadget would rot), we reproduce exactly the register state
+# `gret 1` leaves and then branch straight into the existing gadget. On entry
+# _ip points at [disp]; the unfused addr gadget's `gret 1` advances _ip past
+# disp AND past the op's gadget pointer, landing on [orig_ip], which is where
+# the op body expects it. `add _ip, _ip, 8` reproduces that here, so the body
+# runs bit-identically. What is removed is the dispatch itself: a load of the
+# next gadget pointer, the `dmb ishld`, and an indirect `br`, replaced by one
+# direct `b`.
+#
+# Correctness note: the 32-bit `add` is deliberate -- it wraps the effective
+# address at 4G exactly as the addr_* gadget it replaces does.
+# load/store x 8/16/32 covers ~90% of the fusable memory operands measured
+# (load32 50.2%, store32 24.2%, load8 8.2%, store8 4.3%, load16 3.0%, store16
+# 0.4%). The address arithmetic is size-independent -- only the data width in the
+# body differs -- so one prologue shape serves all of them.
+# Spelled out one macro per (op,size) rather than nesting .irp inside .macro:
+# clang's integrated assembler does not substitute .irp parameters inside a
+# .macro body ("unexpected token" at instantiation), and this file is not the
+# place to be clever -- a malformed gadget array here is a runtime wrong-pointer,
+# not a build error.
+.macro xf_l8 name, reg
+    .gadget fused_load8_mem_\name
+        ldr _addr, [_ip]
+        add _addr, _addr, \reg
+        add _ip, _ip, 8
+        b NAME(gadget_load8_mem)
+.endm
+.each_reg xf_l8
+.purgem xf_l8
+
+.macro xf_l16 name, reg
+    .gadget fused_load16_mem_\name
+        ldr _addr, [_ip]
+        add _addr, _addr, \reg
+        add _ip, _ip, 8
+        b NAME(gadget_load16_mem)
+.endm
+.each_reg xf_l16
+.purgem xf_l16
+
+.macro xf_l32 name, reg
+    .gadget fused_load32_mem_\name
+        ldr _addr, [_ip]
+        add _addr, _addr, \reg
+        add _ip, _ip, 8
+        b NAME(gadget_load32_mem)
+.endm
+.each_reg xf_l32
+.purgem xf_l32
+
+.macro xf_s8 name, reg
+    .gadget fused_store8_mem_\name
+        ldr _addr, [_ip]
+        add _addr, _addr, \reg
+        add _ip, _ip, 8
+        b NAME(gadget_store8_mem)
+.endm
+.each_reg xf_s8
+.purgem xf_s8
+
+.macro xf_s16 name, reg
+    .gadget fused_store16_mem_\name
+        ldr _addr, [_ip]
+        add _addr, _addr, \reg
+        add _ip, _ip, 8
+        b NAME(gadget_store16_mem)
+.endm
+.each_reg xf_s16
+.purgem xf_s16
+
+.macro xf_s32 name, reg
+    .gadget fused_store32_mem_\name
+        ldr _addr, [_ip]
+        add _addr, _addr, \reg
+        add _ip, _ip, 8
+        b NAME(gadget_store32_mem)
+.endm
+.each_reg xf_s32
+.purgem xf_s32
+# One array per (op,size), each indexed by enum reg32 via REG_LIST. Keep these in
+# step with the tables gen_try_fuse_addr() looks up: a short or misordered array
+# here is not a build error, it is a wrong function pointer at runtime.
+.gadget_list fused_load8_mem, REG_LIST
+.gadget_list fused_load16_mem, REG_LIST
+.gadget_list fused_load32_mem, REG_LIST
+.gadget_list fused_store8_mem, REG_LIST
+.gadget_list fused_store16_mem, REG_LIST
+.gadget_list fused_store32_mem, REG_LIST
+
 .macro x name, reg
     .irp times, 1,2,4,8
         .gadget si_\name\()_\times
