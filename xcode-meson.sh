@@ -206,7 +206,15 @@ EOF
     b_ndebug=false
     # Opt in to an unoptimized build when you genuinely need one -- single
     # stepping the emulator core, or chasing something optimizer-dependent:
-    #   ISH_MESON_BUILDTYPE=debug   (in iSH.xcconfig or the scheme environment)
+    #   ISH_MESON_BUILDTYPE=debug   (as a build setting in iSH.xcconfig)
+    # ⚠ It must be a BUILD SETTING, not a scheme "Environment Variable". Those
+    # live under the scheme's <LaunchAction> and are handed to the app when it is
+    # LAUNCHED; a build script phase such as this one never sees them, so the
+    # setting silently does nothing and the build looks like it succeeded. This
+    # is not hypothetical: it cost a real on-device A/B, which measured a flat
+    # result that was actually one configuration compared against itself.
+    # Build settings from an xcconfig ARE exported into script phases, which is
+    # why that is the working place to put these.
     # uname -v reports " unoptimized" whenever this is in effect, so a build
     # that is slow for this reason says so rather than being mistaken for data.
     if [[ -n "${ISH_MESON_BUILDTYPE:-}" ]]; then
@@ -229,7 +237,8 @@ EOF
     guest_archs=${ISH_GUEST_ARCHS:-i386,amd64,arm64,riscv64}
     # arm64-guest gadget dispatch: 'ldar' (default, fastest on Apple Silicon) or
     # 'dmb' (ldr + dmb ishld, expected better on ARMv8.0 devices like the A9).
-    # Set ISH_ARM64_GRET=dmb in iSH.xcconfig or the scheme environment to build
+    # Set ISH_ARM64_GRET=dmb as a build setting in iSH.xcconfig (NOT a scheme
+    # environment variable -- see the warning above) to build
     # the variant for an on-device A/B; see jit/guest-arm64/gadgets.h for why
     # this is host-generation dependent and why it must be measured on ARMv8.0.
     arm64_gret=${ISH_ARM64_GRET:-ldar}
