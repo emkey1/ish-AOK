@@ -58,6 +58,16 @@ foreach garch : ['i386', 'amd64', 'arm64', 'riscv64']
     add_project_arguments('-DISH_GUEST_' + garch.to_upper() + '=' + (guest_archs.contains(garch) ? '1' : '0'), language: 'c')
 endforeach
 
+# Which instruction sequence the arm64-guest gadget dispatcher uses to load the
+# next gadget pointer. This exists because the right answer is host-generation
+# dependent and the difference is large: for the x86 gadgets, ldar measured 4.3%
+# FASTER on Apple Silicon and 2.04x SLOWER on an A9 (ARMv8.0) -- see the warning
+# in jit/gadgets-aarch64/gadgets.h and commits 861da1d1 / 95140ab7. The arm64
+# guest still dispatches through ldar, so it may be paying that same penalty on
+# ARMv8.0 hardware; this switch is how that gets A/B'd on a device without
+# hand-patching a header. Default 'ldar' keeps existing behaviour.
+add_project_arguments('-DISH_ARM64_GRET_' + get_option('arm64_gret').to_upper() + '=1', language: 'c')
+
 if jit_cpu_family == 'aarch64' and guest_archs.contains('arm64')
     add_project_arguments('-DISH_JIT_ARM64_GUEST=1', language: 'c')
 elif guest_archs.contains('arm64')

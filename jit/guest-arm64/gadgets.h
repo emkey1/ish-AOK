@@ -95,20 +95,36 @@ _addr   .req x7
 // because the i386 one is textually entangled with i386-specific
 // PROFILE/debug hooks not relevant here. Keep in sync if entry.S's
 // contract changes.
-// Dispatch. The gadget-pointer load is a LOAD-ACQUIRE (ldar) instead of
-// i386's `ldr + dmb ishld`: acquire ordering gives the same guarantee
-// the trailing barrier did (this load is ordered before every later
-// access, so a concurrently-patched chain word can't be observed before
-// the block contents it points into), but ldar is close to free on
-// Apple Silicon while `dmb ishld` costs tens of cycles with loads in
-// flight — and this sequence runs once per guest instruction, making it
-// the single largest constant in the whole engine (measured ~34 host
-// cycles per guest instruction with the dmb, dominated by it).
+// Dispatch. Two spellings of the same ordering guarantee, selected by
+// -Darm64_gret= (default ldar, so this is unchanged unless asked for). Either
+// way the gadget-pointer load must be ordered before every later access, so a
+// concurrently-patched chain word cannot be observed before the block contents
+// it points into; `ldar` gets that from acquire semantics, `ldr + dmb ishld`
+// from the trailing barrier.
+//
+// WHICH IS FASTER DEPENDS ON THE HOST GENERATION, by a lot, and this sequence
+// runs once per guest instruction so it is the single largest constant in the
+// engine. Known numbers:
+//   - Apple Silicon: ldar wins. arm64-guest sh-loop min 1.66s vs 1.77s (~6%),
+//     4 of 4 interleaved pairs. The ~34-host-cycles-per-guest-instruction
+//     "dominated by the dmb" figure this file used to cite is from here.
+//   - ARMv8.0 (A9): for the X86 gadgets, the same substitution was a 2.04x
+//     REGRESSION (8422ms -> 17203ms, i386 chroot sh-loop on an A9 iPad;
+//     861da1d1 tried it, 95140ab7 reverted it). Apple's cores retire ldar
+//     nearly free; the A9 evidently does not.
+// Whether the arm64 guest pays that same ARMv8.0 penalty is the open question
+// this switch exists to answer -- build with ISH_ARM64_GRET=dmb (xcode-meson.sh)
+// or -Darm64_gret=dmb (CLI) and A/B on an ARMv8.0 device, NOT on Apple Silicon.
 .macro gret pop=0
+#if defined(ISH_ARM64_GRET_DMB)
+    ldr x9, [_ip, \pop*8]!
+    dmb ishld
+#else
 .if \pop != 0
     add _ip, _ip, \pop*8
 .endif
     ldar x9, [_ip]
+#endif
     add _ip, _ip, 8
     cbnz x9, 0f
     b jit_ret

@@ -227,7 +227,13 @@ EOF
     # i386,amd64,arm64. Set ISH_GUEST_ARCHS in iSH.xcconfig (or the scheme
     # environment) to trim the emulator; meson rejects an empty list.
     guest_archs=${ISH_GUEST_ARCHS:-i386,amd64,arm64,riscv64}
-    for var in buildtype log b_ndebug b_sanitize log_handler kernel kconfig guest_archs; do
+    # arm64-guest gadget dispatch: 'ldar' (default, fastest on Apple Silicon) or
+    # 'dmb' (ldr + dmb ishld, expected better on ARMv8.0 devices like the A9).
+    # Set ISH_ARM64_GRET=dmb in iSH.xcconfig or the scheme environment to build
+    # the variant for an on-device A/B; see jit/guest-arm64/gadgets.h for why
+    # this is host-generation dependent and why it must be measured on ARMv8.0.
+    arm64_gret=${ISH_ARM64_GRET:-ldar}
+    for var in buildtype log b_ndebug b_sanitize log_handler kernel kconfig guest_archs arm64_gret; do
         if ! old_value=$(python3 -c "import sys, json; v = next(x['value'] for x in json.load(sys.stdin) if x['name'] == '$var'); print(str(v).lower() if isinstance(v, bool) else ','.join(v) if isinstance(v, list) else v)" <<< "$config" 2>/dev/null); then
             # The option is missing from this build dir's cached
             # configuration: it was added to meson_options.txt after the
