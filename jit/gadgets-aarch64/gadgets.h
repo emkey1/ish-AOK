@@ -30,6 +30,22 @@ _xaddr .req x3
     .align 4
     NAME(gadget_\()\name) :
 .endm
+// DO NOT "optimize" the load+barrier below into a single `ldar`, however
+// obviously equivalent it looks. It was tried (861da1d1) and reverted
+// (95140ab7): correct, faster on Apple Silicon (i386 sh-loop 4.3%), and a
+// 2.04x REGRESSION on ARMv8.0. Measured on an A9 iPad, i386 chroot sh-loop
+// 20k, two builds differing only in that change: 8422ms with ldr+dmb, 17203ms
+// with ldar, while the sha256 calibrator got faster and the aarch64 guest
+// (whose gadgets were untouched) stayed flat.
+//
+// jit/guest-arm64/gadgets.h says ldar is "close to free" and dmb ishld "costs
+// tens of cycles", and invites keeping the two dispatchers in sync. That
+// measurement is Apple Silicon only. Apple's cores retire ldar almost free;
+// the A9 evidently implements load-acquire far more conservatively, and this
+// sequence runs once per guest instruction, so a per-dispatch acquire is
+// brutal there. Old devices are the point of this project, so they win.
+// (Open, untested: guest-arm64 still dispatches via ldar, so the arm64 guest
+// may be paying that same penalty on ARMv8.0. A/B it on an ARMv8.0 device.)
 .macro gret pop=0
     ldr x8, [_ip, \pop*8]!
     dmb ishld /* Jason Conway's Re Ordering patch (upstream PR #1944 */
