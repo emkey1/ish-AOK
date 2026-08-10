@@ -55,6 +55,14 @@
 #
 # Correctness note: the 32-bit `add` is deliberate -- it wraps the effective
 # address at 4G exactly as the addr_* gadget it replaces does.
+#
+# Measured, and it transfers across host generations (which per this file's
+# neighbours is not a safe assumption, so it was checked):
+#   Apple Silicon, i386 guest: sh-loop 5.24 -> 4.74s (9.5%), gcc 1.71 -> 1.57s
+#   ARMv8.0 (A9 iPad), i386:   sh-loop 20k 8166 -> 7449 ms (8.8%), with the
+#     arm64 guest flat as a control (3088 -> 3074 ms), which is what attributes
+#     the gain to this change rather than to device state.
+# Slightly SMALLER on ARMv8.0, not larger, despite dispatch being pricier there.
 # load/store x 8/16/32 covers ~90% of the fusable memory operands measured
 # (load32 50.2%, store32 24.2%, load8 8.2%, store8 4.3%, load16 3.0%, store16
 # 0.4%). The address arithmetic is size-independent -- only the data width in the
