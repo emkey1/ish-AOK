@@ -37,35 +37,36 @@ _addr   .req x7
 // -Darm64_gret option; see the measurements and rationale there. Short version:
 // dmb is the default because ldar costs ~1.7x on ARMv8.0 while only buying ~6%
 // on Apple Silicon. Keep in sync if entry.S's contract changes.
-// ⚠ MEASURED, and it does NOT match the arm64 result: the riscv64 guest is
-// INSENSITIVE to this choice. A9 iPad, sh-loop 20k, same two builds, both
-// verified from `uname -v` and from the disassembled dispatch tail:
-//     riscv64   9998ms (dmb)  vs 10065ms (ldar)  -- flat, 0.7%
-//     arm64     3089ms (dmb)  vs  5394ms (ldar)  -- 1.75x
-// So the "it is a verbatim copy of the arm64 dispatcher, therefore it must
-// benefit the same" reasoning that first landed this was wrong, and is recorded
-// here because it is an inviting mistake: the instruction really is identical,
-// but what surrounds it is not.
+// ⚠ MEASURED on ARMv8.0 (A9 iPad), and the answer DEPENDS ON THE GUEST USERLAND,
+// which is the whole reason this comment is long. sh-loop 20k, the same two
+// builds throughout, each verified from `uname -v` and from the disassembled
+// dispatch tail of gadget_riscv64_addi:
 //
-// THE MECHANISM IS NOT KNOWN. A first explanation -- "this engine is ~3.2x
-// slower per unit of guest work, so dispatch is diluted" -- was withdrawn: that
-// 3.2x compared busybox sh on the Alpine/musl riscv64 root against dash on the
-// Devuan/glibc arm64 root, i.e. two different shell interpreters. Matching the
-// shell (busybox both sides, same build) puts riscv64 only **1.56x** slower than
-// arm64 (10065 vs 6455 ms), and a 1.56x gap is too small to erase a 1.75x effect
-// by dilution alone. Candidates not yet separated: dispatches per unit of guest
-// work (RV64 may map to fewer, heavier gadgets, and the lui/auipc folds cut more),
-// and HLE fingerprint coverage differing by libc and by guest arch. Settling it
-// wants ISH_HLE_STATS, which is an emulator-process env var and so cannot be set
-// from a guest ssh session on a device.
+//   root / shell              ldar      dmb      dmb win
+//   Devuan6-riscv64 / dash    9022 ms   5893 ms   1.53x
+//   Alpine3.23.3 / busybox   10065 ms   9998 ms   FLAT
+//   (arm64 Devuan / dash      5396 ms   3088 ms   1.75x)
 //
-// Kept on dmb regardless: it measures the same either way on ARMv8.0, and one
-// setting for both engines means one code path. If riscv64 dispatch ever becomes
-// a larger share of its time, re-measure rather than assuming it tracks arm64.
+// Same engine, same emulator builds, opposite conclusions. So riscv64 IS
+// dispatch-sensitive and dmb is a real win here, not merely harmless -- but a
+// workload can hide that completely. The busybox/musl loop evidently spends its
+// time somewhere other than gadget dispatch (HLE'd libc, helper gadgets, or
+// simply a different hot loop than dash's interpreter); that has not been
+// separated, and ISH_HLE_STATS would be the way to, except it is an
+// emulator-process env var and so unsettable from a guest ssh session on device.
 //
-// ⚠ When comparing guests on a device, MATCH THE USERLAND. The roots here differ
-// in libc (musl vs glibc) and in /bin/sh (busybox vs dash), and the shell alone
-// moved the cross-arch ratio from 3.24x to 1.56x.
+// THIS CLAIM WAS WRONG TWICE BEFORE, both times from measuring too narrowly:
+//   1. First landed by inference alone ("verbatim copy of the arm64 dispatcher,
+//      so it must behave the same") with no riscv64 measurement at all.
+//   2. Then "corrected" to INSENSITIVE on the strength of the Alpine/busybox row
+//      only, which is the one row that shows no effect.
+// Both readings were confident and both were wrong. One row of one workload is
+// not a property of an engine.
+//
+// ⚠ MATCH THE USERLAND before quoting any cross-arch number. These roots differ
+// in libc (musl vs glibc) and in /bin/sh (busybox vs dash). A mismatched pair
+// once produced a "3.24x slower than arm64" figure that is really ~1.6-1.9x;
+// check `readlink -f /bin/sh` and the libc on both sides first.
 .macro gret pop=0
 #if defined(ISH_ARM64_GRET_LDAR)
 .if \pop != 0
