@@ -40,6 +40,10 @@ jit_ret_chain:
     mov %r10, LOCAL_last_block(%_cpu)
     gret
 
+# .global so the ret gadget's return-cache path in control.S can branch here
+# on chain-budget expiry, the way the aarch64 host's poke already is. Without
+# it the Intel host fails to LINK, which an assemble-only check cannot catch.
+.global poke
 poke:
     mov -JIT_BLOCK_code+JIT_BLOCK_addr(%_ip), %_eip
     # fallthrough
