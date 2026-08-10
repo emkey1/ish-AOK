@@ -33,13 +33,23 @@ _addr   .req x7
     NAME(gadget_riscv64_\()\name) :
 .endm
 
-// Same ldar dispatch as jit/guest-arm64/gadgets.h's gret (see the rationale
-// there); keep in sync if entry.S's contract changes.
+// Same dispatch as jit/guest-arm64/gadgets.h's gret, selected by the same
+// -Darm64_gret option; see the measurements and rationale there. Short version:
+// dmb is the default because ldar costs ~1.7x on ARMv8.0 while only buying ~6%
+// on Apple Silicon. Keep in sync if entry.S's contract changes.
+// NOTE: the riscv64 guest has not been re-measured on ARMv8.0 itself (no
+// riscv64 root on the A9), but this dispatcher was a verbatim copy of the arm64
+// one and the cost being measured is the host instruction, not the guest ISA.
 .macro gret pop=0
+#if defined(ISH_ARM64_GRET_LDAR)
 .if \pop != 0
     add _ip, _ip, \pop*8
 .endif
     ldar x9, [_ip]
+#else
+    ldr x9, [_ip, \pop*8]!
+    dmb ishld
+#endif
     add _ip, _ip, 8
     cbnz x9, 0f
     b jit_ret

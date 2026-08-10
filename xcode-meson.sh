@@ -241,7 +241,7 @@ EOF
     # environment variable -- see the warning above) to build
     # the variant for an on-device A/B; see jit/guest-arm64/gadgets.h for why
     # this is host-generation dependent and why it must be measured on ARMv8.0.
-    arm64_gret=${ISH_ARM64_GRET:-ldar}
+    arm64_gret=${ISH_ARM64_GRET:-dmb}
     for var in buildtype log b_ndebug b_sanitize log_handler kernel kconfig guest_archs arm64_gret; do
         if ! old_value=$(python3 -c "import sys, json; v = next(x['value'] for x in json.load(sys.stdin) if x['name'] == '$var'); print(str(v).lower() if isinstance(v, bool) else ','.join(v) if isinstance(v, list) else v)" <<< "$config" 2>/dev/null); then
             # The option is missing from this build dir's cached

@@ -11,8 +11,8 @@ option('guest_archs', type: 'array',
        value: ['i386', 'amd64', 'arm64', 'riscv64'],
        description: 'Guest architectures this build can execute (at least one required)')
 
-option('arm64_gret', type: 'combo', choices: ['ldar', 'dmb'], value: 'ldar',
-       description: 'arm64-guest gadget dispatch: ldar (load-acquire, best on Apple Silicon) or dmb (ldr + dmb ishld, expected better on ARMv8.0)')
+option('arm64_gret', type: 'combo', choices: ['ldar', 'dmb'], value: 'dmb',
+       description: 'Gadget dispatch for the fully-translated guests (arm64, riscv64): dmb (ldr + dmb ishld, 1.7x faster on ARMv8.0, the default) or ldar (load-acquire, ~6% faster on Apple Silicon only)')
 
 option('vdso_c_args', type: 'string', value: '')
 

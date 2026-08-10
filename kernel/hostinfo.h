@@ -26,14 +26,16 @@ char *copyBuildVersion(void);
 #define ISH_BUILD_OPT_SUFFIX " unoptimized"
 #endif
 
-// Same idea, same reason, for the arm64-guest gadget dispatch mode selected by
-// -Darm64_gret (see jit/guest-arm64/gadgets.h). A build whose dispatch
-// instruction you cannot see makes a dispatch A/B unfalsifiable: a flat result
-// is then indistinguishable from "the option never took effect", which is
-// exactly the ambiguity this suffix exists to remove. Empty for the 'ldar'
-// default so normal builds read unchanged, following ISH_BUILD_OPT_SUFFIX.
-#if defined(ISH_ARM64_GRET_DMB)
-#define ISH_BUILD_GRET_SUFFIX " gret=dmb"
+// Same idea, same reason, for the gadget dispatch mode selected by -Darm64_gret
+// (see jit/guest-arm64/gadgets.h). A build whose dispatch instruction you cannot
+// see makes a dispatch A/B unfalsifiable: a flat result is then indistinguishable
+// from "the option never took effect", and that ambiguity really did produce a
+// bogus flat reading before this existed. Reports only the NON-default 'ldar',
+// so ordinary builds read unchanged, following ISH_BUILD_OPT_SUFFIX. Note the
+// default flipped to dmb once ARMv8.0 was measured, so the reported value
+// flipped with it: seeing nothing here means dmb.
+#if defined(ISH_ARM64_GRET_LDAR)
+#define ISH_BUILD_GRET_SUFFIX " gret=ldar"
 #else
 #define ISH_BUILD_GRET_SUFFIX ""
 #endif

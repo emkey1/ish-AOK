@@ -104,26 +104,32 @@ _addr   .req x7
 //
 // WHICH IS FASTER DEPENDS ON THE HOST GENERATION, by a lot, and this sequence
 // runs once per guest instruction so it is the single largest constant in the
-// engine. Known numbers:
-//   - Apple Silicon: ldar wins. arm64-guest sh-loop min 1.66s vs 1.77s (~6%),
-//     4 of 4 interleaved pairs. The ~34-host-cycles-per-guest-instruction
-//     "dominated by the dmb" figure this file used to cite is from here.
-//   - ARMv8.0 (A9): for the X86 gadgets, the same substitution was a 2.04x
-//     REGRESSION (8422ms -> 17203ms, i386 chroot sh-loop on an A9 iPad;
-//     861da1d1 tried it, 95140ab7 reverted it). Apple's cores retire ldar
-//     nearly free; the A9 evidently does not.
-// Whether the arm64 guest pays that same ARMv8.0 penalty is the open question
-// this switch exists to answer -- build with ISH_ARM64_GRET=dmb (xcode-meson.sh)
-// or -Darm64_gret=dmb (CLI) and A/B on an ARMv8.0 device, NOT on Apple Silicon.
+// engine. MEASURED, both directions, same benchmark shape:
+//   - ARMv8.0 (A9 iPad): dmb wins hugely. arm64-guest sh-loop 50k
+//     **13255ms with ldar -> 7652ms with dmb, a 1.73x speedup**, run-to-run
+//     spread 0.13%. The x86 gadgets said the same thing independently: going
+//     the other way there was a 2.04x REGRESSION (8422 -> 17203ms), which is
+//     why 861da1d1 was reverted by 95140ab7.
+//   - Apple Silicon: ldar wins, but only ~6% (arm64-guest sh-loop min 1.66s
+//     vs 1.77s, 4 of 4 pairs). The "~34 host cycles per guest instruction,
+//     dominated by the dmb" figure this file used to cite came from here, and
+//     it does NOT generalize -- Apple's cores retire ldar nearly free while
+//     the A9 evidently implements load-acquire far more conservatively.
+// So dmb is the DEFAULT: giving up ~6% on new hardware to gain ~73% on old
+// hardware is the trade this project wants, and iSH-AOK ships one binary for
+// both. -Darm64_gret=ldar restores the other spelling; a build using it says
+// " gret=ldar" in `uname -v`.
+// A future refinement could pick per host at startup, but that needs two full
+// gadget tables, and 1.7x on old devices is worth having now.
 .macro gret pop=0
-#if defined(ISH_ARM64_GRET_DMB)
-    ldr x9, [_ip, \pop*8]!
-    dmb ishld
-#else
+#if defined(ISH_ARM64_GRET_LDAR)
 .if \pop != 0
     add _ip, _ip, \pop*8
 .endif
     ldar x9, [_ip]
+#else
+    ldr x9, [_ip, \pop*8]!
+    dmb ishld
 #endif
     add _ip, _ip, 8
     cbnz x9, 0f
