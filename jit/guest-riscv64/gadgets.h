@@ -45,12 +45,27 @@ _addr   .req x7
 // So the "it is a verbatim copy of the arm64 dispatcher, therefore it must
 // benefit the same" reasoning that first landed this was wrong, and is recorded
 // here because it is an inviting mistake: the instruction really is identical,
-// but this engine is ~3.2x slower per unit of guest work than the arm64 one, so
-// dispatch is a much smaller share of its time and the per-dispatch cost is
-// diluted to nothing. Kept on dmb anyway -- it measures the same either way on
-// ARMv8.0, and keeping both engines on one setting means one code path.
-// If riscv64 dispatch ever gets cheap enough to matter, re-measure rather than
-// assuming it now tracks arm64.
+// but what surrounds it is not.
+//
+// THE MECHANISM IS NOT KNOWN. A first explanation -- "this engine is ~3.2x
+// slower per unit of guest work, so dispatch is diluted" -- was withdrawn: that
+// 3.2x compared busybox sh on the Alpine/musl riscv64 root against dash on the
+// Devuan/glibc arm64 root, i.e. two different shell interpreters. Matching the
+// shell (busybox both sides, same build) puts riscv64 only **1.56x** slower than
+// arm64 (10065 vs 6455 ms), and a 1.56x gap is too small to erase a 1.75x effect
+// by dilution alone. Candidates not yet separated: dispatches per unit of guest
+// work (RV64 may map to fewer, heavier gadgets, and the lui/auipc folds cut more),
+// and HLE fingerprint coverage differing by libc and by guest arch. Settling it
+// wants ISH_HLE_STATS, which is an emulator-process env var and so cannot be set
+// from a guest ssh session on a device.
+//
+// Kept on dmb regardless: it measures the same either way on ARMv8.0, and one
+// setting for both engines means one code path. If riscv64 dispatch ever becomes
+// a larger share of its time, re-measure rather than assuming it tracks arm64.
+//
+// ⚠ When comparing guests on a device, MATCH THE USERLAND. The roots here differ
+// in libc (musl vs glibc) and in /bin/sh (busybox vs dash), and the shell alone
+// moved the cross-arch ratio from 3.24x to 1.56x.
 .macro gret pop=0
 #if defined(ISH_ARM64_GRET_LDAR)
 .if \pop != 0
