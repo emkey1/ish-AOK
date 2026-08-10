@@ -30,10 +30,29 @@ _xaddr .req x3
     .align 4
     NAME(gadget_\()\name) :
 .endm
+// Dispatch. The gadget-pointer load is a LOAD-ACQUIRE (ldar) rather than the
+// `ldr + dmb ishld` this used to be (Jason Conway's re-ordering fix, upstream
+// PR #1944): acquire ordering gives exactly the same guarantee the trailing
+// barrier did -- this load is ordered before every later access, so a
+// concurrently-patched chain word cannot be observed before the block contents
+// it points into -- and it pairs directly with the __ATOMIC_RELEASE store the
+// frontend uses when it patches a jump word.
+//
+// This is the form jit/guest-arm64/gadgets.h already converted to, where the
+// measurement is recorded: the sequence runs once per guest instruction, which
+// makes it the single largest constant in the engine (~34 host cycles per guest
+// instruction with the dmb, dominated by it), and ldar is close to free by
+// comparison. That header says "keep in sync"; the x86 side was never brought
+// along, so i386 AND amd64 (both use these gadgets) kept paying the barrier.
+//
+// ldar takes no addressing mode, so the pop is folded into an explicit add,
+// which still comes out one instruction SHORTER than the old sequence at pop=0.
 .macro gret pop=0
-    ldr x8, [_ip, \pop*8]!
-    dmb ishld /* Jason Conway's Re Ordering patch (upstream PR #1944 */
-    add _ip, _ip, 8 /* TODO get rid of this */
+.if \pop != 0
+    add _ip, _ip, \pop*8
+.endif
+    ldar x8, [_ip]
+    add _ip, _ip, 8
     cbnz x8, 0f   /* null gadget safety: if non-null, execute normally */
     b jit_ret     /* null gadget: bail safely (cbz can't reach external; unconditional branch can) */
 0:  br x8
