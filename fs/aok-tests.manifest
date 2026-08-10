@@ -23,6 +23,7 @@ x86/cow_atomic_fault.c
 x86/x87_fpu.c
 x86/x86_loop.c
 x86/bcd_adjust.c
+x86/port_io_gpf.c
 signal_core.c
 signal_restart.c
 signal_realtime.c
