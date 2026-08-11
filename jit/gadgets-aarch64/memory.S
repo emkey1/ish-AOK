@@ -17,6 +17,76 @@
     gret 1
     read_bullshit 32, pop
 
+# ---- `push <reg>` / `pop <reg>` in ONE gadget ----
+#
+# The two gadgets above move their value through _tmp, so gen.c has to stage it
+# with a separate dispatch on either side:
+#     [load32_reg_<r>][push][orig_ip]     3 words, 2 dispatches
+#     [fused_push_<r>][orig_ip]           2 words, 1 dispatch
+#     [pop][orig_ip][store32_reg_<r>]     3 words, 2 dispatches
+#     [fused_pop_<r>][orig_ip]            2 words, 1 dispatch
+# These are worth their own family because they are everywhere (every call
+# sequence) and, unlike the ALU reg,reg case, the table is ONE dimensional:
+# 16 gadgets, not 448. In an i386 profile at the time of writing, push+pop were
+# 4.7% of gadget samples and the load32_reg/store32_reg staging they drive was a
+# further 21.1% shared with other shapes.
+#
+# The bodies are the generic ones with _tmp replaced by the guest register.
+# read_prep/write_prep only clobber x8-x10 and the guest registers live in
+# x20-x27, so the register is safe across the prep (including its slow path,
+# which is a C call for writes) -- the same reasoning fused_movrm32 above relies
+# on. write_done is likewise kept: on a page-straddling push, write_prep aims
+# _xaddr at the frame scratch and write_done is what splits it across pages.
+.macro fpush name, reg
+    .gadget fused_push_\name
+        sub _addr, esp, 4
+        write_prep 32, fpush_\name
+        str \reg, [_xaddr]
+        write_done 32, fpush_\name
+        sub esp, esp, 4
+        gret 1
+        write_bullshit 32, fpush_\name
+.endm
+.each_reg fpush
+.purgem fpush
+.gadget_list fused_push, REG_LIST
+
+# `push esp` needs no special case: _addr and the stored value are both taken
+# from esp BEFORE the decrement, which is what x86 specifies.
+#
+# `pop esp` DOES, and is deliberately absent from the table below (a 0 entry, so
+# gen.c falls back to the two-dispatch form). Loading straight into esp and then
+# running the `add esp, esp, 4` would add 4 to the value just popped. Reordering
+# the increment before the load would fix that but breaks something subtler:
+# gen.c marks POP with orig_ip_extra bit 62, "on segfault the stack pointer
+# should be adjusted", so a fault on the load must leave esp un-incremented or
+# the handler's adjustment double-counts. Falling back is correct and `pop esp`
+# is rare.
+.macro fpop name, reg
+    .ifnc \name,reg_sp
+    .gadget fused_pop_\name
+        mov _addr, esp
+        read_prep 32, fpop_\name
+        ldr \reg, [_xaddr]
+        add esp, esp, 4
+        gret 1
+        read_bullshit 32, fpop_\name
+    .endif
+.endm
+.each_reg fpop
+.purgem fpop
+
+.pushsection_rodata
+.global.name fused_pop_gadgets
+.irp reg, REG_LIST
+    .ifc \reg,reg_sp
+        .quad 0
+    .else
+        .quad NAME(gadget_fused_pop_\reg)
+    .endif
+.endr
+.popsection
+
 .macro x name, reg
     .gadget addr_\name
         ldr _addr, [_ip]

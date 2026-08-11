@@ -10492,6 +10492,81 @@ static inline bool gen_alu_imm_fused(struct gen_state *state, gadget_t *fused,
 #endif
 }
 
+// `push <reg>` / `pop <reg>` in one dispatch instead of two.
+//
+// PUSH and POP move their value through _tmp, so each needs a staging gadget on
+// one side: load32_reg_<r> before push, store32_reg_<r> after pop. Both shapes
+// are extremely common (every call sequence) and the fused table is only ONE
+// dimensional -- 16 gadgets, against the 448 that fusing ALU reg,reg would need
+// for a comparable share. In an i386 profile taken after the earlier fusions
+// landed, push+pop were 4.7% of gadget samples and the load32_reg/store32_reg
+// staging they drive was another 21.1% (shared with other shapes).
+//
+// Register destination only. `push <mem>` and `pop <mem>` keep the generic form:
+// their staging gadget is doing a real memory access, not just moving a value,
+// and fusing that away would drop it.
+static inline bool gen_push_reg_fused(struct gen_state *state, enum arg thing,
+        struct modrm *modrm, int size) {
+#if defined(__aarch64__)
+    // ISH_NO_PUSHPOP_FUSE=1 falls back to the two-gadget form, so both sides live
+    // in one binary for A/B, as ISH_NO_ALU_FUSE and ISH_NO_ADDR_FUSE do.
+    static int enabled = -1;
+    if (enabled == -1)
+        enabled = getenv("ISH_NO_PUSHPOP_FUSE") == NULL ? 1 : 0;
+    if (!enabled)
+        return false;
+    if (sz(size) != size_32)
+        return false;
+    enum arg reg = gen_reg_arg(thing, modrm);
+    if (reg == arg_invalid)
+        return false;
+    extern gadget_t fused_push_gadgets[];
+    gadget_t g = fused_push_gadgets[reg - arg_reg_a];
+    if (g == NULL)
+        return false;
+    GEN(g);
+    GEN(state->orig_ip);
+    return true;
+#else
+    (void) state; (void) thing; (void) modrm; (void) size;
+    return false;
+#endif
+}
+
+static inline bool gen_pop_reg_fused(struct gen_state *state, enum arg thing,
+        struct modrm *modrm, int size) {
+#if defined(__aarch64__)
+    static int enabled = -1;
+    if (enabled == -1)
+        enabled = getenv("ISH_NO_PUSHPOP_FUSE") == NULL ? 1 : 0;
+    if (!enabled)
+        return false;
+    if (sz(size) != size_32)
+        return false;
+    enum arg reg = gen_reg_arg(thing, modrm);
+    if (reg == arg_invalid)
+        return false;
+    extern gadget_t fused_pop_gadgets[];
+    // reg_sp is a deliberate 0 in that table: see the comment on fused_pop in
+    // jit/gadgets-aarch64/memory.S. `pop esp` falls back here.
+    gadget_t g = fused_pop_gadgets[reg - arg_reg_a];
+    if (g == NULL)
+        return false;
+    GEN(g);
+    // Plain orig_ip, matching the generic `gg(pop, state->orig_ip)`: the bit-62
+    // "adjust esp on segfault" marker is set AFTER that gadget is emitted, so it
+    // only ever reaches a following memory store's orig_ip word -- i.e. only the
+    // `pop <mem>` form, which is not fused here. Set below anyway so this path
+    // leaves gen_state identical to the generic one.
+    GEN(state->orig_ip);
+    state->orig_ip_extra = 1ul << 62;
+    return true;
+#else
+    (void) state; (void) thing; (void) modrm; (void) size;
+    return false;
+#endif
+}
+
 #define op(type, thing, z) do { \
     extern gadget_t type##_gadgets[]; \
     if (!gen_op(state, type##_gadgets, arg_##thing, &modrm, &imm, z, seg_tls, addr_offset)) return false; \
@@ -10536,11 +10611,18 @@ static inline bool gen_alu_imm_fused(struct gen_state *state, gadget_t *fused,
 #define NOT(val,z) load(val,z); gz(not, z); store(val,z)
 #define NEG(val,z) imm = 0; load(imm,z); op(sub, val,z); store(val,z)
 
-#define POP(thing,z) \
-    gg(pop, state->orig_ip); \
-    state->orig_ip_extra = 1ul << 62; /* marks that on segfault the stack pointer should be adjusted */\
-    store(thing, z)
-#define PUSH(thing,z) load(thing, z); gg(push, state->orig_ip)
+#define POP(thing,z) do { \
+    if (!gen_pop_reg_fused(state, arg_##thing, &modrm, z)) { \
+        gg(pop, state->orig_ip); \
+        state->orig_ip_extra = 1ul << 62; /* marks that on segfault the stack pointer should be adjusted */\
+        store(thing, z); \
+    } \
+} while (0)
+#define PUSH(thing,z) do { \
+    if (!gen_push_reg_fused(state, arg_##thing, &modrm, z)) { \
+        load(thing, z); gg(push, state->orig_ip); \
+    } \
+} while (0)
 
 #define INC(val,z) load(val, z); gz(inc, z); store(val, z)
 #define DEC(val,z) load(val, z); gz(dec, z); store(val, z)
