@@ -10403,6 +10403,35 @@ static inline bool gen_mov(struct gen_state *state, enum arg src, enum arg dst, 
             return true;
         }
     }
+
+    // LEA: `lea <reg>, [<base>+disp]` in one gadget instead of three. This is the
+    // only i386 MOV site whose src is arg_addr (emu/decode.h:1171), which is why
+    // the movmr fusion above declines it, and it was the unexplained "src=other"
+    // 14.3% of the MOV emission histogram -- 18.4% of instructions reaching
+    // gen_mov in this repo's i386 rootfs.
+    //
+    // Worst work-to-dispatch ratio in the engine: LEA never touches memory, yet it
+    // emitted addr_<base> + load32_addr + store32_reg_<dst>, and load32_addr's
+    // whole body is `mov w0, w3`. No memory access also means the fused gadget
+    // needs no read_prep, no orig_ip word and no fault path -- three instructions
+    // total, and two stream words instead of four.
+    //
+    // 32-bit only: at oz=16 LEA writes just the low half of the destination.
+    // seg_tls declines: gen_addr folds a segment base in via seg_gs, and rather
+    // than decide whether LEA should do that, this leaves that case exactly as it
+    // was. modrm_mem (not != modrm_reg) excludes the scaled-index form, which
+    // needs its own si gadget.
+    if (movmr_enabled && sz(size) == size_32 && dst_reg != arg_invalid &&
+            src == arg_addr && modrm->type == modrm_mem && !seg_tls &&
+            modrm->base != reg_none && modrm->base < reg_count) {
+        extern gadget_t fused_lea32_gadgets[];
+        gadget_t g = fused_lea32_gadgets[(dst_reg - arg_reg_a) * 8 + modrm->base];
+        if (g != NULL) {
+            GEN(g);
+            GEN(modrm->offset);
+            return true;
+        }
+    }
 #endif
 
     extern gadget_t load_gadgets[];

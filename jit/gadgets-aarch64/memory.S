@@ -254,6 +254,56 @@
 .endr
 .popsection
 
+# ---- `lea <reg>, [<base>+disp]` in ONE gadget ----
+#
+# LEA is 18.4% of the instructions that reach gen_mov in this repo's own i386
+# Devuan rootfs, and it was the mystery "src=other" 14.3% bucket in the MOV
+# emission histogram -- it is the only i386 MOV site whose src is arg_addr
+# (emu/decode.h:1171, `MOV(addr, modrm_reg, oz)`), which is exactly the case the
+# movmr fusion above declines.
+#
+# It is also the worst work-to-dispatch ratio in the engine. LEA is pure
+# arithmetic -- it computes an address and never touches memory -- yet it costs
+# THREE dispatches:
+#     [addr_<base>][disp][load32_addr][store32_reg_<dst>]     4 words, 3 dispatches
+# where gadget_load32_addr's entire body is `mov w0, w3`: ONE instruction of work
+# behind a full gret. Fused:
+#     [fused_lea32_<dst>_<base>][disp]                        2 words, 1 dispatch
+#
+# And because there is no memory access there is no read_prep, no orig_ip word and
+# no fault path -- the whole gadget is three instructions. Compare the mov<->mem
+# fusions above, which each needed their own TLB trampoline.
+#
+# dst == base (`lea eax, [eax+8]`) is fine: one add that reads and writes the same
+# register. 32-bit only -- at oz=16 LEA writes just the low half of the
+# destination, which a full-width add would not reproduce.
+.macro flea32 dst_name, dst, base_name, base
+    .gadget fused_lea32_\dst_name\()_\base_name
+        ldr w8, [_ip]
+        add \dst, w8, \base
+        gret 1
+.endm
+
+.macro flea32_row dst_name, dst
+    .macro flea32_col base_name, base
+        flea32 \dst_name, \dst, \base_name, \base
+    .endm
+    .each_reg flea32_col
+    .purgem flea32_col
+.endm
+.each_reg flea32_row
+.purgem flea32_row
+
+# dst-major, indexed [(dst_reg - arg_reg_a) * 8 + modrm->base], REG_LIST order.
+.pushsection_rodata
+.global.name fused_lea32_gadgets
+.irp dst, REG_LIST
+    .irp base, REG_LIST
+        .quad NAME(gadget_fused_lea32_\dst\()_\base)
+    .endr
+.endr
+.popsection
+
 .macro x name, reg
     .irp times, 1,2,4,8
         .gadget si_\name\()_\times
