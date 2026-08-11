@@ -10266,6 +10266,58 @@ static inline bool gen_mov(struct gen_state *state, enum arg src, enum arg dst, 
            gen_op(state, store_gadgets, dst, modrm, imm, size, seg_tls, addr_offset);
 }
 
+// Collapse load(dst_reg) + op(imm) + store(dst_reg) into one fused gadget. See
+// jit/gadgets-aarch64/math.S for the gadget family and why reg,imm rather than
+// reg,reg (measured: reg,imm is ~60% of ALU load-op-store trios and needs 56
+// gadgets; reg,reg is ~21% and would need 448).
+//
+// Deliberately NOT hooked inside gen_op, for two reasons that each cost real
+// performance if ignored:
+//   - gen_op cannot distinguish CMP/TEST from SUB/AND (they share sub_gadgets and
+//     and_gadgets), so hooking there would fuse CMP and silently disable the
+//     cmp/test+jcc fusion, which is worth more than this.
+//   - gen_try_fuse_addr identifies its op by pointer-comparing gen_op's table
+//     argument, so changing what gen_op receives can disable the address fusion.
+// Deciding here, at the los() call site, means both operand kinds are known
+// statically and neither existing fusion is perturbed.
+//
+// Requires BOTH that the source is a true immediate and that the destination
+// resolves to a register: los() also emits load32_mem/op/store32_mem for a MEMORY
+// destination, and fusing that shape would silently drop the memory load and store.
+static inline bool gen_alu_imm_fused(struct gen_state *state, gadget_t *fused,
+        enum arg src, enum arg dst, struct modrm *modrm, uint64_t *imm, int size) {
+#if defined(__aarch64__)
+    // ISH_NO_ALU_FUSE=1 falls back to the three-gadget form so both sides live in
+    // one binary for A/B, as ISH_NO_ADDR_FUSE does for the address fusion.
+    static int enabled = -1;
+    if (enabled == -1)
+        enabled = getenv("ISH_NO_ALU_FUSE") == NULL ? 1 : 0;
+    if (!enabled)
+        return false;
+    if (sz(size) != size_32)
+        return false;
+    if (src != arg_imm)
+        return false;
+    enum arg dst_reg = gen_reg_arg(dst, modrm);
+    if (dst_reg == arg_invalid)
+        return false;
+    gadget_t g = fused[dst_reg - arg_reg_a];
+    if (g == NULL)
+        return false;
+    // Always emits two words. Never short-circuit to zero emission (even for a
+    // no-op immediate): gen_try_fuse_jcc requires state->size to advance past a
+    // flag-setting instruction, and an ALU op emitting nothing would leave a stale
+    // cmp/test fuse note live for the next jcc.
+    GEN(g);
+    GEN(*imm);
+    return true;
+#else
+    (void) state; (void) fused; (void) src; (void) dst;
+    (void) modrm; (void) imm; (void) size;
+    return false;
+#endif
+}
+
 #define op(type, thing, z) do { \
     extern gadget_t type##_gadgets[]; \
     if (!gen_op(state, type##_gadgets, arg_##thing, &modrm, &imm, z, seg_tls, addr_offset)) return false; \
@@ -10283,13 +10335,28 @@ static inline bool gen_mov(struct gen_state *state, enum arg src, enum arg dst, 
 // xchg must generate in this order to be atomic
 #define XCHG(src, dst,z) load(src, z); op(xchg, dst, z); store(src, z)
 
-#define ADD(src, dst,z) los(add, src, dst, z)
-#define OR(src, dst,z) los(or, src, dst, z)
-#define ADC(src, dst,z) los(adc, src, dst, z)
-#define SBB(src, dst,z) los(sbb, src, dst, z)
-#define AND(src, dst,z) los(and, src, dst, z)
-#define SUB(src, dst,z) los(sub, src, dst, z)
-#define XOR(src, dst,z) los(xor, src, dst, z)
+// load-op-store, but try the fused reg,imm gadget first (one dispatch and two
+// stream words instead of three and four). Falls back to the plain los()
+// expansion for every shape the fused family does not cover: non-32-bit, a
+// memory destination, or a non-immediate source.
+//
+// Applied ONLY to the seven store-back ALU ops. CMP and TEST keep lo() verbatim
+// below -- they have no store to save, and their op word must stay a literal entry
+// of sub_gadgets/and_gadgets for gen_try_fuse_jcc to pointer-match.
+#define losf(o, src, dst, z) do { \
+    extern gadget_t fused_##o##32_imm_gadgets[]; \
+    if (!gen_alu_imm_fused(state, fused_##o##32_imm_gadgets, arg_##src, arg_##dst, &modrm, &imm, z)) { \
+        los(o, src, dst, z); \
+    } \
+} while (0)
+
+#define ADD(src, dst,z) losf(add, src, dst, z)
+#define OR(src, dst,z) losf(or, src, dst, z)
+#define ADC(src, dst,z) losf(adc, src, dst, z)
+#define SBB(src, dst,z) losf(sbb, src, dst, z)
+#define AND(src, dst,z) losf(and, src, dst, z)
+#define SUB(src, dst,z) losf(sub, src, dst, z)
+#define XOR(src, dst,z) losf(xor, src, dst, z)
 #define CMP(src, dst,z) lo(sub, src, dst, z); gen_note_flag_op_fuse(state, z, 1)
 #define TEST(src, dst,z) lo(and, src, dst, z); gen_note_flag_op_fuse(state, z, 2)
 #define NOT(val,z) load(val,z); gz(not, z); store(val,z)

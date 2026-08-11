@@ -1808,7 +1808,13 @@ amd64_gen_shift_count shift_count64, 8
 
 # this would have been just a few nice compact nested loops, but gas said "nuh uh"
 
-.macro _do_op op, arg, size, s
+# \dst is the register the operation accumulates into. It is _tmp for every
+# ordinary gadget (the load/store gadgets move the guest register in and out of
+# _tmp around it); a fused reg,imm gadget passes the guest register itself so no
+# load or store gadget is needed. Only the add/sub/adc/sbc and and/orr/eor paths
+# honour \dst -- load, store, xchg, imul, the shifts and the bit ops still use
+# _tmp explicitly, and must not be given a guest destination.
+.macro _do_op op, arg, dst, size, s
     .ifc \op,load
         movs _tmp, \arg, \s
         uxts _tmp, _tmp, \s
@@ -1819,7 +1825,7 @@ amd64_gen_shift_count shift_count64, 8
     .endif N .endif
 
     .ifin(\op, add,sub,adc,sbc)
-        setf_a \arg, _tmp, \s
+        setf_a \arg, \dst, \s
     .endifin
     .ifin(\op, and,orr,eor)
         clearf_a
@@ -1836,11 +1842,11 @@ amd64_gen_shift_count shift_count64, 8
     .endifin
 
     .ifin(\op, and,orr,eor)
-        \op _tmp, _tmp, \arg
+        \op \dst, \dst, \arg
     .endifin
 
     .ifin(\op, add,sub,adc,sbc)
-        do_add \op, _tmp, \arg, \s
+        do_add \op, \dst, \arg, \s
     .endifin
 
     .ifc \op,imul
@@ -1981,11 +1987,16 @@ amd64_gen_shift_count shift_count64, 8
     .endif
 
     .ifin(\op, add,sub,adc,sbc,and,orr,eor)
-        setf_zsp \s
+        setf_zsp \s, \dst
     .endifin
 .endm
-.macro do_op op, size, arg
-    ss \size, _do_op, \op, \arg
+# dst defaults to _tmp, so every existing caller is unchanged. It exists so a
+# FUSED gadget can run the op directly on a guest register instead of the scratch,
+# collapsing load(dst)+op(src)+store(dst) into one dispatch. `ss` expands to
+# `\macro \args, \size, <suffix>`, so \dst must be the last of \args to land in
+# _do_op's third parameter.
+.macro do_op op, size, arg, dst=_tmp
+    ss \size, _do_op, \op, \arg, \dst
 .endm
 
 .macro do_reg_op op, armop, size, reg
@@ -2088,6 +2099,118 @@ amd64_gen_shift_count shift_count64, 8
     .endr
     .gadget_array \op
 .endr
+
+# ---- FUSED reg,imm ALU: load(dst) + op(imm) + store(dst) collapsed to ONE gadget ----
+#
+# Emitted by gen_alu_imm_fused() in jit/gen.c. The stream goes from
+#     [load32_reg_<dst>][<op>32_imm][imm][store32_reg_<dst>]   4 words, 3 dispatches
+# to
+#     [fused_<op>32_imm_<dst>][imm]                            2 words, 1 dispatch
+#
+# Why this shape and not the reg,reg one: measured emission on a real gcc compile
+# (207139 MOVs, 102510 ALU load-op-store trios) says reg,imm is ~60% of all ALU
+# trios -- `add reg,imm` alone is 35.3% and `sub reg,imm` 18.1% -- while reg,reg
+# is ~21%. reg,imm needs 7 ops x 8 destinations = 56 gadgets; reg,reg would need
+# 7 x 64 = 448 for a third of the benefit, i.e. ~22x worse per byte of gadget text,
+# which is I-cache this project cannot spend freely on old devices.
+#
+# The body is the ordinary imm-form gadget with the accumulator re-pointed from the
+# _tmp scratch to the guest register itself, via do_op's dst parameter. All the rest
+# of it -- the eager CF/OF, the lazy op1/op2/res/flags_res deposit, the per-family
+# differences between the add group and the and/orr/eor group -- comes from the same
+# _do_op expansion the unfused gadgets use, so the flag state is identical by
+# construction rather than by inspection. Do NOT hand-write a flag epilogue here:
+# the logic family also clears AF in CPU_eflags, which is easy to omit and invisible
+# until af_ops happens to be 0.
+#
+# 32-bit ONLY, and that is load-bearing, not conservatism:
+#   - at size 8 the gadget names reg_sp/bp/si/di mean the HIGH BYTES ah/ch/dh/bh
+#     (see do_hi_op above and arg_reg_ah = arg_reg_sp in jit/gen.c), so an
+#     8-register generator would silently operate on esp instead of ah;
+#   - at 8/16 the load is a bfxil partial write and do_add's sized path writes a
+#     sign-extended out-of-range intermediate into its destination to detect
+#     overflow, so it cannot accumulate straight into a guest register.
+# mov32_reg_reg is 32-bit only for the same reasons.
+#
+# CMP and TEST are deliberately absent: they use lo() (no store-back), and the
+# cmp/test+jcc fusion identifies its target by pointer-matching the op word against
+# sub_gadgets/and_gadgets. A fused cmp would not match, silently disabling a fusion
+# worth far more than this one.
+.macro xfa_add name, reg
+    .gadget fused_add32_imm_\name
+        ldr w8, [_ip]
+        do_op add, 32, w8, \reg
+        gret 1
+.endm
+.each_reg xfa_add
+.purgem xfa_add
+
+.macro xfa_or name, reg
+    .gadget fused_or32_imm_\name
+        ldr w8, [_ip]
+        do_op orr, 32, w8, \reg
+        gret 1
+.endm
+.each_reg xfa_or
+.purgem xfa_or
+
+.macro xfa_adc name, reg
+    .gadget fused_adc32_imm_\name
+        ldr w8, [_ip]
+        do_op adc, 32, w8, \reg
+        gret 1
+.endm
+.each_reg xfa_adc
+.purgem xfa_adc
+
+.macro xfa_sbb name, reg
+    .gadget fused_sbb32_imm_\name
+        ldr w8, [_ip]
+        do_op sbc, 32, w8, \reg
+        gret 1
+.endm
+.each_reg xfa_sbb
+.purgem xfa_sbb
+
+.macro xfa_and name, reg
+    .gadget fused_and32_imm_\name
+        ldr w8, [_ip]
+        do_op and, 32, w8, \reg
+        gret 1
+.endm
+.each_reg xfa_and
+.purgem xfa_and
+
+.macro xfa_sub name, reg
+    .gadget fused_sub32_imm_\name
+        ldr w8, [_ip]
+        do_op sub, 32, w8, \reg
+        gret 1
+.endm
+.each_reg xfa_sub
+.purgem xfa_sub
+
+.macro xfa_xor name, reg
+    .gadget fused_xor32_imm_\name
+        ldr w8, [_ip]
+        do_op eor, 32, w8, \reg
+        gret 1
+.endm
+.each_reg xfa_xor
+.purgem xfa_xor
+
+# One 8-entry array per op, indexed by (dst_reg - arg_reg_a). MUST be built from
+# REG_LIST (a,c,d,b,sp,bp,si,di), which is enum arg's order -- NOT .each_reg's
+# order (a,b,c,d,si,di,bp,sp), which is what instantiated the bodies above. Using
+# the wrong order here yields a silently permuted table: the wrong register on
+# every single operation, with no build error.
+.gadget_list fused_add32_imm, REG_LIST
+.gadget_list fused_or32_imm, REG_LIST
+.gadget_list fused_adc32_imm, REG_LIST
+.gadget_list fused_sbb32_imm, REG_LIST
+.gadget_list fused_and32_imm, REG_LIST
+.gadget_list fused_sub32_imm, REG_LIST
+.gadget_list fused_xor32_imm, REG_LIST
 
 # atomics. oof
 
