@@ -10260,6 +10260,50 @@ static inline bool gen_mov(struct gen_state *state, enum arg src, enum arg dst, 
     }
 #endif
 
+#if defined(__aarch64__)
+    // `mov <reg>, [<base>+disp]` in one gadget instead of two. The most-emitted
+    // shape in the stream: 96709 of 207139 MOVs on a real gcc compile (46.7%).
+    // Even with the address fusion the load still lands in _tmp and needs a
+    // separate store32_reg_<dst> to move it out; this loads straight into the
+    // destination register. See fused_movmr32 in jit/gadgets-aarch64/memory.S.
+    //
+    // The modrm test is deliberately `== modrm_mem`, not `!= modrm_reg`: that
+    // excludes modrm_mem_si (a scaled index needs its own si gadget) in the same
+    // breath, and it excludes arg_mem_addr, whose modrm fields gen_op rewrites
+    // later, so inspecting them here would be reading pre-mutation state.
+    static int movmr_enabled = -1;
+    if (movmr_enabled == -1)
+        movmr_enabled = getenv("ISH_NO_MOVMR_FUSE") == NULL ? 1 : 0;
+    if (movmr_enabled && sz(size) == size_32 && dst_reg != arg_invalid &&
+            src == arg_modrm_val && modrm->type == modrm_mem && !seg_tls &&
+            modrm->base != reg_none && modrm->base < reg_count) {
+        extern gadget_t fused_movmr32_gadgets[];
+        gadget_t g = fused_movmr32_gadgets[(dst_reg - arg_reg_a) * 8 + modrm->base];
+        if (g != NULL) {
+            GEN(g);
+            GEN(modrm->offset);
+            GEN(state->orig_ip | state->orig_ip_extra);
+            return true;
+        }
+    }
+
+    // The mirror: `mov [<base>+disp], <reg>`, 39815 of 207139 MOVs (19.2%).
+    // Same conditions with the operands swapped. Shares ISH_NO_MOVMR_FUSE, since
+    // the two are one change and are measured together.
+    if (movmr_enabled && sz(size) == size_32 && src_reg != arg_invalid &&
+            dst == arg_modrm_val && modrm->type == modrm_mem && !seg_tls &&
+            modrm->base != reg_none && modrm->base < reg_count) {
+        extern gadget_t fused_movrm32_gadgets[];
+        gadget_t g = fused_movrm32_gadgets[(src_reg - arg_reg_a) * 8 + modrm->base];
+        if (g != NULL) {
+            GEN(g);
+            GEN(modrm->offset);
+            GEN(state->orig_ip | state->orig_ip_extra);
+            return true;
+        }
+    }
+#endif
+
     extern gadget_t load_gadgets[];
     extern gadget_t store_gadgets[];
     return gen_op(state, load_gadgets, src, modrm, imm, size, seg_tls, addr_offset) &&

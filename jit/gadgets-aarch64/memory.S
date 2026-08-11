@@ -141,6 +141,119 @@
 .gadget_list fused_store16_mem, REG_LIST
 .gadget_list fused_store32_mem, REG_LIST
 
+# ---- `mov <reg>, [<base>+disp]` in ONE gadget ----
+#
+# The single most-emitted shape in the whole instruction stream: 96709 of 207139
+# MOVs on a real gcc compile (46.7%), measured by instrumenting gen_mov. Even
+# after the address fusion above it still costs two dispatches, because the load
+# lands in the _tmp scratch and a separate store32_reg_<dst> moves it out:
+#     [fused_load32_mem_<base>][disp][orig_ip][store32_reg_<dst>]   4 words, 2
+# becomes
+#     [fused_movmr32_<dst>_<base>][disp][orig_ip]                   3 words, 1
+#
+# Unlike the address fusion, this CANNOT branch into the existing body: the
+# destination differs per gadget, so each needs its own read_prep/read_bullshit
+# pair (hence a unique label id per (dst,base), and 64 trampolines).
+#
+# Loading straight into the guest register is safe across the slow paths, which is
+# the part worth checking rather than assuming: read_prep clobbers only x8-x10 and
+# _xaddr, and both slow paths (handle_read_miss, crosspage_load) are `bl` calls
+# that return to `back_<id>` before the load executes -- and the guest registers
+# are x20-x27, inside the callee-saved x19-x28 range, so a C call preserves them.
+# That is also why the unfused body loads into w8 (caller-saved) and then moves to
+# _tmp rather than loading into _tmp directly.
+#
+# _ip is advanced past the displacement BEFORE read_prep, so a fault sees _ip at
+# [orig_ip] exactly as it does in the unfused path.
+.macro fmr32 dst_name, dst, base_name, base
+    .gadget fused_movmr32_\dst_name\()_\base_name
+        ldr _addr, [_ip]
+        add _addr, _addr, \base
+        add _ip, _ip, 8
+        read_prep 32, fmr32_\dst_name\()_\base_name
+        ldr \dst, [_xaddr]
+        gret 1
+        read_bullshit 32, fmr32_\dst_name\()_\base_name
+.endm
+
+# Two dimensions need nested macros, not nested .irp: clang's integrated assembler
+# will not substitute .irp parameters inside a .macro body. Same shape as
+# mov32_reg_reg_row/_col in math.S.
+.macro fmr32_row dst_name, dst
+    .macro fmr32_col base_name, base
+        fmr32 \dst_name, \dst, \base_name, \base
+    .endm
+    .each_reg fmr32_col
+    .purgem fmr32_col
+.endm
+.each_reg fmr32_row
+.purgem fmr32_row
+
+# 64-entry table, dst-major, indexed [(dst_reg - arg_reg_a) * 8 + modrm->base].
+# Built from REG_LIST (enum arg / enum reg32 order), NOT .each_reg order which
+# instantiated the bodies above. Emitted manually like mov32_reg_reg_gadgets
+# rather than via .gadget_list, since that helper only walks one dimension.
+.pushsection_rodata
+.global.name fused_movmr32_gadgets
+.irp dst, REG_LIST
+    .irp base, REG_LIST
+        .quad NAME(gadget_fused_movmr32_\dst\()_\base)
+    .endr
+.endr
+.popsection
+
+# ---- `mov [<base>+disp], <reg>` in ONE gadget ----
+#
+# The mirror of the above, and the next most-emitted shape: 39815 of 207139 MOVs
+# (19.2%). Two dispatches become one:
+#     [load32_reg_<src>][fused_store32_mem_<base>][disp][orig_ip]   4 words, 2
+#     [fused_movrm32_<src>_<base>][disp][orig_ip]                   3 words, 1
+#
+# Stores need more of the surrounding machinery than loads, and all of it is kept:
+#   - write_prep validates writability and may take slow_write (bl resolve_write_ptr),
+#     which is a C call -- safe, because the source is a guest register (x20-x27,
+#     inside callee-saved x19-x28) and write_prep itself only clobbers x8-x10.
+#   - write_done is NOT optional: on a page-straddling store, write_prep points
+#     _xaddr at the frame's scratch (LOCAL_value) instead of at guest memory, and
+#     write_done is what notices that and calls crosspage_store to split the value
+#     across the two pages. Omitting it would silently drop every crosspage store.
+#
+# The generic body loads the old value into w8 before overwriting it, because
+# do_op's sub-32-bit store path writes only w8's low bits. At 32 bits the whole word
+# is replaced and `str` writes all of it, so this stores the guest register directly
+# and skips that dead load.
+.macro fmw32 src_name, src, base_name, base
+    .gadget fused_movrm32_\src_name\()_\base_name
+        ldr _addr, [_ip]
+        add _addr, _addr, \base
+        add _ip, _ip, 8
+        write_prep 32, fmw32_\src_name\()_\base_name
+        str \src, [_xaddr]
+        write_done 32, fmw32_\src_name\()_\base_name
+        gret 1
+        write_bullshit 32, fmw32_\src_name\()_\base_name
+.endm
+
+.macro fmw32_row src_name, src
+    .macro fmw32_col base_name, base
+        fmw32 \src_name, \src, \base_name, \base
+    .endm
+    .each_reg fmw32_col
+    .purgem fmw32_col
+.endm
+.each_reg fmw32_row
+.purgem fmw32_row
+
+# src-major, indexed [(src_reg - arg_reg_a) * 8 + modrm->base], REG_LIST order.
+.pushsection_rodata
+.global.name fused_movrm32_gadgets
+.irp src, REG_LIST
+    .irp base, REG_LIST
+        .quad NAME(gadget_fused_movrm32_\src\()_\base)
+    .endr
+.endr
+.popsection
+
 .macro x name, reg
     .irp times, 1,2,4,8
         .gadget si_\name\()_\times
