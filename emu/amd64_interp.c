@@ -14322,8 +14322,19 @@ amd64_0f_rm_pf:
 
 // Instrumentation: every 0F vector op the amd64 JIT can't do as a native gadget
 // is COMPILED into a bridge to this C helper (no compile-fallback — it runs
-// per-op at runtime). That bridge is the dominant amd64-JIT cost. Count by op2
-// so we can rank which vector ops are worth a real gadget. ISH_TRACE_AMD64_JIT_STATS=1.
+// per-op at runtime). Count by op2 so we can rank which vector ops are worth a
+// real gadget. ISH_TRACE_AMD64_JIT_STATS=1.
+//
+// This comment used to claim "that bridge is the dominant amd64-JIT cost". It is
+// not, and the claim was load-bearing enough to misdirect optimization work, so:
+// measured on an -O2 build, the amd64_jit_0f_vec_rm subtree is 0.68% of busy
+// samples on `gcc -O2 -S`, and 0% on a busybox shell loop and on python3.
+// The counter here is what made it look dominant -- it records >1,048,576 bridges
+// per cc1 compile (48% `0f db` PAND, 46% `0f df` PANDN) -- but a large COUNT of a
+// cheap operation is not a large share of TIME. The genuinely dominant cost in
+// this engine is the OTHER bridge family, gadget_helper_tlb_N_retint (41.6% of
+// busy time on a shell loop, 28.0% on python), whose helpers re-decode their own
+// instruction in C on every execution. Rank by profile share, not by counter.
 static unsigned long amd64_jit_vec_bridge_by_op2[256];
 static unsigned long amd64_jit_vec_bridge_total;
 
