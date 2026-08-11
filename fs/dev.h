@@ -50,6 +50,23 @@ struct dev_ops {
 extern struct dev_ops *block_devs[];
 extern struct dev_ops *char_devs[];
 
+// The standard /dev node set, in one place because three things build it:
+// devtmpfs populates a fresh mount with it (fs/tmp.c), sys_mount_guest
+// repairs an existing /dev in place with it (fs/mount.c), and the app and
+// command-line startup paths create it on the main root.
+struct dev_node_spec {
+    const char *name; // relative to the /dev directory, no leading slash
+    mode_t_ mode;
+    int major, minor;
+};
+// Always published: these majors are statically dispatched in fs/dev.c.
+extern const struct dev_node_spec dev_standard_nodes[];
+extern const size_t dev_standard_nodes_count;
+// Published only where dyn_dev_is_registered() says the device exists, which
+// in practice means the iOS app and not the command-line build.
+extern const struct dev_node_spec dev_dynamic_nodes[];
+extern const size_t dev_dynamic_nodes_count;
+
 int dev_open(int major, int minor, int type, struct fd *fd);
 
 extern struct dev_ops null_dev;

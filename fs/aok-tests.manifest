@@ -72,6 +72,7 @@ getpeername_smallbuf.c
 netlink_route.c
 netlink_audit.c
 mount_flags.c
+devtmpfs_mount.c
 clone_error_cleanup.c
 uts_namespace.c
 posix_timer_fork.c

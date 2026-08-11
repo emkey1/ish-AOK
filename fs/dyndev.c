@@ -50,6 +50,16 @@ int dyn_dev_register(struct dev_ops *ops, int type, int major, int minor) {
     return 0;
 }
 
+bool dyn_dev_is_registered(int major, int minor) {
+    if (minor < 0 || minor > MAX_MINOR)
+        return false;
+    if ((major != DYN_DEV_MAJOR) && (major != DEV_RTC_MAJOR))
+        return false;
+    // Same read-only access dyn_open() makes without the lock: entries are
+    // only ever installed, never removed (see the XXX at the top).
+    return dyn_info_char.devs[minor] != NULL;
+}
+
 static int dyn_open(int type, int major, int minor, struct fd *fd) {
     assert((type == DEV_CHAR) || (type == DEV_BLOCK));
     assert(major == DYN_DEV_MAJOR || major == DEV_RTC_MAJOR);

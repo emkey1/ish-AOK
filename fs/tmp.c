@@ -11,6 +11,9 @@
 #include "fs/fifo.h"
 #include "fs/poll.h"
 #include "fs/real.h"
+#include "fs/dev.h"
+#include "fs/devices.h"
+#include "fs/dyndev.h"
 #include "util/refcount.h"
 #include "util/timer.h"
 #include "debug.h"
@@ -258,6 +261,136 @@ static int tmpfs_populate_cgroup2_dir(struct tmp_dirent *dir) {
     return 0;
 }
 
+// ============================
+// ======== DEVTMPFS ==========
+// ============================
+//
+// devtmpfs is tmpfs that publishes the emulator's device nodes at mount time,
+// the way the real one mirrors the kernel's device model. iSH's device nodes
+// are dispatched purely by rdev major/minor (fs/dev.c) regardless of which
+// filesystem they live on, so a node created here is fully functional.
+//
+// This exists because a mount that silently produced an EMPTY /dev was worse
+// than useless: the first `echo x > /dev/null` on it creates a REGULAR FILE
+// that accumulates every byte ever written to it, forever, on the backing
+// store. That is the state any guest reached when it mounted devtmpfs
+// somewhere other than an already-populated /dev -- switch_root and chroot
+// boots (iSH's own /AOK/roots multi-arch chroots included), and any rootfs
+// whose tarball could not carry real device nodes.
+
+static bool tmpfs_is_devtmpfs_mount(struct mount *mount) {
+    return strcmp(mount->fs->name, "devtmpfs") == 0;
+}
+
+// Device nodes are root-owned on a real devtmpfs no matter who mounted it,
+// while tmp_inode_new() inherits the caller's ids -- stamp them explicitly.
+static int tmpfs_add_dev_node(struct tmp_dirent *dir, const char *name, mode_t_ mode, dev_t_ dev) {
+    int err = tmpfs_dir_lookup_existence(dir, name);
+    if (err == _EEXIST)
+        return 0;
+    if (err < 0)
+        return err;
+
+    struct tmp_inode *inode = tmp_inode_new(S_IFCHR | mode);
+    if (inode == NULL)
+        return _ENOMEM;
+    inode->stat.rdev = dev;
+    inode->stat.uid = 0;
+    inode->stat.gid = 0;
+
+    err = tmpfs_dir_link(dir, name, inode, NULL);
+    tmp_inode_release(inode);
+    return err;
+}
+
+static int tmpfs_add_dev_subdir(struct tmp_dirent *dir, const char *name, mode_t_ mode) {
+    int err = tmpfs_dir_lookup_existence(dir, name);
+    if (err == _EEXIST)
+        return 0;
+    if (err < 0)
+        return err;
+
+    struct tmp_inode *inode = tmp_inode_new(S_IFDIR | mode);
+    if (inode == NULL)
+        return _ENOMEM;
+    inode->stat.uid = 0;
+    inode->stat.gid = 0;
+
+    err = tmpfs_dir_link(dir, name, inode, NULL);
+    if (err == 0)
+        dir->inode->stat.nlink++; // the new subdir's ".." link
+    tmp_inode_release(inode);
+    return err;
+}
+
+static int tmpfs_add_dev_symlink(struct tmp_dirent *dir, const char *name, const char *target) {
+    int err = tmpfs_dir_lookup_existence(dir, name);
+    if (err == _EEXIST)
+        return 0;
+    if (err < 0)
+        return err;
+
+    struct tmp_inode *inode = tmp_inode_new(S_IFLNK | 0777);
+    if (inode == NULL)
+        return _ENOMEM;
+    // Same storage a tmpfs symlink uses: raw target bytes in file_data.
+    size_t target_len = strlen(target);
+    inode->file_data = malloc(target_len + 1);
+    if (inode->file_data == NULL) {
+        tmp_inode_release(inode);
+        return _ENOMEM;
+    }
+    memcpy(inode->file_data, target, target_len + 1);
+    inode->stat.size = target_len;
+    inode->stat.uid = 0;
+    inode->stat.gid = 0;
+
+    err = tmpfs_dir_link(dir, name, inode, NULL);
+    tmp_inode_release(inode);
+    return err;
+}
+
+static int tmpfs_populate_devtmpfs_root(struct tmp_dirent *dir) {
+    for (size_t i = 0; i < dev_standard_nodes_count; i++) {
+        int err = tmpfs_add_dev_node(dir, dev_standard_nodes[i].name, dev_standard_nodes[i].mode,
+                dev_make(dev_standard_nodes[i].major, dev_standard_nodes[i].minor));
+        if (err < 0)
+            return err;
+    }
+    for (size_t i = 0; i < dev_dynamic_nodes_count; i++) {
+        if (!dyn_dev_is_registered(dev_dynamic_nodes[i].major, dev_dynamic_nodes[i].minor))
+            continue;
+        int err = tmpfs_add_dev_node(dir, dev_dynamic_nodes[i].name, dev_dynamic_nodes[i].mode,
+                dev_make(dev_dynamic_nodes[i].major, dev_dynamic_nodes[i].minor));
+        if (err < 0)
+            return err;
+    }
+
+    // Mount points Linux ships as directories on /dev: devpts goes on pts,
+    // and shm is where POSIX shared memory lands (1777, or every non-root
+    // shm_open() fails with EACCES -- see the matching AppDelegate.m fix).
+    int err = tmpfs_add_dev_subdir(dir, "pts", 0755);
+    if (err < 0)
+        return err;
+    err = tmpfs_add_dev_subdir(dir, "shm", 01777);
+    if (err < 0)
+        return err;
+
+    err = tmpfs_add_dev_symlink(dir, "fd", "/proc/self/fd");
+    if (err < 0)
+        return err;
+    err = tmpfs_add_dev_symlink(dir, "stdin", "/proc/self/fd/0");
+    if (err < 0)
+        return err;
+    err = tmpfs_add_dev_symlink(dir, "stdout", "/proc/self/fd/1");
+    if (err < 0)
+        return err;
+    err = tmpfs_add_dev_symlink(dir, "stderr", "/proc/self/fd/2");
+    if (err < 0)
+        return err;
+    return 0;
+}
+
 static struct tmp_dirent *__tmpfs_lookup(struct mount *mount, const char *path, bool parent, const char **filename_out) {
     struct tmp_dirent *root = mount->data;
     struct tmp_dirent *dirent = tmp_dirent_retain(root); // strong reference
@@ -445,6 +578,13 @@ static int tmpfs_mount(struct mount *mount) {
     if (tmpfs_is_cgroup2_mount(mount)) {
         lock(&root->lock, 0);
         int err = tmpfs_populate_cgroup2_dir(root);
+        unlock(&root->lock);
+        if (err < 0)
+            return err;
+    }
+    if (tmpfs_is_devtmpfs_mount(mount)) {
+        lock(&root->lock, 0);
+        int err = tmpfs_populate_devtmpfs_root(root);
         unlock(&root->lock);
         if (err < 0)
             return err;
@@ -1468,6 +1608,32 @@ static int cgroupfs_statfs(struct mount *UNUSED(mount), struct statfsbuf *stat) 
 
 const struct fs_ops tmpfs = {
     .name = "tmpfs", .magic = 0x01021994,
+    .mount = tmpfs_mount,
+    .umount = tmpfs_umount,
+    .statfs = tmpfs_statfs,
+    .open = tmpfs_open,
+    .close = tmpfs_close,
+    .stat = tmpfs_stat,
+    .unlink = tmpfs_unlink,
+    .rmdir = tmpfs_rmdir,
+    .rename = tmpfs_rename,
+    .fstat = tmpfs_fstat,
+    .setattr = tmpfs_setattr,
+    .fsetattr = tmpfs_fsetattr,
+    .utime = tmpfs_utime,
+    .futime = tmpfs_futime,
+    .getpath = tmpfs_getpath,
+    .mkdir = tmpfs_mkdir,
+    .mknod = tmpfs_mknod,
+    .symlink = tmpfs_symlink,
+    .readlink = tmpfs_readlink,
+};
+
+// Real devtmpfs is tmpfs underneath and reports TMPFS_MAGIC from statfs, so
+// this differs from tmpfs only in the name (which drives the mount-time
+// population above, and is what shows up in /proc/filesystems and mountinfo).
+const struct fs_ops devtmpfs = {
+    .name = "devtmpfs", .magic = 0x01021994,
     .mount = tmpfs_mount,
     .umount = tmpfs_umount,
     .statfs = tmpfs_statfs,

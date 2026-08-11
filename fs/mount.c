@@ -4,14 +4,19 @@
 #include "kernel/fs.h"
 #include "fs/path.h"
 #include "fs/real.h"
+#include "fs/dev.h"
 
-#define MAX_FILESYSTEMS 11
+// Sized for the static set below plus the two the iOS app registers at
+// startup (iosfs and iosfs_unsafe) with room to spare -- overflowing this
+// asserts at boot rather than failing gracefully, so don't run it to the rim.
+#define MAX_FILESYSTEMS 14
 static const struct fs_ops *filesystems[MAX_FILESYSTEMS] = {
     &realfs,
     &procfs,
     &aokfs,
     &devptsfs,
     &tmpfs,
+    &devtmpfs,
     &sysfs,
     &cgroupfs,
     &cgroup2fs,
@@ -208,6 +213,61 @@ bool mount_param_flag(const char *info, const char *flag) {
     return false;
 }
 
+// -- devtmpfs over an already-working /dev --
+//
+// A devtmpfs mount normally gets the real filesystem (fs/tmp.c), which
+// publishes iSH's device nodes into the fresh mount. The one case that must
+// NOT is a mount over a /dev that already works: iSH's main /dev is created
+// on the root filesystem before init ever runs (AppDelegate.m on the app,
+// main.c on the command line) and accumulates live state -- POSIX shared
+// memory under /dev/shm, the devpts mount, a bound /dev/log, whatever the
+// user put there -- none of which a fresh mount can carry over. Covering it
+// with an empty-but-for-our-nodes tmpfs would hide all of that to publish
+// device nodes that are, by definition, already present.
+//
+// So: if the target already holds real device nodes, keep the mount a no-op
+// (the behavior that has been shipping since e1b56bf9, when rejecting it with
+// EINVAL was found to freeze systemd's boot outright) and merely repair any
+// missing nodes in place. Otherwise -- an empty /dev, or one holding the
+// regular-file stand-ins a Docker-exported tarball ships instead of real
+// nodes -- do a real mount, which is the case that was silently broken:
+// mounting devtmpfs there used to "succeed" and leave the directory empty.
+static bool devtmpfs_target_is_populated(const char *point) {
+    for (size_t i = 0; i < dev_standard_nodes_count; i++) {
+        char path[MAX_PATH];
+        if (snprintf(path, sizeof(path), "%s/%s", point, dev_standard_nodes[i].name) >= (int) sizeof(path))
+            continue;
+        struct statbuf stat;
+        // Deliberately S_ISCHR and not mere existence: the regular file a
+        // tarball leaves at /dev/null is exactly what this must not accept.
+        if (generic_statat(AT_PWD, path, &stat, false) == 0 && S_ISCHR(stat.mode))
+            return true;
+    }
+    return false;
+}
+
+// Best-effort in-place equivalent of what the devtmpfs population does for a
+// fresh mount. Errors are ignored on purpose: this runs on a /dev that is
+// already working, so a node we cannot create is a node the caller was living
+// without anyway, and failing the mount over it would be a regression.
+static void devtmpfs_repair_nodes(const char *point) {
+    for (size_t i = 0; i < dev_standard_nodes_count; i++) {
+        char path[MAX_PATH];
+        if (snprintf(path, sizeof(path), "%s/%s", point, dev_standard_nodes[i].name) >= (int) sizeof(path))
+            continue;
+        dev_t_ dev = dev_make(dev_standard_nodes[i].major, dev_standard_nodes[i].minor);
+        struct statbuf stat;
+        int err = generic_statat(AT_PWD, path, &stat, false);
+        if (err == 0 && S_ISCHR(stat.mode) && stat.rdev == dev)
+            continue;
+        if (err == 0 && !S_ISCHR(stat.mode))
+            generic_unlinkat(AT_PWD, path); // the regular-file stand-in case
+        else if (err == 0)
+            continue; // a char device with some other rdev: leave it alone
+        generic_mknodat(AT_PWD, path, S_IFCHR | dev_standard_nodes[i].mode, dev);
+    }
+}
+
 #define MS_SUPPORTED (MS_READONLY_|MS_NOSUID_|MS_NODEV_|MS_NOEXEC_|MS_REMOUNT_|MS_NOATIME_|MS_NODIRATIME_|MS_SILENT_|MS_RELATIME_|MS_STRICTATIME_)
 #define MS_FLAGS (MS_READONLY_|MS_NOSUID_|MS_NODEV_|MS_NOEXEC_|MS_NOATIME_|MS_NODIRATIME_|MS_RELATIME_|MS_STRICTATIME_)
 
@@ -343,6 +403,15 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
         return err;
     }
 
+    // Before taking the lock: both helpers resolve guest paths, which re-enters
+    // mount_find() and takes mounts_lock (it isn't recursive). MS_MOVE/MS_REMOUNT
+    // name an existing mount rather than creating one, so they skip this.
+    if (strcmp(type, "devtmpfs") == 0 && !(flags & (MS_MOVE_ | MS_REMOUNT_)) &&
+            devtmpfs_target_is_populated(point)) {
+        devtmpfs_repair_nodes(point);
+        return 0;
+    }
+
     lock(&mounts_lock, 0);
     if (flags & MS_MOVE_) {
         struct mount *mount, *found = NULL;
@@ -392,21 +461,6 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
         if (found)
             proc_mountinfo_notify_changed();
         return found ? 0 : _EINVAL;
-    }
-
-    // devtmpfs has no iSH-side backing: on real Linux the kernel populates it
-    // by mirroring its live device model (hotplug included), but iSH's /dev
-    // is a static set of device nodes already baked into the rootfs image at
-    // build time, dispatched by rdev major/minor regardless of which fs they
-    // live on (see fs/dev.c). Mounting a fresh (empty) fs over /dev would
-    // hide that pre-populated content instead of augmenting it, so accept
-    // the mount as a no-op -- matching the existing MS_PROPAGATION no-op
-    // below -- rather than rejecting it with EINVAL, which froze systemd's
-    // "mount API" boot sequence (Failed to mount devtmpfs ... Freezing
-    // execution) since it has no fallback for a hard mount failure here.
-    if (strcmp(type, "devtmpfs") == 0) {
-        unlock(&mounts_lock);
-        return 0;
     }
 
     const struct fs_ops *fs = NULL;
@@ -662,6 +716,21 @@ fd_t sys_fsmount(fd_t f, dword_t flags, dword_t attr_flags) {
     return sys_fsmount_guest(f, flags, attr_flags);
 }
 
+// The filesystem backing the mount rooted exactly at `point`, or NULL.
+static const struct fs_ops *mount_fs_at(const char *point) {
+    lock(&mounts_lock, 0);
+    struct mount *mount;
+    const struct fs_ops *fs = NULL;
+    list_for_each_entry(&mounts, mount, mounts) {
+        if (strcmp(mount->point, point) == 0) {
+            fs = mount->fs;
+            break;
+        }
+    }
+    unlock(&mounts_lock);
+    return fs;
+}
+
 // Relocates an existing mount's point in the mounts list -- the same
 // list-resplice logic as sys_mount's MS_MOVE handling above, factored out
 // separately (rather than shared) so this new code path can't regress the
@@ -739,6 +808,29 @@ dword_t sys_move_mount_guest(fd_t from_dfd, guest_addr_t from_path_addr, fd_t to
     err = path_normalize(AT_PWD, to_path_raw, to_point, N_SYMLINK_FOLLOW);
     if (err < 0)
         return err;
+
+    // The same rule sys_mount_guest applies to devtmpfs, or this API would be
+    // a way around it: a devtmpfs must not be moved on top of a /dev that is
+    // already populated. Leave the mount detached and repair in place instead.
+    //
+    // The umount is best-effort and normally fails: a caller doing this for
+    // real still holds the fsmount fd (that is how the API works), and that fd
+    // holds a reference, so mount_remove returns EBUSY. Forcing it would leave
+    // the caller's fd pointing at freed memory, so the mount stays parked at
+    // its private staging path and shows up in /proc/mounts there. That is
+    // cosmetic -- it never reaches the target, which is the guarantee that
+    // matters -- and removing it properly needs lazy-detach (Linux's
+    // MNT_DETACH: unlink from the namespace now, free on last reference),
+    // which is a mount-lifetime change worth doing on its own rather than as
+    // a rider here.
+    if (mount_fs_at(from_point) == &devtmpfs && devtmpfs_target_is_populated(to_point)) {
+        lock(&mounts_lock, 0);
+        do_umount(from_point);
+        unlock(&mounts_lock);
+        devtmpfs_repair_nodes(to_point);
+        proc_mountinfo_notify_changed();
+        return 0;
+    }
 
     err = mount_relocate(from_point, to_point);
     if (err >= 0)

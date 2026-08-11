@@ -31,4 +31,12 @@ extern struct dev_ops rtc_dev_char;
 //  - _EINVAL if provided arguments are invalid
 extern int dyn_dev_register(struct dev_ops *ops, int type, int major, int minor);
 
+// Whether a device has actually been registered for this major/minor. A real
+// devtmpfs publishes exactly the devices the kernel has, so the population
+// done by devtmpfs_mount() (fs/tmp.c) uses this to skip the platform-specific
+// nodes -- clipboard/location/dsp are registered by the iOS app and simply do
+// not exist under the command-line build, where a node for them would be a
+// dangling entry that only ever opens with ENXIO.
+extern bool dyn_dev_is_registered(int major, int minor);
+
 #endif

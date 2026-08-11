@@ -264,6 +264,7 @@ extern const struct fs_ops aokfs;
 extern const struct fs_ops fakefs;
 extern const struct fs_ops devptsfs;
 extern const struct fs_ops tmpfs;
+extern const struct fs_ops devtmpfs;
 extern const struct fs_ops sysfs;
 extern const struct fs_ops cgroupfs;
 extern const struct fs_ops cgroup2fs;
