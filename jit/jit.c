@@ -2264,6 +2264,8 @@ rearm_riscv64:
 
         if (jit_should_yield(jit, cpu)) {
             interrupt = INT_TIMER;
+            // per-block sync gone, *cpu is otherwise stale here.
+            jit_frame_sync_out(cpu, frame);
             break;
         }
         guest_addr_t ip = frame->cpu.riscv64_pc;
@@ -2279,6 +2281,7 @@ rearm_riscv64:
 
                 if (jit_should_yield(jit, cpu)) {
                     interrupt = INT_TIMER;
+                    jit_frame_sync_out(cpu, frame);
                     goto done_unlocked_riscv64;
                 }
 
@@ -2300,10 +2303,13 @@ rearm_riscv64:
 
                     if (jit_should_yield(jit, cpu)) {
                         interrupt = INT_TIMER;
+                        jit_frame_sync_out(cpu, frame);
                         goto done_unlocked_riscv64;
                     }
                     block = jit_block_compile_riscv64(ip, tlb);
                     if (block == NULL) {
+                        // per-block sync gone, *cpu is otherwise stale here.
+                        jit_frame_sync_out(cpu, frame);
                         printk("JIT OOM at %#llx pid %d: even after full flush, killing task\n",
                                (unsigned long long) ip, current ? current->pid : -1);
                         jit_crash_unwind_active = false;
@@ -2319,6 +2325,7 @@ rearm_riscv64:
                 if (jit_should_yield(jit, cpu)) {
                     jit_block_free(NULL, block);
                     interrupt = INT_TIMER;
+                    jit_frame_sync_out(cpu, frame);
                     break;
                 }
 
@@ -2405,7 +2412,17 @@ rearm_riscv64:
             interrupt = INT_TIMER;
         if (interrupt == INT_NONE && ++frame->cpu.cycle % (1 << 10) == 0)
             interrupt = INT_TIMER;
-        jit_frame_sync_out(cpu, frame);
+        // Only when an interrupt is actually being returned. This ran
+        // unconditionally, copying the whole >3KB cpu_state out of the frame on
+        // EVERY block: 27.5% of this engine's host time in a profile (1596 of
+        // 5811 samples in _platform_memmove, versus 13 for the arm64 guest doing
+        // the same work). The arm64 and i386 frontends were fixed for exactly
+        // this (9e8723b8, 68374669); riscv64 was missed.
+        // The frame is authoritative while the JIT runs and nothing below reads
+        // guest registers from *cpu, so the sync is only owed on the way out,
+        // which is why every early exit above now syncs explicitly.
+        if (interrupt != INT_NONE)
+            jit_frame_sync_out(cpu, frame);
         if (current != NULL && current->force_no_jit_cache) {
             frame->last_block = NULL;
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
