@@ -115,6 +115,47 @@ void jit_invalidate_range(struct jit *jit, page_t start, page_t end);
 void jit_invalidate_page(struct jit *jit, page_t page);
 void jit_invalidate_all(struct jit *jit);
 
+// i386 gadget-fusion switches, readable and writable at RUNTIME via
+// /proc/ish/i386_jit_fuse. Each bit enables one fused gadget family in
+// jit/gen.c; clearing it makes gen fall back to the unfused multi-dispatch
+// expansion, so both sides of a fusion live in one binary.
+//
+// The point of making these live rather than build-time or env-only is
+// MEASUREMENT. An env var can only be changed by relaunching, which on a device
+// means killing the app (and with it sshd, and the guest /tmp), and it cannot be
+// read back to prove it took effect -- two failure modes that silently produced
+// meaningless "flat" A/B results before this existed. Here the value that gen.c
+// consults and the value `cat` prints are the SAME variable, so a read-back is
+// proof of plumbing by construction, and flipping arms costs a file write
+// instead of a launch cycle. That makes rep-level interleaving possible, which
+// is the only way to keep thermal drift and host load out of a 1-2% result.
+//
+// Affects NEWLY COMPILED blocks only: already-translated blocks keep whatever
+// they were compiled with. A freshly exec'd guest process gets a fresh mm and
+// therefore a fresh jit, so running each benchmark rep as its own process is
+// enough to pick up a change; nothing invalidates live blocks here on purpose,
+// since sweeping another thread's cache from a proc write buys nothing for
+// measurement and is a concurrency hazard.
+#define JIT_FUSE_ADDR    (1u << 0)  // addr_* folded into the mem load/store gadget
+#define JIT_FUSE_MOVMR   (1u << 1)  // mov reg<->[base+disp] in one gadget
+#define JIT_FUSE_LEA     (1u << 2)  // lea reg,[base+disp] in one gadget
+#define JIT_FUSE_ALU     (1u << 3)  // ALU reg,imm (32-bit) in one gadget
+#define JIT_FUSE_PUSHPOP (1u << 4)  // push/pop of a register in one gadget
+#define JIT_FUSE_ALL (JIT_FUSE_ADDR | JIT_FUSE_MOVMR | JIT_FUSE_LEA | \
+                      JIT_FUSE_ALU | JIT_FUSE_PUSHPOP)
+
+// Live mask. Seeded on first use from the ISH_NO_*_FUSE environment variables,
+// whose existing semantics are unchanged (set to ANY value = that family off;
+// ISH_NO_MOVMR_FUSE still covers LEA, which shared its gate before LEA got its
+// own bit here).
+unsigned i386_jit_fuse_mask(void);
+void i386_jit_fuse_mask_set(unsigned mask);
+// Name-keyed access for the proc node: "addr", "movmr", "lea", "alu", "pushpop".
+// Returns false for an unknown name. i386_jit_fuse_name walks the table for the
+// show handler and returns NULL past the end.
+bool i386_jit_fuse_set_by_name(const char *name, bool on);
+const char *i386_jit_fuse_name(unsigned index, unsigned *bit_out);
+
 bool amd64_jit_is_enabled(void);
 void amd64_jit_set_enabled(bool enabled);
 bool i386_single_step_comm_matches(const char *comm);

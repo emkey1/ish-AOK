@@ -99,6 +99,97 @@ static int proc_ish_show_i386_no_cache_comm(struct proc_entry *UNUSED(entry), st
     return 0;
 }
 
+// /proc/ish/i386_jit_fuse -- read/write the live i386 gadget-fusion mask.
+//
+//   cat  /proc/ish/i386_jit_fuse       -> one "name on|off" line per family
+//   echo pushpop=0 > /proc/ish/i386_jit_fuse
+//   echo "addr=0 alu=1" > /proc/ish/i386_jit_fuse    (space or comma separated)
+//   echo all=1 > /proc/ish/i386_jit_fuse
+//
+// Exists for measurement: it makes a fusion A/B a file write instead of an app
+// relaunch, so arms can be interleaved rep by rep (the only way to keep thermal
+// drift out of a 1-2% result), and the value written is the same variable gen.c
+// reads, so cat-ing it back is proof the change took effect. Affects newly
+// compiled blocks; run each rep as its own guest process to pick up a change.
+// See jit/jit.h.
+static int proc_ish_show_i386_jit_fuse(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    unsigned mask = i386_jit_fuse_mask();
+    for (unsigned i = 0;; i++) {
+        unsigned bit;
+        const char *name = i386_jit_fuse_name(i, &bit);
+        if (name == NULL)
+            break;
+        proc_printf(buf, "%s %s\n", name, (mask & bit) ? "on" : "off");
+    }
+    return 0;
+}
+
+static int proc_ish_update_i386_jit_fuse(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    // Deliberately requires an explicit =0/=1 per name rather than treating a
+    // bare name as "disable": the ISH_NO_*_FUSE env vars use presence-means-off,
+    // and mistaking `FOO=0` for "off" there has already cost one bogus A/B.
+    // Nothing is applied unless the WHOLE input parses, so a typo cannot leave
+    // the mask half-changed.
+    unsigned mask = i386_jit_fuse_mask();
+    size_t i = 0;
+    bool saw_one = false;
+    while (i < data->size) {
+        char c = data->data[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ',') {
+            i++;
+            continue;
+        }
+        size_t start = i;
+        while (i < data->size) {
+            c = data->data[i];
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == ',')
+                break;
+            i++;
+        }
+        size_t len = i - start;
+        // "name=v": at least one name char, an '=', and a single 0 or 1.
+        if (len < 3 || data->data[i - 2] != '=')
+            return _EINVAL;
+        char val = data->data[i - 1];
+        if (val != '0' && val != '1')
+            return _EINVAL;
+        size_t namelen = len - 2;
+        if (namelen >= 32)
+            return _EINVAL;
+        char name[32];
+        memcpy(name, &data->data[start], namelen);
+        name[namelen] = '\0';
+
+        unsigned bit = 0;
+        bool matched = false;
+        if (strcmp(name, "all") == 0) {
+            mask = (val == '1') ? JIT_FUSE_ALL : 0;
+            matched = true;
+        } else {
+            for (unsigned k = 0;; k++) {
+                const char *known = i386_jit_fuse_name(k, &bit);
+                if (known == NULL)
+                    break;
+                if (strcmp(name, known) == 0) {
+                    if (val == '1')
+                        mask |= bit;
+                    else
+                        mask &= ~bit;
+                    matched = true;
+                    break;
+                }
+            }
+        }
+        if (!matched)
+            return _EINVAL;
+        saw_one = true;
+    }
+    if (!saw_one)
+        return _EINVAL;
+    i386_jit_fuse_mask_set(mask);
+    return 0;
+}
+
 static int proc_ish_update_amd64_jit(struct proc_entry *UNUSED(entry), struct proc_data *data) {
     size_t start = 0;
     size_t end = data->size;
@@ -434,6 +525,7 @@ static int proc_ish_show_host_info(struct proc_entry *UNUSED(entry), struct proc
 struct proc_children proc_ish_children = PROC_CHILDREN({
     {"amd64_jit", S_IFREG | 0644, .show = proc_ish_show_amd64_jit, .update = proc_ish_update_amd64_jit},
     {"amd_jit", S_IFREG | 0644, .show = proc_ish_show_amd64_jit, .update = proc_ish_update_amd64_jit},
+    {"i386_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_i386_jit_fuse, .update = proc_ish_update_i386_jit_fuse},
     {"i386_no_cache_comm", S_IFREG | 0644, .show = proc_ish_show_i386_no_cache_comm, .update = proc_ish_update_i386_no_cache_comm},
     {"i386_single_step_comm", S_IFREG | 0644, .show = proc_ish_show_i386_single_step_comm, .update = proc_ish_update_i386_single_step_comm},
     {"BAT0", .show = proc_ish_show_battery},

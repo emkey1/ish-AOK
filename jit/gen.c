@@ -10236,16 +10236,84 @@ bool gen_addr(struct gen_state *state, struct modrm *modrm, bool seg_tls) {
 // The op is identified by pointer-matching the caller's table, the same trick
 // gen_try_fuse_jcc uses. Note gen_op has already been handed the UNADJUSTED
 // table base here, before the size stride is applied.
+// ---- Live fusion mask (see jit/jit.h and /proc/ish/i386_jit_fuse) ----------
+//
+// -1 means "not yet seeded from the environment". Every gate below reads this
+// through i386_jit_fuse_mask() on each call rather than caching the answer in a
+// per-site `static`, which is the whole point: a cached gate would consult a
+// stale value after the first block compiled and silently ignore every later
+// write to the proc node, turning the knob into a liar. That is exactly the
+// silent-plumbing failure mode this facility exists to eliminate, so it must not
+// be reintroduced here for the sake of one relaxed atomic load per translated
+// operand (translation-time, not execution-time).
+static atomic_int i386_fuse_mask = -1;
+
+unsigned i386_jit_fuse_mask(void) {
+    int m = atomic_load_explicit(&i386_fuse_mask, memory_order_relaxed);
+    if (m < 0) {
+        unsigned v = JIT_FUSE_ALL;
+        // Existing env semantics preserved exactly: set to ANY value disables.
+        // ISH_NO_MOVMR_FUSE still covers LEA, which shared movmr's gate before
+        // LEA was given its own bit for independent A/B.
+        if (getenv("ISH_NO_ADDR_FUSE") != NULL)    v &= ~JIT_FUSE_ADDR;
+        if (getenv("ISH_NO_MOVMR_FUSE") != NULL)   v &= ~(JIT_FUSE_MOVMR | JIT_FUSE_LEA);
+        if (getenv("ISH_NO_ALU_FUSE") != NULL)     v &= ~JIT_FUSE_ALU;
+        if (getenv("ISH_NO_PUSHPOP_FUSE") != NULL) v &= ~JIT_FUSE_PUSHPOP;
+        // Benign race: concurrent seeders derive the same value from the same
+        // environment, so whoever wins stores an identical mask.
+        atomic_store_explicit(&i386_fuse_mask, (int) v, memory_order_relaxed);
+        m = (int) v;
+    }
+    return (unsigned) m;
+}
+
+void i386_jit_fuse_mask_set(unsigned mask) {
+    atomic_store_explicit(&i386_fuse_mask, (int) (mask & JIT_FUSE_ALL),
+            memory_order_relaxed);
+}
+
+static const struct { const char *name; unsigned bit; } i386_fuse_names[] = {
+    {"addr", JIT_FUSE_ADDR},
+    {"movmr", JIT_FUSE_MOVMR},
+    {"lea", JIT_FUSE_LEA},
+    {"alu", JIT_FUSE_ALU},
+    {"pushpop", JIT_FUSE_PUSHPOP},
+};
+
+const char *i386_jit_fuse_name(unsigned index, unsigned *bit_out) {
+    if (index >= sizeof(i386_fuse_names) / sizeof(i386_fuse_names[0]))
+        return NULL;
+    if (bit_out != NULL)
+        *bit_out = i386_fuse_names[index].bit;
+    return i386_fuse_names[index].name;
+}
+
+bool i386_jit_fuse_set_by_name(const char *name, bool on) {
+    for (unsigned i = 0; i < sizeof(i386_fuse_names) / sizeof(i386_fuse_names[0]); i++) {
+        if (strcmp(name, i386_fuse_names[i].name) != 0)
+            continue;
+        unsigned m = i386_jit_fuse_mask();
+        if (on)
+            m |= i386_fuse_names[i].bit;
+        else
+            m &= ~i386_fuse_names[i].bit;
+        i386_jit_fuse_mask_set(m);
+        return true;
+    }
+    if (strcmp(name, "all") == 0) {
+        i386_jit_fuse_mask_set(on ? JIT_FUSE_ALL : 0);
+        return true;
+    }
+    return false;
+}
+
 static inline bool gen_try_fuse_addr(struct gen_state *state, gadget_t *table,
         struct modrm *modrm, int size, bool seg_tls) {
 #if defined(__aarch64__)
-    // ISH_NO_ADDR_FUSE=1 emits the old two-gadget form, so the fusion can be
-    // A/B'd and bisected from one binary. Cached: this sits in the per-operand
-    // translation path.
-    static int fuse_enabled = -1;
-    if (fuse_enabled == -1)
-        fuse_enabled = getenv("ISH_NO_ADDR_FUSE") == NULL ? 1 : 0;
-    if (!fuse_enabled)
+    // ISH_NO_ADDR_FUSE=1, or `addr=0` written to /proc/ish/i386_jit_fuse, emits
+    // the old two-gadget form so the fusion can be A/B'd and bisected from one
+    // binary. Read live, never cached -- see i386_jit_fuse_mask above.
+    if (!(i386_jit_fuse_mask() & JIT_FUSE_ADDR))
         return false;
     if (seg_tls)
         return false;
@@ -10372,10 +10440,8 @@ static inline bool gen_mov(struct gen_state *state, enum arg src, enum arg dst, 
     // excludes modrm_mem_si (a scaled index needs its own si gadget) in the same
     // breath, and it excludes arg_mem_addr, whose modrm fields gen_op rewrites
     // later, so inspecting them here would be reading pre-mutation state.
-    static int movmr_enabled = -1;
-    if (movmr_enabled == -1)
-        movmr_enabled = getenv("ISH_NO_MOVMR_FUSE") == NULL ? 1 : 0;
-    if (movmr_enabled && sz(size) == size_32 && dst_reg != arg_invalid &&
+    if (sz(size) == size_32 && (i386_jit_fuse_mask() & JIT_FUSE_MOVMR) &&
+            dst_reg != arg_invalid &&
             src == arg_modrm_val && modrm->type == modrm_mem && !seg_tls &&
             modrm->base != reg_none && modrm->base < reg_count) {
         extern gadget_t fused_movmr32_gadgets[];
@@ -10389,9 +10455,9 @@ static inline bool gen_mov(struct gen_state *state, enum arg src, enum arg dst, 
     }
 
     // The mirror: `mov [<base>+disp], <reg>`, 39815 of 207139 MOVs (19.2%).
-    // Same conditions with the operands swapped. Shares ISH_NO_MOVMR_FUSE, since
-    // the two are one change and are measured together.
-    if (movmr_enabled && sz(size) == size_32 && src_reg != arg_invalid &&
+    // Same conditions with the operands swapped. Shares ISH_NO_MOVMR_FUSE and the
+    // JIT_FUSE_MOVMR bit, since the two are one change and are measured together.
+    if ((i386_jit_fuse_mask() & JIT_FUSE_MOVMR) && sz(size) == size_32 && src_reg != arg_invalid &&
             dst == arg_modrm_val && modrm->type == modrm_mem && !seg_tls &&
             modrm->base != reg_none && modrm->base < reg_count) {
         extern gadget_t fused_movrm32_gadgets[];
@@ -10421,7 +10487,9 @@ static inline bool gen_mov(struct gen_state *state, enum arg src, enum arg dst, 
     // than decide whether LEA should do that, this leaves that case exactly as it
     // was. modrm_mem (not != modrm_reg) excludes the scaled-index form, which
     // needs its own si gadget.
-    if (movmr_enabled && sz(size) == size_32 && dst_reg != arg_invalid &&
+    // Own bit (JIT_FUSE_LEA) so LEA can be A/B'd independently; ISH_NO_MOVMR_FUSE
+    // still clears it too, preserving the env var's original scope.
+    if ((i386_jit_fuse_mask() & JIT_FUSE_LEA) && sz(size) == size_32 && dst_reg != arg_invalid &&
             src == arg_addr && modrm->type == modrm_mem && !seg_tls &&
             modrm->base != reg_none && modrm->base < reg_count) {
         extern gadget_t fused_lea32_gadgets[];
@@ -10461,12 +10529,10 @@ static inline bool gen_mov(struct gen_state *state, enum arg src, enum arg dst, 
 static inline bool gen_alu_imm_fused(struct gen_state *state, gadget_t *fused,
         enum arg src, enum arg dst, struct modrm *modrm, uint64_t *imm, int size) {
 #if defined(__aarch64__)
-    // ISH_NO_ALU_FUSE=1 falls back to the three-gadget form so both sides live in
-    // one binary for A/B, as ISH_NO_ADDR_FUSE does for the address fusion.
-    static int enabled = -1;
-    if (enabled == -1)
-        enabled = getenv("ISH_NO_ALU_FUSE") == NULL ? 1 : 0;
-    if (!enabled)
+    // ISH_NO_ALU_FUSE=1, or `alu=0` written to /proc/ish/i386_jit_fuse, falls back
+    // to the three-gadget form so both sides live in one binary for A/B. Read
+    // live, never cached -- see i386_jit_fuse_mask.
+    if (!(i386_jit_fuse_mask() & JIT_FUSE_ALU))
         return false;
     if (sz(size) != size_32)
         return false;
@@ -10508,12 +10574,10 @@ static inline bool gen_alu_imm_fused(struct gen_state *state, gadget_t *fused,
 static inline bool gen_push_reg_fused(struct gen_state *state, enum arg thing,
         struct modrm *modrm, int size) {
 #if defined(__aarch64__)
-    // ISH_NO_PUSHPOP_FUSE=1 falls back to the two-gadget form, so both sides live
-    // in one binary for A/B, as ISH_NO_ALU_FUSE and ISH_NO_ADDR_FUSE do.
-    static int enabled = -1;
-    if (enabled == -1)
-        enabled = getenv("ISH_NO_PUSHPOP_FUSE") == NULL ? 1 : 0;
-    if (!enabled)
+    // ISH_NO_PUSHPOP_FUSE=1, or `pushpop=0` written to /proc/ish/i386_jit_fuse,
+    // falls back to the two-gadget form so both sides live in one binary for A/B.
+    // Read live, never cached -- see i386_jit_fuse_mask.
+    if (!(i386_jit_fuse_mask() & JIT_FUSE_PUSHPOP))
         return false;
     if (sz(size) != size_32)
         return false;
@@ -10536,10 +10600,7 @@ static inline bool gen_push_reg_fused(struct gen_state *state, enum arg thing,
 static inline bool gen_pop_reg_fused(struct gen_state *state, enum arg thing,
         struct modrm *modrm, int size) {
 #if defined(__aarch64__)
-    static int enabled = -1;
-    if (enabled == -1)
-        enabled = getenv("ISH_NO_PUSHPOP_FUSE") == NULL ? 1 : 0;
-    if (!enabled)
+    if (!(i386_jit_fuse_mask() & JIT_FUSE_PUSHPOP))
         return false;
     if (sz(size) != size_32)
         return false;
