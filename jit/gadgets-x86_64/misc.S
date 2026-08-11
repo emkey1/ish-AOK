@@ -34,6 +34,33 @@
 .macro cmpxchg_set_flags
     setf_oc
     # god help us
+    #
+    # ⚠️ KNOWN BUG, diagnosed but NOT fixed here: `seta` below is shifted into bit
+    # 4, which is AF -- but SETA is "above" (CF==0 && ZF==0), not the auxiliary
+    # carry. x86 has no SETcc that reads AF at all, which is presumably how this
+    # substitution happened. Consequence: AF comes out SET for every unequal
+    # compare that did not borrow, so `lock cmpxchgl` reports flags 0x010 where
+    # hardware gives 0x000. Confirmed on TWO independent x86_64 hosts (a Lima VM
+    # and bare-metal AMD Ryzen), so it is a real gadget bug and not a VM artifact:
+    # tests/manual/x86 atomic_cmpxchg32 fails 976 of 2000 vectors. The data
+    # results are correct; only AF is wrong, which is why it survived this long.
+    #
+    # The fix is NOT to find a cleverer SETcc. AF must be seeded LAZILY from the
+    # two compared values the way the aarch64 host does it
+    # (jit/gadgets-aarch64/misc.S's cmpxchg does `setf_a w8, eax`): put the
+    # original memory operand in CPU_op1 and the original accumulator in CPU_op2
+    # and leave AF_OPS set, so the guest derives AF on demand. Note two things
+    # that make it fiddlier than it looks: after CMPXCHG the accumulator holds the
+    # ORIGINAL memory value on BOTH paths (on success it already equalled it), so
+    # that operand is free -- but the original accumulator must be saved before
+    # the instruction, and every obvious scratch register is taken here (r13 is
+    # _addrq, r14 is clobbered by write_done, r10 is _tmp), so it needs the stack.
+    # Also note AF depends only on the carry out of bit 3, so op1/op2 do not need
+    # size-exact moves for AF's sake alone.
+    #
+    # Left as-is deliberately rather than half-done: a wrong edit in a locked
+    # atomic is worse than a known-wrong flag. The `andl` below must stop clearing
+    # AF_OPS when this is fixed.
     setp %r10b
     seta %r13b
     setz %r14b

@@ -871,6 +871,30 @@
     .ifin(\op, inc,dec)
         \op\ss %r14\s
     .endifin
+
+    # CF and OF MUST be captured here, between the arithmetic above and the CAS
+    # below. The `lock cmpxchg` overwrites the host flags (that is how its own
+    # `jnz` retry works), so capturing after it -- which is what this macro used
+    # to do -- recorded CMPXCHG's carry and overflow as if they were the guest
+    # operation's. The data results were right, which is why it hid: only the
+    # flags were wrong, so `lock xaddl` produced a correct sum with a wrong CF
+    # (measured: got 0x004, expected 0x005) and any guest branching on the carry
+    # after a locked op took the wrong path.
+    #
+    # Safe to place here for two reasons: SETcc reads the flags without modifying
+    # them, so it cannot disturb the CAS's own condition; and a failed CAS jumps
+    # back to re-run the arithmetic, so the iteration that finally succeeds is
+    # the one whose flags are left behind.
+    #
+    # ZF/SF/PF need no such move: setf_zsp below recomputes them from the RESULT
+    # VALUE in r14 rather than from live host flags.
+    .ifin(\op, add,sub,adc,sbb,xadd)
+        setf_oc
+    .endifin
+    .ifin(\op, inc,dec)
+        seto CPU_of(%_cpu)
+    .endifin
+
     lock cmpxchg\ss %r14\s, \arg
     jnz 1b
     mov %r15, %rax
@@ -878,12 +902,6 @@
         add $8, %rsp
     .endif
 
-    .ifin(\op, add,sub,adc,sbb,xadd)
-        setf_oc
-    .endifin
-    .ifin(\op, inc,dec)
-        seto CPU_of(%_cpu)
-    .endifin
     # setf_zsp is apparently broken in such a way that it can only use _tmp
     xchg %r14, %r10
     setf_zsp %tmp\s, \ss
