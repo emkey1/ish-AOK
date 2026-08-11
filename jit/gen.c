@@ -4804,6 +4804,103 @@ static void gen_riscv64_mov_const(struct gen_state *state, unsigned rd, uint64_t
     gen(state, value);
 }
 
+// Fetch (but do not consume) the instruction at state->riscv64_ip.
+// Returns its length in bytes (2 or 4) with the RVC-expanded encoding in
+// *insn_out, or 0 if it can't be fetched, expanded, or isn't a standard
+// 2/4-byte encoding. Mirrors the main fetch's split halfword reads so a
+// peek never touches the page after a trailing compressed instruction.
+static unsigned gen_riscv64_peek(struct gen_state *state, struct tlb *tlb,
+        uint32_t *insn_out) {
+    uint16_t low16;
+    if (!tlb_read(tlb, state->riscv64_ip, &low16, sizeof(low16)))
+        return 0;
+    unsigned length = riscv64_insn_length(low16);
+    if (length == 2) {
+        uint32_t expanded = riscv64_expand_rvc(low16);
+        if (expanded == 0)
+            return 0;
+        *insn_out = expanded;
+        return 2;
+    }
+    if (length != 4)
+        return 0;
+    uint16_t high16;
+    if (!tlb_read(tlb, state->riscv64_ip + 2, &high16, sizeof(high16)))
+        return 0;
+    *insn_out = (uint32_t) low16 | ((uint32_t) high16 << 16);
+    return 4;
+}
+
+// lui/auipc + {addi, addiw, load} same-register pairs fold into a single
+// gadget: the first instruction's result is compile-time known (gen knows
+// the guest pc), so the pair costs one dispatch instead of two, and the
+// load form (auipc+ld = GOT loads and other PC-relative accesses) also
+// skips the runtime add by loading from an absolute address through the
+// always-zero x0 slot. Measured on Alpine riscv64 busybox + musl + apk:
+// auipc+addi covers 5.4% of static instructions, auipc+load 3.6%,
+// lui+addi 0.7%.
+//
+// Consuming the second instruction is safe under the same rules as the
+// arm64 guest fusions: a jump landing on the consumed instruction just
+// compiles a fresh block that decodes it standalone, and the fused
+// result/pc equal exactly what the unfused pair leaves. For the load
+// form the fault-restart pc is the PAIR START: the folded constant has
+// no runtime state, so replaying from the first instruction after a
+// kernel-resolved fault recomputes the identical address.
+static bool gen_riscv64_fold_const(struct gen_state *state, struct tlb *tlb,
+        unsigned rd, uint64_t value) {
+    uint32_t next;
+    unsigned len = gen_riscv64_peek(state, tlb, &next);
+    if (len == 0)
+        return false;
+    // Same page budget as gen_arm64_fits_block: consumed instructions
+    // must not push the decoded range past one page from block start
+    // (jit.c only enforces its cap between gen_step calls).
+    if (state->riscv64_ip + len - state->block->addr > PAGE_SIZE)
+        return false;
+    if (riscv64_rd(next) != rd || riscv64_rs1(next) != rd)
+        return false;
+    unsigned opcode = riscv64_opcode(next);
+    unsigned funct3 = riscv64_funct3(next);
+    if (opcode == RISCV64_OP_OP_IMM && funct3 == 0) { // addi
+        gen_riscv64_mov_const(state, rd,
+                value + (uint64_t) riscv64_imm_i(next));
+        state->riscv64_ip += len;
+        return true;
+    }
+    if (opcode == RISCV64_OP_OP_IMM_32 && funct3 == 0) { // addiw (sext.w)
+        gen_riscv64_mov_const(state, rd, (uint64_t) (int64_t) (int32_t)
+                (value + (uint64_t) riscv64_imm_i(next)));
+        state->riscv64_ip += len;
+        return true;
+    }
+    if (opcode == RISCV64_OP_LOAD) {
+        extern void gadget_riscv64_lb(void);
+        extern void gadget_riscv64_lh(void);
+        extern void gadget_riscv64_lw(void);
+        extern void gadget_riscv64_ld(void);
+        extern void gadget_riscv64_lbu(void);
+        extern void gadget_riscv64_lhu(void);
+        extern void gadget_riscv64_lwu(void);
+        static void (*const load_gadgets[8])(void) = {
+            gadget_riscv64_lb, gadget_riscv64_lh, gadget_riscv64_lw,
+            gadget_riscv64_ld, gadget_riscv64_lbu, gadget_riscv64_lhu,
+            gadget_riscv64_lwu, NULL,
+        };
+        void (*gadget)(void) = load_gadgets[funct3];
+        if (gadget == NULL)
+            return false;
+        gen(state, (unsigned long) gadget);
+        gen(state, riscv64_rd_off(rd));
+        gen(state, riscv64_rs_off(0)); // always-zero slot: absolute address
+        gen(state, value + (uint64_t) riscv64_imm_i(next));
+        gen(state, state->riscv64_orig_ip); // pair start; ALWAYS last
+        state->riscv64_ip += len;
+        return true;
+    }
+    return false;
+}
+
 // Unconditional compile-time branch: ends the block. Target is tagged with
 // bit 63 (unchained) for riscv64_branch_dispatch; gen_end turns the stream
 // slot recorded in jump_ip[0] into a chainable word.
@@ -5086,13 +5183,17 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
 
     switch (riscv64_opcode(insn)) {
     case RISCV64_OP_LUI:
-        gen_riscv64_mov_const(state, rd, (uint64_t) riscv64_imm_u(insn));
+    case RISCV64_OP_AUIPC: {
+        uint64_t value = (uint64_t) riscv64_imm_u(insn);
+        if (riscv64_opcode(insn) == RISCV64_OP_AUIPC)
+            value += state->riscv64_orig_ip;
+        // rd == x0: the value is discarded, so a same-rd fold can't match
+        // (rd_off is the zero sink but rs_off(0) is the real zero slot).
+        if (rd != 0 && gen_riscv64_fold_const(state, tlb, rd, value))
+            return 1;
+        gen_riscv64_mov_const(state, rd, value);
         return 1;
-
-    case RISCV64_OP_AUIPC:
-        gen_riscv64_mov_const(state, rd,
-                state->riscv64_orig_ip + (uint64_t) riscv64_imm_u(insn));
-        return 1;
+    }
 
     case RISCV64_OP_OP_IMM: {
         int64_t imm = riscv64_imm_i(insn);

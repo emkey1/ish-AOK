@@ -110,8 +110,10 @@ riscv64_chain:
     ldrb w8, [x8]
     cbnz w8, riscv64_chain_poked
     // Chain budget bounds time-in-JIT (see guest-arm64 control.S and
-    // jit_frame.chain_budget) — required before any backward edge is ever
-    // chained, and harmless now while nothing chains.
+    // jit_frame.chain_budget). The frontend patches BOTH forward and
+    // backward edges (jit.c cpu_step_to_interrupt_riscv64), so chained
+    // loops are real: this budget is what keeps them from starving
+    // jetsam/quiesce waiters.
     ldr x8, [_cpu, #LOCAL_chain_budget]
     subs x8, x8, #1
     str x8, [_cpu, #LOCAL_chain_budget]
