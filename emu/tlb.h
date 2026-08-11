@@ -5,6 +5,41 @@
 #include "emu/mmu.h"
 #include "debug.h"
 
+// 24 bytes, deliberately NOT padded to 32. Padding it looks like an obvious
+// win and is not, so before trying it, know that it has been measured:
+//
+// Because the size is not a power of two, every gadget's TLB probe has to
+// MULTIPLY the hash index to reach its entry (`mov w10, TLB_ENTRY_SIZE;
+// madd x9,x9,x10,_tlb` on aarch64, `imull $TLB_ENTRY_SIZE` on x86_64), and
+// that multiply sits in the dependency chain addr -> index -> entry ->
+// compare, in front of every guest load and store. Padding to 32 turns it
+// into one `add x9,_tlb,x9,lsl 5`. It also fixes a real cache detail: at 24
+// bytes the entry starts cycle through 0,24,48,8,32,56,16,40 within a
+// 64-byte line, so the ones at 48 and 56 SPAN two lines, and 25% of probes
+// touch two lines to read `page` (+0) and `data_minus_addr` (+16).
+//
+// Both of those are true and neither is worth anything. Implemented in full
+// (aligned(32) on the entry so the array base is aligned too, TLB_ENTRY_SHIFT
+// emitted from jit/offsets.c, all six gadget sites converted, all four guests
+// green on the memory/TLB tests) and measured on two microarchitectures and
+// two workload shapes:
+//
+//   md5sum of 24MB, interleaved A/B, median of 8   (Apple Silicon host)
+//     riscv64 guest  1699 -> 1688 ms   (+0.6%)
+//     i386 guest      550 ->  553 ms   (-0.5%)   [converged reps 548-550 vs
+//                                                 547-553: identical]
+//     arm64 guest     427 ->  431 ms   (-0.9%)
+//   dash sh-loop 20k, min of 5-8       (A9 / ARMv8.0, no LSE, iPad 5)
+//     arm64 guest    3042 -> 3035 ms   (flat)
+//     riscv64 guest  3588 -> 3596 ms   (flat)
+//
+// Flat everywhere, arguably a hair worse, for +8KB per address space. The
+// reason the multiply is free: A9/Twister is a 3-wide OUT-OF-ORDER core, not
+// in-order, so it overlaps the multiply with the surrounding gadget work; and
+// a straddled entry costs nothing extra while the 24KB array stays cache
+// resident. Reverted. Do not re-land this without a workload that actually
+// shows a win -- and note that a shell loop and a hash of 24MB, on both an
+// Apple Silicon and an ARMv8.0 core, already did not.
 struct tlb_entry {
     page_t page;
     page_t page_if_writable;
