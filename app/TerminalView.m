@@ -103,7 +103,7 @@ struct rowcol {
     }
 }
 
-static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight", @"newScrollTop", @"openLink"};
+static NSString *const HANDLERS[] = {@"syncFocus", @"focus", @"newScrollHeight", @"newScrollTop", @"openLink", @"findCount"};
 
 static BOOL ISHTerminalViewEventLogEnabled(void) {
     const char *enabled = getenv("ISH_TRACE_TERMINAL_LIFECYCLE");
@@ -316,6 +316,11 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
         [self.scrollbarView setContentOffset:CGPointMake(0, newOffset) animated:NO];
     } else if ([message.name isEqualToString:@"openLink"]) {
         [UIApplication openURL:message.body];
+    } else if ([message.name isEqualToString:@"findCount"]) {
+        NSArray *counts = message.body;
+        if (self.findResultsDidChange != nil && [counts isKindOfClass:NSArray.class] && counts.count == 2) {
+            self.findResultsDidChange([counts[0] integerValue], [counts[1] integerValue]);
+        }
     }
 }
 
@@ -466,6 +471,35 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
 
 - (void)clearScrollback:(UIKeyCommand *)command {
     [self.terminal.webView evaluateJavaScript:@"exports.clearScrollback()" completionHandler:nil];
+}
+
+#pragma mark Scrollback search
+
+- (void)findOpen {
+    [self.terminal.webView evaluateJavaScript:@"exports.findOpen()" completionHandler:nil];
+}
+
+- (void)findSetText:(NSString *)text {
+    // Round-trip through JSON rather than interpolating: a search query is
+    // arbitrary user text and will contain quotes, backslashes and newlines.
+    NSData *json = [NSJSONSerialization dataWithJSONObject:@[text ?: @""] options:0 error:NULL];
+    if (json == nil)
+        return;
+    NSString *literal = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+    NSString *script = [NSString stringWithFormat:@"exports.findSetText(%@[0])", literal];
+    [self.terminal.webView evaluateJavaScript:script completionHandler:nil];
+}
+
+- (void)findNext {
+    [self.terminal.webView evaluateJavaScript:@"exports.findNext()" completionHandler:nil];
+}
+
+- (void)findPrevious {
+    [self.terminal.webView evaluateJavaScript:@"exports.findPrevious()" completionHandler:nil];
+}
+
+- (void)findClose {
+    [self.terminal.webView evaluateJavaScript:@"exports.findClose()" completionHandler:nil];
 }
 
 #pragma mark Floating cursor

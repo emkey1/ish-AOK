@@ -184,6 +184,72 @@ exports.setUserGesture = () => term.accessibilityReader_.hasUserGesture = true;
 // when "Maximize Screen Space" is on with an external keyboard to reclaim edge space.
 exports.setScreenPaddingSize = (size) => term.getPrefs().set('screen-padding-size', size);
 
+// Scrollback search. hterm ships a complete incremental-search engine
+// (hterm.FindBar), already constructed and decorated for every terminal, but the
+// only thing that ever triggers it upstream is a Ctrl+Shift+F keymap entry that
+// can never fire here: term.js replaces onVTKeyStroke to forward every keystroke
+// to native before hterm's keyboard sees it. So the engine is driven directly
+// from the native find bar in TerminalViewController instead.
+//
+// Deliberately not findBar.display()/findBar.close(): both move focus inside the
+// webview (display() focuses hterm's own <input>, close() focuses the
+// contenteditable x-screen), which fights TerminalView for first responder and
+// can summon the WKWebView's own keyboard on top of ours. The native UITextField
+// owns the query text; only the search engine and its highlight overlay are used
+// here, and hterm's own find-bar chrome stays hidden the whole time.
+const findBar = term.findBar;
+
+exports.findOpen = () => {
+    if (findBar.isVisible)
+        return;
+    findBar.scrollPort_.subscribe('scroll', findBar.onScroll_);
+    findBar.resultScreen_.style.display = '';
+    // Load-bearing: scheduleNotifyChanges() early-returns unless isVisible, and
+    // that is what keeps results live as new output scrolls in underneath.
+    findBar.isVisible = true;
+    // Resync before the overlay is shown, as upstream display() does. findClose
+    // empties the input but leaves the previous highlight rows in the (hidden)
+    // result screen, so without this a reopen can flash stale highlights.
+    findBar.input_.dispatchEvent(new Event('input'));
+};
+
+exports.findSetText = (text) => {
+    findBar.input_.value = text;
+    // onInput_ reads event.target.value, so this routes into the existing
+    // setTimeout-batched syncResults_ rather than searching synchronously --
+    // which is what keeps a search over a long scrollback off the main thread.
+    findBar.input_.dispatchEvent(new Event('input'));
+};
+
+// Both early-return unless the matching arrow carries class 'enabled', which
+// findInRow_ adds once there is a result, so these are safe to call blind.
+exports.findNext = () => findBar.onNext_();
+exports.findPrevious = () => findBar.onPrevious_();
+
+exports.findClose = () => {
+    if (!findBar.isVisible)
+        return;
+    // close() minus its terminal_.focus(); see the note above.
+    findBar.input_.value = '';
+    findBar.searchText_ = '';
+    findBar.resultScreen_.style.display = 'none';
+    findBar.scrollPort_.unsubscribe('scroll', findBar.onScroll_);
+    findBar.isVisible = false;
+    findBar.stopSearch();
+    findBar.results_ = {};
+    findBar.resultCount_ = 0;
+};
+
+// Push the result counter to native instead of having native poll for it. Same
+// monkey-patch idiom as syncScrollHeight above. Batched searching means the
+// count climbs over several calls on a long scrollback, and this is what lets
+// the native label track it live instead of sitting at 0/0.
+const realUpdateCounterLabel = hterm.FindBar.prototype.updateCounterLabel_;
+hterm.FindBar.prototype.updateCounterLabel_ = function() {
+    realUpdateCounterLabel.call(this);
+    native.findCount([this.resultCount_, this.selectedOrdinal_]);
+};
+
 hterm.openUrl = (url) => native.openLink(url);
 
 native.load();

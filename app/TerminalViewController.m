@@ -194,7 +194,7 @@ static NSArray<NSString *> *ISHSessionCommandWithFallback(NSArray<NSString *> *c
 }
 #endif
 
-@interface TerminalViewController () <UIGestureRecognizerDelegate>
+@interface TerminalViewController () <UIGestureRecognizerDelegate, UITextFieldDelegate>
 
 @property UITapGestureRecognizer *tapRecognizer;
 @property (weak, nonatomic) IBOutlet TerminalView *termView;
@@ -233,6 +233,13 @@ static NSArray<NSString *> *ISHSessionCommandWithFallback(NSArray<NSString *> *c
 @property (strong, nonatomic) UIButton *floatingTerminalSwitcherButton;
 @property (strong, nonatomic) UIView *floatingSettingsBadge;
 @property (strong, nonatomic) NSLayoutConstraint *floatingSettingsBottomConstraint;
+@property (strong, nonatomic) UIVisualEffectView *findBar;
+@property (strong, nonatomic) UITextField *findField;
+@property (strong, nonatomic) UILabel *findCountLabel;
+@property (strong, nonatomic) UIButton *findPreviousButton;
+@property (strong, nonatomic) UIButton *findNextButton;
+@property (strong, nonatomic) UIButton *findCloseButton;
+@property (nonatomic) BOOL findBarVisible;
 @property (strong, nonatomic) UIView *terminalStartupOverlay;
 @property (strong, nonatomic) UIActivityIndicatorView *terminalStartupSpinner;
 @property (strong, nonatomic) UILabel *terminalStartupLabel;
@@ -417,6 +424,7 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     [self _installWorkspaceButton];
     [self _installTerminalSwitcherButton];
     [self _installCenterKeys];
+    [self _installFindBar];
 
     if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone) {
         self.barHeight.constant = 36;
@@ -543,6 +551,203 @@ static const NSInteger kMaximumTerminalFontSize = 72;
         [badge.topAnchor constraintEqualToAnchor:button.topAnchor constant:5],
         [badge.trailingAnchor constraintEqualToAnchor:button.trailingAnchor constant:-5],
     ]];
+}
+
+// MARK: Scrollback search
+//
+// The search itself is hterm's (see the find* exports in term.js); this is only
+// the chrome. The query lives in a native UITextField rather than hterm's own
+// find-bar input because focusing anything inside the WKWebView fights
+// TerminalView for first responder.
+
+static const CGFloat kFindBarHeight = 44;
+
+- (UIButton *)_findBarButtonWithSymbol:(NSString *)symbolName fallback:(NSString *)fallback action:(SEL)action accessibilityLabel:(NSString *)label {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    button.translatesAutoresizingMaskIntoConstraints = NO;
+    button.accessibilityLabel = label;
+    UIImageSymbolConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold];
+    UIImage *image = [UIImage systemImageNamed:symbolName withConfiguration:config];
+    if (image != nil) {
+        [button setImage:image forState:UIControlStateNormal];
+    } else {
+        [button setTitle:fallback forState:UIControlStateNormal];
+    }
+    [button addTarget:self action:action forControlEvents:UIControlEventPrimaryActionTriggered];
+    [button.widthAnchor constraintEqualToConstant:32].active = YES;
+    return button;
+}
+
+- (void)_installFindBar {
+    UIVisualEffectView *bar = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterial]];
+    bar.translatesAutoresizingMaskIntoConstraints = NO;
+    bar.hidden = YES;
+    bar.layer.cornerRadius = 10;
+    bar.layer.masksToBounds = YES;
+    [self.view addSubview:bar];
+    self.findBar = bar;
+
+    UITextField *field = [[UITextField alloc] init];
+    field.translatesAutoresizingMaskIntoConstraints = NO;
+    field.placeholder = @"Find in scrollback";
+    field.accessibilityLabel = @"Find in scrollback";
+    field.borderStyle = UITextBorderStyleNone;
+    field.clearButtonMode = UITextFieldViewModeWhileEditing;
+    field.returnKeyType = UIReturnKeySearch;
+    field.enablesReturnKeyAutomatically = NO;
+    field.autocorrectionType = UITextAutocorrectionTypeNo;
+    field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    field.spellCheckingType = UITextSpellCheckingTypeNo;
+    field.smartQuotesType = UITextSmartQuotesTypeNo;
+    field.smartDashesType = UITextSmartDashesTypeNo;
+    field.font = [UIFont systemFontOfSize:15];
+    field.delegate = self;
+    [field addTarget:self action:@selector(_findFieldDidChange:) forControlEvents:UIControlEventEditingChanged];
+    [bar.contentView addSubview:field];
+    self.findField = field;
+
+    UILabel *count = [[UILabel alloc] init];
+    count.translatesAutoresizingMaskIntoConstraints = NO;
+    count.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightRegular];
+    count.textAlignment = NSTextAlignmentRight;
+    count.text = @"";
+    count.isAccessibilityElement = NO;
+    [count setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [count setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
+    [bar.contentView addSubview:count];
+    self.findCountLabel = count;
+
+    self.findPreviousButton = [self _findBarButtonWithSymbol:@"chevron.up" fallback:@"↑"
+                                                      action:@selector(findPrevious:)
+                                          accessibilityLabel:@"Previous match"];
+    self.findNextButton = [self _findBarButtonWithSymbol:@"chevron.down" fallback:@"↓"
+                                                  action:@selector(findNext:)
+                                      accessibilityLabel:@"Next match"];
+    self.findCloseButton = [self _findBarButtonWithSymbol:@"xmark" fallback:@"✕"
+                                                   action:@selector(hideFindBar:)
+                                       accessibilityLabel:@"Close find bar"];
+    for (UIButton *button in @[self.findPreviousButton, self.findNextButton, self.findCloseButton]) {
+        [bar.contentView addSubview:button];
+    }
+
+    [NSLayoutConstraint activateConstraints:@[
+        [bar.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:6],
+        [bar.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:8],
+        [bar.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-8],
+        [bar.heightAnchor constraintEqualToConstant:kFindBarHeight],
+
+        [field.leadingAnchor constraintEqualToAnchor:bar.contentView.leadingAnchor constant:12],
+        [field.centerYAnchor constraintEqualToAnchor:bar.contentView.centerYAnchor],
+        [count.leadingAnchor constraintEqualToAnchor:field.trailingAnchor constant:8],
+        [count.centerYAnchor constraintEqualToAnchor:bar.contentView.centerYAnchor],
+        [self.findPreviousButton.leadingAnchor constraintEqualToAnchor:count.trailingAnchor constant:4],
+        [self.findPreviousButton.centerYAnchor constraintEqualToAnchor:bar.contentView.centerYAnchor],
+        [self.findNextButton.leadingAnchor constraintEqualToAnchor:self.findPreviousButton.trailingAnchor],
+        [self.findNextButton.centerYAnchor constraintEqualToAnchor:bar.contentView.centerYAnchor],
+        [self.findCloseButton.leadingAnchor constraintEqualToAnchor:self.findNextButton.trailingAnchor],
+        [self.findCloseButton.centerYAnchor constraintEqualToAnchor:bar.contentView.centerYAnchor],
+        [self.findCloseButton.trailingAnchor constraintEqualToAnchor:bar.contentView.trailingAnchor constant:-6],
+    ]];
+
+    __weak typeof(self) weakSelf = self;
+    self.termView.findResultsDidChange = ^(NSInteger matches, NSInteger ordinal) {
+        [weakSelf _updateFindCount:matches ordinal:ordinal];
+    };
+}
+
+- (void)_updateFindCount:(NSInteger)matches ordinal:(NSInteger)ordinal {
+    if (self.findField.text.length == 0) {
+        self.findCountLabel.text = @"";
+    } else if (matches == 0) {
+        self.findCountLabel.text = @"No results";
+    } else if (ordinal < 0) {
+        // Still batching, or nothing selected yet: report the running total.
+        self.findCountLabel.text = [NSString stringWithFormat:@"%ld", (long) matches];
+    } else {
+        self.findCountLabel.text = [NSString stringWithFormat:@"%ld/%ld", (long) (ordinal + 1), (long) matches];
+    }
+    BOOL enabled = matches > 0;
+    self.findPreviousButton.enabled = enabled;
+    self.findNextButton.enabled = enabled;
+    self.findField.accessibilityValue = self.findCountLabel.text;
+}
+
+- (void)showFindBar:(id)sender {
+    if (self.terminal == nil)
+        return;
+    if (self.findBarVisible) {
+        // ⌘F with the bar already up re-focuses and selects, the way every other
+        // find bar behaves, so a second ⌘F starts a new query instead of nothing.
+        [self.findField becomeFirstResponder];
+        [self.findField selectAll:nil];
+        return;
+    }
+    self.findBarVisible = YES;
+    self.findBar.hidden = NO;
+    self.findBar.alpha = 0;
+    [self _updateFindBarStyle];
+    [self.termView findOpen];
+    [self.findField becomeFirstResponder];
+    [UIView animateWithDuration:0.15 animations:^{
+        self.findBar.alpha = 1;
+    }];
+    // Carry the previous query over, and re-run it against the current scrollback.
+    if (self.findField.text.length > 0) {
+        [self.termView findSetText:self.findField.text];
+        [self.findField selectAll:nil];
+    } else {
+        [self _updateFindCount:0 ordinal:-1];
+    }
+}
+
+- (void)hideFindBar:(id)sender {
+    if (!self.findBarVisible)
+        return;
+    self.findBarVisible = NO;
+    [self.termView findClose];
+    [self.findField resignFirstResponder];
+    [UIView animateWithDuration:0.15 animations:^{
+        self.findBar.alpha = 0;
+    } completion:^(BOOL finished) {
+        if (!self.findBarVisible)
+            self.findBar.hidden = YES;
+    }];
+    [self focusTerminal];
+}
+
+- (void)_findFieldDidChange:(UITextField *)field {
+    [self.termView findSetText:field.text];
+    if (field.text.length == 0)
+        [self _updateFindCount:0 ordinal:-1];
+}
+
+- (void)findNext:(id)sender {
+    [self.termView findNext];
+}
+
+- (void)findPrevious:(id)sender {
+    [self.termView findPrevious];
+}
+
+- (void)_updateFindBarStyle {
+    BOOL light = UserPreferences.shared.keyboardAppearance == UIKeyboardAppearanceLight;
+    self.findField.keyboardAppearance = UserPreferences.shared.keyboardAppearance;
+    self.findBar.effect = [UIBlurEffect effectWithStyle:light ? UIBlurEffectStyleSystemChromeMaterialLight
+                                                              : UIBlurEffectStyleSystemChromeMaterialDark];
+    UIColor *textColor = light ? UIColor.blackColor : UIColor.whiteColor;
+    self.findField.textColor = textColor;
+    self.findCountLabel.textColor = [textColor colorWithAlphaComponent:0.6];
+    UIColor *tint = light ? UIColor.blackColor : UIColor.whiteColor;
+    self.findPreviousButton.tintColor = tint;
+    self.findNextButton.tintColor = tint;
+    self.findCloseButton.tintColor = tint;
+}
+
+// Return runs the search forward, matching Safari and Xcode. Returning NO keeps
+// the keyboard up so you can step through matches without re-opening it.
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [self.termView findNext];
+    return NO;
 }
 
 - (void)_installFloatingWorkspaceButton {
@@ -1269,6 +1474,10 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     if (notification.object != self.terminal)
         return;
     [self _hideTerminalStartupOverlay];
+    // A reload means a fresh JS context (this also fires after
+    // recoverTerminalWebViewWithReason: discards the webview), so any find state
+    // the bar thinks it has on the JS side is gone. Drop the native half too.
+    [self hideFindBar:nil];
 }
 
 - (void)terminalLoadFailed:(NSNotification *)notification {
@@ -1338,6 +1547,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
             [UIColor colorWithWhite:1 alpha:0.78] :
             [UIColor colorWithWhite:0 alpha:0.45];
     }];
+    [self _updateFindBarStyle];
     UIView *oldBarView = self.termView.inputAccessoryView;
     // Whether the bar is hidden with a hardware keyboard attached is entirely the user's
     // call via the "Hide extra keys with external keyboard" switch -- it used to be forced
@@ -1658,6 +1868,12 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
         }]];
     }
 
+    [alert addAction:[UIAlertAction actionWithTitle:@"Find in Scrollback…"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(__unused UIAlertAction *action) {
+        [self showFindBar:nil];
+    }]];
+
     if (ISHLLMClientEnabled()) {
         [alert addAction:[UIAlertAction actionWithTitle:@"LLM Chat"
                                                   style:UIAlertActionStyleDefault
@@ -1851,8 +2067,32 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
                              modifierFlags:UIKeyModifierCommand
                                     action:@selector(showAbout:)
                       discoverabilityTitle:@"Settings"]];
+        [commands addObject:
+         [UIKeyCommand keyCommandWithInput:@"f"
+                             modifierFlags:UIKeyModifierCommand
+                                    action:@selector(showFindBar:)
+                      discoverabilityTitle:@"Find in Scrollback"]];
+        [commands addObject:
+         [UIKeyCommand keyCommandWithInput:@"g"
+                             modifierFlags:UIKeyModifierCommand
+                                    action:@selector(findNext:)
+                      discoverabilityTitle:@"Find Next"]];
+        [commands addObject:
+         [UIKeyCommand keyCommandWithInput:@"g"
+                             modifierFlags:UIKeyModifierCommand|UIKeyModifierShift
+                                    action:@selector(findPrevious:)
+                      discoverabilityTitle:@"Find Previous"]];
     }
-    return commands;
+    if (!self.findBarVisible)
+        return commands;
+    // Esc closes the find bar, but only while it is open. Registering it
+    // unconditionally would make it ambiguous with the terminal's own Esc key
+    // (TerminalView registers that, and TerminalView is ahead of this view
+    // controller in the responder chain whenever the terminal has focus).
+    return [commands arrayByAddingObject:
+            [UIKeyCommand keyCommandWithInput:UIKeyInputEscape
+                                modifierFlags:0
+                                       action:@selector(hideFindBar:)]];
 }
 
 - (void)setTerminal:(Terminal *)terminal {
@@ -1860,6 +2100,10 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
                                   details:@{@"terminalUUID": terminal.uuid.UUIDString ?: @"",
                                             @"type": terminal != nil ? @(terminal.type) : @(-1),
                                             @"number": terminal != nil ? @(terminal.number) : @(-1)}];
+    // Results belong to the outgoing terminal's scrollback, and its highlight
+    // overlay lives in a webview we're about to swap out. Close before switching
+    // or the new terminal inherits a stale count over an empty screen.
+    [self hideFindBar:nil];
     _terminal = terminal;
     [self _applyCurrentTerminalToViewIfPossible];
     BOOL installedElsewhere = [self _isTerminalInstalledElsewhere:_terminal];
