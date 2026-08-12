@@ -1318,8 +1318,19 @@ static void jit_block_disconnect(struct jit *jit, struct jit_block *block) {
     jit_block_unlink_predecessors(jit, block);
 }
 
+// Bumped on every path that frees a block. Read by jit_entry_scratch_get()
+// (below) to decide whether a thread's cached block pointers may name freed
+// memory; see the long comment there for why this replaced a ~40 KB per-syscall
+// memset. Relaxed: it is a clear-more-often-than-needed hint, not a lock.
+static atomic_ulong jit_block_free_generation;
+
+static inline void jit_note_block_freed(void) {
+    atomic_fetch_add_explicit(&jit_block_free_generation, 1, memory_order_relaxed);
+}
+
 static void jit_block_free(struct jit *jit, struct jit_block *block) {
     jit_block_disconnect(jit, block);
+    jit_note_block_freed();
     free(block);
 }
 
@@ -1340,8 +1351,101 @@ static void jit_free_jetsam(struct jit *jit) {
         jit_block_unlink_predecessors(jit, block);
         for (int i = 0; i <= 1; i++)
             list_remove_safe(&block->jumps_from_links[i]);
+        jit_note_block_freed();
         free(block);
     }
+}
+
+// ---- Per-entry scratch: frame + block-lookup cache ------------------------
+//
+// Every frontend below used to declare these as zero-initialized STACK objects:
+//
+//     struct jit_block *cache[JIT_CACHE_SIZE] = {};   // 1024 ptrs  =  8 KB
+//     struct jit_frame frame_storage = {};            // ret_cache  = 32 KB
+//
+// which is ~40 KB of memset on every entry -- and an entry happens once per
+// INTERRUPT, i.e. once per guest syscall. Measured on `dd bs=1` (600k read+write
+// syscalls, i386 guest, -O2, logging off): __bzero 8.8% + memmove 8.1% +
+// memset 3.0% of self samples, with 2345 of ~2350 of those samples attributing to
+// cpu_step_to_interrupt as their immediate caller. 600k syscalls x 40.5 KB is
+// 23.2 GB of zeroing. This file already carries one scar of the same shape: the
+// sigsetjmp comment below records savesigs=1 costing ~35% of host time for a
+// syscall-heavy guest.
+//
+// The zeroing was not gratuitous -- it is what made staleness impossible. Both
+// arrays hold pointers INTO blocks (the lookup memo holds jit_block *, the return
+// cache holds pointers to call-gadget argument words), so an entry that inherited
+// them from a previous entry could dereference a block freed in between.
+//
+// So keep the guarantee and drop the cost: make the scratch per-thread and
+// persistent, and clear it only when a block has actually been freed since this
+// thread last cleared. jit_note_block_freed() bumps a global counter on every
+// free path; an entry compares and memsets only on a mismatch. Frees are rare
+// next to syscalls, so this converts per-syscall zeroing into per-free zeroing.
+//
+// The staleness guarantee is exactly the one the old code provided, no weaker:
+// "an entry begins with no pointers to blocks freed before it began". A free
+// racing an already-running entry was equally possible before -- the old code
+// zeroed at entry and then held pointers across the whole entry too -- and is
+// handled where it always was, by the poke flag and the teardown/invalidate
+// locks. Relaxed ordering is therefore sufficient: this is a
+// clear-more-often-than-strictly-needed hint, not a lock.
+struct jit_entry_scratch {
+    struct jit_frame frame;
+    struct jit_block *cache[JIT_CACHE_SIZE];
+    unsigned long generation;
+    bool seeded;
+};
+
+// One per host thread, so one per guest task. Same total footprint as the stack
+// objects it replaces (~40 KB), just allocated once instead of re-zeroed per entry.
+//
+// Held in a pthread key rather than a plain __thread pointer SO THAT IT IS FREED
+// when the thread exits. A guest task is a host thread and a fork/exec-heavy guest
+// churns through thousands of them, so leaking 40 KB per exited task would have
+// been a worse bug than the memset this removes.
+static pthread_key_t jit_entry_scratch_key;
+static pthread_once_t jit_entry_scratch_once = PTHREAD_ONCE_INIT;
+
+static void jit_entry_scratch_destroy(void *p) {
+    free(p);
+}
+
+static void jit_entry_scratch_key_init(void) {
+    if (pthread_key_create(&jit_entry_scratch_key, jit_entry_scratch_destroy) != 0)
+        jit_entry_scratch_key = (pthread_key_t) -1;
+}
+
+static struct jit_entry_scratch *jit_entry_scratch_get(void) {
+    pthread_once(&jit_entry_scratch_once, jit_entry_scratch_key_init);
+    if (jit_entry_scratch_key == (pthread_key_t) -1)
+        return NULL; // key creation failed; callers use the stack fallback
+    struct jit_entry_scratch *scratch = pthread_getspecific(jit_entry_scratch_key);
+    unsigned long generation =
+        atomic_load_explicit(&jit_block_free_generation, memory_order_relaxed);
+    if (scratch == NULL) {
+        // calloc, not malloc: the first use needs the same all-zero state the
+        // old stack initializer gave.
+        scratch = calloc(1, sizeof(*scratch));
+        if (scratch == NULL)
+            return NULL; // caller falls back to a stack frame
+        if (pthread_setspecific(jit_entry_scratch_key, scratch) != 0) {
+            free(scratch);
+            return NULL;
+        }
+        scratch->seeded = true;
+        scratch->generation = generation;
+        return scratch;
+    }
+    if (scratch->generation != generation) {
+        // A block was freed since this thread last looked. Drop every pointer
+        // that could name it. Only these two members hold block pointers; the
+        // rest of jit_frame is scratch the frontends set explicitly per entry.
+        memset(scratch->cache, 0, sizeof(scratch->cache));
+        memset(scratch->frame.ret_cache, 0, sizeof(scratch->frame.ret_cache));
+        scratch->generation = generation;
+    }
+    return scratch;
 }
 
 int jit_enter(struct jit_block *block, struct jit_frame *frame, struct tlb *tlb);
@@ -1398,9 +1502,28 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     // Keep the hot path off malloc/free. With iOS debug malloc enabled
     // (guard pages + scribbling), even these small short-lived allocations
     // are expensive enough to dominate guest startup helpers like /bin/uname.
-    struct jit_block *cache[JIT_CACHE_SIZE] = {};
-    struct jit_frame frame_storage = {};
-    struct jit_frame *frame = &frame_storage;
+    // Per-thread persistent scratch instead of ~40 KB of stack zeroed on every
+    // entry -- i.e. on every guest syscall. See jit_entry_scratch_get(). The
+    // stack fallback keeps the old behaviour if the one-per-thread allocation
+    // ever fails, so an OOM degrades to slow rather than to broken.
+    struct jit_entry_scratch *scratch = jit_entry_scratch_get();
+    struct jit_block *stack_cache[JIT_CACHE_SIZE]; // uninitialized on purpose
+    struct jit_frame stack_frame_storage;
+    struct jit_block **cache;
+    struct jit_frame *frame;
+    if (scratch != NULL) {
+        cache = scratch->cache;
+        frame = &scratch->frame;
+    } else {
+        memset(stack_cache, 0, sizeof(stack_cache));
+        memset(&stack_frame_storage, 0, sizeof(stack_frame_storage));
+        cache = stack_cache;
+        frame = &stack_frame_storage;
+    }
+    // last_block chains blocks together and is the one frame field that must not
+    // survive an entry: a stale value names a block this entry never validated.
+    // The old `= {}` zeroed it implicitly; now it is explicit.
+    frame->last_block = NULL;
     frame->cpu = *cpu;
     assert(jit->mmu == cpu->mmu);
 
@@ -1420,7 +1543,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     // register copy rolled back by longjmp would defeat the retry cap.
     volatile unsigned unmapped_retries = 0;
     if (sigsetjmp(jit_crash_unwind_buf, 0) != 0) {
-        frame = &frame_storage;
+        frame = scratch != NULL ? &scratch->frame : &stack_frame_storage;
         if (jit_crash_cpu != NULL && jit_crash_frame != NULL)
             *jit_crash_cpu = jit_crash_frame->cpu;
         // Same stale-TLB heal as cpu_step_to_interrupt_arm64: a host fault
@@ -1439,7 +1562,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
             unmapped_retries++;
             frame->last_block = NULL;
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
-            memset(cache, 0, sizeof(cache));
+            memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
             tlb_flush(tlb);
             goto rearm_i386;
         }
@@ -1532,7 +1655,7 @@ rearm_i386:
                         unlock(&jit->lock);
                         atomic_fetch_add_explicit(&jit->cleanup_seq, 1, memory_order_relaxed);
                         pthread_rwlock_unlock(&jit->jetsam_lock.l);
-                        memset(cache, 0, sizeof(cache));
+                        memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
                         memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
                         frame->last_block = NULL;
                     }
@@ -1557,7 +1680,7 @@ rearm_i386:
                             unlock(&jit->lock);
                             atomic_fetch_add_explicit(&jit->cleanup_seq, 1, memory_order_relaxed);
                             pthread_rwlock_unlock(&jit->jetsam_lock.l);
-                            memset(cache, 0, sizeof(cache));
+                            memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
                             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
                             frame->last_block = NULL;
                         }
@@ -1618,7 +1741,7 @@ rearm_i386:
         // blocks whose memory has been reused — clear both.
         if (atomic_load_explicit(&jit->cleanup_seq, memory_order_relaxed) != last_block_cleanup_seq) {
             last_block = frame->last_block = NULL;
-            memset(cache, 0, sizeof(cache));
+            memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
             // Also clear the assembly-level return cache: it holds raw pointers
             // into jit_block code arrays. If jetsam freed those blocks, a ret
             // gadget reading a stale entry reads scribbled memory and stores
@@ -1816,9 +1939,28 @@ static int cpu_step_to_interrupt_arm64(struct cpu_state *cpu, struct tlb *tlb) {
         exception_handler_installed = true;
     }
 
-    struct jit_block *cache[JIT_CACHE_SIZE] = {};
-    struct jit_frame frame_storage = {};
-    struct jit_frame *frame = &frame_storage;
+    // Per-thread persistent scratch instead of ~40 KB of stack zeroed on every
+    // entry -- i.e. on every guest syscall. See jit_entry_scratch_get(). The
+    // stack fallback keeps the old behaviour if the one-per-thread allocation
+    // ever fails, so an OOM degrades to slow rather than to broken.
+    struct jit_entry_scratch *scratch = jit_entry_scratch_get();
+    struct jit_block *stack_cache[JIT_CACHE_SIZE]; // uninitialized on purpose
+    struct jit_frame stack_frame_storage;
+    struct jit_block **cache;
+    struct jit_frame *frame;
+    if (scratch != NULL) {
+        cache = scratch->cache;
+        frame = &scratch->frame;
+    } else {
+        memset(stack_cache, 0, sizeof(stack_cache));
+        memset(&stack_frame_storage, 0, sizeof(stack_frame_storage));
+        cache = stack_cache;
+        frame = &stack_frame_storage;
+    }
+    // last_block chains blocks together and is the one frame field that must not
+    // survive an entry: a stale value names a block this entry never validated.
+    // The old `= {}` zeroed it implicitly; now it is explicit.
+    frame->last_block = NULL;
     frame->cpu = *cpu;
     assert(jit->mmu == cpu->mmu);
 
@@ -1830,7 +1972,7 @@ static int cpu_step_to_interrupt_arm64(struct cpu_state *cpu, struct tlb *tlb) {
     // a register copy rolled back by longjmp would defeat the retry cap.
     volatile unsigned unmapped_retries = 0;
     if (sigsetjmp(jit_crash_unwind_buf, 0) != 0) {
-        frame = &frame_storage;
+        frame = scratch != NULL ? &scratch->frame : &stack_frame_storage;
         if (jit_crash_cpu != NULL && jit_crash_frame != NULL)
             *jit_crash_cpu = jit_crash_frame->cpu;
         // A host fault mid-gadget with NO guest mapping behind it is the
@@ -1852,7 +1994,7 @@ static int cpu_step_to_interrupt_arm64(struct cpu_state *cpu, struct tlb *tlb) {
             unmapped_retries++;
             frame->last_block = NULL;
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
-            memset(cache, 0, sizeof(cache));
+            memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
             tlb_flush(tlb);
             goto rearm_arm64;
         }
@@ -1918,7 +2060,7 @@ rearm_arm64:
                         unlock(&jit->lock);
                         atomic_fetch_add_explicit(&jit->cleanup_seq, 1, memory_order_relaxed);
                         pthread_rwlock_unlock(&jit->jetsam_lock.l);
-                        memset(cache, 0, sizeof(cache));
+                        memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
                         memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
                         frame->last_block = NULL;
                     }
@@ -1970,7 +2112,7 @@ rearm_arm64:
         struct jit_block *last_block = frame->last_block;
         if (atomic_load_explicit(&jit->cleanup_seq, memory_order_relaxed) != last_block_cleanup_seq) {
             last_block = frame->last_block = NULL;
-            memset(cache, 0, sizeof(cache));
+            memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
             last_block_cleanup_seq = atomic_load_explicit(&jit->cleanup_seq, memory_order_relaxed);
         }
@@ -2198,9 +2340,28 @@ static int cpu_step_to_interrupt_riscv64(struct cpu_state *cpu, struct tlb *tlb)
         exception_handler_installed = true;
     }
 
-    struct jit_block *cache[JIT_CACHE_SIZE] = {};
-    struct jit_frame frame_storage = {};
-    struct jit_frame *frame = &frame_storage;
+    // Per-thread persistent scratch instead of ~40 KB of stack zeroed on every
+    // entry -- i.e. on every guest syscall. See jit_entry_scratch_get(). The
+    // stack fallback keeps the old behaviour if the one-per-thread allocation
+    // ever fails, so an OOM degrades to slow rather than to broken.
+    struct jit_entry_scratch *scratch = jit_entry_scratch_get();
+    struct jit_block *stack_cache[JIT_CACHE_SIZE]; // uninitialized on purpose
+    struct jit_frame stack_frame_storage;
+    struct jit_block **cache;
+    struct jit_frame *frame;
+    if (scratch != NULL) {
+        cache = scratch->cache;
+        frame = &scratch->frame;
+    } else {
+        memset(stack_cache, 0, sizeof(stack_cache));
+        memset(&stack_frame_storage, 0, sizeof(stack_frame_storage));
+        cache = stack_cache;
+        frame = &stack_frame_storage;
+    }
+    // last_block chains blocks together and is the one frame field that must not
+    // survive an entry: a stale value names a block this entry never validated.
+    // The old `= {}` zeroed it implicitly; now it is explicit.
+    frame->last_block = NULL;
     frame->cpu = *cpu;
     assert(jit->mmu == cpu->mmu);
 
@@ -2212,7 +2373,7 @@ static int cpu_step_to_interrupt_riscv64(struct cpu_state *cpu, struct tlb *tlb)
     // register copy rolled back by longjmp would defeat the retry cap.
     volatile unsigned unmapped_retries = 0;
     if (sigsetjmp(jit_crash_unwind_buf, 0) != 0) {
-        frame = &frame_storage;
+        frame = scratch != NULL ? &scratch->frame : &stack_frame_storage;
         if (jit_crash_cpu != NULL && jit_crash_frame != NULL)
             *jit_crash_cpu = jit_crash_frame->cpu;
         // Same stale-TLB heal as cpu_step_to_interrupt_arm64: a host fault
@@ -2228,7 +2389,7 @@ static int cpu_step_to_interrupt_riscv64(struct cpu_state *cpu, struct tlb *tlb)
             unmapped_retries++;
             frame->last_block = NULL;
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
-            memset(cache, 0, sizeof(cache));
+            memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
             tlb_flush(tlb);
             goto rearm_riscv64;
         }
@@ -2295,7 +2456,7 @@ rearm_riscv64:
                         unlock(&jit->lock);
                         atomic_fetch_add_explicit(&jit->cleanup_seq, 1, memory_order_relaxed);
                         pthread_rwlock_unlock(&jit->jetsam_lock.l);
-                        memset(cache, 0, sizeof(cache));
+                        memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
                         memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
                         frame->last_block = NULL;
                     }
@@ -2346,7 +2507,7 @@ rearm_riscv64:
         struct jit_block *last_block = frame->last_block;
         if (atomic_load_explicit(&jit->cleanup_seq, memory_order_relaxed) != last_block_cleanup_seq) {
             last_block = frame->last_block = NULL;
-            memset(cache, 0, sizeof(cache));
+            memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
             last_block_cleanup_seq = atomic_load_explicit(&jit->cleanup_seq, memory_order_relaxed);
         }
@@ -2483,9 +2644,28 @@ static int cpu_single_step_no_debug(struct cpu_state *cpu, struct tlb *tlb) {
 static int cpu_step_to_interrupt_amd64_frontend(struct cpu_state *cpu, struct tlb *tlb) {
     struct jit *jit = cpu->mmu->jit;
     enum { AMD64_FRONTEND_TIMER_BLOCK_QUANTUM = 1024 };
-    struct jit_block *cache[JIT_CACHE_SIZE] = {};
-    struct jit_frame frame_storage = {};
-    struct jit_frame *frame = &frame_storage;
+    // Per-thread persistent scratch instead of ~40 KB of stack zeroed on every
+    // entry -- i.e. on every guest syscall. See jit_entry_scratch_get(). The
+    // stack fallback keeps the old behaviour if the one-per-thread allocation
+    // ever fails, so an OOM degrades to slow rather than to broken.
+    struct jit_entry_scratch *scratch = jit_entry_scratch_get();
+    struct jit_block *stack_cache[JIT_CACHE_SIZE]; // uninitialized on purpose
+    struct jit_frame stack_frame_storage;
+    struct jit_block **cache;
+    struct jit_frame *frame;
+    if (scratch != NULL) {
+        cache = scratch->cache;
+        frame = &scratch->frame;
+    } else {
+        memset(stack_cache, 0, sizeof(stack_cache));
+        memset(&stack_frame_storage, 0, sizeof(stack_frame_storage));
+        cache = stack_cache;
+        frame = &stack_frame_storage;
+    }
+    // last_block chains blocks together and is the one frame field that must not
+    // survive an entry: a stale value names a block this entry never validated.
+    // The old `= {}` zeroed it implicitly; now it is explicit.
+    frame->last_block = NULL;
     int interrupt;
     bool fallback_to_interp;
     guest_addr_t ip;
@@ -2523,7 +2703,7 @@ static int cpu_step_to_interrupt_amd64_frontend(struct cpu_state *cpu, struct tl
     // register copy rolled back by longjmp would defeat the retry cap.
     volatile unsigned unmapped_retries = 0;
     if (sigsetjmp(jit_crash_unwind_buf, 0) != 0) {
-        frame = &frame_storage;
+        frame = scratch != NULL ? &scratch->frame : &stack_frame_storage;
         if (jit_crash_cpu != NULL && jit_crash_frame != NULL)
             *jit_crash_cpu = jit_crash_frame->cpu;
         // Same stale-TLB heal as cpu_step_to_interrupt (i386): a host fault
@@ -2539,7 +2719,7 @@ static int cpu_step_to_interrupt_amd64_frontend(struct cpu_state *cpu, struct tl
             unmapped_retries++;
             frame->last_block = NULL;
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
-            memset(cache, 0, sizeof(cache));
+            memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
             tlb_flush(tlb);
             goto rearm_amd64;
         }
@@ -2680,7 +2860,7 @@ rearm_amd64:
         // and we hold jetsam_lock continuously from here through jit_enter().
         if (atomic_load_explicit(&jit->cleanup_seq, memory_order_relaxed) !=
                 last_block_cleanup_seq) {
-            memset(cache, 0, sizeof(cache));
+            memset(cache, 0, JIT_CACHE_SIZE * sizeof(*cache));
             memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
             frame->last_block = NULL;
             last_block_cleanup_seq =
