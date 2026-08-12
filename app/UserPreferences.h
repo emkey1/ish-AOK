@@ -77,6 +77,14 @@ extern NSString *const kThemeBackgroundColor;
 @property (nonatomic) NSString *llmServerURL;
 @property (nonatomic) NSString *llmModel;
 @property (nonatomic) NSString *llmAPIKey;
+// The saved set of chat destinations (endpoints) the user can switch between
+// without opening settings, and which one is selected. Each entry is a
+// dictionary of strings: "id", "name", "provider", "url", "model", "apiKey".
+// The selected entry is mirrored into the four properties above, which stay
+// the single source of truth for every request the client actually makes --
+// these two only describe the saved set to pick from.
+@property (nonatomic) NSArray<NSDictionary<NSString *, NSString *> *> *llmDestinations;
+@property (nonatomic) NSString *llmActiveDestinationID;
 @property BOOL llmToolsEnabled;
 @property NSInteger llmToolTimeoutSeconds;
 @property NSInteger llmToolOutputLimitKB;

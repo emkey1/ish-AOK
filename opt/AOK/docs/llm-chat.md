@@ -11,6 +11,36 @@ It's off by default. Turn it on in Settings; once enabled, "LLM Chat"
 appears both in the terminal's "Switch Terminal" menu and in the
 [Workspace](workspace.md) dock.
 
+## Chats
+
+The client keeps as many separate conversations as you want. The first
+toolbar button is named after the chat you're in and opens a menu with:
+
+- **New Chat** and **All Chats…** (the full list, where you can rename,
+  delete, or switch)
+- your five most recent chats, for one-tap switching
+- **Rename Chat…**, **System Prompt…**, **Clear Messages**, **Delete Chat**
+
+Each chat keeps its own history, its own destination, and its own optional
+system prompt (standing instructions sent with every message in that chat
+only). An unnamed chat titles itself from your first message.
+
+Switching chats while a reply is still arriving asks first, and waits for
+that reply to finish landing in the chat it belongs to before swapping.
+
+## Destinations
+
+A destination is one saved endpoint: provider, server URL, model and API
+key. The second toolbar button is named after the destination you're
+talking to and switches between saved destinations in one tap — you only
+need Settings to add or edit one, and even adding can be done from that
+menu via **Add Destination…**.
+
+Manage the saved set under **Settings → Destinations**: select, edit,
+duplicate (handy for the same server with two models), or delete. The
+Settings rows below it — Provider, Server URL, Model, API Key — always
+configure whichever destination is currently selected.
+
 ## Providers
 
 A "Provider" preset picker covers the common cases, or you can point it at
@@ -47,7 +77,12 @@ Nothing runs without your explicit per-command confirmation; there's no
 
 ## Persistence
 
-Chat history is saved to `/AOK/persist/llm-chat.json`, so it survives root
-switches and app restarts. Saved extracts and prompt templates live under
-`/AOK/persist/llm-extracts` and `/AOK/persist/llm-prompts` respectively —
-see [persist.md](persist.md).
+Chats are saved under `/AOK/persist/llm-chats` — one file per chat, plus an
+`index.json` naming them and recording which one is selected — so they
+survive root switches and app restarts. A transcript from before multiple
+chats existed is carried in as your first chat; the old
+`/AOK/persist/llm-chat.json` is copied, not moved, so an older build still
+finds it where it left it.
+
+Saved extracts and prompt templates live under `/AOK/persist/llm-extracts`
+and `/AOK/persist/llm-prompts` respectively — see [persist.md](persist.md).

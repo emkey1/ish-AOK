@@ -113,6 +113,20 @@ UINavigationController *ISHCreateAboutNavigationController(BOOL recoveryMode, BO
 @interface LLMProviderPickerViewController : UITableViewController
 @end
 
+// The saved chats, newest first: switch, rename, delete. Presented modally
+// (the chat is an embedded child view controller in Workspace mode, where a
+// push has nowhere to go).
+@interface LLMChatSessionListViewController : UITableViewController
+@property (nonatomic, copy) NSString *currentSessionID;
+@property (nonatomic, copy) void (^sessionSelected)(NSString *sessionID);
+@end
+
+// The saved destinations: select, edit, duplicate, delete, add from a preset.
+// Reachable both from the chat's destination menu and from LLM Settings.
+@interface LLMDestinationListViewController : UITableViewController
+@property (nonatomic, copy) void (^destinationsChanged)(void);
+@end
+
 UIViewController *ISHCreateDiagnosticsViewController(void) {
     return [DiagnosticsViewController new];
 }
@@ -296,6 +310,391 @@ static NSString *ISHLLMExtensionForFenceLanguage(NSString *language) {
     if ([lower isEqualToString:@"cpp"] || [lower isEqualToString:@"c++"])
         return @"cpp";
     return @"txt";
+}
+
+#pragma mark - Chat destinations
+
+// A "destination" is one saved endpoint: provider + server URL + model + API
+// key. The four UserPreferences scalars stay the single source of truth for
+// everything that actually talks to a server -- selecting a destination just
+// mirrors its values into them -- so no request path had to learn about
+// destinations at all. The saved array only describes the set to pick from.
+//
+// Because the mirror is global, two live chat view controllers (a Workspace
+// window and the terminal's modal) share one active destination: the last
+// switch wins for both. That matches how the four scalars already behaved.
+static NSString *const kISHLLMDestinationID = @"id";
+static NSString *const kISHLLMDestinationName = @"name";
+static NSString *const kISHLLMDestinationProvider = @"provider";
+static NSString *const kISHLLMDestinationURL = @"url";
+static NSString *const kISHLLMDestinationModel = @"model";
+static NSString *const kISHLLMDestinationAPIKey = @"apiKey";
+
+static NSString *ISHLLMStringValue(NSDictionary *dictionary, NSString *key) {
+    id value = dictionary[key];
+    return [value isKindOfClass:NSString.class] ? value : @"";
+}
+
+// Snapshot of the live configuration as a destination entry.
+static NSDictionary<NSString *, NSString *> *ISHLLMDestinationFromCurrentPreferences(NSString *identifier, NSString *name) {
+    UserPreferences *preferences = UserPreferences.shared;
+    NSString *provider = preferences.llmProvider ?: @"Custom";
+    return @{
+        kISHLLMDestinationID: identifier.length > 0 ? identifier : NSUUID.UUID.UUIDString,
+        kISHLLMDestinationName: name.length > 0 ? name : provider,
+        kISHLLMDestinationProvider: provider,
+        kISHLLMDestinationURL: preferences.llmServerURL ?: @"",
+        kISHLLMDestinationModel: preferences.llmModel ?: @"",
+        kISHLLMDestinationAPIKey: preferences.llmAPIKey ?: @"",
+    };
+}
+
+// Reading accessor, with the upgrade seed: someone arriving from an older
+// build has exactly one configured endpoint (the four scalars), so it becomes
+// destination #1 and stays selected. Entries without a usable id are dropped
+// rather than trusted, since the id is what selection and editing key on.
+static NSArray<NSDictionary<NSString *, NSString *> *> *ISHLLMDestinations(void) {
+    NSMutableArray<NSDictionary<NSString *, NSString *> *> *valid = [NSMutableArray array];
+    for (id entry in UserPreferences.shared.llmDestinations) {
+        if ([entry isKindOfClass:NSDictionary.class] && ISHLLMStringValue(entry, kISHLLMDestinationID).length > 0)
+            [valid addObject:entry];
+    }
+    if (valid.count == 0) {
+        NSDictionary<NSString *, NSString *> *seeded = ISHLLMDestinationFromCurrentPreferences(nil, nil);
+        [valid addObject:seeded];
+        UserPreferences.shared.llmDestinations = valid;
+        UserPreferences.shared.llmActiveDestinationID = seeded[kISHLLMDestinationID];
+    }
+    return valid;
+}
+
+// Index of the selected destination. A stale or deleted id resolves to the
+// first entry instead of failing -- there is always exactly one active
+// destination, and ISHLLMDestinations() guarantees the array is non-empty.
+static NSUInteger ISHLLMActiveDestinationIndex(void) {
+    NSArray<NSDictionary<NSString *, NSString *> *> *destinations = ISHLLMDestinations();
+    NSString *activeID = UserPreferences.shared.llmActiveDestinationID;
+    if (activeID.length > 0) {
+        for (NSUInteger i = 0; i < destinations.count; i++) {
+            if ([ISHLLMStringValue(destinations[i], kISHLLMDestinationID) isEqualToString:activeID])
+                return i;
+        }
+    }
+    return 0;
+}
+
+static NSDictionary<NSString *, NSString *> *ISHLLMActiveDestination(void) {
+    return ISHLLMDestinations()[ISHLLMActiveDestinationIndex()];
+}
+
+static NSString *ISHLLMDestinationDisplayName(NSDictionary<NSString *, NSString *> *destination) {
+    NSString *name = ISHLLMStringValue(destination, kISHLLMDestinationName);
+    if (name.length > 0)
+        return name;
+    NSString *provider = ISHLLMStringValue(destination, kISHLLMDestinationProvider);
+    return provider.length > 0 ? provider : @"Destination";
+}
+
+// One-line "what does this destination point at" summary for pickers.
+static NSString *ISHLLMDestinationSubtitle(NSDictionary<NSString *, NSString *> *destination) {
+    NSString *model = ISHLLMStringValue(destination, kISHLLMDestinationModel);
+    NSString *provider = ISHLLMStringValue(destination, kISHLLMDestinationProvider);
+    if ([provider.lowercaseString containsString:@"foundation models"])
+        return model.length > 0 ? [@"On-device · " stringByAppendingString:model] : @"On-device";
+    NSString *host = [NSURL URLWithString:ISHLLMStringValue(destination, kISHLLMDestinationURL)].host ?: @"";
+    if (model.length > 0 && host.length > 0)
+        return [NSString stringWithFormat:@"%@ · %@", model, host];
+    if (model.length > 0)
+        return model;
+    return host.length > 0 ? host : @"Not configured";
+}
+
+// The ONLY place a destination is written into the four scalars.
+static void ISHLLMActivateDestination(NSDictionary<NSString *, NSString *> *destination) {
+    UserPreferences *preferences = UserPreferences.shared;
+    preferences.llmActiveDestinationID = ISHLLMStringValue(destination, kISHLLMDestinationID);
+    preferences.llmProvider = ISHLLMStringValue(destination, kISHLLMDestinationProvider) ?: @"Custom";
+    preferences.llmServerURL = ISHLLMStringValue(destination, kISHLLMDestinationURL);
+    preferences.llmModel = ISHLLMStringValue(destination, kISHLLMDestinationModel);
+    preferences.llmAPIKey = ISHLLMStringValue(destination, kISHLLMDestinationAPIKey);
+}
+
+// The inverse, and the reason the saved set can't drift: every edit that
+// writes one of the four scalars (the Settings rows, the provider preset
+// picker, the model picker, the /model command) calls this straight after, so
+// the active entry always describes the live configuration.
+static void ISHLLMSyncActiveDestinationFromPreferences(void) {
+    NSMutableArray<NSDictionary<NSString *, NSString *> *> *destinations = [ISHLLMDestinations() mutableCopy];
+    NSUInteger index = ISHLLMActiveDestinationIndex();
+    NSDictionary<NSString *, NSString *> *existing = destinations[index];
+    // A destination the user never renamed follows its provider; one they did
+    // name keeps that name across a provider change.
+    NSString *name = ISHLLMStringValue(existing, kISHLLMDestinationName);
+    if (name.length == 0 || [name isEqualToString:ISHLLMStringValue(existing, kISHLLMDestinationProvider)])
+        name = nil;
+    destinations[index] = ISHLLMDestinationFromCurrentPreferences(ISHLLMStringValue(existing, kISHLLMDestinationID), name);
+    UserPreferences.shared.llmDestinations = destinations;
+    UserPreferences.shared.llmActiveDestinationID = destinations[index][kISHLLMDestinationID];
+}
+
+// Upsert by id; a destination not already in the array is appended.
+static void ISHLLMSaveDestination(NSDictionary<NSString *, NSString *> *destination) {
+    NSString *identifier = ISHLLMStringValue(destination, kISHLLMDestinationID);
+    if (identifier.length == 0)
+        return;
+    NSMutableArray<NSDictionary<NSString *, NSString *> *> *destinations = [ISHLLMDestinations() mutableCopy];
+    for (NSUInteger i = 0; i < destinations.count; i++) {
+        if ([ISHLLMStringValue(destinations[i], kISHLLMDestinationID) isEqualToString:identifier]) {
+            destinations[i] = destination;
+            UserPreferences.shared.llmDestinations = destinations;
+            // Editing the active destination has to move the live scalars too,
+            // or the chat keeps talking to the pre-edit endpoint.
+            if (i == ISHLLMActiveDestinationIndex())
+                ISHLLMActivateDestination(destination);
+            return;
+        }
+    }
+    [destinations addObject:destination];
+    UserPreferences.shared.llmDestinations = destinations;
+}
+
+// Deleting the active destination selects a survivor; the last one can't be
+// deleted, since "no destination" has no meaning for the four scalars.
+static BOOL ISHLLMDeleteDestinationWithID(NSString *identifier) {
+    NSMutableArray<NSDictionary<NSString *, NSString *> *> *destinations = [ISHLLMDestinations() mutableCopy];
+    if (destinations.count <= 1)
+        return NO;
+    BOOL wasActive = [ISHLLMStringValue(ISHLLMActiveDestination(), kISHLLMDestinationID) isEqualToString:identifier];
+    NSUInteger removedIndex = NSNotFound;
+    for (NSUInteger i = 0; i < destinations.count; i++) {
+        if ([ISHLLMStringValue(destinations[i], kISHLLMDestinationID) isEqualToString:identifier]) {
+            removedIndex = i;
+            break;
+        }
+    }
+    if (removedIndex == NSNotFound)
+        return NO;
+    [destinations removeObjectAtIndex:removedIndex];
+    UserPreferences.shared.llmDestinations = destinations;
+    if (wasActive)
+        ISHLLMActivateDestination(destinations[removedIndex < destinations.count ? removedIndex : destinations.count - 1]);
+    return YES;
+}
+
+#pragma mark - Chat sessions
+
+// Chats are stored one file per session under /AOK/persist/llm-chats, with an
+// index document beside them naming the sessions and which one is selected:
+//
+//   llm-chats/index.json          {version, active, sessions:[{id,title,...}]}
+//   llm-chats/<session-id>.json   the message array, same shape as before
+//
+// Session files use the same writeToURL:/arrayWithContentsOfURL: mechanism
+// the single transcript always used (a property list, despite the .json
+// name) so the on-disk message format is unchanged and a migrated chat reads
+// back exactly as it was written.
+static NSURL *ISHLLMSessionsDirectoryURL(void) {
+    return [ISHLLMPersistDirectoryURL() URLByAppendingPathComponent:@"llm-chats" isDirectory:YES];
+}
+
+static NSURL *ISHLLMSessionIndexURL(void) {
+    return [ISHLLMSessionsDirectoryURL() URLByAppendingPathComponent:@"index.json" isDirectory:NO];
+}
+
+static NSURL *ISHLLMSessionFileURL(NSString *sessionID) {
+    NSString *component = ISHLLMSanitizeFilenameComponent(sessionID ?: @"");
+    return [ISHLLMSessionsDirectoryURL() URLByAppendingPathComponent:[component stringByAppendingString:@".json"] isDirectory:NO];
+}
+
+static void ISHLLMEnsureSessionsDirectory(void) {
+    NSURL *directoryURL = ISHLLMSessionsDirectoryURL();
+    if (directoryURL != nil)
+        [NSFileManager.defaultManager createDirectoryAtURL:directoryURL withIntermediateDirectories:YES attributes:nil error:nil];
+}
+
+static NSArray<NSDictionary<NSString *, id> *> *ISHLLMValidMessagesFromStoredArray(NSArray *stored) {
+    NSMutableArray<NSDictionary<NSString *, id> *> *messages = [NSMutableArray array];
+    for (id message in stored) {
+        if ([message isKindOfClass:NSDictionary.class] && [message[@"role"] isKindOfClass:NSString.class] && [message[@"content"] isKindOfClass:NSString.class])
+            [messages addObject:message];
+    }
+    return messages;
+}
+
+static NSArray<NSDictionary<NSString *, id> *> *ISHLLMLoadSessionMessages(NSString *sessionID) {
+    if (sessionID.length == 0)
+        return @[];
+    NSArray *stored = [NSArray arrayWithContentsOfURL:ISHLLMSessionFileURL(sessionID)];
+    return [stored isKindOfClass:NSArray.class] ? ISHLLMValidMessagesFromStoredArray(stored) : @[];
+}
+
+static void ISHLLMWriteSessionMessages(NSString *sessionID, NSArray<NSDictionary<NSString *, id> *> *messages) {
+    if (sessionID.length == 0)
+        return;
+    ISHLLMEnsureSessionsDirectory();
+    [messages writeToURL:ISHLLMSessionFileURL(sessionID) atomically:YES];
+}
+
+// A one-line label for a chat, taken from its first real user turn -- the
+// same thing the user would have typed as a title. Slash commands and the
+// terminal-context prompts are skipped; those name the tool, not the chat.
+static NSString *ISHLLMSessionTitleFromMessages(NSArray<NSDictionary<NSString *, id> *> *messages) {
+    for (NSDictionary<NSString *, id> *message in messages) {
+        if (![ISHLLMStringValue(message, @"role") isEqualToString:@"user"])
+            continue;
+        NSString *content = [ISHLLMStringValue(message, @"content") stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (content.length == 0 || [content hasPrefix:@"/"])
+            continue;
+        NSString *firstLine = [content componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet].firstObject ?: content;
+        firstLine = [firstLine stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (firstLine.length == 0)
+            continue;
+        if (firstLine.length > 42)
+            firstLine = [[firstLine substringToIndex:41] stringByAppendingString:@"…"];
+        return firstLine;
+    }
+    return @"";
+}
+
+static NSDictionary<NSString *, id> *ISHLLMNewSessionEntry(NSString *title) {
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    return @{
+        @"id": NSUUID.UUID.UUIDString,
+        @"title": title.length > 0 ? title : @"New Chat",
+        @"created": @(now),
+        @"updated": @(now),
+        @"destination": ISHLLMStringValue(ISHLLMActiveDestination(), kISHLLMDestinationID),
+        @"system": @"",
+        @"count": @0,
+    };
+}
+
+// The index, rebuilt from whatever is on disk and always valid: at least one
+// session, a selected id that exists, and (on first run in this build) the
+// pre-sessions transcript carried in as the first chat. The legacy
+// llm-chat.json is copied, never moved -- an older build reopened afterwards
+// still finds the chat where it left it.
+static NSDictionary<NSString *, id> *ISHLLMLoadSessionIndexDocument(void) {
+    NSDictionary *stored = [NSDictionary dictionaryWithContentsOfURL:ISHLLMSessionIndexURL()];
+    NSMutableArray<NSDictionary<NSString *, id> *> *sessions = [NSMutableArray array];
+    if ([stored isKindOfClass:NSDictionary.class] && [stored[@"sessions"] isKindOfClass:NSArray.class]) {
+        for (id entry in stored[@"sessions"]) {
+            if ([entry isKindOfClass:NSDictionary.class] && ISHLLMStringValue(entry, @"id").length > 0)
+                [sessions addObject:entry];
+        }
+    }
+    NSString *activeID = [stored isKindOfClass:NSDictionary.class] ? ISHLLMStringValue(stored, @"active") : @"";
+
+    if (sessions.count == 0) {
+        NSArray *legacy = [NSArray arrayWithContentsOfURL:ISHLLMTranscriptURL()];
+        NSArray<NSDictionary<NSString *, id> *> *legacyMessages = [legacy isKindOfClass:NSArray.class] ? ISHLLMValidMessagesFromStoredArray(legacy) : @[];
+        NSMutableDictionary<NSString *, id> *entry = [ISHLLMNewSessionEntry(ISHLLMSessionTitleFromMessages(legacyMessages)) mutableCopy];
+        if (legacyMessages.count > 0) {
+            entry[@"count"] = @(legacyMessages.count);
+            ISHLLMWriteSessionMessages(entry[@"id"], legacyMessages);
+        }
+        [sessions addObject:entry];
+        activeID = entry[@"id"];
+    }
+
+    BOOL activeExists = NO;
+    for (NSDictionary<NSString *, id> *entry in sessions) {
+        if ([ISHLLMStringValue(entry, @"id") isEqualToString:activeID]) {
+            activeExists = YES;
+            break;
+        }
+    }
+    if (!activeExists)
+        activeID = ISHLLMStringValue(sessions.firstObject, @"id");
+    return @{@"version": @1, @"active": activeID, @"sessions": sessions};
+}
+
+static void ISHLLMWriteSessionIndex(NSArray<NSDictionary<NSString *, id> *> *sessions, NSString *activeID) {
+    ISHLLMEnsureSessionsDirectory();
+    [@{@"version": @1, @"active": activeID ?: @"", @"sessions": sessions ?: @[]} writeToURL:ISHLLMSessionIndexURL() atomically:YES];
+}
+
+static NSArray<NSDictionary<NSString *, id> *> *ISHLLMSessionEntries(void) {
+    return ISHLLMLoadSessionIndexDocument()[@"sessions"];
+}
+
+// Newest activity first, which is the order a chat list is useful in.
+static NSArray<NSDictionary<NSString *, id> *> *ISHLLMSessionEntriesByRecency(void) {
+    return [ISHLLMSessionEntries() sortedArrayUsingComparator:^NSComparisonResult(NSDictionary<NSString *, id> *a, NSDictionary<NSString *, id> *b) {
+        double left = [a[@"updated"] isKindOfClass:NSNumber.class] ? [a[@"updated"] doubleValue] : 0.0;
+        double right = [b[@"updated"] isKindOfClass:NSNumber.class] ? [b[@"updated"] doubleValue] : 0.0;
+        if (left == right)
+            return NSOrderedSame;
+        return left > right ? NSOrderedAscending : NSOrderedDescending;
+    }];
+}
+
+static NSString *ISHLLMActiveSessionID(void) {
+    return ISHLLMLoadSessionIndexDocument()[@"active"];
+}
+
+static NSDictionary<NSString *, id> *ISHLLMSessionEntryWithID(NSString *sessionID) {
+    for (NSDictionary<NSString *, id> *entry in ISHLLMSessionEntries()) {
+        if ([ISHLLMStringValue(entry, @"id") isEqualToString:sessionID])
+            return entry;
+    }
+    return nil;
+}
+
+// Merge `updates` into one session entry in place, leaving the rest alone.
+static void ISHLLMUpdateSessionEntry(NSString *sessionID, NSDictionary<NSString *, id> *updates) {
+    if (sessionID.length == 0)
+        return;
+    NSDictionary<NSString *, id> *document = ISHLLMLoadSessionIndexDocument();
+    NSMutableArray<NSDictionary<NSString *, id> *> *sessions = [document[@"sessions"] mutableCopy];
+    for (NSUInteger i = 0; i < sessions.count; i++) {
+        if (![ISHLLMStringValue(sessions[i], @"id") isEqualToString:sessionID])
+            continue;
+        NSMutableDictionary<NSString *, id> *entry = [sessions[i] mutableCopy];
+        [entry addEntriesFromDictionary:updates];
+        sessions[i] = entry;
+        ISHLLMWriteSessionIndex(sessions, document[@"active"]);
+        return;
+    }
+}
+
+static void ISHLLMSetActiveSessionID(NSString *sessionID) {
+    NSDictionary<NSString *, id> *document = ISHLLMLoadSessionIndexDocument();
+    ISHLLMWriteSessionIndex(document[@"sessions"], sessionID);
+}
+
+static NSDictionary<NSString *, id> *ISHLLMCreateSession(NSString *title) {
+    NSDictionary<NSString *, id> *document = ISHLLMLoadSessionIndexDocument();
+    NSMutableArray<NSDictionary<NSString *, id> *> *sessions = [document[@"sessions"] mutableCopy];
+    NSDictionary<NSString *, id> *entry = ISHLLMNewSessionEntry(title);
+    [sessions addObject:entry];
+    ISHLLMWriteSessionIndex(sessions, entry[@"id"]);
+    return entry;
+}
+
+// Deleting the last chat leaves an empty one rather than no chat at all --
+// the client always has somewhere to put the next message.
+static NSString *ISHLLMDeleteSession(NSString *sessionID) {
+    NSDictionary<NSString *, id> *document = ISHLLMLoadSessionIndexDocument();
+    NSMutableArray<NSDictionary<NSString *, id> *> *sessions = [document[@"sessions"] mutableCopy];
+    NSUInteger removedIndex = NSNotFound;
+    for (NSUInteger i = 0; i < sessions.count; i++) {
+        if ([ISHLLMStringValue(sessions[i], @"id") isEqualToString:sessionID]) {
+            removedIndex = i;
+            break;
+        }
+    }
+    if (removedIndex == NSNotFound)
+        return ISHLLMStringValue(document, @"active");
+    [sessions removeObjectAtIndex:removedIndex];
+    [NSFileManager.defaultManager removeItemAtURL:ISHLLMSessionFileURL(sessionID) error:nil];
+    if (sessions.count == 0)
+        [sessions addObject:ISHLLMNewSessionEntry(nil)];
+    NSString *activeID = ISHLLMStringValue(document, @"active");
+    if ([activeID isEqualToString:sessionID])
+        activeID = ISHLLMStringValue(sessions[removedIndex < sessions.count ? removedIndex : sessions.count - 1], @"id");
+    ISHLLMWriteSessionIndex(sessions, activeID);
+    return activeID;
 }
 
 static NSString *ISHLLMChatEndpoint(void) {
@@ -1785,6 +2184,15 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     NSInteger _knownContextWindowTokens; // 0 = unknown; best-effort from /models, see probeContextWindowIfNeeded
     NSString *_knownContextWindowProbeKey; // "model|endpoint" the value above was probed for; re-probes when it changes
     BOOL _contextWindowProbeInFlight;
+    NSString *_sessionID; // the chat currently on screen; _messages is its content
+    NSString *_sessionTitle;
+    NSString *_sessionSystemPrompt; // per-chat system message, "" for none
+    BOOL _sessionTitleIsAutomatic; // still derived from the first user turn, so it keeps following it
+    UIButton *_chatsButton; // titled with the session, so the visible chat is always named
+    UIButton *_destinationButton; // titled with the destination, one tap to switch
+    UIBarButtonItem *_chatsBarButtonItem;
+    UIBarButtonItem *_destinationBarButtonItem;
+    void (^_pendingIdleAction)(void); // a chat/destination switch waiting for the in-flight reply to land
 }
 
 - (void)viewDidLoad {
@@ -1799,13 +2207,10 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     _messages = [NSMutableArray array];
     _commandDecisionsThisReply = [NSMutableDictionary dictionary];
     _expandedThinkingIndices = [NSMutableSet set];
-    NSArray *storedMessages = [NSArray arrayWithContentsOfURL:ISHLLMTranscriptURL()];
-    if ([storedMessages isKindOfClass:NSArray.class]) {
-        for (id message in storedMessages) {
-            if ([message isKindOfClass:NSDictionary.class] && [message[@"role"] isKindOfClass:NSString.class] && [message[@"content"] isKindOfClass:NSString.class])
-                [_messages addObject:message];
-        }
-    }
+    // Opens the chat that was last selected; on the first run in this build
+    // that is the migrated pre-sessions transcript (see
+    // ISHLLMLoadSessionIndexDocument).
+    [self loadSessionWithID:ISHLLMActiveSessionID()];
 
     _transcriptTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     _transcriptTable.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1879,25 +2284,23 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     _toolbarStackView.distribution = UIStackViewDistributionFillEqually;
     _toolbarStackView.spacing = 6.0;
     [self.view addSubview:_toolbarStackView];
-    NSArray<NSDictionary<NSString *, NSString *> *> *toolbarButtons = @[
-        @{@"title": @"Settings", @"selector": NSStringFromSelector(@selector(showLLMSettings:))},
-        @{@"title": @"Actions", @"selector": NSStringFromSelector(@selector(showPromptActions:))},
-        @{@"title": @"Save", @"selector": NSStringFromSelector(@selector(showExtractActions:))},
-        @{@"title": @"Clear", @"selector": NSStringFromSelector(@selector(clearTranscript:))},
-    ];
-    for (NSDictionary<NSString *, NSString *> *descriptor in toolbarButtons) {
-        UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
-        button.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
-        [button setTitle:descriptor[@"title"] forState:UIControlStateNormal];
-        [button addTarget:self action:NSSelectorFromString(descriptor[@"selector"]) forControlEvents:UIControlEventTouchUpInside];
-        [_toolbarStackView addArrangedSubview:button];
-    }
+    // Four buttons, same as before, but the first two are now the chat and the
+    // destination -- both name what they currently point at and both switch it
+    // in one tap, which is the whole point of the row. Saving extracts moved
+    // under Actions and clearing under Chats to keep the count at four; a
+    // fifth crushes the labels on a narrow iPhone.
+    _chatsButton = [self toolbarButtonWithTitle:@"Chats" action:NULL];
+    _destinationButton = [self toolbarButtonWithTitle:@"Model" action:NULL];
+    [self toolbarButtonWithTitle:@"Actions" action:@selector(showPromptActions:)];
+    [self toolbarButtonWithTitle:@"Settings" action:@selector(showLLMSettings:)];
 
+    _chatsBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Chats" style:UIBarButtonItemStylePlain target:nil action:NULL];
+    _destinationBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"Model" style:UIBarButtonItemStylePlain target:nil action:NULL];
     self.navigationItem.rightBarButtonItems = @[
         [[UIBarButtonItem alloc] initWithTitle:@"Settings" style:UIBarButtonItemStylePlain target:self action:@selector(showLLMSettings:)],
         [[UIBarButtonItem alloc] initWithTitle:@"Actions" style:UIBarButtonItemStylePlain target:self action:@selector(showPromptActions:)],
-        [[UIBarButtonItem alloc] initWithTitle:@"Save" style:UIBarButtonItemStylePlain target:self action:@selector(showExtractActions:)],
-        [[UIBarButtonItem alloc] initWithTitle:@"Clear" style:UIBarButtonItemStylePlain target:self action:@selector(clearTranscript:)],
+        _destinationBarButtonItem,
+        _chatsBarButtonItem,
     ];
 
     // Status row: a spinner + label so the connection/work state is always visible
@@ -1963,6 +2366,7 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     ]];
 
     [self refreshTranscript];
+    [self updateChatHeaderTitles];
     [self setStatus:[self idleStatusText] busy:NO];
     if (self.initialPrompt.length > 0) {
         [self.view layoutIfNeeded]; // give _promptField a real width before sizing it to this initial text
@@ -1985,8 +2389,406 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     [self refreshTranscript];
+    [self updateChatHeaderTitles]; // Settings can have changed the destination
     if (!_activityIndicator.isAnimating)
         [self setStatus:[self idleStatusText] busy:NO];
+}
+
+#pragma mark - Chat and destination switching
+
+- (UIButton *)toolbarButtonWithTitle:(NSString *)title action:(SEL)action {
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
+    button.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+    button.titleLabel.adjustsFontSizeToFitWidth = YES;
+    button.titleLabel.minimumScaleFactor = 0.8;
+    [button setTitle:title forState:UIControlStateNormal];
+    if (action != NULL)
+        [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    else
+        button.showsMenuAsPrimaryAction = YES; // menu is attached in -updateChatHeaderTitles
+    [_toolbarStackView addArrangedSubview:button];
+    return button;
+}
+
+// Toolbar labels are narrow; keep them recognisable rather than complete.
+static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
+    NSString *trimmed = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (trimmed.length == 0)
+        return @"";
+    if (trimmed.length <= limit)
+        return trimmed;
+    return [[trimmed substringToIndex:limit - 1] stringByAppendingString:@"…"];
+}
+
+- (void)updateChatHeaderTitles {
+    NSString *sessionTitle = _sessionTitle.length > 0 ? _sessionTitle : @"New Chat";
+    NSString *destinationName = ISHLLMDestinationDisplayName(ISHLLMActiveDestination());
+    self.title = sessionTitle;
+
+    UIMenu *chatMenu = [self chatActionsMenu];
+    UIMenu *destinationMenu = [self destinationActionsMenu];
+
+    [_chatsButton setTitle:ISHLLMShortenedButtonTitle(sessionTitle, 14) forState:UIControlStateNormal];
+    _chatsButton.accessibilityLabel = [NSString stringWithFormat:@"Chats. Current chat: %@", sessionTitle];
+    _chatsButton.menu = chatMenu;
+    [_destinationButton setTitle:ISHLLMShortenedButtonTitle(destinationName, 14) forState:UIControlStateNormal];
+    _destinationButton.accessibilityLabel = [NSString stringWithFormat:@"Chat destination: %@", destinationName];
+    _destinationButton.menu = destinationMenu;
+
+    _chatsBarButtonItem.title = ISHLLMShortenedButtonTitle(sessionTitle, 14);
+    _chatsBarButtonItem.menu = chatMenu;
+    _destinationBarButtonItem.title = ISHLLMShortenedButtonTitle(destinationName, 14);
+    _destinationBarButtonItem.menu = destinationMenu;
+}
+
+- (BOOL)isBusy {
+    return _activityIndicator.isAnimating || _activeTask != nil || _activeStreamFD != 0;
+}
+
+// Switching chats or destinations mid-reply would let the in-flight response
+// land in a transcript it doesn't belong to: the streaming paths hold a bare
+// index into _messages, and the completion handlers append through self, so
+// swapping _messages under them corrupts the chat that is switched TO.
+//
+// Rather than epoch-stamping every completion path (there are seven, and
+// missing one is silent corruption), the switch is queued and run from
+// -setSending:NO -- the single funnel every path already ends in. Stopping
+// therefore lets the current reply finish landing in its own chat, and only
+// then does the swap happen. Returns YES if the caller's work was deferred.
+- (BOOL)confirmSwitchWhileBusyWithAction:(NSString *)actionTitle continuation:(void (^)(void))continuation {
+    if (![self isBusy])
+        return NO;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Still replying"
+                                                                  message:[NSString stringWithFormat:@"A reply is still coming in. Stop it before you %@?", actionTitle]
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Stop and Continue" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        self->_pendingIdleAction = [continuation copy];
+        [self stopGenerating:nil];
+    }]];
+    [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
+    return YES;
+}
+
+// Everything that has to be true for _messages to describe the chat named by
+// _sessionID. Called from viewDidLoad and on every switch -- if a per-chat
+// piece of state is added later, it belongs here.
+- (void)loadSessionWithID:(NSString *)sessionID {
+    NSDictionary<NSString *, id> *entry = ISHLLMSessionEntryWithID(sessionID);
+    if (entry == nil) {
+        entry = ISHLLMSessionEntryWithID(ISHLLMActiveSessionID());
+        if (entry == nil)
+            entry = ISHLLMCreateSession(nil);
+    }
+    _sessionID = ISHLLMStringValue(entry, @"id");
+    _sessionTitle = ISHLLMStringValue(entry, @"title");
+    _sessionSystemPrompt = ISHLLMStringValue(entry, @"system");
+    _sessionTitleIsAutomatic = ![entry[@"titleIsCustom"] boolValue];
+    [_messages setArray:ISHLLMLoadSessionMessages(_sessionID)];
+
+    // Per-chat state that must not survive the switch. The auto-run grants in
+    // particular are a safety decision the user made about one conversation --
+    // carrying them into another would run commands they never approved.
+    _autoRunCommandsThisChat = NO;
+    _autoRunCommandsThisReply = NO;
+    [_commandDecisionsThisReply removeAllObjects];
+    [_expandedThinkingIndices removeAllObjects]; // indices into _messages, which just changed
+    _streamingThinkingOpen = NO;
+    _cancelled = NO;
+    // _guestEnvironmentNote is a property of the guest, not of the chat, so it
+    // deliberately survives; the context-window probe re-keys itself off the
+    // model and endpoint (see contextWindowProbeKey).
+}
+
+- (void)switchToSessionWithID:(NSString *)sessionID {
+    if ([sessionID isEqualToString:_sessionID])
+        return;
+    // Weak in the deferred continuations: a request that never completes would
+    // otherwise pin the view controller through _pendingIdleAction.
+    __weak typeof(self) weakSelf = self;
+    if ([self confirmSwitchWhileBusyWithAction:@"switch chats" continuation:^{ [weakSelf switchToSessionWithID:sessionID]; }])
+        return;
+    [self saveTranscript]; // flush the outgoing chat before its buffer is replaced
+    ISHLLMSetActiveSessionID(sessionID);
+    [self loadSessionWithID:sessionID];
+    [self setSending:NO];
+    [self refreshTranscript];
+    [self updateChatHeaderTitles];
+    [self setStatus:[self idleStatusText] busy:NO];
+}
+
+- (void)startNewChat {
+    __weak typeof(self) weakSelf = self;
+    if ([self confirmSwitchWhileBusyWithAction:@"start a new chat" continuation:^{ [weakSelf startNewChat]; }])
+        return;
+    [self saveTranscript];
+    NSDictionary<NSString *, id> *entry = ISHLLMCreateSession(nil);
+    [self loadSessionWithID:ISHLLMStringValue(entry, @"id")];
+    [self setSending:NO];
+    [self refreshTranscript];
+    [self updateChatHeaderTitles];
+    [self setStatus:[self idleStatusText] busy:NO];
+}
+
+- (UIMenu *)chatActionsMenu {
+    UIAction *newChat = [UIAction actionWithTitle:@"New Chat"
+                                            image:[UIImage systemImageNamed:@"square.and.pencil"]
+                                       identifier:nil
+                                          handler:^(__unused UIAction *action) { [self startNewChat]; }];
+    UIAction *browse = [UIAction actionWithTitle:@"All Chats…"
+                                           image:[UIImage systemImageNamed:@"list.bullet"]
+                                      identifier:nil
+                                         handler:^(__unused UIAction *action) { [self showChatList]; }];
+
+    // The handful of most recent chats inline, so the common switch is one
+    // gesture; the full list (rename, delete, search by title) is behind
+    // "All Chats…".
+    NSMutableArray<UIAction *> *recent = [NSMutableArray array];
+    for (NSDictionary<NSString *, id> *entry in ISHLLMSessionEntriesByRecency()) {
+        if (recent.count >= 5)
+            break;
+        NSString *entryID = ISHLLMStringValue(entry, @"id");
+        NSString *title = ISHLLMStringValue(entry, @"title");
+        UIAction *item = [UIAction actionWithTitle:title.length > 0 ? title : @"New Chat"
+                                             image:nil
+                                        identifier:nil
+                                           handler:^(__unused UIAction *action) { [self switchToSessionWithID:entryID]; }];
+        item.state = [entryID isEqualToString:_sessionID] ? UIMenuElementStateOn : UIMenuElementStateOff;
+        [recent addObject:item];
+    }
+
+    UIAction *rename = [UIAction actionWithTitle:@"Rename Chat…"
+                                           image:[UIImage systemImageNamed:@"pencil"]
+                                      identifier:nil
+                                         handler:^(__unused UIAction *action) { [self renameCurrentChat]; }];
+    UIAction *systemPrompt = [UIAction actionWithTitle:_sessionSystemPrompt.length > 0 ? @"System Prompt (set)…" : @"System Prompt…"
+                                                 image:[UIImage systemImageNamed:@"text.badge.star"]
+                                            identifier:nil
+                                               handler:^(__unused UIAction *action) { [self editSystemPromptForCurrentChat]; }];
+    UIAction *clear = [UIAction actionWithTitle:@"Clear Messages"
+                                          image:[UIImage systemImageNamed:@"eraser"]
+                                     identifier:nil
+                                        handler:^(__unused UIAction *action) { [self clearTranscript:nil]; }];
+    UIAction *delete = [UIAction actionWithTitle:@"Delete Chat"
+                                           image:[UIImage systemImageNamed:@"trash"]
+                                      identifier:nil
+                                         handler:^(__unused UIAction *action) { [self deleteCurrentChat]; }];
+    delete.attributes = UIMenuElementAttributesDestructive;
+
+    UIMenu *switchSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:recent];
+    UIMenu *currentSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[rename, systemPrompt, clear, delete]];
+    return [UIMenu menuWithTitle:@"" image:nil identifier:nil options:0 children:@[newChat, browse, switchSection, currentSection]];
+}
+
+- (void)showChatList {
+    LLMChatSessionListViewController *listViewController = [LLMChatSessionListViewController new];
+    listViewController.currentSessionID = _sessionID;
+    __weak typeof(self) weakSelf = self;
+    listViewController.sessionSelected = ^(NSString *sessionID) {
+        typeof(self) self = weakSelf;
+        if (self == nil)
+            return;
+        if (sessionID.length == 0) {
+            [self startNewChat]; // the list's compose button; creating it here keeps the busy check
+            return;
+        }
+        if ([sessionID isEqualToString:self->_sessionID]) {
+            // The open chat may have been renamed in the list.
+            [self loadSessionWithID:sessionID];
+            [self refreshTranscript];
+            [self updateChatHeaderTitles];
+            return;
+        }
+        [self switchToSessionWithID:sessionID];
+    };
+    // The chat is a deeply nested child view controller in Workspace mode, so
+    // modals go through the window's top view controller (see
+    // -ish_presentationViewController); presenting from self silently fails.
+    UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:listViewController];
+    ISHConfigureLLMSettingsNavigationController(navigationController);
+    [[self ish_presentationViewController] presentViewController:navigationController animated:YES completion:nil];
+}
+
+- (void)renameCurrentChat {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Rename Chat" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = self->_sessionTitle;
+        textField.placeholder = @"Chat name";
+        textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Rename" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        NSString *title = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        // Clearing the name hands the chat back to automatic titling.
+        self->_sessionTitleIsAutomatic = title.length == 0;
+        self->_sessionTitle = title.length > 0 ? title : ISHLLMSessionTitleFromMessages(self->_messages);
+        ISHLLMUpdateSessionEntry(self->_sessionID, @{@"title": self->_sessionTitle ?: @"", @"titleIsCustom": @(!self->_sessionTitleIsAutomatic)});
+        [self updateChatHeaderTitles];
+    }]];
+    [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
+}
+
+// A per-chat system message: the persona/standing instructions for this
+// conversation only, prepended to what every backend is sent.
+- (void)editSystemPromptForCurrentChat {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"System Prompt"
+                                                                  message:@"Standing instructions sent with every message in this chat. Leave empty for none."
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = self->_sessionSystemPrompt;
+        textField.placeholder = @"You are a concise assistant…";
+        textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+        textField.autocapitalizationType = UITextAutocapitalizationTypeSentences;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        self->_sessionSystemPrompt = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+        ISHLLMUpdateSessionEntry(self->_sessionID, @{@"system": self->_sessionSystemPrompt});
+        [self updateChatHeaderTitles];
+        [self setStatus:[self idleStatusText] busy:NO];
+    }]];
+    [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)deleteCurrentChat {
+    __weak typeof(self) weakSelf = self;
+    if ([self confirmSwitchWhileBusyWithAction:@"delete this chat" continuation:^{ [weakSelf deleteCurrentChat]; }])
+        return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Delete Chat"
+                                                                  message:[NSString stringWithFormat:@"Delete “%@” and its saved messages? This can't be undone.", _sessionTitle.length > 0 ? _sessionTitle : @"New Chat"]
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Delete" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        NSString *nextSessionID = ISHLLMDeleteSession(self->_sessionID);
+        [self loadSessionWithID:nextSessionID];
+        [self setSending:NO];
+        [self refreshTranscript];
+        [self updateChatHeaderTitles];
+        [self setStatus:[self idleStatusText] busy:NO];
+    }]];
+    [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
+}
+
+- (UIMenu *)destinationActionsMenu {
+    NSArray<NSDictionary<NSString *, NSString *> *> *destinations = ISHLLMDestinations();
+    NSString *activeID = ISHLLMStringValue(ISHLLMActiveDestination(), kISHLLMDestinationID);
+    NSMutableArray<UIAction *> *items = [NSMutableArray array];
+    for (NSDictionary<NSString *, NSString *> *destination in destinations) {
+        NSString *destinationID = ISHLLMStringValue(destination, kISHLLMDestinationID);
+        UIAction *item = [UIAction actionWithTitle:ISHLLMDestinationDisplayName(destination)
+                                             image:nil
+                                        identifier:nil
+                                           handler:^(__unused UIAction *action) { [self switchToDestinationWithID:destinationID]; }];
+        item.subtitle = ISHLLMDestinationSubtitle(destination);
+        item.state = [destinationID isEqualToString:activeID] ? UIMenuElementStateOn : UIMenuElementStateOff;
+        [items addObject:item];
+    }
+
+    UIAction *chooseModel = [UIAction actionWithTitle:@"Choose Model…"
+                                                image:[UIImage systemImageNamed:@"cube"]
+                                           identifier:nil
+                                              handler:^(__unused UIAction *action) { [self queryModelsInTranscript]; }];
+    UIAction *addDestination = [UIAction actionWithTitle:@"Add Destination…"
+                                                   image:[UIImage systemImageNamed:@"plus"]
+                                              identifier:nil
+                                                 handler:^(__unused UIAction *action) { [self addDestinationFromPreset]; }];
+    UIAction *manage = [UIAction actionWithTitle:@"Manage Destinations…"
+                                           image:[UIImage systemImageNamed:@"slider.horizontal.3"]
+                                      identifier:nil
+                                         handler:^(__unused UIAction *action) { [self showDestinationList]; }];
+    UIMenu *switchSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:items];
+    UIMenu *manageSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[chooseModel, addDestination, manage]];
+    return [UIMenu menuWithTitle:@"Chat With" image:nil identifier:nil options:0 children:@[switchSection, manageSection]];
+}
+
+- (void)switchToDestinationWithID:(NSString *)destinationID {
+    if ([ISHLLMStringValue(ISHLLMActiveDestination(), kISHLLMDestinationID) isEqualToString:destinationID])
+        return;
+    __weak typeof(self) weakSelf = self;
+    if ([self confirmSwitchWhileBusyWithAction:@"switch destinations" continuation:^{ [weakSelf switchToDestinationWithID:destinationID]; }])
+        return;
+    for (NSDictionary<NSString *, NSString *> *destination in ISHLLMDestinations()) {
+        if (![ISHLLMStringValue(destination, kISHLLMDestinationID) isEqualToString:destinationID])
+            continue;
+        ISHLLMActivateDestination(destination);
+        // The chat remembers what it last talked to, so reopening it later
+        // comes back on the same destination.
+        ISHLLMUpdateSessionEntry(_sessionID, @{@"destination": destinationID});
+        [self updateChatHeaderTitles];
+        [self refreshTranscript];
+        [self setStatus:[self idleStatusText] busy:NO];
+        return;
+    }
+}
+
+// Adds a second (third, …) destination straight from the chat: pick a preset,
+// it lands as a new saved destination and becomes the active one. The preset's
+// URL and model are filled in; an API key, if the provider needs one, is
+// prompted for right here so nothing has to go through Settings.
+- (void)addDestinationFromPreset {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Add Destination"
+                                                                  message:@"Pick a provider preset. Server URL, model and key stay editable in Settings."
+                                                           preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSDictionary<NSString *, NSString *> *preset in ISHLLMProviderPresets()) {
+        [alert addAction:[UIAlertAction actionWithTitle:preset[@"name"] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            NSDictionary<NSString *, NSString *> *destination = @{
+                kISHLLMDestinationID: NSUUID.UUID.UUIDString,
+                kISHLLMDestinationName: preset[@"name"] ?: @"Destination",
+                kISHLLMDestinationProvider: preset[@"name"] ?: @"Custom",
+                kISHLLMDestinationURL: preset[@"url"] ?: @"",
+                kISHLLMDestinationModel: preset[@"model"] ?: @"",
+                kISHLLMDestinationAPIKey: @"",
+            };
+            ISHLLMSaveDestination(destination);
+            ISHLLMActivateDestination(destination);
+            ISHLLMUpdateSessionEntry(self->_sessionID, @{@"destination": destination[kISHLLMDestinationID]});
+            [self updateChatHeaderTitles];
+            [self setStatus:[self idleStatusText] busy:NO];
+            if (ISHLLMProviderRequiresAPIKey())
+                [self promptForAPIKeyForNewDestination:destination];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self anchorPopoverForAlertController:alert toSource:_destinationButton];
+    [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)promptForAPIKeyForNewDestination:(NSDictionary<NSString *, NSString *> *)destination {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"%@ API Key", ISHLLMDestinationDisplayName(destination)]
+                                                                  message:@"This provider needs a key. It is stored with the destination and can be changed in Settings."
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.secureTextEntry = YES;
+        textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        textField.placeholder = @"API key";
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Later" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        NSString *key = alert.textFields.firstObject.text ?: @"";
+        if (key.length == 0)
+            return;
+        UserPreferences.shared.llmAPIKey = key;
+        ISHLLMSyncActiveDestinationFromPreferences();
+        [self updateChatHeaderTitles];
+    }]];
+    [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)showDestinationList {
+    LLMDestinationListViewController *listViewController = [LLMDestinationListViewController new];
+    __weak typeof(self) weakSelf = self;
+    listViewController.destinationsChanged = ^{
+        typeof(self) self = weakSelf;
+        if (self == nil)
+            return;
+        [self updateChatHeaderTitles];
+        [self refreshTranscript];
+        [self setStatus:[self idleStatusText] busy:NO];
+    };
+    UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:listViewController];
+    ISHConfigureLLMSettingsNavigationController(navigationController);
+    [[self ish_presentationViewController] presentViewController:navigationController animated:YES completion:nil];
 }
 
 - (void)showLLMSettings:(id)sender {
@@ -2030,6 +2832,7 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     _guestEnvironmentNote = nil; // re-probe the guest on the next tool-enabled reply
     [self saveTranscript];
     [self refreshTranscript];
+    [self updateChatHeaderTitles]; // an automatically-titled chat goes back to "New Chat"
 }
 
 - (NSString *)latestAssistantMessage {
@@ -2131,6 +2934,12 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     [alert addAction:[UIAlertAction actionWithTitle:@"Load Prompt Template" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         [self showPromptTemplatePickerFromSender:sender];
     }]];
+    // Saving code out of the last reply used to have its own toolbar button;
+    // the toolbar now spends two of its four slots on the chat and the
+    // destination, so it lives here.
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save From Chat…" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        [self showExtractActions:sender];
+    }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [self anchorPopoverForAlertController:alert toSource:sender];
     [self presentViewController:alert animated:YES completion:nil];
@@ -2215,6 +3024,11 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     }
 
     NSMutableArray<NSDictionary<NSString *, id> *> *messages = [NSMutableArray array];
+    // This chat's own standing instructions lead every request. Stored on the
+    // session rather than in the transcript so editing it applies to the whole
+    // conversation, retroactively, the way a system prompt is expected to.
+    if (_sessionSystemPrompt.length > 0)
+        [messages addObject:@{@"role": @"system", @"content": _sessionSystemPrompt}];
     for (NSDictionary<NSString *, id> *message in _messages) {
         if ([self messageIsLocalOnly:message])
             continue;
@@ -2251,11 +3065,32 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     return messages;
 }
 
+// Writes the open chat and refreshes its index entry. Called after every
+// append, so it stays the "the transcript on disk matches the screen" point
+// it always was -- it just writes a per-session file now.
 - (void)saveTranscript {
-    NSURL *directoryURL = ISHLLMPersistDirectoryURL();
-    if (directoryURL != nil)
-        [NSFileManager.defaultManager createDirectoryAtURL:directoryURL withIntermediateDirectories:YES attributes:nil error:nil];
-    [_messages writeToURL:ISHLLMTranscriptURL() atomically:YES];
+    if (_sessionID.length == 0)
+        return;
+    ISHLLMWriteSessionMessages(_sessionID, _messages);
+
+    NSMutableDictionary<NSString *, id> *updates = [NSMutableDictionary dictionary];
+    updates[@"updated"] = @(NSDate.date.timeIntervalSince1970);
+    updates[@"count"] = @(_messages.count);
+    // An untitled chat keeps following its first user turn, so a new chat
+    // names itself as soon as it is used; a renamed one is left alone.
+    BOOL titleChanged = NO;
+    if (_sessionTitleIsAutomatic) {
+        NSString *derived = ISHLLMSessionTitleFromMessages(_messages);
+        NSString *title = derived.length > 0 ? derived : @"New Chat";
+        if (![title isEqualToString:_sessionTitle]) {
+            _sessionTitle = title;
+            updates[@"title"] = title;
+            titleChanged = YES;
+        }
+    }
+    ISHLLMUpdateSessionEntry(_sessionID, updates);
+    if (titleChanged)
+        [self updateChatHeaderTitles]; // after the write, so the menu reads the new title back
 }
 
 // A message gets its own bubble/row if it has visible content, or a
@@ -2300,8 +3135,12 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
         if (!_emptyStateLabel.hidden) {
             // Intentionally omit the server URL here -- it shows after Clear and
             // may contain a private host/IP the user doesn't want on screen.
-            _emptyStateLabel.text = [NSString stringWithFormat:@"Configure an OpenAI-compatible server in Settings, then send a prompt.\n\nModel: %@",
-                                      UserPreferences.shared.llmModel];
+            NSString *model = UserPreferences.shared.llmModel;
+            _emptyStateLabel.text = [NSString stringWithFormat:@"%@\n\nDestination: %@%@%@",
+                                      _messages.count > 0 ? @"Nothing to show yet." : @"Send a prompt to start this chat.",
+                                      ISHLLMDestinationDisplayName(ISHLLMActiveDestination()),
+                                      model.length > 0 ? [@"\nModel: " stringByAppendingString:model] : @"\nNo model set — pick one from the destination menu.",
+                                      _sessionSystemPrompt.length > 0 ? @"\nSystem prompt set for this chat." : @""];
         }
     }
     [_transcriptTable reloadData];
@@ -2457,10 +3296,21 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     [_sendButton removeTarget:self action:NULL forControlEvents:UIControlEventTouchUpInside];
     [_sendButton addTarget:self action:(sending ? @selector(stopGenerating:) : @selector(sendPrompt:)) forControlEvents:UIControlEventTouchUpInside];
     _streamingThinkingOpen = NO; // each reply starts outside a <think> block
-    if (sending)
+    if (sending) {
         [self setStatus:@"Working…" busy:YES];
-    else
-        [self setStatus:[self idleStatusText] busy:NO];
+        return;
+    }
+    [self setStatus:[self idleStatusText] busy:NO];
+    // A chat or destination switch the user asked for while a reply was still
+    // arriving (see -confirmSwitchWhileBusyWithAction:continuation:). Run it
+    // one turn later: several handlers call setSending:NO *before* appending
+    // the reply they just received, and that reply belongs to the outgoing
+    // chat.
+    if (_pendingIdleAction != nil) {
+        void (^action)(void) = _pendingIdleAction;
+        _pendingIdleAction = nil;
+        dispatch_async(dispatch_get_main_queue(), action);
+    }
 }
 
 // Cancels whichever request is currently in flight: an NSURLSession task, a
@@ -2720,6 +3570,8 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
         return;
     }
     UserPreferences.shared.llmModel = model;
+    ISHLLMSyncActiveDestinationFromPreferences();
+    [self updateChatHeaderTitles];
     if (ISHLLMCurrentBackend() == AOKLLMBackendAppleFoundationModels) {
         [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Model set to %@. Apple Foundation Models uses the system on-device model when available. %@", model, ISHLLMAppleFoundationModelsUnavailableMessage()]];
         return;
@@ -2901,6 +3753,10 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
             break;
         [kept insertObject:turn atIndex:0];
     }
+    // This backend takes one flat prompt, so the chat's system prompt leads it
+    // rather than riding as a separate message. It is never trimmed away.
+    if (_sessionSystemPrompt.length > 0)
+        [kept insertObject:[NSString stringWithFormat:@"Instructions: %@", _sessionSystemPrompt] atIndex:0];
     return [kept componentsJoinedByString:@"\n\n"];
 }
 
@@ -3026,12 +3882,17 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
         }
         NSMutableArray<NSDictionary<NSString *, id> *> *contents = [NSMutableArray array];
         for (NSDictionary<NSString *, id> *message in [self providerMessages]) {
-            NSString *role = [message[@"role"] isEqualToString:@"assistant"] ? @"model" : @"user";
+            NSString *messageRole = [message[@"role"] isKindOfClass:NSString.class] ? message[@"role"] : @"";
+            if ([messageRole isEqualToString:@"system"])
+                continue; // carried in system_instruction below, not as a turn
+            NSString *role = [messageRole isEqualToString:@"assistant"] ? @"model" : @"user";
             NSString *content = [message[@"content"] isKindOfClass:NSString.class] ? message[@"content"] : @"";
             if (content.length > 0)
                 [contents addObject:@{@"role": role, @"parts": @[@{@"text": content}]}];
         }
-        NSDictionary *body = @{@"contents": contents};
+        NSMutableDictionary *body = [@{@"contents": contents} mutableCopy];
+        if (_sessionSystemPrompt.length > 0)
+            body[@"system_instruction"] = @{@"parts": @[@{@"text": _sessionSystemPrompt}]};
         NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:geminiURL];
         request.HTTPMethod = @"POST";
         [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
@@ -3512,6 +4373,26 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
 
 @end
 
+// Section 1 of LLM Settings. The rows used to be compared as bare integers in
+// two long if/else chains; naming them keeps adding a row from silently
+// renumbering the ones after it.
+typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
+    ISHLLMSettingsRowDestinations,
+    ISHLLMSettingsRowProvider,
+    ISHLLMSettingsRowServerURL,
+    ISHLLMSettingsRowModel,
+    ISHLLMSettingsRowAPIFormat,
+    ISHLLMSettingsRowAPIKey,
+    ISHLLMSettingsRowQueryModels,
+    ISHLLMSettingsRowTestConnection,
+    ISHLLMSettingsRowShellTools,
+    ISHLLMSettingsRowCommandTimeout,
+    ISHLLMSettingsRowOutputLimit,
+    ISHLLMSettingsRowToolRounds,
+    ISHLLMSettingsRowHideThinking,
+    ISHLLMSettingsRowCount,
+};
+
 @implementation LLMSettingsViewController
 
 - (void)viewDidLoad {
@@ -3550,7 +4431,7 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     (void) tableView;
     if (section == 0)
         return 1;
-    return 12;
+    return ISHLLMSettingsRowCount;
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -3558,9 +4439,10 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     if (section == 0)
         return nil;
     NSString *thinkingNote = @"Hide Thinking collapses a reasoning model's <think> blocks behind a “Thinking” line in the transcript; tap it to expand or copy the reasoning. The full text is always kept in the saved history.";
+    NSString *destinationsNote = @"Destinations are the saved endpoints the chat can switch between from its own toolbar; the rows below configure whichever one is selected. Chats are saved in /AOK/persist/llm-chats.";
     if (ISHLLMUsesAppleFoundationModels())
-        return [NSString stringWithFormat:@"Apple Foundation Models is an iOS/iPadOS 26+ on-device backend; no server URL or API key needed. %@ Shell Tools lets it run commands in the iSH shell, confirmed per command; the command timeout, output limit, and tool call round cap are adjustable above. %@ Chat history is saved in /AOK/persist/llm-chat.json.", ISHLLMAppleFoundationModelsUnavailableMessage(), thinkingNote];
-    return [NSString stringWithFormat:@"Use a /v1 OpenAI-compatible server, or the Gemini preset. Hosted providers require API keys.\nShell Tools lets an OpenAI-compatible model run commands in the iSH shell (web search via curl, etc.), confirmed per command; not available for Gemini. The command timeout, output limit, and tool call round cap are adjustable above.\n%@\nChat history is saved in /AOK/persist/llm-chat.json.", thinkingNote];
+        return [NSString stringWithFormat:@"Apple Foundation Models is an iOS/iPadOS 26+ on-device backend; no server URL or API key needed. %@ Shell Tools lets it run commands in the iSH shell, confirmed per command; the command timeout, output limit, and tool call round cap are adjustable above. %@ %@", ISHLLMAppleFoundationModelsUnavailableMessage(), thinkingNote, destinationsNote];
+    return [NSString stringWithFormat:@"Use a /v1 OpenAI-compatible server, or the Gemini preset. Hosted providers require API keys.\nShell Tools lets an OpenAI-compatible model run commands in the iSH shell (web search via curl, etc.), confirmed per command; not available for Gemini. The command timeout, output limit, and tool call round cap are adjustable above.\n%@\n%@", thinkingNote, destinationsNote];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -3572,51 +4454,73 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
         cell.accessoryType = UITableViewCellAccessoryNone;
         return cell;
     }
-    if (indexPath.row == 0) {
-        cell.textLabel.text = @"Provider";
-        cell.detailTextLabel.text = UserPreferences.shared.llmProvider;
-    } else if (indexPath.row == 1) {
-        cell.textLabel.text = @"Server URL";
-        cell.detailTextLabel.text = ISHLLMUsesAppleFoundationModels() ? @"On-device" : UserPreferences.shared.llmServerURL;
-        if (ISHLLMUsesAppleFoundationModels())
+    BOOL onDevice = ISHLLMUsesAppleFoundationModels();
+    switch ((ISHLLMSettingsRow) indexPath.row) {
+        case ISHLLMSettingsRowDestinations: {
+            NSUInteger count = ISHLLMDestinations().count;
+            cell.textLabel.text = @"Destinations";
+            cell.detailTextLabel.text = count == 1 ? @"1 saved" : [NSString stringWithFormat:@"%lu saved", (unsigned long) count];
+            break;
+        }
+        case ISHLLMSettingsRowProvider:
+            cell.textLabel.text = @"Provider";
+            cell.detailTextLabel.text = UserPreferences.shared.llmProvider;
+            break;
+        case ISHLLMSettingsRowServerURL:
+            cell.textLabel.text = @"Server URL";
+            cell.detailTextLabel.text = onDevice ? @"On-device" : UserPreferences.shared.llmServerURL;
+            if (onDevice)
+                cell.accessoryType = UITableViewCellAccessoryNone;
+            break;
+        case ISHLLMSettingsRowModel:
+            cell.textLabel.text = @"Model";
+            cell.detailTextLabel.text = UserPreferences.shared.llmModel;
+            break;
+        case ISHLLMSettingsRowAPIFormat:
+            cell.textLabel.text = @"API Format";
+            cell.detailTextLabel.text = ISHLLMCurrentAPIFormat();
             cell.accessoryType = UITableViewCellAccessoryNone;
-    } else if (indexPath.row == 2) {
-        cell.textLabel.text = @"Model";
-        cell.detailTextLabel.text = UserPreferences.shared.llmModel;
-    } else if (indexPath.row == 3) {
-        cell.textLabel.text = @"API Format";
-        cell.detailTextLabel.text = ISHLLMCurrentAPIFormat();
-        cell.accessoryType = UITableViewCellAccessoryNone;
-    } else if (indexPath.row == 4) {
-        cell.textLabel.text = @"API Key";
-        cell.detailTextLabel.text = ISHLLMUsesAppleFoundationModels() ? @"Not used" : (UserPreferences.shared.llmAPIKey.length > 0 ? @"Set" : (ISHLLMProviderRequiresAPIKey() ? @"Required" : @"Optional"));
-        if (ISHLLMUsesAppleFoundationModels())
+            break;
+        case ISHLLMSettingsRowAPIKey:
+            cell.textLabel.text = @"API Key";
+            cell.detailTextLabel.text = onDevice ? @"Not used" : (UserPreferences.shared.llmAPIKey.length > 0 ? @"Set" : (ISHLLMProviderRequiresAPIKey() ? @"Required" : @"Optional"));
+            if (onDevice)
+                cell.accessoryType = UITableViewCellAccessoryNone;
+            break;
+        case ISHLLMSettingsRowQueryModels:
+            cell.textLabel.text = @"Query Models";
+            cell.detailTextLabel.text = @"/models";
             cell.accessoryType = UITableViewCellAccessoryNone;
-    } else if (indexPath.row == 5) {
-        cell.textLabel.text = @"Query Models";
-        cell.detailTextLabel.text = @"/models";
-        cell.accessoryType = UITableViewCellAccessoryNone;
-    } else if (indexPath.row == 6) {
-        cell.textLabel.text = @"Test Connection";
-        cell.detailTextLabel.text = @"";
-        cell.accessoryType = UITableViewCellAccessoryNone;
-    } else if (indexPath.row == 7) {
-        cell.textLabel.text = @"Shell Tools";
-        cell.detailTextLabel.text = UserPreferences.shared.llmToolsEnabled ? @"On" : @"Off";
-        cell.accessoryType = UserPreferences.shared.llmToolsEnabled ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
-    } else if (indexPath.row == 8) {
-        cell.textLabel.text = @"Command Timeout";
-        cell.detailTextLabel.text = ISHLLMToolTimeoutTitle(ISHLLMToolTimeoutSeconds());
-    } else if (indexPath.row == 9) {
-        cell.textLabel.text = @"Output Limit";
-        cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld KB", (long) ISHLLMToolOutputLimitKB()];
-    } else if (indexPath.row == 10) {
-        cell.textLabel.text = @"Tool Call Rounds";
-        cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld", (long) ISHLLMToolMaxRounds()];
-    } else {
-        cell.textLabel.text = @"Hide Thinking";
-        cell.detailTextLabel.text = UserPreferences.shared.llmHideThinking ? @"On" : @"Off";
-        cell.accessoryType = UserPreferences.shared.llmHideThinking ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+            break;
+        case ISHLLMSettingsRowTestConnection:
+            cell.textLabel.text = @"Test Connection";
+            cell.detailTextLabel.text = @"";
+            cell.accessoryType = UITableViewCellAccessoryNone;
+            break;
+        case ISHLLMSettingsRowShellTools:
+            cell.textLabel.text = @"Shell Tools";
+            cell.detailTextLabel.text = UserPreferences.shared.llmToolsEnabled ? @"On" : @"Off";
+            cell.accessoryType = UserPreferences.shared.llmToolsEnabled ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+            break;
+        case ISHLLMSettingsRowCommandTimeout:
+            cell.textLabel.text = @"Command Timeout";
+            cell.detailTextLabel.text = ISHLLMToolTimeoutTitle(ISHLLMToolTimeoutSeconds());
+            break;
+        case ISHLLMSettingsRowOutputLimit:
+            cell.textLabel.text = @"Output Limit";
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld KB", (long) ISHLLMToolOutputLimitKB()];
+            break;
+        case ISHLLMSettingsRowToolRounds:
+            cell.textLabel.text = @"Tool Call Rounds";
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"%ld", (long) ISHLLMToolMaxRounds()];
+            break;
+        case ISHLLMSettingsRowHideThinking:
+            cell.textLabel.text = @"Hide Thinking";
+            cell.detailTextLabel.text = UserPreferences.shared.llmHideThinking ? @"On" : @"Off";
+            cell.accessoryType = UserPreferences.shared.llmHideThinking ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+            break;
+        case ISHLLMSettingsRowCount:
+            break;
     }
     return cell;
 }
@@ -3627,45 +4531,56 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
         [self done:nil];
         return;
     }
-    if (indexPath.row == 0) {
-        [self.navigationController pushViewController:[LLMProviderPickerViewController new] animated:YES];
+    UITableViewCell *cell = [tableView cellForRowAtIndexPath:indexPath];
+    // The rows below edit the SELECTED destination; the Destinations row is
+    // where a second one is added or a different one selected.
+    ISHLLMSettingsRow row = (ISHLLMSettingsRow) indexPath.row;
+    if (ISHLLMUsesAppleFoundationModels() && (row == ISHLLMSettingsRowServerURL || row == ISHLLMSettingsRowAPIKey))
         return;
+    switch (row) {
+        case ISHLLMSettingsRowDestinations: {
+            LLMDestinationListViewController *destinations = [LLMDestinationListViewController new];
+            __weak typeof(self) weakSelf = self;
+            destinations.destinationsChanged = ^{ [weakSelf.tableView reloadData]; };
+            [self.navigationController pushViewController:destinations animated:YES];
+            return;
+        }
+        case ISHLLMSettingsRowProvider:
+            [self.navigationController pushViewController:[LLMProviderPickerViewController new] animated:YES];
+            return;
+        case ISHLLMSettingsRowAPIFormat:
+        case ISHLLMSettingsRowCount:
+            return;
+        case ISHLLMSettingsRowQueryModels:
+            [self queryAvailableModelsFromView:cell];
+            return;
+        case ISHLLMSettingsRowTestConnection:
+            [self testConnection];
+            return;
+        case ISHLLMSettingsRowShellTools:
+            [self toggleShellToolsFromView:cell];
+            return;
+        case ISHLLMSettingsRowCommandTimeout:
+            [self pickToolTimeoutFromView:cell];
+            return;
+        case ISHLLMSettingsRowOutputLimit:
+            [self pickToolOutputLimitFromView:cell];
+            return;
+        case ISHLLMSettingsRowToolRounds:
+            [self pickToolMaxRoundsFromView:cell];
+            return;
+        case ISHLLMSettingsRowHideThinking:
+            UserPreferences.shared.llmHideThinking = !UserPreferences.shared.llmHideThinking;
+            [tableView reloadData];
+            return;
+        case ISHLLMSettingsRowServerURL:
+        case ISHLLMSettingsRowModel:
+        case ISHLLMSettingsRowAPIKey:
+            break; // the free-text rows, edited below
     }
-    if (indexPath.row == 3)
-        return;
-    if (ISHLLMUsesAppleFoundationModels() && (indexPath.row == 1 || indexPath.row == 4))
-        return;
-    if (indexPath.row == 5) {
-        [self queryAvailableModelsFromView:[tableView cellForRowAtIndexPath:indexPath]];
-        return;
-    }
-    if (indexPath.row == 6) {
-        [self testConnection];
-        return;
-    }
-    if (indexPath.row == 7) {
-        [self toggleShellToolsFromView:[tableView cellForRowAtIndexPath:indexPath]];
-        return;
-    }
-    if (indexPath.row == 8) {
-        [self pickToolTimeoutFromView:[tableView cellForRowAtIndexPath:indexPath]];
-        return;
-    }
-    if (indexPath.row == 9) {
-        [self pickToolOutputLimitFromView:[tableView cellForRowAtIndexPath:indexPath]];
-        return;
-    }
-    if (indexPath.row == 10) {
-        [self pickToolMaxRoundsFromView:[tableView cellForRowAtIndexPath:indexPath]];
-        return;
-    }
-    if (indexPath.row == 11) {
-        UserPreferences.shared.llmHideThinking = !UserPreferences.shared.llmHideThinking;
-        [tableView reloadData];
-        return;
-    }
-    NSString *title = indexPath.row == 1 ? @"Server URL" : (indexPath.row == 2 ? @"Model" : @"API Key");
-    NSString *current = indexPath.row == 1 ? UserPreferences.shared.llmServerURL : (indexPath.row == 2 ? UserPreferences.shared.llmModel : UserPreferences.shared.llmAPIKey);
+
+    NSString *title = row == ISHLLMSettingsRowServerURL ? @"Server URL" : (row == ISHLLMSettingsRowModel ? @"Model" : @"API Key");
+    NSString *current = row == ISHLLMSettingsRowServerURL ? UserPreferences.shared.llmServerURL : (row == ISHLLMSettingsRowModel ? UserPreferences.shared.llmModel : UserPreferences.shared.llmAPIKey);
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:nil preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
         textField.text = current;
@@ -3673,18 +4588,20 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
         textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
         textField.autocorrectionType = UITextAutocorrectionTypeNo;
         textField.spellCheckingType = UITextSpellCheckingTypeNo;
-        if (indexPath.row == 4)
+        if (row == ISHLLMSettingsRowAPIKey)
             textField.secureTextEntry = YES;
     }];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         NSString *value = alert.textFields.firstObject.text ?: @"";
-        if (indexPath.row == 1)
+        if (row == ISHLLMSettingsRowServerURL)
             UserPreferences.shared.llmServerURL = value;
-        else if (indexPath.row == 2)
+        else if (row == ISHLLMSettingsRowModel)
             UserPreferences.shared.llmModel = value;
         else
             UserPreferences.shared.llmAPIKey = value;
+        // Keeps the saved destination describing the live configuration.
+        ISHLLMSyncActiveDestinationFromPreferences();
         [self.tableView reloadData];
     }]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -3793,6 +4710,7 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
         NSString *title = [model isEqualToString:UserPreferences.shared.llmModel] ? [model stringByAppendingString:@"  Current"] : model;
         [alert addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
             UserPreferences.shared.llmModel = model;
+            ISHLLMSyncActiveDestinationFromPreferences();
             [self.tableView reloadData];
         }]];
     }
@@ -3949,7 +4867,475 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     UserPreferences.shared.llmServerURL = preset[@"url"] ?: @"";
     if (preset[@"model"].length > 0)
         UserPreferences.shared.llmModel = preset[@"model"];
+    // Keep the saved destination describing the live configuration: a preset
+    // pick edits the ACTIVE destination in place rather than adding one.
+    ISHLLMSyncActiveDestinationFromPreferences();
     [self.navigationController popViewControllerAnimated:YES];
+}
+
+@end
+
+#pragma mark - Chat list
+
+static NSString *ISHLLMDestinationNameForID(NSString *destinationID) {
+    for (NSDictionary<NSString *, NSString *> *destination in ISHLLMDestinations()) {
+        if ([ISHLLMStringValue(destination, kISHLLMDestinationID) isEqualToString:destinationID])
+            return ISHLLMDestinationDisplayName(destination);
+    }
+    return @"";
+}
+
+static NSString *ISHLLMRelativeDateDescription(double timestamp) {
+    if (timestamp <= 0.0)
+        return @"";
+    NSRelativeDateTimeFormatter *formatter = [NSRelativeDateTimeFormatter new];
+    formatter.unitsStyle = NSRelativeDateTimeFormatterUnitsStyleShort;
+    return [formatter localizedStringForDate:[NSDate dateWithTimeIntervalSince1970:timestamp] relativeToDate:NSDate.date];
+}
+
+@implementation LLMChatSessionListViewController {
+    NSArray<NSDictionary<NSString *, id> *> *_sessions;
+}
+
+- (instancetype)init {
+    return [super initWithStyle:UITableViewStyleInsetGrouped];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Chats";
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                                                          target:self
+                                                                                          action:@selector(done:)];
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCompose
+                                                                                          target:self
+                                                                                          action:@selector(newChat:)];
+    [self reload];
+}
+
+- (void)reload {
+    _sessions = ISHLLMSessionEntriesByRecency();
+    [self.tableView reloadData];
+}
+
+- (void)done:(id)sender {
+    (void) sender;
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+// An empty session id means "start a new chat" -- the chat view controller
+// creates it, so the same busy check and transcript flush apply as when the
+// New Chat menu item is used.
+- (void)newChat:(id)sender {
+    (void) sender;
+    void (^selected)(NSString *) = self.sessionSelected;
+    [self dismissViewControllerAnimated:YES completion:^{
+        if (selected != nil)
+            selected(@"");
+    }];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void) tableView;
+    (void) section;
+    return _sessions.count;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    (void) tableView;
+    (void) section;
+    return @"Each chat keeps its own history, destination and system prompt. Swipe a chat to rename or delete it. Chats are saved in /AOK/persist/llm-chats.";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    NSDictionary<NSString *, id> *entry = _sessions[indexPath.row];
+    NSString *title = ISHLLMStringValue(entry, @"title");
+    cell.textLabel.text = title.length > 0 ? title : @"New Chat";
+
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    NSInteger count = [entry[@"count"] isKindOfClass:NSNumber.class] ? [entry[@"count"] integerValue] : 0;
+    [parts addObject:count == 1 ? @"1 message" : [NSString stringWithFormat:@"%ld messages", (long) count]];
+    NSString *when = ISHLLMRelativeDateDescription([entry[@"updated"] isKindOfClass:NSNumber.class] ? [entry[@"updated"] doubleValue] : 0.0);
+    if (when.length > 0)
+        [parts addObject:when];
+    NSString *destination = ISHLLMDestinationNameForID(ISHLLMStringValue(entry, @"destination"));
+    if (destination.length > 0)
+        [parts addObject:destination];
+    if (ISHLLMStringValue(entry, @"system").length > 0)
+        [parts addObject:@"system prompt"];
+    cell.detailTextLabel.text = [parts componentsJoinedByString:@" · "];
+    cell.detailTextLabel.numberOfLines = 1;
+    if (@available(iOS 13.0, *))
+        cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+    cell.accessoryType = [ISHLLMStringValue(entry, @"id") isEqualToString:self.currentSessionID]
+        ? UITableViewCellAccessoryCheckmark
+        : UITableViewCellAccessoryNone;
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    NSString *sessionID = ISHLLMStringValue(_sessions[indexPath.row], @"id");
+    void (^selected)(NSString *) = self.sessionSelected;
+    [self dismissViewControllerAnimated:YES completion:^{
+        if (selected != nil)
+            selected(sessionID);
+    }];
+}
+
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
+    (void) tableView;
+    NSDictionary<NSString *, id> *entry = _sessions[indexPath.row];
+    NSString *sessionID = ISHLLMStringValue(entry, @"id");
+    UIContextualAction *deleteAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
+                                                                              title:@"Delete"
+                                                                            handler:^(__unused UIContextualAction *action, __unused UIView *sourceView, void (^completion)(BOOL)) {
+        NSString *nextSessionID = ISHLLMDeleteSession(sessionID);
+        completion(YES);
+        [self reload];
+        // Deleting the chat that is open leaves the chat view showing content
+        // with no file behind it, so hand it the survivor immediately.
+        if ([sessionID isEqualToString:self.currentSessionID]) {
+            self.currentSessionID = nextSessionID;
+            if (self.sessionSelected != nil)
+                self.sessionSelected(nextSessionID);
+        }
+    }];
+    UIContextualAction *renameAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
+                                                                              title:@"Rename"
+                                                                            handler:^(__unused UIContextualAction *action, __unused UIView *sourceView, void (^completion)(BOOL)) {
+        completion(YES);
+        [self renameSessionWithID:sessionID currentTitle:ISHLLMStringValue(entry, @"title")];
+    }];
+    return [UISwipeActionsConfiguration configurationWithActions:@[deleteAction, renameAction]];
+}
+
+- (void)renameSessionWithID:(NSString *)sessionID currentTitle:(NSString *)currentTitle {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Rename Chat" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = currentTitle;
+        textField.placeholder = @"Chat name";
+        textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Rename" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        NSString *title = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
+        BOOL isCustom = title.length > 0;
+        if (!isCustom)
+            title = ISHLLMSessionTitleFromMessages(ISHLLMLoadSessionMessages(sessionID));
+        ISHLLMUpdateSessionEntry(sessionID, @{@"title": title.length > 0 ? title : @"New Chat", @"titleIsCustom": @(isCustom)});
+        [self reload];
+        // Renaming the open chat has to reach the toolbar label too.
+        if ([sessionID isEqualToString:self.currentSessionID] && self.sessionSelected != nil)
+            self.sessionSelected(sessionID);
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+@end
+
+#pragma mark - Destination list and editor
+
+// Edits ONE saved destination, active or not. Writes go through
+// ISHLLMSaveDestination, which re-activates the entry if it is the selected
+// one, so editing the destination you are chatting with takes effect at once.
+@interface LLMDestinationEditorViewController : UITableViewController
+@property (nonatomic, copy) NSDictionary<NSString *, NSString *> *destination;
+@property (nonatomic, copy) void (^destinationSaved)(void);
+@end
+
+typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
+    ISHLLMDestinationEditorRowName,
+    ISHLLMDestinationEditorRowPreset,
+    ISHLLMDestinationEditorRowServerURL,
+    ISHLLMDestinationEditorRowModel,
+    ISHLLMDestinationEditorRowAPIKey,
+    ISHLLMDestinationEditorRowCount,
+};
+
+@implementation LLMDestinationEditorViewController
+
+- (instancetype)init {
+    return [super initWithStyle:UITableViewStyleInsetGrouped];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Destination";
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void) tableView;
+    (void) section;
+    return ISHLLMDestinationEditorRowCount;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    (void) tableView;
+    (void) section;
+    return @"A preset fills in the provider, server URL and model; each stays editable. The API key is stored with this destination, in app preferences, the same place the single-endpoint key was always kept.";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    switch ((ISHLLMDestinationEditorRow) indexPath.row) {
+        case ISHLLMDestinationEditorRowName:
+            cell.textLabel.text = @"Name";
+            cell.detailTextLabel.text = ISHLLMDestinationDisplayName(self.destination);
+            break;
+        case ISHLLMDestinationEditorRowPreset:
+            cell.textLabel.text = @"Provider";
+            cell.detailTextLabel.text = ISHLLMStringValue(self.destination, kISHLLMDestinationProvider);
+            break;
+        case ISHLLMDestinationEditorRowServerURL:
+            cell.textLabel.text = @"Server URL";
+            cell.detailTextLabel.text = ISHLLMStringValue(self.destination, kISHLLMDestinationURL);
+            break;
+        case ISHLLMDestinationEditorRowModel:
+            cell.textLabel.text = @"Model";
+            cell.detailTextLabel.text = ISHLLMStringValue(self.destination, kISHLLMDestinationModel);
+            break;
+        case ISHLLMDestinationEditorRowAPIKey:
+            cell.textLabel.text = @"API Key";
+            cell.detailTextLabel.text = ISHLLMStringValue(self.destination, kISHLLMDestinationAPIKey).length > 0 ? @"Set" : @"Not set";
+            break;
+        case ISHLLMDestinationEditorRowCount:
+            break;
+    }
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row == ISHLLMDestinationEditorRowPreset) {
+        [self pickPresetFromView:[tableView cellForRowAtIndexPath:indexPath]];
+        return;
+    }
+    NSString *field = nil;
+    NSString *title = nil;
+    switch ((ISHLLMDestinationEditorRow) indexPath.row) {
+        case ISHLLMDestinationEditorRowName: field = kISHLLMDestinationName; title = @"Name"; break;
+        case ISHLLMDestinationEditorRowServerURL: field = kISHLLMDestinationURL; title = @"Server URL"; break;
+        case ISHLLMDestinationEditorRowModel: field = kISHLLMDestinationModel; title = @"Model"; break;
+        case ISHLLMDestinationEditorRowAPIKey: field = kISHLLMDestinationAPIKey; title = @"API Key"; break;
+        default: return;
+    }
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:nil preferredStyle:UIAlertControllerStyleAlert];
+    NSString *current = ISHLLMStringValue(self.destination, field);
+    BOOL secure = [field isEqualToString:kISHLLMDestinationAPIKey];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+        textField.text = current;
+        textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+        textField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        textField.autocorrectionType = UITextAutocorrectionTypeNo;
+        textField.spellCheckingType = UITextSpellCheckingTypeNo;
+        textField.secureTextEntry = secure;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        NSMutableDictionary<NSString *, NSString *> *updated = [self.destination mutableCopy];
+        updated[field] = alert.textFields.firstObject.text ?: @"";
+        [self commitDestination:updated];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)pickPresetFromView:(UIView *)sourceView {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Provider" message:@"Fills in the server URL and a default model." preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSDictionary<NSString *, NSString *> *preset in ISHLLMProviderPresets()) {
+        [alert addAction:[UIAlertAction actionWithTitle:preset[@"name"] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            NSMutableDictionary<NSString *, NSString *> *updated = [self.destination mutableCopy];
+            NSString *previousProvider = ISHLLMStringValue(updated, kISHLLMDestinationProvider);
+            updated[kISHLLMDestinationProvider] = preset[@"name"] ?: @"Custom";
+            updated[kISHLLMDestinationURL] = preset[@"url"] ?: @"";
+            if (preset[@"model"].length > 0)
+                updated[kISHLLMDestinationModel] = preset[@"model"];
+            // A destination still carrying its provider as its name follows the
+            // new provider; a name the user chose is kept.
+            NSString *name = ISHLLMStringValue(updated, kISHLLMDestinationName);
+            if (name.length == 0 || [name isEqualToString:previousProvider])
+                updated[kISHLLMDestinationName] = updated[kISHLLMDestinationProvider];
+            [self commitDestination:updated];
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self anchorPopoverForAlertController:alert toSource:sourceView];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)commitDestination:(NSDictionary<NSString *, NSString *> *)destination {
+    self.destination = destination;
+    ISHLLMSaveDestination(destination);
+    [self.tableView reloadData];
+    if (self.destinationSaved != nil)
+        self.destinationSaved();
+}
+
+@end
+
+@implementation LLMDestinationListViewController {
+    NSArray<NSDictionary<NSString *, NSString *> *> *_destinations;
+}
+
+- (instancetype)init {
+    return [super initWithStyle:UITableViewStyleInsetGrouped];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"Destinations";
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
+                                                                                           target:self
+                                                                                           action:@selector(addDestination:)];
+    [self reload];
+}
+
+// Presented modally from the chat and pushed from LLM Settings; only the
+// modal presentation needs its own dismiss control.
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    if (self.navigationController.viewControllers.firstObject == self && self.navigationItem.leftBarButtonItem == nil) {
+        self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                                                              target:self
+                                                                                              action:@selector(done:)];
+    }
+    [self reload];
+}
+
+- (void)reload {
+    _destinations = ISHLLMDestinations();
+    [self.tableView reloadData];
+}
+
+- (void)done:(id)sender {
+    (void) sender;
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)notifyChanged {
+    if (self.destinationsChanged != nil)
+        self.destinationsChanged();
+}
+
+- (void)addDestination:(id)sender {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Add Destination" message:@"Start from a provider preset." preferredStyle:UIAlertControllerStyleActionSheet];
+    for (NSDictionary<NSString *, NSString *> *preset in ISHLLMProviderPresets()) {
+        [alert addAction:[UIAlertAction actionWithTitle:preset[@"name"] style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            NSDictionary<NSString *, NSString *> *destination = @{
+                kISHLLMDestinationID: NSUUID.UUID.UUIDString,
+                kISHLLMDestinationName: preset[@"name"] ?: @"Destination",
+                kISHLLMDestinationProvider: preset[@"name"] ?: @"Custom",
+                kISHLLMDestinationURL: preset[@"url"] ?: @"",
+                kISHLLMDestinationModel: preset[@"model"] ?: @"",
+                kISHLLMDestinationAPIKey: @"",
+            };
+            ISHLLMSaveDestination(destination);
+            [self reload];
+            [self notifyChanged];
+            [self editDestination:destination]; // straight into the editor for the key
+        }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self anchorPopoverForAlertController:alert toSource:sender];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)editDestination:(NSDictionary<NSString *, NSString *> *)destination {
+    LLMDestinationEditorViewController *editor = [LLMDestinationEditorViewController new];
+    editor.destination = destination;
+    __weak typeof(self) weakSelf = self;
+    editor.destinationSaved = ^{
+        typeof(self) self = weakSelf;
+        if (self == nil)
+            return;
+        [self reload];
+        [self notifyChanged];
+    };
+    [self.navigationController pushViewController:editor animated:YES];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void) tableView;
+    (void) section;
+    return _destinations.count;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    (void) tableView;
+    (void) section;
+    return @"Tap a destination to chat with it; tap the arrow to edit it. The selected destination is what the chat, Test Connection and Query Models all use. Swipe to duplicate or delete.";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+    NSDictionary<NSString *, NSString *> *destination = _destinations[indexPath.row];
+    cell.textLabel.text = ISHLLMDestinationDisplayName(destination);
+    cell.detailTextLabel.text = ISHLLMDestinationSubtitle(destination);
+    if (@available(iOS 13.0, *))
+        cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+    BOOL isActive = [ISHLLMStringValue(destination, kISHLLMDestinationID) isEqualToString:ISHLLMStringValue(ISHLLMActiveDestination(), kISHLLMDestinationID)];
+    cell.accessoryType = UITableViewCellAccessoryDetailDisclosureButton;
+    if (isActive) {
+        cell.imageView.image = [UIImage systemImageNamed:@"checkmark.circle.fill"];
+    } else {
+        // Keeps the titles aligned whether or not the row is the selected one.
+        cell.imageView.image = [UIImage systemImageNamed:@"circle"];
+        if (@available(iOS 13.0, *))
+            cell.imageView.tintColor = UIColor.tertiaryLabelColor;
+    }
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    ISHLLMActivateDestination(_destinations[indexPath.row]);
+    [self reload];
+    [self notifyChanged];
+}
+
+- (void)tableView:(UITableView *)tableView accessoryButtonTappedForRowWithIndexPath:(NSIndexPath *)indexPath {
+    (void) tableView;
+    [self editDestination:_destinations[indexPath.row]];
+}
+
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
+    (void) tableView;
+    NSDictionary<NSString *, NSString *> *destination = _destinations[indexPath.row];
+    NSString *destinationID = ISHLLMStringValue(destination, kISHLLMDestinationID);
+    UIContextualAction *deleteAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive
+                                                                              title:@"Delete"
+                                                                            handler:^(__unused UIContextualAction *action, __unused UIView *sourceView, void (^completion)(BOOL)) {
+        BOOL deleted = ISHLLMDeleteDestinationWithID(destinationID);
+        completion(deleted);
+        if (!deleted) {
+            [self presentMessage:@"The last destination can't be deleted. Edit it, or add another one first."];
+            return;
+        }
+        [self reload];
+        [self notifyChanged];
+    }];
+    // Duplicating is the cheap way to have the same server twice with two
+    // models, which is the common multi-destination setup for a local server.
+    UIContextualAction *duplicateAction = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal
+                                                                                 title:@"Duplicate"
+                                                                               handler:^(__unused UIContextualAction *action, __unused UIView *sourceView, void (^completion)(BOOL)) {
+        NSMutableDictionary<NSString *, NSString *> *copy = [destination mutableCopy];
+        copy[kISHLLMDestinationID] = NSUUID.UUID.UUIDString;
+        copy[kISHLLMDestinationName] = [ISHLLMDestinationDisplayName(destination) stringByAppendingString:@" copy"];
+        ISHLLMSaveDestination(copy);
+        completion(YES);
+        [self reload];
+        [self notifyChanged];
+    }];
+    return [UISwipeActionsConfiguration configurationWithActions:@[deleteAction, duplicateAction]];
+}
+
+- (void)presentMessage:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:nil message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end

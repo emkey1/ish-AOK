@@ -41,6 +41,8 @@ static NSString *const kPreferenceLLMProviderKey = @"LLM Provider";
 static NSString *const kPreferenceLLMServerURLKey = @"LLM Server URL";
 static NSString *const kPreferenceLLMModelKey = @"LLM Model";
 static NSString *const kPreferenceLLMAPIKeyKey = @"LLM API Key";
+static NSString *const kPreferenceLLMDestinationsKey = @"LLM Destinations";
+static NSString *const kPreferenceLLMActiveDestinationKey = @"LLM Active Destination";
 static NSString *const kPreferenceLLMToolsEnabledKey = @"LLM Tools Enabled";
 static NSString *const kPreferenceLLMToolTimeoutSecondsKey = @"LLM Tool Timeout Seconds";
 static NSString *const kPreferenceLLMToolOutputLimitKBKey = @"LLM Tool Output Limit KB";
@@ -204,6 +206,8 @@ bool (*remove_user_default)(const char *name);
             kPreferenceLLMServerURLKey: @"https://openrouter.ai/api/v1",
             kPreferenceLLMModelKey: @"openrouter/free",
             kPreferenceLLMAPIKeyKey: @"",
+            kPreferenceLLMDestinationsKey: @[],
+            kPreferenceLLMActiveDestinationKey: @"",
             kPreferenceLLMToolsEnabledKey: @(NO),
             kPreferenceLLMToolTimeoutSecondsKey: @(30),
             kPreferenceLLMToolOutputLimitKBKey: @(64),
@@ -317,6 +321,8 @@ bool (*remove_user_default)(const char *name);
             kPreferenceLLMServerURLKey: property(llmServerURL),
             kPreferenceLLMModelKey: property(llmModel),
             kPreferenceLLMAPIKeyKey: property(llmAPIKey),
+            kPreferenceLLMDestinationsKey: property(llmDestinations),
+            kPreferenceLLMActiveDestinationKey: property(llmActiveDestinationID),
             kPreferenceLLMToolsEnabledKey: property(llmToolsEnabled),
             kPreferenceLLMToolTimeoutSecondsKey: property(llmToolTimeoutSeconds),
             kPreferenceLLMToolOutputLimitKBKey: property(llmToolOutputLimitKB),
@@ -630,6 +636,29 @@ bool (*remove_user_default)(const char *name);
 
 - (void)setLlmAPIKey:(NSString *)llmAPIKey {
     [_defaults setObject:llmAPIKey ?: @"" forKey:kPreferenceLLMAPIKeyKey];
+}
+
+// MARK: llmDestinations
+// Deliberately not exposed through friendlyPreferenceMapping: an array of
+// dictionaries has no sensible string form for the guest-side `defaults`
+// tool, and a destination id set there without the matching four scalars
+// would make the next settings edit write into the wrong saved entry.
+- (NSArray<NSDictionary<NSString *, NSString *> *> *)llmDestinations {
+    NSArray *stored = [_defaults arrayForKey:kPreferenceLLMDestinationsKey];
+    return [stored isKindOfClass:NSArray.class] ? stored : @[];
+}
+
+- (void)setLlmDestinations:(NSArray<NSDictionary<NSString *, NSString *> *> *)llmDestinations {
+    [_defaults setObject:llmDestinations ?: @[] forKey:kPreferenceLLMDestinationsKey];
+}
+
+// MARK: llmActiveDestinationID
+- (NSString *)llmActiveDestinationID {
+    return [_defaults stringForKey:kPreferenceLLMActiveDestinationKey] ?: @"";
+}
+
+- (void)setLlmActiveDestinationID:(NSString *)llmActiveDestinationID {
+    [_defaults setObject:llmActiveDestinationID ?: @"" forKey:kPreferenceLLMActiveDestinationKey];
 }
 
 - (BOOL)validateLlmAPIKey:(id *)value error:(NSError **)error {
