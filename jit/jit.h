@@ -161,6 +161,20 @@ void jit_invalidate_all(struct jit *jit);
 #define JIT_FUSE_RV_JAL  (1u << 1)  // jal_link: call = link write + branch in one
 #define JIT_FUSE_RV_ALL (JIT_FUSE_RV_FOLD | JIT_FUSE_RV_JAL)
 
+// The amd64 guest's bits are not fusions in the i386 sense (two gadgets folded
+// into one) but NATIVE-vs-BRIDGE switches, which is the same A/B in the shape
+// that matters here: clearing a bit sends the family back to the C helper it
+// used to reach through gadget_helper_tlb_N_retint, so both implementations
+// live in one binary and the arms differ by a file write.
+//
+// A bridged amd64 instruction costs three things -- a gadget_amd64_set_rip
+// dispatch (the helper re-decodes at CPU_amd64_rip, so every bridge emitter
+// must flush the deferred rip), the bridge dispatch itself, and a C helper
+// that re-derives operands the translator already knew. A native gadget
+// removes all three, which is why these are worth measuring separately.
+#define JIT_FUSE_AMD64_INCDEC_REG (1u << 0)  // FF /0,/1 mod==3: inc/dec of a register
+#define JIT_FUSE_AMD64_ALL (JIT_FUSE_AMD64_INCDEC_REG)
+
 // Live masks. Seeded on first use from the ISH_NO_*_FUSE / ISH_*_NO_FUSE
 // environment variables, whose existing semantics are unchanged (set to ANY value
 // = that family off; ISH_NO_MOVMR_FUSE still covers LEA, which shared its gate
@@ -168,10 +182,13 @@ void jit_invalidate_all(struct jit *jit);
 unsigned i386_jit_fuse_mask(void);
 unsigned arm64_jit_fuse_mask(void);
 unsigned riscv64_jit_fuse_mask(void);
+unsigned amd64_jit_fuse_mask(void);
 
 // Generic access for the /proc/ish/<arch>_jit_fuse nodes. One implementation
-// serves all three; the arch picks the mask and the name table.
-enum jit_fuse_arch { JIT_FUSE_ARCH_I386, JIT_FUSE_ARCH_ARM64, JIT_FUSE_ARCH_RISCV64 };
+// serves all four; the arch picks the mask and the name table.
+enum jit_fuse_arch {
+    JIT_FUSE_ARCH_I386, JIT_FUSE_ARCH_ARM64, JIT_FUSE_ARCH_RISCV64, JIT_FUSE_ARCH_AMD64,
+};
 unsigned jit_fuse_mask_get(enum jit_fuse_arch arch);
 void jit_fuse_mask_set(enum jit_fuse_arch arch, unsigned mask);
 // Walks the arch's table for the show handler; returns NULL past the end.

@@ -3799,6 +3799,75 @@ amd64_gen_opstore_logic opstore_logic64, 8, 64
 amd64_gen_incdec_mem incdec_mem32, 4, 31
 amd64_gen_incdec_mem incdec_mem64, 8, 63
 
+# amd64 INC (FF /0) / DEC (FF /1) on a REGISTER operand (mod==3) -- the form the
+# memory gadgets above could not take, and the one that actually runs hot: in long
+# mode the one-byte 0x40+r encodings are the REX prefixes, so EVERY `incq %rax` is
+# FF /0 mod==3 (musl's __init_libc basename loop is the documented example).
+# Previously this bridged to amd64_jit_ff_group, which cost three things per
+# execution: a gadget_amd64_set_rip dispatch (the helper re-decodes at
+# CPU_amd64_rip, so the bridge emitter must flush the deferred rip), the bridge
+# dispatch, and a C helper that re-walked prefixes and re-decoded the modrm the
+# translator had already decoded. This gadget removes all three.
+#
+# Register-only: it cannot fault, which is why the emitter may DEFER the rip
+# instead of publishing it (the whole set_rip saving) -- there is no re-execution
+# path that needs an accurate rip mid-instruction.
+#
+# The reg id is a runtime operand word rather than a table index, using the same
+# hybrid accessors as amd64_hybrid_mov_reg_reg: ids 0-7 hit the x20-x27 register
+# cache, 8-15 fall through to CPU_amd64_regs. One gadget per size covers all 16
+# registers, so no 2-D table (16 regs x REX would be 256+ entries).
+#
+# Flags are the incdec_mem block verbatim, including the part that is the classic
+# emulator bug: INC/DEC set OF/SF/ZF/AF/PF but leave CF ALONE. CF is eager here
+# (the authoritative CPU_cf byte plus eflags bit 0, per the clc/stc gadgets), so
+# it is snapshotted before the add/sub flag macro and both halves are restored
+# after -- missing either half leaves a `stc; incq; jc` reading the wrong carry.
+#   operand 0: packed -- rm id bits 0-3, is_dec bit 8
+.macro amd64_gen_incdec_reg name, sbit, size
+.gadget amd64_\name
+    ldr  x8, [_ip]                   /* packed operand */
+    and  x9, x8, 0xf                 /* x9 = reg id (0-15), must survive to the write */
+    ubfx x10, x8, 8, 1               /* x10 = is_dec (x10 is reused as rhs below) */
+    amd64_read_low_or_mem x9, x13    /* x13 = lhs (flag macro reads it) */
+    ldrb w11, [_cpu, CPU_cf]         /* snapshot CF before the flag macro rewrites it */
+.if \size == 32
+    mov  w13, w13                    /* truncate lhs to 32 */
+    cbnz w10, 1f
+    adds w15, w13, 1                 /* INC: lhs + 1 */
+    cset w14, cs
+    cset w16, vs
+    b    2f
+1:  subs w15, w13, 1                 /* DEC: lhs - 1 */
+    cset w14, cc
+    cset w16, vs
+2:  mov  w15, w15                    /* zero-extend the 32-bit result */
+.else
+    cbnz x10, 1f
+    adds x15, x13, 1                 /* INC: lhs + 1 */
+    cset w14, cs
+    cset w16, vs
+    b    2f
+1:  subs x15, x13, 1                 /* DEC: lhs - 1 */
+    cset w14, cc
+    cset w16, vs
+2:
+.endif
+    mov  x10, 1                      /* rhs = 1 (AF: lhs ^ 1 ^ result, bit 4) */
+    amd64_cached_set_addsub_flags \sbit
+    strb w11, [_cpu, CPU_cf]         /* restore CF byte: inc/dec preserve it */
+    ldr  w17, [_cpu, CPU_eflags]
+    bic  w17, w17, 1
+    orr  w17, w17, w11               /* and restore eflags bit 0 (the pushfq image) */
+    str  w17, [_cpu, CPU_eflags]
+    mov  x11, \size                  /* the hybrid write takes its size in a register */
+    amd64_write_low_or_mem x9, x15, x11
+    gret 1
+.endm
+
+amd64_gen_incdec_reg incdec_reg32, 31, 32
+amd64_gen_incdec_reg incdec_reg64, 63, 64
+
 # amd64 carry-flag ops: CLC (0xf8), STC (0xf9), CMC (0xf5). One byte, no operand, no
 # memory, no register -- they ONLY touch CF (interp 0xf8/f9/f5: cpu->cf + cpu->cf_bit).
 # CF is eager: the byte CPU_cf (authoritative, read by the CF macro / adc/sbb gadgets)

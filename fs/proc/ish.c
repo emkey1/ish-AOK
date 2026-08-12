@@ -99,8 +99,8 @@ static int proc_ish_show_i386_no_cache_comm(struct proc_entry *UNUSED(entry), st
     return 0;
 }
 
-// /proc/ish/{i386,arm64,riscv64}_jit_fuse -- read/write that guest's live
-// gadget-fusion mask. One implementation, three nodes; the arch selects both the
+// /proc/ish/{i386,arm64,riscv64,amd64}_jit_fuse -- read/write that guest's live
+// gadget-fusion mask. One implementation, four nodes; the arch selects both the
 // mask and the set of valid names, so a name from the wrong arch is rejected
 // rather than silently ignored, and `all` means that arch's families only.
 //
@@ -110,7 +110,8 @@ static int proc_ish_show_i386_no_cache_comm(struct proc_entry *UNUSED(entry), st
 //   echo all=1 > /proc/ish/riscv64_jit_fuse
 //
 // Families: i386 addr/movmr/lea/alu/pushpop; arm64 bcond/ldst/ldcmp;
-// riscv64 fold/jal.
+// riscv64 fold/jal; amd64 incdec_reg (native gadget vs. the C-helper bridge,
+// see jit/jit.h -- same A/B, different mechanism).
 //
 // Exists for measurement: it makes a fusion A/B a file write instead of an app
 // relaunch, so arms can be interleaved rep by rep (the only way to keep thermal
@@ -219,6 +220,12 @@ static int proc_ish_show_riscv64_jit_fuse(struct proc_entry *UNUSED(e), struct p
 }
 static int proc_ish_update_riscv64_jit_fuse(struct proc_entry *UNUSED(e), struct proc_data *d) {
     return proc_ish_update_jit_fuse(JIT_FUSE_ARCH_RISCV64, d);
+}
+static int proc_ish_show_amd64_jit_fuse(struct proc_entry *UNUSED(e), struct proc_data *buf) {
+    return proc_ish_show_jit_fuse(JIT_FUSE_ARCH_AMD64, buf);
+}
+static int proc_ish_update_amd64_jit_fuse(struct proc_entry *UNUSED(e), struct proc_data *d) {
+    return proc_ish_update_jit_fuse(JIT_FUSE_ARCH_AMD64, d);
 }
 
 static int proc_ish_update_amd64_jit(struct proc_entry *UNUSED(entry), struct proc_data *data) {
@@ -556,6 +563,7 @@ static int proc_ish_show_host_info(struct proc_entry *UNUSED(entry), struct proc
 struct proc_children proc_ish_children = PROC_CHILDREN({
     {"amd64_jit", S_IFREG | 0644, .show = proc_ish_show_amd64_jit, .update = proc_ish_update_amd64_jit},
     {"amd_jit", S_IFREG | 0644, .show = proc_ish_show_amd64_jit, .update = proc_ish_update_amd64_jit},
+    {"amd64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_amd64_jit_fuse, .update = proc_ish_update_amd64_jit_fuse},
     {"arm64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_arm64_jit_fuse, .update = proc_ish_update_arm64_jit_fuse},
     {"i386_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_i386_jit_fuse, .update = proc_ish_update_i386_jit_fuse},
     {"riscv64_jit_fuse", S_IFREG | 0644, .show = proc_ish_show_riscv64_jit_fuse, .update = proc_ish_update_riscv64_jit_fuse},

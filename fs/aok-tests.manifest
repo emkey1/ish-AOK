@@ -130,6 +130,7 @@ ftruncate_fd_mode.c
 syscall_wiring.c
 sysfs_cpu_topology.c
 x86/amd64_regress.c
+x86/amd64_incdec.c
 x86/avx_regress.c
 x86/avx32_smoke.c
 x86/amd64_jit_bench.sh

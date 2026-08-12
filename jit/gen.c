@@ -8187,6 +8187,52 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             }
             return false;
         }
+#if defined(__aarch64__)
+        // Native INC (/0) / DEC (/1) on a REGISTER (mod==3), 32/64-bit. The
+        // counterpart of the incdec-mem path above, and the hotter one: long mode
+        // reuses the one-byte 0x40+r inc/dec encodings as the REX prefixes, so
+        // every `incq %rax` in compiled code arrives here as FF /0 mod==3. It was
+        // the last hot FF form still bridging to amd64_jit_ff_group, which is the
+        // single largest amd64 bridge helper (1.85% self time, measured in
+        // 2abe9a1f); the bridge additionally forced a gadget_amd64_set_rip
+        // dispatch on every execution, because the helper re-decodes its own
+        // instruction out of guest memory at CPU_amd64_rip.
+        //
+        // Register-only, so the gadget cannot fault and the rip may be DEFERRED
+        // rather than published -- that deferral is where the set_rip saving comes
+        // from, and it is only sound because there is no #PF re-execution path
+        // through this instruction.
+        //
+        // Declined (the bridge stays the oracle): 0x66, because 16-bit OF needs a
+        // width-correct sub-32 overflow, exactly as for the mem form; lock, which
+        // is #UD on a register operand and must keep raising it from the helper;
+        // and rex.r, which amd64_decode_modrm folds into modrm.reg -- that would
+        // make the helper see a group of 8/9 where this path would execute an
+        // INC, so it must not be claimed here. rex.b is fine: it extends rm, and
+        // the hybrid gadget accessors cover r8-r15 out of CPU_amd64_regs. The FS
+        // prefix has no effect on a register operand, but is declined too rather
+        // than reasoned about. Gated by /proc/ish/amd64_jit_fuse incdec_reg.
+        if (group <= 1 && amd64_modrm_mod(insn.modrm) == 3 &&
+                !insn.lock_prefix && !insn.operand_size_prefix &&
+                !insn.fs_prefix && !insn.rex.r &&
+                (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_INCDEC_REG)) {
+            unsigned long rm = amd64_modrm_rm(insn.modrm);
+            if (insn.rex.b)
+                rm |= 8;
+            unsigned size = insn.rex.w ? 64 : 32;
+            amd64_jit_debug("incdec-reg ip=%llx grp=%u rm=%lu size=%u next=%llx",
+                    (unsigned long long) insn.start_ip, group, rm, size,
+                    (unsigned long long) next_ip);
+            extern void gadget_amd64_incdec_reg32(void), gadget_amd64_incdec_reg64(void);
+            gen_amd64_ensure_reg_cache(state);
+            gen(state, (unsigned long) (size == 64
+                        ? gadget_amd64_incdec_reg64 : gadget_amd64_incdec_reg32));
+            gen(state, rm | ((unsigned long) group << 8));   // group 1 == is_dec
+            gen_amd64_mark_reg_cache_dirty(state);
+            gen_amd64_defer_rip(state, next_ip);
+            return true;
+        }
+#endif
         amd64_jit_debug("ff-group-helper ip=%llx modrm=%02x next=%llx",
                 (unsigned long long) insn.start_ip,
                 insn.modrm,
@@ -10273,6 +10319,7 @@ bool gen_addr(struct gen_state *state, struct modrm *modrm, bool seg_tls) {
 static atomic_int i386_fuse_mask = -1;
 static atomic_int arm64_fuse_mask = -1;
 static atomic_int riscv64_fuse_mask = -1;
+static atomic_int amd64_fuse_mask = -1;
 
 // One table-driven implementation for all three guests. Each domain carries its
 // live mask, its full-on value, its name table, and a seeder that reads the
@@ -10313,6 +10360,12 @@ static unsigned arm64_fuse_seed(void) {
 static unsigned riscv64_fuse_seed(void) {
     return getenv("ISH_RISCV64_NO_FUSE") != NULL ? 0 : JIT_FUSE_RV_ALL;
 }
+static unsigned amd64_fuse_seed(void) {
+    // New namespace, so ISH_AMD64_NO_FUSE has no prior meaning to preserve; it
+    // clears every native-vs-bridge switch, i.e. sends all of them back through
+    // the C helpers, which is the bisection hatch.
+    return getenv("ISH_AMD64_NO_FUSE") != NULL ? 0 : JIT_FUSE_AMD64_ALL;
+}
 
 static const struct jit_fuse_entry i386_fuse_names[] = {
     {"addr", JIT_FUSE_ADDR}, {"movmr", JIT_FUSE_MOVMR}, {"lea", JIT_FUSE_LEA},
@@ -10325,6 +10378,9 @@ static const struct jit_fuse_entry arm64_fuse_names[] = {
 static const struct jit_fuse_entry riscv64_fuse_names[] = {
     {"fold", JIT_FUSE_RV_FOLD}, {"jal", JIT_FUSE_RV_JAL},
 };
+static const struct jit_fuse_entry amd64_fuse_names[] = {
+    {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG},
+};
 
 static const struct jit_fuse_domain jit_fuse_domains[] = {
     [JIT_FUSE_ARCH_I386] = {&i386_fuse_mask, JIT_FUSE_ALL, i386_fuse_names,
@@ -10333,6 +10389,8 @@ static const struct jit_fuse_domain jit_fuse_domains[] = {
         sizeof(arm64_fuse_names) / sizeof(arm64_fuse_names[0]), arm64_fuse_seed},
     [JIT_FUSE_ARCH_RISCV64] = {&riscv64_fuse_mask, JIT_FUSE_RV_ALL, riscv64_fuse_names,
         sizeof(riscv64_fuse_names) / sizeof(riscv64_fuse_names[0]), riscv64_fuse_seed},
+    [JIT_FUSE_ARCH_AMD64] = {&amd64_fuse_mask, JIT_FUSE_AMD64_ALL, amd64_fuse_names,
+        sizeof(amd64_fuse_names) / sizeof(amd64_fuse_names[0]), amd64_fuse_seed},
 };
 #define JIT_FUSE_N_DOMAINS (sizeof(jit_fuse_domains) / sizeof(jit_fuse_domains[0]))
 
@@ -10393,6 +10451,7 @@ bool jit_fuse_set_by_name(enum jit_fuse_arch arch, const char *name, bool on) {
 unsigned i386_jit_fuse_mask(void) { return jit_fuse_mask_get(JIT_FUSE_ARCH_I386); }
 unsigned arm64_jit_fuse_mask(void) { return jit_fuse_mask_get(JIT_FUSE_ARCH_ARM64); }
 unsigned riscv64_jit_fuse_mask(void) { return jit_fuse_mask_get(JIT_FUSE_ARCH_RISCV64); }
+unsigned amd64_jit_fuse_mask(void) { return jit_fuse_mask_get(JIT_FUSE_ARCH_AMD64); }
 
 static inline bool gen_try_fuse_addr(struct gen_state *state, gadget_t *table,
         struct modrm *modrm, int size, bool seg_tls) {
