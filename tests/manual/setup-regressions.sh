@@ -533,6 +533,9 @@ for test in $all_tests; do
         # here rather than listed as tests because they are not tests -- each
         # just returns 7 -- and must not appear in the run list.
         if [ "$test" = vfork_exec_stale_jit ]; then
+            # Deliberately not build_one: these need a per-peer -D, and they
+            # skip its gas_imm_reg_workaround path. Safe only because the peer
+            # source is trivial; keep it that way.
             peer_src=$(src_for vfork_exec_stale_jit_peer)
             pad=0
             while [ "$pad" -lt 12 ]; do

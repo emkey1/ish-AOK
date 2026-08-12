@@ -89,7 +89,8 @@
 #define ROUNDS_PER_PEER 4
 #define PEER_PAD_PAGES 12 // peers are built with 0..PEER_PAD_PAGES-1 pad pages
 #define EXEC_STATUS 7     // what a peer returns
-#define PEER_STEM "vfork_exec_stale_jit_peer"
+#define SUITE "vfork_exec_stale_jit"
+#define PEER_STEM SUITE "_peer"
 #define CHILD_STACK_SIZE (256 * 1024)
 
 static char peers[PEER_PAD_PAGES][PATH_MAX];
@@ -200,16 +201,17 @@ int main(int argc, char **argv) {
 
     find_peers(argv[0]);
     if (peer_count == 0) {
-        printf("SKIP: no %sN binaries next to this one; build them alongside "
-               "(setup-regressions.sh does) or set ISH_STALE_JIT_PEER\n", PEER_STEM);
+        printf("%s: SKIP no %sN binaries next to this one; build them alongside "
+               "(setup-regressions.sh does) or set ISH_STALE_JIT_PEER\n", SUITE, PEER_STEM);
         return 0;
     }
     test_logf("peers: %u\n", peer_count);
 
     void *stack = malloc(CHILD_STACK_SIZE);
     if (stack == NULL) {
-        printf("FAIL: out of memory for child stack\n");
-        return 1;
+        printf("out of memory for child stack\n");
+        failures_total++;
+        return finish_suite(SUITE);
     }
 
     unsigned signaled = 0, wrong_status = 0, exec_failed = 0, ok = 0, attempts = 0;
@@ -229,16 +231,18 @@ int main(int argc, char **argv) {
                               CLONE_VM | CLONE_VFORK | SIGCHLD,
                               (void *) (intptr_t) round);
             if (pid < 0) {
-                printf("FAIL: clone: %s\n", strerror(errno));
+                printf("clone: %s\n", strerror(errno));
                 free(stack);
-                return 1;
+                failures_total++;
+                return finish_suite(SUITE);
             }
 
             int status = 0;
             if (waitpid(pid, &status, 0) != pid) {
-                printf("FAIL: waitpid(%d): %s\n", (int) pid, strerror(errno));
+                printf("waitpid(%d): %s\n", (int) pid, strerror(errno));
                 free(stack);
-                return 1;
+                failures_total++;
+                return finish_suite(SUITE);
             }
 
             if (WIFSIGNALED(status)) {
@@ -266,7 +270,7 @@ int main(int argc, char **argv) {
     free(stack);
 
     if (exec_failed == attempts) {
-        printf("SKIP: could not exec any peer\n");
+        printf("%s: SKIP could not exec any peer\n", SUITE);
         return 0;
     }
 
@@ -274,19 +278,19 @@ int main(int argc, char **argv) {
               attempts, ok, signaled, wrong_status, exec_failed);
 
     if (signaled != 0) {
-        printf("FAIL: %u/%u exec'd children died on a signal (first: %d %s, peer %s) -- "
+        printf("%u/%u exec'd children died on a signal (first: %d %s, peer %s) -- "
                "the new program ran the previous one's JIT translations\n",
                signaled, attempts, first_signal, strsignal(first_signal),
                first_bad_peer);
-        return 1;
+        failures_total++;
     }
     if (wrong_status != 0 || exec_failed != 0) {
-        printf("FAIL: %u/%u wrong exit status, %u/%u exec failures\n",
+        printf("%u/%u wrong exit status, %u/%u exec failures\n",
                wrong_status, attempts, exec_failed, attempts);
-        return 1;
+        failures_total++;
     }
-
-    printf("PASS: %u shared-mm execs over %u peer sizes, no stale translation reused\n",
-           attempts, peer_count);
-    return 0;
+    if (failures_total == 0)
+        test_logf("%u shared-mm execs over %u peer sizes, no stale translation reused\n",
+                  attempts, peer_count);
+    return finish_suite(SUITE);
 }
