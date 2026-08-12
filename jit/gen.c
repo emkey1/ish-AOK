@@ -5443,9 +5443,22 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
 
     case RISCV64_OP_JAL: {
         int64_t offset = riscv64_imm_j(insn);
-        if (rd != 0)
-            gen_riscv64_mov_const(state, rd, state->riscv64_ip); // link = pc + length
-        return gen_riscv64_branch_to(state, state->riscv64_orig_ip + offset);
+        guest_addr_t target = state->riscv64_orig_ip + offset;
+        if (rd != 0) {
+            // A call. One fused gadget instead of mov_const + b; see jal_link in
+            // jit/guest-riscv64/alu.S. Emits the same tagged target word in the
+            // same chainable position as gen_riscv64_branch_to, and records
+            // jump_ip[0] the same way, so the frontend's edge patching is
+            // unaffected by the fusion.
+            extern void gadget_riscv64_jal_link(void);
+            gen(state, (unsigned long) gadget_riscv64_jal_link);
+            gen(state, riscv64_rd_off(rd));
+            gen(state, state->riscv64_ip);  // link = pc + length
+            gen(state, target | 0x8000000000000000ULL);
+            state->jump_ip[0] = state->size - 1;
+            return 0;
+        }
+        return gen_riscv64_branch_to(state, target);
     }
 
     case RISCV64_OP_MADD: case RISCV64_OP_MSUB:

@@ -212,6 +212,32 @@ branch_op ge, ge
 branch_op ltu, lo
 branch_op geu, hs
 
+// JAL with rd != 0 -- i.e. a CALL -- in one gadget instead of two.
+//
+// gen used to emit the link write and the branch separately:
+//     [mov_const][rd_off][link]  +  [b][target]        2 dispatches
+//     [jal_link][rd_off][link][target]                 1
+// which is what arm64's BL already costs here, so this closes a gap rather than
+// inventing anything. Every guest function call pays it.
+//
+// The tail is deliberately identical to gadget_riscv64_b: load the tagged target
+// word into _ip and fall into riscv64_branch_dispatch, which owns the
+// chained/unchained split, the poke check and the chain budget. Reading the
+// target from [_ip, #16] instead of [_ip] is the only difference, and it is safe
+// because _ip's own arguments are not needed once the target is in hand -- the
+// dispatcher either replaces _ip with a pointer into the target block or exits
+// to C with pc set. gen records jump_ip[0] as the index of that target word, so
+// the frontend patches THIS slot when it links the edge.
+//
+// The link must be written before the branch, and unlike jalr below there is no
+// rd/rs1 aliasing hazard to order around: the target is a compile-time constant.
+.gadget jal_link
+    ldr x9, [_ip]             // rd_off
+    ldr x10, [_ip, #8]        // link value (pc + insn length)
+    str x10, [_cpu, x9]
+    ldr _ip, [_ip, #16]       // tagged target word
+    b riscv64_branch_dispatch
+
 // JALR: indirect jump, target = (rs1 + imm) & ~1. No chaining (target is
 // runtime-computed). Target computed from rs1 BEFORE the link write, because rd may alias
 // rs1 (jalr ra, 0(ra)): the spec reads the base first. Code stream:
