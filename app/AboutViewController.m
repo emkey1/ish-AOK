@@ -1450,6 +1450,111 @@ static BOOL ISHLLMDirectHTTPPostStreaming(NSURL *url,
     return YES;
 }
 
+// MARK: - Streaming over https (NSURLSession)
+
+// The raw-socket streamer above exists because ATS blocks plain http, so
+// local Ollama/LM Studio endpoints have to be spoken to directly. https
+// endpoints go through NSURLSession, which used to mean the completion-handler
+// API and therefore no streaming at all: every hosted provider sat silent for
+// the whole generation and then dumped the finished answer.
+//
+// A data-task delegate gives the same incremental Server-Sent Events the
+// direct path parses, so both transports now stream. Everything before the
+// first token is identical to the non-streaming path, and the fallbacks are
+// the ones that already existed: a non-200, or a server that ignores
+// "stream": true and answers with an ordinary JSON body, ends with zero
+// chunks and the buffered body is handed to the normal response handler.
+@interface ISHLLMStreamingResponseDelegate : NSObject <NSURLSessionDataDelegate>
+@property (nonatomic, copy) void (^chunkHandler)(NSString *chunk);
+// receivedChunks is what tells the caller whether the reply already went on
+// screen incrementally or still has to be parsed out of body.
+@property (nonatomic, copy) void (^completionHandler)(BOOL receivedChunks, NSData *body, NSInteger statusCode, NSError *error);
+@end
+
+@implementation ISHLLMStreamingResponseDelegate {
+    NSMutableData *_pending;      // bytes not yet split into complete SSE lines
+    NSMutableData *_body;         // whole response, kept only until streaming is confirmed
+    NSInteger _statusCode;
+    BOOL _receivedChunks;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (self != nil) {
+        _pending = [NSMutableData data];
+        _body = [NSMutableData data];
+    }
+    return self;
+}
+
+- (void)URLSession:(NSURLSession *)session
+          dataTask:(NSURLSessionDataTask *)dataTask
+didReceiveResponse:(NSURLResponse *)response
+ completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+    (void) session;
+    (void) dataTask;
+    if ([response isKindOfClass:NSHTTPURLResponse.class])
+        _statusCode = ((NSHTTPURLResponse *) response).statusCode;
+    completionHandler(NSURLSessionResponseAllow);
+}
+
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
+    (void) session;
+    (void) dataTask;
+    [_body appendData:data];
+    // Only a 200 carries an event stream; an error body is JSON to be parsed
+    // whole by the caller, so don't try to read deltas out of it.
+    if (_statusCode != 200)
+        return;
+    [_pending appendData:data];
+    [self drainCompleteLines];
+}
+
+// SSE frames are line-oriented and a chunk can split mid-line, so only whole
+// lines are consumed and the remainder stays buffered for the next callback.
+- (void)drainCompleteLines {
+    while (YES) {
+        const char newline = '\n';
+        NSRange lineBreak = [_pending rangeOfData:[NSData dataWithBytes:&newline length:1]
+                                          options:0
+                                            range:NSMakeRange(0, _pending.length)];
+        if (lineBreak.location == NSNotFound)
+            return;
+        NSData *lineData = [_pending subdataWithRange:NSMakeRange(0, lineBreak.location)];
+        [_pending replaceBytesInRange:NSMakeRange(0, NSMaxRange(lineBreak)) withBytes:NULL length:0];
+        NSString *line = [[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding];
+        line = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (![line hasPrefix:@"data:"])
+            continue; // comments, event: lines and blank separators
+        NSString *payload = [[line substringFromIndex:5] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if ([payload isEqualToString:@"[DONE]"])
+            continue; // end-of-stream marker, not a delta
+        NSString *content = ISHLLMContentFromStreamingPayload(payload);
+        if (content.length == 0)
+            continue;
+        if (!_receivedChunks) {
+            _receivedChunks = YES;
+            _body = nil; // streaming confirmed; stop keeping a second copy of the text
+        }
+        if (self.chunkHandler != nil)
+            self.chunkHandler(content);
+    }
+}
+
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    (void) task;
+    if (self.completionHandler != nil)
+        self.completionHandler(_receivedChunks, _body, _statusCode, error);
+    self.chunkHandler = nil;
+    self.completionHandler = nil;
+    // NSURLSession holds its delegate strongly until it is invalidated, so a
+    // session left alive here would leak this object and, through the
+    // handlers, the view controller.
+    [session finishTasksAndInvalidate];
+}
+
+@end
+
 // MARK: - Guest-shell tool support (OpenAI-compatible function calling)
 
 typedef NS_ENUM(NSInteger, ISHLLMToolRunDecision) {
@@ -3922,11 +4027,13 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     if (apiKey.length > 0)
         [request setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
 
+    // Both transports stream now: http through the raw socket (ATS blocks it
+    // from NSURLSession), https through the data-task delegate below.
     BOOL useDirectHTTP = [[url.scheme lowercaseString] isEqualToString:@"http"];
     NSDictionary *body = @{
         @"model": model,
         @"messages": [self providerMessages],
-        @"stream": @(useDirectHTTP),
+        @"stream": @YES,
         @"stop": @[@"<file_sep>"],
     };
     request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
@@ -3999,13 +4106,88 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         return;
     }
 
+    // https: the tokens arrive as Server-Sent Events on an NSURLSession data
+    // task delegate. If none arrive -- a non-200, or a server that ignores
+    // "stream": true and answers with one JSON body -- the buffered response
+    // goes to the ordinary handler instead, so nothing regresses to a worse
+    // outcome than the single-shot request this replaces.
+    [_messages addObject:@{@"role": @"assistant", @"content": @""}];
+    NSUInteger streamingIndex = _messages.count - 1;
+    [self refreshTranscript];
     __weak typeof(self) weakSelf = self;
-    _activeTask = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+    ISHLLMStreamingResponseDelegate *streamDelegate = [ISHLLMStreamingResponseDelegate new];
+    streamDelegate.chunkHandler = ^(NSString *chunk) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self = weakSelf;
+            if (self != nil)
+                [self appendStreamingAssistantChunk:chunk toMessageAtIndex:streamingIndex];
+        });
+    };
+    streamDelegate.completionHandler = ^(BOOL receivedChunks, NSData *responseBody, NSInteger statusCode, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) self = weakSelf;
             if (self == nil)
                 return;
-            [self handleLLMResponseData:data response:response error:error];
+            self->_activeTask = nil;
+            if (receivedChunks) {
+                // Whatever streamed in stays on screen, including when the user
+                // hit Stop or the connection dropped part way -- the same
+                // contract the direct-socket path has.
+                BOOL userStopped = self->_cancelled;
+                self->_cancelled = NO;
+                [self finalizeStreamingAssistantMessageAtIndex:streamingIndex];
+                if (error != nil && !userStopped)
+                    [self appendRole:@"assistant" content:[NSString stringWithFormat:@"(stream interrupted: %@)", error.localizedDescription]];
+                [self setSending:NO];
+                [self saveTranscript];
+                return;
+            }
+            if (streamingIndex < self->_messages.count)
+                [self->_messages removeObjectAtIndex:streamingIndex];
+            // An endpoint that rejects "stream": true outright used never to be
+            // asked, so give it the single-shot request it used to get rather
+            // than turning a working configuration into an error.
+            if (error == nil && statusCode >= 400 && !self->_cancelled) {
+                [self retryWithoutStreamingRequest:request];
+                return;
+            }
+            NSHTTPURLResponse *streamResponse = nil;
+            if (statusCode > 0) {
+                streamResponse = [[NSHTTPURLResponse alloc] initWithURL:url
+                                                             statusCode:statusCode
+                                                            HTTPVersion:@"HTTP/1.1"
+                                                           headerFields:nil];
+            }
+            [self handleLLMResponseData:responseBody response:streamResponse error:error];
+        });
+    };
+    NSURLSession *streamSession = [NSURLSession sessionWithConfiguration:NSURLSessionConfiguration.defaultSessionConfiguration
+                                                                delegate:streamDelegate
+                                                           delegateQueue:nil];
+    _activeTask = [streamSession dataTaskWithRequest:request];
+    [_activeTask resume];
+}
+
+// Re-issues the request that just came back as an HTTP error with streaming
+// switched off. Only reached once per prompt (this path is a plain completion
+// handler, so a second failure surfaces as the error it is).
+- (void)retryWithoutStreamingRequest:(NSURLRequest *)streamingRequest {
+    NSMutableURLRequest *request = [streamingRequest mutableCopy];
+    NSMutableDictionary *body = [[NSJSONSerialization JSONObjectWithData:streamingRequest.HTTPBody ?: NSData.data options:0 error:nil] mutableCopy];
+    if (![body isKindOfClass:NSMutableDictionary.class]) {
+        [self appendRole:@"assistant" content:@"Could not encode the request."];
+        [self setSending:NO];
+        return;
+    }
+    body[@"stream"] = @NO;
+    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+    [self setStatus:@"Retrying without streaming…" busy:YES];
+    __weak typeof(self) weakSelf = self;
+    _activeTask = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self = weakSelf;
+            if (self != nil)
+                [self handleLLMResponseData:data response:response error:error];
         });
     }];
     [_activeTask resume];
