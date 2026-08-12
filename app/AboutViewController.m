@@ -506,6 +506,13 @@ static NSURL *ISHLLMSessionFileURL(NSString *sessionID) {
     return [ISHLLMSessionsDirectoryURL() URLByAppendingPathComponent:[component stringByAppendingString:@".json"] isDirectory:NO];
 }
 
+// ContainerURL() is nil when the app group isn't configured, and every URL
+// derived from it is then nil too. Rather than handing nil URLs to Foundation
+// at four call sites, the chats simply live in memory for that launch.
+static BOOL ISHLLMSessionStorageAvailable(void) {
+    return ISHLLMSessionsDirectoryURL() != nil;
+}
+
 static void ISHLLMEnsureSessionsDirectory(void) {
     NSURL *directoryURL = ISHLLMSessionsDirectoryURL();
     if (directoryURL != nil)
@@ -522,14 +529,14 @@ static NSArray<NSDictionary<NSString *, id> *> *ISHLLMValidMessagesFromStoredArr
 }
 
 static NSArray<NSDictionary<NSString *, id> *> *ISHLLMLoadSessionMessages(NSString *sessionID) {
-    if (sessionID.length == 0)
+    if (sessionID.length == 0 || !ISHLLMSessionStorageAvailable())
         return @[];
     NSArray *stored = [NSArray arrayWithContentsOfURL:ISHLLMSessionFileURL(sessionID)];
     return [stored isKindOfClass:NSArray.class] ? ISHLLMValidMessagesFromStoredArray(stored) : @[];
 }
 
 static void ISHLLMWriteSessionMessages(NSString *sessionID, NSArray<NSDictionary<NSString *, id> *> *messages) {
-    if (sessionID.length == 0)
+    if (sessionID.length == 0 || !ISHLLMSessionStorageAvailable())
         return;
     ISHLLMEnsureSessionsDirectory();
     [messages writeToURL:ISHLLMSessionFileURL(sessionID) atomically:YES];
@@ -575,7 +582,7 @@ static NSDictionary<NSString *, id> *ISHLLMNewSessionEntry(NSString *title) {
 // llm-chat.json is copied, never moved -- an older build reopened afterwards
 // still finds the chat where it left it.
 static NSDictionary<NSString *, id> *ISHLLMLoadSessionIndexDocument(void) {
-    NSDictionary *stored = [NSDictionary dictionaryWithContentsOfURL:ISHLLMSessionIndexURL()];
+    NSDictionary *stored = ISHLLMSessionStorageAvailable() ? [NSDictionary dictionaryWithContentsOfURL:ISHLLMSessionIndexURL()] : nil;
     NSMutableArray<NSDictionary<NSString *, id> *> *sessions = [NSMutableArray array];
     if ([stored isKindOfClass:NSDictionary.class] && [stored[@"sessions"] isKindOfClass:NSArray.class]) {
         for (id entry in stored[@"sessions"]) {
@@ -586,7 +593,7 @@ static NSDictionary<NSString *, id> *ISHLLMLoadSessionIndexDocument(void) {
     NSString *activeID = [stored isKindOfClass:NSDictionary.class] ? ISHLLMStringValue(stored, @"active") : @"";
 
     if (sessions.count == 0) {
-        NSArray *legacy = [NSArray arrayWithContentsOfURL:ISHLLMTranscriptURL()];
+        NSArray *legacy = ISHLLMSessionStorageAvailable() ? [NSArray arrayWithContentsOfURL:ISHLLMTranscriptURL()] : nil;
         NSArray<NSDictionary<NSString *, id> *> *legacyMessages = [legacy isKindOfClass:NSArray.class] ? ISHLLMValidMessagesFromStoredArray(legacy) : @[];
         NSMutableDictionary<NSString *, id> *entry = [ISHLLMNewSessionEntry(ISHLLMSessionTitleFromMessages(legacyMessages)) mutableCopy];
         if (legacyMessages.count > 0) {
@@ -610,6 +617,8 @@ static NSDictionary<NSString *, id> *ISHLLMLoadSessionIndexDocument(void) {
 }
 
 static void ISHLLMWriteSessionIndex(NSArray<NSDictionary<NSString *, id> *> *sessions, NSString *activeID) {
+    if (!ISHLLMSessionStorageAvailable())
+        return;
     ISHLLMEnsureSessionsDirectory();
     [@{@"version": @1, @"active": activeID ?: @"", @"sessions": sessions ?: @[]} writeToURL:ISHLLMSessionIndexURL() atomically:YES];
 }
@@ -687,7 +696,8 @@ static NSString *ISHLLMDeleteSession(NSString *sessionID) {
     if (removedIndex == NSNotFound)
         return ISHLLMStringValue(document, @"active");
     [sessions removeObjectAtIndex:removedIndex];
-    [NSFileManager.defaultManager removeItemAtURL:ISHLLMSessionFileURL(sessionID) error:nil];
+    if (ISHLLMSessionStorageAvailable())
+        [NSFileManager.defaultManager removeItemAtURL:ISHLLMSessionFileURL(sessionID) error:nil];
     if (sessions.count == 0)
         [sessions addObject:ISHLLMNewSessionEntry(nil)];
     NSString *activeID = ISHLLMStringValue(document, @"active");
@@ -2530,8 +2540,16 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     NSString *destinationName = ISHLLMDestinationDisplayName(ISHLLMActiveDestination());
     self.title = sessionTitle;
 
-    UIMenu *chatMenu = [self chatActionsMenu];
-    UIMenu *destinationMenu = [self destinationActionsMenu];
+    // Both menus are built from disk every time they are opened rather than
+    // captured here: a chat renamed in the list, or a destination added from
+    // Settings, has to show up without something else happening to refresh
+    // this view first (a form-sheet dismissal doesn't re-run viewWillAppear).
+    UIMenu *chatMenu = [self liveMenuWithElements:^NSArray<UIMenuElement *> *(LLMClientViewController *client) {
+        return [client chatMenuElements];
+    }];
+    UIMenu *destinationMenu = [self liveMenuWithElements:^NSArray<UIMenuElement *> *(LLMClientViewController *client) {
+        return [client destinationMenuElements];
+    }];
 
     [_chatsButton setTitle:ISHLLMShortenedButtonTitle(sessionTitle, 14) forState:UIControlStateNormal];
     _chatsButton.accessibilityLabel = [NSString stringWithFormat:@"Chats. Current chat: %@", sessionTitle];
@@ -2635,7 +2653,19 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     [self setStatus:[self idleStatusText] busy:NO];
 }
 
-- (UIMenu *)chatActionsMenu {
+// Wraps a menu whose children are produced on demand. The provider takes the
+// controller as an argument so this can hold it weakly -- a button retains its
+// menu, and a menu capturing self strongly would outlive the chat.
+- (UIMenu *)liveMenuWithElements:(NSArray<UIMenuElement *> *(^)(LLMClientViewController *client))provider {
+    __weak typeof(self) weakSelf = self;
+    UIDeferredMenuElement *deferred = [UIDeferredMenuElement elementWithUncachedProvider:^(void (^completion)(NSArray<UIMenuElement *> *elements)) {
+        typeof(self) client = weakSelf;
+        completion(client != nil ? provider(client) : @[]);
+    }];
+    return [UIMenu menuWithTitle:@"" image:nil identifier:nil options:0 children:@[deferred]];
+}
+
+- (NSArray<UIMenuElement *> *)chatMenuElements {
     UIAction *newChat = [UIAction actionWithTitle:@"New Chat"
                                             image:[UIImage systemImageNamed:@"square.and.pencil"]
                                        identifier:nil
@@ -2682,7 +2712,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 
     UIMenu *switchSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:recent];
     UIMenu *currentSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[rename, systemPrompt, clear, delete]];
-    return [UIMenu menuWithTitle:@"" image:nil identifier:nil options:0 children:@[newChat, browse, switchSection, currentSection]];
+    return @[newChat, browse, switchSection, currentSection];
 }
 
 - (void)showChatList {
@@ -2774,7 +2804,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
 }
 
-- (UIMenu *)destinationActionsMenu {
+- (NSArray<UIMenuElement *> *)destinationMenuElements {
     NSArray<NSDictionary<NSString *, NSString *> *> *destinations = ISHLLMDestinations();
     NSString *activeID = ISHLLMStringValue(ISHLLMActiveDestination(), kISHLLMDestinationID);
     NSMutableArray<UIAction *> *items = [NSMutableArray array];
@@ -2801,9 +2831,9 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
                                            image:[UIImage systemImageNamed:@"slider.horizontal.3"]
                                       identifier:nil
                                          handler:^(__unused UIAction *action) { [self showDestinationList]; }];
-    UIMenu *switchSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:items];
+    UIMenu *switchSection = [UIMenu menuWithTitle:@"Chat With" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:items];
     UIMenu *manageSection = [UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:@[chooseModel, addDestination, manage]];
-    return [UIMenu menuWithTitle:@"Chat With" image:nil identifier:nil options:0 children:@[switchSection, manageSection]];
+    return @[switchSection, manageSection];
 }
 
 - (void)switchToDestinationWithID:(NSString *)destinationID {
