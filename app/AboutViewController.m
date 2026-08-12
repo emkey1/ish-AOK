@@ -581,6 +581,8 @@ static NSDictionary<NSString *, id> *ISHLLMNewSessionEntry(NSString *title) {
 // pre-sessions transcript carried in as the first chat. The legacy
 // llm-chat.json is copied, never moved -- an older build reopened afterwards
 // still finds the chat where it left it.
+static void ISHLLMWriteSessionIndex(NSArray<NSDictionary<NSString *, id> *> *sessions, NSString *activeID);
+
 static NSDictionary<NSString *, id> *ISHLLMLoadSessionIndexDocument(void) {
     NSDictionary *stored = ISHLLMSessionStorageAvailable() ? [NSDictionary dictionaryWithContentsOfURL:ISHLLMSessionIndexURL()] : nil;
     NSMutableArray<NSDictionary<NSString *, id> *> *sessions = [NSMutableArray array];
@@ -591,6 +593,7 @@ static NSDictionary<NSString *, id> *ISHLLMLoadSessionIndexDocument(void) {
         }
     }
     NSString *activeID = [stored isKindOfClass:NSDictionary.class] ? ISHLLMStringValue(stored, @"active") : @"";
+    BOOL synthesized = NO;
 
     if (sessions.count == 0) {
         NSArray *legacy = ISHLLMSessionStorageAvailable() ? [NSArray arrayWithContentsOfURL:ISHLLMTranscriptURL()] : nil;
@@ -602,6 +605,7 @@ static NSDictionary<NSString *, id> *ISHLLMLoadSessionIndexDocument(void) {
         }
         [sessions addObject:entry];
         activeID = entry[@"id"];
+        synthesized = YES;
     }
 
     BOOL activeExists = NO;
@@ -611,8 +615,18 @@ static NSDictionary<NSString *, id> *ISHLLMLoadSessionIndexDocument(void) {
             break;
         }
     }
-    if (!activeExists)
+    if (!activeExists) {
         activeID = ISHLLMStringValue(sessions.firstObject, @"id");
+        synthesized = YES;
+    }
+    // Anything invented here MUST be written back before returning. This
+    // function is a read accessor called several times per switch, and each
+    // call re-derives what it did not find -- so a migration that stayed in
+    // memory would mint a new chat id (and a new copy of the migrated
+    // transcript) on every single call, leaving the user on an empty chat with
+    // their old conversation stranded in orphan files.
+    if (synthesized)
+        ISHLLMWriteSessionIndex(sessions, activeID);
     return @{@"version": @1, @"active": activeID, @"sessions": sessions};
 }
 
@@ -2307,7 +2321,11 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     UIButton *_destinationButton; // titled with the destination, one tap to switch
     UIBarButtonItem *_chatsBarButtonItem;
     UIBarButtonItem *_destinationBarButtonItem;
+    NSLayoutConstraint *_toolbarHeightConstraint; // collapsed to 0 when the navigation bar already carries these controls
     void (^_pendingIdleAction)(void); // a chat/destination switch waiting for the in-flight reply to land
+    BOOL _sending; // authoritative in-flight flag; see -isBusy
+    NSURLSessionDataTask *_auxiliaryTask; // /models probes, kept out of _activeTask so Stop still owns the reply
+    double _lastKnownSessionUpdate; // "updated" stamp this instance last wrote, to spot another window's edits
 }
 
 - (void)viewDidLoad {
@@ -2439,12 +2457,14 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     statusRow.spacing = 6.0;
     [self.view addSubview:statusRow];
 
+    _toolbarHeightConstraint = [_toolbarStackView.heightAnchor constraintGreaterThanOrEqualToConstant:32.0];
+
     UILayoutGuide *safeArea = self.view.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
         [_toolbarStackView.topAnchor constraintEqualToAnchor:safeArea.topAnchor constant:6.0],
         [_toolbarStackView.leadingAnchor constraintEqualToAnchor:safeArea.leadingAnchor constant:10.0],
         [_toolbarStackView.trailingAnchor constraintEqualToAnchor:safeArea.trailingAnchor constant:-10.0],
-        [_toolbarStackView.heightAnchor constraintGreaterThanOrEqualToConstant:32.0],
+        _toolbarHeightConstraint,
 
         [_transcriptTable.topAnchor constraintEqualToAnchor:_toolbarStackView.bottomAnchor constant:4.0],
         [_transcriptTable.leadingAnchor constraintEqualToAnchor:safeArea.leadingAnchor],
@@ -2503,10 +2523,24 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
 // (model, provider), so re-render on the way back instead of only at load.
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+    [self updateToolbarVisibility];
+    [self reloadSessionIfChangedElsewhere];
     [self refreshTranscript];
     [self updateChatHeaderTitles]; // Settings can have changed the destination
     if (!_activityIndicator.isAnimating)
         [self setStatus:[self idleStatusText] busy:NO];
+}
+
+// The same four controls exist twice: as navigation bar items, for the
+// terminal's modal presentation, and as an in-view row, for the Workspace
+// window, which is a bare child view controller with no navigation bar. Only
+// one of them can be right at a time -- showing both put "New Chat" next to a
+// button also labelled "New Chat" -- so the row collapses whenever a
+// navigation bar is there to carry them.
+- (void)updateToolbarVisibility {
+    BOOL hasNavigationBar = self.navigationController != nil && !self.navigationController.navigationBarHidden;
+    _toolbarStackView.hidden = hasNavigationBar;
+    _toolbarHeightConstraint.constant = hasNavigationBar ? 0.0 : 32.0;
 }
 
 #pragma mark - Chat and destination switching
@@ -2558,14 +2592,23 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     _destinationButton.accessibilityLabel = [NSString stringWithFormat:@"Chat destination: %@", destinationName];
     _destinationButton.menu = destinationMenu;
 
-    _chatsBarButtonItem.title = ISHLLMShortenedButtonTitle(sessionTitle, 14);
+    // The navigation bar shows the chat name as the title, so its button says
+    // what it does instead of repeating the name; the in-view row has no title
+    // above it and carries the name itself.
+    _chatsBarButtonItem.title = @"Chats";
     _chatsBarButtonItem.menu = chatMenu;
     _destinationBarButtonItem.title = ISHLLMShortenedButtonTitle(destinationName, 14);
     _destinationBarButtonItem.menu = destinationMenu;
 }
 
+// Deliberately NOT derived from the spinner. Two backends -- Apple Foundation
+// Models and the OpenAI tool loop -- run without an NSURLSessionTask or a
+// socket fd, so the spinner was the only evidence they were working, and
+// several ordinary actions (saving a system prompt, adding a destination)
+// legitimately refresh the status line and would stop it mid-reply. A switch
+// guarded on that would then walk straight past a live request.
 - (BOOL)isBusy {
-    return _activityIndicator.isAnimating || _activeTask != nil || _activeStreamFD != 0;
+    return _sending || _activeTask != nil || _activeStreamFD != 0;
 }
 
 // Switching chats or destinations mid-reply would let the in-flight response
@@ -2607,7 +2650,21 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     _sessionTitle = ISHLLMStringValue(entry, @"title");
     _sessionSystemPrompt = ISHLLMStringValue(entry, @"system");
     _sessionTitleIsAutomatic = ![entry[@"titleIsCustom"] boolValue];
+    _lastKnownSessionUpdate = [entry[@"updated"] isKindOfClass:NSNumber.class] ? [entry[@"updated"] doubleValue] : 0.0;
     [_messages setArray:ISHLLMLoadSessionMessages(_sessionID)];
+
+    // Reopening a chat puts it back on the destination it was last used with,
+    // which is what makes "each chat keeps its own destination" true rather
+    // than just recorded. A destination since deleted leaves the current one.
+    NSString *sessionDestinationID = ISHLLMStringValue(entry, @"destination");
+    if (sessionDestinationID.length > 0) {
+        for (NSDictionary<NSString *, NSString *> *destination in ISHLLMDestinations()) {
+            if ([ISHLLMStringValue(destination, kISHLLMDestinationID) isEqualToString:sessionDestinationID]) {
+                ISHLLMActivateDestination(destination);
+                break;
+            }
+        }
+    }
 
     // Per-chat state that must not survive the switch. The auto-run grants in
     // particular are a safety decision the user made about one conversation --
@@ -2621,6 +2678,37 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     // _guestEnvironmentNote is a property of the guest, not of the chat, so it
     // deliberately survives; the context-window probe re-keys itself off the
     // model and endpoint (see contextWindowProbeKey).
+}
+
+// The title/system-prompt half of -loadSessionWithID:, for when the chat on
+// screen is the one that changed and its messages must be left alone.
+- (void)reloadCurrentSessionMetadata {
+    NSDictionary<NSString *, id> *entry = ISHLLMSessionEntryWithID(_sessionID);
+    if (entry == nil)
+        return;
+    _sessionTitle = ISHLLMStringValue(entry, @"title");
+    _sessionSystemPrompt = ISHLLMStringValue(entry, @"system");
+    _sessionTitleIsAutomatic = ![entry[@"titleIsCustom"] boolValue];
+    [self updateChatHeaderTitles];
+}
+
+// The chat can be open in two places at once -- a Workspace window and the
+// terminal's modal -- and each holds its own copy of the messages, so whoever
+// saves last would otherwise overwrite the other's turns wholesale. Coming
+// back to a view whose chat has a newer stamp on disk than this instance last
+// wrote, re-read it.
+- (void)reloadSessionIfChangedElsewhere {
+    if (_sessionID.length == 0 || [self isBusy])
+        return;
+    NSDictionary<NSString *, id> *entry = ISHLLMSessionEntryWithID(_sessionID);
+    if (entry == nil) {
+        // Deleted from the other window; fall back to whatever is selected now.
+        [self loadSessionWithID:ISHLLMActiveSessionID()];
+        return;
+    }
+    double updated = [entry[@"updated"] isKindOfClass:NSNumber.class] ? [entry[@"updated"] doubleValue] : 0.0;
+    if (updated > _lastKnownSessionUpdate)
+        [self loadSessionWithID:_sessionID];
 }
 
 - (void)switchToSessionWithID:(NSString *)sessionID {
@@ -2728,10 +2816,10 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             return;
         }
         if ([sessionID isEqualToString:self->_sessionID]) {
-            // The open chat may have been renamed in the list.
-            [self loadSessionWithID:sessionID];
-            [self refreshTranscript];
-            [self updateChatHeaderTitles];
+            // Renamed (or deleted-and-replaced by itself) in the list. Refresh
+            // only the metadata: a full load would re-read _messages from disk
+            // and throw away a reply still streaming into it.
+            [self reloadCurrentSessionMetadata];
             return;
         }
         [self switchToSessionWithID:sessionID];
@@ -2780,7 +2868,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         self->_sessionSystemPrompt = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] ?: @"";
         ISHLLMUpdateSessionEntry(self->_sessionID, @{@"system": self->_sessionSystemPrompt});
         [self updateChatHeaderTitles];
-        [self setStatus:[self idleStatusText] busy:NO];
+        [self refreshIdleStatus];
     }]];
     [[self ish_presentationViewController] presentViewController:alert animated:YES completion:nil];
 }
@@ -2875,11 +2963,10 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
                 kISHLLMDestinationAPIKey: @"",
             };
             ISHLLMSaveDestination(destination);
-            ISHLLMActivateDestination(destination);
-            ISHLLMUpdateSessionEntry(self->_sessionID, @{@"destination": destination[kISHLLMDestinationID]});
-            [self updateChatHeaderTitles];
-            [self setStatus:[self idleStatusText] busy:NO];
-            if (ISHLLMProviderRequiresAPIKey())
+            // Selecting it goes through the same guard as any other switch, so
+            // a reply already in flight isn't retargeted mid-request.
+            [self switchToDestinationWithID:destination[kISHLLMDestinationID]];
+            if (ISHLLMProviderRequiresAPIKey() && ![self isBusy])
                 [self promptForAPIKeyForNewDestination:destination];
         }]];
     }
@@ -2919,7 +3006,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             return;
         [self updateChatHeaderTitles];
         [self refreshTranscript];
-        [self setStatus:[self idleStatusText] busy:NO];
+        [self refreshIdleStatus];
     };
     UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:listViewController];
     ISHConfigureLLMSettingsNavigationController(navigationController);
@@ -2947,6 +3034,13 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 // below -- is a genuine clean slate, not just a visual clear.
 - (void)clearTranscript:(id)sender {
     (void) sender;
+    // Emptying _messages is the same hazard as switching chats: an in-flight
+    // reply appends through a stale index, and the _cancelled reset below
+    // would swallow the Stop that a queued switch is waiting on. So it takes
+    // the same deferral.
+    __weak typeof(self) weakSelf = self;
+    if ([self confirmSwitchWhileBusyWithAction:@"clear this chat" continuation:^{ [weakSelf clearTranscript:nil]; }])
+        return;
     // Cancel anything in flight directly rather than via -stopGenerating: --
     // that sets _cancelled=YES for a completion handler to consume and reset;
     // with nothing in flight to call one, it would stick and wrongly mark
@@ -3206,6 +3300,11 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 - (void)saveTranscript {
     if (_sessionID.length == 0)
         return;
+    // A chat deleted from the list (here or in another window) has had its file
+    // removed already; writing it back would resurrect the transcript as an
+    // orphan no index entry points at.
+    if (ISHLLMSessionEntryWithID(_sessionID) == nil)
+        return;
     ISHLLMWriteSessionMessages(_sessionID, _messages);
 
     NSMutableDictionary<NSString *, id> *updates = [NSMutableDictionary dictionary];
@@ -3223,6 +3322,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
             titleChanged = YES;
         }
     }
+    _lastKnownSessionUpdate = [updates[@"updated"] doubleValue];
     ISHLLMUpdateSessionEntry(_sessionID, updates);
     if (titleChanged)
         [self updateChatHeaderTitles]; // after the write, so the menu reads the new title back
@@ -3424,6 +3524,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 }
 
 - (void)setSending:(BOOL)sending {
+    _sending = sending;
     _sendButton.enabled = YES; // stays tappable while sending -- it becomes Stop
     _promptField.editable = !sending;
     [_sendButton setTitle:(sending ? @"Stop" : @"Send") forState:UIControlStateNormal];
@@ -3458,6 +3559,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     (void) sender;
     _cancelled = YES;
     [_activeTask cancel];
+    [_auxiliaryTask cancel];
     if (_activeStreamFD > 0)
         shutdown(_activeStreamFD, SHUT_RDWR);
 #if __has_include("libiSH_AOKApp-Swift.h")
@@ -3473,6 +3575,14 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         [_activityIndicator startAnimating];
     else
         [_activityIndicator stopAnimating];
+}
+
+// Status refresh for actions that can happen WHILE a reply is arriving (saving
+// a system prompt, managing destinations): they must not paint "Ready" over a
+// live phase caption.
+- (void)refreshIdleStatus {
+    if (![self isBusy])
+        [self setStatus:[self idleStatusText] busy:NO];
 }
 
 - (NSString *)idleStatusText {
@@ -3611,6 +3721,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 
 - (void)appendModelListFromData:(NSData *)data statusCode:(NSInteger)statusCode error:(NSError *)error {
     [self setSending:NO];
+    _auxiliaryTask = nil;
     if (error != nil) {
         [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Model query failed: %@", error.localizedDescription]];
         return;
@@ -3667,8 +3778,11 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     if (apiKey.length > 0 && !ISHLLMUsesGeminiAPI())
         [request setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
+    // Not _activeTask: that slot belongs to the reply, and a probe parked in it
+    // both survives the request (nothing nils it, so the chat reads as busy
+    // forever) and displaces a streaming reply that Stop would then miss.
     __weak typeof(self) weakSelf = self;
-    _activeTask = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+    _auxiliaryTask = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *) response : nil;
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) self = weakSelf;
@@ -3676,12 +3790,12 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
                 [self appendModelListFromData:data statusCode:http.statusCode error:error];
         });
     }];
-    [_activeTask resume];
+    [_auxiliaryTask resume];
 }
 
 - (void)appendModelLoadResultWithModel:(NSString *)model data:(NSData *)data statusCode:(NSInteger)statusCode error:(NSError *)error {
     [self setSending:NO];
-    _activeTask = nil;
+    _auxiliaryTask = nil;
     if (error != nil) {
         [self appendLocalRole:@"assistant" content:[NSString stringWithFormat:@"Model set to %@, but load failed: %@", model, error.localizedDescription]];
         return;
@@ -3754,7 +3868,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
         [request setValue:[@"Bearer " stringByAppendingString:apiKey] forHTTPHeaderField:@"Authorization"];
     request.HTTPBody = bodyData;
     __weak typeof(self) weakSelf = self;
-    _activeTask = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+    _auxiliaryTask = [NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *) response : nil;
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) self = weakSelf;
@@ -3762,7 +3876,7 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
                 [self appendModelLoadResultWithModel:model data:data statusCode:http.statusCode error:error];
         });
     }];
-    [_activeTask resume];
+    [_auxiliaryTask resume];
 }
 
 #if __has_include("libiSH_AOKApp-Swift.h")
