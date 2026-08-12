@@ -799,20 +799,23 @@ static bool gen_arm64_fits_block(struct gen_state *state, uint64_t end_ip) {
     return end_ip - state->block->addr <= PAGE_SIZE;
 }
 
-// Bisection escape hatch: ISH_ARM64_NO_FUSE=1 disables the arm64 lookahead
-// fusion passes (compare+branch, load+store RMW, load+compare) so a
-// deterministic miscompilation can be pinned to a fusion vs. the base
-// gadgets. Evaluated once; no hot-path cost.
-static bool arm64_fusion_disabled(void) {
-    static int cached = -1;
-    if (cached < 0)
-        cached = getenv("ISH_ARM64_NO_FUSE") != NULL ? 1 : 0;
-    return cached == 1;
+// Bisection escape hatch AND measurement switch: ISH_ARM64_NO_FUSE=1 disables all
+// three arm64 lookahead fusion passes (compare+branch, load+store RMW,
+// load+compare) so a deterministic miscompilation can be pinned to a fusion vs.
+// the base gadgets, and /proc/ish/arm64_jit_fuse turns each pass on and off
+// INDIVIDUALLY at runtime so one can be sized without rebuilding.
+//
+// The `static int cached` this replaced was a correctness hazard for the proc
+// node, not just a missed feature: it would have frozen the answer at the first
+// translated block and silently ignored every later write. Read live instead --
+// one relaxed atomic load per fusion attempt, at translation time.
+static bool arm64_fuse_pass_enabled(unsigned bit) {
+    return (arm64_jit_fuse_mask() & bit) != 0;
 }
 
 static void *gen_arm64_peek_bcond(struct gen_state *state, struct tlb *tlb,
         void *const table[14], uint64_t *taken_out, uint64_t *fallthrough_out) {
-    if (arm64_fusion_disabled())
+    if (!arm64_fuse_pass_enabled(JIT_FUSE_A64_BCOND))
         return NULL;
     uint32_t next;
     if (!tlb_read(tlb, state->arm64_ip, &next, sizeof(next)))
@@ -892,7 +895,7 @@ __attribute__((constructor)) static void arm64_probe_host_caps(void) {
 // extra instructions are consumed); false leaves state untouched.
 static bool gen_arm64_try_ldst_fusion(struct gen_state *state, struct tlb *tlb,
         unsigned size, unsigned rt, unsigned rn, uint64_t off) {
-    if (arm64_fusion_disabled())
+    if (!arm64_fuse_pass_enabled(JIT_FUSE_A64_LDST))
         return false;
     extern void gadget_arm64_rmw_addi_fast64(void), gadget_arm64_rmw_subi_fast64(void);
     extern void gadget_arm64_rmw_addi_fast32(void), gadget_arm64_rmw_subi_fast32(void);
@@ -1012,7 +1015,7 @@ try_rmw:
 // fused block. Returns true with the block ended (caller returns 0).
 static bool gen_arm64_try_ld_cmp_fusion(struct gen_state *state, struct tlb *tlb,
         unsigned size, unsigned rt, unsigned rn, uint64_t off) {
-    if (arm64_fusion_disabled())
+    if (!arm64_fuse_pass_enabled(JIT_FUSE_A64_LDCMP))
         return false;
     extern void gadget_arm64_mov_const(void);
     extern void *const arm64_fused_ldcmpr64_table[14];
@@ -5189,7 +5192,8 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             value += state->riscv64_orig_ip;
         // rd == x0: the value is discarded, so a same-rd fold can't match
         // (rd_off is the zero sink but rs_off(0) is the real zero slot).
-        if (rd != 0 && gen_riscv64_fold_const(state, tlb, rd, value))
+        if (rd != 0 && (riscv64_jit_fuse_mask() & JIT_FUSE_RV_FOLD) &&
+                gen_riscv64_fold_const(state, tlb, rd, value))
             return 1;
         gen_riscv64_mov_const(state, rd, value);
         return 1;
@@ -5444,7 +5448,14 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
     case RISCV64_OP_JAL: {
         int64_t offset = riscv64_imm_j(insn);
         guest_addr_t target = state->riscv64_orig_ip + offset;
-        if (rd != 0) {
+        if (rd != 0 && !(riscv64_jit_fuse_mask() & JIT_FUSE_RV_JAL)) {
+            // Fusion switched off: emit the link write separately, as this used
+            // to. This branch is NOT dead code -- it is the control arm of every
+            // A/B -- and omitting it is a miscompile, not a slowdown: `jal ra`
+            // that never writes ra sends the callee's `ret` to garbage. Caught
+            // exactly that way, by testing the OFF arm.
+            gen_riscv64_mov_const(state, rd, state->riscv64_ip);
+        } else if (rd != 0) {
             // A call. One fused gadget instead of mov_const + b; see jal_link in
             // jit/guest-riscv64/alu.S. Emits the same tagged target word in the
             // same chainable position as gen_riscv64_branch_to, and records
@@ -10260,65 +10271,128 @@ bool gen_addr(struct gen_state *state, struct modrm *modrm, bool seg_tls) {
 // be reintroduced here for the sake of one relaxed atomic load per translated
 // operand (translation-time, not execution-time).
 static atomic_int i386_fuse_mask = -1;
+static atomic_int arm64_fuse_mask = -1;
+static atomic_int riscv64_fuse_mask = -1;
 
-unsigned i386_jit_fuse_mask(void) {
-    int m = atomic_load_explicit(&i386_fuse_mask, memory_order_relaxed);
+// One table-driven implementation for all three guests. Each domain carries its
+// live mask, its full-on value, its name table, and a seeder that reads the
+// arch's existing env vars so their documented behaviour is untouched.
+//
+// -1 means "not yet seeded". Every gate reads through jit_fuse_mask_get() on each
+// call and NEVER caches the answer in a per-site static. A cached gate consults a
+// stale value after the first block compiles and then silently ignores every later
+// write to the proc node -- the knob becomes a liar, which is the exact failure
+// class this facility exists to remove. arm64's old arm64_fusion_disabled() had
+// precisely that cache. Worth one relaxed atomic load per translated instruction,
+// which is translation time, not execution time.
+struct jit_fuse_entry { const char *name; unsigned bit; };
+struct jit_fuse_domain {
+    atomic_int *mask;
+    unsigned all;
+    const struct jit_fuse_entry *names;
+    unsigned n_names;
+    unsigned (*seed)(void);
+};
+
+static unsigned i386_fuse_seed(void) {
+    unsigned v = JIT_FUSE_ALL;
+    // Existing semantics preserved exactly: set to ANY value disables.
+    // ISH_NO_MOVMR_FUSE still covers LEA, which shared movmr's gate before LEA
+    // was given its own bit for independent A/B.
+    if (getenv("ISH_NO_ADDR_FUSE") != NULL)    v &= ~JIT_FUSE_ADDR;
+    if (getenv("ISH_NO_MOVMR_FUSE") != NULL)   v &= ~(JIT_FUSE_MOVMR | JIT_FUSE_LEA);
+    if (getenv("ISH_NO_ALU_FUSE") != NULL)     v &= ~JIT_FUSE_ALU;
+    if (getenv("ISH_NO_PUSHPOP_FUSE") != NULL) v &= ~JIT_FUSE_PUSHPOP;
+    return v;
+}
+static unsigned arm64_fuse_seed(void) {
+    // ISH_ARM64_NO_FUSE was the single bisection hatch for all three passes and
+    // keeps that meaning; the per-pass bits are new granularity, not a change.
+    return getenv("ISH_ARM64_NO_FUSE") != NULL ? 0 : JIT_FUSE_A64_ALL;
+}
+static unsigned riscv64_fuse_seed(void) {
+    return getenv("ISH_RISCV64_NO_FUSE") != NULL ? 0 : JIT_FUSE_RV_ALL;
+}
+
+static const struct jit_fuse_entry i386_fuse_names[] = {
+    {"addr", JIT_FUSE_ADDR}, {"movmr", JIT_FUSE_MOVMR}, {"lea", JIT_FUSE_LEA},
+    {"alu", JIT_FUSE_ALU}, {"pushpop", JIT_FUSE_PUSHPOP},
+};
+static const struct jit_fuse_entry arm64_fuse_names[] = {
+    {"bcond", JIT_FUSE_A64_BCOND}, {"ldst", JIT_FUSE_A64_LDST},
+    {"ldcmp", JIT_FUSE_A64_LDCMP},
+};
+static const struct jit_fuse_entry riscv64_fuse_names[] = {
+    {"fold", JIT_FUSE_RV_FOLD}, {"jal", JIT_FUSE_RV_JAL},
+};
+
+static const struct jit_fuse_domain jit_fuse_domains[] = {
+    [JIT_FUSE_ARCH_I386] = {&i386_fuse_mask, JIT_FUSE_ALL, i386_fuse_names,
+        sizeof(i386_fuse_names) / sizeof(i386_fuse_names[0]), i386_fuse_seed},
+    [JIT_FUSE_ARCH_ARM64] = {&arm64_fuse_mask, JIT_FUSE_A64_ALL, arm64_fuse_names,
+        sizeof(arm64_fuse_names) / sizeof(arm64_fuse_names[0]), arm64_fuse_seed},
+    [JIT_FUSE_ARCH_RISCV64] = {&riscv64_fuse_mask, JIT_FUSE_RV_ALL, riscv64_fuse_names,
+        sizeof(riscv64_fuse_names) / sizeof(riscv64_fuse_names[0]), riscv64_fuse_seed},
+};
+#define JIT_FUSE_N_DOMAINS (sizeof(jit_fuse_domains) / sizeof(jit_fuse_domains[0]))
+
+unsigned jit_fuse_mask_get(enum jit_fuse_arch arch) {
+    if ((unsigned) arch >= JIT_FUSE_N_DOMAINS)
+        return 0;
+    const struct jit_fuse_domain *d = &jit_fuse_domains[arch];
+    int m = atomic_load_explicit(d->mask, memory_order_relaxed);
     if (m < 0) {
-        unsigned v = JIT_FUSE_ALL;
-        // Existing env semantics preserved exactly: set to ANY value disables.
-        // ISH_NO_MOVMR_FUSE still covers LEA, which shared movmr's gate before
-        // LEA was given its own bit for independent A/B.
-        if (getenv("ISH_NO_ADDR_FUSE") != NULL)    v &= ~JIT_FUSE_ADDR;
-        if (getenv("ISH_NO_MOVMR_FUSE") != NULL)   v &= ~(JIT_FUSE_MOVMR | JIT_FUSE_LEA);
-        if (getenv("ISH_NO_ALU_FUSE") != NULL)     v &= ~JIT_FUSE_ALU;
-        if (getenv("ISH_NO_PUSHPOP_FUSE") != NULL) v &= ~JIT_FUSE_PUSHPOP;
         // Benign race: concurrent seeders derive the same value from the same
         // environment, so whoever wins stores an identical mask.
-        atomic_store_explicit(&i386_fuse_mask, (int) v, memory_order_relaxed);
-        m = (int) v;
+        m = (int) d->seed();
+        atomic_store_explicit(d->mask, m, memory_order_relaxed);
     }
     return (unsigned) m;
 }
 
-void i386_jit_fuse_mask_set(unsigned mask) {
-    atomic_store_explicit(&i386_fuse_mask, (int) (mask & JIT_FUSE_ALL),
-            memory_order_relaxed);
+void jit_fuse_mask_set(enum jit_fuse_arch arch, unsigned mask) {
+    if ((unsigned) arch >= JIT_FUSE_N_DOMAINS)
+        return;
+    const struct jit_fuse_domain *d = &jit_fuse_domains[arch];
+    atomic_store_explicit(d->mask, (int) (mask & d->all), memory_order_relaxed);
 }
 
-static const struct { const char *name; unsigned bit; } i386_fuse_names[] = {
-    {"addr", JIT_FUSE_ADDR},
-    {"movmr", JIT_FUSE_MOVMR},
-    {"lea", JIT_FUSE_LEA},
-    {"alu", JIT_FUSE_ALU},
-    {"pushpop", JIT_FUSE_PUSHPOP},
-};
-
-const char *i386_jit_fuse_name(unsigned index, unsigned *bit_out) {
-    if (index >= sizeof(i386_fuse_names) / sizeof(i386_fuse_names[0]))
+const char *jit_fuse_name(enum jit_fuse_arch arch, unsigned index, unsigned *bit_out) {
+    if ((unsigned) arch >= JIT_FUSE_N_DOMAINS)
+        return NULL;
+    const struct jit_fuse_domain *d = &jit_fuse_domains[arch];
+    if (index >= d->n_names)
         return NULL;
     if (bit_out != NULL)
-        *bit_out = i386_fuse_names[index].bit;
-    return i386_fuse_names[index].name;
+        *bit_out = d->names[index].bit;
+    return d->names[index].name;
 }
 
-bool i386_jit_fuse_set_by_name(const char *name, bool on) {
-    for (unsigned i = 0; i < sizeof(i386_fuse_names) / sizeof(i386_fuse_names[0]); i++) {
-        if (strcmp(name, i386_fuse_names[i].name) != 0)
-            continue;
-        unsigned m = i386_jit_fuse_mask();
-        if (on)
-            m |= i386_fuse_names[i].bit;
-        else
-            m &= ~i386_fuse_names[i].bit;
-        i386_jit_fuse_mask_set(m);
+bool jit_fuse_set_by_name(enum jit_fuse_arch arch, const char *name, bool on) {
+    if ((unsigned) arch >= JIT_FUSE_N_DOMAINS)
+        return false;
+    const struct jit_fuse_domain *d = &jit_fuse_domains[arch];
+    if (strcmp(name, "all") == 0) {
+        jit_fuse_mask_set(arch, on ? d->all : 0);
         return true;
     }
-    if (strcmp(name, "all") == 0) {
-        i386_jit_fuse_mask_set(on ? JIT_FUSE_ALL : 0);
+    for (unsigned i = 0; i < d->n_names; i++) {
+        if (strcmp(name, d->names[i].name) != 0)
+            continue;
+        unsigned m = jit_fuse_mask_get(arch);
+        if (on)
+            m |= d->names[i].bit;
+        else
+            m &= ~d->names[i].bit;
+        jit_fuse_mask_set(arch, m);
         return true;
     }
     return false;
 }
+
+unsigned i386_jit_fuse_mask(void) { return jit_fuse_mask_get(JIT_FUSE_ARCH_I386); }
+unsigned arm64_jit_fuse_mask(void) { return jit_fuse_mask_get(JIT_FUSE_ARCH_ARM64); }
+unsigned riscv64_jit_fuse_mask(void) { return jit_fuse_mask_get(JIT_FUSE_ARCH_RISCV64); }
 
 static inline bool gen_try_fuse_addr(struct gen_state *state, gadget_t *table,
         struct modrm *modrm, int size, bool seg_tls) {

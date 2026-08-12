@@ -144,17 +144,40 @@ void jit_invalidate_all(struct jit *jit);
 #define JIT_FUSE_ALL (JIT_FUSE_ADDR | JIT_FUSE_MOVMR | JIT_FUSE_LEA | \
                       JIT_FUSE_ALU | JIT_FUSE_PUSHPOP)
 
-// Live mask. Seeded on first use from the ISH_NO_*_FUSE environment variables,
-// whose existing semantics are unchanged (set to ANY value = that family off;
-// ISH_NO_MOVMR_FUSE still covers LEA, which shared its gate before LEA got its
-// own bit here).
+// The arm64 and riscv64 guests get the same treatment, with their own bit
+// namespaces (the values overlap; the arch selects which table applies).
+//
+// arm64's three lookahead passes shared ONE env var, ISH_ARM64_NO_FUSE, so they
+// could only be turned off together. Each has its own bit here so a lever can be
+// sized on its own; the env var still clears all three, preserving its meaning.
+#define JIT_FUSE_A64_BCOND (1u << 0)  // gen_arm64_peek_bcond: compare + branch
+#define JIT_FUSE_A64_LDST  (1u << 1)  // gen_arm64_try_ldst_fusion: load/store RMW
+#define JIT_FUSE_A64_LDCMP (1u << 2)  // gen_arm64_try_ld_cmp_fusion: load + compare
+#define JIT_FUSE_A64_ALL (JIT_FUSE_A64_BCOND | JIT_FUSE_A64_LDST | JIT_FUSE_A64_LDCMP)
+
+// riscv64 had NO switch at all for either of its fusions, so neither could be
+// A/B'd without rebuilding. ISH_RISCV64_NO_FUSE now clears both.
+#define JIT_FUSE_RV_FOLD (1u << 0)  // gen_riscv64_fold_const: lui/auipc + addi/load
+#define JIT_FUSE_RV_JAL  (1u << 1)  // jal_link: call = link write + branch in one
+#define JIT_FUSE_RV_ALL (JIT_FUSE_RV_FOLD | JIT_FUSE_RV_JAL)
+
+// Live masks. Seeded on first use from the ISH_NO_*_FUSE / ISH_*_NO_FUSE
+// environment variables, whose existing semantics are unchanged (set to ANY value
+// = that family off; ISH_NO_MOVMR_FUSE still covers LEA, which shared its gate
+// before LEA got its own bit).
 unsigned i386_jit_fuse_mask(void);
-void i386_jit_fuse_mask_set(unsigned mask);
-// Name-keyed access for the proc node: "addr", "movmr", "lea", "alu", "pushpop".
-// Returns false for an unknown name. i386_jit_fuse_name walks the table for the
-// show handler and returns NULL past the end.
-bool i386_jit_fuse_set_by_name(const char *name, bool on);
-const char *i386_jit_fuse_name(unsigned index, unsigned *bit_out);
+unsigned arm64_jit_fuse_mask(void);
+unsigned riscv64_jit_fuse_mask(void);
+
+// Generic access for the /proc/ish/<arch>_jit_fuse nodes. One implementation
+// serves all three; the arch picks the mask and the name table.
+enum jit_fuse_arch { JIT_FUSE_ARCH_I386, JIT_FUSE_ARCH_ARM64, JIT_FUSE_ARCH_RISCV64 };
+unsigned jit_fuse_mask_get(enum jit_fuse_arch arch);
+void jit_fuse_mask_set(enum jit_fuse_arch arch, unsigned mask);
+// Walks the arch's table for the show handler; returns NULL past the end.
+const char *jit_fuse_name(enum jit_fuse_arch arch, unsigned index, unsigned *bit_out);
+// Returns false for a name this arch does not have ("all" is accepted).
+bool jit_fuse_set_by_name(enum jit_fuse_arch arch, const char *name, bool on);
 
 bool amd64_jit_is_enabled(void);
 void amd64_jit_set_enabled(bool enabled);
