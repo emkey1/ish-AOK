@@ -2629,6 +2629,17 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
                                                            preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Stop and Continue" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        // The reply can land while this alert is on screen -- a long answer
+        // finishing during the two seconds it takes to read the dialog is the
+        // common case, not a corner one. -setSending:NO has then already run
+        // and will not run again, so a queued action would wait forever and
+        // the Stop would leave _cancelled set to mark the NEXT reply as
+        // user-cancelled. Both handlers are main-queue, so this check cannot
+        // race a completion: just go, nothing is in flight.
+        if (![self isBusy]) {
+            continuation();
+            return;
+        }
         self->_pendingIdleAction = [continuation copy];
         [self stopGenerating:nil];
     }]];
