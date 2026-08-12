@@ -147,6 +147,12 @@ dword_t sys_preadv_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_coun
 dword_t sys_pwritev_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count, off_t_ off);
 dword_t sys_preadv2_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count, off_t_ off, uint_t flags);
 dword_t sys_pwritev2_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count, off_t_ off, uint_t flags);
+// The plain _guest entry points above read the vector with the 64-bit iovec
+// layout; these read i386's 32-bit one.
+dword_t sys_preadv_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count, off_t_ off);
+dword_t sys_pwritev_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count, off_t_ off);
+dword_t sys_preadv2_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count, off_t_ off, uint_t flags);
+dword_t sys_pwritev2_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count, off_t_ off, uint_t flags);
 dword_t sys_ioctl(fd_t f, dword_t cmd, dword_t arg);
 dword_t sys_ioctl_guest(fd_t f, dword_t cmd, guest_addr_t arg);
 dword_t sys_fcntl(fd_t f, dword_t cmd, dword_t arg);

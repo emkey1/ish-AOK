@@ -821,21 +821,46 @@ static void amd64_enomem_syscall_trace(qword_t syscall_num, const qword_t raw_ar
            (unsigned long long) raw_args[4], (unsigned long long) raw_args[5]);
 }
 
-static dword_t sys_pread_amd64(fd_t f, addr_t buf_addr, dword_t size,
+// Positioned I/O whose 64-bit offset arrives as a (low, high) dword pair.
+// That is the real i386 kernel ABI (compat_sys_x86_pread and friends take
+// poslo/poshi in two consecutive arg registers, because x86-32 has no
+// even-register-pair alignment rule), and it is also the shape
+// marshal_syscall_args_legacy hands the amd64 table after splitting the
+// single 64-bit offset register. Wiring sys_pread/sys_pwrite into a table
+// directly instead does not work: their 4th parameter is a 64-bit off_t_,
+// but the legacy dispatcher only ever passes six dwords, so the high half
+// is dropped -- an i386 guest's pwrite at 5GiB silently landed at 1GiB and
+// clobbered whatever was there, with a success return and the right byte
+// count. Not "_amd64" any more precisely because i386 needs it too.
+static dword_t sys_pread_off_pair(fd_t f, addr_t buf_addr, dword_t size,
         dword_t off_low, dword_t off_high, dword_t UNUSED(unused)) {
     off_t_ off = ((off_t_) off_high << 32) | off_low;
     return sys_pread(f, buf_addr, size, off);
 }
 
-static dword_t sys_pwrite_amd64(fd_t f, addr_t buf_addr, dword_t size,
+static dword_t sys_pwrite_off_pair(fd_t f, addr_t buf_addr, dword_t size,
         dword_t off_low, dword_t off_high, dword_t UNUSED(unused)) {
     off_t_ off = ((off_t_) off_high << 32) | off_low;
     return sys_pwrite(f, buf_addr, size, off);
 }
 
-// Legacy 32-bit-pointer fallback for the table slot; handle_amd64_native_memory_syscall
-// intercepts 327/328 first with the 64-bit-safe sys_{preadv,pwritev}2_guest, so this
-// never actually runs — it only needs to exist so the table entry isn't NULL.
+// Legacy 32-bit-pointer fallback for the amd64 table slots;
+// handle_amd64_native_memory_syscall intercepts 295/296/327/328 first with the
+// 64-bit-safe sys_{preadv,pwritev}{,2}_guest, so these never actually run --
+// they only need to exist so the table entries aren't NULL (the NULL check in
+// handle_syscall_interrupt runs before the native intercept).
+static dword_t sys_preadv_amd64(fd_t f, addr_t iovec_addr, dword_t iovec_count,
+        dword_t off_low, dword_t off_high, dword_t UNUSED(unused)) {
+    off_t_ off = ((off_t_) off_high << 32) | off_low;
+    return sys_preadv_guest(f, iovec_addr, iovec_count, off);
+}
+
+static dword_t sys_pwritev_amd64(fd_t f, addr_t iovec_addr, dword_t iovec_count,
+        dword_t off_low, dword_t off_high, dword_t UNUSED(unused)) {
+    off_t_ off = ((off_t_) off_high << 32) | off_low;
+    return sys_pwritev_guest(f, iovec_addr, iovec_count, off);
+}
+
 static dword_t sys_preadv2_amd64(fd_t f, addr_t iovec_addr, dword_t iovec_count,
         dword_t off_low, dword_t off_high, dword_t flags) {
     off_t_ off = ((off_t_) off_high << 32) | off_low;
@@ -846,6 +871,33 @@ static dword_t sys_pwritev2_amd64(fd_t f, addr_t iovec_addr, dword_t iovec_count
         dword_t off_low, dword_t off_high, dword_t flags) {
     off_t_ off = ((off_t_) off_high << 32) | off_low;
     return sys_pwritev2_guest(f, iovec_addr, iovec_count, off, flags);
+}
+
+// i386 preadv/pwritev/preadv2/pwritev2 (333/334/378/379). Same (poslo, poshi)
+// offset pair as pread/pwrite above, but the vector itself has to be read with
+// the 32-bit iovec layout, so these cannot share the amd64 wrappers.
+static dword_t sys_preadv_i386(fd_t f, addr_t iovec_addr, dword_t iovec_count,
+        dword_t off_low, dword_t off_high, dword_t UNUSED(unused)) {
+    off_t_ off = ((off_t_) off_high << 32) | off_low;
+    return sys_preadv_i386_guest(f, iovec_addr, iovec_count, off);
+}
+
+static dword_t sys_pwritev_i386(fd_t f, addr_t iovec_addr, dword_t iovec_count,
+        dword_t off_low, dword_t off_high, dword_t UNUSED(unused)) {
+    off_t_ off = ((off_t_) off_high << 32) | off_low;
+    return sys_pwritev_i386_guest(f, iovec_addr, iovec_count, off);
+}
+
+static dword_t sys_preadv2_i386(fd_t f, addr_t iovec_addr, dword_t iovec_count,
+        dword_t off_low, dword_t off_high, dword_t flags) {
+    off_t_ off = ((off_t_) off_high << 32) | off_low;
+    return sys_preadv2_i386_guest(f, iovec_addr, iovec_count, off, flags);
+}
+
+static dword_t sys_pwritev2_i386(fd_t f, addr_t iovec_addr, dword_t iovec_count,
+        dword_t off_low, dword_t off_high, dword_t flags) {
+    off_t_ off = ((off_t_) off_high << 32) | off_low;
+    return sys_pwritev2_i386_guest(f, iovec_addr, iovec_count, off, flags);
 }
 
 static dword_t sys_truncate_amd64(addr_t path_addr, dword_t size_low, dword_t size_high,
@@ -956,6 +1008,7 @@ static syscall_t i386_syscall_table[] = {
     [118] = (syscall_t) sys_fsync,
     [119] = (syscall_t) sys_sigreturn,
     [120] = (syscall_t) sys_clone,
+    [121] = (syscall_t) sys_setdomainname,
     [122] = (syscall_t) sys_uname,
     [124] = (syscall_t) sys_adjtimex, // adjtimex
     [125] = (syscall_t) sys_mprotect,
@@ -976,12 +1029,14 @@ static syscall_t i386_syscall_table[] = {
     [151] = (syscall_t) sys_munlock,
     [152] = (syscall_t) sys_mlockall,
     [153] = (syscall_t) sys_munlockall,
+    [154] = (syscall_t) sys_sched_setparam,
     [155] = (syscall_t) sys_sched_getparam,
     [156] = (syscall_t) sys_sched_setscheduler,
     [157] = (syscall_t) sys_sched_getscheduler,
     [158] = (syscall_t) sys_sched_yield,
     [159] = (syscall_t) sys_sched_get_priority_max,
     [160] = (syscall_t) sys_sched_get_priority_min,
+    [161] = (syscall_t) sys_sched_rr_get_interval,
     [162] = (syscall_t) sys_nanosleep,
     [163] = (syscall_t) sys_mremap,
     [168] = (syscall_t) sys_poll,
@@ -993,8 +1048,10 @@ static syscall_t i386_syscall_table[] = {
     [177] = (syscall_t) sys_rt_sigtimedwait,
     [178] = (syscall_t) sys_rt_sigqueueinfo,
     [179] = (syscall_t) sys_rt_sigsuspend,
-    [180] = (syscall_t) sys_pread,
-    [181] = (syscall_t) sys_pwrite,
+    // NOT sys_pread/sys_pwrite: their 64-bit off_t_ cannot survive the
+    // six-dword legacy dispatcher. See sys_pread_off_pair.
+    [180] = (syscall_t) sys_pread_off_pair,
+    [181] = (syscall_t) sys_pwrite_off_pair,
     [183] = (syscall_t) sys_getcwd,
     [184] = (syscall_t) sys_capget,
     [185] = (syscall_t) sys_capset,
@@ -1104,6 +1161,8 @@ static syscall_t i386_syscall_table[] = {
     [330] = (syscall_t) sys_dup3,
     [331] = (syscall_t) sys_pipe2,
     [332] = (syscall_t) sys_inotify_init1,
+    [333] = (syscall_t) sys_preadv_i386,
+    [334] = (syscall_t) sys_pwritev_i386,
     [336] = (syscall_t) syscall_stub, // perf_event_open
     [337] = (syscall_t) sys_recvmmsg,
     [340] = (syscall_t) sys_prlimit64,
@@ -1137,11 +1196,20 @@ static syscall_t i386_syscall_table[] = {
     [373] = (syscall_t) sys_shutdown,
     [375] = (syscall_t) sys_membarrier, // membarrier
     [377] = (syscall_t) sys_copy_file_range,
+    [378] = (syscall_t) sys_preadv2_i386,
+    [379] = (syscall_t) sys_pwritev2_i386,
     [383] = (syscall_t) sys_statx,
     [384] = (syscall_t) sys_arch_prctl,
     [386] = (syscall_t) sys_rseq,
+    // Direct SysV IPC syscalls, added to i386 in Linux 4.19 alongside the
+    // older sys_ipc(2) multiplexer at [117]. 394 is semctl, not semtimedop:
+    // semtimedop is 392 (the time32 flavour; the timeout is ignored either
+    // way). Having semtimedop at 394 meant every modern-musl semctl(2) --
+    // musl calls 394 directly when __NR_semctl is defined -- was interpreted
+    // as a semop vector, returning EFAULT for a perfectly valid call.
+    [392] = (syscall_t) sys_semtimedop,
     [393] = (syscall_t) sys_semget,
-    [394] = (syscall_t) sys_semtimedop,
+    [394] = (syscall_t) sys_semctl,
     [395] = (syscall_t) sys_shmget,
     [396] = (syscall_t) sys_shmctl,
     [397] = (syscall_t) sys_shmat,
@@ -1314,8 +1382,8 @@ static syscall_t amd64_syscall_table[470] = {
     [13] = (syscall_t) sys_rt_sigaction,
     [14] = (syscall_t) sys_rt_sigprocmask,
     [15] = (syscall_t) sys_rt_sigreturn,
-    [17] = (syscall_t) sys_pread_amd64,
-    [18] = (syscall_t) sys_pwrite_amd64,
+    [17] = (syscall_t) sys_pread_off_pair,
+    [18] = (syscall_t) sys_pwrite_off_pair,
     [16] = (syscall_t) sys_ioctl,
     [19] = (syscall_t) sys_readv_amd64,
     [20] = (syscall_t) sys_writev_amd64,
@@ -1440,11 +1508,13 @@ static syscall_t amd64_syscall_table[470] = {
     [138] = (syscall_t) sys_fstatfs_amd64,
     [140] = (syscall_t) sys_getpriority,
     [141] = (syscall_t) sys_setpriority,
+    [142] = (syscall_t) sys_sched_setparam,
     [143] = (syscall_t) sys_sched_getparam,
     [144] = (syscall_t) sys_sched_setscheduler,
     [145] = (syscall_t) sys_sched_getscheduler,
     [146] = (syscall_t) sys_sched_get_priority_max,
     [147] = (syscall_t) sys_sched_get_priority_min,
+    [148] = (syscall_t) sys_sched_rr_get_interval,
     [149] = (syscall_t) sys_mlock,
     [150] = (syscall_t) sys_munlock,
     [151] = (syscall_t) sys_mlockall,
@@ -1461,6 +1531,7 @@ static syscall_t amd64_syscall_table[470] = {
     [166] = (syscall_t) sys_umount2,
     [169] = (syscall_t) sys_reboot,
     [170] = (syscall_t) sys_sethostname,
+    [171] = (syscall_t) sys_setdomainname,
     [186] = (syscall_t) sys_gettid,
     [187] = (syscall_t) syscall_success_stub, // readahead
     [188 ... 199] = (syscall_t) sys_xattr_stub,
@@ -1537,6 +1608,8 @@ static syscall_t amd64_syscall_table[470] = {
     [292] = (syscall_t) sys_dup3,
     [293] = (syscall_t) sys_pipe2,
     [294] = (syscall_t) sys_inotify_init1,
+    [295] = (syscall_t) sys_preadv_amd64,
+    [296] = (syscall_t) sys_pwritev_amd64,
     [297] = (syscall_t) sys_rt_tgsigqueueinfo,
     [299] = (syscall_t) sys_recvmmsg_amd64,
     [302] = (syscall_t) sys_prlimit64,
@@ -1710,8 +1783,8 @@ static syscall_t arm64_syscall_table[470] = {
     [64]  = (syscall_t) sys_write,
     [65]  = (syscall_t) sys_readv_amd64,
     [66]  = (syscall_t) sys_writev_amd64,
-    [67]  = (syscall_t) sys_pread_amd64,
-    [68]  = (syscall_t) sys_pwrite_amd64,
+    [67]  = (syscall_t) sys_pread_off_pair,
+    [68]  = (syscall_t) sys_pwrite_off_pair,
     [71]  = (syscall_t) sys_sendfile64,
     [72]  = (syscall_t) sys_pselect_amd64,
     [73]  = (syscall_t) sys_ppoll_amd64,
@@ -3050,8 +3123,22 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_capset_guest(
                 raw_args[0], raw_args[1]));
         return true;
+    // 142/148 join 143/144 here rather than riding the legacy table: their
+    // struct sched_param / struct timespec pointer is a full 64-bit guest
+    // address, and an amd64 binary's rodata and heap sit above 4GiB (a static
+    // string literal lands around 0x555555556000), so the marshaller's
+    // dword-fit check would SIGSYS every call made with anything but a stack
+    // buffer. Same reasoning as sethostname/170 below.
+    case 142:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_sched_setparam_guest(
+                (pid_t_) raw_args[0], raw_args[1]));
+        return true;
     case 143:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_sched_getparam_guest(
+                (pid_t_) raw_args[0], raw_args[1]));
+        return true;
+    case 148:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_sched_rr_get_interval_guest(
                 (pid_t_) raw_args[0], raw_args[1]));
         return true;
     case 144:
@@ -3083,6 +3170,10 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
         return true;
     case 170:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_sethostname_guest(
+                raw_args[0], (dword_t) raw_args[1]));
+        return true;
+    case 171:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_setdomainname_guest(
                 raw_args[0], (dword_t) raw_args[1]));
         return true;
     case 218:
@@ -3543,6 +3634,20 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
                 (fd_t) raw_args[0], raw_args[1], (fd_t) raw_args[2], raw_args[3],
                 raw_args[4], (uint_t) raw_args[5]));
         return true;
+    // preadv/pwritev(fd, iov, iovcnt, pos_l, pos_h) -- native so the 64-bit
+    // iovec pointer and a >4GiB offset survive the marshaller. On a 64-bit ABI
+    // pos_l already carries the whole offset (the kernel's pos_from_hilo
+    // shifts pos_h clean out of a 64-bit loff_t), same as arm64's 69/70.
+    case 295:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_preadv_guest(
+                (fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2],
+                (off_t_) raw_args[3]));
+        return true;
+    case 296:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_pwritev_guest(
+                (fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2],
+                (off_t_) raw_args[3]));
+        return true;
     case 327: // preadv2(fd, iov, iovcnt, pos_l, pos_h, flags) -- native so the
               // 64-bit iovec pointer and pos survive the marshaller
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_preadv2_guest(
@@ -3740,8 +3845,11 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
     case 96:  // gettimeofday
     case 131: // sigaltstack
     case 140: // getpriority
+    case 142: // sched_setparam
     case 143: // sched_getparam
     case 144: // sched_setscheduler
+    case 148: // sched_rr_get_interval(pid, tp)
+    case 171: // setdomainname(name, len)
     case 160: // setrlimit
     case 158: // arch_prctl
     case 229: // clock_getres

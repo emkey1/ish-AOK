@@ -1180,6 +1180,14 @@ dword_t sys_preadv_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_coun
     return sys_preadv_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_AMD64);
 }
 
+// i386's struct iovec is {u32 base, u32 len}, half the width of every 64-bit
+// ABI's, so the plain _guest entry points above cannot serve it -- reading an
+// i386 vector with the amd64 layout splits each 8-byte element in half. Same
+// split as sys_readv_guest vs sys_readv_amd64_guest.
+dword_t sys_preadv_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count, off_t_ off) {
+    return sys_preadv_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_I386);
+}
+
 static dword_t sys_pwritev_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count,
         off_t_ off, enum guest_abi abi) {
     STRACE("pwritev(%d, %#llx, %d, %lld)", fd_no, (unsigned long long) iovec_addr,
@@ -1242,6 +1250,10 @@ dword_t sys_pwritev_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_cou
     return sys_pwritev_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_AMD64);
 }
 
+dword_t sys_pwritev_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count, off_t_ off) {
+    return sys_pwritev_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_I386);
+}
+
 // preadv2/pwritev2: same as preadv/pwritev, but an offset of -1 means "use
 // and advance the current file position" (like plain readv/writev) rather
 // than a positioned access, and there's a trailing RWF_* flags word. The
@@ -1260,6 +1272,20 @@ dword_t sys_pwritev2_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_co
     if (off == (off_t_) -1)
         return sys_writev_common(fd_no, iovec_addr, iovec_count, GUEST_ABI_AMD64);
     return sys_pwritev_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_AMD64);
+}
+
+dword_t sys_preadv2_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count,
+        off_t_ off, uint_t UNUSED(flags)) {
+    if (off == (off_t_) -1)
+        return sys_readv_common(fd_no, iovec_addr, iovec_count, GUEST_ABI_I386);
+    return sys_preadv_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_I386);
+}
+
+dword_t sys_pwritev2_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iovec_count,
+        off_t_ off, uint_t UNUSED(flags)) {
+    if (off == (off_t_) -1)
+        return sys_writev_common(fd_no, iovec_addr, iovec_count, GUEST_ABI_I386);
+    return sys_pwritev_common(fd_no, iovec_addr, iovec_count, off, GUEST_ABI_I386);
 }
 
 dword_t sys__llseek(fd_t f, dword_t off_high, dword_t off_low, addr_t res_addr, dword_t whence) {
@@ -1312,7 +1338,8 @@ off_t_ sys_lseek_amd64_guest(fd_t f, off_t_ off, dword_t whence) {
 }
 
 dword_t sys_pread_guest(fd_t f, guest_addr_t buf_addr, dword_t size, off_t_ off) {
-    STRACE("pread(%d, 0x%x, %d, %d)", f, buf_addr, size, off);
+    STRACE("pread(%d, %#llx, %d, %lld)", f, (unsigned long long) buf_addr, size,
+           (long long) off);
     if (size > MAX_RW_COUNT)
         size = MAX_RW_COUNT;
     struct fd *fd = f_get(f);
@@ -1375,7 +1402,8 @@ dword_t sys_pread(fd_t f, addr_t buf_addr, dword_t size, off_t_ off) {
 }
 
 dword_t sys_pwrite_guest(fd_t f, guest_addr_t buf_addr, dword_t size, off_t_ off) {
-    STRACE("pwrite(%d, 0x%x, %d, %d)", f, buf_addr, size, off);
+    STRACE("pwrite(%d, %#llx, %d, %lld)", f, (unsigned long long) buf_addr, size,
+           (long long) off);
     if (size > MAX_RW_COUNT)
         size = MAX_RW_COUNT;
     struct fd *fd = f_get(f);
