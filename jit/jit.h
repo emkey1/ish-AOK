@@ -159,7 +159,15 @@ void jit_invalidate_all(struct jit *jit);
 // A/B'd without rebuilding. ISH_RISCV64_NO_FUSE now clears both.
 #define JIT_FUSE_RV_FOLD (1u << 0)  // gen_riscv64_fold_const: lui/auipc + addi/load
 #define JIT_FUSE_RV_JAL  (1u << 1)  // jal_link: call = link write + branch in one
-#define JIT_FUSE_RV_ALL (JIT_FUSE_RV_FOLD | JIT_FUSE_RV_JAL)
+// jalr_cached: dispatch straight into an already-translated block at the
+// computed target instead of exiting to C. Not a fusion either, but the same
+// A/B in the shape that matters -- clearing the bit emits the old jalr gadget
+// and stops the frontend publishing entries, so both arms live in one binary.
+// The gadget half is chosen at TRANSLATION time, so a mid-run flip only affects
+// newly compiled blocks: an interleaved A/B must start a fresh guest process
+// per rep (fresh jit, fresh translations) after flipping the knob.
+#define JIT_FUSE_RV_RETCACHE (1u << 2)
+#define JIT_FUSE_RV_ALL (JIT_FUSE_RV_FOLD | JIT_FUSE_RV_JAL | JIT_FUSE_RV_RETCACHE)
 
 // The amd64 guest's bits are not fusions in the i386 sense (two gadgets folded
 // into one) but NATIVE-vs-BRIDGE switches, which is the same A/B in the shape

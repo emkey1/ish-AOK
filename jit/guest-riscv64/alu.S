@@ -253,3 +253,63 @@ branch_op geu, hs
     str x12, [_cpu, x9]       // link AFTER target is computed
     str x10, [_cpu, #CPU_riscv64_pc]
     b jit_ret
+
+// JALR that consults the return cache. Identical to `jalr` above through the
+// link write; only the tail differs, replacing the unconditional exit to C with
+// a lookup that can dispatch straight into an already-translated block. Both
+// gadgets exist in every build and gen picks between them
+// (/proc/ish/riscv64_jit_fuse retcache), so the OFF arm is byte-for-byte the
+// gadget that shipped before this.
+//
+// WHY THE CACHE IS FILLED BY THE FRONTEND, NOT BY THE CALL. i386's design
+// records at `call` and validates at `ret` (gadgets-aarch64/control.S), which
+// this guest cannot copy directly anyway -- RISC-V returns through a link
+// register, not a stack pop -- but the deeper reason not to is that it is
+// unnecessary here. This engine leaves the JIT almost exclusively through jalr
+// (measured: exit count and jalr count one apart), so the set of addresses the
+// frontend dispatches at IS the set of jalr targets. Recording at the call
+// would add work to compute a set the frontend already has, and would cover
+// strictly less: keyed by target, one lookup serves returns, indirect calls and
+// `jr` tail calls alike.
+//
+// The entry is self-validating. It points at block->code, so block->addr sits
+// one negative-offset load away and is compared against the computed target --
+// a stale or conflict-evicted entry can only miss, never mis-dispatch. The
+// is_jetsam test is load-bearing rather than defensive: an invalidated block
+// stays allocated until a write-locked cleanup, and the frontend's cleanup_seq
+// purge does not reach this thread until it next returns to C, which is exactly
+// what this gadget avoids doing. A chained edge is protected there by
+// jit_block_disconnect restoring jump_ip; a cache entry has no such backlink,
+// so it has to check for itself. The pointer itself cannot dangle: freeing a
+// block needs the jetsam WRITE lock and jit_enter runs under the read lock.
+//
+// Hash MUST match RISCV64_RET_CACHE_HASH in jit/frame.h bit for bit; the
+// failure mode of a mismatch is a silent 0% hit rate, not a crash.
+.gadget jalr_cached
+    ldr x9, [_ip]             // rd_off
+    ldr x10, [_ip, #8]        // rs1_off
+    ldr x11, [_ip, #16]       // imm
+    ldr x12, [_ip, #24]       // link value (pc + insn length)
+    ldr x10, [_cpu, x10]
+    add x10, x10, x11
+    bic x10, x10, #1
+    str x12, [_cpu, x9]       // link AFTER target is computed
+    eor x13, x10, x10, lsr #12
+    ubfx x13, x13, #1, #12
+    mov x14, LOCAL_ret_cache
+    add x14, _cpu, x14
+    ldr x14, [x14, x13, lsl #3]
+    cbz x14, 1f               // empty slot
+    ldur x15, [x14, #(JIT_BLOCK_addr - JIT_BLOCK_code)]
+    cmp x15, x10
+    b.ne 1f                   // some other address hashes here
+    ldurb w15, [x14, #(JIT_BLOCK_is_jetsam - JIT_BLOCK_code)]
+    cbnz w15, 1f              // invalidated; let C compile the replacement
+    mov _ip, x14
+    // riscv64_chain (core.S) owns the poke check, the chain budget and the
+    // last_block store, exactly as it does for a chained branch edge. Entering
+    // it below the tagged-word test is deliberate: this pointer is a host
+    // address that has already been validated, so there is no tag to strip.
+    b riscv64_chain
+1:  str x10, [_cpu, #CPU_riscv64_pc]
+    b jit_ret

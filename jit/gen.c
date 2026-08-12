@@ -5436,8 +5436,26 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         {
             // Single gadget: target computed from rs1 BEFORE the link
             // write, so rd==rs1 (jalr ra, 0(ra)) follows the spec.
+            //
+            // The _cached variant adds a jit_frame.ret_cache lookup on the
+            // computed target and dispatches straight into an already-
+            // translated block instead of exiting to C; see jalr_cached in
+            // jit/guest-riscv64/alu.S. This is the whole lever: an instrumented
+            // count put this engine's JIT->C exits and its jalr count one apart,
+            // so essentially every round trip through the frontend is here.
+            //
+            // Emitted for EVERY jalr, not only the rd==0 return shape. The
+            // cache is keyed by the TARGET, not by a recorded call site, so an
+            // indirect call (rd!=0) and a `jr`/`jalr x0` tail call are the exact
+            // same lookup and want it for the same reason -- a PLT stub or a
+            // vtable dispatch lands on a function entry the frontend has
+            // dispatched before. Nothing in an entry says "return", so there is
+            // nothing to restrict, and restricting it would only forgo hits.
             extern void gadget_riscv64_jalr(void);
-            gen(state, (unsigned long) gadget_riscv64_jalr);
+            extern void gadget_riscv64_jalr_cached(void);
+            gen(state, (unsigned long)
+                    ((riscv64_jit_fuse_mask() & JIT_FUSE_RV_RETCACHE)
+                     ? gadget_riscv64_jalr_cached : gadget_riscv64_jalr));
             gen(state, riscv64_rd_off(rd));
             gen(state, riscv64_rs_off(rs1));
             gen(state, (uint64_t) riscv64_imm_i(insn));
@@ -10377,6 +10395,7 @@ static const struct jit_fuse_entry arm64_fuse_names[] = {
 };
 static const struct jit_fuse_entry riscv64_fuse_names[] = {
     {"fold", JIT_FUSE_RV_FOLD}, {"jal", JIT_FUSE_RV_JAL},
+    {"retcache", JIT_FUSE_RV_RETCACHE},
 };
 static const struct jit_fuse_entry amd64_fuse_names[] = {
     {"incdec_reg", JIT_FUSE_AMD64_INCDEC_REG},

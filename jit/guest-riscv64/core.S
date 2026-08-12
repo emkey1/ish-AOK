@@ -105,6 +105,11 @@ riscv64_branch_dispatch:
     and x8, _ip, #0x7fffffffffffffff
     str x8, [_cpu, #CPU_riscv64_pc]
     b jit_ret
+// Global, not file-local: gadget_riscv64_jalr_cached (alu.S) enters here
+// directly with a block->code pointer it has already validated, skipping the
+// tagged-word test above (a cache entry is a host pointer, never a tagged
+// guest address).
+.global riscv64_chain
 riscv64_chain:
     ldr x8, [_cpu, #CPU_poked_ptr]
     ldrb w8, [x8]

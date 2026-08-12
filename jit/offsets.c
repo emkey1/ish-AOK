@@ -63,6 +63,10 @@ void cpu() {
 
     OFFSET(JIT_BLOCK, jit_block, addr);
     OFFSET(JIT_BLOCK, jit_block, code);
+    // Read (at code-relative negative offset) by gadget_riscv64_jalr_cached:
+    // an invalidated-but-not-yet-freed block must not be dispatched out of the
+    // return cache, which unlike a chained edge has nothing to unpatch it.
+    OFFSET(JIT_BLOCK, jit_block, is_jetsam);
 
     OFFSET(TLB, tlb, entries);
     OFFSET(TLB, tlb, mmu);

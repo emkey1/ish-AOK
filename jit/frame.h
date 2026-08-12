@@ -2,8 +2,30 @@
 #include "emu/cpu.h"
 
 // keep in sync with asm
+//
+// NOT freely adjustable: the hash width is hardcoded in the gadgets as a
+// 12-bit bitfield extract (`ubfx ..., 12` in gadgets-aarch64/control.S and
+// guest-riscv64/alu.S, `andl $0xfff` in gadgets-x86_64/control.S). Shrinking
+// this array without editing every one of them indexes past the end of the
+// frame; that was tried at 64 entries and the guest silently produced nothing.
 #define JIT_RETURN_CACHE_SIZE 4096
 #define JIT_RETURN_CACHE_HASH(x) ((x) & 0xFFF0) >> 4)
+
+// The riscv64 engine's key derivation for the same array (see the ret_cache
+// member below for what the two engines each store there). Mixing in bits
+// 12+ rather than taking a bare bitfield the way i386 does, because this key
+// is a guest CODE address and RISC-V instructions are 2- and 4-byte aligned:
+// i386's bits 4..15 would put every call site inside one 16-byte window in the
+// same bucket, which in this guest is a run of consecutive instructions.
+//
+// MUST match gadget_riscv64_jalr_cached (jit/guest-riscv64/alu.S) bit for bit:
+//   eor x13, x10, x10, lsr #12   ->   (ip ^ (ip >> 12))
+//   ubfx x13, x13, #1, #12       ->   (... >> 1) & 0xfff
+// A one-bit disagreement is not a correctness bug (entries self-validate), it
+// is a silent 0% hit rate -- which is indistinguishable from "the lever did
+// not pay off".
+#define RISCV64_RET_CACHE_HASH(ip) \
+    ((size_t) ((((ip) ^ ((ip) >> 12)) >> 1) & (JIT_RETURN_CACHE_SIZE - 1)))
 
 struct jit_frame {
     struct cpu_state cpu;
@@ -28,5 +50,24 @@ struct jit_frame {
     // loop has no such budget, so it still forbids backward links
     // outright and pays an exit-to-C round trip per loop iteration.
     long chain_budget;
-    long ret_cache[JIT_RETURN_CACHE_SIZE]; // a map of ip to pointer-to-call-gadget-arguments
+    // Guest-address-keyed dispatch cache, shared by two engines that store
+    // DIFFERENT things in it. Do not unify them without reading both.
+    //
+    //   i386  (gadgets-{aarch64,x86_64}/control.S): a map of return address to
+    //         pointer-to-call-gadget-arguments. `call` records it; `ret`
+    //         validates by re-reading the recorded call's return address and
+    //         then dispatches through that call's frontend-patched
+    //         return-continuation slot -- so invalidation is handled for it by
+    //         the ordinary jump_ip unpatch in jit_block_disconnect.
+    //   riscv64 (guest-riscv64/alu.S jalr_cached): a map of guest address to
+    //         that address's block->code. The FRONTEND records it at dispatch
+    //         (cpu_step_to_interrupt_riscv64), nothing is recorded at the call,
+    //         and the entry self-validates by reading block->addr back at a
+    //         negative offset. It has no jump_ip to unpatch, so the gadget must
+    //         also reject an is_jetsam block itself.
+    //
+    // Either way an entry names memory inside a jit_block, so every path that
+    // frees or invalidates blocks must clear this: jit_entry_scratch_get on a
+    // jit switch or a block free, and the per-frontend cleanup_seq purge.
+    long ret_cache[JIT_RETURN_CACHE_SIZE];
 };
