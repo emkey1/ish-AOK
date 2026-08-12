@@ -46,6 +46,12 @@
 #   BUILD_IMAGE    Debian image that hosts mmdebstrap   (default debian:trixie)
 #   OUT_DIR        where the .tar.gz land               (default repo root)
 #   KEEP_APT_LISTS 1 to keep /var/lib/apt/lists (bigger) (default unset = strip)
+#   EXTRA_PKGS     comma list appended to the bootstrap package set (default
+#                  empty). Installed by mmdebstrap in the natively-run (or
+#                  Docker-emulated) build container, which is minutes rather
+#                  than the hours the same apt-get takes inside an iSH guest --
+#                  e.g. EXTRA_PKGS=gcc,libc6-dev,make for a rootfs that can
+#                  build the tests/manual regression suite on first boot.
 #   SLOW_HASH      1 to keep Devuan's default yescrypt password hashing
 #                  instead of downgrading to sha512crypt (default unset =
 #                  downgrade). yescrypt is deliberately memory-hard, which is
@@ -116,10 +122,19 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$OUT_DIR"
 
 # --- Devuan archive keyring (extracted from the official Devuan image) --------
+# `docker create` + `docker cp` instead of `docker run ... cat`: copying a file
+# out of an image needs no process, and running one here meant running the
+# image's ENTRYPOINT under emulation. dyne/devuan is amd64-only and its tini
+# entrypoint aborts on an Apple Silicon host -- "[FATAL tini (1)]
+# PR_SET_CHILD_SUBREAPER is unavailable on this platform" -- so every build on
+# this project's actual dev machine died here before bootstrapping anything.
 log "Fetching the Devuan archive keyring from $KEYRING_IMAGE"
 docker pull --platform=linux/amd64 "$KEYRING_IMAGE" >/dev/null
-docker run --rm --platform=linux/amd64 "$KEYRING_IMAGE" \
-    cat /usr/share/keyrings/devuan-archive-keyring.gpg > "$WORK/devuan-archive-keyring.gpg"
+keyring_cid="$(docker create --platform=linux/amd64 "$KEYRING_IMAGE")" \
+    || die "could not create a container from $KEYRING_IMAGE"
+docker cp "$keyring_cid:/usr/share/keyrings/devuan-archive-keyring.gpg" \
+    "$WORK/devuan-archive-keyring.gpg" >/dev/null 2>&1 || true
+docker rm "$keyring_cid" >/dev/null 2>&1 || true
 [ -s "$WORK/devuan-archive-keyring.gpg" ] || die "could not extract the Devuan keyring"
 note "keyring: $(wc -c < "$WORK/devuan-archive-keyring.gpg") bytes"
 
@@ -167,6 +182,7 @@ else
     INCLUDE_PKGS="ca-certificates,devuan-keyring,logsave,vim-tiny"
     BBOX_HOOK='true'
 fi
+[ -n "${EXTRA_PKGS:-}" ] && INCLUDE_PKGS="$INCLUDE_PKGS,$EXTRA_PKGS"
 
 # Devuan/Debian's shadow package defaults new password hashes to yescrypt --
 # deliberately memory-hard (its whole point: resist GPU/ASIC cracking), which
