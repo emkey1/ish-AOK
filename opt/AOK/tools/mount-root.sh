@@ -147,11 +147,18 @@ fi
 TARGET=$1
 shift
 
-CMD=""
+# Keep the command as "$@", NOT flattened into a string. It used to be `CMD=$*`
+# and then an UNQUOTED $CMD at the chroot call, which re-split on whitespace and
+# threw the caller's quoting away: `mount-root.sh R -- sh -c "apt-get update"`
+# ran `sh -c apt-get`, so apt got NO arguments and printed its own help. Silent,
+# and it reads as the command misbehaving rather than as this script dropping
+# quotes. "$@" survives the `for name` loop below untouched, so nothing needs
+# saving or re-parsing.
+HAVE_CMD=0
 if [ $# -gt 0 ]; then
     [ "$1" = "--" ] || die "expected -- before a command (got: $1)"
     shift
-    CMD=$*
+    HAVE_CMD=1
 fi
 
 if [ "$TARGET" = all ]; then
@@ -174,11 +181,11 @@ for name in $NAMES; do
 done
 
 if [ "$TARGET" = all ]; then
-    if [ -n "$CMD" ]; then
+    if [ "$HAVE_CMD" = 1 ]; then
         for name in $NAMES; do
             root=$(root_path "$name")
-            log "$name: $CMD"
-            "$CHROOT" "$root" $CMD
+            log "$name: $*"
+            "$CHROOT" "$root" "$@"
         done
     else
         log "Mounts are ready for every root under $ROOTS_DIR:"
@@ -191,9 +198,9 @@ if [ "$TARGET" = all ]; then
 fi
 
 root=$(root_path "$TARGET")
-if [ -n "$CMD" ]; then
-    log "$TARGET: $CMD"
-    exec "$CHROOT" "$root" $CMD
+if [ "$HAVE_CMD" = 1 ]; then
+    log "$TARGET: $*"
+    exec "$CHROOT" "$root" "$@"
 else
     SHELL_BIN=/bin/sh
     [ -x "$root/bin/bash" ] && SHELL_BIN=/bin/bash
