@@ -1390,10 +1390,26 @@ static void jit_free_jetsam(struct jit *jit) {
 // handled where it always was, by the poke flag and the teardown/invalidate
 // locks. Relaxed ordering is therefore sufficient: this is a
 // clear-more-often-than-strictly-needed hint, not a lock.
+//
+// The free counter is not sufficient on its own, because it only answers "could
+// these pointers name freed memory". The other way a cached pointer goes wrong
+// is that it stays perfectly valid but stops describing THIS address space:
+// execve replaces the task's mm (and thus its jit) while the host thread -- and
+// so this scratch -- lives on. The cache is keyed by guest address alone, and
+// iSH places images deterministically (no ASLR), so the new image reuses the
+// very addresses the old one had translated: a leftover entry is then a HIT,
+// and the frontend runs the previous program's code. Whether the old jit was
+// freed at the exec (which would have bumped the counter and saved us) depends
+// on whether anyone else still holds it -- and after a vfork the parent does.
+// So the owning jit is tracked here too, and a switch clears just like a free.
+// Reused-address ambiguity is covered by the pair: a freed jit whose malloc
+// address a new one recycles bumps the counter, and a live jit's address is
+// unique. See jit_invalidate_range's cleanup_seq for the within-one-jit case.
 struct jit_entry_scratch {
     struct jit_frame frame;
     struct jit_block *cache[JIT_CACHE_SIZE];
     unsigned long generation;
+    const struct jit *owner_jit;
     bool seeded;
 };
 
@@ -1416,7 +1432,7 @@ static void jit_entry_scratch_key_init(void) {
         jit_entry_scratch_key = (pthread_key_t) -1;
 }
 
-static struct jit_entry_scratch *jit_entry_scratch_get(void) {
+static struct jit_entry_scratch *jit_entry_scratch_get(const struct jit *jit) {
     pthread_once(&jit_entry_scratch_once, jit_entry_scratch_key_init);
     if (jit_entry_scratch_key == (pthread_key_t) -1)
         return NULL; // key creation failed; callers use the stack fallback
@@ -1435,15 +1451,20 @@ static struct jit_entry_scratch *jit_entry_scratch_get(void) {
         }
         scratch->seeded = true;
         scratch->generation = generation;
+        scratch->owner_jit = jit;
         return scratch;
     }
-    if (scratch->generation != generation) {
-        // A block was freed since this thread last looked. Drop every pointer
-        // that could name it. Only these two members hold block pointers; the
-        // rest of jit_frame is scratch the frontends set explicitly per entry.
+    if (scratch->generation != generation || scratch->owner_jit != jit) {
+        // Either a block was freed since this thread last looked, or this
+        // thread has moved to a different address space (execve). Both make
+        // every cached pointer meaningless -- dangling in the first case,
+        // describing the wrong program in the second -- so drop them all.
+        // Only these two members hold block pointers; the rest of jit_frame is
+        // scratch the frontends set explicitly per entry.
         memset(scratch->cache, 0, sizeof(scratch->cache));
         memset(scratch->frame.ret_cache, 0, sizeof(scratch->frame.ret_cache));
         scratch->generation = generation;
+        scratch->owner_jit = jit;
     }
     return scratch;
 }
@@ -1506,7 +1527,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     // entry -- i.e. on every guest syscall. See jit_entry_scratch_get(). The
     // stack fallback keeps the old behaviour if the one-per-thread allocation
     // ever fails, so an OOM degrades to slow rather than to broken.
-    struct jit_entry_scratch *scratch = jit_entry_scratch_get();
+    struct jit_entry_scratch *scratch = jit_entry_scratch_get(jit);
     struct jit_block *stack_cache[JIT_CACHE_SIZE]; // uninitialized on purpose
     struct jit_frame stack_frame_storage;
     struct jit_block **cache;
@@ -1943,7 +1964,7 @@ static int cpu_step_to_interrupt_arm64(struct cpu_state *cpu, struct tlb *tlb) {
     // entry -- i.e. on every guest syscall. See jit_entry_scratch_get(). The
     // stack fallback keeps the old behaviour if the one-per-thread allocation
     // ever fails, so an OOM degrades to slow rather than to broken.
-    struct jit_entry_scratch *scratch = jit_entry_scratch_get();
+    struct jit_entry_scratch *scratch = jit_entry_scratch_get(jit);
     struct jit_block *stack_cache[JIT_CACHE_SIZE]; // uninitialized on purpose
     struct jit_frame stack_frame_storage;
     struct jit_block **cache;
@@ -2344,7 +2365,7 @@ static int cpu_step_to_interrupt_riscv64(struct cpu_state *cpu, struct tlb *tlb)
     // entry -- i.e. on every guest syscall. See jit_entry_scratch_get(). The
     // stack fallback keeps the old behaviour if the one-per-thread allocation
     // ever fails, so an OOM degrades to slow rather than to broken.
-    struct jit_entry_scratch *scratch = jit_entry_scratch_get();
+    struct jit_entry_scratch *scratch = jit_entry_scratch_get(jit);
     struct jit_block *stack_cache[JIT_CACHE_SIZE]; // uninitialized on purpose
     struct jit_frame stack_frame_storage;
     struct jit_block **cache;
@@ -2648,7 +2669,7 @@ static int cpu_step_to_interrupt_amd64_frontend(struct cpu_state *cpu, struct tl
     // entry -- i.e. on every guest syscall. See jit_entry_scratch_get(). The
     // stack fallback keeps the old behaviour if the one-per-thread allocation
     // ever fails, so an OOM degrades to slow rather than to broken.
-    struct jit_entry_scratch *scratch = jit_entry_scratch_get();
+    struct jit_entry_scratch *scratch = jit_entry_scratch_get(jit);
     struct jit_block *stack_cache[JIT_CACHE_SIZE]; // uninitialized on purpose
     struct jit_frame stack_frame_storage;
     struct jit_block **cache;

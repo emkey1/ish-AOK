@@ -77,6 +77,8 @@ clone_error_cleanup.c
 uts_namespace.c
 posix_timer_fork.c
 vfork_fatal_signal.c
+vfork_exec_stale_jit.c
+vfork_exec_stale_jit_peer.c
 getppid_thread.c
 concurrent_exec_tlb.c
 random_seed.c
