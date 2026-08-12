@@ -206,6 +206,7 @@ need_file vfork_exec_stale_jit.c
 need_file vfork_exec_stale_jit_peer.c
 need_file getppid_thread.c
 need_file concurrent_exec_tlb.c
+need_file exec_i386_fault_addr.c
 need_file random_seed.c
 need_file getrusage_group.c
 need_file pty_line_discipline.c
