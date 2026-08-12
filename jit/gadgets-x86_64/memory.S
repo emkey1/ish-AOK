@@ -80,8 +80,13 @@ handle_\type\()_miss:
     ret
 
 segfault_\type:
-    movl -TLB_entries+TLB_segfault_addr(%_tlb), %_addr
-    movl %_addr, CPU_segfault_addr(%_cpu)
+    # Full quadword: cpu->segfault_addr is a 64-bit guest_addr_t shared by every
+    # guest ABI, and a 32-bit store leaves the high half holding whatever a
+    # 64-bit guest last put there (exec resets the register file field by field
+    # without clearing it; fork copies the whole struct). See the aarch64
+    # counterpart in gadgets-aarch64/memory.S for the failure this caused.
+    movq -TLB_entries+TLB_segfault_addr(%_tlb), %_addrq
+    movq %_addrq, CPU_segfault_addr(%_cpu)
     .ifc \type,read
         movb $0, CPU_segfault_was_write(%_cpu)
     .else

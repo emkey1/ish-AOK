@@ -429,8 +429,20 @@ handle_\type\()_miss:
 
 .global segfault_\type
 segfault_\type:
-    ldr _addr, [_tlb, -TLB_entries+TLB_segfault_addr]
-    str _addr, [_cpu, CPU_segfault_addr]
+    # cpu->segfault_addr is a 64-bit guest_addr_t shared by every guest ABI, so
+    # it must be written a full doubleword wide even though _addr is 32 bits
+    # here. A `str _addr` writes only the low word and leaves the high word
+    # holding whatever a 64-bit guest last put there -- and exec resets the
+    # register file field by field without clearing it, while fork copies the
+    # whole struct. An i386 image exec'd by a task descended from a 64-bit one
+    # therefore reported its faults with the parent's high half glued on
+    # (arm64 maps live at 0x7fff'xxxxxxxx, so an ordinary stack-growth fault at
+    # 0xffffcbdc surfaced as 0x7fffffffcbdc). handle_page_fault_interrupt then
+    # retried GROWSDOWN at that unmapped address, failed, and killed the guest:
+    # every static i386 binary died in libc startup when fork+exec'd from an
+    # aarch64 root, while the same binary exec'd in place ran fine.
+    ldr _xaddr, [_tlb, -TLB_entries+TLB_segfault_addr]
+    str _xaddr, [_cpu, CPU_segfault_addr]
     .ifc \type,read
         mov w0, 0
     .else

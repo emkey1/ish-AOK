@@ -66,7 +66,10 @@ jit_exit:
 .gadget interrupt
     ldr _tmp, [_ip]
     ldr w8, [_ip, 16]
-    str w8, [_cpu, CPU_segfault_addr]
+    # Full doubleword: see segfault_read/write in memory.S. The 32-bit load
+    # above already zero-extends into x8, so this stores the operand with a
+    # clean high half instead of inheriting a 64-bit guest's leftovers.
+    str x8, [_cpu, CPU_segfault_addr]
     ldr eip, [_ip, 8]
     strb wzr, [_cpu, CPU_segfault_was_write]
     b jit_exit

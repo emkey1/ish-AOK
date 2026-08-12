@@ -81,6 +81,7 @@ vfork_exec_stale_jit.c
 vfork_exec_stale_jit_peer.c
 getppid_thread.c
 concurrent_exec_tlb.c
+exec_i386_fault_addr.c
 random_seed.c
 getrusage_group.c
 pty_line_discipline.c

@@ -71,7 +71,10 @@ jit_exit:
 .gadget interrupt
     movl (%_ip), %_tmp
     movl 16(%_ip), %r14d
-    movl %r14d, CPU_segfault_addr(%_cpu)
+    # Full quadword: see segfault_read/write in memory.S. The 32-bit load above
+    # already zero-extends r14, so this stores the operand with a clean high
+    # half instead of inheriting a 64-bit guest's leftovers.
+    movq %r14, CPU_segfault_addr(%_cpu)
     movl 8(%_ip), %_eip
     movb $0, CPU_segfault_was_write(%_cpu)
     jmp jit_exit
