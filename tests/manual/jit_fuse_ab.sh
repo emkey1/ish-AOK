@@ -126,6 +126,26 @@ case $build in
     exit 1 ;;
 esac
 
+# `date +%s%N` is the only sub-second clock this script has, and busybox date
+# does not implement %N -- it prints the seconds and drops the rest, with no
+# error. Every run then times as 0ms on both arms, the delta divides by zero,
+# and the only symptom is one line of awk noise in the middle of an otherwise
+# ordinary-looking report. A busybox-only root (any Alpine) hits this. A real
+# nanosecond stamp is 19 digits where a bare second count is 10, so check the
+# width rather than trusting the format string to have been honoured.
+now_ns=$(date +%s%N)
+case $now_ns in
+    ''|*[!0-9]*)
+        echo "REFUSING: 'date +%s%N' gave '$now_ns', which is not a number." >&2
+        exit 1 ;;
+esac
+if [ ${#now_ns} -lt 15 ]; then
+    echo "REFUSING: 'date +%s%N' gave '$now_ns' -- seconds only, no %N support." >&2
+    echo "  busybox date silently ignores %N, so every rep would time as 0ms." >&2
+    echo "  Use a root with GNU coreutils date, or install it here." >&2
+    exit 1
+fi
+
 # Run a command in the guest under test: chroot for the non-native arches.
 guest() {
     if [ -n "$root" ]; then sudo chroot "$root" "$@"; else "$@"; fi
