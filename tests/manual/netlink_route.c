@@ -42,6 +42,7 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <sys/utsname.h>
 #include <netinet/in.h>
 
 #include "test_common.h"
@@ -414,9 +415,19 @@ static void test_link_dump_family_filter(void) {
         check(lab, n, base);
     }
 
-    /* AF_BRIDGE is the one family Linux answers differently: bridge ports only,
-     * and iSH-AOK has no bridge devices, so an empty list is the correct reply. */
-    check("famlink.bridge_empty", count_dump_family(RTM_GETLINK_, RTM_NEWLINK_, 7), 0);
+    /* AF_BRIDGE is the one family Linux answers differently: rtnl_bridge_getlink
+     * emits bridge ports only. iSH-AOK has no bridge devices, so the reply must
+     * be empty. On a real kernel that is only true when the host has no bridge
+     * (a docker host has docker0), so assert the exact count under iSH and
+     * merely a subset elsewhere -- otherwise this suite fails on any Linux box
+     * that happens to run containers. */
+    int bridge = count_dump_family(RTM_GETLINK_, RTM_NEWLINK_, 7);
+    struct utsname uts;
+    int under_ish = uname(&uts) == 0 && strstr(uts.release, "ish") != NULL;
+    if (under_ish)
+        check("famlink.bridge_empty", bridge, 0);
+    else
+        check("famlink.bridge_subset", bridge >= 0 && bridge <= base, 1);
 
     /* The address dump, unlike the link dump, IS filtered by family on Linux
      * (separate per-family handlers). Guard that the fix above did not turn the
