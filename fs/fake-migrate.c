@@ -705,6 +705,366 @@ static void migrate_repair_orphans(struct fakefs_db *fs, int root_fd) {
     sqlite3_finalize(stmt);
 }
 
+// version 7: give back their own metadata to paths that an inode collision
+// aliased onto another file's.
+//
+// fs/fake-db.c's path_create used to write the paths row even when its
+// `insert into stats` had just lost a primary-key race, binding the new path to
+// a pre-existing inode belonging to an unrelated file. Both paths then read one
+// stat blob. Harmless-looking until the two disagree about being a directory,
+// at which point the entry is beyond removal: rmdir(2) gets ENOTDIR from the
+// host, unlink(2) gets EISDIR from the metadata. A guest gcc, which reuses
+// temporary names, then aborts with "Cannot create temporary file in /tmp/: Is
+// a directory" and cannot build anything until TMPDIR moves.
+//
+// path_create is fixed and fakefs_rmdir can now clear one of these on demand,
+// but neither helps a root that already carries the damage -- the aliased path
+// keeps reporting a type its host entry does not have. So walk the table once
+// and hand every mismatched path a stats row of its own, carrying the type the
+// host entry really has and the permissions the blob already claimed.
+//
+// ONLY the directory bit is compared. fakefs deliberately stores symlinks,
+// sockets and device nodes as ordinary host files, with the real type held in
+// the metadata alone, so comparing full S_IFMT would report every symlink in
+// the root as damaged and "repair" them into regular files.
+struct migrate_alias {
+    char *path;
+    uint64_t inode;
+    struct ish_stat stat;
+    bool host_is_dir;
+};
+
+// Can the host directory this entry lives in still be opened? Used as the
+// safety gate before deleting a row whose own host entry is missing: a whole
+// subtree that suddenly cannot be found means the name mapping is wrong, not
+// that every file in it was deleted.
+static bool host_parent_exists(int root_fd, const char *host) {
+    char parent[MAX_PATH + 1];
+    const char *slash = strrchr(host, '/');
+    size_t len = slash == NULL ? 0 : (size_t) (slash - host);
+    if (len == 0 || len >= sizeof(parent)) {
+        strcpy(parent, ".");
+    } else {
+        memcpy(parent, host, len);
+        parent[len] = '\0';
+    }
+    int fd = openat(root_fd, parent, O_RDONLY | O_DIRECTORY);
+    if (fd < 0)
+        return false;
+    close(fd);
+    return true;
+}
+
+static void migrate_repair_type_alias(struct fakefs_db *fs, int root_fd) {
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(fs->db,
+                "select paths.path, paths.inode, stats.stat from paths "
+                "join stats on stats.inode = paths.inode", -1, &stmt, NULL) != SQLITE_OK) {
+        printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
+        return;
+    }
+
+    // Collected first and applied afterwards: rewriting paths while stepping a
+    // select over it is not something SQLite promises to iterate sanely. Real
+    // damage is a handful of rows at most, so this stays small.
+    struct migrate_alias *alias = NULL;
+    size_t count = 0, cap = 0;
+    char **stale = NULL;
+    size_t stale_count = 0, stale_cap = 0;
+    unsigned long scanned = 0;
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const void *path_blob = sqlite3_column_blob(stmt, 0);
+        int path_len = sqlite3_column_bytes(stmt, 0);
+        // The root ("") has no name to check and no parent to check it from.
+        if (path_blob == NULL || path_len <= 1 || path_len > MAX_PATH)
+            continue;
+        const void *stat_blob = sqlite3_column_blob(stmt, 2);
+        if (stat_blob == NULL || sqlite3_column_bytes(stmt, 2) != sizeof(struct ish_stat))
+            continue;
+        char path[MAX_PATH + 1];
+        memcpy(path, path_blob, path_len);
+        path[path_len] = '\0';
+        if (path[0] != '/')
+            continue;
+        scanned++;
+
+        char host[MAX_PATH + 1];
+        if (fake_path_to_host(path + 1, host, sizeof(host)) == NULL)
+            continue;
+        struct stat st;
+        if (fstatat(root_fd, host, &st, AT_SYMLINK_NOFOLLOW) != 0) {
+            // A row with nothing behind it is NOT harmless. The guest cannot
+            // stat the name, but it cannot create it either: generic_openat
+            // reads the metadata, sees a directory and answers EISDIR long
+            // before the host is consulted, so `: > name` fails with "Is a
+            // directory" on a name that appears not to exist. That is the same
+            // dead name reached from the other side, and it is what a collision
+            // leaves behind once the host file is eventually removed.
+            //
+            // ENOENT only, and only when the parent directory really is there.
+            // If the escaped-name mapping were ever wrong every lookup in a
+            // subtree would miss, and this would delete the root's whole table;
+            // an openable parent says the mapping works and the entry is simply
+            // gone. The stats row left behind is collected by the orphan sweep
+            // fake_db_init runs just after the migration.
+            if (errno != ENOENT || !host_parent_exists(root_fd, host))
+                continue;
+            if (stale_count == stale_cap) {
+                size_t new_cap = stale_cap == 0 ? 8 : stale_cap * 2;
+                char **grown = realloc(stale, new_cap * sizeof(*grown));
+                if (grown == NULL)
+                    continue;
+                stale = grown;
+                stale_cap = new_cap;
+            }
+            char *copy = strdup(path);
+            if (copy != NULL)
+                stale[stale_count++] = copy;
+            continue;
+        }
+
+        struct ish_stat ishstat;
+        memcpy(&ishstat, stat_blob, sizeof(ishstat));
+        bool host_is_dir = S_ISDIR(st.st_mode);
+        if (host_is_dir == (S_ISDIR(ishstat.mode) != 0))
+            continue;
+
+        if (count == cap) {
+            size_t new_cap = cap == 0 ? 8 : cap * 2;
+            struct migrate_alias *grown = realloc(alias, new_cap * sizeof(*grown));
+            if (grown == NULL)
+                break;
+            alias = grown;
+            cap = new_cap;
+        }
+        alias[count].path = strdup(path);
+        if (alias[count].path == NULL)
+            break;
+        alias[count].inode = (uint64_t) sqlite3_column_int64(stmt, 1);
+        alias[count].stat = ishstat;
+        alias[count].host_is_dir = host_is_dir;
+        count++;
+    }
+    sqlite3_finalize(stmt);
+
+    if (stale_count != 0) {
+        sqlite3_stmt *drop;
+        if (sqlite3_prepare_v2(fs->db, "delete from paths where path = ?", -1, &drop, NULL) == SQLITE_OK) {
+            for (size_t i = 0; i < stale_count; i++) {
+                sqlite3_bind_blob(drop, 1, stale[i], strlen(stale[i]), SQLITE_TRANSIENT);
+                sqlite3_step(drop);
+                sqlite3_reset(drop);
+                printk("fakefs migrate: dropped %s, which had metadata but no host entry\n", stale[i]);
+            }
+            sqlite3_finalize(drop);
+            printk("fakefs migrate: freed %lu dead names\n", (unsigned long) stale_count);
+        } else {
+            printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
+        }
+    }
+    for (size_t i = 0; i < stale_count; i++)
+        free(stale[i]);
+    free(stale);
+
+    if (count == 0) {
+        free(alias);
+        return;
+    }
+
+    sqlite3_stmt *shared = NULL, *add_stat = NULL, *repoint = NULL, *fix_stat = NULL;
+    unsigned split = 0, retyped = 0;
+    if (sqlite3_prepare_v2(fs->db, "select count(*) from paths where inode = ?", -1, &shared, NULL) != SQLITE_OK ||
+            sqlite3_prepare_v2(fs->db, "insert into stats (stat) values (?)", -1, &add_stat, NULL) != SQLITE_OK ||
+            sqlite3_prepare_v2(fs->db, "update paths set inode = ? where path = ?", -1, &repoint, NULL) != SQLITE_OK ||
+            sqlite3_prepare_v2(fs->db, "update stats set stat = ? where inode = ?", -1, &fix_stat, NULL) != SQLITE_OK) {
+        printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
+        goto out;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        struct ish_stat fixed = alias[i].stat;
+        fixed.mode = (fixed.mode & ~(uint32_t) S_IFMT) |
+            (uint32_t) (alias[i].host_is_dir ? S_IFDIR : S_IFREG);
+
+        sqlite3_bind_int64(shared, 1, (int64_t) alias[i].inode);
+        int64_t sharers = sqlite3_step(shared) == SQLITE_ROW ? sqlite3_column_int64(shared, 0) : 1;
+        sqlite3_reset(shared);
+
+        if (sharers > 1) {
+            // Someone else is using this blob correctly; leave it alone and
+            // give this path a row of its own. stats.inode is the rowid, so
+            // SQLite picks a free number here without consulting the in-memory
+            // counter -- which fake_db_init has not even seeded yet.
+            sqlite3_bind_blob(add_stat, 1, &fixed, sizeof(fixed), SQLITE_TRANSIENT);
+            if (sqlite3_step(add_stat) != SQLITE_DONE) {
+                printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
+                sqlite3_reset(add_stat);
+                continue;
+            }
+            int64_t fresh = sqlite3_last_insert_rowid(fs->db);
+            sqlite3_reset(add_stat);
+            sqlite3_bind_int64(repoint, 1, fresh);
+            sqlite3_bind_blob(repoint, 2, alias[i].path, strlen(alias[i].path), SQLITE_TRANSIENT);
+            sqlite3_step(repoint);
+            sqlite3_reset(repoint);
+            split++;
+        } else {
+            // Sole owner, so the blob is simply wrong about the type.
+            sqlite3_bind_blob(fix_stat, 1, &fixed, sizeof(fixed), SQLITE_TRANSIENT);
+            sqlite3_bind_int64(fix_stat, 2, (int64_t) alias[i].inode);
+            sqlite3_step(fix_stat);
+            sqlite3_reset(fix_stat);
+            retyped++;
+        }
+        printk("fakefs migrate: %s claimed to be %s; the host entry is %s\n", alias[i].path,
+                alias[i].host_is_dir ? "a file" : "a directory",
+                alias[i].host_is_dir ? "a directory" : "a file");
+    }
+    printk("fakefs migrate: repaired %u aliased and %u mistyped entries of %lu\n",
+            split, retyped, scanned);
+
+out:
+    sqlite3_finalize(shared);
+    sqlite3_finalize(add_stat);
+    sqlite3_finalize(repoint);
+    sqlite3_finalize(fix_stat);
+    for (size_t i = 0; i < count; i++)
+        free(alias[i].path);
+    free(alias);
+}
+
+// The same collision in its other shape: two paths that are BOTH real host
+// directories sharing one inode. Nothing is wedged here -- each agrees with its
+// own host entry, so the pass above leaves them alone -- but (st_dev, st_ino)
+// stops identifying a file, which is exactly the uniqueness cp, mv, rsync and
+// install rely on to tell two files apart (see tests/manual/mount_cross_dev.c
+// for the same invariant broken a different way). link(2) refuses to hard-link
+// a directory, so two of them on one inode cannot have happened honestly; give
+// every one after the first a stats row of its own. Regular files sharing an
+// inode are left alone -- those are indistinguishable from ordinary hard links,
+// which the roots are full of (/usr/bin/ar and friends).
+#define MIGRATE_MAX_SHARERS 256
+
+static void migrate_split_shared_dirs(struct fakefs_db *fs, int root_fd) {
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(fs->db,
+                "select inode from paths group by inode having count(*) > 1", -1, &stmt, NULL) != SQLITE_OK) {
+        printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
+        return;
+    }
+    // Collected up front: the repair rewrites paths, which this reads from.
+    uint64_t *dup = NULL;
+    size_t dup_count = 0, dup_cap = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        if (dup_count == dup_cap) {
+            size_t cap = dup_cap == 0 ? 16 : dup_cap * 2;
+            uint64_t *grown = realloc(dup, cap * sizeof(*grown));
+            if (grown == NULL)
+                break;
+            dup = grown;
+            dup_cap = cap;
+        }
+        dup[dup_count++] = (uint64_t) sqlite3_column_int64(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    if (dup_count == 0) {
+        free(dup);
+        return;
+    }
+
+    sqlite3_stmt *list = NULL, *get_stat = NULL, *add_stat = NULL, *repoint = NULL;
+    unsigned split = 0;
+    if (sqlite3_prepare_v2(fs->db, "select path from paths where inode = ? order by path", -1, &list, NULL) != SQLITE_OK ||
+            sqlite3_prepare_v2(fs->db, "select stat from stats where inode = ?", -1, &get_stat, NULL) != SQLITE_OK ||
+            sqlite3_prepare_v2(fs->db, "insert into stats (stat) values (?)", -1, &add_stat, NULL) != SQLITE_OK ||
+            sqlite3_prepare_v2(fs->db, "update paths set inode = ? where path = ?", -1, &repoint, NULL) != SQLITE_OK) {
+        printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
+        goto out;
+    }
+
+    for (size_t i = 0; i < dup_count; i++) {
+        struct ish_stat ishstat;
+        bool have_stat = false;
+        sqlite3_bind_int64(get_stat, 1, (int64_t) dup[i]);
+        if (sqlite3_step(get_stat) == SQLITE_ROW &&
+                sqlite3_column_bytes(get_stat, 0) == sizeof(ishstat)) {
+            memcpy(&ishstat, sqlite3_column_blob(get_stat, 0), sizeof(ishstat));
+            have_stat = true;
+        }
+        sqlite3_reset(get_stat);
+        if (!have_stat || !S_ISDIR(ishstat.mode))
+            continue;
+
+        char *shared[MIGRATE_MAX_SHARERS];
+        size_t shared_count = 0;
+        sqlite3_bind_int64(list, 1, (int64_t) dup[i]);
+        while (sqlite3_step(list) == SQLITE_ROW && shared_count < MIGRATE_MAX_SHARERS) {
+            const void *blob = sqlite3_column_blob(list, 0);
+            int len = sqlite3_column_bytes(list, 0);
+            if (blob == NULL || len <= 1 || len > MAX_PATH)
+                continue;
+            char path[MAX_PATH + 1];
+            memcpy(path, blob, len);
+            path[len] = '\0';
+            if (path[0] != '/')
+                continue;
+            // Only entries the host really has as directories: an entry whose
+            // host side is a file was the pass above's business, and by now it
+            // is off this inode anyway.
+            char host[MAX_PATH + 1];
+            struct stat st;
+            if (fake_path_to_host(path + 1, host, sizeof(host)) == NULL)
+                continue;
+            if (fstatat(root_fd, host, &st, AT_SYMLINK_NOFOLLOW) != 0 || !S_ISDIR(st.st_mode))
+                continue;
+            char *copy = strdup(path);
+            if (copy == NULL)
+                break;
+            shared[shared_count++] = copy;
+        }
+        sqlite3_reset(list);
+
+        // The first keeps the original row; the rest each get their own.
+        for (size_t j = 1; j < shared_count; j++) {
+            sqlite3_bind_blob(add_stat, 1, &ishstat, sizeof(ishstat), SQLITE_TRANSIENT);
+            if (sqlite3_step(add_stat) != SQLITE_DONE) {
+                printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
+                sqlite3_reset(add_stat);
+                continue;
+            }
+            int64_t fresh = sqlite3_last_insert_rowid(fs->db);
+            sqlite3_reset(add_stat);
+            sqlite3_bind_int64(repoint, 1, fresh);
+            sqlite3_bind_blob(repoint, 2, shared[j], strlen(shared[j]), SQLITE_TRANSIENT);
+            sqlite3_step(repoint);
+            sqlite3_reset(repoint);
+            printk("fakefs migrate: %s shared inode %llu with %s; moved to %lld\n",
+                    shared[j], (unsigned long long) dup[i], shared[0], (long long) fresh);
+            split++;
+        }
+        for (size_t j = 0; j < shared_count; j++)
+            free(shared[j]);
+    }
+    if (split != 0)
+        printk("fakefs migrate: gave %u directories an inode of their own\n", split);
+
+out:
+    sqlite3_finalize(list);
+    sqlite3_finalize(get_stat);
+    sqlite3_finalize(add_stat);
+    sqlite3_finalize(repoint);
+    free(dup);
+}
+
+static void migrate_repair_inode_collisions(struct fakefs_db *fs, int root_fd) {
+    // Order matters: retyping a path whose host entry is not a directory takes
+    // it off the shared inode, so the sharer sweep below sees only the pairs
+    // that are genuinely two directories.
+    migrate_repair_type_alias(fs, root_fd);
+    migrate_split_shared_dirs(fs, root_fd);
+}
+
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 static struct migration {
     const char *sql;
@@ -742,6 +1102,10 @@ static struct migration {
     // version 6: recover what v4/v5 left stranded inside a renamed twin
     {
         NULL, migrate_repair_orphans
+    },
+    // version 7: unpick the inode aliasing left by concurrent allocators
+    {
+        NULL, migrate_repair_inode_collisions
     },
 };
 

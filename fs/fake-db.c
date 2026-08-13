@@ -152,12 +152,55 @@ bool path_read_stat(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     db_reset(fs, fs->stmt.path_read_stat);
     return exists;
 }
+static inode_t fakefs_next_inode_init(struct fakefs_db *fs);
+
+// Returns 0 if no inode could be claimed, in which case nothing was written and
+// the caller must fail the operation rather than commit a half-made file.
+//
+// The stats insert is a plain `insert`, so it fails with SQLITE_CONSTRAINT when
+// the inode is already taken -- and db_check_error only printk()s, so that used
+// to pass unnoticed: the `insert or replace into paths` below it ran anyway and
+// bound the new path to a *pre-existing* inode belonging to some other file.
+// The new path then reads that file's stat blob. When the blob says S_IFDIR and
+// the new host entry is an ordinary file, the result cannot be removed by
+// anything: rmdir(2) gets the host's ENOTDIR, unlink(2) the metadata's EISDIR.
+// Seen in the field as a gcc temporary, /tmp/ccKNBeAg.o, wearing the mode of
+// the directory /rbind, which aborted every in-guest build that reused the name.
+//
+// next_inode is a per-fakefs_db counter seeded once from max(stats.inode) and
+// then kept in memory, so a second allocator on the same meta.db -- another ish
+// process on the same root, or that root mounted twice -- hands out the very
+// numbers this one is working through. Take the constraint failure as the
+// signal it is: re-seed from the database and try again.
 inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *stat) {
-    inode_t inode = fs->next_inode++;
-    // insert into stats (inode, stat) values (?, ?)
-    sqlite3_bind_int64(fs->stmt.path_create_stat, 1, inode);
-    sqlite3_bind_blob(fs->stmt.path_create_stat, 2, stat, sizeof(*stat), SQLITE_TRANSIENT);
-    db_exec_reset(fs, fs->stmt.path_create_stat);
+    inode_t inode = 0;
+    bool created = false;
+    // Each retry re-seeds past every inode in the table, so it can only lose
+    // again to a writer that committed in between; a couple of rounds is
+    // already generous.
+    for (int attempt = 0; attempt < 8; attempt++) {
+        inode = fs->next_inode++;
+        // insert into stats (inode, stat) values (?, ?)
+        sqlite3_bind_int64(fs->stmt.path_create_stat, 1, inode);
+        sqlite3_bind_blob(fs->stmt.path_create_stat, 2, stat, sizeof(*stat), SQLITE_TRANSIENT);
+        int err = sqlite3_step(fs->stmt.path_create_stat);
+        sqlite3_reset(fs->stmt.path_create_stat);
+        if (err == SQLITE_DONE) {
+            created = true;
+            break;
+        }
+        // Extended result codes are off by default, but mask anyway so a build
+        // that turns them on still recognizes SQLITE_CONSTRAINT_PRIMARYKEY.
+        if ((err & 0xff) != SQLITE_CONSTRAINT) {
+            db_check_error(fs);
+            return 0;
+        }
+        fs->next_inode = fakefs_next_inode_init(fs);
+    }
+    if (!created) {
+        printk("ERROR: fakefs path_create(%s): could not claim a free inode\n", path);
+        return 0;
+    }
     // insert or replace into paths values (?, ?)
     bind_path(fs->stmt.path_create_path, 1, path);
     sqlite3_bind_int64(fs->stmt.path_create_path, 2, inode);
@@ -299,10 +342,11 @@ int fake_db_create_schema(const char *db_path) {
              "create table stats (inode integer primary key, stat blob);"
              "create table paths (path blob primary key, inode integer references stats(inode));"
              "create index inode_to_path on paths (inode, path);"
-             // v6 repairs what the v4/v5 rename passes stranded; a root
-             // created here never had unescaped names, so there is nothing
-             // for it to find.
-             "pragma user_version=6;");
+             // v6 repairs what the v4/v5 rename passes stranded and v7 the
+             // inode aliasing that concurrent allocators left; a root created
+             // here never had unescaped names and has no history to alias, so
+             // there is nothing for either to find.
+             "pragma user_version=7;");
     EXEC_RET("commit");
     sqlite3_close(db);
     return 0;

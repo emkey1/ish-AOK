@@ -97,8 +97,10 @@ static const char *schema = Q(
     // version 5: host names are stored in escaped form (fs/fake-path.h),
     // including non-ASCII bytes; fakefs_import writes them that way, so no
     // migration is needed. version 6 repairs what the v4/v5 rename passes
-    // stranded, which for the same reason cannot exist here.
-    pragma user_version=6;
+    // stranded, which for the same reason cannot exist here, and version 7
+    // the inode aliasing left by concurrent allocators -- a root written in
+    // one pass by one writer has none, so it would only pay for the sweep.
+    pragma user_version=7;
 );
 
 // Host file names are the escaped on-disk form of the guest names (see

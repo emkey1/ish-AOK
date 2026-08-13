@@ -102,6 +102,7 @@ chroot_getcwd.c
 iovec_abi_marshal.c
 fakefs_type_race.c
 fakefs_casefold.c
+fakefs_inode_alias.c
 fifo_open_creat_deadlock.c
 proc_stat_monotonic.c
 sock_getfd_errno.c

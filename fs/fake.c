@@ -459,6 +459,31 @@ static int fakefs_rmdir(struct mount *mount, const char *path) {
         return name_err;
     db_begin_write(fs);
     int err = realfs.rmdir(mount, host_path);
+    if (err == _ENOTDIR) {
+        // The host says this is not a directory while the metadata says it is.
+        // That pair is unreachable through any sequence of guest operations,
+        // and it used to be a dead end: rmdir(2) fails here on the host's
+        // ENOTDIR, while unlink(2) never gets this far because generic_unlinkat
+        // reads the metadata and answers EISDIR. The name could then never be
+        // removed or reused -- fatal for a guest gcc, which reuses temporary
+        // names and aborts with "Cannot create temporary file in /tmp/: Is a
+        // directory". fs/fake-db.c's path_create no longer manufactures this
+        // (an inode collision used to alias one path onto another file's stat
+        // blob) and the v7 pass in fs/fake-migrate.c repairs roots already
+        // carrying it, but a root can still arrive here from an older build, so
+        // give rmdir the power to finish what the guest asked.
+        //
+        // Gated on the metadata's directory bit alone. fakefs stores symlinks,
+        // sockets and device nodes as ordinary host files whose real type lives
+        // only in the metadata, so rmdir("symlink-to-dir") and rmdir("file")
+        // still take the normal ENOTDIR path below -- as they must.
+        struct ish_stat ishstat;
+        if (path_read_stat(fs, path, &ishstat, NULL) && S_ISDIR(ishstat.mode)) {
+            err = realfs.unlink(mount, host_path);
+            if (err >= 0)
+                printk("fakefs: removed type-mismatched entry %s (metadata said directory, host did not)\n", path);
+        }
+    }
     if (err < 0) {
         db_rollback(fs);
         return err;
@@ -527,7 +552,13 @@ static int fakefs_symlink(struct mount *mount, const char *target, const char *l
     ishstat.uid = current->euid;
     ishstat.gid = current->egid;
     ishstat.rdev = 0;
-    path_create(fs, link, &ishstat);
+    if (path_create(fs, link, &ishstat) == 0) {
+        // Without its metadata row the host file is not a symlink at all, just
+        // a file holding a path; see fakefs_mknod.
+        db_rollback(fs);
+        unlinkat(mount->root_fd, fix_path(host_link), 0);
+        return _EIO;
+    }
     fakefs_trace_symlink_result(mount, fs, target, link, 0, 0);
     db_commit(fs);
     return 0;
@@ -557,7 +588,13 @@ static int fakefs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev
     stat.rdev = 0;
     if (S_ISBLK(mode) || S_ISCHR(mode))
         stat.rdev = dev;
-    path_create(fs, path, &stat);
+    if (path_create(fs, path, &stat) == 0) {
+        // No metadata means no file, so take the host entry back out rather
+        // than leave one the guest can see but never describe.
+        db_rollback(fs);
+        realfs.unlink(mount, host_path);
+        return _EIO;
+    }
     db_commit(fs);
     return err;
 }
@@ -696,7 +733,13 @@ static int fakefs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
     ishstat.uid = current->euid;
     ishstat.gid = current->egid;
     ishstat.rdev = 0;
-    path_create(fs, path, &ishstat);
+    if (path_create(fs, path, &ishstat) == 0) {
+        // See fakefs_mknod: a host entry with no metadata row behind it is
+        // worse than a failed mkdir.
+        db_rollback(fs);
+        realfs.rmdir(mount, host_path);
+        return _EIO;
+    }
     db_commit(fs);
     return 0;
 }
