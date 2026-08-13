@@ -111,6 +111,18 @@ static bool fakefs_dpkg_trace_enabled(void) {
 }
 
 static void fakefs_apply_stat_override(struct statbuf *stat, ino_t inode, const struct ish_stat *ishstat) {
+    // The caller filled this in from the host stat, whose st_dev names the
+    // volume the backing store happens to sit on. We are about to replace the
+    // inode with one from this mount's SQLite metadata, and those two numbers
+    // must come from the SAME namespace or the (dev, ino) pair is meaningless.
+    // Every fakefs mount on one host volume reports that same host dev, while
+    // each numbers its own inodes from 1, so two roots collide constantly:
+    // three files, one per /AOK/roots mount, all reported dev=265 ino=308, and
+    // cp/mv/rsync/install then treat unrelated files as the same file. Leave
+    // dev 0 and let generic_statat/generic_fstat stamp mount->fake_dev, the
+    // per-mount anonymous device (Linux 0:xx) every other backing-less
+    // filesystem here already gets.
+    stat->dev = 0;
     stat->inode = inode;
     stat->mode = ishstat->mode;
     stat->uid = ishstat->uid;
@@ -573,13 +585,7 @@ static int fakefs_stat(struct mount *mount, const char *path, struct statbuf *fa
     err = realfs.stat(mount, host_path, fake_stat);
     if (err < 0)
         return err;
-    fake_stat->inode = inode;
-    fake_stat->mode = ishstat.mode;
-    fake_stat->uid = ishstat.uid;
-    fake_stat->gid = ishstat.gid;
-    fake_stat->rdev = ishstat.rdev;
-    if (S_ISCHR(fake_stat->mode))
-        tty_stat_rdev(fake_stat->rdev, fake_stat);
+    fakefs_apply_stat_override(fake_stat, inode, &ishstat);
     return 0;
 }
 
