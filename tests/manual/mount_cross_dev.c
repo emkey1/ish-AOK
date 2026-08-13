@@ -33,7 +33,9 @@
 // Needs a SECOND mount to compare against; how it is found, in order:
 //   1. $ISH_TEST_SECOND_MOUNT -- an existing directory on another mount.
 //   2. /fakemnt2 -- the CLI repro rig (run ish with ISH_FAKE_MNT2=<root dir>).
-//   3. /AOK/roots/<name>/data mounted read-write at a temp point, as root.
+//   3. an /AOK/roots/<name> the app has already mounted (the on-device shape;
+//      needs root to write there, so run the suite under sudo).
+//   4. failing that, /AOK/roots/<name>/data mounted at a temp point, as root.
 // Skips cleanly when none is available. Cannot run on real Linux as written
 // (there is no second fakefs there), but the invariant it asserts is a plain
 // POSIX one, so the generic form via $ISH_TEST_SECOND_MOUNT does run there
@@ -113,6 +115,64 @@ static int mountinfo_lookup(const char *point, char *source_out, size_t source_l
 // is a fakefs whose backing dir the app exposes read-write. Skips the root we
 // are booted from: its data dir is already mounted at /, and mounting it a
 // second time would compare a filesystem against itself.
+// On device the app has ALREADY mounted every installed root, one fakefs each,
+// at /AOK/roots/<name> -- that is the real shape, and it is the case this test
+// most wants to cover, because those mounts are exactly where the collision was
+// reported. Measured on an iPad: / is dev 15 ino 16, /AOK/roots/Devuan6 is
+// dev 29 ino 16 and /AOK/roots/Devuan6-x86_64 is dev 31 ino 16 -- three
+// different directories that share an inode number and are told apart by st_dev
+// alone.
+//
+// Find one from /proc/self/mountinfo rather than mounting anything: no
+// privilege needed to look, and no assumption about the backing layout. (The
+// first version of this looked for a <name>/data directory to mount itself,
+// which does not exist -- the app mounts the root and exposes the mount point,
+// not its backing dir -- so this whole branch silently skipped on device, which
+// is the one place it matters most.) Writing still needs root, so a root we
+// cannot create the scratch dir in is passed over.
+static int find_existing_aok_root_mount(void) {
+    char root_src[PATH_MAX];
+    if (!mountinfo_lookup("/", root_src, sizeof(root_src)))
+        root_src[0] = '\0';
+
+    FILE *f = fopen("/proc/self/mountinfo", "r");
+    if (f == NULL)
+        return -1;
+    char line[4096];
+    while (fgets(line, sizeof(line), f) != NULL) {
+        char *save = NULL;
+        char *tok = strtok_r(line, " \n", &save);
+        char *field[32];
+        unsigned n = 0;
+        while (tok != NULL && n < 32) {
+            field[n++] = tok;
+            tok = strtok_r(NULL, " \n", &save);
+        }
+        if (n < 6 || strncmp(field[4], "/AOK/roots/", 11) != 0)
+            continue;
+        if (strchr(field[4] + 11, '/') != NULL)
+            continue; // a mount nested inside a root, not the root itself
+        const char *src = "";
+        for (unsigned i = 5; i + 2 < n; i++)
+            if (strcmp(field[i], "-") == 0) { src = field[i + 2]; break; }
+        if (root_src[0] != '\0' && strcmp(src, root_src) == 0)
+            continue; // the booted root, mounted twice: same superblock
+        char probe[PATH_MAX];
+        snprintf(probe, sizeof(probe), "%s/.crossdev-probe.%d", field[4], (int) getpid());
+        if (mkdir(probe, 0700) != 0)
+            continue; // not writable here (needs root); try the next root
+        rmdir(probe);
+        snprintf(second_mount, sizeof(second_mount), "%s", field[4]);
+        test_logf("using already-mounted root %s (source %s)\n", second_mount, src);
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    return -1;
+}
+
+// Fallback: mount a root ourselves from a <name>/data backing dir, for a layout
+// where the roots are not already mounted. Needs root.
 static int try_mount_aok_root(void) {
     DIR *d = opendir("/AOK/roots");
     if (d == NULL)
@@ -176,6 +236,8 @@ static int find_second_mount(void) {
         return 0;
     }
 
+    if (find_existing_aok_root_mount() == 0)
+        return 0;
     return try_mount_aok_root();
 }
 
