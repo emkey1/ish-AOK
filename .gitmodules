@@ -11,4 +11,4 @@
 	shallow = true
 [submodule "deps/rootfs-manifest"]
 	path = deps/rootfs-manifest
-	url = git@github.com:emkey1/ish-AOK-rootfs.git
+	url = https://github.com/emkey1/ish-AOK-rootfs.git
