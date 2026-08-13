@@ -1752,7 +1752,19 @@ dword_t sys_umask(dword_t mask) {
     return old_umask;
 }
 
-static int mount_statfs(struct mount *mount, struct statfsbuf *stat) {
+int mount_statfs(struct mount *mount, struct statfsbuf *stat) {
+    // A bind carries no backing of its own: do_bind_mount copies the origin's
+    // fs but leaves root_fd -1 and data NULL, so running that fs's statfs
+    // against the bind hands realfs/fakefs an fstatvfs(-1) -- EBADF, i.e.
+    // `df /mnt/x` on a bind of any fakefs or realfs path. (tmpfs hid it: its
+    // statfs needs no backing.) Report the origin's superblock, which is also
+    // what Linux reports for a bind. bind_origin is immutable for the bind's
+    // life and always a real mount -- do_bind_mount resolves its source through
+    // find_mount_and_trim_path, which already collapses a bind-of-a-bind -- and
+    // the caller's reference on the bind keeps the origin's alive, so a single
+    // deref needs no lock.
+    if (mount->bind_origin != NULL)
+        mount = mount->bind_origin;
     int err = 0;
     if (mount->fs->statfs)
         err = mount->fs->statfs(mount, stat);

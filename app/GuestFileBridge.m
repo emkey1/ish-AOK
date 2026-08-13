@@ -481,8 +481,10 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         __block int64_t total = 0;
         __block NSError *vfsError = nil;
         BOOL hadContext = [self withGuestTaskContext:^{
-            // Mirrors sys_statfs (kernel/fs.c): normalize, find the mount,
-            // ask its filesystem. Filesystems without a statfs op (proc,
+            // Mirrors sys_statfs (kernel/fs.c): normalize, find the mount, ask
+            // it via the same mount_statfs the syscalls use -- which follows a
+            // bind to its backing mount, where calling mount->fs->statfs
+            // directly reported EBADF. Filesystems without a statfs op (proc,
             // devpts) just leave the buffer zeroed -- reported as 0/0.
             char normalized[MAX_PATH];
             int err = path_normalize(AT_PWD, path.fileSystemRepresentation, normalized, N_SYMLINK_NOFOLLOW);
@@ -491,8 +493,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
             if (mount == NULL) { vfsError = [self errorWithGuestErrno:_ENOENT message:@"No such mount"]; return; }
             struct statfsbuf buf;
             memset(&buf, 0, sizeof(buf));
-            if (mount->fs->statfs != NULL)
-                err = mount->fs->statfs(mount, &buf);
+            err = mount_statfs(mount, &buf);
             mount_release(mount);
             if (err < 0) { vfsError = [self errorWithGuestErrno:err message:@"Cannot stat filesystem"]; return; }
             long blockSize = buf.frsize > 0 ? buf.frsize : buf.bsize;

@@ -164,6 +164,11 @@ extern lock_t mounts_lock;
 struct mount *mount_find(char *path);
 void mount_retain(struct mount *mount);
 void mount_release(struct mount *mount);
+// statfs for a mount, filling in the filesystem's magic and following a bind
+// to the mount that actually backs it. Every statfs(2)/fstatfs(2) variant goes
+// through this; call it rather than mount->fs->statfs, which is wrong for a
+// bind (see kernel/fs.c).
+int mount_statfs(struct mount *mount, struct statfsbuf *stat);
 // mountinfo/statx mount ID (1-based list position); see fs/mount.c
 int mount_id(struct mount *mount);
 

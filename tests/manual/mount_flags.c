@@ -4,6 +4,7 @@
 //   - MS_BIND creates a bind that shares the source's backing (reads and writes
 //     are visible through both the source and the bind target)
 //   - MS_BIND is transitive: binding a bind collapses to the real origin
+//   - statfs/fstatfs on a bind report the origin's filesystem, not EBADF
 //   - "ignored" option flags (MS_REC/MS_SILENT/...) don't break a valid mount
 //   - propagation-only changes (MS_PRIVATE/SHARED/SLAVE/UNBINDABLE) are accepted
 //     no-ops (iSH has no mount namespaces, so the change has no observable effect)
@@ -21,6 +22,7 @@
 #include <unistd.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include "test_common.h"
 
 // Some libc headers predate a few of these; define to the canonical Linux values.
@@ -56,6 +58,13 @@ static int eq_errno(const char *label, long r, int want) {
 static int check(const char *label, int cond) {
     if (cond) { test_logf("ok   %s\n", label); return 1; }
     printf("FAIL %s\n", label);
+    failures_total++;
+    return 0;
+}
+
+static int statfs_ok(const char *label, const char *path, struct statfs *out) {
+    if (statfs(path, out) == 0) { test_logf("ok   %s\n", label); return 1; }
+    printf("FAIL %s: errno=%d (%s), wanted 0\n", label, errno, strerror(errno));
     failures_total++;
     return 0;
 }
@@ -114,9 +123,44 @@ int main(int argc, char **argv) {
     write_file("dst/newfile", "world");
     check("bind.shared_backing", file_has("src/newfile", "world"));
 
+    // statfs must report the mount that actually backs the bind. A bind has no
+    // backing of its own -- it borrows the origin's filesystem but has no
+    // root_fd or data -- so asking that filesystem about the bind itself failed
+    // EBADF for every fakefs- or realfs-backed origin, i.e. `df` on a bind of
+    // any ordinary path. (A bind of a tmpfs worked and hid it: tmpfs's statfs
+    // needs no backing.) The mkdtemp base below is the failing kind whenever
+    // nothing has mounted a tmpfs over /tmp.
+    struct statfs bind_sfs, src_sfs;
+    int bind_sfs_ok = statfs_ok("bind.statfs", "dst", &bind_sfs);
+    int src_sfs_ok = statfs_ok("bind.statfs_source", "src", &src_sfs);
+    if (bind_sfs_ok && src_sfs_ok) {
+        // f_bfree/f_bavail can legitimately move between the two calls; the
+        // filesystem type and total size cannot.
+        check("bind.statfs_type", bind_sfs.f_type == src_sfs.f_type);
+        check("bind.statfs_blocks", bind_sfs.f_blocks == src_sfs.f_blocks);
+    }
+
+    // Same through an fd opened under the bind.
+    int bind_fd = open("dst/file", O_RDONLY);
+    if (check("bind.open", bind_fd >= 0)) {
+        struct statfs fd_sfs;
+        if (fstatfs(bind_fd, &fd_sfs) == 0) {
+            test_logf("ok   bind.fstatfs\n");
+            if (src_sfs_ok)
+                check("bind.fstatfs_type", fd_sfs.f_type == src_sfs.f_type);
+        } else {
+            printf("FAIL bind.fstatfs: errno=%d (%s), wanted 0\n", errno, strerror(errno));
+            failures_total++;
+        }
+        close(bind_fd);
+    }
+
     // Binding a bind resolves transitively to the real origin.
     is_ok("bind.transitive", mount("dst", "dst2", NULL, MS_BIND, NULL));
     check("bind.transitive_reads", file_has("dst2/file", "hello"));
+    struct statfs xitive_sfs;
+    if (statfs_ok("bind.transitive_statfs", "dst2", &xitive_sfs) && src_sfs_ok)
+        check("bind.transitive_statfs_type", xitive_sfs.f_type == src_sfs.f_type);
 
     // Ignored option flags must not break an otherwise-valid bind.
     is_ok("bind.ignored_flags", mount("src2", "dst3", NULL, MS_BIND | MS_REC | MS_SILENT, NULL));
