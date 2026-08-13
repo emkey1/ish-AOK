@@ -699,9 +699,33 @@ static const NSTimeInterval kISHFileProviderMountIdleSeconds = 3.0;
         return;
     }
 
-    [fileURL startAccessingSecurityScopedResource];
-    BOOL isDir;
-    assert([NSFileManager.defaultManager fileExistsAtPath:fileURL.path isDirectory:&isDir] && !isDir);
+    // Balance the stop against the start only when the start succeeded, which
+    // is Apple's contract. A URL that is not security-scoped returns NO and is
+    // still perfectly readable, so NO is not by itself a failure.
+    BOOL accessing = [fileURL startAccessingSecurityScopedResource];
+
+    // Both of these are ordinary, user-reachable outcomes rather than broken
+    // invariants: Files hands us a directory, or the source has moved (or its
+    // security scope was denied) so the path no longer resolves. They were an
+    // assert(), which turned each into an abort() that killed the whole
+    // extension from inside Apple's createItemBasedOnTemplate: call. Five
+    // reported crashes on build 545 alone, across three devices on iOS 26.5
+    // and 26.6. Report them as errors and let Files show a refusal.
+    BOOL isDir = NO;
+    if (![NSFileManager.defaultManager fileExistsAtPath:fileURL.path isDirectory:&isDir]) {
+        if (accessing)
+            [fileURL stopAccessingSecurityScopedResource];
+        completionHandler(nil, [NSError errorWithDomain:NSPOSIXErrorDomain code:ENOENT userInfo:nil]);
+        return;
+    }
+    if (isDir) {
+        // Importing a directory would need the recursive copy this path does
+        // not do; doCreateFileAt:importFrom: copies one file's contents.
+        if (accessing)
+            [fileURL stopAccessingSecurityScopedResource];
+        completionHandler(nil, [NSError errorWithDomain:NSPOSIXErrorDomain code:EISDIR userInfo:nil]);
+        return;
+    }
     ino_t inode;
     int rootLockFd = ISHFileProviderAcquireRootLock(rootName, YES);
     [mountOwner.ioLock lock];
@@ -712,7 +736,8 @@ static const NSTimeInterval kISHFileProviderMountIdleSeconds = 3.0;
                                  error:&error];
     [mountOwner.ioLock unlock];
     ISHAppGroupReleaseLock(rootLockFd);
-    [fileURL stopAccessingSecurityScopedResource];
+    if (accessing)
+        [fileURL stopAccessingSecurityScopedResource];
     if (!worked) {
         completionHandler(nil, error);
         return;
