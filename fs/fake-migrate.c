@@ -1153,6 +1153,22 @@ static void migrate_names_free(struct migrate_names *list) {
     list->count = 0;
 }
 
+static bool migrate_names_add(struct migrate_names *list, const char *name, size_t *cap) {
+    if (list->count == *cap) {
+        size_t grow = *cap == 0 ? 16 : *cap * 2;
+        char **names = realloc(list->name, grow * sizeof(*names));
+        if (names == NULL)
+            return false;
+        list->name = names;
+        *cap = grow;
+    }
+    char *copy = strdup(name);
+    if (copy == NULL)
+        return false;
+    list->name[list->count++] = copy;
+    return true;
+}
+
 static bool migrate_names_load(int root_fd, const char *host_dir, struct migrate_names *list) {
     list->name = NULL;
     list->count = 0;
@@ -1170,22 +1186,10 @@ static bool migrate_names_load(int root_fd, const char *host_dir, struct migrate
     while ((ent = readdir(dir)) != NULL) {
         if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
             continue;
-        if (list->count == cap) {
-            size_t grow = cap == 0 ? 16 : cap * 2;
-            char **names = realloc(list->name, grow * sizeof(*names));
-            if (names == NULL) {
-                ok = false;
-                break;
-            }
-            list->name = names;
-            cap = grow;
-        }
-        char *copy = strdup(ent->d_name);
-        if (copy == NULL) {
+        if (!migrate_names_add(list, ent->d_name, &cap)) {
             ok = false;
             break;
         }
-        list->name[list->count++] = copy;
     }
     closedir(dir);
     if (!ok)
@@ -1407,11 +1411,6 @@ static void migrate_canonicalize(struct migrate_alias_ctx *ctx, const char *host
     migrate_names_free(&list);
 }
 
-// At most this many aliases are repaired in one directory. Real damage is one
-// or two; a listing that produced hundreds would mean this pass has misread the
-// directory, and stopping is better than rewriting all of it.
-#define MIGRATE_MAX_ALIASES 32
-
 static void migrate_repair_name_aliases(struct fakefs_db *fs, int root_fd) {
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(fs->db, "select path from paths order by path", -1, &stmt, NULL) != SQLITE_OK) {
@@ -1459,10 +1458,12 @@ static void migrate_repair_name_aliases(struct fakefs_db *fs, int root_fd) {
 
         // Collected before anything moves: the repair renames entries in this
         // very directory, which the cached listing and its index would no
-        // longer describe.
-        char *alias[MIGRATE_MAX_ALIASES];
-        size_t alias_count = 0;
-        for (size_t i = 0; i < cache.count && alias_count < MIGRATE_MAX_ALIASES; i++) {
+        // longer describe. Grown rather than capped -- the version bump means
+        // this pass runs once and never again, so a fixed limit quietly reached
+        // would leave the rest of the directory damaged for good.
+        struct migrate_names alias = {0};
+        size_t alias_cap = 0;
+        for (size_t i = 0; i < cache.count; i++) {
             if (strcmp(cache.names[i], ".") == 0 || strcmp(cache.names[i], "..") == 0)
                 continue;
             if (host_name_is_canonical(cache.names[i]))
@@ -1483,26 +1484,24 @@ static void migrate_repair_name_aliases(struct fakefs_db *fs, int root_fd) {
             // told it is fine.
             if (!dir_cache_index(&cache) || !dir_cache_has(&cache, canon))
                 continue;
-            char *copy = strdup(cache.names[i]);
-            if (copy == NULL)
+            if (!migrate_names_add(&alias, cache.names[i], &alias_cap))
                 break;
-            alias[alias_count++] = copy;
         }
 
-        for (size_t i = 0; i < alias_count; i++) {
+        for (size_t i = 0; i < alias.count; i++) {
             char guest[NAME_MAX * 3 + 2], canon[NAME_MAX * 3 + 2];
-            strcpy(guest, alias[i]);
+            strcpy(guest, alias.name[i]);
             fake_path_from_host(guest);
-            if (fake_path_to_host(guest, canon, sizeof(canon)) != NULL) {
-                char guest_path[MAX_PATH + 2];
-                if (snprintf(guest_path, sizeof(guest_path), "%s/%s", guest_dir, guest) < (int) sizeof(guest_path)) {
-                    printk("fakefs migrate: %s/%s and %s/%s are both the guest name %s; merging into %s\n",
-                            host_dir, alias[i], host_dir, canon, guest_path, canon);
-                    migrate_place(&ctx, host_dir, alias[i], host_dir, canon, guest_path, 0);
-                }
-            }
-            free(alias[i]);
+            if (fake_path_to_host(guest, canon, sizeof(canon)) == NULL)
+                continue;
+            char guest_path[MAX_PATH + 2];
+            if (snprintf(guest_path, sizeof(guest_path), "%s/%s", guest_dir, guest) >= (int) sizeof(guest_path))
+                continue;
+            printk("fakefs migrate: %s/%s and %s/%s are both the guest name %s; merging into %s\n",
+                    host_dir, alias.name[i], host_dir, canon, guest_path, canon);
+            migrate_place(&ctx, host_dir, alias.name[i], host_dir, canon, guest_path, 0);
         }
+        migrate_names_free(&alias);
         // The cached listing describes this directory before the repair, and
         // every path left in this run is skipped by the `scanned` test above,
         // so nothing consults it again until it is reloaded for the next one.
