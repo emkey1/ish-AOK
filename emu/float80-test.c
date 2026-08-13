@@ -3,6 +3,7 @@
 #include <stdarg.h>
 #include <math.h>
 #include <fenv.h>
+#include <float.h>
 #include "float80.h"
 
 #pragma GCC diagnostic ignored "-Wliteral-range"
@@ -10,7 +11,15 @@
 //#define DENORMAL 1e-310
 #define DENORMAL 1.11253692925360069155e-308
 
-int deconst_dummy;
+// Keeps the compiler from evaluating the reference expression itself. It must
+// be VOLATILE: as a plain global, GCC proves it is never written, folds the
+// conditional away, and computes the long-double reference at compile time --
+// where the rounding mode is always round-to-nearest, whatever fesetround()
+// does at runtime. That silently invalidated every directed-rounding
+// comparison and cost 30 bogus failures per run, all of them the test being
+// wrong rather than float80. Measured on x86_64: plain int 1186/1224, volatile
+// 1224/1224.
+volatile int deconst_dummy;
 #define deconst(x) (deconst_dummy? 0 : x)
 
 #define neg(x) (x == 0 ? -1e-200/1e200 : -x)
@@ -259,6 +268,32 @@ uint64_t fnmulh(uint64_t a, uint64_t b) {
 }
 
 int main() {
+    // Every check here compares float80 against the host's `long double`,
+    // through a union that aliases the two. That only means anything where
+    // `long double` IS the x87 80-bit format. On Apple aarch64 it is plain
+    // double -- 8 bytes, 53-bit significand -- so reading the union's .ld
+    // member picks up part of the significand of a 10-byte value and calls it
+    // a number: f80_from_int(123) "is" -2.46e+260, while f80_to_int of the
+    // very same value correctly returns 123. There is nothing to test against
+    // on such a host, and reporting that as failure trains people to ignore a
+    // red suite.
+    //
+    // This costs no coverage of the emulator: float80.c does the whole format
+    // in integer arithmetic and does not mention `long double` anywhere, so
+    // float80 emulation is not affected by the host's choice. It is only this
+    // test's oracle that is unavailable. The x86_64 host (where LDBL_MANT_DIG
+    // is 64) still runs all 1224 checks, so the library stays covered.
+    //
+    // 77 is meson's exit code for "skipped", so the suite reports SKIP rather
+    // than a permanent FAIL.
+#if LDBL_MANT_DIG != 64
+    printf("SKIP: host long double is not the x87 80-bit format "
+           "(LDBL_MANT_DIG=%d, sizeof=%zu), so there is no reference to "
+           "compare float80 against on this host.\n",
+           (int) LDBL_MANT_DIG, sizeof(long double));
+    return 77;
+#endif
+
     for (int rounding_mode = 0; rounding_mode < 4; rounding_mode++) {
         f80_rounding_mode = rounding_mode;
         switch (rounding_mode) {
@@ -267,7 +302,12 @@ int main() {
             case round_up: fesetround(FE_UPWARD); break;
             case round_chop: fesetround(FE_TOWARDZERO); break;
         }
-        fesetround(rounding_mode);
+        // (There used to be a bare fesetround(rounding_mode) here, feeding the
+        // raw enum to a function that wants an FE_* constant. It is a no-op on
+        // glibc only by luck -- 1, 2 and 3 are not valid modes there, so the
+        // call fails and leaves the mode the switch above just set correctly.
+        // On a libc where those values ARE valid it would silently undo the
+        // switch and measure every mode as some other mode.)
 
         test_int_convert();
         test_double_convert();
