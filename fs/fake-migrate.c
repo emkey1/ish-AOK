@@ -213,21 +213,34 @@ static bool dir_cache_load(struct migrate_dir_cache *cache, int root_fd, const c
     return true;
 }
 
-// Find the on-disk name (into name_out) of the cached entry matching name
-// case-insensitively (ASCII). Returns true if found. Scans in readdir order and
-// returns the first match, exactly as the per-call readdir it replaces did --
-// which case-twin wins must not change.
+// Find the on-disk name (into name_out) of the cached entry that is `name`,
+// falling back to one matching case-insensitively (ASCII). Returns true if
+// found.
+//
+// An exact match always wins, and settling for the first case-insensitive hit
+// in readdir order is not good enough. A folding host has only ONE entry for a
+// twin pair, so the two rules agree there -- but iOS is case-SENSITIVE, both
+// "A" and "a" are really present, and taking whichever readdir offered first
+// told the caller a twin owned the file when the file was right there. It then
+// left the real "A" alone and created an empty "%a" beside it, which is the
+// damage version 8 has to undo.
 static bool dir_cache_find(const struct migrate_dir_cache *cache, const char *name, char *name_out, size_t name_out_size) {
+    const char *fold = NULL;
     for (size_t i = 0; i < cache->count; i++) {
-        if (strcasecmp(cache->names[i], name) == 0) {
-            size_t len = strlen(cache->names[i]);
-            if (len >= name_out_size)
-                return false;
-            memcpy(name_out, cache->names[i], len + 1);
-            return true;
+        if (strcmp(cache->names[i], name) == 0) {
+            fold = cache->names[i];
+            break;
         }
+        if (fold == NULL && strcasecmp(cache->names[i], name) == 0)
+            fold = cache->names[i];
     }
-    return false;
+    if (fold == NULL)
+        return false;
+    size_t len = strlen(fold);
+    if (len >= name_out_size)
+        return false;
+    memcpy(name_out, fold, len + 1);
+    return true;
 }
 
 // The original per-call directory scan, kept for the case where the listing
@@ -244,14 +257,16 @@ static bool find_ondisk_name(int root_fd, const char *host_dir, const char *name
     bool found = false;
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL) {
-        if (strcasecmp(ent->d_name, name) == 0) {
-            size_t len = strlen(ent->d_name);
-            if (len < name_out_size) {
-                memcpy(name_out, ent->d_name, len + 1);
-                found = true;
-            }
-            break;
+        bool exact = strcmp(ent->d_name, name) == 0;
+        if (!exact && (found || strcasecmp(ent->d_name, name) != 0))
+            continue;
+        size_t len = strlen(ent->d_name);
+        if (len < name_out_size) {
+            memcpy(name_out, ent->d_name, len + 1);
+            found = true;
         }
+        if (exact)
+            break; // an exact match is the answer; nothing beats it
     }
     closedir(dir);
     return found;
@@ -1065,6 +1080,448 @@ static void migrate_repair_inode_collisions(struct fakefs_db *fs, int root_fd) {
     migrate_split_shared_dirs(fs, root_fd);
 }
 
+// version 8: one host entry per guest name.
+//
+// v4/v5 find a DB path's current host entry by scanning its directory for a
+// name that matches case-insensitively. On a folding host that is the only rule
+// that can work, because "A" and "a" are one entry there. iOS is case-
+// SENSITIVE: both spellings are really present, and whichever readdir happened
+// to hand back first was taken -- so when the lowercase twin came first, the
+// pass concluded that a twin owned the file and ran migrate_twin_fallback,
+// which for a directory creates an empty one at the escaped name and leaves the
+// original alone. dir_cache_find now prefers an exact match, so no root grows
+// this again, but the roots that already have it are stuck at version 7.
+//
+// What it leaves behind is a directory holding two host entries that decode to
+// one guest name -- "A" and "%a" -- and both are emitted by readdir, which no
+// real filesystem does. Every lookup escapes the guest name, so the winner is
+// always "%a", the empty one, and the real contents sit in a spelling nothing
+// can address. Measured on an aarch64 Devuan root: /usr/share/terminfo listed
+// "A" and "N" twice, /usr/share/perl/5.40.1 listed "Pod" twice, and
+// TERM=Apple_Terminal could not be found. Which twins are hit comes down to
+// readdir order, so it is a handful per root (4 of 81029 entries there) and
+// another device had none at all.
+//
+// v6 cannot see it: its "is the entry where it belongs?" gate is answered by
+// the empty directory, so it skips the path without looking further. v7 then
+// made it worse -- everything inside has a missing host entry and a parent that
+// opens fine, which is exactly its stale-row condition, so it deleted their
+// paths rows. fakefs_readdir drops any entry with no metadata, which is why the
+// stranded files are invisible rather than merely misplaced, and why putting
+// them back has to hand them rows again.
+//
+// So this pass works from the host side. Where two entries decode to one guest
+// name, the canonical spelling keeps the name and the other one's contents are
+// merged into it; everything recovered is given its canonical spelling too,
+// recursively, since a subtree v4 skipped is still in the format that predates
+// the escaping. Anything whose row v7 dropped is adopted with the type and
+// permissions its host entry actually has.
+//
+// Deviation, and it is not recoverable: fakefs keeps symlinks, sockets and
+// device nodes as ordinary host files with the real type in the metadata alone,
+// so a recovered entry whose row is gone comes back as a regular file holding
+// what the link used to say. Only entries v7 already dropped are affected, and
+// only the ones stranded by this bug.
+
+// Is this the spelling its guest name is reachable by? A lookup escapes the
+// guest name and asks the host for exactly that, so an entry spelled any other
+// way is dead storage no path can name. Anything too long to decode is called
+// canonical: this pass leaves what it cannot reason about alone.
+static bool host_name_is_canonical(const char *host_name) {
+    char guest[NAME_MAX * 3 + 2], canon[NAME_MAX * 3 + 2];
+    if (strlen(host_name) >= sizeof(guest))
+        return true;
+    strcpy(guest, host_name);
+    fake_path_from_host(guest);
+    return fake_path_to_host(guest, canon, sizeof(canon)) != NULL &&
+        strcmp(canon, host_name) == 0;
+}
+
+// A directory's entry names, read in full before anything is renamed. The
+// repair moves entries around as it goes, and renaming during a readdir of the
+// same directory is not something the host promises to iterate sanely.
+struct migrate_names {
+    char **name;
+    size_t count;
+};
+
+static void migrate_names_free(struct migrate_names *list) {
+    for (size_t i = 0; i < list->count; i++)
+        free(list->name[i]);
+    free(list->name);
+    list->name = NULL;
+    list->count = 0;
+}
+
+static bool migrate_names_load(int root_fd, const char *host_dir, struct migrate_names *list) {
+    list->name = NULL;
+    list->count = 0;
+    int dirfd = openat(root_fd, host_dir[0] == '\0' ? "." : host_dir, O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0)
+        return false;
+    DIR *dir = fdopendir(dirfd);
+    if (dir == NULL) {
+        close(dirfd);
+        return false;
+    }
+    size_t cap = 0;
+    bool ok = true;
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        if (list->count == cap) {
+            size_t grow = cap == 0 ? 16 : cap * 2;
+            char **names = realloc(list->name, grow * sizeof(*names));
+            if (names == NULL) {
+                ok = false;
+                break;
+            }
+            list->name = names;
+            cap = grow;
+        }
+        char *copy = strdup(ent->d_name);
+        if (copy == NULL) {
+            ok = false;
+            break;
+        }
+        list->name[list->count++] = copy;
+    }
+    closedir(dir);
+    if (!ok)
+        migrate_names_free(list);
+    return ok;
+}
+
+// A host inode this pass has already handed a fakefs inode. Hard links are
+// common in a root (/usr/bin/ar and the rest of binutils), and adopting the
+// second name onto a second inode would make one file look like two.
+struct migrate_adopted {
+    uint64_t host_ino;
+    int64_t inode;
+};
+
+struct migrate_alias_ctx {
+    struct fakefs_db *fs;
+    int root_fd;
+    sqlite3_stmt *have_path;
+    sqlite3_stmt *add_stat;
+    sqlite3_stmt *add_path;
+    struct migrate_adopted *adopted;
+    size_t adopted_count, adopted_cap;
+    unsigned recovered, merged, dropped, rows, stuck;
+};
+
+// Give a recovered path a metadata row describing the host entry now sitting at
+// it. A path that still has one keeps it: v7 only dropped the rows whose host
+// entry had gone missing, so anything still present is the original.
+static void migrate_adopt(struct migrate_alias_ctx *ctx, const char *guest_path, const struct stat *st) {
+    sqlite3_bind_blob(ctx->have_path, 1, guest_path, (int) strlen(guest_path), SQLITE_TRANSIENT);
+    bool known = sqlite3_step(ctx->have_path) == SQLITE_ROW;
+    sqlite3_reset(ctx->have_path);
+    if (known)
+        return;
+
+    int64_t inode = 0;
+    for (size_t i = 0; i < ctx->adopted_count; i++) {
+        if (ctx->adopted[i].host_ino == (uint64_t) st->st_ino) {
+            inode = ctx->adopted[i].inode;
+            break;
+        }
+    }
+
+    if (inode == 0) {
+        struct ish_stat ishstat = {
+            .mode = (uint32_t) ((st->st_mode & 07777) |
+                    (uint32_t) (S_ISDIR(st->st_mode) ? S_IFDIR : S_IFREG)),
+            .uid = 0,
+            .gid = 0,
+            .rdev = 0,
+        };
+        sqlite3_bind_blob(ctx->add_stat, 1, &ishstat, sizeof(ishstat), SQLITE_TRANSIENT);
+        int step = sqlite3_step(ctx->add_stat);
+        sqlite3_reset(ctx->add_stat);
+        if (step != SQLITE_DONE) {
+            printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(ctx->fs->db));
+            return;
+        }
+        // stats.inode is the rowid, so SQLite picks a free number without
+        // consulting fake_db_init's in-memory counter, which is not seeded yet.
+        inode = sqlite3_last_insert_rowid(ctx->fs->db);
+        if (!S_ISDIR(st->st_mode) && st->st_nlink > 1) {
+            if (ctx->adopted_count == ctx->adopted_cap) {
+                size_t cap = ctx->adopted_cap == 0 ? 16 : ctx->adopted_cap * 2;
+                struct migrate_adopted *grown = realloc(ctx->adopted, cap * sizeof(*grown));
+                if (grown != NULL) {
+                    ctx->adopted = grown;
+                    ctx->adopted_cap = cap;
+                }
+            }
+            if (ctx->adopted_count < ctx->adopted_cap) {
+                ctx->adopted[ctx->adopted_count].host_ino = (uint64_t) st->st_ino;
+                ctx->adopted[ctx->adopted_count].inode = inode;
+                ctx->adopted_count++;
+            }
+        }
+    }
+
+    sqlite3_bind_blob(ctx->add_path, 1, guest_path, (int) strlen(guest_path), SQLITE_TRANSIENT);
+    sqlite3_bind_int64(ctx->add_path, 2, inode);
+    if (sqlite3_step(ctx->add_path) != SQLITE_DONE)
+        printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(ctx->fs->db));
+    else
+        ctx->rows++;
+    sqlite3_reset(ctx->add_path);
+}
+
+// A recovered subtree can be as deep as the guest made it, but the recursion
+// here is bounded so a link loop or a path this pass has misread cannot run the
+// stack out during boot.
+#define MIGRATE_ALIAS_MAX_DEPTH 64
+
+static bool migrate_join(char *out, size_t size, const char *dir, const char *name) {
+    return snprintf(out, size, "%s%s%s", dir, dir[0] != '\0' ? "/" : "", name) < (int) size;
+}
+
+static void migrate_canonicalize(struct migrate_alias_ctx *ctx, const char *host_dir,
+        const char *guest_dir, int depth);
+
+// Put src_dir/src_name at dst_dir/dst_name, the spelling the guest reaches it
+// by, and make sure the result is described by the metadata. dst may already
+// exist -- an empty directory is exactly what v4's fallback left there -- in
+// which case the two are merged rather than either being thrown away.
+static void migrate_place(struct migrate_alias_ctx *ctx,
+        const char *src_dir, const char *src_name,
+        const char *dst_dir, const char *dst_name,
+        const char *guest_path, int depth) {
+    char src[MAX_PATH + 1], dst[MAX_PATH + 1];
+    if (!migrate_join(src, sizeof(src), src_dir, src_name))
+        return;
+    if (!migrate_join(dst, sizeof(dst), dst_dir, dst_name))
+        return;
+
+    struct stat src_st;
+    if (fstatat(ctx->root_fd, src, &src_st, AT_SYMLINK_NOFOLLOW) < 0)
+        return;
+
+    if (strcmp(src, dst) != 0) {
+        struct stat dst_st;
+        if (fstatat(ctx->root_fd, dst, &dst_st, AT_SYMLINK_NOFOLLOW) < 0) {
+            // Nothing in the way, so the whole thing moves under its own name.
+            if (renameat(ctx->root_fd, src, ctx->root_fd, dst) < 0) {
+                printk("fakefs migrate: rename %s -> %s failed: %d\n", src, dst, errno);
+                ctx->stuck++;
+                return;
+            }
+            ctx->recovered++;
+        } else if (src_st.st_dev == dst_st.st_dev && src_st.st_ino == dst_st.st_ino) {
+            // One file under two names: v4's fallback hardlinked non-directories
+            // rather than moving them, so the unreachable name holds nothing the
+            // reachable one does not.
+            if (unlinkat(ctx->root_fd, src, 0) < 0) {
+                ctx->stuck++;
+                return;
+            }
+            ctx->dropped++;
+        } else if (S_ISDIR(src_st.st_mode) && S_ISDIR(dst_st.st_mode)) {
+            struct migrate_names list = {0};
+            if (depth < MIGRATE_ALIAS_MAX_DEPTH && migrate_names_load(ctx->root_fd, src, &list)) {
+                for (size_t i = 0; i < list.count; i++) {
+                    char guest[NAME_MAX * 3 + 2], canon[NAME_MAX * 3 + 2];
+                    if (strlen(list.name[i]) >= sizeof(guest))
+                        continue;
+                    strcpy(guest, list.name[i]);
+                    fake_path_from_host(guest);
+                    if (fake_path_to_host(guest, canon, sizeof(canon)) == NULL)
+                        continue;
+                    char child[MAX_PATH + 2];
+                    if (snprintf(child, sizeof(child), "%s/%s", guest_path, guest) >= (int) sizeof(child))
+                        continue;
+                    migrate_place(ctx, src, list.name[i], dst, canon, child, depth + 1);
+                }
+                migrate_names_free(&list);
+            }
+            // Only when it emptied. A child that could not be placed keeps its
+            // directory, and the pass says so rather than deleting it.
+            if (unlinkat(ctx->root_fd, src, AT_REMOVEDIR) < 0)
+                ctx->stuck++;
+            else
+                ctx->merged++;
+        } else if (!S_ISDIR(src_st.st_mode) && !S_ISDIR(dst_st.st_mode)) {
+            // Two separate files. The reachable one is what the guest has been
+            // reading and writing since the migration, so it wins unless it has
+            // nothing in it and the unreachable one does.
+            if (dst_st.st_size == 0 && src_st.st_size != 0) {
+                if (renameat(ctx->root_fd, src, ctx->root_fd, dst) < 0) {
+                    ctx->stuck++;
+                    return;
+                }
+                ctx->recovered++;
+            } else if (unlinkat(ctx->root_fd, src, 0) < 0) {
+                ctx->stuck++;
+                return;
+            } else {
+                ctx->dropped++;
+            }
+        } else {
+            // A directory on one side and a file on the other: there is no
+            // merge that keeps both, so keep both where they are and report it.
+            printk("fakefs migrate: %s and %s are one guest name but different types; left alone\n", src, dst);
+            ctx->stuck++;
+            return;
+        }
+    }
+
+    struct stat placed;
+    if (fstatat(ctx->root_fd, dst, &placed, AT_SYMLINK_NOFOLLOW) < 0)
+        return;
+    migrate_adopt(ctx, guest_path, &placed);
+    if (S_ISDIR(placed.st_mode))
+        migrate_canonicalize(ctx, dst, guest_path, depth + 1);
+}
+
+// Everything inside a recovered directory is still spelled the way it was
+// before the escaping existed -- v4 walks parents first and skipped this whole
+// subtree once it decided the parent belonged to a twin -- so each entry needs
+// moving to its canonical spelling, and its children after it.
+static void migrate_canonicalize(struct migrate_alias_ctx *ctx, const char *host_dir,
+        const char *guest_dir, int depth) {
+    if (depth >= MIGRATE_ALIAS_MAX_DEPTH)
+        return;
+    struct migrate_names list = {0};
+    if (!migrate_names_load(ctx->root_fd, host_dir, &list))
+        return;
+    for (size_t i = 0; i < list.count; i++) {
+        char guest[NAME_MAX * 3 + 2], canon[NAME_MAX * 3 + 2];
+        if (strlen(list.name[i]) >= sizeof(guest))
+            continue;
+        strcpy(guest, list.name[i]);
+        fake_path_from_host(guest);
+        if (fake_path_to_host(guest, canon, sizeof(canon)) == NULL)
+            continue;
+        char child[MAX_PATH + 2];
+        if (snprintf(child, sizeof(child), "%s/%s", guest_dir, guest) >= (int) sizeof(child))
+            continue;
+        migrate_place(ctx, host_dir, list.name[i], host_dir, canon, child, depth);
+    }
+    migrate_names_free(&list);
+}
+
+// At most this many aliases are repaired in one directory. Real damage is one
+// or two; a listing that produced hundreds would mean this pass has misread the
+// directory, and stopping is better than rewriting all of it.
+#define MIGRATE_MAX_ALIASES 32
+
+static void migrate_repair_name_aliases(struct fakefs_db *fs, int root_fd) {
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(fs->db, "select path from paths order by path", -1, &stmt, NULL) != SQLITE_OK) {
+        printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
+        return;
+    }
+    struct migrate_alias_ctx ctx = { .fs = fs, .root_fd = root_fd };
+    // The directories to look at are the parents of the DB paths, which is the
+    // walk v6 makes and the same one-readdir-per-directory cache: the query is
+    // ordered, so a directory's paths arrive in one run and it is examined once.
+    struct migrate_dir_cache cache = {0};
+    char scanned[MAX_PATH + 2];
+    scanned[0] = '\1'; // no host_dir can be this, so the first one is a miss
+    scanned[1] = '\0';
+
+    if (sqlite3_prepare_v2(fs->db, "select 1 from paths where path = ?", -1, &ctx.have_path, NULL) != SQLITE_OK ||
+            sqlite3_prepare_v2(fs->db, "insert into stats (stat) values (?)", -1, &ctx.add_stat, NULL) != SQLITE_OK ||
+            sqlite3_prepare_v2(fs->db, "insert into paths (path, inode) values (?, ?)", -1, &ctx.add_path, NULL) != SQLITE_OK) {
+        printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
+        goto out;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const void *path_blob = sqlite3_column_blob(stmt, 0);
+        int path_len = sqlite3_column_bytes(stmt, 0);
+        if (path_blob == NULL || path_len <= 0 || path_len > MAX_PATH)
+            continue;
+        char path[MAX_PATH + 1];
+        memcpy(path, path_blob, path_len);
+        path[path_len] = '\0';
+        char *slash = strrchr(path, '/');
+        if (slash == NULL)
+            continue;
+        *slash = '\0';
+        const char *guest_dir = path; // "" at the root, else "/usr/share"
+
+        char host_dir[MAX_PATH + 1];
+        if (fake_path_to_host(guest_dir[0] == '\0' ? "" : guest_dir + 1, host_dir, sizeof(host_dir)) == NULL)
+            continue;
+        if (strcmp(scanned, host_dir) == 0)
+            continue;
+        if (!dir_cache_load(&cache, root_fd, host_dir) || !cache.complete)
+            continue;
+        strcpy(scanned, host_dir);
+
+        // Collected before anything moves: the repair renames entries in this
+        // very directory, which the cached listing and its index would no
+        // longer describe.
+        char *alias[MIGRATE_MAX_ALIASES];
+        size_t alias_count = 0;
+        for (size_t i = 0; i < cache.count && alias_count < MIGRATE_MAX_ALIASES; i++) {
+            if (strcmp(cache.names[i], ".") == 0 || strcmp(cache.names[i], "..") == 0)
+                continue;
+            if (host_name_is_canonical(cache.names[i]))
+                continue;
+            // Unreachable, but only a duplicate -- and only this pass's business
+            // -- when the spelling the guest does reach is here as well. A lone
+            // odd name is something dropped into the data directory by hand,
+            // and fakefs_readdir already hides it.
+            char guest[NAME_MAX * 3 + 2], canon[NAME_MAX * 3 + 2];
+            strcpy(guest, cache.names[i]);
+            fake_path_from_host(guest);
+            if (fake_path_to_host(guest, canon, sizeof(canon)) == NULL)
+                continue;
+            // Sorting the listing is what makes that lookup cheap, and it is
+            // built only now: an unescaped name means this directory is damaged,
+            // and on a healthy root the loop above never gets this far, so no
+            // root pays a qsort of /usr/share/man/man3's 11137 entries to be
+            // told it is fine.
+            if (!dir_cache_index(&cache) || !dir_cache_has(&cache, canon))
+                continue;
+            char *copy = strdup(cache.names[i]);
+            if (copy == NULL)
+                break;
+            alias[alias_count++] = copy;
+        }
+
+        for (size_t i = 0; i < alias_count; i++) {
+            char guest[NAME_MAX * 3 + 2], canon[NAME_MAX * 3 + 2];
+            strcpy(guest, alias[i]);
+            fake_path_from_host(guest);
+            if (fake_path_to_host(guest, canon, sizeof(canon)) != NULL) {
+                char guest_path[MAX_PATH + 2];
+                if (snprintf(guest_path, sizeof(guest_path), "%s/%s", guest_dir, guest) < (int) sizeof(guest_path)) {
+                    printk("fakefs migrate: %s/%s and %s/%s are both the guest name %s; merging into %s\n",
+                            host_dir, alias[i], host_dir, canon, guest_path, canon);
+                    migrate_place(&ctx, host_dir, alias[i], host_dir, canon, guest_path, 0);
+                }
+            }
+            free(alias[i]);
+        }
+        // The cached listing describes this directory before the repair, and
+        // every path left in this run is skipped by the `scanned` test above,
+        // so nothing consults it again until it is reloaded for the next one.
+    }
+    dir_cache_reset(&cache);
+
+    if (ctx.recovered != 0 || ctx.merged != 0 || ctx.dropped != 0 || ctx.stuck != 0)
+        printk("fakefs migrate: %u entries recovered, %u directories merged, %u duplicates dropped, "
+                "%u rows restored; %u left alone\n",
+                ctx.recovered, ctx.merged, ctx.dropped, ctx.rows, ctx.stuck);
+
+out:
+    sqlite3_finalize(ctx.have_path);
+    sqlite3_finalize(ctx.add_stat);
+    sqlite3_finalize(ctx.add_path);
+    free(ctx.adopted);
+    sqlite3_finalize(stmt);
+}
+
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 static struct migration {
     const char *sql;
@@ -1106,6 +1563,11 @@ static struct migration {
     // version 7: unpick the inode aliasing left by concurrent allocators
     {
         NULL, migrate_repair_inode_collisions
+    },
+    // version 8: collapse the two host entries a case-sensitive host let v4
+    // leave behind for one guest name
+    {
+        NULL, migrate_repair_name_aliases
     },
 };
 

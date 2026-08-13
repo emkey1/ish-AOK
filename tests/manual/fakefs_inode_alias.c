@@ -296,6 +296,61 @@ static bool map_note(dev_t dev, ino_t ino, bool is_dir, const char *path, struct
     return false;
 }
 
+// ------------------------------------------------------- duplicate names
+//
+// A directory cannot hold two entries of the same name, so readdir returning
+// one twice is damage, full stop. The inode map below notices it too, but only
+// as a side effect -- both sightings resolve to one entry, so it shows up as a
+// path sharing an inode with itself -- and only while the map has room. This
+// asks the question directly, per directory, and is the check that fails a root
+// carrying the v4 escape bug: on a case-SENSITIVE host that pass could leave
+// "A" beside the "%a" it should have renamed it to, and both decode to the
+// guest name "A" (see the version 8 comment in fs/fake-migrate.c). Lookup
+// escapes the name, so the winner is always "%a" -- which that pass created
+// empty, which is why the duplicate came with 335 unreachable terminfo entries
+// rather than merely an odd listing.
+static char **dir_names;
+static size_t dir_names_len, dir_names_cap;
+
+static void dir_names_add(const char *name) {
+    if (dir_names_len == dir_names_cap) {
+        size_t cap = dir_names_cap == 0 ? 64 : dir_names_cap * 2;
+        char **grown = realloc(dir_names, cap * sizeof(*grown));
+        if (grown == NULL)
+            return;
+        dir_names = grown;
+        dir_names_cap = cap;
+    }
+    char *copy = strdup(name);
+    if (copy != NULL)
+        dir_names[dir_names_len++] = copy;
+}
+
+static int name_cmp(const void *a, const void *b) {
+    return strcmp(*(const char *const *) a, *(const char *const *) b);
+}
+
+// Returns how many repeated names this directory handed back, reporting the
+// first few, and empties the collected listing either way.
+static unsigned dir_names_check(const char *dirpath, unsigned already_reported) {
+    unsigned repeats = 0;
+    qsort(dir_names, dir_names_len, sizeof(*dir_names), name_cmp);
+    for (size_t i = 1; i < dir_names_len; i++) {
+        if (strcmp(dir_names[i - 1], dir_names[i]) != 0)
+            continue;
+        if (already_reported + repeats < 10)
+            fail("readdir of %s returned \"%s\" twice; a directory cannot hold two "
+                 "entries of one name, so two host entries are decoding to it and "
+                 "only one of them is reachable",
+                    dirpath, dir_names[i]);
+        repeats++;
+    }
+    for (size_t i = 0; i < dir_names_len; i++)
+        free(dir_names[i]);
+    dir_names_len = 0;
+    return repeats;
+}
+
 // A queue of directories still to visit, so a deep tree costs heap rather than
 // C stack.
 static char **queue;
@@ -329,7 +384,7 @@ static void scan_root(void) {
     }
 
     inode_map = calloc(MAP_SLOTS, sizeof(*inode_map));
-    unsigned entries = 0, wedged = 0, aliased = 0;
+    unsigned entries = 0, wedged = 0, aliased = 0, repeated = 0;
     bool truncated = false;
 
     // Only meaningful where the host counts subdirectories. btrfs and friends
@@ -350,6 +405,9 @@ static void scan_root(void) {
         while ((ent = readdir(d)) != NULL) {
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
                 continue;
+            // Collected for every entry, before anything below can skip one:
+            // a name being unstattable is no reason for it to appear twice.
+            dir_names_add(ent->d_name);
             char path[PATH_MAX];
             if (snprintf(path, sizeof(path), "%s%s%s", dirpath,
                         strcmp(dirpath, "/") == 0 ? "" : "/", ent->d_name) >= (int) sizeof(path))
@@ -408,14 +466,19 @@ static void scan_root(void) {
             }
         }
         closedir(d);
+        repeated += dir_names_check(dirpath, repeated);
         if (truncated)
             break;
     }
 
     test_logf("scanned %u entries, %u tracked inodes%s\n", entries, map_used,
             truncated ? " (stopped at the scan limit)" : "");
-    if (wedged > 10 || aliased > 10)
-        printf("  (%u wedged, %u aliased entries in total)\n", wedged, aliased);
+    if (wedged > 10 || aliased > 10 || repeated > 10)
+        printf("  (%u wedged, %u aliased, %u repeated entries in total)\n", wedged, aliased, repeated);
+
+    for (size_t i = 0; i < dir_names_len; i++)
+        free(dir_names[i]);
+    free(dir_names);
 
     for (size_t i = 0; i < queue_len; i++)
         free(queue[i]);

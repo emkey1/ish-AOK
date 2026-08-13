@@ -342,11 +342,12 @@ int fake_db_create_schema(const char *db_path) {
              "create table stats (inode integer primary key, stat blob);"
              "create table paths (path blob primary key, inode integer references stats(inode));"
              "create index inode_to_path on paths (inode, path);"
-             // v6 repairs what the v4/v5 rename passes stranded and v7 the
-             // inode aliasing that concurrent allocators left; a root created
-             // here never had unescaped names and has no history to alias, so
-             // there is nothing for either to find.
-             "pragma user_version=7;");
+             // v6 repairs what the v4/v5 rename passes stranded, v7 the inode
+             // aliasing that concurrent allocators left, and v8 the two host
+             // entries those rename passes could leave for one guest name; a
+             // root created here never had unescaped names and has no history
+             // to alias, so there is nothing for any of them to find.
+             "pragma user_version=8;");
     EXEC_RET("commit");
     sqlite3_close(db);
     return 0;
