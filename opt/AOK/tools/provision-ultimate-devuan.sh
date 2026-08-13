@@ -171,7 +171,21 @@ if ! grep -q '^LANG=' /etc/environment 2>/dev/null; then
     printf 'LANG=C.UTF-8\nLC_ALL=C.UTF-8\n' >> /etc/environment
 fi
 update-locale LANG=C.UTF-8 2>/dev/null || true
-note "LANG=C.UTF-8 (via /etc/default/locale, /etc/environment)"
+# Both files above are PAM's, and ssh does not go through PAM here: Excalibur's
+# stock sshd_config leaves UsePAM at the upstream default of "no" (`sshd -T`
+# confirms it), so an ssh session gets neither, and lands in the C/POSIX locale
+# with no UTF-8 charmap -- which is enough for btop to refuse to start at all
+# ("ERROR: No UTF-8 locale detected!"). /etc/profile.d is what every shell
+# login reads, PAM or not, so the locale is named there too. Guarded, so a
+# locale forwarded by the ssh client (AcceptEnv LANG) or set by PAM wins.
+mkdir -p /etc/profile.d
+cat > /etc/profile.d/00-aok-locale.sh <<'LOCALESH'
+# iSH-AOK: default to a UTF-8 locale when nothing else named one.
+# Reaches sessions PAM never touches -- ssh (stock sshd has UsePAM no).
+[ -n "${LANG:-}" ] || export LANG=C.UTF-8
+LOCALESH
+chmod 0644 /etc/profile.d/00-aok-locale.sh
+note "LANG=C.UTF-8 (via /etc/default/locale, /etc/environment, /etc/profile.d)"
 
 # ===========================================================================
 log "machine-id"

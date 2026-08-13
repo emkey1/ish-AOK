@@ -1381,14 +1381,41 @@ static int EnsureRegularFileNonEmpty(const char *path, const char *contents, mod
     return 0;
 }
 
-// Provision /etc/hostname and /etc/hosts before init starts, on EVERY boot path (real
-// /sbin/init and the fake-init fallback) -- called from ensureBooted. Docker-exported
-// distro images ship both files empty and the guest's hostname.sh only *reads*
-// /etc/hostname, so an empty file there leaves the system with an empty hostname.
+// Provision the /etc files a distro image ships empty, before init starts, on EVERY
+// boot path (real /sbin/init and the fake-init fallback) -- called from ensureBooted.
+// Docker-exported distro images ship /etc/hostname and /etc/hosts empty and the guest's
+// hostname.sh only *reads* /etc/hostname, so an empty file there leaves the system with
+// an empty hostname.
 static void ProvisionGuestHostFiles(void) {
     EnsureDirectory("/etc", 0755);
     EnsureRegularFileNonEmpty("/etc/hostname", "localhost\n", 0644);
     EnsureRegularFileNonEmpty("/etc/hosts", "127.0.0.1\tlocalhost\n127.0.1.1\tlocalhost\n", 0644);
+
+    // /etc/environment is the same shape of hole: a Devuan/Debian minirootfs ships it
+    // zero-length and carries no /etc/default/locale either, so a fresh root boots in
+    // the C/POSIX locale with no UTF-8 charmap. UTF-8-aware tools then either mangle
+    // non-ASCII (less, python3, git, man-db) or refuse to start at all -- btop exits
+    // with "ERROR: No UTF-8 locale detected!" before drawing a single frame. Naming
+    // the locale is the whole fix: glibc has C.UTF-8 built in on these images and musl
+    // needs no locale data at all, so nothing has to be generated.
+    //
+    // This is the file that reaches the default launch command, and that is the
+    // reason to write this one rather than any other: the app launches
+    // "/bin/login -f root", login builds the session environment through PAM, and
+    // pam_env reads /etc/environment with no configuration at all (/etc/pam.d/login's
+    // plain "session required pam_env.so readenv=1"). It does NOT reach an ssh
+    // session -- stock sshd_config on these images leaves UsePAM at the upstream
+    // default of "no", so sshd runs no PAM stack; the rootfs carries an
+    // /etc/profile.d/00-aok-locale.sh for that, written by
+    // tools/build-devuan-minirootfs.sh and provision-ultimate-devuan.sh. LANG only,
+    // never LC_ALL, which would outrank -- and so block -- any per-category locale
+    // the user sets later.
+    //
+    // Only ever written when the file is missing or empty, so a root that already
+    // configures its locale (including one built from the fixed
+    // tools/build-devuan-minirootfs.sh, or provisioned by provision-ultimate-*.sh)
+    // keeps exactly what it has.
+    EnsureRegularFileNonEmpty("/etc/environment", "LANG=C.UTF-8\n", 0644);
 
     // Seed the kernel hostname from /etc/hostname right now instead of
     // waiting for the guest's own hostname.sh, which runs a minute or more

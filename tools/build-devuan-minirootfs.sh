@@ -208,6 +208,39 @@ else
     CRYPT_HOOK='f="$1/etc/pam.d/common-password"; [ -f "$f" ] && sed -i "s/\bpam_unix\.so \(.*\)\byescrypt\b/pam_unix.so \1sha512/" "$f"; f="$1/etc/login.defs"; [ -f "$f" ] && sed -i "s/^ENCRYPT_METHOD[[:space:]]\+YESCRYPT/ENCRYPT_METHOD SHA512/" "$f"; true'
 fi
 
+# A Devuan/Debian minirootfs ships /etc/environment EMPTY and no
+# /etc/default/locale at all, so a fresh root comes up in the C/POSIX locale:
+# LC_CTYPE names no UTF-8 charmap, and UTF-8-aware tools either mangle
+# non-ASCII (less, python3, git, man-db) or refuse to run at all -- btop exits
+# with "ERROR: No UTF-8 locale detected!" before drawing anything. glibc has
+# C.UTF-8 built in on this base, so there is no locale-gen step; the locale
+# just has to be *named*.
+#
+# It takes two mechanisms to name it, because the two ways into these images
+# build their environment differently:
+#
+#   /etc/default/locale + /etc/environment  reach anything that goes through
+#     PAM -- pam_env reads /etc/environment with no configuration at all and
+#     /etc/default/locale through the explicit envfile= line in
+#     /etc/pam.d/{login,su}. That is the app's default "/bin/login -f root"
+#     launch command.
+#
+#   /etc/profile.d/00-aok-locale.sh  reaches everything else, and ssh is
+#     "everything else": Excalibur's stock sshd_config leaves UsePAM at the
+#     upstream default of "no" (verified with `sshd -T`), so an ssh session
+#     never runs pam_env and the two files above are invisible to it. This is
+#     also the only mechanism that survives a launch command changed to a bare
+#     shell instead of login. The guard means a locale forwarded by the client
+#     (AcceptEnv LANG) or set by PAM wins; we only fill a vacuum. The 00- name
+#     sorts first and still matches the run-parts regex /etc/profile uses.
+#
+# Only LANG is set, never LC_ALL: LC_ALL outranks every per-category variable,
+# so seeding it would stop a user ever setting, say, LC_TIME=en_GB.UTF-8. A
+# LANG line here also settles the question for the whole image, because
+# provision-ultimate-devuan.sh's own locale step appends to /etc/environment
+# only when `grep -q '^LANG='` finds nothing.
+LOCALE_HOOK='mkdir -p "$1/etc/default" "$1/etc/profile.d"; printf "LANG=C.UTF-8\n" > "$1/etc/default/locale"; grep -q "^LANG=" "$1/etc/environment" 2>/dev/null || printf "LANG=C.UTF-8\n" >> "$1/etc/environment"; printf "%s\n" "# iSH-AOK: default to a UTF-8 locale when nothing else named one." "# Reaches sessions PAM never touches -- ssh (stock sshd has UsePAM no)." "[ -n \"\${LANG:-}\" ] || export LANG=C.UTF-8" > "$1/etc/profile.d/00-aok-locale.sh"; chmod 0644 "$1/etc/profile.d/00-aok-locale.sh"; true'
+
 build_one() {  # <deb-arch>
     arch="$1"
     suffix="$(arch_suffix "$arch")"
@@ -220,6 +253,7 @@ build_one() {  # <deb-arch>
     docker run --rm --privileged --platform="$platform" \
         -e SUITE="$SUITE" -e ARCH="$arch" -e MIRROR="$DEVUAN_MIRROR" \
         -e CLEAN_HOOK="$CLEAN_HOOK" -e BBOX_HOOK="$BBOX_HOOK" -e CRYPT_HOOK="$CRYPT_HOOK" \
+        -e LOCALE_HOOK="$LOCALE_HOOK" \
         -e INCLUDE_PKGS="$INCLUDE_PKGS" \
         -v "$WORK:/work" \
         "$BUILD_IMAGE" bash -euc '
@@ -245,6 +279,7 @@ build_one() {  # <deb-arch>
                 --aptopt="Acquire::Check-Valid-Until \"false\"" \
                 --customize-hook="$BBOX_HOOK" \
                 --customize-hook="$CRYPT_HOOK" \
+                --customize-hook="$LOCALE_HOOK" \
                 --customize-hook="$CLEAN_HOOK" \
                 "$SUITE" "/work/rootfs-$ARCH.tar" \
                 "deb $MIRROR $SUITE main"
@@ -270,6 +305,12 @@ build_one() {  # <deb-arch>
             *) note "  WARNING: expected ENCRYPT_METHOD SHA512 (CRYPT_HOOK may not have run)" ;;
         esac
     fi
+    localeline="$(tar -xOf "$out" ./etc/default/locale 2>/dev/null | grep -E '^LANG=' || true)"
+    note "  ${localeline:-<no LANG line>}"
+    case "$localeline" in
+        *UTF-8*) ;;
+        *) note "  WARNING: expected LANG=C.UTF-8 (LOCALE_HOOK may not have run)" ;;
+    esac
 }
 
 for a in $ARCHES; do
