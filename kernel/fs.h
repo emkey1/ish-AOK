@@ -171,6 +171,10 @@ void mount_release(struct mount *mount);
 int mount_statfs(struct mount *mount, struct statfsbuf *stat);
 // mountinfo/statx mount ID (1-based list position); see fs/mount.c
 int mount_id(struct mount *mount);
+// The st_dev files on this mount report, i.e. mountinfo's device field; asks
+// the filesystem rather than assuming, since only backing-less filesystems use
+// mount->fake_dev. Follows a bind to its origin. See fs/mount.c.
+dev_t_ mount_dev(struct mount *mount);
 
 // O_PATH|O_NOFOLLOW fd referring to a symlink itself; see fs/generic.c
 bool fd_is_opath_link(struct fd *fd);

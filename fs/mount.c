@@ -122,6 +122,42 @@ int mount_id(struct mount *target) {
     return 1;
 }
 
+// The device files on this mount report through stat(2)'s st_dev, which is
+// also /proc/self/mountinfo's field 3 (major:minor). On Linux those two are
+// the same number by construction, so they must be produced from one place
+// here as well.
+//
+// There is no single field to read: a filesystem with no backing device
+// (tmpfs, proc, devpts, sysfs, cgroup, and fakefs since a3ea924e) leaves
+// stat.dev at 0 and gets mount->fake_dev stamped on, while realfs derives a
+// real device from the host volume (fs/real.c copy_stat). Printing fake_dev
+// unconditionally would therefore be wrong for exactly the realfs mounts. So
+// ask the filesystem, by stat'ing the mount's own root: path "" is what
+// find_mount_and_trim_path leaves behind for a path that is exactly the mount
+// point, making this literally the call `stat /mountpoint` makes. Falling back
+// to fake_dev when the filesystem leaves dev 0 is fs/stat.c's
+// stat_stamp_fake_dev rule; the two must stay in step.
+//
+// Deliberately not under inodes_lock, which generic_statat holds across the
+// same call to stop fakefs's SQLite metadata and host stat halves from being
+// combined torn. Only stat.dev is read here, and that field comes wholly from
+// one side -- fakefs pins it to 0, realfs takes it from the host stat -- so
+// there is no torn combination to protect against, and the proc read path
+// this runs on has not been shown to be free of inodes_lock (it is not
+// recursive).
+dev_t_ mount_dev(struct mount *mount) {
+    // A bind carries no backing of its own (root_fd -1, data NULL), so its
+    // fs's stat fails here for the same reason its statfs does; report the
+    // origin's superblock, which is what bind->fake_dev already copies. See
+    // mount_statfs (kernel/fs.c) for why this deref needs no lock.
+    if (mount->bind_origin != NULL)
+        mount = mount->bind_origin;
+    struct statbuf stat = {};
+    if (mount->fs->stat != NULL && mount->fs->stat(mount, "", &stat) >= 0 && stat.dev != 0)
+        return stat.dev;
+    return mount->fake_dev;
+}
+
 int do_mount(const struct fs_ops *fs, const char *source, const char *point, const char *info, int flags) {
     struct mount *new_mount = malloc(sizeof(struct mount));
     if (new_mount == NULL)

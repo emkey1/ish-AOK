@@ -10,6 +10,7 @@
 #include "kernel/task.h"
 #include "fs/proc.h"
 #include "fs/proc/net.h"
+#include "fs/dev.h"
 #include "fs/devices.h"
 #include "fs/real.h"
 #include "platform/platform.h"
@@ -648,7 +649,11 @@ int proc_show_mountinfo(struct proc_entry *UNUSED(entry), struct proc_data *buf)
         int id = proc_mountinfo_id(mount);
         int parent_id = proc_mountinfo_parent_id(mount);
 
-        proc_printf(buf, "%d %d 0:0 / ", id, parent_id);
+        // Field 3 is the device files on this mount report through st_dev, so
+        // it comes from the same place that number does (fs/mount.c) rather
+        // than being made up here; the two must not contradict each other.
+        dev_t_ dev = mount_dev(mount);
+        proc_printf(buf, "%d %d %d:%d / ", id, parent_id, dev_major(dev), dev_minor(dev));
         proc_print_escaped(buf, point);
         proc_printf(buf, " %s", mount->flags & MS_READONLY_ ? "ro" : "rw");
         if (mount->flags & MS_NOSUID_)
