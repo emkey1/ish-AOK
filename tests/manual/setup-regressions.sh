@@ -139,6 +139,7 @@ if [ "$is_arm64_guest" -eq 1 ]; then
     need_file arm64/arm64_regress.c
     need_file arm64/vector_smoke.c
     need_file arm64/smc_stale_block.c
+    need_file arm64/ret_retcache.c
     need_file arm64/stlr_ldar_publish.c
     need_file arm64/ptrace_singlestep.c
     need_file arm64/ands_bcond_fusion.c
@@ -505,7 +506,7 @@ if [ "$is_amd64_guest" -eq 1 ]; then
     all_tests="$all_tests amd64_regress avx_regress amd64_incdec"
 fi
 if [ "$is_arm64_guest" -eq 1 ]; then
-    all_tests="$all_tests atomics64 arm64_regress vector_smoke smc_stale_block stlr_ldar_publish ptrace_singlestep ands_bcond_fusion hle_loop"
+    all_tests="$all_tests atomics64 arm64_regress vector_smoke smc_stale_block ret_retcache stlr_ldar_publish ptrace_singlestep ands_bcond_fusion hle_loop"
 fi
 if [ "$is_riscv64_guest" -eq 1 ]; then
     all_tests="$all_tests ptrace_regset jalr_retcache"

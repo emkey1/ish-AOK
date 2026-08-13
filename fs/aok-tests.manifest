@@ -145,6 +145,7 @@ arm64/ands_bcond_fusion.c
 arm64/hle_loop.c
 riscv64/ptrace_regset.c
 riscv64/jalr_retcache.c
+arm64/ret_retcache.c
 jit_fuse_ab.sh
 jit_bench.c
 aes_gcm_accel.c

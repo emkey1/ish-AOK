@@ -1985,6 +1985,14 @@ static int cpu_step_to_interrupt_arm64(struct cpu_state *cpu, struct tlb *tlb) {
     frame->cpu = *cpu;
     assert(jit->mmu == cpu->mmu);
 
+    // Read once per entry, not per dispatch. The gadget half of this lever is
+    // chosen at translation time (gen_step_arm64's BR/BLR/RET case), so a
+    // mid-run flip of the knob only takes effect for newly compiled blocks
+    // regardless -- publishing per-entry keeps the OFF arm free of the store
+    // instead of making it pay for a cache nothing reads.
+    const bool publish_ret_cache =
+        (arm64_jit_fuse_mask() & JIT_FUSE_A64_RETCACHE) != 0;
+
     jit_crash_frame = frame;
     jit_crash_cpu = cpu;
     jit_crash_interrupt = INT_GPF;
@@ -2190,6 +2198,19 @@ rearm_arm64:
         }
 
         TRACE("%d %08llx --- cycle %ld (arm64)\n", current_pid(current), (unsigned long long) ip, frame->cpu.cycle);
+        // Publish this dispatch to the assembly return cache, so a later
+        // br/blr/ret computing this address as its target can enter the block
+        // directly instead of coming back here (ret_cache_dispatch in
+        // jit/guest-arm64/control.S). Placed after the null-code[0] check above,
+        // so an entry never names a block this loop just rejected.
+        //
+        // A plain store: the only reader is this same thread's gadgets, so
+        // there is no cross-thread publication to order. Everything that can
+        // make the pointer meaningless already clears the whole array -- the
+        // cleanup_seq purge above, and jit_entry_scratch_get on a block free or
+        // an address-space switch.
+        if (publish_ret_cache)
+            frame->ret_cache[LINKREG_RET_CACHE_HASH(block->addr)] = (long) block->code;
         bool force_block_boundary_break = current != NULL && current->force_no_jit_cache;
         if (force_block_boundary_break)
             __atomic_store_n(cpu->poked_ptr, true, __ATOMIC_SEQ_CST);
@@ -2609,8 +2630,8 @@ rearm_riscv64:
         // an address-space switch.
         if (publish_ret_cache) {
             _Static_assert(JIT_RETURN_CACHE_SIZE == 4096,
-                    "RISCV64_RET_CACHE_HASH and jalr_cached's ubfx width must agree");
-            frame->ret_cache[RISCV64_RET_CACHE_HASH(block->addr)] = (long) block->code;
+                    "LINKREG_RET_CACHE_HASH and jalr_cached's ubfx width must agree");
+            frame->ret_cache[LINKREG_RET_CACHE_HASH(block->addr)] = (long) block->code;
         }
         frame->chain_budget = 8192; // see jit_frame.chain_budget
         interrupt = jit_enter(block, frame, tlb);

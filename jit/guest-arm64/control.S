@@ -90,6 +90,10 @@ arm64_branch_dispatch:
     and x8, _ip, #0x7fffffffffffffff
     str x8, [_cpu, #CPU_pc]
     b jit_ret
+// Global, not file-local: the ret_cache_dispatch macro below enters here with a
+// block->code pointer it has already validated, skipping the tagged-word test
+// above (a cache entry is a host pointer, never a tagged guest address).
+.global arm64_chain
 arm64_chain:
     ldr x8, [_cpu, #CPU_poked_ptr]
     ldrb w8, [x8]
@@ -188,6 +192,92 @@ arm64_chain_poked:
 1:  mov x10, #0
 2:  str x10, [_cpu, #CPU_pc]
     b jit_ret
+
+// ---- Return/indirect-target cache ----------------------------------------
+//
+// br/blr/ret each compute a target from a guest register and, above, each end
+// in an unconditional exit to C. Those three are this engine's remaining JIT->C
+// round trips: every other edge (b, bl, cbz/cbnz, tbz/tbnz, b.cond) is a
+// compile-time target that goes through arm64_branch_dispatch and chains.
+//
+// Same design as the riscv64 engine's jalr cache (guest-riscv64/alu.S), which
+// measured +15.1% on a dash shell loop and +70.5% on a function-pointer
+// dispatch loop; the two guests both return through a link register and share
+// LINKREG_RET_CACHE_HASH in jit/frame.h. The cache is filled by the FRONTEND at
+// dispatch time (cpu_step_to_interrupt_arm64), not recorded at the call the way
+// i386's `call` gadget records for its `ret`: since these three ARE the exits,
+// the set of addresses the frontend dispatches at already IS the set of targets
+// they compute. Keyed by target rather than by call site, so one lookup serves
+// returns, indirect calls, PLT stubs and switch-table `br`s alike.
+//
+// Entries self-validate: one names block->code, so block->addr is a
+// negative-offset load away and is compared against the computed target before
+// use. The is_jetsam test is load-bearing, not defensive -- an invalidated block
+// stays allocated until a write-locked cleanup, and the frontend's cleanup_seq
+// purge (which is what clears this cache) only runs when the thread next returns
+// to C, which is exactly what a hit avoids. A chained edge is covered there by
+// jit_block_disconnect restoring its jump_ip; a cache entry has no such
+// backlink. The pointer cannot dangle: freeing needs the jetsam WRITE lock and
+// jit_enter runs under the read lock.
+//
+// \target is the register holding the computed guest address. The macro is
+// placed AFTER the X30 write in blr_cached below, never before: blr x30 is this
+// guest's rd/rs1 aliasing hazard (the twin of riscv64's `jalr ra, 0(ra)`), so
+// the target must be read out of the register file before X30 is overwritten.
+// Hash MUST match LINKREG_RET_CACHE_HASH bit for bit; a mismatch is a silent 0%
+// hit rate, not a crash, and every correctness test still passes.
+.macro ret_cache_dispatch target
+    eor x12, \target, \target, lsr #12
+    ubfx x12, x12, #1, #12
+    mov x13, LOCAL_ret_cache
+    add x13, _cpu, x13
+    ldr x13, [x13, x12, lsl #3]
+    cbz x13, 8f                        // empty slot
+    ldur x14, [x13, #(JIT_BLOCK_addr - JIT_BLOCK_code)]
+    cmp x14, \target
+    b.ne 8f                            // some other address hashes here
+    ldurb w14, [x13, #(JIT_BLOCK_is_jetsam - JIT_BLOCK_code)]
+    cbnz w14, 8f                       // invalidated; let C compile the replacement
+    mov _ip, x13
+    b arm64_chain                      // poke check, chain budget, last_block
+8:  str \target, [_cpu, #CPU_pc]
+    b jit_ret
+.endm
+
+.gadget br_cached
+    ldr x8, [_ip]
+    and x8, x8, #0x1f
+    add x9, _cpu, #CPU_x0
+    cmp x8, #31
+    b.eq 1f
+    ldr x10, [x9, x8, lsl #3]
+    b 2f
+1:  mov x10, #0
+2:  ret_cache_dispatch x10
+
+.gadget blr_cached
+    ldr x8, [_ip]
+    and x8, x8, #0x1f
+    add x9, _cpu, #CPU_x0
+    cmp x8, #31
+    b.eq 1f
+    ldr x10, [x9, x8, lsl #3]
+    b 2f
+1:  mov x10, #0
+2:  ldr x11, [_ip, #8]      // return address
+    str x11, [x9, #(30*8)]  // X30 = return address, AFTER the target is read
+    ret_cache_dispatch x10
+
+.gadget ret_cached
+    ldr x8, [_ip]
+    and x8, x8, #0x1f
+    add x9, _cpu, #CPU_x0
+    cmp x8, #31
+    b.eq 1f
+    ldr x10, [x9, x8, lsl #3]
+    b 2f
+1:  mov x10, #0
+2:  ret_cache_dispatch x10
 
 // CBZ, CBNZ — code stream: [gadget][rt | sf<<8][taken_pc][fallthrough_pc]
 .gadget cbz

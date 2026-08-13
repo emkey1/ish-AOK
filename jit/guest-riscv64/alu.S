@@ -283,7 +283,8 @@ branch_op geu, hs
 // so it has to check for itself. The pointer itself cannot dangle: freeing a
 // block needs the jetsam WRITE lock and jit_enter runs under the read lock.
 //
-// Hash MUST match RISCV64_RET_CACHE_HASH in jit/frame.h bit for bit; the
+// Hash MUST match LINKREG_RET_CACHE_HASH in jit/frame.h bit for bit (the arm64
+// guest shares that macro and the same dispatch tail); the
 // failure mode of a mismatch is a silent 0% hit rate, not a crash.
 .gadget jalr_cached
     ldr x9, [_ip]             // rd_off

@@ -11,20 +11,27 @@
 #define JIT_RETURN_CACHE_SIZE 4096
 #define JIT_RETURN_CACHE_HASH(x) ((x) & 0xFFF0) >> 4)
 
-// The riscv64 engine's key derivation for the same array (see the ret_cache
-// member below for what the two engines each store there). Mixing in bits
-// 12+ rather than taking a bare bitfield the way i386 does, because this key
-// is a guest CODE address and RISC-V instructions are 2- and 4-byte aligned:
-// i386's bits 4..15 would put every call site inside one 16-byte window in the
-// same bucket, which in this guest is a run of consecutive instructions.
+// Key derivation for the LINK-REGISTER engines (riscv64 jalr, arm64 br/blr/ret)
+// which key this array by guest address -- see the ret_cache member below for
+// what each engine stores. Mixing in bits 12+ rather than taking a bare
+// bitfield the way i386 does, because this key is a guest CODE address and
+// these instructions are 2- and 4-byte aligned: i386's bits 4..15 would put
+// every call site inside one 16-byte window in the same bucket, which in these
+// guests is a run of consecutive instructions.
 //
-// MUST match gadget_riscv64_jalr_cached (jit/guest-riscv64/alu.S) bit for bit:
-//   eor x13, x10, x10, lsr #12   ->   (ip ^ (ip >> 12))
-//   ubfx x13, x13, #1, #12       ->   (... >> 1) & 0xfff
+// The `>> 1` costs nothing on arm64's 4-byte alignment: hash bit k is
+// ip[k+1] ^ ip[k+13], so with ip[1] always 0 bit 0 becomes ip[13] and adjacent
+// 4-byte call sites still separate on bit 1 = ip[2] ^ ip[14].
+//
+// MUST match the gadgets bit for bit -- gadget_riscv64_jalr_cached
+// (jit/guest-riscv64/alu.S) and the ret_cache_dispatch macro
+// (jit/guest-arm64/control.S) both spell it:
+//   eor xN, target, target, lsr #12   ->   (ip ^ (ip >> 12))
+//   ubfx xN, xN, #1, #12              ->   (... >> 1) & 0xfff
 // A one-bit disagreement is not a correctness bug (entries self-validate), it
 // is a silent 0% hit rate -- which is indistinguishable from "the lever did
-// not pay off".
-#define RISCV64_RET_CACHE_HASH(ip) \
+// not pay off", and every correctness test still passes.
+#define LINKREG_RET_CACHE_HASH(ip) \
     ((size_t) ((((ip) ^ ((ip) >> 12)) >> 1) & (JIT_RETURN_CACHE_SIZE - 1)))
 
 struct jit_frame {

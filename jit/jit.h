@@ -149,11 +149,18 @@ void jit_invalidate_all(struct jit *jit);
 //
 // arm64's three lookahead passes shared ONE env var, ISH_ARM64_NO_FUSE, so they
 // could only be turned off together. Each has its own bit here so a lever can be
-// sized on its own; the env var still clears all three, preserving its meaning.
+// sized on its own; the env var still clears them all, preserving its meaning as
+// the whole-arch bisection hatch -- which now covers four bits, not three.
 #define JIT_FUSE_A64_BCOND (1u << 0)  // gen_arm64_peek_bcond: compare + branch
 #define JIT_FUSE_A64_LDST  (1u << 1)  // gen_arm64_try_ldst_fusion: load/store RMW
 #define JIT_FUSE_A64_LDCMP (1u << 2)  // gen_arm64_try_ld_cmp_fusion: load + compare
-#define JIT_FUSE_A64_ALL (JIT_FUSE_A64_BCOND | JIT_FUSE_A64_LDST | JIT_FUSE_A64_LDCMP)
+// br/blr/ret dispatch straight into an already-translated block at the computed
+// target instead of exiting to C. Not a fusion, but the same A/B in the shape
+// that matters. Same design as riscv64's (JIT_FUSE_RV_RETCACHE); both engines
+// return through a link register and share LINKREG_RET_CACHE_HASH.
+#define JIT_FUSE_A64_RETCACHE (1u << 3)
+#define JIT_FUSE_A64_ALL (JIT_FUSE_A64_BCOND | JIT_FUSE_A64_LDST | \
+                          JIT_FUSE_A64_LDCMP | JIT_FUSE_A64_RETCACHE)
 
 // riscv64 had NO switch at all for either of its fusions, so neither could be
 // A/B'd without rebuilding. ISH_RISCV64_NO_FUSE now clears both.
