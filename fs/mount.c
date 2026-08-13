@@ -336,6 +336,10 @@ static int do_bind_mount(const char *norm_source, const char *point, const char 
     bind->point = strdup(point);
     bind->point_len = strlen(point);
     bind->source = strdup(norm_source);
+    // A bind reports the guest path it was bound from, which is source; it must
+    // NOT alias the origin's display_source, or umounting the bind would free
+    // the name out from under the origin (`mount --bind / /mnt/x`).
+    bind->display_source = NULL;
     bind->info = strdup(info);
     bind->bind_prefix = strdup(src);
     if (bind->point == NULL || bind->source == NULL || bind->info == NULL || bind->bind_prefix == NULL) {
