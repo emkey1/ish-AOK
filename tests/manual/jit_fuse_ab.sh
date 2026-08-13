@@ -19,6 +19,11 @@
 #   aborts. The node is root-owned; a failed write is SILENT and leaves you
 #   measuring one arm twice, which looks exactly like a clean negative. That
 #   has already produced one worthless A/B.
+# * THE MASK IS PUT BACK ON EVERY EXIT PATH, including Ctrl-C and an abort.
+#   The script's normal operation leaves the knob flipped, and with the arms
+#   alternating an odd rep count always ends on the OFF arm. A device was left
+#   with retcache off on both arm64 and riscv64 this way, and nothing says so:
+#   every later measurement on it silently ran against a crippled build.
 # * REFUSES TO RUN ON AN UNOPTIMIZED BUILD. `uname -v` carries " unoptimized"
 #   when the emulator was built -O0, where measurements are not merely slower
 #   but wrong (an -O0 build once made the crypto accelerator look like a 2x
@@ -55,6 +60,51 @@ arch=$1; bit=$2; reps=$3; shift 3
 
 node=/proc/ish/${arch}_jit_fuse
 [ -r "$node" ] || { echo "no such knob: $node" >&2; exit 1; }
+
+# Put the mask back the way we found it, on EVERY exit path.
+#
+# This script's whole job is leaving the knob somewhere other than where it
+# started, once per timed run, and it used to just stop -- so the mask kept
+# whichever arm the last rep happened to end on. With the arms alternating by
+# rep, an odd rep count always ends on the OFF arm, and a plain `retcache off`
+# is invisible: nothing warns, the build simply runs slower forever. That is
+# how a device was left with retcache disabled on BOTH arm64 and riscv64, so
+# every measurement taken on it afterwards was against a crippled build.
+#
+# Snapshot the WHOLE mask rather than just $bit. `all` is a write-only
+# pseudo-name -- it sets every family but never appears in the node's output --
+# so there is no "previous value of all" to write back, and restoring `all=1`
+# would switch on families that started off. Reading every "name on|off" line
+# and writing every one back is exact for `all` and for any single bit, and it
+# also repairs a run interrupted midway through a rep.
+snapshot_mask() {
+    awk '{printf "%s=%d ", $1, ($2 == "on") ? 1 : 0}' "$node"
+}
+orig_mask=$(snapshot_mask)
+restored=0
+restore_mask() {
+    [ "$restored" = 0 ] || return 0
+    restored=1
+    [ -n "$orig_mask" ] || return 0
+    echo "$orig_mask" | sudo tee "$node" >/dev/null 2>&1
+    now=$(snapshot_mask)
+    if [ "$now" != "$orig_mask" ]; then
+        echo "WARNING: could not restore $node" >&2
+        echo "  wanted: $orig_mask" >&2
+        echo "  now:    $now" >&2
+        echo "  fix by hand: echo \"$orig_mask\" | sudo tee $node" >&2
+        return 1
+    fi
+    echo "restored $node: $orig_mask"
+}
+# INT/TERM do not exit on their own in POSIX sh, so say so explicitly; the EXIT
+# trap then no-ops on the `restored` flag rather than restoring twice.
+trap 'restore_mask; exit 130' INT
+trap 'restore_mask; exit 143' TERM HUP
+trap 'restore_mask' EXIT
+if [ -z "$orig_mask" ]; then
+    echo "WARNING: $node read back empty; cannot restore it afterwards" >&2
+fi
 
 case $arch in
 arm64|aarch64) root="" ;;                 # the native guest, no chroot
