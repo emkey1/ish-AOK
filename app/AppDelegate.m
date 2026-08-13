@@ -1483,6 +1483,15 @@ static int EnsureSymlink(const char *path, const char *target) {
 // already set (e.g. an existing execute bit on a script). Symlinks are left
 // alone (FTW_PHYS below reports them as FTW_SL rather than following them)
 // so this can't be used to reach outside the tree via a symlink target.
+// "It wasn't there" is the ordinary first-launch outcome for a directory we are
+// about to create, not a failure worth logging.
+static BOOL ISHIsFileNotFoundError(NSError *error) {
+    if (error == nil)
+        return YES;
+    return [error.domain isEqualToString:NSCocoaErrorDomain] &&
+           (error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError);
+}
+
 static int FixSharedDirectoryPermissionsCallback(const char *fpath, const struct stat *sb, int typeflag, struct FTW *ftwbuf) {
     (void)ftwbuf;
     if (typeflag == FTW_D || typeflag == FTW_DP)
@@ -2615,7 +2624,40 @@ static TerminalViewController *CreateTerminalViewController(void) {
     if (aokRootsURL != nil) {
         // Recreate fresh each boot so a root renamed/deleted since the last
         // boot doesn't leave a stale, unmountable directory behind.
-        [NSFileManager.defaultManager removeItemAtURL:aokRootsURL error:nil];
+        //
+        // This used to be one removeItemAtURL of the whole directory with its
+        // error discarded, and it was not working: on a device, /AOK/roots
+        // held 15 entries where only 7 roots existed, the other 8 dating from
+        // July while the directory around them was recreated that morning.
+        // Empty leftovers are not harmless -- they are indistinguishable from
+        // real roots in `ls /AOK/roots`, and chroot setups write mount-point
+        // scaffolding (dev, proc, run, sys) into them, so they accrete content
+        // and start to look genuine. They cannot be deleted from the app
+        // either, because the app is right that they are not roots.
+        //
+        // Two changes. Remove entry by entry rather than all-or-nothing, so
+        // one undeletable child cannot strand every other; and keep the error,
+        // because an operation whose entire purpose is preventing stale state
+        // must not fail silently.
+        NSError *pruneError = nil;
+        NSArray<NSURL *> *staleEntries =
+            [NSFileManager.defaultManager contentsOfDirectoryAtURL:aokRootsURL
+                                       includingPropertiesForKeys:nil
+                                                          options:0
+                                                            error:&pruneError];
+        if (staleEntries == nil && pruneError != nil && !ISHIsFileNotFoundError(pruneError))
+            NSLog(@"Could not list %@ to prune it: %@", aokRootsURL.path, pruneError);
+        for (NSURL *stale in staleEntries) {
+            NSError *entryError = nil;
+            if (![NSFileManager.defaultManager removeItemAtURL:stale error:&entryError])
+                NSLog(@"Could not prune stale root mount point %@: %@",
+                        stale.lastPathComponent, entryError);
+        }
+        // Then the directory itself, so a fresh one gets the permissions below.
+        NSError *removeError = nil;
+        if (![NSFileManager.defaultManager removeItemAtURL:aokRootsURL error:&removeError] &&
+                !ISHIsFileNotFoundError(removeError))
+            NSLog(@"Could not remove %@ before recreating it: %@", aokRootsURL.path, removeError);
         NSError *rootsError = nil;
         if ([NSFileManager.defaultManager createDirectoryAtURL:aokRootsURL
                                    withIntermediateDirectories:YES
