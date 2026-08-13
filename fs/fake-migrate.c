@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
@@ -99,9 +100,27 @@ struct migrate_dir_cache {
     char **names;
     size_t count;
     size_t cap;
+    // v6 only, built on demand: the entry names sorted so "is this name here?"
+    // is a binary search rather than a scan. v6 asks that of *every* path, not
+    // just the escape-needing ones, and the largest directory in an ordinary
+    // root is big (11137 entries in /usr/share/man/man3 on an Arch ARM root),
+    // so a linear probe per path would reinstate the O(paths x entries) shape
+    // 7ef8f91b removed. Pointers into names, so building it allocates one
+    // array and copies no strings.
+    const char **sorted;
+    size_t sorted_count;
+    bool sorted_valid;
 };
 
+static void dir_cache_drop_index(struct migrate_dir_cache *cache) {
+    free(cache->sorted);
+    cache->sorted = NULL;
+    cache->sorted_count = 0;
+    cache->sorted_valid = false;
+}
+
 static void dir_cache_reset(struct migrate_dir_cache *cache) {
+    dir_cache_drop_index(cache);
     for (size_t i = 0; i < cache->count; i++)
         free(cache->names[i]);
     free(cache->names);
@@ -109,6 +128,45 @@ static void dir_cache_reset(struct migrate_dir_cache *cache) {
     cache->count = cache->cap = 0;
     cache->loaded = false;
     cache->complete = false;
+}
+
+static int migrate_name_cmp(const void *a, const void *b) {
+    return strcmp(*(const char *const *) a, *(const char *const *) b);
+}
+
+static bool dir_cache_index(struct migrate_dir_cache *cache) {
+    if (cache->sorted_valid)
+        return true;
+    dir_cache_drop_index(cache);
+    if (cache->count != 0) {
+        cache->sorted = calloc(cache->count, sizeof(*cache->sorted));
+        if (cache->sorted == NULL)
+            return false;
+        for (size_t i = 0; i < cache->count; i++)
+            cache->sorted[i] = cache->names[i];
+        cache->sorted_count = cache->count;
+        qsort(cache->sorted, cache->sorted_count, sizeof(*cache->sorted), migrate_name_cmp);
+    }
+    cache->sorted_valid = true;
+    return true;
+}
+
+// Is an entry spelled exactly `host_name` in this directory? That, and only
+// that, is what makes a guest path resolve -- "E" and "%e" are one guest name
+// in two spellings and only the escaped one is reachable.
+static bool dir_cache_has(const struct migrate_dir_cache *cache, const char *host_name) {
+    long lo = 0, hi = (long) cache->sorted_count - 1;
+    while (lo <= hi) {
+        long mid = lo + (hi - lo) / 2;
+        int r = strcmp(cache->sorted[mid], host_name);
+        if (r == 0)
+            return true;
+        if (r < 0)
+            lo = mid + 1;
+        else
+            hi = mid - 1;
+    }
+    return false;
 }
 
 // Load host_dir's entry names, reusing the cache when it is already the
@@ -224,6 +282,7 @@ static void dir_cache_note_rename(struct migrate_dir_cache *cache, const char *f
         }
         free(cache->names[i]);
         cache->names[i] = name;
+        cache->sorted_valid = false; // the index points into names
         return;
     }
 }
@@ -349,6 +408,303 @@ static void migrate_reescape_unicode(struct fakefs_db *fs, int root_fd) {
     migrate_host_names(fs, root_fd, fake_path_to_host_v4);
 }
 
+// version 6: put back what the v4/v5 rename pass orphaned.
+//
+// Those passes move a host entry when its *name* changes, and skip any guest
+// path that needs no escaping. Right for the name, wrong for the location: when
+// a case-twin ancestor is renamed (host "A" -> "%a"), entries that a folding
+// host had been reaching *through* that directory are still physically inside
+// it, while their own escaped path ("a/...") now resolves to nothing. On a
+// pre-v4 root whose twins had merged, that is the entire lowercase half of
+// every twin pair -- and it goes missing at the moment of the upgrade, having
+// been perfectly readable before it. Measured on an ArchLinuxARM aarch64 root:
+// 1069 of 2899 terminfo files unreachable afterwards, xterm-256color among
+// them, so ncurses "installs" and every curses program fails to find a
+// terminal.
+//
+// This pass restores the invariant the escaping exists to provide -- for every
+// DB path there is a host entry at its escaped form -- by hunting anything
+// missing in the twin that swallowed it. An entry whose own guest path is also
+// a DB path is genuinely shared (both guest paths named one host file, and did
+// before the escaping too), so it gets hardlinked rather than stolen from its
+// owner; that is the same concession migrate_twin_fallback makes.
+//
+// It has to be its own version rather than a repair inside v4/v5: every root
+// that has already booted under a build carrying those passes sits at
+// user_version 5 and would never run them again, and those are precisely the
+// roots that are broken.
+//
+// Every action is gated on the entry being missing, so the pass is idempotent
+// and a healthy root pays one readdir per directory and performs no writes.
+
+// A directory this pass had to recreate because the host entry holding its
+// contents belongs to a twin. Its children are still inside that twin, so a
+// child that comes up missing later in the pass knows where to look. Only
+// populated for real damage, so it stays small.
+struct migrate_salvage {
+    char *guest_dir;
+    char *host_dir;
+};
+
+static const char *salvage_lookup(struct migrate_salvage *salvage, size_t count, const char *guest_dir) {
+    for (size_t i = 0; i < count; i++)
+        if (strcmp(salvage[i].guest_dir, guest_dir) == 0)
+            return salvage[i].host_dir;
+    return NULL;
+}
+
+// Scan host_dir for the entry that is guest name `name` (*exact_out) and for
+// one that a folding host would have conflated with it (*fold_out). Used for
+// the salvage directory, which is never the one the pass has cached, and only
+// reached for an entry already known to be missing.
+static void scan_host_dir(int root_fd, const char *host_dir, const char *name,
+        char *exact_out, char *fold_out, size_t out_size) {
+    exact_out[0] = fold_out[0] = '\0';
+    int dirfd = openat(root_fd, host_dir[0] == '\0' ? "." : host_dir, O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0)
+        return;
+    DIR *dir = fdopendir(dirfd);
+    if (dir == NULL) {
+        close(dirfd);
+        return;
+    }
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        char guest[NAME_MAX * 3 + 2];
+        if (strlen(ent->d_name) >= sizeof(guest) || strlen(ent->d_name) >= out_size)
+            continue;
+        strcpy(guest, ent->d_name);
+        fake_path_from_host(guest);
+        if (strcmp(guest, name) == 0) {
+            strcpy(exact_out, ent->d_name);
+            break; // an exact match is the answer; nothing beats it
+        }
+        if (fold_out[0] == '\0' && strcasecmp(guest, name) == 0)
+            strcpy(fold_out, ent->d_name);
+    }
+    closedir(dir);
+}
+
+static void migrate_repair_orphans(struct fakefs_db *fs, int root_fd) {
+    sqlite3_stmt *stmt;
+    if (sqlite3_prepare_v2(fs->db, "select path from paths order by path", -1, &stmt, NULL) != SQLITE_OK) {
+        printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
+        return;
+    }
+    sqlite3_stmt *owner;
+    if (sqlite3_prepare_v2(fs->db, "select 1 from paths where path = ?", -1, &owner, NULL) != SQLITE_OK) {
+        printk("ERROR: fakefs migrate: %s\n", sqlite3_errmsg(fs->db));
+        sqlite3_finalize(stmt);
+        return;
+    }
+
+    struct migrate_dir_cache cache = {0};
+    struct migrate_salvage *salvage = NULL;
+    size_t salvage_count = 0, salvage_cap = 0;
+    unsigned moved = 0, linked = 0, recreated = 0, unfound = 0;
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const void *path_blob = sqlite3_column_blob(stmt, 0);
+        int path_len = sqlite3_column_bytes(stmt, 0);
+        if (path_blob == NULL || path_len <= 0 || path_len > MAX_PATH)
+            continue;
+        char path[MAX_PATH + 1];
+        memcpy(path, path_blob, path_len);
+        path[path_len] = '\0';
+
+        char *slash = strrchr(path, '/');
+        if (slash == NULL)
+            continue;
+        *slash = '\0';
+        const char *guest_dir = path; // "" at the root, else "/usr/share"
+        const char *base = slash + 1;
+        if (base[0] == '\0')
+            continue;
+
+        char host_dir[MAX_PATH + 1], host_base[NAME_MAX * 3 + 2], host_dst[MAX_PATH + 1];
+        if (fake_path_to_host(guest_dir[0] == '\0' ? "" : guest_dir + 1, host_dir, sizeof(host_dir)) == NULL)
+            continue;
+        if (fake_path_to_host(base, host_base, sizeof(host_base)) == NULL)
+            continue;
+        if (snprintf(host_dst, sizeof(host_dst), "%s%s%s",
+                    host_dir, host_dir[0] != '\0' ? "/" : "", host_base) >= (int) sizeof(host_dst))
+            continue;
+
+        // Is it where it belongs? The cached listing answers this without a
+        // syscall; a listing that couldn't be built or completed falls back to
+        // asking the host, so a short read costs speed and never correctness.
+        if (dir_cache_load(&cache, root_fd, host_dir) && cache.complete && dir_cache_index(&cache)) {
+            if (dir_cache_has(&cache, host_base))
+                continue;
+        } else {
+            struct stat st;
+            if (fstatat(root_fd, host_dst, &st, AT_SYMLINK_NOFOLLOW) == 0)
+                continue;
+        }
+
+        // Missing. Everything from here is the repair path, taken only for an
+        // entry that is really gone, so it can afford to read directories
+        // again and decode names.
+        char src_dir[MAX_PATH + 1], src_name[NAME_MAX + 1];
+        bool found_here = false;
+        {
+            // Still in this directory under another spelling? Either its own,
+            // predating the escaping (a subtree that v6 moved wholesale carries
+            // its children in whatever spelling they had, and v4/v5 could not
+            // reach them to escape them while they were stranded), or a twin's.
+            char alias[NAME_MAX + 1], fold[NAME_MAX + 1];
+            scan_host_dir(root_fd, host_dir, base, alias, fold, sizeof(alias));
+            const char *here = alias[0] != '\0' ? alias : (fold[0] != '\0' ? fold : NULL);
+            if (here != NULL) {
+                strcpy(src_name, here);
+                found_here = true;
+            }
+        }
+
+        // Missing. It is either still in this same directory under another
+        // spelling (its own, pre-escaping, or a twin's), or inside the twin of
+        // this directory itself -- which, for a directory this pass already
+        // recreated, it recorded.
+        if (found_here) {
+            strcpy(src_dir, host_dir);
+        } else {
+            const char *from = salvage_lookup(salvage, salvage_count, guest_dir);
+            if (from != NULL) {
+                if (strlen(from) >= sizeof(src_dir))
+                    continue;
+                strcpy(src_dir, from);
+            } else {
+                // No record, so look for a twin of this path's own directory.
+                char parent[MAX_PATH + 1];
+                strcpy(parent, guest_dir);
+                char *pslash = strrchr(parent, '/');
+                if (pslash == NULL) {
+                    unfound++;
+                    continue;
+                }
+                *pslash = '\0';
+                char host_parent[MAX_PATH + 1], twin[NAME_MAX + 1], ignored[NAME_MAX + 1];
+                if (fake_path_to_host(parent[0] == '\0' ? "" : parent + 1, host_parent, sizeof(host_parent)) == NULL)
+                    continue;
+                scan_host_dir(root_fd, host_parent, pslash + 1, ignored, twin, sizeof(twin));
+                if (twin[0] == '\0') {
+                    unfound++;
+                    continue;
+                }
+                if (snprintf(src_dir, sizeof(src_dir), "%s%s%s",
+                            host_parent, host_parent[0] != '\0' ? "/" : "", twin) >= (int) sizeof(src_dir))
+                    continue;
+            }
+            char exact[NAME_MAX + 1], fold[NAME_MAX + 1];
+            scan_host_dir(root_fd, src_dir, base, exact, fold, sizeof(exact));
+            const char *pick = exact[0] != '\0' ? exact : (fold[0] != '\0' ? fold : NULL);
+            if (pick == NULL) {
+                unfound++;
+                continue;
+            }
+            strcpy(src_name, pick);
+        }
+
+        char src_path[MAX_PATH + 1];
+        if (snprintf(src_path, sizeof(src_path), "%s%s%s",
+                    src_dir, src_dir[0] != '\0' ? "/" : "", src_name) >= (int) sizeof(src_path))
+            continue;
+        struct stat st;
+        if (fstatat(root_fd, src_path, &st, AT_SYMLINK_NOFOLLOW) < 0)
+            continue;
+
+        // Does another DB path claim the entry we found? Escaping passes '/'
+        // through, so decoding the whole host path gives the guest path it
+        // would be reached by.
+        char claim[MAX_PATH + 2];
+        claim[0] = '/';
+        strcpy(claim + 1, src_path);
+        fake_path_from_host(claim + 1);
+        char full[MAX_PATH + 2];
+        snprintf(full, sizeof(full), "%s/%s", guest_dir, base);
+        // If what we found decodes to this very path it is our own entry in a
+        // spelling that predates the escaping, and simply needs renaming into
+        // the canonical one. Otherwise ask whether another DB path claims it.
+        bool owned = false;
+        if (strcmp(claim, full) != 0) {
+            // paths is a blob column, and SQLite never compares a text value
+            // equal to a blob one -- bound as text this asks "is anything
+            // unowned?", always answers yes, and renames a twin's whole
+            // directory away.
+            sqlite3_bind_blob(owner, 1, claim, (int) strlen(claim), SQLITE_TRANSIENT);
+            owned = sqlite3_step(owner) == SQLITE_ROW;
+            sqlite3_reset(owner);
+        }
+
+        if (S_ISDIR(st.st_mode)) {
+            if (!owned) {
+                // Nothing else answers to it, so the whole subtree moves.
+                if (renameat(root_fd, src_path, root_fd, host_dst) < 0)
+                    printk("fakefs migrate: rename %s -> %s failed: %d\n", src_path, host_dst, errno);
+                else
+                    moved++;
+            } else if (mkdirat(root_fd, host_dst, 0777) < 0 && errno != EEXIST) {
+                printk("fakefs migrate: mkdir %s failed: %d\n", host_dst, errno);
+            } else {
+                // The twin keeps the directory; remember where this one's
+                // children are so they can be pulled across as they come up.
+                recreated++;
+                if (salvage_count == salvage_cap) {
+                    size_t cap = salvage_cap == 0 ? 8 : salvage_cap * 2;
+                    struct migrate_salvage *grown = realloc(salvage, cap * sizeof(*grown));
+                    if (grown != NULL) {
+                        salvage = grown;
+                        salvage_cap = cap;
+                    }
+                }
+                if (salvage_count < salvage_cap) {
+                    // Children arrive with this directory as their own
+                    // guest_dir, which is exactly `full`.
+                    char *g = strdup(full);
+                    char *h = strdup(src_path);
+                    if (g != NULL && h != NULL) {
+                        salvage[salvage_count].guest_dir = g;
+                        salvage[salvage_count].host_dir = h;
+                        salvage_count++;
+                    } else {
+                        free(g);
+                        free(h);
+                    }
+                }
+            }
+        } else if (owned) {
+            if (linkat(root_fd, src_path, root_fd, host_dst, 0) < 0 && errno != EEXIST)
+                printk("fakefs migrate: link %s -> %s failed: %d\n", src_path, host_dst, errno);
+            else
+                linked++;
+        } else {
+            if (renameat(root_fd, src_path, root_fd, host_dst) < 0)
+                printk("fakefs migrate: rename %s -> %s failed: %d\n", src_path, host_dst, errno);
+            else
+                moved++;
+        }
+        // The cached listing is left alone deliberately. The only entry added
+        // to it is the one being processed, which no later path asks about,
+        // and an entry is only renamed *away* when no DB path claims it, so
+        // nothing later asks about that either.
+    }
+
+    if (moved != 0 || linked != 0 || recreated != 0 || unfound != 0)
+        printk("fakefs migrate: repaired %u moved, %u shared, %u directories; %u not found\n",
+                moved, linked, recreated, unfound);
+
+    for (size_t i = 0; i < salvage_count; i++) {
+        free(salvage[i].guest_dir);
+        free(salvage[i].host_dir);
+    }
+    free(salvage);
+    dir_cache_reset(&cache);
+    sqlite3_finalize(owner);
+    sqlite3_finalize(stmt);
+}
+
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 static struct migration {
     const char *sql;
@@ -382,6 +738,10 @@ static struct migration {
     // version 5: extend the escaping to non-ASCII bytes
     {
         NULL, migrate_reescape_unicode
+    },
+    // version 6: recover what v4/v5 left stranded inside a renamed twin
+    {
+        NULL, migrate_repair_orphans
     },
 };
 

@@ -299,7 +299,10 @@ int fake_db_create_schema(const char *db_path) {
              "create table stats (inode integer primary key, stat blob);"
              "create table paths (path blob primary key, inode integer references stats(inode));"
              "create index inode_to_path on paths (inode, path);"
-             "pragma user_version=5;");
+             // v6 repairs what the v4/v5 rename passes stranded; a root
+             // created here never had unescaped names, so there is nothing
+             // for it to find.
+             "pragma user_version=6;");
     EXEC_RET("commit");
     sqlite3_close(db);
     return 0;
