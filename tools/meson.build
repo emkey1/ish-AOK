@@ -35,16 +35,37 @@ endif
 
 libarchive = dependency('libarchive', required: false)
 if not libarchive.found()
-    # homebrew
-    libarchive_prefix = '/usr/local/opt/libarchive'
-    libarchive_lib = cc.find_library('archive', dirs: [libarchive_prefix + '/lib'], required: false)
-    if not libarchive_lib.found()
-        libarchive_prefix = '/opt/homebrew/opt/libarchive'
-        libarchive_lib = cc.find_library('archive', dirs: [libarchive_prefix + '/lib'], required: false)
+    # Homebrew, which is keg-only for libarchive (macOS ships its own), so it is
+    # not on the default pkg-config path and has to be found by prefix.
+    #
+    # Search the prefix for THIS machine's architecture first. A Mac that has
+    # ever run the Intel Homebrew keeps it at /usr/local alongside the Apple
+    # Silicon one at /opt/homebrew, and trying /usr/local first picked the
+    # x86_64 build on an arm64 host: find_library only looks for the file, so
+    # configure succeeded and the failure landed at link time as a wall of
+    # "Undefined symbols for architecture arm64" behind one easily-missed
+    # "ignoring file ... found architecture 'x86_64'". Seen on an M5 with a
+    # 2021 /usr/local install still present.
+    if host_machine.cpu_family() == 'aarch64'
+        libarchive_prefixes = ['/opt/homebrew/opt/libarchive', '/usr/local/opt/libarchive']
+    else
+        libarchive_prefixes = ['/usr/local/opt/libarchive', '/opt/homebrew/opt/libarchive']
     endif
-    if libarchive_lib.found()
-        libarchive = declare_dependency(dependencies: [libarchive_lib], include_directories: include_directories([libarchive_prefix + '/include']))
-    endif
+    foreach prefix : libarchive_prefixes
+        if not libarchive.found()
+            libarchive_lib = cc.find_library('archive', dirs: [prefix + '/lib'], required: false)
+            # find_library does not check the architecture, so confirm the
+            # library actually links before settling on it. Without this the
+            # ordering above is only a guess about which prefix is usable.
+            if libarchive_lib.found() and cc.links(
+                    '#include <archive.h>\nint main(void) { return archive_read_new() == 0; }',
+                    dependencies: [libarchive_lib],
+                    include_directories: include_directories([prefix + '/include']),
+                    name: 'libarchive in ' + prefix)
+                libarchive = declare_dependency(dependencies: [libarchive_lib], include_directories: include_directories([prefix + '/include']))
+            endif
+        endif
+    endforeach
 endif
 
 if libarchive.found()
