@@ -48,6 +48,14 @@ saved_version=$(q "pragma user_version;")
 probe=/tmp/inode_alias_probe.$$
 failures=0
 
+# The version a fully migrated root lands on, read rather than written down.
+# "already migrated, leave it alone" is a moving number: hard-coding it meant
+# that adding version 8 turned every one of those into "run the newest pass on
+# the next mount" and made the check below insist on a version the migration no
+# longer stops at.
+"$ISH" -f "$ROOT" /bin/true >/dev/null 2>&1 || true
+CURRENT=$(q "pragma user_version;")
+
 cleanup() {
     "$ISH" -f "$ROOT" /bin/sh -c "rm -rf $probe" >/dev/null 2>&1 || true
     q "pragma user_version = $saved_version;" || true
@@ -83,7 +91,7 @@ guest_inode() {
 }
 
 echo "== part 1: rmdir clears an alias met at runtime"
-q "pragma user_version = 7;"   # already migrated, so only the runtime path can help
+q "pragma user_version = $CURRENT;"   # already migrated, so only the runtime path can help
 if manufacture; then
     seen=$(guest_type "$probe/victim")
     note "victim reports as: $seen (host entry is a regular file)"
@@ -111,7 +119,7 @@ echo "== part 2: the v7 migration repairs a root that already carries one"
 if manufacture; then
     q "pragma user_version = 6;"   # let the v7 pass run on the next mount
     "$ISH" -f "$ROOT" /bin/true >/dev/null 2>&1 || true
-    [ "$(q 'pragma user_version;')" = "7" ] || fail "the migration did not reach version 7"
+    [ "$(q 'pragma user_version;')" = "$CURRENT" ] || fail "the migration did not reach version $CURRENT"
 
     seen=$(guest_type "$probe/victim")
     note "victim reports as: $seen"
@@ -172,7 +180,7 @@ echo "== part 4: two allocators on one root must not hand out the same inode"
 # Both sides make DIRECTORIES on purpose: two regular files sharing an inode
 # are indistinguishable from an ordinary hard link, while two directories
 # cannot be hard-linked at all, so any sharing here is unambiguous.
-q "pragma user_version = 7;"
+q "pragma user_version = $CURRENT;"
 "$ISH" -f "$ROOT" /bin/sh -c "rm -rf $probe; mkdir -p $probe/a $probe/b" >/dev/null 2>&1
 racer() {
     "$ISH" -f "$ROOT" /bin/sh -c \
