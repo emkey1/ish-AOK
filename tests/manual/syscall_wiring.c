@@ -31,6 +31,16 @@
 //    semtimedop), so every modern-musl semctl(2) was decoded as a semop vector.
 //
 // Arch-neutral: SYS_* resolve to the right per-ABI numbers.
+//
+// _FILE_OFFSET_BITS must be set before any header: on a 32-bit ABI glibc still
+// defaults to a 32-bit off_t, which silently truncates every constant below --
+// (off_t) 5 << 30 becomes 0x40000000, so the "5GiB" offsets collapse onto the
+// 1GiB one and the entire >4GiB section degenerates into a no-op that passes.
+// musl is always 64-bit here, so an i386-musl run looks fine and hides it;
+// caught by building this file -m32 against glibc on the x86_64 oracle, where
+// gcc also warns "result of '5 << 30' requires 34 bits". The static assert
+// below is the part that cannot be ignored.
+#define _FILE_OFFSET_BITS 64
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -56,6 +66,23 @@
 #else
 #define OFF_ARGS(off) \
     ((long) (uint32_t) (uint64_t) (off)), ((long) (uint32_t) ((uint64_t) (off) >> 32))
+#endif
+
+// pread64/pwrite64 take a single loff_t on a 64-bit ABI (OFF_ARGS above), but
+// preadv/pwritev/preadv2/pwritev2 are SYSCALL_DEFINE5/6 on EVERY arch: the
+// (pos_l, pos_h) pair is part of the ABI even on a 64-bit kernel, where
+// pos_from_hilo() shifts pos_h clean out of the 64-bit loff_t and pos_l alone
+// carries the offset. Passing just pos_l is not merely untidy -- for preadv2
+// it leaves the *flags* argument holding whatever the caller happened to
+// leave in that register, and Linux rejects an unrecognised RWF_* bit. That
+// is not theoretical: on a real x86_64 kernel (Devuan 6, Linux 6.12) the very
+// same 5-argument call returns 14 from one program and -1 from another,
+// purely on register garbage. iSH ignores the flags word, so this only ever
+// misbehaves against the oracle.
+#if __SIZEOF_POINTER__ == 8
+#define OFF_PAIR(off) ((long) (off)), 0L
+#else
+#define OFF_PAIR(off) OFF_ARGS(off)
 #endif
 
 static void check(const char *what, long got, long want) {
@@ -86,6 +113,7 @@ static void check_str(const char *what, const char *got, const char *want) {
 #define MARK_LEN 14
 static const char MARK_LO[MARK_LEN + 1] = "AT-ONE-GIB----";
 static const char MARK_HI[MARK_LEN + 1] = "AT-FIVE-GIB---";
+_Static_assert(sizeof(off_t) == 8, "off_t must be 64-bit or the >4GiB offsets below truncate");
 static const off_t OFF_LO = (off_t) 1 << 30;
 static const off_t OFF_HI = (off_t) 5 << 30;
 
@@ -153,7 +181,7 @@ static void check_positioned_io(void) {
         memset(lo, 0, sizeof lo);
         memset(hi, 0, sizeof hi);
         errno = 0;
-        r = syscall(SYS_preadv, fd, riov, 2, OFF_ARGS(OFF_HI));
+        r = syscall(SYS_preadv, fd, riov, 2, OFF_PAIR(OFF_HI));
         check("raw SYS_preadv at 5GiB", r, MARK_LEN);
         if (r == MARK_LEN) {
             memcpy(got, lo, sizeof lo);
@@ -171,7 +199,7 @@ static void check_positioned_io(void) {
         struct iovec wiov[2] = { { (void *) vmark, 8 },
                                  { (void *) (vmark + 8), MARK_LEN - 8 } };
         errno = 0;
-        r = syscall(SYS_pwritev, fd, wiov, 2, OFF_ARGS(OFF_HI));
+        r = syscall(SYS_pwritev, fd, wiov, 2, OFF_PAIR(OFF_HI));
         check("raw SYS_pwritev at 5GiB", r, MARK_LEN);
         READ_BACK(OFF_HI);
         check_str("raw SYS_pwritev at 5GiB payload", got, vmark);
@@ -200,7 +228,7 @@ static void check_positioned_io(void) {
         // No ENOSYS escape hatch here: an unwired table entry IS the bug this
         // file is for, and iSH implements preadv2 on every ABI. A libc that
         // doesn't know the number is already excluded by the #ifdef.
-        r = syscall(SYS_preadv2, fd, iov, 1, OFF_ARGS(OFF_HI), 0);
+        r = syscall(SYS_preadv2, fd, iov, 1, OFF_PAIR(OFF_HI), 0);
         check("raw SYS_preadv2 at 5GiB", r, MARK_LEN);
         buf[MARK_LEN] = '\0';
         check_str("raw SYS_preadv2 at 5GiB payload", buf, MARK_HI);
@@ -209,7 +237,7 @@ static void check_positioned_io(void) {
         check("seek to 1GiB", (long) (lseek(fd, OFF_LO, SEEK_SET) == OFF_LO), 1);
         memset(buf, 0, sizeof buf);
         errno = 0;
-        r = syscall(SYS_preadv2, fd, iov, 1, OFF_ARGS((off_t) -1), 0);
+        r = syscall(SYS_preadv2, fd, iov, 1, OFF_PAIR((off_t) -1), 0);
         check("raw SYS_preadv2 with offset -1", r, MARK_LEN);
         buf[MARK_LEN] = '\0';
         check_str("raw SYS_preadv2 offset -1 payload", buf, MARK_LO);
@@ -224,7 +252,7 @@ static void check_positioned_io(void) {
         static const char v2mark[MARK_LEN + 1] = "AT-FIVE-VEC2--";
         struct iovec iov[1] = { { (void *) v2mark, MARK_LEN } };
         errno = 0;
-        r = syscall(SYS_pwritev2, fd, iov, 1, OFF_ARGS(OFF_HI), 0);
+        r = syscall(SYS_pwritev2, fd, iov, 1, OFF_PAIR(OFF_HI), 0);
         check("raw SYS_pwritev2 at 5GiB", r, MARK_LEN);
         READ_BACK(OFF_HI);
         check_str("raw SYS_pwritev2 at 5GiB payload", got, v2mark);
@@ -246,7 +274,14 @@ static void check_positioned_io(void) {
 // numbering mistake and nothing else. On i386 this is syscall 394, which used
 // to be semtimedop -- semctl(id, 0, SETVAL, 1) was then read as
 // semop(id, (struct sembuf *) 0, 1) and came back EFAULT.
-#define IPC_64_FLAG 0x100
+//
+// cmd goes in WITHOUT IPC_64. x86_64's sys_semctl switches on the raw cmd, so
+// SETVAL|IPC_64 does not match any case and real Linux returns EINVAL (checked
+// on Linux 6.12/x86_64; glibc's own semctl(3) does not set it either). i386's
+// 394 is sys_old_semctl, which does run ipc_parse_version and would accept
+// either, but IPC_64 there only selects the semid_ds layout -- irrelevant to
+// the layout-free commands used here. iSH masks IPC_64 off for every ABI, so
+// it accepts both; the portable form is the one worth asserting on.
 static void check_sysv_semctl(void) {
 #if defined(SYS_semget) && defined(SYS_semctl)
     errno = 0;
@@ -257,13 +292,13 @@ static void check_sysv_semctl(void) {
         return;
     }
     errno = 0;
-    long r = syscall(SYS_semctl, id, 0, 16 /* SETVAL */ | IPC_64_FLAG, 7);
+    long r = syscall(SYS_semctl, id, 0, 16 /* SETVAL */, 7);
     check("raw SYS_semctl SETVAL", r, 0);
     errno = 0;
-    r = syscall(SYS_semctl, id, 0, 12 /* GETVAL */ | IPC_64_FLAG, 0);
+    r = syscall(SYS_semctl, id, 0, 12 /* GETVAL */, 0);
     check("raw SYS_semctl GETVAL reads back SETVAL", r, 7);
     errno = 0;
-    r = syscall(SYS_semctl, id, 0, 0 /* IPC_RMID */ | IPC_64_FLAG, 0);
+    r = syscall(SYS_semctl, id, 0, 0 /* IPC_RMID */, 0);
     check("raw SYS_semctl IPC_RMID", r, 0);
 #else
     test_logf("  (SYS_semget/SYS_semctl undefined for this ABI, skipping)\n");
@@ -300,8 +335,20 @@ static void check_sched_and_domainname(void) {
         long r = syscall(SYS_sched_rr_get_interval, 0, &tp);
         check("raw SYS_sched_rr_get_interval", r, 0);
         if (r == 0) {
+            // Only the shape is portable, not the value. iSH reports a fixed
+            // 100ms quantum; real Linux gives a SCHED_OTHER task whatever
+            // get_rr_interval_fair() computes, which is 0 on an idle runqueue
+            // (measured: {0, 0} on Linux 6.12/x86_64), and an unprivileged
+            // caller cannot switch to SCHED_RR to see a real slice. Asserting
+            // 100000000 here would be asserting an iSH-ism.
+            //
+            // The 0xa5 poison is the real check: it catches a handler that
+            // writes nothing, and -- on a 64-bit ABI -- one that writes only a
+            // 32-bit timespec into the 64-bit slot, since the upper half of
+            // .nsec would survive as poison.
             check("sched_rr_get_interval quantum tv_sec", tp.sec, 0);
-            check("sched_rr_get_interval quantum tv_nsec", tp.nsec, 100000000L);
+            check("sched_rr_get_interval filled in a sane tv_nsec",
+                  tp.nsec >= 0 && tp.nsec < 1000000000L, 1);
         }
     }
 #else
