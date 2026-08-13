@@ -184,11 +184,13 @@ struct scm {
 
 #define PF_LOCAL_ 1
 #define PF_INET_ 2
+#define PF_BRIDGE_ 7
 #define PF_NETLINK_ 16
 #define PF_PACKET_ 17
 #define PF_INET6_ 10
 #define AF_LOCAL_ PF_LOCAL_
 #define AF_INET_ PF_INET_
+#define AF_BRIDGE_ PF_BRIDGE_
 #define AF_NETLINK_ PF_NETLINK_
 #define AF_PACKET_ PF_PACKET_
 #define AF_INET6_ PF_INET6_
