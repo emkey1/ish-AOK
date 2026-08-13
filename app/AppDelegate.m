@@ -2555,6 +2555,11 @@ static TerminalViewController *CreateTerminalViewController(void) {
     EnsureSymlink("/dev/rtc", "/dev/rtc0");
 
     do_mount(&aokfs, NSBundle.mainBundle.resourcePath.UTF8String, "/AOK", "", MS_READONLY_);
+    // Every /AOK mount's source is a host container path: long, mostly a UUID,
+    // and useless to the guest, so each names itself instead -- the same thing
+    // Linux's own virtual filesystems do, where proc reports "proc" and a tmpfs
+    // reports "tmpfs". Display only; mount->source still opens the real path.
+    mount_set_display_source("/AOK", "aokfs");
     NSURL *aokPersistURL = AOKPersistDirectoryURL();
     if (aokPersistURL != nil) {
         NSError *persistError = nil;
@@ -2568,6 +2573,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
             // than relying on ordinary Unix ownership.
             FixSharedDirectoryPermissions(aokPersistURL.fileSystemRepresentation);
             int persistMountErr = do_mount(&realfs, aokPersistURL.fileSystemRepresentation, "/AOK/persist", "", MOUNT_ISH_SHARED_);
+            if (persistMountErr >= 0)
+                mount_set_display_source("/AOK/persist", "persist");
             if (persistMountErr < 0)
                 NSLog(@"Could not mount /AOK/persist: %d", persistMountErr);
         } else {
@@ -2618,6 +2625,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
             // same single-host-owner-shared-by-every-guest-uid situation.
             chmod(aokRootsURL.fileSystemRepresentation, 0777);
             int rootsMountErr = do_mount(&realfs, aokRootsURL.fileSystemRepresentation, "/AOK/roots", "", MOUNT_ISH_SHARED_);
+            if (rootsMountErr >= 0)
+                mount_set_display_source("/AOK/roots", "roots");
             if (rootsMountErr < 0) {
                 NSLog(@"Could not mount /AOK/roots: %d", rootsMountErr);
             } else {
@@ -2712,6 +2721,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
             NSURL *fakefsDataURL = [sharedFakefsURL URLByAppendingPathComponent:@"data" isDirectory:YES];
             int fakefsMountErr = do_mount(&fakefs, fakefsDataURL.fileSystemRepresentation, "/AOK/fakefs", "", 0);
             ISHAppGroupReleaseLock(fakefsLockFd);
+            if (fakefsMountErr >= 0)
+                mount_set_display_source("/AOK/fakefs", "fakefs");
             if (fakefsMountErr < 0) {
                 NSLog(@"Could not mount /AOK/fakefs: %d", fakefsMountErr);
                 [ISHDiagnosticsStore recordLaunchStage:@"boot.fakefs.mountFailed"
