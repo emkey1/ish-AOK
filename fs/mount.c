@@ -129,6 +129,7 @@ int do_mount(const struct fs_ops *fs, const char *source, const char *point, con
     new_mount->point = strdup(point);
     new_mount->point_len = strlen(point);
     new_mount->source = strdup(source);
+    new_mount->display_source = NULL;
     new_mount->info = strdup(info);
     new_mount->flags = flags;
     new_mount->fs = fs;
@@ -162,6 +163,34 @@ int do_mount(const struct fs_ops *fs, const char *source, const char *point, con
     return 0;
 }
 
+// See kernel/fs.h: renames a mount for display only. `display_source` NULL or
+// empty restores the real source.
+int mount_set_display_source(const char *point, const char *display_source) {
+    char *name = NULL;
+    if (display_source != NULL && display_source[0] != '\0') {
+        name = strdup(display_source);
+        if (name == NULL)
+            return _ENOMEM;
+    }
+
+    lock(&mounts_lock, 0);
+    struct mount *mount;
+    list_for_each_entry(&mounts, mount, mounts) {
+        // The root's point is "" internally, so accept its guest spelling too
+        // (same accommodation as the MS_REMOUNT lookup below).
+        bool is_root = strcmp(point, "/") == 0 && mount->point[0] == '\0';
+        if (strcmp(point, mount->point) == 0 || is_root) {
+            free((void *) mount->display_source);
+            mount->display_source = name;
+            unlock(&mounts_lock);
+            return 0;
+        }
+    }
+    unlock(&mounts_lock);
+    free(name);
+    return _ENOENT;
+}
+
 int mount_remove(struct mount *mount) {
     if (mount->refcount != 0)
         return _EBUSY;
@@ -178,6 +207,7 @@ int mount_remove(struct mount *mount) {
     list_remove(&mount->mounts);
     free((void *) mount->info);
     free((void *) mount->source);
+    free((void *) mount->display_source);
     free((void *) mount->point);
     free(mount);
     return 0;

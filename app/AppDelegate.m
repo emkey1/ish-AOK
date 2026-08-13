@@ -2360,7 +2360,10 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                    @"path": rootMetadata.path ?: @""});
     }
 
-    intptr_t err = mount_root(&fakefs, rootData.fileSystemRepresentation);
+    // defaultRoot ("Devuan6-arm64") is what / reports as its source in
+    // /proc/mounts, so df names the booted filesystem instead of printing the
+    // app group container path it is stored at.
+    intptr_t err = mount_root(&fakefs, rootData.fileSystemRepresentation, defaultRoot.UTF8String);
     if (err < 0) {
         return RecordBootFailure(err,
                                  @"boot.root.mount.failed",

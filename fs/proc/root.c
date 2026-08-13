@@ -587,7 +587,7 @@ int proc_show_mounts(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
         if (point[0] == '\0')
             point = "/";
 
-        proc_print_escaped(buf, mount->source);
+        proc_print_escaped(buf, mount_display_source(mount));
         proc_printf(buf, " ");
         proc_print_escaped(buf, point);
         proc_printf(buf, " %s ", mount->fs->name);
@@ -651,7 +651,8 @@ int proc_show_mountinfo(struct proc_entry *UNUSED(entry), struct proc_data *buf)
         if (mount->flags & MS_NOEXEC_)
             proc_printf(buf, ",noexec");
         proc_printf(buf, " - %s ", mount->fs->name);
-        proc_print_escaped(buf, mount->source[0] == '\0' ? "/" : mount->source);
+        const char *source = mount_display_source(mount);
+        proc_print_escaped(buf, source[0] == '\0' ? "/" : source);
         proc_printf(buf, " %s", mount->flags & MS_READONLY_ ? "ro" : "rw");
         if (mount->info && mount->info[0] != '\0')
             proc_printf(buf, ",%s", mount->info);

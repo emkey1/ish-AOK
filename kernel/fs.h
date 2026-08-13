@@ -118,6 +118,17 @@ struct mount {
     const char *point;
     size_t point_len;
     const char *source;
+    // Name reported for this mount in /proc/mounts and /proc/self/mountinfo
+    // (df's "Filesystem" column), when the real `source` is not worth showing
+    // the guest. The root's source is a host path -- on device one containing
+    // the app group UUID -- which df wraps onto its own line and which the
+    // guest can do nothing with, so the root reports its own name instead
+    // ("Devuan6-arm64"). NULL means "report source", which is every mount the
+    // guest itself made: mount(2) shows the string the guest passed, like
+    // Linux. Deliberately not a copy of source: realfs (fs/real.c) and iosfs
+    // (app/iOSFS.m) replace mount->source after the mount completes, and a
+    // snapshot taken here would go stale.
+    const char *display_source;
     const char *info;
     int flags;
     const struct fs_ops *fs;
@@ -162,6 +173,16 @@ struct fd *opath_link_fd_create(struct mount *mount, const char *path);
 int opath_link_fstat(struct fd *fd, struct statbuf *stat);
 struct mount *opath_link_get_mount(struct fd *fd);
 ssize_t opath_link_readlink(struct fd *fd, char *buf, size_t bufsize);
+
+// The name to report for a mount in /proc/mounts and /proc/self/mountinfo.
+static inline const char *mount_display_source(struct mount *mount) {
+    return mount->display_source != NULL ? mount->display_source : mount->source;
+}
+
+// Set the name the mount at `point` reports in /proc/mounts and
+// /proc/self/mountinfo, leaving mount->source (the host path the filesystem
+// code opens) alone. Takes mounts_lock, so call it without the lock held.
+int mount_set_display_source(const char *point, const char *display_source);
 
 // must hold mounts_lock while calling these, or traversing mounts
 int do_mount(const struct fs_ops *fs, const char *source, const char *point, const char *info, int flags);

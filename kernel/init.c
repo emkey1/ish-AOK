@@ -17,13 +17,20 @@
 #include "kernel/signal.h"
 #include "kernel/task.h"
 
-int mount_root(const struct fs_ops *fs, const char *source) {
+int mount_root(const struct fs_ops *fs, const char *source, const char *name) {
     char source_realpath[MAX_PATH + 1];
     if (realpath(source, source_realpath) == NULL)
         return errno_map();
     int err = do_mount(fs, source_realpath, "", "", 0);
     if (err < 0)
         return err;
+    // df's "Filesystem" column for / would otherwise be the host path this
+    // was mounted from, which is long, unusable from inside the guest, and on
+    // device carries the app group UUID. Report the root's name instead
+    // ("Devuan6-arm64"); the host path stays in mount->source for fakefs.
+    // Ignore failure: the mount succeeded, only its label is at stake.
+    if (name != NULL)
+        mount_set_display_source("", name);
     return 0;
 }
 

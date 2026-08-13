@@ -4,7 +4,9 @@
 #include "fs/tty.h"
 
 // Incredibly sloppy. Please do not reference as an example of good API design.
-int mount_root(const struct fs_ops *fs, const char *source);
+// `name` is what / reports as its source in /proc/mounts (df's "Filesystem"
+// column); NULL reports the host path it was mounted from.
+int mount_root(const struct fs_ops *fs, const char *source, const char *name);
 void set_console_device(int major, int minor);
 void get_console_device(int *major, int *minor);
 intptr_t become_first_process(void);
