@@ -15,16 +15,34 @@ if get_option('kernel') == 'ish'
     endif
 
     unicorn = disabler()
-    if host_machine.system() == 'darwin'
-        unicorn_dirs = ['/usr/local/lib']
+    # pkg-config first: unicorn ships a .pc, and it is the only source here that
+    # supplies the include path as well as the library.
+    unicorn = dependency('unicorn', required: false)
+    if not unicorn.found() and host_machine.system() == 'darwin'
+        # Homebrew, native prefix first. Each candidate carries its own include
+        # directory: the library alone is not enough, and pairing a library from
+        # one prefix with whatever header happens to be reachable is how this
+        # broke. /usr/local/include is an implicit clang search path on macOS, so
+        # an Intel Homebrew's unicorn header satisfied the compile with no -I
+        # flag and left nothing in build.ninja to notice it by -- the build only
+        # failed once that stale prefix was deleted, long after anything pointed
+        # at it.
         if host_machine.cpu_family() == 'aarch64'
-            unicorn_dirs = [
-                '/opt/homebrew/opt/unicorn/lib',
-                '/opt/homebrew/lib',
-            ]
+            unicorn_prefixes = ['/opt/homebrew/opt/unicorn', '/opt/homebrew', '/usr/local']
+        else
+            unicorn_prefixes = ['/usr/local/opt/unicorn', '/usr/local', '/opt/homebrew/opt/unicorn']
         endif
-        unicorn = cc.find_library('unicorn', dirs: unicorn_dirs, required: false)
-    else
+        foreach prefix : unicorn_prefixes
+            if not unicorn.found()
+                unicorn_lib = cc.find_library('unicorn', dirs: [prefix + '/lib'], required: false)
+                if unicorn_lib.found() and cc.has_header('unicorn/unicorn.h',
+                        include_directories: include_directories([prefix + '/include']))
+                    unicorn = declare_dependency(dependencies: [unicorn_lib],
+                        include_directories: include_directories([prefix + '/include']))
+                endif
+            endif
+        endforeach
+    elif not unicorn.found()
         unicorn = cc.find_library('unicorn', required: false)
     endif
     if unicorn.found()
