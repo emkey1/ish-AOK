@@ -236,28 +236,40 @@ static int tmpfs_add_file(struct tmp_dirent *dir, const char *name, mode_t_ mode
     return err;
 }
 
+// The interface files cgroup2 puts inside every directory it creates. One
+// table, because two places have to agree about the exact set: the populate
+// path below creates them, and rmdir has to recognize a directory holding
+// nothing else as empty. Spelling the list twice is how they drift.
+static const struct {
+    const char *name;
+    mode_t_ mode;
+    const char *contents;
+} cgroup2_interface_files[] = {
+    {"cgroup.procs", 0644, ""},
+    {"cgroup.threads", 0644, ""},
+    {"cgroup.controllers", 0444, "cpu io memory pids\n"},
+    {"cgroup.subtree_control", 0644, ""},
+    {"cgroup.events", 0444, "populated 1\nfrozen 0\n"},
+    {"cgroup.stat", 0444, "nr_descendants 0\nnr_dying_descendants 0\n"},
+    {"cgroup.type", 0444, "domain\n"},
+};
+#define CGROUP2_INTERFACE_FILE_COUNT \
+    (sizeof(cgroup2_interface_files) / sizeof(cgroup2_interface_files[0]))
+
+static bool cgroup2_is_interface_file(const char *name) {
+    for (unsigned i = 0; i < CGROUP2_INTERFACE_FILE_COUNT; i++)
+        if (strcmp(name, cgroup2_interface_files[i].name) == 0)
+            return true;
+    return false;
+}
+
 static int tmpfs_populate_cgroup2_dir(struct tmp_dirent *dir) {
-    int err = tmpfs_add_file(dir, "cgroup.procs", 0644, "");
-    if (err < 0)
-        return err;
-    err = tmpfs_add_file(dir, "cgroup.threads", 0644, "");
-    if (err < 0)
-        return err;
-    err = tmpfs_add_file(dir, "cgroup.controllers", 0444, "cpu io memory pids\n");
-    if (err < 0)
-        return err;
-    err = tmpfs_add_file(dir, "cgroup.subtree_control", 0644, "");
-    if (err < 0)
-        return err;
-    err = tmpfs_add_file(dir, "cgroup.events", 0444, "populated 1\nfrozen 0\n");
-    if (err < 0)
-        return err;
-    err = tmpfs_add_file(dir, "cgroup.stat", 0444, "nr_descendants 0\nnr_dying_descendants 0\n");
-    if (err < 0)
-        return err;
-    err = tmpfs_add_file(dir, "cgroup.type", 0444, "domain\n");
-    if (err < 0)
-        return err;
+    for (unsigned i = 0; i < CGROUP2_INTERFACE_FILE_COUNT; i++) {
+        int err = tmpfs_add_file(dir, cgroup2_interface_files[i].name,
+                cgroup2_interface_files[i].mode, cgroup2_interface_files[i].contents);
+        if (err < 0)
+            return err;
+    }
     return 0;
 }
 
@@ -487,7 +499,28 @@ static int tmpfs_file_resize(struct tmp_inode *file, size_t size) {
     return 0;
 }
 
-static int tmpfs_dir_unlink(struct tmp_dirent *parent, const char *name, bool remove_dir) {
+// True if this directory holds nothing but the interface files cgroup2 itself
+// put there, i.e. it is an empty cgroup as far as the guest is concerned.
+// Caller holds dirent->lock.
+static bool cgroup2_dir_is_empty(struct tmp_dirent *dirent) {
+    struct tmp_dirent *child;
+    list_for_each_entry(&dirent->children, child, dir) {
+        if (!cgroup2_is_interface_file(child->name))
+            return false;
+    }
+    return true;
+}
+
+// `prune_cgroup_interface` is set only by rmdir on a cgroup2 mount. Every
+// cgroup2 directory is born holding the interface files, so on a plain
+// list_empty test EVERY cgroup looks non-empty and rmdir(2) always answers
+// ENOTEMPTY -- where Linux removes an empty cgroup happily. systemd deletes
+// cgroups with rmdir and nothing else, so nothing it created was ever cleaned
+// up: on an Arch guest every cgroup leaked for the life of the boot, and even
+// `rmdir` by hand could not clear one. The interface files are ours, not the
+// guest's, so they are removed along with the directory that owns them.
+static int tmpfs_dir_unlink(struct tmp_dirent *parent, const char *name, bool remove_dir,
+        bool prune_cgroup_interface) {
     struct tmp_dirent *dirent = tmpfs_dir_lookup(parent, name);
     if (IS_ERR(dirent))
         return PTR_ERR(dirent);
@@ -497,10 +530,21 @@ static int tmpfs_dir_unlink(struct tmp_dirent *parent, const char *name, bool re
     if (S_ISDIR(dirent->inode->stat.mode)) {
         if (!remove_dir)
             err = _EISDIR;
-        else if (!list_empty(&dirent->children))
+        else if (!list_empty(&dirent->children) &&
+                !(prune_cgroup_interface && cgroup2_dir_is_empty(dirent)))
             err = _ENOTEMPTY;
     } else if (remove_dir) {
         err = _ENOTDIR;
+    }
+    if (err == 0 && remove_dir && prune_cgroup_interface) {
+        // Drop the interface files first so the directory really is empty
+        // before it goes, keeping the tree's own invariants intact.
+        struct tmp_dirent *child, *tmp;
+        list_for_each_entry_safe(&dirent->children, child, tmp, dir) {
+            list_remove(&child->dir);
+            child->inode->stat.nlink--;
+            tmp_dirent_release(child);
+        }
     }
     unlock(&dirent->lock);
     if (err < 0) {
@@ -743,7 +787,7 @@ static int tmpfs_unlink(struct mount *mount, const char *path) {
     if (parent == NULL)
         return _EPERM;
     lock(&parent->lock, 0);
-    int err = tmpfs_dir_unlink(parent, filename, false);
+    int err = tmpfs_dir_unlink(parent, filename, false, false);
     unlock(&parent->lock);
     tmp_dirent_release(parent);
     return err;
@@ -757,7 +801,7 @@ static int tmpfs_rmdir(struct mount *mount, const char *path) {
     if (parent == NULL)
         return _EBUSY;
     lock(&parent->lock, 0);
-    int err = tmpfs_dir_unlink(parent, filename, true);
+    int err = tmpfs_dir_unlink(parent, filename, true, tmpfs_is_cgroup2_mount(mount));
     unlock(&parent->lock);
     tmp_dirent_release(parent);
     return err;

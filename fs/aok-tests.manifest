@@ -92,6 +92,7 @@ tmpfs_statfs.c
 memfd_mmap.c
 mount_stdev.c
 mount_cross_dev.c
+cgroup2_rmdir.c
 mmap_truncate_sigbus.c
 null_page_fault.c
 signalfd_epoll_deadlock.c
