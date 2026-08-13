@@ -2654,6 +2654,15 @@ static TerminalViewController *CreateTerminalViewController(void) {
                             NSLog(@"Could not mount secondary root %@ at %@: %d", otherRootName, mountPoint, secondaryErr);
                             continue;
                         }
+                        // Report the root's name rather than its backing path,
+                        // for the same reason 88496575 does it for / : the
+                        // source here is an app group container path whose
+                        // only variable part is a UUID the guest can do
+                        // nothing with, and it is long enough to wrap every
+                        // df row onto a second line. With several roots
+                        // installed that is most of the table. Display only --
+                        // mount->source still opens the SQLite db.
+                        mount_set_display_source(mountPoint.UTF8String, otherRootName.UTF8String);
                         [ISHDiagnosticsStore recordLaunchStage:@"boot.root.secondary.mounted"
                                                        details:@{@"root": otherRootName, @"path": mountPoint}];
                     }
