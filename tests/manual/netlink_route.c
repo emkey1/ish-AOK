@@ -166,7 +166,8 @@ static const char *method_name(enum io_method m) {
 
 /* Send one RTM_GET* dump request via the chosen io method; returns the
  * write/send result (request length on success, <0 on error). */
-static ssize_t send_dump(int fd, enum io_method m, int type, uint32_t seq) {
+static ssize_t send_dump_family(int fd, enum io_method m, int type, uint32_t seq,
+                                uint8_t family) {
     char req[NL_LENGTH(sizeof(struct nl_genmsg))];
     memset(req, 0, sizeof req);
     struct nl_hdr *nlh = (struct nl_hdr *) req;
@@ -175,7 +176,7 @@ static ssize_t send_dump(int fd, enum io_method m, int type, uint32_t seq) {
     nlh->nlmsg_flags = NLM_F_REQUEST_ | NLM_F_DUMP_;
     nlh->nlmsg_seq = seq;
     nlh->nlmsg_pid = 0;
-    ((struct nl_genmsg *) NL_DATA(nlh))->rtgen_family = 0; /* AF_UNSPEC: all */
+    ((struct nl_genmsg *) NL_DATA(nlh))->rtgen_family = family;
 
     if (m == IO_RW)
         return write(fd, req, sizeof req);
@@ -185,6 +186,10 @@ static ssize_t send_dump(int fd, enum io_method m, int type, uint32_t seq) {
     }
     struct nl_sockaddr dst = { .nl_family = AF_NETLINK };
     return sendto(fd, req, sizeof req, 0, (struct sockaddr *) &dst, sizeof dst);
+}
+
+static ssize_t send_dump(int fd, enum io_method m, int type, uint32_t seq) {
+    return send_dump_family(fd, m, type, seq, 0); /* AF_UNSPEC: all */
 }
 
 static ssize_t recv_batch(int fd, enum io_method m, char *buf, size_t cap) {
@@ -343,6 +348,87 @@ static void test_ifr_txqlen(void) {
     close(fd);
 }
 
+/* Count RTM_NEW* replies to one dump request made with an explicit family.
+ * Returns the count, or -1 if the reply stream carried an NLMSG_ERROR. */
+static int count_dump_family(int req_type, int expect_new, uint8_t family) {
+    int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+    if (fd < 0)
+        return -1;
+    if (send_dump_family(fd, IO_SEND, req_type, 0x5150 + family, family) <= 0) {
+        close(fd);
+        return -1;
+    }
+
+    char buf[64 * 1024];
+    int seen = 0, done = 0, err = 0;
+    arm_alarm(10);
+    while (!done && !alarm_fired) {
+        ssize_t n = recv_batch(fd, IO_SEND, buf, sizeof buf);
+        if (n <= 0)
+            break;
+        struct nl_hdr *nlh = (struct nl_hdr *) buf;
+        size_t len = (size_t) n;
+        for (; NL_OK(nlh, len); nlh = NL_NEXT(nlh, len)) {
+            if (nlh->nlmsg_type == NLMSG_DONE_) { done = 1; break; }
+            if (nlh->nlmsg_type == NLMSG_ERROR_) { err = 1; done = 1; break; }
+            if (nlh->nlmsg_type == expect_new)
+                seen++;
+        }
+    }
+    alarm(0);
+    close(fd);
+    return err ? -1 : seen;
+}
+
+/* An RTM_GETLINK dump must return the SAME link list no matter which family
+ * the request names. Linux registers the link dump under PF_UNSPEC and every
+ * other family falls through to it; only PF_BRIDGE has its own handler
+ * (rtnl_bridge_getlink), which emits bridge ports only. Verified against real
+ * Linux (iproute2 6.15.0, kernel 6.12): families 0/2/10/16/17 all return the
+ * full list, family 7 returns none.
+ *
+ * iSH-AOK dropped every link for any family except AF_UNSPEC/AF_PACKET, which
+ * is invisible to plain `ip addr` (it sends AF_UNSPEC) but makes `ip -4 addr`
+ * and `ip -6 addr` print NOTHING: iproute2 dumps links first to build its
+ * ifindex->name map, and an empty map means every address it then receives has
+ * no interface to attach to and is silently dropped. The address dump itself
+ * was always correct, so the addresses really were arriving and being thrown
+ * away, which is why the failure looked like "no addresses" rather than an
+ * error. */
+static void test_link_dump_family_filter(void) {
+    static const struct { uint8_t fam; const char *name; } families[] = {
+        { 2,  "inet" }, { 10, "inet6" }, { 16, "netlink" }, { 17, "packet" },
+    };
+
+    int base = count_dump_family(RTM_GETLINK_, RTM_NEWLINK_, 0 /* AF_UNSPEC */);
+    check("famlink.unspec_have_links", base >= 1, 1);
+    if (base < 1)
+        return;
+
+    for (size_t i = 0; i < sizeof families / sizeof *families; i++) {
+        char lab[64];
+        int n = count_dump_family(RTM_GETLINK_, RTM_NEWLINK_, families[i].fam);
+        test_log_if(n != base, "  famlink: AF_%s dump returned %d links, AF_UNSPEC returned %d\n",
+                    families[i].name, n, base);
+        snprintf(lab, sizeof lab, "famlink.%s_matches_unspec", families[i].name);
+        check(lab, n, base);
+    }
+
+    /* AF_BRIDGE is the one family Linux answers differently: bridge ports only,
+     * and iSH-AOK has no bridge devices, so an empty list is the correct reply. */
+    check("famlink.bridge_empty", count_dump_family(RTM_GETLINK_, RTM_NEWLINK_, 7), 0);
+
+    /* The address dump, unlike the link dump, IS filtered by family on Linux
+     * (separate per-family handlers). Guard that the fix above did not turn the
+     * address filter off too: an AF_INET address dump must not exceed the
+     * unfiltered one, and both must be non-empty (every host has 127.0.0.1). */
+    int addr_all = count_dump_family(RTM_GETADDR_, RTM_NEWADDR_, 0);
+    int addr_v4 = count_dump_family(RTM_GETADDR_, RTM_NEWADDR_, 2);
+    check("famaddr.unspec_have_addrs", addr_all >= 1, 1);
+    check("famaddr.inet_have_addrs", addr_v4 >= 1, 1);
+    check("famaddr.inet_subset_of_all", addr_v4 <= addr_all, 1);
+}
+
 int main(int argc, char **argv) {
     test_init(argc, argv);
     signal(SIGPIPE, SIG_IGN);
@@ -354,6 +440,9 @@ int main(int argc, char **argv) {
     run_dump(IO_VEC, RTM_GETLINK_, RTM_NEWLINK_);
     /* send/recv was already wired; assert parity as a guard. */
     run_dump(IO_SEND, RTM_GETLINK_, RTM_NEWLINK_);
+
+    /* A family-qualified link dump must match the unqualified one (`ip -4 addr`). */
+    test_link_dump_family_filter();
 
     /* The SIOCGIFTXQLEN ioctl `ip addr` issues per interface. */
     test_ifr_txqlen();

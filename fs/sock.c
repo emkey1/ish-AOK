@@ -721,12 +721,26 @@ static int netlink_append_route_links(struct fd *sock, const struct nlmsghdr_ *r
     if (getifaddrs(&addrs) != 0)
         return _EIO;
 
+    // Linux does NOT filter a link dump by the request's ifi_family: the
+    // RTM_GETLINK dump handler is registered under PF_UNSPEC and every other
+    // family falls back to it, so AF_INET/AF_INET6/AF_PACKET/AF_NETLINK all
+    // return the complete link list. Only PF_BRIDGE has its own handler
+    // (rtnl_bridge_getlink), which emits bridge ports only -- none here.
+    //
+    // We used to drop every link for any family other than AF_UNSPEC/AF_PACKET,
+    // which made `ip -4 addr` and `ip -6 addr` print NOTHING: iproute2 asks for
+    // the links first (with ifi_family set to the -4/-6 family), builds its
+    // ifindex->name map from the reply, then asks for the addresses. The
+    // address dump was already correct and filtered properly, but with an empty
+    // link map iproute2 has no name to attach an address to and silently drops
+    // every one of them. Plain `ip addr` sends AF_UNSPEC and was unaffected,
+    // which is why this hid: the family-qualified forms are the only casualties.
     uint8_t family = netlink_route_request_family(payload, payload_len);
     int err = 0;
     for (const struct ifaddrs *cursor = addrs; cursor != NULL; cursor = cursor->ifa_next) {
         if (cursor->ifa_name == NULL)
             continue;
-        if (family != AF_UNSPEC && family != AF_PACKET_ && family != 0)
+        if (family == AF_BRIDGE_)
             continue;
         bool seen = false;
         for (const struct ifaddrs *prev = addrs; prev != cursor; prev = prev->ifa_next) {
