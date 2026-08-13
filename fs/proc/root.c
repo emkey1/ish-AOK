@@ -587,7 +587,14 @@ int proc_show_mounts(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
         if (point[0] == '\0')
             point = "/";
 
-        proc_print_escaped(buf, mount_display_source(mount));
+        // An empty source would print as an empty field, and /proc/mounts is
+        // space-separated with no quoting: busybox then reads the mount point
+        // as the source and the type as the mount point (`df` showed a bind of
+        // / mounted on "fake", and `umount` tried to unmount "fake"). A bind of
+        // the root is exactly that case, since the root's guest path normalizes
+        // to "". Spell it "/", as mountinfo already does.
+        const char *source = mount_display_source(mount);
+        proc_print_escaped(buf, source[0] == '\0' ? "/" : source);
         proc_printf(buf, " ");
         proc_print_escaped(buf, point);
         proc_printf(buf, " %s ", mount->fs->name);
