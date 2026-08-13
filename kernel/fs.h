@@ -193,6 +193,10 @@ static inline const char *mount_display_source(struct mount *mount) {
 // code opens) alone. Takes mounts_lock, so call it without the lock held.
 int mount_set_display_source(const char *point, const char *display_source);
 
+// True if a filesystem is mounted at exactly `point` ("/" accepted for the
+// root). Takes mounts_lock, so call it without the lock held.
+bool mount_exists_at_point(const char *point);
+
 // must hold mounts_lock while calling these, or traversing mounts
 int do_mount(const struct fs_ops *fs, const char *source, const char *point, const char *info, int flags);
 int do_umount(const char *point);

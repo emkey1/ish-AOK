@@ -2521,7 +2521,15 @@ static UIViewController *ISHCreateWorkspaceToolViewController(NSString *toolIden
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolThemesIdentifier])
         return [WorkspaceThemesToolViewController new];
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolFilesystemsIdentifier])
-        return ISHCreateRootsViewController();
+        // Wrapped in its own navigation controller, not the bare view
+        // controller. Tapping a filesystem fires a "show" segue to the detail
+        // screen; with no navigation stack to push onto, UIKit falls back to
+        // presenting it modally, and a modally presented push destination has
+        // no back button -- so the only ways out of the detail screen were
+        // deleting the filesystem or exporting it. (ISHCreateRootsViewController
+        // is what the rest of the app already avoids: SceneDelegate wraps this
+        // same storyboard in a navigation controller too.)
+        return ISHCreateRootsNavigationController();
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolSettingsIdentifier]) {
         // Embed the whole navigation controller (like Filesystems/Roots above), not just its
         // top view controller. AboutViewController drills into sub-pages with

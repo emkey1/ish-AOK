@@ -14,6 +14,7 @@
 #import "NSObject+SaneKVO.h"
 #import "UserPreferences.h"
 #import "WorkspaceViewController.h"
+#include "kernel/fs.h"
 
 @interface RootsTableViewController ()
 // Archives found in the shared /AOK/persist/roots directory, shown as the
@@ -552,13 +553,38 @@
     BOOL isDefaultRoot = [Roots.instance.roots[indexPath.row] isEqual:Roots.instance.defaultRoot];
     if (isDefaultRoot)
         ident = @"Default Root";
+    NSString *rootName = Roots.instance.roots[indexPath.row];
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:ident forIndexPath:indexPath];
-    cell.textLabel.text = Roots.instance.roots[indexPath.row];
+    cell.textLabel.text = rootName;
+
+    // "Mounted at <point>", and deliberately NOTHING when the root did not
+    // mount. A root can pass every validity check the list is built from --
+    // its directory, its data/ and its meta.db all exist -- and still fail to
+    // mount, e.g. after its contents were deleted out from under it, leaving
+    // meta.db unusable. Those entries then look exactly like healthy ones
+    // here, which is how several came to sit in the list indefinitely with no
+    // way to tell them apart. The subtitle's absence is the tell.
+    //
+    // Asked of the live mount table rather than repeating the checks the mount
+    // attempt already made, because only the mount table knows whether the
+    // attempt actually succeeded. The mount point directory is created before
+    // do_mount runs, so its existence proves nothing.
+    NSString *mountPoint = isDefaultRoot
+        ? @"/"
+        : [@"/AOK/roots/" stringByAppendingString:rootName];
+    BOOL mounted = mount_exists_at_point(mountPoint.UTF8String);
+    cell.detailTextLabel.text = mounted
+        ? [NSString stringWithFormat:@"Mounted at %@", mountPoint]
+        : nil;
+
     if (isDefaultRoot) {
         cell.accessibilityTraits |= UIAccessibilityTraitSelected;
     } else {
         cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
     }
+    cell.accessibilityLabel = mounted
+        ? [NSString stringWithFormat:@"%@, mounted at %@", rootName, mountPoint]
+        : [NSString stringWithFormat:@"%@, not mounted", rootName];
     return cell;
 }
 

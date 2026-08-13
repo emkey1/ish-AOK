@@ -381,11 +381,30 @@ static void scan_root(void) {
             struct map_entry *clash = NULL;
             bool is_dir = S_ISDIR(st.st_mode) != 0;
             if (map_note(st.st_dev, st.st_ino, is_dir, path, &clash)) {
-                if (aliased++ < 10)
-                    fail("%s and %s share inode %llu but %s", clash->path, path,
-                            (unsigned long long) st.st_ino,
-                            clash->is_dir != is_dir ? "disagree about being a directory"
-                                                    : "directories cannot be hard-linked");
+                if (aliased++ < 10) {
+                    // Two IDENTICAL paths is a different fault from two paths
+                    // sharing an inode, and saying "X and X share inode N but
+                    // directories cannot be hard-linked" sends the reader
+                    // looking for a second path that does not exist. It means
+                    // readdir handed back the same name twice, which no real
+                    // filesystem does: on a case-insensitive host, an escaped
+                    // and an unescaped host entry can both decode to one guest
+                    // name (see fs/fake-path.h), and then lstat resolves both
+                    // sightings to whichever one wins. Measured on device:
+                    // /usr/share/terminfo listed "A" twice, and the winner was
+                    // the EMPTY twin, so all 335 entries under "a" were still
+                    // there while Apple_Terminal was unreachable by name.
+                    if (strcmp(clash->path, path) == 0)
+                        fail("%s was returned twice by readdir (inode %llu); a directory "
+                             "cannot hold two entries of the same name, so an escaped and "
+                             "an unescaped host entry are both decoding to it",
+                                path, (unsigned long long) st.st_ino);
+                    else
+                        fail("%s and %s share inode %llu but %s", clash->path, path,
+                                (unsigned long long) st.st_ino,
+                                clash->is_dir != is_dir ? "disagree about being a directory"
+                                                        : "directories cannot be hard-linked");
+                }
             }
         }
         closedir(d);

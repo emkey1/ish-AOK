@@ -92,6 +92,33 @@ struct mount *mount_find(char *path) {
     return mount;
 }
 
+// Is a filesystem mounted at exactly this point?
+//
+// Not the same question as mount_find, which resolves a path to the mount
+// CONTAINING it and so answers "yes" for every path under a mount. This is an
+// exact match on the mount point itself, which is what tells a root that
+// actually mounted from one that silently did not: the app creates
+// /AOK/roots/<name> and only then calls do_mount, so the directory exists
+// either way and its presence proves nothing.
+//
+// The root's point is stored as "" (its guest path normalizes away), so accept
+// the "/" spelling callers naturally use, the same way /proc/mounts prints it.
+bool mount_exists_at_point(const char *point) {
+    if (strcmp(point, "/") == 0)
+        point = "";
+    lock(&mounts_lock, 0);
+    struct mount *mount;
+    bool found = false;
+    list_for_each_entry(&mounts, mount, mounts) {
+        if (strcmp(mount->point, point) == 0) {
+            found = true;
+            break;
+        }
+    }
+    unlock(&mounts_lock);
+    return found;
+}
+
 void mount_retain(struct mount *mount) {
     lock(&mounts_lock, 0);
     mount->refcount++;
