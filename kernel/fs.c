@@ -967,6 +967,14 @@ dword_t sys_write(fd_t fd_no, addr_t buf_addr, dword_t size) {
     return sys_write_common(fd_no, buf_addr, size);
 }
 
+ssize_t fd_write_host_buf(fd_t fd_no, const void *buf, size_t size) {
+    ssize_t res;
+    TASK_MAY_BLOCK {
+        res = sys_write_buf(fd_no, (void *) buf, size);
+    }
+    return res;
+}
+
 dword_t sys_write_guest(fd_t fd_no, guest_addr_t buf_addr, dword_t size) {
     return sys_write_common(fd_no, buf_addr, size);
 }

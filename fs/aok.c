@@ -60,6 +60,16 @@ enum aokfs_node_kind {
     // /docs is flat (no subdirectories) -- same generated-table pattern as
     // /tools, minus the ktop-style subdirectory case.
     aokfs_docs_dir,
+    // /native holds the entry points for programs whose implementation is
+    // compiled into iSH-AOK itself and runs as host code, never as translated
+    // guest code (kernel/native.c). Exec matches on the resolved path, so a
+    // symlink from anywhere -- `ln -s /AOK/native/smallclue /usr/local/bin/df`
+    // -- dispatches natively while keeping argv[0] as the caller typed it.
+    // These files are NOT the program: the bytes served here are the
+    // fallback stub described at aokfs_inline_file_data, which only ever runs
+    // if native dispatch is unavailable.
+    aokfs_native_dir,
+    aokfs_native_smallclue,
 };
 
 static enum aokfs_node_kind aokfs_decode_node(void *fs_data) {
@@ -119,6 +129,7 @@ static bool aokfs_node_is_dir(enum aokfs_node_kind node) {
         node == aokfs_tools_ktop_dir ||
         node == aokfs_tools_pixman_dir ||
         node == aokfs_tools_crypto_dir ||
+        node == aokfs_native_dir ||
         node == aokfs_docs_dir;
 }
 
@@ -141,7 +152,7 @@ static mode_t_ aokfs_node_mode(enum aokfs_node_kind node) {
         return S_IFDIR | 0555;
     if (aokfs_node_is_symlink(node))
         return S_IFLNK | 0777;
-    if (node == aokfs_tools_setup_ish_benchmark)
+    if (node == aokfs_tools_setup_ish_benchmark || node == aokfs_native_smallclue)
         return S_IFREG | 0555;
     return S_IFREG | 0444;
 }
@@ -204,6 +215,10 @@ static const char *aokfs_node_path(enum aokfs_node_kind node) {
             return "/tests/audio/test-tone-48k-s16le-stereo.wav";
         case aokfs_docs_dir:
             return "/docs";
+        case aokfs_native_dir:
+            return "/native";
+        case aokfs_native_smallclue:
+            return "/native/smallclue";
     }
     return "";
 }
@@ -241,6 +256,8 @@ static bool aokfs_lookup_node(const char *path, enum aokfs_node_kind *node_out) 
         aokfs_audio_raw,
         aokfs_audio_wav,
         aokfs_docs_dir,
+        aokfs_native_dir,
+        aokfs_native_smallclue,
     };
 
     for (size_t i = 0; i < sizeof(nodes) / sizeof(nodes[0]); i++) {
@@ -312,7 +329,14 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
         "Most entries are read-only; /AOK/persist and /AOK/fakefs are writable and\n"
         "survive root switches. /AOK/persist is host-backed (visible outside iSH-AOK,\n"
         "but does not preserve Linux ownership or device nodes); /AOK/fakefs preserves\n"
-        "full Linux metadata (uid/gid, permissions, device nodes, hardlinks).\n";
+        "full Linux metadata (uid/gid, permissions, device nodes, hardlinks).\n"
+        "\n"
+        "/AOK/native holds programs implemented inside iSH-AOK itself. Running one\n"
+        "executes host code directly instead of translating guest instructions, so it\n"
+        "is the same speed on every guest architecture. Link to them from anywhere:\n"
+        "  ln -s /AOK/native/smallclue /usr/local/bin/df\n"
+        "The link name selects the applet, exactly as on Linux. Use a SYMlink: /AOK is\n"
+        "a separate filesystem, so a hard link across it fails with EXDEV.\n";
     // /AOK/version is the documented build identifier, so it carries exactly
     // what `uname -v` reports -- including the build timestamp, because the
     // hand-maintained version number is routinely not bumped between builds
@@ -494,10 +518,29 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
         "echo \"Benchmarks extracted and compiled in $src_dir\"\n"
         "echo \"Run $src_dir/bmm or $src_dir/bmt\"\n"
     ;
+    // Fallback stub for /AOK/native/*. These paths are dispatched by exec
+    // straight into compiled-in host code (kernel/native.c) and their contents
+    // are never read on that path, so what lives here only matters when native
+    // dispatch does NOT happen -- the build lacks the program, or the file was
+    // copied somewhere the dispatcher no longer recognizes. A shebang script
+    // rather than an ELF stub on purpose: it is guest-ABI-neutral (native
+    // dispatch serves i386/amd64/arm64/riscv64 guests from one implementation,
+    // and a real ELF fallback would need one build per guest arch), and it
+    // fails loudly with a diagnostic instead of confusingly with ENOEXEC.
+    static const char native_stub[] =
+        "#!/bin/sh\n"
+        "# Placeholder for a program implemented natively inside iSH-AOK.\n"
+        "# Reaching this text means native dispatch did not happen for this\n"
+        "# path -- see /AOK/README.txt.\n"
+        "echo \"${0##*/}: native dispatch unavailable in this build\" >&2\n"
+        "exit 127\n";
     switch (node) {
         case aokfs_readme:
             *size_out = sizeof(readme) - 1;
             return readme;
+        case aokfs_native_smallclue:
+            *size_out = sizeof(native_stub) - 1;
+            return native_stub;
         case aokfs_version:
             pthread_once(&version_once, aokfs_init_version);
             *size_out = strlen(aokfs_version_text);
@@ -660,6 +703,17 @@ static int aokfs_fstat(struct fd *fd, struct statbuf *stat) {
     return aokfs_stat_common(fd->mount, aokfs_decode_node(fd->fs_data), stat);
 }
 
+const char *aokfs_native_program_name(struct fd *fd) {
+    if (fd == NULL || fd->mount == NULL || fd->mount->fs != &aokfs)
+        return NULL;
+    switch (aokfs_decode_node(fd->fs_data)) {
+        case aokfs_native_smallclue:
+            return "smallclue";
+        default:
+            return NULL;
+    }
+}
+
 static int aokfs_getpath(struct fd *fd, char *buf) {
     const char *path = aokfs_node_path(aokfs_decode_node(fd->fs_data));
     strncpy(buf, path, MAX_PATH - 1);
@@ -748,6 +802,13 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
                 case 6: child = aokfs_tests_dir; break;
                 case 7: child = aokfs_tools_dir; break;
                 case 8: child = aokfs_docs_dir; break;
+                case 9: child = aokfs_native_dir; break;
+                default: return 0;
+            }
+            break;
+        case aokfs_native_dir:
+            switch (fd->offset++) {
+                case 0: child = aokfs_native_smallclue; break;
                 default: return 0;
             }
             break;

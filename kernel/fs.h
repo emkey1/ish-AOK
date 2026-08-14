@@ -100,6 +100,12 @@ int generic_mkdirat(struct fd *at, const char *path, mode_t_ mode);
 int access_check(struct statbuf *stat, int check);
 int setattr_check(struct statbuf *stat, struct attr attr);
 
+// Write a HOST buffer to a guest fd number. write(2) copies from guest memory
+// first; code that already holds host memory -- natively-implemented programs
+// (kernel/native.h), which run as host code and never had a guest buffer --
+// needs to skip that copy rather than fake one.
+ssize_t fd_write_host_buf(fd_t fd_no, const void *buf, size_t size);
+
 // iSH-internal mount flag, NOT part of the guest mount(2) ABI. fs/mount.c's
 // sys_mount masks incoming guest flags to MS_FLAGS before calling do_mount(),
 // so a guest process can never set or clear this bit; only native do_mount()
@@ -295,6 +301,12 @@ bool is_adhoc_fd(struct fd *fd);
 // filesystems
 extern const struct fs_ops procfs;
 extern const struct fs_ops aokfs;
+
+// If fd refers to a /AOK/native/<name> entry, the <name> that identifies the
+// natively-implemented program behind it (kernel/native.h); NULL otherwise.
+// Keyed off the already-resolved fd rather than the path execve was handed, so
+// a symlink from anywhere in the guest reaches the same program.
+const char *aokfs_native_program_name(struct fd *fd);
 extern const struct fs_ops fakefs;
 extern const struct fs_ops devptsfs;
 extern const struct fs_ops tmpfs;
