@@ -40,6 +40,12 @@ Options:
   --dest DIR      install the module into DIR (default: OpenSSL's MODULESDIR)
   -v, --verbose   show each step
   -h, --help      this text
+
+Environment:
+  CC                 compiler to build the provider with (default: cc, gcc, clang)
+  ISH_ACCEL_CFLAGS   extra compiler flags, for an OpenSSL whose headers are
+                     somewhere that compiler does not search by default
+                     (e.g. ISH_ACCEL_CFLAGS=-I/opt/ssl/include)
 EOF
 }
 
@@ -88,6 +94,18 @@ need_root() {
     die "must run as root to modify $CNF (try: sudo sh $0 $*)"
 }
 
+# diffutils is not everywhere: Arch's base does not pull it in. A dry run whose
+# whole job is to show you the change is no use if it prints "diff: command not
+# found" where the change should be, so fall back to the finished file.
+show_change() {  # show_change <before> <after>
+    if command -v diff >/dev/null 2>&1; then
+        diff -u "$1" "$2" || true
+    else
+        say "(no diff installed, so here is the file as it would be written)"
+        sed 's/^/  /' "$2"
+    fi
+}
+
 # ---------------------------------------------------------------- uninstall
 
 strip_config() {  # strip_config <infile> <outfile>
@@ -111,7 +129,7 @@ if [ "$DO_UNINSTALL" -eq 1 ]; then
     strip_config "$CNF" "$TMP"
     if [ "$DRY_RUN" -eq 1 ]; then
         say "[dry-run] would restore $CNF to:"
-        diff -u "$CNF" "$TMP" || true
+        show_change "$CNF" "$TMP"
         exit 0
     fi
     need_root --uninstall
@@ -160,32 +178,108 @@ fi
 
 [ -f "$SRC" ] || die "provider source not found at $SRC"
 
-CC=''
-for c in cc gcc clang; do
-    command -v "$c" >/dev/null 2>&1 && { CC=$c; break; }
-done
+# ---------------------------------------------------------------- toolchain
+
+# One scratch directory for every temporary file, created before the first
+# probe so no step has to invent a path in /tmp of its own.
+WORK=$(mktemp -d) || die "mktemp -d failed"
+trap 'rm -rf "$WORK"' EXIT INT TERM
+
+CC=${CC:-}
+if [ -n "$CC" ]; then
+    command -v "$CC" >/dev/null 2>&1 || die "\$CC is set to '$CC', which is not executable"
+else
+    for c in cc gcc clang; do
+        command -v "$c" >/dev/null 2>&1 && { CC=$c; break; }
+    done
+fi
 [ -n "$CC" ] || die "no C compiler found. Install one first:
        Alpine: apk add build-base openssl-dev
        Debian/Devuan/Ubuntu: apt install build-essential libssl-dev
        Arch: pacman -S base-devel openssl"
+vsay "compiler   = $(command -v "$CC") ($("$CC" --version 2>/dev/null | head -1))"
 
-echo '#include <openssl/core.h>' > /tmp/ish-accel-probe.$$.c
-if ! "$CC" -fsyntax-only /tmp/ish-accel-probe.$$.c >/dev/null 2>&1; then
-    rm -f /tmp/ish-accel-probe.$$.c
-    die "OpenSSL development headers not found (openssl/core.h). Install them:
+# Every probe below shows what the compiler actually said. A check that
+# swallows the error it tripped over can only report its own guess at the
+# cause, and a wrong guess sends you off reinstalling a package that was never
+# missing: that is exactly how a present openssl/core.h got reported as absent.
+show_cc_err() {  # show_cc_err <file>
+    [ -s "$1" ] || return 0
+    printf '%s\n' "what the compiler said:" >&2
+    sed 's/^/  /' "$1" >&2
+}
+
+# Probe 1: does the toolchain work at all? An include-free translation unit can
+# only fail if the compiler itself is broken, and saying so plainly beats
+# blaming OpenSSL for it.
+printf 'int ish_accel_probe;\n' > "$WORK/probe-cc.c"
+if ! "$CC" -fsyntax-only "$WORK/probe-cc.c" 2> "$WORK/probe-cc.err"; then
+    show_cc_err "$WORK/probe-cc.err"
+    die "$CC cannot compile a trivial file, so nothing here would have worked.
+       This is a broken or incomplete toolchain, not a missing OpenSSL:
+       Alpine: apk add build-base
+       Debian/Devuan/Ubuntu: apt install build-essential
+       Arch: pacman -S base-devel"
+fi
+
+# Where the compiler itself looks, plus the usual out-of-the-way prefixes, so
+# that "not installed" and "installed somewhere this compiler never looks" stay
+# distinguishable.
+find_openssl_include() {
+    for d in $("$CC" -E -Wp,-v -xc /dev/null 2>&1 >/dev/null | sed -n 's/^ \{1,\}//p') \
+             /usr/include /usr/local/include /usr/local/ssl/include /opt/include
+    do
+        if [ -f "$d/openssl/core.h" ]; then printf '%s\n' "$d"; return 0; fi
+    done
+    return 1
+}
+
+# Probe 2: the provider headers, with exactly the flags the build below uses,
+# because a probe that passes on different flags than the build just moves the
+# misdiagnosis one step later. The include list is read out of the source so
+# the two cannot drift apart.
+SSL_CFLAGS=''
+if command -v pkg-config >/dev/null 2>&1; then
+    SSL_CFLAGS=$(pkg-config --cflags libcrypto 2>/dev/null || true)
+fi
+set -- $SSL_CFLAGS ${ISH_ACCEL_CFLAGS:-}   # collapse, so no flags stays no flags
+SSL_CFLAGS=$*
+
+{ grep '^#include <openssl/' "$SRC" || printf '#include <openssl/core.h>\n'; } \
+    > "$WORK/probe-ssl.c"
+printf 'int ish_accel_probe;\n' >> "$WORK/probe-ssl.c"
+
+if ! "$CC" -fsyntax-only $SSL_CFLAGS "$WORK/probe-ssl.c" 2> "$WORK/probe-ssl.err"; then
+    # The headers may simply sit outside the compiler's search path (a
+    # hand-built OpenSSL under /usr/local is the usual reason), so find them on
+    # disk and retry with an explicit -I before concluding anything.
+    INC=$(find_openssl_include || true)
+    if [ -n "$INC" ] && "$CC" -fsyntax-only "-I$INC" $SSL_CFLAGS "$WORK/probe-ssl.c" \
+            2> "$WORK/probe-ssl.err2"; then
+        SSL_CFLAGS="-I$INC $SSL_CFLAGS"
+        vsay "headers    = $INC (needed an explicit -I)"
+    else
+        show_cc_err "$WORK/probe-ssl.err"
+        if [ -n "$INC" ]; then
+            die "the OpenSSL headers are NOT missing: $INC/openssl/core.h
+       is right there, and $CC failed to compile against it anyway. The
+       compiler output above is the real failure; reinstalling openssl will
+       not change it. Please report that output."
+        fi
+        die "OpenSSL development headers not found (openssl/core.h). Install them:
        Alpine: apk add openssl-dev
        Debian/Devuan/Ubuntu: apt install libssl-dev
-       Arch: pacman -S openssl"
+       Arch: pacman -S openssl
+       If they are installed somewhere this compiler does not search, name it:
+       ISH_ACCEL_CFLAGS=-I/path/to/include sh $0"
+    fi
 fi
-rm -f /tmp/ish-accel-probe.$$.c
+vsay "headers    = ok${SSL_CFLAGS:+ (flags:$SSL_CFLAGS)}"
 
 # ---------------------------------------------------------------- build
 
-WORK=$(mktemp -d) || die "mktemp -d failed"
-trap 'rm -rf "$WORK"' EXIT INT TERM
-
 say "building the provider from $SRC ..."
-if ! "$CC" -O2 -fPIC -shared -o "$WORK/ish.so" "$SRC" 2> "$WORK/build.err"; then
+if ! "$CC" -O2 -fPIC -shared $SSL_CFLAGS -o "$WORK/ish.so" "$SRC" 2> "$WORK/build.err"; then
     cat "$WORK/build.err" >&2
     die "provider build failed"
 fi
@@ -275,7 +369,7 @@ build_config "$CNF" "$WORK/candidate.cnf" "$MODULE"
 if [ "$DRY_RUN" -eq 1 ]; then
     say "[dry-run] would install $WORK/ish.so -> $MODULE"
     say "[dry-run] would apply this change to $CNF:"
-    diff -u "$CNF" "$WORK/candidate.cnf" || true
+    show_change "$CNF" "$WORK/candidate.cnf"
     exit 0
 fi
 
