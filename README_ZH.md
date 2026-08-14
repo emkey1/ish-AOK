@@ -4,57 +4,96 @@ iSH-AOK 是 [ish-app/ish](https://github.com/ish-app/ish) 的一个分支（fork
 
 Testflight: https://testflight.apple.com/join/X1flyiqE
 
-这个分支不只是改个名字。它包含了分支专属的行为、内置的根文件系统、诊断相关工作、File Provider 集成，以及正在进行中的实验性 amd64/x86_64 客户机支持。如果你想要上游的 iSH，请使用 `ish-app/ish`。如果你正在这个仓库中进行开发，这份 README 才是你需要参考的文档。
+这个分支不只是改个名字。它包含了分支专属的行为、内置的根文件系统、诊断相关工作、File Provider 集成，以及对四种客户机架构的支持。如果你想要上游的 iSH，请使用 `ish-app/ish`。如果你正在这个仓库中进行开发，这份 README 才是你需要参考的文档。
 
 ## 本分支新增的内容
 
 - 分支专属的应用标识:
   - 产品名 `iSH-AOK`
   - Bundle root `app.ish.iSH-AOK`
-- 内置在应用中的根文件系统:
-  - `i386` 的 `root.tar.gz`（`Devuan5(Debian12)`）
-  - `alpine-minirootfs-3.23.3-x86.tar.gz`（`Alpine3.23.3`）
-  - `alpine-minirootfs-3.23.3-x86_64.tar.gz`（`Alpine3.23.3(x86_64)`）
+- **四种客户机架构**，全部基于 JIT：`i386`、`amd64`（x86_64）、`arm64`（aarch64）和 `riscv64`。
+- 内置在应用中的根文件系统（Alpine 3.23.3 与 Devuan 6，各自提供 i386、x86_64 和 aarch64 版本），以及包含 riscv64 在内的可下载镜像。
 - 通过 iOS 系统 API 暴露客户机文件的 File Provider 支持。
+- 可选加速器：用原生代码替换热点 libc 例程，以及加密与 pixman 卸载。
 - 该分支专属的额外诊断与运维相关改动。
-- 正在进行中的 amd64 解释器、加载器及系统调用相关工作。
 
-## 当前 amd64 状态
+## 客户机架构
 
-本仓库中的 amd64 相关工作仍处于实验阶段。
+四种客户机都受支持，且都通过 gadget JIT 运行。没有任何一种是原生执行的：在 ARM 宿主机
+上，一条 `arm64` 客户机指令同样是一次 gadget 分派，和 `riscv64` 完全一样。与宿主机同属
+一个 ISA 家族只会让每个 gadget 的主体更便宜，而不会让它免费。
 
-- 应用可以导入并尝试引导 `x86_64` 客户机根文件系统。
-- 解释器、ELF64 加载器和 amd64 系统调用路径正在积极开发中。
-- 目前可能出现启动早期失败、指令解码缺口以及用户态程序只能部分运行的情况。
-- 该项工作目前对应的开发分支通常是 `amd64`。
+| 客户机 | 状态 |
+|---|---|
+| `i386` | 最初的客户机，仅 JIT |
+| `amd64` | 已支持，JIT |
+| `arm64` | 已支持，JIT |
+| `riscv64` | 已支持，JIT |
 
-相关文件:
+各客户机的回归测试套件在四种架构上都能通过。解释器属于遗留实现且即将移除，新的工作
+应当以 JIT 为目标。
 
-- [amd64_port_plan.md](docs/amd64_port_plan.md)
-- [emu/amd64_interp.c](emu/amd64_interp.c)
-- [kernel/exec.c](kernel/exec.c)
-- [kernel/calls.c](kernel/calls.c)
+相关文件：
+
+- [jit/gen.c](jit/gen.c) 所有客户机的指令翻译
+- [jit/jit.c](jit/jit.c) 代码块缓存与分派
+- [kernel/calls.c](kernel/calls.c) 各 ABI 的系统调用表
+- [docs/amd64_port_plan.md](docs/amd64_port_plan.md)
+- [docs/aarch64_guest_plan.md](docs/aarch64_guest_plan.md)
+
+## 性能
+
+引擎受限于分派开销，约为每次 gadget 分派 6.8 ns，因此开销与客户机指令数成正比。测量
+方法与数据见 [docs/perf_benchmarks_2026_08.md](docs/perf_benchmarks_2026_08.md)。
+
+指令融合与返回缓存可以在运行时按客户机切换，便于做 A/B 测量：
+
+```sh
+cat /proc/ish/arm64_jit_fuse          # 每个系列一行 "名称 on|off"
+echo retcache=0 > /proc/ish/arm64_jit_fuse
+echo all=1 > /proc/ish/riscv64_jit_fuse
+```
+
+`i386`、`amd64`、`arm64` 和 `riscv64` 都有对应的节点。这些位在翻译时被读取，因此改动
+只影响新编译的代码块；每次计时测量都应作为独立进程运行。
+[tests/manual/jit_fuse_ab.sh](tests/manual/jit_fuse_ab.sh) 会自动执行交替的 A/B 测量，
+并在退出时恢复原有掩码。
+
+## 可选加速器
+
+三者**默认均为关闭**，需要显式启用：
+
+| 功能 | CLI | 作用 |
+|---|---|---|
+| HLE | `ISH_HLE=1` | 用原生代码替换热点 libc 例程（`memcpy`、`strlen`、`memcmp` 等） |
+| 加密 | `ISH_CRYPTO_ACCEL=1` | AES-GCM 与 ChaCha20-Poly1305 卸载 |
+| Pixman | `ISH_PIX_ACCEL=1` | pixman 合成卸载 |
+
+其中 HLE 影响最大。在以被替换例程为主的循环中，客户机可以从比原生慢约 250 倍改善到
+约 1.4 倍，因为工作发生在一次原生调用内部，而不是每条客户机指令一次分派。它是纯粹的
+快速路径：无法识别的 libc 不会匹配，直接回退到普通翻译。`ISH_HLE_STATS=1` 会输出每个
+函数的调用次数。
 
 ## 仓库结构
 
-- `app/`: iOS 应用、界面、根文件系统选择、诊断、File Provider 集成。
-- `emu/`: 客户机 CPU 仿真，包含 amd64 解释器相关工作。
-- `kernel/`: 系统调用转换、进程模型、exec、信号、内存管理。
-- `fs/`: 文件系统层与 fakefs 集成。
-- `jit/`: 继承自 iSH 的线程化代码 JIT 机制。
-- `tests/`: 手动及自动化测试辅助工具。
-- `tools/`: 开发者工具及主机侧辅助脚本。
+- `app/`: iOS 应用、UI、根文件系统选择、诊断、File Provider 集成。
+- `emu/`: 客户机 CPU 状态、内存、TLB、FPU/向量支持。
+- `kernel/`: 系统调用翻译、进程模型、exec、信号、内存管理。
+- `fs/`: 文件系统层、fakefs、procfs、tmpfs、挂载。
+- `jit/`: gadget JIT 及各客户机的翻译器。
+- `tests/`: 端到端测试与客户机侧回归套件。
+- `tools/`: 开发者工具与宿主机侧辅助脚本。
 
 ## 克隆
 
-本仓库使用了子模块（submodule）。
+本仓库使用子模块。
 
 ```bash
 git clone --recurse-submodules git@github.com:emkey1/ish-AOK.git
 cd ish-AOK
 ```
 
-如果你已经在没有子模块的情况下克隆过：
+如果你已经在没有子模块的情况下克隆：
 
 ```bash
 git submodule update --init --recursive
@@ -62,7 +101,7 @@ git submodule update --init --recursive
 
 ## 构建依赖
 
-进行本地开发通常需要：
+本地开发通常需要：
 
 - Xcode
 - Python 3
@@ -72,260 +111,185 @@ git submodule update --init --recursive
 - sqlite3
 - libarchive
 
-在 macOS 上，常见的安装方式是：
+macOS 上常见的准备方式：
 
 ```bash
 brew install meson ninja llvm libarchive
 ```
 
-`sqlite3` 通常已经预先安装好了。
+`sqlite3` 通常已经存在。
+
+在 Apple Silicon 上请注意，构建会优先在 `/opt/homebrew` 而不是 `/usr/local` 下查找
+`llvm`、`libarchive` 和 `unicorn`。即使旧的 Intel 版 Homebrew 仍然存在，其中的 x86_64
+版本也不会被使用。
 
 ## 构建 iOS 应用
 
-用 Xcode 打开 [iSH-AOK.xcodeproj](iSH-AOK.xcodeproj)，构建 `iSH` scheme。
+用 Xcode 打开 [iSH-AOK.xcodeproj](iSH-AOK.xcodeproj) 并构建 `iSH` scheme。
 
 分支专属的重要设置：
 
-- Bundle ID 由 [app/iSH.xcconfig](app/iSH.xcconfig) 控制。
-- `ROOT_BUNDLE_IDENTIFIER` 默认值为 `app.ish.iSH-AOK`。
-- 项目已经使用了分支专属的调试配置 `Debug-ApplePleaseFixFB19282108`。
+- Bundle ID 由 [app/iSH.xcconfig](app/iSH.xcconfig) 决定。
+- `ROOT_BUNDLE_IDENTIFIER` 默认为 `app.ish.iSH-AOK`。
+- 项目使用分支专属的调试配置 `Debug-ApplePleaseFixFB19282108`。
 
-命令行构建：
+面向真机的命令行构建：
 
 ```bash
 xcodebuild \
   -project iSH-AOK.xcodeproj \
   -scheme iSH \
-  -sdk iphonesimulator \
   -configuration Debug-ApplePleaseFixFB19282108 \
-  build CODE_SIGNING_ALLOWED=NO
+  -destination 'generic/platform=iOS' \
+  -allowProvisioningUpdates build
 ```
 
-如果仓库根目录下存在以下归档文件，iOS 构建脚本会把它们复制进应用包：
-
-- `root.tar.gz`
-- `alpine-minirootfs-3.23.3-x86.tar.gz`
-- `alpine-minirootfs-3.23.3-x86_64.tar.gz`
-
-如果缺少某个文件，对应的内置根文件系统将无法使用。
-
-## 发布自动化（渐进式）
-
-本仓库现在包含一个简单的辅助脚本：
-
-- [`tools/release-aok.sh`](tools/release-aok.sh)
-
-先从安全的部分开始：
-
-```bash
-./tools/release-aok.sh preflight
-./tools/release-aok.sh archive
-./tools/release-aok.sh export latest /tmp/iSH-AOK-export
-```
-
-这样你就能在继续手动上传的同时，获得一个可重复执行的归档 + IPA 导出流程。
-
-当你准备好进行完整的 TestFlight 自动化时，使用：
-
-```bash
-./tools/release-aok.sh upload-fastlane
-```
-
-`upload-fastlane` 使用现有的 `fastlane upload_build` lane，需要你配置好 Ruby/Bundler/Fastlane 以及签名/认证相关的密钥。
-
-如果 `preflight` 提示 Ruby 版本过旧，运行：
-
-```bash
-brew install ruby@3.3
-echo 'export PATH="/opt/homebrew/opt/ruby@3.3/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-bundle install
-```
+iOS 构建脚本会把仓库根目录下的根文件系统压缩包复制进应用包。缺少其中任何一个，对应的
+内置根文件系统就无法使用。
 
 ## 构建原生 CLI / 模拟器
 
-对于模拟器（emulator）相关的开发，通常 Meson 构建比完整的 Xcode 构建更快。
-
-初始设置：
+做模拟器一侧的工作时，Meson 构建比完整的 Xcode 构建快得多。
 
 ```bash
-meson setup build
-```
-
-增量构建：
-
-```bash
+meson setup build --buildtype=debugoptimized
 ninja -C build
 ```
 
-常用目标：
+请使用 `--buildtype=debugoptimized`。Meson 的默认值是 `debug`（`-O0`），而 `-O0` 的
+模拟器不只是更慢，它会让在其上得到的测量结果失去意义。在这种构建上，客户机的
+`uname -v` 会包含 `" unoptimized"`。
 
-- `build/ish`
-- `build/libish.a`
-
-对于大多数模拟器相关的改动，这样就足够了：
+运行客户机：
 
 ```bash
-ninja -C build libish.a
+./build/ish -f build/alpine /bin/login -f root
+```
+
+从根文件系统压缩包创建文件系统：
+
+```bash
+./build/tools/fakefsify alpine-minirootfs-*.tar.gz alpine
 ```
 
 ## 回归测试
 
-本代码树中既有 `tests/e2e/` 下的端到端测试，也有 `tests/manual/` 下针对性的客户机侧探测程序。
+宿主机侧测试：
 
-最相关的原子操作/JIT 回归探测程序是：
+```bash
+meson test -C build
+```
 
-- [tests/manual/atomics32.c](tests/manual/atomics32.c)
-- [tests/manual/atomic_xadd32.c](tests/manual/atomic_xadd32.c)
-- [tests/manual/atomic_cmpxchg32.c](tests/manual/atomic_cmpxchg32.c)
-- [tests/manual/atomic_cmpxchg8b.c](tests/manual/atomic_cmpxchg8b.c)
-- [tests/manual/atomic_logic32.c](tests/manual/atomic_logic32.c)
-- [tests/manual/futex_core.c](tests/manual/futex_core.c)
-- [tests/manual/signal_core.c](tests/manual/signal_core.c)
-- [tests/manual/signal_restart.c](tests/manual/signal_restart.c)
-- [tests/manual/signal_realtime.c](tests/manual/signal_realtime.c)
-- [tests/manual/signal_altstack.c](tests/manual/signal_altstack.c)
-- [tests/manual/signal_poll.c](tests/manual/signal_poll.c)
-- [tests/manual/eventfd_interrupt.c](tests/manual/eventfd_interrupt.c)
-- [tests/manual/amd64_regress.c](tests/manual/amd64_regress.c)
-- [tests/manual/test_common.h](tests/manual/test_common.h)
+在 `long double` 不是 x87 80 位格式的宿主机上，`float80` 会被跳过；Apple Silicon 就属
+于这种情况，因为那里根本没有可供比较的参考值。在 x86_64 宿主机上它会完整运行。
 
-`atomics32.c` 是统领性的探测程序。其余拆分出来的程序设计为在客户机内部编译，并且在结果不匹配时会以非零状态退出，因此可以作为以下方面的可重复回归测试目标：
+客户机侧套件是主要的回归关卡。它位于 [tests/manual/](tests/manual)，在客户机内以只读
+方式提供于 `/AOK/tests`，包含约 120 个专项程序，覆盖信号、futex、进程生命周期、文件
+系统层、JIT 以及各架构的指令行为。每个程序在失败时以非零值退出，并支持 `-v`。
 
-- 带锁的 `xadd`
-- 带锁的 `cmpxchg`
-- 带锁的 `cmpxchg8b`
-- 带锁的逻辑运算及相邻的标志位消费者
-- futex 等待/唤醒、超时、信号中断及重启行为
-- 信号投递、挂起掩码、`sigtimedwait`、`signalfd`、`sigsuspend` 以及面向线程的信号
-- `poll`/`select`/`pselect`/`ppoll` 的信号中断及 EINTR 语义
-- `SA_RESTART` 下阻塞型系统调用的重启行为
-- 带负载的排队实时信号
-- 备用栈（alternate-stack）信号处理程序的投递
-- eventfd 读取中断以及通过共享等待路径实现的 `SA_RESTART` 行为
-- 与 amd64 相关的回归，包括跨页 COW 写入、exec 加载器清零、`fcntl` 锁生命周期竞争，以及客户机 `gcc` 下 `cc1` 的压力测试
+在客户机内：
 
-对于应用内置的根文件系统，或是在 iSH-AOK 下运行的导入根文件系统，客户机侧的设置辅助脚本是：
+```sh
+sh /AOK/tests/setup-regressions.sh --install-deps --run   # 全部构建并运行
+sh /AOK/tests/setup-regressions.sh --only fs_conformance,futex_core --run
+```
 
-- [tests/manual/setup-regressions.sh](tests/manual/setup-regressions.sh)
+新增测试时，把源码放进 `tests/manual/`，并登记到
+[fs/aok-tests.manifest](fs/aok-tests.manifest)，正是这个清单把它发布到 `/AOK/tests`；
+同时加入 [tests/manual/setup-regressions.sh](tests/manual/setup-regressions.sh) 以便被
+构建和运行。清单里遗漏的测试会在设备上悄无声息地消失。
 
-在客户机内部，对应的 `/AOK/tests/setup-regressions.sh` 可以准备、构建并运行这套针对性测试。
+## 使用根文件系统
 
-所有针对性的客户机侧回归测试都接受 `-v` 或 `--verbose` 参数。不带该参数时，只会打印失败项以及最终的 `PASS`/`FAIL` 结果行。
+应用内置：Alpine 3.23.3 与 Devuan 6（excalibur），各自提供 `i386`、`x86_64` 和
+`aarch64` 版本。包括 `riscv64` 和 Arch 在内的更多镜像可在应用内下载，目录见
+[deps/rootfs-manifest](deps/rootfs-manifest)。
 
-## 处理根文件系统
-
-本分支目前在应用中提供三种内置选项：
-
-- `i386` 的 `Devuan5(Debian12)`
-- `i386` 的 `Alpine3.23.3`
-- `amd64` 的 `Alpine3.23.3(x86_64)`
-
-根文件系统选择界面及元数据处理位于：
+根文件系统选择界面与元数据处理位于：
 
 - [app/Roots.m](app/Roots.m)
 - [app/RootsTableViewController.m](app/RootsTableViewController.m)
 
 说明：
 
-- `x86_64` 根文件系统是用于开发调试的，并非面向普通终端用户。
 - 应用会为每个导入的根文件系统记录客户机 ABI。
-- 对于受管理的根文件系统，File Provider 域会保持同步。
+- 所有已安装的根文件系统还会在已启动的客户机中以读写方式暴露于 `/AOK/roots/<名称>`，
+  因此你可以 chroot 进入另一种架构的用户空间。
+- 受管理的根文件系统会同步 File Provider 域。
 
 ## 日志与诊断
 
-日志由 [app/iSH.xcconfig](app/iSH.xcconfig) 中的 `ISH_LOG` 控制。
-
-示例：
+日志由 [app/iSH.xcconfig](app/iSH.xcconfig) 中的 `ISH_LOG` 控制；CLI 构建则使用
+`meson configure -Dlog=...`。
 
 ```xcconfig
 ISH_LOG = verbose strace
 ```
 
-当前日志记录器默认值：
+常用通道：`strace`（系统调用参数与返回值，最有用）、`verbose`，以及 `instr`（每条指令，
+非常慢）。
 
-- iPhone / 模拟器: `nslog`
-- macOS: `dprintf`
-
-常用的日志类型：
-
-- `strace`
-- `verbose`
-- `instr`
-
-对于模拟器相关的开发，通常最快的循环是：
-
-1. 修改解释器或内核代码。
-2. 运行 `ninja -C build libish.a`。
-3. 重新构建 iOS 应用。
-4. 在模拟器中启动。
-5. 查看控制台日志，检查出错的 RIP、opcode 窗口以及寄存器状态。
+日志器默认值在 iPhone 与模拟器上为 `nslog`，在 macOS 上为 `dprintf`。
 
 ## File Provider
 
-本分支包含一个 iOS File Provider 扩展，用于通过系统文件 API 暴露客户机文件。
-
-相关代码：
+本分支包含一个 iOS File Provider 扩展，使客户机文件可以通过系统文件 API 呈现。
 
 - [app/FileProvider/FileProviderExtension.m](app/FileProvider/FileProviderExtension.m)
 - [app/FileProvider/FileProviderEnumerator.m](app/FileProvider/FileProviderEnumerator.m)
 - [app/FileProvider/FileProviderItem.m](app/FileProvider/FileProviderItem.m)
 
-这是本分支专属的功能，应视为此处所维护产品能力的一部分。
+这是分支专属功能，属于这里维护的产品范围。
 
-## amd64 开发流程
+## 发布自动化
 
-如果你正在这个仓库中进行 amd64 相关的开发：
+[tools/release-aok.sh](tools/release-aok.sh) 封装了归档与导出流程：
 
-- 优先关注解释器，不要假设 JIT 路径目前是相关的。
-- 保持改动小而可回退。
-- 用以下两种方式进行验证：
-  - `ninja -C build libish.a`
-  - 模拟器上的 `xcodebuild`
-- 当客户机出现失败时，请记录：
-  - 故障类型
-  - 客户机 RIP
-  - opcode 窗口
-  - 客户机寄存器
-  - 任何额外添加的针对性追踪输出
+```bash
+./tools/release-aok.sh preflight
+./tools/release-aok.sh archive
+./tools/release-aok.sh export latest /tmp/iSH-AOK-export
+./tools/release-aok.sh upload-fastlane      # 完整的 TestFlight 自动化
+```
 
-当前 amd64 相关工作经常涉及：
+`upload-fastlane` 使用既有的 `fastlane upload_build` lane，需要 Ruby/Bundler/Fastlane
+环境以及签名和认证密钥。
 
-- [emu/amd64_interp.c](emu/amd64_interp.c) 中的指令解码与执行
-- [jit/jit.c](jit/jit.c) 中的 JIT 交接与分发
-- [kernel/exec.c](kernel/exec.c) 中的 ELF64 与进程启动
-- [kernel/calls.c](kernel/calls.c) 中的系统调用分发与 ABI 处理
+发布本身的做法是：提升 `CURRENT_PROJECT_VERSION`，添加
+`docs/release-notes-since-iSH-AOK_<N>.md` 和 `docs/release-summary-iSH-AOK_<N>.md`，
+然后在该提交上打上 `builds/iSH-AOK_<N>` 标签。标签名本身是有作用的：
+`.github/workflows/build-release-ipa.yml` 由 `builds/iSH-AOK_*` 触发，因此命名不同的
+标签不会产生发布构建。
 
-## 分支说明
+## 分支
 
-截至撰写本文档时：
-
-- `working` 是本分支的活跃集成分支。修复、功能开发和发布候选都会先合并到这里。
-- `main` 跟踪已合并、稳定的代码，在发布上线时会从 `working` 更新。
-- `amd64` 是 x86_64 客户机支持开发的活跃分支。
-- `aarch64` 是原生 ARM64 客户机支持开发的活跃分支（参见 [aarch64_guest_plan.md](docs/aarch64_guest_plan.md)）。
-
-如果你更新了跨分支的文档，请确保相关分支保持同步。
+- `working` 是默认分支，也是活跃的集成分支。缺陷修复、功能开发和发布候选都先进入这里。
+- `amd64`、`aarch64` 和 `riscv` 原本是各客户机的初期开发分支。这些工作已经合并进
+  `working`，而 `working` 会构建全部四种客户机。
 
 ## 与上游的关系
 
-iSH-AOK 基于上游 iSH，但已经有意地进行了分化。
+iSH-AOK 基于上游 iSH，但有意与之分化。
 
 这意味着：
 
-- 上游 README 中的说明在本分支中可能不完整或不适用
-- 分支名称与构建配置可能不同
-- 内置根文件系统及运维行为是本分支专属的
-- 不应假设本分支中的实验性 amd64 支持在上游也存在
+- 上游 README 的说明对本分支可能不完整或不正确
+- 分支名称与构建配置并不相同
+- 内置根文件系统与运行行为是本分支特有的
+- 不应假定这里的 amd64、arm64 和 riscv64 客户机在上游同样存在
+
+在带有 `upstream` 远端的克隆中使用 `gh` CLI 时，请加上 `--repo emkey1/ish-AOK`。否则
+`gh` 会解析到 `ish-app/ish`，回答的是上游的工作流、发布和标签，而不是本分支的。
 
 ## 致谢
 
-`aarch64` 分支的原生 ARM64 客户机支持工作，受到 [OpenMinis/ish-arm64](https://github.com/OpenMinis/ish-arm64) 的启发，部分内容参考自该项目。它是 `ish-app/ish` 的一个 GPLv3 分支，独立实现了同样的能力。
-详细的文件级致谢参见 [CREDITS-aarch64.md](docs/CREDITS-aarch64.md)。
+ARM64 客户机的工作受到 [OpenMinis/ish-arm64](https://github.com/OpenMinis/ish-arm64)
+的启发，部分内容也改编自该项目。它是 `ish-app/ish` 的一个 GPLv3 分支，独立实现了同样的
+能力。文件级别的署名见 [docs/CREDITS-aarch64.md](docs/CREDITS-aarch64.md)。
 
 ## 许可证
 
-参见：
+请参阅：
 
 - [LICENSE.md](LICENSE.md)
 - [LICENSE.IOS](LICENSE.IOS)
