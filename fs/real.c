@@ -656,6 +656,26 @@ ssize_t realfs_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {
 }
 
 ssize_t realfs_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t off) {
+    // On an O_APPEND fd Linux ignores the offset it was handed and writes at
+    // end of file, while leaving the file position alone (both halves verified
+    // against a real kernel; the offset half is documented under BUGS in
+    // man 2 pwrite). POSIX says the opposite and Darwin follows POSIX, so the
+    // host will not do this for us even though the description was opened
+    // O_APPEND -- realfs_write() gets it for free only because a plain write(2)
+    // goes through the host's own append path. Look the size up and write
+    // there, matching what fs/tmp.c and kernel/memfd.c do for their backing.
+    //
+    // A host write(2) would append atomically, but it also advances the file
+    // position that Linux keeps still here, so the size lookup is the closer
+    // match; the lost atomicity only affects concurrent pwrites to one
+    // O_APPEND description, which is an exotic combination of an already
+    // exotic quirk.
+    if (fd->flags & O_APPEND_) {
+        struct stat real_stat;
+        if (fstat(fd->real_fd, &real_stat) < 0)
+            return errno_map();
+        off = real_stat.st_size;
+    }
     ssize_t res = pwrite(fd->real_fd, buf, bufsize, off);
     if (res < 0)
         return errno_map();

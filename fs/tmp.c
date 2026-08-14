@@ -1285,6 +1285,14 @@ static ssize_t tmpfs_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_
     if (S_ISDIR(inode->stat.mode))
         goto out;
     assert(S_ISREG(inode->stat.mode));
+    // pwrite on an O_APPEND fd appends and ignores the offset it was handed.
+    // POSIX says the opposite, but Linux does this (man 2 pwrite records it
+    // under BUGS) and so does kernel/memfd.c:memfd_pwrite, so matching Linux
+    // also keeps the two host-file-backed filesystems consistent with each
+    // other. Done under inode->lock for the same atomicity reason as
+    // tmpfs_write.
+    if (fd->flags & O_APPEND_)
+        off = (off_t) inode->stat.size;
     size_t end;
     if (__builtin_add_overflow((size_t) off, bufsize, &end)) {
         res = _EFBIG;
@@ -1379,7 +1387,22 @@ static ssize_t tmpfs_write(struct fd *fd, const void *buf, size_t bufsize) {
     // would land past the just-resized buffer -> OOB write / SIGBUS. Using a
     // single snapshot for the grow, the memcpy target, and the advance keeps
     // them internally consistent regardless of a concurrent offset change.
-    size_t off = fd->offset;
+    //
+    // O_APPEND repositions to end-of-file inside the write rather than using
+    // fd->offset, and does so atomically with respect to other writers -- that
+    // atomicity is the whole point of the flag, and reading inode->stat.size
+    // here, under inode->lock, is what provides it. Every other filesystem that
+    // serves seekable regular files already honors it: realfs (and so fakefs,
+    // which opens through it) maps O_APPEND_ onto the host's O_APPEND, and
+    // kernel/memfd.c does this same size lookup for its host-file-backed fd.
+    // tmpfs was the one gap, so a shell's `>>` onto an existing file on /tmp,
+    // /run or /dev/shm wrote at offset 0 -- where a freshly opened O_APPEND fd
+    // starts -- silently overwriting the head of the file with the bytes that
+    // should have gone after it. It hid because appending to an empty or
+    // brand-new file lands at 0 legitimately, and successive writes on one fd
+    // advance fd->offset normally; only reopening a file that already has
+    // content corrupts it.
+    size_t off = (fd->flags & O_APPEND_) ? inode->stat.size : fd->offset;
     // Guard against off + bufsize wrapping (a write at an offset near SIZE_MAX
     // would otherwise skip the grow and memcpy far past the buffer).
     size_t end;
