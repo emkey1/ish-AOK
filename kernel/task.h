@@ -63,6 +63,7 @@ static inline void task_io_counters_add(struct task_io_counters *dst,
     atomic_fetch_add_explicit(&dst->blkio_delay_ns, atomic_load_explicit(&src->blkio_delay_ns, memory_order_relaxed), memory_order_relaxed);
 }
 struct futex; // opaque; defined in kernel/futex.c (see futex_restart_futex below)
+struct native_exec_pending; // opaque; defined in kernel/native.c
 
 struct task {
     enum guest_abi abi;
@@ -73,6 +74,14 @@ struct task {
     struct mem *mem; // pointer to mm.mem, for convenience
     pthread_t thread;
     uint64_t threadid;
+
+    // Set by execve when the program resolves to one implemented natively
+    // inside iSH-AOK (kernel/native.h), and consumed where this task would
+    // otherwise start executing the loaded image. Hung off the task rather
+    // than kept thread-local because a task can be exec'd by a thread that is
+    // only impersonating it (kernel/init.c's boot-command launcher does
+    // exactly that, then hands the task to its own thread).
+    struct native_exec_pending *native_exec;
 
     struct {
         atomic_int count; // If positive, don't delete yet, wait_to_delete

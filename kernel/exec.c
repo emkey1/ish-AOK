@@ -1198,16 +1198,17 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
                 return _ENOMEM;
             }
             fd_close(fd);
-            // Does not return: runs the program on this task and exits with
-            // its status.
-            //
-            // KNOWN DEBT: sys_execve malloc'd the argv/envp string blocks and
-            // frees them only once do_execve returns, which this path never
-            // does -- so each native exec leaks them. Harmless for the probe
-            // this currently is, but it has to be plumbed out (run the program
-            // after the syscall's buffers are freed) before anything invokes
-            // native programs at volume.
-            native_program_exec(prog, (int) argv.count, native_argv, native_envp);
+            // Recorded rather than run here. Running a native program never
+            // returns, so doing it at this point would strand every buffer the
+            // execve syscall still means to free -- including the argv/envp
+            // blocks themselves. Instead take a private copy, report success,
+            // and let each entry point run it once its own frees are done (see
+            // native_exec_run_pending).
+            int perr = native_exec_set_pending(prog, (int) argv.count,
+                    native_argv, native_envp);
+            free(native_argv);
+            free(native_envp);
+            return perr;
         }
     }
 
@@ -1453,6 +1454,9 @@ ssize_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
 
     free(envp);
     free(argv);
+    // After the frees: a native program recorded by __do_execve runs here and
+    // does not return (kernel/native.h).
+    native_exec_run_pending();
     return err;
 }
 
@@ -1488,6 +1492,9 @@ ssize_t sys_execve_guest(guest_addr_t filename_addr, guest_addr_t argv_addr, gue
 
     free(envp);
     free(argv);
+    // After the frees: a native program recorded by __do_execve runs here and
+    // does not return (kernel/native.h).
+    native_exec_run_pending();
     return err;
 }
 
@@ -1548,6 +1555,9 @@ ssize_t sys_execveat(fd_t dirfd, addr_t filename_addr, addr_t argv_addr, addr_t 
 out_free_args:
     free(envp);
     free(argv);
+    // After the frees: a native program recorded by __do_execve runs here and
+    // does not return (kernel/native.h).
+    native_exec_run_pending();
     return err;
 }
 
@@ -1621,6 +1631,9 @@ ssize_t sys_execveat_guest(fd_t dirfd, guest_addr_t filename_addr, guest_addr_t 
 out_free_args:
     free(envp);
     free(argv);
+    // After the frees: a native program recorded by __do_execve runs here and
+    // does not return (kernel/native.h).
+    native_exec_run_pending();
     return err;
 }
 

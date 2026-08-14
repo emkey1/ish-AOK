@@ -46,10 +46,29 @@ struct native_program {
 // reports the situation loudly rather than failing with ENOEXEC.
 const struct native_program *native_program_lookup(const char *name);
 
-// Runs prog on the current task and terminates that task with prog's return
-// value. Called from execve at the point the image would have been replaced,
-// so it never returns.
-noreturn void native_program_exec(const struct native_program *prog,
-        int argc, char *const argv[], char *const envp[]);
+// Running a native program cannot simply happen where execve would have loaded
+// the ELF: that path never returns, so every buffer the execve syscall had
+// allocated -- including the argv/envp blocks it frees on the way out -- would
+// leak on each invocation. Instead execve records the program with private
+// copies of argv/envp and returns success, then unwinds normally, and the
+// entry point runs it once its own frees have happened.
+//
+// Records prog for the current task; returns 0, or _ENOMEM. The copies are
+// owned from here on, so the caller's argv/envp may be freed immediately.
+int native_exec_set_pending(const struct native_program *prog, int argc,
+        char *const argv[], char *const envp[]);
+
+// Runs whatever native_exec_set_pending recorded for this task and terminates
+// the task with its return value; returns immediately if nothing is pending.
+// Called from each execve entry point AFTER it has freed its own argv/envp
+// blocks -- that ordering is the entire reason the pending step exists -- and
+// from task_run_current, which covers a task whose very first image is native
+// and is therefore reached without any execve syscall returning.
+void native_exec_run_pending(void);
+
+struct task;
+// Drops a record that will never run, for a task torn down between exec and
+// first execution.
+void native_exec_discard_pending(struct task *task);
 
 #endif

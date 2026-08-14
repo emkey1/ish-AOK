@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "kernel/calls.h"
+#include "kernel/native.h"
 #include "kernel/task.h"
 #include "emu/memory.h"
 #include "emu/tlb.h"
@@ -469,6 +470,9 @@ void task_unlink_locked(struct task *task) {
 }
 
 static void task_free_final(struct task *task) {
+    // A native program recorded by execve but never reached -- the task died
+    // between the exec and its first execution (task_start failing, say).
+    native_exec_discard_pending(task);
     if (task != NULL && task_is_leader(task) && task->group != NULL) {
         cond_destroy(&task->group->child_exit);
         free(task->group->cgroup_path);
@@ -637,6 +641,14 @@ static void task_wait_for_mem_quiesce(struct task *task) {
 }
 
 void task_run_current(void) {
+    // A task whose image is a natively-implemented program never enters the
+    // emulator at all: it is dispatched here instead, and does not return. The
+    // execve entry points handle the ordinary case of an already-running task
+    // exec'ing one; this covers a task whose FIRST image is native, which is
+    // reached without any execve syscall returning -- the CLI's top-level
+    // command and kernel/init.c's boot-command launcher both land here.
+    native_exec_run_pending();
+
     struct task* save = current; // Because I kinda suspect that current gets messed up sometimes
     struct cpu_state *cpu = &save->cpu;
     struct tlb tlb = {};

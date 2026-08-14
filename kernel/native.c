@@ -2,7 +2,10 @@
 // for the execution model; this file is the table and the plumbing.
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#include "kernel/errno.h"
 
 #include "kernel/calls.h"
 #include "kernel/fs.h"
@@ -128,8 +131,96 @@ const struct native_program *native_program_lookup(const char *name) {
     return NULL;
 }
 
-noreturn void native_program_exec(const struct native_program *prog,
-        int argc, char *const argv[], char *const envp[]) {
+// Deep copy: the vectors handed to set_pending alias buffers the execve
+// syscall is about to free, so the strings have to be copied too, not just the
+// pointer array.
+static char **native_dup_vector(char *const vec[], size_t count) {
+    char **copy = calloc(count + 1, sizeof(*copy));
+    if (copy == NULL)
+        return NULL;
+    for (size_t i = 0; i < count; i++) {
+        copy[i] = strdup(vec[i] != NULL ? vec[i] : "");
+        if (copy[i] == NULL) {
+            for (size_t j = 0; j < i; j++)
+                free(copy[j]);
+            free(copy);
+            return NULL;
+        }
+    }
+    return copy;
+}
+
+static void native_free_vector(char **vec) {
+    if (vec == NULL)
+        return;
+    for (size_t i = 0; vec[i] != NULL; i++)
+        free(vec[i]);
+    free(vec);
+}
+
+struct native_exec_pending {
+    const struct native_program *prog;
+    int argc;
+    char **argv;
+    char **envp;
+};
+
+static void native_pending_free(struct native_exec_pending *pending) {
+    if (pending == NULL)
+        return;
+    native_free_vector(pending->argv);
+    native_free_vector(pending->envp);
+    free(pending);
+}
+
+void native_exec_discard_pending(struct task *task) {
+    if (task == NULL || task->native_exec == NULL)
+        return;
+    native_pending_free(task->native_exec);
+    task->native_exec = NULL;
+}
+
+int native_exec_set_pending(const struct native_program *prog, int argc,
+        char *const argv[], char *const envp[]) {
+    size_t envc = 0;
+    while (envp != NULL && envp[envc] != NULL)
+        envc++;
+
+    struct native_exec_pending *pending = calloc(1, sizeof(*pending));
+    char **argv_copy = native_dup_vector(argv, argc < 0 ? 0 : (size_t) argc);
+    char **envp_copy = native_dup_vector(envp, envc);
+    if (pending == NULL || argv_copy == NULL || envp_copy == NULL) {
+        free(pending);
+        native_free_vector(argv_copy);
+        native_free_vector(envp_copy);
+        return _ENOMEM;
+    }
+
+    pending->prog = prog;
+    pending->argc = argc;
+    pending->argv = argv_copy;
+    pending->envp = envp_copy;
+
+    // An exec over an exec would otherwise strand the earlier record.
+    native_exec_discard_pending(current);
+    current->native_exec = pending;
+    return 0;
+}
+
+void native_exec_run_pending(void) {
+    struct native_exec_pending *pending = current != NULL ? current->native_exec : NULL;
+    if (pending == NULL)
+        return;
+
+    const struct native_program *prog = pending->prog;
+    int argc = pending->argc;
+    char **argv = pending->argv;
+    char **envp = pending->envp;
+    // Detached before running: the program must not see a stale record, and
+    // task teardown must not double-free what is about to run.
+    current->native_exec = NULL;
+    free(pending);
+
     // comm is what /proc and ps report, and the guest should see the name it
     // actually invoked rather than the program backing it.
     const char *applet = native_applet_name(argc, argv);
@@ -140,11 +231,8 @@ noreturn void native_program_exec(const struct native_program *prog,
 
     int status = prog->main(argc, argv, envp);
 
-    // The vectors were built for this one call and nothing outlives it. The
-    // string blocks they point into belong to the caller, and are the leak
-    // documented at the call site in kernel/exec.c.
-    free((void *) argv);
-    free((void *) envp);
+    native_free_vector(argv);
+    native_free_vector(envp);
 
     // Same encoding sys_exit_group uses: the wait status carries the exit code
     // in its high byte.
