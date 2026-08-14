@@ -12,3 +12,6 @@
 [submodule "deps/rootfs-manifest"]
 	path = deps/rootfs-manifest
 	url = https://github.com/emkey1/ish-AOK-rootfs.git
+[submodule "deps/smallclue"]
+	path = deps/smallclue
+	url = https://github.com/emkey1/smallclue.git
