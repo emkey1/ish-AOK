@@ -4,45 +4,89 @@ iSH-AOK is a fork of [ish-app/ish](https://github.com/ish-app/ish) with local pr
 
 Testflight: https://testflight.apple.com/join/X1flyiqE
 
-This fork is not just a rebrand. It carries fork-specific behavior, bundled roots, diagnostics work, File Provider integration, and an active experimental amd64/x86_64 guest bring-up. If you want upstream iSH, use `ish-app/ish`. If you are working in this repository, this README is the relevant one.
+This fork is not just a rebrand. It carries fork-specific behavior, bundled roots, diagnostics work, File Provider integration, and support for four guest architectures. If you want upstream iSH, use `ish-app/ish`. If you are working in this repository, this README is the relevant one.
 
 ## What This Fork Adds
 
 - Fork-specific app identity:
   - product name `iSH-AOK`
   - bundle root `app.ish.iSH-AOK`
-- Bundled root filesystems in the app build:
-  - `root.tar.gz` as `Devuan5(Debian12)` for `i386`
-  - `alpine-minirootfs-3.23.3-x86.tar.gz` as `Alpine3.23.3`
-  - `alpine-minirootfs-3.23.3-x86_64.tar.gz` as `Alpine3.23.3(x86_64)`
+- **Four guest architectures**, all JIT: `i386`, `amd64` (x86_64), `arm64` (aarch64), and `riscv64`.
+- Bundled root filesystems in the app build (Alpine 3.23.3 and Devuan 6, each for i386, x86_64 and aarch64), plus additional downloadable images including riscv64.
 - File Provider support for exposing guest files through iOS.
+- Optional accelerators: native replacement of hot libc routines, and crypto and pixman offload.
 - Extra diagnostics and operational changes that are specific to this fork.
-- Ongoing amd64 interpreter, loader, and syscall work.
 
-## Current amd64 Status
+## Guest Architectures
 
-The amd64 work in this repo is experimental.
+All four guests are supported and run through the gadget JIT. None of them runs
+natively: an `arm64` guest instruction on an ARM host is still one gadget
+dispatch, exactly like a `riscv64` one. Being the host's own ISA family makes
+each gadget's body cheaper, not free.
 
-- The app can import and attempt to boot an `x86_64` guest root.
-- The interpreter, ELF64 loader, and amd64 syscall path are under active bring-up.
-- Expect early boot failures, decode gaps, and partial userland execution.
-- The current development branch for that work is typically `amd64`.
+| guest | status |
+|---|---|
+| `i386` | the original guest, JIT only |
+| `amd64` | supported, JIT |
+| `arm64` | supported, JIT |
+| `riscv64` | supported, JIT |
+
+The per-guest regression suites pass on all four. Note that the interpreters are
+legacy and are being retired: new work should target the JIT.
 
 Relevant files:
 
-- [amd64_port_plan.md](docs/amd64_port_plan.md)
-- [emu/amd64_interp.c](emu/amd64_interp.c)
-- [kernel/exec.c](kernel/exec.c)
-- [kernel/calls.c](kernel/calls.c)
+- [jit/gen.c](jit/gen.c) instruction translation for every guest
+- [jit/jit.c](jit/jit.c) block cache and dispatch
+- [kernel/calls.c](kernel/calls.c) per-ABI syscall tables
+- [docs/amd64_port_plan.md](docs/amd64_port_plan.md)
+- [docs/aarch64_guest_plan.md](docs/aarch64_guest_plan.md)
+
+## Performance
+
+The engine is dispatch-bound at roughly 6.8 ns per gadget dispatch, so cost
+tracks guest instruction count. Measured method and numbers are in
+[docs/perf_benchmarks_2026_08.md](docs/perf_benchmarks_2026_08.md).
+
+Instruction fusion and the return caches can be toggled at runtime for A/B
+measurement, per guest:
+
+```sh
+cat /proc/ish/arm64_jit_fuse          # one "name on|off" line per family
+echo retcache=0 > /proc/ish/arm64_jit_fuse
+echo all=1 > /proc/ish/riscv64_jit_fuse
+```
+
+Nodes exist for `i386`, `amd64`, `arm64` and `riscv64`. The bits are consumed at
+translation time, so a change affects newly compiled blocks; run each timed
+measurement as its own process. [tests/manual/jit_fuse_ab.sh](tests/manual/jit_fuse_ab.sh)
+automates an interleaved A/B and restores the mask when it exits.
+
+## Optional Accelerators
+
+All three are **off by default** and opt-in:
+
+| feature | CLI | what it does |
+|---|---|---|
+| HLE | `ISH_HLE=1` | replaces hot libc routines (`memcpy`, `strlen`, `memcmp`, ...) with native code |
+| Crypto | `ISH_CRYPTO_ACCEL=1` | AES-GCM and ChaCha20-Poly1305 offload |
+| Pixman | `ISH_PIX_ACCEL=1` | pixman composite offload |
+
+HLE matters most. On a loop dominated by the routines it replaces, it takes the
+guest from roughly 250x slower than native to roughly 1.4x, because the work
+happens inside one native call rather than one dispatch per guest instruction.
+It is a pure fast path: an unrecognized libc simply never matches and falls
+through to ordinary translation. `ISH_HLE_STATS=1` prints per-function call
+counts.
 
 ## Repository Layout
 
 - `app/`: iOS app, UI, root selection, diagnostics, File Provider integration.
-- `emu/`: guest CPU emulation, including amd64 interpreter work.
+- `emu/`: guest CPU state, memory, TLB, FPU/vector support.
 - `kernel/`: syscall translation, process model, exec, signals, memory management.
-- `fs/`: filesystem layer and fakefs integration.
-- `jit/`: threaded-code JIT machinery inherited from iSH.
-- `tests/`: manual and automated test helpers.
+- `fs/`: filesystem layer, fakefs, procfs, tmpfs, mounts.
+- `jit/`: the gadget JIT and its per-guest translators.
+- `tests/`: end-to-end tests and the guest-side regression suite.
 - `tools/`: developer tools and host-side helpers.
 
 ## Clone
@@ -80,6 +124,10 @@ brew install meson ninja llvm libarchive
 
 `sqlite3` is usually already present.
 
+On Apple silicon, note that the build looks for `llvm`, `libarchive` and
+`unicorn` under `/opt/homebrew` before `/usr/local`. If an old Intel Homebrew is
+still installed, its x86_64 copies are not used.
+
 ## Build the iOS App
 
 Open [iSH-AOK.xcodeproj](iSH-AOK.xcodeproj) in Xcode and build the `iSH` scheme.
@@ -88,138 +136,84 @@ Important fork-specific settings:
 
 - Bundle IDs are driven by [app/iSH.xcconfig](app/iSH.xcconfig).
 - `ROOT_BUNDLE_IDENTIFIER` defaults to `app.ish.iSH-AOK`.
-- The project already uses the fork-specific debug configuration `Debug-ApplePleaseFixFB19282108`.
+- The project uses the fork-specific debug configuration `Debug-ApplePleaseFixFB19282108`.
 
-Command-line build:
+Command-line build for a device:
 
 ```bash
 xcodebuild \
   -project iSH-AOK.xcodeproj \
   -scheme iSH \
-  -sdk iphonesimulator \
   -configuration Debug-ApplePleaseFixFB19282108 \
-  build CODE_SIGNING_ALLOWED=NO
+  -destination 'generic/platform=iOS' \
+  -allowProvisioningUpdates build
 ```
 
-The iOS build scripts copy these archives into the app bundle if they are present at repo root:
-
-- `root.tar.gz`
-- `alpine-minirootfs-3.23.3-x86.tar.gz`
-- `alpine-minirootfs-3.23.3-x86_64.tar.gz`
-
-If one of those files is missing, the corresponding bundled root will not work.
-
-## Release Automation (Incremental)
-
-This repo now includes a simple helper script:
-
-- [`tools/release-aok.sh`](/Users/mke/git/ish-AOK/tools/release-aok.sh)
-
-Start with the safe parts first:
-
-```bash
-./tools/release-aok.sh preflight
-./tools/release-aok.sh archive
-./tools/release-aok.sh export latest /tmp/iSH-AOK-export
-```
-
-That gives you a repeatable archive + IPA export flow while you keep uploading manually.
-
-When you are ready for full TestFlight automation, use:
-
-```bash
-./tools/release-aok.sh upload-fastlane
-```
-
-`upload-fastlane` uses the existing `fastlane upload_build` lane and requires your Ruby/Bundler/Fastlane setup plus signing/auth secrets.
-
-If `preflight` says Ruby is too old, run:
-
-```bash
-brew install ruby@3.3
-echo 'export PATH="/opt/homebrew/opt/ruby@3.3/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
-bundle install
-```
+The iOS build scripts copy the rootfs archives into the app bundle from the repo
+root. If one is missing, the corresponding bundled root will not work.
 
 ## Build the Native CLI / Emulator
 
-For emulator-side work, the Meson build is usually faster than full Xcode runs.
-
-Initial setup:
+For emulator-side work, the Meson build is much faster than full Xcode runs.
 
 ```bash
-meson setup build
-```
-
-Incremental build:
-
-```bash
+meson setup build --buildtype=debugoptimized
 ninja -C build
 ```
 
-Useful targets include:
+Use `--buildtype=debugoptimized`. Meson's default is `debug` (`-O0`), and an
+`-O0` emulator does not merely run slower, it invalidates measurements taken on
+it. A guest on such a build reports `" unoptimized"` in `uname -v`.
 
-- `build/ish`
-- `build/libish.a`
-
-For many emulator changes, this is enough:
+Run a guest:
 
 ```bash
-ninja -C build libish.a
+./build/ish -f build/alpine /bin/login -f root
+```
+
+Create a filesystem from a rootfs tarball:
+
+```bash
+./build/tools/fakefsify alpine-minirootfs-*.tar.gz alpine
 ```
 
 ## Regression Tests
 
-The tree has both end-to-end tests under `tests/e2e/` and focused guest-side probes under `tests/manual/`.
+Host-side tests:
 
-The most relevant reduced atomic/JIT regression probe is:
+```bash
+meson test -C build
+```
 
-- [tests/manual/atomics32.c](/Users/mke/git/ish-AOK/tests/manual/atomics32.c)
-- [tests/manual/atomic_xadd32.c](/Users/mke/git/ish-AOK/tests/manual/atomic_xadd32.c)
-- [tests/manual/atomic_cmpxchg32.c](/Users/mke/git/ish-AOK/tests/manual/atomic_cmpxchg32.c)
-- [tests/manual/atomic_cmpxchg8b.c](/Users/mke/git/ish-AOK/tests/manual/atomic_cmpxchg8b.c)
-- [tests/manual/atomic_logic32.c](/Users/mke/git/ish-AOK/tests/manual/atomic_logic32.c)
-- [tests/manual/futex_core.c](/Users/mke/git/ish-AOK/tests/manual/futex_core.c)
-- [tests/manual/signal_core.c](/Users/mke/git/ish-AOK/tests/manual/signal_core.c)
-- [tests/manual/signal_restart.c](/Users/mke/git/ish-AOK/tests/manual/signal_restart.c)
-- [tests/manual/signal_realtime.c](/Users/mke/git/ish-AOK/tests/manual/signal_realtime.c)
-- [tests/manual/signal_altstack.c](/Users/mke/git/ish-AOK/tests/manual/signal_altstack.c)
-- [tests/manual/signal_poll.c](/Users/mke/git/ish-AOK/tests/manual/signal_poll.c)
-- [tests/manual/eventfd_interrupt.c](/Users/mke/git/ish-AOK/tests/manual/eventfd_interrupt.c)
-- [tests/manual/amd64_regress.c](/Users/mke/git/ish-AOK/tests/manual/amd64_regress.c)
-- [tests/manual/test_common.h](/Users/mke/git/ish-AOK/tests/manual/test_common.h)
+`float80` skips on hosts whose `long double` is not the x87 80-bit format, which
+includes Apple silicon: there is no reference to compare against there. It runs
+in full on an x86_64 host.
 
-`atomics32.c` is the umbrella probe. The split programs are intended to be compiled inside the guest and now exit non-zero on mismatch, so they can be used as repeatable regression targets for:
+The guest-side suite is the primary regression gate. It lives in
+[tests/manual/](tests/manual) and is served read-only inside the guest at
+`/AOK/tests`, with roughly 120 focused programs covering signals, futexes,
+process lifecycle, the filesystem layer, the JIT, and per-architecture
+instruction behavior. Each exits non-zero on failure and accepts `-v`.
 
-- locked `xadd`
-- locked `cmpxchg`
-- locked `cmpxchg8b`
-- locked logic ops and nearby flag consumers
-- futex wait/wake, timeout, signal interruption, and restart behavior
-- signal delivery, pending masks, `sigtimedwait`, `signalfd`, `sigsuspend`, and thread-directed signals
-- `poll`/`select`/`pselect`/`ppoll` signal interruption and EINTR semantics
-- restart behavior for blocking syscalls under `SA_RESTART`
-- queued realtime signals with payload delivery
-- alternate-stack signal handler delivery
-- eventfd read interruption and `SA_RESTART` behavior through the shared wait path
-- amd64-specific regressions around cross-page COW writes, exec loader zeroing, `fcntl` lock lifetime races, and `cc1` stress under guest `gcc`
+Inside a guest:
 
-For app-bundled roots or imported roots running under iSH-AOK, the guest-side setup helper is:
+```sh
+sh /AOK/tests/setup-regressions.sh --install-deps --run   # build and run everything
+sh /AOK/tests/setup-regressions.sh --only fs_conformance,futex_core --run
+```
 
-- [tests/manual/setup-regressions.sh](/Users/mke/git/ish-AOK/tests/manual/setup-regressions.sh)
-
-Inside the guest, the equivalent `/AOK/tests/setup-regressions.sh` can stage, build, and run the focused suite.
-
-All focused guest-side regressions accept `-v` or `--verbose`. Without it they only print failures plus the final suite `PASS`/`FAIL` line.
+Adding a test means dropping the source in `tests/manual/` and listing it in
+[fs/aok-tests.manifest](fs/aok-tests.manifest), which is what publishes it to
+`/AOK/tests`, plus [tests/manual/setup-regressions.sh](tests/manual/setup-regressions.sh)
+so it is built and run. A test missing from the manifest is silently absent on
+device.
 
 ## Working with Root Filesystems
 
-This fork currently exposes three bundled choices in the app:
-
-- `Devuan5(Debian12)` for `i386`
-- `Alpine3.23.3` for `i386`
-- `Alpine3.23.3(x86_64)` for `amd64`
+Bundled in the app: Alpine 3.23.3 and Devuan 6 (excalibur), each for `i386`,
+`x86_64` and `aarch64`. Further images, including `riscv64` and Arch, are
+downloadable from within the app; the catalogue is
+[deps/rootfs-manifest](deps/rootfs-manifest).
 
 The root-selection UI and metadata handling live in:
 
@@ -228,85 +222,63 @@ The root-selection UI and metadata handling live in:
 
 Notes:
 
-- `x86_64` roots are for bring-up, not for normal end-user use.
-- The app records guest ABI per imported root.
+- The app records the guest ABI per imported root.
+- Every installed root is also exposed read-write at `/AOK/roots/<name>` in the
+  booted guest, so you can chroot into another architecture's userland.
 - File Provider domains are synchronized for managed roots.
 
 ## Logging and Diagnostics
 
-Logging is controlled by `ISH_LOG` in [app/iSH.xcconfig](app/iSH.xcconfig).
-
-Examples:
+Logging is controlled by `ISH_LOG` in [app/iSH.xcconfig](app/iSH.xcconfig), or
+`meson configure -Dlog=...` for the CLI build.
 
 ```xcconfig
 ISH_LOG = verbose strace
 ```
 
-Current logger defaults:
+Common channels: `strace` (syscall parameters and return values, the most
+useful), `verbose`, and `instr` (every instruction, very slow).
 
-- iPhone / simulator: `nslog`
-- macOS: `dprintf`
-
-Common useful channels:
-
-- `strace`
-- `verbose`
-- `instr`
-
-For emulator bring-up, the fastest loop is usually:
-
-1. Patch interpreter or kernel code.
-2. Run `ninja -C build libish.a`.
-3. Rebuild the iOS app.
-4. Launch in simulator.
-5. Inspect console logs for faulting RIP, opcode window, and register state.
+Logger defaults are `nslog` on iPhone and the simulator, `dprintf` on macOS.
 
 ## File Provider
 
-This fork includes an iOS File Provider extension so guest files can be surfaced through the system file APIs.
-
-Relevant code:
+This fork includes an iOS File Provider extension so guest files can be surfaced
+through the system file APIs.
 
 - [app/FileProvider/FileProviderExtension.m](app/FileProvider/FileProviderExtension.m)
 - [app/FileProvider/FileProviderEnumerator.m](app/FileProvider/FileProviderEnumerator.m)
 - [app/FileProvider/FileProviderItem.m](app/FileProvider/FileProviderItem.m)
 
-This is fork-specific functionality and should be treated as part of the maintained product surface here.
+This is fork-specific functionality and part of the maintained product surface
+here.
 
-## amd64 Development Workflow
+## Release Automation
 
-If you are working on amd64 in this repo:
+[tools/release-aok.sh](tools/release-aok.sh) wraps the archive and export flow:
 
-- Prefer the interpreter first; do not assume the JIT path is relevant yet.
-- Keep fixes small and reversible.
-- Validate with both:
-  - `ninja -C build libish.a`
-  - simulator `xcodebuild`
-- When a guest fails, capture:
-  - fault type
-  - guest RIP
-  - opcode window
-  - guest registers
-  - any added targeted trace output
+```bash
+./tools/release-aok.sh preflight
+./tools/release-aok.sh archive
+./tools/release-aok.sh export latest /tmp/iSH-AOK-export
+./tools/release-aok.sh upload-fastlane      # full TestFlight automation
+```
 
-The current amd64 work frequently touches:
+`upload-fastlane` uses the existing `fastlane upload_build` lane and requires a
+Ruby/Bundler/Fastlane setup plus signing and auth secrets.
 
-- instruction decode and execution in [emu/amd64_interp.c](emu/amd64_interp.c)
-- JIT handoff and dispatch in [jit/jit.c](jit/jit.c)
-- ELF64 and process startup in [kernel/exec.c](kernel/exec.c)
-- syscall dispatch and ABI handling in [kernel/calls.c](kernel/calls.c)
+Releases themselves are cut by bumping `CURRENT_PROJECT_VERSION`, adding
+`docs/release-notes-since-iSH-AOK_<N>.md` and `docs/release-summary-iSH-AOK_<N>.md`,
+and tagging that commit `builds/iSH-AOK_<N>`. The tag name is load-bearing:
+`.github/workflows/build-release-ipa.yml` triggers on `builds/iSH-AOK_*`, so a
+differently named tag produces no release build.
 
 ## Branches
 
-At the time of writing:
-
-- `working` is the active integration branch for the fork. Bug fixes, feature work, and release candidates land here first.
-- `main` tracks merged, stable code and is updated from `working` when a release ships.
-- `amd64` is the active branch for x86_64 guest bring-up.
-- `aarch64` is the active branch for native ARM64 guest bring-up (see
-  [aarch64_guest_plan.md](docs/aarch64_guest_plan.md)).
-
-If you update cross-cutting documentation, keep all relevant branches in sync.
+- `working` is the default branch and the active integration branch. Bug fixes,
+  feature work, and release candidates land here.
+- `amd64`, `aarch64` and `riscv` were the original per-guest bring-up branches.
+  That work is merged into `working`, which builds all four guests.
 
 ## Upstream Relationship
 
@@ -315,16 +287,20 @@ iSH-AOK is based on upstream iSH, but it is intentionally diverged.
 That means:
 
 - upstream README instructions may be incomplete or wrong for this fork
-- branch names and build configurations may differ
+- branch names and build configurations differ
 - bundled roots and operational behavior here are fork-specific
-- experimental amd64 support here should not be assumed to exist upstream
+- the amd64, arm64 and riscv64 guests here should not be assumed to exist upstream
+
+If you use the `gh` CLI in a clone that has an `upstream` remote, pass
+`--repo emkey1/ish-AOK`. Without it `gh` resolves to `ish-app/ish` and will
+answer about upstream's workflows, releases and tags instead of this fork's.
 
 ## Acknowledgments
 
-The `aarch64` branch's native ARM64 guest work is motivated by, and in
-places adapted from, [OpenMinis/ish-arm64](https://github.com/OpenMinis/ish-arm64),
-a GPLv3 fork of `ish-app/ish` that added the same capability independently.
-See [CREDITS-aarch64.md](docs/CREDITS-aarch64.md) for file-level attribution.
+The ARM64 guest work is motivated by, and in places adapted from,
+[OpenMinis/ish-arm64](https://github.com/OpenMinis/ish-arm64), a GPLv3 fork of
+`ish-app/ish` that added the same capability independently. See
+[docs/CREDITS-aarch64.md](docs/CREDITS-aarch64.md) for file-level attribution.
 
 ## License
 
