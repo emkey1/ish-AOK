@@ -15,6 +15,7 @@ provision-ultimate-alpine.sh
 provision-ultimate-devuan.sh
 provision-ultimate-archlinux.sh
 mount-root.sh
+manage-roots.sh
 setup-wayland.sh
 start-wayland.sh
 ktop/ktop.c

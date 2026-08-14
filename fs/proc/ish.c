@@ -29,6 +29,8 @@ bool (*get_user_default)(const char *name, char **buffer, size_t *size);
 bool (*set_user_default)(const char *name, char *buffer, size_t size);
 bool (*remove_user_default)(const char *name);
 char *(*get_documents_directory)(void);
+char *(*ish_roots_status)(void);
+int (*ish_roots_command)(const char *command);
 
 #include "kernel/hostinfo.h"
 
@@ -78,6 +80,68 @@ static int proc_ish_show_documents(struct proc_entry *UNUSED(entry), struct proc
     proc_printf(buf, "%s\n", directory != NULL ? directory : "");
     free(directory);
     return 0;
+}
+
+// /proc/ish/roots -- the guest side of the app's Filesystems screen: which root
+// filesystems are installed, which one is booted, which one boots next, and the
+// commands to install another or change that choice. /AOK/tools/manage-roots.sh
+// is the front end; this is the whole mechanism it drives.
+//
+//   cat /proc/ish/roots
+//   printf 'op=default\nname=Devuan6-x86_64\nrun\n' > /proc/ish/roots
+//
+// The format is one key=value per LINE, and a value runs to the end of its
+// line. Root names are the tame part (the app restricts those to
+// [A-Za-z0-9._-]); the values that decide the format are the archive paths and
+// download URLs, which contain spaces, '=' and '#' as a matter of course, and
+// the job messages read back out, which are English sentences.
+//
+// A write is a FRAGMENT of a command, and the line `run` commits it. That is
+// not ceremony: the shell's printf issues one write(2) per line, so the command
+// above arrives as three separate writes, and treating each write as a whole
+// command would reject every one of them. Fragments accumulate app-side.
+//
+// Nothing here blocks. Anything slow -- a download, an unpack -- becomes a job
+// the app runs on its own queue, so the write returns at once and the caller
+// watches `job` in the status. Only one job runs at a time; starting a second
+// gets EBUSY.
+static int proc_ish_show_roots(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    // NULL in the command-line build, where there is no root manager at all.
+    // Saying so beats calling through a NULL pointer: stress-ng --procfs reads
+    // every file under here, and that is exactly how /proc/ish/documents once
+    // took the whole emulator down.
+    if (ish_roots_status == NULL) {
+        proc_printf(buf, "job state=unavailable\n");
+        proc_printf(buf, "job message=root management needs the iSH-AOK app\n");
+        return 0;
+    }
+    char *status = ish_roots_status();
+    if (status == NULL) {
+        proc_printf(buf, "job state=error\n");
+        proc_printf(buf, "job message=the root manager did not answer\n");
+        return 0;
+    }
+    proc_printf(buf, "%s", status);
+    free(status);
+    return 0;
+}
+
+static int proc_ish_update_roots(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    if (ish_roots_command == NULL)
+        return _EOPNOTSUPP;
+    if (data->size == 0 || data->size > 8192)
+        return _EINVAL;
+    char *command = malloc(data->size + 1);
+    if (command == NULL)
+        return _ENOMEM;
+    memcpy(command, data->data, data->size);
+    command[data->size] = '\0';
+    // An embedded NUL would end a value early on the app side while the parser
+    // here saw the rest, so a command that should be rejected could arrive as a
+    // different, accepted one. Refuse instead of guessing which half was meant.
+    int err = strlen(command) == data->size ? ish_roots_command(command) : _EINVAL;
+    free(command);
+    return err;
 }
 
 static int proc_ish_show_amd64_jit(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
@@ -579,6 +643,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"documents", .show = proc_ish_show_documents},
     {"host_info", .show = proc_ish_show_host_info},  // Add host hardware related information
     {"ips", .show = proc_ish_show_ips},
+    {"roots", S_IFREG | 0644, .show = proc_ish_show_roots, .update = proc_ish_update_roots},
     {"version", .show = proc_ish_show_version},
 });
 

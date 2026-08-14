@@ -9,6 +9,10 @@
 #import "Diagnostics.h"
 #import "Roots.h"
 #import "AppGroup.h"
+#import "AppDelegate.h"
+#import "GuestFileBridge.h"
+#include "fs/proc/ish.h"
+#include "kernel/errno.h"
 #import "NSObject+SaneKVO.h"
 #include <archive.h>
 #include <archive_entry.h>
@@ -1090,4 +1094,589 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
     return instance;
 }
 
+@end
+
+#pragma mark - /proc/ish/roots
+
+// The guest side of everything above: /AOK/tools/manage-roots.sh writes a
+// command to /proc/ish/roots and reads the result back, so a root can be
+// installed and chosen from a shell with no app UI in reach (over ssh, from a
+// script, on a device whose screen you are not looking at).
+//
+// This lives in Roots.m rather than a file of its own so it can call the static
+// helpers above -- DownloadBundledArchive in particular, which is the machinery
+// the Filesystems screen already uses for a URL, retries and all.
+//
+// Everything here runs off the guest's thread. A write enqueues onto one serial
+// queue and returns, because a download can take minutes and a guest `echo` that
+// blocked for minutes would be indistinguishable from a hang. Progress comes
+// back through the status text instead.
+
+static NSString *const kRootsJobStateIdle = @"idle";
+static NSString *const kRootsJobStateRunning = @"running";
+static NSString *const kRootsJobStateDone = @"done";
+
+@interface ISHRootsControl : NSObject <ProgressReporter>
+@property (nonatomic) NSString *state;
+@property (nonatomic) NSString *op;
+@property (nonatomic) NSString *name;
+@property (nonatomic) NSString *message;
+@property (nonatomic) NSString *result;
+@property (nonatomic) int percent;
+@property (nonatomic) BOOL cancelRequested;
+@end
+
+@implementation ISHRootsControl {
+    NSLock *_lock;
+    NSMutableString *_pending;
+}
+
++ (instancetype)shared {
+    static ISHRootsControl *shared;
+    static dispatch_once_t token;
+    dispatch_once(&token, ^{ shared = [ISHRootsControl new]; });
+    return shared;
+}
+
++ (dispatch_queue_t)queue {
+    static dispatch_queue_t queue;
+    static dispatch_once_t token;
+    dispatch_once(&token, ^{
+        // Serial on purpose: two imports at once would race over the same roots
+        // directory, and one job at a time is also what makes a single status
+        // record enough to describe what is happening.
+        queue = dispatch_queue_create("app.ish.roots-control", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
+
+- (instancetype)init {
+    if ((self = [super init])) {
+        _lock = [NSLock new];
+        _pending = [NSMutableString string];
+        _state = kRootsJobStateIdle;
+        _op = @"";
+        _name = @"";
+        _message = @"";
+        _result = @"";
+    }
+    return self;
+}
+
+- (void)beginOp:(NSString *)op name:(NSString *)name {
+    [_lock lock];
+    _state = kRootsJobStateRunning;
+    _op = op;
+    _name = name ?: @"";
+    _message = @"starting";
+    _result = @"";
+    _percent = 0;
+    _cancelRequested = NO;
+    [_lock unlock];
+}
+
+// A catalog install does not know what the root will be called until it is
+// done, and the front end reads this name back to act on it (install --default
+// switches to what was just installed). Reporting the catalog id here means
+// switching to a root name that does not exist.
+- (void)renameJobTo:(NSString *)name {
+    [_lock lock];
+    _name = name ?: @"";
+    [_lock unlock];
+}
+
+- (void)finishOk:(NSString *)message {
+    [_lock lock];
+    _state = kRootsJobStateDone;
+    _result = @"ok";
+    _message = message ?: @"";
+    _percent = 100;
+    [_lock unlock];
+}
+
+- (void)finishError:(NSString *)message {
+    [_lock lock];
+    _state = kRootsJobStateDone;
+    _result = @"error";
+    _message = message ?: @"failed";
+    [_lock unlock];
+}
+
+// A synchronous rejection is reported the same way a failed job is, so the CLI
+// has one place to look for what went wrong instead of two.
+- (void)rejectOp:(NSString *)op message:(NSString *)message {
+    [_lock lock];
+    _state = kRootsJobStateDone;
+    _op = op ?: @"";
+    _name = @"";
+    _result = @"error";
+    _message = message ?: @"rejected";
+    _percent = 0;
+    [_lock unlock];
+}
+
+- (BOOL)isBusy {
+    [_lock lock];
+    BOOL busy = [_state isEqualToString:kRootsJobStateRunning];
+    [_lock unlock];
+    return busy;
+}
+
+- (void)requestCancel {
+    [_lock lock];
+    _cancelRequested = YES;
+    [_lock unlock];
+}
+
+// A write is a FRAGMENT, not a command. The shell's printf issues one write(2)
+// per line, so `printf 'op=default\nname=X\n' > /proc/ish/roots` arrives here as
+// two separate writes, and a knob that treated each write as a whole command
+// would see "op=default" and then "name=X" and reject both. (Piping through cat
+// does deliver one write, which is why this was invisible at first -- and cat
+// exits 0 even when the write failed, so it hid the rejections too.)
+//
+// So fragments accumulate until a line that is exactly `run` commits them. Any
+// writer then works: one write or twenty, printf or cat or dd, or a person
+// echoing lines into an open fd one at a time.
+//
+// Returns the complete command, or nil while there is more to come. A fragment
+// beginning a new command resets whatever was pending, so an abandoned partial
+// command cannot contaminate the next one.
+- (NSString *)accumulate:(NSString *)fragment {
+    [_lock lock];
+    if ([fragment hasPrefix:@"op="] || _pending.length + fragment.length > 8192)
+        [_pending setString:@""];
+    [_pending appendString:fragment];
+    NSString *complete = nil;
+    NSRange run = [_pending rangeOfString:@"\nrun\n"];
+    if (_pending.length >= 4 && [[_pending substringToIndex:4] isEqualToString:@"run\n"])
+        run = NSMakeRange(0, 0);   // a command whose only content is `run`
+    if (run.location != NSNotFound) {
+        complete = [_pending substringToIndex:run.location];
+        [_pending setString:@""];
+    }
+    [_lock unlock];
+    return complete;
+}
+
+#pragma mark ProgressReporter
+
+- (void)updateProgress:(double)progressFraction message:(NSString *)progressMessage {
+    [_lock lock];
+    if (progressFraction >= 0 && progressFraction <= 1)
+        _percent = (int)(progressFraction * 100);
+    if (progressMessage.length)
+        _message = progressMessage;
+    [_lock unlock];
+}
+
+- (BOOL)shouldCancel {
+    [_lock lock];
+    BOOL cancel = _cancelRequested;
+    [_lock unlock];
+    return cancel;
+}
+
+- (NSString *)statusText {
+    Roots *roots = Roots.instance;
+    NSString *defaultRoot = roots.defaultRoot ?: @"";
+    NSMutableString *text = [NSMutableString string];
+    // This runs on the guest's thread while the app may be reloading the set.
+    // Holding a reference is enough: the reload builds a new ordered set and
+    // assigns it (see the roots property), so it is swapped, never mutated
+    // underneath an enumeration. Re-reading roots.roots mid-loop would not be.
+    NSOrderedSet<NSString *> *installed = roots.roots;
+
+    // One key=value per line, value to end of line. Anything free-form (a name,
+    // a label, a message) therefore gets a line to itself rather than sharing
+    // one with fields a reader has to find by position.
+    // Strictly one key=value per line, including the ones that would fit
+    // together. Packing several onto a line silently breaks any reader that
+    // takes the value as "the rest of the line", which is the rule this format
+    // promises: a `result=error` tucked onto the end of the state line is a
+    // result nobody finds, and a failed job then reads as a successful one.
+    // The last field of each record is its terminator, so a reader knows when
+    // it has the whole thing.
+    for (NSString *name in installed) {
+        [text appendFormat:@"root abi=%@\n", [roots guestABIForRootNamed:name] ?: @"unknown"];
+        [text appendFormat:@"root default=%d\n", [name isEqualToString:defaultRoot] ? 1 : 0];
+        [text appendFormat:@"root name=%@\n", name];
+    }
+    for (NSDictionary<NSString *, NSString *> *choice in [roots bundledRootChoices]) {
+        [text appendFormat:@"available id=%@\n", choice[kBundledRootIdentifierKey] ?: @""];
+        [text appendFormat:@"available abi=%@\n", choice[kBundledRootGuestABIKey] ?: @"unknown"];
+        [text appendFormat:@"available download=%d\n", [roots bundledRootChoiceNeedsDownload:choice] ? 1 : 0];
+        [text appendFormat:@"available label=%@\n", choice[kBundledRootDisplayNameKey] ?: @""];
+    }
+
+    // Every job field is emitted even when empty, so a reader never has to
+    // tell "no such key" apart from "key with an empty value".
+    [_lock lock];
+    [text appendFormat:@"job state=%@\n", _state];
+    [text appendFormat:@"job op=%@\n", _op];
+    [text appendFormat:@"job percent=%d\n", _percent];
+    [text appendFormat:@"job result=%@\n", _result];
+    [text appendFormat:@"job name=%@\n", _name];
+    [text appendFormat:@"job message=%@\n", _message];
+    [_lock unlock];
+
+    [text appendFormat:@"default name=%@\n", defaultRoot];
+    return text;
+}
+
+@end
+
+// One key=value per line, value running to the end of the line. Repeating a key
+// is an error rather than last-one-wins: two `name=` lines mean the caller built
+// the command wrong, and picking one of them silently is how you install over
+// the wrong root.
+static NSDictionary<NSString *, NSString *> *ParseRootsCommand(NSString *text, NSString **problem) {
+    NSMutableDictionary<NSString *, NSString *> *fields = [NSMutableDictionary dictionary];
+    for (NSString *rawLine in [text componentsSeparatedByString:@"\n"]) {
+        NSString *line = [rawLine stringByTrimmingCharactersInSet:
+                          [NSCharacterSet characterSetWithCharactersInString:@"\r"]];
+        if (line.length == 0)
+            continue;
+        NSRange equals = [line rangeOfString:@"="];
+        if (equals.location == NSNotFound || equals.location == 0) {
+            *problem = [NSString stringWithFormat:@"not a key=value line: %@", line];
+            return nil;
+        }
+        NSString *key = [line substringToIndex:equals.location];
+        NSString *value = [line substringFromIndex:equals.location + 1];
+        if (fields[key] != nil) {
+            *problem = [NSString stringWithFormat:@"%@ given twice", key];
+            return nil;
+        }
+        fields[key] = value;
+    }
+    if (fields[@"op"] == nil) {
+        *problem = @"no op= line";
+        return nil;
+    }
+    return fields;
+}
+
+// What the user's "validate" step means in practice: the import said it worked,
+// the root is really in the list, its guest ABI resolves, and there is something
+// in it that could be executed. Not a boot test, which would need the live
+// switch that is deliberately not part of this.
+static NSString *ValidateInstalledRoot(NSString *name, NSString **abiOut) {
+    Roots *roots = Roots.instance;
+    if (![roots.roots containsObject:name])
+        return @"the import reported success but the root is not in the list";
+    NSString *abi = [roots guestABIForRootNamed:name];
+    if (abi.length == 0)
+        return @"no guest ABI could be determined for the new root";
+    NSURL *data = [[roots rootUrl:name] URLByAppendingPathComponent:@"data"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    BOOL executable = NO;
+    for (NSString *probe in @[@"bin/sh", @"bin/busybox", @"sbin/init", @"usr/bin/sh"]) {
+        if ([fm fileExistsAtPath:[data URLByAppendingPathComponent:probe].path]) {
+            executable = YES;
+            break;
+        }
+    }
+    if (!executable)
+        return @"the new root has no /bin/sh, /bin/busybox or /sbin/init; it is probably not a root filesystem";
+    if (abiOut != NULL)
+        *abiOut = abi;
+    return nil;
+}
+
+// Turns a guest path into something the importer can open. /AOK/persist is a
+// real-fs mount, so the bridge hands back the backing host file with no copy;
+// anything else (a tarball sitting in a fakefs root) gets extracted to a temp
+// file first, because fakefs escapes names on the host and the path a guest
+// sees is not a path the host can open.
+static NSURL *HostURLForGuestPath(NSString *guestPath, id<ProgressReporter> progress, NSString **problem) {
+    __block NSURL *result = nil;
+    __block NSError *failure = nil;
+    __block ISHGuestFileExtractionToken token = nil;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    ISHGuestFileBridge *bridge = ISHGuestFileBridge.sharedBridge;
+    if (![bridge isGuestAvailable]) {
+        *problem = @"the guest filesystem is not reachable from the app right now";
+        return nil;
+    }
+    token = [bridge extractToTempFileAtGuestPath:guestPath
+        progress:^(int64_t written, int64_t total) {
+            if (total > 0)
+                [progress updateProgress:(double)written / (double)total message:@"reading the archive"];
+            // The copy is the long part for a big archive, so cancel has to
+            // reach it here; the completion then arrives with an error and the
+            // wait below ends normally.
+            if ([progress shouldCancel] && token != nil)
+                [bridge cancelExtraction:token];
+        }
+        completion:^(NSURL *fileURL, NSError *error) {
+            result = fileURL;
+            failure = error;
+            dispatch_semaphore_signal(done);
+        }];
+    // Safe to wait: this always runs on the roots-control queue, never on main,
+    // and the bridge completes on its own queue. The timeout is a backstop
+    // rather than a policy -- a completion that never arrives would wedge the
+    // one serial queue for good, and every later command would answer EBUSY
+    // with nothing running to explain it.
+    if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * 60 * NSEC_PER_SEC))) != 0) {
+        if (token != nil)
+            [bridge cancelExtraction:token];
+        *problem = @"gave up waiting for the archive to be read out of the guest";
+        return nil;
+    }
+    if (result == nil)
+        *problem = failure.localizedDescription ?: [NSString stringWithFormat:@"could not read %@", guestPath];
+    return result;
+}
+
+static void RunInstallJob(NSDictionary<NSString *, NSString *> *fields) {
+    ISHRootsControl *control = ISHRootsControl.shared;
+    Roots *roots = Roots.instance;
+    NSString *source = fields[@"source"];
+    NSString *name = fields[@"name"];
+    NSError *error = nil;
+    NSString *problem = nil;
+    // What the root ends up being called is not always what was asked for: a
+    // catalog install names the root itself, and appends _2, _3 ... when that
+    // name is taken. The set difference is the only honest answer for every
+    // source, so it is taken the same way for all of them.
+    NSOrderedSet<NSString *> *before = [roots.roots copy];
+    NSString *installed = nil;
+
+    if ([source isEqualToString:@"catalog"]) {
+        if (![roots importBundledRootChoice:fields[@"id"] error:&error progressReporter:control]) {
+            [control finishError:error.localizedDescription ?: @"the install failed"];
+            return;
+        }
+    } else {
+        NSURL *archive = nil;
+        if ([source isEqualToString:@"url"]) {
+            NSURL *url = [NSURL URLWithString:fields[@"url"]];
+            NSURL *dir = PersistRootsDir();
+            if (url == nil || url.host == nil) {
+                [control finishError:@"that is not a usable URL"];
+                return;
+            }
+            if (dir == nil) {
+                [control finishError:@"no shared roots directory to download into"];
+                return;
+            }
+            [NSFileManager.defaultManager createDirectoryAtURL:dir withIntermediateDirectories:YES attributes:nil error:nil];
+            // Downloaded into /AOK/persist/roots, the same place the Filesystems
+            // screen caches archives, so a failed import can be retried without
+            // fetching it again and the guest can see the file at that path.
+            archive = [dir URLByAppendingPathComponent:url.lastPathComponent.length ? url.lastPathComponent : @"root.tar.gz"];
+            if (!DownloadBundledArchive(url, archive, control, &error)) {
+                [control finishError:error.localizedDescription ?: @"the download failed"];
+                return;
+            }
+        } else {
+            archive = HostURLForGuestPath(fields[@"path"], control, &problem);
+            if (archive == nil) {
+                [control finishError:problem];
+                return;
+            }
+        }
+        [control updateProgress:0 message:@"importing"];
+        if (![roots importRootFromArchive:archive name:name error:&error progressReporter:control]) {
+            [control finishError:error.localizedDescription ?: @"the import failed"];
+            return;
+        }
+    }
+
+    for (NSString *candidate in roots.roots) {
+        if (![before containsObject:candidate]) {
+            installed = candidate;
+            break;
+        }
+    }
+    // A path or URL install asked for a specific name, so if the list has not
+    // caught up yet, the name that was asked for is still the right answer.
+    if (installed == nil && name.length != 0 && [roots.roots containsObject:name])
+        installed = name;
+    if (installed == nil) {
+        [control finishError:@"the install reported success but added no root"];
+        return;
+    }
+
+    [control renameJobTo:installed];
+
+    NSString *abi = nil;
+    problem = ValidateInstalledRoot(installed, &abi);
+    if (problem != nil) {
+        [control finishError:problem];
+        return;
+    }
+    [control finishOk:[NSString stringWithFormat:@"installed %@ (%@)", installed, abi]];
+}
+
+static void RunExitApp(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // Never a bare exit(): the fakefs holds SQLite state that has to be let
+        // go of first, which is the whole reason the suspend guard exists
+        // (RUNNINGBOARD 0xdead10cc). Same path a real suspension takes.
+        ISHSuspendGuardEnterBackground();
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ exit(0); });
+    });
+}
+
+static int ISHRootsCommandImpl(const char *fragment) {
+    ISHRootsControl *control = ISHRootsControl.shared;
+    NSString *chunk = fragment != NULL ? @(fragment) : nil;
+    if (chunk == nil) {
+        [control rejectOp:@"" message:@"the command was not valid UTF-8"];
+        return _EINVAL;
+    }
+    // Nothing happens until `run` arrives; see -accumulate: for why a write is
+    // not a command.
+    NSString *text = [control accumulate:chunk];
+    if (text == nil)
+        return 0;
+
+    NSString *problem = nil;
+    NSDictionary<NSString *, NSString *> *fields = ParseRootsCommand(text, &problem);
+    if (fields == nil) {
+        [control rejectOp:@"" message:problem];
+        return _EINVAL;
+    }
+    NSString *op = fields[@"op"];
+    Roots *roots = Roots.instance;
+
+    // Everything that can be rejected is rejected here, on the caller's thread,
+    // because a write(2) that returns 0 and then fails silently in the
+    // background is the worst of both worlds.
+    if ([op isEqualToString:@"cancel"]) {
+        [control requestCancel];
+        return 0;
+    }
+    if ([op isEqualToString:@"exit-app"]) {
+        RunExitApp();
+        return 0;
+    }
+    if ([op isEqualToString:@"default"]) {
+        NSString *name = fields[@"name"];
+        if (![roots.roots containsObject:name]) {
+            [control rejectOp:op message:[NSString stringWithFormat:@"no such root: %@", name ?: @""]];
+            return _ENOENT;
+        }
+        // Instant, but it still claims the job slot: overwriting a running
+        // install's status with "chosen" would lose the only progress report
+        // there is.
+        if ([control isBusy])
+            return _EBUSY;
+        // The property is plain NSUserDefaults, but the Filesystems screen
+        // observes it, so the write goes where its observers expect to be
+        // called: this one arrives on a guest thread.
+        dispatch_async(dispatch_get_main_queue(), ^{ roots.defaultRoot = name; });
+        [control beginOp:op name:name];
+        [control finishOk:@"chosen; it boots at the next app launch"];
+        return 0;
+    }
+    if ([op isEqualToString:@"rename"] || [op isEqualToString:@"remove"]) {
+        NSString *name = fields[@"name"];
+        if (![roots.roots containsObject:name]) {
+            [control rejectOp:op message:[NSString stringWithFormat:@"no such root: %@", name ?: @""]];
+            return _ENOENT;
+        }
+        if ([op isEqualToString:@"remove"] && ![fields[@"confirm"] isEqualToString:@"yes"]) {
+            [control rejectOp:op message:@"removing a root needs confirm=yes"];
+            return _EINVAL;
+        }
+        NSError *nameError = nil;
+        if ([op isEqualToString:@"rename"] && !RootNameIsValid(fields[@"to"], &nameError)) {
+            [control rejectOp:op message:nameError.localizedDescription ?: @"that is not a usable root name"];
+            return _EINVAL;
+        }
+        if ([control isBusy])
+            return _EBUSY;
+        [control beginOp:op name:name];
+        dispatch_async(ISHRootsControl.queue, ^{
+            NSError *error = nil;
+            BOOL ok;
+            if ([op isEqualToString:@"remove"])
+                ok = [roots destroyRootNamed:name error:&error];
+            else
+                ok = [roots renameRoot:name toName:fields[@"to"] error:&error];
+            if (ok)
+                [control finishOk:[op isEqualToString:@"remove"] ? @"removed" : @"renamed"];
+            else
+                [control finishError:error.localizedDescription ?: @"failed"];
+        });
+        return 0;
+    }
+    if ([op isEqualToString:@"install"]) {
+        NSString *source = fields[@"source"];
+        if ([source isEqualToString:@"catalog"]) {
+            NSString *identifier = fields[@"id"];
+            BOOL known = NO;
+            for (NSDictionary<NSString *, NSString *> *choice in [roots bundledRootChoices]) {
+                if ([choice[kBundledRootIdentifierKey] isEqualToString:identifier]) {
+                    known = YES;
+                    break;
+                }
+            }
+            if (!known) {
+                [control rejectOp:op message:[NSString stringWithFormat:@"no such catalog id: %@", identifier ?: @""]];
+                return _ENOENT;
+            }
+            if (fields[@"name"] != nil) {
+                [control rejectOp:op message:@"a catalog install names the root itself; drop name="];
+                return _EINVAL;
+            }
+        } else if ([source isEqualToString:@"path"] || [source isEqualToString:@"url"]) {
+            NSString *name = fields[@"name"];
+            if (name.length == 0) {
+                [control rejectOp:op message:@"installing from a path or URL needs name="];
+                return _EINVAL;
+            }
+            // The importer's own rule, not a second one written here: a name
+            // this rejects would fail later anyway, and two spellings of
+            // "valid name" is how they drift apart.
+            NSError *nameError = nil;
+            if (!RootNameIsValid(name, &nameError)) {
+                [control rejectOp:op message:nameError.localizedDescription ?: @"that is not a usable root name"];
+                return _EINVAL;
+            }
+            if ([roots.roots containsObject:name]) {
+                [control rejectOp:op message:[NSString stringWithFormat:@"a root named %@ is already installed", name]];
+                return _EEXIST;
+            }
+            if (fields[[source isEqualToString:@"path"] ? @"path" : @"url"].length == 0) {
+                [control rejectOp:op message:@"missing path= or url="];
+                return _EINVAL;
+            }
+        } else {
+            [control rejectOp:op message:@"source must be catalog, path or url"];
+            return _EINVAL;
+        }
+        if ([control isBusy])
+            return _EBUSY;
+        [control beginOp:op name:fields[@"name"] ?: fields[@"id"]];
+        dispatch_async(ISHRootsControl.queue, ^{ RunInstallJob(fields); });
+        return 0;
+    }
+
+    [control rejectOp:op message:[NSString stringWithFormat:@"unknown op: %@", op]];
+    return _EINVAL;
+}
+
+static char *ISHRootsStatusImpl(void) {
+    @autoreleasepool {
+        const char *text = [ISHRootsControl.shared statusText].UTF8String;
+        return text != NULL ? strdup(text) : NULL;
+    }
+}
+
+@interface ISHRootsControlInstaller : NSObject
+@end
+@implementation ISHRootsControlInstaller
+// +load rather than any app startup hook: the guest can read /proc/ish/roots
+// the moment it is running, and a NULL pointer there would report the knob as
+// unavailable rather than merely early.
++ (void)load {
+    ish_roots_status = ISHRootsStatusImpl;
+    ish_roots_command = ISHRootsCommandImpl;
+}
 @end

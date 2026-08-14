@@ -5,7 +5,66 @@ or Devuan, in i386, amd64, arm64, or riscv64 flavors — and can run
 processes from more than one of them at the same time, in the same booted
 session, via `chroot`. This document covers the on-device mechanics; the
 in-app "Filesystems" screen is where you install, download, and delete
-roots in the first place.
+roots in the first place, and `/AOK/tools/manage-roots.sh` does the same
+things from a shell.
+
+## `manage-roots.sh`: installing and switching from the command line
+
+The Filesystems screen is not always in reach: you may be on the far end of
+an ssh session, or scripting a device you are not looking at.
+`/AOK/tools/manage-roots.sh` drives the same catalog, the same importer and
+the same "Default Root" setting.
+
+```sh
+sudo sh /AOK/tools/manage-roots.sh list        # installed, and which boots next
+sudo sh /AOK/tools/manage-roots.sh available   # what you can install
+
+# From the catalog, then make it the root that boots and quit the app
+sudo sh /AOK/tools/manage-roots.sh install alpine3233_arm64 --default --exit-app
+
+# From an archive already on the device, or from a URL
+sudo sh /AOK/tools/manage-roots.sh install /AOK/persist/roots/mine.tar.gz Mine
+sudo sh /AOK/tools/manage-roots.sh install https://example.org/rootfs.tar.gz Experiment
+
+sudo sh /AOK/tools/manage-roots.sh default Devuan6-x86_64
+sudo sh /AOK/tools/manage-roots.sh remove Experiment --yes
+```
+
+Three things worth knowing:
+
+- **Switching takes effect at the next app launch.** Which root boots is read
+  once when the app starts, so nothing here disturbs the running guest. That is
+  also why you can install a root from inside the root you are using.
+  `--exit-app` quits the app for you (through the same shutdown a suspension
+  takes, so nothing is left half-written), and the next launch comes up in the
+  new root.
+- **An install keeps running if you walk away.** The download and unpack belong
+  to the app, not to the shell that asked for them. Ctrl-C, a dropped ssh
+  session, or a second invocation of `manage-roots.sh status` all find the same
+  job still going.
+- **It needs the app.** The command-line build of iSH has no root manager, and
+  says so rather than pretending: `/proc/ish/roots` reports
+  `job state=unavailable` there.
+
+The script is a thin front end over `/proc/ish/roots`, which is the whole
+mechanism. Reading it lists the roots, the catalog and the current job. Writing
+sends a command, one `key=value` per line, with `run` on its own line to commit
+it. Every value runs to the end of its line, so paths and URLs need no quoting:
+
+```sh
+printf 'op=default\nname=Devuan6-x86_64\nrun\n' | sudo tee /proc/ish/roots
+cat /proc/ish/roots
+```
+
+`run` is there because a write is a fragment, not a command: the shell's
+`printf` issues one `write(2)` per line, so the three lines above arrive as
+three separate writes. The knob accumulates them and acts when `run` turns up,
+which also means you can build a command interactively:
+
+```sh
+exec 3> /proc/ish/roots
+echo op=remove >&3; echo name=Experiment >&3; echo confirm=yes >&3; echo run >&3
+```
 
 ## Installing roots (in-app)
 
