@@ -11,6 +11,7 @@
 #include "kernel/fs.h"
 #include "kernel/native.h"
 #include "kernel/native_io.h"
+#include "kernel/smallclue_shim.h"
 #include "kernel/task.h"
 #include "debug.h"
 
@@ -222,8 +223,20 @@ static int smallclue_native_main(int argc, char *const argv[], char *const envp[
     return 127;
 }
 
+// SmallCLUE proper, compiled in from deps/smallclue (meson.build). Its
+// src/main.c -- a four-line shim around this -- is excluded, so this is the
+// same entry point the standalone binary uses.
+extern int smallclueMain(int argc, char **argv);
+
+static int smallclue_real_main(int argc, char *const argv[], char *const envp[]) {
+    (void) envp;  // SmallCLUE reads the environment through getenv, not argv3
+    int status = smallclueMain(argc, (char **) argv);
+    sc_flush_std();
+    return status;
+}
+
 static const struct native_program native_programs[] = {
-    { "smallclue", smallclue_native_main },
+    { "smallclue", smallclue_real_main },
 };
 
 const struct native_program *native_program_lookup(const char *name) {

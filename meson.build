@@ -94,7 +94,10 @@ libdl = cc.find_library('dl', required: false)
 # this is a no-op there.
 libatomic = cc.find_library('atomic', required: false)
 sqlite3 = cc.find_library('sqlite3')
-dependencies = [librt, libm, libdl, libatomic, threads, sqlite3]
+# SmallCLUE's gzip applet (deps/smallclue/src/gzip_app.c) uses zlib's gz* API.
+# zlib ships with macOS and iOS, so this is a link line entry, not a new dep.
+libz = cc.find_library('z')
+dependencies = [librt, libm, libdl, libatomic, threads, sqlite3, libz]
 
 subdir('vdso') # ish depends on the vdso
 
@@ -245,6 +248,8 @@ if get_option('kernel') == 'ish'
         'kernel/exec.c',
         'kernel/native.c',
         'kernel/native_io.c',
+        'kernel/smallclue_shim.c',
+        'kernel/smallclue_glue.c',
         'kernel/exit.c',
         'kernel/time.c',
         'kernel/mmap.c',
@@ -320,10 +325,56 @@ if get_option('kernel') == 'ish'
         'platform/' + host_machine.system() + '.c',
     ]
 
+    # SmallCLUE, compiled in as HOST code so its applets run without being
+    # translated (kernel/native.h). Two things make this unlike an ordinary
+    # vendored dependency:
+    #
+    #  - src/main.c is excluded: it is a four-line shim around smallclueMain,
+    #    and its main() is the one symbol that collides with AOK's.
+    #  - Every file is force-included with kernel/smallclue_shim.h, which
+    #    redirects the libc surface onto AOK's VFS. Without it a plain open()
+    #    in an applet resolves against the *iOS* filesystem and quietly reads
+    #    the wrong file; tools/check-native-libc.py is the gate that keeps
+    #    that honest.
+    #
+    # Excluded feature groups, entry points stubbed in kernel/smallclue_glue.c:
+    # checksum_app needs OpenSSL (AOK links none), integration.c is the
+    # WITH_EXSH path into PSCAL's VM, and the openssh trio needs the vendored
+    # OpenSSH tree.
+    smallclue_excluded = ['main.c', 'integration.c', 'checksum_app.c',
+                          'openssh_app.c', 'openssh_shim.c', 'openssh_stubs.c']
+    smallclue_src = []
+    # Space-separated, not newline: meson interprets \n inside its own string
+    # literals, which would break the one-liner before python ever sees it.
+    foreach f : run_command(python, '-c',
+            'import glob, os, sys; print(" ".join(sorted(os.path.basename(p) for p in glob.glob(sys.argv[1] + "/src/*.c"))))',
+            meson.current_source_dir() / 'deps/smallclue',
+            check: true).stdout().strip().split(' ')
+        if f != '' and not smallclue_excluded.contains(f)
+            smallclue_src += files('deps/smallclue/src' / f)
+        endif
+    endforeach
+
+    smallclue_includes = include_directories(
+        'deps/smallclue-shim',
+        'deps/smallclue',
+        'deps/smallclue/src',
+        'deps/smallclue/common',
+        'deps/smallclue/compat',
+    )
+
+    libsmallclue = static_library('smallclue', smallclue_src,
+        include_directories: [includes, smallclue_includes],
+        c_args: [
+            '-include', meson.current_source_dir() / 'kernel/smallclue_shim.h',
+            '-DSMALLCLUE_PLATFORM_SPAWN',
+            '-w',  # vendored code, not ours to police
+        ])
+
     libish = library('ish', src,
         include_directories: includes)
     ish = declare_dependency(
-        link_with: [libish, libish_emu, libfakefs],
+        link_with: [libish, libish_emu, libfakefs, libsmallclue],
         dependencies: dependencies,
         include_directories: includes)
 
