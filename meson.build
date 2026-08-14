@@ -244,6 +244,7 @@ if get_option('kernel') == 'ish'
         'kernel/fork.c',
         'kernel/exec.c',
         'kernel/native.c',
+        'kernel/native_io.c',
         'kernel/exit.c',
         'kernel/time.c',
         'kernel/mmap.c',

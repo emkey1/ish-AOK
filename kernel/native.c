@@ -10,6 +10,7 @@
 #include "kernel/calls.h"
 #include "kernel/fs.h"
 #include "kernel/native.h"
+#include "kernel/native_io.h"
 #include "kernel/task.h"
 #include "debug.h"
 
@@ -18,20 +19,7 @@
 static void native_write_str(fd_t fd_no, const char *s) {
     if (s == NULL)
         return;
-    fd_write_host_buf(fd_no, s, strlen(s));
-}
-
-static void native_printf(fd_t fd_no, const char *fmt, ...) {
-    char buf[512];
-    va_list args;
-    va_start(args, fmt);
-    int n = vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-    if (n < 0)
-        return;
-    if ((size_t) n >= sizeof(buf))
-        n = sizeof(buf) - 1;
-    fd_write_host_buf(fd_no, buf, (size_t) n);
+    native_write(fd_no, s, strlen(s));
 }
 
 // The applet a multicall binary was invoked as: the basename of argv[0], which
@@ -63,11 +51,108 @@ static const char *native_getenv(char *const envp[], const char *name) {
     return NULL;
 }
 
+// cat: the smallest applet that proves the filesystem seam end to end -- guest
+// path resolution against the task's cwd, a real read through iSH's VFS, and
+// output onto the guest's own stdout.
+static int native_applet_cat(int argc, char *const argv[]) {
+    if (argc < 2) {
+        native_write_str(2, "cat: reading stdin is not implemented yet\n");
+        return 1;
+    }
+    int rc = 0;
+    for (int i = 1; i < argc; i++) {
+        struct fd *fd = NULL;
+        int err = native_open(argv[i], O_RDONLY_, &fd);
+        if (err < 0) {
+            native_printf(2, "cat: %s: cannot open (errno %d)\n", argv[i], -err);
+            rc = 1;
+            continue;
+        }
+        char buf[4096];
+        for (;;) {
+            ssize_t n = native_read(fd, buf, sizeof(buf));
+            if (n < 0) {
+                native_printf(2, "cat: %s: read error (errno %d)\n", argv[i], (int) -n);
+                rc = 1;
+                break;
+            }
+            if (n == 0)
+                break;
+            native_write(1, buf, (size_t) n);
+        }
+        native_close(fd);
+    }
+    return rc;
+}
+
+// ls: proves directory iteration, which is the other half of the seam. One
+// name per line, unsorted -- this is a seam probe, not a coreutils replacement.
+static int native_applet_ls(int argc, char *const argv[]) {
+    const char *path = argc > 1 ? argv[1] : ".";
+    struct fd *fd = NULL;
+    int err = native_open(path, O_RDONLY_, &fd);
+    if (err < 0) {
+        native_printf(2, "ls: %s: cannot open (errno %d)\n", path, -err);
+        return 1;
+    }
+    if (fd->ops->readdir_begin != NULL)
+        fd->ops->readdir_begin(fd);
+    struct dir_entry entry;
+    int rc = 0;
+    for (;;) {
+        int res = native_readdir(fd, &entry);
+        if (res < 0) {
+            native_printf(2, "ls: %s: readdir error (errno %d)\n", path, -res);
+            rc = 1;
+            break;
+        }
+        if (res == 0)
+            break;
+        native_printf(1, "%s\n", entry.name);
+    }
+    if (fd->ops->readdir_end != NULL)
+        fd->ops->readdir_end(fd);
+    native_close(fd);
+    return rc;
+}
+
+// pwd/stat: the remaining two seam primitives, so all of them have a caller.
+static int native_applet_pwd(void) {
+    char buf[MAX_PATH];
+    int err = native_getcwd(buf);
+    if (err < 0) {
+        native_printf(2, "pwd: cannot determine cwd (errno %d)\n", -err);
+        return 1;
+    }
+    native_printf(1, "%s\n", buf[0] != '\0' ? buf : "/");
+    return 0;
+}
+
+static int native_applet_stat(int argc, char *const argv[]) {
+    if (argc < 2) {
+        native_write_str(2, "stat: missing operand\n");
+        return 1;
+    }
+    int rc = 0;
+    for (int i = 1; i < argc; i++) {
+        struct statbuf st = {};
+        int err = native_stat(argv[i], &st, true);
+        if (err < 0) {
+            native_printf(2, "stat: %s: cannot stat (errno %d)\n", argv[i], -err);
+            rc = 1;
+            continue;
+        }
+        native_printf(1, "%s size=%llu mode=%o uid=%u gid=%u\n", argv[i],
+                (unsigned long long) st.size, st.mode & 07777, st.uid, st.gid);
+    }
+    return rc;
+}
+
 // Placeholder standing in for the real SmallCLUE, which is not yet part of this
-// build. It implements only applets that need no filesystem access at all, so
-// it exercises the whole dispatch path -- resolved-path matching, argv[0]
-// applet selection, env handoff, writes onto the guest's own fds, exit status
-// -- without depending on the libc redirection seam that real applets need.
+// build. The applets here are deliberately a seam probe rather than a coreutils
+// implementation: between them they exercise every part of the path SmallCLUE
+// will need -- resolved-path matching, argv[0] applet selection, env handoff,
+// exit status, and now guest filesystem access through kernel/native_io.h.
 // Replacing this with SmallCLUE's own multicall entry point is a change to this
 // function and nothing else.
 static int smallclue_native_main(int argc, char *const argv[], char *const envp[]) {
@@ -87,6 +172,15 @@ static int smallclue_native_main(int argc, char *const argv[], char *const envp[
         native_write_str(1, "\n");
         return 0;
     }
+
+    if (strcmp(applet, "cat") == 0)
+        return native_applet_cat(argc, argv);
+    if (strcmp(applet, "ls") == 0)
+        return native_applet_ls(argc, argv);
+    if (strcmp(applet, "pwd") == 0)
+        return native_applet_pwd();
+    if (strcmp(applet, "stat") == 0)
+        return native_applet_stat(argc, argv);
 
     // Invoked by its own name: report what this build can do. Also the
     // verification surface for the dispatch path, hence the argv/env dump.
@@ -109,7 +203,7 @@ static int smallclue_native_main(int argc, char *const argv[], char *const envp[
                 "guest architecture. Select an applet the usual multicall way:\n"
                 "  ln -s /AOK/native/smallclue /usr/local/bin/true\n"
                 "\n"
-                "Applets in this build: true, false, echo\n"
+                "Applets in this build: true, false, echo, cat, ls, pwd, stat\n"
                 "Self-test: smallclue --selftest\n");
         return 0;
     }
