@@ -1358,16 +1358,21 @@ static NSDictionary<NSString *, NSString *> *ParseRootsCommand(NSString *text, N
 }
 
 // What the user's "validate" step means in practice: the import said it worked,
-// the root is really in the list, its guest ABI resolves, and there is something
-// in it that could be executed. Not a boot test, which would need the live
-// switch that is deliberately not part of this.
+// the root is really in the list, and there is something in it that could be
+// executed. Not a boot test, which would need the live switch that is
+// deliberately not part of this.
+//
+// The guest ABI is reported, never required. It is written into a root's
+// metadata from the CATALOG entry it came from, so the app simply does not know
+// it for an archive somebody brought themselves, and roots without it are
+// ordinary: the stock "default" root has no ABI metadata either and boots fine.
+// Requiring it failed every path and URL install, after the import had already
+// succeeded.
 static NSString *ValidateInstalledRoot(NSString *name, NSString **abiOut) {
     Roots *roots = Roots.instance;
     if (![roots.roots containsObject:name])
         return @"the import reported success but the root is not in the list";
     NSString *abi = [roots guestABIForRootNamed:name];
-    if (abi.length == 0)
-        return @"no guest ABI could be determined for the new root";
     NSURL *data = [[roots rootUrl:name] URLByAppendingPathComponent:@"data"];
     NSFileManager *fm = NSFileManager.defaultManager;
     BOOL executable = NO;
@@ -1380,7 +1385,7 @@ static NSString *ValidateInstalledRoot(NSString *name, NSString **abiOut) {
     if (!executable)
         return @"the new root has no /bin/sh, /bin/busybox or /sbin/init; it is probably not a root filesystem";
     if (abiOut != NULL)
-        *abiOut = abi;
+        *abiOut = abi.length ? abi : @"ABI not recorded";
     return nil;
 }
 
@@ -1505,6 +1510,16 @@ static void RunInstallJob(NSDictionary<NSString *, NSString *> *fields) {
     NSString *abi = nil;
     problem = ValidateInstalledRoot(installed, &abi);
     if (problem != nil) {
+        // Take back what this job created rather than reporting an error and
+        // leaving the thing behind anyway: a root that failed its check is one
+        // the archive never justified, and a failed install that silently adds
+        // an entry to the Filesystems screen is worse than either outcome on
+        // its own. Only ever removes a root installed moments ago by this job.
+        NSError *cleanup = nil;
+        if ([roots destroyRootNamed:installed error:&cleanup])
+            problem = [problem stringByAppendingString:@"; the partial root was removed"];
+        else
+            problem = [problem stringByAppendingFormat:@"; %@ is still installed and may be unusable", installed];
         [control finishError:problem];
         return;
     }
