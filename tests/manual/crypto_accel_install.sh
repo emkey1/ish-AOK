@@ -284,7 +284,50 @@ else
     sed 's/^/       | /' "$WORK/cc.log"
 fi
 
-echo "8. a dry run on a system with no diffutils"
+echo "8. the header probe compiles the provider source itself"
+# The probe used to be a stand-in translation unit assembled here: the source's
+# #include lines grepped out with `>`, then one more line appended with `>>`.
+# An iSH-AOK bug left tmpfs ignoring O_APPEND, so on a guest whose /tmp is a
+# tmpfs that `>>` wrote at offset 0 and overwrote the first include. The
+# compiler then produced a page of errors about a file this script had mangled
+# itself and deleted on exit, and the script reported them as an OpenSSL header
+# problem -- the same wrong-cause report the whole file exists to prevent, one
+# layer down. Probing ish_provider.c directly removes the failure mode outright,
+# so hold it there: nothing self-generated, and nothing to append to.
+: > "$WORK/cc.log"
+plant_headers "$SYSINC"
+run FAKE_CC_SYSINC="$SYSINC"
+assert_status "gets through to the install step" zero
+if grep -- '-fsyntax-only' "$WORK/cc.log" | grep -q 'ish_provider\.c'; then
+    ok "the header probe syntax-checks ish_provider.c"
+else
+    bad "the header probe did not compile ish_provider.c"
+    sed 's/^/       | /' "$WORK/cc.log"
+fi
+if grep -q 'probe-ssl\.c' "$WORK/cc.log"; then
+    bad "the probe is a self-generated translation unit again"
+    sed 's/^/       | /' "$WORK/cc.log"
+else
+    ok "no self-generated probe translation unit"
+fi
+
+echo "9. the provider source is missing"
+# $SRC is resolved from the script's own directory, so a lone copy of the
+# installer has nothing to probe and nothing to build. Name that, rather than
+# letting it surface as an OpenSSL complaint several steps later.
+: > "$WORK/cc.log"
+mkdir -p "$WORK/lonely"
+cp "$INSTALLER" "$WORK/lonely/install-crypto-accel.sh"
+STATUS=0
+env -i PATH="$SHIM:$BIN" HOME="$WORK" \
+    FAKE_SSL_DIR="$SSLDIR" FAKE_CC_LOG="$WORK/cc.log" FAKE_CC_SYSINC="$SYSINC" \
+    /bin/sh "$WORK/lonely/install-crypto-accel.sh" --dry-run > "$WORK/out" 2>&1 || STATUS=$?
+assert_status "refuses to continue" nonzero
+assert "names the missing source" yes "provider source not found or not readable"
+assert "says where it should be" yes "must sit next to this script"
+assert "does not blame the OpenSSL headers" no "OpenSSL development headers not found"
+
+echo "10. a dry run on a system with no diffutils"
 # Arch's base does not pull in diffutils, which is how this surfaced: the dry
 # run printed "diff: command not found" exactly where the change belonged.
 : > "$WORK/cc.log"
@@ -294,7 +337,7 @@ assert_status "still gets through to the install step" zero
 assert "does not leak the missing tool as an error" no "diff: .*not found"
 assert "shows the config it would write instead" yes "default_properties = ?provider=ish"
 
-echo "9. no compiler at all"
+echo "11. no compiler at all"
 : > "$WORK/cc.log"
 rm -f "$SHIM/cc"
 run FAKE_CC_SYSINC="$SYSINC"

@@ -176,7 +176,11 @@ else
     say "warning: $TOGGLE not readable; are you running under iSH-AOK?"
 fi
 
-[ -f "$SRC" ] || die "provider source not found at $SRC"
+# Both the header probe and the build compile this file, so it has to be
+# readable, not merely present.
+{ [ -f "$SRC" ] && [ -r "$SRC" ]; } ||
+    die "provider source not found or not readable at $SRC
+       ish_provider.c must sit next to this script."
 
 # ---------------------------------------------------------------- toolchain
 
@@ -234,10 +238,21 @@ find_openssl_include() {
     return 1
 }
 
-# Probe 2: the provider headers, with exactly the flags the build below uses,
-# because a probe that passes on different flags than the build just moves the
-# misdiagnosis one step later. The include list is read out of the source so
-# the two cannot drift apart.
+# Probe 2: the provider headers, with exactly the flags AND exactly the source
+# the build below uses, because a probe that passes on anything different from
+# the build just moves the misdiagnosis one step later.
+#
+# This syntax-checks ish_provider.c itself rather than a stand-in translation
+# unit assembled here. Assembling one was wrong twice over: it could drift from
+# the real source, and it made this script's own output the thing under test.
+# That is not hypothetical -- an iSH-AOK bug (fixed alongside this) left tmpfs
+# ignoring O_APPEND, so the `>>` that used to finish the generated probe wrote
+# at offset 0 and overwrote the first line of it. The compiler then reported a
+# page of errors about a file this script had mangled itself and deleted on
+# exit, and the script reported them as an OpenSSL header problem. Compiling
+# $SRC has no such failure mode: every diagnostic names a real line of a file
+# that is still on disk afterwards, and there is nothing left to append to.
+# ($SRC was checked for readability up with the other preconditions.)
 SSL_CFLAGS=''
 if command -v pkg-config >/dev/null 2>&1; then
     SSL_CFLAGS=$(pkg-config --cflags libcrypto 2>/dev/null || true)
@@ -245,16 +260,12 @@ fi
 set -- $SSL_CFLAGS ${ISH_ACCEL_CFLAGS:-}   # collapse, so no flags stays no flags
 SSL_CFLAGS=$*
 
-{ grep '^#include <openssl/' "$SRC" || printf '#include <openssl/core.h>\n'; } \
-    > "$WORK/probe-ssl.c"
-printf 'int ish_accel_probe;\n' >> "$WORK/probe-ssl.c"
-
-if ! "$CC" -fsyntax-only $SSL_CFLAGS "$WORK/probe-ssl.c" 2> "$WORK/probe-ssl.err"; then
+if ! "$CC" -fsyntax-only $SSL_CFLAGS "$SRC" 2> "$WORK/probe-ssl.err"; then
     # The headers may simply sit outside the compiler's search path (a
     # hand-built OpenSSL under /usr/local is the usual reason), so find them on
     # disk and retry with an explicit -I before concluding anything.
     INC=$(find_openssl_include || true)
-    if [ -n "$INC" ] && "$CC" -fsyntax-only "-I$INC" $SSL_CFLAGS "$WORK/probe-ssl.c" \
+    if [ -n "$INC" ] && "$CC" -fsyntax-only "-I$INC" $SSL_CFLAGS "$SRC" \
             2> "$WORK/probe-ssl.err2"; then
         SSL_CFLAGS="-I$INC $SSL_CFLAGS"
         vsay "headers    = $INC (needed an explicit -I)"
@@ -262,7 +273,7 @@ if ! "$CC" -fsyntax-only $SSL_CFLAGS "$WORK/probe-ssl.c" 2> "$WORK/probe-ssl.err
         show_cc_err "$WORK/probe-ssl.err"
         if [ -n "$INC" ]; then
             die "the OpenSSL headers are NOT missing: $INC/openssl/core.h
-       is right there, and $CC failed to compile against it anyway. The
+       is right there, and $CC failed to compile $SRC against it anyway. The
        compiler output above is the real failure; reinstalling openssl will
        not change it. Please report that output."
         fi
