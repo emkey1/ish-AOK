@@ -196,15 +196,25 @@ static int smallclue_native_main(int argc, char *const argv[], char *const envp[
             native_write_str(2, "native: this line went to fd 2\n");
             return 0;
         }
+        // Explicit applet form: `smallclue ls -l` means the same as `ls -l`,
+        // the way busybox works. Without this, the only way to reach an applet
+        // is through a symlink, which is a surprise for anyone who invokes the
+        // multicall binary by name to try one out. Shifting argv rather than
+        // special-casing keeps argv[0] meaning the same thing to the applet.
+        if (argc > 1 && argv[1][0] != '-')
+            return smallclue_native_main(argc - 1, argv + 1, envp);
+
         native_write_str(1,
                 "smallclue (native placeholder, built into iSH-AOK)\n"
                 "\n"
                 "Runs as host code -- not translated -- so it costs the same on every\n"
-                "guest architecture. Select an applet the usual multicall way:\n"
-                "  ln -s /AOK/native/smallclue /usr/local/bin/true\n"
+                "guest architecture.\n"
                 "\n"
                 "Applets in this build: true, false, echo, cat, ls, pwd, stat\n"
-                "Self-test: smallclue --selftest\n");
+                "\n"
+                "Run one directly:      smallclue ls /etc\n"
+                "or via a symlink:      ln -s /AOK/native/smallclue /usr/local/bin/ls\n"
+                "Self-test:             smallclue --selftest\n");
         return 0;
     }
 
