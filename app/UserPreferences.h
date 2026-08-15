@@ -118,6 +118,12 @@ extern NSString *const kThemeBackgroundColor;
 
 - (BOOL)hasChangedLaunchCommand;
 
+// Put these two back to what registerDefaults supplies. Setting the property to
+// an empty array does NOT do this: the key would still exist, and a stored
+// empty command is what leaves the app with no way to start a session at all.
+- (void)resetLaunchCommand;
+- (void)resetBootCommand;
+
 @end
 
 extern NSString *const kPreferenceLaunchCommandKey;

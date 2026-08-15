@@ -6185,12 +6185,45 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
     [sender resignFirstResponder];
 }
 
+// Splitting a command line typed into a text field. componentsSeparatedByString:@" "
+// was wrong in two ways that both end in an unusable session:
+//
+//   - it splits on SINGLE spaces, so a trailing space -- which a mobile keyboard
+//     offers freely -- turns "/bin/login -f root " into four components, the last
+//     of them empty. That is no longer the default login command as far as
+//     ISHCommandIsDefaultLogin is concerned, and login is handed "" as the
+//     username. Two spaces between arguments do the same thing mid-line.
+//   - it never returns an empty array: clearing the field stores @[@""], one
+//     empty string. registerDefaults only supplies a value for an ABSENT key, so
+//     that is not "back to the default", it is a permanently broken command that
+//     survives a restart.
+//
+// Split on whitespace, drop the empties, and treat "nothing left" as a request
+// for the default by removing the key entirely.
+static NSArray<NSString *> *ISHCommandFromFieldText(NSString *text) {
+    NSMutableArray<NSString *> *words = [NSMutableArray array];
+    for (NSString *word in [text componentsSeparatedByCharactersInSet:
+                            NSCharacterSet.whitespaceAndNewlineCharacterSet]) {
+        if (word.length != 0)
+            [words addObject:word];
+    }
+    return words;
+}
+
 - (IBAction)launchCommandChanged:(id)sender {
-    UserPreferences.shared.launchCommand = [self.launchCommandField.text componentsSeparatedByString:@" "];
+    NSArray<NSString *> *command = ISHCommandFromFieldText(self.launchCommandField.text);
+    if (command.count == 0)
+        [UserPreferences.shared resetLaunchCommand];
+    else
+        UserPreferences.shared.launchCommand = command;
 }
 
 - (IBAction)bootCommandChanged:(id)sender {
-    UserPreferences.shared.bootCommand = [self.bootCommandField.text componentsSeparatedByString:@" "];
+    NSArray<NSString *> *command = ISHCommandFromFieldText(self.bootCommandField.text);
+    if (command.count == 0)
+        [UserPreferences.shared resetBootCommand];
+    else
+        UserPreferences.shared.bootCommand = command;
 }
 
 @end

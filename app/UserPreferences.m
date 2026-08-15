@@ -53,6 +53,11 @@ static NSString *const kPreferenceCustomDnsServersKey = @"Custom DNS Servers";
 NSString *const kPreferenceLaunchCommandKey = @"Init Command";
 NSString *const kPreferenceBootCommandKey = @"Boot Command";
 NSString *const kPreferenceInitialWindowKey = @"Initial Window";
+
+// Defined next to the accessors that fall back to them; declared here so
+// registerDefaults installs the same commands rather than a second copy.
+static NSArray<NSString *> *ISHDefaultLaunchCommand(void);
+static NSArray<NSString *> *ISHDefaultBootCommand(void);
 static NSString *const kPreferenceLoginAsDefaultUserKey = @"Login As Default User";
 
 const int ISHDefaultUserAccountUID = 1000;
@@ -218,8 +223,8 @@ bool (*remove_user_default)(const char *name);
             kPreferenceOptionMappingKey: @(OptionMapNone),
             kPreferenceBacktickEscapeKey: @(NO),
             kPreferenceDisableDimmingKey: @(NO),
-            kPreferenceLaunchCommandKey: @[@"/bin/login", @"-f", @"root"],
-            kPreferenceBootCommandKey: @[@"/sbin/init"],
+            kPreferenceLaunchCommandKey: ISHDefaultLaunchCommand(),
+            kPreferenceBootCommandKey: ISHDefaultBootCommand(),
             kPreferenceInitialWindowKey: @"terminal",
             kPreferenceBlinkCursorKey: @(NO),
             kPreferenceCursorStyleKey: @(CursorStyleBlock),
@@ -828,12 +833,53 @@ bool (*remove_user_default)(const char *name);
 }
 
 // MARK: launchCommand
+
+// Sanitize on the way OUT, not only on the way in. A launch command that cannot
+// start anything is exactly the state in which no session opens -- so there is
+// no terminal to fix it from, and the bad value survives every restart because
+// registerDefaults only supplies a value for an ABSENT key. A build carrying
+// this heals itself; nothing has to be typed into Settings to recover.
+//
+// Two ways a stored command goes bad, both seen on a device:
+//   - empty components, from a trailing or doubled space in the text field
+//     (@[@"/bin/login", @"-f", @"root", @""] -- login gets "" as the username);
+//   - nothing but empty components, from clearing the field, which used to
+//     store @[@""] rather than removing the key.
+static NSArray<NSString *> *ISHUsableCommandOrDefault(NSArray<NSString *> *command,
+                                                      NSArray<NSString *> *fallback) {
+    NSMutableArray<NSString *> *words = [NSMutableArray arrayWithCapacity:command.count];
+    for (id word in command) {
+        if ([word isKindOfClass:NSString.class] && ((NSString *) word).length != 0)
+            [words addObject:word];
+    }
+    return words.count != 0 ? words : fallback;
+}
+
+// Also what registerDefaults installs, so the two cannot drift -- the fallback
+// below has to be the same command a fresh install would get.
+static NSArray<NSString *> *ISHDefaultLaunchCommand(void) {
+    return @[@"/bin/login", @"-f", @"root"];
+}
+
+static NSArray<NSString *> *ISHDefaultBootCommand(void) {
+    return @[@"/sbin/init"];
+}
+
 - (NSArray<NSString *> *)launchCommand {
-    return [_defaults stringArrayForKey:kPreferenceLaunchCommandKey];
+    return ISHUsableCommandOrDefault([_defaults stringArrayForKey:kPreferenceLaunchCommandKey],
+                                     ISHDefaultLaunchCommand());
 }
 
 - (void)setLaunchCommand:(NSArray<NSString *> *)launchCommand {
     [_defaults setObject:launchCommand forKey:kPreferenceLaunchCommandKey];
+}
+
+// removeObjectForKey, not setObject:@[]. registerDefaults only supplies a value
+// for a key that is ABSENT, so storing an empty array is not a return to the
+// default -- it is a command that can never start anything, and it survives
+// restarts.
+- (void)resetLaunchCommand {
+    [_defaults removeObjectForKey:kPreferenceLaunchCommandKey];
 }
 
 - (BOOL)validateLaunchCommand:(id *)value error:(NSError **)error {
@@ -855,11 +901,16 @@ bool (*remove_user_default)(const char *name);
 
 // MARK: bootCommand
 - (NSArray<NSString *> *)bootCommand {
-    return [_defaults stringArrayForKey:kPreferenceBootCommandKey];
+    return ISHUsableCommandOrDefault([_defaults stringArrayForKey:kPreferenceBootCommandKey],
+                                     ISHDefaultBootCommand());
 }
 
 - (void)setBootCommand:(NSArray<NSString *> *)bootCommand {
     [_defaults setObject:bootCommand forKey:kPreferenceBootCommandKey];
+}
+
+- (void)resetBootCommand {
+    [_defaults removeObjectForKey:kPreferenceBootCommandKey];
 }
 
 - (BOOL)validateBootCommand:(id *)value error:(NSError **)error {
