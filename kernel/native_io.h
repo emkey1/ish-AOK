@@ -6,6 +6,7 @@
 #include <sys/types.h>
 
 #include "kernel/fs.h"
+#include "kernel/signal.h"   // sigset_t_, for the spawned child's mask below
 #include "fs/fd.h"
 
 // Guest-filesystem access for natively-implemented programs (kernel/native.h).
@@ -98,6 +99,23 @@ struct native_spawn_opts {
     int pgid;
     const struct native_spawn_action *actions;
     size_t action_count;
+
+    // The child's blocked-signal mask, when set_sigmask is true. GUEST bits.
+    //
+    // Needed because the shim tells the kernel a lie on the program's behalf:
+    // a native program cannot hand the kernel a signal handler (it would jump
+    // the guest CPU into host code), so every signal the program handles is
+    // BLOCKED and drained at syscall checkpoints instead. That blocking is an
+    // implementation detail of the shim, and a child must not inherit it --
+    // exec preserves the mask, so `sleep 30` under a native bash ran with
+    // SIGINT blocked and ^C did nothing at all.
+    //
+    // nlibc_posix_spawn_common fills this in for every spawn: from the
+    // attribute when the caller set POSIX_SPAWN_SETSIGMASK, and otherwise from
+    // the task's own mask with the shim-held signals taken back out. Which is
+    // the same thing a forked child does when it calls restore_sigmask.
+    bool set_sigmask;
+    sigset_t_ sigmask;
 };
 
 int native_spawn_opts(const char *path, char *const argv[], char *const envp[],

@@ -159,6 +159,13 @@ sqword_t native_syscall_args(unsigned num, const qword_t args[6]) {
             native_checkpoint();
 
         sqword_t result = syscall_dispatch_native(num, args);
+        // A syscall cut short by a signal: run the handler BEFORE the program
+        // sees the EINTR, which is the order a real signal delivery has. Left
+        // to the next syscall's checkpoint instead, readline saw an EINTR with
+        // none of its interrupt flags set yet, retried the read, and only then
+        // ran the handler -- eating the keystroke that had woken it.
+        if (result == _EINTR)
+            native_checkpoint();
         // _ERESTART is the kernel asking for the instruction to be re-executed
         // after a signal. A guest gets its PC rewound; a native caller just
         // issues the call again, which is the same thing one level up.

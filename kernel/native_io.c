@@ -202,6 +202,11 @@ static int native_spawn_setup_child(const struct native_spawn_opts *opts) {
     if (opts == NULL)
         return 0;
 
+    // The mask first: it is what a forked child restores before it does
+    // anything else, and nothing below depends on the child's own signals.
+    if (opts->set_sigmask)
+        sigmask_set_blocked(opts->sigmask);
+
     if (opts->pgid != NATIVE_SPAWN_PGID_INHERIT) {
         // setpgid on a task that has not exec'd, which is precisely the case
         // the guest's own rules allow -- and why this happens here rather than

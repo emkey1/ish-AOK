@@ -422,6 +422,10 @@ struct task *task_create_(struct task *parent) {
     // program asking before then gets an empty vector from native_env_slot.
     task->native_env = NULL;
     task->native_exec = NULL;
+    // The shim's signal bookkeeping describes the native program running in
+    // the PARENT; a fresh task has none until it becomes one.
+    task->native_prog_blocked = 0;
+    task->native_held = 0;
 
     lock_init(&task->general_lock, "task_creat_gen\0");
 

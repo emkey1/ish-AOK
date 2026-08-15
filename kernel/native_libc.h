@@ -381,6 +381,14 @@ int nlibc_pselect(int nfds, void *r, void *w, void *e,
  * depend on which header wins. Darwin's typedefs are `void *` for both, which
  * kernel/native_libc.c asserts against the real <spawn.h>, so a caller passing
  * posix_spawn_file_actions_t * is passing exactly this. */
+
+/* The one attribute flag native_spawn_opts acts on, spelled here because
+ * <spawn.h> is deliberately not included (above) and a caller that needs the
+ * flag would otherwise have to include it and lose to whichever spawn.h wins.
+ * The value is Darwin's, which kernel/native_libc.c checks against the system
+ * header. pgroup 0 means "a group of its own, led by the child". */
+#define NLIBC_SPAWN_SETPGROUP 0x02
+
 int nlibc_posix_spawn_file_actions_init(void **fa);
 int nlibc_posix_spawn_file_actions_destroy(void **fa);
 int nlibc_posix_spawn_file_actions_adddup2(void **fa, int from, int to);

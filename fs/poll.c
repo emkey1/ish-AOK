@@ -681,7 +681,7 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
         bool needs_periodic_host_rescan = poll_needs_periodic_host_rescan(poll_);
 
         lock(&current->sighand->lock,0);
-        bool signal_pending = !!((current->pending | current->sighand->pending) & ~current->blocked);
+        bool signal_pending = !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
         unlock(&current->sighand->lock);
         if (signal_pending) {
             res = _EINTR;
@@ -706,7 +706,7 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
                 err = -1;
             } else {
                 lock(&current->sighand->lock, 0);
-                bool signal_pending = !!((current->pending | current->sighand->pending) & ~current->blocked);
+                bool signal_pending = !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
                 unlock(&current->sighand->lock);
                 if (signal_pending) {
                     sigunwind_end();
@@ -783,7 +783,7 @@ poll_wait_done:
             // invalidation) can land here without any guest signal pending.
             // Only treat this as EINTR if a real guest signal is waiting.
             lock(&current->sighand->lock, 0);
-            bool signal_pending = !!((current->pending | current->sighand->pending) & ~current->blocked);
+            bool signal_pending = !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
             unlock(&current->sighand->lock);
             if (!signal_pending)
                 continue;
@@ -803,7 +803,7 @@ poll_wait_done:
             // over a timeout, matching Linux poll()/select() semantics.
             if (res == 0) {
                 lock(&current->sighand->lock, 0);
-                bool signal_pending = !!((current->pending | current->sighand->pending) & ~current->blocked);
+                bool signal_pending = !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
                 unlock(&current->sighand->lock);
                 if (signal_pending)
                     res = _EINTR;

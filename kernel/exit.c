@@ -700,7 +700,9 @@ static bool wait_interrupted_by_signal(void) {
         return false;
     __atomic_exchange_n(&current->wait_interrupted, false, __ATOMIC_ACQ_REL);
     lock(&current->sighand->lock, 0);
-    bool pending = !!((current->pending | current->sighand->pending) & ~current->blocked);
+    // See kernel/signal.h: a shim-held signal must end this wait too.
+    bool pending = !!((current->pending | current->sighand->pending) &
+            ~task_wake_blocked(current));
     unlock(&current->sighand->lock);
     return pending;
 }

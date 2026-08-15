@@ -97,12 +97,17 @@ static bool is_signal_pending(lock_t *lock) {
     // sighand->pending for the same reason on the do_wait() path.
     sigset_t_ pending = __atomic_load_n(&current->pending, __ATOMIC_ACQUIRE);
     sigset_t_ shand_pending = __atomic_load_n(&current->sighand->pending, __ATOMIC_ACQUIRE);
-    sigset_t_ blocked = __atomic_load_n(&current->blocked, __ATOMIC_ACQUIRE);
+    // task_wake_blocked, not ->blocked: a native program's handlers are held
+    // by the shim with the signal blocked, and such a wait must still end so
+    // the handler can run at the next syscall checkpoint (kernel/signal.h).
+    sigset_t_ blocked = __atomic_load_n(&current->blocked, __ATOMIC_ACQUIRE) &
+        ~__atomic_load_n(&current->native_held, __ATOMIC_ACQUIRE);
     if (((pending | shand_pending) & ~blocked) == 0)
         return false;
     if (lock != &current->sighand->lock)
         lock(&current->sighand->lock, 0);
-    bool has_pending = !!((current->pending | current->sighand->pending) & ~current->blocked);
+    bool has_pending = !!((current->pending | current->sighand->pending) &
+            ~task_wake_blocked(current));
     if (lock != &current->sighand->lock)
         unlock(&current->sighand->lock);
     return has_pending;
@@ -228,7 +233,7 @@ void signal_thread_locals_init(void) {
         sigprocmask(SIG_BLOCK, &sigusr1, NULL);
         if (lock != &current->sighand->lock)
             lock(&current->sighand->lock, 0);
-        bool pending = !!(current->pending & ~current->blocked);
+        bool pending = !!(current->pending & ~task_wake_blocked(current));
         if (lock != &current->sighand->lock)
             unlock(&current->sighand->lock);
         sigprocmask(SIG_UNBLOCK, &sigusr1, NULL);

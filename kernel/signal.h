@@ -202,6 +202,17 @@ int send_group_signal(dword_t pgid, int sig, struct siginfo_ info);
 // check for and deliver pending signals on current
 // must be called without pids_lock, current->group->lock, or current->sighand->lock
 void receive_signals(void);
+// The blocked set as far as WAKING a task is concerned, which is not the same
+// as the blocked set as far as delivering to it is concerned: a native program's
+// handler is held by the shim with the signal blocked (kernel/native_libc.c),
+// and such a task must still wake up, because the handler runs at its next
+// syscall checkpoint. Delivery decisions keep using ->blocked directly.
+#define task_wake_blocked(task) ((task)->blocked & ~(task)->native_held)
+
+// Replace the blocked mask outright, the way SIG_SETMASK does, for code acting
+// on a task's behalf with no guest syscall to carry the set: native_spawn_opts
+// gives a spawned child the mask a forked child would have restored for itself.
+void sigmask_set_blocked(sigset_t_ set);
 // set the signal mask, restore it to what it was before on the next receive_signals call
 void sigmask_set_temp(sigset_t_ mask);
 // restore a temporary signal mask immediately

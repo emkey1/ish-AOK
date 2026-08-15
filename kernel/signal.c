@@ -641,8 +641,8 @@ static void deliver_signal_unlocked_locked(struct task *task, struct sighand *si
     // Synchronous fault signals must be delivered even when the task has them
     // masked. libc abort paths rely on this by blocking signals before
     // executing a crash instruction like `hlt`.
-    if (sigset_has(task->blocked & ~task->waiting, sig) && signal_is_blockable(sig) &&
-            !signal_is_synchronous_trap(sig))
+    if (sigset_has(task_wake_blocked(task) & ~task->waiting, sig) &&
+            signal_is_blockable(sig) && !signal_is_synchronous_trap(sig))
         return;
 
     bool interrupted_wait = signal_wake_task(task, sighand, sig);
@@ -2306,6 +2306,10 @@ dword_t sys_sigaction(dword_t signum, addr_t action_addr, addr_t oldaction_addr)
 
 static void sigmask_set(sigset_t_ set) {
     current->blocked = (set & ~UNBLOCKABLE_MASK);
+}
+
+void sigmask_set_blocked(sigset_t_ set) {
+    sigmask_set(set);
 }
 
 static void sigmask_set_temp_unlocked(sigset_t_ mask) {

@@ -1891,7 +1891,7 @@ static void sock_trace_tcp_info(const char *label, struct fd *sock) {
 
 static bool socket_guest_signal_pending(void) {
     lock(&current->sighand->lock, 0);
-    bool signal_pending = !!((current->pending | current->sighand->pending) & ~current->blocked);
+    bool signal_pending = !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
     unlock(&current->sighand->lock);
     return signal_pending;
 }

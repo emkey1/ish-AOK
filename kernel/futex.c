@@ -196,7 +196,7 @@ static bool futex_wait_has_pending_signal(void) {
     // wake_waiting_task, which the wait loop checks separately.
     __atomic_exchange_n(&current->wait_interrupted, false, __ATOMIC_ACQ_REL);
     lock(&current->sighand->lock, 0);
-    bool pending = !!((current->pending | current->sighand->pending) & ~current->blocked);
+    bool pending = !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
     unlock(&current->sighand->lock);
     return pending;
 }

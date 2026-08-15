@@ -2504,6 +2504,9 @@ static void nlibc_sigset_from_guest(sigset_t_ guest, sigset_t *host) {
             sigaddset(host, nlibc_signals[i].host);
 }
 
+static void nlibc_update_held_signals(void);
+static sigset_t_ nlibc_shim_held_signals(void);
+
 static int nlibc_rt_sigprocmask(int guest_how, sigset_t_ set, sigset_t_ *old_out) {
     NATIVE_FRAME;
     guest_addr_t guest_set = native_scratch_put(&set, sizeof(set));
@@ -2537,8 +2540,12 @@ static int nlibc_set_disposition(int guest_sig, nlibc_sighandler handler) {
         return (int) res;
 
     bool ours = handler != SIG_DFL && handler != SIG_IGN;
-    return nlibc_rt_sigprocmask(ours ? SIG_BLOCK_ : SIG_UNBLOCK_,
+    int err = nlibc_rt_sigprocmask(ours ? SIG_BLOCK_ : SIG_UNBLOCK_,
             (sigset_t_) 1 << (guest_sig - 1), NULL);
+    // The held set just changed; the kernel needs to know, or a wait would go
+    // on ignoring a signal this program now handles.
+    nlibc_update_held_signals();
+    return err;
 }
 
 int nlibc_sigaction(int host_sig, const struct sigaction *act, struct sigaction *oact) {
@@ -2610,12 +2617,39 @@ int nlibc_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
                 guest_set |= bit;
         }
     }
+    sigset_t_ prev_prog = current != NULL ? current->native_prog_blocked : 0;
     sigset_t_ old = 0;
     int err = nlibc_rt_sigprocmask(guest_how, guest_set, oldset != NULL ? &old : NULL);
     if (err < 0)
         return nlibc_fail(err);
+
+    // What the PROGRAM believes its mask is, which is the requested set before
+    // the forcing above -- the kernel's own mask has the shim's blocking mixed
+    // into it. Tracked so a signal the program deliberately blocked goes on not
+    // interrupting its waits, while one the shim blocked behind its back still
+    // does (struct task's native_held).
+    if (current != NULL && set != NULL) {
+        sigset_t_ want = nlibc_sigset_to_guest(set);
+        if (guest_how == SIG_BLOCK_)
+            current->native_prog_blocked |= want;
+        else if (guest_how == SIG_UNBLOCK_)
+            current->native_prog_blocked &= ~want;
+        else
+            current->native_prog_blocked = want;
+        nlibc_update_held_signals();
+    }
+
+    // OLDSET is the program's own mask, NOT the kernel's, and that distinction
+    // is the whole point rather than a nicety. Handing back the kernel's mask
+    // told the program it had blocked every signal the shim was holding -- and
+    // bash, which saves a mask and restores it (`sigprocmask(SIG_BLOCK, &set,
+    // &oset)` then SIG_SETMASK of oset), thereby adopted the shim's blocking as
+    // its own. From then on nothing could interrupt it: the held set was empty,
+    // ^C at a prompt did not end the read it was waiting in, and the shell only
+    // noticed at the next keystroke, which the interrupted read then ate.
+    (void) old;
     if (oldset != NULL)
-        nlibc_sigset_from_guest(old, oldset);
+        nlibc_sigset_from_guest(prev_prog, oldset);
     return 0;
 }
 
@@ -3622,7 +3656,15 @@ int nlibc_pselect(int nfds, void *readfds, void *writefds, void *errorfds,
     struct { qword_t mask; qword_t size; } sigarg = { 0, sizeof(sigset_t_) };
     guest_addr_t guest_sig = 0;
     if (sigmask != NULL) {
-        sigset_t_ guest_mask = nlibc_sigset_to_guest(sigmask);
+        // The shim's own blocking goes in too, for the same reason
+        // nlibc_sigprocmask forces it: a signal this shim handles must stay
+        // blocked whatever the program asks, or the kernel takes the default
+        // action for something the program believes it has a handler for. This
+        // mask is installed for the duration of the wait, so leaving the bits
+        // out meant ^C at a bash prompt killed the shell outright instead of
+        // running readline's handler -- the shell simply vanished, with no
+        // message, exactly where a fresh prompt belonged.
+        sigset_t_ guest_mask = nlibc_sigset_to_guest(sigmask) | nlibc_shim_held_signals();
         guest_addr_t guest_maskp = native_scratch_put(&guest_mask, sizeof(guest_mask));
         if (guest_maskp == 0)
             return nlibc_fail(_ENOMEM);
@@ -3669,6 +3711,9 @@ _Static_assert(sizeof(posix_spawn_file_actions_t) == sizeof(void *),
         "posix_spawn_file_actions_t is not a plain pointer on this platform");
 _Static_assert(sizeof(posix_spawnattr_t) == sizeof(void *),
         "posix_spawnattr_t is not a plain pointer on this platform");
+// native_libc.h spells this flag for callers that cannot include <spawn.h>.
+_Static_assert(NLIBC_SPAWN_SETPGROUP == POSIX_SPAWN_SETPGROUP,
+        "NLIBC_SPAWN_SETPGROUP has drifted from the platform's value");
 
 struct nlibc_spawn_actions {
     struct native_spawn_action *actions;
@@ -3680,7 +3725,46 @@ struct nlibc_spawn_actions {
 struct nlibc_spawn_attr {
     short flags;
     pid_t pgroup;
+    sigset_t_ sigmask;     // guest bits; meaningful with POSIX_SPAWN_SETSIGMASK
 };
+
+// The signals this shim is holding a handler for, as guest mask bits.
+//
+// Every one of them is BLOCKED in the kernel whether the program asked for that
+// or not -- a native program cannot give the kernel a handler, so the shim
+// blocks the signal and drains it at syscall checkpoints instead. The blocking
+// is the shim's, not the program's, and a spawned child must not inherit it:
+// exec preserves the mask, so `sleep 30` under a native bash ran with SIGINT
+// blocked and ^C did nothing whatsoever. A forked child clears this by calling
+// sigprocmask itself, which is the moment a spawn does not have.
+static sigset_t_ nlibc_shim_held_signals(void) {
+    sigset_t_ held = 0;
+    for (int sig = 1; sig < NSIG; sig++) {
+        nlibc_sighandler h = nlibc_handlers[sig];
+        if (h == NULL || h == SIG_DFL || h == SIG_IGN)
+            continue;
+        int guest_sig = nlibc_signal_to_guest(sig);
+        if (guest_sig != 0)
+            held |= (sigset_t_) 1 << (guest_sig - 1);
+    }
+    return held;
+}
+
+// Tell the kernel which of this task's blocked signals are blocked by the shim
+// rather than by the program, so a wait can still be interrupted by one. See
+// the field comment on struct task's native_held.
+//
+// Called from both places that can change the answer: installing a handler
+// (which adds to the held set) and the program's own sigprocmask (which
+// decides which of those the program ALSO wants blocked, and so must not be
+// woken for).
+static void nlibc_update_held_signals(void) {
+    if (current == NULL)
+        return;
+    __atomic_store_n(&current->native_held,
+            nlibc_shim_held_signals() & ~current->native_prog_blocked,
+            __ATOMIC_RELEASE);
+}
 
 int nlibc_posix_spawn_file_actions_init(void **fa) {
     if (fa == NULL)
@@ -3822,8 +3906,11 @@ int nlibc_posix_spawnattr_setsigdefault(void **attr, const sigset_t *set) {
     return (attr != NULL && *attr != NULL) ? 0 : EINVAL;
 }
 int nlibc_posix_spawnattr_setsigmask(void **attr, const sigset_t *set) {
-    (void) set;
-    return (attr != NULL && *attr != NULL) ? 0 : EINVAL;
+    if (attr == NULL || *attr == NULL)
+        return EINVAL;
+    struct nlibc_spawn_attr *a = *attr;
+    a->sigmask = set != NULL ? nlibc_sigset_to_guest(set) : 0;
+    return 0;
 }
 
 static int nlibc_posix_spawn_common(pid_t *pid_out, const char *file,
@@ -3833,12 +3920,29 @@ static int nlibc_posix_spawn_common(pid_t *pid_out, const char *file,
         return EINVAL;
 
     struct native_spawn_opts opts = { .pgid = NATIVE_SPAWN_PGID_INHERIT };
+
+    // The child's mask, ALWAYS -- this is not an attribute the caller has to
+    // ask for. What the kernel holds for this task includes whatever the shim
+    // blocked to hold a handler (see nlibc_shim_held_signals), and inheriting
+    // that would hand the child a set of signals it can never receive and
+    // never asked to block. Taking those bits back out leaves exactly what the
+    // program believes its own mask to be, which is what fork would have given.
+    sigset_t_ mask = 0;
+    if (nlibc_rt_sigprocmask(SIG_BLOCK_, 0, &mask) == 0) {
+        opts.set_sigmask = true;
+        opts.sigmask = mask & ~nlibc_shim_held_signals();
+    }
+
     if (attr != NULL && *attr != NULL) {
         const struct nlibc_spawn_attr *a = *attr;
-        // Only SETPGROUP changes what the child IS; the rest are either
-        // already true of a fresh task or have no meaning here.
+        // SETPGROUP and SETSIGMASK change what the child IS; the rest are
+        // either already true of a fresh task or have no meaning here.
         if (a->flags & POSIX_SPAWN_SETPGROUP)
             opts.pgid = a->pgroup;
+        if (a->flags & POSIX_SPAWN_SETSIGMASK) {
+            opts.set_sigmask = true;
+            opts.sigmask = a->sigmask;
+        }
     }
     if (fa != NULL && *fa != NULL) {
         const struct nlibc_spawn_actions *a = *fa;
