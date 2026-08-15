@@ -57,6 +57,35 @@ int native_path_search(const char *file, char *out, size_t outlen);
 int native_spawn(const char *path, char *const argv[], char *const envp[],
         dword_t *pid_out);
 
+// What a fork+exec caller would do in the child between the two -- setpgid,
+// then dup2, then close. A native program has no such window, because there is
+// no fork: the child is created, given its image and started, all from the
+// parent. So it is described here instead and applied on the child's behalf.
+//
+// A zeroed struct is the useful default, hence the INHERIT sentinel being -1
+// rather than 0: `pgid = 0` has to keep meaning what setpgid(0, 0) means.
+#define NATIVE_SPAWN_PGID_INHERIT (-1)
+
+struct native_spawn_opts {
+    // The child's process group:
+    //   NATIVE_SPAWN_PGID_INHERIT  keep the parent's
+    //   0                          a group of its own, led by the child
+    //   >0                         join this existing group, which must be in
+    //                              the same session
+    int pgid;
+    // Installed as the child's fds 0, 1 and 2, named by their number in the
+    // CALLER's table; -1 leaves the inherited descriptor alone.
+    int stdio[3];
+    // Closed in the child and nowhere else. This is the other end of a pipe:
+    // if the child keeps it open, the side holding the read end never sees EOF
+    // because a writer still exists.
+    const int *close_fds;
+    size_t close_count;
+};
+
+int native_spawn_opts(const char *path, char *const argv[], char *const envp[],
+        const struct native_spawn_opts *opts, dword_t *pid_out);
+
 // Wait for a child, blocking where the guest's own wait4 blocks. Returns the
 // reaped pid, or a negative errno.
 int native_waitpid(dword_t pid, int *status_out, int options);

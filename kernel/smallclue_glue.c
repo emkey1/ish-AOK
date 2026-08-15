@@ -112,6 +112,15 @@ pid_t smallcluePlatformSpawn(const SmallclueSpawnRequest *request) {
         return -1;
     }
 
+    // setpgid_self asks for what a forked child does between fork and exec.
+    // There is no such window here, so it is described to native_spawn instead
+    // and applied on the child's behalf before it starts (kernel/native_io.h).
+    // timeout(1) is the caller that wants it, for killing a whole group.
+    struct native_spawn_opts opts = {
+        .pgid = request->setpgid_self ? 0 : NATIVE_SPAWN_PGID_INHERIT,
+        .stdio = { -1, -1, -1 },
+    };
+
     int last_err = ENOENT;
     for (size_t i = 0; i < request->attempt_count; i++) {
         const SmallclueSpawnAttempt *attempt = &request->attempts[i];
@@ -129,15 +138,12 @@ pid_t smallcluePlatformSpawn(const SmallclueSpawnRequest *request) {
         }
 
         dword_t pid = 0;
-        int err = native_spawn(path, attempt->argv, environ, &pid);
+        int err = native_spawn_opts(path, attempt->argv, environ, &opts, &pid);
         if (err >= 0)
             return (pid_t) pid;
         last_err = err < 0 ? -err : err;
     }
 
-    // setpgid_self is not honoured yet: the child is started already running,
-    // so there is no point between fork and exec to place it in its own group.
-    // timeout(1) is the caller that wants it, for killing a whole group.
     errno = last_err;
     return -1;
 }

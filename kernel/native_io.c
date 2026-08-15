@@ -188,8 +188,56 @@ static char *native_pack_args(char *const vec[], size_t *count_out) {
     return packed;
 }
 
+// Everything a forked child would do to itself before exec. Runs while the
+// caller is impersonating the child, so these are the guest's own syscalls
+// acting on the guest's own state -- no second implementation of setpgid's
+// session rules or of dup2's cloexec handling to keep in step with the first.
+//
+// Before exec, not after, for the one case where the order is observable:
+// do_execve closes cloexec descriptors, and dup2 clears the cloexec bit on
+// what it writes to. Doing this first therefore keeps a redirection whose
+// source was cloexec (and closes that source, which is what fork+exec does
+// too); doing it afterwards would find the descriptor already gone.
+static int native_spawn_setup_child(const struct native_spawn_opts *opts) {
+    if (opts == NULL)
+        return 0;
+
+    if (opts->pgid != NATIVE_SPAWN_PGID_INHERIT) {
+        // setpgid(0, 0) on a task that has not exec'd, which is precisely the
+        // case the guest's own rules allow -- and why this happens here rather
+        // than in the parent afterwards, where sys_setpgid refuses with EACCES
+        // once the child has exec'd.
+        int err = (int) sys_setpgid(0, opts->pgid);
+        if (err < 0)
+            return err;
+    }
+
+    for (int i = 0; i < 3; i++) {
+        if (opts->stdio[i] < 0 || opts->stdio[i] == i)
+            continue;
+        int err = (int) sys_dup2(opts->stdio[i], i);
+        if (err < 0)
+            return err;
+    }
+
+    for (size_t i = 0; i < opts->close_count; i++) {
+        if (opts->close_fds[i] < 0)
+            continue;
+        // A descriptor already gone is not an error here: the caller lists the
+        // ends it does not want the child holding, and one of them may have
+        // just been dup2'd over.
+        (void) sys_close(opts->close_fds[i]);
+    }
+    return 0;
+}
+
 int native_spawn(const char *path, char *const argv[], char *const envp[],
         dword_t *pid_out) {
+    return native_spawn_opts(path, argv, envp, NULL, pid_out);
+}
+
+int native_spawn_opts(const char *path, char *const argv[], char *const envp[],
+        const struct native_spawn_opts *opts, dword_t *pid_out) {
     if (!native_have_task())
         return _EFAULT;
     if (path == NULL || argv == NULL)
@@ -213,9 +261,12 @@ int native_spawn(const char *path, char *const argv[], char *const envp[],
     }
 
     // do_execve acts on `current`, so impersonate the child across it and put
-    // it back immediately after -- the same trick kernel/init.c uses.
+    // it back immediately after -- the same trick kernel/init.c uses. The
+    // pre-exec setup runs inside the same impersonation for the same reason.
     current = child;
-    int err = do_execve(path, argc, argv_packed, envp_packed);
+    int err = native_spawn_setup_child(opts);
+    if (err >= 0)
+        err = do_execve(path, argc, argv_packed, envp_packed);
     current = saved;
 
     free(argv_packed);
