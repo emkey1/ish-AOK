@@ -246,6 +246,7 @@ if get_option('kernel') == 'ish'
         'kernel/native.c',
         'kernel/native_io.c',
         'kernel/native_libc.c',
+        'kernel/native_syscall.c',
         'kernel/smallclue_glue.c',
         'kernel/exit.c',
         'kernel/time.c',

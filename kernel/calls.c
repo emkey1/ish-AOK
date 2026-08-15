@@ -2341,9 +2341,21 @@ static bool syscall_arg_fits_legacy_dword(qword_t arg) {
     return arg <= UINT32_MAX || (arg >> 32) == UINT32_MAX;
 }
 
+// Set while syscall_dispatch_native (below) is running a syscall on behalf of
+// a natively-compiled program -- host code with no guest register file to
+// write a result into. The two places that would touch `cpu` divert here
+// instead, which is what lets the whole asm-generic switch be reused unchanged
+// rather than duplicated for native callers.
+static __thread bool native_syscall_active;
+static __thread qword_t native_syscall_value;
+
 // Full-width result write for the asm-generic 64-bit ABIs served by
 // handle_asm_generic_native_syscall below: arm64's x0 or riscv64's a0.
 static inline void asm_generic_syscall_result_qword(struct cpu_state *cpu, qword_t result) {
+    if (native_syscall_active) {
+        native_syscall_value = result;
+        return;
+    }
     if (current->abi == GUEST_ABI_RISCV64)
         cpu->riscv64_regs[riscv64_a0] = result;
     else
@@ -2752,6 +2764,12 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
         return false; // not handled here: fall through to the legacy-marshalled table
     }
     if (syscall_result_should_restart(result)) {
+        // A native caller has no PC to rewind: it gets the restart code back
+        // and re-issues the call itself (kernel/native_syscall.c).
+        if (native_syscall_active) {
+            native_syscall_value = (qword_t) (sqword_t) (sdword_t) result;
+            return true;
+        }
         // handle_asm_generic_native_syscall is shared by both arm64 and
         // riscv64 guests; prepare_syscall_restart's PC-rewind and
         // syscall-number/first-arg restore are register-file-specific
@@ -4428,6 +4446,69 @@ static bool marshal_syscall_args_legacy(enum guest_abi abi, qword_t syscall_num,
     for (unsigned i = arg_count; i < 6; i++)
         args[i] = 0;
     return true;
+}
+
+// One syscall on behalf of a natively-compiled program (kernel/native.h). This
+// is the same dispatch a translated guest gets -- the asm-generic switch first,
+// the legacy marshalled table behind it -- reached from host code instead of
+// from an SVC.
+//
+// The numbering is asm-generic (arm64/riscv64), always, whatever ABI the
+// calling task's guest image had. A native program is guest-ABI-independent by
+// construction, so it needs ONE numbering; picking the task's would mean the
+// shim spoke a different language per rootfs. The handlers themselves are
+// ABI-neutral -- they take guest addresses and go through user_read/user_write
+// -- so only the numbering and the few explicitly-arm64 struct layouts
+// (newfstatat, fstat) follow from this choice, and both are what the shim
+// marshals against.
+//
+// STRACE prints the same prefix the guest path does, so a native program's
+// calls appear in a trace attributed to its pid and comm, interleaved with
+// every other task's. That is most of the point of routing through here.
+sqword_t syscall_dispatch_native(qword_t syscall_num, const qword_t raw_args[6]) {
+    if (current == NULL)
+        return _EFAULT;
+
+    STRACE("%d(%s) %d:%d native call %-3llu ", current->pid, current->comm,
+           current->reference.count,
+           __atomic_load_n(&current->locks_held.count, __ATOMIC_RELAXED),
+           (unsigned long long) syscall_num);
+
+    sqword_t result;
+    native_syscall_active = true;
+    native_syscall_value = (qword_t) (sqword_t) _ENOSYS;
+    bool handled = handle_asm_generic_native_syscall(NULL, syscall_num, raw_args);
+    native_syscall_active = false;
+
+    if (handled) {
+        result = (sqword_t) native_syscall_value;
+    } else if (syscall_num >= arm64_syscall_dispatch.num_syscalls ||
+            arm64_syscall_dispatch.table[syscall_num] == NULL) {
+        result = _ENOSYS;
+    } else {
+        // The legacy table truncates every argument to a dword. A native
+        // caller's pointers come out of its own scratch region, which is
+        // mapped low enough to survive that (kernel/native_syscall.c); a
+        // refusal here means the shim passed something that cannot fit, which
+        // is a bug in the shim rather than in the guest.
+        dword_t args[6];
+        if (!marshal_syscall_args_legacy(GUEST_ABI_ARM64, syscall_num, raw_args, args)) {
+            printk("ERROR: %d(%s) native syscall %llu needs full-width args "
+                   "(args %#llx %#llx %#llx %#llx %#llx %#llx)\n",
+                   current->pid, current->comm, (unsigned long long) syscall_num,
+                   (unsigned long long) raw_args[0], (unsigned long long) raw_args[1],
+                   (unsigned long long) raw_args[2], (unsigned long long) raw_args[3],
+                   (unsigned long long) raw_args[4], (unsigned long long) raw_args[5]);
+            result = _EFAULT;
+        } else {
+            syscall_t syscall = arm64_syscall_dispatch.table[syscall_num];
+            result = (sqword_t) (sdword_t) syscall(args[0], args[1], args[2],
+                    args[3], args[4], args[5]);
+        }
+    }
+
+    STRACE(" = 0x%llx\n", (unsigned long long) result);
+    return result;
 }
 
 static void log_stub_syscall(struct cpu_state *cpu, const struct syscall_abi_dispatch *dispatch,
