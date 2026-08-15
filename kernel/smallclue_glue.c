@@ -106,3 +106,26 @@ pid_t smallcluePlatformSpawn(const SmallclueSpawnRequest *request) {
     errno = ENOSYS;
     return -1;
 }
+
+// gzip/gunzip/zcat live in gzip_app.c, excluded because it is the only file
+// needing zlib and the Xcode app targets link the meson archives without it.
+// Re-enabling means adding libz.tbd to those targets first.
+int smallclueGzipCommand(int argc, char **argv);
+int smallclueGunzipCommand(int argc, char **argv);
+int smallclueZcatCommand(int argc, char **argv);
+int smallclueGzipCommand(int argc, char **argv) {
+    (void) argc; (void) argv; return smallclue_not_built("gzip");
+}
+int smallclueGunzipCommand(int argc, char **argv) {
+    (void) argc; (void) argv; return smallclue_not_built("gunzip");
+}
+int smallclueZcatCommand(int argc, char **argv) {
+    (void) argc; (void) argv; return smallclue_not_built("zcat");
+}
+
+// tar lives in tar_app.c, excluded for the same zlib reason as gzip: it opens
+// compressed archives through zlib's gz* API even for uncompressed ones.
+int smallclueTarCommand(int argc, char **argv);
+int smallclueTarCommand(int argc, char **argv) {
+    (void) argc; (void) argv; return smallclue_not_built("tar");
+}

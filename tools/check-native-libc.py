@@ -50,6 +50,11 @@ DENIED = {
     "getcwd", "chdir", "fchdir", "chroot", "fork", "vfork", "execv", "execve",
     "execvp", "execl", "execlp", "system", "popen", "pclose", "waitpid",
     "wait", "kill",
+    # Host-global state. Not filesystem calls, but the same class of mistake
+    # and worse consequences: on a host build these reach the developer's own
+    # clock, hostname, mount table and power state.
+    "clock_settime", "settimeofday", "adjtime", "sethostname", "setdomainname",
+    "reboot", "mount", "unmount", "umount", "swapon", "swapoff",
 }
 
 SKIP_PREFIXES = ("__",)

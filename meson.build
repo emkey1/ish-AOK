@@ -94,10 +94,7 @@ libdl = cc.find_library('dl', required: false)
 # this is a no-op there.
 libatomic = cc.find_library('atomic', required: false)
 sqlite3 = cc.find_library('sqlite3')
-# SmallCLUE's gzip applet (deps/smallclue/src/gzip_app.c) uses zlib's gz* API.
-# zlib ships with macOS and iOS, so this is a link line entry, not a new dep.
-libz = cc.find_library('z')
-dependencies = [librt, libm, libdl, libatomic, threads, sqlite3, libz]
+dependencies = [librt, libm, libdl, libatomic, threads, sqlite3]
 
 subdir('vdso') # ish depends on the vdso
 
@@ -341,8 +338,15 @@ if get_option('kernel') == 'ish'
     # checksum_app needs OpenSSL (AOK links none), integration.c is the
     # WITH_EXSH path into PSCAL's VM, and the openssh trio needs the vendored
     # OpenSSH tree.
+    # gzip_app and tar_app are excluded for a build-system reason rather than a
+    # code one: they are the only files needing zlib, and the Xcode app targets
+    # link the meson archives by name with no zlib anywhere in the project (no
+    # libz.tbd, no OTHER_LDFLAGS). Re-enabling either means adding zlib to
+    # those targets first -- worth doing, since tar is a real loss, but it is a
+    # change to the app project rather than to this build.
     smallclue_excluded = ['main.c', 'integration.c', 'checksum_app.c',
-                          'openssh_app.c', 'openssh_shim.c', 'openssh_stubs.c']
+                          'openssh_app.c', 'openssh_shim.c', 'openssh_stubs.c',
+                          'gzip_app.c', 'tar_app.c']
     smallclue_src = []
     # Space-separated, not newline: meson interprets \n inside its own string
     # literals, which would break the one-liner before python ever sees it.
@@ -371,10 +375,17 @@ if get_option('kernel') == 'ish'
             '-w',  # vendored code, not ours to police
         ])
 
+    # link_whole, not link_with: this folds SmallCLUE's objects into libish.a
+    # itself. The Xcode project links the meson archives by name (libish.a,
+    # libish_emu.a, libfakefs.a), so a fourth archive would silently fail to
+    # link on iOS -- which is exactly what happened -- and would need adding to
+    # every app target by hand. Riding inside libish.a keeps the two build
+    # systems from diverging again.
     libish = library('ish', src,
+        link_whole: libsmallclue,
         include_directories: includes)
     ish = declare_dependency(
-        link_with: [libish, libish_emu, libfakefs, libsmallclue],
+        link_with: [libish, libish_emu, libfakefs],
         dependencies: dependencies,
         include_directories: includes)
 

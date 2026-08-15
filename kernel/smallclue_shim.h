@@ -118,6 +118,14 @@ int sc_futimes(int fd, const struct timeval times[2]);
 int sc_statfs(const char *path, void *buf);
 int sc_glob(const char *pattern, int flags, void *errfunc, void *pglob);
 
+/* Host-global state: clock, hostname, mount table, power. See the .c. */
+struct timespec;
+int sc_clock_settime(int clk, const struct timespec *ts);
+int sc_sethostname(const char *name, size_t len);
+int sc_reboot(int howto);
+int sc_mount(const char *src, const char *tgt, const char *type,
+             unsigned long flags, const void *data);
+
 /* --- process ------------------------------------------------------------ */
 /* There is one host process, so these create real guest tasks instead. */
 int sc_execv(const char *path, char *const argv[]);
@@ -211,6 +219,13 @@ pid_t sc_wait(int *status);
  * struct tag, and an object-like macro would rewrite `struct statfs` too. */
 #define statfs(a, b) sc_statfs((a), (b))
 #define glob        sc_glob
+
+/* Function-like: `mount` is also a struct tag in places, and these should only
+ * ever rewrite an actual call. */
+#define clock_settime(a, b)      sc_clock_settime((a), (b))
+#define sethostname(a, b)        sc_sethostname((a), (b))
+#define reboot(a)                sc_reboot((a))
+#define mount(a, b, c, d, e)     sc_mount((a), (b), (c), (d), (e))
 
 #endif /* !SMALLCLUE_SHIM_NO_REDIRECT */
 

@@ -546,3 +546,28 @@ int sc_poll(void *f, unsigned n, int t)  { (void) f; (void) n; (void) t; return 
 int sc_select(int n, void *r, void *w, void *e, void *tv) {
     (void) n; (void) r; (void) w; (void) e; (void) tv; return sc_fail(_ENOSYS);
 }
+
+// ------------------------------------------------------ host-global refusals
+//
+// These change state belonging to the whole machine, not to a guest process.
+// An applet must never be able to reach the host's clock, hostname, mount
+// table or power state -- on the macOS CLI build those calls would land on the
+// developer's own system, and `reboot` in particular is not a mistake worth
+// making once. iOS marks several of them unavailable outright, which is how
+// clock_settime surfaced: the CLI build accepted it and only the iOS SDK
+// refused.
+//
+// A guest-side implementation would go through AOK's own syscall handlers, not
+// these. Until then, refusing is the only safe answer.
+int sc_clock_settime(int clk, const struct timespec *ts) {
+    (void) clk; (void) ts; return sc_fail(_EPERM);
+}
+int sc_sethostname(const char *name, size_t len) {
+    (void) name; (void) len; return sc_fail(_EPERM);
+}
+int sc_reboot(int howto) {
+    (void) howto; return sc_fail(_EPERM);
+}
+int sc_mount(const char *src, const char *tgt, const char *type, unsigned long f, const void *d) {
+    (void) src; (void) tgt; (void) type; (void) f; (void) d; return sc_fail(_EPERM);
+}
