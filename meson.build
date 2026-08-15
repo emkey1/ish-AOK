@@ -36,8 +36,19 @@ add_project_arguments('-Wno-switch', language: 'c')
 # not work: ld64 will not leave an unresolved REFERENCE in a static initializer,
 # weak_import included, so a build without deps/bash failed to link on the table
 # entry itself.
-have_bash = import('fs').exists('deps/bash/shell.c')
+fs_early = import('fs')
+have_bash = fs_early.exists('deps/bash/shell.c')
 if have_bash
+    # Populated but STALE is the case worth catching by name. A pull that moves
+    # the submodule pointer does not move the submodule, so deps/bash can be a
+    # bash without the sources AOK's build lists -- and the error that produced
+    # was `File deps/bash/aok_fork.c does not exist`, which says nothing about
+    # what to do. Checked here so the whole configure stops with the command.
+    if not fs_early.exists('deps/bash/aok_fork.c')
+        error('deps/bash is checked out at an older commit than this build ' +
+              'expects (aok_fork.c is missing). Update it with:\n' +
+              '    git submodule update --init deps/bash')
+    endif
     add_project_arguments('-DISH_NATIVE_BASH=1', language: 'c')
 endif
 
