@@ -488,4 +488,9 @@ void native_checkpoint(void) {
             wait_for_ignore_signals(&group->stopped_cond, &group->lock, NULL);
         unlock(&group->lock);
     }
+
+    // Signals the program installed a handler for. Those are kept blocked in
+    // the kernel -- it cannot jump host code -- so receive_signals above skips
+    // them and the shim runs them here instead (kernel/native_libc.c).
+    nlibc_deliver_signals();
 }

@@ -192,6 +192,12 @@ static int nlibc_signal_to_guest(int host_sig) {
             return nlibc_signals[i].guest;
     return 0;
 }
+static int nlibc_signal_to_host(int guest_sig) {
+    for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_signals); i++)
+        if (nlibc_signals[i].guest == guest_sig)
+            return nlibc_signals[i].host;
+    return 0;
+}
 
 // ------------------------------------------------------------ descriptors
 
@@ -1440,6 +1446,284 @@ int nlibc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 noreturn void nlibc_exit(int status) {
     nlibc_flush_std();
     do_exit_group((status & 0xff) << 8);
+}
+
+// ------------------------------------------------------------------- signals
+//
+// A native program's handler is HOST code, and the kernel delivers a signal by
+// building a sigcontext and jumping the guest CPU to the handler's address --
+// which for host code is not a thing that can be done, there being no guest
+// instruction stream to jump into. So dispositions split two ways:
+//
+//  - SIG_DFL and SIG_IGN go straight to the kernel. Those are dispositions it
+//    implements itself, and they have to reach it: nohup's SIG_IGN on SIGHUP
+//    and the SIG_IGN on SIGPIPE that keeps a broken pipe from killing an
+//    applet are only meaningful there.
+//  - A real handler is recorded here and the signal BLOCKED, so the kernel
+//    holds it pending instead of taking the default action. Every syscall
+//    drains the pending set (native_checkpoint -> nlibc_deliver_signals) and
+//    calls the handler on the program's own thread.
+//
+// A handler therefore runs between syscalls rather than at an arbitrary
+// instruction. For the programs this serves -- SIGWINCH redraws, ^C in an
+// interactive applet -- that is where they would have run anyway. What it does
+// not give: interruption of a compute loop that makes no syscalls at all, and
+// no SA_SIGINFO or sigaltstack.
+
+typedef void (*nlibc_sighandler)(int);
+
+// Indexed by HOST signal number. Static, like the rest of this file's state:
+// two native programs running at once already share nlibc_std and the passwd
+// cache, and fixing that is a separate piece of work.
+static nlibc_sighandler nlibc_handlers[NSIG];
+
+// how values: Linux 0/1/2, Darwin 1/2/3.
+static int nlibc_sigmask_how(int host_how) {
+    switch (host_how) {
+        case SIG_BLOCK:   return SIG_BLOCK_;
+        case SIG_UNBLOCK: return SIG_UNBLOCK_;
+        case SIG_SETMASK: return SIG_SETMASK_;
+        default:          return -1;
+    }
+}
+
+static sigset_t_ nlibc_sigset_to_guest(const sigset_t *host) {
+    sigset_t_ out = 0;
+    for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_signals); i++)
+        if (sigismember(host, nlibc_signals[i].host) == 1)
+            out |= (sigset_t_) 1 << (nlibc_signals[i].guest - 1);
+    return out;
+}
+
+static void nlibc_sigset_from_guest(sigset_t_ guest, sigset_t *host) {
+    sigemptyset(host);
+    for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_signals); i++)
+        if (guest & ((sigset_t_) 1 << (nlibc_signals[i].guest - 1)))
+            sigaddset(host, nlibc_signals[i].host);
+}
+
+static int nlibc_rt_sigprocmask(int guest_how, sigset_t_ set, sigset_t_ *old_out) {
+    NATIVE_FRAME;
+    guest_addr_t guest_set = native_scratch_put(&set, sizeof(set));
+    guest_addr_t guest_old = old_out != NULL ? native_scratch_alloc(sizeof(set)) : 0;
+    if (guest_set == 0 || (old_out != NULL && guest_old == 0))
+        return _ENOMEM;
+    sqword_t res = native_syscall(NATIVE_SYS_rt_sigprocmask, guest_how, guest_set,
+            guest_old, sizeof(sigset_t_));
+    if (res < 0)
+        return (int) res;
+    if (old_out != NULL && native_scratch_get(old_out, guest_old, sizeof(*old_out)) < 0)
+        return _EFAULT;
+    return 0;
+}
+
+// Sets the kernel's disposition and the block bit that goes with it.
+static int nlibc_set_disposition(int guest_sig, nlibc_sighandler handler) {
+    NATIVE_FRAME;
+    // The kernel only ever sees SIG_DFL or SIG_IGN from a native program; a
+    // real handler is ours to run, and the kernel's default action for it must
+    // not fire in the meantime, which is what the block below is for.
+    struct sigaction_ act = {
+        .handler = handler == SIG_IGN ? SIG_IGN_ : SIG_DFL_,
+    };
+    guest_addr_t guest_act = native_scratch_put(&act, sizeof(act));
+    if (guest_act == 0)
+        return _ENOMEM;
+    sqword_t res = native_syscall(NATIVE_SYS_rt_sigaction, guest_sig, guest_act, 0,
+            sizeof(sigset_t_));
+    if (res < 0)
+        return (int) res;
+
+    bool ours = handler != SIG_DFL && handler != SIG_IGN;
+    return nlibc_rt_sigprocmask(ours ? SIG_BLOCK_ : SIG_UNBLOCK_,
+            (sigset_t_) 1 << (guest_sig - 1), NULL);
+}
+
+int nlibc_sigaction(int host_sig, const struct sigaction *act, struct sigaction *oact) {
+    if (host_sig <= 0 || host_sig >= NSIG)
+        return nlibc_fail(_EINVAL);
+    int guest_sig = nlibc_signal_to_guest(host_sig);
+    if (guest_sig == 0)
+        return nlibc_fail(_EINVAL);
+
+    if (oact != NULL) {
+        memset(oact, 0, sizeof(*oact));
+        oact->sa_handler = nlibc_handlers[host_sig];
+    }
+    if (act == NULL)
+        return 0;
+
+    // SA_SIGINFO would want a siginfo the kernel cannot hand host code, so the
+    // three-argument form is refused rather than silently called with two.
+    if (act->sa_flags & SA_SIGINFO)
+        return nlibc_fail(_ENOSYS);
+
+    int err = nlibc_set_disposition(guest_sig, act->sa_handler);
+    if (err < 0)
+        return nlibc_fail(err);
+    nlibc_handlers[host_sig] = act->sa_handler;
+    return 0;
+}
+
+nlibc_sighandler nlibc_signal(int host_sig, nlibc_sighandler handler) {
+    if (host_sig <= 0 || host_sig >= NSIG) {
+        nlibc_fail(_EINVAL);
+        return SIG_ERR;
+    }
+    int guest_sig = nlibc_signal_to_guest(host_sig);
+    if (guest_sig == 0) {
+        nlibc_fail(_EINVAL);
+        return SIG_ERR;
+    }
+    nlibc_sighandler previous = nlibc_handlers[host_sig];
+    int err = nlibc_set_disposition(guest_sig, handler);
+    if (err < 0) {
+        nlibc_fail(err);
+        return SIG_ERR;
+    }
+    nlibc_handlers[host_sig] = handler;
+    return previous;
+}
+
+int nlibc_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
+    int guest_how = nlibc_sigmask_how(how);
+    if (guest_how < 0)
+        return nlibc_fail(_EINVAL);
+    // A signal this shim handles must stay blocked whatever the program asks:
+    // unblocking it would let the kernel take the default action for something
+    // the program believes it has a handler for.
+    sigset_t_ guest_set = set != NULL ? nlibc_sigset_to_guest(set) : 0;
+    if (set != NULL && (guest_how == SIG_UNBLOCK_ || guest_how == SIG_SETMASK_)) {
+        for (int sig = 1; sig < NSIG; sig++) {
+            nlibc_sighandler h = nlibc_handlers[sig];
+            if (h == NULL || h == SIG_DFL || h == SIG_IGN)
+                continue;
+            int guest_sig = nlibc_signal_to_guest(sig);
+            if (guest_sig == 0)
+                continue;
+            sigset_t_ bit = (sigset_t_) 1 << (guest_sig - 1);
+            if (guest_how == SIG_UNBLOCK_)
+                guest_set &= ~bit;
+            else
+                guest_set |= bit;
+        }
+    }
+    sigset_t_ old = 0;
+    int err = nlibc_rt_sigprocmask(guest_how, guest_set, oldset != NULL ? &old : NULL);
+    if (err < 0)
+        return nlibc_fail(err);
+    if (oldset != NULL)
+        nlibc_sigset_from_guest(old, oldset);
+    return 0;
+}
+
+int nlibc_sigpending(sigset_t *set) {
+    NATIVE_FRAME;
+    if (set == NULL)
+        return nlibc_fail(_EFAULT);
+    guest_addr_t guest_set = native_scratch_alloc(sizeof(sigset_t_));
+    if (guest_set == 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res = native_syscall(NATIVE_SYS_rt_sigpending, guest_set);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    sigset_t_ pending = 0;
+    if (native_scratch_get(&pending, guest_set, sizeof(pending)) < 0)
+        return nlibc_fail(_EFAULT);
+    nlibc_sigset_from_guest(pending, set);
+    return 0;
+}
+
+// Dequeues one signal from `set`, waiting if `wait` is true. Returns the guest
+// signal number, or a negative errno.
+static int nlibc_sigtake(sigset_t_ set, bool wait) {
+    NATIVE_FRAME;
+    guest_addr_t guest_set = native_scratch_put(&set, sizeof(set));
+    if (guest_set == 0)
+        return _ENOMEM;
+    guest_addr_t guest_timeout = 0;
+    if (!wait) {
+        // The only timespec in this file whose width follows the TASK's ABI
+        // rather than being fixed at 64-bit: sys_rt_sigtimedwait_common reads
+        // it through guest_abi_is_64bit(current->abi), where utimensat, ppoll
+        // and pselect all take the 64-bit shape whatever the task is.
+        if (guest_abi_is_64bit(current->abi)) {
+            struct { sqword_t sec, nsec; } zero = {0, 0};
+            guest_timeout = native_scratch_put(&zero, sizeof(zero));
+        } else {
+            struct { sdword_t sec, nsec; } zero = {0, 0};
+            guest_timeout = native_scratch_put(&zero, sizeof(zero));
+        }
+        if (guest_timeout == 0)
+            return _ENOMEM;
+    }
+    return (int) native_syscall(NATIVE_SYS_rt_sigtimedwait, guest_set, 0,
+            guest_timeout, sizeof(sigset_t_));
+}
+
+int nlibc_sigwait(const sigset_t *set, int *sig) {
+    if (set == NULL || sig == NULL)
+        return EINVAL;   // sigwait reports through its return value, not errno
+    int res = nlibc_sigtake(nlibc_sigset_to_guest(set), true);
+    if (res < 0)
+        return nlibc_host_errno(res);
+    *sig = nlibc_signal_to_host(res);
+    return 0;
+}
+
+// Called from native_checkpoint, which every syscall goes through: this is
+// where a shim-held handler actually runs.
+void nlibc_deliver_signals(void) {
+    // A handler makes syscalls of its own, each of which checkpoints again.
+    static bool delivering;
+    if (delivering)
+        return;
+
+    // Which of ours are pending. Cheap enough not to matter next to the
+    // syscall it precedes, but skipped entirely when nothing is installed.
+    sigset_t_ ours = 0;
+    for (int host_sig = 1; host_sig < NSIG; host_sig++) {
+        nlibc_sighandler h = nlibc_handlers[host_sig];
+        if (h == NULL || h == SIG_DFL || h == SIG_IGN)
+            continue;
+        int guest_sig = nlibc_signal_to_guest(host_sig);
+        if (guest_sig != 0)
+            ours |= (sigset_t_) 1 << (guest_sig - 1);
+    }
+    if (ours == 0)
+        return;
+
+    delivering = true;
+    for (;;) {
+        int guest_sig = nlibc_sigtake(ours, false);
+        if (guest_sig <= 0)
+            break;
+        int host_sig = nlibc_signal_to_host(guest_sig);
+        nlibc_sighandler handler = host_sig > 0 && host_sig < NSIG ?
+                nlibc_handlers[host_sig] : NULL;
+        if (handler != NULL && handler != SIG_DFL && handler != SIG_IGN)
+            handler(host_sig);
+    }
+    delivering = false;
+}
+
+// -------------------------------------------------------------------- session
+//
+// setsid/setpgid change what the KERNEL records for the task, so there is
+// nothing to translate -- these are the plainest possible case for routing
+// through the dispatcher, and they were unreachable before it.
+
+pid_t nlibc_setsid(void) {
+    return (pid_t) nlibc_ret(native_syscall(NATIVE_SYS_setsid));
+}
+int nlibc_setpgid(pid_t pid, pid_t pgid) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_setpgid, pid, pgid));
+}
+pid_t nlibc_getpgid(pid_t pid) {
+    return (pid_t) nlibc_ret(native_syscall(NATIVE_SYS_getpgid, pid));
+}
+pid_t nlibc_getsid(pid_t pid) {
+    return (pid_t) nlibc_ret(native_syscall(NATIVE_SYS_getsid, pid));
 }
 
 // --------------------------------------------------------------- environment

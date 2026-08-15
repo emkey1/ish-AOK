@@ -131,6 +131,23 @@ struct passwd *nlibc_getpwnam(const char *name);
 struct group *nlibc_getgrgid(gid_t gid);
 struct group *nlibc_getgrnam(const char *name);
 
+/* Signals. A handler is host code, so it cannot be given to the kernel to jump
+ * to; SIG_DFL/SIG_IGN reach the kernel and a real handler is held here and run
+ * at the next syscall. See the block comment in the .c for what that costs. */
+int nlibc_sigaction(int sig, const struct sigaction *act, struct sigaction *oact);
+void (*nlibc_signal(int sig, void (*handler)(int)))(int);
+int nlibc_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
+int nlibc_sigpending(sigset_t *set);
+int nlibc_sigwait(const sigset_t *set, int *sig);
+/* Runs whatever handlers are pending. Called from native_checkpoint. */
+void nlibc_deliver_signals(void);
+
+/* Session and process group: plain kernel state, so plain syscalls. */
+pid_t nlibc_setsid(void);
+int nlibc_setpgid(pid_t pid, pid_t pgid);
+pid_t nlibc_getpgid(pid_t pid);
+pid_t nlibc_getsid(pid_t pid);
+
 /* Environment: the GUEST's, not the host process's. `env` printed the Mac's
  * before this, and the PATH search for a child walked the Mac's directories. */
 char **nlibc_environ(void);
@@ -321,6 +338,16 @@ pid_t nlibc_wait(int *status);
  * declaration of this function, and every use of `environ` becomes a call to
  * it, which is what keeps two concurrently-running native programs from
  * sharing one environment. */
+#define sigaction(a, b, c)       nlibc_sigaction((a), (b), (c))
+#define signal                   nlibc_signal
+#define sigprocmask              nlibc_sigprocmask
+#define sigpending               nlibc_sigpending
+#define sigwait                  nlibc_sigwait
+#define setsid                   nlibc_setsid
+#define setpgid                  nlibc_setpgid
+#define getpgid                  nlibc_getpgid
+#define getsid                   nlibc_getsid
+
 #define environ                  nlibc_environ()
 #define getenv                   nlibc_getenv
 #define setenv                   nlibc_setenv

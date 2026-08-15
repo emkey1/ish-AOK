@@ -141,24 +141,3 @@ pid_t smallcluePlatformSpawn(const SmallclueSpawnRequest *request) {
     errno = last_err;
     return -1;
 }
-
-// gzip/gunzip/zcat and tar live in gzip_app.c and tar_app.c, both excluded
-// because they are the only files needing zlib and the Xcode app targets link
-// the meson archives without it. Re-enabling means adding libz.tbd to those
-// targets first. tar reaches zlib even for uncompressed archives.
-int smallclueGzipCommand(int argc, char **argv);
-int smallclueGunzipCommand(int argc, char **argv);
-int smallclueZcatCommand(int argc, char **argv);
-int smallclueTarCommand(int argc, char **argv);
-int smallclueGzipCommand(int argc, char **argv) {
-    (void) argc; (void) argv; return smallclue_not_built("gzip");
-}
-int smallclueGunzipCommand(int argc, char **argv) {
-    (void) argc; (void) argv; return smallclue_not_built("gunzip");
-}
-int smallclueZcatCommand(int argc, char **argv) {
-    (void) argc; (void) argv; return smallclue_not_built("zcat");
-}
-int smallclueTarCommand(int argc, char **argv) {
-    (void) argc; (void) argv; return smallclue_not_built("tar");
-}
