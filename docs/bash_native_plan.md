@@ -275,6 +275,77 @@ the exclusion list from what the shim refuses. It is now down to 10 applets
 from 34, and `bash` should be run through the same reasoning rather than
 judged by eye.
 
+## The fork work, as it now stands (2026-08-15, after building it)
+
+Native bash is in the app and runs, and `fork` turned out to matter more
+immediately than this document implied. `/etc/profile` line 4 is
+
+    if [ "$(id -u)" -eq 0 ]; then
+
+-- command substitution on the first executable line of the first file any
+login shell reads. And bash does not treat a failed fork as a warning:
+jobs.c's make_child does `sys_error("fork")` then `throw_to_top_level()`, which
+ends the shell. So the observable behaviour is an instant exit, and native bash
+is not usable as a shell until this is done. It is fine for `bash -c` of
+anything that does not fork.
+
+### Two tiers, because one of them cannot be general
+
+**Tier 1 -- general, and not bash's problem.** Implement `posix_spawn` and
+`posix_spawnp` in the shim over `native_spawn_opts`, which already does the
+file-actions work. Any program using them then needs NO patch, which retires
+the per-program spawn seams -- SmallCLUE has one, Nextvi needed one added
+upstream today, and that is the per-instance pattern this project already
+learned to reject once with check-native-libc.py.
+
+**Tier 2 -- re-launch, and necessarily bash-specific**, because only bash can
+serialize bash's state.
+
+### Explicitly NOT the vfork trick
+
+`sigsetjmp` at the fork point, run the "child" on the caller's own thread, and
+have exec snapshot the descriptors and spawn for real. It would make raw
+fork-then-exec work with no patches anywhere. It is rejected because its
+failure mode when a program forks and does NOT exec is silent corruption of the
+parent -- and a loud refusal has been the right answer every other time this
+codebase has faced that choice. `nlibc_fork` returning ENOSYS is ugly and never
+wrong.
+
+### The serializer, confirmed against the source
+
+bash already has every primitive, and each returns a STRING rather than
+printing, so the state can be built into a buffer with bash's own quoting
+rather than a second implementation of it:
+
+| what | primitive |
+|---|---|
+| every variable, exported or not | `all_shell_variables()` (variables.c) |
+| every function | `all_shell_functions()` |
+| scalar value, quoted to read back | `sh_single_quote()`, `ansic_quote()` |
+| indexed array | `array_to_assign()` (array.c) |
+| associative array | `assoc_to_assign()` (assoc.c) |
+| function definition | `named_function_string()` (print_cmd.c) |
+
+`print_assignment()` in variables.c is the model for which of these applies to
+a given SHELL_VAR; it writes to stdout, which is why this is a buffer-building
+sibling of it rather than a reuse of it.
+
+Transfer is over a dedicated pipe rather than the environment -- no size limit,
+and nothing leaks into the child's actual environment. The child learns to read
+it from one variable naming the descriptor, checked in bash's startup.
+
+### Order
+
+Command substitution first: it is the most common, the most clearly one-way,
+and the thing that unblocks `/etc/profile`. Then subshells, then pipelines,
+then coprocesses and process substitution.
+
+The fast path for `$(single external command)` -- spawn it directly with stdout
+on a pipe, no bash re-launch -- is worth having AFTERWARDS as an optimisation
+(it saves a shell startup), but it is not a stepping stone toward this and was
+wrongly described as one: it builds on `native_spawn_opts`, which already
+exists, and shares no machinery with the re-launch.
+
 ## Where the source lives
 
 A submodule at `deps/bash`, pinning a repo of our own — the same arrangement as
