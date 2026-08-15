@@ -1,25 +1,27 @@
 #!/usr/bin/env python3
-"""Fail the build if natively-compiled guest programs still reference the host
-libc for anything filesystem- or process-shaped.
+"""Fail the build when a natively-compiled program can reach the host kernel.
 
-Why this exists
----------------
-A program compiled into iSH-AOK to run as host code (kernel/native.h) links
-against the HOST libc. If such a program calls open()/stat()/opendir()
-directly, it resolves against the iOS filesystem instead of the guest's rootfs
--- and *succeeds*, reading the wrong file. Silent wrongness, not a crash.
+Why an ALLOWLIST
+----------------
+A program compiled into iSH-AOK (kernel/native.h) links against the HOST libc,
+so a direct open()/getuid()/socket() resolves against iOS instead of the guest
+-- and *succeeds*, returning the wrong answer. Silent wrongness, not a crash.
 
-That risk cannot be managed by reading the code: smallclue alone is ~120k lines
-with several hundred such calls, and a single missed one is invisible until it
-corrupts something. So the redirection is enforced mechanically here instead:
-every symbol below must be routed through kernel/native_io.h, and anything
-still undefined-and-referenced at link time fails the build.
+This began as a denylist of calls to forbid, and that was wrong in a way that
+kept repeating. It was written for filesystem calls; then it had to grow for
+process control, then host-global state, then system identity when `uname`
+reported Darwin, then user identity when `whoami` answered "mobile" -- the iOS
+account. Every one of those was found by a person running the thing, never by
+this tool, because a denylist only knows the categories someone already
+thought of.
 
-Note this cannot be solved by path rewriting the way PSCAL's iOS app does it
-(common/path_truncate.h expands a virtual path into a real one and then uses
-plain libc). iSH's guest filesystem is a fakefs -- mangled names plus a
-meta.db -- so no real path exists for libc to open. Every call has to go
-through the VFS.
+So the polarity is inverted. Anything referenced that is not on the allowlist
+below fails the build. The allowlist holds only what has no kernel state at
+all: arithmetic, memory, strings, formatting, sorting. Adding to it is a
+deliberate act asserting "this genuinely cannot observe the host".
+
+The failure mode is the point: a missed call becomes a build error naming the
+symbol, instead of a guest quietly reading the device.
 
 Usage: check-native-libc.py <object-or-archive> [...]
 """
@@ -27,87 +29,115 @@ import re
 import subprocess
 import sys
 
-# Anything that resolves a path, touches a descriptor, or asks the OS about a
-# file. Deliberately broad: a false positive costs one redirect, a false
-# negative costs silent host-filesystem access.
-DENIED = {
-    # path -> object
-    "open", "openat", "creat", "fopen", "freopen", "opendir", "fdopendir",
-    "access", "faccessat", "stat", "lstat", "fstat", "fstatat", "statfs",
-    "statvfs", "realpath", "readlink", "readlinkat", "glob",
-    # directory walk
-    "readdir", "readdir_r", "closedir", "rewinddir", "seekdir", "telldir",
-    "scandir", "ftw", "nftw", "fts_open",
-    # mutation
-    "unlink", "unlinkat", "rmdir", "mkdir", "mkdirat", "rename", "renameat",
-    "link", "linkat", "symlink", "symlinkat", "chmod", "fchmod", "fchmodat",
-    "chown", "lchown", "fchown", "truncate", "ftruncate", "utimes",
-    "utimensat", "futimes", "mknod", "mkfifo", "mkstemp", "mkdtemp",
-    # descriptor io
-    "read", "pread", "readv", "write", "pwrite", "writev", "close", "lseek",
-    "dup", "dup2", "fcntl", "ioctl", "select", "poll", "pipe",
-    # cwd / process
-    "getcwd", "chdir", "fchdir", "chroot", "fork", "vfork", "execv", "execve",
-    "execvp", "execl", "execlp", "system", "popen", "pclose", "waitpid",
-    "wait", "kill",
-    # Host-global state. Not filesystem calls, but the same class of mistake
-    # and worse consequences: on a host build these reach the developer's own
-    # clock, hostname, mount table and power state.
-    "clock_settime", "settimeofday", "adjtime", "sethostname", "setdomainname",
-    "reboot", "mount", "unmount", "umount", "swapon", "swapoff",
-    # Mount-table enumeration: unredirected, df listed the HOST's volumes.
-    "getmntinfo", "getfsstat", "setmntent", "getmntent",
-    # System identity: unredirected, uname reported Darwin and the Mac's host.
-    "uname", "gethostname", "getdomainname", "sysctl", "sysctlbyname",
-    # Process exit: the host's exit() ends the APP, not the task. A plain
-    # exit() in an applet terminated iSH-AOK itself.
-    "exit", "_exit", "_Exit", "abort",
-    # Identity: whoami answered "mobile", the iOS account, because every one of
-    # these asked the device rather than the guest.
-    "getuid", "geteuid", "getgid", "getegid", "getpid", "getppid",
-    "getgroups", "setuid", "setgid", "initgroups", "getlogin",
-    "getpwuid", "getpwnam", "getgrgid", "getgrnam", "getpwent", "getgrent",
+# No kernel state: pure computation over memory the caller already owns.
+PURE = {
+    # memory and strings
+    "memcpy", "memmove", "memset", "memcmp", "memchr", "bcopy", "bzero", "bcmp",
+    "strlen", "strnlen", "strcpy", "strncpy", "strcat", "strncat", "strcmp",
+    "strncmp", "strcasecmp", "strncasecmp", "strchr", "strrchr", "strstr",
+    "strcasestr", "strdup", "strndup", "strspn", "strcspn", "strpbrk", "strtok",
+    "strtok_r", "strsep", "strerror", "strsignal", "basename", "dirname",
+    "fnmatch", "mbrtowc", "wcwidth", "swab",
+    # allocation
+    "malloc", "calloc", "realloc", "free", "reallocf", "posix_memalign",
+    "open_memstream",   # memory-backed FILE; touches nothing
+    # conversion and maths
+    "atoi", "atol", "atoll", "atof", "strtol", "strtoll", "strtoul", "strtoull",
+    "strtod", "strtof", "abs", "labs", "llabs", "qsort", "qsort_r", "bsearch",
+    "sin", "cos", "tan", "atan", "atan2", "exp", "log", "log2", "log10", "pow",
+    "sqrt", "fmod", "floor", "ceil", "round", "trunc", "fabs", "ldexp", "frexp",
+    "rand", "rand_r", "srand", "random", "arc4random", "arc4random_uniform",
+    # ctype
+    "isalnum", "isalpha", "isascii", "isblank", "iscntrl", "isdigit", "isgraph",
+    "islower", "isprint", "ispunct", "isspace", "isupper", "isxdigit",
+    "tolower", "toupper",
+    # Formatting, and FILE* operations. Safe only because fopen/fdopen/stdout/
+    # stderr/stdin are all redirected, so every FILE* a native program holds is
+    # one the shim created over a guest fd.
+    "snprintf", "vsnprintf", "sprintf", "vsprintf", "sscanf", "vsscanf",
+    "asprintf", "vasprintf", "fprintf", "vfprintf", "fputs", "fputc", "putc",
+    "fwrite", "fread", "fgets", "fgetc", "getc", "ungetc", "fclose", "fflush",
+    "ferror", "feof", "clearerr", "fileno", "rewind", "fseek", "fseeko",
+    "ftell", "ftello", "setvbuf", "setbuf", "funopen", "fscanf", "getline",
+    "getdelim", "getchar",
+    # option parsing: operates on the argv it is handed
+    "getopt", "getopt_long", "optarg", "optind", "opterr", "optopt", "optreset",
+    "regcomp", "regexec", "regerror", "regfree",
+    # locale and time FORMATTING. Reading the clock is below; setting it is
+    # redirected.
+    "setlocale", "localeconv", "strftime", "strptime", "mktime", "timegm",
+    "gmtime", "gmtime_r", "localtime", "localtime_r", "difftime", "asctime",
+    "ctime", "tzset",
+    # Thread primitives. Creation is redirected -- a new thread needs the task
+    # propagated onto it -- but locking and joining touch nothing the guest can
+    # observe.
+    "pthread_mutex_init", "pthread_mutex_destroy", "pthread_mutex_lock",
+    "pthread_mutex_unlock", "pthread_mutex_trylock", "pthread_cond_init",
+    "pthread_cond_destroy", "pthread_cond_wait", "pthread_cond_signal",
+    "pthread_cond_broadcast", "pthread_cond_timedwait", "pthread_join",
+    "pthread_detach", "pthread_self", "pthread_equal", "pthread_attr_init",
+    "pthread_attr_destroy", "pthread_attr_setstacksize",
+    "pthread_attr_setdetachstate", "pthread_once", "pthread_key_create",
+    "pthread_getspecific", "pthread_setspecific",
+    # non-local jumps: control flow within the program
+    "setjmp", "longjmp", "sigsetjmp", "siglongjmp", "_setjmp", "_longjmp",
+    # Reading the clock. The guest's time IS the host's, so this is not a leak.
+    "clock_gettime", "gettimeofday", "time", "clock",
 }
 
-SKIP_PREFIXES = ("__",)
+# Compiler and runtime plumbing rather than calls the program made.
+INTERNAL_PREFIXES = ("__", "_tlv_", "_os_", "_platform_")
+INTERNAL = {"dyld_stub_binder"}
+
+# Provided by AOK itself, by the shim, or by the program.
+OURS = re.compile(r"^(nlibc_|native_|task_|do_|f_get|f_install|f_close|"
+                  r"generic_|mount_|fd_|lock$|unlock$|current$|smallclue|"
+                  r"pscal|awk|nextvi|micro_|dvtm_)")
 
 
-def undefined_symbols(path):
-    out = subprocess.run(["nm", "-ju", path], capture_output=True, text=True)
+def _symbols(path, args):
+    out = subprocess.run(["nm"] + args + [path], capture_output=True, text=True)
     syms = set()
     for line in out.stdout.splitlines():
         s = line.strip()
-        if not s:
+        if not s or s.endswith(":"):     # nm prints a header per object
             continue
         s = re.sub(r"^_", "", s)
-        s = re.sub(r"\$.*$", "", s)  # realpath$DARWIN_EXTSN and friends
-        if s.startswith(SKIP_PREFIXES):
-            continue
+        s = re.sub(r"\$.*$", "", s)      # realpath$DARWIN_EXTSN and friends
         syms.add(s)
     return syms
 
 
 def main():
     if len(sys.argv) < 2:
-        print(__doc__.strip().splitlines()[-1], file=sys.stderr)
+        print("usage: check-native-libc.py <object-or-archive> [...]", file=sys.stderr)
         return 2
 
-    offenders = {}
+    referenced, defined = set(), set()
     for path in sys.argv[1:]:
-        for sym in sorted(undefined_symbols(path) & DENIED):
-            offenders.setdefault(sym, []).append(path)
+        referenced |= _symbols(path, ["-ju"])
+        defined |= _symbols(path, ["-jUg"])
+
+    external = {
+        s for s in referenced - defined
+        if not s.startswith(INTERNAL_PREFIXES) and s not in INTERNAL
+        and not OURS.match(s)
+    }
+    offenders = sorted(external - PURE)
 
     if not offenders:
-        print("check-native-libc: clean, no un-redirected host libc calls")
+        print(f"check-native-libc: clean "
+              f"({len(external)} host symbols referenced, all pure)")
         return 0
 
-    print("check-native-libc: FAIL -- these reach the HOST filesystem, not the "
-          "guest's:", file=sys.stderr)
-    for sym, paths in sorted(offenders.items()):
-        where = ", ".join(p.split("/")[-1] for p in sorted(set(paths))[:4])
-        print(f"  {sym:16s} {where}", file=sys.stderr)
+    print("check-native-libc: FAIL -- these reach the HOST, not the guest:",
+          file=sys.stderr)
+    for sym in offenders:
+        print(f"  {sym}", file=sys.stderr)
     print(f"\n{len(offenders)} symbol(s). Route each through "
-          f"kernel/native_io.h.", file=sys.stderr)
+          f"kernel/native_libc.h, or -- only if it genuinely cannot observe "
+          f"the host -- add it to PURE in this file, deliberately.",
+          file=sys.stderr)
     return 1
 
 
