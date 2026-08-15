@@ -141,3 +141,40 @@ pid_t smallcluePlatformSpawn(const SmallclueSpawnRequest *request) {
     errno = last_err;
     return -1;
 }
+
+// tar/gzip/gunzip/zcat live in tar_app.c and gzip_app.c, both excluded from the
+// build (meson.build), so their applet-table entries need definitions here.
+//
+// The reason is NOT the zlib link line, which is easy -- `-lz` in
+// app/Project.xcconfig plus the dependency in meson.build, and it builds. It is
+// that zlib itself is a system dylib compiled against the HOST libc, so its
+// gzopen/gzread/gzwrite call the host's open/read/write on whatever descriptor
+// or path they are handed. A guest fd number means something unrelated over
+// there, and a guest path resolves against iOS.
+//
+// That failure is invisible wherever a path exists on both sides: gzipping
+// something under /tmp round-trips perfectly, because zlib quietly did the
+// whole thing on the HOST's /tmp. Against a guest-only path it fails outright
+// -- `gzip /pscal/zt/g.txt` reports "failed to open compressed output" and
+// produces nothing in the guest.
+//
+// Fixing it means giving zlib guest-backed I/O rather than fds: gzdopen over a
+// funopen-style bridge, or the raw inflate/deflate API driven by the shim's own
+// read/write. Until then these refuse honestly.
+int smallclueTarCommand(int argc, char **argv);
+int smallclueGzipCommand(int argc, char **argv);
+int smallclueGunzipCommand(int argc, char **argv);
+int smallclueZcatCommand(int argc, char **argv);
+
+int smallclueTarCommand(int argc, char **argv) {
+    (void) argc; (void) argv; return smallclue_not_built("tar");
+}
+int smallclueGzipCommand(int argc, char **argv) {
+    (void) argc; (void) argv; return smallclue_not_built("gzip");
+}
+int smallclueGunzipCommand(int argc, char **argv) {
+    (void) argc; (void) argv; return smallclue_not_built("gunzip");
+}
+int smallclueZcatCommand(int argc, char **argv) {
+    (void) argc; (void) argv; return smallclue_not_built("zcat");
+}
