@@ -95,3 +95,17 @@ At the time of writing the suite aborts on the first file.
   implemented`. Candidates are process substitution (subst.c:6536), the
   coprocess (execute_cmd.c:2421), and the null command in a pipeline
   (execute_cmd.c:4107).
+
+## One more defect, from the same audit
+
+**A failed spawn is reported to the script as success.**
+`execute_cmd.c` ~5681: when `aok_spawn_disk_command` returns -1 the code sets
+`p = NULL` and carries on. Upstream's fork-failure path — `sys_error("fork")`,
+`terminate_current_pipeline()`, `throw_to_top_level()` — is never reached, so a
+command that could not be started looks like one that ran and succeeded.
+
+That is the silent-wrongness shape this codebase exists to avoid, and it should
+be fixed alongside the re-entry globals. Verified by the audit against the
+source; the exit-status path itself is otherwise correct — `/bin/false; echo $?`
+now prints 1 and `/bin/true` prints 0, which is the check that the wait fix
+works (before it, `false` reported 0).
