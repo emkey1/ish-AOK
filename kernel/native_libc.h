@@ -204,6 +204,25 @@ int nlibc_tcsetattr(int fd, int action, const struct termios *in);
 int nlibc_isatty(int fd);
 int nlibc_ioctl_tty(int fd, unsigned long request, void *arg);
 
+int nlibc_tcflush(int fd, int queue);
+int nlibc_tcdrain(int fd);
+
+/* The pty. AOK has /dev/ptmx and devpts already (fs/pty.c); this is what makes
+ * them reachable from host code, which is what a native shell needs to run a
+ * job under a terminal of its own. */
+int nlibc_posix_openpt(int flags);
+int nlibc_grantpt(int fd);
+int nlibc_unlockpt(int fd);
+char *nlibc_ptsname(int fd);
+char *nlibc_ttyname(int fd);
+
+/* Odds and ends that answered about the host: its /tmp, its CPU count, its
+ * page size, its resource usage. */
+FILE *nlibc_tmpfile(void);
+void nlibc_globfree(void *pglob);
+long nlibc_sysconf(int name);
+int nlibc_getrusage(int who, void *usage);
+
 /* Threads a native program creates inherit the creating task; see the .c. */
 #include <pthread.h>
 int nlibc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
@@ -338,6 +357,18 @@ pid_t nlibc_wait(int *status);
  * declaration of this function, and every use of `environ` becomes a call to
  * it, which is what keeps two concurrently-running native programs from
  * sharing one environment. */
+#define tcflush                  nlibc_tcflush
+#define tcdrain                  nlibc_tcdrain
+#define posix_openpt             nlibc_posix_openpt
+#define grantpt                  nlibc_grantpt
+#define unlockpt                 nlibc_unlockpt
+#define ptsname                  nlibc_ptsname
+#define ttyname                  nlibc_ttyname
+#define tmpfile                  nlibc_tmpfile
+#define globfree                 nlibc_globfree
+#define sysconf                  nlibc_sysconf
+#define getrusage(a, b)          nlibc_getrusage((a), (b))
+
 #define sigaction(a, b, c)       nlibc_sigaction((a), (b), (c))
 #define signal                   nlibc_signal
 #define sigprocmask              nlibc_sigprocmask

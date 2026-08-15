@@ -1385,6 +1385,232 @@ int nlibc_isatty(int fd_no) {
     return 1;
 }
 
+// Queue selectors: Darwin numbers them 1/2/3, the guest 0/1/2 (fs/tty.h).
+static int nlibc_tcflush_queue(int host_queue) {
+    switch (host_queue) {
+        case TCIFLUSH:  return TCIFLUSH_;
+        case TCOFLUSH:  return TCOFLUSH_;
+        case TCIOFLUSH: return TCIOFLUSH_;
+        default:        return -1;
+    }
+}
+
+int nlibc_tcflush(int fd_no, int queue) {
+    int guest_queue = nlibc_tcflush_queue(queue);
+    if (guest_queue < 0)
+        return nlibc_fail(_EINVAL);
+    // TCFLSH takes its argument by value rather than by pointer -- AOK's
+    // tty_ioctl_size reports 0 bytes for it -- so there is nothing to marshal.
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_ioctl, fd_no, TCFLSH_, guest_queue));
+}
+
+// tcdrain waits for queued output to be written. AOK's tty has no output
+// queue to drain: fs/tty.c hands a write to the driver before returning, so
+// by the time the caller reaches here the data is already gone. Succeeding is
+// the accurate answer rather than a convenient one -- and it has no TCSBRK to
+// forward to in any case.
+int nlibc_tcdrain(int fd_no) {
+    (void) fd_no;
+    return 0;
+}
+
+// ------------------------------------------------------------------ the pty
+//
+// AOK has the whole mechanism already -- /dev/ptmx, devpts, TIOCGPTN and
+// TIOCSPTLCK (fs/pty.c) -- it was just unreachable from host code. This is
+// what a native shell needs before it can run a job under a terminal of its
+// own, which is exactly the piece exsh is waiting on.
+
+int nlibc_posix_openpt(int flags) {
+    return nlibc_open("/dev/ptmx", flags);
+}
+
+// Linux's grantpt has nothing to do: devpts creates the slave with the right
+// owner and mode when the master is opened. glibc's is a no-op too.
+int nlibc_grantpt(int fd_no) {
+    (void) fd_no;
+    return 0;
+}
+
+int nlibc_unlockpt(int fd_no) {
+    dword_t unlock = 0;
+    return nlibc_tty_ioctl(fd_no, TIOCSPTLCK_, &unlock, sizeof(unlock), false);
+}
+
+char *nlibc_ptsname(int fd_no) {
+    // ptsname's contract is a pointer into storage the caller does not own,
+    // valid until the next call.
+    static char name[32];
+    dword_t number = 0;
+    if (nlibc_tty_ioctl(fd_no, TIOCGPTN_, &number, sizeof(number), true) < 0)
+        return NULL;
+    snprintf(name, sizeof(name), "/dev/pts/%u", number);
+    return name;
+}
+
+// The guest's own answer, through /proc/self/fd -- AOK's procfs makes each
+// descriptor a symlink to what it points at (fs/proc/pid.c), which is how
+// ttyname is implemented on Linux too.
+char *nlibc_ttyname(int fd_no) {
+    static char name[MAX_PATH];
+    if (!nlibc_isatty(fd_no)) {
+        errno = ENOTTY;
+        return NULL;
+    }
+    char link[64];
+    snprintf(link, sizeof(link), "/proc/self/fd/%d", fd_no);
+    ssize_t len = nlibc_readlink(link, name, sizeof(name) - 1);
+    if (len < 0)
+        return NULL;
+    name[len] = '\0';
+    return name;
+}
+
+// ------------------------------------------------------------- odds and ends
+
+// tmpfile() creates its file in the HOST's /tmp and hands back a host FILE*.
+// The guest has its own /tmp, and this is the only sensible place for it.
+FILE *nlibc_tmpfile(void) {
+    char path[64];
+    for (int attempt = 0; attempt < 128; attempt++) {
+        snprintf(path, sizeof(path), "/tmp/nlibc-%d-%d", (int) nlibc_getpid(), rand());
+        int fd = nlibc_open(path, O_RDWR | O_CREAT | O_EXCL, 0600);
+        if (fd < 0) {
+            if (errno == EEXIST)
+                continue;
+            return NULL;
+        }
+        // Unlinked immediately, as tmpfile's contract requires: the file lives
+        // exactly as long as the descriptor.
+        nlibc_unlink(path);
+        FILE *f = nlibc_fdopen(fd, "w+");
+        if (f == NULL)
+            nlibc_close(fd);
+        return f;
+    }
+    errno = EEXIST;
+    return NULL;
+}
+
+// glob() refuses, so a glob_t never holds anything of ours to release. Freeing
+// the host's idea of one would be reading a structure nothing ever filled in.
+void nlibc_globfree(void *pglob) {
+    (void) pglob;
+}
+
+// sysinfo's struct is the other one whose width follows the TASK's ABI
+// (kernel/uname.c), so it is read back in whichever shape that guest uses.
+// Only the two fields sysconf needs are lifted out.
+static int nlibc_guest_sysinfo(uint64_t *totalram, unsigned *procs) {
+    NATIVE_FRAME;
+    bool wide = guest_abi_is_64bit(current->abi);
+    size_t size = wide ? sizeof(struct amd64_sys_info) : sizeof(struct sys_info);
+    guest_addr_t guest_info = native_scratch_alloc(size);
+    if (guest_info == 0)
+        return _ENOMEM;
+    sqword_t res = native_syscall(NATIVE_SYS_sysinfo, guest_info);
+    if (res < 0)
+        return (int) res;
+    if (wide) {
+        struct amd64_sys_info info;
+        if (native_scratch_get(&info, guest_info, sizeof(info)) < 0)
+            return _EFAULT;
+        *totalram = info.totalram * (info.mem_unit > 0 ? info.mem_unit : 1);
+        *procs = info.procs;
+    } else {
+        struct sys_info info;
+        if (native_scratch_get(&info, guest_info, sizeof(info)) < 0)
+            return _EFAULT;
+        *totalram = (uint64_t) info.totalram * (info.mem_unit > 0 ? info.mem_unit : 1);
+        *procs = info.procs;
+    }
+    return 0;
+}
+
+// sysconf answers about the HOST: its page size, its CPU count, its clock
+// tick. Only the values a program actually asks for are answered, from the
+// guest; anything else fails rather than reporting the Mac's.
+long nlibc_sysconf(int name) {
+    switch (name) {
+        case _SC_PAGESIZE:
+            return 4096;   // the guest's page size (emu/mmu.h), not the host's
+        case _SC_CLK_TCK:
+            return 100;    // what AOK's /proc/<pid>/stat counts in
+        case _SC_OPEN_MAX:
+            return 1024;
+        case _SC_NPROCESSORS_CONF:
+        case _SC_NPROCESSORS_ONLN: {
+            unsigned procs = 0;
+            uint64_t ram = 0;
+            if (nlibc_guest_sysinfo(&ram, &procs) == 0 && procs > 0)
+                return (long) procs;
+            return 1;
+        }
+        case _SC_PHYS_PAGES: {
+            unsigned procs = 0;
+            uint64_t ram = 0;
+            if (nlibc_guest_sysinfo(&ram, &procs) < 0) {
+                errno = EINVAL;
+                return -1;
+            }
+            return (long) (ram / 4096);
+        }
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+}
+
+// The guest's rusage layout follows the TASK's ABI -- kernel/resource.c's
+// write_guest_rusage_abi picks between the 64-bit and 32-bit shapes -- so
+// unlike everything else here, this reads back in whichever shape the guest
+// image that exec'd would have used.
+int nlibc_getrusage(int who, void *usage) {
+    NATIVE_FRAME;
+    if (usage == NULL)
+        return nlibc_fail(_EFAULT);
+    // RUSAGE_SELF is 0 and RUSAGE_CHILDREN is -1 on both sides.
+    size_t size = guest_abi_is_64bit(current->abi) ?
+            sizeof(struct amd64_rusage_) : sizeof(struct rusage_);
+    guest_addr_t guest_usage = native_scratch_alloc(size);
+    if (guest_usage == 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res = native_syscall(NATIVE_SYS_getrusage, who, guest_usage);
+    if (res < 0)
+        return nlibc_fail((int) res);
+
+    struct rusage *out = usage;
+    memset(out, 0, sizeof(*out));
+    if (guest_abi_is_64bit(current->abi)) {
+        struct amd64_rusage_ guest;
+        if (native_scratch_get(&guest, guest_usage, sizeof(guest)) < 0)
+            return nlibc_fail(_EFAULT);
+        out->ru_utime.tv_sec = guest.utime.sec;
+        out->ru_utime.tv_usec = guest.utime.usec;
+        out->ru_stime.tv_sec = guest.stime.sec;
+        out->ru_stime.tv_usec = guest.stime.usec;
+        out->ru_maxrss = guest.maxrss;
+        out->ru_minflt = guest.minflt;
+        out->ru_majflt = guest.majflt;
+        out->ru_nvcsw = guest.nvcsw;
+        out->ru_nivcsw = guest.nivcsw;
+    } else {
+        struct rusage_ guest;
+        if (native_scratch_get(&guest, guest_usage, sizeof(guest)) < 0)
+            return nlibc_fail(_EFAULT);
+        out->ru_utime.tv_sec = guest.utime.sec;
+        out->ru_utime.tv_usec = guest.utime.usec;
+        out->ru_stime.tv_sec = guest.stime.sec;
+        out->ru_stime.tv_usec = guest.stime.usec;
+        out->ru_maxrss = guest.maxrss;
+        out->ru_minflt = guest.minflt;
+        out->ru_majflt = guest.majflt;
+        out->ru_nvcsw = guest.nvcsw;
+        out->ru_nivcsw = guest.nivcsw;
+    }
+    return 0;
+}
+
 // --------------------------------------------------- threads a program makes
 //
 // A native program may create its own pthreads -- SmallCLUE runs its editor on
