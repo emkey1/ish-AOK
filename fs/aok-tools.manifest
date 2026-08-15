@@ -11,6 +11,7 @@
 # here -- the next build picks it up automatically. Order here is the order
 # shown by `ls /AOK/tools` (after the bundled iSH_benchmark entries).
 
+native-links.sh
 provision-ultimate-alpine.sh
 provision-ultimate-devuan.sh
 provision-ultimate-archlinux.sh
