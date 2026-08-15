@@ -136,6 +136,11 @@ int sc_sysctl(int *name, unsigned namelen, void *old, size_t *oldlen,
 int sc_sysctlbyname(const char *name, void *old, size_t *oldlen,
                     const void *newp, size_t newlen);
 
+/* Interruptible waits -- see the block comment in the .c. */
+unsigned int sc_sleep(unsigned int seconds);
+int sc_usleep(unsigned int usec);
+int sc_nanosleep(const struct timespec *req, struct timespec *rem);
+
 /* --- process ------------------------------------------------------------ */
 /* There is one host process, so these create real guest tasks instead. */
 int sc_execv(const char *path, char *const argv[]);
@@ -240,6 +245,9 @@ pid_t sc_wait(int *status);
 #define uname(a)                 sc_uname((a))
 #define sysctl                   sc_sysctl
 #define sysctlbyname             sc_sysctlbyname
+#define sleep                    sc_sleep
+#define usleep                   sc_usleep
+#define nanosleep                sc_nanosleep
 
 #endif /* !SMALLCLUE_SHIM_NO_REDIRECT */
 

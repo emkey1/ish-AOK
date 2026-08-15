@@ -11,6 +11,7 @@
 #include "kernel/fs.h"
 #include "kernel/native.h"
 #include "kernel/native_io.h"
+#include "kernel/signal.h"
 #include "kernel/smallclue_shim.h"
 #include "kernel/task.h"
 #include "debug.h"
@@ -354,4 +355,36 @@ void native_exec_run_pending(void) {
     // Same encoding sys_exit_group uses: the wait status carries the exit code
     // in its high byte.
     do_exit_group((status & 0xff) << 8);
+}
+
+// ---------------------------------------------------------------- checkpoint
+
+void native_checkpoint(void) {
+    if (current == NULL)
+        return;
+
+    // Same cheap pre-check the syscall return path uses (kernel/calls.c): read
+    // the pending/blocked sets locklessly and only take the slow path when
+    // something is actually deliverable. This runs on every read and write a
+    // native program makes, so the common case has to cost almost nothing.
+    sigset_t_ pending = __atomic_load_n(&current->pending, __ATOMIC_ACQUIRE);
+    sigset_t_ group_pending = __atomic_load_n(&current->sighand->pending, __ATOMIC_ACQUIRE);
+    sigset_t_ blocked = __atomic_load_n(&current->blocked, __ATOMIC_ACQUIRE);
+    bool has_saved_mask = __atomic_load_n(&current->has_saved_mask, __ATOMIC_ACQUIRE);
+    if (has_saved_mask || ((pending | group_pending) & ~blocked) != 0) {
+        // receive_signals runs the default action, which for SIGINT means
+        // do_exit_group -- so this call may not return, and that is the point:
+        // ^C on a native program has to end it the way it ends any other.
+        receive_signals();
+    }
+
+    // ^Z. A stopped group parks its threads here until SIGCONT, mirroring what
+    // handle_interrupt does for translated code.
+    struct tgroup *group = current->group;
+    if (group->stopped) {
+        lock(&group->lock, 0);
+        while (group->stopped)
+            wait_for_ignore_signals(&group->stopped_cond, &group->lock, NULL);
+        unlock(&group->lock);
+    }
 }

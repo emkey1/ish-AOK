@@ -20,6 +20,7 @@
 #include "kernel/calls.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
+#include "kernel/native.h"
 #include "kernel/native_io.h"
 #include "kernel/smallclue_shim.h"
 #include "kernel/task.h"
@@ -117,6 +118,10 @@ int sc_close(int fd) {
 }
 
 ssize_t sc_read(int fd_no, void *buf, size_t n) {
+    // Every read and write is a yield point, which is what makes a native
+    // program interruptible at all -- see native_checkpoint in kernel/native.h.
+    // A ^C during `top` lands here rather than being ignored forever.
+    native_checkpoint();
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
         return sc_fail(_EBADF);
@@ -125,6 +130,7 @@ ssize_t sc_read(int fd_no, void *buf, size_t n) {
 }
 
 ssize_t sc_write(int fd_no, const void *buf, size_t n) {
+    native_checkpoint();
     ssize_t res = native_write(fd_no, buf, n);
     return res < 0 ? sc_fail((int) res) : res;
 }
@@ -782,4 +788,50 @@ int sc_getmntinfo(struct statfs **mntbufp, int flags) {
     previous = out;
     *mntbufp = out;
     return (int) count;
+}
+
+// ------------------------------------------------------- interruptible waits
+//
+// A host sleep parks the thread with nothing watching for signals, which is
+// the main reason `top` could not be quit: it spends almost all its time in a
+// one-second sleep between refreshes, so ^C had nowhere to land. Sleeping in
+// short slices with a checkpoint between them makes the wait interruptible
+// without changing what the program observes -- it still sleeps the requested
+// time, just in pieces.
+#define SC_SLEEP_SLICE_US 50000  // 50ms: responsive to a keypress, negligible overhead
+
+static int sc_sleep_us(uint64_t total_us) {
+    struct timespec slice;
+    while (total_us > 0) {
+        native_checkpoint();     // may not return, if the signal is fatal
+        uint64_t chunk = total_us < SC_SLEEP_SLICE_US ? total_us : SC_SLEEP_SLICE_US;
+        slice.tv_sec = (time_t) (chunk / 1000000u);
+        slice.tv_nsec = (long) ((chunk % 1000000u) * 1000u);
+        nanosleep(&slice, NULL);
+        total_us -= chunk;
+    }
+    native_checkpoint();
+    return 0;
+}
+
+unsigned int sc_sleep(unsigned int seconds) {
+    sc_sleep_us((uint64_t) seconds * 1000000u);
+    return 0;
+}
+
+int sc_usleep(unsigned int usec) {
+    return sc_sleep_us(usec);
+}
+
+int sc_nanosleep(const struct timespec *req, struct timespec *rem) {
+    if (req == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    sc_sleep_us((uint64_t) req->tv_sec * 1000000u + (uint64_t) (req->tv_nsec / 1000));
+    if (rem != NULL) {
+        rem->tv_sec = 0;
+        rem->tv_nsec = 0;
+    }
+    return 0;
 }

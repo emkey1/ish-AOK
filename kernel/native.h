@@ -66,6 +66,22 @@ int native_exec_set_pending(const struct native_program *prog, int argc,
 // and is therefore reached without any execve syscall returning.
 void native_exec_run_pending(void);
 
+// Poll for pending signals and group-stops, and act on them.
+//
+// A native program runs as host code on the guest task's thread, so nothing
+// checks for signals the way the instruction dispatcher does for translated
+// code: the program is a plain C loop. Without this it is UNINTERRUPTIBLE --
+// ^C and ^Z do nothing, which is how `top` became impossible to quit.
+//
+// Call it from anywhere a native program can block or loop. The libc shim
+// calls it on every read and write, which covers anything doing I/O; a
+// compute loop with no I/O still needs its own call. It may not return: a
+// default-fatal signal exits the task from inside receive_signals.
+//
+// This lives here rather than in the shim because it is a property of running
+// natively, not of any one program -- exsh will need it on the same terms.
+void native_checkpoint(void);
+
 struct task;
 // Drops a record that will never run, for a task torn down between exec and
 // first execution.
