@@ -35,6 +35,8 @@
 #include <sys/mount.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#include <sys/sysctl.h>
+#include <sys/utsname.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -125,6 +127,14 @@ int sc_sethostname(const char *name, size_t len);
 int sc_reboot(int howto);
 int sc_mount(const char *src, const char *tgt, const char *type,
              unsigned long flags, const void *data);
+struct statfs;
+int sc_getmntinfo(struct statfs **mntbufp, int flags);
+struct utsname;
+int sc_uname(struct utsname *buf);
+int sc_sysctl(int *name, unsigned namelen, void *old, size_t *oldlen,
+              const void *newp, size_t newlen);
+int sc_sysctlbyname(const char *name, void *old, size_t *oldlen,
+                    const void *newp, size_t newlen);
 
 /* --- process ------------------------------------------------------------ */
 /* There is one host process, so these create real guest tasks instead. */
@@ -226,6 +236,10 @@ pid_t sc_wait(int *status);
 #define sethostname(a, b)        sc_sethostname((a), (b))
 #define reboot(a)                sc_reboot((a))
 #define mount(a, b, c, d, e)     sc_mount((a), (b), (c), (d), (e))
+#define getmntinfo               sc_getmntinfo
+#define uname(a)                 sc_uname((a))
+#define sysctl                   sc_sysctl
+#define sysctlbyname             sc_sysctlbyname
 
 #endif /* !SMALLCLUE_SHIM_NO_REDIRECT */
 

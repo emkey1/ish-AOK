@@ -55,6 +55,10 @@ DENIED = {
     # clock, hostname, mount table and power state.
     "clock_settime", "settimeofday", "adjtime", "sethostname", "setdomainname",
     "reboot", "mount", "unmount", "umount", "swapon", "swapoff",
+    # Mount-table enumeration: unredirected, df listed the HOST's volumes.
+    "getmntinfo", "getfsstat", "setmntent", "getmntent",
+    # System identity: unredirected, uname reported Darwin and the Mac's host.
+    "uname", "gethostname", "getdomainname", "sysctl", "sysctlbyname",
 }
 
 SKIP_PREFIXES = ("__",)

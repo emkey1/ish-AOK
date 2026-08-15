@@ -27,6 +27,18 @@ static bool mount_trace_elogind(void) {
     return false;
 }
 
+// Filesystem by registered name. fsopen has always done this inline; native
+// programs (kernel/smallclue_shim.c) need the same lookup from outside this
+// file, so it is exported rather than copied.
+const struct fs_ops *fs_lookup(const char *name) {
+    if (name == NULL)
+        return NULL;
+    for (size_t i = 0; i < sizeof(filesystems) / sizeof(filesystems[0]); i++)
+        if (filesystems[i] != NULL && strcmp(filesystems[i]->name, name) == 0)
+            return filesystems[i];
+    return NULL;
+}
+
 void fs_register(const struct fs_ops *fs) {
     for (unsigned i = 0; i < MAX_FILESYSTEMS; i++) {
         if (filesystems[i] == NULL) {
@@ -223,6 +235,61 @@ int do_mount(const struct fs_ops *fs, const char *source, const char *point, con
             break;
     }
     list_add_before(&mount->mounts, &new_mount->mounts);
+    return 0;
+}
+
+// Snapshot the mount table for a caller outside this file. Every traversal of
+// `mounts` lives in here because the lock discipline does -- kernel/fs.h says
+// the lock must be held while traversing, and mount_statfs must NOT be called
+// under it. A native `df` (kernel/smallclue_shim.c) got that wrong in both
+// directions before this existed, and hung.
+//
+// Two passes on purpose: collect the mounts under the lock, then statfs each
+// with the lock dropped. Entries are copied rather than referenced so nothing
+// outlives the lock.
+int mount_snapshot(struct mount_info **out, size_t *count_out) {
+    if (out == NULL || count_out == NULL)
+        return _EINVAL;
+    *out = NULL;
+    *count_out = 0;
+
+    lock(&mounts_lock, 0);
+    size_t count = 0;
+    struct mount *mount;
+    list_for_each_entry(&mounts, mount, mounts)
+        count++;
+    struct mount_info *info = calloc(count > 0 ? count : 1, sizeof(*info));
+    if (info == NULL) {
+        unlock(&mounts_lock);
+        return _ENOMEM;
+    }
+    size_t i = 0;
+    list_for_each_entry(&mounts, mount, mounts) {
+        if (i >= count)
+            break;
+        const char *from = mount->display_source != NULL ? mount->display_source
+                                                         : mount->source;
+        snprintf(info[i].source, sizeof(info[i].source), "%s",
+                 from != NULL ? from : "none");
+        snprintf(info[i].point, sizeof(info[i].point), "%s",
+                 (mount->point != NULL && mount->point[0] != '\0') ? mount->point : "/");
+        snprintf(info[i].type, sizeof(info[i].type), "%s",
+                 mount->fs != NULL && mount->fs->name != NULL ? mount->fs->name : "none");
+        info[i].mount = mount;
+        i++;
+    }
+    unlock(&mounts_lock);
+
+    // Lock dropped: mount_statfs reaches into the filesystem and must not run
+    // under mounts_lock.
+    for (size_t j = 0; j < i; j++) {
+        struct statfsbuf sb = {};
+        if (mount_statfs(info[j].mount, &sb) == 0)
+            info[j].statfs = sb;
+    }
+
+    *out = info;
+    *count_out = i;
     return 0;
 }
 

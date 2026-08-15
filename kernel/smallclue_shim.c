@@ -12,7 +12,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <unistd.h>
 
 #include "kernel/calls.h"
@@ -21,15 +23,67 @@
 #include "kernel/native_io.h"
 #include "kernel/smallclue_shim.h"
 #include "kernel/task.h"
+#include "kernel/uts.h"
+#include "util/list.h"
 #include "fs/fd.h"
 #include "fs/path.h"
 
-// AOK's errno values are negative guest errnos; the host libc wants a positive
-// host errno in `errno`. The numbering matches Linux's, which is what the
-// guest ABI uses, so the translation is just the sign -- but doing it in one
-// place keeps every shim function's error path honest.
+// AOK's errno values are negative LINUX errnos, and the numbering is not the
+// host's. Flipping the sign and storing that in `errno` is wrong the moment
+// the two disagree: SmallCLUE formats its messages with the HOST's strerror,
+// so Linux ENOSYS (38) came out as macOS ENOTSOCK -- which is exactly the
+// "df: /: Socket operation on non-socket" that surfaced this. ENOENT and a
+// handful of others happen to share a number, which is why most errors looked
+// fine and only the unusual ones were nonsense.
+//
+// Anything not listed maps to EINVAL rather than being passed through, so a
+// new guest errno produces a wrong-but-plausible message instead of a wildly
+// misleading one from an unrelated part of the host's table.
+static int sc_host_errno(int guest_err) {
+    switch (guest_err < 0 ? -guest_err : guest_err) {
+        case 1:  return EPERM;
+        case 2:  return ENOENT;
+        case 3:  return ESRCH;
+        case 4:  return EINTR;
+        case 5:  return EIO;
+        case 6:  return ENXIO;
+        case 7:  return E2BIG;
+        case 8:  return ENOEXEC;
+        case 9:  return EBADF;
+        case 10: return ECHILD;
+        case 11: return EAGAIN;
+        case 12: return ENOMEM;
+        case 13: return EACCES;
+        case 14: return EFAULT;
+        case 16: return EBUSY;
+        case 17: return EEXIST;
+        case 18: return EXDEV;
+        case 19: return ENODEV;
+        case 20: return ENOTDIR;
+        case 21: return EISDIR;
+        case 22: return EINVAL;
+        case 23: return ENFILE;
+        case 24: return EMFILE;
+        case 25: return ENOTTY;
+        case 26: return ETXTBSY;
+        case 27: return EFBIG;
+        case 28: return ENOSPC;
+        case 29: return ESPIPE;
+        case 30: return EROFS;
+        case 31: return EMLINK;
+        case 32: return EPIPE;
+        case 33: return EDOM;
+        case 34: return ERANGE;
+        case 36: return ENAMETOOLONG;
+        case 38: return ENOSYS;   // Linux 38 is macOS 78; this is the one that bit
+        case 39: return ENOTEMPTY;
+        case 40: return ELOOP;
+        default: return EINVAL;
+    }
+}
+
 static int sc_fail(int guest_err) {
-    errno = guest_err < 0 ? -guest_err : guest_err;
+    errno = sc_host_errno(guest_err);
     return -1;
 }
 
@@ -152,29 +206,48 @@ ssize_t sc_readlink(const char *path, char *buf, size_t bufsize) {
 }
 
 char *sc_realpath(const char *path, char *resolved) {
-    // Enough for the callers here (readlink -f, watch's exec resolution):
-    // confirm it exists, then hand back the path the VFS would use.
-    struct statbuf sb = {};
-    int err = native_stat(path, &sb, true);
+    // realpath(3)'s contract is that the caller's buffer holds PATH_MAX bytes
+    // -- 1024 on Darwin. AOK's MAX_PATH is 4096, and writing that much into a
+    // caller's PATH_MAX buffer smashed its stack on EVERY call: df's
+    //     char resolved[PATH_MAX]; realpath(query_path, resolved)
+    // aborted in __stack_chk_fail before printing a single row. The two
+    // constants are not interchangeable and the caller's one governs.
+    //
+    // Canonicalisation goes through AOK rather than string-joining: opening
+    // the path and asking for its path is the same resolution the guest gets,
+    // symlinks and mounts included.
+    struct fd *fd = NULL;
+    int err = native_open(path, O_RDONLY_, &fd);
     if (err < 0) {
         sc_fail(err);
         return NULL;
     }
-    char *out = resolved != NULL ? resolved : malloc(MAX_PATH);
-    if (out == NULL) {
-        errno = ENOMEM;
+    char canonical[MAX_PATH];
+    err = generic_getpath(fd, canonical);
+    native_close(fd);
+    if (err < 0) {
+        sc_fail(err);
         return NULL;
     }
-    if (path[0] == '/') {
-        strncpy(out, path, MAX_PATH - 1);
-        out[MAX_PATH - 1] = '\0';
-    } else {
-        char cwd[MAX_PATH];
-        if (native_getcwd(cwd) < 0)
-            cwd[0] = '\0';
-        snprintf(out, MAX_PATH, "%s/%s", cwd, path);
+    if (canonical[0] == '\0')
+        strcpy(canonical, "/");
+
+    size_t need = strlen(canonical) + 1;
+    if (resolved == NULL) {
+        char *out = malloc(need);
+        if (out == NULL) {
+            errno = ENOMEM;
+            return NULL;
+        }
+        memcpy(out, canonical, need);
+        return out;
     }
-    return out;
+    if (need > PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    memcpy(resolved, canonical, need);
+    return resolved;
 }
 
 // ------------------------------------------------------------- directories
@@ -537,7 +610,26 @@ int sc_chroot(const char *p)             { (void) p; return sc_fail(_ENOSYS); } 
 int sc_kill(pid_t p, int s)              { (void) p; (void) s; return sc_fail(_ENOSYS); } // timeout, init
 int sc_mknod(const char *p, mode_t m, dev_t d) { (void) p; (void) m; (void) d; return sc_fail(_ENOSYS); } // mknod
 int sc_futimes(int fd, const struct timeval t[2]) { (void) fd; (void) t; return sc_fail(_ENOSYS); } // touch
-int sc_statfs(const char *p, void *b)    { (void) p; (void) b; return sc_fail(_ENOSYS); } // df
+int sc_statfs(const char *path, void *buf) {
+    struct fd *fd = NULL;
+    int err = native_open(path, O_RDONLY_, &fd);
+    if (err < 0)
+        return sc_fail(err);
+    struct statfsbuf sb = {};
+    err = mount_statfs(fd->mount, &sb);
+    native_close(fd);
+    if (err < 0)
+        return sc_fail(err);
+    struct statfs *out = buf;
+    memset(out, 0, sizeof(*out));
+    out->f_bsize = (uint32_t) (sb.bsize > 0 ? sb.bsize : 4096);
+    out->f_blocks = sb.blocks;
+    out->f_bfree = sb.bfree;
+    out->f_bavail = sb.bavail;
+    out->f_files = sb.files;
+    out->f_ffree = sb.ffree;
+    return 0;
+}
 int sc_glob(const char *p, int f, void *e, void *g) { (void) p; (void) f; (void) e; (void) g; return sc_fail(_ENOSYS); } // shell globbing
 int sc_dup2(int a, int b)                { (void) a; (void) b; return sc_fail(_ENOSYS); } // nohup, micro
 int sc_fcntl(int fd, int cmd, ...)       { (void) fd; (void) cmd; return sc_fail(_ENOSYS); }
@@ -559,15 +651,135 @@ int sc_select(int n, void *r, void *w, void *e, void *tv) {
 //
 // A guest-side implementation would go through AOK's own syscall handlers, not
 // these. Until then, refusing is the only safe answer.
+// A guest cannot move the host's clock, and should not be told it failed
+// either -- the guest's own clock is the host's. Succeed and do nothing,
+// matching what a VM does when the hypervisor owns the timebase.
 int sc_clock_settime(int clk, const struct timespec *ts) {
-    (void) clk; (void) ts; return sc_fail(_EPERM);
+    (void) clk; (void) ts;
+    return 0;
 }
+
+// This genuinely works: AOK namespaces the hostname per task (kernel/uts.h),
+// so setting it changes what the GUEST reports, exactly as it would in a VM,
+// without touching the host's.
 int sc_sethostname(const char *name, size_t len) {
-    (void) name; (void) len; return sc_fail(_EPERM);
+    if (name == NULL)
+        return sc_fail(_EFAULT);
+    if (len >= UTS_NAME_LENGTH)
+        return sc_fail(_EINVAL);
+    struct uts_namespace *ns = current->uts_ns;
+    lock(&ns->lock, 0);
+    memcpy(ns->hostname, name, len);
+    ns->hostname[len] = '\0';
+    unlock(&ns->lock);
+    return 0;
 }
+
+// Not reached today -- SmallCLUE's reboot applet prints and exits without
+// calling this -- but wired rather than left to find the host's reboot(2) if
+// that ever changes. Rebooting a guest has no meaning here; the app is the
+// machine.
 int sc_reboot(int howto) {
-    (void) howto; return sc_fail(_EPERM);
+    (void) howto;
+    return sc_fail(_EPERM);
 }
+
+// Routed to AOK's own mount, so `mount` behaves for a native applet exactly as
+// it does for the guest. do_mount requires mounts_lock to be HELD (kernel/fs.h
+// groups it with the other "must hold mounts_lock while calling these"
+// entries) -- this called it without, which is the kind of thing that only
+// shows up under contention.
 int sc_mount(const char *src, const char *tgt, const char *type, unsigned long f, const void *d) {
-    (void) src; (void) tgt; (void) type; (void) f; (void) d; return sc_fail(_EPERM);
+    (void) d;
+    if (src == NULL || tgt == NULL || type == NULL)
+        return sc_fail(_EFAULT);
+    const struct fs_ops *fs = fs_lookup(type);
+    if (fs == NULL)
+        return sc_fail(_ENODEV);
+    lock(&mounts_lock, 0);
+    int err = do_mount(fs, src, tgt, "", (int) f);
+    unlock(&mounts_lock);
+    return err < 0 ? sc_fail(err) : 0;
+}
+
+// sysctl answers about the HOST -- hw.memsize is the Mac's RAM, KERN_BOOTTIME
+// the Mac's boot. Failing is the right answer rather than the easy one:
+// SmallCLUE already handles the failure, falling back to /proc (which AOK
+// serves for the guest) and to a monotonic clock for uptime, so the guest gets
+// guest numbers. Failing here also short-circuits the mach_host_self /
+// host_statistics64 path in smallclueReadMemStats, which runs only after
+// sysctlbyname succeeds and would otherwise report host memory.
+int sc_sysctl(int *name, unsigned namelen, void *old, size_t *oldlen,
+              const void *new, size_t newlen) {
+    (void) name; (void) namelen; (void) old; (void) oldlen;
+    (void) new; (void) newlen;
+    errno = ENOTSUP;
+    return -1;
+}
+int sc_sysctlbyname(const char *name, void *old, size_t *oldlen,
+                    const void *new, size_t newlen) {
+    (void) name; (void) old; (void) oldlen; (void) new; (void) newlen;
+    errno = ENOTSUP;
+    return -1;
+}
+
+// uname reported the HOST: Darwin, the Mac's kernel version, the Mac's
+// hostname. A guest must see the guest. do_uname is the same source of truth
+// the guest's own uname(2) uses, so a native applet and a translated one now
+// agree.
+int sc_uname(struct utsname *buf) {
+    if (buf == NULL)
+        return sc_fail(_EFAULT);
+    struct uname u = {};
+    do_uname(&u);
+    memset(buf, 0, sizeof(*buf));
+    strncpy(buf->sysname, u.system, sizeof(buf->sysname) - 1);
+    strncpy(buf->nodename, u.hostname, sizeof(buf->nodename) - 1);
+    strncpy(buf->release, u.release, sizeof(buf->release) - 1);
+    strncpy(buf->version, u.version, sizeof(buf->version) - 1);
+    strncpy(buf->machine, u.arch, sizeof(buf->machine) - 1);
+    return 0;
+}
+
+// df walks the mount table. On macOS SmallCLUE reaches for getmntinfo, which
+// answers about the HOST -- df inside the guest listed the Mac's volumes. The
+// traversal itself belongs in fs/mount.c, which owns the locking; doing it
+// here held mounts_lock across mount_statfs and hung.
+int sc_getmntinfo(struct statfs **mntbufp, int flags) {
+    (void) flags;
+    if (mntbufp == NULL)
+        return sc_fail(_EFAULT);
+
+    struct mount_info *info = NULL;
+    size_t count = 0;
+    int err = mount_snapshot(&info, &count);
+    if (err < 0)
+        return sc_fail(err);
+
+    struct statfs *out = calloc(count > 0 ? count : 1, sizeof(*out));
+    if (out == NULL) {
+        free(info);
+        errno = ENOMEM;
+        return -1;
+    }
+    for (size_t i = 0; i < count; i++) {
+        out[i].f_bsize = (uint32_t) (info[i].statfs.bsize > 0 ? info[i].statfs.bsize : 4096);
+        out[i].f_blocks = info[i].statfs.blocks;
+        out[i].f_bfree = info[i].statfs.bfree;
+        out[i].f_bavail = info[i].statfs.bavail;
+        out[i].f_files = info[i].statfs.files;
+        out[i].f_ffree = info[i].statfs.ffree;
+        strncpy(out[i].f_mntfromname, info[i].source, sizeof(out[i].f_mntfromname) - 1);
+        strncpy(out[i].f_mntonname, info[i].point, sizeof(out[i].f_mntonname) - 1);
+        strncpy(out[i].f_fstypename, info[i].type, sizeof(out[i].f_fstypename) - 1);
+    }
+    free(info);
+
+    // Freed on the next call: getmntinfo's contract is that the caller never
+    // owns the buffer.
+    static struct statfs *previous;
+    free(previous);
+    previous = out;
+    *mntbufp = out;
+    return (int) count;
 }

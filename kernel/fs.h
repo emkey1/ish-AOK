@@ -175,6 +175,18 @@ void mount_release(struct mount *mount);
 // through this; call it rather than mount->fs->statfs, which is wrong for a
 // bind (see kernel/fs.c).
 int mount_statfs(struct mount *mount, struct statfsbuf *stat);
+
+// A copied snapshot of the mount table, for callers outside fs/mount.c. See
+// mount_snapshot's comment there for why the traversal cannot be done by the
+// caller. Free the returned array with free().
+struct mount_info {
+    char source[256];
+    char point[256];
+    char type[64];
+    struct statfsbuf statfs;
+    struct mount *mount; // for identity only; do not deref without the lock
+};
+int mount_snapshot(struct mount_info **out, size_t *count_out);
 // mountinfo/statx mount ID (1-based list position); see fs/mount.c
 int mount_id(struct mount *mount);
 // The st_dev files on this mount report, i.e. mountinfo's device field; asks
@@ -315,6 +327,7 @@ extern const struct fs_ops sysfs;
 extern const struct fs_ops cgroupfs;
 extern const struct fs_ops cgroup2fs;
 void fs_register(const struct fs_ops *fs);
+const struct fs_ops *fs_lookup(const char *name); // by registered name, NULL if unknown
 char* get_filesystems(void); // For /proc/filesystems
 
 // System-wide bytes moved through file-backed fds (kernel/fs.c), feeding
