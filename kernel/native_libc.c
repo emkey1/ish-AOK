@@ -821,6 +821,28 @@ int nlibc_dup(int fd_no) {
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_dup, fd_no));
 }
 
+// A pipe made of HOST descriptors would be unusable: every other descriptor a
+// native program holds is a guest fd, so the two numbering spaces would collide
+// and a close() on one end would shut something unrelated. pipe2 with no flags
+// is plain pipe -- Linux has no bare pipe(2) in the asm-generic table.
+int nlibc_pipe(int fds[2]) {
+    NATIVE_FRAME;
+    if (fds == NULL)
+        return nlibc_fail(_EFAULT);
+    guest_addr_t guest_fds = native_scratch_alloc(2 * sizeof(dword_t));
+    if (guest_fds == 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res = native_syscall(NATIVE_SYS_pipe2, guest_fds, 0);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    dword_t out[2] = {0, 0};
+    if (native_scratch_get(out, guest_fds, sizeof(out)) < 0)
+        return nlibc_fail(_EFAULT);
+    fds[0] = (int) out[0];
+    fds[1] = (int) out[1];
+    return 0;
+}
+
 int nlibc_dup2(int oldfd, int newfd) {
     // dup2(fd, fd) is a no-op returning fd, where dup3 rejects it with EINVAL.
     // The check that the descriptor is open still has to happen.
@@ -1022,6 +1044,27 @@ int nlibc_ioctl(int fd_no, unsigned long request, ...) {
             };
             return nlibc_tty_ioctl(fd_no, TIOCSWINSZ_, &w, sizeof(w), false);
         }
+        // Job control, for the callers that spell these as ioctls rather than
+        // through tcgetpgrp/tcsetpgrp. Both are a single dword either way.
+        case TIOCGPGRP: {
+            pid_t got = nlibc_tcgetpgrp(fd_no);
+            if (got < 0)
+                return -1;
+            if (arg == NULL)
+                return nlibc_fail(_EFAULT);
+            *(pid_t *) arg = got;
+            return 0;
+        }
+        case TIOCSPGRP:
+            if (arg == NULL)
+                return nlibc_fail(_EFAULT);
+            return nlibc_tcsetpgrp(fd_no, *(pid_t *) arg);
+        // Claim this terminal as the session's controlling one. AOK implements
+        // it (tiocsctty, fs/tty.c); the argument is the "steal it from another
+        // session" flag and travels by value, not by pointer.
+        case TIOCSCTTY:
+            return (int) nlibc_ret(native_syscall(NATIVE_SYS_ioctl, fd_no,
+                    TIOCSCTTY_, (uintptr_t) arg));
         default:
             return nlibc_fail(_ENOSYS);
     }
@@ -2518,6 +2561,26 @@ pid_t nlibc_getpgid(pid_t pid) {
 }
 pid_t nlibc_getsid(pid_t pid) {
     return (pid_t) nlibc_ret(native_syscall(NATIVE_SYS_getsid, pid));
+}
+// getpgrp() is getpgid(0) with the argument spelled out; POSIX gives it no
+// parameter, so there is nothing else it could mean.
+pid_t nlibc_getpgrp(void) {
+    return (pid_t) nlibc_ret(native_syscall(NATIVE_SYS_getpgid, 0));
+}
+
+// The foreground process group of a terminal. Two ioctls in AOK (fs/tty.c),
+// which is also how glibc and musl implement these -- they are not syscalls of
+// their own on Linux. Left to the host libc they would have asked the Mac's
+// terminal about a guest fd number, which is a different terminal or none.
+pid_t nlibc_tcgetpgrp(int fd_no) {
+    dword_t pgrp = 0;
+    if (nlibc_tty_ioctl(fd_no, TIOCGPGRP_, &pgrp, sizeof(pgrp), true) < 0)
+        return -1;
+    return (pid_t) pgrp;
+}
+int nlibc_tcsetpgrp(int fd_no, pid_t pgrp) {
+    dword_t value = (dword_t) pgrp;
+    return nlibc_tty_ioctl(fd_no, TIOCSPGRP_, &value, sizeof(value), false);
 }
 
 // --------------------------------------------------------------- environment

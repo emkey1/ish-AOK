@@ -151,7 +151,12 @@ void nlibc_deliver_signals(void);
 pid_t nlibc_setsid(void);
 int nlibc_setpgid(pid_t pid, pid_t pgid);
 pid_t nlibc_getpgid(pid_t pid);
+pid_t nlibc_getpgrp(void);
 pid_t nlibc_getsid(pid_t pid);
+/* A terminal's foreground process group -- two tty ioctls, as on Linux. Left
+ * to the host libc these would ask the Mac's terminal about a guest fd. */
+pid_t nlibc_tcgetpgrp(int fd);
+int nlibc_tcsetpgrp(int fd, pid_t pgrp);
 
 /* Environment: the GUEST's, not the host process's. `env` printed the Mac's
  * before this, and the PATH search for a child walked the Mac's directories. */
@@ -164,6 +169,7 @@ int nlibc_putenv(char *entry);
 /* --- remaining host-libc holes; see the block comment in the .c ---------- */
 int nlibc_dup(int fd);
 int nlibc_dup2(int oldfd, int newfd);
+int nlibc_pipe(int fds[2]);
 int nlibc_fcntl(int fd, int cmd, ...);
 int nlibc_ioctl(int fd, unsigned long request, ...);
 int nlibc_poll(void *fds, unsigned nfds, int timeout);
@@ -341,6 +347,7 @@ pid_t nlibc_wait(int *status);
 
 #define dup         nlibc_dup
 #define dup2        nlibc_dup2
+#define pipe        nlibc_pipe
 #define fcntl       nlibc_fcntl
 #define ioctl       nlibc_ioctl
 #define poll        nlibc_poll
@@ -434,7 +441,10 @@ pid_t nlibc_wait(int *status);
 #define setsid                   nlibc_setsid
 #define setpgid                  nlibc_setpgid
 #define getpgid                  nlibc_getpgid
+#define getpgrp                  nlibc_getpgrp
 #define getsid                   nlibc_getsid
+#define tcgetpgrp                nlibc_tcgetpgrp
+#define tcsetpgrp                nlibc_tcsetpgrp
 
 #define environ                  nlibc_environ()
 #define getenv                   nlibc_getenv
