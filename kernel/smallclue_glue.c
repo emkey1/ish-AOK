@@ -95,7 +95,7 @@ int pscal_openrsync_main(int argc, char **argv) {
 
 #include "../deps/smallclue/src/spawn.h"
 
-// STAGED alongside the sc_exec* family in kernel/smallclue_shim.c: this is
+// STAGED alongside the nlibc_exec* family in kernel/native_libc.c: this is
 // where a SmallCLUE applet's child becomes a real guest task
 // (task_create_ -> copy_task -> do_execve -> task_start, with do_wait on the
 // parent side; kernel/init.c's boot-command launcher is the working example

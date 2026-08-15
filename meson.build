@@ -245,7 +245,7 @@ if get_option('kernel') == 'ish'
         'kernel/exec.c',
         'kernel/native.c',
         'kernel/native_io.c',
-        'kernel/smallclue_shim.c',
+        'kernel/native_libc.c',
         'kernel/smallclue_glue.c',
         'kernel/exit.c',
         'kernel/time.c',
@@ -328,7 +328,7 @@ if get_option('kernel') == 'ish'
     #
     #  - src/main.c is excluded: it is a four-line shim around smallclueMain,
     #    and its main() is the one symbol that collides with AOK's.
-    #  - Every file is force-included with kernel/smallclue_shim.h, which
+    #  - Every file is force-included with kernel/native_libc.h, which
     #    redirects the libc surface onto AOK's VFS. Without it a plain open()
     #    in an applet resolves against the *iOS* filesystem and quietly reads
     #    the wrong file; tools/check-native-libc.py is the gate that keeps
@@ -370,7 +370,7 @@ if get_option('kernel') == 'ish'
     libsmallclue = static_library('smallclue', smallclue_src,
         include_directories: [includes, smallclue_includes],
         c_args: [
-            '-include', meson.current_source_dir() / 'kernel/smallclue_shim.h',
+            '-include', meson.current_source_dir() / 'kernel/native_libc.h',
             '-DSMALLCLUE_PLATFORM_SPAWN',
             '-w',  # vendored code, not ours to police
         ])

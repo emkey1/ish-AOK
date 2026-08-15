@@ -12,7 +12,7 @@
 #include "kernel/native.h"
 #include "kernel/native_io.h"
 #include "kernel/signal.h"
-#include "kernel/smallclue_shim.h"
+#include "kernel/native_libc.h"
 #include "kernel/task.h"
 #include "debug.h"
 
@@ -232,7 +232,7 @@ extern int smallclueMain(int argc, char **argv);
 static int smallclue_real_main(int argc, char *const argv[], char *const envp[]) {
     (void) envp;  // SmallCLUE reads the environment through getenv, not argv3
     int status = smallclueMain(argc, (char **) argv);
-    sc_flush_std();
+    nlibc_flush_std();
     return status;
 }
 

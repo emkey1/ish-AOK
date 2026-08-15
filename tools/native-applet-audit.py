@@ -11,7 +11,7 @@ because PSCAL's harness runs `env ... bash ...`, installing the links took its
 suite from 217 passing to zero. env has to exec, and exec is not implemented.
 
 So it is derived instead. An applet is excluded if its handler can reach any
-call the shim answers with ENOSYS (kernel/smallclue_shim.c), following helper
+call the shim answers with ENOSYS (kernel/native_libc.c), following helper
 functions transitively -- not just direct calls, since xargs, time, nohup and
 chroot all reach exec through helpers.
 
@@ -32,7 +32,7 @@ import re
 import sys
 import textwrap
 
-# Everything kernel/smallclue_shim.c answers with ENOSYS, plus the spawn family
+# Everything kernel/native_libc.c answers with ENOSYS, plus the spawn family
 # that has no guest-task routing yet. Keep in step with that file.
 UNIMPLEMENTED = (
     "execvp", "execv", "execl", "execlp", "system", "popen", "pclose",
