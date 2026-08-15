@@ -24,7 +24,11 @@ The failure mode is the point: a missed call becomes a build error naming the
 symbol, instead of a guest quietly reading the device.
 
 Usage: check-native-libc.py [object-or-archive ...]
-With no arguments it checks every archive in DEFAULT_TARGETS below.
+       check-native-libc.py --report [object-or-archive ...]
+
+With no arguments it checks every archive in DEFAULT_TARGETS below. --report
+classifies instead of failing: already routed / pure / needs work. Point it at
+a new program's objects and the third list is the porting work, enumerated.
 """
 import os
 import re
@@ -132,8 +136,61 @@ def _symbols(path, args):
 DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a")
 
 
+# The libc names kernel/native_libc.h already rewrites. Read from the header
+# rather than listed here, so this cannot disagree with what the build does.
+def _routed(root):
+    header = os.path.join(root, "kernel", "native_libc.h")
+    try:
+        text = open(header).read()
+    except OSError:
+        return set()
+    names = set()
+    for m in re.finditer(r"^#define\s+(\w+)\s*(?:\([^)]*\))?\s+.*nlibc_",
+                         text, re.M):
+        names.add(m.group(1))
+    return names
+
+
+# Porting a NEW native program starts here: build its objects however its own
+# build system does, point this at them, and the report is the work list --
+# what is already routed, what is pure, and what has to be dealt with before it
+# can link against AOK without reaching the host. That last list is the whole
+# job, enumerated, rather than discovered one runtime surprise at a time.
+def report(targets, root):
+    referenced, defined = set(), set()
+    for path in targets:
+        referenced |= _symbols(path, ["-ju"])
+        defined |= _symbols(path, ["-jUg"])
+    external = {
+        s for s in referenced - defined
+        if not s.startswith(INTERNAL_PREFIXES) and s not in INTERNAL
+        and not OURS.match(s)
+    }
+    routed = _routed(root)
+    already = sorted(external & routed)
+    pure = sorted((external & PURE) - routed)
+    todo = sorted(external - routed - PURE)
+
+    print(f"referenced from outside: {len(external)}")
+    print(f"\n  already routed by native_libc.h ({len(already)}):")
+    print("    " + " ".join(already))
+    print(f"\n  pure, no kernel state ({len(pure)}):")
+    print("    " + " ".join(pure))
+    print(f"\n  NEEDS WORK ({len(todo)}) -- route through native_libc.h, or add")
+    print(f"  to PURE here if it genuinely cannot observe the host:")
+    print("    " + " ".join(todo))
+    return 0
+
+
 def main():
     targets = sys.argv[1:]
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if targets and targets[0] == "--report":
+        targets = targets[1:]
+        if not targets:
+            targets = [os.path.join(root, t) for t in DEFAULT_TARGETS]
+            targets = [t for t in targets if os.path.exists(t)]
+        return report(targets, root)
     if not targets:
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         targets = [os.path.join(root, t) for t in DEFAULT_TARGETS]

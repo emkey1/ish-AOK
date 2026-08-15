@@ -154,6 +154,17 @@ aok_generated_docs = custom_target('aok_generated_docs',
               meson.current_source_dir() / 'opt' / 'AOK' / 'docs', '@OUTPUT@',
               '/docs', '_docs'])
 
+# The syscall numbers a native program may issue, generated from calls.c's own
+# table so the two cannot drift. The hand-written list this replaces named 77
+# of the 217 syscalls AOK implements -- "only what the shim uses" -- which is
+# the same shape of gap tools/check-native-libc.py exists to close, and it left
+# bash with 140 kernel calls it could not reach for no reason but that nobody
+# had needed them yet.
+native_syscall_nums = custom_target('native_syscall_nums',
+    output: 'native_syscall_nums.h',
+    input: files('tools/gen-native-syscalls.py', 'kernel/calls.c'),
+    command: [python, '@INPUT0@', '@INPUT1@', '@OUTPUT@'])
+
 emu_src = [
     'emu/tlb.c',
     'emu/fpu.c',
@@ -246,7 +257,7 @@ if get_option('kernel') == 'ish'
         'kernel/native.c',
         'kernel/native_io.c',
         'kernel/native_libc.c',
-        'kernel/native_syscall.c',
+        'kernel/native_syscall.c', native_syscall_nums,
         'kernel/smallclue_glue.c',
         'kernel/exit.c',
         'kernel/time.c',

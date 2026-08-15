@@ -107,87 +107,22 @@ int native_scratch_get(void *dst, guest_addr_t src, size_t size);
 
 // ------------------------------------------------------------------- numbers
 //
-// asm-generic syscall numbers, checked against arm64_syscall_table and
-// handle_asm_generic_native_syscall in kernel/calls.c. Only what the shim
-// uses; adding one means checking that AOK actually implements it there.
-enum {
-    NATIVE_SYS_getcwd = 17,
-    NATIVE_SYS_dup = 23,
-    NATIVE_SYS_dup3 = 24,
-    NATIVE_SYS_fcntl = 25,
-    NATIVE_SYS_ioctl = 29,
-    NATIVE_SYS_mknodat = 33,
-    NATIVE_SYS_mkdirat = 34,
-    NATIVE_SYS_unlinkat = 35,
-    NATIVE_SYS_symlinkat = 36,
-    NATIVE_SYS_linkat = 37,
-    NATIVE_SYS_renameat = 38,
-    NATIVE_SYS_mount = 40,
-    NATIVE_SYS_statfs = 43,
-    NATIVE_SYS_fstatfs = 44,
-    NATIVE_SYS_truncate = 45,
-    NATIVE_SYS_ftruncate = 46,
-    NATIVE_SYS_faccessat = 48,
-    NATIVE_SYS_chdir = 49,
-    NATIVE_SYS_chroot = 51,
-    NATIVE_SYS_fchmodat = 53,
-    NATIVE_SYS_fchownat = 54,
-    NATIVE_SYS_openat = 56,
-    NATIVE_SYS_close = 57,
-    NATIVE_SYS_pipe2 = 59,
-    NATIVE_SYS_getdents64 = 61,
-    NATIVE_SYS_lseek = 62,
-    NATIVE_SYS_read = 63,
-    NATIVE_SYS_write = 64,
-    NATIVE_SYS_pselect6 = 72,
-    NATIVE_SYS_ppoll = 73,
-    NATIVE_SYS_readlinkat = 78,
-    NATIVE_SYS_newfstatat = 79,
-    NATIVE_SYS_fstat = 80,
-    NATIVE_SYS_utimensat = 88,
-    NATIVE_SYS_exit_group = 94,
-    NATIVE_SYS_nanosleep = 101,
-    NATIVE_SYS_clock_gettime = 113,
-    NATIVE_SYS_kill = 129,
-    NATIVE_SYS_rt_sigaction = 134,
-    NATIVE_SYS_rt_sigprocmask = 135,
-    NATIVE_SYS_rt_sigpending = 136,
-    NATIVE_SYS_rt_sigtimedwait = 137,
-    NATIVE_SYS_setgid = 144,
-    NATIVE_SYS_setuid = 146,
-    NATIVE_SYS_setpgid = 154,
-    NATIVE_SYS_getpgid = 155,
-    NATIVE_SYS_getsid = 156,
-    NATIVE_SYS_setsid = 157,
-    NATIVE_SYS_getgroups = 158,
-    NATIVE_SYS_setgroups = 159,
-    NATIVE_SYS_uname = 160,
-    NATIVE_SYS_sethostname = 161,
-    NATIVE_SYS_getrusage = 165,
-    NATIVE_SYS_umask = 166,
-    NATIVE_SYS_getpid = 172,
-    NATIVE_SYS_getppid = 173,
-    NATIVE_SYS_getuid = 174,
-    NATIVE_SYS_geteuid = 175,
-    NATIVE_SYS_getgid = 176,
-    NATIVE_SYS_getegid = 177,
-    NATIVE_SYS_sysinfo = 179,
-    NATIVE_SYS_socket = 198,
-    NATIVE_SYS_socketpair = 199,
-    NATIVE_SYS_bind = 200,
-    NATIVE_SYS_listen = 201,
-    NATIVE_SYS_accept = 202,
-    NATIVE_SYS_connect = 203,
-    NATIVE_SYS_getsockname = 204,
-    NATIVE_SYS_getpeername = 205,
-    NATIVE_SYS_sendto = 206,
-    NATIVE_SYS_recvfrom = 207,
-    NATIVE_SYS_setsockopt = 208,
-    NATIVE_SYS_getsockopt = 209,
-    NATIVE_SYS_shutdown = 210,
-    NATIVE_SYS_munmap = 215,
-    NATIVE_SYS_mmap = 222,
-    NATIVE_SYS_wait4 = 260,
-};
+// GENERATED, from kernel/calls.c's own arm64 table -- see
+// tools/gen-native-syscalls.py and the custom_target in meson.build. Every
+// syscall AOK genuinely implements is here, so a native program reaches all of
+// the kernel rather than the part somebody happened to need first.
+//
+// It was a hand-written list of "only what the shim uses", and that went stale
+// the way such lists do: 77 numbers against 217 implemented syscalls, which
+// left the second native program unable to reach 140 of them for no reason but
+// that nobody had asked yet. Generating it means adding a syscall to AOK makes
+// it reachable from native code the same day, with nothing to remember.
+//
+// Entries marked "// ABI" have a handler whose struct layout follows
+// current->abi rather than the asm-generic shape -- getrusage and sysinfo are
+// the long-standing examples. A native caller always speaks asm-generic, so
+// those need their argument marshalled to the shape the calling TASK expects.
+#include "native_syscall_nums.h"
+
 
 #endif
