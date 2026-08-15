@@ -20,6 +20,12 @@
 //
 // Every call returns 0 or a negative guest errno, except where noted.
 
+// False when there is no AOK task on this thread -- true of a thread the
+// native program created itself before kernel/native_libc.c's pthread_create
+// wrapper propagates one. Callers that reach f_get or the VFS directly must
+// check, or they dereference NULL and kill the app rather than the applet.
+bool native_have_task(void);
+
 // Opens a guest path. flags are guest O_* values. On success *fd_out is a
 // reference the caller must release with native_close.
 int native_open(const char *path, int flags, struct fd **fd_out);

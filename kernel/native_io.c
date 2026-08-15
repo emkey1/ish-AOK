@@ -14,7 +14,20 @@
 #include "fs/fd.h"
 #include "fs/path.h"
 
+// Every entry point checks for a task first. A native program can be on a
+// thread AOK never created (one the program spawned itself), where `current`
+// is NULL -- and f_get/generic_openat dereference it. That took the whole app
+// down with EXC_BAD_ACCESS when SmallCLUE ran its editor on its own pthread.
+// kernel/native_libc.c now propagates the task into such threads, so this
+// should not trigger; it is here because the failure mode is a dead app rather
+// than a failed call, and that is not a thing to leave to one mechanism.
+bool native_have_task(void) {
+    return current != NULL && current->files != NULL;
+}
+
 int native_open(const char *path, int flags, struct fd **fd_out) {
+    if (!native_have_task())
+        return _EFAULT;
     if (path == NULL || fd_out == NULL)
         return _EINVAL;
     // AT_PWD, not an absolute-only open: relative paths have to resolve
@@ -32,6 +45,9 @@ void native_close(struct fd *fd) {
 }
 
 ssize_t native_read(struct fd *fd, void *buf, size_t size) {
+    if (!native_have_task())
+        return _EFAULT;
+
     if (fd == NULL || buf == NULL)
         return _EINVAL;
     if (S_ISDIR(fd->type))
@@ -64,6 +80,9 @@ int native_readdir(struct fd *fd, struct dir_entry *entry) {
 }
 
 int native_stat(const char *path, struct statbuf *stat, bool follow_links) {
+    if (!native_have_task())
+        return _EFAULT;
+
     if (path == NULL || stat == NULL)
         return _EINVAL;
     return generic_statat(AT_PWD, path, stat,
@@ -71,6 +90,9 @@ int native_stat(const char *path, struct statbuf *stat, bool follow_links) {
 }
 
 int native_getcwd(char *buf) {
+    if (!native_have_task())
+        return _EFAULT;
+
     if (buf == NULL)
         return _EINVAL;
     lock(&current->fs->lock, 0);
@@ -81,6 +103,9 @@ int native_getcwd(char *buf) {
 }
 
 ssize_t native_write(fd_t fd_no, const void *buf, size_t size) {
+    if (!native_have_task())
+        return _EFAULT;
+
     return fd_write_host_buf(fd_no, buf, size);
 }
 

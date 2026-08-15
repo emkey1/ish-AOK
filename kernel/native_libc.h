@@ -157,6 +157,11 @@ int nlibc_tcsetattr(int fd, int action, const struct termios *in);
 int nlibc_isatty(int fd);
 int nlibc_ioctl_tty(int fd, unsigned long request, void *arg);
 
+/* Threads a native program creates inherit the creating task; see the .c. */
+#include <pthread.h>
+int nlibc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+                         void *(*fn)(void *), void *arg);
+
 /* --- process ------------------------------------------------------------ */
 /* There is one host process, so these create real guest tasks instead. */
 int nlibc_execv(const char *path, char *const argv[]);
@@ -267,6 +272,7 @@ pid_t nlibc_wait(int *status);
 #define tcgetattr                nlibc_tcgetattr
 #define tcsetattr                nlibc_tcsetattr
 #define isatty                   nlibc_isatty
+#define pthread_create           nlibc_pthread_create
 
 #endif /* !NATIVE_LIBC_NO_REDIRECT */
 

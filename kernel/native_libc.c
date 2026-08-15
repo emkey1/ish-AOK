@@ -87,6 +87,9 @@ static int nlibc_host_errno(int guest_err) {
 
 static int nlibc_tty_ioctl(int fd_no, int cmd, void *arg);
 
+// Same reason as native_have_task: refuse rather than dereference NULL.
+#define NLIBC_NEED_TASK() do { if (!native_have_task()) return nlibc_fail(_EFAULT); } while (0)
+
 static int nlibc_fail(int guest_err) {
     errno = nlibc_host_errno(guest_err);
     return -1;
@@ -122,6 +125,7 @@ int nlibc_close(int fd) {
 }
 
 ssize_t nlibc_read(int fd_no, void *buf, size_t n) {
+    NLIBC_NEED_TASK();
     // Every read and write is a yield point, which is what makes a native
     // program interruptible at all -- see native_checkpoint in kernel/native.h.
     // A ^C during `top` lands here rather than being ignored forever.
@@ -140,6 +144,7 @@ ssize_t nlibc_write(int fd_no, const void *buf, size_t n) {
 }
 
 off_t nlibc_lseek(int fd_no, off_t off, int whence) {
+    NLIBC_NEED_TASK();
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
         return nlibc_fail(_EBADF);
@@ -199,6 +204,7 @@ int nlibc_stat(const char *path, struct stat *st) { return nlibc_stat_common(pat
 int nlibc_lstat(const char *path, struct stat *st) { return nlibc_stat_common(path, st, false); }
 
 int nlibc_fstat(int fd_no, struct stat *st) {
+    NLIBC_NEED_TASK();
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
         return nlibc_fail(_EBADF);
@@ -575,6 +581,7 @@ pid_t nlibc_wait(int *status) {
 // is what keeps this list from silently regrowing.
 
 int nlibc_dup(int fd_no) {
+    NLIBC_NEED_TASK();
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
         return nlibc_fail(_EBADF);
@@ -886,6 +893,7 @@ int nlibc_nanosleep(const struct timespec *req, struct timespec *rem) {
 // keystroke, which is why it could not be quit.
 
 static int nlibc_tty_ioctl(int fd_no, int cmd, void *arg) {
+    NLIBC_NEED_TASK();
     struct fd *fd = f_get(fd_no);
     if (fd == NULL)
         return nlibc_fail(_EBADF);
@@ -972,4 +980,53 @@ int nlibc_isatty(int fd_no) {
         return 0;
     }
     return 1;
+}
+
+// --------------------------------------------------- threads a program makes
+//
+// A native program may create its own pthreads -- SmallCLUE runs its editor on
+// one (nextvi_app.c). Those are raw host threads, so AOK's `current` is NULL on
+// them, and the first shim call that touches the fd table dereferenced it and
+// took the whole app down with EXC_BAD_ACCESS. That is the worst possible
+// outcome: not the applet failing, the process dying.
+//
+// pthread_create is wrapped so a thread inherits the task of whoever created
+// it, which is what the program already assumes -- it expects its threads to
+// share the process's descriptors and cwd.
+//
+// The two host threads then share one struct task. That is right for the
+// pattern in use here, where the creator blocks in pthread_join and only one
+// runs at a time, and it is what exsh will want for its own threads. Genuinely
+// concurrent use of the same task from two threads is not made safe by this;
+// it would need the task's own locking to be audited for it.
+
+struct nlibc_thread_start {
+    void *(*fn)(void *);
+    void *arg;
+    struct task *task;
+};
+
+static void *nlibc_thread_trampoline(void *opaque) {
+    struct nlibc_thread_start *start = opaque;
+    current = start->task;   // inherit, so the shim has a task to work against
+    void *(*fn)(void *) = start->fn;
+    void *arg = start->arg;
+    free(start);
+    return fn(arg);
+}
+
+int nlibc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
+                         void *(*fn)(void *), void *arg) {
+    if (fn == NULL)
+        return EINVAL;
+    struct nlibc_thread_start *start = malloc(sizeof(*start));
+    if (start == NULL)
+        return EAGAIN;
+    start->fn = fn;
+    start->arg = arg;
+    start->task = current;
+    int err = pthread_create(thread, attr, nlibc_thread_trampoline, start);
+    if (err != 0)
+        free(start);
+    return err;
 }
