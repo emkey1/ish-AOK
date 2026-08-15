@@ -32,13 +32,25 @@ import re
 import sys
 import textwrap
 
-# Everything kernel/native_libc.c answers with ENOSYS, plus the spawn family
-# that has no guest-task routing yet. Keep in step with that file.
+# Everything kernel/native_libc.c still answers with ENOSYS unconditionally.
+# Keep in step with that file: the way to re-derive it is to look for the
+# nlibc_* functions whose whole body is a _ENOSYS failure.
+#
+# This list used to be much longer, and every removal was a call becoming real
+# rather than a judgement being relaxed: exec/system/waitpid/wait and
+# smallclueSpawn once the spawn hook created guest tasks, dup2/poll/select/
+# fcntl/kill/chroot/mknod/futimes once the shim went through the syscall
+# dispatcher, ioctl once the terminal requests were mapped, popen/pclose once
+# there was a pipe and a way to set a child's descriptors up.
+#
+# fcntl, ioctl and sigaction are PARTIAL rather than complete, and are left off
+# deliberately rather than by oversight -- fcntl refuses the lock commands,
+# ioctl anything that is not a terminal request, sigaction the SA_SIGINFO form.
+# SmallCLUE asks for none of those: F_SETFD/F_GETFL/F_DUPFD/F_DUPFD_CLOEXEC and
+# TIOCGWINSZ/TIOCSWINSZ/TIOCSPGRP/TIOCSCTTY is the whole of what it uses.
+# Re-check that before assuming it still holds for a new native program.
 UNIMPLEMENTED = (
-    "execvp", "execv", "execl", "execlp", "system", "popen", "pclose",
-    "smallclueSpawn", "fork", "waitpid", "wait",
-    "dup2", "fcntl", "ioctl", "poll", "select",
-    "glob", "mknod", "futimes", "kill", "chroot",
+    "fork", "glob", "getifaddrs",
 )
 
 

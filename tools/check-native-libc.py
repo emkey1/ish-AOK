@@ -23,8 +23,10 @@ deliberate act asserting "this genuinely cannot observe the host".
 The failure mode is the point: a missed call becomes a build error naming the
 symbol, instead of a guest quietly reading the device.
 
-Usage: check-native-libc.py <object-or-archive> [...]
+Usage: check-native-libc.py [object-or-archive ...]
+With no arguments it checks every archive in DEFAULT_TARGETS below.
 """
+import os
 import re
 import subprocess
 import sys
@@ -122,13 +124,27 @@ def _symbols(path, args):
     return syms
 
 
+# Every archive holding natively-compiled code, so that running this with no
+# arguments checks all of it. Named rather than globbed: a new native program
+# gets a new archive, and the failure this avoids is checking half the native
+# code and reading "clean" -- which is exactly what splitting Nextvi out of
+# libsmallclue.a to give it its own -D made possible.
+DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a")
+
+
 def main():
-    if len(sys.argv) < 2:
-        print("usage: check-native-libc.py <object-or-archive> [...]", file=sys.stderr)
-        return 2
+    targets = sys.argv[1:]
+    if not targets:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        targets = [os.path.join(root, t) for t in DEFAULT_TARGETS]
+        targets = [t for t in targets if os.path.exists(t)]
+        if not targets:
+            print("check-native-libc: nothing built yet -- run ninja -C build, "
+                  "or name an object or archive", file=sys.stderr)
+            return 2
 
     referenced, defined = set(), set()
-    for path in sys.argv[1:]:
+    for path in targets:
         referenced |= _symbols(path, ["-ju"])
         defined |= _symbols(path, ["-jUg"])
 
