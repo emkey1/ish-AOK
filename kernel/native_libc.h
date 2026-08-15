@@ -39,7 +39,20 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+/* A program that brings its own globbing builds with NATIVE_LIBC_OWN_GLOB and
+ * this stays out of its way. bash is the reason: its lib/glob/glob.h uses the
+ * include guard _GLOB_H_, which is the SAME guard macOS's <glob.h> uses, so
+ * including the system header here silently swallowed bash's own -- leaving
+ * glob_filename, glob_pattern_p and the GX_* flags undeclared in three files,
+ * with no hint that a header had been skipped.
+ *
+ * Standing aside is safe rather than a hole: a program in this position calls
+ * its own glob, never libc's, and if it ever did call libc's, that would appear
+ * as an unresolved `glob` and tools/check-native-libc.py would fail the build
+ * on it. */
+#ifndef NATIVE_LIBC_OWN_GLOB
 #include <glob.h>
+#endif
 #include <poll.h>
 #include <signal.h>
 #include <sys/ioctl.h>
@@ -161,6 +174,10 @@ int nlibc_tcsetpgrp(int fd, pid_t pgrp);
 /* Environment: the GUEST's, not the host process's. `env` printed the Mac's
  * before this, and the PATH search for a child walked the Mac's directories. */
 char **nlibc_environ(void);
+/* The environ SLOT. `environ` has to be assignable, not merely readable: bash
+ * keeps the C-level environment in step with its export list by writing to it
+ * (variables.c), and a call is not an lvalue. */
+char ***nlibc_environp(void);
 char *nlibc_getenv(const char *name);
 int nlibc_setenv(const char *name, const char *value, int overwrite);
 int nlibc_unsetenv(const char *name);
@@ -183,7 +200,9 @@ int nlibc_mkstemp(char *template);
 int nlibc_utimes(const char *path, const struct timeval times[2]);
 int nlibc_futimes(int fd, const struct timeval times[2]);
 int nlibc_statfs(const char *path, void *buf);
+#ifndef NATIVE_LIBC_OWN_GLOB
 int nlibc_glob(const char *pattern, int flags, void *errfunc, void *pglob);
+#endif
 
 /* Host-global state: clock, hostname, mount table, power. See the .c. */
 struct timespec;
@@ -261,7 +280,9 @@ char *nlibc_ttyname(int fd);
 /* Odds and ends that answered about the host: its /tmp, its CPU count, its
  * page size, its resource usage. */
 FILE *nlibc_tmpfile(void);
+#ifndef NATIVE_LIBC_OWN_GLOB
 void nlibc_globfree(void *pglob);
+#endif
 long nlibc_sysconf(int name);
 int nlibc_getrusage(int who, void *usage);
 
@@ -363,7 +384,9 @@ pid_t nlibc_wait(int *status);
 /* Function-like, as with stat above: `statfs` names both a function and a
  * struct tag, and an object-like macro would rewrite `struct statfs` too. */
 #define statfs(a, b) nlibc_statfs((a), (b))
+#ifndef NATIVE_LIBC_OWN_GLOB
 #define glob        nlibc_glob
+#endif
 
 /* Function-like: `mount` is also a struct tag in places, and these should only
  * ever rewrite an actual call. */
@@ -429,7 +452,9 @@ pid_t nlibc_wait(int *status);
 #define ptsname                  nlibc_ptsname
 #define ttyname                  nlibc_ttyname
 #define tmpfile                  nlibc_tmpfile
+#ifndef NATIVE_LIBC_OWN_GLOB
 #define globfree                 nlibc_globfree
+#endif
 #define sysconf                  nlibc_sysconf
 #define getrusage(a, b)          nlibc_getrusage((a), (b))
 
@@ -446,7 +471,7 @@ pid_t nlibc_wait(int *status);
 #define tcgetpgrp                nlibc_tcgetpgrp
 #define tcsetpgrp                nlibc_tcsetpgrp
 
-#define environ                  nlibc_environ()
+#define environ                  (*nlibc_environp())
 #define getenv                   nlibc_getenv
 #define setenv                   nlibc_setenv
 #define unsetenv                 nlibc_unsetenv

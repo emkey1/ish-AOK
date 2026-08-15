@@ -104,6 +104,8 @@ void native_env_discard(struct task *task);
 // NULL-terminated, and never NULL itself -- an empty environment is an array
 // holding just the terminator, which is what a caller iterating it expects.
 char **native_env_vector(void);
+// The task's environ slot, so `environ` is assignable and not just readable.
+char ***native_env_slot(void);
 const char *native_env_get(const char *name);
 // 0, or a negative errno.
 int native_env_set(const char *name, const char *value, bool overwrite);

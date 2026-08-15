@@ -2693,6 +2693,7 @@ int nlibc_tcsetpgrp(int fd_no, pid_t pgrp) {
 // libc shapes over it.
 
 char **nlibc_environ(void) { return native_env_vector(); }
+char ***nlibc_environp(void) { return native_env_slot(); }
 
 char *nlibc_getenv(const char *name) {
     // getenv's contract is that the pointer stays valid until the environment

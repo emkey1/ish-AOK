@@ -22,7 +22,7 @@
 #include "kernel/fs.h"
 #include "kernel/native_io.h"
 
-extern char **environ;
+#include "kernel/native.h"
 #include "kernel/task.h"
 
 // ---------------------------------------------------------------- 1. hooks
@@ -137,8 +137,21 @@ pid_t smallcluePlatformSpawn(const SmallclueSpawnRequest *request) {
             path = resolved;
         }
 
+        // native_env_vector(), NOT `environ`. This file is compiled WITHOUT
+        // kernel/native_libc.h force-included -- it is AOK's own code, in
+        // libish rather than in the SmallCLUE archive -- so a plain `environ`
+        // here is the HOST process's, and children were being handed the Mac's
+        // environment: HOME=/Users/mke, __CF_USER_TEXT_ENCODING, and none of
+        // the guest's own exports.
+        //
+        // check-native-libc.py does not cover this file and should not: it is
+        // meant to call the host libc. That makes the glue between AOK and a
+        // native program the one place the gate cannot help, and so the one
+        // place to be deliberate about which side of the seam a name comes
+        // from.
         dword_t pid = 0;
-        int err = native_spawn_opts(path, attempt->argv, environ, &opts, &pid);
+        int err = native_spawn_opts(path, attempt->argv, native_env_vector(),
+                &opts, &pid);
         if (err >= 0)
             return (pid_t) pid;
         last_err = err < 0 ? -err : err;

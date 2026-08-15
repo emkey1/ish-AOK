@@ -374,9 +374,28 @@ static char **native_env_empty(void) {
 }
 
 char **native_env_vector(void) {
-    if (current == NULL || current->native_env == NULL)
-        return native_env_empty();
-    return current->native_env;
+    return *native_env_slot();
+}
+
+// The task's environ SLOT, not its value, so that `environ` can be assigned to
+// and not merely read. SmallCLUE only ever read it and a function returning the
+// vector was enough; bash writes it -- variables.c keeps the C-level environment
+// in step with the shell's export list via `environ = export_env` -- and a call
+// is not an lvalue, so that would not compile.
+//
+// With no task, or a task that has no environment yet, this hands back a slot
+// pointing at a shared empty vector. A write through it is then per-PROCESS
+// rather than per-task, which is wrong but unreachable: native code runs with a
+// task, and native_env_init gives every one its own storage.
+char ***native_env_slot(void) {
+    static char **no_task_env;
+    if (current == NULL)
+        return (no_task_env = native_env_empty(), &no_task_env);
+    if (current->native_env == NULL)
+        current->native_env = native_dup_vector((char *const[]) { NULL }, 0);
+    if (current->native_env == NULL)
+        return (no_task_env = native_env_empty(), &no_task_env);
+    return &current->native_env;
 }
 
 void native_env_init(char *const envp[]) {
