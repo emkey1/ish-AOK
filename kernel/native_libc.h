@@ -133,6 +133,9 @@ int nlibc_putchar(int c);
 void nlibc_perror(const char *s);
 /* Flush the wrapped standard streams; see the note in nlibc_std_stream. */
 void nlibc_flush_std(void);
+/* The guest fd a stream was built over. NOT the host's fileno, which answers
+ * -1 for a funopen stream and sets EBADF -- see the .c. */
+int nlibc_fileno(FILE *stream);
 
 /* The host's exit() would end the whole app; a native program is a task. */
 noreturn void nlibc_exit(int status);
@@ -449,6 +452,7 @@ const char *nlibc_dlerror(void);
 #define puts        nlibc_puts
 #define putchar     nlibc_putchar
 #define perror      nlibc_perror
+#define fileno      nlibc_fileno
 
 #define execv       nlibc_execv
 #define execvp      nlibc_execvp

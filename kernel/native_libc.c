@@ -616,11 +616,60 @@ static int nlibc_file_close(void *cookie) {
 // closed or the program exits.
 static int nlibc_file_close_noop(void *cookie) { (void) cookie; return 0; }
 
+// Which guest fd a stream was built over, so fileno() can answer.
+//
+// This is not a nicety. A funopen stream has NO underlying descriptor, so the
+// host's fileno() returns -1 and sets EBADF -- and bash decides whether it is
+// interactive with `isatty(fileno(stdin)) && isatty(fileno(stderr))`. Both
+// became isatty(-1), so an interactive native bash concluded it was not one,
+// read its input as a script, hit EOF and exited immediately. The stray EBADF
+// is also what turned up in an unrelated message ("setlocale: ... Bad file
+// descriptor"), because errno was still set from it.
+//
+// fileno was on check-native-libc.py's PURE list, described as safe because
+// every FILE* a native program holds is one the shim made. That was the wrong
+// conclusion from a true premise: being ours is exactly WHY fileno cannot be
+// left to the host -- the answer is a property of where the stream came from.
+struct nlibc_stream { struct nlibc_stream *next; FILE *file; int fd; };
+static struct nlibc_stream *nlibc_streams;
+static pthread_mutex_t nlibc_stream_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void nlibc_stream_remember(FILE *file, int fd) {
+    struct nlibc_stream *s = malloc(sizeof(*s));
+    if (s == NULL)
+        return;   // fileno degrades to -1 for this stream; nothing else breaks
+    s->file = file;
+    s->fd = fd;
+    pthread_mutex_lock(&nlibc_stream_lock);
+    s->next = nlibc_streams;
+    nlibc_streams = s;
+    pthread_mutex_unlock(&nlibc_stream_lock);
+}
+
+int nlibc_fileno(FILE *file) {
+    if (file == NULL)
+        return nlibc_fail(_EBADF);
+    pthread_mutex_lock(&nlibc_stream_lock);
+    for (struct nlibc_stream *s = nlibc_streams; s != NULL; s = s->next)
+        if (s->file == file) {
+            int fd = s->fd;
+            pthread_mutex_unlock(&nlibc_stream_lock);
+            return fd;
+        }
+    pthread_mutex_unlock(&nlibc_stream_lock);
+    // Not one of ours -- open_memstream, say. The host's answer is the right
+    // one there, because the stream really is the host's.
+    return fileno(file);
+}
+
 static FILE *nlibc_file_wrap(int fd, int closes_fd) {
     FILE *f = funopen((void *) (intptr_t) fd, nlibc_file_read, nlibc_file_write,
             nlibc_file_seek, closes_fd ? nlibc_file_close : nlibc_file_close_noop);
-    if (f == NULL)
+    if (f == NULL) {
         errno = ENOMEM;
+        return NULL;
+    }
+    nlibc_stream_remember(f, fd);
     return f;
 }
 

@@ -74,10 +74,16 @@ PURE = {
     # Formatting, and FILE* operations. Safe only because fopen/fdopen/stdout/
     # stderr/stdin are all redirected, so every FILE* a native program holds is
     # one the shim created over a guest fd.
+    #
+    # fileno is NOT here, and was, which cost a day. The premise was right --
+    # every stream is ours -- and the conclusion backwards: being ours is
+    # exactly why fileno must be redirected, because a funopen stream has no
+    # descriptor and the host answers -1 with EBADF. bash reads
+    # isatty(fileno(stdin)) to decide whether it is interactive.
     "snprintf", "vsnprintf", "sprintf", "vsprintf", "sscanf", "vsscanf",
     "asprintf", "vasprintf", "fprintf", "vfprintf", "fputs", "fputc", "putc",
     "fwrite", "fread", "fgets", "fgetc", "getc", "ungetc", "fclose", "fflush",
-    "ferror", "feof", "clearerr", "fileno", "rewind", "fseek", "fseeko",
+    "ferror", "feof", "clearerr", "rewind", "fseek", "fseeko",
     "ftell", "ftello", "setvbuf", "setbuf", "funopen", "fscanf", "getline",
     "getdelim", "getchar",
     # option parsing: operates on the argv it is handed
