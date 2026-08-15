@@ -6,9 +6,48 @@ iSH-AOK is built with. Every number below is measured from that build rather
 than estimated.
 
 The short version: **the libc surface is not the problem, the build system is
-not the problem, and symbol collisions are not the problem. `fork()` is.** Six
-of bash's seven fork sites need the child to go on running bash's own C code,
-and that is the one thing a native program cannot do.
+not the problem, symbol collisions are not the problem, and `fork()` is a
+problem that measurement makes much smaller than it looks.** Six of bash's
+seven fork sites need the child to go on running bash's own C code, which a
+native program cannot do — but the replacement for that is affordable, for a
+reason that is not obvious until you time it. See section 0.
+
+## 0. The measurements that decide it
+
+Taken 2026-08-15 on this Mac: `pscal-devuan-arm64` under `./build/ish` for the
+emulated column, and the same bash 5.2.21 binary run directly for the host
+column. Host bash is the ceiling a native bash could reach, since native code
+*is* host code.
+
+| | emulated in AOK | host (native ceiling) | ratio |
+|---|---|---|---|
+| arithmetic loop, 20k iterations | 4.17s cpu | 0.09s cpu | **46x** |
+| string/expansion loop, 4k iterations | 29.3s cpu | 0.78s cpu | **38x** |
+| one `( : )` subshell | ~2.5 ms | ~0.7 ms | 3.5x |
+| one bash startup | ~15 ms | ~3.6 ms | 4x |
+| one **native** task spawn (`smallclue true`) | **~1.6 ms** | — | — |
+| one emulated ELF exec (`/bin/true`) | ~7.4 ms | — | — |
+
+Two things fall out, and they point the same way.
+
+**Interpretation is what emulation costs you: 38–46x.** That is bash's parser,
+word expansion and arithmetic being translated instruction by instruction, and
+it is precisely what compiling bash natively removes.
+
+**Forking is not.** A guest `fork` costs ~2.5 ms because AOK's `sys_clone` is
+native C in the emulator — it was never being emulated. A native task spawn is
+~1.6 ms. So replacing bash's `fork` with "spawn a fresh native bash and give it
+the state" costs about what bash already pays today, and possibly less.
+
+That inverts the conclusion this document originally reached. The re-launch
+design was dismissed as the expensive option; it is the affordable one, because
+the expensive thing was never fork.
+
+The honest qualifier: 38–46x applies to time spent *inside* bash. External
+commands stay emulated unless they are native applets, so an end-to-end figure
+for a real script is lower and depends entirely on the mix. Measuring that mix
+on a real workload — the PSCAL suite is the obvious candidate — is what should
+size the expected win before the work is finished, not before it is started.
 
 ## Why bash rather than exsh
 
@@ -50,31 +89,74 @@ The exec, if it happens at all, is many function calls later. `x=$(date)`,
 
 Making those work means the child must be a second bash with the parent's
 entire mutable state — variables, functions, options, traps, redirections, the
-job table. Three ways out, none free:
+job table.
 
-1. **Serialise and re-launch.** Spawn a fresh `bash` task and hand it the
-   state. bash already exports functions through the environment, so part of
-   the machinery exists. Unexported and local variables do not cross, which is
-   a real semantic break rather than a slow path: `x=1; ( echo $x )` would
-   print nothing.
-2. **vfork-shaped `fork()` in the shim.** `sigsetjmp` at the fork point, return
-   0, let the "child" run on the caller's own thread, and have `exec*` snapshot
-   the descriptors it was left with, spawn the real task, restore the caller's
-   fds and `siglongjmp` back with the pid. This makes *every* fork+exec idiom
-   work unmodified — including Nextvi's `cmd_make`, which is what needed
-   patching for `!!`. It is also exactly as dangerous as vfork: anything the
-   child does between fork and exec that is not descriptor, signal or
-   process-group manipulation corrupts the parent, and bash's children do a
-   great deal more than that before they exec. It would fix site 5 and break on
-   the other six.
-3. **Accept the subset.** Ship native bash as a fast non-interactive command
-   runner with no subshells, no command substitution and no pipelines, and keep
-   the emulated `/bin/bash` for everything else. This is honest but the
-   resulting shell is not one anybody would want as their shell.
+### Why fork cannot simply be emulated
 
-None of these is small, and the choice between them is a design decision rather
-than an implementation detail. **This is the thing to decide before vendoring
-anything.**
+Not for want of cleverness: `fork` needs two threads of execution to see
+*different* memory at the *same* addresses, and that is exactly what a process
+boundary provides and a thread boundary does not. A native program shares one
+address space with the whole app. The only ways around it are to make every
+piece of bash's state reachable through one relocatable context pointer — a
+rewrite, not a patch, against bash's thousands of globals — or to not share the
+address space, which means a second task.
+
+So: a second task. The question is what it is given.
+
+### The design: re-launch, and why it is semantically right
+
+Spawn a fresh **native** bash task, hand it the parent's state, and have it run
+the command. Two things make this work far better than it first appears.
+
+**A subshell is one-way by definition.** Everything a subshell does to its own
+state is *meant* to be discarded — that is what makes it a subshell. So
+"serialise state in, exit status and stdout out" is not an approximation of
+fork's behaviour, it is the actual contract. Only the inbound direction has to
+be complete, and it is finite: variables (including unexported and local ones),
+functions, shell options, traps, positional parameters, `$?`, cwd, umask. Open
+descriptors and redirections cross by inheritance already. bash can already
+serialise every one of these — `declare -p`, `declare -f`, `set -o`,
+`shopt -p`, `trap -p` — and `make_child` is *already handed* the subshell's
+source text, because it needs it for the job table.
+
+(An earlier draft of this document called the loss of unexported variables "a
+real semantic break". That was wrong: it is a break only if you transfer
+nothing but the environment, and there is no reason to stop there.)
+
+**It costs what fork already costs.** Section 0: ~1.6 ms for a native task
+spawn against ~2.5 ms for the guest fork bash performs today. Serialising a few
+dozen variables is native work on top of that, well under a millisecond.
+
+A refinement that removes most of the traffic: the fork at
+`execute_cmd.c:4443` fires for any simple command in a pipeline, and the great
+majority of those end in an exec. Those can keep using the plain spawn path
+that already exists (`native_spawn_opts`), leaving re-launch for genuine
+subshells, command substitution and process substitution.
+
+### What is genuinely hard
+
+- `$!` and the job table across a re-launch, so `wait` and `jobs` stay honest.
+- `BASH_SUBSHELL`, `SHLVL`, `BASHPID` — each has a defined value in a subshell
+  and must be set rather than inherited.
+- `$RANDOM` continuity, which is observable and is seeded state.
+- Coprocesses and process substitution are longer-lived than a subshell but
+  still one-way at creation, so they follow the same shape with more plumbing.
+- Buffered stdio at fork time. A real fork duplicates unflushed buffers, which
+  is a POSIX wart scripts occasionally trip over; re-launch would not. Arguably
+  an improvement, but it is a behaviour difference and belongs in a list of
+  them.
+
+### The alternative that was considered and rejected
+
+A vfork-shaped `fork()` in the shim — `sigsetjmp` at the fork point, return 0,
+let the "child" run on the caller's own thread, and have `exec*` snapshot the
+descriptors it was left with, spawn the real task and `siglongjmp` back with
+the pid. It makes every fork-then-exec idiom work unmodified, which is genuinely
+attractive; it is what Nextvi's `cmd_make` needed and got a spawn seam for
+instead. But it is exactly as dangerous as vfork: anything the child does
+between fork and exec beyond descriptor, signal and process-group manipulation
+corrupts the parent, and bash's children do a great deal more than that. It
+fixes site 5 — the one site that already works — and breaks on the other six.
 
 ## 2. exec-in-place changes the pid
 
@@ -193,13 +275,36 @@ the exclusion list from what the shim refuses. It is now down to 10 applets
 from 34, and `bash` should be run through the same reasoning rather than
 judged by eye.
 
+## Where the source lives
+
+A submodule at `deps/bash`, pinning a repo of our own — the same arrangement as
+`deps/smallclue` and its nested `nextvi`, and for the same reason: this is
+third-party code we patch, and the patches need somewhere to live that is not
+this repository.
+
+Seeded from the 5.2.21 tarball rather than forked from a full upstream mirror.
+bash releases as tarballs, so there is no upstream merge workflow to inherit,
+and a small clean history is worth more than thirty years of import commits.
+Moving to a later bash is then a vendor-drop commit, which is how the tarball
+is published anyway.
+
 ## Recommended order
 
-1. **Decide the fork question** (section 1). Everything else is wasted if the
-   answer is "accept the subset" and the subset turns out to be unusable.
-2. Route the 32 kernel calls and add the 33 pure ones. Independently useful:
-   they are the calls any second native program will want, not bash-specific.
-3. Fix exec-in-place to keep the caller's pid (section 2). Also independently
-   useful, and it removes a whole class of surprise.
-4. Only then vendor bash, with `--disable-readline`, a checked-in `config.h`,
-   its own meson archive, and the two `-D` renames.
+1. **Build it.** Vendor 5.2.21 with `--disable-readline`, a checked-in
+   `config.h` per platform, its own meson archive, and the two `-D` renames
+   (`main`, `wait_for`). Nothing about fork yet: the goal is a native bash that
+   links, starts, and runs commands that do not fork.
+2. Route the 32 kernel calls and add the 33 pure ones — required to link, and
+   independently useful, since they are what any second native program will
+   want rather than anything bash-specific.
+3. Fix exec-in-place to keep the caller's pid (section 2). Independently
+   useful, and it removes a whole class of surprise for a shell.
+4. Re-launch fork, in the order the sites are worth doing: command substitution
+   first (most common, most clearly one-way), then subshells, then pipelines,
+   then coprocesses and process substitution.
+5. Measure a real workload against emulated bash before deciding it is done.
+   Section 0's 38–46x is the ceiling on the part of the time spent inside bash,
+   not a prediction for any particular script.
+
+Steps 1–3 are well-understood work of known shape. Step 4 is the research, and
+it is where the estimate should be treated as soft.
