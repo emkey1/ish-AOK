@@ -103,6 +103,35 @@ PURE = {
     "setjmp", "longjmp", "sigsetjmp", "siglongjmp", "_setjmp", "_longjmp",
     # Reading the clock. The guest's time IS the host's, so this is not a leak.
     "clock_gettime", "gettimeofday", "time", "clock",
+    # Wide characters and multibyte conversion. Every one of these transforms a
+    # buffer the caller already owns, against the locale setlocale selected --
+    # which is above for the same reason. None can name a file or a process.
+    "mblen", "mbrlen", "mbsinit", "mbtowc", "wctomb", "mbstowcs", "wcstombs",
+    "mbsrtowcs", "wcsrtombs", "mbsnrtowcs", "wcsnrtombs", "wcrtomb",
+    "wcslen", "wcschr", "wcsrchr", "wcscmp", "wcsncmp", "wcscoll", "wcsdup",
+    "wcscpy", "wcsncpy", "wcscat", "wcwidth", "wcswidth", "wctob", "btowc",
+    "wctype", "iswctype", "wmemchr", "wmemcmp", "wmemcpy", "wmemset",
+    "towlower", "towupper", "iswalnum", "iswalpha", "iswblank", "iswcntrl",
+    "iswdigit", "iswgraph", "iswlower", "iswprint", "iswpunct", "iswspace",
+    "iswupper", "iswxdigit",
+    # Locale INFORMATION, as distinct from anything the guest owns: these
+    # report the conventions setlocale selected -- decimal point, charset name,
+    # month names. iconv converts one buffer to another under those same
+    # conventions. Consistent with setlocale and localeconv above.
+    "nl_langinfo", "locale_charset", "iconv", "iconv_open", "iconv_close",
+    "_DefaultRuneLocale", "___runetype", "__maskrune",
+    # More string and integer work over the caller's own memory.
+    "strchrnul", "strcoll", "strxfrm", "strtoimax", "strtoumax", "strtold",
+    "imaxdiv", "imaxabs", "div", "ldiv", "lldiv", "memset_pattern16",
+    "memrchr", "memmem", "stpcpy", "stpncpy",
+    # Discards a FILE's buffered data. Every FILE a native program holds is one
+    # the shim built over a guest fd, so this reaches no further than fflush.
+    "fpurge", "__fpurge",
+    # abort() raises SIGABRT on the calling thread. It ends the app rather than
+    # the task, which is wrong, but it is a crash either way and not a way to
+    # observe or change the host -- routing it would be an improvement, not a
+    # correctness fix.
+    "abort",
 }
 
 # Compiler and runtime plumbing rather than calls the program made.

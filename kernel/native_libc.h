@@ -38,6 +38,10 @@
 #include <ifaddrs.h>
 #include <netdb.h>
 #include <sys/socket.h>
+#include <sys/resource.h>
+#include <sys/times.h>
+#include <sys/uio.h>
+#include <dlfcn.h>
 #include <sys/un.h>
 /* A program that brings its own globbing builds with NATIVE_LIBC_OWN_GLOB and
  * this stays out of its way. bash is the reason: its lib/glob/glob.h uses the
@@ -301,6 +305,60 @@ int nlibc_pclose(FILE *stream);
 pid_t nlibc_waitpid(pid_t pid, int *status, int options);
 pid_t nlibc_wait(int *status);
 
+/* --- the rest of the kernel surface ------------------------------------- */
+/* Added by walking the syscall table rather than by waiting for a program to
+ * miss one; see the block comment in the .c. */
+int nlibc_fchmod(int fd, mode_t mode);
+int nlibc_fchown(int fd, uid_t uid, gid_t gid);
+int nlibc_fchdir(int fd);
+int nlibc_fsync(int fd);
+int nlibc_fdatasync(int fd);
+int nlibc_ftruncate(int fd, off_t len);
+int nlibc_syncfs(int fd);
+pid_t nlibc_gettid(void);
+int nlibc_sched_yield(void);
+mode_t nlibc_umask(mode_t mask);
+int nlibc_setreuid(uid_t r, uid_t e);
+int nlibc_setregid(gid_t r, gid_t e);
+int nlibc_flock(int fd, int operation);
+int nlibc_killpg(pid_t pgrp, int sig);
+int nlibc_faccessat(int dirfd, const char *path, int mode, int flags);
+struct rlimit;
+int nlibc_getrlimit(int resource, struct rlimit *out);
+int nlibc_setrlimit(int resource, const struct rlimit *in);
+int nlibc_getdtablesize(void);
+struct itimerval;
+int nlibc_setitimer(int which, const struct itimerval *in, struct itimerval *out);
+int nlibc_getitimer(int which, struct itimerval *out);
+unsigned int nlibc_alarm(unsigned int seconds);
+struct tms;
+clock_t nlibc_times(struct tms *out);
+struct iovec;
+ssize_t nlibc_readv(int fd, const struct iovec *iov, int count);
+ssize_t nlibc_writev(int fd, const struct iovec *iov, int count);
+ssize_t nlibc_pread(int fd, void *buf, size_t n, off_t off);
+ssize_t nlibc_pwrite(int fd, const void *buf, size_t n, off_t off);
+int nlibc_gethostname(char *name, size_t len);
+int nlibc_getentropy(void *buf, size_t len);
+char *nlibc_mkdtemp(char *template);
+char *nlibc_mktemp(char *template);
+long nlibc_pathconf(const char *path, int name);
+long nlibc_fpathconf(int fd, int name);
+size_t nlibc_confstr(int name, char *buf, size_t len);
+void nlibc_setpwent(void);
+void nlibc_endpwent(void);
+struct passwd *nlibc_getpwent(void);
+void nlibc_setgrent(void);
+void nlibc_endgrent(void);
+struct group *nlibc_getgrent(void);
+int nlibc_execve(const char *path, char *const argv[], char *const envp[]);
+int nlibc_pselect(int nfds, void *r, void *w, void *e,
+        const struct timespec *timeout, const sigset_t *sigmask);
+void *nlibc_dlopen(const char *path, int mode);
+void *nlibc_dlsym(void *handle, const char *symbol);
+int nlibc_dlclose(void *handle);
+const char *nlibc_dlerror(void);
+
 #ifdef __cplusplus
 }
 #endif
@@ -480,6 +538,56 @@ pid_t nlibc_wait(int *status);
 #define getpwnam                 nlibc_getpwnam
 #define getgrgid                 nlibc_getgrgid
 #define getgrnam                 nlibc_getgrnam
+
+/* --- the rest of the kernel surface ------------------------------------- */
+#define fchmod                   nlibc_fchmod
+#define fchown                   nlibc_fchown
+#define fchdir                   nlibc_fchdir
+#define fsync                    nlibc_fsync
+#define fdatasync                nlibc_fdatasync
+#define ftruncate                nlibc_ftruncate
+#define syncfs                   nlibc_syncfs
+#define gettid                   nlibc_gettid
+#define sched_yield              nlibc_sched_yield
+#define umask                    nlibc_umask
+#define setreuid                 nlibc_setreuid
+#define setregid                 nlibc_setregid
+#define flock                    nlibc_flock
+#define killpg                   nlibc_killpg
+#define faccessat                nlibc_faccessat
+/* Function-like: `rlimit`, `itimerval`, `tms` and `iovec` are struct tags as
+ * well as parts of these names, and an object-like macro would rewrite a
+ * declaration as readily as a call. */
+#define getrlimit(a, b)          nlibc_getrlimit((a), (b))
+#define setrlimit(a, b)          nlibc_setrlimit((a), (b))
+#define getdtablesize            nlibc_getdtablesize
+#define setitimer(a, b, c)       nlibc_setitimer((a), (b), (c))
+#define getitimer(a, b)          nlibc_getitimer((a), (b))
+#define alarm                    nlibc_alarm
+#define times(a)                 nlibc_times((a))
+#define readv                    nlibc_readv
+#define writev                   nlibc_writev
+#define pread                    nlibc_pread
+#define pwrite                   nlibc_pwrite
+#define gethostname              nlibc_gethostname
+#define getentropy               nlibc_getentropy
+#define mkdtemp                  nlibc_mkdtemp
+#define mktemp                   nlibc_mktemp
+#define pathconf                 nlibc_pathconf
+#define fpathconf                nlibc_fpathconf
+#define confstr                  nlibc_confstr
+#define setpwent                 nlibc_setpwent
+#define endpwent                 nlibc_endpwent
+#define getpwent                 nlibc_getpwent
+#define setgrent                 nlibc_setgrent
+#define endgrent                 nlibc_endgrent
+#define getgrent                 nlibc_getgrent
+#define execve                   nlibc_execve
+#define pselect(a,b,c,d,e,f)     nlibc_pselect((a),(b),(c),(d),(e),(f))
+#define dlopen                   nlibc_dlopen
+#define dlsym                    nlibc_dlsym
+#define dlclose                  nlibc_dlclose
+#define dlerror                  nlibc_dlerror
 
 #endif /* !NATIVE_LIBC_NO_REDIRECT */
 

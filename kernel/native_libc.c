@@ -2921,3 +2921,659 @@ struct group *nlibc_getgrnam(const char *name) {
         return NULL;
     return &nlibc_gr;
 }
+
+// =========================================================== the rest of it
+//
+// Everything below exists because "route what the current program happens to
+// call" is how the shim got a 77-entry syscall list against a 217-syscall
+// kernel (see tools/gen-native-syscalls.py). The numbers are all reachable
+// now; these are the libc entry points on top of them, added by walking the
+// syscall table rather than by waiting for a program to miss one.
+//
+// Shapes, in rough order of how much care each needs:
+//   - a syscall with scalar arguments, which is a one-liner;
+//   - a syscall with a struct, which needs the guest's layout written out;
+//   - a constant AOK's kernel has no syscall for, answered here;
+//   - a refusal, where the honest answer is that it cannot work in-process.
+
+// ------------------------------------------------------------ scalar syscalls
+
+int nlibc_fchmod(int fd_no, mode_t mode) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_fchmod, fd_no, mode));
+}
+int nlibc_fchown(int fd_no, uid_t uid, gid_t gid) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_fchown, fd_no, uid, gid));
+}
+int nlibc_fchdir(int fd_no) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_fchdir, fd_no));
+}
+int nlibc_fsync(int fd_no) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_fsync, fd_no));
+}
+int nlibc_fdatasync(int fd_no) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_fdatasync, fd_no));
+}
+int nlibc_ftruncate(int fd_no, off_t len) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_ftruncate, fd_no, len));
+}
+int nlibc_syncfs(int fd_no) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_syncfs, fd_no));
+}
+pid_t nlibc_gettid(void) {
+    return (pid_t) nlibc_ret(native_syscall(NATIVE_SYS_gettid));
+}
+int nlibc_sched_yield(void) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_sched_yield));
+}
+mode_t nlibc_umask(mode_t mask) {
+    // umask cannot fail and returns the PREVIOUS mask, so there is no error to
+    // translate -- and translating one would turn a legitimate mask into -1.
+    return (mode_t) native_syscall(NATIVE_SYS_umask, mask);
+}
+int nlibc_setreuid(uid_t r, uid_t e) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_setreuid, r, e));
+}
+int nlibc_setregid(gid_t r, gid_t e) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_setregid, r, e));
+}
+
+// Darwin's flock operation numbers are 1/2/4/8 and the guest's are 1/2/4/8 as
+// well -- LOCK_SH/EX/NB/UN agree -- so this is one of the few where passing the
+// value through is correct rather than lazy.
+int nlibc_flock(int fd_no, int operation) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_flock, fd_no, operation));
+}
+
+// kill(-pgrp), which is what killpg IS on Linux; there is no syscall of its own.
+int nlibc_killpg(pid_t pgrp, int sig) {
+    if (pgrp < 0)
+        return nlibc_fail(_EINVAL);
+    return nlibc_kill(-pgrp, sig);
+}
+
+int nlibc_faccessat(int dirfd, const char *path, int mode, int flags) {
+    NATIVE_FRAME;
+    if (path == NULL)
+        return nlibc_fail(_EFAULT);
+    guest_addr_t guest_path = native_scratch_str(path);
+    if (guest_path == 0)
+        return nlibc_fail(_ENOMEM);
+    // AT_EACCESS is 0x10 on Darwin and 0x200 on the guest; the rest of the mode
+    // bits (R_OK/W_OK/X_OK/F_OK) agree.
+    dword_t guest_flags = (flags & AT_EACCESS) ? 0x200 : 0;
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_faccessat2,
+            nlibc_at_fd(dirfd), guest_path, mode, guest_flags));
+}
+
+// --------------------------------------------------------- resource limits
+//
+// The RESOURCE numbers disagree, and only from 5 upward, which is the sort of
+// difference that looks like it works: RLIMIT_CPU through RLIMIT_CORE are 0-4
+// on both, so anything testing those alone would pass while NOFILE silently
+// asked about something else. Darwin's RLIMIT_AS is 5 where the guest's is 9,
+// and Darwin's NOFILE is 8 where the guest's is 7.
+static int nlibc_rlimit_to_guest(int resource) {
+    switch (resource) {
+        case RLIMIT_CPU:     return 0;
+        case RLIMIT_FSIZE:   return 1;
+        case RLIMIT_DATA:    return 2;
+        case RLIMIT_STACK:   return 3;
+        case RLIMIT_CORE:    return 4;
+        case RLIMIT_NPROC:   return 6;
+        case RLIMIT_NOFILE:  return 7;
+        case RLIMIT_MEMLOCK: return 8;
+        case RLIMIT_AS:      return 9;
+        default:             return -1;
+    }
+}
+
+// The guest's rlim_t is 64-bit and its RLIM_INFINITY is ~0ULL; Darwin's is
+// RLIM_INFINITY too but spelled differently, so the sentinel is translated
+// rather than copied.
+struct nlibc_guest_rlimit { uint64_t cur, max; };
+#define NLIBC_GUEST_RLIM_INFINITY (~(uint64_t) 0)
+
+static rlim_t nlibc_rlim_to_host(uint64_t v) {
+    return v == NLIBC_GUEST_RLIM_INFINITY ? RLIM_INFINITY : (rlim_t) v;
+}
+static uint64_t nlibc_rlim_to_guest(rlim_t v) {
+    return v == RLIM_INFINITY ? NLIBC_GUEST_RLIM_INFINITY : (uint64_t) v;
+}
+
+int nlibc_getrlimit(int resource, struct rlimit *out) {
+    NATIVE_FRAME;
+    int guest_res = nlibc_rlimit_to_guest(resource);
+    if (guest_res < 0 || out == NULL)
+        return nlibc_fail(guest_res < 0 ? _EINVAL : _EFAULT);
+    guest_addr_t guest_rl = native_scratch_alloc(sizeof(struct nlibc_guest_rlimit));
+    if (guest_rl == 0)
+        return nlibc_fail(_ENOMEM);
+    // prlimit64 with pid 0 and a NULL "new" is the modern getrlimit, and it is
+    // the one whose struct is unambiguously 64-bit on every guest ABI.
+    sqword_t res = native_syscall(NATIVE_SYS_prlimit64, 0, guest_res, 0, guest_rl);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    struct nlibc_guest_rlimit rl = {};
+    if (native_scratch_get(&rl, guest_rl, sizeof(rl)) < 0)
+        return nlibc_fail(_EFAULT);
+    out->rlim_cur = nlibc_rlim_to_host(rl.cur);
+    out->rlim_max = nlibc_rlim_to_host(rl.max);
+    return 0;
+}
+
+int nlibc_setrlimit(int resource, const struct rlimit *in) {
+    NATIVE_FRAME;
+    int guest_res = nlibc_rlimit_to_guest(resource);
+    if (guest_res < 0 || in == NULL)
+        return nlibc_fail(guest_res < 0 ? _EINVAL : _EFAULT);
+    struct nlibc_guest_rlimit rl = {
+        .cur = nlibc_rlim_to_guest(in->rlim_cur),
+        .max = nlibc_rlim_to_guest(in->rlim_max),
+    };
+    guest_addr_t guest_rl = native_scratch_put(&rl, sizeof(rl));
+    if (guest_rl == 0)
+        return nlibc_fail(_ENOMEM);
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_prlimit64, 0, guest_res,
+            guest_rl, 0));
+}
+
+// The descriptor ceiling, which on Darwin is its own call and on Linux is just
+// RLIMIT_NOFILE. bash asks for it when it builds its fd bitmap.
+int nlibc_getdtablesize(void) {
+    struct rlimit rl;
+    if (nlibc_getrlimit(RLIMIT_NOFILE, &rl) < 0)
+        return 256;   // a plausible floor rather than an error; the caller sizes
+                      // a table with it and cannot do anything useful with -1
+    if (rl.rlim_cur == RLIM_INFINITY || rl.rlim_cur > INT_MAX)
+        return INT_MAX;
+    return (int) rl.rlim_cur;
+}
+
+// ------------------------------------------------------------------- timers
+//
+// struct itimerval is two timevals, and a timeval is two 64-bit words on both
+// sides for a 64-bit guest -- but the guest's is written out here rather than
+// assumed, because that stops being true the moment a 32-bit guest task calls.
+struct nlibc_guest_timeval { sqword_t sec, usec; };
+struct nlibc_guest_itimerval { struct nlibc_guest_timeval interval, value; };
+
+static void nlibc_itimer_to_guest(const struct itimerval *in,
+        struct nlibc_guest_itimerval *out) {
+    out->interval.sec = in->it_interval.tv_sec;
+    out->interval.usec = in->it_interval.tv_usec;
+    out->value.sec = in->it_value.tv_sec;
+    out->value.usec = in->it_value.tv_usec;
+}
+static void nlibc_itimer_to_host(const struct nlibc_guest_itimerval *in,
+        struct itimerval *out) {
+    out->it_interval.tv_sec = in->interval.sec;
+    out->it_interval.tv_usec = in->interval.usec;
+    out->it_value.tv_sec = in->value.sec;
+    out->it_value.tv_usec = in->value.usec;
+}
+
+// ITIMER_REAL/VIRTUAL/PROF are 0/1/2 on both sides.
+int nlibc_setitimer(int which, const struct itimerval *in, struct itimerval *out) {
+    NATIVE_FRAME;
+    guest_addr_t guest_new = 0, guest_old = 0;
+    if (in != NULL) {
+        struct nlibc_guest_itimerval it = {};
+        nlibc_itimer_to_guest(in, &it);
+        guest_new = native_scratch_put(&it, sizeof(it));
+        if (guest_new == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    if (out != NULL) {
+        guest_old = native_scratch_alloc(sizeof(struct nlibc_guest_itimerval));
+        if (guest_old == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    sqword_t res = native_syscall(NATIVE_SYS_setitimer, which, guest_new, guest_old);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    if (out != NULL) {
+        struct nlibc_guest_itimerval it = {};
+        if (native_scratch_get(&it, guest_old, sizeof(it)) < 0)
+            return nlibc_fail(_EFAULT);
+        nlibc_itimer_to_host(&it, out);
+    }
+    return 0;
+}
+
+int nlibc_getitimer(int which, struct itimerval *out) {
+    NATIVE_FRAME;
+    if (out == NULL)
+        return nlibc_fail(_EFAULT);
+    guest_addr_t guest_it = native_scratch_alloc(sizeof(struct nlibc_guest_itimerval));
+    if (guest_it == 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res = native_syscall(NATIVE_SYS_getitimer, which, guest_it);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    struct nlibc_guest_itimerval it = {};
+    if (native_scratch_get(&it, guest_it, sizeof(it)) < 0)
+        return nlibc_fail(_EFAULT);
+    nlibc_itimer_to_host(&it, out);
+    return 0;
+}
+
+// Linux has no alarm syscall on asm-generic; alarm IS setitimer(ITIMER_REAL),
+// which is how glibc and musl implement it too. The return value is the number
+// of seconds left on the previous timer, rounded UP -- a timer with 1ns to run
+// must not report 0, which would mean "no alarm was set".
+unsigned int nlibc_alarm(unsigned int seconds) {
+    struct itimerval new_it = {}, old_it = {};
+    new_it.it_value.tv_sec = seconds;
+    if (nlibc_setitimer(ITIMER_REAL, &new_it, &old_it) < 0)
+        return 0;
+    unsigned int left = (unsigned int) old_it.it_value.tv_sec;
+    if (old_it.it_value.tv_usec != 0)
+        left++;
+    return left;
+}
+
+// struct tms is four clock_t. The guest's are 64-bit words on a 64-bit ABI.
+struct nlibc_guest_tms { sqword_t utime, stime, cutime, cstime; };
+
+clock_t nlibc_times(struct tms *out) {
+    NATIVE_FRAME;
+    guest_addr_t guest_tms = 0;
+    if (out != NULL) {
+        guest_tms = native_scratch_alloc(sizeof(struct nlibc_guest_tms));
+        if (guest_tms == 0)
+            return (clock_t) nlibc_fail(_ENOMEM);
+    }
+    sqword_t res = native_syscall(NATIVE_SYS_times, guest_tms);
+    if (res < 0)
+        return (clock_t) nlibc_fail((int) res);
+    if (out != NULL) {
+        struct nlibc_guest_tms t = {};
+        if (native_scratch_get(&t, guest_tms, sizeof(t)) < 0)
+            return (clock_t) nlibc_fail(_EFAULT);
+        out->tms_utime = t.utime;
+        out->tms_stime = t.stime;
+        out->tms_cutime = t.cutime;
+        out->tms_cstime = t.cstime;
+    }
+    return (clock_t) res;
+}
+
+// ------------------------------------------------------------------ vectored
+//
+// readv/writev take an array of iovecs holding HOST pointers, and marshalling
+// those into guest space would mean copying every buffer and rebuilding the
+// array. Looping over the plain calls is the same system calls in the same
+// order with the same short-read semantics, and it is what the guest sees
+// either way.
+ssize_t nlibc_readv(int fd_no, const struct iovec *iov, int count) {
+    if (iov == NULL || count < 0)
+        return nlibc_fail(_EINVAL);
+    ssize_t total = 0;
+    for (int i = 0; i < count; i++) {
+        if (iov[i].iov_len == 0)
+            continue;
+        ssize_t n = nlibc_read(fd_no, iov[i].iov_base, iov[i].iov_len);
+        if (n < 0)
+            return total > 0 ? total : -1;   // errno is already set
+        total += n;
+        if ((size_t) n < iov[i].iov_len)
+            break;                            // short read ends the whole call
+    }
+    return total;
+}
+
+ssize_t nlibc_writev(int fd_no, const struct iovec *iov, int count) {
+    if (iov == NULL || count < 0)
+        return nlibc_fail(_EINVAL);
+    ssize_t total = 0;
+    for (int i = 0; i < count; i++) {
+        if (iov[i].iov_len == 0)
+            continue;
+        ssize_t n = nlibc_write(fd_no, iov[i].iov_base, iov[i].iov_len);
+        if (n < 0)
+            return total > 0 ? total : -1;
+        total += n;
+        if ((size_t) n < iov[i].iov_len)
+            break;
+    }
+    return total;
+}
+
+ssize_t nlibc_pread(int fd_no, void *buf, size_t n, off_t off) {
+    NATIVE_FRAME;
+    if (buf == NULL && n > 0)
+        return nlibc_fail(_EFAULT);
+    guest_addr_t guest_buf = native_scratch_alloc(n);
+    if (guest_buf == 0 && n > 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res = native_syscall(NATIVE_SYS_pread, fd_no, guest_buf, n, off);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    if (res > 0 && native_scratch_get(buf, guest_buf, (size_t) res) < 0)
+        return nlibc_fail(_EFAULT);
+    return (ssize_t) res;
+}
+
+ssize_t nlibc_pwrite(int fd_no, const void *buf, size_t n, off_t off) {
+    NATIVE_FRAME;
+    if (buf == NULL && n > 0)
+        return nlibc_fail(_EFAULT);
+    guest_addr_t guest_buf = native_scratch_put(buf, n);
+    if (guest_buf == 0 && n > 0)
+        return nlibc_fail(_ENOMEM);
+    return (ssize_t) nlibc_ret(native_syscall(NATIVE_SYS_pwrite, fd_no,
+            guest_buf, n, off));
+}
+
+// ------------------------------------------------------------------ identity
+
+int nlibc_gethostname(char *name, size_t len) {
+    // The guest's nodename, from uname -- there is no gethostname syscall, and
+    // the host's would answer with the Mac's name.
+    struct utsname u;
+    if (nlibc_uname(&u) < 0)
+        return -1;
+    if (name == NULL)
+        return nlibc_fail(_EFAULT);
+    size_t need = strlen(u.nodename) + 1;
+    if (need > len)
+        return nlibc_fail(_ENAMETOOLONG);
+    memcpy(name, u.nodename, need);
+    return 0;
+}
+
+// getentropy over getrandom. Its contract is all-or-nothing for up to 256
+// bytes, where getrandom may return fewer, so this loops.
+int nlibc_getentropy(void *buf, size_t len) {
+    NATIVE_FRAME;
+    if (len > 256)
+        return nlibc_fail(_EIO);
+    if (buf == NULL && len > 0)
+        return nlibc_fail(_EFAULT);
+    guest_addr_t guest_buf = native_scratch_alloc(len);
+    if (guest_buf == 0 && len > 0)
+        return nlibc_fail(_ENOMEM);
+    size_t got = 0;
+    while (got < len) {
+        sqword_t res = native_syscall(NATIVE_SYS_getrandom, guest_buf + got,
+                len - got, 0);
+        if (res < 0)
+            return nlibc_fail((int) res);
+        if (res == 0)
+            return nlibc_fail(_EIO);
+        got += (size_t) res;
+    }
+    if (len > 0 && native_scratch_get(buf, guest_buf, len) < 0)
+        return nlibc_fail(_EFAULT);
+    return 0;
+}
+
+// ----------------------------------------------------------- temporary names
+//
+// mkdtemp and mktemp share mkstemp's contract: the pattern is the caller's
+// buffer and the name used has to be written back into it.
+static bool nlibc_fill_template(char *template) {
+    static const char alphabet[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+    size_t len = strlen(template);
+    if (len < 6 || strcmp(template + len - 6, "XXXXXX") != 0)
+        return false;
+    for (int i = 0; i < 6; i++)
+        template[len - 6 + i] = alphabet[(unsigned) rand() % (sizeof(alphabet) - 1)];
+    return true;
+}
+
+char *nlibc_mkdtemp(char *template) {
+    if (template == NULL) {
+        nlibc_fail(_EINVAL);
+        return NULL;
+    }
+    for (int attempt = 0; attempt < 128; attempt++) {
+        if (!nlibc_fill_template(template)) {
+            nlibc_fail(_EINVAL);
+            return NULL;
+        }
+        if (nlibc_mkdir(template, 0700) == 0)
+            return template;
+        if (errno != EEXIST)
+            return NULL;
+    }
+    nlibc_fail(_EEXIST);
+    return NULL;
+}
+
+// mktemp only reports a name that did not exist a moment ago, which is why it
+// is the unsafe one everywhere. Same contract here; the race is the caller's.
+char *nlibc_mktemp(char *template) {
+    if (template == NULL) {
+        nlibc_fail(_EINVAL);
+        return NULL;
+    }
+    for (int attempt = 0; attempt < 128; attempt++) {
+        if (!nlibc_fill_template(template)) {
+            nlibc_fail(_EINVAL);
+            return NULL;
+        }
+        struct stat st;
+        if (nlibc_stat(template, &st) < 0 && errno == ENOENT)
+            return template;
+    }
+    template[0] = '\0';
+    return template;
+}
+
+// -------------------------------------------------------------- system limits
+//
+// pathconf and confstr have no syscall behind them on any system: they report
+// constants the C library knows. Answering from the host's headers would be
+// answering about iOS, so the guest's values are written out.
+long nlibc_pathconf(const char *path, int name) {
+    (void) path;
+    return nlibc_fpathconf(-1, name);
+}
+
+long nlibc_fpathconf(int fd_no, int name) {
+    (void) fd_no;
+    switch (name) {
+        case _PC_LINK_MAX:         return 127;
+        case _PC_MAX_CANON:        return 255;
+        case _PC_MAX_INPUT:        return 255;
+        case _PC_NAME_MAX:         return 255;
+        case _PC_PATH_MAX:         return 4096;   // the guest's PATH_MAX
+        case _PC_PIPE_BUF:         return 4096;
+        case _PC_CHOWN_RESTRICTED: return 1;
+        case _PC_NO_TRUNC:         return 1;
+        case _PC_VDISABLE:         return 0;
+        default:                   return -1;     // "no limit", errno untouched
+    }
+}
+
+size_t nlibc_confstr(int name, char *buf, size_t len) {
+    // _CS_PATH is the only one anything asks for in practice, and it must be
+    // the GUEST's default PATH rather than the Mac's /usr/bin:/bin.
+    const char *value = name == _CS_PATH ? "/usr/local/bin:/usr/bin:/bin" : NULL;
+    if (value == NULL) {
+        errno = EINVAL;
+        return 0;
+    }
+    size_t need = strlen(value) + 1;
+    if (buf != NULL && len > 0) {
+        size_t copy = need < len ? need : len;
+        memcpy(buf, value, copy);
+        buf[copy - 1] = '\0';
+    }
+    return need;
+}
+
+// ---------------------------------------------------------------- refusals
+//
+// Dynamic loading cannot work here and the honest answer is to say so. A
+// native program lives inside a signed app: on iOS there is no dlopen of
+// anything the app did not ship, and a plugin compiled for the GUEST would be
+// guest code, which is not something host code can call into. bash's loadable
+// builtins are the caller, and they degrade to "not available" rather than
+// misbehaving.
+void *nlibc_dlopen(const char *path, int mode) {
+    (void) path; (void) mode;
+    return NULL;
+}
+void *nlibc_dlsym(void *handle, const char *symbol) {
+    (void) handle; (void) symbol;
+    return NULL;
+}
+int nlibc_dlclose(void *handle) {
+    (void) handle;
+    return -1;
+}
+const char *nlibc_dlerror(void) {
+    return "dynamic loading is not available in iSH-AOK";
+}
+
+// ------------------------------------------------- walking passwd and group
+//
+// getpwent/getgrent enumerate rather than look up, which the scanner above was
+// not built for -- it stops at the first match. Rather than a second parser,
+// the key becomes an INDEX and the match function counts: the Nth call returns
+// the Nth entry. That re-reads the file per entry, which is O(n^2) over a walk
+// and completely fine for /etc/passwd; it also means the enumeration sees the
+// file as it is now rather than a snapshot, which is what a real getpwent does.
+//
+// The state is file-scope, so two native programs walking at once would share a
+// position -- the same sharing already noted for nlibc_std and the passwd cache.
+struct nlibc_ent_key { size_t want, seen; };
+
+static bool nlibc_pw_ent_match(char **f, size_t n, const void *keyv) {
+    struct nlibc_ent_key *key = (struct nlibc_ent_key *) keyv;
+    if (n < 7)
+        return false;
+    if (key->seen++ != key->want)
+        return false;
+    nlibc_pw.pw_name = f[0];
+    nlibc_pw.pw_passwd = f[1];
+    nlibc_pw.pw_uid = (uid_t) strtoul(f[2], NULL, 10);
+    nlibc_pw.pw_gid = (gid_t) strtoul(f[3], NULL, 10);
+    nlibc_pw.pw_gecos = f[4];
+    nlibc_pw.pw_dir = f[5];
+    nlibc_pw.pw_shell = f[6];
+    return true;
+}
+
+static size_t nlibc_pw_pos;
+
+void nlibc_setpwent(void) { nlibc_pw_pos = 0; }
+void nlibc_endpwent(void) { nlibc_pw_pos = 0; }
+
+struct passwd *nlibc_getpwent(void) {
+    struct nlibc_ent_key key = { nlibc_pw_pos, 0 };
+    memset(&nlibc_pw, 0, sizeof(nlibc_pw));
+    if (!nlibc_scan_db("/etc/passwd", nlibc_pw_line, sizeof(nlibc_pw_line),
+                       nlibc_pw_ent_match, &key))
+        return NULL;
+    nlibc_pw_pos++;
+    return &nlibc_pw;
+}
+
+static bool nlibc_gr_ent_match(char **f, size_t n, const void *keyv) {
+    struct nlibc_ent_key *key = (struct nlibc_ent_key *) keyv;
+    if (n < 3)
+        return false;
+    if (key->seen++ != key->want)
+        return false;
+    nlibc_gr_members[0] = NULL;
+    nlibc_gr.gr_name = f[0];
+    nlibc_gr.gr_passwd = f[1];
+    nlibc_gr.gr_gid = (gid_t) strtoul(f[2], NULL, 10);
+    nlibc_gr.gr_mem = nlibc_gr_members;
+    return true;
+}
+
+static size_t nlibc_gr_pos;
+
+void nlibc_setgrent(void) { nlibc_gr_pos = 0; }
+void nlibc_endgrent(void) { nlibc_gr_pos = 0; }
+
+struct group *nlibc_getgrent(void) {
+    struct nlibc_ent_key key = { nlibc_gr_pos, 0 };
+    memset(&nlibc_gr, 0, sizeof(nlibc_gr));
+    if (!nlibc_scan_db("/etc/group", nlibc_gr_line, sizeof(nlibc_gr_line),
+                       nlibc_gr_ent_match, &key))
+        return NULL;
+    nlibc_gr_pos++;
+    return &nlibc_gr;
+}
+
+// ------------------------------------------------------------------ execve
+//
+// execv with the environment given explicitly rather than taken from the task.
+// Same spawn-then-exit shape, and the same caveat: the pid changes.
+int nlibc_execve(const char *path, char *const argv[], char *const envp[]) {
+    if (path == NULL || argv == NULL)
+        return nlibc_fail(_EFAULT);
+    dword_t pid = 0;
+    int err = native_spawn(path, argv, envp != NULL ? envp : native_env_vector(),
+            &pid);
+    if (err < 0)
+        return nlibc_fail(err);
+    int status = 0;
+    if (native_waitpid(pid, &status, 0) < 0)
+        nlibc_exit(127);
+    nlibc_exit(WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status));
+}
+
+// ------------------------------------------------------------------ pselect
+//
+// select with a timespec and a signal mask. nlibc_select already goes through
+// pselect6 because that is the only one the guest has; this is the same call
+// with the two arguments select cannot express.
+int nlibc_pselect(int nfds, void *readfds, void *writefds, void *errorfds,
+        const struct timespec *timeout, const sigset_t *sigmask) {
+    NATIVE_FRAME;
+    if (nfds < 0)
+        return nlibc_fail(_EINVAL);
+    size_t size = ((size_t) nfds + 7) / 8;
+    size = (size + 7) & ~(size_t) 7;
+
+    guest_addr_t guest_sets[3] = {0, 0, 0};
+    void *host_sets[3] = { readfds, writefds, errorfds };
+    for (int i = 0; i < 3; i++) {
+        if (host_sets[i] == NULL)
+            continue;
+        guest_sets[i] = native_scratch_put(host_sets[i], size);
+        if (guest_sets[i] == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+
+    guest_addr_t guest_ts = 0;
+    if (timeout != NULL) {
+        struct nlibc_guest_timespec ts = {
+            .sec = timeout->tv_sec, .nsec = timeout->tv_nsec,
+        };
+        guest_ts = native_scratch_put(&ts, sizeof(ts));
+        if (guest_ts == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+
+    // pselect6's sixth argument is not the mask but a {mask pointer, size}
+    // pair -- the syscall ran out of registers, and getting this wrong means
+    // the kernel reads a pointer out of a length.
+    struct { qword_t mask; qword_t size; } sigarg = { 0, sizeof(sigset_t_) };
+    guest_addr_t guest_sig = 0;
+    if (sigmask != NULL) {
+        sigset_t_ guest_mask = nlibc_sigset_to_guest(sigmask);
+        guest_addr_t guest_maskp = native_scratch_put(&guest_mask, sizeof(guest_mask));
+        if (guest_maskp == 0)
+            return nlibc_fail(_ENOMEM);
+        sigarg.mask = guest_maskp;
+        guest_sig = native_scratch_put(&sigarg, sizeof(sigarg));
+        if (guest_sig == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+
+    sqword_t res = native_syscall(NATIVE_SYS_pselect6, nfds, guest_sets[0],
+            guest_sets[1], guest_sets[2], guest_ts, guest_sig);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    for (int i = 0; i < 3; i++)
+        if (guest_sets[i] != 0 && native_scratch_get(host_sets[i], guest_sets[i], size) < 0)
+            return nlibc_fail(_EFAULT);
+    return (int) res;
+}
