@@ -15,6 +15,7 @@
 // native_env_vector() and the native_* helpers, and read every host-libc name
 // here twice.
 
+#include <stdatomic.h>
 #include <stdbool.h>
 
 #include "kernel/calls.h"
@@ -27,21 +28,51 @@
 // one of its own. The same trick SmallCLUE's CMake build uses on Nextvi.
 int bash_main_entry(int argc, char **argv, char **envp);
 
-// bash is a program written to run once and exit -- and inside AOK it does not,
-// because `bash` is a function called on a thread of the app's process (see
-// the note in kernel/nextvi_glue.c, which is the same problem in a smaller
-// program). Unlike Nextvi it has thousands of globals rather than ninety-odd,
-// so resetting them individually is not a route that ends well.
+// The guest's own bash, for the second and later SIMULTANEOUS invocations. The
+// same choice deps/bash/aok_fork.c makes for a subshell, for the same reason,
+// and named the same way there.
+#define AOK_GUEST_BASH "/bin/bash"
+
+// Is a native bash live in this address space right now?
 //
-// What saves it is that bash already has to leave a clean shell behind for
-// `exec`: shell_reinitialize() exists for exactly this and is what the
-// -c path uses. It is not yet wired up here, so the FIRST bash in a session is
-// the trustworthy one; a second is on notice until this is finished. That is
-// recorded rather than papered over because a stale global in a shell is a
-// wrong answer, not a crash.
+// bash is a program written to run once and exit; inside AOK it is a C function
+// on a thread of the app's process (see kernel/nextvi_glue.c, the same problem
+// in a much smaller program). Two questions follow from that, and they are NOT
+// the same question:
+//
+//   Sequentially -- a second bash after the first has returned -- every global
+//   still holds what the last one left. bash has a function for exactly this,
+//   shell_reinitialize(), which main() already calls when shell_initialized is
+//   set; the iSH-AOK additions to it are in deps/bash/shell.c and the audit
+//   behind them is docs/bash_native_reentry.md.
+//
+//   SIMULTANEOUSLY -- `bash` from a bash prompt, a second terminal, or any of
+//   bash's own tests that re-run $THIS_SH -- no amount of reinitialising helps,
+//   because the two shells would be sharing one set of globals while BOTH are
+//   live. The second one's shell_reinitialize is then not a fix but the injury:
+//   it resets the first shell's variables, jobs and traps out from under it.
+//   Observed as `bash -c 'echo outer; bash -c "echo inner"; echo back'` printing
+//   outer and inner and then stopping, with no error of any kind.
+//
+// What a second live shell actually needs is a separate address space, and AOK
+// has one mechanism for that: a guest process. So this hands over to the
+// emulated bash, which is a real bash 5.2 of the same version, merely slower.
+// exec rather than spawn-and-wait, so the task becomes that shell instead of
+// supervising it -- $$ changes (docs/bash_native_plan.md section 2), which the
+// shell being replaced cannot observe.
+static atomic_flag bash_live = ATOMIC_FLAG_INIT;
+
 int native_bash_main(int argc, char *const argv[], char *const envp[]) {
     (void) envp;   // bash reads the environment through getenv, which is routed
+    if (atomic_flag_test_and_set(&bash_live)) {
+        nlibc_execv(AOK_GUEST_BASH, argv);
+        // Only reached if the guest has no bash at all, which is worth saying
+        // out loud rather than failing as a shell that does nothing.
+        nlibc_perror(AOK_GUEST_BASH);
+        return 127;
+    }
     int status = bash_main_entry(argc, (char **) argv, native_env_vector());
     nlibc_flush_std();
+    atomic_flag_clear(&bash_live);
     return status;
 }

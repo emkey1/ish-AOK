@@ -403,6 +403,26 @@ struct task *task_create_(struct task *parent) {
     task->vfork = NULL;
     task->exit_signal = 0;
 
+    // Both of these are OWNED heap pointers, and `*task = *parent` above is a
+    // shallow copy, so leaving them aliased gives two tasks one allocation and
+    // whichever dies first frees it under the other. task_free_final does
+    // exactly that (native_exec_discard_pending, native_env_discard), and so
+    // does native_env_init on the child's own exec.
+    //
+    // That is not theoretical. Native bash assigns `environ = export_env`, so
+    // the task's environment vector IS bash's exported-variable array; every
+    // command bash ran spawned a child task that inherited the pointer and
+    // freed the array on its way out. The shell then read freed memory in
+    // add_or_supercede_exported_var and the app died on a null entry -- while
+    // running bash's own test suite, several commands after the one that
+    // caused it.
+    //
+    // Null rather than duplicate: a task made here is on its way to an execve,
+    // and the environment it ends up with is that call's envp. A native
+    // program asking before then gets an empty vector from native_env_slot.
+    task->native_env = NULL;
+    task->native_exec = NULL;
+
     lock_init(&task->general_lock, "task_creat_gen\0");
 
     task->sockrestart = (struct task_sockrestart) {};

@@ -473,6 +473,16 @@ struct dirent *nlibc_readdir(DIR *handle) {
     memcpy(dir->ent.d_name, entry->name, name_max);
     dir->ent.d_name[name_max] = '\0';
     dir->ent.d_reclen = sizeof(dir->ent);
+    // d_namlen is a Darwin field with no Linux counterpart, so nothing in the
+    // getdents64 record above supplies it and the memset left it zero. That is
+    // not a cosmetic omission: it is a field the HOST's struct dirent declares,
+    // so host code is entitled to trust it, and portable code reaches it
+    // through configure. bash's glob does exactly that --
+    // HAVE_STRUCT_DIRENT_D_NAMLEN, then `bcopy (dp->d_name, nextname,
+    // D_NAMLEN (dp) + 1)` -- so every glob returned one character per file:
+    // `echo *.txt` printed "f f" for f1.txt and f2.txt. Fill in every field of
+    // the host's structure, not only the ones the guest's record names.
+    dir->ent.d_namlen = (__uint16_t) strlen(dir->ent.d_name);
     return &dir->ent;
 }
 
