@@ -15,3 +15,7 @@
 [submodule "deps/smallclue"]
 	path = deps/smallclue
 	url = https://github.com/emkey1/smallclue.git
+[submodule "deps/bash"]
+	path = deps/bash
+	url = https://github.com/emkey1/bash.git
+	branch = main
