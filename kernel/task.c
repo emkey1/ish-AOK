@@ -473,6 +473,7 @@ static void task_free_final(struct task *task) {
     // A native program recorded by execve but never reached -- the task died
     // between the exec and its first execution (task_start failing, say).
     native_exec_discard_pending(task);
+    native_env_discard(task);
     if (task != NULL && task_is_leader(task) && task->group != NULL) {
         cond_destroy(&task->group->child_exit);
         free(task->group->cgroup_path);

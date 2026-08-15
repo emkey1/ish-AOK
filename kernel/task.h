@@ -82,6 +82,10 @@ struct task {
     // only impersonating it (kernel/init.c's boot-command launcher does
     // exactly that, then hands the task to its own thread).
     struct native_exec_pending *native_exec;
+    // The environment that native program sees, seeded from execve's envp.
+    // Here rather than in a global because two native programs really can run
+    // at once, one per guest task (kernel/native.h).
+    char **native_env;
 
     struct {
         atomic_int count; // If positive, don't delete yet, wait_to_delete

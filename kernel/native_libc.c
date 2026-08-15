@@ -86,8 +86,6 @@ static int nlibc_host_errno(int guest_err) {
     }
 }
 
-extern char **environ;   // Darwin: needs declaring outside a main program
-
 static int nlibc_tty_ioctl(int fd_no, dword_t cmd, void *arg, size_t size, bool out);
 
 // Same reason as native_have_task: refuse rather than dereference NULL.
@@ -729,7 +727,7 @@ static int nlibc_exec_common(const char *path, char *const argv[], int search_pa
     }
 
     dword_t pid = 0;
-    int err = native_spawn(path, argv, environ, &pid);
+    int err = native_spawn(path, argv, native_env_vector(), &pid);
     if (err < 0)
         return nlibc_fail(err);
 
@@ -771,7 +769,7 @@ int nlibc_system(const char *command) {
         return 1;   // a shell is available
     char *argv[] = { (char *) "/bin/sh", (char *) "-c", (char *) command, NULL };
     dword_t pid = 0;
-    int err = native_spawn("/bin/sh", argv, environ, &pid);
+    int err = native_spawn("/bin/sh", argv, native_env_vector(), &pid);
     if (err < 0)
         return nlibc_fail(err);
     int status = 0;
@@ -1442,6 +1440,51 @@ int nlibc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 noreturn void nlibc_exit(int status) {
     nlibc_flush_std();
     do_exit_group((status & 0xff) << 8);
+}
+
+// --------------------------------------------------------------- environment
+//
+// getenv() in host code answers about the HOST process -- the developer's
+// shell on the macOS build, the app's on iOS. `env` printed the Mac's
+// environment, and every PATH search a native program made walked the Mac's
+// directories. The storage lives on the task (kernel/native.h); these are the
+// libc shapes over it.
+
+char **nlibc_environ(void) { return native_env_vector(); }
+
+char *nlibc_getenv(const char *name) {
+    // getenv's contract is that the pointer stays valid until the environment
+    // is next changed, which is exactly the lifetime of the entry it points
+    // into -- so this hands back the storage rather than a copy.
+    return (char *) native_env_get(name);
+}
+
+int nlibc_setenv(const char *name, const char *value, int overwrite) {
+    int err = native_env_set(name, value, overwrite != 0);
+    return err < 0 ? nlibc_fail(err) : 0;
+}
+
+int nlibc_unsetenv(const char *name) {
+    int err = native_env_unset(name);
+    return err < 0 ? nlibc_fail(err) : 0;
+}
+
+int nlibc_putenv(char *entry) {
+    // putenv's contract is that the caller's string BECOMES the environment
+    // entry. Copying instead is the safe divergence: the alternative is
+    // holding a pointer into a caller's buffer that may be a local.
+    if (entry == NULL)
+        return nlibc_fail(_EINVAL);
+    const char *eq = strchr(entry, '=');
+    if (eq == NULL)
+        return nlibc_unsetenv(entry);
+    char name[256];
+    size_t len = (size_t) (eq - entry);
+    if (len >= sizeof(name))
+        return nlibc_fail(_EINVAL);
+    memcpy(name, entry, len);
+    name[len] = '\0';
+    return nlibc_setenv(name, eq + 1, 1);
 }
 
 // ------------------------------------------------------------------ identity

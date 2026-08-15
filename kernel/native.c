@@ -347,6 +347,10 @@ void native_exec_run_pending(void) {
     current->comm[sizeof(current->comm) - 1] = '\0';
     unlock(&current->general_lock);
 
+    // Before the program runs: getenv() in host code would otherwise answer
+    // about the Mac (kernel/native.h).
+    native_env_init(envp);
+
     int status = prog->main(argc, argv, envp);
 
     native_free_vector(argv);
@@ -355,6 +359,103 @@ void native_exec_run_pending(void) {
     // Same encoding sys_exit_group uses: the wait status carries the exit code
     // in its high byte.
     do_exit_group((status & 0xff) << 8);
+}
+
+// -------------------------------------------------------------- environment
+//
+// See kernel/native.h. Kept here rather than in the libc shim because the shim
+// is force-included with its own macros, and this has to call the real
+// getenv-free libc; kernel/native_io.c's PATH search needs it too, and that
+// file is not shim-included either.
+
+static char **native_env_empty(void) {
+    static char *empty[] = { NULL };
+    return empty;
+}
+
+char **native_env_vector(void) {
+    if (current == NULL || current->native_env == NULL)
+        return native_env_empty();
+    return current->native_env;
+}
+
+void native_env_init(char *const envp[]) {
+    if (current == NULL)
+        return;
+    native_env_discard(current);
+    size_t count = native_envp_count(envp);
+    current->native_env = native_dup_vector(envp, count);
+}
+
+void native_env_discard(struct task *task) {
+    if (task == NULL || task->native_env == NULL)
+        return;
+    native_free_vector(task->native_env);
+    task->native_env = NULL;
+}
+
+// The index of `name` in the vector, or -1. Matches on the whole name up to
+// the '=', so PATH does not match PATH_TO_SOMETHING.
+static ssize_t native_env_find(const char *name) {
+    if (name == NULL || current == NULL || current->native_env == NULL)
+        return -1;
+    size_t len = strlen(name);
+    for (size_t i = 0; current->native_env[i] != NULL; i++)
+        if (strncmp(current->native_env[i], name, len) == 0 &&
+                current->native_env[i][len] == '=')
+            return (ssize_t) i;
+    return -1;
+}
+
+const char *native_env_get(const char *name) {
+    ssize_t at = native_env_find(name);
+    if (at < 0)
+        return NULL;
+    return current->native_env[at] + strlen(name) + 1;
+}
+
+int native_env_set(const char *name, const char *value, bool overwrite) {
+    if (current == NULL || name == NULL || value == NULL || name[0] == '\0' ||
+            strchr(name, '=') != NULL)
+        return _EINVAL;
+
+    char *entry = malloc(strlen(name) + strlen(value) + 2);
+    if (entry == NULL)
+        return _ENOMEM;
+    sprintf(entry, "%s=%s", name, value);
+
+    ssize_t at = native_env_find(name);
+    if (at >= 0) {
+        if (!overwrite) {
+            free(entry);
+            return 0;
+        }
+        free(current->native_env[at]);
+        current->native_env[at] = entry;
+        return 0;
+    }
+
+    size_t count = native_envp_count(current->native_env);
+    char **grown = realloc(current->native_env, (count + 2) * sizeof(*grown));
+    if (grown == NULL) {
+        free(entry);
+        return _ENOMEM;
+    }
+    grown[count] = entry;
+    grown[count + 1] = NULL;
+    current->native_env = grown;
+    return 0;
+}
+
+int native_env_unset(const char *name) {
+    ssize_t at = native_env_find(name);
+    if (at < 0)
+        return 0;   // unsetenv succeeds on a name that was not set
+    free(current->native_env[at]);
+    size_t count = native_envp_count(current->native_env);
+    memmove(&current->native_env[at], &current->native_env[at + 1],
+            (count - (size_t) at) * sizeof(*current->native_env));
+    return 0;
 }
 
 // ---------------------------------------------------------------- checkpoint

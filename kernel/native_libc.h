@@ -131,6 +131,14 @@ struct passwd *nlibc_getpwnam(const char *name);
 struct group *nlibc_getgrgid(gid_t gid);
 struct group *nlibc_getgrnam(const char *name);
 
+/* Environment: the GUEST's, not the host process's. `env` printed the Mac's
+ * before this, and the PATH search for a child walked the Mac's directories. */
+char **nlibc_environ(void);
+char *nlibc_getenv(const char *name);
+int nlibc_setenv(const char *name, const char *value, int overwrite);
+int nlibc_unsetenv(const char *name);
+int nlibc_putenv(char *entry);
+
 /* --- remaining host-libc holes; see the block comment in the .c ---------- */
 int nlibc_dup(int fd);
 int nlibc_dup2(int oldfd, int newfd);
@@ -308,6 +316,16 @@ pid_t nlibc_wait(int *status);
 #define setuid                   nlibc_setuid
 #define setgid                   nlibc_setgid
 #define initgroups               nlibc_initgroups
+/* `environ` is a variable, not a call, and it has to stay per-task -- so the
+ * rewrite makes it one. SmallCLUE's own `extern char **environ;` becomes a
+ * declaration of this function, and every use of `environ` becomes a call to
+ * it, which is what keeps two concurrently-running native programs from
+ * sharing one environment. */
+#define environ                  nlibc_environ()
+#define getenv                   nlibc_getenv
+#define setenv                   nlibc_setenv
+#define unsetenv                 nlibc_unsetenv
+#define putenv                   nlibc_putenv
 #define getpwuid                 nlibc_getpwuid
 #define getpwnam                 nlibc_getpwnam
 #define getgrgid                 nlibc_getgrgid

@@ -9,6 +9,7 @@
 #include "kernel/calls.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
+#include "kernel/native.h"
 #include "kernel/native_io.h"
 #include "kernel/task.h"
 #include "fs/fd.h"
@@ -129,7 +130,10 @@ void native_printf(fd_t fd_no, const char *fmt, ...) {
 int native_path_search(const char *file, char *out, size_t outlen) {
     if (file == NULL || out == NULL)
         return _EINVAL;
-    const char *path = getenv("PATH");
+    // The GUEST's PATH. getenv() here reads the host process's environment,
+    // so this walked the Mac's directories -- it only ever found anything
+    // because each candidate is then tested through the VFS.
+    const char *path = native_env_get("PATH");
     if (path == NULL || path[0] == '\0')
         path = "/usr/local/bin:/usr/bin:/bin";
     while (*path != '\0') {

@@ -87,4 +87,26 @@ struct task;
 // first execution.
 void native_exec_discard_pending(struct task *task);
 
+// The environment a native program sees.
+//
+// getenv() in host code reads the HOST process's environment -- the Mac's, or
+// the iOS app's. So `env` printed the developer's shell, and worse, the PATH
+// search for a native program's children walked the Mac's directories. The
+// guest's environment arrives as execve's envp and has to be kept somewhere
+// the shim can reach; it lives on the task, so a program's own pthreads (which
+// share `current`) share it, and each concurrently-running native program has
+// its own.
+//
+// Seeded from execve's envp; owned by the task from then on.
+void native_env_init(char *const envp[]);
+void native_env_discard(struct task *task);
+
+// NULL-terminated, and never NULL itself -- an empty environment is an array
+// holding just the terminator, which is what a caller iterating it expects.
+char **native_env_vector(void);
+const char *native_env_get(const char *name);
+// 0, or a negative errno.
+int native_env_set(const char *name, const char *value, bool overwrite);
+int native_env_unset(const char *name);
+
 #endif
