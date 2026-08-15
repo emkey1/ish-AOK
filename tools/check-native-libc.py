@@ -162,7 +162,8 @@ def _symbols(path, args):
 # gets a new archive, and the failure this avoids is checking half the native
 # code and reading "clean" -- which is exactly what splitting Nextvi out of
 # libsmallclue.a to give it its own -D made possible.
-DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a")
+DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a",
+                   "build/libbash.a")
 
 
 # The libc names kernel/native_libc.h already rewrites. Read from the header

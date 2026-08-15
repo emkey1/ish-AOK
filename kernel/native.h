@@ -46,6 +46,17 @@ struct native_program {
 // reports the situation loudly rather than failing with ENOEXEC.
 const struct native_program *native_program_lookup(const char *name);
 
+// Enumerating what this build actually has, so /AOK/native (fs/aok.c) is served
+// FROM the registry rather than from a second list beside it. Adding a native
+// program is then one table entry, not an entry plus five places in the
+// filesystem that have to agree with it.
+//
+// The index is over programs that are present: a program whose implementation
+// is not in this build (a submodule nobody populated) is skipped, so it has no
+// node and exec finds nothing, rather than a node that dispatches into a hole.
+size_t native_program_count(void);
+const struct native_program *native_program_at(size_t index);
+
 // Running a native program cannot simply happen where execve would have loaded
 // the ELF: that path never returns, so every buffer the execve syscall had
 // allocated -- including the argv/envp blocks it frees on the way out -- would

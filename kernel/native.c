@@ -236,16 +236,53 @@ static int smallclue_real_main(int argc, char *const argv[], char *const envp[])
     return status;
 }
 
+// bash (kernel/bash_glue.c), which is only in the build when the deps/bash
+// submodule is populated. WEAK rather than a build-wide define: the address is
+// simply NULL when nothing defines it, so the table below says what programs
+// COULD exist and native_program_lookup answers for what actually does. That
+// keeps the condition in one place instead of in a -D that every translation
+// unit would have to agree about.
+#ifdef ISH_NATIVE_BASH
+int native_bash_main(int argc, char *const argv[], char *const envp[]);
+#endif
+
 static const struct native_program native_programs[] = {
     { "smallclue", smallclue_real_main },
+#ifdef ISH_NATIVE_BASH
+    { "bash", native_bash_main },
+#endif
 };
+
+size_t native_program_count(void) {
+    size_t n = 0;
+    for (size_t i = 0; i < sizeof(native_programs) / sizeof(native_programs[0]); i++)
+        if (native_programs[i].main != NULL)
+            n++;
+    return n;
+}
+
+const struct native_program *native_program_at(size_t index) {
+    for (size_t i = 0; i < sizeof(native_programs) / sizeof(native_programs[0]); i++) {
+        if (native_programs[i].main == NULL)
+            continue;
+        if (index-- == 0)
+            return &native_programs[i];
+    }
+    return NULL;
+}
 
 const struct native_program *native_program_lookup(const char *name) {
     if (name == NULL)
         return NULL;
-    for (size_t i = 0; i < sizeof(native_programs) / sizeof(native_programs[0]); i++)
+    for (size_t i = 0; i < sizeof(native_programs) / sizeof(native_programs[0]); i++) {
+        // A NULL main is a program this build does not have -- see the weak
+        // declaration above. Skipping it here means /AOK/native serves no node
+        // for it and exec finds nothing, rather than dispatching into a hole.
+        if (native_programs[i].main == NULL)
+            continue;
         if (strcmp(native_programs[i].name, name) == 0)
             return &native_programs[i];
+    }
     return NULL;
 }
 

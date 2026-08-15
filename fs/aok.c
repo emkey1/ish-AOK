@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "kernel/calls.h"
+#include "kernel/native.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
 #include "kernel/hostinfo.h"
@@ -69,7 +70,8 @@ enum aokfs_node_kind {
     // fallback stub described at aokfs_inline_file_data, which only ever runs
     // if native dispatch is unavailable.
     aokfs_native_dir,
-    aokfs_native_smallclue,
+    // No constant per program: /native/<name> nodes are AOKFS_NATIVE_BASE plus
+    // an index into kernel/native.c's registry. See the base below.
 };
 
 static enum aokfs_node_kind aokfs_decode_node(void *fs_data) {
@@ -89,6 +91,20 @@ static void *aokfs_encode_node(enum aokfs_node_kind node) {
 #include "aok_generated_tests.inc"
 #include "aok_generated_tools.inc"
 #include "aok_generated_docs.inc"
+// Native programs are addressed like the generated files above: a base plus an
+// index into kernel/native.c's registry, rather than one enum constant per
+// program. The registry is already the thing exec dispatches on, so serving
+// /AOK/native FROM it means adding a native program cannot leave the filesystem
+// and the dispatcher disagreeing about what exists.
+#define AOKFS_NATIVE_BASE 0x40000
+static bool aokfs_node_is_native(enum aokfs_node_kind node) {
+    return (unsigned) node >= AOKFS_NATIVE_BASE &&
+        (unsigned) node < AOKFS_NATIVE_BASE + native_program_count();
+}
+static const struct native_program *aokfs_node_native(enum aokfs_node_kind node) {
+    return native_program_at((unsigned) node - AOKFS_NATIVE_BASE);
+}
+
 #define AOKFS_GEN_BASE 0x10000
 #define AOKFS_GEN_TOOLS_BASE 0x20000
 #define AOKFS_GEN_DOCS_BASE 0x30000
@@ -152,7 +168,7 @@ static mode_t_ aokfs_node_mode(enum aokfs_node_kind node) {
         return S_IFDIR | 0555;
     if (aokfs_node_is_symlink(node))
         return S_IFLNK | 0777;
-    if (node == aokfs_tools_setup_ish_benchmark || node == aokfs_native_smallclue)
+    if (node == aokfs_tools_setup_ish_benchmark || aokfs_node_is_native(node))
         return S_IFREG | 0555;
     return S_IFREG | 0444;
 }
@@ -217,8 +233,13 @@ static const char *aokfs_node_path(enum aokfs_node_kind node) {
             return "/docs";
         case aokfs_native_dir:
             return "/native";
-        case aokfs_native_smallclue:
-            return "/native/smallclue";
+    }
+    if (aokfs_node_is_native(node)) {
+        // Built per call into a rotating buffer: the callers compare it or copy
+        // it immediately, and a native program's name is short and fixed.
+        static _Thread_local char path[64];
+        snprintf(path, sizeof(path), "/native/%s", aokfs_node_native(node)->name);
+        return path;
     }
     return "";
 }
@@ -257,13 +278,22 @@ static bool aokfs_lookup_node(const char *path, enum aokfs_node_kind *node_out) 
         aokfs_audio_wav,
         aokfs_docs_dir,
         aokfs_native_dir,
-        aokfs_native_smallclue,
     };
 
     for (size_t i = 0; i < sizeof(nodes) / sizeof(nodes[0]); i++) {
         enum aokfs_node_kind node = nodes[i];
         if (strcmp(path, aokfs_node_path(node)) == 0) {
             *node_out = node;
+            return true;
+        }
+    }
+    // /native/<name>, straight from the registry.
+    for (size_t i = 0; i < native_program_count(); i++) {
+        const struct native_program *prog = native_program_at(i);
+        char candidate[64];
+        snprintf(candidate, sizeof(candidate), "/native/%s", prog->name);
+        if (strcmp(path, candidate) == 0) {
+            *node_out = (enum aokfs_node_kind) (AOKFS_NATIVE_BASE + i);
             return true;
         }
     }
@@ -534,13 +564,15 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
         "# path -- see /AOK/README.txt.\n"
         "echo \"${0##*/}: native dispatch unavailable in this build\" >&2\n"
         "exit 127\n";
+    if (aokfs_node_is_native(node)) {
+        *size_out = sizeof(native_stub) - 1;
+        return native_stub;
+    }
     switch (node) {
         case aokfs_readme:
             *size_out = sizeof(readme) - 1;
             return readme;
-        case aokfs_native_smallclue:
-            *size_out = sizeof(native_stub) - 1;
-            return native_stub;
+
         case aokfs_version:
             pthread_once(&version_once, aokfs_init_version);
             *size_out = strlen(aokfs_version_text);
@@ -706,12 +738,8 @@ static int aokfs_fstat(struct fd *fd, struct statbuf *stat) {
 const char *aokfs_native_program_name(struct fd *fd) {
     if (fd == NULL || fd->mount == NULL || fd->mount->fs != &aokfs)
         return NULL;
-    switch (aokfs_decode_node(fd->fs_data)) {
-        case aokfs_native_smallclue:
-            return "smallclue";
-        default:
-            return NULL;
-    }
+    enum aokfs_node_kind node = aokfs_decode_node(fd->fs_data);
+    return aokfs_node_is_native(node) ? aokfs_node_native(node)->name : NULL;
 }
 
 static int aokfs_getpath(struct fd *fd, char *buf) {
@@ -806,12 +834,13 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
                 default: return 0;
             }
             break;
-        case aokfs_native_dir:
-            switch (fd->offset++) {
-                case 0: child = aokfs_native_smallclue; break;
-                default: return 0;
-            }
+        case aokfs_native_dir: {
+            size_t i = (size_t) fd->offset++;
+            if (i >= native_program_count())
+                return 0;
+            child = (enum aokfs_node_kind) (AOKFS_NATIVE_BASE + i);
             break;
+        }
         case aokfs_fixes_dir:
             switch (fd->offset++) {
                 case 0: child = aokfs_fixes_devuan_dir; break;

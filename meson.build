@@ -28,6 +28,19 @@ endif
 
 add_project_arguments('-Wno-switch', language: 'c')
 
+# Whether the deps/bash submodule is populated, decided HERE rather than beside
+# the bash target further down: kernel/native.c's registry needs the answer as a
+# define, and add_project_arguments has to run before any target is declared.
+#
+# A weak symbol would keep this local to one file and was tried first. It does
+# not work: ld64 will not leave an unresolved REFERENCE in a static initializer,
+# weak_import included, so a build without deps/bash failed to link on the table
+# entry itself.
+have_bash = import('fs').exists('deps/bash/shell.c')
+if have_bash
+    add_project_arguments('-DISH_NATIVE_BASH=1', language: 'c')
+endif
+
 # Resolved here (rather than next to the gadget source lists below) because
 # it also drives a project-wide define, and add_project_arguments must run
 # before any target is declared. The arm64-GUEST gadgets
@@ -457,6 +470,183 @@ if get_option('kernel') == 'ish'
             c_args: nextvi_c_args)
     endif
 
+    # ------------------------------------------------------------------ bash
+    #
+    # GNU bash as a second native program (docs/bash_native_plan.md). Like
+    # Nextvi it is a submodule that a plain checkout does not populate, so the
+    # build works either way and says so when it does not:
+    #
+    #     git submodule update --init deps/bash
+    bash_dir = 'deps/bash'
+
+    libbash = []
+    if have_bash
+        bash_includes = include_directories(
+            'deps/bash-shim',   # <builtins/builtext.h>; see the header there
+            bash_dir, bash_dir / 'generated', bash_dir / 'generated/builtins',
+            bash_dir / 'include', bash_dir / 'builtins', bash_dir / 'lib',
+        )
+
+        # What bash's own Makefile passes. -DHAVE_CONFIG_H above all: without it
+        # most of bash does not include config.h at all, and the failures look
+        # like missing headers rather than a missing define.
+        #
+        # CONF_* describe the GUEST rather than this Mac, because they are what
+        # $MACHTYPE and $OSTYPE report to a script -- a shell inside AOK saying
+        # "darwin" would be lying about the system its scripts are running on.
+        bash_defs = [
+            '-DHAVE_CONFIG_H', '-DSHELL',
+            # NOT -DMACOSX, which bash's configure would set here. It turns on
+            # HFS filename normalization (lib/sh/fnxform.c) -- and the
+            # filesystem bash sees is the GUEST's fakefs, not the Mac's, so
+            # decomposing names the way HFS wants would corrupt them.
+            '-DPROGRAM="bash"',
+            '-DCONF_HOSTTYPE="' + host_machine.cpu_family() + '"',
+            '-DCONF_OSTYPE="linux-gnu"',
+            '-DCONF_MACHTYPE="' + host_machine.cpu_family() + '-ish-linux-gnu"',
+            '-DCONF_VENDOR="ish"',
+            '-DLOCALEDIR="/usr/local/share/locale"', '-DPACKAGE="bash"',
+            # bash brings its own globbing, and macOS's <glob.h> shares the
+            # include guard _GLOB_H_ with bash's -- see kernel/native_libc.h.
+            '-DNATIVE_LIBC_OWN_GLOB',
+            # The two symbols that collide with libish, out of 1837 against
+            # 1775. main is the obvious one; wait_for is bash's job-control
+            # reaper against AOK's condition-variable wait (util/sync.h).
+            '-Dmain=bash_main_entry',
+            '-Dwait_for=bash_wait_for',
+            '-include', meson.current_source_dir() / 'kernel/native_libc.h',
+            # mkbuiltins writes bash_builtext.h here; deps/bash-shim forwards
+            # <builtins/builtext.h> to it.
+            '-I' + meson.current_build_dir(),
+            '-w',  # vendored code, not ours to police
+        ]
+
+        # mkbuiltins turns builtins/*.def into C. It runs on the BUILD machine,
+        # so it is a native: true executable and is NOT compiled with the shim
+        # -- it is a build tool reading files here, not a program that will run
+        # inside the guest.
+        mkbuiltins = executable('mkbuiltins',
+            files(bash_dir / 'builtins/mkbuiltins.c'),
+            native: true,
+            include_directories: bash_includes,
+            c_args: ['-DHAVE_CONFIG_H', '-DSHELL', '-w'])
+        run_mkbuiltins = find_program('tools/run-mkbuiltins.sh')
+        bash_def_dir = meson.current_source_dir() / bash_dir / 'builtins'
+
+        bash_defs_files = []
+        foreach d : run_command(python, '-c',
+                'import glob, os, sys; print(" ".join(sorted(os.path.basename(p) for p in glob.glob(sys.argv[1] + "/*.def"))))',
+                bash_def_dir, check: true).stdout().strip().split(' ')
+            bash_defs_files += files(bash_dir / 'builtins' / d)
+        endforeach
+
+        # The dispatch table and its externs, from every .def at once. Every
+        # .def goes in even where the builtin is compiled out: the #if guards
+        # inside the generated table are what leave `complete` and friends out
+        # of a build without readline.
+        bash_builtins_tbl = custom_target('bash_builtins_table',
+            output: ['bash_builtins.c', 'bash_builtext.h'],
+            input: bash_defs_files,
+            command: [run_mkbuiltins, 'table', mkbuiltins, bash_def_dir,
+                      '@OUTPUT0@', '@OUTPUT1@', '@INPUT@'])
+
+        # Builtins whose .c must not be LINKED, though their .def still feeds
+        # the table above. Each needs readline or history, which this build does
+        # not have, and each would drag in rl_*/history_* that nothing defines.
+        # bash itself gets away with compiling them because its builtins are a
+        # static archive and nothing references them -- link_whole here would
+        # pull them in regardless.
+        # bind and complete need READLINE, which this build does not have --
+        # config-bot.h undefines PROGRAMMABLE_COMPLETION when READLINE is off,
+        # so the generated table leaves their entries out and nothing refers to
+        # them. fc and history are NOT in this list: config-bot.h defines
+        # HISTORY from BANG_HISTORY, so those two builtins are live even though
+        # the readline LIBRARY is not.
+        bash_builtins_unlinked = ['bind.def', 'complete.def',
+                                  # reserved.def documents the shell keywords
+                                  # and produces no C file at all.
+                                  'reserved.def']
+        bash_builtin_src = []
+        foreach d : run_command(python, '-c',
+                'import glob, os, sys; print(" ".join(sorted(os.path.basename(p) for p in glob.glob(sys.argv[1] + "/*.def"))))',
+                bash_def_dir, check: true).stdout().strip().split(' ')
+            if not bash_builtins_unlinked.contains(d)
+                bash_builtin_src += custom_target('bash_builtin_' + d.split('.')[0],
+                    output: d.replace('.def', '.c'),
+                    input: files(bash_dir / 'builtins' / d),
+                    command: [run_mkbuiltins, 'one', mkbuiltins, bash_def_dir,
+                              '@INPUT@', '@OUTPUT@'])
+            endif
+        endforeach
+
+        # The sources bash actually links, taken from its own build rather than
+        # a glob: several top-level .c are build tools (mksignames, mksyntax),
+        # and lib/readline contributes only the nine files bash uses whether or
+        # not line editing is compiled in.
+        bash_top = ['shell.c', 'eval.c', 'y.tab.c', 'general.c', 'make_cmd.c',
+            'print_cmd.c', 'dispose_cmd.c', 'execute_cmd.c', 'variables.c',
+            'copy_cmd.c', 'error.c', 'expr.c', 'flags.c', 'jobs.c', 'subst.c',
+            'hashcmd.c', 'hashlib.c', 'mailcheck.c', 'trap.c', 'input.c',
+            'unwind_prot.c', 'pathexp.c', 'sig.c', 'test.c', 'version.c',
+            'alias.c', 'array.c', 'arrayfunc.c', 'assoc.c', 'braces.c',
+            'bracecomp.c', 'bashhist.c', 'bashline.c', 'list.c', 'stringlib.c',
+            'locale.c', 'findcmd.c', 'redir.c', 'pcomplete.c', 'pcomplib.c',
+            'xmalloc.c']
+        bash_builtins_static = ['common.c', 'evalstring.c', 'evalfile.c',
+            'getopt.c', 'bashgetopt.c']
+        # lib/sh's exact list, from bash's own build rather than a glob. 22 of
+        # its 75 sources are REPLACEMENTS configure compiles only where the
+        # system lacks the function -- getcwd, strerror, times, strtoul and so
+        # on -- and compiling those here would not merely be redundant, it
+        # would define the very names kernel/native_libc.h rewrites and shadow
+        # the routed versions with ones that talk to the host.
+        bash_lib_sh = ['casemod', 'clktck', 'clock', 'eaccess', 'fmtullong',
+            'fmtulong', 'fmtumax', 'fnxform', 'fpurge', 'getenv',
+            'gettimeofday', 'input_avail', 'itos', 'mailstat', 'makepath',
+            'mbscasecmp', 'mbschr', 'mbscmp', 'mktime', 'netconn', 'netopen',
+            'oslib', 'pathcanon', 'pathphys', 'random', 'setlinebuf', 'shmatch',
+            'shmbchar', 'shquote', 'shtty', 'snprintf', 'spell', 'stringlist',
+            'stringvec', 'strnlen', 'strtoimax', 'strtrans', 'strvis', 'timers',
+            'timeval', 'tmpfile', 'uconvert', 'ufuncs', 'unicode', 'utf8',
+            'wcsdup', 'wcsnwidth', 'winsize', 'zcatfd', 'zgetline', 'zmapfd',
+            'zread', 'zwrite']
+        bash_lib_other = ['lib/glob/glob.c', 'lib/glob/gmisc.c',
+            'lib/glob/smatch.c', 'lib/glob/strmatch.c',
+            'lib/glob/xmbsrtowcs.c', 'lib/tilde/tilde.c',
+            # The nine lib/readline sources bash uses whether or not line
+            # editing is compiled in -- history storage, multibyte helpers and
+            # its allocator.
+            'lib/readline/histexpand.c', 'lib/readline/histfile.c',
+            'lib/readline/history.c', 'lib/readline/histsearch.c',
+            'lib/readline/mbutil.c', 'lib/readline/savestring.c',
+            'lib/readline/shell.c', 'lib/readline/xfree.c',
+            'lib/readline/xmalloc.c']
+
+        bash_src = []
+        foreach f : bash_top
+            bash_src += files(bash_dir / f)
+        endforeach
+        foreach f : bash_builtins_static
+            bash_src += files(bash_dir / 'builtins' / f)
+        endforeach
+        foreach f : bash_lib_sh
+            bash_src += files(bash_dir / 'lib/sh' / (f + '.c'))
+        endforeach
+        foreach f : bash_lib_other
+            bash_src += files(bash_dir / f)
+        endforeach
+        bash_src += files(bash_dir / 'generated/syntax.c')
+
+        # kernel/native.c declares native_bash_main weak, so the registry entry
+        # resolves only when this file is in the build.
+        src += files('kernel/bash_glue.c')
+
+        libbash = static_library('bash',
+            bash_src + bash_builtin_src + [bash_builtins_tbl],
+            include_directories: [includes, bash_includes],
+            c_args: bash_defs)
+    endif
+
     # link_whole, not link_with: this folds SmallCLUE's objects into libish.a
     # itself. The Xcode project links the meson archives by name (libish.a,
     # libish_emu.a, libfakefs.a), so a fourth archive would silently fail to
@@ -464,7 +654,7 @@ if get_option('kernel') == 'ish'
     # every app target by hand. Riding inside libish.a keeps the two build
     # systems from diverging again.
     libish = library('ish', src,
-        link_whole: [libsmallclue, libnextvi],
+        link_whole: [libsmallclue, libnextvi, libbash],
         include_directories: includes)
     ish = declare_dependency(
         link_with: [libish, libish_emu, libfakefs],
