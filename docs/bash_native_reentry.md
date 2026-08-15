@@ -1,7 +1,9 @@
 # Native bash: the re-entry problem, and the globals it turns into crashes
 
-Written 2026-08-15. This is the open work item for native bash, and the reason
-it is not yet usable as a login shell.
+Written 2026-08-15. **Done the same day** — every global in the table below is
+reset, and the two things the table did not know about are answered too. What
+follows is kept as the record of what was wrong and why each fix is the fix it
+is; the closing section says where it landed and what is measured.
 
 ## The problem in one paragraph
 
@@ -542,25 +544,58 @@ Report a pass count out of 80. Do NOT report progress from hand-typed commands:
 every failure in this class needs a SECOND bash invocation to appear, and
 single commands cannot reach it. That mistake cost five rebuild cycles.
 
-At the time of writing the suite aborts on the first file.
+At the time of writing the suite aborted on the first file.
+
+**Measure it against the guest's own emulated bash 5.2, not against 80.** The
+suite is being run outside a bash build tree, so a large number of its files
+fail for reasons that have nothing to do with this shell — missing locales, and
+error messages that say `arith.tests` where the `.right` file says
+`./arith.tests`. Both shells fail those identically, byte for byte. The number
+that means something is the DIFFERENCE between the two columns, and the failure
+lists, not the totals.
+
+## Where it landed
+
+Every global in the table is reset, one `aok_reinit_*` per file so each sits
+beside the statics it clears (`jobs.c`, `subst.c`, `execute_cmd.c`, `sig.c`,
+`variables.c`, `parse.y` + `y.tab.c`, `input.c`, `alias.c`, `findcmd.c`,
+`general.c`, `bashhist.c`, `bashline.c`), all called from
+`shell_reinitialize`. `shell_name` is the one exception and is cleared in
+`kernel/bash_glue.c`, because `main()` reads it before it reinitialises
+anything. `general.c`'s two group caches moved from function statics to file
+scope; that is the only structural change.
+
+Measured over the 79 files, run one shell after the other with nothing else on
+the machine:
+
+| | pass |
+|---|---|
+| native bash | 41 |
+| the guest's own emulated bash 5.2 | 42 |
+
+and the two failure lists are identical but for one file. That file is
+`shopt`, whose `shopt1.sub` exists to check "all shopt options are reset
+properly when the shell is reinitialized" — and it fails because native bash's
+two runs AGREE where upstream's disagree on one option. The `.right` file
+records upstream's own inconsistency; we do not reproduce it. Worth knowing
+about, not worth reproducing.
+
+## What re-entry could not answer, and what did
+
+Two bash instances running AT ONCE is a different problem, and no amount of
+reinitialising touches it: they would share one set of globals while both were
+live, and the second one's `shell_reinitialize` is then the injury rather than
+the fix — it resets the first shell's variables, jobs and traps out from under
+it. `bash -c 'echo outer; bash -c "echo inner"; echo back'` printed outer and
+inner and then stopped, silently.
+
+That is answered in `kernel/bash_glue.c` instead: a native bash that starts
+while one is already live in this address space hands over to the guest's own
+`/bin/bash`, which is a real bash 5.2 of the same version and merely slower.
 
 ## Also still open
 
-- One `make_child` site is unconverted — `./alias1.sub: fork: Function not
-  implemented`. Candidates are process substitution (subst.c:6536), the
-  coprocess (execute_cmd.c:2421), and the null command in a pipeline
-  (execute_cmd.c:4107).
-
-## One more defect, from the same audit
-
-**A failed spawn is reported to the script as success.**
-`execute_cmd.c` ~5681: when `aok_spawn_disk_command` returns -1 the code sets
-`p = NULL` and carries on. Upstream's fork-failure path — `sys_error("fork")`,
-`terminate_current_pipeline()`, `throw_to_top_level()` — is never reached, so a
-command that could not be started looks like one that ran and succeeded.
-
-That is the silent-wrongness shape this codebase exists to avoid, and it should
-be fixed alongside the re-entry globals. Verified by the audit against the
-source; the exit-status path itself is otherwise correct — `/bin/false; echo $?`
-now prints 1 and `/bin/true` prints 0, which is the check that the wait fix
-works (before it, `false` reported 0).
+Nothing from this list. The three unconverted `make_child` sites (process
+substitution, the coprocess, and the null command) are converted, and a failed
+spawn now reports the 126 or 127 it should — `report_execve_failure`, split out
+of `shell_execve` so the parent can say why without an execve of its own.

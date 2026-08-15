@@ -379,3 +379,52 @@ is published anyway.
 
 Steps 1–3 are well-understood work of known shape. Step 4 is the research, and
 it is where the estimate should be treated as soft.
+
+## Where this got to (2026-08-15)
+
+Steps 1, 2, 4 and 5 are done, and readline came back in rather than staying
+out. Step 3 — exec-in-place keeping the caller's pid — is the one still open,
+and is still not on the critical path: a login shell comes up, runs
+`/etc/profile`, and behaves.
+
+All seven `make_child` sites are converted. Six re-launch (subshells, command
+substitution, pipeline elements, process substitution, the coprocess, the null
+command); the seventh, the external command, spawns the argv bash already
+computed, which is the one thing it must not re-run as text.
+
+**Measured, against the guest's own emulated bash 5.2 rather than against host
+bash, since that is the comparison a user actually makes:**
+
+| | emulated | native | ratio |
+|---|---|---|---|
+| arithmetic loop, 20k iterations | 2.26 s | 0.12 s | **19x** |
+| expansion loop, 4k iterations | 0.79 s | 0.04 s | **20x** |
+| shell startup (`echo hi`) | 0.01 s | 0.01 s | — |
+
+Lower than section 0's 38–46x, and honestly so: that measured host bash against
+the emulator, where this measures native-inside-AOK, which pays for every
+syscall through the shim. It is the number a script sees.
+
+**Conformance**: bash's own 79-file test suite, run under each shell in turn,
+gives 41 native against 42 emulated, with identical failure lists but for one
+file — and the shared failures are the harness rather than either shell, byte
+for byte the same output from both. See docs/bash_native_reentry.md.
+
+Three things a shell needs that none of the above implies, and which took the
+longest, are all in the seam rather than in bash: a spawned child must not
+inherit the shim's own signal blocking, must be told its process group before it
+execs, and must get SIGTSTP/SIGTTIN/SIGTTOU back at SIG_DFL. Without the first,
+^C reached nothing; without the second, no foreground job owned the terminal;
+without the third, ^Z did nothing at all.
+
+### What is knowingly not the same
+
+- **The job table does not cross a re-launch.** `jobs` in a pipeline or a
+  command substitution — `jobs | grep`, `$(jobs -p)` — runs in a fresh shell
+  that has no jobs. `jobs` itself, `fg`, `bg`, `kill %1` and `wait` are the
+  parent's own and work.
+- **Two native bash instances cannot run at once**, so the second one hands over
+  to the guest's `/bin/bash`. Correct, and slower for that shell only.
+- **A subshell is an emulated bash**, for the address-space reason in section 1.
+  The interpretation the parent does — where a script's time actually goes —
+  stays native.
