@@ -42,6 +42,8 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/sysctl.h>
+#include <grp.h>
+#include <pwd.h>
 #include <stdnoreturn.h>
 #include <termios.h>
 #include <sys/utsname.h>
@@ -112,6 +114,22 @@ void nlibc_flush_std(void);
 
 /* The host's exit() would end the whole app; a native program is a task. */
 noreturn void nlibc_exit(int status);
+
+/* Identity: the GUEST's, not the device's. whoami said "mobile" before this. */
+uid_t nlibc_getuid(void);
+uid_t nlibc_geteuid(void);
+gid_t nlibc_getgid(void);
+gid_t nlibc_getegid(void);
+pid_t nlibc_getpid(void);
+pid_t nlibc_getppid(void);
+int nlibc_getgroups(int size, gid_t list[]);
+int nlibc_setuid(uid_t uid);
+int nlibc_setgid(gid_t gid);
+int nlibc_initgroups(const char *user, gid_t group);
+struct passwd *nlibc_getpwuid(uid_t uid);
+struct passwd *nlibc_getpwnam(const char *name);
+struct group *nlibc_getgrgid(gid_t gid);
+struct group *nlibc_getgrnam(const char *name);
 
 /* --- remaining host-libc holes; see the block comment in the .c ---------- */
 int nlibc_dup(int fd);
@@ -280,6 +298,20 @@ pid_t nlibc_wait(int *status);
 #define exit                     nlibc_exit
 #define _exit                    nlibc_exit
 #define _Exit                    nlibc_exit
+#define getuid                   nlibc_getuid
+#define geteuid                  nlibc_geteuid
+#define getgid                   nlibc_getgid
+#define getegid                  nlibc_getegid
+#define getpid                   nlibc_getpid
+#define getppid                  nlibc_getppid
+#define getgroups                nlibc_getgroups
+#define setuid                   nlibc_setuid
+#define setgid                   nlibc_setgid
+#define initgroups               nlibc_initgroups
+#define getpwuid                 nlibc_getpwuid
+#define getpwnam                 nlibc_getpwnam
+#define getgrgid                 nlibc_getgrgid
+#define getgrnam                 nlibc_getgrnam
 
 #endif /* !NATIVE_LIBC_NO_REDIRECT */
 

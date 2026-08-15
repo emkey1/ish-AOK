@@ -1100,3 +1100,207 @@ noreturn void nlibc_exit(int status) {
     nlibc_flush_std();
     do_exit_group((status & 0xff) << 8);
 }
+
+// ------------------------------------------------------------------ identity
+//
+// `whoami` answered "mobile" -- the iOS user account. Every one of these was
+// reaching the host: getuid returned the app's uid, getpid the app's pid, and
+// getpwuid read the DEVICE's passwd database rather than the guest's. Same
+// class as uname and getmntinfo, and the guard's denylist had no idea it
+// existed either.
+//
+// The task carries the guest's credentials (kernel/task.h), and the guest's
+// /etc/passwd and /etc/group are ordinary files reachable through the VFS.
+
+uid_t nlibc_getuid(void)  { return native_have_task() ? (uid_t) current->uid  : 0; }
+uid_t nlibc_geteuid(void) { return native_have_task() ? (uid_t) current->euid : 0; }
+gid_t nlibc_getgid(void)  { return native_have_task() ? (gid_t) current->gid  : 0; }
+gid_t nlibc_getegid(void) { return native_have_task() ? (gid_t) current->egid : 0; }
+pid_t nlibc_getpid(void)  { return native_have_task() ? (pid_t) current->pid  : 0; }
+
+pid_t nlibc_getppid(void) {
+    if (!native_have_task())
+        return 0;
+    struct task *parent = current->parent;
+    return parent != NULL ? (pid_t) parent->pid : 1;
+}
+
+int nlibc_getgroups(int size, gid_t list[]) {
+    // Supplementary groups are not modelled per-task, so report just the
+    // effective gid rather than inventing membership.
+    if (!native_have_task())
+        return 0;
+    if (size == 0)
+        return 1;
+    if (size < 1 || list == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    list[0] = (gid_t) current->egid;
+    return 1;
+}
+
+int nlibc_setuid(uid_t uid) {
+    if (!native_have_task())
+        return nlibc_fail(_EPERM);
+    if (current->euid != 0 && uid != (uid_t) current->uid)
+        return nlibc_fail(_EPERM);
+    current->uid = current->euid = current->suid = current->fsuid = (uid_t_) uid;
+    return 0;
+}
+int nlibc_setgid(gid_t gid) {
+    if (!native_have_task())
+        return nlibc_fail(_EPERM);
+    if (current->euid != 0 && gid != (gid_t) current->gid)
+        return nlibc_fail(_EPERM);
+    current->gid = current->egid = current->sgid = current->fsgid = (uid_t_) gid;
+    return 0;
+}
+int nlibc_initgroups(const char *user, gid_t group) {
+    (void) user; (void) group;
+    return 0;   // no supplementary groups to set; succeeding is the honest no-op
+}
+
+// /etc/passwd and /etc/group, read from the GUEST. One entry is cached at a
+// time, which is what getpwuid's contract allows -- the returned pointer is
+// only valid until the next call.
+static char nlibc_pw_line[512];
+static struct passwd nlibc_pw;
+static char nlibc_gr_line[512];
+static struct group nlibc_gr;
+static char *nlibc_gr_members[1];
+
+static char *nlibc_next_field(char **cursor) {
+    char *start = *cursor;
+    if (start == NULL)
+        return NULL;
+    char *colon = strchr(start, ':');
+    if (colon != NULL) {
+        *colon = '\0';
+        *cursor = colon + 1;
+    } else {
+        *cursor = NULL;
+    }
+    return start;
+}
+
+// Walks a colon-separated database, handing each line to `match`.
+static bool nlibc_scan_db(const char *path, char *linebuf, size_t linelen,
+        bool (*match)(char **fields, size_t n, const void *key), const void *key) {
+    struct fd *fd = NULL;
+    if (native_open(path, O_RDONLY_, &fd) < 0)
+        return false;
+    char buf[4096];
+    size_t held = 0;
+    bool found = false;
+    for (;;) {
+        ssize_t n = native_read(fd, buf + held, sizeof(buf) - held - 1);
+        if (n < 0)
+            break;
+        size_t avail = held + (size_t) n;
+        buf[avail] = '\0';
+        char *line = buf, *nl;
+        while ((nl = strchr(line, '\n')) != NULL) {
+            *nl = '\0';
+            if (line[0] != '\0' && line[0] != '#') {
+                snprintf(linebuf, linelen, "%s", line);
+                char *cursor = linebuf;
+                char *fields[8] = {0};
+                size_t nf = 0;
+                while (nf < 8) {
+                    char *f = nlibc_next_field(&cursor);
+                    if (f == NULL) break;
+                    fields[nf++] = f;
+                }
+                if (match(fields, nf, key)) {
+                    found = true;
+                    goto done;
+                }
+            }
+            line = nl + 1;
+        }
+        if (n == 0)
+            break;
+        held = strlen(line);
+        memmove(buf, line, held);
+    }
+done:
+    native_close(fd);
+    return found;
+}
+
+struct nlibc_pw_key { const char *name; uid_t uid; bool by_name; };
+
+static bool nlibc_pw_match(char **f, size_t n, const void *keyv) {
+    const struct nlibc_pw_key *key = keyv;
+    if (n < 7)
+        return false;
+    if (key->by_name ? strcmp(f[0], key->name) != 0
+                     : (uid_t) strtoul(f[2], NULL, 10) != key->uid)
+        return false;
+    nlibc_pw.pw_name = f[0];
+    nlibc_pw.pw_passwd = f[1];
+    nlibc_pw.pw_uid = (uid_t) strtoul(f[2], NULL, 10);
+    nlibc_pw.pw_gid = (gid_t) strtoul(f[3], NULL, 10);
+    nlibc_pw.pw_gecos = f[4];
+    nlibc_pw.pw_dir = f[5];
+    nlibc_pw.pw_shell = f[6];
+    return true;
+}
+
+struct passwd *nlibc_getpwuid(uid_t uid) {
+    struct nlibc_pw_key key = { NULL, uid, false };
+    memset(&nlibc_pw, 0, sizeof(nlibc_pw));
+    if (!nlibc_scan_db("/etc/passwd", nlibc_pw_line, sizeof(nlibc_pw_line),
+                       nlibc_pw_match, &key))
+        return NULL;
+    return &nlibc_pw;
+}
+
+struct passwd *nlibc_getpwnam(const char *name) {
+    if (name == NULL)
+        return NULL;
+    struct nlibc_pw_key key = { name, 0, true };
+    memset(&nlibc_pw, 0, sizeof(nlibc_pw));
+    if (!nlibc_scan_db("/etc/passwd", nlibc_pw_line, sizeof(nlibc_pw_line),
+                       nlibc_pw_match, &key))
+        return NULL;
+    return &nlibc_pw;
+}
+
+struct nlibc_gr_key { const char *name; gid_t gid; bool by_name; };
+
+static bool nlibc_gr_match(char **f, size_t n, const void *keyv) {
+    const struct nlibc_gr_key *key = keyv;
+    if (n < 3)
+        return false;
+    if (key->by_name ? strcmp(f[0], key->name) != 0
+                     : (gid_t) strtoul(f[2], NULL, 10) != key->gid)
+        return false;
+    nlibc_gr_members[0] = NULL;
+    nlibc_gr.gr_name = f[0];
+    nlibc_gr.gr_passwd = f[1];
+    nlibc_gr.gr_gid = (gid_t) strtoul(f[2], NULL, 10);
+    nlibc_gr.gr_mem = nlibc_gr_members;
+    return true;
+}
+
+struct group *nlibc_getgrgid(gid_t gid) {
+    struct nlibc_gr_key key = { NULL, gid, false };
+    memset(&nlibc_gr, 0, sizeof(nlibc_gr));
+    if (!nlibc_scan_db("/etc/group", nlibc_gr_line, sizeof(nlibc_gr_line),
+                       nlibc_gr_match, &key))
+        return NULL;
+    return &nlibc_gr;
+}
+
+struct group *nlibc_getgrnam(const char *name) {
+    if (name == NULL)
+        return NULL;
+    struct nlibc_gr_key key = { name, 0, true };
+    memset(&nlibc_gr, 0, sizeof(nlibc_gr));
+    if (!nlibc_scan_db("/etc/group", nlibc_gr_line, sizeof(nlibc_gr_line),
+                       nlibc_gr_match, &key))
+        return NULL;
+    return &nlibc_gr;
+}

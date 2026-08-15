@@ -62,6 +62,11 @@ DENIED = {
     # Process exit: the host's exit() ends the APP, not the task. A plain
     # exit() in an applet terminated iSH-AOK itself.
     "exit", "_exit", "_Exit", "abort",
+    # Identity: whoami answered "mobile", the iOS account, because every one of
+    # these asked the device rather than the guest.
+    "getuid", "geteuid", "getgid", "getegid", "getpid", "getppid",
+    "getgroups", "setuid", "setgid", "initgroups", "getlogin",
+    "getpwuid", "getpwnam", "getgrgid", "getgrnam", "getpwent", "getgrent",
 }
 
 SKIP_PREFIXES = ("__",)
