@@ -388,6 +388,7 @@ int nlibc_pselect(int nfds, void *r, void *w, void *e,
  * The value is Darwin's, which kernel/native_libc.c checks against the system
  * header. pgroup 0 means "a group of its own, led by the child". */
 #define NLIBC_SPAWN_SETPGROUP 0x02
+#define NLIBC_SPAWN_SETSIGDEF 0x04
 
 int nlibc_posix_spawn_file_actions_init(void **fa);
 int nlibc_posix_spawn_file_actions_destroy(void **fa);

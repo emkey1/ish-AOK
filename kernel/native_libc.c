@@ -3714,6 +3714,8 @@ _Static_assert(sizeof(posix_spawnattr_t) == sizeof(void *),
 // native_libc.h spells this flag for callers that cannot include <spawn.h>.
 _Static_assert(NLIBC_SPAWN_SETPGROUP == POSIX_SPAWN_SETPGROUP,
         "NLIBC_SPAWN_SETPGROUP has drifted from the platform's value");
+_Static_assert(NLIBC_SPAWN_SETSIGDEF == POSIX_SPAWN_SETSIGDEF,
+        "NLIBC_SPAWN_SETSIGDEF has drifted from the platform's value");
 
 struct nlibc_spawn_actions {
     struct native_spawn_action *actions;
@@ -3726,6 +3728,7 @@ struct nlibc_spawn_attr {
     short flags;
     pid_t pgroup;
     sigset_t_ sigmask;     // guest bits; meaningful with POSIX_SPAWN_SETSIGMASK
+    sigset_t_ sigdefault;  // guest bits; meaningful with POSIX_SPAWN_SETSIGDEF
 };
 
 // The signals this shim is holding a handler for, as guest mask bits.
@@ -3902,8 +3905,11 @@ int nlibc_posix_spawnattr_getpgroup(void **attr, pid_t *out) {
 // would break callers that set them as a matter of routine and would gain
 // nothing.
 int nlibc_posix_spawnattr_setsigdefault(void **attr, const sigset_t *set) {
-    (void) set;
-    return (attr != NULL && *attr != NULL) ? 0 : EINVAL;
+    if (attr == NULL || *attr == NULL)
+        return EINVAL;
+    struct nlibc_spawn_attr *a = *attr;
+    a->sigdefault = set != NULL ? nlibc_sigset_to_guest(set) : 0;
+    return 0;
 }
 int nlibc_posix_spawnattr_setsigmask(void **attr, const sigset_t *set) {
     if (attr == NULL || *attr == NULL)
@@ -3942,6 +3948,10 @@ static int nlibc_posix_spawn_common(pid_t *pid_out, const char *file,
         if (a->flags & POSIX_SPAWN_SETSIGMASK) {
             opts.set_sigmask = true;
             opts.sigmask = a->sigmask;
+        }
+        if (a->flags & POSIX_SPAWN_SETSIGDEF) {
+            opts.set_sigdefault = true;
+            opts.sigdefault = a->sigdefault;
         }
     }
     if (fa != NULL && *fa != NULL) {

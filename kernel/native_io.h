@@ -116,6 +116,18 @@ struct native_spawn_opts {
     // the same thing a forked child does when it calls restore_sigmask.
     bool set_sigmask;
     sigset_t_ sigmask;
+
+    // Signals to put back to SIG_DFL in the child. GUEST bits.
+    //
+    // exec resets handlers but PRESERVES SIG_IGN, so a shell that ignores the
+    // job-control signals for itself -- every interactive bash does -- hands
+    // that ignoring to everything it runs. A forked child undoes it
+    // (default_tty_job_signals, jobs.c); there is no child here to do it, so
+    // ^Z did nothing at all: the foreground job ignored the SIGTSTP the
+    // terminal sent it, and the shell went on waiting for a job that never
+    // stopped.
+    bool set_sigdefault;
+    sigset_t_ sigdefault;
 };
 
 int native_spawn_opts(const char *path, char *const argv[], char *const envp[],

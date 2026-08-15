@@ -207,6 +207,17 @@ static int native_spawn_setup_child(const struct native_spawn_opts *opts) {
     if (opts->set_sigmask)
         sigmask_set_blocked(opts->sigmask);
 
+    // Dispositions next, straight into the sighand rather than through
+    // sys_rt_sigaction: this is the guest's own state and there is no guest
+    // memory to marshal a struct through.
+    if (opts->set_sigdefault) {
+        lock(&current->sighand->lock, 0);
+        for (int sig = 1; sig < NUM_SIGS; sig++)
+            if (opts->sigdefault & ((sigset_t_) 1 << (sig - 1)))
+                current->sighand->action[sig].handler = SIG_DFL_;
+        unlock(&current->sighand->lock);
+    }
+
     if (opts->pgid != NATIVE_SPAWN_PGID_INHERIT) {
         // setpgid on a task that has not exec'd, which is precisely the case
         // the guest's own rules allow -- and why this happens here rather than
