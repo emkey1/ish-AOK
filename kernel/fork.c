@@ -619,6 +619,30 @@ static dword_t sys_clone_common(dword_t flags, guest_addr_t stack, guest_addr_t 
     return pid;
 }
 
+// A child of `current` with fork semantics, for a caller that will exec into
+// it immediately. Exists so natively-implemented programs (kernel/native.h)
+// can start a real guest task -- there is one host process, so a native
+// program's child cannot be a host process and has to be an AOK task.
+//
+// copy_task is static here and the error unwinding is fiddly, so this is
+// exported rather than reimplemented at the call site.
+//
+// The mm copy is wasted work when the caller execs straight away, exactly as
+// it is for a guest's own fork+exec; correctness first.
+struct task *task_fork_for_exec(void) {
+    struct task *task = task_create_(current);
+    if (task == NULL)
+        return NULL;
+    int err = copy_task(task, 0, 0, 0, 0, 0);
+    if (err < 0) {
+        complex_lockt(&pids_lock, 0);
+        task_destroy(task, 3);
+        unlock(&pids_lock);
+        return NULL;
+    }
+    return task;
+}
+
 dword_t sys_clone(dword_t flags, addr_t stack, addr_t ptid, addr_t tls, addr_t ctid) {
     return sys_clone_common(flags, stack, ptid, tls, ctid);
 }

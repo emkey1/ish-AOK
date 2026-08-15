@@ -59,6 +59,9 @@ DENIED = {
     "getmntinfo", "getfsstat", "setmntent", "getmntent",
     # System identity: unredirected, uname reported Darwin and the Mac's host.
     "uname", "gethostname", "getdomainname", "sysctl", "sysctlbyname",
+    # Process exit: the host's exit() ends the APP, not the task. A plain
+    # exit() in an applet terminated iSH-AOK itself.
+    "exit", "_exit", "_Exit", "abort",
 }
 
 SKIP_PREFIXES = ("__",)

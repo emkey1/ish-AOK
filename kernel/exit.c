@@ -858,6 +858,24 @@ dword_t sys_waitid_guest(int_t idtype, pid_t_ id, guest_addr_t info_addr, int_t 
     return 0;
 }
 
+// Wait for a child on behalf of a natively-implemented program
+// (kernel/native_io.h). do_wait and the P_*/WEXITED_ constants are private to
+// this file, so the wrapper lives here rather than exporting them; a native
+// parent then blocks in exactly the place a translated one does.
+//
+// pid (dword_t)-1 means "any child", matching waitpid(-1, ...). Returns the
+// reaped pid, or a negative errno.
+int task_wait_child(dword_t pid, int *status_out, int options) {
+    struct siginfo_ info = {};
+    int idtype = (pid == (dword_t) -1) ? P_ALL_ : P_PID_;
+    int err = do_wait(idtype, (pid_t_) pid, &info, NULL, options | WEXITED_);
+    if (err < 0)
+        return err;
+    if (status_out != NULL)
+        *status_out = info.child.status;
+    return (int) info.child.pid;
+}
+
 dword_t sys_wait4(pid_t_ id, addr_t status_addr, dword_t options, addr_t rusage_addr) {
     return sys_wait4_guest(id, status_addr, options, rusage_addr);
 }

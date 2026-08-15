@@ -48,6 +48,19 @@ int native_getcwd(char *buf);
 // the interesting ones). Bytes written, or a negative errno.
 ssize_t native_write(fd_t fd_no, const void *buf, size_t size);
 
+// PATH search against the GUEST filesystem, for execvp-style callers.
+// 0 and fills `out`, or a negative errno.
+int native_path_search(const char *file, char *out, size_t outlen);
+
+// Start a child running `path` as a real AOK task and return its pid. There
+// is one host process, so a native program's child cannot be a host process.
+int native_spawn(const char *path, char *const argv[], char *const envp[],
+        dword_t *pid_out);
+
+// Wait for a child, blocking where the guest's own wait4 blocks. Returns the
+// reaped pid, or a negative errno.
+int native_waitpid(dword_t pid, int *status_out, int options);
+
 // printf onto a guest fd. Output longer than the internal buffer is truncated,
 // which is fine for the diagnostics this exists to carry.
 void native_printf(fd_t fd_no, const char *fmt, ...)

@@ -305,6 +305,9 @@ static inline bool task_is_64bit(const struct task *task) {
 // parent as NULL to create the init process. Returns NULL if out of memory.
 // Ends with an underscore because there's a mach function by the same name
 struct task *task_create_(struct task *parent);
+// A child of current with fork semantics, for a caller that execs into it
+// immediately. See kernel/fork.c. NULL on failure, already cleaned up.
+struct task *task_fork_for_exec(void);
 // Removes the process from the process table and frees it. Must be called with pids_lock.
 void task_destroy(struct task *task, int UNUSED(caller));
 // Removes the process from the process table. Must be called with pids_lock.

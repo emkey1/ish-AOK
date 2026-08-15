@@ -85,6 +85,8 @@ static int nlibc_host_errno(int guest_err) {
     }
 }
 
+extern char **environ;   // Darwin: needs declaring outside a main program
+
 static int nlibc_tty_ioctl(int fd_no, int cmd, void *arg);
 
 // Same reason as native_have_task: refuse rather than dereference NULL.
@@ -529,28 +531,91 @@ void nlibc_perror(const char *s) {
 
 // ----------------------------------------------------------------- process
 //
-// STAGED: these are the guest-task routing described in kernel/native.h, and
-// are not implemented yet. They return ENOSYS rather than falling through to
-// the host's fork/exec, which on iOS would either fail confusingly or -- worse
-// on a host that does have fork -- spawn a real host process outside the
-// guest entirely.
+// A native program's child is a real AOK task, not a host process -- there is
+// only one of those. native_spawn/native_waitpid (kernel/native_io.h) do the
+// work; these give it the shapes a C program expects.
 //
-// smallcluePlatformSpawn is the one SmallCLUE itself calls (its spawn helper
-// dispatches here when SMALLCLUE_PLATFORM_SPAWN is defined); the rest are the
-// direct callers the shim redirects.
+// exec-in-place is the one that does not fit: execv replaces the CALLER, and a
+// native program cannot be replaced by a guest image in the middle of a C
+// function. It is implemented as spawn-then-exit, which is observably the same
+// to everything except the caller itself -- the pid changes. nohup and chroot
+// use it and do not care; a program that depends on keeping its pid across
+// exec would notice.
+
+static int nlibc_exec_common(const char *path, char *const argv[], int search_path) {
+    if (path == NULL || argv == NULL)
+        return nlibc_fail(_EFAULT);
+
+    char resolved[MAX_PATH];
+    if (search_path && strchr(path, '/') == NULL) {
+        if (native_path_search(path, resolved, sizeof(resolved)) < 0)
+            return nlibc_fail(_ENOENT);
+        path = resolved;
+    }
+
+    dword_t pid = 0;
+    int err = native_spawn(path, argv, environ, &pid);
+    if (err < 0)
+        return nlibc_fail(err);
+
+    // Stand in for "this process became that program": wait for it and exit
+    // with its status, so the caller's caller sees what it expects.
+    int status = 0;
+    if (native_waitpid(pid, &status, 0) < 0)
+        nlibc_exit(127);
+    nlibc_exit(WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status));
+}
 
 int nlibc_execv(const char *path, char *const argv[]) {
-    (void) path; (void) argv;
-    return nlibc_fail(_ENOSYS);
+    return nlibc_exec_common(path, argv, 0);
 }
 int nlibc_execvp(const char *file, char *const argv[]) {
-    (void) file; (void) argv;
-    return nlibc_fail(_ENOSYS);
+    return nlibc_exec_common(file, argv, 1);
 }
+int nlibc_execl(const char *path, const char *arg0, ...) {
+    // Collect the varargs into a vector; callers here pass short lists.
+    enum { MAX_ARGS = 64 };
+    char *argv[MAX_ARGS];
+    size_t n = 0;
+    va_list ap;
+    va_start(ap, arg0);
+    argv[n++] = (char *) arg0;
+    while (n < MAX_ARGS - 1) {
+        char *next = va_arg(ap, char *);
+        if (next == NULL)
+            break;
+        argv[n++] = next;
+    }
+    va_end(ap);
+    argv[n] = NULL;
+    return nlibc_exec_common(path, argv, 0);
+}
+
 int nlibc_system(const char *command) {
-    (void) command;
-    return nlibc_fail(_ENOSYS);
+    if (command == NULL)
+        return 1;   // a shell is available
+    char *argv[] = { (char *) "/bin/sh", (char *) "-c", (char *) command, NULL };
+    dword_t pid = 0;
+    int err = native_spawn("/bin/sh", argv, environ, &pid);
+    if (err < 0)
+        return nlibc_fail(err);
+    int status = 0;
+    if (native_waitpid(pid, &status, 0) < 0)
+        return -1;
+    return status;
 }
+
+pid_t nlibc_waitpid(pid_t pid, int *status, int options) {
+    int res = native_waitpid((dword_t) pid, status, options);
+    return res < 0 ? nlibc_fail(res) : res;
+}
+pid_t nlibc_wait(int *status) {
+    return nlibc_waitpid(-1, status, 0);
+}
+
+// popen needs a pipe between parent and child, which needs the guest's own
+// pipe and dup2 on the child side -- neither is wired yet. Refusing keeps it
+// honest rather than half-working.
 FILE *nlibc_popen(const char *command, const char *mode) {
     (void) command; (void) mode;
     errno = ENOSYS;
@@ -558,14 +623,6 @@ FILE *nlibc_popen(const char *command, const char *mode) {
 }
 int nlibc_pclose(FILE *stream) {
     (void) stream;
-    return nlibc_fail(_ENOSYS);
-}
-pid_t nlibc_waitpid(pid_t pid, int *status, int options) {
-    (void) pid; (void) status; (void) options;
-    return nlibc_fail(_ENOSYS);
-}
-pid_t nlibc_wait(int *status) {
-    (void) status;
     return nlibc_fail(_ENOSYS);
 }
 
@@ -622,7 +679,6 @@ int nlibc_utimes(const char *path, const struct timeval times[2]) {
 // Refusals. Each names the applet that wanted it, so the cost of the gap is
 // visible rather than mysterious.
 int nlibc_fork(void)                        { return nlibc_fail(_ENOSYS); } // init, runit, micro
-int nlibc_execl(const char *p, const char *a0, ...) { (void) p; (void) a0; return nlibc_fail(_ENOSYS); } // init, runit
 int nlibc_chroot(const char *p)             { (void) p; return nlibc_fail(_ENOSYS); } // chroot
 int nlibc_kill(pid_t p, int s)              { (void) p; (void) s; return nlibc_fail(_ENOSYS); } // timeout, init
 int nlibc_mknod(const char *p, mode_t m, dev_t d) { (void) p; (void) m; (void) d; return nlibc_fail(_ENOSYS); } // mknod
@@ -1029,4 +1085,18 @@ int nlibc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
     if (err != 0)
         free(start);
     return err;
+}
+
+// ------------------------------------------------------------------- exit
+//
+// The host's exit() ends the PROCESS, and a native program shares the app's
+// process -- so a plain exit() in an applet terminated iSH-AOK itself. That is
+// how `env` came to take the whole emulator down after its child finished, and
+// SmallCLUE calls exit()/_exit() in nine places besides.
+//
+// A native program is a guest TASK, so ending it means do_exit_group, exactly
+// as returning from its main does (kernel/native.c).
+noreturn void nlibc_exit(int status) {
+    nlibc_flush_std();
+    do_exit_group((status & 0xff) << 8);
 }

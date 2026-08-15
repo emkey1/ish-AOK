@@ -21,6 +21,8 @@
 #include "kernel/errno.h"
 #include "kernel/fs.h"
 #include "kernel/native_io.h"
+
+extern char **environ;
 #include "kernel/task.h"
 
 // ---------------------------------------------------------------- 1. hooks
@@ -95,24 +97,59 @@ int pscal_openrsync_main(int argc, char **argv) {
 
 #include "../deps/smallclue/src/spawn.h"
 
-// STAGED alongside the nlibc_exec* family in kernel/native_libc.c: this is
-// where a SmallCLUE applet's child becomes a real guest task
-// (task_create_ -> copy_task -> do_execve -> task_start, with do_wait on the
-// parent side; kernel/init.c's boot-command launcher is the working example
-// of that shape). Until then it fails honestly rather than silently doing
-// something host-side.
+// SmallCLUE's spawn helper (deps/smallclue/src/spawn.h) dispatches here when
+// SMALLCLUE_PLATFORM_SPAWN is defined, which it is for this build: there is no
+// fork() to be had inside one app process, so a child becomes a real AOK task
+// instead (native_spawn, kernel/native_io.h).
+//
+// The attempt list is tried in order, mirroring the exec cascade the POSIX
+// implementation runs in the child. Reporting -1 only when EVERY attempt fails
+// keeps "never started" distinguishable from "ran and exited 127", which is
+// the distinction spawn.h exists to preserve.
 pid_t smallcluePlatformSpawn(const SmallclueSpawnRequest *request) {
-    (void) request;
-    errno = ENOSYS;
+    if (request == NULL || request->attempts == NULL || request->attempt_count == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int last_err = ENOENT;
+    for (size_t i = 0; i < request->attempt_count; i++) {
+        const SmallclueSpawnAttempt *attempt = &request->attempts[i];
+        if (attempt->file == NULL || attempt->argv == NULL)
+            continue;
+
+        char resolved[MAX_PATH];
+        const char *path = attempt->file;
+        if (attempt->search_path && strchr(path, '/') == NULL) {
+            if (native_path_search(path, resolved, sizeof(resolved)) < 0) {
+                last_err = ENOENT;
+                continue;
+            }
+            path = resolved;
+        }
+
+        dword_t pid = 0;
+        int err = native_spawn(path, attempt->argv, environ, &pid);
+        if (err >= 0)
+            return (pid_t) pid;
+        last_err = err < 0 ? -err : err;
+    }
+
+    // setpgid_self is not honoured yet: the child is started already running,
+    // so there is no point between fork and exec to place it in its own group.
+    // timeout(1) is the caller that wants it, for killing a whole group.
+    errno = last_err;
     return -1;
 }
 
-// gzip/gunzip/zcat live in gzip_app.c, excluded because it is the only file
-// needing zlib and the Xcode app targets link the meson archives without it.
-// Re-enabling means adding libz.tbd to those targets first.
+// gzip/gunzip/zcat and tar live in gzip_app.c and tar_app.c, both excluded
+// because they are the only files needing zlib and the Xcode app targets link
+// the meson archives without it. Re-enabling means adding libz.tbd to those
+// targets first. tar reaches zlib even for uncompressed archives.
 int smallclueGzipCommand(int argc, char **argv);
 int smallclueGunzipCommand(int argc, char **argv);
 int smallclueZcatCommand(int argc, char **argv);
+int smallclueTarCommand(int argc, char **argv);
 int smallclueGzipCommand(int argc, char **argv) {
     (void) argc; (void) argv; return smallclue_not_built("gzip");
 }
@@ -122,10 +159,6 @@ int smallclueGunzipCommand(int argc, char **argv) {
 int smallclueZcatCommand(int argc, char **argv) {
     (void) argc; (void) argv; return smallclue_not_built("zcat");
 }
-
-// tar lives in tar_app.c, excluded for the same zlib reason as gzip: it opens
-// compressed archives through zlib's gz* API even for uncompressed ones.
-int smallclueTarCommand(int argc, char **argv);
 int smallclueTarCommand(int argc, char **argv) {
     (void) argc; (void) argv; return smallclue_not_built("tar");
 }

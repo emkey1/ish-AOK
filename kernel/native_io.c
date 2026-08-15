@@ -121,3 +121,121 @@ void native_printf(fd_t fd_no, const char *fmt, ...) {
         n = (int) sizeof(buf) - 1;
     native_write(fd_no, buf, (size_t) n);
 }
+
+// execvp semantics: walk PATH from the guest's environment and test each
+// candidate through the VFS, not the host's -- searching the host's PATH would
+// find the Mac's binaries. Shared by the libc shim and SmallCLUE's spawn hook
+// so there is one copy of the rule.
+int native_path_search(const char *file, char *out, size_t outlen) {
+    if (file == NULL || out == NULL)
+        return _EINVAL;
+    const char *path = getenv("PATH");
+    if (path == NULL || path[0] == '\0')
+        path = "/usr/local/bin:/usr/bin:/bin";
+    while (*path != '\0') {
+        const char *sep = strchr(path, ':');
+        size_t len = sep != NULL ? (size_t) (sep - path) : strlen(path);
+        const char *dir = len == 0 ? "." : path;
+        if (len == 0)
+            len = 1;
+        int n = snprintf(out, outlen, "%.*s/%s", (int) len, dir, file);
+        if (n > 0 && (size_t) n < outlen) {
+            struct statbuf sb = {};
+            if (native_stat(out, &sb, true) == 0 && (sb.mode & 0111) != 0)
+                return 0;
+        }
+        if (sep == NULL)
+            break;
+        path = sep + 1;
+    }
+    return _ENOENT;
+}
+
+// ------------------------------------------------------------------- spawn
+//
+// Starting a child from a native program. There is one host process, so the
+// child cannot be one: it becomes a real AOK task, exactly as a guest's own
+// fork+exec would produce. kernel/init.c's boot-command launcher is the same
+// shape -- impersonate the child, exec, then hand it its own thread.
+//
+// This is the piece exsh cannot do without; SmallCLUE's env/xargs/timeout want
+// it too.
+
+// do_execve wants its arguments packed as "a\0b\0c\0" with ONE MORE trailing
+// NUL after the last -- args_size() walks `count` strings and then asserts the
+// next byte is '\0' (kernel/exec.c). Getting that terminator wrong trips an
+// assert rather than returning an error.
+static char *native_pack_args(char *const vec[], size_t *count_out) {
+    size_t count = 0, bytes = 1;   // the extra terminator
+    if (vec != NULL)
+        for (; vec[count] != NULL; count++)
+            bytes += strlen(vec[count]) + 1;
+    char *packed = malloc(bytes);
+    if (packed == NULL)
+        return NULL;
+    size_t off = 0;
+    for (size_t i = 0; i < count; i++) {
+        size_t n = strlen(vec[i]) + 1;
+        memcpy(packed + off, vec[i], n);
+        off += n;
+    }
+    packed[off] = '\0';
+    *count_out = count;
+    return packed;
+}
+
+int native_spawn(const char *path, char *const argv[], char *const envp[],
+        dword_t *pid_out) {
+    if (!native_have_task())
+        return _EFAULT;
+    if (path == NULL || argv == NULL)
+        return _EINVAL;
+
+    size_t argc = 0, envc = 0;
+    char *argv_packed = native_pack_args(argv, &argc);
+    char *envp_packed = native_pack_args(envp, &envc);
+    if (argv_packed == NULL || envp_packed == NULL) {
+        free(argv_packed);
+        free(envp_packed);
+        return _ENOMEM;
+    }
+
+    struct task *saved = current;
+    struct task *child = task_fork_for_exec();
+    if (child == NULL) {
+        free(argv_packed);
+        free(envp_packed);
+        return _ENOMEM;
+    }
+
+    // do_execve acts on `current`, so impersonate the child across it and put
+    // it back immediately after -- the same trick kernel/init.c uses.
+    current = child;
+    int err = do_execve(path, argc, argv_packed, envp_packed);
+    current = saved;
+
+    free(argv_packed);
+    free(envp_packed);
+
+    if (err < 0) {
+        // The child never ran, so its fds and mm are released by this rather
+        // than by an exit.
+        task_never_ran_destroy(child);
+        return err;
+    }
+
+    dword_t pid = child->pid;
+    if (task_start(child) < 0) {
+        task_never_ran_destroy(child);
+        return _EAGAIN;
+    }
+    if (pid_out != NULL)
+        *pid_out = pid;
+    return 0;
+}
+
+int native_waitpid(dword_t pid, int *status_out, int options) {
+    if (!native_have_task())
+        return _EFAULT;
+    return task_wait_child(pid, status_out, options);
+}

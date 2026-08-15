@@ -42,6 +42,7 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <sys/sysctl.h>
+#include <stdnoreturn.h>
 #include <termios.h>
 #include <sys/utsname.h>
 #include <stdarg.h>
@@ -108,6 +109,9 @@ int nlibc_putchar(int c);
 void nlibc_perror(const char *s);
 /* Flush the wrapped standard streams; see the note in nlibc_std_stream. */
 void nlibc_flush_std(void);
+
+/* The host's exit() would end the whole app; a native program is a task. */
+noreturn void nlibc_exit(int status);
 
 /* --- remaining host-libc holes; see the block comment in the .c ---------- */
 int nlibc_dup(int fd);
@@ -273,6 +277,9 @@ pid_t nlibc_wait(int *status);
 #define tcsetattr                nlibc_tcsetattr
 #define isatty                   nlibc_isatty
 #define pthread_create           nlibc_pthread_create
+#define exit                     nlibc_exit
+#define _exit                    nlibc_exit
+#define _Exit                    nlibc_exit
 
 #endif /* !NATIVE_LIBC_NO_REDIRECT */
 

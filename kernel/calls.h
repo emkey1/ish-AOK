@@ -51,6 +51,8 @@ int do_execve(const char *file, size_t argc, const char *argv, const char *envp)
 dword_t sys_exit(dword_t status);
 noreturn void do_exit(struct task *task, int status);
 noreturn void do_exit_group(int status);
+// Wait for a child on behalf of native code; see kernel/exit.c.
+int task_wait_child(dword_t pid, int *status_out, int options);
 dword_t sys_exit_group(dword_t status);
 dword_t sys_wait4(pid_t_ pid, addr_t status_addr, dword_t options, addr_t rusage_addr);
 dword_t sys_wait4_guest(pid_t_ pid, guest_addr_t status_addr, dword_t options, guest_addr_t rusage_addr);
