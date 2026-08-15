@@ -37,6 +37,7 @@
 #include <fcntl.h>
 #include <ifaddrs.h>
 #include <netdb.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/resource.h>
 #include <sys/times.h>
@@ -136,6 +137,11 @@ void nlibc_flush_std(void);
 /* The guest fd a stream was built over. NOT the host's fileno, which answers
  * -1 for a funopen stream and sets EBADF -- see the .c. */
 int nlibc_fileno(FILE *stream);
+/* Falls back to a host locale with the same ENCODING when the guest asks for a
+ * name the host does not have -- C.UTF-8 exists on Linux and macOS but not on
+ * iOS. See the .c. */
+#include <locale.h>
+char *nlibc_setlocale(int category, const char *name);
 
 /* The host's exit() would end the whole app; a native program is a task. */
 noreturn void nlibc_exit(int status);
@@ -351,6 +357,11 @@ size_t nlibc_confstr(int name, char *buf, size_t len);
 void nlibc_setpwent(void);
 void nlibc_endpwent(void);
 struct passwd *nlibc_getpwent(void);
+/* readline completes service names out of /etc/services; the host's is the
+ * Mac's list, not the guest's. */
+void nlibc_setservent(int stayopen);
+void nlibc_endservent(void);
+struct servent *nlibc_getservent(void);
 void nlibc_setgrent(void);
 void nlibc_endgrent(void);
 struct group *nlibc_getgrent(void);
@@ -453,6 +464,7 @@ const char *nlibc_dlerror(void);
 #define putchar     nlibc_putchar
 #define perror      nlibc_perror
 #define fileno      nlibc_fileno
+#define setlocale   nlibc_setlocale
 
 #define execv       nlibc_execv
 #define execvp      nlibc_execvp
@@ -617,6 +629,9 @@ const char *nlibc_dlerror(void);
 #define setpwent                 nlibc_setpwent
 #define endpwent                 nlibc_endpwent
 #define getpwent                 nlibc_getpwent
+#define setservent               nlibc_setservent
+#define endservent               nlibc_endservent
+#define getservent               nlibc_getservent
 #define setgrent                 nlibc_setgrent
 #define endgrent                 nlibc_endgrent
 #define getgrent                 nlibc_getgrent

@@ -496,6 +496,7 @@ if get_option('kernel') == 'ish'
             'deps/bash-shim',   # <builtins/builtext.h>; see the header there
             bash_dir, bash_dir / 'generated', bash_dir / 'generated/builtins',
             bash_dir / 'include', bash_dir / 'builtins', bash_dir / 'lib',
+            bash_dir / 'lib/readline', bash_dir / 'lib/termcap',
         )
 
         # What bash's own Makefile passes. -DHAVE_CONFIG_H above all: without it
@@ -570,14 +571,11 @@ if get_option('kernel') == 'ish'
         # bash itself gets away with compiling them because its builtins are a
         # static archive and nothing references them -- link_whole here would
         # pull them in regardless.
-        # bind and complete need READLINE, which this build does not have --
-        # config-bot.h undefines PROGRAMMABLE_COMPLETION when READLINE is off,
-        # so the generated table leaves their entries out and nothing refers to
-        # them. fc and history are NOT in this list: config-bot.h defines
-        # HISTORY from BANG_HISTORY, so those two builtins are live even though
-        # the readline LIBRARY is not.
-        bash_builtins_unlinked = ['bind.def', 'complete.def',
-                                  # reserved.def documents the shell keywords
+        # Every builtin is linked now that readline is in: bind and complete
+        # were excluded only because READLINE being off made config-bot.h
+        # undefine PROGRAMMABLE_COMPLETION, so the generated table left them
+        # out and nothing referred to them.
+        bash_builtins_unlinked = [# reserved.def documents the shell keywords
                                   # and produces no C file at all.
                                   'reserved.def']
         bash_builtin_src = []
@@ -629,14 +627,38 @@ if get_option('kernel') == 'ish'
         bash_lib_other = ['lib/glob/glob.c', 'lib/glob/gmisc.c',
             'lib/glob/smatch.c', 'lib/glob/strmatch.c',
             'lib/glob/xmbsrtowcs.c', 'lib/tilde/tilde.c',
-            # The nine lib/readline sources bash uses whether or not line
-            # editing is compiled in -- history storage, multibyte helpers and
-            # its allocator.
-            'lib/readline/histexpand.c', 'lib/readline/histfile.c',
-            'lib/readline/history.c', 'lib/readline/histsearch.c',
-            'lib/readline/mbutil.c', 'lib/readline/savestring.c',
-            'lib/readline/shell.c', 'lib/readline/xfree.c',
-            'lib/readline/xmalloc.c']
+            # readline in full. It was left out of the first cut as "a large
+            # body of code doing its own terminal handling", and that turned
+            # out to cost the two things a shell is judged by: `shopt -s
+            # progcomp` fails without it, because config-bot.h undefines
+            # PROGRAMMABLE_COMPLETION when READLINE is off, and \[ \] in PS1
+            # print LITERALLY, because their handling in decode_prompt_string
+            # sits inside #if defined (READLINE). A prompt full of \[\] and no
+            # line editing is not a shell anyone would set as their default.
+            'lib/readline/bind.c', 'lib/readline/callback.c',
+            'lib/readline/colors.c', 'lib/readline/compat.c',
+            'lib/readline/complete.c', 'lib/readline/display.c',
+            'lib/readline/funmap.c', 'lib/readline/histexpand.c',
+            'lib/readline/histfile.c', 'lib/readline/history.c',
+            'lib/readline/histsearch.c', 'lib/readline/input.c',
+            'lib/readline/isearch.c', 'lib/readline/keymaps.c',
+            'lib/readline/kill.c', 'lib/readline/macro.c',
+            'lib/readline/mbutil.c', 'lib/readline/misc.c',
+            'lib/readline/nls.c', 'lib/readline/parens.c',
+            'lib/readline/parse-colors.c', 'lib/readline/readline.c',
+            'lib/readline/rltty.c', 'lib/readline/savestring.c',
+            'lib/readline/search.c', 'lib/readline/shell.c',
+            'lib/readline/signals.c', 'lib/readline/terminal.c',
+            'lib/readline/text.c', 'lib/readline/tilde.c',
+            'lib/readline/undo.c', 'lib/readline/util.c',
+            'lib/readline/vi_mode.c', 'lib/readline/xfree.c',
+            'lib/readline/xmalloc.c',
+            # bash's OWN termcap, not the system one. readline needs tgetent
+            # and friends, and bash's configure links -ltermcap when it finds
+            # it -- which would put a system library on the Xcode link line,
+            # the very thing that keeps zlib (and tar, and gzip) out. The
+            # bundled implementation costs three files and no dependency.
+            'lib/termcap/termcap.c', 'lib/termcap/tparam.c']
 
         bash_src = []
         foreach f : bash_top

@@ -90,8 +90,11 @@ PURE = {
     "getopt", "getopt_long", "optarg", "optind", "opterr", "optopt", "optreset",
     "regcomp", "regexec", "regerror", "regfree",
     # locale and time FORMATTING. Reading the clock is below; setting it is
-    # redirected.
-    "setlocale", "localeconv", "strftime", "strptime", "mktime", "timegm",
+    # redirected. setlocale is NOT here: the guest's locale names are Linux's
+    # and the host's database is Darwin's, so a name has to be translated
+    # rather than passed through -- C.UTF-8 exists on Linux and macOS but not
+    # on iOS, which is a warning on every shell start.
+    "localeconv", "strftime", "strptime", "mktime", "timegm",
     "gmtime", "gmtime_r", "localtime", "localtime_r", "difftime", "asctime",
     "ctime", "tzset",
     # Thread primitives. Creation is redirected -- a new thread needs the task

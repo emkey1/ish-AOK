@@ -3867,3 +3867,115 @@ int nlibc_posix_spawnp(pid_t *pid, const char *file,
         char *const argv[], char *const envp[]) {
     return nlibc_posix_spawn_common(pid, file, fa, attr, argv, envp, true);
 }
+
+// ------------------------------------------------------------------ locale
+//
+// The guest's locale NAMES are Linux's; the host's locale database is Darwin's,
+// and the two do not hold the same set. C.UTF-8 is the one that bites: it is
+// the default on most modern Linux userlands, macOS happens to have it, and iOS
+// does not -- so a shell that starts fine on the CLI greets you on a device
+// with
+//
+//     setlocale: LC_ALL: cannot change locale (C.UTF-8): Bad file descriptor
+//
+// (the errno being unrelated leftovers, which is its own story).
+//
+// What a program wants from a locale is overwhelmingly the character encoding,
+// and the encoding it is asking for is right there in the name. So a request
+// the host cannot honour falls back to a host locale with the SAME encoding
+// rather than failing: C.UTF-8 becomes en_US.UTF-8, which is UTF-8 either way.
+// Collation differs between them in ways almost nothing observes; a warning on
+// every shell start is observed by everyone.
+//
+// setlocale(cat, NULL) is a QUERY and must never fall back -- it would answer a
+// question by changing the thing it was asked about.
+char *nlibc_setlocale(int category, const char *name) {
+    char *res = setlocale(category, name);
+    if (res != NULL || name == NULL)
+        return res;
+
+    // Same encoding first. Anything ending .UTF-8 or .utf8 is UTF-8 whatever
+    // the territory in front of it.
+    size_t len = strlen(name);
+    bool utf8 = (len >= 6 && strcasecmp(name + len - 6, ".UTF-8") == 0) ||
+                (len >= 5 && strcasecmp(name + len - 5, ".utf8") == 0);
+    if (utf8) {
+        res = setlocale(category, "en_US.UTF-8");
+        if (res != NULL)
+            return res;
+    }
+    // Then the one locale every C library is required to have.
+    return setlocale(category, "C");
+}
+
+// -------------------------------------------------------- the service database
+//
+// readline's completion offers service names, which it takes from /etc/services
+// -- and left to the host that is the MAC's list, not the guest's. Same shape as
+// the passwd and group walkers above: an index-keyed scan, so the enumeration
+// sees the file as it is now and there is one parser rather than two.
+//
+// /etc/services is whitespace-separated rather than colon-separated
+// ("ssh 22/tcp SSH"), so it cannot reuse nlibc_scan_db, which splits on colons
+// for passwd and group.
+static char nlibc_se_line[512];
+static struct servent nlibc_se;
+static char *nlibc_se_aliases[1];
+static char nlibc_se_proto[16];
+static size_t nlibc_se_pos;
+
+void nlibc_setservent(int stayopen) { (void) stayopen; nlibc_se_pos = 0; }
+void nlibc_endservent(void) { nlibc_se_pos = 0; }
+
+struct servent *nlibc_getservent(void) {
+    struct fd *fd = NULL;
+    if (native_open("/etc/services", O_RDONLY_, &fd) < 0)
+        return NULL;
+
+    char buf[4096];
+    size_t held = 0, seen = 0;
+    struct servent *found = NULL;
+    for (;;) {
+        ssize_t n = native_read(fd, buf + held, sizeof(buf) - held - 1);
+        if (n < 0)
+            break;
+        size_t avail = held + (size_t) n;
+        buf[avail] = '\0';
+        char *line = buf, *nl;
+        while ((nl = strchr(line, '\n')) != NULL) {
+            *nl = '\0';
+            char *hash = strchr(line, '#');
+            if (hash != NULL)
+                *hash = '\0';
+            // name, then port/proto. Anything after is an alias, which is not
+            // reported: readline completes on the NAME.
+            char name[128], portproto[64];
+            if (sscanf(line, "%127s %63s", name, portproto) == 2) {
+                char *slash = strchr(portproto, '/');
+                if (slash != NULL && seen++ == nlibc_se_pos) {
+                    *slash = '\0';
+                    snprintf(nlibc_se_line, sizeof(nlibc_se_line), "%s", name);
+                    snprintf(nlibc_se_proto, sizeof(nlibc_se_proto), "%s", slash + 1);
+                    nlibc_se_aliases[0] = NULL;
+                    nlibc_se.s_name = nlibc_se_line;
+                    nlibc_se.s_aliases = nlibc_se_aliases;
+                    // s_port is network order, as getservent's contract says.
+                    nlibc_se.s_port = htons((uint16_t) atoi(portproto));
+                    nlibc_se.s_proto = nlibc_se_proto;
+                    found = &nlibc_se;
+                    goto done;
+                }
+            }
+            line = nl + 1;
+        }
+        if (n == 0)
+            break;
+        held = strlen(line);
+        memmove(buf, line, held);
+    }
+done:
+    native_close(fd);
+    if (found != NULL)
+        nlibc_se_pos++;
+    return found;
+}

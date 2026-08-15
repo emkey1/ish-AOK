@@ -197,7 +197,7 @@ struct fd *fdtable_get(struct fdtable *table, fd_t f) {
 
 struct fd *f_get(fd_t f) {
     lock(&current->files->lock, 0);
-    struct fd *fd = fdtable_get(current->files, f);
+    struct fd *fd = fdtable_get(current->files, f); 
     unlock(&current->files->lock);
     return fd;
 }
