@@ -348,7 +348,39 @@ if get_option('kernel') == 'ish'
     smallclue_excluded = ['main.c', 'integration.c', 'checksum_app.c',
                           'openssh_app.c', 'openssh_shim.c', 'openssh_stubs.c',
                           'gzip_app.c', 'tar_app.c']
+
+    # Nextvi -- the editor `vi` runs -- is a submodule OF a submodule and is not
+    # populated by a plain checkout, so the build has to work either way. With
+    # the tree present its single translation unit is compiled in (vi.c
+    # #includes the other eight sources) and src/nextvi_stubs.c drops out; with
+    # it absent the stub's weak nextvi_main_entry prints "editor unavailable in
+    # this build" and `vi` exits 127. Populate it with:
+    #
+    #     git -C deps/smallclue submodule update --init third-party/nextvi
+    #
+    # -- and NOT a bare `--init`, which also drags in the abandoned deps/linux.
+    # The result is fixed at configure time, so populating the submodule
+    # afterwards needs a `meson setup --reconfigure` before ninja sees it.
+    nextvi_dir = 'deps/smallclue/third-party/nextvi'
+    have_nextvi = run_command(python, '-c',
+            'import os, sys; sys.exit(0 if os.path.exists(sys.argv[1]) else 1)',
+            meson.current_source_dir() / nextvi_dir / 'vi.c',
+            check: false).returncode() == 0
+
     smallclue_src = []
+    if have_nextvi
+        smallclue_excluded += 'nextvi_stubs.c'
+        smallclue_src += files(nextvi_dir / 'vi.c')
+    else
+        # Loudly, because the runtime symptom is not: the stub's diagnostic is
+        # written and then erased by the terminal reset SmallCLUE emits on the
+        # way out, and the editor's status is discarded, so `vi` on a stub build
+        # simply vanishes and reports success. That was reported from a device
+        # as "vi exits immediately", and it took a build to reproduce.
+        warning('nextvi is not checked out -- `vi` will be a stub that exits ' +
+                'silently. Populate it with: git -C deps/smallclue submodule ' +
+                'update --init third-party/nextvi')
+    endif
     # Space-separated, not newline: meson interprets \n inside its own string
     # literals, which would break the one-liner before python ever sees it.
     foreach f : run_command(python, '-c',
