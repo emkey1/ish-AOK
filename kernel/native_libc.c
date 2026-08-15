@@ -1674,6 +1674,574 @@ noreturn void nlibc_exit(int status) {
     do_exit_group((status & 0xff) << 8);
 }
 
+// ---------------------------------------------------------------- networking
+//
+// AOK's sockets are real host sockets underneath (fs/sock.c), so what routing
+// through the dispatcher buys is not the traffic -- it is everything around
+// it. A socket becomes a GUEST descriptor, which is what makes it work with
+// the same close, poll, select, dup and fd table as every other descriptor a
+// native program holds; before this a socket() came back as a HOST fd that
+// collided with guest fd numbers, so closing one closed something else.
+//
+// Nothing here can be passed through unchanged. Darwin's AF_INET6 is 30 and
+// the guest's is 10; Darwin's SOL_SOCKET is 0xffff and the guest's is 1; every
+// SO_ and MSG_ constant is renumbered; and a sockaddr carries a length byte on
+// Darwin where the guest has a 16-bit family. Getting any of those wrong is
+// silent -- a bind to the wrong family, an option set on the wrong level -- so
+// each is a table with the guest values written out.
+
+// Guest (Linux) constants. Spelled as literals because these are the ABI the
+// syscall layer speaks, not values this build's headers would agree with.
+#define NLIBC_AF_UNIX_   1
+#define NLIBC_AF_INET_   2
+#define NLIBC_AF_INET6_  10
+#define NLIBC_SOL_SOCKET_ 1
+
+static const struct nlibc_signalmap nlibc_families[] = {
+    { AF_UNIX, NLIBC_AF_UNIX_ }, { AF_INET, NLIBC_AF_INET_ },
+    { AF_INET6, NLIBC_AF_INET6_ },
+};
+
+static int nlibc_family_to_guest(int host_family) {
+    for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_families); i++)
+        if (nlibc_families[i].host == host_family)
+            return nlibc_families[i].guest;
+    return -1;
+}
+static int nlibc_family_to_host(int guest_family) {
+    for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_families); i++)
+        if (nlibc_families[i].guest == guest_family)
+            return nlibc_families[i].host;
+    return -1;
+}
+
+// SOCK_STREAM/DGRAM/RAW/SEQPACKET are 1/2/3/5 on both sides; only the two
+// flags ORed into the type differ.
+static const struct nlibc_flagmap nlibc_sock_type_flags[] = {
+    // Darwin has no SOCK_NONBLOCK/SOCK_CLOEXEC of its own -- they are Linux
+    // extensions -- so the host side uses the values Linux gave them, which
+    // is what a program written against Linux would have passed anyway.
+    { 0x800, 0x800 },     // SOCK_NONBLOCK
+    { 0x80000, 0x80000 }, // SOCK_CLOEXEC
+};
+
+static const struct nlibc_flagmap nlibc_msg_flags[] = {
+    { MSG_OOB, 0x1 }, { MSG_PEEK, 0x2 }, { MSG_DONTROUTE, 0x4 },
+    { MSG_CTRUNC, 0x8 }, { MSG_TRUNC, 0x20 }, { MSG_DONTWAIT, 0x40 },
+    { MSG_EOR, 0x80 }, { MSG_WAITALL, 0x100 },
+};
+
+// SOL_SOCKET options. Everything else (IPPROTO_IP/TCP/IPV6 levels and their
+// options) happens to share numbers between the two, so only this level needs
+// a table.
+static const struct nlibc_signalmap nlibc_sock_opts[] = {
+    { SO_DEBUG, 1 },      { SO_REUSEADDR, 2 },  { SO_TYPE, 3 },
+    { SO_ERROR, 4 },      { SO_DONTROUTE, 5 },  { SO_BROADCAST, 6 },
+    { SO_SNDBUF, 7 },     { SO_RCVBUF, 8 },     { SO_KEEPALIVE, 9 },
+    { SO_OOBINLINE, 10 }, { SO_LINGER, 13 },    { SO_REUSEPORT, 15 },
+    { SO_RCVLOWAT, 18 },  { SO_SNDLOWAT, 19 },  { SO_RCVTIMEO, 20 },
+    { SO_SNDTIMEO, 21 },
+};
+
+// The guest's sockaddrs. Same sizes as Darwin's, different heads: Darwin
+// spends its first byte on sa_len, the guest gives the family a full 16 bits.
+struct nlibc_sockaddr_in { uint16_t family; uint16_t port; uint32_t addr; uint8_t zero[8]; };
+struct nlibc_sockaddr_in6 { uint16_t family; uint16_t port; uint32_t flowinfo;
+                            uint8_t addr[16]; uint32_t scope_id; };
+struct nlibc_sockaddr_un { uint16_t family; char path[108]; };
+
+// Host sockaddr -> guest. Returns the guest length, or a negative errno.
+static ssize_t nlibc_sockaddr_to_guest(const void *host, socklen_t host_len,
+        void *out, size_t out_size) {
+    const struct sockaddr *sa = host;
+    if (host == NULL || host_len < (socklen_t) sizeof(sa->sa_family))
+        return _EINVAL;
+    switch (sa->sa_family) {
+        case AF_INET: {
+            const struct sockaddr_in *in = host;
+            if (out_size < sizeof(struct nlibc_sockaddr_in))
+                return _EINVAL;
+            struct nlibc_sockaddr_in *g = out;
+            memset(g, 0, sizeof(*g));
+            g->family = NLIBC_AF_INET_;
+            g->port = in->sin_port;             // already network order
+            g->addr = in->sin_addr.s_addr;
+            return sizeof(*g);
+        }
+        case AF_INET6: {
+            const struct sockaddr_in6 *in6 = host;
+            if (out_size < sizeof(struct nlibc_sockaddr_in6))
+                return _EINVAL;
+            struct nlibc_sockaddr_in6 *g = out;
+            memset(g, 0, sizeof(*g));
+            g->family = NLIBC_AF_INET6_;
+            g->port = in6->sin6_port;
+            g->flowinfo = in6->sin6_flowinfo;
+            memcpy(g->addr, &in6->sin6_addr, sizeof(g->addr));
+            g->scope_id = in6->sin6_scope_id;
+            return sizeof(*g);
+        }
+        case AF_UNIX: {
+            const struct sockaddr_un *un = host;
+            if (out_size < sizeof(struct nlibc_sockaddr_un))
+                return _EINVAL;
+            struct nlibc_sockaddr_un *g = out;
+            memset(g, 0, sizeof(*g));
+            g->family = NLIBC_AF_UNIX_;
+            // Darwin's sun_path is 104 bytes against the guest's 108, so the
+            // copy is bounded by the smaller of the two rather than either.
+            size_t path_max = sizeof(un->sun_path) < sizeof(g->path) ?
+                    sizeof(un->sun_path) : sizeof(g->path) - 1;
+            memcpy(g->path, un->sun_path, path_max);
+            return (ssize_t) (offsetof(struct nlibc_sockaddr_un, path) +
+                    strnlen(g->path, sizeof(g->path) - 1) + 1);
+        }
+        default:
+            return _EAFNOSUPPORT;
+    }
+}
+
+// Guest sockaddr -> host. Returns the host length, or a negative errno.
+static ssize_t nlibc_sockaddr_to_host(const void *guest, size_t guest_len,
+        void *out, size_t out_size) {
+    uint16_t family;
+    if (guest_len < sizeof(family))
+        return _EINVAL;
+    memcpy(&family, guest, sizeof(family));
+    switch (family) {
+        case NLIBC_AF_INET_: {
+            if (guest_len < sizeof(struct nlibc_sockaddr_in) ||
+                    out_size < sizeof(struct sockaddr_in))
+                return _EINVAL;
+            const struct nlibc_sockaddr_in *g = guest;
+            struct sockaddr_in *in = out;
+            memset(in, 0, sizeof(*in));
+            in->sin_len = sizeof(*in);
+            in->sin_family = AF_INET;
+            in->sin_port = g->port;
+            in->sin_addr.s_addr = g->addr;
+            return sizeof(*in);
+        }
+        case NLIBC_AF_INET6_: {
+            if (guest_len < sizeof(struct nlibc_sockaddr_in6) ||
+                    out_size < sizeof(struct sockaddr_in6))
+                return _EINVAL;
+            const struct nlibc_sockaddr_in6 *g = guest;
+            struct sockaddr_in6 *in6 = out;
+            memset(in6, 0, sizeof(*in6));
+            in6->sin6_len = sizeof(*in6);
+            in6->sin6_family = AF_INET6;
+            in6->sin6_port = g->port;
+            in6->sin6_flowinfo = g->flowinfo;
+            memcpy(&in6->sin6_addr, g->addr, sizeof(g->addr));
+            in6->sin6_scope_id = g->scope_id;
+            return sizeof(*in6);
+        }
+        case NLIBC_AF_UNIX_: {
+            if (out_size < sizeof(struct sockaddr_un))
+                return _EINVAL;
+            const struct nlibc_sockaddr_un *g = guest;
+            struct sockaddr_un *un = out;
+            memset(un, 0, sizeof(*un));
+            un->sun_len = sizeof(*un);
+            un->sun_family = AF_UNIX;
+            size_t avail = guest_len > offsetof(struct nlibc_sockaddr_un, path) ?
+                    guest_len - offsetof(struct nlibc_sockaddr_un, path) : 0;
+            if (avail > sizeof(un->sun_path) - 1)
+                avail = sizeof(un->sun_path) - 1;
+            memcpy(un->sun_path, g->path, avail);
+            return sizeof(*un);
+        }
+        default:
+            return _EAFNOSUPPORT;
+    }
+}
+
+int nlibc_socket(int domain, int type, int protocol) {
+    int guest_domain = nlibc_family_to_guest(domain);
+    if (guest_domain < 0)
+        return nlibc_fail(_EAFNOSUPPORT);
+    // The type's low bits are the socket kind, which both sides number alike.
+    int guest_type = (type & 0xf) | (int) nlibc_flags_to_guest((unsigned long) type,
+            nlibc_sock_type_flags, NLIBC_MAP_COUNT(nlibc_sock_type_flags));
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_socket, guest_domain,
+            guest_type, protocol));
+}
+
+// bind and connect differ only in which syscall they issue.
+static int nlibc_bind_or_connect(unsigned num, int fd_no, const void *addr, socklen_t len) {
+    NATIVE_FRAME;
+    char guest_addr[sizeof(struct nlibc_sockaddr_un)];
+    ssize_t guest_len = nlibc_sockaddr_to_guest(addr, len, guest_addr, sizeof(guest_addr));
+    if (guest_len < 0)
+        return nlibc_fail((int) guest_len);
+    guest_addr_t scratch = native_scratch_put(guest_addr, (size_t) guest_len);
+    if (scratch == 0)
+        return nlibc_fail(_ENOMEM);
+    return (int) nlibc_ret(native_syscall(num, fd_no, scratch, guest_len));
+}
+
+int nlibc_bind(int fd_no, const void *addr, socklen_t len) {
+    return nlibc_bind_or_connect(NATIVE_SYS_bind, fd_no, addr, len);
+}
+int nlibc_connect(int fd_no, const void *addr, socklen_t len) {
+    return nlibc_bind_or_connect(NATIVE_SYS_connect, fd_no, addr, len);
+}
+int nlibc_listen(int fd_no, int backlog) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_listen, fd_no, backlog));
+}
+
+// accept/getsockname/getpeername all hand back an address the same way.
+static int nlibc_accept_common(unsigned num, int fd_no, void *addr, socklen_t *len) {
+    NATIVE_FRAME;
+    guest_addr_t guest_sa = 0, guest_salen = 0;
+    if (addr != NULL && len != NULL) {
+        guest_sa = native_scratch_alloc(sizeof(struct nlibc_sockaddr_un));
+        dword_t size = sizeof(struct nlibc_sockaddr_un);
+        guest_salen = native_scratch_put(&size, sizeof(size));
+        if (guest_sa == 0 || guest_salen == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    sqword_t res = native_syscall(num, fd_no, guest_sa, guest_salen);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    if (guest_sa != 0) {
+        dword_t got = 0;
+        char raw[sizeof(struct nlibc_sockaddr_un)];
+        if (native_scratch_get(&got, guest_salen, sizeof(got)) < 0 ||
+                native_scratch_get(raw, guest_sa, sizeof(raw)) < 0)
+            return nlibc_fail(_EFAULT);
+        char host_addr[sizeof(struct sockaddr_un)];
+        ssize_t host_len = nlibc_sockaddr_to_host(raw, got, host_addr, sizeof(host_addr));
+        if (host_len < 0)
+            return nlibc_fail((int) host_len);
+        if ((socklen_t) host_len > *len)
+            host_len = *len;
+        memcpy(addr, host_addr, (size_t) host_len);
+        *len = (socklen_t) host_len;
+    }
+    return (int) res;
+}
+
+int nlibc_accept(int fd_no, void *addr, socklen_t *len) {
+    return nlibc_accept_common(NATIVE_SYS_accept, fd_no, addr, len);
+}
+int nlibc_getsockname(int fd_no, void *addr, socklen_t *len) {
+    return nlibc_accept_common(NATIVE_SYS_getsockname, fd_no, addr, len);
+}
+int nlibc_getpeername(int fd_no, void *addr, socklen_t *len) {
+    return nlibc_accept_common(NATIVE_SYS_getpeername, fd_no, addr, len);
+}
+
+static dword_t nlibc_msg_to_guest(int flags) {
+    return nlibc_flags_to_guest((unsigned long) flags, nlibc_msg_flags,
+            NLIBC_MAP_COUNT(nlibc_msg_flags));
+}
+
+ssize_t nlibc_sendto(int fd_no, const void *buf, size_t len, int flags,
+        const void *addr, socklen_t addrlen) {
+    NATIVE_FRAME;
+    guest_addr_t guest_buf = native_scratch_put(buf, len);
+    if (guest_buf == 0 && len > 0)
+        return nlibc_fail(_ENOMEM);
+    guest_addr_t guest_sa = 0;
+    ssize_t guest_salen = 0;
+    if (addr != NULL) {
+        char raw[sizeof(struct nlibc_sockaddr_un)];
+        guest_salen = nlibc_sockaddr_to_guest(addr, addrlen, raw, sizeof(raw));
+        if (guest_salen < 0)
+            return nlibc_fail((int) guest_salen);
+        guest_sa = native_scratch_put(raw, (size_t) guest_salen);
+        if (guest_sa == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    return nlibc_ret(native_syscall(NATIVE_SYS_sendto, fd_no, guest_buf, len,
+            nlibc_msg_to_guest(flags), guest_sa, guest_salen));
+}
+
+ssize_t nlibc_send(int fd_no, const void *buf, size_t len, int flags) {
+    return nlibc_sendto(fd_no, buf, len, flags, NULL, 0);
+}
+
+ssize_t nlibc_recvfrom(int fd_no, void *buf, size_t len, int flags,
+        void *addr, socklen_t *addrlen) {
+    NATIVE_FRAME;
+    guest_addr_t guest_buf = native_scratch_alloc(len);
+    if (guest_buf == 0 && len > 0)
+        return nlibc_fail(_ENOMEM);
+    guest_addr_t guest_sa = 0, guest_salen = 0;
+    if (addr != NULL && addrlen != NULL) {
+        guest_sa = native_scratch_alloc(sizeof(struct nlibc_sockaddr_un));
+        dword_t size = sizeof(struct nlibc_sockaddr_un);
+        guest_salen = native_scratch_put(&size, sizeof(size));
+        if (guest_sa == 0 || guest_salen == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    sqword_t res = native_syscall(NATIVE_SYS_recvfrom, fd_no, guest_buf, len,
+            nlibc_msg_to_guest(flags), guest_sa, guest_salen);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    if (res > 0 && native_scratch_get(buf, guest_buf, (size_t) res) < 0)
+        return nlibc_fail(_EFAULT);
+    if (guest_sa != 0) {
+        dword_t got = 0;
+        char raw[sizeof(struct nlibc_sockaddr_un)];
+        if (native_scratch_get(&got, guest_salen, sizeof(got)) < 0 ||
+                native_scratch_get(raw, guest_sa, sizeof(raw)) < 0)
+            return nlibc_fail(_EFAULT);
+        char host_addr[sizeof(struct sockaddr_un)];
+        ssize_t host_len = nlibc_sockaddr_to_host(raw, got, host_addr, sizeof(host_addr));
+        if (host_len > 0) {
+            if ((socklen_t) host_len > *addrlen)
+                host_len = *addrlen;
+            memcpy(addr, host_addr, (size_t) host_len);
+            *addrlen = (socklen_t) host_len;
+        }
+    }
+    return (ssize_t) res;
+}
+
+ssize_t nlibc_recv(int fd_no, void *buf, size_t len, int flags) {
+    return nlibc_recvfrom(fd_no, buf, len, flags, NULL, NULL);
+}
+
+int nlibc_shutdown(int fd_no, int how) {
+    // SHUT_RD/WR/RDWR are 0/1/2 on both sides.
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_shutdown, fd_no, how));
+}
+
+// Levels other than SOL_SOCKET are IPPROTO_ numbers, which agree.
+static int nlibc_sockopt_to_guest(int level, int option, int *guest_level) {
+    if (level != SOL_SOCKET) {
+        *guest_level = level;
+        return option;
+    }
+    *guest_level = NLIBC_SOL_SOCKET_;
+    for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_sock_opts); i++)
+        if (nlibc_sock_opts[i].host == option)
+            return nlibc_sock_opts[i].guest;
+    return -1;
+}
+
+int nlibc_setsockopt(int fd_no, int level, int option, const void *value, socklen_t len) {
+    NATIVE_FRAME;
+    int guest_level;
+    int guest_option = nlibc_sockopt_to_guest(level, option, &guest_level);
+    if (guest_option < 0)
+        return nlibc_fail(_ENOPROTOOPT);
+    guest_addr_t guest_value = native_scratch_put(value, len);
+    if (guest_value == 0 && len > 0)
+        return nlibc_fail(_ENOMEM);
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_setsockopt, fd_no, guest_level,
+            guest_option, guest_value, len));
+}
+
+int nlibc_getsockopt(int fd_no, int level, int option, void *value, socklen_t *len) {
+    NATIVE_FRAME;
+    if (len == NULL)
+        return nlibc_fail(_EFAULT);
+    int guest_level;
+    int guest_option = nlibc_sockopt_to_guest(level, option, &guest_level);
+    if (guest_option < 0)
+        return nlibc_fail(_ENOPROTOOPT);
+    guest_addr_t guest_value = native_scratch_alloc(*len);
+    dword_t size = *len;
+    guest_addr_t guest_size = native_scratch_put(&size, sizeof(size));
+    if ((guest_value == 0 && *len > 0) || guest_size == 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res = native_syscall(NATIVE_SYS_getsockopt, fd_no, guest_level,
+            guest_option, guest_value, guest_size);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    if (native_scratch_get(&size, guest_size, sizeof(size)) < 0 ||
+            (size > 0 && native_scratch_get(value, guest_value, size) < 0))
+        return nlibc_fail(_EFAULT);
+    *len = size;
+    return 0;
+}
+
+// ---------------------------------------------------------------- resolution
+//
+// getaddrinfo on the host reads the MAC's /etc/resolv.conf and /etc/hosts and
+// answers from the Mac's resolver. What a guest asks for has to be answered
+// from the guest.
+//
+// Numeric addresses and /etc/hosts are served here, from the guest's own
+// files. Names needing DNS are NOT: that wants a stub resolver speaking to the
+// nameservers in the guest's /etc/resolv.conf over the sockets above, which is
+// a piece of work in its own right. EAI_NONAME is the honest answer until then
+// -- SmallCLUE's own DNS applet does its queries itself and only uses
+// getaddrinfo to turn the SERVER argument into an address, which is numeric in
+// the case anyone actually types.
+
+#define NLIBC_EAI_NONAME -2
+#define NLIBC_EAI_FAIL   -4
+#define NLIBC_EAI_MEMORY -10
+
+static int nlibc_parse_numeric(const char *node, int family, void *out, int *out_family) {
+    struct in_addr v4;
+    if ((family == AF_UNSPEC || family == AF_INET) && inet_pton(AF_INET, node, &v4) == 1) {
+        memcpy(out, &v4, sizeof(v4));
+        *out_family = AF_INET;
+        return 0;
+    }
+    struct in6_addr v6;
+    if ((family == AF_UNSPEC || family == AF_INET6) && inet_pton(AF_INET6, node, &v6) == 1) {
+        memcpy(out, &v6, sizeof(v6));
+        *out_family = AF_INET6;
+        return 0;
+    }
+    return -1;
+}
+
+// The GUEST's /etc/hosts, read through the shim's own open/read.
+static int nlibc_hosts_lookup(const char *node, int family, void *out, int *out_family) {
+    FILE *f = nlibc_fopen("/etc/hosts", "r");
+    if (f == NULL)
+        return -1;
+    char line[512];
+    int found = -1;
+    while (found < 0 && fgets(line, sizeof(line), f) != NULL) {
+        char *hash = strchr(line, '#');
+        if (hash != NULL)
+            *hash = '\0';
+        char *save = NULL;
+        char *addr = strtok_r(line, " \t\r\n", &save);
+        if (addr == NULL)
+            continue;
+        for (char *name = strtok_r(NULL, " \t\r\n", &save); name != NULL;
+                name = strtok_r(NULL, " \t\r\n", &save)) {
+            if (strcasecmp(name, node) == 0) {
+                found = nlibc_parse_numeric(addr, family, out, out_family);
+                break;
+            }
+        }
+    }
+    fclose(f);
+    return found;
+}
+
+int nlibc_getaddrinfo(const char *node, const char *service,
+        const struct addrinfo *hints, struct addrinfo **res) {
+    if (res == NULL)
+        return NLIBC_EAI_FAIL;
+    *res = NULL;
+    if (node == NULL)
+        return NLIBC_EAI_NONAME;
+
+    int family = hints != NULL ? hints->ai_family : AF_UNSPEC;
+    int socktype = hints != NULL && hints->ai_socktype != 0 ? hints->ai_socktype : SOCK_STREAM;
+    int protocol = hints != NULL ? hints->ai_protocol : 0;
+
+    uint8_t raw[16];
+    int found_family = 0;
+    if (nlibc_parse_numeric(node, family, raw, &found_family) < 0) {
+        if (hints != NULL && (hints->ai_flags & AI_NUMERICHOST))
+            return NLIBC_EAI_NONAME;
+        if (nlibc_hosts_lookup(node, family, raw, &found_family) < 0)
+            return NLIBC_EAI_NONAME;
+    }
+
+    // Ports: a numeric service, or one named in the guest's /etc/services --
+    // which is not consulted, for the same reason DNS is not. Numeric covers
+    // what a program passes programmatically.
+    unsigned port = 0;
+    if (service != NULL && service[0] != '\0') {
+        char *end = NULL;
+        unsigned long parsed = strtoul(service, &end, 10);
+        if (end == NULL || *end != '\0' || parsed > 65535)
+            return NLIBC_EAI_NONAME;
+        port = (unsigned) parsed;
+    }
+
+    struct addrinfo *ai = calloc(1, sizeof(*ai));
+    if (ai == NULL)
+        return NLIBC_EAI_MEMORY;
+    if (found_family == AF_INET) {
+        struct sockaddr_in *sa = calloc(1, sizeof(*sa));
+        if (sa == NULL) { free(ai); return NLIBC_EAI_MEMORY; }
+        sa->sin_len = sizeof(*sa);
+        sa->sin_family = AF_INET;
+        sa->sin_port = htons((uint16_t) port);
+        memcpy(&sa->sin_addr, raw, sizeof(sa->sin_addr));
+        ai->ai_addr = (struct sockaddr *) sa;
+        ai->ai_addrlen = sizeof(*sa);
+    } else {
+        struct sockaddr_in6 *sa = calloc(1, sizeof(*sa));
+        if (sa == NULL) { free(ai); return NLIBC_EAI_MEMORY; }
+        sa->sin6_len = sizeof(*sa);
+        sa->sin6_family = AF_INET6;
+        sa->sin6_port = htons((uint16_t) port);
+        memcpy(&sa->sin6_addr, raw, sizeof(sa->sin6_addr));
+        ai->ai_addr = (struct sockaddr *) sa;
+        ai->ai_addrlen = sizeof(*sa);
+    }
+    ai->ai_family = found_family;
+    ai->ai_socktype = socktype;
+    ai->ai_protocol = protocol;
+    *res = ai;
+    return 0;
+}
+
+void nlibc_freeaddrinfo(struct addrinfo *res) {
+    while (res != NULL) {
+        struct addrinfo *next = res->ai_next;
+        free(res->ai_addr);
+        free(res->ai_canonname);
+        free(res);
+        res = next;
+    }
+}
+
+const char *nlibc_gai_strerror(int code) {
+    switch (code) {
+        case 0:                return "no error";
+        case NLIBC_EAI_NONAME: return "name or service not known";
+        case NLIBC_EAI_MEMORY: return "memory allocation failure";
+        default:               return "non-recoverable failure in name resolution";
+    }
+}
+
+// The reverse direction is DNS too (PTR lookups), so the numeric form is all
+// there is until the resolver exists. NI_NAMEREQD asks for a name or nothing,
+// which is exactly what has to fail here.
+int nlibc_getnameinfo(const void *addr, socklen_t addrlen, char *host, socklen_t hostlen,
+        char *serv, socklen_t servlen, int flags) {
+    const struct sockaddr *sa = addr;
+    if (sa == NULL || host == NULL || hostlen == 0)
+        return NLIBC_EAI_FAIL;
+    if (flags & NI_NAMEREQD)
+        return NLIBC_EAI_NONAME;
+    const void *raw;
+    unsigned port;
+    if (sa->sa_family == AF_INET && addrlen >= sizeof(struct sockaddr_in)) {
+        raw = &((const struct sockaddr_in *) addr)->sin_addr;
+        port = ntohs(((const struct sockaddr_in *) addr)->sin_port);
+    } else if (sa->sa_family == AF_INET6 && addrlen >= sizeof(struct sockaddr_in6)) {
+        raw = &((const struct sockaddr_in6 *) addr)->sin6_addr;
+        port = ntohs(((const struct sockaddr_in6 *) addr)->sin6_port);
+    } else {
+        return NLIBC_EAI_FAIL;
+    }
+    if (inet_ntop(sa->sa_family, raw, host, hostlen) == NULL)
+        return NLIBC_EAI_FAIL;
+    if (serv != NULL && servlen > 0)
+        snprintf(serv, servlen, "%u", port);
+    return 0;
+}
+
+// getifaddrs enumerates the HOST's interfaces -- en0, the Mac's addresses. The
+// guest's are in /proc/net/dev and behind SIOCGIFADDR, and building an ifaddrs
+// list from those is a piece of work with no caller yet: SmallCLUE only
+// reaches for this in one diagnostic path. Refusing is what keeps the Mac's
+// interfaces from being reported as the guest's.
+int nlibc_getifaddrs(struct ifaddrs **ifap) {
+    if (ifap != NULL)
+        *ifap = NULL;
+    return nlibc_fail(_ENOSYS);
+}
+void nlibc_freeifaddrs(struct ifaddrs *ifa) { (void) ifa; }
+
 // ------------------------------------------------------------------- signals
 //
 // A native program's handler is HOST code, and the kernel delivers a signal by

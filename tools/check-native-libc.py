@@ -51,6 +51,20 @@ PURE = {
     "isalnum", "isalpha", "isascii", "isblank", "iscntrl", "isdigit", "isgraph",
     "islower", "isprint", "ispunct", "isspace", "isupper", "isxdigit",
     "tolower", "toupper",
+    # Address text <-> bytes. No kernel state: these parse and format a buffer
+    # the caller already owns. The address FAMILY argument stays in the host's
+    # numbering throughout (a program passes the AF_INET6 its own headers gave
+    # it, and the host libc reads it the same way), so nothing here has to
+    # agree with the guest -- only the resulting bytes cross, and those are
+    # network order on both sides.
+    "inet_ntop", "inet_pton", "inet_ntoa", "inet_addr", "htons", "htonl",
+    "ntohs", "ntohl",
+    # termios helpers that only edit a struct in memory. Not tcgetattr or
+    # tcsetattr, which talk to a terminal and are redirected: these set or read
+    # fields, and the redirected calls translate the result on its way to the
+    # guest's tty.
+    "cfmakeraw", "cfgetospeed", "cfgetispeed", "cfsetospeed", "cfsetispeed",
+    "cfsetspeed",
     # Formatting, and FILE* operations. Safe only because fopen/fdopen/stdout/
     # stderr/stdin are all redirected, so every FILE* a native program holds is
     # one the shim created over a guest fd.

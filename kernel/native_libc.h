@@ -32,8 +32,13 @@
  * tools/check-native-libc.py fails the build on anything missed here.
  */
 
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
+#include <netdb.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <glob.h>
 #include <poll.h>
 #include <signal.h>
@@ -204,6 +209,37 @@ int nlibc_tcsetattr(int fd, int action, const struct termios *in);
 int nlibc_isatty(int fd);
 int nlibc_ioctl_tty(int fd, unsigned long request, void *arg);
 
+/* Networking. AOK's sockets are real host sockets underneath, so what going
+ * through the kernel buys is that a socket is a GUEST descriptor -- usable
+ * with the same close/poll/select/dup as everything else a native program
+ * holds. Every constant and every sockaddr is translated; see the .c. */
+int nlibc_socket(int domain, int type, int protocol);
+int nlibc_bind(int fd, const void *addr, socklen_t len);
+int nlibc_connect(int fd, const void *addr, socklen_t len);
+int nlibc_listen(int fd, int backlog);
+int nlibc_accept(int fd, void *addr, socklen_t *len);
+int nlibc_getsockname(int fd, void *addr, socklen_t *len);
+int nlibc_getpeername(int fd, void *addr, socklen_t *len);
+ssize_t nlibc_send(int fd, const void *buf, size_t len, int flags);
+ssize_t nlibc_sendto(int fd, const void *buf, size_t len, int flags,
+        const void *addr, socklen_t addrlen);
+ssize_t nlibc_recv(int fd, void *buf, size_t len, int flags);
+ssize_t nlibc_recvfrom(int fd, void *buf, size_t len, int flags,
+        void *addr, socklen_t *addrlen);
+int nlibc_shutdown(int fd, int how);
+int nlibc_setsockopt(int fd, int level, int option, const void *value, socklen_t len);
+int nlibc_getsockopt(int fd, int level, int option, void *value, socklen_t *len);
+
+/* Resolution, from the guest's files rather than the Mac's. */
+int nlibc_getaddrinfo(const char *node, const char *service,
+        const struct addrinfo *hints, struct addrinfo **res);
+void nlibc_freeaddrinfo(struct addrinfo *res);
+const char *nlibc_gai_strerror(int code);
+int nlibc_getnameinfo(const void *addr, socklen_t addrlen, char *host, socklen_t hostlen,
+        char *serv, socklen_t servlen, int flags);
+int nlibc_getifaddrs(struct ifaddrs **ifap);
+void nlibc_freeifaddrs(struct ifaddrs *ifa);
+
 int nlibc_tcflush(int fd, int queue);
 int nlibc_tcdrain(int fd);
 
@@ -357,6 +393,27 @@ pid_t nlibc_wait(int *status);
  * declaration of this function, and every use of `environ` becomes a call to
  * it, which is what keeps two concurrently-running native programs from
  * sharing one environment. */
+#define socket                   nlibc_socket
+#define bind                     nlibc_bind
+#define connect                  nlibc_connect
+#define listen                   nlibc_listen
+#define accept                   nlibc_accept
+#define getsockname              nlibc_getsockname
+#define getpeername              nlibc_getpeername
+#define send                     nlibc_send
+#define sendto                   nlibc_sendto
+#define recv                     nlibc_recv
+#define recvfrom                 nlibc_recvfrom
+#define shutdown                 nlibc_shutdown
+#define setsockopt               nlibc_setsockopt
+#define getsockopt               nlibc_getsockopt
+#define getaddrinfo              nlibc_getaddrinfo
+#define freeaddrinfo             nlibc_freeaddrinfo
+#define gai_strerror             nlibc_gai_strerror
+#define getnameinfo(a,b,c,d,e,f,g) nlibc_getnameinfo((a),(b),(c),(d),(e),(f),(g))
+#define getifaddrs               nlibc_getifaddrs
+#define freeifaddrs              nlibc_freeifaddrs
+
 #define tcflush                  nlibc_tcflush
 #define tcdrain                  nlibc_tcdrain
 #define posix_openpt             nlibc_posix_openpt
