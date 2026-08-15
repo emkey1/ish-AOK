@@ -792,17 +792,118 @@ pid_t nlibc_wait(int *status) {
     return nlibc_waitpid(-1, status, 0);
 }
 
-// popen needs a pipe between parent and child, which needs the guest's own
-// pipe and dup2 on the child side -- neither is wired yet. Refusing keeps it
-// honest rather than half-working.
-FILE *nlibc_popen(const char *command, const char *mode) {
-    (void) command; (void) mode;
-    errno = ENOSYS;
-    return NULL;
+// popen is a guest pipe, a child task with one end wired to its stdio, and a
+// FILE* over the other end -- the same funopen wrapper every stream the shim
+// hands out is built from, so the caller's fgets/fwrite work unchanged.
+//
+// pclose has to find the child again from the FILE*, and there is no portable
+// way to recover a funopen cookie, so the pairs are kept in a list. It is
+// file-scope, which two native programs running at once would share; that is
+// safe because the key is a FILE* and no two tasks can produce the same one,
+// but it is the same sharing noted for nlibc_std and the passwd cache.
+struct nlibc_popen {
+    struct nlibc_popen *next;
+    FILE *file;
+    dword_t pid;
+};
+static struct nlibc_popen *nlibc_popens;
+static pthread_mutex_t nlibc_popen_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static bool nlibc_popen_take(FILE *file, dword_t *pid_out) {
+    pthread_mutex_lock(&nlibc_popen_lock);
+    for (struct nlibc_popen **link = &nlibc_popens; *link != NULL; link = &(*link)->next) {
+        if ((*link)->file != file)
+            continue;
+        struct nlibc_popen *found = *link;
+        *link = found->next;
+        pthread_mutex_unlock(&nlibc_popen_lock);
+        *pid_out = found->pid;
+        free(found);
+        return true;
+    }
+    pthread_mutex_unlock(&nlibc_popen_lock);
+    return false;
 }
+
+FILE *nlibc_popen(const char *command, const char *mode) {
+    if (command == NULL || mode == NULL || (mode[0] != 'r' && mode[0] != 'w')) {
+        errno = EINVAL;
+        return NULL;
+    }
+    bool reading = mode[0] == 'r';
+
+    int fds[2];
+    if (nlibc_pipe(fds) < 0)
+        return NULL;
+    // Reading from the child means the child writes: it gets fds[1], and it
+    // gets it as its stdout. Writing to the child is the mirror image.
+    int child_fd = reading ? fds[1] : fds[0];
+    int parent_fd = reading ? fds[0] : fds[1];
+    int child_slot = reading ? 1 : 0;
+
+    // The child must hold neither our end -- or nobody ever sees EOF, because
+    // a writer still exists -- nor a second copy of its own under the original
+    // number, which would otherwise land on top of its stderr.
+    int child_close[2];
+    size_t child_close_count = 0;
+    child_close[child_close_count++] = parent_fd;
+    if (child_fd != child_slot)
+        child_close[child_close_count++] = child_fd;
+
+    struct native_spawn_opts opts = {
+        .pgid = NATIVE_SPAWN_PGID_INHERIT,
+        .stdio = { -1, -1, -1 },
+        .close_fds = child_close,
+        .close_count = child_close_count,
+    };
+    opts.stdio[child_slot] = child_fd;
+
+    struct nlibc_popen *entry = malloc(sizeof(*entry));
+    char *argv[] = { (char *) "/bin/sh", (char *) "-c", (char *) command, NULL };
+    dword_t pid = 0;
+    int err = entry != NULL
+        ? native_spawn_opts("/bin/sh", argv, native_env_vector(), &opts, &pid)
+        : _ENOMEM;
+    // Ours only for handing to the child; the child has its own copy now.
+    nlibc_close(child_fd);
+    if (err < 0) {
+        free(entry);
+        nlibc_close(parent_fd);
+        nlibc_fail(err);
+        return NULL;
+    }
+
+    FILE *file = nlibc_file_wrap(parent_fd, 1);
+    if (file == NULL) {
+        free(entry);
+        nlibc_close(parent_fd);
+        return NULL;
+    }
+    entry->file = file;
+    entry->pid = pid;
+    pthread_mutex_lock(&nlibc_popen_lock);
+    entry->next = nlibc_popens;
+    nlibc_popens = entry;
+    pthread_mutex_unlock(&nlibc_popen_lock);
+    return file;
+}
+
+// Returns the child's wait status, as system() does -- not the exit code.
 int nlibc_pclose(FILE *stream) {
-    (void) stream;
-    return nlibc_fail(_ENOSYS);
+    dword_t pid = 0;
+    if (stream == NULL || !nlibc_popen_take(stream, &pid)) {
+        // Not a stream popen handed out. POSIX makes this undefined; refusing
+        // is better than closing something and waiting for an unrelated child.
+        errno = EINVAL;
+        return -1;
+    }
+    // Closing the parent's end first is what lets a child blocked writing to a
+    // full pipe finish, so the wait below cannot deadlock against it.
+    fclose(stream);
+    int status = 0;
+    if (native_waitpid(pid, &status, 0) < 0)
+        return -1;
+    return status;
 }
 
 // ------------------------------------------------- remaining host-libc holes
