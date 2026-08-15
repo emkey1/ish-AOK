@@ -354,6 +354,40 @@ struct group *nlibc_getgrent(void);
 int nlibc_execve(const char *path, char *const argv[], char *const envp[]);
 int nlibc_pselect(int nfds, void *r, void *w, void *e,
         const struct timespec *timeout, const sigset_t *sigmask);
+/* posix_spawn: the general answer to "a native program cannot fork". A program
+ * that starts children this way needs no patch at all, which is what retires
+ * the per-program spawn seams SmallCLUE and Nextvi both carry. The file-actions
+ * and attributes objects are ours -- Darwin declares both as void* -- so the
+ * whole family is redirected together or not at all.
+ *
+ * Spelled `void **` rather than `posix_spawn_file_actions_t *`, and <spawn.h>
+ * deliberately NOT included here, because that name does not reliably reach the
+ * system header: SmallCLUE ships its own src/spawn.h and its include path comes
+ * first. Same collision class as glob.h above, and the same remedy -- do not
+ * depend on which header wins. Darwin's typedefs are `void *` for both, which
+ * kernel/native_libc.c asserts against the real <spawn.h>, so a caller passing
+ * posix_spawn_file_actions_t * is passing exactly this. */
+int nlibc_posix_spawn_file_actions_init(void **fa);
+int nlibc_posix_spawn_file_actions_destroy(void **fa);
+int nlibc_posix_spawn_file_actions_adddup2(void **fa, int from, int to);
+int nlibc_posix_spawn_file_actions_addclose(void **fa, int fd);
+int nlibc_posix_spawn_file_actions_addopen(void **fa, int fd,
+        const char *path, int flags, mode_t mode);
+int nlibc_posix_spawnattr_init(void **attr);
+int nlibc_posix_spawnattr_destroy(void **attr);
+int nlibc_posix_spawnattr_setflags(void **attr, short flags);
+int nlibc_posix_spawnattr_getflags(void **attr, short *out);
+int nlibc_posix_spawnattr_setpgroup(void **attr, pid_t pgroup);
+int nlibc_posix_spawnattr_getpgroup(void **attr, pid_t *out);
+int nlibc_posix_spawnattr_setsigdefault(void **attr, const sigset_t *set);
+int nlibc_posix_spawnattr_setsigmask(void **attr, const sigset_t *set);
+int nlibc_posix_spawn(pid_t *pid, const char *path,
+        const void **fa, const void **attr,
+        char *const argv[], char *const envp[]);
+int nlibc_posix_spawnp(pid_t *pid, const char *file,
+        const void **fa, const void **attr,
+        char *const argv[], char *const envp[]);
+
 void *nlibc_dlopen(const char *path, int mode);
 void *nlibc_dlsym(void *handle, const char *symbol);
 int nlibc_dlclose(void *handle);
@@ -584,6 +618,22 @@ const char *nlibc_dlerror(void);
 #define getgrent                 nlibc_getgrent
 #define execve                   nlibc_execve
 #define pselect(a,b,c,d,e,f)     nlibc_pselect((a),(b),(c),(d),(e),(f))
+#define posix_spawn_file_actions_init    nlibc_posix_spawn_file_actions_init
+#define posix_spawn_file_actions_destroy nlibc_posix_spawn_file_actions_destroy
+#define posix_spawn_file_actions_adddup2 nlibc_posix_spawn_file_actions_adddup2
+#define posix_spawn_file_actions_addclose nlibc_posix_spawn_file_actions_addclose
+#define posix_spawn_file_actions_addopen nlibc_posix_spawn_file_actions_addopen
+#define posix_spawnattr_init             nlibc_posix_spawnattr_init
+#define posix_spawnattr_destroy          nlibc_posix_spawnattr_destroy
+#define posix_spawnattr_setflags         nlibc_posix_spawnattr_setflags
+#define posix_spawnattr_getflags         nlibc_posix_spawnattr_getflags
+#define posix_spawnattr_setpgroup        nlibc_posix_spawnattr_setpgroup
+#define posix_spawnattr_getpgroup        nlibc_posix_spawnattr_getpgroup
+#define posix_spawnattr_setsigdefault    nlibc_posix_spawnattr_setsigdefault
+#define posix_spawnattr_setsigmask       nlibc_posix_spawnattr_setsigmask
+#define posix_spawn                      nlibc_posix_spawn
+#define posix_spawnp                     nlibc_posix_spawnp
+
 #define dlopen                   nlibc_dlopen
 #define dlsym                    nlibc_dlsym
 #define dlclose                  nlibc_dlclose

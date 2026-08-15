@@ -509,6 +509,9 @@ if get_option('kernel') == 'ish'
             # bash brings its own globbing, and macOS's <glob.h> shares the
             # include guard _GLOB_H_ with bash's -- see kernel/native_libc.h.
             '-DNATIVE_LIBC_OWN_GLOB',
+            # fork by re-launch (deps/bash/aok_fork.c). Guards the two hooks in
+            # bash's own sources so the vendor tree still builds without it.
+            '-DAOK_NATIVE_FORK=1',
             # The two symbols that collide with libish, out of 1837 against
             # 1775. main is the obvious one; wait_for is bash's job-control
             # reaper against AOK's condition-variable wait (util/sync.h).
@@ -591,7 +594,9 @@ if get_option('kernel') == 'ish'
             'alias.c', 'array.c', 'arrayfunc.c', 'assoc.c', 'braces.c',
             'bracecomp.c', 'bashhist.c', 'bashline.c', 'list.c', 'stringlib.c',
             'locale.c', 'findcmd.c', 'redir.c', 'pcomplete.c', 'pcomplib.c',
-            'xmalloc.c']
+            'xmalloc.c',
+            # iSH-AOK's own: fork by re-launch. Not upstream.
+            'aok_fork.c']
         bash_builtins_static = ['common.c', 'evalstring.c', 'evalfile.c',
             'getopt.c', 'bashgetopt.c']
         # lib/sh's exact list, from bash's own build rather than a glob. 22 of

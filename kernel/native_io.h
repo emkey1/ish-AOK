@@ -58,13 +58,36 @@ int native_spawn(const char *path, char *const argv[], char *const envp[],
         dword_t *pid_out);
 
 // What a fork+exec caller would do in the child between the two -- setpgid,
-// then dup2, then close. A native program has no such window, because there is
-// no fork: the child is created, given its image and started, all from the
-// parent. So it is described here instead and applied on the child's behalf.
+// then dup2, open and close in whatever order it wrote them. A native program
+// has no such window, because there is no fork: the child is created, given its
+// image and started, all from the parent. So it is described here instead and
+// applied on the child's behalf.
+//
+// The actions are an ORDERED list rather than a tidier "stdio[3] plus fds to
+// close", which is what this was at first. Order is not a detail: closing an
+// fd that a later dup2 reads from, or closing one that an earlier dup2 just
+// wrote to, are both silent breakage, and only the caller knows which it meant.
+// It is also exactly posix_spawn's model, which is what lets the shim's
+// posix_spawn be a thin translation rather than an interpretation.
 //
 // A zeroed struct is the useful default, hence the INHERIT sentinel being -1
 // rather than 0: `pgid = 0` has to keep meaning what setpgid(0, 0) means.
 #define NATIVE_SPAWN_PGID_INHERIT (-1)
+
+enum native_spawn_action_kind {
+    NATIVE_SPAWN_DUP2,    // fd <- from
+    NATIVE_SPAWN_CLOSE,   // close fd
+    NATIVE_SPAWN_OPEN,    // fd <- open(path, flags, mode)
+};
+
+struct native_spawn_action {
+    enum native_spawn_action_kind kind;
+    int fd;
+    int from;             // DUP2
+    const char *path;     // OPEN, a GUEST path
+    int flags;            // OPEN, guest O_* values
+    int mode;             // OPEN
+};
 
 struct native_spawn_opts {
     // The child's process group:
@@ -73,14 +96,8 @@ struct native_spawn_opts {
     //   >0                         join this existing group, which must be in
     //                              the same session
     int pgid;
-    // Installed as the child's fds 0, 1 and 2, named by their number in the
-    // CALLER's table; -1 leaves the inherited descriptor alone.
-    int stdio[3];
-    // Closed in the child and nowhere else. This is the other end of a pipe:
-    // if the child keeps it open, the side holding the read end never sees EOF
-    // because a writer still exists.
-    const int *close_fds;
-    size_t close_count;
+    const struct native_spawn_action *actions;
+    size_t action_count;
 };
 
 int native_spawn_opts(const char *path, char *const argv[], char *const envp[],

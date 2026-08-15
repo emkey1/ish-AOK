@@ -118,7 +118,6 @@ pid_t smallcluePlatformSpawn(const SmallclueSpawnRequest *request) {
     // timeout(1) is the caller that wants it, for killing a whole group.
     struct native_spawn_opts opts = {
         .pgid = request->setpgid_self ? 0 : NATIVE_SPAWN_PGID_INHERIT,
-        .stdio = { -1, -1, -1 },
     };
 
     int last_err = ENOENT;

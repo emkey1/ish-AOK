@@ -15,6 +15,7 @@
 #include <limits.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <spawn.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 
@@ -841,22 +842,26 @@ FILE *nlibc_popen(const char *command, const char *mode) {
     int parent_fd = reading ? fds[0] : fds[1];
     int child_slot = reading ? 1 : 0;
 
-    // The child must hold neither our end -- or nobody ever sees EOF, because
-    // a writer still exists -- nor a second copy of its own under the original
-    // number, which would otherwise land on top of its stderr.
-    int child_close[2];
-    size_t child_close_count = 0;
-    child_close[child_close_count++] = parent_fd;
+    // In order, as a forked child would have done it: put our end of the pipe
+    // where the child expects it, then drop both originals. The child must hold
+    // neither our end -- or nobody ever sees EOF, because a writer still exists
+    // -- nor a second copy of its own under the number pipe() gave it, which
+    // would otherwise sit on top of its stderr.
+    struct native_spawn_action actions[3];
+    size_t n = 0;
+    actions[n++] = (struct native_spawn_action) {
+        .kind = NATIVE_SPAWN_DUP2, .fd = child_slot, .from = child_fd };
+    actions[n++] = (struct native_spawn_action) {
+        .kind = NATIVE_SPAWN_CLOSE, .fd = parent_fd };
     if (child_fd != child_slot)
-        child_close[child_close_count++] = child_fd;
+        actions[n++] = (struct native_spawn_action) {
+            .kind = NATIVE_SPAWN_CLOSE, .fd = child_fd };
 
     struct native_spawn_opts opts = {
         .pgid = NATIVE_SPAWN_PGID_INHERIT,
-        .stdio = { -1, -1, -1 },
-        .close_fds = child_close,
-        .close_count = child_close_count,
+        .actions = actions,
+        .action_count = n,
     };
-    opts.stdio[child_slot] = child_fd;
 
     struct nlibc_popen *entry = malloc(sizeof(*entry));
     char *argv[] = { (char *) "/bin/sh", (char *) "-c", (char *) command, NULL };
@@ -3576,4 +3581,240 @@ int nlibc_pselect(int nfds, void *readfds, void *writefds, void *errorfds,
         if (guest_sets[i] != 0 && native_scratch_get(host_sets[i], guest_sets[i], size) < 0)
             return nlibc_fail(_EFAULT);
     return (int) res;
+}
+
+// ============================================================== posix_spawn
+//
+// The general answer to "a native program cannot fork". Everything written
+// since about 2005 that wants to start a child can say so with posix_spawn,
+// and a program that does needs NO patch to run inside AOK -- which is the
+// point. SmallCLUE carries a spawn seam and Nextvi had one added upstream
+// precisely because they call fork() directly; anything using posix_spawn is
+// spared both.
+//
+// This can be a translation rather than an interpretation because
+// native_spawn_opts takes the same ordered action list posix_spawn does.
+//
+// The file-actions and attributes objects are OURS. Darwin declares both as
+// `void *` (spawn.h), so redirecting the whole family means the caller's
+// posix_spawn_file_actions_t holds a pointer to the struct below and never to
+// anything the host libc would recognise -- which is what makes this safe.
+// Mixing them would not be: a host posix_spawn handed one of these would
+// dereference it as its own.
+
+// The whole scheme rests on Darwin declaring these as plain pointers, so that
+// what the caller holds is ours to define. If that ever stopped being true, the
+// silent failure would be a host posix_spawn dereferencing one of our structs
+// as its own -- so it is asserted rather than trusted.
+_Static_assert(sizeof(posix_spawn_file_actions_t) == sizeof(void *),
+        "posix_spawn_file_actions_t is not a plain pointer on this platform");
+_Static_assert(sizeof(posix_spawnattr_t) == sizeof(void *),
+        "posix_spawnattr_t is not a plain pointer on this platform");
+
+struct nlibc_spawn_actions {
+    struct native_spawn_action *actions;
+    size_t count, cap;
+    char **paths;          // OPEN copies the path; freed with the object
+    size_t path_count, path_cap;
+};
+
+struct nlibc_spawn_attr {
+    short flags;
+    pid_t pgroup;
+};
+
+int nlibc_posix_spawn_file_actions_init(void **fa) {
+    if (fa == NULL)
+        return EINVAL;
+    struct nlibc_spawn_actions *a = calloc(1, sizeof(*a));
+    if (a == NULL)
+        return ENOMEM;
+    *fa = a;
+    return 0;
+}
+
+int nlibc_posix_spawn_file_actions_destroy(void **fa) {
+    if (fa == NULL || *fa == NULL)
+        return EINVAL;
+    struct nlibc_spawn_actions *a = *fa;
+    for (size_t i = 0; i < a->path_count; i++)
+        free(a->paths[i]);
+    free(a->paths);
+    free(a->actions);
+    free(a);
+    *fa = NULL;
+    return 0;
+}
+
+static int nlibc_spawn_actions_push(void **fa,
+        struct native_spawn_action action) {
+    if (fa == NULL || *fa == NULL)
+        return EINVAL;
+    struct nlibc_spawn_actions *a = *fa;
+    if (a->count == a->cap) {
+        size_t cap = a->cap == 0 ? 8 : a->cap * 2;
+        struct native_spawn_action *grown = realloc(a->actions, cap * sizeof(*grown));
+        if (grown == NULL)
+            return ENOMEM;
+        a->actions = grown;
+        a->cap = cap;
+    }
+    a->actions[a->count++] = action;
+    return 0;
+}
+
+int nlibc_posix_spawn_file_actions_adddup2(void **fa,
+        int from, int to) {
+    if (from < 0 || to < 0)
+        return EBADF;
+    return nlibc_spawn_actions_push(fa, (struct native_spawn_action) {
+        .kind = NATIVE_SPAWN_DUP2, .fd = to, .from = from });
+}
+
+int nlibc_posix_spawn_file_actions_addclose(void **fa, int fd) {
+    if (fd < 0)
+        return EBADF;
+    return nlibc_spawn_actions_push(fa, (struct native_spawn_action) {
+        .kind = NATIVE_SPAWN_CLOSE, .fd = fd });
+}
+
+int nlibc_posix_spawn_file_actions_addopen(void **fa,
+        int fd, const char *path, int flags, mode_t mode) {
+    if (fd < 0)
+        return EBADF;
+    if (fa == NULL || *fa == NULL || path == NULL)
+        return EINVAL;
+    // The caller may free the path the moment this returns, and the action is
+    // not applied until the spawn, so it has to be copied.
+    struct nlibc_spawn_actions *a = *fa;
+    if (a->path_count == a->path_cap) {
+        size_t cap = a->path_cap == 0 ? 4 : a->path_cap * 2;
+        char **grown = realloc(a->paths, cap * sizeof(*grown));
+        if (grown == NULL)
+            return ENOMEM;
+        a->paths = grown;
+        a->path_cap = cap;
+    }
+    char *copy = strdup(path);
+    if (copy == NULL)
+        return ENOMEM;
+    a->paths[a->path_count++] = copy;
+    // Guest O_* values, since the action is performed against the guest's VFS.
+    return nlibc_spawn_actions_push(fa, (struct native_spawn_action) {
+        .kind = NATIVE_SPAWN_OPEN, .fd = fd, .path = copy,
+        .flags = (int) nlibc_open_flags_to_guest(flags), .mode = (int) mode });
+}
+
+int nlibc_posix_spawnattr_init(void **attr) {
+    if (attr == NULL)
+        return EINVAL;
+    struct nlibc_spawn_attr *a = calloc(1, sizeof(*a));
+    if (a == NULL)
+        return ENOMEM;
+    *attr = a;
+    return 0;
+}
+
+int nlibc_posix_spawnattr_destroy(void **attr) {
+    if (attr == NULL || *attr == NULL)
+        return EINVAL;
+    free(*attr);
+    *attr = NULL;
+    return 0;
+}
+
+int nlibc_posix_spawnattr_setflags(void **attr, short flags) {
+    if (attr == NULL || *attr == NULL)
+        return EINVAL;
+    ((struct nlibc_spawn_attr *) *attr)->flags = flags;
+    return 0;
+}
+
+int nlibc_posix_spawnattr_getflags(void **attr, short *out) {
+    if (attr == NULL || *attr == NULL || out == NULL)
+        return EINVAL;
+    *out = ((struct nlibc_spawn_attr *) *attr)->flags;
+    return 0;
+}
+
+int nlibc_posix_spawnattr_setpgroup(void **attr, pid_t pgroup) {
+    if (attr == NULL || *attr == NULL)
+        return EINVAL;
+    ((struct nlibc_spawn_attr *) *attr)->pgroup = pgroup;
+    return 0;
+}
+
+int nlibc_posix_spawnattr_getpgroup(void **attr, pid_t *out) {
+    if (attr == NULL || *attr == NULL || out == NULL)
+        return EINVAL;
+    *out = ((struct nlibc_spawn_attr *) *attr)->pgroup;
+    return 0;
+}
+
+// The signal attributes are accepted and ignored, deliberately and narrowly:
+// a native program's signal dispositions live in the shim rather than in the
+// kernel (see the block comment above nlibc_sigaction), so there is nothing in
+// the CHILD for them to reset -- the child is a fresh task with default
+// dispositions already, which is what POSIX_SPAWN_SETSIGDEF asks for. Refusing
+// would break callers that set them as a matter of routine and would gain
+// nothing.
+int nlibc_posix_spawnattr_setsigdefault(void **attr, const sigset_t *set) {
+    (void) set;
+    return (attr != NULL && *attr != NULL) ? 0 : EINVAL;
+}
+int nlibc_posix_spawnattr_setsigmask(void **attr, const sigset_t *set) {
+    (void) set;
+    return (attr != NULL && *attr != NULL) ? 0 : EINVAL;
+}
+
+static int nlibc_posix_spawn_common(pid_t *pid_out, const char *file,
+        const void **fa, const void **attr,
+        char *const argv[], char *const envp[], bool search_path) {
+    if (file == NULL || argv == NULL)
+        return EINVAL;
+
+    struct native_spawn_opts opts = { .pgid = NATIVE_SPAWN_PGID_INHERIT };
+    if (attr != NULL && *attr != NULL) {
+        const struct nlibc_spawn_attr *a = *attr;
+        // Only SETPGROUP changes what the child IS; the rest are either
+        // already true of a fresh task or have no meaning here.
+        if (a->flags & POSIX_SPAWN_SETPGROUP)
+            opts.pgid = a->pgroup;
+    }
+    if (fa != NULL && *fa != NULL) {
+        const struct nlibc_spawn_actions *a = *fa;
+        opts.actions = a->actions;
+        opts.action_count = a->count;
+    }
+
+    char resolved[MAX_PATH];
+    const char *path = file;
+    if (search_path && strchr(path, '/') == NULL) {
+        // The GUEST's PATH, as with execvp.
+        if (native_path_search(path, resolved, sizeof(resolved)) < 0)
+            return ENOENT;
+        path = resolved;
+    }
+
+    dword_t pid = 0;
+    int err = native_spawn_opts(path, argv,
+            envp != NULL ? envp : native_env_vector(), &opts, &pid);
+    if (err < 0)
+        return nlibc_host_errno(err);   // posix_spawn RETURNS the error; it
+                                        // does not set errno
+    if (pid_out != NULL)
+        *pid_out = (pid_t) pid;
+    return 0;
+}
+
+int nlibc_posix_spawn(pid_t *pid, const char *path,
+        const void **fa, const void **attr,
+        char *const argv[], char *const envp[]) {
+    return nlibc_posix_spawn_common(pid, path, fa, attr, argv, envp, false);
+}
+
+int nlibc_posix_spawnp(pid_t *pid, const char *file,
+        const void **fa, const void **attr,
+        char *const argv[], char *const envp[]) {
+    return nlibc_posix_spawn_common(pid, file, fa, attr, argv, envp, true);
 }

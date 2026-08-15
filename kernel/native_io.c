@@ -203,41 +203,51 @@ static int native_spawn_setup_child(const struct native_spawn_opts *opts) {
         return 0;
 
     if (opts->pgid != NATIVE_SPAWN_PGID_INHERIT) {
-        // setpgid(0, 0) on a task that has not exec'd, which is precisely the
-        // case the guest's own rules allow -- and why this happens here rather
-        // than in the parent afterwards, where sys_setpgid refuses with EACCES
-        // once the child has exec'd.
+        // setpgid on a task that has not exec'd, which is precisely the case
+        // the guest's own rules allow -- and why this happens here rather than
+        // in the parent afterwards, where sys_setpgid refuses with EACCES once
+        // the child has exec'd.
         int err = (int) sys_setpgid(0, opts->pgid);
         if (err < 0)
             return err;
     }
 
-    for (int i = 0; i < 3; i++) {
-        if (opts->stdio[i] < 0 || opts->stdio[i] == i)
-            continue;
-        int err = (int) sys_dup2(opts->stdio[i], i);
+    // In the caller's order, exactly as a forked child would have run them.
+    for (size_t i = 0; i < opts->action_count; i++) {
+        const struct native_spawn_action *a = &opts->actions[i];
+        int err = 0;
+        switch (a->kind) {
+            case NATIVE_SPAWN_DUP2:
+                // sys_dup2 already gets dup2(fd, fd) right -- it checks the
+                // descriptor is open and returns it without clearing cloexec,
+                // where dup3 would reject it with EINVAL.
+                err = (int) sys_dup2(a->from, a->fd);
+                break;
+            case NATIVE_SPAWN_CLOSE:
+                // A descriptor already gone is not an error: closing what the
+                // caller does not want kept is idempotent by intent.
+                (void) sys_close(a->fd);
+                break;
+            case NATIVE_SPAWN_OPEN: {
+                struct fd *fd = generic_openat(AT_PWD, a->path, a->flags, a->mode);
+                if (IS_ERR(fd)) {
+                    err = (int) PTR_ERR(fd);
+                    break;
+                }
+                fd_t got = f_install(fd, 0);
+                if (got < 0) {
+                    err = got;
+                    break;
+                }
+                if (got != a->fd) {
+                    err = (int) sys_dup2(got, a->fd);
+                    sys_close(got);
+                }
+                break;
+            }
+        }
         if (err < 0)
             return err;
-    }
-
-    for (size_t i = 0; i < opts->close_count; i++) {
-        int fd = opts->close_fds[i];
-        if (fd < 0)
-            continue;
-        // Never close what the dup2s above just installed. The list is written
-        // as "the pipe ends I do not want the child holding", in numbers the
-        // caller got back from pipe() -- and pipe() hands back descriptor 1
-        // when the caller had it closed, at which point closing it would undo
-        // the redirection instead of tidying up after it.
-        bool installed = false;
-        for (int slot = 0; slot < 3; slot++)
-            if (opts->stdio[slot] >= 0 && fd == slot)
-                installed = true;
-        if (installed)
-            continue;
-        // A descriptor already gone is not an error: one of the ends listed
-        // may have just been dup2'd over.
-        (void) sys_close(fd);
     }
     return 0;
 }

@@ -100,24 +100,37 @@ int nextvi_platform_spawn(char **argv, const int *pipe_in, const int *pipe_out) 
         return -1;
     }
 
-    struct native_spawn_opts opts = {
-        .pgid = NATIVE_SPAWN_PGID_INHERIT,
-        .stdio = { -1, -1, -1 },
-    };
-    int closes[4];
-    size_t close_count = 0;
+    // Written in the order the forked child ran them: redirect first, then drop
+    // both ends of both pipes. Closing before the dup2s would take away the
+    // descriptor being copied.
+    struct native_spawn_action actions[7];
+    size_t n = 0;
+    if (pipe_in != NULL)
+        actions[n++] = (struct native_spawn_action) {
+            .kind = NATIVE_SPAWN_DUP2, .fd = 0, .from = pipe_in[0] };
+    if (pipe_out != NULL) {
+        actions[n++] = (struct native_spawn_action) {
+            .kind = NATIVE_SPAWN_DUP2, .fd = 1, .from = pipe_out[1] };
+        actions[n++] = (struct native_spawn_action) {
+            .kind = NATIVE_SPAWN_DUP2, .fd = 2, .from = pipe_out[1] };
+    }
     if (pipe_in != NULL) {
-        opts.stdio[0] = pipe_in[0];
-        closes[close_count++] = pipe_in[0];
-        closes[close_count++] = pipe_in[1];
+        actions[n++] = (struct native_spawn_action) {
+            .kind = NATIVE_SPAWN_CLOSE, .fd = pipe_in[0] };
+        actions[n++] = (struct native_spawn_action) {
+            .kind = NATIVE_SPAWN_CLOSE, .fd = pipe_in[1] };
     }
     if (pipe_out != NULL) {
-        opts.stdio[1] = opts.stdio[2] = pipe_out[1];
-        closes[close_count++] = pipe_out[0];
-        closes[close_count++] = pipe_out[1];
+        actions[n++] = (struct native_spawn_action) {
+            .kind = NATIVE_SPAWN_CLOSE, .fd = pipe_out[0] };
+        actions[n++] = (struct native_spawn_action) {
+            .kind = NATIVE_SPAWN_CLOSE, .fd = pipe_out[1] };
     }
-    opts.close_fds = closes;
-    opts.close_count = close_count;
+    struct native_spawn_opts opts = {
+        .pgid = NATIVE_SPAWN_PGID_INHERIT,
+        .actions = actions,
+        .action_count = n,
+    };
 
     // execvp semantics, against the GUEST's PATH -- the host's would find the
     // Mac's binaries.
