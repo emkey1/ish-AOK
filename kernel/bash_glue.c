@@ -28,6 +28,9 @@
 // one of its own. The same trick SmallCLUE's CMake build uses on Nextvi.
 int bash_main_entry(int argc, char **argv, char **envp);
 
+// bash's own, not renamed by the build. See the use below.
+extern char *shell_name;
+
 // The guest's own bash, for the second and later SIMULTANEOUS invocations. The
 // same choice deps/bash/aok_fork.c makes for a subshell, for the same reason,
 // and named the same way there.
@@ -71,6 +74,17 @@ int native_bash_main(int argc, char *const argv[], char *const envp[]) {
         nlibc_perror(AOK_GUEST_BASH);
         return 127;
     }
+    // The one piece of re-entry state that has to be cleared from OUT here.
+    // bash's main() reads shell_name before it calls shell_reinitialize -- that
+    // is how it decides whether it is a login shell -- so a pointer the last
+    // bash left behind is dereferenced after the memory has gone. Everything
+    // else belongs in shell_reinitialize and is there (deps/bash/shell.c).
+    //
+    // Safe to null rather than guard: set_shell_name gives it a fresh value
+    // immediately afterwards, and shell_name is only the SECOND of the two
+    // triggers for reinitialising at all -- shell_initialized is the first, is
+    // set once and never cleared.
+    shell_name = (char *) NULL;
     int status = bash_main_entry(argc, (char **) argv, native_env_vector());
     nlibc_flush_std();
     atomic_flag_clear(&bash_live);
