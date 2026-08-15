@@ -367,10 +367,28 @@ if get_option('kernel') == 'ish'
             meson.current_source_dir() / nextvi_dir / 'vi.c',
             check: false).returncode() == 0
 
+    # Nextvi runs `!!` and `:!cmd` with fork+dup2+execvp, and a native program
+    # cannot fork. Upstream Nextvi therefore reports "fork failed" for the shell
+    # escape; a Nextvi carrying the NEXTVI_PLATFORM_SPAWN seam in term.c calls
+    # kernel/nextvi_glue.c's nextvi_platform_spawn instead and it works.
+    #
+    # Detected rather than assumed, so that both are correct builds: without
+    # the seam nothing here is compiled in and the escape fails honestly, and
+    # nothing has to be remembered when the submodule moves either way.
+    have_nextvi_spawn = have_nextvi and run_command(python, '-c',
+            'import sys; sys.exit(0 if "NEXTVI_PLATFORM_SPAWN" in open(sys.argv[1]).read() else 1)',
+            meson.current_source_dir() / nextvi_dir / 'term.c',
+            check: false).returncode() == 0
+
     smallclue_src = []
     if have_nextvi
         smallclue_excluded += 'nextvi_stubs.c'
-        smallclue_src += files(nextvi_dir / 'vi.c')
+        # Supplies nextvi_main_entry over the renamed real one; see the file.
+        src += files('kernel/nextvi_glue.c')
+        if not have_nextvi_spawn
+            warning('this Nextvi has no NEXTVI_PLATFORM_SPAWN seam in term.c, ' +
+                    'so `!!` and `:!cmd` inside vi will report "fork failed"')
+        endif
     else
         # Loudly, because the runtime symptom is not: the stub's diagnostic is
         # written and then erased by the terminal reset SmallCLUE emits on the
@@ -400,13 +418,33 @@ if get_option('kernel') == 'ish'
         'deps/smallclue/compat',
     )
 
+    smallclue_c_args = [
+        '-include', meson.current_source_dir() / 'kernel/native_libc.h',
+        '-DSMALLCLUE_PLATFORM_SPAWN',
+        '-w',  # vendored code, not ours to police
+    ]
+
     libsmallclue = static_library('smallclue', smallclue_src,
         include_directories: [includes, smallclue_includes],
-        c_args: [
-            '-include', meson.current_source_dir() / 'kernel/native_libc.h',
-            '-DSMALLCLUE_PLATFORM_SPAWN',
-            '-w',  # vendored code, not ours to police
-        ])
+        c_args: smallclue_c_args)
+
+    # Nextvi gets an archive of its own for one reason: a -D that must apply to
+    # its translation unit and to no other. It is a program written to run once
+    # and exit, and AOK runs it again every time someone types `vi`, so its
+    # entry point is renamed and kernel/nextvi_glue.c supplies a
+    # nextvi_main_entry that resets the state a fresh process would have had.
+    # Renaming through the compiler is how SmallCLUE's own CMake build already
+    # turns Nextvi's main() into nextvi_main_entry.
+    libnextvi = []
+    if have_nextvi
+        nextvi_c_args = smallclue_c_args + ['-Dnextvi_main_entry=nextvi_editor_run']
+        if have_nextvi_spawn
+            nextvi_c_args += '-DNEXTVI_PLATFORM_SPAWN'
+        endif
+        libnextvi = static_library('nextvi', files(nextvi_dir / 'vi.c'),
+            include_directories: [includes, smallclue_includes],
+            c_args: nextvi_c_args)
+    endif
 
     # link_whole, not link_with: this folds SmallCLUE's objects into libish.a
     # itself. The Xcode project links the meson archives by name (libish.a,
@@ -415,7 +453,7 @@ if get_option('kernel') == 'ish'
     # every app target by hand. Riding inside libish.a keeps the two build
     # systems from diverging again.
     libish = library('ish', src,
-        link_whole: libsmallclue,
+        link_whole: [libsmallclue, libnextvi],
         include_directories: includes)
     ish = declare_dependency(
         link_with: [libish, libish_emu, libfakefs],

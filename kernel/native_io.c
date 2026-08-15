@@ -221,12 +221,23 @@ static int native_spawn_setup_child(const struct native_spawn_opts *opts) {
     }
 
     for (size_t i = 0; i < opts->close_count; i++) {
-        if (opts->close_fds[i] < 0)
+        int fd = opts->close_fds[i];
+        if (fd < 0)
             continue;
-        // A descriptor already gone is not an error here: the caller lists the
-        // ends it does not want the child holding, and one of them may have
-        // just been dup2'd over.
-        (void) sys_close(opts->close_fds[i]);
+        // Never close what the dup2s above just installed. The list is written
+        // as "the pipe ends I do not want the child holding", in numbers the
+        // caller got back from pipe() -- and pipe() hands back descriptor 1
+        // when the caller had it closed, at which point closing it would undo
+        // the redirection instead of tidying up after it.
+        bool installed = false;
+        for (int slot = 0; slot < 3; slot++)
+            if (opts->stdio[slot] >= 0 && fd == slot)
+                installed = true;
+        if (installed)
+            continue;
+        // A descriptor already gone is not an error: one of the ends listed
+        // may have just been dup2'd over.
+        (void) sys_close(fd);
     }
     return 0;
 }
