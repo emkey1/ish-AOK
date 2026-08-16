@@ -283,6 +283,7 @@ if get_option('kernel') == 'ish'
         'kernel/native_libc.c',
         'kernel/native_syscall.c', native_syscall_nums,
         'kernel/smallclue_glue.c',
+        'kernel/openssh_glue.c',
         'kernel/exit.c',
         'kernel/time.c',
         'kernel/mmap.c',
@@ -371,9 +372,8 @@ if get_option('kernel') == 'ish'
     #    that honest.
     #
     # Excluded feature groups, entry points stubbed in kernel/smallclue_glue.c:
-    # checksum_app needs OpenSSL (AOK links none), integration.c is the
-    # WITH_EXSH path into PSCAL's VM, and the openssh trio needs the vendored
-    # OpenSSH tree.
+    # checksum_app needs OpenSSL (AOK links none) and integration.c is the
+    # WITH_EXSH path into PSCAL's VM.
     # gzip_app and tar_app are excluded for a build-system reason rather than a
     # code one: they are the only files needing zlib, and the Xcode app targets
     # link the meson archives by name with no zlib anywhere in the project (no
@@ -381,8 +381,82 @@ if get_option('kernel') == 'ish'
     # those targets first -- worth doing, since tar is a real loss, but it is a
     # change to the app project rather than to this build.
     smallclue_excluded = ['main.c', 'integration.c', 'checksum_app.c',
-                          'openssh_app.c', 'openssh_shim.c', 'openssh_stubs.c',
                           'gzip_app.c', 'tar_app.c']
+
+    # --------------------------------------------------------------- openssh
+    #
+    # ssh/scp/sftp/ssh-keygen/ssh-copy-id, from the OpenSSH tree vendored at
+    # deps/smallclue/third-party/openssh. Like Nextvi it is a tree a plain
+    # checkout does not populate, so the build works either way and says so.
+    #
+    # Two things have to be true before it can be built, and they are checked
+    # separately because the fixes differ:
+    #
+    #  - the tree is there at all (ssh.c), and
+    #  - it has been CONFIGURED (config.h), with:
+    #
+    #        cd deps/smallclue/third-party/openssh
+    #        ./configure --without-openssl --without-zlib --sysconfdir=/etc/ssh
+    #
+    # --without-openssl is not a shortcut, it is the whole reason this links:
+    # AOK ships no libcrypto and no zlib, and the Xcode app targets link the
+    # meson archives by name with nothing else on the line. Configured that way
+    # OpenSSH falls back to its own bundled crypto and the link line is just
+    # "-lresolv" -- no new libraries and no change to the app project.
+    #
+    # The price, and it is a real one someone will hit: without libcrypto the
+    # client supports ED25519 KEYS AND chacha20-poly1305 ONLY. RSA and ECDSA
+    # keys -- including most keys people already have -- will not work, and
+    # `ssh-keygen -t rsa` will refuse. That is a deliberate trade, not a bug.
+    #
+    # The tree also has to be the PATCHED one: smallclue's
+    # fetch_dependencies.sh renames ssh.c/scp.c/sftp.c/ssh-keygen.c's main()
+    # to pscal_openssh_*_main() with sed, which is what
+    # deps/smallclue/src/openssh_app.c calls. An unpatched tree links four
+    # main()s against AOK's own.
+    openssh_dir = 'deps/smallclue/third-party/openssh'
+    have_openssh_tree = run_command(python, '-c',
+            'import os, sys; sys.exit(0 if os.path.exists(sys.argv[1]) else 1)',
+            meson.current_source_dir() / openssh_dir / 'ssh.c',
+            check: false).returncode() == 0
+    have_openssh = have_openssh_tree and run_command(python, '-c',
+            'import os, sys; sys.exit(0 if os.path.exists(sys.argv[1]) else 1)',
+            meson.current_source_dir() / openssh_dir / 'config.h',
+            check: false).returncode() == 0
+
+    if not have_openssh
+        # src/openssh_app.c is the launcher (setjmp around fatal()/exit(), pty
+        # handling, the re-entry split); openssh_shim.c and openssh_stubs.c only
+        # exist to feed it. None of them compile without the tree's headers, so
+        # they drop out together and kernel/smallclue_glue.c's honest "not built
+        # into this iSH-AOK" stubs stay.
+        smallclue_excluded += ['openssh_app.c', 'openssh_shim.c',
+                               'openssh_stubs.c']
+        if have_openssh_tree
+            warning('deps/smallclue/third-party/openssh is present but has no ' +
+                    'config.h -- ssh/scp/sftp/ssh-keygen will report "not ' +
+                    'built into this iSH-AOK". Configure it with: ./configure ' +
+                    '--without-openssl --without-zlib --sysconfdir=/etc/ssh')
+        else
+            warning('deps/smallclue/third-party/openssh is not checked out -- ' +
+                    'ssh/scp/sftp/ssh-keygen will report "not built into this ' +
+                    'iSH-AOK"')
+        endif
+    else
+        # src/openssh_stubs.c does two jobs, and only one of them survives
+        # contact with a real OpenSSH: it implements the exit-context helpers
+        # openssh_app.c calls, AND it defines four WEAK pscal_openssh_*_main()
+        # that print "OpenSSH integration unavailable in this build".
+        #
+        # Weak loses to strong within one link -- but NOT across static
+        # archives. The linker takes the first archive member that defines a
+        # symbol and stops looking, so the stub satisfied openssh_app.c and
+        # ssh.o was never pulled in at all: `ssh -V` printed "OpenSSH
+        # integration unavailable" out of a binary that contained every line of
+        # OpenSSH. So the file is compiled on its own below, with those four
+        # names renamed out of the way rather than left to lose a race.
+        smallclue_excluded += 'openssh_stubs.c'
+    endif
 
     # Nextvi -- the editor `vi` runs -- is a submodule OF a submodule and is not
     # populated by a plain checkout, so the build has to work either way. With
@@ -459,8 +533,18 @@ if get_option('kernel') == 'ish'
         '-w',  # vendored code, not ours to police
     ]
 
+    # src/openssh_app.c and src/openssh_shim.c reach into the vendored tree
+    # (sshkey.h, pscal_runtime_hooks.h), so libsmallclue needs its headers too
+    # -- but only when it is there, since include_directories() on a missing
+    # directory is a configure error.
+    openssh_includes = []
+    if have_openssh
+        openssh_includes = [include_directories(
+            openssh_dir, openssh_dir / 'openbsd-compat')]
+    endif
+
     libsmallclue = static_library('smallclue', smallclue_src,
-        include_directories: [includes, smallclue_includes],
+        include_directories: [includes, smallclue_includes] + openssh_includes,
         c_args: smallclue_c_args)
 
     # Nextvi gets an archive of its own for one reason: a -D that must apply to
@@ -479,6 +563,201 @@ if get_option('kernel') == 'ish'
         libnextvi = static_library('nextvi', files(nextvi_dir / 'vi.c'),
             include_directories: [includes, smallclue_includes],
             c_args: nextvi_c_args)
+    endif
+
+    # --------------------------------------------------------------- openssh
+    #
+    # OpenSSH is not built as a library upstream: it is five programs that
+    # share a pile of .c files, and the Makefile links a different subset into
+    # each. AOK links ONE binary, so the subset has to be chosen here -- and
+    # the choice is not obvious, because "client" and "server" are not
+    # separated by filename. What follows is ported from SmallCLUE's own
+    # CMakeLists.txt, where it was derived one link error at a time; the
+    # reasons are kept because re-deriving them costs a day.
+    #
+    # Start from every .c in the tree, then drop, in groups:
+    #
+    #  - Other programs. ssh-agent, ssh-add, ssh-keyscan, ssh-keysign,
+    #    ssh-sk-helper, ssh-pkcs11-helper, sftp-server(-main) and sshd* each
+    #    have their own main(); only ssh/scp/sftp/ssh-keygen got the
+    #    main() -> pscal_openssh_*_main() rename, so the rest collide with
+    #    AOK's main() at link time. contrib/ is GUI askpass helpers (also with
+    #    their own main()), regress/ is the test suite.
+    #
+    #  - The server. auth2-*, auth-passwd/rhosts/shadow, monitor*, servconf,
+    #    session, serverloop, sshlogin, loginrec/logintest, sandbox-*: sshd's
+    #    privsep monitor, its config parser, its select loop, its utmp/wtmp
+    #    accounting, its sandbox. auth.c/auth2.c/sshlogin.c/serverloop.c have
+    #    generic-sounding names and were missed by the patterns above -- they
+    #    are server-only all the same, and once their own callees are gone they
+    #    fail to link. No client source calls any of them.
+    #
+    #  - Duplicate symbols, which is where the surprises live:
+    #      * ssh-pkcs11.c is the dlopen-based provider meant to run INSIDE
+    #        ssh-pkcs11-helper; the client side is ssh-pkcs11-client.c, which
+    #        talks to it over IPC. Both define pkcs11_add_provider and friends.
+    #        Same story for ssh-sk-client.c against ssh-sk.c.
+    #      * cleanup.c's cleanup_exit() is the trivial default (_exit(i));
+    #        clientloop.c defines a client-specific one that restores the
+    #        terminal and kills the mux proxy, and no-ops those safely when ssh
+    #        never started them. One binary, one cleanup_exit: keep the fuller
+    #        one. scp.c has a THIRD (closing remin/remout) -- that one is
+    #        renamed rather than dropped, below.
+    #      * sftp-realpath.c's sftp_realpath(path, resolved) resolves a LOCAL
+    #        path for the sftp *server*; sftp-client.c's sftp_realpath(conn,
+    #        path) sends a REALPATH request to the remote. The client wants the
+    #        second.
+    #      * dns.c (VerifyHostKeyDNS via SSHFP records) collides with
+    #        src/openssh_shim.c's deliberate verify_host_key_dns() stub, and
+    #        wants getrrsetbyname() besides. SSHFP lookups stay off, so dns.c
+    #        and getrrsetbyname*.c both go rather than the stub.
+    #
+    # Three files the broad patterns catch by accident and the client needs:
+    # monitor_fdpass.c (fd passing, used by ssh's mux), sshsig.c (ssh-keygen
+    # -Y), platform-pledge.c (a no-op pledge() on everything but OpenBSD).
+    openssh_excluded = [
+        # own main()
+        'ssh-agent.c', 'ssh-add.c', 'ssh-keyscan.c', 'ssh-keysign.c',
+        'ssh-sk-helper.c', 'ssh-pkcs11-helper.c',
+        'sftp-server.c', 'sftp-server-main.c',
+        # server
+        'auth.c', 'auth2.c', 'auth-passwd.c', 'auth-rhosts.c', 'auth-shadow.c',
+        'servconf.c', 'session.c', 'serverloop.c', 'sshlogin.c',
+        'loginrec.c', 'logintest.c', 'gss-genr.c', 'platform-tracing.c',
+        # duplicate symbols
+        'ssh-pkcs11.c', 'ssh-sk-client.c', 'cleanup.c', 'sftp-realpath.c',
+        'dns.c',
+    ]
+    # Whole families, matched on the leading name: auth2-* and sandbox-* and
+    # sshd* are server; monitor* is the privsep monitor (minus monitor_fdpass);
+    # getrrsetbyname* is dns.c's dependency.
+    openssh_excluded_prefixes = ['auth2-', 'sandbox-', 'sshd', 'monitor',
+                                 'getrrsetbyname']
+    openssh_readded = ['monitor_fdpass.c', 'sshsig.c', 'platform-pledge.c']
+
+    # Two sources need a compiler flag that must not reach any other, so each
+    # is compiled into a one-file archive of its own. Same reason Nextvi has its
+    # own: meson can only vary flags per target.
+    #
+    #  - scp.c defines a THIRD cleanup_exit(), closing the four remote fds it
+    #    owns, unrelated to the clientloop.c one everything else resolves to.
+    #    Renaming it is scoped here so scp's own call sites -- the only callers
+    #    -- move with it.
+    #  - smult_curve25519_ref.c has a file-static helper called select(), which
+    #    native_libc.h's `#define select nlibc_select` turns into a second,
+    #    wrongly-typed declaration of nlibc_select. A -D cannot undo that (the
+    #    header is included after the command line), so a second force-included
+    #    header undefines it afterwards. See that header for the rule.
+    openssh_special = {
+        'scp.c': ['-Dcleanup_exit=pscal_openssh_scp_cleanup_exit'],
+        'smult_curve25519_ref.c': ['-include',
+            meson.current_source_dir() / 'deps/smallclue-shim/openssh_local_names.h'],
+    }
+
+    libopenssh = []
+    libopenssh_special = []
+    if have_openssh
+        openssh_src = []
+        openssh_special_src = {}
+        # Paths relative to the tree, so the directory tests below can see
+        # contrib/ and regress/. Space-separated for the same reason as the
+        # SmallCLUE glob above: meson eats \n in its own string literals.
+        foreach p : run_command(python, '-c',
+                'import glob, sys; print(" ".join(sorted(p[len(sys.argv[1]) + 1:] for p in glob.glob(sys.argv[1] + "/**/*.c", recursive=True))))',
+                meson.current_source_dir() / openssh_dir,
+                check: true).stdout().strip().split(' ')
+            if p == ''
+                continue
+            endif
+            base = p.split('/')[-1]
+            keep = true
+            if p.contains('contrib/') or p.contains('regress/')
+                keep = false
+            elif openssh_excluded.contains(base)
+                keep = false
+            else
+                foreach prefix : openssh_excluded_prefixes
+                    if base.startswith(prefix)
+                        keep = false
+                    endif
+                endforeach
+            endif
+            if openssh_readded.contains(base)
+                keep = true
+            endif
+            if keep
+                if openssh_special.has_key(base)
+                    openssh_special_src += {base: files(openssh_dir / p)}
+                else
+                    openssh_src += files(openssh_dir / p)
+                endif
+            endif
+        endforeach
+
+        # OpenSSH brings its own glob (openbsd-compat/glob.c) and has to: sftp
+        # globs REMOTE paths through GLOB_ALTDIRFUNC, handing glob() its own
+        # opendir/readdir/stat that speak the SFTP protocol. Routing glob() to
+        # nlibc_glob would both collide with that definition and, if it linked,
+        # glob the local filesystem for a remote pattern. The compat glob calls
+        # the ordinary directory functions underneath, and those are routed, so
+        # local globbing still sees the guest. Same escape hatch bash uses --
+        # see kernel/native_libc.h.
+        #
+        # Two names collide with the native bash in the same binary, out of the
+        # ~170 translation units on each side. Renaming OpenSSH's rather than
+        # bash's keeps each rename inside one archive: these two are declared in
+        # OpenSSH's own headers and used only by OpenSSH's own sources, and none
+        # of deps/smallclue/src reaches for either.
+        #  - xmalloc: both are "malloc or die", but bash's is the one its whole
+        #    tree and its readline are built around.
+        #  - tilde_expand: OpenSSH's takes a const char *, bash's does not, and
+        #    they expand different syntax.
+        openssh_c_args = smallclue_c_args + [
+            '-DNATIVE_LIBC_OWN_GLOB',
+            '-Dxmalloc=pscal_openssh_xmalloc',
+            '-Dtilde_expand=pscal_openssh_tilde_expand',
+        ]
+        # implicit_include_directories: false, and it matters. Meson otherwise
+        # puts the target's build dir and the PROJECT SOURCE ROOT ahead of
+        # every -I given here -- and AOK's root has a misc.h, as does OpenSSH.
+        # A quoted #include "misc.h" from a source under openbsd-compat/ does
+        # not find its own directory, so it walked the -I list and read AOK's,
+        # leaving SSH_TUNMODE_* undeclared in port-net.c with no hint that the
+        # wrong header had been used. Nothing here wants AOK's headers anyway:
+        # the one AOK file these sources see is kernel/native_libc.h, which is
+        # force-included by absolute path and includes only system headers.
+        libopenssh = static_library('openssh', openssh_src,
+            include_directories: openssh_includes + [includes, smallclue_includes],
+            implicit_include_directories: false,
+            c_args: openssh_c_args)
+
+        # See the note beside smallclue_excluded above: the four weak
+        # pscal_openssh_*_main() here would otherwise beat the real ssh.c,
+        # scp.c, sftp.c and ssh-keygen.c to the link.
+        libopenssh_special += static_library('openssh_stubs',
+            files('deps/smallclue/src/openssh_stubs.c'),
+            include_directories: [includes, smallclue_includes] + openssh_includes,
+            c_args: smallclue_c_args + [
+                '-Dpscal_openssh_ssh_main=pscal_openssh_ssh_main_unavailable',
+                '-Dpscal_openssh_scp_main=pscal_openssh_scp_main_unavailable',
+                '-Dpscal_openssh_sftp_main=pscal_openssh_sftp_main_unavailable',
+                '-Dpscal_openssh_ssh_keygen_main=pscal_openssh_ssh_keygen_main_unavailable',
+            ])
+
+        foreach base, extra_args : openssh_special
+            if not openssh_special_src.has_key(base)
+                # The file was excluded, or the tree moved under us. Silence
+                # here would mean scp linking without its cleanup_exit rename.
+                error('openssh_special names ' + base + ', which is not in the ' +
+                      'source list -- reconcile it with openssh_excluded')
+            endif
+            libopenssh_special += static_library(
+                'openssh_' + base.replace('.c', '').replace('-', '_'),
+                openssh_special_src[base],
+                include_directories: openssh_includes + [includes, smallclue_includes],
+                implicit_include_directories: false,
+                c_args: openssh_c_args + extra_args)
+        endforeach
     endif
 
     # ------------------------------------------------------------------ bash
@@ -698,9 +977,17 @@ if get_option('kernel') == 'ish'
     # link on iOS -- which is exactly what happened -- and would need adding to
     # every app target by hand. Riding inside libish.a keeps the two build
     # systems from diverging again.
+    # -DAOK_HAVE_OPENSSH is read by kernel/openssh_glue.c alone, and is passed
+    # here rather than decided in that file so that the archive and the glue
+    # cannot disagree: one `have_openssh` decides both.
+    ish_c_args = []
+    if have_openssh
+        ish_c_args += '-DAOK_HAVE_OPENSSH'
+    endif
+
     libish = library('ish', src,
-        link_whole: [libsmallclue, libnextvi, libbash],
-        include_directories: includes)
+        link_whole: [libsmallclue, libnextvi, libbash, libopenssh] + libopenssh_special,
+        include_directories: includes, c_args: ish_c_args)
     ish = declare_dependency(
         link_with: [libish, libish_emu, libfakefs],
         dependencies: dependencies,

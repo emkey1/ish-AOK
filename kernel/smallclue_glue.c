@@ -5,10 +5,11 @@
 //  1. Runtime hooks smallclue declares but expects the embedding program to
 //     define (deps/smallclue-shim/core/build_info.h).
 //  2. Entry points for the feature groups AOK deliberately does not compile --
-//     OpenSSH (needs the vendored tree), the checksum applets (need OpenSSL,
-//     which AOK does not link), and openrsync. Their applet-table entries
-//     still reference these symbols, so each needs a definition that fails
-//     honestly rather than a build that fails to link.
+//     the checksum applets (need OpenSSL, which AOK does not link) and
+//     openrsync. Their applet-table entries still reference these symbols, so
+//     each needs a definition that fails honestly rather than a build that
+//     fails to link. The ssh family used to be on this list; it is built now,
+//     and what is left of it lives in kernel/openssh_glue.c.
 //  3. smallcluePlatformSpawn, which is how a smallclue applet starts another
 //     program when there is no fork() to be had (deps/smallclue/src/spawn.h).
 
@@ -48,11 +49,6 @@ static int smallclue_not_built(const char *what) {
 int smallclueMd5sumCommand(int argc, char **argv);
 int smallclueSha1sumCommand(int argc, char **argv);
 int smallclueSha256sumCommand(int argc, char **argv);
-int smallclueRunSsh(int argc, char **argv);
-int smallclueRunScp(int argc, char **argv);
-int smallclueRunSftp(int argc, char **argv);
-int smallclueRunSshKeygen(int argc, char **argv);
-int smallclueRunSshCopyId(int argc, char **argv);
 int smallclueRunRsync(int argc, char **argv);
 int pscal_openrsync_main(int argc, char **argv);
 
@@ -69,23 +65,9 @@ int smallclueSha256sumCommand(int argc, char **argv) {
     (void) argc; (void) argv; return smallclue_not_built("sha256sum");
 }
 
-// The ssh family needs smallclue's vendored OpenSSH tree, which is a heavy
-// dependency for three applets and is deliberately skipped for now.
-int smallclueRunSsh(int argc, char **argv) {
-    (void) argc; (void) argv; return smallclue_not_built("ssh");
-}
-int smallclueRunScp(int argc, char **argv) {
-    (void) argc; (void) argv; return smallclue_not_built("scp");
-}
-int smallclueRunSftp(int argc, char **argv) {
-    (void) argc; (void) argv; return smallclue_not_built("sftp");
-}
-int smallclueRunSshKeygen(int argc, char **argv) {
-    (void) argc; (void) argv; return smallclue_not_built("ssh-keygen");
-}
-int smallclueRunSshCopyId(int argc, char **argv) {
-    (void) argc; (void) argv; return smallclue_not_built("ssh-copy-id");
-}
+// The ssh family (ssh/scp/sftp/ssh-keygen/ssh-copy-id) is real now, from the
+// vendored OpenSSH tree; kernel/openssh_glue.c holds both its globals and the
+// refusal for a build without the tree.
 int smallclueRunRsync(int argc, char **argv) {
     (void) argc; (void) argv; return smallclue_not_built("rsync");
 }
