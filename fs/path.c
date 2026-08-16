@@ -146,6 +146,23 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
     return 0;
 }
 
+int path_final_dot(const char *path) {
+    size_t len = strlen(path);
+    // Trailing slashes do not change which component is last: "foo/./" ends in
+    // "." just as "foo/." does.
+    while (len > 1 && path[len - 1] == '/')
+        len--;
+    size_t start = len;
+    while (start > 0 && path[start - 1] != '/')
+        start--;
+    size_t n = len - start;
+    if (n == 1 && path[start] == '.')
+        return 1;
+    if (n == 2 && path[start] == '.' && path[start + 1] == '.')
+        return 2;
+    return 0;
+}
+
 int path_normalize(struct fd *at, const char *path, char *out, int flags) {
     // A genuinely-NULL dirfd (distinct from the AT_PWD sentinel (struct fd *)-2)
     // reaches here when an *at syscall is handed a bad/closed dirfd. Linux

@@ -40,6 +40,18 @@
 // at is the file descriptor to use as a base to interpret relative paths. If
 // at is AT_PWD, uses current->pwd (with appropriate locking).
 int path_normalize(struct fd *at, const char *path, char *out, int flags);
+
+// Is the final component of `path` "." or ".."? 1 for ".", 2 for "..", else 0.
+//
+// Linux answers this in filename_create()/do_unlinkat() BEFORE checking any
+// permission on the parent, because such a component can never name an entry
+// to create or remove. AOK checked the parent's write permission first, and
+// the parent of a normalized "." is its GRANDparent -- so `ln -s /bin/sh .` in
+// a user's own home reported EACCES (parent /home is root-owned) while root
+// got the real EEXIST. GNU ln keys off exactly that EEXIST to retry as "link
+// into this directory", so the command worked for root and failed for every
+// normal user.
+int path_final_dot(const char *path);
 bool path_is_normalized(const char *path);
 
 // Helper function for iterating through a normalized path.
