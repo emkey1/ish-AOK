@@ -133,8 +133,16 @@ PURE = {
     "ferror", "feof", "clearerr", "rewind", "fseek", "fseeko",
     "ftell", "ftello", "setvbuf", "setbuf", "funopen", "fscanf", "getline",
     "getdelim", "getchar",
-    # option parsing: operates on the argv it is handed
-    "getopt", "getopt_long", "optarg", "optind", "opterr", "optopt", "optreset",
+    # getopt is NOT here, and was, on the reasoning that it "operates on the
+    # argv it is handed". That was true of the argv and false of everything
+    # else: optind, optarg, opterr, optopt, optreset and getopt's own scanning
+    # pointer are one copy per PROCESS, and a native program is a function on a
+    # task's thread. Six concurrent `smallclue ssh-keygen -q -t ed25519 -N ""
+    # -f /tmp/cN` had three of them lose -f entirely and fall back to prompting
+    # for a filename, because their parses were reading each other's state.
+    # It is routed through native_libc.h now, per-thread. The lesson generalises
+    # past this entry: "touches no file" is not the test -- "holds no state the
+    # next program can see" is.
     "regcomp", "regexec", "regerror", "regfree",
     # locale and time FORMATTING. Reading the clock is below; setting it is
     # redirected. setlocale is NOT here: the guest's locale names are Linux's

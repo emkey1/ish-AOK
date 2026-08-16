@@ -218,6 +218,32 @@ int nlibc_setenv(const char *name, const char *value, int overwrite);
 int nlibc_unsetenv(const char *name);
 int nlibc_putenv(char *entry);
 
+/* --- option parsing ------------------------------------------------------
+ * getopt's optind/optarg/opterr/optopt/optreset are ONE copy per process in
+ * libSystem, and so is the scanning pointer inside getopt itself. A native
+ * program is a function on a task's thread, so two of them parsing argv at
+ * once share that copy: six concurrent `smallclue ssh-keygen ... -f /tmp/cN`
+ * lost the -f in three of them. These are the per-thread replacements.
+ *
+ * `struct option` is only forward-declared: <getopt.h> completes it for most
+ * consumers and OpenSSH's openbsd-compat/getopt.h for the rest, and including
+ * a header here would decide that for them. The layout is the same everywhere
+ * this builds, so the pointer is all these need. */
+struct option;
+int nlibc_getopt(int argc, char *const argv[], const char *optstring);
+int nlibc_getopt_long(int argc, char *const argv[], const char *optstring,
+        const struct option *longopts, int *longindex);
+int nlibc_getopt_long_only(int argc, char *const argv[], const char *optstring,
+        const struct option *longopts, int *longindex);
+/* The SLOTS, not the values: every one of these has to be assignable -- a
+ * program resets optind to restart a parse and clears opterr to silence the
+ * error messages -- and a call is not an lvalue. Same shape as environ. */
+char **nlibc_optargp(void);
+int *nlibc_optindp(void);
+int *nlibc_opterrp(void);
+int *nlibc_optoptp(void);
+int *nlibc_optresetp(void);
+
 /* --- remaining host-libc holes; see the block comment in the .c ---------- */
 int nlibc_dup(int fd);
 int nlibc_dup2(int oldfd, int newfd);
@@ -773,6 +799,23 @@ const char *nlibc_dlerror(void);
 
 #define mmap                     nlibc_mmap
 #define munmap                   nlibc_munmap
+
+/* Option parsing. The five variables become accessor calls the way `environ`
+ * does, and the scanning functions become ours -- routing only the
+ * variables would leave getopt's own `place` pointer, and getopt_long's
+ * permutation bookkeeping, shared across every native program in the app.
+ *
+ * A later `#include <getopt.h>` (OpenSSH's includes.h reaches one) is fine:
+ * the macros rewrite its declarations into declarations of these, which are
+ * compatible with the definitions above. */
+#define getopt                   nlibc_getopt
+#define getopt_long              nlibc_getopt_long
+#define getopt_long_only         nlibc_getopt_long_only
+#define optarg                   (*nlibc_optargp())
+#define optind                   (*nlibc_optindp())
+#define opterr                   (*nlibc_opterrp())
+#define optopt                   (*nlibc_optoptp())
+#define optreset                 (*nlibc_optresetp())
 
 #define dlopen                   nlibc_dlopen
 #define dlsym                    nlibc_dlsym

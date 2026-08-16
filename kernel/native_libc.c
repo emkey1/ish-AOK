@@ -8,6 +8,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <getopt.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -4063,6 +4064,609 @@ int nlibc_putenv(char *entry) {
     name[len] = '\0';
     return nlibc_setenv(name, eq + 1, 1);
 }
+
+// ------------------------------------------------------------ option parsing
+//
+// getopt keeps its scanning position in process-global storage: one optind,
+// one optarg, one `place` for the whole of libSystem. A native program is a C
+// function on a task's thread, not a process, so two of them parsing their
+// argv at the same moment read and clobber each other's. Six concurrent
+// `smallclue ssh-keygen -q -t ed25519 -N "" -f /tmp/cN` lost the -f in three
+// of them and fell back to prompting for a filename -- the parse had walked
+// off into another invocation's argv.
+//
+// So the state is __thread and the scanning functions are ours. Routing only
+// the five variables would not have been enough: `place`, and the permutation
+// bookkeeping behind getopt_long, are just as global and just as fatal.
+//
+// The semantics are the platform's, not an approximation of them. These
+// programs parse real user command lines, and a getopt that differs in some
+// corner is worse than a shared one -- it fails quietly on an unusual flag
+// instead of loudly. nlibc_getopt is the 4.4BSD getopt macOS actually ships
+// (non-permuting, `::` optional arguments, optreset); nlibc_getopt_long is the
+// FreeBSD getopt_long macOS ships next to it, built GNU_COMPATIBLE as macOS
+// builds it (permuting by default, leading `+`/`-`, `W;`, abbreviation
+// matching, GNU's message wording). They are two different vintages of two
+// different files and they keep SEPARATE scanning positions -- which is
+// libSystem's arrangement, not a simplification of it.
+//
+// Which they are was settled by measurement, not by reading: see
+// tools/difftest-native-getopt.sh, which lifts the marked region below
+// verbatim out of this file, links it beside the host's own getopt, and runs
+// the same argv through both. Three of the behaviours encoded here contradict
+// the obvious reading of the BSD sources and were found only that way.
+
+// >>> native getopt: BEGIN (extracted verbatim by tools/difftest-native-getopt.sh)
+static __thread char *nlibc_optarg_v;
+static __thread int nlibc_optind_v = 1;
+static __thread int nlibc_opterr_v = 1;
+static __thread int nlibc_optopt_v = '?';
+static __thread int nlibc_optreset_v;
+
+char **nlibc_optargp(void)   { return &nlibc_optarg_v; }
+int   *nlibc_optindp(void)   { return &nlibc_optind_v; }
+int   *nlibc_opterrp(void)   { return &nlibc_opterr_v; }
+int   *nlibc_optoptp(void)   { return &nlibc_optopt_v; }
+int   *nlibc_optresetp(void) { return &nlibc_optreset_v; }
+
+// Shorthands so the ported bodies below read like their originals.
+#define nl_optarg   nlibc_optarg_v
+#define nl_optind   nlibc_optind_v
+#define nl_opterr   nlibc_opterr_v
+#define nl_optopt   nlibc_optopt_v
+#define nl_optreset nlibc_optreset_v
+
+#define NL_BADCH  ((int) '?')
+#define NL_EMSG   ""
+
+// argv[0]'s basename. libSystem's getopt uses the same helper rather than the
+// global __progname, which is what makes the message name the applet ("ls:")
+// and not the app.
+static const char *nlibc_getopt_progname(const char *nargv0) {
+    const char *tmp;
+    if (nargv0 == NULL)
+        return "";
+    tmp = strrchr(nargv0, '/');
+    if (tmp != NULL)
+        tmp++;
+    else
+        tmp = nargv0;
+    return tmp;
+}
+
+// --- getopt: the 4.4BSD one, ported from Libc's gen/FreeBSD/getopt.c --------
+//
+// Non-permuting on purpose: BSD getopt stops at the first non-option, and
+// every applet here was written against that. `place` is the per-call scanning
+// pointer into a clustered argument (-abc), and is the state that made six
+// concurrent ssh-keygens step on each other.
+int nlibc_getopt(int nargc, char *const nargv[], const char *ostr) {
+    static __thread const char *place = NL_EMSG;    /* option letter processing */
+    const char *oli;                                /* option letter list index */
+
+    if (nl_optreset || *place == 0) {       /* update scanning pointer */
+        nl_optreset = 0;
+        /* The bound is tested BEFORE the load, which the original does the
+         * other way round. Observationally identical -- the value read is
+         * discarded on that path -- but the original reads one past the end
+         * of argv whenever it is re-entered after a missing-argument error,
+         * which leaves optind at nargc + 1. */
+        if (nl_optind >= nargc ||
+                (place = nargv[nl_optind], *place++ != '-')) {
+            /* Argument is absent or is not an option */
+            place = NL_EMSG;
+            return -1;
+        }
+        nl_optopt = *place++;
+        if (nl_optopt == '-' && *place == 0) {
+            /* "--" => end of options */
+            ++nl_optind;
+            place = NL_EMSG;
+            return -1;
+        }
+        if (nl_optopt == 0) {
+            /* Solitary '-', treat as a '-' option if the program (eg su) is
+               looking for it. */
+            place = NL_EMSG;
+            if (strchr(ostr, '-') == NULL)
+                return -1;
+            nl_optopt = '-';
+        }
+    } else {
+        nl_optopt = *place++;
+    }
+
+    /* See if option letter is one the caller wanted... */
+    if (nl_optopt == ':' || (oli = strchr(ostr, nl_optopt)) == NULL) {
+        if (*place == 0)
+            ++nl_optind;
+        if (nl_opterr && *ostr != ':')
+            fprintf(nlibc_stderr(), "%s: illegal option -- %c\n",
+                    nlibc_getopt_progname(nargv[0]), nl_optopt);
+        return NL_BADCH;
+    }
+
+    /* Does this option need an argument? */
+    if (oli[1] != ':') {
+        /* don't need argument */
+        nl_optarg = NULL;
+        if (*place == 0)
+            ++nl_optind;
+    } else {
+        /* Option-argument is either the rest of this argument or the entire
+           next argument. */
+        if (*place) {
+            nl_optarg = (char *) place;
+        } else if (oli[2] == ':') {
+            /* GNU extension: for optional arguments, if the rest of the
+               argument is empty we return NULL rather than consuming the next
+               word. */
+            nl_optarg = NULL;
+        } else if (nargc > ++nl_optind) {
+            nl_optarg = nargv[nl_optind];
+        } else {
+            /* Option-argument absent. optarg is CLEARED and optind lands one
+             * past the end (nargc + 1), not on it -- both observable, and
+             * both differed from a straight reading of the 4.4BSD source
+             * until the differential harness caught them. A caller that
+             * inspects optarg after a '?' would otherwise see the PREVIOUS
+             * option's argument. */
+            place = NL_EMSG;
+            nl_optarg = NULL;
+            ++nl_optind;
+            if (*ostr == ':')
+                return (int) ':';
+            if (nl_opterr)
+                fprintf(nlibc_stderr(),
+                        "%s: option requires an argument -- %c\n",
+                        nlibc_getopt_progname(nargv[0]), nl_optopt);
+            return NL_BADCH;
+        }
+        place = NL_EMSG;
+        ++nl_optind;
+    }
+    return nl_optopt;                       /* return option letter */
+}
+
+// --- getopt_long: the FreeBSD one macOS ships, built GNU_COMPATIBLE ---------
+//
+// This one permutes: non-options are shuffled to the end of argv so options
+// after them are still seen. That is GNU behaviour, and it is what ssh, sftp
+// and scp are written against. The permutation bookkeeping
+// (nonopt_start/nonopt_end) is per-parse state, so it is per-thread here too.
+//
+// GNU_COMPATIBLE is not cosmetic and the differential harness proved each of
+// these against the host rather than assuming them:
+//   - an EXACT long-option match wins even when earlier entries partially
+//     matched, so {veal,vest,ve} + `--ve` returns ve instead of "ambiguous";
+//   - partial matches that agree on has_arg/flag/val are not ambiguous;
+//   - a lone "-" is always a non-option, even with '-' in the optstring;
+//   - `--flag=x` on a no_argument option returns '?' even under a leading
+//     ':' optstring, where the non-GNU build returns ':';
+//   - the messages are GNU's wording ("unrecognized option `--x'"), which is
+//     also what the guest's own Linux tools print.
+//
+// The one deliberate divergence is the program name in those messages. The
+// host's getopt_long uses the process's __progname, which inside AOK is the
+// app -- every applet would introduce itself as "ish". These use argv[0]'s
+// basename, so ls says "ls", which is both what the guest expects and what
+// the host's plain getopt already does.
+
+#define NL_FLAG_PERMUTE   0x01  /* permute non-options to the end of argv */
+#define NL_FLAG_ALLARGS   0x02  /* treat non-options as args to option "-1" */
+#define NL_FLAG_LONGONLY  0x04  /* operate as getopt_long_only */
+
+#define NL_NO_PREFIX  (-1)
+#define NL_D_PREFIX   0
+#define NL_DD_PREFIX  1
+#define NL_W_PREFIX   2
+
+#define NL_INORDER  ((int) 1)
+#define NL_BADARG   ((*options == ':') ? (int) ':' : (int) '?')
+#define NL_PRINT_ERROR ((nl_opterr) && (*options != ':'))
+
+static __thread const char *nl_place = NL_EMSG;  /* option letter processing */
+static __thread int nl_nonopt_start = -1;  /* first non option argument */
+static __thread int nl_nonopt_end = -1;    /* first option after non options */
+static __thread int nl_dash_prefix = NL_NO_PREFIX;
+
+static const char nl_recargchar[] = "option requires an argument -- %c";
+/* P1003.2's wording, which is what the FreeBSD getopt_long macOS ships uses
+   and what nlibc_getopt above prints. "unknown option -- %c" is the OpenBSD
+   file's string and leaked in from reading it as reference; the differential
+   harness caught the difference in stderr text. */
+static const char nl_illoptchar[] = "illegal option -- %c";
+static const char nl_gnuoptchar[] = "invalid option -- %c";
+static const char nl_recargstring[] = "option `%s%s' requires an argument";
+static const char nl_ambig[] = "option `%s%.*s' is ambiguous";
+static const char nl_noarg[] = "option `%s%.*s' doesn't allow an argument";
+static const char nl_illoptstring[] = "unrecognized option `%s%s'";
+
+static void nl_warnx(const char *prog, const char *fmt, ...) {
+    va_list ap;
+    fprintf(nlibc_stderr(), "%s: ", nlibc_getopt_progname(prog));
+    va_start(ap, fmt);
+    vfprintf(nlibc_stderr(), fmt, ap);
+    va_end(ap);
+    fputc('\n', nlibc_stderr());
+}
+
+/* Greatest common divisor of a and b. */
+static int nl_gcd(int a, int b) {
+    int c = a % b;
+    while (c != 0) {
+        a = b;
+        b = c;
+        c = a % b;
+    }
+    return b;
+}
+
+/*
+ * Exchange the block from nonopt_start to nonopt_end with the block from
+ * nonopt_end to opt_end (keeping the same order of arguments in each block).
+ */
+static void nl_permute_args(int panonopt_start, int panonopt_end, int opt_end,
+        char *const *nargv) {
+    int cstart, cyclelen, i, j, ncycle, nnonopts, nopts, pos;
+    char *swap;
+
+    nnonopts = panonopt_end - panonopt_start;
+    nopts = opt_end - panonopt_end;
+    ncycle = nl_gcd(nnonopts, nopts);
+    cyclelen = (opt_end - panonopt_start) / ncycle;
+
+    for (i = 0; i < ncycle; i++) {
+        cstart = panonopt_end + i;
+        pos = cstart;
+        for (j = 0; j < cyclelen; j++) {
+            if (pos >= panonopt_end)
+                pos -= nnonopts;
+            else
+                pos += nopts;
+            swap = nargv[pos];
+            ((char **) nargv)[pos] = nargv[cstart];
+            ((char **) nargv)[cstart] = swap;
+        }
+    }
+}
+
+/*
+ * Parse long options in argc/argv argument vector.
+ * Returns -1 if short_too is set and the option does not match long_options.
+ */
+static int nl_parse_long_options(char *const *nargv, const char *options,
+        const struct option *long_options, int *idx, int short_too,
+        int flags) {
+    const char *current_argv;
+    const char *current_dash;
+    char *has_equal;
+    size_t current_argv_len;
+    int i, match, exact_match, second_partial_match;
+
+    current_argv = nl_place;
+    switch (nl_dash_prefix) {
+        case NL_D_PREFIX:  current_dash = "-";   break;
+        case NL_DD_PREFIX: current_dash = "--";  break;
+        case NL_W_PREFIX:  current_dash = "-W "; break;
+        default:           current_dash = "";    break;
+    }
+    match = -1;
+    exact_match = 0;
+    second_partial_match = 0;
+
+    nl_optind++;
+
+    if ((has_equal = strchr(current_argv, '=')) != NULL) {
+        /* argument found (--option=arg) */
+        current_argv_len = (size_t) (has_equal - current_argv);
+        has_equal++;
+    } else {
+        current_argv_len = strlen(current_argv);
+    }
+
+    for (i = 0; long_options[i].name; i++) {
+        /* find matching long option */
+        if (strncmp(current_argv, long_options[i].name, current_argv_len))
+            continue;
+
+        if (strlen(long_options[i].name) == current_argv_len) {
+            /* exact match */
+            match = i;
+            exact_match = 1;
+            break;
+        }
+        /*
+         * If this is a known short option, don't allow a partial match of a
+         * single character.
+         */
+        if (short_too && current_argv_len == 1)
+            continue;
+
+        if (match == -1) {              /* first partial match */
+            match = i;
+        } else if ((flags & NL_FLAG_LONGONLY) ||
+                long_options[i].has_arg != long_options[match].has_arg ||
+                long_options[i].flag != long_options[match].flag ||
+                long_options[i].val != long_options[match].val) {
+            second_partial_match = 1;
+        }
+    }
+    if (!exact_match && second_partial_match) {
+        /* ambiguous abbreviation */
+        if (NL_PRINT_ERROR)
+            nl_warnx(nargv[0], nl_ambig, current_dash,
+                    (int) current_argv_len, current_argv);
+        nl_optopt = 0;
+        return NL_BADCH;
+    }
+    if (match != -1) {          /* option found */
+        if (long_options[match].has_arg == no_argument && has_equal) {
+            if (NL_PRINT_ERROR)
+                nl_warnx(nargv[0], nl_noarg, current_dash,
+                        (int) current_argv_len, current_argv);
+            /* XXX: GNU sets optopt to val regardless of flag */
+            if (long_options[match].flag == NULL)
+                nl_optopt = long_options[match].val;
+            else
+                nl_optopt = 0;
+            return NL_BADCH;
+        }
+        if (long_options[match].has_arg == required_argument ||
+                long_options[match].has_arg == optional_argument) {
+            if (has_equal)
+                nl_optarg = has_equal;
+            else if (long_options[match].has_arg == required_argument)
+                /* optional argument doesn't use next nargv */
+                nl_optarg = nargv[nl_optind++];
+        }
+        if ((long_options[match].has_arg == required_argument) &&
+                nl_optarg == NULL) {
+            /*
+             * Missing argument; leading ':' indicates no error should be
+             * generated.
+             */
+            if (NL_PRINT_ERROR)
+                nl_warnx(nargv[0], nl_recargstring, current_dash,
+                        current_argv);
+            /* XXX: GNU sets optopt to val regardless of flag */
+            if (long_options[match].flag == NULL)
+                nl_optopt = long_options[match].val;
+            else
+                nl_optopt = 0;
+            --nl_optind;
+            return NL_BADARG;
+        }
+    } else {                    /* unknown option */
+        if (short_too) {
+            --nl_optind;
+            return -1;
+        }
+        if (NL_PRINT_ERROR)
+            nl_warnx(nargv[0], nl_illoptstring, current_dash, current_argv);
+        nl_optopt = 0;
+        return NL_BADCH;
+    }
+    if (idx)
+        *idx = match;
+    if (long_options[match].flag) {
+        *long_options[match].flag = long_options[match].val;
+        return 0;
+    }
+    return long_options[match].val;
+}
+
+/*
+ * Parse argc/argv argument vector.  Called by the user-level routines below.
+ */
+static int nl_getopt_internal(int nargc, char *const *nargv,
+        const char *options, const struct option *long_options, int *idx,
+        int flags) {
+    const char *oli;                        /* option letter list index */
+    int optchar, short_too;
+    /* Not cached: POSIXLY_CORRECT is read on every call, so a program that
+     * sets it between parses is obeyed -- and, here, so that one task's
+     * environment cannot decide another's parse. */
+    int posixly_correct;
+
+    if (options == NULL)
+        return -1;
+
+    /*
+     * Disable GNU extensions if POSIXLY_CORRECT is set or the options string
+     * begins with a '+'.
+     */
+    posixly_correct = (nlibc_getenv("POSIXLY_CORRECT") != NULL);
+    if (*options == '-')
+        flags |= NL_FLAG_ALLARGS;
+    else if (posixly_correct || *options == '+')
+        flags &= ~NL_FLAG_PERMUTE;
+    if (*options == '+' || *options == '-')
+        options++;
+
+    /*
+     * XXX Some GNU programs (like cvs) set optind to 0 instead of using
+     * XXX optreset.  Work around this braindamage.
+     */
+    if (nl_optind == 0)
+        nl_optind = nl_optreset = 1;
+
+    nl_optarg = NULL;
+    if (nl_optreset)
+        nl_nonopt_start = nl_nonopt_end = -1;
+start:
+    if (nl_optreset || !*nl_place) {        /* update scanning pointer */
+        nl_optreset = 0;
+        if (nl_optind >= nargc) {           /* end of argument vector */
+            nl_place = NL_EMSG;
+            if (nl_nonopt_end != -1) {
+                /* do permutation, if we have to */
+                nl_permute_args(nl_nonopt_start, nl_nonopt_end, nl_optind,
+                        nargv);
+                nl_optind -= nl_nonopt_end - nl_nonopt_start;
+            } else if (nl_nonopt_start != -1) {
+                /*
+                 * If we skipped non-options, set optind to the first of them.
+                 */
+                nl_optind = nl_nonopt_start;
+            }
+            nl_nonopt_start = nl_nonopt_end = -1;
+            return -1;
+        }
+        /* A lone "-" is a non-option even when '-' appears in the optstring:
+         * GNU_COMPATIBLE drops the strchr(options, '-') escape the plain BSD
+         * build has. nlibc_getopt above keeps it, because the plain getopt
+         * macOS ships keeps it. */
+        if (*(nl_place = nargv[nl_optind]) != '-' || nl_place[1] == '\0') {
+            nl_place = NL_EMSG;             /* found non-option */
+            if (flags & NL_FLAG_ALLARGS) {
+                /*
+                 * GNU extension: return non-option as argument to option 1
+                 */
+                nl_optarg = nargv[nl_optind++];
+                return NL_INORDER;
+            }
+            if (!(flags & NL_FLAG_PERMUTE)) {
+                /*
+                 * If no permutation wanted, stop parsing at first non-option.
+                 */
+                return -1;
+            }
+            /* do permutation */
+            if (nl_nonopt_start == -1) {
+                nl_nonopt_start = nl_optind;
+            } else if (nl_nonopt_end != -1) {
+                nl_permute_args(nl_nonopt_start, nl_nonopt_end, nl_optind,
+                        nargv);
+                nl_nonopt_start = nl_optind -
+                        (nl_nonopt_end - nl_nonopt_start);
+                nl_nonopt_end = -1;
+            }
+            nl_optind++;
+            /* process next argument */
+            goto start;
+        }
+        if (nl_nonopt_start != -1 && nl_nonopt_end == -1)
+            nl_nonopt_end = nl_optind;
+
+        /*
+         * If we have "-" do nothing, if "--" we are done.
+         */
+        if (nl_place[1] != '\0' && *++nl_place == '-' && nl_place[1] == '\0') {
+            nl_optind++;
+            nl_place = NL_EMSG;
+            /*
+             * We found an option (--), so if we skipped non-options, we have
+             * to permute.
+             */
+            if (nl_nonopt_end != -1) {
+                nl_permute_args(nl_nonopt_start, nl_nonopt_end, nl_optind,
+                        nargv);
+                nl_optind -= nl_nonopt_end - nl_nonopt_start;
+            }
+            nl_nonopt_start = nl_nonopt_end = -1;
+            return -1;
+        }
+    }
+
+    /*
+     * Check long options if:
+     *  1) we were passed some
+     *  2) the arg is not just "-"
+     *  3) either the arg starts with -- or we are getopt_long_only()
+     */
+    if (long_options != NULL && nl_place != nargv[nl_optind] &&
+            (*nl_place == '-' || (flags & NL_FLAG_LONGONLY))) {
+        short_too = 0;
+        nl_dash_prefix = NL_D_PREFIX;
+        if (*nl_place == '-') {
+            nl_place++;                     /* --foo long option */
+            nl_dash_prefix = NL_DD_PREFIX;
+        } else if (*nl_place != ':' && strchr(options, *nl_place) != NULL) {
+            short_too = 1;                  /* could be short option too */
+        }
+
+        optchar = nl_parse_long_options(nargv, options, long_options, idx,
+                short_too, flags);
+        if (optchar != -1) {
+            nl_place = NL_EMSG;
+            return optchar;
+        }
+    }
+
+    if ((optchar = (int) *nl_place++) == (int) ':' ||
+            (optchar == (int) '-' && *nl_place != '\0') ||
+            (oli = strchr(options, optchar)) == NULL) {
+        /*
+         * If the user specified "-" and '-' isn't listed in options, return -1
+         * (non-option) as per POSIX.  Otherwise, it is an unknown option
+         * character (or ':').
+         */
+        if (optchar == (int) '-' && *nl_place == '\0')
+            return -1;
+        if (!*nl_place)
+            ++nl_optind;
+        if (NL_PRINT_ERROR)
+            nl_warnx(nargv[0], posixly_correct ? nl_illoptchar : nl_gnuoptchar,
+                    optchar);
+        nl_optopt = optchar;
+        return NL_BADCH;
+    }
+    if (long_options != NULL && optchar == 'W' && oli[1] == ';') {
+        /* -W long-option */
+        if (*nl_place) {                    /* no space */
+            /* NOTHING */;
+        } else if (++nl_optind >= nargc) {  /* no arg */
+            nl_place = NL_EMSG;
+            if (NL_PRINT_ERROR)
+                nl_warnx(nargv[0], nl_recargchar, optchar);
+            nl_optopt = optchar;
+            return NL_BADARG;
+        } else {                            /* white space */
+            nl_place = nargv[nl_optind];
+        }
+        nl_dash_prefix = NL_W_PREFIX;
+        optchar = nl_parse_long_options(nargv, options, long_options, idx, 0,
+                flags);
+        nl_place = NL_EMSG;
+        return optchar;
+    }
+    if (*++oli != ':') {                    /* doesn't take argument */
+        if (!*nl_place)
+            ++nl_optind;
+    } else {                                /* takes (optional) argument */
+        nl_optarg = NULL;
+        if (*nl_place) {                    /* no white space */
+            nl_optarg = (char *) nl_place;
+        } else if (oli[1] != ':') {         /* arg not optional */
+            if (++nl_optind >= nargc) {     /* no arg */
+                nl_place = NL_EMSG;
+                if (NL_PRINT_ERROR)
+                    nl_warnx(nargv[0], nl_recargchar, optchar);
+                nl_optopt = optchar;
+                return NL_BADARG;
+            }
+            nl_optarg = nargv[nl_optind];
+        }
+        nl_place = NL_EMSG;
+        ++nl_optind;
+    }
+    /* dump back option letter */
+    return optchar;
+}
+
+int nlibc_getopt_long(int nargc, char *const *nargv, const char *options,
+        const struct option *long_options, int *idx) {
+    return nl_getopt_internal(nargc, nargv, options, long_options, idx,
+            NL_FLAG_PERMUTE);
+}
+
+int nlibc_getopt_long_only(int nargc, char *const *nargv, const char *options,
+        const struct option *long_options, int *idx) {
+    return nl_getopt_internal(nargc, nargv, options, long_options, idx,
+            NL_FLAG_PERMUTE | NL_FLAG_LONGONLY);
+}
+// <<< native getopt: END
 
 // ------------------------------------------------------------------ identity
 //
