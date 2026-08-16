@@ -36,3 +36,6 @@
 ## 2026-03-28 - Optimize finding the last slash in a path
 **Learning:** In `fs/generic.c`, finding the last slash in a path by iterating over the string character by character (using `strlen` and a `for` loop) is an inefficient O(N) operation compared to optimized library functions like `strrchr`, which are often vectorized.
 **Action:** Replace manual character-by-character loops for finding the last character with `strrchr` and pointer arithmetic to significantly improve performance, especially for long path strings.
+## 2026-03-29 - Avoid strcmp for "." and ".." in VFS loops
+**Learning:** In C VFS directory traversal loops (e.g., `scan_host_dir`, `migrate_names_load`), repeatedly calling `strcmp` to filter out "." and ".." causes unnecessary O(N) operations per entry.
+**Action:** Replace `strcmp` with explicit string length comparisons and character index checks (e.g., `(len == 1 && name[0] == '.')` or `name[0] == '.' && name[1] == '\0'`) to eliminate the overhead of function calls inside hot loops.

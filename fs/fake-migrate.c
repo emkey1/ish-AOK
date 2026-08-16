@@ -485,10 +485,12 @@ static void scan_host_dir(int root_fd, const char *host_dir, const char *name,
     }
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+        size_t d_name_len = strlen(ent->d_name);
+        if ((d_name_len == 1 && ent->d_name[0] == '.') ||
+            (d_name_len == 2 && ent->d_name[0] == '.' && ent->d_name[1] == '.'))
             continue;
         char guest[NAME_MAX * 3 + 2];
-        if (strlen(ent->d_name) >= sizeof(guest) || strlen(ent->d_name) >= out_size)
+        if (d_name_len >= sizeof(guest) || d_name_len >= out_size)
             continue;
         strcpy(guest, ent->d_name);
         fake_path_from_host(guest);
@@ -1184,8 +1186,10 @@ static bool migrate_names_load(int root_fd, const char *host_dir, struct migrate
     bool ok = true;
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
-            continue;
+        if (ent->d_name[0] == '.') {
+            if (ent->d_name[1] == '\0' || (ent->d_name[1] == '.' && ent->d_name[2] == '\0'))
+                continue;
+        }
         if (!migrate_names_add(list, ent->d_name, &cap)) {
             ok = false;
             break;
@@ -1464,8 +1468,10 @@ static void migrate_repair_name_aliases(struct fakefs_db *fs, int root_fd) {
         struct migrate_names alias = {0};
         size_t alias_cap = 0;
         for (size_t i = 0; i < cache.count; i++) {
-            if (strcmp(cache.names[i], ".") == 0 || strcmp(cache.names[i], "..") == 0)
-                continue;
+            if (cache.names[i][0] == '.') {
+                if (cache.names[i][1] == '\0' || (cache.names[i][1] == '.' && cache.names[i][2] == '\0'))
+                    continue;
+            }
             if (host_name_is_canonical(cache.names[i]))
                 continue;
             // Unreachable, but only a duplicate -- and only this pass's business
