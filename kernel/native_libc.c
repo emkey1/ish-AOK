@@ -704,6 +704,25 @@ static void nlibc_stream_remember(FILE *file, int fd) {
     pthread_mutex_unlock(&nlibc_stream_lock);
 }
 
+// Drop a stream from the registry. The list is keyed by FILE* address, so an
+// entry left behind after the FILE is freed can be matched by a LATER stream
+// that malloc happens to place at the same address -- and then fileno() answers
+// with the dead stream's descriptor.
+static void nlibc_stream_forget(FILE *file) {
+    pthread_mutex_lock(&nlibc_stream_lock);
+    struct nlibc_stream **link = &nlibc_streams;
+    while (*link != NULL) {
+        if ((*link)->file == file) {
+            struct nlibc_stream *dead = *link;
+            *link = dead->next;
+            free(dead);
+            break;
+        }
+        link = &(*link)->next;
+    }
+    pthread_mutex_unlock(&nlibc_stream_lock);
+}
+
 int nlibc_fileno(FILE *file) {
     if (file == NULL)
         return nlibc_fail(_EBADF);
@@ -775,7 +794,20 @@ FILE *nlibc_fdopen(int fd, const char *mode) {
 
 // One wrapper per standard stream, made on demand and kept, so repeated use
 // does not leak a FILE each time and buffering behaves consistently.
-static FILE *nlibc_std[3];
+//
+// PER TASK, not per process. These wrap descriptor NUMBERS -- 0, 1, 2 -- and
+// every native program has its own 0, 1 and 2 pointing at different things. As
+// a process-wide cache the first native program to run created the wrappers and
+// every later one inherited them, still buffering into the FIRST program's
+// descriptors.
+//
+// A pipeline is where that becomes visible, because both halves are live at
+// once: `cat file | less` between two native applets printed NOTHING, while
+// either half paired with an emulated program worked perfectly. Same shape as
+// bash's globals (docs/bash_native_plan.md) -- a native program is a C function
+// on a guest task's thread, not a process, so anything that is "per program"
+// has to be per thread.
+static __thread FILE *nlibc_std[3];
 
 static FILE *nlibc_std_stream(int fd) {
     if (nlibc_std[fd] == NULL) {
@@ -796,9 +828,20 @@ static FILE *nlibc_std_stream(int fd) {
 // Called once a native program returns, before its task exits: a return from
 // main() is not exit(), so the C runtime never flushes these for us.
 void nlibc_flush_std(void) {
-    for (int i = 0; i < 3; i++)
-        if (nlibc_std[i] != NULL)
-            fflush(nlibc_std[i]);
+    for (int i = 0; i < 3; i++) {
+        if (nlibc_std[i] == NULL)
+            continue;
+        fflush(nlibc_std[i]);
+        // Safe to close: these were wrapped with close_fd = 0, so the FILE goes
+        // away and the guest's descriptor does not. Dropped from the registry
+        // and nulled so that a task which runs a second native program -- bash
+        // re-execing itself is the one that does -- builds fresh wrappers
+        // rather than writing into the previous program's buffers.
+        FILE *dead = nlibc_std[i];
+        nlibc_std[i] = NULL;
+        nlibc_stream_forget(dead);
+        fclose(dead);
+    }
 }
 FILE *nlibc_stdin(void)  { return nlibc_std_stream(0); }
 FILE *nlibc_stdout(void) { return nlibc_std_stream(1); }
