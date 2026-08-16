@@ -593,6 +593,34 @@ That is answered in `kernel/bash_glue.c` instead: a native bash that starts
 while one is already live in this address space hands over to the guest's own
 `/bin/bash`, which is a real bash 5.2 of the same version and merely slower.
 
+## What the table did not know about
+
+Four things that only appeared once the guard stopped latching and the re-entry
+path actually ran, and they matter more than most of the table:
+
+- **`shell_reinitialize` sets `no_rc = no_profile = 1`.** Correct for what
+  upstream uses it for -- a shell re-execing itself to run a script should not
+  re-read `~/.bashrc` -- and wrong here, where each invocation is a new shell.
+  Every native bash after the first read NO startup files at all, so a second
+  ssh login came up with no `/etc/profile`. `enable_history_list` (turned off by
+  `bash_history_reinit`) and `sourced_env` (which made `$BASH_ENV` a
+  once-per-app affair) are the same shape.
+- **`funcnest` / `evalnest` / `sourcenest`**, left above zero by a shell that
+  exited from inside a function, an eval or a sourced file.
+- **`running_trap`**, left set by a shell that exited from inside a handler; the
+  next shell then believes it is already running one and refuses to run pending
+  traps.
+- **`last_procsub_child`**, which `procsub_add` aliases into the `procsubs`
+  chain the table already lists.
+
+And the guard itself was the biggest finding. An `atomic_flag` set on entry and
+cleared on RETURN latches on forever, because a shell does not return -- bash
+leaves through `exit()`. So after the first native bash every later one quietly
+became the emulated shell, which meant this entire audit had **never executed**
+while testing green. It records the owning task now and asks whether that task
+is still alive. If a fix and its guard ship together, prove the guarded path
+runs.
+
 ## Also still open
 
 Nothing from this list. The three unconverted `make_child` sites (process
