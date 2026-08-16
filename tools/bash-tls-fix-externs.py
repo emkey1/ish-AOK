@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Make bash's remaining shared globals thread-local, by name, everywhere.
+
+The companion tools each miss this set for their own reason.
+bash-tls-rewrite.py drives off clang's JSON AST, whose file attribution drifts
+(see the comment there) so it silently skipped a batch. bash-tls-fix-statics.py
+only looks at non-external symbols. check-bash-tls.py only reports symbols two
+files DISAGREE about, and a variable no file made thread-local is something
+every file agrees on -- consistently shared, consistently wrong.
+
+What was left behind mattered. o_options is one of the tables aok_fix_*() fills
+in per thread: shared, every shell writes its own variables' addresses into the
+one table and the last writer wins, which is precisely the race this conversion
+exists to remove. xpg_echo, localvar_unset and shell_function_defs are ordinary
+per-shell settings that one shell would have changed under another.
+
+So this takes the names from `nm` -- external, mutable, not thread-local -- and
+inserts __thread at every file-scope declaration of them in the vendored tree,
+definitions and externs alike. A declaration missed in one header is not a
+compile error, it is a silent wrong-memory read, which is why it goes by name
+across every file rather than per translation unit.
+"""
+
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+VENDOR = os.path.join(REPO, "deps", "bash")
+
+# Deliberately shared. Each of these is something two live shells can see each
+# other through, kept that way for a reason that is worth more than the
+# isolation would be.
+ALLOW = {
+    # readline's keymaps cross-reference each other in static initialisers
+    # (emacs_standard_keymap's Control-x entry IS emacs_ctlx_keymap), so they
+    # cannot be thread-local without a fixup pass over all of them. The visible
+    # consequence is narrow and interactive: `bind` in one shell is seen by
+    # another. Noted in docs/bash_native_plan.md.
+    "emacs_standard_keymap", "emacs_meta_keymap", "emacs_ctlx_keymap",
+    "vi_movement_keymap", "vi_insertion_keymap", "builtin_keymap_names",
+    # The set of builtins bash was compiled with -- identical in every shell.
+    # `enable`/`disable` flip flags inside it, which is shared; see builtins.h.
+    "static_shell_builtins", "shell_builtins", "num_shell_builtins",
+    "current_builtin",
+    # Written once, at startup, with the same value by every shell.
+    "rl_library_version", "rl_readline_name",
+    # Read-only lookup tables that only lack `const` upstream.
+    "default_prefixes", "default_suffixes",
+    "posix_collsyms", "posix_collwcsyms",
+}
+
+SRC = (".c", ".h", ".def", ".y")
+
+
+def shared_externals(archive):
+    names = set()
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run(["ar", "x", archive], cwd=tmp, capture_output=True)
+        for entry in sorted(os.listdir(tmp)):
+            if not entry.endswith(".o"):
+                continue
+            nm = subprocess.run(["nm", "-m", os.path.join(tmp, entry)],
+                                capture_output=True, text=True).stdout
+            for line in nm.splitlines():
+                # `external` is not adjacent to the section: a common symbol
+                # prints as `(common) (alignment 2^3) external _name`. Matching
+                # them as one string quietly skipped every tentative definition
+                # -- tempvar_list, pcomp_curcmd, rl_executing_keymap and the
+                # rest -- and reported "nothing shared" while seven were.
+                if not re.search(r"\((__DATA,__(data|bss|common)|common)\)", line):
+                    continue
+                if " external" not in line or "non-external" in line:
+                    continue
+                sym = line.split()[-1]
+                if "$tlv$" in sym or not sym.startswith("_"):
+                    continue
+                name = sym[1:]
+                if name not in ALLOW:
+                    names.add(name)
+    return names
+
+
+def sources():
+    for root, _, files in os.walk(VENDOR):
+        if os.sep + ".git" in root:
+            continue
+        for f in files:
+            if f.endswith(SRC):
+                yield os.path.join(root, f)
+
+
+def declares(line, name):
+    """True if this file-scope line declares `name`.
+
+    Narrow on purpose. The name must be a declarator: it is followed by
+    optional array brackets and then `;`, `=` or `,`, and nothing opens a
+    paren before it -- `int f (int xpg_echo)` names a parameter and
+    `static int g PARAMS((int))` is a prototype, and putting __thread on either
+    does not compile.
+    """
+    if line.startswith(("#", "//", " ", "\t", "}", "*")) or "__thread" in line:
+        return False
+    m = re.search(r"\b" + re.escape(name) + r"\b\s*(\[[^\]]*\])*\s*[;=,]", line)
+    if not m:
+        return False
+    head = line[:m.start()]
+    if head.count("(") > head.count(")"):
+        return False
+    # A typedef or a struct member is not a variable.
+    return not re.match(r"\s*(typedef|return|case)\b", line)
+
+
+def main():
+    archive = sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO, "build", "libbash.a")
+    names = shared_externals(archive)
+    if not names:
+        print("bash-tls-fix-externs: nothing shared", file=sys.stderr)
+        return 0
+    print(f"bash-tls-fix-externs: {len(names)} shared externals: "
+          f"{' '.join(sorted(names))}", file=sys.stderr)
+
+    hits, changed = {n: 0 for n in names}, 0
+    for path in sources():
+        with open(path, encoding="utf-8", errors="surrogateescape") as fh:
+            lines = fh.read().split("\n")
+        touched = False
+        for i, line in enumerate(lines):
+            for n in names:
+                if n in line and declares(line, n):
+                    lines[i] = "__thread " + line
+                    hits[n] += 1
+                    touched = True
+                    break
+        if touched:
+            changed += 1
+            with open(path, "w", encoding="utf-8", errors="surrogateescape") as fh:
+                fh.write("\n".join(lines))
+
+    for n in sorted(names):
+        if hits[n] == 0:
+            print(f"  MISSED {n}: no declaration found", file=sys.stderr)
+    print(f"  patched {sum(hits.values())} declarations in {changed} files",
+          file=sys.stderr)
+    return 1 if any(v == 0 for v in hits.values()) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

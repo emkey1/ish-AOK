@@ -445,8 +445,8 @@ the first thing to reach for when one misbehaves.
   command substitution — `jobs | grep`, `$(jobs -p)` — runs in a fresh shell
   that has no jobs. `jobs` itself, `fg`, `bg`, `kill %1` and `wait` are the
   parent's own and work.
-- **Two native bash instances cannot run at once**, so the second one hands over
-  to the guest's `/bin/bash`. Correct, and slower for that shell only.
+- **`bind` is shared between live shells** — see the TLS section below for why,
+  and for what is no longer shared.
 - **A subshell is an emulated bash**, for the address-space reason in section 1.
   The interpretation the parent does — where a script's time actually goes —
   stays native.
@@ -456,3 +456,83 @@ the first thing to reach for when one misbehaves.
 - **`trap -p` inside a child under-reports**: bash lists the strings of traps
   that are not armed there, and reproducing that would mean setting a trap and
   disarming it, which an early-exiting child never reaches.
+
+## Many shells at once: thread-local globals (2026-08-16)
+
+A native program is a C function on a guest task's thread inside the app's one
+address space, so until now two live native bash instances would have shared
+bash's globals — the same wall `fork` hits. `kernel/bash_glue.c` therefore
+allowed exactly one, and every other shell in the app silently got the emulated
+bash instead. That is gone. Nested shells and concurrent shells both work, each
+with its own variables, functions, options, jobs and readline state.
+
+What made it affordable is that the state which has to differ per shell is
+small: about 50 KB of `__data`, `__bss` and `__common` across the whole
+bash+readline archive. bash's own malloc is not compiled in, so there is no
+arena to duplicate. Making each of those variables `__thread` gives every task
+its own copy. Measured on this platform TLS access costs nothing in a loop —
+clang hoists the `$tlv$init` resolution out — and the 19–20x numbers above are
+unchanged.
+
+The conversion is tooling rather than a patch, so moving to a later bash is a
+re-run rather than a re-do:
+
+| tool | what it converts | driven by |
+|---|---|---|
+| `tools/bash-tls-rewrite.py` | declarations and definitions in the vendored tree | clang `-ast-dump=json` |
+| `tools/bash-tls-fix-defs.py` | the `.def` files the AST cannot reach | compiler diagnostics |
+| `tools/bash-tls-fix-tables.py` | 7 option tables, to per-thread `aok_fix_*()` fixups | hand-listed |
+| `tools/bash-tls-fix-statics.py` | file-local statics | `nm` |
+| `tools/bash-tls-fix-externs.py` | whatever is still shared, by name, everywhere | `nm` |
+| `tools/check-bash-tls.py` | **the gate** | `nm` + relocations |
+
+### The gate is the important part
+
+An incomplete conversion does not fail to build. A translation unit that
+declares one of these variables without `__thread` compiles clean, links clean,
+and reads the wrong memory: measured on a two-file test, a variable holding 1
+read back as `-1882127480`. In bash it was worse than wrong values —
+`dist_version` is defined `const char * const` in version.c but declared plain
+`char *` in shell.h, so only the declaration got `__thread`, and reading it
+treated the string's first bytes as a thread-vector descriptor and called
+through it. The shell jumped into the text of `"5.2"`.
+
+`check-bash-tls.py` asks two questions per object file. The first is whether any
+symbol is thread-local in one place and ordinary data in another, in either
+definitions or relocations. The second, and the one that matters more, is
+simply: **what is in a writable data section and not thread-local?** The
+mismatch checks only fire when two files disagree; a variable that no file ever
+converted is something every file agrees on — consistently shared, and
+consistently wrong once two shells are live. That question found 129 file-local
+statics and 13 externals the AST-based pass had silently skipped, including
+`o_options`, one of the tables each thread fills in with its own addresses.
+Anything allowed to stay shared is in `ALLOW` in `bash-tls-fix-externs.py`,
+where it has to be justified in writing, and the other tools import that same
+set so they cannot undo each other.
+
+### What is still shared, and why
+
+- **readline's keymaps.** They cross-reference each other in static
+  initialisers — `emacs_standard_keymap`'s Control-x entry *is*
+  `emacs_ctlx_keymap` — so they cannot be thread-local without a fixup pass over
+  all of them. The visible consequence is narrow and interactive: `bind` in one
+  live shell is seen by another. `_rl_keymap` and the other keymap *pointers*
+  are per-shell, so which keymap a shell is using is its own business.
+- **The builtins table.** Identical in every shell, since it is the set bash was
+  compiled with. `enable`/`disable` flip flags inside it, and that is shared.
+- **Read-only lookup tables that upstream simply did not mark `const`** —
+  `default_prefixes`, `posix_collsyms` and friends.
+
+Everything else — including `xpg_echo`, `localvar_unset`, `shell_function_defs`,
+the completion state and all five option tables — is per shell.
+
+### If you re-run the tools
+
+`bash-tls-rewrite.py` is the least trustworthy of them. clang's JSON omits a
+location's file whenever it repeats the previous one, and macro locations carry
+theirs inside nested `spellingLoc`/`expansionLoc` dicts, so the walk drifts and
+starts attributing variables.c's offsets to pcomplete.h. Its word-boundary guard
+rejects the bad ones rather than corrupting a header, which is why the drift is
+survivable — but it is also why it silently skipped 129 statics. The `nm`-driven
+tools have nothing to drift and should be trusted over it. Run the gate after
+any of them.

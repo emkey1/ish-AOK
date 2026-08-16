@@ -151,6 +151,23 @@ def collect_one(job):
     return entry["file"], found, None
 
 
+# Variables whose DEFINITION is const but whose extern declaration is not, so
+# nothing in the AST marks them const where this tool looks. version.c has
+# `const char * const dist_version = DISTVERSION;` while shell.h says plain
+# `char *dist_version`. A const object is shared and has no thread vector, so
+# reading one as thread-local treats the string's first bytes as a descriptor
+# and calls through it -- bash jumped into the text of "5.2".
+#
+# tools/check-bash-tls.py catches this (it counts __TEXT,__const definitions as
+# ordinary data), but only after a build; skipping them here is what makes
+# re-running this tool safe, which matters because a re-run silently undid the
+# fix once already.
+CONST_DEFINED = {
+    "dist_version", "release_status", "patch_level", "build_version",
+    "sccs_version", "shell_version_string",
+}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--compdb", default=os.path.join(REPO, "build", "compile_commands.json"))
@@ -179,6 +196,8 @@ def main():
                 failures.append((name, err))
                 continue
             for path, off, var in found:
+                if var in CONST_DEFINED:
+                    continue
                 sites.setdefault(path, {})[off] = var
 
     if failures:
