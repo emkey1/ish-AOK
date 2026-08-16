@@ -14,7 +14,9 @@
 #include <string.h>
 #include <limits.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <syslog.h>
 #include <spawn.h>
 #include <sys/utsname.h>
 #include <unistd.h>
