@@ -64,7 +64,9 @@
 #include <sys/mount.h>
 #include <sys/select.h>
 #include <sys/time.h>
+#if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/sysctl.h>
+#endif
 #include <grp.h>
 #include <pwd.h>
 #include <stdnoreturn.h>
