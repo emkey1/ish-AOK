@@ -781,6 +781,10 @@ void nlibc_perror(const char *s) {
 // use it and do not care; a program that depends on keeping its pid across
 // exec would notice.
 
+// Defined beside the signal bookkeeping further down; declared here because
+// exec is the first caller in this file.
+static void nlibc_spawn_default_sigmask(struct native_spawn_opts *opts);
+
 static int nlibc_exec_common(const char *path, char *const argv[], int search_path) {
     if (path == NULL || argv == NULL)
         return nlibc_fail(_EFAULT);
@@ -792,8 +796,16 @@ static int nlibc_exec_common(const char *path, char *const argv[], int search_pa
         path = resolved;
     }
 
+    // Through native_spawn_opts rather than native_spawn, for the signal mask:
+    // this is the program saying "become that program", and the shim's own
+    // blocking must not be part of what it becomes. Dispositions are NOT reset
+    // here -- exec legitimately preserves SIG_IGN, and a caller that ignored a
+    // signal meant it.
+    struct native_spawn_opts opts = { .pgid = NATIVE_SPAWN_PGID_INHERIT };
+    nlibc_spawn_default_sigmask(&opts);
+
     dword_t pid = 0;
-    int err = native_spawn(path, argv, native_env_vector(), &pid);
+    int err = native_spawn_opts(path, argv, native_env_vector(), &opts, &pid);
     if (err < 0)
         return nlibc_fail(err);
 
@@ -3791,6 +3803,25 @@ static sigset_t_ nlibc_shim_held_signals(void) {
     return held;
 }
 
+// The mask a child must start with, and it is not an attribute a caller has to
+// ask for -- it is a correction. What the kernel holds for this task includes
+// whatever the shim blocked in order to hold a handler
+// (nlibc_shim_held_signals), and a child inheriting that gets a set of signals
+// it can never receive and never asked to block. Taking those bits back out
+// leaves what the program believes its own mask to be, which is what fork would
+// have given it.
+//
+// Applies to exec as much as to spawn: exec here is spawn-then-exit, so the
+// same leak reaches the same place. That is how a native bash handing over to
+// the guest's /bin/bash produced a shell with SIGINT and SIGCHLD blocked.
+static void nlibc_spawn_default_sigmask(struct native_spawn_opts *opts) {
+    sigset_t_ mask = 0;
+    if (nlibc_rt_sigprocmask(SIG_BLOCK_, 0, &mask) != 0)
+        return;
+    opts->set_sigmask = true;
+    opts->sigmask = mask & ~nlibc_shim_held_signals();
+}
+
 // Tell the kernel which of this task's blocked signals are blocked by the shim
 // rather than by the program, so a wait can still be interrupted by one. See
 // the field comment on struct task's native_held.
@@ -3964,18 +3995,7 @@ static int nlibc_posix_spawn_common(pid_t *pid_out, const char *file,
         return EINVAL;
 
     struct native_spawn_opts opts = { .pgid = NATIVE_SPAWN_PGID_INHERIT };
-
-    // The child's mask, ALWAYS -- this is not an attribute the caller has to
-    // ask for. What the kernel holds for this task includes whatever the shim
-    // blocked to hold a handler (see nlibc_shim_held_signals), and inheriting
-    // that would hand the child a set of signals it can never receive and
-    // never asked to block. Taking those bits back out leaves exactly what the
-    // program believes its own mask to be, which is what fork would have given.
-    sigset_t_ mask = 0;
-    if (nlibc_rt_sigprocmask(SIG_BLOCK_, 0, &mask) == 0) {
-        opts.set_sigmask = true;
-        opts.sigmask = mask & ~nlibc_shim_held_signals();
-    }
+    nlibc_spawn_default_sigmask(&opts);
 
     if (attr != NULL && *attr != NULL) {
         const struct nlibc_spawn_attr *a = *attr;
