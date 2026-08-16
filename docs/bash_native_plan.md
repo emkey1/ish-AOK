@@ -557,6 +557,24 @@ is worth recording.** Measured on one build, in the same guest:
 | 30 subshells | 275 ms | 82 ms | 3.4x *slower* |
 | 30 bare shell starts | 84 ms | 335 ms | 4x faster |
 
+**Then the slow part was found, and it was none of the obvious candidates.**
+A subshell cost 8.3 ms while the spawn and a full native bash startup together
+cost 1.8 ms, and the state script grew 2.7x for only +0.7 ms — so it was not the
+spawn, not bash's startup, and not parsing. It was that every line of the state
+carried its own `2>/dev/null`, each one an open/dup2/close through the shim,
+about 85 times per subshell. 120 such lines cost 9.2 ms; the same lines under
+one `exec` redirection cost 1.4 ms. After the fix:
+
+| | native | emulated | |
+|---|---|---|---|
+| 30 subshells | **83 ms** | 78 ms | parity |
+| 30 command substitutions | **79 ms** | 90 ms | native *faster* |
+
+Note it must be `exec`, not a `{ ... } 2>/dev/null` wrapper: bash parses a `-c`
+string command by command, and a brace group is one command, so the `shopt -s
+extglob` inside it would not have run before the function bodies inside it were
+parsed.
+
 So the change made the re-launch path about **4x cheaper** — ~11.2 ms per
 subshell start became ~2.8 ms — and subshells roughly twice as fast as they
 were. It did **not** make them faster than the emulated shell, which forks
