@@ -68,50 +68,104 @@ PATH_FILE=/etc/profile.d/05-aok-native-bin.sh
 #
 # THIS LIST WENT BADLY STALE ONCE. It was written when much of the native libc
 # shim was missing, and kept entries long after the shim grew spawn, signals,
-# wait and job control. tools/native-applet-audit.py -- which walks SmallCLUE's
-# sources for calls the shim answers with ENOSYS -- now flags only 10 of 143
-# applets, while this list had 52. Worse, the audit is a static approximation
-# in BOTH directions: it flagged find, rm, time, timeout and xargs, all of
-# which were then measured working, and it cleared `env`, whose inability to
-# exec once took PSCAL's harness from 217 passing to zero.
+# wait and job control -- 52 entries where a measurement found a handful.
+#
+# tools/native-applet-audit.py, which walks SmallCLUE's sources for calls the
+# shim answers with ENOSYS, is NOT the authority here and has drifted further
+# from one: it flags find, rm, time, timeout, watch, xargs, init and runit, and
+# every one of those was then measured working. The reason is structural -- it
+# follows helpers transitively and cannot see #if defined(PSCAL_TARGET_IOS), so
+# the one fork() left in the tree (inside an iOS-only watch helper) taints
+# everything that can reach the applet table. It also cleared `env`, whose
+# inability to exec once took PSCAL's harness from 217 passing to zero. Treat
+# it as a hint about where to LOOK, never as an answer.
 #
 # So the entries below are what was MEASURED by running each applet, not what
 # the audit predicted. Re-measure rather than re-reason when this is revisited.
 #
-#   broken here      ipaddr (getifaddrs is ENOSYS), and kill, which reaches
-#                    real code but rejects `kill -0` -- a per-flag gap, the
-#                    same shape as the `grep -q` incident that made this list
-#                    necessary in the first place
-#   loops or blocks  init, runit, watch -- daemons and a repeat-forever tool,
-#                    not things to shadow, and they hang a probe
-#   system state     mount/umount, halt/poweroff/reboot, passwd, su, sudo,
-#                    mknod, mdev, chroot -- shadowing these is all risk
-#   not commands     smallclue, smallclue-help, licenses, version, vproc-test
+#   broken here      script needs the PSCAL app's terminal-capture hooks and
+#                    creates no pty of its own; dmesg, mount, umount and passwd
+#                    have their real bodies inside #if defined(__linux__), and
+#                    a native program is compiled for the HOST; vproc-test says
+#                    it is iOS-only; version reports the embedding app's
+#                    marketing version, which AOK has none of
+#   loops or blocks  init, runit, watch all WORK -- init runs /etc/rc and reaps,
+#                    runit starts its services, watch repeats -- and that is
+#                    exactly why they are not linked: two are supervisors that
+#                    never return and the third repeats until interrupted
+#   misleading       halt, poweroff and reboot print "System halt requested"
+#                    and return 0, having halted nothing: their body is an
+#                    exit(0), and a native program's exit is a return into the
+#                    kernel, not the end of anything. Shadowing sysvinit's
+#                    halt with a no-op that reports success is the worst kind
+#                    of entry to link
+#   system state     mknod, mdev, chroot, su, sudo -- these work, and
+#                    shadowing them is still all risk: this sudo runs the
+#                    command with no authentication at all
+#   not commands     smallclue, smallclue-help, licenses
+#
+# Two entries left this list after being fixed rather than reclassified, which
+# is the outcome to aim for: ipaddr (the shim's getifaddrs is real now -- the
+# host's interfaces ARE the guest's, and /proc/net/dev was already built from
+# them) and kill (which now takes -0, -s SIG and a signal by name or number).
 #
 # Absent from this list on purpose, because they are handled by PROBED below
 # rather than hardcoded: everything whose availability depends on what this
 # particular build has compiled in.
-EXCLUDED="chroot halt init ipaddr kill licenses mdev mknod mount passwd
-poweroff reboot runit smallclue smallclue-help su sudo umount version
+EXCLUDED="chroot dmesg halt init licenses mdev mknod mount passwd poweroff
+reboot runit script smallclue smallclue-help su sudo umount version
 vproc-test watch"
 
 # Availability-gated applets: present in every build, working only in some.
 # These are the ones that made the list stale, because whether they work is a
 # property of the BUILD rather than of the applet -- ssh needs the vendored
-# OpenSSH tree, tar and gzip need zlib, the checksums need OpenSSL, git needs
-# libgit2, micro and vi need their embedded editors.
+# OpenSSH tree, tar and gzip need zlib, git needs libgit2, curl and wget need
+# libcurl, micro and vi need their embedded editors.
 #
 # So they are not guessed at: each is run once, and skipped only if it reports
 # that it is not in this build. A build that gains ssh starts linking ssh with
 # no edit here, which is the property this list was missing.
+#
+# md5sum/sha1sum/sha256sum are still probed although they now work everywhere
+# AOK builds: they are compiled only where CommonCrypto exists, which is the
+# same kind of build-time fact as the rest of this list.
 PROBED="ssh scp sftp ssh-keygen ssh-copy-id rsync git tar gzip gunzip zcat
-md5sum sha1sum sha256sum micro vi nextvi"
+md5sum sha1sum sha256sum micro vi nextvi curl wget"
+
+# What to run to make an applet own up. --version for almost everything, but
+# not for curl and wget: they parse it as an option, print usage, and look
+# perfectly healthy right up until a transfer reports that libcurl is absent.
+# So they are probed with a real fetch from an address on this machine that
+# nothing listens on -- no network required, instant either way, and a build
+# WITH libcurl fails at connect rather than at "unavailable".
+probe_args() {
+    case "$1" in
+        curl) echo "-o /dev/null http://127.0.0.1:1/" ;;
+        wget) echo "-O /dev/null http://127.0.0.1:1/" ;;
+        # OpenSSH spells it -V, and answers --version with a getopt complaint on
+        # stderr. Harmless to the probe, which only looks for the stub's words,
+        # but it leaked "ssh: illegal option -- r" onto the terminal of anyone
+        # running this script.
+        # The ssh family has no version flag they all share: -V means a
+        # validity interval to ssh-keygen, nothing to sftp, and ssh-copy-id has
+        # none. No arguments at all -- each prints usage, and the stub ignores
+        # arguments anyway, which is the only thing the probe reads.
+        ssh|scp|sftp|ssh-keygen|ssh-copy-id) echo "" ;;
+        *) echo "--version" ;;
+    esac
+}
 
 # The stubs' own words, from kernel/smallclue_glue.c and the nextvi/micro
-# stubs. Matched loosely because they are diagnostics rather than an API.
+# stubs. Matched loosely because they are diagnostics rather than an API --
+# three different spellings for one idea, which is why this is a case and not
+# a comparison. "not enabled in this build" is git's, and its absence here is
+# why git used to be linked into a build that had no libgit2.
 probe_missing() {
-    case "$("$NATIVE" "$1" --version 2>&1 | head -2)" in
-        *"not built into this iSH-AOK"*|*"unavailable in this build"*) return 0 ;;
+    # shellcheck disable=SC2046
+    case "$("$NATIVE" "$1" $(probe_args "$1") 2>&1 | head -2)" in
+        *"not built into this iSH-AOK"*|\
+        *"unavailable in this build"*|\
+        *"not enabled in this build"*) return 0 ;;
     esac
     return 1
 }

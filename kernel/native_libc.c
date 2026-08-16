@@ -83,6 +83,54 @@ static int nlibc_host_errno(int guest_err) {
         case 38: return ENOSYS;   // Linux 38 is macOS 78; this is the one that bit
         case 39: return ENOTEMPTY;
         case 40: return ELOOP;
+
+        // The socket errnos. Every one of these used to land on the default
+        // and come out as EINVAL, which is how a perfectly ordinary
+        // non-blocking connect() -- EINPROGRESS, the expected answer, not an
+        // error -- turned into "ssh: connect to host ...: Invalid argument"
+        // and stopped ssh dead before it sent a byte. A refused connection, an
+        // unreachable host and a timeout were all the same "Invalid argument"
+        // too. Linux numbers on the left, host names on the right; they
+        // disagree from 41 up, so nothing here can be passed through.
+        case 42: return ENOMSG;
+        case 43: return EIDRM;
+        case 71: return EPROTO;
+        case 74: return EBADMSG;
+        case 75: return EOVERFLOW;
+        case 84: return EILSEQ;
+        case 87: return EUSERS;
+        case 88: return ENOTSOCK;
+        case 89: return EDESTADDRREQ;
+        case 90: return EMSGSIZE;
+        case 91: return EPROTOTYPE;
+        case 92: return ENOPROTOOPT;
+        case 93: return EPROTONOSUPPORT;
+        case 94: return ESOCKTNOSUPPORT;
+        case 95: return EOPNOTSUPP;
+        case 96: return EPFNOSUPPORT;
+        case 97: return EAFNOSUPPORT;
+        case 98: return EADDRINUSE;
+        case 99: return EADDRNOTAVAIL;
+        case 100: return ENETDOWN;
+        case 101: return ENETUNREACH;
+        case 102: return ENETRESET;
+        case 103: return ECONNABORTED;
+        case 104: return ECONNRESET;
+        case 105: return ENOBUFS;
+        case 106: return EISCONN;
+        case 107: return ENOTCONN;
+        case 108: return ESHUTDOWN;
+        case 109: return ETOOMANYREFS;
+        case 110: return ETIMEDOUT;
+        case 111: return ECONNREFUSED;
+        case 112: return EHOSTDOWN;
+        case 113: return EHOSTUNREACH;
+        case 114: return EALREADY;
+        case 115: return EINPROGRESS;
+        case 116: return ESTALE;
+        case 122: return EDQUOT;
+        case 125: return ECANCELED;
+
         default: return EINVAL;
     }
 }
@@ -697,7 +745,15 @@ static int nlibc_mode_to_flags(const char *mode) {
 }
 
 FILE *nlibc_fopen(const char *path, const char *mode) {
-    int fd = nlibc_open(path, nlibc_mode_to_flags(mode));
+    // 0666, and it MUST be passed: nlibc_open is variadic and reads the mode
+    // with va_arg whenever O_CREAT is set, so calling it with two arguments
+    // for "w" handed the guest whatever junk was in the third argument slot.
+    // The symptom was not a permission oddity but a wrong FILE TYPE -- `dd
+    // if=f of=g` created something stat reported as a socket and then failed
+    // with ENXIO opening it -- and it was intermittent, because the junk
+    // differed from call to call. 0666 is what glibc and musl's fopen pass;
+    // the guest's umask narrows it from there.
+    int fd = nlibc_open(path, nlibc_mode_to_flags(mode), 0666);
     if (fd < 0)
         return NULL;
     FILE *f = nlibc_file_wrap(fd, 1);
@@ -2268,16 +2324,53 @@ int nlibc_shutdown(int fd_no, int how) {
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_shutdown, fd_no, how));
 }
 
-// Levels other than SOL_SOCKET are IPPROTO_ numbers, which agree.
+// The LEVELS other than SOL_SOCKET are IPPROTO_ numbers, which agree. The
+// OPTIONS under them do not, and that is worse than it sounds: Darwin's IP_TOS
+// is 3 where the guest's is 1, and the guest's 3 is IP_HDRINCL -- so passing
+// the number through does not simply fail, it asks for a different option on a
+// socket that has no business with it. ssh sets IP_TOS on every connection
+// (IPQoS, interactive and bulk) and that is where the two "setsockopt socket 3
+// IP_TOS 184: Invalid argument" lines per connection came from.
+//
+// Only what a native program actually reaches for is listed; anything absent
+// is refused with ENOPROTOOPT rather than guessed at, since a wrong guess here
+// is silent.
+static const struct nlibc_signalmap nlibc_ip_opts[] = {
+    { IP_TOS, 1 },            { IP_TTL, 2 },            { IP_HDRINCL, 3 },
+    { IP_RETOPTS, 7 },        { IP_RECVTTL, 12 },       { IP_RECVTOS, 13 },
+    { IP_MULTICAST_IF, 32 },  { IP_MULTICAST_TTL, 33 }, { IP_MULTICAST_LOOP, 34 },
+    { IP_ADD_MEMBERSHIP, 35 },{ IP_DROP_MEMBERSHIP, 36 },
+#ifdef IP_RECVPKTINFO
+    { IP_RECVPKTINFO, 8 },    // the guest's IP_PKTINFO
+#endif
+};
+
+static const struct nlibc_signalmap nlibc_ipv6_opts[] = {
+    { IPV6_UNICAST_HOPS, 16 },   { IPV6_MULTICAST_IF, 17 },
+    { IPV6_MULTICAST_HOPS, 18 }, { IPV6_MULTICAST_LOOP, 19 },
+    { IPV6_JOIN_GROUP, 20 },     { IPV6_LEAVE_GROUP, 21 },
+    { IPV6_V6ONLY, 26 },         { IPV6_TCLASS, 67 },
+};
+
 static int nlibc_sockopt_to_guest(int level, int option, int *guest_level) {
-    if (level != SOL_SOCKET) {
-        *guest_level = level;
+    *guest_level = level;
+    const struct nlibc_signalmap *map = NULL;
+    size_t n = 0;
+    if (level == SOL_SOCKET) {
+        *guest_level = NLIBC_SOL_SOCKET_;
+        map = nlibc_sock_opts; n = NLIBC_MAP_COUNT(nlibc_sock_opts);
+    } else if (level == IPPROTO_IP) {
+        map = nlibc_ip_opts; n = NLIBC_MAP_COUNT(nlibc_ip_opts);
+    } else if (level == IPPROTO_IPV6) {
+        map = nlibc_ipv6_opts; n = NLIBC_MAP_COUNT(nlibc_ipv6_opts);
+    } else {
+        // IPPROTO_TCP's TCP_NODELAY and TCP_MAXSEG are 1 and 2 on both sides,
+        // and those are the only ones reached today.
         return option;
     }
-    *guest_level = NLIBC_SOL_SOCKET_;
-    for (size_t i = 0; i < NLIBC_MAP_COUNT(nlibc_sock_opts); i++)
-        if (nlibc_sock_opts[i].host == option)
-            return nlibc_sock_opts[i].guest;
+    for (size_t i = 0; i < n; i++)
+        if (map[i].host == option)
+            return map[i].guest;
     return -1;
 }
 
@@ -2322,17 +2415,30 @@ int nlibc_getsockopt(int fd_no, int level, int option, void *value, socklen_t *l
 //
 // getaddrinfo on the host reads the MAC's /etc/resolv.conf and /etc/hosts and
 // answers from the Mac's resolver. What a guest asks for has to be answered
-// from the guest.
+// from the guest -- not because the Mac's answer would be slower or scruffier
+// but because it would be a different answer: the guest may run its own
+// nameservers, its own /etc/hosts, a VPN, or a Tailscale name that the Mac
+// cannot see, and the Mac may hold names the guest is not entitled to.
 //
-// Numeric addresses and /etc/hosts are served here, from the guest's own
-// files. Names needing DNS are NOT: that wants a stub resolver speaking to the
-// nameservers in the guest's /etc/resolv.conf over the sockets above, which is
-// a piece of work in its own right. EAI_NONAME is the honest answer until then
-// -- SmallCLUE's own DNS applet does its queries itself and only uses
-// getaddrinfo to turn the SERVER argument into an address, which is numeric in
-// the case anyone actually types.
+// So all three sources here are the guest's. A numeric address is parsed on
+// the spot; then the guest's /etc/hosts; and then, for anything left, a stub
+// resolver that reads the guest's /etc/resolv.conf and queries the nameservers
+// it names -- over the sockets above, which are GUEST sockets, so a query
+// leaves through the guest's network stack exactly like every other packet the
+// guest sends.
+//
+// The DNS wire format below is written out again rather than called into.
+// SmallCLUE's deps/smallclue/src/core.c already has a complete implementation
+// (smallclueDnsEncodeName, smallclueDnsDecodeName, smallclueDnsQueryServer and
+// a resolv.conf reader), but that lives ABOVE this file -- it is one of the
+// programs the shim serves -- and calling up into it would invert the layering
+// and make the shim depend on the applet set. The duplication is deliberate,
+// and this copy is deliberately the smaller one: A and AAAA only, UDP only, no
+// EDNS0, no TCP fallback on a truncated reply, since an address RRset that
+// overflows 512 bytes is not a case a connecting program hits.
 
 #define NLIBC_EAI_NONAME -2
+#define NLIBC_EAI_AGAIN  -3
 #define NLIBC_EAI_FAIL   -4
 #define NLIBC_EAI_MEMORY -10
 
@@ -2379,6 +2485,385 @@ static int nlibc_hosts_lookup(const char *node, int family, void *out, int *out_
     return found;
 }
 
+// ------------------------------------------------------------ the stub resolver
+
+#define NLIBC_DNS_MAX_SERVERS 3
+#define NLIBC_DNS_MAX_SEARCH  4
+#define NLIBC_DNS_MAX_ADDRS   8
+#define NLIBC_DNS_PORT        53
+#define NLIBC_DNS_TYPE_A      1
+#define NLIBC_DNS_TYPE_CNAME  5
+#define NLIBC_DNS_TYPE_AAAA   28
+#define NLIBC_DNS_CLASS_IN    1
+
+// One address, family-tagged, in network order -- what a query yields and what
+// the addrinfo builder below turns into a sockaddr.
+struct nlibc_addr { int family; uint8_t raw[16]; };
+
+struct nlibc_resolv {
+    struct nlibc_addr servers[NLIBC_DNS_MAX_SERVERS];
+    int server_count;
+    char search[NLIBC_DNS_MAX_SEARCH][256];
+    int search_count;
+    int timeout_ms;
+    int attempts;
+    int ndots;
+};
+
+// The GUEST's /etc/resolv.conf, read the same way /etc/hosts is: through the
+// shim's own fopen, so it is the guest's file and not the Mac's.
+static void nlibc_read_resolv_conf(struct nlibc_resolv *rc) {
+    memset(rc, 0, sizeof(*rc));
+    rc->timeout_ms = 2000;   // per server per attempt
+    rc->attempts = 2;
+    rc->ndots = 1;
+
+    FILE *f = nlibc_fopen("/etc/resolv.conf", "r");
+    if (f == NULL)
+        return;
+    char line[512];
+    while (fgets(line, sizeof(line), f) != NULL) {
+        char *comment = strpbrk(line, "#;");
+        if (comment != NULL)
+            *comment = '\0';
+        char *save = NULL;
+        char *key = strtok_r(line, " \t\r\n", &save);
+        if (key == NULL)
+            continue;
+        if (strcmp(key, "nameserver") == 0) {
+            char *value = strtok_r(NULL, " \t\r\n", &save);
+            struct nlibc_addr server;
+            memset(&server, 0, sizeof(server));
+            if (value != NULL && rc->server_count < NLIBC_DNS_MAX_SERVERS &&
+                    nlibc_parse_numeric(value, AF_UNSPEC, server.raw, &server.family) == 0)
+                rc->servers[rc->server_count++] = server;
+        } else if (strcmp(key, "search") == 0 || strcmp(key, "domain") == 0) {
+            rc->search_count = 0;   // a later line replaces an earlier one
+            for (char *value = strtok_r(NULL, " \t\r\n", &save);
+                    value != NULL && rc->search_count < NLIBC_DNS_MAX_SEARCH;
+                    value = strtok_r(NULL, " \t\r\n", &save))
+                snprintf(rc->search[rc->search_count++], sizeof(rc->search[0]), "%s", value);
+        } else if (strcmp(key, "options") == 0) {
+            for (char *value = strtok_r(NULL, " \t\r\n", &save); value != NULL;
+                    value = strtok_r(NULL, " \t\r\n", &save)) {
+                int n;
+                if (strncmp(value, "timeout:", 8) == 0 && (n = atoi(value + 8)) > 0)
+                    rc->timeout_ms = (n > 30 ? 30 : n) * 1000;
+                else if (strncmp(value, "attempts:", 9) == 0 && (n = atoi(value + 9)) > 0)
+                    rc->attempts = n > 5 ? 5 : n;
+                else if (strncmp(value, "ndots:", 6) == 0 && (n = atoi(value + 6)) >= 0)
+                    rc->ndots = n > 15 ? 15 : n;
+            }
+        }
+    }
+    fclose(f);
+}
+
+// "www.example.com" -> 3www7example3com0. Returns the encoded length, or 0 if
+// the name will not fit or is not a legal name.
+static size_t nlibc_dns_encode_name(const char *name, uint8_t *buf, size_t size) {
+    size_t pos = 0;
+    for (const char *p = name; *p != '\0'; ) {
+        const char *dot = strchr(p, '.');
+        size_t label = dot != NULL ? (size_t) (dot - p) : strlen(p);
+        if (label == 0) {
+            // A single trailing dot is the root and ends the name; an empty
+            // label anywhere else is malformed.
+            if (dot != NULL && dot[1] == '\0')
+                break;
+            return 0;
+        }
+        if (label > 63 || pos + label + 2 > size)
+            return 0;
+        buf[pos++] = (uint8_t) label;
+        memcpy(buf + pos, p, label);
+        pos += label;
+        p += label;
+        if (*p == '.')
+            p++;
+    }
+    if (pos + 1 > size)
+        return 0;
+    buf[pos++] = 0;
+    return pos;
+}
+
+// Reads the name at `pos` into `out` and sets `*after` past the name AS IT
+// APPEARS AT `pos` -- past the compression pointer itself, not into what it
+// points at, which is what walking a record needs. A pointer may only go
+// BACKWARDS, which is both the rule and what makes a crafted reply unable to
+// spin this forever.
+static bool nlibc_dns_decode_name(const uint8_t *msg, size_t len, size_t pos,
+        char *out, size_t out_size, size_t *after) {
+    size_t out_len = 0;
+    bool jumped = false;
+    unsigned guard = 0;
+    if (out != NULL && out_size > 0)
+        out[0] = '\0';
+    for (;;) {
+        if (guard++ > 128 || pos >= len)
+            return false;
+        uint8_t n = msg[pos];
+        if ((n & 0xc0) == 0xc0) {
+            if (pos + 1 >= len)
+                return false;
+            size_t target = ((size_t) (n & 0x3f) << 8) | msg[pos + 1];
+            if (!jumped && after != NULL)
+                *after = pos + 2;
+            jumped = true;
+            if (target >= pos)
+                return false;
+            pos = target;
+            continue;
+        }
+        if (n > 63)
+            return false;
+        if (n == 0) {
+            if (!jumped && after != NULL)
+                *after = pos + 1;
+            return true;
+        }
+        if (pos + 1 + n > len)
+            return false;
+        if (out != NULL) {
+            if (out_len + n + 2 > out_size)
+                return false;
+            if (out_len > 0)
+                out[out_len++] = '.';
+            memcpy(out + out_len, msg + pos + 1, n);
+            out_len += n;
+            out[out_len] = '\0';
+        }
+        pos += 1 + n;
+    }
+}
+
+// One question out, one reply in, over a GUEST socket -- so the packet leaves
+// through the guest's stack and reaches whatever the guest's routing says,
+// which is the whole point of not calling the Mac's resolver. Returns the
+// reply length or -1.
+static ssize_t nlibc_dns_exchange(const struct nlibc_addr *server,
+        const uint8_t *query, size_t qlen, int timeout_ms,
+        uint8_t *reply, size_t reply_size) {
+    union { struct sockaddr_in v4; struct sockaddr_in6 v6; } sa;
+    socklen_t salen;
+    memset(&sa, 0, sizeof(sa));
+    if (server->family == AF_INET) {
+        sa.v4.sin_len = sizeof(sa.v4);
+        sa.v4.sin_family = AF_INET;
+        sa.v4.sin_port = htons(NLIBC_DNS_PORT);
+        memcpy(&sa.v4.sin_addr, server->raw, 4);
+        salen = sizeof(sa.v4);
+    } else {
+        sa.v6.sin6_len = sizeof(sa.v6);
+        sa.v6.sin6_family = AF_INET6;
+        sa.v6.sin6_port = htons(NLIBC_DNS_PORT);
+        memcpy(&sa.v6.sin6_addr, server->raw, 16);
+        salen = sizeof(sa.v6);
+    }
+
+    int fd = nlibc_socket(server->family, SOCK_DGRAM, 0);
+    if (fd < 0)
+        return -1;
+    ssize_t got = -1;
+    // connect() rather than sendto(): it filters the reply to the server that
+    // was asked, and it turns an ICMP port-unreachable into an error on the
+    // next call instead of a wait for the full timeout.
+    if (nlibc_connect(fd, &sa, salen) == 0 &&
+            nlibc_send(fd, query, qlen, 0) == (ssize_t) qlen) {
+        // The timeout is the whole reason this cannot hang: a nameserver that
+        // is listed and does not answer costs timeout_ms and no more.
+        struct pollfd pfd;
+        memset(&pfd, 0, sizeof(pfd));
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        if (nlibc_poll(&pfd, 1, timeout_ms) == 1 && (pfd.revents & POLLIN))
+            got = nlibc_recv(fd, reply, reply_size, 0);
+    }
+    nlibc_close(fd);
+    return got;
+}
+
+// Walks the answer section, following CNAMEs. A recursive resolver returns the
+// chain and the addresses it ends at in the same message, so a hop is a
+// re-walk of the section with the new owner name rather than another query.
+// Returns how many addresses were written.
+static int nlibc_dns_answers(const uint8_t *msg, size_t len, const char *qname,
+        int qtype, struct nlibc_addr *out, int max) {
+    if (len < 12)
+        return 0;
+    unsigned qdcount = ((unsigned) msg[4] << 8) | msg[5];
+    unsigned ancount = ((unsigned) msg[6] << 8) | msg[7];
+    size_t answers = 12;
+    for (unsigned i = 0; i < qdcount; i++) {
+        if (!nlibc_dns_decode_name(msg, len, answers, NULL, 0, &answers))
+            return 0;
+        answers += 4;   // QTYPE + QCLASS
+        if (answers > len)
+            return 0;
+    }
+
+    char target[256];
+    snprintf(target, sizeof(target), "%s", qname);
+    size_t tlen = strlen(target);
+    if (tlen > 0 && target[tlen - 1] == '.')
+        target[tlen - 1] = '\0';
+
+    size_t need = qtype == NLIBC_DNS_TYPE_AAAA ? 16 : 4;
+    int count = 0;
+    for (int hop = 0; hop < 8; hop++) {
+        char next[256];
+        next[0] = '\0';
+        size_t pos = answers;
+        for (unsigned i = 0; i < ancount && pos < len; i++) {
+            char owner[256];
+            if (!nlibc_dns_decode_name(msg, len, pos, owner, sizeof(owner), &pos))
+                return count;
+            if (pos + 10 > len)
+                return count;
+            unsigned type = ((unsigned) msg[pos] << 8) | msg[pos + 1];
+            unsigned class = ((unsigned) msg[pos + 2] << 8) | msg[pos + 3];
+            unsigned rdlen = ((unsigned) msg[pos + 8] << 8) | msg[pos + 9];
+            size_t rdata = pos + 10;
+            pos = rdata + rdlen;
+            if (pos > len)
+                return count;
+            if (class != NLIBC_DNS_CLASS_IN || strcasecmp(owner, target) != 0)
+                continue;
+            if (type == NLIBC_DNS_TYPE_CNAME) {
+                if (next[0] == '\0') {
+                    size_t ignored = 0;
+                    if (!nlibc_dns_decode_name(msg, len, rdata, next, sizeof(next), &ignored))
+                        next[0] = '\0';
+                }
+            } else if ((int) type == qtype && rdlen == need && count < max) {
+                out[count].family = qtype == NLIBC_DNS_TYPE_AAAA ? AF_INET6 : AF_INET;
+                memset(out[count].raw, 0, sizeof(out[count].raw));
+                memcpy(out[count].raw, msg + rdata, need);
+                count++;
+            }
+        }
+        if (count > 0 || next[0] == '\0')
+            break;
+        snprintf(target, sizeof(target), "%s", next);
+    }
+    return count;
+}
+
+// Asks every configured server, `attempts` times round, until one answers.
+// Returns the number of addresses (0 means "the name is fine, it just has no
+// record of this type"), NLIBC_EAI_NONAME for an authoritative NXDOMAIN, or
+// NLIBC_EAI_AGAIN when nothing answered at all.
+static int nlibc_dns_query(const struct nlibc_resolv *rc, const char *name, int qtype,
+        struct nlibc_addr *out, int max) {
+    uint8_t query[512];
+    memset(query, 0, sizeof(query));
+    size_t name_len = nlibc_dns_encode_name(name, query + 12, sizeof(query) - 12 - 4);
+    if (name_len == 0)
+        return NLIBC_EAI_NONAME;
+    size_t qlen = 12 + name_len;
+    query[2] = 0x01;   // RD: ask the server to recurse
+    query[5] = 0x01;   // QDCOUNT = 1
+    query[qlen++] = (uint8_t) (qtype >> 8);
+    query[qlen++] = (uint8_t) (qtype & 0xff);
+    query[qlen++] = 0;
+    query[qlen++] = NLIBC_DNS_CLASS_IN;
+
+    for (int attempt = 0; attempt < rc->attempts; attempt++) {
+        for (int s = 0; s < rc->server_count; s++) {
+            // A fresh ID per exchange, so a late reply to the previous attempt
+            // cannot be mistaken for this one's.
+            uint16_t id = (uint16_t) arc4random();
+            query[0] = (uint8_t) (id >> 8);
+            query[1] = (uint8_t) (id & 0xff);
+
+            uint8_t reply[2048];
+            ssize_t n = nlibc_dns_exchange(&rc->servers[s], query, qlen,
+                    rc->timeout_ms, reply, sizeof(reply));
+            if (n < 12 || reply[0] != query[0] || reply[1] != query[1])
+                continue;
+            if ((reply[2] & 0x80) == 0)   // not a response
+                continue;
+            int rcode = reply[3] & 0x0f;
+            if (rcode == 3)               // NXDOMAIN: an answer, and it is "no"
+                return NLIBC_EAI_NONAME;
+            if (rcode != 0)               // SERVFAIL and friends: try the next
+                continue;
+            return nlibc_dns_answers(reply, (size_t) n, name, qtype, out, max);
+        }
+    }
+    return NLIBC_EAI_AGAIN;
+}
+
+// The name -> addresses path: resolv.conf, the search list, then A and AAAA.
+// Returns a count, or a negative NLIBC_EAI_*.
+static int nlibc_dns_lookup(const char *node, int family, struct nlibc_addr *out, int max) {
+    struct nlibc_resolv rc;
+    nlibc_read_resolv_conf(&rc);
+    if (rc.server_count == 0)
+        return NLIBC_EAI_NONAME;   // nothing configured to ask
+
+    size_t node_len = strlen(node);
+    if (node_len == 0 || node_len > 255)
+        return NLIBC_EAI_NONAME;
+    bool absolute = node[node_len - 1] == '.';
+    int dots = 0;
+    for (const char *p = node; *p != '\0'; p++)
+        if (*p == '.')
+            dots++;
+
+    // Candidate order, as a resolver does it: a name with at least `ndots`
+    // dots (or a trailing one) is tried as written first, a shorter one goes
+    // through the search list first.
+    char candidates[NLIBC_DNS_MAX_SEARCH + 1][320];
+    int n = 0;
+    bool bare_first = absolute || dots >= rc.ndots;
+    if (bare_first)
+        snprintf(candidates[n++], sizeof(candidates[0]), "%s", node);
+    if (!absolute)
+        for (int i = 0; i < rc.search_count && n < NLIBC_DNS_MAX_SEARCH + 1; i++)
+            snprintf(candidates[n++], sizeof(candidates[0]), "%s.%s", node, rc.search[i]);
+    if (!bare_first && n < NLIBC_DNS_MAX_SEARCH + 1)
+        snprintf(candidates[n++], sizeof(candidates[0]), "%s", node);
+
+    int last = NLIBC_EAI_NONAME;
+    for (int i = 0; i < n; i++) {
+        int count = 0;
+        bool nxdomain = false;
+        // A before AAAA: the list is handed back in this order and a caller
+        // walks it in order, so a guest without working IPv6 connects on the
+        // first address rather than after a timeout.
+        if (family == AF_UNSPEC || family == AF_INET) {
+            int got = nlibc_dns_query(&rc, candidates[i], NLIBC_DNS_TYPE_A, out, max);
+            // Two answers that make the rest of the work pointless: nothing
+            // answered (the AAAA would wait out the same timeouts twice over),
+            // and NXDOMAIN (the name does not exist for ANY type). Both are
+            // the difference between a bounded failure and a long one.
+            if (got == NLIBC_EAI_AGAIN)
+                return got;
+            if (got == NLIBC_EAI_NONAME)
+                nxdomain = true;
+            if (got < 0)
+                last = got;
+            else
+                count += got;
+        }
+        if (!nxdomain && (family == AF_UNSPEC || family == AF_INET6) && count < max) {
+            int got = nlibc_dns_query(&rc, candidates[i], NLIBC_DNS_TYPE_AAAA,
+                    out + count, max - count);
+            if (got == NLIBC_EAI_AGAIN && count == 0)
+                return got;
+            if (got < 0)
+                last = got;
+            else
+                count += got;
+        }
+        if (count > 0)
+            return count;
+    }
+    return last;
+}
+
 int nlibc_getaddrinfo(const char *node, const char *service,
         const struct addrinfo *hints, struct addrinfo **res) {
     if (res == NULL)
@@ -2391,54 +2876,94 @@ int nlibc_getaddrinfo(const char *node, const char *service,
     int socktype = hints != NULL && hints->ai_socktype != 0 ? hints->ai_socktype : SOCK_STREAM;
     int protocol = hints != NULL ? hints->ai_protocol : 0;
 
-    uint8_t raw[16];
-    int found_family = 0;
-    if (nlibc_parse_numeric(node, family, raw, &found_family) < 0) {
-        if (hints != NULL && (hints->ai_flags & AI_NUMERICHOST))
-            return NLIBC_EAI_NONAME;
-        if (nlibc_hosts_lookup(node, family, raw, &found_family) < 0)
-            return NLIBC_EAI_NONAME;
-    }
-
-    // Ports: a numeric service, or one named in the guest's /etc/services --
-    // which is not consulted, for the same reason DNS is not. Numeric covers
-    // what a program passes programmatically.
+    // The port first: a bad service is a cheaper "no" than a DNS round trip.
+    // Numeric, or a name from the GUEST's /etc/services through the walker at
+    // the end of this file -- the Mac's list would be a different answer for
+    // the same reason its resolver would be.
     unsigned port = 0;
     if (service != NULL && service[0] != '\0') {
         char *end = NULL;
         unsigned long parsed = strtoul(service, &end, 10);
-        if (end == NULL || *end != '\0' || parsed > 65535)
-            return NLIBC_EAI_NONAME;
-        port = (unsigned) parsed;
+        if (end != NULL && *end == '\0' && parsed <= 65535) {
+            port = (unsigned) parsed;
+        } else {
+            const char *want_proto = socktype == SOCK_DGRAM ? "udp" : "tcp";
+            int resolved = -1;
+            nlibc_setservent(1);
+            for (struct servent *se = nlibc_getservent(); se != NULL;
+                    se = nlibc_getservent()) {
+                if (se->s_name != NULL && strcmp(se->s_name, service) == 0 &&
+                        (se->s_proto == NULL || strcmp(se->s_proto, want_proto) == 0)) {
+                    resolved = ntohs((uint16_t) se->s_port);
+                    break;
+                }
+            }
+            nlibc_endservent();
+            if (resolved < 0)
+                return NLIBC_EAI_NONAME;
+            port = (unsigned) resolved;
+        }
     }
 
-    struct addrinfo *ai = calloc(1, sizeof(*ai));
-    if (ai == NULL)
-        return NLIBC_EAI_MEMORY;
-    if (found_family == AF_INET) {
-        struct sockaddr_in *sa = calloc(1, sizeof(*sa));
-        if (sa == NULL) { free(ai); return NLIBC_EAI_MEMORY; }
-        sa->sin_len = sizeof(*sa);
-        sa->sin_family = AF_INET;
-        sa->sin_port = htons((uint16_t) port);
-        memcpy(&sa->sin_addr, raw, sizeof(sa->sin_addr));
-        ai->ai_addr = (struct sockaddr *) sa;
-        ai->ai_addrlen = sizeof(*sa);
+    // Then the address. Three sources, in the order they take precedence: a
+    // numeric address, then the guest's /etc/hosts, then the guest's
+    // nameservers. /etc/hosts winning over DNS is the same rule every other
+    // resolver follows, and the reason an entry there is how a guest overrides
+    // a name.
+    struct nlibc_addr addrs[NLIBC_DNS_MAX_ADDRS];
+    memset(addrs, 0, sizeof(addrs));
+    int count;
+    if (nlibc_parse_numeric(node, family, addrs[0].raw, &addrs[0].family) == 0) {
+        count = 1;
+    } else if (hints != NULL && (hints->ai_flags & AI_NUMERICHOST)) {
+        return NLIBC_EAI_NONAME;
+    } else if (nlibc_hosts_lookup(node, family, addrs[0].raw, &addrs[0].family) == 0) {
+        count = 1;
     } else {
-        struct sockaddr_in6 *sa = calloc(1, sizeof(*sa));
-        if (sa == NULL) { free(ai); return NLIBC_EAI_MEMORY; }
-        sa->sin6_len = sizeof(*sa);
-        sa->sin6_family = AF_INET6;
-        sa->sin6_port = htons((uint16_t) port);
-        memcpy(&sa->sin6_addr, raw, sizeof(sa->sin6_addr));
-        ai->ai_addr = (struct sockaddr *) sa;
-        ai->ai_addrlen = sizeof(*sa);
+        count = nlibc_dns_lookup(node, family, addrs, NLIBC_DNS_MAX_ADDRS);
+        if (count < 0)
+            return count;
+        if (count == 0)
+            return NLIBC_EAI_NONAME;
     }
-    ai->ai_family = found_family;
-    ai->ai_socktype = socktype;
-    ai->ai_protocol = protocol;
-    *res = ai;
-    return 0;
+
+    // One addrinfo per address, chained -- the same shape the numeric case
+    // always produced, so nlibc_freeaddrinfo is unchanged and a caller that
+    // walks ai_next now has more than one thing to walk.
+    struct addrinfo *head = NULL, **tail = &head;
+    for (int i = 0; i < count; i++) {
+        struct addrinfo *ai = calloc(1, sizeof(*ai));
+        if (ai == NULL) {
+            nlibc_freeaddrinfo(head);
+            return NLIBC_EAI_MEMORY;
+        }
+        if (addrs[i].family == AF_INET) {
+            struct sockaddr_in *sa = calloc(1, sizeof(*sa));
+            if (sa == NULL) { free(ai); nlibc_freeaddrinfo(head); return NLIBC_EAI_MEMORY; }
+            sa->sin_len = sizeof(*sa);
+            sa->sin_family = AF_INET;
+            sa->sin_port = htons((uint16_t) port);
+            memcpy(&sa->sin_addr, addrs[i].raw, sizeof(sa->sin_addr));
+            ai->ai_addr = (struct sockaddr *) sa;
+            ai->ai_addrlen = sizeof(*sa);
+        } else {
+            struct sockaddr_in6 *sa = calloc(1, sizeof(*sa));
+            if (sa == NULL) { free(ai); nlibc_freeaddrinfo(head); return NLIBC_EAI_MEMORY; }
+            sa->sin6_len = sizeof(*sa);
+            sa->sin6_family = AF_INET6;
+            sa->sin6_port = htons((uint16_t) port);
+            memcpy(&sa->sin6_addr, addrs[i].raw, sizeof(sa->sin6_addr));
+            ai->ai_addr = (struct sockaddr *) sa;
+            ai->ai_addrlen = sizeof(*sa);
+        }
+        ai->ai_family = addrs[i].family;
+        ai->ai_socktype = socktype;
+        ai->ai_protocol = protocol;
+        *tail = ai;
+        tail = &ai->ai_next;
+    }
+    *res = head;
+    return head != NULL ? 0 : NLIBC_EAI_NONAME;
 }
 
 void nlibc_freeaddrinfo(struct addrinfo *res) {
@@ -2455,20 +2980,30 @@ const char *nlibc_gai_strerror(int code) {
     switch (code) {
         case 0:                return "no error";
         case NLIBC_EAI_NONAME: return "name or service not known";
+        case NLIBC_EAI_AGAIN:  return "temporary failure in name resolution";
         case NLIBC_EAI_MEMORY: return "memory allocation failure";
         default:               return "non-recoverable failure in name resolution";
     }
 }
 
-// The reverse direction is DNS too (PTR lookups), so the numeric form is all
-// there is until the resolver exists. NI_NAMEREQD asks for a name or nothing,
-// which is exactly what has to fail here.
+// The reverse direction is a PTR query, which the resolver above could serve
+// -- but nothing native asks for a name back: ssh prints and compares the
+// numeric form, and a wrong reverse name is worse than none. So this stays
+// numeric-only. NI_NAMEREQD asks for a name or nothing, which is exactly what
+// has to fail here.
+//
+// Either half may be asked for alone. ssh's get_sock_port() wants only the
+// port (host NULL, NI_NUMERICSERV) and treats a failure as fatal, so refusing
+// a NULL host -- which this did -- killed a connection that had already been
+// made.
 int nlibc_getnameinfo(const void *addr, socklen_t addrlen, char *host, socklen_t hostlen,
         char *serv, socklen_t servlen, int flags) {
     const struct sockaddr *sa = addr;
-    if (sa == NULL || host == NULL || hostlen == 0)
+    bool want_host = host != NULL && hostlen > 0;
+    bool want_serv = serv != NULL && servlen > 0;
+    if (sa == NULL || (!want_host && !want_serv))
         return NLIBC_EAI_FAIL;
-    if (flags & NI_NAMEREQD)
+    if (want_host && (flags & NI_NAMEREQD))
         return NLIBC_EAI_NONAME;
     const void *raw;
     unsigned port;
@@ -2481,24 +3016,46 @@ int nlibc_getnameinfo(const void *addr, socklen_t addrlen, char *host, socklen_t
     } else {
         return NLIBC_EAI_FAIL;
     }
-    if (inet_ntop(sa->sa_family, raw, host, hostlen) == NULL)
+    if (want_host && inet_ntop(sa->sa_family, raw, host, hostlen) == NULL)
         return NLIBC_EAI_FAIL;
-    if (serv != NULL && servlen > 0)
+    // The service name would come from the guest's /etc/services; numeric is
+    // what every caller here asks for (NI_NUMERICSERV) and what a port with no
+    // entry gets anyway.
+    if (want_serv)
         snprintf(serv, servlen, "%u", port);
     return 0;
 }
 
-// getifaddrs enumerates the HOST's interfaces -- en0, the Mac's addresses. The
-// guest's are in /proc/net/dev and behind SIOCGIFADDR, and building an ifaddrs
-// list from those is a piece of work with no caller yet: SmallCLUE only
-// reaches for this in one diagnostic path. Refusing is what keeps the Mac's
-// interfaces from being reported as the guest's.
+// getifaddrs enumerates the HOST's interfaces -- en0, the Mac's addresses --
+// and that is the RIGHT answer here, which is not obvious and was got wrong
+// once: this used to refuse with ENOSYS to keep the Mac's interfaces from
+// being reported as the guest's.
+//
+// But AOK has no interfaces of its own. It has no network stack: a guest
+// socket is a host socket (fs/sock.c), so the addresses a guest program can
+// bind to and the routes its packets take are the host's. The kernel already
+// says so out loud -- fs/proc/net.c builds /proc/net/dev, /proc/net/if_inet6
+// and /proc/net/route by calling this very function -- so `cat /proc/net/dev`
+// in the guest already lists en0 and awdl0. Refusing here did not hide the
+// host's interfaces; it only made the native `ipaddr` disagree with /proc.
+//
+// A straight passthrough is therefore the same data /proc/net/dev is built
+// from, reached the same way, and struct ifaddrs is the host's own layout on
+// both sides of the call since native code is compiled against these headers.
 int nlibc_getifaddrs(struct ifaddrs **ifap) {
-    if (ifap != NULL)
-        *ifap = NULL;
-    return nlibc_fail(_ENOSYS);
+    if (ifap == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    *ifap = NULL;
+    // The real one: this file is built with NATIVE_LIBC_NO_REDIRECT, so the
+    // name is not the macro that brought us here.
+    return getifaddrs(ifap);
 }
-void nlibc_freeifaddrs(struct ifaddrs *ifa) { (void) ifa; }
+void nlibc_freeifaddrs(struct ifaddrs *ifa) {
+    if (ifa != NULL)
+        freeifaddrs(ifa);
+}
 
 // ------------------------------------------------------------------- signals
 //

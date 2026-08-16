@@ -46,15 +46,21 @@ static int smallclue_not_built(const char *what) {
     return 127;
 }
 
-int smallclueMd5sumCommand(int argc, char **argv);
-int smallclueSha1sumCommand(int argc, char **argv);
-int smallclueSha256sumCommand(int argc, char **argv);
 int smallclueRunRsync(int argc, char **argv);
 int pscal_openrsync_main(int argc, char **argv);
 
 // The checksum applets live in checksum_app.c, which needs <openssl/evp.h>.
-// AOK links no OpenSSL (its crypto accelerator is self-contained), so these
-// are out until that changes.
+// AOK links no OpenSSL, so these used to be refusals -- but the dependency was
+// never really OpenSSL, it was a digest, and deps/smallclue-shim/openssl/evp.h
+// now serves that #include out of CommonCrypto. checksum_app.c is compiled
+// wherever that is possible, and only where it is not do the refusals below
+// exist. -DAOK_HAVE_CHECKSUMS comes from meson.build, from the same variable
+// that decides the archive, so exactly one of the two definitions is ever
+// linked.
+#ifndef AOK_HAVE_CHECKSUMS
+int smallclueMd5sumCommand(int argc, char **argv);
+int smallclueSha1sumCommand(int argc, char **argv);
+int smallclueSha256sumCommand(int argc, char **argv);
 int smallclueMd5sumCommand(int argc, char **argv) {
     (void) argc; (void) argv; return smallclue_not_built("md5sum");
 }
@@ -64,6 +70,7 @@ int smallclueSha1sumCommand(int argc, char **argv) {
 int smallclueSha256sumCommand(int argc, char **argv) {
     (void) argc; (void) argv; return smallclue_not_built("sha256sum");
 }
+#endif
 
 // The ssh family (ssh/scp/sftp/ssh-keygen/ssh-copy-id) is real now, from the
 // vendored OpenSSH tree; kernel/openssh_glue.c holds both its globals and the

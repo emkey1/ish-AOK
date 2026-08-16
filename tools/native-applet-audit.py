@@ -49,8 +49,11 @@ import textwrap
 # SmallCLUE asks for none of those: F_SETFD/F_GETFL/F_DUPFD/F_DUPFD_CLOEXEC and
 # TIOCGWINSZ/TIOCSWINSZ/TIOCSPGRP/TIOCSCTTY is the whole of what it uses.
 # Re-check that before assuming it still holds for a new native program.
+# getifaddrs came off this list when kernel/native_libc.c stopped refusing it:
+# AOK has no interfaces of its own, so the host's list IS the guest's, and the
+# kernel already builds /proc/net/dev from the same call.
 UNIMPLEMENTED = (
-    "fork", "glob", "getifaddrs",
+    "fork", "glob",
 )
 
 

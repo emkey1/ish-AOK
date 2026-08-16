@@ -65,6 +65,21 @@ PURE = {
     # network order on both sides.
     "inet_ntop", "inet_pton", "inet_ntoa", "inet_addr", "htons", "htonl",
     "ntohs", "ntohl",
+    # CommonCrypto's digest transforms, reached through
+    # deps/smallclue-shim/openssl/evp.h, which is how md5sum/sha1sum/sha256sum
+    # exist at all without AOK linking OpenSSL.
+    #
+    # These qualify on the same terms as memcpy: Init/Update/Final read and
+    # write a context struct and an input buffer the CALLER owns, and consult
+    # no descriptor, file, clock or device. The bytes they hash arrive through
+    # the redirected fread, so the file being digested is the guest's.
+    #
+    # Scoped to the digests deliberately. CommonCrypto as a whole is NOT pure
+    # -- CCRandomGenerateBytes draws on the host, and the keychain and cipher
+    # APIs hold state -- so this is a list of nine functions, not a category.
+    "CC_MD5_Init", "CC_MD5_Update", "CC_MD5_Final",
+    "CC_SHA1_Init", "CC_SHA1_Update", "CC_SHA1_Final",
+    "CC_SHA256_Init", "CC_SHA256_Update", "CC_SHA256_Final",
     # termios helpers that only edit a struct in memory. Not tcgetattr or
     # tcsetattr, which talk to a terminal and are redirected: these set or read
     # fields, and the redirected calls translate the result on its way to the

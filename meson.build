@@ -372,16 +372,29 @@ if get_option('kernel') == 'ish'
     #    that honest.
     #
     # Excluded feature groups, entry points stubbed in kernel/smallclue_glue.c:
-    # checksum_app needs OpenSSL (AOK links none) and integration.c is the
-    # WITH_EXSH path into PSCAL's VM.
+    # integration.c is the WITH_EXSH path into PSCAL's VM.
     # gzip_app and tar_app are excluded for a build-system reason rather than a
     # code one: they are the only files needing zlib, and the Xcode app targets
     # link the meson archives by name with no zlib anywhere in the project (no
     # libz.tbd, no OTHER_LDFLAGS). Re-enabling either means adding zlib to
     # those targets first -- worth doing, since tar is a real loss, but it is a
     # change to the app project rather than to this build.
-    smallclue_excluded = ['main.c', 'integration.c', 'checksum_app.c',
-                          'gzip_app.c', 'tar_app.c']
+    smallclue_excluded = ['main.c', 'integration.c', 'gzip_app.c', 'tar_app.c']
+
+    # checksum_app.c (md5sum/sha1sum/sha256sum) was on that list too, for the
+    # same shape of reason and with a better answer: it wants OpenSSL's EVP,
+    # SmallCLUE has OpenSSL because libgit2 and OpenSSH pull it in, and AOK
+    # links neither -- so three working commands were stubbed over one
+    # #include. deps/smallclue-shim/openssl/evp.h supplies that #include from
+    # CommonCrypto, which is in libSystem on macOS and iOS, so unlike zlib this
+    # needs nothing added to the Xcode project.
+    #
+    # Apple-only on purpose: elsewhere there is no CommonCrypto, and the honest
+    # stub is better than a build that fails at the include.
+    have_checksums = host_machine.system() in ['darwin', 'ios']
+    if not have_checksums
+        smallclue_excluded += 'checksum_app.c'
+    endif
 
     # --------------------------------------------------------------- openssh
     #
@@ -983,6 +996,15 @@ if get_option('kernel') == 'ish'
     ish_c_args = []
     if have_openssh
         ish_c_args += '-DAOK_HAVE_OPENSSH'
+    endif
+    # Same contract for the checksums: one `have_checksums` decides both
+    # whether checksum_app.c is in the archive and whether smallclue_glue.c
+    # defines the refusals, so the two cannot disagree. They must not both be
+    # present -- the linker takes the first archive member defining a symbol
+    # and stops, which is how `ssh -V` once printed "unavailable" out of a
+    # binary containing all of OpenSSH.
+    if have_checksums
+        ish_c_args += '-DAOK_HAVE_CHECKSUMS'
     endif
 
     libish = library('ish', src,
