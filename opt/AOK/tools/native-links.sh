@@ -146,11 +146,13 @@ probe_args() {
         # stderr. Harmless to the probe, which only looks for the stub's words,
         # but it leaked "ssh: illegal option -- r" onto the terminal of anyone
         # running this script.
-        # The ssh family has no version flag they all share: -V means a
-        # validity interval to ssh-keygen, nothing to sftp, and ssh-copy-id has
-        # none. No arguments at all -- each prints usage, and the stub ignores
-        # arguments anyway, which is the only thing the probe reads.
-        ssh|scp|sftp|ssh-keygen|ssh-copy-id) echo "" ;;
+        # The ssh family shares no version flag: -V is a validity interval to
+        # ssh-keygen, nothing to sftp, and ssh-copy-id has none. Bare usage is
+        # what the probe wants -- but NOT for ssh-keygen, which with no
+        # arguments starts GENERATING A KEY and blocks on a prompt. A probe must
+        # not have side effects; give it a read-only failure instead.
+        ssh|scp|sftp|ssh-copy-id) echo "" ;;
+        ssh-keygen) echo "-l -f /nonexistent-probe" ;;
         *) echo "--version" ;;
     esac
 }
