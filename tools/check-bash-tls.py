@@ -39,6 +39,14 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ARCHIVES = [os.path.join(REPO, "build", "libbash.a"),
                     os.path.join(REPO, "build", "libish.a")]
 
+# Archives of vendored native programs -- the ones where "mutable and shared
+# between threads" is a bug rather than a design choice, so the whole-class
+# question in shared_mutable() applies. Anything not listed here gets only the
+# mismatch checks.
+VENDORED_NATIVE = ("libbash.a", "libsmallclue.a", "libopenssh.a",
+                   "libopenssh_scp.a", "libopenssh_stubs.a",
+                   "libopenssh_smult_curve25519_ref.a")
+
 # In a relocatable object a tentative definition (`int x;` with no initialiser)
 # is printed as `(common)`, not `(__DATA,__common)` -- that is only its section
 # once linked. Missing it let `int cdable_vars;` in cd.def stay ordinary data
@@ -147,7 +155,10 @@ def main():
             # vendored native programs. smallclue is NOT in DEFAULT_ARCHIVES:
             # name it explicitly to gate it, which keeps the default run -- the
             # one wired into everyone's habits -- meaning exactly what it did.
-            if os.path.basename(archive) in ("libbash.a", "libsmallclue.a"):
+            # The openssh* ones are the ssh/scp/sftp/ssh-keygen family, split
+            # across archives only because two files need their own compiler
+            # flags; all of them are native programs with the same exposure.
+            if os.path.basename(archive) in VENDORED_NATIVE:
                 for name, objs in sorted(shared_mutable(tmp).items()):
                     bad.append(f"{name}: mutable and shared between shells, in "
                                f"{sorted(objs)[:2]} -- make it __thread, or add it "

@@ -15,6 +15,17 @@
 //     whichever transfer is actually running. Nobody defines them, so AOK
 //     does.
 //
+//     They are __thread for the same reason the rest of OpenSSH's mutable
+//     globals are: a native program is a function call on a guest task's
+//     thread, not a process, so one shared across every run outlives the run
+//     that set it. `interrupted` left at 1 by a ^C'd scp would abort the next
+//     scp of the app session before it started, and nothing resets it. Sharing
+//     between the three SOURCE FILES is what the patch wanted and is what this
+//     still gives -- they are one variable within a thread. The handler that
+//     sets `interrupted` runs on the program's own thread (kernel/native.c's
+//     native_checkpoint -> nlibc_deliver_signals), so per-thread is where it
+//     belongs.
+//
 //  2. The honest refusal when the tree is not there. meson.build passes
 //     -DAOK_HAVE_OPENSSH exactly when it built the vendored tree, so this
 //     file and libopenssh.a cannot disagree about whether ssh exists.
@@ -31,8 +42,8 @@
 
 #include <signal.h>
 
-volatile sig_atomic_t pscal_openssh_interrupted = 0;
-int pscal_openssh_showprogress = 1;
+__thread volatile sig_atomic_t pscal_openssh_interrupted = 0;
+__thread int pscal_openssh_showprogress = 1;
 
 #ifndef AOK_HAVE_OPENSSH
 

@@ -50,6 +50,13 @@ ALLOW = {
     # Read-only lookup tables that only lack `const` upstream.
     "default_prefixes", "default_suffixes",
     "posix_collsyms", "posix_collwcsyms",
+    # A clipboard is shared BY DEFINITION -- `pbcopy` in one shell then
+    # `pbpaste` in another. Per-task would give every applet its own empty one.
+    # Guarded by g_clipboard_lock in runtime_support.c, which concurrent applets
+    # made necessary rather than merely tidy.
+    "g_clipboard_data", "g_clipboard_init", "g_clipboard_len",
+    # The mutex guarding them. A per-thread lock guards nothing.
+    "g_clipboard_lock",
 
     # ---- smallclue (build/libsmallclue.a) ----
     # Its applets are native programs for the same reason bash is, so two live
@@ -68,6 +75,28 @@ ALLOW = {
     "s_nextvi_sessions", "s_nextvi_session_count", "s_nextvi_session_cap",
     "s_nextvi_sessions_lock",
 
+    # ---- OpenSSH (build/libopenssh*.a) ----
+    # ssh, scp, sftp and ssh-keygen are native programs too, so one run's
+    # file-statics were still there for the next one -- the reported bug was
+    # ssh-keygen's `identity_file` surviving from a root run into a user run.
+    #
+    # Read-only lookup tables that only lack `const` upstream. Nothing writes
+    # to any of these; each is a name/value table walked to translate a string.
+    "keywords",                    # readconf.c: config keyword -> OpCode
+    "log_facilities", "log_levels",  # log.c: name -> SyslogFacility/LogLevel
+    "cclasses",                    # openbsd-compat/charclass.h: [:alpha:] & co
+    "PADDING",                     # openbsd-compat/md5.c: the MD5 pad block
+    # sntrup761's constant-time primitives XOR/AND with these to stop the
+    # compiler proving a branch away; they are read on every operation and
+    # assigned never. Thread-local would put a TLS lookup in the inner loop of
+    # the key exchange to isolate a value that is always zero.
+    "crypto_int16_optblocker", "crypto_int32_optblocker",
+    "crypto_int64_optblocker",
+    # An upstream slip, not state: umac.c writes `} umac_ctx;` after the struct
+    # definition, defining an unused global instance of it. (umac128.c is the
+    # same file compiled with the names remapped, hence the second one.) No
+    # code reads or writes either.
+    "umac_ctx", "umac128_ctx",
 }
 
 # Undecided: the fixers leave these alone, and the gate KEEPS REPORTING them.
@@ -78,17 +107,22 @@ ALLOW = {
 # way -- the fixers would convert it, which is also a decision nobody made. So:
 # skipped by the fixers, still reported by the gate, until someone answers the
 # question written next to it.
-DEFER = {
-    # Written from a signal handler (deps/smallclue/src/core.c:6263). Whether
-    # __thread is even CORRECT depends on which thread a native program's
-    # signals are delivered on. If the handler does not run on the applet's own
-    # thread, making this thread-local breaks it rather than fixes it.
-    "g_pager_sigwinch_received",
-    # A clipboard is arguably a shared system resource, so sharing may well be
-    # right -- but it is unguarded, and concurrent applets turn that into a real
-    # race. Needs a decision between "share it with a lock" and "per-applet".
-    "g_clipboard_data", "g_clipboard_init", "g_clipboard_len",
-}
+    # Empty, and that is the point: an entry here is a question nobody has
+    # answered yet, not a parking space. Both original entries were closed
+    # rather than left to rot.
+    #
+    #   g_pager_sigwinch_received -- asked which thread a native program's
+    #     signal arrives on. Answer: its own. The shim records the handler and
+    #     calls it from native_checkpoint -> nlibc_deliver_signals on the thread
+    #     making the syscall, so __thread is correct rather than merely
+    #     harmless. Converted.
+    #   g_clipboard_* -- asked share-with-a-lock versus per-applet. Answer:
+    #     shared, obviously, since `pbcopy` in one shell and `pbpaste` in
+    #     another is what a clipboard IS; per-task would give each applet its
+    #     own empty one. Now guarded by a mutex, because Set() frees and
+    #     reallocates while a concurrent Get() may be copying -- a
+    #     use-after-free, not a stale read. Moved to ALLOW.
+DEFER = set()
 
 # What the fixers skip. The gate skips only ALLOW.
 SKIP = ALLOW | DEFER
@@ -128,6 +162,21 @@ def shared_externals(archive):
     return names
 
 
+# Archives whose sources are NOT at deps/<name>.
+#
+# OpenSSH is a submodule inside a submodule -- deps/smallclue/third-party/openssh
+# -- so the deps/<name> guess lands on nothing and falls through to deps/bash,
+# where every OpenSSH symbol is reported MISSED. meson also splits it across
+# several archives, because scp.c and smult_curve25519_ref.c each need a
+# compiler flag no other file may see (see openssh_special in meson.build), and
+# all of those share the one tree. libopenssh_stubs.a is the exception: it is
+# SmallCLUE's own glue file, deps/smallclue/src/openssh_stubs.c.
+OPENSSH = os.path.join(REPO, "deps", "smallclue", "third-party", "openssh")
+VENDOR_OVERRIDE = {
+    "openssh_stubs": os.path.join(REPO, "deps", "smallclue"),
+}
+
+
 def vendor_for(archive):
     """Which vendored tree an archive's sources live in.
 
@@ -137,15 +186,29 @@ def vendor_for(archive):
     """
     stem = os.path.basename(archive)
     if stem.startswith("lib") and stem.endswith(".a"):
-        cand = os.path.join(REPO, "deps", stem[3:-2])
+        name = stem[3:-2]
+        if name in VENDOR_OVERRIDE:
+            return VENDOR_OVERRIDE[name]
+        if name == "openssh" or name.startswith("openssh_"):
+            return OPENSSH
+        cand = os.path.join(REPO, "deps", name)
         if os.path.isdir(cand):
             return cand
     return VENDOR
 
 
+# Directories inside a vendored tree that are not compiled into the app.
+# OpenSSH's contrib/ and regress/ are excluded by the same names in
+# meson.build; patching them would put __thread on declarations no build ever
+# sees, which is pure churn in a submodule fork whose diff has to stay readable.
+UNBUILT = (os.sep + "contrib" + os.sep, os.sep + "regress" + os.sep)
+
+
 def sources(root=None):
     for root, _, files in os.walk(root or VENDOR):
         if os.sep + ".git" in root:
+            continue
+        if any(u in root + os.sep for u in UNBUILT):
             continue
         for f in files:
             if f.endswith(SRC):
@@ -161,7 +224,11 @@ def declares(line, name):
     `static int g PARAMS((int))` is a prototype, and putting __thread on either
     does not compile.
     """
-    if line.startswith(("#", "//", " ", "\t", "}", "*")) or "__thread" in line:
+    # A line opening a block comment is not a declaration, and OpenSSH writes
+    # plenty of them at column 0. `/* ... for a given host, but skip ... */`
+    # matched the declarator pattern on "host," and the file got
+    # `__thread /* print all known host keys ...` above a function.
+    if line.startswith(("#", "//", "/*", " ", "\t", "}", "*")) or "__thread" in line:
         return False
     m = re.search(r"\b" + re.escape(name) + r"\b\s*(\[[^\]]*\])*\s*[;=,]", line)
     if not m:

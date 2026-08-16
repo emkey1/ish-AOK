@@ -640,6 +640,27 @@ if get_option('kernel') == 'ish'
         # duplicate symbols
         'ssh-pkcs11.c', 'ssh-sk-client.c', 'cleanup.c', 'sftp-realpath.c',
         'dns.c',
+        # reaches the host, and cannot be redirected any other way.
+        #
+        # mktemp.c exists in this build only to define _ssh_mkstemp(), the
+        # umask-clamping wrapper that openbsd-compat.h's UNCONDITIONAL
+        # `#define mkstemp(x) _ssh_mkstemp(x)` points every caller at
+        # (everything else in the file is behind !HAVE_MKDTEMP, which Darwin
+        # has). That macro lands AFTER the force-included native_libc.h and
+        # overwrites its `#define mkstemp nlibc_mkstemp`, and then mktemp.c
+        # opens with `#ifdef mkstemp / #undef mkstemp / int mkstemp(char *);`
+        # -- deliberately undoing any redirection, including a -D on the
+        # command line. So the routed mkstemp was quietly bypassed and
+        # hostfile.c and ssh-keygen.c created their temp files on the DEVICE,
+        # with the host fd number then handed to the routed fchmod/write/close
+        # as if it were a guest descriptor.
+        #
+        # Dropping the file is what makes the redirection stick: nothing else
+        # defines _ssh_mkstemp, so native_libc.h's `#define _ssh_mkstemp
+        # nlibc_mkstemp` catches the rescan of openbsd-compat.h's macro and
+        # every call site lands on the guest's mkstemp -- which already applies
+        # the 0600 the wrapper's umask dance was for.
+        'mktemp.c',
     ]
     # Whole families, matched on the leading name: auth2-* and sandbox-* and
     # sshd* are server; monitor* is the privsep monitor (minus monitor_fdpass);

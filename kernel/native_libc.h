@@ -60,6 +60,8 @@
 #endif
 #include <poll.h>
 #include <signal.h>
+#include <syslog.h>
+#include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 #include <sys/select.h>
@@ -95,11 +97,17 @@ int nlibc_lstat(const char *path, struct stat *st);
 int nlibc_fstat(int fd, struct stat *st);
 ssize_t nlibc_readlink(const char *path, char *buf, size_t bufsize);
 char *nlibc_realpath(const char *path, char *resolved);
+int nlibc_fstatat(int dirfd, const char *path, struct stat *st, int flags);
+int nlibc_unlinkat(int dirfd, const char *path, int flags);
 
 /* --- directories -------------------------------------------------------- */
 DIR *nlibc_opendir(const char *path);
 struct dirent *nlibc_readdir(DIR *dir);
 int nlibc_closedir(DIR *dir);
+/* The descriptor behind a DIR. Ours, necessarily: nlibc_opendir hands back a
+ * private struct rather than a host DIR, so the host's dirfd() would read a
+ * field out of a layout that is not there. */
+int nlibc_dirfd(DIR *dir);
 
 /* --- mutation ----------------------------------------------------------- */
 int nlibc_unlink(const char *path);
@@ -156,11 +164,25 @@ pid_t nlibc_getppid(void);
 int nlibc_getgroups(int size, gid_t list[]);
 int nlibc_setuid(uid_t uid);
 int nlibc_setgid(gid_t gid);
+/* The EFFECTIVE half of the same family, over the guest's setresuid/setresgid.
+ * Not an afterthought: a native "child" is a host THREAD of this app, so a host
+ * seteuid that succeeded would move the whole app's credentials. */
+int nlibc_seteuid(uid_t uid);
+int nlibc_setegid(gid_t gid);
+int nlibc_setgroups(int size, const gid_t *list);
 int nlibc_initgroups(const char *user, gid_t group);
 struct passwd *nlibc_getpwuid(uid_t uid);
 struct passwd *nlibc_getpwnam(const char *name);
 struct group *nlibc_getgrgid(gid_t gid);
 struct group *nlibc_getgrnam(const char *name);
+int nlibc_getgrouplist(const char *name, int basegid, int *groups, int *ngroups);
+/* uid/gid -> name, from the GUEST's /etc/passwd and /etc/group. The pair
+ * getpwuid and getgrgid were already routed and these two were not, which is
+ * the whole-family failure this round of work keeps finding. */
+const char *nlibc_user_from_uid(uid_t uid, int nouser);
+const char *nlibc_group_from_gid(gid_t gid, int nogroup);
+/* Password hashing. A refusal, not an implementation -- see the .c. */
+char *nlibc_crypt(const char *key, const char *salt);
 
 /* Signals. A handler is host code, so it cannot be given to the kernel to jump
  * to; SIG_DFL/SIG_IGN reach the kernel and a real handler is held here and run
@@ -206,8 +228,17 @@ int nlibc_poll(void *fds, unsigned nfds, int timeout);
 int nlibc_select(int nfds, void *r, void *w, void *e, void *timeout);
 int nlibc_fork(void);
 int nlibc_execl(const char *path, const char *arg0, ...);
+/* execl's PATH-searching twin. execv, execvp, execl and execve were all routed
+ * and this one was not -- the single form that BOTH takes varargs and walks
+ * PATH, so left alone it resolved an SSH_ASKPASS name against the MAC's PATH
+ * and exec'd a device binary over the app. */
+int nlibc_execlp(const char *file, const char *arg0, ...);
 int nlibc_chroot(const char *path);
 int nlibc_kill(pid_t pid, int sig);
+/* raise() is kill(getpid()), and the guest's kill ends the TASK where the
+ * host's would end the app. Routed rather than tolerated the way abort() is:
+ * kill and signal are already here, so there is nothing to trade off. */
+int nlibc_raise(int sig);
 int nlibc_mknod(const char *path, mode_t mode, dev_t dev);
 int nlibc_mkstemp(char *template);
 int nlibc_utimes(const char *path, const struct timeval times[2]);
@@ -252,6 +283,7 @@ int nlibc_ioctl_tty(int fd, unsigned long request, void *arg);
  * with the same close/poll/select/dup as everything else a native program
  * holds. Every constant and every sockaddr is translated; see the .c. */
 int nlibc_socket(int domain, int type, int protocol);
+int nlibc_socketpair(int domain, int type, int protocol, int fds[2]);
 int nlibc_bind(int fd, const void *addr, socklen_t len);
 int nlibc_connect(int fd, const void *addr, socklen_t len);
 int nlibc_listen(int fd, int backlog);
@@ -265,8 +297,18 @@ ssize_t nlibc_recv(int fd, void *buf, size_t len, int flags);
 ssize_t nlibc_recvfrom(int fd, void *buf, size_t len, int flags,
         void *addr, socklen_t *addrlen);
 int nlibc_shutdown(int fd, int how);
+/* Scatter/gather with ancillary data -- which for OpenSSH means SCM_RIGHTS fd
+ * passing over the mux socket. Every fd inside the cmsg is a GUEST descriptor
+ * and the cmsghdr layout is the guest's, neither of which the host's sendmsg
+ * could have got right. */
+ssize_t nlibc_sendmsg(int fd, const struct msghdr *msg, int flags);
+ssize_t nlibc_recvmsg(int fd, struct msghdr *msg, int flags);
 int nlibc_setsockopt(int fd, int level, int option, const void *value, socklen_t len);
 int nlibc_getsockopt(int fd, int level, int option, void *value, socklen_t *len);
+/* The peer's credentials on a guest AF_UNIX socket, over the guest's
+ * SO_PEERCRED (fs/sock.c). The host's getpeereid answers about a host
+ * descriptor with the same number, i.e. about the iOS account. */
+int nlibc_getpeereid(int fd, uid_t *euid, gid_t *egid);
 
 /* Resolution, from the guest's files rather than the Mac's. */
 int nlibc_getaddrinfo(const char *node, const char *service,
@@ -289,6 +331,11 @@ int nlibc_grantpt(int fd);
 int nlibc_unlockpt(int fd);
 char *nlibc_ptsname(int fd);
 char *nlibc_ttyname(int fd);
+/* The whole dance in one call, which is what OpenSSH's sshpty.c asks for. Left
+ * to the host it would allocate a DEVICE pty and hand back host descriptors. */
+struct winsize;
+int nlibc_openpty(int *amaster, int *aslave, char *name,
+        struct termios *termp, struct winsize *winp);
 
 /* Odds and ends that answered about the host: its /tmp, its CPU count, its
  * page size, its resource usage. */
@@ -362,6 +409,10 @@ struct passwd *nlibc_getpwent(void);
 void nlibc_setservent(int stayopen);
 void nlibc_endservent(void);
 struct servent *nlibc_getservent(void);
+/* The LOOKUPS over that same guest database. ssh calls default_ssh_port() on
+ * essentially every run, and it is getservbyname("ssh", "tcp"). */
+struct servent *nlibc_getservbyname(const char *name, const char *proto);
+struct servent *nlibc_getservbyport(int port, const char *proto);
 void nlibc_setgrent(void);
 void nlibc_endgrent(void);
 struct group *nlibc_getgrent(void);
@@ -411,6 +462,22 @@ int nlibc_posix_spawnp(pid_t *pid, const char *file,
         const void **fa, const void **attr,
         char *const argv[], char *const envp[]);
 
+/* Logging. The device's log is not the guest's: openlog/syslog land in os_log
+ * or ASL on iOS and in the Mac's syslog on the CLI, where the guest has its own
+ * /dev/log that AOK already serves (fs/sock.c). openlog also sets a
+ * PROCESS-WIDE identity on the host, so one guest task running ssh would rename
+ * the log identity of the whole app. */
+void nlibc_openlog(const char *ident, int option, int facility);
+void nlibc_syslog(int priority, const char *fmt, ...)
+        __attribute__((format(printf, 2, 3)));
+void nlibc_vsyslog(int priority, const char *fmt, va_list ap);
+void nlibc_closelog(void);
+
+/* mmap is the one entry here that must give two DIFFERENT answers in the same
+ * build, so it is a wrapper rather than a rename -- see the .c. */
+void *nlibc_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset);
+int nlibc_munmap(void *addr, size_t len);
+
 void *nlibc_dlopen(const char *path, int mode);
 void *nlibc_dlsym(void *handle, const char *symbol);
 int nlibc_dlclose(void *handle);
@@ -440,10 +507,19 @@ const char *nlibc_dlerror(void);
 #define fstat       nlibc_fstat
 #define readlink    nlibc_readlink
 #define realpath    nlibc_realpath
+/* Object-like, unlike stat above: `fstatat` is only a function name, and
+ * OpenSSH's openbsd-compat/bsd-misc.h declares it with UNNAMED parameters --
+ * `int fstatat(int, const char *, struct stat *, int);` -- which a
+ * function-like macro would try to expand as a call and mangle into implicit
+ * ints. Prototypes are the reason to prefer the object-like form wherever the
+ * name is not also a struct tag. */
+#define fstatat     nlibc_fstatat
+#define unlinkat    nlibc_unlinkat
 
 #define opendir     nlibc_opendir
 #define readdir     nlibc_readdir
 #define closedir    nlibc_closedir
+#define dirfd       nlibc_dirfd
 
 #define unlink      nlibc_unlink
 #define rmdir       nlibc_rmdir
@@ -492,10 +568,24 @@ const char *nlibc_dlerror(void);
 #define select      nlibc_select
 #define fork        nlibc_fork
 #define execl       nlibc_execl
+#define execlp      nlibc_execlp
 #define chroot      nlibc_chroot
 #define kill        nlibc_kill
+#define raise       nlibc_raise
 #define mknod       nlibc_mknod
 #define mkstemp     nlibc_mkstemp
+/* OpenSSH's openbsd-compat/openbsd-compat.h carries an UNCONDITIONAL
+ * `#define mkstemp(x) _ssh_mkstemp(x)`, which is included after this header and
+ * simply overwrites the line above -- so every ssh call site expanded to a
+ * name that was NOT routed, and openbsd-compat/mktemp.c then opened with
+ * `#ifdef mkstemp / #undef mkstemp` to make sure its own call reached the host.
+ * The rewrite below catches the rescan: mkstemp(x) -> _ssh_mkstemp(x) ->
+ * nlibc_mkstemp(x). mktemp.c is dropped from the build in meson.build so
+ * nothing defines the host-reaching wrapper; see the note there.
+ *
+ * There is no HAVE_* guard on that macro, so config.h could not have been the
+ * lever, and a -D could not either -- the #undef would have removed it. */
+#define _ssh_mkstemp nlibc_mkstemp
 #define utimes      nlibc_utimes
 #define futimes     nlibc_futimes
 /* Function-like, as with stat above: `statfs` names both a function and a
@@ -534,6 +624,9 @@ const char *nlibc_dlerror(void);
 #define getgroups                nlibc_getgroups
 #define setuid                   nlibc_setuid
 #define setgid                   nlibc_setgid
+#define seteuid                  nlibc_seteuid
+#define setegid                  nlibc_setegid
+#define setgroups                nlibc_setgroups
 #define initgroups               nlibc_initgroups
 /* `environ` is a variable, not a call, and it has to stay per-task -- so the
  * rewrite makes it one. SmallCLUE's own `extern char **environ;` becomes a
@@ -541,6 +634,7 @@ const char *nlibc_dlerror(void);
  * it, which is what keeps two concurrently-running native programs from
  * sharing one environment. */
 #define socket                   nlibc_socket
+#define socketpair               nlibc_socketpair
 #define bind                     nlibc_bind
 #define connect                  nlibc_connect
 #define listen                   nlibc_listen
@@ -552,8 +646,11 @@ const char *nlibc_dlerror(void);
 #define recv                     nlibc_recv
 #define recvfrom                 nlibc_recvfrom
 #define shutdown                 nlibc_shutdown
+#define sendmsg                  nlibc_sendmsg
+#define recvmsg                  nlibc_recvmsg
 #define setsockopt               nlibc_setsockopt
 #define getsockopt               nlibc_getsockopt
+#define getpeereid               nlibc_getpeereid
 #define getaddrinfo              nlibc_getaddrinfo
 #define freeaddrinfo             nlibc_freeaddrinfo
 #define gai_strerror             nlibc_gai_strerror
@@ -568,6 +665,7 @@ const char *nlibc_dlerror(void);
 #define unlockpt                 nlibc_unlockpt
 #define ptsname                  nlibc_ptsname
 #define ttyname                  nlibc_ttyname
+#define openpty                  nlibc_openpty
 #define tmpfile                  nlibc_tmpfile
 #ifndef NATIVE_LIBC_OWN_GLOB
 #define globfree                 nlibc_globfree
@@ -597,6 +695,10 @@ const char *nlibc_dlerror(void);
 #define getpwnam                 nlibc_getpwnam
 #define getgrgid                 nlibc_getgrgid
 #define getgrnam                 nlibc_getgrnam
+#define getgrouplist             nlibc_getgrouplist
+#define user_from_uid            nlibc_user_from_uid
+#define group_from_gid           nlibc_group_from_gid
+#define crypt                    nlibc_crypt
 
 /* --- the rest of the kernel surface ------------------------------------- */
 #define fchmod                   nlibc_fchmod
@@ -641,6 +743,8 @@ const char *nlibc_dlerror(void);
 #define setservent               nlibc_setservent
 #define endservent               nlibc_endservent
 #define getservent               nlibc_getservent
+#define getservbyname            nlibc_getservbyname
+#define getservbyport            nlibc_getservbyport
 #define setgrent                 nlibc_setgrent
 #define endgrent                 nlibc_endgrent
 #define getgrent                 nlibc_getgrent
@@ -661,6 +765,14 @@ const char *nlibc_dlerror(void);
 #define posix_spawnattr_setsigmask       nlibc_posix_spawnattr_setsigmask
 #define posix_spawn                      nlibc_posix_spawn
 #define posix_spawnp                     nlibc_posix_spawnp
+
+#define openlog                  nlibc_openlog
+#define syslog                   nlibc_syslog
+#define vsyslog                  nlibc_vsyslog
+#define closelog                 nlibc_closelog
+
+#define mmap                     nlibc_mmap
+#define munmap                   nlibc_munmap
 
 #define dlopen                   nlibc_dlopen
 #define dlsym                    nlibc_dlsym

@@ -112,8 +112,18 @@ def in_parens(window, name):
     does have a static called `delim` as well. Patching the function put
     `static __thread void` on a function definition, which does not compile.
     Counting the parens is the whole distinction: a declarator is at depth 0.
+
+    The occurrence has to be found the same way the caller found it -- on a word
+    boundary. A plain .index() lands on the first SUBSTRING, and OpenSSH's
+    `set_next_interval(..., struct timespec *next_interval, ...)` contains the
+    static `next_interval` inside the function's own name, at depth 0. The
+    guard passed, the function got `static __thread void`, and the build
+    stopped on "'__thread' is only allowed on variable declarations".
     """
-    head = window[:window.index(name)]
+    m = re.search(r"\b" + re.escape(name) + r"\b", window)
+    if m is None:
+        return False
+    head = window[:m.start()]
     return head.count("(") > head.count(")")
 
 

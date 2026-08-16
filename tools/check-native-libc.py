@@ -53,6 +53,38 @@ PURE = {
     "sin", "cos", "tan", "atan", "atan2", "exp", "log", "log2", "log10", "pow",
     "sqrt", "fmod", "floor", "ceil", "round", "trunc", "fabs", "ldexp", "frexp",
     "rand", "rand_r", "srand", "random", "arc4random", "arc4random_uniform",
+    # arc4random_buf, and the reasoning written out because this one is a
+    # JUDGEMENT rather than a fact -- the shape fileno had.
+    #
+    # It qualifies on the test that matters: it fills the caller's buffer with
+    # CSPRNG output, reads no guest-visible state, and reports nothing about the
+    # host. The bytes are indistinguishable from any other source's, so no
+    # answer here can "differ between host and guest" in a way a guest could
+    # observe. It also belongs to a family: arc4random and arc4random_uniform
+    # are already here, and routing one of three would leave the same binary
+    # drawing from two pools for no gain.
+    #
+    # The counter-argument as first written was wrong on its facts and is
+    # corrected here rather than quietly dropped. It claimed the routed
+    # getentropy meant OpenSSH already drew from two pools. The routing is real
+    # and the consequence is not: openbsd-compat/bsd-getentropy.c defines
+    # _ssh_compat_getentropy, NOTHING references it across any archive, and
+    # arc4random.c/arc4random_uniform.c compile to empty objects. So there is
+    # exactly ONE pool here, the host's, and the routed getentropy is
+    # compiled-in dead code. That strengthens this entry rather than weakening
+    # it -- there is no split to be inconsistent about. Left as written below is
+    # the part that still stands: what draws on it, and when to revisit.
+    # (Historical: getentropy IS routed
+    # (native_libc.h -> NATIVE_SYS_getrandom), which would mean two
+    # pools, and everything security-bearing comes from the host's -- session
+    # keys, packet padding, private-key shielding, new key material, mux
+    # cookies, known_hosts hashing. entropy.c's seed_rng() in this
+    # without-OpenSSL build is nothing but an arc4random_buf priming call.
+    # Cryptographically the host's is the stronger and non-failing choice, and
+    # guest getrandom can fail where arc4random_buf has no way to say so. The
+    # reason to revisit would be a guest with a deliberately controlled RNG -- a
+    # seeded rootfs for reproducible tests -- which this silently bypasses.
+    "arc4random_buf",
     # ctype
     "isalnum", "isalpha", "isascii", "isblank", "iscntrl", "isdigit", "isgraph",
     "islower", "isprint", "ispunct", "isspace", "isupper", "isxdigit",
@@ -151,6 +183,31 @@ PURE = {
     # Discards a FILE's buffered data. Every FILE a native program holds is one
     # the shim built over a guest fd, so this reaches no further than fflush.
     "fpurge", "__fpurge",
+    # OpenBSD's string and memory helpers, which OpenSSH brings with it. Each
+    # one transforms a buffer the caller already owns and consults no
+    # descriptor, path, clock or identity -- the same standing memcpy and
+    # memcmp have above.
+    #
+    #  - memset_s writes a byte into the caller's buffer behind an optimization
+    #    barrier. (config.h leaves HAVE_EXPLICIT_BZERO undefined and defines
+    #    HAVE_MEMSET_S, so this is what explicit_bzero.c compiles to.)
+    #  - timingsafe_bcmp compares two caller-owned buffers in constant time.
+    #  - strtonum parses text to a long long with a range check, on strings the
+    #    caller already holds -- strtol and strtoll are here for the same
+    #    reason.
+    #  - strmode formats a mode_t as "-rw-r--r--". The only host/guest question
+    #    is whether the S_IF* encoding differs, and it does not: Darwin and
+    #    Linux agree from S_IFIFO 010000 through S_IFSOCK 0140000, and Darwin's
+    #    one extra (S_IFWHT) is a value the guest never produces. The mode
+    #    sftp-common.c formats arrives over the SFTP wire, POSIX-numbered on
+    #    both sides.
+    "memset_s", "timingsafe_bcmp", "strtonum",
+    # strmode was here, justified on the grounds that the guest never produces
+    # Darwin's extra S_IFWHT. That guard was void -- sftp-common.c takes st_mode
+    # off the SFTP WIRE and formats it, so the producer is the remote peer, and
+    # Darwin's strmode differs from openbsd's on 4096 of 65536 modes. It is
+    # compiled from openbsd-compat now (HAVE_STRMODE undefined) and so is no
+    # longer a host symbol at all.
     # abort() raises SIGABRT on the calling thread. It ends the app rather than
     # the task, which is wrong, but it is a crash either way and not a way to
     # observe or change the host -- routing it would be an improvement, not a

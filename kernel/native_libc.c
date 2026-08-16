@@ -2865,6 +2865,11 @@ ssize_t nlibc_recvmsg(int fd_no, struct msghdr *msg, int flags) {
         if (got_controllen > 0) {
             uint8_t cbuf[512];
             size_t take = got_controllen < sizeof(cbuf) ? got_controllen : sizeof(cbuf);
+            // More ancillary data than this staging buffer holds is truncation,
+            // and the caller has to be told so -- a parcel quietly dropped is
+            // descriptors quietly lost.
+            if (take < got_controllen)
+                msg->msg_flags |= MSG_CTRUNC;
             if (native_scratch_get(cbuf, guest_control, take) < 0)
                 return nlibc_fail(_EFAULT);
             size_t hdr = nlibc_cmsg_hdr_size(w64);
@@ -5626,8 +5631,13 @@ static __thread int nlibc_log_option;
 static __thread int nlibc_log_fd = -1;
 
 void nlibc_openlog(const char *ident, int option, int facility) {
-    snprintf(nlibc_log_ident, sizeof(nlibc_log_ident), "%s",
-             ident != NULL ? ident : "");
+    // Not `ident != NULL ? ident : ""` straight into snprintf: nlibc_vsyslog
+    // below re-opens a dropped connection by calling this with the stored
+    // ident, and a snprintf whose source and destination are the same buffer
+    // is undefined.
+    if (ident != nlibc_log_ident)
+        snprintf(nlibc_log_ident, sizeof(nlibc_log_ident), "%s",
+                 ident != NULL ? ident : "");
     nlibc_log_option = option;
     if (facility != 0)
         nlibc_log_facility = facility;
