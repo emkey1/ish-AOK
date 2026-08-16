@@ -447,12 +447,12 @@ the first thing to reach for when one misbehaves.
   parent's own and work.
 - **`bind` is shared between live shells** — see the TLS section below for why,
   and for what is no longer shared.
-- **A subshell is an emulated bash**, for the address-space reason in section 1.
-  The interpretation the parent does — where a script's time actually goes —
-  stays native.
-- **`$$` in a subshell is the child's pid**, where bash keeps the parent's. The
-  child is a stock `/bin/bash` with no hook available and `$$` is not
-  assignable, so this one is structural. `$BASHPID` is right either way.
+- **`BASH_SUBSHELL` is 0 in a subshell**, where bash counts the nesting. A
+  re-launched child is a fresh top-level shell and has nothing to count from;
+  the state script cannot carry it, because `BASH_SUBSHELL` is readonly and the
+  child sets its own.
+- **`PPID` in a subshell is the parent shell**, where bash keeps the
+  grandparent — same reason, and the same readonly obstacle.
 - **`trap -p` inside a child under-reports**: bash lists the strings of traps
   that are not armed there, and reproducing that would mean setting a trap and
   disarming it, which an early-exiting child never reaches.
@@ -536,3 +536,47 @@ rejects the bad ones rather than corrupting a header, which is why the drift is
 survivable — but it is also why it silently skipped 129 statics. The `nm`-driven
 tools have nothing to drift and should be trusted over it. Run the gate after
 any of them.
+
+## Native subshells, and what they actually cost (2026-08-16)
+
+With bash's globals thread-local, the premise that forced a re-launched child to
+be the guest's emulated `/bin/bash` no longer holds: a live parent and a live
+child no longer collide. `AOK_SUBSHELL_BASH` is `/AOK/native/bash` now. That
+fixes `$$`, which was previously listed here as structural — the child computed
+its own pid, so the universal `file-$$` idiom silently disagreed across the
+boundary and `mkfifo /tmp/f-$$; cmd > /tmp/f-$$ &` deadlocked on a FIFO nobody
+would ever open. bash's own `tests/source6.sub` is the case that found it.
+
+**The performance result is not the one that was predicted, and the difference
+is worth recording.** Measured on one build, in the same guest:
+
+| | native | emulated | |
+|---|---|---|---|
+| arithmetic loop, 20k | 87 ms | 1438 ms | **16.5x faster** |
+| 30 command substitutions | 294 ms | 100 ms | 2.9x *slower* |
+| 30 subshells | 275 ms | 82 ms | 3.4x *slower* |
+| 30 bare shell starts | 84 ms | 335 ms | 4x faster |
+
+So the change made the re-launch path about **4x cheaper** — ~11.2 ms per
+subshell start became ~2.8 ms — and subshells roughly twice as fast as they
+were. It did **not** make them faster than the emulated shell, which forks
+through AOK's `sys_clone`: native C that was never emulated, at ~2.7 ms against
+a re-launch's ~9.2 ms all in.
+
+This was predicted by section 0 and then talked past anyway. The proposal
+claimed native subshells would be "19–20x faster", by extrapolating the
+*interpretation* speedup onto the *re-launch* path — two entirely different
+mechanisms. The rule that falls out: **the win is interpretation, the loss is
+forking.** A script whose time goes into expansion and arithmetic gets much
+faster; a script that spawns a subshell per loop iteration gets slower. Which
+one a real workload looks like is still the open question section 0 asked, and
+still the thing to measure before claiming an end-to-end number.
+
+Two divergences are *new* with this change, both verified against the emulated
+shell rather than assumed:
+
+- **`BASH_SUBSHELL` stays 0** at every nesting depth, where bash counts 0/1/2.
+  A re-launched child is a fresh top-level shell with nothing to count from, and
+  the variable is readonly so the state script cannot carry it.
+- **`PPID` in a subshell is the parent shell**, where bash keeps the
+  grandparent — same readonly obstacle.

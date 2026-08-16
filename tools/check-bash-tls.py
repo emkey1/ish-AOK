@@ -135,10 +135,19 @@ def main():
     bad = []
     for archive in archives:
         with tempfile.TemporaryDirectory() as tmp:
-            subprocess.run(["ar", "x", archive], cwd=tmp, capture_output=True)
+            # Absolute, because `ar x` runs with cwd=tmp. A relative archive
+            # path extracts nothing, and a gate that examined no objects prints
+            # "clean" -- the exact failure this whole file exists to prevent.
+            subprocess.run(["ar", "x", os.path.abspath(archive)], cwd=tmp,
+                           capture_output=True)
             tls_defs, data_defs, tls_refs, data_refs = classify(tmp)
 
-            if os.path.basename(archive) == "libbash.a":
+            # libish.a is AOK's own kernel, whose globals are process-wide by
+            # design, so the whole-class question only makes sense for the
+            # vendored native programs. smallclue is NOT in DEFAULT_ARCHIVES:
+            # name it explicitly to gate it, which keeps the default run -- the
+            # one wired into everyone's habits -- meaning exactly what it did.
+            if os.path.basename(archive) in ("libbash.a", "libsmallclue.a"):
                 for name, objs in sorted(shared_mutable(tmp).items()):
                     bad.append(f"{name}: mutable and shared between shells, in "
                                f"{sorted(objs)[:2]} -- make it __thread, or add it "

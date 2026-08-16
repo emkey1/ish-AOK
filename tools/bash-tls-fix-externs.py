@@ -50,7 +50,48 @@ ALLOW = {
     # Read-only lookup tables that only lack `const` upstream.
     "default_prefixes", "default_suffixes",
     "posix_collsyms", "posix_collwcsyms",
+
+    # ---- smallclue (build/libsmallclue.a) ----
+    # Its applets are native programs for the same reason bash is, so two live
+    # ones share every global. The surface is far smaller: 36 mutable symbols
+    # against bash's ~1500, and 24 already thread-local.
+    #
+    # Read-only tables that only lack `const`, same class as the bash ones above.
+    "kAwkBuiltins", "kSmallclueAppletCount",
+    "markdownLooksLikeNewsMetaLine.months", "smallclueBaudLabel.unknown",
+    "smallclueDfFormatSize.suffixes", "smallclueDnsRcodeName.rcodeNames",
+    "smallclueTouchParseDashD.formats",
+    # nextvi's session registry is shared ON PURPOSE and carries its own lock
+    # (s_nextvi_sessions_lock). Making it per-thread would give every task its
+    # own empty registry and quietly defeat session sharing, which is the point
+    # of it.
+    "s_nextvi_sessions", "s_nextvi_session_count", "s_nextvi_session_cap",
+    "s_nextvi_sessions_lock",
+
 }
+
+# Undecided: the fixers leave these alone, and the gate KEEPS REPORTING them.
+#
+# This is a third state on purpose. ALLOW means "shared, and that is right";
+# putting an open question in there would record a decision nobody made, and the
+# gate would go quiet on it. Leaving it out of ALLOW entirely is worse the other
+# way -- the fixers would convert it, which is also a decision nobody made. So:
+# skipped by the fixers, still reported by the gate, until someone answers the
+# question written next to it.
+DEFER = {
+    # Written from a signal handler (deps/smallclue/src/core.c:6263). Whether
+    # __thread is even CORRECT depends on which thread a native program's
+    # signals are delivered on. If the handler does not run on the applet's own
+    # thread, making this thread-local breaks it rather than fixes it.
+    "g_pager_sigwinch_received",
+    # A clipboard is arguably a shared system resource, so sharing may well be
+    # right -- but it is unguarded, and concurrent applets turn that into a real
+    # race. Needs a decision between "share it with a lock" and "per-applet".
+    "g_clipboard_data", "g_clipboard_init", "g_clipboard_len",
+}
+
+# What the fixers skip. The gate skips only ALLOW.
+SKIP = ALLOW | DEFER
 
 SRC = (".c", ".h", ".def", ".y")
 
@@ -58,7 +99,11 @@ SRC = (".c", ".h", ".def", ".y")
 def shared_externals(archive):
     names = set()
     with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run(["ar", "x", archive], cwd=tmp, capture_output=True)
+        # Absolute: `ar x` runs with cwd=tmp, so a relative archive path
+        # resolves against the temp directory, finds nothing, and -- because the
+        # output is captured -- reports "nothing shared" instead of failing.
+        subprocess.run(["ar", "x", os.path.abspath(archive)], cwd=tmp,
+                       capture_output=True)
         for entry in sorted(os.listdir(tmp)):
             if not entry.endswith(".o"):
                 continue
@@ -78,13 +123,28 @@ def shared_externals(archive):
                 if "$tlv$" in sym or not sym.startswith("_"):
                     continue
                 name = sym[1:]
-                if name not in ALLOW:
+                if name not in SKIP:
                     names.add(name)
     return names
 
 
-def sources():
-    for root, _, files in os.walk(VENDOR):
+def vendor_for(archive):
+    """Which vendored tree an archive's sources live in.
+
+    libbash.a -> deps/bash, libsmallclue.a -> deps/smallclue. Walking the wrong
+    one finds no declarations and reports every symbol as MISSED, which looks
+    like a parsing bug rather than the wrong root.
+    """
+    stem = os.path.basename(archive)
+    if stem.startswith("lib") and stem.endswith(".a"):
+        cand = os.path.join(REPO, "deps", stem[3:-2])
+        if os.path.isdir(cand):
+            return cand
+    return VENDOR
+
+
+def sources(root=None):
+    for root, _, files in os.walk(root or VENDOR):
         if os.sep + ".git" in root:
             continue
         for f in files:
@@ -123,7 +183,7 @@ def main():
           f"{' '.join(sorted(names))}", file=sys.stderr)
 
     hits, changed = {n: 0 for n in names}, 0
-    for path in sources():
+    for path in sources(vendor_for(archive)):
         with open(path, encoding="utf-8", errors="surrogateescape") as fh:
             lines = fh.read().split("\n")
         touched = False

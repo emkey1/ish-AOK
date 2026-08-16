@@ -37,7 +37,7 @@ VENDOR = os.path.join(REPO, "deps", "bash")
 # tilde.c initialises a global with its address.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from importlib import import_module
-SHARED = import_module("bash-tls-fix-externs").ALLOW
+SHARED = import_module("bash-tls-fix-externs").SKIP
 
 
 def source_for(obj):
@@ -51,17 +51,21 @@ def source_for(obj):
     name = obj[:-2] if obj.endswith(".o") else obj
     m = re.match(r"meson-generated_\.\._(.+)\.c$", name)
     if m:
-        cand = os.path.join(VENDOR, "builtins", m.group(1) + ".def")
+        cand = os.path.join(REPO, "deps", "bash", "builtins", m.group(1) + ".def")
         return cand if os.path.exists(cand) else None
-    if not name.startswith("deps_bash_"):
+    # Any vendored tree, not just bash. smallclue has the same problem for the
+    # same reason -- its applets are native programs too, so two live ones share
+    # every global -- and its objects are named deps_smallclue_src_awk_interp.c.o
+    # in exactly the same scheme.
+    if not name.startswith("deps_"):
         return None
-    # Underscores in the object name stand for path separators, but bash has
-    # source files with underscores in them too, so guessing wrong is possible.
-    # Try every split rather than assuming.
-    rest = name[len("deps_bash_"):]
-    parts = rest.split("_")
+    # Underscores in the object name stand for path separators, but there are
+    # source files with underscores in them too (awk_interp.c, runtime_support.c),
+    # so guessing where the path stops and the filename starts is not safe.
+    # Try every split and let the filesystem decide.
+    parts = name[len("deps_"):].split("_")
     for i in range(len(parts), 0, -1):
-        cand = os.path.join(VENDOR, *parts[:i - 1], "_".join(parts[i - 1:]))
+        cand = os.path.join(REPO, "deps", *parts[:i - 1], "_".join(parts[i - 1:]))
         if os.path.exists(cand):
             return cand
     return None
@@ -71,7 +75,11 @@ def statics(archive):
     """{source path: {symbol names}} for every still-shared mutable static."""
     out = {}
     with tempfile.TemporaryDirectory() as tmp:
-        subprocess.run(["ar", "x", archive], cwd=tmp, capture_output=True)
+        # Absolute: `ar x` runs with cwd=tmp, so a relative archive path
+        # resolves against the temp directory, finds nothing, and -- because the
+        # output is captured -- reports "nothing shared" instead of failing.
+        subprocess.run(["ar", "x", os.path.abspath(archive)], cwd=tmp,
+                       capture_output=True)
         for entry in sorted(os.listdir(tmp)):
             if not entry.endswith(".o"):
                 continue
