@@ -428,3 +428,9 @@ without the third, ^Z did nothing at all.
 - **A subshell is an emulated bash**, for the address-space reason in section 1.
   The interpretation the parent does — where a script's time actually goes —
   stays native.
+- **`$$` in a subshell is the child's pid**, where bash keeps the parent's. The
+  child is a stock `/bin/bash` with no hook available and `$$` is not
+  assignable, so this one is structural. `$BASHPID` is right either way.
+- **`trap -p` inside a child under-reports**: bash lists the strings of traps
+  that are not armed there, and reproducing that would mean setting a trap and
+  disarming it, which an early-exiting child never reaches.
