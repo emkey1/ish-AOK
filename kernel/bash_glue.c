@@ -15,6 +15,7 @@
 // native_env_vector() and the native_* helpers, and read every host-libc name
 // here twice.
 
+#include <errno.h>
 #include <stdbool.h>
 
 #include "kernel/calls.h"
@@ -110,9 +111,17 @@ static void native_bash_release(void) {
 int native_bash_main(int argc, char *const argv[], char *const envp[]) {
     (void) envp;   // bash reads the environment through getenv, which is routed
     if (!native_bash_claim()) {
+        // Say so in the kernel log as well as trying to run it. A shell that
+        // hands over is invisible from the outside -- the user sees a working
+        // but slower bash, or, if this fails, a session that ends before it
+        // prints anything -- and neither tells anyone why. printk reaches the
+        // app's own log, which is the only channel a login shell over ssh has
+        // not already lost.
+        printk("native bash: another is live (pid %d); handing this one to %s\n",
+               bash_owner_pid, AOK_GUEST_BASH);
         nlibc_execv(AOK_GUEST_BASH, argv);
-        // Only reached if the guest has no bash at all, which is worth saying
-        // out loud rather than failing as a shell that does nothing.
+        printk("native bash: %s did not start (errno %d); this shell exits 127\n",
+               AOK_GUEST_BASH, errno);
         nlibc_perror(AOK_GUEST_BASH);
         return 127;
     }
@@ -146,5 +155,9 @@ int native_bash_main(int argc, char *const argv[], char *const envp[]) {
     int status = bash_main_entry(argc, (char **) argv, native_env_vector());
     nlibc_flush_std();
     native_bash_release();
+    // Only reached when bash RETURNS rather than exiting, which is unusual
+    // enough to be worth a line -- and the interesting case is a shell that
+    // came back immediately without having done anything.
+    printk("native bash: returned %d\n", status);
     return status;
 }
