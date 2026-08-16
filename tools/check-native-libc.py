@@ -186,8 +186,16 @@ def _symbols(path, args):
 # gets a new archive, and the failure this avoids is checking half the native
 # code and reading "clean" -- which is exactly what splitting Nextvi out of
 # libsmallclue.a to give it its own -D made possible.
+# The ssh family is a native program like the rest, and was missing here while
+# it was being built -- so nothing checked it. It cost a real bug: config.h said
+# HAVE_READPASSPHRASE, so OpenSSH called the HOST's readpassphrase(), which
+# opens the Mac's /dev/tty rather than the guest's. ssh never prompted, sent an
+# empty password, and reported "Too many authentication failures". A gate that
+# does not look at an archive cannot report anything about it.
 DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a",
-                   "build/libbash.a")
+                   "build/libbash.a", "build/libopenssh.a",
+                   "build/libopenssh_scp.a", "build/libopenssh_stubs.a",
+                   "build/libopenssh_smult_curve25519_ref.a")
 
 
 # The libc names kernel/native_libc.h already rewrites. Read from the header
