@@ -1521,18 +1521,12 @@ static NSURL *AOKPersistDirectoryURL(void) {
             URLByAppendingPathComponent:@"persist" isDirectory:YES];
 }
 
-// Sibling of AOKPersistDirectoryURL -- a real, writable, host-backed
-// directory mounted at /AOK/roots the same way /AOK/persist is mounted,
-// purely so other installed roots can be exposed as real (mkdir'd)
-// subdirectories under it. Distinct from AOK/persist/roots, which is the
-// cached-archive-download directory (see Roots.h).
-static NSURL *AOKRootsExposureDirectoryURL(void) {
-    NSURL *containerURL = ContainerURL();
-    if (containerURL == nil)
-        return nil;
-    return [[containerURL URLByAppendingPathComponent:@"AOK" isDirectory:YES]
-            URLByAppendingPathComponent:@"roots" isDirectory:YES];
-}
+// The sibling of AOKPersistDirectoryURL -- a real, writable, host-backed
+// directory mounted at /AOK/roots the same way /AOK/persist is mounted, purely
+// so other installed roots can be exposed as real (mkdir'd) subdirectories
+// under it -- is ISHRootsExposureDirectoryURL() in AppGroup.m, because Roots.m
+// needs it too (renaming a root moves its mount point). Distinct from
+// AOK/persist/roots, which is the cached-archive-download directory (Roots.h).
 
 // Sibling of AOKPersistDirectoryURL, but a fakefs (data/ dir + meta.db SQLite
 // metadata, same on-disk layout as an installed root) instead of a realfs
@@ -2339,6 +2333,10 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                  @"Open Filesystems and choose or import a root filesystem.",
                                  @{@"rootCount": @(Roots.instance.roots.count)});
     }
+    // From here on this root is /, whatever the user later sets the default to.
+    // Roots consults this before letting a rename or delete touch a root's
+    // backing store; see -[Roots bootedRoot].
+    Roots.instance.bootedRoot = defaultRoot;
     NSError *rootLockError = nil;
     int rootLockFd = ISHAppGroupAcquireNamedLock(@"root", defaultRoot, YES, &rootLockError);
     if (rootLockFd < 0) {
@@ -2614,13 +2612,11 @@ static TerminalViewController *CreateTerminalViewController(void) {
     // queue -- these mounts just appear at /AOK/roots a moment after launch
     // instead of being guaranteed present before boot() returns.
     //
-    // Best-effort: a root whose lock is already held (the FileProvider
-    // extension is mid-operation on it) is silently skipped rather than
-    // blocking, and each root's lock is released immediately after its own
-    // mount attempt -- it only needs to guard that root's mount setup, not
-    // the whole guest runtime (matching how the booted root's own lock,
-    // released in the @finally below, works the same way).
-    NSURL *aokRootsURL = AOKRootsExposureDirectoryURL();
+    // The per-root work is -[Roots exposeRootNamed:], not open code here, so a
+    // root that appears at /AOK/roots later in the session -- which is what
+    // renaming one now does -- is mounted by the same code, with the same
+    // validity checks, locking and display source, as one present at launch.
+    NSURL *aokRootsURL = ISHRootsExposureDirectoryURL();
     if (aokRootsURL != nil) {
         // Recreate fresh each boot so a root renamed/deleted since the last
         // boot doesn't leave a stale, unmountable directory behind.
@@ -2674,49 +2670,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
             } else {
                 NSOrderedSet<NSString *> *otherRootNames = Roots.instance.roots;
                 ISHDispatchBootWork(@"boot.secondary-mounts", ^{
-                    for (NSString *otherRootName in otherRootNames) {
-                        if ([otherRootName isEqualToString:defaultRoot])
-                            continue;
-                        NSURL *otherRoot = [Roots.instance rootUrl:otherRootName];
-                        NSURL *otherRootData = [otherRoot URLByAppendingPathComponent:@"data" isDirectory:YES];
-                        NSURL *otherRootMetadata = [otherRoot URLByAppendingPathComponent:@"meta.db" isDirectory:NO];
-                        BOOL otherIsDirectory = NO;
-                        if (![NSFileManager.defaultManager fileExistsAtPath:otherRootData.path isDirectory:&otherIsDirectory] || !otherIsDirectory)
-                            continue;
-                        otherIsDirectory = NO;
-                        if (![NSFileManager.defaultManager fileExistsAtPath:otherRootMetadata.path isDirectory:&otherIsDirectory] || otherIsDirectory)
-                            continue;
-                        NSURL *mountPointURL = [aokRootsURL URLByAppendingPathComponent:otherRootName isDirectory:YES];
-                        if (![NSFileManager.defaultManager createDirectoryAtURL:mountPointURL
-                                                     withIntermediateDirectories:YES
-                                                                      attributes:nil
-                                                                           error:nil])
-                            continue;
-                        int otherLockFd = ISHAppGroupTryAcquireNamedLock(@"root", otherRootName, YES, nil);
-                        if (otherLockFd < 0) {
-                            [ISHDiagnosticsStore recordLaunchStage:@"boot.root.secondary.busy"
-                                                           details:@{@"root": otherRootName}];
-                            continue;
-                        }
-                        NSString *mountPoint = [@"/AOK/roots/" stringByAppendingString:otherRootName];
-                        int secondaryErr = do_mount(&fakefs, otherRootData.fileSystemRepresentation, mountPoint.UTF8String, "", 0);
-                        ISHAppGroupReleaseLock(otherLockFd);
-                        if (secondaryErr < 0) {
-                            NSLog(@"Could not mount secondary root %@ at %@: %d", otherRootName, mountPoint, secondaryErr);
-                            continue;
-                        }
-                        // Report the root's name rather than its backing path,
-                        // for the same reason 88496575 does it for / : the
-                        // source here is an app group container path whose
-                        // only variable part is a UUID the guest can do
-                        // nothing with, and it is long enough to wrap every
-                        // df row onto a second line. With several roots
-                        // installed that is most of the table. Display only --
-                        // mount->source still opens the SQLite db.
-                        mount_set_display_source(mountPoint.UTF8String, otherRootName.UTF8String);
-                        [ISHDiagnosticsStore recordLaunchStage:@"boot.root.secondary.mounted"
-                                                       details:@{@"root": otherRootName, @"path": mountPoint}];
-                    }
+                    // exposeRootNamed: skips the booted root itself.
+                    for (NSString *otherRootName in otherRootNames)
+                        [Roots.instance exposeRootNamed:otherRootName];
                 });
             }
         } else {
@@ -2761,7 +2717,10 @@ static TerminalViewController *CreateTerminalViewController(void) {
                 }
             }
             NSURL *fakefsDataURL = [sharedFakefsURL URLByAppendingPathComponent:@"data" isDirectory:YES];
-            int fakefsMountErr = do_mount(&fakefs, fakefsDataURL.fileSystemRepresentation, "/AOK/fakefs", "", 0);
+            // mount_attach, not do_mount: this runs on a background queue while
+            // the guest is already up, and do_mount's caller is the one that
+            // has to hold mounts_lock (kernel/fs.h).
+            int fakefsMountErr = mount_attach(&fakefs, fakefsDataURL.fileSystemRepresentation, "/AOK/fakefs", "", 0);
             ISHAppGroupReleaseLock(fakefsLockFd);
             if (fakefsMountErr >= 0)
                 mount_set_display_source("/AOK/fakefs", "fakefs");

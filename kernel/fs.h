@@ -221,6 +221,13 @@ int do_umount(const char *point);
 int mount_remove(struct mount *mount);
 extern struct list mounts;
 
+// do_mount/do_umount for callers outside fs/ -- the app, which attaches and
+// detaches the /AOK/roots/<name> exposure mounts from its own threads while
+// the guest is running. These take mounts_lock and post the mount-table
+// change themselves, so call them WITHOUT the lock held. See fs/mount.c.
+int mount_attach(const struct fs_ops *fs, const char *source, const char *point, const char *info, int flags);
+int mount_detach(const char *point);
+
 bool mount_param_flag(const char *info, const char *flag);
 
 // open flags

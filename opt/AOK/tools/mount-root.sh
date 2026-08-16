@@ -15,6 +15,11 @@
 # read-write at /AOK/roots/<name> at boot; this script just wires up the
 # bind mounts a chroot needs on top of that.
 #
+# The path follows the name: renaming a root (Filesystems, or manage-roots.sh
+# rename) moves its /AOK/roots entry to the new name in the same step, and
+# refuses outright while anything is still inside it -- so tear down or exit a
+# chroot before renaming, and re-run this script under the new name after.
+#
 # Usage:
 #   mount-root.sh <name>              set up mounts, then chroot in (shell)
 #   mount-root.sh <name> -- CMD...    set up mounts, then chroot in and run CMD

@@ -143,6 +143,14 @@ NSURL *ContainerURL(void) {
     return [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:appGroup];
 }
 
+NSURL *ISHRootsExposureDirectoryURL(void) {
+    NSURL *containerURL = ContainerURL();
+    if (containerURL == nil)
+        return nil;
+    return [[containerURL URLByAppendingPathComponent:@"AOK" isDirectory:YES]
+            URLByAppendingPathComponent:@"roots" isDirectory:YES];
+}
+
 static NSString *ISHAppGroupLockSafeComponent(NSString *value) {
     if (value.length == 0)
         return @"default";

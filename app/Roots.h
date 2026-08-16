@@ -24,6 +24,12 @@ FOUNDATION_EXPORT NSNotificationName const RootsDidFinishInitialSelectionNotific
 
 @property (readonly) NSOrderedSet<NSString *> *roots;
 @property NSString *defaultRoot;
+// The root actually mounted as / this session, recorded by the app when it
+// boots; nil until then. NOT interchangeable with defaultRoot, which is a
+// preference the user can change at any time and that only takes effect at the
+// next launch -- renaming or deleting the running root because it no longer
+// matches defaultRoot would move / out from under the live guest.
+@property (nullable) NSString *bootedRoot;
 @property (readonly) BOOL wantsVersionFile;
 @property (readonly) BOOL needsInitialRootSelection;
 @property (readonly) BOOL initialBundledRootImportInProgress;
@@ -45,6 +51,10 @@ FOUNDATION_EXPORT NSNotificationName const RootsDidFinishInitialSelectionNotific
 - (BOOL)exportRootNamed:(NSString *)name toArchive:(NSURL *)archive error:(NSError **)error progressReporter:(id<ProgressReporter> _Nullable)progress;
 - (BOOL)destroyRootNamed:(NSString *)name error:(NSError **)error;
 - (BOOL)renameRoot:(NSString *)name toName:(NSString *)newName error:(NSError **)error;
+// Mount an installed root read-write at /AOK/roots/<name> for the guest. Boot
+// calls this for every root other than the one it booted; rename calls it again
+// under the new name. Returns whether the root ended up mounted.
+- (BOOL)exposeRootNamed:(NSString *)name;
 
 @end
 

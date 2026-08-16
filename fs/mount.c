@@ -357,6 +357,35 @@ int do_umount(const char *point) {
     return mount_remove(mount);
 }
 
+// Mount and unmount for callers outside fs/, where do_mount/do_umount's
+// "caller holds mounts_lock" contract is easy to miss. The app is exactly such
+// a caller: it attaches every installed root at /AOK/roots/<name> and detaches
+// one again when that root is renamed or deleted, from its own threads, while
+// guest CPU threads are walking this same list on every path lookup. Doing
+// that unlocked means list_add_before/list_remove -- and mount_remove's free()
+// -- running against a list somebody else is mid-traversal of.
+//
+// These take the lock and post the mount-table change, so a caller outside
+// this file never has to know about either. Same shape as mount_snapshot and
+// mount_exists_at_point: call them WITHOUT mounts_lock held.
+int mount_attach(const struct fs_ops *fs, const char *source, const char *point, const char *info, int flags) {
+    lock(&mounts_lock, 0);
+    int err = do_mount(fs, source, point, info, flags);
+    unlock(&mounts_lock);
+    if (err >= 0)
+        proc_mountinfo_notify_changed();
+    return err;
+}
+
+int mount_detach(const char *point) {
+    lock(&mounts_lock, 0);
+    int err = do_umount(point);
+    unlock(&mounts_lock);
+    if (err >= 0)
+        proc_mountinfo_notify_changed();
+    return err;
+}
+
 // Checks whether `flag` appears as a whole comma-separated token in `info`
 // (a mount option string like "rw,noexec,relatime"), not just as a substring.
 bool mount_param_flag(const char *info, const char *flag) {

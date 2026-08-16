@@ -241,6 +241,26 @@ static NSURL *DownloadedBundledArchiveURL(NSDictionary<NSString *, NSString *> *
     return [dir URLByAppendingPathComponent:[archiveName stringByAppendingString:@".tar.xz"]];
 }
 
+// The guest path an installed root other than the booted one is exposed at.
+// One spelling, because unmounting the old name and mounting the new one have
+// to agree with each other and with what boot produced. (Only the iSH kernel
+// has /AOK/roots; the iSH+Linux build has no mounts to name.)
+#if !ISH_LINUX
+static NSString *ExposedRootPoint(NSString *name) {
+    return [@"/AOK/roots/" stringByAppendingString:name];
+}
+#endif
+
+// "It wasn't there" is a fine outcome for something we are removing, not a
+// failure worth logging. (AppDelegate.m has its own copy for the same reason;
+// it is four lines and neither file is the natural home for the other's.)
+static BOOL RootsIsFileNotFoundError(NSError *error) {
+    if (error == nil)
+        return YES;
+    return [error.domain isEqualToString:NSCocoaErrorDomain] &&
+           (error.code == NSFileNoSuchFileError || error.code == NSFileReadNoSuchFileError);
+}
+
 static NSURL *RootMetadataURL(NSURL *rootURL) {
     return [rootURL URLByAppendingPathComponent:kRootMetadataFileName];
 }
@@ -980,14 +1000,26 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
         return NO;
     }
 
-    void (^addRoot)(void) = ^{
-        [[self mutableOrderedSetValueForKey:@"roots"] addObject:name];
+    [self mutateRoots:^(NSMutableOrderedSet<NSString *> *roots) {
+        [roots addObject:name];
+    }];
+    return YES;
+}
+
+// Every change to the installed set goes through here. The Filesystems screen
+// and the file-provider domain sync observe "roots" through KVO and expect
+// their callbacks on the main thread, but installs, renames and deletes all
+// run on a background queue (and, via /proc/ish/roots, on the guest's own
+// thread). Synchronous so the caller can read self.roots back immediately
+// afterwards, which install does to work out what the root ended up named.
+- (void)mutateRoots:(void (^)(NSMutableOrderedSet<NSString *> *roots))mutate {
+    void (^apply)(void) = ^{
+        mutate([self mutableOrderedSetValueForKey:@"roots"]);
     };
     if (!NSThread.isMainThread)
-        dispatch_sync(dispatch_get_main_queue(), addRoot);
+        dispatch_sync(dispatch_get_main_queue(), apply);
     else
-        addRoot();
-    return YES;
+        apply();
 }
 
 - (BOOL)exportRootNamed:(NSString *)name toArchive:(NSURL *)archive error:(NSError **)error progressReporter:(id<ProgressReporter> _Nullable)progress {
@@ -1018,21 +1050,28 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
 // directory out from under a still-mounted (or actively chrooted-into) fake
 // filesystem would corrupt or orphan it, so tear those mounts down first.
 //
+// The guard here used to be `#if ISH_LINUX`, which is backwards: /AOK/roots
+// only exists in the iSH kernel (-boot's whole body is `#if !ISH_LINUX`, and
+// do_umount is that kernel's, not liblinux's). So in every shipping build this
+// method was compiled down to `return YES` -- no unmount, and no busy check at
+// all. A rename then moved a live fakefs's data/ and meta.db out from under it
+// while a chroot was still running on them, and a delete removed them outright.
+//
 // Returns NO with *error set only if the root is genuinely busy (something
 // still has an open fd/cwd/root inside it, e.g. an active chroot session --
-// do_umount reports this as EBUSY). Any other do_umount outcome (most
-// commonly EINVAL: this root was never touched via mount-root.sh, so there's
-// nothing mounted at all) is harmless and silently ignored -- do_umount is
-// safe to call unconditionally on a path that isn't currently mounted.
+// mount_detach reports this as EBUSY). Any other outcome (most commonly
+// EINVAL: this root was never touched via mount-root.sh, so there's nothing
+// mounted at all) is harmless and silently ignored -- mount_detach is safe to
+// call unconditionally on a path that isn't currently mounted.
 - (BOOL)unmountExposedRootNamed:(NSString *)name error:(NSError **)error {
-#if ISH_LINUX
-    NSString *base = [@"/AOK/roots/" stringByAppendingString:name];
+#if !ISH_LINUX
+    NSString *base = ExposedRootPoint(name);
     NSArray<NSString *> *binds = @[@"AOK/tools", @"run", @"dev/pts", @"dev", @"sys", @"proc"];
     for (NSString *bind in binds)
-        do_umount([base stringByAppendingPathComponent:bind].UTF8String);
+        mount_detach([base stringByAppendingPathComponent:bind].UTF8String);
 
-    if (do_umount(base.UTF8String) == _EBUSY) {
-        if (error != nil) {
+    if (mount_detach(base.UTF8String) == _EBUSY) {
+        if (error != NULL) {
             *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey:
                 @"This filesystem is currently mounted or in use (e.g. via mount-root.sh) -- exit any active session into it first"}];
         }
@@ -1042,46 +1081,195 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
     return YES;
 }
 
-- (BOOL)destroyRootNamed:(NSString *)name error:(NSError **)error {
-    if ([name isEqualToString:self.defaultRoot]) {
-        *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey: @"Cannot delete the default filesystem"}];
+// Mount an installed root read-write at /AOK/roots/<name>, exactly as boot
+// does -- boot's per-root loop is now this method, so a root that appears
+// after a rename is indistinguishable from one that was there at launch.
+// Returns whether it ended up mounted; a root that can't be exposed (its
+// backing store is gone, another process holds its lock, the mount itself
+// fails) is a diagnosable non-event, not an error the caller must handle.
+//
+// Boot defers this to a background queue because fakefs's mount can run a
+// migration/rebuild pass over the whole tree and iOS's launch watchdog was
+// killing the app; the rename path calls it inline instead, because there the
+// root was mounted moments earlier (so no migration is pending) and the guest
+// must see the new name before the caller reports the rename as done.
+- (BOOL)exposeRootNamed:(NSString *)name {
+#if !ISH_LINUX
+    // The booted root is already /, and /AOK/roots is deliberately "every
+    // OTHER root": mounting it a second time would give the same fakefs two
+    // live SQLite connections in one process.
+    if (name.length == 0 || [name isEqualToString:self.bootedRoot])
+        return NO;
+    NSURL *exposureDir = ISHRootsExposureDirectoryURL();
+    if (exposureDir == nil)
+        return NO;
+
+    NSURL *rootURL = [self rootUrl:name];
+    NSURL *dataURL = [rootURL URLByAppendingPathComponent:@"data" isDirectory:YES];
+    NSURL *metadataURL = [rootURL URLByAppendingPathComponent:@"meta.db" isDirectory:NO];
+    BOOL isDirectory = NO;
+    if (![NSFileManager.defaultManager fileExistsAtPath:dataURL.path isDirectory:&isDirectory] || !isDirectory)
+        return NO;
+    isDirectory = NO;
+    if (![NSFileManager.defaultManager fileExistsAtPath:metadataURL.path isDirectory:&isDirectory] || isDirectory)
+        return NO;
+
+    NSURL *mountPointURL = [exposureDir URLByAppendingPathComponent:name isDirectory:YES];
+    if (![NSFileManager.defaultManager createDirectoryAtURL:mountPointURL
+                                 withIntermediateDirectories:YES
+                                                  attributes:nil
+                                                       error:nil])
+        return NO;
+
+    // Best-effort: a root whose lock is already held (the FileProvider
+    // extension is mid-operation on it) is skipped rather than blocking, and
+    // the lock is released as soon as this root's own mount is set up -- it
+    // only needs to guard that, not the whole guest runtime.
+    int lockFd = ISHAppGroupTryAcquireNamedLock(@"root", name, YES, nil);
+    if (lockFd < 0) {
+        [ISHDiagnosticsStore recordLaunchStage:@"boot.root.secondary.busy"
+                                       details:@{@"root": name}];
         return NO;
     }
-    NSAssert([self.roots containsObject:name], @"root does not exist: %@", name);
+    NSString *mountPoint = ExposedRootPoint(name);
+    int err = mount_attach(&fakefs, dataURL.fileSystemRepresentation, mountPoint.UTF8String, "", 0);
+    ISHAppGroupReleaseLock(lockFd);
+    if (err < 0) {
+        NSLog(@"Could not mount secondary root %@ at %@: %d", name, mountPoint, err);
+        return NO;
+    }
+    // Report the root's name rather than its backing path, for the same reason
+    // 88496575 does it for / : the source here is an app group container path
+    // whose only variable part is a UUID the guest can do nothing with, and it
+    // is long enough to wrap every df row onto a second line. With several
+    // roots installed that is most of the table. Display only -- mount->source
+    // still opens the SQLite db.
+    mount_set_display_source(mountPoint.UTF8String, name.UTF8String);
+    [ISHDiagnosticsStore recordLaunchStage:@"boot.root.secondary.mounted"
+                                   details:@{@"root": name, @"path": mountPoint}];
+    return YES;
+#else
+    return NO;
+#endif
+}
+
+// The mkdir'd directory the mount above sits on. Once that mount is gone the
+// directory is a stale, empty entry that `ls /AOK/roots` cannot tell apart
+// from a real root -- the exact leftovers boot's prune pass exists to sweep up
+// (see AppDelegate). Renaming or deleting a root is where they are created, so
+// it is also where they should be removed, rather than leaving a phantom under
+// the old name until the next launch.
+- (void)removeExposedMountPointForRootNamed:(NSString *)name {
+    NSURL *exposureDir = ISHRootsExposureDirectoryURL();
+    if (exposureDir == nil || name.length == 0)
+        return;
+    NSURL *mountPointURL = [exposureDir URLByAppendingPathComponent:name isDirectory:YES];
+    NSError *error = nil;
+    if (![NSFileManager.defaultManager removeItemAtURL:mountPointURL error:&error] &&
+            !RootsIsFileNotFoundError(error)) {
+        NSLog(@"Could not remove stale root mount point %@: %@", name, error);
+    }
+}
+
+// Renaming or deleting the root that is CURRENTLY BOOTED is not the same
+// question as renaming the default root, and checking only the latter was a
+// hole: defaultRoot is a plain user default that takes effect at the next
+// launch, so choosing a different one and then acting on the running root
+// walked straight past the guard and moved (or deleted) / out from under the
+// live guest.
+- (BOOL)rejectIfBootedOrDefault:(NSString *)name verb:(NSString *)verb error:(NSError **)error {
+    NSString *reason = nil;
+    if ([name isEqualToString:self.bootedRoot])
+        reason = [NSString stringWithFormat:@"Cannot %@ the filesystem this session is booted from", verb];
+    else if ([name isEqualToString:self.defaultRoot])
+        reason = [NSString stringWithFormat:@"Cannot %@ the default filesystem", verb];
+    if (reason == nil)
+        return NO;
+    if (error != NULL)
+        *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey: reason}];
+    return YES;
+}
+
+// A name the caller believes is installed but isn't. Reachable from a stale
+// Filesystems screen and from /proc/ish/roots (the guest can write a command
+// naming anything), so it has to be an error rather than the NSAssert that
+// used to stand here -- the app is built with assertions enabled.
+static BOOL RootIsInstalled(Roots *roots, NSString *name, NSError **error) {
+    if ([roots.roots containsObject:name])
+        return YES;
+    if (error != NULL) {
+        *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey:
+            [NSString stringWithFormat:@"There is no filesystem named %@", name ?: @""]}];
+    }
+    return NO;
+}
+
+- (BOOL)destroyRootNamed:(NSString *)name error:(NSError **)error {
+    if ([self rejectIfBootedOrDefault:name verb:@"delete" error:error])
+        return NO;
+    if (!RootIsInstalled(self, name, error))
+        return NO;
     if (![self unmountExposedRootNamed:name error:error])
         return NO;
-    if (![NSFileManager.defaultManager removeItemAtURL:[self rootUrl:name] error:error])
+    if (![NSFileManager.defaultManager removeItemAtURL:[self rootUrl:name] error:error]) {
+        // The store is still there, so put the guest's view of it back rather
+        // than leaving a root that is installed but no longer reachable.
+        [self exposeRootNamed:name];
         return NO;
-    [[self mutableOrderedSetValueForKey:@"roots"] removeObject:name];
+    }
+    [self removeExposedMountPointForRootNamed:name];
+    [self mutateRoots:^(NSMutableOrderedSet<NSString *> *roots) {
+        [roots removeObject:name];
+    }];
     return YES;
 }
 
 - (BOOL)renameRoot:(NSString *)name toName:(NSString *)newName error:(NSError **)error {
     if (name.length == 0) {
-        *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey: @"Filesystem name can't be empty"}];
+        if (error != NULL)
+            *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey: @"Filesystem name can't be empty"}];
         return NO;
     }
-    if ([name containsString:@"/"]) {
-        *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey: @"Filesystem name can't contain /"}];
+    if ([self rejectIfBootedOrDefault:name verb:@"rename" error:error])
         return NO;
-    }
-    if ([name isEqualToString:@"."] || [name isEqualToString:@".."]) {
-        *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey: @"Filesystem name can't be . or .."}];
-        return NO;
-    }
-    if ([name isEqualToString:self.defaultRoot]) {
-        *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey: @"Cannot rename the default filesystem"}];
-        return NO;
-    }
     if (!RootNameIsValid(newName, error))
         return NO;
-    NSAssert([self.roots containsObject:name], @"root does not exist: %@", name);
+    // Tapping out of the name field without changing anything fires the same
+    // action as a real rename. That used to unmount the root and then fail the
+    // move ("file exists"), leaving a working filesystem detached from the
+    // guest with an "I couldn't rename it" alert on top.
+    if ([newName isEqualToString:name])
+        return YES;
+    if (!RootIsInstalled(self, name, error))
+        return NO;
+    if ([self.roots containsObject:newName]) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey:
+                [NSString stringWithFormat:@"There is already a filesystem named %@", newName]}];
+        }
+        return NO;
+    }
+
     if (![self unmountExposedRootNamed:name error:error])
         return NO;
-    if (![NSFileManager.defaultManager moveItemAtURL:[self rootUrl:name] toURL:[self rootUrl:newName] error:error])
+    if (![NSFileManager.defaultManager moveItemAtURL:[self rootUrl:name] toURL:[self rootUrl:newName] error:error]) {
+        [self exposeRootNamed:name];
         return NO;
-    NSUInteger index = [self.roots indexOfObject:name];
-    [[self mutableOrderedSetValueForKey:@"roots"] replaceObjectAtIndex:index withObject:newName];
+    }
+    // Order matters: drop the old mount point before the new one goes up, so
+    // `ls /AOK/roots` never shows the same filesystem under two names.
+    [self removeExposedMountPointForRootNamed:name];
+    [self mutateRoots:^(NSMutableOrderedSet<NSString *> *roots) {
+        NSUInteger index = [roots indexOfObject:name];
+        if (index != NSNotFound)
+            [roots replaceObjectAtIndex:index withObject:newName];
+    }];
+    // Re-expose under the new name, so the rename is complete from the guest's
+    // side too. Without this the root kept serving under its OLD path for the
+    // rest of the session -- reading a data/ and meta.db that had been moved
+    // away underneath it -- and the name the app now showed named nothing at
+    // all, so there was no renamed entry to chroot into.
+    [self exposeRootNamed:newName];
     return YES;
 }
 

@@ -732,12 +732,13 @@
 }
 
 - (void)update {
+    BOOL locked = self.isInUseRoot;
     self.navigationItem.title = self.rootName;
-    self.nameField.enabled = !self.isDefaultRoot;
-    self.nameField.clearButtonMode = self.isDefaultRoot ? UITextFieldViewModeNever : UITextFieldViewModeAlways;
+    self.nameField.enabled = !locked;
+    self.nameField.clearButtonMode = locked ? UITextFieldViewModeNever : UITextFieldViewModeAlways;
     self.nameField.accessibilityLabel = @"Filesystem Name";
-    self.deleteLabel.enabled = !self.isDefaultRoot;
-    self.deleteCell.selectionStyle = !self.isDefaultRoot ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
+    self.deleteLabel.enabled = !locked;
+    self.deleteCell.selectionStyle = !locked ? UITableViewCellSelectionStyleDefault : UITableViewCellSelectionStyleNone;
     [self.tableView reloadData];
 }
 
@@ -762,10 +763,25 @@
     return [self.rootName isEqualToString:Roots.instance.defaultRoot];
 }
 
+// Renaming or deleting a root moves or removes its backing store, so neither
+// is allowed for a root the app is holding open: the one booted as / this
+// session, and the one chosen to boot next (whose store the next launch will
+// go looking for under the name recorded in the default). Those are usually
+// the same root but need not be -- picking "Boot this" on another filesystem
+// changes the default immediately while / stays where it is -- and checking
+// only the default left the running root editable. Roots enforces this too;
+// this just keeps the controls from offering something that will be refused.
+- (BOOL)isInUseRoot {
+    return self.isDefaultRoot ||
+        [self.rootName isEqualToString:Roots.instance.bootedRoot];
+}
+
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (section == 2) { // delete
+        if ([self.rootName isEqualToString:Roots.instance.bootedRoot])
+            return @"This filesystem can't be deleted or renamed because it's currently mounted as the root.";
         if (self.isDefaultRoot)
-            return @"This filesystem can't be deleted because it's currently mounted as the root.";
+            return @"This filesystem can't be deleted or renamed because it's the one set to boot next.";
     }
     return [super tableView:tableView titleForFooterInSection:section];
 }
@@ -845,7 +861,7 @@
 }
 
 - (void)deleteFilesystem {
-    if (self.isDefaultRoot)
+    if (self.isInUseRoot)
         return;
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Really delete?"
                                                                    message:@"I can't be bothered to implement any undo or regret UI so this is irreversable."
