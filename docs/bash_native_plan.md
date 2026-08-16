@@ -417,6 +417,28 @@ execs, and must get SIGTSTP/SIGTTIN/SIGTTOU back at SIG_DFL. Without the first,
 ^C reached nothing; without the second, no foreground job owned the terminal;
 without the third, ^Z did nothing at all.
 
+### The state script has ordering rules
+
+The script a re-launched child runs is built by `aok_serialize_state`, and
+three of its rules are load-bearing rather than tidy. They are in the code with
+their reasons; the short form:
+
+- **extglob must be ON while the functions are emitted**, whatever the parent's
+  own setting is. A function body containing `?(...)` can only be re-read by a
+  shell that has it, bash prints such functions back in that syntax, and
+  bash-completion turns extglob off again after defining hundreds of them. Get
+  this wrong and every child dies on a syntax error partway through the state,
+  which shows up as every command substitution in a login shell coming back
+  empty.
+- **shopt before `set -o`**, because `shopt -u extdebug` turns off `-E` and `-T`.
+- **errexit and nounset last**, after the variables the state assigns.
+
+What must NOT cross matters as much: a forked child resets its traps
+(`reset_signal_handlers`), keeping only the ignored ones and DEBUG/ERR/RETURN,
+so sending the EXIT trap made it fire once per subshell and once per command
+substitution. `AOK_BASH_DUMP_STATE=1` prints what a child was handed, and is
+the first thing to reach for when one misbehaves.
+
 ### What is knowingly not the same
 
 - **The job table does not cross a re-launch.** `jobs` in a pipeline or a
