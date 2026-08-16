@@ -844,8 +844,46 @@ int nlibc_system(const char *command) {
     return status;
 }
 
+// NOT translating the wait OPTIONS, deliberately, and this is the note that
+// says so. The guest's and Darwin's numbering agree on WNOHANG and WUNTRACED
+// and disagree above: Darwin's WCONTINUED is 0x10 where the guest's is 8, and
+// Darwin's WSTOPPED is 8, which is the guest's WCONTINUED. The guest answers
+// EINVAL for an option it does not recognise, and bash handles exactly that --
+// it retries without WCONTINUED (jobs.c, "WCONTINUED may be rejected by
+// waitpid as invalid even when defined").
+//
+// Mapping them properly was tried and made bash HANG: with WCONTINUED really
+// enabled, its wait loop never settles. That is a bug in what the guest reports
+// for a continued child rather than in the mapping, and fixing it belongs with
+// that. Until then, passing the options through unchanged means the one caller
+// that matters takes its own documented fallback, which works.
+
+// The signal number inside a wait status is the GUEST's, and the caller will
+// read it back with the HOST's WTERMSIG/WSTOPSIG and print it with the host's
+// strsignal. The two numberings agree for the signals people notice -- INT,
+// TERM, KILL, HUP, SEGV -- and disagree above that: guest SIGUSR1 is 10, which
+// is Darwin's SIGBUS. A native bash reported a child killed by SIGUSR1 as "Bus
+// error", and $? was 128 plus the wrong number.
+static int nlibc_wait_status_to_host(int status) {
+    int sig, host;
+
+    if ((status & 0xff) == 0x7f) {                  // stopped
+        sig = (status >> 8) & 0xff;
+        host = nlibc_signal_to_host(sig);
+        return host != 0 ? ((host << 8) | 0x7f) : status;
+    }
+    if ((status & 0x7f) != 0 && (status & 0x7f) != 0x7f) {   // terminated
+        sig = status & 0x7f;
+        host = nlibc_signal_to_host(sig);
+        return host != 0 ? ((status & ~0x7f) | host) : status;
+    }
+    return status;                                  // exited, or continued
+}
+
 pid_t nlibc_waitpid(pid_t pid, int *status, int options) {
     int res = native_waitpid((dword_t) pid, status, options);
+    if (res >= 0 && status != NULL)
+        *status = nlibc_wait_status_to_host(*status);
     return res < 0 ? nlibc_fail(res) : res;
 }
 pid_t nlibc_wait(int *status) {

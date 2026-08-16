@@ -15,7 +15,6 @@
 // native_env_vector() and the native_* helpers, and read every host-libc name
 // here twice.
 
-#include <stdatomic.h>
 #include <stdbool.h>
 
 #include "kernel/calls.h"
@@ -23,6 +22,7 @@
 #include "kernel/native_io.h"
 #include "kernel/native_libc.h"
 #include "kernel/task.h"
+#include "util/sync.h"
 
 // bash's main(), renamed by the build (-Dmain=bash_main_entry) because AOK has
 // one of its own. The same trick SmallCLUE's CMake build uses on Nextvi.
@@ -63,30 +63,88 @@ extern char *shell_name;
 // exec rather than spawn-and-wait, so the task becomes that shell instead of
 // supervising it -- $$ changes (docs/bash_native_plan.md section 2), which the
 // shell being replaced cannot observe.
-static atomic_flag bash_live = ATOMIC_FLAG_INIT;
+//
+// Recorded as the OWNING TASK rather than as a flag, and that is the whole
+// lesson of the first attempt. A flag set on entry and cleared on return
+// latches ON forever, because a shell does not return: bash leaves through
+// exit() -- nlibc_exit, then do_exit_group -- and the line that would have
+// cleared the flag is never reached. The symptom was silent and expensive.
+// After the first native bash in an app session, every later one quietly
+// became the emulated shell: the fast path was gone, and the whole of the
+// re-entry work was never being exercised, so it tested clean while doing
+// nothing at all.
+//
+// Asking "is the task that owns this still alive?" instead stays true through
+// every way of dying. A pid recycled onto an unrelated task in the window
+// between the owner exiting and the next shell starting would read as
+// still-owned; the cost is one shell running emulated, which is the safe
+// direction to be wrong in.
+static lock_t bash_owner_lock = LOCK_INITIALIZER;
+static dword_t bash_owner_pid;          // 0: no native bash is live
+
+static bool native_bash_claim(void) {
+    bool claimed = false;
+    lock(&bash_owner_lock, 0);
+    if (bash_owner_pid != 0) {
+        struct task *owner = pid_get_task_ref(bash_owner_pid);
+        if (owner != NULL)
+            task_ref_cnt_mod(owner, -1);   // alive, which is all that was asked
+        else
+            bash_owner_pid = 0;            // gone; the seat is free
+    }
+    if (bash_owner_pid == 0 && current != NULL) {
+        bash_owner_pid = current->pid;
+        claimed = true;
+    }
+    unlock(&bash_owner_lock);
+    return claimed;
+}
+
+static void native_bash_release(void) {
+    lock(&bash_owner_lock, 0);
+    if (current != NULL && bash_owner_pid == current->pid)
+        bash_owner_pid = 0;
+    unlock(&bash_owner_lock);
+}
 
 int native_bash_main(int argc, char *const argv[], char *const envp[]) {
     (void) envp;   // bash reads the environment through getenv, which is routed
-    if (atomic_flag_test_and_set(&bash_live)) {
+    if (!native_bash_claim()) {
         nlibc_execv(AOK_GUEST_BASH, argv);
         // Only reached if the guest has no bash at all, which is worth saying
         // out loud rather than failing as a shell that does nothing.
         nlibc_perror(AOK_GUEST_BASH);
         return 127;
     }
-    // The one piece of re-entry state that has to be cleared from OUT here.
-    // bash's main() reads shell_name before it calls shell_reinitialize -- that
-    // is how it decides whether it is a login shell -- so a pointer the last
-    // bash left behind is dereferenced after the memory has gone. Everything
-    // else belongs in shell_reinitialize and is there (deps/bash/shell.c).
+    // The one piece of re-entry state that has to be handled from OUT here,
+    // because bash's main() reads shell_name BEFORE it calls
+    // shell_reinitialize: that read is how it decides whether it is a login
+    // shell, and the pointer the previous shell left behind is into memory that
+    // has since gone. Everything else belongs in shell_reinitialize and is
+    // there (deps/bash/shell.c).
     //
-    // Safe to null rather than guard: set_shell_name gives it a fresh value
-    // immediately afterwards, and shell_name is only the SECOND of the two
-    // triggers for reinitialising at all -- shell_initialized is the first, is
-    // set once and never cleared.
-    shell_name = (char *) NULL;
+    // Pointed at a string literal rather than nulled, and the difference is not
+    // cosmetic. `shell_initialized || shell_name` is the condition that decides
+    // whether to reinitialise at all, and for `bash -c` shell_initialized is
+    // NEVER set -- that path runs exit_shell (shell.c:776) long before
+    // shell.c:834 sets it. So shell_name is the only trigger there, and nulling
+    // it silently turned re-entry OFF for every non-interactive shell: the
+    // second `bash -c` in an app session then found the FIRST one's variable
+    // table still populated, and died in bind_variable("COMP_WORDBREAKS")
+    // calling assign_comp_wordbreaks on a variable that already had an assign
+    // function, with a null value. A literal keeps the trigger and cannot
+    // dangle; set_shell_name replaces it from argv[0] a few lines later.
+    //
+    // From the SECOND shell onwards only. On the first, shell_variables is
+    // still null, and shell_reinitialize would walk straight through
+    // delete_all_contexts into global_variables->table -- reinitialising a
+    // world that has not been built yet.
+    static bool bash_has_run;
+    if (bash_has_run)
+        shell_name = (char *) "bash";
+    bash_has_run = true;
     int status = bash_main_entry(argc, (char **) argv, native_env_vector());
     nlibc_flush_std();
-    atomic_flag_clear(&bash_live);
+    native_bash_release();
     return status;
 }
