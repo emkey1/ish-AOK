@@ -518,6 +518,13 @@ if get_option('kernel') == 'ish'
             '-DCONF_MACHTYPE="' + host_machine.cpu_family() + '-ish-linux-gnu"',
             '-DCONF_VENDOR="ish"',
             '-DLOCALEDIR="/usr/local/share/locale"', '-DPACKAGE="bash"',
+            # The system-wide bashrc, which every distribution's bash is built
+            # with and bash's own config-top.h leaves commented out. Without it
+            # an interactive native bash silently skips /etc/bash.bashrc, so it
+            # comes up with a different prompt, aliases and completion from the
+            # guest's own /bin/bash in the same rootfs -- which is precisely the
+            # comparison a user makes when deciding whether this shell works.
+            '-DSYS_BASHRC="/etc/bash.bashrc"',
             # bash brings its own globbing, and macOS's <glob.h> shares the
             # include guard _GLOB_H_ with bash's -- see kernel/native_libc.h.
             '-DNATIVE_LIBC_OWN_GLOB',
