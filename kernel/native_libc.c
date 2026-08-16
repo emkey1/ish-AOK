@@ -357,6 +357,16 @@ int nlibc_lstat(const char *path, struct stat *st) {
     return nlibc_statat(AT_FDCWD, path, st, AT_SYMLINK_NOFOLLOW_);
 }
 
+// Darwin's AT_SYMLINK_NOFOLLOW is 0x0020 and the guest's is 0x100, so the flag
+// cannot be passed through: the raw 0x20 is the guest's AT_EACCESS bit for a
+// different call entirely. Nothing else in Darwin's AT_ set has a meaning here
+// -- AT_SYMLINK_FOLLOW is the default, and there is no AT_EMPTY_PATH on Darwin
+// for a caller to have passed.
+int nlibc_fstatat(int dirfd, const char *path, struct stat *st, int flags) {
+    dword_t guest_flags = (flags & AT_SYMLINK_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW_ : 0;
+    return nlibc_statat(dirfd, path, st, guest_flags);
+}
+
 int nlibc_fstat(int fd_no, struct stat *st) {
     NATIVE_FRAME;
     if (st == NULL)
@@ -543,6 +553,18 @@ int nlibc_closedir(DIR *handle) {
     return nlibc_close(fd);
 }
 
+// The descriptor a DIR was opened over. This is the fileno() case again, and
+// the reason it cannot be waved through as "pure": a native program's DIR is
+// the struct above, not a host DIR, so the host's dirfd() would read whatever
+// lies at its own layout's offset -- here, the fd field only by accident, and
+// nothing at all if either struct ever changes.
+int nlibc_dirfd(DIR *handle) {
+    struct nlibc_dir *dir = (struct nlibc_dir *) handle;
+    if (dir == NULL)
+        return nlibc_fail(_EBADF);
+    return dir->fd;
+}
+
 // ---------------------------------------------------------------- mutation
 
 // AT_REMOVEDIR, which fs/dir.c's unlinkat reads. Named here because kernel/fs.c
@@ -559,6 +581,15 @@ int nlibc_rmdir(const char *path) {
     NLIBC_PATH(guest_path, path);
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_unlinkat, AT_FDCWD_, guest_path,
             NLIBC_AT_REMOVEDIR));
+}
+// Darwin's AT_REMOVEDIR is 0x80 where the guest's is 0x200, so this is another
+// flag that must be translated rather than forwarded.
+int nlibc_unlinkat(int dirfd, const char *path, int flags) {
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_path, path);
+    dword_t guest_flags = (flags & AT_REMOVEDIR) ? NLIBC_AT_REMOVEDIR : 0;
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_unlinkat, nlibc_at_fd(dirfd),
+            guest_path, guest_flags));
 }
 int nlibc_mkdir(const char *path, mode_t mode) {
     NATIVE_FRAME;
@@ -922,13 +953,17 @@ int nlibc_execv(const char *path, char *const argv[]) {
 int nlibc_execvp(const char *file, char *const argv[]) {
     return nlibc_exec_common(file, argv, 1);
 }
-int nlibc_execl(const char *path, const char *arg0, ...) {
+// execl and execlp differ only in whether the name is searched for on PATH --
+// and execlp is the form that was missed, which matters more than it sounds:
+// the PATH it would have searched is the HOST's. readpass.c execs SSH_ASKPASS
+// this way, so an askpass named without a slash would have been looked up in
+// the Mac's directories and run as a device binary in place of the whole app.
+static int nlibc_execl_common(const char *path, const char *arg0, va_list ap,
+        int search_path) {
     // Collect the varargs into a vector; callers here pass short lists.
     enum { MAX_ARGS = 64 };
     char *argv[MAX_ARGS];
     size_t n = 0;
-    va_list ap;
-    va_start(ap, arg0);
     argv[n++] = (char *) arg0;
     while (n < MAX_ARGS - 1) {
         char *next = va_arg(ap, char *);
@@ -936,9 +971,24 @@ int nlibc_execl(const char *path, const char *arg0, ...) {
             break;
         argv[n++] = next;
     }
-    va_end(ap);
     argv[n] = NULL;
-    return nlibc_exec_common(path, argv, 0);
+    return nlibc_exec_common(path, argv, search_path);
+}
+
+int nlibc_execl(const char *path, const char *arg0, ...) {
+    va_list ap;
+    va_start(ap, arg0);
+    int res = nlibc_execl_common(path, arg0, ap, 0);
+    va_end(ap);
+    return res;
+}
+
+int nlibc_execlp(const char *file, const char *arg0, ...) {
+    va_list ap;
+    va_start(ap, arg0);
+    int res = nlibc_execl_common(file, arg0, ap, 1);
+    va_end(ap);
+    return res;
 }
 
 int nlibc_system(const char *command) {
@@ -1272,6 +1322,17 @@ int nlibc_chroot(const char *path) {
 int nlibc_kill(pid_t pid, int sig) {
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_kill, pid,
             nlibc_signal_to_guest(sig)));
+}
+
+// raise() is kill(getpid()) and nothing else, so routing it is free -- both
+// halves were already here. Worth doing rather than parking on PURE beside
+// abort(): the host's raise ends the APP, this ends the TASK, and the argument
+// for leaving abort() alone ("a crash either way") gets weaker the moment the
+// signal is a parameter rather than a constant. OpenSSH's one call site is
+// sshbuf.c's deliberate SIGSEGV on detected buffer corruption; the next import
+// could add another with a different signal, and this way it does not matter.
+int nlibc_raise(int sig) {
+    return nlibc_kill(nlibc_getpid(), sig);
 }
 
 int nlibc_mknod(const char *path, mode_t mode, dev_t dev) {
@@ -1682,15 +1743,31 @@ static int nlibc_tty_ioctl(int fd_no, dword_t cmd, void *arg, size_t size, bool 
     return (int) res;
 }
 
-// Only the bits worth honouring; see the note above about dropping the rest.
+// Enough of the bits to describe a terminal to something else, which is more
+// than "enough to drive one locally".
+//
+// The short map cost a real bug. ssh sends the CLIENT's terminal modes to the
+// server in its pty-req, encoded from tcgetattr. ONLCR was not mapped, so the
+// modes said "OPOST on, ONLCR off"; the remote pty obeyed, stopped translating
+// newline to CRLF, and every remote command came back staircased down the
+// screen. `reset` on the remote cured it, which is what pointed at the modes
+// rather than at the local terminal.
+//
+// So anything a caller might reasonably READ and pass on has to survive the
+// round trip, not just the handful the shim itself acts upon. These are the
+// flags OpenSSH's ttymodes.c actually puts on the wire.
 static const struct nlibc_flagmap nlibc_lflags[] = {
-    { ISIG,   ISIG_ }, { ICANON, ICANON_ }, { ECHO, ECHO_ }, { ECHOE, ECHOE_ },
+    { ISIG,   ISIG_ },   { ICANON,  ICANON_ },  { ECHO,   ECHO_ },
+    { ECHOE,  ECHOE_ },  { ECHOK,   ECHOK_ },   { NOFLSH, NOFLSH_ },
+    { ECHOCTL, ECHOCTL_ }, { ECHOKE, ECHOKE_ }, { IEXTEN, IEXTEN_ },
 };
 static const struct nlibc_flagmap nlibc_iflags[] = {
-    { ICRNL,  ICRNL_ }, { IXON, IXON_ },
+    { ICRNL,  ICRNL_ },  { IXON,    IXON_ },    { INLCR,  INLCR_ },
+    { IGNCR,  IGNCR_ },
 };
 static const struct nlibc_flagmap nlibc_oflags[] = {
-    { OPOST,  OPOST_ },
+    { OPOST,  OPOST_ },  { ONLCR,   ONLCR_ },   { OCRNL,  OCRNL_ },
+    { ONOCR,  ONOCR_ },  { ONLRET,  ONLRET_ },
 };
 
 int nlibc_tcgetattr(int fd_no, struct termios *out) {
@@ -1709,6 +1786,39 @@ int nlibc_tcgetattr(int fd_no, struct termios *out) {
     out->c_cc[VQUIT] = t.cc[VQUIT_];
     out->c_cc[VSUSP] = t.cc[VSUSP_];
     out->c_cc[VEOF] = t.cc[VEOF_];
+    // The rest of the control characters, for the same reason as the flags
+    // above: a caller may be DESCRIBING this terminal to something else rather
+    // than driving it. Measured over a real ssh session with only the six
+    // above mapped, the remote pty came up reporting
+    //     erase = <undef>; kill = <undef>; eol = <undef>
+    // which is a terminal where backspace does not erase.
+    out->c_cc[VERASE] = t.cc[VERASE_];
+    out->c_cc[VKILL] = t.cc[VKILL_];
+    out->c_cc[VSTART] = t.cc[VSTART_];
+    out->c_cc[VSTOP] = t.cc[VSTOP_];
+    out->c_cc[VEOL] = t.cc[VEOL_];
+    out->c_cc[VREPRINT] = t.cc[VREPRINT_];
+    out->c_cc[VDISCARD] = t.cc[VDISCARD_];
+    out->c_cc[VWERASE] = t.cc[VWERASE_];
+    out->c_cc[VLNEXT] = t.cc[VLNEXT_];
+    out->c_cc[VEOL2] = t.cc[VEOL2_];
+    // c_cflag, which was not translated at ALL. Measured on a real session,
+    // the remote pty came up "speed 0 baud ... cs5" -- five-bit characters on
+    // a hung line.
+    //
+    // The speed is not cosmetic, and fs/tty.h already records why for the
+    // emulated path: cfgetospeed() reads c_cflag & CBAUD, B0 means "hang up",
+    // and a BSD sshd honours an ospeed of 0 by SIGHUPing the session leader.
+    // The native path reintroduced exactly that by leaving c_cflag empty. Read
+    // the guest's own speed rather than asserting one, so a tty that really
+    // does report B0 still says so.
+    out->c_cflag |= CS8;   // the guest's CS8_ is its CSIZE_, i.e. always 8 here
+    if (t.cflags & CREAD_)  out->c_cflag |= CREAD;
+    if (t.cflags & PARENB_) out->c_cflag |= PARENB;
+    if (t.cflags & HUPCL_)  out->c_cflag |= HUPCL;
+    speed_t baud = ((t.cflags & CBAUD_) == B0_) ? B0 : B38400;
+    cfsetispeed(out, baud);
+    cfsetospeed(out, baud);
     return 0;
 }
 
@@ -1803,6 +1913,48 @@ char *nlibc_ptsname(int fd_no) {
         return NULL;
     snprintf(name, sizeof(name), "/dev/pts/%u", number);
     return name;
+}
+
+// The four calls above in the order every BSD does them. OpenSSH's sshpty.c is
+// the caller, which today is compiled into libopenssh.a but not pulled into the
+// link -- the client's pty comes from deps/smallclue/src/openssh_app.c instead.
+// It is implemented rather than left as a hole because the gate looks at the
+// ARCHIVE, and because "not called yet" stops being true the day a native sshd
+// is built: sshd is the program that allocates ptys, and one taken from the
+// host would be a DEVICE pty, on the device's /dev/pts, with host descriptors.
+int nlibc_openpty(int *amaster, int *aslave, char *name,
+        struct termios *termp, struct winsize *winp) {
+    int master = nlibc_posix_openpt(O_RDWR | O_NOCTTY);
+    if (master < 0)
+        return -1;
+    if (nlibc_grantpt(master) < 0 || nlibc_unlockpt(master) < 0) {
+        nlibc_close(master);
+        return -1;
+    }
+    // ptsname's storage is reused by the next call, and nlibc_open below makes
+    // no such call -- but the caller's `name` copy must happen from a stable
+    // buffer either way.
+    char slave_path[64];
+    const char *found = nlibc_ptsname(master);
+    if (found == NULL) {
+        nlibc_close(master);
+        return -1;
+    }
+    snprintf(slave_path, sizeof(slave_path), "%s", found);
+    int slave = nlibc_open(slave_path, O_RDWR | O_NOCTTY);
+    if (slave < 0) {
+        nlibc_close(master);
+        return -1;
+    }
+    if (termp != NULL)
+        nlibc_tcsetattr(slave, TCSAFLUSH, termp);
+    if (winp != NULL)
+        nlibc_ioctl(slave, TIOCSWINSZ, winp);
+    if (name != NULL)
+        strcpy(name, slave_path);   // openpty's contract: the caller sizes it
+    *amaster = master;
+    *aslave = slave;
+    return 0;
 }
 
 // The guest's own answer, through /proc/self/fd -- AOK's procfs makes each
@@ -2225,6 +2377,40 @@ int nlibc_socket(int domain, int type, int protocol) {
             guest_type, protocol));
 }
 
+// A socketpair of HOST descriptors is the pipe() problem again, and it was
+// live: config.h leaves USE_PIPES undefined, so sftp.c, scp.c and
+// sshconnect.c's ProxyUseFdpass all take this branch rather than the pipe one.
+// The two host fds were stored as a channel's in/out and then handed to the
+// routed dup2/read/write/close, which read them as GUEST fd numbers.
+//
+// Today nlibc_fork's ENOSYS on the very next statement caps the damage at a
+// leaked pair of host descriptors per attempt. That is exactly the shape that
+// makes a runtime check useless -- "scp fails at fork either way" -- and the
+// leak happens before the failure.
+int nlibc_socketpair(int domain, int type, int protocol, int fds[2]) {
+    NATIVE_FRAME;
+    if (fds == NULL)
+        return nlibc_fail(_EFAULT);
+    int guest_domain = nlibc_family_to_guest(domain);
+    if (guest_domain < 0)
+        return nlibc_fail(_EAFNOSUPPORT);
+    int guest_type = (type & 0xf) | (int) nlibc_flags_to_guest((unsigned long) type,
+            nlibc_sock_type_flags, NLIBC_MAP_COUNT(nlibc_sock_type_flags));
+    guest_addr_t guest_fds = native_scratch_alloc(2 * sizeof(dword_t));
+    if (guest_fds == 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res = native_syscall(NATIVE_SYS_socketpair, guest_domain, guest_type,
+            protocol, guest_fds);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    dword_t out[2] = {0, 0};
+    if (native_scratch_get(out, guest_fds, sizeof(out)) < 0)
+        return nlibc_fail(_EFAULT);
+    fds[0] = (int) out[0];
+    fds[1] = (int) out[1];
+    return 0;
+}
+
 // bind and connect differ only in which syscall they issue.
 static int nlibc_bind_or_connect(unsigned num, int fd_no, const void *addr, socklen_t len) {
     NATIVE_FRAME;
@@ -2367,6 +2553,357 @@ int nlibc_shutdown(int fd_no, int how) {
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_shutdown, fd_no, how));
 }
 
+// ------------------------------------------ messages with ancillary data
+//
+// sendmsg/recvmsg exist here for one reason: SCM_RIGHTS. OpenSSH's
+// monitor_fdpass.c passes descriptors over the mux socket (mux.c, sshconnect.c
+// ProxyUseFdpass), and every part of that is the guest's -- the socket is a
+// guest fd, the descriptors INSIDE the cmsg are guest fd numbers, and the
+// cmsghdr the kernel expects is the guest's, whose length field is 64 bits
+// where Darwin's is 32. Left to the host, mux_client_request_session reported
+// "mm_send_fd: sendmsg: Bad file descriptor" and multiplexing did not work at
+// all; the alternative, succeeding against a host descriptor with the same
+// number, would have been worse.
+//
+// Two simplifications, both deliberate:
+//
+//  - The iovec is FLATTENED to a single element. Scatter/gather is a delivery
+//    convenience, not a wire property: a stream is a stream and a datagram is
+//    one contiguous chunk either way, and the shim already has to copy through
+//    guest scratch, so the gather happens during a copy that was happening
+//    anyway. It also means one guest iovec to marshal instead of n.
+//  - Only SOL_SOCKET/SCM_RIGHTS control messages are handled. Anything else is
+//    refused with EOPNOTSUPP rather than forwarded with a level and type that
+//    mean something different on the far side. Silently dropping ancillary data
+//    is the failure mode this whole file exists to avoid.
+#define NLIBC_SCM_RIGHTS_ 1
+
+// The guest's shapes, written out for both widths. asm-generic is what a native
+// caller normally speaks, but sendmsg and recvmsg are marked "// ABI" in
+// native_syscall_nums.h -- their handlers read the struct according to the
+// CALLING TASK's abi -- so a 32-bit guest gets the 32-bit layout, exactly as
+// nlibc_getrusage branches for the same reason.
+struct nlibc_guest_msghdr64 {
+    qword_t name; dword_t namelen; dword_t pad0;
+    qword_t iov; qword_t iovlen;
+    qword_t control; qword_t controllen;
+    dword_t flags; dword_t pad1;
+};
+struct nlibc_guest_msghdr32 {
+    dword_t name, namelen, iov, iovlen, control, controllen, flags;
+};
+struct nlibc_guest_iovec64 { qword_t base, len; };
+struct nlibc_guest_iovec32 { dword_t base, len; };
+struct nlibc_guest_cmsghdr64 { qword_t len; dword_t level, type; };
+struct nlibc_guest_cmsghdr32 { dword_t len, level, type; };
+_Static_assert(sizeof(struct nlibc_guest_msghdr64) == 56, "guest msghdr, 64-bit");
+_Static_assert(sizeof(struct nlibc_guest_msghdr32) == 28, "guest msghdr, 32-bit");
+
+// CMSG_ALIGN, whose unit is the guest's `long` rather than the host's.
+static size_t nlibc_cmsg_align(size_t n, bool w64) {
+    return w64 ? ((n + 7) & ~(size_t) 7) : ((n + 3) & ~(size_t) 3);
+}
+static size_t nlibc_cmsg_hdr_size(bool w64) {
+    return w64 ? sizeof(struct nlibc_guest_cmsghdr64)
+               : sizeof(struct nlibc_guest_cmsghdr32);
+}
+
+// Total bytes across an iovec, or -1 for a vector the caller got wrong.
+static ssize_t nlibc_iov_total(const struct iovec *iov, int count) {
+    if (count < 0 || (count > 0 && iov == NULL))
+        return -1;
+    size_t total = 0;
+    for (int i = 0; i < count; i++) {
+        if (iov[i].iov_len > 0 && iov[i].iov_base == NULL)
+            return -1;
+        total += iov[i].iov_len;
+    }
+    return (ssize_t) total;
+}
+
+// Lay a guest msghdr into `raw` for whichever width the task speaks, and report
+// how many bytes of it are meaningful.
+static size_t nlibc_put_guest_msghdr(void *raw, bool w64, guest_addr_t name,
+        size_t namelen, guest_addr_t iov, size_t iovlen,
+        guest_addr_t control, size_t controllen) {
+    if (w64) {
+        struct nlibc_guest_msghdr64 *h = raw;
+        memset(h, 0, sizeof(*h));
+        h->name = name; h->namelen = (dword_t) namelen;
+        h->iov = iov;   h->iovlen = iovlen;
+        h->control = control; h->controllen = controllen;
+        return sizeof(*h);
+    }
+    struct nlibc_guest_msghdr32 *h = raw;
+    memset(h, 0, sizeof(*h));
+    h->name = (dword_t) name; h->namelen = (dword_t) namelen;
+    h->iov = (dword_t) iov;   h->iovlen = (dword_t) iovlen;
+    h->control = (dword_t) control; h->controllen = (dword_t) controllen;
+    return sizeof(*h);
+}
+
+ssize_t nlibc_sendmsg(int fd_no, const struct msghdr *msg, int flags) {
+    NATIVE_FRAME;
+    if (msg == NULL)
+        return nlibc_fail(_EFAULT);
+    bool w64 = guest_abi_is_64bit(current->abi);
+
+    guest_addr_t guest_name = 0;
+    size_t guest_namelen = 0;
+    if (msg->msg_name != NULL && msg->msg_namelen > 0) {
+        char addr[sizeof(struct nlibc_sockaddr_un)];
+        ssize_t n = nlibc_sockaddr_to_guest(msg->msg_name, msg->msg_namelen,
+                addr, sizeof(addr));
+        if (n < 0)
+            return nlibc_fail((int) n);
+        guest_name = native_scratch_put(addr, (size_t) n);
+        if (guest_name == 0)
+            return nlibc_fail(_ENOMEM);
+        guest_namelen = (size_t) n;
+    }
+
+    ssize_t total = nlibc_iov_total(msg->msg_iov, msg->msg_iovlen);
+    if (total < 0)
+        return nlibc_fail(_EFAULT);
+    guest_addr_t guest_data = 0;
+    if (total > 0) {
+        char *flat = malloc((size_t) total);
+        if (flat == NULL)
+            return nlibc_fail(_ENOMEM);
+        size_t at = 0;
+        for (int i = 0; i < msg->msg_iovlen; i++) {
+            memcpy(flat + at, msg->msg_iov[i].iov_base, msg->msg_iov[i].iov_len);
+            at += msg->msg_iov[i].iov_len;
+        }
+        guest_data = native_scratch_put(flat, (size_t) total);
+        free(flat);
+        if (guest_data == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    char iov_raw[sizeof(struct nlibc_guest_iovec64)];
+    size_t iov_size;
+    if (w64) {
+        struct nlibc_guest_iovec64 v = { guest_data, (qword_t) total };
+        memcpy(iov_raw, &v, iov_size = sizeof(v));
+    } else {
+        struct nlibc_guest_iovec32 v = { (dword_t) guest_data, (dword_t) total };
+        memcpy(iov_raw, &v, iov_size = sizeof(v));
+    }
+    guest_addr_t guest_iov = native_scratch_put(iov_raw, iov_size);
+    if (guest_iov == 0)
+        return nlibc_fail(_ENOMEM);
+
+    // The control block, rebuilt rather than copied: Darwin's cmsghdr is
+    // {u32 len, int level, int type} aligned to 4, the guest's 64-bit one is
+    // {u64 len, int level, int type} aligned to 8, and the level and type
+    // numbers differ as well (Darwin's SOL_SOCKET is 0xffff).
+    uint8_t cbuf[512];
+    size_t clen = 0;
+    for (struct cmsghdr *c = CMSG_FIRSTHDR((struct msghdr *) msg); c != NULL;
+            c = CMSG_NXTHDR((struct msghdr *) msg, c)) {
+        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS)
+            return nlibc_fail(_EOPNOTSUPP);
+        size_t payload = c->cmsg_len - CMSG_LEN(0);
+        size_t hdr = nlibc_cmsg_hdr_size(w64);
+        size_t need = hdr + payload;
+        if (clen + nlibc_cmsg_align(need, w64) > sizeof(cbuf))
+            return nlibc_fail(_EMSGSIZE);
+        memset(cbuf + clen, 0, nlibc_cmsg_align(need, w64));
+        if (w64) {
+            struct nlibc_guest_cmsghdr64 h = { need, NLIBC_SOL_SOCKET_,
+                                               NLIBC_SCM_RIGHTS_ };
+            memcpy(cbuf + clen, &h, sizeof(h));
+        } else {
+            struct nlibc_guest_cmsghdr32 h = { (dword_t) need, NLIBC_SOL_SOCKET_,
+                                               NLIBC_SCM_RIGHTS_ };
+            memcpy(cbuf + clen, &h, sizeof(h));
+        }
+        // The descriptors travel as-is: an fd a native program holds IS a guest
+        // fd, which is the whole point of routing socket() and open().
+        memcpy(cbuf + clen + hdr, CMSG_DATA(c), payload);
+        clen += nlibc_cmsg_align(need, w64);
+    }
+    guest_addr_t guest_control = 0;
+    if (clen > 0) {
+        guest_control = native_scratch_put(cbuf, clen);
+        if (guest_control == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+
+    char hdr_raw[sizeof(struct nlibc_guest_msghdr64)];
+    size_t hdr_size = nlibc_put_guest_msghdr(hdr_raw, w64, guest_name,
+            guest_namelen, guest_iov, 1, guest_control, clen);
+    guest_addr_t guest_msg = native_scratch_put(hdr_raw, hdr_size);
+    if (guest_msg == 0)
+        return nlibc_fail(_ENOMEM);
+    return (ssize_t) nlibc_ret(native_syscall(NATIVE_SYS_sendmsg, fd_no, guest_msg,
+            nlibc_msg_to_guest(flags)));
+}
+
+ssize_t nlibc_recvmsg(int fd_no, struct msghdr *msg, int flags) {
+    NATIVE_FRAME;
+    if (msg == NULL)
+        return nlibc_fail(_EFAULT);
+    bool w64 = guest_abi_is_64bit(current->abi);
+
+    ssize_t total = nlibc_iov_total(msg->msg_iov, msg->msg_iovlen);
+    if (total < 0)
+        return nlibc_fail(_EFAULT);
+    guest_addr_t guest_data = 0;
+    if (total > 0) {
+        guest_data = native_scratch_alloc((size_t) total);
+        if (guest_data == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    char iov_raw[sizeof(struct nlibc_guest_iovec64)];
+    size_t iov_size;
+    if (w64) {
+        struct nlibc_guest_iovec64 v = { guest_data, (qword_t) total };
+        memcpy(iov_raw, &v, iov_size = sizeof(v));
+    } else {
+        struct nlibc_guest_iovec32 v = { (dword_t) guest_data, (dword_t) total };
+        memcpy(iov_raw, &v, iov_size = sizeof(v));
+    }
+    guest_addr_t guest_iov = native_scratch_put(iov_raw, iov_size);
+    if (guest_iov == 0)
+        return nlibc_fail(_ENOMEM);
+
+    guest_addr_t guest_name = 0;
+    size_t guest_namelen = 0;
+    if (msg->msg_name != NULL && msg->msg_namelen > 0) {
+        guest_namelen = sizeof(struct nlibc_sockaddr_un);
+        guest_name = native_scratch_alloc(guest_namelen);
+        if (guest_name == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+
+    // Room for the guest's control block, which is BIGGER than the caller's:
+    // its cmsghdr is 16 bytes against Darwin's 12 and it aligns to 8 rather
+    // than 4, so a buffer sized like the caller's could truncate a parcel that
+    // would have fit. Sizing generously here costs scratch and nothing else --
+    // what the caller asked for still bounds what is copied back.
+    guest_addr_t guest_control = 0;
+    size_t guest_controllen = 0;
+    if (msg->msg_control != NULL && msg->msg_controllen > 0) {
+        guest_controllen = (size_t) msg->msg_controllen * 2 + 64;
+        guest_control = native_scratch_alloc(guest_controllen);
+        if (guest_control == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+
+    char hdr_raw[sizeof(struct nlibc_guest_msghdr64)];
+    size_t hdr_size = nlibc_put_guest_msghdr(hdr_raw, w64, guest_name,
+            guest_namelen, guest_iov, 1, guest_control, guest_controllen);
+    guest_addr_t guest_msg = native_scratch_put(hdr_raw, hdr_size);
+    if (guest_msg == 0)
+        return nlibc_fail(_ENOMEM);
+
+    sqword_t res = native_syscall(NATIVE_SYS_recvmsg, fd_no, guest_msg,
+            nlibc_msg_to_guest(flags));
+    if (res < 0)
+        return nlibc_fail((int) res);
+
+    // What came back: the kernel writes namelen, controllen and flags into the
+    // header it was given.
+    if (native_scratch_get(hdr_raw, guest_msg, hdr_size) < 0)
+        return nlibc_fail(_EFAULT);
+    size_t got_namelen, got_controllen;
+    dword_t got_flags;
+    if (w64) {
+        struct nlibc_guest_msghdr64 *h = (void *) hdr_raw;
+        got_namelen = h->namelen; got_controllen = h->controllen;
+        got_flags = h->flags;
+    } else {
+        struct nlibc_guest_msghdr32 *h = (void *) hdr_raw;
+        got_namelen = h->namelen; got_controllen = h->controllen;
+        got_flags = h->flags;
+    }
+
+    if (res > 0) {
+        char *flat = malloc((size_t) res);
+        if (flat == NULL)
+            return nlibc_fail(_ENOMEM);
+        if (native_scratch_get(flat, guest_data, (size_t) res) < 0) {
+            free(flat);
+            return nlibc_fail(_EFAULT);
+        }
+        size_t at = 0;
+        for (int i = 0; i < msg->msg_iovlen && at < (size_t) res; i++) {
+            size_t take = msg->msg_iov[i].iov_len;
+            if (take > (size_t) res - at)
+                take = (size_t) res - at;
+            memcpy(msg->msg_iov[i].iov_base, flat + at, take);
+            at += take;
+        }
+        free(flat);
+    }
+
+    if (guest_name != 0 && got_namelen > 0) {
+        char raw[sizeof(struct nlibc_sockaddr_un)];
+        if (native_scratch_get(raw, guest_name, sizeof(raw)) < 0)
+            return nlibc_fail(_EFAULT);
+        char host_addr[sizeof(struct sockaddr_un)];
+        ssize_t host_len = nlibc_sockaddr_to_host(raw, got_namelen,
+                host_addr, sizeof(host_addr));
+        if (host_len < 0)
+            return nlibc_fail((int) host_len);
+        if ((socklen_t) host_len > msg->msg_namelen)
+            host_len = msg->msg_namelen;
+        memcpy(msg->msg_name, host_addr, (size_t) host_len);
+        msg->msg_namelen = (socklen_t) host_len;
+    } else if (msg->msg_name != NULL) {
+        msg->msg_namelen = 0;
+    }
+
+    msg->msg_flags = (int) nlibc_flags_to_host(got_flags, nlibc_msg_flags,
+            NLIBC_MAP_COUNT(nlibc_msg_flags));
+
+    if (msg->msg_control != NULL) {
+        size_t written = 0;
+        if (got_controllen > 0) {
+            uint8_t cbuf[512];
+            size_t take = got_controllen < sizeof(cbuf) ? got_controllen : sizeof(cbuf);
+            if (native_scratch_get(cbuf, guest_control, take) < 0)
+                return nlibc_fail(_EFAULT);
+            size_t hdr = nlibc_cmsg_hdr_size(w64);
+            for (size_t at = 0; at + hdr <= take; ) {
+                size_t len, level, type;
+                if (w64) {
+                    struct nlibc_guest_cmsghdr64 h;
+                    memcpy(&h, cbuf + at, sizeof(h));
+                    len = (size_t) h.len; level = h.level; type = h.type;
+                } else {
+                    struct nlibc_guest_cmsghdr32 h;
+                    memcpy(&h, cbuf + at, sizeof(h));
+                    len = h.len; level = h.level; type = h.type;
+                }
+                if (len < hdr || at + len > take)
+                    break;
+                size_t payload = len - hdr;
+                // Anything that is not SCM_RIGHTS is dropped rather than
+                // mistranslated -- and the caller is told, through MSG_CTRUNC,
+                // that its control buffer does not hold everything that came.
+                if (level != (size_t) NLIBC_SOL_SOCKET_ ||
+                        type != (size_t) NLIBC_SCM_RIGHTS_ ||
+                        written + CMSG_SPACE(payload) > msg->msg_controllen) {
+                    msg->msg_flags |= MSG_CTRUNC;
+                } else {
+                    struct cmsghdr *out = (struct cmsghdr *)
+                            ((uint8_t *) msg->msg_control + written);
+                    out->cmsg_len = CMSG_LEN(payload);
+                    out->cmsg_level = SOL_SOCKET;
+                    out->cmsg_type = SCM_RIGHTS;
+                    memcpy(CMSG_DATA(out), cbuf + at + hdr, payload);
+                    written += CMSG_SPACE(payload);
+                }
+                at += nlibc_cmsg_align(len, w64);
+            }
+        }
+        msg->msg_controllen = (socklen_t) written;
+    }
+    return (ssize_t) res;
+}
+
 // The LEVELS other than SOL_SOCKET are IPPROTO_ numbers, which agree. The
 // OPTIONS under them do not, and that is worse than it sounds: Darwin's IP_TOS
 // is 3 where the guest's is 1, and the guest's 3 is IP_HDRINCL -- so passing
@@ -2451,6 +2988,48 @@ int nlibc_getsockopt(int fd_no, int level, int option, void *value, socklen_t *l
             (size > 0 && native_scratch_get(value, guest_value, size) < 0))
         return nlibc_fail(_EFAULT);
     *len = size;
+    return 0;
+}
+
+// The peer's credentials on a unix socket. Not routed through nlibc_getsockopt
+// because Darwin has no SO_PEERCRED to translate FROM -- it spells this
+// LOCAL_PEERCRED at a different level with a different struct -- so the option
+// is named in the guest's numbering directly, which is what the table above
+// does for every other constant that has no host equivalent.
+//
+// This is the most immediately provable of the whole set, because no fork
+// stands in the way: channels.c's channel_post_mux_listener() accepts a
+// ControlMaster connection on a guest AF_UNIX socket and then asks who is on
+// the other end. The host's getpeereid either fails with ENOTSOCK on a
+// descriptor number that means something else, or succeeds and reports the iOS
+// account's uid 501 -- which channels.c compares against the routed getuid()'s
+// 0 and refuses the client with "multiplex uid mismatch".
+#define NLIBC_SO_PEERCRED_ 17
+
+int nlibc_getpeereid(int fd_no, uid_t *euid, gid_t *egid) {
+    NATIVE_FRAME;
+    // The guest's struct ucred: pid, uid, gid, three 32-bit fields (fs/sock.h).
+    struct { dword_t pid, uid, gid; } cred = { 0, 0, 0 };
+    guest_addr_t guest_cred = native_scratch_alloc(sizeof(cred));
+    dword_t size = sizeof(cred);
+    guest_addr_t guest_size = native_scratch_put(&size, sizeof(size));
+    if (guest_cred == 0 || guest_size == 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res = native_syscall(NATIVE_SYS_getsockopt, fd_no, NLIBC_SOL_SOCKET_,
+            NLIBC_SO_PEERCRED_, guest_cred, guest_size);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    if (native_scratch_get(&cred, guest_cred, sizeof(cred)) < 0)
+        return nlibc_fail(_EFAULT);
+    // fs/sock.c answers uid = gid = -1 for a socket with no peer to report --
+    // an unconnected socket, or one that is not AF_UNIX at all. getpeereid's
+    // contract is to fail there rather than hand back that sentinel.
+    if (cred.uid == (dword_t) -1 && cred.gid == (dword_t) -1)
+        return nlibc_fail(_ENOTCONN);
+    if (euid != NULL)
+        *euid = (uid_t) cred.uid;
+    if (egid != NULL)
+        *egid = (gid_t) cred.gid;
     return 0;
 }
 
@@ -3521,6 +4100,51 @@ int nlibc_setuid(uid_t uid) {
 int nlibc_setgid(gid_t gid) {
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_setgid, gid));
 }
+
+// The effective half of the same family, as setresuid/setresgid with -1 for the
+// real and saved ids -- which is what glibc's seteuid and setegid are.
+//
+// setegid is the one that was actually live, and it is worth saying how it got
+// missed, because the evidence points the wrong way. Both functions appear in
+// uidswap.c, which is server-only and is NOT linked; that is a per-FILE reading
+// and it is wrong for setegid, because openbsd-compat/bsd-setres_id.c ALSO
+// calls it -- config.h defines BROKEN_SETREGID, so its setresgid() takes the
+// `setegid(egid); setgid(rgid);` branch, and misc.c's subprocess() (the runner
+// behind KnownHostsCommand, `Match exec` and ssh-keygen -Y) pulls that in.
+// setgid was routed and setegid was not, so a pair that must move together was
+// half on the guest and half on the host. Its twin seteuid really is dead --
+// config.h's SETEUID_BREAKS_SETUID skips the matching branch in setresuid --
+// and is routed anyway, since a family split is exactly how this happened.
+//
+// The consequence of leaving them is not a wrong answer but a wrong SUBJECT: a
+// native "child" is a host thread of this app, so a host setegid that succeeded
+// would move the credentials of every other guest task at once.
+int nlibc_seteuid(uid_t uid) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_setresuid,
+            (uid_t) -1, uid, (uid_t) -1));
+}
+int nlibc_setegid(gid_t gid) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_setresgid,
+            (gid_t) -1, gid, (gid_t) -1));
+}
+
+int nlibc_setgroups(int size, const gid_t *list) {
+    NATIVE_FRAME;
+    if (size < 0)
+        return nlibc_fail(_EINVAL);
+    guest_addr_t guest_list = 0;
+    if (size > 0) {
+        if (list == NULL)
+            return nlibc_fail(_EFAULT);
+        // The guest's gid_t is 32 bits, as Darwin's is -- the same assumption
+        // nlibc_getgroups makes going the other way.
+        guest_list = native_scratch_put(list, (size_t) size * sizeof(uint32_t));
+        if (guest_list == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_setgroups, size, guest_list));
+}
+
 int nlibc_initgroups(const char *user, gid_t group) {
     (void) user; (void) group;
     return 0;   // no supplementary groups to set; succeeding is the honest no-op
@@ -3529,10 +4153,10 @@ int nlibc_initgroups(const char *user, gid_t group) {
 // /etc/passwd and /etc/group, read from the GUEST. One entry is cached at a
 // time, which is what getpwuid's contract allows -- the returned pointer is
 // only valid until the next call.
-static char nlibc_pw_line[512];
-static struct passwd nlibc_pw;
-static char nlibc_gr_line[512];
-static struct group nlibc_gr;
+static __thread char nlibc_pw_line[512];
+static __thread struct passwd nlibc_pw;
+static __thread char nlibc_gr_line[512];
+static __thread struct group nlibc_gr;
 static char *nlibc_gr_members[1];
 
 static char *nlibc_next_field(char **cursor) {
@@ -3595,6 +4219,14 @@ done:
 }
 
 struct nlibc_pw_key { const char *name; uid_t uid; bool by_name; };
+
+// nlibc_pw and its line buffer below are PER TASK. getpwuid's contract lets it
+// return a pointer to storage the next call may reuse -- per THREAD, which is
+// what callers assume. Shared across native programs it is worse than stale:
+// two concurrent ssh runs crashed the whole app about 8 times in 20, strlen(0)
+// inside pwcopy(), because one program's scan cleared the struct while the
+// other was copying out of it. Native bash crashed the same way through
+// get_current_user_info.
 
 static bool nlibc_pw_match(char **f, size_t n, const void *keyv) {
     const struct nlibc_pw_key *key = keyv;
@@ -3668,6 +4300,153 @@ struct group *nlibc_getgrnam(const char *name) {
                        nlibc_gr_match, &key))
         return NULL;
     return &nlibc_gr;
+}
+
+// uid/gid -> NAME, for anything that renders an owner rather than checking one.
+//
+// getpwuid and getgrgid were routed and these two were not, which is the same
+// whole-family miss as execlp and setegid. What it would have cost is the
+// `whoami` bug in a different costume: sftp-common.c's ls_file() renders a
+// remote listing, so the SERVER's uid 501 would have been resolved against the
+// MAC's account database and printed as the Mac user's name, with root matching
+// only by coincidence.
+//
+// That branch is not reached in this build -- every ls_file() caller compiled
+// in passes remote = 1, and the only remote = 0 caller is sftp-server.c, which
+// meson excludes. Not reached is not the same as not wrong, and a native sshd
+// brings sftp-server.c with it.
+static __thread char nlibc_uid_name[64];
+static __thread char nlibc_gid_name[64];
+
+const char *nlibc_user_from_uid(uid_t uid, int nouser) {
+    struct passwd *pw = nlibc_getpwuid(uid);
+    if (pw != NULL && pw->pw_name != NULL) {
+        snprintf(nlibc_uid_name, sizeof(nlibc_uid_name), "%s", pw->pw_name);
+        return nlibc_uid_name;
+    }
+    if (nouser)
+        return NULL;   // the contract: NULL rather than a number, if asked
+    snprintf(nlibc_uid_name, sizeof(nlibc_uid_name), "%u", (unsigned) uid);
+    return nlibc_uid_name;
+}
+
+const char *nlibc_group_from_gid(gid_t gid, int nogroup) {
+    struct group *gr = nlibc_getgrgid(gid);
+    if (gr != NULL && gr->gr_name != NULL) {
+        snprintf(nlibc_gid_name, sizeof(nlibc_gid_name), "%s", gr->gr_name);
+        return nlibc_gid_name;
+    }
+    if (nogroup)
+        return NULL;
+    snprintf(nlibc_gid_name, sizeof(nlibc_gid_name), "%u", (unsigned) gid);
+    return nlibc_gid_name;
+}
+
+// Which groups a user belongs to, from the GUEST's /etc/group.
+//
+// nlibc_getgrent cannot answer this: its parser fills gr_mem with an empty
+// list, so a walk over it would report the base gid and nothing else. So this
+// reads the fourth field itself -- the comma-separated member list -- through
+// the same index-keyed scan the getgrent walker uses, which re-reads the file
+// once per group. That is O(n^2) over /etc/group and entirely fine at its size;
+// it is also what makes the answer reflect the file as it is now.
+//
+// Only groupaccess.c calls this, and groupaccess.c is sshd's AllowGroups
+// matching, so nothing in the current link reaches it. Written anyway for the
+// same reason as openpty: the day sshd is compiled in, the host's answer would
+// be the iOS account's group membership, and the failure would be silent and
+// security-bearing.
+struct nlibc_grouplist_key {
+    size_t want, seen;
+    gid_t gid;
+    char members[512];
+};
+
+static bool nlibc_gr_list_match(char **f, size_t n, const void *keyv) {
+    struct nlibc_grouplist_key *key = (struct nlibc_grouplist_key *) keyv;
+    if (n < 3)
+        return false;
+    if (key->seen++ != key->want)
+        return false;
+    key->gid = (gid_t) strtoul(f[2], NULL, 10);
+    snprintf(key->members, sizeof(key->members), "%s", n > 3 && f[3] ? f[3] : "");
+    return true;
+}
+
+int nlibc_getgrouplist(const char *name, int basegid, int *groups, int *ngroups) {
+    if (name == NULL || ngroups == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    int room = *ngroups, found = 0;
+    // The primary group is always first, whether or not /etc/group lists it.
+    if (groups != NULL && found < room)
+        groups[found] = basegid;
+    found++;
+
+    char line[512];
+    for (size_t index = 0; ; index++) {
+        struct nlibc_grouplist_key key = { index, 0, 0, { 0 } };
+        if (!nlibc_scan_db("/etc/group", line, sizeof(line),
+                           nlibc_gr_list_match, &key))
+            break;              // walked off the end of the file
+        if ((int) key.gid == basegid)
+            continue;           // already reported
+        bool member = false;
+        for (char *cursor = key.members; cursor != NULL && *cursor != '\0'; ) {
+            char *comma = strchr(cursor, ',');
+            if (comma != NULL)
+                *comma = '\0';
+            if (strcmp(cursor, name) == 0) {
+                member = true;
+                break;
+            }
+            cursor = comma != NULL ? comma + 1 : NULL;
+        }
+        if (!member)
+            continue;
+        bool already = false;   // a gid listed twice is one membership
+        for (int i = 0; groups != NULL && i < found && i < room; i++)
+            if (groups[i] == (int) key.gid)
+                already = true;
+        if (already)
+            continue;
+        if (groups != NULL && found < room)
+            groups[found] = (int) key.gid;
+        found++;
+    }
+
+    // getgrouplist's contract: *ngroups is always the number needed, and the
+    // return is -1 when that exceeds the room offered.
+    bool overflow = found > room;
+    *ngroups = found;
+    return overflow ? -1 : found;
+}
+
+// Password hashing, and the one entry here that is a REFUSAL rather than an
+// implementation.
+//
+// Darwin's crypt() is DES-only: it cannot produce the $6$ SHA-512, $5$, $1$ or
+// $2b$ hashes a Linux /etc/shadow holds, so its answer could never match the
+// guest's stored one. That is not a case of the host reading the wrong file --
+// it is the host computing a different function.
+//
+// The only caller in the tree is openbsd-compat/xcrypt.c, reached from
+// auth-passwd.c, which is sshd's password check and is not compiled in. So
+// nothing calls this today; it is here because the gate reads the archive, and
+// because a native sshd is planned. Failing closed is the only safe answer for
+// an authentication primitive: a plausible-looking wrong hash that HAPPENED to
+// match a locked account's "*" or "!" field would be an authentication bypass,
+// so NULL it is -- what glibc returns for an unsupported salt, and what
+// xcrypt's callers must already tolerate.
+//
+// Making this real means implementing the crypt algorithms over CommonCrypto's
+// SHA-2, against the guest's /etc/shadow. That belongs with the sshd work, not
+// ahead of it.
+char *nlibc_crypt(const char *key, const char *salt) {
+    (void) key; (void) salt;
+    errno = ENOSYS;
+    return NULL;
 }
 
 // =========================================================== the rest of it
@@ -4760,4 +5539,236 @@ done:
     if (found != NULL)
         nlibc_se_pos++;
     return found;
+}
+
+// The LOOKUPS over that same guest database, which is where the misses were.
+// setservent/getservent/endservent were routed for readline's completion and
+// getservbyname was not -- the entry point ssh actually uses. readconf.c's
+// default_ssh_port() is getservbyname("ssh", "tcp"), and ssh.c calls it at six
+// places whenever no Port is configured, which is the common case; misc.c's
+// a2port() is the other caller, behind `-p ssh`.
+//
+// Usually harmless, because the Mac's /etc/services and the guest's both say
+// ssh 22 -- and "usually harmless" is precisely the class of bug this file
+// exists to remove. A guest that moves the port, or one with no /etc/services
+// at all, silently got the Mac's answer instead of its own.
+//
+// Built on the walker above rather than a second parser, so there is one
+// /etc/services reader. The enumeration position is saved and restored: a
+// lookup in the middle of somebody's getservent walk must not move it, which is
+// what setservent(1) buys on a real libc.
+static struct servent *nlibc_serv_lookup(const char *name, int port,
+        const char *proto) {
+    size_t saved = nlibc_se_pos;
+    struct servent *found = NULL;
+    nlibc_se_pos = 0;
+    for (;;) {
+        struct servent *se = nlibc_getservent();
+        if (se == NULL)
+            break;
+        if (proto != NULL && se->s_proto != NULL && strcmp(se->s_proto, proto) != 0)
+            continue;
+        if (name != NULL ? strcmp(se->s_name, name) == 0 : se->s_port == port) {
+            found = se;
+            break;
+        }
+    }
+    nlibc_se_pos = saved;
+    return found;
+}
+
+// Aliases are not matched, because nlibc_getservent does not parse them -- it
+// reports the canonical name, which is what readline's completion wanted. A
+// lookup by alias therefore misses where a real libc would hit; that is a
+// smaller wrong than answering from the Mac's file, and it is written down here
+// rather than left to be discovered.
+struct servent *nlibc_getservbyname(const char *name, const char *proto) {
+    if (name == NULL)
+        return NULL;
+    return nlibc_serv_lookup(name, 0, proto);
+}
+
+// port is in network order, as getservbyport's contract says.
+struct servent *nlibc_getservbyport(int port, const char *proto) {
+    return nlibc_serv_lookup(NULL, port, proto);
+}
+
+// ------------------------------------------------------------------- logging
+//
+// openlog/syslog/closelog reach the DEVICE's log: os_log or ASL on iOS, the
+// Mac's syslog on the CLI. The guest has its own /dev/log and AOK already
+// serves it (fs/sock.c contemplates "a syslogd reading /dev/log"), so this is
+// not a missing capability -- it is a message delivered to the wrong machine.
+//
+// It is also live on EVERY run rather than on some unusual path: log.c's
+// log_init() calls openlog() and then closelog() unconditionally, and every
+// entry point calls log_init -- ssh, scp, sftp and ssh-keygen alike. syslog()
+// itself fires whenever logging is not on stderr (`ssh -y`, or a SyslogFacility
+// and LogLevel that route it away).
+//
+// The second half of the problem is worse than the destination. openlog() sets
+// a PROCESS-WIDE identity on the host, and a native program is a task inside
+// one process: one guest task running ssh would have renamed the syslog
+// identity for the whole iSH-AOK app, including whatever logged next. Here the
+// state is per-thread, which is per native program.
+//
+// The wire format is RFC 3164, which is what a Linux syslogd expects on
+// /dev/log: "<PRI>Mmm dd hh:mm:ss ident[pid]: message". The facility and level
+// NUMBERS need no translation -- both sides inherited BSD's, so LOG_USER is 8,
+// LOG_AUTH 32, LOG_AUTHPRIV 80 and LOG_DEBUG 7 on Darwin and Linux alike --
+// which is worth stating because almost nothing else in this file gets to pass
+// a constant through.
+static __thread char nlibc_log_ident[64];
+static __thread int nlibc_log_facility = LOG_USER;
+static __thread int nlibc_log_option;
+static __thread int nlibc_log_fd = -1;
+
+void nlibc_openlog(const char *ident, int option, int facility) {
+    snprintf(nlibc_log_ident, sizeof(nlibc_log_ident), "%s",
+             ident != NULL ? ident : "");
+    nlibc_log_option = option;
+    if (facility != 0)
+        nlibc_log_facility = facility;
+    // LOG_NDELAY asks for the connection now; otherwise it waits for the first
+    // message, exactly as a real syslog does.
+    if ((option & LOG_NDELAY) && nlibc_log_fd < 0) {
+        int fd = nlibc_socket(AF_UNIX, SOCK_DGRAM, 0);
+        if (fd >= 0) {
+            struct sockaddr_un addr = { .sun_family = AF_UNIX };
+            snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", "/dev/log");
+            if (nlibc_connect(fd, &addr, sizeof(addr)) < 0)
+                nlibc_close(fd);
+            else
+                nlibc_log_fd = fd;
+        }
+    }
+}
+
+void nlibc_closelog(void) {
+    if (nlibc_log_fd >= 0)
+        nlibc_close(nlibc_log_fd);
+    nlibc_log_fd = -1;
+    nlibc_log_ident[0] = '\0';
+    nlibc_log_option = 0;
+    nlibc_log_facility = LOG_USER;
+}
+
+void nlibc_vsyslog(int priority, const char *fmt, va_list ap) {
+    char body[1024];
+    // %m is a glibc extension and Darwin's vsnprintf does not know it; OpenSSH
+    // does not use it, and expanding it here would mean parsing the format.
+    vsnprintf(body, sizeof(body), fmt, ap);
+
+    if ((priority & ~0x7) == 0)          // a bare level: use the stored facility
+        priority |= nlibc_log_facility;
+
+    char stamp[32];
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    strftime(stamp, sizeof(stamp), "%b %e %H:%M:%S", &tm);
+
+    char line[1200];
+    int n = snprintf(line, sizeof(line), "<%d>%s %s[%d]: %s", priority, stamp,
+            nlibc_log_ident[0] != '\0' ? nlibc_log_ident : "native",
+            (int) nlibc_getpid(), body);
+    if (n < 0)
+        return;
+    if ((size_t) n > sizeof(line) - 1)
+        n = sizeof(line) - 1;
+
+    if (nlibc_log_fd < 0)
+        nlibc_openlog(nlibc_log_ident, nlibc_log_option | LOG_NDELAY,
+                nlibc_log_facility);
+    if (nlibc_log_fd >= 0 && nlibc_write(nlibc_log_fd, line, (size_t) n) < 0) {
+        // A syslogd that went away leaves a dead socket behind; drop it so the
+        // next message reconnects.
+        nlibc_close(nlibc_log_fd);
+        nlibc_log_fd = -1;
+    }
+    // No /dev/log in the guest means the message is dropped, which is what
+    // syslog() does everywhere when nothing is listening. LOG_PERROR still
+    // reaches the guest's stderr, because that is routed too.
+    if (nlibc_log_option & LOG_PERROR)
+        fprintf(nlibc_stderr(), "%s: %s\n",
+                nlibc_log_ident[0] != '\0' ? nlibc_log_ident : "native", body);
+}
+
+void nlibc_syslog(int priority, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    nlibc_vsyslog(priority, fmt, ap);
+    va_end(ap);
+}
+
+// ------------------------------------------------------------------- mapping
+//
+// mmap is the only symbol in this file that must give two DIFFERENT answers in
+// the same build, which is why it is a wrapper and not a rename:
+//
+//  - sshkey.c's sshkey_prekey_alloc() maps MAP_ANON|MAP_PRIVATE with fd -1, on
+//    every private-key load, to hold the shielding prekey. That is ordinary
+//    host memory for host code to dereference, and it must STAY on the host: a
+//    guest mmap would return a guest address that this program cannot touch.
+//  - misc.c's lib_contains_symbol() maps a descriptor that came from the routed
+//    open() -- a GUEST fd. A host mmap on that number maps whatever host file
+//    happens to hold the same descriptor, or fails. It is reached from
+//    ssh-sk.c's sshsk_open(), i.e. any FIDO/-sk key.
+//
+// So the branch is on what the mapping IS, not on who called: anonymous memory
+// goes straight to the host, and a file mapping is satisfied by reading the
+// guest's file into host anonymous memory. That read is the honest way to give
+// host code a pointer to guest file contents -- there is no shared page to hand
+// out, because the guest's file lives behind AOK's VFS rather than in the host
+// filesystem.
+//
+// MAP_SHARED on a guest fd is refused rather than faked. A private read-only
+// map is a snapshot and copying gives exactly that; a shared one promises that
+// writes reach the file and that another mapper's writes become visible, and
+// neither is true of a copy. The one caller wants PROT_READ|MAP_PRIVATE.
+void *nlibc_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset) {
+    if ((flags & MAP_ANON) || fd < 0)
+        return mmap(addr, len, prot, flags, fd, offset);
+
+    if (flags & MAP_SHARED) {
+        errno = ENOTSUP;
+        return MAP_FAILED;
+    }
+    if (len == 0) {
+        errno = EINVAL;
+        return MAP_FAILED;
+    }
+    // Writable to fill, then narrowed to what the caller asked for.
+    void *mem = mmap(NULL, len, PROT_READ | PROT_WRITE,
+            MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (mem == MAP_FAILED)
+        return MAP_FAILED;
+    size_t at = 0;
+    while (at < len) {
+        ssize_t got = nlibc_pread(fd, (char *) mem + at, len - at,
+                offset + (off_t) at);
+        if (got < 0) {
+            int saved = errno;
+            munmap(mem, len);
+            errno = saved;
+            return MAP_FAILED;
+        }
+        if (got == 0)
+            break;      // short file: the rest stays zero, as mmap promises
+        at += (size_t) got;
+    }
+    if ((prot & (PROT_READ | PROT_WRITE)) != (PROT_READ | PROT_WRITE) &&
+            mprotect(mem, len, prot) < 0) {
+        int saved = errno;
+        munmap(mem, len);
+        errno = saved;
+        return MAP_FAILED;
+    }
+    return mem;
+}
+
+// Both kinds of mapping above are host anonymous memory underneath, so one
+// unmap serves both.
+int nlibc_munmap(void *addr, size_t len) {
+    return munmap(addr, len);
 }
