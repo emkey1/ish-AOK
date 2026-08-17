@@ -150,9 +150,27 @@ def patch(path, names):
     wanted = {n.rsplit(".", 1)[-1]: n for n in names}
     done, hit = set(), set()
 
-    def mark(i):
+    def is_function(window):
+        """`static void scanparamvals(HashNode hn, int flags)` is not a variable.
+
+        in_parens() only rejects a name found INSIDE the parameter list; it says
+        nothing when some other wanted name matches the return type or the
+        function's own name, and then `static __thread void` lands on a function
+        and the file stops compiling. This asks the shape of the whole
+        declarator instead: no `=` anywhere and a `name(` in it is a function,
+        unless the `(` opens a function-POINTER declarator, which is a variable.
+        """
+        if "=" in window:
+            return False
+        if re.search(r"\(\s*\*", window):
+            return False
+        return re.search(r"\w\s*\(", window) is not None
+
+    def mark(i, window=None):
         m = DEFN.match(lines[i])
         if not m or i in done:
+            return False
+        if window is not None and is_function(window):
             return False
         lines[i] = m.group("pre") + "static __thread" + m.group("post") + lines[i][m.end():]
         done.add(i)
@@ -169,7 +187,7 @@ def patch(path, names):
         found = [s for s in wanted
                  if re.search(r"\b" + re.escape(s) + r"\b", window)
                  and not in_parens(window, s)]
-        if found and mark(i):
+        if found and mark(i, window):
             hit.update(wanted[s] for s in found)
 
     # Second shape: find the name's own line, then walk back to the `static`
@@ -196,6 +214,67 @@ def patch(path, names):
     return hit
 
 
+def is_function_decl(window):
+    """See is_function() inside patch(); the .pro walk needs the same test."""
+    if "=" in window:
+        return False
+    if re.search(r"\(\s*\*", window):
+        return False
+    return re.search(r"\w\s*\(", window) is not None
+
+
+def patch_pro(path, names):
+    """zsh's generated `.pro` re-declares the file's statics; patch it too.
+
+    zsh runs makepro.awk over every source and writes Src/jobs.pro, which
+    jobs.c includes -- and which carries `static struct rusage child_usage;`
+    for a variable jobs.c itself has just defined. Converting only the
+    definition is not a silent wrong-memory read here, because both live in the
+    one translation unit and clang says so:
+
+        error: thread-local declaration of 'child_usage' follows
+               non-thread-local declaration
+
+    That is a nicer failure than the cross-TU one, but it still has to be
+    fixed, and there is no point making the human do 600 of them. The .pro is
+    a generated file that is checked in (deps/zsh is a CONFIGURED tree), so
+    editing it is as legitimate as editing the .c -- and `make prep` would undo
+    both together.
+    """
+    pro = path[:-2] + ".pro" if path.endswith(".c") else None
+    if not pro or not os.path.exists(pro):
+        return
+    wanted = {n.rsplit(".", 1)[-1] for n in names}
+    with open(pro, encoding="utf-8", errors="surrogateescape") as fh:
+        lines = fh.read().split("\n")
+    touched = False
+    for i, line in enumerate(lines):
+        m = DEFN.match(line)
+        if not m:
+            continue
+        # A prototype is `static void foo _((int));` -- the name is followed by
+        # a paren. A variable declarator is followed by `[`, `;`, `,` or `=`.
+        # Function POINTERS are variables and look like `static void
+        # (*f)(void);`, so they are matched by their own shape.
+        for n in wanted:
+            # `static int getargspec(int argc, int marg, int evset);` is a
+            # prototype, and `evset` is also the name of a static in the same
+            # file -- matched inside the parameter list, it put `__thread` on a
+            # function and the file stopped compiling. Same guard, same reason,
+            # as in_parens() above.
+            if in_parens(line, n) or is_function_decl(line):
+                continue
+            if (re.search(r"\b" + re.escape(n) + r"\b\s*(\[[^\]]*\])*\s*[;=,]", line)
+                    or re.search(r"\(\s*\*\s*" + re.escape(n) + r"\s*\)", line)):
+                lines[i] = (m.group("pre") + "static __thread" + m.group("post")
+                            + line[m.end():])
+                touched = True
+                break
+    if touched:
+        with open(pro, "w", encoding="utf-8", errors="surrogateescape") as fh:
+            fh.write("\n".join(lines))
+
+
 def main():
     archive = sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO, "build", "libbash.a")
     found = statics(archive)
@@ -207,6 +286,7 @@ def main():
             missed.append(f"{obj}: no source (symbols: {sorted(names)[:3]})")
             continue
         hit = patch(path, names)
+        patch_pro(path, names)
         patched += len(hit)
         for n in sorted(names - hit):
             missed.append(f"{os.path.relpath(path, REPO)}: {n} not found textually")

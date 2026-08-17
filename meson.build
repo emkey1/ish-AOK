@@ -1160,7 +1160,11 @@ if get_option('kernel') == 'ish'
             'jobs.c', 'lex.c', 'linklist.c', 'loop.c', 'math.c', 'mem.c',
             'module.c', 'options.c', 'params.c', 'parse.c', 'pattern.c',
             'prompt.c', 'signals.c', 'signames.c', 'sort.c', 'string.c',
-            'subst.c', 'text.c', 'utils.c', 'openssh_bsd_setres_id.c']
+            'subst.c', 'text.c', 'utils.c', 'openssh_bsd_setres_id.c',
+            # AOK's own, not upstream zsh's: fork by re-launch. It lives in the
+            # zsh tree beside the code it patches, exactly as deps/bash's
+            # aok_fork.c does, because only zsh can serialise zsh's state.
+            'aok_fork.c']
         zsh_builtins = ['rlimits.c', 'sched.c']
         zsh_modules = [
             'attr.c', 'clone.c', 'datetime.c', 'files.c', 'hlgroup.c',

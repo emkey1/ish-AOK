@@ -21,6 +21,7 @@
 #include <spawn.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+#include <utmpx.h>
 
 #include "kernel/calls.h"
 #include "kernel/errno.h"
@@ -1052,6 +1053,28 @@ pid_t nlibc_waitpid(pid_t pid, int *status, int options) {
 }
 pid_t nlibc_wait(int *status) {
     return nlibc_waitpid(-1, status, 0);
+}
+
+// wait3 and wait4, which exist here because a native program that DOES fork --
+// a shell -- reaches for them and the host's would answer.
+//
+// zsh's reaper is `pid = wait3(&status, WAITFLAGS, &ru)` (Src/signals.c), and
+// while fork always failed that line was unreachable. The moment a subshell
+// can be spawned it is the ONLY way zsh learns a child has exited: unrouted, it
+// asks Darwin about the app process's children, is told ECHILD forever, and
+// every subshell is reaped by nobody.
+//
+// The rusage is zeroed rather than filled. AOK has no per-task resource
+// accounting to report, and zsh's only use of it is the `time` keyword's
+// user/system breakdown, which would otherwise be uninitialised stack.
+pid_t nlibc_wait4(pid_t pid, int *status, int options, struct rusage *rusage) {
+    if (rusage != NULL)
+        memset(rusage, 0, sizeof(*rusage));
+    return nlibc_waitpid(pid, status, options);
+}
+
+pid_t nlibc_wait3(int *status, int options, struct rusage *rusage) {
+    return nlibc_wait4(-1, status, options, rusage);
 }
 
 // popen is a guest pipe, a child task with one end wired to its stdio, and a
@@ -3381,11 +3404,14 @@ static int nlibc_dns_answers(const uint8_t *msg, size_t len, const char *qname,
 }
 
 // Asks every configured server, `attempts` times round, until one answers.
-// Returns the number of addresses (0 means "the name is fine, it just has no
-// record of this type"), NLIBC_EAI_NONAME for an authoritative NXDOMAIN, or
-// NLIBC_EAI_AGAIN when nothing answered at all.
-static int nlibc_dns_query(const struct nlibc_resolv *rc, const char *name, int qtype,
-        struct nlibc_addr *out, int max) {
+// Returns the reply's length, NLIBC_EAI_NONAME for an authoritative NXDOMAIN,
+// or NLIBC_EAI_AGAIN when nothing answered at all.
+//
+// Split out from nlibc_dns_query below because there are two shapes of answer
+// to walk -- addresses for A and AAAA, a name for PTR -- and only the walking
+// differs. Asking is identical, down to the per-exchange ID.
+static ssize_t nlibc_dns_transact(const struct nlibc_resolv *rc, const char *name,
+        int qtype, uint8_t *reply, size_t reply_size) {
     uint8_t query[512];
     memset(query, 0, sizeof(query));
     size_t name_len = nlibc_dns_encode_name(name, query + 12, sizeof(query) - 12 - 4);
@@ -3407,9 +3433,8 @@ static int nlibc_dns_query(const struct nlibc_resolv *rc, const char *name, int 
             query[0] = (uint8_t) (id >> 8);
             query[1] = (uint8_t) (id & 0xff);
 
-            uint8_t reply[2048];
             ssize_t n = nlibc_dns_exchange(&rc->servers[s], query, qlen,
-                    rc->timeout_ms, reply, sizeof(reply));
+                    rc->timeout_ms, reply, reply_size);
             if (n < 12 || reply[0] != query[0] || reply[1] != query[1])
                 continue;
             if ((reply[2] & 0x80) == 0)   // not a response
@@ -3419,10 +3444,21 @@ static int nlibc_dns_query(const struct nlibc_resolv *rc, const char *name, int 
                 return NLIBC_EAI_NONAME;
             if (rcode != 0)               // SERVFAIL and friends: try the next
                 continue;
-            return nlibc_dns_answers(reply, (size_t) n, name, qtype, out, max);
+            return n;
         }
     }
     return NLIBC_EAI_AGAIN;
+}
+
+// The address form of that: how many addresses were written (0 means "the name
+// is fine, it just has no record of this type"), or a negative NLIBC_EAI_*.
+static int nlibc_dns_query(const struct nlibc_resolv *rc, const char *name, int qtype,
+        struct nlibc_addr *out, int max) {
+    uint8_t reply[2048];
+    ssize_t n = nlibc_dns_transact(rc, name, qtype, reply, sizeof(reply));
+    if (n < 0)
+        return (int) n;
+    return nlibc_dns_answers(reply, (size_t) n, name, qtype, out, max);
 }
 
 // The name -> addresses path: resolv.conf, the search list, then A and AAAA.
@@ -3687,6 +3723,341 @@ void nlibc_freeifaddrs(struct ifaddrs *ifa) {
         freeifaddrs(ifa);
 }
 
+// ------------------------------------------------------- the hostent family
+//
+// The OLDER resolver interface, and it was reaching the HOST's while
+// getaddrinfo directly above already asked the guest's -- one binary, two
+// resolvers, free to disagree. zsh's zsh/net/tcp and zsh/zftp are the callers:
+// `ztcp host port` resolves through getipnodebyname, because config.h defines
+// HAVE_GETIPNODEBYNAME and that makes zsh_getipnodebyname a plain #define onto
+// the host's (Src/Modules/tcp.c compiles its own portable version out), and the
+// bare `ztcp` session listing reverse-resolves each end with gethostbyaddr.
+// zftp adds getprotobyname, which is at the end of this file with the other
+// /etc database readers.
+//
+// Everything here is built ON the machinery above rather than beside it, so
+// there is one resolver in this file and one precedence rule: a numeric
+// address as itself, then the guest's /etc/hosts, then the guest's
+// /etc/resolv.conf nameservers over guest sockets.
+//
+// getipnodebyname and freehostent had to move TOGETHER, and that is the
+// load-bearing part of this block rather than an aside. getipnodebyname's
+// contract is that the CALLER frees the result with freehostent; route one and
+// not the other and the program hands a pointer from one allocator to the
+// other's free path. That is heap corruption rather than a wrong answer -- the
+// failure this file is least equipped to debug. gethostbyname and gethostbyaddr
+// have the opposite contract (a buffer the caller must NOT free), so both
+// shapes exist below and freehostent has to tell them apart, which is the only
+// reason `heap` is a field rather than an assumption.
+
+#define NLIBC_DNS_TYPE_PTR 12
+
+// "1.2.0.192.in-addr.arpa", or the nibble-reversed ip6.arpa form -- the name a
+// reverse lookup actually asks for.
+static bool nlibc_reverse_name(const void *raw, int family, char *out, size_t out_size) {
+    const uint8_t *b = raw;
+    if (family == AF_INET)
+        return (size_t) snprintf(out, out_size, "%u.%u.%u.%u.in-addr.arpa",
+                b[3], b[2], b[1], b[0]) < out_size;
+    if (family != AF_INET6 || out_size < 74)
+        return false;
+    static const char hex[] = "0123456789abcdef";
+    size_t at = 0;
+    for (int i = 15; i >= 0; i--) {
+        out[at++] = hex[b[i] & 0x0f];
+        out[at++] = '.';
+        out[at++] = hex[(b[i] >> 4) & 0x0f];
+        out[at++] = '.';
+    }
+    snprintf(out + at, out_size - at, "ip6.arpa");
+    return true;
+}
+
+// The first PTR record in the answer section whose owner is the name asked.
+// The same walk nlibc_dns_answers does, reading a NAME out of the rdata rather
+// than an address -- and with the same protection, since every name goes
+// through nlibc_dns_decode_name, whose backward-only pointer rule is what stops
+// a crafted reply from spinning here.
+static bool nlibc_dns_ptr_answer(const uint8_t *msg, size_t len, const char *qname,
+        char *out, size_t out_size) {
+    if (len < 12)
+        return false;
+    unsigned qdcount = ((unsigned) msg[4] << 8) | msg[5];
+    unsigned ancount = ((unsigned) msg[6] << 8) | msg[7];
+    size_t pos = 12;
+    for (unsigned i = 0; i < qdcount; i++) {
+        if (!nlibc_dns_decode_name(msg, len, pos, NULL, 0, &pos))
+            return false;
+        pos += 4;   // QTYPE + QCLASS
+        if (pos > len)
+            return false;
+    }
+    for (unsigned i = 0; i < ancount && pos < len; i++) {
+        char owner[256];
+        if (!nlibc_dns_decode_name(msg, len, pos, owner, sizeof(owner), &pos))
+            return false;
+        if (pos + 10 > len)
+            return false;
+        unsigned type = ((unsigned) msg[pos] << 8) | msg[pos + 1];
+        unsigned class = ((unsigned) msg[pos + 2] << 8) | msg[pos + 3];
+        unsigned rdlen = ((unsigned) msg[pos + 8] << 8) | msg[pos + 9];
+        size_t rdata = pos + 10;
+        pos = rdata + rdlen;
+        if (pos > len)
+            return false;
+        if (class != NLIBC_DNS_CLASS_IN || type != NLIBC_DNS_TYPE_PTR ||
+                strcasecmp(owner, qname) != 0)
+            continue;
+        size_t ignored = 0;
+        if (nlibc_dns_decode_name(msg, len, rdata, out, out_size, &ignored))
+            return true;
+    }
+    return false;
+}
+
+// The GUEST's /etc/hosts in the reverse direction. It comes before DNS here for
+// the same reason it does in getaddrinfo: an entry in that file is how a guest
+// overrides a name, and a resolver that consulted it only one way round would
+// honour the override for connect and ignore it for display.
+static bool nlibc_hosts_reverse(const void *raw, int family, char *out, size_t out_size) {
+    FILE *f = nlibc_fopen("/etc/hosts", "r");
+    if (f == NULL)
+        return false;
+    size_t width = family == AF_INET6 ? 16 : 4;
+    char line[512];
+    bool found = false;
+    while (!found && fgets(line, sizeof(line), f) != NULL) {
+        char *hash = strchr(line, '#');
+        if (hash != NULL)
+            *hash = '\0';
+        char *save = NULL;
+        char *addr = strtok_r(line, " \t\r\n", &save);
+        if (addr == NULL)
+            continue;
+        uint8_t bytes[16];
+        int af = 0;
+        memset(bytes, 0, sizeof(bytes));
+        if (nlibc_parse_numeric(addr, family, bytes, &af) != 0 || af != family)
+            continue;
+        if (memcmp(bytes, raw, width) != 0)
+            continue;
+        char *name = strtok_r(NULL, " \t\r\n", &save);
+        if (name != NULL) {
+            snprintf(out, out_size, "%s", name);
+            found = true;
+        }
+    }
+    fclose(f);
+    return found;
+}
+
+// One hostent and everything it points at, in a single block: the heap form is
+// then one calloc and one free, and the static form one thread-local object
+// rather than a scatter of buffers with different lifetimes. `he` is FIRST on
+// purpose -- freehostent is handed that address and casts back.
+struct nlibc_hostent {
+    struct hostent he;
+    bool heap;
+    char name[256];
+    char *aliases[1];
+    char *addrs[NLIBC_DNS_MAX_ADDRS + 1];
+    uint8_t raw[NLIBC_DNS_MAX_ADDRS][16];
+};
+
+static struct hostent *nlibc_hostent_fill(struct nlibc_hostent *h, const char *name,
+        int family, const struct nlibc_addr *addrs, int count) {
+    int width = family == AF_INET6 ? 16 : 4;
+    if (count > NLIBC_DNS_MAX_ADDRS)
+        count = NLIBC_DNS_MAX_ADDRS;
+    snprintf(h->name, sizeof(h->name), "%s", name);
+    h->aliases[0] = NULL;
+    for (int i = 0; i < count; i++) {
+        memcpy(h->raw[i], addrs[i].raw, (size_t) width);
+        h->addrs[i] = (char *) h->raw[i];
+    }
+    h->addrs[count] = NULL;
+    h->he.h_name = h->name;
+    h->he.h_aliases = h->aliases;
+    h->he.h_addrtype = family;
+    h->he.h_length = width;
+    h->he.h_addr_list = h->addrs;
+    return &h->he;
+}
+
+// name -> addresses, through nlibc_getaddrinfo so the precedence rule lives in
+// exactly one place. A hostent carries ONE address family, so a lookup that
+// asked for AF_UNSPEC keeps whichever family came back first -- and A is
+// emitted before AAAA above, which is the same order a caller walking the list
+// would have used anyway.
+static int nlibc_host_addrs(const char *name, int family, struct nlibc_addr *out,
+        int max, int *out_family, int *error_num) {
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = family;
+    hints.ai_socktype = SOCK_STREAM;
+    int err = nlibc_getaddrinfo(name, NULL, &hints, &res);
+    if (err != 0) {
+        *error_num = err == NLIBC_EAI_AGAIN ? TRY_AGAIN : HOST_NOT_FOUND;
+        return -1;
+    }
+    int count = 0, af = 0;
+    for (struct addrinfo *ai = res; ai != NULL && count < max; ai = ai->ai_next) {
+        if (af == 0)
+            af = ai->ai_family;
+        if (ai->ai_family != af || ai->ai_addr == NULL)
+            continue;
+        memset(&out[count], 0, sizeof(out[count]));
+        out[count].family = af;
+        if (af == AF_INET)
+            memcpy(out[count].raw, &((struct sockaddr_in *) ai->ai_addr)->sin_addr, 4);
+        else
+            memcpy(out[count].raw, &((struct sockaddr_in6 *) ai->ai_addr)->sin6_addr, 16);
+        count++;
+    }
+    nlibc_freeaddrinfo(res);
+    if (count == 0) {
+        *error_num = HOST_NOT_FOUND;
+        return -1;
+    }
+    *out_family = af;
+    return count;
+}
+
+// The reverse direction, shared by gethostbyaddr and getipnodebyaddr.
+static bool nlibc_host_name(const void *addr, int family, char *out, size_t out_size,
+        int *error_num) {
+    if (nlibc_hosts_reverse(addr, family, out, out_size))
+        return true;
+    struct nlibc_resolv rc;
+    nlibc_read_resolv_conf(&rc);
+    char qname[80];
+    if (rc.server_count == 0 || !nlibc_reverse_name(addr, family, qname, sizeof(qname))) {
+        *error_num = HOST_NOT_FOUND;
+        return false;
+    }
+    uint8_t reply[2048];
+    ssize_t n = nlibc_dns_transact(&rc, qname, NLIBC_DNS_TYPE_PTR, reply, sizeof(reply));
+    if (n < 0 || !nlibc_dns_ptr_answer(reply, (size_t) n, qname, out, out_size)) {
+        *error_num = n == NLIBC_EAI_AGAIN ? TRY_AGAIN : HOST_NOT_FOUND;
+        return false;
+    }
+    return true;
+}
+
+// The static-buffer half of the family. Thread-local rather than file-scope,
+// which is the lesson getopt taught one level up in this file: a native program
+// is a function on a task's thread, so "one copy per process" means two guest
+// processes sharing a result.
+static __thread struct nlibc_hostent nlibc_he;
+
+struct hostent *nlibc_gethostbyname2(const char *name, int af) {
+    if (name == NULL || (af != AF_INET && af != AF_INET6)) {
+        h_errno = HOST_NOT_FOUND;
+        return NULL;
+    }
+    struct nlibc_addr addrs[NLIBC_DNS_MAX_ADDRS];
+    int family = af, error_num = HOST_NOT_FOUND;
+    int count = nlibc_host_addrs(name, af, addrs, NLIBC_DNS_MAX_ADDRS,
+            &family, &error_num);
+    if (count < 0) {
+        h_errno = error_num;
+        return NULL;
+    }
+    memset(&nlibc_he, 0, sizeof(nlibc_he));
+    return nlibc_hostent_fill(&nlibc_he, name, family, addrs, count);
+}
+
+struct hostent *nlibc_gethostbyname(const char *name) {
+    return nlibc_gethostbyname2(name, AF_INET);
+}
+
+struct hostent *nlibc_gethostbyaddr(const void *addr, socklen_t len, int af) {
+    size_t width = af == AF_INET6 ? 16 : 4;
+    if (addr == NULL || (af != AF_INET && af != AF_INET6) || len != (socklen_t) width) {
+        h_errno = HOST_NOT_FOUND;
+        return NULL;
+    }
+    char name[256];
+    int error_num = HOST_NOT_FOUND;
+    if (!nlibc_host_name(addr, af, name, sizeof(name), &error_num)) {
+        h_errno = error_num;
+        return NULL;
+    }
+    struct nlibc_addr one;
+    memset(&one, 0, sizeof(one));
+    one.family = af;
+    memcpy(one.raw, addr, width);
+    memset(&nlibc_he, 0, sizeof(nlibc_he));
+    return nlibc_hostent_fill(&nlibc_he, name, af, &one, 1);
+}
+
+// The caller-frees half. `flags` is accepted and not acted on: AI_V4MAPPED and
+// AI_ALL ask for a v4 answer dressed up as v6, which this resolver does not
+// synthesise, so AF_INET6 here means real AAAA records or nothing. Said out
+// loud because silently mapping would be the more dangerous of the two.
+struct hostent *nlibc_getipnodebyname(const char *name, int af, int flags,
+        int *error_num) {
+    int discard = 0;
+    if (error_num == NULL)
+        error_num = &discard;
+    (void) flags;
+    *error_num = HOST_NOT_FOUND;
+    if (name == NULL || (af != AF_INET && af != AF_INET6))
+        return NULL;
+    struct nlibc_addr addrs[NLIBC_DNS_MAX_ADDRS];
+    int family = af;
+    int count = nlibc_host_addrs(name, af, addrs, NLIBC_DNS_MAX_ADDRS,
+            &family, error_num);
+    if (count < 0)
+        return NULL;
+    struct nlibc_hostent *h = calloc(1, sizeof(*h));
+    if (h == NULL) {
+        *error_num = NO_RECOVERY;
+        return NULL;
+    }
+    h->heap = true;
+    return nlibc_hostent_fill(h, name, family, addrs, count);
+}
+
+struct hostent *nlibc_getipnodebyaddr(const void *addr, size_t len, int af,
+        int *error_num) {
+    int discard = 0;
+    if (error_num == NULL)
+        error_num = &discard;
+    *error_num = HOST_NOT_FOUND;
+    size_t width = af == AF_INET6 ? 16 : 4;
+    if (addr == NULL || (af != AF_INET && af != AF_INET6) || len != width)
+        return NULL;
+    char name[256];
+    if (!nlibc_host_name(addr, af, name, sizeof(name), error_num))
+        return NULL;
+    struct nlibc_hostent *h = calloc(1, sizeof(*h));
+    if (h == NULL) {
+        *error_num = NO_RECOVERY;
+        return NULL;
+    }
+    h->heap = true;
+    struct nlibc_addr one;
+    memset(&one, 0, sizeof(one));
+    one.family = af;
+    memcpy(one.raw, addr, width);
+    return nlibc_hostent_fill(h, name, af, &one, 1);
+}
+
+// Frees what getipnodeby* returned and NOTHING else. The `heap` flag is what
+// makes that safe: a hostent from gethostbyname is the thread-local above, and
+// a caller that passes it here -- which the API says it must not, and which a
+// program porting between the two families will do sooner or later -- gets a
+// no-op instead of free() on a static object.
+void nlibc_freehostent(struct hostent *he) {
+    if (he == NULL)
+        return;
+    struct nlibc_hostent *h = (struct nlibc_hostent *) he;   // he is the first member
+    if (h->heap)
+        free(h);
+}
+
 // ------------------------------------------------------------------- signals
 //
 // A native program's handler is HOST code, and the kernel delivers a signal by
@@ -3711,10 +4082,21 @@ void nlibc_freeifaddrs(struct ifaddrs *ifa) {
 
 typedef void (*nlibc_sighandler)(int);
 
-// Indexed by HOST signal number. Static, like the rest of this file's state:
-// two native programs running at once already share nlibc_std and the passwd
-// cache, and fixing that is a separate piece of work.
-static nlibc_sighandler nlibc_handlers[NSIG];
+// Indexed by HOST signal number, and PER TASK.
+//
+// This was a plain static, with a note saying that two native programs running
+// at once share other things too. It stopped being defensible when a native
+// shell started spawning native children: zsh ignores SIGQUIT for itself at
+// startup and then asks `sigaction(SIGQUIT, NULL, &act)` whether it was ALREADY
+// ignored, to decide whether to record an inherited `trap -- '' QUIT`. Shared,
+// the answer it got was its own parent's, so every subshell reported a trap
+// that a real forked subshell does not have -- and, less visibly, one shell's
+// SIG_IGN was another's disposition for every signal.
+//
+// __thread rather than per-task-struct because a native program IS a host
+// thread here, and everything else the shim keeps for it (the delivery
+// re-entry guard, the held set) is reached the same way.
+static __thread nlibc_sighandler nlibc_handlers[NSIG];
 
 // how values: Linux 0/1/2, Darwin 1/2/3.
 static int nlibc_sigmask_how(int host_how) {
@@ -3947,10 +4329,21 @@ int nlibc_sigwait(const sigset_t *set, int *sig) {
 // Called from native_checkpoint, which every syscall goes through: this is
 // where a shim-held handler actually runs.
 void nlibc_deliver_signals(void) {
+    (void) nlibc_deliver_signals_count();
+}
+
+// How many handlers ran. The count is what nlibc_sigsuspend needs: "a signal
+// arrived while you were waiting" is exactly the thing sigsuspend reports, and
+// a caller that goes straight back to sleep without being told would never see
+// the state the handler changed.
+int nlibc_deliver_signals_count(void) {
     // A handler makes syscalls of its own, each of which checkpoints again.
-    static bool delivering;
+    // __thread because two native programs can be live at once: a process-wide
+    // flag meant one shell delivering suppressed the other's delivery entirely.
+    static __thread bool delivering;
+    int ran = 0;
     if (delivering)
-        return;
+        return 0;
 
     // Which of ours are pending. Cheap enough not to matter next to the
     // syscall it precedes, but skipped entirely when nothing is installed.
@@ -3964,7 +4357,7 @@ void nlibc_deliver_signals(void) {
             ours |= (sigset_t_) 1 << (guest_sig - 1);
     }
     if (ours == 0)
-        return;
+        return 0;
 
     delivering = true;
     for (;;) {
@@ -3974,10 +4367,13 @@ void nlibc_deliver_signals(void) {
         int host_sig = nlibc_signal_to_host(guest_sig);
         nlibc_sighandler handler = host_sig > 0 && host_sig < NSIG ?
                 nlibc_handlers[host_sig] : NULL;
-        if (handler != NULL && handler != SIG_DFL && handler != SIG_IGN)
+        if (handler != NULL && handler != SIG_DFL && handler != SIG_IGN) {
             handler(host_sig);
+            ran++;
+        }
     }
     delivering = false;
+    return ran;
 }
 
 // -------------------------------------------------------------------- session
@@ -5097,6 +5493,117 @@ int nlibc_ftruncate(int fd_no, off_t len) {
 int nlibc_syncfs(int fd_no) {
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_syncfs, fd_no));
 }
+
+// sync(2). The guest's answer is a known constant rather than a call: AOK's
+// arm64 table has `[81] = syscall_success_stub, // sync` (kernel/calls.c, and
+// the same at 36 on i386 and 162 on amd64), because a fakefs has no device
+// buffers of its own to flush. So this returns having done nothing, which is
+// precisely what the guest's own sync(2) does.
+//
+// It is written here rather than dispatched because the number is not in the
+// generated header: tools/gen-native-syscalls.py excludes the stub handlers on
+// purpose, and success_stub is one of them. That exclusion is right for
+// "unimplemented" and merely inconvenient for "deliberately a no-op", which is
+// what this comment exists to record -- the value below is not a guess about
+// the guest, it is the guest's table read out.
+//
+// Unrouted this was the HOST's sync(2), which flushes the DEVICE's buffers:
+// `zmodload zsh/files; sync` in a guest shell made the Mac write out its
+// filesystems.
+void nlibc_sync(void) {
+}
+
+// The extended-attribute family, all eight of Darwin's spellings.
+//
+// The guest's answer is again a constant, and again read out of the table
+// rather than guessed: kernel/calls.c's arm64 entry is
+// `[5 ... 16] = (syscall_t) sys_xattr_stub` -- twelve numbers, the whole
+// get/set/list/remove x plain/l/f matrix -- and kernel/fs.c:2763 makes
+// sys_xattr_stub `return _ENOTSUP;` unconditionally, for any path. AOK's fakefs
+// stores no xattrs, so "this filesystem does not support them" is the true
+// answer and not a refusal to answer.
+//
+// These are absent from the generated header for a different reason than sync
+// above: the numbers arrive as a RANGE initialiser and the generator's regex
+// only matches single-index entries. Worth knowing before assuming a missing
+// NATIVE_SYS_* means a missing syscall.
+//
+// What this replaces is the sharpest result the triage turned up, and it is
+// worth keeping: `zmodload zsh/attr` (one line in a .zshrc) plus
+// `zlistattr /Users` returned SUCCESS in a guest where /Users does not exist,
+// while `zlistattr /etc/debian_version` failed on a file the guest could list.
+// The module was resolving guest paths against the Mac's root -- a read and
+// write primitive aimed at the device, two words from any prompt.
+//
+// If AOK ever implements xattrs, these move to native_syscall together with the
+// kernel change; the l-forms are Darwin's XATTR_NOFOLLOW option rather than
+// separate entry points, which is why there are eight names here and twelve in
+// the table.
+ssize_t nlibc_getxattr(const char *path, const char *name, void *value,
+        size_t size, uint32_t position, int options) {
+    (void) path; (void) name; (void) value; (void) size;
+    (void) position; (void) options;
+    return nlibc_fail(_ENOTSUP);
+}
+ssize_t nlibc_fgetxattr(int fd_no, const char *name, void *value,
+        size_t size, uint32_t position, int options) {
+    (void) fd_no; (void) name; (void) value; (void) size;
+    (void) position; (void) options;
+    return nlibc_fail(_ENOTSUP);
+}
+int nlibc_setxattr(const char *path, const char *name, const void *value,
+        size_t size, uint32_t position, int options) {
+    (void) path; (void) name; (void) value; (void) size;
+    (void) position; (void) options;
+    return nlibc_fail(_ENOTSUP);
+}
+int nlibc_fsetxattr(int fd_no, const char *name, const void *value,
+        size_t size, uint32_t position, int options) {
+    (void) fd_no; (void) name; (void) value; (void) size;
+    (void) position; (void) options;
+    return nlibc_fail(_ENOTSUP);
+}
+ssize_t nlibc_listxattr(const char *path, char *names, size_t size, int options) {
+    (void) path; (void) names; (void) size; (void) options;
+    return nlibc_fail(_ENOTSUP);
+}
+ssize_t nlibc_flistxattr(int fd_no, char *names, size_t size, int options) {
+    (void) fd_no; (void) names; (void) size; (void) options;
+    return nlibc_fail(_ENOTSUP);
+}
+int nlibc_removexattr(const char *path, const char *name, int options) {
+    (void) path; (void) name; (void) options;
+    return nlibc_fail(_ENOTSUP);
+}
+int nlibc_fremovexattr(int fd_no, const char *name, int options) {
+    (void) fd_no; (void) name; (void) options;
+    return nlibc_fail(_ENOTSUP);
+}
+
+// nice(3). The host's renices the THREAD this emulator is running on -- so a
+// guest background job would deprioritise the whole of iSH-AOK, while the
+// guest's own view of its nice level (what guest `ps` and `nice` report) never
+// moved. Wrong subject, in the same shape as the setegid entry further up.
+//
+// The request is issued to the GUEST so that it lands where a guest process's
+// priority lives, and so it follows automatically if AOK ever grows real
+// scheduling. The ANSWER is written here because AOK has no priorities today:
+// kernel/resource.c's sys_setpriority does nothing and sys_getpriority returns
+// a constant, since guest tasks run on host threads the app does not get to
+// renice. The guest's nice level is therefore 0 before the call and 0 after it,
+// and 0 is what a caller must be told.
+//
+// setpriority takes an ABSOLUTE nice value where nice() takes an increment. The
+// two coincide only because the current value is fixed at 0; the day that stops
+// being true, this has to read the current value first, and this paragraph is
+// the note saying so.
+int nlibc_nice(int incr) {
+    // PRIO_PROCESS is 0 on the guest as on Darwin, and `who` 0 means "me".
+    sqword_t res = native_syscall(NATIVE_SYS_setpriority, 0, 0, (dword_t) incr);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    return 0;
+}
 pid_t nlibc_gettid(void) {
     return (pid_t) nlibc_ret(native_syscall(NATIVE_SYS_gettid));
 }
@@ -5639,6 +6146,245 @@ struct group *nlibc_getgrent(void) {
     return &nlibc_gr;
 }
 
+// ------------------------------------------------------- the login database
+//
+// getutxent and its relatives read the HOST's utmpx, and this is the leak that
+// prints rather than merely misreports: with `log` or $WATCH set, a guest shell
+// listed the MAC's sessions by name -- "mke has logged on console from ." and
+// one line per open Terminal tab. Nothing in the guest put them there.
+//
+// The trap that makes this more than a redirection is the LAYOUT. The guest's
+// /var/run/utmp is Linux's:
+//
+//   offset  0  int32   ut_type          (USER_PROCESS == 7)
+//           4  int32   ut_pid
+//           8  char    ut_line[32]
+//          40  char    ut_id[4]
+//          44  char    ut_user[32]
+//          76  char    ut_host[256]
+//         340  int32   ut_tv.tv_sec, then int32 tv_usec
+//                                      384 bytes per record
+//
+// Darwin's struct utmpx is a different shape entirely -- ut_user first and 256
+// bytes wide, ut_type after ut_pid -- so pointing the host's header at the
+// guest's file parses nonsense. That is exactly what un-defining HAVE_GETUTXENT
+// would have done, because zsh's fallback (Src/Modules/watch.c) fread()s the
+// file straight into WATCH_STRUCT_UTMP. So the file is parsed here, by offset,
+// and a Darwin struct utmpx is BUILT from it.
+//
+// The offsets are not derived again: they are the ones deps/smallclue/src/
+// core.c's smallclueUtmpUserCount() already established and ships against, and
+// the two readers agree field for field so a guest cannot see `uptime` and
+// `log` disagree about who is logged in.
+//
+// Byte order is the guest's, and the guest's is the host's: every AOK guest ABI
+// (i386, amd64, arm64, riscv64) is little-endian, as is every device this runs
+// on, so the int32 fields are memcpy'd rather than assembled.
+
+#define NLIBC_UTMP_RECORD    384
+#define NLIBC_UTMP_OFF_TYPE    0
+#define NLIBC_UTMP_OFF_PID     4
+#define NLIBC_UTMP_OFF_LINE    8
+#define NLIBC_UTMP_OFF_ID     40
+#define NLIBC_UTMP_OFF_USER   44
+#define NLIBC_UTMP_OFF_HOST   76
+#define NLIBC_UTMP_OFF_TV    340
+#define NLIBC_UTMP_LEN_LINE   32
+#define NLIBC_UTMP_LEN_ID      4
+#define NLIBC_UTMP_LEN_USER   32
+#define NLIBC_UTMP_LEN_HOST  256
+
+// Where a Linux guest keeps it. Both spellings, because /var/run is a symlink
+// to /run on a systemd-era rootfs and a plain directory on others, and a
+// distribution that has moved it should not silently read nothing.
+static const char *const nlibc_utmp_paths[] = { "/var/run/utmp", "/run/utmp", NULL };
+
+static __thread FILE *nlibc_utx_file;
+static __thread struct utmpx nlibc_utx;
+
+// The two numbering systems agree on every value except 3 and 4, which are
+// SWAPPED: Linux has NEW_TIME 3 and OLD_TIME 4, Darwin has OLD_TIME 3 and
+// NEW_TIME 4. Everything else -- EMPTY 0 through ACCOUNTING 9, and USER_PROCESS
+// 7, the only one anything here tests -- lines up.
+static short nlibc_utmp_type(int32_t guest_type) {
+    switch (guest_type) {
+        case 3:  return NEW_TIME;
+        case 4:  return OLD_TIME;
+        default: break;
+    }
+    if (guest_type < 0 || guest_type > 9)
+        return EMPTY;
+    return (short) guest_type;
+}
+
+static void nlibc_utmp_field(char *dst, size_t dst_size, const uint8_t *rec,
+        size_t offset, size_t width) {
+    size_t copy = width < dst_size - 1 ? width : dst_size - 1;
+    memcpy(dst, rec + offset, copy);
+    dst[copy] = '\0';
+}
+
+// Opening and reading are separate from the ENUMERATION STATE on purpose:
+// getlogin below needs to walk the same file without disturbing a walk the
+// program may be in the middle of, and a getutxent that saved and restored a
+// position could not do that -- there is no position to save on a FILE*. So it
+// gets a handle of its own instead.
+static FILE *nlibc_utmp_open(void) {
+    for (int i = 0; nlibc_utmp_paths[i] != NULL; i++) {
+        FILE *f = nlibc_fopen(nlibc_utmp_paths[i], "r");
+        if (f != NULL)
+            return f;
+    }
+    return NULL;
+}
+
+static bool nlibc_utmp_next(FILE *f, struct utmpx *out) {
+    uint8_t rec[NLIBC_UTMP_RECORD];
+    if (f == NULL || fread(rec, sizeof(rec), 1, f) != 1)
+        return false;
+    int32_t type = 0, pid = 0, sec = 0, usec = 0;
+    memcpy(&type, rec + NLIBC_UTMP_OFF_TYPE, sizeof(type));
+    memcpy(&pid, rec + NLIBC_UTMP_OFF_PID, sizeof(pid));
+    memcpy(&sec, rec + NLIBC_UTMP_OFF_TV, sizeof(sec));
+    memcpy(&usec, rec + NLIBC_UTMP_OFF_TV + 4, sizeof(usec));
+    memset(out, 0, sizeof(*out));
+    out->ut_type = nlibc_utmp_type(type);
+    out->ut_pid = (pid_t) pid;
+    out->ut_tv.tv_sec = sec;
+    out->ut_tv.tv_usec = usec;
+    nlibc_utmp_field(out->ut_user, sizeof(out->ut_user), rec,
+            NLIBC_UTMP_OFF_USER, NLIBC_UTMP_LEN_USER);
+    nlibc_utmp_field(out->ut_line, sizeof(out->ut_line), rec,
+            NLIBC_UTMP_OFF_LINE, NLIBC_UTMP_LEN_LINE);
+    nlibc_utmp_field(out->ut_host, sizeof(out->ut_host), rec,
+            NLIBC_UTMP_OFF_HOST, NLIBC_UTMP_LEN_HOST);
+    memcpy(out->ut_id, rec + NLIBC_UTMP_OFF_ID, NLIBC_UTMP_LEN_ID);
+    return true;
+}
+
+void nlibc_setutxent(void) {
+    if (nlibc_utx_file != NULL)
+        fclose(nlibc_utx_file);
+    nlibc_utx_file = nlibc_utmp_open();
+}
+
+void nlibc_endutxent(void) {
+    if (nlibc_utx_file != NULL) {
+        fclose(nlibc_utx_file);
+        nlibc_utx_file = NULL;
+    }
+}
+
+struct utmpx *nlibc_getutxent(void) {
+    // A real getutxent opens on first use; a caller that never calls setutxent
+    // still gets the first record rather than nothing.
+    if (nlibc_utx_file == NULL)
+        nlibc_setutxent();
+    return nlibc_utmp_next(nlibc_utx_file, &nlibc_utx) ? &nlibc_utx : NULL;
+}
+
+// Scan forward for a line, as the API says: from where the walk currently is,
+// not from the start.
+struct utmpx *nlibc_getutxline(const struct utmpx *want) {
+    if (want == NULL)
+        return NULL;
+    for (struct utmpx *u = nlibc_getutxent(); u != NULL; u = nlibc_getutxent())
+        if ((u->ut_type == LOGIN_PROCESS || u->ut_type == USER_PROCESS) &&
+                strncmp(u->ut_line, want->ut_line, sizeof(u->ut_line)) == 0)
+            return u;
+    return NULL;
+}
+
+struct utmpx *nlibc_getutxid(const struct utmpx *want) {
+    if (want == NULL)
+        return NULL;
+    for (struct utmpx *u = nlibc_getutxent(); u != NULL; u = nlibc_getutxent()) {
+        switch (want->ut_type) {
+            case RUN_LVL: case BOOT_TIME: case OLD_TIME: case NEW_TIME:
+                if (u->ut_type == want->ut_type)
+                    return u;
+                break;
+            case INIT_PROCESS: case LOGIN_PROCESS:
+            case USER_PROCESS: case DEAD_PROCESS:
+                if ((u->ut_type == INIT_PROCESS || u->ut_type == LOGIN_PROCESS ||
+                     u->ut_type == USER_PROCESS || u->ut_type == DEAD_PROCESS) &&
+                        memcmp(u->ut_id, want->ut_id, sizeof(u->ut_id)) == 0)
+                    return u;
+                break;
+            default:
+                return NULL;
+        }
+    }
+    return NULL;
+}
+
+// Writing is refused rather than implemented. A record appended here would have
+// to be built in the GUEST's layout, and nothing native has ever asked -- so an
+// implementation would be untested code holding a lock on a file the guest's
+// own login programs also write. Refusing is what a real system tells an
+// unprivileged process anyway, and it is a failure the caller can see, which is
+// the whole difference from appending to the DEVICE's database.
+struct utmpx *nlibc_pututxline(const struct utmpx *line) {
+    (void) line;
+    errno = EPERM;
+    return NULL;
+}
+
+// getlogin answered with the MAC's login session, and not even consistently
+// with the host's own credentials: a probe running as uid 501 (mke) got "root"
+// back. zsh takes this and makes it $LOGNAME (Src/params.c), so every native
+// shell started with a $LOGNAME nobody in the guest chose.
+//
+// The algorithm is glibc's, over the guest's data: find the controlling
+// terminal, then the utmp record that claims it. The fallback is the one place
+// this differs, and deliberately -- glibc gives up when utmp has nothing, but
+// an AOK guest usually has no utmp at all (neither test rootfs ships one), and
+// "the passwd entry for the uid this task is running as" is both a true
+// statement about the guest and the answer a user expects `su - aok` to change.
+char *nlibc_getlogin(void) {
+    static __thread char name[64];
+    char *tty = nlibc_ttyname(STDIN_FILENO);
+    if (tty != NULL) {
+        const char *line = strrchr(tty, '/');
+        line = line != NULL ? line + 1 : tty;
+        // Its own handle, so this cannot move a getutxent walk the program is
+        // in the middle of. See nlibc_utmp_open.
+        FILE *f = nlibc_utmp_open();
+        struct utmpx u;
+        bool found = false;
+        while (!found && nlibc_utmp_next(f, &u)) {
+            if (u.ut_type == USER_PROCESS && u.ut_user[0] != '\0' &&
+                    strncmp(u.ut_line, line, sizeof(u.ut_line)) == 0) {
+                snprintf(name, sizeof(name), "%s", u.ut_user);
+                found = true;
+            }
+        }
+        if (f != NULL)
+            fclose(f);
+        if (found)
+            return name;
+    }
+    struct passwd *pw = nlibc_getpwuid(nlibc_getuid());
+    if (pw == NULL || pw->pw_name == NULL) {
+        errno = ENXIO;
+        return NULL;
+    }
+    snprintf(name, sizeof(name), "%s", pw->pw_name);
+    return name;
+}
+
+int nlibc_getlogin_r(char *buf, size_t len) {
+    if (buf == NULL || len == 0)
+        return EINVAL;
+    char *who = nlibc_getlogin();
+    if (who == NULL)
+        return ENXIO;
+    if (strlen(who) + 1 > len)
+        return ERANGE;
+    memcpy(buf, who, strlen(who) + 1);
+    return 0;
+}
+
 // ------------------------------------------------------------------ execve
 //
 // execv with the environment given explicitly rather than taken from the task.
@@ -5646,15 +6392,94 @@ struct group *nlibc_getgrent(void) {
 int nlibc_execve(const char *path, char *const argv[], char *const envp[]) {
     if (path == NULL || argv == NULL)
         return nlibc_fail(_EFAULT);
+    // native_spawn_opts, not native_spawn, and ONLY for the signal mask -- the
+    // same reason nlibc_exec_common does it, and this function was the one
+    // place that did not. Measured in the guest before the fix:
+    //
+    //   /bin/sh          -c 'exec grep SigBlk /proc/self/status' -> 00000000
+    //   /AOK/native/zsh  -c 'exec grep SigBlk /proc/self/status' -> 08010001
+    //
+    // 0x08010001 is SIGHUP, SIGCHLD and SIGWINCH blocked in a program that
+    // never asked -- the shim's own "block it and drain at a checkpoint"
+    // holding, inherited by whatever the caller exec'd. zsh's zexecve goes
+    // through execve rather than execv, so every external command a native zsh
+    // ran started life with those three blocked.
+    struct native_spawn_opts opts = { .pgid = NATIVE_SPAWN_PGID_INHERIT };
+    nlibc_spawn_default_sigmask(&opts);
     dword_t pid = 0;
-    int err = native_spawn(path, argv, envp != NULL ? envp : native_env_vector(),
-            &pid);
+    int err = native_spawn_opts(path, argv,
+            envp != NULL ? envp : native_env_vector(), &opts, &pid);
     if (err < 0)
         return nlibc_fail(err);
     int status = 0;
     if (native_waitpid(pid, &status, 0) < 0)
         nlibc_exit(127);
     nlibc_exit(WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status));
+}
+
+// --------------------------------------------------------------- sigsuspend
+//
+// Wait until a signal is delivered, with MASK installed for the duration.
+//
+// Expressed as pselect with no descriptors and no timeout, which is exactly
+// what sigsuspend is -- and which means it inherits nlibc_pselect's handling of
+// the shim's own held signals rather than needing a second copy of it.
+//
+// Unrouted, this reached the HOST's sigsuspend and parked the task's pthread on
+// a mask no guest signal can break. zsh's signal_suspend (Src/signals.c) is
+// what waitforpid spins in, so `x=$(cmd)` would have hung after the child
+// exited rather than collecting its status.
+int nlibc_sigsuspend(const sigset_t *mask) {
+    struct timespec *forever = NULL;
+    // MASK is the program's blocked set FOR THE DURATION, and saying so to the
+    // shim is the whole point rather than bookkeeping.
+    //
+    // struct task's native_held is `shim_held & ~native_prog_blocked` -- the
+    // signals the shim is holding behind the program's back, which
+    // task_wake_blocked() subtracts so that a wait still ends for them. A
+    // signal the PROGRAM blocked is deliberately not in there: it asked not to
+    // be interrupted.
+    //
+    // zsh waits for a child inside child_block(), which blocks SIGCHLD, and
+    // then calls sigsuspend with an (almost) empty mask -- "unblock SIGCHLD
+    // while I sleep". Without this, native_prog_blocked still said SIGCHLD was
+    // the program's own choice, native_held did not include it, and the
+    // pselect6 the wait rides on was never interrupted by the child's exit.
+    // The shell hung after its first external command, forever, with a zombie
+    // sitting there.
+    // Deliver first, and do not block if anything was waiting.
+    //
+    // This is the other half of the hang, and it is a sequencing problem rather
+    // than a masking one. Handlers run at a syscall CHECKPOINT, so a SIGCHLD
+    // that interrupts this wait is not delivered until the NEXT syscall the
+    // program makes -- and for zsh that next syscall is the following
+    // sigsuspend, which checkpoints (running the handler, which reaps the
+    // child and marks the job done) and then blocks anyway, on a condition
+    // that has just stopped being true and will never be signalled again.
+    //
+    // Delivering before the wait and reporting it as EINTR gives the caller its
+    // chance to re-test.
+    if (nlibc_deliver_signals_count() > 0) {
+        errno = EINTR;
+        return -1;
+    }
+    sigset_t_ saved = 0;
+    bool tracked = current != NULL;
+    if (tracked) {
+        saved = current->native_prog_blocked;
+        current->native_prog_blocked = mask != NULL ? nlibc_sigset_to_guest(mask) : 0;
+        nlibc_update_held_signals();
+    }
+    nlibc_pselect(0, NULL, NULL, NULL, forever, mask);
+    if (tracked) {
+        current->native_prog_blocked = saved;
+        nlibc_update_held_signals();
+    }
+    nlibc_deliver_signals_count();
+    // sigsuspend has no success return: it comes back only when a handler has
+    // run, and always as -1/EINTR.
+    errno = EINTR;
+    return -1;
 }
 
 // ------------------------------------------------------------------ pselect
@@ -6204,6 +7029,149 @@ struct servent *nlibc_getservbyport(int port, const char *proto) {
     return nlibc_serv_lookup(NULL, port, proto);
 }
 
+// ------------------------------------------------------ the protocol database
+//
+// /etc/protocols, the neighbour of the file above, and the pair produced the
+// clearest single line of split brain in this whole file. On a rootfs with
+// NEITHER file, zftp's getprotobyname("tcp") SUCCEEDED -- out of the Mac's
+// /etc/protocols -- and the very next statement, the already-routed
+// getservbyname("ftp", "tcp"), failed because the guest has no /etc/services.
+// Protocols from the device and services from the guest, in adjacent calls.
+//
+// Same walker shape as getservent above, over "tcp 6 TCP" instead of
+// "ssh 22/tcp SSH".
+static char nlibc_pe_line[512];
+static struct protoent nlibc_pe;
+static char *nlibc_pe_aliases[1];
+static size_t nlibc_pe_pos;
+
+void nlibc_setprotoent(int stayopen) { (void) stayopen; nlibc_pe_pos = 0; }
+void nlibc_endprotoent(void) { nlibc_pe_pos = 0; }
+
+struct protoent *nlibc_getprotoent(void) {
+    struct fd *fd = NULL;
+    if (native_open("/etc/protocols", O_RDONLY_, &fd) < 0)
+        return NULL;
+
+    char buf[4096];
+    size_t held = 0, seen = 0;
+    struct protoent *found = NULL;
+    for (;;) {
+        ssize_t n = native_read(fd, buf + held, sizeof(buf) - held - 1);
+        if (n < 0)
+            break;
+        size_t avail = held + (size_t) n;
+        buf[avail] = '\0';
+        char *line = buf, *nl;
+        while ((nl = strchr(line, '\n')) != NULL) {
+            *nl = '\0';
+            char *hash = strchr(line, '#');
+            if (hash != NULL)
+                *hash = '\0';
+            // name, then number. Aliases follow and are not reported, on the
+            // same terms as the service walker: the canonical name is what a
+            // lookup asks by.
+            char name[128], number[32];
+            if (sscanf(line, "%127s %31s", name, number) == 2 &&
+                    number[strspn(number, "0123456789")] == '\0' &&
+                    seen++ == nlibc_pe_pos) {
+                snprintf(nlibc_pe_line, sizeof(nlibc_pe_line), "%s", name);
+                nlibc_pe_aliases[0] = NULL;
+                nlibc_pe.p_name = nlibc_pe_line;
+                nlibc_pe.p_aliases = nlibc_pe_aliases;
+                nlibc_pe.p_proto = atoi(number);
+                found = &nlibc_pe;
+                goto done;
+            }
+            line = nl + 1;
+        }
+        if (n == 0)
+            break;
+        held = strlen(line);
+        memmove(buf, line, held);
+    }
+done:
+    native_close(fd);
+    if (found != NULL)
+        nlibc_pe_pos++;
+    return found;
+}
+
+// The well-known assignments, used only when the guest has NO /etc/protocols.
+//
+// This is the one answer in this file that comes from neither the guest nor the
+// host, and it needs the governing test applied out loud rather than waved
+// past: a protocol number is an IANA assignment, so "tcp is 6" cannot differ
+// between a guest and a device, and there is no system where it does. musl's
+// getprotoent answers from exactly such a table and reads no file at all, so a
+// guest running musl already behaves this way. The FILE still wins where it
+// exists, because that is where a guest renames or adds one -- the table is the
+// floor, not an override.
+static const struct { const char *name; int proto; } nlibc_proto_wellknown[] = {
+    {"ip", 0}, {"icmp", 1}, {"igmp", 2}, {"ggp", 3}, {"ipencap", 4},
+    {"tcp", 6}, {"egp", 8}, {"pup", 12}, {"udp", 17}, {"hmp", 20},
+    {"xns-idp", 22}, {"rdp", 27}, {"iso-tp4", 29}, {"dccp", 33}, {"xtp", 36},
+    {"ddp", 37}, {"idpr-cmtp", 38}, {"ipv6", 41}, {"ipv6-route", 43},
+    {"ipv6-frag", 44}, {"idrp", 45}, {"rsvp", 46}, {"gre", 47}, {"esp", 50},
+    {"ah", 51}, {"skip", 57}, {"ipv6-icmp", 58}, {"ipv6-nonxt", 59},
+    {"ipv6-opts", 60}, {"rspf", 73}, {"vmtp", 81}, {"eigrp", 88}, {"ospf", 89},
+    {"ipip", 94}, {"encap", 98}, {"pim", 103}, {"ipcomp", 108}, {"vrrp", 112},
+    {"l2tp", 115}, {"isis", 124}, {"sctp", 132}, {"fc", 133}, {"udplite", 136},
+    {"mpls-in-ip", 137}, {"manet", 138}, {"hip", 139}, {"shim6", 140},
+    {"wesp", 141}, {"rohc", 142},
+};
+
+static struct protoent *nlibc_proto_lookup(const char *name, int proto) {
+    size_t saved = nlibc_pe_pos;
+    struct protoent *found = NULL;
+    nlibc_pe_pos = 0;
+    for (;;) {
+        struct protoent *pe = nlibc_getprotoent();
+        if (pe == NULL)
+            break;
+        if (name != NULL ? strcmp(pe->p_name, name) == 0 : pe->p_proto == proto) {
+            found = pe;
+            break;
+        }
+    }
+    nlibc_pe_pos = saved;
+    if (found != NULL)
+        return found;
+    // "No match" and "no file" are different answers and must not be conflated:
+    // a guest that HAS the file and leaves a protocol out has said something,
+    // and the table below must not overrule it. The walk above cannot tell them
+    // apart (it returns NULL for an empty file as readily as a missing one), so
+    // the presence of the file is asked separately.
+    struct fd *probe = NULL;
+    if (native_open("/etc/protocols", O_RDONLY_, &probe) >= 0) {
+        native_close(probe);
+        return NULL;
+    }
+    for (size_t i = 0; i < sizeof(nlibc_proto_wellknown) / sizeof(nlibc_proto_wellknown[0]); i++) {
+        if (name != NULL ? strcmp(nlibc_proto_wellknown[i].name, name) == 0
+                         : nlibc_proto_wellknown[i].proto == proto) {
+            snprintf(nlibc_pe_line, sizeof(nlibc_pe_line), "%s",
+                    nlibc_proto_wellknown[i].name);
+            nlibc_pe_aliases[0] = NULL;
+            nlibc_pe.p_name = nlibc_pe_line;
+            nlibc_pe.p_aliases = nlibc_pe_aliases;
+            nlibc_pe.p_proto = nlibc_proto_wellknown[i].proto;
+            return &nlibc_pe;
+        }
+    }
+    return NULL;
+}
+
+struct protoent *nlibc_getprotobyname(const char *name) {
+    if (name == NULL)
+        return NULL;
+    return nlibc_proto_lookup(name, 0);
+}
+
+struct protoent *nlibc_getprotobynumber(int proto) {
+    return nlibc_proto_lookup(NULL, proto);
+}
+
 // ------------------------------------------------------------------- logging
 //
 // openlog/syslog/closelog reach the DEVICE's log: os_log or ASL on iOS, the
@@ -6387,4 +7355,55 @@ void *nlibc_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offs
 // unmap serves both.
 int nlibc_munmap(void *addr, size_t len) {
     return munmap(addr, len);
+}
+
+// msync, and it is here to be COUPLED to the branch above rather than because
+// it does anything.
+//
+// Every mapping nlibc_mmap can return is host anonymous memory: an anonymous
+// request goes straight through, and a file request is satisfied by reading the
+// guest's file into a private anonymous copy. Neither has anything to write
+// back -- a private mapping never does, by definition -- so "flush this to the
+// file" is genuinely a no-op here, and the host's msync over the host's own
+// anonymous pages is the right authority for the range and alignment checks
+// that remain. The flags are Darwin's on both sides (MS_SYNC is 0x10 there and
+// 4 on Linux), and a native program passes the value its own headers gave it,
+// so they are passed through rather than translated.
+//
+// The trap this must not become: nlibc_mmap REFUSES file-backed MAP_SHARED. If
+// that refusal is ever lifted, msync stops being a no-op and this function
+// becomes silent data loss -- it would report success having written the
+// caller's changes to a private copy that no one will ever read back. The two
+// move together; that is the entire content of this entry.
+int nlibc_msync(void *addr, size_t len, int flags) {
+    return msync(addr, len, flags);
+}
+
+// _NSGetExecutablePath: the path of the running executable image, which on the
+// host is the app -- /tmp/libc-build/ish on the CLI build, the .app bundle on
+// iOS. zsh calls it from getmypath() (Src/init.c, behind `#if defined(__APPLE__)`,
+// which native code always satisfies) to set $ZSH_EXEPATH, so a guest shell
+// advertised a host path with no counterpart in the guest filesystem; anything
+// re-execing "$ZSH_EXEPATH" would run nothing.
+//
+// This one cannot be answered, and reporting failure is the answer rather than
+// a shrug. The honest guest path would be /AOK/native/<name>, and the shim has
+// no way to know <name>: native_exec_run_pending frees the record naming the
+// program before it calls into it (kernel/native.c), and /proc/self/exe is no
+// help either -- it still names the image the exec REPLACED, which a probe in
+// the guest confirms (`/AOK/native/zsh` reports /usr/bin/dash).
+//
+// Failing is not a dead end for the caller. It is a documented outcome of this
+// API, and every consumer has a fallback that reaches guest-visible sources
+// instead: zsh's getmypath falls through to argv[0], the guest's cwd and the
+// guest's $PATH, all of which arrive through routed calls, so `/AOK/native/zsh`
+// sets ZSH_EXEPATH=/AOK/native/zsh and a symlinked one resolves through the
+// guest's own PATH. That is a better answer than this function could give.
+//
+// *bufsize is left alone deliberately: the contract sets it only to report the
+// size a larger buffer would need, and a caller that retries (zsh does, once)
+// must not be sent round a growing loop for a call that will never succeed.
+int nlibc_NSGetExecutablePath(char *buf, uint32_t *bufsize) {
+    (void) buf; (void) bufsize;
+    return -1;
 }

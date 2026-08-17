@@ -194,6 +194,8 @@ int nlibc_sigpending(sigset_t *set);
 int nlibc_sigwait(const sigset_t *set, int *sig);
 /* Runs whatever handlers are pending. Called from native_checkpoint. */
 void nlibc_deliver_signals(void);
+/* The same, reporting how many handlers ran -- see nlibc_sigsuspend. */
+int nlibc_deliver_signals_count(void);
 
 /* Session and process group: plain kernel state, so plain syscalls. */
 pid_t nlibc_setsid(void);
@@ -346,6 +348,29 @@ int nlibc_getnameinfo(const void *addr, socklen_t addrlen, char *host, socklen_t
 int nlibc_getifaddrs(struct ifaddrs **ifap);
 void nlibc_freeifaddrs(struct ifaddrs *ifa);
 
+/* The older resolver interface, over the same guest /etc/hosts, guest
+ * /etc/resolv.conf and guest sockets getaddrinfo already uses -- one binary
+ * must not carry two resolvers free to disagree.
+ *
+ * getipnodebyname and freehostent are ONE entry, not two. The caller frees what
+ * getipnodebyname returned; routing either alone hands a pointer from one
+ * allocator to the other's free path, which is corruption rather than a wrong
+ * answer. See the .c. */
+struct hostent *nlibc_gethostbyname(const char *name);
+struct hostent *nlibc_gethostbyname2(const char *name, int af);
+struct hostent *nlibc_gethostbyaddr(const void *addr, socklen_t len, int af);
+struct hostent *nlibc_getipnodebyname(const char *name, int af, int flags,
+        int *error_num);
+struct hostent *nlibc_getipnodebyaddr(const void *addr, size_t len, int af,
+        int *error_num);
+void nlibc_freehostent(struct hostent *he);
+/* /etc/protocols, the neighbour of /etc/services below. */
+void nlibc_setprotoent(int stayopen);
+void nlibc_endprotoent(void);
+struct protoent *nlibc_getprotoent(void);
+struct protoent *nlibc_getprotobyname(const char *name);
+struct protoent *nlibc_getprotobynumber(int proto);
+
 int nlibc_tcflush(int fd, int queue);
 int nlibc_tcdrain(int fd);
 
@@ -386,6 +411,11 @@ FILE *nlibc_popen(const char *command, const char *mode);
 int nlibc_pclose(FILE *stream);
 pid_t nlibc_waitpid(pid_t pid, int *status, int options);
 pid_t nlibc_wait(int *status);
+/* wait3/wait4: what a native SHELL reaps its children with. The rusage is
+ * zeroed -- AOK has no per-task accounting -- but the reaping is real. */
+struct rusage;
+pid_t nlibc_wait3(int *status, int options, struct rusage *rusage);
+pid_t nlibc_wait4(pid_t pid, int *status, int options, struct rusage *rusage);
 
 /* --- the rest of the kernel surface ------------------------------------- */
 /* Added by walking the syscall table rather than by waiting for a program to
@@ -397,6 +427,26 @@ int nlibc_fsync(int fd);
 int nlibc_fdatasync(int fd);
 int nlibc_ftruncate(int fd, off_t len);
 int nlibc_syncfs(int fd);
+/* sync(2) and the extended-attribute family. Both answer with a constant the
+ * guest's own syscall table already holds -- sync is a success stub there and
+ * every xattr entry is _ENOTSUP -- rather than reaching the DEVICE's buffers
+ * and the DEVICE's filesystem. Neither number reaches the generated header;
+ * the .c says why for each. */
+void nlibc_sync(void);
+ssize_t nlibc_getxattr(const char *path, const char *name, void *value,
+        size_t size, uint32_t position, int options);
+ssize_t nlibc_fgetxattr(int fd, const char *name, void *value,
+        size_t size, uint32_t position, int options);
+int nlibc_setxattr(const char *path, const char *name, const void *value,
+        size_t size, uint32_t position, int options);
+int nlibc_fsetxattr(int fd, const char *name, const void *value,
+        size_t size, uint32_t position, int options);
+ssize_t nlibc_listxattr(const char *path, char *names, size_t size, int options);
+ssize_t nlibc_flistxattr(int fd, char *names, size_t size, int options);
+int nlibc_removexattr(const char *path, const char *name, int options);
+int nlibc_fremovexattr(int fd, const char *name, int options);
+/* nice(3): the host's renices the thread the EMULATOR runs on. */
+int nlibc_nice(int incr);
 pid_t nlibc_gettid(void);
 int nlibc_sched_yield(void);
 mode_t nlibc_umask(mode_t mask);
@@ -442,9 +492,30 @@ struct servent *nlibc_getservbyport(int port, const char *proto);
 void nlibc_setgrent(void);
 void nlibc_endgrent(void);
 struct group *nlibc_getgrent(void);
+/* The login database. The host's utmpx is the DEVICE's session list, and with
+ * $WATCH set a guest shell printed it by name. The guest's /var/run/utmp is
+ * LINUX's 384-byte layout, which Darwin's struct utmpx cannot be pointed at --
+ * so the file is parsed by offset in the .c and a struct utmpx is built from
+ * it. `struct utmpx` is named rather than defined here: <utmpx.h> stays out of
+ * this header (nothing but these six need it) and a pointer to an incomplete
+ * type is all a rewrite of a call site requires. */
+struct utmpx;
+void nlibc_setutxent(void);
+void nlibc_endutxent(void);
+struct utmpx *nlibc_getutxent(void);
+struct utmpx *nlibc_getutxline(const struct utmpx *want);
+struct utmpx *nlibc_getutxid(const struct utmpx *want);
+struct utmpx *nlibc_pututxline(const struct utmpx *line);
+/* Which guest user this is, from that database and then from the guest's
+ * /etc/passwd -- not the Mac's login session, which is what $LOGNAME held. */
+char *nlibc_getlogin(void);
+int nlibc_getlogin_r(char *buf, size_t len);
 int nlibc_execve(const char *path, char *const argv[], char *const envp[]);
 int nlibc_pselect(int nfds, void *r, void *w, void *e,
         const struct timespec *timeout, const sigset_t *sigmask);
+/* sigsuspend, over pselect. See the .c for why an unrouted one hangs a shell
+ * that is waiting for a child. */
+int nlibc_sigsuspend(const sigset_t *mask);
 /* posix_spawn: the general answer to "a native program cannot fork". A program
  * that starts children this way needs no patch at all, which is what retires
  * the per-program spawn seams SmallCLUE and Nextvi both carry. The file-actions
@@ -503,6 +574,15 @@ void nlibc_closelog(void);
  * build, so it is a wrapper rather than a rename -- see the .c. */
 void *nlibc_mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset);
 int nlibc_munmap(void *addr, size_t len);
+/* msync exists to stay COUPLED to that branch: every mapping nlibc_mmap hands
+ * back is host anonymous memory with nothing to write back, and the day
+ * file-backed MAP_SHARED is allowed it stops being a no-op. */
+int nlibc_msync(void *addr, size_t len, int flags);
+
+/* The running executable's path, which on the host is the app's. There is no
+ * guest answer available to give, so this reports failure -- see the .c for why
+ * that is the right answer rather than a gap, and what a caller falls back to. */
+int nlibc_NSGetExecutablePath(char *buf, uint32_t *bufsize);
 
 void *nlibc_dlopen(const char *path, int mode);
 void *nlibc_dlsym(void *handle, const char *symbol);
@@ -584,6 +664,8 @@ const char *nlibc_dlerror(void);
 #define pclose      nlibc_pclose
 #define waitpid     nlibc_waitpid
 #define wait        nlibc_wait
+#define wait3       nlibc_wait3
+#define wait4       nlibc_wait4
 
 #define dup         nlibc_dup
 #define dup2        nlibc_dup2
@@ -683,6 +765,17 @@ const char *nlibc_dlerror(void);
 #define getnameinfo(a,b,c,d,e,f,g) nlibc_getnameinfo((a),(b),(c),(d),(e),(f),(g))
 #define getifaddrs               nlibc_getifaddrs
 #define freeifaddrs              nlibc_freeifaddrs
+#define gethostbyname            nlibc_gethostbyname
+#define gethostbyname2           nlibc_gethostbyname2
+#define gethostbyaddr            nlibc_gethostbyaddr
+#define getipnodebyname          nlibc_getipnodebyname
+#define getipnodebyaddr          nlibc_getipnodebyaddr
+#define freehostent              nlibc_freehostent
+#define setprotoent              nlibc_setprotoent
+#define endprotoent              nlibc_endprotoent
+#define getprotoent              nlibc_getprotoent
+#define getprotobyname           nlibc_getprotobyname
+#define getprotobynumber         nlibc_getprotobynumber
 
 #define tcflush                  nlibc_tcflush
 #define tcdrain                  nlibc_tcdrain
@@ -734,6 +827,16 @@ const char *nlibc_dlerror(void);
 #define fdatasync                nlibc_fdatasync
 #define ftruncate                nlibc_ftruncate
 #define syncfs                   nlibc_syncfs
+#define sync                     nlibc_sync
+#define getxattr                 nlibc_getxattr
+#define fgetxattr                nlibc_fgetxattr
+#define setxattr                 nlibc_setxattr
+#define fsetxattr                nlibc_fsetxattr
+#define listxattr                nlibc_listxattr
+#define flistxattr               nlibc_flistxattr
+#define removexattr              nlibc_removexattr
+#define fremovexattr             nlibc_fremovexattr
+#define nice                     nlibc_nice
 #define gettid                   nlibc_gettid
 #define sched_yield              nlibc_sched_yield
 #define umask                    nlibc_umask
@@ -765,6 +868,15 @@ const char *nlibc_dlerror(void);
 #define getentropy               nlibc_getentropy
 #define mkdtemp                  nlibc_mkdtemp
 #define mktemp                   nlibc_mktemp
+/* Darwin's own name for the same function, and the one zsh actually calls:
+ * config.h defines HAVE__MKTEMP, so Src/utils.c's gettempname() -- every
+ * here-string, process substitution, named pipe and `fc` edit -- declares
+ * `extern char *_mktemp(char *)` and calls THAT. Routing `mktemp` alone left it
+ * behind: the uniqueness check ran against the DEVICE's filesystem while the
+ * file was then created in the guest, so the guest-side collision check never
+ * happened at all. The rewrite catches the extern declaration too, which is
+ * why the signature above has to match it exactly. */
+#define _mktemp                  nlibc_mktemp
 #define pathconf                 nlibc_pathconf
 #define fpathconf                nlibc_fpathconf
 #define confstr                  nlibc_confstr
@@ -779,8 +891,17 @@ const char *nlibc_dlerror(void);
 #define setgrent                 nlibc_setgrent
 #define endgrent                 nlibc_endgrent
 #define getgrent                 nlibc_getgrent
+#define setutxent                nlibc_setutxent
+#define endutxent                nlibc_endutxent
+#define getutxent                nlibc_getutxent
+#define getutxline               nlibc_getutxline
+#define getutxid                 nlibc_getutxid
+#define pututxline               nlibc_pututxline
+#define getlogin                 nlibc_getlogin
+#define getlogin_r               nlibc_getlogin_r
 #define execve                   nlibc_execve
 #define pselect(a,b,c,d,e,f)     nlibc_pselect((a),(b),(c),(d),(e),(f))
+#define sigsuspend               nlibc_sigsuspend
 #define posix_spawn_file_actions_init    nlibc_posix_spawn_file_actions_init
 #define posix_spawn_file_actions_destroy nlibc_posix_spawn_file_actions_destroy
 #define posix_spawn_file_actions_adddup2 nlibc_posix_spawn_file_actions_adddup2
@@ -804,6 +925,8 @@ const char *nlibc_dlerror(void);
 
 #define mmap                     nlibc_mmap
 #define munmap                   nlibc_munmap
+#define msync                    nlibc_msync
+#define _NSGetExecutablePath     nlibc_NSGetExecutablePath
 
 /* Option parsing. The five variables become accessor calls the way `environ`
  * does, and the scanning functions become ours -- routing only the

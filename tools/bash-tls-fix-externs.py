@@ -81,6 +81,34 @@ ALLOW = {
     # read-only after, so sharing it needs no lock.
     "gSmallclueProcessStartMonoNs",
 
+    # ---- zsh (build/libzsh.a) ----
+    # zsh is a native program for the same reason bash is, and needed the same
+    # conversion before fork-by-re-launch could target /AOK/native/zsh: the
+    # child of a re-launch is a second live zsh in the same address space.
+    #
+    # widgets[] and thingies[] USED to be excused here, on the grounds that
+    # they cross-reference each other's ADDRESSES in static initialisers, and
+    # that the damage was confined to interactive shells. Both halves were
+    # true and the conclusion was wrong: interactive shells are what a shell is
+    # for, and two AOK terminal tabs running zsh shared one mutable widget
+    # table, so `zle -N accept-line ...` in one landed in the other's key table
+    # and the second shell's init_thingies() re-chained the nodes out from
+    # under the first's hash table. They are now deferred-init thread-locals
+    # (Src/Zle/zle_bindings.c, and the long comment on thingies[] in
+    # Src/Zle/zle.h), which is what this file's own zsh-tls-fix-tables.py
+    # companion exists to do. Do not add them back.
+    #
+    # A table of zsh's own execution functions, indexed by wordcode type. Read
+    # on every command; assigned never. Only lacks `const` upstream.
+    "execfuncs",
+    # ksh93.c: `static char sh_unsetval[2]` -- a never-written sentinel whose
+    # ADDRESS is the value ("Dummy to treat as NULL"). Three thread-locals are
+    # initialised with it, and the address of a thread-local is not a constant
+    # expression, so making this one per-thread breaks the file for no gain.
+    "sh_unsetval",
+    # termquery.c: the all-NULL array returned when prompt markers are off.
+    "prompt_markers.nomark",
+
     # ---- OpenSSH (build/libopenssh*.a) ----
     # ssh, scp, sftp and ssh-keygen are native programs too, so one run's
     # file-statics were still there for the next one -- the reported bug was
@@ -133,7 +161,15 @@ DEFER = set()
 # What the fixers skip. The gate skips only ALLOW.
 SKIP = ALLOW | DEFER
 
-SRC = (".c", ".h", ".def", ".y")
+# .epro and .pro are zsh's: makepro.awk generates one per source file and that
+# is where zsh keeps the `extern` for every global it exports -- Src/params.epro
+# holds `extern char **pparams;` and Src/zsh.mdh includes the lot. A header the
+# tool does not walk is a declaration left non-thread-local, which is the silent
+# wrong-memory read this whole conversion exists to avoid, so they are not
+# optional. They are generated files that are checked in (see the note at the
+# top of meson.build about deps/zsh being a CONFIGURED tree); re-running zsh's
+# `make prep` would undo this, and re-running this tool is the fix.
+SRC = (".c", ".h", ".def", ".y", ".epro", ".pro")
 
 
 def shared_externals(archive):

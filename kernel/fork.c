@@ -633,7 +633,17 @@ struct task *task_fork_for_exec(void) {
     struct task *task = task_create_(current);
     if (task == NULL)
         return NULL;
-    int err = copy_task(task, 0, 0, 0, 0, 0);
+    // SIGCHLD_ as the exit signal, exactly as a guest fork() passes it in the
+    // low byte of clone's flags. This was 0, meaning "tell nobody when this
+    // task dies", and that was invisible for as long as every caller reaped
+    // its child with a blocking waitpid -- which is what native_spawn's own
+    // helpers and native bash both do.
+    //
+    // A native SHELL does not. zsh waits for a job by sleeping in sigsuspend
+    // until its SIGCHLD handler reaps, so with no exit signal the child
+    // finished, became a zombie, and the parent slept forever: the shell
+    // printed the output of its first external command and then hung.
+    int err = copy_task(task, SIGCHLD_, 0, 0, 0, 0);
     if (err < 0) {
         complex_lockt(&pids_lock, 0);
         task_destroy(task, 3);

@@ -37,13 +37,14 @@ ALLOW = import_module("bash-tls-fix-externs").ALLOW
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ARCHIVES = [os.path.join(REPO, "build", "libbash.a"),
+                    os.path.join(REPO, "build", "libzsh.a"),
                     os.path.join(REPO, "build", "libish.a")]
 
 # Archives of vendored native programs -- the ones where "mutable and shared
 # between threads" is a bug rather than a design choice, so the whole-class
 # question in shared_mutable() applies. Anything not listed here gets only the
 # mismatch checks.
-VENDORED_NATIVE = ("libbash.a", "libsmallclue.a", "libopenssh.a",
+VENDORED_NATIVE = ("libbash.a", "libzsh.a", "libsmallclue.a", "libopenssh.a",
                    "libopenssh_scp.a", "libopenssh_stubs.a",
                    "libopenssh_smult_curve25519_ref.a")
 
@@ -80,6 +81,18 @@ def classify(objdir):
             continue
         obj = os.path.join(objdir, entry)
 
+        # Names this object defines for itself. A relocation naming one of them
+        # is resolved inside the object and says nothing about anyone else's
+        # variable of the same name -- bash's test.c has a `static term()` (the
+        # test builtin's recursive-descent parser) and zsh has a thread-local
+        # `char *term` for $TERM, and once both archives are folded into
+        # libish.a the calls to bash's function were reported as ordinary-data
+        # reads of zsh's variable. They never meet: bash's is local.
+        local = set()
+        for line in run("nm", "-m", obj).splitlines():
+            if "non-external" in line and " (" in line:
+                local.add(line.split()[-1])
+
         for line in run("nm", "-m", obj).splitlines():
             # EXTERNAL definitions only. Two files may each have their own
             # `static int foo;` and those are genuinely different variables --
@@ -98,7 +111,7 @@ def classify(objdir):
             if len(parts) < 3 or not parts[1].startswith("ARM64_RELOC"):
                 continue
             kind, sym = parts[1], parts[2]
-            if not sym.startswith("_") or ignorable(sym):
+            if not sym.startswith("_") or ignorable(sym) or sym in local:
                 continue
             (tls_refs if "TLVP" in kind else data_refs).setdefault(sym, set()).add(entry)
     return tls_defs, data_defs, tls_refs, data_refs

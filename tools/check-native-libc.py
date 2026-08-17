@@ -115,6 +115,33 @@ PURE = {
     # network order on both sides.
     "inet_ntop", "inet_pton", "inet_ntoa", "inet_addr", "htons", "htonl",
     "ntohs", "ntohl",
+    # inet_aton belongs to that same list and is spelled out separately because
+    # it arrived beside nineteen symbols that all had to be ROUTED, and "it was
+    # in the same batch" is not a reason.
+    #
+    # It parses a caller-owned NUL-terminated string into four network-order
+    # bytes in a caller-owned struct in_addr. No descriptor, path, clock,
+    # identity or device is consulted, and the result is a pure function of the
+    # input text -- the same standing inet_addr has one line up, which is the
+    # same parse with a different return convention.
+    #
+    # The governing test is not "is it pure" but "can its answer differ between
+    # the host and the guest", and for a text-to-bytes parser the only way it
+    # could is if Darwin and Linux accepted different input grammars. They do
+    # not; both take the classic 4-, 3-, 2- and 1-part forms. That argument did
+    # not have to be trusted, though, because zsh's only call site is
+    # Src/Modules/tcp.c's `zsh_inet_aton("0.0.0.0", ...)` -- a compile-time
+    # string constant, which no grammar difference can reach. (Its other
+    # reference, inside tcp.c's own zsh_inet_pton, is compiled out because
+    # HAVE_INET_PTON is defined.)
+    #
+    # One warning for whoever next reads an interposer log: a run of
+    # `ztcp 127.0.0.1 12345` shows inet_aton called with BOTH "0.0.0.0" and
+    # "127.0.0.1". The second is not zsh -- it is libSystem's own
+    # getipnodebyname calling inet_aton internally, visible because dyld
+    # interposition rewrites intra-library calls too. That is evidence about
+    # getipnodebyname, which is routed, and none about this entry.
+    "inet_aton",
     # CommonCrypto's digest transforms, reached through
     # deps/smallclue-shim/openssl/evp.h, which is how md5sum/sha1sum/sha256sum
     # exist at all without AOK linking OpenSSL.

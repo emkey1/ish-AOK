@@ -131,6 +131,7 @@
    </AnalyzeAction>
    <ArchiveAction
       buildConfiguration = "Release"
+      customArchiveName = "iSH-AOK"
       revealArchiveInOrganizer = "YES">
    </ArchiveAction>
 </Scheme>
