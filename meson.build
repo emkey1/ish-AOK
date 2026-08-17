@@ -37,7 +37,19 @@ add_project_arguments('-Wno-switch', language: 'c')
 # weak_import included, so a build without deps/bash failed to link on the table
 # entry itself.
 fs_early = import('fs')
-have_bash = fs_early.exists('deps/bash/shell.c')
+bash_opt = get_option('native_bash')
+bash_present = fs_early.exists('deps/bash/shell.c')
+if bash_opt.disabled()
+    # Not merely unregistered: libbash never gets built, so link_whole below
+    # folds nothing in. See meson_options.txt for why that distinction matters.
+    have_bash = false
+elif bash_opt.enabled() and not bash_present
+    error('-Dnative_bash=enabled but deps/bash is not checked out. Either:\n' +
+          '    git submodule update --init deps/bash\n' +
+          '  or build without it: -Dnative_bash=disabled')
+else
+    have_bash = bash_present
+endif
 if have_bash
     # Populated but STALE is the case worth catching by name. A pull that moves
     # the submodule pointer does not move the submodule, so deps/bash can be a
@@ -51,6 +63,14 @@ if have_bash
     endif
     add_project_arguments('-DISH_NATIVE_BASH=1', language: 'c')
 endif
+
+# Said out loud at configure time, because the consequence is a licensing one
+# and the alternative is finding out from an App Store takedown. Nothing else
+# in the binary is GPL: smallclue is MIT, OpenSSH and libarchive BSD, liblzma
+# public domain, and iSH-AOK's own GPL is what LICENSE.IOS covers.
+summary({'native bash': have_bash ? 'yes -- binary contains GPLv3 (bash, readline, GNU termcap)'
+                                  : 'no -- no third-party GPL in the binary'},
+        section: 'Licensing')
 
 # Resolved here (rather than next to the gadget source lists below) because
 # it also drives a project-wide define, and add_project_arguments must run
