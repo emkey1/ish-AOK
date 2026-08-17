@@ -153,3 +153,4 @@ arm64/ret_retcache.c
 jit_fuse_ab.sh
 jit_bench.c
 aes_gcm_accel.c
+native_stdio_redirect.sh

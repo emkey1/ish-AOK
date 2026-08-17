@@ -774,8 +774,55 @@ int nlibc_fileno(FILE *file) {
     return fileno(file);
 }
 
-static FILE *nlibc_file_wrap(int fd, int closes_fd) {
-    FILE *f = funopen((void *) (intptr_t) fd, nlibc_file_read, nlibc_file_write,
+// Which way a stream goes. funopen() infers the direction from which callbacks
+// it is handed, and getting that wrong is not cosmetic -- see below.
+enum nlibc_stream_dir { NLIBC_RD, NLIBC_WR, NLIBC_RDWR };
+
+// The direction a mode string asks for, the way fopen reads it: "r" reads, "w"
+// and "a" write, and a '+' anywhere makes it both.
+static enum nlibc_stream_dir nlibc_mode_dir(const char *mode) {
+    if (mode == NULL || mode[0] == '\0')
+        return NLIBC_RDWR;    // no claim made; assume the permissive thing
+    if (strchr(mode, '+') != NULL)
+        return NLIBC_RDWR;
+    return mode[0] == 'r' ? NLIBC_RD : NLIBC_WR;
+}
+
+// The direction MUST be the stream's real one, not a permissive "both".
+//
+// funopen() records it as the FILE's direction flag: a write callback alone
+// yields __SWR, a read callback alone __SRD, and both together __SRW -- which
+// means "read/write, direction not yet decided". For an __SRW stream stdio
+// leaves __SWR clear until __swsetup() runs on the first write, and __sflush()
+// -- what fflush() is -- opens with `if ((flags & __SWR) == 0) return 0`. A
+// stream that stdio does not believe has been written to CANNOT BE FLUSHED.
+//
+// That is normally invisible, because everything that writes goes through
+// __swsetup first. Everything except putc()'s inline fast path, which stores
+// straight into the buffer whenever _w > 0 -- and _w is set to the buffer size,
+// without __SWR, by fpurge() and by setvbuf(). So:
+//
+//   zsh's init.c    setvbuf(stdout, outbuf, _IOFBF, BUFSIZ)
+//   zsh's redup()   fpurge(stdout) before dup2'ing a redirect onto fd 1
+//                     -> _w = 1024, __SWR still clear
+//   printf's        putc(c, fout) per literal character
+//                     -> five bytes in the buffer, __SWR still clear
+//   bin_print's     fflush(fout) -> __sflush -> no __SWR -> returns 0, writes
+//                   NOTHING and reports success
+//   zsh's redup()   fpurge(stdout) restoring fd 1 -> buffer discarded
+//
+// and `printf plain > file` wrote an empty file, silently, while `print plain >
+// file` worked -- print reaches the buffer through fwrite(), which does call
+// __swsetup. The bytes were not misdirected, they were dropped.
+//
+// Passing the real direction removes the whole failure mode rather than that
+// one path through it: a shim stream now carries exactly the direction bits a
+// host stream opened the same way carries, so __SWR is set from the start on
+// everything opened for writing, exactly as it is on the host's own stdout.
+static FILE *nlibc_file_wrap(int fd, int closes_fd, enum nlibc_stream_dir dir) {
+    FILE *f = funopen((void *) (intptr_t) fd,
+            dir == NLIBC_WR ? NULL : nlibc_file_read,
+            dir == NLIBC_RD ? NULL : nlibc_file_write,
             nlibc_file_seek, closes_fd ? nlibc_file_close : nlibc_file_close_noop);
     if (f == NULL) {
         errno = ENOMEM;
@@ -810,7 +857,7 @@ FILE *nlibc_fopen(const char *path, const char *mode) {
     int fd = nlibc_open(path, nlibc_mode_to_flags(mode), 0666);
     if (fd < 0)
         return NULL;
-    FILE *f = nlibc_file_wrap(fd, 1);
+    FILE *f = nlibc_file_wrap(fd, 1, nlibc_mode_dir(mode));
     if (f == NULL)
         nlibc_close(fd);
     return f;
@@ -822,9 +869,12 @@ FILE *nlibc_freopen(const char *path, const char *mode, FILE *stream) {
     return nlibc_fopen(path, mode);
 }
 
+// The mode is honoured, not ignored: it is what tells stdio which direction the
+// stream runs in, and a stream told "both" when it is really one is the bug
+// described at nlibc_file_wrap. zsh's `print -u2 ...` reaches here through
+// fdopen(fd, "w"), which is exactly the case that has to come out write-only.
 FILE *nlibc_fdopen(int fd, const char *mode) {
-    (void) mode;
-    return nlibc_file_wrap(fd, 1);
+    return nlibc_file_wrap(fd, 1, nlibc_mode_dir(mode));
 }
 
 // One wrapper per standard stream, made on demand and kept, so repeated use
@@ -846,7 +896,11 @@ static __thread FILE *nlibc_std[3];
 
 static FILE *nlibc_std_stream(int fd) {
     if (nlibc_std[fd] == NULL) {
-        nlibc_std[fd] = nlibc_file_wrap(fd, 0);
+        // Direction as the host's own standard streams have it: stdin reads,
+        // stdout and stderr write. Nothing here is read AND written, and saying
+        // otherwise is what silently dropped redirected printf output (see
+        // nlibc_file_wrap).
+        nlibc_std[fd] = nlibc_file_wrap(fd, 0, fd == 0 ? NLIBC_RD : NLIBC_WR);
         if (nlibc_std[fd] != NULL) {
             // A funopen stream is fully buffered by default, and a native
             // program exits by returning rather than through exit(), so
@@ -1198,7 +1252,9 @@ FILE *nlibc_popen(const char *command, const char *mode) {
         return NULL;
     }
 
-    FILE *file = nlibc_file_wrap(parent_fd, 1);
+    // popen("r") is read-only to the caller and popen("w") write-only, which is
+    // also what the pipe end can actually do.
+    FILE *file = nlibc_file_wrap(parent_fd, 1, reading ? NLIBC_RD : NLIBC_WR);
     if (file == NULL) {
         free(entry);
         nlibc_close(parent_fd);
