@@ -104,6 +104,10 @@ If you already cloned without submodules:
 git submodule update --init --recursive
 ```
 
+Note that `--recursive` includes `deps/bash`, which makes the default build a
+GPLv3 one. See [Native bash and licensing](#native-bash-and-licensing) if you
+intend to distribute the result.
+
 ## Build Requirements
 
 For local development you will typically want:
@@ -176,6 +180,55 @@ Create a filesystem from a rootfs tarball:
 ```bash
 ./build/tools/fakefsify alpine-minirootfs-*.tar.gz alpine
 ```
+
+## Native bash and licensing
+
+bash is compiled into the app as a native program, which makes the shell
+roughly 16x faster than the emulated one. It also puts GPLv3 code in the
+binary: bash itself, its bundled readline, and GNU termcap.
+
+That matters for App Store distribution. iSH-AOK is GPLv3 too, but
+[LICENSE.IOS](LICENSE.IOS) is a promise from *this project's* copyright holders
+not to enforce against the conflict between the GPL and Apple's terms. It
+cannot bind the FSF, which holds bash's copyright and has had GPL software
+removed from the App Store twice — [GNU
+Go](https://www.theregister.com/2010/05/27/gnu_go_fsf_apple_itunes/) in 2010
+and [VLC](https://www.fsf.org/blogs/licensing/vlc-enforcement) in 2011, on the
+grounds that the store's Usage Rules impose "further restrictions" barred by
+[GPL section
+6](https://www.fsf.org/blogs/licensing/more-about-the-app-store-gpl-enforcement).
+The FSF states that analysis applies to all GPL versions, not only v3.
+
+So it is a build option:
+
+```bash
+meson setup build .                          # auto: on if deps/bash is present
+meson setup build . -Dnative_bash=disabled   # no third-party GPL in the binary
+meson setup build . -Dnative_bash=enabled    # fail if deps/bash is missing
+```
+
+Configure prints which one you got, under a `Licensing` heading. Check it
+rather than assuming:
+
+```
+Licensing
+  native bash: no -- no third-party GPL in the binary
+```
+
+`disabled` leaves bash, readline and termcap out of the archive entirely — 0
+objects, verified with `ar t`. Users still get bash: the emulated `/bin/bash`
+from the guest rootfs, which is the same mere-aggregation position as every
+other GPL tool in Devuan or Alpine.
+
+**Removing the applet-table entry in `kernel/native.c` is not sufficient.**
+`meson.build` folds these archives in with `link_whole`, so the objects ship
+whether or not anything references them — measured, 144 bash and 35 readline
+objects remain with the registry entry deleted. Only the build option removes
+them.
+
+Nothing else in the binary is third-party GPL: SmallCLUE is MIT, OpenSSH and
+libarchive are BSD, liblzma is public domain, and `deps/linux` is not compiled
+into this target.
 
 ## Regression Tests
 
