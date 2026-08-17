@@ -242,6 +242,24 @@ EOF
     # the variant for an on-device A/B; see jit/guest-arm64/gadgets.h for why
     # this is host-generation dependent and why it must be measured on ARMv8.0.
     arm64_gret=${ISH_ARM64_GRET:-dmb}
+    # Options added to meson_options.txt after this build dir was set up are
+    # invisible to `meson configure`, which only knows what the dir was
+    # configured with -- so a NEW option silently keeps whatever default was
+    # current when the dir was created, and a changed default never arrives.
+    # native_zsh was added and defaulted on, and an existing DerivedData tree
+    # kept building without zsh and said nothing.
+    #
+    # The per-variable fallback below catches this only for the names it
+    # iterates. This catches it for every option the project declares.
+    declared=$(grep -oE "^option\('[a-z0-9_]+'" "$SRCROOT/meson_options.txt" | sed "s/option('//;s/'//")
+    for opt in $declared; do
+        if ! grep -q "\"name\": \"$opt\"" <<< "$config"; then
+            (set -x; meson setup --reconfigure . "$SRCROOT" --cross-file "$crossfile") || exit $?
+            config=$(meson introspect --buildoptions)
+            break
+        fi
+    done
+
     for var in buildtype log b_ndebug b_sanitize log_handler kernel kconfig guest_archs arm64_gret; do
         if ! old_value=$(python3 -c "import sys, json; v = next(x['value'] for x in json.load(sys.stdin) if x['name'] == '$var'); print(str(v).lower() if isinstance(v, bool) else ','.join(v) if isinstance(v, list) else v)" <<< "$config" 2>/dev/null); then
             # The option is missing from this build dir's cached
