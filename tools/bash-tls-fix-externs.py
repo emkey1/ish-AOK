@@ -74,6 +74,12 @@ ALLOW = {
     # of it.
     "s_nextvi_sessions", "s_nextvi_session_count", "s_nextvi_session_cap",
     "s_nextvi_sessions_lock",
+    # The app's start time, captured by a __attribute__((constructor)) that runs
+    # once on the loading thread. Thread-local gave every applet a zero and
+    # `uptime` printed "up 00:00:00" against the distro's "up 4:32" -- the name
+    # was right and the conversion was not. Written before any applet runs and
+    # read-only after, so sharing it needs no lock.
+    "gSmallclueProcessStartMonoNs",
 
     # ---- OpenSSH (build/libopenssh*.a) ----
     # ssh, scp, sftp and ssh-keygen are native programs too, so one run's
