@@ -19,3 +19,7 @@
 	path = deps/bash
 	url = https://github.com/emkey1/bash.git
 	branch = main
+[submodule "deps/zsh"]
+	path = deps/zsh
+	url = https://github.com/emkey1/zsh.git
+	branch = ish-aok

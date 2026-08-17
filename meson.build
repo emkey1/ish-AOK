@@ -64,12 +64,48 @@ if have_bash
     add_project_arguments('-DISH_NATIVE_BASH=1', language: 'c')
 endif
 
+# The same question for zsh, and the same reason it is answered here: the
+# registry in kernel/native.c needs it as a define before any target exists.
+#
+# deps/zsh is a CONFIGURED tree rather than a pristine checkout, and that is
+# what the test looks for. zsh generates a great deal of its own source --
+# config.h, Src/signames.c, every module's .mdh and .epro, Src/bltinmods.list
+# -- and this build compiles those generated files rather than reproducing
+# zsh's mkmakemod.sh in meson. So the marker is config.h, not a .c: a tree
+# someone unpacked but never configured would otherwise fail much later with a
+# missing "../config.h" from inside a generated header.
+zsh_opt = get_option('native_zsh')
+zsh_present = fs_early.exists('deps/zsh/config.h') and fs_early.exists('deps/zsh/Src/bltinmods.list')
+if zsh_opt.disabled()
+    have_zsh = false
+elif zsh_opt.enabled() and not zsh_present
+    error('-Dnative_zsh=enabled but deps/zsh is not a configured zsh tree.\n' +
+          '  It is a submodule now, and the generated sources are committed in\n' +
+          '  it, so there is nothing to configure -- just check it out:\n' +
+          '    git submodule update --init deps/zsh\n' +
+          '  To re-generate them instead (a new zsh, or different options):\n' +
+          '    cd deps/zsh && ../../tools/configure-zsh.sh && make prep\n' +
+          '  Or build without zsh: -Dnative_zsh=disabled')
+else
+    have_zsh = zsh_present
+endif
+if have_zsh
+    add_project_arguments('-DISH_NATIVE_ZSH=1', language: 'c')
+endif
+
 # Said out loud at configure time, because the consequence is a licensing one
 # and the alternative is finding out from an App Store takedown. Nothing else
 # in the binary is GPL: smallclue is MIT, OpenSSH and libarchive BSD, liblzma
 # public domain, and iSH-AOK's own GPL is what LICENSE.IOS covers.
 summary({'native bash': have_bash ? 'yes -- binary contains GPLv3 (bash, readline, GNU termcap)'
                                   : 'no -- no third-party GPL in the binary'},
+        section: 'Licensing')
+# zsh is in the OTHER column and says so, because "another shell compiled in"
+# reads like the same licensing question and is not: zsh's licence is
+# permissive, and the only GPL files in its tree are three completion SCRIPTS
+# that nothing here compiles or installs.
+summary({'native zsh': have_zsh ? 'yes -- permissive (zsh LICENCE), no GPL compiled'
+                                : 'no'},
         section: 'Licensing')
 
 # Resolved here (rather than next to the gadget source lists below) because
@@ -139,6 +175,27 @@ libdl = cc.find_library('dl', required: false)
 libatomic = cc.find_library('atomic', required: false)
 sqlite3 = cc.find_library('sqlite3')
 dependencies = [librt, libm, libdl, libatomic, threads, sqlite3]
+
+# zsh needs tgetent/tgetstr/tgoto/tputs and, unlike bash, does not bundle a
+# termcap of its own. This is the one system library the native-zsh build adds
+# to the link line, and it is the reason native_zsh defaults off for the app:
+# the Xcode project links the meson archives by name and would need libcurses
+# added to its own link line too (the iOS SDK ships the .tbd stubs but no
+# curses.h/term.h, which is also why deps/zsh is configured termcap-only).
+if have_zsh
+    libtermcap = cc.find_library('termcap', required: false)
+    if not libtermcap.found()
+        libtermcap = cc.find_library('curses')
+    endif
+    dependencies += libtermcap
+    # And iconv, which zsh uses for two things: converting a filename that is
+    # not valid in the current charset (Src/utils.c zreaddir) and turning a
+    # \u escape into the locale's encoding (ucs4tomb). Darwin and iOS both
+    # ship libiconv, so this is a link-line entry rather than a port. The
+    # alternative was configuring zsh without it, which silently changes what
+    # $'é' produces -- not a thing to decide by omission.
+    dependencies += cc.find_library('iconv')
+endif
 
 subdir('vdso') # ish depends on the vdso
 
@@ -1025,6 +1082,123 @@ if get_option('kernel') == 'ish'
             c_args: bash_defs)
     endif
 
+    # ------------------------------------------------------------------- zsh
+    #
+    # zsh as a third native program, EXPERIMENTAL and default-off (see
+    # meson_options.txt). Unlike bash this is not a submodule: deps/zsh is a
+    # zsh source tree that has been CONFIGURED AND BUILT in place by
+    # tools/configure-zsh.sh, and this target compiles the result. zsh
+    # generates a lot of its own source -- config.h, Src/signames.c,
+    # Src/bltinmods.list, and for every module a .mdh, an .epro and a .pro --
+    # through mkmakemod.sh, makepro.awk and mkbltnmlst.sh, and reproducing
+    # that machinery in meson would be a second build system to keep honest.
+    # Compiling zsh's own generated files is the smaller commitment; the price
+    # is that deps/zsh must be configured before this build runs, which is
+    # what the check at the top of this file enforces.
+    #
+    # The generated headers include each other by RELATIVE path -- a module's
+    # .mdh does `#include "../../Src/zsh.mdh"` and that does `#include
+    # "../config.h"` -- so the tree layout is load-bearing and the include
+    # list below is smaller than zsh's own Makefile passes.
+    libzsh = []
+    if have_zsh
+        zsh_dir = 'deps/zsh'
+        zsh_includes = include_directories(
+            zsh_dir, zsh_dir / 'Src', zsh_dir / 'Src/Zle',
+            zsh_dir / 'Src/Modules', zsh_dir / 'Src/Builtins')
+
+        # The seven names zsh and libish both define, out of zsh's 1941
+        # externals against libish's 5216. Renaming ZSH's side keeps each
+        # rename inside one archive, which is the rule the OpenSSH block above
+        # follows for the same reason.
+        #
+        # Three come from bash (evalstring.c, evalfile.c, lib/sh/zgetline.c)
+        # and four from OpenSSH (scp.c's `pwd` and `source`, and
+        # openbsd-compat/bsd-setres_id.c). The setres* pair is the one worth a
+        # word: zsh vendors OpenSSH's file too (Src/openssh_bsd_setres_id.c),
+        # so both archives carry an implementation. They are NOT
+        # interchangeable -- each is compiled with kernel/native_libc.h inside
+        # its own archive, and the guest-vs-host question is settled by which
+        # copy the call site reaches. Renaming keeps zsh's calls in zsh's copy.
+        zsh_renames = [
+            '-Dparse_string=zsh_parse_string',    # bash builtins/evalstring.c
+            '-Dsourcelevel=zsh_sourcelevel',      # bash builtins/evalfile.c
+            '-Dzgetline=zsh_zgetline',            # bash lib/sh/zgetline.c
+            '-Dpwd=zsh_pwd',                      # OpenSSH scp.c
+            '-Dsource=zsh_source',                # OpenSSH scp.c
+            '-Dsetresuid=zsh_setresuid',          # OpenSSH bsd-setres_id.c
+            '-Dsetresgid=zsh_setresgid',          # OpenSSH bsd-setres_id.c
+        ]
+
+        zsh_defs = [
+            '-DHAVE_CONFIG_H',
+            # zsh brings its own globbing (Src/glob.c defines zglob and
+            # friends) and never calls libc's. Same escape hatch bash uses --
+            # see kernel/native_libc.h -- and here it is also what keeps
+            # macOS's <glob.h> from being dragged in at all.
+            '-DNATIVE_LIBC_OWN_GLOB',
+            '-include', meson.current_source_dir() / 'kernel/native_libc.h',
+            # AFTER the shim, deliberately: it exists to take back the handful
+            # of rewrites zsh cannot live with. See the header for the rule.
+            '-include', meson.current_source_dir() / 'deps/zsh-shim/aok_zsh_shim.h',
+            '-w',  # vendored code, not ours to police
+        ] + zsh_renames
+
+        # From zsh's own build (Src/stamp-modobjs), not a glob: several .c in
+        # the tree belong to modules this build maps to link=no in
+        # config.modules, and Src/main.c is a three-line wrapper around
+        # zsh_main that would define a second main().
+        zsh_top = [
+            'builtin.c', 'compat.c', 'cond.c', 'context.c', 'exec.c', 'glob.c',
+            'hashtable.c', 'hashnameddir.c', 'hist.c', 'init.c', 'input.c',
+            'jobs.c', 'lex.c', 'linklist.c', 'loop.c', 'math.c', 'mem.c',
+            'module.c', 'options.c', 'params.c', 'parse.c', 'pattern.c',
+            'prompt.c', 'signals.c', 'signames.c', 'sort.c', 'string.c',
+            'subst.c', 'text.c', 'utils.c', 'openssh_bsd_setres_id.c']
+        zsh_builtins = ['rlimits.c', 'sched.c']
+        zsh_modules = [
+            'attr.c', 'clone.c', 'datetime.c', 'files.c', 'hlgroup.c',
+            'ksh93.c', 'langinfo.c', 'mapfile.c', 'mathfunc.c', 'nearcolor.c',
+            'newuser.c', 'param_private.c', 'parameter.c', 'random.c',
+            'random_real.c', 'regex.c', 'socket.c', 'stat.c', 'system.c',
+            'errnames.c', 'tcp.c', 'termcap.c', 'watch.c', 'zftp.c', 'zprof.c',
+            'zpty.c', 'zselect.c', 'zutil.c']
+        zsh_zle = [
+            'compctl.c', 'complete.c', 'compcore.c', 'compmatch.c',
+            'compresult.c', 'complist.c', 'computil.c', 'deltochar.c',
+            'zle_bindings.c', 'zle_hist.c', 'zle_keymap.c', 'zle_main.c',
+            'zle_misc.c', 'zle_move.c', 'zle_params.c', 'zle_refresh.c',
+            'zle_thingy.c', 'zle_tricky.c', 'zle_utils.c', 'zle_vi.c',
+            'zle_word.c', 'termquery.c', 'textobjects.c', 'zleparameter.c']
+
+        zsh_src = []
+        foreach f : zsh_top
+            zsh_src += files(zsh_dir / 'Src' / f)
+        endforeach
+        foreach f : zsh_builtins
+            zsh_src += files(zsh_dir / 'Src/Builtins' / f)
+        endforeach
+        foreach f : zsh_modules
+            zsh_src += files(zsh_dir / 'Src/Modules' / f)
+        endforeach
+        foreach f : zsh_zle
+            zsh_src += files(zsh_dir / 'Src/Zle' / f)
+        endforeach
+
+        # kernel/native.c's registry entry is behind ISH_NATIVE_ZSH, so this
+        # file and the define are decided by the same `have_zsh`.
+        src += files('kernel/zsh_glue.c')
+
+        # implicit_include_directories: false for the reason spelled out in
+        # the OpenSSH block -- meson would otherwise put AOK's source root
+        # ahead of everything here, and AOK's root has files whose names zsh
+        # also uses.
+        libzsh = static_library('zsh', zsh_src,
+            include_directories: zsh_includes,
+            implicit_include_directories: false,
+            c_args: zsh_defs)
+    endif
+
     # link_whole, not link_with: this folds SmallCLUE's objects into libish.a
     # itself. The Xcode project links the meson archives by name (libish.a,
     # libish_emu.a, libfakefs.a), so a fourth archive would silently fail to
@@ -1049,7 +1223,7 @@ if get_option('kernel') == 'ish'
     endif
 
     libish = library('ish', src,
-        link_whole: [libsmallclue, libnextvi, libbash, libopenssh] + libopenssh_special,
+        link_whole: [libsmallclue, libnextvi, libbash, libzsh, libopenssh] + libopenssh_special,
         include_directories: includes, c_args: ish_c_args)
     ish = declare_dependency(
         link_with: [libish, libish_emu, libfakefs],

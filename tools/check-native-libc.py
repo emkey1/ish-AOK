@@ -52,6 +52,24 @@ PURE = {
     "strtod", "strtof", "abs", "labs", "llabs", "qsort", "qsort_r", "bsearch",
     "sin", "cos", "tan", "atan", "atan2", "exp", "log", "log2", "log10", "pow",
     "sqrt", "fmod", "floor", "ceil", "round", "trunc", "fabs", "ldexp", "frexp",
+    # The rest of libm, added when zsh/mathfunc arrived -- that one module is
+    # 28 of these on its own, and every one of them is a floating-point
+    # function of its arguments. `signgam` is the odd name in the list: it is
+    # not a function but the global lgamma writes its sign into, and it is as
+    # host-free as the return value beside it.
+    "acos", "acosh", "asin", "asinh", "atanh", "cbrt", "cosh", "erf", "erfc",
+    "expm1", "hypot", "ilogb", "j0", "j1", "jn", "lgamma", "log1p", "logb",
+    "modf", "nextafter", "scalbn", "signgam", "sinh", "tanh", "tgamma",
+    "y0", "y1", "yn",
+    # The 48-bit PRNG family, on the same terms as rand/random above: erand48
+    # draws from a buffer the CALLER owns, and seed48 from libc's own static
+    # state. Neither reads a device, a file or a clock -- a seeded sequence is
+    # the same sequence on host and guest.
+    "erand48", "seed48",
+    # Compiler-generated bounds-checked forms of memccpy and strncat. Same
+    # function plus a size the compiler knew; clang emits them under
+    # _FORTIFY_SOURCE without the source ever naming them.
+    "__memccpy_chk", "__strncat_chk", "wmemmove",
     "rand", "rand_r", "srand", "random", "arc4random", "arc4random_uniform",
     # arc4random_buf, and the reasoning written out because this one is a
     # JUDGEMENT rather than a fact -- the shape fileno had.
@@ -303,8 +321,12 @@ def _symbols(path, args):
 # opens the Mac's /dev/tty rather than the guest's. ssh never prompted, sent an
 # empty password, and reported "Too many authentication failures". A gate that
 # does not look at an archive cannot report anything about it.
+#
+# libzsh.a is here on the same terms, and is only built when -Dnative_zsh is
+# on. Missing targets are skipped rather than failed (see main below), so a
+# default build -- which has no zsh -- is unaffected.
 DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a",
-                   "build/libbash.a", "build/libopenssh.a",
+                   "build/libbash.a", "build/libzsh.a", "build/libopenssh.a",
                    "build/libopenssh_scp.a", "build/libopenssh_stubs.a",
                    "build/libopenssh_smult_curve25519_ref.a")
 

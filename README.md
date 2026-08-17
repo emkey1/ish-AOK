@@ -230,6 +230,44 @@ Nothing else in the binary is third-party GPL: SmallCLUE is MIT, OpenSSH and
 libarchive are BSD, liblzma is public domain, and `deps/linux` is not compiled
 into this target.
 
+## Native zsh (experimental)
+
+zsh is compiled in as a third native program, reachable as `/AOK/native/zsh`,
+and is **on by default** — `-Dnative_zsh=disabled` leaves it out. Unlike bash
+there is no licensing question: zsh's licence is permissive and none of its
+compiled C is GPL.
+
+**It is not yet a usable shell.** ZLE — the line editor — works: prompt, echo,
+editing, history keys, line wrapping, full terminal negotiation. What does not
+work is `fork`:
+
+```
+% $(echo hi)
+zsh:1: fork failed: function not implemented
+```
+
+so no command substitution, no pipelines, no subshells, no background jobs. A
+native program is a C function on a guest task's thread rather than a process,
+so `fork` has to be replaced by the same re-launch design bash uses
+(`deps/bash/aok_fork.c`), and that work has not been done. Until it is, zsh is
+worth poking at and not worth setting as anyone's login shell.
+
+The tree at `deps/zsh` is a submodule of
+[emkey1/zsh](https://github.com/emkey1/zsh) on branch `ish-aok`. It carries
+zsh's *generated* sources — `config.h`, `Src/signames.c`, the per-module
+`.mdh`/`.epro`/`.pro` — committed against upstream's `.gitignore`, because this
+build compiles zsh with meson and never runs zsh's own `make`. So a checkout
+builds with no configure step:
+
+```bash
+git submodule update --init deps/zsh
+```
+
+It is configured termcap-only with all modules linked statically. Both are
+forced: the iOS SDK ships the curses `.tbd` stubs without `curses.h`/`term.h`,
+and a native program cannot `dlopen` — where `--disable-dynamic` alone silently
+maps `zsh/regex` to `link=no` and `[[ =~ ]]` then fails at runtime.
+
 ## Regression Tests
 
 Host-side tests:

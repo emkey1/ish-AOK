@@ -739,7 +739,12 @@ const char *nlibc_dlerror(void);
 #define umask                    nlibc_umask
 #define setreuid                 nlibc_setreuid
 #define setregid                 nlibc_setregid
-#define flock                    nlibc_flock
+/* Function-like, for the reason spelled out at statfs above: `flock` names
+ * both a function and a STRUCT TAG (<fcntl.h>'s record-locking struct), and an
+ * object-like macro rewrites `struct flock lck;` into `struct nlibc_flock`,
+ * which does not exist. zsh's Src/Modules/files.c is where that surfaced. Two
+ * arguments always, in every caller and in POSIX. */
+#define flock(a, b)              nlibc_flock((a), (b))
 #define killpg                   nlibc_killpg
 #define faccessat                nlibc_faccessat
 /* Function-like: `rlimit`, `itimerval`, `tms` and `iovec` are struct tags as

@@ -246,10 +246,20 @@ static int smallclue_real_main(int argc, char *const argv[], char *const envp[])
 int native_bash_main(int argc, char *const argv[], char *const envp[]);
 #endif
 
+// zsh (kernel/zsh_glue.c), on the same terms as bash: the define and the glue
+// file are both decided by meson's `have_zsh`, so the table and the archive
+// cannot disagree. Off by default -- see meson_options.txt.
+#ifdef ISH_NATIVE_ZSH
+int native_zsh_main(int argc, char *const argv[], char *const envp[]);
+#endif
+
 static const struct native_program native_programs[] = {
     { "smallclue", smallclue_real_main },
 #ifdef ISH_NATIVE_BASH
     { "bash", native_bash_main },
+#endif
+#ifdef ISH_NATIVE_ZSH
+    { "zsh", native_zsh_main },
 #endif
 };
 
