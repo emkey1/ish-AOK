@@ -1104,6 +1104,12 @@ if get_option('kernel') == 'ish'
     if have_zsh
         zsh_dir = 'deps/zsh'
         zsh_includes = include_directories(
+            # FIRST, so <termcap.h> resolves to deps/zsh-shim/termcap.h on both
+            # platforms. The iOS SDK ships libtermcap.tbd and libncurses.tbd but
+            # no termcap.h, and zsh brings no termcap of its own -- so the
+            # symbols link and only the declarations were missing. See that
+            # header for why macOS uses it too rather than the system one.
+            'deps/zsh-shim',
             zsh_dir, zsh_dir / 'Src', zsh_dir / 'Src/Zle',
             zsh_dir / 'Src/Modules', zsh_dir / 'Src/Builtins')
 
