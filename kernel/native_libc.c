@@ -919,6 +919,42 @@ void nlibc_perror(const char *s) {
 // exec is the first caller in this file.
 static void nlibc_spawn_default_sigmask(struct native_spawn_opts *opts);
 
+// Wait for a child this shim started on the program's behalf, and do not let a
+// signal be mistaken for the answer.
+//
+// A signal is not an answer to that question. task_wait_child returns _EINTR
+// whenever a signal becomes deliverable while it blocks -- and the callers
+// below treated any negative return as "the exec failed", exiting 127 without
+// ever collecting the child's status. The child is running perfectly well at
+// that point, so the shell got a "command not found" for a command that was
+// still executing, and the command's output turned up afterwards, out of order,
+// attributed to nothing.
+//
+// It took a very ordinary line to hit: `wc -c < <(echo hi)` in native zsh
+// reported 127 while printing 3, and `/bin/sleep 2 < <(print x)` came back in
+// zero seconds. The interrupting signal is SIGCHLD from the process
+// substitution's own child, which exits while the consumer is still being
+// waited for -- so the bug needed a second child, which is why plain external
+// commands never showed it.
+//
+// EINTR therefore means "look for signals, then carry on waiting", exactly as
+// native_syscall does for every other interrupted call: native_checkpoint runs
+// the handlers (and does not return at all if the signal is fatal, which is
+// what makes ^C still work here), and then the wait is reissued. Every other
+// error is still an error.
+//
+// exec is where it was found, but system() and pclose() reap the same way and
+// had the same hole: system() would have returned -1, and pclose() -1, for a
+// command that ran to completion.
+static int nlibc_wait_for_child(dword_t pid, int *status) {
+    for (;;) {
+        int res = native_waitpid(pid, status, 0);
+        if (res != _EINTR)
+            return res;
+        native_checkpoint();
+    }
+}
+
 static int nlibc_exec_common(const char *path, char *const argv[], int search_path) {
     if (path == NULL || argv == NULL)
         return nlibc_fail(_EFAULT);
@@ -946,7 +982,7 @@ static int nlibc_exec_common(const char *path, char *const argv[], int search_pa
     // Stand in for "this process became that program": wait for it and exit
     // with its status, so the caller's caller sees what it expects.
     int status = 0;
-    if (native_waitpid(pid, &status, 0) < 0)
+    if (nlibc_wait_for_child(pid, &status) < 0)
         nlibc_exit(127);
     nlibc_exit(WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status));
 }
@@ -1004,7 +1040,7 @@ int nlibc_system(const char *command) {
     if (err < 0)
         return nlibc_fail(err);
     int status = 0;
-    if (native_waitpid(pid, &status, 0) < 0)
+    if (nlibc_wait_for_child(pid, &status) < 0)
         return -1;
     return status;
 }
@@ -1190,7 +1226,7 @@ int nlibc_pclose(FILE *stream) {
     // full pipe finish, so the wait below cannot deadlock against it.
     fclose(stream);
     int status = 0;
-    if (native_waitpid(pid, &status, 0) < 0)
+    if (nlibc_wait_for_child(pid, &status) < 0)
         return -1;
     return status;
 }
@@ -4368,7 +4404,41 @@ int nlibc_deliver_signals_count(void) {
         nlibc_sighandler handler = host_sig > 0 && host_sig < NSIG ?
                 nlibc_handlers[host_sig] : NULL;
         if (handler != NULL && handler != SIG_DFL && handler != SIG_IGN) {
+            // The mask a handler is entered with is the mask it comes back
+            // with, because on Linux a handler runs on a signal FRAME and
+            // sigreturn reinstalls the mask saved in it -- so a sigprocmask
+            // the handler makes does not outlive the handler. Here the
+            // handler is a plain C call with no frame and no sigreturn, so
+            // nothing undid it, and one very ordinary handler leaked a
+            // permanently wrong mask:
+            //
+            //   zsh's zhandler (Src/signals.c) blocks everything on entry,
+            //   remembers the old mask, and calls signal_setmask(oldmask) on
+            //   the way out. When it runs during nlibc_sigsuspend the "old
+            //   mask" it reads is sigsuspend's TEMPORARY mask -- for a shell
+            //   waiting on a job that is {SIGINT}, added by zsh's
+            //   signal_suspend so a ^C reaches the foreground command first.
+            //   The setmask then wrote SIGINT into the task's real blocked
+            //   set, sigsuspend restored only its own bookkeeping, and SIGINT
+            //   stayed blocked for the rest of the shell's life. Masks are
+            //   inherited across spawn AND exec, so every child from the
+            //   second external command onwards ignored ^C: `sh -c 'kill -INT
+            //   $$'` returned 0 instead of 130, and the process survived.
+            //
+            // Restoring here rather than in sigsuspend closes the class: any
+            // wait that installs a temporary mask (pselect, ppoll,
+            // epoll_pwait, sigtimedwait) had the same hole, and so did any
+            // handler that changes the mask deliberately.
+            sigset_t_ entry_mask = 0;
+            bool have_mask = nlibc_rt_sigprocmask(SIG_BLOCK_, 0, &entry_mask) == 0;
+            sigset_t_ entry_prog = current != NULL ? current->native_prog_blocked : 0;
             handler(host_sig);
+            if (have_mask)
+                nlibc_rt_sigprocmask(SIG_SETMASK_, entry_mask, NULL);
+            if (current != NULL) {
+                current->native_prog_blocked = entry_prog;
+                nlibc_update_held_signals();
+            }
             ran++;
         }
     }
@@ -6412,7 +6482,7 @@ int nlibc_execve(const char *path, char *const argv[], char *const envp[]) {
     if (err < 0)
         return nlibc_fail(err);
     int status = 0;
-    if (native_waitpid(pid, &status, 0) < 0)
+    if (nlibc_wait_for_child(pid, &status) < 0)
         nlibc_exit(127);
     nlibc_exit(WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status));
 }
