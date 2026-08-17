@@ -224,8 +224,54 @@ PURE = {
 }
 
 # Compiler and runtime plumbing rather than calls the program made.
-INTERNAL_PREFIXES = ("__", "_tlv_", "_os_", "_platform_")
-INTERNAL = {"dyld_stub_binder"}
+#
+# Note what is NOT a prefix here. This list began ("__", "_tlv_", ...), and
+# that first entry is why __progname shipped: OpenSSH read the host's
+# __progname, so every applet introduced itself as the app and sftp printed
+# "usage: ish [...]". The symbol was an undefined external sitting in
+# libopenssh.a in plain view of this allowlist, and the prefix waved it
+# through. Darwin keeps compiler plumbing and real host state in the SAME
+# namespace, so matching the shape of a name instead of the name itself handed
+# back exactly the denylist blindness the top of this file describes -- and
+# handed it back wholesale, since one prefix exempts a whole namespace at once.
+#
+# The lesson is the docstring's, one level down: it is not enough to invert the
+# polarity if an escape hatch is left that is matched on form. Anything
+# exempted has to be exempted BY NAME, which is a sentence someone has to
+# write. So a new __-name fails the build until it is classified.
+#
+# (A second reading of "the gate cannot see this": it can. It reads undefined
+# symbols, which covers data as readily as calls -- __progname is a variable
+# and would have been caught. Nothing here needs to learn about variables.)
+INTERNAL_PREFIXES = ("_tlv_", "_os_", "_platform_")
+INTERNAL = {
+    "dyld_stub_binder",
+    # Stack protector and stack probes.
+    "__stack_chk_fail", "__stack_chk_guard", "__chkstk_darwin",
+    # _FORTIFY_SOURCE wrappers around calls already in PURE, plus the fd_set
+    # bounds check the compiler inserts. They compute over the caller's own
+    # memory and trap; nothing observes the host.
+    "__memcpy_chk", "__memmove_chk", "__memset_chk",
+    "__snprintf_chk", "__sprintf_chk", "__vsnprintf_chk",
+    "__strcat_chk", "__strcpy_chk", "__strncpy_chk",
+    "__strlcat_chk", "__strlcpy_chk",
+    "__darwin_check_fd_set_overflow",
+    # errno. Darwin expands errno to (*__error()), which returns a pointer to
+    # the CALLING THREAD's copy -- and a native program runs on its guest
+    # task's own thread, the same thread the routed nlibc_* calls set errno on.
+    # So this already carries the guest's error, and routing it could only
+    # invent a second errno for the first one to disagree with.
+    "__error",
+    # MB_CUR_MAX, and the one entry here that is a real divergence rather than
+    # plumbing. It reports the HOST locale's maximum multibyte length, because
+    # the app's LC_CTYPE is what libSystem has; bash and OpenSSH's utf8.c read
+    # it. Left unrouted because the blast radius is bounded -- how many bytes a
+    # character may occupy, not which file gets opened -- and because the
+    # guest's own locale is not plumbed anywhere a native program could ask
+    # yet. It is written down so that it is a known gap with somewhere to hang
+    # the fix, which is precisely what it was not while "__" hid it.
+    "__mb_cur_max",
+}
 
 # Provided by AOK itself, by the shim, or by the program.
 OURS = re.compile(r"^(nlibc_|native_|task_|do_|f_get|f_install|f_close|"
