@@ -695,17 +695,18 @@ void task_run_current(void) {
 static void *task_thread(void *task) {
     current = task;
 
-    // SIGUSR1 is blocked on entry (task_start created us that way). Instantiate
-    // the thread-local storage sigusr1_handler relies on -- on this normal call
-    // stack, where malloc is safe -- before unblocking SIGUSR1. The assignment
+    // The wake signals are blocked on entry (task_start created us that way).
+    // Instantiate the thread-local storage sigusr1_handler relies on -- on this
+    // normal call stack, where malloc is safe -- before unblocking them. The assignment
     // above instantiates `current`; this covers should_unwind / unwind_buf /
     // should_mark_wait_interrupted as well.
     signal_thread_locals_init();
 
-    sigset_t sigusr1;
-    sigemptyset(&sigusr1);
-    sigaddset(&sigusr1, SIGUSR1);
-    pthread_sigmask(SIG_UNBLOCK, &sigusr1, NULL);
+    sigset_t wake_sigs;
+    sigemptyset(&wake_sigs);
+    sigaddset(&wake_sigs, SIGUSR1);
+    sigaddset(&wake_sigs, SIGUSR2); // the backup poke, see util/sync.c
+    pthread_sigmask(SIG_UNBLOCK, &wake_sigs, NULL);
 
     update_thread_name();
     
@@ -737,11 +738,12 @@ int task_start(struct task *task) {
     // (task_poke_shared_mem -> pthread_kill(.., SIGUSR1)) could be delivered
     // while the new thread is mid-malloc instantiating that storage, making the
     // handler re-enter malloc and abort on the malloc lock. The new thread
-    // inherits this mask and unblocks SIGUSR1 itself once it is safe.
-    sigset_t sigusr1, oldmask;
-    sigemptyset(&sigusr1);
-    sigaddset(&sigusr1, SIGUSR1);
-    pthread_sigmask(SIG_BLOCK, &sigusr1, &oldmask);
+    // inherits this mask and unblocks them itself once it is safe.
+    sigset_t wake_sigs, oldmask;
+    sigemptyset(&wake_sigs);
+    sigaddset(&wake_sigs, SIGUSR1);
+    sigaddset(&wake_sigs, SIGUSR2); // same reasoning, see util/sync.c
+    pthread_sigmask(SIG_BLOCK, &wake_sigs, &oldmask);
     // Test knob: ISH_TEST_FAIL_TASK_START_AFTER=N makes every create after
     // the Nth fail as if the host were at its thread limit, so the unwind
     // path below can be regression-tested without a 16k-thread storm.

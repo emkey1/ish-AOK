@@ -42,6 +42,18 @@ static void establish_signal_handlers(void) {
     sigemptyset(&sigact.sa_mask);
     sigaddset(&sigact.sa_mask, SIGUSR1);
     sigaction(SIGUSR1, &sigact, NULL);
+
+    // The backup wake poke (util/sync.c). Without a handler SIGUSR2's default
+    // action is to kill the whole emulator, so this must be installed before
+    // signal_wake_task can ever send one.
+    extern void sigusr2_handler(int sig);
+    struct sigaction usr2act;
+    usr2act.sa_handler = sigusr2_handler;
+    usr2act.sa_flags = 0;
+    sigemptyset(&usr2act.sa_mask);
+    sigaddset(&usr2act.sa_mask, SIGUSR2);
+    sigaction(SIGUSR2, &usr2act, NULL);
+
     signal(SIGPIPE, SIG_IGN);
 }
 

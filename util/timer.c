@@ -43,15 +43,16 @@ void timer_free(struct timer *timer) {
 
 static void *timer_thread(void *param) {
     struct timer *timer = param;
-    // SIGUSR1 (used by timer_set/timer_free to interrupt our nanosleep) is
-    // blocked on entry. Instantiate the thread-local storage sigusr1_handler
-    // touches on this normal call stack, then unblock SIGUSR1, so the handler
-    // never has to malloc() a TLV block from async signal context.
+    // SIGUSR1 (used by timer_set/timer_free to interrupt our nanosleep) and its
+    // backup SIGUSR2 are blocked on entry. Instantiate the thread-local storage
+    // the handlers touch on this normal call stack, then unblock them, so no
+    // handler has to malloc() a TLV block from async signal context.
     signal_thread_locals_init();
-    sigset_t sigusr1;
-    sigemptyset(&sigusr1);
-    sigaddset(&sigusr1, SIGUSR1);
-    pthread_sigmask(SIG_UNBLOCK, &sigusr1, NULL);
+    sigset_t wake_sigs;
+    sigemptyset(&wake_sigs);
+    sigaddset(&wake_sigs, SIGUSR1);
+    sigaddset(&wake_sigs, SIGUSR2); // the backup poke, see util/sync.c
+    pthread_sigmask(SIG_UNBLOCK, &wake_sigs, NULL);
 
     lock(&timer->lock, 1);
     while (true) {
@@ -166,14 +167,15 @@ int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *ol
         pthread_kill(timer->thread, SIGUSR1);
     } else if (timer->active) {
         timer->thread_running = true;
-        // Born with SIGUSR1 blocked so the timer thread cannot run
+        // Born with the wake signals blocked so the timer thread cannot run
         // sigusr1_handler (and lazily malloc() its TLV block from async signal
         // context) before it has instantiated its thread-locals. It unblocks
-        // SIGUSR1 itself once safe. See signal_thread_locals_init.
-        sigset_t sigusr1, oldmask;
-        sigemptyset(&sigusr1);
-        sigaddset(&sigusr1, SIGUSR1);
-        pthread_sigmask(SIG_BLOCK, &sigusr1, &oldmask);
+        // them itself once safe. See signal_thread_locals_init.
+        sigset_t wake_sigs, oldmask;
+        sigemptyset(&wake_sigs);
+        sigaddset(&wake_sigs, SIGUSR1);
+        sigaddset(&wake_sigs, SIGUSR2); // same reasoning, see util/sync.c
+        pthread_sigmask(SIG_BLOCK, &wake_sigs, &oldmask);
         pthread_create(&timer->thread, NULL, timer_thread, timer);
         pthread_detach(timer->thread);
         pthread_sigmask(SIG_SETMASK, &oldmask, NULL);

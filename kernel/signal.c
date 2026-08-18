@@ -556,6 +556,17 @@ static bool signal_wake_task(struct task *task, struct sighand *sighand, int sig
         return wake_waiting_task(task);
 
     int wake_err = pthread_kill(task->thread, SIGUSR1);
+    // Second, independent poke. The SIGUSR1 above is not reliable: on Darwin it
+    // is intermittently swallowed in a way that leaves SIGUSR1 blocked and
+    // pending in the target thread's own mask with sigusr1_handler never
+    // running, after which that thread is deaf to every later SIGUSR1 for the
+    // rest of its life. A target parked in a host syscall then finishes the
+    // syscall on its own schedule and never reaches the checkpoint where
+    // receive_signals() would act -- which is how a `sleep 30` could ignore a
+    // pending SIGKILL and exit normally 30 seconds later. SIGUSR2 is delivered
+    // fine at the moment SIGUSR1 is swallowed (measured), and all it has to do
+    // is EINTR the host call. See sigusr2_handler in util/sync.c.
+    pthread_kill(task->thread, SIGUSR2);
     // Robustly wake a sibling parked in poll/select/epoll: the SIGUSR1 above
     // can be lost in TLB-poke noise, but the notify-pipe write cannot.
     poll_notify_poke(task->poll_notify_fd);

@@ -113,6 +113,14 @@ static bool is_signal_pending(lock_t *lock) {
     return has_pending;
 }
 
+// Public form of is_signal_pending for blocking sites that are not parked in a
+// cond_t (kernel/time.c's sleep loop). Same rule -- task_wake_blocked, and the
+// shared sighand queue counts too -- so a poll of this cannot disagree with
+// what receive_signals() will do at the next syscall checkpoint.
+bool task_wake_signal_pending(void) {
+    return is_signal_pending(NULL);
+}
+
 static bool consume_wait_interrupted(void) {
     if (!current)
         return false;
@@ -196,6 +204,26 @@ void sigusr1_handler(int UNUSED(sig)) {
     }
 }
 
+// The backup poke. signal_wake_task sends this immediately after SIGUSR1
+// because SIGUSR1 alone is not reliable: on Darwin a poke is occasionally
+// swallowed in a way that leaves SIGUSR1 blocked and pending in the target
+// thread's mask with this handler's SIGUSR1 twin never running, and the target
+// then sits in its host syscall until it finishes on its own -- ignoring even a
+// pending SIGKILL. A second, independent signal gives the wake another way in.
+//
+// Deliberately weaker than sigusr1_handler: it never unwinds. fs/real.c,
+// fs/poll.c and fs/sock.c block SIGUSR1 around the window where they arm
+// sigunwind_start(), precisely so no poke can siglongjmp out of it; SIGUSR2 is
+// NOT blocked there, so unwinding from here would jump out of exactly the
+// window they protect. All this needs to do is make the host syscall return
+// EINTR, which every blocking site in the tree already handles by re-checking
+// the guest's pending set -- they have to, since a spurious SIGUSR1 can already
+// produce the same EINTR today.
+void sigusr2_handler(int UNUSED(sig)) {
+    if (should_mark_wait_interrupted && current != NULL)
+        __atomic_store_n(&current->wait_interrupted, true, __ATOMIC_RELEASE);
+}
+
 // Force this thread's thread-local storage for everything sigusr1_handler
 // touches to be instantiated *now*, on a normal call stack where malloc is
 // safe. On Darwin the first access to a __thread variable is resolved lazily by
@@ -215,6 +243,55 @@ void signal_thread_locals_init(void) {
     (void) *unwind;
     (void) *mark;
     (void) *buf;
+}
+
+// Undo the "thread went permanently deaf to its wake poke" state.
+//
+// A task is woken out of a host blocking call by pthread_kill(thread, SIGUSR1)
+// (kernel/signal.c signal_wake_task). On Darwin that poke is occasionally
+// swallowed in a way that leaves SIGUSR1 *blocked and pending* in the target
+// thread's own host signal mask with sigusr1_handler never having run --
+// observed while the thread sat in nanosleep(), across host thread churn from
+// concurrent guest fork/exec. It is permanent: the signal is masked, so it is
+// never redelivered, and every later poke to that thread is equally deaf.
+//
+// A thread that finds a wake signal masked when it expected it unblocked can
+// repair itself: unblocking delivers the queued signal immediately (the handler
+// runs inside this call) and the thread is receptive again. Covers SIGUSR2 as
+// well as SIGUSR1, so the two pokes stay independent -- the whole point of
+// sending both is that one being swallowed does not take the other with it.
+//
+// This has to run on a normal call stack, NOT from inside a signal handler: a
+// handler's sigreturn restores the mask as it was at delivery, which would put
+// the wedged bit straight back.
+//
+// Returns true if a repair was actually needed, for the caller to count.
+bool signal_thread_unwedge_wake_sigs(void) {
+    sigset_t mask;
+    if (pthread_sigmask(SIG_BLOCK, NULL, &mask) != 0)
+        return false;
+    sigset_t stuck;
+    sigemptyset(&stuck);
+    bool any = false;
+    if (sigismember(&mask, SIGUSR1)) {
+        sigaddset(&stuck, SIGUSR1);
+        any = true;
+    }
+    if (sigismember(&mask, SIGUSR2)) {
+        sigaddset(&stuck, SIGUSR2);
+        any = true;
+    }
+    if (!any)
+        return false;
+    pthread_sigmask(SIG_UNBLOCK, &stuck, NULL);
+    return true;
+}
+
+bool signal_thread_wake_sigs_unblocked(void) {
+    sigset_t mask;
+    if (pthread_sigmask(SIG_BLOCK, NULL, &mask) != 0)
+        return false;
+    return !sigismember(&mask, SIGUSR1) && !sigismember(&mask, SIGUSR2);
 }
 
 // This is how you would mitigate the unlock/wait race if the wait

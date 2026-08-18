@@ -207,6 +207,99 @@ int write_guest_timespec_abi(enum guest_abi abi, guest_addr_t addr, const struct
     return 0;
 }
 
+// How long a single host sleep slice may run before the task re-checks its own
+// pending signals. Sets the worst-case latency between `kill` and the sleeping
+// task noticing, and costs one extra host nanosleep per slice -- 20 wakeups a
+// second per sleeping task, which is nothing next to what the emulator does per
+// second of guest execution.
+#define SLEEP_SLICE_NS 50000000L // 50ms
+// Count of sleeping threads found deaf to their wake signal and repaired. The
+// first one is logged; the rest only bump this, which a debugger can read.
+_Atomic long sleep_wedged_repairs;
+
+// Sleep `req` on the host, but in bounded slices with a pending-signal re-check
+// between them, and return EINTR the moment the guest has a deliverable signal.
+//
+// Every other blocking site in the tree already defends itself this way --
+// fs/real.c's realfs_wait_readable polls with a 100ms timeout and re-checks
+// realfs_guest_signal_pending, fs/poll.c has its notify pipe, fs/sock.c does the
+// equivalent -- precisely because the host SIGUSR1 poke that signal_wake_task
+// sends is not reliable. This was the one blocking site left holding a bare,
+// unbounded host nanosleep with no pending check at all, so a lost poke meant a
+// sleeping task never acted on a pending signal, SIGKILL included: it ran the
+// full sleep and exited normally, having ignored the kill entirely.
+//
+// While it is here, a task that finds a wake signal masked in its own host
+// thread -- the state a swallowed poke leaves behind, see
+// signal_thread_unwedge_wake_sigs -- repairs it, so the thread is receptive
+// again for its next wait rather than staying deaf for the rest of its life.
+//
+// On return: 0 if the full time elapsed, or -1/EINTR with *rem set to the time
+// left (relative sleeps report it; Linux does).
+static int host_sleep_interruptible(struct timespec req, struct timespec *rem) {
+    *rem = (struct timespec) {0};
+    if (!timespec_positive(req))
+        return 0;
+
+    // Only a task can have guest signals, and only a task thread has a poke to
+    // lose. Anything else (bootstrap paths, helper threads) keeps the plain
+    // host sleep -- and note TASK_MAY_BLOCK writes current->io_block, so it
+    // cannot appear on this branch.
+    if (current == NULL)
+        return nanosleep(&req, rem);
+
+    // Whether the wake signals are ours to repair. A caller that deliberately
+    // blocked one around this sleep (nothing does today, but fs/real.c's arming
+    // dance shows the shape) must get its mask back untouched.
+    bool own_wake_sigs = signal_thread_wake_sigs_unblocked();
+
+    struct timespec deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), req);
+    for (;;) {
+        // Check before sleeping as well as after: the signal may have been
+        // delivered while we were between slices, and on the first pass it may
+        // predate the sleep entirely.
+        struct timespec left = timespec_subtract(deadline, timespec_now(CLOCK_MONOTONIC));
+        if (task_wake_signal_pending()) {
+            if (timespec_positive(left))
+                *rem = left;
+            errno = EINTR;
+            return -1;
+        }
+        if (!timespec_positive(left))
+            return 0;
+
+        struct timespec slice = left;
+        if (slice.tv_sec > 0 || slice.tv_nsec > SLEEP_SLICE_NS)
+            slice = (struct timespec) {.tv_sec = 0, .tv_nsec = SLEEP_SLICE_NS};
+
+        int res;
+        TASK_MAY_BLOCK { res = nanosleep(&slice, NULL); }
+        if (res < 0 && errno != EINTR) {
+            // Only EINVAL is possible (a bad slice would be our own bug), but
+            // don't silently spin on it.
+            return -1;
+        }
+
+        // A real poke got through, or one was swallowed and left this thread
+        // masked. Either way the next loop iteration reads the authoritative
+        // guest state; all this does is stop the thread being deaf from here on.
+        if (own_wake_sigs && signal_thread_unwedge_wake_sigs()) {
+            long n = atomic_fetch_add_explicit(&sleep_wedged_repairs, 1,
+                                               memory_order_relaxed) + 1;
+            // Say it out loud once. This is a host-level fault, not a guest
+            // one, and silently papering over it is how it stayed invisible
+            // long enough to be mistaken for a signal-delivery bug in AOK.
+            if (n == 1)
+                printk("WARNING: host thread went deaf to its wake signal while sleeping "
+                       "(pid=%d comm=%s); repaired. Further occurrences are counted, not logged.\n",
+                       current->pid, current->comm);
+        }
+
+        // `left` is recomputed from the deadline every pass, so an EINTR that
+        // turns out not to concern the guest costs no sleep time.
+    }
+}
+
 static dword_t clock_nanosleep_common(dword_t clock, int_t flags, struct timespec req,
         guest_addr_t rem_addr, bool rem_time64) {
     clockid_t clock_id;
@@ -232,10 +325,7 @@ static dword_t clock_nanosleep_common(dword_t clock, int_t flags, struct timespe
                clock, flags, (long long) req.tv_sec, req.tv_nsec, rem_addr);
     }
 
-    int res;
-    TASK_MAY_BLOCK {
-        res = nanosleep(&req, &rem);
-    }
+    int res = host_sleep_interruptible(req, &rem);
     if (trace_short_sleep) {
         printk("INFO: wait clock_nanosleep exit pid=%d comm=%s res=%d rem=%llds.%09ld\n",
                current != NULL ? current->pid : -1,
@@ -993,12 +1083,7 @@ static dword_t sys_nanosleep_guest_abi(guest_addr_t req_addr, guest_addr_t rem_a
                (long long) req_ts.tv_sec, req_ts.tv_nsec, rem_addr);
     }
     struct timespec rem;
-   // rem.tv_sec = 0;
-    //rem.tv_nsec = 0;
-    int res = 0;
-    TASK_MAY_BLOCK {
-        res = nanosleep(&req_ts, &rem);
-    }
+    int res = host_sleep_interruptible(req_ts, &rem);
     if (trace_short_sleep) {
         printk("INFO: wait nanosleep exit pid=%d comm=%s res=%d rem=%llds.%09ld\n",
                current != NULL ? current->pid : -1,

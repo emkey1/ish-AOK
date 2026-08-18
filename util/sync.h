@@ -114,10 +114,24 @@ void notify_once(cond_t *cond);
 // "INFO: wait" short-wait traces in kernel/time.c and kernel/poll.c. See sync.c.
 bool wait_trace_enabled(void);
 void sigusr1_handler(int sig);
+// The backup wake poke, sent alongside SIGUSR1. See the definition in sync.c
+// for why it exists and why it must not unwind.
+void sigusr2_handler(int sig);
 // Instantiate this thread's thread-local storage used by sigusr1_handler before
 // SIGUSR1 is unblocked, so the handler never has to malloc() it from async
 // signal context. See the definition in sync.c.
 void signal_thread_locals_init(void);
+// True if a signal is pending on `current` and not blocked for wake purposes --
+// the same rule wait_for() uses, for blocking sites that are not parked in a
+// cond_t. False when there is no current task.
+bool task_wake_signal_pending(void);
+// True if both wake signals (SIGUSR1, SIGUSR2) are unblocked in the calling
+// host thread's mask.
+bool signal_thread_wake_sigs_unblocked(void);
+// If either wake signal is blocked in the calling host thread's mask, unblock
+// it (which delivers it right here) and return true. Must be called from a
+// normal call stack, never from a signal handler. See sync.c.
+bool signal_thread_unwedge_wake_sigs(void);
 bool current_is_valid(void);
 
 #endif
