@@ -39,3 +39,7 @@
 ## 2026-03-29 - Avoid strcmp for "." and ".." in VFS loops
 **Learning:** In C VFS directory traversal loops (e.g., `scan_host_dir`, `migrate_names_load`), repeatedly calling `strcmp` to filter out "." and ".." causes unnecessary O(N) operations per entry.
 **Action:** Replace `strcmp` with explicit string length comparisons and character index checks (e.g., `(len == 1 && name[0] == '.')` or `name[0] == '.' && name[1] == '\0'`) to eliminate the overhead of function calls inside hot loops.
+
+## 2026-03-30 - Identify Hot vs Cold Paths
+**Learning:** Functions like `scan_host_dir` and `migrate_names_load` in `fs/fake-migrate.c` run during a one-time rootfs migration, making them cold paths. Micro-optimizing string operations (like `strcmp` vs manual length checks) in these areas yields no observable savings. Furthermore, modern compilers often inline small literal comparisons anyway, so manual unrolling can sometimes perform worse if it forces explicit `strlen` calculations.
+**Action:** When hunting for performance wins, do not optimize cold paths like one-off migration scripts or boot sequences. Verify a path is hot and prioritize loops that run continuously during steady-state operations.
