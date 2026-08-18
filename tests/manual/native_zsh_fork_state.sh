@@ -319,6 +319,24 @@ ck mathfn-two-arg   "5"   'add() { REPLY=$(( $1 + $2 )) }; functions -M madd 2 2
 ck mathfn-nested    "9"   'sq() { REPLY=$(( $1 * $1 )) }; add() { REPLY=$(( $1 + $2 )) }; functions -M msq 1 1 sq; functions -M madd 2 2 add; print $( print $(( msq(madd(1,2)) )) )'
 ck mathfn-pipe      "25"  'sq() { REPLY=$(( $1 * $1 )) }; functions -M msq 1 1 sq; print $(( msq(5) )) | cat'
 
+echo "== zstyle patterns are compiled EAGERLY, so they must be replayed late =="
+# A zstyle's context pattern is compiled at `zstyle' time, not at first use, so
+# replaying the `zstyle -L' lines inline compiled them under the zsh -f defaults
+# the child still had. Every one of these answered MISS where zsh 5.9 answers.
+ck zstyle-extglob  "v1" 'setopt extendedglob; zstyle ":t:a#" s v1; print $( unset v; zstyle -s ":t:aaa" s v; print -n ${v:-MISS} )'
+ck zstyle-sub      "v1" 'setopt extendedglob; zstyle ":t:a#" s v1; ( unset v; zstyle -s ":t:aaa" s v; print -n ${v:-MISS} )'
+ck zstyle-pipe     "v1" 'setopt extendedglob; zstyle ":t:a#" s v1; { unset v; zstyle -s ":t:aaa" s v; print -n ${v:-MISS} } | cat'
+ck zstyle-kshglob  "v2" 'setopt kshglob; zstyle ":t:@(a|b)" s v2; print $( unset v; zstyle -s ":t:a" s v; print -n ${v:-MISS} )'
+# The default-syntax patterns always crossed; they are here so a regression in
+# the deferral shows up as a difference between these and the ones above.
+ck zstyle-plain    "v3" 'zstyle ":t:a*" s v3; print $( unset v; zstyle -s ":t:axx" s v; print -n ${v:-MISS} )'
+ck zstyle-count    "2"  'zstyle ":a:*" s1 x; zstyle ":b:*" s2 y; print $( zstyle -L | wc -l | tr -d " " )'
+# A shell that has never used zstyle must not pay for any of it.
+# The bracket keeps this case from matching ITSELF: the shell serialises its own
+# -c text into ZSH_EXECUTION_STRING, so a literal name here appears in the dump
+# and the first version of this case counted its own command line.
+ck zstyle-no-cost  "0"  'export AOK_ZSH_DUMP_STATE=1; { v=$(true) } 2>/tmp/aokzs; unset AOK_ZSH_DUMP_STATE; print -r -- $(grep -c "__aok_zs[t]" /tmp/aokzs)'
+
 echo
 echo "  passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
