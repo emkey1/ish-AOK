@@ -738,8 +738,26 @@ static void *task_thread(void *task) {
 // have fixed only zsh -- bash and every future native program share this
 // thread.
 //
+// Re-measured once both shells had the guard, since the depth that matters is
+// what is USABLE, not what the stack holds raw: native zsh refuses at 1186
+// levels and native bash at 1455 (binary search, this rootfs, 4 MB). zsh's own
+// FUNCNEST default of 500 therefore still fires first, which is the intent --
+// an ordinary script that recurses too far gets zsh's message from zsh's guard,
+// exactly as it does off-device.
+//
+// bash is the one that actually depends on this number, and it was not part of
+// the original reasoning: bash's FUNCNEST is UNSET by default, so there is no
+// first limit to fire and the stack guard is the only thing between a runaway
+// recursive function and the end of the stack. Halving this to 2 MB would put
+// zsh at roughly 550 usable levels -- close enough to FUNCNEST's 500 that the
+// two guards would start racing -- and 1 MB would put it below, so ours would
+// fire on scripts that are legal everywhere else. 4 MB is the smallest size
+// with real margin, not a round number.
+//
 // The cost is address space rather than memory: the pages are committed on
 // demand, so a thread that never recurses still touches only a few KB of it.
+// Measured with 60 concurrent guest tasks live: RSS stayed in the low
+// megabytes, i.e. the 8x reservation is not an 8x footprint.
 // That is what makes this affordable to give to every guest task rather than
 // only to the ones running native programs -- which is just as well, because
 // at creation time we do not yet know which those are.
