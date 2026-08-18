@@ -303,6 +303,22 @@ ck bindkey-deep     '"^X^T" beep'  'zmodload zsh/zle; bindkey -e; bindkey "^X^T"
 ck bindkey-cost-0   "0" 'zmodload zsh/zle; bindkey -e; export AOK_ZSH_DUMP_STATE=1; { v=$(true) } 2>/tmp/aokbk; unset AOK_ZSH_DUMP_STATE; print -r -- $(grep -c "^builtin bindkey" /tmp/aokbk)'
 ck bindkey-cost-1   "1" 'zmodload zsh/zle; bindkey -e; bindkey "^X^T" beep; export AOK_ZSH_DUMP_STATE=1; { v=$(true) } 2>/tmp/aokbk; unset AOK_ZSH_DUMP_STATE; print -r -- $(grep -c "^builtin bindkey" /tmp/aokbk)'
 
+echo "== user math functions cross, and still evaluate in the child =="
+# Reported as a re-launch defect: `functions -M mf 0 0 impl; echo $(( mf() ))'
+# answers 0 in the parent and 1 in a re-launched child. Real, but NOT a fork
+# bug -- it reproduces with a registration made entirely INSIDE the child, and
+# in that shape the implementation never produces a return value at all, so
+# what zsh answers is unspecified: /bin/zsh 5.9 gives 4621819117588971520 for
+# `mf() + 10' (the bit pattern of the double 10.0) and `0.' for `2 * mf()'.
+# Both shells agree exactly on the arity table in the parent -- 0 0 -> 0,
+# 0 1 -> 0, 1 1 -> 1 -- so there is nothing here to assert but the supported
+# usage, which is what these cases pin.
+ck mathfn-crosses   "25"  'sq() { REPLY=$(( $1 * $1 )) }; functions -M msq 1 1 sq; print $( print $(( msq(5) )) )'
+ck mathfn-in-expr   "26"  'sq() { REPLY=$(( $1 * $1 )) }; functions -M msq 1 1 sq; print $( print $(( msq(5) + 1 )) )'
+ck mathfn-two-arg   "5"   'add() { REPLY=$(( $1 + $2 )) }; functions -M madd 2 2 add; print $( print $(( madd(2,3) )) )'
+ck mathfn-nested    "9"   'sq() { REPLY=$(( $1 * $1 )) }; add() { REPLY=$(( $1 + $2 )) }; functions -M msq 1 1 sq; functions -M madd 2 2 add; print $( print $(( msq(madd(1,2)) )) )'
+ck mathfn-pipe      "25"  'sq() { REPLY=$(( $1 * $1 )) }; functions -M msq 1 1 sq; print $(( msq(5) )) | cat'
+
 echo
 echo "  passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
