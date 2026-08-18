@@ -47,6 +47,7 @@
    </TestAction>
    <LaunchAction
       buildConfiguration = "DebugLinux"
+      customLLDBInitFile = "$(SRCROOT)/ish-lldb.lldbinit"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       launchStyle = "0"
