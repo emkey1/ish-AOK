@@ -20,6 +20,14 @@
 # every ncurses build has the 8 colliding directory pairs A/a E/e L/l M/m N/n
 # P/p Q/q X/x, so on an ArchLinuxARM aarch64 root 1069 of 2899 terminfo files
 # went unreachable on upgrade, xterm-256color among them.
+#
+# Both spellings of the merged directory are replayed, because which one it ends
+# up with is just which twin the extraction created first, and the repair used to
+# handle only one of them. When the merged directory keeps the *uppercase* name
+# the twin is found and everything is recovered; when it keeps the lowercase one
+# the recovery had to look past an exact match to see the twin at all, and a
+# readdir that returned the escaped spelling first made it give up. Running only
+# the uppercase variant is what let that survive, so a pass here now means both.
 set -e
 
 TARBALL=${1:?usage: fakefs_migrate_repair.sh <rootfs.tar.gz> [subtree] [builddir]}
@@ -41,6 +49,11 @@ if [ ! -e "$probe/AA" ]; then
     exit 0
 fi
 
+fail=0
+for WINNER in upper lower; do
+echo "--- merged directory keeps the $WINNER-case spelling ---"
+rm -rf "$ROOT"
+
 echo "importing $TARBALL"
 "$FAKEFSIFY" "$TARBALL" "$ROOT" >/dev/null
 # First boot absorbs the db_inode rebuild that a freshly imported root always
@@ -52,7 +65,7 @@ before=$("$ISH" -f "$ROOT" /bin/sh -c "find /$SUBTREE -type f 2>/dev/null | wc -
 echo "  $before files under /$SUBTREE"
 
 echo "rewriting /$SUBTREE into the pre-v4 on-disk format"
-python3 - "$ROOT/data/$SUBTREE" <<'PY'
+python3 - "$ROOT/data/$SUBTREE" "$WINNER" <<'PY'
 import os, sys
 
 def decode(name):
@@ -80,8 +93,13 @@ def downgrade(d):
         staged.append((tmp, decode(n)))
     # Place in ASCII order of the guest name, which is tar order: the uppercase
     # twin lands first and keeps the host name, the lowercase one merges into
-    # it and its files win the name conflicts, exactly as extraction did.
-    staged.sort(key=lambda t: t[1])
+    # it and its files win the name conflicts, exactly as extraction did. With
+    # "lower" the pair is placed the other way round, which is the same merge an
+    # archive listing the lowercase twin first produces.
+    if sys.argv[2] == 'lower':
+        staged.sort(key=lambda t: (t[1].lower(), not t[1][:1].islower(), t[1]))
+    else:
+        staged.sort(key=lambda t: t[1])
     for tmp, dn in staged:
         dst = os.path.join(d, dn)
         if not os.path.lexists(dst):
@@ -109,8 +127,16 @@ after=$("$ISH" -f "$ROOT" /bin/sh -c "find /$SUBTREE -type f 2>/dev/null | wc -l
 echo "  $after files readable after the migration"
 
 if [ "$after" -eq "$before" ]; then
-    echo "fakefs_migrate_repair: PASS ($before files, none stranded)"
+    echo "  $WINNER: PASS ($before files, none stranded)"
 else
-    echo "fakefs_migrate_repair: FAIL ($((before - after)) of $before files stranded by the migration)"
+    echo "  $WINNER: FAIL ($((before - after)) of $before files stranded by the migration)"
+    fail=1
+fi
+done
+
+if [ "$fail" -eq 0 ]; then
+    echo "fakefs_migrate_repair: PASS (both spellings, none stranded)"
+else
+    echo "fakefs_migrate_repair: FAIL"
     exit 1
 fi

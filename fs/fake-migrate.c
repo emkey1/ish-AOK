@@ -472,6 +472,13 @@ static const char *salvage_lookup(struct migrate_salvage *salvage, size_t count,
 // one that a folding host would have conflated with it (*fold_out). Used for
 // the salvage directory, which is never the one the pass has cached, and only
 // reached for an entry already known to be missing.
+//
+// Both answers are looked for all the way to the end of the directory. Stopping
+// at the exact match costs nothing where the caller wants that one, but the
+// twin lookup below reads *only* fold_out, and whether the twin had already
+// gone past is readdir order -- so an early stop left that caller empty-handed
+// whenever the canonical spelling came first, and it gave up on the entry
+// instead of pulling it out of the twin that was holding it.
 static void scan_host_dir(int root_fd, const char *host_dir, const char *name,
         char *exact_out, char *fold_out, size_t out_size) {
     exact_out[0] = fold_out[0] = '\0';
@@ -494,10 +501,15 @@ static void scan_host_dir(int root_fd, const char *host_dir, const char *name,
         fake_path_from_host(guest);
         if (strcmp(guest, name) == 0) {
             strcpy(exact_out, ent->d_name);
-            break; // an exact match is the answer; nothing beats it
+            if (fold_out[0] != '\0')
+                break; // both answers in hand
+            continue;
         }
-        if (fold_out[0] == '\0' && strcasecmp(guest, name) == 0)
+        if (fold_out[0] == '\0' && strcasecmp(guest, name) == 0) {
             strcpy(fold_out, ent->d_name);
+            if (exact_out[0] != '\0')
+                break;
+        }
     }
     closedir(dir);
 }
