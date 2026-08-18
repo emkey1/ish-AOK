@@ -1,0 +1,28 @@
+# lldb settings for debugging iSH-AOK, the counterpart of ish-gdb.gdb.
+#
+# Use it with:   command source /path/to/ish-lldb.lldbinit
+# or in Xcode:   Scheme > Run > Options > "LLDB Init File"
+#
+# WHY THIS IS NEEDED. AOK wakes a task blocked in a host syscall by poking its
+# thread with a signal, so these arrive constantly and none of them indicates a
+# problem. Without this, a debugger halts the whole app on every single wake and
+# the session is unusable.
+#
+# SIGUSR1 is the primary poke (kernel/signal.c signal_wake_task).
+#
+# SIGUSR2 is a SECOND, independent poke added 2026-08-18. It is not redundant:
+# on Darwin the SIGUSR1 poke is intermittently swallowed in a way that leaves it
+# blocked and pending in the target thread's own mask with the handler never
+# running, after which that thread is deaf to every later SIGUSR1 for the rest
+# of its life -- which is how a `sleep 30` could sit on a pending SIGKILL and
+# exit normally half a minute later. SIGUSR2 is delivered fine at the moment
+# SIGUSR1 is swallowed, and all it has to do is EINTR the host call.
+#
+# SIGTTIN and SIGPIPE are ordinary traffic for a shell that manages terminals
+# and pipes, matching ish-gdb.gdb.
+
+process handle SIGUSR1 --notify false --pass true --stop false
+process handle SIGUSR2 --notify false --pass true --stop false
+process handle SIGTTIN --notify false --pass true --stop false
+process handle SIGPIPE --notify false --pass true --stop false
+settings set target.process.stop-on-sharedlibrary-events false

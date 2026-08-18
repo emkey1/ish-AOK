@@ -566,6 +566,11 @@ static bool signal_wake_task(struct task *task, struct sighand *sighand, int sig
     // pending SIGKILL and exit normally 30 seconds later. SIGUSR2 is delivered
     // fine at the moment SIGUSR1 is swallowed (measured), and all it has to do
     // is EINTR the host call. See sigusr2_handler in util/sync.c.
+    //
+    // A DEBUGGER WILL HALT ON THIS unless told not to. Anyone who had already
+    // silenced SIGUSR1 suddenly finds the app stopping on every wake instead,
+    // which looks like a new hang rather than a new signal. ish-gdb.gdb and
+    // ish-lldb.lldbinit in the repo root silence both.
     pthread_kill(task->thread, SIGUSR2);
     // Robustly wake a sibling parked in poll/select/epoll: the SIGUSR1 above
     // can be lost in TLB-poke noise, but the notify-pipe write cannot.

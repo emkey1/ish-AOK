@@ -1,4 +1,5 @@
 handle SIGUSR1 noprint pass
+handle SIGUSR2 noprint pass
 handle SIGTTIN noprint pass
 handle SIGPIPE noprint pass
 set print thread-events off
