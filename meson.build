@@ -194,7 +194,19 @@ if have_zsh
     # ship libiconv, so this is a link-line entry rather than a port. The
     # alternative was configuring zsh without it, which silently changes what
     # $'é' produces -- not a thing to decide by omission.
-    dependencies += cc.find_library('iconv')
+    #
+    # Where it LIVES is not the same question as whether it is there. Darwin and
+    # iOS ship it as a separate libiconv, which is what this originally assumed;
+    # glibc and musl put iconv_open inside libc itself and have no -liconv to
+    # link at all. Asking only the first question broke every Linux CI build
+    # from e06c2aa5 until this commit -- `ld: cannot find -liconv' -- while the
+    # mac job went on passing, because on the mac the assumption was true.
+    iconv_lib = cc.find_library('iconv', required: false)
+    if iconv_lib.found()
+        dependencies += iconv_lib
+    elif not cc.has_function('iconv_open', prefix: '#include <iconv.h>')
+        error('zsh needs iconv: no libiconv, and no iconv_open in libc either')
+    endif
 endif
 
 subdir('vdso') # ish depends on the vdso
