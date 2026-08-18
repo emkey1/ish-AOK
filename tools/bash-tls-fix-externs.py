@@ -299,7 +299,7 @@ def main():
         for i, line in enumerate(lines):
             for n in names:
                 if n in line and declares(line, n):
-                    lines[i] = "__thread " + line
+                    lines[i] = insert_thread(line)
                     hits[n] += 1
                     touched = True
                     break
@@ -318,3 +318,23 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def insert_thread(line):
+    """Put `__thread` AFTER a leading extern/static, never before it.
+
+    GCC requires __thread to follow the storage class and rejects the other
+    order outright -- "error: '__thread' before 'extern'" -- while clang accepts
+    both. Since the app is built with clang, `__thread extern` compiled here for
+    months and only ever failed on the Linux CI builds, which are gcc and clang
+    on a platform nobody was watching because the build died earlier for
+    unrelated reasons. 527 declarations were affected.
+    """
+    if "__thread" in line:
+        return line
+    stripped = line.lstrip()
+    indent = line[:len(line) - len(stripped)]
+    for kw in ("extern ", "static "):
+        if stripped.startswith(kw):
+            return indent + kw + "__thread " + stripped[len(kw):]
+    return indent + "__thread " + stripped

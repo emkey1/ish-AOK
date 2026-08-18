@@ -90,8 +90,7 @@ def patch(sites):
             stripped = text[i].lstrip()
             if stripped.startswith("__thread "):
                 continue
-            indent = text[i][:len(text[i]) - len(stripped)]
-            text[i] = indent + "__thread " + stripped
+            text[i] = insert_thread(text[i])
             changed += 1
         with open(path, "w", encoding="utf-8", errors="surrogateescape") as fh:
             fh.write("\n".join(text))
@@ -122,3 +121,23 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def insert_thread(line):
+    """Put `__thread` AFTER a leading extern/static, never before it.
+
+    GCC requires __thread to follow the storage class and rejects the other
+    order outright -- "error: '__thread' before 'extern'" -- while clang accepts
+    both. Since the app is built with clang, `__thread extern` compiled here for
+    months and only ever failed on the Linux CI builds, which are gcc and clang
+    on a platform nobody was watching because the build died earlier for
+    unrelated reasons. 527 declarations were affected.
+    """
+    if "__thread" in line:
+        return line
+    stripped = line.lstrip()
+    indent = line[:len(line) - len(stripped)]
+    for kw in ("extern ", "static "):
+        if stripped.startswith(kw):
+            return indent + kw + "__thread " + stripped[len(kw):]
+    return indent + "__thread " + stripped
