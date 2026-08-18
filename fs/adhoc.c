@@ -19,6 +19,23 @@ struct fd *adhoc_fd_create(const struct fd_ops *ops) {
     // can tell sockets/pipes/eventfds apart. st_dev is 0 for these, so they
     // never collide with real-fs inodes.
     fd->stat.inode = __atomic_add_fetch(&adhoc_inode_seq, 1, __ATOMIC_RELAXED);
+    // An anon_inode fd is a REGULAR file to stat(2). Linux makes these with
+    // alloc_anon_inode, which sets S_IFREG|S_IRUSR|S_IWUSR; leaving the mode 0
+    // reports a file with NO type bits at all, which is not a thing a file can
+    // be. coreutils calls it "weird file"; lsof 4.99.4 SEGVs on it -- statting
+    // dbus-daemon's epoll fd killed `lsof' outright, on every device, and took
+    // the whole listing with it because one bad fd ends the run:
+    //
+    //     newfstatat("/proc/683/fd/3", {st_mode=000, ...}, 0) = 0
+    //     --- SIGSEGV {si_code=SEGV_MAPERR, si_addr=0xfa000c98} ---
+    //
+    // Only for fds that declare a class, which is exactly the anon_inode family
+    // (eventpoll, inotify, timerfd, signalfd, eventfd, pidfd, nsfs, fscontext).
+    // Sockets and pipes set S_IFSOCK/S_IFIFO themselves and are left alone --
+    // the namer below keys off those bits, so defaulting them would rename
+    // every socket to anon_inode.
+    if (ops != NULL && ops->anon_inode_class != NULL)
+        fd->stat.mode = S_IFREG | 0600;
     return fd;
 }
 
@@ -59,7 +76,13 @@ static int adhoc_getpath(struct fd *fd, char *buf) {
     else {
         const char *cls = (fd->ops != NULL && fd->ops->anon_inode_class != NULL)
             ? fd->ops->anon_inode_class : "anon_inode";
-        snprintf(buf, MAX_PATH, "anon_inode:[%s]", cls);
+        // Two classes spell their own brackets -- "[pidfd]" and "[fscontext]" --
+        // and wrapping those again produced `anon_inode:[[pidfd]]', which is not
+        // what any reader expects to parse. Seen on elogind, which holds three.
+        if (cls[0] == '[')
+            snprintf(buf, MAX_PATH, "anon_inode:%s", cls);
+        else
+            snprintf(buf, MAX_PATH, "anon_inode:[%s]", cls);
     }
     return 0;
 }
