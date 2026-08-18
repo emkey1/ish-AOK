@@ -323,10 +323,31 @@ int native_zsh_multio_main(int argc, char *const argv[], char *const envp[]) {
 
     ssize_t len;
     if (tee) {
-        // The tee process. One reader, several writers, and the inner `break`
-        // on a failed write leaves only the write loop -- upstream keeps
-        // pumping to the remaining targets, so `echo hi > /dev/full > b` still
-        // fills b.
+        // The tee process: one reader, several writers.
+        //
+        // A TARGET THAT FAILS MUST NOT STARVE THE OTHERS, and getting this
+        // wrong was silent. The first version broke out of the target loop on a
+        // failed write, so once one target refused, every target after it was
+        // skipped for that chunk -- and, since the failing one is retried and
+        // fails again on the next chunk, for the whole transfer. Measured
+        // against the guest's own zsh, which is the spec:
+        //
+        //     echo hi > /dev/full > b     oracle b="hi"   ours b= (empty)
+        //     echo hi > b > /dev/full     oracle b="hi"   ours b="hi"
+        //
+        // i.e. it depended on which side of the failing target you were
+        // written on, which is not a distinction a user could be expected to
+        // make. A target is now retired on its first failure and the rest keep
+        // receiving -- retiring rather than merely continuing, because
+        // otherwise a permanently unwritable target is retried once per chunk
+        // for the length of the transfer.
+        bool *dead = calloc((size_t) ct, sizeof(*dead));
+        if (dead == NULL) {
+            printk("zsh-multio: out of memory\n");
+            free(fds);
+            free(buf);
+            return 1;
+        }
         while ((len = read(pipefd, buf, AOK_MULTIO_BUFSIZE)) != 0) {
             if (len < 0) {
                 if (errno == EINTR)
@@ -334,10 +355,22 @@ int native_zsh_multio_main(int argc, char *const argv[], char *const envp[]) {
                 else
                     break;
             }
-            for (int i = 0; i < ct; i++)
+            int live = 0;
+            for (int i = 0; i < ct; i++) {
+                if (dead[i])
+                    continue;
                 if (aok_multio_write_loop(fds[i], buf, (size_t) len) < 0)
-                    break;
+                    dead[i] = true;
+                else
+                    live++;
+            }
+            // Nothing left to write to. Draining the pipe from here would only
+            // burn CPU on bytes with nowhere to go, and stopping lets the
+            // writer see EPIPE, which is what a real tee would give it.
+            if (live == 0)
+                break;
         }
+        free(dead);
     } else {
         // The cat process: each source in turn, in the order the redirections
         // were written, because `cat < in1 < in2` is a concatenation and the
