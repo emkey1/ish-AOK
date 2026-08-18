@@ -633,6 +633,21 @@ if get_option('kernel') == 'ish'
     smallclue_c_args = [
         '-include', meson.current_source_dir() / 'kernel/native_libc.h',
         '-DSMALLCLUE_PLATFORM_SPAWN',
+        # SmallCLUE is written against BSD/Darwin header visibility, where
+        # ptsname_r, strptime and FNM_CASEFOLD are simply there. glibc puts all
+        # three behind feature-test macros, so on Linux they vanish and the
+        # compiler reports them as implicit declarations -- with strptime that
+        # then cascades into an int-to-pointer error, because an undeclared
+        # function is assumed to return int.
+        #
+        # Darwin ignores the macro, so this is unconditional rather than
+        # host-gated. It has to be a -D and not a #define in a header: the macro
+        # only counts if it precedes the first libc header, and the force-include
+        # above is itself a header.
+        #
+        # Not noticed until 21a2a4a8, because until then no Linux build got past
+        # the iconv probe at configure time to compile any of this.
+        '-D_GNU_SOURCE',
         '-w',  # vendored code, not ours to police
     ]
 
