@@ -19,9 +19,12 @@
  * different prototype than iOS does, which is the kind of divergence that
  * shows up only on device.
  *
- * The prototypes are the historical termcap ones, matching what ncurses
- * exports. `char *` rather than `const char *` throughout: that is what the
- * library declares, and tightening it here would break zsh's call sites.
+ * The prototypes are the historical termcap ones. `char *` rather than
+ * `const char *` throughout, and that is not a style choice: zsh's own
+ * Src/prototypes.h declares this same set, unqualified, for every translation
+ * unit that does no terminal handling. A declaration we cannot edit is the one
+ * everything else has to agree with -- kernel/native_libc.h matches it too,
+ * which is what these names resolve to now (kernel/native_termcap.c).
  */
 
 #ifndef AOK_ZSH_TERMCAP_H
@@ -31,19 +34,36 @@
 extern "C" {
 #endif
 
-int   tgetent(char *bp, const char *name);
-int   tgetflag(const char *id);
-int   tgetnum(const char *id);
-char *tgetstr(const char *id, char **area);
-char *tgoto(const char *cap, int col, int row);
-int   tputs(const char *str, int affcnt, int (*putc_fn)(int));
+int   tgetent(char *bp, char *name);
+int   tgetflag(char *id);
+int   tgetnum(char *id);
+char *tgetstr(char *id, char **area);
+char *tgoto(char *cap, int col, int row);
+int   tputs(char *str, int affcnt, int (*putc_fn)(int));
 
-/* Set by tgetent and read by tputs for padding. zsh assigns PC and ospeed
- * itself (Src/init.c), so they must be declared, not merely available. */
+/* The padding globals a termcap library traditionally exports. zsh only ever
+ * DECLARES ospeed (Src/zsh_system.h) and never reads or writes any of the
+ * four, so these are declarations with nothing behind them -- and nothing
+ * references them, so nothing needs there to be. kernel/native_termcap.c's
+ * tputs drops padding outright; see the note there for why that is right for a
+ * pty rather than a serial line. */
 extern char PC;
 extern char *BC;
 extern char *UP;
 extern short ospeed;
+
+/* The capability-code tables, in terminfo index order and NULL-terminated,
+ * exactly as ncurses exports them from <term.h>. meson defines HAVE_BOOLCODES,
+ * HAVE_NUMCODES and HAVE_STRCODES for the zsh build so that Src/Modules/
+ * termcap.c walks THESE to enumerate $termcap. Its own fallback lists are
+ * ncurses-5-era and shorter, and using them made ${(k)termcap} 13 entries
+ * shorter than the guest's own zsh reports -- for capabilities the reader
+ * resolves perfectly well when asked by name. Defined in
+ * kernel/native_termcap.c, which is also what indexes a compiled entry with
+ * them, so the two can never disagree. */
+extern const char *const boolcodes[];
+extern const char *const numcodes[];
+extern const char *const strcodes[];
 
 #ifdef __cplusplus
 }

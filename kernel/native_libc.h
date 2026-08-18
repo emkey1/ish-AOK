@@ -388,6 +388,34 @@ struct winsize;
 int nlibc_openpty(int *amaster, int *aslave, char *name,
         struct termios *termp, struct winsize *winp);
 
+/* --- terminal capabilities -----------------------------------------------
+ * The termcap API, answered from the GUEST's terminfo database rather than a
+ * host library reading a host database. kernel/native_termcap.c has the long
+ * version; the short one is that these six names were missing here, so on a
+ * device -- which ships no terminfo at all -- every capability came back
+ * empty and ZLE could not move the cursor.
+ *
+ * NATIVE_LIBC_OWN_TERMCAP is the same escape hatch NATIVE_LIBC_OWN_GLOB is,
+ * for a program that DEFINES these names itself -- rewriting them there would
+ * rename the definitions and collide with kernel/native_termcap.c. Nothing
+ * uses it today. bash did, while it still compiled its bundled GNU termcap
+ * (deps/bash/lib/termcap); that copy reads /etc/termcap, which none of the
+ * rootfs images ship, so readline resolved nothing and its editor could not
+ * move the cursor either. Those two files are out of bash's build now
+ * (meson.build) and readline comes through here like zsh does. */
+#ifndef NATIVE_LIBC_OWN_TERMCAP
+/* The historical termcap signatures, `char *` throughout rather than
+ * `const char *`. Not a style choice: zsh's Src/prototypes.h declares these
+ * itself for every translation unit that does no terminal handling, and a
+ * declaration we cannot edit is the one the rest has to agree with. */
+int nlibc_tgetent(char *bp, char *name);
+int nlibc_tgetflag(char *id);
+int nlibc_tgetnum(char *id);
+char *nlibc_tgetstr(char *id, char **area);
+char *nlibc_tgoto(char *cap, int col, int row);
+int nlibc_tputs(char *str, int affcnt, int (*putc_fn)(int));
+#endif
+
 /* Odds and ends that answered about the host: its /tmp, its CPU count, its
  * page size, its resource usage. */
 FILE *nlibc_tmpfile(void);
@@ -785,6 +813,14 @@ const char *nlibc_dlerror(void);
 #define ptsname                  nlibc_ptsname
 #define ttyname                  nlibc_ttyname
 #define openpty                  nlibc_openpty
+#ifndef NATIVE_LIBC_OWN_TERMCAP
+#define tgetent                  nlibc_tgetent
+#define tgetflag                 nlibc_tgetflag
+#define tgetnum                  nlibc_tgetnum
+#define tgetstr                  nlibc_tgetstr
+#define tgoto                    nlibc_tgoto
+#define tputs                    nlibc_tputs
+#endif
 #define tmpfile                  nlibc_tmpfile
 #ifndef NATIVE_LIBC_OWN_GLOB
 #define globfree                 nlibc_globfree

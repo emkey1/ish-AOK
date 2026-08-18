@@ -321,7 +321,16 @@ INTERNAL = {
 # Provided by AOK itself, by the shim, or by the program.
 OURS = re.compile(r"^(nlibc_|native_|task_|do_|f_get|f_install|f_close|"
                   r"generic_|mount_|fd_|lock$|unlock$|current$|smallclue|"
-                  r"pscal|awk|nextvi|micro_|dvtm_)")
+                  r"pscal|awk|nextvi|micro_|dvtm_|"
+                  # The terminfo capability-code tables. They carry ncurses's
+                  # names because that is the interface -- zsh's zsh/termcap
+                  # module walks them to enumerate $termcap -- but the
+                  # definitions are AOK's, in kernel/native_termcap.c, and
+                  # they are three arrays of two-letter string constants.
+                  # There is no host in them; the file that indexes a guest
+                  # terminfo entry with them is the same file that defines
+                  # them, which is the point.
+                  r"boolcodes$|numcodes$|strcodes$)")
 
 
 def _symbols(path, args):

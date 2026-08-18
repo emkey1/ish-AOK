@@ -97,7 +97,7 @@ endif
 # and the alternative is finding out from an App Store takedown. Nothing else
 # in the binary is GPL: smallclue is MIT, OpenSSH and libarchive BSD, liblzma
 # public domain, and iSH-AOK's own GPL is what LICENSE.IOS covers.
-summary({'native bash': have_bash ? 'yes -- binary contains GPLv3 (bash, readline, GNU termcap)'
+summary({'native bash': have_bash ? 'yes -- binary contains GPLv3 (bash, readline)'
                                   : 'no -- no third-party GPL in the binary'},
         section: 'Licensing')
 # zsh is in the OTHER column and says so, because "another shell compiled in"
@@ -177,18 +177,18 @@ sqlite3 = cc.find_library('sqlite3')
 dependencies = [librt, libm, libdl, libatomic, threads, sqlite3]
 
 # zsh needs tgetent/tgetstr/tgoto/tputs and, unlike bash, does not bundle a
-# termcap of its own. This is the one system library the native-zsh build adds
-# to the link line, and it is the reason native_zsh defaults off for the app:
-# the Xcode project links the meson archives by name and would need libcurses
-# added to its own link line too (the iOS SDK ships the .tbd stubs but no
-# curses.h/term.h, which is also why deps/zsh is configured termcap-only).
+# termcap of its own. This USED to add -ltermcap (or -lcurses) here, and that
+# was the bug kernel/native_termcap.c exists to fix: the system library reads
+# the HOST's terminfo database, so on a device -- which has none -- ZLE got no
+# capabilities and could not move the cursor. The shim answers those six names
+# from the GUEST's database now, so the system library is not merely
+# unnecessary, it is the wrong answer. It also takes away the reason the app
+# build could not have zsh: the Xcode project links the meson archives by name
+# and would have had to grow a libcurses of its own, and there is nothing left
+# for it to link (the iOS SDK ships the .tbd stubs but no curses.h/term.h,
+# which is also why deps/zsh is configured termcap-only).
 if have_zsh
-    libtermcap = cc.find_library('termcap', required: false)
-    if not libtermcap.found()
-        libtermcap = cc.find_library('curses')
-    endif
-    dependencies += libtermcap
-    # And iconv, which zsh uses for two things: converting a filename that is
+    # iconv, which zsh uses for two things: converting a filename that is
     # not valid in the current charset (Src/utils.c zreaddir) and turning a
     # \u escape into the locale's encoding (ucs4tomb). Darwin and iOS both
     # ship libiconv, so this is a link-line entry rather than a port. The
@@ -358,6 +358,7 @@ if get_option('kernel') == 'ish'
         'kernel/native.c',
         'kernel/native_io.c',
         'kernel/native_libc.c',
+        'kernel/native_termcap.c',
         'kernel/native_syscall.c', native_syscall_nums,
         'kernel/smallclue_glue.c',
         'kernel/openssh_glue.c',
@@ -883,10 +884,16 @@ if get_option('kernel') == 'ish'
     libbash = []
     if have_bash
         bash_includes = include_directories(
-            'deps/bash-shim',   # <builtins/builtext.h>; see the header there
+            # FIRST, and it holds two headers bash would otherwise find its own
+            # copy of: <builtins/builtext.h> and <termcap.h>. See them for why.
+            'deps/bash-shim',
             bash_dir, bash_dir / 'generated', bash_dir / 'generated/builtins',
             bash_dir / 'include', bash_dir / 'builtins', bash_dir / 'lib',
-            bash_dir / 'lib/readline', bash_dir / 'lib/termcap',
+            # NOT lib/termcap. Its termcap.h declares the bundled GNU termcap
+            # that is no longer built (see the source list below), and having
+            # both on the path would leave which one readline compiles against
+            # a matter of directory order.
+            bash_dir / 'lib/readline',
         )
 
         # What bash's own Makefile passes. -DHAVE_CONFIG_H above all: without it
@@ -918,6 +925,16 @@ if get_option('kernel') == 'ish'
             # bash brings its own globbing, and macOS's <glob.h> shares the
             # include guard _GLOB_H_ with bash's -- see kernel/native_libc.h.
             '-DNATIVE_LIBC_OWN_GLOB',
+            # NOT -DNATIVE_LIBC_OWN_TERMCAP, which bash carried while it still
+            # built its own bundled GNU termcap (lib/termcap). That copy reads
+            # /etc/termcap and nothing else, and no rootfs AOK supports ships
+            # one -- Debian, Devuan and Alpine all moved to terminfo -- so
+            # every capability readline asked for came back empty and its
+            # editor erased with a bare space, which ADVANCES the cursor.
+            # tgetent and friends route to kernel/native_termcap.c now, which
+            # reads the GUEST's terminfo. The bundled files are out of the
+            # source list below, so there are no DEFINITIONS left here for the
+            # shim to rename into a collision.
             # fork by re-launch (deps/bash/aok_fork.c). Guards the two hooks in
             # bash's own sources so the vendor tree still builds without it.
             '-DAOK_NATIVE_FORK=1',
@@ -1049,13 +1066,24 @@ if get_option('kernel') == 'ish'
             'lib/readline/text.c', 'lib/readline/tilde.c',
             'lib/readline/undo.c', 'lib/readline/util.c',
             'lib/readline/vi_mode.c', 'lib/readline/xfree.c',
-            'lib/readline/xmalloc.c',
-            # bash's OWN termcap, not the system one. readline needs tgetent
-            # and friends, and bash's configure links -ltermcap when it finds
-            # it -- which would put a system library on the Xcode link line,
-            # the very thing that keeps zlib (and tar, and gzip) out. The
-            # bundled implementation costs three files and no dependency.
-            'lib/termcap/termcap.c', 'lib/termcap/tparam.c']
+            'lib/readline/xmalloc.c']
+        # NOT lib/termcap/termcap.c and lib/termcap/tparam.c, which readline
+        # used to get tgetent and friends from. Two reasons to drop the files
+        # rather than keep compiling them with NATIVE_LIBC_OWN_TERMCAP:
+        #
+        #   * They resolve nothing. That termcap reads /etc/termcap only, and
+        #     the rootfs images ship terminfo instead. Leaving a second, dead
+        #     implementation in the binary under the standard names is a trap
+        #     for the next unrouted call site, not a fallback.
+        #   * Nothing outside them uses them. readline (terminal.c, display.c)
+        #     is the only caller of the six functions, tparam has no callers at
+        #     all, and bashline.c only DECLARED tputs.
+        #
+        # What went with them: PC, which lib/readline/terminal.c now defines
+        # itself -- it is the only code that writes it -- and ospeed, which
+        # nothing in bash references. deps/bash-shim/termcap.h holds the
+        # declarations, and lib/termcap is off the include path above so it is
+        # the only <termcap.h> bash can find.
 
         bash_src = []
         foreach f : bash_top
@@ -1138,6 +1166,18 @@ if get_option('kernel') == 'ish'
 
         zsh_defs = [
             '-DHAVE_CONFIG_H',
+            # The capability-code tables exist (kernel/native_termcap.c
+            # exports them under ncurses's names, declared in the shim's
+            # termcap.h), so zsh/termcap enumerates $termcap from THOSE rather
+            # than from its own bundled ncurses-5-era fallback. Not cosmetic:
+            # with the fallback, ${(k)termcap} listed 37 capabilities where
+            # the guest's own zsh listed 50, for the same terminal.
+            #
+            # deps/zsh/config.h leaves these undefined because zsh's configure
+            # ran without a curses library to find them in. They belong on the
+            # command line rather than in that file: this is AOK supplying
+            # them, and deps/zsh is a vendored tree.
+            '-DHAVE_BOOLCODES', '-DHAVE_NUMCODES', '-DHAVE_STRCODES',
             # zsh brings its own globbing (Src/glob.c defines zglob and
             # friends) and never calls libc's. Same escape hatch bash uses --
             # see kernel/native_libc.h -- and here it is also what keeps
