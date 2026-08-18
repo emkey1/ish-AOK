@@ -715,10 +715,39 @@ static void *task_thread(void *task) {
     return NULL;
 }
 
+// A guest task's host stack has to be big enough for a NATIVE program, which
+// runs as an ordinary C function on this thread rather than inside the
+// emulator. Emulated code keeps its own recursion on the guest's stack and
+// barely touches this one, so the 512 KB Darwin gives a non-main thread was
+// never noticed -- until zsh and bash started running natively.
+//
+// Measured with native zsh: shell-function recursion costs ~3.5 KB of this
+// stack per level, so 512 KB ran out at about 150 nested calls. zsh's own
+// guard, FUNCNEST, defaults to 500 and is what makes `r() { r }; r` print
+// "maximum nested function level reached" on a real zsh; here the C stack was
+// exhausted first, and a native program is a function call on a thread of the
+// APP, so the resulting SIGBUS took the whole app down (host exit 138) rather
+// than one shell. `builtin() { builtin print x }; builtin` did the same thing
+// in one line.
+//
+// So the stack is sized to fit the guard rather than the guard shrunk to fit
+// the stack: 4 MB was measured to hold between 1250 and 1300 levels, i.e. two
+// and a half times FUNCNEST's default, which leaves zsh's own guard to stop
+// first and say so in zsh's own words. Shrinking FUNCNEST instead would have
+// been a divergence from what the same script does off-device, and it would
+// have fixed only zsh -- bash and every future native program share this
+// thread. The cost is address space, not
+// memory -- the pages are committed on demand, so a thread that never recurses
+// still touches a few KB -- which is what makes this affordable to give to
+// every guest task rather than only to the ones running native programs, and
+// we cannot know which those are at creation time anyway.
+#define TASK_THREAD_STACK_SIZE (4 * 1024 * 1024)
+
 static pthread_attr_t task_thread_attr;
 __attribute__((constructor)) static void create_attr(void) {
     pthread_attr_init(&task_thread_attr);
     pthread_attr_setdetachstate(&task_thread_attr, PTHREAD_CREATE_DETACHED);
+    pthread_attr_setstacksize(&task_thread_attr, TASK_THREAD_STACK_SIZE);
 #if defined(__APPLE__)
     // Run emulated guest threads one QoS band below the UI thread
     // (USER_INTERACTIVE). A multi-threaded guest workload spawns one OS thread

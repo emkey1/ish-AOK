@@ -22,10 +22,13 @@
 //    one. The flag below makes the case visible instead of mysterious.
 
 #include <dirent.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "kernel/calls.h"
 #include "kernel/native.h"
@@ -206,4 +209,162 @@ int native_zsh_main(int argc, char *const argv[], char *const envp[]) {
     // which is unusual enough to be worth a line in the log.
     printk("native zsh: returned %d\n", status);
     return status;
+}
+
+// ------------------------------------------------------- zsh's MULTIOS pump
+//
+// `echo hi > a > b` and `cat < in1 < in2` are MULTIOS: two or more
+// redirections on one descriptor, which is zsh's default. zsh implements them
+// by forking a child that is not a shell at all -- it is a byte pump between
+// one internal pipe and several real descriptors, holding no shell state of
+// any kind. See closemn() in deps/zsh/Src/exec.c, which is the only caller of
+// this program and explains the other half of the arrangement.
+//
+// That fork is the one zsh fork with no re-launch equivalent. A re-launch
+// (deps/zsh/Src/aok_fork.c) starts a fresh zsh and hands it this shell's
+// serialised state, which is the right way to run a COMMAND and an absurd way
+// to copy bytes. Nor can the pump be a host thread: the parent's very next act
+// is to CLOSE the descriptors the pump is reading and writing, and a thread
+// shares the task's fd table, so the close would take them out from under it.
+// What is left is a separate guest TASK running a tiny program, which is this
+// one. It is in kernel/native.c's registry like any other native program, so
+// exec finds it at /AOK/native/zsh-multio, and the descriptors reach it by
+// INHERITANCE -- a spawned guest task gets a copy of the spawner's fd table,
+// which is what lets them be named on the command line as bare numbers:
+//
+//     zsh-multio tee <pipefd> <fd> [<fd> ...]   output: cmd > a > b
+//     zsh-multio cat <pipefd> <fd> [<fd> ...]   input:  cmd < a < b
+//
+// Everything that is NOT one of those descriptors has already been closed by
+// closemn's spawn file actions, which is closeallelse()'s job in the forked
+// child and matters for the same reason: a pump still holding the write end of
+// the pipe it is reading never sees EOF, and the shell waits forever.
+//
+// Before this existed the whole family of constructs was refused outright --
+// and, until the refusal was moved ahead of the redirection loop, refused
+// after truncating every target file.
+
+// Upstream zsh's TCBUFSIZE, which lived in Src/exec.c and went with the fork
+// it sized. The same number deliberately: the two loops below are a
+// transcription of the ones in closemn's forked child, and nobody comparing
+// them should have to wonder whether the buffer size is significant.
+#define AOK_MULTIO_BUFSIZE 4092
+
+// zsh's write_loop (Src/utils.c) without the zwarn. There is nowhere for a
+// diagnostic to go: fd 2 is one of the descriptors closemn closed, and the
+// forked child said nothing here either.
+static int aok_multio_write_loop(int fd, const char *buf, size_t len) {
+    while (len > 0) {
+        ssize_t n = write(fd, buf, len);
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            return -1;
+        }
+        buf += n;
+        len -= (size_t) n;
+    }
+    return 0;
+}
+
+static bool aok_multio_fdarg(const char *s, int *out) {
+    char *end;
+    long v;
+
+    if (s == NULL || *s == '\0')
+        return false;
+    errno = 0;
+    v = strtol(s, &end, 10);
+    if (*end != '\0' || errno != 0 || v < 0 || v > 0x7fffffff)
+        return false;
+    *out = (int) v;
+    return true;
+}
+
+int native_zsh_multio_main(int argc, char *const argv[], char *const envp[]) {
+    (void) envp;   // a byte pump reads no environment
+
+    // A usage error here is an AOK bug, not a user error, and it cannot be
+    // reported on stderr because the pump has none. printk puts it in the
+    // app's log, which is where someone debugging closemn will be looking.
+    if (argc < 4) {
+        printk("zsh-multio: need a mode, a pipe fd and at least one target fd\n");
+        return 1;
+    }
+    bool tee = strcmp(argv[1], "tee") == 0;
+    if (!tee && strcmp(argv[1], "cat") != 0) {
+        printk("zsh-multio: unknown mode '%s'\n", argv[1]);
+        return 1;
+    }
+
+    int pipefd;
+    if (!aok_multio_fdarg(argv[2], &pipefd)) {
+        printk("zsh-multio: bad pipe fd '%s'\n", argv[2]);
+        return 1;
+    }
+
+    int ct = argc - 3;
+    int *fds = malloc((size_t) ct * sizeof(*fds));
+    char *buf = malloc(AOK_MULTIO_BUFSIZE);
+    if (fds == NULL || buf == NULL) {
+        printk("zsh-multio: out of memory\n");
+        free(fds);
+        free(buf);
+        return 1;
+    }
+    for (int i = 0; i < ct; i++) {
+        if (!aok_multio_fdarg(argv[3 + i], &fds[i])) {
+            printk("zsh-multio: bad target fd '%s'\n", argv[3 + i]);
+            free(fds);
+            free(buf);
+            return 1;
+        }
+    }
+
+    ssize_t len;
+    if (tee) {
+        // The tee process. One reader, several writers, and the inner `break`
+        // on a failed write leaves only the write loop -- upstream keeps
+        // pumping to the remaining targets, so `echo hi > /dev/full > b` still
+        // fills b.
+        while ((len = read(pipefd, buf, AOK_MULTIO_BUFSIZE)) != 0) {
+            if (len < 0) {
+                if (errno == EINTR)
+                    continue;
+                else
+                    break;
+            }
+            for (int i = 0; i < ct; i++)
+                if (aok_multio_write_loop(fds[i], buf, (size_t) len) < 0)
+                    break;
+        }
+    } else {
+        // The cat process: each source in turn, in the order the redirections
+        // were written, because `cat < in1 < in2` is a concatenation and the
+        // order is the answer.
+        //
+        // The EINTR guard is NOT the same as the tee side's, and the asymmetry
+        // is upstream's and deliberate: a read interrupted on a TTY means the
+        // user did something, and retrying would ignore it, so only a
+        // non-tty read is resumed.
+        for (int i = 0; i < ct; i++)
+            while ((len = read(fds[i], buf, AOK_MULTIO_BUFSIZE)) != 0) {
+                if (len < 0) {
+                    if (errno == EINTR && !isatty(fds[i]))
+                        continue;
+                    else
+                        break;
+                }
+                if (aok_multio_write_loop(pipefd, buf, (size_t) len) < 0)
+                    break;
+            }
+    }
+
+    free(fds);
+    free(buf);
+    // Upstream's child ends with _exit(0) whatever the pump managed to
+    // transfer, and the status matters: closemn adds this pid to the job as an
+    // AUXILIARY process, so a non-zero status here would be a failure the user
+    // never asked about.
+    return 0;
 }
