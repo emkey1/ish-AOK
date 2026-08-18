@@ -7233,6 +7233,42 @@ char *nlibc_setlocale(int category, const char *name) {
         res = setlocale(category, "en_US.UTF-8");
         if (res != NULL)
             return res;
+
+        // Both of those can fail for ONE category and still be available for
+        // another, because Darwin's "UTF-8" is a CHARSET, not a locale: it names
+        // an encoding with no territory, so LC_CTYPE takes it and a whole-locale
+        // request refuses it. Probed on the host:
+        //
+        //     setlocale(LC_ALL,   "UTF-8") = NULL         MB_CUR_MAX=1
+        //     setlocale(LC_CTYPE, "UTF-8") = UTF-8        MB_CUR_MAX=4
+        //
+        // which is the whole of why this was still broken on a device after the
+        // fallback above was added. A shell asks for LC_ALL. On macOS that never
+        // gets here -- macOS HAS C.UTF-8, so the first call succeeds and the bug
+        // is invisible on the CLI build. On iOS C.UTF-8 does not exist, "UTF-8"
+        // is rejected as an LC_ALL, en_US.UTF-8 does not exist either, and the
+        // request fell all the way to "C". Measured on an iPad, build 548, with
+        // the guest at LC_ALL=C.UTF-8, counting the characters in a 2-byte "e"
+        // with an acute accent:
+        //
+        //     /usr/bin/bash     (guest)   1     <- the oracle
+        //     /AOK/native/bash            2
+        //     /AOK/native/zsh             2
+        //
+        // So put the charset where the charset lives: take "C" as the base for
+        // everything and give LC_CTYPE the UTF-8 it will accept. Encoding is what
+        // the caller was asking for -- every other category differs between
+        // C.UTF-8 and C only in collation and messages, which is the same trade
+        // the fallback above already makes.
+        if (category == LC_ALL) {
+            char *base = setlocale(LC_ALL, "C");
+            if (setlocale(LC_CTYPE, "UTF-8") != NULL ||
+                    setlocale(LC_CTYPE, "en_US.UTF-8") != NULL)
+                // The composite name, which is now genuinely mixed. Callers that
+                // print it get the truth rather than a name nothing is set to.
+                return setlocale(LC_ALL, NULL);
+            return base;
+        }
     }
     // Then the one locale every C library is required to have.
     return setlocale(category, "C");
