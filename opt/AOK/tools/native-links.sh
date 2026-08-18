@@ -36,9 +36,10 @@
 #   --all      include applets that do not work in this build (see EXCLUDED)
 #   --force    replace files that are not our own symlinks
 #   --no-shell leave the UID 1000 login shell alone
+#   --shell S  which native shell to switch to: bash, zsh or an absolute path
 #   --help
 #
-# It also switches the UID 1000 user's login shell to the native bash, because
+# It also switches the UID 1000 user's login shell to a native shell, because
 # that is the other half of "make this install use the native code": the links
 # above only matter for commands the shell RUNS, and the shell itself is where
 # a session actually spends its time -- interpretation is 16.5x faster natively
@@ -47,6 +48,14 @@ set -eu
 
 NATIVE=/AOK/native/smallclue
 NATIVE_BASH=/AOK/native/bash
+NATIVE_ZSH=/AOK/native/zsh
+# Which of them becomes the login shell. Empty means "decide below": prefer bash
+# when it is there, otherwise zsh. That ordering keeps this script doing exactly
+# what it always did on a build that HAS bash, while making a default build --
+# where -Dnative_bash is off and /AOK/native/bash does not exist at all, because
+# linking bash would put GPLv3 in the binary -- switch to zsh instead of
+# silently switching nothing.
+SHELL_WANT=
 TARGET_DIR=/usr/local/native-bin
 MODE=link
 INCLUDE_ALL=0
@@ -186,11 +195,13 @@ usage() {
     echo "  --all      include applets that do not work in this build"
     echo "  --force    replace files that are not our own symlinks"
     echo "  --no-shell leave the UID 1000 login shell alone"
+    echo "  --shell S  which native shell to switch to: bash, zsh, or a path"
     echo "  --no-path  do not put the link directory on PATH"
     echo "  --help"
     echo
-    echo "The UID 1000 user's login shell is switched to $NATIVE_BASH unless"
-    echo "--no-shell is given; --remove restores whatever it was before."
+    echo "The UID 1000 user's login shell is switched unless --no-shell is"
+    echo "given; --remove restores whatever it was before. Without --shell the"
+    echo "choice is $NATIVE_BASH when present, otherwise $NATIVE_ZSH."
     echo
     echo "Applets with missing dependencies or no working implementation are"
     echo "skipped by default: linking one would shadow a working command with"
@@ -205,6 +216,9 @@ while [ $# -gt 0 ]; do
         --all) INCLUDE_ALL=1 ;;
         --force) FORCE=1 ;;
         --no-shell) DO_SHELL=0 ;;
+        --shell) [ $# -ge 2 ] || { echo "$0: --shell needs a value" >&2; exit 1; }
+                 SHELL_WANT=$2; shift ;;
+        --shell=*) SHELL_WANT=${1#--shell=} ;;
         --no-path) DO_PATH=0 ;;
         -h|--help) usage 0 ;;
         -*) echo "$0: unknown option $1" >&2; usage 1 ;;
@@ -322,7 +336,22 @@ PATHEOF
     echo "  put $TARGET_DIR first on PATH via $PATH_FILE (takes effect at next login)"
 }
 
+# Resolve SHELL_WANT to a path. A bare name picks the matching native shell; a
+# path is taken as given, so an install can point at something this script has
+# never heard of.
+resolve_native_shell() {
+    case "$SHELL_WANT" in
+        bash) NATIVE_SHELL=$NATIVE_BASH ;;
+        zsh)  NATIVE_SHELL=$NATIVE_ZSH ;;
+        /*)   NATIVE_SHELL=$SHELL_WANT ;;
+        "")   if [ -x "$NATIVE_BASH" ]; then NATIVE_SHELL=$NATIVE_BASH
+              else NATIVE_SHELL=$NATIVE_ZSH; fi ;;
+        *)    echo "$0: --shell wants bash, zsh or an absolute path" >&2; exit 1 ;;
+    esac
+}
+
 apply_shell() {
+    resolve_native_shell
     user=$(uid1000_field 1) || { echo "  no UID 1000 user; leaving shells alone"; return 0; }
     cur=$(uid1000_field 7)
 
@@ -343,29 +372,29 @@ apply_shell() {
         return 0
     fi
 
-    if [ "$cur" = "$NATIVE_BASH" ]; then
-        echo "  $user already uses $NATIVE_BASH"
+    if [ "$cur" = "$NATIVE_SHELL" ]; then
+        echo "  $user already uses $NATIVE_SHELL"
         return 0
     fi
     # Never point a login shell at something that will not run. This is the one
     # failure here that locks the user out rather than merely annoying them.
-    if [ ! -x "$NATIVE_BASH" ]; then
-        echo "  $NATIVE_BASH not present; leaving $user's shell as $cur" >&2
+    if [ ! -x "$NATIVE_SHELL" ]; then
+        echo "  $NATIVE_SHELL not present; leaving $user's shell as $cur" >&2
         return 0
     fi
     if [ "$MODE" = list ]; then
-        echo "  would set $user's shell: $cur -> $NATIVE_BASH"
+        echo "  would set $user's shell: $cur -> $NATIVE_SHELL"
         return 0
     fi
-    if set_uid1000_shell "$NATIVE_BASH"; then
+    if set_uid1000_shell "$NATIVE_SHELL"; then
         printf '%s\n' "$cur" > "$SHELL_STATE"
-        echo "  set $user's shell: $cur -> $NATIVE_BASH (--remove restores it)"
+        echo "  set $user's shell: $cur -> $NATIVE_SHELL (--remove restores it)"
         # Some tools refuse a shell that is not listed here (chsh, and a few
         # ftp/mail daemons). Appending is harmless when it is already present.
         if [ -f /etc/shells ]; then
             found=0
-            while IFS= read -r l; do [ "$l" = "$NATIVE_BASH" ] && found=1; done < /etc/shells
-            [ "$found" = 0 ] && printf '%s\n' "$NATIVE_BASH" >> /etc/shells
+            while IFS= read -r l; do [ "$l" = "$NATIVE_SHELL" ] && found=1; done < /etc/shells
+            [ "$found" = 0 ] && printf '%s\n' "$NATIVE_SHELL" >> /etc/shells
         fi
     fi
 }
