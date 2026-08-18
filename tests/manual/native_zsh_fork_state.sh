@@ -103,6 +103,19 @@ echo "== modules =="
 # replays parameters -- so re-declaring ZFTP_SESSION aborted the whole state.
 ck zftp-subshell 1        'zmodload zsh/zftp 2>/dev/null; echo $(zmodload -L | grep -c zftp)'
 
+echo "== MULTIOS (two or more redirections on one descriptor) =="
+# The byte pump is a child that is NOT a shell, so a re-launch cannot express it;
+# it is a separate native program, zsh-multio, spawned as its own guest task.
+# Before that existed, every one of these refused outright.
+mkdir -p /tmp/aokmul 2>/dev/null
+ck multios-out   "hi|hi" 'cd /tmp/aokmul; rm -f a b; echo hi > a > b; print "$(cat a)|$(cat b)"'
+ck multios-in    "I1 I2" 'cd /tmp/aokmul; print I1 > i1; print I2 > i2; print $(cat < i1 < i2)'
+# The one that mattered most: this used to write the file, return 0, print no
+# warning, and hand the downstream command an EMPTY pipe. It must do both.
+ck multios-pipe  "hi|hi" 'cd /tmp/aokmul; rm -f e; print "$(echo hi > e | cat)|$(cat e)"'
+# A descriptor CLOSE is not a second redirection and must not trip the check.
+ck multios-close "hi"    'cd /tmp/aokmul; rm -f f; echo hi > f 2>&-; cat f'
+
 echo "== app-killers (these used to take the app down) =="
 # The state script is zsh text the PARENT parses, so every word in it resolved
 # against the parent's aliases, functions, builtins and reserved words. All
