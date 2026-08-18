@@ -2296,6 +2296,56 @@ int nlibc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 //
 // A native program is a guest TASK, so ending it means do_exit_group, exactly
 // as returning from its main does (kernel/native.c).
+// Is there too little stack left below here to survive another level of
+// whatever the caller was about to do?
+//
+// WHY THIS IS IN THE SHIM. A native program runs on a GUEST TASK'S THREAD, whose
+// stack is far smaller than the main thread's, while the shells' own recursion
+// limits assume otherwise -- bash's FUNCNEST is unset (unlimited) by default and
+// zsh's message invites you to raise it. Running off the end therefore does not
+// kill one shell, it kills the WHOLE APP, because a native program is a function
+// call inside it. Measured before this existed: `r() { r; }; r` in native bash
+// took the ish process down, and the `echo` after it never ran.
+//
+// Bounds come from pthread, not from arithmetic on a frame address: Darwin's
+// pthread_get_stackaddr_np gives the high end and pthread_get_stacksize_np the
+// size, so the low end is exact for a guest task thread, the main thread, or any
+// future host thread that ends up running a native program. Only "where am I
+// now" comes from __builtin_frame_address, which is the one part that must.
+//
+// A thread's stack never moves, so this is worked out once per thread and what a
+// recursing shell pays afterwards is a load and a compare. State is __thread
+// because each guest task answers for its own stack -- a re-launched subshell is
+// a fresh task on a fresh thread and must work out its own bounds.
+//
+// The reserve is what still has to fit below the deepest refused call: the rest
+// of the caller's frame, the error formatting, and the unwind back out. When the
+// platform cannot answer, nothing is refused -- a guess here would break working
+// scripts to prevent a crash that might not be coming.
+#define NLIBC_STACK_RESERVE (256 * 1024)
+
+static __thread uintptr_t nlibc_stack_floor;
+static __thread int nlibc_stack_state;
+
+int nlibc_stack_exhausted(void) {
+    if (nlibc_stack_state == 0) {
+#if defined(__APPLE__)
+        pthread_t self = pthread_self();
+        void *high = pthread_get_stackaddr_np(self);
+        size_t size = pthread_get_stacksize_np(self);
+
+        if (high != NULL && size > (size_t) (2 * NLIBC_STACK_RESERVE)) {
+            nlibc_stack_floor = (uintptr_t) high - size + NLIBC_STACK_RESERVE;
+            nlibc_stack_state = 1;
+        } else
+#endif
+            nlibc_stack_state = -1;
+    }
+    if (nlibc_stack_state != 1)
+        return 0;
+    return (uintptr_t) __builtin_frame_address(0) <= nlibc_stack_floor;
+}
+
 noreturn void nlibc_exit(int status) {
     nlibc_flush_std();
     do_exit_group((status & 0xff) << 8);

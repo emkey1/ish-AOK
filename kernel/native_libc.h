@@ -142,6 +142,11 @@ int nlibc_putchar(int c);
 void nlibc_perror(const char *s);
 /* Flush the wrapped standard streams; see the note in nlibc_std_stream. */
 void nlibc_flush_std(void);
+
+/* True when this thread is too close to the end of its stack to recurse
+ * again. See the comment on the definition: overrunning it takes the whole
+ * app, not one program. */
+int nlibc_stack_exhausted(void);
 /* The guest fd a stream was built over. NOT the host's fileno, which answers
  * -1 for a funopen stream and sets EBADF -- see the .c. */
 int nlibc_fileno(FILE *stream);
