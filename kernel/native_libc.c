@@ -7127,6 +7127,22 @@ char *nlibc_setlocale(int category, const char *name) {
     bool utf8 = (len >= 6 && strcasecmp(name + len - 6, ".UTF-8") == 0) ||
                 (len >= 5 && strcasecmp(name + len - 5, ".utf8") == 0);
     if (utf8) {
+        // Darwin spells the charset-only UTF-8 locale "UTF-8", and on iOS that
+        // is the ONLY one there is. Measured on an iPad running this build:
+        //
+        //     LANG=C.UTF-8      native len=2   guest len=1
+        //     LANG=en_US.UTF-8  native len=2
+        //     LANG=UTF-8        native len=1
+        //
+        // so trying en_US.UTF-8 alone -- which works on macOS and made this
+        // look fixed there -- fell through to "C" on the device, and every
+        // native program went single-byte while the guest was UTF-8. C.UTF-8
+        // is what modern guests actually set, and "UTF-8" is also its closest
+        // match: the C locale's collation and messages with a UTF-8 charset,
+        // where en_US.UTF-8 would additionally change collation.
+        res = setlocale(category, "UTF-8");
+        if (res != NULL)
+            return res;
         res = setlocale(category, "en_US.UTF-8");
         if (res != NULL)
             return res;
