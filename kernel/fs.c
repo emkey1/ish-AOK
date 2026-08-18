@@ -1134,10 +1134,14 @@ static dword_t sys_preadv_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t io
     size_t io_size = iovec_size(iovec, iovec_count);
     if (io_size > MAX_RW_COUNT)
         io_size = MAX_RW_COUNT;
-    char *buf = malloc(io_size + 1);
-    if (buf == NULL) {
-        free(iovec);
-        return _ENOMEM;
+    char stack_buf[256] __attribute__((aligned(16)));
+    char *buf = stack_buf;
+    if (io_size + 1 > sizeof(stack_buf)) {
+        buf = malloc(io_size + 1);
+        if (buf == NULL) {
+            free(iovec);
+            return _ENOMEM;
+        }
     }
     struct fd *fd = f_get(fd_no);
     ssize_t res;
@@ -1179,7 +1183,8 @@ static dword_t sys_preadv_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t io
         }
     }
 out:
-    free(buf);
+    if (buf != stack_buf)
+        free(buf);
     free(iovec);
     return res;
 }
@@ -1206,10 +1211,14 @@ static dword_t sys_pwritev_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t i
     size_t io_size = iovec_size(iovec, iovec_count);
     if (io_size > MAX_RW_COUNT)
         io_size = MAX_RW_COUNT;
-    char *buf = malloc(io_size + 1);
-    if (buf == NULL) {
-        free(iovec);
-        return _ENOMEM;
+    char stack_buf[256] __attribute__((aligned(16)));
+    char *buf = stack_buf;
+    if (io_size + 1 > sizeof(stack_buf)) {
+        buf = malloc(io_size + 1);
+        if (buf == NULL) {
+            free(iovec);
+            return _ENOMEM;
+        }
     }
     ssize_t res = 0;
     size_t offset = 0;
@@ -1249,7 +1258,8 @@ static dword_t sys_pwritev_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t i
     task_may_block_end();
     io_account_write(fd, res);
 out:
-    free(buf);
+    if (buf != stack_buf)
+        free(buf);
     free(iovec);
     return res;
 }

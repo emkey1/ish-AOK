@@ -36,3 +36,7 @@
 ## 2026-03-28 - Optimize finding the last slash in a path
 **Learning:** In `fs/generic.c`, finding the last slash in a path by iterating over the string character by character (using `strlen` and a `for` loop) is an inefficient O(N) operation compared to optimized library functions like `strrchr`, which are often vectorized.
 **Action:** Replace manual character-by-character loops for finding the last character with `strrchr` and pointer arithmetic to significantly improve performance, especially for long path strings.
+
+## 2024-05-25 - sys_preadv and sys_pwritev performance
+**Learning:** System calls `sys_preadv` and `sys_pwritev` in `kernel/fs.c` flatten vectorized I/O requests into a single buffer. Before, they always used `malloc()` to allocate this buffer, regardless of the size. This incurs significant performance overhead for small readv/writev calls which are very common, mirroring the issue previously fixed in `sys_readv` and `sys_writev`.
+**Action:** Implemented a fast path using an explicitly aligned `256`-byte stack buffer for small `sys_preadv` and `sys_pwritev` requests, similar to existing optimizations in `sys_readv`, `sys_writev`, `sys_read`, `sys_write`, `sys_pread` and `sys_pwrite`. Only requests larger than 256 bytes will now fall back to heap allocation.
