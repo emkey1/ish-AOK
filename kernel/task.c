@@ -736,11 +736,13 @@ static void *task_thread(void *task) {
 // first and say so in zsh's own words. Shrinking FUNCNEST instead would have
 // been a divergence from what the same script does off-device, and it would
 // have fixed only zsh -- bash and every future native program share this
-// thread. The cost is address space, not
-// memory -- the pages are committed on demand, so a thread that never recurses
-// still touches a few KB -- which is what makes this affordable to give to
-// every guest task rather than only to the ones running native programs, and
-// we cannot know which those are at creation time anyway.
+// thread.
+//
+// The cost is address space rather than memory: the pages are committed on
+// demand, so a thread that never recurses still touches only a few KB of it.
+// That is what makes this affordable to give to every guest task rather than
+// only to the ones running native programs -- which is just as well, because
+// at creation time we do not yet know which those are.
 #define TASK_THREAD_STACK_SIZE (4 * 1024 * 1024)
 
 static pthread_attr_t task_thread_attr;
