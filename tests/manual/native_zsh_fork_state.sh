@@ -337,6 +337,24 @@ ck zstyle-count    "2"  'zstyle ":a:*" s1 x; zstyle ":b:*" s2 y; print $( zstyle
 # and the first version of this case counted its own command line.
 ck zstyle-no-cost  "0"  'export AOK_ZSH_DUMP_STATE=1; { v=$(true) } 2>/tmp/aokzs; unset AOK_ZSH_DUMP_STATE; print -r -- $(grep -c "__aok_zs[t]" /tmp/aokzs)'
 
+echo "== global rc files come from where the GUEST keeps them =="
+# configure baked in /etc/zshrc (upstream's default, and Fedora's). Devuan,
+# Debian, Arch and Gentoo use /etc/zsh/zshrc, so native zsh read no system zsh
+# configuration at all while the guest's own zsh read all of it. aok_source_global
+# probes for the etcdir spelling and falls back to the compiled-in path.
+#
+# These cases drive the AOK_ZSH_ETCDIR knob rather than /etc, so they pass on any
+# rootfs -- including one with no global rc files at all, which is what an image
+# without zsh installed looks like. The /etc/zsh derivation itself depends on the
+# rootfs and is verified by hand: on a Devuan root, native zsh now picks up the
+# `:completion:*:sudo:*' style that /etc/zsh/zshrc sets, and did not before.
+ck rc-knob-read    "[MARK]" 'mkdir -p /tmp/aokrc1; print -r -- "typeset -g AOK_RC=MARK" > /tmp/aokrc1/zshrc; print -r -- "print -n \"[\$AOK_RC]\"" > /tmp/aokrc1/p.zsh; print -r -- $(AOK_ZSH_ETCDIR=/tmp/aokrc1 /AOK/native/zsh -i /tmp/aokrc1/p.zsh 2>/dev/null)'
+ck rc-knob-absent  "[]"     'mkdir -p /tmp/aokrc2; rm -f /tmp/aokrc2/zshrc; print -r -- "print -n \"[\$AOK_RC]\"" > /tmp/aokrc2/p.zsh; print -r -- $(AOK_ZSH_ETCDIR=/tmp/aokrc2 /AOK/native/zsh -i /tmp/aokrc2/p.zsh 2>/dev/null)'
+# A script and a `zsh -f' must still read nothing, which is what keeps every
+# re-launched child free of this: a child is spawned as `zsh -f -c'.
+ck rc-script-none  "[]"     'mkdir -p /tmp/aokrc3; print -r -- "typeset -g AOK_RC=MARK" > /tmp/aokrc3/zshrc; print -r -- "print -n \"[\$AOK_RC]\"" > /tmp/aokrc3/p.zsh; print -r -- $(AOK_ZSH_ETCDIR=/tmp/aokrc3 /AOK/native/zsh /tmp/aokrc3/p.zsh 2>/dev/null)'
+ck rc-norcs-none   "[]"     'mkdir -p /tmp/aokrc4; print -r -- "typeset -g AOK_RC=MARK" > /tmp/aokrc4/zshrc; print -r -- "print -n \"[\$AOK_RC]\"" > /tmp/aokrc4/p.zsh; print -r -- $(AOK_ZSH_ETCDIR=/tmp/aokrc4 /AOK/native/zsh -f -i /tmp/aokrc4/p.zsh 2>/dev/null)'
+
 echo
 echo "  passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
