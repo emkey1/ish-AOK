@@ -640,7 +640,18 @@ static const char *hle_symtab_resolve_name(guest_addr_t ip, enum guest_abi abi,
 // ---- Emission (called from jit.c at block-translation start) ------------
 
 extern void gadget_arm64_hle_call(void);
+#if ISH_GUEST_RISCV64
 extern void gadget_riscv64_hle_call(void);
+#else
+// The riscv64 gadgets are only compiled when that guest is selected
+// (meson.build gates jit/guest-riscv64/*.S on guest_archs), but this file is
+// built unconditionally -- so a build with a SUBSET of guest_archs that omits
+// riscv64 failed to link on an undefined _gadget_riscv64_hle_call. Nothing
+// reaches the riscv64 branch in such a build, because the `riscv64' flag is
+// only ever set by the riscv64 decoder, so a never-called stub is honest and
+// keeps hle_emit_word's shape identical across configurations.
+static void gadget_riscv64_hle_call(void) { __builtin_unreachable(); }
+#endif
 
 // Emit the whole-block hle_call gadget with code-stream word `word` at guest
 // address `ip`, claiming `len` guest bytes so gen_end's end_addr covers them
