@@ -752,6 +752,11 @@ const char *nlibc_dlerror(void);
 #define mount(a, b, c, d, e)     nlibc_mount((a), (b), (c), (d), (e))
 #define getmntinfo               nlibc_getmntinfo
 #define uname(a)                 nlibc_uname((a))
+/* Not in libSystem below iOS 18.4 / macOS 15.4, so a weak import that is NULL
+ * on older devices. See the definition for the crash it caused. */
+char *nlibc_strchrnul(const char *s, int c);
+#define strchrnul                nlibc_strchrnul
+
 #define sysctl                   nlibc_sysctl
 #define sysctlbyname             nlibc_sysctlbyname
 #define sleep                    nlibc_sleep

@@ -6219,6 +6219,41 @@ int nlibc_getentropy(void *buf, size_t len) {
     return 0;
 }
 
+// --------------------------------------------------------------- string bits
+//
+// strchrnul is a GNU extension. Darwin grew one, but only in iOS 18.4 and macOS
+// 15.4, and this app deploys to iOS 15.0 -- so building against a current SDK
+// turns the call into a WEAK import that is NULL on every older device, and
+// calling it jumps to address 0.
+//
+// That is not hypothetical. Reported on an A10X iPad Pro (iPad7,2) running
+// iOS 17.7.11: the app launched, and died the moment the terminal started.
+//
+//     jit_crash_fn                      <- EXC_BAD_ACCESS, "let it crash"
+//     xdupmbstowcs2   xmbsrtowcs.c:173  <- end_or_backslash = strchrnul(p, ...)
+//     remove_pattern  "${REPLY%/*}"
+//     ... sourcing /usr/share/bash-completion/bash_completion from /etc/profile
+//
+// The same binary is fine on anything from 18.4 up, which is exactly what makes
+// this the kind of bug that ships: it cannot be reproduced on a current device.
+//
+// bash carries its own replacement (lib/sh/strchrnul.c) for platforms without
+// one, but its configure ran against an SDK that DECLARES the function, so
+// generated/config.h says HAVE_STRCHRNUL and the replacement is never compiled.
+// Answering it here instead fixes it for every native program at once, and for
+// any future one, without a vendored-tree change: the force-included header
+// renames the callers, so nothing reaches libSystem for it.
+//
+// Nothing else in the binary is gated above the deployment target -- all 455
+// imported symbols were checked against the SDK's availability annotations, and
+// strchrnul was the only one.
+char *nlibc_strchrnul(const char *s, int c) {
+    // A NUL search terminates at the NUL, which is the same answer either way.
+    while (*s != '\0' && *s != (char) c)
+        s++;
+    return (char *) s;
+}
+
 // ----------------------------------------------------------- temporary names
 //
 // mkdtemp and mktemp share mkstemp's contract: the pattern is the caller's
