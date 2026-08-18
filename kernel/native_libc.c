@@ -7062,7 +7062,61 @@ int nlibc_posix_spawnp(pid_t *pid, const char *file,
 //
 // setlocale(cat, NULL) is a QUERY and must never fall back -- it would answer a
 // question by changing the thing it was asked about.
+// The environment variable a single category answers to, or NULL for LC_ALL
+// and anything this platform has that POSIX does not name.
+static const char *nlibc_locale_env_for(int category) {
+    switch (category) {
+    case LC_CTYPE:    return "LC_CTYPE";
+    case LC_NUMERIC:  return "LC_NUMERIC";
+    case LC_TIME:     return "LC_TIME";
+    case LC_COLLATE:  return "LC_COLLATE";
+    case LC_MONETARY: return "LC_MONETARY";
+#ifdef LC_MESSAGES
+    case LC_MESSAGES: return "LC_MESSAGES";
+#endif
+    default:          return NULL;
+    }
+}
+
 char *nlibc_setlocale(int category, const char *name) {
+    // setlocale(cat, "") means "take it from the environment" -- and the host's
+    // environment is the wrong one. A native program is a function call inside
+    // the app, so the C library resolves "" against the HOST process's LANG,
+    // which on a device is whatever iOS is set to and has nothing to do with the
+    // guest. The guest's own shells read the guest's environment and answer
+    // differently, which is the whole test this shim exists to apply.
+    //
+    // Measured with the host at en_US.UTF-8 and the guest's LANG unset, which is
+    // exactly the device shape: a two-byte UTF-8 character measured
+    //     ${#e}  ->  1  in native bash and native zsh
+    //     ${#e}  ->  2  in the guest's own bash and zsh
+    // so every native program silently disagreed with the guest about what a
+    // character is -- string length, case, collation and pattern matching all
+    // follow from it.
+    //
+    // Resolved here, from the GUEST environment, in POSIX's order: LC_ALL wins,
+    // then the category's own variable, then LANG, then "C". Simplification
+    // worth knowing: for LC_ALL this picks ONE name rather than resolving each
+    // category separately, which differs from POSIX only when the guest sets
+    // some but not all of the per-category variables without LC_ALL. Both shells
+    // set the individual categories themselves afterwards, so that case does not
+    // arise in practice -- but it is a simplification, not an equivalence.
+    char resolved[128];
+    if (name != NULL && name[0] == '\0') {
+        const char *env = nlibc_getenv("LC_ALL");
+        if (env == NULL || *env == '\0') {
+            const char *catname = nlibc_locale_env_for(category);
+            if (catname != NULL)
+                env = nlibc_getenv(catname);
+            if (env == NULL || *env == '\0')
+                env = nlibc_getenv("LANG");
+        }
+        if (env == NULL || *env == '\0')
+            env = "C";
+        snprintf(resolved, sizeof(resolved), "%s", env);
+        name = resolved;
+    }
+
     char *res = setlocale(category, name);
     if (res != NULL || name == NULL)
         return res;
