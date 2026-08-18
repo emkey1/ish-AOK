@@ -103,6 +103,29 @@ echo "== modules =="
 # replays parameters -- so re-declaring ZFTP_SESSION aborted the whole state.
 ck zftp-subshell 1        'zmodload zsh/zftp 2>/dev/null; echo $(zmodload -L | grep -c zftp)'
 
+echo "== recursion must not take the app down =="
+# A native program runs on a guest task thread, whose stack is far smaller than
+# the main thread's, while zsh's FUNCNEST default assumes otherwise. Unbounded
+# recursion ran off the end and killed the WHOLE APP -- and zsh's own message
+# ("increase FUNCNEST?") is exactly the wrong advice when the limit is the
+# stack, so following it made things worse. doshfunc now checks real thread
+# headroom. If one of these regresses the app dies and this script reports
+# nothing at all, which is the point of keeping them.
+# The top-level cases assert the MESSAGE, not a later command: real zsh also
+# abandons the rest of a -c script after a nested-function error, so expecting
+# anything printed afterwards would assert behaviour the oracle does not have.
+# A message at all proves the guard fired rather than the app dying.
+ck recurse-default   "r: maximum nested function level reached; increase FUNCNEST?" 'r(){ r; }; r'
+ck recurse-nofuncnest "r: maximum nested function level reached; out of stack (raising FUNCNEST will not help)" 'FUNCNEST=99999; r(){ r; }; r'
+# The guard must reach a RE-LAUNCHED child too -- a subshell is a fresh task on
+# a fresh thread, so the bounds have to be worked out there as well.
+ck recurse-subshell  "rc=1 ALIVE" 'FUNCNEST=99999; r(){ r; }; x=$(r) 2>/dev/null; print rc=$? ALIVE'
+ck recurse-pipeline  ALIVE      'FUNCNEST=99999; r(){ r; }; r 2>/dev/null | cat; print ALIVE'
+ck recurse-background ALIVE     'FUNCNEST=99999; r(){ r; }; r 2>/dev/null & wait; print ALIVE'
+# ...while legal deep recursion still completes. The reserve costs ~6% of the
+# usable depth, so this must stay well inside it.
+ck recurse-legal-400 deep-ok    'f(){ (( $1 > 0 )) && f $(( $1 - 1 )) || print deep-ok }; f 400'
+
 echo "== globbing across the boundary =="
 # The re-launch hands the child ALREADY-EXPANDED words, so that a $( ) is not
 # evaluated twice. They were taken one step too early -- before globbing -- so
