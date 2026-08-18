@@ -457,9 +457,31 @@ fi
 [ "$MODE" = list ] || mkdir -p "$TARGET_DIR"
 
 linked=0; skipped=0; excluded=0; blocked=0
+pruned=0
 for applet in $APPLETS; do
     if is_excluded "$applet"; then
         excluded=$((excluded + 1))
+        # PRUNE a link this script made before the applet was excluded. Without
+        # this, exclusions only ever applied to installs that had never run the
+        # script: an older version linked dmesg, dmesg was later found not to
+        # work here and added to EXCLUDED, and every subsequent run skipped it
+        # and left the broken link in place -- shadowing the distro's dmesg,
+        # which works. Reported on an install whose dmesg link was made on
+        # 2026-08-16.
+        #
+        # Same ownership test --remove uses: only ever unlink a symlink that
+        # resolves to the native binary, so a real file of the same name, or
+        # somebody else's link, is never touched.
+        stale="$TARGET_DIR/$applet"
+        if [ -L "$stale" ] && [ "$stale" -ef "$NATIVE" ]; then
+            if [ "$MODE" = list ]; then
+                echo "  would unlink $stale (now excluded)"
+            else
+                rm -f "$stale"
+                echo "  unlinked $stale (now excluded)"
+            fi
+            pruned=$((pruned + 1))
+        fi
         continue
     fi
     dest="$TARGET_DIR/$applet"
@@ -485,9 +507,9 @@ for applet in $APPLETS; do
 done
 
 if [ "$MODE" = list ]; then
-    echo "would link $linked, leave $blocked in place, skip $excluded excluded, $skipped already linked"
+    echo "would link $linked, leave $blocked in place, skip $excluded excluded, $skipped already linked, unlink $pruned now-excluded"
 else
-    echo "linked $linked into $TARGET_DIR ($skipped already, $blocked left in place, $excluded excluded)"
+    echo "linked $linked into $TARGET_DIR ($skipped already, $blocked left in place, $excluded excluded, $pruned stale removed)"
     [ "$blocked" -gt 0 ] && echo "  $blocked existing command(s) left alone; --force to replace, --list to see them"
 fi
 
