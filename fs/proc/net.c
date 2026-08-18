@@ -304,7 +304,32 @@ static int proc_show_inet_sockets(struct proc_data *buf, int domain, int type) {
         return err;
     }
 
-    proc_printf(buf, "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n");
+    // The header is how a reader decides the FORMAT, so the v6 files need the
+    // v6 one -- `remote_address' rather than `rem_address', and address columns
+    // wide enough for 128 bits. Emitting the v4 header for all four files made
+    // lsof refuse both v6 tables outright:
+    //
+    //     lsof: WARNING: unsupported format: /proc/net/tcp6
+    //     lsof: WARNING: unsupported format: /proc/net/udp6
+    //
+    // The ROWS were already right -- see the %32s below -- so only the banner
+    // was lying about them.
+    //
+    // Taken verbatim from the kernel rather than from memory: tcp6_seq_show in
+    // net/ipv6/tcp_ipv6.c, and IPV6_SEQ_DGRAM_HEADER in include/net/transp_v6.h
+    // for the datagram variant, which differs only by the three trailing
+    // columns. The v4 datagram header gains those same three, which our rows
+    // have always emitted.
+    if (domain == AF_INET_)
+        proc_printf(buf, "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode%s\n",
+                type == SOCK_STREAM_ ? "" : " ref pointer drops");
+    else
+        proc_printf(buf, "  sl  "
+                "local_address                         "
+                "remote_address                        "
+                "st tx_queue rx_queue tr tm->when retrnsmt"
+                "   uid  timeout inode%s\n",
+                type == SOCK_STREAM_ ? "" : " ref pointer drops");
     for (unsigned i = 0; i < entries.count; i++) {
         struct fd *fd = entries.fds[i];
         struct sockaddr_storage local = {};
