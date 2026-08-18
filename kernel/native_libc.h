@@ -66,7 +66,15 @@
 #include <sys/mount.h>
 #include <sys/select.h>
 #include <sys/time.h>
+/* Not on Linux: glibc dropped <sys/sysctl.h> in 2.32 and musl never had it.
+ * Nothing here needs its contents -- nlibc_sysctl and nlibc_sysctlbyname take
+ * plain types and only set ENOTSUP, and no CTL_* constant is used anywhere in
+ * the tree -- so the include exists to declare the real thing before the
+ * `#define sysctl nlibc_sysctl' below renames the callers. Where the header is
+ * absent there is no real declaration to precede, and the rename still works. */
+#if defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/sysctl.h>
+#endif
 #include <grp.h>
 #include <pwd.h>
 #include <stdnoreturn.h>
