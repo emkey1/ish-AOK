@@ -152,6 +152,67 @@ ck multios-pipe  "hi|hi" 'cd /tmp/aokmul; rm -f e; print "$(echo hi > e | cat)|$
 # A descriptor CLOSE is not a second redirection and must not trip the check.
 ck multios-close "hi"    'cd /tmp/aokmul; rm -f f; echo hi > f 2>&-; cat f'
 
+# ...AND THE SAME THING AGAIN WHEN THE COMMAND ALSO SUBSTITUTES SOMETHING.
+#
+# The pipeline element is told about its pipe in AOK_ZSH_PIPEIO, and the bits
+# used to be taken by whichever execcmd_exec reached the descriptors first --
+# which is NOT the same frame as the one that was entered first. Anything the
+# argument expansion runs gets there sooner, and every re-launch runs the state
+# serialiser, which is a zsh function this shell executes. So a substitution
+# anywhere in the command stole the bits, dup'd the STATE PIPE instead of the
+# pipeline's, and the file quietly replaced the pipe again -- the exact failure
+# the channel exists to prevent, back for every command that substitutes.
+# `echo hi > f | cat` worked and `echo $(echo hi) > f | cat` did not.
+ck multios-cmdsubst  "hi|hi" 'cd /tmp/aokmul; rm -f e; print "$(echo $(echo hi) > e | cat)|$(cat e)"'
+ck multios-backtick  "hi|hi" 'cd /tmp/aokmul; rm -f e; print "$(echo `echo hi` > e | cat)|$(cat e)"'
+ck multios-procsub   "hi|hi" 'cd /tmp/aokmul; rm -f e; print "$(cat <(echo hi) > e | cat)|$(cat e)"'
+# =(...) is the one that needs the bits passed on a SECOND time: it puts a name
+# in the file list, havefiles() rules out the fake exec, so the element has to
+# re-launch again and the grandchild is what actually runs the command.
+ck multios-eqsub     "hi|hi" 'cd /tmp/aokmul; rm -f e; print "$(cat =(echo hi) > e | cat)|$(cat e)"'
+# A container does NOT get the bits -- zsh gives the pipe to the group and the
+# inner redirection replaces it for the inner command only, so cat gets nothing.
+ck multios-group     "|hi"   'cd /tmp/aokmul; rm -f e; print "$({ echo $(echo hi) > e } | cat)|$(cat e)"'
+
+echo "== process substitution: a temporary name per call =="
+# The app's mktemp fills the XXXXXX from rand(), and rand() in a re-launched
+# child replays the sequence its parent just used; its retry after a collision
+# then rewrites a template it has already overwritten and returns NULL. So
+# gettempname returned NULL, getoutputfile returned NULL, and the WHOLE WORD
+# disappeared -- no message, status 0. Five substitutions produced two words.
+ck procsub-five-names "5" 'print -rl -- =(echo 1) =(echo 2) =(echo 3) =(echo 4) =(echo 5) | sort -u | wc -l | tr -d " "'
+ck procsub-five-read  "12345" 'cat =(echo 1) =(echo 2) =(echo 3) =(echo 4) =(echo 5) | tr -d "\n"'
+ck procsub-in-child   "12" 'print -r -- "$(cat =(echo 1) =(echo 2) | tr -d "\n")"'
+# The same failure one level down: with a redirection the command could not
+# fake-exec, so it was re-launched and the child's name collided with the
+# parent's. cat lost its argument, read its own stdin, and the file was empty.
+ck procsub-redirected "X" 'cd /tmp/aokmul; rm -f p1; cat =(echo X) > p1; cat p1'
+ck procsub-assigned   "X" 'cd /tmp/aokmul; rm -f p2; V=1 cat =(echo X) > p2; cat p2'
+
+echo "== the words a re-launch hands over, when it also has a redirection =="
+# A command with a redirection used to be re-launched as SOURCE TEXT, so the
+# child ran every expansion a second time -- `/bin/echo $(cmd) > f` ran cmd
+# twice -- and `cat =(echo X) > h` never terminated at all, because each child
+# made another temp file and re-launched for the same reason.
+ck redir-eval-once  "1" 'rm -rf /tmp/aokre; mkdir -p /tmp/aokre; cd /tmp/aokre; /bin/echo $(print -n x >> c; print v) > o; true; wc -c < c | tr -d " "'
+ck redir-words-ok   "v" 'rm -rf /tmp/aokre2; mkdir -p /tmp/aokre2; cd /tmp/aokre2; /bin/echo $(print v) > o; true; cat o'
+ck assign-eval-once "1" 'rm -rf /tmp/aokre3; mkdir -p /tmp/aokre3; cd /tmp/aokre3; V=1 /bin/echo $(print -n x >> c; print v) > o; true; wc -c < c | tr -d " "'
+# The assignment must still reach the command, and must still not stick.
+ck assign-reaches   "1" 'rm -rf /tmp/aokre4; mkdir -p /tmp/aokre4; cd /tmp/aokre4; V=1 /usr/bin/printenv V > o; true; cat o'
+ck assign-not-stuck "[]" 'V=1 /bin/echo hi > /dev/null; print "[$V]"'
+
+echo "== a re-launched element still reports its own write errors =="
+# `save[1] == -2` is upstream asking "am I a forked child about to exit?" -- a
+# fork does not save its descriptors, so a write error there is reported, while
+# the main shell, which will restore fd 1, swallows it. A re-launched element
+# is that child but saves like a main shell, so the diagnostic was thrown away
+# and `print` wrote nowhere, said nothing and exited 0.
+ck writeerr-pipe   "zsh:1: write error: bad file descriptor" 'cd /tmp/aokmul; rm -f w1; print a > w1 >&- | cat'
+ck writeerr-noredir "zsh:1: write error: bad file descriptor" 'print a >&- | cat'
+ck writeerr-async  "zsh:1: write error: bad file descriptor" 'print a >&- & wait'
+# ...and the shell that is going to carry on still swallows it, as zsh does.
+ck writeerr-quiet  "[]" 'cd /tmp/aokmul; rm -f w2; print "[$(print a > w2 >&- 2>&1)]"'
+
 echo "== app-killers (these used to take the app down) =="
 # The state script is zsh text the PARENT parses, so every word in it resolved
 # against the parent's aliases, functions, builtins and reserved words. All
@@ -164,6 +225,83 @@ ck fn-named-print ok      'print() { echo p }; echo $(echo ok)'
 # The subshell text was passed as `zsh -f -c <text>` with no --, so text
 # starting with a dash was parsed as OPTIONS.
 ck leading-dash  "[]"     'echo "[$( -e )]"'
+
+echo "== the EXIT trap fires where zsh fires it, and nowhere else =="
+# A re-launched child is a main shell, so it leaves through zexit() and zexit()
+# fires the EXIT trap. A FORKED child mostly does not: `( )`, a pipeline
+# element and a background job leave through _realexit(), and only the
+# substitution sites run their body with execode(..., exiting, ...). So an
+# inherited TRAPEXIT fired at EVERY fork site -- one firing per subshell more
+# than zsh 5.9. Counted rather than watched, because a $( ) captures the
+# trap's stdout and "no output" proves nothing.
+XT=/tmp/aokxt
+ck exittrap-parens    0 ": > $XT; TRAPEXIT(){ print -r -- X >> $XT }; ( true ); unfunction TRAPEXIT; print -r -- \$(wc -l < $XT | tr -d ' ')"
+ck exittrap-pipe      0 ": > $XT; TRAPEXIT(){ print -r -- X >> $XT }; { true } | cat; unfunction TRAPEXIT; print -r -- \$(wc -l < $XT | tr -d ' ')"
+ck exittrap-async     0 ": > $XT; TRAPEXIT(){ print -r -- X >> $XT }; { true } & wait; unfunction TRAPEXIT; print -r -- \$(wc -l < $XT | tr -d ' ')"
+ck exittrap-cmdsubst  1 ": > $XT; TRAPEXIT(){ print -r -- X >> $XT }; v=\$(true); unfunction TRAPEXIT; print -r -- \$(wc -l < $XT | tr -d ' ')"
+ck exittrap-nested    2 ": > $XT; TRAPEXIT(){ print -r -- X >> $XT }; v=\$(w=\$(true); true); unfunction TRAPEXIT; print -r -- \$(wc -l < $XT | tr -d ' ')"
+# A cmdsubst INSIDE a ( ) fires nothing: the ( ) child has no exit trap left to
+# hand on, so the whole subtree is quiet.
+ck exittrap-under-sub 0 ": > $XT; TRAPEXIT(){ print -r -- X >> $XT }; ( v=\$(true) ); unfunction TRAPEXIT; print -r -- \$(wc -l < $XT | tr -d ' ')"
+# ...and the substitution child must not exec its last command away, or it
+# leaves without running the trap it still owes. Clause (2) of the fake-exec
+# test counts SIGEXIT even though the child inherited it.
+ck exittrap-external  1 ": > $XT; TRAPEXIT(){ print -r -- X >> $XT }; v=\$(/bin/echo a); unfunction TRAPEXIT; print -r -- \$(wc -l < $XT | tr -d ' ')"
+# The FUNCTION still crosses even where the trap does not: zsh leaves TRAPEXIT
+# in shfunctab and only takes the arming off it, which is why `unfunction`
+# there answers "no such hash table element" while `functions` prints the body.
+ck exittrap-defined   1 "TRAPEXIT(){ : }; ( print -r -- \${+functions[TRAPEXIT]} )"
+ck exittrap-disarmed  1 "TRAPEXIT(){ : }; ( unfunction TRAPEXIT 2>/dev/null; print -r -- \$? )"
+
+echo "== disable crosses with the DEFINITION, not just the bit =="
+# `alias -L`, `alias -sL` and the `${(@k)functions}` loop all skip a DISABLED
+# node by design, so the state emitted `builtin disable -a -- hi` for an alias
+# whose definition it had never emitted -- and the line then failed in the
+# child with `no such hash table element`. A disable the parent could undo with
+# one `enable` was, in every subshell, an object that no longer existed.
+ck disable-alias    "hi='print -r -- A'" "alias hi='print -r -- A'; disable -a hi; print -r -- \$( disable -a )"
+ck disable-suffix   "txt='print -r --'" "alias -s txt='print -r --'; disable -s txt; print -r -- \$( disable -s )"
+ck disable-function "FN"                'fn(){ print -r -- FN }; disable -f fn; print -r -- $( enable -f fn; fn )'
+ck disable-galias   "GG='| cat'"        "alias -g GG='| cat'; disable -a GG; print -r -- \$( disable -a )"
+# Two levels down, and with the re-enable in the grandchild.
+ck disable-deep     "FN"                'fn(){ print -r -- FN }; disable -f fn; print -r -- $( print -r -- $( enable -f fn; fn ) )'
+
+echo "== disable -p: the pattern characters cross too =="
+# `disable -p` has no node in any table -- its state is pattern.c's
+# zpc_disables[] -- so nothing emitted it, and a parent that had switched `*`
+# off had every subshell switch it back on and expand the word.
+ck disable-p-star  "/etc/hos*"  "setopt nonomatch; disable -p '*'; print -r -- \$( print -r -- /etc/hos* )"
+ck disable-p-list  "'*'"        "disable -p '*'; print -r -- \$( disable -p )"
+ck disable-p-many  "'?' '*'"    "disable -p '*' '?'; print -r -- \$( disable -p )"
+ck disable-p-hash  "no"         "setopt extendedglob; disable -p '#'; print -r -- \$( [[ aab == a#b ]] && print -r -- yes || print -r -- no )"
+
+echo "== getopts keeps its place inside a clustered option =="
+# optcind is how far getopts has read into `-abc`, and it is a bare int in
+# builtin.c with no parameter to write it into -- so the child restarted the
+# cluster and handed back an option the parent had already consumed.
+ck getopts-cluster  "b" 'set -- -abc x; getopts abc o >/dev/null; print -r -- $( getopts abc p >/dev/null; print -r -- $p )'
+ck getopts-third    "c" 'set -- -abc x; getopts abc o >/dev/null; getopts abc o >/dev/null; print -r -- $( getopts abc p >/dev/null; print -r -- $p )'
+ck getopts-optarg   "b/val" 'set -- -ab val; getopts "ab:" o >/dev/null; print -r -- $( getopts "ab:" p >/dev/null; print -r -- "$p/$OPTARG" )'
+ck getopts-pipe     "b" 'set -- -abc x; getopts abc o >/dev/null; { getopts abc p >/dev/null; print -r -- $p } | cat'
+
+echo "== bindkey keymaps cross, as a difference from the defaults =="
+# Widgets crossed (`zle -lL`) but keymaps did not, so a key the parent REBOUND
+# read as its default in the child. Replaying `bindkey -L` would have cost 400
+# lines and 14 KB on every subshell of any shell that has loaded zle, nearly
+# all of it default -- so the parent snapshots the keymaps when zle creates
+# them and emits only what has changed since. A shell that bound nothing pays
+# nothing, which is what bindkey-quiet measures.
+ck bindkey-rebound  '"^X^T" beep'  'zmodload zsh/zle; bindkey -e; bindkey "^X^T" beep; print -r -- $( bindkey "^X^T" )'
+ck bindkey-widget   '"^X^Q" w'     'zmodload zsh/zle; bindkey -e; w(){ : }; zle -N w; bindkey "^X^Q" w; print -r -- $( bindkey "^X^Q" )'
+ck bindkey-newmap   '"a" beep'     'zmodload zsh/zle; bindkey -N mymap; bindkey -M mymap a beep; print -r -- $( bindkey -M mymap a )'
+ck bindkey-removed  '"^A" undefined-key' 'zmodload zsh/zle; bindkey -e; bindkey -r "^A"; print -r -- $( bindkey "^A" )'
+ck bindkey-string   '"^X^S" "hi"'  'zmodload zsh/zle; bindkey -e; bindkey -s "^X^S" hi; print -r -- $( bindkey "^X^S" )'
+ck bindkey-alias    '"a" beep'     'zmodload zsh/zle; bindkey -N m1; bindkey -M m1 a beep; bindkey -A m1 m2; print -r -- $( bindkey -M m2 a )'
+ck bindkey-deep     '"^X^T" beep'  'zmodload zsh/zle; bindkey -e; bindkey "^X^T" beep; print -r -- $( print -r -- $( bindkey "^X^T" ) )'
+# The cost, measured rather than asserted: with zle loaded and nothing rebound
+# the state carries no bindkey lines at all, and one rebind carries one line.
+ck bindkey-cost-0   "0" 'zmodload zsh/zle; bindkey -e; export AOK_ZSH_DUMP_STATE=1; { v=$(true) } 2>/tmp/aokbk; unset AOK_ZSH_DUMP_STATE; print -r -- $(grep -c "^builtin bindkey" /tmp/aokbk)'
+ck bindkey-cost-1   "1" 'zmodload zsh/zle; bindkey -e; bindkey "^X^T" beep; export AOK_ZSH_DUMP_STATE=1; { v=$(true) } 2>/tmp/aokbk; unset AOK_ZSH_DUMP_STATE; print -r -- $(grep -c "^builtin bindkey" /tmp/aokbk)'
 
 echo
 echo "  passed=$pass failed=$fail"
