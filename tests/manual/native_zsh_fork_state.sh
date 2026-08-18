@@ -103,6 +103,19 @@ echo "== modules =="
 # replays parameters -- so re-declaring ZFTP_SESSION aborted the whole state.
 ck zftp-subshell 1        'zmodload zsh/zftp 2>/dev/null; echo $(zmodload -L | grep -c zftp)'
 
+echo "== globbing across the boundary =="
+# The re-launch hands the child ALREADY-EXPANDED words, so that a $( ) is not
+# evaluated twice. They were taken one step too early -- before globbing -- so
+# the child received a quoted literal '*'. `rm -f *` deleted NOTHING whenever it
+# was not the last command in the shell, status 0, no diagnostic. Only external
+# commands in non-final position were hit, which is how it survived a 1167-case
+# differential sweep.
+ck glob-not-last "a b c"  'rm -rf /tmp/aokg; mkdir -p /tmp/aokg; cd /tmp/aokg; touch a b c; /bin/echo *; true'
+ck glob-rm-works "0"      'rm -rf /tmp/aokg2; mkdir -p /tmp/aokg2; cd /tmp/aokg2; touch x y; rm -f *; true; ls | wc -l | tr -d " "'
+ck glob-noglob   "*"      'rm -rf /tmp/aokgn; mkdir -p /tmp/aokgn; cd /tmp/aokgn; touch a; setopt noglob; /bin/echo *; true'
+# The double-evaluation guard the expanded-words design exists for: RAN once.
+ck glob-eval-once "RAN a b c" 'rm -rf /tmp/aokge; mkdir -p /tmp/aokge; cd /tmp/aokge; touch a b c; /bin/echo $(echo RAN) *; true'
+
 echo "== MULTIOS (two or more redirections on one descriptor) =="
 # The byte pump is a child that is NOT a shell, so a re-launch cannot express it;
 # it is a separate native program, zsh-multio, spawned as its own guest task.
