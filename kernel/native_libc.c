@@ -972,6 +972,80 @@ void nlibc_perror(const char *s) {
 // Defined beside the signal bookkeeping further down; declared here because
 // exec is the first caller in this file.
 static void nlibc_spawn_default_sigmask(struct native_spawn_opts *opts);
+static void nlibc_exec_reset_handlers(void);
+
+// The wait that stands in for "this process became that program". Getting it
+// wrong is not a corner case: `zsh -c 'sleep 5'` execs in place, so the pid a
+// shell knows for that job IS this wait, and every signal aimed at the job
+// lands here rather than on sleep.
+//
+// Two things have to hold, and neither did.
+//
+// A signal must not END the wait. native_waitpid reports EINTR when one
+// arrives, and reading that as "the child is gone" exited the stand-in with
+// 127 -- a shell's "no such job" status, out of a process the shell had just
+// killed. `sleep 5 & p=$!; kill -TERM $p; wait $p` answered 127 where every
+// other shell answers 143, for SIGKILL just the same, because the stand-in
+// died of its own bookkeeping before the signal was ever acted on.
+//
+// And the signal has to reach the program that replaced us, which nothing else
+// will ever signal: the sender aimed at this pid, and after a real exec this
+// pid would BE that program. So forward it, then checkpoint -- which, for a
+// default-fatal signal, does not return, and that is exactly right. The
+// stand-in dies of the same signal the job was killed with, so the parent's
+// wait status says "killed by SIGTERM" instead of "exited 127".
+//
+// SIGCHLD is the one signal not forwarded: the only child this task has is the
+// exec'd program itself, so a SIGCHLD here is news ABOUT it, never news FOR it.
+//
+// sys_kill rather than the shim's own nlibc_kill, and that is not a shortcut:
+// every native_syscall CHECKPOINTS on the way in (kernel/native_syscall.c), and
+// the signal being forwarded is by definition pending and fatal, so the shim
+// route dies inside its own argument evaluation and the child is never
+// signalled at all. Measured: `kill -TERM` on a native shell's job left the
+// sleep it had exec'd running to full term, reparented to init.
+//
+// The forward is a best effort, not a guarantee, and the gap is not here: a
+// task spawned by a native program INTERMITTENTLY never acts on a pending
+// fatal signal at all, SIGKILL included, whoever sends it. That reproduces
+// with no exec stand-in in the path and it predates this function, so what is
+// queued here is right and what happens to it afterwards is somebody else's
+// bug.
+static void nlibc_exec_forward_signals(dword_t child) {
+    sigset_t_ pending = __atomic_load_n(&current->pending, __ATOMIC_ACQUIRE) |
+            __atomic_load_n(&current->sighand->pending, __ATOMIC_ACQUIRE);
+    pending &= ~((sigset_t_) 1 << (SIGCHLD_ - 1));
+    for (int sig = 1; sig < NUM_SIGS && pending != 0; sig++) {
+        sigset_t_ bit = (sigset_t_) 1 << (sig - 1);
+        if (!(pending & bit))
+            continue;
+        pending &= ~bit;
+        sys_kill((pid_t_) child, (dword_t) sig);
+    }
+}
+
+// Exit as the exec'd program did. The guest's wait status word already encodes
+// both endings -- code << 8 for an exit, the bare signal number (plus the core
+// bit) for a death -- and it is the same word do_exit_group takes, so handing
+// it straight back keeps WIFSIGNALED true where it should be. Exiting 128 + N
+// instead, as this used to, prints the same number for `$?` and then lies to
+// everything that asks HOW the job ended: `jobs`, the "Terminated" line, and
+// any script testing the status word itself.
+static noreturn void nlibc_exec_standin(dword_t child) {
+    nlibc_exec_reset_handlers();
+    for (;;) {
+        int status = 0;
+        int res = native_waitpid(child, &status, 0);
+        if (res >= 0) {
+            nlibc_flush_std();
+            do_exit_group(status);
+        }
+        if (res != _EINTR)
+            nlibc_exit(127);        // the child really is unreachable
+        nlibc_exec_forward_signals(child);
+        native_checkpoint();        // may not return, and that is the point
+    }
+}
 
 // Wait for a child this shim started on the program's behalf, and do not let a
 // signal be mistaken for the answer.
@@ -1022,9 +1096,11 @@ static int nlibc_exec_common(const char *path, char *const argv[], int search_pa
 
     // Through native_spawn_opts rather than native_spawn, for the signal mask:
     // this is the program saying "become that program", and the shim's own
-    // blocking must not be part of what it becomes. Dispositions are NOT reset
-    // here -- exec legitimately preserves SIG_IGN, and a caller that ignored a
-    // signal meant it.
+    // blocking must not be part of what it becomes. The CHILD's dispositions
+    // are NOT reset here -- exec legitimately preserves SIG_IGN, and a caller
+    // that ignored a signal meant it. (The stand-in resets its OWN caught
+    // handlers, which is the other half of the same rule: see
+    // nlibc_exec_reset_handlers.)
     struct native_spawn_opts opts = { .pgid = NATIVE_SPAWN_PGID_INHERIT };
     nlibc_spawn_default_sigmask(&opts);
 
@@ -1033,12 +1109,7 @@ static int nlibc_exec_common(const char *path, char *const argv[], int search_pa
     if (err < 0)
         return nlibc_fail(err);
 
-    // Stand in for "this process became that program": wait for it and exit
-    // with its status, so the caller's caller sees what it expects.
-    int status = 0;
-    if (nlibc_wait_for_child(pid, &status) < 0)
-        nlibc_exit(127);
-    nlibc_exit(WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status));
+    nlibc_exec_standin(pid);
 }
 
 int nlibc_execv(const char *path, char *const argv[]) {
@@ -4355,6 +4426,25 @@ nlibc_sighandler nlibc_signal(int host_sig, nlibc_sighandler handler) {
     return previous;
 }
 
+// exec, for the stand-in that has to imitate one (see nlibc_exec_standin).
+// A real exec resets every CAUGHT signal to its default and preserves the
+// ignored ones, and the stand-in has to do it by hand because the C handlers
+// it is still carrying belong to the program that is supposed to be gone.
+//
+// Not cosmetic. A shell's SIGCHLD handler is a reaper: leave it installed and
+// the checkpoint in that wait loop can call it, it reaps the exec'd program
+// with its own wait3, and the stand-in's wait comes back ECHILD with the
+// status gone -- the same "reaped out from under the bookkeeping that needed
+// it" the loop exists to prevent, one layer down. SIG_IGN survives, which is
+// what makes `nohup cmd` still mean what it says.
+static void nlibc_exec_reset_handlers(void) {
+    for (int host_sig = 1; host_sig < NSIG; host_sig++) {
+        nlibc_sighandler h = nlibc_handlers[host_sig];
+        if (h != NULL && h != SIG_DFL && h != SIG_IGN)
+            nlibc_signal(host_sig, SIG_DFL);
+    }
+}
+
 int nlibc_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     int guest_how = nlibc_sigmask_how(how);
     if (guest_how < 0)
@@ -6587,10 +6677,7 @@ int nlibc_execve(const char *path, char *const argv[], char *const envp[]) {
             envp != NULL ? envp : native_env_vector(), &opts, &pid);
     if (err < 0)
         return nlibc_fail(err);
-    int status = 0;
-    if (nlibc_wait_for_child(pid, &status) < 0)
-        nlibc_exit(127);
-    nlibc_exit(WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status));
+    nlibc_exec_standin(pid);
 }
 
 // --------------------------------------------------------------- sigsuspend
