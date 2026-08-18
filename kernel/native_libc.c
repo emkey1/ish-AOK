@@ -6223,14 +6223,39 @@ int nlibc_getentropy(void *buf, size_t len) {
 //
 // mkdtemp and mktemp share mkstemp's contract: the pattern is the caller's
 // buffer and the name used has to be written back into it.
-static bool nlibc_fill_template(char *template) {
-    static const char alphabet[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+// The template is validated ONCE and refilled by position thereafter, because
+// the six characters stop being "XXXXXX" the moment they are first filled.
+// Checking the literal on every attempt -- as this did -- made the retry loops
+// below unreachable: the alphabet is lowercase and digits, so a filled template
+// can never match "XXXXXX" again, every retry failed EINVAL, and mkdtemp
+// answered NULL for the first collision instead of trying a second name.
+static bool nlibc_template_offset(const char *template, size_t *off) {
     size_t len = strlen(template);
     if (len < 6 || strcmp(template + len - 6, "XXXXXX") != 0)
         return false;
-    for (int i = 0; i < 6; i++)
-        template[len - 6 + i] = alphabet[(unsigned) rand() % (sizeof(alphabet) - 1)];
+    *off = len - 6;
     return true;
+}
+
+// arc4random, not rand, and the difference is the whole point of the retry.
+//
+// rand() is one sequence for the whole host process, and a re-launched shell
+// RESTORES ITS PARENT'S SEED on purpose: $RANDOM has to keep answering what a
+// forked child would have answered, so AOK_ZSH_INHERIT carries the seed and the
+// draw count and the child calls srand with them. Every other caller of rand()
+// in that task then replays the parent's sequence too -- so a parent and its
+// child asked for a temporary name and were handed the SAME one, measured as
+// /tmp/zsht0rkmr in both. Collisions were not rare here, they were the norm,
+// which is exactly when a retry loop matters.
+//
+// arc4random is not seeded from the guest and is not replayed, so the child
+// draws its own names. It reaches the host untouched (the shim header does not
+// rewrite it) and that is correct rather than a leak: entropy has no guest
+// semantics to diverge from.
+static void nlibc_fill_template_at(char *template, size_t off) {
+    static const char alphabet[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+    for (int i = 0; i < 6; i++)
+        template[off + i] = alphabet[arc4random_uniform(sizeof(alphabet) - 1)];
 }
 
 char *nlibc_mkdtemp(char *template) {
@@ -6238,11 +6263,13 @@ char *nlibc_mkdtemp(char *template) {
         nlibc_fail(_EINVAL);
         return NULL;
     }
+    size_t off;
+    if (!nlibc_template_offset(template, &off)) {
+        nlibc_fail(_EINVAL);
+        return NULL;
+    }
     for (int attempt = 0; attempt < 128; attempt++) {
-        if (!nlibc_fill_template(template)) {
-            nlibc_fail(_EINVAL);
-            return NULL;
-        }
+        nlibc_fill_template_at(template, off);
         if (nlibc_mkdir(template, 0700) == 0)
             return template;
         if (errno != EEXIST)
@@ -6259,11 +6286,13 @@ char *nlibc_mktemp(char *template) {
         nlibc_fail(_EINVAL);
         return NULL;
     }
+    size_t off;
+    if (!nlibc_template_offset(template, &off)) {
+        nlibc_fail(_EINVAL);
+        return NULL;
+    }
     for (int attempt = 0; attempt < 128; attempt++) {
-        if (!nlibc_fill_template(template)) {
-            nlibc_fail(_EINVAL);
-            return NULL;
-        }
+        nlibc_fill_template_at(template, off);
         struct stat st;
         if (nlibc_stat(template, &st) < 0 && errno == ENOENT)
             return template;
