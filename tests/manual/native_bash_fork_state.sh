@@ -55,6 +55,33 @@ ck bg-wait           ok     'sleep 1 & wait; echo ok'
 ck lastpid           ok     'sleep 1 & [ -n "$!" ] && echo ok; wait'
 ck jobs-builtin      ok     'sleep 1 & jobs >/dev/null && echo ok; wait'
 
+echo "== recursion must not take the app down =="
+# bash is the worse case of the two shells: FUNCNEST is UNSET by default, so
+# bash's own limit never fires and the stack guard is the ONLY thing between a
+# runaway recursive function and the end of a guest task thread's stack --
+# which, for a native program, is the end of the APP. If one of these regresses
+# the app dies and this script reports nothing at all, which is the point.
+# These assert the MESSAGE, not a later command: the guard ends the -c script,
+# so expecting anything printed afterwards would assert behaviour the shell does
+# not have. A message at all proves the guard fired instead of the app dying --
+# and the app dying is what this case exists to catch.
+ck recurse-unbounded "environment: line 1: r: maximum function nesting level exceeded (out of stack)" 'r(){ r; }; r'
+ck recurse-funcnest  "environment: line 1: r: maximum function nesting level exceeded (out of stack)" 'FUNCNEST=5000; r(){ r; }; r'
+ck recurse-subshell   "rc=1 alive" 'r(){ r; }; x=$(r) 2>/dev/null; echo rc=$? alive'
+ck recurse-legal-400  deep-ok  'f(){ [ $1 -gt 0 ] && f $(($1-1)) || echo deep-ok; }; f 400'
+# bash's own FUNCNEST must still work where it applies.
+ck funcnest-still-works 1 'FUNCNEST=10; r(){ r; }; r 2>&1 | grep -c "exceeded (10)"'
+
+echo "== the locale comes from the guest, not the host =="
+# setlocale(cat, "") means "take it from the environment", and a native program
+# is a function call inside the app -- so the C library resolved it against the
+# HOST's environment, which on a device is whatever iOS is set to. Native and
+# emulated bash then disagreed about what a character IS, and length, case and
+# collation all follow from that. Asserted as AGREEMENT with the guest's own
+# bash rather than a fixed number, so the case holds whatever locale the guest
+# is actually in.
+ck locale-agrees agree 'n=$(/AOK/native/bash -c "e=\$(printf \\303\\251); echo \${#e}"); g=$(/bin/bash -c "e=\$(printf \\303\\251); echo \${#e}"); [ "$n" = "$g" ] && echo agree || echo "differ n=$n g=$g"'
+
 echo "== state crossing =="
 ck var               outer  'v=outer; ( v=inner ); echo $v'
 ck function          fn-ok  'f(){ echo fn-ok; }; echo $(f)'
