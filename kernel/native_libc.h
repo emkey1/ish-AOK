@@ -63,6 +63,14 @@
 #include <syslog.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
+/* Before the `flock(a, b)' macro below: glibc DECLARES flock in <sys/file.h>,
+ * and a function-like macro matches that declaration -- rewriting
+ * `flock (int __fd, int __operation)' into `nlibc_flock((int __fd), ...)',
+ * which gcc reports as "expected declaration specifiers" and clang as
+ * "conflicting types for 'nlibc_flock'". Letting the real header land first
+ * leaves nothing for the macro to mangle. Darwin declares it elsewhere, which
+ * is why this never mattered here. */
+#include <sys/file.h>
 #include <sys/mount.h>
 #include <sys/select.h>
 #include <sys/time.h>

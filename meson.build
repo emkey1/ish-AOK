@@ -971,6 +971,10 @@ if get_option('kernel') == 'ish'
             '-Dmain=bash_main_entry',
             '-Dwait_for=bash_wait_for',
             '-include', meson.current_source_dir() / 'kernel/native_libc.h',
+            # Same reason smallclue_c_args carries it: bash reaches for wcswidth,
+            # which glibc puts behind a feature-test macro and Darwin exposes by
+            # default. Darwin ignores the macro, so it is unconditional.
+            '-D_GNU_SOURCE',
             # mkbuiltins writes bash_builtext.h here; deps/bash-shim forwards
             # <builtins/builtext.h> to it.
             '-I' + meson.current_build_dir(),
