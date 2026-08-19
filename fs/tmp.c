@@ -448,7 +448,9 @@ static struct tmp_dirent *tmpfs_lookup_parent(struct mount *mount, const char *p
 // realfs. Only mmapped files pay the host-fd cost. Call with inode->lock held.
 // Returns the host fd, or a negative errno.
 static int tmpfs_inode_host_backing(struct tmp_inode *inode) {
-    assert(S_ISREG(inode->stat.mode));
+    // Returns a negative errno, so this can say no rather than abort.
+    if (!S_ISREG(inode->stat.mode))
+        return _EINVAL;
     if (inode->host_fd >= 0)
         return inode->host_fd;
     int host_fd = host_unlinked_tmpfd();
@@ -472,7 +474,10 @@ static int tmpfs_inode_host_backing(struct tmp_inode *inode) {
 }
 
 static int tmpfs_file_resize(struct tmp_inode *file, size_t size) {
-    assert(S_ISREG(file->stat.mode));
+    // See the note in tmpfs_read: reachable via ftruncate on a mknod-created
+    // inode of an invalid type, where an assert aborted the whole app.
+    if (!S_ISREG(file->stat.mode))
+        return _EINVAL;
     if (file->host_fd >= 0) {
         // Host-file-backed (has been mmapped): ftruncate keeps live guest
         // mappings coherent, and the host zero-fills growth.
@@ -1197,7 +1202,12 @@ static ssize_t tmpfs_read(struct fd *fd, void *buf, size_t bufsize) {
     res = _EISDIR;
     if (S_ISDIR(inode->stat.mode))
         goto out;
-    assert(S_ISREG(inode->stat.mode));
+    // Not an assert: an inode of an invalid type could be created by mknod, and
+    // aborting here took down every guest process in the app. kernel/fs.c now
+    // refuses to create one; this is the second line of defence.
+    res = _EINVAL;
+    if (!S_ISREG(inode->stat.mode))
+        goto out;
 
     // Snapshot fd->offset once (see tmpfs_write): a concurrent lseek/pwrite on
     // a shared fd could otherwise move it between the clamp and the memcpy,
@@ -1252,7 +1262,12 @@ static ssize_t tmpfs_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) 
     res = _EISDIR;
     if (S_ISDIR(inode->stat.mode))
         goto out;
-    assert(S_ISREG(inode->stat.mode));
+    // Not an assert: an inode of an invalid type could be created by mknod, and
+    // aborting here took down every guest process in the app. kernel/fs.c now
+    // refuses to create one; this is the second line of defence.
+    res = _EINVAL;
+    if (!S_ISREG(inode->stat.mode))
+        goto out;
     if (inode->host_fd >= 0) {
         ssize_t n = pread(inode->host_fd, buf, bufsize, off);
         res = n < 0 ? errno_map() : n;
@@ -1284,7 +1299,12 @@ static ssize_t tmpfs_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_
     res = _EISDIR;
     if (S_ISDIR(inode->stat.mode))
         goto out;
-    assert(S_ISREG(inode->stat.mode));
+    // Not an assert: an inode of an invalid type could be created by mknod, and
+    // aborting here took down every guest process in the app. kernel/fs.c now
+    // refuses to create one; this is the second line of defence.
+    res = _EINVAL;
+    if (!S_ISREG(inode->stat.mode))
+        goto out;
     // pwrite on an O_APPEND fd appends and ignores the offset it was handed.
     // POSIX says the opposite, but Linux does this (man 2 pwrite records it
     // under BUGS) and so does kernel/memfd.c:memfd_pwrite, so matching Linux

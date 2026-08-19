@@ -790,6 +790,27 @@ static dword_t sys_mknodat_common(fd_t at_f, guest_addr_t path_addr, mode_t_ mod
     // build 548, two device families, two iOS versions, all this one thing.
     if ((mode & S_IFMT) == 0)
         mode |= S_IFREG;
+    // ...and a mode with a type that is not one of Linux's five is not a file
+    // of any kind. Linux checks this at the syscall boundary (may_mknod, called
+    // from do_mknodat) and returns EINVAL; without the same check a value like
+    // 0x3000 walks straight through generic_mknodat, which only rejects DIR and
+    // LNK, and builds a tmpfs inode whose type answers no S_IS*() question.
+    // Every later operation on it then hits an assert -- read, pread, pwrite and
+    // ftruncate each abort the WHOLE app, not just the caller, and mknod is not
+    // privileged for these types, so any guest process could do it. Closing it
+    // here means such an inode can no longer be created at all; the asserts
+    // those paths still carry became errno returns as well, on the principle
+    // that an assert reachable from a syscall argument is the wrong tool.
+    switch (mode & S_IFMT) {
+        case S_IFREG: case S_IFCHR: case S_IFBLK: case S_IFIFO: case S_IFSOCK:
+            break;
+        default:
+            // S_IFDIR and S_IFLNK reach generic_mknodat, which has said EINVAL
+            // to both since before this check existed; leaving them to it keeps
+            // one answer per type in one place.
+            if (!S_ISDIR(mode) && !S_ISLNK(mode))
+                return _EINVAL;
+    }
     apply_umask(&mode);
     struct fd *at = at_fd(at_f);
     if (at == NULL)
