@@ -7,11 +7,24 @@
 extern const struct fd_ops realfs_fdops;
 extern const struct fs_ops realfs;
 
+// The guest's one block device.
+//
+// "sda", not the host's "disk1" it used to be called: AOK aggregates every real
+// read and write into a single device and has always printed major 8, minor 0
+// for it, which IS sda in Linux's numbering. Naming it after an Apple disk both
+// leaked a host detail into the guest and contradicted the numbers beside it.
+//
+// This name is the one thing /proc/mounts, /proc/diskstats, /sys/block and
+// /sys/class/block must agree on -- a mount and a device that share no name is
+// why btop's disk and io panels listed nothing. Change it in one place.
+#define GUEST_DISK_NAME "sda"
+#define GUEST_DISK_MAJOR 8
+#define GUEST_DISK_MINOR 0
+
 // Aggregate byte-level I/O counters for every real-host read/write/pread/pwrite
 // (this is the single choke point fakefs, realfs, and iosfs data all flow
 // through), used to back /proc/diskstats and /sys/block so vmstat/iostat have
-// real numbers instead of an all-zero stub. One global "disk1" device, not
-// per-mount -- matches the single fake device diskstats already advertised.
+// real numbers instead of an all-zero stub. One global device, not per-mount.
 struct realfs_io_stats {
     _Atomic uint64_t read_ops, read_bytes;
     _Atomic uint64_t write_ops, write_bytes;

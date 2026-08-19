@@ -17,20 +17,33 @@
 #include "kernel/signal.h"
 #include "kernel/task.h"
 
-int mount_root(const struct fs_ops *fs, const char *source, const char *name) {
+int mount_root(const struct fs_ops *fs, const char *source) {
     char source_realpath[MAX_PATH + 1];
     if (realpath(source, source_realpath) == NULL)
         return errno_map();
     int err = do_mount(fs, source_realpath, "", "", 0);
     if (err < 0)
         return err;
-    // df's "Filesystem" column for / would otherwise be the host path this
-    // was mounted from, which is long, unusable from inside the guest, and on
-    // device carries the app group UUID. Report the root's name instead
-    // ("Devuan6-arm64"); the host path stays in mount->source for fakefs.
+    // What / reports as its source, in /proc/mounts, /proc/self/mountinfo and
+    // therefore df's "Filesystem" column.
+    //
+    // NOT the host path this was mounted from: that is long, unusable from
+    // inside the guest, and on device carries the app group UUID. It used to be
+    // the root's directory name ("Devuan6-arm64"), which read well in df but
+    // named something no other file in the guest had ever heard of. Nothing
+    // tied a mount to a device: /proc/diskstats advertised one device, btop
+    // matched mounts to diskstats entries by name, and no name in one file
+    // appeared in the other, so btop's disk and io panels listed nothing at all.
+    //
+    // So it is the block device the root is on, spelled the way Linux spells
+    // it. AOK aggregates every real read and write into one device (see
+    // fs/real.h) and has always printed major 8, minor 0 for it -- which IS
+    // "sda" in Linux's numbering, whatever the name beside it said. Now
+    // /proc/mounts, /proc/diskstats and /sys/block agree on it.
+    //
+    // The host path stays in mount->source for fakefs; only the label changes.
     // Ignore failure: the mount succeeded, only its label is at stake.
-    if (name != NULL)
-        mount_set_display_source("", name);
+    mount_set_display_source("", "/dev/" GUEST_DISK_NAME);
     return 0;
 }
 
@@ -168,6 +181,22 @@ intptr_t become_first_process(void) {
     struct task *task = construct_task(NULL);
     if (IS_ERR(task))
         return PTR_ERR(task);
+
+    // The machine boots when init does, not when the app process starts.
+    //
+    // run_at_boot() sets boot_time once per APP PROCESS, and iOS keeps an app
+    // alive across suspensions for days -- so a guest whose init had just
+    // started reported an uptime measured from the app's launch, and
+    // /proc/stat's btime (derived from it) named a moment long past. Linux
+    // userland reads btime as "when this system came up" and checks it:
+    // wtmpdb-update-boot refused AOK's outright, with "Boot time too far in
+    // the past".
+    //
+    // This is where pid 1 is created, which is the only event in AOK that
+    // means what a boot means. run_at_boot still seeds boot_time so it is
+    // never zero for anything that reads the clock before init exists.
+    extern time_t boot_time;
+    boot_time = time(NULL);
     //task_ref_cnt_mod(task, 1);
     current = task;
     return 0;

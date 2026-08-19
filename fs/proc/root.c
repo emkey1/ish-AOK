@@ -526,16 +526,21 @@ static int proc_show_vmstat(struct proc_entry *UNUSED(entry), struct proc_data *
 11       0 sr0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
  */
 static int proc_show_diskstats(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
-    // "disk1" aggregates every real read/write/pread/pwrite (fakefs, realfs,
-    // and iosfs data all funnel through fs/real.c's realfs_io_stats -- see
-    // realfs_count_read/realfs_count_write). Merge counts, I/O time, and
-    // in-progress/weighted-time fields aren't tracked, so those report 0
-    // rather than a fabricated value.
+    // One device (GUEST_DISK_NAME, see fs/real.h) aggregating every real
+    // read/write/pread/pwrite -- fakefs, realfs and iosfs data all funnel
+    // through fs/real.c's realfs_io_stats (realfs_count_read/write). Merge
+    // counts, I/O time and in-progress/weighted-time fields aren't tracked, so
+    // those report 0 rather than a fabricated value.
+    //
+    // The name has to match what / reports as its source in /proc/mounts, or a
+    // consumer has nothing to attach these counters to: that mismatch is why
+    // btop's disk and io panels were empty. See kernel/init.c's mount_root.
     uint64_t read_ops = atomic_load_explicit(&realfs_io_stats.read_ops, memory_order_relaxed);
     uint64_t read_sectors = atomic_load_explicit(&realfs_io_stats.read_bytes, memory_order_relaxed) / 512;
     uint64_t write_ops = atomic_load_explicit(&realfs_io_stats.write_ops, memory_order_relaxed);
     uint64_t write_sectors = atomic_load_explicit(&realfs_io_stats.write_bytes, memory_order_relaxed) / 512;
-    proc_printf(buf, "8       0 disk1 %"PRIu64" 0 %"PRIu64" 0 %"PRIu64" 0 %"PRIu64" 0 0 0 0\n",
+    proc_printf(buf, "%7d %7d %s %"PRIu64" 0 %"PRIu64" 0 %"PRIu64" 0 %"PRIu64" 0 0 0 0\n",
+                GUEST_DISK_MAJOR, GUEST_DISK_MINOR, GUEST_DISK_NAME,
                 read_ops, read_sectors, write_ops, write_sectors);
     return 0;
 }
@@ -830,9 +835,12 @@ enum sysfs_node_kind {
     sysfs_cgroup_unified,
     sysfs_cgroup_elogind,
     sysfs_block,
-    sysfs_block_disk1,
-    sysfs_block_disk1_dev,
-    sysfs_block_disk1_stat,
+    sysfs_block_dev_dir,
+    sysfs_block_dev_devno,
+    sysfs_block_dev_stat,
+    sysfs_class,
+    sysfs_class_block,
+    sysfs_class_block_dev,
 };
 
 // A node is identified by (kind, cpu, index). cpu is -1 except under cpuN/,
@@ -912,9 +920,20 @@ static const struct sysfs_node_desc sysfs_node_descs[] = {
     {sysfs_cgroup_unified, sysfs_cgroup, "unified", SYSFS_DIR},
     {sysfs_cgroup_elogind, sysfs_cgroup, "elogind", SYSFS_DIR},
 
-    {sysfs_block_disk1, sysfs_block, "disk1", SYSFS_DIR},
-    {sysfs_block_disk1_dev, sysfs_block_disk1, "dev", SYSFS_REG},
-    {sysfs_block_disk1_stat, sysfs_block_disk1, "stat", SYSFS_REG},
+    {sysfs_block_dev_dir, sysfs_block, GUEST_DISK_NAME, SYSFS_DIR},
+    {sysfs_block_dev_devno, sysfs_block_dev_dir, "dev", SYSFS_REG},
+    {sysfs_block_dev_stat, sysfs_block_dev_dir, "stat", SYSFS_REG},
+
+    // /sys/class exists on every Linux system, and its absence is not cosmetic.
+    // Devuan's /etc/init.d/eudev tests `[ ! -d /sys/class/ ]` and reports
+    // "sysfs not mounted" -- misleading, since sysfs IS mounted -- and then,
+    // because log_end_msg does not exit, runs on to a guard that checks
+    // `[ -e /sys/block -a ! -e /sys/class/block ]` and SLEEPS 30 SECONDS.
+    // Supplying /sys/class without /sys/class/block would therefore have made
+    // boot much worse than the warning it fixed. They arrive together.
+    {sysfs_class, sysfs_root, "class", SYSFS_DIR},
+    {sysfs_class_block, sysfs_class, "block", SYSFS_DIR},
+    {sysfs_class_block_dev, sysfs_class_block, GUEST_DISK_NAME, SYSFS_DIR},
 };
 
 #undef SYSFS_DIR
@@ -1127,7 +1146,7 @@ static size_t sysfs_format_cpulist(char *buf, size_t bufsize, int first, int las
 // Real Linux keeps this at /sys/block/<dev>/stat: the same 11 diskstats
 // fields as /proc/diskstats, minus the leading major/minor/name -- backed by
 // the same realfs_io_stats counters as proc_show_diskstats.
-static size_t sysfs_disk1_stat_format(char *buf, size_t bufsize) {
+static size_t sysfs_guest_disk_stat_format(char *buf, size_t bufsize) {
     uint64_t read_ops = atomic_load_explicit(&realfs_io_stats.read_ops, memory_order_relaxed);
     uint64_t read_sectors = atomic_load_explicit(&realfs_io_stats.read_bytes, memory_order_relaxed) / 512;
     uint64_t write_ops = atomic_load_explicit(&realfs_io_stats.write_ops, memory_order_relaxed);
@@ -1225,10 +1244,10 @@ static size_t sysfs_file_data(struct sysfs_node node, char *buf, size_t bufsize)
                 return sysfs_format_cpulist(buf, bufsize, 0, last_cpu);
             return sysfs_format_cpulist(buf, bufsize, node.cpu, node.cpu);
 
-        case sysfs_block_disk1_dev:
+        case sysfs_block_dev_devno:
             return snprintf(buf, bufsize, "8:0\n");
-        case sysfs_block_disk1_stat:
-            return sysfs_disk1_stat_format(buf, bufsize);
+        case sysfs_block_dev_stat:
+            return sysfs_guest_disk_stat_format(buf, bufsize);
         default:
             return 0;
     }

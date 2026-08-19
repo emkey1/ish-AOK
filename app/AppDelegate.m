@@ -2394,10 +2394,11 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                    @"path": rootMetadata.path ?: @""});
     }
 
-    // defaultRoot ("Devuan6-arm64") is what / reports as its source in
-    // /proc/mounts, so df names the booted filesystem instead of printing the
-    // app group container path it is stored at.
-    intptr_t err = mount_root(&fakefs, rootData.fileSystemRepresentation, defaultRoot.UTF8String);
+    // / reports /dev/sda as its source in /proc/mounts, matching what
+    // /proc/diskstats and /sys/block call the guest's one block device; see
+    // mount_root in kernel/init.c. Not the app group container path this is
+    // stored at, and no longer the root's name either.
+    intptr_t err = mount_root(&fakefs, rootData.fileSystemRepresentation);
     if (err < 0) {
         return RecordBootFailure(err,
                                  @"boot.root.mount.failed",

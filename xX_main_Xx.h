@@ -73,18 +73,9 @@ static inline int xX_main_Xx(int argc, char *const argv[], const char *envp) {
         perror(root);
         exit(1);
     }
-    // What / reports as its source in /proc/mounts: the rootfs directory's own
-    // name ("alpine-clean-x86") rather than the host path it lives at, which
-    // is long enough to wrap df's output onto a second line. Copied out before
-    // the "/data" suffix goes on, since that would extend this substring.
-    char root_name[MAX_PATH + 1] = "";
-    if (root != NULL) {
-        const char *slash = strrchr(root_realpath, '/');
-        strcpy(root_name, slash != NULL ? slash + 1 : root_realpath);
-    }
     if (fs == &fakefs)
         strcat(root_realpath, "/data");
-    int err = mount_root(fs, root_realpath, root_name[0] != '\0' ? root_name : NULL);
+    int err = mount_root(fs, root_realpath);
     if (err < 0)
         return err;
 
