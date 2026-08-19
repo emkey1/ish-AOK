@@ -10836,12 +10836,25 @@ static inline bool gen_pop_reg_fused(struct gen_state *state, enum arg thing,
 // Applied ONLY to the seven store-back ALU ops. CMP and TEST keep lo() verbatim
 // below -- they have no store to save, and their op word must stay a literal entry
 // of sub_gadgets/and_gadgets for gen_try_fuse_jcc to pointer-match.
+#if defined(__aarch64__)
 #define losf(o, src, dst, z) do { \
     extern gadget_t fused_##o##32_imm_gadgets[]; \
     if (!gen_alu_imm_fused(state, fused_##o##32_imm_gadgets, arg_##src, arg_##dst, &modrm, &imm, z)) { \
         los(o, src, dst, z); \
     } \
 } while (0)
+#else
+// The fused reg,imm family is written in jit/gadgets-aarch64/math.S and has no
+// x86_64 counterpart, so on an x86_64 host there is nothing to point at: the
+// reference alone is a link error, which is why no x86_64 host could link this
+// at all. Fall back to the unfused expansion, which is what the runtime knob
+// (/proc/ish/i386_jit_fuse, jit.h) already does when a family is switched off
+// -- so this host takes a path the code supports rather than a new one.
+//
+// Same shape as the eight other `#if defined(__aarch64__)' guards above, which
+// exist for exactly this reason.
+#define losf(o, src, dst, z) los(o, src, dst, z)
+#endif
 
 #define ADD(src, dst,z) losf(add, src, dst, z)
 #define OR(src, dst,z) losf(or, src, dst, z)
