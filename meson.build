@@ -1218,6 +1218,9 @@ if get_option('kernel') == 'ish'
             # AFTER the shim, deliberately: it exists to take back the handful
             # of rewrites zsh cannot live with. See the header for the rule.
             '-include', meson.current_source_dir() / 'deps/zsh-shim/aok_zsh_shim.h',
+            # Same reason bash and smallclue carry it: zsh calls wcwidth, which
+            # glibc puts behind a feature-test macro and Darwin exposes anyway.
+            '-D_GNU_SOURCE',
             '-w',  # vendored code, not ours to police
         ] + zsh_renames
 
