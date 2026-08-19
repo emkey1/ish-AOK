@@ -159,13 +159,86 @@ Separately: `platform/darwin.c`'s `get_uptime()` calls
 `sysctlbyname("kern.boottime")` into a local and never uses it. Dead code -- and
 had it been used it would have reported the DEVICE's boot time, which is worse.
 
-### tmpfs asserts that can abort the whole app
+### tmpfs asserts that can abort the whole app -- FIXED 2026-08-19
 
-`fs/tmp.c` has five more `assert(S_ISREG(inode->stat.mode))` sites (around lines
-206, 451, 475, 1200, 1255, 1287) reachable the way `tmpfs_write`'s was before
-`11edc1843`. An assert there aborts every guest process in the app, not just the
-caller. Now unreachable via mknod, but the principle stands. Mechanical: give
-each an errno appropriate to its caller.
+This entry said the remaining sites were "now unreachable via mknod". That was
+wrong, and the cost of being wrong was high: `11edc1843` mapped only the type-0
+case, so any OTHER invalid `S_IFMT` -- `0x3000`, say -- walked through
+`generic_mknodat`, which rejects only DIR and LNK and gates only BLK and CHR on
+superuser. The result was a tmpfs inode of no type at all, and `read`, `pread`,
+`pwrite` and `ftruncate` each hit an assert and aborted the WHOLE app. Three
+lines of C, no privilege required, on any mounted tmpfs. Reproduced, then fixed:
+
+- `kernel/fs.c` now whitelists the five types Linux's `may_mknod` accepts and
+  returns EINVAL otherwise, so such an inode cannot be created in the first
+  place;
+- the five reachable asserts in `fs/tmp.c` became errno returns anyway, because
+  an assert reachable from a syscall argument is the wrong tool.
+
+The one assert left (`tmpfs_init_regular_file`) is a creation-time invariant its
+only caller satisfies by construction.
+
+### Lingering `ish` CLI processes: a shutdown deadlock in `fflush(NULL)`
+
+Noticed 2026-08-19 while checking whether background work had wedged. Several
+`ish` processes were alive long after their command should have finished --
+24, 11 and 7 minutes -- at 0% CPU, and they never exited. Once wedged, they stay
+wedged.
+
+**Scope: the CLI only, not the app.** `cli_halt` runs through `halt_hook`, and
+`halt_hook = cli_halt` is set in exactly one place, `main.c:337`, which is the
+`ish` command-line binary. The app leaves the hook NULL and takes
+`halt_system_locked()` instead. So this costs us test-rig processes; it is not
+something a device user meets. Not new either: `22be47367` (2026-06-15) is an
+ancestor of `builds/iSH-AOK_548`.
+
+**Where it is stuck.** `sample(1)` on a wedged process gives the whole answer:
+
+```
+main -> task_run_current -> handle_interrupt -> handle_arm64_syscall_interrupt
+     -> handle_syscall_interrupt -> sys_exit_group (exit.c:573)
+     -> do_exit_group (exit.c:540) -> do_exit (exit.c:389)
+     -> cli_halt (main.c:150)
+     -> _pthread_mutex_firstfit_lock_slow -> __psynch_mutexwait
+```
+
+`main.c:150` is `fflush(NULL)`. Only two threads are left: this one, and the
+`netlink_link_watch_thread` asleep in its 5-second `nanosleep` (`fs/sock.c:1212`),
+which is not a party to it.
+
+**The likely mechanism, and why it implicates native programs.** `fflush(NULL)`
+flushes EVERY open host stream and must take each `FILE`'s lock to do it. Native
+programs are host code writing through the host's own stdio, so they take those
+same locks -- unlike an emulated guest binary, whose writes are guest syscalls
+and touch no host `FILE`. A Darwin mutex is not released when its owner thread
+goes away, so a native program's thread that ends while holding a stream lock
+leaves `fflush(NULL)` waiting for a thread that no longer exists. All three
+wedged processes had run a native program (a `smallclue` applet reached through
+a symlink, native bash, native zsh), each with a backgrounded child, an output
+pipe closed early by `head`, or both.
+
+**It is a race, and it wants contention.** The same command hung once and then
+0 times in 8 controlled runs at the same load average; the machine was running
+three parallel agent workflows when the three survivors wedged. The emulated
+equivalent has never hung:
+
+```sh
+# hangs occasionally; kill it yourself, it will not return
+./build/ish -f build/alpine-arm64-test /bin/sh -c \
+  'ln -sf /AOK/native/smallclue /usr/local/bin/sleepy
+   (/usr/local/bin/sleepy sleep 3 &); sleep 1; ps -o pid,comm | head -10'
+
+# the oracle: same shape, emulated, has never hung
+./build/ish -f build/alpine-arm64-test /bin/sh -c '(sleep 3 &); sleep 1; ps -o pid,comm | head -10'
+```
+
+**Next step.** Confirm the lock owner with `lldb` (`thread list`, then the
+`FILE`'s `_lock` owner) rather than trusting the reasoning above -- the
+mechanism is inferred from the stack and the native-program correlation, not yet
+observed directly. The fix is then likely to be that `cli_halt` should not
+`fflush(NULL)` at all: it wants the streams AOK itself owns, `stdout` and
+`stderr`, not every stream any native program ever opened. Flushing those two by
+name cannot block on a thread that has gone.
 
 ### btop shows nothing in its disk, net and io sections
 
