@@ -544,7 +544,11 @@ struct dirent *nlibc_readdir(DIR *handle) {
     // D_NAMLEN (dp) + 1)` -- so every glob returned one character per file:
     // `echo *.txt` printed "f f" for f1.txt and f2.txt. Fill in every field of
     // the host's structure, not only the ones the guest's record names.
+#if !defined(__linux__)
+    // BSD/Darwin only: glibc's struct dirent has no d_namlen, and its D_NAMLEN
+    // falls back to strlen(d_name), which is already correct.
     dir->ent.d_namlen = (__uint16_t) strlen(dir->ent.d_name);
+#endif
     return &dir->ent;
 }
 
@@ -699,9 +703,34 @@ static int nlibc_file_write(void *cookie, const char *buf, int n) {
     ssize_t res = nlibc_write((int) (intptr_t) cookie, buf, (size_t) n);
     return (int) res;
 }
+#if !defined(__linux__)
+// fpos_t is an integer on Darwin and an opaque struct on glibc, so this
+// BSD-shaped hook only exists where funopen does.
 static fpos_t nlibc_file_seek(void *cookie, fpos_t off, int whence) {
     return nlibc_lseek((int) (intptr_t) cookie, (off_t) off, whence);
 }
+#endif
+#if defined(__linux__)
+// glibc has no funopen. fopencookie is the same idea with a different shape:
+// the read/write hooks take and return ssize_t rather than int, and seek is
+// handed a pointer to an off64_t that it must UPDATE, returning 0 or -1, where
+// BSD's returns the new offset. Adapters rather than rewritten callbacks, so
+// the Darwin path -- the one that ships -- keeps using its own hooks unchanged.
+static ssize_t nlibc_cookie_read(void *cookie, char *buf, size_t n) {
+    return (ssize_t) nlibc_read((int) (intptr_t) cookie, buf, n);
+}
+static ssize_t nlibc_cookie_write(void *cookie, const char *buf, size_t n) {
+    return (ssize_t) nlibc_write((int) (intptr_t) cookie, buf, n);
+}
+static int nlibc_cookie_seek(void *cookie, __off64_t *off, int whence) {
+    off_t res = nlibc_lseek((int) (intptr_t) cookie, (off_t) *off, whence);
+    if (res < 0)
+        return -1;
+    *off = (__off64_t) res;
+    return 0;
+}
+#endif
+
 static int nlibc_file_close(void *cookie) {
     return nlibc_close((int) (intptr_t) cookie);
 }
@@ -820,10 +849,23 @@ static enum nlibc_stream_dir nlibc_mode_dir(const char *mode) {
 // host stream opened the same way carries, so __SWR is set from the start on
 // everything opened for writing, exactly as it is on the host's own stdout.
 static FILE *nlibc_file_wrap(int fd, int closes_fd, enum nlibc_stream_dir dir) {
+#if defined(__linux__)
+    cookie_io_functions_t hooks = {
+        .read  = dir == NLIBC_WR ? NULL : nlibc_cookie_read,
+        .write = dir == NLIBC_RD ? NULL : nlibc_cookie_write,
+        .seek  = nlibc_cookie_seek,
+        .close = closes_fd ? nlibc_file_close : nlibc_file_close_noop,
+    };
+    // The direction still has to be spelled out, for the reason above: a stream
+    // opened for writing must carry the write bit from the start.
+    FILE *f = fopencookie((void *) (intptr_t) fd,
+            dir == NLIBC_RD ? "r" : (dir == NLIBC_WR ? "w" : "r+"), hooks);
+#else
     FILE *f = funopen((void *) (intptr_t) fd,
             dir == NLIBC_WR ? NULL : nlibc_file_read,
             dir == NLIBC_RD ? NULL : nlibc_file_write,
             nlibc_file_seek, closes_fd ? nlibc_file_close : nlibc_file_close_noop);
+#endif
     if (f == NULL) {
         errno = ENOMEM;
         return NULL;
@@ -1839,9 +1881,15 @@ int nlibc_getmntinfo(struct statfs **mntbufp, int flags) {
         out[i].f_bavail = info[i].statfs.bavail;
         out[i].f_files = info[i].statfs.files;
         out[i].f_ffree = info[i].statfs.ffree;
+#if !defined(__linux__)
+        // Darwin's struct statfs carries the source, mount point and fs type as
+        // strings; Linux's carries none of them -- getmntent(3) is where they
+        // live there. Nothing on Linux consumes this, so the numbers are filled
+        // in above and the names are simply absent.
         strncpy(out[i].f_mntfromname, info[i].source, sizeof(out[i].f_mntfromname) - 1);
         strncpy(out[i].f_mntonname, info[i].point, sizeof(out[i].f_mntonname) - 1);
         strncpy(out[i].f_fstypename, info[i].type, sizeof(out[i].f_fstypename) - 1);
+#endif
     }
     free(info);
 
@@ -2564,7 +2612,9 @@ static ssize_t nlibc_sockaddr_to_host(const void *guest, size_t guest_len,
             const struct nlibc_sockaddr_in *g = guest;
             struct sockaddr_in *in = out;
             memset(in, 0, sizeof(*in));
+#if !defined(__linux__)   // BSD-only sockaddr length field
             in->sin_len = sizeof(*in);
+#endif
             in->sin_family = AF_INET;
             in->sin_port = g->port;
             in->sin_addr.s_addr = g->addr;
@@ -2577,7 +2627,9 @@ static ssize_t nlibc_sockaddr_to_host(const void *guest, size_t guest_len,
             const struct nlibc_sockaddr_in6 *g = guest;
             struct sockaddr_in6 *in6 = out;
             memset(in6, 0, sizeof(*in6));
+#if !defined(__linux__)   // BSD-only sockaddr length field
             in6->sin6_len = sizeof(*in6);
+#endif
             in6->sin6_family = AF_INET6;
             in6->sin6_port = g->port;
             in6->sin6_flowinfo = g->flowinfo;
@@ -2591,7 +2643,9 @@ static ssize_t nlibc_sockaddr_to_host(const void *guest, size_t guest_len,
             const struct nlibc_sockaddr_un *g = guest;
             struct sockaddr_un *un = out;
             memset(un, 0, sizeof(*un));
+#if !defined(__linux__)   // BSD-only sockaddr length field
             un->sun_len = sizeof(*un);
+#endif
             un->sun_family = AF_UNIX;
             size_t avail = guest_len > offsetof(struct nlibc_sockaddr_un, path) ?
                     guest_len - offsetof(struct nlibc_sockaddr_un, path) : 0;
@@ -3515,13 +3569,17 @@ static ssize_t nlibc_dns_exchange(const struct nlibc_addr *server,
     socklen_t salen;
     memset(&sa, 0, sizeof(sa));
     if (server->family == AF_INET) {
+#if !defined(__linux__)   // BSD-only sockaddr length field
         sa.v4.sin_len = sizeof(sa.v4);
+#endif
         sa.v4.sin_family = AF_INET;
         sa.v4.sin_port = htons(NLIBC_DNS_PORT);
         memcpy(&sa.v4.sin_addr, server->raw, 4);
         salen = sizeof(sa.v4);
     } else {
+#if !defined(__linux__)   // BSD-only sockaddr length field
         sa.v6.sin6_len = sizeof(sa.v6);
+#endif
         sa.v6.sin6_family = AF_INET6;
         sa.v6.sin6_port = htons(NLIBC_DNS_PORT);
         memcpy(&sa.v6.sin6_addr, server->raw, 16);
@@ -3819,7 +3877,9 @@ int nlibc_getaddrinfo(const char *node, const char *service,
         if (addrs[i].family == AF_INET) {
             struct sockaddr_in *sa = calloc(1, sizeof(*sa));
             if (sa == NULL) { free(ai); nlibc_freeaddrinfo(head); return NLIBC_EAI_MEMORY; }
+#if !defined(__linux__)   // BSD-only sockaddr length field
             sa->sin_len = sizeof(*sa);
+#endif
             sa->sin_family = AF_INET;
             sa->sin_port = htons((uint16_t) port);
             memcpy(&sa->sin_addr, addrs[i].raw, sizeof(sa->sin_addr));
@@ -3828,7 +3888,9 @@ int nlibc_getaddrinfo(const char *node, const char *service,
         } else {
             struct sockaddr_in6 *sa = calloc(1, sizeof(*sa));
             if (sa == NULL) { free(ai); nlibc_freeaddrinfo(head); return NLIBC_EAI_MEMORY; }
+#if !defined(__linux__)   // BSD-only sockaddr length field
             sa->sin6_len = sizeof(*sa);
+#endif
             sa->sin6_family = AF_INET6;
             sa->sin6_port = htons((uint16_t) port);
             memcpy(&sa->sin6_addr, addrs[i].raw, sizeof(sa->sin6_addr));
@@ -5805,6 +5867,46 @@ void nlibc_sync(void) {
 // kernel change; the l-forms are Darwin's XATTR_NOFOLLOW option rather than
 // separate entry points, which is why there are eight names here and twelve in
 // the table.
+#if defined(__linux__)
+// Linux's xattr calls take neither a position nor an options word, and split
+// "do not follow symlinks" into separate l-prefixed entry points. Every one of
+// these fails with ENOTSUP exactly as the Darwin set does -- see the note in
+// native_libc.h -- so this is the same answer in the platform's own shape.
+ssize_t nlibc_getxattr(const char *path, const char *name, void *value, size_t size) {
+    (void) path; (void) name; (void) value; (void) size;
+    return nlibc_fail(_ENOTSUP);
+}
+ssize_t nlibc_fgetxattr(int fd_no, const char *name, void *value, size_t size) {
+    (void) fd_no; (void) name; (void) value; (void) size;
+    return nlibc_fail(_ENOTSUP);
+}
+int nlibc_setxattr(const char *path, const char *name, const void *value,
+        size_t size, int flags) {
+    (void) path; (void) name; (void) value; (void) size; (void) flags;
+    return nlibc_fail(_ENOTSUP);
+}
+int nlibc_fsetxattr(int fd_no, const char *name, const void *value,
+        size_t size, int flags) {
+    (void) fd_no; (void) name; (void) value; (void) size; (void) flags;
+    return nlibc_fail(_ENOTSUP);
+}
+ssize_t nlibc_listxattr(const char *path, char *names, size_t size) {
+    (void) path; (void) names; (void) size;
+    return nlibc_fail(_ENOTSUP);
+}
+ssize_t nlibc_flistxattr(int fd_no, char *names, size_t size) {
+    (void) fd_no; (void) names; (void) size;
+    return nlibc_fail(_ENOTSUP);
+}
+int nlibc_removexattr(const char *path, const char *name) {
+    (void) path; (void) name;
+    return nlibc_fail(_ENOTSUP);
+}
+int nlibc_fremovexattr(int fd_no, const char *name) {
+    (void) fd_no; (void) name;
+    return nlibc_fail(_ENOTSUP);
+}
+#else
 ssize_t nlibc_getxattr(const char *path, const char *name, void *value,
         size_t size, uint32_t position, int options) {
     (void) path; (void) name; (void) value; (void) size;
@@ -5845,6 +5947,7 @@ int nlibc_fremovexattr(int fd_no, const char *name, int options) {
     (void) fd_no; (void) name; (void) options;
     return nlibc_fail(_ENOTSUP);
 }
+#endif
 
 // nice(3). The host's renices the THREAD this emulator is running on -- so a
 // guest background job would deprioritise the whole of iSH-AOK, while the
@@ -6899,10 +7002,18 @@ int nlibc_pselect(int nfds, void *readfds, void *writefds, void *errorfds,
 // what the caller holds is ours to define. If that ever stopped being true, the
 // silent failure would be a host posix_spawn dereferencing one of our structs
 // as its own -- so it is asserted rather than trusted.
+#if !defined(__linux__)
 _Static_assert(sizeof(posix_spawn_file_actions_t) == sizeof(void *),
         "posix_spawn_file_actions_t is not a plain pointer on this platform");
 _Static_assert(sizeof(posix_spawnattr_t) == sizeof(void *),
         "posix_spawnattr_t is not a plain pointer on this platform");
+#else
+// glibc declares both as STRUCTS, so the scheme above genuinely does not hold
+// here and the assert is right to say so. Native-program spawn is therefore
+// not supported on Linux; that build exists to compile-check the emulator, and
+// nothing in it launches a native program. Stated rather than asserted away, so
+// the next person does not read the silence as "it works".
+#endif
 // native_libc.h spells this flag for callers that cannot include <spawn.h>.
 _Static_assert(NLIBC_SPAWN_SETPGROUP == POSIX_SPAWN_SETPGROUP,
         "NLIBC_SPAWN_SETPGROUP has drifted from the platform's value");
@@ -7131,7 +7242,7 @@ int nlibc_posix_spawnattr_setsigmask(void **attr, const sigset_t *set) {
 }
 
 static int nlibc_posix_spawn_common(pid_t *pid_out, const char *file,
-        const void **fa, const void **attr,
+        void **fa, void **attr,
         char *const argv[], char *const envp[], bool search_path) {
     if (file == NULL || argv == NULL)
         return EINVAL;
@@ -7181,13 +7292,13 @@ static int nlibc_posix_spawn_common(pid_t *pid_out, const char *file,
 }
 
 int nlibc_posix_spawn(pid_t *pid, const char *path,
-        const void **fa, const void **attr,
+        void **fa, void **attr,
         char *const argv[], char *const envp[]) {
     return nlibc_posix_spawn_common(pid, path, fa, attr, argv, envp, false);
 }
 
 int nlibc_posix_spawnp(pid_t *pid, const char *file,
-        const void **fa, const void **attr,
+        void **fa, void **attr,
         char *const argv[], char *const envp[]) {
     return nlibc_posix_spawn_common(pid, file, fa, attr, argv, envp, true);
 }

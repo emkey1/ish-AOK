@@ -72,6 +72,12 @@
  * is why this never mattered here. */
 #include <sys/file.h>
 #include <sys/mount.h>
+#if defined(__linux__)
+/* struct statfs is declared by <sys/mount.h> on Darwin and by <sys/vfs.h> on
+ * glibc, where <sys/mount.h> gives only the mount(2) flags. Without this the
+ * type is incomplete everywhere nlibc_statfs touches it. */
+#include <sys/vfs.h>
+#endif
 #include <sys/select.h>
 #include <sys/time.h>
 /* Not on Linux: glibc dropped <sys/sysctl.h> in 2.32 and musl never had it.
@@ -482,6 +488,23 @@ int nlibc_syncfs(int fd);
  * and the DEVICE's filesystem. Neither number reaches the generated header;
  * the .c says why for each. */
 void nlibc_sync(void);
+/* Darwin's xattr calls take a position and an options word; Linux's take
+ * neither, and split "do not follow symlinks" into separate l-prefixed calls.
+ * Every one of these is an ENOTSUP stub -- see the note above -- so only the
+ * SHAPE has to match the platform, or the `#define getxattr nlibc_getxattr'
+ * below turns glibc's own declaration into a conflicting one. */
+#if defined(__linux__)
+ssize_t nlibc_getxattr(const char *path, const char *name, void *value, size_t size);
+ssize_t nlibc_fgetxattr(int fd, const char *name, void *value, size_t size);
+int nlibc_setxattr(const char *path, const char *name, const void *value,
+        size_t size, int flags);
+int nlibc_fsetxattr(int fd, const char *name, const void *value,
+        size_t size, int flags);
+ssize_t nlibc_listxattr(const char *path, char *names, size_t size);
+ssize_t nlibc_flistxattr(int fd, char *names, size_t size);
+int nlibc_removexattr(const char *path, const char *name);
+int nlibc_fremovexattr(int fd, const char *name);
+#else
 ssize_t nlibc_getxattr(const char *path, const char *name, void *value,
         size_t size, uint32_t position, int options);
 ssize_t nlibc_fgetxattr(int fd, const char *name, void *value,
@@ -494,6 +517,7 @@ ssize_t nlibc_listxattr(const char *path, char *names, size_t size, int options)
 ssize_t nlibc_flistxattr(int fd, char *names, size_t size, int options);
 int nlibc_removexattr(const char *path, const char *name, int options);
 int nlibc_fremovexattr(int fd, const char *name, int options);
+#endif
 /* nice(3): the host's renices the thread the EMULATOR runs on. */
 int nlibc_nice(int incr);
 pid_t nlibc_gettid(void);
@@ -602,10 +626,10 @@ int nlibc_posix_spawnattr_getpgroup(void **attr, pid_t *out);
 int nlibc_posix_spawnattr_setsigdefault(void **attr, const sigset_t *set);
 int nlibc_posix_spawnattr_setsigmask(void **attr, const sigset_t *set);
 int nlibc_posix_spawn(pid_t *pid, const char *path,
-        const void **fa, const void **attr,
+        void **fa, void **attr,
         char *const argv[], char *const envp[]);
 int nlibc_posix_spawnp(pid_t *pid, const char *file,
-        const void **fa, const void **attr,
+        void **fa, void **attr,
         char *const argv[], char *const envp[]);
 
 /* Logging. The device's log is not the guest's: openlog/syslog land in os_log
