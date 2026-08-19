@@ -136,9 +136,11 @@ using OpenSSL's own implementation and works normally.
 
 ## Which guests
 
-Only **arm64** and **riscv64**. On i386 and amd64 guests the syscall raises
-SIGSYS by design and the installer refuses to run: those guests already execute
-these ciphers at reasonable speed, so there is nothing to win.
+Only **arm64** and **riscv64** — as a matter of policy, not capability. The
+accelerator syscall is wired for every guest ABI, so a provider probing for it
+on i386 or amd64 now gets a clean refusal rather than `SIGSYS`; the installer
+still declines to run there, because those guests already execute these ciphers
+at reasonable speed and there is nothing to win.
 
 ## It is safe to leave installed
 

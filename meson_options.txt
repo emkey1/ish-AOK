@@ -52,4 +52,4 @@ option('native_bash', type: 'feature', value: 'auto',
 # deps/zsh IS a submodule now, carrying a configured tree, so this is plainly
 # `enabled' rather than `auto'.
 option('native_zsh', type: 'feature', value: 'enabled',
-       description: 'Compile zsh in as a native program (experimental: ZLE works, fork does not yet)')
+       description: 'Compile zsh in as a native program (on by default; disable to leave zsh out)')

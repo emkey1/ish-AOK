@@ -1,4 +1,4 @@
-# /AOK/persist: the one directory that survives everything
+# /AOK/persist: a host directory that survives everything
 
 `/AOK/persist` is a real, writable, host-backed directory (not an emulated
 SQLite filesystem) living in the app's shared App Group container. Unlike
@@ -15,7 +15,11 @@ every root filesystem you install, it is:
   read quickly (audio playback, the LLM chat log, etc.).
 
 If you want a place to keep something that should outlive "delete this
-root and reinstall a fresh one," `/AOK/persist` is that place.
+root and reinstall a fresh one," `/AOK/persist` is usually that place — but it
+is host-backed, so it flattens Linux ownership and cannot hold device nodes.
+For a cross-root tree that needs real filesystem semantics (uid/gid, modes,
+device nodes, hardlinks), use `/AOK/fakefs` instead; it survives exactly the
+same things. See [00-overview.md](00-overview.md) for where both sit.
 
 ## What already lives there
 

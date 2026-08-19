@@ -12,13 +12,20 @@ them. That refusal happens at the *host* level, underneath the emulated
 kernel, so there is nothing the guest's own root account can do about it —
 being `root` inside the guest doesn't make the app privileged outside it.
 
-When a guest daemon binds a privileged port on a wildcard address (`0.0.0.0`,
-or `::`), iSH doesn't fail the call. It quietly rebinds the socket to a
-loopback address on an unprivileged port and reports success. The daemon
-starts normally, `netstat` shows it listening on `0.0.0.0:22`, and nothing
-looks wrong.
+When a guest daemon binds a privileged port on the IPv4 wildcard address
+(`0.0.0.0`), iSH-AOK doesn't fail the call. It quietly rebinds the socket to
+`127.0.0.1` on an ephemeral port and reports success. The daemon starts
+normally, `getsockname` still answers `0.0.0.0:22`, and nothing in the daemon's
+own output looks wrong. `netstat` is the exception: its rows come straight from
+the host socket, so a substituted listener shows there as
+`127.0.0.1:<some high port>`.
 
-But that listener is only reachable through iSH's internal guest-to-guest
+The IPv6 wildcard (`::`) is *not* covered by that fallback — the substitution
+only handles `AF_INET` — so a privileged `::` bind fails for real. A dual-stack
+daemon therefore logs a permission-denied bind failure for its IPv6 half and is
+left holding only the substituted IPv4 listener.
+
+But that listener is only reachable through iSH-AOK's internal guest-to-guest
 loopback NAT. Not from your laptop. Not from another device on the same
 Wi-Fi. Not from anything outside the app.
 
@@ -41,13 +48,17 @@ same pattern: change the listen port in the service's own configuration.
 The kernel logs a warning the moment it substitutes the bind:
 
 ```
-WARNING: 947(sshd) bound 0.0.0.0:22 but iSH can't bind privileged ports as
+WARNING: 947(sshd) bound 0.0.0.0:22 but iSH-AOK can't bind privileged ports as
 non-root -- this socket is loopback-only, NOT reachable from the network.
 Use a port >=1024 for anything meant to accept external connections.
 ```
 
-If a service "starts fine but nothing can connect," check the console or
-log output for that line first. It is the single most common cause.
+If a service "starts fine but nothing can connect," run `dmesg` in the guest and
+look for that line first — the emulated kernel's log goes into the ring buffer
+your distro's own `dmesg` reads, so you do not need a Mac attached. `netstat
+-ltn` is the other quick check: a listener the daemon believes is on
+`0.0.0.0:22` that shows up there as `127.0.0.1:<some high port>` has been
+substituted. It is the single most common cause.
 
 ## What is *not* affected
 

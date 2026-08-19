@@ -42,7 +42,7 @@ Three things worth knowing:
   to the app, not to the shell that asked for them. Ctrl-C, a dropped ssh
   session, or a second invocation of `manage-roots.sh status` all find the same
   job still going.
-- **It needs the app.** The command-line build of iSH has no root manager, and
+- **It needs the app.** The command-line build of iSH-AOK has no root manager, and
   says so rather than pretending: `/proc/ish/roots` reports
   `job state=unavailable` there.
 
@@ -68,19 +68,23 @@ echo op=remove >&3; echo name=Experiment >&3; echo confirm=yes >&3; echo run >&3
 
 ## Installing roots (in-app)
 
-The **Filesystems** screen (reachable from Workspace, or app settings)
-lists three groups:
+The **Filesystems** screen — in app settings, and the same screen as the **Boot
+Images** applet in Workspace — lists four groups:
 
-- **Bundled Filesystems** — shipped inside the app itself (currently arm64
-  Alpine and arm64 Devuan).
-- **Downloadable** — i386/x86_64/riscv64 Alpine and Devuan images, fetched
-  on demand from the project's GitHub release assets into
-  `/AOK/persist/roots` and imported from there.
+- **Installed Filesystems** — the roots you already have, with the one that
+  boots next marked. Swipe to delete one.
 - **Root Cached Filesystems (`/AOK/persist/roots`)** — any root archives
   sitting in that shared, persistent folder, whether they got there via
   automatic download or because you (or the Files app) dropped a
   `.tar.xz`/`.tar.zst`/`.tar.gz`/etc. archive in yourself. Tap one to
-  install it as a new named root; swipe to delete an installed root.
+  install it as a new named root.
+- **Official Distributions** — Alpine 3.23.3 and Devuan 6 (excalibur), one row
+  per distro with the architecture as a sub-choice. The `aarch64` images are
+  bundled in the app; `i386`, `x86_64` and `riscv64` download on demand into
+  `/AOK/persist/roots` and import from there.
+- **Community Distributions** — PSCAL + SmallCLUE (arm64) and Arch Linux
+  (`x86_64` and ARM `aarch64`). Contributed or experimental, without the same
+  support guarantees as the official images.
 
 Root names become the mount "source" string guest tools like `mount` and
 `df` will show, so names are restricted to `[A-Za-z0-9._-]`, can't start
@@ -143,17 +147,18 @@ the other way (running `ktop` *from inside* a chroot).
 
 ## Provisioning scripts: turning a bare rootfs into a full terminal environment
 
-A freshly-imported Alpine or Devuan root is intentionally minimal. Two
-scripts under `/AOK/tools` turn one into a comfortable, "full Linux feel"
-terminal environment in one pass — matched packages, sudo, a themed shell,
-tmux, and services that behave correctly under iSH-AOK's clock model:
+A freshly-imported root is intentionally minimal. Three scripts under
+`/AOK/tools` turn one into a comfortable, "full Linux feel" terminal
+environment in one pass — matched packages, sudo, a themed shell, tmux, and
+services that behave correctly under iSH-AOK's clock model:
 
 ```sh
 sudo sh /AOK/tools/provision-ultimate-alpine.sh
 sudo sh /AOK/tools/provision-ultimate-devuan.sh
+sudo sh /AOK/tools/provision-ultimate-archlinux.sh   # experimental, like the root itself
 ```
 
-Both are idempotent (safe to re-run) and interactively prompt for a
+All three are idempotent (safe to re-run) and interactively prompt for a
 timezone and a target username unless you set `TZ_NAME` / `TARGET_USER`
 (and optionally `NEW_HOSTNAME`, `SUDO_NOPASSWD`) in the environment first.
 Each one:
@@ -175,7 +180,11 @@ Each one:
   than try to step or slew it.
 - Enables and starts the relevant boot services for the distro (OpenRC on
   Alpine: sshd, cronie, chronyd, syslog-ng; sysvinit on Devuan: ssh, cron,
-  chrony, rsyslog).
+  chrony, rsyslog). Arch has no *non-systemd* init — systemd itself runs as
+  init when the app boots that root normally — so the Arch script starts sshd,
+  syslog-ng, chronyd and crond directly in the background, and installs
+  `start-aok-services` as the fallback for when the app drops you into a bare
+  shell instead.
 
 The Devuan script is the apt/dpkg + sysvinit counterpart of the Alpine
 script; a comment block at the top of `provision-ultimate-devuan.sh`

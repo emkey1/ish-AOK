@@ -151,9 +151,9 @@ case "$ARCH" in
     aarch64|arm64|riscv64)
         ;;
     i386|i486|i586|i686|x86_64|amd64)
-        die "the accelerator is not wired for $ARCH guests by design.
-       x86 guests already run these ciphers at reasonable speed, and the
-       accelerator syscall deliberately raises SIGSYS there. Nothing to install."
+        die "the accelerator is not offered for $ARCH guests by design.
+       x86 guests already run these ciphers at reasonable speed, so there is
+       nothing to win here. Nothing to install."
         ;;
     *)
         say "warning: unrecognised guest arch '$ARCH'; continuing, but the"

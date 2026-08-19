@@ -52,7 +52,7 @@ its buffers, not instead of returning.
 
 **SmallCLUE's applets are native.** The full busybox-style toolbox is compiled in
 (`f8152644f`, `622ab23f8`), reachable through a link farm off `PATH`
-(`0c7de3507`, `c36592960`). `tools/native-links.sh` also switches the UID 1000
+(`0c7de3507`, `c36592960`). `/AOK/tools/native-links.sh` also switches the UID 1000
 login shell (`34f066e2d`).
 
 **vi is a real editor.** Nextvi is compiled in rather than stubbed (`478398189`),

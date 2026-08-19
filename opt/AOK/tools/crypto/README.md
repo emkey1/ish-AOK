@@ -28,8 +28,9 @@ sudo sh install-crypto-accel.sh --dry-run
 sudo sh install-crypto-accel.sh --uninstall
 ```
 
-`build-provider.sh` is the older minimal path: it builds the module and prints
-a config snippet for you to merge by hand. Prefer the installer, which edits
+`build-provider.sh` in the source tree (`opt/AOK/tools/crypto/`, not shipped in
+/AOK) is the older minimal path: it builds the module and prints a config
+snippet for you to merge by hand. Prefer the installer, which edits
 the existing config sections in place and validates the result before it takes
 effect.
 

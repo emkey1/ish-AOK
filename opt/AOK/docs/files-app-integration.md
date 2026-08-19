@@ -1,8 +1,9 @@
 # Browsing your guest filesystem from the iOS Files app
 
-iSH-AOK ships a File Provider extension (a separate iOS extension target,
-sometimes labeled "iSH Files") that exposes your installed root
-filesystems through Apple's Files framework. Once set up, your guest files
+iSH-AOK ships a File Provider extension (a separate iOS extension target) that
+exposes your installed root filesystems through Apple's Files framework. In the
+Files app it appears as the location **iSH** — the extension's display name has
+not been renamed to match the fork. Once set up, your guest files
 show up as a regular location in the iOS **Files** app, and in any other
 app's document picker — no `scp`, no manual export step.
 
@@ -21,6 +22,10 @@ from any app's "Open"/"Save" document picker, exactly like iCloud Drive or
 a third-party cloud provider.
 
 ## What you can do with it
+
+The location's top level is one folder per installed root, plus a **Persist**
+folder for the shared `/AOK/persist` directory every root sees (see
+[persist.md](persist.md)).
 
 - Browse the contents of your installed root filesystem(s) directly.
 - Open guest files in other apps (a text editor, an image viewer, a

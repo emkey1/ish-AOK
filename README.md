@@ -31,8 +31,11 @@ each gadget's body cheaper, not free.
 | `arm64` | supported, JIT |
 | `riscv64` | supported, JIT |
 
-The per-guest regression suites pass on all four. Note that the interpreters are
-legacy and are being retired: new work should target the JIT.
+The per-guest regression suites pass on all four on device. One known exception
+on the CLI build: `fakefs_type_race` crashes deterministically on an i386 guest
+(forward-edge block chaining; workaround `ISH_I386_NOCHAIN=1` — see
+[docs/TODO.md](docs/TODO.md)). Note that the interpreters are legacy and are
+being retired: new work should target the JIT.
 
 Relevant files:
 
@@ -68,16 +71,21 @@ All three are **off by default** and opt-in:
 
 | feature | CLI | what it does |
 |---|---|---|
-| HLE | `ISH_HLE=1` | replaces hot libc routines (`memcpy`, `strlen`, `memcmp`, ...) with native code |
+| HLE | `ISH_HLE=1` | replaces hot libc routines (`memcpy`, `strlen`, `memcmp`, ...) with native code — **arm64 and riscv64 guests only** |
 | Crypto | `ISH_CRYPTO_ACCEL=1` | AES-GCM and ChaCha20-Poly1305 offload |
 | Pixman | `ISH_PIX_ACCEL=1` | pixman composite offload |
 
-HLE matters most. On a loop dominated by the routines it replaces, it takes the
-guest from roughly 250x slower than native to roughly 1.4x, because the work
-happens inside one native call rather than one dispatch per guest instruction.
-It is a pure fast path: an unrecognized libc simply never matches and falls
-through to ordinary translation. `ISH_HLE_STATS=1` prints per-function call
-counts.
+HLE matters most, and only for the arm64 and riscv64 guests — `jit/jit.c` gates
+it on those two, so an i386 or amd64 guest never takes the path and `ISH_HLE=1`
+silently does nothing there. Measured against the same build with it off, on a
+memcpy/memset/memcmp/strlen loop: 1.23x at 256 B, 3.16x at 4 KB, 7.17x at 64 KB,
+6.68x at 1 MB
+([docs/performance-optimizations-2026-07.md](docs/performance-optimizations-2026-07.md)).
+The work happens inside one native call rather than one dispatch per guest
+instruction, so it helps data-movement-heavy code and is neutral where a
+program's own arithmetic dominates. It is a pure fast path: an unrecognized libc
+simply never matches and falls through to ordinary translation.
+`ISH_HLE_STATS=1` prints per-function call counts.
 
 ## Repository Layout
 
@@ -183,9 +191,12 @@ Create a filesystem from a rootfs tarball:
 
 ## Native bash and licensing
 
-bash is compiled into the app as a native program, which makes the shell
-roughly 16x faster than the emulated one. It also puts GPLv3 code in the
-binary: bash itself, its bundled readline, and GNU termcap.
+bash is compiled into the app as a native program. The win is interpretation,
+not forking: an arithmetic loop runs roughly 16x faster than under the emulated
+shell, while subshells and command substitutions land near parity, because a
+native program cannot `fork` and re-launches itself instead. Numbers and method
+are in [docs/bash_native_plan.md](docs/bash_native_plan.md). It also puts GPLv3
+code in the binary: bash itself, its bundled readline, and GNU termcap.
 
 That matters for App Store distribution. iSH-AOK is GPLv3 too, but
 [LICENSE.IOS](LICENSE.IOS) is a promise from *this project's* copyright holders

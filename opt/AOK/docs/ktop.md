@@ -20,23 +20,20 @@ regression test `taskstats_genl.c` if you're curious about that one).
 
 ## Building and running it
 
-On aarch64 you don't need to build anything — `prebuilt/ktop-aarch64-musl`
-(static, works everywhere) and `prebuilt/ktop-aarch64-glibc` (dynamic, for
-glibc-based roots like Devuan/Debian) ship ready to run and are rebuilt by CI
-whenever `ktop.c` changes:
-
-```sh
-cp /AOK/tools/ktop/prebuilt/ktop-aarch64-musl /usr/local/bin/ktop
-```
-
-For other architectures (x86_64, x86, riscv64), `/AOK` is a read-only mount,
-so `ktop` can't be built in place — copy its source out first. The bundled
-`build.sh` does this for you:
+`/AOK` is a read-only mount, so `ktop` can't be built in place — copy its source
+out first. The bundled `build.sh` does that for you, on every guest architecture
+(arm64, x86_64, x86, riscv64):
 
 ```sh
 sh /AOK/tools/ktop/build.sh              # build only -> /tmp/ktop-build/ktop
 sh /AOK/tools/ktop/build.sh install      # also installs to /usr/local/bin/ktop
 ```
+
+Prebuilt aarch64 binaries (`ktop-aarch64-musl`, static, and `ktop-aarch64-glibc`,
+dynamic, for glibc roots like Devuan/Debian) live in the iSH-AOK source
+repository under `opt/AOK/tools/ktop/prebuilt/`, and CI rebuilds them whenever
+`ktop.c` changes — but they are **not** embedded in the app, so there is no
+`/AOK/tools/ktop/prebuilt` on the device. Build from source here, on aarch64 too.
 
 Or by hand: copy `ktop.c` and `Makefile` to a writable directory and run
 `make` (`make install PREFIX=/usr/local` to install; `make clean` to
@@ -57,13 +54,21 @@ scrollable process table with columns PID, USER, PR, NI, VIRT, RES, S
 (state), **ARCH**, %CPU, %MEM, TIME+, and COMMAND.
 
 Batch mode (`-bn1` and friends) prints the same columns as a plain table,
-suitable for piping or logging.
+suitable for piping or logging — that is the interactive column set without `S`
+and `TIME+`.
+
+A command too wide for the terminal is cut and marked with a trailing `+`, the
+way `top` does, so a shortened name is never mistaken for the real one, and the
+cut always falls on a UTF-8 character boundary rather than mid-character. In
+batch mode this applies only when stdout is a terminal: redirect or pipe
+`ktop -bn1` and the full command is recorded uncut.
 
 ### Interactive keys
 
 | Key | Action |
 |---|---|
 | Up / Down / PgUp / PgDn / Home / End | move cursor / scroll |
+| `1` | collapse the per-CPU meter bars into a single average-load meter, and back |
 | `P` | sort by %CPU |
 | `M` | sort by %MEM |
 | `T` | sort by TIME+ |

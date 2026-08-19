@@ -137,7 +137,7 @@ x86/amd64_regress.c
 x86/amd64_incdec.c
 x86/avx_regress.c
 x86/avx32_smoke.c
-x86/amd64_jit_bench.sh
+x86/amd64_jit_guest_bench.sh
 setup-regressions.sh
 arm64/atomics64.c
 arm64/arm64_regress.c

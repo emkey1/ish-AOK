@@ -100,7 +100,7 @@ Exit criterion: same as phase 0 but on device, with a written perf note.
     - WKWebView loading the vendored noVNC bundle from app resources,
       configured to connect to ws://127.0.0.1:<bridge-port>.
     - Launch flow: applet start triggers a guest session running
-      /AOK/bin/start-wayland.sh (packaged via the existing /AOK docs/tools
+      /AOK/tools/start-wayland.sh (packaged via the existing /AOK docs/tools
       generation), which brings up cage|labwc + wayvnc and exits with a clear
       error to the applet if packages are missing, pointing at the setup script.
     - Lifecycle: applet close tears down the guest session (SIGTERM to the
@@ -127,7 +127,7 @@ Exit criterion: same as phase 0 but on device, with a written perf note.
 
 2.7 Packaging: the guest bits are packages the user installs (setup script), we
     do not bundle a compositor in the rootfs for v1. Ship
-    /AOK/bin/setup-wayland.sh (apt/apk aware: Devuan first, Alpine follow-up).
+    /AOK/tools/setup-wayland.sh (apt/apk aware: Devuan first, Alpine follow-up).
 
 Exit criterion: launch applet -> guest stack starts -> foot visible and
 interactive inside Workspace on the M4 iPad, survives applet close/reopen and

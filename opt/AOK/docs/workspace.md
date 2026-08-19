@@ -14,18 +14,18 @@ doesn't depend on iOS Scenes or Stage Manager multi-window support.
 
 ## What's in the dock
 
-- **Layout Manager / Desktops** — manage and switch between virtual
-  desktops; window arrangements are saved and restored per layout.
-- **Launcher / Quick Actions** — shortcuts to common actions.
-- **Sessions** — list and switch between running terminal sessions.
-- **Browser** — an in-app web browser applet.
-- **Music** — see below.
-- **MotePad** — see below.
-- **LLM Chat** — an OpenAI-compatible/on-device chat assistant; only shown
-  if enabled in Settings. See [llm-chat.md](llm-chat.md).
-- **Themes, Clock, Info, Monitor, Networks, Status, Storage, Filesystems,
-  Settings, Diagnostics** — status/utility applets and the Filesystems
-  screen described in [roots.md](roots.md).
+The dock itself has two tiles: **Terminal** and **Utils**. Long-press either for
+its menu — Terminal lists your sessions, Utils lists every applet, in five
+groups:
+
+- **Workspace** — Layout Manager, Desktops, Launcher, Quick Actions, Browser,
+  Music, MotePad, File Manager, Sessions, Themes, and LLM Chat when it is
+  enabled in Settings (see [llm-chat.md](llm-chat.md)).
+- **Media** — Markdown, Image Viewer, Video Player, and Wayland (see below).
+- **Status** — Clock, Monitor, Networks, Logs.
+- **Storage** — Storage, and Boot Images, which is the Filesystems screen
+  described in [roots.md](roots.md).
+- **Support** — Settings, Diagnostics.
 
 Window arrangements can be bookmarked and saved, so a favorite layout of
 terminals and applets can be recalled later.

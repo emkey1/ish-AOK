@@ -8,11 +8,18 @@ it isn't part of any root, it shows up the same way no matter which
 filesystem you booted or chrooted into, and it can't be deleted or corrupted
 by anything that happens inside a guest root.
 
-Two entries under `/AOK` break the "read-only" rule and are real,
-host-backed directories instead of synthetic ones:
+Three entries under `/AOK` break the "read-only" rule and are real, writable
+mounts instead of synthetic ones:
 
-- `/AOK/persist` — a single writable location that survives root switches,
-  app updates, and reinstalls. See [persist.md](persist.md).
+- `/AOK/persist` — a single writable location, backed by a real host
+  directory, that survives root switches, app updates, and reinstalls. Being
+  host-backed, it flattens Linux ownership and cannot hold device nodes. See
+  [persist.md](persist.md).
+- `/AOK/fakefs` — a second writable location surviving the same things, but
+  backed by a filesystem of the kind an installed root uses, so it keeps full
+  Linux metadata: uid/gid, modes, device nodes and hardlinks. Use it for a
+  cross-root tree that needs real filesystem semantics — a debootstrap'd
+  rootfs, say — which `/AOK/persist` cannot hold.
 - `/AOK/roots` — read-write views of your *other* installed root
   filesystems, used for chrooting between them. See [roots.md](roots.md).
 

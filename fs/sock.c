@@ -4121,7 +4121,7 @@ static int inet_nat_bind_fallback(struct fd *sock, struct sockaddr_in *sin, int 
     // of this warning; ports >=1024 don't hit this path at all, since a
     // non-root process can really bind those on a wildcard address.
     if (wildcard && priv_port) {
-        printk("WARNING: %d(%s) bound 0.0.0.0:%u but iSH can't bind privileged "
+        printk("WARNING: %d(%s) bound 0.0.0.0:%u but iSH-AOK can't bind privileged "
                "ports as non-root -- this socket is loopback-only, NOT reachable "
                "from the network. Use a port >=1024 for anything meant to accept "
                "external connections.\n",

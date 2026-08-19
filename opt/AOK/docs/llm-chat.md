@@ -53,9 +53,13 @@ any OpenAI-compatible endpoint yourself:
 | Groq Llama | Hosted, needs an API key |
 | Gemini Flash | Uses Google's `generateContent` REST API, key passed as a query param |
 | LM Studio | Local server, defaults to `127.0.0.1:1234` |
-| Ollama | Local server, defaults to `127.0.0.1:11434` (this is the overall default if nothing else is configured) |
+| Ollama | Local server, defaults to `127.0.0.1:11434`; `http://localhost:11434/v1` is also the fallback if you blank out the Server URL field |
 | OpenAI | Hosted, needs an API key |
 | Custom | Any OpenAI-compatible chat completions endpoint |
+
+Out of the box the client is configured for **OpenRouter Free**
+(`https://openrouter.ai/api/v1`, model `openrouter/free`), which needs an API
+key; switch the Provider preset to change that.
 
 API keys are sent as an `Authorization: Bearer` header for OpenAI-style
 providers, or as a `?key=` query parameter for Gemini.
@@ -66,11 +70,14 @@ arrive.
 
 ## Shell Tools: letting the model run commands for you
 
-For OpenAI-compatible providers (not available with Gemini), you can grant
-the assistant a `run_shell` tool. When it wants to run something — for
-example, to fetch a web page via `curl` on your behalf — **you're asked to
-confirm each command before it executes.** Command output is capped at
-64 KB and the command is killed if it runs longer than 30 seconds.
+For OpenAI-compatible providers and for Apple Foundation Models — but not for
+Gemini — you can grant the assistant a `run_shell` tool. When it wants to run
+something — for example, to fetch a web page via `curl` on your behalf —
+**you're asked to confirm each command before it executes.** Command output is
+capped (64 KB by default) and the command is killed if it runs too long (30
+seconds by default); a reply also stops after a capped number of tool rounds (20
+by default). All three are adjustable under **Settings → LLM Client** as Command
+Timeout, Output Limit and Tool Call Rounds.
 
 There IS a way to stop being asked. The confirmation sheet offers "Run, don't
 ask again this reply", and a separate "Auto-run all commands this chat?" prompt

@@ -7,9 +7,9 @@ cases=
 
 usage() {
     cat <<'EOF'
-Usage: amd64_jit_bench.sh [options]
+Usage: amd64_jit_guest_bench.sh [options]
 
-Run a small guest-side amd64 JIT benchmark from inside iSH.
+Run a small guest-side amd64 JIT benchmark from inside iSH-AOK.
 
 Options:
   -n N        Run each case N times. Default: 1
@@ -18,9 +18,9 @@ Options:
   -h          Show this help
 
 Examples:
-  sh /AOK/tests/amd64_jit_bench.sh
-  sh /AOK/tests/amd64_jit_bench.sh -n 3
-  sh /AOK/tests/amd64_jit_bench.sh -c 'ssh_v=ssh -V >/dev/null'
+  sh /AOK/tests/x86/amd64_jit_guest_bench.sh
+  sh /AOK/tests/x86/amd64_jit_guest_bench.sh -n 3
+  sh /AOK/tests/x86/amd64_jit_guest_bench.sh -c 'ssh_v=ssh -V >/dev/null'
 EOF
 }
 

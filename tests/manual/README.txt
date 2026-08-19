@@ -12,9 +12,9 @@ Verbose mode:
   sh /AOK/tests/setup-regressions.sh --run -v
 
 Simple amd64 JIT timing benchmark inside the guest:
-  sh /AOK/tests/x86/amd64_jit_bench.sh
+  sh /AOK/tests/x86/amd64_jit_guest_bench.sh
   For short commands, use -n to amplify timing differences, e.g.:
-  sh /AOK/tests/x86/amd64_jit_bench.sh -n 5
+  sh /AOK/tests/x86/amd64_jit_guest_bench.sh -n 5
 
 Host-side amd64 GAS encoding probe:
   tests/manual/x86/amd64_gas_probe.sh -r /path/to/amd64-root-with-binutils
@@ -28,6 +28,7 @@ Layout:
   arm64/               AArch64-only tests. Built on aarch64 guests.
 
 Focused tests (x86/, i386 + x86_64 guests):
+  amd64_regress.c      amd64 cross-page write, exec loader, fcntl race, and cc1 stress
   atomics32.c          Combined atomic probe with single-case and stress checks
   atomic_xadd32.c      lock xaddl coverage
   atomic_cmpxchg32.c   lock cmpxchgl coverage
@@ -84,8 +85,6 @@ Portable focused tests (all guest arches):
   futex_core.c         FUTEX_WAIT/FUTEX_WAKE timeout, wake, and signal coverage
   process_lifecycle.c  fork/exec/vfork/wait and signal inheritance coverage
   pthread_sync.c       mutex/condvar/rwlock/timed wait and pthread_once coverage
-  amd64_regress.c      amd64 cross-page write, exec loader, fcntl race, and cc1 stress
-  amd64_gas_probe.sh   host-side GNU as immediate/register encoding probe
 
 All focused tests accept -v or --verbose. Without it they print only failures
 plus the final PASS/FAIL line for each test.

@@ -51,7 +51,7 @@ device, or across devices to compare hardware.
 ## amd64 JIT translation-mode benchmark
 
 For amd64-specific JIT tuning, the regression suite (`/AOK/tests`) also
-ships `amd64_jit_bench.sh` and `amd64_jit_guest_bench.sh`. The latter
+ships `x86/amd64_jit_guest_bench.sh`. It
 toggles `/proc/ish/amd64_jit` across the available JIT modes and times a
 set of representative guest commands (`true`, `uname -a`, `busybox
 --help`, `apk --help`) in each mode, writing a `summary.tsv` (columns:
