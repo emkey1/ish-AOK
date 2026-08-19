@@ -25,6 +25,10 @@ struct mem_usage {
 struct mem_usage get_mem_usage(void);
 
 struct uptime_info {
+    // Since the GUEST booted (pid 1 created; see kernel/init.c), in 100 Hz
+    // ticks -- the unit /proc/uptime and the per-CPU idle accounting divide
+    // by. sysinfo(2) wants seconds and must divide; it did not, and reported
+    // a 12-second-old guest as "up 20 min".
     uint64_t uptime_ticks;
     uint64_t load_1m, load_5m, load_15m;
 };

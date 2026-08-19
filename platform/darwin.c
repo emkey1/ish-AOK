@@ -97,22 +97,21 @@ CFTimeInterval getSystemUptime(void) {
 }
 
 struct uptime_info get_uptime(void) {
-    struct timeval kern_boottime;
-    size_t size = sizeof(kern_boottime);
-    if (sysctlbyname("kern.boottime", &kern_boottime, &size, NULL, 0) != 0) {
-        printk("ERROR: in sysctlbyname(kern.boottime) call\n");
-    }
     struct timeval now;
     if (gettimeofday(&now, NULL) != 0) {
         printk("ERROR: in gettimeofday() call\n");
     }
-    extern time_t boot_time;  // Consider passing this as an argument
+    // The guest's boot, set where pid 1 is created (kernel/init.c). NOT the
+    // host's kern.boottime, which this used to read into a local and never
+    // use: had it been used it would have reported when the DEVICE last
+    // booted, which is further from the truth than the value it ignored.
+    extern time_t boot_time;
 
     struct {
         uint32_t ldavg[3];
         long scale;
     } vm_loadavg;
-    size = sizeof(vm_loadavg);
+    size_t size = sizeof(vm_loadavg);
     if (sysctlbyname("vm.loadavg", &vm_loadavg, &size, NULL, 0) != 0) {
         printk("ERROR: in sysctlbyname(vm.loadavg) call\n");
     }

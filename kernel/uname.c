@@ -282,7 +282,10 @@ dword_t sys_sysinfo_guest(guest_addr_t info_addr) {
     // that ABI fill and write the wider layout with raw (un-truncated) values.
     if (guest_abi_is_64bit(current->abi)) { // arm64 shares the 64-bit layout
         struct amd64_sys_info info = {0};
-        info.uptime = (sqword_t)uptime.uptime_ticks;
+        // sysinfo(2)'s uptime is in SECONDS; uptime_ticks is 100 Hz. Without
+        // the divide, busybox uptime read a 12-second-old guest as "up 20
+        // min" -- and top, htop and anything else on sysinfo(2) with it.
+        info.uptime = (sqword_t)(uptime.uptime_ticks / 100);
         info.loads[0] = loads[0];
         info.loads[1] = loads[1];
         info.loads[2] = loads[2];
@@ -293,7 +296,7 @@ dword_t sys_sysinfo_guest(guest_addr_t info_addr) {
     }
 
     struct sys_info info = {0};
-    info.uptime = (dword_t)uptime.uptime_ticks;
+    info.uptime = (dword_t)(uptime.uptime_ticks / 100);   // seconds, as above
     info.loads[0] = (dword_t)loads[0];
     info.loads[1] = (dword_t)loads[1];
     info.loads[2] = (dword_t)loads[2];

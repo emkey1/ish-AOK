@@ -47,8 +47,12 @@ struct mem_usage get_mem_usage(void) {
 struct uptime_info get_uptime(void) {
     struct sysinfo info;
     sysinfo(&info);
+    // info.uptime is the HOST's, which is a different machine from the guest
+    // and usually a much older one. Take the guest's boot the same way the
+    // Darwin build does -- set where pid 1 is created, kernel/init.c.
+    extern time_t boot_time;
     struct uptime_info uptime = {
-        .uptime_ticks = info.uptime,
+        .uptime_ticks = (uint64_t) (time(NULL) - boot_time) * 100,
         .load_1m = info.loads[0],
         .load_5m = info.loads[1],
         .load_15m = info.loads[2],
