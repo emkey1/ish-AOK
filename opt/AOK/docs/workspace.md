@@ -53,11 +53,31 @@ An audio player applet with two kinds of sources:
 
 Playlists are saved as JSON under `/AOK/persist/playlists`.
 
-## A note on the Wayland/wlroots plan
+## The Wayland applet
 
-You may come across `wayland_workspace_plan.md` in the project's design
-docs, describing a future headless Wayland compositor (wlroots + wayvnc)
-surfaced through a VNC client in a "Display" applet. That is a forward
-design document for a **not-yet-shipped** feature, distinct from the
-native Workspace described here — don't confuse the two if you see it
-referenced elsewhere.
+The **Wayland** applet is the one window here whose contents are drawn by guest
+programs rather than by UIKit. A wlroots compositor, a terminal and a VNC server
+run as ordinary processes inside your root, and the applet is a native RFB
+client connected to them over localhost. It can also be the window the app opens
+on, rather than the terminal.
+
+It needs those programs installed in the guest first, and two scripts do that:
+
+```sh
+sudo sh /AOK/tools/setup-wayland.sh   # once: labwc, sway, wofi, foot, wayvnc
+sh /AOK/tools/start-wayland.sh        # the applet runs this for you
+```
+
+`labwc` is the default compositor and `foot` the first app; `sway` is installed
+as a `WAYLAND_COMPOSITOR_CMD=sway` alternative. `start-wayland.sh` also honours
+`WAYVNC_PORT` and `ISH_DISPLAY_READY_FILE`.
+
+Two caveats worth knowing before you start. Only **amd64/x86_64** guests have
+been bring-up-tested — the packages exist for the other architectures in Devuan
+and may well work, but nobody has run them. And Devuan (apt) and Arch (pacman)
+install the same stack under the same package names, while Alpine (apk) is a
+documented follow-up rather than a supported path.
+
+You may also come across `wayland_workspace_plan.md` in the project's design
+docs. That is the forward design document this applet came out of; where it and
+the shipped applet disagree, the applet is right.

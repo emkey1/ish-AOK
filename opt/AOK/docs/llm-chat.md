@@ -72,8 +72,16 @@ example, to fetch a web page via `curl` on your behalf — **you're asked to
 confirm each command before it executes.** Command output is capped at
 64 KB and the command is killed if it runs longer than 30 seconds.
 
-Nothing runs without your explicit per-command confirmation; there's no
-"auto-approve everything" mode.
+There IS a way to stop being asked. The confirmation sheet offers "Run, don't
+ask again this reply", and a separate "Auto-run all commands this chat?" prompt
+offers **Allow All**, after which every command for the rest of that chat runs
+without confirmation. Auto-run re-arms when you clear the chat — but the
+*warning* is shown only once ever: once you have acknowledged it, later chats
+enter auto-run without showing it again.
+
+Worth understanding before you use it: content the model fetches — a web page, a
+file — can instruct it to run destructive commands or read private data, and in
+auto-run nothing stops that but the model itself.
 
 ## Persistence
 

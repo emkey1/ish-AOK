@@ -20,7 +20,7 @@ sudo sh /AOK/tools/manage-roots.sh list        # installed, and which boots next
 sudo sh /AOK/tools/manage-roots.sh available   # what you can install
 
 # From the catalog, then make it the root that boots and quit the app
-sudo sh /AOK/tools/manage-roots.sh install alpine3233_arm64 --default --exit-app
+sudo sh /AOK/tools/manage-roots.sh install alpine3233arm64 --default --exit-app
 
 # From an archive already on the device, or from a URL
 sudo sh /AOK/tools/manage-roots.sh install /AOK/persist/roots/mine.tar.gz Mine

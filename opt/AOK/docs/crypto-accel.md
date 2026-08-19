@@ -48,6 +48,21 @@ Long-running programs read `openssl.cnf` when they start, so restart anything
 already running. For ssh that means restarting `sshd` if you want existing
 listeners to accelerate new connections.
 
+**This applies to your distro's ssh, not to the native one.** iSH-AOK's native
+`ssh`, `scp`, `sftp` and `ssh-keygen` -- reached as `/AOK/native/smallclue ssh`,
+or as plain `ssh` once `/AOK/tools/native-links.sh` has run -- are host code
+compiled into the app, and they are built **without OpenSSL**:
+
+```sh
+$ /AOK/native/smallclue ssh -V
+OpenSSH_10.2p1, without OpenSSL
+```
+
+They use their own bundled crypto, so an OpenSSL provider installed in the guest
+cannot reach them and nothing here accelerates them. Everything below describes
+guest programs that link the guest's OpenSSL. See
+[native-programs.md](native-programs.md) for what runs natively and how to tell.
+
 ## Verify
 
 ```sh

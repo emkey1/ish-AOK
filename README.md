@@ -12,7 +12,7 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
   - product name `iSH-AOK`
   - bundle root `app.ish.iSH-AOK`
 - **Four guest architectures**, all JIT: `i386`, `amd64` (x86_64), `arm64` (aarch64), and `riscv64`.
-- Bundled root filesystems in the app build (Alpine 3.23.3 and Devuan 6, each for i386, x86_64 and aarch64), plus additional downloadable images including riscv64.
+- Bundled root filesystems in the app build (Alpine 3.23.3 and Devuan 6, `aarch64` only), plus downloadable images for `i386`, `x86_64` and `riscv64`.
 - File Provider support for exposing guest files through iOS.
 - Optional accelerators: native replacement of hot libc routines, and crypto and pixman offload.
 - Extra diagnostics and operational changes that are specific to this fork.
@@ -230,27 +230,46 @@ Nothing else in the binary is third-party GPL: SmallCLUE is MIT, OpenSSH and
 libarchive are BSD, liblzma is public domain, and `deps/linux` is not compiled
 into this target.
 
-## Native zsh (experimental)
+## Native zsh
 
 zsh is compiled in as a third native program, reachable as `/AOK/native/zsh`,
 and is **on by default** — `-Dnative_zsh=disabled` leaves it out. Unlike bash
 there is no licensing question: zsh's licence is permissive and none of its
 compiled C is GPL.
 
-**It is not yet a usable shell.** ZLE — the line editor — works: prompt, echo,
-editing, history keys, line wrapping, full terminal negotiation. What does not
-work is `fork`:
+It is a working shell. ZLE — the line editor — works: prompt, echo, editing,
+history keys, line wrapping, full terminal negotiation. So does `fork`, which
+was the thing that did not. A native program is a C function on a guest task's
+thread rather than a process, so `fork` cannot copy an address space; zsh
+instead serialises its own state into a script and re-launches itself, the
+design proven first on bash (`deps/zsh/Src/aok_fork.c`, `deps/bash/aok_fork.c`).
+Command substitution, pipelines, subshells and background jobs all go through
+that path:
 
 ```
-% $(echo hi)
-zsh:1: fork failed: function not implemented
+% echo $(echo A); echo B | tr B C; (echo D); sleep 0.1 & wait; echo E
+A
+C
+D
+E
 ```
 
-so no command substitution, no pipelines, no subshells, no background jobs. A
-native program is a C function on a guest task's thread rather than a process,
-so `fork` has to be replaced by the same re-launch design bash uses
-(`deps/bash/aok_fork.c`), and that work has not been done. Until it is, zsh is
-worth poking at and not worth setting as anyone's login shell.
+MULTIOS redirections use a companion native program, `zsh-multio`, because the
+descriptors have to be held by something that is not the shell.
+
+`/AOK/tools/native-links.sh --shell zsh` will make it the login shell.
+
+**Process substitution — `<(...)` and `>(...)` — does not work yet**, since it
+needs `/dev/fd` entries the re-launch has no way to hand across. 119 differential
+cases ship in the guest at `/AOK/tests/native_zsh_fork_state.sh`, with every
+expectation taken from what real zsh prints rather than from what looked
+reasonable; 116 of them pass, and the two that fail are both that gap. Two
+further known gaps are recorded under *Known gaps* in
+[docs/release-notes-since-iSH-AOK_549.md](docs/release-notes-since-iSH-AOK_549.md):
+a pattern is compiled at first use and cached in the parse tree with nothing
+recording the options in force at the time, so a re-launched child can compile
+it under different options than its parent did; and `pipestatus` under a multio
+reports `1 0` where zsh reports `0 0`.
 
 The tree at `deps/zsh` is a submodule of
 [emkey1/zsh](https://github.com/emkey1/zsh) on branch `ish-aok`. It carries
@@ -301,9 +320,11 @@ device.
 
 ## Working with Root Filesystems
 
-Bundled in the app: Alpine 3.23.3 and Devuan 6 (excalibur), each for `i386`,
-`x86_64` and `aarch64`. Further images, including `riscv64` and Arch, are
-downloadable from within the app; the catalogue is
+Bundled in the app: Alpine 3.23.3 and Devuan 6 (excalibur), `aarch64` only. The
+Xcode "Download Root" phase installs those two archives and deletes the i386 and
+x86_64 ones from Resources, so they are the only roots present before any
+download. The same two distros for `i386`, `x86_64` and `riscv64`, plus Arch,
+are downloadable from within the app; the catalogue is
 [deps/rootfs-manifest](deps/rootfs-manifest).
 
 The root-selection UI and metadata handling live in:

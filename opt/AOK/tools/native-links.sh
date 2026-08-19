@@ -9,24 +9,32 @@
 # Use a SYMlink, never a hard link: /AOK is its own filesystem, so `ln` across
 # it fails with EXDEV.
 #
-# Default target is /usr/local/native-bin, which is deliberately NOT on PATH.
+# Default target is /usr/local/native-bin, and this script puts that directory
+# FIRST on PATH, via /etc/profile.d, unless you pass --no-path.
 #
-# Linking into /usr/local/bin was the obvious design and it is wrong: that
-# directory precedes /usr/bin, so every link shadows the distro's command, and
-# SmallCLUE's applets are SMALLER implementations rather than drop-in
-# replacements. Excluding the applets that cannot work at all is not enough,
-# because the incompatibilities are per-flag: with the links installed,
-# PSCAL's harness died on `grep -q`, which SmallCLUE's grep does not support.
-# No audit of the sources finds that -- grep is present and works, just not
-# with that flag.
+# That default was reversed deliberately, and the reasoning it reversed is still
+# worth keeping in view: shadowing means every link takes precedence over the
+# distro's command, and SmallCLUE's applets are SMALLER implementations rather
+# than drop-in replacements. Excluding the applets that cannot work at all is not
+# enough on its own, because the incompatibilities are per-flag -- PSCAL's
+# harness once died on `grep -q`, which SmallCLUE's grep does not support, and no
+# audit of the sources finds that, since grep is present and works, just not with
+# that flag.
 #
-# So the default is a directory you opt into:
+# What changed is the other half: the EXCLUDED list below is now derived from
+# tools/native-applet-audit.py rather than guessed, so an applet that cannot work
+# is not linked in the first place. If something still turns out to be shadowed
+# badly:
 #
-#   PATH=/usr/local/native-bin:$PATH        # this shell only
-#   /usr/local/native-bin/wc -l file        # one command
+#   sh /AOK/tools/native-links.sh --no-path   # link, but leave PATH alone
+#   sh /AOK/tools/native-links.sh --remove    # take the links back out
 #
-# Pass /usr/local/bin explicitly if you want the shadowing, and expect scripts
-# that rely on GNU extensions to break.
+# The links stay usable by full path either way:
+#
+#   /usr/local/native-bin/wc -l file          # one command, no PATH needed
+#
+# Pass /usr/local/bin explicitly if you want the links ahead of the distro's own
+# /usr/local/bin entries too.
 #
 # Usage:
 #   sh /AOK/tools/native-links.sh [options] [directory]
@@ -189,7 +197,7 @@ usage() {
     echo "Link SmallCLUE's applets into a bin directory so they run natively."
     echo
     echo "Usage: sh /AOK/tools/native-links.sh [options] [directory]"
-    echo "       (defaults to /usr/local/native-bin, deliberately not on PATH)"
+    echo "       (defaults to /usr/local/native-bin, put first on PATH unless --no-path)"
     echo
     echo "  --list     show what would happen, change nothing"
     echo "  --remove   remove links pointing at /AOK/native/smallclue"

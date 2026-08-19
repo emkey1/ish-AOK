@@ -30,7 +30,7 @@
 #
 # Examples:
 #   manage-roots.sh available
-#   manage-roots.sh install alpine3233_arm64 --default --exit-app
+#   manage-roots.sh install alpine3233arm64 --default --exit-app
 #   manage-roots.sh install /AOK/persist/roots/mine.tar.gz "My Root"
 #   manage-roots.sh install https://example.org/rootfs.tar.gz Experiment
 #   manage-roots.sh default Devuan6-x86_64 --exit-app
