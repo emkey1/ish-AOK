@@ -19,6 +19,10 @@ foreach channel : log_on + log_off
         add_project_arguments('-DDEBUG_' + channel + '=0', language: 'c')
     endif
 endforeach
+# glibc hides a good deal behind feature-test macros that Darwin exposes anyway
+# -- off64_t and the cookie_io typedefs, RUN_LVL in <utmpx.h>, and more. Darwin
+# ignores the macro, so it is set for everyone rather than gated.
+add_project_arguments('-D_GNU_SOURCE', language: 'c')
 add_project_arguments('-DLOG_HANDLER_' + get_option('log_handler').to_upper() + '=1', language: 'c')
 add_project_arguments('-DENGINE_' + get_option('engine').to_upper() + '=1', language: 'c')
 
@@ -624,6 +628,9 @@ if get_option('kernel') == 'ish'
 
     smallclue_includes = include_directories(
         'deps/smallclue-shim',
+        # Headers that exist on Darwin and not here. Gated so the shipping
+        # build never picks up a stand-in for a header it really has.
+        host_machine.system() in ['darwin', 'ios'] ? [] : 'deps/smallclue-shim/linux',
         'deps/smallclue',
         'deps/smallclue/src',
         'deps/smallclue/common',

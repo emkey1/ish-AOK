@@ -1,5 +1,10 @@
 #include <errno.h>
 #include <limits.h>
+// signal_thread_unwedge_wake_sigs() below uses pthread_sigmask, sigemptyset and
+// SIGUSR1. Darwin pulls <signal.h> in transitively through one of the headers
+// here; glibc does not, so on Linux every one of them was an implicit
+// declaration or an undeclared identifier. Ours to include, not theirs to leak.
+#include <signal.h>
 #include <stdlib.h>
 #include "kernel/task.h"
 #include "util/sync.h"
