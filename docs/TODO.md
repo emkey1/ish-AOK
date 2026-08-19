@@ -74,8 +74,9 @@ this. Start by tracing whether the host ever reports it for the losing runs.
 
 ### `pread_stack_thread_race` hangs, on both x86 arches
 
-**Established.** Hangs 3 of 5 runs on i386 and was seen hanging on x86_64 in the
-same sweep, so it is not arch-specific as first recorded. Before the JIT
+**Established.** Hangs 3 of 5 runs on i386, and hangs on x86_64 too -- it was
+the ONLY failure in the final tier0 sweep (i386 106 passed / 0 failed / 4
+skipped; x86_64 105 / 1 / 4), so it is not arch-specific as first recorded. Before the JIT
 ret_cache fix (`49de7e671`) the same test hung once and took SIGSEGV once in two
 runs, so that fix removed the crash and not the hang. The conductor's timeout is
 180 seconds and the test's own work is about 8, so this is a real hang rather
