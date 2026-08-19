@@ -147,7 +147,21 @@ static noreturn void cli_halt(int status) {
         extern void jit_timing_dump(void); // no-op unless ISH_JIT_TIMING counted compiles
         jit_timing_dump();
     }
-    fflush(NULL);
+    // Deliberately NOT fflush(NULL). That walks every host stream and takes
+    // each one's lock, and the shim gives a native program host FILEs for its
+    // stdout and stderr -- so a guest task killed inside stdio leaves a stream
+    // lock held by a thread that is gone, and Darwin does not release a mutex
+    // when its owner dies. This process then waits here for ever: two were
+    // found at 0% CPU, 5 and 23 hours after their guest had exited, blocked in
+    // _fwalk -> sflush_locked -> flockfile. Flush the same streams, but skip
+    // any whose lock cannot be taken -- see nlibc_flush_all_streams().
+    {
+        extern void nlibc_flush_stream_if_lockable(FILE *stream);
+        extern void nlibc_flush_all_streams(void);
+        nlibc_flush_stream_if_lockable(stdout);
+        nlibc_flush_stream_if_lockable(stderr);
+        nlibc_flush_all_streams();
+    }
     if ((status & 0x7f) == 0)          // WIFEXITED
         _exit((status >> 8) & 0xff);
     _exit(128 + (status & 0x7f));      // WIFSIGNALED: shell convention 128+signo

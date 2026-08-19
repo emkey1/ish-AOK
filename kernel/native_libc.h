@@ -164,6 +164,18 @@ int nlibc_putchar(int c);
 void nlibc_perror(const char *s);
 /* Flush the wrapped standard streams; see the note in nlibc_std_stream. */
 void nlibc_flush_std(void);
+/* Flush without ever waiting on a lock. What a shutdown path wants in place of
+ * fflush(NULL), which hangs for ever on a stream whose lock a departed native
+ * program's thread still holds. See the .c. */
+void nlibc_flush_stream_if_lockable(FILE *stream);
+void nlibc_flush_all_streams(void);
+/* Just the calling thread's streams -- that is, one native program's. */
+void nlibc_flush_thread_streams(void);
+/* fflush, except that NULL means "the streams this program owns" rather than
+ * "every stream in the process". See the .c. */
+int nlibc_fflush(FILE *stream);
+/* fclose, plus dropping the stream from the registry fileno() reads. */
+int nlibc_fclose(FILE *stream);
 
 /* True when this thread is too close to the end of its stack to recurse
  * again. See the comment on the definition: overrunning it takes the whole
@@ -728,6 +740,12 @@ const char *nlibc_dlerror(void);
 #define putchar     nlibc_putchar
 #define perror      nlibc_perror
 #define fileno      nlibc_fileno
+/* fflush(f) needs no help; fflush(NULL) does -- it is a whole-process
+ * operation in a place where a "process" is one thread. See the .c. */
+#define fflush      nlibc_fflush
+/* fclose reaches nothing on the host, but it does have to drop the stream from
+ * the shim's registry -- otherwise the entry outlives the FILE. See the .c. */
+#define fclose      nlibc_fclose
 #define setlocale   nlibc_setlocale
 
 #define execv       nlibc_execv

@@ -159,98 +159,130 @@ Separately: `platform/darwin.c`'s `get_uptime()` calls
 `sysctlbyname("kern.boottime")` into a local and never uses it. Dead code -- and
 had it been used it would have reported the DEVICE's boot time, which is worse.
 
-### Lingering `ish` CLI processes: a shutdown deadlock in `fflush(NULL)`
-
-Noticed 2026-08-19 while checking whether background work had wedged. Several
-`ish` processes were alive long after their command should have finished --
-24, 11 and 7 minutes -- at 0% CPU, and they never exited. Once wedged, they stay
-wedged.
-
-**Scope: the CLI only, not the app.** `cli_halt` runs through `halt_hook`, and
-`halt_hook = cli_halt` is set in exactly one place, `main.c:337`, which is the
-`ish` command-line binary. The app leaves the hook NULL and takes
-`halt_system_locked()` instead. So this costs us test-rig processes; it is not
-something a device user meets. Not new either: `22be47367` (2026-06-15) is an
-ancestor of `builds/iSH-AOK_548`.
-
-**Where it is stuck.** `sample(1)` on a wedged process gives the whole answer:
-
-```
-main -> task_run_current -> handle_interrupt -> handle_arm64_syscall_interrupt
-     -> handle_syscall_interrupt -> sys_exit_group (exit.c:573)
-     -> do_exit_group (exit.c:540) -> do_exit (exit.c:389)
-     -> cli_halt (main.c:150)
-     -> _pthread_mutex_firstfit_lock_slow -> __psynch_mutexwait
-```
-
-`main.c:150` is `fflush(NULL)`. Only two threads are left: this one, and the
-`netlink_link_watch_thread` asleep in its 5-second `nanosleep` (`fs/sock.c:1212`),
-which is not a party to it.
-
-**The likely mechanism, and why it implicates native programs.** `fflush(NULL)`
-flushes EVERY open host stream and must take each `FILE`'s lock to do it. Native
-programs are host code writing through the host's own stdio, so they take those
-same locks -- unlike an emulated guest binary, whose writes are guest syscalls
-and touch no host `FILE`. A Darwin mutex is not released when its owner thread
-goes away, so a native program's thread that ends while holding a stream lock
-leaves `fflush(NULL)` waiting for a thread that no longer exists. All three
-wedged processes had run a native program (a `smallclue` applet reached through
-a symlink, native bash, native zsh), each with a backgrounded child, an output
-pipe closed early by `head`, or both.
-
-**It is a race, and it wants contention.** The same command hung once and then
-0 times in 8 controlled runs at the same load average; the machine was running
-three parallel agent workflows when the three survivors wedged. The emulated
-equivalent has never hung:
-
-```sh
-# hangs occasionally; kill it yourself, it will not return
-./build/ish -f build/alpine-arm64-test /bin/sh -c \
-  'ln -sf /AOK/native/smallclue /usr/local/bin/sleepy
-   (/usr/local/bin/sleepy sleep 3 &); sleep 1; ps -o pid,comm | head -10'
-
-# the oracle: same shape, emulated, has never hung
-./build/ish -f build/alpine-arm64-test /bin/sh -c '(sleep 3 &); sleep 1; ps -o pid,comm | head -10'
-```
-
-**Next step.** Confirm the lock owner with `lldb` (`thread list`, then the
-`FILE`'s `_lock` owner) rather than trusting the reasoning above -- the
-mechanism is inferred from the stack and the native-program correlation, not yet
-observed directly. The fix is then likely to be that `cli_halt` should not
-`fflush(NULL)` at all: it wants the streams AOK itself owns, `stdout` and
-`stderr`, not every stream any native program ever opened. Flushing those two by
-name cannot block on a thread that has gone.
-
-### btop shows nothing in its disk, net and io sections
+### btop shows nothing in its disk and io sections
 
 Reported 2026-08-19. Both procfs files btop reads exist and are populated, so
-"the file is missing" is the wrong lead. Each half has its own cause.
+"the file is missing" was the wrong lead. **The net half is fixed** -- see
+*Closed during the 550 cycle* below. This is the remaining half.
 
-**Net -- `/proc/net/dev` prints nine columns a side, not eight.** The header
-promises 8 receive and 8 transmit fields and the format string has exactly 16
-conversions, but `proc_show_dev()` in `fs/proc/net.c` passes **18** arguments.
-Linux's single `frame` column is commented across two source lines there
-(`rx_length_errors + rx_over_errors +` / `rx_crc_errors + rx_frame_errors`) and
-was given an argument each; `carrier` on the transmit side has the same split.
-So every transmit column is shifted one place left and the last two arguments
-are dropped on the floor. Visible in any guest:
+**Nothing ties a mount to a device.** `/proc/diskstats` names the HOST's device
+(`disk1` on the Mac CLI), while `/proc/mounts` shows the guest's root as
+`alpine-arm64-test / fake`. btop matches mounts to diskstats entries by device
+name, and no name in one file appears in the other, so it has nothing to attach
+io counters to and lists nothing.
 
-    lo0: 209946624 302159 0 0 0 0 0 0    29488 209946624 302159 0 0 0 0 0
-                                          ^^^^ that is multicast, sitting in
-                                               tx_bytes, and rx_bytes has
-                                               landed in tx_packets
+**This is a design question, not a formatting bug.** Deciding what a guest's
+disk *is* -- whether the fake filesystem should present a device name at all,
+and if so whether one name per fakefs root or one for the whole guest -- has to
+be settled before any code. Whatever is chosen must appear in BOTH files under
+the same name, which is the invariant btop actually depends on.
 
-Fix is two lines: fold arguments 6+7 into one and 16+17 into one, leaving 16.
-Worth doing regardless of btop -- the comment above that `proc_printf` records
-that ifconfig already needed a workaround for this function's output.
+---
 
-**Disk/io -- nothing ties a mount to a device.** `/proc/diskstats` names the
-HOST's device (`disk1` on the Mac CLI), while `/proc/mounts` shows the guest's
-root as `alpine-arm64-test / fake`. btop matches mounts to diskstats entries by
-device name, and no name in one file appears in the other, so it has nothing to
-attach io counters to and lists nothing. Deciding what a guest's disk *is* --
-whether the fake fs should present a device name at all -- is a design question,
-not a formatting bug, so it is the larger half.
+## Closed during the 550 cycle
+
+### `/proc/net/dev` printed nine columns a side -- FIXED 2026-08-19
+
+`proc_show_dev()` passed eighteen arguments to a format string with sixteen
+conversions: Linux folds four counters into its single `frame` column and four
+more into `carrier`, and the port had given each half of those sums an argument
+of its own. printf dropped the last two and every transmit column sat one place
+left of its header -- multicast printed as tx_bytes, rx_bytes as tx_packets.
+btop's network panel was empty and ifconfig showed a loopback that had received
+259 MiB and sent 33 kB. Fixed in `104e5ff4d`.
+
+**Why it shipped, and what else it was hiding.** `proc_printf()` carried no
+`format` attribute, so no compiler ever checked a single procfs format string.
+It has one now, and it immediately found three more:
+
+- `/proc/<pid>/stat` printed six `addr_t` values through `%lu`. `addr_t` is 32
+  bits, so the conversion read eight bytes where four were passed -- correct
+  today on Darwin arm64 only because the adjacent stack happens to be zero.
+- `/proc/<pid>/status` rendered the signal masks as `%08x` from a 64-bit
+  `sigset_t_`; Linux's `render_sigset_t()` always emits all sixteen hex digits.
+- `/proc/consoles` passed `console_major` twice and dropped `console_minor`.
+
+**Guarded by `tests/manual/proc_field_layout.c`.** Counting fields does NOT
+catch the `/proc/net/dev` bug -- the line still had sixteen of them -- so the
+test pushes a megabyte through loopback and requires the column the header
+calls tx_bytes to move by at least that much. Against the pre-fix kernel it
+reports tx_bytes moving by 0 and tx_packets by 1054720, which is rx_bytes,
+exactly one place over. Passes on real Linux (Debian 13, 6.12) too.
+
+Not simplified, deliberately: the literal space after the name colon. It is
+what Linux itself writes, not a workaround, and without it an 8-digit rx_bytes
+glues onto the interface name and busybox ifconfig loses the device. The test
+asserts it so nobody "tidies" it away.
+
+### Lingering `ish` processes: the `fflush(NULL)` deadlock -- FIXED 2026-08-19
+
+The entry that used to sit under *Diagnosed, not fixed* had the stack right and
+the mechanism half right, and the fix it proposed would have traded the hang for
+silent data loss. Recorded here because of that.
+
+**What was actually observed**, with `lldb` on two live wedged processes rather
+than inferred:
+
+- The blocked frame is `cli_halt -> _fwalk -> sflush_locked -> flockfile ->
+  __psynch_mutexwait`. `_fwalk` is `fflush(NULL)` walking every host stream.
+- The stream it blocks on is **one of ours**: `_file = -1`, `_write =
+  nlibc_file_write`, cookie = guest fd 1. That is the native-libc shim's
+  `funopen()` wrapper for a native program's stdout (`nlibc_file_wrap`), living
+  in libc's `usual[]` pool -- NOT `stdout`, and not some stream a native program
+  opened for itself.
+- The mutex's recorded owner tid was absent from the process's own live thread
+  list, in both processes. Both had exactly two threads left, neither of them
+  the owner.
+
+So: a native program is host code on a guest task's thread. A task killed before
+`nlibc_flush_std()` runs leaves its wrapped stdout live in libc's pool, and a
+task killed INSIDE stdio leaves that stream's lock held. Darwin does not release
+a mutex when its owner thread dies, so `fflush(NULL)` waits for a thread that no
+longer exists. Confirmed independently by a 30-line host probe with no AOK in
+it: a thread that exits holding a `flockfile` makes a later `fflush(NULL)` hang
+for ever, and `ftrylockfile` refuses that lock rather than blocking on it.
+
+**Why the proposed fix was wrong.** "Flush `stdout` and `stderr` by name" would
+have stopped the hang, but `stdout` is `__sF[1]` -- not where a native program's
+pending output is. The shim's wrappers are, and skipping them loses the tail of
+every native program's output. What landed instead: flush the same set of
+streams, each guarded by `ftrylockfile()`, and skip any whose lock cannot be
+taken. A stream nobody can lock has nothing recoverable in it anyway. Verified
+A/B on the real algorithm -- old hangs, new returns and still writes the owned
+stream's bytes -- and by 360 runs of the reproducer under self-contention with
+zero survivors.
+
+**The same landmine was inside native programs, and that one reached users.**
+`fflush` was on `check-native-libc.py`'s PURE list, justified as "every stream a
+native program holds is one the shim made". True of `fflush(f)`, and not an
+argument about `fflush(NULL)` at all -- that one flushes EVERY stream in the
+process, meaning every other concurrently-running native program's stdout and
+stderr as well, and it blocks on any lock a departed task's thread still holds.
+smallclue's shell alone calls it 20 times, several around fork and pipeline
+teardown. This is the third instance of that exact error shape, after `fileno`
+and `getopt`: premise right, conclusion backwards. `fflush` is now routed to
+`nlibc_fflush`, which reads NULL as "the streams this program owns" -- the
+registry gained a per-thread owner tag to answer that -- and flushes them
+without waiting. Unlike the `cli_halt` half, this one was reachable in the iOS
+app, where it would have hung a user's shell rather than a test process.
+
+`fclose` came with it, for a different reason. It was on PURE too, and closing a
+stream really does reach nothing on the host -- but it has to drop the stream
+from the shim's own registry, and leaving it to the host left a stale entry
+behind for every `fopen`/`fclose` pair a native program ever made. Only
+`nlibc_flush_std`'s teardown forgot one. The registry is keyed by `FILE*` and
+libc reissues the same slot, so a later stream inherited the dead entry's answer
+to `fileno()` -- the hazard `nlibc_stream_forget`'s own comment describes, with
+nothing closing the loop. Now routed to `nlibc_fclose`, and `nlibc_freopen` and
+`nlibc_pclose` go through it too.
+
+Also fixed in passing: refreshing the archives the gate reads (`ninja ish` does
+not, which is its own trap) exposed a real pre-existing failure --
+`deps/zsh/Src/aok_fork.c` calls `pthread_get_stackaddr_np` and
+`pthread_get_stacksize_np`. Those ask about the calling HOST thread's own stack,
+which is the only correct answer for a stack-overflow guard, and the shim's own
+`nlibc_stack_exhausted()` asks the same two questions. Added to PURE with that
+reason; the gate is clean again, at 236 host symbols.
 
 ---
 
@@ -308,7 +340,7 @@ release by accident. Left on its branch deliberately.
 | [#541](https://github.com/emkey1/ish-AOK/issues/541) | ptraceomatic does not run: tracee reaped during setup | ours |
 | [#542](https://github.com/emkey1/ish-AOK/issues/542) | JVM/HotSpot crashes on aarch64, "Field too big for insn" | reporter suspects upstream OpenJDK |
 | [#558](https://github.com/emkey1/ish-AOK/issues/558) | npm segfault installing OpenClaw | **empty body**; repro requested 2026-08-18, awaiting reply |
-| -- | btop shows nothing in its disk, net and io sections | reported 2026-08-19; see *Diagnosed* above |
+| -- | btop shows nothing in its disk and io sections | reported 2026-08-19; net half fixed, disk half is a design question -- see above |
 
 ### Feature requests
 

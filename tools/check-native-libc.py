@@ -174,7 +174,18 @@ PURE = {
     # isatty(fileno(stdin)) to decide whether it is interactive.
     "snprintf", "vsnprintf", "sprintf", "vsprintf", "sscanf", "vsscanf",
     "asprintf", "vasprintf", "fprintf", "vfprintf", "fputs", "fputc", "putc",
-    "fwrite", "fread", "fgets", "fgetc", "getc", "ungetc", "fclose", "fflush",
+    "fwrite", "fread", "fgets", "fgetc", "getc", "ungetc",
+    # fclose is NOT here either, for a different reason from fflush's: closing a
+    # stream genuinely reaches nothing on the host, but it has to drop the
+    # stream from the shim's own registry, and leaving it to the host left an
+    # entry behind for every fopen/fclose pair a native program made.
+    # fflush is NOT here, and was, on the same reasoning fileno was: every
+    # stream is ours. True of fflush(f) and irrelevant to fflush(NULL), which
+    # is not an operation on the caller's stream at all -- it flushes every
+    # stream in the process, meaning every OTHER native program's stdout and
+    # stderr as well, and it blocks for ever on any whose lock a departed
+    # task's thread still holds. Routed through nlibc_fflush, which reads NULL
+    # as "mine".
     "ferror", "feof", "clearerr", "rewind", "fseek", "fseeko",
     "ftell", "ftello", "setvbuf", "setbuf", "funopen", "fscanf", "getline",
     "getdelim", "getchar",
@@ -208,6 +219,13 @@ PURE = {
     "pthread_attr_destroy", "pthread_attr_setstacksize",
     "pthread_attr_setdetachstate", "pthread_once", "pthread_key_create",
     "pthread_getspecific", "pthread_setspecific",
+    # The calling HOST thread's own stack bounds, which is the only correct
+    # answer for a stack-overflow guard: what is about to overflow is the host
+    # stack the native program is running on, not anything the guest models.
+    # kernel/native_libc.c's own nlibc_stack_exhausted() asks the same two
+    # questions for the same reason; deps/zsh/Src/aok_fork.c is the caller that
+    # made them show up here.
+    "pthread_get_stackaddr_np", "pthread_get_stacksize_np",
     # non-local jumps: control flow within the program
     "setjmp", "longjmp", "sigsetjmp", "siglongjmp", "_setjmp", "_longjmp",
     # Reading the clock. The guest's time IS the host's, so this is not a leak.

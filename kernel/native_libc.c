@@ -752,7 +752,11 @@ static int nlibc_file_close_noop(void *cookie) { (void) cookie; return 0; }
 // every FILE* a native program holds is one the shim made. That was the wrong
 // conclusion from a true premise: being ours is exactly WHY fileno cannot be
 // left to the host -- the answer is a property of where the stream came from.
-struct nlibc_stream { struct nlibc_stream *next; FILE *file; int fd; };
+// owner: which thread built the stream. A native program is a C function on a
+// guest task's thread, so "this program's streams" is exactly "this thread's"
+// -- the same reasoning that makes nlibc_std thread-local. fflush(NULL) needs
+// it to flush the caller's streams instead of every native program's at once.
+struct nlibc_stream { struct nlibc_stream *next; FILE *file; int fd; pthread_t owner; };
 static struct nlibc_stream *nlibc_streams;
 static pthread_mutex_t nlibc_stream_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -762,6 +766,7 @@ static void nlibc_stream_remember(FILE *file, int fd) {
         return;   // fileno degrades to -1 for this stream; nothing else breaks
     s->file = file;
     s->fd = fd;
+    s->owner = pthread_self();
     pthread_mutex_lock(&nlibc_stream_lock);
     s->next = nlibc_streams;
     nlibc_streams = s;
@@ -905,9 +910,25 @@ FILE *nlibc_fopen(const char *path, const char *mode) {
     return f;
 }
 
+// fclose has to drop the registry entry, or the entry outlives the FILE.
+//
+// The registry is keyed by FILE* address and libc hands the same FILE slot back
+// out to a later fopen -- the hazard nlibc_stream_forget's own comment
+// describes. Nothing was closing that loop: fclose was left to the host (it was
+// on check-native-libc.py's PURE list, and closing a stream really does not
+// reach the host), so every fopen/fclose pair a native program made left a
+// stale entry behind, and only nlibc_flush_std's own teardown ever forgot one.
+// A later stream landing on that address then inherited the dead entry's answer
+// to fileno(), and now also its place in the flush walks below.
+int nlibc_fclose(FILE *stream) {
+    if (stream != NULL)
+        nlibc_stream_forget(stream);
+    return fclose(stream);
+}
+
 FILE *nlibc_freopen(const char *path, const char *mode, FILE *stream) {
     if (stream != NULL)
-        fclose(stream);
+        nlibc_fclose(stream);
     return nlibc_fopen(path, mode);
 }
 
@@ -974,6 +995,95 @@ void nlibc_flush_std(void) {
         fclose(dead);
     }
 }
+
+// Flush one stream if its lock can be had, and never wait for it.
+//
+// fflush(NULL) walks EVERY host stream and takes each stream's lock to do it.
+// The shim's streams are host FILEs (nlibc_file_wrap), and a native program is
+// host code running on a guest task's thread rather than a process -- so a task
+// that dies before nlibc_flush_std() runs leaves its stdout and stderr live in
+// libc's stream pool, and a task that dies INSIDE stdio leaves that stream's
+// lock held. A Darwin mutex is not released when its owner thread goes away, so
+// fflush(NULL) then waits on a thread that no longer exists, for ever.
+//
+// Two CLI processes were caught wedged exactly there -- 0% CPU, 5 hours and 23
+// hours after their guest had finished -- blocked in
+// _fwalk -> sflush_locked -> flockfile -> __psynch_mutexwait. In both, the
+// stream being flushed was one of ours (_file = -1, _write = nlibc_file_write,
+// cookie = guest fd 1) and the mutex's recorded owner tid was absent from the
+// process's own live thread list.
+//
+// ftrylockfile() refuses an abandoned lock rather than blocking on it, and the
+// FILE lock is recursive, so fflush()'s own flockfile inside the region is
+// fine. A stream whose lock nobody can take has nothing recoverable in it.
+void nlibc_flush_stream_if_lockable(FILE *file) {
+    if (file == NULL)
+        return;
+    if (ftrylockfile(file) != 0)
+        return;
+    fflush(file);
+    funlockfile(file);
+}
+
+// Every stream the shim still owns, best effort. This is what a caller wants
+// instead of fflush(NULL) on the way out: the same streams get flushed, and a
+// stream held by a departed thread is skipped rather than waited on.
+// mine_only: just the calling thread's streams, which is one native program's.
+static void nlibc_flush_registered(int mine_only) {
+    // The registry lock can be abandoned by a dying thread the same way the
+    // stream locks can, so it gets the same treatment.
+    if (pthread_mutex_trylock(&nlibc_stream_lock) != 0)
+        return;
+    pthread_t self = pthread_self();
+    size_t count = 0;
+    for (struct nlibc_stream *s = nlibc_streams; s != NULL; s = s->next)
+        if (!mine_only || pthread_equal(s->owner, self))
+            count++;
+    FILE **snapshot = count != 0 ? malloc(count * sizeof(*snapshot)) : NULL;
+    size_t n = 0;
+    if (snapshot != NULL)
+        for (struct nlibc_stream *s = nlibc_streams; s != NULL && n < count; s = s->next)
+            if (!mine_only || pthread_equal(s->owner, self))
+                snapshot[n++] = s->file;
+    pthread_mutex_unlock(&nlibc_stream_lock);
+
+    // Deliberately outside the registry lock: a flush runs the stream's write
+    // callback, which issues a guest write, and that must not happen while
+    // holding a lock the rest of the shim needs to answer fileno().
+    for (size_t i = 0; i < n; i++)
+        nlibc_flush_stream_if_lockable(snapshot[i]);
+    free(snapshot);
+}
+
+void nlibc_flush_all_streams(void) { nlibc_flush_registered(0); }
+void nlibc_flush_thread_streams(void) { nlibc_flush_registered(1); }
+
+// fflush() -- and specifically fflush(NULL), which is a different function.
+//
+// fflush(f) really is pure with respect to the host: f is always a stream the
+// shim built over a guest fd, and check-native-libc.py said so. fflush(NULL) is
+// not that operation at all. It flushes EVERY stream in the process, which here
+// means every OTHER concurrently-running native program's stdout and stderr,
+// plus AOK's own -- a native program is a function on a task's thread, not a
+// process, so "all streams" is not "mine". Same shape as the fileno and getopt
+// mistakes above: the premise (every stream is ours) was right and the
+// conclusion backwards.
+//
+// It is also the deadlock in cli_halt, reachable from a native program instead
+// of from shutdown: fflush(NULL) takes each stream's lock, and a stream whose
+// lock a departed task's thread still holds never gives it up. smallclue's
+// shell alone calls fflush(NULL) 20 times, several of them around fork and
+// pipeline teardown -- exactly where a sibling task is dying.
+//
+// So NULL means "this program's streams", flushed without waiting on any of
+// them; a real stream keeps the host's behaviour it always had.
+int nlibc_fflush(FILE *file) {
+    if (file != NULL)
+        return fflush(file);
+    nlibc_flush_thread_streams();
+    return 0;
+}
+
 FILE *nlibc_stdin(void)  { return nlibc_std_stream(0); }
 FILE *nlibc_stdout(void) { return nlibc_std_stream(1); }
 FILE *nlibc_stderr(void) { return nlibc_std_stream(2); }
@@ -1393,7 +1503,7 @@ int nlibc_pclose(FILE *stream) {
     }
     // Closing the parent's end first is what lets a child blocked writing to a
     // full pipe finish, so the wait below cannot deadlock against it.
-    fclose(stream);
+    nlibc_fclose(stream);
     int status = 0;
     if (nlibc_wait_for_child(pid, &status) < 0)
         return -1;
