@@ -51,10 +51,11 @@ NATIVE_BASH=/AOK/native/bash
 NATIVE_ZSH=/AOK/native/zsh
 # Which of them becomes the login shell. Empty means "decide below": prefer bash
 # when it is there, otherwise zsh. That ordering keeps this script doing exactly
-# what it always did on a build that HAS bash, while making a default build --
-# where -Dnative_bash is off and /AOK/native/bash does not exist at all, because
-# linking bash would put GPLv3 in the binary -- switch to zsh instead of
-# silently switching nothing.
+# what it always did on a build that HAS bash -- which is the default build, since
+# -Dnative_bash is `auto' and resolves to ON whenever deps/bash is checked out --
+# while making a build configured with -Dnative_bash=disabled, where
+# /AOK/native/bash does not exist at all because linking it would put GPLv3 in the
+# binary, switch to zsh instead of silently switching nothing.
 SHELL_WANT=
 TARGET_DIR=/usr/local/native-bin
 MODE=link
