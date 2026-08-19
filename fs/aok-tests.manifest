@@ -108,6 +108,7 @@ fakefs_inode_alias.c
 fifo_open_creat_deadlock.c
 proc_stat_monotonic.c
 proc_field_layout.c
+sock_conn_error.c
 sock_getfd_errno.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c

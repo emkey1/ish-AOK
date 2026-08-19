@@ -1332,6 +1332,7 @@ static uint32_t netlink_next_port_id(void);
 // ECONNRESET. Defined near sock_read/sock_write; forward-declared here so the
 // recvfrom/sendto/recvmsg/sendmsg paths above them can use it too.
 static void sock_translate_err(struct fd *fd, int *err);
+static int sock_take_pending_error(struct fd *fd);
 
 const struct fd_ops socket_fdops;
 
@@ -5450,6 +5451,18 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
             break;
         }
     }
+    if (res <= 0) {
+        // A pending socket error outranks both EOF and EAGAIN, and AOK's own
+        // poll probe may already have taken it off the host. See
+        // sock_take_pending_error.
+        int pending = sock_take_pending_error(sock);
+        if (pending != 0) {
+            free(buffer);
+            sock_trace("recvfrom", sock, -1, pending);
+            sock_debug_event("recvfrom", sock, -1, pending);
+            return pending;
+        }
+    }
     if (res < 0) {
         free(buffer);
         if (res > -4096 && res < 0 && errno == 0)
@@ -5461,7 +5474,14 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
             return _EAGAIN;
         }
         int mapped_err = errno_map();
+        bool was_dead = sock->socket.conn_dead;
         sock_translate_err(sock, &mapped_err);
+        // Already reported. A connection that is gone reads end-of-file from
+        // here on, exactly as a reset one does on Linux and on the host.
+        if (was_dead && mapped_err == _ECONNRESET) {
+            sock_trace("recvfrom", sock, 0, 0);
+            return 0;
+        }
         sock_trace("recvfrom", sock, -1, mapped_err);
         sock_debug_event("recvfrom", sock, -1, mapped_err);
         if (mapped_err == _EAGAIN)
@@ -7481,6 +7501,19 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
     }
     size_t requested = sock_iov_requested(msg.msg_iov, msg.msg_iovlen);
     err = 0;
+    if (res <= 0) {
+        // A pending socket error outranks both EOF and EAGAIN, and AOK's own
+        // poll probe may already have taken it off the host. See
+        // sock_take_pending_error.
+        int pending = sock_take_pending_error(sock);
+        if (pending != 0) {
+            res = -1;
+            err = pending;
+            sock_trace("recvmsg", sock, -1, err);
+            sock_debug_event("recvmsg", sock, -1, err);
+            goto out_recvmsg_done;
+        }
+    }
     if (res < 0) {
         if (res > -4096 && res < 0 && errno == 0)
             err = (int) res;
@@ -7488,7 +7521,15 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
             err = _EAGAIN;
         else
             err = errno_map();
+        bool was_dead = sock->socket.conn_dead;
         sock_translate_err(sock, &err);
+        // Already reported; a connection that is gone reads EOF from here on.
+        if (was_dead && err == _ECONNRESET) {
+            res = 0;
+            err = 0;
+            sock_trace("recvmsg", sock, 0, 0);
+            goto out_recvmsg_done;
+        }
         sock_trace("recvmsg", sock, -1, err);
         sock_debug_event("recvmsg", sock, -1, err);
         if (err == _EAGAIN)
@@ -7506,6 +7547,7 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
                    (unsigned) msg.msg_namelen, msg.msg_controllen);
         }
     }
+out_recvmsg_done:
     // don't return err quite yet, there are outstanding mallocs
     msg_fake.msg_flags = sock_flags_from_real(msg.msg_flags);
 
@@ -7866,8 +7908,41 @@ static void sock_translate_err(struct fd *fd, int *err) {
         socklen_t len = sizeof(addr);
         if (getpeername(fd->real_fd, &addr, &len) < 0 && errno == EINVAL) {
             *err = _ECONNRESET;
+            // ...and remember it. The host keeps answering ENOTCONN for as
+            // long as the fd exists, so this used to re-manufacture the same
+            // ECONNRESET on every call while sock_poll went on reporting the
+            // fd readable: poll says ready, recv says error, nothing changes.
+            // chronyd sat at 106% of one core doing that -- 23748 pselect6 and
+            // 47496 failing recvmmsg in 12 seconds of strace, on two fds. A
+            // reset connection reports itself ONCE on every other system.
+            fd->socket.conn_dead = true;
         }
     }
+}
+
+// A socket error that has already been taken off the host, if any.
+//
+// Linux hands a pending socket error to whichever call asks first and then
+// clears it. On Darwin that error lives in SO_ERROR, which is read-and-clear --
+// and AOK reads it ITSELF: socket_tcp_connect_write_ready() runs on every
+// sock_poll() of a stream socket. So by the time the guest's recv() arrives the
+// host has nothing left to report and the read looks like a clean end-of-file.
+//
+// Measured rather than reasoned: a TCP peer resetting with SO_LINGER 0 makes
+// recv() report ECONNRESET on the macOS host and on Linux 6.12 alike, and an
+// AOK guest agreed -- until the guest called poll() first, after which the same
+// recv() returned 0 bytes. "The peer reset me" and "the peer closed cleanly"
+// are different answers, and every guest that polls before reading was getting
+// the wrong one.
+//
+// getsockopt(SO_ERROR) already consulted this stash (see the fd.h comment on
+// host_connect_error). The reads have to as well, for the same reason.
+static int sock_take_pending_error(struct fd *fd) {
+    int err = fd->socket.host_connect_error;
+    if (err == 0)
+        return 0;
+    fd->socket.host_connect_error = 0;
+    return err_map(err);
 }
 
 static int sock_poll(struct fd *fd) {
@@ -7889,6 +7964,16 @@ static int sock_poll(struct fd *fd) {
         }
         return types;
     }
+    // The connection is gone for good -- iOS killed it while the device slept,
+    // and sock_translate_err has already said so once. Report what Linux shows
+    // for a dead connection, and specifically NOT POLL_READ: a poll loop that
+    // is told "readable" and then handed an error by every recv is exactly the
+    // 100%-CPU spin this flag exists to end. A reader still wakes, because
+    // select counts POLL_HUP and POLL_ERR as readable (kernel/poll.c's
+    // SELECT_READ, matching Linux), and gets the end-of-file the read paths
+    // now return.
+    if (fd->socket.conn_dead)
+        return POLL_ERR | POLL_HUP;
     int types = realfs_poll(fd);
 #if defined(__APPLE__)
     if (types & POLL_WRITE)
@@ -7969,6 +8054,16 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
         }
     }
 out_read:
+    if (res <= 0) {
+        // A pending socket error outranks both EOF and EAGAIN, and AOK's own
+        // poll probe may already have taken it off the host. See
+        // sock_take_pending_error.
+        int pending = sock_take_pending_error(fd);
+        if (pending != 0) {
+            sock_trace("read", fd, -1, pending);
+            return pending;
+        }
+    }
     if (res < 0) {
         if (res > -4096 && res < 0 && errno == 0)
             return res;
@@ -7977,7 +8072,13 @@ out_read:
             return _EAGAIN;
         }
         int err = errno_map();
+        bool was_dead = fd->socket.conn_dead;
         sock_translate_err(fd, &err);
+        // Already reported; a connection that is gone reads EOF from here on.
+        if (was_dead && err == _ECONNRESET) {
+            sock_trace("read", fd, 0, 0);
+            return 0;
+        }
         sock_trace("read", fd, -1, err);
         if (err == _EAGAIN)
             sock_x11_event("read-eagain", fd, -1, err, size);

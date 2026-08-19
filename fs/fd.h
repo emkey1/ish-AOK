@@ -110,6 +110,13 @@ struct fd {
             // guest-facing getsockopt(SO_ERROR) handler in preference to a
             // since-reset host value of 0.
             int host_connect_error;
+            // Set once the ENOTCONN->ECONNRESET translation in fs/sock.c has
+            // fired: iOS killed this connected socket when the device slept and
+            // it is never coming back. Without it the translation re-delivered
+            // the same error on every call while poll went on reporting the fd
+            // readable -- chronyd at 106% of one core, 47496 failing recvmmsg
+            // in 12 seconds. A dead connection reports itself once.
+            bool conn_dead;
             dword_t ip_mtu_discover;
             dword_t ipv6_mtu_discover;
             dword_t ipv6_mtu;
