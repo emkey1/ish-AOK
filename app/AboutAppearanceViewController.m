@@ -61,7 +61,7 @@ char *previewString = "# cat /proc/ish/colors\r\n"
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    [UserPreferences.shared observe:@[@"theme", @"fontSize", @"fontFamily", @"colorScheme", @"workspaceStyle"]
+    [UserPreferences.shared observe:@[@"theme", @"fontSize", @"lineHeight", @"fontFamily", @"colorScheme", @"workspaceStyle"]
                             options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self.tableView reloadData];
@@ -117,7 +117,7 @@ enum {
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     switch (section) {
         case PreviewSection: return 2;
-        case MainSection: return 3;
+        case MainSection: return 4;
         case ColorSchemeSection: return 3;
         case WorkspaceStyleSection: return 2;
         case CursorSection: return 2;
@@ -154,7 +154,11 @@ enum {
 - (NSString *)reuseIdentifierForIndexPath:(NSIndexPath *)indexPath {
     switch (indexPath.section) {
         case PreviewSection: return @[@"Preview", @"Color Scheme Preview"][indexPath.row];
-        case MainSection: return @[@"Theme Name", @"Font", @"Font Size"][indexPath.row];
+        // Line Height reuses the Font Size prototype: same title label, value
+        // label and stepper. Everything that differs is set in code, because a
+        // recycled cell would otherwise arrive carrying the other row's range,
+        // the other row's title, and the other row's action.
+        case MainSection: return @[@"Theme Name", @"Font", @"Font Size", @"Font Size"][indexPath.row];
         case ColorSchemeSection: return @"Color Scheme";
         case WorkspaceStyleSection: return @"Color Scheme";
         case CursorSection: return @[@"Cursor Style", @"Blink Cursor"][indexPath.row];
@@ -205,12 +209,38 @@ enum {
                     cell.detailTextLabel.text = UserPreferences.shared.fontFamilyUserFacingName;
                     cell.detailTextLabel.font = [UIFont fontWithName:UserPreferences.shared.fontFamily size:cell.detailTextLabel.font.pointSize];
                     break;
-                case 2: {
+                case 2:
+                case 3: {
                     UserPreferences *prefs = [UserPreferences shared];
+                    UILabel *title = [cell viewWithTag:3];
                     UILabel *label = [cell viewWithTag:1];
                     UIStepper *stepper = [cell viewWithTag:2];
-                    label.text = prefs.fontSize.stringValue;
-                    stepper.value = prefs.fontSize.doubleValue;
+                    // Shared prototype, so nothing may be left to the storyboard --
+                    // including the action it wired, which belongs to Font Size.
+                    [stepper removeTarget:nil action:NULL forControlEvents:UIControlEventValueChanged];
+                    if (indexPath.row == 2) {
+                        title.text = @"Font Size";
+                        stepper.minimumValue = 1;
+                        stepper.maximumValue = 72;
+                        stepper.stepValue = 1;
+                        stepper.value = prefs.fontSize.doubleValue;
+                        label.text = prefs.fontSize.stringValue;
+                        [stepper addTarget:self action:@selector(fontSizeChanged:)
+                          forControlEvents:UIControlEventValueChanged];
+                    } else {
+                        title.text = @"Line Height";
+                        // Inside the bounds UserPreferences and hterm both enforce, and
+                        // narrower: this closes a one-or-two-pixel band, so the useful
+                        // range is just below 1. 0.05 is a visible step at every font
+                        // size without being a jump.
+                        stepper.minimumValue = 0.7;
+                        stepper.maximumValue = 1.3;
+                        stepper.stepValue = 0.05;
+                        stepper.value = prefs.lineHeight.doubleValue;
+                        label.text = [NSString stringWithFormat:@"%.2f", prefs.lineHeight.doubleValue];
+                        [stepper addTarget:self action:@selector(lineHeightChanged:)
+                          forControlEvents:UIControlEventValueChanged];
+                    }
                     cell.selectionStyle = UITableViewCellSelectionStyleNone;
                     break;
                 }
@@ -336,6 +366,12 @@ enum {
 
 - (void)selectFont:(id)sender {
     [self.navigationController pushViewController:[FontPickerViewController new] animated:YES];
+}
+
+- (IBAction)lineHeightChanged:(UIStepper *)sender {
+    // Rounded because a stepper accumulates its step in binary: 0.05 twenty
+    // times is not 1, and the value label would show 0.95000000000000007.
+    UserPreferences.shared.lineHeight = @(round(sender.value * 100) / 100);
 }
 
 - (IBAction)fontSizeChanged:(UIStepper *)sender {

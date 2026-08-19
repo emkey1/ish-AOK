@@ -84,28 +84,47 @@ static int do_statx(int dirfd, const char *path, int flags, unsigned mask,
     return syscall(SYS_statx, dirfd, path, flags, mask, sx);
 }
 
+// Any directory on the root filesystem answers what this test asks -- does
+// statx report a mount id, and does the AT_EMPTY_PATH form agree. /etc was
+// hardcoded, and the tier0 roots are minimal enough not to have one, so this
+// reported six statx failures in a root that simply had no /etc. Only on
+// x86_64: i386 makes statx ENOSYS on purpose and skips the whole half, which
+// is why one arch looked fine and the other did not.
+static const char *statx_target_dir(void) {
+    static const char *candidates[] = {"/etc", "/tmp", "/bin", "/"};
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        struct stat st;
+        if (stat(candidates[i], &st) == 0 && S_ISDIR(st.st_mode))
+            return candidates[i];
+    }
+    return "/";
+}
+
 int main(int argc, char **argv) {
     test_init(argc, argv);
     alarm(test_watchdog_secs(30));
 
+    const char *dir = statx_target_dir();
+    test_logf("statx target directory: %s\n", dir);
+
     struct test_statx sx;
     int statx_enosys = 0;
-    int r = do_statx(AT_FDCWD, "/etc", 0, STATX_BASIC_STATS | STATX_MNT_ID, &sx);
+    int r = do_statx(AT_FDCWD, dir, 0, STATX_BASIC_STATS | STATX_MNT_ID, &sx);
     if (r < 0 && errno == ENOSYS) {
         // i386 guest: statx intentionally ENOSYS (dpkg/APFS fstatat64
         // fallback); skip the statx half entirely.
         statx_enosys = 1;
         test_logf("statx ENOSYS (expected on i386), skipping statx checks\n");
     } else {
-        check(r == 0, "statx(/etc) succeeds");
+        check(r == 0, "statx(dir) succeeds");
         check(sx.stx_mask & STATX_MNT_ID, "stx_mask reports STATX_MNT_ID");
         check(sx.stx_mnt_id != 0, "stx_mnt_id is nonzero");
     }
 
     if (!statx_enosys) {
         // fd + AT_EMPTY_PATH form (systemd stats fds constantly)
-        int dfd = open("/etc", O_RDONLY | O_DIRECTORY);
-        check(dfd >= 0, "open(/etc, O_DIRECTORY)");
+        int dfd = open(dir, O_RDONLY | O_DIRECTORY);
+        check(dfd >= 0, "open(dir, O_DIRECTORY)");
         r = do_statx(dfd, "", AT_EMPTY_PATH, STATX_BASIC_STATS | STATX_MNT_ID, &sx);
         check(r == 0, "statx(fd, \"\", AT_EMPTY_PATH) succeeds");
         check((sx.stx_mask & STATX_MNT_ID) && sx.stx_mnt_id != 0,

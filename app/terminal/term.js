@@ -163,12 +163,16 @@ hterm.ScrollPort.prototype.syncScrollHeight = function() {
 };
 term.scrollPort_.screen_.addEventListener('scroll', syncScroll);
 
-exports.updateStyle = ({foregroundColor, backgroundColor, fontFamily, fontSize, colorPaletteOverrides, blinkCursor, cursorShape}) => {
+exports.updateStyle = ({foregroundColor, backgroundColor, fontFamily, fontSize, lineHeight, colorPaletteOverrides, blinkCursor, cursorShape}) => {
     term.getPrefs().set('background-color', backgroundColor);
     term.getPrefs().set('foreground-color', foregroundColor);
     term.getPrefs().set('cursor-color', foregroundColor);
     term.getPrefs().set('font-family', fontFamily);
     term.getPrefs().set('font-size', fontSize);
+    // Cell height as a multiple of the font's measured maximum extent. See the
+    // 'line-height' pref: a block glyph is shorter than the box its background
+    // fills, and the leftover shows as a band beside a Powerline separator.
+    term.getPrefs().set('line-height', lineHeight);
     term.getPrefs().set('color-palette-overrides', colorPaletteOverrides);
     term.getPrefs().set('cursor-blink', blinkCursor);
     term.getPrefs().set('cursor-shape', cursorShape);

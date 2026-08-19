@@ -75,7 +75,7 @@ struct rowcol {
             self->_keyCommands = nil;
         });
     }];
-    [prefs observe:@[@"colorScheme", @"fontFamily", @"fontSize", @"theme", @"cursorStyle", @"blinkCursor"]
+    [prefs observe:@[@"colorScheme", @"fontFamily", @"fontSize", @"lineHeight", @"theme", @"cursorStyle", @"blinkCursor"]
            options:0 owner:self usingBlock:^(typeof(self) self) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self _updateStyle];
@@ -212,6 +212,7 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
     NSMutableDictionary<NSString *, id> *themeInfo = [@{
         @"fontFamily": prefs.fontFamily,
         @"fontSize": @(self.effectiveFontSize),
+        @"lineHeight": prefs.lineHeight,
         @"foregroundColor": palette.foregroundColor,
         @"backgroundColor": palette.backgroundColor,
         @"blinkCursor": @(prefs.blinkCursor),

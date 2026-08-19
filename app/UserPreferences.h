@@ -97,6 +97,9 @@ extern NSString *const kThemeBackgroundColor;
 @property (readonly) NSString *fontFamilyUserFacingName;
 @property (readonly) UIFont *approximateFont;
 @property NSNumber *fontSize;
+// Cell height as a multiple of the font's measured maximum extent. 1 is that
+// height unchanged, which is what every build before this one did.
+@property NSNumber *lineHeight;
 @property (readonly) NSNumber *defaultFontSize;
 @property ColorScheme colorScheme;
 @property (readonly) BOOL requestingDarkAppearance;

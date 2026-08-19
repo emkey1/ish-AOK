@@ -29,6 +29,7 @@ static NSString *const kPreferenceWorkspaceLaunchCountKey = @"Workspaces At Laun
 static NSString *const kPreferenceOverrideControlSpaceKey = @"Override Control Space";
 static NSString *const kPreferenceFontFamilyKey = @"Font Family";
 static NSString *const kPreferenceFontSizeKey = @"Font Size";
+static NSString *const kPreferenceLineHeightKey = @"Line Height";
 static NSString *const kPreferenceThemeKey = @"ModernTheme";
 static NSString *const kPreferenceDisableDimmingKey = @"Disable Dimming";
 static NSString *const kPreferenceEnableMulticoreKey = @"Enable Multicore";
@@ -219,6 +220,9 @@ bool (*remove_user_default)(const char *name);
             kPreferenceLLMToolMaxRoundsKey: @(20),
             kPreferenceLLMHideThinkingKey: @(YES),
             kPreferenceFontSizeKey: @(12),
+            // 1 = the height hterm measures, i.e. exactly what every build
+            // before this one did. Nobody's terminal moves until they ask.
+            kPreferenceLineHeightKey: @(1),
             kPreferenceCapsLockMappingKey: @(CapsLockMapControl),
             kPreferenceOptionMappingKey: @(OptionMapNone),
             kPreferenceBacktickEscapeKey: @(NO),
@@ -275,6 +279,7 @@ bool (*remove_user_default)(const char *name);
             @"override_control_space": kPreferenceOverrideControlSpaceKey,
             @"font_family": kPreferenceFontFamilyKey,
             @"font_size": kPreferenceFontSizeKey,
+            @"line_height": kPreferenceLineHeightKey,
             @"disable_dimming": kPreferenceDisableDimmingKey,
             @"enable_llm_client": kPreferenceEnableLLMClientKey,
             @"llm_provider": kPreferenceLLMProviderKey,
@@ -320,6 +325,7 @@ bool (*remove_user_default)(const char *name);
             kPreferenceOverrideControlSpaceKey: property(overrideControlSpace),
             kPreferenceFontFamilyKey: property(fontFamily),
             kPreferenceFontSizeKey: property(fontSize),
+            kPreferenceLineHeightKey: property(lineHeight),
             kPreferenceDisableDimmingKey: property(shouldDisableDimming),
             kPreferenceEnableLLMClientKey: property(shouldEnableLLMClient),
             kPreferenceLLMProviderKey: property(llmProvider),
@@ -479,6 +485,28 @@ bool (*remove_user_default)(const char *name);
 
 - (BOOL)validateFontSize:(id *)value error:(NSError **)error {
     return [*value isKindOfClass:NSNumber.class];
+}
+
+// MARK: lineHeight
+- (NSNumber *)lineHeight {
+    NSNumber *value = [_defaults objectForKey:kPreferenceLineHeightKey];
+    return value != nil ? value : @(1);
+}
+
+- (void)setLineHeight:(NSNumber *)lineHeight {
+    [_defaults setObject:lineHeight forKey:kPreferenceLineHeightKey];
+}
+
+// The same bounds hterm's setLineHeight enforces. Below about half the measured
+// height even capitals are cut, so this is a floor against nonsense rather than
+// a claim that everything inside it looks right -- how much of the em a patched
+// font's block glyphs cover varies between Nerd Font patches, which is why this
+// is a multiplier to tune and not a formula.
+- (BOOL)validateLineHeight:(id *)value error:(NSError **)error {
+    if (![*value isKindOfClass:NSNumber.class])
+        return NO;
+    double scale = [*value doubleValue];
+    return scale > 0.5 && scale <= 2;
 }
 
 - (NSNumber *)defaultFontSize {

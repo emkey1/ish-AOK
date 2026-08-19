@@ -10,158 +10,193 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
-### Terminal cell height vs Powerline/block glyphs
+### Terminal cell height -- IMPLEMENTED, not yet seen
 
 At font sizes under 16 a background highlight sits 1-2px proud of the Powerline
-separator next to it. Reported as "add a setting for cell height or baseline
-offset".
+separator next to it. hterm sizes a cell as
+`fontBoundingBoxAscent + fontBoundingBoxDescent` -- the font's MAXIMUM extent,
+including room for accents and deep descenders a block glyph never uses. The
+background fills that cell; `U+2588` only rises to about the em height, and the
+leftover ascent is the band. It is a fixed fraction of the em, so it shrinks
+with the font but cannot go below one whole pixel.
 
-**Established** (from two on-device screenshots, 2026-08-19):
+**Done** (2026-08-19), the reporter's first suggestion rather than the second --
+a baseline offset cannot fix a glyph shorter than its cell, it only moves the
+band from the top to the bottom:
 
-- Cell **backgrounds** tile perfectly: a run of background-coloured spaces is a
-  solid column with no seam between rows.
-- Block **glyphs** do not. `█` leaves a uniform dark band between every row, and
-  on a red background the red shows through at the **top** of each cell.
-- The band is the same on every row, so this is NOT sub-pixel rounding or
-  per-row drift. It is a constant mismatch.
-- Cause: hterm sizes a cell as `fontBoundingBoxAscent + fontBoundingBoxDescent`
-  (hterm_scrollport.js, `measureCharacterSizeModern`) -- the font's MAXIMUM
-  extent, including room for accents and deep descenders that `█` does not use.
-  The background fills that cell; the glyph only rises to about the em/cap
-  height. The leftover ascent is the band.
-- Why it depends on size: the band is a fixed fraction of the em, so it shrinks
-  with the font but cannot go below one whole pixel -- under ~16pt it stops
-  being invisible.
+- `deps/libapps` gains a `line-height` preference: a MULTIPLIER, because how
+  much of the em a patched font's blocks cover varies between Nerd Font
+  patches, so there is no one formula. Applied in `measureCharacterSize` so the
+  legacy non-monospace fallback honours it too, bounded to (0.5, 2].
+- Plumbed through `term.js`, `TerminalView.m` and `UserPreferences`, so it is
+  settable from the guest at `/proc/ish/defaults/line_height`, and a
+  "Line Height" row sits under Font Size in Appearance (0.7-1.3, step 0.05).
+- **Default 1 = the measured height, exactly today's behaviour.** The scaling
+  branch does not execute at all until someone changes it, so no existing
+  setup moves.
 
-**Next step.** Implement the reporter's FIRST suggestion, cell height, not the
-second. A baseline offset cannot fix a glyph that is shorter than its cell; it
-just moves the band from the top to the bottom. Expose a **line-height
-multiplier** rather than a hardcoded formula, because how much of the em a
-patched font's blocks cover varies between Nerd Font patches. Default it to
-today's behaviour so nobody's setup shifts.
+**What is left: looking at it.** The whole point is a visual judgement, and the
+entry always said so -- shrinking a cell risks clipping tall glyphs, so it needs
+checks across font sizes plus an accented and a CJK sample. The app builds for
+the simulator with all of this in it, which is the only verification done so
+far; granting the simulator panel device access is what unblocks the rest.
+Until someone has seen it, treat the settings row in particular as unreviewed
+UI -- it reuses the Font Size prototype cell and sets its title, range and
+action in code.
 
-Caveats: this is in `deps/libapps`, our vendored hterm fork, so it is a
-submodule change; and shrinking cell height risks clipping tall glyphs, so it
-needs visual checks across sizes plus an accented and a CJK sample.
+### AOK loses a connected UDP socket's error about a third of the time
 
-### chronyd (or any poll loop) spins at 100% CPU after the device sleeps
+Found 2026-08-19 while building the regression test for the chronyd spin, and
+older than that fix. A connected UDP socket that takes an ICMP port-unreachable
+should report ECONNREFUSED to the next recv. AOK reports it **14 times in 20**;
+the macOS host underneath reports it 20 in 20, and so does Linux 6.12.
 
-**Established.** Measured on ip5-dev at 106% of one core, state S. 12s of
-strace: 23748 `pselect6`, 47496 `clock_gettime`, 47496 `recvmmsg` -- every
-`recvmmsg` failing with ECONNRESET on the same two fds, which `pselect` keeps
-reporting readable.
+**Established.** When it does arrive it is always on the very first poll, so
+this is presence-or-absence, not slowness -- three seconds of polling does not
+recover a lost one. Ruled out by measurement: the port is genuinely free after
+the probe socket closes (0 of 20 still held, same as the host), so the datagram
+is not being delivered to a lingering listener instead of refused.
 
-The cause is in `fs/sock.c`'s `sock_translate_err`, whose own comment says it:
-iOS kills connected sockets when the device sleeps, reads then return ENOTCONN,
-and we translate that to ECONNRESET. The socket is dead for good, so the error
-is re-delivered for ever while `sock_poll` goes on saying "readable". Poll says
-ready, recv says error, nothing changes.
+**Why it matters.** It is the same family as the spin that has just been fixed:
+a poll loop that never learns its socket is dead. `chronyd` is exactly such a
+loop.
 
-The host is NOT at fault, measured rather than assumed: a native macOS probe
-(`scratchpad/udperr2.c` pattern) shows Darwin delivering a pending socket error
-exactly once and then reporting the socket unreadable, which is Linux's
-behaviour too.
+**Reproduce.** `tests/manual/sock_conn_error.c` logs the ratio on every run
+("udp-unreachable delivered 9 of 10 attempts"). The test deliberately does NOT
+fail on a single miss -- a flaky assertion teaches people to ignore the suite --
+so it requires only that some attempt out of ten deliver.
 
-**Next step.** Once that translation fires the socket is finished, so record it
-on the fd and have `sock_poll` return `POLL_ERR|POLL_HUP` instead of
-`POLL_READ` thereafter -- what Linux shows for a reset connection, and what
-makes a poll loop close or reconnect rather than spin.
+**Next step.** Find what consumes it. The obvious candidate, AOK's own
+`socket_tcp_connect_write_ready()` reading the host's read-and-clear SO_ERROR
+from inside `sock_poll` (which really was eating the equivalent error on TCP,
+now fixed), returns early for anything that is not SOCK_STREAM, so it is not
+this. Start by tracing whether the host ever reports it for the losing runs.
 
-**Caveat: not verifiable on demand.** The state needs a socket killed by a
-device sleep. Both devices read 0% now. Do not read 0% as evidence of a fix.
+### `pread_stack_thread_race` hangs, on both x86 arches
 
-Secondary: the host and Linux both report ECONNREFUSED for a connected UDP
-socket on ICMP port-unreachable; the guest sees ECONNRESET. Check the mapping.
+**Established.** Hangs 3 of 5 runs on i386 and was seen hanging on x86_64 in the
+same sweep, so it is not arch-specific as first recorded. Before the JIT
+ret_cache fix (`49de7e671`) the same test hung once and took SIGSEGV once in two
+runs, so that fix removed the crash and not the hang. The conductor's timeout is
+180 seconds and the test's own work is about 8, so this is a real hang rather
+than slowness.
 
-### eudev does not start on Devuan
+The test is a deliberate stress repro: 6 pread-into-own-stack workers, 3 mmap/
+munmap churn workers and 2 fork/wait workers, all on one shared address space
+for 8 seconds. Its header says a hang or a crash here is the confirming signal
+for the suspected `mem_ptr()`-vs-concurrent-address-space-mutation race it was
+written to catch, so this is the test doing its job.
 
-**Established.** The message is misleading: sysfs IS mounted. `/etc/init.d/eudev`
-line 120 tests for a DIRECTORY, `[ ! -d /sys/class/ ]`, and AOK's sysfs provides
-only `block/`, `devices/`, `fs/`.
+It is tier0-only -- not in `all_tests` and not in `fs/aok-tests.manifest` -- so
+it runs under `python3 tests/remote/conductor.py tier0` and nowhere else.
 
-**The trap.** `log_end_msg 1` does not exit, so the script runs on. Guard 2 asks
-whether `ps` shows bracketed kernel threads; it passes today only by accident,
-because the one bracketed process is `[elogind-daemon]`. Guard 3 then checks
-`[ -e /sys/block -a ! -e /sys/class/block ]` and **sleeps 30 seconds**. So
-creating an empty `/sys/class/` makes boot much worse than the current cosmetic
-warning. Any fix must supply `/sys/class/block` at the same time.
-
-**Open question.** Whether udevd should run here at all. devtmpfs is advertised
-and the app supplies device nodes itself, so disabling the init script in the
-rootfs may beat growing sysfs to satisfy eudev.
-
-### SmallCLUE `dmesg` says it is unsupported
-
-**Established.** The implementation already exists: `deps/smallclue/src/core.c`'s
-dmesg is a three-way `#if`, with `#elif defined(__linux__)` doing the real thing
-via `klogctl(10, ...)`, and the `#else` printing "not supported on this
-platform". A native program is compiled as HOST (Darwin) code, so `__linux__` is
-undefined and it takes the `#else` -- even though it runs against a Linux guest
-whose `sys_syslog` AOK implements and answers (the distro's `/usr/bin/dmesg`
-prints AOK's boot line today).
-
-Already done: the stale `dmesg` link is gone -- `native-links.sh` now prunes
-links it made before an applet was excluded (`7b35aa49b`).
-
-**Next step.** An `nlibc_klogctl` in the shim issuing the guest syslog(2), plus
-a define from `smallclue_c_args` so the klogctl branch compiles for AOK rather
-than pretending to be `__linux__`. Then drop dmesg from `EXCLUDED`.
-
-### Uptime and `btime` describe the app process, not the guest
-
-**Established.** `kernel/task.c:579` sets `boot_time = time(NULL)` in
-`run_at_boot()` -- once per APP PROCESS. `get_uptime()` reports
-`now - boot_time`, and `/proc/stat`'s btime is derived from it. iOS keeps an app
-alive across suspensions for days, so when the guest's init restarts inside that
-process the guest boots fresh while boot_time still holds the app's launch.
-`wtmpdb-update-boot` then refuses it: "Boot time too far in the past".
-
-**This is a decision, not just a fix.** Is the "machine" the app process or the
-guest? Uptime-as-app-lifetime is defensible, but Linux userland expects btime to
-move when init restarts. If per-guest-boot is the answer, reset `boot_time`
-wherever init is (re)started, not only in `run_at_boot()`.
-
-Separately: `platform/darwin.c`'s `get_uptime()` calls
-`sysctlbyname("kern.boottime")` into a local and never uses it. Dead code -- and
-had it been used it would have reported the DEVICE's boot time, which is worse.
-
-### tier0: two pre-existing i386/x86_64 failures, unrelated to the JIT fix
-
-Found by sweeping every tier0 binary on both roots while checking the JIT fix
-(2026-08-19). Both were verified against a pre-fix binary and behave identically,
-so neither is a regression -- recorded because nothing else names them.
-
-- **`pread_stack_thread_race` hangs on i386**, 3 of 5 runs; before the JIT fix
-  the same test hung once and took SIGSEGV once, so the fix removed the crash
-  but not the hang. Passes on x86_64. Next step is a `sample(1)` on a hung one.
-- **`statx_mnt_id_timerfd` fails on x86_64**, `failures=6`, identically before
-  and after. It passes in the arm64 guest suite, so this is amd64-specific.
-
-Also, `fakefs_casefold` does not clean up `/tmp/fakefs_casefold.1`, so a second
-run in the same root fails on "File exists". A test-hygiene bug, not a product
-one, but it makes any repeated tier0 sweep report a false failure.
-
-### btop shows nothing in its disk and io sections
-
-Reported 2026-08-19. Both procfs files btop reads exist and are populated, so
-"the file is missing" was the wrong lead. **The net half is fixed** -- see
-*Closed during the 550 cycle* below. This is the remaining half.
-
-**Nothing ties a mount to a device.** `/proc/diskstats` names the HOST's device
-(`disk1` on the Mac CLI), while `/proc/mounts` shows the guest's root as
-`alpine-arm64-test / fake`. btop matches mounts to diskstats entries by device
-name, and no name in one file appears in the other, so it has nothing to attach
-io counters to and lists nothing.
-
-**This is a design question, not a formatting bug.** Deciding what a guest's
-disk *is* -- whether the fake filesystem should present a device name at all,
-and if so whether one name per fakefs root or one for the whole guest -- has to
-be settled before any code. Whatever is chosen must appear in BOTH files under
-the same name, which is the invariant btop actually depends on.
-
----
+**Next step.** `sample(1)` a hung one. See [[go-runtime-concurrency-debugging]]
+for the lldb setup, and note the `process handle SIGUSR1` lines are needed
+before `run` or lldb stops on AOK's own poke signal.
 
 ## Closed during the 550 cycle
+
+### SmallCLUE `dmesg` said it was unsupported -- FIXED 2026-08-19
+
+The implementation was there all along, behind `#if defined(__linux__)`, and a
+native program is compiled for the HOST -- so the test was false even though the
+kernel the call would reach is Linux, and AOK's own. The same guest's
+`/usr/bin/dmesg` printed the boot line perfectly while this said it could not.
+The platform test was asking about the compiler's target when what matters is
+which kernel answers.
+
+`nlibc_klogctl` issues the guest's `syslog(2)`; `deps/smallclue` gained
+`SMALLCLUE_HAVE_KLOGCTL` so the existing branch compiles; and dmesg left
+`native-links.sh`'s EXCLUDED list, which now skips 27 applets rather than 28.
+Output verified byte-identical to the oracle -- the same guest's `/bin/dmesg` --
+for both `dmesg` and `dmesg -T`. `42c1536da`.
+
+### eudev's "sysfs not mounted", and the 30-second sleep behind it -- FIXED 2026-08-19
+
+`/sys/class` did not exist at all. Fixed together with the block-device naming
+below, because they need the same thing: `/sys/class/block/sda`.
+
+Supplying `/sys/class` alone would have made boot **worse**. `log_end_msg 1`
+does not exit, so the script runs on to a guard that checks
+`[ -e /sys/block -a ! -e /sys/class/block ]` and sleeps 30 seconds; an empty
+`/sys/class` turns a cosmetic warning into half a minute on every boot. Both
+arrive together and both guards now pass.
+
+**The open question answered itself.** Run against a real Devuan root with eudev
+actually installed, the init script no longer complains about sysfs, does not
+sleep, and stops at its NEXT guard with "eudev does not support containers,
+udevd not started ... (warning)", exit 0, in under a second. eudev decides
+correctly on its own. On a root where that container check passes by accident
+(the TODO's note about `[elogind-daemon]` being the one bracketed process), the
+30-second guard is now passed too, so both paths are covered. `4fb8c0768`.
+
+### btop's empty disk and io panels -- FIXED 2026-08-19
+
+`/proc/diskstats` named "disk1" and `/proc/mounts` named the root
+"alpine-arm64-test"; btop matches mounts to diskstats entries by device name and
+no name in one file appeared in the other. "disk1" was the host's name for a Mac
+disk -- a host detail leaking into a guest -- and it contradicted the major 8,
+minor 0 printed beside it, which IS sda in Linux's numbering.
+
+The device is `sda` now, defined once in `fs/real.h` and used by
+`/proc/diskstats`, `/sys/block` and `/sys/class/block`, and `/` reports
+`/dev/sda`. That replaces a deliberate choice worth naming: `mount_root` used to
+report the root's directory name there so df would not print the host path.
+`/dev/sda` is the Linux answer and the one that makes tools work; busybox df
+prints it correctly. `4fb8c0768`.
+
+### Uptime and btime described the app process -- FIXED 2026-08-19
+
+The decision the entry asked for: **the machine is the guest**. `boot_time` is
+now set where pid 1 is created, the only event in AOK that means what a boot
+means, instead of once per app process. `run_at_boot` still seeds it so nothing
+reading the clock before init exists sees zero.
+
+Two more found there. `sysinfo(2)` reported uptime in the wrong unit --
+`uptime_ticks` is 100 Hz and `kernel/uname.c` handed it to a field measured in
+SECONDS, so a 12-second-old guest read as "up 20 min" through busybox uptime and
+anything else on `sysinfo(2)`. And the two platforms disagreed about that unit,
+which is how it survived: darwin produced ticks, linux produced seconds taken
+straight from the HOST's `sysinfo()`, a different and much older machine. Both
+produce ticks from the guest's boot now. Measured after a `sleep(15)`: sysinfo
+16 s, `/proc/uptime` 16.0 s.
+
+Also gone: darwin's `get_uptime()` read `kern.boottime` into a local and never
+used it -- and had it been used it would have reported when the DEVICE last
+booted. `f23d92bdc`.
+
+### The `fflush(NULL)`-adjacent socket bugs -- chronyd's spin -- FIXED 2026-08-19
+
+Two bugs, one recorded and one not.
+
+**The recorded one.** iOS kills connected sockets when the device sleeps, reads
+return ENOTCONN, and `sock_translate_err` maps that to ECONNRESET -- on every
+call, for ever, because the host keeps answering ENOTCONN while `sock_poll` went
+on reporting the fd readable. The translation now records that the connection is
+finished; after that, reads report end-of-file and poll reports
+`POLL_ERR|POLL_HUP`.
+
+**Correction to the plan that was written here.** `POLL_ERR|POLL_HUP` alone
+would NOT have stopped it. `kernel/poll.c`'s `SELECT_READ` counts both as
+readable, matching Linux, so a select-based loop like chronyd's still wakes. It
+is the read returning EOF that ends the loop; both halves are needed.
+
+**The unrecorded one, and the one that could be measured.** A TCP peer resetting
+with SO_LINGER 0 makes `recv()` report ECONNRESET on the macOS host and on Linux
+6.12 alike. An AOK guest agreed -- until it called `poll()` first, after which
+the same `recv()` returned 0 bytes. AOK reads the host's SO_ERROR itself
+(`socket_tcp_connect_write_ready`, on every `sock_poll` of a stream socket) and
+SO_ERROR is read-and-clear, so AOK's own poll consumed the pending error and the
+guest's read saw a clean end-of-file. The stash that already existed for this
+was consulted only by `getsockopt(SO_ERROR)`; `read`, `recvfrom` and `recvmsg`
+consult it now too.
+
+**The secondary item in the old entry did not reproduce.** It said a connected
+UDP socket on ICMP port-unreachable showed ECONNRESET where the host and Linux
+show ECONNREFUSED. AOK reports ECONNREFUSED correctly. What it does do is lose
+the error entirely about a third of the time -- filed above, on its own.
+
+Guarded by `tests/manual/sock_conn_error.c`. `31261988b`.
 
 ### i386 `fakefs_type_race` killed the CLI build -- FIXED 2026-08-19
 
@@ -377,7 +412,7 @@ release by accident. Left on its branch deliberately.
 | [#541](https://github.com/emkey1/ish-AOK/issues/541) | ptraceomatic does not run: tracee reaped during setup | ours |
 | [#542](https://github.com/emkey1/ish-AOK/issues/542) | JVM/HotSpot crashes on aarch64, "Field too big for insn" | reporter suspects upstream OpenJDK |
 | [#558](https://github.com/emkey1/ish-AOK/issues/558) | npm segfault installing OpenClaw | **empty body**; repro requested 2026-08-18, awaiting reply |
-| -- | btop shows nothing in its disk and io sections | reported 2026-08-19; net half fixed, disk half is a design question -- see above |
+| -- | btop shows nothing in its disk, net and io sections | reported 2026-08-19; **fixed** -- see *Closed during the 550 cycle* |
 
 ### Feature requests
 
