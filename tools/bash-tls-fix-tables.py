@@ -29,6 +29,10 @@ import sys
 
 # (file, table variable, struct field, braced)
 #
+# `struct field` is a member name, or a {slot: member} map when the table has
+# more than one pointer member and different entries fill different ones.
+# `slot` counts comma-separated initialisers inside the entry's braces.
+#
 # `braced` says whether each entry is written { like, this }. posix_vars in
 # general.c is a one-member struct written with the braces elided, so its
 # entries are counted differently -- getting that wrong would shift every index
@@ -38,10 +42,37 @@ TABLES = [
     ("builtins/set.def", "o_options", "variable", True),
     ("flags.c", "shell_flags", "value", True),
     ("general.c", "posix_vars", "posix_mode_var", False),
-    ("shell.c", "long_args", "int_value", True),
+    # long_args is the one table with TWO pointer members: entries tagged Int
+    # carry &an_int in slot 2, entries tagged Charp carry &a_char_p in slot 3.
+    # A single field name here filled int_value for both, so --rcfile/--init-file
+    # left char_value NULL -- and bash dispatches on the type tag, not on which
+    # pointer is set, so it wrote through that NULL. Map the slot to the member.
+    ("shell.c", "long_args", {2: "int_value", 3: "char_value"}, True),
     ("lib/readline/bind.c", "boolean_varlist", "value", True),
     ("lib/readline/terminal.c", "tc_strings", "tc_value", True),
 ]
+
+def slot_of(line, pos):
+    """Which comma-separated initialiser of a braced entry contains `pos`."""
+    depth, slot, started = 0, 0, False
+    for i, ch in enumerate(line):
+        if i >= pos:
+            break
+        if ch == "{":
+            if not started:
+                started, depth = True, 0
+                continue
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        elif ch == "(" or ch == "[":
+            depth += 1
+        elif ch == ")" or ch == "]":
+            depth -= 1
+        elif ch == "," and started and depth == 0:
+            slot += 1
+    return slot
+
 
 CPP = re.compile(r"^\s*#\s*(if|ifdef|ifndef|else|elif|endif)\b")
 ADDR = re.compile(r"&\s*([A-Za-z_]\w*)")
@@ -129,7 +160,8 @@ def convert(path, table, field, braced):
         if m and entries:
             name = m.group(1)
             body.append(line[:m.start()] + "0" + line[m.end():])
-            fixups.append(f"  {table}[{idx_expr}].{field} = &{name};")
+            member = field[slot_of(line, m.start())] if isinstance(field, dict) else field
+            fixups.append(f"  {table}[{idx_expr}].{member} = &{name};")
         else:
             body.append(line)
         if entries:
