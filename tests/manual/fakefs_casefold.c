@@ -105,11 +105,40 @@ static int dir_matches(const char *const *names, unsigned count) {
     return ok && seen == count;
 }
 
+// Remove the tree with syscalls, not `rm -rf` through system().
+//
+// The tier0 root has no /bin/sh at all, so system() failed silently and the
+// directory survived every run. That alone would be harmless -- except the
+// name is keyed on getpid(), and in a root whose only process IS the test the
+// pid is always 1, so the next run collided with its own debris and reported
+// "mkdir /tmp/fakefs_casefold.1: File exists". A test that cannot be run twice
+// looks like a product failure the second time.
+static void remove_tree(const char *path) {
+    DIR *dir = opendir(path);
+    if (dir != NULL) {
+        int dfd = dirfd(dir);
+        struct dirent *ent;
+        while ((ent = readdir(dir)) != NULL) {
+            if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+                continue;
+            // unlink first and only recurse if it was a directory: one syscall
+            // in the common case, and no reliance on d_type, which fakefs is
+            // entitled not to fill in.
+            if (unlinkat(dfd, ent->d_name, 0) == 0)
+                continue;
+            if (unlinkat(dfd, ent->d_name, AT_REMOVEDIR) == 0)
+                continue;
+            char child[sizeof(g_dir) + 256];
+            snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+            remove_tree(child);
+        }
+        closedir(dir);
+    }
+    rmdir(path);
+}
+
 static void cleanup_tree(void) {
-    char cmd[600];
-    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", g_dir);
-    int res = system(cmd);
-    (void) res;
+    remove_tree(g_dir);
 }
 
 int main(int argc, char **argv) {
@@ -125,6 +154,9 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    // A previous run that died mid-test (or one whose cleanup could not run)
+    // leaves this directory behind, and the name repeats -- see remove_tree.
+    remove_tree(g_dir);
     if (mkdir(g_dir, 0755) < 0) {
         printf("FAIL fakefs_casefold: mkdir %s: %s\n", g_dir, strerror(errno));
         return 1;

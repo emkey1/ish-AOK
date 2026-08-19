@@ -306,12 +306,23 @@ def tier0_fakefs(arch):
     return fs
 
 def run_tier0(test, fakefs):
-    """A self-check test passes iff it exits 0 AND prints '<test>: PASS'."""
+    """A self-check test passes iff it exits 0 AND prints '<test>: PASS'.
+
+    SKIP is its own verdict, not a failure. A test that says it cannot run here
+    -- no accelerator in this build, no second mount, no peer binaries -- exits
+    0 and prints '<test>: SKIP ...'. Counting that as FAIL made a completely
+    clean tier0 report "4 failed" on both arches, which is exactly the kind of
+    standing noise that stops anyone reading the output.
+    """
     try:
         p = subprocess.run([str(ISH), "-f", str(fakefs), f"/bin/{test}"],
                            capture_output=True, text=True, timeout=TIMEOUT)
-        ok = p.returncode == 0 and re.search(rf"(?m)^{re.escape(test)}: PASS$", p.stdout)
-        return ("PASS" if ok else "FAIL"), p.returncode, p.stdout + p.stderr
+        if p.returncode == 0:
+            if re.search(rf"(?m)^{re.escape(test)}: PASS(?:$|[^A-Za-z])", p.stdout):
+                return "PASS", p.returncode, p.stdout + p.stderr
+            if re.search(rf"(?m)^{re.escape(test)}: SKIP(?:$|[^A-Za-z])", p.stdout):
+                return "SKIP", p.returncode, p.stdout + p.stderr
+        return "FAIL", p.returncode, p.stdout + p.stderr
     except subprocess.TimeoutExpired:
         return "HANG", None, ""
 
@@ -812,20 +823,24 @@ def cmd_tier0(args):
     fakefs = {a: tier0_fakefs(a) for a in ZIG_TARGET}
     any_fail = False
     for arch in ZIG_TARGET:
-        passed = failed = na = 0
+        passed = failed = skipped = na = 0
         print(f"\n=== {arch} ===")
         for t in tests:
             if t not in built[arch]:
                 na += 1
                 continue
             verdict, rc, out = run_tier0(t, fakefs[arch])
+            tail = (out.strip().splitlines() or [""])[-1][:90]
             if verdict == "PASS":
                 passed += 1
+            elif verdict == "SKIP":
+                skipped += 1
+                print(f"  [SKIP] {t:22} {tail}")
             else:
                 failed += 1; any_fail = True
-                tail = (out.strip().splitlines() or [""])[-1][:90]
                 print(f"  [{verdict:4}] {t:22} rc={rc}  {tail}")
-        print(f"  {arch}: {passed} passed, {failed} failed, {na} n/a")
+        print(f"  {arch}: {passed} passed, {failed} failed, "
+              f"{skipped} skipped, {na} n/a")
     sys.exit(1 if any_fail else 0)
 
 def main():
