@@ -1379,7 +1379,17 @@ static ssize_t tmpfs_write(struct fd *fd, const void *buf, size_t bufsize) {
     res = _EISDIR;
     if (S_ISDIR(inode->stat.mode))
         goto out;
-    assert(S_ISREG(inode->stat.mode));
+    // NOT an assert. The types tmpfs can write are ruled out above, so anything
+    // still here is a file the guest should be told about -- not a reason to
+    // abort. An assert turns one odd inode into a crash for every guest in the
+    // app, and that is what reached users: mknod with no type bits built a
+    // typeless inode and the first write() to it took the app down. The mknod
+    // path no longer creates one (kernel/fs.c); this is the belt to that fix's
+    // braces. The other asserts on this predicate in this file are reachable
+    // the same way and deserve the same treatment.
+    res = _EINVAL;
+    if (!S_ISREG(inode->stat.mode))
+        goto out;
 
     // Snapshot fd->offset ONCE. lseek/pwrite mutate fd->offset without holding
     // inode->lock, and a struct fd is shared across dup/fork/threads. If the

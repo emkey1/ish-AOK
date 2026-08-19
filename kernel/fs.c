@@ -782,6 +782,14 @@ static dword_t sys_mknodat_common(fd_t at_f, guest_addr_t path_addr, mode_t_ mod
     if (path_err)
         return path_err;
     STRACE("mknodat(%d, \"%s\", %#x, %#x)", at_f, path, mode, dev);
+    // A mode with NO type bits means a regular file. Linux says so explicitly
+    // -- sys_mknod's switch runs `case 0:' into `case S_IFREG:' -- and it is a
+    // normal way to create one. Passing the bare mode through instead built a
+    // tmpfs inode that was of no type at all, and the first write() to it hit
+    // an assert and took the whole app down with it. Five crash reports from
+    // build 548, two device families, two iOS versions, all this one thing.
+    if ((mode & S_IFMT) == 0)
+        mode |= S_IFREG;
     apply_umask(&mode);
     struct fd *at = at_fd(at_f);
     if (at == NULL)
