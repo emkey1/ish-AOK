@@ -42,10 +42,19 @@ one)
     ;;
 table)
     out_c=$(abspath "$1"); out_h=$(abspath "$2"); shift 2
-    # The .def arguments are relative too.
-    defs=""
-    for d; do defs="$defs $(abspath "$d")"; done
-    set -- $defs
+    # The .def arguments are relative too. Rotated through the positional
+    # parameters rather than joined into a string and re-split with
+    # `set -- $defs`: word splitting destroys any path containing a space, and
+    # $PWD is the build directory -- which is under "Application Support"
+    # whenever DerivedData is pointed there, as a headless simulator build
+    # does. That failed with "/Users/mke/Library/Application: No such file or
+    # directory" and nothing naming the script.
+    count=$#
+    while [ "$count" -gt 0 ]; do
+        d=$1; shift
+        set -- "$@" "$(abspath "$d")"
+        count=$((count - 1))
+    done
     # -noproduction: emit only the table and the externs, not the per-builtin
     # files, which the `one` mode above generates individually.
     (cd "$scratch" && "$mkbuiltins" -externfile builtext.h -structfile builtins.c \
