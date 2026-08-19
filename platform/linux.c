@@ -1,6 +1,7 @@
 #ifdef __linux__
 
 #include <sys/sysinfo.h>
+#include <time.h>          // time(), time_t -- for the guest's boot_time
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
