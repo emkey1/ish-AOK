@@ -280,6 +280,38 @@ EOF
     done
 }
 
+# hterm's shipped bundle is a build artifact, not a source file.
+#
+# app/terminal/term.html loads deps/libapps/hterm/dist/js/hterm_all.js, and
+# hterm/dist is gitignored -- so the bundle only exists because somebody ran
+# bin/mkdist at some point, and an edit to hterm's SOURCES silently shipped
+# whatever bundle was already there. A line-height preference added to
+# hterm/js took three builds to appear for exactly that reason, and a fresh
+# clone has no bundle at all.
+#
+# Done here rather than in the "Compile JavaScript" phase because that is a
+# user script phase, and ENABLE_USER_SCRIPT_SANDBOXING (on, deliberately)
+# denies it even reading bin/mkdist. This script is a legacy target's build
+# tool, which is not sandboxed, and it already runs before everything else.
+regenerate_hterm_bundle() {
+    local hterm="$SRCROOT/deps/libapps/hterm"
+    local dist="$hterm/dist/js/hterm_all.js"
+    [ -d "$hterm/js" ] || return 0        # submodule not checked out; not our problem
+    local stale=""
+    if [ ! -f "$dist" ]; then
+        stale="bundle missing"
+    else
+        stale=$(find "$hterm/js" "$SRCROOT/deps/libapps/libdot/js" -name '*.js' -newer "$dist" -print -quit 2>/dev/null || true)
+    fi
+    [ -n "$stale" ] || return 0
+    echo "note: regenerating hterm_all.js ($stale)"
+    (cd "$hterm" && python3 bin/mkdist >/dev/null) || {
+        echo "error: hterm/bin/mkdist failed -- hterm_all.js would be stale" >&2
+        return 1
+    }
+}
+regenerate_hterm_bundle
+
 for arch in "${arch_list[@]}"; do
     configure_arch "$arch"
 done
