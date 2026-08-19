@@ -1,6 +1,6 @@
 # Release Notes Since `builds/iSH-AOK_548`
 
-177 commits, and one of them is the release: iSH-AOK can now run programs that
+178 commits, and one of them is the release: iSH-AOK can now run programs that
 were **compiled into the app** instead of translating them instruction by
 instruction. A native program is host code running on a guest task's thread, so
 it executes at full speed — but it has to be made to believe it is inside the
@@ -254,8 +254,9 @@ recorded, and is the one gap in this account.
 
 **On the CLI**, after the `mknod` fix below, the aarch64 guest suite is 114
 pass / 6 skip / 1 fail, that one being `ptrace_group_stop` timing out under a
-heavily loaded host — it passes 3 for 3 when run alone, and makes no filesystem
-calls at all. The `mknod` change itself was checked against every `S_IFMT`
+heavily loaded host — it passes 8 for 8 when run alone, and makes no filesystem
+calls at all, so the filesystem change cannot reach it. The booted aarch64 device
+run had it passing as part of its 118/118. The `mknod` change itself was checked against every `S_IFMT`
 value: the six invalid ones now answer EINVAL, `S_IFREG`, `S_IFIFO`, `S_IFSOCK`,
 `S_IFCHR` and a bare mode still succeed, and DIR and LNK are unchanged.
 
@@ -311,6 +312,8 @@ Recorded rather than fixed, so nobody has to rediscover them:
 `builds/iSH-AOK_548..builds/iSH-AOK_549`
 
 ```
+2d0d00868 docs: state the ptrace_group_stop isolation result precisely
+bce7cbcbc docs: the 549 notes gain a Validation section, a correct count, and a range
 d101eeb07 docs: two pages on native programs, and the gaps around them
 4dba625a4 docs: twenty stale claims across the README, /AOK/docs and the tools
 1c0c5ddf7 docs: seven corrections that would have misled a 549 user
