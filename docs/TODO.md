@@ -49,7 +49,8 @@ action in code.
 Found 2026-08-19 while building the regression test for the chronyd spin, and
 older than that fix. A connected UDP socket that takes an ICMP port-unreachable
 should report ECONNREFUSED to the next recv. AOK reports it **14 times in 20**;
-the macOS host underneath reports it 20 in 20, and so does Linux 6.12.
+the macOS host underneath reports it 20 in 20, and Linux 6.12 delivers 10 of 10
+running this test's own UDP half (AOK manages 9 of 10 on a good run).
 
 **Established.** When it does arrive it is always on the very first poll, so
 this is presence-or-absence, not slowness -- three seconds of polling does not
@@ -166,6 +167,12 @@ Also gone: darwin's `get_uptime()` read `kern.boottime` into a local and never
 used it -- and had it been used it would have reported when the DEVICE last
 booted. `f23d92bdc`.
 
+Confirmed end to end on the Linux build, where the old behaviour was worst: on a
+host 685417 seconds into its uptime, a guest that had slept 6 seconds reports
+`/proc/uptime` 7.0 and a btime 7 seconds back. GCC and clang both build it
+clean; `platform/linux.c` needed a `<time.h>` it had been getting from nobody
+(`d672344af`).
+
 ### The `fflush(NULL)`-adjacent socket bugs -- chronyd's spin -- FIXED 2026-08-19
 
 Two bugs, one recorded and one not.
@@ -197,7 +204,9 @@ UDP socket on ICMP port-unreachable showed ECONNRESET where the host and Linux
 show ECONNREFUSED. AOK reports ECONNREFUSED correctly. What it does do is lose
 the error entirely about a third of the time -- filed above, on its own.
 
-Guarded by `tests/manual/sock_conn_error.c`. `31261988b`.
+Guarded by `tests/manual/sock_conn_error.c`, which passes on real Linux 6.12 as
+well as on AOK -- re-run against the oracle after it came back online, together
+with `proc_field_layout`. `31261988b`.
 
 ### i386 `fakefs_type_race` killed the CLI build -- FIXED 2026-08-19
 
