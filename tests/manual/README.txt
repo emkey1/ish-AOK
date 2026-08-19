@@ -86,5 +86,13 @@ Portable focused tests (all guest arches):
   process_lifecycle.c  fork/exec/vfork/wait and signal inheritance coverage
   pthread_sync.c       mutex/condvar/rwlock/timed wait and pthread_once coverage
 
+Native-shell suites (shell scripts, not built by setup-regressions.sh):
+  sh /AOK/tests/native_zsh_fork_state.sh     # 119 cases; needs /AOK/native/zsh
+  sh /AOK/tests/native_bash_fork_state.sh    # 20 cases; needs /AOK/native/bash
+  sh /AOK/tests/native_stdio_redirect.sh
+  Each prints one ok/FAIL line per case plus a passed/failed total, and exits
+  non-zero on any failure. setup-regressions.sh neither builds nor lists them:
+  they are scripts rather than C, and need the matching native program.
+
 All focused tests accept -v or --verbose. Without it they print only failures
 plus the final PASS/FAIL line for each test.

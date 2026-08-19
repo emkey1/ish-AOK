@@ -1,5 +1,13 @@
 # iSH-AOK
 
+> **번역 안내:** 이 문서는 [README.md](README.md)의 이전 개정판(2026-08-14)을 옮긴 것으로,
+> 549 릴리스에서 추가된 네이티브 프로그램(SmallCLUE, bash, zsh)에 관한 내용이 빠져
+> 있습니다. 최신 내용은 README.md를 참고하세요.
+>
+> 특히 라이선스: `git submodule update --init --recursive`는 `deps/bash`를 포함하므로
+> 기본 빌드는 GPLv3 바이너리가 됩니다. 배포할 계획이라면 README.md의
+> "Native bash and licensing" 절을 먼저 읽으십시오.
+
 iSH-AOK는 [ish-app/ish](https://github.com/ish-app/ish)의 포크로, 이 트리에서의 일상적인 개발을 위한 자체 제품, 툴링, 플랫폼 변경 사항을 포함하고 있습니다.
 
 Testflight: https://testflight.apple.com/join/X1flyiqE

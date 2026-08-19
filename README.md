@@ -12,6 +12,8 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
   - product name `iSH-AOK`
   - bundle root `app.ish.iSH-AOK`
 - **Four guest architectures**, all JIT: `i386`, `amd64` (x86_64), `arm64` (aarch64), and `riscv64`.
+- **Native programs**: bash, zsh and SmallCLUE's busybox-style toolbox — which carries OpenSSH (`ssh`, `scp`, `sftp`, `ssh-keygen`), openrsync and the Nextvi editor — are compiled into the app as host code and dispatched from guest `execve` through `/AOK/native/<name>`. They are host functions on a guest task's thread, not guest binaries, so they run at full speed instead of being translated instruction by instruction.
+- `/AOK`, a read-only in-app filesystem (`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`) embedded at build time from `opt/AOK/` via `fs/aok-*.manifest` and `tools/gen-aokfs.py`.
 - Bundled root filesystems in the app build (Alpine 3.23.3 and Devuan 6, `aarch64` only), plus downloadable images for `i386`, `x86_64` and `riscv64`.
 - File Provider support for exposing guest files through iOS.
 - Optional accelerators: native replacement of hot libc routines, and crypto and pixman offload.
@@ -189,6 +191,40 @@ Create a filesystem from a rootfs tarball:
 ./build/tools/fakefsify alpine-minirootfs-*.tar.gz alpine
 ```
 
+## Native Programs
+
+A native program is host code compiled into the app. `execve` of a path under
+`/AOK/native` dispatches to a function inside iSH-AOK rather than loading a
+guest image, and the caller cannot tell the difference. `/AOK/native` holds one
+entry per program in the registry (`kernel/native.c`) — `smallclue`, `bash`,
+`zsh`, `zsh-multio` — and everything else is a symlink to one of those, the link
+name selecting the applet exactly as busybox does:
+
+| program | what it is |
+|---|---|
+| `/AOK/native/smallclue` | busybox-style multicall toolbox, applet chosen by `argv[0]` |
+| `ssh`, `scp`, `sftp`, `ssh-keygen` | OpenSSH, applets of SmallCLUE (built without OpenSSL) |
+| `rsync` | openrsync, an applet of SmallCLUE |
+| `vi` | the Nextvi editor, an applet of SmallCLUE |
+| `/AOK/native/bash` | see [Native bash and licensing](#native-bash-and-licensing) |
+| `/AOK/native/zsh` | see [Native zsh](#native-zsh) |
+
+`/AOK/tools/native-links.sh` builds the symlink farm that puts the applets on
+`PATH`, and `--shell bash|zsh|/path` switches the login shell; `--remove` undoes
+both. In-app documentation is at `/AOK/docs/native-programs.md` (what they are)
+and `/AOK/docs/native-setup.md` (how to set them up), sources under
+[opt/AOK/docs/](opt/AOK/docs).
+
+The hard part is not speed, it is that a native program must answer questions
+about the *guest* rather than about the iPhone it is running on: environment,
+identity, filesystem, `/etc/hosts` and `/etc/resolv.conf`, terminfo, locale and
+rc-file locations are all routed to the rootfs by a shim compiled in ahead of
+the system headers (`kernel/native_libc.c`). The governing question is not "is
+this function pure?" but "can this function's answer differ between the host and
+the guest?". `tools/check-native-libc.py` enforces it, failing the build on any
+host-libc symbol a native program references that is not on an explicit
+allowlist.
+
 ## Native bash and licensing
 
 bash is compiled into the app as a native program. The win is interpretation,
@@ -328,6 +364,12 @@ Adding a test means dropping the source in `tests/manual/` and listing it in
 `/AOK/tests`, plus [tests/manual/setup-regressions.sh](tests/manual/setup-regressions.sh)
 so it is built and run. A test missing from the manifest is silently absent on
 device.
+
+Three suites are the exception: `native_zsh_fork_state.sh` (119 cases),
+`native_bash_fork_state.sh` (20) and `native_stdio_redirect.sh` are shell
+scripts rather than C, so `setup-regressions.sh` neither builds nor lists them.
+They ship via the manifest and are run directly from `/AOK/tests`, and each
+needs the matching native program to be present.
 
 ## Working with Root Filesystems
 

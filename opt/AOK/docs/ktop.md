@@ -63,6 +63,18 @@ cut always falls on a UTF-8 character boundary rather than mid-character. In
 batch mode this applies only when stdout is a terminal: redirect or pipe
 `ktop -bn1` and the full command is recorded uncut.
 
+### Native programs and the ARCH column
+
+iSH-AOK's native programs — `bash`, `zsh`, and SmallCLUE's applets (among them
+`ssh`, `scp`, `sftp`, `ssh-keygen`, `rsync` and `vi`), all dispatched through
+`/AOK/native` — are host code compiled into the app, not guest binaries, so they
+have no guest ELF image of their own. `execve` of one does not replace the
+task's memory map, so `/proc/<pid>/exe` keeps pointing at whatever guest binary
+that task loaded last: COMMAND shows the native program's real name while ARCH
+still describes the previous image. Seeing `x86` next to a native `zsh` in an
+x86 root is that, not a mislabelled process. See
+[native-programs.md](native-programs.md).
+
 ### Interactive keys
 
 | Key | Action |

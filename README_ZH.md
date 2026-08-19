@@ -1,5 +1,12 @@
 # iSH-AOK
 
+> **翻译说明：** 本文是 [README.md](README.md) 较早修订版（2026-08-14）的翻译，缺少 549
+> 版新增的原生程序（SmallCLUE、bash、zsh）相关内容。最新内容请参阅 README.md。
+>
+> 特别是许可证方面：`git submodule update --init --recursive` 会包含 `deps/bash`，
+> 因此默认构建会产生 GPLv3 二进制文件。若打算分发，请先阅读 README.md 中的
+> "Native bash and licensing" 一节。
+
 iSH-AOK 是 [ish-app/ish](https://github.com/ish-app/ish) 的一个分支（fork），在此基础上添加了用于日常开发的产品、工具链和平台相关改动。
 
 Testflight: https://testflight.apple.com/join/X1flyiqE

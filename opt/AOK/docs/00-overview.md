@@ -26,13 +26,17 @@ mounts instead of synthetic ones:
 Everything else under `/AOK` is baked into the app at build time:
 
 ```
-/AOK/README             one-line pointer to this filesystem
-/AOK/version             build identifier
+/AOK/README.txt           what this filesystem is, in a dozen lines
+/AOK/VERSION              build identifier
 /AOK/docs/                this documentation set
-/AOK/tools/               scripts and utilities (mount-root.sh, ktop, benchmarks, provisioning)
+/AOK/tools/               scripts and utilities (native-links.sh, manage-roots.sh,
+                          mount-root.sh, ktop, benchmarks, provisioning, Wayland)
 /AOK/tests/               the guest-side regression suite
 /AOK/fixes/               canned fixes for known upstream-distro bugs
-/AOK/persist/             writable, shared, survives everything (see persist.md)
+/AOK/native/              programs compiled into the app -- exec'ing one runs host
+                          code instead of translated guest code (native-programs.md)
+/AOK/persist/             writable, host-backed, survives everything (see persist.md)
+/AOK/fakefs/              writable, survives everything, keeps full Linux metadata
 /AOK/roots/               other installed roots, exposed read-write (see roots.md)
 ```
 
@@ -60,6 +64,12 @@ A couple of things fall out of that:
 - If you're building iSH-AOK from source and want to see a new doc or tool
   show up under `/AOK`, it has to be listed in the matching manifest file,
   or it won't be embedded.
+
+`/AOK/native` is different again: it has no manifest. Each entry is one program
+compiled into the app and registered in `kernel/native.c`, and `execve` of the
+path runs that host code instead of loading a guest image. A program this build
+does not carry has no entry at all, rather than an entry that fails. See
+[native-programs.md](native-programs.md) and [native-setup.md](native-setup.md).
 
 ## A note on `/proc`, `/sys`, and `/dev`
 
