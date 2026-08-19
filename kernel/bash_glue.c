@@ -34,7 +34,7 @@ int bash_main_entry(int argc, char **argv, char **envp);
 // non-thread-local declaration of a thread-local variable compiles, links, and
 // then reads the descriptor as if it were the value. tools/check-bash-tls.py
 // found this one.
-__thread extern char *shell_name;
+extern __thread char *shell_name;
 void aok_tls_fixups(void);
 
 // bash used to be limited to ONE live instance in the app, because a native

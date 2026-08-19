@@ -75,9 +75,12 @@ int smallclueSha256sumCommand(int argc, char **argv) {
 // The ssh family (ssh/scp/sftp/ssh-keygen/ssh-copy-id) is real now, from the
 // vendored OpenSSH tree; kernel/openssh_glue.c holds both its globals and the
 // refusal for a build without the tree.
-int smallclueRunRsync(int argc, char **argv) {
-    (void) argc; (void) argv; return smallclue_not_built("rsync");
-}
+// No smallclueRunRsync stub here: deps/smallclue/src/openrsync_app.c defines
+// the real one UNCONDITIONALLY, and that file is always in the build. Two
+// definitions is a duplicate symbol -- GNU ld says so with --start-group, while
+// ld64 never pulls the second archive member and stays quiet, which is why this
+// only ever showed up on Linux. pscal_openrsync_main below IS ours alone:
+// openrsync_app.c only declares it.
 int pscal_openrsync_main(int argc, char **argv) {
     (void) argc; (void) argv; return smallclue_not_built("openrsync");
 }
