@@ -159,25 +159,6 @@ Separately: `platform/darwin.c`'s `get_uptime()` calls
 `sysctlbyname("kern.boottime")` into a local and never uses it. Dead code -- and
 had it been used it would have reported the DEVICE's boot time, which is worse.
 
-### tmpfs asserts that can abort the whole app -- FIXED 2026-08-19
-
-This entry said the remaining sites were "now unreachable via mknod". That was
-wrong, and the cost of being wrong was high: `11edc1843` mapped only the type-0
-case, so any OTHER invalid `S_IFMT` -- `0x3000`, say -- walked through
-`generic_mknodat`, which rejects only DIR and LNK and gates only BLK and CHR on
-superuser. The result was a tmpfs inode of no type at all, and `read`, `pread`,
-`pwrite` and `ftruncate` each hit an assert and aborted the WHOLE app. Three
-lines of C, no privilege required, on any mounted tmpfs. Reproduced, then fixed:
-
-- `kernel/fs.c` now whitelists the five types Linux's `may_mknod` accepts and
-  returns EINVAL otherwise, so such an inode cannot be created in the first
-  place;
-- the five reachable asserts in `fs/tmp.c` became errno returns anyway, because
-  an assert reachable from a syscall argument is the wrong tool.
-
-The one assert left (`tmpfs_init_regular_file`) is a creation-time invariant its
-only caller satisfies by construction.
-
 ### Lingering `ish` CLI processes: a shutdown deadlock in `fflush(NULL)`
 
 Noticed 2026-08-19 while checking whether background work had wedged. Several
@@ -270,6 +251,31 @@ device name, and no name in one file appears in the other, so it has nothing to
 attach io counters to and lists nothing. Deciding what a guest's disk *is* --
 whether the fake fs should present a device name at all -- is a design question,
 not a formatting bug, so it is the larger half.
+
+---
+
+## Closed during the 549 cycle
+
+Kept only because the entry was wrong in a way worth remembering.
+
+### tmpfs asserts that can abort the whole app -- FIXED 2026-08-19
+
+This entry said the remaining sites were "now unreachable via mknod". That was
+wrong, and the cost of being wrong was high: `11edc1843` mapped only the type-0
+case, so any OTHER invalid `S_IFMT` -- `0x3000`, say -- walked through
+`generic_mknodat`, which rejects only DIR and LNK and gates only BLK and CHR on
+superuser. The result was a tmpfs inode of no type at all, and `read`, `pread`,
+`pwrite` and `ftruncate` each hit an assert and aborted the WHOLE app. Three
+lines of C, no privilege required, on any mounted tmpfs. Reproduced, then fixed:
+
+- `kernel/fs.c` now whitelists the five types Linux's `may_mknod` accepts and
+  returns EINVAL otherwise, so such an inode cannot be created in the first
+  place;
+- the five reachable asserts in `fs/tmp.c` became errno returns anyway, because
+  an assert reachable from a syscall argument is the wrong tool.
+
+The one assert left (`tmpfs_init_regular_file`) is a creation-time invariant its
+only caller satisfies by construction.
 
 ---
 
