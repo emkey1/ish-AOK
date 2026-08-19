@@ -73,40 +73,6 @@ device sleep. Both devices read 0% now. Do not read 0% as evidence of a fix.
 Secondary: the host and Linux both report ECONNREFUSED for a connected UDP
 socket on ICMP port-unreachable; the guest sees ECONNRESET. Check the mapping.
 
-### i386: `fakefs_type_race` kills the CLI build
-
-**Established.** On an i386 guest the CLI build dies deterministically (3/3, no
-output); x86_64 passes 3/3.
-
-    thread #1058, name = 'fakefs_-1250', EXC_BAD_ACCESS (code=1, address=0x1c)
-    frame #0: cpu_step_to_interrupt(...) at jit.c:1774
-
-That line dereferences `last_block->jump_ip[0]`, and the comment above it warns
-about exactly this: pointers to a block already marked jetsam.
-
-Bisected with the frontend's own hatches:
-
-    (no hatch)             rc=139   crash
-    ISH_I386_NOBACKCHAIN=1 rc=139   crash    <- forward edges only
-    ISH_I386_NOCHAIN=1     PASS              <- no linking at all
-
-So it is forward-edge block chaining, NOT the newer backward-edge work.
-Workaround: `ISH_I386_NOCHAIN=1`.
-
-Ruled out by measurement: emulated CPU count (crashes at 1, 2 and 4 alike), and
-the 2026-08-19 mknod change (reverting just that hunk leaves it identical).
-
-The DEVICE build does not crash -- the i386 arm ran this test during the 4-arch
-run with the app staying up -- so treat it as live but timing-dependent; the CLI
-is `buildtype=debug, optimization=0`, which widens the window.
-
-Also odd: the crashing thread is named `fakefs_-1250`, a NEGATIVE pid.
-
-**Reproduce.** `python3 tests/remote/conductor.py tier0`, then
-`./build/ish -f tests/remote/.work/tier0fs-i386 /bin/fakefs_type_race`.
-Capture the status directly -- piping to `tail` reports tail's status and hides
-the crash.
-
 ### eudev does not start on Devuan
 
 **Established.** The message is misleading: sysfs IS mounted. `/etc/init.d/eudev`
@@ -159,6 +125,22 @@ Separately: `platform/darwin.c`'s `get_uptime()` calls
 `sysctlbyname("kern.boottime")` into a local and never uses it. Dead code -- and
 had it been used it would have reported the DEVICE's boot time, which is worse.
 
+### tier0: two pre-existing i386/x86_64 failures, unrelated to the JIT fix
+
+Found by sweeping every tier0 binary on both roots while checking the JIT fix
+(2026-08-19). Both were verified against a pre-fix binary and behave identically,
+so neither is a regression -- recorded because nothing else names them.
+
+- **`pread_stack_thread_race` hangs on i386**, 3 of 5 runs; before the JIT fix
+  the same test hung once and took SIGSEGV once, so the fix removed the crash
+  but not the hang. Passes on x86_64. Next step is a `sample(1)` on a hung one.
+- **`statx_mnt_id_timerfd` fails on x86_64**, `failures=6`, identically before
+  and after. It passes in the arm64 guest suite, so this is amd64-specific.
+
+Also, `fakefs_casefold` does not clean up `/tmp/fakefs_casefold.1`, so a second
+run in the same root fails on "File exists". A test-hygiene bug, not a product
+one, but it makes any repeated tier0 sweep report a false failure.
+
 ### btop shows nothing in its disk and io sections
 
 Reported 2026-08-19. Both procfs files btop reads exist and are populated, so
@@ -180,6 +162,61 @@ the same name, which is the invariant btop actually depends on.
 ---
 
 ## Closed during the 550 cycle
+
+### i386 `fakefs_type_race` killed the CLI build -- FIXED 2026-08-19
+
+**The recorded bisect was measuring the wrong thing.** The entry said
+`ISH_I386_NOCHAIN=1` made it pass and `ISH_I386_NOBACKCHAIN=1` did not, and
+concluded "forward-edge block chaining". But `i386_jit_chaining_enabled()` is a
+C-side gate on the *linking loop* only -- it does not touch a single line of the
+assembly that writes `frame->last_block` -- and it appears in the crashing
+expression itself:
+
+```c
+if (last_block != NULL && i386_jit_chaining_enabled() &&
+        (last_block->jump_ip[0] != NULL || ...     // <- jit.c, the faulting line
+```
+
+`&&` short-circuits, so `NOCHAIN=1` was not preventing the corruption, it was
+skipping the DEREFERENCE. Instrumenting `last_block` proved it: with
+`NOCHAIN=1`, and the test "passing", the pointer was still being corrupted
+1-3 times per run. Chaining was never involved.
+
+**What it actually was.** `frame->last_block` was `0x4`, and `jump_ip` is at
+offset `0x18`, giving the reported fault address `0x1c`. 4 and 8 are `4 + imm`
+from `RET_NEAR(imm)` -- a **ret** gadget's pop count. The `ret` gadget's
+return-cache path reads its candidate block pointer from the offset where a
+**call** gadget keeps one, so the cache entry was pointing into a block that had
+been freed and whose memory had been reused by a block with a ret gadget there.
+
+The dangling entry survives because of a hole between the two staleness guards:
+
+- `jit_entry_scratch_get()` purges `cache` and `ret_cache` when
+  `jit_block_free_generation` has moved -- but it is called **before** the
+  caller takes `jetsam_lock`, so it samples the counter too early;
+- the frontend loop purges when `cleanup_seq` has moved -- but it seeds
+  `last_block_cleanup_seq` **after** the lock, so a bump inside the window is
+  already included and never seen.
+
+A `jit_free_jetsam()` pass landing between the two reads is therefore invisible
+to both, and the thread runs the whole entry with a `ret_cache` full of pointers
+into freed blocks. Fixed by `jit_entry_scratch_refresh()`, called with the read
+lock held -- at which point no free can be in flight, so the generation it reads
+holds for the entry. One relaxed load when nothing was freed; no measurable
+cost on a syscall-heavy or a find-heavy guest benchmark.
+
+**All four frontends had it**, not just i386 -- the same three lines appear in
+the arm64, riscv64 and amd64 entry paths, and all four are fixed. i386 is
+simply where a test hit it: 3/3 crashes before, 6/6 clean after, and 9/9 across
+`default` / `NOCHAIN` / `NOBACKCHAIN` with the instrumentation still in and
+reporting zero corruption events.
+
+`ISH_I386_NOCHAIN=1` is no longer needed as a workaround, and would not have
+been a real one -- it left the corrupt pointer in place.
+
+**Regression gate:** `python3 tests/remote/conductor.py tier0`, then
+`./build/ish -f tests/remote/.work/tier0fs-i386 /bin/fakefs_type_race`. Capture
+the status directly; piping to `tail` reports tail's status and hides a crash.
 
 ### `/proc/net/dev` printed nine columns a side -- FIXED 2026-08-19
 
