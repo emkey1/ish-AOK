@@ -655,6 +655,12 @@ if get_option('kernel') == 'ish'
         # Not noticed until 21a2a4a8, because until then no Linux build got past
         # the iconv probe at configure time to compile any of this.
         '-D_GNU_SOURCE',
+        # dmesg's real body sits behind a __linux__ test, which is false for a
+        # native program (compiled for the HOST) even though the kernel it talks
+        # to IS Linux -- AOK's own. The shim routes klogctl to the guest's
+        # syslog(2), so say so rather than letting the #else claim dmesg is
+        # unsupported on a system whose /usr/bin/dmesg works.
+        '-DSMALLCLUE_HAVE_KLOGCTL',
         '-w',  # vendored code, not ours to police
     ]
 

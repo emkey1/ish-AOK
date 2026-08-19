@@ -6329,6 +6329,38 @@ clock_t nlibc_times(struct tms *out) {
 // array. Looping over the plain calls is the same system calls in the same
 // order with the same short-read semantics, and it is what the guest sees
 // either way.
+// klogctl(2): the GUEST's kernel ring buffer, which AOK answers itself.
+//
+// SmallCLUE's dmesg has had a real implementation all along, behind
+// `#if defined(__linux__)`. A native program is compiled for the HOST, so that
+// test was false and it fell to the #else -- printing "not supported on this
+// platform" while the very same guest's /usr/bin/dmesg printed AOK's boot line
+// perfectly, because AOK implements syslog(2). The platform test was asking
+// about the compiler's target when what matters is which kernel the call
+// reaches, and for a native program those are two different systems.
+//
+// Only the three READ types take a buffer; the rest (SIZE_BUFFER, CLEAR,
+// CONSOLE_*) pass a null guest address, exactly as the guest's own dmesg does.
+int nlibc_klogctl(int type, char *bufp, int len) {
+    NATIVE_FRAME;
+    if (len < 0)
+        return nlibc_fail(_EINVAL);
+    int reads_buffer = type == 2 || type == 3 || type == 4;  // READ, READ_ALL, READ_CLEAR
+    guest_addr_t guest_buf = 0;
+    if (reads_buffer) {
+        if (bufp == NULL)
+            return nlibc_fail(_EFAULT);
+        guest_buf = native_scratch_alloc((size_t) len);
+        if (guest_buf == 0 && len > 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    sqword_t res = native_syscall(NATIVE_SYS_syslog, type, guest_buf, len);
+    if (reads_buffer && res > 0 &&
+            native_scratch_get(bufp, guest_buf, (size_t) res) < 0)
+        return nlibc_fail(_EFAULT);
+    return (int) nlibc_ret(res);
+}
+
 ssize_t nlibc_readv(int fd_no, const struct iovec *iov, int count) {
     if (iov == NULL || count < 0)
         return nlibc_fail(_EINVAL);

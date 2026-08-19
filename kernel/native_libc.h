@@ -176,6 +176,8 @@ void nlibc_flush_thread_streams(void);
 int nlibc_fflush(FILE *stream);
 /* fclose, plus dropping the stream from the registry fileno() reads. */
 int nlibc_fclose(FILE *stream);
+/* klogctl(2) against the guest's ring buffer, the one AOK fills. */
+int nlibc_klogctl(int type, char *bufp, int len);
 
 /* True when this thread is too close to the end of its stack to recurse
  * again. See the comment on the definition: overrunning it takes the whole
@@ -740,6 +742,9 @@ const char *nlibc_dlerror(void);
 #define putchar     nlibc_putchar
 #define perror      nlibc_perror
 #define fileno      nlibc_fileno
+/* The GUEST's kernel ring buffer. There is no host klogctl on Darwin at all,
+ * and on Linux the host's would be the wrong kernel; see the .c. */
+#define klogctl     nlibc_klogctl
 /* fflush(f) needs no help; fflush(NULL) does -- it is a whole-process
  * operation in a place where a "process" is one thread. See the .c. */
 #define fflush      nlibc_fflush

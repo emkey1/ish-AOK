@@ -103,9 +103,9 @@ PATH_FILE=/etc/profile.d/05-aok-native-bin.sh
 # the audit predicted. Re-measure rather than re-reason when this is revisited.
 #
 #   broken here      script needs the PSCAL app's terminal-capture hooks and
-#                    creates no pty of its own; dmesg, mount, umount and passwd
-#                    have their real bodies inside #if defined(__linux__), and
-#                    a native program is compiled for the HOST; vproc-test says
+#                    creates no pty of its own; mount, umount and passwd have
+#                    their real bodies inside #if defined(__linux__), and a
+#                    native program is compiled for the HOST; vproc-test says
 #                    it is iOS-only; version reports the embedding app's
 #                    marketing version, which AOK has none of
 #   loops or blocks  init, runit, watch all WORK -- init runs /etc/rc and reaps,
@@ -123,15 +123,17 @@ PATH_FILE=/etc/profile.d/05-aok-native-bin.sh
 #                    command with no authentication at all
 #   not commands     smallclue, smallclue-help, licenses
 #
-# Two entries left this list after being fixed rather than reclassified, which
+# Three entries left this list after being fixed rather than reclassified, which
 # is the outcome to aim for: ipaddr (the shim's getifaddrs is real now -- the
 # host's interfaces ARE the guest's, and /proc/net/dev was already built from
-# them) and kill (which now takes -0, -s SIG and a signal by name or number).
+# them), kill (which now takes -0, -s SIG and a signal by name or number), and
+# dmesg -- whose __linux__ test was answering the wrong question, since AOK's
+# guest IS Linux and now answers klogctl through the shim.
 #
 # Absent from this list on purpose, because they are handled by PROBED below
 # rather than hardcoded: everything whose availability depends on what this
 # particular build has compiled in.
-EXCLUDED="chroot dmesg halt init licenses mdev mknod mount passwd poweroff
+EXCLUDED="chroot halt init licenses mdev mknod mount passwd poweroff
 reboot runit script smallclue smallclue-help su sudo umount version
 vproc-test watch"
 
