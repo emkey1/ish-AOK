@@ -58,6 +58,11 @@ int net_iface_snapshot(struct net_iface_stats *out, int max) {
     struct ifaddrs *addrs;
     if (getifaddrs(&addrs) != 0)
         return 0;
+    // Darwin hands the MTU over in if_data; Linux's rtnl_link_stats has no such
+    // field, and reporting 0 for /sys/class/net/<iface>/mtu is a wrong answer
+    // rather than a missing one (lo is 65536 there). Ask for it, once, over one
+    // socket reused for every interface.
+    int mtu_sock = out != NULL ? socket(AF_INET, SOCK_DGRAM, 0) : -1;
     int count = 0;
     for (const struct ifaddrs *cursor = addrs; cursor != NULL; cursor = cursor->ifa_next) {
         if (cursor->ifa_addr == NULL || cursor->ifa_addr->sa_family != AF_LINK)
@@ -89,6 +94,13 @@ int net_iface_snapshot(struct net_iface_stats *out, int max) {
             iface->mtu = stats->ifi_mtu;
 #endif
         }
+        if (iface->mtu == 0 && mtu_sock >= 0) {
+            struct ifreq req;
+            memset(&req, 0, sizeof(req));
+            snprintf(req.ifr_name, sizeof(req.ifr_name), "%s", iface->name);
+            if (ioctl(mtu_sock, SIOCGIFMTU, &req) == 0)
+                iface->mtu = (unsigned) req.ifr_mtu;
+        }
 
         // The hardware address, for /sys/class/net/<iface>/address. The link
         // sockaddr differs between the two platforms; everything above this
@@ -107,6 +119,8 @@ int net_iface_snapshot(struct net_iface_stats *out, int max) {
         }
 #endif
     }
+    if (mtu_sock >= 0)
+        close(mtu_sock);
     freeifaddrs(addrs);
     return count;
 }
