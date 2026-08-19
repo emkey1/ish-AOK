@@ -260,7 +260,7 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     // bunch of shit that can only be accessed by a debugger
     proc_printf(buf, "%lu ", 0l); // startcode
     proc_printf(buf, "%lu ", 0l); // endcode
-    proc_printf(buf, "%lu ", stack_start);
+    proc_printf(buf, "%lu ", (unsigned long)stack_start);
     proc_printf(buf, "%lu ", 0l); // kstkesp
     proc_printf(buf, "%lu ", 0l); // kstkeip
 
@@ -295,11 +295,11 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     proc_printf(buf, "%ld ", 0l); // cguest_time
     proc_printf(buf, "%lu ", 0ul); // start_data
     proc_printf(buf, "%lu ", 0ul); // end_data
-    proc_printf(buf, "%lu ", start_brk); // start_brk
-    proc_printf(buf, "%lu ", argv_start); // arg_start
-    proc_printf(buf, "%lu ", argv_end); // arg_end
-    proc_printf(buf, "%lu ", env_start); // env_start
-    proc_printf(buf, "%lu ", env_end); // env_end
+    proc_printf(buf, "%lu ", (unsigned long)start_brk); // start_brk
+    proc_printf(buf, "%lu ", (unsigned long)argv_start); // arg_start
+    proc_printf(buf, "%lu ", (unsigned long)argv_end); // arg_end
+    proc_printf(buf, "%lu ", (unsigned long)env_start); // env_start
+    proc_printf(buf, "%lu ", (unsigned long)env_end); // env_end
     proc_printf(buf, "%d", 0); // exit_code
     proc_printf(buf, "\n");
 
@@ -557,11 +557,14 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     proc_printf(buf, "VmRSS:\t%lu kB\n", vm_kb);
     proc_printf(buf, "Threads:\t%lu\n", thread_count);
     proc_printf(buf, "SigQ:\t0/0\n");
-    proc_printf(buf, "SigPnd:\t%08x\n", pending);
-    proc_printf(buf, "ShdPnd:\t00000000\n");
-    proc_printf(buf, "SigBlk:\t%08x\n", blocked);
-    proc_printf(buf, "SigIgn:\t00000000\n");
-    proc_printf(buf, "SigCgt:\t00000000\n");
+    // Linux's render_sigset_t() prints the whole 64-bit sigset, all 16 hex
+    // digits of it. sigset_t_ is 64 bits here too, so %08x both under-read the
+    // argument and told consumers the mask was half the width it is.
+    proc_printf(buf, "SigPnd:\t%016llx\n", (unsigned long long)pending);
+    proc_printf(buf, "ShdPnd:\t0000000000000000\n");
+    proc_printf(buf, "SigBlk:\t%016llx\n", (unsigned long long)blocked);
+    proc_printf(buf, "SigIgn:\t0000000000000000\n");
+    proc_printf(buf, "SigCgt:\t0000000000000000\n");
     proc_printf(buf, "CapInh:\t%08x%08x\n", task->cap_inheritable[1], task->cap_inheritable[0]);
     proc_printf(buf, "CapPrm:\t%08x%08x\n", task->cap_permitted[1], task->cap_permitted[0]);
     proc_printf(buf, "CapEff:\t%08x%08x\n", task->cap_effective[1], task->cap_effective[0]);

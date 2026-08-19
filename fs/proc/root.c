@@ -277,7 +277,7 @@ static int proc_show_consoles(struct proc_entry *UNUSED(entry), struct proc_data
     } else if (console_major == TTY_PSEUDO_SLAVE_MAJOR) {
         proc_printf(buf, "pts/%d                -WU (E  ) %d:%d\n", console_minor, console_major, console_minor);
     } else {
-        proc_printf(buf, "console               -WU (E  ) %d:%d\n", console_major, console_major, console_minor);
+        proc_printf(buf, "console               -WU (E  ) %d:%d\n", console_major, console_minor);
     }
     return 0;
 }

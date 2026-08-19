@@ -94,7 +94,11 @@ void free_string_array(char **array);
 bool proc_dir_read(struct proc_entry *entry, unsigned long *index, struct proc_entry *next_entry);
 
 void proc_buf_append(struct proc_data *buf, const void *data, size_t size);
-void proc_printf(struct proc_data *buf, const char *format, ...);
+// Format-checked: an argument/conversion mismatch here silently shifts every
+// column of a procfs file (see proc_show_dev, which shipped 18 arguments
+// against 16 conversions).
+void proc_printf(struct proc_data *buf, const char *format, ...)
+    __attribute__((format(printf, 2, 3)));
 
 void proc_set_entries_parent(struct proc_dir_entry *entries, size_t count, struct proc_dir_entry *parent);
 void proc_set_children_parent(struct proc_children *children, struct proc_dir_entry *parent);

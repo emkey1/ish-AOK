@@ -501,55 +501,54 @@ static int proc_show_dev(struct proc_entry * UNUSED(entry), struct proc_data *bu
                */
                 const struct if_data *stats = (struct if_data *)cursor->ifa_data;
                 
+                /* Linux's dev_seq_printf_stats() always emits a literal
+                   space after the name colon ("%6s: %7llu ..."), which
+                   guarantees a separator even when rx_bytes is 8+ digits.
+                   Without it, busybox/net-tools ifconfig's whitespace
+                   tokenizer glues the byte count onto the interface
+                   name (e.g. "lo0:3020696576"), so the parsed name is
+                   wrong/empty and the follow-up SIOCGIFFLAGS lookup
+                   fails with ENODEV -> "Device not found".
+
+                   Sixteen conversions take sixteen arguments: eight receive
+                   columns then eight transmit ones. Linux sums four of its
+                   own counters into the single "frame" column and four more
+                   into "carrier"; Darwin's if_data has no equivalent for
+                   either, so both are reported as zero. Giving each half of
+                   those sums an argument of its own is what shifted every
+                   transmit column one place left. */
                 if (stats != NULL) {
-                    /* Linux's dev_seq_printf_stats() always emits a literal
-                       space after the name colon ("%6s: %7llu ..."), which
-                       guarantees a separator even when rx_bytes is 8+ digits.
-                       Without it, busybox/net-tools ifconfig's whitespace
-                       tokenizer glues the byte count onto the interface
-                       name (e.g. "lo0:3020696576"), so the parsed name is
-                       wrong/empty and the follow-up SIOCGIFFLAGS lookup
-                       fails with ENODEV -> "Device not found". */
-                    proc_printf(buf, "%6s: %7lu %7lu %4lu %4lu %4lu %5lu %10lu %9lu %8lu %7lu %4lu %4lu %4lu %5lu %7lu %10lu\n",
+                    proc_printf(buf, "%6s: %7lu %7lu %4lu %4lu %4lu %5lu %10lu %9lu "
+                                     "%8lu %7lu %4lu %4lu %4lu %5lu %7lu %10lu\n",
                                  cursor->ifa_name,
-                                 (unsigned long)stats->ifi_ibytes,   // stats->rx_bytes,
-                                 (unsigned long)stats->ifi_ipackets,   // stats->rx_packets,
-                                 (unsigned long)stats->ifi_ierrors,  // stats->rx_errors,
-                                 (unsigned long)stats->ifi_iqdrops,  // stats->rx_dropped + stats->rx_missed_errors,
-                                 (unsigned long)0,  // stats->rx_fifo_errors,
-                                 (unsigned long)0,  // stats->rx_length_errors + stats->rx_over_errors +
-                                 (unsigned long)0,  // stats->rx_crc_errors + stats->rx_frame_errors,
-                                 (unsigned long)0,  // stats->rx_compressed,
-                                 (unsigned long)stats->ifi_imcasts,  // stats->multicast,
-                                 (unsigned long)stats->ifi_obytes,  // stats->tx_bytes,
-                                 (unsigned long)stats->ifi_opackets,  // stats->tx_packets,
-                                 (unsigned long)stats->ifi_oerrors,  // stats->tx_errors,
-                                 (unsigned long)0,  // stats->tx_dropped,
-                                 (unsigned long)0,  // stats->tx_fifo_errors,
-                                 (unsigned long)stats->ifi_collisions,  // stats->collisions,
-                                 (unsigned long)stats->ifi_ierrors + stats->ifi_oerrors,  // stats->tx_carrier_errors + stats->tx_aborted_errors +
-                                 (unsigned long)0,  // stats->tx_window_errors + stats->tx_heartbeat_errors,
-                                 (unsigned long)0
-                                );  // stats->tx_compressed);
+                                 (unsigned long)stats->ifi_ibytes,      // rx_bytes
+                                 (unsigned long)stats->ifi_ipackets,    // rx_packets
+                                 (unsigned long)stats->ifi_ierrors,     // rx_errors
+                                 (unsigned long)stats->ifi_iqdrops,     // rx_dropped + rx_missed_errors
+                                 (unsigned long)0,                      // rx_fifo_errors
+                                 (unsigned long)0,                      // frame: rx_length + rx_over + rx_crc + rx_frame
+                                 (unsigned long)0,                      // rx_compressed
+                                 (unsigned long)stats->ifi_imcasts,     // multicast
+                                 (unsigned long)stats->ifi_obytes,      // tx_bytes
+                                 (unsigned long)stats->ifi_opackets,    // tx_packets
+                                 (unsigned long)stats->ifi_oerrors,     // tx_errors
+                                 (unsigned long)0,                      // tx_dropped
+                                 (unsigned long)0,                      // tx_fifo_errors
+                                 (unsigned long)stats->ifi_collisions,  // collisions
+                                 (unsigned long)0,                      // carrier: tx_carrier + tx_aborted + tx_window + tx_heartbeat
+                                 (unsigned long)0);                     // tx_compressed
                 } else {
-                    proc_printf(buf, "%6.6s:%8lu %7lu %4lu %4lu %4lu %5lu %10lu %9lu %8lu %7lu %4lu %4lu %4lu %5lu %7lu %10lu\n",
+                    proc_printf(buf, "%6s: %7lu %7lu %4lu %4lu %4lu %5lu %10lu %9lu "
+                                     "%8lu %7lu %4lu %4lu %4lu %5lu %7lu %10lu\n",
                                  cursor->ifa_name,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0,
-                                 (unsigned long long)0);
+                                 (unsigned long)0, (unsigned long)0,
+                                 (unsigned long)0, (unsigned long)0,
+                                 (unsigned long)0, (unsigned long)0,
+                                 (unsigned long)0, (unsigned long)0,
+                                 (unsigned long)0, (unsigned long)0,
+                                 (unsigned long)0, (unsigned long)0,
+                                 (unsigned long)0, (unsigned long)0,
+                                 (unsigned long)0, (unsigned long)0);
                 }
             }
             cursor = cursor->ifa_next;
