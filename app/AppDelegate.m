@@ -2458,7 +2458,15 @@ static TerminalViewController *CreateTerminalViewController(void) {
     EnsureCharacterDevice("/dev/full", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_FULL_MINOR));
     EnsureCharacterDevice("/dev/random", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_RANDOM_MINOR));
     EnsureCharacterDevice("/dev/urandom", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_URANDOM_MINOR));
-    
+
+    // Same idea one level up: the root is a device now (/proc/diskstats,
+    // /sys/block, and / reporting /dev/sda), and a rootfs image has never
+    // declared it in /etc/fstab. btop takes its whole disk list from fstab by
+    // default, which is why its disk and io panels were empty on device even
+    // after the two procfs files were made to agree. Adds a line only when
+    // nothing declares "/" already; see kernel/init.c.
+    ensure_root_fstab_entry();
+
     generic_mkdirat(AT_PWD, "/dev/pts", 0755);
 
     // Linux ships /dev/shm as a (normally tmpfs-mounted) directory, mode 1777

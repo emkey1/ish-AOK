@@ -13,6 +13,7 @@
 #include "fs/net_route.h"
 #include "fs/sock.h"
 #include "platform/platform.h"
+#include "fs/proc/net.h"
 
 #import <ifaddrs.h>
 #import <netinet/in.h>
@@ -21,7 +22,11 @@
 #import <unistd.h>
 #if defined(__APPLE__)
 #import <net/if_var.h>
+#import <net/if_dl.h>
+#else
+#include <netpacket/packet.h>
 #endif
+#import <net/if.h>
 
 #if !defined(__APPLE__)
 /* iSH's /proc/net code was written against the BSD struct if_data + AF_LINK that
@@ -41,6 +46,70 @@
 #define ifi_oerrors tx_errors
 #define ifi_collisions collisions
 #endif
+
+// Every interface the host has, with the counters both /proc/net/dev and
+// /sys/class/net report. See the comment on struct net_iface_stats for why they
+// share this rather than each calling getifaddrs().
+// More interfaces than any host plausibly has; a machine with more simply
+// reports the first 64 rather than growing an unbounded stack buffer.
+#define PROC_NET_DEV_MAX_IFACES 64
+
+int net_iface_snapshot(struct net_iface_stats *out, int max) {
+    struct ifaddrs *addrs;
+    if (getifaddrs(&addrs) != 0)
+        return 0;
+    int count = 0;
+    for (const struct ifaddrs *cursor = addrs; cursor != NULL; cursor = cursor->ifa_next) {
+        if (cursor->ifa_addr == NULL || cursor->ifa_addr->sa_family != AF_LINK)
+            continue;
+        int slot = count++;
+        if (out == NULL || slot >= max)
+            continue;
+        struct net_iface_stats *iface = &out[slot];
+        memset(iface, 0, sizeof(*iface));
+        snprintf(iface->name, sizeof(iface->name), "%s",
+                 cursor->ifa_name != NULL ? cursor->ifa_name : "");
+        iface->flags = cursor->ifa_flags;
+
+        const struct if_data *stats = (const struct if_data *) cursor->ifa_data;
+        if (stats != NULL) {
+            iface->has_stats = true;
+            iface->rx_bytes   = stats->ifi_ibytes;
+            iface->rx_packets = stats->ifi_ipackets;
+            iface->rx_errors  = stats->ifi_ierrors;
+            iface->rx_dropped = stats->ifi_iqdrops;
+            iface->multicast  = stats->ifi_imcasts;
+            iface->tx_bytes   = stats->ifi_obytes;
+            iface->tx_packets = stats->ifi_opackets;
+            iface->tx_errors  = stats->ifi_oerrors;
+            iface->collisions = stats->ifi_collisions;
+            // tx_dropped has no counterpart in either shape; Linux's own
+            // /proc/net/dev prints it, so report the zero rather than omit it.
+#if defined(__APPLE__)
+            iface->mtu = stats->ifi_mtu;
+#endif
+        }
+
+        // The hardware address, for /sys/class/net/<iface>/address. The link
+        // sockaddr differs between the two platforms; everything above this
+        // point was already shimmed by name, but this one is a struct shape.
+#if defined(__APPLE__)
+        const struct sockaddr_dl *dl = (const struct sockaddr_dl *) cursor->ifa_addr;
+        if (dl->sdl_alen == sizeof(iface->mac)) {
+            memcpy(iface->mac, LLADDR(dl), sizeof(iface->mac));
+            iface->has_mac = true;
+        }
+#else
+        const struct sockaddr_ll *ll = (const struct sockaddr_ll *) cursor->ifa_addr;
+        if (ll->sll_halen == sizeof(iface->mac)) {
+            memcpy(iface->mac, ll->sll_addr, sizeof(iface->mac));
+            iface->has_mac = true;
+        }
+#endif
+    }
+    freeifaddrs(addrs);
+    return count;
+}
 
 // Partially cribbed from https://github.com/ish-app/ish/pull/315/commits/4a3d96b4ed81470216534d299b921ba3c09ba03f#diff-8c3246e6b14ecb993cb4bf40b3d502a201566f225e339aa09cff57871f0d6351
 
@@ -486,76 +555,48 @@ static int proc_show_dev(struct proc_entry * UNUSED(entry), struct proc_data *bu
                  "compressed multicast|bytes    packets errs "
                  "drop fifo colls carrier compressed\n");
 
-    struct ifaddrs *addrs;
-    bool success = (getifaddrs(&addrs) == 0);
-    if (success) {
-        const struct ifaddrs *cursor = addrs;
-        while (cursor != NULL) {
-            if (cursor->ifa_addr->sa_family == AF_LINK) {
-              /*
-               Inter-|   Receive                                                |  Transmit
-                 face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
-                    lo:    4214      37    0    0    0     0          0         0     4214      37    0    0    0     0       0          0
-                  eth0:  410911    6589    0    0    0     0          0       116   264679    4078    0    0    0     0       0          0
-                 wlan0: 3014178    3267    0    0    0     0          0         2   126045    1205    0    0    0     0       0          0
-               */
-                const struct if_data *stats = (struct if_data *)cursor->ifa_data;
-                
-                /* Linux's dev_seq_printf_stats() always emits a literal
-                   space after the name colon ("%6s: %7llu ..."), which
-                   guarantees a separator even when rx_bytes is 8+ digits.
-                   Without it, busybox/net-tools ifconfig's whitespace
-                   tokenizer glues the byte count onto the interface
-                   name (e.g. "lo0:3020696576"), so the parsed name is
-                   wrong/empty and the follow-up SIOCGIFFLAGS lookup
-                   fails with ENODEV -> "Device not found".
+    // The same snapshot /sys/class/net is built from, so the two cannot
+    // disagree about which interfaces exist or what their counters say.
+    struct net_iface_stats ifaces[PROC_NET_DEV_MAX_IFACES];
+    int count = net_iface_snapshot(ifaces, PROC_NET_DEV_MAX_IFACES);
+    if (count > PROC_NET_DEV_MAX_IFACES)
+        count = PROC_NET_DEV_MAX_IFACES;
 
-                   Sixteen conversions take sixteen arguments: eight receive
-                   columns then eight transmit ones. Linux sums four of its
-                   own counters into the single "frame" column and four more
-                   into "carrier"; Darwin's if_data has no equivalent for
-                   either, so both are reported as zero. Giving each half of
-                   those sums an argument of its own is what shifted every
-                   transmit column one place left. */
-                if (stats != NULL) {
-                    proc_printf(buf, "%6s: %7lu %7lu %4lu %4lu %4lu %5lu %10lu %9lu "
-                                     "%8lu %7lu %4lu %4lu %4lu %5lu %7lu %10lu\n",
-                                 cursor->ifa_name,
-                                 (unsigned long)stats->ifi_ibytes,      // rx_bytes
-                                 (unsigned long)stats->ifi_ipackets,    // rx_packets
-                                 (unsigned long)stats->ifi_ierrors,     // rx_errors
-                                 (unsigned long)stats->ifi_iqdrops,     // rx_dropped + rx_missed_errors
-                                 (unsigned long)0,                      // rx_fifo_errors
-                                 (unsigned long)0,                      // frame: rx_length + rx_over + rx_crc + rx_frame
-                                 (unsigned long)0,                      // rx_compressed
-                                 (unsigned long)stats->ifi_imcasts,     // multicast
-                                 (unsigned long)stats->ifi_obytes,      // tx_bytes
-                                 (unsigned long)stats->ifi_opackets,    // tx_packets
-                                 (unsigned long)stats->ifi_oerrors,     // tx_errors
-                                 (unsigned long)0,                      // tx_dropped
-                                 (unsigned long)0,                      // tx_fifo_errors
-                                 (unsigned long)stats->ifi_collisions,  // collisions
-                                 (unsigned long)0,                      // carrier: tx_carrier + tx_aborted + tx_window + tx_heartbeat
-                                 (unsigned long)0);                     // tx_compressed
-                } else {
-                    proc_printf(buf, "%6s: %7lu %7lu %4lu %4lu %4lu %5lu %10lu %9lu "
-                                     "%8lu %7lu %4lu %4lu %4lu %5lu %7lu %10lu\n",
-                                 cursor->ifa_name,
-                                 (unsigned long)0, (unsigned long)0,
-                                 (unsigned long)0, (unsigned long)0,
-                                 (unsigned long)0, (unsigned long)0,
-                                 (unsigned long)0, (unsigned long)0,
-                                 (unsigned long)0, (unsigned long)0,
-                                 (unsigned long)0, (unsigned long)0,
-                                 (unsigned long)0, (unsigned long)0,
-                                 (unsigned long)0, (unsigned long)0);
-                }
-            }
-            cursor = cursor->ifa_next;
-        }
-        freeifaddrs(addrs);
+    for (int i = 0; i < count; i++) {
+        const struct net_iface_stats *iface = &ifaces[i];
+        /* Linux's dev_seq_printf_stats() always emits a literal space after the
+           name colon ("%6s: %7llu ..."), which guarantees a separator even when
+           rx_bytes is 8+ digits. Without it, busybox/net-tools ifconfig's
+           whitespace tokenizer glues the byte count onto the interface name
+           (e.g. "lo0:3020696576"), so the parsed name is wrong/empty and the
+           follow-up SIOCGIFFLAGS lookup fails with ENODEV -> "Device not found".
+
+           Sixteen conversions take sixteen arguments: eight receive columns then
+           eight transmit ones. Linux sums four of its own counters into the
+           single "frame" column and four more into "carrier"; neither platform's
+           getifaddrs has an equivalent, so both are reported as zero. Giving each
+           half of those sums an argument of its own is what once shifted every
+           transmit column one place left. */
+        proc_printf(buf, "%6s: %7llu %7llu %4llu %4llu %4llu %5llu %10llu %9llu "
+                         "%8llu %7llu %4llu %4llu %4llu %5llu %7llu %10llu\n",
+                     iface->name,
+                     (unsigned long long) iface->rx_bytes,
+                     (unsigned long long) iface->rx_packets,
+                     (unsigned long long) iface->rx_errors,
+                     (unsigned long long) iface->rx_dropped,
+                     0ULL,                                  // rx_fifo_errors
+                     0ULL,                                  // frame
+                     0ULL,                                  // rx_compressed
+                     (unsigned long long) iface->multicast,
+                     (unsigned long long) iface->tx_bytes,
+                     (unsigned long long) iface->tx_packets,
+                     (unsigned long long) iface->tx_errors,
+                     (unsigned long long) iface->tx_dropped,
+                     0ULL,                                  // tx_fifo_errors
+                     (unsigned long long) iface->collisions,
+                     0ULL,                                  // carrier
+                     0ULL);                                 // tx_compressed
     }
-
     return 0;
 }
 

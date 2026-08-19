@@ -47,6 +47,71 @@ int mount_root(const struct fs_ops *fs, const char *source) {
     return 0;
 }
 
+// Declare the root in /etc/fstab, if nothing there declares it already.
+//
+// A rootfs tarball has never heard of AOK's root: Alpine's ships an fstab whose
+// only entries are `noauto` lines for a CD-ROM and a USB stick, and Devuan's and
+// Arch's are no better. Every real Linux system's fstab names its root
+// filesystem, and things read it expecting that -- btop takes its ENTIRE disk
+// list from fstab by default (use_fstab), so its disk and io panels were empty
+// on every AOK guest, showing nothing at all rather than showing the root.
+// (Measured: with use_fstab off the same btop fills the panel in; with it on,
+// which is the default nobody changes, it stays blank.)
+//
+// The same reasoning as the /dev repair the CLI and the app each do at boot,
+// and the same conservatism: this only ever ADDS a line, and only when no entry
+// for "/" exists at all. A user who has written their own root entry keeps it,
+// and running twice changes nothing.
+void ensure_root_fstab_entry(void) {
+    static const char entry[] =
+        "# Added by iSH-AOK: the root, which the rootfs image did not describe.\n"
+        "/dev/" GUEST_DISK_NAME "\t/\tfake\trw\t0 0\n";
+
+    struct fd *fd = generic_open("/etc/fstab", O_RDWR_ | O_CREAT_, 0644);
+    if (IS_ERR(fd))
+        return;   // no /etc, read-only root, whatever -- not worth a boot failure
+
+    // Small file by nature; a root entry past 64 KiB is not a case to serve.
+    char buf[65536];
+    ssize_t n = fd->ops->read(fd, buf, sizeof(buf) - 1);
+    if (n < 0)
+        n = 0;
+    buf[n] = '\0';
+
+    bool have_root = false;
+    for (char *line = buf; line != NULL && *line != '\0'; ) {
+        char *end = strchr(line, '\n');
+        if (end != NULL)
+            *end = '\0';
+        // <device> <mountpoint> ...; the mountpoint is the second field.
+        const char *p = line;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p != '#' && *p != '\0') {
+            while (*p != '\0' && *p != ' ' && *p != '\t')
+                p++;                              // past the device
+            while (*p == ' ' || *p == '\t')
+                p++;
+            if (p[0] == '/' && (p[1] == '\0' || p[1] == ' ' || p[1] == '\t'))
+                have_root = true;
+        }
+        line = end != NULL ? end + 1 : NULL;
+    }
+
+    if (!have_root) {
+        // A file not ending in a newline would otherwise splice onto our line.
+        off_t_ at = n;
+        if (n > 0 && buf[n - 1] != '\n') {
+            fd->ops->lseek(fd, at, LSEEK_SET);
+            fd->ops->write(fd, "\n", 1);
+            at++;
+        }
+        fd->ops->lseek(fd, at, LSEEK_SET);
+        fd->ops->write(fd, entry, sizeof(entry) - 1);
+    }
+    fd_close(fd);
+}
+
 static void establish_signal_handlers(void) {
     extern void sigusr1_handler(int sig);
     struct sigaction sigact;

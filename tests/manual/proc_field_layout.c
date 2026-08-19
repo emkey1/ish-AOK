@@ -58,6 +58,7 @@
 
 struct dev_line {
     int found;
+    char name[64];
     unsigned long long f[RX_COLUMNS + TX_COLUMNS];
 };
 
@@ -81,6 +82,8 @@ static int is_loopback_name(const char *name) {
             return 0;
     return 1;
 }
+
+static void check_sysfs_net_agrees(const char *lo_name, unsigned long long procfs_rx);
 
 // Reads /proc/net/dev. Fills `lo` with the loopback line if present, and
 // checks every data line's structure on the way past. Returns -1 if the file
@@ -150,6 +153,7 @@ static int read_net_dev(struct dev_line *lo, int check_structure) {
 
         if (is_loopback_name(name) && n == RX_COLUMNS + TX_COLUMNS) {
             lo->found = 1;
+            snprintf(lo->name, sizeof(lo->name), "%s", name);
             memcpy(lo->f, v, sizeof(v));
             test_logf("  lo line: %s rx_bytes=%llu tx_bytes=%llu\n",
                       name, v[F_RX_BYTES], v[F_TX_BYTES]);
@@ -299,6 +303,8 @@ static void check_net_dev(void) {
                  " (column %d is misaligned if this is a stale counter)",
                  want[i].name, d, PAYLOAD_BYTES, want[i].least, want[i].idx);
     }
+
+    check_sysfs_net_agrees(after.name, after.f[F_RX_BYTES]);
 }
 
 // Linux's render_sigset_t() prints the whole 64-bit sigset: 16 hex digits,
@@ -370,6 +376,37 @@ static void check_stat_field_count(void) {
     test_logf("  /proc/self/stat has %d fields\n", n);
     if (n < 52)
         fail("/proc/self/stat has %d fields, want at least 52", n);
+}
+
+// A lot of userland reads per-interface counters from /sys/class/net, NOT from
+// /proc/net/dev -- btop is one, and its binary mentions "/sys/class/net/" and
+// "/statistics/" and never /proc/net/dev at all, so its network graph read zero
+// on every interface no matter how correct /proc/net/dev was. The two have to
+// exist and agree; this checks both, on the loopback line the traffic above
+// just moved.
+static void check_sysfs_net_agrees(const char *lo_name, unsigned long long procfs_rx) {
+    char path[256];
+    snprintf(path, sizeof(path), "/sys/class/net/%s/statistics/rx_bytes", lo_name);
+    FILE *f = fopen(path, "r");
+    if (f == NULL) {
+        fail("%s: %s -- userland that reads counters from sysfs sees nothing",
+             path, strerror(errno));
+        return;
+    }
+    unsigned long long sysfs_rx = 0;
+    int got = fscanf(f, "%llu", &sysfs_rx);
+    fclose(f);
+    if (got != 1) {
+        fail("%s did not contain a number", path);
+        return;
+    }
+    test_logf("  sysfs rx_bytes=%llu  procfs rx_bytes=%llu\n", sysfs_rx, procfs_rx);
+    // Read a moment apart, so allow drift; they must describe the same counter,
+    // not merely both be nonzero.
+    unsigned long long low = procfs_rx > (1u << 20) ? procfs_rx - (1u << 20) : 0;
+    if (sysfs_rx < low)
+        fail("%s reports %llu where /proc/net/dev reports %llu -- the two files"
+             " disagree about the same interface", path, sysfs_rx, procfs_rx);
 }
 
 int main(int argc, char **argv) {

@@ -841,6 +841,25 @@ enum sysfs_node_kind {
     sysfs_class,
     sysfs_class_block,
     sysfs_class_block_dev,
+    sysfs_class_net,
+    sysfs_net_dir,
+    sysfs_net_address,
+    sysfs_net_mtu,
+    sysfs_net_flags,
+    sysfs_net_operstate,
+    sysfs_net_carrier,
+    sysfs_net_type,
+    sysfs_net_statistics,
+    sysfs_net_rx_bytes,
+    sysfs_net_rx_packets,
+    sysfs_net_rx_errors,
+    sysfs_net_rx_dropped,
+    sysfs_net_multicast,
+    sysfs_net_tx_bytes,
+    sysfs_net_tx_packets,
+    sysfs_net_tx_errors,
+    sysfs_net_tx_dropped,
+    sysfs_net_collisions,
 };
 
 // A node is identified by (kind, cpu, index). cpu is -1 except under cpuN/,
@@ -934,6 +953,35 @@ static const struct sysfs_node_desc sysfs_node_descs[] = {
     {sysfs_class, sysfs_root, "class", SYSFS_DIR},
     {sysfs_class_block, sysfs_class, "block", SYSFS_DIR},
     {sysfs_class_block_dev, sysfs_class_block, GUEST_DISK_NAME, SYSFS_DIR},
+
+    // /sys/class/net, which is where a lot of userland actually looks for
+    // per-interface byte counters -- NOT /proc/net/dev. btop is one: its binary
+    // contains "/sys/class/net/" and "/statistics/" and no mention of
+    // /proc/net/dev at all, so its network graph read zero on every interface
+    // no matter what /proc/net/dev said. Interface names are dynamic, so the
+    // directory under net/ is generated the way cpuN is, with node.cpu holding
+    // the index into the snapshot.
+    {sysfs_class_net, sysfs_class, "net", SYSFS_DIR},
+    {sysfs_net_dir, sysfs_class_net, NULL, SYSFS_DIR},
+
+    {sysfs_net_address, sysfs_net_dir, "address", SYSFS_REG},
+    {sysfs_net_mtu, sysfs_net_dir, "mtu", SYSFS_REG},
+    {sysfs_net_flags, sysfs_net_dir, "flags", SYSFS_REG},
+    {sysfs_net_operstate, sysfs_net_dir, "operstate", SYSFS_REG},
+    {sysfs_net_carrier, sysfs_net_dir, "carrier", SYSFS_REG},
+    {sysfs_net_type, sysfs_net_dir, "type", SYSFS_REG},
+    {sysfs_net_statistics, sysfs_net_dir, "statistics", SYSFS_DIR},
+
+    {sysfs_net_rx_bytes, sysfs_net_statistics, "rx_bytes", SYSFS_REG},
+    {sysfs_net_rx_packets, sysfs_net_statistics, "rx_packets", SYSFS_REG},
+    {sysfs_net_rx_errors, sysfs_net_statistics, "rx_errors", SYSFS_REG},
+    {sysfs_net_rx_dropped, sysfs_net_statistics, "rx_dropped", SYSFS_REG},
+    {sysfs_net_multicast, sysfs_net_statistics, "multicast", SYSFS_REG},
+    {sysfs_net_tx_bytes, sysfs_net_statistics, "tx_bytes", SYSFS_REG},
+    {sysfs_net_tx_packets, sysfs_net_statistics, "tx_packets", SYSFS_REG},
+    {sysfs_net_tx_errors, sysfs_net_statistics, "tx_errors", SYSFS_REG},
+    {sysfs_net_tx_dropped, sysfs_net_statistics, "tx_dropped", SYSFS_REG},
+    {sysfs_net_collisions, sysfs_net_statistics, "collisions", SYSFS_REG},
 };
 
 #undef SYSFS_DIR
@@ -1016,10 +1064,37 @@ static uint64_t sysfs_cache_line_bytes(void) {
     return geometry.line_size;
 }
 
+// The interfaces, for /sys/class/net. Snapshotted per call rather than cached:
+// interfaces come and go (a VPN going up is the common case) and a stale list
+// would answer for a device that is no longer there.
+#define SYSFS_NET_MAX 64
+
+static int sysfs_net_count(void) {
+    int n = net_iface_snapshot(NULL, 0);
+    return n > SYSFS_NET_MAX ? SYSFS_NET_MAX : n;
+}
+
+static bool sysfs_net_iface_at(int index, struct net_iface_stats *out) {
+    if (index < 0 || index >= SYSFS_NET_MAX)
+        return false;
+    struct net_iface_stats ifaces[SYSFS_NET_MAX];
+    int n = net_iface_snapshot(ifaces, SYSFS_NET_MAX);
+    if (n > SYSFS_NET_MAX)
+        n = SYSFS_NET_MAX;
+    if (index >= n)
+        return false;
+    *out = ifaces[index];
+    return true;
+}
+
 // How many instances of this kind exist under one parent.
+static size_t sysfs_net_file_data(struct sysfs_node node, char *buf, size_t bufsize);
+
 static int sysfs_node_multiplicity(enum sysfs_node_kind kind) {
     if (kind == sysfs_cpu_dir)
         return sysfs_cpu_count();
+    if (kind == sysfs_net_dir)
+        return sysfs_net_count();
     if (kind == sysfs_cache_index) {
         struct sysfs_cache_desc descs[3];
         return sysfs_cache_descs(descs);
@@ -1030,6 +1105,12 @@ static int sysfs_node_multiplicity(enum sysfs_node_kind kind) {
 static bool sysfs_node_name(struct sysfs_node node, char *buf, size_t bufsize) {
     if (node.kind == sysfs_cpu_dir)
         return snprintf(buf, bufsize, "cpu%d", node.cpu) >= 0;
+    if (node.kind == sysfs_net_dir) {
+        struct net_iface_stats iface;
+        if (!sysfs_net_iface_at(node.cpu, &iface))
+            return false;
+        return snprintf(buf, bufsize, "%s", iface.name) >= 0;
+    }
     if (node.kind == sysfs_cache_index)
         return snprintf(buf, bufsize, "index%d", node.index) >= 0;
     const struct sysfs_node_desc *desc = sysfs_desc(node.kind);
@@ -1063,6 +1144,23 @@ static bool sysfs_lookup_child(struct sysfs_node parent, const char *name, size_
                 continue;
             *child_out = sysfs_node_make(desc->kind, parent.cpu, parent.index);
             return true;
+        }
+
+        // Generated name: an interface, matched against the live list rather
+        // than parsed, since a name like "utun4" carries no index.
+        if (desc->kind == sysfs_net_dir) {
+            int total = sysfs_net_count();
+            for (int n = 0; n < total; n++) {
+                struct net_iface_stats iface;
+                if (!sysfs_net_iface_at(n, &iface))
+                    break;
+                if (strlen(iface.name) == namelen &&
+                        strncmp(iface.name, name, namelen) == 0) {
+                    *child_out = sysfs_node_make(desc->kind, n, parent.index);
+                    return true;
+                }
+            }
+            continue;
         }
 
         // Generated name: cpuN or indexN.
@@ -1244,6 +1342,24 @@ static size_t sysfs_file_data(struct sysfs_node node, char *buf, size_t bufsize)
                 return sysfs_format_cpulist(buf, bufsize, 0, last_cpu);
             return sysfs_format_cpulist(buf, bufsize, node.cpu, node.cpu);
 
+        case sysfs_net_address:
+        case sysfs_net_mtu:
+        case sysfs_net_flags:
+        case sysfs_net_operstate:
+        case sysfs_net_carrier:
+        case sysfs_net_type:
+        case sysfs_net_rx_bytes:
+        case sysfs_net_rx_packets:
+        case sysfs_net_rx_errors:
+        case sysfs_net_rx_dropped:
+        case sysfs_net_multicast:
+        case sysfs_net_tx_bytes:
+        case sysfs_net_tx_packets:
+        case sysfs_net_tx_errors:
+        case sysfs_net_tx_dropped:
+        case sysfs_net_collisions:
+            return sysfs_net_file_data(node, buf, bufsize);
+
         case sysfs_block_dev_devno:
             return snprintf(buf, bufsize, "8:0\n");
         case sysfs_block_dev_stat:
@@ -1251,6 +1367,67 @@ static size_t sysfs_file_data(struct sysfs_node node, char *buf, size_t bufsize)
         default:
             return 0;
     }
+}
+
+// Linux's IFF_* numbering, which is what /sys/class/net/<iface>/flags means.
+// The low ten bits are the same on both platforms; above those they diverge,
+// and MULTICAST is the one that matters (0x8000 on BSD, 0x1000 on Linux).
+static unsigned int sysfs_net_linux_flags(unsigned int host_flags) {
+#if defined(__APPLE__)
+    unsigned int out = host_flags & 0x3ff;
+    if (host_flags & 0x8000)     // IFF_MULTICAST (BSD)
+        out |= 0x1000;           // IFF_MULTICAST (Linux)
+    return out;
+#else
+    return host_flags;           // already Linux's
+#endif
+}
+
+static size_t sysfs_net_file_data(struct sysfs_node node, char *buf, size_t bufsize) {
+    struct net_iface_stats iface;
+    if (!sysfs_net_iface_at(node.cpu, &iface))
+        return 0;
+
+    // Linux reports every counter as a decimal on its own line, and 0 for one
+    // it does not have -- an absent file would make a reader think the
+    // interface is absent, which is worse than a zero.
+    uint64_t value;
+    switch (node.kind) {
+        case sysfs_net_address:
+            if (!iface.has_mac)
+                return snprintf(buf, bufsize, "00:00:00:00:00:00\n");
+            return snprintf(buf, bufsize, "%02x:%02x:%02x:%02x:%02x:%02x\n",
+                            iface.mac[0], iface.mac[1], iface.mac[2],
+                            iface.mac[3], iface.mac[4], iface.mac[5]);
+        case sysfs_net_mtu:
+            return snprintf(buf, bufsize, "%llu\n", (unsigned long long) iface.mtu);
+        case sysfs_net_flags:
+            return snprintf(buf, bufsize, "0x%x\n", sysfs_net_linux_flags(iface.flags));
+        case sysfs_net_operstate:
+            // IFF_UP is "administratively up"; IFF_RUNNING is "the link is
+            // actually there", which is what operstate reports.
+            return snprintf(buf, bufsize, "%s\n",
+                            (iface.flags & 0x40) ? "up" : "down");
+        case sysfs_net_carrier:
+            return snprintf(buf, bufsize, "%d\n", (iface.flags & 0x40) ? 1 : 0);
+        case sysfs_net_type:
+            // ARPHRD_LOOPBACK / ARPHRD_ETHER. Taken from IFF_LOOPBACK rather
+            // than if_data's ifi_type, whose numbering is BSD's IFT_*.
+            return snprintf(buf, bufsize, "%d\n", (iface.flags & 0x8) ? 772 : 1);
+
+        case sysfs_net_rx_bytes:   value = iface.rx_bytes;   break;
+        case sysfs_net_rx_packets: value = iface.rx_packets; break;
+        case sysfs_net_rx_errors:  value = iface.rx_errors;  break;
+        case sysfs_net_rx_dropped: value = iface.rx_dropped; break;
+        case sysfs_net_multicast:  value = iface.multicast;  break;
+        case sysfs_net_tx_bytes:   value = iface.tx_bytes;   break;
+        case sysfs_net_tx_packets: value = iface.tx_packets; break;
+        case sysfs_net_tx_errors:  value = iface.tx_errors;  break;
+        case sysfs_net_tx_dropped: value = iface.tx_dropped; break;
+        case sysfs_net_collisions: value = iface.collisions; break;
+        default: return 0;
+    }
+    return snprintf(buf, bufsize, "%llu\n", (unsigned long long) value);
 }
 
 static size_t sysfs_file_size(struct sysfs_node node) {
@@ -1380,7 +1557,7 @@ static int sysfs_readdir(struct fd *fd, struct dir_entry *entry) {
         const struct sysfs_node_desc *desc = sysfs_desc(node.kind);
         struct sysfs_node parent = node;
         if (desc != NULL && node.kind != sysfs_root) {
-            int cpu = node.kind == sysfs_cpu_dir ? -1 : node.cpu;
+            int cpu = (node.kind == sysfs_cpu_dir || node.kind == sysfs_net_dir) ? -1 : node.cpu;
             int idx = node.kind == sysfs_cache_index ? -1 : node.index;
             parent = sysfs_node_make(desc->parent, cpu, idx);
         }
@@ -1403,7 +1580,7 @@ static int sysfs_readdir(struct fd *fd, struct dir_entry *entry) {
         }
 
         struct sysfs_node child;
-        if (desc->kind == sysfs_cpu_dir)
+        if (desc->kind == sysfs_cpu_dir || desc->kind == sysfs_net_dir)
             child = sysfs_node_make(desc->kind, (int) remaining, node.index);
         else if (desc->kind == sysfs_cache_index)
             child = sysfs_node_make(desc->kind, node.cpu, (int) remaining);

@@ -132,11 +132,46 @@ correctly on its own. On a root where that container check passes by accident
 (the TODO's note about `[elogind-daemon]` being the one bracketed process), the
 30-second guard is now passed too, so both paths are covered. `4fb8c0768`.
 
-### btop's empty disk and io panels -- FIXED 2026-08-19
+### btop's empty disk, net and io panels -- FIXED 2026-08-19 (in two goes)
 
-`/proc/diskstats` named "disk1" and `/proc/mounts` named the root
-"alpine-arm64-test"; btop matches mounts to diskstats entries by device name and
-no name in one file appeared in the other. "disk1" was the host's name for a Mac
+**The first attempt fixed the wrong thing, and this is why.** The entry said
+btop matches mounts to diskstats entries by device name, so the two files were
+made to agree on `sda`. Verified: the invariant held, in every file, on all four
+guest arches. Then it was installed on an iPad and both panels were still empty
+-- because that invariant was never what btop reads.
+
+Reading btop's own binary settles it in one command:
+
+    strings /usr/bin/btop | grep -E "^/(proc|sys|etc)/"
+    /etc/fstab          /etc/mtab          /sys/block/{}/stat
+    /sys/class/net/     /statistics/       ...
+
+`/proc/net/dev` does not appear ANYWHERE in it, and `/proc/diskstats` does not
+either. Two separate causes, neither of them column alignment:
+
+- **Disks come from `/etc/fstab`.** btop's `use_fstab` defaults to true, so its
+  whole disk list is whatever fstab declares -- and a rootfs tarball has never
+  heard of AOK's root. Alpine's ships `noauto` lines for a CD-ROM and a USB
+  stick and nothing else. Measured both ways: with `use_fstab = false` the panel
+  fills in; with the default, blank. `ensure_root_fstab_entry()` (kernel/init.c,
+  called from both the CLI and the app at boot, like the /dev repair beside it)
+  adds a root line when nothing declares "/", and only then.
+- **Counters come from `/sys/class/net/<iface>/statistics/`.** AOK had no
+  `/sys/class/net` at all, so every interface read zero -- which is exactly the
+  "shows no traffic" seen on the iPad's tailscale interface. Now present, with
+  statistics plus address/mtu/flags/operstate/carrier/type, built from the same
+  snapshot `/proc/net/dev` uses so the two cannot disagree.
+
+With btop's stock config, unmodified: disks show 926 GiB at 32% used, and the
+net panel reads 2.88 MiB/s down / 124 KiB/s up against real traffic.
+
+**The lesson, since it cost a round trip:** the invariant was verified and the
+outcome was not. Running btop once would have caught it in a minute, and reading
+its binary for the paths it opens would have caught it before any code changed.
+
+**The name fix was still worth doing**, for everything that DOES read those
+files. `/proc/diskstats` named "disk1" and `/proc/mounts` named the root
+"alpine-arm64-test", so nothing tied a mount to a device. "disk1" was the host's name for a Mac
 disk -- a host detail leaking into a guest -- and it contradicted the major 8,
 minor 0 printed beside it, which IS sda in Linux's numbering.
 

@@ -216,6 +216,9 @@ static void setup_host_mounts(void) {
     // that writes boot status or opens the console) then silently got ENOENT.
     // Same node the app and the aarch64 image use (5:1).
     ensure_dev_node("/dev/console", TTY_ALTERNATE_MAJOR, DEV_CONSOLE_MINOR);
+    // The root is a device now (/proc/diskstats, /sys/block); say so where
+    // userland looks for the list of filesystems. See kernel/init.c.
+    ensure_root_fstab_entry();
     ignore_eexist(generic_mkdirat(AT_PWD, "/dev/pts", 0755));
     // Not every bundled root's base tarball ships /dev/shm, and iSH has no
     // boot-time tmpfs auto-mount for it; create it unconditionally so POSIX
