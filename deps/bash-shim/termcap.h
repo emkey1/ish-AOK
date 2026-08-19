@@ -57,10 +57,10 @@ int   tputs(char *str, int affcnt, int (*putc_fn)(int));
  * references it once the bundled termcap is out of the build (jobs.c's
  * `ospeed` is a parameter of draino, not this). If something starts to, the
  * failure is a link error naming it, which is the loud kind. */
-__thread extern char PC;
-__thread extern short ospeed;
-__thread extern char *UP;
-__thread extern char *BC;
+extern __thread char PC;
+extern __thread short ospeed;
+extern __thread char *UP;
+extern __thread char *BC;
 
 #ifdef __cplusplus
 }
