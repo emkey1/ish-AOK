@@ -1,6 +1,6 @@
 # Release Notes Since `builds/iSH-AOK_548`
 
-178 commits, and one of them is the release: iSH-AOK can now run programs that
+179 commits, and one of them is the release: iSH-AOK can now run programs that
 were **compiled into the app** instead of translating them instruction by
 instruction. A native program is host code running on a guest task's thread, so
 it executes at full speed — but it has to be made to believe it is inside the
@@ -260,8 +260,12 @@ run had it passing as part of its 118/118. The `mknod` change itself was checked
 value: the six invalid ones now answer EINVAL, `S_IFREG`, `S_IFIFO`, `S_IFSOCK`,
 `S_IFCHR` and a bare mode still succeed, and DIR and LNK are unchanged.
 
-Native zsh's differential suite (`/AOK/tests/native_zsh_fork_state.sh`) is
-116 of 119, the three failures being process substitution — see *Known gaps*.
+Native zsh's differential suite (`/AOK/tests/native_zsh_fork_state.sh`) is 116
+of 119 on the Alpine test root. Two of the three failures are process
+substitution, and that is the ROOTFS rather than the shell: `<(...)` needs
+`/dev/fd`, which that image does not carry, so it fails identically under the
+emulated `/bin/bash` there and works under both shells on Devuan. The third
+wants `/usr/bin/printenv`, which the image also lacks.
 
 ## Licensing
 
@@ -312,7 +316,8 @@ Recorded rather than fixed, so nobody has to rediscover them:
 `builds/iSH-AOK_548..builds/iSH-AOK_549`
 
 ```
-2d0d00868 docs: state the ptrace_group_stop isolation result precisely
+d77b3254b docs: correct nine claims in the native-program pages, one of them mine
+55e1d7e11 docs: state the ptrace_group_stop isolation result precisely
 bce7cbcbc docs: the 549 notes gain a Validation section, a correct count, and a range
 d101eeb07 docs: two pages on native programs, and the gaps around them
 4dba625a4 docs: twenty stale claims across the README, /AOK/docs and the tools

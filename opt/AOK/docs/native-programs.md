@@ -16,7 +16,7 @@ ls /AOK/native
 # bash  smallclue  zsh  zsh-multio
 ```
 
-Everything else — `ssh`, `wc`, `vi`, `rsync` — is a symlink to
+Everything else — `ssh`, `wc`, `vi` — is a symlink to
 `/AOK/native/smallclue`, which picks its applet from the name it was invoked
 under, exactly the way busybox does. [native-setup.md](native-setup.md) covers
 putting those symlinks in place.
@@ -69,9 +69,11 @@ A few things genuinely belong to the host and stay there — a native program's 
 stack is a host stack, and its memory comes from the host allocator, because
 those are not things the guest has an opinion about.
 
-The rule is enforced rather than trusted: `tools/check-native-libc.py` fails the
-build if a native program references a host libc symbol that is not on an
-explicit allowlist.
+The rule is checked rather than trusted: `tools/check-native-libc.py`, run over
+the built objects, reports every host-libc symbol a native program references
+that is not on an explicit allowlist. It is a gate someone runs, not something
+wired into the build, and it covers the routed surface rather than proving there
+is nothing left — the timezone, for one, is still the host's.
 
 ## When a program is not in this build
 
@@ -98,11 +100,10 @@ diagnostic rather than a program.
 | path | what it is |
 |---|---|
 | `/AOK/native/smallclue` | a busybox-style toolbox; the applet is chosen by the name it is invoked under |
-| `ssh`, `scp`, `sftp`, `ssh-keygen` | OpenSSH, as applets of SmallCLUE — note it is built **without OpenSSL**, so the [crypto accelerator](crypto-accel.md) does not apply to it |
-| `rsync` | openrsync, an applet of SmallCLUE |
+| `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id` | OpenSSH, as applets of SmallCLUE — note it is built **without OpenSSL**, so the [crypto accelerator](crypto-accel.md) does not apply to it |
 | `vi` | the Nextvi editor, an applet of SmallCLUE |
 | `/AOK/native/bash` | bash 5.2. GPLv3, which is why it has a build switch at all |
-| `/AOK/native/zsh` | zsh. See the README for what works and what does not |
+| `/AOK/native/zsh` | zsh, with fork-by-relaunch; `zsh --version` for the exact one |
 | `/AOK/native/zsh-multio` | a helper for zsh's MULTIOS redirections, which need a process that is not the shell to hold the descriptors |
 
 SmallCLUE's applets are *smaller* implementations, not drop-in replacements for
@@ -114,9 +115,14 @@ them ahead of your distro's tools on `PATH`; see
 
 ## Where this is not the fast path
 
-Native execution is a large win for anything that spends its time interpreting —
-a shell running a long script, for example. It is neutral or slightly negative
-for work dominated by a single tight loop of the program's own arithmetic, and
-for anything that forks constantly, since each fork becomes a re-launch. If you
-are measuring, measure the workload you actually care about rather than
-extrapolating from one number.
+The win is **interpretation**. A shell grinding through a long script — an
+arithmetic loop is the extreme case, at roughly 16x — spends its time reading and
+dispatching its own syntax, and that is exactly the work that stops being
+translated.
+
+The cost is **forking**. Every subshell, pipeline stage and command substitution
+becomes a serialise-and-re-launch rather than a `fork`, so a script whose shape
+is thousands of short subshells gains far less, and can be slower than you
+expect. If you are measuring, measure the workload you actually care about:
+extrapolating one number to "the shell is 16x faster" is a mistake this project
+has already made once.

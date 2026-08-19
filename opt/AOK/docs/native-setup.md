@@ -17,12 +17,17 @@ What the setup does is let you type `wc` and `ssh` and get the native ones.
 ## The one command
 
 ```sh
-sudo sh /AOK/tools/native-links.sh
+sh /AOK/tools/native-links.sh
 ```
 
+No `sudo` — a stock Alpine or Devuan root does not have it installed, and the
+app logs you in as root anyway. If you have added `sudo` and are running as
+someone else, prefix it.
+
 That creates a symlink per applet in `/usr/local/native-bin`, puts that
-directory first on your `PATH`, and switches your login shell to a native one.
-On a current build it links about 105 applets and skips 28 it knows do not work.
+directory first on your `PATH`, and switches the UID 1000 user's login shell to
+a native one. On a current build it links about 105 applets and skips 28 it
+knows do not work.
 
 Look before you leap — `--list` changes nothing and prints exactly what would
 happen:
@@ -45,30 +50,37 @@ since it is part of the app rather than of any root.
 
 ## Choosing the shell
 
-By default the script switches the UID 1000 user's login shell to
-`/AOK/native/bash` when that exists, and `/AOK/native/zsh` otherwise. Say so
-explicitly with `--shell`:
+The script switches **the UID 1000 user's** login shell — not root's, and not
+necessarily yours. That is worth saying out loud: the app logs you in as root by
+default, so on a stock setup this step changes a user you may never log in as,
+and you will not notice it. On the bundled roots that user is `nu`; check with
+`getent passwd 1000`.
+
+By default it picks `/AOK/native/bash` when that exists and `/AOK/native/zsh`
+otherwise. Say so explicitly with `--shell`:
 
 ```sh
-sudo sh /AOK/tools/native-links.sh --shell zsh     # native zsh
-sudo sh /AOK/tools/native-links.sh --shell bash    # native bash
-sudo sh /AOK/tools/native-links.sh --shell /bin/ash   # an absolute path is taken as given
-sudo sh /AOK/tools/native-links.sh --no-shell      # link the applets, leave the shell alone
+sh /AOK/tools/native-links.sh --shell zsh        # native zsh
+sh /AOK/tools/native-links.sh --shell bash       # native bash
+sh /AOK/tools/native-links.sh --shell /bin/ash   # an absolute path is taken as given
+sh /AOK/tools/native-links.sh --no-shell         # link the applets, leave the shell alone
 ```
 
 The previous shell is recorded in `/etc/aok-native-shell.prev`, so `--remove`
 can put it back.
 
-To check what you are actually running right now, ask the shell for its own
-name:
+To check what you are actually running right now, ask the shell where it came
+from:
 
 ```sh
-echo $0
-# /AOK/native/bash
+echo $BASH          # bash:  /AOK/native/bash
+echo $ZSH_ARGZERO   # zsh:   /AOK/native/zsh
 ```
 
-`/proc/self/exe` will *not* tell you — a native program has no guest image of
-its own, so that link still points at the last guest binary the task loaded.
+`echo $0` works for a shell you invoked by name, but a *login* shell
+conventionally reports `-bash`, which tells you nothing about which bash it is.
+`/proc/self/exe` will not tell you either — a native program has no guest image
+of its own, so that link still points at the last guest binary the task loaded.
 
 ## Options
 
@@ -86,7 +98,7 @@ its own, so that link still points at the last guest binary the task loaded.
 A trailing argument picks a different directory:
 
 ```sh
-sudo sh /AOK/tools/native-links.sh /usr/local/bin
+sh /AOK/tools/native-links.sh /usr/local/bin
 ```
 
 That puts the links ahead of your distro's own `/usr/local/bin` entries too,
@@ -95,12 +107,14 @@ which is more shadowing than the default, not less.
 ## Backing out
 
 ```sh
-sudo sh /AOK/tools/native-links.sh --remove
+sh /AOK/tools/native-links.sh --remove
 ```
 
 That removes every link it owns, restores the login shell it saved, and deletes
-`/etc/profile.d/05-aok-native-bin.sh`. It only touches symlinks that point into
-`/AOK/native`, so anything of your own in the same directory is left alone. The
+`/etc/profile.d/05-aok-native-bin.sh`. It only touches symlinks that resolve to
+`/AOK/native/smallclue` specifically, so anything of your own in the same
+directory — including a link you made to `/AOK/native/bash` by hand — is left
+alone. Pass the same directory you installed into if it was not the default. The
 PATH change goes away at your next login.
 
 For a single stubborn command, `--no-path` is the softer version: the links stay
@@ -113,9 +127,13 @@ places they diverge tend to be individual flags rather than whole commands. A
 script that has always worked can fail on one option while the command itself is
 plainly present and working — that is the shape this problem takes.
 
-The excluded list is derived mechanically (`tools/native-applet-audit.py`)
-rather than guessed, so applets that cannot work are not linked in the first
-place. If one that *is* linked misbehaves:
+The excluded list is **measured** — each applet was run and its behaviour
+recorded — rather than predicted from the sources; `tools/native-applet-audit.py`
+exists, but the script's own comments are explicit that it is a hint about where
+to look and not the authority, having flagged several applets that turned out to
+work. A second, runtime probe covers applets whose availability depends on the
+build. So applets that cannot work are not linked in the first place. If one that
+*is* linked misbehaves:
 
 ```sh
 command -v wc                  # which one am I actually getting?

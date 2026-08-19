@@ -16,10 +16,11 @@
 # worth keeping in view: shadowing means every link takes precedence over the
 # distro's command, and SmallCLUE's applets are SMALLER implementations rather
 # than drop-in replacements. Excluding the applets that cannot work at all is not
-# enough on its own, because the incompatibilities are per-flag -- PSCAL's
-# harness once died on `grep -q`, which SmallCLUE's grep does not support, and no
-# audit of the sources finds that, since grep is present and works, just not with
-# that flag.
+# enough on its own, because the incompatibilities are per-flag: PSCAL's harness
+# once died on `grep -q', which SmallCLUE's grep did not support at the time. No
+# audit of the SOURCES finds that class, since grep is plainly present and works,
+# just not with that one flag. (`grep -q' itself works now -- the shape of the
+# problem is what matters, not that example.)
 #
 # What changed is the other half: the EXCLUDED list below is now derived from
 # tools/native-applet-audit.py rather than guessed, so an applet that cannot work

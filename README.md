@@ -12,7 +12,7 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
   - product name `iSH-AOK`
   - bundle root `app.ish.iSH-AOK`
 - **Four guest architectures**, all JIT: `i386`, `amd64` (x86_64), `arm64` (aarch64), and `riscv64`.
-- **Native programs**: bash, zsh and SmallCLUE's busybox-style toolbox — which carries OpenSSH (`ssh`, `scp`, `sftp`, `ssh-keygen`), openrsync and the Nextvi editor — are compiled into the app as host code and dispatched from guest `execve` through `/AOK/native/<name>`. They are host functions on a guest task's thread, not guest binaries, so they run at full speed instead of being translated instruction by instruction.
+- **Native programs**: bash, zsh and SmallCLUE's busybox-style toolbox — which carries OpenSSH (`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`) and the Nextvi editor — are compiled into the app as host code and dispatched from guest `execve` through `/AOK/native/<name>`. They are host functions on a guest task's thread, not guest binaries, so they run at full speed instead of being translated instruction by instruction.
 - `/AOK`, a read-only in-app filesystem (`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`) embedded at build time from `opt/AOK/` via `fs/aok-*.manifest` and `tools/gen-aokfs.py`.
 - Bundled root filesystems in the app build (Alpine 3.23.3 and Devuan 6, `aarch64` only), plus downloadable images for `i386`, `x86_64` and `riscv64`.
 - File Provider support for exposing guest files through iOS.
@@ -203,8 +203,7 @@ name selecting the applet exactly as busybox does:
 | program | what it is |
 |---|---|
 | `/AOK/native/smallclue` | busybox-style multicall toolbox, applet chosen by `argv[0]` |
-| `ssh`, `scp`, `sftp`, `ssh-keygen` | OpenSSH, applets of SmallCLUE (built without OpenSSL) |
-| `rsync` | openrsync, an applet of SmallCLUE |
+| `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id` | OpenSSH, applets of SmallCLUE (built without OpenSSL) |
 | `vi` | the Nextvi editor, an applet of SmallCLUE |
 | `/AOK/native/bash` | see [Native bash and licensing](#native-bash-and-licensing) |
 | `/AOK/native/zsh` | see [Native zsh](#native-zsh) |
@@ -221,9 +220,10 @@ identity, filesystem, `/etc/hosts` and `/etc/resolv.conf`, terminfo, locale and
 rc-file locations are all routed to the rootfs by a shim compiled in ahead of
 the system headers (`kernel/native_libc.c`). The governing question is not "is
 this function pure?" but "can this function's answer differ between the host and
-the guest?". `tools/check-native-libc.py` enforces it, failing the build on any
-host-libc symbol a native program references that is not on an explicit
-allowlist.
+the guest?". `tools/check-native-libc.py` is the gate for it: run over the built
+objects, it reports every host-libc symbol a native program references that is
+not on an explicit allowlist. It is run deliberately rather than wired into the
+build.
 
 ## Native bash and licensing
 
@@ -306,12 +306,15 @@ descriptors have to be held by something that is not the shell.
 
 `/AOK/tools/native-links.sh --shell zsh` will make it the login shell.
 
-**Process substitution — `<(...)` and `>(...)` — does not work yet**, since it
-needs `/dev/fd` entries the re-launch has no way to hand across. 119 differential
-cases ship in the guest at `/AOK/tests/native_zsh_fork_state.sh`, with every
-expectation taken from what real zsh prints rather than from what looked
-reasonable; 116 of them pass, and the two that fail are both that gap. Two
-further known gaps are recorded under *Known gaps* in
+119 differential cases ship in the guest at
+`/AOK/tests/native_zsh_fork_state.sh`, with every expectation taken from what
+real zsh prints rather than from what looked reasonable; 116 of them pass. The
+two that fail are **process substitution** — `<(...)` and `>(...)` — and that is
+a property of the rootfs rather than of the shell: it needs `/dev/fd`, which the
+Alpine image does not provide, so it fails identically under the emulated
+`/bin/bash` there and works under both shells on Devuan, where `/dev/fd` is a
+symlink to `/proc/self/fd`. Two known gaps that *are* the shell's are recorded
+under *Known gaps* in
 [docs/release-notes-since-iSH-AOK_549.md](docs/release-notes-since-iSH-AOK_549.md):
 a pattern is compiled at first use and cached in the parse tree with nothing
 recording the options in force at the time, so a re-launched child can compile
