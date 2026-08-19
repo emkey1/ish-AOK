@@ -1588,6 +1588,87 @@ int nlibc_fcntl(int fd_no, int cmd, ...) {
         case F_SETFL:
             return (int) nlibc_ret(native_syscall(NATIVE_SYS_fcntl, fd_no, F_SETFL,
                     nlibc_open_flags_to_guest((int) arg)));
+
+        // POSIX advisory locks. Everything above is a flag or a dup; these are
+        // the ones carrying a struct, and they used to fall to the ENOSYS below
+        // -- which is why nothing that locks a file could run natively. SQLite's
+        // ENTIRE locking protocol is fcntl() byte-range locks, so a native
+        // sqlite3 would either refuse to open a database or, worse, believe it
+        // held a lock it did not.
+        //
+        // Two traps here, both silent when got wrong:
+        //
+        //  - Darwin's struct flock and Linux's share no field order. Darwin is
+        //    {l_start, l_len, l_pid, l_type, l_whence}; Linux is {l_type,
+        //    l_whence, l_start, l_len, l_pid}. Copying the struct across gives
+        //    nonsense, so it goes field by field.
+        //  - The lock TYPES differ too: Darwin F_RDLCK=1, F_UNLCK=2, F_WRLCK=3
+        //    against Linux's 0, 1, 2. A straight assignment turns a read lock
+        //    into a write lock, which is the kind of bug that shows up as
+        //    database corruption rather than as an error.
+        //
+        // The 64-bit command numbers deliberately. A native program's syscalls
+        // always dispatch through the ARM64 table, whatever the task's ABI
+        // (syscall_dispatch_native in kernel/calls.c), and that table's fcntl is
+        // sys_fcntl -- guest64_locks false, so plain F_SETLK there reads a
+        // struct flock32_ and truncates any offset past 2 GiB. SQLite's pending
+        // byte sits at 0x40000000. F_SETLK64 reads the 64-bit struct flock_.
+        case F_GETLK:
+        case F_SETLK:
+        case F_SETLKW: {
+            // Matches fs/inode.h's struct flock_ up to (not including) its
+            // comm[], which is AOK's own and not part of the guest ABI --
+            // the kernel reads exactly offsetof(struct flock_, comm) bytes.
+            struct guest_flock64 {
+                int16_t type;
+                int16_t whence;
+                int64_t start;
+                int64_t len;
+                int32_t pid;
+            } __attribute__((packed)) g;
+            _Static_assert(sizeof(g) == 24, "guest struct flock64 is 24 bytes");
+
+            struct flock *host = (struct flock *) (uintptr_t) arg;
+            if (host == NULL)
+                return nlibc_fail(_EFAULT);
+            int type;
+            switch (host->l_type) {
+                case F_RDLCK: type = 0; break;
+                case F_WRLCK: type = 1; break;
+                case F_UNLCK: type = 2; break;
+                default: return nlibc_fail(_EINVAL);
+            }
+            memset(&g, 0, sizeof(g));
+            g.type = (int16_t) type;
+            g.whence = (int16_t) host->l_whence;
+            g.start = (int64_t) host->l_start;
+            g.len = (int64_t) host->l_len;
+            g.pid = (int32_t) host->l_pid;
+
+            NATIVE_FRAME;
+            guest_addr_t guest_lock = native_scratch_put(&g, sizeof(g));
+            if (guest_lock == 0)
+                return nlibc_fail(_ENOMEM);
+            int guest_cmd = cmd == F_GETLK ? 12 : (cmd == F_SETLK ? 13 : 14);
+            sqword_t res = native_syscall(NATIVE_SYS_fcntl, fd_no, guest_cmd, guest_lock);
+            if (res < 0)
+                return nlibc_fail((int) res);
+            if (cmd == F_GETLK) {
+                if (native_scratch_get(&g, guest_lock, sizeof(g)) < 0)
+                    return nlibc_fail(_EFAULT);
+                switch (g.type) {
+                    case 0: host->l_type = F_RDLCK; break;
+                    case 1: host->l_type = F_WRLCK; break;
+                    default: host->l_type = F_UNLCK; break;
+                }
+                host->l_whence = (short) g.whence;
+                host->l_start = (off_t) g.start;
+                host->l_len = (off_t) g.len;
+                host->l_pid = (pid_t) g.pid;
+            }
+            return 0;
+        }
+
         default:
             return nlibc_fail(_ENOSYS);
     }
