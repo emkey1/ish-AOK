@@ -151,6 +151,46 @@ static void sanitize_display(char *s) {
     }
 }
 
+
+// Truncate for display: at most `width` COLUMNS, never splitting a UTF-8
+// sequence, with top's '+' marker when something was cut.
+//
+// Two reasons this exists rather than a bare "%.*s". First, precision counts
+// BYTES, so a multi-byte character straddling the limit is cut in half and the
+// terminal renders the tail as garbage. Second, the batch path had no limit at
+// all: it printed comm with a plain %s, so a long name ran past the right edge
+// and wrapped, and a wrapped line makes every row after it unreadable.
+static void truncate_display(char *dst, size_t dstsize, const char *src, int width) {
+    if (dstsize == 0)
+        return;
+    if (width < 1)
+        width = 1;
+    size_t out = 0;
+    int cols = 0;
+    const unsigned char *p = (const unsigned char *) src;
+    while (*p != '\0' && cols < width) {
+        // Length of this UTF-8 sequence; a stray continuation or invalid lead
+        // byte is treated as one byte so we always make progress.
+        size_t seq = 1;
+        if ((*p & 0xE0) == 0xC0) seq = 2;
+        else if ((*p & 0xF0) == 0xE0) seq = 3;
+        else if ((*p & 0xF8) == 0xF0) seq = 4;
+        for (size_t k = 1; k < seq; k++)
+            if ((p[k] & 0xC0) != 0x80) { seq = 1; break; }
+        if (out + seq >= dstsize)
+            break;
+        memcpy(dst + out, p, seq);
+        out += seq;
+        p += seq;
+        cols++;   // counts characters, not wcwidth -- see the note below
+    }
+    // A truncation marker, as top uses, so a cut name is not mistaken for the
+    // whole one. Only when there is more to show AND room to say so.
+    if (*p != '\0' && out > 0 && out + 1 < dstsize)
+        dst[out - 1] = '+';
+    dst[out] = '\0';
+}
+
 // Reads one process's fields we need. /proc/<pid>/stat's 2nd field (comm) is
 // the only one that can contain spaces or parens, so we locate it by the
 // *last* ')' on the line rather than naive whitespace splitting.
@@ -936,13 +976,16 @@ static void draw_interactive(struct proc_sample *procs, int n,
         if (cmd_width < 7)
             cmd_width = 7;
 
+        char cmdbuf[CMDLINE_MAX];
+        truncate_display(cmdbuf, sizeof(cmdbuf), cmd, cmd_width);
+
         char line[512];
         int len = snprintf(line, sizeof(line),
-                           "%6d %-8.8s %3ld %3ld %7s %7s %1s %-7s %5.1f %5.1f %8s %.*s",
+                           "%6d %-8.8s %3ld %3ld %7s %7s %1s %-7s %5.1f %5.1f %8s %s",
                            (int) procs[i].pid, userbuf,
                            procs[i].priority, procs[i].nice,
                            virt, res, state, procs[i].arch,
-                           cpu_pct, mem_pct, timebuf, cmd_width, cmd);
+                           cpu_pct, mem_pct, timebuf, cmdbuf);
         if (len > cols)
             len = cols;
         if (i == selected)
@@ -1049,10 +1092,25 @@ static void print_batch(struct proc_sample *cur, int cur_n,
             : 0;
         char userbuf[32];
         username_for(cur[i].uid, userbuf, sizeof(userbuf));
+        // The fixed columns above occupy 60; give the command whatever is
+        // left of the terminal. When stdout is not a tty there is no width to
+        // respect, so nothing is cut -- a redirected snapshot should keep the
+        // whole name.
+        char cmdbuf[CMDLINE_MAX];
+        struct winsize bws;
+        int bcols = 0;
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &bws) == 0 && bws.ws_col > 0)
+            bcols = bws.ws_col;
+        if (bcols > 0) {
+            int w = bcols - 60;
+            truncate_display(cmdbuf, sizeof(cmdbuf), cur[i].comm, w < 7 ? 7 : w);
+        } else {
+            snprintf(cmdbuf, sizeof(cmdbuf), "%s", cur[i].comm);
+        }
         printf("%6d %-8s %3ld %3ld %8lu %8ld %-7s %5.1f %5.1f  %s\n",
                (int) cur[i].pid, userbuf, cur[i].priority, cur[i].nice,
                cur[i].vsize / 1024, cur[i].rss_pages * page_kb,
-               cur[i].arch, cpu_pct, mem_pct, cur[i].comm);
+               cur[i].arch, cpu_pct, mem_pct, cmdbuf);
     }
     fflush(stdout);
 }
