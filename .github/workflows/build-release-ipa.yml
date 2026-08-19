@@ -118,8 +118,12 @@ jobs:
           TAG="${{ steps.package.outputs.tag }}"
           IPA_NAME="${{ steps.package.outputs.ipa_name }}"
           BUILD_N="${{ steps.package.outputs.build_n }}"
-          PREV_N=$((BUILD_N - 1))
-          NOTES_FILE="release-notes-since-iSH-AOK_${PREV_N}.md"
+          # Named for the build being SHIPPED, and they live under docs/. This
+          # looked for docs-less "release-notes-since-iSH-AOK_$((N-1)).md" in the
+          # checkout root, which has matched nothing since the notes moved into
+          # docs/ (60b9b8285) -- so builds 544 through 548 all published with the
+          # placeholder body below instead of their notes.
+          NOTES_FILE="docs/release-notes-since-iSH-AOK_${BUILD_N}.md"
           if [ -f "$NOTES_FILE" ]; then
             NOTES_ARGS=(--notes-file "$NOTES_FILE")
           else
