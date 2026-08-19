@@ -10,40 +10,6 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
-### Terminal cell height -- IMPLEMENTED, not yet seen
-
-At font sizes under 16 a background highlight sits 1-2px proud of the Powerline
-separator next to it. hterm sizes a cell as
-`fontBoundingBoxAscent + fontBoundingBoxDescent` -- the font's MAXIMUM extent,
-including room for accents and deep descenders a block glyph never uses. The
-background fills that cell; `U+2588` only rises to about the em height, and the
-leftover ascent is the band. It is a fixed fraction of the em, so it shrinks
-with the font but cannot go below one whole pixel.
-
-**Done** (2026-08-19), the reporter's first suggestion rather than the second --
-a baseline offset cannot fix a glyph shorter than its cell, it only moves the
-band from the top to the bottom:
-
-- `deps/libapps` gains a `line-height` preference: a MULTIPLIER, because how
-  much of the em a patched font's blocks cover varies between Nerd Font
-  patches, so there is no one formula. Applied in `measureCharacterSize` so the
-  legacy non-monospace fallback honours it too, bounded to (0.5, 2].
-- Plumbed through `term.js`, `TerminalView.m` and `UserPreferences`, so it is
-  settable from the guest at `/proc/ish/defaults/line_height`, and a
-  "Line Height" row sits under Font Size in Appearance (0.7-1.3, step 0.05).
-- **Default 1 = the measured height, exactly today's behaviour.** The scaling
-  branch does not execute at all until someone changes it, so no existing
-  setup moves.
-
-**What is left: looking at it.** The whole point is a visual judgement, and the
-entry always said so -- shrinking a cell risks clipping tall glyphs, so it needs
-checks across font sizes plus an accented and a CJK sample. The app builds for
-the simulator with all of this in it, which is the only verification done so
-far; granting the simulator panel device access is what unblocks the rest.
-Until someone has seen it, treat the settings row in particular as unreviewed
-UI -- it reuses the Font Size prototype cell and sets its title, range and
-action in code.
-
 ### AOK loses a connected UDP socket's error about a third of the time
 
 Found 2026-08-19 while building the regression test for the chronyd spin, and
@@ -97,6 +63,45 @@ for the lldb setup, and note the `process handle SIGUSR1` lines are needed
 before `run` or lldb stops on AOK's own poke signal.
 
 ## Closed during the 550 cycle
+
+### Terminal cell height -- FIXED and SEEN 2026-08-19
+
+At font sizes under 16 a background highlight sat 1-2px proud of the Powerline
+separator beside it. hterm sizes a cell as
+`fontBoundingBoxAscent + fontBoundingBoxDescent` -- the font's MAXIMUM extent,
+with room for accents and deep descenders a block glyph never uses. The
+background fills that cell; `U+2588` only rises to about the em height, and the
+leftover is the band.
+
+Fixed with a `line-height` MULTIPLIER (not the reporter's second suggestion, a
+baseline offset, which cannot fix a glyph shorter than its cell -- it only moves
+the band from the top to the bottom). A multiplier rather than a formula because
+how much of the em a patched font's blocks cover varies between Nerd Font
+patches. Default 1 is the measured height, so nothing moves until someone asks.
+Settable at `/proc/ish/defaults/line_height` and from a Line Height row under
+Font Size in Appearance.
+
+**Seen, on an iPhone 17 Pro simulator, at font size 12** -- five rows of `U+2588`
+on a red background, three rows of blue background-only, and a line each of
+descenders/accents and CJK:
+
+| line-height | block-glyph band | `Agjpqy ÀÉÎÕÜ` and CJK |
+|---|---|---|
+| 1.00 (default) | thick red band between every row | intact |
+| 0.85 | much thinner | intact |
+| 0.75 | thinner still | **descenders clipping** |
+
+So the useful range for that font is about 0.85-0.95, the band narrows rather
+than vanishing, and clipping starts below ~0.8 -- which is exactly why this is a
+knob with bounds and not a computed value. Background-only rows tiled solid at
+every setting, confirming the diagnosis that it is the glyph and not the cell.
+
+**What actually took the time, and the real bug behind it.** The JS was correct
+from the start and had no effect for three builds, because
+`app/terminal/term.html` loads `hterm/dist/js/hterm_all.js` -- a bundle that is
+gitignored and that NOTHING in the build produced. The phase named "Compile
+JavaScript" only asserted the file existed. Fixed in `61fc0f59a`; see that
+commit for why the regeneration lives in `xcode-meson.sh` and not in the phase.
 
 ### SmallCLUE `dmesg` said it was unsupported -- FIXED 2026-08-19
 
