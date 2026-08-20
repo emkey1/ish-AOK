@@ -139,6 +139,41 @@ than of AOK's.
 
 ## Closed during the 550 cycle
 
+### The applets stubbed over a missing library -- FIXED 2026-08-20
+
+tar, gzip, gunzip, zcat, curl, wget and `md <url>` all refused with "not built
+into this iSH-AOK" or "networking support is unavailable in this build". Both
+groups are real now, and neither was the build-system problem it looked like.
+
+- **zlib was never missing.** It is public on iOS as well as macOS. The actual
+  obstacle was that a system dylib compiled against the HOST libc does host
+  I/O: `gzopen` on a guest path opened iOS's copy, invisibly correct wherever a
+  path existed on both sides. deps/smallclue-shim/zlib.h reimplements the six
+  gz* calls over the redirected open/read/write and leaves deflate/inflate --
+  which touch nothing but the caller's buffers -- to zlib. `550bc653c`.
+- **libcurl really is absent from the iOS SDK**, header and tbd alike.
+  deps/smallclue-shim/curl/curl.h implements the seven functions core.c uses on
+  NSURLSession. That is host networking, deliberately and with the cost written
+  down: guest /etc/hosts and /etc/resolv.conf do not apply. `643c8ef7d`.
+- **Enabling tar exposed a corruption in it.** SmallCLUE's tar treated GNU
+  @LongLink and PAX headers as files, then read their data as the next header
+  and abandoned the archive -- and those are what busybox tar writes for any
+  path over 100 bytes. Fixed in the fork before tar could reach anyone's PATH.
+  `07ed79c6e`.
+
+native-links.sh needed no edit: its PROBED list already anticipated "tar and
+gzip need zlib, curl and wget need libcurl" and runs each applet once to ask.
+The link count went from 106 to 112 on its own.
+
+**Not verified, and worth knowing.** The Xcode app link (libz.tbd added to the
+app and CLI targets' Frameworks phases, beside the libbz2.tbd that has always
+worked there) could not be confirmed by a headless build: the project's targets
+do not build standalone -- `libiSH-AOKApp` resolves SDKROOT to macOS and fails
+on `UIKit/UIKit.h`, and `iSH-AOK.FileProvider` links `-lish_emu` before the
+Meson target has produced it. Both are pre-existing, and both are why this
+needs Xcode's own scheme-driven build with implicit dependencies. If the link
+line is wrong it fails loudly on `_deflate`; there is no quiet failure mode.
+
 ### Terminal cell height -- FIXED and SEEN 2026-08-19
 
 At font sizes under 16 a background highlight sat 1-2px proud of the Powerline
@@ -519,6 +554,55 @@ Work exists on the branch `worktree-external-display-540`:
 **Deferred to a future release by the maintainer (2026-08-18): "the external
 display work is flawed".** The commit is NOT merged and must not be swept into a
 release by accident. Left on its branch deliberately.
+
+---
+
+## Native program candidates
+
+Programs worth compiling in as native code (kernel/native.h), and the one
+question that decides most of them.
+
+**The dividing line is the shim, not the program.** kernel/native_libc.h works
+by `#define`-ing libc names ahead of the system headers, so it redirects calls
+in translation units AOK COMPILES. It does nothing to calls made from a
+prebuilt dylib or from another toolchain's objects -- that is exactly what made
+zlib's gz* family unusable until deps/smallclue-shim/zlib.h reimplemented it.
+So candidates fall into two groups, and the second is a different project from
+the first:
+
+- **C sources AOK can compile itself.** bash, zsh, OpenSSH and nextvi are
+  already here. Cost is the porting work the gate enumerates
+  (`tools/check-native-libc.py --report <objects>`), which is finite and
+  visible up front.
+- **Anything built by a foreign toolchain** -- Rust, Go, or a vendored build
+  system we do not drive. Their `open`/`read`/`write` resolve to the host's at
+  link time and no `#define` reaches them. Making one work needs link-time
+  symbol interposition (rename the libc imports in those objects to the
+  `nlibc_` entry points), which AOK does not have today. **Building that
+  mechanism is the prerequisite for the whole second group**, and is worth
+  costing once rather than per program.
+
+### helix
+
+Requested 2026-08-20. Modal editor, Rust, MPL-2.0 (confirm before any work --
+the licence matters here the way GPLv3 does for bash, which is why
+`-Dnative_bash` exists at all).
+
+Second group, so it is behind the interposition question above. Beyond that:
+
+- Rust std does its own syscalls, and helix does file I/O throughout -- there
+  is no pure/impure split to exploit the way zlib's deflate/inflate allowed.
+- LSP servers and formatters are spawned processes. `fork()` is ENOSYS for a
+  native program, but exec/spawn works (see [[native-exec-standin]]), so this
+  is probably not the blocker it first looks like.
+- Tree-sitter grammars are built as loadable objects by default; a static
+  grammar build would be needed.
+- Size is tens of MB with grammars, against a binary that ships in an app.
+
+AOK already has nextvi and micro native, so this is the "modern editor" slot
+rather than a gap. **Next step** is the interposition prototype, not helix
+itself -- pick the smallest Rust program that does one `open` and see whether
+its objects can be made to call `nlibc_open`.
 
 ---
 
