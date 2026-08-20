@@ -35,6 +35,39 @@ change is inert for it. It bites a guest that asks for POLLERR/EPOLLERR --
 which epoll consumers do, rtorrent and libtorrent among them, per the comment
 at that very site -- and then finds its error gone.
 
+### #523: yay's reported failure does not reproduce; an http2 flake does
+
+Reproduced the environment on 2026-08-20 -- Arch Linux ARM aarch64, yay v13.0.1
+built from AUR under emulation -- and ran `yay -S pandoc-bin` four times. **The
+reported `context: signal: terminated` never appeared.** All four got through
+the AUR fetch and downloaded sources.
+
+Getting there needed five things fixed first, only one of them AOK's:
+
+1. Landlock, 2. a dangling /etc/resolv.conf, 3. an empty keyring -- all three
+   now shipped as `/AOK/fixes/arch`.
+4. **`/dev/fd` was missing**, so bash process substitution was ENOENT and
+   makepkg died at "Retrieving sources". Ours, and fixed (`59827f5ce`).
+5. The minirootfs strips headers from 137 packages, so anything that compiles
+   needs `pacman -S glibc linux-api-headers` first.
+
+**What DOES reproduce, about one run in four:**
+
+    request failed: Get "https://aur.archlinux.org/rpc?...":
+        http2: client conn could not be established
+
+yay recovers -- it falls back to git and carries on -- so it is not fatal, and
+it is not what was reported. But it is a real intermittent failure of Go's
+HTTP/2 client against a host that curl reaches every time, on both HTTP/2 and
+HTTP/1.1. Ruled out already: not git (3 of 3 clones standalone), not TLS
+generally (pacman syncs fine), not concurrency (9 simultaneous TLS operations
+all succeeded).
+
+**Next step.** Decide whether the http2 flake is worth chasing on its own
+terms. It is the only reproducible AOK-side misbehaviour left in this issue,
+and Go's HTTP/2 client succeeding only 3 times in 4 where libcurl never fails
+is a narrow enough difference to be a real lead.
+
 ### `pread_stack_thread_race` hangs: the mem read lock is held across the JIT lock
 
 **Established, 2026-08-20, by sampling a hung one** -- which was the next step
@@ -910,7 +943,7 @@ its objects can be made to call `nlibc_open`.
 | [#485](https://github.com/emkey1/ish-AOK/issues/485) | Qt apps (Falkon) cannot connect to session bus | 6 comments |
 | [#503](https://github.com/emkey1/ish-AOK/issues/503) | amd64: gdb next/step after a breakpoint crashes with SIGILL | ours |
 | [#521](https://github.com/emkey1/ish-AOK/issues/521) | Buildroot `make` crashes on "checking for working sigaltstack" | body is a screenshot only |
-| [#523](https://github.com/emkey1/ish-AOK/issues/523) | yay (AUR helper) fails on Arch ARM64 | **half fixed.** The crash was a poll.c fd use-after-free, fixed in `717e6d3d`. The *reported* symptom -- `yay -S pandoc-bin` dying with `context: signal: terminated` -- still reproduces and is not a crash: yay's Go runtime sends itself SIGTERM when its context is cancelled, most likely its own timeout firing because emulated syscalls are slower than its budget assumes. Not a re-test; a timeout question |
+| [#523](https://github.com/emkey1/ish-AOK/issues/523) | yay (AUR helper) fails on Arch ARM64 | **reported symptom does not reproduce** -- see *Diagnosed* above. Previously: **half fixed.** The crash was a poll.c fd use-after-free, fixed in `717e6d3d`. The *reported* symptom -- `yay -S pandoc-bin` dying with `context: signal: terminated` -- still reproduces and is not a crash: yay's Go runtime sends itself SIGTERM when its context is cancelled, most likely its own timeout firing because emulated syscalls are slower than its budget assumes. Not a re-test; a timeout question |
 | [#527](https://github.com/emkey1/ish-AOK/issues/527) | pikaur fails on Arch ARM64 | blocked on `systemd-run` |
 | [#541](https://github.com/emkey1/ish-AOK/issues/541) | ptraceomatic does not run: tracee reaped during setup | **fixed 2026-08-20** -- see *Closed during the 550 cycle* |
 | [#542](https://github.com/emkey1/ish-AOK/issues/542) | JVM/HotSpot crashes on aarch64, "Field too big for insn" | reporter suspects upstream OpenJDK |
