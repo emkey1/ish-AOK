@@ -88,44 +88,6 @@ the lock. Fixed (`kernel/fs.c`), and measured: 9 of 12 hung with the fix
 against 7 of 12 without, which is the same number. Worth having, not worth
 crediting.
 
-### `pidfd_open` refuses a zombie, so `pidfd_epoll_deadlock` fails 1 run in 3
-
-Found 2026-08-20 in a tier0 sweep: x86_64 came back 104 passed / 2 failed where
-the recorded baseline is 105 / 1, the extra failure being
-
-    pidfd_epoll_deadlock: FAIL pidfd_open: No such process
-
-Re-run alone it fails 1 of 3 on x86_64 and passes every time on i386, so it is
-a race rather than an arch difference.
-
-**Established.** It is not the test. The test forks a child that `_exit(0)`s at
-once and then calls `pidfd_open(child)` before waiting -- deliberately, because
-the exit is half of the race it exists to catch. At that moment the child is a
-zombie, and on Linux `pidfd_open` on a zombie SUCCEEDS: the fd is immediately
-readable, which is how a pidfd reports an exit at all. ESRCH is Linux's answer
-only for a pid that does not exist, meaning after reaping.
-
-AOK returns ESRCH because `sys_pidfd_open` (kernel/pidfd.c:103) calls
-`pid_get_task_ref`, and `pid_get_task` (kernel/task.c:75) filters zombies out
-by design:
-
-    struct task *task = pid_get_task_zombie(id);
-    if (task != NULL && task->zombie)
-        return NULL;
-
-So the test only fails when the child wins the race to exit before the parent's
-`pidfd_open` -- which is exactly the flakiness observed, and exactly what the
-test was written to provoke.
-
-**Next step.** `pid_get_task_zombie` is right there and is what this call wants.
-Before switching to it, check the rest of the pidfd machinery against a zombie
-task: `pidfd_create` takes a reference, and do_exit's first step busy-waits for
-pidfd references to drop (see the O_CLOEXEC comment in the same function), so a
-pidfd opened on an already-zombie task must not be able to wedge the reaping it
-is waiting for. Reading a zombie's pidfd should report ready immediately, and
-`waitid(P_PIDFD, ...)` on one should reap normally -- both worth a test
-alongside the fix.
-
 ### Interposition for foreign-toolchain native programs -- PROTOTYPED 2026-08-20
 
 The question blocking python, node, ripgrep and helix -- can another
@@ -229,6 +191,44 @@ Answering 1 vs 2 is the whole task, and it is a read of eudev's source rather
 than of AOK's.
 
 ## Closed during the 550 cycle
+
+### `pidfd_open` refused a zombie -- FIXED 2026-08-20
+
+sys_pidfd_open went through pid_get_task_ref, and pid_get_task filters zombies
+out by design, so the call failed for a task that had exited and not been
+reaped. Linux succeeds there -- an immediately-readable pidfd is how a pidfd
+reports an exit at all -- and answers ESRCH only once the pid is gone.
+
+It showed up as a flaky suite rather than a bug report: pidfd_epoll_deadlock
+opens a pidfd on children that _exit at once, deliberately, so whenever a child
+won that race the open returned ESRCH. About one run in three on x86_64.
+
+pid_get_task_zombie_ref is the accessor it wanted, and it is safe against the
+exit path for reasons already in pidfd.c -- pidfd_create flags its reference so
+do_exit's exit_wait_needed() ignores it, and pidfd_poll already reported
+POLL_READ for a zombie. tests/manual/pidfd_zombie.c pins it down with no race
+in it (waitid(WNOWAIT) guarantees the zombie), and was verified to fail on both
+arches with the fix reverted. `52f55c10d`.
+
+### ptraceomatic did not run -- FIXED 2026-08-20 (GH #541)
+
+Its divergence reports went to printk, which writes to fd 555 -- the emulator's
+own log convention, which nobody redirects when running the tool by hand. The
+write failed with EBADF, the report vanished, and `debugger` fired an int3, so
+the tool that exists to say what differed died with "Trace/breakpoint trap" and
+no output at all. Reports go to stderr now, the trap is opt-in via
+PTRACEOMATIC_TRAP=1, and the report names the faulting instruction.
+
+The issue's "tracee reaped during setup" was real too: start_tracee waited with
+bare wait(), which reaps any child, so another child exiting at the wrong
+moment was consumed instead and the WIFSTOPPED check read a status belonging to
+something else.
+
+Then it ran, and immediately reported two flags the architecture does not
+define -- AF after a shift, and everything after DIV/IDIV. Both were gaps in
+undefined_flags_mask rather than emulator bugs, which is exactly the kind of
+false positive that would have made the restored tool useless. With them fixed
+it reaches instruction 4175 before reporting something real. `796a9c179`.
 
 ### `md`'s word boundaries come from the HTML, not from letter case -- FIXED 2026-08-20
 
@@ -842,7 +842,7 @@ its objects can be made to call `nlibc_open`.
 | [#521](https://github.com/emkey1/ish-AOK/issues/521) | Buildroot `make` crashes on "checking for working sigaltstack" | body is a screenshot only |
 | [#523](https://github.com/emkey1/ish-AOK/issues/523) | yay (AUR helper) fails on Arch ARM64 | crash fix already pushed (`717e6d3d`); re-test |
 | [#527](https://github.com/emkey1/ish-AOK/issues/527) | pikaur fails on Arch ARM64 | blocked on `systemd-run` |
-| [#541](https://github.com/emkey1/ish-AOK/issues/541) | ptraceomatic does not run: tracee reaped during setup | ours |
+| [#541](https://github.com/emkey1/ish-AOK/issues/541) | ptraceomatic does not run: tracee reaped during setup | **fixed 2026-08-20** -- see *Closed during the 550 cycle* |
 | [#542](https://github.com/emkey1/ish-AOK/issues/542) | JVM/HotSpot crashes on aarch64, "Field too big for insn" | reporter suspects upstream OpenJDK |
 | [#558](https://github.com/emkey1/ish-AOK/issues/558) | npm segfault installing OpenClaw | **reporter answered 2026-08-18**: 1.3 (548), aarch64, Devuan 6 excalibur, node v24.18.0, npm v11.16.0. Still missing the "how far does it get" answers (`node -e`, bare `npm`), which is what separates node crashing from npm doing so |
 | -- | btop shows nothing in its disk, net and io sections | reported 2026-08-19; **fixed** -- see *Closed during the 550 cycle* |
