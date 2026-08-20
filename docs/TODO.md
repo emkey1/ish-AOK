@@ -180,7 +180,9 @@ exact signature, confirmed by serving plain HTTP from the guest itself and
 watching that succeed while `http://example.com` failed and the emulated curl
 got 200 from the same device. app/Info.plist declared NSAllowsArbitraryLoads
 AND NSAllowsLocalNetworking, and the presence of the latter makes the former be
-ignored on iOS 10 and later. Removing it is what makes the declaration apply.
+ignored on iOS 10 and later. Removing it is what makes the declaration apply:
+confirmed on the rebuilt device, where three plain-HTTP hosts now fetch, HTTPS
+is unaffected, and localhost still works -- so nothing was lost with the key.
 The shim also now reports the framework's own wording instead of mapping every
 unrecognised NSError to "Failure when receiving data from the peer", which is
 what made this look like a network fault for as long as it did.
