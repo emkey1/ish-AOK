@@ -226,6 +226,34 @@ than of AOK's.
 
 ## Closed during the 550 cycle
 
+### #558 npm segfault installing OpenClaw -- DOES NOT REPRODUCE 2026-08-20
+
+Reproduced the reporter's environment exactly rather than approximately, on the
+M4 iPad: **Devuan GNU/Linux 6 (excalibur), aarch64, glibc 2.41, node v24.18.0,
+npm v11.16.0** -- their distro, arch, libc and both version numbers. Devuan
+packages only node 20, so they must have installed 24 themselves; matched with
+the official arm64 build from nodejs.org.
+
+On current code, `npm install -g openclaw` **added 309 packages in 5m, exit 0**,
+and the result runs: `openclaw --version` reports 2026.7.1-2 (0790d9f) and
+`--help` loads. The ladder they never answered passes too -- `node -e`, bare
+`npm`, `npm --version`, `npm ping`, and a small install.
+
+Also reproduced on an Alpine arm64 guest (musl, node 24.18.0, npm 11.17.0) for
+a second data point: 309 packages in 14m, exit 0.
+
+**What changed.** They are on build 548, cut 2026-08-13, and reported on
+2026-08-18. Ninety-six emulator commits have landed since, and the one that
+fits the symptom is `49de7e671` (2026-08-19, the day after the report): a JIT
+use-after-free where a thread keeps using a freed block's ret_cache. It was
+found on an i386 guest, but the fix adds jit_entry_scratch_refresh at four call
+sites, one per frontend, so the arm64 guest is covered -- and it is the shape
+that hits node and little else, because V8 generates and discards code
+constantly and so churns AOK's translated blocks far harder than ordinary
+programs do.
+
+**Next step: tell the reporter to update.** 549 or later carries the fix.
+
 ### `pidfd_open` refused a zombie -- FIXED 2026-08-20
 
 sys_pidfd_open went through pid_get_task_ref, and pid_get_task filters zombies
@@ -878,7 +906,7 @@ its objects can be made to call `nlibc_open`.
 | [#527](https://github.com/emkey1/ish-AOK/issues/527) | pikaur fails on Arch ARM64 | blocked on `systemd-run` |
 | [#541](https://github.com/emkey1/ish-AOK/issues/541) | ptraceomatic does not run: tracee reaped during setup | **fixed 2026-08-20** -- see *Closed during the 550 cycle* |
 | [#542](https://github.com/emkey1/ish-AOK/issues/542) | JVM/HotSpot crashes on aarch64, "Field too big for insn" | reporter suspects upstream OpenJDK |
-| [#558](https://github.com/emkey1/ish-AOK/issues/558) | npm segfault installing OpenClaw | **reporter answered 2026-08-18**: 1.3 (548), aarch64, Devuan 6 excalibur, node v24.18.0, npm v11.16.0. Still missing the "how far does it get" answers (`node -e`, bare `npm`), which is what separates node crashing from npm doing so |
+| [#558](https://github.com/emkey1/ish-AOK/issues/558) | npm segfault installing OpenClaw | **does not reproduce on current code** -- see *Closed during the 550 cycle* |
 | -- | btop shows nothing in its disk, net and io sections | reported 2026-08-19; **fixed** -- see *Closed during the 550 cycle* |
 
 ### Feature requests
