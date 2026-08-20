@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -43,11 +44,26 @@ int start_tracee(int at, const char *path, char *const argv[], char *const envp[
             signal(sig, SIG_DFL);
         trycall(fexecve(openat(at, path, O_RDONLY), argv, envp), "execve");
     } else {
-        // parent, wait for child to stop after exec
+        // parent, wait for child to stop after exec.
+        //
+        // waitpid on the tracee specifically, not wait(). A bare wait() reaps
+        // whichever child happens to be ready, so any other child of this
+        // process exiting at the wrong moment was consumed here instead --
+        // leaving the real tracee unwaited and this check looking at a status
+        // that belongs to something else. That is issue #541's "tracee reaped
+        // during setup": the reap was real, the pid was not the tracee's.
         int status;
-        trycall(wait(&status), "wait");
+        trycall(waitpid(pid, &status, 0), "waitpid tracee");
         if (!WIFSTOPPED(status)) {
-            fprintf(stderr, "child failed to start\n");
+            if (WIFEXITED(status))
+                fprintf(stderr, "tracee exited during setup with status %d "
+                        "(exec of the guest binary probably failed)\n",
+                        WEXITSTATUS(status));
+            else if (WIFSIGNALED(status))
+                fprintf(stderr, "tracee died during setup on signal %d (%s)\n",
+                        WTERMSIG(status), strsignal(WTERMSIG(status)));
+            else
+                fprintf(stderr, "tracee failed to start (status %#x)\n", status);
             exit(1);
         }
     }
