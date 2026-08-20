@@ -242,17 +242,27 @@ and the result runs: `openclaw --version` reports 2026.7.1-2 (0790d9f) and
 Also reproduced on an Alpine arm64 guest (musl, node 24.18.0, npm 11.17.0) for
 a second data point: 309 packages in 14m, exit 0.
 
-**What changed.** They are on build 548, cut 2026-08-13, and reported on
-2026-08-18. Ninety-six emulator commits have landed since, and the one that
-fits the symptom is `49de7e671` (2026-08-19, the day after the report): a JIT
-use-after-free where a thread keeps using a freed block's ret_cache. It was
-found on an i386 guest, but the fix adds jit_entry_scratch_refresh at four call
-sites, one per frontend, so the arm64 guest is covered -- and it is the shape
-that hits node and little else, because V8 generates and discards code
-constantly and so churns AOK's translated blocks far harder than ordinary
-programs do.
+**What changed is not established, and one attractive answer was tested and
+rejected.** They are on build 548, cut 2026-08-13, and reported on 2026-08-18;
+ninety-six emulator commits have landed since. `49de7e671` (2026-08-19, the day
+after the report) looked like the one -- a JIT use-after-free on a freed block's
+ret_cache, fixed in all four frontends, and exactly the shape that would hit a
+guest whose own JIT churns translated blocks the way V8 does. The dates were
+suggestive enough to be worth testing rather than asserting.
 
-**Next step: tell the reporter to update.** 549 or later carries the fix.
+It does not hold up. Built with that single commit reverted and ran the
+identical install: **309 packages, exit 0** (20m rather than 14m). So the crash
+does not come back when the fix is removed, and that commit cannot be credited.
+
+What survives is the observation and not a cause: the failure does not
+reproduce on current code in the reporter's exact environment, on Alpine arm64,
+or with the suspect commit removed. Either something else among the 96 commits
+fixed it, or it depends on a condition not matched here -- device memory
+pressure, a different node install method, or their particular root.
+
+**Next step.** Ask the reporter to retest on 549 or later. If it persists,
+the two diagnostics still missing are the ones that separate node crashing from
+npm crashing: `node -e "console.log(1+1)"` and a bare `npm`.
 
 ### `pidfd_open` refused a zombie -- FIXED 2026-08-20
 
