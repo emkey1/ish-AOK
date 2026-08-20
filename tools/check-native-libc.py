@@ -157,6 +157,21 @@ PURE = {
     "CC_MD5_Init", "CC_MD5_Update", "CC_MD5_Final",
     "CC_SHA1_Init", "CC_SHA1_Update", "CC_SHA1_Final",
     "CC_SHA256_Init", "CC_SHA256_Update", "CC_SHA256_Final",
+    # zlib's compression core, reached through deps/smallclue-shim/zlib.h,
+    # which is how tar/gzip/gunzip/zcat exist without host I/O leaking into
+    # them.
+    #
+    # These qualify on the same terms as the digests above: deflate and inflate
+    # move bytes between a next_in and a next_out the CALLER supplies, and
+    # consult no descriptor, path, clock or device. The Init2_/End pair only
+    # sizes and frees the window buffer.
+    #
+    # The gz* family is emphatically NOT here and must never be. Those are the
+    # half of zlib that opens files and reads descriptors, and being a host
+    # dylib is exactly why they cannot be allowed to -- see the header. This is
+    # a list of seven functions, not permission to link zlib and call it.
+    "deflate", "deflateEnd", "deflateInit2_",
+    "inflate", "inflateEnd", "inflateInit2_", "inflateReset",
     # termios helpers that only edit a struct in memory. Not tcgetattr or
     # tcsetattr, which talk to a terminal and are redirected: these set or read
     # fields, and the redirected calls translate the result on its way to the
