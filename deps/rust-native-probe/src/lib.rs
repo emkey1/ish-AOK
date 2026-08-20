@@ -85,16 +85,37 @@ pub extern "C" fn rust_native_probe_main(
     println!("env::var(PATH): {:?}", env::var("PATH"));
     println!("env::var(HOME): {:?}", env::var("HOME"));
     println!("env::vars() count: {}", env::vars().count());
-    // home_dir() consults the passwd database only when HOME is unset, and
-    // that is the path that used to read the Mac's /etc/passwd through an
-    // unrouted getpwuid_r. With HOME set it never gets there, so the check
-    // has to take HOME away to mean anything.
+    // The passwd database, which is where an unrouted getpwuid_r sent Rust to
+    // read the Mac's /etc/passwd for home_dir().
+    //
+    // Called directly rather than through home_dir(), because home_dir() is
+    // not a proxy for it: std compiles the passwd fallback out for iOS
+    // (target_vendor = "apple", not(target_os = "macos")), so on device it
+    // answers None whatever the shim does. The first device run showed
+    // exactly that, and the direct call is the only version of this check
+    // that means the same thing on both.
+    unsafe {
+        let uid = getuid();
+        let mut pw: Passwd = core::mem::zeroed();
+        let mut buf = [0 as c_char; 1024];
+        let mut res: *mut Passwd = core::ptr::null_mut();
+        let rc = getpwuid_r(uid, &mut pw, buf.as_mut_ptr(), buf.len(), &mut res);
+        if rc == 0 && !res.is_null() {
+            let f = |p: *mut c_char| if p.is_null() { String::new() }
+                                     else { CStr::from_ptr(p).to_string_lossy().into_owned() };
+            println!("getpwuid_r({}): name={:?} dir={:?} shell={:?}",
+                     uid, f(pw.pw_name), f(pw.pw_dir), f(pw.pw_shell));
+        } else {
+            println!("getpwuid_r({}): rc={} result={}", uid, rc,
+                     if res.is_null() { "NULL" } else { "set" });
+        }
+    }
+    #[allow(deprecated)]
     {
         let saved = env::var("HOME").ok();
         env::remove_var("HOME");
-        #[allow(deprecated)]
-        let home = env::home_dir();
-        println!("home_dir() with HOME unset: {:?}  (via getpwuid_r)", home);
+        println!("home_dir() with HOME unset: {:?} (None on iOS by std's own cfg)",
+                 env::home_dir());
         if let Some(h) = saved {
             env::set_var("HOME", h);
         }
@@ -252,6 +273,23 @@ pub extern "C" fn rust_native_probe_main(
 #[repr(C)]
 struct Winsize { row: u16, col: u16, xpixel: u16, ypixel: u16 }
 
+// Darwin's struct passwd, which carries three fields Linux's does not
+// (pw_change, pw_class, pw_expire). Spelled out because the shim answers this
+// layout, not the guest's -- a native program is host code.
+#[repr(C)]
+struct Passwd {
+    pw_name: *mut c_char,
+    pw_passwd: *mut c_char,
+    pw_uid: u32,
+    pw_gid: u32,
+    pw_change: i64,
+    pw_class: *mut c_char,
+    pw_gecos: *mut c_char,
+    pw_dir: *mut c_char,
+    pw_shell: *mut c_char,
+    pw_expire: i64,
+}
+
 // Darwin's TIOCGWINSZ. The shim translates it to the guest's number.
 const TIOCGWINSZ: u64 = 0x40087468;
 
@@ -264,4 +302,7 @@ extern "C" {
                     argv: *const *const c_char,
                     envp: *const *const c_char) -> c_int;
     fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int;
+    fn getuid() -> u32;
+    fn getpwuid_r(uid: u32, pwd: *mut Passwd, buf: *mut c_char, buflen: usize,
+                  result: *mut *mut Passwd) -> c_int;
 }

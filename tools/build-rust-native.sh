@@ -64,7 +64,10 @@ case "$target" in
     *-apple-ios)                        sdk="iphoneos" ;;
     *-apple-darwin)                     sdk="macosx" ;;
 esac
-[ -n "$target" ] && clang_target="-target $target"
+# The deployment target too, when Xcode is the one asking. Without it clang
+# defaults the partial link to iOS 7.0 and warns once per object that std was
+# built for something newer -- harmless, and 400 lines of it.
+[ -n "$target" ] && clang_target="-target $target${IPHONEOS_DEPLOYMENT_TARGET:-}"
 # shellcheck disable=SC2086
 (cd "$work" && xcrun ${sdk:+-sdk $sdk} clang $clang_target -nostdlib -Wl,-r -o "$merged" ./*.o)
 
