@@ -661,6 +661,12 @@ if get_option('kernel') == 'ish'
         # syslog(2), so say so rather than letting the #else claim dmesg is
         # unsupported on a system whose /usr/bin/dmesg works.
         '-DSMALLCLUE_HAVE_KLOGCTL',
+        # `md` with no arguments lists the documents in this directory, and
+        # `md native-programs` resolves a bare name against it. The default is
+        # $HOME/Docs, which an AOK guest has no reason to have -- so md looked
+        # broken rather than empty. /AOK/docs is compiled into the app
+        # (fs/aok-docs.manifest) and is always there.
+        '-DSMALLCLUE_MARKDOWN_DOCS_DIR="/AOK/docs"',
         '-w',  # vendored code, not ours to police
     ]
 
