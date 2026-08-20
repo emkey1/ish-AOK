@@ -62,6 +62,81 @@ it runs under `python3 tests/remote/conductor.py tier0` and nowhere else.
 for the lldb setup, and note the `process handle SIGUSR1` lines are needed
 before `run` or lldb stops on AOK's own poke signal.
 
+### `pidfd_open` refuses a zombie, so `pidfd_epoll_deadlock` fails 1 run in 3
+
+Found 2026-08-20 in a tier0 sweep: x86_64 came back 104 passed / 2 failed where
+the recorded baseline is 105 / 1, the extra failure being
+
+    pidfd_epoll_deadlock: FAIL pidfd_open: No such process
+
+Re-run alone it fails 1 of 3 on x86_64 and passes every time on i386, so it is
+a race rather than an arch difference.
+
+**Established.** It is not the test. The test forks a child that `_exit(0)`s at
+once and then calls `pidfd_open(child)` before waiting -- deliberately, because
+the exit is half of the race it exists to catch. At that moment the child is a
+zombie, and on Linux `pidfd_open` on a zombie SUCCEEDS: the fd is immediately
+readable, which is how a pidfd reports an exit at all. ESRCH is Linux's answer
+only for a pid that does not exist, meaning after reaping.
+
+AOK returns ESRCH because `sys_pidfd_open` (kernel/pidfd.c:103) calls
+`pid_get_task_ref`, and `pid_get_task` (kernel/task.c:75) filters zombies out
+by design:
+
+    struct task *task = pid_get_task_zombie(id);
+    if (task != NULL && task->zombie)
+        return NULL;
+
+So the test only fails when the child wins the race to exit before the parent's
+`pidfd_open` -- which is exactly the flakiness observed, and exactly what the
+test was written to provoke.
+
+**Next step.** `pid_get_task_zombie` is right there and is what this call wants.
+Before switching to it, check the rest of the pidfd machinery against a zombie
+task: `pidfd_create` takes a reference, and do_exit's first step busy-waits for
+pidfd references to drop (see the O_CLOEXEC comment in the same function), so a
+pidfd opened on an already-zombie task must not be able to wedge the reaping it
+is waiting for. Reading a zombie's pidfd should report ready immediately, and
+`waitid(P_PIDFD, ...)` on one should reap normally -- both worth a test
+alongside the fix.
+
+### eudev refuses to start: "does not support containers" (Devuan)
+
+Reported 2026-08-20, on Devuan. Left over from the sysfs work below: with
+`/sys/class/block/sda` supplied, eudev's init script gets past both the "sysfs
+not mounted" complaint and the 30-second guard, and stops at the NEXT check
+with
+
+    eudev does not support containers, udevd not started ... (warning)
+
+exit 0, in under a second. That was recorded as eudev deciding correctly on its
+own, and as a boot that is no longer slow it is an improvement -- but the device
+manager still does not run, so this is a warning standing in for a feature that
+is simply absent.
+
+**Established.** The message is eudev's own container detection, not AOK's. It
+is a guard in the init script rather than in udevd, and it is reached only
+because everything before it now passes. The Alpine path is different -- Alpine
+ships mdev, which is on native-links.sh's EXCLUDED list -- so this entry is
+about Devuan and any other eudev distro.
+
+**Next step.** Read what eudev's container check actually tests: on a systemd
+system it is `/run/systemd/container` and the `container=` environment
+variable, and eudev's is a variant of that. Decide between three answers, in
+this order of preference:
+
+1. AOK is not a container and can say so -- if the check is a file or an
+   environment variable AOK sets or inherits by accident, stop setting it.
+2. It IS container-like by that definition and udevd genuinely cannot work
+   (it wants netlink uevents, which AOK's kernel does not generate). Then the
+   honest fix is documentation plus, if a guest needs device nodes, keeping the
+   existing `/dev` repair doing that job -- and the warning is correct.
+3. Neither: make udevd start and watch it fail, which is worse than the
+   warning.
+
+Answering 1 vs 2 is the whole task, and it is a read of eudev's source rather
+than of AOK's.
+
 ## Closed during the 550 cycle
 
 ### Terminal cell height -- FIXED and SEEN 2026-08-19
