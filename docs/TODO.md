@@ -10,34 +10,30 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
-### AOK loses a connected UDP socket's error about a third of the time
+### AOK lost a connected UDP socket's error -- NO LONGER REPRODUCES 2026-08-20
 
-Found 2026-08-19 while building the regression test for the chronyd spin, and
-older than that fix. A connected UDP socket that takes an ICMP port-unreachable
-should report ECONNREFUSED to the next recv. AOK reports it **14 times in 20**;
-the macOS host underneath reports it 20 in 20, and Linux 6.12 delivers 10 of 10
-running this test's own UDP half (AOK manages 9 of 10 on a good run).
+Measured again on the same harness the entry was written against: **10 of 10,
+five runs**, against the 14-of-20 recorded here. It does not reproduce with or
+without any change of mine, so it is fixed and I cannot claim it.
 
-**Established.** When it does arrive it is always on the very first poll, so
-this is presence-or-absence, not slowness -- three seconds of polling does not
-recover a lost one. Ruled out by measurement: the port is genuinely free after
-the probe socket closes (0 of 20 still held, same as the host), so the datagram
-is not being delivered to a lingering listener instead of refused.
+**What fixed it.** `31261988b` ("a dead connection reports itself once, and AOK
+stops eating the report") landed 2026-08-19 at 18:28, hours after this entry
+was written, and introduced `sock_take_pending_error()` -- which the recv path
+calls when a read returns nothing, precisely to recover an error AOK's own poll
+probe consumed off the host first. That is this bug's mechanism, answered.
 
-**Why it matters.** It is the same family as the spin that has just been fixed:
-a poll loop that never learns its socket is dead. `chronyd` is exactly such a
-loop.
+**One genuine gap remains from the same family, and is fixed here.** The
+EVFILT_EXCEPT branch of fs/poll.c's `rpe_events` calls getsockopt(SO_ERROR) --
+which read-and-CLEARS on the host -- and threw the value away, returning only
+POLL_ERR. fd.h's contract for `host_connect_error` is that AOK's internal
+probes stash what they consume so the guest-facing call still sees it, and the
+two other probe sites do; this one did not.
 
-**Reproduce.** `tests/manual/sock_conn_error.c` logs the ratio on every run
-("udp-unreachable delivered 9 of 10 attempts"). The test deliberately does NOT
-fail on a single miss -- a flaky assertion teaches people to ignore the suite --
-so it requires only that some attempt out of ten deliver.
-
-**Next step.** Find what consumes it. The obvious candidate, AOK's own
-`socket_tcp_connect_write_ready()` reading the host's read-and-clear SO_ERROR
-from inside `sock_poll` (which really was eating the equivalent error on TCP,
-now fixed), returns early for anything that is not SOCK_STREAM, so it is not
-this. Start by tracing whether the host ever reports it for the losing runs.
+It is not what the UDP test measures, and the entry should not pretend
+otherwise: that test polls POLLIN only, so EVFILT_EXCEPT is never armed and the
+change is inert for it. It bites a guest that asks for POLLERR/EPOLLERR --
+which epoll consumers do, rtorrent and libtorrent among them, per the comment
+at that very site -- and then finds its error gone.
 
 ### `pread_stack_thread_race` hangs: the mem read lock is held across the JIT lock
 

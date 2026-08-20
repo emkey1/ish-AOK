@@ -14,6 +14,8 @@
 #include "kernel/fs.h"
 #include "fs/fd.h"
 #include "fs/poll.h"
+
+extern const struct fd_ops socket_fdops;
 #include "fs/real.h"
 #include "fs/sock.h"
 #include "fs/sockrestart.h"
@@ -36,7 +38,7 @@ struct real_poll_event {
 #endif
 };
 static void *rpe_data(struct real_poll_event *rpe);
-static int rpe_events(struct real_poll_event *rpe);
+static int rpe_events(struct real_poll_event *rpe, struct poll_fd *pfd);
 static int real_poll_wait(struct real_poll *real, struct real_poll_event *events, int max, struct timespec *timeout);
 static int real_poll_update(struct real_poll *real, int fd, int types, void *data);
 static inline bool poll_fd_has_host_wait(struct poll_fd *pollfd);
@@ -766,7 +768,7 @@ poll_wait_done:
                     struct poll_fd *candidate = rpe_data(&e[i]);
                     struct poll_fd *triggered_poll_fd = poll_find_ptr(poll_, candidate);
                     if (triggered_poll_fd != NULL)
-                        poll_wait_trace_fd(triggered_poll_fd, rpe_events(&e[i]), "host-event");
+                        poll_wait_trace_fd(triggered_poll_fd, rpe_events(&e[i], candidate), "host-event");
                     else {
                         poll_wait_trace_raw_event(poll_, &e[i], "raw-event");
                         poll_drop_unknown_event(poll_, &e[i]);
@@ -845,7 +847,7 @@ poll_wait_done:
             struct poll_fd *triggered_poll_fd = poll_find_ptr(poll_, candidate);
             if (triggered_poll_fd == NULL || triggered_poll_fd->poll != poll_)
                 continue;
-            int host_events = rpe_events(&e[i]);
+            int host_events = rpe_events(&e[i], candidate);
             if (poll_epoll_trace_enabled()) {
                 struct fd *fd = triggered_poll_fd->fd;
                 char path[MAX_PATH];
@@ -981,7 +983,7 @@ static int real_poll_update(struct real_poll *real, int fd, int types, void *dat
 static void *rpe_data(struct real_poll_event *rpe) {
     return rpe->real.data.ptr;
 }
-static int rpe_events(struct real_poll_event *rpe) {
+static int rpe_events(struct real_poll_event *rpe, struct poll_fd *UNUSED(pfd)) {
     return rpe->real.events;
 }
 
@@ -1048,7 +1050,7 @@ static void *rpe_data(struct real_poll_event *rpe) {
     return rpe->real.udata;
 }
 
-static int rpe_events(struct real_poll_event *rpe) {
+static int rpe_events(struct real_poll_event *rpe, struct poll_fd *pfd) {
     if (rpe->real.flags & EV_ERROR) {
         int err = (int) rpe->real.data;
         if (err == 0)
@@ -1082,6 +1084,21 @@ static int rpe_events(struct real_poll_event *rpe) {
         socklen_t so_error_len = sizeof(so_error);
         if (getsockopt((int) rpe->real.ident, SOL_SOCKET, SO_ERROR, &so_error, &so_error_len) < 0 || so_error == 0)
             return 0;
+        // That getsockopt READ-AND-CLEARED the host's SO_ERROR, and this used
+        // to throw the value away -- so the error existed only long enough for
+        // the poll to report POLL_ERR, and the guest's recv() that followed
+        // found nothing. On a connected UDP socket that took an ICMP
+        // port-unreachable, the ECONNREFUSED simply vanished whenever a poll
+        // happened to run first, which is why it arrived only about two thirds
+        // of the time and always on the very first poll when it did.
+        //
+        // Stash it, exactly as socket_tcp_connect_write_ready() does for the
+        // stream case: fd.h's contract for host_connect_error is that AOK's own
+        // internal probes record what they consumed so the guest-facing call
+        // can still see it.
+        if (pfd != NULL && pfd->fd != NULL && pfd->fd->ops == &socket_fdops &&
+                pfd->fd->socket.host_connect_error == 0)
+            pfd->fd->socket.host_connect_error = so_error;
         return POLL_ERR;
     }
     return 0;
