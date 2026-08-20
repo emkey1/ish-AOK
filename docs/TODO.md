@@ -39,28 +39,54 @@ from inside `sock_poll` (which really was eating the equivalent error on TCP,
 now fixed), returns early for anything that is not SOCK_STREAM, so it is not
 this. Start by tracing whether the host ever reports it for the losing runs.
 
-### `pread_stack_thread_race` hangs, on both x86 arches
+### `pread_stack_thread_race` hangs: the mem read lock is held across the JIT lock
 
-**Established.** Hangs 3 of 5 runs on i386, and hangs on x86_64 too -- it was
-the ONLY failure in the final tier0 sweep (i386 106 passed / 0 failed / 4
-skipped; x86_64 105 / 1 / 4), so it is not arch-specific as first recorded. Before the JIT
-ret_cache fix (`49de7e671`) the same test hung once and took SIGSEGV once in two
-runs, so that fix removed the crash and not the hang. The conductor's timeout is
-180 seconds and the test's own work is about 8, so this is a real hang rather
-than slowness.
+**Established, 2026-08-20, by sampling a hung one** -- which was the next step
+recorded here, and it produced a lock cycle rather than a hunch. Measured hang
+rate on a direct 12-run loop: 7 of 12, both arches, so it is flaky rather than
+arch-specific.
 
-The test is a deliberate stress repro: 6 pread-into-own-stack workers, 3 mmap/
-munmap churn workers and 2 fork/wait workers, all on one shared address space
-for 8 seconds. Its header says a hang or a crash here is the confirming signal
-for the suspected `mem_ptr()`-vs-concurrent-address-space-mutation race it was
-written to catch, so this is the test doing its job.
+`sample(1)` of a hung emulator (13 threads, nothing running):
 
-It is tier0-only -- not in `all_tests` and not in `fs/aok-tests.manifest` -- so
-it runs under `python3 tests/remote/conductor.py tier0` and nowhere else.
+- one thread in `sys_munmap_guest` -> `mem_write_lock_with_pokes`, which has
+  taken `pt_alloc_lock`, raised `quiesce_requested`, spun its 1024 attempts and
+  fallen through to a blocking `write_lock(&mem->lock)`. It is waiting for
+  every reader to drain.
+- two threads in `cpu_run_to_interrupt` -> `cpu_step_to_interrupt_amd64_frontend`
+  -> `_pthread_rwlock_lock_slow`. These are the ones that matter:
+  `task_run_current` takes the mem READ lock and then calls into the frontend,
+  so they **hold the mem read lock while contending for the JIT jetsam
+  rwlock**.
+- seven threads parked in `mem_quiesce_park`, correctly, waiting for the
+  quiesce to finish.
 
-**Next step.** `sample(1)` a hung one. See [[go-runtime-concurrency-debugging]]
-for the lldb setup, and note the `process handle SIGUSR1` lines are needed
-before `run` or lldb stops on AOK's own poke signal.
+So the ordering is mem-read then jetsam, and the frontends do not only take
+jetsam for reading: `jetsam_write_lock_timed` is called from inside them at
+jit.c:1710, 1733, 2126 and 2547. A frontend thread can therefore hold the mem
+read lock and escalate to the jetsam WRITE lock, blocking every sibling
+frontend's `pthread_rwlock_rdlock` -- and every one of those siblings is
+holding a mem read lock the munmap is waiting to see released.
+
+**Next step.** The invariant to establish is that the mem read lock is not held
+across a jetsam acquisition, or that a reader blocked on the JIT lock is
+evictable by the quiesce. Two shapes worth costing before writing code:
+
+1. Drop the mem read lock around the jetsam write-lock escalation in the
+   frontends, re-taking it after -- correct only if nothing between the two
+   points depends on the address space staying still, which needs checking at
+   each of the four sites.
+2. Make `mem_write_lock_with_pokes` able to see that a reader is parked on the
+   JIT lock and treat it as skippable, the way `task_wait_for_mem_quiesce`
+   already flags `quiesce_parked`. That is the cheaper change and the less
+   invasive one, but it only helps if the blocked reader genuinely cannot touch
+   guest memory before it releases.
+
+**Not the cause, though it looked promising.** `sys_pread_guest` held
+`fd->lock` across `user_write`, which parks in the quiesce -- a real ordering
+hazard, and one `sys_pwrite_guest` had always avoided by copying before taking
+the lock. Fixed (`kernel/fs.c`), and measured: 9 of 12 hung with the fix
+against 7 of 12 without, which is the same number. Worth having, not worth
+crediting.
 
 ### `pidfd_open` refuses a zombie, so `pidfd_epoll_deadlock` fails 1 run in 3
 

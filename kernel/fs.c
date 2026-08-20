@@ -1434,12 +1434,32 @@ dword_t sys_pread_guest(fd_t f, guest_addr_t buf_addr, dword_t size, off_t_ off)
         }
         buf[res] = '\0';
         STRACE(" \"%.99s\"", buf);
-        if (user_write(buf_addr, buf, res))
-            res = _EFAULT;
     }
 out:
     unlock(&fd->lock);
     task_may_block_end();
+    // The copy-out happens AFTER fd->lock is dropped, and that is not tidiness.
+    //
+    // user_write takes the memory read lock, which is quiesce-aware: if a
+    // sibling thread is mid-munmap it has raised quiesce_requested, and this
+    // thread parks on a condvar until that finishes. Parking there while
+    // holding fd->lock deadlocks the whole emulator:
+    //
+    //   this thread   holds fd->lock, parked waiting for the quiesce
+    //   pread threads blocked on fd->lock, so they never reach a checkpoint
+    //   the munmap    waiting for every reader to drain, which they cannot
+    //
+    // Sampled exactly that on a hung pread_stack_thread_race: three threads in
+    // sys_pread_guest blocked on this mutex, one inside it parked in
+    // mem_quiesce_park, three more parked in task_wait_for_mem_quiesce, and
+    // sys_munmap_guest waiting on the structural lock. Nothing was running.
+    //
+    // sys_pwrite_guest had the ordering right all along -- it does its
+    // user_read before taking fd->lock -- so this was the one outlier. The
+    // data is already in a local buffer by now, so the lock buys nothing here
+    // anyway.
+    if (res >= 0 && user_write(buf_addr, buf, res))
+        res = _EFAULT;
     if (buf != stack_buf) free(buf);
     return res;
 }
