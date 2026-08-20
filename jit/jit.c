@@ -1469,6 +1469,39 @@ static struct jit_entry_scratch *jit_entry_scratch_get(const struct jit *jit) {
     return scratch;
 }
 
+// Re-run that purge once frees are actually excluded.
+//
+// jit_entry_scratch_get reads jit_block_free_generation, but its caller does not
+// hold jetsam_lock yet at that point. A jit_free_jetsam pass can run between
+// that read and the read lock being taken -- and then NEITHER guard sees it: the
+// generation was sampled too early, and cleanup_seq, which the frontend loop
+// compares against for the rest of the entry, is seeded too late and already
+// includes the bump. The thread carries on with a ret_cache full of pointers
+// into blocks freed inside that window.
+//
+// Not theoretical. It is why an i386 guest died in cpu_step_to_interrupt
+// dereferencing frame->last_block: a ret gadget hit a dangling ret_cache entry,
+// read the word at the offset where a call gadget keeps its block pointer, and
+// got whatever the REUSED block has there -- a `ret` gadget's pop count, 4 or 8
+// -- which it duly stored into frame->last_block for the C loop to dereference.
+//
+// Call with the read lock held: no free can then be in flight, so the value read
+// here holds for the whole entry. Costs one relaxed load when nothing was freed.
+static void jit_entry_scratch_refresh(struct jit_entry_scratch *scratch,
+                                      const struct jit *jit) {
+    if (scratch == NULL)
+        return; // stack fallback, zeroed outright by the caller
+    unsigned long generation =
+        atomic_load_explicit(&jit_block_free_generation, memory_order_relaxed);
+    if (scratch->generation == generation && scratch->owner_jit == jit)
+        return;
+    memset(scratch->cache, 0, sizeof(scratch->cache));
+    memset(scratch->frame.ret_cache, 0, sizeof(scratch->frame.ret_cache));
+    scratch->frame.last_block = NULL;
+    scratch->generation = generation;
+    scratch->owner_jit = jit;
+}
+
 int jit_enter(struct jit_block *block, struct jit_frame *frame, struct tlb *tlb);
 
 static inline size_t jit_cache_hash(guest_addr_t ip) {
@@ -1611,6 +1644,10 @@ rearm_i386:
     // dispatch PC=0, or non-zero bad address), hook.c's handler redirects the
     // thread to jit_crash_fn() which reads this pointer and releases the lock.
     jit_crash_lock = &jit->jetsam_lock;
+    // The read lock now excludes jit_free_jetsam, so re-check whether one ran
+    // between jit_entry_scratch_get's generation sample and this point -- the
+    // one window neither that sample nor last_block_cleanup_seq below covers.
+    jit_entry_scratch_refresh(scratch, jit);
 
     // Track cleanup_seq locally (NOT in frame, which would corrupt assembly
     // gadget offsets for ret_cache — see frame.h "keep in sync with asm").
@@ -2043,6 +2080,10 @@ rearm_arm64:
 
     pthread_rwlock_rdlock(&jit->jetsam_lock.l);
     jit_crash_lock = &jit->jetsam_lock;
+    // The read lock now excludes jit_free_jetsam, so re-check whether one ran
+    // between jit_entry_scratch_get's generation sample and this point -- the
+    // one window neither that sample nor last_block_cleanup_seq below covers.
+    jit_entry_scratch_refresh(scratch, jit);
 
     unsigned last_block_cleanup_seq = atomic_load_explicit(&jit->cleanup_seq, memory_order_relaxed);
 
@@ -2459,6 +2500,10 @@ rearm_riscv64:
 
     pthread_rwlock_rdlock(&jit->jetsam_lock.l);
     jit_crash_lock = &jit->jetsam_lock;
+    // The read lock now excludes jit_free_jetsam, so re-check whether one ran
+    // between jit_entry_scratch_get's generation sample and this point -- the
+    // one window neither that sample nor last_block_cleanup_seq below covers.
+    jit_entry_scratch_refresh(scratch, jit);
 
     unsigned last_block_cleanup_seq = atomic_load_explicit(&jit->cleanup_seq, memory_order_relaxed);
 
@@ -2815,6 +2860,10 @@ rearm_amd64:
 
     pthread_rwlock_rdlock(&jit->jetsam_lock.l);
     jit_crash_lock = &jit->jetsam_lock;
+    // The read lock now excludes jit_free_jetsam, so re-check whether one ran
+    // between jit_entry_scratch_get's generation sample and this point -- the
+    // one window neither that sample nor last_block_cleanup_seq below covers.
+    jit_entry_scratch_refresh(scratch, jit);
     // This frontend drops jetsam_lock around block compilation (below). While it
     // is dropped, another thread can take the write lock and run jit_free_jetsam(),
     // freeing blocks still referenced by our per-call cache[] and the assembly
