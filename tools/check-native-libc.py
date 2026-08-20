@@ -394,6 +394,33 @@ def _symbols(path, args):
 # libzsh.a is here on the same terms, and is only built when -Dnative_zsh is
 # on. Missing targets are skipped rather than failed (see main below), so a
 # default build -- which has no zsh -- is unaffected.
+# AOK's own routing layer, defined in an archive this tool deliberately does
+# NOT scan.
+#
+# deps/smallclue-shim/curl_nsurlsession.m implements curl's easy API on
+# NSURLSession, because the iOS SDK ships no libcurl in any form. It is the one
+# object in the build that is MEANT to reach the host: the transport is the
+# host's, knowingly, and the header spells out what that costs (guest
+# /etc/hosts and /etc/resolv.conf do not apply, and the fetch holds no guest
+# fd). The bytes still reach the guest only through the caller's write
+# callback, which is SmallCLUE's code and redirected like everything else.
+#
+# Scanning that archive would mean classifying objc_msgSend, and there is no
+# honest classification: it is dispatch, so what it reaches is whatever the
+# receiver is. Calling it pure would hand back precisely the matched-on-form
+# hole the note below describes, and one entry would exempt every Objective-C
+# call in any future file. So the archive stays out, and what appears here
+# instead is the seven-name interface it presents -- names a reader can follow
+# to one file and one written justification.
+#
+# The cost, stated so it is not discovered later: nothing checks that file. It
+# is 570 lines and it is on the reviewer.
+SHIM_TO_HOST = {
+    "curl_easy_init", "curl_easy_setopt", "curl_easy_perform",
+    "curl_easy_cleanup", "curl_easy_strerror",
+    "curl_slist_append", "curl_slist_free_all",
+}
+
 DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a",
                    "build/libbash.a", "build/libzsh.a", "build/libopenssh.a",
                    "build/libopenssh_scp.a", "build/libopenssh_stubs.a",
@@ -433,7 +460,7 @@ def report(targets, root):
     routed = _routed(root)
     already = sorted(external & routed)
     pure = sorted((external & PURE) - routed)
-    todo = sorted(external - routed - PURE)
+    todo = sorted(external - routed - PURE - SHIM_TO_HOST)
 
     print(f"referenced from outside: {len(external)}")
     print(f"\n  already routed by native_libc.h ({len(already)}):")
@@ -474,7 +501,7 @@ def main():
         if not s.startswith(INTERNAL_PREFIXES) and s not in INTERNAL
         and not OURS.match(s)
     }
-    offenders = sorted(external - PURE)
+    offenders = sorted(external - PURE - SHIM_TO_HOST)
 
     if not offenders:
         print(f"check-native-libc: clean "

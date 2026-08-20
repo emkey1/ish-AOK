@@ -142,6 +142,7 @@ configure_arch() {
     cat >"$crossfile_tmp" <<-EOF
 	[binaries]
 	c = 'clang'
+	objc = 'clang'
 	ar = 'ar'
 
 	[host_machine]
@@ -153,6 +154,8 @@ configure_arch() {
 	[built-in options]
 	c_args = ['-target', '$target_triple', '-isysroot', '$sdk_path']
 	c_link_args = ['-target', '$target_triple', '-isysroot', '$sdk_path']
+	objc_args = ['-target', '$target_triple', '-isysroot', '$sdk_path']
+	objc_link_args = ['-target', '$target_triple', '-isysroot', '$sdk_path']
 
 	[properties]
 	needs_exe_wrapper = true

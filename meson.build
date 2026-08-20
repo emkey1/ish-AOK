@@ -189,9 +189,28 @@ if zlib.found()
     # which is why it is here rather than beside the applet list below.
     add_project_arguments('-DISH_HAVE_ZLIB=1', language: 'c')
 endif
+
+# curl, wget and `md <url>` need libcurl, which the iOS SDK does not have in
+# any form -- no header, no tbd. deps/smallclue-shim/curl/curl.h supplies the
+# slice of the easy API SmallCLUE uses on top of NSURLSession, which needs an
+# Objective-C compiler. add_languages must run before any target is declared.
+#
+# required: false so that a toolchain without one still builds, with curl and
+# wget refusing honestly as they do today. Apple-only for the obvious reason:
+# elsewhere there is no Foundation to implement it with.
+have_curl_shim = false
+if host_machine.system() in ['darwin', 'ios']
+    have_curl_shim = add_languages('objc', required: false, native: false)
+endif
+if not have_curl_shim and host_machine.system() in ['darwin', 'ios']
+    warning('no Objective-C compiler -- curl and wget will be stubs')
+endif
 dependencies = [librt, libm, libdl, libatomic, threads, sqlite3]
 if zlib.found()
     dependencies += zlib
+endif
+if have_curl_shim
+    dependencies += dependency('foundation')
 endif
 
 # zsh needs tgetent/tgetstr/tgoto/tputs and, unlike bash, does not bundle a
@@ -696,6 +715,13 @@ if get_option('kernel') == 'ish'
         '-w',  # vendored code, not ours to police
     ]
 
+    # core.c reaches for <curl/curl.h> under this, and gets
+    # deps/smallclue-shim/curl/curl.h -- which is on the include path above,
+    # ahead of the SDK's own on the one platform that has one.
+    if have_curl_shim
+        smallclue_c_args += '-DPSCAL_HAS_LIBCURL'
+    endif
+
     # src/openssh_app.c and src/openssh_shim.c reach into the vendored tree
     # (sshkey.h, pscal_runtime_hooks.h), so libsmallclue needs its headers too
     # -- but only when it is there, since include_directories() on a missing
@@ -709,6 +735,20 @@ if get_option('kernel') == 'ish'
     libsmallclue = static_library('smallclue', smallclue_src + smallclue_extra_src,
         include_directories: [includes, smallclue_includes] + openssh_includes,
         c_args: smallclue_c_args)
+
+    # NOT compiled with the native_libc.h force-include the rest of SmallCLUE
+    # gets. This file's whole job is to talk to Foundation, so redirecting its
+    # libc onto the guest would be redirecting the wrong half -- the bytes go
+    # back to the caller's write callback, which IS redirected, and that is
+    # where the guest belongs in this picture. deps/smallclue-shim/curl/curl.h
+    # says the rest.
+    libcurlshim = []
+    if have_curl_shim
+        libcurlshim = [static_library('curlshim',
+            files('deps/smallclue-shim/curl_nsurlsession.m'),
+            include_directories: [includes, smallclue_includes],
+            objc_args: ['-fobjc-arc'])]
+    endif
 
     # Nextvi gets an archive of its own for one reason: a -D that must apply to
     # its translation unit and to no other. It is a program written to run once
@@ -1352,7 +1392,7 @@ if get_option('kernel') == 'ish'
     endif
 
     libish = library('ish', src,
-        link_whole: [libsmallclue, libnextvi, libbash, libzsh, libopenssh] + libopenssh_special,
+        link_whole: [libsmallclue, libnextvi, libbash, libzsh, libopenssh] + libopenssh_special + libcurlshim,
         include_directories: includes, c_args: ish_c_args)
     ish = declare_dependency(
         link_with: [libish, libish_emu, libfakefs],
