@@ -120,6 +120,40 @@ it.**
 native_libc.h so the two cannot drift, and teach the gate about it. Picking the
 first candidate is a separate and much smaller question after that.
 
+### ptraceomatic reports a real divergence at instruction 4175
+
+Found 2026-08-20, the moment the tool was working again. Not a false positive
+like the two flag-mask gaps fixed alongside it -- those were the emulator being
+right and the tool being wrong. This one is a register:
+
+    ptraceomatic: emulated and real CPU diverged after 4175 instruction(s)
+      last instruction at eip 0x8058b8b, now at 0x8058b8f
+      bytes at 0x8058b8b: 8b 54 24 14 b8 00 40 00 00 39 c2 0f
+    edx: real 0x1, fake 0x800000
+
+`8b 54 24 14` is `mov edx, [esp+0x14]`, so the two CPUs read different values
+from the same stack slot: the divergence is in MEMORY, and happened earlier
+than the instruction that revealed it. Reproduce with a static i386 binary on a
+Linux x86_64 host (camd):
+
+    ./build/tools/ptraceomatic -r / /tmp/hi
+
+**Before treating it as an emulator bug, rule out the honest alternatives.**
+ptraceomatic runs the same program twice -- once under ptrace, once in the
+emulator -- and they are not identical processes. Anything whose value legitimately
+differs between them will show up exactly like this:
+
+- a syscall returning host-specific data (pids, times, addresses) that
+  step_tracing does not synchronise,
+- auxv, the initial stack layout, or environment differing between the two,
+- ASLR, though start_tracee disables it with ADDR_NO_RANDOMIZE.
+
+0x800000 looks like a size or an address constant and 0x1 like a count, at
+about the point libc start-up is settling in, so the auxv/stack-layout
+explanation deserves checking first. **Next step** is to find where that stack
+slot was last written rather than where it was read -- the tool's new report
+names the reading instruction, which is a start and not the answer.
+
 ### A terminal MotePad, and a way for the shell to hand a file to the applet
 
 Requested 2026-08-20. Two halves, and only the first is small.
