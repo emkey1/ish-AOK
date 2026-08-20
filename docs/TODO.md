@@ -126,6 +126,39 @@ is waiting for. Reading a zombie's pidfd should report ready immediately, and
 `waitid(P_PIDFD, ...)` on one should reap normally -- both worth a test
 alongside the fix.
 
+### A terminal MotePad, and a way for the shell to hand a file to the applet
+
+Requested 2026-08-20. Two halves, and only the first is small.
+
+**The editor.** MotePad exists as a Workspace applet (app/MotePadDocumentStore.m,
+app/WorkspaceViewController.h) and has no terminal counterpart, so editing a
+file from a shell means nextvi or micro. A `motepad` command that opens the
+same documents from the terminal is the ask.
+
+**The interesting half: `motepad file.txt` in a Workspace-hosted terminal
+should be able to open the GUI applet instead.** Nothing exists for that today,
+and it needs two things AOK does not have:
+
+1. **The guest cannot tell it is running under Workspace.** /proc/ish is the
+   established guest-visible surface for this kind of fact -- it already
+   carries colors, defaults, roots, UIDevice, the JIT knobs -- and has no
+   workspace indicator. A read-only `/proc/ish/workspace` saying whether the
+   session is Workspace-hosted is the natural shape, and is useful well beyond
+   this (a shell profile could use it too).
+2. **There is no guest-to-app request channel.** GuestFileBridge
+   (app/GuestFileBridge.{h,m}) goes the other way -- the app reading guest
+   files -- so "open this path in MotePad" has nowhere to go. This wants a
+   deliberate design rather than a quick pipe: it is a guest asking the app to
+   put something on screen, so it needs a defined verb set, a path that is
+   validated app-side, and a sensible answer when the app is backgrounded or
+   the applet is already open on another file.
+
+**Suggested order.** Ship the terminal editor first and have it check
+/proc/ish/workspace only to print "run this from the Workspace MotePad applet
+for the GUI version" -- useful on its own, and it forces (1) to be defined
+without committing to (2). Then design the request channel separately, because
+it is the piece with security and lifecycle questions in it.
+
 ### eudev refuses to start: "does not support containers" (Devuan)
 
 Reported 2026-08-20, on Devuan. Left over from the sysfs work below: with
