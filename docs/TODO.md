@@ -226,7 +226,7 @@ than of AOK's.
 
 ## Closed during the 550 cycle
 
-### #558 npm segfault installing OpenClaw -- DOES NOT REPRODUCE 2026-08-20
+### #558 npm segfault installing OpenClaw -- CLOSED BY THE REPORTER 2026-08-20
 
 Reproduced the reporter's environment exactly rather than approximately, on the
 M4 iPad: **Devuan GNU/Linux 6 (excalibur), aarch64, glibc 2.41, node v24.18.0,
@@ -260,9 +260,11 @@ or with the suspect commit removed. Either something else among the 96 commits
 fixed it, or it depends on a condition not matched here -- device memory
 pressure, a different node install method, or their particular root.
 
-**Next step.** Ask the reporter to retest on 549 or later. If it persists,
-the two diagnostics still missing are the ones that separate node crashing from
-npm crashing: `node -e "console.log(1+1)"` and a bare `npm`.
+Reported back on the issue with that evidence and asked them to retest on 549
+or later. They replied "This Problem is Resolved thx" and closed it the same
+day, so it was fixed somewhere in the 96 commits between 548 and now -- by
+which one is still not established, and the one candidate worth suspecting was
+tested and cleared.
 
 ### `pidfd_open` refused a zombie -- FIXED 2026-08-20
 
@@ -916,7 +918,6 @@ its objects can be made to call `nlibc_open`.
 | [#527](https://github.com/emkey1/ish-AOK/issues/527) | pikaur fails on Arch ARM64 | blocked on `systemd-run` |
 | [#541](https://github.com/emkey1/ish-AOK/issues/541) | ptraceomatic does not run: tracee reaped during setup | **fixed 2026-08-20** -- see *Closed during the 550 cycle* |
 | [#542](https://github.com/emkey1/ish-AOK/issues/542) | JVM/HotSpot crashes on aarch64, "Field too big for insn" | reporter suspects upstream OpenJDK |
-| [#558](https://github.com/emkey1/ish-AOK/issues/558) | npm segfault installing OpenClaw | **does not reproduce on current code** -- see *Closed during the 550 cycle* |
 | -- | btop shows nothing in its disk, net and io sections | reported 2026-08-19; **fixed** -- see *Closed during the 550 cycle* |
 
 ### Feature requests
