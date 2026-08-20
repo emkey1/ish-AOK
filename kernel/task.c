@@ -88,6 +88,19 @@ struct task *pid_get_task_ref(dword_t id) {
     return task;
 }
 
+// Same, but a zombie counts as existing. A task that has exited and not yet
+// been reaped is still a process: it holds its pid, wait() can still find it,
+// and pidfd_open(2) on Linux succeeds for one -- an immediately-readable
+// pidfd is how a pidfd reports an exit at all.
+struct task *pid_get_task_zombie_ref(dword_t id) {
+    complex_lockt(&pids_lock, 0);
+    struct task *task = pid_get_task_zombie(id);
+    if (task != NULL)
+        task_ref_cnt_mod(task, 1);
+    unlock(&pids_lock);
+    return task;
+}
+
 void task_snapshot_release(struct task_snapshot *snapshot) {
     for (unsigned i = 0; i < snapshot->count; i++)
         task_ref_cnt_mod(snapshot->tasks[i], -1);

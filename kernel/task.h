@@ -453,6 +453,7 @@ struct pid *pid_get_last_allocated(void);
 struct task *pid_get_task(dword_t pid);
 struct task *pid_get_task_ref(dword_t pid);
 struct task *pid_get_task_zombie(dword_t id); // don't return null if the task exists as a zombie
+struct task *pid_get_task_zombie_ref(dword_t id); // ...and take a reference, like pid_get_task_ref
 int task_snapshot_collect(struct task_snapshot *snapshot, bool leaders_only);
 void task_snapshot_release(struct task_snapshot *snapshot);
 

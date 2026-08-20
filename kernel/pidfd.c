@@ -100,7 +100,20 @@ int_t sys_pidfd_open(pid_t_ pid, dword_t flags) {
     STRACE("pidfd_open(%d, %#x)", pid, flags);
     if (flags & ~PIDFD_NONBLOCK_)
         return _EINVAL;
-    struct task *task = pid_get_task_ref(pid);
+    // A zombie is a valid target, and the interesting one: pidfd_open on a
+    // child that has exited but not been reaped is how a process learns it
+    // exited. Linux answers ESRCH only for a pid that does not exist, meaning
+    // after reaping. pid_get_task_ref filters zombies out by design, so it is
+    // the wrong accessor here -- using it made pidfd_open fail whenever the
+    // child won the race to exit, which is exactly what pidfd_epoll_deadlock
+    // provokes on purpose and why it failed about one run in three.
+    //
+    // Safe against the exit path: pidfd_create flags its reference in
+    // pidfd_ref_count so do_exit's exit_wait_needed() ignores it, and
+    // pidfd_poll already reports POLL_READ for a zombie. Both were written for
+    // a pidfd whose task exits while it is open; a task that is already a
+    // zombie is the same situation, further along.
+    struct task *task = pid_get_task_zombie_ref(pid);
     if (task == NULL)
         return _ESRCH;
     struct fd *fd = pidfd_create(task);
