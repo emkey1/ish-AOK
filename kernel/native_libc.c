@@ -17,6 +17,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <syslog.h>
 #include <spawn.h>
 #include <sys/utsname.h>
@@ -24,6 +25,7 @@
 #include <utmpx.h>
 
 #include "kernel/calls.h"
+#include "platform/platform.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
 #include "kernel/native.h"
@@ -486,6 +488,49 @@ DIR *nlibc_opendir(const char *path) {
     }
     dir->fd = fd;
     return (DIR *) dir;
+}
+
+// fdopendir and readdir_r, the two of the directory family that were missing.
+//
+// They were not missed while the shim only served code AOK compiles, because
+// nothing here calls them. They matter now that a foreign toolchain's objects
+// are routed by symbol rewriting (tools/gen-nlibc-renames.py): Rust's
+// std::fs::read_dir uses fdopendir and readdir_r, so on a build without these
+// its directory listing went to the HOST -- against a guest fd, which is the
+// exact silent-wrongness the shim exists to prevent. It showed up as an empty
+// listing rather than an error, which is the worst way for it to show up.
+DIR *nlibc_fdopendir(int fd) {
+    // Takes ownership of fd, as the real fdopendir does: closedir closes it.
+    if (fd < 0) {
+        errno = EBADF;
+        return NULL;
+    }
+    struct nlibc_dir *dir = calloc(1, sizeof(*dir));
+    if (dir == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    dir->fd = fd;
+    return (DIR *) dir;
+}
+
+// The reentrant readdir. POSIX deprecated it and Rust still uses it on Darwin,
+// so it is here rather than argued with. Contract: *result is the entry on
+// success and NULL at end of directory, and the return value is an errno (0 on
+// success), NOT -1 -- getting that backwards makes every caller see an
+// immediate end of directory.
+int nlibc_readdir_r(DIR *handle, struct dirent *entry, struct dirent **result) {
+    if (handle == NULL || entry == NULL || result == NULL)
+        return EINVAL;
+    errno = 0;
+    struct dirent *found = nlibc_readdir(handle);
+    if (found == NULL) {
+        *result = NULL;
+        return errno;   // 0 at end of directory, the error otherwise
+    }
+    memcpy(entry, found, sizeof(*entry));
+    *result = entry;
+    return 0;
 }
 
 struct dirent *nlibc_readdir(DIR *handle) {
@@ -2011,11 +2056,77 @@ int nlibc_sysctl(int *name, unsigned namelen, void *old, size_t *oldlen,
     errno = ENOTSUP;
     return -1;
 }
+// Split by what the key is actually asking about, because two callers inside
+// one Rust binary want opposite answers and both are right.
+//
+//   available_parallelism() asks hw.ncpu to size a thread pool. AOK
+//   deliberately reports fewer CPUs than the host has, reserving cores so the
+//   emulator does not starve the UI (get_cpu_count_for_affinity,
+//   kernel/resource.c). A program that went around that would size itself for
+//   the whole machine.
+//
+//   std_detect asks hw.optional.arm.FEAT_* to decide which instructions it may
+//   emit. A native program IS host arm64 code, so the host's answer is the only
+//   correct one; a guest notion of CPU features would have it avoid
+//   instructions the silicon has, or use ones it does not.
+//
+// This replaced a blanket ENOTSUP. That was the safe answer while nothing
+// called it -- refusing beats answering about the wrong machine -- but it
+// stops being safe once a native program asks: Rust's available_parallelism
+// falls back to 1 on ENOTSUP, so every Rust program would have run
+// single-threaded and looked like an emulator performance problem.
+//
+// This file is compiled with NATIVE_LIBC_NO_REDIRECT, so the sysctlbyname
+// called below is the real one.
 int nlibc_sysctlbyname(const char *name, void *old, size_t *oldlen,
                     const void *new, size_t newlen) {
-    (void) name; (void) old; (void) oldlen; (void) new; (void) newlen;
-    errno = ENOTSUP;
-    return -1;
+    if (name == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    bool is_cpu_count =
+            strcmp(name, "hw.ncpu") == 0 ||
+            strcmp(name, "hw.logicalcpu") == 0 ||
+            strcmp(name, "hw.logicalcpu_max") == 0 ||
+            strcmp(name, "hw.activecpu") == 0 ||
+            strcmp(name, "hw.availcpu") == 0 ||
+            strcmp(name, "hw.physicalcpu") == 0 ||
+            strcmp(name, "hw.physicalcpu_max") == 0;
+    if (!is_cpu_count)
+        return sysctlbyname(name, old, oldlen, (void *) (uintptr_t) new, newlen);
+
+    // A guest program does not get to change the host's idea of anything.
+    if (new != NULL || newlen != 0) {
+        errno = EPERM;
+        return -1;
+    }
+
+    long value = get_cpu_count_for_affinity();
+    if (old == NULL) {
+        if (oldlen != NULL)
+            *oldlen = sizeof(int);
+        return 0;
+    }
+    if (oldlen == NULL) {
+        errno = EFAULT;
+        return -1;
+    }
+    // Callers ask as int or int64; serve the width requested. A short write
+    // here is a garbage core count, a long one a buffer overrun.
+    if (*oldlen >= sizeof(int64_t)) {
+        int64_t v64 = (int64_t) value;
+        memcpy(old, &v64, sizeof(v64));
+        *oldlen = sizeof(v64);
+    } else if (*oldlen >= sizeof(int)) {
+        int v32 = (int) value;
+        memcpy(old, &v32, sizeof(v32));
+        *oldlen = sizeof(v32);
+    } else {
+        errno = ENOMEM;
+        return -1;
+    }
+    return 0;
 }
 
 // uname reported the HOST: Darwin, the Mac's kernel version, the Mac's
@@ -2476,13 +2587,19 @@ long nlibc_sysconf(int name) {
         case _SC_OPEN_MAX:
             return 1024;
         case _SC_NPROCESSORS_CONF:
-        case _SC_NPROCESSORS_ONLN: {
-            unsigned procs = 0;
-            uint64_t ram = 0;
-            if (nlibc_guest_sysinfo(&ram, &procs) == 0 && procs > 0)
-                return (long) procs;
-            return 1;
-        }
+        case _SC_NPROCESSORS_ONLN:
+            // This used to answer with sysinfo()'s `procs`, which is not the
+            // CPU count -- Linux documents that field as "number of current
+            // processes". So the answer was however many tasks happened to be
+            // running: 1 on an idle guest, and never related to the question.
+            //
+            // Found because Rust's available_parallelism() reported 1 while
+            // nproc in the same guest said 4. nproc goes through
+            // sched_getaffinity, which was right all along, so the two ways of
+            // asking disagreed. get_cpu_count_for_affinity is what
+            // sched_getaffinity uses (kernel/resource.c) and is the one source
+            // of truth for how many CPUs AOK is prepared to hand out.
+            return get_cpu_count_for_affinity();
         case _SC_PHYS_PAGES: {
             unsigned procs = 0;
             uint64_t ram = 0;

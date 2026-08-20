@@ -198,6 +198,34 @@ endif
 # required: false so that a toolchain without one still builds, with curl and
 # wget refusing honestly as they do today. Apple-only for the obvious reason:
 # elsewhere there is no Foundation to implement it with.
+# A Rust program compiled into the binary, reached the only way a foreign
+# toolchain can be: by rewriting its libc imports onto the shim.
+#
+# kernel/native_libc.h redirects libc by #define, which reaches only the
+# translation units AOK compiles. Rust's std is not one of them, so its
+# open()/read() bind to the host at link time and would resolve against iOS.
+# tools/gen-nlibc-renames.py reads the header and emits the objcopy flags that
+# rewrite exactly the set it redirects -- generated rather than listed so the
+# two cannot drift.
+#
+# Not the linker's -alias, which was the first thing that worked and is wrong:
+# an alias is global, so it would redirect AOK's OWN calls too, and the kernel
+# must reach the real host open(). Rewriting one archive is the scoped version.
+#
+# required: false throughout -- a machine without a Rust toolchain builds
+# everything else exactly as before.
+cargo = find_program('cargo', join_paths(get_option('cargo_home'), 'bin', 'cargo'), required: false)
+llvm_objcopy = find_program('llvm-objcopy', '/opt/homebrew/opt/llvm/bin/llvm-objcopy',
+                            '/usr/local/opt/llvm/bin/llvm-objcopy', required: false)
+have_rust_native = false
+if get_option('native_rust') != 'disabled'
+    if cargo.found() and llvm_objcopy.found() and host_machine.system() in ['darwin', 'ios']
+        have_rust_native = true
+    elif get_option('native_rust') == 'enabled'
+        error('native_rust=enabled but cargo or llvm-objcopy is missing')
+    endif
+endif
+
 have_curl_shim = false
 if host_machine.system() in ['darwin', 'ios']
     have_curl_shim = add_languages('objc', required: false, native: false)
@@ -206,6 +234,7 @@ if not have_curl_shim and host_machine.system() in ['darwin', 'ios']
     warning('no Objective-C compiler -- curl and wget will be stubs')
 endif
 dependencies = [librt, libm, libdl, libatomic, threads, sqlite3]
+rust_native_dep = []
 if zlib.found()
     dependencies += zlib
 endif
@@ -742,6 +771,39 @@ if get_option('kernel') == 'ish'
     # back to the caller's write callback, which IS redirected, and that is
     # where the guest belongs in this picture. deps/smallclue-shim/curl/curl.h
     # says the rest.
+    # The Rust native program: cargo, then the objcopy rename, in one step.
+    # See tools/build-rust-native.sh for why they cannot be separated.
+    librustnative = []
+    if have_rust_native
+        nlibc_renames = custom_target('nlibc-renames',
+            input: 'kernel/native_libc.h',
+            output: 'nlibc-renames.txt',
+            command: [find_program('tools/gen-nlibc-renames.py'), '@INPUT@'],
+            capture: true)
+        rust_native_lib = custom_target('rust-native-probe',
+            input: nlibc_renames,
+            output: 'librust_native_probe_routed.a',
+            command: [find_program('tools/build-rust-native.sh'),
+                      meson.current_source_dir() / 'deps/rust-native-probe',
+                      '@OUTPUT@', cargo, llvm_objcopy, '@INPUT@'],
+            # Without this the crate's own sources are invisible to ninja --
+            # cargo would rebuild them but the target is only rerun when the
+            # rename list changes, so an edit to the Rust silently ships the
+            # previous binary. Caught exactly that way.
+            depend_files: files('deps/rust-native-probe/src/lib.rs',
+                                'deps/rust-native-probe/Cargo.toml'),
+            build_by_default: true)
+        # meson will not link_whole a custom target, so the archive is pulled
+        # in with -force_load and the target declared as a source so ninja
+        # builds it first. force_load, not a plain -l: the registry entry is
+        # the only reference to rust_native_probe_main, and the linker would
+        # otherwise drop the member that defines it.
+        rust_native_dep = declare_dependency(
+            sources: rust_native_lib,
+            link_args: ['-Wl,-force_load', meson.current_build_dir() / 'librust_native_probe_routed.a'])
+        librustnative = [rust_native_dep]
+    endif
+
     libcurlshim = []
     if have_curl_shim
         libcurlshim = [static_library('curlshim',
@@ -1390,13 +1452,18 @@ if get_option('kernel') == 'ish'
     if have_checksums
         ish_c_args += '-DAOK_HAVE_CHECKSUMS'
     endif
+    # One flag decides both the archive and the registry entry, so the two
+    # cannot disagree -- the same contract as AOK_HAVE_OPENSSH above.
+    if have_rust_native
+        ish_c_args += '-DISH_NATIVE_RUST'
+    endif
 
     libish = library('ish', src,
         link_whole: [libsmallclue, libnextvi, libbash, libzsh, libopenssh] + libopenssh_special + libcurlshim,
         include_directories: includes, c_args: ish_c_args)
     ish = declare_dependency(
         link_with: [libish, libish_emu, libfakefs],
-        dependencies: dependencies,
+        dependencies: dependencies + librustnative,
         include_directories: includes)
 
     if not meson.is_cross_build()

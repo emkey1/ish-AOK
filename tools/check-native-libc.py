@@ -294,6 +294,34 @@ PURE = {
     # Darwin's strmode differs from openbsd's on 4096 of 65536 modes. It is
     # compiled from openbsd-compat now (HAVE_STRMODE undefined) and so is no
     # longer a host symbol at all.
+    # Rust's two pieces of runtime plumbing.
+    #
+    # __assert_rtn is Darwin's assert-failure handler: it prints and aborts, so
+    # it qualifies on the same terms as abort() below -- a crash either way, and
+    # no way to observe or change the host.
+    #
+    # rust_eh_personality is the unwinder's personality routine. It is called
+    # by the unwind machinery while walking frames and reads only the tables
+    # the compiler emitted alongside the code. The crate is built panic=abort,
+    # so nothing here should reach it at all; it is referenced because std is
+    # compiled once for both panic strategies.
+    "__assert_rtn", "rust_eh_personality",
+    # sysctlbyname, and only as Rust's std_detect uses it.
+    #
+    # This is the one name in the routed Rust archive that llvm-objcopy cannot
+    # rewrite -- it reports success and leaves the undefined symbol alone -- so
+    # std_detect reaches the host whatever the header says. Allowed because it
+    # is asking the RIGHT machine: a native program is host arm64 code, and
+    # std_detect asks hw.optional.arm.FEAT_* to decide which instructions the
+    # silicon really supports. A guest answer there would be wrong in both
+    # directions.
+    #
+    # The scheduling keys are a different question and are NOT left to the
+    # host: nlibc_sysctlbyname answers hw.ncpu and friends from AOK's own
+    # policy, because a program sizing a thread pool must see the cores AOK is
+    # prepared to give it. The split is what makes this entry safe; without it
+    # this would be a hole.
+    "sysctlbyname",
     # abort() raises SIGABRT on the calling thread. It ends the app rather than
     # the task, which is wrong, but it is a crash either way and not a way to
     # observe or change the host -- routing it would be an improvement, not a
@@ -321,7 +349,13 @@ PURE = {
 # (A second reading of "the gate cannot see this": it can. It reads undefined
 # symbols, which covers data as readily as calls -- __progname is a variable
 # and would have been caught. Nothing here needs to learn about variables.)
-INTERNAL_PREFIXES = ("_tlv_", "_os_", "_platform_")
+# Rust's name mangling (RFC 2603): every symbol it generates for its own code
+# starts _R. These are Rust calling Rust -- the archive's internal edges -- and
+# no more a host call than a static C function is. The libc names Rust DOES
+# import are ordinary C symbols and still face the allowlist, which is the
+# point: routing rewrites them to nlibc_* (tools/gen-nlibc-renames.py), so one
+# left unrewritten still shows up here by its real name.
+INTERNAL_PREFIXES = ("_tlv_", "_os_", "_platform_", "_R")
 INTERNAL = {
     "dyld_stub_binder",
     # Stack protector and stack probes.

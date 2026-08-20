@@ -261,8 +261,18 @@ int native_zsh_main(int argc, char *const argv[], char *const envp[]);
 int native_zsh_multio_main(int argc, char *const argv[], char *const envp[]);
 #endif
 
+#ifdef ISH_NATIVE_RUST
+int rust_native_probe_main(int argc, char *const argv[], char *const envp[]);
+#endif
+
 static const struct native_program native_programs[] = {
     { "smallclue", smallclue_real_main },
+#ifdef ISH_NATIVE_RUST
+    // Rust, reached by rewriting its libc imports onto the shim rather than by
+    // the #define redirection that only covers what AOK compiles. See
+    // tools/gen-nlibc-renames.py and deps/rust-native-probe.
+    { "rust-probe", rust_native_probe_main },
+#endif
 #ifdef ISH_NATIVE_BASH
     { "bash", native_bash_main },
 #endif

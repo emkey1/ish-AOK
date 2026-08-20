@@ -1,0 +1,13 @@
+[package]
+name = "rust_native_probe"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rust_native_probe"
+crate-type = ["staticlib"]
+
+[profile.release]
+opt-level = "z"
+panic = "abort"
+strip = true

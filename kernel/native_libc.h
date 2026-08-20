@@ -124,6 +124,8 @@ int nlibc_unlinkat(int dirfd, const char *path, int flags);
 
 /* --- directories -------------------------------------------------------- */
 DIR *nlibc_opendir(const char *path);
+DIR *nlibc_fdopendir(int fd);
+int nlibc_readdir_r(DIR *handle, struct dirent *entry, struct dirent **result);
 struct dirent *nlibc_readdir(DIR *dir);
 int nlibc_closedir(DIR *dir);
 /* The descriptor behind a DIR. Ours, necessarily: nlibc_opendir hands back a
@@ -709,6 +711,8 @@ const char *nlibc_dlerror(void);
 #define fstatat     nlibc_fstatat
 #define unlinkat    nlibc_unlinkat
 
+#define fdopendir   nlibc_fdopendir
+#define readdir_r   nlibc_readdir_r
 #define opendir     nlibc_opendir
 #define readdir     nlibc_readdir
 #define closedir    nlibc_closedir

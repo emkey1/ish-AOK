@@ -1,4 +1,8 @@
 option('log', type: 'string', value: '')
+option('cargo_home', type: 'string', value: '~/.cargo',
+       description: 'Where rustup installed cargo, when it is not on PATH')
+option('native_rust', type: 'combo', choices: ['enabled', 'disabled', 'auto'], value: 'auto',
+       description: 'Compile the Rust native program in (needs cargo and llvm-objcopy)')
 option('nolog', type: 'string', value: '')
 option('log_handler', type: 'string', value: 'dprintf')
 
