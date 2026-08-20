@@ -358,12 +358,22 @@ The link count went from 106 to 112 on its own.
 
 **Verified on device** (ipp4-dev-arm64, an M4 iPad, 2026-08-20): tar, gzip,
 gunzip, zcat, curl, wget and `md <url>` all work in the app, which settles the
-`libz.tbd` link -- a build that had missed it could not have launched. It could
-NOT be confirmed by a headless build here, for reasons worth knowing separately:
-the project's targets do not build standalone. `libiSH-AOKApp` resolves SDKROOT
-to macOS and fails on `UIKit/UIKit.h`, and `iSH-AOK.FileProvider` links
-`-lish_emu` before the Meson target has produced it, because neither declares
-the dependency that Xcode's scheme-driven build infers. Both are pre-existing.
+`libz.tbd` link -- a build that had missed it could not have launched.
+
+**Also confirmed by a headless build, 2026-08-20**, and the earlier claim here
+that one was impossible was wrong. The project builds fine from the command
+line; it has to be driven by SCHEME, not by target:
+
+    xcodebuild -project iSH-AOK.xcodeproj -scheme iSH -configuration Release \
+        -sdk iphonesimulator ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build
+
+`-target` disables the implicit dependency resolution that makes the Meson and
+Ninja targets run before anything links against their archives, which is why
+`libiSH-AOKApp` appeared to resolve SDKROOT to macOS and `iSH-AOK.FileProvider`
+appeared to link `-lish_emu` too early. Both were artefacts of the wrong flag,
+not project defects: iSH, ish-cli, iSH+Linux and Screenshots are all shared
+schemes and 16 target dependencies are declared. The resulting app binary links
+/usr/lib/libz.1.dylib with `_deflate`/`_inflate` bound to it.
 
 **The device found one thing the CLI could not**: plain HTTP to a public host
 failed in the app while HTTPS and localhost worked -- App Transport Security's
