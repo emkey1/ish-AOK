@@ -76,10 +76,44 @@ DO_PATH=1
 # because that is where the thing it describes lives, and because /usr/local
 # may be a different filesystem.
 SHELL_STATE=/etc/aok-native-shell.prev
+# Delimits the block this script owns inside a zsh startup file that may not be
+# ours, so --remove takes back exactly what it added.
+ZSH_MARK_BEGIN='# >>> iSH-AOK native-bin >>>'
+ZSH_MARK_END='# <<< iSH-AOK native-bin <<<'
 # The PATH snippet. profile.d rather than a user dotfile: it is system state
 # this script owns, so --remove can delete the whole file and be sure it has
 # left nothing behind, which editing someone's .bashrc could never promise.
 PATH_FILE=/etc/profile.d/05-aok-native-bin.sh
+
+# zsh NEVER reads /etc/profile or /etc/profile.d. Its global files are zshenv,
+# zprofile, zshrc, zlogin -- so a user whose login shell is zsh got the links
+# and never got them on PATH, and `md` (or any other applet) answered "command
+# not found" with a perfectly good symlink sitting in the link directory. That
+# is not a corner case: this script's own --shell zsh puts people there.
+#
+# Which file, per the probe AOK's native zsh actually does (deps/zsh
+# Src/aok_fork.c aok_source_global): /etc/zsh/<name> when that file exists,
+# otherwise the compiled-in /etc/<name>. Matched here so the snippet lands
+# where zsh will look, and NEVER creating a second file that would shadow one
+# the distro already ships -- the probe is per-file and takes the /etc/zsh one.
+# Builtin-only, for the reason the APPLETS parser below spells out: this script
+# puts native commands on PATH, so it must not then depend on which grep or awk
+# that PATH resolves to.
+zsh_block_present() {
+    [ -f "$1" ] || return 1
+    while IFS= read -r zline || [ -n "$zline" ]; do
+        [ "$zline" = "$ZSH_MARK_BEGIN" ] && return 0
+    done < "$1"
+    return 1
+}
+
+zsh_path_file() {
+    if [ -f /etc/zsh/zprofile ]; then echo /etc/zsh/zprofile
+    elif [ -f /etc/zprofile ]; then echo /etc/zprofile
+    elif [ -d /etc/zsh ]; then echo /etc/zsh/zprofile
+    else echo /etc/zprofile
+    fi
+}
 
 # Applets deliberately NOT linked. Linking a broken one is worse than leaving
 # it alone: the distro's working command gets shadowed by one that errors, and
@@ -321,16 +355,37 @@ set_uid1000_shell() {
 # to be shadowed badly, --no-path leaves PATH alone and --remove takes it back
 # out; the links themselves stay useful by full path either way.
 apply_path() {
+    zfile=$(zsh_path_file)
     if [ "$MODE" = remove ]; then
         if [ -f "$PATH_FILE" ]; then
             rm -f "$PATH_FILE"
             echo "  removed $PATH_FILE (PATH reverts at next login)"
+        fi
+        # Only ever the block this script wrote: the file may be the distro's.
+        if zsh_block_present "$zfile"; then
+            tmp=$zfile.aok.$$
+            skip=0
+            while IFS= read -r zline || [ -n "$zline" ]; do
+                case "$zline" in
+                    "$ZSH_MARK_BEGIN") skip=1; continue ;;
+                    "$ZSH_MARK_END")   skip=0; continue ;;
+                esac
+                [ "$skip" -eq 1 ] || printf '%s\n' "$zline"
+            done < "$zfile" > "$tmp" && mv "$tmp" "$zfile"
+            # A file left empty was one this script created.
+            [ -s "$zfile" ] || rm -f "$zfile"
+            echo "  removed the PATH block from $zfile"
         fi
         return 0
     fi
     if [ "$MODE" = list ]; then
         [ -f "$PATH_FILE" ] && echo "  $PATH_FILE already present" \
                             || echo "  would put $TARGET_DIR first on PATH via $PATH_FILE"
+        if zsh_block_present "$zfile"; then
+            echo "  $zfile already sources it (zsh)"
+        else
+            echo "  would make zsh read it too, via $zfile"
+        fi
         return 0
     fi
     [ -d /etc/profile.d ] || { echo "  no /etc/profile.d; leaving PATH alone"; return 0; }
@@ -346,6 +401,22 @@ case ":\$PATH:" in
 esac
 PATHEOF
     echo "  put $TARGET_DIR first on PATH via $PATH_FILE (takes effect at next login)"
+
+    # The zsh side is a two-line shim rather than a copy of the logic above, so
+    # there stays exactly one definition of what goes on PATH.
+    if zsh_block_present "$zfile"; then
+        echo "  $zfile already sources it (zsh)"
+    else
+        zdir=${zfile%/*}
+        [ -d "$zdir" ] || mkdir -p "$zdir" 2>/dev/null || true
+        {
+            echo "$ZSH_MARK_BEGIN"
+            echo "# zsh does not read /etc/profile.d; source the snippet that does."
+            echo "[ -r $PATH_FILE ] && . $PATH_FILE"
+            echo "$ZSH_MARK_END"
+        } >> "$zfile" && echo "  made zsh read it too, via $zfile" \
+                      || echo "  could not write $zfile; zsh will not see the links on PATH"
+    fi
 }
 
 # Resolve SHELL_WANT to a path. A bare name picks the matching native shell; a
