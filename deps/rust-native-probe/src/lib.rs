@@ -246,6 +246,38 @@ pub extern "C" fn rust_native_probe_main(
             });
             println!("  time driver: sleep(150ms) returned after {:?}", t.elapsed());
 
+            // The point of the whole exercise: real readiness through
+            // EVFILT_READ/EVFILT_WRITE. A timer proves the driver parks and
+            // wakes; only an actual socket proves registrations, edge state
+            // and the readiness translation.
+            let io = rt.block_on(async {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+                let addr = listener.local_addr()?;
+                let server = tokio::spawn(async move {
+                    let (mut sock, _) = listener.accept().await?;
+                    let mut buf = vec![0u8; 64];
+                    let n = sock.read(&mut buf).await?;
+                    buf.truncate(n);
+                    buf.iter_mut().for_each(|b| b.make_ascii_uppercase());
+                    sock.write_all(&buf).await?;
+                    sock.flush().await?;
+                    Ok::<_, std::io::Error>(n)
+                });
+                let mut client = tokio::net::TcpStream::connect(addr).await?;
+                client.write_all(b"async round trip").await?;
+                let mut back = String::new();
+                client.read_to_string(&mut back).await?;
+                let sent = server.await.map_err(std::io::Error::other)??;
+                Ok::<_, std::io::Error>((addr.port(), sent, back))
+            });
+            match io {
+                Ok((port, sent, back)) =>
+                    println!("  io driver: port={} {} bytes each way, echoed {:?}",
+                             port, sent, back),
+                Err(e) => println!("  io driver failed: {}", e),
+            }
+
             // The LSP pattern: a child process with a pipe the runtime polls.
             let out = rt.block_on(async {
                 tokio::process::Command::new("/bin/echo")

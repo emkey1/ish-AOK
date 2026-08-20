@@ -30,6 +30,7 @@
 #include "kernel/fs.h"
 #include "kernel/native.h"
 #include "kernel/native_io.h"
+#include "kernel/native_kqueue.h"
 #include "kernel/native_libc.h"
 #include "kernel/native_syscall.h"
 #include "kernel/task.h"
@@ -281,7 +282,19 @@ int nlibc_open(const char *path, int flags, ...) {
     return nlibc_openat(AT_FDCWD, path, flags, mode);
 }
 
+// close() without the kqueue bookkeeping, for the bookkeeping itself.
+int nlibc_close_raw(int fd_no) {
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_close, fd_no));
+}
+
 int nlibc_close(int fd_no) {
+    // A kqueue descriptor is a pipe end with a table behind it, and the table
+    // has to go first -- otherwise the number is recycled by the guest while
+    // this side still believes it names a queue, and the next kqueue() to be
+    // handed the same number inherits someone else's registrations. The hook
+    // closes both pipe ends itself, so there is nothing left to do here.
+    if (nlibc_kqueue_close_hook(fd_no))
+        return 0;
     return (int) nlibc_ret(native_syscall(NATIVE_SYS_close, fd_no));
 }
 
@@ -1567,8 +1580,13 @@ int nlibc_pclose(FILE *stream) {
 // dup2 or a poll was more machinery than the applet needing it was worth. Over
 // the syscall dispatcher they are a few lines each, which is the point.
 
+// The three ways a descriptor gets a second number, all of which have to tell
+// the kqueue table: a dup of a kqueue names the same queue (native_kqueue.h).
 int nlibc_dup(int fd_no) {
-    return (int) nlibc_ret(native_syscall(NATIVE_SYS_dup, fd_no));
+    int newfd = (int) nlibc_ret(native_syscall(NATIVE_SYS_dup, fd_no));
+    if (newfd >= 0)
+        nlibc_kqueue_dup_hook(fd_no, newfd);
+    return newfd;
 }
 
 // A pipe made of HOST descriptors would be unusable: every other descriptor a
@@ -1601,7 +1619,10 @@ int nlibc_dup2(int oldfd, int newfd) {
             return nlibc_fail(_EBADF);
         return newfd;
     }
-    return (int) nlibc_ret(native_syscall(NATIVE_SYS_dup3, oldfd, newfd, 0));
+    int got = (int) nlibc_ret(native_syscall(NATIVE_SYS_dup3, oldfd, newfd, 0));
+    if (got >= 0)
+        nlibc_kqueue_dup_hook(oldfd, got);
+    return got;
 }
 
 // fcntl commands 0-4 (DUPFD/GETFD/SETFD/GETFL/SETFL) happen to agree between
@@ -1615,12 +1636,17 @@ int nlibc_fcntl(int fd_no, int cmd, ...) {
     va_end(ap);
 
     switch (cmd) {
-        case F_DUPFD:
         case F_GETFD:
         case F_SETFD:
             return (int) nlibc_ret(native_syscall(NATIVE_SYS_fcntl, fd_no, cmd, arg));
-        case F_DUPFD_CLOEXEC:
-            return (int) nlibc_ret(native_syscall(NATIVE_SYS_fcntl, fd_no, 1030, arg));
+        case F_DUPFD:
+        case F_DUPFD_CLOEXEC: {
+            int guest_cmd = cmd == F_DUPFD ? F_DUPFD : 1030;
+            int got = (int) nlibc_ret(native_syscall(NATIVE_SYS_fcntl, fd_no, guest_cmd, arg));
+            if (got >= 0)
+                nlibc_kqueue_dup_hook(fd_no, got);
+            return got;
+        }
         case F_GETFL: {
             sqword_t res = native_syscall(NATIVE_SYS_fcntl, fd_no, F_GETFL, 0);
             if (res < 0)
@@ -1965,6 +1991,33 @@ int nlibc_ioctl(int fd_no, unsigned long request, ...) {
         default:
             return nlibc_fail(_ENOSYS);
     }
+}
+
+// The timespec form, which is what nlibc_poll is built on anyway. Exposed
+// because the kqueue front end's timeout arrives as a timespec, and routing it
+// through poll()'s milliseconds would round a sub-millisecond wait either up
+// (a timer runtime sleeps too long) or down to zero (it spins).
+int nlibc_ppoll(void *fds, unsigned nfds, const struct timespec *timeout) {
+    NATIVE_FRAME;
+    size_t size = (size_t) nfds * sizeof(struct pollfd);
+    guest_addr_t guest_fds = native_scratch_put(fds, size);
+    if (guest_fds == 0 && size > 0)
+        return nlibc_fail(_ENOMEM);
+
+    guest_addr_t guest_ts = 0;
+    if (timeout != NULL) {
+        struct nlibc_guest_timespec ts = {
+            .sec = timeout->tv_sec,
+            .nsec = timeout->tv_nsec,
+        };
+        guest_ts = native_scratch_put(&ts, sizeof(ts));
+        if (guest_ts == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    sqword_t res = native_syscall(NATIVE_SYS_ppoll, guest_fds, nfds, guest_ts, 0, 0);
+    if (res >= 0 && size > 0 && native_scratch_get(fds, guest_fds, size) < 0)
+        return nlibc_fail(_EFAULT);
+    return (int) nlibc_ret(res);
 }
 
 // struct pollfd is {int, short, short} on both sides and the POLL* bits share
@@ -3615,8 +3668,76 @@ static int nlibc_sockopt_to_guest(int level, int option, int *guest_level) {
     return -1;
 }
 
+// Darwin's sendfile is not Linux's with the arguments shuffled: it takes the
+// byte count in/out through a pointer, puts the source first, and returns 0 or
+// -1 rather than a count. Unrouted it would have copied a HOST file into a
+// HOST socket, which is why it is translated rather than passed through.
+//
+// The guest's sendfile64 wants the offset by pointer and answers with the
+// count, so both halves of the shape change here.
+int nlibc_sendfile(int in_fd, int out_fd, off_t offset, off_t *len,
+                   void *hdtr, int flags) {
+    NATIVE_FRAME;
+    (void) flags;
+    // sf_hdtr prepends and appends caller buffers around the file. Nothing
+    // reaches this with one, and quietly dropping the headers would send a
+    // truncated message, so it is refused.
+    if (hdtr != NULL)
+        return nlibc_fail(_ENOSYS);
+    if (len == NULL)
+        return nlibc_fail(_EFAULT);
+
+    off_t want = *len;
+    *len = 0;
+    // 0 means "to the end of the file" on Darwin. The guest has no such
+    // spelling, so it becomes a large count and the short answer below
+    // reports what actually moved.
+    size_t count = want > 0 ? (size_t) want : (size_t) SSIZE_MAX;
+
+    sqword_t guest_off = offset;
+    guest_addr_t off_ptr = native_scratch_put(&guest_off, sizeof(guest_off));
+    if (off_ptr == 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res = native_syscall(NATIVE_SYS_sendfile64, out_fd, in_fd, off_ptr,
+            (dword_t) count);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    *len = (off_t) res;
+    // Darwin reports a short send as EAGAIN with *len set, not as success.
+    if (want > 0 && res < want) {
+        errno = EAGAIN;
+        return -1;
+    }
+    return 0;
+}
+
+// SO_NOSIGPIPE is Darwin's per-socket "return EPIPE instead of raising
+// SIGPIPE", and Linux has no counterpart -- it spells the same wish
+// MSG_NOSIGNAL, per send, which write(2) on a socket cannot carry. So there is
+// nothing to translate this into.
+//
+// Accepted rather than refused, because refusing it stops the caller dead:
+// mio sets it on every socket it opens on an Apple target, so ENOPROTOOPT here
+// meant no async Rust program could open a socket at all.
+//
+// What is NOT true afterwards: the socket does not actually suppress SIGPIPE.
+// A write to a peer that has gone away raises it, and a task that has not
+// handled or ignored SIGPIPE dies. That is how every native program already
+// behaves, so this is a gap being named rather than one being opened --
+// docs/TODO.md carries it.
+static bool nlibc_sockopt_is_nosigpipe(int level, int option) {
+#ifdef SO_NOSIGPIPE
+    return level == SOL_SOCKET && option == SO_NOSIGPIPE;
+#else
+    (void) level; (void) option;
+    return false;
+#endif
+}
+
 int nlibc_setsockopt(int fd_no, int level, int option, const void *value, socklen_t len) {
     NATIVE_FRAME;
+    if (nlibc_sockopt_is_nosigpipe(level, option))
+        return 0;
     int guest_level;
     int guest_option = nlibc_sockopt_to_guest(level, option, &guest_level);
     if (guest_option < 0)
@@ -3632,6 +3753,16 @@ int nlibc_getsockopt(int fd_no, int level, int option, void *value, socklen_t *l
     NATIVE_FRAME;
     if (len == NULL)
         return nlibc_fail(_EFAULT);
+    // Answers what setsockopt above accepted, so a caller that sets and reads
+    // back does not conclude the socket is in a state it never asked for.
+    if (nlibc_sockopt_is_nosigpipe(level, option)) {
+        if (value != NULL && *len >= sizeof(int)) {
+            *(int *) value = 1;
+            *len = sizeof(int);
+            return 0;
+        }
+        return nlibc_fail(_EINVAL);
+    }
     int guest_level;
     int guest_option = nlibc_sockopt_to_guest(level, option, &guest_level);
     if (guest_option < 0)
@@ -4734,7 +4865,69 @@ typedef void (*nlibc_sighandler)(int);
 // __thread rather than per-task-struct because a native program IS a host
 // thread here, and everything else the shim keeps for it (the delivery
 // re-entry guard, the held set) is reached the same way.
-static __thread nlibc_sighandler nlibc_handlers[NSIG];
+// SA_SIGINFO handlers, which take (sig, siginfo_t *, void *). Kept beside the
+// one-argument table rather than replacing it so that every "is something
+// installed here" test in this file keeps working unchanged: a three-argument
+// handler puts a marker in the one-argument table and the real function here.
+typedef void (*nlibc_sigaction_handler)(int, siginfo_t *, void *);
+
+struct nlibc_sigtable {
+    nlibc_sighandler h[NSIG];
+    nlibc_sigaction_handler h3[NSIG];
+};
+
+// PER TASK, not per thread, and that distinction is the whole point.
+//
+// It was __thread, on the reasoning that a native program IS a host thread.
+// True of the shells; false of anything with a runtime. A native program can
+// create threads -- nlibc_pthread_create hands each one the creator's task --
+// and then the thread that INSTALLS a handler is not the thread that reaches
+// a checkpoint and delivers it. With the table per thread the deliverer sees
+// an empty one, decides no signal here is interesting, and takes nothing: the
+// signal stays pending forever.
+//
+// Measured: tokio registers its SIGCHLD handler from one thread and waits in
+// the I/O driver on another, so a native Rust program that spawned a child
+// never learned it had exited. It hung rather than failing, which is the
+// worse half.
+//
+// Per task is also what the shells wanted all along -- two of them are two
+// TASKS, so they still cannot see each other's dispositions.
+static pthread_mutex_t nlibc_sigtable_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static struct nlibc_sigtable *nlibc_sigtable(void) {
+    // The fallback for code reached with no task at all. Per thread because
+    // there is nothing else to hang it on, and unreachable from a native
+    // program, which always has one.
+    static __thread struct nlibc_sigtable no_task;
+    if (current == NULL)
+        return &no_task;
+    struct nlibc_sigtable *t = __atomic_load_n(&current->native_sigtable,
+                                               __ATOMIC_ACQUIRE);
+    if (t != NULL)
+        return t;
+    // The lock covers creation only. Entries are plain aligned pointer stores
+    // afterwards: a thread installing a handler while a sibling delivers reads
+    // either the old function or the new one, never a torn value, and a
+    // program that needs those two ordered has to order them itself -- which
+    // is exactly as true on a real kernel.
+    pthread_mutex_lock(&nlibc_sigtable_lock);
+    t = current->native_sigtable;
+    if (t == NULL) {
+        t = calloc(1, sizeof(*t));
+        __atomic_store_n(&current->native_sigtable, t, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&nlibc_sigtable_lock);
+    return t != NULL ? t : &no_task;
+}
+
+#define nlibc_handlers      (nlibc_sigtable()->h)
+#define nlibc_info_handlers (nlibc_sigtable()->h3)
+
+// Never called. Its address is the marker, and taking one keeps the compiler
+// from folding it onto something else.
+static void nlibc_siginfo_marker_fn(int sig) { (void) sig; }
+#define NLIBC_SIGINFO_MARKER (&nlibc_siginfo_marker_fn)
 
 // how values: Linux 0/1/2, Darwin 1/2/3.
 static int nlibc_sigmask_how(int host_how) {
@@ -4814,20 +5007,45 @@ int nlibc_sigaction(int host_sig, const struct sigaction *act, struct sigaction 
 
     if (oact != NULL) {
         memset(oact, 0, sizeof(*oact));
-        oact->sa_handler = nlibc_handlers[host_sig];
+        if (nlibc_handlers[host_sig] == NLIBC_SIGINFO_MARKER) {
+            oact->sa_sigaction = nlibc_info_handlers[host_sig];
+            oact->sa_flags = SA_SIGINFO;
+        } else {
+            oact->sa_handler = nlibc_handlers[host_sig];
+        }
     }
     if (act == NULL)
         return 0;
 
-    // SA_SIGINFO would want a siginfo the kernel cannot hand host code, so the
-    // three-argument form is refused rather than silently called with two.
-    if (act->sa_flags & SA_SIGINFO)
-        return nlibc_fail(_ENOSYS);
+    // SA_SIGINFO used to be refused, on the grounds that there was no siginfo
+    // to hand host code. There was: rt_sigtimedwait writes one, and this file
+    // was passing NULL for it. Refusing it stopped anything built on
+    // signal_hook -- which is to say tokio's process and signal drivers, and
+    // so every async Rust program that spawns a child.
+    bool want_info = (act->sa_flags & SA_SIGINFO) != 0;
+    nlibc_sighandler entry = want_info
+            ? (act->sa_sigaction != NULL ? NLIBC_SIGINFO_MARKER : SIG_DFL)
+            : act->sa_handler;
+    // SIG_DFL and SIG_IGN are spelled in sa_handler even when SA_SIGINFO is
+    // set, and they are not function pointers to call.
+    if (want_info && (act->sa_handler == SIG_DFL || act->sa_handler == SIG_IGN))
+        entry = act->sa_handler;
 
-    int err = nlibc_set_disposition(guest_sig, act->sa_handler);
+    int err = nlibc_set_disposition(guest_sig, entry);
     if (err < 0)
         return nlibc_fail(err);
-    nlibc_handlers[host_sig] = act->sa_handler;
+    nlibc_handlers[host_sig] = entry;
+    // AFTER the table is written, not before. nlibc_set_disposition also
+    // updates the held set, but it runs first and computes it from a table
+    // that does not yet contain this handler -- so the held set was always one
+    // registration behind. Invisible in a shell, which installs several and
+    // has the next one paper over the last, and fatal for a program with only
+    // one: tokio installs a single SIGCHLD handler, the held set stayed empty,
+    // and so a blocking poll in the guest was never interrupted for it. It
+    // waited for a child that had already exited.
+    nlibc_update_held_signals();
+    nlibc_info_handlers[host_sig] = entry == NLIBC_SIGINFO_MARKER
+            ? act->sa_sigaction : NULL;
     return 0;
 }
 
@@ -4848,6 +5066,7 @@ nlibc_sighandler nlibc_signal(int host_sig, nlibc_sighandler handler) {
         return SIG_ERR;
     }
     nlibc_handlers[host_sig] = handler;
+    nlibc_update_held_signals();   // same ordering fix as nlibc_sigaction
     return previous;
 }
 
@@ -4948,17 +5167,59 @@ int nlibc_sigpending(sigset_t *set) {
 
 // Dequeues one signal from `set`, waiting if `wait` is true. Returns the guest
 // signal number, or a negative errno.
-static int nlibc_sigtake(sigset_t_ set, bool wait) {
+// The guest's siginfo as rt_sigtimedwait writes it. Two shapes, because it
+// follows the TASK's ABI -- the same split the timespec below has. Only the
+// fields a handler can act on are mirrored; the rest is padding this side
+// never reads, which is why each is followed by the size the kernel asserts.
+struct nlibc_guest_siginfo64 {
+    sdword_t sig, sig_errno, code, _pad0;
+    sdword_t pid;
+    dword_t  uid;
+    sdword_t status;
+} __attribute__((packed));
+
+struct nlibc_guest_siginfo32 {
+    sdword_t sig, sig_errno, code;
+    sdword_t pid;
+    dword_t  uid;
+    sdword_t status;
+} __attribute__((packed));
+
+// What a handler is actually given. Filled from whichever shape the task uses.
+struct nlibc_taken_signal {
+    int sig, sig_errno, code, status;
+    int pid;
+    unsigned uid;
+    bool have_info;
+};
+
+// rt_sigtimedwait's second argument is the siginfo out-pointer, and it used to
+// be passed as NULL here -- which is why SA_SIGINFO could only be refused. The
+// information was always available; nothing was asking for it.
+static int nlibc_sigtake_info(sigset_t_ set, bool wait,
+                              struct nlibc_taken_signal *info) {
     NATIVE_FRAME;
+    if (info != NULL)
+        memset(info, 0, sizeof(*info));
     guest_addr_t guest_set = native_scratch_put(&set, sizeof(set));
     if (guest_set == 0)
         return _ENOMEM;
+
+    bool abi64 = current != NULL && guest_abi_is_64bit(current->abi);
+    size_t info_size = abi64 ? sizeof(struct nlibc_guest_siginfo64)
+                             : sizeof(struct nlibc_guest_siginfo32);
+    // The kernel writes the FULL siginfo, not just the prefix mirrored above,
+    // so the scratch has to be the size it expects or the write runs off the
+    // end of the allocation.
+    guest_addr_t guest_info = 0;
+    if (info != NULL) {
+        guest_info = native_scratch_alloc(abi64 ? 128 : 128);
+        if (guest_info == 0)
+            return _ENOMEM;
+    }
+
     guest_addr_t guest_timeout = 0;
     if (!wait) {
-        // The only timespec in this file whose width follows the TASK's ABI
-        // rather than being fixed at 64-bit: sys_rt_sigtimedwait_common reads
-        // it through guest_abi_is_64bit(current->abi), where utimensat, ppoll
-        // and pselect all take the 64-bit shape whatever the task is.
         if (guest_abi_is_64bit(current->abi)) {
             struct { sqword_t sec, nsec; } zero = {0, 0};
             guest_timeout = native_scratch_put(&zero, sizeof(zero));
@@ -4969,8 +5230,37 @@ static int nlibc_sigtake(sigset_t_ set, bool wait) {
         if (guest_timeout == 0)
             return _ENOMEM;
     }
-    return (int) native_syscall(NATIVE_SYS_rt_sigtimedwait, guest_set, 0,
+    int res = (int) native_syscall(NATIVE_SYS_rt_sigtimedwait, guest_set, guest_info,
             guest_timeout, sizeof(sigset_t_));
+    if (res > 0 && info != NULL) {
+        union {
+            struct nlibc_guest_siginfo64 a;
+            struct nlibc_guest_siginfo32 b;
+        } raw;
+        memset(&raw, 0, sizeof(raw));
+        if (native_scratch_get(&raw, guest_info, info_size) == 0) {
+            if (abi64) {
+                info->sig = raw.a.sig; info->sig_errno = raw.a.sig_errno;
+                info->code = raw.a.code; info->pid = raw.a.pid;
+                info->uid = raw.a.uid;  info->status = raw.a.status;
+            } else {
+                info->sig = raw.b.sig; info->sig_errno = raw.b.sig_errno;
+                info->code = raw.b.code; info->pid = raw.b.pid;
+                info->uid = raw.b.uid;  info->status = raw.b.status;
+            }
+            info->have_info = true;
+        }
+    }
+    return res;
+}
+
+// The plain form, for callers with nothing to do with the detail. Note the
+// timeout above is the only timespec in this file whose width follows the
+// TASK's ABI rather than being fixed at 64-bit: sys_rt_sigtimedwait_common
+// reads it through guest_abi_is_64bit(current->abi), where utimensat, ppoll
+// and pselect all take the 64-bit shape whatever the task is.
+static int nlibc_sigtake(sigset_t_ set, bool wait) {
+    return nlibc_sigtake_info(set, wait, NULL);
 }
 
 int nlibc_sigwait(const sigset_t *set, int *sig) {
@@ -5018,7 +5308,8 @@ int nlibc_deliver_signals_count(void) {
 
     delivering = true;
     for (;;) {
-        int guest_sig = nlibc_sigtake(ours, false);
+        struct nlibc_taken_signal taken;
+        int guest_sig = nlibc_sigtake_info(ours, false, &taken);
         if (guest_sig <= 0)
             break;
         int host_sig = nlibc_signal_to_host(guest_sig);
@@ -5053,7 +5344,33 @@ int nlibc_deliver_signals_count(void) {
             sigset_t_ entry_mask = 0;
             bool have_mask = nlibc_rt_sigprocmask(SIG_BLOCK_, 0, &entry_mask) == 0;
             sigset_t_ entry_prog = current != NULL ? current->native_prog_blocked : 0;
-            handler(host_sig);
+            if (handler == NLIBC_SIGINFO_MARKER) {
+                // The three-argument form. si_code travels as the guest wrote
+                // it: the SI_* values agree between the two on every code a
+                // handler tests (SI_USER 0, SI_QUEUE -1, and CLD_* 1..6).
+                //
+                // The context argument is NULL, and that is the one thing
+                // this cannot supply: a ucontext_t describes the interrupted
+                // machine state, and a native program's handler is a plain
+                // call at a checkpoint rather than a frame the kernel built.
+                // Nothing that runs here reads it -- signal_hook and tokio
+                // ignore it -- and a fabricated one would be worse than none.
+                siginfo_t info;
+                memset(&info, 0, sizeof(info));
+                info.si_signo = host_sig;
+                if (taken.have_info) {
+                    info.si_errno = taken.sig_errno;
+                    info.si_code = taken.code;
+                    info.si_pid = (pid_t) taken.pid;
+                    info.si_uid = (uid_t) taken.uid;
+                    info.si_status = taken.status;
+                }
+                nlibc_sigaction_handler h3 = nlibc_info_handlers[host_sig];
+                if (h3 != NULL)
+                    h3(host_sig, &info, NULL);
+            } else {
+                handler(host_sig);
+            }
             if (have_mask)
                 nlibc_rt_sigprocmask(SIG_SETMASK_, entry_mask, NULL);
             if (current != NULL) {

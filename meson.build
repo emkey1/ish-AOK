@@ -435,6 +435,7 @@ if get_option('kernel') == 'ish'
         'kernel/native.c',
         'kernel/native_io.c',
         'kernel/native_libc.c',
+        'kernel/native_kqueue.c',
         'kernel/native_termcap.c',
         'kernel/native_syscall.c', native_syscall_nums,
         'kernel/smallclue_glue.c',

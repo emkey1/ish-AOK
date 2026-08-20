@@ -136,7 +136,7 @@ the lock. Fixed (`kernel/fs.c`), and measured: 9 of 12 hung with the fix
 against 7 of 12 without, which is the same number. Worth having, not worth
 crediting.
 
-### Rust runs natively; async Rust needs kqueue -- MEASURED 2026-08-20
+### Rust runs natively, async Rust included -- WORKING 2026-08-20
 
 The question blocking python, node, ripgrep and helix -- can another
 toolchain's objects be made to call `nlibc_open`? -- is answered, and no longer
@@ -152,37 +152,56 @@ spawned worker can read guest files -- it is not a main-thread-only trick.
 guest binaries. `isatty` and `TIOCGWINSZ` answer about the guest's tty (43x132
 under a pty). `available_parallelism` reports AOK's core count, not the Mac's.
 
-**What does not, and it is one thing.** tokio's runtime cannot be built:
-`Runtime::build` fails with EBADF. Its reactor is kqueue on Apple targets, the
-shim routes neither kqueue nor epoll, so it creates a *host* kqueue and
-registers *guest* descriptor numbers in it. The gate names the whole gap:
-`kqueue`, `kevent`, `sendfile`. Reproduce with
+**tokio works too, as of the same day.** kernel/native_kqueue.c is a kqueue
+front end over the guest's `ppoll`; the runtime builds, timers fire, an async
+TCP round trip completes, and `tokio::process` spawns a child, reads its
+output through the reactor and reaps it. Reproduce with
 
-    cargo build --release --features tokio-probe   # deps/rust-native-probe
+    AOK_RUST_FEATURES=tokio-probe ninja -C build ish
 
-This is not specific to helix. It is the gate on every async Rust program, and
-on anything else that reaches for kqueue.
+Four things had to be true, and three of them were bugs elsewhere:
 
-**The shape of the fix, and how big it is.** A kqueue front end in the shim
-over the guest's `ppoll`, rather than over its epoll. The registration table
-has to live in the shim either way -- kqueue is keyed by (ident, filter) and
-epoll by fd alone, so the two do not map one to one -- and `ppoll` avoids
-mirroring that state into a guest epoll fd on top of it. A text editor watches
-a handful of descriptors, so the O(n) rebuild per call is not the constraint.
+- **EV_CLEAR is edge, ppoll is level.** A descriptor that has been reported
+  ready is held back until it is next seen NOT ready, and is excluded from the
+  blocking set meanwhile. Without that, tokio's driver marks readiness, loops
+  straight back into kevent, and ppoll returns the same descriptor at once,
+  forever.
+- **A dup of a kqueue names the same queue.** mio's `Waker::new` calls
+  `try_clone()`, so the waker fires EVFILT_USER through a different descriptor
+  number than the poller waits on. Without the alias it got EBADF, which is
+  what tokio reported as "Runtime::build failed".
+- **SA_SIGINFO was refused**, on the grounds that there was no siginfo to hand
+  host code. There was: `rt_sigtimedwait` writes one and the shim was passing
+  NULL for it. signal_hook, and so tokio's process and signal drivers, needs
+  the three-argument form.
+- **The shim's handler table was per THREAD.** A native program's threads share
+  one task, so the thread that installs a handler is not the one that reaches
+  a checkpoint and delivers it; the deliverer saw an empty table and took
+  nothing. Now per task.
+- **The held set was one registration behind.** `nlibc_set_disposition`
+  computed it from the handler table before the table was written. A shell
+  installs several handlers and the next one papers over the last, so this
+  never showed; tokio installs exactly one, the held set stayed empty, and a
+  blocking poll in the guest was never interrupted for SIGCHLD.
 
-The surface is smaller than kqueue's reputation suggests, because it is mio's
-use of it that has to work, not all of it. Counted from mio 1.2.2's
-`sys/unix/selector/kqueue.rs` -- the rest of the EVFILT_/NOTE_ names in that
-file are a Debug formatting table, not calls:
+**Two gaps named rather than closed.** `SO_NOSIGPIPE` is accepted and does
+nothing -- Darwin's per-socket SIGPIPE suppression has no Linux counterpart,
+and a write to a departed peer still raises SIGPIPE. And a SA_SIGINFO handler
+is given a NULL `ucontext_t`: it describes interrupted machine state, and a
+native program's handler is a plain call at a checkpoint rather than a frame
+the kernel built.
+
+**What the front end covers**, which is mio's use of kqueue rather than all of
+it. Counted from mio 1.2.2's `sys/unix/selector/kqueue.rs` -- the rest of the
+EVFILT_/NOTE_ names in that file are a Debug formatting table, not calls:
 
   filters   EVFILT_READ, EVFILT_WRITE, EVFILT_USER
-  flags in  EV_ADD, EV_DELETE, EV_CLEAR, EV_RECEIPT
+  flags in  EV_ADD, EV_DELETE, EV_CLEAR, EV_RECEIPT, EV_ONESHOT, EV_DISPATCH
   flags out EV_ERROR, EV_EOF
   fflags    NOTE_TRIGGER, for the waker
 
-EVFILT_USER is the one with no guest counterpart at all: mio's `Waker` arms it
-and fires it with NOTE_TRIGGER to break another thread out of `kevent`. A
-self-pipe in the shim, added to the ppoll set, is the same thing.
+Any other filter is refused with ENOTSUP rather than ignored, so a program
+that wants EVFILT_VNODE or EVFILT_PROC finds out.
 
 **Four silent host escapes were found on the way and closed**, all of the same
 family -- a Darwin entry point the rename list did not name:

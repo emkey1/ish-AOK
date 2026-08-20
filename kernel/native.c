@@ -503,6 +503,16 @@ void native_env_discard(struct task *task) {
     task->native_env = NULL;
 }
 
+// The signal table goes the same way and at the same time: it is the same kind
+// of per-task native state, and a task that is going away has no dispositions.
+void native_sigtable_discard(struct task *task) {
+    if (task == NULL)
+        return;
+    void *t = task->native_sigtable;
+    task->native_sigtable = NULL;
+    free(t);
+}
+
 // The index of `name` in the vector, or -1. Matches on the whole name up to
 // the '=', so PATH does not match PATH_TO_SOMETHING.
 static ssize_t native_env_find(const char *name) {

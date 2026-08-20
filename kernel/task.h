@@ -92,6 +92,11 @@ struct task {
     // otherwise get the iSH app's command line.
     char **native_argv;
     int native_argc;
+    // The native program's signal dispositions, owned by kernel/native_libc.c
+    // (struct nlibc_sigtable). Here rather than in that file's thread-local
+    // storage because a native program's THREADS share one task, and the
+    // thread that installs a handler is not always the one that delivers it.
+    void *native_sigtable;
 
     // Signals a native program has a handler for that the SHIM is blocking on
     // its behalf, and which the program itself has not asked to block.

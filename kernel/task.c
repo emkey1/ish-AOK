@@ -439,6 +439,7 @@ struct task *task_create_(struct task *parent) {
     // the PARENT; a fresh task has none until it becomes one.
     task->native_prog_blocked = 0;
     task->native_held = 0;
+    task->native_sigtable = NULL;
 
     lock_init(&task->general_lock, "task_creat_gen\0");
 
@@ -511,6 +512,7 @@ static void task_free_final(struct task *task) {
     // between the exec and its first execution (task_start failing, say).
     native_exec_discard_pending(task);
     native_env_discard(task);
+    native_sigtable_discard(task);
     if (task != NULL && task_is_leader(task) && task->group != NULL) {
         cond_destroy(&task->group->child_exit);
         free(task->group->cgroup_path);

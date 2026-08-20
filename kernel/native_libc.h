@@ -110,6 +110,7 @@ extern "C" {
 int nlibc_open(const char *path, int flags, ...);
 int nlibc_openat(int dirfd, const char *path, int flags, ...);
 int nlibc_close(int fd);
+int nlibc_close_raw(int fd);
 ssize_t nlibc_read(int fd, void *buf, size_t n);
 ssize_t nlibc_write(int fd, const void *buf, size_t n);
 off_t nlibc_lseek(int fd, off_t off, int whence);
@@ -300,6 +301,14 @@ int nlibc_pipe(int fds[2]);
 int nlibc_fcntl(int fd, int cmd, ...);
 int nlibc_ioctl(int fd, unsigned long request, ...);
 int nlibc_poll(void *fds, unsigned nfds, int timeout);
+/* Deliberately NOT redirected from `ppoll`, and not ppoll's signature: POSIX
+ * ppoll takes a sigmask this has no use for, and OpenSSH's openbsd-compat
+ * ships its own ppoll -- Darwin has none -- which a redirect would rename into
+ * a second definition of this. Nothing on an Apple target calls ppoll by name
+ * for the same reason, so there is no host to escape to; the gate would say so
+ * if that changed. kernel/native_kqueue.c calls it by name. */
+struct timespec;
+int nlibc_ppoll(void *fds, unsigned nfds, const struct timespec *timeout);
 int nlibc_select(int nfds, void *r, void *w, void *e, void *timeout);
 int nlibc_fork(void);
 int nlibc_execl(const char *path, const char *arg0, ...);
@@ -379,6 +388,8 @@ int nlibc_shutdown(int fd, int how);
 ssize_t nlibc_sendmsg(int fd, const struct msghdr *msg, int flags);
 ssize_t nlibc_recvmsg(int fd, struct msghdr *msg, int flags);
 int nlibc_setsockopt(int fd, int level, int option, const void *value, socklen_t len);
+int nlibc_sendfile(int in_fd, int out_fd, off_t offset, off_t *len,
+                   void *hdtr, int flags);
 int nlibc_getsockopt(int fd, int level, int option, void *value, socklen_t *len);
 /* The peer's credentials on a guest AF_UNIX socket, over the guest's
  * SO_PEERCRED (fs/sock.c). The host's getpeereid answers about a host
@@ -793,6 +804,11 @@ const char *nlibc_dlerror(void);
 #define fcntl       nlibc_fcntl
 #define ioctl       nlibc_ioctl
 #define poll        nlibc_poll
+/* kqueue and kevent, for a runtime built for Apple. See kernel/native_kqueue.h.
+ * kevent is function-like on purpose: `kevent` is a STRUCT tag as well as a
+ * function, and an object-like macro would rewrite `struct kevent` too. */
+#define kqueue      nlibc_kqueue
+#define kevent(a, b, c, d, e, f) nlibc_kevent((a), (b), (c), (d), (e), (f))
 #define select      nlibc_select
 #define fork        nlibc_fork
 #define execl       nlibc_execl
@@ -868,6 +884,7 @@ char *nlibc_strchrnul(const char *s, int c);
  * sharing one environment. */
 #define socket                   nlibc_socket
 #define socketpair               nlibc_socketpair
+#define sendfile                 nlibc_sendfile
 #define bind                     nlibc_bind
 #define connect                  nlibc_connect
 #define listen                   nlibc_listen
