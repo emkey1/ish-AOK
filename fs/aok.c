@@ -27,6 +27,9 @@ enum aokfs_node_kind {
     aokfs_fixes_devuan_readme,
     aokfs_fixes_devuan_pkcsslotd_init,
     aokfs_fixes_debian_link,
+    aokfs_fixes_arch_dir,
+    aokfs_fixes_arch_readme,
+    aokfs_fixes_arch_script,
     aokfs_tests_dir,
     // Individual /tests/* files are no longer enumerated here -- they come from
     // the build-time generator (tools/gen-aokfs.py + fs/aok-tests.manifest) and
@@ -136,6 +139,7 @@ static bool aokfs_node_is_dir(enum aokfs_node_kind node) {
         node == aokfs_roots_dir ||
         node == aokfs_fakefs_dir ||
         node == aokfs_fixes_devuan_dir ||
+        node == aokfs_fixes_arch_dir ||
         node == aokfs_tools_dir ||
         node == aokfs_tests_dir ||
         node == aokfs_tests_audio_dir ||
@@ -203,6 +207,12 @@ static const char *aokfs_node_path(enum aokfs_node_kind node) {
             return "/fixes/devuan/fix-pkcsslotd-init.sh";
         case aokfs_fixes_debian_link:
             return "/fixes/debian";
+        case aokfs_fixes_arch_dir:
+            return "/fixes/arch";
+        case aokfs_fixes_arch_readme:
+            return "/fixes/arch/README.txt";
+        case aokfs_fixes_arch_script:
+            return "/fixes/arch/fix-pacman.sh";
         case aokfs_tests_dir:
             return "/tests";
         case aokfs_tests_x86_dir:
@@ -263,6 +273,9 @@ static bool aokfs_lookup_node(const char *path, enum aokfs_node_kind *node_out) 
         aokfs_fixes_devuan_readme,
         aokfs_fixes_devuan_pkcsslotd_init,
         aokfs_fixes_debian_link,
+        aokfs_fixes_arch_dir,
+        aokfs_fixes_arch_readme,
+        aokfs_fixes_arch_script,
         aokfs_tests_dir,
         aokfs_tests_x86_dir,
         aokfs_tests_arm64_dir,
@@ -374,6 +387,114 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
     // Filled once into a static buffer: this function hands back a pointer and
     // a length, and stat and read have to agree on that length.
     static pthread_once_t version_once = PTHREAD_ONCE_INIT;
+    static const char fixes_arch_readme[] =
+        "Arch Linux ARM under iSH-AOK\n"
+        "\n"
+        "Three things stop a stock Arch root from installing packages here. None of\n"
+        "them is an emulator bug; all three are the root expecting a system service or\n"
+        "kernel feature that an AOK guest does not have.\n"
+        "\n"
+        "1. pacman's sandbox needs Landlock.\n"
+        "\n"
+        "   pacman 7 confines its download and extraction work with Landlock, the Linux\n"
+        "   LSM. AOK's kernel does not implement it and reports ENOSYS, and pacman\n"
+        "   treats that as fatal rather than degrading:\n"
+        "\n"
+        "       error: restricting filesystem access failed because Landlock is not\n"
+        "              supported by the kernel!\n"
+        "       error: switching to sandbox user 'alpm' failed!\n"
+        "\n"
+        "   AOK will not pretend to support it. A syscall that claims to have\n"
+        "   sandboxed something it did not is worse than one that says it cannot,\n"
+        "   because the caller then trusts a confinement that is not there. So the\n"
+        "   sandbox is switched off explicitly in pacman.conf, which is what every\n"
+        "   kernel without Landlock gets.\n"
+        "\n"
+        "2. /etc/resolv.conf is a dangling symlink.\n"
+        "\n"
+        "   The image ships it pointing at /run/systemd/resolve/resolv.conf, which\n"
+        "   systemd-resolved would create. Nothing under AOK runs systemd, so the link\n"
+        "   never resolves and every mirror lookup fails with \"Could not resolve host\".\n"
+        "\n"
+        "3. The keyring is empty.\n"
+        "\n"
+        "   A fresh root has no populated pacman keyring, so signed packages are\n"
+        "   refused with \"required key missing from keyring\".\n"
+        "\n"
+        "Apply all three with:\n"
+        "\n"
+        "  sh /AOK/fixes/arch/fix-pacman.sh\n"
+        "\n"
+        "It is safe to re-run: each step checks whether it is already done. The keyring\n"
+        "step takes a few minutes and needs no network.\n"
+        "\n";
+
+    static const char fixes_arch_script[] =
+        "#!/bin/sh\n"
+        "# Make a stock Arch Linux ARM root able to install packages under iSH-AOK.\n"
+        "# See /AOK/fixes/arch/README.txt for why each step is needed.\n"
+        "set -e\n"
+        "\n"
+        "if [ ! -f /etc/pacman.conf ]; then\n"
+        "    echo \"ERROR: /etc/pacman.conf is missing -- this does not look like an Arch root\"\n"
+        "    exit 1\n"
+        "fi\n"
+        "\n"
+        "changed=0\n"
+        "\n"
+        "# 1. Landlock is not implemented by AOK's kernel, and pacman treats its\n"
+        "#    absence as fatal rather than degrading. Turn the sandbox off explicitly.\n"
+        "for opt in DisableSandboxFilesystem DisableSandboxSyscalls; do\n"
+        "    if grep -q \"^${opt}\" /etc/pacman.conf; then\n"
+        "        echo \"ok: ${opt} already set\"\n"
+        "    else\n"
+        "        if grep -q \"^#${opt}\" /etc/pacman.conf; then\n"
+        "            sed -i \"s/^#${opt}/${opt}/\" /etc/pacman.conf\n"
+        "        else\n"
+        "            sed -i \"s/^\\\\[options\\\\]/[options]\\\\n${opt}/\" /etc/pacman.conf\n"
+        "        fi\n"
+        "        echo \"set: ${opt}\"\n"
+        "        changed=1\n"
+        "    fi\n"
+        "done\n"
+        "\n"
+        "# 2. The shipped /etc/resolv.conf points at a file systemd-resolved would\n"
+        "#    create. Nothing runs systemd here, so it never exists.\n"
+        "if [ -e /etc/resolv.conf ] && [ ! -L /etc/resolv.conf ]; then\n"
+        "    echo \"ok: /etc/resolv.conf is a real file\"\n"
+        "elif [ -L /etc/resolv.conf ] && [ -e /etc/resolv.conf ]; then\n"
+        "    echo \"ok: /etc/resolv.conf symlink resolves\"\n"
+        "else\n"
+        "    rm -f /etc/resolv.conf\n"
+        "    printf 'nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n' > /etc/resolv.conf\n"
+        "    echo \"set: /etc/resolv.conf replaced (was a dangling symlink)\"\n"
+        "    changed=1\n"
+        "fi\n"
+        "\n"
+        "# 3. A fresh root has no populated keyring, so signed packages are refused.\n"
+        "if [ -s /etc/pacman.d/gnupg/trustdb.gpg ]; then\n"
+        "    echo \"ok: pacman keyring already initialised\"\n"
+        "else\n"
+        "    echo \"initialising the pacman keyring (a few minutes, no network needed)...\"\n"
+        "    pacman-key --init\n"
+        "    if pacman-key --populate archlinuxarm 2>/dev/null; then\n"
+        "        echo \"set: keyring populated from archlinuxarm\"\n"
+        "    else\n"
+        "        pacman-key --populate\n"
+        "        echo \"set: keyring populated\"\n"
+        "    fi\n"
+        "    changed=1\n"
+        "fi\n"
+        "\n"
+        "if [ \"$changed\" = \"0\" ]; then\n"
+        "    echo\n"
+        "    echo \"Nothing to do -- this root is already set up.\"\n"
+        "else\n"
+        "    echo\n"
+        "    echo \"Done. Try:  pacman -Sy\"\n"
+        "fi\n"
+        "\n";
+
     static const char fixes_devuan_readme[] =
         "pkcsslotd init fix\n"
         "\n"
@@ -583,6 +704,12 @@ static const char *aokfs_inline_file_data(enum aokfs_node_kind node, size_t *siz
         case aokfs_fixes_devuan_pkcsslotd_init:
             *size_out = sizeof(fixes_devuan_pkcsslotd_init) - 1;
             return fixes_devuan_pkcsslotd_init;
+        case aokfs_fixes_arch_readme:
+            *size_out = sizeof(fixes_arch_readme) - 1;
+            return fixes_arch_readme;
+        case aokfs_fixes_arch_script:
+            *size_out = sizeof(fixes_arch_script) - 1;
+            return fixes_arch_script;
         case aokfs_tools_setup_ish_benchmark:
             *size_out = sizeof(setup_ish_benchmark) - 1;
             return setup_ish_benchmark;
@@ -845,6 +972,14 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
             switch (fd->offset++) {
                 case 0: child = aokfs_fixes_devuan_dir; break;
                 case 1: child = aokfs_fixes_debian_link; break;
+                case 2: child = aokfs_fixes_arch_dir; break;
+                default: return 0;
+            }
+            break;
+        case aokfs_fixes_arch_dir:
+            switch (fd->offset++) {
+                case 0: child = aokfs_fixes_arch_readme; break;
+                case 1: child = aokfs_fixes_arch_script; break;
                 default: return 0;
             }
             break;

@@ -203,3 +203,25 @@ even though the daemon is actually running. Apply it with:
 ```sh
 sh /AOK/fixes/devuan/fix-pkcsslotd-init.sh
 ```
+
+`/AOK/fixes/arch` does the same for Arch Linux ARM, where a stock root cannot
+install packages at all until three things are dealt with — none of them an
+emulator bug:
+
+- **pacman's sandbox needs Landlock**, the Linux LSM, which AOK does not
+  implement. pacman treats its absence as fatal rather than degrading
+  (`restricting filesystem access failed because Landlock is not supported by
+  the kernel!`), so the sandbox is switched off explicitly. AOK will not
+  pretend to support it: a syscall claiming to have sandboxed something it did
+  not is worse than one that says it cannot.
+- **`/etc/resolv.conf` is a dangling symlink** to the file systemd-resolved
+  would create. Nothing runs systemd here, so every mirror lookup fails with
+  "Could not resolve host".
+- **The keyring is empty**, so signed packages are refused.
+
+```sh
+sh /AOK/fixes/arch/fix-pacman.sh
+```
+
+Safe to re-run; each step checks whether it is already done. The keyring step
+takes a few minutes and needs no network.
