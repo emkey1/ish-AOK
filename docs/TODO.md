@@ -844,7 +844,7 @@ its objects can be made to call `nlibc_open`.
 | [#527](https://github.com/emkey1/ish-AOK/issues/527) | pikaur fails on Arch ARM64 | blocked on `systemd-run` |
 | [#541](https://github.com/emkey1/ish-AOK/issues/541) | ptraceomatic does not run: tracee reaped during setup | ours |
 | [#542](https://github.com/emkey1/ish-AOK/issues/542) | JVM/HotSpot crashes on aarch64, "Field too big for insn" | reporter suspects upstream OpenJDK |
-| [#558](https://github.com/emkey1/ish-AOK/issues/558) | npm segfault installing OpenClaw | **empty body**; repro requested 2026-08-18, awaiting reply |
+| [#558](https://github.com/emkey1/ish-AOK/issues/558) | npm segfault installing OpenClaw | **reporter answered 2026-08-18**: 1.3 (548), aarch64, Devuan 6 excalibur, node v24.18.0, npm v11.16.0. Still missing the "how far does it get" answers (`node -e`, bare `npm`), which is what separates node crashing from npm doing so |
 | -- | btop shows nothing in its disk, net and io sections | reported 2026-08-19; **fixed** -- see *Closed during the 550 cycle* |
 
 ### Feature requests
