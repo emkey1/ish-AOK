@@ -100,31 +100,6 @@ is waiting for. Reading a zombie's pidfd should report ready immediately, and
 `waitid(P_PIDFD, ...)` on one should reap normally -- both worth a test
 alongside the fix.
 
-### `md` does not recognise indented code blocks
-
-Found 2026-08-20 while fixing the renderer below. A fenced block renders
-correctly -- indented four spaces, inner indentation kept -- but the other
-standard spelling, a block indented four spaces with no fence, is not detected
-at all. Its lines are treated as an ordinary paragraph, so they are joined and
-re-wrapped:
-
-        echo hello
-          indented inside
-
-    renders as "echo hello indented inside", one line, indentation gone.
-
-**Established.** No document in opt/AOK/docs uses the indented form -- checked
-all 14 -- so nothing shipped is affected today. It matters because md renders
-arbitrary markdown: a file the user wrote, or a page fetched from a URL.
-
-**Next step is the reason this was filed rather than fixed.** The detection is
-easy in isolation (a blank line, then lines indented four spaces or more) and
-dangerous in context: four-space indentation inside a list item is a
-continuation paragraph, not code, and these documents are full of bullet lists.
-Getting it wrong would turn working list rendering into code blocks, which is a
-worse bug than the one being fixed. The fix needs list state threaded into the
-check, and a test over all 14 documents showing the bullets are unchanged.
-
 ### eudev refuses to start: "does not support containers" (Devuan)
 
 Reported 2026-08-20, on Devuan. Left over from the sysfs work below: with
@@ -163,6 +138,38 @@ Answering 1 vs 2 is the whole task, and it is a read of eudev's source rather
 than of AOK's.
 
 ## Closed during the 550 cycle
+
+### `md`: indented code blocks, and the syntax that showed through -- FIXED 2026-08-20
+
+The indented-code-block gap filed earlier is closed, and the trap it was filed
+over turned out to be real: four spaces under a bullet is that item's
+continuation paragraph, not code. Detection is guarded on not being in a list
+and on no paragraph being open, since an indented chunk cannot interrupt one.
+
+Fixing it surfaced more of the same kind:
+
+- **A list item's own wrapped lines were rendered as a separate block**, so the
+  first line wrapped to the margin and the rest started again underneath --
+  stray one-word lines like "    but". Items go through the paragraph buffer
+  now and wrap once.
+- **Width was measured in bytes.** "• " is three bytes and one column, and the
+  list prefixes compensated by indenting continuations two spaces too far.
+- **Every list rendered loose**, once items went through the paragraph buffer,
+  until the trailing blank was made to come from a blank line in the source.
+- **`has_blank_separator` was lying after a heading** -- it claims the output
+  ends with a blank line and none was emitted, so two headings ran together.
+
+And five inline constructs were printing their own markup: `\*` kept the
+backslash and lost the asterisk; `&amp;` and numeric references rendered
+literally; `![alt](url)` came out as "!alt [3]"; `<https://example.com>` kept
+its brackets; and `[text][ref]` showed its brackets while every "[ref]: url"
+definition was rendered as a paragraph, so a README keeping its links at the
+bottom ended with a block of bare URLs. Hard breaks (two trailing spaces) are
+honoured rather than reflowed away.
+
+Checked against all 14 documents: every word of every source still present, no
+colour-marker leaks in piped output, and the only over-wide lines are inside
+code blocks. `11f07b4` in the fork.
 
 ### `md` rewrote the documents it rendered -- FIXED 2026-08-20
 
