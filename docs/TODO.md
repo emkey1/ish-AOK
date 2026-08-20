@@ -126,6 +126,38 @@ is waiting for. Reading a zombie's pidfd should report ready immediately, and
 `waitid(P_PIDFD, ...)` on one should reap normally -- both worth a test
 alongside the fix.
 
+### Interposition for foreign-toolchain native programs -- PROTOTYPED 2026-08-20
+
+The question blocking python, node, ripgrep and helix -- can another
+toolchain's objects be made to call `nlibc_open`? -- is answered: yes, and more
+cheaply than expected. See the candidates section below for the mechanism.
+
+**What this does NOT settle, and should be checked before anyone counts on
+it.**
+
+- **It was proved with a C object standing in for a foreign one.** That is
+  mechanically the same thing -- an object whose undefined symbol is `_open` --
+  but it is not literal Rust. On macOS and iOS, Rust's std goes through
+  libSystem, so its objects should import the same names; worth confirming on a
+  machine with a Rust toolchain, which this one has not got.
+- **Calls made through `dlsym` or a function pointer read at runtime are not
+  caught.** The alias is link-time symbol resolution and nothing more.
+- **It does not reach inside a prebuilt dylib**, which is the zlib lesson
+  (deps/smallclue-shim/zlib.h) and still true. This works for objects and
+  archives linked into the binary.
+- **A missed name silently goes to the host**, which is the whole failure mode
+  the shim exists to prevent, so the alias list has to be complete.
+- **tools/check-native-libc.py and this mechanism need reconciling.** After
+  aliasing, the object still *imports* `_open`, so the gate scanning that
+  archive would flag it and fail the build even though the link is safe. The
+  gate would need to read the alias list the way it already reads
+  native_libc.h's `#define`s -- which is the right shape, since it keeps one
+  source of truth for what is routed.
+
+**Next step** is not a program: decide whether the alias list is generated from
+native_libc.h so the two cannot drift, and teach the gate about it. Picking the
+first candidate is a separate and much smaller question after that.
+
 ### A terminal MotePad, and a way for the shell to hand a file to the applet
 
 Requested 2026-08-20. Two halves, and only the first is small.
@@ -748,11 +780,21 @@ the first:
   visible up front.
 - **Anything built by a foreign toolchain** -- Rust, Go, or a vendored build
   system we do not drive. Their `open`/`read`/`write` resolve to the host's at
-  link time and no `#define` reaches them. Making one work needs link-time
-  symbol interposition (rename the libc imports in those objects to the
-  `nlibc_` entry points), which AOK does not have today. **Building that
-  mechanism is the prerequisite for the whole second group**, and is worth
-  costing once rather than per program.
+  link time and no `#define` reaches them.
+
+  **Prototyped 2026-08-20, and it works with link flags alone.** Darwin's
+  linker will alias an undefined import onto a symbol we define:
+
+      clang -o prog shim.o foreign.o \
+          -Wl,-alias,_nlibc_open,_open \
+          -Wl,-alias,_nlibc_read,_read
+
+  An object compiled with no knowledge of AOK then calls `nlibc_*` instead --
+  verified against a control build of the same object, which read the host's
+  real /etc/hosts while the aliased one read the stand-in guest VFS.
+  `llvm-objcopy --redefine-sym` also works, including on static archives (what
+  a Rust staticlib ships as), but it rewrites the objects and the alias needs
+  nothing but the link line. Caveats and the one open decision are below.
 
 ### helix
 
