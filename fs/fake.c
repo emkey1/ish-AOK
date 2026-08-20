@@ -140,10 +140,10 @@ static void fakefs_snapshot_fd_stat(struct fd *fd) {
         return;
 
     struct fakefs_db *fs = &fd->mount->fakefs;
-    sqlite3_mutex_enter(fs->lock);
+    FAKEFS_LOCK(fs);
     struct ish_stat ishstat;
     bool found = inode_read_stat(fs, fd->fake_inode, &ishstat);
-    sqlite3_mutex_leave(fs->lock);
+    FAKEFS_UNLOCK(fs);
     if (!found)
         return;
 
@@ -225,7 +225,7 @@ static int fakefs_getpath(struct fd *fd, char *buf) {
     }
     if (fd->mount != NULL && fd->fake_inode != 0) {
         struct fakefs_db *fs = &fd->mount->fakefs;
-        sqlite3_mutex_enter(fs->lock);
+        FAKEFS_LOCK(fs);
         sqlite3_stmt *stmt = fs->stmt.path_from_inode;
         sqlite3_bind_int64(stmt, 1, fd->fake_inode);
         bool found = db_exec(fs, stmt);
@@ -234,17 +234,17 @@ static int fakefs_getpath(struct fd *fd, char *buf) {
             int path_len = sqlite3_column_bytes(stmt, 0);
             if (path_len < 0 || path_len > MAX_PATH) {
                 db_reset(fs, stmt);
-                sqlite3_mutex_leave(fs->lock);
+                FAKEFS_UNLOCK(fs);
                 return _ENAMETOOLONG;
             }
             memcpy(buf, path_blob, (size_t) path_len);
             buf[path_len] = '\0';
             db_reset(fs, stmt);
-            sqlite3_mutex_leave(fs->lock);
+            FAKEFS_UNLOCK(fs);
             return 0;
         }
         db_reset(fs, stmt);
-        sqlite3_mutex_leave(fs->lock);
+        FAKEFS_UNLOCK(fs);
     }
     int err = realfs_getpath(fd, buf);
     if (err >= 0)
@@ -606,14 +606,14 @@ static int fakefs_stat(struct mount *mount, const char *path, struct statbuf *fa
         return 0;
     }
     struct fakefs_db *fs = &mount->fakefs;
-    sqlite3_mutex_enter(fs->lock);
+    FAKEFS_LOCK(fs);
     struct ish_stat ishstat;
     ino_t inode;
     if (!path_read_stat(fs, path, &ishstat, &inode)) {
-        sqlite3_mutex_leave(fs->lock);
+        FAKEFS_UNLOCK(fs);
         return _ENOENT;
     }
-    sqlite3_mutex_leave(fs->lock);
+    FAKEFS_UNLOCK(fs);
 
     host_path_t host_path;
     int err = fakefs_host_path(path, host_path);
@@ -635,10 +635,10 @@ static int fakefs_fstat(struct fd *fd, struct statbuf *fake_stat) {
     int err = realfs.fstat(fd, fake_stat);
     if (err < 0)
         return err;
-    sqlite3_mutex_enter(fs->lock);
+    FAKEFS_LOCK(fs);
     struct ish_stat ishstat;
     bool found = inode_read_stat(fs, fd->fake_inode, &ishstat);
-    sqlite3_mutex_leave(fs->lock);
+    FAKEFS_UNLOCK(fs);
     if (!found) {
         // Linux still allows fstat() on an unlinked-but-open file.
         // Preserve the most recent fake metadata snapshot on the fd.

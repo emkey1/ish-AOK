@@ -147,6 +147,10 @@ static noreturn void cli_halt(int status) {
         extern void jit_timing_dump(void); // no-op unless ISH_JIT_TIMING counted compiles
         jit_timing_dump();
     }
+    {
+        extern void fakefs_lockstats_dump(void); // no-op unless ISH_FAKEFS_LOCKSTATS
+        fakefs_lockstats_dump();
+    }
     // Deliberately NOT fflush(NULL). That walks every host stream and takes
     // each one's lock, and the shim gives a native program host FILEs for its
     // stdout and stderr -- so a guest task killed inside stdio leaves a stream
@@ -370,6 +374,13 @@ int main(int argc, char *const argv[]) {
         int fd = dup(STDERR_FILENO);
         if (fd >= 0)
             jit_timing_stats_fd = fd;
+    }
+    // Same again for the fakefs lock stats.
+    if (getenv("ISH_FAKEFS_LOCKSTATS") != NULL) {
+        extern int fakefs_lockstats_fd;
+        int fd = dup(STDERR_FILENO);
+        if (fd >= 0)
+            fakefs_lockstats_fd = fd;
     }
 
     char *envp = build_initial_envp();

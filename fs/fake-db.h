@@ -2,6 +2,7 @@
 #define FS_FAKEFS_API_H
 
 #include <sqlite3.h>
+#include "fs/fake-lockstats.h"
 #include "fs/fix_path.h"
 #include "misc.h"
 
@@ -39,10 +40,22 @@ int fake_db_deinit(struct fakefs_db *fs);
 // callers still need to seed a root ("") path_create themselves.
 int fake_db_create_schema(const char *db_path);
 
-void db_begin_read(struct fakefs_db *fs);
-void db_begin_write(struct fakefs_db *fs);
+// A transaction holds fs->lock from begin to commit/rollback. The macros exist
+// only so ISH_FAKEFS_LOCKSTATS can attribute the hold to the fakefs entry point
+// that opened it (fakefs_stat, fakefs_unlink, ...) rather than to db_begin_*.
+void db_begin_read_at(struct fakefs_db *fs, struct fakefs_lock_site *site);
+void db_begin_write_at(struct fakefs_db *fs, struct fakefs_lock_site *site);
 void db_commit(struct fakefs_db *fs);
 void db_rollback(struct fakefs_db *fs);
+
+#define FAKEFS_DB_BEGIN(fs, which) do {                                       \
+    static struct fakefs_lock_site *_fls_txn;                                 \
+    if (fakefs_lockstats_on && _fls_txn == NULL)                              \
+        _fls_txn = fakefs_lockstats_site(__func__);                           \
+    which((fs), _fls_txn);                                                    \
+} while (0)
+#define db_begin_read(fs) FAKEFS_DB_BEGIN(fs, db_begin_read_at)
+#define db_begin_write(fs) FAKEFS_DB_BEGIN(fs, db_begin_write_at)
 
 // Suspension quiesce gate.
 //

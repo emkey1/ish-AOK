@@ -103,26 +103,49 @@ void fakefs_quiesce_end(void) {
     pthread_mutex_unlock(&quiesce_mutex);
 }
 
-void db_begin_read(struct fakefs_db *fs) {
+// The lockstats clock starts AFTER transaction_enter: the quiesce gate is a
+// different (and much rarer) wait, and folding it in would inflate the lock
+// numbers every time the app suspends.
+static void db_begin_locked(struct fakefs_db *fs, struct fakefs_lock_site *site) {
     transaction_enter();
+    if (!fakefs_lockstats_on) {
+        sqlite3_mutex_enter(fs->lock);
+        return;
+    }
+    uint64_t t0 = fakefs_lockstats_now();
     sqlite3_mutex_enter(fs->lock);
+    fakefs_lockstats_held(site, t0);
+}
+
+// Release + account, keeping every atomic outside the critical section.
+static void db_end_locked(struct fakefs_db *fs) {
+    if (!fakefs_lockstats_on) {
+        sqlite3_mutex_leave(fs->lock);
+        return;
+    }
+    uint64_t t2 = fakefs_lockstats_now();
+    sqlite3_mutex_leave(fs->lock);
+    fakefs_lockstats_account(t2);
+}
+
+void db_begin_read_at(struct fakefs_db *fs, struct fakefs_lock_site *site) {
+    db_begin_locked(fs, site);
     db_exec_reset(fs, fs->stmt.begin_deferred);
 }
 
-void db_begin_write(struct fakefs_db *fs) {
-    transaction_enter();
-    sqlite3_mutex_enter(fs->lock);
+void db_begin_write_at(struct fakefs_db *fs, struct fakefs_lock_site *site) {
+    db_begin_locked(fs, site);
     db_exec_reset(fs, fs->stmt.begin_immediate);
 }
 
 void db_commit(struct fakefs_db *fs) {
     db_exec_reset(fs, fs->stmt.commit);
-    sqlite3_mutex_leave(fs->lock);
+    db_end_locked(fs);
     transaction_leave();
 }
 void db_rollback(struct fakefs_db *fs) {
     db_exec_reset(fs, fs->stmt.rollback);
-    sqlite3_mutex_leave(fs->lock);
+    db_end_locked(fs);
     transaction_leave();
 }
 
@@ -209,11 +232,11 @@ inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *sta
 }
 
 bool inode_exists(struct fakefs_db *fs, inode_t inode) {
-    sqlite3_mutex_enter(fs->lock);
+    FAKEFS_LOCK(fs);
     sqlite3_bind_int64(fs->stmt.inode_read_stat, 1, inode);
     bool exists = db_exec(fs, fs->stmt.inode_read_stat);
     db_reset(fs, fs->stmt.inode_read_stat);
-    sqlite3_mutex_leave(fs->lock);
+    FAKEFS_UNLOCK(fs);
     return exists;
 }
 
@@ -354,6 +377,11 @@ int fake_db_create_schema(const char *db_path) {
 }
 
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
+    // Reads ISH_FAKEFS_LOCKSTATS once, before this mount can serve any
+    // transaction -- and from here rather than main.c so the app build gets
+    // the same knob as the CLI.
+    static pthread_once_t lockstats_once = PTHREAD_ONCE_INIT;
+    pthread_once(&lockstats_once, fakefs_lockstats_init);
     int err = sqlite3_open_v2(db_path, &fs->db, SQLITE_OPEN_READWRITE, NULL);
     if (err != SQLITE_OK) {
         printk("ERROR: sqlite3 opening database: %s\n", sqlite3_errmsg(fs->db));
