@@ -100,6 +100,31 @@ is waiting for. Reading a zombie's pidfd should report ready immediately, and
 `waitid(P_PIDFD, ...)` on one should reap normally -- both worth a test
 alongside the fix.
 
+### `md` does not recognise indented code blocks
+
+Found 2026-08-20 while fixing the renderer below. A fenced block renders
+correctly -- indented four spaces, inner indentation kept -- but the other
+standard spelling, a block indented four spaces with no fence, is not detected
+at all. Its lines are treated as an ordinary paragraph, so they are joined and
+re-wrapped:
+
+        echo hello
+          indented inside
+
+    renders as "echo hello indented inside", one line, indentation gone.
+
+**Established.** No document in opt/AOK/docs uses the indented form -- checked
+all 14 -- so nothing shipped is affected today. It matters because md renders
+arbitrary markdown: a file the user wrote, or a page fetched from a URL.
+
+**Next step is the reason this was filed rather than fixed.** The detection is
+easy in isolation (a blank line, then lines indented four spaces or more) and
+dangerous in context: four-space indentation inside a list item is a
+continuation paragraph, not code, and these documents are full of bullet lists.
+Getting it wrong would turn working list rendering into code blocks, which is a
+worse bug than the one being fixed. The fix needs list state threaded into the
+check, and a test over all 14 documents showing the bullets are unchanged.
+
 ### eudev refuses to start: "does not support containers" (Devuan)
 
 Reported 2026-08-20, on Devuan. Left over from the sysfs work below: with
@@ -138,6 +163,46 @@ Answering 1 vs 2 is the whole task, and it is a read of eudev's source rather
 than of AOK's.
 
 ## Closed during the 550 cycle
+
+### `md` rewrote the documents it rendered -- FIXED 2026-08-20
+
+Reported against /AOK/docs, where "iSH-AOK" rendered as "i SH-AOK". Three bugs,
+all of them the renderer editing text it should have been showing, and the
+reported one was the least damaging of them.
+
+- **Web-scrape heuristics ran on local files.** md cleans up pages fetched as
+  HTML, and every one of those passes also ran on real .md files. camelCase
+  splitting rewrote the whole vocabulary -- macOS to "mac OS", GitHub to "Git
+  Hub", NSURLSession to "NSURL Session" -- and the CSS-selector detector
+  DELETED whole sentences: two commas and a '.' not followed by a space was
+  enough, so "small, synthetic, read-only filesystem (`aokfs`, see `fs/aok.c`)
+  that" vanished from the overview with no marker where it had been. They are
+  gated on the input having come out of the HTML converter now.
+- **Code spans were not verbatim.** A backtick was skipped rather than opening
+  a span, so `a*b*c` rendered as "abc".
+- **Every '*' and '_' was deleted on sight**, matched or not: TZ_NAME to
+  TZNAME, kernel/native_libc.c to kernel/nativelibc.c, "5 * 3" to "5  3".
+
+Checked by rendering all 14 documents and diffing every word against the
+sources: 66 words were missing before, and the remainder are table-cell
+wrapping and '/'-joined tokens, verified present by hand. `787236a` in the
+fork, `bdbd617e0` here.
+
+### `md` has colour -- ADDED 2026-08-20
+
+The reason it had none was a good one: the pager sanitises every line so a
+fetched page cannot emit escape sequences. So the renderer emits a two-byte
+private marker instead, and the pager expands markers into SGR only for buffers
+it was told are markdown renders. A document carrying a stray marker can change
+a colour and nothing else -- no cursor movement, no screen clear, no mode
+switch. Markers are only emitted when something will expand them, so a
+redirected run is plain text; NO_COLOR and a dumb TERM are honoured.
+
+Two fixes fell out of it. **The pager's `raw_mode` had never worked**: it was
+assigned before pagerCollectLines, which memsets the struct, so `less -r` has
+been sanitising its output for as long as the option has existed. And **table
+cells printed their backticks** while the same code span in a paragraph did
+not, because cells never went through the inline pass. `87e628c` in the fork.
 
 ### The applets stubbed over a missing library -- FIXED 2026-08-20
 
