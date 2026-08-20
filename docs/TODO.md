@@ -903,6 +903,19 @@ Verified by cloning the pushed branch fresh on Debian 13 and building it exactly
 the way CI does, with each compiler: 0 failed targets, `float80` and
 `riscv64_decode` pass, `e2e` passes.
 
+### `time_conformance` fails only in a full-suite run
+
+Seen 2026-08-20 in a full tier0 sweep: x86_64 reported `time_conformance: FAIL
+failures=3`, and the same test passed three times out of three when run alone
+immediately afterwards. It is a timing test, the full sweep loads the machine,
+and nothing in that run touched clocks -- the only kernel change was
+pidfd_open. Recorded rather than diagnosed: if it starts failing alone, it is a
+real regression and this note is the date it was not one.
+
+The conductor keeps no per-test log, so the three failing assertions were not
+recoverable after the fact. Worth fixing if this recurs -- a failing test that
+cannot say what it checked costs a re-run every time.
+
 ### Regression-suite observations
 
 From the 4-arch on-device run, 2026-08-19 (aarch64 booted 118/118 clean; i386
