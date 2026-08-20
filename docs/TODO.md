@@ -165,14 +165,25 @@ native-links.sh needed no edit: its PROBED list already anticipated "tar and
 gzip need zlib, curl and wget need libcurl" and runs each applet once to ask.
 The link count went from 106 to 112 on its own.
 
-**Not verified, and worth knowing.** The Xcode app link (libz.tbd added to the
-app and CLI targets' Frameworks phases, beside the libbz2.tbd that has always
-worked there) could not be confirmed by a headless build: the project's targets
-do not build standalone -- `libiSH-AOKApp` resolves SDKROOT to macOS and fails
-on `UIKit/UIKit.h`, and `iSH-AOK.FileProvider` links `-lish_emu` before the
-Meson target has produced it. Both are pre-existing, and both are why this
-needs Xcode's own scheme-driven build with implicit dependencies. If the link
-line is wrong it fails loudly on `_deflate`; there is no quiet failure mode.
+**Verified on device** (ipp4-dev-arm64, an M4 iPad, 2026-08-20): tar, gzip,
+gunzip, zcat, curl, wget and `md <url>` all work in the app, which settles the
+`libz.tbd` link -- a build that had missed it could not have launched. It could
+NOT be confirmed by a headless build here, for reasons worth knowing separately:
+the project's targets do not build standalone. `libiSH-AOKApp` resolves SDKROOT
+to macOS and fails on `UIKit/UIKit.h`, and `iSH-AOK.FileProvider` links
+`-lish_emu` before the Meson target has produced it, because neither declares
+the dependency that Xcode's scheme-driven build infers. Both are pre-existing.
+
+**The device found one thing the CLI could not**: plain HTTP to a public host
+failed in the app while HTTPS and localhost worked -- App Transport Security's
+exact signature, confirmed by serving plain HTTP from the guest itself and
+watching that succeed while `http://example.com` failed and the emulated curl
+got 200 from the same device. app/Info.plist declared NSAllowsArbitraryLoads
+AND NSAllowsLocalNetworking, and the presence of the latter makes the former be
+ignored on iOS 10 and later. Removing it is what makes the declaration apply.
+The shim also now reports the framework's own wording instead of mapping every
+unrecognised NSError to "Failure when receiving data from the peer", which is
+what made this look like a network fault for as long as it did.
 
 ### Terminal cell height -- FIXED and SEEN 2026-08-19
 

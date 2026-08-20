@@ -82,6 +82,9 @@ struct aok_curl_xfer {
     long followlocation;
     long maxredirs;
     long ssl_verifypeer;
+    // What the framework actually said, for curl_easy_strerror to hand back.
+    // A CURLcode is seventeen buckets; an NSError names the problem.
+    char detail[256];
 };
 
 // ------------------------------------------------------------------ helpers
@@ -172,8 +175,20 @@ static int aok_xfer_append(struct aok_curl_xfer *x, const void *bytes, size_t n)
 didCompleteWithError:(NSError *)error {
     struct aok_curl_xfer *x = self.xfer;
     pthread_mutex_lock(&x->mu);
+    if (error && error.code != NSURLErrorCancelled) {
+        // Cancellation is ours -- a refused redirect or a failed write -- and
+        // its description would replace the reason we already recorded.
+        const char *text = error.localizedDescription.UTF8String;
+        if (text)
+            snprintf(x->detail, sizeof(x->detail), "%s", text);
+    }
     if (error && x->result == CURLE_OK) {
         switch (error.code) {
+            case NSURLErrorAppTransportSecurityRequiresSecureConnection:
+                // Not a network failure at all: the request never left. The
+                // app's Info.plist decides this, and a plain-http URL is the
+                // way to meet it.
+                x->result = CURLE_UNSUPPORTED_PROTOCOL; break;
             case NSURLErrorCannotFindHost:
             case NSURLErrorDNSLookupFailed:
                 x->result = CURLE_COULDNT_RESOLVE_HOST; break;
@@ -372,7 +387,14 @@ void curl_easy_cleanup(CURL *handle) {
     free(h);
 }
 
+// Set by curl_easy_perform from the transfer it just finished, and preferred
+// by curl_easy_strerror over the generic table below. core.c calls the two in
+// that order, which is what makes a thread-local the right scope for it.
+static _Thread_local char aok_curl_last_detail[256];
+
 const char *curl_easy_strerror(CURLcode code) {
+    if (code != CURLE_OK && aok_curl_last_detail[0] != '\0')
+        return aok_curl_last_detail;
     switch (code) {
         case CURLE_OK:                       return "No error";
         case CURLE_UNSUPPORTED_PROTOCOL:     return "Unsupported protocol";
@@ -540,6 +562,7 @@ CURLcode curl_easy_perform(CURL *handle) {
         NSURLSessionDataTask *task = [session dataTaskWithRequest:req];
         [task resume];
 
+        aok_curl_last_detail[0] = '\0';
         CURLcode result = CURLE_OK;
         for (;;) {
             unsigned char *chunk = NULL;
@@ -601,6 +624,11 @@ CURLcode curl_easy_perform(CURL *handle) {
             native_checkpoint();
         }
 
+        if (result != CURLE_OK) {
+            pthread_mutex_lock(&x->mu);
+            snprintf(aok_curl_last_detail, sizeof(aok_curl_last_detail), "%s", x->detail);
+            pthread_mutex_unlock(&x->mu);
+        }
         // No frees here: the delegate owns `x` now, and releasing the last
         // reference to it -- ours when this scope ends, or the session's when
         // invalidation completes, whichever is later -- is what frees it.

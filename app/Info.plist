@@ -31,9 +31,16 @@
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
+		<!-- NSAllowsLocalNetworking must NOT be added back beside this.
+		     It is one of the keys iOS 10 introduced, and the presence of any
+		     of them makes NSAllowsArbitraryLoads be ignored on iOS 10 and
+		     later -- it is kept only for older systems. The two together
+		     therefore read as "allow everything" and mean "allow local
+		     networking and the exception domains below", which is how plain
+		     HTTP to a public host came to fail in the app while HTTPS and
+		     localhost worked. Arbitrary loads is strictly the broader of the
+		     two, so nothing is lost by letting it apply. -->
 		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-		<key>NSAllowsLocalNetworking</key>
 		<true/>
 		<key>NSExceptionDomains</key>
 		<dict>
