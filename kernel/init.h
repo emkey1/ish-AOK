@@ -11,6 +11,7 @@ int mount_root(const struct fs_ops *fs, const char *source);
 // AFTER become_first_process() -- it goes through the guest VFS, which needs a
 // current task. See the definition for why a rootfs image never declares it.
 void ensure_root_fstab_entry(void);
+void ensure_dev_fd_links(void);
 void set_console_device(int major, int minor);
 void get_console_device(int *major, int *minor);
 intptr_t become_first_process(void);

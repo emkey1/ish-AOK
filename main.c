@@ -219,6 +219,9 @@ static void setup_host_mounts(void) {
     // The root is a device now (/proc/diskstats, /sys/block); say so where
     // userland looks for the list of filesystems. See kernel/init.c.
     ensure_root_fstab_entry();
+    // /dev/fd and the three std* links, without which bash process
+    // substitution -- `diff <(a) <(b)` -- is ENOENT in every guest.
+    ensure_dev_fd_links();
     ignore_eexist(generic_mkdirat(AT_PWD, "/dev/pts", 0755));
     // Not every bundled root's base tarball ships /dev/shm, and iSH has no
     // boot-time tmpfs auto-mount for it; create it unconditionally so POSIX

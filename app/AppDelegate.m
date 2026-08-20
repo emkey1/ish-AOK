@@ -2466,6 +2466,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
     // after the two procfs files were made to agree. Adds a line only when
     // nothing declares "/" already; see kernel/init.c.
     ensure_root_fstab_entry();
+    // /dev/fd and the three std* links -- see kernel/init.c. Called from both
+    // here and the CLI so the two repair sets cannot drift apart again.
+    ensure_dev_fd_links();
 
     generic_mkdirat(AT_PWD, "/dev/pts", 0755);
 

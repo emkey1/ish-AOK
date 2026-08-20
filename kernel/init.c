@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include "fs/devices.h"
 #include "fs/fd.h"
+#include "fs/path.h"
 #include "fs/real.h"
 #include "fs/tty.h"
 #include "kernel/calls.h"
@@ -62,6 +63,53 @@ int mount_root(const struct fs_ops *fs, const char *source) {
 // and the same conservatism: this only ever ADDS a line, and only when no entry
 // for "/" exists at all. A user who has written their own root entry keeps it,
 // and running twice changes nothing.
+// /dev/fd, /dev/stdin, /dev/stdout and /dev/stderr, which every Linux system
+// has as symlinks into /proc/self/fd and which AOK was not creating.
+//
+// The one that matters is /dev/fd, because it is how bash implements process
+// substitution: `diff <(a) <(b)` opens /dev/fd/63, and without the link that is
+// ENOENT -- taking a lot of ordinary shell scripting down with it. Found
+// because makepkg uses it throughout, so building anything from the AUR failed
+// at "Retrieving sources" with a wall of
+//
+//     /usr/share/makepkg/util/pkgbuild.sh: line 73: /dev/fd/63: No such file
+//
+// Which roots this bites is worth stating precisely, because it is not all of
+// them: on Linux these names come from devtmpfs, and AOK was leaving them to
+// whatever the rootfs image happened to ship. Devuan ships them, so process
+// substitution has always worked there. The Alpine and Arch minirootfs images
+// do not, so it never worked on either. Checked both ways rather than assumed.
+//
+// /proc/self/fd itself already worked everywhere; only the conventional /dev
+// names were absent. That is why this is four symlinks and not a filesystem.
+//
+// Created only when the name is free, the same conservatism as the fstab
+// repair above: a root that ships its own /dev/fd keeps it, and running twice
+// changes nothing. Both the CLI and the app call this, because the two device
+// repair sets have drifted apart before -- /dev/console existed only in the
+// app for a while, and a CLI guest silently had none.
+void ensure_dev_fd_links(void) {
+    static const struct {
+        const char *link;
+        const char *target;
+    } links[] = {
+        {"/dev/fd",     "/proc/self/fd"},
+        {"/dev/stdin",  "/proc/self/fd/0"},
+        {"/dev/stdout", "/proc/self/fd/1"},
+        {"/dev/stderr", "/proc/self/fd/2"},
+    };
+
+    for (size_t i = 0; i < sizeof(links) / sizeof(links[0]); i++) {
+        struct statbuf stat = {};
+        // generic_statat with follow_links=false: a dangling symlink still
+        // counts as present, because replacing one a root deliberately shipped
+        // is not this function's business.
+        if (generic_statat(AT_PWD, links[i].link, &stat, false) == 0)
+            continue;
+        generic_symlinkat(links[i].target, AT_PWD, links[i].link);
+    }
+}
+
 void ensure_root_fstab_entry(void) {
     static const char entry[] =
         "# Added by iSH-AOK: the root, which the rootfs image did not describe.\n"
