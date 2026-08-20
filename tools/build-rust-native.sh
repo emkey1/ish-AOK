@@ -1,10 +1,10 @@
 #!/bin/sh
 # Build the Rust native program and rewrite its libc imports onto the shim.
 #
-# Two steps that have to happen together, which is why they are one script
-# rather than two meson rules: cargo produces an archive whose open()/read()
+# Three steps that have to happen together, which is why they are one script
+# rather than three meson rules: cargo produces an archive whose open()/read()
 # bind to the HOST, and it is only safe to link once those are renamed. A
-# half-applied version of this is an archive that silently reads iOS's
+# half-applied version of this is an object that silently reads iOS's
 # filesystem, so the rename is not an optimisation to skip on a rebuild.
 set -eu
 
@@ -25,33 +25,69 @@ fi
 staticlib="$built_dir/librust_native_probe.a"
 [ -f "$staticlib" ] || { echo "build-rust-native: cargo produced no $staticlib" >&2; exit 1; }
 
+# Why the archive is flattened into one object before anything else:
+#
+#  1. It is the only form meson can hand to libish's `objects:`, and being
+#     inside libish.a is what lets the Xcode build link this without knowing
+#     it exists. A separate archive needs a -force_load that only meson's own
+#     link line carries, so the app build fails to resolve the registry entry.
+#  2. llvm-objcopy --redefine-sym does not reliably rewrite undefined symbols
+#     in Mach-O *archive members* -- it skips some and still exits 0. On a
+#     single flat object it rewrites all of them. Merging first turned a
+#     rename that needed a documented exception into one with no survivors.
+#
+# It has to be `ar x` and then a partial link of the extracted members: `ld -r`
+# reading the archive directly, with -all_load or -force_load, produces an
+# 11MB object holding four symbols and exits 0. That output links, and every
+# call in it goes nowhere.
+work=$(mktemp -d "${TMPDIR:-/tmp}/rust-native.XXXXXX")
+trap 'rm -rf "$work"' EXIT INT TERM
+abs_staticlib=$(cd "$(dirname "$staticlib")" && pwd)/$(basename "$staticlib")
+
+dupes=$(ar t "$abs_staticlib" | sort | uniq -d)
+if [ -n "$dupes" ]; then
+    # ar x would silently keep only the last of each name.
+    echo "build-rust-native: the archive has members with duplicate names:" >&2
+    printf '    %s\n' $dupes >&2
+    exit 1
+fi
+
+(cd "$work" && ar x "$abs_staticlib")
+merged="$work/merged.o"
+# clang, not ld: it supplies -platform_version from the triple, which bare
+# `ld -r` refuses to go without. -sdk keeps the iOS build off the macOS
+# sysroot; a host build takes the default.
+sdk=""
+clang_target=""
+case "$target" in
+    *-apple-ios-sim|*-apple-ios-macabi) sdk="iphonesimulator" ;;
+    *-apple-ios)                        sdk="iphoneos" ;;
+    *-apple-darwin)                     sdk="macosx" ;;
+esac
+[ -n "$target" ] && clang_target="-target $target"
+# shellcheck disable=SC2086
+(cd "$work" && xcrun ${sdk:+-sdk $sdk} clang $clang_target -nostdlib -Wl,-r -o "$merged" ./*.o)
+
 # The rename list is generated from kernel/native_libc.h at build time, so it
 # cannot fall behind the header. See tools/gen-nlibc-renames.py.
 # shellcheck disable=SC2046
-"$objcopy" $(tr '\n' ' ' < "$renames") "$staticlib" "$out"
+"$objcopy" $(tr '\n' ' ' < "$renames") "$merged" "$out"
 
-# A rewritten archive that still imports a raw libc name is the failure this
+# A rewritten object that still imports a raw libc name is the failure this
 # whole mechanism exists to prevent, and it is SILENT: the link succeeds and
-# the guest reads the host's files. Worse, llvm-objcopy does not always manage
-# the rewrite -- it leaves undefined symbols in some Mach-O members untouched
-# and reports success -- so this check is not belt and braces, it is the only
-# thing standing between a missed rename and a wrong answer.
+# the guest reads the host's files.
 #
-# Checked against the whole generated list rather than a hand-picked few.
+# Checked against the whole generated list rather than a hand-picked few, and
+# with no exceptions -- since the merge above, there are none.
 raw=$(nm -u "$out" 2>/dev/null | sed 's/^ *U //' | sort -u)
 missed=""
 while IFS= read -r line; do
     case $line in
+        *--redefine-sym) continue ;;
         _*=_*) from=${line%%=*} ;;
         *) continue ;;
     esac
-    # sysctlbyname is the one name allowed to survive, and only because the
-    # split in nlibc_sysctlbyname makes both paths agree -- see the comment
-    # there and in tools/check-native-libc.py. Every other survivor is a bug.
-    if [ "$from" = "_sysctlbyname" ]; then
-        continue
-    fi
-    if printf '%s\n' "$raw" | grep -qx -- "$from"; then
+    if printf '%s\n' "$raw" | grep -qxF -- "$from"; then
         missed="$missed $from"
     fi
 done < "$renames"

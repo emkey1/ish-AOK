@@ -416,9 +416,15 @@ void native_exec_run_pending(void) {
     // Before the program runs: getenv() in host code would otherwise answer
     // about the Mac (kernel/native.h).
     native_env_init(envp);
+    // Published for the same reason and for exactly the call's lifetime:
+    // argv is freed below, so a slot left pointing at it would dangle.
+    current->native_argv = argv;
+    current->native_argc = argc;
 
     int status = prog->main(argc, argv, envp);
 
+    current->native_argv = NULL;
+    current->native_argc = 0;
     native_free_vector(argv);
     native_free_vector(envp);
 
@@ -441,6 +447,24 @@ static char **native_env_empty(void) {
 
 char **native_env_vector(void) {
     return *native_env_slot();
+}
+
+// The argv equivalents of native_env_slot. Same no-task fallback: a native
+// program can be entered from a context with no current task, and answering
+// with an empty vector is better than a crash in someone else's runtime.
+char ***native_argv_slot(void) {
+    static char **no_task_argv;
+    static char *empty[] = { NULL };
+    if (current == NULL || current->native_argv == NULL)
+        return (no_task_argv = empty, &no_task_argv);
+    return &current->native_argv;
+}
+
+int *native_argc_slot(void) {
+    static int no_task_argc;
+    if (current == NULL || current->native_argv == NULL)
+        return (no_task_argc = 0, &no_task_argc);
+    return &current->native_argc;
 }
 
 // The task's environ SLOT, not its value, so that `environ` can be assigned to

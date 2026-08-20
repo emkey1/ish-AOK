@@ -31,6 +31,19 @@ SKIP = {
 }
 
 
+# Darwin exports several libc entry points under a suffixed symbol as well as
+# the bare name, and the compiler picks the suffixed one: <stdlib.h> makes
+# realpath() emit _realpath$DARWIN_EXTSN, and on x86_64 the stat family emits
+# $INODE64. A rename list keyed only on the bare name misses those, and misses
+# them SILENTLY -- Rust's fs::canonicalize was resolving against the host's
+# filesystem with every visible check passing.
+#
+# Routing the suffixed symbol to the same nlibc_ function is right rather than
+# merely expedient: the shim is compiled against these same headers, so its
+# realpath() and struct stat are the suffixed variant's, not the legacy one's.
+DARWIN_VARIANTS = ("$DARWIN_EXTSN", "$INODE64", "$UNIX2003", "$NOCANCEL")
+
+
 def renames(header_path):
     text = open(header_path).read()
     names = []
@@ -58,12 +71,13 @@ def main():
         print("gen-nlibc-renames: no redirects found in " + header, file=sys.stderr)
         return 1
     for guest, impl in pairs:
-        if fmt == "objcopy":
-            # Mach-O symbols carry a leading underscore.
-            print("--redefine-sym")
-            print("_%s=_%s" % (guest, impl))
-        else:
-            print("%s %s" % (guest, impl))
+        for guest_sym in [guest] + [guest + v for v in DARWIN_VARIANTS]:
+            if fmt == "objcopy":
+                # Mach-O symbols carry a leading underscore.
+                print("--redefine-sym")
+                print("_%s=_%s" % (guest_sym, impl))
+            else:
+                print("%s %s" % (guest_sym, impl))
     return 0
 
 

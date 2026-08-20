@@ -1802,6 +1802,26 @@ int nlibc_raise(int sig) {
     return nlibc_kill(nlibc_getpid(), sig);
 }
 
+// mkfifo is not a syscall on either side: Darwin's libc and the guest both
+// reach it through mknod with S_IFIFO. Routed because Rust's std reaches for
+// it directly, and unrouted it made a FIFO on the Mac.
+int nlibc_mkfifo(const char *path, mode_t mode) {
+    return nlibc_mknod(path, (mode & 07777) | S_IFIFO, 0);
+}
+
+// Darwin's AT_SYMLINK_FOLLOW is 0x0040 and the guest's is 0x400, so the flag
+// is translated rather than passed through -- the same trap as fstatat's
+// AT_SYMLINK_NOFOLLOW above, and the same fix.
+#define NLIBC_AT_SYMLINK_FOLLOW 0x400
+int nlibc_linkat(int oldfd, const char *from, int newfd, const char *to, int flags) {
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_from, from);
+    NLIBC_PATH(guest_to, to);
+    dword_t guest_flags = (flags & AT_SYMLINK_FOLLOW) ? NLIBC_AT_SYMLINK_FOLLOW : 0;
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_linkat, nlibc_at_fd(oldfd),
+            guest_from, nlibc_at_fd(newfd), guest_to, guest_flags));
+}
+
 int nlibc_mknod(const char *path, mode_t mode, dev_t dev) {
     NATIVE_FRAME;
     NLIBC_PATH(guest_path, path);
@@ -1907,6 +1927,41 @@ int nlibc_ioctl(int fd_no, unsigned long request, ...) {
         case TIOCSCTTY:
             return (int) nlibc_ret(native_syscall(NATIVE_SYS_ioctl, fd_no,
                     TIOCSCTTY_, (uintptr_t) arg));
+
+        // The fd-flag ioctls, which every one of these has an fcntl spelling
+        // for -- and that is where they go, because the guest answers them
+        // per fd type and the fcntl path is routed already.
+        //
+        // FIOCLEX is not an obscure corner. Rust's std sets close-on-exec this
+        // way on every pipe it opens, so a native Rust program could not spawn
+        // a child with a redirected stdout at all: Command::output() failed
+        // with ENOSYS while the same spawn with inherited stdio worked, which
+        // made it look like the spawn path was broken when the spawn had not
+        // been reached. Anything that builds a pipeline lands here.
+        case FIOCLEX:
+            return nlibc_fcntl(fd_no, F_SETFD, (long) FD_CLOEXEC);
+        case FIONCLEX:
+            return nlibc_fcntl(fd_no, F_SETFD, 0L);
+        case FIONBIO: {
+            if (arg == NULL)
+                return nlibc_fail(_EFAULT);
+            int flags = nlibc_fcntl(fd_no, F_GETFL, 0L);
+            if (flags < 0)
+                return -1;
+            flags = *(const int *) arg ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+            return nlibc_fcntl(fd_no, F_SETFL, (long) flags);
+        }
+        // Darwin and the guest disagree on the number but not on the shape:
+        // one int out. FIONREAD_ is the guest's, from kernel/fs.h.
+        case FIONREAD: {
+            if (arg == NULL)
+                return nlibc_fail(_EFAULT);
+            dword_t value = 0;
+            if (nlibc_tty_ioctl(fd_no, FIONREAD_, &value, sizeof(value), true) < 0)
+                return -1;
+            *(int *) arg = (int) value;
+            return 0;
+        }
         default:
             return nlibc_fail(_ENOSYS);
     }
@@ -5062,6 +5117,16 @@ int nlibc_tcsetpgrp(int fd_no, pid_t pgrp) {
 char **nlibc_environ(void) { return native_env_vector(); }
 char ***nlibc_environp(void) { return native_env_slot(); }
 
+// Darwin has no `environ` symbol to link against in a library: <crt_externs.h>
+// hands out _NSGetEnviron(), and that is what a runtime built for Apple calls.
+// It answers about the host process, so it is the same bug as getenv() wearing
+// a different name, and gets the same slot. Likewise _NSGetArgv/_NSGetArgc,
+// which is how Rust's std::env::args() reads its arguments -- unrouted, a
+// native program saw the iSH app's command line instead of its own.
+char ***nlibc_NSGetEnviron(void) { return native_env_slot(); }
+char ***nlibc_NSGetArgv(void) { return native_argv_slot(); }
+int *nlibc_NSGetArgc(void) { return native_argc_slot(); }
+
 char *nlibc_getenv(const char *name) {
     // getenv's contract is that the pointer stays valid until the environment
     // is next changed, which is exactly the lifetime of the entry it points
@@ -5906,6 +5971,67 @@ struct passwd *nlibc_getpwnam(const char *name) {
                        nlibc_pw_match, &key))
         return NULL;
     return &nlibc_pw;
+}
+
+// The _r forms, which is what a thread-aware runtime calls -- Rust's std uses
+// getpwuid_r for home_dir(), and unrouted it read the Mac's /etc/passwd and
+// handed a native program the developer's home directory.
+//
+// Built on the same per-task scan rather than a second parser: the copy out to
+// the caller's buffer is the only part that differs, and duplicating the
+// /etc/passwd parsing is how the two would come to disagree.
+static int nlibc_pw_copy_out(struct passwd *src, struct passwd *out, char *buf,
+                             size_t buflen, struct passwd **result) {
+    *result = NULL;
+    if (src == NULL)
+        return 0;               // not found is success with a NULL result
+    // Zeroed rather than filled field by field, because Darwin's struct passwd
+    // carries pw_change, pw_class and pw_expire that Linux's does not and that
+    // /etc/passwd has no column for. Leaving them as the caller's stack is how
+    // a BSD-shaped consumer ends up reading a garbage pointer.
+    memset(out, 0, sizeof(*out));
+    const char *fields[] = { src->pw_name, src->pw_passwd, src->pw_gecos,
+                             src->pw_dir, src->pw_shell,
+#ifdef __APPLE__
+                             src->pw_class,
+#endif
+    };
+    char **slots[] = { &out->pw_name, &out->pw_passwd, &out->pw_gecos,
+                       &out->pw_dir, &out->pw_shell,
+#ifdef __APPLE__
+                       // Empty rather than NULL: BSD callers pass it to
+                       // strlen without checking.
+                       &out->pw_class,
+#endif
+    };
+    size_t used = 0;
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+        const char *f = fields[i] != NULL ? fields[i] : "";
+        size_t n = strlen(f) + 1;
+        if (used + n > buflen)
+            return ERANGE;      // the caller's cue to retry with more room
+        memcpy(buf + used, f, n);
+        *slots[i] = buf + used;
+        used += n;
+    }
+    out->pw_uid = src->pw_uid;
+    out->pw_gid = src->pw_gid;
+    *result = out;
+    return 0;
+}
+
+int nlibc_getpwuid_r(uid_t uid, struct passwd *out, char *buf, size_t buflen,
+                     struct passwd **result) {
+    if (out == NULL || buf == NULL || result == NULL)
+        return EINVAL;
+    return nlibc_pw_copy_out(nlibc_getpwuid(uid), out, buf, buflen, result);
+}
+
+int nlibc_getpwnam_r(const char *name, struct passwd *out, char *buf,
+                     size_t buflen, struct passwd **result) {
+    if (out == NULL || buf == NULL || result == NULL)
+        return EINVAL;
+    return nlibc_pw_copy_out(nlibc_getpwnam(name), out, buf, buflen, result);
 }
 
 struct nlibc_gr_key { const char *name; gid_t gid; bool by_name; };
@@ -8289,5 +8415,113 @@ int nlibc_msync(void *addr, size_t len, int flags) {
 // must not be sent round a growing loop for a call that will never succeed.
 int nlibc_NSGetExecutablePath(char *buf, uint32_t *bufsize) {
     (void) buf; (void) bufsize;
+    return -1;
+}
+
+// ------------------------------------------------- Darwin's copy fast paths
+//
+// std::fs::copy on Apple does not read and write: it tries fclonefileat, then
+// fcopyfile, and only those. Both are libc, not syscalls, and unrouted they
+// copied one host file to another while the guest saw nothing happen.
+//
+// clonefile is refused rather than emulated. It asks the *filesystem* to share
+// extents, which fakefs cannot do, and ENOTSUP is a documented outcome that
+// every caller already handles -- Rust's copy() explicitly falls through to
+// fcopyfile on it, which is the path that works.
+int nlibc_fclonefileat(int srcfd, int dstdirfd, const char *dst, int flags) {
+    (void) srcfd; (void) dstdirfd; (void) dst; (void) flags;
+    errno = ENOTSUP;
+    return -1;
+}
+
+// The state object exists so the caller can ask how many bytes moved. Only
+// COPYFILE_STATE_COPIED is answered, because it is the only key a copy that
+// went through this path can know, and guessing at the others would be worse
+// than saying no.
+struct nlibc_copyfile_state { off_t copied; };
+
+void *nlibc_copyfile_state_alloc(void) {
+    struct nlibc_copyfile_state *st = calloc(1, sizeof(*st));
+    return st;
+}
+
+int nlibc_copyfile_state_free(void *state) {
+    free(state);
+    return 0;
+}
+
+#define NLIBC_COPYFILE_STATE_COPIED 8
+int nlibc_copyfile_state_get(void *state, uint32_t flag, void *dst) {
+    struct nlibc_copyfile_state *st = state;
+    if (st == NULL || dst == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (flag != NLIBC_COPYFILE_STATE_COPIED) {
+        errno = EINVAL;
+        return -1;
+    }
+    *(off_t *) dst = st->copied;
+    return 0;
+}
+
+// A plain read/write loop over the two guest descriptors. It is what fcopyfile
+// degrades to on a filesystem without copy acceleration anyway, and both fds
+// are already routed, so nothing here needs to know about fakefs.
+//
+// COPYFILE_DATA is all that is honoured. The metadata bits (ACLs, xattrs,
+// resource forks) have no guest counterpart, and quietly claiming to have
+// copied them would be the silent-wrong-answer this file exists to avoid --
+// but a caller asking for COPYFILE_ALL on a copy of a plain file expects data
+// to move, so the flags are not rejected either. Rust asks for ALL.
+int nlibc_fcopyfile(int from_fd, int to_fd, void *state, uint32_t flags) {
+    struct nlibc_copyfile_state *st = state;
+    (void) flags;
+    if (st != NULL)
+        st->copied = 0;
+    if (nlibc_lseek(from_fd, 0, SEEK_SET) < 0 && errno != ESPIPE)
+        return -1;
+
+    char buf[64 * 1024];
+    for (;;) {
+        ssize_t n = nlibc_read(from_fd, buf, sizeof(buf));
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+            return -1;
+        }
+        if (n == 0)
+            break;
+        ssize_t off = 0;
+        while (off < n) {
+            ssize_t w = nlibc_write(to_fd, buf + off, (size_t) (n - off));
+            if (w < 0) {
+                if (errno == EINTR)
+                    continue;
+                return -1;
+            }
+            off += w;
+        }
+        if (st != NULL)
+            st->copied += n;
+    }
+    return 0;
+}
+
+// setattrlist is Darwin's bulk attribute setter, and the only thing that
+// reaches it here is std's File::set_times on an older deployment target.
+// Refused rather than half-parsed: the attribute list is a variable-length
+// description of which fields the caller packed, and answering it wrongly
+// would write the wrong timestamps rather than none. A caller that gets
+// ENOTSUP reports a failed set_times, which is true.
+int nlibc_setattrlist(const char *path, void *attrs, void *buf, size_t size, unsigned long options) {
+    (void) path; (void) attrs; (void) buf; (void) size; (void) options;
+    errno = ENOTSUP;
+    return -1;
+}
+
+int nlibc_fsetattrlist(int fd_no, void *attrs, void *buf, size_t size, unsigned long options) {
+    (void) fd_no; (void) attrs; (void) buf; (void) size; (void) options;
+    errno = ENOTSUP;
     return -1;
 }

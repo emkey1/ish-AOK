@@ -136,37 +136,83 @@ the lock. Fixed (`kernel/fs.c`), and measured: 9 of 12 hung with the fix
 against 7 of 12 without, which is the same number. Worth having, not worth
 crediting.
 
-### Interposition for foreign-toolchain native programs -- PROTOTYPED 2026-08-20
+### Rust runs natively; async Rust needs kqueue -- MEASURED 2026-08-20
 
 The question blocking python, node, ripgrep and helix -- can another
-toolchain's objects be made to call `nlibc_open`? -- is answered: yes, and more
-cheaply than expected. See the candidates section below for the mechanism.
+toolchain's objects be made to call `nlibc_open`? -- is answered, and no longer
+with a C stand-in: real Rust, `rustc 1.98`, built as a staticlib, its libc
+imports rewritten onto the shim by `tools/build-rust-native.sh`, running as
+`/AOK/native/rust-probe`. Every question the prototype left open is settled
+except one, and that one is now the whole remaining piece of work.
 
-**What this does NOT settle, and should be checked before anyone counts on
-it.**
+**What works, measured rather than reasoned about.** `std::fs` reads and
+writes the guest. `env::args`/`env::vars` see the guest's. Threads work, and a
+spawned worker can read guest files -- it is not a main-thread-only trick.
+`std::process::Command` works with inherited, null and piped stdio, running
+guest binaries. `isatty` and `TIOCGWINSZ` answer about the guest's tty (43x132
+under a pty). `available_parallelism` reports AOK's core count, not the Mac's.
 
-- **It was proved with a C object standing in for a foreign one.** That is
-  mechanically the same thing -- an object whose undefined symbol is `_open` --
-  but it is not literal Rust. On macOS and iOS, Rust's std goes through
-  libSystem, so its objects should import the same names; worth confirming on a
-  machine with a Rust toolchain, which this one has not got.
-- **Calls made through `dlsym` or a function pointer read at runtime are not
-  caught.** The alias is link-time symbol resolution and nothing more.
-- **It does not reach inside a prebuilt dylib**, which is the zlib lesson
-  (deps/smallclue-shim/zlib.h) and still true. This works for objects and
-  archives linked into the binary.
-- **A missed name silently goes to the host**, which is the whole failure mode
-  the shim exists to prevent, so the alias list has to be complete.
-- **tools/check-native-libc.py and this mechanism need reconciling.** After
-  aliasing, the object still *imports* `_open`, so the gate scanning that
-  archive would flag it and fail the build even though the link is safe. The
-  gate would need to read the alias list the way it already reads
-  native_libc.h's `#define`s -- which is the right shape, since it keeps one
-  source of truth for what is routed.
+**What does not, and it is one thing.** tokio's runtime cannot be built:
+`Runtime::build` fails with EBADF. Its reactor is kqueue on Apple targets, the
+shim routes neither kqueue nor epoll, so it creates a *host* kqueue and
+registers *guest* descriptor numbers in it. The gate names the whole gap:
+`kqueue`, `kevent`, `sendfile`. Reproduce with
 
-**Next step** is not a program: decide whether the alias list is generated from
-native_libc.h so the two cannot drift, and teach the gate about it. Picking the
-first candidate is a separate and much smaller question after that.
+    cargo build --release --features tokio-probe   # deps/rust-native-probe
+
+This is not specific to helix. It is the gate on every async Rust program, and
+on anything else that reaches for kqueue.
+
+**The shape of the fix, and how big it is.** A kqueue front end in the shim
+over the guest's `ppoll`, rather than over its epoll. The registration table
+has to live in the shim either way -- kqueue is keyed by (ident, filter) and
+epoll by fd alone, so the two do not map one to one -- and `ppoll` avoids
+mirroring that state into a guest epoll fd on top of it. A text editor watches
+a handful of descriptors, so the O(n) rebuild per call is not the constraint.
+
+The surface is smaller than kqueue's reputation suggests, because it is mio's
+use of it that has to work, not all of it. Counted from mio 1.2.2's
+`sys/unix/selector/kqueue.rs` -- the rest of the EVFILT_/NOTE_ names in that
+file are a Debug formatting table, not calls:
+
+  filters   EVFILT_READ, EVFILT_WRITE, EVFILT_USER
+  flags in  EV_ADD, EV_DELETE, EV_CLEAR, EV_RECEIPT
+  flags out EV_ERROR, EV_EOF
+  fflags    NOTE_TRIGGER, for the waker
+
+EVFILT_USER is the one with no guest counterpart at all: mio's `Waker` arms it
+and fires it with NOTE_TRIGGER to break another thread out of `kevent`. A
+self-pipe in the shim, added to the ppoll set, is the same thing.
+
+**Four silent host escapes were found on the way and closed**, all of the same
+family -- a Darwin entry point the rename list did not name:
+
+- `realpath$DARWIN_EXTSN`. `<stdlib.h>` makes `realpath()` emit the suffixed
+  symbol, the list was keyed on the bare name, and `fs::canonicalize` resolved
+  against the Mac's filesystem with every visible check passing. The generator
+  now emits `$DARWIN_EXTSN`, `$INODE64`, `$UNIX2003` and `$NOCANCEL` variants.
+- `getpwuid_r`. `getpwuid` was routed and the `_r` form was not, so Rust's
+  `home_dir()` read the Mac's `/etc/passwd`.
+- `_NSGetArgv`/`_NSGetEnviron`. Darwin has no linkable `environ`, so a runtime
+  built for Apple reads its arguments and environment through these -- and got
+  the iSH app's.
+- `std::fs::copy`'s fast path: `fclonefileat`, `fcopyfile`, `copyfile_state_*`.
+  Not read/write at all on Apple; it copied one host file to another.
+
+`ioctl(fd, FIOCLEX)` was a fifth of a different kind -- it hit the `default:
+ENOSYS`, and since Rust sets close-on-exec that way on every pipe it opens,
+`Command::output()` failed before the spawn was reached. It looked exactly like
+a broken spawn path, and the spawn path was fine.
+
+**Still open, and unchanged by any of this.** The rewrite does not reach inside
+a prebuilt dylib, and it does not catch a call made through `dlsym` -- Rust
+imports no `dlsym`, so nothing escaped that way here, but a runtime that does
+would need a different answer.
+
+**One loose end before release.** `rust-probe` is a diagnostic and it is in the
+app whenever cargo is on the build machine (`native_rust` defaults to `auto`).
+Either flip that default to `disabled` or drop the registry entry before the
+550 tag.
 
 ### ptraceomatic reports a real divergence at instruction 4175
 

@@ -86,6 +86,12 @@ struct task {
     // Here rather than in a global because two native programs really can run
     // at once, one per guest task (kernel/native.h).
     char **native_env;
+    // argv as the running native program received it. Kept because Darwin's
+    // libc answers _NSGetArgv() about the host process, and a foreign runtime
+    // that reads its arguments that way (Rust's std::env::args does) would
+    // otherwise get the iSH app's command line.
+    char **native_argv;
+    int native_argc;
 
     // Signals a native program has a handler for that the SHIM is blocking on
     // its behalf, and which the program itself has not asked to block.

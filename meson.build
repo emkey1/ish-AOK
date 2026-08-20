@@ -234,7 +234,6 @@ if not have_curl_shim and host_machine.system() in ['darwin', 'ios']
     warning('no Objective-C compiler -- curl and wget will be stubs')
 endif
 dependencies = [librt, libm, libdl, libatomic, threads, sqlite3]
-rust_native_dep = []
 if zlib.found()
     dependencies += zlib
 endif
@@ -782,10 +781,14 @@ if get_option('kernel') == 'ish'
             capture: true)
         rust_native_lib = custom_target('rust-native-probe',
             input: nlibc_renames,
-            output: 'librust_native_probe_routed.a',
+            output: 'rust_native_probe_routed.o',
             command: [find_program('tools/build-rust-native.sh'),
                       meson.current_source_dir() / 'deps/rust-native-probe',
-                      '@OUTPUT@', cargo, llvm_objcopy, '@INPUT@'],
+                      '@OUTPUT@', cargo, llvm_objcopy, '@INPUT@',
+                      # Empty for a host build; the Xcode path passes the iOS
+                      # triple, because a crate built for macOS would link but
+                      # target the wrong platform.
+                      get_option('native_rust_target')],
             # Without this the crate's own sources are invisible to ninja --
             # cargo would rebuild them but the target is only rerun when the
             # rename list changes, so an edit to the Rust silently ships the
@@ -793,15 +796,15 @@ if get_option('kernel') == 'ish'
             depend_files: files('deps/rust-native-probe/src/lib.rs',
                                 'deps/rust-native-probe/Cargo.toml'),
             build_by_default: true)
-        # meson will not link_whole a custom target, so the archive is pulled
-        # in with -force_load and the target declared as a source so ninja
-        # builds it first. force_load, not a plain -l: the registry entry is
-        # the only reference to rust_native_probe_main, and the linker would
-        # otherwise drop the member that defines it.
-        rust_native_dep = declare_dependency(
-            sources: rust_native_lib,
-            link_args: ['-Wl,-force_load', meson.current_build_dir() / 'librust_native_probe_routed.a'])
-        librustnative = [rust_native_dep]
+        # One object, added to libish's own objects, rather than a second
+        # archive next to it. The Xcode build does not link through meson --
+        # it links -lish against the archive meson produced -- so anything
+        # carried on a meson dependency's link_args reaches the CLI build and
+        # nothing else. On device that failed exactly as you would expect:
+        # ISH_NATIVE_RUST was defined, the registry entry referenced
+        # rust_native_probe_main, and the symbol was nowhere in the link.
+        # Inside libish.a it needs no cooperation from either build system.
+        librustnative = [rust_native_lib]
     endif
 
     libcurlshim = []
@@ -1459,11 +1462,12 @@ if get_option('kernel') == 'ish'
     endif
 
     libish = library('ish', src,
+        objects: librustnative,
         link_whole: [libsmallclue, libnextvi, libbash, libzsh, libopenssh] + libopenssh_special + libcurlshim,
         include_directories: includes, c_args: ish_c_args)
     ish = declare_dependency(
         link_with: [libish, libish_emu, libfakefs],
-        dependencies: dependencies + librustnative,
+        dependencies: dependencies,
         include_directories: includes)
 
     if not meson.is_cross_build()

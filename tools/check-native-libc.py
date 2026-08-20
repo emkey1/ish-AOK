@@ -397,7 +397,10 @@ OURS = re.compile(r"^(nlibc_|native_|task_|do_|f_get|f_install|f_close|"
                   # There is no host in them; the file that indexes a guest
                   # terminfo entry with them is the same file that defines
                   # them, which is the point.
-                  r"boolcodes$|numcodes$|strcodes$)")
+                  # AOK's own build identifier, which SmallCLUE's `version`
+                  # applet reads weakly so the three places that report a
+                  # build -- version, uname -v and /AOK/VERSION -- agree.
+                  r"boolcodes$|numcodes$|strcodes$|copyBuildVersion$)")
 
 
 def _symbols(path, args):
@@ -455,10 +458,61 @@ SHIM_TO_HOST = {
     "curl_slist_append", "curl_slist_free_all",
 }
 
+# The host machinery a foreign runtime uses because a native program IS a host
+# thread. These are not a gap to close later: a native program runs on its
+# guest task's own pthread, with a host stack and host-scheduled time, so its
+# runtime's threading, unwinding and clocks must reach the host or they would
+# be describing a thread that does not exist. Kept apart from PURE because
+# these DO observe the host -- deliberately, and only about the host side of
+# the program, never about files, processes or identity.
+#
+# The line: anything that could answer a question about the SYSTEM -- what
+# files exist, who the user is, what is on the network -- belongs in the shim,
+# and getpwuid_r was on this list until it turned out to be reading the Mac's
+# /etc/passwd for Rust's home_dir().
+HOST_THREAD_RUNTIME = {
+    # Unwinding, over host frames on a host stack.
+    "_Unwind_Backtrace", "_Unwind_GetCFA", "_Unwind_GetDataRelBase",
+    "_Unwind_GetIP", "_Unwind_GetIPInfo", "_Unwind_GetLanguageSpecificData",
+    "_Unwind_GetRegionStart", "_Unwind_GetTextRelBase", "_Unwind_Resume",
+    "_Unwind_SetGR", "_Unwind_SetIP",
+    # Symbolicating a backtrace means naming loaded host images.
+    "_dyld_get_image_header", "_dyld_get_image_name",
+    "_dyld_get_image_vmaddr_slide", "_dyld_image_count",
+    # Rust parks threads on GCD semaphores on Apple.
+    "dispatch_release", "dispatch_semaphore_create",
+    "dispatch_semaphore_signal", "dispatch_semaphore_wait", "dispatch_time",
+    # Monotonic time and sleeping. The guest has no separate clock.
+    "mach_error_string", "mach_timebase_info", "mach_wait_until",
+    # Thread attributes and naming, on the host thread the program is running
+    # on. The pthread family the shim does not route is here for that reason.
+    "pthread_cond_timedwait_relative_np", "pthread_mutexattr_destroy",
+    "pthread_mutexattr_init", "pthread_mutexattr_settype",
+    "pthread_setname_np", "pthread_threadid_np",
+    # Guard pages and the alternate signal stack for stack-overflow detection,
+    # both on the host stack this program was called on.
+    "mprotect", "sigaltstack", "pause",
+    # Pure bit operations on a sigset the caller owns.
+    "sigaddset", "sigemptyset",
+    # errno is already the guest's error translated to a host value (see
+    # __error above), so the host's message for it is the right message.
+    "strerror_r",
+    # The system CSPRNG. There is no guest entropy source to prefer.
+    "CCRandomGenerateBytes",
+}
+
 DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a",
                    "build/libbash.a", "build/libzsh.a", "build/libopenssh.a",
                    "build/libopenssh_scp.a", "build/libopenssh_stubs.a",
-                   "build/libopenssh_smult_curve25519_ref.a")
+                   "build/libopenssh_smult_curve25519_ref.a",
+                   # Optional -- present only when the Rust native program is
+                   # configured. main() drops targets that do not exist, so a
+                   # build without cargo checks the rest and says nothing.
+                   # It has to be named: the object is linked INTO libish.a,
+                   # which is not on this list, so nothing else would look at
+                   # it, and the whole point of a foreign toolchain is that it
+                   # is the one AOK's #defines cannot reach.
+                   "build/rust_native_probe_routed.o")
 
 
 # The libc names kernel/native_libc.h already rewrites. Read from the header
@@ -494,7 +548,7 @@ def report(targets, root):
     routed = _routed(root)
     already = sorted(external & routed)
     pure = sorted((external & PURE) - routed)
-    todo = sorted(external - routed - PURE - SHIM_TO_HOST)
+    todo = sorted(external - routed - PURE - SHIM_TO_HOST - HOST_THREAD_RUNTIME)
 
     print(f"referenced from outside: {len(external)}")
     print(f"\n  already routed by native_libc.h ({len(already)}):")
@@ -535,7 +589,7 @@ def main():
         if not s.startswith(INTERNAL_PREFIXES) and s not in INTERNAL
         and not OURS.match(s)
     }
-    offenders = sorted(external - PURE - SHIM_TO_HOST)
+    offenders = sorted(external - PURE - SHIM_TO_HOST - HOST_THREAD_RUNTIME)
 
     if not offenders:
         print(f"check-native-libc: clean "

@@ -1,0 +1,4 @@
+# cargo's build output. It was committed once by accident -- 17MB archives and
+# a .cargo-lock -- because `cargo build` writes it inside the crate and the
+# repo has no blanket ignore for target/.
+/target/

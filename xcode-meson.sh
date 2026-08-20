@@ -161,6 +161,21 @@ configure_arch() {
 	needs_exe_wrapper = true
 EOF
 
+    # The Rust native program needs two things Xcode's environment does not
+    # supply: where rustup put cargo (it is not on PATH under xcodebuild), and
+    # the Rust target triple, which must be the iOS one rather than the host's
+    # -- a crate built for macOS links fine and targets the wrong platform.
+    # Both are empty-safe: without cargo the crate is simply not built, and
+    # everything else builds exactly as before.
+    local rust_triple=""
+    case "$sdk_name" in
+        iphoneos)          rust_triple="aarch64-apple-ios" ;;
+        iphonesimulator)   [[ "$arch" == arm64 ]] && rust_triple="aarch64-apple-ios-sim" ;;
+        macosx)            [[ "$arch" == arm64 ]] && rust_triple="aarch64-apple-darwin" ;;
+    esac
+    local meson_extra_opts="-Dcargo_home=$HOME/.cargo"
+    [[ -n "$rust_triple" ]] && meson_extra_opts="$meson_extra_opts -Dnative_rust_target=$rust_triple"
+
     if [[ ! -f "$crossfile" ]] || ! cmp -s "$crossfile_tmp" "$crossfile"; then
         mv "$crossfile_tmp" "$crossfile"
         meson_needs_setup=1
@@ -180,14 +195,26 @@ EOF
         if [[ "$current_c_args_json" != "$desired_c_args_json" ]] || [[ "$current_c_link_args_json" != "$desired_c_args_json" ]]; then
             meson_needs_wipe=1
         fi
+        # Options are read at setup time only, so a build directory made
+        # before these existed keeps its old answer and quietly leaves the
+        # Rust native program out. A reconfigure is enough -- these do not
+        # change the compiler flags, which is what the wipe above is for.
+        # `|| echo drift` covers the directory that predates the option
+        # entirely, where introspect reports it missing rather than empty.
+        current_cargo_home=$(meson_option_json "$config" cargo_home 2>/dev/null || echo drift)
+        current_rust_target=$(meson_option_json "$config" native_rust_target 2>/dev/null || echo drift)
+        if [[ "$current_cargo_home" != "\"$HOME/.cargo\"" ]] || \
+           [[ "$current_rust_target" != "\"$rust_triple\"" ]]; then
+            meson_needs_setup=1
+        fi
     fi
 
     if (( meson_needs_wipe )); then
-        (set -x; meson setup --wipe "$meson_dir" "$SRCROOT" --cross-file "$crossfile") || exit $?
+        (set -x; meson setup --wipe "$meson_dir" "$SRCROOT" --cross-file "$crossfile" $meson_extra_opts) || exit $?
     elif [[ ! -f "$meson_dir/meson-private/coredata.dat" ]]; then
-        (set -x; meson setup "$meson_dir" "$SRCROOT" --cross-file "$crossfile") || exit $?
+        (set -x; meson setup "$meson_dir" "$SRCROOT" --cross-file "$crossfile" $meson_extra_opts) || exit $?
     elif (( meson_needs_setup )); then
-        (set -x; meson setup --reconfigure "$meson_dir" "$SRCROOT" --cross-file "$crossfile") || exit $?
+        (set -x; meson setup --reconfigure "$meson_dir" "$SRCROOT" --cross-file "$crossfile" $meson_extra_opts) || exit $?
     fi
 
     cd "$meson_dir"

@@ -216,6 +216,10 @@ int nlibc_setgroups(int size, const gid_t *list);
 int nlibc_initgroups(const char *user, gid_t group);
 struct passwd *nlibc_getpwuid(uid_t uid);
 struct passwd *nlibc_getpwnam(const char *name);
+int nlibc_getpwuid_r(uid_t uid, struct passwd *out, char *buf, size_t buflen,
+                     struct passwd **result);
+int nlibc_getpwnam_r(const char *name, struct passwd *out, char *buf,
+                     size_t buflen, struct passwd **result);
 struct group *nlibc_getgrgid(gid_t gid);
 struct group *nlibc_getgrnam(const char *name);
 int nlibc_getgrouplist(const char *name, int basegid, int *groups, int *ngroups);
@@ -672,6 +676,22 @@ int nlibc_msync(void *addr, size_t len, int flags);
  * guest answer available to give, so this reports failure -- see the .c for why
  * that is the right answer rather than a gap, and what a caller falls back to. */
 int nlibc_NSGetExecutablePath(char *buf, uint32_t *bufsize);
+/* Darwin has no linkable `environ`/`argv` symbols: <crt_externs.h> hands out
+ * these accessors, and a runtime built for Apple calls them instead. Same
+ * per-task storage as nlibc_environ. */
+char ***nlibc_NSGetEnviron(void);
+char ***nlibc_NSGetArgv(void);
+int *nlibc_NSGetArgc(void);
+int nlibc_mkfifo(const char *path, mode_t mode);
+int nlibc_linkat(int oldfd, const char *from, int newfd, const char *to, int flags);
+/* Darwin's copy fast paths, which std::fs::copy uses in place of read/write. */
+int nlibc_fclonefileat(int srcfd, int dstdirfd, const char *dst, int flags);
+int nlibc_fcopyfile(int from_fd, int to_fd, void *state, uint32_t flags);
+void *nlibc_copyfile_state_alloc(void);
+int nlibc_copyfile_state_free(void *state);
+int nlibc_copyfile_state_get(void *state, uint32_t flag, void *dst);
+int nlibc_setattrlist(const char *path, void *attrs, void *buf, size_t size, unsigned long options);
+int nlibc_fsetattrlist(int fd_no, void *attrs, void *buf, size_t size, unsigned long options);
 
 void *nlibc_dlopen(const char *path, int mode);
 void *nlibc_dlsym(void *handle, const char *symbol);
@@ -925,6 +945,8 @@ char *nlibc_strchrnul(const char *s, int c);
 #define putenv                   nlibc_putenv
 #define getpwuid                 nlibc_getpwuid
 #define getpwnam                 nlibc_getpwnam
+#define getpwuid_r               nlibc_getpwuid_r
+#define getpwnam_r               nlibc_getpwnam_r
 #define getgrgid                 nlibc_getgrgid
 #define getgrnam                 nlibc_getgrnam
 #define getgrouplist             nlibc_getgrouplist
@@ -1040,6 +1062,18 @@ char *nlibc_strchrnul(const char *s, int c);
 #define munmap                   nlibc_munmap
 #define msync                    nlibc_msync
 #define _NSGetExecutablePath     nlibc_NSGetExecutablePath
+#define _NSGetEnviron            nlibc_NSGetEnviron
+#define _NSGetArgv               nlibc_NSGetArgv
+#define _NSGetArgc               nlibc_NSGetArgc
+#define mkfifo                   nlibc_mkfifo
+#define linkat                   nlibc_linkat
+#define fclonefileat             nlibc_fclonefileat
+#define fcopyfile                nlibc_fcopyfile
+#define copyfile_state_alloc     nlibc_copyfile_state_alloc
+#define copyfile_state_free      nlibc_copyfile_state_free
+#define copyfile_state_get       nlibc_copyfile_state_get
+#define setattrlist              nlibc_setattrlist
+#define fsetattrlist             nlibc_fsetattrlist
 
 /* Option parsing. The five variables become accessor calls the way `environ`
  * does, and the scanning functions become ours -- routing only the
