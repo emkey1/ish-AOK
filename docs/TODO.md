@@ -63,10 +63,29 @@ HTTP/1.1. Ruled out already: not git (3 of 3 clones standalone), not TLS
 generally (pacman syncs fine), not concurrency (9 simultaneous TLS operations
 all succeeded).
 
-**Next step.** Decide whether the http2 flake is worth chasing on its own
-terms. It is the only reproducible AOK-side misbehaviour left in this issue,
-and Go's HTTP/2 client succeeding only 3 times in 4 where libcurl never fails
-is a narrow enough difference to be a real lead.
+**Measured 2026-08-20, and it is a latency tail, not a protocol bug.** TLS
+handshake time to the same host, 15 samples each:
+
+    host  (macOS)   min 0.09  median 0.21  max  1.15
+    guest (AOK)     min 0.21  median 0.39  max 15.32
+
+The median is about twice the host's -- unremarkable for emulation. The TAIL is
+13x worse, and 15.3s is past Go's default TLSHandshakeTimeout of 10s, which is
+exactly how "http2: client conn could not be established" arises. The same
+stall explains the OpenSSL "unexpected eof while reading" seen from git.
+
+**The CPU-count lie is not the cause**, though it was the obvious suspect:
+AOK reports 4 of the host's 10 logical CPUs, and Go sizes GOMAXPROCS from it.
+A Go HTTP/2 probe run at GOMAXPROCS 1, 4 and 8 (20 requests each) failed once
+in 60, at GOMAXPROCS=8, with a handshake timeout -- the same tail, not a
+scheduling effect.
+
+**Next step.** Find what stalls a socket for seconds when the median is
+sub-second. Nothing in the handshake is compute-heavy, so this is a wait that
+is not being woken promptly rather than work that is slow -- which puts it in
+the same neighbourhood as the poll/quiesce machinery. `curl` on its own shows
+the tail too, so it reproduces without Go, without yay and without the AUR:
+any repeated HTTPS handshake will do.
 
 ### `pread_stack_thread_race` hangs: the mem read lock is held across the JIT lock
 
