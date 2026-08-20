@@ -139,6 +139,34 @@ than of AOK's.
 
 ## Closed during the 550 cycle
 
+### `md`'s word boundaries come from the HTML, not from letter case -- FIXED 2026-08-20
+
+The camelCase splitter behind the original "i SH-AOK" report was a guess
+standing in for information the HTML converter had thrown away: dropping a tag
+without putting anything in its place runs words together, so
+"<td>Some</td><td>Text</td>" became "SomeText", and the answer had been to
+insert a space wherever a lowercase letter met an uppercase one. Gating it to
+fetched pages stopped it damaging local documents; it still damaged the fetched
+ones, where macOS read as "mac OS" and GitHub as "Git Hub".
+
+markdownHtmlTagKind classifies every tag reaching the converter's default case
+-- inline, side by side, own line, own paragraph -- so the boundary comes from
+the element, which is the only place it exists. <td>, <button>, <dt>/<dd>,
+<nav> and the rest separate; <b>mac</b>OS stays "macOS".
+
+That left the guessing with nothing to do, so it is gone along with its three
+helpers, an 8 KB stack buffer and a copy of every line. It had been doing more
+than letter case: splitting a digit from a letter ("utf8mb4"), splitting
+"array[0]", and carrying hardcoded fixups for particular scraped sites.
+
+**The limit, recorded so it is not filed again as a bug.** CSS can make an
+inline element a block one and this does not read CSS, so GitHub's navigation
+-- two <span>s inside one <a> -- still runs together as "GitHub CopilotWrite
+better code with AI". Unfixable from the element name, and the better failure:
+wrong about navigation furniture on some pages rather than wrong about macOS in
+every document. Article text on the same page reads correctly throughout.
+`6834e9e` in the fork.
+
 ### `md`: indented code blocks, and the syntax that showed through -- FIXED 2026-08-20
 
 The indented-code-block gap filed earlier is closed, and the trap it was filed
