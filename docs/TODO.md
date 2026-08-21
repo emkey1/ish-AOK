@@ -217,63 +217,63 @@ the same neighbourhood as the poll/quiesce machinery. `curl` on its own shows
 the tail too, so it reproduces without Go, without yay and without the AUR:
 any repeated HTTPS handshake will do.
 
-### `pread_stack_thread_race` hangs: the mem read lock is held across the JIT lock
+### `pread_stack_thread_race` hangs -- FIXED 2026-08-21, and it was not a lock cycle
 
-**Established, 2026-08-20, by sampling a hung one** -- which was the next step
-recorded here, and it produced a lock cycle rather than a hunch. Measured hang
-rate on a direct 12-run loop: 7 of 12, both arches, so it is flaky rather than
-arch-specific. Re-measured 2026-08-21 at 2 of 7 on i386, same picture.
+**The recorded diagnosis was wrong, and confidently so.** This entry said the
+hang was an ordering cycle -- the mem read lock held across the jetsam lock --
+and proposed two fixes costed against that. Neither would have worked. Sampling
+a freshly wedged run showed:
 
-**It reads like a fresh regression in tier0 and is not one.** The runner
-reports it as `[HANG] pread_stack_thread_race rc=None` and the arch it lands on
-changes between runs, so a sweep after an unrelated change looks like that
-change broke something -- and a sweep before it looks clean, because sometimes
-it passes. Anyone chasing a new tier0 hang should check this entry first, and
-`grep -c` the sweep for OTHER failures before believing their own diff. Until
-the lock cycle below is fixed, "tier0 green except pread_stack_thread_race" is
-the expected result rather than a qualified one.
+- one thread in `mem_write_lock_with_pokes`, waiting for readers to drain;
+- one frontend thread asleep in `_pthread_rwlock_lock_slow` on the jetsam lock,
+  holding the mem read lock;
+- every other thread parked in `mem_quiesce_park`, a futex, or nanosleep;
+- **and no thread holding the jetsam write lock at all.**
 
-`sample(1)` of a hung emulator (13 threads, nothing running):
+There is no cycle. That reader is asleep on a lock NOBODY HOLDS -- the Darwin
+psynch lost-wakeup pathology kernel/task.c already documents ("writers asleep
+forever on a FREE lock"). `mem_write_lock_with_pokes` exists to fire SIGUSR1 at
+exactly these threads to evict them, and a signal landing on a thread parked in
+`_pthread_rwlock_lock_wait` is what loses the wakeup. The reader then never
+returns, never drops the mem read lock, and everything parks behind the writer.
 
-- one thread in `sys_munmap_guest` -> `mem_write_lock_with_pokes`, which has
-  taken `pt_alloc_lock`, raised `quiesce_requested`, spun its 1024 attempts and
-  fallen through to a blocking `write_lock(&mem->lock)`. It is waiting for
-  every reader to drain.
-- two threads in `cpu_run_to_interrupt` -> `cpu_step_to_interrupt_amd64_frontend`
-  -> `_pthread_rwlock_lock_slow`. These are the ones that matter:
-  `task_run_current` takes the mem READ lock and then calls into the frontend,
-  so they **hold the mem read lock while contending for the JIT jetsam
-  rwlock**.
-- seven threads parked in `mem_quiesce_park`, correctly, waiting for the
-  quiesce to finish.
+The earlier stack trace was real; the conclusion drawn from it was not. Two
+threads blocked on a lock looks like contention until you check whether anyone
+holds it.
 
-So the ordering is mem-read then jetsam, and the frontends do not only take
-jetsam for reading: `jetsam_write_lock_timed` is called from inside them at
-jit.c:1710, 1733, 2126 and 2547. A frontend thread can therefore hold the mem
-read lock and escalate to the jetsam WRITE lock, blocking every sibling
-frontend's `pthread_rwlock_rdlock` -- and every one of those siblings is
-holding a mem read lock the munmap is waiting to see released.
+**Fixed** by `jetsam_read_lock_polled` (jit/jit.c): the nine blocking
+`pthread_rwlock_rdlock` sites poll with `tryrdlock` instead, so a lost wakeup
+self-heals on the next attempt. This is the treatment the WRITE path already
+had -- `jetsam_write_lock_timed` polls for the same reason, so a stuck reader
+cannot wedge writers -- applied to the side that was still blocking.
 
-**Next step.** The invariant to establish is that the mem read lock is not held
-across a jetsam acquisition, or that a reader blocked on the JIT lock is
-evictable by the quiesce. Two shapes worth costing before writing code:
+Measured, same harness both sides:
 
-1. Drop the mem read lock around the jetsam write-lock escalation in the
-   frontends, re-taking it after -- correct only if nothing between the two
-   points depends on the address space staying still, which needs checking at
-   each of the four sites.
-2. Make `mem_write_lock_with_pokes` able to see that a reader is parked on the
-   JIT lock and treat it as skippable, the way `task_wait_for_mem_quiesce`
-   already flags `quiesce_parked`. That is the cheaper change and the less
-   invasive one, but it only helps if the blocked reader genuinely cannot touch
-   guest memory before it releases.
+    pre-fix   amd64  hung on run 1;  i386  2 hangs in 8
+    post-fix  amd64  0 hangs in 12;  i386  0 hangs in 10
 
-**Not the cause, though it looked promising.** `sys_pread_guest` held
-`fd->lock` across `user_write`, which parks in the quiesce -- a real ordering
-hazard, and one `sys_pwrite_guest` had always avoided by copying before taking
-the lock. Fixed (`kernel/fs.c`), and measured: 9 of 12 hung with the fix
-against 7 of 12 without, which is the same number. Worth having, not worth
-crediting.
+**It was masking a second, unrelated bug** -- see the entry below. Every tier0
+failure of this test has been written off as "the known hang"; roughly one in
+eight on i386 was not.
+
+### `pread_stack_thread_race` SIGSEGVs on i386, about 1 run in 8
+
+Split out of the hang entry above once the hang was fixed and stopped hiding
+it. **Pre-existing, and NOT caused by the jetsam fix**: measured on a binary
+built before that change (1 in 8), and it survives the fix at about the same
+rate.
+
+The run dies with rc=139 and produces no output at all -- not even the test's
+first line -- so it is dying early, and the empty output is itself a clue worth
+starting from. amd64 has not shown it in 12 runs; only i386 so far.
+
+Next step is the same one that settled the hang: catch one and look, rather
+than reason from the symptom. `scratchpad/catch_hang.sh` in the working notes
+is the shape to copy -- run in a loop, and when the exit status is 139 rather
+than a timeout, get a core or attach before it goes.
+
+**Do not write a tier0 failure of this test off as "the known flake" any
+more.** That reflex is what kept this one invisible.
 
 ### Rust runs natively, async Rust included -- WORKING 2026-08-20
 

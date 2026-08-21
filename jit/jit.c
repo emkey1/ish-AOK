@@ -809,6 +809,42 @@ static bool jetsam_write_lock_timed(struct jit *jit) {
     return false;
 }
 
+// The read side of the same problem jetsam_write_lock_timed solves, and it
+// took a hung sample to see it.
+//
+// Darwin's psynch rwlock can lose a wakeup when a signal lands on a thread
+// parked in _pthread_rwlock_lock_wait -- and mem_write_lock_with_pokes exists
+// to fire SIGUSR1 at exactly these threads, to evict readers so a barrier
+// writer can proceed. The result is a reader asleep forever on a lock NOBODY
+// HOLDS, still holding the mem read lock the poking writer is waiting to
+// drain. Everything else then parks behind that writer and the emulator is
+// wedged with nothing running.
+//
+// That is the pread_stack_thread_race hang, and a sample of a wedged run shows
+// it exactly: one thread in mem_write_lock_with_pokes, one in
+// _pthread_rwlock_lock_slow from the frontend, every other thread parked in
+// mem_quiesce_park or a futex -- and no holder of the jetsam write lock
+// anywhere. It was recorded in docs/TODO.md as a mem-read/jetsam lock-ordering
+// cycle; it is not one, which is why neither fix proposed there would have
+// helped.
+//
+// Polling makes a lost wakeup self-healing: the next attempt simply takes the
+// free lock. Writers hold this for the length of jit_free_jetsam, so the spin
+// almost always wins outright and the sleep is the rare path.
+static void jetsam_read_lock_polled(struct jit *jit) {
+    if (pthread_rwlock_tryrdlock(&jit->jetsam_lock.l) == 0)
+        return;
+    static const struct timespec kDelay = {0, 200000}; // 200us
+    for (;;) {
+        for (int i = 0; i < 64; i++) {
+            if (pthread_rwlock_tryrdlock(&jit->jetsam_lock.l) == 0)
+                return;
+            sched_yield();
+        }
+        nanosleep(&kDelay, NULL);
+    }
+}
+
 static void jit_cleanup_jetsam_if_needed(struct jit *jit) {
     if (jit == NULL)
         return;
@@ -1639,7 +1675,7 @@ rearm_i386:
     // Use pthread directly (not read_lock) to block in the kernel rather than
     // spinning through atomic_l_lock — eliminates mutex saturation when many
     // goroutines wait for a jetsam write-lock to clear.
-    pthread_rwlock_rdlock(&jit->jetsam_lock.l);
+    jetsam_read_lock_polled(jit);
     // Register lock for crash recovery: on any EXC_BAD_ACCESS (null gadget
     // dispatch PC=0, or non-zero bad address), hook.c's handler redirects the
     // thread to jit_crash_fn() which reads this pointer and releases the lock.
@@ -1767,7 +1803,7 @@ rearm_i386:
                 // Re-acquire jetsam_lock now that compilation is done. If a jetsam
                 // cleanup is already pending, discard the block and yield — it will
                 // be recompiled (or found in the hash) on the next call.
-                pthread_rwlock_rdlock(&jit->jetsam_lock.l);
+                jetsam_read_lock_polled(jit);
                 jit_crash_lock = &jit->jetsam_lock;  // Re-enable crash recovery
                 if (jit_should_yield(jit, cpu)) {
                     jit_block_free(NULL, block);
@@ -2078,7 +2114,7 @@ rearm_arm64:
     jit_crash_cpu = cpu;
     jit_crash_unwind_active = true;
 
-    pthread_rwlock_rdlock(&jit->jetsam_lock.l);
+    jetsam_read_lock_polled(jit);
     jit_crash_lock = &jit->jetsam_lock;
     // The read lock now excludes jit_free_jetsam, so re-check whether one ran
     // between jit_entry_scratch_get's generation sample and this point -- the
@@ -2156,7 +2192,7 @@ rearm_arm64:
                     }
                 }
 
-                pthread_rwlock_rdlock(&jit->jetsam_lock.l);
+                jetsam_read_lock_polled(jit);
                 jit_crash_lock = &jit->jetsam_lock;
                 if (jit_should_yield(jit, cpu)) {
                     jit_block_free(NULL, block);
@@ -2368,7 +2404,7 @@ static int cpu_single_step_arm64(struct cpu_state *cpu, struct tlb *tlb) {
     // needed for THIS block's safety. Taken anyway purely to satisfy that
     // contract; a plain read-lock, negligible cost for what's inherently a
     // rare, deliberate, slow-path operation (a ptrace single-step in flight).
-    pthread_rwlock_rdlock(&jit->jetsam_lock.l);
+    jetsam_read_lock_polled(jit);
     jit_crash_lock = &jit->jetsam_lock;
     jit_crash_frame = frame;
     jit_crash_cpu = cpu;
@@ -2498,7 +2534,7 @@ rearm_riscv64:
     jit_crash_cpu = cpu;
     jit_crash_unwind_active = true;
 
-    pthread_rwlock_rdlock(&jit->jetsam_lock.l);
+    jetsam_read_lock_polled(jit);
     jit_crash_lock = &jit->jetsam_lock;
     // The read lock now excludes jit_free_jetsam, so re-check whether one ran
     // between jit_entry_scratch_get's generation sample and this point -- the
@@ -2576,7 +2612,7 @@ rearm_riscv64:
                     }
                 }
 
-                pthread_rwlock_rdlock(&jit->jetsam_lock.l);
+                jetsam_read_lock_polled(jit);
                 jit_crash_lock = &jit->jetsam_lock;
                 if (jit_should_yield(jit, cpu)) {
                     jit_block_free(NULL, block);
@@ -2858,7 +2894,7 @@ rearm_amd64:
     jit_crash_addr = frame->cpu.amd64_rip;
     jit_crash_unwind_active = true;
 
-    pthread_rwlock_rdlock(&jit->jetsam_lock.l);
+    jetsam_read_lock_polled(jit);
     jit_crash_lock = &jit->jetsam_lock;
     // The read lock now excludes jit_free_jetsam, so re-check whether one ran
     // between jit_entry_scratch_get's generation sample and this point -- the
@@ -2952,7 +2988,7 @@ rearm_amd64:
                     return INT_GPF;
                 }
 
-                pthread_rwlock_rdlock(&jit->jetsam_lock.l);
+                jetsam_read_lock_polled(jit);
                 jit_crash_lock = &jit->jetsam_lock;
                 jit_crash_track_mutex_lock(&jit->lock);
                 struct jit_block *existing = jit_lookup(jit, ip);
