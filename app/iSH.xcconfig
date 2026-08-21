@@ -14,15 +14,18 @@ ISH_LOGGER_macosx = dprintf
 // helix as a native program, at /AOK/native/hx, with syntax highlighting for
 // fifteen languages and 219 themes under /AOK/native/libs/helix.
 //
-// Empty (off) by default for two reasons. It is MPL-2.0, which is a decision
-// about what the shipped binary contains rather than a default; and it is not
-// small -- roughly 45MB, against an app binary that is 14MB without it.
+// ON by default: a native editor that only appears when you know to ask for it
+// is not shipped, it is hidden, and this one is the reason the native-program
+// work exists. The two costs are real and taken deliberately -- it is MPL-2.0,
+// so the shipped binary carries MPL code, and it is roughly 45MB against an
+// app binary that is 14MB without it.
 //
-// Set to YES to build it in. Needs the Rust toolchain and the deps/helix
-// submodule; meson says so plainly if either is missing rather than quietly
-// leaving the editor out.
-AOK_NATIVE_HELIX = 
-// AOK_NATIVE_HELIX = YES
+// Needs the Rust toolchain (cargo + llvm-objcopy) and the deps/helix
+// submodule. Missing either is a hard build error naming the fix, not a quiet
+// skip: an editor that silently vanished from a build would be found by users,
+// not by us. Clear this to build without it.
+AOK_NATIVE_HELIX = YES
+// AOK_NATIVE_HELIX = 
 
 // Cargo features for the Rust native program (/AOK/native/rust-probe).
 // Empty for a normal build -- the probe's tokio test pulls in a dependency
