@@ -67,6 +67,36 @@ you built it in. That is the combination worth knowing about.
     # from any arm64 root with a compiler, or cross-compiled on a Mac:
     zig cc -target aarch64-linux-musl -static -O2 -o /AOK/persist/bin/mytool mytool.c
 
+## The `ws-*` Workspace launchers
+
+`bin` also gets a small generated launcher per Workspace applet, rewritten on
+every launch so they track the app:
+
+    ws-motepad ws-filemanager ws-markdown ws-imageviewer ws-videoplayer
+    ws-audio ws-browser ws-llm ws-filesystems ws-storage ws-monitor
+    ws-networks ws-status ws-settings ws-themes ws-launcher ws-clock
+    ws-info ws-diagnostics ws-sessions
+
+Each opens that applet in a Workspace window, optionally on a file:
+
+    ws-markdown README.md          # relative paths are resolved for you
+    ws-filemanager /etc
+    ws-audio                       # no file: just open the applet
+
+They are shell scripts, not binaries, so they work under any root regardless of
+architecture, and you can read one to see exactly what it does. They talk to
+`/proc/ish/workspace`; outside a Workspace-hosted session they say so and exit
+1 rather than failing obscurely.
+
+The `ws-` prefix is deliberate. `bin` is first on `PATH`, and several applet
+names collide with real commands -- `info` is GNU info, and `status`, `clock`
+and `browser` are plausible names for anything you might install. A bare `info`
+that opened a GUI panel is exactly the kind of shadowing worth avoiding. It
+also makes the set discoverable: type `ws-` and press TAB.
+
+They are only rewritten if the existing file still carries the generated-file
+marker, so if you replace one with your own, yours is left alone.
+
 **If it cannot be static**, put the libraries in `/AOK/persist/lib` and build
 the binary with an rpath so it finds them by itself:
 

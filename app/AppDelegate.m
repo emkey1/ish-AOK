@@ -1513,6 +1513,70 @@ static void FixSharedDirectoryPermissions(const char *path) {
     nftw(path, FixSharedDirectoryPermissionsCallback, 16, FTW_PHYS);
 }
 
+// One tiny launcher per Workspace applet, written into /AOK/persist/bin so a
+// shell can open a GUI window: `ws-filemanager /etc`, `ws-markdown README.md`.
+// They talk to /proc/ish/workspace (see fs/proc/ish.c).
+//
+// Shell scripts rather than compiled binaries, even though /AOK/persist/bin is
+// documented as the place for aarch64 binaries. Three reasons: they are four
+// lines; a script runs under an i386 or riscv64 root without caring which ELF
+// we shipped; and a user can read one to see exactly what it does to their
+// system, which for something that talks to the app is worth more than speed.
+//
+// The `ws-` prefix is not decoration. /AOK/persist/bin is FIRST on PATH, and
+// several tool identifiers collide with real commands -- `info` is GNU info,
+// `status`, `clock` and `browser` are plausible names for anything. Shipping a
+// bare `info` that opened a GUI panel would be exactly the class of shadowing
+// that got SmallCLUE's `less` excluded. The prefix also makes the whole set
+// discoverable: `ws-` then TAB.
+static void ISHWriteWorkspaceLaunchers(NSURL *binURL) {
+    if (binURL == nil)
+        return;
+    // Rewritten on every launch so they track the app, but ONLY over files
+    // carrying this marker: /AOK/persist survives reinstalls and belongs to
+    // the user, so anything of theirs that happens to share a name is left
+    // alone rather than silently replaced.
+    static NSString *const marker = @"# iSH-AOK Workspace launcher -- generated, edits are overwritten";
+    NSArray<NSString *> *tools = @[@"motepad", @"filemanager", @"markdown", @"imageviewer",
+                                   @"videoplayer", @"audio", @"browser", @"llm",
+                                   @"filesystems", @"storage", @"monitor", @"networks",
+                                   @"status", @"settings", @"themes", @"launcher",
+                                   @"clock", @"info", @"diagnostics", @"sessions"];
+    for (NSString *tool in tools) {
+        NSURL *url = [binURL URLByAppendingPathComponent:
+            [NSString stringWithFormat:@"ws-%@", tool]];
+        NSString *existing = [NSString stringWithContentsOfURL:url
+                                                      encoding:NSUTF8StringEncoding error:NULL];
+        if (existing != nil && ![existing containsString:marker])
+            continue;   // somebody else's file of the same name; do not touch it
+        NSString *script = [NSString stringWithFormat:
+            @"#!/bin/sh\n"
+            @"%@\n"
+            @"# Opens the %@ applet in Workspace. Without a Workspace-hosted\n"
+            @"# session there is nothing to open into, so this says so and stops\n"
+            @"# rather than writing a request nobody will answer.\n"
+            @"case \"$(head -1 /proc/ish/workspace 2>/dev/null)\" in\n"
+            @"    hosted=1) ;;\n"
+            @"    *) echo \"${0##*/}: not running under Workspace\" >&2; exit 1 ;;\n"
+            @"esac\n"
+            @"if [ $# -gt 0 ]; then\n"
+            @"    # The bridge takes absolute paths only: by the time the request\n"
+            @"    # reaches the app, this shell's cwd means nothing to it.\n"
+            @"    case \"$1\" in /*) p=$1 ;; *) p=\"$PWD/$1\" ;; esac\n"
+            @"    printf 'open %@ %%s\\n' \"$p\" > /proc/ish/workspace\n"
+            @"else\n"
+            @"    printf 'open %@\\n' > /proc/ish/workspace\n"
+            @"fi\n", marker, tool, tool, tool];
+        NSError *writeError = nil;
+        if (![script writeToURL:url atomically:YES
+                       encoding:NSUTF8StringEncoding error:&writeError]) {
+            NSLog(@"Could not write Workspace launcher ws-%@: %@", tool, writeError);
+            continue;
+        }
+        chmod(url.fileSystemRepresentation, 0755);
+    }
+}
+
 static NSURL *AOKPersistDirectoryURL(void) {
     NSURL *containerURL = ContainerURL();
     if (containerURL == nil)
@@ -2615,6 +2679,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
                         ![NSFileManager.defaultManager fileExistsAtPath:subURL.path])
                     NSLog(@"Could not create /AOK/persist/%@: %@", sub, subError);
             }
+            ISHWriteWorkspaceLaunchers([aokPersistURL
+                URLByAppendingPathComponent:@"bin" isDirectory:YES]);
             FixSharedDirectoryPermissions(aokPersistURL.fileSystemRepresentation);
             int persistMountErr = do_mount(&realfs, aokPersistURL.fileSystemRepresentation, "/AOK/persist", "", MOUNT_ISH_SHARED_);
             if (persistMountErr >= 0)
