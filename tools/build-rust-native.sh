@@ -84,6 +84,31 @@ esac
 # shellcheck disable=SC2046
 "$objcopy" $(tr '\n' ' ' < "$renames") "$merged" "$out"
 
+# Second pass, driven by what the object actually imports rather than by a
+# list of suffixes someone guessed.
+#
+# Darwin exports several libc entry points under a suffixed symbol as well as
+# the bare name, and the suffixes COMPOUND: rustix imports
+# `select$DARWIN_EXTSN$NOCANCEL`. gen-nlibc-renames.py emits the single
+# suffixes it knows, and that list had already been wrong twice -- first
+# missing $DARWIN_EXTSN entirely, then missing the compound -- each time as a
+# SILENT escape to the host. Enumerating harder is the same bet again.
+#
+# So: take every undefined symbol that still carries a `$`, and if the part
+# before the first `$` is a name this rename list routes, route the variant to
+# the same place. A suffix nobody has seen yet is handled by construction.
+variants=$(nm -u "$out" 2>/dev/null | sed 's/^ *//' | grep '\$' | sort -u | while read -r sym; do
+    base=${sym%%\$*}
+    dest=$(grep -m1 -- "^${base}=" "$renames" 2>/dev/null | cut -d= -f2)
+    [ -n "$dest" ] && printf -- '--redefine-sym\n%s=%s\n' "$sym" "$dest"
+done)
+if [ -n "$variants" ]; then
+    echo "build-rust-native: routing $(printf '%s' "$variants" | grep -c '=') suffixed variant(s)" >&2
+    # shellcheck disable=SC2046
+    "$objcopy" $(printf '%s' "$variants" | tr '\n' ' ') "$out" "$out.variants"
+    mv "$out.variants" "$out"
+fi
+
 # A rewritten object that still imports a raw libc name is the failure this
 # whole mechanism exists to prevent, and it is SILENT: the link succeeds and
 # the guest reads the host's files.
@@ -101,6 +126,10 @@ while IFS= read -r line; do
     if printf '%s\n' "$raw" | grep -qxF -- "$from"; then
         missed="$missed $from"
     fi
+    # And the same name wearing any suffix, which is the form that escaped.
+    for sym in $(printf '%s\n' "$raw" | grep -E "^${from}\\\$"); do
+        missed="$missed $sym"
+    done
 done < "$renames"
 
 if [ -n "$missed" ]; then
