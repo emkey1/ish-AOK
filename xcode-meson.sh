@@ -200,17 +200,29 @@ EOF
             meson_needs_wipe=1
         fi
         # Options are read at setup time only, so a build directory made
-        # before these existed keeps its old answer and quietly leaves the
-        # Rust native program out. A reconfigure is enough -- these do not
-        # change the compiler flags, which is what the wipe above is for.
-        # `|| echo drift` covers the directory that predates the option
-        # entirely, where introspect reports it missing rather than empty.
-        current_cargo_home=$(meson_option_json "$config" cargo_home 2>/dev/null || echo drift)
-        current_rust_target=$(meson_option_json "$config" native_rust_target 2>/dev/null || echo drift)
-        current_rust_features=$(meson_option_json "$config" native_rust_features 2>/dev/null || echo drift)
-        if [[ "$current_cargo_home" != "\"$HOME/.cargo\"" ]] || \
-           [[ "$current_rust_target" != "\"$rust_triple\"" ]] || \
-           [[ "$current_rust_features" != "\"${AOK_RUST_FEATURES:-}\"" ]]; then
+        # before one of these existed keeps its old answer and quietly leaves
+        # the Rust native program out.
+        #
+        # MISSING and merely different are not the same repair, and getting
+        # that wrong broke every Xcode build for a day: `meson setup
+        # --reconfigure` REJECTS a -D for an option the build directory does
+        # not already know -- "ERROR: Unknown option" -- even when
+        # meson_options.txt has since gained it. So a directory that predates
+        # an option has to be WIPED, which re-reads meson_options.txt from
+        # scratch, and only a directory that knows the option and disagrees
+        # about its value can be reconfigured.
+        #
+        # Anyone adding a fourth option here inherits the same rule.
+        current_cargo_home=$(meson_option_json "$config" cargo_home 2>/dev/null || echo MISSING)
+        current_rust_target=$(meson_option_json "$config" native_rust_target 2>/dev/null || echo MISSING)
+        current_rust_features=$(meson_option_json "$config" native_rust_features 2>/dev/null || echo MISSING)
+        if [[ "$current_cargo_home" == MISSING ]] || \
+           [[ "$current_rust_target" == MISSING ]] || \
+           [[ "$current_rust_features" == MISSING ]]; then
+            meson_needs_wipe=1
+        elif [[ "$current_cargo_home" != "\"$HOME/.cargo\"" ]] || \
+             [[ "$current_rust_target" != "\"$rust_triple\"" ]] || \
+             [[ "$current_rust_features" != "\"${AOK_RUST_FEATURES:-}\"" ]]; then
             meson_needs_setup=1
         fi
     fi
