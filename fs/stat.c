@@ -393,6 +393,17 @@ static struct fd *at_fd(fd_t f) {
     return f_get(f);
 }
 
+// An ABSOLUTE path means dirfd is ignored -- see the long version beside the
+// twin of this in kernel/fs.c, which is where the bug was found. This file
+// keeping its own copy of at_fd is exactly why it survived here after being
+// fixed there: the first fix passed every check except fstatat, and only the
+// regression test noticed.
+static struct fd *at_fd_for_path(fd_t f, const char *path) {
+    if (path != NULL && path[0] == '/')
+        return AT_PWD;
+    return at_fd(f);
+}
+
 // The `flags` parameter accepts AT_ flags
 static dword_t sys_stat_path(fd_t at_f, addr_t path_addr, addr_t statbuf_addr, int flags) {
     int err;
@@ -401,7 +412,7 @@ static dword_t sys_stat_path(fd_t at_f, addr_t path_addr, addr_t statbuf_addr, i
     if (path_err)
         return path_err;
     STRACE("stat(at=%d, path=\"%s\", statbuf=0x%x, flags=0x%x)", at_f, path, statbuf_addr, flags);
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     struct statbuf stat = {};
@@ -427,7 +438,7 @@ static dword_t sys_stat_path_amd64_guest(fd_t at_f, guest_addr_t path_addr, gues
     if (path_err)
         return path_err;
     STRACE("stat64_amd64(at=%d, path=\"%s\", statbuf=0x%x, flags=0x%x)", at_f, path, statbuf_addr, flags);
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     struct statbuf stat = {};
@@ -471,7 +482,7 @@ dword_t sys_newfstatat_arm64_guest(fd_t at_f, guest_addr_t path_addr, guest_addr
         return path_err;
     STRACE("newfstatat_arm64(at=%d, path=\"%s\", statbuf=0x%llx, flags=0x%x)", at_f, path,
            (unsigned long long) statbuf_addr, flags);
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     struct statbuf stat = {};
@@ -559,7 +570,7 @@ static dword_t sys_stat_path_legacy(fd_t at_f, addr_t path_addr, addr_t statbuf_
     if (path_err)
         return path_err;
     STRACE("stat32(at=%d, path=\"%s\", statbuf=0x%x, flags=0x%x)", at_f, path, statbuf_addr, flags);
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     struct statbuf stat = {};
@@ -627,7 +638,7 @@ static dword_t sys_statx_guest_abi(fd_t at_f, guest_addr_t path_addr, dword_t fl
     if (flags & ~supported_flags)
         return _EINVAL;
 
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
 

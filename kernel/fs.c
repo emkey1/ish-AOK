@@ -94,6 +94,27 @@ static struct fd *at_fd(fd_t f) {
     return f_get(f);
 }
 
+// The *at() rule everyone forgets: "If the pathname given in pathname is
+// absolute, then dirfd is ignored" (openat(2), and POSIX says the same). So an
+// absolute path must NOT make us validate dirfd at all -- it can be -1, or a
+// descriptor closed long ago, and the call is still perfectly legal.
+//
+// Validating it anyway turned such calls into EBADF, and that is not a corner
+// case: it is how mariadbd died. glibc canonicalising an Aria temp table did
+// openat(-1, "/tmp", O_PATH|O_CLOEXEC|O_NOFOLLOW), got EBADF where Linux gives
+// a descriptor, and Aria carried the failure as far as ha_maria::drop_table
+// before dereferencing the NULL it had left behind -- a SIGSEGV three frames
+// away from the actual mistake, which is why it read as a MariaDB bug. It also
+// broke mysql_install_db, so no MariaDB install ever completed.
+//
+// AT_PWD is handed back for the absolute case because the resolver ignores the
+// base for a leading '/' -- it only has to be a valid pointer.
+static struct fd *at_fd_for_path(fd_t f, const char *path) {
+    if (path != NULL && path[0] == '/')
+        return AT_PWD;
+    return at_fd(f);
+}
+
 static bool fs_trace_elogind(void) {
     return false;
 }
@@ -379,7 +400,7 @@ static dword_t sys_faccessat_common(fd_t at_f, guest_addr_t path_addr, mode_t_ m
     int path_err = user_read_path(path_addr, path, sizeof(path));
     if (path_err)
         return path_err;
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     STRACE("faccessat(%d, \"%s\", 0x%x, %d)", at_f, path, mode, flags);
@@ -502,7 +523,7 @@ fd_t sys_openat_guest(fd_t at_f, guest_addr_t path_addr, dword_t flags, mode_t_ 
     if (flags & O_CREAT_)
         apply_umask(&mode);
 
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     struct fd *fd;
@@ -604,7 +625,7 @@ static dword_t sys_readlinkat_common(fd_t at_f, guest_addr_t path_addr, guest_ad
     if (path_err)
         return path_err;
     STRACE("readlinkat(%d, \"%s\", %#x, %#x)", at_f, path, buf_addr, bufsize);
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     if (bufsize > MAX_PATH)
@@ -657,10 +678,10 @@ static dword_t sys_linkat_common(fd_t src_at_f, guest_addr_t src_addr, fd_t dst_
     if (path_err)
         return path_err;
     STRACE("linkat(%d, \"%s\", %d, \"%s\")", src_at_f, src, dst_at_f, dst);
-    struct fd *src_at = at_fd(src_at_f);
+    struct fd *src_at = at_fd_for_path(src_at_f, src);
     if (src_at == NULL)
         return _EBADF;
-    struct fd *dst_at = at_fd(dst_at_f);
+    struct fd *dst_at = at_fd_for_path(dst_at_f, dst);
     if (dst_at == NULL)
         return _EBADF;
     return generic_linkat(src_at, src, dst_at, dst);
@@ -686,7 +707,7 @@ static dword_t sys_unlinkat_common(fd_t at_f, guest_addr_t path_addr, int_t flag
     if (path_err)
         return path_err;
     STRACE("unlinkat(%d, \"%s\", %d)", at_f, path, flags);
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     if (flags & AT_REMOVEDIR_)
@@ -718,10 +739,10 @@ static dword_t sys_renameat2_common(fd_t src_at_f, guest_addr_t src_addr, fd_t d
     if (path_err)
         return path_err;
     STRACE("renameat2(%d, \"%s\", %d, \"%s\", %#x)", src_at_f, src, dst_at_f, dst, flags);
-    struct fd *src_at = at_fd(src_at_f);
+    struct fd *src_at = at_fd_for_path(src_at_f, src);
     if (src_at == NULL)
         return _EBADF;
-    struct fd *dst_at = at_fd(dst_at_f);
+    struct fd *dst_at = at_fd_for_path(dst_at_f, dst);
     if (dst_at == NULL)
         return _EBADF;
     return generic_renameat(src_at, src, dst_at, dst, flags);
@@ -757,7 +778,7 @@ static dword_t sys_symlinkat_common(guest_addr_t target_addr, fd_t at_f, guest_a
     if (path_err)
         return path_err;
     STRACE("symlinkat(\"%s\", %d, \"%s\")", target, at_f, link);
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, link);
     if (at == NULL)
         return _EBADF;
     return generic_symlinkat(target, at, link);
@@ -812,7 +833,7 @@ static dword_t sys_mknodat_common(fd_t at_f, guest_addr_t path_addr, mode_t_ mod
                 return _EINVAL;
     }
     apply_umask(&mode);
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     int err = generic_mknodat(at, path, mode, dev);
@@ -2021,7 +2042,7 @@ static dword_t sys_utime_common(fd_t at_f, guest_addr_t path_addr, struct timesp
     }
     STRACE("utimensat(%d, %s, {{%d, %d}, {%d, %d}}, %d)", at_f, path,
             atime.tv_sec, atime.tv_nsec, mtime.tv_sec, mtime.tv_nsec, flags);
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
 
@@ -2302,7 +2323,7 @@ static dword_t sys_fchmodat_common(fd_t at_f, guest_addr_t path_addr, dword_t mo
     } else {
         STRACE("fchmodat(%d, \"%s\", %o)", at_f, path, mode);
     }
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     mode &= ~S_IFMT;
@@ -2381,7 +2402,7 @@ static dword_t sys_fchownat_common(fd_t at_f, guest_addr_t path_addr, dword_t ow
     if (path_err)
         return path_err;
     STRACE("fchownat(%d, \"%s\", %d, %d, %d)", at_f, path, owner, group, flags);
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     int err;
@@ -2519,7 +2540,7 @@ static dword_t sys_mkdirat_common(fd_t at_f, guest_addr_t path_addr, mode_t_ mod
     if (path_err)
         return path_err;
     STRACE("mkdirat(%d, %s, 0%o)", at_f, path, mode);
-    struct fd *at = at_fd(at_f);
+    struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
     apply_umask(&mode);
