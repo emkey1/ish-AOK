@@ -1,10 +1,19 @@
 #!/bin/sh
-# Link SmallCLUE's applets into a bin directory so they run natively.
+# Link iSH-AOK's native programs into a bin directory so they run natively:
+# SmallCLUE's applets, and the standalone programs beside it in /AOK/native --
+# helix (`hx`), bash and zsh.
 #
 # /AOK/native/smallclue is compiled into iSH-AOK and runs as host code rather
 # than translated guest instructions, so it costs the same on every guest
 # architecture. Like any multicall binary it picks its applet from argv[0], so
 # a symlink named `wc` runs the wc applet.
+#
+# The standalone programs are not applets: each is its own binary, so its link
+# points at its own file and argv[0] selects nothing. Which of them exist is a
+# build property -- `hx` is in the app build and absent from a CLI build
+# configured without -Dnative_helix -- so they are enumerated from /AOK/native
+# rather than named here. See PROGRAMS_EXCLUDED for the three that are not
+# commands.
 #
 # Use a SYMlink, never a hard link: /AOK is its own filesystem, so `ln` across
 # it fails with EXDEV.
@@ -41,7 +50,7 @@
 #   sh /AOK/tools/native-links.sh [options] [directory]
 #
 #   --list     show what would happen, change nothing
-#   --remove   remove links pointing at /AOK/native/smallclue
+#   --remove   remove links pointing anywhere into /AOK/native
 #   --all      include applets that do not work in this build (see EXCLUDED)
 #   --force    replace files that are not our own symlinks
 #   --no-shell leave the UID 1000 login shell alone
@@ -56,8 +65,28 @@
 set -eu
 
 NATIVE=/AOK/native/smallclue
+NATIVE_DIR=/AOK/native
 NATIVE_BASH=/AOK/native/bash
 NATIVE_ZSH=/AOK/native/zsh
+
+# The standalone native programs -- everything in /AOK/native that is NOT
+# SmallCLUE -- get linked too. They are whole programs rather than applets of a
+# multicall binary, so each link points at its own file instead of at
+# $NATIVE, and argv[0] selects nothing.
+#
+# Enumerated from the directory rather than listed here, for the same reason
+# the applet list is read out of the binary: which ones exist is a property of
+# the BUILD. helix is the case that proves it -- `hx` is in the app build and
+# absent from a CLI build configured without -Dnative_helix, and a hardcoded
+# name would be wrong in one of them.
+#
+# Not linked, and neither is a judgement about whether it works:
+#   rust-probe   a diagnostic that exercises the Rust/kqueue path, not a
+#                command anybody types
+#   zsh-multio   an internal variant of zsh, not a second shell
+#   smallclue    the multicall binary itself; its applets are linked by name
+#                further down, and a `smallclue` link would just be the banner
+PROGRAMS_EXCLUDED="smallclue rust-probe zsh-multio"
 # Which of them becomes the login shell. Empty means "decide below": prefer bash
 # when it is there, otherwise zsh. That ordering keeps this script doing exactly
 # what it always did on a build that HAS bash -- which is the default build, since
@@ -245,17 +274,41 @@ probe_missing() {
     return 1
 }
 
+# Every file in /AOK/native, so the ownership test below can recognise a link
+# this script made to ANY of them, not just to SmallCLUE. Populated even in
+# --remove mode: that is the mode that most needs to know what is ours.
+NATIVE_ALL=
+if [ -d "$NATIVE_DIR" ]; then
+    for np in "$NATIVE_DIR"/*; do
+        [ -f "$np" ] || continue
+        NATIVE_ALL="$NATIVE_ALL ${np##*/}"
+    done
+fi
+
+# True when $1 is a symlink that resolves to something in /AOK/native -- which
+# is what "this script made it" means now that the links have more than one
+# target. `readlink` is itself an applet this script links, so this uses -ef
+# against the enumerated names and stays builtin-only.
+link_is_native() {
+    [ -L "$1" ] || return 1
+    for _np in $NATIVE_ALL; do
+        [ "$1" -ef "$NATIVE_DIR/$_np" ] && return 0
+    done
+    return 1
+}
+
 # Inlined rather than read out of the file header with sed: `sed` is itself an
 # applet this script links, so --help would break after installation. Same
 # reason the applet list is parsed with builtins.
 usage() {
-    echo "Link SmallCLUE's applets into a bin directory so they run natively."
+    echo "Link iSH-AOK's native programs into a bin directory so they run"
+    echo "natively: SmallCLUE's applets, plus hx, bash and zsh from /AOK/native."
     echo
     echo "Usage: sh /AOK/tools/native-links.sh [options] [directory]"
     echo "       (defaults to /usr/local/native-bin, put first on PATH unless --no-path)"
     echo
     echo "  --list     show what would happen, change nothing"
-    echo "  --remove   remove links pointing at /AOK/native/smallclue"
+    echo "  --remove   remove links pointing anywhere into /AOK/native"
     echo "  --all      include applets that do not work in this build"
     echo "  --force    replace files that are not our own symlinks"
     echo "  --no-shell leave the UID 1000 login shell alone"
@@ -519,10 +572,10 @@ is_excluded() {
 if [ "$MODE" = remove ]; then
     removed=0
     for f in "$TARGET_DIR"/*; do
-        [ -L "$f" ] || continue
         # `readlink` is itself an applet this script may have linked, so avoid
-        # it: -ef compares what the paths resolve to, using the shell alone.
-        [ "$f" -ef "$NATIVE" ] || continue
+        # it: link_is_native compares what the paths resolve to, using the
+        # shell alone, and covers the standalone programs as well as SmallCLUE.
+        link_is_native "$f" || continue
         rm -f "$f"
         removed=$((removed + 1))
     done
@@ -607,10 +660,47 @@ for applet in $APPLETS; do
     linked=$((linked + 1))
 done
 
+# The standalone programs. Same rules as the applets -- never replace
+# something that is not ours without --force, idempotent when the link is
+# already right -- but each points at its own file rather than at $NATIVE.
+programs=0
+for prog in $NATIVE_ALL; do
+    skip=0
+    for e in $PROGRAMS_EXCLUDED; do
+        [ "$prog" = "$e" ] && skip=1
+    done
+    [ "$skip" -eq 1 ] && continue
+
+    src="$NATIVE_DIR/$prog"
+    dest="$TARGET_DIR/$prog"
+
+    if [ -L "$dest" ] && [ "$dest" -ef "$src" ]; then
+        skipped=$((skipped + 1))   # already ours and already right
+        continue
+    fi
+    # A link of ours pointing somewhere else in /AOK/native is ours to correct
+    # -- an applet link left by an older run whose name a program has since
+    # taken, say -- and is repointed without needing --force.
+    if [ -e "$dest" ] || [ -L "$dest" ]; then
+        if ! link_is_native "$dest" && [ "$FORCE" -eq 0 ]; then
+            [ "$MODE" = list ] && echo "  would NOT replace $dest (exists; --force to override)"
+            blocked=$((blocked + 1))
+            continue
+        fi
+    fi
+
+    if [ "$MODE" = list ]; then
+        echo "  would link $dest -> $src"
+    else
+        ln -sf "$src" "$dest"
+    fi
+    programs=$((programs + 1))
+done
+
 if [ "$MODE" = list ]; then
-    echo "would link $linked, leave $blocked in place, skip $excluded excluded, $skipped already linked, unlink $pruned now-excluded"
+    echo "would link $linked applet(s) and $programs program(s), leave $blocked in place, skip $excluded excluded, $skipped already linked, unlink $pruned now-excluded"
 else
-    echo "linked $linked into $TARGET_DIR ($skipped already, $blocked left in place, $excluded excluded, $pruned stale removed)"
+    echo "linked $linked applet(s) and $programs program(s) into $TARGET_DIR ($skipped already, $blocked left in place, $excluded excluded, $pruned stale removed)"
     [ "$blocked" -gt 0 ] && echo "  $blocked existing command(s) left alone; --force to replace, --list to see them"
 fi
 
