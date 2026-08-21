@@ -162,6 +162,36 @@ names the reading instruction, which is a start and not the answer.
 
 ## Closed during the 550 cycle
 
+### System Console gave no prompt -- FIXED 2026-08-21 (tty hangup recovery)
+
+Reported as "the System Console fails to give the prompt". Reproduced in the
+CLI by booting the guest's own init (`./build/ish -f ROOT /sbin/init 2` under a
+pty): the pre-fix build never reaches a login prompt, the fixed one shows
+`login:` on tty1 within a minute, from the same root state.
+
+The full chain, all four steps confirmed:
+
+1. bootlogd holds /dev/tty1 through boot and is stopped at the end of it. A
+   session leader exiting hangs up its controlling terminal -- correct, and
+   kernel/exit.c does it deliberately.
+2. getty's EXISTING descriptors correctly go EIO, and it exits. Also correct.
+3. init respawns getty -- and its FRESH open was still EIO. **This was the
+   bug.** AOK modelled a hangup as one sticky bool on the tty, where Linux
+   scopes it to the descriptors open at the time.
+4. So getty died repeatedly until `init: Id "1" respawning too fast: disabled
+   for 5 minutes`, and the console stayed dead. Restarting the app did not
+   help, because bootlogd does the same thing every boot.
+
+Fixed by per-descriptor hangup generations (fs/tty.c, tests/manual/
+tty_hangup_reopen.c). Note bootlogd's TIOCCONS is already a deliberate no-op
+here and is NOT involved -- worth saying, because it looks like the culprit in
+a trace.
+
+Two wrong turns, both plausible: "udev rewrote the tty nodes" (it had, to
+root:tty 0620 -- but udev never ran on the boot that was broken), and "clear
+the flag when no descriptors remain" (the app holds the console open, so the
+list is never empty; that version passed a pty-based test and fixed nothing).
+
 ### System Console never gets a shell on Devuan 6 -- ROOT CAUSED AND FIXED 2026-08-21
 
 Reported with a thread backtrace, then established by logging into the device
