@@ -48,3 +48,7 @@
 **Vulnerability:** Widespread use of unbounded `sprintf` and `vsprintf` calls (e.g. `fs/pty.c`, `fs/proc/pid.c`, `fs/proc/root.c`, `fs/sock.c`, `emu/regid.h`, `emu/float80-test.c`, `tools/ptutil.c`, `tools/vdso-transplant.c`) writing to fixed-size buffers, posing significant buffer overflow risks.
 **Learning:** Hardcoded stack buffer sizes with string formatting lacking bounds checking create systemic vulnerabilities across various domains of the codebase (kernel, emulation, tooling, etc.).
 **Prevention:** Strictly utilize bounds-checked functions (`snprintf`, `vsnprintf`) combined with explicit buffer length parameters (e.g. `sizeof(buf)`) to inherently prevent buffer overflow conditions when constructing paths or log messages.
+## 2026-08-21 - Buffer Overflow in kernel/native.c
+**Vulnerability:** The `native_env_set` function used `sprintf` to write into a dynamically allocated buffer. Although the buffer size was calculated beforehand, `sprintf` is inherently unsafe and can lead to a heap buffer overflow if integer overflow occurs during size calculation or if race conditions exist.
+**Learning:** Even when buffer sizes are explicitly calculated, `sprintf` should not be used as it does not enforce limits at the point of writing, increasing the risk of memory corruption.
+**Prevention:** Always use bounds-checking functions like `snprintf` combined with the explicitly calculated size variable to guarantee the write does not exceed the allocated bounds, even if calculations fail.
