@@ -336,6 +336,13 @@ void fdtable_do_cloexec(struct fdtable *table);
 struct fd *fdtable_get(struct fdtable *table, fd_t f);
 
 struct fd *f_get(fd_t f);
+// The *at() base directory for `path`, honouring the rule that an ABSOLUTE
+// path makes dirfd irrelevant -- see the definition in kernel/fs.c for why
+// that matters and what it broke. Declared here rather than duplicated because
+// it already WAS duplicated, in kernel/fs.c and fs/stat.c, and the fix landed
+// in one of them: everything passed except fstatat and statx, which is where
+// modern glibc actually goes.
+struct fd *at_fd_for_path(fd_t f, const char *path);
 struct fd *f_get_retain(fd_t f);
 // steals a reference to the fd, gives it to the table on success and destroys it on error
 // flags is checked for O_CLOEXEC and O_NONBLOCK

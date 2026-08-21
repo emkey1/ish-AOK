@@ -109,7 +109,7 @@ static struct fd *at_fd(fd_t f) {
 //
 // AT_PWD is handed back for the absolute case because the resolver ignores the
 // base for a leading '/' -- it only has to be a valid pointer.
-static struct fd *at_fd_for_path(fd_t f, const char *path) {
+struct fd *at_fd_for_path(fd_t f, const char *path) {
     if (path != NULL && path[0] == '/')
         return AT_PWD;
     return at_fd(f);

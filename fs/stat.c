@@ -386,24 +386,6 @@ int generic_statat(struct fd *at, const char *path_raw, struct statbuf *stat, in
     return generic_statat_full(at, path_raw, stat, flags, NULL, NULL);
 }
 
-// TODO get rid of this and maybe everything else in the file
-static struct fd *at_fd(fd_t f) {
-    if (f == AT_FDCWD_)
-        return AT_PWD;
-    return f_get(f);
-}
-
-// An ABSOLUTE path means dirfd is ignored -- see the long version beside the
-// twin of this in kernel/fs.c, which is where the bug was found. This file
-// keeping its own copy of at_fd is exactly why it survived here after being
-// fixed there: the first fix passed every check except fstatat, and only the
-// regression test noticed.
-static struct fd *at_fd_for_path(fd_t f, const char *path) {
-    if (path != NULL && path[0] == '/')
-        return AT_PWD;
-    return at_fd(f);
-}
-
 // The `flags` parameter accepts AT_ flags
 static dword_t sys_stat_path(fd_t at_f, addr_t path_addr, addr_t statbuf_addr, int flags) {
     int err;
