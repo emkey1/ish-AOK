@@ -16,11 +16,41 @@
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/syscall.h>
 #include "test_common.h"
 
 #ifndef AT_EMPTY_PATH
 #define AT_EMPTY_PATH 0x1000
 #endif
+
+// Linux's fchmodat(2) syscall takes no flags argument, so AT_EMPTY_PATH for
+// chmod is only reachable through fchmodat2(2) (kernel 6.6+). glibc >= 2.39
+// routes fchmodat(..., AT_EMPTY_PATH) there for you; musl 1.1.24 -- what the
+// Alpine 3.11 i386 e2e root ships -- instead rejects any flag other than
+// AT_SYMLINK_NOFOLLOW with EINVAL in userspace, never issuing a syscall at
+// all. That made this test report a kernel regression that was not there:
+// verified against Linux 6.12/glibc 2.41 and against iSH-AOK, raw fchmodat2
+// applies the mode on both, and raw fchmodat with an empty path is ENOENT on
+// both. So fall back to the raw syscall when the libc declines to make one --
+// the kernel behaviour is what this test locks, not the libc's routing.
+#ifndef SYS_fchmodat2
+# ifdef __NR_fchmodat2
+#  define SYS_fchmodat2 __NR_fchmodat2
+# else
+#  define SYS_fchmodat2 452 // "common" number on i386 and amd64
+# endif
+#endif
+
+static int fchmodat_empty_path(int fd, mode_t mode) {
+    errno = 0;
+    if (fchmodat(fd, "", mode, AT_EMPTY_PATH) == 0)
+        return 0;
+    if (errno != EINVAL)
+        return -1;
+    // Old libc, not an old kernel: ask the kernel directly.
+    errno = 0;
+    return (int) syscall(SYS_fchmodat2, fd, "", mode, AT_EMPTY_PATH);
+}
 
 int main(int argc, char **argv) {
     test_init(argc, argv);
@@ -58,8 +88,7 @@ int main(int argc, char **argv) {
     }
 
     // Companion: fchmodat(fd, "", ..., AT_EMPTY_PATH).
-    errno = 0;
-    if (fchmodat(fd, "", 0641, AT_EMPTY_PATH) < 0) {
+    if (fchmodat_empty_path(fd, 0641) < 0) {
         printf("FAIL: fchmodat(fd, \"\", AT_EMPTY_PATH) = -1 (%s)\n", strerror(errno));
         failures_total++;
     } else if (fstat(fd, &st) == 0 && (st.st_mode & 07777) != 0641) {
