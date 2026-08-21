@@ -156,6 +156,24 @@ zsh_path_file() {
 #                    shadowing them is still all risk: this sudo runs the
 #                    command with no authentication at all
 #   not commands     smallclue, smallclue-help, licenses
+#   pagers           less and more. `apt search maria` wedged the app every
+#                    time, and removing the less symlink cured it -- confirmed
+#                    on device. The two backtraces agree on the shape: apt
+#                    blocked reading four bytes from a descriptor, and
+#                    SmallCLUE's less blocked in pagerCollectLines reading
+#                    stdin that never reaches EOF. It spools the WHOLE stream
+#                    to a temp file before drawing anything, where real less
+#                    paints the first screen at once, so a producer that waits
+#                    on its pager before closing waits forever.
+#
+#                    Excluded rather than fixed because the exact trigger is
+#                    not characterised yet: forcing PAGER at SmallCLUE's less
+#                    by hand COMPLETED, so it is something about how apt
+#                    invokes a pager it found on PATH, not collect-all alone.
+#                    Until that is understood, a pager that can hang the app
+#                    has no business shadowing the distro's. `more` goes with
+#                    it -- same code path, same risk, and nothing has proved it
+#                    safe either.
 #
 # Three entries left this list after being fixed rather than reclassified, which
 # is the outcome to aim for: ipaddr (the shim's getifaddrs is real now -- the
@@ -167,9 +185,9 @@ zsh_path_file() {
 # Absent from this list on purpose, because they are handled by PROBED below
 # rather than hardcoded: everything whose availability depends on what this
 # particular build has compiled in.
-EXCLUDED="chroot halt init licenses mdev mknod mount passwd poweroff
-reboot runit script smallclue smallclue-help su sudo umount version
-vproc-test watch"
+EXCLUDED="chroot halt init less licenses mdev mknod more mount passwd
+poweroff reboot runit script smallclue smallclue-help su sudo umount
+version vproc-test watch"
 
 # Availability-gated applets: present in every build, working only in some.
 # These are the ones that made the list stale, because whether they work is a

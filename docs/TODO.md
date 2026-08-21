@@ -10,6 +10,51 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### SmallCLUE's pager wedges apt, and is excluded rather than fixed
+
+`apt search maria` hung the whole app, every time, on device. Removing
+/usr/local/native-bin/less cured it and restoring it brought it back --
+confirmed by the user, not inferred. opt/AOK/tools/native-links.sh now excludes
+`less` and `more`, so the distro's pagers win; re-running it removes the links
+it made before they were excluded.
+
+**What two backtraces agree on.** SmallCLUE's less is blocked in
+`pagerCollectLines` -> `nlibc_read(fd 0, 8192)` -> `realfs_wait_readable`, on
+stdin that never reaches EOF. apt is blocked reading FOUR bytes from a
+descriptor of its own. Neither moves again.
+
+`pagerCollectLines` (deps/smallclue/src/core.c) spools the ENTIRE stream into a
+temp file before drawing anything. Real less paints the first screen as soon as
+it has one. A producer that waits on its pager before closing its end therefore
+waits forever on ours and not on theirs, which fits the shape exactly.
+
+**What is NOT established, and why this is excluded rather than fixed.** That
+story predicts the hang whenever apt pages through SmallCLUE, and it does not
+hold up: forcing `PAGER=/usr/local/native-bin/less apt search maria` by hand
+COMPLETED, 9366 bytes, no hang. So collect-all alone is not sufficient -- it is
+something about how apt invokes a pager it discovers on PATH, and that is the
+piece still missing. Seven attempts over ssh with and without a tty never
+reproduced it either; apt kept choosing /usr/bin/less regardless of PATH, which
+is itself a clue about how it resolves one.
+
+**Next step**, in order:
+
+1. Find the trigger. `strace`-equivalent on the guest side around apt's pager
+   spawn, or a `less` that logs its argv and the state of fd 0, would say
+   whether it is arguments SmallCLUE mis-parses, an fd apt expects the pager to
+   close, or that four-byte read being a handshake nothing answers.
+2. Then make the pager stream: display the first screenful as soon as it is
+   read and continue lazily, which is what real less does and what removes the
+   deadlock shape whatever the trigger turns out to be.
+3. Then un-exclude both pagers, since a native less on a large file is worth
+   having -- that is the outcome three earlier entries reached and the one to
+   aim for here.
+
+Not caused by the recent filesystem or shim work: SmallCLUE calls none of the
+ioctls added with the kqueue front end, and nothing in it touches pipes, exec
+or fd inheritance. The pager has spooled like this since it was written.
+
+
 ### AOK lost a connected UDP socket's error -- NO LONGER REPRODUCES 2026-08-20
 
 Measured again on the same harness the entry was written against: **10 of 10,
