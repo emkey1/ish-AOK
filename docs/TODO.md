@@ -10,6 +10,53 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### System Console never gets a shell on Devuan 6, because rc never finishes
+
+Reported 2026-08-21 with a full thread backtrace, on a Devuan 6 arm64 guest
+where the system is otherwise up and the app's own session shell works.
+
+**The console is not the broken part.** sysvinit's inittab runs the runlevel
+script as `l2:2:wait:/etc/init.d/rc 2`, and `wait` means init does not process
+any later entry until rc exits -- the `getty` lines are `respawn` entries that
+come after it. So a runlevel that never completes means no getty, and a console
+with no getty has nothing to spawn a shell. The backtrace agrees: there is no
+getty or agetty process anywhere in it.
+
+What rc is waiting on, read off the thread names:
+
+    587  rc         read(fd 3)   -- startpar's pipe
+    591  startpar   pselect
+    630  mariadb    read(fd 3)   -- the init script, still running
+    729  mariadb    wait4        -- waiting on a child
+    858  logger     read(fd 0)   -- mysqld_safe's log pipe
+
+so the runlevel is parked inside `/etc/init.d/mariadb start`. mariadbd ITSELF is
+healthy -- eleven threads across futex, ppoll and rt_sigtimedwait -- so this is
+the init script not concluding the server is ready, not the server failing.
+Note this became visible only once AIO landed: before that mariadbd crash-looped
+and the script presumably gave up.
+
+The 142/180 login+bash pair is the app's session shell, spawned separately from
+init, which is why the user has a working shell and an empty console at once.
+
+**Decisive test**, in order: confirm the inittab shape and the stuck processes
+with `grep -E '^l2|getty' /etc/inittab` and `ps -eo pid,stat,args`, then
+`update-rc.d mariadb disable` and reboot. A console that gets a shell with
+mariadb disabled settles it.
+
+**The other suspect, if that is not it.** pid 187 is a `startpar` from an
+EARLIER rc generation than 587, blocked in `tty_read` on fd 0 with no timeout.
+startpar has no business reading stdin, and nothing will free it: AOK's
+`tty_signal_if_background_locked` (fs/tty.c:633) returns 0 without sending
+SIGTTIN when `tty->fg_group == 0`. That matches Linux's `tty_check_change`, so
+it is not a divergence to fix -- but it does mean any stray reader of a tty with
+no foreground process group parks permanently, and one is parked.
+
+**Not caused by the AIO work**, on the evidence available: nothing in this path
+issues an io_* syscall, and the only AIO code reachable is aio_discard_tgroup on
+an empty list at task teardown. But it has not been tested against a build
+without it, so that is a reasoned position rather than a measured one.
+
 ### SmallCLUE's pager wedges apt, and is excluded rather than fixed
 
 `apt search maria` hung the whole app, every time, on device. Removing
