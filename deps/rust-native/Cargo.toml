@@ -1,0 +1,41 @@
+# ONE crate for every native Rust program, not one crate each.
+#
+# Each staticlib carries its own copy of Rust's std, core and alloc. Two of
+# them in the same link is thousands of duplicate symbols -- which is exactly
+# what happened the first time helix was built alongside the probe, and would
+# happen again for the third program and the fourth. So the programs are
+# modules here and a cargo feature decides which are compiled in; the link
+# gets one std however many of them are on.
+[package]
+name = "aok_native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "aok_native"
+crate-type = ["staticlib"]
+
+[features]
+default = []
+# tokio's reactor is kqueue on Apple targets, and this exercises it. Off by
+# default because the dependency tree has no business in a shipping app; see
+# kernel/native_kqueue.h for what it proves.
+tokio-probe = ["dep:tokio"]
+# helix. Off by default and gated again in meson (-Dnative_helix), because it
+# is MPL-2.0 and tens of megabytes.
+helix = ["dep:tokio", "dep:anyhow", "dep:log",
+         "dep:helix-term", "dep:helix-core", "dep:helix-loader", "dep:helix-stdx"]
+
+[dependencies]
+tokio = { version = "1", optional = true, features = ["rt", "rt-multi-thread", "macros", "time", "process", "io-util", "net", "sync"] }
+anyhow = { version = "1", optional = true }
+log = { version = "0.4", optional = true }
+helix-term = { path = "../helix/helix-term", optional = true }
+helix-core = { path = "../helix/helix-core", optional = true }
+helix-loader = { path = "../helix/helix-loader", optional = true }
+helix-stdx = { path = "../helix/helix-stdx", optional = true }
+
+[profile.release]
+opt-level = "z"
+panic = "abort"
+strip = true

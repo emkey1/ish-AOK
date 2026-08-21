@@ -218,11 +218,16 @@ cargo = find_program('cargo', join_paths(get_option('cargo_home'), 'bin', 'cargo
 llvm_objcopy = find_program('llvm-objcopy', '/opt/homebrew/opt/llvm/bin/llvm-objcopy',
                             '/usr/local/opt/llvm/bin/llvm-objcopy', required: false)
 have_rust_native = false
+# Declared out here because the -D that turns on the registry entry is decided
+# outside the block that sets it, and meson has no notion of an unset variable.
+have_helix = false
 if get_option('native_rust') != 'disabled'
     if cargo.found() and llvm_objcopy.found() and host_machine.system() in ['darwin', 'ios']
         have_rust_native = true
     elif get_option('native_rust') == 'enabled'
         error('native_rust=enabled but cargo or llvm-objcopy is missing')
+    elif get_option('native_helix').enabled()
+        error('native_helix needs the Rust toolchain: cargo and llvm-objcopy')
     endif
 endif
 
@@ -781,11 +786,24 @@ if get_option('kernel') == 'ish'
             output: 'nlibc-renames.txt',
             command: [find_program('tools/gen-nlibc-renames.py'), '@INPUT@'],
             capture: true)
-        rust_native_lib = custom_target('rust-native-probe',
+        # helix is a cargo FEATURE of the one native-Rust crate, not a crate
+        # of its own. Each staticlib carries its own std, so two of them in a
+        # link is thousands of duplicate symbols -- which is what happened the
+        # first time this was two crates.
+        native_features = get_option('native_rust_features')
+        if get_option('native_helix').enabled()
+            if not fs_mod.exists('deps/helix/helix-term/Cargo.toml')
+                error('native_helix: deps/helix is empty -- git submodule update --init deps/helix')
+            endif
+            have_helix = true
+            native_features = native_features == '' ? 'helix' : native_features + ',helix'
+        endif
+
+        rust_native_lib = custom_target('rust-native',
             input: nlibc_renames,
-            output: 'rust_native_probe_routed.o',
+            output: 'aok_native_routed.o',
             command: [find_program('tools/build-rust-native.sh'),
-                      meson.current_source_dir() / 'deps/rust-native-probe',
+                      meson.current_source_dir() / 'deps/rust-native',
                       '@OUTPUT@', cargo, llvm_objcopy, '@INPUT@',
                       # Empty for a host build; the Xcode path passes the iOS
                       # triple, because a crate built for macOS would link but
@@ -795,22 +813,22 @@ if get_option('kernel') == 'ish'
                       # environment, so ninja notices a change to it. Through
                       # the environment alone the option could be flipped and
                       # yesterday's crate would ship.
-                      get_option('native_rust_features')],
+                      native_features],
             # Without this the crate's own sources are invisible to ninja --
             # cargo would rebuild them but the target is only rerun when the
             # rename list changes, so an edit to the Rust silently ships the
             # previous binary. Caught exactly that way.
-            depend_files: files('deps/rust-native-probe/src/lib.rs',
-                                'deps/rust-native-probe/Cargo.toml'),
+            depend_files: files('deps/rust-native/src/lib.rs',
+                                'deps/rust-native/src/probe.rs',
+                                'deps/rust-native/src/helix.rs',
+                                'deps/rust-native/Cargo.toml'),
             build_by_default: true)
         # One object, added to libish's own objects, rather than a second
         # archive next to it. The Xcode build does not link through meson --
         # it links -lish against the archive meson produced -- so anything
         # carried on a meson dependency's link_args reaches the CLI build and
-        # nothing else. On device that failed exactly as you would expect:
-        # ISH_NATIVE_RUST was defined, the registry entry referenced
-        # rust_native_probe_main, and the symbol was nowhere in the link.
-        # Inside libish.a it needs no cooperation from either build system.
+        # nothing else. Inside libish.a it needs no cooperation from either
+        # build system.
         librustnative = [rust_native_lib]
     endif
 
@@ -1466,6 +1484,11 @@ if get_option('kernel') == 'ish'
     # cannot disagree -- the same contract as AOK_HAVE_OPENSSH above.
     if have_rust_native
         ish_c_args += '-DISH_NATIVE_RUST'
+    endif
+    # One flag decides both the object and the registry entry, so the two
+    # cannot disagree -- the same contract as AOK_HAVE_OPENSSH.
+    if have_helix
+        ish_c_args += '-DISH_NATIVE_HELIX'
     endif
 
     libish = library('ish', src,

@@ -265,6 +265,13 @@ int native_zsh_multio_main(int argc, char *const argv[], char *const envp[]);
 int rust_native_probe_main(int argc, char *const argv[], char *const envp[]);
 #endif
 
+#ifdef ISH_NATIVE_HELIX
+// Reached the same way as the probe -- a staticlib whose libc imports are
+// rewritten onto the shim -- but its own crate, deps/helix-native, so that the
+// probe stays small enough to be a diagnostic. helix itself is deps/helix.
+int helix_native_main(int argc, char *const argv[], char *const envp[]);
+#endif
+
 static const struct native_program native_programs[] = {
     { "smallclue", smallclue_real_main },
 #ifdef ISH_NATIVE_RUST
@@ -272,6 +279,12 @@ static const struct native_program native_programs[] = {
     // the #define redirection that only covers what AOK compiles. See
     // tools/gen-nlibc-renames.py and deps/rust-native-probe.
     { "rust-probe", rust_native_probe_main },
+#endif
+#ifdef ISH_NATIVE_HELIX
+    // Registered as `hx`, which is what helix calls itself and what a user
+    // types. deps/helix-native is the staticlib wrapper; deps/helix is the
+    // editor.
+    { "hx", helix_native_main },
 #endif
 #ifdef ISH_NATIVE_BASH
     { "bash", native_bash_main },

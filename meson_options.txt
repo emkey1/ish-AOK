@@ -3,6 +3,17 @@ option('cargo_home', type: 'string', value: '~/.cargo',
        description: 'Where rustup installed cargo, when it is not on PATH')
 option('native_rust_target', type: 'string', value: '',
        description: 'Rust target triple for the native crate (empty: build for the host)')
+# helix as a native program. Default-disabled, and the licence is why -- the
+# same reason native_bash exists: helix is MPL-2.0, which is file-level
+# copyleft rather than GPLv3's reach, but it is still a deliberate decision
+# about what the shipped binary contains and not one to make by default.
+#
+# Size is the second reason. helix links tens of megabytes against an app
+# binary that is currently fourteen, so a build that does not want an editor
+# should not carry one.
+option('native_helix', type: 'feature', value: 'disabled',
+       description: 'Compile helix in as a native program (adds MPL-2.0 code, and tens of MB)')
+
 option('native_rust_features', type: 'string', value: '',
        description: 'Cargo features for the Rust native program (e.g. tokio-probe)')
 option('native_rust', type: 'combo', choices: ['enabled', 'disabled', 'auto'], value: 'auto',
