@@ -155,9 +155,18 @@ static int proc_ish_update_roots(struct proc_entry *UNUSED(entry), struct proc_d
 //     hosted=1
 //     tools=motepad,filemanager,markdown,imageviewer,videoplayer,audio,llm,...
 //
+// `hosted` answers "is there a Workspace that can receive a request", not "is
+// THIS session inside one" -- and that is the useful question. An ssh login has
+// no Workspace of its own but can still perfectly well ask the app on screen to
+// open a file, which is exactly what someone typing ws-markdown over ssh wants.
+//
 // hosted=0 is a complete and useful answer, not an error: it is what a plain
-// terminal session, or the command-line build, honestly is. A launcher reads
-// this first and falls back rather than writing a request nobody will answer.
+// terminal session on a build with no Workspace, and the whole command-line
+// build, honestly are. A launcher reads this first and falls back rather than
+// writing a request nobody will answer.
+//
+// The entry is 0666 rather than roots' 0644: managing roots is administrative,
+// opening a window is not, and every AOK session is uid 1000.
 static int proc_ish_show_workspace(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     // NULL in the command-line build and in any app build without Workspace.
     // Saying so beats calling through a NULL pointer -- stress-ng --procfs
@@ -702,7 +711,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"host_info", .show = proc_ish_show_host_info},  // Add host hardware related information
     {"ips", .show = proc_ish_show_ips},
     {"roots", S_IFREG | 0644, .show = proc_ish_show_roots, .update = proc_ish_update_roots},
-    {"workspace", S_IFREG | 0644, .show = proc_ish_show_workspace, .update = proc_ish_update_workspace},
+    {"workspace", S_IFREG | 0666, .show = proc_ish_show_workspace, .update = proc_ish_update_workspace},
     {"version", .show = proc_ish_show_version},
 });
 

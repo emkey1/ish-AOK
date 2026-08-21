@@ -631,6 +631,7 @@ static bool mp_handoff(const char *path) {
 
 static void mp_usage(void) {
     printf("usage: motepad [-t] [file]\n"
+           "       motepad --selftest [path]   check the editor without a terminal\n"
            "\n"
            "  A plain text editor. Ctrl-S save, Ctrl-Q quit, Ctrl-F find,\n"
            "  Ctrl-G go to line, Ctrl-K delete line, Ctrl-A/Ctrl-E line ends.\n"
@@ -666,7 +667,13 @@ int native_motepad_main(int argc, char *const argv[], char *const envp[]) {
             free(E.path);
             memset(&E, 0, sizeof(E));
             mp_insert_line(0, "", 0);
-            E.path = strdup("/realmnt/motepad-selftest.txt");
+            // Takes an optional path; /realmnt was a development mount and had
+            // no business being the default in a shipped diagnostic -- on a
+            // device it made the self-test report a save failure that was not
+            // real.
+            const char *out = (i + 1 < argc && argv[i + 1][0] != '-')
+                ? argv[++i] : "/tmp/motepad-selftest.txt";
+            E.path = strdup(out);
             const char *first = "hello", *second = "world";
             for (const char *q = first; *q; q++)
                 mp_insert_char(*q);

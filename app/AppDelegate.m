@@ -1557,7 +1557,7 @@ static void ISHWriteWorkspaceLaunchers(NSURL *binURL) {
             @"# rather than writing a request nobody will answer.\n"
             @"case \"$(head -1 /proc/ish/workspace 2>/dev/null)\" in\n"
             @"    hosted=1) ;;\n"
-            @"    *) echo \"${0##*/}: not running under Workspace\" >&2; exit 1 ;;\n"
+            @"    *) echo \"${0##*/}: no Workspace is running\" >&2; exit 1 ;;\n"
             @"esac\n"
             @"if [ $# -gt 0 ]; then\n"
             @"    # The bridge takes absolute paths only: by the time the request\n"
