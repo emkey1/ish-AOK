@@ -272,8 +272,15 @@ int rust_native_probe_main(int argc, char *const argv[], char *const envp[]);
 int helix_native_main(int argc, char *const argv[], char *const envp[]);
 #endif
 
+// The terminal half of the Workspace MotePad editor (kernel/native_motepad.c).
+// Unconditional: it is one C file with no dependency beyond the shim, so there
+// is nothing to gate it on -- unlike helix or bash, which bring a toolchain and
+// a licence question with them.
+int native_motepad_main(int argc, char *const argv[], char *const envp[]);
+
 static const struct native_program native_programs[] = {
     { "smallclue", smallclue_real_main },
+    { "motepad", native_motepad_main },
 #ifdef ISH_NATIVE_RUST
     // Rust, reached by rewriting its libc imports onto the shim rather than by
     // the #define redirection that only covers what AOK compiles. See

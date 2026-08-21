@@ -1528,9 +1528,25 @@ if get_option('kernel') == 'ish'
         ish_c_args += '-DISH_NATIVE_HELIX'
     endif
 
+    # motepad is a native PROGRAM, so its libc calls have to reach the guest --
+    # its own archive purely so it can be compiled with the native_libc.h
+    # force-include that the rest of libish must not have. (kernel/native_libc.c
+    # implements that shim; it cannot be redirected onto itself.)
+    #
+    # Getting this wrong is not subtle in hindsight and was invisible at first:
+    # without the force-include the program compiled, linked, ran, and quietly
+    # used the HOST's filesystem and the HOST's stdin. It wrote its files to the
+    # Mac, and its reads raced the emulator's own reader on the same host
+    # descriptor -- which showed up as every other keystroke going missing.
+    libmotepad = static_library('motepad', 'kernel/native_motepad.c',
+        include_directories: includes,
+        c_args: ish_c_args + [
+            '-include', meson.current_source_dir() / 'kernel/native_libc.h',
+        ])
+
     libish = library('ish', src,
         objects: librustnative,
-        link_whole: [libsmallclue, libnextvi, libbash, libzsh, libopenssh] + libopenssh_special + libcurlshim,
+        link_whole: [libsmallclue, libnextvi, libbash, libzsh, libopenssh, libmotepad] + libopenssh_special + libcurlshim,
         include_directories: includes, c_args: ish_c_args)
     ish = declare_dependency(
         link_with: [libish, libish_emu, libfakefs],
