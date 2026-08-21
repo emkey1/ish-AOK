@@ -198,7 +198,12 @@ ck redir-eval-once  "1" 'rm -rf /tmp/aokre; mkdir -p /tmp/aokre; cd /tmp/aokre; 
 ck redir-words-ok   "v" 'rm -rf /tmp/aokre2; mkdir -p /tmp/aokre2; cd /tmp/aokre2; /bin/echo $(print v) > o; true; cat o'
 ck assign-eval-once "1" 'rm -rf /tmp/aokre3; mkdir -p /tmp/aokre3; cd /tmp/aokre3; V=1 /bin/echo $(print -n x >> c; print v) > o; true; wc -c < c | tr -d " "'
 # The assignment must still reach the command, and must still not stick.
-ck assign-reaches   "1" 'rm -rf /tmp/aokre4; mkdir -p /tmp/aokre4; cd /tmp/aokre4; V=1 /usr/bin/printenv V > o; true; cat o'
+# printenv is resolved rather than spelled: it is /usr/bin/printenv on a
+# Debian-derived root and /bin/printenv on Alpine, and hardcoding either makes
+# this case fail on the other for a reason that has nothing to do with what it
+# is testing. It has to stay an EXTERNAL command -- an assignment reaching a
+# builtin proves nothing about the re-launch.
+ck assign-reaches   "1" 'rm -rf /tmp/aokre4; mkdir -p /tmp/aokre4; cd /tmp/aokre4; V=1 $(command -v printenv) V > o; true; cat o'
 ck assign-not-stuck "[]" 'V=1 /bin/echo hi > /dev/null; print "[$V]"'
 
 echo "== a re-launched element still reports its own write errors =="

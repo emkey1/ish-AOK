@@ -10,6 +10,7 @@ a repro. Built to push the edges of the 32- and 64-bit JIT.
 | Piece | State |
 |---|---|
 | `conductor.py` — 5 modes: `run` / `supervise` / `device` / `tier0` / `conform` | **working** |
+| `native_job_control.py` — ^C / ^Z / fg / jobs / traps in a native shell, over a real pty | **working** |
 | local-fakefs backend (host `./build/ish`, device-identical aarch64 gadgets) | **working** (primary) |
 | Rosetta `arch -x86_64` + mint Lima-VM oracles (true i386 + real-Linux x86_64) | **working** |
 | differential corpus — 12 families (ALU, adc/sbb-mem, shifts, sign-ext, mul/div, mxcsr, bit-ops, rep-string, sse-cvt, sse-shuffle, sse4, atomics) | **working** |
@@ -27,6 +28,8 @@ a repro. Built to push the edges of the 32- and 64-bit JIT.
 python3 tests/remote/conductor.py run                  # differential corpus, all cells
 python3 tests/remote/conductor.py run --tests flags_alu --cells oracle,amd64:jit
 python3 tests/remote/conductor.py tier0                # tests/manual self-check suite, per arch
+python3 tests/remote/native_job_control.py build/alpine-arm64-test          # native bash, over a pty
+python3 tests/remote/native_job_control.py build/alpine-arm64-test /AOK/native/zsh
 python3 tests/remote/conductor.py conform              # signal/syscall conformance vs REAL LINUX (mint)
 python3 tests/remote/conductor.py conform --tests sig_rt_order
 python3 tests/remote/conductor.py supervise            # journaled batch (device crash model), local

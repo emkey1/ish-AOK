@@ -175,6 +175,10 @@ EOF
     esac
     local meson_extra_opts="-Dcargo_home=$HOME/.cargo"
     [[ -n "$rust_triple" ]] && meson_extra_opts="$meson_extra_opts -Dnative_rust_target=$rust_triple"
+    # AOK_RUST_FEATURES comes from app/iSH.xcconfig, so the Rust program's
+    # cargo features are set where every other project-wide knob is set rather
+    # than on a command line. Empty for a normal build.
+    meson_extra_opts="$meson_extra_opts -Dnative_rust_features=${AOK_RUST_FEATURES:-}"
 
     if [[ ! -f "$crossfile" ]] || ! cmp -s "$crossfile_tmp" "$crossfile"; then
         mv "$crossfile_tmp" "$crossfile"
@@ -203,8 +207,10 @@ EOF
         # entirely, where introspect reports it missing rather than empty.
         current_cargo_home=$(meson_option_json "$config" cargo_home 2>/dev/null || echo drift)
         current_rust_target=$(meson_option_json "$config" native_rust_target 2>/dev/null || echo drift)
+        current_rust_features=$(meson_option_json "$config" native_rust_features 2>/dev/null || echo drift)
         if [[ "$current_cargo_home" != "\"$HOME/.cargo\"" ]] || \
-           [[ "$current_rust_target" != "\"$rust_triple\"" ]]; then
+           [[ "$current_rust_target" != "\"$rust_triple\"" ]] || \
+           [[ "$current_rust_features" != "\"${AOK_RUST_FEATURES:-}\"" ]]; then
             meson_needs_setup=1
         fi
     fi

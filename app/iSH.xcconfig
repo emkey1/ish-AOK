@@ -11,6 +11,14 @@ ISH_LOGGER_iphoneos = nslog
 ISH_LOGGER_iphonesimulator = nslog
 ISH_LOGGER_macosx = dprintf
 
+// Cargo features for the Rust native program (/AOK/native/rust-probe).
+// Empty for a normal build -- the probe's tokio test pulls in a dependency
+// tree that has no business in a shipping app. Set it to "tokio-probe" to
+// make the probe exercise the async runtime, which is what proves the kqueue
+// front end (kernel/native_kqueue.h) works on device.
+AOK_RUST_FEATURES = 
+// AOK_RUST_FEATURES = tokio-probe
+
 // Guest architectures the emulator supports (comma-separated; at least one).
 // Default is everything. Trim to e.g. "arm64" for a smaller/faster build.
 ISH_GUEST_ARCHS = i386,amd64,arm64,riscv64

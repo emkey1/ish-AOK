@@ -228,10 +228,25 @@ a prebuilt dylib, and it does not catch a call made through `dlsym` -- Rust
 imports no `dlsym`, so nothing escaped that way here, but a runtime that does
 would need a different answer.
 
+**Turning the tokio test on from Xcode.** `AOK_RUST_FEATURES` in
+app/iSH.xcconfig, next to `ISH_LOG` and `ISH_GUEST_ARCHS`; set it to
+`tokio-probe`. It reaches cargo through a meson option rather than only the
+environment, so changing it reconfigures and rebuilds the crate on its own --
+through the environment alone the flag could be flipped and yesterday's crate
+would ship. Empty is the default, and has to stay that way: the tokio test
+pulls in a dependency tree with no business in a shipping app.
+
 **One loose end before release.** `rust-probe` is a diagnostic and it is in the
 app whenever cargo is on the build machine (`native_rust` defaults to `auto`).
 Either flip that default to `disabled` or drop the registry entry before the
 550 tag.
+
+**And the test that guards this.** tests/remote/native_job_control.py drives a
+native shell through a real pty -- ^C, ^Z, fg, the job table, a trap firing
+while the shell waits. tests/manual's two native-shell suites run a shell with
+`-c` and read what it prints, which covers everything except the part that
+needs a terminal, and that is exactly where the signal work above could have
+broken something.
 
 ### ptraceomatic reports a real divergence at instruction 4175
 

@@ -8,16 +8,17 @@
 # filesystem, so the rename is not an optimisation to skip on a rebuild.
 set -eu
 
-crate_dir=$1; out=$2; cargo=$3; objcopy=$4; renames=$5; target=${6:-}
+crate_dir=$1; out=$2; cargo=$3; objcopy=$4; renames=$5; target=${6:-}; features=${7:-}
 
 cargo_args="--release --quiet --manifest-path $crate_dir/Cargo.toml"
-# Reproducing the tokio measurement has to go through the real build -- the
-# rename pass is the thing under test -- so the feature is reachable from the
-# environment rather than only from a bare `cargo build`:
-#     AOK_RUST_FEATURES=tokio-probe ninja -C build ish
-# Changing it does not by itself make ninja rerun this; touch the crate's
-# lib.rs, which is in depend_files.
-[ -n "${AOK_RUST_FEATURES:-}" ] && cargo_args="$cargo_args --features $AOK_RUST_FEATURES"
+# Reproducing the tokio measurement has to go through the real build, because
+# the rename pass is the thing under test. Two ways in, and both make ninja
+# rerun this on their own -- the argument is part of the command line:
+#     Xcode:  set AOK_RUST_FEATURES in app/iSH.xcconfig
+#     meson:  -Dnative_rust_features=tokio-probe
+# The environment is still honoured for a bare `ninja -C build ish`.
+[ -z "$features" ] && features="${AOK_RUST_FEATURES:-}"
+[ -n "$features" ] && cargo_args="$cargo_args --features $features"
 built_dir="$crate_dir/target/release"
 if [ -n "$target" ]; then
     cargo_args="$cargo_args --target $target"

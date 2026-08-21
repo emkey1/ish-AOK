@@ -789,7 +789,12 @@ if get_option('kernel') == 'ish'
                       # Empty for a host build; the Xcode path passes the iOS
                       # triple, because a crate built for macOS would link but
                       # target the wrong platform.
-                      get_option('native_rust_target')],
+                      get_option('native_rust_target'),
+                      # Part of the command line rather than only the
+                      # environment, so ninja notices a change to it. Through
+                      # the environment alone the option could be flipped and
+                      # yesterday's crate would ship.
+                      get_option('native_rust_features')],
             # Without this the crate's own sources are invisible to ninja --
             # cargo would rebuild them but the target is only rerun when the
             # rename list changes, so an edit to the Rust silently ships the
