@@ -681,6 +681,15 @@ static void task_wait_for_mem_quiesce(struct task *task) {
 }
 
 void task_run_current(void) {
+    // Every host thread that runs guest work reaches here exactly once, so this
+    // is the one place that catches them all -- task_thread and timer_thread do
+    // it for themselves, but the thread that runs init does not go through
+    // either (the CLI's main thread, and whichever thread the app boots on).
+    // Idempotent, and it must happen before a wake poke can be the first thing
+    // on this thread to touch the storage the handlers read. See
+    // signal_thread_locals_init() in util/sync.c.
+    signal_thread_locals_init();
+
     // A task whose image is a natively-implemented program never enters the
     // emulator at all: it is dispatched here instead, and does not return. The
     // execve entry points handle the ordinary case of an already-running task

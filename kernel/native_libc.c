@@ -2799,6 +2799,11 @@ struct nlibc_thread_start {
 
 static void *nlibc_thread_trampoline(void *opaque) {
     struct nlibc_thread_start *start = opaque;
+    // Before the assignment below, which is this thread's first touch of a
+    // __thread variable: a wake poke landing mid-instantiation would make the
+    // handler re-enter malloc and abort the process. See
+    // signal_thread_locals_init() in util/sync.c.
+    signal_thread_locals_init();
     current = start->task;   // inherit, so the shim has a task to work against
     void *(*fn)(void *) = start->fn;
     void *arg = start->arg;

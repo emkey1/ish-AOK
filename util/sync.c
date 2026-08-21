@@ -4,6 +4,7 @@
 // SIGUSR1. Darwin pulls <signal.h> in transitively through one of the headers
 // here; glibc does not, so on Linux every one of them was an implicit
 // declaration or an undeclared identifier. Ours to include, not theirs to leak.
+#include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include "kernel/task.h"
@@ -200,7 +201,29 @@ __thread sigjmp_buf unwind_buf;
 __thread bool should_unwind = false;
 __thread bool should_mark_wait_interrupted = false;
 
+// Set on a thread once signal_thread_locals_init() has instantiated the
+// __thread storage below, so the wake handlers can tell whether reading those
+// variables is safe *from a signal handler*. See the comment on
+// signal_thread_locals_init(); the key exists because a thread-specific-data
+// slot lives inside the pthread struct, so reading it neither allocates nor
+// takes a lock, while reading a not-yet-instantiated __thread variable does
+// both. A thread that never ran the init reads NULL here, which is exactly the
+// right answer: it has no task and nothing for a wake to interrupt.
+static pthread_key_t thread_locals_ready_key;
+__attribute__((constructor)) static void thread_locals_ready_key_init(void) {
+    // A constructor, not pthread_once from the handler: the key must already
+    // exist the first time any handler runs, and key 0 is a live slot on
+    // Darwin (it holds pthread_self), so an uncreated key would read non-NULL
+    // and defeat the whole check.
+    pthread_key_create(&thread_locals_ready_key, NULL);
+}
+static bool thread_locals_ready(void) {
+    return pthread_getspecific(thread_locals_ready_key) != NULL;
+}
+
 void sigusr1_handler(int UNUSED(sig)) {
+    if (!thread_locals_ready())
+        return;
     if (should_mark_wait_interrupted && current != NULL)
         __atomic_store_n(&current->wait_interrupted, true, __ATOMIC_RELEASE);
     if (should_unwind) {
@@ -225,20 +248,46 @@ void sigusr1_handler(int UNUSED(sig)) {
 // the guest's pending set -- they have to, since a spurious SIGUSR1 can already
 // produce the same EINTR today.
 void sigusr2_handler(int UNUSED(sig)) {
+    if (!thread_locals_ready())
+        return;
     if (should_mark_wait_interrupted && current != NULL)
         __atomic_store_n(&current->wait_interrupted, true, __ATOMIC_RELEASE);
 }
 
-// Force this thread's thread-local storage for everything sigusr1_handler
-// touches to be instantiated *now*, on a normal call stack where malloc is
-// safe. On Darwin the first access to a __thread variable is resolved lazily by
-// _tlv_get_addr, which malloc()s the per-thread TLV block. If SIGUSR1 is
-// delivered before that has happened, sigusr1_handler's own __thread access
-// re-enters malloc from async-signal context; if the interrupted code already
-// holds the (non-recursive) malloc lock, the process aborts in
-// _os_unfair_lock_recursive_abort. Every thread that unblocks SIGUSR1 must call
-// this first. Taking each variable's address forces _tlv_get_addr; the volatile
-// loads keep the compiler from eliding the accesses.
+// Force this thread's thread-local storage for everything the wake handlers
+// touch to be instantiated *now*, on a normal call stack where malloc is safe,
+// and then mark the thread ready so the handlers will actually read it.
+//
+// On Darwin the first access to a __thread variable is resolved lazily by
+// _tlv_get_addr, which malloc()s storage for it. If a wake signal is delivered
+// before that has happened, the handler's own __thread access re-enters malloc
+// from async-signal context; if the interrupted code already holds the
+// (non-recursive) malloc lock, the process aborts in
+// _os_unfair_lock_recursive_abort -- SIGKILL, no core, host exit 137, and on a
+// pipe not even the program's buffered output survives. Measured at roughly
+// one run in four of tests/manual/pidfd_epoll_deadlock.c, whose 200 rounds of
+// fork + 4 threads make guest task threads faster than they can be initialized;
+// every crash report was byte-for-byte this stack:
+//
+//   _os_unfair_lock_recursive_abort <- malloc <- _tlv_get_addr
+//     <- sigusr2_handler <- _sigtramp <- malloc <- _tlv_get_addr <- task_thread
+//
+// Blocking the wake signals until this has run (kernel/task.c task_start) is
+// necessary but NOT sufficient, and that was the hole: a task thread was
+// measured entering task_thread with SIGUSR2 already unblocked in about 2% of
+// creations, and others lost it from the mask later with no handler of ours
+// having run on them -- the same Darwin wake-mask weirdness that
+// signal_thread_unwedge_wake_sigs() below exists to repair. So the handlers
+// cannot assume the mask protected them; they check thread_locals_ready()
+// instead, which is true only once the instantiation below has finished.
+//
+// Taking each variable's address forces _tlv_get_addr; the volatile loads keep
+// the compiler from eliding the accesses. Every thread that runs guest work or
+// can be woken must call this, and it is idempotent so overlapping callers are
+// fine: task_thread and timer_thread do it at their own entry,
+// task_run_current() covers whichever thread ends up running init (the CLI's
+// main thread, the app's boot thread), kernel/init.c does it earlier still for
+// the CLI, and nlibc_thread_trampoline covers native-program threads.
 void signal_thread_locals_init(void) {
     volatile struct task *const *cur = (volatile struct task *const *) &current;
     volatile bool *unwind = &should_unwind;
@@ -248,6 +297,8 @@ void signal_thread_locals_init(void) {
     (void) *unwind;
     (void) *mark;
     (void) *buf;
+    // Last, and only after every one of them exists.
+    pthread_setspecific(thread_locals_ready_key, (void *) 1);
 }
 
 // Undo the "thread went permanently deaf to its wake poke" state.

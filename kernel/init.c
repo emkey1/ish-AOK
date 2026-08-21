@@ -17,6 +17,7 @@
 #include "kernel/personality.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
+#include "util/sync.h"
 
 int mount_root(const struct fs_ops *fs, const char *source) {
     char source_realpath[MAX_PATH + 1];
@@ -287,6 +288,12 @@ static struct task *construct_task(struct task *parent) {
 intptr_t become_first_process(void) {
     // now seems like a nice time
     establish_signal_handlers();
+    // This is the thread that will run init, so it takes wake pokes like any
+    // other guest task thread -- and it never went through task_thread, which
+    // is where every other one instantiates the storage the wake handlers
+    // read. Do it here, before a handler can be the first to touch it. See
+    // signal_thread_locals_init() in util/sync.c.
+    signal_thread_locals_init();
 
     list_init(&alive_pids_list);
     init_pending_queues(); // Initialize pending queus
