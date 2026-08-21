@@ -468,7 +468,7 @@ int run_guest_command_capture(const char *command, const char *env,
     size_t command_len = strlen(command);
     char *argv = malloc(sizeof(shell_path) + sizeof("-c") + command_len + 1 + 1);
     const char *envp = (env != NULL && env[0] != '\0') ? env
-        : "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
+        : "PATH=/AOK/persist/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
           "HOME=/root\0TERM=dumb\0";
     int launch_err = argv != NULL ? 0 : _ENOMEM;
     if (argv != NULL) {

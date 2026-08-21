@@ -105,7 +105,7 @@ static void configure_standalone_amd64_jit(void) {
 // kernel/init.c; TERM passes through from the host when set.
 static char *build_initial_envp(void) {
     static const char path_var[] =
-        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+        "PATH=/AOK/persist/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
     static const char home_var[] = "HOME=/root";
     const char *term = getenv("TERM");
     if (term == NULL)

@@ -520,7 +520,7 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
     NSArray<NSString *> *command = DisplayGuestSessionCommand();
     char argv[4096];
     [Terminal convertCommand:command toArgs:argv limitSize:sizeof(argv)];
-    const char *envp = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
+    const char *envp = "PATH=/AOK/persist/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
                         "HOME=/root\0"
                         "TERM=xterm\0";
     err = do_execve(command[0].UTF8String, command.count, argv, envp);

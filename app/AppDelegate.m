@@ -852,7 +852,7 @@ static NSData *BootEnvironmentForCommand(NSString *commandPath) {
         @"USER=root",
         @"LOGNAME=root",
         [NSString stringWithFormat:@"SHELL=%@", shell],
-        @"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        @"PATH=/AOK/persist/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         @"PS1=# ",
         @"COLUMNS=80",
         @"LINES=24",
@@ -2590,6 +2590,31 @@ static TerminalViewController *CreateTerminalViewController(void) {
             // layer by the app's own uid -- see MOUNT_ISH_SHARED_ (kernel/fs.h)
             // for why that means it needs to be forced world-writable rather
             // than relying on ordinary Unix ownership.
+            // bin/lib/etc, created empty on every launch so they are simply
+            // THERE to drop things into -- from the guest or from the Files
+            // app -- rather than something a user has to know to mkdir.
+            //
+            // /AOK/persist/bin is first on the default PATH (see the PATH in
+            // this file, main.c, DisplayViewController.m and kernel/init.c).
+            // Putting a user directory first is safe here in a way it is not
+            // for the SmallCLUE links: this one is EMPTY unless its owner puts
+            // something in it, so it shadows nothing by default.
+            //
+            // What makes it worth having: AOK selects the guest ABI from each
+            // ELF's own header, so an aarch64 binary runs under an i386 or
+            // riscv64 root just as happily -- verified. Combined with persist
+            // surviving root switches, a static binary dropped in here follows
+            // you across every rootfs you ever install.
+            for (NSString *sub in @[@"bin", @"lib", @"etc"]) {
+                NSURL *subURL = [aokPersistURL URLByAppendingPathComponent:sub isDirectory:YES];
+                NSError *subError = nil;
+                if (![NSFileManager.defaultManager createDirectoryAtURL:subURL
+                                           withIntermediateDirectories:YES
+                                                            attributes:nil
+                                                                 error:&subError] &&
+                        ![NSFileManager.defaultManager fileExistsAtPath:subURL.path])
+                    NSLog(@"Could not create /AOK/persist/%@: %@", sub, subError);
+            }
             FixSharedDirectoryPermissions(aokPersistURL.fileSystemRepresentation);
             int persistMountErr = do_mount(&realfs, aokPersistURL.fileSystemRepresentation, "/AOK/persist", "", MOUNT_ISH_SHARED_);
             if (persistMountErr >= 0)

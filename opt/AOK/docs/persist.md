@@ -32,9 +32,55 @@ same things. See [00-overview.md](00-overview.md) for where both sit.
 | `/AOK/persist/llm-extracts/` | Saved extracted content from the LLM assistant. |
 | `/AOK/persist/llm-prompts/` | User-editable prompt templates for the LLM assistant. |
 
+| `/AOK/persist/bin` | Your own programs. **First on the default `PATH`.** |
+| `/AOK/persist/lib` | Shared libraries for them, if they are not static. |
+| `/AOK/persist/etc` | Their configuration. |
+
 The MotePad text editor also treats `/AOK/persist` as its default starting
 directory whenever it's present, since it's the one location guaranteed
 not to disappear under it.
+
+## `bin`, `lib` and `etc`: programs that follow you between roots
+
+`bin`, `lib` and `etc` are created empty on every launch, so they are simply
+there to drop things into -- from the guest, or from the Files app. Nothing
+lives in them unless you put it there.
+
+`/AOK/persist/bin` comes **first** on the default `PATH`. That is safe in a way
+it would not be for a directory full of replacement commands, because this one
+is empty until you fill it: it shadows nothing by default, and anything it does
+shadow is something you chose to put there.
+
+What makes this more useful than a plain `~/bin` is that **it does not care
+which root you booted**, for two separate reasons:
+
+- `/AOK/persist` is one host-backed directory shared by every root, and it
+  survives root switches, app updates and reinstalls.
+- iSH-AOK picks the guest ABI from **each ELF's own header**, not from the
+  root. An `aarch64` binary runs under an i386 Alpine root or a riscv64 one
+  just as happily -- that is tested, not assumed.
+
+So a **statically linked aarch64 binary** dropped in `/AOK/persist/bin` works
+in every root you will ever install, and keeps working after you delete the one
+you built it in. That is the combination worth knowing about.
+
+    # from any arm64 root with a compiler, or cross-compiled on a Mac:
+    zig cc -target aarch64-linux-musl -static -O2 -o /AOK/persist/bin/mytool mytool.c
+
+**If it cannot be static**, put the libraries in `/AOK/persist/lib` and build
+the binary with an rpath so it finds them by itself:
+
+    zig cc -target aarch64-linux-musl -O2 -Wl,-rpath,/AOK/persist/lib \
+        -o /AOK/persist/bin/mytool mytool.c
+
+An rpath is used rather than a global `LD_LIBRARY_PATH` on purpose: that
+variable would be inherited by every process in every root, and would send the
+dynamic linker hunting through a directory of wrong-architecture libraries on
+every single exec. The rpath binds the lookup to the one binary that needs it.
+
+Two things this directory is host-backed and therefore cannot do: hold device
+nodes, or preserve Linux uid/gid and modes. If you need those, use
+`/AOK/fakefs`.
 
 There's nothing special about the directory beyond being a plain writable
 folder — feel free to keep your own dotfiles, scripts, or notes there if
