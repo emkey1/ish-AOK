@@ -148,8 +148,8 @@ static noreturn void cli_halt(int status) {
         jit_timing_dump();
     }
     {
-        extern void fakefs_lockstats_dump(void); // no-op unless ISH_FAKEFS_LOCKSTATS
-        fakefs_lockstats_dump();
+        extern void lockstats_dump(void); // no-op unless a lockstats knob is set
+        lockstats_dump();
     }
     // Deliberately NOT fflush(NULL). That walks every host stream and takes
     // each one's lock, and the shim gives a native program host FILEs for its
@@ -309,6 +309,10 @@ static void *quiesce_test_thread(void *arg) {
 }
 
 int main(int argc, char *const argv[]) {
+    // Before any lock is taken: the lock_t and wrlock_t hooks read this flag on
+    // every acquire, and a lock held from before it was armed would be dropped
+    // as an unmatched release.
+    lockstats_init();
     run_at_boot();
     configure_standalone_i386_safety(argc, argv);
     configure_standalone_amd64_jit();
@@ -376,11 +380,11 @@ int main(int argc, char *const argv[]) {
             jit_timing_stats_fd = fd;
     }
     // Same again for the fakefs lock stats.
-    if (getenv("ISH_FAKEFS_LOCKSTATS") != NULL) {
-        extern int fakefs_lockstats_fd;
+    if (getenv("ISH_FAKEFS_LOCKSTATS") != NULL || getenv("ISH_LOCKSTATS") != NULL) {
+        extern int lockstats_fd;
         int fd = dup(STDERR_FILENO);
         if (fd >= 0)
-            fakefs_lockstats_fd = fd;
+            lockstats_fd = fd;
     }
 
     char *envp = build_initial_envp();

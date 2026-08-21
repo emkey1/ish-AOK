@@ -44,6 +44,17 @@ extern lock_t atomic_l_lock; // Used to make lock state transitions atomic.
     .pid = -1, \
     .reference = { .lock = PTHREAD_MUTEX_INITIALIZER }, \
 }
+
+// Same, but carrying a name. Statically initialized locks otherwise have an
+// empty lname, which lockstats groups together as plain "lock" -- worth
+// spending on the ones whose contention anyone ever asks about.
+#define LOCK_INITIALIZER_NAMED(lock_name) { \
+    .m = PTHREAD_MUTEX_INITIALIZER, \
+    .cond = PTHREAD_COND_INITIALIZER, \
+    .pid = -1, \
+    .reference = { .lock = PTHREAD_MUTEX_INITIALIZER }, \
+    .lname = lock_name, \
+}
 #endif
 
 // conditions, implemented using pthread conditions but hacked so you can also
@@ -89,8 +100,17 @@ extern __thread bool should_mark_wait_interrupted;
 #define sigunwind_start() \
     ({ \
         int __sigunwind_result; \
+        /* volatile: read back on the siglongjmp branch, so it must survive */ \
+        volatile unsigned __sigunwind_frames = lockstats_depth; \
         if (sigsetjmp(unwind_buf, 1)) { \
             should_unwind = false; \
+            /* A siglongjmp abandons every lockstats frame opened since the \
+               setjmp -- nothing releases those locks through the hooks, so \
+               without this the stack grows until it is full and every later \
+               sample is dropped. It also made pids_lock report a 285% duty \
+               cycle on an exclusive mutex: abandoned frames from many \
+               threads overlapped in the totals. */ \
+            lockstats_depth = __sigunwind_frames; \
             __sigunwind_result = 1; \
         } else { \
             should_unwind = true; \

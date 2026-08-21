@@ -7,6 +7,8 @@
 #ifndef RW_LOCK_H
 #define RW_LOCK_H
 
+#include "util/lockstats.h"
+
 #include <strings.h>
 #include "misc.h"
 #include "debug.h"
@@ -67,6 +69,18 @@ static inline int trylockw(wrlock_t *lock);
 
 extern void _lock_destroy(wrlock_t *lock);
 
+// Read and write acquisitions of the same rwlock are separate groups: the read
+// side is shared (its duty cycle can legitimately exceed 100% -- that is the
+// point of a shared lock) while the write side is the barrier. Built on the
+// cold interning path only.
+static inline struct lock_site *rw_site(wrlock_t *lock, const char *fn, int is_write) {
+    char group[24];
+    snprintf(group, sizeof(group), "%s-%s",
+             lock->lname[0] ? lock->lname : "rwlock", is_write ? "wr" : "rd");
+    return lockstats_site(group, fn);
+}
+
+
 static inline void _read_unlock(wrlock_t *lock, const char *file, int line) {
     pthread_mutex_lock(&lock->m);
     int old_val = atomic_load_explicit(&lock->val, memory_order_relaxed);
@@ -106,7 +120,13 @@ static inline void _read_unlock(wrlock_t *lock, const char *file, int line) {
     pthread_mutex_unlock(&lock->m);
 }
 
-#define read_unlock(lock) _read_unlock(lock, __FILE__, __LINE__)
+#define read_unlock(l) do {                                                  \
+    uint64_t _ls_t = lockstats_on ? lockstats_now() : 0;                      \
+    _read_unlock((l), __FILE__, __LINE__);                                    \
+    if (lockstats_on)                                                         \
+        lockstats_account_named((l), _ls_t,                                   \
+                (l)->lname[0] ? (l)->lname : "rwlock");                       \
+} while (0)
 
 static inline void _write_unlock(wrlock_t *lock) {
     pthread_mutex_lock(&lock->m);
@@ -124,10 +144,13 @@ static inline void _write_unlock(wrlock_t *lock) {
     pthread_mutex_unlock(&lock->m);
 }
 
-static inline void write_unlock(wrlock_t *lock) { // Wrapper so external calls take the meta-lock.
-    _write_unlock(lock);
-    return;
-}
+#define write_unlock(l) do {                                                 \
+    uint64_t _ls_t = lockstats_on ? lockstats_now() : 0;                      \
+    _write_unlock((l));                                                       \
+    if (lockstats_on)                                                         \
+        lockstats_account_named((l), _ls_t,                                   \
+                (l)->lname[0] ? (l)->lname : "rwlock");                       \
+} while (0)
 
 // Blocking acquire under the hand-rolled state machine. Writer-preferring
 // (matches the old Darwin PTHREAD_RWLOCK_PREFER_WRITER / writer-intent
@@ -177,7 +200,16 @@ static inline void _read_lock(wrlock_t *lock, const char *file, int line) {
     pthread_mutex_unlock(&lock->m);
 }
 
-#define read_lock(lock) _read_lock(lock, __FILE__, __LINE__)
+#define read_lock(l) do {                                                    \
+    static struct lock_site *_ls_site;                                        \
+    uint64_t _ls_t0 = lockstats_on ? lockstats_now() : 0;                     \
+    _read_lock((l), __FILE__, __LINE__);                                      \
+    if (lockstats_on) {                                                       \
+        if (_ls_site == NULL)                                                 \
+            _ls_site = rw_site((l), __func__, 0);                             \
+        lockstats_held(_ls_site, (l), _ls_t0);                                \
+    }                                                                         \
+} while (0)
 
 
 static inline void _write_lock(wrlock_t *lock) { // Write lock
@@ -186,9 +218,16 @@ static inline void _write_lock(wrlock_t *lock) { // Write lock
     pthread_mutex_unlock(&lock->m);
 }
 
-static inline void write_lock(wrlock_t *lock) {
-    _write_lock(lock);
-}
+#define write_lock(l) do {                                                   \
+    static struct lock_site *_ls_site;                                        \
+    uint64_t _ls_t0 = lockstats_on ? lockstats_now() : 0;                     \
+    _write_lock((l));                                                         \
+    if (lockstats_on) {                                                       \
+        if (_ls_site == NULL)                                                 \
+            _ls_site = rw_site((l), __func__, 1);                             \
+        lockstats_held(_ls_site, (l), _ls_t0);                                \
+    }                                                                         \
+} while (0)
 
 
 static inline void read_to_write_lock(wrlock_t *lock) {  // Atomically swap a read lock to a write lock.
@@ -216,7 +255,14 @@ static inline void write_to_read_lock(wrlock_t *lock) { // Atomically swap a wri
 }
 
 static inline void write_unlock_and_destroy(wrlock_t *lock) {
+    // Accounts before the destroy: this is a release like any other, and
+    // skipping it leaks the frame permanently (mem_destroy is the one caller,
+    // so every address-space teardown used to leave one behind until the
+    // thread's frame stack filled and every later sample was dropped).
+    uint64_t _ls_t = lockstats_on ? lockstats_now() : 0;
     _write_unlock(lock);
+    if (lockstats_on)
+        lockstats_account_named(lock, _ls_t, lock->lname[0] ? lock->lname : "rwlock");
     _lock_destroy(lock);
 }
 
@@ -231,6 +277,8 @@ static inline int trylockw(wrlock_t *lock) {
     }
     atomic_store_explicit(&lock->val, -1, memory_order_relaxed);
     pthread_mutex_unlock(&lock->m);
+    if (lockstats_on)
+        lockstats_held(rw_site(lock, "trylockw", 1), lock, lockstats_now());
     return 0;
 }
 
@@ -253,6 +301,8 @@ static inline int _trylockr(wrlock_t *lock, const char *file, int line) {
     (void) line;
 #endif
     pthread_mutex_unlock(&lock->m);
+    if (lockstats_on)
+        lockstats_held(rw_site(lock, "trylockr", 0), lock, lockstats_now());
     return 0;
 }
 

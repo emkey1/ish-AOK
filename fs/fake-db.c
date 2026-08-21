@@ -111,7 +111,7 @@ void fakefs_quiesce_end(void) {
 // connection (which the fallback path shares between threads).
 static _Thread_local bool txn_exclusive;
 
-static void db_begin_locked(struct fakefs_db *fs, struct fakefs_lock_site *site, bool exclusive) {
+static void db_begin_locked(struct fakefs_db *fs, struct lock_site *site, bool exclusive) {
     transaction_enter();
     txn_exclusive = exclusive;
     // A read transaction on a pooled connection touches nothing shared: its own
@@ -119,40 +119,40 @@ static void db_begin_locked(struct fakefs_db *fs, struct fakefs_lock_site *site,
     // mutex, and only against each other.
     if (!exclusive && fs->shared != NULL) {
         if (fakefs_lockstats_on)
-            fakefs_lockstats_held(site, fakefs_lockstats_now());
+            lockstats_held(site, fs, lockstats_now());
         return;
     }
     if (!fakefs_lockstats_on) {
         sqlite3_mutex_enter(fs->lock);
         return;
     }
-    uint64_t t0 = fakefs_lockstats_now();
+    uint64_t t0 = lockstats_now();
     sqlite3_mutex_enter(fs->lock);
-    fakefs_lockstats_held(site, t0);
+    lockstats_held(site, fs, t0);
 }
 
 // Release + account, keeping every atomic outside the critical section.
 static void db_end_locked(struct fakefs_db *fs, bool exclusive) {
     if (!exclusive && fs->shared != NULL) {
         if (fakefs_lockstats_on)
-            fakefs_lockstats_account(fakefs_lockstats_now());
+            lockstats_account(fs, lockstats_now());
         return;
     }
     if (!fakefs_lockstats_on) {
         sqlite3_mutex_leave(fs->lock);
         return;
     }
-    uint64_t t2 = fakefs_lockstats_now();
+    uint64_t t2 = lockstats_now();
     sqlite3_mutex_leave(fs->lock);
-    fakefs_lockstats_account(t2);
+    lockstats_account(fs, t2);
 }
 
-void db_begin_read_at(struct fakefs_db *fs, struct fakefs_lock_site *site) {
+void db_begin_read_at(struct fakefs_db *fs, struct lock_site *site) {
     db_begin_locked(fs, site, false);
     db_exec_reset(fs, fs->stmt.begin_deferred);
 }
 
-void db_begin_write_at(struct fakefs_db *fs, struct fakefs_lock_site *site) {
+void db_begin_write_at(struct fakefs_db *fs, struct lock_site *site) {
     db_begin_locked(fs, site, true);
     db_exec_reset(fs, fs->stmt.begin_immediate);
 }
@@ -462,7 +462,7 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     // transaction -- and from here rather than main.c so the app build gets
     // the same knob as the CLI.
     static pthread_once_t lockstats_once = PTHREAD_ONCE_INIT;
-    pthread_once(&lockstats_once, fakefs_lockstats_init);
+    pthread_once(&lockstats_once, lockstats_init);
     int err = sqlite3_open_v2(db_path, &fs->db, SQLITE_OPEN_READWRITE, NULL);
     if (err != SQLITE_OK) {
         printk("ERROR: sqlite3 opening database: %s\n", sqlite3_errmsg(fs->db));

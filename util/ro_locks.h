@@ -10,6 +10,7 @@
 #include <strings.h>
 #include <string.h>
 #include "misc.h"
+#include "util/lockstats.h"
 #include "debug.h"
 #include "kernel/errno.h"
 #include "kernel/log.h"
@@ -50,8 +51,17 @@ extern bool doEnableExtraLocking;
 
 void lock_init(lock_t *lock, char lname[16]);
 
+// Locks initialized with LOCK_INITIALIZER have an all-zero lname; those get
+// bucketed together, which is fine because the call site still separates them.
+static inline const char *lock_group_name(lock_t *lock) {
+    return lock->lname[0] != '\0' ? lock->lname : "lock";
+}
+
+
 static inline void unlock(lock_t *lock) {
     //pid_t pid = current_pid();
+    // Sampled before the release, accounted after it: see util/lockstats.h.
+    uint64_t _ls_t = lockstats_on ? lockstats_now() : 0;
 
     lock->owner = zero_init(pthread_t);
     lock->pid = -1; //
@@ -63,6 +73,8 @@ static inline void unlock(lock_t *lock) {
   */
     modify_locks_held_count(current, -1);
     pthread_mutex_unlock(&lock->m);
+    if (lockstats_on)
+        lockstats_account_named(lock, _ls_t, lock_group_name(lock));
     
 #if LOCK_DEBUG
     assert(lock->debug.initialized);
@@ -72,8 +84,15 @@ static inline void unlock(lock_t *lock) {
     return;
 }
 
-static inline void mylock(lock_t *lock, int log_lock) {
+// Locks initialized with LOCK_INITIALIZER have an all-zero lname; those get
+// bucketed together, which is fine because the call site still separates them.
+// The instrumented form is a macro so the call site's function name can be
+// baked in; mylock_at is what it expands to. See util/lockstats.h.
+static inline void mylock_at(lock_t *lock, int log_lock, struct lock_site *site) {
+    uint64_t _ls_t0 = (site != NULL) ? lockstats_now() : 0;
     pthread_mutex_lock(&lock->m);
+    if (site != NULL)
+        lockstats_held(site, lock, _ls_t0);
     if(!log_lock) {
         modify_locks_held_count(current, 1);
     }
@@ -86,6 +105,10 @@ static inline void mylock(lock_t *lock, int log_lock) {
         strncpy(lock->comm, current_comm(current), 16);
     } */
     return;
+}
+
+static inline void mylock(lock_t *lock, int log_lock) {
+    mylock_at(lock, log_lock, NULL);
 }
 
 #define LOCK_TIMEOUT_SECONDS 5
@@ -114,7 +137,11 @@ static inline int mylock_with_timeout(lock_t *lock, int UNUSED(log_lock)) {
     return 0; // Success
 }
 
+// Not a macro, so this one is attributed to itself rather than to its caller.
+// It still has to push a frame: unlock() is instrumented and would otherwise
+// count every release from here as unmatched.
 static inline void complex_lockt(lock_t *lock, int log_lock) {
+    uint64_t _ls_t0 = lockstats_on ? lockstats_now() : 0;
     struct timespec start = {};
     struct timespec end = {};
     bool contended = pthread_mutex_trylock(&lock->m) != 0;
@@ -134,6 +161,8 @@ static inline void complex_lockt(lock_t *lock, int log_lock) {
 
     lock->owner = pthread_self();
     lock->comm[sizeof(lock->comm) - 1] = '\0';  // Null-terminate just in case
+    if (lockstats_on)
+        lockstats_held(lockstats_site(lock_group_name(lock), "complex_lockt"), lock, _ls_t0);
 }
 
 static inline int trylock(lock_t *lock) {
@@ -150,6 +179,12 @@ static inline int trylock(lock_t *lock) {
         modify_locks_held_count(current, 1);
         lock->owner = pthread_self();
         lock->comm[sizeof(lock->comm) - 1] = '\0';
+        // A successful trylock is an acquire like any other; without a frame
+        // its unlock() shows up as an unmatched release and its hold time is
+        // simply lost.
+        if (lockstats_on)
+            lockstats_held(lockstats_site(lock_group_name(lock), "trylock"),
+                           lock, lockstats_now());
     }
     return status;
 }
@@ -179,7 +214,12 @@ static inline int trylocknl(lock_t *lock, char *comm, int pid) {
 //#define complex_lockt(lock, log_lock) mylock_with_timeout(lock, log_lock)  // Lets try simplifying locking for now
 //#define complex_lockt(lock, log_lock) mylock(lock, log_lock)  // Lets try simplifying locking for now
 
-#define lock(lock, log_lock) mylock(lock, log_lock)
+#define lock(l, log_lock) do {                                               \
+    static struct lock_site *_ls_site;                                        \
+    if (lockstats_on && _ls_site == NULL)                                     \
+        _ls_site = lockstats_site(lock_group_name(l), __func__);              \
+    mylock_at((l), (log_lock), lockstats_on ? _ls_site : NULL);               \
+} while (0)
 //#define lock(lock, log_lock) mylock_with_timeout(lock, log_lock)
 //#define trylock(lock) trylock(lock, __FILE__, __LINE__)
 //#define trylocknl(lock, comm, pid) trylocknl(lock, comm, pid, __FILE__, __LINE__)

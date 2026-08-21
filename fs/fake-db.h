@@ -71,10 +71,10 @@ void fake_db_close_conn(struct fakefs_db *conn);
 #define FAKEFS_LOCK_READ(fs) do {                                             \
     if ((fs)->shared != NULL) {                                               \
         if (fakefs_lockstats_on) {                                            \
-            static struct fakefs_lock_site *_flr_site;                        \
+            static struct lock_site *_flr_site;                               \
             if (_flr_site == NULL)                                            \
-                _flr_site = fakefs_lockstats_site(__func__);                  \
-            fakefs_lockstats_held(_flr_site, fakefs_lockstats_now());         \
+                _flr_site = lockstats_site("fakefs", __func__);               \
+            lockstats_held(_flr_site, (fs), lockstats_now());                 \
         }                                                                     \
         break;                                                                \
     }                                                                         \
@@ -84,7 +84,7 @@ void fake_db_close_conn(struct fakefs_db *conn);
 #define FAKEFS_UNLOCK_READ(fs) do {                                           \
     if ((fs)->shared != NULL) {                                              \
         if (fakefs_lockstats_on)                                              \
-            fakefs_lockstats_account(fakefs_lockstats_now());                 \
+            lockstats_account((fs), lockstats_now());                         \
         break;                                                                \
     }                                                                         \
     FAKEFS_UNLOCK(fs);                                                        \
@@ -103,15 +103,15 @@ int fake_db_create_schema(const char *db_path);
 // A transaction holds fs->lock from begin to commit/rollback. The macros exist
 // only so ISH_FAKEFS_LOCKSTATS can attribute the hold to the fakefs entry point
 // that opened it (fakefs_stat, fakefs_unlink, ...) rather than to db_begin_*.
-void db_begin_read_at(struct fakefs_db *fs, struct fakefs_lock_site *site);
-void db_begin_write_at(struct fakefs_db *fs, struct fakefs_lock_site *site);
+void db_begin_read_at(struct fakefs_db *fs, struct lock_site *site);
+void db_begin_write_at(struct fakefs_db *fs, struct lock_site *site);
 void db_commit(struct fakefs_db *fs);
 void db_rollback(struct fakefs_db *fs);
 
 #define FAKEFS_DB_BEGIN(fs, which) do {                                       \
-    static struct fakefs_lock_site *_fls_txn;                                 \
+    static struct lock_site *_fls_txn;                                 \
     if (fakefs_lockstats_on && _fls_txn == NULL)                              \
-        _fls_txn = fakefs_lockstats_site(__func__);                           \
+        _fls_txn = lockstats_site("fakefs", __func__);                        \
     which((fs), _fls_txn);                                                    \
 } while (0)
 #define db_begin_read(fs) FAKEFS_DB_BEGIN(fs, db_begin_read_at)

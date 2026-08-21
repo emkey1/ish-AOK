@@ -4,7 +4,7 @@
 #include "fs/inode.h"
 #include "debug.h"
 
-lock_t inodes_lock = LOCK_INITIALIZER;
+lock_t inodes_lock = LOCK_INITIALIZER_NAMED("inodes");
 #define INODES_HASH_SIZE (1 << 10)
 static struct list inodes_hash[INODES_HASH_SIZE];
 
