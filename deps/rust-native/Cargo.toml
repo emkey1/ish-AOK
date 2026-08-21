@@ -24,7 +24,13 @@ tokio-probe = ["dep:tokio"]
 # helix. Off by default and gated again in meson (-Dnative_helix), because it
 # is MPL-2.0 and tens of megabytes.
 helix = ["dep:tokio", "dep:anyhow", "dep:log",
-         "dep:helix-term", "dep:helix-core", "dep:helix-loader", "dep:helix-stdx"]
+         "dep:helix-term", "dep:helix-core", "dep:helix-loader", "dep:helix-stdx",
+         "dep:tree-house", "dep:tree-house-bindings", "dep:tree-sitter-language",
+         "dep:tree-sitter-rust", "dep:tree-sitter-c", "dep:tree-sitter-python",
+         "dep:tree-sitter-json", "dep:tree-sitter-bash", "dep:tree-sitter-go",
+         "dep:tree-sitter-javascript", "dep:tree-sitter-html", "dep:tree-sitter-css",
+         "dep:tree-sitter-lua", "dep:tree-sitter-md", "dep:tree-sitter-toml-ng",
+         "dep:tree-sitter-yaml", "dep:tree-sitter-diff", "dep:tree-sitter-make"]
 
 [dependencies]
 tokio = { version = "1", optional = true, features = ["rt", "rt-multi-thread", "macros", "time", "process", "io-util", "net", "sync"] }
@@ -34,6 +40,39 @@ helix-term = { path = "../helix/helix-term", optional = true }
 helix-core = { path = "../helix/helix-core", optional = true }
 helix-loader = { path = "../helix/helix-loader", optional = true }
 helix-stdx = { path = "../helix/helix-stdx", optional = true }
+
+# Grammars linked in rather than opened at runtime. iOS will not dlopen code
+# that is not signed into the app bundle, and dyld could not see a file inside
+# fakefs even if it would -- so helix's shared-library grammars can never load
+# here. tree-house-bindings has the static path already:
+# `impl TryFrom<LanguageFn> for Grammar`, behind a feature its parent does not
+# forward, so it is depended on directly and cargo unions the feature onto the
+# copy helix already uses.
+tree-house = { version = "0.4", default-features = false, optional = true }
+tree-house-bindings = { version = "0.3", features = ["tree-sitter-language"], optional = true }
+tree-sitter-language = { version = "0.1", optional = true }
+# The languages a phone or tablet is plausibly used to edit. Not the whole of
+# helix's languages.toml -- that is two hundred grammars, and each one is
+# megabytes of generated C compiled into the app rather than a file fetched on
+# demand. Adding one is two lines: here, and an arm in static_grammar().
+#
+# C++ is deliberately absent: its grammar alone is larger than the rest of this
+# list together, and a build that wants it can say so.
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-c = { version = "0.24", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-json = { version = "0.24", optional = true }
+tree-sitter-bash = { version = "0.25", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-html = { version = "0.23", optional = true }
+tree-sitter-css = { version = "0.25", optional = true }
+tree-sitter-lua = { version = "0.5", optional = true }
+tree-sitter-md = { version = "0.5", optional = true }
+tree-sitter-toml-ng = { version = "0.7", optional = true }
+tree-sitter-yaml = { version = "0.7", optional = true }
+tree-sitter-diff = { version = "0.1", optional = true }
+tree-sitter-make = { version = "1.1", optional = true }
 
 [profile.release]
 opt-level = "z"

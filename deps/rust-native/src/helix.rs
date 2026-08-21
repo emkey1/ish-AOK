@@ -12,6 +12,8 @@ use helix_term::application::Application;
 use helix_term::args::Args;
 use helix_term::config::{Config, ConfigLoadError};
 use std::ffi::{c_char, c_int};
+use tree_house::tree_sitter::Grammar;
+use tree_sitter_language::LanguageFn;
 
 fn setup_logging(verbosity: u64) -> Result<()> {
     let level = match verbosity {
@@ -24,7 +26,61 @@ fn setup_logging(verbosity: u64) -> Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------- grammars
+//
+// helix normally opens a grammar as a shared library at runtime. Here it
+// cannot: iOS refuses to load code that is not signed into the app bundle, and
+// the file would live inside fakefs where the system loader cannot see it
+// anyway. So the grammars are LINKED IN, and this table is what helix asks
+// instead -- see helix_loader::grammar::set_static_grammars, and the
+// `impl TryFrom<LanguageFn> for Grammar` that tree-house-bindings already had.
+//
+// A name that is not here returns None, and helix falls through to the shared
+// library exactly as before -- which simply will not be found, so that
+// language goes unhighlighted rather than failing.
+//
+// Adding a language is two lines: the crate in Cargo.toml, and its arm here.
+// It also needs its queries under the runtime directory, which is what carries
+// the highlight rules; a grammar with no queries parses and colours nothing.
+fn static_grammar(name: &str) -> Option<Grammar> {
+    // The names are helix's, from languages.toml -- `grammar = "..."` where it
+    // differs from the language name, which is why markdown appears twice and
+    // typescript's grammar is javascript's.
+    let language: LanguageFn = match name {
+        "rust" => tree_sitter_rust::LANGUAGE,
+        "c" => tree_sitter_c::LANGUAGE,
+        "python" => tree_sitter_python::LANGUAGE,
+        "json" => tree_sitter_json::LANGUAGE,
+        "bash" => tree_sitter_bash::LANGUAGE,
+        "go" => tree_sitter_go::LANGUAGE,
+        "javascript" => tree_sitter_javascript::LANGUAGE,
+        "html" => tree_sitter_html::LANGUAGE,
+        "css" => tree_sitter_css::LANGUAGE,
+        "lua" => tree_sitter_lua::LANGUAGE,
+        "markdown" => tree_sitter_md::LANGUAGE,
+        "markdown_inline" => tree_sitter_md::INLINE_LANGUAGE,
+        "toml" => tree_sitter_toml_ng::LANGUAGE,
+        "yaml" => tree_sitter_yaml::LANGUAGE,
+        "diff" => tree_sitter_diff::LANGUAGE,
+        "make" => tree_sitter_make::LANGUAGE,
+        _ => return None,
+    };
+    match Grammar::try_from(language) {
+        Ok(grammar) => Some(grammar),
+        Err(err) => {
+            // An ABI mismatch between the grammar crate and tree-house is the
+            // one thing that can go wrong here, and silently dropping to "no
+            // highlighting for this language" would hide it.
+            eprintln!("hx: built-in grammar {name} is unusable: {err}");
+            None
+        }
+    }
+}
+
 async fn run() -> Result<i32> {
+    // Before anything reads a language configuration.
+    helix_loader::grammar::set_static_grammars(static_grammar);
+
     let args = Args::parse_args().context("could not parse arguments")?;
 
     helix_loader::initialize_config_file(args.config_file.clone());

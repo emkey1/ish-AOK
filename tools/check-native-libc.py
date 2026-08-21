@@ -383,6 +383,19 @@ INTERNAL = {
     # yet. It is written down so that it is a known gap with somewhere to hang
     # the fix, which is precisely what it was not while "__" hid it.
     "__mb_cur_max",
+    # The same gap as __mb_cur_max, reached the same way. Darwin's <ctype.h>
+    # defines tolower()/toupper() as macros over these, and it does so AFTER
+    # the shim header has been force-included -- so its own redirect, if there
+    # were one, would be overridden by the system header rather than the other
+    # way round. They consult the HOST's locale table, which for a native
+    # program is the app's.
+    #
+    # Bounded, and in the one caller that reaches them it does not bite at all:
+    # tree-sitter's grammar scanners use them to fold ASCII keywords, and ASCII
+    # case is the same answer in every locale. Written down rather than
+    # allowed silently, so that a caller who does depend on the locale has
+    # somewhere to find out why it was wrong.
+    "__tolower", "__toupper",
 }
 
 # Provided by AOK itself, by the shim, or by the program.

@@ -93,15 +93,14 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rust-native.XXXXXX")
 trap 'rm -rf "$work"' EXIT INT TERM
 abs_staticlib=$(cd "$(dirname "$staticlib")" && pwd)/$(basename "$staticlib")
 
-dupes=$(ar t "$abs_staticlib" | sort | uniq -d)
-if [ -n "$dupes" ]; then
-    # ar x would silently keep only the last of each name.
-    echo "build-rust-native: the archive has members with duplicate names:" >&2
-    printf '    %s\n' $dupes >&2
-    exit 1
-fi
-
-(cd "$work" && ar x "$abs_staticlib")
+# tools/ar-extract.py rather than `ar x`, because members really do share
+# names and `ar x` keeps only one of each -- silently, leaving the link short a
+# translation unit it will not miss until something calls into it. With the
+# fifteen tree-sitter grammars linked in there are TWELVE members called
+# parser.o, so this is not a hypothetical: eleven grammars would have gone
+# missing and every file of those languages would simply not have highlighted.
+extracted=$(python3 "$repo_root/tools/ar-extract.py" "$abs_staticlib" "$work")
+echo "build-rust-native: $extracted object(s) from $(basename "$abs_staticlib")" >&2
 merged="$work/merged.o"
 # clang, not ld: it supplies -platform_version from the triple, which bare
 # `ld -r` refuses to go without. -sdk keeps the iOS build off the macOS
