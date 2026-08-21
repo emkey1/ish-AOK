@@ -10,6 +10,68 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### Linux native AIO is a stub, and MariaDB dies on it
+
+`apt install mariadb-server` leaves the server looping in startup. It is not a
+hang, it is a crash loop -- pids climbing 1591, 1772, 1774, 1877 -- and the log
+names the cause exactly:
+
+    ERROR: 1591(mariadbd) arm64 stub syscall 0 x0=0x800 x1=0xffff8d70
+    ERROR: 1591(mariadbd) [arm64] page fault on 0 at 0x7fffbc8e185c (read)
+
+arm64 syscall 0 is `io_setup`, x0=0x800 is 2048 events. kernel/calls.c has the
+whole io_* family as syscall_stub, which returns ENOSYS. MariaDB 11.8's thread
+pool does not fall back: create_linux_aio() returns nullptr and the caller
+dereferences it. The faulting opcodes are that, precisely --
+
+    f942c403  ldr x3, [x0, #0x588]   ; load the aio member
+    f9400062  ldr x2, [x3]           ; read its vtable -- x3 is 0
+
+**Worked around, not fixed.** innodb_use_native_aio=0 in a drop-in under
+/etc/mysql/mariadb.conf.d/ stops the crash: verified on device, pids went from
+climbing to stable. That belongs in /AOK/fixes the way the pacman Landlock fix
+does, so a user hits it once rather than debugging it.
+
+**What implementing it actually takes**, having checked the two things that
+decide the size:
+
+  - eventfd already exists (sys_eventfd, sys_eventfd2), and it is what MariaDB's
+    tpool uses for completion notification via IOCB_FLAG_RESFD. That half is
+    free.
+  - mariadbd links libaio.so.1t64, so the userspace ring fast path is in play:
+    libaio's io_getevents reads `struct aio_ring` at the context address and
+    only makes the syscall when the ring looks wrong. That sounds like it
+    forces a real shared ring, and it does not -- aio_ring_is_empty() bails out
+    unless ring->magic == AIO_RING_MAGIC. So io_setup can hand back one zeroed
+    guest page and every libaio caller takes the syscall path by construction.
+    That is the difference between a full ring implementation and a
+    syscall-only one.
+
+So, syscall-only:
+
+    io_setup      allocate a zeroed guest page, register a context keyed by
+                  that address, return it                       ~120 lines
+    io_submit     marshal N iocbs from guest memory, queue them  ~200 lines
+    execution     a worker per context doing pread/pwrite/fsync
+                  through the existing fd ops                    (in the above)
+    io_getevents  min_nr and timeout semantics, copy events out  ~120 lines
+    io_destroy    drain, free, unmap                             ~60 lines
+    io_cancel     EINVAL, which is what Linux mostly does anyway ~20 lines
+    marshalling   struct iocb and struct io_event, 32- and
+                  64-bit, across i386/amd64/arm64/riscv64        ~150 lines
+    a tier0 test  read, write, fsync, eventfd notification       ~200 lines
+
+Call it 700-900 lines including the test. A day of focused work plus device
+validation. The concurrency is self-contained -- one queue per context, no
+interaction with the mem or JIT locks -- so the risk is in the ABI structs
+rather than the locking, which is the good way round.
+
+**Worth more than MariaDB.** nginx's aio, PostgreSQL's io_method=aio, RocksDB
+and anything else that assumes native AIO exists on Linux hit the same stub,
+and each one fails in its own way -- MariaDB's is a null dereference, which is
+the worst kind because it looks like a hang rather than an unimplemented call.
+
+
 ### SmallCLUE's pager wedges apt, and is excluded rather than fixed
 
 `apt search maria` hung the whole app, every time, on device. Removing
