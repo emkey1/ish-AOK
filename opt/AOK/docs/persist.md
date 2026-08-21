@@ -189,9 +189,10 @@ and `--list` names them:
 
 `--remove` takes back only symlinks that actually resolve into
 `/AOK/persist/bin`, so a real file of yours that happens to share a name with
-one of your tools is never touched. Anything in `bin` that is not executable is
-skipped rather than linked, so a config file or a note kept alongside your
-programs does not become a command.
+one of your tools is never touched. `--list` applies to a removal too:
+`--list --remove` names every link it would take back and takes back none.
+Anything in `bin` that is not executable is skipped rather than linked, so a
+config file or a note kept alongside your programs does not become a command.
 
 This is a different job from [`native-links.sh`](native-setup.md), which links
 the app's own [native programs](native-programs.md) and can shadow your distro's

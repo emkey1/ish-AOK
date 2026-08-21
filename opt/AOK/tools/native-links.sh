@@ -96,7 +96,12 @@ PROGRAMS_EXCLUDED="smallclue rust-probe zsh-multio"
 # binary, switch to zsh instead of silently switching nothing.
 SHELL_WANT=
 TARGET_DIR=/usr/local/native-bin
-MODE=link
+# MODE is what the run is FOR; DRY_RUN is whether it touches anything. Two
+# variables rather than one, so --list composes with --remove instead of
+# racing it: `--list --remove` prints what a removal would take back and takes
+# nothing back. Held in one variable, the last flag simply won.
+MODE=link          # link | remove
+DRY_RUN=0          # --list: print, change nothing, in either mode
 INCLUDE_ALL=0
 FORCE=0
 DO_SHELL=1
@@ -328,7 +333,7 @@ usage() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --list) MODE=list ;;
+        --list) DRY_RUN=1 ;;
         --remove) MODE=remove ;;
         --all) INCLUDE_ALL=1 ;;
         --force) FORCE=1 ;;
@@ -429,27 +434,35 @@ apply_path() {
     zfile=$(zsh_path_file)
     if [ "$MODE" = remove ]; then
         if [ -f "$PATH_FILE" ]; then
-            rm -f "$PATH_FILE"
-            echo "  removed $PATH_FILE (PATH reverts at next login)"
+            if [ "$DRY_RUN" -eq 1 ]; then
+                echo "  would remove $PATH_FILE (PATH reverts at next login)"
+            else
+                rm -f "$PATH_FILE"
+                echo "  removed $PATH_FILE (PATH reverts at next login)"
+            fi
         fi
         # Only ever the block this script wrote: the file may be the distro's.
         if zsh_block_present "$zfile"; then
-            tmp=$zfile.aok.$$
-            skip=0
-            while IFS= read -r zline || [ -n "$zline" ]; do
-                case "$zline" in
-                    "$ZSH_MARK_BEGIN") skip=1; continue ;;
-                    "$ZSH_MARK_END")   skip=0; continue ;;
-                esac
-                [ "$skip" -eq 1 ] || printf '%s\n' "$zline"
-            done < "$zfile" > "$tmp" && mv "$tmp" "$zfile"
-            # A file left empty was one this script created.
-            [ -s "$zfile" ] || rm -f "$zfile"
-            echo "  removed the PATH block from $zfile"
+            if [ "$DRY_RUN" -eq 1 ]; then
+                echo "  would remove the PATH block from $zfile"
+            else
+                tmp=$zfile.aok.$$
+                skip=0
+                while IFS= read -r zline || [ -n "$zline" ]; do
+                    case "$zline" in
+                        "$ZSH_MARK_BEGIN") skip=1; continue ;;
+                        "$ZSH_MARK_END")   skip=0; continue ;;
+                    esac
+                    [ "$skip" -eq 1 ] || printf '%s\n' "$zline"
+                done < "$zfile" > "$tmp" && mv "$tmp" "$zfile"
+                # A file left empty was one this script created.
+                [ -s "$zfile" ] || rm -f "$zfile"
+                echo "  removed the PATH block from $zfile"
+            fi
         fi
         return 0
     fi
-    if [ "$MODE" = list ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
         [ -f "$PATH_FILE" ] && echo "  $PATH_FILE already present" \
                             || echo "  would put $TARGET_DIR first on PATH via $PATH_FILE"
         if zsh_block_present "$zfile"; then
@@ -519,10 +532,14 @@ apply_shell() {
         [ -n "$prev" ] || { echo "  saved shell for $user is empty; leaving $cur alone"; return 0; }
         if [ "$cur" = "$prev" ]; then
             echo "  $user already uses $prev"
+        elif [ "$DRY_RUN" -eq 1 ]; then
+            echo "  would restore $user's shell: $cur -> $prev"
         elif set_uid1000_shell "$prev"; then
             echo "  restored $user's shell: $cur -> $prev"
         fi
-        rm -f "$SHELL_STATE"
+        # The saved shell is what a real --remove consumes; a preview must
+        # leave it behind or the run that follows has nothing to restore from.
+        [ "$DRY_RUN" -eq 1 ] || rm -f "$SHELL_STATE"
         return 0
     fi
 
@@ -536,7 +553,7 @@ apply_shell() {
         echo "  $NATIVE_SHELL not present; leaving $user's shell as $cur" >&2
         return 0
     fi
-    if [ "$MODE" = list ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
         echo "  would set $user's shell: $cur -> $NATIVE_SHELL"
         return 0
     fi
@@ -576,10 +593,18 @@ if [ "$MODE" = remove ]; then
         # it: link_is_native compares what the paths resolve to, using the
         # shell alone, and covers the standalone programs as well as SmallCLUE.
         link_is_native "$f" || continue
-        rm -f "$f"
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "  would unlink $f"
+        else
+            rm -f "$f"
+        fi
         removed=$((removed + 1))
     done
-    echo "removed $removed link(s) from $TARGET_DIR"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "would remove $removed link(s) from $TARGET_DIR"
+    else
+        echo "removed $removed link(s) from $TARGET_DIR"
+    fi
     [ "$DO_PATH" -eq 1 ] && apply_path
     [ "$DO_SHELL" -eq 1 ] && apply_shell
     exit 0
@@ -608,7 +633,7 @@ if [ -z "$APPLETS" ]; then
     exit 1
 fi
 
-[ "$MODE" = list ] || mkdir -p "$TARGET_DIR"
+[ "$DRY_RUN" -eq 1 ] || mkdir -p "$TARGET_DIR"
 
 linked=0; skipped=0; excluded=0; blocked=0
 pruned=0
@@ -628,7 +653,7 @@ for applet in $APPLETS; do
         # somebody else's link, is never touched.
         stale="$TARGET_DIR/$applet"
         if [ -L "$stale" ] && [ "$stale" -ef "$NATIVE" ]; then
-            if [ "$MODE" = list ]; then
+            if [ "$DRY_RUN" -eq 1 ]; then
                 echo "  would unlink $stale (now excluded)"
             else
                 rm -f "$stale"
@@ -646,13 +671,13 @@ for applet in $APPLETS; do
     fi
     if [ -e "$dest" ] || [ -L "$dest" ]; then
         if [ "$FORCE" -eq 0 ]; then
-            [ "$MODE" = list ] && echo "  would NOT replace $dest (exists; --force to override)"
+            [ "$DRY_RUN" -eq 1 ] && echo "  would NOT replace $dest (exists; --force to override)"
             blocked=$((blocked + 1))
             continue
         fi
     fi
 
-    if [ "$MODE" = list ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
         echo "  would link $dest -> $NATIVE"
     else
         ln -sf "$NATIVE" "$dest"
@@ -683,13 +708,13 @@ for prog in $NATIVE_ALL; do
     # taken, say -- and is repointed without needing --force.
     if [ -e "$dest" ] || [ -L "$dest" ]; then
         if ! link_is_native "$dest" && [ "$FORCE" -eq 0 ]; then
-            [ "$MODE" = list ] && echo "  would NOT replace $dest (exists; --force to override)"
+            [ "$DRY_RUN" -eq 1 ] && echo "  would NOT replace $dest (exists; --force to override)"
             blocked=$((blocked + 1))
             continue
         fi
     fi
 
-    if [ "$MODE" = list ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
         echo "  would link $dest -> $src"
     else
         ln -sf "$src" "$dest"
@@ -697,7 +722,7 @@ for prog in $NATIVE_ALL; do
     programs=$((programs + 1))
 done
 
-if [ "$MODE" = list ]; then
+if [ "$DRY_RUN" -eq 1 ]; then
     echo "would link $linked applet(s) and $programs program(s), leave $blocked in place, skip $excluded excluded, $skipped already linked, unlink $pruned now-excluded"
 else
     echo "linked $linked applet(s) and $programs program(s) into $TARGET_DIR ($skipped already, $blocked left in place, $excluded excluded, $pruned stale removed)"

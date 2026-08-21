@@ -133,6 +133,9 @@ directory — including a link you made to `/AOK/native/bash` by hand — is lef
 alone. Pass the same directory you installed into if it was not the default. The
 PATH change goes away at your next login.
 
+`--list` applies here too: `--list --remove` prints every link, file and shell
+change the removal would make, and makes none of them.
+
 For a single stubborn command, `--no-path` is the softer version: the links stay
 usable by full path, and nothing is shadowed.
 

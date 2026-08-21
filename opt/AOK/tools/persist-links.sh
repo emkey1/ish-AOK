@@ -24,11 +24,18 @@
 #   --remove   remove links pointing into /AOK/persist/bin
 #   --force    replace files that are not our own symlinks
 #   --help
+#
+# --list is a dry run rather than a mode of its own, so it composes with the
+# others: `--list --remove` prints what a removal would unlink and unlinks
+# nothing. Holding both in one MODE variable is what made that combination
+# delete instead of preview -- last flag won, and the preview arm inside the
+# removal loop could never be reached.
 set -eu
 
 SOURCE=/AOK/persist/bin
 TARGET_DIR=/usr/local/bin
-MODE=link
+MODE=link          # link | remove -- what this run is for
+DRY_RUN=0          # --list: print, change nothing, in either mode
 FORCE=0
 
 usage() {
@@ -46,7 +53,7 @@ usage() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --list) MODE=list ;;
+        --list) DRY_RUN=1 ;;
         --remove) MODE=remove ;;
         --force) FORCE=1 ;;
         -h|--help) usage 0 ;;
@@ -79,18 +86,22 @@ if [ "$MODE" = remove ]; then
     removed=0
     for f in "$TARGET_DIR"/*; do
         link_is_ours "$f" || continue
-        if [ "$MODE" = list ]; then
+        if [ "$DRY_RUN" -eq 1 ]; then
             echo "  would unlink $f"
         else
             rm -f "$f"
         fi
         removed=$((removed + 1))
     done
-    echo "removed $removed link(s) from $TARGET_DIR"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        echo "would remove $removed link(s) from $TARGET_DIR"
+    else
+        echo "removed $removed link(s) from $TARGET_DIR"
+    fi
     exit 0
 fi
 
-[ "$MODE" = list ] || mkdir -p "$TARGET_DIR"
+[ "$DRY_RUN" -eq 1 ] || mkdir -p "$TARGET_DIR"
 
 linked=0; skipped=0; blocked=0; empty=1
 for src in "$SOURCE"/*; do
@@ -103,7 +114,7 @@ for src in "$SOURCE"/*; do
     # one here.
     [ -d "$src" ] && continue
     if [ ! -x "$src" ]; then
-        [ "$MODE" = list ] && echo "  skipping $src (not executable)"
+        [ "$DRY_RUN" -eq 1 ] && echo "  skipping $src (not executable)"
         skipped=$((skipped + 1))
         continue
     fi
@@ -121,13 +132,13 @@ for src in "$SOURCE"/*; do
         # from a directory this script does not own is exactly the failure
         # native-links.sh had to be walked back from.
         if ! link_is_ours "$dest" && [ "$FORCE" -eq 0 ]; then
-            [ "$MODE" = list ] && echo "  would NOT replace $dest (exists; --force to override)"
+            [ "$DRY_RUN" -eq 1 ] && echo "  would NOT replace $dest (exists; --force to override)"
             blocked=$((blocked + 1))
             continue
         fi
     fi
 
-    if [ "$MODE" = list ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
         echo "  would link $dest -> $src"
     else
         ln -sf "$src" "$dest"
@@ -140,7 +151,7 @@ if [ "$empty" -eq 1 ]; then
     exit 0
 fi
 
-if [ "$MODE" = list ]; then
+if [ "$DRY_RUN" -eq 1 ]; then
     echo "would link $linked, leave $blocked in place, skip $skipped"
 else
     echo "linked $linked into $TARGET_DIR ($skipped already or skipped, $blocked left in place)"
