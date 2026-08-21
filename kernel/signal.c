@@ -2840,7 +2840,55 @@ retry:
 // si_code distinguishes the sender: SI_USER for kill(2), SI_TKILL for
 // tkill/tgkill(2). Linux forces this on the receiving side, so we thread it
 // down from the syscall entry point rather than letting kill_task assume SI_USER.
-static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid, int si_code) {
+// kill(2) is PROCESS-directed: Linux puts it in the shared queue and
+// complete_signal() hands it to a thread that can actually take it. AOK
+// delivers into one task's private queue, which is right for tkill/tgkill and
+// wrong for kill -- under the standard daemon shape (block these signals in
+// every thread, one dedicated thread sigwait()s them) the signal lands on a
+// thread that blocks it and that nobody will ever dequeue from, while the
+// sigwait-ing thread sees nothing. mariadbd hit this trying to make its own
+// signal thread exit and could not die; a hung mariadbd then wedged an entire
+// Devuan boot. See tests/manual/sigwait_kill.c.
+//
+// Choosing the thread rather than re-routing kill through the group path is
+// deliberate: the group path does not carry the stop/cont and default-ignore
+// handling that send_signal() does, and using it for kill hung signal_restart,
+// signal_stop_cont and process_conformance. This changes only the case that
+// was already broken -- every target that could already receive the signal
+// still receives it, on the same task as before.
+//
+// Caller holds pids_lock (the group thread list needs it).
+static struct task *pick_process_directed_target(struct task *task, dword_t sig) {
+    // The addressed task can take it: nothing to do. This is every
+    // single-threaded case, and the common multithreaded one.
+    if (!sigset_has(__atomic_load_n(&task->blocked, __ATOMIC_ACQUIRE), sig) ||
+            sigset_has(__atomic_load_n(&task->waiting, __ATOMIC_ACQUIRE), sig))
+        return task;
+    if (task->group == NULL)
+        return task;
+
+    struct task *candidate = NULL;
+    struct task *thread;
+    list_for_each_entry(&task->group->threads, thread, group_links) {
+        if (thread->exiting || thread->zombie)
+            continue;
+        // A thread parked in sigwait() for this signal is the best target
+        // there is -- it is asking for it by name.
+        if (sigset_has(__atomic_load_n(&thread->waiting, __ATOMIC_ACQUIRE), sig))
+            return thread;
+        if (candidate == NULL &&
+                !sigset_has(__atomic_load_n(&thread->blocked, __ATOMIC_ACQUIRE), sig))
+            candidate = thread;
+    }
+    // Nobody can take it right now: leave it on the addressed task, where it
+    // stays pending until that thread unblocks it. Same as before.
+    return candidate != NULL ? candidate : task;
+}
+
+// thread_directed distinguishes tkill/tgkill (deliver to THIS thread's private
+// queue, which is their entire purpose) from kill (deliver to the process).
+static int do_kill_common(pid_t_ pid, dword_t sig, pid_t_ tgid, int si_code,
+                          bool thread_directed) {
     STRACE("kill(%d, %d)", pid, sig);
     if (sig >= NUM_SIGS)
         return _EINVAL;
@@ -2880,6 +2928,8 @@ static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid, int si_code) {
             return 0;
         }
 
+        if (!thread_directed)
+            task = pick_process_directed_target(task, sig);
         task_ref_cnt_mod(task, 1);
         unlock(&pids_lock);
         err = signal_kill_task(task, sig, si_code);
@@ -2889,17 +2939,17 @@ static int do_kill(pid_t_ pid, dword_t sig, pid_t_ tgid, int si_code) {
 }
 
 dword_t sys_kill(pid_t_ pid, dword_t sig) {
-    return do_kill(pid, sig, 0, SI_USER_);
+    return do_kill_common(pid, sig, 0, SI_USER_, false);
 }
 dword_t sys_tgkill(pid_t_ tgid, pid_t_ tid, dword_t sig) {
     if (tid <= 0 || tgid <= 0)
         return _EINVAL;
-    return do_kill(tid, sig, tgid, SI_TKILL_);
+    return do_kill_common(tid, sig, tgid, SI_TKILL_, true);
 }
 dword_t sys_tkill(pid_t_ tid, dword_t sig) {
     if (tid <= 0)
         return _EINVAL;
-    return do_kill(tid, sig, 0, SI_TKILL_);
+    return do_kill_common(tid, sig, 0, SI_TKILL_, true);
 }
 
 dword_t sys_rt_sigqueueinfo(pid_t_ pid, dword_t sig, addr_t uinfo_addr) {

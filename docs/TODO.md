@@ -10,52 +10,93 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
-### System Console never gets a shell on Devuan 6, because rc never finishes
+### System Console never gets a shell on Devuan 6 -- ROOT CAUSED AND FIXED 2026-08-21
 
-Reported 2026-08-21 with a full thread backtrace, on a Devuan 6 arm64 guest
-where the system is otherwise up and the app's own session shell works.
+Reported with a thread backtrace, then established by logging into the device
+itself, which turned a plausible story into a measured one and found a kernel
+bug underneath it.
 
-**The console is not the broken part.** sysvinit's inittab runs the runlevel
-script as `l2:2:wait:/etc/init.d/rc 2`, and `wait` means init does not process
-any later entry until rc exits -- the `getty` lines are `respawn` entries that
-come after it. So a runlevel that never completes means no getty, and a console
-with no getty has nothing to spawn a shell. The backtrace agrees: there is no
-getty or agetty process anywhere in it.
+**The console was never the broken part.** sysvinit runs the runlevel as
+`l2:2:wait:/etc/init.d/rc 2`, and `wait` means init processes no later entry
+until rc exits -- the `getty` lines are `respawn` entries after it. rc was
+parked in `/etc/init.d/mariadb start`, which polls `mariadb-admin ping`
+forever against a mariadbd that had already decided to abort but could not
+exit. Killing that chain by hand made rc exit and six gettys appear within
+seconds, which is the whole chain confirmed end to end.
 
-What rc is waiting on, read off the thread names:
+**Why mariadbd could not exit -- the actual kernel bug.** Its `/proc` state
+named it exactly:
 
-    587  rc         read(fd 3)   -- startpar's pipe
-    591  startpar   pselect
-    630  mariadb    read(fd 3)   -- the init script, still running
-    729  mariadb    wait4        -- waiting on a child
-    858  logger     read(fd 0)   -- mysqld_safe's log pipe
+    tid 990 (signal_handler, parked in sigwait)  SigPnd: 0
+    tid 857 (main thread)                        SigPnd: 0x4000  (SIGTERM)
+    both                                         SigBlk: 0x85007 (HUP INT QUIT PIPE TERM TSTP)
+    neither                                      ShdPnd: 0
 
-so the runlevel is parked inside `/etc/init.d/mariadb start`. mariadbd ITSELF is
-healthy -- eleven threads across futex, ppoll and rt_sigtimedwait -- so this is
-the init script not concluding the server is ready, not the server failing.
-Note this became visible only once AIO landed: before that mariadbd crash-looped
-and the script presumably gave up.
+MariaDB signalled its own signal thread to make it exit. `kill(2)` is
+PROCESS-directed on Linux: it goes to the thread group's shared queue, where
+any thread not blocking it -- including one in `sigwait()` for exactly that
+signal -- dequeues it. AOK's `do_kill` delivered it to the addressed task's
+PRIVATE queue instead, so it landed on a thread that blocks it and that nobody
+will ever dequeue from, while the sigwait-ing thread saw nothing.
 
-The 142/180 login+bash pair is the app's session shell, spawned separately from
-init, which is why the user has a working shell and an empty console at once.
+That breaks the standard daemon shape -- block the signals in every thread,
+one dedicated thread sigwaits them -- which MariaDB, PostgreSQL and most sysv
+daemons use. `kill <pid>` against any of them was a no-op.
 
-**Decisive test**, in order: confirm the inittab shape and the stuck processes
-with `grep -E '^l2|getty' /etc/inittab` and `ps -eo pid,stat,args`, then
-`update-rc.d mariadb disable` and reboot. A console that gets a shell with
-mariadb disabled settles it.
+Fixed by `pick_process_directed_target()` in kernel/signal.c: `kill` now hands
+the signal to a thread that can actually take it -- preferring one parked in
+`sigwait()` for exactly that signal -- while `tkill`/`tgkill` still deliver to
+the addressed thread's private queue, which is their purpose.
+tests/manual/sigwait_kill.c reproduces it -- watchdog before, PASS after, on
+all four ABIs.
 
-**The other suspect, if that is not it.** pid 187 is a `startpar` from an
-EARLIER rc generation than 587, blocked in `tty_read` on fd 0 with no timeout.
-startpar has no business reading stdin, and nothing will free it: AOK's
-`tty_signal_if_background_locked` (fs/tty.c:633) returns 0 without sending
-SIGTTIN when `tty->fg_group == 0`. That matches Linux's `tty_check_change`, so
-it is not a divergence to fix -- but it does mean any stray reader of a tty with
-no foreground process group parks permanently, and one is parked.
+**The first fix was wrong and tier0 caught it.** Routing all of `kill` through
+`send_signal_to_group` looked like the obvious answer and hung
+`signal_restart`, `signal_stop_cont` and `process_conformance`: that path does
+not carry the stop/cont and default-ignore handling `send_signal()` has. The
+lesson generalises -- the group path is for signals that are genuinely
+group-wide (SIGCHLD from exit.c), not a drop-in for per-task delivery. Choosing
+the target thread instead leaves every case that already worked on exactly the
+task it used before, so the blast radius is only the case that was broken.
 
-**Not caused by the AIO work**, on the evidence available: nothing in this path
-issues an io_* syscall, and the only AIO code reachable is aio_discard_tgroup on
-an empty list at task teardown. But it has not been tested against a build
-without it, so that is a reasoned position rather than a measured one.
+**Still open, and the reason mariadb is disabled on that device:** the crash
+that started all of it, in the entry below.
+
+### mariadbd SIGSEGVs in ha_maria::drop_table, and mariadb-install-db cannot finish
+
+Established 2026-08-21 on the M4 iPad (Devuan 6 arm64), by logging into the
+device rather than reasoning from a report.
+
+`mariadb-install-db` dies partway through:
+
+    [ERROR] /usr/sbin/mariadbd got signal 11 ;
+    /usr/sbin/mariadbd(_ZN8ha_maria10drop_tableEPKc+0x18) [0x7fffbc8e185c]
+    /usr/sbin/mariadbd(_Z14free_tmp_tableP3THDP5TABLE+0xb4)
+    /usr/sbin/mariadbd(_Z19close_thread_tablesP3THD+0x118)
+    /usr/sbin/mariadbd(_Z21mysql_execute_commandP3THDb+0x558)
+
+so the `mysql` system database is left with 3 tables of the ~30 it needs (only
+`db` and `global_priv`), and every later start fails with `Can't open and lock
+privilege tables`. **That address is the one from the original bug report**,
+which this file previously attributed to the AIO nullptr -- see the correction
+in the AIO entry above.
+
+The disassembly recorded at the time was `ldr x3, [x0, #0x588]` then
+`ldr x2, [x3]`: a member pointer at +0x588 is NULL and its vtable is read.
+Preceding it in the log is `Got error 9 "Bad file descriptor" from storage
+engine Aria`, which suggests the Aria file handle was already invalid before
+drop_table ran -- so the thing to chase is which syscall hands Aria an EBADF
+that Linux would not, not the null deref itself.
+
+**Not yet reproduced locally.** No local root has MariaDB; a Devuan root with it
+installed would allow the fd-555 syscall log, which is what would actually name
+the offending call. That is the next step.
+
+Until it is fixed, mariadb must stay disabled on that device
+(`update-rc.d mariadb disable`), because a mariadbd that fails this way HANGS
+rather than exits, and a hung mariadbd wedges the whole boot -- see the entry
+on the System Console. The hang itself is fixed (kill() is process-directed
+now, tests/manual/sigwait_kill.c) but that fix is not on the device yet.
 
 ### SmallCLUE's pager wedges apt, and is excluded rather than fixed
 
@@ -459,13 +500,21 @@ than of AOK's.
 
 `apt install mariadb-server` used to leave the server crash-looping, because
 the whole io_* family was `syscall_stub` and MariaDB 11.8's thread pool does
-not fall back: `create_linux_aio()` returned nullptr and the caller
-dereferenced it. Now implemented in kernel/aio.c for all four guest ABIs, with
+not fall back: `create_linux_aio()` returned nullptr. Now implemented in
+kernel/aio.c for all four guest ABIs, with
 tests/manual/aio_basic.c and aio_threads.c; see docs/aio_plan.md for the design
 and, more usefully, for the three things implementation contradicted.
 
 The drop-in workaround (`innodb_use_native_aio=0` under
 /etc/mysql/mariadb.conf.d/) is no longer needed and was never shipped.
+
+**Correction, 2026-08-21.** This entry used to claim the SIGSEGV in the
+original report was that nullptr being dereferenced, and named the faulting
+opcodes as "load the aio member". That was wrong. Resolving the same fault
+address against the binary on the device gives
+`_ZN8ha_maria10drop_tableEPKc+0x18` -- Aria's drop_table on a temp table, a
+different bug that is still open (see the entry below). The io_* stub was real
+and is fixed; it was simply not the thing that was crashing.
 
 Two things deliberately NOT done, both cheap to add if something wants them:
 
