@@ -12,6 +12,7 @@
 # shown by `ls /AOK/tools` (after the bundled iSH_benchmark entries).
 
 native-links.sh
+persist-links.sh
 provision-ultimate-alpine.sh
 provision-ultimate-devuan.sh
 provision-ultimate-archlinux.sh
