@@ -3,6 +3,12 @@
 
     python3 tests/remote/native_job_control.py <fakefs-root> [/AOK/native/bash]
 
+On a device, where the shell is reached over ssh rather than through the CLI,
+give the launch command instead -- the pty is this end's either way:
+
+    AOK_SHELL_CMD="ssh -tt -p 1022 mke@<ip> exec /AOK/native/bash -i" \
+        python3 tests/remote/native_job_control.py
+
 WHY A PTY, when tests/manual already has two native-shell suites. Those run a
 shell with -c and check what it prints, which covers everything about a shell
 EXCEPT the part that needs a terminal: ^C reaching a foreground job, ^Z and fg,
@@ -19,9 +25,11 @@ Exit status is 0 only if every case passes.
 """
 import os, pty, select, signal, sys, time, re
 
-if len(sys.argv) < 2:
+import shlex
+CMD = shlex.split(os.environ.get("AOK_SHELL_CMD", ""))
+if not CMD and len(sys.argv) < 2:
     sys.exit(__doc__)
-ROOT = sys.argv[1]
+ROOT = sys.argv[1] if len(sys.argv) > 1 else ""
 SHELL = sys.argv[2] if len(sys.argv) > 2 else "/AOK/native/bash"
 ISH = os.environ.get("ISH_BIN", "./build-rust/ish")
 MARK = "AOKPROMPT>"
@@ -32,10 +40,21 @@ def spawn():
         os.environ["PS1"] = MARK
         os.environ["PROMPT"] = MARK
         os.environ["TERM"] = "dumb"
+        if CMD:
+            os.execvp(CMD[0], CMD)
         # Through /bin/sh: the CLI cannot exec a /AOK/native entry directly,
         # since those are dispatch names rather than files on the rootfs.
         os.execv(ISH, [ISH, "-f", ROOT, "/bin/sh", "-c", "exec " + SHELL + " -i"])
     return pid, fd
+
+# A real prompt on a real device is not plain text: it carries OSC title and
+# colour-query sequences, and a themed zsh emits a run of them before every
+# prompt. Matching against the raw stream made the harness report "shell never
+# prompted" at a shell that was plainly prompting.
+ANSI = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[\[\]P][0-?]*[ -/]*[@-~]|\x1b.")
+
+def strip_ansi(text):
+    return ANSI.sub("", text)
 
 def read_until(fd, pattern, timeout=20):
     buf = ""
@@ -52,9 +71,16 @@ def read_until(fd, pattern, timeout=20):
         if not data:
             break
         buf += data.decode("utf-8", "replace")
-        if rx.search(buf):
-            return True, buf
-    return False, buf
+        # A terminal query left unanswered stalls zsh's zle before it draws a
+        # prompt, so the two it actually waits on are answered here: primary
+        # device attributes, and the cursor position report.
+        if "\x1b[c" in buf or "\x1b[0c" in buf:
+            os.write(fd, b"\x1b[?1;2c")
+        if "\x1b[6n" in buf:
+            os.write(fd, b"\x1b[1;1R")
+        if rx.search(strip_ansi(buf)):
+            return True, strip_ansi(buf)
+    return False, strip_ansi(buf)
 
 def send(fd, s):
     os.write(fd, s.encode())
