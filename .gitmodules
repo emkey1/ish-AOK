@@ -23,3 +23,6 @@
 	path = deps/zsh
 	url = https://github.com/emkey1/zsh.git
 	branch = ish-aok
+[submodule "deps/helix"]
+	path = deps/helix
+	url = https://github.com/emkey1/helix.git

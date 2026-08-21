@@ -58,8 +58,21 @@ export CFLAGS TARGET_CFLAGS
 # this breaks silently.
 "$cargo" build $cargo_args
 
-staticlib="$built_dir/librust_native_probe.a"
-[ -f "$staticlib" ] || { echo "build-rust-native: cargo produced no $staticlib" >&2; exit 1; }
+# Found rather than named: a staticlib crate produces exactly one lib*.a at the
+# top of its profile directory (the copies under deps/ are not it), so there is
+# nothing to keep in step with a crate's [lib] name. This script builds more
+# than one crate now -- the probe and helix -- and spelling the name here was
+# the obvious way for the second one to silently get the first one's archive.
+staticlib=""
+for candidate in "$built_dir"/lib*.a; do
+    [ -f "$candidate" ] || continue
+    if [ -n "$staticlib" ]; then
+        echo "build-rust-native: $built_dir has more than one lib*.a; which is the crate?" >&2
+        exit 1
+    fi
+    staticlib="$candidate"
+done
+[ -n "$staticlib" ] || { echo "build-rust-native: cargo produced no lib*.a in $built_dir" >&2; exit 1; }
 
 # Why the archive is flattened into one object before anything else:
 #
