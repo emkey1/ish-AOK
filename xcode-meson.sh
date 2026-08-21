@@ -203,26 +203,36 @@ EOF
         # before one of these existed keeps its old answer and quietly leaves
         # the Rust native program out.
         #
-        # MISSING and merely different are not the same repair, and getting
-        # that wrong broke every Xcode build for a day: `meson setup
-        # --reconfigure` REJECTS a -D for an option the build directory does
-        # not already know -- "ERROR: Unknown option" -- even when
-        # meson_options.txt has since gained it. So a directory that predates
-        # an option has to be WIPED, which re-reads meson_options.txt from
-        # scratch, and only a directory that knows the option and disagrees
-        # about its value can be reconfigured.
+        # Teaching a build directory an option it has never heard of, and
+        # setting that option, are TWO steps and cannot be one. `meson setup
+        # --reconfigure` validates -D against the options the directory
+        # already knows, so passing -D for a new one is rejected outright --
+        # "ERROR: Unknown option" -- however current meson_options.txt is.
+        # A plain --reconfigure, with no -D at all, re-reads the option
+        # definitions and adds the newcomer at its default; only then will the
+        # -D be accepted. The declared-option loop further down has used that
+        # same trick since guest_archs, and this block ignored it and broke
+        # every Xcode build against an existing DerivedData tree.
         #
-        # Anyone adding a fourth option here inherits the same rule.
-        current_cargo_home=$(meson_option_json "$config" cargo_home 2>/dev/null || echo MISSING)
-        current_rust_target=$(meson_option_json "$config" native_rust_target 2>/dev/null || echo MISSING)
-        current_rust_features=$(meson_option_json "$config" native_rust_features 2>/dev/null || echo MISSING)
+        # So: teach first, re-read, and let the ordinary value comparison
+        # below decide whether anything still has to be set. Anyone adding a
+        # fourth option here inherits the rule.
+        read_rust_opts() {
+            current_cargo_home=$(meson_option_json "$config" cargo_home 2>/dev/null || echo MISSING)
+            current_rust_target=$(meson_option_json "$config" native_rust_target 2>/dev/null || echo MISSING)
+            current_rust_features=$(meson_option_json "$config" native_rust_features 2>/dev/null || echo MISSING)
+        }
+        read_rust_opts
         if [[ "$current_cargo_home" == MISSING ]] || \
            [[ "$current_rust_target" == MISSING ]] || \
            [[ "$current_rust_features" == MISSING ]]; then
-            meson_needs_wipe=1
-        elif [[ "$current_cargo_home" != "\"$HOME/.cargo\"" ]] || \
-             [[ "$current_rust_target" != "\"$rust_triple\"" ]] || \
-             [[ "$current_rust_features" != "\"${AOK_RUST_FEATURES:-}\"" ]]; then
+            (set -x; meson setup --reconfigure "$meson_dir" "$SRCROOT" --cross-file "$crossfile") || exit $?
+            config=$(meson introspect --buildoptions "$meson_dir")
+            read_rust_opts
+        fi
+        if [[ "$current_cargo_home" != "\"$HOME/.cargo\"" ]] || \
+           [[ "$current_rust_target" != "\"$rust_triple\"" ]] || \
+           [[ "$current_rust_features" != "\"${AOK_RUST_FEATURES:-}\"" ]]; then
             meson_needs_setup=1
         fi
     fi
