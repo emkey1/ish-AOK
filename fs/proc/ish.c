@@ -31,6 +31,8 @@ bool (*remove_user_default)(const char *name);
 char *(*get_documents_directory)(void);
 char *(*ish_roots_status)(void);
 int (*ish_roots_command)(const char *command);
+char *(*ish_workspace_status)(void);
+int (*ish_workspace_open)(const char *request);
 
 #include "kernel/hostinfo.h"
 
@@ -141,6 +143,62 @@ static int proc_ish_update_roots(struct proc_entry *UNUSED(entry), struct proc_d
     // different, accepted one. Refuse instead of guessing which half was meant.
     int err = strlen(command) == data->size ? ish_roots_command(command) : _EINVAL;
     free(command);
+    return err;
+}
+
+// /proc/ish/workspace -- read it to learn whether this session is hosted by
+// Workspace and which tools it can open, write to it to ask for one.
+//
+// Read format is key=value lines, the same shape as roots, so a shell can
+// parse it with `. /dev/stdin`-free case matching:
+//
+//     hosted=1
+//     tools=motepad,filemanager,markdown,imageviewer,videoplayer,audio,llm,...
+//
+// hosted=0 is a complete and useful answer, not an error: it is what a plain
+// terminal session, or the command-line build, honestly is. A launcher reads
+// this first and falls back rather than writing a request nobody will answer.
+static int proc_ish_show_workspace(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    // NULL in the command-line build and in any app build without Workspace.
+    // Saying so beats calling through a NULL pointer -- stress-ng --procfs
+    // reads every file under here, which is how /proc/ish/documents once took
+    // the whole emulator down.
+    if (ish_workspace_status == NULL) {
+        proc_printf(buf, "hosted=0\n");
+        proc_printf(buf, "reason=this build has no Workspace\n");
+        return 0;
+    }
+    char *status = ish_workspace_status();
+    if (status == NULL) {
+        proc_printf(buf, "hosted=0\n");
+        proc_printf(buf, "reason=Workspace did not answer\n");
+        return 0;
+    }
+    proc_printf(buf, "%s", status);
+    free(status);
+    return 0;
+}
+
+// One verb today: `open <tool> [path]`. A verb set rather than a bare path is
+// the point -- this is a guest asking the app to put something on screen, so
+// what it may ask for has to be enumerable, and the app validates both the
+// tool name and the path before acting on either.
+static int proc_ish_update_workspace(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    if (ish_workspace_open == NULL)
+        return _EOPNOTSUPP;
+    if (data->size == 0 || data->size > 4096)
+        return _EINVAL;
+    char *request = malloc(data->size + 1);
+    if (request == NULL)
+        return _ENOMEM;
+    memcpy(request, data->data, data->size);
+    request[data->size] = '\0';
+    // An embedded NUL would end the request early on the app side while the
+    // parser here saw the rest, so a request that should be rejected could
+    // arrive as a different, accepted one. Refuse rather than guess which half
+    // was meant. (Same reasoning as proc_ish_update_roots.)
+    int err = strlen(request) == data->size ? ish_workspace_open(request) : _EINVAL;
+    free(request);
     return err;
 }
 
@@ -644,6 +702,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"host_info", .show = proc_ish_show_host_info},  // Add host hardware related information
     {"ips", .show = proc_ish_show_ips},
     {"roots", S_IFREG | 0644, .show = proc_ish_show_roots, .update = proc_ish_update_roots},
+    {"workspace", S_IFREG | 0644, .show = proc_ish_show_workspace, .update = proc_ish_update_workspace},
     {"version", .show = proc_ish_show_version},
 });
 

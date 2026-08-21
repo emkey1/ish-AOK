@@ -20,6 +20,8 @@
 #import "UIApplication+OpenURL.h"
 #import <WebKit/WebKit.h>
 #include "kernel/task.h"
+#include "fs/proc/ish.h"
+#include "kernel/errno.h"
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <mach/mach.h>
@@ -125,6 +127,34 @@ static NSString *const ISHWorkspaceToolMarkdownViewerIdentifier = @"markdown";
 static NSString *const ISHWorkspaceToolImageViewerIdentifier = @"imageviewer";
 static NSString *const ISHWorkspaceToolVideoPlayerIdentifier = @"videoplayer";
 static NSString *const ISHWorkspaceToolDisplayIdentifier = @"display";
+
+// The live Workspace, for the /proc/ish/workspace bridge to reach from a guest
+// thread. Weak on purpose: leaving Workspace mode deallocates the controller
+// and this goes nil by itself, which is exactly the answer the guest should
+// get -- "there is no Workspace" rather than a dangling one.
+static __weak WorkspaceViewController *ISHWorkspaceActiveController = nil;
+
+// Every tool a guest may name. The guest gets this list by reading
+// /proc/ish/workspace, and anything not on it is refused: a guest asking the
+// app to put something on screen must only be able to ask for things that were
+// decided here, not for whatever string it can construct.
+static NSArray<NSString *> *ISHWorkspaceOpenableToolIdentifiers(void) {
+    static NSArray<NSString *> *tools;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        tools = @[ISHWorkspaceToolMotePadIdentifier, ISHWorkspaceToolFileManagerIdentifier,
+                  ISHWorkspaceToolMarkdownViewerIdentifier, ISHWorkspaceToolImageViewerIdentifier,
+                  ISHWorkspaceToolVideoPlayerIdentifier, ISHWorkspaceToolAudioIdentifier,
+                  ISHWorkspaceToolBrowserIdentifier, ISHWorkspaceToolLLMIdentifier,
+                  ISHWorkspaceToolFilesystemsIdentifier, ISHWorkspaceToolStorageIdentifier,
+                  ISHWorkspaceToolMonitorIdentifier, ISHWorkspaceToolNetworksIdentifier,
+                  ISHWorkspaceToolStatusIdentifier, ISHWorkspaceToolSettingsIdentifier,
+                  ISHWorkspaceToolThemesIdentifier, ISHWorkspaceToolLauncherIdentifier,
+                  ISHWorkspaceToolClockIdentifier, ISHWorkspaceToolInfoIdentifier,
+                  ISHWorkspaceToolDiagnosticsIdentifier, ISHWorkspaceToolSessionsIdentifier];
+    });
+    return tools;
+}
 static NSString *const ISHWorkspaceSavedLayoutDefaultsKey = @"ISHWorkspaceSavedLayout";
 static NSString *const ISHWorkspacePersistentWorkspacesWindowFrameDefaultsKey = @"ISHWorkspacePersistentWorkspacesWindowFrame";
 static NSString *const ISHWorkspaceLegacyPersistentWorkspacesWindowFrameDefaultsKeyPrefix = @"ISHWorkspacePersistentWorkspacesWindowFrame";
@@ -5112,6 +5142,7 @@ static NSRange ISHWorkspaceLineRangeContainingIndex(NSString *text, NSUInteger i
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
+    ISHWorkspaceActiveController = self;
     [self applyCurrentThemeWallpaperIfNeededForced:NO];
     [self applyCompactSizingToOpenWorkspaceToolWindows];
     if (!self.didOpenInitialTool && self.initialToolIdentifier.length > 0) {
@@ -13307,4 +13338,106 @@ static dispatch_queue_t ISHWorkspaceLogReaderQueue(void) {
     _logTextView.text = lines.count > 0 ? [lines componentsJoinedByString:@"\n"] : @"(log file is empty)";
 }
 
+@end
+
+#pragma mark - /proc/ish/workspace bridge
+
+// The guest side of Workspace. Two questions a guest could not previously ask:
+// "am I running under Workspace?" and "will you open this file for me?".
+//
+// GuestFileBridge goes the other way -- the app reading guest files -- so this
+// is the first path in the other direction, and it is deliberately narrow: one
+// verb, a fixed set of tool names, and a path the app resolves itself.
+
+static char *ISHWorkspaceStatusImpl(void) {
+    // Called from a guest thread. Reading a __weak under ARC is atomic, and a
+    // stale-but-live controller is harmless here: the worst case is reporting
+    // hosted=1 a moment after Workspace went away, and the open request that
+    // follows is refused on the main thread where the check is authoritative.
+    BOOL hosted = ISHWorkspaceActiveController != nil;
+    NSMutableString *body = [NSMutableString string];
+    [body appendFormat:@"hosted=%d\n", hosted ? 1 : 0];
+    if (hosted) {
+        [body appendFormat:@"tools=%@\n",
+            [ISHWorkspaceOpenableToolIdentifiers() componentsJoinedByString:@","]];
+        [body appendString:@"verbs=open\n"];
+    } else {
+        [body appendString:@"reason=this session is not hosted by Workspace\n"];
+    }
+    return strdup(body.UTF8String);
+}
+
+// `open <tool> [path]`. Returns 0 or a negative errno; never blocks, because
+// it is called from a guest write(2) and UIKit must not be touched from a task
+// thread -- the presenting is dispatched to the main queue and this returns.
+//
+// That means success here means "accepted", not "on screen". It is the honest
+// answer available synchronously: whether a window can actually be presented
+// depends on state only the main thread can see, and blocking a guest write on
+// the UI queue is how you deadlock a terminal that is itself hosted by that UI.
+static int ISHWorkspaceOpenImpl(const char *request) {
+    if (request == NULL)
+        return _EINVAL;
+    NSString *line = [[NSString stringWithUTF8String:request]
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (line.length == 0)
+        return _EINVAL;
+
+    // Split into at most three: verb, tool, and the rest as the path. The path
+    // is NOT split on whitespace -- guest filenames contain spaces, and a
+    // launcher should not have to quote around this interface.
+    NSRange firstGap = [line rangeOfString:@" "];
+    if (firstGap.location == NSNotFound)
+        return _EINVAL;
+    NSString *verb = [line substringToIndex:firstGap.location];
+    if (![verb isEqualToString:@"open"])
+        return _EINVAL;
+    NSString *rest = [[line substringFromIndex:NSMaxRange(firstGap)]
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    NSRange secondGap = [rest rangeOfString:@" "];
+    NSString *tool = secondGap.location == NSNotFound ? rest
+                                                      : [rest substringToIndex:secondGap.location];
+    NSString *path = secondGap.location == NSNotFound ? nil
+        : [[rest substringFromIndex:NSMaxRange(secondGap)]
+            stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    if (path.length == 0)
+        path = nil;
+
+    // Refuse an unknown tool HERE, synchronously, so the guest gets a real
+    // errno it can act on rather than silence from a queue it cannot observe.
+    if (![ISHWorkspaceOpenableToolIdentifiers() containsObject:tool])
+        return _EINVAL;
+    // A relative path has no meaning by the time this reaches the main queue:
+    // the guest's cwd is not the app's, and it may have changed or the process
+    // exited. Make the caller resolve it.
+    if (path != nil && ![path hasPrefix:@"/"])
+        return _EINVAL;
+
+    if (ISHWorkspaceActiveController == nil)
+        return _EOPNOTSUPP;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // Re-read on the main thread: this is the authoritative check, and
+        // Workspace may have gone away between the guest's write and now.
+        WorkspaceViewController *workspace = ISHWorkspaceActiveController;
+        if (workspace == nil)
+            return;
+        if (path != nil)
+            [workspace openWorkspaceToolWithIdentifier:tool fileGuestPath:path];
+        else
+            [workspace openWorkspaceToolWithIdentifier:tool];
+    });
+    return 0;
+}
+
+@interface ISHWorkspaceBridgeInstaller : NSObject
+@end
+@implementation ISHWorkspaceBridgeInstaller
+// +load, matching ISHRootsControlInstaller: a guest can read /proc/ish/workspace
+// the moment it is running, and a NULL hook there would report "no Workspace"
+// rather than "not yet".
++ (void)load {
+    ish_workspace_status = ISHWorkspaceStatusImpl;
+    ish_workspace_open = ISHWorkspaceOpenImpl;
+}
 @end

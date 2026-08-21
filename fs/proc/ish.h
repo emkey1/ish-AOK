@@ -26,5 +26,20 @@ extern char *(*get_documents_directory)(void);
 extern char *(*ish_roots_status)(void);
 extern int (*ish_roots_command)(const char *command);
 
+// The Workspace bridge, same shape and the same NULL-in-the-CLI-build rule.
+//
+// A guest cannot otherwise tell it is running under Workspace, and has no way
+// to ask the app to put anything on screen -- GuestFileBridge goes the other
+// way, the app reading guest files. /proc/ish/workspace is both halves: read
+// it to find out whether there is a Workspace at all and what tools it has,
+// write to it to ask for one.
+//
+// ish_workspace_status returns the whole body, malloc'd for the caller to
+// free. ish_workspace_open takes one complete request and returns 0 or a
+// negative errno. It must not block: it is called from a guest write(2), and
+// the app does the actual presenting on its own queue.
+extern char *(*ish_workspace_status)(void);
+extern int (*ish_workspace_open)(const char *request);
+
 bool amd64_jit_preference_get(void);
 void amd64_jit_preference_set(bool enabled);
