@@ -106,8 +106,22 @@ void fakefs_quiesce_end(void) {
 // The lockstats clock starts AFTER transaction_enter: the quiesce gate is a
 // different (and much rarer) wait, and folding it in would inflate the lock
 // numbers every time the app suspends.
-static void db_begin_locked(struct fakefs_db *fs, struct fakefs_lock_site *site) {
+// A thread holds at most one fakefs transaction at a time, so how that
+// transaction was acquired can ride on the thread rather than on the
+// connection (which the fallback path shares between threads).
+static _Thread_local bool txn_exclusive;
+
+static void db_begin_locked(struct fakefs_db *fs, struct fakefs_lock_site *site, bool exclusive) {
     transaction_enter();
+    txn_exclusive = exclusive;
+    // A read transaction on a pooled connection touches nothing shared: its own
+    // handle, its own statements, its own WAL snapshot. Only writers need the
+    // mutex, and only against each other.
+    if (!exclusive && fs->shared != NULL) {
+        if (fakefs_lockstats_on)
+            fakefs_lockstats_held(site, fakefs_lockstats_now());
+        return;
+    }
     if (!fakefs_lockstats_on) {
         sqlite3_mutex_enter(fs->lock);
         return;
@@ -118,7 +132,12 @@ static void db_begin_locked(struct fakefs_db *fs, struct fakefs_lock_site *site)
 }
 
 // Release + account, keeping every atomic outside the critical section.
-static void db_end_locked(struct fakefs_db *fs) {
+static void db_end_locked(struct fakefs_db *fs, bool exclusive) {
+    if (!exclusive && fs->shared != NULL) {
+        if (fakefs_lockstats_on)
+            fakefs_lockstats_account(fakefs_lockstats_now());
+        return;
+    }
     if (!fakefs_lockstats_on) {
         sqlite3_mutex_leave(fs->lock);
         return;
@@ -129,23 +148,23 @@ static void db_end_locked(struct fakefs_db *fs) {
 }
 
 void db_begin_read_at(struct fakefs_db *fs, struct fakefs_lock_site *site) {
-    db_begin_locked(fs, site);
+    db_begin_locked(fs, site, false);
     db_exec_reset(fs, fs->stmt.begin_deferred);
 }
 
 void db_begin_write_at(struct fakefs_db *fs, struct fakefs_lock_site *site) {
-    db_begin_locked(fs, site);
+    db_begin_locked(fs, site, true);
     db_exec_reset(fs, fs->stmt.begin_immediate);
 }
 
 void db_commit(struct fakefs_db *fs) {
     db_exec_reset(fs, fs->stmt.commit);
-    db_end_locked(fs);
+    db_end_locked(fs, txn_exclusive);
     transaction_leave();
 }
 void db_rollback(struct fakefs_db *fs) {
     db_exec_reset(fs, fs->stmt.rollback);
-    db_end_locked(fs);
+    db_end_locked(fs, txn_exclusive);
     transaction_leave();
 }
 
@@ -202,7 +221,7 @@ inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     // again to a writer that committed in between; a couple of rounds is
     // already generous.
     for (int attempt = 0; attempt < 8; attempt++) {
-        inode = fs->next_inode++;
+        inode = fakefs_db_shared(fs)->next_inode++;
         // insert into stats (inode, stat) values (?, ?)
         sqlite3_bind_int64(fs->stmt.path_create_stat, 1, inode);
         sqlite3_bind_blob(fs->stmt.path_create_stat, 2, stat, sizeof(*stat), SQLITE_TRANSIENT);
@@ -218,7 +237,7 @@ inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *sta
             db_check_error(fs);
             return 0;
         }
-        fs->next_inode = fakefs_next_inode_init(fs);
+        fakefs_db_shared(fs)->next_inode = fakefs_next_inode_init(fs);
     }
     if (!created) {
         printk("ERROR: fakefs path_create(%s): could not claim a free inode\n", path);
@@ -232,11 +251,11 @@ inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *sta
 }
 
 bool inode_exists(struct fakefs_db *fs, inode_t inode) {
-    FAKEFS_LOCK(fs);
+    FAKEFS_LOCK_READ(fs);
     sqlite3_bind_int64(fs->stmt.inode_read_stat, 1, inode);
     bool exists = db_exec(fs, fs->stmt.inode_read_stat);
     db_reset(fs, fs->stmt.inode_read_stat);
-    FAKEFS_UNLOCK(fs);
+    FAKEFS_UNLOCK_READ(fs);
     return exists;
 }
 
@@ -376,6 +395,68 @@ int fake_db_create_schema(const char *db_path) {
     return 0;
 }
 
+// Every connection to a mount's meta.db carries the same statement cache.
+static void db_prepare_statements(struct fakefs_db *fs) {
+    fs->stmt.begin_deferred = db_prepare(fs, "begin deferred");
+    fs->stmt.begin_immediate = db_prepare(fs, "begin immediate");
+    fs->stmt.commit = db_prepare(fs, "commit");
+    fs->stmt.rollback = db_prepare(fs, "rollback");
+    fs->stmt.path_get_inode = db_prepare(fs, "select inode from paths where path = ?");
+    fs->stmt.path_read_stat = db_prepare(fs, "select inode, stat from stats natural join paths where path = ?");
+    fs->stmt.path_create_stat = db_prepare(fs, "insert into stats (inode, stat) values (?, ?)");
+    fs->stmt.path_create_path = db_prepare(fs, "insert or replace into paths values (?, ?)");
+    fs->stmt.inode_read_stat = db_prepare(fs, "select stat from stats where inode = ?");
+    fs->stmt.inode_write_stat = db_prepare(fs, "update stats set stat = ? where inode = ?");
+    fs->stmt.path_link = db_prepare(fs, "insert or replace into paths (path, inode) values (?, ?)");
+    fs->stmt.path_unlink = db_prepare(fs, "delete from paths where path = ?");
+    fs->stmt.path_rename = db_prepare(fs, "update or replace paths set path = change_prefix(path, ?, ?) "
+            "where (path >= ? and path < ?) or path = ?");
+    fs->stmt.path_from_inode = db_prepare(fs, "select path from paths where inode = ?");
+    fs->stmt.try_cleanup_inode = db_prepare(fs, "delete from stats where inode = ? and not exists (select 1 from paths where inode = stats.inode)");
+}
+
+// Session pragmas. journal_mode is a property of the database file, not of the
+// connection, so it is set once at mount; these are per-connection and have to
+// be repeated on every extra handle.
+static void db_set_session_pragmas(struct fakefs_db *fs) {
+    static const char *const pragmas[] = {
+        "pragma synchronous=NORMAL",
+        "pragma journal_size_limit=1048576",
+        "pragma foreign_keys=true",
+    };
+    for (size_t i = 0; i < sizeof(pragmas) / sizeof(pragmas[0]); i++) {
+        sqlite3_stmt *statement = db_prepare(fs, pragmas[i]);
+        db_check_error(fs);
+        sqlite3_step(statement);
+        db_check_error(fs);
+        sqlite3_finalize(statement);
+    }
+}
+
+// A second (third, ...) handle on an already-migrated database: no schema work,
+// no next_inode seeding, just an equivalent connection with its own statements.
+int fake_db_open_conn(struct fakefs_db *conn, const char *db_path) {
+    int err = sqlite3_open_v2(db_path, &conn->db, SQLITE_OPEN_READWRITE, NULL);
+    if (err != SQLITE_OK) {
+        printk("ERROR: sqlite3 opening extra fakefs connection: %s\n", sqlite3_errmsg(conn->db));
+        sqlite3_close(conn->db);
+        conn->db = NULL;
+        return _EINVAL;
+    }
+    sqlite3_busy_timeout(conn->db, 1000);
+    sqlite3_create_function(conn->db, "change_prefix", 3, SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL, sqlite_func_change_prefix, NULL, NULL);
+    db_set_session_pragmas(conn);
+    db_prepare_statements(conn);
+    return 0;
+}
+
+void fake_db_close_conn(struct fakefs_db *conn) {
+    fake_db_finalize_statements(conn);
+    if (conn->db != NULL)
+        sqlite3_close(conn->db);
+    conn->db = NULL;
+}
+
 int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     // Reads ISH_FAKEFS_LOCKSTATS once, before this mount can serve any
     // transaction -- and from here rather than main.c so the app build gets
@@ -399,34 +480,7 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     db_check_error(fs);
     sqlite3_finalize(statement);
 
-    // synchronous=NORMAL is safe in WAL mode, and much faster
-    statement = db_prepare(fs, "pragma synchronous=NORMAL");
-    db_check_error(fs);
-    sqlite3_step(statement);
-    db_check_error(fs);
-    sqlite3_finalize(statement);
-
-    // Bound the WAL. The default journal_size_limit is -1, which means a
-    // checkpoint RESETS the WAL but never shrinks it, so it grows to its
-    // high-water mark and stays there. That matters because sqlite3_close()
-    // checkpoints the whole WAL back into the database on the last connection,
-    // and on iOS that close happens as the process is being suspended: a large
-    // WAL turns it into slow I/O performed while still holding the database
-    // lock, which is exactly what RunningBoard kills with 0xdead10cc (seen in
-    // the File Provider extension, whose crash stacks sat in sqlite3WalClose ->
-    // sqlite3WalCheckpoint -> unixWrite/unixTruncate). Truncating at each
-    // checkpoint keeps that final close cheap.
-    statement = db_prepare(fs, "pragma journal_size_limit=1048576");
-    db_check_error(fs);
-    sqlite3_step(statement);
-    db_check_error(fs);
-    sqlite3_finalize(statement);
-
-    statement = db_prepare(fs, "pragma foreign_keys=true");
-    db_check_error(fs);
-    sqlite3_step(statement);
-    db_check_error(fs);
-    sqlite3_finalize(statement);
+    db_set_session_pragmas(fs);
 
 #if DEBUG_sql
     sqlite3_trace_v2(mount->db, SQLITE_TRACE_STMT, trace_callback, NULL);
@@ -480,42 +534,38 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
 
     fs->next_inode = fakefs_next_inode_init(fs);
     fs->lock = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST);
-    fs->stmt.begin_deferred = db_prepare(fs, "begin deferred");
-    fs->stmt.begin_immediate = db_prepare(fs, "begin immediate");
-    fs->stmt.commit = db_prepare(fs, "commit");
-    fs->stmt.rollback = db_prepare(fs, "rollback");
-    fs->stmt.path_get_inode = db_prepare(fs, "select inode from paths where path = ?");
-    fs->stmt.path_read_stat = db_prepare(fs, "select inode, stat from stats natural join paths where path = ?");
-    fs->stmt.path_create_stat = db_prepare(fs, "insert into stats (inode, stat) values (?, ?)");
-    fs->stmt.path_create_path = db_prepare(fs, "insert or replace into paths values (?, ?)");
-    fs->stmt.inode_read_stat = db_prepare(fs, "select stat from stats where inode = ?");
-    fs->stmt.inode_write_stat = db_prepare(fs, "update stats set stat = ? where inode = ?");
-    fs->stmt.path_link = db_prepare(fs, "insert or replace into paths (path, inode) values (?, ?)");
-    fs->stmt.path_unlink = db_prepare(fs, "delete from paths where path = ?");
-    fs->stmt.path_rename = db_prepare(fs, "update or replace paths set path = change_prefix(path, ?, ?) "
-            "where (path >= ? and path < ?) or path = ?");
-    fs->stmt.path_from_inode = db_prepare(fs, "select path from paths where inode = ?");
-    fs->stmt.try_cleanup_inode = db_prepare(fs, "delete from stats where inode = ? and not exists (select 1 from paths where inode = stats.inode)");
+    db_prepare_statements(fs);
+    fakefs_pool_init(fs, db_path);
     return 0;
 }
 
+void fake_db_finalize_statements(struct fakefs_db *fs) {
+    if (fs->db == NULL)
+        return;
+    sqlite3_finalize(fs->stmt.begin_deferred);
+    sqlite3_finalize(fs->stmt.begin_immediate);
+    sqlite3_finalize(fs->stmt.commit);
+    sqlite3_finalize(fs->stmt.rollback);
+    sqlite3_finalize(fs->stmt.path_get_inode);
+    sqlite3_finalize(fs->stmt.path_read_stat);
+    sqlite3_finalize(fs->stmt.path_create_stat);
+    sqlite3_finalize(fs->stmt.path_create_path);
+    sqlite3_finalize(fs->stmt.inode_read_stat);
+    sqlite3_finalize(fs->stmt.inode_write_stat);
+    sqlite3_finalize(fs->stmt.path_link);
+    sqlite3_finalize(fs->stmt.path_unlink);
+    sqlite3_finalize(fs->stmt.path_rename);
+    sqlite3_finalize(fs->stmt.path_from_inode);
+    sqlite3_finalize(fs->stmt.try_cleanup_inode);
+    memset(&fs->stmt, 0, sizeof(fs->stmt));
+}
+
 int fake_db_deinit(struct fakefs_db *fs) {
+    // Close the pooled connections first: they are handles on the same
+    // database, and the primary's close is the one that checkpoints the WAL.
+    fakefs_pool_deinit(fs);
     if (fs->db) {
-        sqlite3_finalize(fs->stmt.begin_deferred);
-        sqlite3_finalize(fs->stmt.begin_immediate);
-        sqlite3_finalize(fs->stmt.commit);
-        sqlite3_finalize(fs->stmt.rollback);
-        sqlite3_finalize(fs->stmt.path_get_inode);
-        sqlite3_finalize(fs->stmt.path_read_stat);
-        sqlite3_finalize(fs->stmt.path_create_stat);
-        sqlite3_finalize(fs->stmt.path_create_path);
-        sqlite3_finalize(fs->stmt.inode_read_stat);
-        sqlite3_finalize(fs->stmt.inode_write_stat);
-        sqlite3_finalize(fs->stmt.path_link);
-        sqlite3_finalize(fs->stmt.path_unlink);
-        sqlite3_finalize(fs->stmt.path_rename);
-        sqlite3_finalize(fs->stmt.path_from_inode);
-        sqlite3_finalize(fs->stmt.try_cleanup_inode);
+        fake_db_finalize_statements(fs);
         return sqlite3_close(fs->db);
     }
     return SQLITE_OK;

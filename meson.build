@@ -407,7 +407,7 @@ endif
 libish_emu = library('ish_emu', emu_src, include_directories: includes)
 
 libfakefs = library('fakefs',
-    ['fs/fake-db.c', 'fs/fake-migrate.c', 'fs/fake-rebuild.c', 'fs/fake-lockstats.c'],
+    ['fs/fake-db.c', 'fs/fake-migrate.c', 'fs/fake-rebuild.c', 'fs/fake-lockstats.c', 'fs/fake-conn.c'],
     include_directories: includes,
     dependencies: sqlite3)
 
