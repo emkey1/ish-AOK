@@ -121,17 +121,32 @@ the question entirely:
 
 ```sh
 motepad --selftest
-# selftest: lines=2 save=ok (wrote ...) l1="hello" l2="world"
+# selftest: lines=2 save=ok (wrote ..., then removed) l1="hello" l2="world"
 ```
 
 It drives insert, newline, backspace, delete and the atomic save with no tty
 involved. `l1` and `l2` are what the document model ended up holding; `save=`
-is whether the write-and-rename went through. If those are right and
-interactive editing still misbehaves, the problem is in the terminal path
-rather than in the editor — which is exactly the distinction that is hard to
-make by eye.
+is whether the write-and-rename went through *and* the file read back as the
+document. If those are right and interactive editing still misbehaves, the
+problem is in the terminal path rather than in the editor — which is exactly
+the distinction that is hard to make by eye.
 
-One wrinkle: the save half writes to the fixed path
-`/realmnt/motepad-selftest.txt`, so in a root without a `/realmnt` directory it
-reports `save=FAILED` and exits 1. That is a fact about the path, not about the
-editor — the `l1`/`l2` half of the line is still the answer you came for.
+The save half needs somewhere to write, and no root is obliged to have any
+particular directory — an earlier version hardcoded `/realmnt`, a development
+mount, and so reported `save=FAILED` on every root without one for an editor
+that was perfectly healthy. It now takes the first of `$TMPDIR`, `/tmp`,
+`/var/tmp` and the current directory that it can actually create in, makes a
+private directory there, and removes it again on the way out — the check leaves
+nothing behind. Pass a path to override it (`motepad --selftest ~/mp.txt`); a
+path you name is yours, and is left in place to look at.
+
+The three answers are meant to be told apart, by eye and by exit status:
+
+| `save=` | exit | means |
+| --- | --- | --- |
+| `ok` | 0 | the document saved and read back correctly |
+| `FAILED` | 1 | the save path is broken — as is a wrong `l1`/`l2` |
+| `skipped` | 3 | nothing was writable, so the save was never exercised |
+
+`skipped` is a fact about the root, not about the editor: the `l1`/`l2` half of
+the line is still the answer you came for.

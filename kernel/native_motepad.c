@@ -627,6 +627,73 @@ static bool mp_handoff(const char *path) {
     return ok;
 }
 
+// ------------------------------------------------------------- selftest
+
+// --selftest has to write somewhere to exercise the save path, and the one
+// thing no root guarantees is any particular directory: the first version
+// hardcoded /realmnt, a development mount main.c makes for host-fs
+// reproductions, so a root without it reported save=FAILED for a perfectly
+// healthy editor -- the exact opposite of what a check that exists to acquit
+// the editor is for. These are the places a guest can be expected to have,
+// tried in turn.
+//
+// mkdtemp is the probe as much as the choice: it proves a directory is there
+// and writable with the same call that reserves the name, so there is no
+// access() race and no second guess. A directory of our own also keeps a
+// world-writable /tmp from being able to aim the save at a name somebody else
+// already owns.
+static char *mp_selftest_dir(char *buf, size_t bufsz) {
+    const char *cand[4];
+    int n = 0;
+    const char *tmpdir = getenv("TMPDIR");
+    if (tmpdir != NULL && tmpdir[0] == '/')
+        cand[n++] = tmpdir;
+    cand[n++] = "/tmp";
+    cand[n++] = "/var/tmp";
+    cand[n++] = ".";        // last resort: wherever the caller ran it from
+    for (int i = 0; i < n; i++) {
+        size_t len = strlen(cand[i]);
+        while (len > 0 && cand[i][len - 1] == '/')
+            len--;          // "/tmp/" and "/tmp" name one directory
+        if (snprintf(buf, bufsz, "%.*s/motepad-selftest.XXXXXX",
+                     (int) len, cand[i]) >= (int) bufsz)
+            continue;
+        if (mkdtemp(buf) != NULL)
+            return buf;
+    }
+    return NULL;
+}
+
+// save=ok meant only that write-and-rename returned 0. Reading the file back
+// is what makes it mean the bytes on disk are the document, which is the claim
+// the line is actually making.
+static bool mp_selftest_saved(const char *path, const char *want) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return false;
+    char got[64];
+    size_t have = 0;
+    ssize_t n;
+    while (have < sizeof(got) &&
+           (n = read(fd, got + have, sizeof(got) - have)) > 0)
+        have += (size_t) n;
+    close(fd);
+    size_t wantlen = strlen(want);
+    return have == wantlen && memcmp(got, want, wantlen) == 0;
+}
+
+// The check made the directory, so the check removes it -- a diagnostic that
+// litters is one people stop running. mp_save unlinks its own temp file on the
+// failures it notices, but not on a rename that half-happened.
+static void mp_selftest_cleanup(const char *dir, const char *file) {
+    char tmp[1024];
+    int len = snprintf(tmp, sizeof(tmp), "%s.motepad.tmp", file);
+    if (len > 0 && len < (int) sizeof(tmp))
+        unlink(tmp);
+    unlink(file);
+    rmdir(dir);
+}
+
 // ------------------------------------------------------------------ main
 
 static void mp_usage(void) {
@@ -667,13 +734,32 @@ int native_motepad_main(int argc, char *const argv[], char *const envp[]) {
             free(E.path);
             memset(&E, 0, sizeof(E));
             mp_insert_line(0, "", 0);
-            // Takes an optional path; /realmnt was a development mount and had
-            // no business being the default in a shipped diagnostic -- on a
-            // device it made the self-test report a save failure that was not
-            // real.
-            const char *out = (i + 1 < argc && argv[i + 1][0] != '-')
-                ? argv[++i] : "/tmp/motepad-selftest.txt";
-            E.path = strdup(out);
+
+            // Takes an optional path. Given one the caller owns it, and it
+            // is left behind to look at; without one the check picks a
+            // directory of its own (mp_selftest_dir) and takes it away again,
+            // so running the check leaves no trace.
+            const char *given = (i + 1 < argc && argv[i + 1][0] != '-')
+                ? argv[++i] : NULL;
+            if (given != NULL && given[0] == '\0') {
+                fprintf(stderr, "motepad: --selftest: empty path\n");
+                return 2;
+            }
+            char dir[512] = "", file[1024];
+            file[0] = '\0';
+            bool owned = false;         // we made the directory, so we remove it
+            if (given != NULL) {
+                if (snprintf(file, sizeof(file), "%s", given) >= (int) sizeof(file)) {
+                    fprintf(stderr, "motepad: --selftest path too long\n");
+                    return 2;
+                }
+            } else if (mp_selftest_dir(dir, sizeof(dir)) != NULL) {
+                snprintf(file, sizeof(file), "%s/doc.txt", dir);
+                owned = true;
+            }
+            if (file[0] != '\0')
+                E.path = strdup(file);
+
             const char *first = "hello", *second = "world";
             for (const char *q = first; *q; q++)
                 mp_insert_char(*q);
@@ -688,15 +774,54 @@ int native_motepad_main(int argc, char *const argv[], char *const envp[]) {
             E.cx = 0;
             mp_delete();
             mp_insert_char('w');
-            int rc = mp_save();
+
+            // A root with nowhere to write is not a broken editor, and keeping
+            // the two apart is the point: skipped and FAILED are different
+            // answers and carry different exit statuses.
+            const char *save;
+            bool save_failed = false;
+            if (E.path == NULL) {
+                save = "skipped";
+                mp_status("nowhere to write: tried $TMPDIR, /tmp, /var/tmp and .");
+            } else if (mp_save() != 0) {
+                save = "FAILED";
+                save_failed = true;
+            } else if (!mp_selftest_saved(E.path, "hello\nworld\n")) {
+                save = "FAILED";
+                save_failed = true;
+                mp_status("wrote %s, but it does not read back as the document", file);
+            } else {
+                save = "ok";
+            }
+            if (owned) {
+                mp_selftest_cleanup(dir, file);
+                // The status names a path that is already gone, so say so --
+                // otherwise the first thing anyone does is cat it. Copied out
+                // first: mp_status would be formatting E.status into itself.
+                if (!save_failed) {
+                    char was[sizeof(E.status)];
+                    snprintf(was, sizeof(was), "%s", E.status);
+                    mp_status("%s, then removed", was);
+                }
+            }
+
+            // Guard the report itself: too few lines is one of the failures
+            // this is here to catch, and printing E.line[1] regardless would
+            // crash on exactly the run that had something to say.
+            struct mp_line none = { (char *) "", 0, 0 };
+            const struct mp_line *l1 = E.nlines > 0 ? &E.line[0] : &none;
+            const struct mp_line *l2 = E.nlines > 1 ? &E.line[1] : &none;
             printf("selftest: lines=%zu save=%s (%s) l1=\"%.*s\" l2=\"%.*s\"\n",
-                   E.nlines, rc == 0 ? "ok" : "FAILED", E.status,
-                   (int) E.line[0].len, E.line[0].s,
-                   (int) E.line[1].len, E.line[1].s);
+                   E.nlines, save, E.status,
+                   (int) l1->len, l1->s, (int) l2->len, l2->s);
             fflush(stdout);
-            return rc == 0 && E.nlines == 2 &&
-                   E.line[0].len == 5 && memcmp(E.line[0].s, "hello", 5) == 0 &&
-                   E.line[1].len == 5 && memcmp(E.line[1].s, "world", 5) == 0 ? 0 : 1;
+
+            bool model_ok = E.nlines == 2 &&
+                l1->len == 5 && memcmp(l1->s, "hello", 5) == 0 &&
+                l2->len == 5 && memcmp(l2->s, "world", 5) == 0;
+            if (!model_ok || save_failed)
+                return 1;               // a real defect: the model or the save
+            return E.path != NULL ? 0 : 3;   // 3: editor fine, root unwritable
         } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
             fprintf(stderr, "motepad: unknown option %s\n", argv[i]);
             return 2;
