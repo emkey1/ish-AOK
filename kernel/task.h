@@ -336,6 +336,13 @@ static inline bool task_is_64bit(const struct task *task) {
 // parent as NULL to create the init process. Returns NULL if out of memory.
 // Ends with an underscore because there's a mach function by the same name
 struct task *task_create_(struct task *parent);
+
+// Synthetic kernel threads (kernel/task.c). They have no task and no thread --
+// just enough of /proc for ps to render them bracketed, which is what programs
+// testing "am I in a container" actually look for. pid_kthread_at walks them by
+// index for /proc's readdir; it returns 0 past the end.
+bool pid_is_kthread(dword_t pid, const char **name_out);
+dword_t pid_kthread_at(size_t index);
 // A child of current with fork semantics, for a caller that execs into it
 // immediately. See kernel/fork.c. NULL on failure, already cleaned up.
 struct task *task_fork_for_exec(void);

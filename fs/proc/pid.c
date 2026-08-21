@@ -142,7 +142,40 @@ static size_t proc_mem_count_pages(struct mem *mem) {
     return mem_mapped_page_count(mem);
 }
 
+// A synthetic kernel thread has no task behind it (kernel/task.c explains
+// why it exists at all). Only the files a process listing actually reads are
+// answered: `ps` wants cmdline and stat, and comm/status are cheap and would
+// look broken by their absence. Everything else falls through to the normal
+// path and reports ESRCH, which is the truth -- there is no process there.
+//
+// The empty cmdline is the entire point: that is how a listing decides to
+// render a name in brackets, and the bracket is what the container heuristics
+// look for.
+static int proc_kthread_stat(pid_t_ pid, const char *name, struct proc_data *buf) {
+    // Fields in the order /proc/PID/stat has them, with zeros for everything
+    // that would be a lie to invent. State R and ppid 0 match Linux's kthreadd.
+    proc_printf(buf, "%d (%s) S 0 0 0 0 -1 %u 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 "
+                     "%u 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
+                pid, name, 0x00200040u /* PF_KTHREAD|PF_NOFREEZE */, (unsigned) -1);
+    return 0;
+}
+
+static int proc_kthread_status(pid_t_ pid, const char *name, struct proc_data *buf) {
+    proc_printf(buf, "Name:\t%s\n", name);
+    proc_printf(buf, "State:\tS (sleeping)\n");
+    proc_printf(buf, "Tgid:\t%d\n", pid);
+    proc_printf(buf, "Pid:\t%d\n", pid);
+    proc_printf(buf, "PPid:\t0\n");
+    proc_printf(buf, "Uid:\t0\t0\t0\t0\n");
+    proc_printf(buf, "Gid:\t0\t0\t0\t0\n");
+    proc_printf(buf, "Threads:\t1\n");
+    return 0;
+}
+
 static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
+    const char *kname;
+    if (pid_is_kthread((dword_t) entry->pid, &kname))
+        return proc_kthread_stat(entry->pid, kname, buf);
     struct task *task = proc_get_task(entry);
     if ((task == NULL) || (task->exiting == true)) {
         proc_put_task(task);
@@ -402,6 +435,9 @@ out_free_task:
 }
 
 static int proc_pid_cmdline_show(struct proc_entry *entry, struct proc_data *buf) {
+    // Empty, exactly as a kernel thread's is.
+    if (pid_is_kthread((dword_t) entry->pid, NULL))
+        return 0;
     struct task *task = proc_get_task(entry);
     if ((task == NULL) || (task->exiting == true)) {
         proc_put_task(task);
@@ -439,6 +475,11 @@ out_free_task:
 }
 
 static int proc_pid_comm_show(struct proc_entry *entry, struct proc_data *buf) {
+    const char *kname;
+    if (pid_is_kthread((dword_t) entry->pid, &kname)) {
+        proc_printf(buf, "%s\n", kname);
+        return 0;
+    }
     struct task *task = proc_get_task(entry);
     if ((task == NULL) || (task->exiting == true)) {
         proc_put_task(task);
@@ -489,6 +530,9 @@ out_free_task:
 }
 
 static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf) {
+    const char *kname;
+    if (pid_is_kthread((dword_t) entry->pid, &kname))
+        return proc_kthread_status(entry->pid, kname, buf);
     struct task *task = proc_get_task(entry);
     if ((task == NULL) || (task->exiting == true)) {
         proc_put_task(task);

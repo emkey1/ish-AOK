@@ -724,11 +724,21 @@ static void proc_root_refresh_pid_snapshot(struct proc_entry *entry) {
     }
     unlock(&pids_lock);
 
+    // Room for the synthetic kernel threads too (kernel/task.c): they have no
+    // task in alive_pids_list, so the walk above cannot see them, but /proc has
+    // to list them or nothing will look.
+    unsigned nkthreads = 0;
+    while (pid_kthread_at(nkthreads) != 0)
+        nkthreads++;
+    used += nkthreads;
+
     pids = calloc(used ? used : 1, sizeof(*pids));
     if (pids == NULL)
         return;
 
     unsigned filled = 0;
+    for (unsigned k = 0; k < nkthreads && filled < used; k++)
+        pids[filled++] = (dword_t) pid_kthread_at(k);
     complex_lockt(&pids_lock, 0);
     list_for_each_entry(&alive_pids_list, pid_entry, alive) {
         struct task *task = pid_entry->task;

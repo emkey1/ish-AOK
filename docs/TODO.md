@@ -10,6 +10,158 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### SmallCLUE's pager wedges apt, and is excluded rather than fixed
+
+`apt search maria` hung the whole app, every time, on device. Removing
+/usr/local/native-bin/less cured it and restoring it brought it back --
+confirmed by the user, not inferred. opt/AOK/tools/native-links.sh now excludes
+`less` and `more`, so the distro's pagers win; re-running it removes the links
+it made before they were excluded.
+
+**What two backtraces agree on.** SmallCLUE's less is blocked in
+`pagerCollectLines` -> `nlibc_read(fd 0, 8192)` -> `realfs_wait_readable`, on
+stdin that never reaches EOF. apt is blocked reading FOUR bytes from a
+descriptor of its own. Neither moves again.
+
+`pagerCollectLines` (deps/smallclue/src/core.c) spools the ENTIRE stream into a
+temp file before drawing anything. Real less paints the first screen as soon as
+it has one. A producer that waits on its pager before closing its end therefore
+waits forever on ours and not on theirs, which fits the shape exactly.
+
+**What is NOT established, and why this is excluded rather than fixed.** That
+story predicts the hang whenever apt pages through SmallCLUE, and it does not
+hold up: forcing `PAGER=/usr/local/native-bin/less apt search maria` by hand
+COMPLETED, 9366 bytes, no hang. So collect-all alone is not sufficient -- it is
+something about how apt invokes a pager it discovers on PATH, and that is the
+piece still missing. Seven attempts over ssh with and without a tty never
+reproduced it either; apt kept choosing /usr/bin/less regardless of PATH, which
+is itself a clue about how it resolves one.
+
+**Next step**, in order:
+
+1. Find the trigger. `strace`-equivalent on the guest side around apt's pager
+   spawn, or a `less` that logs its argv and the state of fd 0, would say
+   whether it is arguments SmallCLUE mis-parses, an fd apt expects the pager to
+   close, or that four-byte read being a handshake nothing answers.
+2. Then make the pager stream: display the first screenful as soon as it is
+   read and continue lazily, which is what real less does and what removes the
+   deadlock shape whatever the trigger turns out to be.
+3. Then un-exclude both pagers, since a native less on a large file is worth
+   having -- that is the outcome three earlier entries reached and the one to
+   aim for here.
+
+Not caused by the recent filesystem or shim work: SmallCLUE calls none of the
+ioctls added with the kqueue front end, and nothing in it touches pipes, exec
+or fd inheritance. The pager has spooled like this since it was written.
+
+
+### #523: yay's reported failure does not reproduce; an http2 flake does
+
+Reproduced the environment on 2026-08-20 -- Arch Linux ARM aarch64, yay v13.0.1
+built from AUR under emulation -- and ran `yay -S pandoc-bin` four times. **The
+reported `context: signal: terminated` never appeared.** All four got through
+the AUR fetch and downloaded sources.
+
+Getting there needed five things fixed first, only one of them AOK's:
+
+1. Landlock, 2. a dangling /etc/resolv.conf, 3. an empty keyring -- all three
+   now shipped as `/AOK/fixes/arch`.
+4. **`/dev/fd` was missing**, so bash process substitution was ENOENT and
+   makepkg died at "Retrieving sources". Ours, and fixed (`59827f5ce`).
+5. The minirootfs strips headers from 137 packages, so anything that compiles
+   needs `pacman -S glibc linux-api-headers` first.
+
+**What DOES reproduce, about one run in four:**
+
+    request failed: Get "https://aur.archlinux.org/rpc?...":
+        http2: client conn could not be established
+
+yay recovers -- it falls back to git and carries on -- so it is not fatal, and
+it is not what was reported. But it is a real intermittent failure of Go's
+HTTP/2 client against a host that curl reaches every time, on both HTTP/2 and
+HTTP/1.1. Ruled out already: not git (3 of 3 clones standalone), not TLS
+generally (pacman syncs fine), not concurrency (9 simultaneous TLS operations
+all succeeded).
+
+**Measured 2026-08-20, and it is a latency tail, not a protocol bug.** TLS
+handshake time to the same host, 15 samples each:
+
+    host  (macOS)   min 0.09  median 0.21  max  1.15
+    guest (AOK)     min 0.21  median 0.39  max 15.32
+
+The median is about twice the host's -- unremarkable for emulation. The TAIL is
+13x worse, and 15.3s is past Go's default TLSHandshakeTimeout of 10s, which is
+exactly how "http2: client conn could not be established" arises. The same
+stall explains the OpenSSL "unexpected eof while reading" seen from git.
+
+**The CPU-count lie is not the cause**, though it was the obvious suspect:
+AOK reports 4 of the host's 10 logical CPUs, and Go sizes GOMAXPROCS from it.
+A Go HTTP/2 probe run at GOMAXPROCS 1, 4 and 8 (20 requests each) failed once
+in 60, at GOMAXPROCS=8, with a handshake timeout -- the same tail, not a
+scheduling effect.
+
+**Next step.** Find what stalls a socket for seconds when the median is
+sub-second. Nothing in the handshake is compute-heavy, so this is a wait that
+is not being woken promptly rather than work that is slow -- which puts it in
+the same neighbourhood as the poll/quiesce machinery. `curl` on its own shows
+the tail too, so it reproduces without Go, without yay and without the AUR:
+any repeated HTTPS handshake will do.
+
+### `pread_stack_thread_race` SIGSEGVs on i386, about 1 run in 8
+
+Split out of the hang entry above once the hang was fixed and stopped hiding
+it. **Pre-existing, and NOT caused by the jetsam fix**: measured on a binary
+built before that change (1 in 8), and it survives the fix at about the same
+rate.
+
+The run dies with rc=139 and produces no output at all -- not even the test's
+first line -- so it is dying early, and the empty output is itself a clue worth
+starting from. amd64 has not shown it in 12 runs; only i386 so far.
+
+Next step is the same one that settled the hang: catch one and look, rather
+than reason from the symptom. `scratchpad/catch_hang.sh` in the working notes
+is the shape to copy -- run in a loop, and when the exit status is 139 rather
+than a timeout, get a core or attach before it goes.
+
+**Do not write a tier0 failure of this test off as "the known flake" any
+more.** That reflex is what kept this one invisible.
+
+### ptraceomatic reports a real divergence at instruction 4175
+
+Found 2026-08-20, the moment the tool was working again. Not a false positive
+like the two flag-mask gaps fixed alongside it -- those were the emulator being
+right and the tool being wrong. This one is a register:
+
+    ptraceomatic: emulated and real CPU diverged after 4175 instruction(s)
+      last instruction at eip 0x8058b8b, now at 0x8058b8f
+      bytes at 0x8058b8b: 8b 54 24 14 b8 00 40 00 00 39 c2 0f
+    edx: real 0x1, fake 0x800000
+
+`8b 54 24 14` is `mov edx, [esp+0x14]`, so the two CPUs read different values
+from the same stack slot: the divergence is in MEMORY, and happened earlier
+than the instruction that revealed it. Reproduce with a static i386 binary on a
+Linux x86_64 host (camd):
+
+    ./build/tools/ptraceomatic -r / /tmp/hi
+
+**Before treating it as an emulator bug, rule out the honest alternatives.**
+ptraceomatic runs the same program twice -- once under ptrace, once in the
+emulator -- and they are not identical processes. Anything whose value legitimately
+differs between them will show up exactly like this:
+
+- a syscall returning host-specific data (pids, times, addresses) that
+  step_tracing does not synchronise,
+- auxv, the initial stack layout, or environment differing between the two,
+- ASLR, though start_tracee disables it with ADDR_NO_RANDOMIZE.
+
+0x800000 looks like a size or an address constant and 0x1 like a count, at
+about the point libc start-up is settling in, so the auxv/stack-layout
+explanation deserves checking first. **Next step** is to find where that stack
+slot was last written rather than where it was read -- the tool's new report
+names the reading instruction, which is a start and not the answer.
+
+## Closed during the 550 cycle
+
 ### System Console never gets a shell on Devuan 6 -- ROOT CAUSED AND FIXED 2026-08-21
 
 Reported with a thread backtrace, then established by logging into the device
@@ -95,51 +247,6 @@ Found with the fd-555 syscall log against a local Devuan root. strace ON THE
 DEVICE would not follow the exec into the crashing binary and named nothing --
 build the local repro instead of fighting it.
 
-### SmallCLUE's pager wedges apt, and is excluded rather than fixed
-
-`apt search maria` hung the whole app, every time, on device. Removing
-/usr/local/native-bin/less cured it and restoring it brought it back --
-confirmed by the user, not inferred. opt/AOK/tools/native-links.sh now excludes
-`less` and `more`, so the distro's pagers win; re-running it removes the links
-it made before they were excluded.
-
-**What two backtraces agree on.** SmallCLUE's less is blocked in
-`pagerCollectLines` -> `nlibc_read(fd 0, 8192)` -> `realfs_wait_readable`, on
-stdin that never reaches EOF. apt is blocked reading FOUR bytes from a
-descriptor of its own. Neither moves again.
-
-`pagerCollectLines` (deps/smallclue/src/core.c) spools the ENTIRE stream into a
-temp file before drawing anything. Real less paints the first screen as soon as
-it has one. A producer that waits on its pager before closing its end therefore
-waits forever on ours and not on theirs, which fits the shape exactly.
-
-**What is NOT established, and why this is excluded rather than fixed.** That
-story predicts the hang whenever apt pages through SmallCLUE, and it does not
-hold up: forcing `PAGER=/usr/local/native-bin/less apt search maria` by hand
-COMPLETED, 9366 bytes, no hang. So collect-all alone is not sufficient -- it is
-something about how apt invokes a pager it discovers on PATH, and that is the
-piece still missing. Seven attempts over ssh with and without a tty never
-reproduced it either; apt kept choosing /usr/bin/less regardless of PATH, which
-is itself a clue about how it resolves one.
-
-**Next step**, in order:
-
-1. Find the trigger. `strace`-equivalent on the guest side around apt's pager
-   spawn, or a `less` that logs its argv and the state of fd 0, would say
-   whether it is arguments SmallCLUE mis-parses, an fd apt expects the pager to
-   close, or that four-byte read being a handshake nothing answers.
-2. Then make the pager stream: display the first screenful as soon as it is
-   read and continue lazily, which is what real less does and what removes the
-   deadlock shape whatever the trigger turns out to be.
-3. Then un-exclude both pagers, since a native less on a large file is worth
-   having -- that is the outcome three earlier entries reached and the one to
-   aim for here.
-
-Not caused by the recent filesystem or shim work: SmallCLUE calls none of the
-ioctls added with the kqueue front end, and nothing in it touches pipes, exec
-or fd inheritance. The pager has spooled like this since it was written.
-
-
 ### AOK lost a connected UDP socket's error -- NO LONGER REPRODUCES 2026-08-20
 
 Measured again on the same harness the entry was written against: **10 of 10,
@@ -164,58 +271,6 @@ otherwise: that test polls POLLIN only, so EVFILT_EXCEPT is never armed and the
 change is inert for it. It bites a guest that asks for POLLERR/EPOLLERR --
 which epoll consumers do, rtorrent and libtorrent among them, per the comment
 at that very site -- and then finds its error gone.
-
-### #523: yay's reported failure does not reproduce; an http2 flake does
-
-Reproduced the environment on 2026-08-20 -- Arch Linux ARM aarch64, yay v13.0.1
-built from AUR under emulation -- and ran `yay -S pandoc-bin` four times. **The
-reported `context: signal: terminated` never appeared.** All four got through
-the AUR fetch and downloaded sources.
-
-Getting there needed five things fixed first, only one of them AOK's:
-
-1. Landlock, 2. a dangling /etc/resolv.conf, 3. an empty keyring -- all three
-   now shipped as `/AOK/fixes/arch`.
-4. **`/dev/fd` was missing**, so bash process substitution was ENOENT and
-   makepkg died at "Retrieving sources". Ours, and fixed (`59827f5ce`).
-5. The minirootfs strips headers from 137 packages, so anything that compiles
-   needs `pacman -S glibc linux-api-headers` first.
-
-**What DOES reproduce, about one run in four:**
-
-    request failed: Get "https://aur.archlinux.org/rpc?...":
-        http2: client conn could not be established
-
-yay recovers -- it falls back to git and carries on -- so it is not fatal, and
-it is not what was reported. But it is a real intermittent failure of Go's
-HTTP/2 client against a host that curl reaches every time, on both HTTP/2 and
-HTTP/1.1. Ruled out already: not git (3 of 3 clones standalone), not TLS
-generally (pacman syncs fine), not concurrency (9 simultaneous TLS operations
-all succeeded).
-
-**Measured 2026-08-20, and it is a latency tail, not a protocol bug.** TLS
-handshake time to the same host, 15 samples each:
-
-    host  (macOS)   min 0.09  median 0.21  max  1.15
-    guest (AOK)     min 0.21  median 0.39  max 15.32
-
-The median is about twice the host's -- unremarkable for emulation. The TAIL is
-13x worse, and 15.3s is past Go's default TLSHandshakeTimeout of 10s, which is
-exactly how "http2: client conn could not be established" arises. The same
-stall explains the OpenSSL "unexpected eof while reading" seen from git.
-
-**The CPU-count lie is not the cause**, though it was the obvious suspect:
-AOK reports 4 of the host's 10 logical CPUs, and Go sizes GOMAXPROCS from it.
-A Go HTTP/2 probe run at GOMAXPROCS 1, 4 and 8 (20 requests each) failed once
-in 60, at GOMAXPROCS=8, with a handshake timeout -- the same tail, not a
-scheduling effect.
-
-**Next step.** Find what stalls a socket for seconds when the median is
-sub-second. Nothing in the handshake is compute-heavy, so this is a wait that
-is not being woken promptly rather than work that is slow -- which puts it in
-the same neighbourhood as the poll/quiesce machinery. `curl` on its own shows
-the tail too, so it reproduces without Go, without yay and without the AUR:
-any repeated HTTPS handshake will do.
 
 ### `pread_stack_thread_race` hangs -- FIXED 2026-08-21, and it was not a lock cycle
 
@@ -255,25 +310,6 @@ Measured, same harness both sides:
 **It was masking a second, unrelated bug** -- see the entry below. Every tier0
 failure of this test has been written off as "the known hang"; roughly one in
 eight on i386 was not.
-
-### `pread_stack_thread_race` SIGSEGVs on i386, about 1 run in 8
-
-Split out of the hang entry above once the hang was fixed and stopped hiding
-it. **Pre-existing, and NOT caused by the jetsam fix**: measured on a binary
-built before that change (1 in 8), and it survives the fix at about the same
-rate.
-
-The run dies with rc=139 and produces no output at all -- not even the test's
-first line -- so it is dying early, and the empty output is itself a clue worth
-starting from. amd64 has not shown it in 12 runs; only i386 so far.
-
-Next step is the same one that settled the hang: catch one and look, rather
-than reason from the symptom. `scratchpad/catch_hang.sh` in the working notes
-is the shape to copy -- run in a loop, and when the exit status is 139 rather
-than a timeout, get a core or attach before it goes.
-
-**Do not write a tier0 failure of this test off as "the known flake" any
-more.** That reflex is what kept this one invisible.
 
 ### Rust runs natively, async Rust included -- WORKING 2026-08-20
 
@@ -387,40 +423,6 @@ while the shell waits. tests/manual's two native-shell suites run a shell with
 needs a terminal, and that is exactly where the signal work above could have
 broken something.
 
-### ptraceomatic reports a real divergence at instruction 4175
-
-Found 2026-08-20, the moment the tool was working again. Not a false positive
-like the two flag-mask gaps fixed alongside it -- those were the emulator being
-right and the tool being wrong. This one is a register:
-
-    ptraceomatic: emulated and real CPU diverged after 4175 instruction(s)
-      last instruction at eip 0x8058b8b, now at 0x8058b8f
-      bytes at 0x8058b8b: 8b 54 24 14 b8 00 40 00 00 39 c2 0f
-    edx: real 0x1, fake 0x800000
-
-`8b 54 24 14` is `mov edx, [esp+0x14]`, so the two CPUs read different values
-from the same stack slot: the divergence is in MEMORY, and happened earlier
-than the instruction that revealed it. Reproduce with a static i386 binary on a
-Linux x86_64 host (camd):
-
-    ./build/tools/ptraceomatic -r / /tmp/hi
-
-**Before treating it as an emulator bug, rule out the honest alternatives.**
-ptraceomatic runs the same program twice -- once under ptrace, once in the
-emulator -- and they are not identical processes. Anything whose value legitimately
-differs between them will show up exactly like this:
-
-- a syscall returning host-specific data (pids, times, addresses) that
-  step_tracing does not synchronise,
-- auxv, the initial stack layout, or environment differing between the two,
-- ASLR, though start_tracee disables it with ADDR_NO_RANDOMIZE.
-
-0x800000 looks like a size or an address constant and 0x1 like a count, at
-about the point libc start-up is settling in, so the auxv/stack-layout
-explanation deserves checking first. **Next step** is to find where that stack
-slot was last written rather than where it was read -- the tool's new report
-names the reading instruction, which is a start and not the answer.
-
 ### A terminal MotePad, and a guest-to-app channel -- BOTH DONE 2026-08-21
 
 Requested 2026-08-20 as two halves, "and only the first is small". Both landed.
@@ -456,44 +458,48 @@ bash through the same harness and watching it behave perfectly.
 Still open, and small: no wcwidth, so a double-width glyph counts as one column
 and can leave the cursor a cell off on such a line.
 
-### eudev refuses to start: "does not support containers" (Devuan)
+### eudev refuses to start -- FIXED 2026-08-21, and it was never about containers
 
-Reported 2026-08-20, on Devuan. Left over from the sysfs work below: with
-`/sys/class/block/sda` supplied, eudev's init script gets past both the "sysfs
-not mounted" complaint and the 30-second guard, and stops at the NEXT check
-with
+The entry this replaces had two things wrong, both worth naming because both
+would have sent the work in the wrong direction.
 
-    eudev does not support containers, udevd not started ... (warning)
+**It is not a container check.** eudev's init script line 126:
 
-exit 0, in under a second. That was recorded as eudev deciding correctly on its
-own, and as a boot that is no longer slow it is an improvement -- but the device
-manager still does not run, so this is a warning standing in for a feature that
-is simply absent.
+    # System processes and/or kernel threads are surrounded by brackets: [...]
+    if ! ps --no-headers --format args ax | egrep -q '^\['; then
+      log_warning_msg "eudev does not support containers, $NAME not started"
 
-**Established.** The message is eudev's own container detection, not AOK's. It
-is a guard in the init script rather than in udevd, and it is reached only
-because everything before it now passes. The Alpine path is different -- Alpine
-ships mdev, which is on native-links.sh's EXCLUDED list -- so this entry is
-about Devuan and any other eudev distro.
+The test is "are any KERNEL THREADS visible". The word container appears only
+in the message. AOK showed none, so the check fired.
 
-**Next step.** Read what eudev's container check actually tests: on a systemd
-system it is `/run/systemd/container` and the `container=` environment
-variable, and eudev's is a variant of that. Decide between three answers, in
-this order of preference:
+**And udevd works.** The old entry hedged that starting it might be worse than
+the warning, since udevd wants netlink uevents AOK does not generate. Started
+by hand on the device it enumerated **30 devices**, and udevadm trigger and
+settle both returned 0. There was nothing to protect anyone from.
 
-1. AOK is not a container and can say so -- if the check is a file or an
-   environment variable AOK sets or inherits by accident, stop setting it.
-2. It IS container-like by that definition and udevd genuinely cannot work
-   (it wants netlink uevents, which AOK's kernel does not generate). Then the
-   honest fix is documentation plus, if a guest needs device nodes, keeping the
-   existing `/dev` repair doing that job -- and the warning is correct.
-3. Neither: make udevd start and watch it fail, which is worse than the
-   warning.
+Two things only a look at the device showed:
 
-Answering 1 vs 2 is the whole task, and it is a read of eudev's source rather
-than of AOK's.
+  - Started by hand it passed **by accident**: `[elogind-daemon]` has an empty
+    cmdline, so ps brackets it and the egrep matches something that is not a
+    kernel thread at all.
+  - At boot it cannot. eudev is `Default-Start: S`; elogind is
+    `Default-Start: 2 3 4 5`. Nothing that early has an empty cmdline, so the
+    check fires -- which is exactly the reported symptom.
 
-## Closed during the 550 cycle
+**Fixed** with a synthetic kernel thread: /proc/2 is `kthreadd`, with an empty
+cmdline so ps renders it `[kthreadd]`, and pid 2 reserved in the allocator so
+no real task can collide (40 spawned tasks got 85+, never 2). Only the files a
+process listing reads are answered -- stat, cmdline, comm, status; everything
+else still reports ESRCH, because there is no process there.
+
+Deliberately ONE thread. AOK genuinely runs kernel-side threads (timer,
+netlink watcher, JIT) doing kernel work for the guest, so showing one is not a
+fiction -- but inventing a plausible crowd of `[ksoftirqd/0]` and friends would
+claim more than is true. kthreadd is the honest minimum: on Linux it is the one
+kernel thread that always exists.
+
+**Still to do on the device**: eudev is not enabled at boot there
+(`/etc/rc2.d` has no entry), so enabling it is a separate step from this fix.
 
 ### Linux native AIO -- IMPLEMENTED 2026-08-21
 

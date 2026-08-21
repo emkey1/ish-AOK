@@ -51,6 +51,47 @@ void init_pending_queues(void) {
     
 }
 
+// Synthetic kernel threads.
+//
+// A Linux system always has at least one, and their ABSENCE is what several
+// programs use to decide they are inside a container -- eudev's init script
+// tests `ps ax | egrep '^\['` and refuses to start udevd when nothing matches,
+// with the misleading message "eudev does not support containers". AOK is not
+// a container: udevd runs perfectly once past that gate (30 devices
+// enumerated, trigger and settle both fine). It simply had no kernel threads
+// to show.
+//
+// It is also not a fiction. AOK genuinely runs kernel-side threads -- the
+// timer, the netlink watcher, the JIT -- doing kernel work on the guest's
+// behalf; they were merely never guest-visible. kthreadd alone is enough for
+// the heuristic and is the honest minimum: on Linux it is the one kernel
+// thread that always exists and is the parent of the rest. Inventing a
+// plausible-looking crowd of others would be claiming more than is true.
+//
+// pid 2 to match Linux, where kthreadd is always pid 2. The allocator below
+// skips it so no real task can ever collide.
+struct kthread_entry { dword_t pid; const char *name; };
+static const struct kthread_entry kthreads[] = {
+    {2, "kthreadd"},
+};
+
+bool pid_is_kthread(dword_t pid, const char **name_out) {
+    for (size_t i = 0; i < sizeof(kthreads)/sizeof(kthreads[0]); i++) {
+        if (kthreads[i].pid == pid) {
+            if (name_out != NULL)
+                *name_out = kthreads[i].name;
+            return true;
+        }
+    }
+    return false;
+}
+
+dword_t pid_kthread_at(size_t index) {
+    if (index >= sizeof(kthreads)/sizeof(kthreads[0]))
+        return 0;
+    return kthreads[index].pid;
+}
+
 static bool pid_empty(struct pid *pid) {
     return pid->task == NULL && list_empty(&pid->session) && list_empty(&pid->pgroup);
 }
@@ -471,7 +512,10 @@ struct task *task_create_(struct task *parent) {
     do {
         last_allocated_pid++;
         if (last_allocated_pid > MAX_PID) last_allocated_pid = 1;
-    } while (!pid_empty(&pids[last_allocated_pid]));
+        // Reserved for a synthetic kernel thread: handing it to a real task
+        // would make two different processes answer to one pid.
+    } while (!pid_empty(&pids[last_allocated_pid]) ||
+             pid_is_kthread(last_allocated_pid, NULL));
     struct pid *pid = &pids[last_allocated_pid];
     pid->id = last_allocated_pid;
     list_init(&pid->alive);
