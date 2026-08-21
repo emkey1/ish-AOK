@@ -124,6 +124,11 @@ void fpu_stenv32(struct cpu_state *cpu, struct fpu_env32 *env);
 void fpu_ldenv32(struct cpu_state *cpu, struct fpu_env32 *env);
 void fpu_save32(struct cpu_state *cpu, struct fpu_state32 *state);
 void fpu_restore32(struct cpu_state *cpu, struct fpu_state32 *state);
+struct fxsave_area;
+void fpu_fxsave32(struct cpu_state *cpu, struct fxsave_area *area);
+void fpu_fxrestore32(struct cpu_state *cpu, struct fxsave_area *area);
+void fpu_stmxcsr32(struct cpu_state *cpu, dword_t *value);
+void fpu_ldmxcsr32(struct cpu_state *cpu, dword_t *value);
 void fpu_init(struct cpu_state *cpu);
 void fpu_clex(struct cpu_state *cpu);
 

@@ -4,6 +4,7 @@
 #include "emu/cpu.h"
 #include "emu/float80.h"
 #include "emu/fpu.h"
+#include "emu/fxsave.h"
 
 #define ST(i) cpu->fp[(cpu->top + i) % 8]
 
@@ -497,6 +498,38 @@ void fpu_restore32(struct cpu_state *cpu, struct fpu_state32 *state) {
     fpu_ldenv32(cpu, &state->env);
     for (int i = 0; i < 8; i++)
         memcpy(&ST(i), state->regs[i], 10);
+}
+
+// FXSAVE/FXRSTOR and the MXCSR accessors for the i386 guest. The area layout
+// and the cpu_state conversions are shared with the amd64 engine (emu/fxsave.h);
+// 32-bit mode sees eight XMM registers, and the slots for the other eight stay
+// zeroed as the reserved region of the 32-bit area requires.
+//
+// These existed only on the amd64 side until now. The i386 decoder folded the
+// whole 0f ae group into a single "fence" case that read the modrm byte and
+// fell through, so FXSAVE, FXRSTOR, LDMXCSR and STMXCSR were all silently
+// skipped -- no fault, no diagnostic, just stale state -- while CPUID kept
+// advertising fxsr and sse. tests/manual/x86/cpuid_xsave.c is what caught it
+// and is what keeps it caught.
+void fpu_fxsave32(struct cpu_state *cpu, struct fxsave_area *area) {
+    fxsave_fill(cpu, area, 8);
+}
+
+void fpu_fxrestore32(struct cpu_state *cpu, struct fxsave_area *area) {
+    fxsave_restore(cpu, area, 8);
+}
+
+// SSE runs round-to-nearest with every exception masked, so the control bits
+// are stored rather than honored -- the same deal cpu_state's mxcsr comment
+// describes. Storing them still matters: a read-modify-write of the control
+// word has to round-trip, and software reads MXCSR back to decide whether it
+// is running on a CPU that accepted what it wrote.
+void fpu_stmxcsr32(struct cpu_state *cpu, dword_t *value) {
+    *value = cpu->mxcsr;
+}
+
+void fpu_ldmxcsr32(struct cpu_state *cpu, dword_t *value) {
+    cpu->mxcsr = *value & 0xffff;
 }
 
 // FNINIT: control word back to 0x037f (all exceptions masked, round to

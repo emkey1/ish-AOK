@@ -11110,6 +11110,16 @@ void helper_rdtsc(struct cpu_state *cpu);
 #define FLDENV(val,z) h_write(fpu_ldenv, z)
 #define FSAVE(val,z) h_write(fpu_save, z)
 #define FRESTORE(val,z) h_write(fpu_restore, z)
+// The 0f ae memory forms. Sizes are fixed by the instruction rather than by
+// the operand-size prefix, so these pass a literal 32 instead of `oz`: decode.h
+// is compiled once per OP_SIZE and both passes must reach the same helper.
+// FXSAVE/FXRSTOR move 512 bytes and LDMXCSR/STMXCSR four; the size here only
+// selects the TLB-check width of the helper gadget, exactly as it already does
+// for the 108-byte FSAVE above.
+#define FXSAVE()  h_write(fpu_fxsave, 32)
+#define FXRSTOR() h_read(fpu_fxrestore, 32)
+#define STMXCSR() h_write(fpu_stmxcsr, 32)
+#define LDMXCSR() h_read(fpu_ldmxcsr, 32)
 #define FINIT() h(fpu_init)
 #define FCLEX() h(fpu_clex)
 #define FPOP h(fpu_pop)

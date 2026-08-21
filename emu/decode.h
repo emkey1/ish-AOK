@@ -214,7 +214,46 @@ restart:
                 case 0xad: TRACEI("shrd cl, reg, modrm");
                            READMODRM; SHRD(reg_c, modrm_reg, modrm_val,oz); break;
 
-                case 0xae: TRACEI("fence"); READMODRM; break;
+                // The 0f ae group. This used to be one blanket "fence"
+                // case that read the modrm byte and fell through, which meant
+                // FXSAVE, FXRSTOR, LDMXCSR and STMXCSR were decoded and thrown
+                // away -- no fault, no diagnostic, just state that silently
+                // did not move -- while CPUID advertised fxsr and sse to the
+                // guest the whole time. The register forms really are no-ops
+                // here (there is no reordering to fence against when the guest
+                // sees one memory order), but the memory forms are not.
+                //
+                // /4 is XSAVE, /5 XRSTOR and /6 XSAVEOPT, which this engine
+                // does not implement. Those stay UNDEFINED rather than silently
+                // succeeding, because for a state-save instruction "accepted
+                // and ignored" means the guest reads back garbage later with
+                // nothing to blame; emu/cpuid.h keeps the XSAVE bit dark so
+                // nothing should be reaching them anyway.
+                //
+                // /7 with a memory operand is CLFLUSH, which is a different
+                // case entirely and stays a no-op: there is one coherent view
+                // of guest memory here, so there is no cache line to write
+                // back, and faulting on it would break code that legitimately
+                // emits it.
+                case 0xae: TRACEI("0f ae group\t"); READMODRM;
+                    if (modrm.type == modrm_reg) {
+                        switch (modrm.opcode) {
+                            case 5: TRACE("lfence"); break;
+                            case 6: TRACE("mfence"); break;
+                            case 7: TRACE("sfence"); break;
+                            default: TRACE("undefined"); UNDEFINED;
+                        }
+                        break;
+                    }
+                    switch (modrm.opcode) {
+                        case 0: TRACE("fxsave"); FXSAVE(); break;
+                        case 1: TRACE("fxrstor"); FXRSTOR(); break;
+                        case 2: TRACE("ldmxcsr"); LDMXCSR(); break;
+                        case 3: TRACE("stmxcsr"); STMXCSR(); break;
+                        case 7: TRACE("clflush"); break;
+                        default: TRACE("undefined"); UNDEFINED;
+                    }
+                    break;
 
                 case 0xaf: TRACEI("imul modrm, reg");
                            READMODRM; IMUL2(modrm_val, modrm_reg,oz); break;

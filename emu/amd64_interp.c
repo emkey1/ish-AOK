@@ -8,6 +8,7 @@
 #include "emu/cpuid.h"
 #include "emu/cpu.h"
 #include "emu/fpu.h"
+#include "emu/fxsave.h"
 #include "emu/memory.h"
 #include "emu/tlb.h"
 #include "emu/avx.h"
@@ -61,32 +62,9 @@ struct fpu_state32 {
     uint8_t regs[8][10];
 };
 
-struct amd64_fxsave_fpxreg {
-    word_t significand[4];
-    word_t exponent;
-    word_t padding[3];
-};
-
-struct amd64_fxsave_xmmreg {
-    dword_t element[4];
-};
-
-struct amd64_fxsave_area {
-    word_t fcw;
-    word_t fsw;
-    byte_t ftw;
-    byte_t reserved0;
-    word_t fop;
-    qword_t rip;
-    qword_t rdp;
-    dword_t mxcsr;
-    dword_t mxcsr_mask;
-    struct amd64_fxsave_fpxreg st[8];
-    struct amd64_fxsave_xmmreg xmm[16];
-    byte_t reserved1[96];
-};
-
-static_assert(sizeof(struct amd64_fxsave_area) == 512, "amd64 fxsave area size");
+// The FXSAVE area layout and its cpu_state conversions are shared with the
+// i386 engine; see emu/fxsave.h. Long mode sees sixteen XMM registers.
+#define AMD64_FXSAVE_XMM_COUNT 16
 
 #define AMD64_BUSYBOX_INIT_SLOT 0x5661a6d8ull
 #define AMD64_BUSYBOX_INIT_SLOT_SIZE 8
@@ -7031,49 +7009,17 @@ static int amd64_vex_step(struct cpu_state *cpu, struct tlb *tlb,
     }
 }
 
-static void amd64_fill_fxsave_area(struct cpu_state *cpu, struct amd64_fxsave_area *area) {
-    memset(area, 0, sizeof(*area));
-    area->fcw = cpu->fcw;
-    area->fsw = cpu->fsw;
-    area->mxcsr = cpu->mxcsr;
-    area->mxcsr_mask = 0xffff;
-
-    for (int i = 0; i < 8; i++) {
-        const float80 value = cpu->fp[i];
-        for (int j = 0; j < 4; j++)
-            area->st[i].significand[j] = (word_t) (value.signif >> (j * 16));
-        area->st[i].exponent = value.signExp;
-        if (value.signif != 0 || value.signExp != 0)
-            area->ftw |= (byte_t) (1u << i);
-    }
-
-    for (int i = 0; i < 16; i++)
-        for (int j = 0; j < 4; j++)
-            area->xmm[i].element[j] = cpu->xmm[i].u32[j];
+static void amd64_fill_fxsave_area(struct cpu_state *cpu, struct fxsave_area *area) {
+    fxsave_fill(cpu, area, AMD64_FXSAVE_XMM_COUNT);
 }
 
-static void amd64_restore_fxsave_area(struct cpu_state *cpu, const struct amd64_fxsave_area *area) {
-    word_t fcw = area->fcw;
-    fpu_ldcw16(cpu, &fcw);
-    cpu->fsw = area->fsw;
-    cpu->mxcsr = area->mxcsr;
-
-    for (int i = 0; i < 8; i++) {
-        float80 value = {0};
-        for (int j = 0; j < 4; j++)
-            value.signif |= (uint64_t) area->st[i].significand[j] << (j * 16);
-        value.signExp = area->st[i].exponent;
-        cpu->fp[i] = value;
-    }
-
-    for (int i = 0; i < 16; i++)
-        for (int j = 0; j < 4; j++)
-            cpu->xmm[i].u32[j] = area->xmm[i].element[j];
+static void amd64_restore_fxsave_area(struct cpu_state *cpu, const struct fxsave_area *area) {
+    fxsave_restore(cpu, area, AMD64_FXSAVE_XMM_COUNT);
 }
 
 static inline int amd64_fxsave_op(struct cpu_state *cpu, struct tlb *tlb,
         const struct amd64_modrm *modrm, bool fs_prefix, qword_t saved_rip) {
-    struct amd64_fxsave_area area;
+    struct fxsave_area area;
     qword_t addr;
 
     if (modrm->is_reg) {
@@ -7111,6 +7057,15 @@ static inline int amd64_fxsave_op(struct cpu_state *cpu, struct tlb *tlb,
         }
         return INT_NONE;
     }
+
+    // /7 with a memory operand is CLFLUSH (and, with a 66 prefix, CLFLUSHOPT).
+    // There is one coherent view of guest memory here, so there is no cache
+    // line to write back and the correct emulation is to do nothing. Missing
+    // it entirely meant SIGILL, which is a real crash for anything that emits
+    // the instruction -- the i386 engine reaches the same conclusion in
+    // emu/decode.h's 0f ae group.
+    if (modrm->reg == 7)
+        return INT_NONE;
 
     if (modrm->reg != 0 && modrm->reg != 1)
         return INT_UNDEFINED;

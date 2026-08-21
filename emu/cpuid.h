@@ -30,7 +30,14 @@ static inline dword_t cpuid_extended_max_leaf(void) {
 // component offsets from CPUID leaf 0x0D rather than assume a fixed map -- real
 // silicon varies here too, since Ice Lake dropped MPX exactly like this -- so
 // the only hard requirement is that this table and the offsets the XSAVE
-// implementation uses agree. emu/xsave.h derives both from these constants.
+// implementation uses agree.
+//
+// There is no XSAVE implementation yet, so this table is currently the only
+// definition of the map and nothing derives from it. Leaf 0x0D answers
+// unconditionally all the same, which is harmless only because
+// CPUID_ADVERTISE_VECTOR_STATE keeps the leaf-1 XSAVE bit dark: software
+// checks that bit before it goes looking here. Whoever writes XSAVE/XRSTOR
+// must take its offsets from these constants rather than repeat them.
 #define XCR0_X87_       (1u << 0)
 #define XCR0_SSE_       (1u << 1)
 #define XCR0_YMM_       (1u << 2)
@@ -78,7 +85,17 @@ static inline qword_t xcr0_value(void) {
 // So the enumeration lands dark and this flips to 1 in the same commit that
 // teaches the signal frame (and ptrace's regsets) to carry ymm_hi, zmm_hi,
 // xmm_ext and the opmask registers. XSAVE/XRSTOR must land with it too: bit 26
-// below promises those instructions exist.
+// below promises those instructions exist, and today nothing implements them.
+//
+// The signal frame is not the only debt. Flipping this to 1 and running
+// tests/manual/x86/cpuid_xsave.c on an i386 guest reports thirteen features
+// advertised that the guest cannot execute: every AVX-512 bit (the i386 front
+// end reaches vector code only through gen_vex32, which is VEX-only -- there
+// is no EVEX decoder), BMI1 and BMI2, and the legacy SSE encodings of AESNI
+// and PCLMULQDQ. The amd64 guest is in better shape but shares the XSAVE gap.
+// Run that test on BOTH guest ABIs before believing the switch is safe: these
+// bits are advertised from ABI-independent functions, so i386 gets whatever
+// amd64 is promised.
 #define CPUID_ADVERTISE_VECTOR_STATE 0
 
 static inline dword_t cpuid_leaf1_ecx_features(void) {
@@ -135,11 +152,16 @@ static inline dword_t cpuid_leaf1_edx_features(void) {
 
 // Leaf 7 subleaf 0: the structured extended feature flags. Everything here is
 // implemented by emu/avx.c plus the amd64 interpreter's VEX/EVEX decoder and
-// covered by tests/manual/x86/avx_regress.c; the i386 guest reaches the same
-// semantics through gen_vex32. Nothing is advertised that a guest cannot
-// actually execute -- tests/manual/x86/cpuid_xsave.c walks these bits and runs
-// a representative instruction for each one, so a bit added here without an
-// implementation behind it fails the suite rather than SIGILLing a user.
+// covered by tests/manual/x86/avx_regress.c. The i386 guest is NOT in the same
+// position: gen_vex32 decodes VEX only, so the AVX-512 bits below have nothing
+// behind them there -- see the CPUID_ADVERTISE_VECTOR_STATE comment above.
+//
+// tests/manual/x86/cpuid_xsave.c walks every bit this file advertises and runs
+// a representative instruction for each one, so a bit turned on here without an
+// implementation behind it fails the suite rather than SIGILLing a user. It
+// also catches the quieter failure: an instruction the decoder accepts and then
+// discards, which is how FXSAVE and STMXCSR spent a long time doing nothing at
+// all on the i386 guest while fxsr and sse were advertised.
 static inline dword_t cpuid_leaf7_ebx_features(void) {
 #if !CPUID_ADVERTISE_VECTOR_STATE
     return 0;
