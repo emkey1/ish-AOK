@@ -62,44 +62,38 @@ task it used before, so the blast radius is only the case that was broken.
 **Still open, and the reason mariadb is disabled on that device:** the crash
 that started all of it, in the entry below.
 
-### mariadbd SIGSEGVs in ha_maria::drop_table, and mariadb-install-db cannot finish
+### mariadbd SIGSEGV in ha_maria::drop_table -- FIXED 2026-08-21, and it was ours
 
-Established 2026-08-21 on the M4 iPad (Devuan 6 arm64), by logging into the
-device rather than reasoning from a report.
+Established on the M4 iPad, then reproduced locally and fixed. Not an Aria bug,
+and not an AIO one either: **AOK returned EBADF for a legal openat.**
 
-`mariadb-install-db` dies partway through:
+`openat(2)`, and POSIX for the whole *at() family: "If the pathname given in
+pathname is absolute, then dirfd is ignored." Ignored, not merely unused -- it
+is never looked at, so it may be -1, or closed. AOK validated it anyway. glibc,
+canonicalising an Aria temp table, calls
 
-    [ERROR] /usr/sbin/mariadbd got signal 11 ;
-    /usr/sbin/mariadbd(_ZN8ha_maria10drop_tableEPKc+0x18) [0x7fffbc8e185c]
-    /usr/sbin/mariadbd(_Z14free_tmp_tableP3THDP5TABLE+0xb4)
-    /usr/sbin/mariadbd(_Z19close_thread_tablesP3THD+0x118)
-    /usr/sbin/mariadbd(_Z21mysql_execute_commandP3THDb+0x558)
+    openat(-1, "/tmp", O_PATH|O_CLOEXEC|O_NOFOLLOW)
 
-so the `mysql` system database is left with 3 tables of the ~30 it needs (only
-`db` and `global_priv`), and every later start fails with `Can't open and lock
-privilege tables`. **That address is the one from the original bug report**,
-which this file previously attributed to the AIO nullptr -- see the correction
-in the AIO entry above.
+got EBADF where Linux hands back a descriptor, and Aria carried the failure
+three frames -- surfacing first as `Got error 9 "Bad file descriptor" from
+storage engine Aria` -- before dereferencing the NULL it had left behind. The
+SIGSEGV therefore landed in ha_maria::drop_table, nowhere near the mistake,
+which is why it read as a MariaDB bug for weeks and why its fault address is
+recorded elsewhere in this file as an AIO nullptr.
 
-The disassembly recorded at the time was `ldr x3, [x0, #0x588]` then
-`ldr x2, [x3]`: a member pointer at +0x588 is NULL and its vtable is read.
-Preceding it in the log is `Got error 9 "Bad file descriptor" from storage
-engine Aria`, which suggests the Aria file handle was already invalid before
-drop_table ran -- so the thing to chase is which syscall hands Aria an EBADF
-that Linux would not, not the null deref itself.
+**No MariaDB install on iSH-AOK had ever completed**: mysql_install_db died
+leaving 3 of ~30 system tables. It now installs 88 and serves queries, verified
+on the device.
 
-**Not yet reproduced locally.** No local root has MariaDB; a Devuan root with it
-installed would allow the fd-555 syscall log, which is what would actually name
-the offending call. That is the next step.
+Fixed by at_fd_for_path() in kernel/fs.c **and fs/stat.c** -- that file keeps
+its own copy of at_fd, so the first fix passed everything except fstatat, and
+only tests/manual/at_absolute_path.c noticed. statx lives in that same file,
+which is the call modern glibc actually makes. The two helpers are still
+duplicated; unifying them is worth doing.
 
-**The boot-wedge half is fixed and confirmed on the device** (2026-08-21,
-after reinstall). A mariadbd that fails this way now aborts and EXITS in about
-4 seconds instead of hanging, and `/etc/init.d/mariadb start` gives up and
-returns after 54s instead of polling forever, leaving no stragglers. So
-re-enabling mariadb no longer wedges boot -- it just costs that time and still
-fails to start. It is left disabled (`update-rc.d mariadb enable` to reverse)
-because there is nothing to gain from the delay until the crash below is
-fixed.
+Found with the fd-555 syscall log against a local Devuan root. strace ON THE
+DEVICE would not follow the exec into the crashing binary and named nothing --
+build the local repro instead of fighting it.
 
 ### SmallCLUE's pager wedges apt, and is excluded rather than fixed
 
@@ -427,38 +421,40 @@ explanation deserves checking first. **Next step** is to find where that stack
 slot was last written rather than where it was read -- the tool's new report
 names the reading instruction, which is a start and not the answer.
 
-### A terminal MotePad, and a way for the shell to hand a file to the applet
+### A terminal MotePad, and a guest-to-app channel -- BOTH DONE 2026-08-21
 
-Requested 2026-08-20. Two halves, and only the first is small.
+Requested 2026-08-20 as two halves, "and only the first is small". Both landed.
 
-**The editor.** MotePad exists as a Workspace applet (app/MotePadDocumentStore.m,
-app/WorkspaceViewController.h) and has no terminal counterpart, so editing a
-file from a shell means nextvi or micro. A `motepad` command that opens the
-same documents from the terminal is the ask.
+**The channel** is `/proc/ish/workspace` (fs/proc/ish.c, app side in
+WorkspaceViewController.m), which answers the question the guest could not ask
+-- am I under Workspace, and what can you open? -- and takes `open <tool>
+[path]` requests. Deliberately narrow: one verb, a tool allowlist decided in
+the app, unknown tool or relative path refused synchronously so the caller gets
+an errno rather than silence from a queue it cannot observe. It reports
+"accepted", not "on screen": UIKit cannot be touched from a task thread, and
+blocking a guest write on the UI queue would deadlock a terminal hosted BY that
+UI.
 
-**The interesting half: `motepad file.txt` in a Workspace-hosted terminal
-should be able to open the GUI applet instead.** Nothing exists for that today,
-and it needs two things AOK does not have:
+**The launchers** are twenty `ws-*` scripts generated into /AOK/persist/bin at
+launch (AppDelegate.m). Prefixed because that directory is first on PATH and
+several tool identifiers collide with real commands -- `info` is GNU info.
 
-1. **The guest cannot tell it is running under Workspace.** /proc/ish is the
-   established guest-visible surface for this kind of fact -- it already
-   carries colors, defaults, roots, UIDevice, the JIT knobs -- and has no
-   workspace indicator. A read-only `/proc/ish/workspace` saying whether the
-   session is Workspace-hosted is the natural shape, and is useful well beyond
-   this (a shell profile could use it too).
-2. **There is no guest-to-app request channel.** GuestFileBridge
-   (app/GuestFileBridge.{h,m}) goes the other way -- the app reading guest
-   files -- so "open this path in MotePad" has nowhere to go. This wants a
-   deliberate design rather than a quick pipe: it is a guest asking the app to
-   put something on screen, so it needs a defined verb set, a path that is
-   validated app-side, and a sensible answer when the app is backgrounded or
-   the applet is already open on another file.
+**The editor** is kernel/native_motepad.c, a native program: modeless, gutter,
+Ctrl-S/Q/F/G/K, UTF-8-aware motion, atomic save. Under Workspace it hands the
+file to the applet; -t forces the terminal.
 
-**Suggested order.** Ship the terminal editor first and have it check
-/proc/ish/workspace only to print "run this from the Workspace MotePad applet
-for the GUI version" -- useful on its own, and it forces (1) to be defined
-without committing to (2). Then design the request channel separately, because
-it is the piece with security and lifecycle questions in it.
+**The trap worth remembering, because it cost hours.** A native program built
+as an ordinary libish source gets the HOST libc, not the shim: it compiles,
+links and runs while writing files to the Mac and reading the Mac's stdin,
+where it races the emulator's own reader on the same descriptor and loses every
+other keystroke. It needs its own archive compiled with the native_libc.h
+force-include, folded in with link_whole (meson.build). Nothing about the
+failure points at the cause -- the visible symptom was dropped keys, which
+looks exactly like a tty bug in AOK. What ruled that out was running native
+bash through the same harness and watching it behave perfectly.
+
+Still open, and small: no wcwidth, so a double-width glyph counts as one column
+and can leave the cursor a cell off on such a line.
 
 ### eudev refuses to start: "does not support containers" (Devuan)
 
