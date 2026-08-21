@@ -154,6 +154,13 @@ struct tty {
     unsigned refcount;
     struct tty_driver *driver;
     bool hung_up;
+    // Bumped by every hangup. A descriptor records this at open and is hung up
+    // only if the tty has been hung up SINCE -- which is what a hangup means on
+    // Linux: it belongs to the descriptors that were open at the time, and a
+    // fresh open of the same terminal gets a working one. Modelling it as a
+    // single sticky flag made a hung-up console permanently dead: see
+    // tests/manual/tty_hangup_reopen.c.
+    unsigned hangup_gen;
     bool ever_opened;
 
 #define TTY_BUF_SIZE 4096

@@ -35,6 +35,10 @@ struct fd {
             // links together fds pointing to the same tty
             // locked by the tty
             struct list tty_other_fds;
+            // tty->hangup_gen as it was when this descriptor was opened.
+            // Differing from the tty's current value means a hangup happened
+            // after this open, and only then does this fd see EIO.
+            unsigned tty_hangup_gen;
         };
         struct {
             struct poll *poll;

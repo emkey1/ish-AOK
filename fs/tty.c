@@ -39,6 +39,7 @@ struct tty *tty_alloc(struct tty_driver *driver, int type, int num) {
     tty->mtime = (dword_t) boot_time;
     tty->ctime = (dword_t) boot_time;
     tty->hung_up = false;
+    tty->hangup_gen = 0;
     tty->ever_opened = false;
     tty->session = 0;
     tty->fg_group = 0;
@@ -106,6 +107,12 @@ static struct tty *get_slave_side_tty(struct tty *tty) {
   } else {
       return tty;
   }
+}
+
+// True only if the tty was hung up AFTER this descriptor was opened. See
+// tty_open and struct tty's hangup_gen.
+static bool tty_fd_hung_up(struct fd *fd) {
+    return fd->tty != NULL && fd->tty_hangup_gen != fd->tty->hangup_gen;
 }
 
 static bool tty_has_open_fds(struct tty *tty) {
@@ -215,9 +222,23 @@ int console_minor = 1;
 int tty_open(struct tty *tty, struct fd *fd) {
     fd->tty = tty;
 
+    // A hangup belongs to the descriptors that were open when it happened, and
+    // a fresh open of the same terminal must get a working tty -- that is what
+    // it means on Linux. AOK modelled it as one sticky flag on the tty, so the
+    // first hangup killed the terminal for good.
+    //
+    // The System Console is where that showed: something hangs up tty1 early in
+    // boot, getty's descriptors correctly go EIO and it exits, init respawns it
+    // -- and the NEW getty's fresh open was still EIO, so it died again until
+    // init gave up with `Id "1" respawning too fast`. Writing to /dev/tty1 or
+    // /dev/console returned EIO with a healthy getty holding both. Restarting
+    // the app did not help, because the same hangup happens again every boot.
     lock(&tty->fds_lock, 0);
     list_add(&tty->fds, &fd->tty_other_fds);
     unlock(&tty->fds_lock);
+    lock(&tty->lock, 0);
+    fd->tty_hangup_gen = tty->hangup_gen;
+    unlock(&tty->lock);
 
     if (!(fd->flags & O_NOCTTY_) && tty->driver != &pty_master) {
         // Make this our controlling terminal if:
@@ -645,7 +666,7 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
     int err = 0;
     struct tty *tty = fd->tty;
     lock(&tty->lock, 0);
-    if (tty->hung_up) {
+    if (tty_fd_hung_up(fd)) {
         goto error;
     }
 
@@ -760,7 +781,7 @@ error:
 static ssize_t tty_write(struct fd *fd, const void *buf, size_t bufsize) {
     struct tty *tty = fd->tty;
     lock(&tty->lock, 0);
-    if (tty->hung_up) {
+    if (tty_fd_hung_up(fd)) {
         unlock(&tty->lock);
         return _EIO;
     }
@@ -829,7 +850,7 @@ static int tty_poll(struct fd *fd) {
     } else {
         types |= POLL_WRITE;
     }
-    if (tty->hung_up) {
+    if (tty_fd_hung_up(fd)) {
         types |= POLL_READ | POLL_WRITE | POLL_ERR | POLL_HUP;
     } else if (pty_is_half_closed_master(tty)) {
         types |= POLL_READ | POLL_HUP;
@@ -1046,7 +1067,7 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
     int err = 0;
     struct tty *tty = fd->tty;
     lock(&tty->lock, 0);
-    if (tty->hung_up) {
+    if (tty_fd_hung_up(fd)) {
         unlock(&tty->lock);
         if (cmd == TIOCSPGRP_)
             return _ENOTTY;
@@ -1143,6 +1164,8 @@ void tty_set_winsize(struct tty *tty, struct winsize_ winsize) {
 
 void tty_hangup(struct tty *tty) {
     tty->hung_up = true;
+    // Everything open right now is hung up; anything opened after this is not.
+    tty->hangup_gen++;
     tty_poll_wakeup(tty, POLL_READ | POLL_WRITE | POLL_ERR | POLL_HUP);
     // Wake blocking readers/writers, not just pollers: a thread asleep in
     // tty_read/tty_write's wait_for() must be notified or it will never observe

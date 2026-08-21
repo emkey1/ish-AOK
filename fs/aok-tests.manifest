@@ -15,6 +15,7 @@ README.txt
 aio_basic.c
 aio_threads.c
 sigwait_kill.c
+tty_hangup_reopen.c
 x86/atomics32.c
 x86/atomic_common.h
 test_common.h
