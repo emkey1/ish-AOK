@@ -26,6 +26,17 @@
 // round so at least one is reliably mid-scan, and children that exit
 // immediately. The watchdog is the verdict: on a build with the bug this test
 // does not fail, it HANGS, and the alarm is what turns that into a failure.
+//
+// It has since caught the same cycle a SECOND time through a different edge,
+// so do not read a hang here as "pidfd_notify_exit regressed". The exit path
+// also raises SIGCHLD to the parent group, and that runs signalfd_wakeup_task
+// (kernel/signal.c) with pids_lock held -- which trylocked the parent's fd
+// table, and on failure released the table through fdtable_release(), which
+// blocked on the very lock whose trylock had just failed. Three locks, one
+// cycle: pids_lock -> files->lock -> poll->lock -> pids_lock. Fixed 2026-08-21
+// by making fdtable_release() take files->lock only for the final teardown;
+// see the comment on it in fs/fd.c. If this test hangs again, sample the
+// process and read the cycle off the stacks rather than assuming which edge.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>

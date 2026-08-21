@@ -107,19 +107,38 @@ static int fdtable_close(struct fdtable *table, fd_t f);
 // So a concurrent retain either precedes teardown (its +1 keeps this release
 // from reaching 0) or sees task->files == NULL and skips. See the cross-task
 // *_task_files_retain wrappers in fs/proc, fs/sock, and kernel/signal.
+//
+// The decrement must NOT be taken under table->lock, even though it used to
+// be. Those cross-task wrappers exist to be callable from the signal-delivery
+// path, which runs holding sighand->lock and often pids_lock, and they are
+// carefully written to give up rather than block -- signalfd_wakeup_task()
+// trylocks files->lock and bails out when it is busy. But the bail-out
+// released the table, and a blocking lock() here meant it then waited for the
+// very lock whose trylock had just failed, with pids_lock still in hand. That
+// closed a three-lock cycle and wedged the whole emulator:
+//
+//   A exiting        pids_lock          -> waits for files->lock  (here)
+//   B in close(2)    files->lock        -> waits for poll->lock   (epoll_close)
+//   C in epoll_wait  poll->lock         -> waits for pids_lock    (pidfd_poll)
+//
+// Reproduced by tests/manual/pidfd_epoll_deadlock.c, which hammers exactly
+// this interleaving; every thread that later wants pids_lock (any fork, any
+// exit, any /proc/<pid> lookup) then queues behind A for ever.
+//
+// refcount is already atomic, so the lock was never what made the decrement
+// safe. Take it only for the teardown, which by definition runs when no other
+// reference -- and therefore no other lock holder -- is left.
 void fdtable_release(struct fdtable *table) {
+    if (atomic_fetch_sub(&table->refcount, 1) != 1)
+        return;
     lock(&table->lock, 0);
-    if (--table->refcount == 0) {
-        for (fd_t f = 0; (unsigned) f < table->size; f++) {
-            fdtable_close(table, f);
-        }
-        free(table->files);
-        free(table->cloexec);
-        unlock(&table->lock);
-        free(table);
-    } else {
-        unlock(&table->lock);
+    for (fd_t f = 0; (unsigned) f < table->size; f++) {
+        fdtable_close(table, f);
     }
+    free(table->files);
+    free(table->cloexec);
+    unlock(&table->lock);
+    free(table);
 }
 
 static int fdtable_resize(struct fdtable *table, unsigned size) {
