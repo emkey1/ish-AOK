@@ -617,7 +617,17 @@ fi
 # had installed the links, `awk` resolved to the NATIVE awk, which reads the
 # banner differently, and the second run could no longer find any applets. A
 # script that installs commands onto PATH must not then depend on that PATH.
-APPLETS=$(
+#
+# A function rather than the loop written straight inside `APPLETS=$( ... )`,
+# which is what it used to be. bash 3.2 -- still what macOS ships as /bin/bash,
+# so still what a `bash native-links.sh` or a `sh -n` lint run on a Mac uses --
+# counts parentheses naively inside $( ), takes the `)` that ends a case PATTERN
+# for the one that ends the substitution, and rejects the whole file at the
+# following `;;'. Nothing here is bash-specific and no guest shell has the bug
+# (ash, dash, zsh and ksh all parse it), but a script nobody can lint is one
+# whose next real syntax error goes unnoticed. Moving the case out of the
+# substitution costs nothing and parses everywhere.
+applet_list() {
     "$NATIVE" 2>&1 | while IFS= read -r line; do
         case "$line" in
             "  "[a-z[]*)
@@ -627,7 +637,8 @@ APPLETS=$(
                 ;;
         esac
     done
-)
+}
+APPLETS=$(applet_list)
 if [ -z "$APPLETS" ]; then
     echo "$0: could not read the applet list from $NATIVE" >&2
     exit 1
