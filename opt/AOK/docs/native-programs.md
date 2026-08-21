@@ -13,7 +13,7 @@ You reach them through `/AOK/native`:
 
 ```sh
 ls /AOK/native
-# bash  smallclue  zsh  zsh-multio
+# bash  motepad  smallclue  zsh  zsh-multio
 ```
 
 Everything else — `ssh`, `wc`, `vi` — is a symlink to
@@ -82,6 +82,11 @@ which is how a build leaves bash's GPLv3 code out of the binary. When that
 happens the registry entry is empty and **`/AOK/native/bash` simply does not
 exist**, rather than existing and failing.
 
+Not everything here has a switch. `smallclue` and `motepad` are unconditional,
+because there is nothing to gate them on: neither drags in a toolchain or a
+licence question the way bash, zsh and helix do. So a script may reasonably
+assume those two and should check for the rest.
+
 The files that *do* exist are worth a look:
 
 ```sh
@@ -105,6 +110,7 @@ diagnostic rather than a program.
 | `/AOK/native/bash` | bash 5.2. GPLv3, which is why it has a build switch at all |
 | `/AOK/native/zsh` | zsh, with fork-by-relaunch; `zsh --version` for the exact one |
 | `/AOK/native/zsh-multio` | a helper for zsh's MULTIOS redirections, which need a process that is not the shell to hold the descriptors |
+| `/AOK/native/motepad` | a modeless terminal text editor, the counterpart to Workspace's MotePad applet — see [motepad.md](motepad.md) |
 
 SmallCLUE's applets are *smaller* implementations, not drop-in replacements for
 the distro's. They cover the common cases and diverge on individual flags — the

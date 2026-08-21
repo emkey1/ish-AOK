@@ -29,8 +29,9 @@ Everything else under `/AOK` is baked into the app at build time:
 /AOK/README.txt           what this filesystem is, in a dozen lines
 /AOK/VERSION              build identifier
 /AOK/docs/                this documentation set
-/AOK/tools/               scripts and utilities (native-links.sh, manage-roots.sh,
-                          mount-root.sh, ktop, benchmarks, provisioning, Wayland)
+/AOK/tools/               scripts and utilities (native-links.sh, persist-links.sh,
+                          manage-roots.sh, mount-root.sh, ktop, benchmarks,
+                          provisioning, Wayland)
 /AOK/tests/               the guest-side regression suite
 /AOK/fixes/               canned fixes for known upstream-distro bugs
 /AOK/native/              programs compiled into the app -- exec'ing one runs host

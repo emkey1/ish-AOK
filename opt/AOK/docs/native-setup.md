@@ -4,6 +4,12 @@
 why it is fast. This page is the practical half: getting them onto your `PATH`,
 making one your login shell, and backing out again.
 
+There is a near neighbour with a different job. `/AOK/tools/persist-links.sh`
+has the same shape — same `--list`, `--remove`, `--force`, same per-root
+caveat — but it links **your own** programs out of `/AOK/persist/bin`, so it can
+never shadow a distro command you did not choose to shadow. See
+[persist.md](persist.md). This page is only about the app's programs.
+
 Nothing here is required. `/AOK/native` is always present, and you can always
 run a native program by its full path without setting anything up at all:
 
@@ -26,8 +32,16 @@ someone else, prefix it.
 
 That creates a symlink per applet in `/usr/local/native-bin`, puts that
 directory first on your `PATH`, and switches the UID 1000 user's login shell to
-a native one. On a current build it links about 105 applets and skips 28 it
-knows do not work.
+a native one. On a current build it links about 110 applets and skips a couple
+of dozen it knows do not work.
+
+It links the **standalone** native programs too, not only SmallCLUE's applets —
+`bash`, `zsh`, and [`motepad`](motepad.md) each get a link pointing at their own
+file. Three names are deliberately left out: `smallclue` itself (its applets are
+linked by name, so a bare `smallclue` link would only print the banner),
+`zsh-multio` (an internal helper, not a second shell), and `rust-probe` (a
+diagnostic nobody types). Exclusion there is not a judgement about whether the
+program works.
 
 Look before you leap — `--list` changes nothing and prints exactly what would
 happen:
@@ -39,8 +53,10 @@ sh /AOK/tools/native-links.sh --list
 The last lines are the summary worth reading:
 
 ```
-would link 105, leave 0 in place, skip 28 excluded, 0 already linked, unlink 0 now-excluded
+would link 110 applet(s) and 3 program(s), leave 0 in place, skip 20 excluded, 0 already linked, unlink 0 now-excluded
   would put /usr/local/native-bin first on PATH via /etc/profile.d/05-aok-native-bin.sh
+  would make zsh read it too, via /etc/zprofile
+  nu already uses /AOK/native/bash
 ```
 
 **Do this once per root.** The links live in the root's own `/usr/local`, and
