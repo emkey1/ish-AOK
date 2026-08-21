@@ -1,0 +1,4 @@
+# Deliberately empty: the /AOK/native/libs table is only populated when a
+# native program that needs it is compiled in. fs/aok.c reads the generated
+# counts either way, so this keeps the build honest without a second code path
+# -- zero files, zero directories, and /AOK/native/libs simply does not exist.

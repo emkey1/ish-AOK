@@ -231,6 +231,22 @@ if get_option('native_rust') != 'disabled'
     endif
 endif
 
+# Decided here rather than beside the crate that builds it, because the
+# /AOK/native/libs table is generated a long way above that and has to know
+# whether helix's runtime is going in.
+if get_option('native_helix').enabled()
+    if not have_rust_native
+        error('native_helix needs the Rust toolchain: cargo and llvm-objcopy')
+    endif
+    # fs_early, not fs_mod: this runs before the latter is imported, and it
+    # has to run here because the /AOK/native/libs table is generated further
+    # down and needs to know whether helix's runtime is going in.
+    if not fs_early.exists('deps/helix/helix-term/Cargo.toml')
+        error('native_helix: deps/helix is empty -- git submodule update --init deps/helix')
+    endif
+    have_helix = true
+endif
+
 have_curl_shim = false
 if host_machine.system() in ['darwin', 'ios']
     have_curl_shim = add_languages('objc', required: false, native: false)
@@ -336,6 +352,30 @@ aok_generated_docs = custom_target('aok_generated_docs',
     command: [python, '@INPUT0@', '@INPUT1@',
               meson.current_source_dir() / 'opt' / 'AOK' / 'docs', '@OUTPUT@',
               '/docs', '_docs'])
+
+# Same mechanism for /AOK/native/libs, from fs/aok-libs.manifest with sources
+# under deps/helix/runtime/. Unlike the three above, its names NEST -- the
+# directories are derived from the paths by the generator rather than declared
+# in fs/aok.c, which is what lets it serve a tree with a directory per
+# language.
+#
+# Only built when helix is; without it the manifest's files would be a
+# megabyte of queries and themes for an editor that is not in the binary. The
+# empty manifest keeps fs/aok.c compiling either way, with the counts at zero.
+aok_libs_manifest = have_helix ? 'fs/aok-libs.manifest' : 'fs/aok-libs-empty.manifest'
+aok_lib_srcs = []
+foreach line : fs_mod.read(aok_libs_manifest).strip().split('\n')
+    entry = line.strip()
+    if entry != '' and not entry.startswith('#')
+        aok_lib_srcs += files('deps/helix/runtime' / entry.split()[0])
+    endif
+endforeach
+aok_generated_libs = custom_target('aok_generated_libs',
+    output: 'aok_generated_libs.inc',
+    input: [files('tools/gen-aokfs.py', aok_libs_manifest)] + aok_lib_srcs,
+    command: [python, '@INPUT0@', '@INPUT1@',
+              meson.current_source_dir() / 'deps' / 'helix' / 'runtime', '@OUTPUT@',
+              '/native/libs/helix', '_libs'])
 
 # The syscall numbers a native program may issue, generated from calls.c's own
 # table so the two cannot drift. The hand-written list this replaces named 77
@@ -468,7 +508,7 @@ if get_option('kernel') == 'ish'
 
         'kernel/fs.c',
         'kernel/fs_info.c',
-        'fs/aok.c', aok_generated_tests, aok_generated_tools, aok_generated_docs,
+        'fs/aok.c', aok_generated_libs, aok_generated_tests, aok_generated_tools, aok_generated_docs,
         'fs/mount.c',
         'fs/fd.c',
         'fs/inode.c',
@@ -791,11 +831,7 @@ if get_option('kernel') == 'ish'
         # link is thousands of duplicate symbols -- which is what happened the
         # first time this was two crates.
         native_features = get_option('native_rust_features')
-        if get_option('native_helix').enabled()
-            if not fs_mod.exists('deps/helix/helix-term/Cargo.toml')
-                error('native_helix: deps/helix is empty -- git submodule update --init deps/helix')
-            endif
-            have_helix = true
+        if have_helix
             native_features = native_features == '' ? 'helix' : native_features + ',helix'
         endif
 

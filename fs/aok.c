@@ -94,6 +94,7 @@ static void *aokfs_encode_node(enum aokfs_node_kind node) {
 #include "aok_generated_tests.inc"
 #include "aok_generated_tools.inc"
 #include "aok_generated_docs.inc"
+#include "aok_generated_libs.inc"
 // Native programs are addressed like the generated files above: a base plus an
 // index into kernel/native.c's registry, rather than one enum constant per
 // program. The registry is already the thing exec dispatches on, so serving
@@ -111,6 +112,18 @@ static const struct native_program *aokfs_node_native(enum aokfs_node_kind node)
 #define AOKFS_GEN_BASE 0x10000
 #define AOKFS_GEN_TOOLS_BASE 0x20000
 #define AOKFS_GEN_DOCS_BASE 0x30000
+// /native/libs: support files a native program reads -- helix's tree-sitter
+// queries and themes are the first, and the reason it exists.
+//
+// Unlike the three tables above, this one is NESTED arbitrarily deep, so its
+// directories cannot be enum constants the way /tools/ktop and the arch test
+// dirs are. Adding one of those means an enum entry plus edits in four other
+// places, which does not scale to a tree with a directory per language. So
+// gen-aokfs.py derives the directory list from the file paths and it gets a
+// base of its own; a directory here is an index into that table and nothing
+// else in this file has to learn about it.
+#define AOKFS_GEN_LIBS_BASE 0x50000
+#define AOKFS_GEN_LIBSDIR_BASE 0x60000
 static bool aokfs_node_is_gen_tools(enum aokfs_node_kind node) {
     return (unsigned) node >= AOKFS_GEN_TOOLS_BASE &&
         (unsigned) node < AOKFS_GEN_TOOLS_BASE + AOKFS_GEN_FILE_COUNT_tools;
@@ -119,20 +132,38 @@ static bool aokfs_node_is_gen_docs(enum aokfs_node_kind node) {
     return (unsigned) node >= AOKFS_GEN_DOCS_BASE &&
         (unsigned) node < AOKFS_GEN_DOCS_BASE + AOKFS_GEN_FILE_COUNT_docs;
 }
+static bool aokfs_node_is_gen_libs(enum aokfs_node_kind node) {
+    return (unsigned) node >= AOKFS_GEN_LIBS_BASE &&
+        (unsigned) node < AOKFS_GEN_LIBS_BASE + AOKFS_GEN_FILE_COUNT_libs;
+}
+static bool aokfs_node_is_gen_libsdir(enum aokfs_node_kind node) {
+    return (unsigned) node >= AOKFS_GEN_LIBSDIR_BASE &&
+        (unsigned) node < AOKFS_GEN_LIBSDIR_BASE + AOKFS_GEN_DIR_COUNT_libs;
+}
 static bool aokfs_node_is_gen(enum aokfs_node_kind node) {
     return ((unsigned) node >= AOKFS_GEN_BASE &&
             (unsigned) node < AOKFS_GEN_BASE + AOKFS_GEN_FILE_COUNT) ||
-        aokfs_node_is_gen_tools(node) || aokfs_node_is_gen_docs(node);
+        aokfs_node_is_gen_tools(node) || aokfs_node_is_gen_docs(node) ||
+        aokfs_node_is_gen_libs(node);
 }
 static const struct aokfs_gen_file *aokfs_gen_entry(enum aokfs_node_kind node) {
     if (aokfs_node_is_gen_tools(node))
         return &aokfs_gen_files_tools[(unsigned) node - AOKFS_GEN_TOOLS_BASE];
     if (aokfs_node_is_gen_docs(node))
         return &aokfs_gen_files_docs[(unsigned) node - AOKFS_GEN_DOCS_BASE];
+    if (aokfs_node_is_gen_libs(node))
+        return &aokfs_gen_files_libs[(unsigned) node - AOKFS_GEN_LIBS_BASE];
     return &aokfs_gen_files[(unsigned) node - AOKFS_GEN_BASE];
 }
 
+// The path of a derived /native/libs directory.
+static const char *aokfs_gen_libsdir_path(enum aokfs_node_kind node) {
+    return aokfs_gen_dirs_libs[(unsigned) node - AOKFS_GEN_LIBSDIR_BASE];
+}
+
 static bool aokfs_node_is_dir(enum aokfs_node_kind node) {
+    if (aokfs_node_is_gen_libsdir(node))
+        return true;
     return node == aokfs_root ||
         node == aokfs_fixes_dir ||
         node == aokfs_persist_dir ||
@@ -184,6 +215,8 @@ static qword_t aokfs_node_inode(enum aokfs_node_kind node) {
 static const char *aokfs_node_path(enum aokfs_node_kind node) {
     if (aokfs_node_is_gen(node))
         return aokfs_gen_entry(node)->path;
+    if (aokfs_node_is_gen_libsdir(node))
+        return aokfs_gen_libsdir_path(node);
     switch (node) {
         case aokfs_root:
             return "";
@@ -321,6 +354,21 @@ static bool aokfs_lookup_node(const char *path, enum aokfs_node_kind *node_out) 
     for (size_t i = 0; i < AOKFS_GEN_FILE_COUNT_tools; i++) {
         if (strcmp(path, aokfs_gen_files_tools[i].path) == 0) {
             *node_out = (enum aokfs_node_kind) (AOKFS_GEN_TOOLS_BASE + i);
+            return true;
+        }
+    }
+    // Generated /native/libs/* files, and the directories derived from their
+    // paths. Files first: a name cannot be both, and the file table is the
+    // one with the data.
+    for (size_t i = 0; i < AOKFS_GEN_FILE_COUNT_libs; i++) {
+        if (strcmp(path, aokfs_gen_files_libs[i].path) == 0) {
+            *node_out = (enum aokfs_node_kind) (AOKFS_GEN_LIBS_BASE + i);
+            return true;
+        }
+    }
+    for (size_t i = 0; i < AOKFS_GEN_DIR_COUNT_libs; i++) {
+        if (strcmp(path, aokfs_gen_dirs_libs[i]) == 0) {
+            *node_out = (enum aokfs_node_kind) (AOKFS_GEN_LIBSDIR_BASE + i);
             return true;
         }
     }
@@ -945,6 +993,42 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
     enum aokfs_node_kind node = aokfs_decode_node(fd->fs_data);
     enum aokfs_node_kind child;
 
+    // A derived /native/libs directory, handled before the switch because the
+    // node is an index into a generated table rather than an enum constant a
+    // case label could name. One routine for every depth: list the immediate
+    // subdirectories, then the files that sit directly in this directory.
+    // Both tables are sorted, so the order is stable between calls and a
+    // reader part way through does not see an entry twice.
+    if (aokfs_node_is_gen_libsdir(node)) {
+        const char *base = aokfs_node_path(node);
+        size_t blen = strlen(base);
+        size_t want = (size_t) fd->offset++;
+        size_t seen = 0;
+        for (size_t i = 0; i < AOKFS_GEN_DIR_COUNT_libs; i++) {
+            const char *d = aokfs_gen_dirs_libs[i];
+            if (strncmp(d, base, blen) != 0 || d[blen] != '/')
+                continue;
+            if (strchr(d + blen + 1, '/') != NULL)
+                continue;                       // a grandchild, not a child
+            if (seen++ == want) {
+                child = (enum aokfs_node_kind) (AOKFS_GEN_LIBSDIR_BASE + i);
+                goto emit;
+            }
+        }
+        for (size_t i = 0; i < AOKFS_GEN_FILE_COUNT_libs; i++) {
+            const char *f = aokfs_gen_files_libs[i].path;
+            if (strncmp(f, base, blen) != 0 || f[blen] != '/')
+                continue;
+            if (strchr(f + blen + 1, '/') != NULL)
+                continue;
+            if (seen++ == want) {
+                child = (enum aokfs_node_kind) (AOKFS_GEN_LIBS_BASE + i);
+                goto emit;
+            }
+        }
+        return 0;
+    }
+
     switch (node) {
         case aokfs_root:
             switch (fd->offset++) {
@@ -962,11 +1046,22 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
             }
             break;
         case aokfs_native_dir: {
+            // The registry, then `libs` last -- so that adding a native
+            // program does not renumber an offset a reader is part way
+            // through.
             size_t i = (size_t) fd->offset++;
-            if (i >= native_program_count())
-                return 0;
-            child = (enum aokfs_node_kind) (AOKFS_NATIVE_BASE + i);
-            break;
+            if (i < native_program_count()) {
+                child = (enum aokfs_node_kind) (AOKFS_NATIVE_BASE + i);
+                break;
+            }
+            if (i == native_program_count() && AOKFS_GEN_DIR_COUNT_libs > 0) {
+                enum aokfs_node_kind libs;
+                if (!aokfs_lookup_node("/native/libs", &libs))
+                    return 0;
+                child = libs;
+                break;
+            }
+            return 0;
         }
         case aokfs_fixes_dir:
             switch (fd->offset++) {
@@ -1112,6 +1207,7 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
             return _ENOTDIR;
     }
 
+emit:
     entry->inode = aokfs_node_inode(child);
     entry->type = dir_entry_type_for_mode(aokfs_node_mode(child));
     strncpy(entry->name, aokfs_node_basename(child), sizeof(entry->name) - 1);

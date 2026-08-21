@@ -167,6 +167,46 @@ def main():
                % (sym_suffix, sym_suffix, sym_suffix))
     out.append("")
 
+    # The directories those files live in, DERIVED rather than listed.
+    #
+    # fs/aok.c enumerates a directory node by hand for every subdirectory it
+    # serves, and says so: adding one means an enum entry plus edits in four
+    # more places. That is fine for the three or four that /tools has and
+    # impossible for a tree like helix's runtime, which is a couple of hundred
+    # directories deep in places. So a manifest whose names contain slashes
+    # gets its directories worked out here, once, from the paths themselves --
+    # every proper prefix of every file, uniqued and sorted so that a parent
+    # always precedes its children.
+    dirs = set()
+    if any("/" in name for name, _ in entries):
+        # The destination's own components too, not just the ones inside the
+        # manifest: files served at /native/libs/helix/themes need
+        # /native/libs and /native/libs/helix to exist as directories, and
+        # neither appears in any manifest line. fs/aok.c looks these up AFTER
+        # its hand-written node table, so a prefix that is already a real node
+        # -- /native, or /tests for the other manifests -- keeps winning.
+        parts = [c for c in dest_prefix.split("/") if c]
+        for i in range(1, len(parts) + 1):
+            dirs.add("/" + "/".join(parts[:i]))
+    for name, _mode in entries:
+        parts = name.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            dirs.add("%s/%s" % (dest_prefix, "/".join(parts[:i])))
+    # __unused__ because only the tables fs/aok.c actually serves nested will
+    # reference this; GCC's -Wunused-const-variable would otherwise fail the
+    # Linux build for the tables that do not.
+    out.append("__attribute__((__unused__))")
+    out.append("static const char *const aokfs_gen_dirs%s[] = {" % sym_suffix)
+    for d in sorted(dirs):
+        out.append('    "%s",' % d)
+    if not dirs:
+        # A zero-length array is not C, and an empty manifest is legal.
+        out.append("    (const char *) 0,")
+    out.append("};")
+    out.append("")
+    out.append("#define AOKFS_GEN_DIR_COUNT%s %d" % (sym_suffix, len(dirs)))
+    out.append("")
+
     text = "\n".join(out)
     # Only rewrite if changed, to avoid needless recompiles.
     if os.path.exists(output_path):

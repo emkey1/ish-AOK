@@ -81,6 +81,20 @@ async fn run() -> Result<i32> {
     // Before anything reads a language configuration.
     helix_loader::grammar::set_static_grammars(static_grammar);
 
+    // Where the queries and themes live. helix's own search covers the user's
+    // config directory and $HELIX_RUNTIME, then the directory beside the
+    // executable -- and a native program has no executable, so without this
+    // there is nowhere for a stock install to find either: the grammars would
+    // parse and nothing would say what to paint, and `:theme` would offer only
+    // the two themes compiled into helix itself.
+    //
+    // Only when the user has not said otherwise. Someone who sets
+    // HELIX_RUNTIME means it, and helix searches the config directory ahead of
+    // this anyway, so a theme dropped in ~/.config/helix/themes still wins.
+    if std::env::var_os("HELIX_RUNTIME").is_none() {
+        std::env::set_var("HELIX_RUNTIME", "/AOK/native/libs/helix");
+    }
+
     let args = Args::parse_args().context("could not parse arguments")?;
 
     helix_loader::initialize_config_file(args.config_file.clone());
