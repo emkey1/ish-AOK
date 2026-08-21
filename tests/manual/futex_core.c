@@ -86,11 +86,17 @@ static long raw_syscall6(long nr, long a1, long a2, long a3, long a4, long a5, l
     // futex(2) op that uses all 6 args (FUTEX_WAKE_OP). ebp has no such
     // single-letter constraint, so a6 goes in via the stack: pushed first
     // (while ebp/esp are still whatever the compiler expects, so %[arg6]'s
-    // own addressing mode -- register, immediate, or ebp/esp-relative
-    // memory -- is still valid), then loaded into ebp via a literal
-    // esp-relative offset. An xchgl-with-memory version of this (swap ebp
-    // and a6's stack slot directly) is what real libcs use, but it's only
-    // safe under -fomit-frame-pointer: with a frame pointer, gcc addresses
+    // own ebp/esp-relative addressing mode is still valid), then loaded into
+    // ebp via a literal esp-relative offset. a6 is "m", NOT "rm": the other
+    // six operands already pin eax/ebx/ecx/edx/esi/edi, so once ebp is also
+    // unavailable (a frame pointer, or -fno-pie letting the allocator try
+    // ebp and fail) there is no register left for the "r" alternative and
+    // gcc reports "'asm' operand has impossible constraints", which is what
+    // blocked the whole i386 regression suite from building. Memory-only
+    // needs no spare register, and "push mem" is a legal i386 encoding.
+    // An xchgl-with-memory version of this (swap ebp and a6's stack slot
+    // directly) is what real libcs use, but it's only safe under
+    // -fomit-frame-pointer: with a frame pointer, gcc addresses
     // %[arg6] as -N(%ebp), and the second xchgl (restoring ebp) then
     // computes that same -N(%ebp) using the *new* ebp (a6's syscall value,
     // not the frame pointer) -- garbage address, corrupting the stack.
@@ -105,7 +111,7 @@ static long raw_syscall6(long nr, long a1, long a2, long a3, long a4, long a5, l
         "pop %%ebp\n\t"
         "add $4, %%esp\n\t"
         : "=a"(ret)
-        : "a"(nr), "b"(a1), "c"(a2), "d"(a3), "S"(a4), "D"(a5), [arg6] "rm"(a6)
+        : "a"(nr), "b"(a1), "c"(a2), "d"(a3), "S"(a4), "D"(a5), [arg6] "m"(a6)
         : "memory", "cc");
     return ret;
 }
