@@ -394,6 +394,68 @@ day, so it was fixed somewhere in the 96 commits between 548 and now -- by
 which one is still not established, and the one candidate worth suspecting was
 tested and cleared.
 
+### pidfd_epoll_deadlock was two bugs, not a flake -- FIXED 2026-08-21
+
+Reported as "intermittently hangs and exits 137". It was both, and they are
+unrelated: on `18df370e5`, 40 runs of the test gave **8 exits with 137 and no
+hang**, and a later 24-run batch with only the first fix in gave **6 SIGKILLs
+and 1 hang**. Neither is the fakefs connection-pool work -- both predate that
+branch.
+
+**137 was not a guest status.** cli_halt maps a signalled init to 128+signo, so
+137 reads like the guest was SIGKILLed; the host `ish` process was. Every run
+left a crash report in `~/Library/Logs/DiagnosticReports`, and all fourteen of
+them were byte-for-byte the same stack:
+
+    _os_unfair_lock_recursive_abort <- malloc <- _tlv_get_addr
+      <- sigusr2_handler <- _sigtramp <- malloc <- _tlv_get_addr <- task_thread
+
+A wake poke landed on a brand-new task thread while it was inside
+`_tlv_get_addr` instantiating `current` -- the first `__thread` access on that
+thread, which on Darwin malloc()s -- and the handler's own `__thread` read
+re-entered malloc holding its lock. libplatform kills the process for that, and
+because stdout to a pipe is block-buffered, the test's already-completed "PASS"
+died in the buffer with it.
+
+`task_start` blocks both wake signals across `pthread_create` precisely to
+prevent this, and the mask really is inherited: instrumented, the creating
+thread read 0x60000000 in 1000 of 1000 creations. The child did not. **18 of
+1000 task threads entered `task_thread` with SIGUSR2 already missing from the
+mask**, and others lost it later with none of our handlers having run on them
+(verified with a per-thread ring buffer of handler entries). The same anomaly a
+standalone 1600-thread reproduction of the identical pattern -- same attrs,
+same pokes -- could not produce in three runs, and the same family as the
+"Darwin swallowed the poke and left it blocked and pending" behaviour that
+`signal_thread_unwedge_wake_sigs()` already exists to repair. **Not explained.**
+
+So the fix does not rely on the mask. `signal_thread_locals_init()` now sets a
+pthread TSD flag once the storage exists, and both handlers return immediately
+unless it is set -- reading a TSD slot cannot allocate, and a thread that has
+not run the init has no task and nothing to interrupt anyway. Every thread that
+runs guest work now calls it: `task_run_current()` covers whichever thread runs
+init, and `nlibc_thread_trampoline` covers native-program threads, which had
+the same latent hole.
+
+**The hang is an AB-BA cycle over three locks, and the pidfd path is innocent.**
+`pidfd_notify_exit`'s half was already fixed with the trylock form; this comes
+in through the SIGCHLD the same `do_exit` raises. Sampled live, with source
+lines:
+
+    A  do_exit          holds pids_lock   -> signalfd_wakeup_task -> fdtable_release -> files->lock
+    B  close(2)         holds files->lock -> epoll_close -> poll_destroy -> poll->lock
+    C  epoll_wait/ctl   holds poll->lock  -> pidfd_poll -> pids_lock
+
+`signalfd_wakeup_task` is written not to block -- it trylocks the fd table and
+gives up when busy -- but its give-up path called `fdtable_release()`, and that
+took `table->lock` unconditionally, so it waited for the lock whose trylock had
+just failed, with pids_lock still in hand. `refcount` is already atomic, so the
+lock was never what made the decrement safe; it now guards only the final
+teardown, which by definition runs with no other reference left.
+
+Verified by A/B against a build with a 1.5 ms delay in `poll_destroy` to widen
+the window: **2 hangs in 60 runs without the fix, 0 in 100 with it**. Unwidened,
+252 runs of the real binary passed with no SIGKILL and no hang.
+
 ### `pidfd_open` refused a zombie -- FIXED 2026-08-20
 
 sys_pidfd_open went through pid_get_task_ref, and pid_get_task filters zombies
