@@ -179,6 +179,14 @@ EOF
     # cargo features are set where every other project-wide knob is set rather
     # than on a command line. Empty for a normal build.
     meson_extra_opts="$meson_extra_opts -Dnative_rust_features=${AOK_RUST_FEATURES:-}"
+    # AOK_NATIVE_HELIX likewise comes from app/iSH.xcconfig. Without this the
+    # meson default (disabled) won a build that had asked for an editor, and
+    # the only symptom was /AOK/native/hx not being there.
+    if [[ "${AOK_NATIVE_HELIX:-}" == YES ]]; then
+        meson_extra_opts="$meson_extra_opts -Dnative_helix=enabled"
+    else
+        meson_extra_opts="$meson_extra_opts -Dnative_helix=disabled"
+    fi
 
     if [[ ! -f "$crossfile" ]] || ! cmp -s "$crossfile_tmp" "$crossfile"; then
         mv "$crossfile_tmp" "$crossfile"
@@ -221,18 +229,22 @@ EOF
             current_cargo_home=$(meson_option_json "$config" cargo_home 2>/dev/null || echo MISSING)
             current_rust_target=$(meson_option_json "$config" native_rust_target 2>/dev/null || echo MISSING)
             current_rust_features=$(meson_option_json "$config" native_rust_features 2>/dev/null || echo MISSING)
+        current_helix=$(meson_option_json "$config" native_helix 2>/dev/null || echo MISSING)
+        want_helix=$([[ "${AOK_NATIVE_HELIX:-}" == YES ]] && echo '"enabled"' || echo '"disabled"')
         }
         read_rust_opts
         if [[ "$current_cargo_home" == MISSING ]] || \
            [[ "$current_rust_target" == MISSING ]] || \
-           [[ "$current_rust_features" == MISSING ]]; then
+           [[ "$current_rust_features" == MISSING ]] || \
+           [[ "$current_helix" == MISSING ]]; then
             (set -x; meson setup --reconfigure "$meson_dir" "$SRCROOT" --cross-file "$crossfile") || exit $?
             config=$(meson introspect --buildoptions "$meson_dir")
             read_rust_opts
         fi
         if [[ "$current_cargo_home" != "\"$HOME/.cargo\"" ]] || \
            [[ "$current_rust_target" != "\"$rust_triple\"" ]] || \
-           [[ "$current_rust_features" != "\"${AOK_RUST_FEATURES:-}\"" ]]; then
+           [[ "$current_rust_features" != "\"${AOK_RUST_FEATURES:-}\"" ]] || \
+           [[ "$current_helix" != "$want_helix" ]]; then
             meson_needs_setup=1
         fi
     fi

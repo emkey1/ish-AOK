@@ -11,6 +11,19 @@ ISH_LOGGER_iphoneos = nslog
 ISH_LOGGER_iphonesimulator = nslog
 ISH_LOGGER_macosx = dprintf
 
+// helix as a native program, at /AOK/native/hx, with syntax highlighting for
+// fifteen languages and 219 themes under /AOK/native/libs/helix.
+//
+// Empty (off) by default for two reasons. It is MPL-2.0, which is a decision
+// about what the shipped binary contains rather than a default; and it is not
+// small -- roughly 45MB, against an app binary that is 14MB without it.
+//
+// Set to YES to build it in. Needs the Rust toolchain and the deps/helix
+// submodule; meson says so plainly if either is missing rather than quietly
+// leaving the editor out.
+AOK_NATIVE_HELIX = 
+// AOK_NATIVE_HELIX = YES
+
 // Cargo features for the Rust native program (/AOK/native/rust-probe).
 // Empty for a normal build -- the probe's tokio test pulls in a dependency
 // tree that has no business in a shipping app. Set it to "tokio-probe" to
