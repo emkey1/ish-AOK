@@ -499,6 +499,13 @@ HOST_THREAD_RUNTIME = {
     "strerror_r",
     # The system CSPRNG. There is no guest entropy source to prefer.
     "CCRandomGenerateBytes",
+    # Advice and pinning for the program's OWN address space. memmap2 reaches
+    # these after mapping memory it allocated here; the guest has no say in a
+    # host mapping, and routing them would be asking the wrong kernel about
+    # the wrong pages. Note this is only true because a native program has no
+    # guest address space of its own to confuse them with -- see
+    # docs/TODO.md on why that stayed the case.
+    "madvise", "mlock", "munlock",
 }
 
 DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a",

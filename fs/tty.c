@@ -866,6 +866,7 @@ static ssize_t tty_ioctl_size(int cmd) {
             return sizeof(struct termios2_);
         case TIOCGWINSZ_: case TIOCSWINSZ_:
             return sizeof(struct winsize_);
+        case TIOCGSID_:
         case TIOCGPGRP_: case TIOCSPGRP_:
         case TIOCSPTLCK_: case TIOCGPTN_:
         case TIOCPKT_: case TIOCGPKT_:
@@ -915,6 +916,33 @@ static int tiocsctty(struct tty *tty, int force) {
 out:
     unlock(&current->group->lock);
     unlock(&pids_lock);
+    return err;
+}
+
+// The SESSION that owns the terminal, which is not tiocgpgrp's question: the
+// foreground process group changes with every job, and the session does not.
+// Same shape otherwise, including the "this is not your controlling terminal"
+// refusal -- a caller holding a descriptor to someone else's tty is not
+// entitled to an answer.
+//
+// Added because tcgetsid(3) is how a library asks whether it can do job
+// control at all, and the shim had nothing to route it to.
+static int tiocgsid(struct tty *tty, pid_t_ *out) {
+    int err = 0;
+    struct tty *slave = get_slave_side_tty(tty);
+    if (slave != tty)
+        lock(&slave->lock, 0);
+
+    if (tty == slave && (!tty_is_current(slave) || slave->session == 0)) {
+        err = _ENOTTY;
+        goto out_unlock;
+    }
+    *out = slave->session;
+    STRACE("tty session = %d\n", slave->session);
+
+out_unlock:
+    if (slave != tty)
+        unlock(&slave->lock);
     return err;
 }
 
@@ -1054,6 +1082,10 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
 
         case TIOCGPGRP_:
             err = tiocgpgrp(tty, (pid_t_ *) arg);
+            break;
+
+        case TIOCGSID_:
+            err = tiocgsid(tty, (pid_t_ *) arg);
             break;
 
         case TIOCSPGRP_:

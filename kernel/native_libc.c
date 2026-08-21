@@ -698,6 +698,65 @@ static int nlibc_chown_common(const char *path, uid_t uid, gid_t gid, dword_t at
 int nlibc_chown(const char *path, uid_t uid, gid_t gid) {
     return nlibc_chown_common(path, uid, gid, 0);
 }
+
+// ------------------------------------------------------ the *at family
+//
+// The forms that take a directory descriptor, which the bare ones above are
+// already implemented in terms of -- every one of these guest syscalls takes
+// an at-fd, and AT_FDCWD_ was simply being passed for it. So these are the
+// same calls with nlibc_at_fd(dirfd) where the constant was.
+//
+// Reached by Rust rather than by the shells: std and rustix prefer the *at
+// forms because they are the ones without a race between resolving a path and
+// acting on it. Unrouted they were resolving against the HOST's directories.
+
+int nlibc_mkdirat(int dirfd, const char *path, mode_t mode) {
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_path, path);
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_mkdirat, nlibc_at_fd(dirfd),
+            guest_path, mode));
+}
+
+int nlibc_symlinkat(const char *target, int dirfd, const char *linkpath) {
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_target, target);
+    NLIBC_PATH(guest_link, linkpath);
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_symlinkat, guest_target,
+            nlibc_at_fd(dirfd), guest_link));
+}
+
+ssize_t nlibc_readlinkat(int dirfd, const char *path, char *buf, size_t bufsize) {
+    NATIVE_FRAME;
+    if (buf == NULL)
+        return nlibc_fail(_EFAULT);
+    NLIBC_PATH(guest_path, path);
+    guest_addr_t guest_buf = native_scratch_alloc(bufsize);
+    if (guest_buf == 0 && bufsize > 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res = native_syscall(NATIVE_SYS_readlinkat, nlibc_at_fd(dirfd),
+            guest_path, guest_buf, bufsize);
+    if (res > 0 && native_scratch_get(buf, guest_buf, (size_t) res) < 0)
+        return nlibc_fail(_EFAULT);
+    return nlibc_ret(res);
+}
+
+// AT_SYMLINK_NOFOLLOW is 0x0020 on Darwin and 0x100 on the guest, the same
+// disagreement fstatat has to translate.
+int nlibc_fchmodat(int dirfd, const char *path, mode_t mode, int flags) {
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_path, path);
+    dword_t guest_flags = (flags & AT_SYMLINK_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW_ : 0;
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_fchmodat, nlibc_at_fd(dirfd),
+            guest_path, mode, guest_flags));
+}
+
+int nlibc_fchownat(int dirfd, const char *path, uid_t uid, gid_t gid, int flags) {
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_path, path);
+    dword_t guest_flags = (flags & AT_SYMLINK_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW_ : 0;
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_fchownat, nlibc_at_fd(dirfd),
+            guest_path, uid, gid, guest_flags));
+}
 int nlibc_lchown(const char *path, uid_t uid, gid_t gid) {
     return nlibc_chown_common(path, uid, gid, AT_SYMLINK_NOFOLLOW_);
 }
@@ -1802,6 +1861,29 @@ static int nlibc_utimens(int dirfd, const char *path, int fd_no,
 int nlibc_utimes(const char *path, const struct timeval times[2]) {
     return nlibc_utimens(AT_FDCWD, path, -1, times);
 }
+
+// utimes that does NOT follow a final symlink: it sets the times on the link
+// itself. Spelled out rather than routed through nlibc_utimens, which passes 0
+// for utimensat's flags and has three other callers that want it that way.
+int nlibc_lutimes(const char *path, const struct timeval times[2]) {
+    NATIVE_FRAME;
+    struct nlibc_guest_timespec ts[2];
+    for (int i = 0; i < 2; i++) {
+        if (times == NULL) {
+            ts[i].sec = 0;
+            ts[i].nsec = NLIBC_UTIME_NOW;
+        } else {
+            ts[i].sec = times[i].tv_sec;
+            ts[i].nsec = (sqword_t) times[i].tv_usec * 1000;
+        }
+    }
+    guest_addr_t guest_ts = native_scratch_put(ts, sizeof(ts));
+    if (guest_ts == 0)
+        return nlibc_fail(_ENOMEM);
+    NLIBC_PATH(guest_path, path);
+    return (int) nlibc_ret(native_syscall(NATIVE_SYS_utimensat, AT_FDCWD_,
+            guest_path, guest_ts, AT_SYMLINK_NOFOLLOW_));
+}
 int nlibc_futimes(int fd_no, const struct timeval times[2]) {
     return nlibc_utimens(AT_FDCWD, NULL, fd_no, times);
 }
@@ -1869,6 +1951,63 @@ static void nlibc_guest_statfs_to_host(const struct amd64_statfs_ *in, struct st
     out->f_bavail = in->bavail;
     out->f_files = in->files;
     out->f_ffree = in->ffree;
+}
+
+// The descriptor form. Rust reaches for it where a path form would race, and
+// helix asks it about the file it already has open.
+int nlibc_fstatfs(int fd_no, void *buf) {
+    NATIVE_FRAME;
+    if (buf == NULL)
+        return nlibc_fail(_EFAULT);
+    guest_addr_t guest_buf = native_scratch_alloc(sizeof(struct amd64_statfs_));
+    if (guest_buf == 0)
+        return nlibc_fail(_ENOMEM);
+    sqword_t res = native_syscall(NATIVE_SYS_fstatfs, fd_no, guest_buf);
+    if (res < 0)
+        return nlibc_fail((int) res);
+    struct amd64_statfs_ guest_statfs;
+    if (native_scratch_get(&guest_statfs, guest_buf, sizeof(guest_statfs)) < 0)
+        return nlibc_fail(_EFAULT);
+    nlibc_guest_statfs_to_host(&guest_statfs, buf);
+    return 0;
+}
+
+// statvfs is POSIX's shape over the same information, and Darwin's struct
+// statvfs is a different layout from its struct statfs -- so this is a
+// translation of a translation rather than an alias. Only the fields a caller
+// can act on are filled; f_flag's ST_* bits have no guest counterpart the
+// guest statfs carries, so it is left zero rather than invented.
+static void nlibc_statfs_to_statvfs(const struct statfs *in, struct statvfs *out) {
+    memset(out, 0, sizeof(*out));
+    out->f_bsize = in->f_bsize;
+    out->f_frsize = in->f_bsize;
+    out->f_blocks = in->f_blocks;
+    out->f_bfree = in->f_bfree;
+    out->f_bavail = in->f_bavail;
+    out->f_files = in->f_files;
+    out->f_ffree = in->f_ffree;
+    out->f_favail = in->f_ffree;
+    out->f_namemax = NAME_MAX;
+}
+
+int nlibc_fstatvfs(int fd_no, struct statvfs *out) {
+    struct statfs host;
+    if (out == NULL)
+        return nlibc_fail(_EFAULT);
+    if (nlibc_fstatfs(fd_no, &host) < 0)
+        return -1;
+    nlibc_statfs_to_statvfs(&host, out);
+    return 0;
+}
+
+int nlibc_statvfs(const char *path, struct statvfs *out) {
+    struct statfs host;
+    if (out == NULL)
+        return nlibc_fail(_EFAULT);
+    if (nlibc_statfs(path, &host) < 0)
+        return -1;
+    nlibc_statfs_to_statvfs(&host, out);
+    return 0;
 }
 
 int nlibc_statfs(const char *path, void *buf) {
@@ -2525,6 +2664,54 @@ int nlibc_tcflush(int fd_no, int queue) {
 // forward to in any case.
 int nlibc_tcdrain(int fd_no) {
     (void) fd_no;
+    return 0;
+}
+
+// Software flow control, and the guest tty has no TCXONC to route it to --
+// deliberately, because there is no line to start or stop: TCOOFF/TCOON
+// suspend transmission on a serial link, and TCIOFF/TCION send the STOP and
+// START characters down one. On a pty both are asking a question the medium
+// cannot answer.
+//
+// Reporting success rather than failing, on the same reasoning as tcdrain
+// above: the caller asked for a state the terminal is already in.
+int nlibc_tcflow(int fd_no, int action) {
+    (void) fd_no; (void) action;
+    return 0;
+}
+
+// A break is a line condition, and the guest's ttys are not lines. Reporting
+// success is right rather than convenient: the contract is "send a break for
+// `duration`", and on a pty there is nothing for it to reach -- the same
+// reasoning tcdrain above is written with.
+int nlibc_tcsendbreak(int fd_no, int duration) {
+    (void) fd_no; (void) duration;
+    return 0;
+}
+
+// The session that owns the terminal, which is not the same question as
+// getsid() of the calling process -- a program can hold a descriptor to a
+// terminal it is not in the session of.
+int nlibc_tcgetsid(int fd_no) {
+    dword_t sid = 0;
+    if (nlibc_tty_ioctl(fd_no, TIOCGSID_, &sid, sizeof(sid), true) < 0)
+        return -1;
+    return (int) sid;
+}
+
+// The reentrant ttyname. Written over nlibc_ttyname rather than beside it so
+// the two cannot come to disagree about what a terminal is called, and it
+// reports through its RETURN value -- ttyname_r returns an errno, not -1.
+int nlibc_ttyname_r(int fd_no, char *buf, size_t buflen) {
+    if (buf == NULL)
+        return EINVAL;
+    char *name = nlibc_ttyname(fd_no);
+    if (name == NULL)
+        return errno != 0 ? errno : ENOTTY;
+    size_t n = strlen(name) + 1;
+    if (n > buflen)
+        return ERANGE;
+    memcpy(buf, name, n);
     return 0;
 }
 

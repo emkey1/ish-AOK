@@ -72,6 +72,12 @@
  * is why this never mattered here. */
 #include <sys/file.h>
 #include <sys/mount.h>
+/* Included for the same reason as sys/mount.h above: the redirect block below
+ * rewrites `statvfs`, and a system header that declares it must be seen BEFORE
+ * the macro exists -- once its include guard has fired, a later #include is a
+ * no-op and its declaration is never macro-expanded into a conflicting one.
+ * OpenSSH's sftp.c includes it late and found exactly that conflict. */
+#include <sys/statvfs.h>
 #if defined(__linux__)
 /* struct statfs is declared by <sys/mount.h> on Darwin and by <sys/vfs.h> on
  * glibc, where <sys/mount.h> gives only the mount(2) flags. Without this the
@@ -138,6 +144,21 @@ int nlibc_dirfd(DIR *dir);
 int nlibc_unlink(const char *path);
 int nlibc_rmdir(const char *path);
 int nlibc_mkdir(const char *path, mode_t mode);
+/* The *at forms. Rust's std and rustix prefer them -- they are the ones
+ * without a race between resolving a path and acting on it. */
+int nlibc_mkdirat(int dirfd, const char *path, mode_t mode);
+int nlibc_symlinkat(const char *target, int dirfd, const char *linkpath);
+ssize_t nlibc_readlinkat(int dirfd, const char *path, char *buf, size_t bufsize);
+int nlibc_fchmodat(int dirfd, const char *path, mode_t mode, int flags);
+int nlibc_fchownat(int dirfd, const char *path, uid_t uid, gid_t gid, int flags);
+int nlibc_lutimes(const char *path, const struct timeval times[2]);
+int nlibc_fstatfs(int fd, void *buf);
+int nlibc_statvfs(const char *path, struct statvfs *out);
+int nlibc_fstatvfs(int fd, struct statvfs *out);
+int nlibc_tcflow(int fd, int action);
+int nlibc_tcsendbreak(int fd, int duration);
+int nlibc_tcgetsid(int fd);
+int nlibc_ttyname_r(int fd, char *buf, size_t buflen);
 int nlibc_rename(const char *from, const char *to);
 int nlibc_symlink(const char *target, const char *linkpath);
 int nlibc_link(const char *from, const char *to);
@@ -752,6 +773,20 @@ const char *nlibc_dlerror(void);
 #define unlink      nlibc_unlink
 #define rmdir       nlibc_rmdir
 #define mkdir       nlibc_mkdir
+#define mkdirat     nlibc_mkdirat
+#define symlinkat   nlibc_symlinkat
+#define readlinkat  nlibc_readlinkat
+#define fchmodat    nlibc_fchmodat
+#define fchownat    nlibc_fchownat
+#define lutimes     nlibc_lutimes
+#define fstatfs     nlibc_fstatfs
+/* Function-like for the same reason statfs is: `statvfs` is a struct tag too. */
+#define statvfs(a, b)  nlibc_statvfs((a), (b))
+#define fstatvfs(a, b) nlibc_fstatvfs((a), (b))
+#define tcflow      nlibc_tcflow
+#define tcsendbreak nlibc_tcsendbreak
+#define tcgetsid    nlibc_tcgetsid
+#define ttyname_r   nlibc_ttyname_r
 #define rename      nlibc_rename
 #define symlink     nlibc_symlink
 #define link        nlibc_link

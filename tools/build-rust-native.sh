@@ -25,6 +25,34 @@ if [ -n "$target" ]; then
     built_dir="$crate_dir/target/$target/release"
 fi
 
+# C that CARGO builds gets the shim force-included, the same way AOK's own
+# sources do.
+#
+# The rename pass cannot reach it. objcopy rewrites CALLS, and a C dependency's
+# reference to Darwin's `stderr` is not a call -- it reads the variable
+# `__stderrp` and passes it. There is nothing to rename it to either: the
+# shim's stderr is a per-THREAD FILE (nlibc_std[3]), and a global variable
+# cannot be one.
+#
+# Force-including turns it back into a call. tree-sitter's runtime, vendored
+# inside tree-house-bindings and built by cc-rs, was the case that found this:
+# unrouted it wrote its parser diagnostics to the app's stderr instead of the
+# program's. With the header it compiles clean and calls nlibc_stderr.
+#
+# Both variables, because cc-rs picks by whether it is cross-compiling:
+# TARGET_CFLAGS for a cross build, CFLAGS for a native one.
+repo_root=$(cd "$(dirname "$0")/.." && pwd)
+# _DARWIN_C_SOURCE because the header is force-included BEFORE the translation
+# unit's own feature-test macros, and a dependency that asks for strict POSIX
+# takes the BSD types with it: tree-house-bindings builds tree-sitter with
+# -D_POSIX_C_SOURCE=200112L, which hides u_int/u_short/u_long, and the shim
+# header includes <sys/mount.h>, which needs them. Eleven errors inside the
+# SDK's own headers, none of them in anyone's code.
+shim_include="-include $repo_root/kernel/native_libc.h -I$repo_root -D_DARWIN_C_SOURCE"
+CFLAGS="${CFLAGS:-} $shim_include"
+TARGET_CFLAGS="${TARGET_CFLAGS:-} $shim_include"
+export CFLAGS TARGET_CFLAGS
+
 # CARGO_TARGET_DIR is left alone deliberately: cargo's own layout is what the
 # path above assumes, and overriding it in one place and not the other is how
 # this breaks silently.

@@ -112,6 +112,7 @@ struct termios2_ {
 #define TCSETSF2_ 0x402c542d
 #define TCFLSH_ 0x540b
 #define TIOCSCTTY_ 0x540e
+#define TIOCGSID_ 0x5429
 #define TIOCGPGRP_ 0x540f
 #define TIOCSPGRP_ 0x5410
 #define TIOCGWINSZ_ 0x5413
