@@ -137,7 +137,16 @@ any repeated HTTPS handshake will do.
 **Established, 2026-08-20, by sampling a hung one** -- which was the next step
 recorded here, and it produced a lock cycle rather than a hunch. Measured hang
 rate on a direct 12-run loop: 7 of 12, both arches, so it is flaky rather than
-arch-specific.
+arch-specific. Re-measured 2026-08-21 at 2 of 7 on i386, same picture.
+
+**It reads like a fresh regression in tier0 and is not one.** The runner
+reports it as `[HANG] pread_stack_thread_race rc=None` and the arch it lands on
+changes between runs, so a sweep after an unrelated change looks like that
+change broke something -- and a sweep before it looks clean, because sometimes
+it passes. Anyone chasing a new tier0 hang should check this entry first, and
+`grep -c` the sweep for OTHER failures before believing their own diff. Until
+the lock cycle below is fixed, "tier0 green except pread_stack_thread_race" is
+the expected result rather than a qualified one.
 
 `sample(1)` of a hung emulator (13 threads, nothing running):
 
