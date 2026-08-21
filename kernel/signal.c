@@ -2859,6 +2859,13 @@ retry:
 //
 // Caller holds pids_lock (the group thread list needs it).
 static struct task *pick_process_directed_target(struct task *task, dword_t sig) {
+    // kill(pid, 0) is the "does this process exist" probe and carries no
+    // signal at all -- sig_mask(0) is out of range and asserts. It has no
+    // target to choose, so it never gets here. (apt does this constantly; the
+    // first version of this function skipped the check and killed apt on the
+    // spot.)
+    if (sig == 0)
+        return task;
     // The addressed task can take it: nothing to do. This is every
     // single-threaded case, and the common multithreaded one.
     if (!sigset_has(__atomic_load_n(&task->blocked, __ATOMIC_ACQUIRE), sig) ||

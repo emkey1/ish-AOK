@@ -67,5 +67,15 @@ int main(int argc, char **argv) {
     ck("the sigwait thread received it", pthread_join(th, NULL) == 0, strerror(errno));
     ck("...and it was SIGTERM", got_sig == SIGTERM, NULL);
 
+    // kill(pid, 0) carries no signal: it is the "does this process exist"
+    // probe, and every shell and package manager leans on it. It is in this
+    // file because the first version of the fix above forgot it and indexed a
+    // signal mask with 0, which is out of range -- apt died on the spot. A
+    // signal-routing change must be tested against the call that routes no
+    // signal at all.
+    ck("kill(getpid(), 0) succeeds", kill(getpid(), 0) == 0, strerror(errno));
+    ck("kill(nonexistent, 0) is ESRCH",
+       kill(0x7ffffff, 0) == -1 && errno == ESRCH, strerror(errno));
+
     return finish_suite("sigwait_kill");
 }
