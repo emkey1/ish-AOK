@@ -84,12 +84,19 @@ link_is_ours() {
 
 if [ "$MODE" = remove ]; then
     removed=0
+    failed=0
     for f in "$TARGET_DIR"/*; do
         link_is_ours "$f" || continue
         if [ "$DRY_RUN" -eq 1 ]; then
             echo "  would unlink $f"
+        elif rm -f "$f" 2>/dev/null && [ ! -e "$f" ] && [ ! -L "$f" ]; then
+            :
         else
-            rm -f "$f"
+            # Counting a removal that did not happen is how "removed 115
+            # link(s)" gets printed by a run that changed nothing, which sends
+            # the reader looking anywhere but here. Count what actually went.
+            failed=$((failed + 1))
+            continue
         fi
         removed=$((removed + 1))
     done
@@ -97,8 +104,12 @@ if [ "$MODE" = remove ]; then
         echo "would remove $removed link(s) from $TARGET_DIR"
     else
         echo "removed $removed link(s) from $TARGET_DIR"
+        if [ "$failed" -gt 0 ]; then
+            echo "  $failed link(s) could NOT be removed (need root?)" >&2
+            REMOVE_FAILED=1
+        fi
     fi
-    exit 0
+    exit "${REMOVE_FAILED:-0}"
 fi
 
 [ "$DRY_RUN" -eq 1 ] || mkdir -p "$TARGET_DIR"

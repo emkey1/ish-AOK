@@ -437,8 +437,11 @@ apply_path() {
             if [ "$DRY_RUN" -eq 1 ]; then
                 echo "  would remove $PATH_FILE (PATH reverts at next login)"
             else
-                rm -f "$PATH_FILE"
-                echo "  removed $PATH_FILE (PATH reverts at next login)"
+                if rm -f "$PATH_FILE" 2>/dev/null && [ ! -f "$PATH_FILE" ]; then
+                    echo "  removed $PATH_FILE (PATH reverts at next login)"
+                else
+                    echo "  could NOT remove $PATH_FILE (need root?)" >&2
+                fi
             fi
         fi
         # Only ever the block this script wrote: the file may be the distro's.
@@ -448,16 +451,27 @@ apply_path() {
             else
                 tmp=$zfile.aok.$$
                 skip=0
-                while IFS= read -r zline || [ -n "$zline" ]; do
-                    case "$zline" in
-                        "$ZSH_MARK_BEGIN") skip=1; continue ;;
-                        "$ZSH_MARK_END")   skip=0; continue ;;
-                    esac
-                    [ "$skip" -eq 1 ] || printf '%s\n' "$zline"
-                done < "$zfile" > "$tmp" && mv "$tmp" "$zfile"
-                # A file left empty was one this script created.
-                [ -s "$zfile" ] || rm -f "$zfile"
-                echo "  removed the PATH block from $zfile"
+                # Every step here can fail on a file this user does not own,
+                # and saying so is the whole point: the message used to print
+                # unconditionally, so a run that changed nothing reported
+                # having removed the block. That is worse than the failure --
+                # it sends you looking somewhere else for the problem.
+                if { while IFS= read -r zline || [ -n "$zline" ]; do
+                        case "$zline" in
+                            "$ZSH_MARK_BEGIN") skip=1; continue ;;
+                            "$ZSH_MARK_END")   skip=0; continue ;;
+                        esac
+                        [ "$skip" -eq 1 ] || printf '%s\n' "$zline"
+                     done < "$zfile" > "$tmp"; } 2>/dev/null && mv "$tmp" "$zfile" 2>/dev/null; then
+                    # A file left empty was one this script created. Only
+                    # considered once the rewrite actually landed, or a failed
+                    # run could delete a file it never managed to touch.
+                    [ -s "$zfile" ] || rm -f "$zfile"
+                    echo "  removed the PATH block from $zfile"
+                else
+                    rm -f "$tmp" 2>/dev/null || :
+                    echo "  could NOT edit $zfile (need root?); its PATH block is still there" >&2
+                fi
             fi
         fi
         return 0
@@ -588,6 +602,7 @@ is_excluded() {
 # real file that happens to share a name is never touched.
 if [ "$MODE" = remove ]; then
     removed=0
+    failed=0
     for f in "$TARGET_DIR"/*; do
         # `readlink` is itself an applet this script may have linked, so avoid
         # it: link_is_native compares what the paths resolve to, using the
@@ -595,8 +610,14 @@ if [ "$MODE" = remove ]; then
         link_is_native "$f" || continue
         if [ "$DRY_RUN" -eq 1 ]; then
             echo "  would unlink $f"
+        elif rm -f "$f" 2>/dev/null && [ ! -e "$f" ] && [ ! -L "$f" ]; then
+            :
         else
-            rm -f "$f"
+            # Counting a removal that did not happen is how "removed 115
+            # link(s)" gets printed by a run that changed nothing, which sends
+            # the reader looking anywhere but here. Count what actually went.
+            failed=$((failed + 1))
+            continue
         fi
         removed=$((removed + 1))
     done
@@ -604,10 +625,14 @@ if [ "$MODE" = remove ]; then
         echo "would remove $removed link(s) from $TARGET_DIR"
     else
         echo "removed $removed link(s) from $TARGET_DIR"
+        if [ "$failed" -gt 0 ]; then
+            echo "  $failed link(s) could NOT be removed (need root?)" >&2
+            REMOVE_FAILED=1
+        fi
     fi
     [ "$DO_PATH" -eq 1 ] && apply_path
     [ "$DO_SHELL" -eq 1 ] && apply_shell
-    exit 0
+    exit "${REMOVE_FAILED:-0}"
 fi
 
 # The applet list comes from the binary, not from a list in here, so it tracks
