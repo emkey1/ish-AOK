@@ -13,6 +13,7 @@
 #include "kernel/time.h"
 #include "kernel/resource.h"
 #include "kernel/ptrace.h"
+#include "kernel/aio.h"
 
 void handle_interrupt(int interrupt);
 // One syscall on behalf of a natively-compiled program (kernel/native.h),

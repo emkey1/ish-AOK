@@ -514,6 +514,9 @@ static void task_free_final(struct task *task) {
     native_env_discard(task);
     native_sigtable_discard(task);
     if (task != NULL && task_is_leader(task) && task->group != NULL) {
+        // Before the group struct goes: an AIO context is keyed by a guest
+        // address, and this address space is on its way out.
+        aio_discard_tgroup(task->group);
         cond_destroy(&task->group->child_exit);
         free(task->group->cgroup_path);
         free(task->group);

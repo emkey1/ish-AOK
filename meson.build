@@ -497,6 +497,7 @@ if get_option('kernel') == 'ish'
         'kernel/resource.c',
         'kernel/random.c',
         'kernel/misc.c',
+        'kernel/aio.c',
         'kernel/eventfd.c',
         'kernel/pidfd.c',
         'kernel/inotify.c',

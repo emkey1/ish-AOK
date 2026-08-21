@@ -12,6 +12,8 @@
 # order shown by `ls /AOK/tests`.
 
 README.txt
+aio_basic.c
+aio_threads.c
 x86/atomics32.c
 x86/atomic_common.h
 test_common.h

@@ -174,6 +174,8 @@ and brings the concurrency risk this design currently does not have.
 
 1. **`io_submit` blocking.** Discussed above. Known, bounded, phase 2 exists.
 2. **32-bit marshalling.** Mitigated by testing on i386, not by care.
+   *(This one landed backwards -- see "What implementation changed" below.
+   i386 was fine; amd64 was the fatal one.)*
 3. **The decoy page being written by the guest.** Nothing may be read back
    from it; treat it as a handle only.
 4. **A context outliving its mm.** Tie the list to the mm and free with it;
@@ -186,3 +188,63 @@ MariaDB is the reporter, not the constituency. nginx's `aio`, PostgreSQL's
 Linux hit the same stub. MariaDB's failure -- a null dereference that reads as
 a hang -- is the worst of the class, but the others are only better by
 accident.
+
+## What implementation changed
+
+Three things the plan had wrong, all found by running the test rather than by
+reading the code.
+
+**The marshalling risk was on the 64-bit ABIs, not i386.** An `aio_context_t`
+is the address of the ring page, so every call after `io_setup` carries a real
+64-bit pointer in argument 0. amd64's legacy marshaller validates that an
+argument fits a dword and SIGSYS-kills the task when it does not -- which it
+did, to `io_submit`, at `0x7ffffdfff000`. That refusal was correct: silently
+truncating an opaque handle is worse. The fix is native full-width dispatch
+(`handle_amd64_native_memory_syscall` for 206-210,
+`handle_asm_generic_native_syscall` for 0-4), with the dword forms kept only
+for i386, where the whole address space fits in a dword and widening is
+lossless. Narrowing the declared arity was the first attempt and did nothing.
+
+**arm64's table entries were dead on arrival.** Syscalls 0-4 were already in
+the asm-generic handler's "clean ENOSYS" list, which runs before the table --
+so wiring `arm64_syscall_table` changed nothing at all, silently. Worth
+remembering: on the asm-generic ABIs a table entry is not evidence that a
+syscall is reachable.
+
+**A dword errno widened into a 4GB success.** Every `sys_*` the submit path
+calls returns `dword_t`, so `-EBADF` arrives as `0xfffffff7`; assigning that
+to a 64-bit `io_event.res` without sign-extending turns an error into a
+~4-billion-byte completed transfer. This is the failure mode with real
+consequences -- InnoDB reads `res` as the byte count and would conclude a
+write it never made had succeeded. Hence `aio_widen`.
+
+**And a fourth, found by writing the concurrency test rather than by running
+it.** `io_destroy` unlinked the context and freed it on the spot, reasoning
+that synchronous submission means nothing is in flight. That is true and it is
+not the question: a thread parked in `io_getevents` is holding the context's
+lock and cond, and another inside `io_submit` is holding the context itself.
+Freeing it under either is a use-after-free. Contexts are reference counted
+now -- the list holds one, every caller holds one for the length of its call,
+and a destroy marks the context dead and wakes its reapers so they return
+EINVAL instead of waiting on a ring nothing will ever post to.
+
+Worth being straight about the evidence: tests/manual/aio_threads.c pins down
+that contract, but run it against the old code and it still passes, because
+`cond_destroy` happens to wake the waiters and freed memory happens to still be
+readable. The obvious detector is not available either -- an AddressSanitizer
+build of the emulator dies inside ASan's own poisoning code before any guest
+starts. So this one rests on reading the code, and the test is a regression
+test for the behaviour rather than a reproduction of the bug.
+
+One deliberate change of semantics came out of the same pass: Linux validates
+an iocb in `io_submit` (`aio_prep_rw`'s `fget`, the FMODE checks, the opcode
+switch) and returns the error from the submit, queueing no event. The first
+implementation accepted everything and reported failures through the event
+instead. That is not a cosmetic difference -- a caller told "1 submitted" waits
+for exactly one event -- so submit-time validation now matches the kernel, and
+only errors the transfer itself hits reach `io_event.res`.
+
+Verified on all four guest ABIs (i386, amd64, arm64, riscv64) with the raw
+syscalls, and end-to-end on amd64 and arm64 against real libaio 0.3.113 --
+including `io_getevents` with a zero timeout, which is the path that reads the
+ring in userspace and is where a plausible-but-wrong context id would hang.

@@ -1097,7 +1097,14 @@ static syscall_t i386_syscall_table[] = {
     [241] = (syscall_t) sys_sched_setaffinity,
     [242] = (syscall_t) sys_sched_getaffinity,
     [243] = (syscall_t) sys_set_thread_area,
-    [245] = (syscall_t) syscall_stub, // io_setup
+    // The io_* family. 246-249 were absent rather than stubbed, and absent is
+    // worse: a missing entry is a "missing syscall" SIGSYS kill instead of an
+    // errno, so a 32-bit guest touching AIO died without even a log line.
+    [245] = (syscall_t) sys_io_setup,
+    [246] = (syscall_t) sys_io_destroy,
+    [247] = (syscall_t) sys_io_getevents,
+    [248] = (syscall_t) sys_io_submit,
+    [249] = (syscall_t) sys_io_cancel,
     [252] = (syscall_t) sys_exit_group,
     [254] = (syscall_t) sys_epoll_create0,
     [255] = (syscall_t) sys_epoll_ctl,
@@ -1540,6 +1547,14 @@ static syscall_t amd64_syscall_table[470] = {
     [202] = (syscall_t) sys_futex,
     [203] = (syscall_t) sys_sched_setaffinity,
     [204] = (syscall_t) sys_sched_getaffinity,
+    // The io_* family, which had NO amd64 entries at all -- so an amd64 guest
+    // touching AIO got a "missing syscall" SIGSYS kill rather than an errno,
+    // and none of the log line that made this diagnosable on arm64.
+    [206] = (syscall_t) sys_io_setup,
+    [207] = (syscall_t) sys_io_destroy,
+    [208] = (syscall_t) sys_io_getevents,
+    [209] = (syscall_t) sys_io_submit,
+    [210] = (syscall_t) sys_io_cancel,
     [213] = (syscall_t) sys_epoll_create0,
     [217] = (syscall_t) sys_getdents64,
     [218] = (syscall_t) sys_set_tid_address,
@@ -1735,7 +1750,7 @@ static dword_t sys_riscv_flush_icache(void) {
 
 static syscall_t arm64_syscall_table[470] = {
     // I/O
-    [2]   = (syscall_t) syscall_stub, // io_submit
+    [2] = (syscall_t) sys_io_submit,
     [5 ... 16] = (syscall_t) sys_xattr_stub,
     [17]  = (syscall_t) sys_getcwd,
     [19]  = (syscall_t) sys_eventfd2,
@@ -1893,10 +1908,10 @@ static syscall_t arm64_syscall_table[470] = {
     // errno instead of a "missing syscall" SIGSYS kill. All of these
     // dispatch natively (full-width); the entries exist to pass the
     // NULL check. syscall_stub entries keep the "stub" log visible.
-    [0] = (syscall_t) syscall_stub, // io_setup
-    [1] = (syscall_t) syscall_stub, // io_destroy
-    [3] = (syscall_t) syscall_stub, // io_cancel
-    [4] = (syscall_t) syscall_stub, // io_getevents
+    [0] = (syscall_t) sys_io_setup,
+    [1] = (syscall_t) sys_io_destroy,
+    [3] = (syscall_t) sys_io_cancel,
+    [4] = (syscall_t) sys_io_getevents,
     [18] = (syscall_t) syscall_stub, // lookup_dcookie
     [41] = (syscall_t) syscall_stub, // pivot_root
     [42] = (syscall_t) syscall_stub, // nfsservctl
@@ -2476,6 +2491,24 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 429: // move_mount(from_dfd, from_path, to_dfd, to_path, flags)
         result = (dword_t) sys_move_mount_guest((fd_t) raw_args[0], raw_args[1],
                 (fd_t) raw_args[2], raw_args[3], (dword_t) raw_args[4]); break;
+
+    // The io_* family. An aio_context_t is the address of the context's ring
+    // page, so arg 0 is a full 64-bit guest address on every call after
+    // io_setup -- the legacy marshalled path would have to truncate it, and
+    // refuses (SIGSYS). Results are counts or -errno, so the dword sign-
+    // extension at the bottom of this function is the right writeback.
+    case 0: // io_setup(nr_events, ctx_idp)
+        result = (dword_t) sys_io_setup_guest((uint_t) raw_args[0], raw_args[1]); break;
+    case 1: // io_destroy(ctx)
+        result = (dword_t) sys_io_destroy_guest(raw_args[0]); break;
+    case 2: // io_submit(ctx, nr, iocbpp)
+        result = (dword_t) sys_io_submit_guest(raw_args[0], (sqword_t) raw_args[1],
+                raw_args[2]); break;
+    case 3: // io_cancel(ctx, iocb, result)
+        result = (dword_t) sys_io_cancel_guest(raw_args[0], raw_args[1], raw_args[2]); break;
+    case 4: // io_getevents(ctx, min_nr, nr, events, timeout)
+        result = (dword_t) sys_io_getevents_guest(raw_args[0], (sqword_t) raw_args[1],
+                (sqword_t) raw_args[2], raw_args[3], raw_args[4]); break;
     case 25: { // fcntl — F_SETFL takes, and F_GETFL returns, open flags in the
                // aarch64 encoding; translate both directions at this boundary
                // (same four relocated O_ constants as openat's flags, above).
@@ -2743,7 +2776,10 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
                       (dword_t) raw_args[2], (dword_t) raw_args[3], (dword_t) raw_args[4]); break;
     // clean ENOSYS: known syscalls with no implementation; native so
     // 64-bit pointer args never trip the legacy-marshal validation
-    case 0: case 1: case 2: case 3: case 4: case 18: case 41: case 42:
+    // (0-4 are the io_* family, implemented above -- they were on this
+    // ENOSYS list, which is why wiring arm64_syscall_table alone changed
+    // nothing: this native list runs first and answered for them.)
+    case 18: case 41: case 42:
     case 60: case 75: case 77: case 89: case 104: case 105: case 106:
     case 128:
     case 180: case 181: case 182: case 183: case 184: case 185:
@@ -3697,6 +3733,34 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
                 (fd_t) raw_args[0], raw_args[1], (fd_t) raw_args[2], raw_args[3],
                 (dword_t) raw_args[4]));
         return true;
+
+    // The io_* family, for the same reason again, and here it is unavoidable
+    // rather than merely typical: an aio_context_t IS the address of the
+    // context's ring page, so EVERY call after io_setup carries a 64-bit
+    // address in arg 0. The legacy path refused to truncate it and SIGSYS'd
+    // io_submit -- correctly; truncating an opaque handle would have been the
+    // worse outcome. min_nr/nr are longs, hence the sqword casts.
+    case 206: // io_setup(nr_events, ctx_idp)
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_io_setup_guest(
+                (uint_t) raw_args[0], raw_args[1]));
+        return true;
+    case 207: // io_destroy(ctx)
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_io_destroy_guest(
+                raw_args[0]));
+        return true;
+    case 208: // io_getevents(ctx, min_nr, nr, events, timeout)
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_io_getevents_guest(
+                raw_args[0], (sqword_t) raw_args[1], (sqword_t) raw_args[2],
+                raw_args[3], raw_args[4]));
+        return true;
+    case 209: // io_submit(ctx, nr, iocbpp)
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_io_submit_guest(
+                raw_args[0], (sqword_t) raw_args[1], raw_args[2]));
+        return true;
+    case 210: // io_cancel(ctx, iocb, result)
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_io_cancel_guest(
+                raw_args[0], raw_args[1], raw_args[2]));
+        return true;
     default:
         return false;
     }
@@ -3715,6 +3779,12 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
               // sys_membarrier ignores flags+cpuid anyway. Over-counting to 3 made the
               // marshaller validate the garbage rdx and SIGSYS syslog-ng.
         return 2;
+    // The io_* family (206-210) is absent on purpose: it is dispatched
+    // natively in handle_amd64_native_memory_syscall and never reaches this
+    // classifier. It cannot -- an aio_context_t is the ring page's address,
+    // so arg 0 is a real 64-bit pointer and no arity would make it fit a
+    // dword. Narrowing the count here was the first attempt and it did not
+    // help; the marshaller was right to refuse.
     case 145: // sched_getscheduler(pid)
     case 146: // sched_get_priority_max(policy)
     case 147: // sched_get_priority_min(policy)
