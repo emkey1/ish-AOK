@@ -31,6 +31,15 @@
 # endif
 #endif
 
+// P_PIDFD is a kernel ABI constant, but musl only grew the idtype_t enumerator
+// in 1.2.x -- the Alpine 3.11 i386 root the e2e suite builds against is still
+// on 1.1.24, where this is a hard "'P_PIDFD' undeclared" error that stops
+// setup-regressions.sh (set -e, builds everything before running anything) and
+// so blocks the whole suite. Same fallback opath_symlink_pidfd_wait.c uses.
+#ifndef P_PIDFD
+#define P_PIDFD 3
+#endif
+
 #define CHILD_STATUS 42
 
 static int pidfd_open_(pid_t pid) {
@@ -95,7 +104,7 @@ int main(int argc, char **argv) {
 
     // And it reaps through the fd, reporting what the child actually returned.
     memset(&info, 0, sizeof(info));
-    if (waitid(P_PIDFD, (id_t) pidfd, &info, WEXITED) != 0) {
+    if (waitid((idtype_t) P_PIDFD, (id_t) pidfd, &info, WEXITED) != 0) {
         // Not every build routes P_PIDFD; fall back so the reap still happens
         // and the ESRCH check below stays meaningful.
         test_logf("waitid(P_PIDFD): %s -- falling back to P_PID\n", strerror(errno));

@@ -27,6 +27,18 @@
 
 #include "test_common.h"
 
+// Alpine 3.11's kernel headers (the i386 root the e2e suite builds against)
+// predate pidfd_open, so SYS_pidfd_open is undeclared there -- a hard error
+// that stops setup-regressions.sh, which builds every test before running
+// any. Every other pidfd test already carries this guard; this one did not.
+#ifndef SYS_pidfd_open
+# ifdef __NR_pidfd_open
+#  define SYS_pidfd_open __NR_pidfd_open
+# else
+#  define SYS_pidfd_open 434 // "common" number on i386 and amd64
+# endif
+#endif
+
 static void check(const char *label, long got, long exp) {
     int bad = got != exp;
     test_log_if(bad, "%s: got=%ld exp=%ld errno=%d (%s)\n",
