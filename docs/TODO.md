@@ -92,11 +92,14 @@ that Linux would not, not the null deref itself.
 installed would allow the fd-555 syscall log, which is what would actually name
 the offending call. That is the next step.
 
-Until it is fixed, mariadb must stay disabled on that device
-(`update-rc.d mariadb disable`), because a mariadbd that fails this way HANGS
-rather than exits, and a hung mariadbd wedges the whole boot -- see the entry
-on the System Console. The hang itself is fixed (kill() is process-directed
-now, tests/manual/sigwait_kill.c) but that fix is not on the device yet.
+**The boot-wedge half is fixed and confirmed on the device** (2026-08-21,
+after reinstall). A mariadbd that fails this way now aborts and EXITS in about
+4 seconds instead of hanging, and `/etc/init.d/mariadb start` gives up and
+returns after 54s instead of polling forever, leaving no stragglers. So
+re-enabling mariadb no longer wedges boot -- it just costs that time and still
+fails to start. It is left disabled (`update-rc.d mariadb enable` to reverse)
+because there is nothing to gain from the delay until the crash below is
+fixed.
 
 ### SmallCLUE's pager wedges apt, and is excluded rather than fixed
 
