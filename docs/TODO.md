@@ -62,7 +62,7 @@ the same neighbourhood as the poll/quiesce machinery. `curl` on its own shows
 the tail too, so it reproduces without Go, without yay and without the AUR:
 any repeated HTTPS handshake will do.
 
-### `pread_stack_thread_race` SIGSEGVs on i386 -- ROOT CAUSED 2026-08-22
+### `pread_stack_thread_race` SIGSEGVs on i386 -- FIXED 2026-08-22
 
 **A dangling pointer to a dead stack frame, written one byte at a time by
 another thread.** `kernel/futex.c:412` publishes the address of one of its own
@@ -88,7 +88,24 @@ ours on it. Not a coincidence, not a stray value: one byte at a fixed
 sub-offset.
 
 Fixed by clearing the pointer on that early return. `ISH_WAITFLAG_LEAK=1`
-restores the old behaviour so the fix can be A/B'd on one binary.
+restores the old behaviour so the fix can be A/B'd on one binary, and
+`ISH_WAITFLAG_TRACE=1` proves the knob actually toggles it -- an A/B whose two
+arms behave identically looks exactly like an A/B whose subject does not matter.
+
+**Proven by counting the bug, not by waiting for it.** The SIGSEGV is the
+~1.3%-per-run tail of this: only a small fraction of stale stores happen to
+land on a live cleanup record, so proving a fix that way needs hundreds of runs
+per arm and a lot of patience with noise. `task->waiting_interrupt_flag` is only
+ever set to `&wait.interrupted`, so the containing `struct futex_wait` is
+recoverable and its magic says whether that object is still live --
+`futex_wait_flag_is_live()`, checked at the store site in `wake_waiting_task`,
+counts the defect directly:
+
+    ISH_WAITFLAG_LEAK=1 (bug restored)   12 runs, 17 stale stores
+    fix active                           12 runs,  0
+
+Twelve runs an arm, perfectly separated. tier0 is green on both arches with the
+fix in (113 passed, 0 failed, 4 environmental skips).
 
 **What had to be corrected on the way, because each one cost time:**
 
