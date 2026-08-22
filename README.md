@@ -196,15 +196,19 @@ Create a filesystem from a rootfs tarball:
 A native program is host code compiled into the app. `execve` of a path under
 `/AOK/native` dispatches to a function inside iSH-AOK rather than loading a
 guest image, and the caller cannot tell the difference. `/AOK/native` holds one
-entry per program in the registry (`kernel/native.c`) — `smallclue`, `bash`,
-`zsh`, `zsh-multio` — and everything else is a symlink to one of those, the link
-name selecting the applet exactly as busybox does:
+entry per program in the registry (`kernel/native.c`) — `smallclue`, `motepad`,
+`hx`, `rust-probe`, `bash`, `zsh`, `zsh-multio` — and everything else is a
+symlink to one of those, the link name selecting the applet exactly as busybox
+does:
 
 | program | what it is |
 |---|---|
 | `/AOK/native/smallclue` | busybox-style multicall toolbox, applet chosen by `argv[0]` |
 | `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id` | OpenSSH, applets of SmallCLUE (built without OpenSSL) |
 | `vi` | the Nextvi editor, an applet of SmallCLUE |
+| `/AOK/native/motepad` | a modeless terminal text editor, the counterpart to Workspace's MotePad applet |
+| `/AOK/native/hx` | [helix](https://helix-editor.com), a modal editor with syntax highlighting. MPL-2.0, so like bash it has a build switch (`-Dnative_helix`); its grammars live under `/AOK/native/libs` |
+| `/AOK/native/rust-probe` | exercises the Rust-on-the-shim path that `hx` is built on; not a tool you have a use for |
 | `/AOK/native/bash` | see [Native bash and licensing](#native-bash-and-licensing) |
 | `/AOK/native/zsh` | see [Native zsh](#native-zsh) |
 

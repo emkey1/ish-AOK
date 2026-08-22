@@ -183,6 +183,155 @@ ninja -C build
 ./build/tools/fakefsify alpine-minirootfs-*.tar.gz alpine
 ```
 
+## 네이티브 프로그램
+
+네이티브 프로그램은 앱 안에 컴파일되어 들어간 호스트 코드입니다. `/AOK/native`
+아래의 경로를 `execve` 하면 게스트 이미지를 적재하는 대신 iSH-AOK 내부의 함수로
+디스패치되며, 호출한 쪽은 그 차이를 알 수 없습니다. `/AOK/native` 에는
+레지스트리(`kernel/native.c`)에 등록된 프로그램마다 항목이 하나씩 있고 —
+`smallclue`, `motepad`, `hx`, `rust-probe`, `bash`, `zsh`, `zsh-multio` —
+나머지는 모두 그중 하나를 가리키는 심볼릭 링크입니다. busybox 와 똑같이 링크
+이름이 애플릿을 고릅니다:
+
+| 프로그램 | 설명 |
+|---|---|
+| `/AOK/native/smallclue` | busybox 스타일 멀티콜 도구 모음, `argv[0]` 으로 애플릿 선택 |
+| `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id` | OpenSSH, SmallCLUE 의 애플릿 (OpenSSL 없이 빌드) |
+| `vi` | Nextvi 편집기, SmallCLUE 의 애플릿 |
+| `/AOK/native/motepad` | 모드가 없는 터미널 텍스트 편집기, Workspace 의 MotePad 애플릿에 대응 |
+| `/AOK/native/hx` | [helix](https://helix-editor.com), 구문 강조를 지원하는 모달 편집기. MPL-2.0 이라 bash 처럼 빌드 스위치(`-Dnative_helix`)가 있으며, 문법 파일은 `/AOK/native/libs` 에 있습니다 |
+| `/AOK/native/rust-probe` | `hx` 가 딛고 있는 Rust-온-shim 경로를 검증하는 프로브. 직접 쓸 일은 없습니다 |
+| `/AOK/native/bash` | [네이티브 bash와 라이선스](#네이티브-bash와-라이선스) 참고 |
+| `/AOK/native/zsh` | [네이티브 zsh](#네이티브-zsh) 참고 |
+
+`/AOK/tools/native-links.sh` 는 애플릿을 `PATH` 에 올리는 심볼릭 링크 묶음을
+만들고, `--shell bash|zsh|/path` 로 로그인 셸을 바꿉니다. `--remove` 는 둘 다
+되돌립니다. 앱 안의 문서는 `/AOK/docs/native-programs.md`(무엇인가)와
+`/AOK/docs/native-setup.md`(설정 방법)에 있고, 원본은
+[opt/AOK/docs/](opt/AOK/docs) 아래에 있습니다.
+
+어려운 부분은 속도가 아니라, 네이티브 프로그램이 자신이 실행되고 있는 iPhone 이
+아니라 *게스트*에 대해 답해야 한다는 점입니다. 환경 변수, 신원, 파일시스템,
+`/etc/hosts` 와 `/etc/resolv.conf`, terminfo, 로캘, rc 파일 위치가 모두 시스템
+헤더보다 먼저 컴파일되는 shim(`kernel/native_libc.c`)을 통해 루트 파일시스템으로
+라우팅됩니다. 기준이 되는 질문은 "이 함수는 순수한가?"가 아니라 "이 함수의 답이
+호스트와 게스트에서 달라질 수 있는가?"입니다. `tools/check-native-libc.py` 가 그
+게이트입니다. 빌드된 오브젝트를 훑어, 명시적 허용 목록에 없는데 네이티브
+프로그램이 참조하는 호스트 libc 심볼을 전부 보고합니다. 빌드에 엮여 있지 않고
+의도적으로 직접 실행하도록 되어 있습니다.
+
+## 네이티브 bash와 라이선스
+
+> 라이선스에 관한 내용은 영어판 README 의
+> [Native bash and licensing](README.md#native-bash-and-licensing) 이 정본입니다.
+> 아래는 이해를 돕기 위한 번역입니다.
+
+bash 는 네이티브 프로그램으로 앱에 컴파일되어 들어갑니다. 이득은 fork 가 아니라
+해석(interpretation)에 있습니다. 산술 루프는 에뮬레이트되는 셸보다 약 16배 빠르고,
+서브셸과 명령 치환은 거의 같은 수준입니다. 네이티브 프로그램은 `fork` 를 할 수
+없어 자기 자신을 다시 띄우기 때문입니다. 수치와 측정 방법은
+[docs/bash_native_plan.md](docs/bash_native_plan.md) 에 있습니다. 동시에 이는
+바이너리에 GPLv3 코드를 넣는 일이기도 합니다. bash 자체, 함께 들어가는 readline,
+그리고 GNU termcap 입니다.
+
+이 점은 App Store 배포에서 중요합니다. iSH-AOK 역시 GPLv3 이지만,
+[LICENSE.IOS](LICENSE.IOS) 는 *이 프로젝트의* 저작권자들이 GPL 과 Apple 약관 사이의
+충돌에 대해 권리를 행사하지 않겠다는 약속입니다. 이것이 bash 의 저작권을 보유한
+FSF 를 구속할 수는 없으며, FSF 는 실제로 GPL 소프트웨어를 App Store 에서 두 번
+내리게 한 적이 있습니다 — 2010년 [GNU
+Go](https://www.theregister.com/2010/05/27/gnu_go_fsf_apple_itunes/) 와 2011년
+[VLC](https://www.fsf.org/blogs/licensing/vlc-enforcement) 로, 스토어의 이용
+규칙이 [GPL 6조](https://www.fsf.org/blogs/licensing/more-about-the-app-store-gpl-enforcement)
+가 금지하는 "추가적인 제한"을 부과한다는 근거였습니다. FSF 는 이 해석이 v3 뿐
+아니라 모든 GPL 버전에 적용된다고 밝히고 있습니다.
+
+그래서 빌드 옵션입니다:
+
+```bash
+meson setup build .                          # auto: deps/bash 가 있으면 켜짐
+meson setup build . -Dnative_bash=disabled   # 바이너리에 서드파티 GPL 없음
+meson setup build . -Dnative_bash=enabled    # deps/bash 가 없으면 실패
+```
+
+configure 는 어느 쪽이 선택되었는지 `Licensing` 항목 아래에 출력합니다. 짐작하지
+말고 확인하십시오:
+
+```
+Licensing
+  native bash: no -- no third-party GPL in the binary
+```
+
+`disabled` 는 bash, readline, termcap 을 아카이브에서 완전히 뺍니다 — 오브젝트 0개,
+`ar t` 로 확인했습니다. 그래도 사용자는 bash 를 쓸 수 있습니다. 게스트 루트
+파일시스템의 에뮬레이트되는 `/bin/bash` 이며, 이는 Devuan 이나 Alpine 의 다른 모든
+GPL 도구와 동일한 단순 병합(mere aggregation) 입장입니다.
+
+**`kernel/native.c` 의 애플릿 테이블 항목을 지우는 것만으로는 부족합니다.**
+`meson.build` 가 이 아카이브들을 `link_whole` 로 묶기 때문에, 아무것도 참조하지
+않아도 오브젝트는 그대로 들어갑니다 — 레지스트리 항목을 지운 상태에서 bash
+오브젝트 144개와 readline 오브젝트 35개가 남는 것을 측정했습니다. 빌드 옵션만이
+이를 제거합니다.
+
+바이너리의 나머지에는 서드파티 GPL 이 없습니다. SmallCLUE 는 MIT, OpenSSH 와
+libarchive 는 BSD, liblzma 는 퍼블릭 도메인이며, `deps/linux` 는 이 타깃에
+컴파일되지 않습니다.
+
+## 네이티브 zsh
+
+zsh 는 세 번째 네이티브 프로그램으로 컴파일되어 들어가며 `/AOK/native/zsh` 로
+접근합니다. **기본값이 켜짐**이고, `-Dnative_zsh=disabled` 로 뺄 수 있습니다.
+bash 와 달리 라이선스 문제는 없습니다. zsh 의 라이선스는 허용적이고, 컴파일되는 C
+코드 중 GPL 인 것은 없습니다.
+
+제대로 동작하는 셸입니다. 줄 편집기인 ZLE 가 동작합니다 — 프롬프트, 에코, 편집,
+히스토리 키, 줄바꿈, 완전한 터미널 협상까지. 되지 않던 `fork` 도 됩니다. 네이티브
+프로그램은 프로세스가 아니라 게스트 태스크 스레드 위의 C 함수이므로 `fork` 로 주소
+공간을 복사할 수 없습니다. 그래서 zsh 는 자신의 상태를 스크립트로 직렬화한 뒤 자기
+자신을 다시 띄웁니다. bash 에서 먼저 검증한 설계입니다
+(`deps/zsh/Src/aok_fork.c`, `deps/bash/aok_fork.c`). 명령 치환, 파이프라인,
+서브셸, 백그라운드 작업이 모두 이 경로를 지납니다:
+
+```
+% echo $(echo A); echo B | tr B C; (echo D); sleep 0.1 & wait; echo E
+A
+C
+D
+E
+```
+
+MULTIOS 리다이렉션은 동반 네이티브 프로그램인 `zsh-multio` 를 씁니다. 디스크립터를
+셸이 아닌 무언가가 붙들고 있어야 하기 때문입니다.
+
+`/AOK/tools/native-links.sh --shell zsh` 로 로그인 셸로 지정할 수 있습니다.
+
+119개의 차등 테스트가 게스트의 `/AOK/tests/native_zsh_fork_state.sh` 에 들어
+있습니다. 기대값은 그럴듯해 보이는 것이 아니라 실제 zsh 가 출력하는 것에서
+가져왔으며, 그중 116개가 통과합니다. 실패하는 둘은 **프로세스 치환** — `<(...)` 과
+`>(...)` — 이고, 이는 셸이 아니라 루트 파일시스템의 속성입니다. `/dev/fd` 가
+필요한데 Alpine 이미지에는 없어서 그곳에서는 에뮬레이트되는 `/bin/bash` 에서도
+똑같이 실패하고, `/dev/fd` 가 `/proc/self/fd` 심볼릭 링크인 Devuan 에서는 두 셸
+모두 동작합니다. *셸 자체의* 알려진 결함 두 가지는
+[docs/release-notes-since-iSH-AOK_549.md](docs/release-notes-since-iSH-AOK_549.md)
+의 *Known gaps* 에 적혀 있습니다. 패턴이 처음 쓰일 때 컴파일되어 파스 트리에
+캐시되는데 그때 어떤 옵션이 켜져 있었는지는 어디에도 기록되지 않아, 다시 띄워진
+자식이 부모와 다른 옵션으로 컴파일할 수 있다는 것, 그리고 multio 아래의
+`pipestatus` 가 zsh 의 `0 0` 대신 `1 0` 을 보고한다는 것입니다.
+
+`deps/zsh` 트리는 [emkey1/zsh](https://github.com/emkey1/zsh) 의 `ish-aok`
+브랜치를 서브모듈로 둔 것입니다. zsh 의 *생성된* 소스 — `config.h`,
+`Src/signames.c`, 모듈별 `.mdh`/`.epro`/`.pro` — 를 업스트림의 `.gitignore` 를
+거슬러 커밋해 두었습니다. 이 빌드는 zsh 를 meson 으로 컴파일하고 zsh 자신의 `make`
+는 전혀 돌리지 않기 때문입니다. 그래서 체크아웃하면 configure 단계 없이 빌드됩니다:
+
+```bash
+git submodule update --init deps/zsh
+```
+
+termcap 전용으로, 모든 모듈을 정적 링크하도록 구성되어 있습니다. 둘 다 강제입니다.
+iOS SDK 는 curses `.tbd` 스텁은 주면서 `curses.h`/`term.h` 는 주지 않고, 네이티브
+프로그램은 `dlopen` 을 할 수 없습니다 — `--disable-dynamic` 만으로는 `zsh/regex`
+가 조용히 `link=no` 로 매핑되어 `[[ =~ ]]` 가 런타임에 실패합니다.
+
 ## 회귀 테스트
 
 호스트 측 테스트:
