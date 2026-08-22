@@ -1488,10 +1488,6 @@ static void canary_rearm_all(void) {}
 static void canary_watch_selftest(void) {}
 static int canary_watch_covers(uintptr_t UNUSED(addr)) { return -1; }
 static void canary_watch_claim(uintptr_t UNUSED(self)) {}
-void task_pthread_canary_check_self(const char *UNUSED(where)) {}
-void task_pthread_canary_check_self_at(const char *UNUSED(where), bool UNUSED(must_be_empty)) {}
-void task_pthread_canary_note_tlb(const void *UNUSED(tlb), unsigned long UNUSED(size)) {}
-void task_pthread_canary_note_unwind(void) {}
 static void canary_watch_release(uintptr_t UNUSED(self)) {}
 #endif
 
@@ -1646,8 +1642,17 @@ void task_pthread_canary_unregister(void) {
 }
 
 #else
+// Not Darwin: there is no struct _pthread to watch and no ARM_DEBUG_STATE64 to
+// watch it with, so every entry point is a no-op. All of these are called
+// unconditionally from task_run_current, do_exit and sigusr1_handler, so they
+// have to exist here or the link fails -- which is exactly what the Linux CI
+// jobs are for.
 static void task_pthread_canary_register(void) {}
 void task_pthread_canary_unregister(void) {}
+void task_pthread_canary_check_self(const char *UNUSED(where)) {}
+void task_pthread_canary_check_self_at(const char *UNUSED(where), bool UNUSED(must_be_empty)) {}
+void task_pthread_canary_note_tlb(const void *UNUSED(tlb), unsigned long UNUSED(size)) {}
+void task_pthread_canary_note_unwind(void) {}
 #endif
 
 
