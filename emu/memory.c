@@ -765,6 +765,30 @@ int pt_unmap(struct mem *mem, page_t start, pages_t pages) {
     return pt_unmap_always(mem, start, pages);
 }
 
+// ISH_MEM_QUARANTINE=1: when guest page data is released, mprotect it
+// PROT_NONE and keep the address range, instead of munmapping it.
+//
+// This exists because of how the failure looks WITHOUT it. Task threads take
+// their 4 MB stacks from the same host arena this memory goes back to
+// (kernel/task.c, pthread_attr_setstacksize), so a page AOK unmaps can come
+// straight back as the next thread's `_pthread` struct. A write through a
+// mem_ptr() result that outlived its mapping therefore does not fault -- it
+// quietly overwrites a live thread's bookkeeping, and the bill arrives later,
+// on a different thread, inside pthread_exit. See the pread_stack_thread_race
+// entry in docs/TODO.md for the crash report that led here.
+//
+// With the knob on, that write faults at the instruction that makes it, while
+// the guilty frames are still on the stack. It leaks address space by design,
+// so it is for a debugging run and nothing else.
+static bool mem_quarantine_freed_pages(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *v = getenv("ISH_MEM_QUARANTINE");
+        enabled = (v != NULL && *v != '\0' && *v != '0') ? 1 : 0;
+    }
+    return enabled == 1;
+}
+
 // Core of pt_unmap_always, without the jetsam_lock exclusion -- callers that
 // already know no sibling thread can be executing JIT code in `mem` (e.g.
 // mm_copy building a brand-new, not-yet-started child mm; see
@@ -789,9 +813,17 @@ static int pt_unmap_always_unlocked(struct mem *mem, page_t start, pages_t pages
         if (--data->refcount == 0) {
             // vdso wasn't allocated with mmap, it's just in our data segment
             if (data->data != NULL && data->data != vdso_data) {
-                int err = munmap(data->data, data->size);
-                if (err != 0)
-                    die("munmap(%p, %lu) failed: %s", data->data, data->size, strerror(errno));
+                if (mem_quarantine_freed_pages()) {
+                    // Debug mode: keep the range reserved and make it fault
+                    // rather than handing it back. See the helper above.
+                    if (mprotect(data->data, data->size, PROT_NONE) != 0)
+                        die("quarantine mprotect(%p, %lu) failed: %s",
+                            data->data, data->size, strerror(errno));
+                } else {
+                    int err = munmap(data->data, data->size);
+                    if (err != 0)
+                        die("munmap(%p, %lu) failed: %s", data->data, data->size, strerror(errno));
+                }
             }
             if (data->fd != NULL) {
                 fd_close(data->fd);

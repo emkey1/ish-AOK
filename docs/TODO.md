@@ -154,14 +154,37 @@ state: `__user_write_task_mem` (kernel/user.c:129) validates the whole range
 once with `user_range_valid_mem` before its loop, and holds only a read lock
 around it.
 
-**Next step**, and the reason this is written up rather than patched: the
-corrupting write has not been caught in the act, only its victim. Quarantine
-freed guest pages instead of returning them -- `mprotect(PROT_NONE)` at
-emu/memory.c:792 behind a debug env knob, munmap later -- and the next run
-faults at the offending memcpy with the real backtrace, instead of corrupting
-a stack that crashes somewhere else minutes later. Do that before writing any
-fix, because the lock-upgrade window above is a plausible culprit and not yet
-a demonstrated one.
+**The recycling explanation is REFUTED.** The quarantine above was built --
+`ISH_MEM_QUARANTINE=1`, emu/memory.c, mprotect(PROT_NONE) instead of munmap so
+a freed guest page can never come back as anything -- and the crash is
+byte-identical with it on: same 0x100000000, same `_pthread_exit+56`, same
+frames. If the corruption were a write through a stale mem_ptr() into memory
+the host had re-handed to libsystem_pthread, quarantining would have moved the
+fault to the offending write. It did not. So the value is reaching that struct
+some other way, and the whole same-arena story above is background, not cause.
+
+Keep the knob; it earned its place by killing a plausible theory in one run,
+and it makes the crash reproduce more often (3 in 25 with it on, ~1 in 40
+without) which is useful on its own.
+
+**Ruled in, still:** AOK pushes no pthread cleanup handlers anywhere
+(`pthread_cleanup_push` appears nowhere; the only TSD is
+`thread_locals_ready_key` and the JIT's `jit_entry_scratch_key`), so a nonzero
+`__cleanup_stack` is corruption by definition rather than a stale-but-real
+record.
+
+**Tested and inconclusive:** whether this shares a cause with the i386
+forward-edge block-chaining bug that `fakefs_type_race` hits. 1 failure in 30
+with chaining on versus 0 in 30 with `ISH_I386_NOCHAIN=1` is not a result at
+these rates -- do not cite it either way. A larger sample, or a reproducer with
+a materially higher rate, is needed before that link can be claimed.
+
+**Next step:** catch the write rather than the reader. A watchpoint on
+`self+8` is the direct route but the crash hides under a debugger (60 lldb runs,
+none). Better: since the struct sits at a known offset from the thread stack
+top, have the emulator itself checksum or watch that word around suspicious
+operations, or bisect by disabling JIT features one at a time with a sample
+size large enough to mean something.
 
 Also seen in the same 40-run sweep, and not the same failure: one run exited
 rc=5 with `waitpid: Interrupted system call`. Do not fold it into this entry.
