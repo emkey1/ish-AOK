@@ -93,6 +93,17 @@ struct futex_wait {
     struct list queue;   // For linking in the futex's queue
 };
 
+static bool futex_heap_wait_enabled(void) {
+    static _Atomic int enabled = -1;
+    int e = atomic_load_explicit(&enabled, memory_order_relaxed);
+    if (e < 0) {
+        const char *v = getenv("ISH_FUTEX_HEAP_WAIT");
+        e = (v != NULL && *v != '\0' && *v != '0') ? 1 : 0;
+        atomic_store_explicit(&enabled, e, memory_order_relaxed);
+    }
+    return e == 1;
+}
+
 #define FUTEX_HASH_BITS 12
 #define FUTEX_HASH_SIZE (1 << FUTEX_HASH_BITS)
 static lock_t futex_lock = LOCK_INITIALIZER;
@@ -347,14 +358,30 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
         struct timespec deadline = {};
         if (timeout != NULL)
             deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), *timeout);
-        struct futex_wait wait = {
+        // ISH_FUTEX_HEAP_WAIT=1: take this object off the stack. It is
+        // published on a shared queue and every wake path runs
+        // pthread_cond_broadcast over it, so on the stack it aliases the very
+        // bytes libpthread uses for that thread's pthread_cond_wait cleanup
+        // record -- measured, see docs/TODO.md. The heap copy is deliberately
+        // never freed: the point is to give it a lifetime that outlives the
+        // frame, so a stale wake lands somewhere harmless. That makes this an
+        // A/B for whether the stack lifetime is what kills the thread later,
+        // not a fix, and it leaks a few tens of MB over an 8-second stress run.
+        struct futex_wait wait_storage;
+        struct futex_wait *w = &wait_storage;
+        if (futex_heap_wait_enabled()) {
+            struct futex_wait *heap = calloc(1, sizeof(*heap));
+            if (heap != NULL)
+                w = heap;
+        }
+        *w = (struct futex_wait) {
             .magic = FUTEX_WAIT_MAGIC,
             .cond = COND_INITIALIZER,
         };
-        wait.futex = futex;
-        wait.thread = pthread_self();
-        wait.bitset = bitset;
-        list_add_tail(&futex->queue, &wait.queue);
+        w->futex = futex;
+        w->thread = pthread_self();
+        w->bitset = bitset;
+        list_add_tail(&futex->queue, &w->queue);
         for (;;) {
             struct timespec remaining = wait_slice;
             if (timeout != NULL) {
@@ -376,13 +403,13 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
             }
             TASK_MAY_BLOCK {
                 lock(&current->waiting_cond_lock, 0);
-                current->waiting_interrupt_flag = &wait.interrupted;
+                current->waiting_interrupt_flag = &w->interrupted;
                 unlock(&current->waiting_cond_lock);
                 should_mark_wait_interrupted = true;
-                err = wait_for(&wait.cond, &futex_lock, &remaining);
+                err = wait_for(&w->cond, &futex_lock, &remaining);
                 should_mark_wait_interrupted = false;
             }
-            if (__atomic_load_n(&wait.interrupted, __ATOMIC_ACQUIRE) || futex_wait_has_pending_signal()) {
+            if (__atomic_load_n(&w->interrupted, __ATOMIC_ACQUIRE) || futex_wait_has_pending_signal()) {
                 err = _EINTR;
                 break;
             }
@@ -391,7 +418,7 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
             // Keep waiting instead of leaking a spurious EINTR to the guest.
             if (err == _EINTR)
                 continue;
-            if (list_null(&wait.queue)) {
+            if (list_null(&w->queue)) {
                 // FUTEX_WAKE removed us from the queue. The wake may have
                 // fired while we were between wait_for iterations (not
                 // sleeping), so the cond notification was lost and the next
@@ -405,11 +432,11 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
             if (err != _ETIMEDOUT)
                 break;
         }
-        futex = wait.futex;
-        list_remove_safe(&wait.queue);
+        futex = w->futex;
+        list_remove_safe(&w->queue);
         // Off the queue: from here the frame may die at any point, so no waker
         // may touch this object again.
-        wait.magic = 0;
+        w->magic = 0;
 
         if (err == _EINTR) {
             // The wait was interrupted by a signal that may restart the syscall
