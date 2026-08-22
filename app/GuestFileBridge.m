@@ -19,6 +19,7 @@
 #include "fs/fd.h"
 #include "fs/stat.h"
 #include "fs/path.h"
+#include "fs/tty.h"
 #include "util/sync.h"
 #include "debug.h"
 
@@ -1287,6 +1288,73 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         fd_close(fd);
     }
     return YES;
+}
+
+#pragma mark - Terminal integration
+
+// Resolve the foreground process group of one tty to a working directory.
+// Caller must already hold a borrowed task context (generic_getpath resolves
+// through `current`).
+//
+// fg_group is a process group id, and a group's leader has pid == pgid, so the
+// leader is one pid_get_task_ref away. Using the leader rather than walking
+// every task in the group is deliberate: at a shell prompt the foreground
+// group IS the shell, and that is when a file browser gets opened.
+static NSString *ISHForegroundDirectoryForTTY(int type, int number) {
+    struct tty *tty = tty_lookup_ref(type, number, NULL);
+    if (tty == NULL)
+        return nil;
+    lock(&tty->lock, 0);
+    pid_t_ fg = tty->fg_group;
+    unlock(&tty->lock);
+    tty_put(tty);
+    if (fg <= 0)
+        return nil;
+
+    struct task *task = pid_get_task_ref(fg);
+    if (task == NULL)
+        return nil;
+    struct fs_info *fs = NULL;
+    lock(&task->general_lock, 0);
+    if (!task->exiting && task->fs != NULL)
+        fs = fs_info_retain(task->fs);
+    unlock(&task->general_lock);
+    task_ref_cnt_mod(task, -1);
+    if (fs == NULL)
+        return nil;
+
+    complex_lockt(&fs->lock, 0);
+    struct fd *pwd = fs->pwd != NULL ? fd_retain(fs->pwd) : NULL;
+    unlock(&fs->lock);
+    fs_info_release(fs);
+    if (pwd == NULL)
+        return nil;
+
+    char buf[MAX_PATH + 1];
+    memset(buf, 0, sizeof(buf));
+    int err = generic_getpath(pwd, buf);
+    fd_close(pwd);
+    if (err < 0)
+        return nil;
+    // An unlinked cwd resolves to "" (the root fd itself also yields ""), and
+    // both mean "/" to a browser that only ever shows absolute paths.
+    if (buf[0] == '\0')
+        return @"/";
+    return [NSString stringWithUTF8String:buf];
+}
+
+- (void)foregroundDirectoryForTTYType:(int)type
+                                number:(int)number
+                            completion:(void (^)(NSString * _Nullable guestPath))completion {
+    dispatch_async(self.ioQueue, ^{
+        __block NSString *path = nil;
+        [self withGuestTaskContext:^{
+            path = ISHForegroundDirectoryForTTY(type, number);
+        }];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(path);
+        });
+    });
 }
 
 @end

@@ -180,6 +180,26 @@ typedef NSUUID *ISHGuestFileExtractionToken;
                      recursive:(BOOL)recursive
                     completion:(void (^)(BOOL ok, NSError * _Nullable error))completion;
 
+
+#pragma mark Terminal integration
+
+// Best-effort working directory of the process group in the foreground of the
+// tty identified by (type, number) -- "where the shell is standing right now".
+// Used by the terminal's file browser to open on the shell's own directory
+// instead of a fixed root.
+//
+// Completes with nil when the guest has not booted, the tty has no foreground
+// group yet, or the path cannot be resolved. That is a normal state, not a
+// failure, so this reports no NSError: a nil result simply means the caller
+// should fall back to its own default.
+//
+// Note this follows the FOREGROUND group, so while a job is running it is that
+// job's directory, not the shell's. At a prompt -- when a user actually opens
+// a file browser -- the foreground group is the shell.
+- (void)foregroundDirectoryForTTYType:(int)type
+                                number:(int)number
+                            completion:(void (^)(NSString * _Nullable guestPath))completion;
+
 @end
 
 NS_ASSUME_NONNULL_END

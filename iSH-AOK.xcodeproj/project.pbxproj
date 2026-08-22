@@ -142,6 +142,7 @@
 		9E0E330D31CAA2DC36F0F208 /* FoundationModels.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1C46BFA5283C8409E80F5EC /* FoundationModels.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		A143B4E425BDFAE03A1725CD /* AOKFoundationModelsBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F681FC66C14DDED4FBD7BD6 /* AOKFoundationModelsBridge.swift */; };
 		AC2AD539A8142C5355A695A5 /* WorkspaceFileManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 8DA9B7B2A14CC33EF9CF003E /* WorkspaceFileManager.m */; };
+		AC2AD539A8142C5355A695B7 /* ShellFileBrowser.m in Sources */ = {isa = PBXBuildFile; fileRef = 8DA9B7B2A14CC33EF9CF00B7 /* ShellFileBrowser.m */; };
 		B115F7067DF5415ECA19F2C3 /* AudioPCMDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = 2D2CE94AE68FC33023A693E0 /* AudioPCMDecoder.m */; };
 		B5B659AF30978A9998EF8AB6 /* audiocodecs.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3F264C7242E0E51BAA5B5CF3 /* audiocodecs.xcframework */; };
 		BB0F552E239F8A790032A2A1 /* Icons.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB0F552D239F8A790032A2A1 /* Icons.plist */; };
@@ -696,6 +697,7 @@
 		8632A7BE219A59FB00F02325 /* UserPreferences.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = UserPreferences.m; sourceTree = "<group>"; };
 		8C79AE703940107B279572E7 /* WorkspaceImageViewer.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WorkspaceImageViewer.m; sourceTree = "<group>"; };
 		8DA9B7B2A14CC33EF9CF003E /* WorkspaceFileManager.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = WorkspaceFileManager.m; sourceTree = "<group>"; };
+		8DA9B7B2A14CC33EF9CF00B7 /* ShellFileBrowser.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = ShellFileBrowser.m; sourceTree = "<group>"; };
 		9A28E4E8219A8B670073D200 /* AboutAppearanceViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AboutAppearanceViewController.h; sourceTree = "<group>"; };
 		9A28E4E9219A8B670073D200 /* AboutAppearanceViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AboutAppearanceViewController.m; sourceTree = "<group>"; };
 		A1C46BFA5283C8409E80F5EC /* FoundationModels.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = FoundationModels.framework; path = System/Library/Frameworks/FoundationModels.framework; sourceTree = SDKROOT; };
@@ -869,6 +871,7 @@
 		C100D3488E931E73E9A1AC8C /* WorkspaceImageViewer.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WorkspaceImageViewer.h; sourceTree = "<group>"; };
 		C64EFBFD4819B3516B73356F /* DisplayRFBShaders.metal */ = {isa = PBXFileReference; includeInIndex = 1; path = DisplayRFBShaders.metal; sourceTree = "<group>"; };
 		C9934D01E356E81EDFCCD344 /* WorkspaceFileManager.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WorkspaceFileManager.h; sourceTree = "<group>"; };
+		C9934D01E356E81EDFCCD3B7 /* ShellFileBrowser.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = ShellFileBrowser.h; sourceTree = "<group>"; };
 		DB5F3377782D953C463D3F4C /* AudioLibrary.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = AudioLibrary.h; sourceTree = "<group>"; };
 		DEAD678A36BE975280C995BA /* DisplayRFBView.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = DisplayRFBView.h; sourceTree = "<group>"; };
 		EDE84B56A5A0D9AC87E4DABB /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
@@ -1276,6 +1279,8 @@
 				04D500F4AD345B478159A9D2 /* GuestFileBridge.m */,
 				761C29F5D922E3D01F78AE83 /* MarkdownRenderer.h */,
 				57D6250B1A93D2423FF389EB /* MarkdownRenderer.m */,
+				C9934D01E356E81EDFCCD3B7 /* ShellFileBrowser.h */,
+				8DA9B7B2A14CC33EF9CF00B7 /* ShellFileBrowser.m */,
 				C9934D01E356E81EDFCCD344 /* WorkspaceFileManager.h */,
 				8DA9B7B2A14CC33EF9CF003E /* WorkspaceFileManager.m */,
 				438B54F5AE6878B6B1BF54F1 /* WorkspaceMarkdownViewer.h */,
@@ -2585,6 +2590,7 @@
 				3CFB2CDE11FC08241BE3BAA3 /* GuestFileBridge.m in Sources */,
 				E02D963E8F2A7D5D58954A0D /* MarkdownRenderer.m in Sources */,
 				AC2AD539A8142C5355A695A5 /* WorkspaceFileManager.m in Sources */,
+				AC2AD539A8142C5355A695B7 /* ShellFileBrowser.m in Sources */,
 				826E8F9723237C5BAA6FDD6A /* WorkspaceMarkdownViewer.m in Sources */,
 				54D528EF4254773BF6EDC8AB /* WorkspaceImageViewer.m in Sources */,
 				FF0F1FAE84EA95701F222D85 /* WorkspaceVideoPlayer.m in Sources */,

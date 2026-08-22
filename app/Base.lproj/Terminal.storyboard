@@ -179,6 +179,15 @@
                                         <constraint firstItem="5dl-UV-6qh" firstAttribute="width" secondItem="QqP-xI-1vv" secondAttribute="width" id="v7m-bU-plD"/>
                                     </constraints>
                                 </view>
+                                <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="FbR-ws-Ct1" userLabel="Files">
+                                    <rect key="frame" x="420" y="0.0" width="31" height="50"/>
+                                    <accessibility key="accessibilityConfiguration" label="Browse Files"/>
+                                    <color key="tintColor" white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+                                    <state key="normal" image="folder" catalog="system"/>
+                                    <connections>
+                                        <action selector="showFileBrowser:" destination="BYZ-38-t0r" eventType="primaryActionTriggered" id="Fb2-ac-Ct9"/>
+                                    </connections>
+                                </button>
                                 <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="hmm-tv-z35" userLabel="Paste">
                                     <rect key="frame" x="420" y="0.0" width="31" height="50"/>
                                     <accessibility key="accessibilityConfiguration" label="Paste"/>
@@ -201,6 +210,7 @@
                             <constraints>
                                 <constraint firstAttribute="height" constant="43" id="3cy-zm-9Qp"/>
                                 <constraint firstItem="7qw-ie-p4d" firstAttribute="width" secondItem="5dl-UV-6qh" secondAttribute="width" id="5aW-YN-2vX"/>
+                                <constraint firstItem="FbR-ws-Ct1" firstAttribute="width" secondItem="5dl-UV-6qh" secondAttribute="width" id="Fb3-wd-Ct7"/>
                                 <constraint firstItem="5dl-UV-6qh" firstAttribute="width" secondItem="hmm-tv-z35" secondAttribute="width" id="Nyk-On-Tyt"/>
                                 <constraint firstItem="W9v-cj-FWz" firstAttribute="width" secondItem="5dl-UV-6qh" secondAttribute="width" id="Xdt-z5-Zdb"/>
                                 <constraint firstItem="IPm-l0-f25" firstAttribute="width" secondItem="5dl-UV-6qh" secondAttribute="width" id="ebo-yF-ffX"/>
@@ -230,6 +240,7 @@
     </scenes>
     <resources>
         <image name="Hide Keyboard" width="32" height="32"/>
+        <image name="folder" catalog="system" width="128" height="105"/>
         <image name="Paste" width="20" height="21"/>
         <systemColor name="darkTextColor">
             <color white="0.0" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>

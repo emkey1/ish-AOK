@@ -18,6 +18,7 @@
 #import "NSObject+SaneKVO.h"
 #import "UIViewController+Extras.h"
 #import "WorkspaceViewController.h"
+#import "ShellFileBrowser.h"
 #import "SceneDelegate.h"
 #import "LinuxInterop.h"
 #import <GameController/GameController.h>
@@ -194,7 +195,7 @@ static NSArray<NSString *> *ISHSessionCommandWithFallback(NSArray<NSString *> *c
 }
 #endif
 
-@interface TerminalViewController () <UIGestureRecognizerDelegate, UITextFieldDelegate>
+@interface TerminalViewController () <UIGestureRecognizerDelegate, UITextFieldDelegate, ISHShellFileBrowserDelegate>
 
 @property UITapGestureRecognizer *tapRecognizer;
 @property (weak, nonatomic) IBOutlet TerminalView *termView;
@@ -1776,6 +1777,26 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     [self.termView resignFirstResponder];
 }
 
+- (IBAction)showFileBrowser:(id)sender {
+    // Deliberately does NOT resign the terminal's first responder, unlike
+    // showAbout: -- the sheet's whole purpose is to put text on the command
+    // line, and the keyboard should still be there when it dismisses.
+    [ISHShellFileBrowserViewController presentFromViewController:self
+                                                          ttyType:self.terminal.type
+                                                        ttyNumber:self.terminal.number
+                                                     fallbackPath:@"/"
+                                                         delegate:self];
+}
+
+#pragma mark ISHShellFileBrowserDelegate
+
+- (void)shellFileBrowser:(ISHShellFileBrowserViewController *)browser insertText:(NSString *)text {
+    NSData *input = [text dataUsingEncoding:NSUTF8StringEncoding];
+    if (input != nil)
+        [self.terminal sendInput:input];
+    [self focusTerminal];
+}
+
 - (IBAction)showWorkspaceDashboard:(id)sender {
     [self.termView resignFirstResponder];
     if (@available(iOS 13.0, *)) {
@@ -2072,6 +2093,11 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
                              modifierFlags:UIKeyModifierCommand
                                     action:@selector(showFindBar:)
                       discoverabilityTitle:@"Find in Scrollback"]];
+        [commands addObject:
+         [UIKeyCommand keyCommandWithInput:@"b"
+                             modifierFlags:UIKeyModifierCommand
+                                    action:@selector(showFileBrowser:)
+                      discoverabilityTitle:@"Browse Files"]];
         [commands addObject:
          [UIKeyCommand keyCommandWithInput:@"g"
                              modifierFlags:UIKeyModifierCommand
