@@ -162,6 +162,43 @@ names the reading instruction, which is a start and not the answer.
 
 ## Closed during the 550 cycle
 
+### CI was red for the whole 550 cycle -- FIXED 2026-08-22
+
+Found by release verification, not by anything failing locally. Every commit
+since 549 had failed CI, on three jobs, for two unrelated reasons. Neither
+shows up in an Xcode build, which is why neither was noticed.
+
+**Linux (clang and gcc).** `kernel/native_libc.c` included `<sys/sysctl.h>`
+unconditionally; glibc dropped it and musl never had it. A second one behind
+it: `kernel/native_kqueue.c` included `<sys/event.h>`, kqueue being BSD-only.
+Every other Darwin-only include in the non-app sources was already guarded, so
+these were the only two gaps -- which is why the build stopped at exactly them.
+Both are Darwin-only in substance: sysctl passthrough answers about the host,
+and the kqueue front end exists only because a runtime built for Apple reaches
+for kqueue. Linux gets ENOTSUP and four linkable stubs, not a second
+implementation.
+
+Consequence worth stating plainly: Linux CI is a second compiler, and GCC has
+caught shipping bugs here that clang's `-w` hides. Nothing in this cycle went
+through it until now.
+
+**mac, and the release tag.** `the aarch64-apple-ios target may not be
+installed`. None of the three workflows installed it. 549 shipped before Rust
+was in the build; 550 is the first release that needs it, helix being Rust and
+compiled in unconditionally. The release IPA workflow is not exercised until a
+tag is pushed, so **pushing builds/iSH-AOK_550 would have failed to produce an
+IPA** with nothing before it to warn us.
+
+The trap is `native_rust = auto`. The runners ship cargo, so auto enables the
+Rust program and the build only then discovers the target is missing. Detecting
+a toolchain is not the same as being able to build for the platform.
+
+Verified: CI green on 9fdeb44ca -- build-linux (clang), build-linux (gcc) with
+its Unit tests and e2e steps, and build-mac -- plus Build Dev IPA, which is the
+same shape as the release IPA job. The Linux fixes were iterated in an
+ubuntu:24.04 container with `ninja -k 0`, which reports every portability error
+in one pass instead of one per CI round trip.
+
 ### System Console gave no prompt -- FIXED 2026-08-21 (tty hangup recovery)
 
 Reported as "the System Console fails to give the prompt". Reproduced in the
