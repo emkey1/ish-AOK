@@ -10,51 +10,6 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
-### SmallCLUE's pager wedges apt, and is excluded rather than fixed
-
-`apt search maria` hung the whole app, every time, on device. Removing
-/usr/local/native-bin/less cured it and restoring it brought it back --
-confirmed by the user, not inferred. opt/AOK/tools/native-links.sh now excludes
-`less` and `more`, so the distro's pagers win; re-running it removes the links
-it made before they were excluded.
-
-**What two backtraces agree on.** SmallCLUE's less is blocked in
-`pagerCollectLines` -> `nlibc_read(fd 0, 8192)` -> `realfs_wait_readable`, on
-stdin that never reaches EOF. apt is blocked reading FOUR bytes from a
-descriptor of its own. Neither moves again.
-
-`pagerCollectLines` (deps/smallclue/src/core.c) spools the ENTIRE stream into a
-temp file before drawing anything. Real less paints the first screen as soon as
-it has one. A producer that waits on its pager before closing its end therefore
-waits forever on ours and not on theirs, which fits the shape exactly.
-
-**What is NOT established, and why this is excluded rather than fixed.** That
-story predicts the hang whenever apt pages through SmallCLUE, and it does not
-hold up: forcing `PAGER=/usr/local/native-bin/less apt search maria` by hand
-COMPLETED, 9366 bytes, no hang. So collect-all alone is not sufficient -- it is
-something about how apt invokes a pager it discovers on PATH, and that is the
-piece still missing. Seven attempts over ssh with and without a tty never
-reproduced it either; apt kept choosing /usr/bin/less regardless of PATH, which
-is itself a clue about how it resolves one.
-
-**Next step**, in order:
-
-1. Find the trigger. `strace`-equivalent on the guest side around apt's pager
-   spawn, or a `less` that logs its argv and the state of fd 0, would say
-   whether it is arguments SmallCLUE mis-parses, an fd apt expects the pager to
-   close, or that four-byte read being a handshake nothing answers.
-2. Then make the pager stream: display the first screenful as soon as it is
-   read and continue lazily, which is what real less does and what removes the
-   deadlock shape whatever the trigger turns out to be.
-3. Then un-exclude both pagers, since a native less on a large file is worth
-   having -- that is the outcome three earlier entries reached and the one to
-   aim for here.
-
-Not caused by the recent filesystem or shim work: SmallCLUE calls none of the
-ioctls added with the kqueue front end, and nothing in it touches pipes, exec
-or fd inheritance. The pager has spooled like this since it was written.
-
-
 ### #523: yay's reported failure does not reproduce; an http2 flake does
 
 Reproduced the environment on 2026-08-20 -- Arch Linux ARM aarch64, yay v13.0.1
@@ -217,6 +172,69 @@ than a timeout, get a core or attach before it goes.
 more.** That reflex is what kept this one invisible.
 
 ## Closed during the 550 cycle
+
+### SmallCLUE's pager wedged apt -- FIXED 2026-08-22, and it was not the pager
+
+`apt search maria` hung the whole app, every time, and removing
+/usr/local/native-bin/less cured it. This entry used to say the trigger was
+uncharacterised and name the pager's read-it-all spooling as the likely shape.
+The spooling was real and is gone now, but it was not the trigger.
+
+**The trigger was close-on-exec, and it was ours.** APT learns whether its pager
+exec'd by handing the child a close-on-exec pipe and reading four bytes from it:
+EOF means the exec happened and closed the write end; four bytes of errno mean
+it did not. `kernel/exec.c`'s native dispatch (`/AOK/native/*`) returned from
+`__do_execve` the moment it had recorded the program to run -- before
+`fdtable_do_cloexec`, before the signal-handler reset, before `vfork_notify`.
+The write end therefore survived into the pager, apt's read never saw EOF, and
+apt sat on four bytes while the pager sat on the stdin apt had not begun
+writing. That is both backtraces, exactly.
+
+It also explains the observation that stopped the last attempt: `PAGER=<path>
+apt search maria` COMPLETED. Anything that puts a real exec between apt and the
+native pager -- a shell script, an interpreter -- closes the pipe on apt's
+behalf, and the pager that runs after it is not the exec apt was watching.
+
+**And how apt found the pager at all**, which the old entry called a clue and
+could not resolve: `opt/AOK/tools/provision-ultimate-devuan.sh` exports
+`PAGER=less`, a BARE name. apt resolves that on PATH, and native-links.sh puts
+/usr/local/native-bin first on PATH through /etc/profile.d. A non-login ssh
+session never sources /etc/profile.d -- which is why seven attempts there kept
+getting /usr/bin/less and never reproduced it.
+
+**Fixed in three places:**
+
+1. `kernel/exec.c` -- `exec_apply_native_process_state()` applies the
+   process-state half of an exec to a native program: close-on-exec, the
+   signal-handler reset and altstack, did_exec/keepcaps, and `vfork_notify`.
+   That last one is its own latent hang: a vfork parent was being released by
+   the native program's EXIT rather than its exec, so it stayed blocked for the
+   whole run -- and glibc's `posix_spawn` waits exactly that way.
+2. `deps/smallclue` -- the pager streams. `pagerCollectLines` read the entire
+   input before drawing a line; `pagerBufferFill` now reads only as far as the
+   reader has scrolled, so the first screen appears at once and a stream that
+   never ends is paged rather than waited on. Pipes are read a byte at a time
+   for that reason, regular files in blocks. It also took real less's other
+   rule with it -- "if the output is not a tty, less acts like cat" -- which
+   this pager applied only when it had no controlling terminal at all, so
+   `less file | head` inside a session used to draw a page down a pipe nobody
+   was watching and then wait for a keystroke nobody would type.
+3. `opt/AOK/tools/native-links.sh` -- `less` and `more` are linked again.
+
+**Verified with the actual failing case rather than a model of it:** Devuan 6
+amd64, `native-links.sh` run for real, /usr/local/native-bin first on PATH via
+the snippet the script installs, `PAGER=less`, stdout a tty, `apt search maria`.
+Before: no pager output at all, four keypresses ignored, killed at 140s. After:
+the pager draws its first screen, Q exits it, `APT RC=0`, 83s.
+`tests/manual/native_exec_cloexec.c` is the guard -- it runs apt's handshake
+against a native exec, with an ordinary exec as a control so it still means
+something on a Linux oracle, which has no native dispatch.
+
+**Two things worth keeping.** Streaming alone would NOT have fixed this: apt
+writes nothing until its read returns, so a streaming pager would still have had
+an empty pipe to wait on. And the class is wider than the pager -- EVERY native
+program was exec'ing without close-on-exec, so any parent using that handshake
+would have hung on any of them.
 
 ### ptraceomatic's divergence at 4175 -- NOT AN EMULATOR BUG, FIXED 2026-08-22
 
