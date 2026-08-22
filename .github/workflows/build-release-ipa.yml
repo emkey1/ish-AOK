@@ -46,6 +46,14 @@ jobs:
           pip3 install --break-system-packages meson
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
 
+      # helix is compiled in (AOK_NATIVE_HELIX=YES in app/iSH.xcconfig) and helix
+      # is Rust, so the build needs a Rust toolchain that can emit iOS objects.
+      # The runners ship cargo but not the iOS target, and meson's native_rust
+      # is `auto`: it sees cargo, enables the Rust program, and only then fails
+      # on the missing target. Detecting cargo is not the same as being able to
+      # build for iOS, so install the target rather than relying on auto.
+      - name: Install Rust iOS target
+        run: rustup target add aarch64-apple-ios
       - name: Build hterm_all.js
         run: |
           cd deps/libapps/hterm
