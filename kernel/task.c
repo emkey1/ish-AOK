@@ -1216,6 +1216,7 @@ static __thread int canary_my_watch_slot = -1;
 #define CANARY_WATCH_WORD 1
 #define CANARY_WATCH_STACK 2
 #define CANARY_WATCH_RECORD 3
+#define CANARY_WATCH_CENSUS 4
 #define CANARY_WATCH_WINDOW_BITS 16
 
 static int task_pthread_watch_mode(void) {
@@ -1229,6 +1230,8 @@ static int task_pthread_watch_mode(void) {
             m = CANARY_WATCH_STACK;
         else if (v[0] == 'r')
             m = CANARY_WATCH_RECORD;
+        else if (v[0] == 'c')
+            m = CANARY_WATCH_CENSUS;
         else
             m = CANARY_WATCH_WORD;
         atomic_store_explicit(&mode, m, memory_order_relaxed);
@@ -1292,8 +1295,83 @@ static bool canary_watch_trap_is_live(uint64_t far) {
 
 static _Atomic long canary_watch_stale_traps;
 
+// ISH_PTHREAD_WATCH=census: do not stop at the first trap. Record the storing
+// pc, disarm this thread, and carry on, so a run ends with a list of every
+// distinct instruction that stored into another task thread's host stack. The
+// answer is expected to be short -- writes into a sibling's stack are not a
+// thing AOK should be doing at all -- and anything on it that is not already
+// accounted for is a candidate for the corruption this file is chasing.
+#define CANARY_CENSUS_MAX 64
+static struct {
+    _Atomic(uint64_t) pc;
+    _Atomic long count;
+} canary_census[CANARY_CENSUS_MAX];
+
+static void canary_census_record(uint64_t pc) {
+    for (int i = 0; i < CANARY_CENSUS_MAX; i++) {
+        uint64_t seen = atomic_load_explicit(&canary_census[i].pc, memory_order_acquire);
+        if (seen == pc) {
+            atomic_fetch_add_explicit(&canary_census[i].count, 1, memory_order_relaxed);
+            return;
+        }
+        if (seen == 0) {
+            uint64_t expected = 0;
+            if (atomic_compare_exchange_strong(&canary_census[i].pc, &expected, pc)) {
+                atomic_fetch_add_explicit(&canary_census[i].count, 1, memory_order_relaxed);
+                return;
+            }
+            i--; // someone else took the slot; re-read it
+        }
+    }
+}
+
+static void canary_census_dump(void) {
+    if (task_pthread_watch_mode() != CANARY_WATCH_CENSUS)
+        return;
+    static char buf[8192];
+    char *p = buf;
+    p = canary_put(p, "\n*** ISH_PTHREAD_WATCH census: stores into another task thread's stack ***\n image slide=");
+    p = canary_hex(p, (uint64_t) _dyld_get_image_vmaddr_slide(0));
+    p = canary_put(p, "\n");
+    for (int i = 0; i < CANARY_CENSUS_MAX; i++) {
+        uint64_t pc = atomic_load_explicit(&canary_census[i].pc, memory_order_relaxed);
+        if (pc == 0)
+            break;
+        p = canary_put(p, "  ");
+        p = canary_dec(p, (uint64_t) atomic_load_explicit(&canary_census[i].count, memory_order_relaxed));
+        p = canary_put(p, " x pc=");
+        p = canary_hex(p, pc);
+        p = canary_put(p, "\n");
+    }
+    ssize_t unused = write(2, buf, (size_t) (p - buf));
+    (void) unused;
+}
+
 static void canary_watch_trap(int UNUSED(sig), siginfo_t *UNUSED(info), void *ucontext) {
     ucontext_t *uc = (ucontext_t *) ucontext;
+    if (task_pthread_watch_mode() == CANARY_WATCH_CENSUS) {
+        // Filter by ADDRESS, not by window geometry. The masked windows are
+        // power-of-two aligned and the struct sits at an arbitrary offset in
+        // one, so the pair inevitably reaches some way ABOVE `self` -- into
+        // whatever the host mapped next, which with ISH_MEM_QUARANTINE on is
+        // often a guest page. Censusing by window put three JIT gadgets on the
+        // list, storing to guest memory exactly as they should, and they read
+        // like a spectacular finding. Only a store strictly below `self` and
+        // within this thread's 4 MB stack is a store into another thread's
+        // stack; the struct page above it is libpthread's own thread-list
+        // traffic, which is legitimate and would drown everything else.
+        uint64_t far = (uint64_t) uc->uc_mcontext->__es.__far;
+        bool in_a_stack = false;
+        for (int i = 0; i < CANARY_WATCHPOINTS; i++) {
+            uintptr_t owner = atomic_load_explicit(&watch_owner[i], memory_order_relaxed);
+            if (owner != 0 && far < owner && owner - far <= TASK_THREAD_STACK_SIZE)
+                in_a_stack = true;
+        }
+        if (in_a_stack)
+            canary_census_record((uint64_t) uc->uc_mcontext->__ss.__pc);
+        canary_disarm_thread(mach_thread_self());
+        return;
+    }
     if (!canary_watch_trap_is_live((uint64_t) uc->uc_mcontext->__es.__far)) {
         atomic_fetch_add_explicit(&canary_watch_stale_traps, 1, memory_order_relaxed);
         canary_disarm_thread(mach_thread_self());
@@ -1444,6 +1522,8 @@ static int canary_watch_covers(uintptr_t addr) {
 // execution under the JIT, or AOK's own interrupt handling. Three loads and a
 // branch per guest syscall, only when the canary is on.
 void task_pthread_canary_note_tlb(const void *tlb, unsigned long size) {
+    if (!task_pthread_canary_enabled())
+        return; // a plain static, not TLS -- see task_pthread_canary_note_unwind
     struct canary_slot *slot = canary_my_slot;
     if (slot == NULL)
         return;
@@ -1457,7 +1537,16 @@ void task_pthread_canary_note_tlb(const void *tlb, unsigned long size) {
 // pthread_cond_wait, and nothing pops it on this path. That leaves
 // __cleanup_stack aimed at dead stack, which later gets reused by ordinary
 // calls, and pthread_exit walks it at the end of the thread's life.
+// No longer called from sigusr1_handler, and it must not be again: reading
+// canary_my_slot there is a __thread access, and the first one on a thread goes
+// through dyld's _tlv_get_addr, which mallocs. A signal that lands while the
+// interrupted code holds the malloc lock -- pthread_exit freeing its TSD is the
+// case that actually happened -- then aborts the process in
+// _os_unfair_lock_recursive_abort. Kept because the counter it feeds is what
+// killed the leaked-cleanup-record theory, but it is for ordinary contexts now.
 void task_pthread_canary_note_unwind(void) {
+    if (!task_pthread_canary_enabled())
+        return;
     if (canary_my_slot == NULL)
         return;
     atomic_fetch_add_explicit(&canary_unwinds_total, 1, memory_order_relaxed);
@@ -1482,6 +1571,8 @@ void task_pthread_canary_note_unwind(void) {
 // walk the corpse at the end of this thread's life. That is the shape the crash
 // has, so it is worth catching directly rather than waiting for the value.
 void task_pthread_canary_check_self_at(const char *where, bool must_be_empty) {
+    if (!task_pthread_canary_enabled())
+        return; // knob first: with it off this must not even touch TLS
     if (canary_my_slot == NULL)
         return;
     uintptr_t self = atomic_load_explicit(&canary_my_slot->self, memory_order_relaxed);
@@ -1538,7 +1629,8 @@ static void canary_watch_claim(uintptr_t self) {
     if (task_pthread_watch_mode() == CANARY_WATCH_RECORD)
         return; // the sweep picks the addresses; nothing to claim here
     unsigned n = atomic_fetch_add_explicit(&watch_claim_counter, 1, memory_order_relaxed);
-    if (task_pthread_watch_mode() == CANARY_WATCH_STACK) {
+    if (task_pthread_watch_mode() == CANARY_WATCH_STACK ||
+            task_pthread_watch_mode() == CANARY_WATCH_CENSUS) {
         // Two adjacent 64 KB windows. The lower one is anchored on the window
         // holding self-1, the other sits directly below it, so their union
         // always contains [self - 64 KB, self] whatever self's alignment.
@@ -1574,7 +1666,8 @@ static void canary_watch_release(uintptr_t self) {
         return;
     if (task_pthread_watch_mode() == CANARY_WATCH_RECORD)
         return;
-    int slots = task_pthread_watch_mode() == CANARY_WATCH_STACK ? 2 : 1;
+    int mode_now = task_pthread_watch_mode();
+    int slots = (mode_now == CANARY_WATCH_STACK || mode_now == CANARY_WATCH_CENSUS) ? 2 : 1;
     for (int k = 0; k < slots; k++) {
         uintptr_t expected = self;
         // Only clear a slot if it is still ours; a later thread may have taken it.
@@ -1597,6 +1690,7 @@ static void *canary_watcher(void *arg) {
     pthread_setname_np("ish-canary");
     bool watching = task_pthread_watch_enabled();
     bool records = task_pthread_watch_mode() == CANARY_WATCH_RECORD;
+    bool census = task_pthread_watch_mode() == CANARY_WATCH_CENSUS;
     bool selftest = watching && getenv("ISH_PTHREAD_WATCH_SELFTEST") != NULL;
     for (;;) {
         for (int i = 0; i < CANARY_SLOTS; i++) {
@@ -1667,6 +1761,8 @@ static void *canary_watcher(void *arg) {
         canary_pass = pass;
         // Threads are created constantly here and start with a clean debug
         // state, so the watchpoints have to be re-applied, not just set once.
+        if (census && (pass % 2000000) == 0 && pass != 0)
+            canary_census_dump();
         if (watching && (pass % (records ? 512 : 8192)) == 0) {
             if (records)
                 canary_watch_refresh_records();
@@ -1681,6 +1777,10 @@ static void *canary_watcher(void *arg) {
 static void canary_start_watcher(void) {
     if (task_pthread_watch_enabled())
         canary_watch_install_handler();
+    // No atexit here: the guest's exit path leaves through _exit and never
+    // runs handlers, so a census registered that way prints nothing. The
+    // watcher dumps it periodically instead, and the last dump of a run is the
+    // complete picture.
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);

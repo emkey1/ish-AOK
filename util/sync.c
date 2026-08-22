@@ -287,7 +287,16 @@ void sigusr1_handler(int UNUSED(sig)) {
         __atomic_store_n(&current->wait_interrupted, true, __ATOMIC_RELEASE);
     if (should_unwind) {
         should_unwind = false;
-        task_pthread_canary_note_unwind();
+        // NOTHING that reads a __thread variable may be added here. This
+        // handler can interrupt a thread that is inside malloc -- pthread_exit
+        // freeing its TSD, for instance -- and the FIRST read of an
+        // uninstantiated __thread variable goes through dyld's
+        // _tlv_get_addr, which mallocs. That re-enters the lock the
+        // interrupted code holds and aborts the process in
+        // _os_unfair_lock_recursive_abort. The thread_locals_ready() guard at
+        // the top of this function only covers the variables
+        // signal_thread_locals_init() explicitly instantiates; any new one is
+        // a fresh landmine. A canary hook added here cost exactly that.
         siglongjmp(unwind_buf, 1);
     }
 }
