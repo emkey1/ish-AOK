@@ -107,7 +107,74 @@ the same neighbourhood as the poll/quiesce machinery. `curl` on its own shows
 the tail too, so it reproduces without Go, without yay and without the AUR:
 any repeated HTTPS handshake will do.
 
-### `pread_stack_thread_race` SIGSEGVs on i386, about 1 run in 8
+### `pread_stack_thread_race` SIGSEGVs on i386 -- CAUGHT AND LOCATED 2026-08-22
+
+**The crash is now identified, and it is not where the empty output suggested.**
+Caught natively (running under lldb hides it -- 60 debugger runs, no crash;
+1 in ~40 without) and read out of the host crash report:
+
+    EXC_BAD_ACCESS, KERN_INVALID_ADDRESS at 0x100000000   far=0x100000000
+    Thread 4:  _pthread_exit + 56
+               pthread_exit
+               ish  do_exit   kernel/exit.c:451
+               ish  sys_exit  kernel/exit.c:568
+
+exit.c:451 is the `pthread_exit(NULL)` itself, so nothing of ours is on the
+faulting frame. Disassembling `_pthread_exit`:
+
+    +48: ldr  x21, [x20, #0x8]     ; x21 = self->__cleanup_stack
+    +52: cbz  x21, +76
+    +56: ldp  x8, x0, [x21]        ; <-- faults, x21 = 0x100000000
+
+So the **host** `_pthread` struct of the exiting task thread has had its
+cleanup-handler list head overwritten with 0x100000000. `x20` (self) is
+0x16cfc7000 and `sp` is 0x16cfc07a0, ~26 KB below it -- the struct sits at the
+top of the thread's stack, exactly where it belongs, and sp is nowhere near the
+bottom. **This is not a stack overflow. It is a targeted write into another
+thread's pthread struct.**
+
+Why that is reachable at all: guest page data is host `mmap`/`munmap`
+(emu/memory.c:836, :792) and task threads get 4 MB pthread stacks
+(kernel/task.c:835-841, `pthread_attr_setstacksize`), so both come out of the
+same host arena. A guest page that AOK unmaps can be handed straight back to
+libsystem_pthread as the next thread's stack -- struct included. A write
+through a `mem_ptr()` result that outlived its mapping therefore does not
+fault; it silently lands in a live thread's pthread struct, and the bill
+arrives later, in `pthread_exit`, on a different thread.
+
+That is precisely the bug this test was written to hunt. Its own header says a
+clean PASS clears nothing and "a crash ... would confirm it".
+
+**The window.** `read_to_write_lock` (emu/memory.c:991, :1027) drops the read
+lock before taking the write lock, and the comment at :992 already says so --
+it was written for a narrower consequence, another thread mapping the same
+growsdown page first. Both sites re-fetch and re-validate `entry` afterwards,
+so the page they return is current. What is NOT re-established is the caller's
+state: `__user_write_task_mem` (kernel/user.c:129) validates the whole range
+once with `user_range_valid_mem` before its loop, and holds only a read lock
+around it.
+
+**Next step**, and the reason this is written up rather than patched: the
+corrupting write has not been caught in the act, only its victim. Quarantine
+freed guest pages instead of returning them -- `mprotect(PROT_NONE)` at
+emu/memory.c:792 behind a debug env knob, munmap later -- and the next run
+faults at the offending memcpy with the real backtrace, instead of corrupting
+a stack that crashes somewhere else minutes later. Do that before writing any
+fix, because the lock-upgrade window above is a plausible culprit and not yet
+a demonstrated one.
+
+Also seen in the same 40-run sweep, and not the same failure: one run exited
+rc=5 with `waitpid: Interrupted system call`. Do not fold it into this entry.
+
+Pre-existing, and NOT caused by the jetsam fix: measured on a binary built
+before that change (1 in 8), and it survives the fix at about the same rate.
+amd64 has not shown it; only i386 so far.
+
+**Do not write a tier0 failure of this test off as "the known flake" any
+more.** That reflex is what kept this one invisible.
+
+<!-- superseded detail below retained deliberately -->
+### Original entry: `pread_stack_thread_race` SIGSEGVs on i386, about 1 run in 8
 
 Split out of the hang entry above once the hang was fixed and stopped hiding
 it. **Pre-existing, and NOT caused by the jetsam fix**: measured on a binary
