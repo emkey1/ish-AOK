@@ -93,15 +93,20 @@ struct futex_wait {
     struct list queue;   // For linking in the futex's queue
 };
 
-static bool futex_heap_wait_enabled(void) {
-    static _Atomic int enabled = -1;
-    int e = atomic_load_explicit(&enabled, memory_order_relaxed);
-    if (e < 0) {
+// 0 = off, 1 = put the waiter on the heap, 2 = DECOY: do the same allocation
+// and then use the stack object anyway. Mode 2 is the control that keeps mode 1
+// honest: it has identical allocator traffic and identical timing perturbation
+// but identical aliasing too, so if the crash also goes away under 2 then 1
+// proved nothing except that this test is sensitive to being disturbed.
+static int futex_heap_wait_mode(void) {
+    static _Atomic int mode = -1;
+    int m = atomic_load_explicit(&mode, memory_order_relaxed);
+    if (m < 0) {
         const char *v = getenv("ISH_FUTEX_HEAP_WAIT");
-        e = (v != NULL && *v != '\0' && *v != '0') ? 1 : 0;
-        atomic_store_explicit(&enabled, e, memory_order_relaxed);
+        m = (v == NULL || *v == '\0' || *v == '0') ? 0 : (*v == '2' ? 2 : 1);
+        atomic_store_explicit(&mode, m, memory_order_relaxed);
     }
-    return e == 1;
+    return m;
 }
 
 #define FUTEX_HASH_BITS 12
@@ -369,9 +374,10 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
         // not a fix, and it leaks a few tens of MB over an 8-second stress run.
         struct futex_wait wait_storage;
         struct futex_wait *w = &wait_storage;
-        if (futex_heap_wait_enabled()) {
+        int heap_mode = futex_heap_wait_mode();
+        if (heap_mode != 0) {
             struct futex_wait *heap = calloc(1, sizeof(*heap));
-            if (heap != NULL)
+            if (heap != NULL && heap_mode == 1)
                 w = heap;
         }
         *w = (struct futex_wait) {
