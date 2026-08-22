@@ -62,236 +62,100 @@ the same neighbourhood as the poll/quiesce machinery. `curl` on its own shows
 the tail too, so it reproduces without Go, without yay and without the AUR:
 any repeated HTTPS handshake will do.
 
-### `pread_stack_thread_race` SIGSEGVs on i386 -- the premise was wrong 2026-08-22
+### `pread_stack_thread_race` SIGSEGVs on i386 -- ROOT CAUSED 2026-08-22
 
-**Still not fixed, but the previous entry's central claim is refuted and the
-value is identified.** Read this before the older text below it.
+**A dangling pointer to a dead stack frame, written one byte at a time by
+another thread.** `kernel/futex.c:412` publishes the address of one of its own
+STACK locals in `current->waiting_interrupt_flag` (`&wait.interrupted`) just
+before calling `wait_for`, and `wait_for_internal` (util/sync.c:180) is the only
+place that pointer is ever cleared. `wait_for`'s FIRST early return --
+`consume_wait_interrupted() || is_signal_pending(lock)` -- skips
+`wait_for_internal` entirely. So `futex_wait_masked` returns `_EINTR`, its frame
+dies, and `task->waiting_interrupt_flag` goes on pointing into it. From then on
+`wake_waiting_task` (kernel/signal.c:341) does
 
-**"A nonzero `__cleanup_stack` is corruption by definition" is false, and it is
-what pointed the last hunt at the wrong memory.** AOK pushes no cleanup
-handlers -- but **libpthread does**: Darwin's `pthread_cond_wait` wraps its
-`__psynch_cvwait` in a `pthread_cleanup_push`/`pop` pair, so every thread parked
-in `wait_for`, `mem_quiesce_park` or `wrlock_acquire_locked` legitimately has a
-record on its own stack and a nonzero head in its `struct _pthread`. The first
-version of the watcher below reported any nonzero value and fired on **12 runs
-out of 12**, every one of them a thread sitting innocently in
-`mem_quiesce_park` (emu/memory.c:66). The real invariant is: `__cleanup_stack`
-is NULL, or a pointer into *this thread's own 4 MB stack*. Anything else is the
-bug.
+    __atomic_store_n(waiting_interrupt_flag, true, __ATOMIC_RELEASE);
 
-**The value is `guest_abi_user_addr_max(GUEST_ABI_I386)`.** kernel/abi.h:103
-returns `(qword_t) 1 << 32` for i386 -- 0x100000000, the top of the 32-bit
-address space -- and no other guest returns anything near it. Disassembling
-`build/ish` for the constant (MOVZ Xd,#1,LSL#32) finds 24 sites, 7 of them that
-one inlined function and the rest inside vendored Rust/zlib string code that
-never runs here. **That is why only i386 has ever shown this**: on amd64 the
-same code path materialises 1<<47, and 100 amd64 runs under the watcher
-produced no genuine catch at all.
+from *another* thread, into dead stack, for the rest of that task's life.
 
-**The store goes into a LIVE cleanup record on a thread that is blocked and
-cannot have written it.** This is the sharpest measurement in the entry, so
-here is the report itself:
+**Why the crash value was always identical.** `interrupted` sits at offset 4 of
+its eight-byte word, so the stale store always writes byte 4 of some aligned
+word -- every dangling address measured ends in 4 mod 8. When the dead frame has
+been reused by libpthread's `pthread_cond_wait` cleanup record, that word is the
+record's `__next`, and setting byte 4 of it makes exactly **0x100000000**. The
+thread dies later inside `pthread_exit` following it, on a frame with nothing of
+ours on it. Not a coincidence, not a stray value: one byte at a fixed
+sub-offset.
 
-    victim self=0x16f783000 offset=+8 found=0x100000000
-    ...in the __next field of the cleanup record at 0x16f77c968 (self-0x6698)
-    the same record's __next one scan pass earlier: 0x0
-    the record's three words (__routine __arg __next):
-        0x1887847e4  0x10418ecd8  0x100000000
-    the bad word is at 0x16f77c978; this thread's struct tlb spans
-        0x16f77cf28..0x16f782f70 -> the word is below the tlb by 0x5b0 bytes
-    siglongjmps out of sigusr1_handler so far: 0, with a live record: 0
+Fixed by clearing the pointer on that early return. `ISH_WAITFLAG_LEAK=1`
+restores the old behaviour so the fix can be A/B'd on one binary.
 
-`__routine` is a libsystem_pthread address and `__arg` an ish one, so this is a
-real, current `_pthread_cond_cleanup` record and not a dead frame's leftovers.
-`__next` held **0 one scan pass earlier**. And the owner is parked inside
-`__psynch_cvwait` across that whole window -- it executes nothing, so it did not
-make this store. **Something else writes 0x100000000 into a parked thread's
-live stack frame.**
+**What had to be corrected on the way, because each one cost time:**
 
-**And it is not a leaked record.** The obvious alternative was that AOK's one
-non-local exit out of arbitrary code -- `sigusr1_handler`'s `siglongjmp`
-(util/sync.c:231) -- abandons a `pthread_cond_wait` frame without popping
-libpthread's record, leaving the head aimed at dead stack that ordinary calls
-then reuse. It is instrumented and counted, and the counter says **zero**: this
-test never reaches a `sigunwind_start()` window at all. Do not spend time on
-that theory here. (The hazard itself is real and worth fixing on its own terms:
-`sigunwind_start()` already saves and restores `lockstats_depth` for exactly
-the "this jump abandons frames" reason, and does not save `__cleanup_stack`.)
+- **"A nonzero `__cleanup_stack` is corruption by definition" is false.** Darwin's
+  `pthread_cond_wait` pushes a cleanup record itself, so every thread parked in
+  `wait_for`, `mem_quiesce_park` or `wrlock_acquire_locked` has one. A watcher
+  that reported any nonzero value fired on **12 runs out of 12**, every time on
+  a thread sitting innocently in `mem_quiesce_park`. The real invariant is NULL,
+  or a pointer into this thread's own 4 MB stack.
+- **`printk` goes to fd 555**, which an ordinary CLI run never opens -- and zsh
+  cannot even parse `555>file` to attach it. Two separate "nothing fired"
+  results in this hunt were a disconnected channel, not a zero, and one of them
+  would have closed the case an hour earlier. Diagnostics in a CLI debugging run
+  belong on stderr.
+- **Nine `sig`-changed reports** that looked like the corruption enriching on
+  exiting threads were the watcher racing a thread's own teardown. The tell was
+  in the report itself: the victim was missing from its own registered-threads
+  list, and the value differed every time, where all twelve genuine catches had
+  it present with exactly 0x100000000.
+- **Ten hardware-watchpoint traps** named `notify()` in the futex wake path. The
+  handler now re-reads the owner's `__cleanup_stack` at trap time and all ten
+  came back *record already popped* -- a stale watch address, legitimate stores.
+- **A census of cross-thread stack writes** initially listed three JIT gadgets,
+  which reads as a spectacular finding and was the masked watch window
+  overshooting above the struct into a guest page. Filter by address, not by
+  window geometry.
+- **The leaked-cleanup-record theory** (a `siglongjmp` abandoning a
+  `pthread_cond_wait` frame) is dead: a counter on `sigusr1_handler`'s
+  `siglongjmp` reads zero, because this test never reaches a
+  `sigunwind_start()` window at all.
 
-**The bad word is on the thread's own STACK, not in the struct.** Extending the
-watcher to walk the cleanup chain (`__next` sits at +16 of each record, the
-same +0x10 `_pthread_exit` loads) caught it in the act: the head is a perfectly
-valid record address, and it is that record's `__next` that holds
-0x100000000. Every catch of that kind has the same shape:
+**Measurements worth keeping.** The corruption is transient -- it ping-pongs
+between the head and a record's `__next` as records are pushed and popped, and
+only kills the thread if it reaches `pthread_exit` while the value is in the
+head, which is why the crash is a flake rather than every run. Rate without
+instrumentation was **3 in 200** on this machine, not the 1-in-8 the original
+entry recorded. `ISH_MEM_QUARANTINE` is complete (emu/memory.c:823 is the only
+`munmap` of guest page data), so its earlier refutation stands -- though note it
+cannot see a kernel copyout, which returns EFAULT to a PROT_NONE page in
+silence. libpthread legitimately writes OTHER threads' `struct _pthread` at
++16/+24 (the global thread list), measured at 200 runs out of 200; `+8` carries
+none of that traffic.
 
-    victim self=0x170feb000  head=0x170fe4978 (self-0x6688)   <- valid
-      record's __next = 0x100000000                           <- the bug
-
-So the fatal head value need never be stored into the struct by anyone:
-libpthread's own cleanup pop (`self->__cleanup_stack = handler->__next`) puts
-it there. The value ping-pongs -- a push copies the head into the new record's
-`__next` and writes a valid head; a pop copies it back -- and the crash is the
-thread reaching `pthread_exit` on the half of that cycle where it is in the
-head.
-
-The old entry's reading of the disassembly survives this, and three fresh
-crashes confirm it: the fault is on the FIRST iteration of the walk. `+56` is
-inside the loop (`+72 cbnz` jumps back to it), so the register argument matters
--- and x8 is 0x22 and x0 is `self` in all three reports, identical run to run,
-which they would not be if an intervening `blraaz` to a cleanup handler had
-returned. So `__cleanup_stack` really does hold 0x100000000 at pthread_exit.
-
-Measured against the thread's own frame: `task_run_current`'s `struct tlb`
-local is 24 KB and dominates the stack, and the bad word sits **0x5b0 bytes
-BELOW it** -- in the call frames under `task_run_current`, not off the end of
-the tlb array.
-
-**The corruption is transient, and that is why the crash is a flake.** The
-value ping-pongs: it sits in a record's `__next` until a pop copies it to the
-head, and the next `pthread_cond_wait` push copies it back into a fresh
-record's `__next` and overwrites the head with a valid pointer. The watcher
-sees a bad head only in the window between a pop and the next push. A thread
-only dies if it reaches `pthread_exit` while the value is in the head.
-
-**It is not a cross-thread store into `self + 8`.** Built an arm64 HARDWARE
-WATCHPOINT into the emulator -- `thread_set_state(ARM_DEBUG_STATE64)` works
-in-process on this host, and there is a self-test that proves the arming rather
-than trusting a quiet run. Four is the hardware's limit, so four registered task
-threads get `self + 8` watched on every OTHER thread, which makes a trap a
-cross-thread store by construction. **805 i386 runs with the watchpoints armed,
-12 corruption events, 0 traps**, at a measured 36% coverage (11.1 registered
-task threads on average, 4 watched) -- p = 0.64^12 = 0.5% if another thread
-were doing it.
-
-**libpthread DOES write other threads' `struct _pthread`, at +16 and +24.**
-Worth knowing before anyone watches that struct again: a masked watchpoint over
-the top 128 KB of a watched thread's stack trapped on **200 runs out of 200**,
-every time from libsystem_pthread storing to `self + 0x10` -- the `tl_plist`
-TAILQ links of the global thread list, rewritten by every thread create and
-destroy. `+8` is not in that traffic, which is why the narrow watch is clean
-rather than useless.
-
-**A finding that was my own instrument, written down because it was
-convincing.** Nine catches said `sig` at +0 had changed (the first four early
-enough to shape the hunt), and all four had
-the victim in the tail of `do_exit` a few instructions from `pthread_exit` --
-which reads as the corruption being enriched exactly where the crash happens,
-and was one edit from going into this file as a fact. It is the watcher racing
-a thread's own teardown: the owner clears its table slot in `do_exit` and runs
-on into `pthread_exit`, where libpthread tears the struct down and hands it to
-the next thread. The tell was in the report itself -- every one of the four had
-the victim MISSING from its own "registered task threads" list, and a different
-random value each time, while all twelve `+8` catches had it present, always
-with exactly 0x100000000, with correct `tl_plist` links and the thread's own
-name still at +80. Re-checking the slot narrows the window but does not close
-it, so the `sig` comparison is gone: it is not the word the crash reads and it
-bought noise only.
-
-**Quarantine's completeness re-checked; the earlier refutation stands.**
-`emu/memory.c:823` is the only `munmap` of guest page data in the tree (the
-allocators at :868/:921/:1079/:1153 all come back through that one free path),
-so with `ISH_MEM_QUARANTINE=1` a freed guest page really cannot be recycled.
-Note one thing the knob cannot rule out, though: it turns a stale *user* store
-into a fault, but a stale *kernel* copyout into the same page returns EFAULT
-silently. A hardware watchpoint cannot see a kernel copyout either, so that
-class survives both instruments.
-
-**Rate, honestly.** Under this build and this machine's load the crash is
-**3 in 200 runs without the canary** -- 1.5%, not the 1-in-8 the original entry
-recorded, and not the 3-in-25 the entry above it recorded with quarantine. All
-three control crashes are byte-identical to the original (`_pthread_exit+56`,
-x20 = self, x21 = 0x100000000, x8 = 0x22), so the bug is unchanged; the rate is
-what moved. Plan a session around a hundred runs per event, not eight.
-
-**amd64 stays clean under the same instrument**: 100 runs, no `+8` catch at
-all (only the exit-race artifact above). That is now a measurement rather than
-an absence of reports.
-
-**Next step: `ISH_PTHREAD_WATCH=record`, which is in the tree and running.**
-The target is now one specific eight-byte word -- `__next` of whichever cleanup
-record each parked thread currently has -- and unlike the `struct _pthread` it
-carries no legitimate cross-thread traffic whatsoever, so a hardware watchpoint
-on it is quiet by construction. The mode arms it on every thread except the
-owner and recomputes the addresses on each sweep, because the record moves as
-threads park and wake. A trap prints the storing pc, which is one measurement
-away from naming the writer.
-
-What the writer can be, given everything above: another thread storing through
-a pointer into a sibling's host stack, or a kernel copyout into a stale buffer
--- and note that a kernel copyout is invisible to BOTH instruments, since a
-watchpoint only sees EL0 stores and `ISH_MEM_QUARANTINE` turns a kernel write
-to a protected page into a silent EFAULT rather than a fault. The value being
-`guest_abi_user_addr_max` says whoever it is came through i386 address
-validation on the way. The bad word sits at a fixed depth run to run
-(self-0x6688 or self-0x6698, 0x5b0 below `task_run_current`'s 24 KB `struct
-tlb` local) -- that is a property of the call path that parks there, not of the
-writer's arithmetic, so do not read a fixed offset into it.
-
-**Who writes into a task thread's host stack from another thread: the futex
-wake path, and it aliases the cleanup record exactly.** `ISH_PTHREAD_WATCH=record`
-trapped ten times in 57 runs, every one with the same storing pc inside
-libsystem_pthread and the same caller:
-
-    notify (util/sync.c:195)            <- pthread_cond_broadcast
-    futex_wakelike (kernel/futex.c:464)
-    sys_futex_common (kernel/futex.c:719)
-
-`struct futex_wait` -- which begins with a `cond_t`, i.e. a `pthread_cond_t` --
-is a **stack local of `futex_wait_masked`** whose address is published on the
-shared `futex->queue`. So a `FUTEX_WAKE` on one thread calls
-`pthread_cond_broadcast` on memory that lives on ANOTHER task thread's host
-stack, and libpthread writes psynch sequence words into it. The trap addresses
-say those bytes are the very same bytes libpthread uses for the
-`pthread_cond_wait` cleanup record: the store landed at `cond + 0x18` while the
-watched word was `record + 16`, i.e. the two objects sit at the same stack
-depth in the same thread. **That aliasing is the shape of this bug** -- a
-broadcast aimed at a `futex_wait` whose frame has gone lands in a live cleanup
-record's `__next`.
-
-**But those ten traps are NOT the corrupting store, and the instrument says so
-itself.** In record mode the watched address is `head + 16` as of the last
-sweep, and the owner can pop that record before the store arrives; the report
-now re-reads the owner's `__cleanup_stack` at trap time and every one of them
-came back *record already popped, this store is legitimate* (`__cleanup_stack`
-was 0). Without that re-check the futex path would have gone into this file as
-the answer. The handler now skips a stale trap -- disarm, return, let the
-watcher re-arm -- and only stops for a store into a record that is still the
-owner's live head. That run is what is outstanding.
+**Two guards in kernel/futex.c that came out of this.** `futex_wait_is_live()`:
+`struct futex_wait` is a stack local published on a shared queue, so every wake
+path runs `pthread_cond_broadcast` over another task thread's stack -- a magic
+set when it is built and cleared when it leaves the queue means a stale entry is
+dequeued and reported rather than notified. It has never fired, which is the
+answer that theory deserved. `ISH_FUTEX_HEAP_WAIT=1|2` is the A/B harness built
+for it, with a decoy arm; the theory did not survive, but the harness is the
+shape to copy.
 
 **Knobs, all in kernel/task.c:**
 
-- `ISH_PTHREAD_CANARY=1` -- register every task thread's `self` and spin a
-  watcher over `__cleanup_stack` and the cleanup chain's `__next` links, plus
-  self-checks on the owning thread around guest execution and before
-  `pthread_exit`. On a violation it suspends every other thread with the mach
-  APIs and dumps registers and a frame-pointer backtrace for each, then exits
-  66. Addresses are raw and the report prints the image slide, so
-  `atos -o build/ish -l <load address>` symbolises them.
-- `ISH_PTHREAD_WATCH=1` -- add the hardware watchpoint on `self + 8`.
-  `=record` watches `__next` of each parked thread's current cleanup record,
-  which is where the store actually lands, and is the mode to use. `=stack`
-  watches the top 128 KB of the stack, which is what measured libpthread's own
-  cross-thread writes and is otherwise far too noisy to run. Exits 67 on a
-  trap.
-- `ISH_PTHREAD_WATCH_SELFTEST=1` -- positive control. A watchpoint that was
-  never applied looks exactly like one that was never hit, so this stores a
-  watched word's own value back over itself and says so loudly if no trap
-  follows. Run it before believing a quiet watch run.
-
-**Two things in kernel/futex.c that came out of this, one of them a fix.**
-
-- `futex_wait_is_live()` -- `struct futex_wait` carries a magic set when it is
-  built and cleared the instant it leaves the queue, and all three wake loops
-  check it. A stale entry is now dequeued and reported instead of notified,
-  which is both safer than the use-after-free and a direct, high-rate test of
-  whether one ever happens. One compare on the wake path.
-- `ISH_FUTEX_HEAP_WAIT=1` -- puts the object on the heap and deliberately never
-  frees it (about 27 MB of RSS over an 8-second run), so a wake arriving after
-  the waiter's frame is gone lands somewhere harmless. **This is an A/B, not a
-  fix**: run it against the same binary with the knob off, under the same load,
-  for several hundred runs each. Crash gone with it on and still ~1.5% with it
-  off means the stack lifetime is the cause and the real fix is a managed
-  lifetime for that object. Crash surviving means the theory is dead.
+- `ISH_PTHREAD_CANARY=1` -- register every task thread's `self` and watch
+  `__cleanup_stack` and the cleanup chain's `__next` links, plus self-checks on
+  the owning thread. On a violation it suspends every other thread with the mach
+  APIs and dumps registers and a frame-pointer backtrace for each, then exits 66.
+  The report prints the image slide, so `atos -o build/ish -l <load address>`
+  symbolises it.
+- `ISH_PTHREAD_WATCH=1|record|stack|census` -- arm64 hardware watchpoints via
+  `thread_set_state(ARM_DEBUG_STATE64)`, which works in-process on this host.
+  `record` watches the live cleanup record, `census` lists every instruction that
+  stores into another task thread's stack.
+- `ISH_PTHREAD_WATCH_SELFTEST=1` -- positive control. A watchpoint that was never
+  applied looks exactly like one that was never hit. Run it before believing a
+  quiet watch run; the same discipline is what caught the fd-555 problem above.
 
 **Do not write a tier0 failure of this test off as "the known flake" any
 more.** That reflex is what kept this one invisible.
