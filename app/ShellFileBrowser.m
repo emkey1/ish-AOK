@@ -225,6 +225,16 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     self.navigationController.toolbarHidden = NO;
 }
 
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    // Only when the whole sheet is going away -- not when a child (Get Info,
+    // a rename prompt) is covering us.
+    if (self.isBeingDismissed || self.navigationController.isBeingDismissed) {
+        if ([self.delegate respondsToSelector:@selector(shellFileBrowserDidDismiss:)])
+            [self.delegate shellFileBrowserDidDismiss:self];
+    }
+}
+
 #pragma mark Navigation
 
 - (void)navigateToPath:(NSString *)path {

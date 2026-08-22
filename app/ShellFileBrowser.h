@@ -32,6 +32,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)shellFileBrowser:(ISHShellFileBrowserViewController *)browser
               insertText:(NSString *)text;
 
+@optional
+
+// The sheet has gone away. The presenter uses this to put keyboard focus back
+// on the terminal, which it gave up while the sheet was open.
+- (void)shellFileBrowserDidDismiss:(ISHShellFileBrowserViewController *)browser;
+
 @end
 
 @interface ISHShellFileBrowserViewController : UIViewController

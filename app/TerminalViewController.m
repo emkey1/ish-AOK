@@ -1778,9 +1778,14 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
 }
 
 - (IBAction)showFileBrowser:(id)sender {
-    // Deliberately does NOT resign the terminal's first responder, unlike
-    // showAbout: -- the sheet's whole purpose is to put text on the command
-    // line, and the keyboard should still be there when it dismisses.
+    // Give up the keyboard while the sheet is up. Keeping it looked right --
+    // the sheet exists to put text on the command line, so why put the
+    // keyboard away -- but the bar is the terminal's inputAccessoryView, and
+    // an accessory view floats ABOVE a presented sheet. It covered the sheet's
+    // own toolbar, which is where cd Here and Insert Path live, so the two
+    // verbs the sheet exists for could not be tapped. Focus comes back in
+    // -shellFileBrowserDidDismiss:.
+    [self.termView resignFirstResponder];
     [ISHShellFileBrowserViewController presentFromViewController:self
                                                           ttyType:self.terminal.type
                                                         ttyNumber:self.terminal.number
@@ -1794,6 +1799,9 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     NSData *input = [text dataUsingEncoding:NSUTF8StringEncoding];
     if (input != nil)
         [self.terminal sendInput:input];
+}
+
+- (void)shellFileBrowserDidDismiss:(ISHShellFileBrowserViewController *)browser {
     [self focusTerminal];
 }
 
