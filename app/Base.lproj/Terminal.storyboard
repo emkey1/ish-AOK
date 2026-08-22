@@ -65,6 +65,7 @@
                         <outletCollection property="barControls" destination="7qw-ie-p4d" id="fDV-Yg-Dec"/>
                         <outletCollection property="barControls" destination="hmm-tv-z35" id="EEv-5m-po5"/>
                         <outletCollection property="barControls" destination="5dl-UV-6qh" id="ocU-st-RdO"/>
+                        <outletCollection property="barControls" destination="FbR-ws-Ct1" id="Fb4-bc-Ct5"/>
                     </connections>
                 </viewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="dkx-z0-nzr" sceneMemberID="firstResponder"/>
