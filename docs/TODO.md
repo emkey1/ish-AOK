@@ -227,6 +227,37 @@ validation on the way. The bad word sits at a fixed depth run to run
 tlb` local) -- that is a property of the call path that parks there, not of the
 writer's arithmetic, so do not read a fixed offset into it.
 
+**Who writes into a task thread's host stack from another thread: the futex
+wake path, and it aliases the cleanup record exactly.** `ISH_PTHREAD_WATCH=record`
+trapped ten times in 57 runs, every one with the same storing pc inside
+libsystem_pthread and the same caller:
+
+    notify (util/sync.c:195)            <- pthread_cond_broadcast
+    futex_wakelike (kernel/futex.c:464)
+    sys_futex_common (kernel/futex.c:719)
+
+`struct futex_wait` -- which begins with a `cond_t`, i.e. a `pthread_cond_t` --
+is a **stack local of `futex_wait_masked`** whose address is published on the
+shared `futex->queue`. So a `FUTEX_WAKE` on one thread calls
+`pthread_cond_broadcast` on memory that lives on ANOTHER task thread's host
+stack, and libpthread writes psynch sequence words into it. The trap addresses
+say those bytes are the very same bytes libpthread uses for the
+`pthread_cond_wait` cleanup record: the store landed at `cond + 0x18` while the
+watched word was `record + 16`, i.e. the two objects sit at the same stack
+depth in the same thread. **That aliasing is the shape of this bug** -- a
+broadcast aimed at a `futex_wait` whose frame has gone lands in a live cleanup
+record's `__next`.
+
+**But those ten traps are NOT the corrupting store, and the instrument says so
+itself.** In record mode the watched address is `head + 16` as of the last
+sweep, and the owner can pop that record before the store arrives; the report
+now re-reads the owner's `__cleanup_stack` at trap time and every one of them
+came back *record already popped, this store is legitimate* (`__cleanup_stack`
+was 0). Without that re-check the futex path would have gone into this file as
+the answer. The handler now skips a stale trap -- disarm, return, let the
+watcher re-arm -- and only stops for a store into a record that is still the
+owner's live head. That run is what is outstanding.
+
 **Knobs, all in kernel/task.c:**
 
 - `ISH_PTHREAD_CANARY=1` -- register every task thread's `self` and spin a

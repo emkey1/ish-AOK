@@ -1255,11 +1255,47 @@ static void canary_arm_thread(mach_port_t thread, uintptr_t skip_owner) {
 // A watchpoint exception on AArch64 reports the address of the instruction
 // that made the access, and returning would just re-run it, so this never
 // returns.
+static void canary_disarm_thread(mach_port_t thread) {
+    arm_debug_state64_t ds;
+    memset(&ds, 0, sizeof(ds));
+    thread_set_state(thread, ARM_DEBUG_STATE64, (thread_state_t) &ds,
+                     ARM_DEBUG_STATE64_COUNT);
+}
+
+// In record mode the watched address is `head + 16` as of the last sweep, and
+// the owner may have popped that record since -- at which point the bytes are
+// ordinary stack again and somebody storing there is doing nothing wrong. The
+// first version of this handler exited on any trap and reported ten of those
+// as the writer. So: decide, and only stop for a store into a record that is
+// STILL the owner's live head. A stale trap disarms this thread and returns,
+// letting the store complete; the watcher's next sweep re-arms it.
+static bool canary_watch_trap_is_live(uint64_t far) {
+    if (task_pthread_watch_mode() != CANARY_WATCH_RECORD)
+        return true;
+    for (int i = 0; i < CANARY_WATCHPOINTS; i++) {
+        uintptr_t owner = atomic_load_explicit(&watch_owner[i], memory_order_relaxed);
+        uintptr_t addr = atomic_load_explicit(&watch_addr[i], memory_order_relaxed);
+        if (owner == 0 || addr == 0 || (far & ~7ULL) != (addr & ~7ULL))
+            continue;
+        return ((const volatile uint64_t *) owner)[1] + 16 == addr;
+    }
+    return false; // not one of ours any more
+}
+
+static _Atomic long canary_watch_stale_traps;
+
 static void canary_watch_trap(int UNUSED(sig), siginfo_t *UNUSED(info), void *ucontext) {
     ucontext_t *uc = (ucontext_t *) ucontext;
+    if (!canary_watch_trap_is_live((uint64_t) uc->uc_mcontext->__es.__far)) {
+        atomic_fetch_add_explicit(&canary_watch_stale_traps, 1, memory_order_relaxed);
+        canary_disarm_thread(mach_thread_self());
+        return;
+    }
     static char buf[64 * 1024];
     char *p = buf;
-    p = canary_put(p, "\n*** ISH_PTHREAD_WATCH: cross-thread store into a host struct _pthread ***\n stored to=");
+    p = canary_put(p, "\n*** ISH_PTHREAD_WATCH: store into a LIVE watched word ***\n stale traps skipped so far: ");
+    p = canary_dec(p, (uint64_t) atomic_load_explicit(&canary_watch_stale_traps, memory_order_relaxed));
+    p = canary_put(p, "\n stored to=");
     p = canary_hex(p, (uint64_t) uc->uc_mcontext->__es.__far);
     p = canary_put(p, " by pc=");
     uint64_t pc = (uint64_t) uc->uc_mcontext->__ss.__pc;
@@ -1276,6 +1312,27 @@ static void canary_watch_trap(int UNUSED(sig), siginfo_t *UNUSED(info), void *uc
             continue;
         p = canary_put(p, " ");
         p = canary_hex(p, addr);
+    }
+    // The one thing that decides whether this trap is the bug or the
+    // instrument: in record mode the watched address is `head + 16` as of the
+    // last sweep, and the owner may have popped that record since. If its
+    // CURRENT head still names the record, the store landed on a live one --
+    // the owner is parked in pthread_cond_wait and cannot have made it. If not,
+    // the address went stale and this store is somebody's legitimate business.
+    uint64_t far = (uint64_t) uc->uc_mcontext->__es.__far;
+    for (int i = 0; i < CANARY_WATCHPOINTS; i++) {
+        uintptr_t owner = atomic_load_explicit(&watch_owner[i], memory_order_relaxed);
+        uintptr_t addr = atomic_load_explicit(&watch_addr[i], memory_order_relaxed);
+        if (owner == 0 || addr == 0 || (far & ~7ULL) != (addr & ~7ULL))
+            continue;
+        uint64_t head = ((const volatile uint64_t *) owner)[1];
+        p = canary_put(p, "\n owner=");
+        p = canary_hex(p, owner);
+        p = canary_put(p, " its __cleanup_stack now=");
+        p = canary_hex(p, head);
+        p = canary_put(p, head + 16 == addr
+                ? " -- STILL THE LIVE RECORD: this store is the corruption"
+                : " -- record already popped: the watch address went stale, this store is legitimate");
     }
     p = canary_put(p, "\n storing thread sp=");
     p = canary_hex(p, sp);
