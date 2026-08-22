@@ -17,7 +17,9 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/sysctl.h>
+#if !defined(__linux__)
+#include <sys/sysctl.h>   // BSD-only; glibc dropped it and musl never had it
+#endif
 #include <syslog.h>
 #include <spawn.h>
 #include <sys/utsname.h>
@@ -2340,8 +2342,19 @@ int nlibc_sysctlbyname(const char *name, void *old, size_t *oldlen,
             strcmp(name, "hw.availcpu") == 0 ||
             strcmp(name, "hw.physicalcpu") == 0 ||
             strcmp(name, "hw.physicalcpu_max") == 0;
-    if (!is_cpu_count)
+    if (!is_cpu_count) {
+#if defined(__linux__)
+        // No sysctlbyname on Linux, so there is no host answer to pass
+        // through. ENOTSUP is the same answer nlibc_sysctl gives, and callers
+        // already handle it -- see its comment. Only the CPU-count path below
+        // survives here, and that one is portable.
+        (void) old; (void) oldlen; (void) new; (void) newlen;
+        errno = ENOTSUP;
+        return -1;
+#else
         return sysctlbyname(name, old, oldlen, (void *) (uintptr_t) new, newlen);
+#endif
+    }
 
     // A guest program does not get to change the host's idea of anything.
     if (new != NULL || newlen != 0) {
