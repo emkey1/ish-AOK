@@ -1115,6 +1115,14 @@ static void canary_report(uintptr_t self, unsigned offset, uint64_t expect, uint
 
     if (kr == KERN_SUCCESS) {
         for (mach_msg_type_number_t i = 0; i < nacts; i++) {
+            // Each thread costs about a kilobyte of registers and backtrace,
+            // and CANARY_SLOTS allows 256 of them. Stop before the end of the
+            // buffer rather than running off it -- a debugging aid that
+            // corrupts the process it is debugging is worse than useless.
+            if (p > buf + sizeof(buf) - 4096) {
+                p = canary_put(p, " ...report truncated, too many threads\n");
+                break;
+            }
             p = canary_put(p, " thread port=");
             p = canary_dec(p, (uint64_t) acts[i]);
             if (acts[i] == me) {
