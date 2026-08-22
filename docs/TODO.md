@@ -115,6 +115,16 @@ restores the old behaviour so the fix can be A/B'd on one binary.
   which reads as a spectacular finding and was the masked watch window
   overshooting above the struct into a guest page. Filter by address, not by
   window geometry.
+- **The instrument itself shipped a crash.** The counter that killed the
+  leaked-record theory read a `__thread` variable from inside
+  `sigusr1_handler`, and the first read of an uninstantiated one goes through
+  dyld's `_tlv_get_addr`, which mallocs. A signal landing on a thread already
+  inside malloc -- `pthread_exit` freeing its TSD -- then re-enters the malloc
+  lock and aborts in `_os_unfair_lock_recursive_abort`. It looked safe because
+  the handler's `thread_locals_ready()` guard is right there, but that guard
+  only covers the variables `signal_thread_locals_init()` instantiates by hand.
+  Any NEW `__thread` variable in that handler is a fresh landmine. Found from a
+  stray `.ips` in the A/B lane, not from the test.
 - **The leaked-cleanup-record theory** (a `siglongjmp` abandoning a
   `pthread_cond_wait` frame) is dead: a counter on `sigusr1_handler`'s
   `siglongjmp` reads zero, because this test never reaches a
