@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include "kernel/task.h"
+#include <stdio.h>
 #include "util/sync.h"
 #include "debug.h"
 #include "kernel/errno.h"
@@ -133,9 +134,43 @@ static bool consume_wait_interrupted(void) {
     return __atomic_exchange_n(&current->wait_interrupted, false, __ATOMIC_ACQ_REL);
 }
 
+static bool wait_flag_leak_enabled(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *v = getenv("ISH_WAITFLAG_LEAK");
+        enabled = (v != NULL && *v != '\0' && *v != '0') ? 1 : 0;
+    }
+    return enabled == 1;
+}
+
 int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout) {
-    if (consume_wait_interrupted() || is_signal_pending(lock))
+    if (consume_wait_interrupted() || is_signal_pending(lock)) {
+        // The caller published the address of one of its own STACK locals in
+        // current->waiting_interrupt_flag just before calling (kernel/futex.c
+        // does, with &wait.interrupted) and is about to get _EINTR back and
+        // destroy that frame. wait_for_internal is the ONLY place that pointer
+        // is ever cleared, and this early return skips it -- so from here on
+        // wake_waiting_task (kernel/signal.c) stores a byte of `true` into a
+        // dead stack frame, from another thread, for the rest of this task's
+        // life. Measured: it happens on every run of pread_stack_thread_race.
+        //
+        // What that byte does when it lands is the pread_stack_thread_race
+        // SIGSEGV (docs/TODO.md). `interrupted` sits at offset 4 of its
+        // eight-byte word, so the stale store always writes byte 4 of some
+        // aligned word; when the frame has been reused by libpthread's
+        // pthread_cond_wait cleanup record, that word is the record's `__next`
+        // and it becomes 0x100000000. The thread dies chasing it inside
+        // pthread_exit, on a frame with nothing of ours on it.
+        //
+        // ISH_WAITFLAG_LEAK=1 restores the old behaviour, so the fix can be
+        // A/B'd against itself on one binary rather than argued.
+        if (current != NULL && !wait_flag_leak_enabled()) {
+            lock(&current->waiting_cond_lock, 0);
+            current->waiting_interrupt_flag = NULL;
+            unlock(&current->waiting_cond_lock);
+        }
         return _EINTR;
+    }
     int err = wait_for_internal(cond, lock, timeout, true);
     if (consume_wait_interrupted() || is_signal_pending(lock))
         return _EINTR;

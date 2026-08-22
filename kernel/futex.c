@@ -496,12 +496,14 @@ static bool futex_wait_is_live(struct futex_wait *wait, const char *where) {
     if (wait != NULL && wait->magic == FUTEX_WAIT_MAGIC)
         return true;
     static _Atomic int reported;
+    // stderr, NOT printk: printk goes to fd 555, which an ordinary CLI run
+    // never opens, so this would have been discarded in silence.
     if (atomic_fetch_add_explicit(&reported, 1, memory_order_relaxed) < 8)
-        printk("URGENT: futex %s found a STALE waiter at %p (magic=%#llx, thread=%p): "
-               "its frame is gone and notifying it would write into that thread's stack\n",
-               where, (void *) wait,
-               wait != NULL ? (unsigned long long) wait->magic : 0ULL,
-               wait != NULL ? (void *) wait->thread : NULL);
+        fprintf(stderr, "URGENT: futex %s found a STALE waiter at %p (magic=%#llx, thread=%p): "
+                "its frame is gone and notifying it would write into that thread's stack\n",
+                where, (void *) wait,
+                wait != NULL ? (unsigned long long) wait->magic : 0ULL,
+                wait != NULL ? (void *) wait->thread : NULL);
     return false;
 }
 
