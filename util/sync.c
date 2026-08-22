@@ -134,6 +134,15 @@ static bool consume_wait_interrupted(void) {
     return __atomic_exchange_n(&current->wait_interrupted, false, __ATOMIC_ACQ_REL);
 }
 
+static bool wait_flag_trace_enabled(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *v = getenv("ISH_WAITFLAG_TRACE");
+        enabled = (v != NULL && *v != '\0' && *v != '0') ? 1 : 0;
+    }
+    return enabled == 1;
+}
+
 static bool wait_flag_leak_enabled(void) {
     static int enabled = -1;
     if (enabled < 0) {
@@ -164,10 +173,25 @@ int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout) {
         //
         // ISH_WAITFLAG_LEAK=1 restores the old behaviour, so the fix can be
         // A/B'd against itself on one binary rather than argued.
+        bool was_set = current != NULL &&
+            __atomic_load_n(&current->waiting_interrupt_flag, __ATOMIC_ACQUIRE) != NULL;
         if (current != NULL && !wait_flag_leak_enabled()) {
             lock(&current->waiting_cond_lock, 0);
             current->waiting_interrupt_flag = NULL;
             unlock(&current->waiting_cond_lock);
+        }
+        // ISH_WAITFLAG_TRACE=1: a positive control for the fix and for the
+        // ISH_WAITFLAG_LEAK knob that A/Bs it. "left dangling" appearing means
+        // the leak is live; "cleared" means the fix ran. Without this, an A/B
+        // whose two arms behave identically looks exactly like an A/B whose
+        // subject does not matter. stderr, never printk -- see the comment on
+        // that below.
+        if (was_set && wait_flag_trace_enabled()) {
+            static long seen;
+            long n = __atomic_fetch_add(&seen, 1, __ATOMIC_RELAXED);
+            if (n < 3)
+                fprintf(stderr, "waitflag: early return, waiting_interrupt_flag was set -> %s\n",
+                        wait_flag_leak_enabled() ? "LEFT DANGLING" : "cleared");
         }
         return _EINTR;
     }
