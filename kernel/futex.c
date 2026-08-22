@@ -492,6 +492,20 @@ static int futex_read_timeout(guest_addr_t timeout_addr, bool time64, struct tim
 // Returns true if `wait` still looks like a live queued waiter. A false here
 // means a wake was about to run pthread_cond_broadcast over stack that its
 // owner has already left, which is a use-after-free of another thread's frame.
+// task->waiting_interrupt_flag is only ever set to &wait.interrupted, so the
+// container is recoverable and its magic says whether that object is still a
+// live queued waiter. wake_waiting_task (kernel/signal.c) uses this to count
+// stores it is about to make into a frame that has already returned. Reading
+// through a stale pointer here is safe -- it is mapped stack either way, and a
+// wrong magic is exactly the answer being asked for.
+bool futex_wait_flag_is_live(const bool *flag) {
+    if (flag == NULL)
+        return true;
+    const struct futex_wait *wait = (const struct futex_wait *)
+        ((const char *) flag - offsetof(struct futex_wait, interrupted));
+    return wait->magic == FUTEX_WAIT_MAGIC;
+}
+
 static bool futex_wait_is_live(struct futex_wait *wait, const char *where) {
     if (wait != NULL && wait->magic == FUTEX_WAIT_MAGIC)
         return true;

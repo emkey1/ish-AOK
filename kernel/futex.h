@@ -9,4 +9,8 @@ int futex_wake(guest_addr_t uaddr, dword_t val);
 // parked. Safe to call with futex_lock NOT held.
 void futex_release_restart_park(void);
 
+// True if `flag` (a task's waiting_interrupt_flag) still points at a live
+// queued futex waiter. See the definition in kernel/futex.c.
+bool futex_wait_flag_is_live(const bool *flag);
+
 #endif

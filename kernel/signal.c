@@ -6,6 +6,8 @@
 #include <errno.h>
 #include "fs/poll.h"
 #include "kernel/calls.h"
+#include "kernel/futex.h"
+#include <stdio.h>
 #include "kernel/signal.h"
 #include "kernel/time.h"
 #include "kernel/task.h"
@@ -337,8 +339,25 @@ static bool wake_waiting_task(struct task *task) {
     bool *waiting_interrupt_flag = task->waiting_interrupt_flag;
     bool interrupted_wait = waiting_interrupt_flag != NULL ||
         (waiting_cond != NULL && waiting_lock != NULL);
-    if (waiting_interrupt_flag != NULL)
+    if (waiting_interrupt_flag != NULL) {
+        // Counts the bug in docs/TODO.md's pread_stack_thread_race entry
+        // directly, instead of waiting for its ~1% fatal outcome: a stale
+        // pointer here means this store lands in a frame that has already
+        // returned, and one of those eventually lands on libpthread's live
+        // cleanup record. With the wait_for fix in place this is never hit;
+        // with ISH_WAITFLAG_LEAK=1 it fires constantly. It only counts -- the
+        // store still happens, so the A/B's two arms differ in exactly one
+        // thing.
+        if (!futex_wait_flag_is_live(waiting_interrupt_flag)) {
+            static _Atomic long stale;
+            long n = atomic_fetch_add_explicit(&stale, 1, memory_order_relaxed);
+            if (n < 3 || (n % 500) == 0)
+                fprintf(stderr, "URGENT: wake_waiting_task storing through a STALE "
+                        "waiting_interrupt_flag=%p (occurrence %ld)\n",
+                        (void *) waiting_interrupt_flag, n + 1);
+        }
         __atomic_store_n(waiting_interrupt_flag, true, __ATOMIC_RELEASE);
+    }
     if (waiting_cond != NULL && waiting_lock != NULL) {
         bool have_wait_lock = false;
         bool acquired_wait_lock = false;
