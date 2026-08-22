@@ -13,3 +13,25 @@ MESON_BUILD_DIR = $(CONFIGURATION_BUILD_DIR)/meson
 NINJA_TARGETS = libish.a libish_emu.a libfakefs.a
 
 SUPPORTED_PLATFORMS = iphonesimulator iphoneos macosx
+
+// The simulator's ARCHS_STANDARD is "arm64 x86_64", and the Ninja/Meson
+// external build fans out over every entry in ARCHS -- xcode-meson.sh
+// configures one build directory per arch and xcode-ninja.sh lipos the
+// results. That is two complete emulator builds and two cargo builds, of
+// which only the slice matching the host can ever be launched.
+//
+// It is worse than wasted time: a cross-arch simulator slice needs a rustup
+// target the host does not have (x86_64-apple-ios-sim on an Apple Silicon
+// Mac), so the Rust native program did not merely cost time, it FAILED the
+// build -- cargo fell back to a host build and macOS objects landed in an
+// iOS-Simulator link.
+//
+// ONLY_ACTIVE_ARCH is the setting that normally says this, and XcodeDebug.xcconfig
+// already sets it to YES. It does not help here: `xcodebuild` with no
+// -destination has no active architecture to resolve, and forces the setting
+// to NO, so every command-line simulator build ignored it.
+//
+// Scoped to the simulator so the device build is untouched -- ARCHS there is
+// arm64 alone either way. Override on the command line (ARCHS=x86_64) if you
+// ever do want the other slice.
+ARCHS[sdk=iphonesimulator*] = $(NATIVE_ARCH_ACTUAL)

@@ -107,22 +107,77 @@ merged="$work/merged.o"
 # sysroot; a host build takes the default.
 sdk=""
 clang_target=""
+# $target is CARGO's triple, and cargo does not spell triples the way LLVM
+# does: the simulator is `-sim` to cargo and `-simulator` to clang, and the
+# deployment version goes BEFORE that environment rather than after it.
+#
+# This used to be a concatenation, "$target${IPHONEOS_DEPLOYMENT_TARGET}", and
+# it survived only because the device case is the one where the two spellings
+# coincide -- aarch64-apple-ios + 15.0 really is the valid aarch64-apple-ios15.0.
+# The simulator got aarch64-apple-ios-sim15.0, which clang rejects outright
+# ("version 'sim15.0' in target triple ... is invalid"), so the partial link
+# below failed and took the whole Ninja target with it. Nothing could be built
+# for the Simulator at all -- UI work was device-only. Bare `ninja` was broken
+# the same way, just less visibly: with no IPHONEOS_DEPLOYMENT_TARGET in the
+# environment the concatenation left aarch64-apple-ios-sim, which is equally
+# invalid.
+#
+# So this translates rather than concatenates, and every arm has to name the
+# environment explicitly. A new cargo triple that is not listed here falls
+# through and is passed as given, which is wrong-but-visible; appending a
+# version to it was wrong-and-silent.
+ios_version="${IPHONEOS_DEPLOYMENT_TARGET:-15.0}"
+# arm64, not cargo's aarch64. clang takes either, but this is the spelling
+# xcode-meson.sh's cross file already uses for the very same build, and one
+# spelling per build is what keeps the two greppable together.
+target_arch=${target%%-*}
+[ "$target_arch" = aarch64 ] && target_arch=arm64
 case "$target" in
-    *-apple-ios-sim|*-apple-ios-macabi) sdk="iphonesimulator" ;;
-    *-apple-ios)                        sdk="iphoneos" ;;
-    *-apple-darwin)                     sdk="macosx" ;;
+    "")                 ;;
+    *-apple-ios-sim)    sdk="iphonesimulator"
+                        clang_target="-target $target_arch-apple-ios$ios_version-simulator" ;;
+    *-apple-ios-macabi) sdk="iphonesimulator"
+                        clang_target="-target $target_arch-apple-ios$ios_version-macabi" ;;
+    *-apple-ios)        sdk="iphoneos"
+                        clang_target="-target $target_arch-apple-ios$ios_version" ;;
+    # The host build. No version appended: clang defaults it to the running
+    # macOS, which is what a host build wants, and IPHONEOS_DEPLOYMENT_TARGET
+    # was never meaningful here in the first place.
+    *-apple-darwin)     sdk="macosx"
+                        clang_target="-target $target" ;;
+    *)                  clang_target="-target $target" ;;
 esac
-# The deployment target too, when Xcode is the one asking. Without it clang
-# defaults the partial link to iOS 7.0 and warns once per object that std was
-# built for something newer -- harmless, and 400 lines of it.
-[ -n "$target" ] && clang_target="-target $target${IPHONEOS_DEPLOYMENT_TARGET:-}"
 # shellcheck disable=SC2086
 (cd "$work" && xcrun ${sdk:+-sdk $sdk} clang $clang_target -nostdlib -Wl,-r -o "$merged" ./*.o)
 
 # The rename list is generated from kernel/native_libc.h at build time, so it
 # cannot fall behind the header. See tools/gen-nlibc-renames.py.
+#
+# The two --redefine-sym below are NOT libc routing, which is why they are
+# spelled here rather than added to that generated list.
+#
+# Rust's std defines __isPlatformVersionAtLeast / __isOSVersionAtLeast -- the
+# compiler-rt builtins clang emits for Objective-C's `@available` -- as
+# ordinary global symbols. Linking the crate into the app therefore makes
+# RUST's copy win over the toolchain's for AOK's own Objective-C.
+#
+# On device the two agree, so nothing showed. In the SIMULATOR they do not:
+# Rust's reads the system plist relative to $IPHONE_SIMULATOR_ROOT and
+# .expect()s that variable, which is NOT set for an app the simulator
+# launches. app/AccessibilityFixes.m asks `if (@available(iOS 15.7, *))` from
+# a __attribute__((constructor)), so the panic landed inside a dyld static
+# initializer and iSH-AOK took SIGABRT before main() on every launch. The
+# build being fixed is what made this reachable at all.
+#
+# Renamed rather than deleted: objcopy rewrites the definition AND the crate's
+# own references to it in one pass, so Rust keeps its implementation for its
+# own callers and only AOK's Objective-C falls through to compiler-rt -- which
+# is the implementation that knows how to answer this under a simulator.
 # shellcheck disable=SC2046
-"$objcopy" $(tr '\n' ' ' < "$renames") "$merged" "$out"
+"$objcopy" $(tr '\n' ' ' < "$renames") \
+    --redefine-sym ___isPlatformVersionAtLeast=___rust_isPlatformVersionAtLeast \
+    --redefine-sym ___isOSVersionAtLeast=___rust_isOSVersionAtLeast \
+    "$merged" "$out"
 
 # Second pass, driven by what the object actually imports rather than by a
 # list of suffixes someone guessed.

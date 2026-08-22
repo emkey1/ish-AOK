@@ -167,12 +167,31 @@ EOF
     # -- a crate built for macOS links fine and targets the wrong platform.
     # Both are empty-safe: without cargo the crate is simply not built, and
     # everything else builds exactly as before.
-    local rust_triple=""
-    case "$sdk_name" in
-        iphoneos)          rust_triple="aarch64-apple-ios" ;;
-        iphonesimulator)   [[ "$arch" == arm64 ]] && rust_triple="aarch64-apple-ios-sim" ;;
-        macosx)            [[ "$arch" == arm64 ]] && rust_triple="aarch64-apple-darwin" ;;
+    # Both halves of the triple come from $arch, and BOTH are needed. The
+    # simulator's ARCHS is "arm64 x86_64" -- two slices, not one -- and this
+    # used to read `[[ "$arch" == arm64 ]] && rust_triple=...`, so the x86_64
+    # slice got no -Dnative_rust_target at all. An empty target is not inert:
+    # build-rust-native.sh then runs cargo with no --target, cargo builds the
+    # crate for the HOST, and macOS objects go into an iOS-Simulator link
+    # ("linking in object file built for macOS"). It stayed hidden only
+    # because the invalid simulator triple in that same script killed the
+    # build one step earlier; fixing that surfaced this.
+    #
+    # Rust also spells the architecture differently from Xcode -- aarch64
+    # where Xcode says arm64 -- which is why this is a mapping and not $arch.
+    local rust_arch=""
+    case "$arch" in
+        arm64)  rust_arch=aarch64 ;;
+        x86_64) rust_arch=x86_64 ;;
     esac
+    local rust_triple=""
+    if [[ -n "$rust_arch" ]]; then
+        case "$sdk_name" in
+            iphoneos)          rust_triple="$rust_arch-apple-ios" ;;
+            iphonesimulator)   rust_triple="$rust_arch-apple-ios-sim" ;;
+            macosx)            rust_triple="$rust_arch-apple-darwin" ;;
+        esac
+    fi
     local meson_extra_opts="-Dcargo_home=$HOME/.cargo"
     [[ -n "$rust_triple" ]] && meson_extra_opts="$meson_extra_opts -Dnative_rust_target=$rust_triple"
     # AOK_RUST_FEATURES comes from app/iSH.xcconfig, so the Rust program's
