@@ -13,7 +13,7 @@ You reach them through `/AOK/native`:
 
 ```sh
 ls /AOK/native
-# bash  motepad  smallclue  zsh  zsh-multio
+# bash  hx  libs  motepad  rust-probe  smallclue  zsh  zsh-multio
 ```
 
 Everything else — `ssh`, `wc`, `vi` — is a symlink to
@@ -111,6 +111,8 @@ diagnostic rather than a program.
 | `/AOK/native/zsh` | zsh, with fork-by-relaunch; `zsh --version` for the exact one |
 | `/AOK/native/zsh-multio` | a helper for zsh's MULTIOS redirections, which need a process that is not the shell to hold the descriptors |
 | `/AOK/native/motepad` | a modeless terminal text editor, the counterpart to Workspace's MotePad applet — see [motepad.md](motepad.md) |
+| `/AOK/native/hx` | [helix](https://helix-editor.com), a modal editor with syntax highlighting and multiple selections. MPL-2.0, so like bash it has a build switch; registered as `hx`, which is what helix calls itself. Its grammars and themes are served from `/AOK/native/libs` |
+| `/AOK/native/rust-probe` | a probe that exercises the Rust-on-the-shim path, not a tool you have a use for. Present because the Rust support it checks is what `hx` is built on |
 
 SmallCLUE's applets are *smaller* implementations, not drop-in replacements for
 the distro's. They cover the common cases and diverge on individual flags — the
