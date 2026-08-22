@@ -88,6 +88,36 @@ never runs here. **That is why only i386 has ever shown this**: on amd64 the
 same code path materialises 1<<47, and 100 amd64 runs under the watcher
 produced no genuine catch at all.
 
+**The store goes into a LIVE cleanup record on a thread that is blocked and
+cannot have written it.** This is the sharpest measurement in the entry, so
+here is the report itself:
+
+    victim self=0x16f783000 offset=+8 found=0x100000000
+    ...in the __next field of the cleanup record at 0x16f77c968 (self-0x6698)
+    the same record's __next one scan pass earlier: 0x0
+    the record's three words (__routine __arg __next):
+        0x1887847e4  0x10418ecd8  0x100000000
+    the bad word is at 0x16f77c978; this thread's struct tlb spans
+        0x16f77cf28..0x16f782f70 -> the word is below the tlb by 0x5b0 bytes
+    siglongjmps out of sigusr1_handler so far: 0, with a live record: 0
+
+`__routine` is a libsystem_pthread address and `__arg` an ish one, so this is a
+real, current `_pthread_cond_cleanup` record and not a dead frame's leftovers.
+`__next` held **0 one scan pass earlier**. And the owner is parked inside
+`__psynch_cvwait` across that whole window -- it executes nothing, so it did not
+make this store. **Something else writes 0x100000000 into a parked thread's
+live stack frame.**
+
+**And it is not a leaked record.** The obvious alternative was that AOK's one
+non-local exit out of arbitrary code -- `sigusr1_handler`'s `siglongjmp`
+(util/sync.c:231) -- abandons a `pthread_cond_wait` frame without popping
+libpthread's record, leaving the head aimed at dead stack that ordinary calls
+then reuse. It is instrumented and counted, and the counter says **zero**: this
+test never reaches a `sigunwind_start()` window at all. Do not spend time on
+that theory here. (The hazard itself is real and worth fixing on its own terms:
+`sigunwind_start()` already saves and restores `lockstats_depth` for exactly
+the "this jump abandons frames" reason, and does not save `__cleanup_stack`.)
+
 **The bad word is on the thread's own STACK, not in the struct.** Extending the
 watcher to walk the cleanup chain (`__next` sits at +16 of each record, the
 same +0x10 `_pthread_exit` loads) caught it in the act: the head is a perfectly
@@ -177,24 +207,25 @@ what moved. Plan a session around a hundred runs per event, not eight.
 all (only the exit-race artifact above). That is now a measurement rather than
 an absence of reports.
 
-**Next step.** The leading hypothesis is now a LEAKED cleanup record: the head
-points at a record whose frame is dead, and ordinary AOK calls reusing those
-bytes leave `guest_abi_user_addr_max` in the `__next` slot. AOK has exactly one
-non-local exit out of arbitrary code that could leak one -- `sigusr1_handler`'s
-`siglongjmp` (util/sync.c:231), whose `sigunwind_start()` macro already saves
-and restores `lockstats_depth` for precisely this "the jump abandons frames"
-reason and does not save `__cleanup_stack`. Two checks for it are in the tree
-and running: a counter pair on that `siglongjmp` (how many happen at all, how
-many with a non-empty cleanup list) and a hard assertion at the top of
-`task_run_current`'s loop, where the thread is inside no cond wait and the
-cleanup list must therefore be exactly empty. Neither had fired in the first
-80 runs at the time of writing, which at roughly 1.5% per run means nothing
-yet; give them several hundred. **If the
-leak is confirmed, the fix is the same shape as the lockstats one already in
-`sigunwind_start()`: snapshot `pthread_self()->__cleanup_stack` before the
-`sigsetjmp` and restore it on the longjmp branch.** If it is refuted, the
-remaining candidates are an owner-thread store and a kernel copyout, in that
-order.
+**Next step: `ISH_PTHREAD_WATCH=record`, which is in the tree and running.**
+The target is now one specific eight-byte word -- `__next` of whichever cleanup
+record each parked thread currently has -- and unlike the `struct _pthread` it
+carries no legitimate cross-thread traffic whatsoever, so a hardware watchpoint
+on it is quiet by construction. The mode arms it on every thread except the
+owner and recomputes the addresses on each sweep, because the record moves as
+threads park and wake. A trap prints the storing pc, which is one measurement
+away from naming the writer.
+
+What the writer can be, given everything above: another thread storing through
+a pointer into a sibling's host stack, or a kernel copyout into a stale buffer
+-- and note that a kernel copyout is invisible to BOTH instruments, since a
+watchpoint only sees EL0 stores and `ISH_MEM_QUARANTINE` turns a kernel write
+to a protected page into a silent EFAULT rather than a fault. The value being
+`guest_abi_user_addr_max` says whoever it is came through i386 address
+validation on the way. The bad word sits at a fixed depth run to run
+(self-0x6688 or self-0x6698, 0x5b0 below `task_run_current`'s 24 KB `struct
+tlb` local) -- that is a property of the call path that parks there, not of the
+writer's arithmetic, so do not read a fixed offset into it.
 
 **Knobs, all in kernel/task.c:**
 
@@ -205,9 +236,12 @@ order.
   APIs and dumps registers and a frame-pointer backtrace for each, then exits
   66. Addresses are raw and the report prints the image slide, so
   `atos -o build/ish -l <load address>` symbolises them.
-- `ISH_PTHREAD_WATCH=1` -- add the hardware watchpoint on `self + 8`
-  (`=stack` watches the top 128 KB of the stack instead, which is what measured
-  libpthread's own cross-thread writes). Exits 67 on a trap.
+- `ISH_PTHREAD_WATCH=1` -- add the hardware watchpoint on `self + 8`.
+  `=record` watches `__next` of each parked thread's current cleanup record,
+  which is where the store actually lands, and is the mode to use. `=stack`
+  watches the top 128 KB of the stack, which is what measured libpthread's own
+  cross-thread writes and is otherwise far too noisy to run. Exits 67 on a
+  trap.
 - `ISH_PTHREAD_WATCH_SELFTEST=1` -- positive control. A watchpoint that was
   never applied looks exactly like one that was never hit, so this stores a
   watched word's own value back over itself and says so loudly if no trap

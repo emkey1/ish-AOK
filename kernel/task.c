@@ -1207,6 +1207,7 @@ static __thread int canary_my_watch_slot = -1;
 #define CANARY_WATCH_OFF 0
 #define CANARY_WATCH_WORD 1
 #define CANARY_WATCH_STACK 2
+#define CANARY_WATCH_RECORD 3
 #define CANARY_WATCH_WINDOW_BITS 16
 
 static int task_pthread_watch_mode(void) {
@@ -1218,6 +1219,8 @@ static int task_pthread_watch_mode(void) {
             m = CANARY_WATCH_OFF;
         else if (v[0] == 's')
             m = CANARY_WATCH_STACK;
+        else if (v[0] == 'r')
+            m = CANARY_WATCH_RECORD;
         else
             m = CANARY_WATCH_WORD;
         atomic_store_explicit(&mode, m, memory_order_relaxed);
@@ -1342,10 +1345,10 @@ static void canary_rearm_all(void) {
 // itself -- harmless, and a watchpoint traps on the store whatever the value
 // is. Reaching the line after the store means the arming is not working, and
 // says so rather than reporting a quiet, meaningless pass.
-static void canary_watch_selftest(void) {
+static bool canary_watch_selftest(void) {
     uintptr_t addr = atomic_load_explicit(&watch_addr[0], memory_order_acquire);
     if (addr == 0)
-        return;
+        return false; // nothing watched yet -- try again on the next sweep
     canary_arm_thread(mach_thread_self(), 0);
     volatile uint64_t *w = (volatile uint64_t *) addr;
     *w = *w;
@@ -1438,7 +1441,37 @@ void task_pthread_canary_check_self(const char *where) {
     task_pthread_canary_check_self_at(where, false);
 }
 
+// ISH_PTHREAD_WATCH=record: watch `__next` of the cleanup record each parked
+// thread currently has on its stack, armed on every thread EXCEPT its owner.
+// This is the word that was measured going from 0 to 0x100000000 while its
+// owner was blocked inside __psynch_cvwait and could not have written it
+// itself, and unlike the struct _pthread it carries no legitimate cross-thread
+// traffic at all -- so a trap here is the store, with the pc that made it.
+// The record moves as threads park and wake, so the addresses are recomputed
+// on every re-arm sweep rather than claimed once.
+static void canary_watch_refresh_records(void) {
+    int w = 0;
+    for (int i = 0; i < CANARY_SLOTS && w < CANARY_WATCHPOINTS; i++) {
+        uintptr_t self = atomic_load_explicit(&canary_slots[i].self, memory_order_acquire);
+        if (self <= 1)
+            continue;
+        uint64_t head = ((const volatile uint64_t *) self)[1];
+        if (head == 0 || head >= self || self - head > TASK_THREAD_STACK_SIZE)
+            continue;
+        atomic_store_explicit(&watch_owner[w], self, memory_order_release);
+        atomic_store_explicit(&watch_mask[w], 0, memory_order_release);
+        atomic_store_explicit(&watch_addr[w], (uintptr_t) head + 16, memory_order_release);
+        w++;
+    }
+    for (; w < CANARY_WATCHPOINTS; w++) {
+        atomic_store_explicit(&watch_addr[w], 0, memory_order_release);
+        atomic_store_explicit(&watch_owner[w], 0, memory_order_release);
+    }
+}
+
 static void canary_watch_claim(uintptr_t self) {
+    if (task_pthread_watch_mode() == CANARY_WATCH_RECORD)
+        return; // the sweep picks the addresses; nothing to claim here
     unsigned n = atomic_fetch_add_explicit(&watch_claim_counter, 1, memory_order_relaxed);
     if (task_pthread_watch_mode() == CANARY_WATCH_STACK) {
         // Two adjacent 64 KB windows. The lower one is anchored on the window
@@ -1474,6 +1507,8 @@ static void canary_watch_release(uintptr_t self) {
     canary_my_watch_slot = -1;
     if (slot < 0)
         return;
+    if (task_pthread_watch_mode() == CANARY_WATCH_RECORD)
+        return;
     int slots = task_pthread_watch_mode() == CANARY_WATCH_STACK ? 2 : 1;
     for (int k = 0; k < slots; k++) {
         uintptr_t expected = self;
@@ -1485,7 +1520,8 @@ static void canary_watch_release(uintptr_t self) {
 #else
 static void canary_watch_install_handler(void) {}
 static void canary_rearm_all(void) {}
-static void canary_watch_selftest(void) {}
+static bool canary_watch_selftest(void) { return true; }
+static void canary_watch_refresh_records(void) {}
 static int canary_watch_covers(uintptr_t UNUSED(addr)) { return -1; }
 static void canary_watch_claim(uintptr_t UNUSED(self)) {}
 static void canary_watch_release(uintptr_t UNUSED(self)) {}
@@ -1495,6 +1531,7 @@ static void *canary_watcher(void *arg) {
     (void) arg;
     pthread_setname_np("ish-canary");
     bool watching = task_pthread_watch_enabled();
+    bool records = task_pthread_watch_mode() == CANARY_WATCH_RECORD;
     bool selftest = watching && getenv("ISH_PTHREAD_WATCH_SELFTEST") != NULL;
     for (;;) {
         for (int i = 0; i < CANARY_SLOTS; i++) {
@@ -1565,12 +1602,12 @@ static void *canary_watcher(void *arg) {
         canary_pass = pass;
         // Threads are created constantly here and start with a clean debug
         // state, so the watchpoints have to be re-applied, not just set once.
-        if (watching && (pass % 8192) == 0) {
+        if (watching && (pass % (records ? 512 : 8192)) == 0) {
+            if (records)
+                canary_watch_refresh_records();
             canary_rearm_all();
-            if (selftest) {
+            if (selftest && canary_watch_selftest())
                 selftest = false;
-                canary_watch_selftest();
-            }
         }
     }
     return NULL;
