@@ -72,7 +72,19 @@ struct futex {
     uint64_t wake_seq;
 };
 
+// A queued futex_wait is a STACK LOCAL of futex_wait_masked whose address is
+// published on a shared queue, so every wake path below calls
+// pthread_cond_broadcast on another task thread's host stack. That is only
+// sound while the waiter is still in that frame. This magic is the check:
+// set when the object is built, cleared the instant it leaves the queue and
+// its frame is about to die. A waker that finds a queued entry without it is
+// looking at a corpse -- see docs/TODO.md's pread_stack_thread_race entry,
+// where a stray 8 bytes landing at that exact stack depth is what kills the
+// thread later, inside pthread_exit.
+#define FUTEX_WAIT_MAGIC 0x0FEEDFACEF00D01ULL
+
 struct futex_wait {
+    uint64_t magic;
     cond_t cond;
     struct futex *futex; // The futex on which the thread is waiting
     pthread_t thread;    // The thread that is waiting
@@ -336,6 +348,7 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
         if (timeout != NULL)
             deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), *timeout);
         struct futex_wait wait = {
+            .magic = FUTEX_WAIT_MAGIC,
             .cond = COND_INITIALIZER,
         };
         wait.futex = futex;
@@ -394,6 +407,9 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
         }
         futex = wait.futex;
         list_remove_safe(&wait.queue);
+        // Off the queue: from here the frame may die at any point, so no waker
+        // may touch this object again.
+        wait.magic = 0;
 
         if (err == _EINTR) {
             // The wait was interrupted by a signal that may restart the syscall
@@ -440,6 +456,22 @@ static int futex_read_timeout(guest_addr_t timeout_addr, bool time64, struct tim
     return 0;
 }
 
+// Returns true if `wait` still looks like a live queued waiter. A false here
+// means a wake was about to run pthread_cond_broadcast over stack that its
+// owner has already left, which is a use-after-free of another thread's frame.
+static bool futex_wait_is_live(struct futex_wait *wait, const char *where) {
+    if (wait != NULL && wait->magic == FUTEX_WAIT_MAGIC)
+        return true;
+    static _Atomic int reported;
+    if (atomic_fetch_add_explicit(&reported, 1, memory_order_relaxed) < 8)
+        printk("URGENT: futex %s found a STALE waiter at %p (magic=%#llx, thread=%p): "
+               "its frame is gone and notifying it would write into that thread's stack\n",
+               where, (void *) wait,
+               wait != NULL ? (unsigned long long) wait->magic : 0ULL,
+               wait != NULL ? (void *) wait->thread : NULL);
+    return false;
+}
+
 static int futex_wakelike(int op, guest_addr_t uaddr, dword_t wake_max, dword_t requeue_max,
         guest_addr_t requeue_addr, dword_t wake_mask) {
     struct futex *futex = futex_get(uaddr, op);
@@ -460,6 +492,10 @@ static int futex_wakelike(int op, guest_addr_t uaddr, dword_t wake_max, dword_t 
             break;
         if ((wait->bitset & wake_mask) == 0)
             continue;
+        if (!futex_wait_is_live(wait, "wake")) {
+            list_remove(&wait->queue);
+            continue;
+        }
         notify(&wait->cond);
         list_remove(&wait->queue);
         woken++;
@@ -554,6 +590,10 @@ static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2
     list_for_each_entry_safe(&futex1->queue, wait, tmp, queue) {
         if (woken >= wake_max)
             break;
+        if (!futex_wait_is_live(wait, "wake_op")) {
+            list_remove(&wait->queue);
+            continue;
+        }
         notify(&wait->cond);
         list_remove(&wait->queue);
         woken++;
@@ -574,6 +614,10 @@ static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2
         list_for_each_entry_safe(&futex2->queue, wait, tmp, queue) {
             if (woken2 >= wake_max2)
                 break;
+            if (!futex_wait_is_live(wait, "wake_op2")) {
+                list_remove(&wait->queue);
+                continue;
+            }
             notify(&wait->cond);
             list_remove(&wait->queue);
             woken2++;
