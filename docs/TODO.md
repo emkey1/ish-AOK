@@ -55,57 +55,199 @@ ioctls added with the kqueue front end, and nothing in it touches pipes, exec
 or fd inheritance. The pager has spooled like this since it was written.
 
 
-### #523: yay's reported failure does not reproduce; an http2 flake does
+### The AUR "unexpected EOF" flake: a Go heap-growth stall meeting a 2s server -- 2026-08-22
 
-Reproduced the environment on 2026-08-20 -- Arch Linux ARM aarch64, yay v13.0.1
-built from AUR under emulation -- and ran `yay -S pandoc-bin` four times. **The
-reported `context: signal: terminated` never appeared.** All four got through
-the AUR fetch and downloaded sources.
+Split out of #523's entry, which had this as one bug and blamed Go's TLS
+handshake timeout. It is **two** ingredients, neither of them a timeout, and
+one of them is ours and is not about networking at all.
 
-Getting there needed five things fixed first, only one of them AOK's:
+**The symptom.** Against `aur.archlinux.org`, in a share of `yay` runs that
+varies with conditions -- 3 of 24 in one batch on the Mac, 7 of 8 in another, 6
+of 9 on the iPad. yay usually retries or falls back to git and carries on; it
+was fatal to 2 of those 24:
 
-1. Landlock, 2. a dangling /etc/resolv.conf, 3. an empty keyring -- all three
-   now shipped as `/AOK/fixes/arch`.
-4. **`/dev/fd` was missing**, so bash process substitution was ENOENT and
-   makepkg died at "Retrieving sources". Ours, and fixed (`59827f5ce`).
-5. The minirootfs strips headers from 137 packages, so anything that compiles
-   needs `pacman -S glibc linux-api-headers` first.
+    request failed: Get "https://aur.archlinux.org/rpc?...": unexpected EOF
+    request failed: Get "https://aur.archlinux.org/rpc?...": http2: client conn could not be established
+    fatal: unable to access 'https://aur.archlinux.org/paru-bin.git/':
+        TLS connect error: error:0A000126:SSL routines::unexpected eof while reading
 
-**What DOES reproduce, about one run in four:**
+All three are one event: the connection is closed without a `close_notify`.
+Go's message is not a timeout -- `http2errClientConnNotEstablished` comes from
+`awaitOpenSlotForStreamLocked` only when `cc.closed && cc.nextStreamID == 1`,
+i.e. the ClientConn was built (the handshake *succeeded*) and then closed
+before its first request.
 
-    request failed: Get "https://aur.archlinux.org/rpc?...":
-        http2: client conn could not be established
+#### Ingredient one: the AUR drops slow clients, and that is not ours
 
-yay recovers -- it falls back to git and carries on -- so it is not fatal, and
-it is not what was reported. But it is a real intermittent failure of Go's
-HTTP/2 client against a host that curl reaches every time, on both HTTP/2 and
-HTTP/1.1. Ruled out already: not git (3 of 3 clones standalone), not TLS
-generally (pacman syncs fine), not concurrency (9 simultaneous TLS operations
-all succeeded).
+Measured on the macOS host with **no emulator anywhere**, using a `net/http`
+client whose `DialTLSContext` completes the handshake and then sleeps before
+returning the connection:
 
-**Measured 2026-08-20, and it is a latency tail, not a protocol bug.** TLS
-handshake time to the same host, 15 samples each:
+| delay after handshake | result |
+|---|---|
+| 0s | 8 of 8 ok |
+| 1s | 8 of 8 ok |
+| 1.5s | 6 of 6 ok |
+| **2s** | **0 of 8 ok**, and 0 of 6 on a re-run from a different network |
 
-    host  (macOS)   min 0.09  median 0.21  max  1.15
-    guest (AOK)     min 0.21  median 0.39  max 15.32
+So the AUR end closes a connection whose first request has not arrived -- the
+origin or a middlebox, indistinguishable from here -- with the threshold
+between 1.5 and 2 seconds. Both runs were on the plain macOS host and the
+second was on a different uplink, so this is the endpoint, not a local network.
+`github.com` does not do it: the same guest client that fails against the AUR
+got 24 of 24 there.
 
-The median is about twice the host's -- unremarkable for emulation. The TAIL is
-13x worse, and 15.3s is past Go's default TLSHandshakeTimeout of 10s, which is
-exactly how "http2: client conn could not be established" arises. The same
-stall explains the OpenSSL "unexpected eof while reading" seen from git.
+#### Ingredient two: a fresh Go process stalls for seconds, and that IS ours
 
-**The CPU-count lie is not the cause**, though it was the obvious suspect:
-AOK reports 4 of the host's 10 logical CPUs, and Go sizes GOMAXPROCS from it.
-A Go HTTP/2 probe run at GOMAXPROCS 1, 4 and 8 (20 requests each) failed once
-in 60, at GOMAXPROCS=8, with a handshake timeout -- the same tail, not a
-scheduling effect.
+Go builds the system CA pool lazily, on its first certificate verification --
+which happens **inside** the TLS handshake. In the guest, `x509.SystemCertPool()`
+in a fresh process:
 
-**Next step.** Find what stalls a socket for seconds when the median is
-sub-second. Nothing in the handshake is compute-heavy, so this is a wait that
-is not being woken promptly rather than work that is slow -- which puts it in
-the same neighbourhood as the poll/quiesce machinery. `curl` on its own shows
-the tail too, so it reproduces without Go, without yay and without the AUR:
-any repeated HTTPS handshake will do.
+    GOMAXPROCS=1     0.516 0.517 0.528 0.530 0.537
+    GOMAXPROCS=4     0.572 0.576 0.619 6.729 7.177     <-- bimodal
+
+**No network is involved in that measurement at all** -- the whole probe is
+`x509.SystemCertPool()` with a stopwatch round it. The stall is a function of
+GOMAXPROCS, and AOK reports 4 CPUs:
+
+| GOMAXPROCS | n | median | max | runs >= 2s |
+|---|---|---|---|---|
+| 1 | 20 | 0.538 | 0.598 | 0 |
+| 2 | 20 | 0.537 | 0.577 | 0 |
+| 4 (the default here) | 20 | 0.581 | 12.805 | **4 (20%)** |
+| 8 | 20 | 0.798 | 37.315 | **9 (45%)** |
+
+The slow samples quantize: 6.67, 6.69, 6.85, 12.80 at 4; and 2.12, 6.77, 7.10,
+12.80, 12.85, 12.92, 18.95, 31.17, 37.31 at 8. **A step of about 6.2s**, which
+is the same quantum the network failures showed (7.4, 13.5, 19.9, 25.8).
+
+**It is not the certificates, the parsing, or the files -- it is the heap.**
+Three probes in one guest, same window, 12 runs each at the default GOMAXPROCS:
+
+| probe | what it does | min | median | max |
+|---|---|---|---|---|
+| `cpu` | pure arithmetic in GOMAXPROCS goroutines | 0.350 | 1.468 | 1.520 |
+| `files` | open+read all 363 cert files, no parsing | 0.045 | 0.050 | 0.079 |
+| **`alloc`** | **4000 x 64 KB of Go heap, nothing else** | **0.205** | **12.431** | **18.805** |
+
+Compute is steady. File I/O is fast and steady. **Growing the Go heap by 256 MB
+takes 0.2s at best and twelve seconds typically.** That is the stall, and
+`SystemCertPool` only meets it because parsing 121 certificates is what makes a
+fresh Go process grow its heap.
+
+The same GOMAXPROCS cliff, on the allocation alone (10 runs each, 256 MB):
+
+| GOMAXPROCS | min | median | max | runs >= 2s |
+|---|---|---|---|---|
+| 1 | 0.178 | **0.201** | 0.269 | 0 |
+| 2 | 0.209 | **0.247** | 0.331 | 0 |
+| 4 (the default -- AOK reports 4 CPUs) | 0.203 | **6.516** | 24.935 | 6 |
+| 8 | 0.247 | **7.219** | 38.651 | 7 |
+
+A hard cliff between 2 and 4, and a 30x regression in the median. The best case
+never moves, so nothing is *slow*: something is *waiting*.
+
+That allocation is therefore the whole reproducer -- no files, no sockets, no
+TLS, no AUR, and about a minute to run:
+
+```go
+package main
+
+import ("fmt"; "runtime"; "time")
+
+func main() {
+    t0 := time.Now()
+    var keep [][]byte
+    for i := 0; i < 4000; i++ {
+        keep = append(keep, make([]byte, 64*1024))
+    }
+    _ = keep
+    fmt.Printf("gomaxprocs=%d  256MB heap in %.3fs\n",
+        runtime.GOMAXPROCS(0), time.Since(t0).Seconds())
+}
+```
+
+```sh
+for g in 1 2 4 8; do for i in $(seq 10); do GOMAXPROCS=$g ./alloc; done; done
+```
+
+**Two obvious explanations are already refuted.** `mem_write_lock_with_pokes`
+(kernel/mmap.c:58) spins 256 `sched_yield()` then 768 `nanosleep(&lock_pause)`
+before falling back to a blocking `write_lock`, and `lock_pause` is 2000 ns
+(debug.h:6) -- but 768 of those measure **4 milliseconds** on this host, not six
+seconds, so the nap budget alone cannot be it. `futex_wait_masked`
+(kernel/futex.c:360) re-checks on a 50 ms slice, so a lost futex wake caps out
+at 50 ms. `ISH_QUIESCE_STATS` dumps its counters from main.c:138 at exit, but
+printed nothing on these runs -- worth wiring up properly, since those counters
+are exactly the ones this needs.
+
+**Next step** is the heap-growth path itself: `mem_write_lock_with_pokes` and
+the mmap growth/eviction machinery in kernel/mmap.c and emu/memory.c, with the
+allocation probe above as the metric and GOMAXPROCS as the knob. This is bigger than
+the AUR -- every Go program under AOK pays it at startup -- and it belongs with
+the lock-contention entries already in this file.
+
+An `httptrace` of a failing request confirms where the stall lands in the
+network case, entirely between `tls0` and `tls1`:
+
+    FAIL 19.252 [dns0=0.005 dns1=0.029 conn0=0.030 conn1=0.060 tls0=0.061 tls1=19.246 gotconn=19.250]
+
+...and `ISH_TRACE_POLL_WAIT` shows the guest doing **no polling at all** during
+each 6.1s gap. It is not a missed wakeup; it is work not finishing.
+
+#### What follows, and what each control says
+
+| control | result |
+|---|---|
+| Go, one long-lived process, 8 requests each | 23 of 24 ok -- the pool is built once |
+| Go, fresh process per request | 16 of 24 ok |
+| `curl` (single-threaded, one bundled CA file) | 24 of 24 ok |
+| Go, fresh process, `github.com` | 24 of 24 ok |
+| `GOMAXPROCS=1`, fresh process, AUR | **0 failures of 18** |
+| default, fresh process, AUR | 6 failures of 18 |
+| `GODEBUG=http2client=0` (HTTP/1.1) | 7 failures of 18 -- not an HTTP/2 bug |
+| Go on the macOS host, same window, paced | 0 of 60 (guest: 18 of 60) |
+| macOS host TLS handshake, 150 samples | p50 0.100s, max 0.417s, no failures |
+| `yay -S pandoc-bin`, default vs `GOMAXPROCS=1`, alternating | the error in **7 of 8** runs vs **0 of 8** |
+
+`GOMAXPROCS=1` is therefore a real workaround for anyone hitting this today,
+and it is the one offered on the issue.
+
+**A second divergence found on the way, and it is a real bug of its own.**
+AOK's `epoll_ctl(EPOLL_CTL_ADD)` **accepts regular files and directories**.
+Linux fails both with `EPERM` -- epoll_ctl(2) says so outright -- and Go's
+`internal/poll` relies on that failure to decide an fd is not pollable and to
+use ordinary blocking reads for it. Measured in a guest with a three-line
+`epoll_ctl(EPOLL_CTL_ADD)` on `/etc/hosts` and on `/etc`:
+
+    regular file epoll_ctl(ADD) -> 0 errno=0 (accepted)   [linux: -1 EPERM]
+    directory    epoll_ctl(ADD) -> 0 errno=0 (accepted)   [linux: -1 EPERM]
+
+The poll trace confirms the consequence: Go registers
+`/etc/ca-certificates/extracted/cadir/*.pem` in its epoll **with EPOLLET**,
+which cannot happen on Linux. Whether that is what stalls is not established --
+that is what the next step above is for -- but the divergence is wrong on its
+own terms, and the fix is small: reject fds whose `->poll` cannot ever change
+state, the way Linux does.
+
+**Two traps this cost most of a day.** macOS's system `curl` is LibreSSL and
+never reports `unexpected eof` at all, so comparing it against an OpenSSL guest
+manufactures a guest-only failure (22 of 200 against the host's 3, which
+inverted to 0 of 120 against 2 once both used OpenSSL). And a guest loop is
+slower than a host loop, so an unpaced pair grades different minutes of the
+network -- pace both, stamp every sample, and intersect the windows.
+
+#### The background rate, which really is the network
+
+Separately, and much smaller: with `curl` on both sides AOK is
+indistinguishable from a native client. Paced, DNS pinned, matched OpenSSL 3.x,
+same window, 320 requests each -- macOS 4 failures, camd (Debian 13, same
+Wi-Fi) 6, the AOK guest 8. Against a TLS/h2 server on the same machine the
+guest was 100 of 100, slowest 0.14s. DNS is equal too: paired `dig` at the same
+server gave 3 timeouts in 60 on both host and guest via the LAN resolver, and
+13 vs 26 in 100 via 8.8.8.8 -- a lossy uplink, not AOK. The previous entry's
+"guest max 15.32s" was a guest resolving through 8.8.8.8 while macOS used a LAN
+resolver, with musl's retry turning one lost packet into a 5-10s stall.
 
 ### `pread_stack_thread_race` SIGSEGVs on i386 -- CAUGHT AND LOCATED 2026-08-22
 
@@ -251,6 +393,50 @@ slot was last written rather than where it was read -- the tool's new report
 names the reading instruction, which is a start and not the answer.
 
 ## Closed during the 550 cycle
+
+### #523: yay's reported failure does not reproduce -- CLOSED 2026-08-22
+
+Closed on the issue after **38 runs of the reporter's own command, across two
+environments, produced the reported symptom zero times.**
+
+|  | build | yay | runs of `yay -S <pkg>` |
+|---|---|---|---|
+| iPad (M4), the app | 1.3 (549) built 2026-08-22 | **yay-bin 13.0.1**, the upstream prebuilt aarch64 binary the reporter's package installs | 14 |
+| macOS, CLI build | same tree | yay 13.0.1 built from the AUR, Go 1.26.6 | 24: 8 x `pandoc-bin`, 8 x `yay-bin`, 8 x `paru-bin`, cached clone deleted before each |
+
+Run as an unprivileged user with sudo on Arch Linux ARM aarch64, exactly as the
+report says. `context: signal: terminated` **never appeared**. 36 of the 38
+reached `:: (1/1) Downloaded PKGBUILD`, which is the step the report dies in,
+and one `--noconfirm` run went the whole way through: fetch, source download,
+sha256 validation, extraction, into `package()`. The other 2 failed with the
+flake described under *Diagnosed, not fixed*, which is a different error.
+
+**Testing with `yay-bin` mattered and was not optional.** The report names
+`yay-bin 13.0.1` -- a binary built by yay's maintainers with their Go, not the
+Arch package's. The earlier attempt only ever ran a locally-compiled `yay`, so
+"does not reproduce" was one Go toolchain short of the claim it was making.
+Fetching the upstream release tarball straight into `/tmp` and running it from
+there tests the reporter's binary without installing anything.
+
+**What could NOT be tested.** The reporter's strace reaches the AUR over IPv6
+(`2604:cac0:a104:d::2`). Neither this Wi-Fi nor the iPad has global IPv6, so
+every run above was IPv4. If the failure is IPv6-only it is still real, and the
+issue says to reopen for exactly that.
+
+Five things had to be fixed before any of this could run, one of them ours:
+Landlock, a dangling `/etc/resolv.conf` and an empty keyring (all three now
+`/AOK/fixes/arch`, `94a31f798`); a missing `/dev/fd`, which is ours and fixed
+(`59827f5ce`); and the minirootfs stripping headers from 137 packages, so
+anything that compiles needs `pacman -S glibc linux-api-headers` first.
+
+The `poll.c` use-after-free found while chasing this (`717e6d3d`, shipped in
+545) remains a real fix and is unaffected by the close.
+
+**One gotcha found on the way, worth knowing.** Only the *booted* root gets an
+AOK-generated `/etc/resolv.conf`. A root reached through
+`/AOK/tools/mount-root.sh` keeps whatever file it was left with -- the iPad's
+Arch root still pointed at a nameserver from a network it had not seen in
+weeks, and every lookup inside the chroot failed until it was replaced.
 
 ### CI was red for the whole 550 cycle -- FIXED 2026-08-22
 
@@ -1442,7 +1628,7 @@ its objects can be made to call `nlibc_open`.
 | [#485](https://github.com/emkey1/ish-AOK/issues/485) | Qt apps (Falkon) cannot connect to session bus | 6 comments |
 | [#503](https://github.com/emkey1/ish-AOK/issues/503) | amd64: gdb next/step after a breakpoint crashes with SIGILL | ours |
 | [#521](https://github.com/emkey1/ish-AOK/issues/521) | Buildroot `make` crashes on "checking for working sigaltstack" | body is a screenshot only |
-| [#523](https://github.com/emkey1/ish-AOK/issues/523) | yay (AUR helper) fails on Arch ARM64 | **reported symptom does not reproduce** -- see *Diagnosed* above. Previously: **half fixed.** The crash was a poll.c fd use-after-free, fixed in `717e6d3d`. The *reported* symptom -- `yay -S pandoc-bin` dying with `context: signal: terminated` -- still reproduces and is not a crash: yay's Go runtime sends itself SIGTERM when its context is cancelled, most likely its own timeout firing because emulated syscalls are slower than its budget assumes. Not a re-test; a timeout question |
+| [#523](https://github.com/emkey1/ish-AOK/issues/523) | yay (AUR helper) fails on Arch ARM64 | **closed 2026-08-22** -- the reported `context: signal: terminated` did not appear in 38 runs across the app and the CLI build, including the reporter's own `yay-bin 13.0.1`; see *Closed during the 550 cycle*. The `unexpected EOF` failure that DOES occur is a different bug and is still open -- see *Diagnosed, not fixed* |
 | [#527](https://github.com/emkey1/ish-AOK/issues/527) | pikaur fails on Arch ARM64 | blocked on `systemd-run` |
 | [#541](https://github.com/emkey1/ish-AOK/issues/541) | ptraceomatic does not run: tracee reaped during setup | **fixed 2026-08-20** -- see *Closed during the 550 cycle* |
 | [#542](https://github.com/emkey1/ish-AOK/issues/542) | JVM/HotSpot crashes on aarch64, "Field too big for insn" | reporter suspects upstream OpenJDK |
