@@ -278,6 +278,21 @@ owner's live head. That run is what is outstanding.
   watched word's own value back over itself and says so loudly if no trap
   follows. Run it before believing a quiet watch run.
 
+**Two things in kernel/futex.c that came out of this, one of them a fix.**
+
+- `futex_wait_is_live()` -- `struct futex_wait` carries a magic set when it is
+  built and cleared the instant it leaves the queue, and all three wake loops
+  check it. A stale entry is now dequeued and reported instead of notified,
+  which is both safer than the use-after-free and a direct, high-rate test of
+  whether one ever happens. One compare on the wake path.
+- `ISH_FUTEX_HEAP_WAIT=1` -- puts the object on the heap and deliberately never
+  frees it (about 27 MB of RSS over an 8-second run), so a wake arriving after
+  the waiter's frame is gone lands somewhere harmless. **This is an A/B, not a
+  fix**: run it against the same binary with the knob off, under the same load,
+  for several hundred runs each. Crash gone with it on and still ~1.5% with it
+  off means the stack lifetime is the cause and the real fix is a managed
+  lifetime for that object. Crash surviving means the theory is dead.
+
 **Do not write a tier0 failure of this test off as "the known flake" any
 more.** That reflex is what kept this one invisible.
 
