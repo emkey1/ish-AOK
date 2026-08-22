@@ -518,6 +518,24 @@ extern void (*halt_hook)(int status);
 // Will ensure that the -pid part always fits, then will fit as much of comm as possible.
 void update_thread_name(void);
 
+// ISH_PTHREAD_CANARY=1 only: leave the host-struct-_pthread watch table.
+// Must be called on a task thread immediately before it calls pthread_exit --
+// see the canary block in kernel/task.c.
+void task_pthread_canary_unregister(void);
+
+// ISH_PTHREAD_CANARY=1 only: validate this thread's own __cleanup_stack and
+// name `where` if it has gone bad. A no-op with the knob off.
+void task_pthread_canary_check_self(const char *where);
+void task_pthread_canary_check_self_at(const char *where, bool must_be_empty);
+
+// ISH_PTHREAD_CANARY=1 only: record where this thread's 24 KB `struct tlb`
+// stack local lives, so a bad stack address can be reported relative to it.
+void task_pthread_canary_note_tlb(const void *tlb, unsigned long size);
+
+// ISH_PTHREAD_CANARY=1 only: report a siglongjmp that is about to abandon a
+// live pthread cleanup record. See the definition in kernel/task.c.
+void task_pthread_canary_note_unwind(void);
+
 // To collect statics on which tasks are blocked we need to proccess areas
 // of code which could block our task (e.g reads or writes). Before executing
 // of functions which can block the task, we mark our task as blocked and

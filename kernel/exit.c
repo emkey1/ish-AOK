@@ -448,7 +448,14 @@ noreturn void do_exit(struct task *task, int status) {
     if (destroy_unlinked_task)
         task_destroy_unlinked(task, 1);
     
-EXIT:pthread_exit(NULL);
+EXIT:
+    // The crash this instruments is a fault inside the pthread_exit below, so
+    // this is the one check with no race in it at all: the thread validates
+    // its own struct on its own stack, an instant before handing it to
+    // libpthread. ISH_PTHREAD_CANARY only; a no-op otherwise.
+    task_pthread_canary_check_self("in do_exit, immediately before pthread_exit");
+    task_pthread_canary_unregister();
+    pthread_exit(NULL);
 }
 
 // Exits all tasks in the current task's thread group and then calls do_exit to terminate

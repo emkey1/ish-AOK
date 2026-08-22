@@ -228,6 +228,7 @@ void sigusr1_handler(int UNUSED(sig)) {
         __atomic_store_n(&current->wait_interrupted, true, __ATOMIC_RELEASE);
     if (should_unwind) {
         should_unwind = false;
+        task_pthread_canary_note_unwind();
         siglongjmp(unwind_buf, 1);
     }
 }
