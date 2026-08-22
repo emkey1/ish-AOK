@@ -1159,6 +1159,49 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     return err;
 }
 
+// A native program (kernel/native.h) replaces this process image exactly as an
+// ELF would, and everything below format_exec that is NOT about loading an
+// image applies to it just the same. That half used to be skipped altogether,
+// because the native branch returns before reaching any of it.
+//
+// The descriptor half of the omission was a deadlock. A parent that wants to
+// know whether its child's exec worked hands the child a close-on-exec pipe
+// and reads it: EOF means the exec happened, four bytes of errno mean it did
+// not. apt's pager handshake is exactly that, and `apt search maria` wedged
+// the whole app whenever the pager it found resolved to SmallCLUE's native
+// less -- the write end survived an exec that never closed it, so apt sat on a
+// four-byte read while the pager sat on the stdin apt had not begun writing.
+// Neither could move. See docs/TODO.md.
+static void exec_apply_native_process_state(void) {
+    // cloexec: the trigger above, and the reason this function exists.
+    fdtable_do_cloexec(current->files);
+
+    // Caught signals go back to default across an exec; ignored ones stay
+    // ignored. Skipping this left a native program running with the previous
+    // program's handler addresses -- which, since no image was loaded over it,
+    // still pointed into code that is no longer what is executing.
+    lock(&current->sighand->lock, 0);
+    for (int sig = 0; sig < NUM_SIGS; sig++) {
+        struct sigaction_ *action = &current->sighand->action[sig];
+        if (action->handler != SIG_IGN_)
+            action->handler = SIG_DFL_;
+    }
+    current->altstack = 0;
+    current->altstack_size = 0;
+    unlock(&current->sighand->lock);
+    // The shim keeps native code's own view of the dispositions beside the
+    // guest table (kernel/native_libc.c). Resetting one and not the other
+    // would leave the two disagreeing.
+    native_sigtable_discard(current);
+
+    current->did_exec = true;
+    current->keepcaps = false;
+    // A vfork parent is released by its child's exec, not by its exit. Without
+    // this it stayed blocked for the native program's whole run -- which is
+    // how glibc's posix_spawn waits, so it is not an exotic path.
+    vfork_notify(current);
+}
+
 int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) {
     struct fd *fd = generic_open(file, O_RDONLY, 0);
     if (IS_ERR(fd))
@@ -1208,7 +1251,12 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
                     native_argv, native_envp);
             free(native_argv);
             free(native_envp);
-            return perr;
+            if (perr < 0)
+                return perr;
+            // Only once the record is safely taken: everything below commits
+            // the exec, and there is no undoing a closed descriptor.
+            exec_apply_native_process_state();
+            return 0;
         }
     }
 
@@ -1298,6 +1346,10 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     current->altstack = 0;
     current->altstack_size = 0;
     unlock(&current->sighand->lock);
+    // And the shim's own copy of the dispositions, for a task whose previous
+    // image was a native program. A no-op for every other task, which never
+    // allocates one.
+    native_sigtable_discard(current);
 
     current->did_exec = true;
     current->keepcaps = false;

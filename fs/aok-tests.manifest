@@ -55,6 +55,7 @@ fcntl_ofd.c
 fcntl_setown.c
 at_empty_path.c
 at_absolute_path.c
+native_exec_cloexec.c
 utimensat_fd.c
 copy_file_range.c
 name_to_handle_at.c
