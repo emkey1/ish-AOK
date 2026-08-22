@@ -14,11 +14,49 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(__linux__)
 #include <sys/event.h>
+#endif
 #include <time.h>
 
 #include "kernel/native_kqueue.h"
 #include "kernel/native_libc.h"
+
+// kqueue is a BSD interface, and this front end exists for exactly one reason:
+// a native program is HOST code, so on Apple platforms a runtime built for
+// Apple (mio, and therefore tokio) reaches for kqueue and would otherwise get
+// the host's event queue. A Linux host has no kqueue for anything to reach
+// for -- a runtime built there uses epoll, which needs no interception -- so
+// the whole translation layer is Darwin-only, and the Linux build gets stubs
+// that keep the four symbols linkable rather than a second implementation of
+// something nothing calls.
+#if defined(__linux__)
+
+int nlibc_kqueue(void) {
+    errno = ENOSYS;
+    return -1;
+}
+
+int nlibc_kevent(int kq, const void *changelist, int nchanges,
+                 void *eventlist, int nevents, const void *timeout) {
+    (void) kq; (void) changelist; (void) nchanges;
+    (void) eventlist; (void) nevents; (void) timeout;
+    errno = ENOSYS;
+    return -1;
+}
+
+// No descriptor here is ever a queue, so close() has nothing to reclaim and
+// dup() has nothing to alias.
+bool nlibc_kqueue_close_hook(int fd) {
+    (void) fd;
+    return false;
+}
+
+void nlibc_kqueue_dup_hook(int oldfd, int newfd) {
+    (void) oldfd; (void) newfd;
+}
+
+#else
 
 // One registration. kqueue is keyed by (ident, filter), so the same descriptor
 // can appear twice with different udata -- which is exactly what epoll cannot
@@ -551,3 +589,5 @@ int nlibc_kevent(int kq, const void *changelist, int nchanges,
     kq_release(q);
     return out;
 }
+
+#endif  // !__linux__
