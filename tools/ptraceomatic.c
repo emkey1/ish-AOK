@@ -66,6 +66,20 @@ static bool trap_wanted(void) {
     return want == 1;
 }
 
+// A syscall the interception switch does not know about still gets its return
+// value synced, so a missing case is invisible until the guest reads the buffer
+// the syscall was supposed to fill -- at which point the report blames whatever
+// innocent instruction did the reading. This trace names the syscalls that went
+// through with no memory sync, which is where to look first.
+static bool trace_syscalls(void) {
+    static int want = -1;
+    if (want < 0) {
+        const char *v = getenv("PTRACEOMATIC_TRACE_SYSCALLS");
+        want = (v != NULL && *v != '\0' && strcmp(v, "0") != 0) ? 1 : 0;
+    }
+    return want == 1;
+}
+
 static inline int step(int pid) {
     trycall(ptrace(PTRACE_SINGLESTEP, pid, NULL, 0), "ptrace step");
     int status;
@@ -353,6 +367,7 @@ static void step_tracing(struct cpu_state *cpu, struct tlb *tlb, int pid, int se
     // step fake cpu
     bool is_amd64 = current->abi == GUEST_ABI_AMD64;
     cpu->tf = 1;
+    uint64_t pre_eip = is_amd64 ? cpu->amd64_rip : cpu->eip;
     int interrupt = cpu_run_to_interrupt(cpu, tlb);
     // hack to clean up before the exit syscall
     if (interrupt == INT_SYSCALL &&
@@ -363,8 +378,37 @@ static void step_tracing(struct cpu_state *cpu, struct tlb *tlb, int pid, int se
             exit(1);
         }
     }
-    if (interrupt != INT_DEBUG)
+    if (interrupt != INT_DEBUG) {
         handle_interrupt(interrupt);
+        // A fault the emulator resolves itself -- growing the stack, faulting in
+        // a page -- leaves the faulting instruction UN-RETIRED, to be retried on
+        // the next run. Stepping the real CPU anyway puts the two one instruction
+        // out of phase, and the next compare then blames whatever innocent
+        // instruction happens to be next. The syscall interrupts are not this
+        // case: handle_interrupt runs the syscall and advances past it, and the
+        // interception below needs to see the int $0x80 in the real process.
+        int syscall_int = is_amd64 ? INT_AMD64_SYSCALL : INT_SYSCALL;
+        uint64_t post_eip = is_amd64 ? cpu->amd64_rip : cpu->eip;
+        if (interrupt != syscall_int && post_eip == pre_eip) {
+            // If handle_interrupt cannot make progress, holding the real CPU
+            // back forever turns a false divergence report into a silent hang,
+            // which is worse. Bound it and say so instead.
+            static uint64_t held_eip;
+            static int held_times;
+            held_times = (pre_eip == held_eip) ? held_times + 1 : 0;
+            held_eip = pre_eip;
+            if (held_times >= 16) {
+                reportf("ptraceomatic: fake cpu stuck on interrupt %d at eip %#llx, "
+                        "not retiring it after %d attempts\n",
+                        interrupt, (unsigned long long) pre_eip, held_times);
+                exit(1);
+            }
+            if (trace_syscalls())
+                reportf("ptraceomatic: fake cpu took interrupt %d at eip %#llx without retiring it; "
+                        "holding the real cpu back a step\n", interrupt, (unsigned long long) pre_eip);
+            return;
+        }
+    }
 
     // step real cpu
     // intercept cpuid, rdtsc, and int $0x80, though
@@ -402,6 +446,7 @@ static void step_tracing(struct cpu_state *cpu, struct tlb *tlb, int pid, int se
     } else if (!is_amd64 && (inst & 0xff) == 0xcd && ((inst & 0xff00) >> 8) == 0x80) {
         // int $0x80, intercept the syscall unless it's one of a few actually important ones
         dword_t syscall_num = (dword_t) regs.rax;
+        bool synced_memory = true;
         switch (syscall_num) {
             // put syscall result from fake process into real process
             case 3: // read
@@ -469,6 +514,9 @@ static void step_tracing(struct cpu_state *cpu, struct tlb *tlb, int pid, int se
             case 186: // sigaltstack
                 if (regs.rcx != 0) pt_copy(pid, regs.rcx, sizeof(struct stack_t_));
                 break;
+            case 76:  // old_getrlimit
+            case 191: // ugetrlimit
+                pt_copy(pid, regs.rcx, sizeof(struct rlimit32_)); break;
             case 195: // stat64
             case 196: // lstat64
             case 197: // fstat64
@@ -510,7 +558,14 @@ static void step_tracing(struct cpu_state *cpu, struct tlb *tlb, int pid, int se
             case 243: // set_thread_area
                 //regs.rax = cpu->eax;
                 goto do_step;
+
+            default:
+                synced_memory = false;
+                break;
         }
+        if (trace_syscalls())
+            reportf("ptraceomatic: syscall %u -> %#x%s\n", (unsigned) syscall_num,
+                    (unsigned) cpu->eax, synced_memory ? "" : "   [no memory sync]");
         regs.rax = cpu->eax;
         regs.rip += 2;
     } else {

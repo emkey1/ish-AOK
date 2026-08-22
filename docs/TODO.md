@@ -216,41 +216,95 @@ than a timeout, get a core or attach before it goes.
 **Do not write a tier0 failure of this test off as "the known flake" any
 more.** That reflex is what kept this one invisible.
 
-### ptraceomatic reports a real divergence at instruction 4175
-
-Found 2026-08-20, the moment the tool was working again. Not a false positive
-like the two flag-mask gaps fixed alongside it -- those were the emulator being
-right and the tool being wrong. This one is a register:
-
-    ptraceomatic: emulated and real CPU diverged after 4175 instruction(s)
-      last instruction at eip 0x8058b8b, now at 0x8058b8f
-      bytes at 0x8058b8b: 8b 54 24 14 b8 00 40 00 00 39 c2 0f
-    edx: real 0x1, fake 0x800000
-
-`8b 54 24 14` is `mov edx, [esp+0x14]`, so the two CPUs read different values
-from the same stack slot: the divergence is in MEMORY, and happened earlier
-than the instruction that revealed it. Reproduce with a static i386 binary on a
-Linux x86_64 host (camd):
-
-    ./build/tools/ptraceomatic -r / /tmp/hi
-
-**Before treating it as an emulator bug, rule out the honest alternatives.**
-ptraceomatic runs the same program twice -- once under ptrace, once in the
-emulator -- and they are not identical processes. Anything whose value legitimately
-differs between them will show up exactly like this:
-
-- a syscall returning host-specific data (pids, times, addresses) that
-  step_tracing does not synchronise,
-- auxv, the initial stack layout, or environment differing between the two,
-- ASLR, though start_tracee disables it with ADDR_NO_RANDOMIZE.
-
-0x800000 looks like a size or an address constant and 0x1 like a count, at
-about the point libc start-up is settling in, so the auxv/stack-layout
-explanation deserves checking first. **Next step** is to find where that stack
-slot was last written rather than where it was read -- the tool's new report
-names the reading instruction, which is a start and not the answer.
-
 ## Closed during the 550 cycle
+
+### ptraceomatic's divergence at 4175 -- NOT AN EMULATOR BUG, FIXED 2026-08-22
+
+The emulator was right and the tool was wrong, for the third time in this
+tool's short working life. `edx: real 0x1, fake 0x800000` -- and 0x800000 is
+8388608, which is exactly camd's `ulimit -s`. The correct answer was the one
+the emulator had.
+
+**What it actually was.** ptraceomatic does not let the real process execute
+`int $0x80` at all. It intercepts the instruction, `pt_copy`s the emulated
+process's output buffer into the tracee, injects the emulated return value into
+eax, and steps the eip past it. That is what the big switch in `step_tracing`
+is for. A syscall with no case in that switch still gets its **return value**
+synced -- the code falls out of the switch into `regs.rax = cpu->eax` -- but
+nothing writes the **memory** the syscall was supposed to fill. The real
+process keeps whatever was already there.
+
+Syscall 191, `ugetrlimit`, had no case. glibc's `__libc_early_init` calls
+`getrlimit(RLIMIT_STACK, &rlim)` and then reads `rlim.rlim_cur` off the stack
+four instructions later; the emulated process had 0x800000 written into it and
+the real one still had uninitialised stack, which happened to be 1. `8b 54 24
+14` was innocent, as the entry suspected -- but the write it was missing had
+never been performed in the first place, rather than performed differently.
+
+Both variants were missing, 191 and 76 (`old_getrlimit`), and both write a
+`struct rlimit32_` through the address in ECX. Two lines fix it.
+
+**The honest alternatives, ruled out rather than assumed away:**
+
+- *auxv, initial stack, environment.* Ruled out by construction, not by
+  argument: `prepare_tracee` calls `transplant_vdso` and then `pt_copy`s the
+  emulator's entire initial stack page range into the tracee, and sets the
+  tracee's esp to the emulator's. argv, envp and auxv in the real process are
+  the emulator's own bytes. This was the entry's first suspect and it was the
+  wrong one.
+- *ASLR.* `start_tracee` sets ADDR_NO_RANDOMIZE, and the divergence reproduces
+  at exactly instruction 4175 across two different binaries built minutes
+  apart -- 0x8058b8b in one, 0x805f2cb in the other, same four bytes, same
+  values. Nothing random survives that.
+- *A syscall returning host-specific data the tool does not synchronise.* This
+  is the right family, but the direction is the reverse of the guess. The
+  problem was never that the real process saw a host value the emulator could
+  not know. It was that the emulator's answer never reached the real process.
+  The tool's design means host-specific results are *already* handled: watch
+  `readlinkat` on /proc/self/exe, where both CPUs agree on the emulated answer
+  because case 305 copies it across.
+
+**Evidence, five independent lines.** The reading instruction is four
+instructions after the `call __new_getrlimit` that fills the slot;
+`__new_getrlimit` issues `mov $0xbf,%eax` = 191; 191 is absent from the switch;
+the fake value equals the host's real RLIMIT_STACK and the real value does not;
+and removing the case reproduces the divergence exactly while adding it back
+removes it. A new `PTRACEOMATIC_TRACE_SYSCALLS=1` prints the same conclusion
+directly -- `syscall 191 -> 0   [no memory sync]` -- which is the diagnostic
+that would have found this in minutes, so it is now part of the tool.
+
+**The second bug it was hiding.** With 4175 fixed the run got 416 instructions
+further and stopped again, at `call *%gs:0x10` in `_dl_get_origin`, with esp
+off by exactly 4. `step_tracing` runs the fake CPU, and on any interrupt other
+than INT_DEBUG hands it to `handle_interrupt` -- then steps the real CPU
+regardless. But a fault the emulator resolves itself, here an INT_GPF growing
+the stack after `sub $0x101c,%esp`, leaves the faulting instruction
+**un-retired**, to be retried on the next run. The real CPU had executed the
+`call` and pushed a return address; the fake one had not moved. One instruction
+out of phase, and the next compare blames whichever instruction is next. The
+fix holds the real CPU back whenever the fake CPU takes a non-syscall interrupt
+without advancing eip, bounded at 16 consecutive holds so a genuinely stuck
+emulator reports instead of hanging.
+
+**Where it leaves the tool.** A static i386 glibc binary now runs start to
+finish with no divergence at all. Verified on four binaries, twice each, exit
+codes matching a native run: an empty `main`, /tmp/hi, a witness printing
+getrlimit's result, and a syscall-heavy one doing uname, readlink, a 1MB
+malloc-and-touch, and file I/O. An edge-case binary calling 191 and 76 directly
+matches native on all four paths including the NULL-buffer EFAULT and the
+EINVAL that must leave the buffer untouched. Both compilers build it clean.
+
+amd64 guests still die in setup with SIGSEGV -- unchanged by any of this, and
+consistent with the comment in `prepare_tracee` saying vdso and stack sync for
+amd64 is phase-2 work.
+
+**The general lesson for this tool.** Only four syscalls in a whole start-up
+were intercepted rather than executed: 258 `set_tid_address`, 311
+`set_robust_list`, 386 `rseq`, and 191. The first three write no guest memory,
+so exactly one of the four needed a case and exactly that one was missing. When
+ptraceomatic next reports a memory divergence, run it with
+PTRACEOMATIC_TRACE_SYSCALLS=1 and read the `[no memory sync]` lines before
+reading the emulator.
 
 ### CI was red for the whole 550 cycle -- FIXED 2026-08-22
 
@@ -831,6 +885,8 @@ define -- AF after a shift, and everything after DIV/IDIV. Both were gaps in
 undefined_flags_mask rather than emulator bugs, which is exactly the kind of
 false positive that would have made the restored tool useless. With them fixed
 it reaches instruction 4175 before reporting something real. `796a9c179`.
+That one turned out to be a third false positive of the same kind -- see
+"ptraceomatic's divergence at 4175" above.
 
 ### `md`'s word boundaries come from the HTML, not from letter case -- FIXED 2026-08-20
 
