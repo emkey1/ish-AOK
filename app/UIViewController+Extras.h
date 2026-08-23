@@ -20,6 +20,20 @@ NS_ASSUME_NONNULL_BEGIN
 // alert is not presented as a popover (e.g. iPhone, or a plain alert).
 - (void)anchorPopoverForAlertController:(UIAlertController *)alertController toSource:(nullable id)source;
 
+// Whether pushing a sub-page from here will actually give the user a way back.
+//
+// A non-nil navigationController is NOT enough. -navigationController walks the
+// PARENT chain, so a bare child view controller inherits its host's navigation
+// controller -- and Workspace mode's host hides its navigation bar
+// (WorkspaceViewController.m, ISHCreateWorkspaceNavigationControllerForTool).
+// Pushing there succeeds and strands the user: no chevron, no title, and the
+// interactive pop gesture does not fire while the bar is hidden (measured --
+// isEnabled still reads YES, so do not trust that flag).
+//
+// Callers that present a sub-page should branch on this rather than on
+// `self.navigationController != nil`, and present modally when it is NO.
+@property (nonatomic, readonly) BOOL ish_canPushSubpage;
+
 @end
 
 NS_ASSUME_NONNULL_END

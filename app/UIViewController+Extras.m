@@ -15,6 +15,11 @@
     [self presentViewController:alert animated:YES completion:nil];
 }
 
+- (BOOL)ish_canPushSubpage {
+    UINavigationController *nav = self.navigationController;
+    return nav != nil && !nav.navigationBarHidden;
+}
+
 - (void)anchorPopoverForAlertController:(UIAlertController *)alertController toSource:(id)source {
     UIPopoverPresentationController *popover = alertController.popoverPresentationController;
     if (popover == nil)

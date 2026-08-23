@@ -809,13 +809,36 @@ static NSString *ISHLLMModelsEndpoint(void) {
     return [base stringByAppendingString:@"/models"];
 }
 
+@interface UINavigationController (ISHLLMSettingsDismiss)
+- (void)ish_dismissLLMSettings;
+@end
+
 static void ISHConfigureLLMSettingsNavigationController(UINavigationController *navigationController) {
     if (@available(iOS 13.0, *)) {
         navigationController.modalPresentationStyle = UIModalPresentationFormSheet;
     } else {
         navigationController.modalPresentationStyle = UIModalPresentationPageSheet;
     }
+    // A modal root has no back button -- it is the root -- so it needs its own
+    // dismiss, and a swipe-down nobody knows about does not count. Every LLM
+    // modal presentation funnels through here, so installing it once covers
+    // all four call sites. Only when the root has not already provided one:
+    // LLMSettingsViewController and LLMChatSessionListViewController do.
+    UIViewController *root = navigationController.viewControllers.firstObject;
+    if (root != nil && root.navigationItem.leftBarButtonItem == nil) {
+        root.navigationItem.leftBarButtonItem =
+            [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                          target:navigationController
+                                                          action:@selector(ish_dismissLLMSettings)];
+    }
 }
+
+@implementation UINavigationController (ISHLLMSettingsDismiss)
+- (void)ish_dismissLLMSettings {
+    UIViewController *presenter = self.presentingViewController;
+    [(presenter ?: self) dismissViewControllerAnimated:YES completion:nil];
+}
+@end
 
 static NSArray<NSDictionary<NSString *, NSString *> *> *ISHLLMProviderPresets(void) {
     return @[
@@ -3027,12 +3050,16 @@ static NSString *ISHLLMShortenedButtonTitle(NSString *text, NSUInteger limit) {
 - (void)showLLMSettings:(id)sender {
     (void) sender;
     UIViewController *settingsViewController = ISHCreateLLMSettingsViewController();
-    if (self.navigationController != nil) {
+    // NOT `navigationController != nil`. In Workspace mode the chat is a bare
+    // child of a host whose navigation bar is hidden, so it INHERITS that
+    // navigation controller -- pushing succeeds and leaves the user with no
+    // chevron, no title, and no working pop gesture. See -ish_canPushSubpage.
+    if (self.ish_canPushSubpage) {
         [self.navigationController pushViewController:settingsViewController animated:YES];
     } else {
         UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:settingsViewController];
         ISHConfigureLLMSettingsNavigationController(navigationController);
-        [self presentViewController:navigationController animated:YES completion:nil];
+        [[self ish_presentationViewController] presentViewController:navigationController animated:YES completion:nil];
     }
 }
 
@@ -5866,7 +5893,7 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
     if (indexPath.section == [self _llmSectionIndex]) {
         if (indexPath.row == 1) {
             UIViewController *settingsViewController = ISHCreateLLMSettingsViewController();
-            if (self.navigationController != nil) {
+            if (self.ish_canPushSubpage) {
                 [self.navigationController pushViewController:settingsViewController animated:YES];
             } else {
                 UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:settingsViewController];
