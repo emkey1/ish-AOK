@@ -436,6 +436,39 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     }];
 }
 
+// "notes.txt" -> "notes copy.txt", then "notes copy 2.txt". Picked against the
+// names already on screen, so it does not silently overwrite a sibling -- the
+// bridge's copy has no O_EXCL and would happily clobber one.
+- (NSString *)duplicateNameFor:(ISHGuestFileItem *)item {
+    NSString *ext = item.name.pathExtension;
+    NSString *base = item.name.stringByDeletingPathExtension;
+    NSMutableSet<NSString *> *taken = [NSMutableSet set];
+    for (ISHGuestFileItem *sibling in _items)
+        [taken addObject:sibling.name];
+    for (NSUInteger n = 1; n < 1000; n++) {
+        NSString *stem = (n == 1) ? [base stringByAppendingString:@" copy"]
+                                  : [NSString stringWithFormat:@"%@ copy %lu", base, (unsigned long) n];
+        NSString *candidate = ext.length > 0 ? [stem stringByAppendingPathExtension:ext] : stem;
+        if (![taken containsObject:candidate])
+            return candidate;
+    }
+    return [base stringByAppendingFormat:@" copy %@", [NSUUID UUID].UUIDString];
+}
+
+- (void)duplicateItem:(ISHGuestFileItem *)item {
+    NSString *destination = [[item.guestPath stringByDeletingLastPathComponent]
+                             stringByAppendingPathComponent:[self duplicateNameFor:item]];
+    __weak typeof(self) weakSelf = self;
+    [[ISHGuestFileBridge sharedBridge] copyItemAtGuestPath:item.guestPath
+                                              toGuestPath:destination
+                                               completion:^(BOOL ok, NSError *error) {
+        if (!ok)
+            [weakSelf presentError:error title:@"Couldn't Duplicate"];
+        else
+            [weakSelf reload];
+    }];
+}
+
 - (void)promptRenameItem:(ISHGuestFileItem *)item {
     __weak typeof(self) weakSelf = self;
     [self promptForName:@"Rename"
@@ -692,6 +725,14 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
                                                image:[UIImage systemImageNamed:@"pencil"]
                                           identifier:nil
                                              handler:^(UIAction *action) { [weakSelf promptRenameItem:item]; }]];
+        if (item.kind == ISHGuestFileKindRegular && !item.isSymlink) {
+            // Regular files only: the bridge's copy does not do directories,
+            // and offering a verb that fails is worse than not offering it.
+            [actions addObject:[UIAction actionWithTitle:@"Duplicate"
+                                                   image:[UIImage systemImageNamed:@"plus.square.on.square"]
+                                              identifier:nil
+                                                 handler:^(UIAction *action) { [weakSelf duplicateItem:item]; }]];
+        }
         [actions addObject:[UIAction actionWithTitle:@"Get Info"
                                                image:[UIImage systemImageNamed:@"info.circle"]
                                           identifier:nil

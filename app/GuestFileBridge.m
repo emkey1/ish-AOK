@@ -31,7 +31,6 @@ NSString *const ISHGuestFileErrorDomain = @"ISHGuestFileErrorDomain";
 
 static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
 static const NSUInteger kExtractionChunkSize = 1 << 20;  // 1 MiB
-static const NSUInteger kMixedBackendCopyMaxBytes = 256 * 1024 * 1024;
 
 static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     if (S_ISDIR(mode)) return ISHGuestFileKindDirectory;
@@ -1179,21 +1178,189 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         return [NSFileManager.defaultManager copyItemAtURL:srcHost toURL:dstHost error:error];
     }
 
-    NSData *data;
-    if (srcHost != nil) {
-        data = [self readHostRegularFileAtURL:srcHost maxBytes:kMixedBackendCopyMaxBytes error:error];
-    } else {
-        __block NSData *vfsData = nil;
-        __block NSError *vfsError = nil;
-        BOOL hadContext = [self withGuestTaskContext:^{
-            vfsData = [self readGuestFileViaVFS:sourcePath maxBytes:kMixedBackendCopyMaxBytes error:&vfsError];
-        }];
-        if (!hadContext) { if (error) *error = [self notReadyError]; return NO; }
-        data = vfsData;
-        if (data == nil && error) *error = vfsError;
+    // Crossing the realfs/fakefs boundary. This used to read the WHOLE file into
+    // one NSData and then write it, capped at 256 MiB -- so copying a large file
+    // into /AOK/persist spiked memory by the size of the file (a jetsam risk on
+    // a device) and refused outright above the cap. Stream it instead, the same
+    // way extractGuestPathViaVFS: already does.
+    return [self copyStreamingFrom:sourcePath toGuestPath:destinationPath error:error];
+}
+
+// Chunked copy across the realfs/fakefs boundary, atomic at the destination
+// (temp file + rename) and bounded in memory by one chunk regardless of file
+// size. Exactly one side is realfs here; copySync: handled realfs->realfs above
+// with NSFileManager, which already streams.
+- (BOOL)copyStreamingFrom:(NSString *)sourcePath toGuestPath:(NSString *)destinationPath error:(NSError **)error {
+    NSURL *srcHost = [self hostURLForRealfsGuestPath:sourcePath];
+    NSURL *dstHost = [self hostURLForRealfsGuestPath:destinationPath];
+
+    __block BOOL ok = NO;
+    __block NSError *failure = nil;
+
+    BOOL hadContext = [self withGuestTaskContext:^{
+        FILE *hostIn = NULL;
+        struct fd *guestIn = NULL;
+        FILE *hostOut = NULL;
+        struct fd *guestOut = NULL;
+        NSString *guestTmpPath = nil;
+        NSString *guestDestPath = destinationPath;  // symlink-resolved below; the parameter is captured, so not reassigned
+        NSURL *hostTmpURL = nil;
+        char *buffer = NULL;
+
+        // ---- source
+        if (srcHost != nil) {
+            hostIn = fopen(srcHost.fileSystemRepresentation, "rb");
+            if (hostIn == NULL) {
+                failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Cannot open source file"];
+                goto done;
+            }
+        } else {
+            guestIn = generic_open(sourcePath.fileSystemRepresentation, O_RDONLY_ | O_NONBLOCK_, 0);
+            if (IS_ERR(guestIn)) {
+                failure = [self errorWithGuestErrno:(long)PTR_ERR(guestIn) message:@"Cannot open source file"];
+                guestIn = NULL;
+                goto done;
+            }
+            if (S_ISDIR(guestIn->type)) {
+                failure = [self errorWithCode:ISHGuestFileBridgeErrorIsDirectory message:@"That path is a directory"];
+                goto done;
+            }
+            if (!S_ISREG(guestIn->type)) {
+                failure = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+                goto done;
+            }
+        }
+
+        // ---- destination temp, beside the target so the rename stays on one filesystem
+        if (dstHost != nil) {
+            [NSFileManager.defaultManager createDirectoryAtURL:dstHost.URLByDeletingLastPathComponent
+                                  withIntermediateDirectories:YES attributes:nil error:NULL];
+            NSString *tmpName = [NSString stringWithFormat:@".%@.guestfilebridge-tmp",
+                                 dstHost.lastPathComponent];
+            hostTmpURL = [dstHost.URLByDeletingLastPathComponent URLByAppendingPathComponent:tmpName];
+            [NSFileManager.defaultManager removeItemAtURL:hostTmpURL error:NULL];
+            hostOut = fopen(hostTmpURL.fileSystemRepresentation, "wb");
+            if (hostOut == NULL) {
+                failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Cannot create destination file"];
+                goto done;
+            }
+        } else {
+            // Follow a symlink destination and inherit an existing file's mode,
+            // matching -writeDataViaVFS:.
+            NSString *target = [self resolvedGuestWriteTargetForPath:destinationPath] ?: destinationPath;
+            int mode = 0644;
+            struct statbuf st;
+            memset(&st, 0, sizeof(st));
+            if (generic_statat(AT_PWD, target.fileSystemRepresentation, &st, AT_SYMLINK_NOFOLLOW_) >= 0) {
+                if (!S_ISREG(st.mode)) {
+                    failure = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+                    goto done;
+                }
+                mode = (int)(st.mode & 07777);
+            }
+            guestTmpPath = [target.stringByDeletingLastPathComponent stringByAppendingPathComponent:
+                            [NSString stringWithFormat:@".%@.guestfilebridge-tmp", target.lastPathComponent]];
+            generic_unlinkat(AT_PWD, guestTmpPath.fileSystemRepresentation);  // usually ENOENT
+            guestOut = generic_open(guestTmpPath.fileSystemRepresentation,
+                                    O_WRONLY_ | O_CREAT_ | O_TRUNC_, mode);
+            if (IS_ERR(guestOut)) {
+                failure = [self errorWithGuestErrno:(long)PTR_ERR(guestOut) message:@"Cannot create destination file"];
+                guestOut = NULL;
+                goto done;
+            }
+            guestDestPath = target;   // rename onto what we actually sized/moded
+        }
+
+        buffer = malloc(kExtractionChunkSize);
+        if (buffer == NULL) {
+            failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Out of memory"];
+            goto done;
+        }
+
+        while (true) {
+            ssize_t n;
+            if (hostIn != NULL) {
+                size_t got = fread(buffer, 1, kExtractionChunkSize, hostIn);
+                if (got == 0) {
+                    if (ferror(hostIn)) {
+                        failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Failed reading source file"];
+                        goto done;
+                    }
+                    break;  // clean EOF
+                }
+                n = (ssize_t)got;
+            } else {
+                n = guestIn->ops->read(guestIn, buffer, kExtractionChunkSize);
+                if (n < 0) {
+                    failure = [self errorWithGuestErrno:(long)n message:@"Failed reading source file"];
+                    goto done;
+                }
+                if (n == 0) break;
+            }
+
+            if (hostOut != NULL) {
+                if (fwrite(buffer, 1, (size_t)n, hostOut) != (size_t)n) {
+                    failure = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Failed writing destination file"];
+                    goto done;
+                }
+            } else {
+                // Short writes are legal; keep pushing the remainder.
+                ssize_t off = 0;
+                while (off < n) {
+                    ssize_t w = guestOut->ops->write(guestOut, buffer + off, (size_t)(n - off));
+                    if (w <= 0) {
+                        failure = [self errorWithGuestErrno:(long)(w < 0 ? w : -_EIO) message:@"Failed writing destination file"];
+                        goto done;
+                    }
+                    off += w;
+                }
+            }
+        }
+
+        // ---- commit
+        if (hostOut != NULL) {
+            fflush(hostOut);
+            fsync(fileno(hostOut));
+            fclose(hostOut);
+            hostOut = NULL;
+            [NSFileManager.defaultManager removeItemAtURL:dstHost error:NULL];
+            NSError *moveError = nil;
+            if (![NSFileManager.defaultManager moveItemAtURL:hostTmpURL toURL:dstHost error:&moveError]) {
+                failure = moveError ?: [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Cannot place destination file"];
+                goto done;
+            }
+            hostTmpURL = nil;
+        } else {
+            if (guestOut->ops->fsync != NULL)
+                guestOut->ops->fsync(guestOut);
+            fd_close(guestOut);
+            guestOut = NULL;
+            int err = generic_renameat(AT_PWD, guestTmpPath.fileSystemRepresentation,
+                                       AT_PWD, guestDestPath.fileSystemRepresentation, 0);
+            if (err < 0) {
+                failure = [self errorWithGuestErrno:err message:@"Cannot place destination file"];
+                goto done;
+            }
+            guestTmpPath = nil;
+        }
+        ok = YES;
+
+    done:
+        free(buffer);
+        if (hostIn != NULL) fclose(hostIn);
+        if (guestIn != NULL) fd_close(guestIn);
+        if (hostOut != NULL) fclose(hostOut);
+        if (guestOut != NULL) fd_close(guestOut);
+        if (hostTmpURL != nil) [NSFileManager.defaultManager removeItemAtURL:hostTmpURL error:NULL];
+        if (guestTmpPath != nil) generic_unlinkat(AT_PWD, guestTmpPath.fileSystemRepresentation);
+    }];
+
+    if (!hadContext) {
+        if (error) *error = [self notReadyError];
+        return NO;
     }
-    if (data == nil) return NO;
-    return [self writeDataSync:data toGuestPath:destinationPath error:error];
+    if (!ok && error) *error = failure ?: [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Copy failed"];
+    return ok;
 }
 
 - (void)removeItemAtGuestPath:(NSString *)guestPath recursive:(BOOL)recursive
