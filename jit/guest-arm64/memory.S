@@ -270,6 +270,48 @@ arm64_crosspage_store:
 
 .text
 
+// DC ZVA, Xt: zero the naturally-aligned ARM64_DCZVA_BYTES-byte block
+// containing the VA in Xt. DCZID_EL0 advertises DZP=0 / BS=4 (jit/gen.c),
+// so the guest is entitled to issue this and expects exactly this block
+// size; it is what glibc's memset and HotSpot's zero_blocks stub emit.
+//
+// Aligning the address down BEFORE write_prep is what makes that macro's
+// crosspage branch dead code: a 64-byte-aligned address has a page offset
+// of at most 0xfc0, which is precisely write_prep's `cmp x9, #(0x1000-64)`
+// bound, so its `b.hi` can never be taken. That is load-bearing, not a
+// nicety — the crosspage buffer (LOCAL_value, jit/frame.h) is 32 bytes,
+// and a 64-byte crosspage access would run off the end of it. The TLB
+// MISS path is very much live, though, so write_bullshit still has to be
+// here.
+//
+// Xt = 31 is XZR, not SP, in this encoding: DC ZVA of address 0 is
+// well-formed and faults like any other unmapped write.
+//
+// Code stream: [rt][orig_ip] — orig_ip is the fault-restart address the
+// segfault paths read from the fixed [_ip, #-8] slot.
+.if ARM64_DCZVA_BYTES != 64
+.error "dc_zva zeroes four 16-byte pairs; ARM64_DCZVA_BYTES must be 64"
+.endif
+.gadget dc_zva
+    ldr x8, [_ip]
+    add _ip, _ip, #16          // rt + trailing orig_ip (fault restart)
+    and x8, x8, #0x1f
+    cmp x8, #31
+    b.eq 1f
+    add x9, _cpu, #CPU_x0
+    ldr x7, [x9, x8, lsl #3]
+    b 2f
+1:  mov x7, #0
+2:  and x7, x7, #-ARM64_DCZVA_BYTES
+    write_prep (ARM64_DCZVA_BYTES*8), dc_zva
+    stp xzr, xzr, [_addr]
+    stp xzr, xzr, [_addr, #16]
+    stp xzr, xzr, [_addr, #32]
+    stp xzr, xzr, [_addr, #48]
+    write_done (ARM64_DCZVA_BYTES*8), dc_zva
+    gret
+    write_bullshit (ARM64_DCZVA_BYTES*8), dc_zva
+
 .macro ldp_gadget name, bits, bytes, ldr_reg1, ldr_reg2
 .gadget \name
     ldr x8, [_ip]

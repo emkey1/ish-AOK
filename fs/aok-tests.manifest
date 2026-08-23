@@ -157,6 +157,7 @@ arm64/stlr_ldar_publish.c
 arm64/ptrace_singlestep.c
 arm64/ands_bcond_fusion.c
 arm64/hle_loop.c
+arm64/dc_zva.c
 riscv64/ptrace_regset.c
 riscv64/jalr_retcache.c
 arm64/ret_retcache.c

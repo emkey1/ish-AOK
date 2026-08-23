@@ -76,6 +76,12 @@ _addr   .req x7
 // crash -- this would have been a rare, unreproducible on-device
 // corruption.
 
+// DC ZVA block size in bytes. The guest is told this via DCZID_EL0.BS,
+// which gen_step_arm64 (jit/gen.c) reports as log2 of the block size in
+// 4-byte words — 64 bytes == BS 4. Change one and the other is wrong, so
+// the dc_zva gadget (memory.S) asserts the value it was written for.
+#define ARM64_DCZVA_BYTES 64
+
 .extern jit_ret
 .extern jit_exit
 .extern arm64_handle_read_miss

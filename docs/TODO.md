@@ -209,6 +209,85 @@ more.** That reflex is what kept this one invisible.
 
 ## Closed during the 550 cycle
 
+### #542: the JVM will not start on aarch64 -- FIXED 2026-08-23, and it was one bit
+
+`apk add openjdk21` then `java -version` on an aarch64 guest died before any
+Java code ran:
+
+    # Internal Error (assembler_aarch64.hpp:245), pid=947,
+    # guarantee(val < (1ULL << nbits)) failed: Field too big for insn
+
+The reporter had already ruled out the two usual suspects -- it failed
+identically under `-Xint` and `-Xshare:off`, so neither the JIT nor
+class-data-sharing. Reproduces exactly on the CLI build against
+`build/alpine-arm64-test`.
+
+**The value HotSpot could not encode was -1, and `hs_err` says so.** That file
+prints a register dump, and `R1=0x00000000ffffffff` is the `unsigned val`
+argument of `Instruction_aarch64::patch`. Alpine ships `libjvm.so` stripped, but
+the frame offsets in the report are enough: disassembling `libjvm.so+0x8af230`
+(the caller) shows `sub w1, w21, #1` / `bl <encode_logical_immediate>` /
+`patch(insn, val, 22, 10)` against an instruction word of `0x92000000`. Bits
+22:10 of an `AND (immediate)` are the N:immr:imms logical immediate, and
+`encode_logical_immediate` returns `0xffffffff` for an immediate that cannot be
+encoded. So: `and Xd, Xn, #(w21 - 1)` where `w21 - 1` came out unencodable. The
+same GOT slot is written in `VM_Version::get_os_cpu_info`, right after `mrs x3,
+DCZID_EL0` -- `w21` is `VM_Version::_zva_length`, and the caller is
+`MacroAssembler::zero_dcache_blocks`.
+
+**AOK reported DCZID_EL0 = 0x10 -- DZP=1, "DC ZVA prohibited at EL0".** That was
+a deliberate choice made to avoid implementing DC ZVA: `jit/gen.c` returned the
+constant, and the instruction itself fell through to SIGILL. HotSpot reads that
+bit, leaves `_zva_length` at its 0 initializer, and then goes on generating
+`zero_blocks` anyway, because `UseBlockZeroing` is a separate flag and defaults
+on. `andr(tmp, tmp, zva_length - 1)` is `and Xd, Xn, #0xffffffffffffffff`, and a
+mask of all ones is one of the two values the AArch64 logical-immediate encoding
+cannot represent. The JVM died in its own assembler.
+
+Confirmed before changing anything -- `java -XX:-UseBlockZeroing -version`
+starts cleanly on the unmodified build.
+
+**Linux enables DC ZVA for userspace** -- `SCTLR_EL1.DZE` is set in the kernel's
+SCTLR_EL1 init, so DZP reads 0 at EL0 on every aarch64 Linux box. DZP=1 was a
+state the JVM's target platform does not present, and HotSpot is not much at
+fault for never having been tested against it. That makes this ours rather than
+upstream's: AOK was describing a machine that does not exist. The fix is to
+stop:
+
+* `DCZID_EL0` now reads `0x4` -- DZP=0, BS=4, a 64-byte block, which is what
+  every real AArch64 core reports.
+* `DC ZVA` gets a real gadget (`gadget_arm64_dc_zva`, `jit/guest-arm64/
+  memory.S`): align the operand down, one `write_prep`, four `stp xzr, xzr`.
+
+Aligning down **before** `write_prep` is load-bearing rather than tidy. A
+64-byte-aligned address has a page offset of at most `0xfc0`, which is exactly
+`write_prep`'s `cmp x9, #(0x1000-64)` bound, so the crosspage branch is
+provably dead -- and it had to be, because the crosspage buffer (`LOCAL_value`,
+`jit/frame.h`) is 32 bytes and a 64-byte crosspage access would run off the end
+of it. The TLB *miss* path is very much live, so `write_bullshit` stays.
+
+**This also turns DC ZVA on for libc, which is a far bigger behaviour change
+than the JVM fix.** Both glibc's and musl's `memset` read DCZID_EL0 at runtime
+and skip their zeroing loops when DZP is set -- which is why no arm64 guest ever
+hit the old SIGILL. They will now, on every large `memset` in every aarch64
+guest. Verified two ways on `build/devuan-arm64-uv` (glibc 2.41): a
+`ctypes.memset` sweep over every offset/length combination that straddles a
+64-byte granule is byte-exact, and an lldb breakpoint on the gadget confirms
+libc genuinely reaches it rather than the test proving nothing. The same
+breakpoint fires in the Alpine (musl) root, so this is not a glibc-only change.
+
+
+`java -version`, `javac`, and a 4000-array allocation loop now run, and give
+identical results in mixed mode, `-Xint` and `-Xshare:off`.
+
+New test: `tests/manual/arm64/dc_zva.c`. It checks the two halves against each
+other -- DCZID_EL0.BS versus the granule DC ZVA *observes* zeroing -- because a
+block size that does not match what the instruction does is silent corruption,
+not a fault. Plus alignment-down, untouched neighbours, the last block of a
+page, a 24-page sweep for the TLB-miss path, a copy-on-write fault taken by the
+instruction itself, and SIGSEGV on a read-only page and on `dc zva, xzr`.
+Before the fix every one of those raises SIGILL.
+
 ### Typed characters arrived out of order -- FIXED 2026-08-23, and only h/j/k/l ever moved
 
 Typing quickly into the terminal delivered characters transposed, always with a
@@ -1777,7 +1856,7 @@ its objects can be made to call `nlibc_open`.
 | [#523](https://github.com/emkey1/ish-AOK/issues/523) | yay (AUR helper) fails on Arch ARM64 | **reported symptom does not reproduce** -- see *Diagnosed* above. Previously: **half fixed.** The crash was a poll.c fd use-after-free, fixed in `717e6d3d`. The *reported* symptom -- `yay -S pandoc-bin` dying with `context: signal: terminated` -- still reproduces and is not a crash: yay's Go runtime sends itself SIGTERM when its context is cancelled, most likely its own timeout firing because emulated syscalls are slower than its budget assumes. Not a re-test; a timeout question |
 | [#527](https://github.com/emkey1/ish-AOK/issues/527) | pikaur fails on Arch ARM64 | blocked on `systemd-run` |
 | [#541](https://github.com/emkey1/ish-AOK/issues/541) | ptraceomatic does not run: tracee reaped during setup | **fixed 2026-08-20** -- see *Closed during the 550 cycle* |
-| [#542](https://github.com/emkey1/ish-AOK/issues/542) | JVM/HotSpot crashes on aarch64, "Field too big for insn" | reporter suspects upstream OpenJDK |
+| [#542](https://github.com/emkey1/ish-AOK/issues/542) | JVM/HotSpot crashes on aarch64, "Field too big for insn" | **fixed 2026-08-23** -- ours, not upstream: AOK reported DCZID_EL0 DZP=1. See *Closed during the 550 cycle* |
 | -- | btop shows nothing in its disk, net and io sections | reported 2026-08-19; **fixed** -- see *Closed during the 550 cycle* |
 
 ### Feature requests

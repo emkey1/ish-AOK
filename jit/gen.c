@@ -4570,9 +4570,9 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
     // pages, which have already happened by the time the cache ops run,
     // so these are architecturally safe no-ops — same self-modifying-code
     // model as the x86 guests, no gadget emitted (hint-space precedent
-    // above). Whitelisted CRm values only: DC ZVA (CRm=4, same op1/CRn/
-    // op2 space) must keep faulting because DCZID_EL0 advertises DZP=1
-    // (see the MRS below), and unallocated encodings stay UNDEFINED.
+    // above). Whitelisted CRm values only; unallocated encodings stay
+    // UNDEFINED. DC ZVA (CRm=4) shares this op1/CRn/op2 space but is a
+    // real memory write, not a hint, so it gets a gadget of its own below.
     // EL1-only maintenance ops have op1!=3 and never match this mask.
     if ((insn & 0xfffff0e0) == 0xd50b7020) {
         unsigned crm = (insn >> 8) & 0xf;
@@ -4594,11 +4594,24 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
             }
             return 1;
         }
+        if (crm == 0x4) {
+            // DC ZVA: zero the naturally-aligned block containing the VA
+            // in Xt. This used to fall through to SIGILL, which was only
+            // defensible while DCZID_EL0 advertised DZP=1 — it no longer
+            // does (see the MRS below), so the guest is entitled to
+            // execute this and needs a real gadget. Xt=31 is XZR (VA 0),
+            // an ordinary faulting write, handled inside the gadget.
+            extern void gadget_arm64_dc_zva(void);
+            gen(state, (unsigned long) gadget_arm64_dc_zva);
+            gen(state, insn & 0x1f);
+            gen(state, state->arm64_orig_ip); // fault-restart address (see memory.S's segfault paths)
+            return 1;
+        }
         if (crm == 0xa || crm == 0xb ||  // DC CVAC, DC CVAU
             crm == 0xc || crm == 0xd ||  // DC CVAP, DC CVADP
             crm == 0xe)                  // DC CIVAC
             return 1;
-        // fall through: DC ZVA / EL1-only ops reject below
+        // fall through: EL1-only ops reject below
     }
 
     // MRS/MSR TPIDR_EL0 — the TLS base register (see cpu_state.arm64_tpidr).
@@ -4644,15 +4657,28 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
 
     // MRS of constant system registers, via the generic mrs_const gadget:
     // CTR_EL0 (cache-line geometry: 64-byte I/D lines, PIPT, the standard
-    // QEMU-user value) and DCZID_EL0 with DZP=1 (DC ZVA prohibited, so
-    // libc memset never tries the zeroing instruction and no DC ZVA
-    // emulation is needed).
+    // QEMU-user value) and DCZID_EL0.
+    //
+    // DCZID_EL0 reads 0x4: DZP=0 (DC ZVA permitted) and BS=4, i.e. a
+    // 64-byte block — BS is log2 of the block size in 4-byte words, and
+    // 64 bytes is what every real AArch64 core reports. It must stay in
+    // sync with ARM64_DCZVA_BYTES (jit/guest-arm64/gadgets.h), which is
+    // what the DC ZVA gadget actually zeroes.
+    //
+    // This used to report DZP=1 to avoid implementing DC ZVA at all.
+    // Linux sets SCTLR_EL1.DZE, so DZP reads 0 at EL0 on every aarch64
+    // Linux box, and software is entitled to assume it never sees the
+    // other value: HotSpot leaves VM_Version::_zva_length at 0 when DZP
+    // is set but still honours UseBlockZeroing (default on), then emits
+    // `and Xd, Xn, #(zva_length - 1)` — a mask of all ones, which is not
+    // an encodable AArch64 logical immediate. The JVM died in its own
+    // assembler before reaching any Java code (issue #542).
     if ((insn & 0xffffffe0) == 0xd53b0020 || (insn & 0xffffffe0) == 0xd53b00e0) {
         extern void gadget_arm64_mrs_const(void);
         bool is_ctr = (insn & 0xffffffe0) == 0xd53b0020;
         gen(state, (unsigned long) gadget_arm64_mrs_const);
         gen(state, insn & 0x1f);
-        gen(state, is_ctr ? 0x8444c004ULL : 0x10ULL);
+        gen(state, is_ctr ? 0x8444c004ULL : 0x4ULL);
         return 1;
     }
 
