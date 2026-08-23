@@ -209,6 +209,76 @@ more.** That reflex is what kept this one invisible.
 
 ## Closed during the 550 cycle
 
+### Typed characters arrived out of order -- FIXED 2026-08-23, and only h/j/k/l ever moved
+
+Typing quickly into the terminal delivered characters transposed, always with a
+later character jumping toward the front: `mkdir big` -> `kmdir big`,
+`cd /etc/apk` -> `cd k/etc/ap`, `clear; touch "my file;rm.txt"` ->
+`clear; htoucl "my fie;rm.txt"`. The shell genuinely received the wrong bytes,
+so it was neither a rendering artifact nor dropped input.
+
+**Every displaced character is in `hjkl`, and nothing else ever moves.** That is
+the whole diagnosis. `app/TerminalView.m` registered those four as bare
+`UIKeyCommand`s (added 2026-03-23 in `4c10b28af`) so that a held key would
+repeat -- UIKit only repeats keys a key command has claimed. But claiming a key
+also changes how it is delivered:
+
+* a key command is dispatched straight off the key event -- measured **0.3 ms**
+  after the press;
+* every other printable character reaches `-insertText:` through UIKit's
+  text-input pipeline -- measured **~5 ms** after the press, and further behind
+  once that pipeline has a backlog.
+
+Two delivery paths, nothing sequencing them. Each stream stayed internally
+ordered and they interleaved wrongly, which is exactly the observed shape:
+`abcdefghijklmnopqrst` reached the tty as `abcdhejkflgimnopqrst`, the sixteen
+other letters still in order.
+
+**Does it affect real users? Measured: no, not by typing.** Injecting a
+`ghghghghgh` alternation at controlled rates, order held at 11 ms between
+keystrokes and first broke at 5.6 ms -- about 90 keystrokes/second. It stayed
+correct at 40-100 ms with the terminal under heavy render load (a `yes` flood),
+because a busy main thread delays both paths together rather than spreading
+them. The software keyboard, paste and autocorrect never enter the key-command
+path at all, and key repeat is self-consistent. So the reordering needs a
+machine at the keyboard: synthetic injection, a macro key, a scanner, anything
+delivering faster than ~90 keys/s. It is still a defect -- the terminal has no
+business reordering what it is handed -- and it was worth fixing on those terms,
+not as a user-facing regression.
+
+**The fix** (`app/TerminalView.m`) drops the four bare key-command registrations
+so the letters travel the same in-order path as the rest of the alphabet, and
+synthesises the held-key repeat from `-pressesBegan:`/`-pressesEnded:` instead,
+at the delay and interval UIKit's own key-command repeat was measured using
+(0.4 s, then 0.1 s). The first character of a hold now comes from the ordinary
+text path, so only the repeats are synthetic.
+
+**Verified in the Xcode Simulator build**, same device and same harness for
+both sides, comparing the keys the app received against the bytes that reached
+the tty: baseline reordered 5 runs out of 5 at 2-3 ms per key, the fix preserved
+order 5 out of 5. End to end through the guest tty, all eight test lines --
+including every string from the original report and `hjkl hjkl hjkl kjhl lkjh`
+-- came back byte-exact. Held h/j/k/l still deliver 7 characters over ~1.3 s,
+identical to the old behaviour, and an unregistered letter still delivers 1.
+
+Two things worth knowing about the harness, both of which cost time here:
+
+* `xcrun simctl`-style injection drops keys below about 3 ms spacing, and a
+  dropped key looks exactly like a reordering failure in a naive string compare.
+  Log what the app actually *received* alongside what it delivered; the diff
+  between those two is the only honest signal.
+* Another session on this machine was installing its own build onto the same
+  booted simulator, which silently replaced the binary under test and wiped the
+  guest root twice. Check the installed binary's hash before trusting a
+  measurement, or boot a private device.
+
+**Residual, not fixed:** arrows, Tab, Esc, function keys and the Ctrl chords are
+still key commands, so they keep the same ~5 ms head start over typed text. The
+hazard is unchanged from before the vi keys were added and is far rarer -- it
+needs a special key inside the same 5 ms window -- but it is the same defect.
+Fixing it properly means either owning key repeat for every key or buffering the
+fast path behind the text path, neither of which this bug justified.
+
 ### SmallCLUE's pager wedged apt -- FIXED 2026-08-22, and it was not the pager
 
 `apt search maria` hung the whole app, every time, and removing
