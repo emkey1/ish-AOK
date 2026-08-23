@@ -4821,9 +4821,15 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
     BOOL onDevice = ISHLLMUsesAppleFoundationModels();
     switch ((ISHLLMSettingsRow) indexPath.row) {
         case ISHLLMSettingsRowDestinations: {
+            // Name the ACTIVE one, not just how many there are. A bare count
+            // reads as bookkeeping; the name reads as "this is what you are
+            // talking to, and this row is where you change it".
             NSUInteger count = ISHLLMDestinations().count;
+            NSString *active = ISHLLMDestinationDisplayName(ISHLLMActiveDestination());
             cell.textLabel.text = @"Destinations";
-            cell.detailTextLabel.text = count == 1 ? @"1 saved" : [NSString stringWithFormat:@"%lu saved", (unsigned long) count];
+            cell.detailTextLabel.text = count == 1
+                ? active
+                : [NSString stringWithFormat:@"%@ · %lu saved", active, (unsigned long) count];
             break;
         }
         case ISHLLMSettingsRowProvider:
@@ -5227,13 +5233,40 @@ typedef NS_ENUM(NSInteger, ISHLLMSettingsRow) {
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     NSDictionary<NSString *, NSString *> *preset = ISHLLMProviderPresets()[indexPath.row];
-    UserPreferences.shared.llmProvider = preset[@"name"];
-    UserPreferences.shared.llmServerURL = preset[@"url"] ?: @"";
-    if (preset[@"model"].length > 0)
-        UserPreferences.shared.llmModel = preset[@"model"];
-    // Keep the saved destination describing the live configuration: a preset
-    // pick edits the ACTIVE destination in place rather than adding one.
-    ISHLLMSyncActiveDestinationFromPreferences();
+    NSString *name = preset[@"name"];
+
+    // Picking a provider SWITCHES destinations; it does not overwrite one.
+    //
+    // This used to write the four scalars and then sync them into the active
+    // destination, so choosing Groq while OpenAI was active replaced the OpenAI
+    // entry -- its model, its URL, and the fact it existed at all. Anyone who
+    // uses two providers had to know to go to Destinations and add one FIRST,
+    // and if they did not, the only copy of the old setup was gone. It also
+    // carried the previous provider's API key over to the new one, which is
+    // both wrong and quietly confusing to debug.
+    //
+    // So: if a saved destination already uses this provider, activate it and
+    // restore its model, URL and key. Otherwise add a new one seeded from the
+    // preset and leave the current destination untouched.
+    for (NSDictionary<NSString *, NSString *> *destination in ISHLLMDestinations()) {
+        if ([ISHLLMStringValue(destination, kISHLLMDestinationProvider) isEqualToString:name]) {
+            ISHLLMActivateDestination(destination);
+            [self.navigationController popViewControllerAnimated:YES];
+            return;
+        }
+    }
+
+    NSDictionary<NSString *, NSString *> *fresh = @{
+        kISHLLMDestinationID: NSUUID.UUID.UUIDString,
+        kISHLLMDestinationName: name,
+        kISHLLMDestinationProvider: name,
+        kISHLLMDestinationURL: preset[@"url"] ?: @"",
+        kISHLLMDestinationModel: preset[@"model"] ?: @"",
+        // Deliberately empty: a key belongs to the provider that issued it.
+        kISHLLMDestinationAPIKey: @"",
+    };
+    ISHLLMSaveDestination(fresh);
+    ISHLLMActivateDestination(fresh);
     [self.navigationController popViewControllerAnimated:YES];
 }
 
