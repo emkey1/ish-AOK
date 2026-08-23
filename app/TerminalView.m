@@ -236,7 +236,11 @@ static void ISHRecordTerminalViewEvent(NSString *event, Terminal *terminal, NSDi
         @"blinkCursor": @(prefs.blinkCursor),
         @"cursorShape": prefs.htermCursorShape,
     } mutableCopy];
-    if (prefs.palette.colorPaletteOverrides) {
+    // Ask the palette that is actually being rendered, not prefs.palette: with
+    // an appearance override in play those are different objects, and testing
+    // one while reading the other drops a light palette's overrides whenever
+    // the dark half of the same theme happens not to define any.
+    if (palette.colorPaletteOverrides) {
         themeInfo[@"colorPaletteOverrides"] = palette.colorPaletteOverrides;
     }
     NSString *json = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:themeInfo options:0 error:nil] encoding:NSUTF8StringEncoding];
