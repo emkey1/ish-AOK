@@ -338,7 +338,13 @@ enum {
         }
         validColors &= (empty == COLORS || valid == COLORS);
     }
-    return !(self.navigationItem.hidesBackButton = !validName || !validColors);
+    // Just report validity. This used to ASSIGN hidesBackButton as a side effect
+    // of the return, so clearing the Name field or half-typing a hex colour made
+    // the back button disappear mid-keystroke and the screen became a dead end.
+    // The guard bought nothing either: -viewDidDisappear already gates
+    // persistence on this same check, so an invalid theme cannot be saved by any
+    // exit path -- trapping the user was never what kept the data clean.
+    return validName && validColors;
 }
 
 - (void)textFieldChanged:(UITextField *)sender {
