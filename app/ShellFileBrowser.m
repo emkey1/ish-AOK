@@ -50,6 +50,10 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     // Bumped on every navigation so a slow listing that lands after the user
     // has already moved on is dropped instead of repainting the wrong folder.
     NSUInteger _loadGeneration;
+    // The listing itself, so a superseded or abandoned one can be STOPPED and
+    // not merely ignored. The generation guard above only discards the answer;
+    // on a big directory the enumeration kept running regardless.
+    ISHGuestFileOperationToken _listToken;
     BOOL _showsHiddenFiles;
 }
 
@@ -230,6 +234,9 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     // Only when the whole sheet is going away -- not when a child (Get Info,
     // a rename prompt) is covering us.
     if (self.isBeingDismissed || self.navigationController.isBeingDismissed) {
+        // The sheet is gone; a listing still walking /usr/bin is pure waste and
+        // it is holding the lane the next browser will want.
+        [self cancelPendingListing];
         if ([self.delegate respondsToSelector:@selector(shellFileBrowserDidDismiss:)])
             [self.delegate shellFileBrowserDidDismiss:self];
     }
@@ -246,6 +253,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     _loadGeneration += 1;
     NSUInteger generation = _loadGeneration;
     NSString *path = _path;
+    [self cancelPendingListing];
     self.title = path.lastPathComponent.length > 0 ? path.lastPathComponent : @"/";
     [self rebuildBreadcrumb];
     _statusLabel.hidden = YES;
@@ -266,12 +274,27 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     [_spinner startAnimating];
 
     __weak typeof(self) weakSelf = self;
-    [[ISHGuestFileBridge sharedBridge] listDirectoryAtGuestPath:path completion:^(NSArray<ISHGuestFileItem *> *items, NSError *error) {
+    _listToken = [[ISHGuestFileBridge sharedBridge] listDirectoryAtGuestPath:path completion:^(NSArray<ISHGuestFileItem *> *items, NSError *error) {
         typeof(self) self_ = weakSelf;
         if (self_ == nil || generation != self_->_loadGeneration)
             return;
+        self_->_listToken = nil;
         [self_ applyListing:items error:error];
     }];
+}
+
+// Cancelling always completes the listing, with ISHGuestFileBridgeErrorCancelled.
+// That completion is dropped by the generation guard above, since anything that
+// cancels has already bumped the generation or is on its way out.
+- (void)cancelPendingListing {
+    if (_listToken == nil)
+        return;
+    [[ISHGuestFileBridge sharedBridge] cancelOperation:_listToken];
+    _listToken = nil;
+}
+
+- (void)dealloc {
+    [self cancelPendingListing];
 }
 
 - (void)applyListing:(nullable NSArray<ISHGuestFileItem *> *)items error:(nullable NSError *)error {

@@ -84,6 +84,10 @@ static NSString *ISHHomeDirectoryForUID(NSData *passwdData, uid_t targetUID) {
     NSError *_loadError;
     BOOL _loading;
     NSInteger _loadGeneration;                // discards stale async listings
+    // ...and this STOPS the superseded one. The generation guard only throws the
+    // answer away; the enumeration kept running, holding the lane, while the
+    // table sat with userInteractionEnabled = NO.
+    ISHGuestFileOperationToken _listToken;
     int64_t _availableBytes;                  // statfs free space of the current mount, 0 = no figure
 
     WorkspaceFileManagerSortMode _sortMode;
@@ -554,13 +558,15 @@ static NSString *ISHHomeDirectoryForUID(NSData *passwdData, uid_t targetUID) {
 
 - (void)reload {
     NSInteger generation = ++_loadGeneration;
+    [self cancelPendingListing];
     [self setLoading:YES];
     __weak typeof(self) weakSelf = self;
-    [[ISHGuestFileBridge sharedBridge] listDirectoryAtGuestPath:_currentPath
+    _listToken = [[ISHGuestFileBridge sharedBridge] listDirectoryAtGuestPath:_currentPath
                                                       completion:^(NSArray<ISHGuestFileItem *> *items, NSError *error) {
         typeof(self) strongSelf = weakSelf;
         if (strongSelf == nil || strongSelf->_loadGeneration != generation)
             return;  // a newer navigation superseded this listing
+        strongSelf->_listToken = nil;
         strongSelf->_loadError = error;
         strongSelf->_allItems = items ?: @[];
         [strongSelf setLoading:NO];  // after the assignments: this recomputes the empty state from them
@@ -574,6 +580,20 @@ static NSString *ISHHomeDirectoryForUID(NSData *passwdData, uid_t targetUID) {
         strongSelf->_availableBytes = (error == nil) ? availableBytes : 0;
         [strongSelf updateStatusLabel];
     }];
+}
+
+// The cancelled listing still completes, with ISHGuestFileBridgeErrorCancelled;
+// the generation guard drops it, because everything that cancels has already
+// bumped the generation or is being torn down.
+- (void)cancelPendingListing {
+    if (_listToken == nil)
+        return;
+    [ISHGuestFileBridge.sharedBridge cancelOperation:_listToken];
+    _listToken = nil;
+}
+
+- (void)dealloc {
+    [self cancelPendingListing];
 }
 
 - (void)setLoading:(BOOL)loading {

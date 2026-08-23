@@ -26,6 +26,7 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
     NSString *_rawMarkdown;    // nil while a status message (loading/error/empty) is showing instead
     NSString *_statusMessage;
     NSInteger _loadGeneration; // discards stale async reads
+    ISHGuestFileOperationToken _readToken;  // ...and this stops the superseded one
 }
 
 #pragma mark Lifecycle
@@ -199,6 +200,7 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
 #pragma mark Loading
 
 - (void)loadPath:(NSString *)path {
+    [self cancelPendingRead];
     _currentPath = path;
     _titleLabel.text = path.lastPathComponent;
     _backButton.enabled = _backHistory.count > 0;
@@ -210,11 +212,12 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
 
     NSInteger generation = ++_loadGeneration;
     __weak typeof(self) weakSelf = self;
-    [ISHGuestFileBridge.sharedBridge readFileAtGuestPath:path maxBytes:kMarkdownViewerMaxBytes
+    _readToken = [ISHGuestFileBridge.sharedBridge readFileAtGuestPath:path maxBytes:kMarkdownViewerMaxBytes
                                                 completion:^(NSData *data, NSError *error) {
         typeof(self) strongSelf = weakSelf;
         if (strongSelf == nil || strongSelf->_loadGeneration != generation)
             return;  // a newer navigation superseded this read
+        strongSelf->_readToken = nil;
         if (data == nil) {
             strongSelf->_rawMarkdown = nil;
             strongSelf->_statusMessage = [strongSelf messageForReadError:error];
@@ -228,6 +231,20 @@ static const NSUInteger kMarkdownViewerMaxBytes = 4 * 1024 * 1024;  // 4 MiB; re
         strongSelf->_statusMessage = nil;
         [strongSelf updateContent];
     }];
+}
+
+// The cancelled read still completes, with ISHGuestFileBridgeErrorCancelled;
+// _loadGeneration drops it, since anything that cancels has bumped it or is
+// tearing the viewer down.
+- (void)cancelPendingRead {
+    if (_readToken == nil)
+        return;
+    [ISHGuestFileBridge.sharedBridge cancelOperation:_readToken];
+    _readToken = nil;
+}
+
+- (void)dealloc {
+    [self cancelPendingRead];
 }
 
 - (NSString *)messageForReadError:(NSError *)error {

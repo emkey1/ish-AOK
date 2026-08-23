@@ -279,6 +279,107 @@ needs a special key inside the same 5 ms window -- but it is the same defect.
 Fixing it properly means either owning key repeat for every key or buffering the
 fast path behind the text path, neither of which this bug justified.
 
+### The file browsers froze behind bulk transfers -- FIXED 2026-08-23
+
+`GuestFileBridge` ran everything on one serial queue -- directory listings,
+stat, statfs, mkdir, rename, delete, whole-file reads and writes, chunked
+extraction, cross-backend copies -- so a large copy or extraction sat in front
+of every short operation behind it. The file manager made that maximally
+visible: `-setLoading:` (app/WorkspaceFileManager.m) holds
+`userInteractionEnabled = NO` for the whole load, so the folder was not merely
+stale, it was untappable. That is the mechanism behind the reports of the file
+manager going "completely unresponsive trying to do anything with the folder,
+including just viewing it".
+
+**Fixed by separating latency classes, not by adding parallelism.** Two SERIAL
+lanes, interactive and bulk. Concurrency was never the answer here: AOK's fakefs
+metadata mutex already saturates under a single thread (78% duty under
+`ISH_FAKEFS_LOCKSTATS`) and parallel metadata work measures slower. What was
+wrong was that a `readdir` of twelve entries queued behind a 300 MB transfer.
+
+Design and the full reasoning: [guest_file_bridge_lanes.md](guest_file_bridge_lanes.md).
+
+**The ordering question, which is where a naive split goes wrong.** Callers do
+write-then-reload (new folder, rename, duplicate, delete, then `-reload`) and
+expect the listing to show the result. Reading every call site settled it: they
+all issue the reload *from inside the mutation's completion block*, so the
+happens-before is the completion's, not the queue's, and splitting cannot break
+it. The `ioQueue` property that existed so callers could order their own work
+behind pending operations had **no users**; it is gone from the header so nobody
+can rebuild a dependency on a total order that no longer exists.
+
+That was not left to caller discipline. The bridge keeps a table of the claims
+held on each lane and enforces per-path ordering itself, under one invariant:
+**the interactive lane never waits** -- an interactive operation that would have
+to wait is re-routed onto the bulk lane behind the work it must follow, while
+the bulk lane may block, because it is already slow. No cycle, so no deadlock.
+
+**Three bugs found by testing it, all in the first draft of my own work:**
+
+- The claim-conflict rule started as "equal, or one is an ancestor of the
+  other". `/` is an ancestor of everything, so a copy into `/tmp/foo` conflicted
+  with a listing of `/` -- any transfer anywhere would have pushed every listing
+  of `/` onto the bulk lane, which is the exact blocking being removed. The rule
+  is now: same path, a path and its parent directory, and (for a recursive
+  delete alone) a subtree and anything inside it.
+- `WorkspaceImageViewer`'s sibling scan had no generation guard, so once
+  cancellation existed, a scan cancelled by the next `loadPath:` landed
+  afterward and cleared the token that load had just stored.
+- The cross-lane barrier is a `dispatch_sync` onto the interactive lane, which
+  self-deadlocks when `ISH_BRIDGE_SINGLE_LANE` makes the two lanes the same
+  queue -- and it duly did, the first time the control run reached section 4.
+  The shipping path was never exposed to it (the barrier is only ever set for
+  work heading to the bulk lane), but the knob is only useful if it runs, so the
+  barrier is now skipped when the queues are identical, where the ordering it
+  restores is already the queue's own.
+
+**Also folded in: listings are cancellable.** They had no token at all, and
+`ShellFileBrowser`'s `_loadGeneration` guard discarded the *answer*, not the
+*work* -- dismissing a sheet over a big directory left the whole enumeration
+running. `ISHGuestFileOperationToken` now covers listings, whole-file reads,
+extraction, and the cross-store copy (which previously ran to completion even
+when cancelled). Recursive delete is deliberately NOT cancellable: stopping a
+tree walk halfway leaves a half-deleted tree and no way to say what survived.
+
+**Measured, not asserted.** `ISH_BRIDGE_LANE_SELFTEST=<MiB>` runs a harness
+against the live guest fs at launch, and `ISH_BRIDGE_SINGLE_LANE=1` collapses
+the lanes back into one so the control is taken on the same hardware in the same
+binary. iPhone 17 Pro simulator, 64 MiB payload, listing `/etc` with the bulk
+lane saturated by continuous copies (mean 19-20ms each):
+
+                                    under load            idle baseline
+    one lane (the old behaviour)    mean 19.8ms worst 77.3ms    1.3 / 7.6ms
+    two lanes                       mean  1.6ms worst  7.7ms    0.8 / 5.7ms
+
+so listing latency under load drops about 12x on the mean and 10x on the worst
+case, and lands within noise of the idle baseline. Under one lane the mean
+listing costs almost exactly one copy, which is the head-of-line blocking stated
+as a number; the worst is four copies, because a listing there queues behind
+several. Section 1 correctly FAILS its own bar in the control run.
+
+Ordering held in both configurations: 40 iterations of write-then-reload under
+bulk load, 0 mismatches; 40 iterations of mutation-then-listing enqueued back to
+back *without* chaining through the completion, 0 same-lane and 0 cross-lane
+misses; 30 iterations of unchained write-then-copy, 0 stale reads. Cancelling a
+900-entry listing mid-walk cut it from 9.5ms to 2.8ms, so the work stops rather
+than the answer being thrown away.
+
+The claim-conflict truth table is also checked directly, including the `/` case
+above and the `/ab` vs `/abc` component-boundary trap.
+
+And by hand in `ShellFileBrowser` on the simulator, against a 400 MB file, since
+the harness drives the bridge and not the widget: Duplicate (a 400 MB bulk copy),
+New Folder, Rename and Delete each showed their result in the reload that
+followed. Note the simulator is far too fast for a wall-clock freeze demo -- it
+writes 400 MB through fakefs at 2.6 GB/s -- which is why the numbers above come
+from saturating the lane rather than from timing one copy.
+
+**Still open in this area.** `-clearExtractionCache` has no caller despite its
+own documentation saying it should run at app launch, so extracted temp files
+leak across runs. Copy and move return cancellation tokens that no UI drives
+yet.
+
+
 ### SmallCLUE's pager wedged apt -- FIXED 2026-08-22, and it was not the pager
 
 `apt search maria` hung the whole app, every time, and removing

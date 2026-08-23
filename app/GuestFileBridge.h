@@ -15,6 +15,26 @@
 //  callers must always use the async API here -- never call the emulator's
 //  fs/ C API directly from UI code.
 //
+//  There are TWO such queues, an interactive lane and a bulk lane, because one
+//  queue for everything meant a 300 MB extraction sat in front of a twelve-
+//  entry readdir and froze the file browsers. Each entry point below says which
+//  lane it uses. They are both SERIAL, deliberately: AOK's fakefs metadata
+//  mutex saturates under a single thread already, and parallel metadata work
+//  measures slower, so this separates latency classes rather than chasing
+//  parallelism. See docs/guest_file_bridge_lanes.md.
+//
+//  ORDERING. Operations that reach the same filesystem state keep the order they
+//  were enqueued in, whichever lanes they land on; the bridge enforces that
+//  itself. "The same state" means the same path, a path and the directory it
+//  lives in (so a listing of D is ordered against a write at D/name), or -- for
+//  a recursive delete alone -- a subtree and anything inside it. Operations on
+//  unrelated paths have no ordering relationship and never did.
+//
+//  What every caller in the tree actually relies on is stronger than either: an
+//  operation's completion runs after its effects are visible, so write-then-
+//  reload works by chaining the reload inside the write's completion block,
+//  which is what they all do.
+//
 //  Paths under /AOK/persist are realfs-backed (a real host directory via the
 //  AppGroup container): those are read/written directly with no VFS borrow
 //  and no copy. Everything else lives in the per-root fakefs and is reached
@@ -84,17 +104,22 @@ typedef NS_ENUM(NSInteger, ISHGuestFileKind) {
 @property (nonatomic, readonly) BOOL isBrokenSymlink;
 @end
 
-// Opaque handle for a cancelable extraction; pass to -cancelExtraction:.
-typedef NSUUID *ISHGuestFileExtractionToken;
+// Opaque handle for a cancelable operation; pass to -cancelOperation:.
+// Cancelling completes the operation with ISHGuestFileBridgeErrorCancelled --
+// the completion always runs, so a caller can rely on it to release state.
+typedef NSUUID *ISHGuestFileOperationToken;
+// The original name, from when only extraction was cancelable. Kept so
+// extraction call sites keep reading as extraction.
+typedef ISHGuestFileOperationToken ISHGuestFileExtractionToken;
 
 @interface ISHGuestFileBridge : NSObject
 
 + (instancetype)sharedBridge;
 
-// The serial queue every guest-VFS operation runs on. Exposed so callers can
-// order their own follow-up work behind pending bridge operations (same
-// pattern as MotePadDocumentStore.ioQueue).
-@property (nonatomic, readonly) dispatch_queue_t ioQueue;
+// (There is deliberately no exposed queue. The bridge used to publish its one
+// serial queue so callers could order follow-up work behind pending operations;
+// nothing ever did, and with two lanes there is no single queue to publish. Chain
+// through a completion block instead -- see ORDERING at the top of this file.)
 
 // True if a guest task is currently available to borrow (pid 1 booted with a
 // usable mm/mem/files/fs). Safe to call from any thread. This is a hint for
@@ -104,15 +129,21 @@ typedef NSUUID *ISHGuestFileExtractionToken;
 
 #pragma mark Directory / metadata
 
-- (void)listDirectoryAtGuestPath:(NSString *)guestPath
+// Interactive lane. Returns a token: a listing of a big directory is seconds of
+// readdir + per-entry stat, and a caller that navigates away or gets dismissed
+// should stop the WORK, not just discard the answer. Ignore the token and
+// nothing changes.
+- (ISHGuestFileOperationToken)listDirectoryAtGuestPath:(NSString *)guestPath
                        completion:(void (^)(NSArray<ISHGuestFileItem *> * _Nullable items,
                                              NSError * _Nullable error))completion;
 
+// Interactive lane.
 - (void)statAtGuestPath:(NSString *)guestPath
               completion:(void (^)(ISHGuestFileItem * _Nullable item,
                                     NSError * _Nullable error))completion;
 
-// Free/total space of the filesystem containing guestPath (statfs). Virtual
+// Interactive lane. Free/total space of the filesystem containing guestPath
+// (statfs). Virtual
 // filesystems that report no numbers (proc, devpts) come back as 0/0 with no
 // error -- display should treat 0 total as "no free-space figure", not "full".
 - (void)filesystemStatusAtGuestPath:(NSString *)guestPath
@@ -124,11 +155,21 @@ typedef NSUUID *ISHGuestFileExtractionToken;
 // Whole-file read capped at maxBytes; a file larger than the cap fails with
 // ISHGuestFileBridgeErrorTooLarge rather than silently truncating. Callers
 // must always pass a real cap -- there is no unbounded-read entry point.
-- (void)readFileAtGuestPath:(NSString *)guestPath
+//
+// The cap also picks the lane, because choosing it is the caller declaring how
+// much work it is asking for: up to 8 MiB is interactive, above that is bulk.
+// The viewers reading a document (8 KiB preview, 64 KiB /etc/passwd, 4 MiB
+// markdown) stay interactive; the image viewer's 64 MiB really is a transfer.
+- (ISHGuestFileOperationToken)readFileAtGuestPath:(NSString *)guestPath
                     maxBytes:(NSUInteger)maxBytes
                   completion:(void (^)(NSData * _Nullable data,
                                         NSError * _Nullable error))completion;
 
+// Split across lanes. The cheap part -- the stat, the realfs fast path and the
+// cache lookup, two of which answer without touching the VFS at all -- runs on
+// the interactive lane, so sharing an already-extracted image stays instant
+// while a video is still copying; only the chunked copy itself goes bulk.
+//
 // Copies a guest file to a private temp file that a native framework
 // (AVFoundation, ImageIO, ...) can open directly, in ~1 MiB chunks, with
 // progress and cancellation. Realfs-backed paths (/AOK/persist) return the
@@ -142,37 +183,56 @@ typedef NSUUID *ISHGuestFileExtractionToken;
     progress:(nullable void (^)(int64_t bytesWritten, int64_t totalBytes))progress
     completion:(void (^)(NSURL * _Nullable fileURL, NSError * _Nullable error))completion;
 
-- (void)cancelExtraction:(ISHGuestFileExtractionToken)token;
+// Cancels any operation that returned a token. Cancelling something already
+// finished, or a token from an operation that does not poll for cancellation,
+// is a no-op rather than an error.
+//
+// Polled by: directory listing (both the readdir loop and the per-entry stat
+// loop), whole-file read, extraction, and the cross-store streaming copy. NOT
+// by recursive delete -- stopping a tree walk halfway leaves a half-deleted
+// tree and no way to say what survived, so a delete that has begun finishes.
+- (void)cancelOperation:(ISHGuestFileOperationToken)token;
+- (void)cancelExtraction:(ISHGuestFileExtractionToken)token;  // synonym for -cancelOperation:
 
-// Drops every cached extraction and deletes its backing temp files. Safe to
-// call at app launch to reclaim space left by a previous run.
+// Bulk lane. Drops every cached extraction and deletes its backing temp files.
+// Safe to call at app launch to reclaim space left by a previous run.
 - (void)clearExtractionCache;
 
 #pragma mark Writing
 
-// Atomic write: temp file + rename on the VFS, NSDataWritingAtomic on realfs.
+// Interactive lane for up to 8 MiB of data, bulk above that (the same rule the
+// read cap follows). Atomic write: temp file + rename on the VFS, NSDataWritingAtomic on realfs.
 // Writing through a symlink updates the target rather than replacing the
 // link itself. Refuses to clobber a non-regular file (FIFO, socket, device).
 - (void)writeData:(NSData *)data
        toGuestPath:(NSString *)guestPath
         completion:(void (^)(BOOL ok, NSError * _Nullable error))completion;
 
+// Interactive lane.
 - (void)createDirectoryAtGuestPath:(NSString *)guestPath
                          completion:(void (^)(BOOL ok, NSError * _Nullable error))completion;
 
+// Interactive lane within one backing store (it is one rename), bulk across the
+// realfs/fakefs boundary (it is a whole-file copy). Which one it is falls out of
+// the two paths alone, with no VFS call, so the lane is settled before enqueue.
+//
 // Renames/moves within one backing store; copies-then-deletes across a
 // realfs/fakefs boundary (matches real EXDEV — no single rename spans two
 // filesystems). The cross-filesystem fallback supports regular files only;
 // moving a directory across the realfs/fakefs boundary is not yet supported.
-- (void)moveItemAtGuestPath:(NSString *)sourcePath
+- (ISHGuestFileOperationToken)moveItemAtGuestPath:(NSString *)sourcePath
                 toGuestPath:(NSString *)destinationPath
                  completion:(void (^)(BOOL ok, NSError * _Nullable error))completion;
 
+// Bulk lane -- a copy is O(file size) however small this particular file is.
 // Regular files only in v1 -- recursive directory copy is not yet implemented.
-- (void)copyItemAtGuestPath:(NSString *)sourcePath
+- (ISHGuestFileOperationToken)copyItemAtGuestPath:(NSString *)sourcePath
                 toGuestPath:(NSString *)destinationPath
                  completion:(void (^)(BOOL ok, NSError * _Nullable error))completion;
 
+// Interactive lane when recursive:NO (one unlink/rmdir), bulk when recursive:YES
+// (an unbounded tree walk), even where the tree turns out to be empty.
+//
 // Deletes a file, empty directory, or (recursive:YES) a whole directory
 // tree. Never follows symlinks while recursing -- a symlinked directory
 // inside the tree is unlinked as itself, never traversed into.
@@ -183,7 +243,7 @@ typedef NSUUID *ISHGuestFileExtractionToken;
 
 #pragma mark Terminal integration
 
-// Best-effort working directory of the process group in the foreground of the
+// Interactive lane. Best-effort working directory of the process group in the foreground of the
 // tty identified by (type, number) -- "where the shell is standing right now".
 // Used by the terminal's file browser to open on the shell's own directory
 // instead of a fixed root.
@@ -201,5 +261,16 @@ typedef NSUUID *ISHGuestFileExtractionToken;
                             completion:(void (^)(NSString * _Nullable guestPath))completion;
 
 @end
+
+// Diagnostic, off unless ISH_BRIDGE_LANE_SELFTEST is set in the environment.
+// Exercises the two-lane scheduler against the live guest filesystem and logs a
+// PASS/FAIL summary: how long a listing waits while a bulk copy is in flight,
+// and whether per-path ordering holds over many repetitions of the shapes a
+// naive queue split breaks (mutate-then-list issued back to back, in both
+// directions across the lanes). Returns immediately when the variable is unset.
+//
+// Companion knob: ISH_BRIDGE_LANE_LOG logs one line per operation with its lane
+// and how long it waited to start.
+void ISHGuestFileBridgeRunSelfTestIfRequested(void);
 
 NS_ASSUME_NONNULL_END

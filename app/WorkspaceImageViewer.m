@@ -47,6 +47,11 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
     BOOL _showingActualSize;
     NSString *_statusMessage;
     NSInteger _loadGeneration;            // discards stale async loads
+    // ...and these stop them. Flipping through a folder of 60 MiB photos with
+    // only the generation guard left every skipped image still being read out of
+    // the guest, and the sibling scan still walking the directory.
+    ISHGuestFileOperationToken _readToken;
+    ISHGuestFileOperationToken _siblingsToken;
     CGSize _lastLayoutSize;               // detects real window resizes in viewDidLayoutSubviews
 }
 
@@ -303,10 +308,17 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
 - (void)loadSiblingsForCurrentDirectory {
     NSString *directory = _currentPath.stringByDeletingLastPathComponent;
     if (directory.length == 0) directory = @"/";
+    // Guarded by the generation like the image read is. Without it a scan
+    // cancelled by the NEXT loadPath: would land afterward and clear the token
+    // that load had just stored, leaving its own scan uncancellable -- and it
+    // would also overwrite _siblingPaths with the directory we had left.
+    NSInteger generation = _loadGeneration;
     __weak typeof(self) weakSelf = self;
-    [ISHGuestFileBridge.sharedBridge listDirectoryAtGuestPath:directory completion:^(NSArray<ISHGuestFileItem *> *items, NSError *error) {
+    _siblingsToken = [ISHGuestFileBridge.sharedBridge listDirectoryAtGuestPath:directory completion:^(NSArray<ISHGuestFileItem *> *items, NSError *error) {
         typeof(self) strongSelf = weakSelf;
-        if (strongSelf == nil || items == nil) return;
+        if (strongSelf == nil || strongSelf->_loadGeneration != generation) return;
+        strongSelf->_siblingsToken = nil;
+        if (items == nil) return;
         NSMutableArray<NSString *> *imagePaths = [NSMutableArray array];
         for (ISHGuestFileItem *item in items) {
             if (item.kind != ISHGuestFileKindRegular) continue;
@@ -321,7 +333,27 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
 
 #pragma mark Loading
 
+// Both the sibling scan and the image read belong to one displayed image, so
+// they are cancelled together whenever a new one starts or the viewer goes away.
+// Their completions are guarded by _loadGeneration and a nil check, so a
+// cancelled one lands harmlessly.
+- (void)cancelPendingBridgeWork {
+    if (_siblingsToken != nil) {
+        [ISHGuestFileBridge.sharedBridge cancelOperation:_siblingsToken];
+        _siblingsToken = nil;
+    }
+    if (_readToken != nil) {
+        [ISHGuestFileBridge.sharedBridge cancelOperation:_readToken];
+        _readToken = nil;
+    }
+}
+
+- (void)dealloc {
+    [self cancelPendingBridgeWork];
+}
+
 - (void)loadPath:(NSString *)path {
+    [self cancelPendingBridgeWork];  // whatever the last image was doing, stop it
     _currentPath = path;
     _titleLabel.text = path.lastPathComponent;
     _reloadButton.enabled = YES;
@@ -331,15 +363,17 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
     _originalPixelSize = CGSizeZero;
     _statusMessage = @"Loading…";
     [self updateStatusLabel];
-    [self loadSiblingsForCurrentDirectory];
 
     NSInteger generation = ++_loadGeneration;
+    [self loadSiblingsForCurrentDirectory];  // after the bump: it reads the new generation
+
     __weak typeof(self) weakSelf = self;
-    [ISHGuestFileBridge.sharedBridge readFileAtGuestPath:path maxBytes:kImageViewerMaxBytes
+    _readToken = [ISHGuestFileBridge.sharedBridge readFileAtGuestPath:path maxBytes:kImageViewerMaxBytes
                                                 completion:^(NSData *data, NSError *error) {
         typeof(self) strongSelf = weakSelf;
         if (strongSelf == nil || strongSelf->_loadGeneration != generation)
             return;  // a newer navigation superseded this read
+        strongSelf->_readToken = nil;
         if (data == nil) {
             strongSelf->_statusMessage = [strongSelf messageForReadError:error];
             [strongSelf updateStatusLabel];

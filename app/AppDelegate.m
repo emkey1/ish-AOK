@@ -30,6 +30,7 @@
 #import "CurrentRoot.h"
 #import "Diagnostics.h"
 #import "DiagnosticsBridge.h"
+#import "GuestFileBridge.h"
 #import "iOSFS.h"
 #import "SceneDelegate.h"
 #import "AudioDevice.h"
@@ -3525,6 +3526,10 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
                                   details:launchOptions.count != 0 ? @{@"launchOptions": launchOptions.description} : nil];
     // get the network permissions popup to appear on chinese devices
     [[NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:@"http://captive.apple.com"]] resume];
+
+    // No-op unless ISH_BRIDGE_LANE_SELFTEST is set; it waits for the guest to
+    // come up on a queue of its own rather than holding launch.
+    ISHGuestFileBridgeRunSelfTestIfRequested();
 
     if ([NSUserDefaults.standardUserDefaults boolForKey:@"FASTLANE_SNAPSHOT"])
         [UIView setAnimationsEnabled:NO];

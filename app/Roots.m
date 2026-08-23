@@ -1608,10 +1608,12 @@ static NSURL *HostURLForGuestPath(NSString *guestPath, id<ProgressReporter> prog
             dispatch_semaphore_signal(done);
         }];
     // Safe to wait: this always runs on the roots-control queue, never on main,
-    // and the bridge completes on its own queue. The timeout is a backstop
-    // rather than a policy -- a completion that never arrives would wedge the
-    // one serial queue for good, and every later command would answer EBUSY
-    // with nothing running to explain it.
+    // and the bridge does its work on a lane of its own -- the completion that
+    // signals us is dispatched to MAIN, which is why nothing may ever block main
+    // on the roots-control queue. The timeout is a backstop rather than a policy
+    // -- a completion that never arrives would wedge the one serial queue for
+    // good, and every later command would answer EBUSY with nothing running to
+    // explain it.
     if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30 * 60 * NSEC_PER_SEC))) != 0) {
         if (token != nil)
             [bridge cancelExtraction:token];
