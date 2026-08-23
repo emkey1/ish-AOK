@@ -276,6 +276,9 @@ guest. Verified two ways on `build/devuan-arm64-uv` (glibc 2.41): a
 libc genuinely reaches it rather than the test proving nothing. The same
 breakpoint fires in the Alpine (musl) root, so this is not a glibc-only change.
 
+That blast radius is the reason the regression suite mattered here, and it
+earned its keep: it turned up a **second, unrelated bug** that this change made
+reproducible -- see the next entry.
 
 `java -version`, `javac`, and a 4000-array allocation loop now run, and give
 identical results in mixed mode, `-Xint` and `-Xshare:off`.
@@ -287,6 +290,65 @@ not a fault. Plus alignment-down, untouched neighbours, the last block of a
 page, a 24-page sweep for the TLB-miss path, a copy-on-write fault taken by the
 instruction itself, and SIGSEGV on a read-only page and on `dc zva, xzr`.
 Before the fix every one of those raises SIGILL.
+
+### PTRACE_SEIZE of an already-stopped tracee hung forever -- FIXED 2026-08-23, and DC ZVA is how it was found
+
+`ptrace_group_stop` started failing in the arm64 suite the moment the DC ZVA
+gadget above landed: `FAIL timeout (no group-stop report / never resumed)`. It
+passed standalone and failed in the suite, which reads exactly like the
+load-flake class -- and it is not one. Flipping DCZID_EL0 back to DZP=1 in the
+same binary made it pass; flipping it to DZP=0 made it fail. Causal, in one
+build, both directions.
+
+**What it actually was.** `lldb -p` on the hung process, `thread backtrace all`:
+
+* the tracer (pid 59) in `do_wait` -> `wait_for`, waiting for the tracee;
+* the tracee (pid 60) in `handle_interrupt` at `calls.c:6299` --
+  `wait_for_ignore_signals(&group->stopped_cond, ...)`, the **untraced**
+  job-control wait.
+
+That second frame is the whole answer. `handle_interrupt` tested
+`current->ptrace.traced` once, on entry, and only then fell into the plain
+job-control wait. `PTRACE_SEIZE` sets `traced` on the tracee from the tracer's
+thread and does not wake it. So a tracee that reached `raise(SIGSTOP)` before
+its tracer reached `ptrace()` parked in a wait that nothing would ever notify,
+never noticed it had become traced, and never reported the group-stop. The
+tracer's `wait4` then waited for a report that could not arrive.
+
+Nothing synchronises those two events in the test, so the losing order was
+always reachable -- the parent just always won. DC ZVA shifted musl's `memset`
+timing enough to flip that, every time. Linux handles the same race from the
+other side: `ptrace_attach()` explicitly wakes a `__TASK_STOPPED` tracee so it
+can re-enter the trap and report.
+
+Fixed on both sides, matching that:
+
+* `kernel/ptrace.c` -- `PTRACE_SEIZE` notifies `group->stopped_cond` when the
+  tracee it just seized is already group-stopped. Done with `pids_lock` still
+  held (it keeps the task alive and `pids_lock` -> `group->lock` is the
+  established order) and after dropping `ptrace.lock`.
+* `kernel/calls.c` -- the group-stop wait re-checks `ptrace.traced` on every
+  pass instead of once on entry, so the woken tracee goes to
+  `ptrace_group_stop()` and reports.
+
+`tests/manual/ptrace_group_stop.c` gained a second case for the attach-after-
+stop order, and it **forces** that order with `waitpid(WUNTRACED)` rather than
+racing for it: a test that only fails when the scheduler cooperates would have
+reported this fixed while it was still broken. A/B'd on its own with the kernel
+fix stashed -- hangs to the watchdog without it, passes with it.
+
+**Noticed while reading, not fixed:** the native-program path has its own
+group-stop wait (`kernel/native.c`, the `^Z` block) and it has no ptrace
+handling at all -- a traced native program parks there and never reports to its
+tracer, whether it was traced from the start or attached to later. Nothing in
+this change touches that path and nothing here makes it worse, but `strace` on
+a native program would hit it. Its own change, with its own test.
+
+**Worth remembering:** "passes alone, fails in the suite" is the signature of a
+load flake, and this project has a documented one (`time_conformance`). It is
+also the signature of a real bug that needs a warm machine to lose a race. The
+thing that separated them was not more re-runs -- it was one A/B on the
+suspected cause, and then a backtrace.
 
 ### Typed characters arrived out of order -- FIXED 2026-08-23, and only h/j/k/l ever moved
 

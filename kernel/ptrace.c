@@ -763,6 +763,24 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             if (child->parent == NULL || child->parent->group != current->group)
                 list_add(&current->ptracees, &child->ptrace_siblings);
             unlock(&child->ptrace.lock);
+            // A tracee that was ALREADY group-stopped when we seized it is
+            // parked in handle_interrupt's job-control wait with nothing left
+            // to wake it, so it would never notice it is now traced and never
+            // report the stop -- our wait4 would hang forever. Wake it; the
+            // loop there re-checks ptrace.traced on every pass. This is the
+            // race ptrace_group_stop() loses when the tracee reaches
+            // raise(SIGSTOP) before the tracer reaches ptrace(). Linux does
+            // the same in ptrace_attach(), which wakes a __TASK_STOPPED tracee
+            // for exactly this reason.
+            //
+            // pids_lock is still held: it keeps `child` alive across the
+            // notify, and pids_lock -> group->lock is the established order
+            // (see handle_interrupt's own comment on taking pids_lock only
+            // after dropping group->lock).
+            lock(&child->group->lock, 0);
+            if (child->group->stopped)
+                notify(&child->group->stopped_cond);
+            unlock(&child->group->lock);
             unlock(&pids_lock);
             return 0;
         }
