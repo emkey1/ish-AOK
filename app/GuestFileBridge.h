@@ -176,7 +176,7 @@ typedef ISHGuestFileOperationToken ISHGuestFileExtractionToken;
 // backing host URL immediately with no copy. Results are cached by
 // (guestPath, size, modificationDate); a second call for an unchanged file
 // returns from cache without touching the VFS. Cached temp files are only
-// reclaimed by clearExtractionCache (call it at app launch) -- deliberately
+// reclaimed by clearExtractionCache, which runs at app launch -- deliberately
 // not evicted while the app runs, because a consumer (AVPlayer especially)
 // may hold the URL and reopen the file at any time during playback.
 - (ISHGuestFileExtractionToken)extractToTempFileAtGuestPath:(NSString *)guestPath
@@ -195,7 +195,10 @@ typedef ISHGuestFileOperationToken ISHGuestFileExtractionToken;
 - (void)cancelExtraction:(ISHGuestFileExtractionToken)token;  // synonym for -cancelOperation:
 
 // Bulk lane. Drops every cached extraction and deletes its backing temp files.
-// Safe to call at app launch to reclaim space left by a previous run.
+// Called at app launch, from -application:didFinishLaunchingWithOptions:, to
+// reclaim the space left by a previous run -- nothing else calls it, and
+// nothing else should: see the extraction comment above for why entries are
+// never evicted while the app is running.
 - (void)clearExtractionCache;
 
 #pragma mark Writing

@@ -374,10 +374,19 @@ followed. Note the simulator is far too fast for a wall-clock freeze demo -- it
 writes 400 MB through fakefs at 2.6 GB/s -- which is why the numbers above come
 from saturating the lane rather than from timing one copy.
 
-**Still open in this area.** `-clearExtractionCache` has no caller despite its
-own documentation saying it should run at app launch, so extracted temp files
-leak across runs. Copy and move return cancellation tokens that no UI drives
-yet.
+**The extraction leak is closed -- FIXED 2026-08-23.** `-clearExtractionCache`
+had no caller despite its own documentation saying it should run at app launch,
+so every video played and every image shared out of a fakefs root left a
+full-size copy in `NSTemporaryDirectory()/GuestFileBridgeExtractions` that no
+later run could even find to reuse -- the cache keyed to those files is
+in-memory, so it dies with the process while the files do not.
+`-application:didFinishLaunchingWithOptions:` now calls it. Nothing can be
+holding a URL from a previous run for the same reason the files were
+unreachable, and the call is a `dispatch_async` onto the bulk lane with no path
+claims, so it does not hold launch.
+
+**Still open in this area.** Copy and move return cancellation tokens that no UI
+drives yet.
 
 
 ### SmallCLUE's pager wedged apt -- FIXED 2026-08-22, and it was not the pager

@@ -174,7 +174,8 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     // own schedule (memory pressure, backgrounding), and evicting an entry
     // whose temp file a consumer still has open -- AVPlayer reopens local
     // files by path on seek -- would yank the file mid-use. Space is
-    // reclaimed only by clearExtractionCache at app launch; the dictionary
+    // reclaimed only by clearExtractionCache, which the app delegate runs at
+    // launch to sweep up what the previous run left behind; the dictionary
     // also guarantees an unchanged file is never extracted twice, so disk
     // use is bounded by the set of distinct files opened in one app run.
     // Read on the interactive lane and written on the bulk lane, so it is

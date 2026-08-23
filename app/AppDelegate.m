@@ -3527,6 +3527,14 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
     // get the network permissions popup to appear on chinese devices
     [[NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:@"http://captive.apple.com"]] resume];
 
+    // Extraction temp files outlive the process that wrote them. The cache
+    // that knows about them is in-memory only, so a previous run's copies are
+    // unreachable -- never reused, never deleted -- and NSTemporaryDirectory is
+    // purged by iOS on its own schedule, if at all. Reclaim them here, before
+    // anything has had a chance to extract. Bulk lane, dispatched async with no
+    // path claims: it neither holds launch nor orders against later work.
+    [ISHGuestFileBridge.sharedBridge clearExtractionCache];
+
     // No-op unless ISH_BRIDGE_LANE_SELFTEST is set; it waits for the guest to
     // come up on a queue of its own rather than holding launch.
     ISHGuestFileBridgeRunSelfTestIfRequested();
