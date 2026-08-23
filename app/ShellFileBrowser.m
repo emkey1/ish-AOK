@@ -249,8 +249,21 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     self.title = path.lastPathComponent.length > 0 ? path.lastPathComponent : @"/";
     [self rebuildBreadcrumb];
     _statusLabel.hidden = YES;
-    if (_items.count == 0)
-        [_spinner startAnimating];
+
+    // Drop the old rows before the new listing arrives, and always spin.
+    //
+    // The title and breadcrumb above are updated synchronously, so leaving the
+    // previous folder's rows on screen showed them UNDER A HEADER NAMING A
+    // DIFFERENT DIRECTORY -- and they stayed live: a tap inserted a path from
+    // the folder you had just left, and a long-press Delete confirmed against
+    // it. That is a wrong-file hazard, not a cosmetic one.
+    //
+    // Spinning only when the list happened to be empty made the same moment
+    // look like nothing was happening at all, which on a big directory reads
+    // as a hang.
+    _items = @[];
+    [_tableView reloadData];
+    [_spinner startAnimating];
 
     __weak typeof(self) weakSelf = self;
     [[ISHGuestFileBridge sharedBridge] listDirectoryAtGuestPath:path completion:^(NSArray<ISHGuestFileItem *> *items, NSError *error) {
