@@ -148,8 +148,16 @@ NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NSFileProviderItemId
         fd = open(self.mount->source, O_DIRECTORY | O_RDONLY);
     } else if (self.isVirtualItem) {
         NSString *path = self.virtualPath;
-        if (path != nil)
-            fd = openat(self.mount->root_fd, fix_path(ISHHostPathForGuestPath(path).fileSystemRepresentation), O_RDONLY);
+        if (path != nil) {
+            const char *host = fix_path(ISHHostPathForGuestPath(path).fileSystemRepresentation);
+            // O_NONBLOCK: everything the guest writes into /AOK/persist arrives
+            // here as a virtual item, and realfs_mknod makes REAL host FIFOs
+            // (fs/real.c). open(fifo, O_RDONLY) blocks until a writer appears,
+            // which is forever inside an enumeration -- and it blocks while
+            // holding the root lock, so it takes the whole domain with it.
+            // On a regular file the flag costs nothing.
+            fd = openat(self.mount->root_fd, host, O_RDONLY | O_NONBLOCK);
+        }
     } else {
         db_begin_read(&self.mount->db);
         sqlite3_stmt *stmt = self.mount->db.stmt.path_from_inode;
@@ -161,10 +169,24 @@ NSFileProviderItemIdentifier ISHFileProviderInnerIdentifier(NSFileProviderItemId
             if (fake_path_to_host(path, host_path, sizeof(host_path)) == NULL)
                 continue;
             fd = openat(self.mount->root_fd, fix_path(host_path), O_RDWR);
-            if (fd == -1 && errno == EISDIR)
-                fd = openat(self.mount->root_fd, fix_path(host_path), O_RDONLY);
-            if (fd == -1 && errno != ENOENT)
-                break;
+            if (fd == -1) {
+                // Fall back on ANY failure, not just EISDIR. A file imported
+                // through the Files app keeps its source mode, so a read-only
+                // one fails O_RDWR with EACCES -- which used to leave fd == -1,
+                // produce a nil item, and (before the enumerator learned to
+                // skip) blank the entire folder. Write capability is decided
+                // separately in -capabilities, so opening read-only here only
+                // loses the ability to write, which we did not have anyway.
+                //
+                // O_RDWR stays FIRST deliberately: on a FIFO it returns at once
+                // where O_RDONLY would block, so it is load-bearing. O_NONBLOCK
+                // on the fallback covers the same hazard for every other type.
+                fd = openat(self.mount->root_fd, fix_path(host_path), O_RDONLY | O_NONBLOCK);
+            }
+            if (fd != -1)
+                break;   // stop at the first path that opens
+            if (errno != ENOENT)
+                break;   // a real error: report it rather than trying more rows
         }
         db_reset(&self.mount->db, stmt);
         db_commit(&self.mount->db);

@@ -125,6 +125,11 @@ static NSNumber *ISHFileProviderEnumeratorDurationMilliseconds(NSTimeInterval st
         return;
     }
     NSMutableArray<FileProviderItem *> *items = [NSMutableArray new];
+    // Entries we could not build an item for. Counted and reported rather than
+    // silently dropped -- a listing that is quietly short is its own bug.
+    NSUInteger skipped = 0;
+    NSError *firstSkipError = nil;
+    NSString *firstSkippedName = nil;
     struct dirent *dirent;
     errno = 0;
     while ((dirent = readdir(dir))) {
@@ -153,15 +158,27 @@ static NSNumber *ISHFileProviderEnumeratorDurationMilliseconds(NSTimeInterval st
         NSLog(@"returning %s %@", dirent->d_name, childIdent);
         FileProviderItem *item = [[FileProviderItem alloc] initWithIdentifier:childIdent mountOwner:_item.mountOwner error:&error];
         if (item == nil) {
-            ISHAppGroupReleaseLock(rootLockFd);
-            ISHFileProviderRecordBreadcrumb(@"fileprovider.enumerate.failed",
-                                            @{@"container": containerIdentifier,
-                                              @"domain": domainIdentifier,
-                                              @"duration_ms": ISHFileProviderEnumeratorDurationMilliseconds(start),
-                                              @"error": error.localizedDescription ?: @"unknown"});
-            [observer finishEnumeratingWithError:error];
-            closedir(dir);
-            return;
+            // Skip this entry, do not abandon the directory. Aborting here
+            // discarded every item already collected, so a SINGLE unopenable
+            // child made the whole folder show up empty in the Files app --
+            // and it stayed empty on every later enumeration too, because the
+            // offending file was still there. That is the "copy a file into
+            // Persist and the folder goes blank until you delete it" report:
+            // a read-only imported file (O_RDWR -> EACCES), a dangling
+            // symlink, or a stale db row is enough to do it.
+            //
+            // One missing row is a far better failure than no rows. The
+            // domain-root branch above already takes this view and continues
+            // past a root it cannot mount; this loop was the odd one out.
+            skipped++;
+            if (firstSkipError == nil)
+                firstSkipError = error;
+            if (firstSkippedName == nil)
+                firstSkippedName = name;
+            NSLog(@"skipping unreadable entry %@: %@", childIdent, error.localizedDescription ?: @"unknown");
+            error = nil;
+            errno = 0;
+            continue;
         }
         [items addObject:item];
         errno = 0;
@@ -183,11 +200,18 @@ static NSNumber *ISHFileProviderEnumeratorDurationMilliseconds(NSTimeInterval st
     closedir(dir);
     ISHAppGroupReleaseLock(rootLockFd);
     NSLog(@"returning %@", items);
-    ISHFileProviderRecordBreadcrumb(@"fileprovider.enumerate.end",
-                                    @{@"container": containerIdentifier,
-                                      @"domain": domainIdentifier,
-                                      @"duration_ms": ISHFileProviderEnumeratorDurationMilliseconds(start),
-                                      @"count": @(items.count)});
+    NSMutableDictionary<NSString *, id> *endCrumb = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"container": containerIdentifier,
+        @"domain": domainIdentifier,
+        @"duration_ms": ISHFileProviderEnumeratorDurationMilliseconds(start),
+        @"count": @(items.count),
+    }];
+    if (skipped > 0) {
+        endCrumb[@"skipped"] = @(skipped);
+        endCrumb[@"skipped_first"] = firstSkippedName ?: @"?";
+        endCrumb[@"skipped_error"] = firstSkipError.localizedDescription ?: @"unknown";
+    }
+    ISHFileProviderRecordBreadcrumb(@"fileprovider.enumerate.end", endCrumb);
     [observer didEnumerateItems:items];
     [observer finishEnumeratingUpToPage:nil];
 }
