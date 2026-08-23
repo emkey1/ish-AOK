@@ -291,9 +291,25 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
 // alias badge, matching Finder), falling back to the symlink's own info if
 // the target is missing (broken link).
 - (nullable ISHGuestFileItem *)itemForGuestPathViaVFS:(NSString *)guestPath {
+    // Resolving from AT_PWD walks the whole path. That is the right thing for a
+    // one-off stat; -listGuestDirectoryViaVFS: passes its open directory and a
+    // bare name instead, which is the same answer for one component of work.
+    return [self itemAtName:guestPath.fileSystemRepresentation
+                 relativeTo:AT_PWD
+                  guestPath:guestPath];
+}
+
+// `name` is resolved relative to `at` -- either AT_PWD with a full path, or an
+// open directory with a single component. `guestPath` is the absolute path the
+// item should report regardless, since every consumer navigates and acts on it.
+//
+// Caller must already hold a borrowed task context.
+- (nullable ISHGuestFileItem *)itemAtName:(const char *)name
+                                relativeTo:(struct fd *)at
+                                 guestPath:(NSString *)guestPath {
     struct statbuf lst;
     memset(&lst, 0, sizeof(lst));
-    if (generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &lst, AT_SYMLINK_NOFOLLOW_) < 0)
+    if (generic_statat(at, name, &lst, AT_SYMLINK_NOFOLLOW_) < 0)
         return nil;  // dangling entry (TOCTOU race) or permission error; caller skips it
 
     ISHGuestFileItem *item = [ISHGuestFileItem new];
@@ -310,7 +326,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         return item;
 
     char target[MAX_PATH];
-    ssize_t n = generic_readlinkat(AT_PWD, guestPath.fileSystemRepresentation, target, sizeof(target) - 1);
+    ssize_t n = generic_readlinkat(at, name, target, sizeof(target) - 1);
     if (n > 0) {
         target[n] = '\0';
         item.symlinkTarget = [NSString stringWithUTF8String:target] ?: @"";
@@ -320,7 +336,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
 
     struct statbuf followed;
     memset(&followed, 0, sizeof(followed));
-    if (generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &followed, 0) >= 0) {
+    if (generic_statat(at, name, &followed, 0) >= 0) {
         item.kind = ISHGuestFileKindFromMode((mode_t)followed.mode);
         item.size = followed.size;
         item.modificationDate = [NSDate dateWithTimeIntervalSince1970:(NSTimeInterval)followed.mtime];
@@ -406,14 +422,31 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         [names addObject:name];
     }
     if (fd->ops->readdir_end) fd->ops->readdir_end(fd);
-    fd_close(fd);
 
+    // Stat each entry against the directory we already have open, NOT by its
+    // absolute path. Closing the fd here and rebuilding "/a/b/c/name" per entry
+    // made every stat re-resolve every component from the root -- and each
+    // component costs a readlink attempt AND a stat inside fs/path.c, so the
+    // work was O(entries x depth) with a fakefs read transaction per step.
+    // Against the open directory it is one component per entry, and a symlink's
+    // extra readlink and follow-stat get the same reduction (they were three
+    // full walks per link, which is why symlink-dense directories like /bin
+    // were the worst case).
     NSMutableArray<ISHGuestFileItem *> *items = [NSMutableArray arrayWithCapacity:names.count];
     for (NSString *name in names) {
-        NSString *childPath = [guestPath stringByAppendingPathComponent:name];
-        ISHGuestFileItem *item = [self itemForGuestPathViaVFS:childPath];
-        if (item != nil) [items addObject:item];  // skip TOCTOU-dangling entries rather than aborting the listing
+        // Per-iteration pool: the path string and -fileSystemRepresentation's
+        // buffer are autoreleased, and on a directory with tens of thousands of
+        // entries they would otherwise all live until the listing finished. The
+        // item itself is retained by `items` and survives the drain.
+        @autoreleasepool {
+            NSString *childPath = [guestPath stringByAppendingPathComponent:name];
+            ISHGuestFileItem *item = [self itemAtName:name.fileSystemRepresentation
+                                           relativeTo:fd
+                                            guestPath:childPath];
+            if (item != nil) [items addObject:item];  // skip TOCTOU-dangling entries rather than aborting the listing
+        }
     }
+    fd_close(fd);
     [items sortUsingComparator:^NSComparisonResult(ISHGuestFileItem *a, ISHGuestFileItem *b) {
         return [a.name caseInsensitiveCompare:b.name];
     }];
