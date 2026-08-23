@@ -272,12 +272,54 @@ Two things worth knowing about the harness, both of which cost time here:
   guest root twice. Check the installed binary's hash before trusting a
   measurement, or boot a private device.
 
-**Residual, not fixed:** arrows, Tab, Esc, function keys and the Ctrl chords are
-still key commands, so they keep the same ~5 ms head start over typed text. The
-hazard is unchanged from before the vi keys were added and is far rarer -- it
-needs a special key inside the same 5 ms window -- but it is the same defect.
-Fixing it properly means either owning key repeat for every key or buffering the
-fast path behind the text path, neither of which this bug justified.
+**The residual is fixed too, the same day.** Taking the vi keys off the
+key-command path cured the reported symptom but left the mechanism standing:
+arrows, Tab, Esc, the function keys and the Ctrl chords are still key commands
+and kept the same ~5 ms head start over typed text. Same defect, same window,
+just a rarer trigger -- it needs a special key inside those 5 ms rather than one
+of four very common letters. Reproduced by interleaving Left arrows with typed
+characters and capturing what the tty actually got: `a<Left>b<Left>...` arrived
+as `a<Left><Left>b<Left>c<Left>d<Left>e<Left>f<Left>gh<Left>`, 3 runs out of 3.
+Nothing was lost -- eight letters and eight arrows both times -- only reordered.
+
+`-pressesBegan:` turns out to see **every** hardware key, in true press order,
+before either route runs, including keys a UIKeyCommand goes on to claim. That
+makes it the one place that knows what order the user typed in, so it is where
+the ordering is now enforced (`app/TerminalView.m`): each press that can produce
+input reserves a slot, whichever route produces the bytes fills that press's
+slot, and slots are emitted strictly from the front.
+
+Three things keep it from being worse than the disease it cures:
+
+* **A lone keystroke costs nothing.** It fills the only slot and flushes in the
+  same call, so the common case adds no latency at all. Only overlapping presses
+  ever wait.
+* **Every uncertain case degrades to sending immediately**, which is exactly the
+  behaviour before any of this existed. A mis-identified slot can fail to
+  improve the ordering; it cannot lose or duplicate a keystroke.
+* **Nothing can hold the queue indefinitely.** A press that produces no input --
+  a chord belonging to another responder, a keystroke swallowed into an IME
+  composition -- is written off after 75 ms. That has to clear the worst
+  text-path latency (25 ms, cold) by a wide margin, because giving up early is
+  what reintroduces the reordering. Presses that cannot reach the tty at all
+  (a modifier on its own, any Command chord) never reserve a slot in the first
+  place.
+
+Key repeat needed care: UIKit repeats a held key by calling `-handleKeyCommand:`
+again with **no press in between**, so a repeat must not take a reservation
+belonging to a key typed a millisecond earlier. The claim is checked against the
+press's own characters, and an unmatched claim is dropped.
+
+Verified on a private simulator, same device and harness for baseline and fix:
+arrows interleaved with text went from 3/3 reordered to 4/4 byte-exact; a
+ten-line regression capture came back byte-exact with no loss or duplication,
+including Tab and Esc landing in place and a hardware Ctrl-A arriving exactly
+between the `x` and `y` it was typed between; held Left arrow still repeats 7
+times over ~1.3 s, as do h/j/k/l, while an unregistered letter still yields 1;
+and the on-screen keyboard and the Ctrl accessory key both still work. Command
+chords and Cmd+V paste could not be driven from this harness -- the Simulator
+eats Cmd for its own shortcuts -- but Command presses never enter the queue by
+construction, and paste reaches the empty-queue immediate path.
 
 ### The file browsers froze behind bulk transfers -- FIXED 2026-08-23
 
