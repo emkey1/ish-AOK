@@ -10,6 +10,47 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### `fcntl(F_GETFL)` on a pipe reports an O_NONBLOCK the guest never set
+
+Found 2026-08-23 while writing `native_ptrace_group_stop.c`, whose drain step
+did the textbook thing and got bitten:
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    ... read until EAGAIN ...
+    fcntl(fd, F_SETFL, flags);          // "restore"
+
+The restore left the pipe NON-blocking, and every later `read` returned
+EAGAIN. Not an `F_SETFL` bug -- `flags` was already `O_NONBLOCK` when it was
+read back, so the restore faithfully wrote it again.
+
+**Where the lie comes from.** A guest pipe is a host pipe (`fs/pipe.c` ->
+`realfs_fdops`), and `realfs_getflags` (`fs/real.c:1160`) answers `F_GETFL` by
+asking the HOST descriptor:
+
+    int flags = fcntl(fd->real_fd, F_GETFL);
+
+Meanwhile `realfs_read` (`fs/real.c:585`) permanently forces that host
+descriptor non-blocking the first time the guest does a *blocking* read on it,
+and deliberately never restores it -- the comment there is right about why
+(restoring it races a sibling task into an uninterruptible, SIGKILL-proof host
+`read`, which is a real pipeherd hang that was fixed by exactly this). So the
+host flag is an implementation detail that must not be visible, and it is:
+before the first read `F_GETFL` says 0, after it says `O_NONBLOCK`, with the
+guest having done nothing.
+
+The kernel's own `fd->flags` -- which is what actually governs guest blocking
+semantics, and what `realfs_setflags` maintains -- still says blocking. The
+two disagree and `F_GETFL` returns the wrong one.
+
+**Next step.** `realfs_getflags` should report the guest-visible flags from
+`fd->flags` for the bits the guest owns (`O_APPEND`, `O_NONBLOCK`) and take
+only the access mode and the rest from the host. Small, but it needs its own
+test: the get-modify-set idiom is everywhere, and silently turning a pipe
+non-blocking under a program that never asked is the kind of thing that
+surfaces far from here. Worth checking whether sockets and ttys answer
+`F_GETFL` the same way before fixing just the one path.
+
 ### #523: yay's reported failure does not reproduce; an http2 flake does
 
 Reproduced the environment on 2026-08-20 -- Arch Linux ARM aarch64, yay v13.0.1
@@ -209,6 +250,74 @@ more.** That reflex is what kept this one invisible.
 
 ## Closed during the 550 cycle
 
+### A traced NATIVE program never reported its group-stop -- FIXED 2026-08-23
+
+The other half of the entry below, found by reading it and confirmed by
+running it. `strace` (or any tracer) attached to a program iSH-AOK runs as
+HOST code hung the moment that program was ^Z'd: no stop report ever reached
+the tracer, so its `wait4` waited forever.
+
+**Why the native path has a second copy of anything.** A native program
+(`kernel/native.h`) is not translated -- it runs as host C on the guest task's
+own thread -- so nothing dispatches instructions for it and `handle_interrupt`
+never runs. It polls instead, at `native_checkpoint()` (`kernel/native.c`),
+which is called from every syscall the libc shim makes. That function carried
+its own group-stop wait, whose comment said it mirrored `handle_interrupt` and
+which did not:
+
+    struct tgroup *group = current->group;
+    if (group->stopped) {
+        lock(&group->lock, 0);
+        while (group->stopped)
+            wait_for_ignore_signals(&group->stopped_cond, &group->lock, NULL);
+        unlock(&group->lock);
+    }
+
+No `ptrace_group_stop()` on the way in, so the stop was invisible to the
+tracer, and no re-check of `ptrace.traced` while parked, so the
+attach-after-stop order below was unreachable too. Both attach orders hung.
+
+**Confirmed before fixing**, with `/AOK/native/smallclue` invoked as `yes` on
+an aarch64 guest: the child group-stops (the parent's `waitpid(WUNTRACED)`
+reports it), `PTRACE_SEIZE` succeeds, and the next `wait4` never returns.
+`lldb -p` on the hung run named the frame outright -- `native_checkpoint` at
+`native.c:627`, in `wait_for_ignore_signals`, under `nlibc_write` under
+smallclue's `yes` loop. Native programs are perfectly traceable otherwise:
+`receive_signals` already routes a traced task's signals through
+`signal_delivery_stop`, and `native_checkpoint` already calls it. It was only
+the group-stop that had no path to the tracer.
+
+**Fixed by deleting the second copy rather than repairing it.** The
+group-stop wait now lives once, as `group_stop_wait()` in `kernel/signal.c`,
+and both `handle_interrupt` and `native_checkpoint` call it. Copy-and-drift is
+what produced the bug -- the native copy was written from the translated one
+and then never tracked its ptrace fixes -- so one function is the fix for the
+class, not just for this instance. The native path also gains the
+`group->continued` notify it never had, which wakes a parent blocked in
+`wait4`/`waitid(WCONTINUED)` when a native program is SIGCONT'd.
+
+`tests/manual/native_ptrace_group_stop.c` is the guard. Four cases: both
+attach orders, against a native program AND against an ordinary guest ELF as a
+control (the control is the whole test on a Linux oracle, which has no native
+dispatch). Like `ptrace_group_stop.c` it FORCES the attach-after-stop order
+with `waitpid(WUNTRACED)` rather than racing for it. Two details worth
+keeping:
+
+* The victim writes into a pipe forever. The first read proves the program is
+  really running, so the stop lands inside it rather than somewhere in exec;
+  and draining that pipe *while the child is stopped* makes a later successful
+  read positive proof it was RESUMED. "It died when I killed it" proves
+  nothing -- SIGKILL reaps a stopped task too.
+* The watchdog names the case it timed out in. stdout is block-buffered when
+  the suite captures it and a signal handler cannot safely flush it, so
+  without that a hang reports only "timeout" and every `test_logf` line is
+  lost -- including the one saying whether it was the control or the subject
+  that hung. The first A/B run was misread for exactly that reason.
+
+A/B'd with the kernel change stashed: `FAIL timeout in case
+native_stop_after_attach` without it, PASS with it, and `ptrace_group_stop`
+passes either way (its half was already fixed).
+
 ### #542: the JVM will not start on aarch64 -- FIXED 2026-08-23, and it was one bit
 
 `apk add openjdk21` then `java -version` on an aarch64 guest died before any
@@ -337,12 +446,10 @@ racing for it: a test that only fails when the scheduler cooperates would have
 reported this fixed while it was still broken. A/B'd on its own with the kernel
 fix stashed -- hangs to the watchdog without it, passes with it.
 
-**Noticed while reading, not fixed:** the native-program path has its own
-group-stop wait (`kernel/native.c`, the `^Z` block) and it has no ptrace
-handling at all -- a traced native program parks there and never reports to its
-tracer, whether it was traced from the start or attached to later. Nothing in
-this change touches that path and nothing here makes it worse, but `strace` on
-a native program would hit it. Its own change, with its own test.
+**Noticed while reading, and now fixed:** the native-program path had its own
+group-stop wait (`kernel/native.c`, the `^Z` block) with no ptrace handling at
+all. Confirmed real and fixed the same day -- see *A traced NATIVE program
+never reported its group-stop* above.
 
 **Worth remembering:** "passes alone, fails in the suite" is the signature of a
 load flake, and this project has a documented one (`time_conformance`). It is

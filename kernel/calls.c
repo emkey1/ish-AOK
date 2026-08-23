@@ -6279,53 +6279,12 @@ void handle_interrupt(int interrupt) {
     bool has_saved_mask = __atomic_load_n(&current->has_saved_mask, __ATOMIC_ACQUIRE);
     if (has_saved_mask || ((pending | group_pending) & ~blocked) != 0)
         receive_signals();
-    // Fast path: group->stopped is almost always false. Read it locklessly
-    // (it is _Atomic) and only take group->lock to actually wait when stopped.
-    // Missing a just-set transition here is harmless: a SIGSTOP'd thread is
-    // poked and re-enters handle_interrupt, catching the stop on the next pass.
-    struct tgroup *group = current->group;
-    if (group->stopped) {
-        // A traced task reports its group-stop to the tracer and blocks there
-        // until PTRACE_CONT (which lifts group->stopped). Without this the stop
-        // is invisible to the tracer's wait4 and the tracee hangs -- see
-        // ptrace_group_stop().
-        //
-        // `traced` is re-checked on every pass, not just on entry, and that is
-        // load-bearing in BOTH directions: the tracer may detach us while we
-        // are stopped, and it may also ATTACH to us while we are stopped.
-        // PTRACE_SEIZE of an already-group-stopped tracee sets `traced` from
-        // the tracer's own thread and notifies stopped_cond to bring us back
-        // around here (kernel/ptrace.c). Testing it once, outside the wait, is
-        // what a tracee that raise(SIGSTOP)'d before its tracer seized it used
-        // to do: it parked in the plain job-control wait below, never noticed
-        // it had become traced, never reported the stop, and the tracer's
-        // wait4 hung forever. Linux handles the same race from the other side
-        // -- ptrace_attach() wakes a __TASK_STOPPED tracee so it can re-enter
-        // the trap and report.
-        while (group->stopped) {
-            if (current->ptrace.traced) {
-                ptrace_group_stop();
-                continue;
-            }
-            lock(&group->lock, 0);
-            if (group->stopped && !current->ptrace.traced)
-                wait_for_ignore_signals(&group->stopped_cond, &group->lock, NULL);
-            unlock(&group->lock);
-        }
-
-        // We were stopped and have just been resumed. If SIGCONT flagged a
-        // reportable continue, wake a parent blocked in wait4/waitid(WCONTINUED)
-        // (the flag itself is consumed by the parent's notify_if_continued).
-        // Done from our own context — never the signal sender's — so taking
-        // pids_lock here respects the pids_lock -> group->lock ordering.
-        if (group->continued) {
-            complex_lockt(&pids_lock, 0);
-            struct task *parent = current->group->leader->parent;
-            if (parent != NULL)
-                notify(&parent->group->child_exit);
-            unlock(&pids_lock);
-        }
-    }
+    // A job-control group-stop parks the task until SIGCONT (or, for a traced
+    // task, until the tracer resumes it). Shared with native_checkpoint --
+    // kernel/signal.c -- because a native program needs exactly the same
+    // handling and the second copy this used to be lacked all of the ptrace
+    // half of it.
+    group_stop_wait();
 }
 
 

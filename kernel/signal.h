@@ -202,6 +202,12 @@ int send_group_signal(dword_t pgid, int sig, struct siginfo_ info);
 // check for and deliver pending signals on current
 // must be called without pids_lock, current->group->lock, or current->sighand->lock
 void receive_signals(void);
+// Block for the duration of a job-control group-stop, reporting it to a tracer
+// if the task is traced. Shared by the two execution models -- handle_interrupt
+// for translated code, native_checkpoint for a native program -- because they
+// used to hold separate copies and the native one silently lacked every bit of
+// the ptrace handling. Call with no lock held, from the task's own context.
+void group_stop_wait(void);
 // The blocked set as far as WAKING a task is concerned, which is not the same
 // as the blocked set as far as delivering to it is concerned: a native program's
 // handler is held by the shim with the signal blocked (kernel/native_libc.c),

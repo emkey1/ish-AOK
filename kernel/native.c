@@ -618,15 +618,13 @@ void native_checkpoint(void) {
         receive_signals();
     }
 
-    // ^Z. A stopped group parks its threads here until SIGCONT, mirroring what
-    // handle_interrupt does for translated code.
-    struct tgroup *group = current->group;
-    if (group->stopped) {
-        lock(&group->lock, 0);
-        while (group->stopped)
-            wait_for_ignore_signals(&group->stopped_cond, &group->lock, NULL);
-        unlock(&group->lock);
-    }
+    // ^Z. A stopped group parks its threads here until SIGCONT -- the SAME
+    // function handle_interrupt uses for translated code (kernel/signal.c),
+    // rather than a second copy of it. The copy this replaces claimed in its
+    // comment to mirror handle_interrupt and did not: it had no ptrace handling
+    // at all, so a traced native program that group-stopped never reported to
+    // its tracer and the tracer's wait4 hung forever.
+    group_stop_wait();
 
     // Signals the program installed a handler for. Those are kept blocked in
     // the kernel -- it cannot jump host code -- so receive_signals above skips
