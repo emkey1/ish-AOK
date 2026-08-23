@@ -46,7 +46,7 @@
         self.upgradeButton.enabled = YES;
         [self printToTerminal:@"# /sbin/apk upgrade"];
     } else {
-        [self showAlertWithTitle:@"fuck" message:@"No update needed. If you're seeing this message, there's a bug."];
+        [self showAlertWithTitle:@"That Shouldn't Happen" message:@"No update needed. If you're seeing this message, there's a bug."];
     }
 }
 
