@@ -47,6 +47,7 @@
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/utsname.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
@@ -108,12 +109,44 @@ static const char *arch_intern(const char *s) {
     return s;
 }
 
-static const char *detect_arch(pid_t pid) {
+// A kernel thread has no /proc/<pid>/exe -- on real Linux either -- so there is
+// no ELF header to read an architecture out of. Reporting "?" for AOK's
+// kthreadd is accurate but useless; a kernel thread belongs to the running
+// kernel, so the honest answer is the guest's own architecture. uname gives
+// that, and it is whatever the booted rootfs is.
+//
+// Mapped to the vocabulary the rest of this file uses (uname says "aarch64",
+// ktop's column says "arm64"), and cached: uname does not change under us.
+static const char *guest_arch(void) {
+    static const char *cached = NULL;
+    if (cached != NULL)
+        return cached;
+    struct utsname u;
+    cached = arch_intern("?");
+    if (uname(&u) == 0) {
+        if (strcmp(u.machine, "aarch64") == 0 || strcmp(u.machine, "arm64") == 0)
+            cached = arch_intern("arm64");
+        else if (strcmp(u.machine, "x86_64") == 0 || strcmp(u.machine, "amd64") == 0)
+            cached = arch_intern("x86_64");
+        else if (strcmp(u.machine, "riscv64") == 0)
+            cached = arch_intern("riscv64");
+        else if (u.machine[0] == 'i' && strstr(u.machine, "86") != NULL)
+            cached = arch_intern("x86");
+        else if (strncmp(u.machine, "arm", 3) == 0)
+            cached = arch_intern("arm");
+    }
+    return cached;
+}
+
+// `kernel_thread` comes from the caller, which has already read the state and
+// the command line: an empty /proc/<pid>/cmdline is how ps decides to bracket a
+// name, and excluding zombies keeps a reaped process from borrowing the label.
+static const char *detect_arch(pid_t pid, bool kernel_thread) {
     char path[64];
     snprintf(path, sizeof(path), "/proc/%d/exe", (int) pid);
     int fd = open(path, O_RDONLY);
     if (fd < 0)
-        return arch_intern("?");
+        return kernel_thread ? guest_arch() : arch_intern("?");
 
     unsigned char hdr[20];
     ssize_t n = read(fd, hdr, sizeof(hdr));
@@ -423,8 +456,10 @@ static int collect(struct proc_sample *procs, int max) {
         if (!read_proc_stat(pid, &p))
             continue;
         p.uid = read_proc_uid(pid);
-        p.arch = detect_arch(pid);
+        // cmdline first: detect_arch needs it to tell a kernel thread (no exe,
+        // empty cmdline) from a process whose exe merely could not be opened.
         read_proc_cmdline(pid, p.cmdline, sizeof(p.cmdline));
+        p.arch = detect_arch(pid, p.cmdline[0] == '\0' && p.state != 'Z');
         procs[count++] = p;
     }
     closedir(d);
