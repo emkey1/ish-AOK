@@ -496,6 +496,7 @@ static NSSet<NSString *> *ISHImageViewerSupportedExtensions(void) {
 
 - (void)updateZoomToggleTitle {
     [_zoomToggleButton setTitle:(_showingActualSize ? @"Fit" : @"100%") forState:UIControlStateNormal];
+    _zoomToggleButton.accessibilityLabel = _showingActualSize ? @"Fit to screen" : @"View actual size";
 }
 
 - (void)applyZoomMode {
