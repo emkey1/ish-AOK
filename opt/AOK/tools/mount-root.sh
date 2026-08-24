@@ -5,8 +5,12 @@
 # chroot: bind-mount the live /proc, /sys, /dev and /dev/pts (and /run) from
 # the currently-booted root into it, the same setup any Linux chroot needs
 # for process/tty/device-aware tools (top, ps, free, tty, ...) to work. Also
-# bind-mounts /AOK/tools in, so these same tools (including this script) are
-# reachable from inside the chroot too.
+# bind-mounts /AOK/tools and /AOK/tests in, so these same tools (including this
+# script) and the guest regression suite are reachable from inside the chroot
+# too. /AOK/tests is what makes a per-architecture test run possible at all:
+# without it, `mount-root.sh <root> -- sh /AOK/tests/setup-regressions.sh --run`
+# fails with "No such file or directory", because /AOK is the booted root's
+# aokfs mount and does not exist inside another root.
 #
 # iSH-AOK has no mount or PID namespaces, so /proc et al. always reflect the
 # one true kernel state regardless of which root you bind them into -- `top`
@@ -39,7 +43,7 @@
 set -u
 
 ROOTS_DIR=${ROOTS_DIR:-/AOK/roots}
-BIND_DIRS="proc sys dev dev/pts run AOK/tools"
+BIND_DIRS="proc sys dev dev/pts run AOK/tools AOK/tests"
 
 log()  { printf '\n\033[1;36m==>\033[0m \033[1m%s\033[0m\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
@@ -116,7 +120,7 @@ teardown_mounts() {
     root=$1
     log "Tearing down $root"
     # Reverse order: dev/pts before dev, etc.
-    for d in AOK/tools run dev/pts dev sys proc; do
+    for d in AOK/tests AOK/tools run dev/pts dev sys proc; do
         umount_one_dir "$root/$d"
     done
 }
