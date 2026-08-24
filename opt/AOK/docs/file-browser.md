@@ -17,7 +17,7 @@ terminal for [Workspace mode](workspace.md) and driving a full Finder by touch.
 | **cd Here** | `cd <this folder>` runs, and the sheet closes |
 | **Insert Path** | the current folder's path is typed at your cursor |
 | tap a breadcrumb | you jump to that ancestor |
-| long-press a row | the full menu: insert, cd, copy path, rename, info, delete |
+| long-press a row | the full menu: insert, cd, copy path, rename, duplicate, info, delete |
 
 Everything typed onto the command line is **shell-quoted first**. A file called
 `my report (final).txt` arrives as `'my report (final).txt'`, one argument, not
@@ -44,14 +44,21 @@ file list scrolls the list rather than growing the sheet.
 
 ## Managing files
 
-New Folder, Rename and Delete are in the sheet: New Folder under the `⋯` menu,
-the other two by long-pressing a row. Delete asks first, and says when it is
-about to take a folder's contents with it.
+New Folder, Rename, Duplicate and Delete are in the sheet: New Folder under the
+`⋯` menu, the rest by long-pressing a row. Delete asks first, and says when it
+is about to take a folder's contents with it.
 
-This is deliberately the smaller half of the tool. For sustained file work —
-a sidebar of locations, sorting, duplicating, previewing images and video —
-Workspace mode's file manager is still the full applet, and this sheet is not
-trying to replace it.
+Duplicate is offered on regular files only, because that is what the underlying
+copy supports — a folder has no Duplicate rather than one that fails. The copy
+names itself the way Finder does, treating only the last extension, so
+`notes.txt` becomes `notes copy.txt` and it picks a name no sibling already
+has.
+
+This is deliberately the smaller half of the tool. There is still no copy to
+*another* folder, no cut and paste, no multi-select and no permission editing.
+For sustained file work — a sidebar of locations, sorting, previewing images
+and video — Workspace mode's file manager is still the full applet, and this
+sheet is not trying to replace it.
 
 Hidden files are off by default; the `⋯` menu toggles them, and the choice
 sticks.
