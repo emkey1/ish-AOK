@@ -156,7 +156,11 @@ struct mm *mm_copy(struct mm *mm) {
     mem_set_page_limit(&new_mm->mem, mm->mem.page_limit);
     mem_set_mmap_window(&new_mm->mem, mm->mem.mmap_floor, mm->mem.mmap_ceiling);
     ipc_mm_init(new_mm);
-    fd_retain(new_mm->exefile);
+    // NULL when the task's first exec was a native program (e.g. the Shortcuts
+    // runner exec'ing /AOK/native/zsh directly): no guest image was ever
+    // loaded, and mm_release already tolerates that.
+    if (new_mm->exefile != NULL)
+        fd_retain(new_mm->exefile);
     // Use the quiesce/poke protocol: sibling threads sharing this mm hold the
     // read lock for as long as they execute guest code, and only a poke makes
     // them exit at the next block boundary. A plain write_lock can stall fork
