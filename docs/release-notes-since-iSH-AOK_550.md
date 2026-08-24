@@ -87,16 +87,27 @@ run in eight.
   killing the extension before any AOK code ran. The app says why instead.
 - **`curl`, `wget` and `md <url>`** work, over an NSURLSession-backed libcurl.
 - **Real `tar`, `gzip`, `gunzip` and `zcat`**, over guest-backed gzip streams.
-- **`ktop`** reports a guest architecture for kernel threads instead of `?`.
+- **`ktop`** reports a guest architecture for kernel threads instead of `?`,
+  and the **prebuilt binaries actually contain that fix**. The job that
+  cross-compiles and commits them had failed on every run since before build
+  547 — it pinned a setup action that resolves versions against Zig's
+  dev-builds path, and 0.16.0 is a release — so the shipped binary had been
+  quietly frozen for four releases while `ktop.c` moved on.
 - **`kill()` is process-directed**, delivered to a thread that can take it.
 - Directory listings **stat against the open directory** rather than re-walking
   every path from `/`, which collapses the cost from O(entries × depth).
 
 ## Documentation
 
-Three pages for features that had none: `themes.md`, `md.md` and `proc-ish.md` —
-the last recording that `/proc/ish/defaults` is read-only, a window onto the
-app's settings rather than a control surface. Nineteen pages now.
+Three pages for features that had none: `themes.md`, `md.md` and `proc-ish.md`.
+Nineteen pages now.
+
+All three were then rewritten, because a verification pass caught seven wrong
+claims in them — including two that reported a capability as absent when it is
+not. `/proc/ish/defaults` is **writable by root**, and a write takes effect live
+through the same validator Settings uses; `md`'s `-l` flag is in its usage text,
+not missing from it. A page that says a thing cannot be done is the kind of
+error nobody reports, because the reader simply believes it.
 
 A full pre-release audit found and fixed a page that would have cost people
 their symlinks: `native-links.sh --remove` had been widened to own anything
@@ -127,4 +138,4 @@ instruction 4175 — which turned out to be the tool rather than the emulator.
 
 ## Commit Range
 
-`builds/iSH-AOK_549..builds/iSH-AOK_550` — 162 commits.
+`builds/iSH-AOK_549..builds/iSH-AOK_550` — 167 commits.

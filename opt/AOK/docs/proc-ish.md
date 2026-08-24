@@ -68,6 +68,11 @@ above block glyphs — the characters box-drawing and TUI programs use — where
 row of blocks shows hairline gaps instead of a solid field. Nudging it just
 below 1 usually removes them. Settings → Appearance → Line Height.
 
+That 0.70-1.30 is what the stepper offers. Writing `line_height` directly
+accepts anything above 0.5 and up to 2 -- the floor exists because below about
+half the measured height even capitals are cut. The stepper is the range worth
+using; the validator is only a guard against nonsense.
+
 ## Writable entries
 
 Most of `/proc/ish` is read-only. The exceptions:

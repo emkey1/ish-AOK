@@ -40,8 +40,6 @@ where upstream SmallCLUE looks.
 With no arguments and no terminal — `md < file.md`, or on the end of a pipe —
 it reads standard input instead of listing.
 
-`md`'s own `--help` text omits `-l`. The flag works; the help is what is wrong.
-
 ## Things worth knowing
 
 - **It opens everything read-only.** A file it renders is never written to.
