@@ -1,4 +1,4 @@
-iSH is licensed under the [GPLv3][]. The additional terms in LICENSE.IOS also apply.
+iSH-AOK is licensed under the [GPLv3][]. The additional terms in LICENSE.IOS also apply.
 
 Contributions made after commit 0e3a4144f93135c4fd618c8397d2cfd87194f69f are
 additionally licensed under the [GPLv2][]. This is intended to allow linking

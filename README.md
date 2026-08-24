@@ -33,11 +33,8 @@ each gadget's body cheaper, not free.
 | `arm64` | supported, JIT |
 | `riscv64` | supported, JIT |
 
-The per-guest regression suites pass on all four on device. One known exception
-on the CLI build: `fakefs_type_race` crashes deterministically on an i386 guest
-(forward-edge block chaining; workaround `ISH_I386_NOCHAIN=1` — see
-[docs/TODO.md](docs/TODO.md)). Note that the interpreters are legacy and are
-being retired: new work should target the JIT.
+The per-guest regression suites pass on all four on device. Note that the
+interpreters are legacy and are being retired: new work should target the JIT.
 
 Relevant files:
 

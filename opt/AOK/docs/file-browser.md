@@ -65,8 +65,10 @@ sticks.
 
 ## Things worth knowing
 
-- The keyboard does **not** dismiss when the sheet opens, and it comes back
-  focused afterwards — the point is to type, so nothing is put away.
+- The keyboard drops when the sheet opens and comes back, focused, when it
+  closes — so a path you insert lands on a live command line. It has to work
+  that way: the keyboard bar is an accessory view, and an accessory view floats
+  *above* a sheet, where it covered `cd Here` and `Insert Path`.
 - `cd Here` sends a real command line, so it lands in your shell history like
   anything else you typed.
 - It sends keystrokes to whatever is reading the terminal. Use it at a prompt.

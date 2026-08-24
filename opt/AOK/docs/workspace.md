@@ -140,7 +140,8 @@ the app: the guest's working directory is not the app's, and the process may be
 gone before the window appears. `motepad` and the `ws-*` launchers resolve yours
 for you.
 
-The file is `0644` and owned by root, like `/proc/ish/roots` — reading it works
+The file is `0666` and owned by root — unlike `/proc/ish/roots`, which is
+`0644`. Reading it works
 for anyone, writing to it needs root. The app logs you in as root, so this is
 usually invisible; it is worth knowing if you run a `ws-*` launcher as the
 UID 1000 user and get `Permission denied` from a command that works fine in your

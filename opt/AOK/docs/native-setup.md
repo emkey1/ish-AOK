@@ -127,10 +127,13 @@ sh /AOK/tools/native-links.sh --remove
 ```
 
 That removes every link it owns, restores the login shell it saved, and deletes
-`/etc/profile.d/05-aok-native-bin.sh`. It only touches symlinks that resolve to
-`/AOK/native/smallclue` specifically, so anything of your own in the same
-directory — including a link you made to `/AOK/native/bash` by hand — is left
-alone. Pass the same directory you installed into if it was not the default. The
+`/etc/profile.d/05-aok-native-bin.sh`. It removes any symlink in that directory
+pointing **anywhere into `/AOK/native`** — not just SmallCLUE's applets, but the
+standalone programs too, and that includes a link you made to `/AOK/native/bash`
+or `/AOK/native/hx` by hand: the script now creates those itself, so it treats
+them as its own. A real file is never touched, nor is a symlink pointing
+anywhere outside `/AOK/native`, and only the top level of the directory is
+scanned. Keep a link you want to survive outside the link directory. Pass the same directory you installed into if it was not the default. The
 PATH change goes away at your next login.
 
 `--list` applies here too: `--list --remove` prints every link, file and shell

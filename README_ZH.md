@@ -1,11 +1,6 @@
 # iSH-AOK
 
-> **翻译说明：** 本文是 [README.md](README.md) 较早修订版（2026-08-14）的翻译，缺少 549
-> 版新增的原生程序（SmallCLUE、bash、zsh）相关内容。最新内容请参阅 README.md。
->
-> 特别是许可证方面：`git submodule update --init --recursive` 会包含 `deps/bash`，
-> 因此默认构建会产生 GPLv3 二进制文件。若打算分发，请先阅读 README.md 中的
-> "Native bash and licensing" 一节。
+> **翻译说明：** 本文是 [README.md](README.md) 的译文。若有出入，以英文版 README.md 为准。
 
 iSH-AOK 是 [ish-app/ish](https://github.com/ish-app/ish) 的一个分支（fork），在此基础上添加了用于日常开发的产品、工具链和平台相关改动。
 
@@ -19,7 +14,9 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
   - 产品名 `iSH-AOK`
   - Bundle root `app.ish.iSH-AOK`
 - **四种客户机架构**，全部基于 JIT：`i386`、`amd64`（x86_64）、`arm64`（aarch64）和 `riscv64`。
-- 内置在应用中的根文件系统（Alpine 3.23.3 与 Devuan 6，各自提供 i386、x86_64 和 aarch64 版本），以及包含 riscv64 在内的可下载镜像。
+- **原生程序**：bash、zsh，以及携带 OpenSSH（`ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id`）和 Nextvi 编辑器的 SmallCLUE busybox 风格工具箱，都作为宿主代码编译进应用，并由客户机的 `execve` 经 `/AOK/native/<名称>` 分发。它们是运行在客户机任务线程上的宿主函数，而不是客户机二进制，因此以全速运行，无需逐条指令翻译。
+- `/AOK`，一个只读的应用内文件系统（`/AOK/docs`、`/AOK/tools`、`/AOK/tests`、`/AOK/native`），在构建时通过 `fs/aok-*.manifest` 和 `tools/gen-aokfs.py` 从 `opt/AOK/` 嵌入。
+- 内置在应用中的根文件系统（Alpine 3.23.3 与 Devuan 6，仅 `aarch64`），以及面向 `i386`、`x86_64` 和 `riscv64` 的可下载镜像。
 - 通过 iOS 系统 API 暴露客户机文件的 File Provider 支持。
 - 可选加速器：用原生代码替换热点 libc 例程，以及加密与 pixman 卸载。
 - 该分支专属的额外诊断与运维相关改动。
@@ -37,8 +34,8 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 | `arm64` | 已支持，JIT |
 | `riscv64` | 已支持，JIT |
 
-各客户机的回归测试套件在四种架构上都能通过。解释器属于遗留实现且即将移除，新的工作
-应当以 JIT 为目标。
+各客户机的回归测试套件在真机上于四种架构均能通过。解释器属于遗留实现且即将移除，新的
+工作应当以 JIT 为目标。
 
 相关文件：
 
@@ -72,14 +69,18 @@ echo all=1 > /proc/ish/riscv64_jit_fuse
 
 | 功能 | CLI | 作用 |
 |---|---|---|
-| HLE | `ISH_HLE=1` | 用原生代码替换热点 libc 例程（`memcpy`、`strlen`、`memcmp` 等） |
+| HLE | `ISH_HLE=1` | 用原生代码替换热点 libc 例程（`memcpy`、`strlen`、`memcmp` 等）——**仅限 arm64 与 riscv64 客户机** |
 | 加密 | `ISH_CRYPTO_ACCEL=1` | AES-GCM 与 ChaCha20-Poly1305 卸载 |
 | Pixman | `ISH_PIX_ACCEL=1` | pixman 合成卸载 |
 
-其中 HLE 影响最大。在以被替换例程为主的循环中，客户机可以从比原生慢约 250 倍改善到
-约 1.4 倍，因为工作发生在一次原生调用内部，而不是每条客户机指令一次分派。它是纯粹的
-快速路径：无法识别的 libc 不会匹配，直接回退到普通翻译。`ISH_HLE_STATS=1` 会输出每个
-函数的调用次数。
+HLE 影响最大，但只对 arm64 和 riscv64 客户机有效：`jit/jit.c` 只为这两者开了门，因此
+i386 或 amd64 客户机根本不会走这条路径，在那里设置 `ISH_HLE=1` 会悄无声息地毫无作用。
+与关闭该选项的同一构建相比，在 memcpy/memset/memcmp/strlen 循环上实测：256 B 时
+1.23 倍，4 KB 时 3.16 倍，64 KB 时 7.17 倍，1 MB 时 6.68 倍
+（[docs/performance-optimizations-2026-07.md](docs/performance-optimizations-2026-07.md)）。
+工作发生在一次原生调用内部，而不是每条客户机指令一次分派，因此它对数据搬运密集的代码
+有帮助，而在程序自身算术占主导时则是中性的。它是纯粹的快速路径：无法识别的 libc 不会
+匹配，直接回退到普通翻译。`ISH_HLE_STATS=1` 会输出每个函数的调用次数。
 
 ## 仓库结构
 
@@ -105,6 +106,9 @@ cd ish-AOK
 ```bash
 git submodule update --init --recursive
 ```
+
+请注意，`--recursive` 会包含 `deps/bash`，这会让默认构建成为 GPLv3 构建。若打算分发
+构建结果，请阅读[原生 bash 与许可证](#原生-bash-与许可证)。
 
 ## 构建依赖
 
@@ -336,10 +340,17 @@ sh /AOK/tests/setup-regressions.sh --only fs_conformance,futex_core --run
 同时加入 [tests/manual/setup-regressions.sh](tests/manual/setup-regressions.sh) 以便被
 构建和运行。清单里遗漏的测试会在设备上悄无声息地消失。
 
+有三个套件是例外：`native_zsh_fork_state.sh`（119 个用例）、`native_bash_fork_state.sh`
+（20 个）和 `native_stdio_redirect.sh` 是 shell 脚本而非 C，因此 `setup-regressions.sh`
+既不构建也不列出它们。它们经由清单随应用发布，直接从 `/AOK/tests` 运行，并且各自都需要
+对应的原生程序存在。
+
 ## 使用根文件系统
 
-应用内置：Alpine 3.23.3 与 Devuan 6（excalibur），各自提供 `i386`、`x86_64` 和
-`aarch64` 版本。包括 `riscv64` 和 Arch 在内的更多镜像可在应用内下载，目录见
+应用内置：Alpine 3.23.3 与 Devuan 6（excalibur），仅 `aarch64`。Xcode 的
+"Download Root" 阶段会安装这两个压缩包，并从 Resources 中删除 i386 和 x86_64 的压缩包，
+因此在下载任何东西之前，设备上只有这两个。同样这两个发行版的 `i386`、`x86_64` 和
+`riscv64` 版本，以及 Arch，都可在应用内下载，目录见
 [deps/rootfs-manifest](deps/rootfs-manifest)。
 
 根文件系统选择界面与元数据处理位于：

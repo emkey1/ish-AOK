@@ -1,12 +1,7 @@
 # iSH-AOK
 
-> **번역 안내:** 이 문서는 [README.md](README.md)의 이전 개정판(2026-08-14)을 옮긴 것으로,
-> 549 릴리스에서 추가된 네이티브 프로그램(SmallCLUE, bash, zsh)에 관한 내용이 빠져
-> 있습니다. 최신 내용은 README.md를 참고하세요.
->
-> 특히 라이선스: `git submodule update --init --recursive`는 `deps/bash`를 포함하므로
-> 기본 빌드는 GPLv3 바이너리가 됩니다. 배포할 계획이라면 README.md의
-> "Native bash and licensing" 절을 먼저 읽으십시오.
+> **번역 안내:** 이 문서는 [README.md](README.md)의 번역본입니다. 내용이 어긋나는
+> 경우 영어판 README.md가 정본입니다.
 
 iSH-AOK는 [ish-app/ish](https://github.com/ish-app/ish)의 포크로, 이 트리에서의 일상적인 개발을 위한 자체 제품, 툴링, 플랫폼 변경 사항을 포함하고 있습니다.
 
@@ -20,7 +15,9 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
   - 제품명 `iSH-AOK`
   - 번들 루트 `app.ish.iSH-AOK`
 - **네 가지 게스트 아키텍처**, 모두 JIT 기반: `i386`, `amd64`(x86_64), `arm64`(aarch64), `riscv64`.
-- 앱 빌드에 번들된 루트 파일시스템(Alpine 3.23.3과 Devuan 6, 각각 i386, x86_64, aarch64용), 그리고 riscv64를 포함한 추가 다운로드 이미지.
+- **네이티브 프로그램**: bash, zsh, 그리고 OpenSSH(`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`)와 Nextvi 편집기를 품고 있는 SmallCLUE 의 busybox 스타일 도구 모음이 호스트 코드로 앱에 컴파일되어 들어가며, 게스트의 `execve` 에서 `/AOK/native/<이름>` 을 통해 디스패치됩니다. 이들은 게스트 바이너리가 아니라 게스트 태스크 스레드 위에서 도는 호스트 함수이므로, 명령어 단위로 변환되지 않고 전속력으로 실행됩니다.
+- `/AOK`, 읽기 전용 인앱 파일시스템(`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`). `fs/aok-*.manifest` 와 `tools/gen-aokfs.py` 를 통해 빌드 시점에 `opt/AOK/` 에서 만들어 넣습니다.
+- 앱 빌드에 번들된 루트 파일시스템(Alpine 3.23.3과 Devuan 6, `aarch64` 전용), 그리고 `i386`, `x86_64`, `riscv64` 용 다운로드 이미지.
 - iOS를 통해 게스트 파일을 노출하는 File Provider 지원.
 - 선택적 가속기: 자주 쓰이는 libc 루틴의 네이티브 대체, 암호화 및 pixman 오프로드.
 - 이 포크 전용의 추가 진단 및 운영 관련 변경 사항.
@@ -39,7 +36,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 | `arm64` | 지원됨, JIT |
 | `riscv64` | 지원됨, JIT |
 
-게스트별 회귀 테스트 스위트는 네 아키텍처 모두에서 통과합니다. 인터프리터는
+게스트별 회귀 테스트 스위트는 기기에서 네 아키텍처 모두 통과합니다. 인터프리터는
 레거시이며 제거될 예정이므로, 새 작업은 JIT를 대상으로 해야 합니다.
 
 관련 파일:
@@ -75,15 +72,20 @@ echo all=1 > /proc/ish/riscv64_jit_fuse
 
 | 기능 | CLI | 동작 |
 |---|---|---|
-| HLE | `ISH_HLE=1` | 자주 쓰이는 libc 루틴(`memcpy`, `strlen`, `memcmp` 등)을 네이티브 코드로 대체 |
+| HLE | `ISH_HLE=1` | 자주 쓰이는 libc 루틴(`memcpy`, `strlen`, `memcmp` 등)을 네이티브 코드로 대체 — **arm64와 riscv64 게스트 전용** |
 | 암호화 | `ISH_CRYPTO_ACCEL=1` | AES-GCM 및 ChaCha20-Poly1305 오프로드 |
 | Pixman | `ISH_PIX_ACCEL=1` | pixman 합성 오프로드 |
 
-이 중 HLE의 영향이 가장 큽니다. 대체 대상 루틴이 대부분을 차지하는 루프에서, 게스트는
-네이티브 대비 약 250배 느린 상태에서 약 1.4배 수준으로 개선됩니다. 게스트 명령어마다
-디스패치를 하는 대신 네이티브 호출 한 번 안에서 작업이 이루어지기 때문입니다. 이는
-순수한 빠른 경로입니다. 인식되지 않는 libc는 매칭되지 않고 일반 변환으로 넘어갑니다.
-`ISH_HLE_STATS=1`은 함수별 호출 횟수를 출력합니다.
+HLE의 영향이 가장 크지만, arm64와 riscv64 게스트에 한정됩니다. `jit/jit.c`가 이 둘에만
+게이트를 걸어 두었기 때문에 i386이나 amd64 게스트는 이 경로를 아예 타지 않으며,
+그곳에서는 `ISH_HLE=1`을 줘도 조용히 아무 일도 일어나지 않습니다. 같은 빌드에서 끈
+상태와 비교해 memcpy/memset/memcmp/strlen 루프로 측정한 값은 256 B에서 1.23배,
+4 KB에서 3.16배, 64 KB에서 7.17배, 1 MB에서 6.68배입니다
+([docs/performance-optimizations-2026-07.md](docs/performance-optimizations-2026-07.md)).
+게스트 명령어마다 디스패치를 하는 대신 네이티브 호출 한 번 안에서 작업이 이루어지므로,
+데이터 이동이 많은 코드에는 도움이 되고 프로그램 자신의 산술 연산이 지배적인 경우에는
+중립적입니다. 이는 순수한 빠른 경로입니다. 인식되지 않는 libc는 매칭되지 않고 일반
+변환으로 넘어갑니다. `ISH_HLE_STATS=1`은 함수별 호출 횟수를 출력합니다.
 
 ## 저장소 구조
 
@@ -109,6 +111,10 @@ cd ish-AOK
 ```bash
 git submodule update --init --recursive
 ```
+
+`--recursive` 는 `deps/bash` 를 포함하므로 기본 빌드가 GPLv3 빌드가 된다는 점에
+유의하세요. 결과물을 배포할 생각이라면
+[네이티브 bash와 라이선스](#네이티브-bash와-라이선스) 를 읽어 보십시오.
 
 ## 빌드 요구 사항
 
@@ -363,11 +369,18 @@ sh /AOK/tests/setup-regressions.sh --only fs_conformance,futex_core --run
 [tests/manual/setup-regressions.sh](tests/manual/setup-regressions.sh)에도 추가하세요.
 매니페스트에서 빠진 테스트는 기기에서 아무 말 없이 사라집니다.
 
+예외인 스위트가 셋 있습니다. `native_zsh_fork_state.sh`(119개), `native_bash_fork_state.sh`(20개),
+`native_stdio_redirect.sh` 는 C 가 아니라 셸 스크립트여서 `setup-regressions.sh` 가
+빌드하지도 나열하지도 않습니다. 이들은 매니페스트를 통해 배포되어 `/AOK/tests` 에서
+직접 실행되며, 각각 대응하는 네이티브 프로그램이 있어야 합니다.
+
 ## 루트 파일시스템 다루기
 
-앱에 번들된 것: Alpine 3.23.3과 Devuan 6(excalibur), 각각 `i386`, `x86_64`,
-`aarch64`용. `riscv64`와 Arch를 포함한 추가 이미지는 앱 안에서 내려받을 수 있으며,
-카탈로그는 [deps/rootfs-manifest](deps/rootfs-manifest)에 있습니다.
+앱에 번들된 것: Alpine 3.23.3과 Devuan 6(excalibur), `aarch64` 전용. Xcode 의
+"Download Root" 단계가 이 두 아카이브를 설치하고 Resources 에서 i386 과 x86_64
+아카이브를 지우므로, 무언가를 내려받기 전까지는 이 둘만 존재합니다. 같은 두 배포판의
+`i386`, `x86_64`, `riscv64` 판과 Arch 는 앱 안에서 내려받을 수 있으며, 카탈로그는
+[deps/rootfs-manifest](deps/rootfs-manifest)에 있습니다.
 
 루트 선택 UI와 메타데이터 처리는 다음에 있습니다.
 

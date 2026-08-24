@@ -38,8 +38,12 @@ menu via **Add Destination…**.
 
 Manage the saved set under **Settings → Destinations**: select, edit,
 duplicate (handy for the same server with two models), or delete. The
-Settings rows below it — Provider, Server URL, Model, API Key — always
-configure whichever destination is currently selected.
+Settings rows below it — Server URL, Model, API Key — configure whichever
+destination is currently selected. **Provider** is different: picking one
+switches to your saved destination for that provider if you have one, restoring
+its model, URL and key, and otherwise adds a new destination seeded from the
+preset. It never overwrites the destination you were on, so keeping one setup
+per provider and moving between them is just picking the provider.
 
 ## Providers
 
