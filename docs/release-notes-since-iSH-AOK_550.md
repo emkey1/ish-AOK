@@ -1,6 +1,6 @@
 # Release Notes Since `builds/iSH-AOK_549`
 
-162 commits. Where 549 was about making native programs *believe* they were
+167 commits. Where 549 was about making native programs *believe* they were
 inside the guest, this release is mostly about the things you actually touch:
 a file browser you can reach without leaving the terminal, an editor, helix,
 themes worth using, and a run of fixes for bugs that took the app down or made
