@@ -20,8 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # v1 resolved a version against Zig's dev-builds path and a list of
+      # community mirrors. 0.16.0 is a RELEASE, so it lives under
+      # ziglang.org/download/ instead, and every one of v1's sources started
+      # answering 404/503 for it -- this job had failed on every run since
+      # before build 547 without anyone noticing, so the prebuilt binaries
+      # silently stopped tracking ktop.c. v2 resolves releases correctly.
       - name: Install zig
-        uses: mlugg/setup-zig@v1
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
 
