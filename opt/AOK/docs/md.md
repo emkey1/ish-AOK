@@ -44,16 +44,19 @@ it reads standard input instead of listing.
 
 ## Things worth knowing
 
-- **It never modifies what it renders.** An earlier version rewrote the
-  documents it displayed; it does not any more. Rendering a file leaves it
-  byte-for-byte as it was.
-- **Press `o` to open links in-page**, so a document set that cross-links —
-  like this one — can be read by following references rather than by relaunching
-  with a new filename.
+- **It opens everything read-only.** A file it renders is never written to.
+  (An August 2026 fix titled "stop rewriting the documents it renders" was about
+  mangled *output* — the text on your screen — not about files on disk. Nothing
+  was ever damaged.)
+- **Links are numbered and followable in-page.** `[` and `]` move between the
+  links on the page, Enter or `o` opens the selected one, `q` goes back one
+  document, and `Q` quits. A document set that cross-links — like this one — can
+  be read by following references rather than by relaunching with a filename.
 - **Colour turns itself off when it should**: piped or redirected output gets
   plain text, and `NO_COLOR` is honoured.
-- **It does its own paging.** SmallCLUE's `less` and `more` are deliberately not
-  linked onto your PATH (see [native-setup.md](native-setup.md)), but `md` does
-  not need them.
+- **It does its own paging**, so it needs no external pager. (SmallCLUE's
+  `less` and `more` were held off PATH for a while over a bug that turned out
+  not to be theirs; they are linked again as of this release. See
+  [native-setup.md](native-setup.md).)
 - **A URL is fetched through the app**, using the same networking as `curl` and
   `wget` here — see [networking.md](networking.md).

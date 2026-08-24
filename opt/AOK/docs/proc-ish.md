@@ -25,10 +25,26 @@ ls  /proc/ish/defaults               # everything available
 Values come out as JSON: strings quoted, numbers bare, booleans as `true` or
 `false`.
 
-**These are read-only.** They are a window onto the app's preferences, not a
-control surface — writing one fails no matter who you are, including root. To
-change a setting, use Settings in the app. What this is good for is a script
-that needs to know how the app is configured: which theme is active, whether an
+The entries are `0444 root:root`, so an ordinary user can read them and gets
+`EACCES` on write. **Root can write them**, and the change takes effect live and
+persists, exactly as though you had used Settings:
+
+```sh
+echo '"Nord"' > /proc/ish/defaults/theme    # a string value, so JSON-quoted
+echo 16 > /proc/ish/defaults/font_size
+```
+
+The value goes through the same validation the Settings screen uses, so a
+rejected value fails the write rather than wedging the app. Removing an entry
+resets that preference to its default:
+
+```sh
+rm /proc/ish/defaults/font_size
+```
+
+If **Login As Default User** is on you are not root, and these become
+read-only unless you `sudo`. Reading is the common case anyway: a script that
+needs to know how the app is configured — which theme is active, whether an
 accelerator is on, what the font size is.
 
 The names are lower-cased and underscored versions of the Settings labels, so
