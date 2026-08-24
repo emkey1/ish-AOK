@@ -766,7 +766,56 @@ static NSString *PreferredDefaultRootName(NSOrderedSet<NSString *> *roots) {
     [self requestFileProviderDomainSync];
 }
 
+// The File Provider extension cannot run on a Mac, and registering a domain
+// there does not fail politely -- it crashes.
+//
+// FileProviderExtension subclasses NSFileProviderExtension, whose availability
+// macro in Apple's own SDK is
+//
+//     API_AVAILABLE(ios(8.0)) API_UNAVAILABLE(macos, macCatalyst)
+//
+// and the extension point is com.apple.fileprovider-nonui, the classic API.
+// macOS hosts only the replicated API (NSFileProviderReplicatedExtension). So
+// on an Apple Silicon Mac running this as a "Designed for iPad" app, the
+// framework loads the extension, finds one it cannot host, and aborts it with
+// __FILEPROVIDER_BAD_EXTENSION__ inside beginRequestWithDomain: -- before a
+// single line of ours runs, which is why the crash reports carry no AOK frame.
+//
+// Nothing inside the extension can prevent that; the only lever is here, in the
+// app: do not register a domain, and the extension is never asked to begin a
+// request. Everything else about AOK works on a Mac -- it is the Files
+// integration specifically that is unavailable.
+static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
+    if (@available(iOS 14.0, *)) {
+        NSProcessInfo *info = NSProcessInfo.processInfo;
+        return info.isiOSAppOnMac || info.isMacCatalystApp;
+    }
+    return NO;
+}
+
+// Drop a domain a previous run (or an earlier build) left registered, so a Mac
+// does not keep a stale one that Finder would try to open.
+- (void)removeAllFileProviderDomainsForUnsupportedPlatform {
+    [NSFileProviderManager getDomainsWithCompletionHandler:^(NSArray<NSFileProviderDomain *> *domains, NSError *error) {
+        if (error != nil || domains.count == 0)
+            return;
+        for (NSFileProviderDomain *domain in domains) {
+            [NSFileProviderManager removeDomain:domain completionHandler:^(NSError *removeError) {
+                if (removeError != nil)
+                    NSLog(@"error removing file provider domain on unsupported platform: %@", removeError);
+            }];
+        }
+    }];
+}
+
 - (void)requestFileProviderDomainSync {
+    if (ISHFileProviderUnavailableOnThisPlatform()) {
+        [ISHDiagnosticsStore recordBreadcrumb:@"fileprovider.domainSync.unsupportedPlatform"
+                                      details:@{@"reason": @"NSFileProviderExtension is unavailable on macOS"}];
+        [self removeAllFileProviderDomainsForUnsupportedPlatform];
+        return;
+    }
+
     NSArray<NSString *> *rootsSnapshot = nil;
     NSUInteger requestedGeneration = 0;
     @synchronized (self) {

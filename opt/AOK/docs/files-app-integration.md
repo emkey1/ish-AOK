@@ -7,6 +7,23 @@ not been renamed to match the fork. Once set up, your guest files
 show up as a regular location in the iOS **Files** app, and in any other
 app's document picker — no `scp`, no manual export step.
 
+## Not available on a Mac
+
+If you are running iSH-AOK on an Apple Silicon Mac (as a "Designed for iPad"
+app), this feature is switched off and your filesystems will not appear in
+Finder. That is deliberate.
+
+The extension is built on Apple's `NSFileProviderExtension`, which their own SDK
+marks unavailable on macOS -- a Mac hosts only the newer replicated File
+Provider API. Left enabled, macOS loads the extension, finds one it cannot host,
+and kills it before any iSH-AOK code runs. So the app does not register a
+provider there at all; a missing feature is better than a crash you cannot act
+on.
+
+Nothing else is affected -- the emulator, Workspace mode and the terminal file
+browser all work normally on a Mac. To move files in and out, use the terminal
+(`scp`, or [/AOK/persist](persist.md), which is a real host directory).
+
 ## Enabling it
 
 Files app integration is an iOS extension, so it needs to be turned on

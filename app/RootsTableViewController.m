@@ -480,7 +480,29 @@
     return nil;
 }
 
+// Say why the Files app shows nothing, on the screen where a user would expect
+// their filesystems to be browsable from. Silence here reads as a broken
+// feature; the reason is a platform limit, not something they can fix.
+static BOOL ISHRunningAsIOSAppOnMac(void) {
+    if (@available(iOS 14.0, *)) {
+        NSProcessInfo *info = NSProcessInfo.processInfo;
+        return info.isiOSAppOnMac || info.isMacCatalystApp;
+    }
+    return NO;
+}
+
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    if ([self sectionShowsInstalledRoots:section]) {
+        if (ISHRunningAsIOSAppOnMac()) {
+            NSString *note = @"Browsing these from the Files app isn't available on a Mac — "
+                              "Apple's File Provider framework doesn't support the kind of "
+                              "extension iSH-AOK uses, so it has been turned off here rather "
+                              "than left to fail. Everything else works as usual.";
+            if (self.choosesRootOnSelection)
+                return [@"Tap a filesystem to make it active and continue booting.\n\n" stringByAppendingString:note];
+            return note;
+        }
+    }
     if ([self sectionShowsInstalledRoots:section] && self.choosesRootOnSelection) {
         return @"Tap a filesystem to make it active and continue booting.";
     }
