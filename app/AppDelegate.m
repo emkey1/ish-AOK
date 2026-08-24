@@ -3524,6 +3524,14 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
                                    details:launchOptions.count != 0 ? @{@"launchOptions": launchOptions.description} : nil];
     [ISHDiagnosticsStore recordBreadcrumb:@"application.didFinishLaunching"
                                   details:launchOptions.count != 0 ? @{@"launchOptions": launchOptions.description} : nil];
+    // Re-donate the App Shortcuts phrases (app/ISHAppShortcuts.swift). Looked
+    // up at runtime rather than through the generated Swift header: that
+    // header belongs to the app target, and this file compiles earlier, in
+    // libiSH-AOKApp, where a __has_include would always be false. The class is
+    // absent below iOS 16 or if AppIntents wasn't available at build time.
+    Class appShortcutsBridge = NSClassFromString(@"ISHAppShortcutsBridge");
+    if ([appShortcutsBridge respondsToSelector:@selector(refreshAppShortcuts)])
+        [appShortcutsBridge performSelector:@selector(refreshAppShortcuts)];
     // get the network permissions popup to appear on chinese devices
     [[NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:@"http://captive.apple.com"]] resume];
 

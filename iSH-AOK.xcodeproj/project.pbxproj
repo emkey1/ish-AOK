@@ -141,6 +141,9 @@
 		9C2BEE382C85ECD21A4672CA /* AudioPCMDecoder_Opus.m in Sources */ = {isa = PBXBuildFile; fileRef = 0877CBCD3AD3639A48727F42 /* AudioPCMDecoder_Opus.m */; };
 		9E0E330D31CAA2DC36F0F208 /* FoundationModels.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1C46BFA5283C8409E80F5EC /* FoundationModels.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		A143B4E425BDFAE03A1725CD /* AOKFoundationModelsBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F681FC66C14DDED4FBD7BD6 /* AOKFoundationModelsBridge.swift */; };
+		C0A200042F2F000100000001 /* ISHAppShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000002 /* ISHAppShortcuts.swift */; };
+		C0A200042F2F000100000003 /* ISHRunCommandIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */; };
+		C0A200042F2F000100000005 /* GuestCommandRunner.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A200042F2F000100000006 /* GuestCommandRunner.m */; };
 		AC2AD539A8142C5355A695A5 /* WorkspaceFileManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 8DA9B7B2A14CC33EF9CF003E /* WorkspaceFileManager.m */; };
 		AC2AD539A8142C5355A695B7 /* ShellFileBrowser.m in Sources */ = {isa = PBXBuildFile; fileRef = 8DA9B7B2A14CC33EF9CF00B7 /* ShellFileBrowser.m */; };
 		B115F7067DF5415ECA19F2C3 /* AudioPCMDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = 2D2CE94AE68FC33023A693E0 /* AudioPCMDecoder.m */; };
@@ -690,6 +693,11 @@
 		650B337222EA235C00B4C03E /* PasteboardDevice.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = PasteboardDevice.h; sourceTree = "<group>"; };
 		650B337322EA235C00B4C03E /* PasteboardDevice.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = PasteboardDevice.m; sourceTree = "<group>"; };
 		6F681FC66C14DDED4FBD7BD6 /* AOKFoundationModelsBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AOKFoundationModelsBridge.swift; sourceTree = "<group>"; };
+		C0A200042F2F000100000002 /* ISHAppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISHAppShortcuts.swift; sourceTree = "<group>"; };
+		C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISHRunCommandIntent.swift; sourceTree = "<group>"; };
+		C0A200042F2F000100000006 /* GuestCommandRunner.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = GuestCommandRunner.m; sourceTree = "<group>"; };
+		C0A200042F2F000100000007 /* GuestCommandRunner.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GuestCommandRunner.h; sourceTree = "<group>"; };
+		C0A200042F2F000100000008 /* ShortcutActivityBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ShortcutActivityBridge.h; sourceTree = "<group>"; };
 		704575CA466EF25ECC14EA7B /* DisplayRFBClient.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = DisplayRFBClient.m; sourceTree = "<group>"; };
 		753D59F184017DDADD8F541A /* AudioPCMDecoder_AVF.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = AudioPCMDecoder_AVF.m; sourceTree = "<group>"; };
 		761C29F5D922E3D01F78AE83 /* MarkdownRenderer.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = MarkdownRenderer.h; sourceTree = "<group>"; };
@@ -1581,6 +1589,11 @@
 				8632A7BD219A59FB00F02325 /* UserPreferences.h */,
 				8632A7BE219A59FB00F02325 /* UserPreferences.m */,
 				6F681FC66C14DDED4FBD7BD6 /* AOKFoundationModelsBridge.swift */,
+				C0A200042F2F000100000002 /* ISHAppShortcuts.swift */,
+				C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */,
+				C0A200042F2F000100000007 /* GuestCommandRunner.h */,
+				C0A200042F2F000100000006 /* GuestCommandRunner.m */,
+				C0A200042F2F000100000008 /* ShortcutActivityBridge.h */,
 			);
 			name = About;
 			sourceTree = "<group>";
@@ -2487,6 +2500,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0A200042F2F000100000001 /* ISHAppShortcuts.swift in Sources */,
+				C0A200042F2F000100000003 /* ISHRunCommandIntent.swift in Sources */,
 				C0A000012E00000100000001 /* AudioDevice.m in Sources */,
 				C0A000012E00000100000002 /* AudioOutput.m in Sources */,
 				5DA0A8342AAE21D000397280 /* BatteryStatus.m in Sources */,
@@ -2598,6 +2613,7 @@
 				C3060403DA76F382061A1170 /* DisplayRFBClient.m in Sources */,
 				8D457CFF8048C780CA8A5561 /* DisplayRFBView.m in Sources */,
 				A143B4E425BDFAE03A1725CD /* AOKFoundationModelsBridge.swift in Sources */,
+				C0A200042F2F000100000005 /* GuestCommandRunner.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

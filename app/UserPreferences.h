@@ -93,6 +93,9 @@ extern NSString *const kThemeBackgroundColor;
 // collapsed in the transcript behind a "Thinking" disclosure instead of being shown
 // inline. The raw text is still stored and can be expanded and copied.
 @property BOOL llmHideThinking;
+// Gate for the Shortcuts "Run Command" App Intent (default YES). Off, the
+// action fails with an error naming this setting instead of running anything.
+@property BOOL shortcutsRunCommandsEnabled;
 @property (null_resettable) NSString *fontFamily;
 @property (readonly) NSString *fontFamilyUserFacingName;
 @property (readonly) UIFont *approximateFont;

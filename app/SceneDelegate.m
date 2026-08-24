@@ -14,6 +14,7 @@
 #import "NSObject+SaneKVO.h"
 #import "Roots.h"
 #import "RootsTableViewController.h"
+#import "ShortcutActivityBridge.h"
 #import "UserPreferences.h"
 #import "WorkspaceViewController.h"
 
@@ -445,6 +446,86 @@ static void ConfigureTerminalViewController(SceneDelegate *delegate, TerminalVie
     if (session == nil)
         return;
     [self continueAfterInitialRootImportForSession:session];
+}
+
+// Routes an app.ish.scene.* destination activity onto an already-connected
+// scene's window. The App Shortcuts intent asks for a destination with
+// requestSceneSessionActivation(nil, userActivity:...), which only delivers
+// the activity when it CREATES a scene (iPad); on a single-scene device it
+// just foregrounds the existing scene and drops the activity -- verified by
+// breadcrumb: -scene:continueUserActivity: is never called for it either.
+static void ISHWindowApplyShortcutActivity(UIWindow *window, NSUserActivity *userActivity) {
+    // The special launch states (diagnostics, recovery, first-run root
+    // selection) own the window; leave them alone.
+    if ([NSUserDefaults.standardUserDefaults boolForKey:kPreferenceOpenDiagnosticsOnLaunchKey] ||
+        [NSUserDefaults.standardUserDefaults boolForKey:@"recovery"] ||
+        Roots.instance.needsInitialRootSelection)
+        return;
+
+    NSString *activityType = userActivity.activityType;
+    if ([activityType isEqualToString:ISHSceneActivityTypeWorkspace]) {
+        ISHWindowShowWorkspace(window);
+        NSString *toolIdentifier = userActivity.userInfo[ISHSceneWorkspaceToolUserInfoKey];
+        if ([toolIdentifier isKindOfClass:NSString.class] && toolIdentifier.length > 0) {
+            // Next runloop turn: ISHWindowShowWorkspace may have just installed
+            // (or rebuilt) the workspace root, and the tool open needs it live.
+            dispatch_async(dispatch_get_main_queue(), ^{
+                UIViewController *root = window.rootViewController;
+                UIViewController *hosted = [root isKindOfClass:UINavigationController.class]
+                    ? ((UINavigationController *) root).viewControllers.firstObject
+                    : root;
+                if ([hosted isKindOfClass:WorkspaceViewController.class])
+                    [(WorkspaceViewController *) hosted openWorkspaceToolWithIdentifier:toolIdentifier];
+            });
+        }
+        return;
+    }
+
+    if ([activityType isEqualToString:ISHSceneActivityTypeTerminal]) {
+        NSString *mode = userActivity.userInfo[ISHSceneTerminalDisplayModeUserInfoKey];
+        BOOL wantsConsole = [mode isEqualToString:ISHSceneTerminalDisplayModeSystemConsoleValue];
+        if (![window.rootViewController isKindOfClass:TerminalViewController.class])
+            ISHWindowShowSessionShell(window);
+        TerminalViewController *terminal = [window.rootViewController isKindOfClass:TerminalViewController.class]
+            ? (TerminalViewController *) window.rootViewController
+            : nil;
+        if (wantsConsole)
+            [terminal showSystemConsoleForCurrentSession];
+        else
+            [terminal showSessionShellForCurrentSession];
+        return;
+    }
+}
+
+BOOL ISHApplyShortcutActivityToConnectedScene(NSUserActivity *activity) {
+    UIWindow *bestWindow = nil;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class])
+            continue;
+        SceneDelegate *delegate = (SceneDelegate *) scene.delegate;
+        if (![delegate isKindOfClass:SceneDelegate.class] || delegate.window == nil)
+            continue;
+        if (scene.activationState == UISceneActivationStateForegroundActive) {
+            bestWindow = delegate.window;
+            break;
+        }
+        if (bestWindow == nil)
+            bestWindow = delegate.window;
+    }
+    if (bestWindow == nil)
+        return NO;
+    [ISHDiagnosticsStore recordBreadcrumb:@"scene.applyShortcutActivity"
+                                  details:@{@"type": activity.activityType ?: @""}];
+    ISHWindowApplyShortcutActivity(bestWindow, activity);
+    return YES;
+}
+
+// Kept for completeness: if UIKit ever does hand an activity to a connected
+// scene (e.g. Handoff-style delivery), route it the same way.
+- (void)scene:(UIScene *)scene continueUserActivity:(NSUserActivity *)userActivity {
+    [ISHDiagnosticsStore recordBreadcrumb:@"scene.continueUserActivity"
+                                  details:@{@"type": userActivity.activityType ?: @""}];
+    ISHWindowApplyShortcutActivity(self.window, userActivity);
 }
 
 - (NSUserActivity *)stateRestorationActivityForScene:(UIScene *)scene {

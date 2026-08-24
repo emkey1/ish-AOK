@@ -18,6 +18,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 - `/AOK`，一个只读的应用内文件系统（`/AOK/docs`、`/AOK/tools`、`/AOK/tests`、`/AOK/native`），在构建时通过 `fs/aok-*.manifest` 和 `tools/gen-aokfs.py` 从 `opt/AOK/` 嵌入。
 - 内置在应用中的根文件系统（Alpine 3.23.3 与 Devuan 6，仅 `aarch64`），以及面向 `i386`、`x86_64` 和 `riscv64` 的可下载镜像。
 - 通过 iOS 系统 API 暴露客户机文件的 File Provider 支持。
+- **Apple 快捷指令（Shortcuts）操作**（iOS 16+）：无需打开应用即可通过原生 zsh 在客户机中执行命令并把输出返回给快捷指令的 "Run Command" 操作，以及带有 Siri 短语的 "Open iSH-AOK" 目标页面。参见 `/AOK/docs/shortcuts.md`。
 - 可选加速器：用原生代码替换热点 libc 例程，以及加密与 pixman 卸载。
 - 该分支专属的额外诊断与运维相关改动。
 

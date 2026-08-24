@@ -44,4 +44,11 @@ int run_guest_command_capture(const char *command, const char *env,
                               int timeout_ms, size_t max_output,
                               struct guest_command_result *result);
 
+// Same, but `shell -c command` with a caller-chosen shell (absolute guest
+// path, e.g. /AOK/native/zsh). NULL or "" means /bin/sh.
+int run_guest_command_capture_shell(const char *shell, const char *command,
+                                    const char *env, int timeout_ms,
+                                    size_t max_output,
+                                    struct guest_command_result *result);
+
 #endif

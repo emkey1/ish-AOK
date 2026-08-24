@@ -19,6 +19,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 - `/AOK`, 읽기 전용 인앱 파일시스템(`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`). `fs/aok-*.manifest` 와 `tools/gen-aokfs.py` 를 통해 빌드 시점에 `opt/AOK/` 에서 만들어 넣습니다.
 - 앱 빌드에 번들된 루트 파일시스템(Alpine 3.23.3과 Devuan 6, `aarch64` 전용), 그리고 `i386`, `x86_64`, `riscv64` 용 다운로드 이미지.
 - iOS를 통해 게스트 파일을 노출하는 File Provider 지원.
+- **Apple 단축어(Shortcuts) 액션** (iOS 16+): 앱을 열지 않고도 네이티브 zsh로 게스트에서 명령을 실행하고 그 출력을 단축어로 돌려주는 "Run Command" 액션과, Siri 문구가 지원되는 "Open iSH-AOK" 대상들. `/AOK/docs/shortcuts.md` 참고.
 - 선택적 가속기: 자주 쓰이는 libc 루틴의 네이티브 대체, 암호화 및 pixman 오프로드.
 - 이 포크 전용의 추가 진단 및 운영 관련 변경 사항.
 

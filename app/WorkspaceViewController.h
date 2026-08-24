@@ -75,6 +75,7 @@ extern NSString *_Nullable ISHWorkspaceToolIdentifierForViewController(UIViewCon
 // WorkspaceFileOpenable — delivers `guestPath` to it. No-op if the tool
 // identifier has no factory registration.
 - (void)openWorkspaceToolWithIdentifier:(NSString *)toolIdentifier fileGuestPath:(NSString *)guestPath;
+- (void)openWorkspaceToolWithIdentifier:(NSString *)toolIdentifier;
 
 // Opens a new terminal window and, once its shell is up, injects `command` as a typed line
 // (empty command just opens a fresh shell). Same mechanism a Launcher shortcut's command runs

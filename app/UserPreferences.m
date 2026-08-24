@@ -49,6 +49,7 @@ static NSString *const kPreferenceLLMToolTimeoutSecondsKey = @"LLM Tool Timeout 
 static NSString *const kPreferenceLLMToolOutputLimitKBKey = @"LLM Tool Output Limit KB";
 static NSString *const kPreferenceLLMToolMaxRoundsKey = @"LLM Tool Max Rounds";
 static NSString *const kPreferenceLLMHideThinkingKey = @"LLM Hide Thinking";
+static NSString *const kPreferenceShortcutsRunCommandsEnabledKey = @"Shortcuts Run Commands Enabled";
 static NSString *const kPreferenceCustomDnsServersKey = @"Custom DNS Servers";
 
 NSString *const kPreferenceLaunchCommandKey = @"Init Command";
@@ -219,6 +220,7 @@ bool (*remove_user_default)(const char *name);
             kPreferenceLLMToolOutputLimitKBKey: @(64),
             kPreferenceLLMToolMaxRoundsKey: @(20),
             kPreferenceLLMHideThinkingKey: @(YES),
+            kPreferenceShortcutsRunCommandsEnabledKey: @(YES),
             kPreferenceFontSizeKey: @(12),
             // 1 = the height hterm measures, i.e. exactly what every build
             // before this one did. Nobody's terminal moves until they ask.
@@ -291,6 +293,7 @@ bool (*remove_user_default)(const char *name);
             @"llm_tool_output_limit_kb": kPreferenceLLMToolOutputLimitKBKey,
             @"llm_tool_max_rounds": kPreferenceLLMToolMaxRoundsKey,
             @"llm_hide_thinking": kPreferenceLLMHideThinkingKey,
+            @"shortcuts_run_commands": kPreferenceShortcutsRunCommandsEnabledKey,
             @"launch_command": kPreferenceLaunchCommandKey,
             @"boot_command": kPreferenceBootCommandKey,
             @"login_as_default_user": kPreferenceLoginAsDefaultUserKey,
@@ -339,6 +342,7 @@ bool (*remove_user_default)(const char *name);
             kPreferenceLLMToolOutputLimitKBKey: property(llmToolOutputLimitKB),
             kPreferenceLLMToolMaxRoundsKey: property(llmToolMaxRounds),
             kPreferenceLLMHideThinkingKey: property(llmHideThinking),
+            kPreferenceShortcutsRunCommandsEnabledKey: property(shortcutsRunCommandsEnabled),
             kPreferenceCustomDnsServersKey: property(customDnsServers),
             kPreferenceLaunchCommandKey: property(launchCommand),
             kPreferenceBootCommandKey: property(bootCommand),
@@ -708,6 +712,19 @@ bool (*remove_user_default)(const char *name);
 }
 
 - (BOOL)validateLlmToolsEnabled:(id *)value error:(NSError **)error {
+    return [*value isKindOfClass:NSNumber.class];
+}
+
+// MARK: shortcutsRunCommandsEnabled
+- (BOOL)shortcutsRunCommandsEnabled {
+    return [_defaults boolForKey:kPreferenceShortcutsRunCommandsEnabledKey];
+}
+
+- (void)setShortcutsRunCommandsEnabled:(BOOL)shortcutsRunCommandsEnabled {
+    [_defaults setBool:shortcutsRunCommandsEnabled forKey:kPreferenceShortcutsRunCommandsEnabledKey];
+}
+
+- (BOOL)validateShortcutsRunCommandsEnabled:(id *)value error:(NSError **)error {
     return [*value isKindOfClass:NSNumber.class];
 }
 

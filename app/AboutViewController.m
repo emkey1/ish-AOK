@@ -178,6 +178,7 @@ BOOL ISHLLMClientEnabled(void) {
 
 @property (nonatomic, strong) UISwitch *llmClientSwitch;
 @property (nonatomic, strong) UISwitch *loginAsDefaultUserSwitch;
+@property (nonatomic, strong) UISwitch *shortcutsRunCommandsSwitch;
 
 @end
 
@@ -5881,13 +5882,17 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
 }
 
 // Appended sections live past the storyboard's static ones, in a fixed order:
-// user-account section, then LLM section.
+// user-account section, then LLM section, then Shortcuts section.
 - (NSInteger)_userAccountSectionIndex {
     return [self _visibleStoryboardSectionCount];
 }
 
 - (NSInteger)_llmSectionIndex {
     return [self _visibleStoryboardSectionCount] + 1;
+}
+
+- (NSInteger)_shortcutsSectionIndex {
+    return [self _visibleStoryboardSectionCount] + 2;
 }
 
 - (UITableViewCell *)_loginAsDefaultUserCell {
@@ -5919,6 +5924,18 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
     cell.textLabel.text = @"LLM Settings";
     cell.detailTextLabel.text = UserPreferences.shared.llmModel;
     cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    return cell;
+}
+
+- (UITableViewCell *)_shortcutsRunCommandsCell {
+    UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.textLabel.text = @"Allow Shortcuts to Run Commands";
+    UISwitch *enabledSwitch = [UISwitch new];
+    enabledSwitch.on = UserPreferences.shared.shortcutsRunCommandsEnabled;
+    [enabledSwitch addTarget:self action:@selector(shortcutsRunCommandsChanged:) forControlEvents:UIControlEventValueChanged];
+    cell.accessoryView = enabledSwitch;
+    self.shortcutsRunCommandsSwitch = enabledSwitch;
     return cell;
 }
 
@@ -6095,6 +6112,8 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
         return UserPreferences.shared.shouldEnableLLMClient
             ? @"When enabled, LLM Chat appears in Switch Terminal and Workspace menus."
             : @"Enable to show an OpenAI-compatible LLM client in terminal and Workspace menus.";
+    if (section == [self _shortcutsSectionIndex])
+        return @"When enabled, the Shortcuts app's \"Run Command\" action can run shell commands in the guest system without opening iSH-AOK.";
     if (section == 1) { // filesystems / upgrade
         if (!FsIsManaged()) {
             return @"The current filesystem is not managed by iSH.";
@@ -6112,11 +6131,13 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
         return @"Default User";
     if (section == [self _llmSectionIndex])
         return @"LLM Client";
+    if (section == [self _shortcutsSectionIndex])
+        return @"Shortcuts";
     return [super tableView:tableView titleForHeaderInSection:section];
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return [self _visibleStoryboardSectionCount] + 2;
+    return [self _visibleStoryboardSectionCount] + 3;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -6124,6 +6145,8 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
         return 1;
     if (section == [self _llmSectionIndex])
         return UserPreferences.shared.shouldEnableLLMClient ? 2 : 1;
+    if (section == [self _shortcutsSectionIndex])
+        return 1;
     return [super tableView:tableView numberOfRowsInSection:section];
 }
 
@@ -6135,6 +6158,8 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
             return [self _llmEnabledCell];
         return [self _llmSettingsCell];
     }
+    if (indexPath.section == [self _shortcutsSectionIndex])
+        return [self _shortcutsRunCommandsCell];
     return [super tableView:tableView cellForRowAtIndexPath:indexPath];
 }
 
@@ -6235,6 +6260,10 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
 
 - (void)loginAsDefaultUserChanged:(UISwitch *)sender {
     UserPreferences.shared.shouldLoginAsDefaultUser = sender.on;
+}
+
+- (void)shortcutsRunCommandsChanged:(UISwitch *)sender {
+    UserPreferences.shared.shortcutsRunCommandsEnabled = sender.on;
 }
 
 //- (IBAction)shouldLockSleepNanoseconds:(id)sender {

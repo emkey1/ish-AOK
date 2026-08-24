@@ -422,8 +422,18 @@ static long ish_monotonic_ms_since(const struct timespec *start) {
 int run_guest_command_capture(const char *command, const char *env,
                               int timeout_ms, size_t max_output,
                               struct guest_command_result *result) {
+    return run_guest_command_capture_shell(NULL, command, env,
+                                           timeout_ms, max_output, result);
+}
+
+int run_guest_command_capture_shell(const char *shell, const char *command,
+                                    const char *env, int timeout_ms,
+                                    size_t max_output,
+                                    struct guest_command_result *result) {
     if (result == NULL || command == NULL)
         return _EINVAL;
+    if (shell == NULL || shell[0] == '\0')
+        shell = "/bin/sh";
     memset(result, 0, sizeof(*result));
     if (max_output == 0)
         max_output = 64 * 1024;
@@ -460,26 +470,26 @@ int run_guest_command_capture(const char *command, const char *env,
     struct task *child = current;
     dword_t child_pid = child->pid;
 
-    // Pack argv as do_execve expects: "/bin/sh\0-c\0<command>\0\0", argc = 3.
+    // Pack argv as do_execve expects: "<shell>\0-c\0<command>\0\0", argc = 3.
     // Note the trailing double-NUL: args_size() walks `count` strings and then
     // asserts the next byte is '\0' (see exec.c), so the buffer needs one extra
     // terminator after the last argument -- exactly what xX_main_Xx writes.
-    static const char shell_path[] = "/bin/sh";
+    size_t shell_len = strlen(shell);
     size_t command_len = strlen(command);
-    char *argv = malloc(sizeof(shell_path) + sizeof("-c") + command_len + 1 + 1);
+    char *argv = malloc(shell_len + 1 + sizeof("-c") + command_len + 1 + 1);
     const char *envp = (env != NULL && env[0] != '\0') ? env
         : "PATH=/AOK/persist/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
           "HOME=/root\0TERM=dumb\0";
     int launch_err = argv != NULL ? 0 : _ENOMEM;
     if (argv != NULL) {
         size_t off = 0;
-        memcpy(argv + off, shell_path, sizeof(shell_path)); off += sizeof(shell_path);
+        memcpy(argv + off, shell, shell_len + 1); off += shell_len + 1;
         memcpy(argv + off, "-c", sizeof("-c")); off += sizeof("-c");
         memcpy(argv + off, command, command_len + 1); off += command_len + 1;
         argv[off] = '\0'; // trailing terminator required by args_size()
         // Load the program image first, then wire stdio (matches the xX_main_Xx
         // bootstrap order; do_execve does not need an fd table to be present).
-        launch_err = do_execve(shell_path, 3, argv, envp);
+        launch_err = do_execve(shell, 3, argv, envp);
         free(argv);
     }
     if (launch_err < 0) {
