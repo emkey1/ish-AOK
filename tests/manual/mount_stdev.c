@@ -307,6 +307,7 @@ static void test_mountinfo_dev_field(void) {
 
 int main(int argc, char **argv) {
     test_init(argc, argv);
+    TEST_SKIP_IF_FOREIGN_PROC("mount_stdev");
     test_tmpfs_devs();
     test_anon_fd_devs();
     test_mountinfo_dev_field();

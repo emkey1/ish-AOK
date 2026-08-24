@@ -60,6 +60,7 @@ static int raw_move_mount(int from_dfd, const char *from_path, int to_dfd,
 
 int main(int argc, char **argv) {
     test_init(argc, argv);
+    TEST_SKIP_IF_FOREIGN_PROC("fsopen_move_mount");
     if (geteuid() != 0) {
         // Creating and moving a mount needs privilege, so unprivileged this can
         // only ever report EACCES from FSCONFIG_CMD_CREATE. Skip rather than

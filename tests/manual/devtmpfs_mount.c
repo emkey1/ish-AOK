@@ -172,6 +172,7 @@ static void check_nodes_work(const char *dir) {
 
 int main(int argc, char **argv) {
     test_init(argc, argv);
+    TEST_SKIP_IF_FOREIGN_PROC("devtmpfs_mount");
     alarm(test_watchdog_secs(60));
 
     char base[64];

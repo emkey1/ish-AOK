@@ -7,9 +7,42 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static unsigned failures_total;
 static int test_verbose;
+
+// True when this test is running inside a chroot set up by
+// /AOK/tools/mount-root.sh, which is how the release procedure's
+// per-architecture run reaches a root that is not the booted one.
+//
+// That script bind-mounts /proc, /sys, /dev, /run, /AOK/tools and /AOK/tests
+// from the BOOTED root into the target root. So /proc describes the booted
+// root's mount table, not the filesystem you are standing in, and any test
+// that cross-checks procfs against the live filesystem is comparing two
+// different roots. It cannot pass however correct the kernel is: mount_stdev
+// sees `/` as 0:15 in mountinfo and 0:29 from stat(), and reports five
+// failures that mean nothing.
+//
+// Detected by what the bind list leaves out rather than by what it includes.
+// /AOK is the booted root's aokfs, so /AOK/VERSION exists only there, while
+// /AOK/tests is bound in -- it is how this test got here at all. Deliberately
+// NOT detected by comparing procfs against stat(), because that is exactly
+// what these tests assert, and a skip condition that overlaps the assertion
+// would hide the bug it exists to catch.
+static inline int test_in_foreign_proc_chroot(void) {
+    return access("/AOK/tests", F_OK) == 0 && access("/AOK/VERSION", F_OK) != 0;
+}
+
+// Print the standard SKIP line for the above and return from main with 0.
+#define TEST_SKIP_IF_FOREIGN_PROC(name)                                        \
+    do {                                                                       \
+        if (test_in_foreign_proc_chroot()) {                                   \
+            printf("%s: SKIP (chroot with a bind-mounted /proc -- mountinfo "  \
+                   "describes the booted root, not this one)\n", (name));      \
+            return 0;                                                          \
+        }                                                                      \
+    } while (0)
 
 static void test_init(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
