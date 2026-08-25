@@ -177,11 +177,23 @@ pub extern "C" fn helix_native_main(
             return 1;
         }
     };
-    match rt.block_on(run()) {
+    let rt_id = rt.handle().id();
+    let code = match rt.block_on(run()) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("hx: {e:?}");
             1
         }
-    }
+    };
+    // The log sink holds a file this RUN opened, and per-process `log` state
+    // would otherwise carry it into the next run, where its fd number means
+    // something else (kernel/native.h, the third bullet). Closed here, on the
+    // run's own thread, which is the only place that close is routed right.
+    helix_term::logging::shutdown(rt_id);
+    // Dropped explicitly for the same reason, before this function returns to
+    // native_exec_run_pending and the task starts tearing down: the runtime's
+    // kqueue and worker teardown must happen while the task's fd table is
+    // still the one they were created in.
+    drop(rt);
+    code
 }

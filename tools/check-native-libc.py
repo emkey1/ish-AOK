@@ -531,8 +531,10 @@ DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a",
                    # It has to be named: the object is linked INTO libish.a,
                    # which is not on this list, so nothing else would look at
                    # it, and the whole point of a foreign toolchain is that it
-                   # is the one AOK's #defines cannot reach.
-                   "build/rust_native_probe_routed.o")
+                   # is the one AOK's #defines cannot reach. (It was
+                   # rust_native_probe_routed.o before the crate merge; the
+                   # old name sat here silently checking nothing.)
+                   "build/aok_native_routed.o")
 
 
 # The libc names kernel/native_libc.h already rewrites. Read from the header

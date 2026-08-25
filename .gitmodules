@@ -26,3 +26,11 @@
 [submodule "deps/helix"]
 	path = deps/helix
 	url = https://github.com/emkey1/helix.git
+[submodule "deps/tokio"]
+	path = deps/tokio
+	url = https://github.com/emkey1/tokio.git
+	branch = aok
+[submodule "deps/signal-hook"]
+	path = deps/signal-hook
+	url = https://github.com/emkey1/signal-hook.git
+	branch = aok

@@ -217,12 +217,14 @@ int nlibc_kqueue(void) {
     q->next = kq_list;
     kq_list = q;
     pthread_mutex_unlock(&kq_list_lock);
+    KQ_TRACE("kqueue() -> fd=%d (queue %p, wake fd=%d)", fds[0], (void *) q, fds[1]);
     return fds[0];
 }
 
 void nlibc_kqueue_dup_hook(int oldfd, int newfd) {
     if (oldfd == newfd)
         return;
+    KQ_TRACE("dup(%d -> %d)", oldfd, newfd);
     pthread_mutex_lock(&kq_list_lock);
     struct kq *q = kq_lookup(oldfd);
     // If the new number already named a queue, the dup closed it out from
@@ -248,6 +250,7 @@ bool nlibc_kqueue_close_hook(int fd) {
         pthread_mutex_unlock(&kq_list_lock);
         return false;
     }
+    KQ_TRACE("close(%d) (queue %p, %zu name(s))", fd, (void *) q, q->nfds);
     // Closing one name for the queue is not closing the queue. It goes when
     // the last descriptor naming it does.
     for (size_t i = 0; i < q->nfds; i++) {

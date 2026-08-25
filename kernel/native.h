@@ -2,6 +2,7 @@
 #define KERNEL_NATIVE_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include "misc.h"
 
 // Programs whose implementation is compiled into iSH-AOK and executed as HOST
@@ -18,7 +19,7 @@
 // implementation serves i386, amd64, arm64 and riscv64 guests alike, which
 // matters most for the slowest of them.
 //
-// Execution model, and the two things easiest to get wrong:
+// Execution model, and the three things easiest to get wrong:
 //
 //  - A native program is NOT a host process. It runs on the calling task's own
 //    thread, inside the execve syscall that would otherwise have replaced the
@@ -32,6 +33,23 @@
 //    must go through iSH's kernel instead (fd_write_host_buf and friends in
 //    kernel/fs.h). This is the seam that real programs need filling in before
 //    they can do anything filesystem-shaped.
+//
+//  - Any process-global state the program sets MUST be cleaned up when it
+//    exits, or keyed per invocation -- because the process outlives the
+//    program. A global that caches a file descriptor, a "logger already
+//    installed" flag, or a registered signal handler survives into the NEXT
+//    run of the program, pointing into a task that no longer exists; the fd
+//    NUMBER it holds may even name an unrelated open file of the new task.
+//    This is how the second `hx` in one app session failed to start: tokio's
+//    once-per-process signal socketpair held the first run's dead fds, and
+//    helix's once-per-process logger refused to initialize again. The two
+//    correct shapes are (a) reset/teardown on every entry and exit (see
+//    nextvi_glue.c), and (b) keying the state by nlibc_invocation_token()
+//    below (see the tokio and signal-hook-registry forks under deps/). An fd
+//    held in a global is never safe to close from a later run's thread --
+//    close routes through the CURRENT task's table -- so replaced state that
+//    holds descriptors must be leaked, not dropped, unless it is torn down by
+//    the run that owns it.
 
 struct native_program {
     // basename under /AOK/native/
@@ -97,6 +115,17 @@ struct task;
 // Drops a record that will never run, for a task torn down between exec and
 // first execution.
 void native_exec_discard_pending(struct task *task);
+
+// The per-invocation token behind the third bullet above: a value that is
+// different for every run of every native program, readable from any thread
+// the program creates (nlibc_pthread_create hands it down with `current`),
+// and async-signal-safe to read (one __thread load). 0 means "this thread is
+// not running a native program". Foreign-toolchain code imports it by name --
+// the tokio and signal-hook-registry forks key their per-process globals on
+// it -- so the symbol name is ABI. Implemented in kernel/native_libc.c;
+// assigned by native_exec_run_pending immediately before the program's main.
+uint64_t nlibc_invocation_token(void);
+void nlibc_invocation_token_assign(void);
 
 // The environment a native program sees.
 //

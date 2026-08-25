@@ -20,11 +20,12 @@ default = []
 # tokio's reactor is kqueue on Apple targets, and this exercises it. Off by
 # default because the dependency tree has no business in a shipping app; see
 # kernel/native_kqueue.h for what it proves.
-tokio-probe = ["dep:tokio"]
+tokio-probe = ["dep:tokio", "dep:signal-hook-registry"]
 # helix. Off by default and gated again in meson (-Dnative_helix), because it
 # is MPL-2.0 and tens of megabytes.
-helix = ["dep:tokio", "dep:anyhow", "dep:log",
+helix = ["dep:tokio", "dep:signal-hook-registry", "dep:anyhow", "dep:log",
          "dep:helix-term", "dep:helix-core", "dep:helix-loader", "dep:helix-stdx",
+         "dep:helix-event",
          "dep:tree-house", "dep:tree-house-bindings", "dep:tree-sitter-language",
          "dep:tree-sitter-rust", "dep:tree-sitter-c", "dep:tree-sitter-python",
          "dep:tree-sitter-json", "dep:tree-sitter-bash", "dep:tree-sitter-go",
@@ -33,13 +34,32 @@ helix = ["dep:tokio", "dep:anyhow", "dep:log",
          "dep:tree-sitter-yaml", "dep:tree-sitter-diff", "dep:tree-sitter-make"]
 
 [dependencies]
-tokio = { version = "1", optional = true, features = ["rt", "rt-multi-thread", "macros", "time", "process", "io-util", "net", "sync"] }
+# aok-embedded on tokio and signal-hook-registry (both patched below to the
+# AOK forks): a native program is a function called many times in one process,
+# and both crates keep once-per-process signal state holding fds and handler
+# registrations that die with each run's guest task. The forks key that state
+# by kernel/native.h's nlibc_invocation_token(). Without this the SECOND run
+# of any tokio program in one app session failed Runtime::build with EBADF.
+tokio = { version = "1", optional = true, features = ["rt", "rt-multi-thread", "macros", "time", "process", "io-util", "net", "sync", "aok-embedded"] }
+# Not imported by this crate's code -- named only to switch the feature on for
+# the copy tokio uses.
+signal-hook-registry = { version = "1.4", optional = true, features = ["aok-embedded"] }
 anyhow = { version = "1", optional = true }
 log = { version = "0.4", optional = true }
 helix-term = { path = "../helix/helix-term", optional = true }
 helix-core = { path = "../helix/helix-core", optional = true }
 helix-loader = { path = "../helix/helix-loader", optional = true }
-helix-stdx = { path = "../helix/helix-stdx", optional = true }
+# aok-embedded: bypass the process-global CWD cache; each run must see its own
+# task's working directory.
+helix-stdx = { path = "../helix/helix-stdx", optional = true, features = ["aok-embedded"] }
+# integration_test is helix's own answer to many Applications in one process:
+# it turns the event registry, redraw/status state and the job queue from
+# process globals into per-tokio-runtime state. A native run builds a fresh
+# runtime every time, so this gives each run (and each CONCURRENT run) its
+# own. Without it the second run panicked in handlers::setup with "Event
+# OnModeSwitch was registered multiple times" -- an abort, with this crate's
+# panic=abort. Not imported by this crate's code either.
+helix-event = { path = "../helix/helix-event", optional = true, features = ["integration_test"] }
 
 # Grammars linked in rather than opened at runtime. iOS will not dlopen code
 # that is not signed into the app bundle, and dyld could not see a file inside
@@ -78,3 +98,11 @@ tree-sitter-make = { version = "1.1", optional = true }
 opt-level = "z"
 panic = "abort"
 strip = true
+
+# The AOK forks (emkey1/tokio branch aok, emkey1/signal-hook branch aok):
+# upstream releases plus the aok-embedded feature each. Path patches so the
+# submodules are the source of truth; a missing submodule is a loud cargo
+# error, run `git submodule update --init deps/tokio deps/signal-hook`.
+[patch.crates-io]
+tokio = { path = "../tokio/tokio" }
+signal-hook-registry = { path = "../signal-hook/signal-hook-registry" }

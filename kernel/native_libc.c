@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <getopt.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2991,10 +2992,30 @@ int nlibc_getrusage(int who, void *usage) {
 // concurrent use of the same task from two threads is not made safe by this;
 // it would need the task's own locking to be audited for it.
 
+// The per-invocation token (kernel/native.h). __thread, seeded from a global
+// counter at program entry and handed to every thread the program creates
+// below, so any thread of the run -- including one a signal handler borrows --
+// answers with the same value, and no run ever repeats another's. A u64 off an
+// atomic counter does not recycle, which matters: a recycled token would hand
+// a new run some earlier run's per-token state, and that state holds fd
+// NUMBERS that now mean something else.
+static __thread uint64_t nlibc_invocation_token_v;
+
+uint64_t nlibc_invocation_token(void) {
+    return nlibc_invocation_token_v;
+}
+
+void nlibc_invocation_token_assign(void) {
+    static _Atomic uint64_t next_token;
+    nlibc_invocation_token_v =
+        atomic_fetch_add_explicit(&next_token, 1, memory_order_relaxed) + 1;
+}
+
 struct nlibc_thread_start {
     void *(*fn)(void *);
     void *arg;
     struct task *task;
+    uint64_t token;
 };
 
 static void *nlibc_thread_trampoline(void *opaque) {
@@ -3005,6 +3026,7 @@ static void *nlibc_thread_trampoline(void *opaque) {
     // signal_thread_locals_init() in util/sync.c.
     signal_thread_locals_init();
     current = start->task;   // inherit, so the shim has a task to work against
+    nlibc_invocation_token_v = start->token;   // same run, same token
     void *(*fn)(void *) = start->fn;
     void *arg = start->arg;
     free(start);
@@ -3021,6 +3043,7 @@ int nlibc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
     start->fn = fn;
     start->arg = arg;
     start->task = current;
+    start->token = nlibc_invocation_token_v;
     int err = pthread_create(thread, attr, nlibc_thread_trampoline, start);
     if (err != 0)
         free(start);

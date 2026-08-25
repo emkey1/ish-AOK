@@ -441,6 +441,11 @@ void native_exec_run_pending(void) {
     current->native_argv = argv;
     current->native_argc = argc;
 
+    // A fresh token for this run, so per-invocation state keyed on it (see the
+    // third bullet in kernel/native.h) can never be mistaken for a previous
+    // run's.
+    nlibc_invocation_token_assign();
+
     int status = prog->main(argc, argv, envp);
 
     current->native_argv = NULL;

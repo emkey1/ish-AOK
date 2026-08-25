@@ -230,6 +230,16 @@ if get_option('native_rust') != 'disabled'
         error('native_helix needs the Rust toolchain: cargo and llvm-objcopy')
     endif
 endif
+if have_rust_native
+    # The crate patches tokio and signal-hook-registry to the AOK forks
+    # (deps/rust-native/Cargo.toml, [patch.crates-io]); cargo would say so
+    # itself, but a configure-time error names the fix.
+    if not fs_early.exists('deps/tokio/tokio/Cargo.toml') or \
+       not fs_early.exists('deps/signal-hook/signal-hook-registry/Cargo.toml')
+        error('native_rust: the tokio/signal-hook forks are empty -- ' +
+              'git submodule update --init deps/tokio deps/signal-hook')
+    endif
+endif
 
 # Decided here rather than beside the crate that builds it, because the
 # /AOK/native/libs table is generated a long way above that and has to know
@@ -858,7 +868,20 @@ if get_option('kernel') == 'ish'
             depend_files: files('deps/rust-native/src/lib.rs',
                                 'deps/rust-native/src/probe.rs',
                                 'deps/rust-native/src/helix.rs',
-                                'deps/rust-native/Cargo.toml'),
+                                'deps/rust-native/Cargo.toml',
+                                # The AOK-patched files in the fork submodules;
+                                # an edit there must re-run cargo. Not the
+                                # whole trees -- these are the files the AOK
+                                # branches actually touch, and an upstream
+                                # bump changes Cargo.toml/Cargo.lock anyway.
+                                'deps/tokio/tokio/src/aok_embedded.rs',
+                                'deps/tokio/tokio/src/signal/registry.rs',
+                                'deps/tokio/tokio/src/process/unix/mod.rs',
+                                'deps/signal-hook/signal-hook-registry/src/aok_embedded.rs',
+                                'deps/signal-hook/signal-hook-registry/src/lib.rs',
+                                'deps/helix/helix-term/src/logging.rs',
+                                'deps/helix/helix-stdx/src/env.rs',
+                                'deps/helix/helix-loader/src/lib.rs'),
             build_by_default: true)
         # One object, added to libish's own objects, rather than a second
         # archive next to it. The Xcode build does not link through meson --
