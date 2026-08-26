@@ -4,6 +4,7 @@
 //
 
 #import "GuestFileBridge.h"
+#import "AppDelegate.h"
 #import "AppGroup.h"
 
 #include <fcntl.h>
@@ -1279,6 +1280,20 @@ static void ISHCarryGuestOwner(NSString *path, const struct statbuf *st) {
     generic_setattrat(AT_PWD, path.fileSystemRepresentation, make_attr(gid, st->gid), false);
 }
 
+// Hand a freshly created guest file or directory to the account "Open
+// Everything as Default User" logs the user into. Without this every GUI
+// creation belongs to the borrowed pid-1 task, so the user's own shell can't
+// write the file the GUI just made for them. A no-op when the preference is
+// off or the rootfs has no such account, and best-effort like the carry
+// above. Caller must already hold a borrowed task context.
+static void ISHApplyDefaultOwnerForCreation(NSString *path) {
+    NSInteger ownerUid = 0, ownerGid = 0;
+    if (![AppDelegate headlessCommandAccountOwner:&ownerUid gid:&ownerGid])
+        return;
+    generic_setattrat(AT_PWD, path.fileSystemRepresentation, make_attr(uid, (uid_t_)ownerUid), false);
+    generic_setattrat(AT_PWD, path.fileSystemRepresentation, make_attr(gid, (uid_t_)ownerGid), false);
+}
+
 // Atomic guest-VFS write: everything goes to a temp file in the same
 // directory, then a rename over the target, so a mid-write failure (ENOSPC,
 // ...) never leaves the file truncated. Falls back to an in-place write with
@@ -1326,8 +1341,11 @@ static void ISHCarryGuestOwner(NSString *path, const struct statbuf *st) {
     // not), so a save over a user-owned file would silently hand it to root
     // and the user's own session could no longer write it. Restore the
     // displaced owner on the temp first, so the swap lands fully formed.
+    // A brand-new file goes to the default-user account instead.
     if (existed)
         ISHCarryGuestOwner(tmpPath, &st);
+    else
+        ISHApplyDefaultOwnerForCreation(tmpPath);
 
     int err = generic_renameat(AT_PWD, tmpPath.fileSystemRepresentation, AT_PWD, target.fileSystemRepresentation, 0);
     if (err < 0) {
@@ -1343,11 +1361,15 @@ static void ISHCarryGuestOwner(NSString *path, const struct statbuf *st) {
 // fails so the file is never left truncated silently. Caller must already
 // hold a borrowed task context.
 - (BOOL)writeDataInPlaceViaVFS:(NSData *)data toGuestPath:(NSString *)guestPath mode:(int)mode error:(NSError **)error {
+    BOOL existed = NO;
     struct statbuf st;
     memset(&st, 0, sizeof(st));
-    if (generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &st, 0) >= 0 && !S_ISREG(st.mode)) {
-        if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
-        return NO;
+    if (generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &st, 0) >= 0) {
+        if (!S_ISREG(st.mode)) {
+            if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
+            return NO;
+        }
+        existed = YES;
     }
     // No token: this stash is the file's only copy while the truncating write
     // below runs, so cancelling here would lose the data it exists to protect.
@@ -1360,8 +1382,13 @@ static void ISHCarryGuestOwner(NSString *path, const struct statbuf *st) {
     }
     BOOL ok = [self writeAllData:data toOpenFd:fd];
     fd_close(fd);
-    if (ok)
+    if (ok) {
+        // An in-place write into an existing file keeps its inode and owner;
+        // only a creation needs handing to the default-user account.
+        if (!existed)
+            ISHApplyDefaultOwnerForCreation(guestPath);
         return YES;
+    }
 
     BOOL restored = NO;
     if (previous != nil) {
@@ -1412,7 +1439,7 @@ static void ISHCarryGuestOwner(NSString *path, const struct statbuf *st) {
             BOOL hadContext = [self withGuestTaskContext:^{
                 int err = generic_mkdirat(AT_PWD, path.fileSystemRepresentation, 0755);
                 if (err < 0) vfsError = [self errorWithGuestErrno:err message:@"Cannot create directory"];
-                else vfsOk = YES;
+                else { vfsOk = YES; ISHApplyDefaultOwnerForCreation(path); }
             }];
             if (!hadContext) error = [self notReadyError];
             else { ok = vfsOk; error = vfsError; }
@@ -1699,9 +1726,12 @@ static void ISHCarryGuestOwner(NSString *path, const struct statbuf *st) {
             fd_close(guestOut);
             guestOut = NULL;
             // Same reason as -writeDataViaVFS:: the rename would otherwise
-            // hand an overwritten user-owned file to root.
+            // hand an overwritten user-owned file to root, and a brand-new
+            // destination goes to the default-user account.
             if (dstExisted)
                 ISHCarryGuestOwner(guestTmpPath, &dstStat);
+            else
+                ISHApplyDefaultOwnerForCreation(guestTmpPath);
             int err = generic_renameat(AT_PWD, guestTmpPath.fileSystemRepresentation,
                                        AT_PWD, guestDestPath.fileSystemRepresentation, 0);
             if (err < 0) {
@@ -2375,6 +2405,52 @@ static void ISHGuestFileBridgeRunSelfTest(void) {
             if (wrong > 0) failures++;
         }
         ISHSelfTestRemove(ownRoot, YES);
+    }
+
+    // ---- 7. Fresh creations belong to the default-user account when "Open
+    // Everything as Default User" asks for that. Runs only when the
+    // preference is on AND the rootfs has a uid-1000 account, the same
+    // condition every other surface of the preference keys on -- so a SKIP
+    // here is the feature being off, not a failure. Same fakefs path
+    // reasoning as section 6.
+    {
+        NSInteger wantUid = 0, wantGid = 0;
+        if (![AppDelegate headlessCommandAccountOwner:&wantUid gid:&wantGid]) {
+            NSLog(@"[bridge-selftest] 7. SKIPPED: default-user preference off, or no uid-1000 account");
+        } else {
+            NSString *createRoot = @"/root/ish-bridge-selftest-created";
+            NSString *newFile = [createRoot stringByAppendingPathComponent:@"fresh.txt"];
+            NSString *newCopy = [createRoot stringByAppendingPathComponent:@"fresh-copy.txt"];
+            ISHSelfTestRemove(createRoot, YES);
+            if (!ISHSelfTestMkdir(createRoot) || !ISHSelfTestWrite(1 << 10, newFile)
+                || !ISHSelfTestCopy(newFile, newCopy)) {
+                NSLog(@"[bridge-selftest] 7. FAIL: could not create the fresh items");
+                failures++;
+            } else {
+                __block struct statbuf dirSt, fileSt, copySt;
+                memset(&dirSt, 0, sizeof(dirSt));
+                memset(&fileSt, 0, sizeof(fileSt));
+                memset(&copySt, 0, sizeof(copySt));
+                [bridge withGuestTaskContext:^{
+                    generic_statat(AT_PWD, createRoot.fileSystemRepresentation, &dirSt, 0);
+                    generic_statat(AT_PWD, newFile.fileSystemRepresentation, &fileSt, 0);
+                    generic_statat(AT_PWD, newCopy.fileSystemRepresentation, &copySt, 0);
+                }];
+                NSUInteger wrong = 0;
+                struct { const char *what; struct statbuf *st; } items[] =
+                    {{"mkdir", &dirSt}, {"write", &fileSt}, {"copy", &copySt}};
+                for (size_t i = 0; i < sizeof(items) / sizeof(items[0]); i++) {
+                    if (items[i].st->uid != (dword_t)wantUid || items[i].st->gid != (dword_t)wantGid) {
+                        NSLog(@"[bridge-selftest] 7. %s created %u:%u (want %ld:%ld)", items[i].what,
+                              items[i].st->uid, items[i].st->gid, (long)wantUid, (long)wantGid);
+                        wrong++;
+                    }
+                }
+                NSLog(@"[bridge-selftest] 7. default-user creations: %lu of 3 wrong", (unsigned long)wrong);
+                if (wrong > 0) failures++;
+            }
+            ISHSelfTestRemove(createRoot, YES);
+        }
     }
 
     ISHSelfTestRemove(root, YES);

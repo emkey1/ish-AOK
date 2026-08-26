@@ -4,6 +4,7 @@
 //
 
 #import "MotePadDocumentStore.h"
+#import "AppDelegate.h"
 #import "AppGroup.h"
 
 #include <fcntl.h>
@@ -451,6 +452,19 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
     return nil;
 }
 
+// Hand a freshly created guest file to the account "Open Everything as Default
+// User" logs the user into; a no-op when the preference is off or the rootfs
+// has no such account, and best-effort beyond that. A copy of the bridge's
+// ISHApplyDefaultOwnerForCreation, like the writers below, until this store
+// migrates onto the bridge. Caller must already hold a borrowed task context.
+static void MotePadApplyDefaultOwnerForCreation(NSString *path) {
+    NSInteger ownerUid = 0, ownerGid = 0;
+    if (![AppDelegate headlessCommandAccountOwner:&ownerUid gid:&ownerGid])
+        return;
+    generic_setattrat(AT_PWD, path.fileSystemRepresentation, make_attr(uid, (uid_t_)ownerUid), false);
+    generic_setattrat(AT_PWD, path.fileSystemRepresentation, make_attr(gid, (uid_t_)ownerGid), false);
+}
+
 // Atomic guest-VFS write: write everything to a temp file in the same directory,
 // fsync it, then rename over the target. A mid-write failure (ENOSPC, ...) can then
 // never leave the user's file truncated — the original survives untouched and the
@@ -511,11 +525,14 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
     // created, so a save over a user-owned file would silently hand it to root
     // and the user's own session could no longer write it. Restore the displaced
     // owner on the temp first (best-effort; on a realfs mount chown maps to a
-    // host fchownat the sandboxed app cannot perform). Same as -[ISHGuestFileBridge
+    // host fchownat the sandboxed app cannot perform); a brand-new file goes to
+    // the default-user account instead. Same as -[ISHGuestFileBridge
     // writeDataViaVFS:toGuestPath:error:], until this store migrates onto it.
     if (existed) {
         generic_setattrat(AT_PWD, tmpPath.fileSystemRepresentation, make_attr(uid, st.uid), false);
         generic_setattrat(AT_PWD, tmpPath.fileSystemRepresentation, make_attr(gid, st.gid), false);
+    } else {
+        MotePadApplyDefaultOwnerForCreation(tmpPath);
     }
 
     int err = generic_renameat(AT_PWD, tmpPath.fileSystemRepresentation,
@@ -535,11 +552,15 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
 // Caller must already hold a borrowed task context.
 - (BOOL)writeDataInPlace:(NSData *)data toGuestPathViaVFS:(NSString *)guestPath mode:(int)mode error:(NSError **)error {
     // Refuse to open-and-truncate anything that isn't a regular file (or absent).
+    BOOL existed = NO;
     struct statbuf st;
     memset(&st, 0, sizeof(st));
-    if (generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &st, 0) >= 0 && !S_ISREG(st.mode)) {
-        if (error) *error = [self errorWithCode:0 message:@"That path is not a regular file"];
-        return NO;
+    if (generic_statat(AT_PWD, guestPath.fileSystemRepresentation, &st, 0) >= 0) {
+        if (!S_ISREG(st.mode)) {
+            if (error) *error = [self errorWithCode:0 message:@"That path is not a regular file"];
+            return NO;
+        }
+        existed = YES;
     }
     NSData *previous = [self readGuestFileViaVFS:guestPath error:NULL];  // nil if the file is new
 
@@ -550,8 +571,13 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
     }
     BOOL ok = [self writeAllData:data toOpenFd:fd];
     fd_close(fd);
-    if (ok)
+    if (ok) {
+        // In place into an existing file keeps its inode and owner; only a
+        // creation needs handing to the default-user account.
+        if (!existed)
+            MotePadApplyDefaultOwnerForCreation(guestPath);
         return YES;
+    }
 
     // The write failed mid-stream; try to put the old contents back.
     BOOL restored = NO;

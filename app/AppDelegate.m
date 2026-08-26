@@ -2311,7 +2311,9 @@ static void PopCurrentTask(struct task *previousCurrent) {
     PopCurrentTask(previousCurrent);
 }
 
-+ (NSString *)defaultUserAccountName {
+// The whole /etc/passwd line for the ISHDefaultUserAccountUID account, split
+// on colons, or nil. One reader for both the name and the uid/gid pair below.
++ (NSArray<NSString *> *)defaultUserPasswdFields {
     struct task *previousCurrent = NULL;
     if (!PushInitTaskAsCurrent(&previousCurrent)) {
         PopCurrentTask(previousCurrent);
@@ -2338,9 +2340,13 @@ static void PopCurrentTask(struct task *previousCurrent) {
     for (NSString *line in [contents componentsSeparatedByString:@"\n"]) {
         NSArray<NSString *> *fields = [line componentsSeparatedByString:@":"];
         if (fields.count >= 3 && fields[2].integerValue == ISHDefaultUserAccountUID)
-            return fields[0];
+            return fields;
     }
     return nil;
+}
+
++ (NSString *)defaultUserAccountName {
+    return [self defaultUserPasswdFields].firstObject;
 }
 
 + (NSString *)headlessCommandAccountName {
@@ -2348,6 +2354,17 @@ static void PopCurrentTask(struct task *previousCurrent) {
         return nil;
     NSString *accountName = [self defaultUserAccountName];
     return accountName.length > 0 ? accountName : nil;
+}
+
++ (BOOL)headlessCommandAccountOwner:(NSInteger *)uid gid:(NSInteger *)gid {
+    if (!UserPreferences.shared.shouldLoginAsDefaultUser)
+        return NO;
+    NSArray<NSString *> *fields = [self defaultUserPasswdFields];
+    if (fields.count < 4 || fields[0].length == 0)
+        return NO;
+    if (uid) *uid = ISHDefaultUserAccountUID;
+    if (gid) *gid = fields[3].integerValue;
+    return YES;
 }
 
 static UIViewController *CreateRootSelectionViewController(void) {

@@ -35,6 +35,10 @@ struct task;
 // Default User" is on and this rootfs actually has one, else nil for root. Callers hand the
 // name to run_guest_command_capture_user; a nil keeps the plain root capture path.
 + (NSString * _Nullable)headlessCommandAccountName;
+// That account's uid and primary gid (/etc/passwd fields 2 and 3), for handing files the
+// GUI creates to the account the user's sessions run as. NO under the same conditions
+// headlessCommandAccountName answers nil: preference off, or no such account.
++ (BOOL)headlessCommandAccountOwner:(NSInteger * _Nullable)uid gid:(NSInteger * _Nullable)gid;
 #endif
 
 + (void)maybePresentStartupMessageOnViewController:(UIViewController *)vc;
