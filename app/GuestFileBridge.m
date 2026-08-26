@@ -1269,6 +1269,16 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
     return nil;
 }
 
+// Carry the owner recorded in `st` onto `path` (two setattrs; the VFS takes
+// one attribute at a time). Failure is deliberately ignored: on a realfs
+// mount chown maps to a host fchownat the sandboxed app cannot perform, and
+// realfs carries no per-file guest ownership to preserve anyway. Caller must
+// already hold a borrowed task context.
+static void ISHCarryGuestOwner(NSString *path, const struct statbuf *st) {
+    generic_setattrat(AT_PWD, path.fileSystemRepresentation, make_attr(uid, st->uid), false);
+    generic_setattrat(AT_PWD, path.fileSystemRepresentation, make_attr(gid, st->gid), false);
+}
+
 // Atomic guest-VFS write: everything goes to a temp file in the same
 // directory, then a rename over the target, so a mid-write failure (ENOSPC,
 // ...) never leaves the file truncated. Falls back to an in-place write with
@@ -1280,6 +1290,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         return [self writeDataInPlaceViaVFS:data toGuestPath:guestPath mode:0644 error:error];
 
     int mode = 0644;
+    BOOL existed = NO;
     struct statbuf st;
     memset(&st, 0, sizeof(st));
     if (generic_statat(AT_PWD, target.fileSystemRepresentation, &st, AT_SYMLINK_NOFOLLOW_) >= 0) {
@@ -1288,6 +1299,7 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
             return NO;
         }
         mode = (int)(st.mode & 07777);
+        existed = YES;
     }
 
     NSString *tmpPath = [target.stringByDeletingLastPathComponent stringByAppendingPathComponent:
@@ -1308,6 +1320,14 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         if (error) *error = [self errorWithCode:ISHGuestFileBridgeErrorUnknown message:@"Failed writing file"];
         return NO;
     }
+
+    // The rename replaces the target's inode with one the borrowed pid-1 task
+    // created (the mode came through generic_open above; the ownership did
+    // not), so a save over a user-owned file would silently hand it to root
+    // and the user's own session could no longer write it. Restore the
+    // displaced owner on the temp first, so the swap lands fully formed.
+    if (existed)
+        ISHCarryGuestOwner(tmpPath, &st);
 
     int err = generic_renameat(AT_PWD, tmpPath.fileSystemRepresentation, AT_PWD, target.fileSystemRepresentation, 0);
     if (err < 0) {
@@ -1539,6 +1559,9 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
         NSString *guestDestPath = destinationPath;  // symlink-resolved below; the parameter is captured, so not reassigned
         NSURL *hostTmpURL = nil;
         char *buffer = NULL;
+        struct statbuf dstStat;
+        BOOL dstExisted = NO;  // guest destination replaced an existing file
+        memset(&dstStat, 0, sizeof(dstStat));
 
         // ---- source
         if (srcHost != nil) {
@@ -1582,14 +1605,13 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
             // matching -writeDataViaVFS:.
             NSString *target = [self resolvedGuestWriteTargetForPath:destinationPath] ?: destinationPath;
             int mode = 0644;
-            struct statbuf st;
-            memset(&st, 0, sizeof(st));
-            if (generic_statat(AT_PWD, target.fileSystemRepresentation, &st, AT_SYMLINK_NOFOLLOW_) >= 0) {
-                if (!S_ISREG(st.mode)) {
+            if (generic_statat(AT_PWD, target.fileSystemRepresentation, &dstStat, AT_SYMLINK_NOFOLLOW_) >= 0) {
+                if (!S_ISREG(dstStat.mode)) {
                     failure = [self errorWithCode:ISHGuestFileBridgeErrorNotRegularFile message:@"That path is not a regular file"];
                     goto done;
                 }
-                mode = (int)(st.mode & 07777);
+                mode = (int)(dstStat.mode & 07777);
+                dstExisted = YES;
             }
             guestTmpPath = [target.stringByDeletingLastPathComponent stringByAppendingPathComponent:
                             [NSString stringWithFormat:@".%@.guestfilebridge-tmp", target.lastPathComponent]];
@@ -1676,6 +1698,10 @@ static ISHGuestFileKind ISHGuestFileKindFromMode(mode_t mode) {
                 guestOut->ops->fsync(guestOut);
             fd_close(guestOut);
             guestOut = NULL;
+            // Same reason as -writeDataViaVFS:: the rename would otherwise
+            // hand an overwritten user-owned file to root.
+            if (dstExisted)
+                ISHCarryGuestOwner(guestTmpPath, &dstStat);
             int err = generic_renameat(AT_PWD, guestTmpPath.fileSystemRepresentation,
                                        AT_PWD, guestDestPath.fileSystemRepresentation, 0);
             if (err < 0) {
@@ -1919,6 +1945,13 @@ static NSString *ISHForegroundDirectoryForTTY(int type, int number) {
 //
 // Everything goes through the public API against the live guest fs, so what it
 // tests is the shipped scheduler and not a model of it.
+
+// The ownership section below marks files and reads them back through the
+// same borrowed-task VFS access the bridge itself uses. The method lives in
+// the class above; this only makes it visible to the harness functions.
+@interface ISHGuestFileBridge (SelfTestGuestContext)
+- (BOOL)withGuestTaskContext:(void (^)(void))block;
+@end
 
 // One async bridge call, made synchronous. Runs on the harness's own queue --
 // never main, never a lane -- and waits for the completion the bridge dispatches
@@ -2278,6 +2311,70 @@ static void ISHGuestFileBridgeRunSelfTest(void) {
             NSLog(@"[bridge-selftest] 5. FAIL: the cancelled listing ran about as long as the full one");
             failures++;
         }
+    }
+
+    // ---- 6. Ownership across the atomic replace. Both temp+rename writers
+    // (writeData and copy) replace the target's inode with one created by the
+    // borrowed pid-1 task, so without the owner carry a GUI save over a
+    // user-owned file would flip it to root and the user's own shell could no
+    // longer write it. On a fakefs path deliberately: the selftest root above
+    // may sit on tmpfs, depending on what the guest's init mounts over /tmp.
+    {
+        NSString *ownRoot = @"/root/ish-bridge-selftest-owner";
+        NSString *saved = [ownRoot stringByAppendingPathComponent:@"saved.txt"];
+        NSString *copied = [ownRoot stringByAppendingPathComponent:@"copied.txt"];
+        NSString *copySrc = [ownRoot stringByAppendingPathComponent:@"copy-src.bin"];
+        ISHSelfTestRemove(ownRoot, YES);
+        BOOL setupOk = ISHSelfTestMkdir(ownRoot)
+            && ISHSelfTestWrite(1 << 10, saved)
+            && ISHSelfTestWrite(1 << 10, copied)
+            && ISHSelfTestWrite(2 << 10, copySrc);
+        __block BOOL markedOk = NO;
+        if (setupOk) {
+            // Hand both targets to uid 1000 with a setuid mode, the way a
+            // user's own shell session could have left them. 4755 also guards
+            // the mode's separate path through the writers -- it rides
+            // generic_open's mode parameter, which must stay umask-free.
+            [bridge withGuestTaskContext:^{
+                markedOk = YES;
+                for (NSString *path in @[saved, copied]) {
+                    const char *p = path.fileSystemRepresentation;
+                    if (generic_setattrat(AT_PWD, p, make_attr(uid, 1000), false) < 0 ||
+                        generic_setattrat(AT_PWD, p, make_attr(gid, 1000), false) < 0 ||
+                        generic_setattrat(AT_PWD, p, make_attr(mode, 04755), false) < 0)
+                        markedOk = NO;
+                }
+            }];
+        }
+        if (!setupOk || !markedOk) {
+            NSLog(@"[bridge-selftest] 6. FAIL: cannot set up the owned files (setup %d, mark %d)", setupOk, markedOk);
+            failures++;
+        } else if (!ISHSelfTestWrite(2 << 10, saved) || !ISHSelfTestCopy(copySrc, copied)) {
+            NSLog(@"[bridge-selftest] 6. FAIL: the save or the copy over the owned files failed");
+            failures++;
+        } else {
+            __block struct statbuf savedSt, copiedSt;
+            memset(&savedSt, 0, sizeof(savedSt));
+            memset(&copiedSt, 0, sizeof(copiedSt));
+            [bridge withGuestTaskContext:^{
+                generic_statat(AT_PWD, saved.fileSystemRepresentation, &savedSt, 0);
+                generic_statat(AT_PWD, copied.fileSystemRepresentation, &copiedSt, 0);
+            }];
+            NSUInteger wrong = 0;
+            if (savedSt.uid != 1000 || savedSt.gid != 1000 || (savedSt.mode & 07777) != 04755) {
+                NSLog(@"[bridge-selftest] 6. save-over-existing came back %u:%u mode %o (want 1000:1000 mode 4755)",
+                      savedSt.uid, savedSt.gid, savedSt.mode & 07777);
+                wrong++;
+            }
+            if (copiedSt.uid != 1000 || copiedSt.gid != 1000 || (copiedSt.mode & 07777) != 04755) {
+                NSLog(@"[bridge-selftest] 6. copy-over-existing came back %u:%u mode %o (want 1000:1000 mode 4755)",
+                      copiedSt.uid, copiedSt.gid, copiedSt.mode & 07777);
+                wrong++;
+            }
+            NSLog(@"[bridge-selftest] 6. ownership across the atomic replace: %lu of 2 targets wrong", (unsigned long)wrong);
+            if (wrong > 0) failures++;
+        }
+        ISHSelfTestRemove(ownRoot, YES);
     }
 
     ISHSelfTestRemove(root, YES);

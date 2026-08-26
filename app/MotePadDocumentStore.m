@@ -464,6 +464,7 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
 
     // Preserve the existing file's permissions; refuse to clobber a non-regular file.
     int mode = 0644;
+    BOOL existed = NO;
     struct statbuf st;
     memset(&st, 0, sizeof(st));
     if (generic_statat(AT_PWD, target.fileSystemRepresentation, &st, AT_SYMLINK_NOFOLLOW_) >= 0) {
@@ -472,6 +473,7 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
             return NO;
         }
         mode = (int)(st.mode & 07777);
+        existed = YES;
     }
 
     // Deterministic temp name in the same directory: a leftover from a crashed
@@ -503,6 +505,17 @@ static NSString *const kPersistGuestPrefix = @"/AOK/persist/";
         generic_unlinkat(AT_PWD, tmpPath.fileSystemRepresentation);
         if (error) *error = [self errorWithCode:0 message:@"Failed writing file"];
         return NO;
+    }
+
+    // The rename replaces the target's inode with one the borrowed pid-1 task
+    // created, so a save over a user-owned file would silently hand it to root
+    // and the user's own session could no longer write it. Restore the displaced
+    // owner on the temp first (best-effort; on a realfs mount chown maps to a
+    // host fchownat the sandboxed app cannot perform). Same as -[ISHGuestFileBridge
+    // writeDataViaVFS:toGuestPath:error:], until this store migrates onto it.
+    if (existed) {
+        generic_setattrat(AT_PWD, tmpPath.fileSystemRepresentation, make_attr(uid, st.uid), false);
+        generic_setattrat(AT_PWD, tmpPath.fileSystemRepresentation, make_attr(gid, st.gid), false);
     }
 
     int err = generic_renameat(AT_PWD, tmpPath.fileSystemRepresentation,
