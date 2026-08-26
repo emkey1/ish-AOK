@@ -117,7 +117,10 @@ extern NSString *const kThemeBackgroundColor;
 @property (nonatomic) NSString *customDnsServers;
 // When YES, new terminal sessions launched with the default "/bin/login -f root" command log in
 // as the unprivileged UID 1000 account instead, matching how a real Linux desktop is normally
-// used. Sessions with a customized launch command are unaffected.
+// used. Sessions with a customized launch command are unaffected. The headless command surfaces
+// (LLM chat's run_shell tool, the Shortcuts Run Command intent) and the Display applet's Wayland
+// session follow the same rule via su -- see +[AppDelegate headlessCommandAccountName] and
+// DisplayGuestSessionCommand. Session Shell / System Console surfaces stay root by design.
 @property BOOL shouldLoginAsDefaultUser;
 
 + (instancetype)shared;

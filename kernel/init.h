@@ -51,4 +51,19 @@ int run_guest_command_capture_shell(const char *shell, const char *command,
                                     size_t max_output,
                                     struct guest_command_result *result);
 
+// Same, but as `user` instead of root, via `/bin/su - user -c command` -- the
+// child of init is root, so no password is involved, and su gives the command
+// the account's real identity (uid/gid/groups), HOME, and login-shell
+// environment. The command is one argv element, so no shell quoting of it
+// happens here. That argv ordering works on both BusyBox su (options parsed
+// anywhere) and util-linux/shadow su (post-username words are passed to the
+// login shell as its arguments) -- the same form DisplayViewController uses
+// for the Wayland session. NULL or "" user means run as root, exactly
+// run_guest_command_capture(). Backs "Open Everything as Default User" for
+// the headless command surfaces (LLM chat's run_shell tool, Shortcuts).
+int run_guest_command_capture_user(const char *user, const char *command,
+                                   const char *env, int timeout_ms,
+                                   size_t max_output,
+                                   struct guest_command_result *result);
+
 #endif

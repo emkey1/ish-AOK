@@ -426,14 +426,109 @@ int run_guest_command_capture(const char *command, const char *env,
                                            timeout_ms, max_output, result);
 }
 
+static int run_guest_command_capture_argv(const char *const *args, int argc,
+                                          const char *env, int timeout_ms,
+                                          size_t max_output,
+                                          struct guest_command_result *result);
+
 int run_guest_command_capture_shell(const char *shell, const char *command,
                                     const char *env, int timeout_ms,
                                     size_t max_output,
                                     struct guest_command_result *result) {
-    if (result == NULL || command == NULL)
+    if (command == NULL)
         return _EINVAL;
     if (shell == NULL || shell[0] == '\0')
         shell = "/bin/sh";
+    const char *args[] = {shell, "-c", command};
+    return run_guest_command_capture_argv(args, 3, env,
+                                          timeout_ms, max_output, result);
+}
+
+int run_guest_command_capture_user(const char *user, const char *command,
+                                   const char *env, int timeout_ms,
+                                   size_t max_output,
+                                   struct guest_command_result *result) {
+    if (user == NULL || user[0] == '\0')
+        return run_guest_command_capture_shell(NULL, command, env,
+                                               timeout_ms, max_output, result);
+    if (command == NULL)
+        return _EINVAL;
+    // See init.h for why this exact argv ordering is the one that works on
+    // every su implementation the shipped roots carry.
+    const char *args[] = {"/bin/su", "-", user, "-c", command};
+    return run_guest_command_capture_argv(args, 5, env,
+                                          timeout_ms, max_output, result);
+}
+
+// SIGKILL the capture child and everything it spawned. Two nets, because
+// neither alone covers the tree: the process-group kill catches tasks that
+// reparented away inside the group (a shell that backgrounded a child and
+// exited), and the descendant walk catches tasks that left the group --
+// util-linux su moves its forked login shell into a process group of its
+// own, so a timed-out command under su outlived a bare kill(-pgid)
+// (measured on the Devuan root: the orphan was still running, and still
+// holding the pipe write ends, after the capture returned). The walk
+// snapshots the subtree under pids_lock -- fork links children under the
+// same lock, so nothing can duck out mid-collection -- takes a reference on
+// each task, and delivers after unlocking, mirroring send_group_signal. A
+// double-forked daemon has already reparented to init and genuinely left
+// both nets, same as kill(-pgid) on Linux.
+static void capture_child_kill(dword_t child_pid, bool own_pgroup) {
+    if (own_pgroup)
+        send_group_signal(child_pid, SIGKILL_, SIGINFO_NIL);
+
+    struct task *stack_victims[32];
+    struct task **victims = stack_victims;
+    size_t cap = sizeof(stack_victims) / sizeof(stack_victims[0]);
+    size_t count = 0;
+
+    complex_lockt(&pids_lock, 0);
+    struct task *root = pid_get_task(child_pid);
+    if (root != NULL) {
+        task_ref_cnt_mod(root, 1);
+        victims[count++] = root;
+    }
+    // Breadth-first: victims doubles as the walk queue, children of
+    // victims[i] append to the tail. Zombies stay collected (their children
+    // lists are empty and the delivery loop skips them) so an exiting
+    // middle process never hides its still-live children from the walk.
+    for (size_t i = 0; i < count; i++) {
+        struct task *child;
+        list_for_each_entry(&victims[i]->children, child, siblings) {
+            if (count == cap) {
+                size_t newcap = cap * 2;
+                struct task **grown = malloc(sizeof(*grown) * newcap);
+                if (grown == NULL)
+                    goto collected; // deliver to what we have
+                memcpy(grown, victims, sizeof(*victims) * count);
+                if (victims != stack_victims)
+                    free(victims);
+                victims = grown;
+                cap = newcap;
+            }
+            task_ref_cnt_mod(child, 1);
+            victims[count++] = child;
+        }
+    }
+collected:
+    unlock(&pids_lock);
+
+    for (size_t i = 0; i < count; i++) {
+        struct task *task = victims[i];
+        if (!task->zombie && !task->exiting && task->sighand != NULL)
+            send_signal(task, SIGKILL_, SIGINFO_NIL);
+        task_ref_cnt_mod(task, -1);
+    }
+    if (victims != stack_victims)
+        free(victims);
+}
+
+static int run_guest_command_capture_argv(const char *const *args, int argc,
+                                          const char *env, int timeout_ms,
+                                          size_t max_output,
+                                          struct guest_command_result *result) {
+    if (result == NULL || args == NULL || argc < 1)
+        return _EINVAL;
     memset(result, 0, sizeof(*result));
     if (max_output == 0)
         max_output = 64 * 1024;
@@ -470,26 +565,43 @@ int run_guest_command_capture_shell(const char *shell, const char *command,
     struct task *child = current;
     dword_t child_pid = child->pid;
 
-    // Pack argv as do_execve expects: "<shell>\0-c\0<command>\0\0", argc = 3.
-    // Note the trailing double-NUL: args_size() walks `count` strings and then
-    // asserts the next byte is '\0' (see exec.c), so the buffer needs one extra
+    // The child must own its process group (pgid == pid): the exec'd program
+    // may fork -- util-linux/shadow su runs the login shell in a child while
+    // it holds a PAM session open, and any shell forks for compound commands
+    // -- and the timeout/cleanup kills must reach those descendants too, or a
+    // timed-out command lingers as an orphan still holding the pipe write
+    // ends. construct_task already ran task_setsid on it (every init child is
+    // born a session+pgroup leader), so confirm rather than re-setsid (which
+    // would just return EPERM for an existing leader); if the invariant ever
+    // breaks, capture_child_kill falls back to the old per-pid kill instead
+    // of signaling a group the child doesn't own.
+    lock(&child->group->lock, 0);
+    bool own_pgroup = child->group->pgid == child_pid && child->group->sid == child_pid;
+    unlock(&child->group->lock);
+
+    // Pack argv as do_execve expects: "<arg>\0<arg>\0...\0\0", note the
+    // trailing double-NUL: args_size() walks `count` strings and then asserts
+    // the next byte is '\0' (see exec.c), so the buffer needs one extra
     // terminator after the last argument -- exactly what xX_main_Xx writes.
-    size_t shell_len = strlen(shell);
-    size_t command_len = strlen(command);
-    char *argv = malloc(shell_len + 1 + sizeof("-c") + command_len + 1 + 1);
+    size_t argv_size = 1; // the trailing terminator
+    for (int i = 0; i < argc; i++)
+        argv_size += strlen(args[i]) + 1;
+    char *argv = malloc(argv_size);
     const char *envp = (env != NULL && env[0] != '\0') ? env
         : "PATH=/AOK/persist/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\0"
           "HOME=/root\0TERM=dumb\0";
     int launch_err = argv != NULL ? 0 : _ENOMEM;
     if (argv != NULL) {
         size_t off = 0;
-        memcpy(argv + off, shell, shell_len + 1); off += shell_len + 1;
-        memcpy(argv + off, "-c", sizeof("-c")); off += sizeof("-c");
-        memcpy(argv + off, command, command_len + 1); off += command_len + 1;
+        for (int i = 0; i < argc; i++) {
+            size_t len = strlen(args[i]) + 1;
+            memcpy(argv + off, args[i], len);
+            off += len;
+        }
         argv[off] = '\0'; // trailing terminator required by args_size()
         // Load the program image first, then wire stdio (matches the xX_main_Xx
         // bootstrap order; do_execve does not need an fd table to be present).
-        launch_err = do_execve(shell, 3, argv, envp);
+        launch_err = do_execve(args[0], argc, argv, envp);
         free(argv);
     }
     if (launch_err < 0) {
@@ -531,8 +643,8 @@ int run_guest_command_capture_shell(const char *shell, const char *command,
     current = saved; // the child runs on its own thread now; stop impersonating it
 
     // Drain the pipe until EOF (guest exit closes both write ends), bounding total
-    // bytes and wall-clock time. On timeout, SIGKILL the child by pid and keep
-    // draining briefly so any final buffered output is still captured.
+    // bytes and wall-clock time. On timeout, SIGKILL the child's process group and
+    // keep draining briefly so any final buffered output is still captured.
     size_t cap = 4096;
     char *buf = malloc(cap);
     size_t len = 0;
@@ -546,11 +658,7 @@ int run_guest_command_capture_shell(const char *shell, const char *command,
             long remaining = timeout_ms - ish_monotonic_ms_since(&start);
             if (remaining <= 0) {
                 if (!killed) {
-                    struct task *ct = pid_get_task_ref(child_pid);
-                    if (ct != NULL) {
-                        send_signal(ct, SIGKILL_, SIGINFO_NIL);
-                        task_ref_cnt_mod(ct, -1);
-                    }
+                    capture_child_kill(child_pid, own_pgroup);
                     killed = 1;
                     result->timed_out = 1;
                 }
@@ -614,13 +722,8 @@ int run_guest_command_capture_shell(const char *shell, const char *command,
     // read error, timeout), the child may still be alive and could otherwise
     // wedge the reap below forever (e.g. a command that ignores SIGPIPE), so make
     // sure it dies. On clean EOF we leave it alone to preserve its real exit code.
-    if (!got_eof && !killed) {
-        struct task *ct = pid_get_task_ref(child_pid);
-        if (ct != NULL) {
-            send_signal(ct, SIGKILL_, SIGINFO_NIL);
-            task_ref_cnt_mod(ct, -1);
-        }
-    }
+    if (!got_eof && !killed)
+        capture_child_kill(child_pid, own_pgroup);
 
     // Reap for the exit status, bounded so it can never hang the caller's thread:
     // poll with WNOHANG, escalate to SIGKILL if the child lingers, and give up
@@ -640,11 +743,7 @@ int run_guest_command_capture_shell(const char *shell, const char *command,
                 break; // reaped > 0: collected; < 0: ECHILD/error (already gone)
             long waited = ish_monotonic_ms_since(&reap_start);
             if (!escalated && waited > 200) {
-                struct task *ct = pid_get_task_ref(child_pid);
-                if (ct != NULL) {
-                    send_signal(ct, SIGKILL_, SIGINFO_NIL);
-                    task_ref_cnt_mod(ct, -1);
-                }
+                capture_child_kill(child_pid, own_pgroup);
                 escalated = 1;
             }
             if (waited > 3000)

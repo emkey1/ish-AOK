@@ -26,7 +26,10 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 // Runs `<shell> -c command` headlessly in the booted guest, /AOK/native/zsh
-// first with a /bin/sh fallback if the native shell cannot start. Safe to call
+// first with a /bin/sh fallback if the native shell cannot start. When "Open
+// Everything as Default User" is on and the rootfs has a UID-1000 account, the
+// command instead runs as that account via `su - <account> -c command` (its
+// login shell; no native-zsh path, and no silent root fallback). Safe to call
 // from any thread and while the app is background-launched for an intent: the
 // runner boots the guest if needed, holds a background-task assertion for the
 // duration, lifts the fakefs quiesce gate before running, and re-arms the

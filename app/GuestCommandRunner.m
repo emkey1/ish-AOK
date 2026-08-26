@@ -106,21 +106,43 @@ static dispatch_queue_t ISHShortcutCommandQueue(void) {
     // Idempotent when the gate is not engaged.
     fakefs_quiesce_end();
 
+    // "Open Everything as Default User": run as the same account the user's
+    // own workspace terminals sign in as, via su and that account's login
+    // shell (run_guest_command_capture_user). The native-zsh fast path only
+    // applies to the root case -- su decides the shell for the account -- and
+    // the fallback chain never crosses identities: a failure here reports the
+    // setting rather than silently retrying as root.
+    NSString *account = [AppDelegate headlessCommandAccountName];
     struct guest_command_result result;
-    int rc = run_guest_command_capture_shell(kISHShortcutShellPath, command.UTF8String, NULL,
+    int rc;
+    if (account != nil) {
+        outcome.shell = [NSString stringWithFormat:@"/bin/su - %@", account];
+        rc = run_guest_command_capture_user(account.UTF8String, command.UTF8String, NULL,
+                                            (int) (timeoutSeconds * 1000),
+                                            (size_t) kISHShortcutOutputLimitKB * 1024, &result);
+        if (rc < 0) {
+            outcome.failureReason = [NSString stringWithFormat:
+                @"Could not start the command as user \"%@\" (error %d). The \"Open Everything as "
+                @"Default User\" setting runs commands via /bin/su -- if su is missing or that "
+                @"account cannot log in, disable the setting or fix the account.", account, rc];
+            return outcome;
+        }
+    } else {
+        rc = run_guest_command_capture_shell(kISHShortcutShellPath, command.UTF8String, NULL,
                                              (int) (timeoutSeconds * 1000),
                                              (size_t) kISHShortcutOutputLimitKB * 1024, &result);
-    if (rc < 0) {
-        // The native zsh is expected on every root (/AOK is app-bundled), but
-        // fall back rather than fail if it cannot exec.
-        outcome.shell = @"/bin/sh";
-        rc = run_guest_command_capture_shell(NULL, command.UTF8String, NULL,
-                                             (int) (timeoutSeconds * 1000),
-                                             (size_t) kISHShortcutOutputLimitKB * 1024, &result);
-    }
-    if (rc < 0) {
-        outcome.failureReason = [NSString stringWithFormat:@"Could not start the command (error %d). Is the guest system booted?", rc];
-        return outcome;
+        if (rc < 0) {
+            // The native zsh is expected on every root (/AOK is app-bundled), but
+            // fall back rather than fail if it cannot exec.
+            outcome.shell = @"/bin/sh";
+            rc = run_guest_command_capture_shell(NULL, command.UTF8String, NULL,
+                                                 (int) (timeoutSeconds * 1000),
+                                                 (size_t) kISHShortcutOutputLimitKB * 1024, &result);
+        }
+        if (rc < 0) {
+            outcome.failureReason = [NSString stringWithFormat:@"Could not start the command (error %d). Is the guest system booted?", rc];
+            return outcome;
+        }
     }
 
     outcome.launched = result.launched != 0;

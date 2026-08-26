@@ -419,8 +419,16 @@ int main(int argc, char *const argv[]) {
         if (quiesce_test)
             pthread_create(&quiesce_thread, NULL, quiesce_test_thread, NULL);
 
+        // With ISH_TEST_GUEST_USER also set, run as that account via the su
+        // path (run_guest_command_capture_user) -- the primitive behind "Open
+        // Everything as Default User" for the app's headless command surfaces.
+        // Optional ISH_TEST_GUEST_TIMEOUT_MS overrides the 10 s cap, for
+        // exercising the process-group timeout kill.
+        const char *test_user = getenv("ISH_TEST_GUEST_USER");
+        const char *timeout_str = getenv("ISH_TEST_GUEST_TIMEOUT_MS");
+        int timeout_ms = timeout_str != NULL ? atoi(timeout_str) : 10000;
         struct guest_command_result r;
-        int rc = run_guest_command_capture(test_cmd, NULL, 10000, 0, &r);
+        int rc = run_guest_command_capture_user(test_user, test_cmd, NULL, timeout_ms, 0, &r);
         if (quiesce_test)
             pthread_join(quiesce_thread, NULL);
         fprintf(stderr,
@@ -430,6 +438,13 @@ int main(int argc, char *const argv[]) {
         fprintf(stderr, "[guest-cmd] ---output---\n%s\n[guest-cmd] ---end---\n",
                 r.output != NULL ? r.output : "(null)");
         free(r.output);
+        // ISH_TEST_GUEST_LINGER_MS keeps the emulator alive after the capture
+        // returns, so a process that wrongly survived the timeout kill has time
+        // to leave observable evidence (e.g. touch a marker file) before
+        // everything dies with the host process.
+        const char *linger_str = getenv("ISH_TEST_GUEST_LINGER_MS");
+        if (linger_str != NULL)
+            usleep((useconds_t) atoi(linger_str) * 1000);
         _exit(0);
     }
 

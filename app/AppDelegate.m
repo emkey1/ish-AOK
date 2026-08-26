@@ -2343,6 +2343,13 @@ static void PopCurrentTask(struct task *previousCurrent) {
     return nil;
 }
 
++ (NSString *)headlessCommandAccountName {
+    if (!UserPreferences.shared.shouldLoginAsDefaultUser)
+        return nil;
+    NSString *accountName = [self defaultUserAccountName];
+    return accountName.length > 0 ? accountName : nil;
+}
+
 static UIViewController *CreateRootSelectionViewController(void) {
     UIViewController *rootsViewController = [[UIStoryboard storyboardWithName:@"Roots" bundle:nil] instantiateInitialViewController];
     UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:rootsViewController];

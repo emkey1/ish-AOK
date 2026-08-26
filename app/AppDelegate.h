@@ -30,6 +30,11 @@ struct task;
 // UserPreferences.h), or nil if this rootfs has no such account. "Open Everything as Default
 // User" targets whatever's actually there instead of a name iSH provisions itself.
 + (NSString * _Nullable)defaultUserAccountName;
+// The account the headless command surfaces (LLM chat's run_shell tool, the Shortcuts Run
+// Command intent) should run commands as: the default-user account when "Open Everything as
+// Default User" is on and this rootfs actually has one, else nil for root. Callers hand the
+// name to run_guest_command_capture_user; a nil keeps the plain root capture path.
++ (NSString * _Nullable)headlessCommandAccountName;
 #endif
 
 + (void)maybePresentStartupMessageOnViewController:(UIViewController *)vc;

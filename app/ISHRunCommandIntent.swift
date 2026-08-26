@@ -6,13 +6,15 @@ import AppIntents
 // The Shortcuts "Run Command" action: execute one command headlessly in the
 // AOK guest and hand the merged stdout+stderr back to the shortcut. Execution
 // goes through ISHGuestCommandRunner (app/GuestCommandRunner.m), which runs
-// `/AOK/native/zsh -c` via run_guest_command_capture_shell and takes care of
-// boot, threading, and background-suspension safety.
+// `/AOK/native/zsh -c` via run_guest_command_capture_shell -- or, when "Open
+// Everything as Default User" is on, `su - <account> -c` as the UID-1000
+// account -- and takes care of boot, threading, and background-suspension
+// safety.
 @available(iOS 16.0, *)
 struct ISHRunCommandIntent: AppIntent {
     static var title: LocalizedStringResource = "Run Command"
     static var description = IntentDescription(
-        "Runs a shell command in the iSH-AOK guest system and returns its output (stdout and stderr merged). The command runs headlessly under /AOK/native/zsh; the app does not need to be open.")
+        "Runs a shell command in the iSH-AOK guest system and returns its output (stdout and stderr merged). The command runs headlessly; the app does not need to be open. It runs as root, or as the default user account when \"Open Everything as Default User\" is enabled in Settings.")
     static var openAppWhenRun: Bool = false
 
     @Parameter(title: "Command")

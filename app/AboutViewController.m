@@ -1689,11 +1689,22 @@ static NSString *ISHLLMToolTimeoutTitle(NSInteger seconds) {
 // return its combined stdout+stderr. This makes "web search" just `curl`/`wget`
 // in the environment iSH already is, with no extra API key.
 static NSArray<NSDictionary<NSString *, id> *> *ISHLLMChatToolDefinitions(void) {
+    // Rebuilt per request, so the description tracks the current "Open
+    // Everything as Default User" state: commands run as that account (via su
+    // and its login shell) when the setting is on, as root via /bin/sh -c
+    // otherwise. Only the preference is consulted here -- this runs on the
+    // main thread while composing the request, and resolving the actual
+    // account name means a guest-VFS read of /etc/passwd (the per-session
+    // environment note, built on the guest command queue, carries the exact
+    // name).
+    NSString *identityNote = UserPreferences.shared.shouldLoginAsDefaultUser
+        ? @"Commands run as the unprivileged default user account (not root) when this filesystem has one. "
+        : @"";
     return @[@{
         @"type": @"function",
         @"function": @{
             @"name": @"run_shell",
-            @"description": [NSString stringWithFormat:@"Run a command in the local iSH Linux shell (/bin/sh -c) and return its combined stdout and stderr. Use this to fetch web pages or APIs, read files, or run any Linux command available in this environment. The userland varies by distro -- it may be a minimal BusyBox/Alpine system or a full Debian/Devuan/glibc one -- so use the tools that are actually present (a per-session environment note lists what was detected) and try an alternative if a command reports 'not found'. Output is capped at %ld KB and the command is killed after %ld seconds.", (long) ISHLLMToolOutputLimitKB(), (long) ISHLLMToolTimeoutSeconds()],
+            @"description": [NSString stringWithFormat:@"Run a command in the local iSH Linux shell and return its combined stdout and stderr. %@Use this to fetch web pages or APIs, read files, or run any Linux command available in this environment. The userland varies by distro -- it may be a minimal BusyBox/Alpine system or a full Debian/Devuan/glibc one -- so use the tools that are actually present (a per-session environment note lists what was detected) and try an alternative if a command reports 'not found'. Output is capped at %ld KB and the command is killed after %ld seconds.", identityNote, (long) ISHLLMToolOutputLimitKB(), (long) ISHLLMToolTimeoutSeconds()],
             @"parameters": @{
                 @"type": @"object",
                 @"properties": @{
@@ -1786,12 +1797,27 @@ static NSData *ISHLLMSynchronousChatPost(NSURL *url, NSData *body, NSString *api
 static NSString *ISHLLMRunGuestShellCommand(NSString *command, NSString **summaryOut) {
     NSInteger timeoutSeconds = ISHLLMToolTimeoutSeconds();
     NSInteger outputLimitKB = ISHLLMToolOutputLimitKB();
+    // "Open Everything as Default User": tool commands run as the same account
+    // the user's own workspace terminals sign in as, via su (see
+    // run_guest_command_capture_user). nil account = the plain root path.
+    NSString *account = [AppDelegate headlessCommandAccountName];
     struct guest_command_result result;
-    int rc = run_guest_command_capture(command.UTF8String, NULL,
-                                       (int) (timeoutSeconds * 1000), (size_t) outputLimitKB * 1024, &result);
+    int rc = account != nil
+        ? run_guest_command_capture_user(account.UTF8String, command.UTF8String, NULL,
+                                         (int) (timeoutSeconds * 1000), (size_t) outputLimitKB * 1024, &result)
+        : run_guest_command_capture(command.UTF8String, NULL,
+                                    (int) (timeoutSeconds * 1000), (size_t) outputLimitKB * 1024, &result);
     if (rc < 0) {
         if (summaryOut != NULL)
             *summaryOut = @"failed to start";
+        // Never fall back to running as root here: the failure is reported
+        // instead, naming the setting that chose the su path (mirrors the
+        // Display applet's Wayland-session failure guidance).
+        if (account != nil)
+            return [NSString stringWithFormat:@"Could not start the command as user \"%@\" (error %d). "
+                    @"The \"Open Everything as Default User\" setting runs commands via /bin/su -- "
+                    @"if su is missing or that account cannot log in, disable the setting or fix the account.",
+                    account, rc];
         return [NSString stringWithFormat:@"Could not start the command (error %d). Is the guest system booted?", rc];
     }
 
@@ -1844,8 +1870,13 @@ static NSString *ISHLLMDetectGuestEnvironmentNote(void) {
         "for t in curl wget jq python3 python git make gcc cc vi vim nano tar unzip ssh nc ss netstat ip ifconfig ps top apk apt apt-get dpkg rc-service rc-status service systemctl crontab; do "
         "command -v \"$t\" >/dev/null 2>&1 && printf 'have=%s\\n' \"$t\"; done; "
         "[ -d /etc/init.d ] && printf 'have=/etc/init.d\\n'";
+    // Probe as the same account tool commands will run as, so the detected
+    // tools/PATH match what run_shell actually sees.
+    NSString *account = [AppDelegate headlessCommandAccountName];
     struct guest_command_result result;
-    int rc = run_guest_command_capture(probe, NULL, 10000, 16 * 1024, &result);
+    int rc = account != nil
+        ? run_guest_command_capture_user(account.UTF8String, probe, NULL, 10000, 16 * 1024, &result)
+        : run_guest_command_capture(probe, NULL, 10000, 16 * 1024, &result);
     if (rc < 0)
         return nil;
     NSString *raw = (result.output != NULL && result.output_len > 0)
@@ -1869,6 +1900,10 @@ static NSString *ISHLLMDetectGuestEnvironmentNote(void) {
     NSMutableString *note = [NSMutableString stringWithFormat:
         @"You can run shell commands in this iSH Linux guest with the run_shell tool; it returns combined stdout+stderr (capped at %ld KB, killed after %lds).",
         (long) ISHLLMToolOutputLimitKB(), (long) ISHLLMToolTimeoutSeconds()];
+    if (account != nil)
+        [note appendFormat:@" Commands run as the unprivileged user \"%@\" (the app's \"Open Everything as "
+         @"Default User\" setting), not root -- expect permission errors from root-only operations "
+         @"(package installs, service control) and say so rather than retrying.", account];
     if (distro.length > 0)
         [note appendFormat:@" Detected distro: %@.", distro];
     if (hasCurl && hasWget)
@@ -6103,9 +6138,9 @@ typedef NS_ENUM(NSInteger, ISHLLMDestinationEditorRow) {
     if (section == [self _userAccountSectionIndex]) {
         NSString *accountName = [AppDelegate defaultUserAccountName];
         return accountName.length != 0
-            ? [NSString stringWithFormat:@"When enabled, new Workspace terminals and app sessions sign in as \"%@\" (UID %d) instead of root. The Session Shell always signs in as root.",
+            ? [NSString stringWithFormat:@"When enabled, new Workspace terminals, app sessions, and headless commands (LLM Chat's shell tool, Shortcuts' Run Command) run as \"%@\" (UID %d) instead of root. The Session Shell always signs in as root.",
                accountName, ISHDefaultUserAccountUID]
-            : [NSString stringWithFormat:@"When enabled, new Workspace terminals and app sessions sign in as the UID %d account instead of root -- but this filesystem doesn't have one yet. The Session Shell always signs in as root.",
+            : [NSString stringWithFormat:@"When enabled, new Workspace terminals, app sessions, and headless commands (LLM Chat's shell tool, Shortcuts' Run Command) run as the UID %d account instead of root -- but this filesystem doesn't have one yet. The Session Shell always signs in as root.",
                ISHDefaultUserAccountUID];
     }
     if (section == [self _llmSectionIndex])
