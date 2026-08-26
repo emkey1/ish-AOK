@@ -33,3 +33,7 @@
 ## 2024-06-05 - Accessibility Labels for Factory-Generated Buttons
 **Learning:** When using a factory method to generate icon-only buttons with fallback text strings (like "M", "|<", ">|"), setting `accessibilityLabel` equal to the abbreviated fallback text does not provide enough context for VoiceOver users.
 **Action:** In button generation methods, expand abbreviated text placeholders into clear, descriptive `accessibilityLabel` values (e.g., mapping "M" to "Menu", ">|" to "Next Track") so VoiceOver users understand the button's purpose without relying on visual context.
+
+## 2024-06-06 - Dynamic Accessibility Labels for Toggle Buttons
+**Learning:** In iOS UI development, when a button toggles its title and purpose (e.g., between "Fit" and "100%"), its `accessibilityLabel` must also be dynamically updated to reflect the new action.
+**Action:** Always update the `accessibilityLabel` dynamically when a button's primary title or state changes.
