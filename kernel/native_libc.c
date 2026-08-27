@@ -815,19 +815,61 @@ int nlibc_chdir(const char *path) {
 // funopen() gives a real FILE* driven by our callbacks, which is what lets the
 // ~1600 fprintf/fputs/fread/fwrite/fclose call sites keep working untouched:
 // only where the handle comes from changes.
+//
+// While one of these callbacks is on the stack, host stdio HOLDS the FILE's
+// lock -- fwrite/getdelim lock the stream for their whole call, the blocking
+// I/O included. Dying here (receive_signals' default action for a fatal
+// signal does not return) abandons that lock, and Darwin never releases a
+// mutex whose owner thread is gone: one native program killed mid-write --
+// SIGPIPE from `yes | head -1` was the reproducer -- left its stdout wrapper
+// locked forever, and every later native program's first stdio read hung in
+// __srefill's _fwalk(lflush) walking onto it. That is the terminal-hangs-
+// before-prompt wedge, the second instance of the 1d8eaae0d class.
+//
+// So the callbacks bracket themselves with a depth marker, and
+// native_checkpoint defers fatal delivery (and handler delivery, which can
+// longjmp out of host frames the same way) while it is set: the callback
+// instead fails with the error the interrupted syscall produced, stdio
+// returns through its own unlock, and the program dies at its next signal
+// checkpoint outside stdio -- usually its own clean exit(), which also
+// flushes and closes its streams properly. nlibc_stdio_defer_fatal() carries
+// a give-up limit so a pathological program looping on stdio errors without
+// ever leaving stdio still dies (leaking its lock, which fully-buffered
+// native stdin -- see nlibc_std_stream -- has made harmless to bystanders).
+static __thread int nlibc_stdio_depth;
+static __thread unsigned nlibc_stdio_deferred;
+#define NLIBC_STDIO_DEFER_LIMIT 1000
+
+bool nlibc_stdio_defer_fatal(void) {
+    if (nlibc_stdio_depth <= 0) {
+        nlibc_stdio_deferred = 0; // safe point: death releases nothing owned
+        return false;
+    }
+    if (++nlibc_stdio_deferred > NLIBC_STDIO_DEFER_LIMIT)
+        return false;
+    return true;
+}
+
 static int nlibc_file_read(void *cookie, char *buf, int n) {
+    nlibc_stdio_depth++;
     ssize_t res = nlibc_read((int) (intptr_t) cookie, buf, (size_t) n);
+    nlibc_stdio_depth--;
     return (int) res;
 }
 static int nlibc_file_write(void *cookie, const char *buf, int n) {
+    nlibc_stdio_depth++;
     ssize_t res = nlibc_write((int) (intptr_t) cookie, buf, (size_t) n);
+    nlibc_stdio_depth--;
     return (int) res;
 }
 #if !defined(__linux__)
 // fpos_t is an integer on Darwin and an opaque struct on glibc, so this
 // BSD-shaped hook only exists where funopen does.
 static fpos_t nlibc_file_seek(void *cookie, fpos_t off, int whence) {
-    return nlibc_lseek((int) (intptr_t) cookie, (off_t) off, whence);
+    nlibc_stdio_depth++;
+    fpos_t res = nlibc_lseek((int) (intptr_t) cookie, (off_t) off, whence);
+    nlibc_stdio_depth--;
+    return res;
 }
 #endif
 #if defined(__linux__)
@@ -837,13 +879,21 @@ static fpos_t nlibc_file_seek(void *cookie, fpos_t off, int whence) {
 // BSD's returns the new offset. Adapters rather than rewritten callbacks, so
 // the Darwin path -- the one that ships -- keeps using its own hooks unchanged.
 static ssize_t nlibc_cookie_read(void *cookie, char *buf, size_t n) {
-    return (ssize_t) nlibc_read((int) (intptr_t) cookie, buf, n);
+    nlibc_stdio_depth++;
+    ssize_t res = (ssize_t) nlibc_read((int) (intptr_t) cookie, buf, n);
+    nlibc_stdio_depth--;
+    return res;
 }
 static ssize_t nlibc_cookie_write(void *cookie, const char *buf, size_t n) {
-    return (ssize_t) nlibc_write((int) (intptr_t) cookie, buf, n);
+    nlibc_stdio_depth++;
+    ssize_t res = (ssize_t) nlibc_write((int) (intptr_t) cookie, buf, n);
+    nlibc_stdio_depth--;
+    return res;
 }
 static int nlibc_cookie_seek(void *cookie, __off64_t *off, int whence) {
+    nlibc_stdio_depth++;
     off_t res = nlibc_lseek((int) (intptr_t) cookie, (off_t) *off, whence);
+    nlibc_stdio_depth--;
     if (res < 0)
         return -1;
     *off = (__off64_t) res;
@@ -1091,7 +1141,22 @@ static FILE *nlibc_std_stream(int fd) {
             // Match what a terminal program expects instead: stderr
             // unbuffered, stdout line-buffered. nlibc_flush_std() below still
             // catches the tail when stdout is a pipe.
-            setvbuf(nlibc_std[fd], NULL, fd == 2 ? _IONBF : _IOLBF, BUFSIZ);
+            //
+            // stdin stays FULLY buffered, deliberately diverging from a
+            // terminal program's usual line-buffered stdin. Darwin's __srefill
+            // flushes every line-buffered output stream in the PROCESS before
+            // refilling a line-buffered or unbuffered input stream --
+            // _fwalk(lflush), taking each stream's lock -- and in this process
+            // "every stream" includes every OTHER native program's stdout,
+            // plus any lock a killed program's dead thread still holds. A
+            // line-buffered stdin is how one leaked lock hung every later
+            // native reader at its first getdelim. Input buffering has no
+            // line-vs-full semantic difference (a read fills what is
+            // available either way); the only casualty is the implicit
+            // flush-stdout-before-reading-stdin idiom, which cross-program is
+            // exactly the coupling this exists to break.
+            setvbuf(nlibc_std[fd], NULL,
+                    fd == 2 ? _IONBF : fd == 0 ? _IOFBF : _IOLBF, BUFSIZ);
         }
     }
     return nlibc_std[fd];
@@ -3111,6 +3176,13 @@ int nlibc_stack_exhausted(void) {
 
 noreturn void nlibc_exit(int status) {
     nlibc_flush_std();
+    // A fatal signal deferred while the program was inside host stdio (see
+    // nlibc_stdio_defer_fatal) is still pending here. Take it now that the
+    // streams are flushed, closed and unlocked, so the task reports
+    // died-by-signal -- what ^C on a blocked native reader should look like
+    // to its parent -- rather than the error-path exit code the deferral
+    // detoured it into.
+    native_checkpoint();
     do_exit_group((status & 0xff) << 8);
 }
 

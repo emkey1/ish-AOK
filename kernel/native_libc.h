@@ -263,6 +263,11 @@ int nlibc_sigpending(sigset_t *set);
 int nlibc_sigwait(const sigset_t *set, int *sig);
 /* Runs whatever handlers are pending. Called from native_checkpoint. */
 void nlibc_deliver_signals(void);
+// True while the calling thread is inside a host-stdio funopen callback with
+// a FILE lock held, meaning native_checkpoint must defer fatal delivery and
+// handler delivery rather than risk abandoning the lock. Carries its own
+// give-up limit; see the callbacks in native_libc.c.
+bool nlibc_stdio_defer_fatal(void);
 /* The same, reporting how many handlers ran -- see nlibc_sigsuspend. */
 int nlibc_deliver_signals_count(void);
 

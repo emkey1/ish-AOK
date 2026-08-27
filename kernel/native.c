@@ -453,6 +453,14 @@ void native_exec_run_pending(void) {
     native_free_vector(argv);
     native_free_vector(envp);
 
+    // A fatal signal deferred while the program was inside host stdio (see
+    // nlibc_stdio_defer_fatal) is still pending. The program has unwound and
+    // its glue flushed its streams, so this is the safe point to take it:
+    // the task then reports died-by-signal -- what ^C on a blocked native
+    // reader should look like to its parent -- instead of whatever exit code
+    // the error path it was detoured into produced.
+    native_checkpoint();
+
     // Same encoding sys_exit_group uses: the wait status carries the exit code
     // in its high byte.
     do_exit_group((status & 0xff) << 8);
@@ -616,11 +624,23 @@ void native_checkpoint(void) {
     sigset_t_ group_pending = __atomic_load_n(&current->sighand->pending, __ATOMIC_ACQUIRE);
     sigset_t_ blocked = __atomic_load_n(&current->blocked, __ATOMIC_ACQUIRE);
     bool has_saved_mask = __atomic_load_n(&current->has_saved_mask, __ATOMIC_ACQUIRE);
+
+    // Inside a host stdio callback the FILE's lock is held by this thread, and
+    // neither receive_signals (fatal default action exits without returning)
+    // nor nlibc_deliver_signals (a handler may longjmp -- bash's SIGINT does)
+    // may abandon it: Darwin never releases a dead owner's mutex, and one
+    // orphaned stream lock wedges every later _fwalk in the process. Defer
+    // both; the interrupted callback fails back through stdio's own unlock and
+    // the signal is taken at the next checkpoint outside stdio. See the
+    // callbacks in kernel/native_libc.c for the whole story.
+    bool defer = nlibc_stdio_defer_fatal();
+
     if (has_saved_mask || ((pending | group_pending) & ~blocked) != 0) {
         // receive_signals runs the default action, which for SIGINT means
         // do_exit_group -- so this call may not return, and that is the point:
         // ^C on a native program has to end it the way it ends any other.
-        receive_signals();
+        if (!defer)
+            receive_signals();
     }
 
     // ^Z. A stopped group parks its threads here until SIGCONT -- the SAME
@@ -628,11 +648,13 @@ void native_checkpoint(void) {
     // rather than a second copy of it. The copy this replaces claimed in its
     // comment to mirror handle_interrupt and did not: it had no ptrace handling
     // at all, so a traced native program that group-stopped never reported to
-    // its tracer and the tracer's wait4 hung forever.
+    // its tracer and the tracer's wait4 hung forever. Parking WHILE holding a
+    // stdio lock is fine -- the owner is alive and will release it on SIGCONT.
     group_stop_wait();
 
     // Signals the program installed a handler for. Those are kept blocked in
     // the kernel -- it cannot jump host code -- so receive_signals above skips
     // them and the shim runs them here instead (kernel/native_libc.c).
-    nlibc_deliver_signals();
+    if (!defer)
+        nlibc_deliver_signals();
 }
