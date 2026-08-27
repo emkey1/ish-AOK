@@ -80,6 +80,7 @@ getpeername_smallbuf.c
 netlink_route.c
 netlink_audit.c
 mount_flags.c
+mount_bind_rbind.c
 devtmpfs_mount.c
 clone_error_cleanup.c
 uts_namespace.c

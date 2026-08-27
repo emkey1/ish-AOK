@@ -464,9 +464,11 @@ static void devtmpfs_repair_nodes(const char *point) {
 // does rather than acting as plain mount options.
 #define MS_PROPAGATION (MS_SHARED_|MS_PRIVATE_|MS_SLAVE_|MS_UNBINDABLE_)
 #define MS_OP (MS_REMOUNT_|MS_BIND_|MS_MOVE_|MS_PROPAGATION)
-// Flags iSH accepts but does not act on: durability/atime/symlink-resolution
-// niceties plus the recursive-bind modifier. Without mount namespaces these are
-// effectively no-ops, so we strip them rather than reject the whole mount.
+// Flags iSH-AOK accepts but does not act on: durability/atime/symlink-resolution
+// niceties. Without mount namespaces these are effectively no-ops, so we strip
+// them rather than reject the whole mount. MS_REC stays in this set so a
+// recursive propagation change (mount --make-rprivate) is still accepted as a
+// no-op, but the bind path does act on it (bind_replicate_submounts).
 #define MS_IGNORED (MS_SYNCHRONOUS_|MS_MANDLOCK_|MS_DIRSYNC_|MS_NOSYMFOLLOW_|MS_REC_|MS_POSIXACL_|MS_I_VERSION_|MS_KERNMOUNT_|MS_LAZYTIME_)
 
 // Create a bind mount at `point` aliasing the already-normalized guest path
@@ -530,6 +532,57 @@ static int do_bind_mount(const char *norm_source, const char *point, const char 
     return 0;
 }
 
+// mount --rbind: replicate every mount already sitting under the source
+// subtree at the corresponding path under the new bind. Linux clones the
+// subtree atomically; here each submount is re-bound one by one, best-effort
+// -- a submount that fails (ENOMEM, over-long path) is skipped rather than
+// unwinding the whole operation, matching this file's lenient treatment of
+// mount niceties. The snapshot is taken before any replica is created, so a
+// target inside the source subtree (mount --rbind / /mnt/x) terminates
+// instead of finding and copying its own copies. The one post-attach mount the
+// snapshot can still see is the parent bind itself, created just before this
+// runs -- when the target sits inside the source subtree it matches the scan
+// and would clone itself (/mnt/x/mnt/x), which Linux's clone-then-attach
+// order never produces, so it is excluded by exact point.
+static void bind_replicate_submounts(const char *norm_source, const char *point, const char *info, int flags) {
+    size_t src_len = strlen(norm_source);
+    // Collect the submount points under the lock, then bind with it dropped:
+    // do_bind_mount resolves paths and takes mounts_lock itself.
+    size_t count = 0, cap = 0;
+    char **subs = NULL;
+    lock(&mounts_lock, 0);
+    struct mount *mount;
+    list_for_each_entry(&mounts, mount, mounts) {
+        if (mount->point_len <= src_len || strncmp(mount->point, norm_source, src_len) != 0 ||
+                mount->point[src_len] != '/')
+            continue;
+        if (strcmp(mount->point, point) == 0)
+            continue;
+        if (count == cap) {
+            size_t new_cap = cap == 0 ? 8 : cap * 2;
+            char **grown = realloc(subs, new_cap * sizeof(*subs));
+            if (grown == NULL)
+                break;
+            subs = grown;
+            cap = new_cap;
+        }
+        subs[count] = strdup(mount->point);
+        if (subs[count] == NULL)
+            break;
+        count++;
+    }
+    unlock(&mounts_lock);
+
+    for (size_t i = 0; i < count; i++) {
+        char sub_point[MAX_PATH];
+        int n = snprintf(sub_point, sizeof(sub_point), "%s%s", point, subs[i] + src_len);
+        if (n > 0 && (size_t) n < sizeof(sub_point))
+            do_bind_mount(subs[i], sub_point, info, flags);
+        free(subs[i]);
+    }
+    free(subs);
+}
+
 dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest_addr_t type_addr, dword_t flags, guest_addr_t data_addr) {
     // source/data/type are copy_mount_string() args in Linux (strndup_user,
     // EINVAL when over-long), NOT getname() pathnames -- so they keep the plain
@@ -569,7 +622,11 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
     int err = generic_statat(AT_PWD, point_raw, &stat, 0);
     if (err < 0)
         return err;
-    if (!S_ISDIR(stat.mode))
+    // A bind is exempt from the directory requirement: Linux allows binding a
+    // single file over another file. Dir-onto-dir or non-dir-onto-non-dir;
+    // the mixed cases are rejected in the bind branch once the source has
+    // been stat'd too.
+    if (!S_ISDIR(stat.mode) && !(flags & MS_BIND_))
         return _ENOTDIR;
 
     char point[MAX_PATH];
@@ -590,9 +647,18 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
     // A bind shares the source mount's backing; do_bind_mount resolves the source
     // and takes mounts_lock itself, so dispatch it before we lock here.
     if (flags & MS_BIND_) {
+        struct statbuf source_stat;
+        err = generic_statat(AT_PWD, source, &source_stat, 0);
+        if (err < 0)
+            return err;
+        if (S_ISDIR(source_stat.mode) != S_ISDIR(stat.mode))
+            return _ENOTDIR;
         err = do_bind_mount(op_source, point, data, flags & MS_FLAGS);
-        if (err >= 0)
+        if (err >= 0) {
+            if (flags & MS_REC_)
+                bind_replicate_submounts(op_source, point, data, flags & MS_FLAGS);
             proc_mountinfo_notify_changed();
+        }
         return err;
     }
 
