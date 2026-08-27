@@ -365,11 +365,17 @@ int generic_statat_full(struct fd *at, const char *path_raw, struct statbuf *sta
     // metadata-update pair under inodes_lock -- see generic_openat) can land
     // in between those two steps and produce a torn combination: metadata
     // describing one entry type together with a live host entry of a
-    // different type. mount->fs->stat never blocks, so it's safe to hold
-    // the lock across it unconditionally.
-    lock(&inodes_lock, 0); // TODO: don't do this
-    err = mount->fs->stat(mount, path, stat);
-    unlock(&inodes_lock);
+    // different type. mount->fs->stat never blocks for those filesystems, so
+    // it's safe to hold the lock across it -- except for a may_block
+    // filesystem (fusefs), whose stat waits on a userspace daemon and has no
+    // torn-metadata pair to protect; see the may_block comment in kernel/fs.h.
+    if (!mount->fs->may_block) {
+        lock(&inodes_lock, 0); // TODO: don't do this
+        err = mount->fs->stat(mount, path, stat);
+        unlock(&inodes_lock);
+    } else {
+        err = mount->fs->stat(mount, path, stat);
+    }
     if (err >= 0)
         stat_stamp_fake_dev(mount, stat);
     if (mnt_id)

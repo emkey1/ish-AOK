@@ -2547,6 +2547,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
     EnsureCharacterDevice("/dev/full", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_FULL_MINOR));
     EnsureCharacterDevice("/dev/random", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_RANDOM_MINOR));
     EnsureCharacterDevice("/dev/urandom", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_URANDOM_MINOR));
+    EnsureCharacterDevice("/dev/fuse", S_IFCHR|0666, dev_make(MISC_MAJOR, DEV_FUSE_MINOR));
 
     // Same idea one level up: the root is a device now (/proc/diskstats,
     // /sys/block, and / reporting /dev/sda), and a rootfs image has never

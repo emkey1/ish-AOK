@@ -12,6 +12,7 @@ struct dev_ops *block_devs[256] = {
 };
 struct dev_ops *char_devs[256] = {
     [MEM_MAJOR] = &mem_dev,
+    [MISC_MAJOR] = &fuse_dev,
     [TTY_CONSOLE_MAJOR] = &tty_dev,
     [TTY_ALTERNATE_MAJOR] = &tty_dev,
     [TTY_PSEUDO_MASTER_MAJOR] = &tty_dev,
@@ -42,6 +43,7 @@ const struct dev_node_spec dev_standard_nodes[] = {
     {"tty6",    0666, TTY_CONSOLE_MAJOR, 6},
     {"tty7",    0666, TTY_CONSOLE_MAJOR, 7},
     {"rtc0",    0666, DEV_RTC_MAJOR, DEV_RTC_MINOR},
+    {"fuse",    0666, MISC_MAJOR, DEV_FUSE_MINOR},
 };
 const size_t dev_standard_nodes_count = sizeof(dev_standard_nodes)/sizeof(dev_standard_nodes[0]);
 

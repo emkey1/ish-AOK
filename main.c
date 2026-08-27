@@ -204,6 +204,7 @@ static void setup_host_mounts(void) {
     ensure_dev_node("/dev/urandom", MEM_MAJOR, DEV_URANDOM_MINOR);
     ensure_dev_node("/dev/tty", TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR);
     ensure_dev_node("/dev/ptmx", TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR);
+    ensure_dev_node("/dev/fuse", MISC_MAJOR, DEV_FUSE_MINOR);
     // systemd's getty@tty1.service (and friends) carry
     // ConditionPathExists=/dev/tty0 -- the Linux "current VT" alias -- and
     // silently skip without it, so a systemd guest finishes booting with no

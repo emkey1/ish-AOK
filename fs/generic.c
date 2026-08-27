@@ -417,8 +417,17 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
 
     bool created = false;
 
+    // A may_block filesystem (fusefs) waits on a userspace daemon inside its
+    // ops, so this function's inodes_lock serialization is skipped for it: the
+    // lock guards fakefs's real-op/metadata pairing, which such a filesystem
+    // doesn't have, and holding it across a daemon wait deadlocks (see
+    // kernel/fs.h). It is still taken briefly for the inode-table lookup at
+    // the end.
+    bool fs_blocks = mount->fs->may_block;
+
     struct statbuf stat;
-    lock(&inodes_lock, 0); // TODO: don't do this
+    if (!fs_blocks)
+        lock(&inodes_lock, 0); // TODO: don't do this
 
     // Stat before open so permission checks happen before backends can truncate
     // or otherwise mutate an existing file as a side effect of open.
@@ -427,7 +436,8 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
         if ((flags & O_CREAT_) && err == _ENOENT) {
             // "newname/" names a directory; open() cannot create one (EISDIR).
             if (trailing_slash) {
-                unlock(&inodes_lock);
+                if (!fs_blocks)
+                    unlock(&inodes_lock);
                 mount_release(mount);
                 return ERR_PTR(_EISDIR);
             }
@@ -458,14 +468,16 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
                 if (perr >= 0)
                     perr = access_check(&parent_stat, AC_W | AC_X);
                 if (perr < 0) {
-                    unlock(&inodes_lock);
+                    if (!fs_blocks)
+                        unlock(&inodes_lock);
                     mount_release(mount);
                     return ERR_PTR(perr);
                 }
             }
             created = true;
         } else {
-            unlock(&inodes_lock);
+            if (!fs_blocks)
+                unlock(&inodes_lock);
             mount_release(mount);
             return ERR_PTR(err);
         }
@@ -477,7 +489,8 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
         // component this way, so without this any chase ending on a symlink
         // failed with ELOOP.
         if ((flags & O_NOFOLLOW_) && S_ISLNK(stat.mode)) {
-            unlock(&inodes_lock);
+            if (!fs_blocks)
+                unlock(&inodes_lock);
             if (flags & O_PATH_) {
                 if (flags & O_DIRECTORY_) {
                     mount_release(mount);
@@ -504,7 +517,8 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
             else accmode = AC_R;
             err = access_check(&stat, accmode);
             if (err < 0) {
-                unlock(&inodes_lock);
+                if (!fs_blocks)
+                    unlock(&inodes_lock);
                 mount_release(mount);
                 return ERR_PTR(err);
             }
@@ -524,7 +538,8 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
         // and regular files keep the real-open path: their O_PATH fds are
         // routinely used as dirfds, which the pseudo-fd doesn't support.
         if ((flags & O_PATH_) && (S_ISSOCK(stat.mode) || S_ISFIFO(stat.mode))) {
-            unlock(&inodes_lock);
+            if (!fs_blocks)
+                unlock(&inodes_lock);
             if (flags & O_DIRECTORY_) {
                 mount_release(mount);
                 return ERR_PTR(_ENOTDIR);
@@ -548,7 +563,7 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
     // wedges every other open() in the emulator -- the whole app appears to
     // freeze. Drop the lock around the open for files that can block, and
     // re-acquire it for the inode bookkeeping below.
-    bool open_may_block = !created && S_ISFIFO(stat.mode) && !(flags & O_NONBLOCK_);
+    bool open_may_block = !fs_blocks && !created && S_ISFIFO(stat.mode) && !(flags & O_NONBLOCK_);
     if (open_may_block)
         unlock(&inodes_lock);
     // Strip O_PATH before handing flags to the backend: its bit value
@@ -560,7 +575,8 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
     if (open_may_block)
         lock(&inodes_lock, 0);
     if (IS_ERR(fd)) {
-        unlock(&inodes_lock);
+        if (!fs_blocks)
+            unlock(&inodes_lock);
         // if an error happens after this point, fd_close will release the
         // mount, but right now we need to do it manually
         mount_release(mount);
@@ -570,9 +586,12 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
 
     err = fd->mount->fs->fstat(fd, &stat);
     if (err < 0) {
-        unlock(&inodes_lock);
+        if (!fs_blocks)
+            unlock(&inodes_lock);
         goto error;
     }
+    if (fs_blocks)
+        lock(&inodes_lock, 0);
     fd->inode = inode_get_unlocked(mount, stat.inode);
     unlock(&inodes_lock);
     fd->type = stat.mode & S_IFMT;
@@ -721,14 +740,17 @@ int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, co
     // see the inodes_lock comment in generic_openat for why fakefs needs this
     // (a mutating fs op is a real-host-op + SQLite-metadata-update pair that
     // isn't atomic against a concurrent one of these on its own).
-    lock(&inodes_lock, 0); // TODO: don't do this
+    bool fs_blocks = mount->fs->may_block; // see generic_openat
+    if (!fs_blocks)
+        lock(&inodes_lock, 0); // TODO: don't do this
     if (mount != dst_mount)
         err = _EXDEV;
     else if (mount->fs->link == NULL)
         err = _EPERM;
     else
         err = mount->fs->link(mount, src, dst);
-    unlock(&inodes_lock);
+    if (!fs_blocks)
+        unlock(&inodes_lock);
     mount_release(mount);
     mount_release(dst_mount);
     return err;
@@ -784,20 +806,24 @@ int generic_unlinkat(struct fd *at, const char *path_raw) {
     // on the same path, so fakefs's real-op + metadata-update pair can't
     // interleave with another one and leave the metadata mismatched with
     // what's actually on the host filesystem.
-    lock(&inodes_lock, 0); // TODO: don't do this
+    bool fs_blocks = mount->fs->may_block; // see generic_openat
+    if (!fs_blocks)
+        lock(&inodes_lock, 0); // TODO: don't do this
     // Linux reports EISDIR for unlink of a directory. Enforce it here so the
     // host's own errno (EPERM on Darwin/iOS hosts) does not leak to the guest.
     struct statbuf ust;
     bool have_ust = mount->fs->stat(mount, path, &ust) >= 0;
     if (have_ust && S_ISDIR(ust.mode)) {
-        unlock(&inodes_lock);
+        if (!fs_blocks)
+            unlock(&inodes_lock);
         mount_release(mount);
         return _EISDIR;
     }
     if (have_ust) {
         err = sticky_check(mount, path, &ust);
         if (err < 0) {
-            unlock(&inodes_lock);
+            if (!fs_blocks)
+                unlock(&inodes_lock);
             mount_release(mount);
             return err;
         }
@@ -805,7 +831,8 @@ int generic_unlinkat(struct fd *at, const char *path_raw) {
     err = _EPERM;
     if (mount->fs->unlink)
         err = mount->fs->unlink(mount, path);
-    unlock(&inodes_lock);
+    if (!fs_blocks)
+        unlock(&inodes_lock);
     mount_release(mount);
     if (err >= 0)
         inotify_notify_delete(guest_path, false);
@@ -849,7 +876,9 @@ int generic_renameat(struct fd *src_at, const char *src_raw, struct fd *dst_at, 
     // See the inodes_lock comment in generic_openat: serialize the
     // stat-check(s) + rename pair against a concurrent open(O_CREAT)/mkdir/
     // unlink/etc. on either path.
-    lock(&inodes_lock, 0); // TODO: don't do this
+    bool fs_blocks = mount->fs->may_block; // see generic_openat
+    if (!fs_blocks)
+        lock(&inodes_lock, 0); // TODO: don't do this
     bool is_dir = false;
     if (mount != dst_mount)
         err = _EXDEV;
@@ -874,7 +903,8 @@ int generic_renameat(struct fd *src_at, const char *src_raw, struct fd *dst_at, 
                 err = mount->fs->rename(mount, src, dst);
         }
     }
-    unlock(&inodes_lock);
+    if (!fs_blocks)
+        unlock(&inodes_lock);
     mount_release(mount);
     mount_release(dst_mount);
     if (err >= 0)
@@ -901,11 +931,14 @@ int generic_symlinkat(const char *target, struct fd *at, const char *link_raw) {
     // See the inodes_lock comment in generic_openat: serializes the
     // real-symlink-create + metadata-write pair against a concurrent
     // open(O_CREAT)/mkdir/unlink/etc. on the same path.
-    lock(&inodes_lock, 0); // TODO: don't do this
+    bool fs_blocks = mount->fs->may_block; // see generic_openat
+    if (!fs_blocks)
+        lock(&inodes_lock, 0); // TODO: don't do this
     err = _EPERM;
     if (mount->fs->symlink)
         err = mount->fs->symlink(mount, target, link);
-    unlock(&inodes_lock);
+    if (!fs_blocks)
+        unlock(&inodes_lock);
     mount_release(mount);
     if (err >= 0)
         inotify_notify_create(guest_path, false);
@@ -932,11 +965,14 @@ int generic_mknodat(struct fd *at, const char *path_raw, mode_t_ mode, dev_t_ de
     // See the inodes_lock comment in generic_openat: serializes the
     // real-mknod + metadata-write pair against a concurrent
     // open(O_CREAT)/mkdir/unlink/etc. on the same path.
-    lock(&inodes_lock, 0); // TODO: don't do this
+    bool fs_blocks = mount->fs->may_block; // see generic_openat
+    if (!fs_blocks)
+        lock(&inodes_lock, 0); // TODO: don't do this
     err = _EPERM;
     if (mount->fs->mknod)
         err = mount->fs->mknod(mount, path, mode, dev);
-    unlock(&inodes_lock);
+    if (!fs_blocks)
+        unlock(&inodes_lock);
     mount_release(mount);
     if (err >= 0)
         inotify_notify_create(guest_path, false);
@@ -1021,23 +1057,28 @@ int generic_mkdirat(struct fd *at, const char *path_raw, mode_t_ mode) {
     // See the inodes_lock comment in generic_openat: serializes the
     // exists-check + real-mkdir + metadata-write against a concurrent
     // open(O_CREAT)/unlink/mkdir/etc. on the same path.
-    lock(&inodes_lock, 0); // TODO: don't do this
+    bool fs_blocks = mount->fs->may_block; // see generic_openat
+    if (!fs_blocks)
+        lock(&inodes_lock, 0); // TODO: don't do this
     struct statbuf stat;
     err = mount->fs->stat(mount, path, &stat);
     if (err == 0) {
-        unlock(&inodes_lock);
+        if (!fs_blocks)
+            unlock(&inodes_lock);
         mount_release(mount);
         return _EEXIST;
     }
     if (err < 0 && err != _ENOENT) {
-        unlock(&inodes_lock);
+        if (!fs_blocks)
+            unlock(&inodes_lock);
         mount_release(mount);
         return err;
     }
     err = _EPERM;
     if (mount->fs->mkdir)
         err = mount->fs->mkdir(mount, path, mode);
-    unlock(&inodes_lock);
+    if (!fs_blocks)
+        unlock(&inodes_lock);
     mount_release(mount);
     if (err >= 0)
         inotify_notify_create(guest_path, true);
@@ -1067,12 +1108,15 @@ int generic_rmdirat(struct fd *at, const char *path_raw) {
     // See the inodes_lock comment in generic_openat: serializes the
     // real-rmdir + metadata-update against a concurrent
     // open(O_CREAT)/mkdir/unlink/etc. on the same path.
-    lock(&inodes_lock, 0); // TODO: don't do this
+    bool fs_blocks = mount->fs->may_block; // see generic_openat
+    if (!fs_blocks)
+        lock(&inodes_lock, 0); // TODO: don't do this
     struct statbuf dst_stat;
     if (mount->fs->stat(mount, path, &dst_stat) >= 0) {
         err = sticky_check(mount, path, &dst_stat);
         if (err < 0) {
-            unlock(&inodes_lock);
+            if (!fs_blocks)
+                unlock(&inodes_lock);
             mount_release(mount);
             return err;
         }
@@ -1080,7 +1124,8 @@ int generic_rmdirat(struct fd *at, const char *path_raw) {
     err = _EPERM;
     if (mount->fs->rmdir)
         err = mount->fs->rmdir(mount, path);
-    unlock(&inodes_lock);
+    if (!fs_blocks)
+        unlock(&inodes_lock);
     mount_release(mount);
     if (err >= 0)
         inotify_notify_delete(guest_path, true);

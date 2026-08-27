@@ -70,5 +70,6 @@ extern const size_t dev_dynamic_nodes_count;
 int dev_open(int major, int minor, int type, struct fd *fd);
 
 extern struct dev_ops null_dev;
+extern struct dev_ops fuse_dev; // fs/fuse.c
 
 #endif

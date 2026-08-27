@@ -555,6 +555,7 @@ if get_option('kernel') == 'ish'
         'fs/tty-real.c',
         'fs/pty.c',
         'fs/tmp.c',
+        'fs/fuse.c',
 
         'fs/poll.c',
         'kernel/poll.c',

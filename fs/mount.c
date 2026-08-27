@@ -21,6 +21,7 @@ static const struct fs_ops *filesystems[MAX_FILESYSTEMS] = {
     &cgroupfs,
     &cgroup2fs,
     &fakefs,
+    &fusefs,
 };
 
 static bool mount_trace_elogind(void) {
@@ -729,6 +730,10 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
             break;
         }
     }
+    // libfuse mounts with a subtype ("fuse.sshfs", "fuse.rclone"); the part
+    // after the dot only names the daemon for mtab display.
+    if (fs == NULL && strncmp(type, "fuse.", 5) == 0)
+        fs = &fusefs;
     if (fs == NULL &&
             strcmp(point, "/proc/sys/fs/binfmt_misc") == 0 &&
             (strcmp(type, "binfmt_misc") == 0 ||

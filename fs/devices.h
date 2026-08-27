@@ -18,6 +18,11 @@
 // /dev/kmsg
 #define DEV_KMSG_MINOR 11
 
+// --- misc devices ---
+#define MISC_MAJOR 10
+// /dev/fuse
+#define DEV_FUSE_MINOR 229
+
 // --- tty devices ---
 // /dev/ttyX where X is minor
 #define TTY_CONSOLE_MAJOR 4

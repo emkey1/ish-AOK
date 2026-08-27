@@ -268,6 +268,14 @@ struct fs_ops {
     const char *name;
     int magic;
 
+    // True for a filesystem whose operations can block indefinitely on
+    // something outside the kernel (fusefs: a userspace daemon). generic.c and
+    // stat.c drop inodes_lock across calls into such a filesystem -- holding a
+    // global lock while waiting on a daemon whose own filesystem work needs
+    // that lock is a deadlock, and even without the cycle it would wedge every
+    // other file operation in the emulator behind one slow daemon.
+    bool may_block;
+
     int (*mount)(struct mount *mount);
     int (*umount)(struct mount *mount);
     int (*statfs)(struct mount *mount, struct statfsbuf *stat);
@@ -333,6 +341,7 @@ extern const struct fs_ops devtmpfs;
 extern const struct fs_ops sysfs;
 extern const struct fs_ops cgroupfs;
 extern const struct fs_ops cgroup2fs;
+extern const struct fs_ops fusefs;
 void fs_register(const struct fs_ops *fs);
 const struct fs_ops *fs_lookup(const char *name); // by registered name, NULL if unknown
 char* get_filesystems(void); // For /proc/filesystems
