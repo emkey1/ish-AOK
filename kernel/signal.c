@@ -2980,14 +2980,21 @@ static int do_kill_common(pid_t_ pid, dword_t sig, pid_t_ tgid, int si_code,
     STRACE("kill(%d, %d)", pid, sig);
     if (sig >= NUM_SIGS)
         return _EINVAL;
-    if (pid == 0) {
-        lock(&current->group->lock, 0);
-        pid = -current->group->pgid;
-        unlock(&current->group->lock);
-    }
-
     int err;
-    if (pid == -1) {
+    if (pid == 0) {
+        // "Every process in MY process group." Encoding that as a negative pid
+        // and re-dispatching collided with the pid == -1 broadcast whenever the
+        // caller's pgid was 1 -- the default for the top-level shell and
+        // everything started under it -- so an ordinary kill(0, sig) signalled
+        // every task in the guest, across every session and process group.
+        // Dispatch the group directly so the broadcast stays reachable only
+        // from a literal -1.
+        lock(&current->group->lock, 0);
+        pid_t_ pgid = current->group->pgid;
+        unlock(&current->group->lock);
+        complex_lockt(&pids_lock, 0);
+        err = kill_group(pgid, sig, si_code);
+    } else if (pid == -1) {
         complex_lockt(&pids_lock, 0);
         err = kill_everything(sig, si_code);
     } else if (pid < 0) {
