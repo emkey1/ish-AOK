@@ -84,6 +84,25 @@ static bool exit_tgroup(struct task *task) {
         if (group->itimer_vprof_sampler)
             timer_free(group->itimer_vprof_sampler);
 
+        // timer_create() timers were never freed here, only the two itimers
+        // above. Each one owns a host thread, so a process that created timers
+        // and exited leaked them permanently -- host threads climbed 2 -> 2402
+        // in the audit's probe at 16 timers per process and never came back,
+        // burning CPU forever on a repeating interval, with the callbacks
+        // firing into a tgroup that is about to be freed.
+        //
+        // Clear tgroup BEFORE freeing: posix_timer_callback's first act is to
+        // bail when it is NULL, and timer_free does not wait for a callback
+        // already in flight -- it flags the timer dead and signals its thread.
+        for (int i = 0; i < TIMERS_MAX; i++) {
+            struct posix_timer *pt = &group->posix_timers[i];
+            if (pt->timer == NULL)
+                continue;
+            pt->tgroup = NULL;
+            timer_free(pt->timer);
+            pt->timer = NULL;
+        }
+
         // The group will be removed from its group and session by reap_if_zombie,
         // because fish tries to set the pgid to that of an exited but not reaped
         // task.
