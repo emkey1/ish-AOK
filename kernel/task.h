@@ -514,6 +514,20 @@ extern void (*halt_hook)(int status);
 
 #define superuser() (current != NULL && current->euid == 0)
 
+// Linux capability numbers, for the gates below. Only the ones something
+// actually checks are listed; add as needed rather than transcribing all 40.
+#define CAP_SETGID_      6
+#define CAP_SETUID_      7
+#define CAP_SYS_CHROOT_  18
+#define CAP_SYS_ADMIN_   21
+
+// The equivalent of Linux's capable(): true if the caller holds `cap` in its
+// effective set, or is root. Privileged syscalls gate on this rather than on
+// superuser() alone, so a process given a capability without uid 0 behaves the
+// way it would on Linux. Implemented in kernel/getset.c, next to the capset
+// machinery that maintains the sets.
+bool current_capable(unsigned cap);
+
 // Update the thread name to match the current task, in the format "comm-pid".
 // Will ensure that the -pid part always fits, then will fit as much of comm as possible.
 void update_thread_name(void);

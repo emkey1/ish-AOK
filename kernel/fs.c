@@ -1808,6 +1808,11 @@ dword_t sys_fchdir(fd_t f) {
 }
 
 static dword_t sys_chroot_common(guest_addr_t path_addr) {
+    // Linux requires CAP_SYS_CHROOT. Without this an unprivileged process could
+    // chroot itself, which is both unlike Linux and a way to escape a directory
+    // restriction rather than enter one.
+    if (!current_capable(CAP_SYS_CHROOT_))
+        return _EPERM;
     char path[MAX_PATH];
     int path_err = user_read_path(path_addr, path, sizeof(path));
     if (path_err)

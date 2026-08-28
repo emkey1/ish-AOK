@@ -2346,6 +2346,14 @@ int nlibc_reboot(int howto) {
 // shows up under contention.
 int nlibc_mount(const char *src, const char *tgt, const char *type, unsigned long f, const void *d) {
     (void) d;
+    // Same CAP_SYS_ADMIN gate the guest syscall carries. This path calls
+    // do_mount() directly rather than going through sys_mount_guest, so without
+    // its own check a native program -- SmallCLUE's mount applet, say -- would
+    // be the one way left to mount without privilege. The boot-time do_mount()
+    // callers in main.c and the app are deliberately not gated; they run before
+    // there is a guest task to have credentials at all.
+    if (!current_capable(CAP_SYS_ADMIN_))
+        return nlibc_fail(_EPERM);
     if (src == NULL || tgt == NULL || type == NULL)
         return nlibc_fail(_EFAULT);
     const struct fs_ops *fs = fs_lookup(type);

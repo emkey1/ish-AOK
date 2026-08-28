@@ -6,8 +6,6 @@
 #define _LINUX_CAPABILITY_VERSION_1_ 0x19980330
 #define _LINUX_CAPABILITY_VERSION_2_ 0x20071026
 #define _LINUX_CAPABILITY_VERSION_3_ 0x20080522
-#define CAP_SETGID_ 6
-#define CAP_SETUID_ 7
 
 struct cap_user_header_ {
     dword_t version;
@@ -44,6 +42,11 @@ static bool current_has_cap(uint_t cap) {
     if (current == NULL || cap >= 64)
         return false;
     return (current->cap_effective[cap / 32] & (1u << (cap % 32))) != 0;
+}
+
+// Shared with the privileged syscalls elsewhere in the tree; see task.h.
+bool current_capable(unsigned cap) {
+    return superuser() || current_has_cap(cap);
 }
 
 static bool current_can_setuids(void) {

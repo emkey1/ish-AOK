@@ -585,6 +585,11 @@ static void bind_replicate_submounts(const char *norm_source, const char *point,
 }
 
 dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest_addr_t type_addr, dword_t flags, guest_addr_t data_addr) {
+    // Linux requires CAP_SYS_ADMIN for every door into the mount table.
+    // The app's own boot-time mounts go through do_mount() directly and are
+    // unaffected; this gate is only on the guest syscall path.
+    if (!current_capable(CAP_SYS_ADMIN_))
+        return _EPERM;
     // source/data/type are copy_mount_string() args in Linux (strndup_user,
     // EINVAL when over-long), NOT getname() pathnames -- so they keep the plain
     // user_read_string path. Only the mount point below is a real getname path.
@@ -764,6 +769,11 @@ dword_t sys_mount(addr_t source_addr, addr_t point_addr, addr_t type_addr, dword
 #define UMOUNT_NOFOLLOW_ 8
 
 dword_t sys_umount2_guest(guest_addr_t target_addr, dword_t flags) {
+    // Linux requires CAP_SYS_ADMIN for every door into the mount table.
+    // The app's own boot-time mounts go through do_mount() directly and are
+    // unaffected; this gate is only on the guest syscall path.
+    if (!current_capable(CAP_SYS_ADMIN_))
+        return _EPERM;
     char target_raw[MAX_PATH];
     int path_err = user_read_path(target_addr, target_raw, sizeof(target_raw));
     if (path_err)
@@ -831,6 +841,11 @@ static struct fd_ops fscontext_ops = {
 #define FSOPEN_CLOEXEC_ 1
 
 fd_t sys_fsopen_guest(guest_addr_t fsname_addr, dword_t flags) {
+    // Linux requires CAP_SYS_ADMIN for every door into the mount table.
+    // The app's own boot-time mounts go through do_mount() directly and are
+    // unaffected; this gate is only on the guest syscall path.
+    if (!current_capable(CAP_SYS_ADMIN_))
+        return _EPERM;
     char fsname[100] = "";
     if (user_read_string(fsname_addr, fsname, sizeof(fsname)))
         return _EFAULT;
@@ -956,6 +971,11 @@ dword_t sys_fsconfig(fd_t f, dword_t cmd, addr_t key_addr, addr_t value_addr, in
 }
 
 fd_t sys_fsmount_guest(fd_t f, dword_t flags, dword_t attr_flags) {
+    // Linux requires CAP_SYS_ADMIN for every door into the mount table.
+    // The app's own boot-time mounts go through do_mount() directly and are
+    // unaffected; this gate is only on the guest syscall path.
+    if (!current_capable(CAP_SYS_ADMIN_))
+        return _EPERM;
     STRACE("fsmount(%d, %#x, %#x)", f, flags, attr_flags);
     struct fd *fd = f_get(f);
     if (fd == NULL)
@@ -1035,6 +1055,11 @@ static int mount_relocate(const char *from_point, const char *to_point) {
 
 dword_t sys_move_mount_guest(fd_t from_dfd, guest_addr_t from_path_addr, fd_t to_dfd,
         guest_addr_t to_path_addr, dword_t flags) {
+    // Linux requires CAP_SYS_ADMIN for every door into the mount table.
+    // The app's own boot-time mounts go through do_mount() directly and are
+    // unaffected; this gate is only on the guest syscall path.
+    if (!current_capable(CAP_SYS_ADMIN_))
+        return _EPERM;
     char from_path[MAX_PATH] = "";
     if (from_path_addr != 0 && user_read_string(from_path_addr, from_path, sizeof(from_path)))
         return _EFAULT;
