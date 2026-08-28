@@ -24,13 +24,28 @@ fusermount3 -u /mnt/hello          # or: umount /mnt/hello
 
 libfuse2 daemons work too — the protocol version covers both.
 
-**No `fusermount` helper is involved in mounting.** On a normal Linux box
-libfuse shells out to the setuid `fusermount` binary because an unprivileged
-user cannot call `mount(2)`. Here you are already fake-root, so libfuse takes
-the direct path: it opens `/dev/fuse` itself and calls `mount(2)` with
-`fd=<n>` in the options. Nothing needs to be setuid, and a root without
-`fusermount` installed still mounts fine. You only need `fusermount3` for the
-*unmount* convenience it provides, and plain `umount` does that job as well.
+**You do not need to be root.** That is the point of FUSE, and it holds here:
+`/dev/fuse` is mode `0666`, and mounting is not privilege-gated, so an ordinary
+user can mount and use a FUSE filesystem. This matters because a session with
+*Open Everything as Default User* turned on is not root — see
+[proc-ish.md](proc-ish.md).
+
+Two things follow, and the second is the one that catches people out:
+
+- **If your session is root**, libfuse mounts directly — it opens `/dev/fuse`
+  and calls `mount(2)` with `fd=<n>` itself. No setuid helper is involved, and
+  a root without `fusermount` installed still mounts fine.
+- **If it is not**, libfuse uses the `fusermount3` helper, exactly as it would
+  on any Linux box. Install the distro's FUSE package (`apk add fuse3`,
+  `apt install fuse3`) so that helper exists.
+
+**A daemon must report ownership its caller can actually use.** This is the
+usual reason an unprivileged mount appears broken: a daemon that reports every
+file as owned by root, over a root-owned `0755` directory, will refuse a
+non-root caller's `create` with `EACCES` — correctly, and identically on real
+Linux. Report the mounting user in the `user_id=`/`group_id=` mount options and
+in the `uid`/`gid` you fill into each attribute reply, and an unprivileged mount
+behaves exactly like a privileged one.
 
 ## Things worth knowing
 

@@ -158,10 +158,19 @@ static struct dent *dent_by_name(const char *name) {
             return &dents[i];
     return NULL;
 }
+// Everything this daemon serves is owned by whoever is running it. Reporting
+// uid 0 instead -- which a memset does by default -- makes the whole test fail
+// for any non-root caller, since creating inside a root-owned 0755 directory is
+// EACCES by ordinary permission rules, here and on real Linux both. FUSE exists
+// precisely so an unprivileged user can serve a filesystem, and a session with
+// "Open Everything as Default User" on is not root, so that is the case worth
+// covering rather than the one worth skipping.
 static void fill_attr(struct fuse_wire_attr *attr, uint64_t nodeid) {
     memset(attr, 0, sizeof(*attr));
     attr->ino = nodeid;
     attr->blksize = 4096;
+    attr->uid = (uint32_t) getuid();
+    attr->gid = (uint32_t) getgid();
     if (nodeid == 1) {
         attr->mode = S_IFDIR | 0755;
         attr->nlink = 2;
@@ -487,7 +496,10 @@ int main(int argc, char **argv) {
     mkdir(mnt, 0755);
 
     char opts[128];
-    snprintf(opts, sizeof(opts), "fd=%d,rootmode=40000,user_id=0,group_id=0", devfd);
+    // Mount as the caller, matching the ownership fill_attr reports; hardcoding
+    // 0 here works only when the test happens to run as root.
+    snprintf(opts, sizeof(opts), "fd=%d,rootmode=40000,user_id=%u,group_id=%u",
+             devfd, (unsigned) getuid(), (unsigned) getgid());
     if (mount("fuse_basic", mnt, "fuse", 0, opts) != 0) {
         if (errno == EPERM || errno == EACCES) {
             printf("fuse_basic: SKIP (mount not permitted: %s)\n", strerror(errno));
