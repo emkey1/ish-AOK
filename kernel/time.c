@@ -1477,6 +1477,13 @@ int_t sys_timer_gettime64_guest(dword_t timer_id, guest_addr_t curr_value_addr) 
 
 int_t sys_timer_delete(dword_t timer_id) {
     STRACE("timer_delete(%d)\n", timer_id);
+    // The bounds check its three siblings all have (gettime, getoverrun,
+    // settime). Without it the guest indexes posix_timers[] out of bounds and
+    // hands timer_free() whatever lies past the array -- an attacker-chosen
+    // pointer, since adjacent tgroup fields are guest-settable -- taking down
+    // the whole emulator and every other guest process with it.
+    if (timer_id >= TIMERS_MAX)
+        return _EINVAL;
     lock(&current->group->lock, 0);
     struct posix_timer *timer = &current->group->posix_timers[timer_id];
     if (timer->timer == NULL) {
