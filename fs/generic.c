@@ -515,6 +515,15 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
             if (flags & O_RDWR_) accmode = AC_R | AC_W;
             else if (flags & O_WRONLY_) accmode = AC_W;
             else accmode = AC_R;
+            // O_TRUNC destroys the contents, so it needs write permission even
+            // when the open itself is read-only. Without this, open(path,
+            // O_RDONLY|O_TRUNC) emptied any file the caller could merely READ
+            // -- a root-owned 0755 binary truncated to zero by an ordinary
+            // user. truncate(2) on the same file already returns EACCES, so
+            // this was the only way in. Guarded on S_ISREG because O_TRUNC is
+            // meaningless on other types, which is Linux's rule too.
+            if ((flags & O_TRUNC_) && S_ISREG(stat.mode))
+                accmode |= AC_W;
             err = access_check(&stat, accmode);
             if (err < 0) {
                 if (!fs_blocks)
