@@ -51,7 +51,9 @@ it reads standard input instead of listing.
   document, and `Q` quits. A document set that cross-links — like this one — can
   be read by following references rather than by relaunching with a filename.
 - **Colour turns itself off when it should**: piped or redirected output gets
-  plain text, and `NO_COLOR` is honoured.
+  plain text, and `NO_COLOR` is honoured. This is the same policy the other
+  colouring applets follow — see *Colour* in
+  [native-setup.md](native-setup.md).
 - **It does its own paging**, so it needs no external pager. (SmallCLUE's
   `less` and `more` were held off PATH for a while over a bug that turned out
   not to be theirs; they are linked again as of this release. See

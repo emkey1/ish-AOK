@@ -42,14 +42,16 @@ resets that preference to its default:
 rm /proc/ish/defaults/font_size
 ```
 
-If **Login As Default User** is on you are not root, and these become
-read-only unless you `sudo`. Reading is the common case anyway: a script that
-needs to know how the app is configured — which theme is active, whether an
+If **Open Everything as Default User** is on you are not root, and these
+become read-only unless you `sudo`. Reading is the common case anyway: a script
+that needs to know how the app is configured — which theme is active, whether an
 accelerator is on, what the font size is.
 
 The names are lower-cased and underscored versions of the Settings labels, so
-`hide_extra_keys_with_external_keyboard` is the switch of that name. A few
-notable ones:
+`hide_extra_keys_with_external_keyboard` is the switch of that name. **One
+exception**: the switch above is still `login_as_default_user` here, because the
+Settings label was renamed once its reach grew beyond the login shell and the
+stored name stayed put. A few notable ones:
 
 | entry | what it reflects |
 |---|---|

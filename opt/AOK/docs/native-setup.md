@@ -120,6 +120,39 @@ sh /AOK/tools/native-links.sh /usr/local/bin
 That puts the links ahead of your distro's own `/usr/local/bin` entries too,
 which is more shadowing than the default, not less.
 
+## Colour
+
+The applets that paint their output — `ls`, `grep`, `ps`, `top`, `df`, `cal`,
+`watch`, `rm`'s confirmation prompt, the usage listing, and
+[md](md.md) — share one colour policy, so they all answer to the same
+switches:
+
+```sh
+NO_COLOR=1 ls          # no escape sequences from any of them
+TERM=dumb ls           # likewise; an unset TERM counts too
+```
+
+Colour is also dropped automatically when output is piped or redirected rather
+than going to a terminal, which is what you want inside a script without having
+to set anything.
+
+`ls` and `grep` take `--color` on top of that, and it is the stronger signal:
+
+| form | behaviour |
+|---|---|
+| `--color=never` | never colour — wins over everything |
+| `--color=always` | always colour — outranks `NO_COLOR` and `TERM` |
+| `--color=auto` | colour only on a terminal, and only if `NO_COLOR`/`TERM` allow |
+
+**`auto` is the default here**, unlike GNU `ls`, which defaults to no colour
+until you ask. A script that wants bytes rather than escapes should redirect,
+set `NO_COLOR=1`, or pass `--color=never` — and one that wants colour *through*
+a pipe needs `--color=always`.
+
+Screen clears, cursor positioning and terminal resets are not colour, and
+`NO_COLOR` does not disable them. That is what the variable means: a program
+should stop colouring, not stop drawing.
+
 ## Backing out
 
 ```sh

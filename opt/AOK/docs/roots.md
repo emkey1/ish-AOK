@@ -145,6 +145,45 @@ root's point of view — `ktop` or `ps` run outside the chroot will see it,
 architecture and all. See [ktop.md](ktop.md) for the one caveat that runs
 the other way (running `ktop` *from inside* a chroot).
 
+## Bind mounts by hand
+
+`mount-root.sh` does its bind-mounting for you, but `mount --bind` is available
+directly and behaves the way Linux does:
+
+```sh
+mount --bind /some/dir  /mnt/point     # directory over directory
+mount --bind /etc/hosts /tmp/hosts     # a single FILE over another file
+umount /tmp/hosts                      # the original contents come back
+```
+
+Binding a file over a file is the case people most often assume is missing; it
+works, and it is how a config file gets shadowed without touching the original.
+
+The shapes have to match, exactly as on Linux — directory onto directory, or
+non-directory onto non-directory. Mixing them fails with `ENOTDIR`, and a source
+that does not exist fails with `ENOENT` rather than quietly creating a bind that
+shadows the target with a dead path.
+
+**`--rbind` is genuinely recursive.** A plain `--bind` copies only the one
+filesystem at the source; `--rbind` replicates every mount underneath it at the
+matching place under the new location:
+
+```sh
+mount --bind  /a /b     # anything mounted *under* /a is not visible under /b
+mount --rbind /a /c     # it is under /c
+```
+
+Recursive propagation flags (`--make-rprivate` and friends) are accepted and do
+nothing, which is the honest answer here: there are no mount namespaces to
+propagate between.
+
+That last point is the one real difference from a normal Linux box, and it is
+worth keeping in mind — **a bind mount you create is visible to everything**,
+including processes in other roots and other chroots, because there is a single
+mount table underneath all of them (see [00-overview.md](00-overview.md)). A
+bind is a system-wide change, not a private one, so unmount what you no longer
+need.
+
 ## Provisioning scripts: turning a bare rootfs into a full terminal environment
 
 A freshly-imported root is intentionally minimal. Three scripts under
