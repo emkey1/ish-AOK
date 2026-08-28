@@ -571,15 +571,42 @@ if [ -z "$selected_tests" ]; then
     exit 1
 fi
 
+# Tests that genuinely need uid 0 -- they exercise chown, capabilities, audit
+# netlink, mount/chroot containment, or the root-bypasses-permissions paths.
+#
+# Each of these already skips itself when unprivileged, and that is the wrong
+# outcome on a device: a session with "Open Everything as Default User" on runs
+# as uid 1000, so the suite quietly retires this whole group and still reports
+# a clean run. Re-invoke them under passwordless sudo instead. Where sudo is
+# absent or wants a password we fall through to the plain invocation and the
+# test's own guard skips it, which is exactly the old behaviour.
+needs_root_tests=" at_empty_path ambient_caps chroot_getcwd file_perms fsopen_move_mount netlink_audit oom_score_adj uts_namespace "
+
 cat >"$work_dir/run-regressions.sh" <<EOF
 #!/bin/sh
 set -eu
+
+needs_root_tests="$needs_root_tests"
+sudo_prefix=""
+if [ "\$(id -u)" -ne 0 ]; then
+    if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+        sudo_prefix="sudo -n"
+        echo "note: running as uid \$(id -u); privileged tests go through sudo -n" >&2
+    else
+        echo "note: running as uid \$(id -u) with no passwordless sudo;" >&2
+        echo "      privileged tests will skip themselves:\$needs_root_tests" >&2
+    fi
+fi
 
 status=0
 for test in$selected_tests; do
     echo "==> \$test"
     output="$work_dir/\$test.out"
-    if "$work_dir/bin/\$test" "\$@" >"\$output" 2>&1; then
+    as_root=""
+    case "\$needs_root_tests" in
+        *" \$test "*) as_root="\$sudo_prefix" ;;
+    esac
+    if \$as_root "$work_dir/bin/\$test" "\$@" >"\$output" 2>&1; then
         rc=0
     else
         rc=\$?
