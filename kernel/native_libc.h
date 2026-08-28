@@ -32,6 +32,7 @@
  * tools/check-native-libc.py fails the build on anything missed here.
  */
 
+#include <stdbool.h>
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <fcntl.h>
