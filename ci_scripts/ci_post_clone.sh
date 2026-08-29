@@ -28,7 +28,8 @@ export PATH
 HOMEBREW_NO_AUTO_UPDATE=1
 HOMEBREW_NO_INSTALL_CLEANUP=1
 HOMEBREW_NO_ANALYTICS=1
-export HOMEBREW_NO_AUTO_UPDATE HOMEBREW_NO_INSTALL_CLEANUP HOMEBREW_NO_ANALYTICS
+HOMEBREW_NO_ENV_HINTS=1
+export HOMEBREW_NO_AUTO_UPDATE HOMEBREW_NO_INSTALL_CLEANUP HOMEBREW_NO_ANALYTICS HOMEBREW_NO_ENV_HINTS
 
 problems=""
 note_problem() { problems="$problems
@@ -52,9 +53,12 @@ if command -v brew >/dev/null 2>&1; then
     for formula in meson ninja llvm; do
         brew install "$formula" || note_problem "brew install $formula failed"
     done
-    for formula in lld libarchive; do
-        brew install "$formula" || echo "note: optional formula $formula did not install"
-    done
+    # lld and libarchive are deliberately NOT installed. The Actions job takes
+    # them, but nothing in meson.build references either, and here they are not
+    # free: lld depends on llvm, so asking for it drags the largest formula in
+    # the set through dependency resolution a second time, and Xcode Cloud
+    # caches no Homebrew state between builds, so every one of those bytes is
+    # paid for again on every single run.
 else
     note_problem "brew is not on PATH, so no dependency could be installed"
 fi
