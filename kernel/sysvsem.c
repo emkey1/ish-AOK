@@ -210,6 +210,13 @@ static int_t semop_common(int_t semid, guest_addr_t sops_addr, uint_t nsops) {
         unlock(&sem_lock);
         return _EINVAL;
     }
+
+    // semop alters the set, so it needs write permission. Without this any uid
+    // could operate on another user's private semaphores.
+    if (!ipc_access_ok(set->uid, set->gid, set->cuid, set->cgid, set->mode, 2)) {
+        unlock(&sem_lock);
+        return _EACCES;
+    }
     for (unsigned i = 0; i < nsops; i++) {
         if (sops[i].sem_num >= set->nsems) {
             unlock(&sem_lock);
@@ -359,6 +366,11 @@ int_t sys_semctl_guest(int_t semid, int_t semnum, int_t cmd, guest_addr_t arg) {
 
     switch (cmd_base) {
     case IPC_RMID_:
+        // Owner or creator only, like Linux.
+        if (!ipc_owner_ok(set->uid, set->cuid)) {
+            unlock(&sem_lock);
+            return _EPERM;
+        }
         set->removed = true;
         notify(&set->cond);
         sem_set_maybe_free(set);

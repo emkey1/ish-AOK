@@ -199,6 +199,12 @@ int_t sys_msgsnd_guest(int_t msqid, guest_addr_t msgp, qword_t msgsz, int_t msgf
         free(msg);
         return _EINVAL;
     }
+    // Sending needs write permission on the queue.
+    if (!ipc_access_ok(queue->uid, queue->gid, queue->cuid, queue->cgid, queue->mode, 2)) {
+        unlock(&msg_lock);
+        free(msg);
+        return _EACCES;
+    }
     while (queue->cbytes + msgsz > queue->qbytes) {
         if (msgflg & IPC_NOWAIT_) {
             unlock(&msg_lock);
@@ -262,6 +268,11 @@ int_t sys_msgrcv_guest(int_t msqid, guest_addr_t msgp, qword_t msgsz,
     if (queue == NULL) {
         unlock(&msg_lock);
         return _EINVAL;
+    }
+    // Receiving needs read permission on the queue.
+    if (!ipc_access_ok(queue->uid, queue->gid, queue->cuid, queue->cgid, queue->mode, 4)) {
+        unlock(&msg_lock);
+        return _EACCES;
     }
     struct msg_msg *msg;
     for (;;) {
@@ -366,6 +377,10 @@ int_t sys_msgctl_guest(int_t msqid, int_t cmd, guest_addr_t buf) {
     }
 
     if (cmd_base == IPC_RMID_) {
+        if (!ipc_owner_ok(queue->uid, queue->cuid)) {
+            unlock(&msg_lock);
+            return _EPERM;
+        }
         queue->removed = true;
         notify(&queue->snd_cond);
         notify(&queue->rcv_cond);
@@ -375,6 +390,10 @@ int_t sys_msgctl_guest(int_t msqid, int_t cmd, guest_addr_t buf) {
     }
 
     if (cmd_base == IPC_SET_) {
+        if (!ipc_owner_ok(queue->uid, queue->cuid)) {
+            unlock(&msg_lock);
+            return _EPERM;
+        }
         // Only perms and qbytes are settable; read the ABI-appropriate
         // layout and apply the fields we track.
         uid_t_ uid; uid_t_ gid; mode_t_ mode; qword_t qbytes;

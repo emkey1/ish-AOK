@@ -40,6 +40,34 @@
 
 #include "kernel/sysvipc.h"
 
+bool ipc_access_ok(uid_t_ uid, uid_t_ gid, uid_t_ cuid, uid_t_ cgid,
+                   mode_t_ mode, int want) {
+    if (current == NULL)
+        return false;
+    if (current_capable(CAP_SYS_ADMIN_))
+        return true;
+    // Owner bits if we own it, else group bits if we are in its group, else
+    // other bits -- and the chosen class is final, exactly as on Linux. A
+    // 0600 object owned by someone else is refused even though the "other"
+    // bits would be consulted for a stranger, because the group class already
+    // matched and lost.
+    mode_t_ granted;
+    if (current->euid == uid || current->euid == cuid)
+        granted = (mode >> 6) & 7;
+    else if (current->egid == gid || current->egid == cgid)
+        granted = (mode >> 3) & 7;
+    else
+        granted = mode & 7;
+    return (granted & (mode_t_) want) == (mode_t_) want;
+}
+
+bool ipc_owner_ok(uid_t_ uid, uid_t_ cuid) {
+    if (current == NULL)
+        return false;
+    return current_capable(CAP_SYS_ADMIN_) ||
+           current->euid == uid || current->euid == cuid;
+}
+
 struct kernel_shmid64_ds_i386_ {
     struct ipc_perm_i386_ shm_perm;
     dword_t shm_segsz;
@@ -307,6 +335,14 @@ static guest_addr_t shmat_internal(int id, guest_addr_t shmaddr, int shmflg) {
     unlock(&shm_lock);
     if (segment == NULL || segment->removed)
         return (guest_addr_t) _EINVAL;
+    // Attaching needs read, and write too unless SHM_RDONLY was asked for.
+    // Without this any uid attached to and wrote a root-owned 0600 segment.
+    int want = 4;
+    if (!(shmflg & SHM_RDONLY_))
+        want |= 2;
+    if (!ipc_access_ok(segment->uid, segment->gid, segment->cuid, segment->cgid,
+                       segment->mode, want))
+        return (guest_addr_t) _EACCES;
     return shm_region_attach(current->mm, segment, shmaddr, shmflg);
 }
 
@@ -377,6 +413,11 @@ static int shmctl_internal_i386(int id, int cmd, addr_t ptr) {
     }
 
     if (cmd_base == IPC_RMID_) {
+        // Destroying is the owner's or creator's privilege, not everyone's.
+        if (!ipc_owner_ok(segment->uid, segment->cuid)) {
+            unlock(&shm_lock);
+            return _EPERM;
+        }
         segment->removed = true;
         shm_segment_maybe_destroy(segment);
         unlock(&shm_lock);
@@ -384,6 +425,11 @@ static int shmctl_internal_i386(int id, int cmd, addr_t ptr) {
     }
 
     if (cmd_base == IPC_SET_) {
+        // Changing ownership or mode: owner or creator only.
+        if (!ipc_owner_ok(segment->uid, segment->cuid)) {
+            unlock(&shm_lock);
+            return _EPERM;
+        }
         struct kernel_shmid64_ds_i386_ info;
         unlock(&shm_lock);
         if (ptr == 0)
@@ -434,6 +480,11 @@ static int shmctl_internal_amd64(int id, int cmd, guest_addr_t ptr) {
     }
 
     if (cmd_base == IPC_RMID_) {
+        // Destroying is the owner's or creator's privilege, not everyone's.
+        if (!ipc_owner_ok(segment->uid, segment->cuid)) {
+            unlock(&shm_lock);
+            return _EPERM;
+        }
         segment->removed = true;
         shm_segment_maybe_destroy(segment);
         unlock(&shm_lock);
@@ -441,6 +492,11 @@ static int shmctl_internal_amd64(int id, int cmd, guest_addr_t ptr) {
     }
 
     if (cmd_base == IPC_SET_) {
+        // Changing ownership or mode: owner or creator only.
+        if (!ipc_owner_ok(segment->uid, segment->cuid)) {
+            unlock(&shm_lock);
+            return _EPERM;
+        }
         struct shmid_ds_amd64_ info;
         unlock(&shm_lock);
         if (ptr == 0)
