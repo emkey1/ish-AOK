@@ -18,6 +18,7 @@ struct task;
 #define PTRACE_SINGLESTEP_ 9
 #define PTRACE_GETREGS_ 12
 #define PTRACE_SETREGS_ 13
+#define PTRACE_ATTACH_ 16
 #define PTRACE_DETACH_ 17
 #define PTRACE_GETFPREGS_ 14
 #define PTRACE_SETFPREGS_ 15

@@ -727,10 +727,19 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             current->ptrace.tracer = current->parent;
             return 0;
 
+        // PTRACE_ATTACH is what gdb uses; it differs from SEIZE in two ways.
+        // It takes no options, and it STOPS the tracee -- the tracer's first
+        // wait() must report a SIGSTOP signal-delivery-stop. It was missing
+        // entirely and fell through to the default arm's EPERM, so attaching a
+        // debugger to a running guest process simply could not be done.
+        case PTRACE_ATTACH_:
         case PTRACE_SEIZE_: {
-            STRACE("ptrace(PTRACE_SEIZE, %d, %#llx, %#llx)", pid,
+            bool seize = request == PTRACE_SEIZE_;
+            STRACE("ptrace(PTRACE_%s, %d, %#llx, %#llx)", seize ? "SEIZE" : "ATTACH", pid,
                     (unsigned long long) addr, (unsigned long long) data);
-            if (addr != 0)
+            // SEIZE takes its options in `data` and rejects a nonzero `addr`.
+            // ATTACH ignores both, as Linux does.
+            if (seize && addr != 0)
                 return _EIO;
 
             complex_lockt(&pids_lock, 0);
@@ -752,10 +761,10 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             }
 
             child->ptrace.traced = true;
-            child->ptrace.seized = true;
+            child->ptrace.seized = seize;
             child->ptrace.tracer = current;
-            child->ptrace.options = data;
-            child->ptrace.sysgood = !!(data & PTRACE_O_TRACESYSGOOD_);
+            child->ptrace.options = seize ? data : 0;
+            child->ptrace.sysgood = seize && !!(data & PTRACE_O_TRACESYSGOOD_);
             child->ptrace.stop_at_syscall = false;
             child->ptrace.syscall_stopped = false;
             child->ptrace.trap_event = 0;
@@ -781,6 +790,12 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             if (child->group->stopped)
                 notify(&child->group->stopped_cond);
             unlock(&child->group->lock);
+            // ATTACH, unlike SEIZE, stops the tracee: Linux sends it a SIGSTOP
+            // that the tracer then sees as a signal-delivery-stop. Sent after
+            // ptrace.traced is set, so the tracee reports the stop to us
+            // rather than just entering an ordinary job-control stop.
+            if (!seize)
+                send_signal(child, SIGSTOP_, SIGINFO_NIL);
             unlock(&pids_lock);
             return 0;
         }
@@ -955,6 +970,12 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             struct task *child = find_tracee(pid, false);
             if (!child)
                 return _EPERM;
+            // Linux: only a SEIZE'd tracee can be interrupted; an ATTACH'd one
+            // gets EIO. Measured on 6.12.
+            if (!child->ptrace.seized) {
+                unlock(&child->ptrace.lock);
+                return _EIO;
+            }
             if (!child->ptrace.stopped) {
                 child->ptrace.trap_event = PTRACE_EVENT_STOP_;
                 child->ptrace.eventmsg = 0;
