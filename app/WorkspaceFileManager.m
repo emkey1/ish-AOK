@@ -367,6 +367,7 @@ static NSString *ISHHomeDirectoryForUID(NSData *passwdData, uid_t targetUID) {
         [button setTitle:titles[i] forState:UIControlStateNormal];
         [button setTitleColor:(isLast ? theme[@"primary"] : theme[@"accent"]) forState:UIControlStateNormal];
         button.enabled = !isLast;  // the current location isn't a link anywhere
+        button.accessibilityHint = isLast ? nil : @"Go to this folder";
         NSString *targetPath = prefixes[i];
         __weak typeof(self) weakSelf = self;
         [button addAction:[UIAction actionWithHandler:^(UIAction *action) {
