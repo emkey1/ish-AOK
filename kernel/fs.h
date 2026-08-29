@@ -69,6 +69,10 @@ int generic_renameat(struct fd *src_at, const char *src, struct fd *dst_at, cons
 int generic_symlinkat(const char *target, struct fd *at, const char *link);
 int generic_mknodat(struct fd *at, const char *path, mode_t_ mode, dev_t_ dev);
 int generic_seek(struct fd *fd, off_t_ off, int whence, size_t size);
+// The sticky bit. Shared: fs/generic.c enforces it, kernel/fs.c must not
+// mask it off in mkdir.
+#define S_ISVTX_ 01000
+
 #define AC_R 4
 #define AC_W 2
 #define AC_X 1

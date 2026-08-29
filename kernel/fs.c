@@ -2563,7 +2563,12 @@ static dword_t sys_mkdirat_common(fd_t at_f, guest_addr_t path_addr, mode_t_ mod
     if (at == NULL)
         return _EBADF;
     apply_umask(&mode);
-    mode &= 0777;
+    // Keep S_ISVTX: mkdir("/tmp/x", 01777) must produce a sticky directory,
+    // as it does on Linux (verified). Masking to 0777 silently dropped it, so
+    // any single-call creation of a sticky directory produced a world-writable
+    // one instead. setuid/setgid stay masked off -- Linux clears S_ISGID here
+    // too (verified: mkdir 02755 gives 0755).
+    mode &= 0777 | S_ISVTX_;
     int err = generic_mkdirat(at, path, mode);
     if (fs_trace_elogind())
         printk("INFO: elogind mkdirat pid=%d comm=%s at=%d path=%s mode=%#o result=%d\n",

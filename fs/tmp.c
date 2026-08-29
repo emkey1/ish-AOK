@@ -590,7 +590,10 @@ static int tmpfs_mount(struct mount *mount) {
     // ("Trying to run as user instance, but $XDG_RUNTIME_DIR is not set")
     // and every user@ start failed. Other options (size=, nr_inodes=,
     // smackfsroot=, ...) remain accepted no-ops as before.
-    mode_t_ root_mode = S_IFDIR | 0777;
+    // 01777 like Linux (verified: a fresh `mount -t tmpfs` gives 1777). 0777
+    // made every tmpfs world-writable with NO sticky bit, so any guest user
+    // could delete or replace another's files in it.
+    mode_t_ root_mode = S_IFDIR | 01777;
     uid_t_ root_uid = 0;
     uid_t_ root_gid = 0;
     const char *opt = mount->info;

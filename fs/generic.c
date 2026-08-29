@@ -769,7 +769,6 @@ int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, co
 // as /tmp has), you may only remove or rename an entry if you own the entry,
 // own the directory, or are privileged. Without this a world-writable /tmp is
 // not safe -- any user can delete anyone else's files.
-#define S_ISVTX_ 01000
 static int sticky_check(struct mount *mount, const char *path, struct statbuf *entry_stat) {
     if (superuser())
         return 0;
@@ -778,10 +777,16 @@ static int sticky_check(struct mount *mount, const char *path, struct statbuf *e
     char parent[MAX_PATH];
     strcpy(parent, path);
     char *slash = strrchr(parent, '/');
-    if (slash == NULL)
-        return 0;
-    if (slash == parent)
-        parent[1] = '\0'; // entry sits directly in the mount root
+    // The mount root is spelled "" -- what find_mount_and_trim_path leaves for
+    // a path that IS the mount point -- not "/". Asking for "/" made the stat
+    // below return ENOENT, so sticky_check bailed and allowed the unlink: any
+    // user could delete another's files sitting directly in the root of a
+    // sticky mount, while entries one level deeper were correctly refused.
+    // Both spellings of "no directory part" mean the mount root, because a
+    // trimmed path may or may not keep its leading slash depending on the
+    // mount's point_len.
+    if (slash == NULL || slash == parent)
+        parent[0] = '\0';
     else
         *slash = '\0';
     struct statbuf dir_stat;
