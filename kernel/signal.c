@@ -2840,7 +2840,21 @@ retry:
     size_t skipped = 0;
     list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
         struct task *task = tgroup->leader;
-        if (task == NULL || task->zombie || task->exiting) {
+        if (task != NULL && (task->zombie || task->exiting || task->sighand == NULL)) {
+            // The leader is a corpse but the process may well still be alive:
+            // its other threads keep running, and the leader stays registered
+            // until the last of them exits. Signalling the group must reach
+            // those threads rather than counting the whole process as gone.
+            struct task *live = NULL, *thread;
+            list_for_each_entry(&tgroup->threads, thread, group_links) {
+                if (!thread->exiting && !thread->zombie && thread->sighand != NULL) {
+                    live = thread;
+                    break;
+                }
+            }
+            task = live;
+        }
+        if (task == NULL) {
             skipped++;
             continue;
         }
@@ -2947,19 +2961,30 @@ static struct task *pick_process_directed_target(struct task *task, dword_t sig)
     // spot.)
     if (sig == 0)
         return task;
+    // A task that has begun exiting cannot take anything: do_exit clears
+    // sighand and sets exiting BEFORE the group is dead, and a thread-group
+    // leader stays registered in the pid table until every sibling has gone.
+    // So kill(pid) on a process whose leader exited first addressed a corpse,
+    // and send_signal dropped the signal on the sighand==NULL and exiting
+    // checks -- kill() returned 0 and nothing whatsoever happened, forever.
+    bool addressed_usable = !task->exiting && !task->zombie && task->sighand != NULL;
     // The addressed task can take it: nothing to do. This is every
     // single-threaded case, and the common multithreaded one.
-    if (!sigset_has(__atomic_load_n(&task->blocked, __ATOMIC_ACQUIRE), sig) ||
-            sigset_has(__atomic_load_n(&task->waiting, __ATOMIC_ACQUIRE), sig))
+    if (addressed_usable &&
+            (!sigset_has(__atomic_load_n(&task->blocked, __ATOMIC_ACQUIRE), sig) ||
+             sigset_has(__atomic_load_n(&task->waiting, __ATOMIC_ACQUIRE), sig)))
         return task;
     if (task->group == NULL)
         return task;
 
     struct task *candidate = NULL;
+    struct task *live = NULL;   // any live sibling, blocked or not
     struct task *thread;
     list_for_each_entry(&task->group->threads, thread, group_links) {
-        if (thread->exiting || thread->zombie)
+        if (thread->exiting || thread->zombie || thread->sighand == NULL)
             continue;
+        if (live == NULL)
+            live = thread;
         // A thread parked in sigwait() for this signal is the best target
         // there is -- it is asking for it by name.
         if (sigset_has(__atomic_load_n(&thread->waiting, __ATOMIC_ACQUIRE), sig))
@@ -2968,9 +2993,15 @@ static struct task *pick_process_directed_target(struct task *task, dword_t sig)
                 !sigset_has(__atomic_load_n(&thread->blocked, __ATOMIC_ACQUIRE), sig))
             candidate = thread;
     }
-    // Nobody can take it right now: leave it on the addressed task, where it
-    // stays pending until that thread unblocks it. Same as before.
-    return candidate != NULL ? candidate : task;
+    if (candidate != NULL)
+        return candidate;
+    // Every live thread has it blocked. Leave it pending on the addressed task
+    // so it fires when that thread unblocks -- unless the addressed task is a
+    // corpse, in which case parking it there means dropping it. Any live
+    // sibling will do; the signal waits on its mask instead.
+    if (!addressed_usable && live != NULL)
+        return live;
+    return task;
 }
 
 // thread_directed distinguishes tkill/tgkill (deliver to THIS thread's private
