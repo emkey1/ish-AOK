@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 
 #include "kernel/fs.h"
+#include "kernel/calls.h"   // MS_READONLY_ and the other mount flags
 #include "fs/fd.h"
 #include "fs/inode.h"
 #include "fs/path.h"
@@ -233,6 +234,15 @@ struct mount *find_mount_and_trim_path(char *path) {
     return mount;
 }
 
+// Linux fails every modifying operation on a read-only mount with EROFS. The
+// flag was recorded at mount time and never consulted anywhere, so read-only
+// was purely cosmetic: only /proc/mounts said "ro" while creates, writes,
+// unlinks and renames all went through.
+static bool mount_is_readonly(struct mount *mount) {
+    return mount != NULL && (mount->flags & MS_READONLY_) != 0;
+}
+
+
 bool contains_mount_point(const char *path) {
     struct mount *mount;
     // Optimization: hoist strlen(path) outside the loop to avoid redundant O(N) recalculations
@@ -414,6 +424,15 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
     struct mount *mount = find_mount_and_trim_path(path);
     if (mount == NULL)
         return ERR_PTR(_ENOENT);
+    // Refusing the write-mode open is what Linux does for a read-only mount,
+    // and it is sufficient: an fd that cannot be opened for writing cannot be
+    // written through. O_TRUNC counts as a modification even with O_RDONLY,
+    // for the same reason it needs write permission.
+    if (mount_is_readonly(mount) &&
+            ((flags & (O_WRONLY_ | O_RDWR_ | O_CREAT_ | O_TRUNC_)) != 0)) {
+        mount_release(mount);
+        return ERR_PTR(_EROFS);
+    }
 
     bool created = false;
 
@@ -745,6 +764,11 @@ int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, co
             mount_release(dst_mount);
         return _ENOENT;
     }
+    if (mount_is_readonly(mount) || mount_is_readonly(dst_mount)) {
+        mount_release(mount);
+        mount_release(dst_mount);
+        return _EROFS;
+    }
     // Serialize against generic_openat/generic_mkdirat/etc. on the same path:
     // see the inodes_lock comment in generic_openat for why fakefs needs this
     // (a mutating fs op is a real-host-op + SQLite-metadata-update pair that
@@ -815,6 +839,10 @@ int generic_unlinkat(struct fd *at, const char *path_raw) {
     struct mount *mount = find_mount_and_trim_path(path);
     if (mount == NULL)
         return _ENOENT;
+    if (mount_is_readonly(mount)) {
+        mount_release(mount);
+        return _EROFS;
+    }
     // See the inodes_lock comment in generic_openat: this serializes the
     // stat-check + unlink pair against a concurrent open(O_CREAT)/mkdir/etc.
     // on the same path, so fakefs's real-op + metadata-update pair can't
@@ -887,6 +915,11 @@ int generic_renameat(struct fd *src_at, const char *src_raw, struct fd *dst_at, 
             mount_release(dst_mount);
         return _ENOENT;
     }
+    if (mount_is_readonly(mount) || mount_is_readonly(dst_mount)) {
+        mount_release(mount);
+        mount_release(dst_mount);
+        return _EROFS;
+    }
     // See the inodes_lock comment in generic_openat: serialize the
     // stat-check(s) + rename pair against a concurrent open(O_CREAT)/mkdir/
     // unlink/etc. on either path.
@@ -942,6 +975,10 @@ int generic_symlinkat(const char *target, struct fd *at, const char *link_raw) {
     struct mount *mount = find_mount_and_trim_path(link);
     if (mount == NULL)
         return _ENOENT;
+    if (mount_is_readonly(mount)) {
+        mount_release(mount);
+        return _EROFS;
+    }
     // See the inodes_lock comment in generic_openat: serializes the
     // real-symlink-create + metadata-write pair against a concurrent
     // open(O_CREAT)/mkdir/unlink/etc. on the same path.
@@ -976,6 +1013,10 @@ int generic_mknodat(struct fd *at, const char *path_raw, mode_t_ mode, dev_t_ de
     struct mount *mount = find_mount_and_trim_path(path);
     if (mount == NULL)
         return _ENOENT;
+    if (mount_is_readonly(mount)) {
+        mount_release(mount);
+        return _EROFS;
+    }
     // See the inodes_lock comment in generic_openat: serializes the
     // real-mknod + metadata-write pair against a concurrent
     // open(O_CREAT)/mkdir/unlink/etc. on the same path.
@@ -1003,6 +1044,10 @@ int generic_setattrat(struct fd *at, const char *path_raw, struct attr attr, boo
     struct mount *mount = find_mount_and_trim_path(path);
     if (mount == NULL)
         return _ENOENT;
+    if (mount_is_readonly(mount)) {
+        mount_release(mount);
+        return _EROFS;
+    }
     struct statbuf stat = {};
     err = mount->fs->stat(mount, path, &stat);
     if (err >= 0)
@@ -1032,6 +1077,10 @@ int generic_utime(struct fd *at, const char *path_raw, struct timespec atime, st
     struct mount *mount = find_mount_and_trim_path(path);
     if (mount == NULL)
         return _ENOENT;
+    if (mount_is_readonly(mount)) {
+        mount_release(mount);
+        return _EROFS;
+    }
     err = _EPERM;
     if (mount->fs->utime)
         err = mount->fs->utime(mount, path, atime, mtime, follow_links);
@@ -1068,6 +1117,10 @@ int generic_mkdirat(struct fd *at, const char *path_raw, mode_t_ mode) {
     struct mount *mount = find_mount_and_trim_path(path);
     if (mount == NULL)
         return _ENOENT;
+    if (mount_is_readonly(mount)) {
+        mount_release(mount);
+        return _EROFS;
+    }
     // See the inodes_lock comment in generic_openat: serializes the
     // exists-check + real-mkdir + metadata-write against a concurrent
     // open(O_CREAT)/unlink/mkdir/etc. on the same path.
@@ -1119,6 +1172,10 @@ int generic_rmdirat(struct fd *at, const char *path_raw) {
     struct mount *mount = find_mount_and_trim_path(path);
     if (mount == NULL)
         return _ENOENT;
+    if (mount_is_readonly(mount)) {
+        mount_release(mount);
+        return _EROFS;
+    }
     // See the inodes_lock comment in generic_openat: serializes the
     // real-rmdir + metadata-update against a concurrent
     // open(O_CREAT)/mkdir/unlink/etc. on the same path.

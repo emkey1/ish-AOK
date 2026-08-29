@@ -333,6 +333,15 @@ int_t sys_inotify_add_watch_guest(fd_t fd_no, guest_addr_t pathname_addr, uint_t
             return err;
     }
 
+    // Watching an inode requires the same read permission open(2) needs --
+    // Linux's inotify_find_inode() does path_permission(MAY_READ). Without it
+    // an unprivileged process installed a watch on a directory it could not
+    // open and harvested the filenames inside from the events, which carry the
+    // child name. The stat above already has the mode/uid/gid.
+    err = access_check(&stat, AC_R);
+    if (err < 0)
+        return err;
+
     struct fd *fd;
     err = inotify_lookup_fd(fd_no, &fd);
     if (err < 0)
