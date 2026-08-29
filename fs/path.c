@@ -199,6 +199,25 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
         // stress-ng --sockabuse passed a socket fd to utimensat).
         if (!path_is_normalized(at_path))
             return _ENOTDIR;
+        // The starting directory's OWN search bit is never a component of
+        // `path`, so the component loop in __path_normalize never checks it --
+        // it only checks what follows. Without this, openat(dirfd, "file")
+        // read files inside a directory the caller had no search permission
+        // on, and the same held for a cwd whose search bit was removed after
+        // the chdir. The dirfd is reachable because O_PATH on a directory
+        // correctly performs no permission check of its own, so the check has
+        // to happen here, at use time -- an fd opened while permissions
+        // allowed it must not keep working after they change.
+        //
+        // fstat on the fd rather than stat by path: the path lookup above is
+        // already the expensive part on fakefs, and this adds no second one.
+        struct statbuf at_stat;
+        if (at->mount != NULL && at->mount->fs->fstat != NULL &&
+                at->mount->fs->fstat(at, &at_stat) >= 0) {
+            int perm_err = access_check(&at_stat, AC_X);
+            if (perm_err < 0)
+                return perm_err;
+        }
     }
     // root_path anchors any *absolute symlink target* encountered while
     // resolving (see __path_normalize): it must always be the process's
