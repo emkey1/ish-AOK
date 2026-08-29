@@ -917,6 +917,15 @@ static long sys_setitimer_guest_abi(int_t which, guest_addr_t new_val_addr, gues
             .value.tv_nsec = val.value.usec * 1000,
         };
     }
+    // Linux rejects tv_usec >= 1e6 and negative seconds with EINVAL. We copied
+    // them straight through, so a denormalized value left the deadline
+    // permanently in the past and the timer thread spun a host core at 100%
+    // for the timer's life -- and a negative one fired immediately and
+    // repeatedly. timespec_is_valid already existed for clock_nanosleep; the
+    // timer paths simply never called it. usec has been scaled to nsec above,
+    // so the nsec bound is the usec bound.
+    if (!timespec_is_valid(spec.value) || !timespec_is_valid(spec.interval))
+        return _EINVAL;
     struct timer_spec old_spec;
 
     struct tgroup *group = current->group;
@@ -1290,6 +1299,14 @@ static int_t sys_timer_create_guest_abi(dword_t clock, guest_addr_t sigevent_add
     }
     if (sigev.method != SIGEV_SIGNAL_ && sigev.method != SIGEV_NONE_ && sigev.method != SIGEV_THREAD_ID_)
         return _EINVAL;
+    // Linux rejects a signo outside 1..64 here. We stored it unchecked, so a
+    // guest could create a timer carrying signo 100 with three ordinary
+    // syscalls and no privilege; the FIRST expiry then tripped
+    // assert(sig >= 1 && sig < NUM_SIGS) in sig_mask and aborted the host
+    // process, destroying the whole guest and every process in it.
+    if ((sigev.method == SIGEV_SIGNAL_ || sigev.method == SIGEV_THREAD_ID_) &&
+            (sigev.signo < 1 || sigev.signo >= NUM_SIGS))
+        return _EINVAL;
 
     if (sigev.method == SIGEV_THREAD_ID_) {
         struct task *target = pid_get_task_ref(sigev.tid);
@@ -1423,6 +1440,9 @@ static int_t sys_timer_settime_common(dword_t timer_id, int_t flags, guest_addr_
             return _EFAULT;
         spec = timer_spec_to_real64(value);
     }
+    // Same validation as setitimer above, for the same reason.
+    if (!timespec_is_valid(spec.value) || !timespec_is_valid(spec.interval))
+        return _EINVAL;
 
     lock(&current->group->lock, 0);
     struct posix_timer *timer = &current->group->posix_timers[timer_id];
