@@ -9,6 +9,9 @@ on:
       tag:
         description: 'Existing builds/iSH-AOK_N tag to (re)build'
         required: true
+      ref:
+        description: 'Source ref to build (default: the tag itself). Set it to re-spin a published IPA from newer code, as 551 was for the sideloading fix.'
+        required: false
 
 env:
   KEEP_RELEASES: 5
@@ -29,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.ref || github.event.inputs.tag || github.ref }}
           submodules: true
           fetch-depth: 0
 
@@ -101,6 +104,20 @@ jobs:
             -arch arm64 -sdk iphoneos \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
+      # An unsigned bundle carries no entitlements, and the AltStore family
+      # decides what to ask Apple for by reading the entitlements of the app it
+      # re-signs -- so it signed AOK with no App Group and the app booted with
+      # nowhere to store a filesystem. See tools/adhoc-sign-app.sh.
+      - name: Embed entitlements (ad-hoc signature)
+        run: |
+          set -eu
+          APP_PATH="build/Build/Products/Release-iphoneos/iSH-AOK.app"
+          if [ -x tools/adhoc-sign-app.sh ]; then
+            ./tools/adhoc-sign-app.sh "$APP_PATH"
+          else
+            echo "::warning::tools/adhoc-sign-app.sh is not in this checkout (tag predates it); the IPA will ship without entitlements and re-signers will drop its App Group"
+          fi
 
       - name: Package IPA
         id: package

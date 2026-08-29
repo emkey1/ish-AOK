@@ -138,9 +138,79 @@ NSArray<NSString *> *CurrentAppGroups(void) {
     return AppEntitlements()[@"com.apple.security.application-groups"];
 }
 
+// An app extension gets its own private container, not the app's, so the
+// fallback below would hand it a directory the app never looks at. Extensions
+// keep the old behaviour instead: no app group means no container, and their
+// callers already handle nil.
+static BOOL RunningInAppExtension(void) {
+    return [NSBundle.mainBundle.bundleURL.pathExtension isEqualToString:@"appex"];
+}
+
+// Where the app stores everything when it has no app group. Under Application
+// Support, so it is neither user-visible in Files nor swept by the system the
+// way Caches is.
+static NSURL *PrivateContainerFallbackURL(void) {
+    NSURL *applicationSupport = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory
+                                                                     inDomains:NSUserDomainMask].firstObject;
+    if (applicationSupport == nil)
+        return nil;
+    NSURL *fallback = [applicationSupport URLByAppendingPathComponent:@"AppGroupFallback" isDirectory:YES];
+    NSError *error = nil;
+    if (![NSFileManager.defaultManager createDirectoryAtURL:fallback
+                               withIntermediateDirectories:YES
+                                                attributes:nil
+                                                     error:&error]) {
+        NSLog(@"ContainerURL: couldn't create the private container fallback: %@", error);
+        return nil;
+    }
+    return fallback;
+}
+
+static NSURL *containerURL;
+static BOOL containerIsSharedAppGroup;
+
+// Re-signing (AltStore, SideStore, Sideloadly) is how AOK gets onto a device
+// outside TestFlight, and a re-signed build only has an app group if the signer
+// asked Apple for one. The AltStore family asks only when it finds the
+// entitlement in the bundle it is signing, and our published IPAs are built
+// unsigned, so it found nothing: the app was installed with no app group at
+// all. iOS then returns nil here, which left roots, /AOK/persist, the audio
+// library and the cross-process locks with nowhere to write -- the app came up,
+// failed to import its bundled root with "No filesystem storage available", and
+// was unusable.
+//
+// So fall back to this process's own container. Everything that only needs
+// somewhere to put files keeps working. What the fallback cannot do is share
+// across processes, which is why the app switches the Files integration off
+// when it is in use -- see ContainerIsSharedAppGroup().
+static void ResolveContainerURL(void) {
+    NSString *appGroup = CurrentAppGroups().firstObject;
+    if (appGroup != nil) {
+        containerURL = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:appGroup];
+        if (containerURL != nil) {
+            containerIsSharedAppGroup = YES;
+            return;
+        }
+        NSLog(@"ContainerURL: entitled to app group %@ but iOS returned no container", appGroup);
+    }
+    if (RunningInAppExtension())
+        return;
+    containerURL = PrivateContainerFallbackURL();
+    NSLog(@"ContainerURL: no app group container (re-signed without the App Group entitlement?), "
+          @"falling back to this app's own container at %@", containerURL.path);
+}
+
 NSURL *ContainerURL(void) {
-    NSString *appGroup = CurrentAppGroups()[0];
-    return [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:appGroup];
+    static dispatch_once_t token;
+    dispatch_once(&token, ^{
+        ResolveContainerURL();
+    });
+    return containerURL;
+}
+
+BOOL ContainerIsSharedAppGroup(void) {
+    (void) ContainerURL();
+    return containerIsSharedAppGroup;
 }
 
 NSURL *ISHRootsExposureDirectoryURL(void) {

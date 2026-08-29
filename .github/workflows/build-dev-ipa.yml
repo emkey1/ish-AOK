@@ -70,6 +70,13 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
 
+      # An unsigned bundle carries no entitlements, and the AltStore family
+      # decides what to ask Apple for by reading the entitlements of the app it
+      # re-signs -- so it signed AOK with no App Group and the app booted with
+      # nowhere to store a filesystem. See tools/adhoc-sign-app.sh.
+      - name: Embed entitlements (ad-hoc signature)
+        run: ./tools/adhoc-sign-app.sh build/Build/Products/Release-iphoneos/iSH-AOK.app
+
       - name: Package IPA
         id: package
         run: |

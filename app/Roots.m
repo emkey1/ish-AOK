@@ -794,15 +794,16 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
 }
 
 // Drop a domain a previous run (or an earlier build) left registered, so a Mac
-// does not keep a stale one that Finder would try to open.
-- (void)removeAllFileProviderDomainsForUnsupportedPlatform {
+// -- or a re-signed build that has since lost its app group -- does not keep a
+// stale one that Finder or Files would try to open.
+- (void)removeAllFileProviderDomains {
     [NSFileProviderManager getDomainsWithCompletionHandler:^(NSArray<NSFileProviderDomain *> *domains, NSError *error) {
         if (error != nil || domains.count == 0)
             return;
         for (NSFileProviderDomain *domain in domains) {
             [NSFileProviderManager removeDomain:domain completionHandler:^(NSError *removeError) {
                 if (removeError != nil)
-                    NSLog(@"error removing file provider domain on unsupported platform: %@", removeError);
+                    NSLog(@"error removing file provider domain: %@", removeError);
             }];
         }
     }];
@@ -812,7 +813,19 @@ static BOOL ISHFileProviderUnavailableOnThisPlatform(void) {
     if (ISHFileProviderUnavailableOnThisPlatform()) {
         [ISHDiagnosticsStore recordBreadcrumb:@"fileprovider.domainSync.unsupportedPlatform"
                                       details:@{@"reason": @"NSFileProviderExtension is unavailable on macOS"}];
-        [self removeAllFileProviderDomainsForUnsupportedPlatform];
+        [self removeAllFileProviderDomains];
+        return;
+    }
+
+    // Without an app group the app runs out of its own private container
+    // (ContainerURL()), which the extension -- a separate process with a
+    // separate private container -- cannot see. A domain registered here would
+    // be an empty folder in Files whose every operation failed, so don't
+    // register one. Everything else about AOK works in that state.
+    if (!ContainerIsSharedAppGroup()) {
+        [ISHDiagnosticsStore recordBreadcrumb:@"fileprovider.domainSync.noAppGroup"
+                                      details:@{@"reason": @"no shared app group container; using the private fallback"}];
+        [self removeAllFileProviderDomains];
         return;
     }
 
