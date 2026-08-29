@@ -661,9 +661,10 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
     err = _ENOTDIR;
     if (!S_ISDIR(fd->type) && flags & O_DIRECTORY_)
         goto error;
-    inotify_notify_open(guest_path);
+    // Creation is reported before the open that caused it, as in Linux.
     if (created)
         inotify_notify_create(guest_path, S_ISDIR(fd->type));
+    inotify_notify_open(guest_path);
     return fd;
 
 error:

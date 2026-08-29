@@ -128,6 +128,7 @@ signal_stop_restart.c
 utimensat_omit.c
 creds_groups_access.c
 sock_optlen.c
+inotify_events.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c
 timerfd_settime_readiness.c

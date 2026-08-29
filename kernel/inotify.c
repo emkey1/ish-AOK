@@ -53,6 +53,11 @@ struct inotify_state {
 static struct fd_ops inotify_fdops;
 static struct list inotify_instances = LIST_INITIALIZER(inotify_instances);
 static lock_t inotify_instances_lock = LOCK_INITIALIZER;
+// Shadows the list's emptiness so inotify_has_instances() -- which now gates
+// the read, write AND close paths, i.e. most syscalls a busy guest makes --
+// costs an atomic load instead of a mutex round trip. Only ever written under
+// inotify_instances_lock, so it cannot disagree with the list.
+static _Atomic unsigned inotify_instance_count = 0;
 
 static struct inotify_state *inotify_state_get(struct fd *fd) {
     return fd->data;
@@ -289,6 +294,7 @@ int_t sys_inotify_init1(int_t flags) {
     fd->data = state;
     lock(&inotify_instances_lock, 0);
     list_add_tail(&inotify_instances, &state->all);
+    inotify_instance_count++;
     unlock(&inotify_instances_lock);
     return f_install(fd, flags);
 }
@@ -476,7 +482,12 @@ static int inotify_close(struct fd *fd) {
     fd->data = NULL;
 
     lock(&inotify_instances_lock, 0);
-    list_remove_safe(&state->all);
+    // list_remove_safe is a no-op on an already-unlinked node, so only
+    // decrement when this call is the one that unlinked it.
+    if (!list_null(&state->all)) {
+        list_remove(&state->all);
+        inotify_instance_count--;
+    }
     unlock(&inotify_instances_lock);
 
     struct inotify_watch *watch, *watch_tmp;
@@ -504,10 +515,7 @@ static struct fd_ops inotify_fdops = {
 };
 
 bool inotify_has_instances(void) {
-    lock(&inotify_instances_lock, 0);
-    bool any = !list_empty(&inotify_instances);
-    unlock(&inotify_instances_lock);
-    return any;
+    return atomic_load_explicit(&inotify_instance_count, memory_order_relaxed) != 0;
 }
 
 void inotify_notify_open(const char *path) {
@@ -541,6 +549,25 @@ void inotify_notify_create(const char *path, bool is_dir) {
     inotify_for_each_instance(inotify_emit_parent_cb, &event);
 }
 
+// A watch on a file that has just been deleted is dead: Linux reports
+// IN_ATTRIB for the link-count change, then IN_DELETE_SELF, then retires the
+// watch with IN_IGNORED. Watchers use IN_IGNORED to know the wd is gone and
+// stop tracking it; without it they hold a stale wd forever and never re-arm
+// on a recreated file, which is the usual "editor saved the file and my
+// watcher went deaf" shape.
+static bool inotify_emit_ignored_cb(struct inotify_state *state, void *ctx) {
+    struct inotify_path_event *event = ctx;
+    struct inotify_watch *watch = inotify_find_watch(state, event->path);
+    if (watch == NULL)
+        return false;
+    int_t wd = watch->wd;
+    list_remove(&watch->list);
+    free(watch->path);
+    free(watch);
+    // IN_IGNORED is delivered whether or not the watch asked for it.
+    return inotify_queue_event_locked(state->fd, wd, IN_IGNORED_, 0, NULL) == 0;
+}
+
 void inotify_notify_delete(const char *path, bool is_dir) {
     if (path == NULL || path[0] != '/')
         return;
@@ -548,12 +575,38 @@ void inotify_notify_delete(const char *path, bool is_dir) {
         .path = path,
         .mask = IN_DELETE_ | (is_dir ? IN_ISDIR_ : 0),
     };
+    struct inotify_path_event attrib = { .path = path, .mask = IN_ATTRIB_ };
     struct inotify_path_event exact = {
         .path = path,
         .mask = IN_DELETE_SELF_,
     };
+    struct inotify_path_event ignored = { .path = path, .mask = IN_IGNORED_ };
     inotify_for_each_instance(inotify_emit_parent_cb, &parent);
+    inotify_for_each_instance(inotify_emit_exact_cb, &attrib);
     inotify_for_each_instance(inotify_emit_exact_cb, &exact);
+    inotify_for_each_instance(inotify_emit_ignored_cb, &ignored);
+}
+
+// close(2) on a descriptor that was open for writing is IN_CLOSE_WRITE, and
+// IN_CLOSE_NOWRITE otherwise. This is the single most-used inotify event
+// there is -- `inotifywait -e close_write`, entr, and every build watcher key
+// on it to mean "the writer finished, the file is now consistent" -- and AOK
+// emitted neither, so those tools simply never fired.
+void inotify_notify_close(const char *path, bool was_writable) {
+    if (path == NULL || path[0] != '/')
+        return;
+    struct inotify_path_event event = {
+        .path = path,
+        .mask = was_writable ? IN_CLOSE_WRITE_ : IN_CLOSE_NOWRITE_,
+    };
+    inotify_for_each_instance(inotify_emit_exact_and_parent_cb, &event);
+}
+
+void inotify_notify_access(const char *path) {
+    if (path == NULL || path[0] != '/')
+        return;
+    struct inotify_path_event event = {.path = path, .mask = IN_ACCESS_};
+    inotify_for_each_instance(inotify_emit_exact_and_parent_cb, &event);
 }
 
 void inotify_notify_move(const char *old_path, const char *new_path, bool is_dir) {

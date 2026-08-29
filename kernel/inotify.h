@@ -10,6 +10,9 @@ bool inotify_has_instances(void);
 
 void inotify_notify_open(const char *path);
 void inotify_notify_modify(const char *path);
+void inotify_notify_access(const char *path);
+// was_writable: the description was opened O_WRONLY or O_RDWR.
+void inotify_notify_close(const char *path, bool was_writable);
 void inotify_notify_attrib(const char *path);
 void inotify_notify_create(const char *path, bool is_dir);
 void inotify_notify_delete(const char *path, bool is_dir);

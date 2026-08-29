@@ -930,9 +930,17 @@ static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
         // lookup, and paying that on EVERY read made bulk I/O (e.g. nix
         // unpacking a channel tarball) run at syscall-trace speed while
         // looking like a hang at 100% CPU.
-        if (amd64_as_source_trace_enabled() || fs_trace_elogind()) {
+        // IN_ACCESS joins the same gate: an inotify instance that could
+        // receive it is the third consumer that makes the path worth
+        // computing. procfs is excluded like the write side -- its reads are
+        // constant and never interesting to a watcher.
+        bool notify_access = res > 0 && inotify_has_instances() &&
+            (fd->mount == NULL || fd->mount->fs != &procfs);
+        if (amd64_as_source_trace_enabled() || fs_trace_elogind() || notify_access) {
             char path[MAX_PATH];
             if (generic_getpath(fd, path) == 0) {
+                if (notify_access)
+                    inotify_notify_access(path);
                 amd64_as_source_trace_read(fd_no, path, buf, (size_t) res);
                 if (fs_trace_elogind() && fs_trace_interesting_path(path)) {
                     size_t print_size = res;

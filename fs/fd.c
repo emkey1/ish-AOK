@@ -4,6 +4,7 @@
 #include "kernel/calls.h"
 #include "kernel/resource.h"
 #include "kernel/fs.h"
+#include "kernel/inotify.h"
 #include "fs/poll.h"
 #include "fs/fd.h"
 #include "fs/inode.h"
@@ -47,6 +48,19 @@ struct fd *fd_retain_if_live(struct fd *fd) {
 int fd_close(struct fd *fd) {
     int err = 0;
     if (--fd->refcount == 0) {
+        // IN_CLOSE_WRITE / IN_CLOSE_NOWRITE, on the last reference to this
+        // open file description -- which is exactly what Linux reports on.
+        // Emitted before ops->close, while the path can still be resolved,
+        // and behind inotify_has_instances() because generic_getpath is a
+        // SQLite lookup on fakefs and this runs on every close in the system.
+        if (inotify_has_instances() && fd->mount != NULL &&
+                fd->mount->fs != &procfs && !S_ISSOCK(fd->type)) {
+            char path[MAX_PATH];
+            if (generic_getpath(fd, path) == 0) {
+                unsigned acc = fd_getflags(fd) & O_ACCMODE_;
+                inotify_notify_close(path, acc == O_WRONLY_ || acc == O_RDWR_);
+            }
+        }
         poll_cleanup_fd(fd);
         if (fd->inode != NULL) {
             flock_remove_owned_by(fd);
