@@ -427,6 +427,16 @@ void mem_init(struct mem *mem) {
     mem->page_limit = MEM_DEFAULT_PAGE_LIMIT;
     mem->mmap_floor = MEM_DEFAULT_MMAP_FLOOR;
     mem->mmap_ceiling = MEM_DEFAULT_MMAP_CEILING;
+    // MUST be cleared here. mm_copy does `*new_mm = *mm` -- a whole-struct
+    // copy -- and then calls this on the child, so without it the child
+    // inherits the parent's reservations. pt_copy_on_write has meanwhile
+    // materialised those same ranges into real COW entries, leaving the child
+    // with a range that is both mapped AND reserved: a later fault
+    // re-materialises over the copied pages with the reservation's original
+    // flags. That broke every fork-heavy workload -- the e2e suite's gcc step
+    // first.
+    memset(mem->lazy, 0, sizeof(mem->lazy));
+    mem->lazy_count = 0;
     atomic_init(&mem->quiesce_requested, 0);
     pthread_mutex_init(&mem->quiesce_park_lock, NULL);
     pthread_cond_init(&mem->quiesce_park_cond, NULL);
