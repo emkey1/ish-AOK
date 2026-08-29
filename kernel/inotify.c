@@ -252,11 +252,44 @@ struct inotify_move_event {
     dword_t cookie;
 };
 
+// Watches are keyed by path here, where Linux keys them by inode. Renaming
+// the watched file itself is handled below by rewriting its path -- but a
+// rename of an ANCESTOR directory moves the inode just as surely, and left
+// every watch underneath naming a path that no longer exists, silently deaf
+// from then on. Editors and build tools rename directories routinely.
+//
+// So carry the subtree: rewrite the prefix of every watch living under the
+// renamed directory. No event is emitted for them, matching Linux, where those
+// inodes have not changed -- only the path by which they are reached has.
+static void inotify_move_subtree_locked(struct inotify_state *state,
+        const char *old_path, const char *new_path) {
+    size_t old_len = strlen(old_path);
+    if (old_len == 0)
+        return;
+    struct inotify_watch *watch;
+    list_for_each_entry(&state->watches, watch, list) {
+        if (watch->path == NULL)
+            continue;
+        if (strncmp(watch->path, old_path, old_len) != 0 || watch->path[old_len] != '/')
+            continue;
+        char rebuilt[MAX_PATH];
+        int n = snprintf(rebuilt, sizeof(rebuilt), "%s%s", new_path, watch->path + old_len);
+        if (n < 0 || (size_t) n >= sizeof(rebuilt))
+            continue;   // would truncate: leave it rather than corrupt it
+        char *copy = strdup(rebuilt);
+        if (copy == NULL)
+            continue;
+        free(watch->path);
+        watch->path = copy;
+    }
+}
+
 static bool inotify_emit_move_cb(struct inotify_state *state, void *ctx) {
     struct inotify_move_event *event = ctx;
     bool wake = false;
     wake |= inotify_notify_parent_locked(state, event->old_path, event->old_mask, event->cookie);
     wake |= inotify_notify_parent_locked(state, event->new_path, event->new_mask, event->cookie);
+    inotify_move_subtree_locked(state, event->old_path, event->new_path);
     struct inotify_watch *watch = inotify_find_watch(state, event->old_path);
     if (watch == NULL)
         return wake;
@@ -267,7 +300,10 @@ static bool inotify_emit_move_cb(struct inotify_state *state, void *ctx) {
         return wake;
     free(watch->path);
     watch->path = new_path;
-    wake |= inotify_queue_event_locked(state->fd, watch->wd, event->self_mask, event->cookie, NULL) == 0;
+    // Cookie 0: the cookie exists to pair IN_MOVED_FROM with IN_MOVED_TO, and
+    // inotify(7) gives IN_MOVE_SELF none. Verified against Linux 6.12, which
+    // reports 0 here where AOK was passing the rename's cookie through.
+    wake |= inotify_queue_event_locked(state->fd, watch->wd, event->self_mask, 0, NULL) == 0;
     return wake;
 }
 

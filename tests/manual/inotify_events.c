@@ -64,6 +64,19 @@ static void drain(const char *label, const char *want) {
     test_logf("  %-30s %s\n", label, seen[0] ? seen : "(nothing)");
 }
 
+// Consume whatever is queued without judging it -- for use after a block's
+// own cleanup, whose unlinks and rmdirs raise events of their own.
+static void drain_any(void) {
+    char buf[8192];
+    for (;;) {
+        struct pollfd p = { ifd, POLLIN, 0 };
+        if (poll(&p, 1, (int) (200 * test_watchdog_secs(1))) <= 0)
+            break;
+        if (read(ifd, buf, sizeof buf) <= 0)
+            break;
+    }
+}
+
 static void wr(const char *name, const char *data) {
     char p[256];
     snprintf(p, sizeof p, "%s/%s", dir, name);
@@ -152,6 +165,90 @@ int main(int argc, char **argv) {
     if (!(inotify_add_watch(ifd, "/tmp/inotify-events-no-such-path", IN_ALL_EVENTS) < 0 &&
             errno == ENOENT))
         failf("add_watch(missing) -> ENOENT", (uint64_t) errno, 0, 0, ENOENT, 0, 0);
+
+    // Watch identity. Watches here are keyed by path where Linux keys them by
+    // inode, so the cases where those two disagree are what is pinned: the
+    // watched file renamed, an ANCESTOR directory renamed -- which used to
+    // leave the watch naming a path that no longer existed, silently deaf --
+    // and a fresh file at the old name, which must NOT inherit the watch.
+    {
+        char sub[256], sub2[256], f1[320], f2[320], moved[320];
+        snprintf(sub, sizeof sub, "%s/sub", dir);
+        snprintf(sub2, sizeof sub2, "%s/sub2", dir);
+        if (mkdir(sub, 0700) == 0) {
+            snprintf(f1, sizeof f1, "%s/f", sub);
+            snprintf(f2, sizeof f2, "%s/renamed", sub);
+            snprintf(moved, sizeof moved, "%s/renamed", sub2);
+            int fd = open(f1, O_WRONLY | O_CREAT, 0600);
+            if (fd >= 0) { if (write(fd, "x", 1) < 0) {} close(fd); }
+
+            int fwd = inotify_add_watch(ifd, f1, IN_MODIFY | IN_MOVE_SELF | IN_ATTRIB);
+            if (fwd < 0) {
+                printf("  watch identity: SKIP (%s)\n", strerror(errno));
+            } else {
+                drain("settle", "");
+
+                // The watched file is renamed: the watch goes with it.
+                if (rename(f1, f2) == 0) {
+                    // No cookie: that pairs MOVED_FROM with MOVED_TO, not the self event.
+                    drain("rename the watched file", "IN_MOVE_SELF[]");
+                    fd = open(f2, O_WRONLY | O_APPEND);
+                    if (fd >= 0) { if (write(fd, "y", 1) < 0) {} close(fd); }
+                    drain("modify it at its new name", "IN_MODIFY[]");
+
+                    // Its PARENT is renamed. The inode has not moved -- only
+                    // the path by which it is reached -- so no event, and the
+                    // watch must keep working underneath the new name.
+                    if (rename(sub, sub2) == 0) {
+                        drain("rename the parent directory", "");
+                        fd = open(moved, O_WRONLY | O_APPEND);
+                        if (fd >= 0) { if (write(fd, "z", 1) < 0) {} close(fd); }
+                        drain("modify it under its new parent", "IN_MODIFY[]");
+
+                        // A brand-new file at the ORIGINAL path is a different
+                        // inode and must not inherit the watch.
+                        mkdir(sub, 0700);
+                        fd = open(f1, O_WRONLY | O_CREAT, 0600);
+                        if (fd >= 0) { if (write(fd, "w", 1) < 0) {} close(fd); }
+                        drain("a new file at the old path is not watched", "");
+                        unlink(f1);
+                        rmdir(sub);
+                        unlink(moved);
+                        rmdir(sub2);
+                    } else {
+                        unlink(f2);
+                        rmdir(sub);
+                    }
+                }
+            }
+        }
+    }
+
+    // link() reports two things on Linux: IN_ATTRIB on the inode whose link
+    // count changed, and IN_CREATE in the directory that gained the name.
+    // Neither was emitted at all.
+    {
+        char src[256], lnk[256];
+        snprintf(src, sizeof src, "%s/linksrc", dir);
+        snprintf(lnk, sizeof lnk, "%s/linkdst", dir);
+        int fd = open(src, O_WRONLY | O_CREAT, 0600);
+        if (fd >= 0) { if (write(fd, "x", 1) < 0) {} close(fd); }
+        drain_any();          // the previous block's teardown
+        int lwd = inotify_add_watch(ifd, src, IN_ATTRIB);
+        if (lwd < 0) {
+            printf("  link(): SKIP (%s)\n", strerror(errno));
+        } else {
+            drain("settle", "");
+            if (link(src, lnk) == 0)
+                drain("link() -> IN_ATTRIB on the inode", "IN_ATTRIB[]");
+            else
+                printf("  link(): SKIP (%s)\n", strerror(errno));
+            inotify_rm_watch(ifd, lwd);
+            drain_any();
+        }
+        unlink(lnk);
+        unlink(src);
+    }
 
     close(ifd);
     rmdir(dir);

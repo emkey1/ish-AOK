@@ -37,8 +37,9 @@ static void *real_tty_read_thread(void *_tty) {
             else
                 printk("real tty: read failed (%s), hanging up console\n", strerror(errno));
             lock(&tty->lock, 0);
-            tty_hangup(tty);
+            struct tty_hangup_targets hup = tty_hangup(tty);
             unlock(&tty->lock);
+            tty_hangup_notify(hup);
             // Park rather than return: the thread is detached, and
             // real_tty_cleanup's pthread_cancel (which requires the thread
             // to still exist) reclaims it -- pause() is a cancellation

@@ -159,6 +159,21 @@ int main(int argc, char **argv) {
     if (readlink("/proc/self/exe", selfpath, sizeof selfpath - 1) <= 0)
         snprintf(selfpath, sizeof selfpath, "%s", argv[0]);
 
+    // timer_create(2): a NULL sigevent means SIGEV_SIGNAL/SIGALRM with the
+    // timer id as sival_int. AOK read the struct unconditionally, so the
+    // documented default faulted and returned EFAULT.
+    {
+        timer_t tid;
+        errno = 0;
+        int r = timer_create(CLOCK_MONOTONIC, NULL, &tid);
+        if (r != 0)
+            failf("timer_create(NULL sigevent)", (uint64_t) errno, 0, 0, 0, 0, 0);
+        else
+            timer_delete(tid);
+        test_logf("  %-40s rc=%d errno=%d\n", "timer_create(NULL sigevent)", r,
+                  r < 0 ? errno : 0);
+    }
+
     case_exec();
     case_fork();
     case_process_directed();

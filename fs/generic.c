@@ -756,6 +756,10 @@ int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, co
     err = path_normalize(dst_at, dst_raw, dst, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
     if (err < 0)
         return err;
+    // Pre-trim copies for inotify; see generic_openat.
+    char guest_src[MAX_PATH], guest_dst[MAX_PATH];
+    strcpy(guest_src, src);
+    strcpy(guest_dst, dst);
     struct mount *mount = find_mount_and_trim_path(src);
     struct mount *dst_mount = find_mount_and_trim_path(dst);
     if (mount == NULL || dst_mount == NULL) {
@@ -787,6 +791,13 @@ int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, co
         unlock(&inodes_lock);
     mount_release(mount);
     mount_release(dst_mount);
+    if (err >= 0) {
+        // Linux reports a new link two ways: IN_ATTRIB on the inode whose link
+        // count changed, and IN_CREATE in the directory that gained the name.
+        // link() emitted neither, so a file grew a second name with no event.
+        inotify_notify_attrib(guest_src);
+        inotify_notify_create(guest_dst, false);
+    }
     return err;
 }
 

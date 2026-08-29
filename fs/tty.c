@@ -1162,7 +1162,14 @@ void tty_set_winsize(struct tty *tty, struct winsize_ winsize) {
     unlock(&pids_lock);
 }
 
-void tty_hangup(struct tty *tty) {
+struct tty_hangup_targets tty_hangup(struct tty *tty) {
+    // Captured before anything else: the caller may clear these itself (the
+    // session leader's own exit does), and the signal has to reflect who was
+    // attached when the terminal went away.
+    struct tty_hangup_targets targets = {
+        .fg_group = tty->fg_group,
+        .session = tty->session,
+    };
     tty->hung_up = true;
     // Everything open right now is hung up; anything opened after this is not.
     tty->hangup_gen++;
@@ -1178,6 +1185,25 @@ void tty_hangup(struct tty *tty) {
         tty_poll_wakeup_unlocked(tty->pty.other, POLL_READ | POLL_HUP);
         notify(&tty->pty.other->produced);
         notify(&tty->pty.other->consumed);
+    }
+    return targets;
+}
+
+// A terminal going away is how a shell learns its session is over -- an ssh
+// disconnect, a closed terminal window, the last master of a pty closing.
+// Linux signals the foreground group and the session leader with SIGHUP and
+// then SIGCONT (the SIGCONT so a stopped job runs far enough to notice the
+// SIGHUP). AOK woke every reader and poller but signalled nobody, so a shell
+// sat in its read loop on a terminal that no longer existed.
+void tty_hangup_notify(struct tty_hangup_targets targets) {
+    if (targets.fg_group != 0) {
+        send_group_signal(targets.fg_group, SIGHUP_, SIGINFO_NIL);
+        send_group_signal(targets.fg_group, SIGCONT_, SIGINFO_NIL);
+    }
+    // The session leader too, unless the foreground group already covered it.
+    if (targets.session != 0 && targets.session != targets.fg_group) {
+        send_group_signal(targets.session, SIGHUP_, SIGINFO_NIL);
+        send_group_signal(targets.session, SIGCONT_, SIGINFO_NIL);
     }
 }
 

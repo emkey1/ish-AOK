@@ -233,7 +233,12 @@ static void exit_hangup_session_tty(struct task *leader) {
     lock(&tty->lock, 0);
     tty->session = 0;
     tty->fg_group = 0;
-    tty_hangup(tty);
+    // Return value deliberately dropped. This is the session leader giving up
+    // its own controlling terminal on the way out, and tty->session and
+    // tty->fg_group are cleared just above, so there is nobody left to signal.
+    // Signalling from inside do_exit would also mean sending under the exit
+    // path's own locks, which is not a thing to do untested.
+    (void) tty_hangup(tty);
     unlock(&tty->lock);
     while (tty_release_count-- > 0)
         tty_release(tty);

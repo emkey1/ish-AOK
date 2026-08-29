@@ -39,9 +39,12 @@ static void pty_master_cleanup(struct tty *tty) {
     struct tty *slave = tty->pty.other;
     slave->pty.other = NULL;
     lock(&slave->lock, 0);
-    tty_hangup(slave);
+    struct tty_hangup_targets hup = tty_hangup(slave);
     unlock(&slave->lock);
     tty_release(slave);
+    // After every tty lock is dropped: this is the ssh-disconnect /
+    // terminal-window-closed path, and the shell on the slave needs SIGHUP.
+    tty_hangup_notify(hup);
 }
 
 static int pty_slave_open(struct tty *tty) {

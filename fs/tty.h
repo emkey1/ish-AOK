@@ -208,7 +208,18 @@ struct tty {
 // if blocking, may return _EINTR, otherwise, may return _EAGAIN
 ssize_t tty_input(struct tty *tty, const char *input, size_t len, bool blocking);
 void tty_set_winsize(struct tty *tty, struct winsize_ winsize);
-void tty_hangup(struct tty *tty);
+// Who to signal for a hangup. Captured while tty->lock is held (tty_hangup),
+// then handed to tty_hangup_notify once every tty lock has been dropped --
+// sending a signal takes pids_lock, and fs/tty.c's input path already
+// establishes that signals go out only after tty->lock is released.
+struct tty_hangup_targets {
+    pid_t_ fg_group;
+    pid_t_ session;
+};
+struct tty_hangup_targets tty_hangup(struct tty *tty);
+// SIGHUP (then SIGCONT, as Linux does) to the foreground group and session
+// leader of a terminal that has gone away. Call with no tty lock held.
+void tty_hangup_notify(struct tty_hangup_targets targets);
 bool tty_stat_rdev(dev_t_ rdev, struct statbuf *stat);
 
 // public for the benefit of ptys

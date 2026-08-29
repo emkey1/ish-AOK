@@ -1321,7 +1321,18 @@ static int_t sys_timer_create_guest_abi(dword_t clock, guest_addr_t sigevent_add
     if (clockid_to_real(clock, &real_clockid))
         return _EINVAL;
     struct sigevent_ sigev = {};
-    if (abi == GUEST_ABI_AMD64) {
+    // timer_create(2): "If evp is NULL ... the default sigevent is
+    // sigev_notify = SIGEV_SIGNAL, sigev_signo = SIGALRM, and sigev_value.
+    // sival_int = timer ID." AOK read the struct unconditionally, so a NULL
+    // evp faulted and the call returned EFAULT -- glibc's timer_create(clock,
+    // NULL, &t) and every program that takes the documented default got an
+    // error Linux never returns. sival_int is filled in below, once the timer
+    // id is known.
+    bool default_sigevent = sigevent_addr == 0;
+    if (default_sigevent) {
+        sigev.method = SIGEV_SIGNAL_;
+        sigev.signo = SIGALRM_;
+    } else if (abi == GUEST_ABI_AMD64) {
         struct amd64_sigevent_marshaled user_sigev;
         if (user_get(sigevent_addr, user_sigev))
             return _EFAULT;
@@ -1381,6 +1392,9 @@ static int_t sys_timer_create_guest_abi(dword_t clock, guest_addr_t sigevent_add
 
     struct posix_timer *timer = &group->posix_timers[timer_id];
     timer->timer_id = timer_id;
+    // The documented default carries the timer id as sival_int.
+    if (default_sigevent)
+        sigev.value.sv_ptr = timer_id;
     timer->timer = timer_new(real_clockid, (timer_callback_t) posix_timer_callback, timer);
     timer->signal = sigev.signo;
     timer->sig_value = sigev.value;
