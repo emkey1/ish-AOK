@@ -3494,6 +3494,19 @@ static int unix_socket_get(const char *path_raw, struct fd *bind_fd, uint32_t *s
         goto out;
     }
 
+    // Connecting to a unix socket needs write permission on the socket file --
+    // Linux's unix_find_other() calls inode_permission(MAY_WRITE) at exactly
+    // this point. Without it the socket's own mode meant nothing: mode 0700,
+    // 0666 and even 0000 all connected for any uid, so every daemon whose
+    // access control IS its socket mode (0660 root:docker and friends) was
+    // open to the whole guest. Only bind is exempt -- it is creating the
+    // socket, not reaching one that already exists.
+    if (bind_fd == NULL) {
+        err = access_check(&stat, AC_W);
+        if (err < 0)
+            goto out;
+    }
+
     // Look up the socket ID for the inode number.
     struct inode_data *inode = inode_get(mount, stat.inode);
     lock(&inode->lock, 0);
