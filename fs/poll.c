@@ -1,4 +1,5 @@
 #include "kernel/task.h"
+#include "kernel/signal.h"
 #include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -655,11 +656,22 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
     struct timespec deadline_storage = {0};
     struct timespec *deadline = NULL;
     if (timeout != NULL) {
-        deadline_storage = timespec_add(timespec_now(CLOCK_MONOTONIC), *timeout);
+        // Resuming after a job-control stop: keep the deadline this wait
+        // already had. Restarting the relative timeout from zero would give
+        // the guest a longer wait than it asked for every time it is stopped.
+        if (current->poll_restart_valid) {
+            deadline_storage = current->poll_restart_deadline;
+            current->poll_restart_valid = false;
+        } else {
+            deadline_storage = timespec_add(timespec_now(CLOCK_MONOTONIC), *timeout);
+        }
         deadline = &deadline_storage;
+    } else {
+        current->poll_restart_valid = false;
     }
 
     int res = 0;
+    // Set by the two exits below; see poll_restart_deadline in kernel/task.h.
     while (true) {
         // check if any fds are ready
         struct poll_fd *poll_fd;
@@ -686,7 +698,9 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
         bool signal_pending = !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
         unlock(&current->sighand->lock);
         if (signal_pending) {
-            res = _EINTR;
+            // ERESTARTNOHAND: a running handler still gives the guest its
+            // EINTR, but a job-control stop must resume transparently.
+            res = signal_restart_or_eintr_nohand(_EINTR);
             break;
         }
 
@@ -789,7 +803,10 @@ poll_wait_done:
             unlock(&current->sighand->lock);
             if (!signal_pending)
                 continue;
-            res = errno_map();
+            // The host wait was torn out and a guest signal is waiting. Same
+            // ERESTARTNOHAND rule as the other two exits: a handler about to
+            // run gives the guest its EINTR, a job-control stop does not.
+            res = signal_restart_or_eintr_nohand(errno_map());
             break;
         }
         if (err == 0) {
@@ -808,7 +825,7 @@ poll_wait_done:
                 bool signal_pending = !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
                 unlock(&current->sighand->lock);
                 if (signal_pending)
-                    res = _EINTR;
+                    res = signal_restart_or_eintr_nohand(_EINTR);
             }
             break;
         }
@@ -927,6 +944,14 @@ poll_wait_done:
     }
 
     unlock(&poll_->lock);
+    // Restarting after a job-control stop: hand the deadline we already
+    // computed to the re-executed syscall, which cannot see the time this
+    // call spent waiting (it only gets the guest's original relative
+    // timeout). An untimed wait has nothing to carry.
+    if (res == _ERESTART_NOHAND && deadline != NULL) {
+        current->poll_restart_deadline = *deadline;
+        current->poll_restart_valid = true;
+    }
     return res;
 }
 

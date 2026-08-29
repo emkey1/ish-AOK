@@ -497,6 +497,10 @@ struct task *task_create_(struct task *parent) {
     task->waiting_interrupt_flag = NULL;
     task->wait_interrupted = false;
     task->restart_interrupted_syscall = false;
+    task->restart_interrupted_syscall_nohand = false;
+    task->poll_restart_valid = false;
+    task->sleep_restart_valid = false;
+    task->restart_nohand_pending = false;
     task->futex_restart_futex = NULL;
     task->futex_restart_uaddr = 0;
     task->futex_restart_wake_seq = 0;

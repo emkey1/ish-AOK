@@ -300,6 +300,25 @@ struct task {
     lock_t waiting_cond_lock;
     bool wait_interrupted;
     bool restart_interrupted_syscall;
+    // Same, but under ERESTARTNOHAND rules: set only when the interrupting
+    // signal runs no handler. poll/select/epoll consult this one.
+    bool restart_interrupted_syscall_nohand;
+    // The syscall whose PC has just been rewound was an _ERESTART_NOHAND one,
+    // so a handler about to run must cancel the restart. Set by the dispatcher
+    // at rewind time, consumed by receive_signal.
+    bool restart_nohand_pending;
+    // Linux's restart_block, in the two places AOK needs it: a timed wait
+    // restarted after a job-control stop -- poll/select/epoll_wait, or
+    // nanosleep -- must resume the deadline it already had, not start its
+    // relative timeout over. Set only when such a wait returns
+    // _ERESTART_NOHAND, and consumed by the re-executed syscall, which is
+    // necessarily the very next one this task makes: _ERESTART_NOHAND
+    // re-executes the same instruction, and a handler running in between
+    // cancels the restart outright (see restart_nohand_pending).
+    struct timespec poll_restart_deadline;
+    bool poll_restart_valid;
+    struct timespec sleep_restart_deadline;
+    bool sleep_restart_valid;
 
     // SA_RESTART futex lost-wake fix (kernel/futex.c): when a FUTEX_WAIT is
     // interrupted by a signal whose handler restarts the syscall, the waiter

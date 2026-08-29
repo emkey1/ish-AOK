@@ -638,9 +638,17 @@ static bool signal_wake_task(struct task *task, struct sighand *sighand, int sig
 static void signal_note_interrupted(struct task *task, struct sighand *sighand, int sig, bool interrupted_wait) {
     if (!interrupted_wait)
         return;
-    bool restart = signal_action(sighand, sig) == SIGNAL_CALL_HANDLER &&
-        !!(sighand->action[sig].flags & SA_RESTART_);
+    // A job-control stop is not an interruption. Linux parks the task inside
+    // the wait and resumes it on SIGCONT, so the syscall never returns EINTR
+    // to the guest -- and because no handler runs, that holds even for the
+    // interfaces SA_RESTART cannot rescue (poll, select, epoll_wait). Only a
+    // handler actually running can turn a wait into a guest-visible EINTR.
+    int action = signal_action(sighand, sig);
+    bool stops = action == SIGNAL_STOP;
+    bool restart = stops || (action == SIGNAL_CALL_HANDLER &&
+        !!(sighand->action[sig].flags & SA_RESTART_));
     __atomic_store_n(&task->restart_interrupted_syscall, restart, __ATOMIC_RELEASE);
+    __atomic_store_n(&task->restart_interrupted_syscall_nohand, stops, __ATOMIC_RELEASE);
     __atomic_store_n(&task->wait_interrupted, true, __ATOMIC_RELEASE);
 }
 
@@ -1319,11 +1327,51 @@ static void send_signal_with_sighand(struct task *task, struct sighand *sighand,
     }
 }
 
+// Both predicates consume both flags: a syscall asks exactly one of them, and
+// leaving the other set would leak this interruption's answer into the next
+// syscall's decision.
+static bool restart_flags_take(bool nohand_only) {
+    bool restart = __atomic_exchange_n(&current->restart_interrupted_syscall, false, __ATOMIC_ACQ_REL);
+    bool nohand = __atomic_exchange_n(&current->restart_interrupted_syscall_nohand, false, __ATOMIC_ACQ_REL);
+    return nohand_only ? nohand : restart;
+}
+
+// ERESTARTNOHAND: restart only if the interrupting signal ran no handler. This
+// is what poll/select/epoll_wait get -- SA_RESTART never rescues them, but a
+// job-control stop still must not surface as EINTR.
+bool signal_should_restart_syscall_nohand(void) {
+    if (current == NULL)
+        return false;
+
+    if (restart_flags_take(true))
+        return true;
+
+    struct sighand *sighand = current->sighand;
+    lock(&sighand->lock, 0);
+    struct sigqueue *sigqueue;
+    struct sigqueue *best = NULL;
+    list_for_each_entry(&current->queue, sigqueue, queue) {
+        if (sigset_has(current->blocked, sigqueue->info.sig))
+            continue;
+        if (best == NULL || sigqueue->info.sig < best->info.sig)
+            best = sigqueue;
+    }
+    list_for_each_entry(&sighand->queue, sigqueue, queue) {
+        if (sigset_has(current->blocked, sigqueue->info.sig))
+            continue;
+        if (best == NULL || sigqueue->info.sig < best->info.sig)
+            best = sigqueue;
+    }
+    bool stops = best != NULL && signal_action(sighand, best->info.sig) == SIGNAL_STOP;
+    unlock(&sighand->lock);
+    return stops;
+}
+
 bool signal_should_restart_syscall(void) {
     if (current == NULL)
         return false;
 
-    if (__atomic_exchange_n(&current->restart_interrupted_syscall, false, __ATOMIC_ACQ_REL))
+    if (restart_flags_take(false))
         return true;
 
     struct sighand *sighand = current->sighand;
@@ -1359,9 +1407,13 @@ bool signal_should_restart_syscall(void) {
         return false;
     }
     int sig = best->info.sig;
-    if (signal_action(sighand, sig) != SIGNAL_CALL_HANDLER) {
+    int action = signal_action(sighand, sig);
+    if (action != SIGNAL_CALL_HANDLER) {
+        // A stop resumes the syscall transparently; anything else with no
+        // handler either kills the task or should not have woken it.
+        bool stops = action == SIGNAL_STOP;
         unlock(&sighand->lock);
-        return false;
+        return stops;
     }
     bool restart = !!(sighand->action[sig].flags & SA_RESTART_);
     unlock(&sighand->lock);
@@ -1780,6 +1832,17 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         case SIGNAL_KILL:
             unlock(&sighand->lock); // do_exit must be called without this lock
             do_exit_group(sig);
+    }
+
+    // A handler is about to run. If the syscall it interrupted asked for an
+    // ERESTARTNOHAND restart -- poll/select/epoll_wait, which resume across a
+    // job-control stop but not across a handler -- the restart is cancelled
+    // here and the guest gets EINTR, exactly as Linux's handle_signal does.
+    if (current->restart_nohand_pending) {
+        current->restart_nohand_pending = false;
+        current->poll_restart_valid = false;
+        current->sleep_restart_valid = false;
+        cancel_syscall_restart();
     }
 
     struct sigaction_ *action = &sighand->action[info->sig];

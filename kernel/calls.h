@@ -15,6 +15,8 @@
 #include "kernel/ptrace.h"
 #include "kernel/aio.h"
 
+// See kernel/calls.c: cancels a pending _ERESTART_NOHAND rewind.
+void cancel_syscall_restart(void);
 void handle_interrupt(int interrupt);
 // One syscall on behalf of a natively-compiled program (kernel/native.h),
 // reached from host code instead of from a guest trap. Numbering is

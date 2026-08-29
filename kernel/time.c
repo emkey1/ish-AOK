@@ -325,6 +325,19 @@ static dword_t clock_nanosleep_common(dword_t clock, int_t flags, struct timespe
                clock, flags, (long long) req.tv_sec, req.tv_nsec, rem_addr);
     }
 
+    // Resuming after a job-control stop: sleep out the deadline this call
+    // already had rather than the full relative time again. An absolute
+    // request needs nothing -- it is already a deadline.
+    if (current != NULL && current->sleep_restart_valid) {
+        bool usable = !(flags & TIMER_ABSTIME_);
+        current->sleep_restart_valid = false;
+        if (usable) {
+            struct timespec left = timespec_subtract(current->sleep_restart_deadline,
+                                                     timespec_now(CLOCK_MONOTONIC));
+            req = timespec_positive(left) ? left : (struct timespec) {0};
+        }
+    }
+    struct timespec sleep_deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), req);
     int res = host_sleep_interruptible(req, &rem);
     if (trace_short_sleep) {
         printk("INFO: wait clock_nanosleep exit pid=%d comm=%s res=%d rem=%llds.%09ld\n",
@@ -334,6 +347,19 @@ static dword_t clock_nanosleep_common(dword_t clock, int_t flags, struct timespe
     }
     if (res < 0) {
         int err = errno_map();
+        // ERESTARTNOHAND, exactly as for poll: a job-control stop resumes the
+        // sleep transparently (carrying the deadline across), while a handler
+        // actually running still gives the guest its EINTR.
+        if (err == _EINTR) {
+            int restarted = signal_restart_or_eintr_nohand(err);
+            if (restarted == _ERESTART_NOHAND) {
+                if (current != NULL && !(flags & TIMER_ABSTIME_)) {
+                    current->sleep_restart_deadline = sleep_deadline;
+                    current->sleep_restart_valid = true;
+                }
+                return (dword_t) restarted;
+            }
+        }
         // POSIX: an interrupted *relative* sleep reports the time remaining so
         // the caller (or its libc restart logic) can resume. The host nanosleep
         // already populated `rem`; hand it back. Best effort — still report
@@ -1095,6 +1121,15 @@ static dword_t sys_nanosleep_guest_abi(guest_addr_t req_addr, guest_addr_t rem_a
                (long long) req_ts.tv_sec, req_ts.tv_nsec, rem_addr);
     }
     struct timespec rem;
+    // Same job-control-stop handling as clock_nanosleep_common; nanosleep() is
+    // always relative, so the carried deadline needs no ABSTIME check.
+    if (current != NULL && current->sleep_restart_valid) {
+        current->sleep_restart_valid = false;
+        struct timespec left = timespec_subtract(current->sleep_restart_deadline,
+                                                 timespec_now(CLOCK_MONOTONIC));
+        req_ts = timespec_positive(left) ? left : (struct timespec) {0};
+    }
+    struct timespec sleep_deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), req_ts);
     int res = host_sleep_interruptible(req_ts, &rem);
     if (trace_short_sleep) {
         printk("INFO: wait nanosleep exit pid=%d comm=%s res=%d rem=%llds.%09ld\n",
@@ -1104,6 +1139,18 @@ static dword_t sys_nanosleep_guest_abi(guest_addr_t req_addr, guest_addr_t rem_a
     }
     if (res < 0) {
         int err = errno_map();
+        // ERESTARTNOHAND: a job-control stop resumes the sleep transparently,
+        // carrying the deadline across; a handler running still gives EINTR.
+        if (err == _EINTR) {
+            int restarted = signal_restart_or_eintr_nohand(err);
+            if (restarted == _ERESTART_NOHAND) {
+                if (current != NULL) {
+                    current->sleep_restart_deadline = sleep_deadline;
+                    current->sleep_restart_valid = true;
+                }
+                return (dword_t) restarted;
+            }
+        }
         // On EINTR report the remaining time (Linux does); best effort.
         if (err == _EINTR && rem_addr != 0)
             (void) write_guest_timespec_abi(abi, rem_addr, &rem);

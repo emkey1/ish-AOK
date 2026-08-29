@@ -124,6 +124,7 @@ sock_conn_error.c
 sock_getfd_errno.c
 sock_nosignal.c
 signal_restart_coverage.c
+signal_stop_restart.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c
 timerfd_settime_readiness.c

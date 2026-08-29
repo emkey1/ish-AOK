@@ -2202,7 +2202,48 @@ static bool syscall_result_is_errno(dword_t result) {
 }
 
 static bool syscall_result_should_restart(dword_t result) {
-    return (sdword_t) result == _ERESTART;
+    sdword_t r = (sdword_t) result;
+    if (r != _ERESTART && r != _ERESTART_NOHAND) {
+        if (current != NULL)
+            current->restart_nohand_pending = false;
+        return false;
+    }
+    // Remember which flavour, for the handler-setup path: an _ERESTART_NOHAND
+    // restart is cancelled by a handler running before the syscall re-executes
+    // (Linux's ERESTARTNOHAND), an _ERESTART one is not. Recorded here because
+    // this predicate is checked immediately before every PC rewind.
+    if (current != NULL)
+        current->restart_nohand_pending = (r == _ERESTART_NOHAND);
+    return true;
+}
+
+// Undo prepare_syscall_restart: step the PC forward over the syscall
+// instruction again and hand the guest EINTR instead. Linux does exactly this
+// in handle_signal() when the pending restart is an ERESTARTNOHAND one and a
+// handler is about to run.
+void cancel_syscall_restart(void) {
+    struct cpu_state *cpu = &current->cpu;
+    switch (current->abi) {
+        case GUEST_ABI_AMD64:
+            cpu->amd64_rip += 2;
+            cpu->eip = (dword_t) cpu->amd64_rip;
+            cpu->amd64_regs[amd64_rax] = (qword_t) (sqword_t) _EINTR;
+            cpu->eax = (dword_t) _EINTR;
+            break;
+        case GUEST_ABI_ARM64:
+            cpu->arm64_pc += 4;
+            cpu->arm64_regs[arm64_x0] = (qword_t) (sqword_t) _EINTR;
+            break;
+        case GUEST_ABI_RISCV64:
+            cpu->riscv64_pc += 4;
+            cpu->riscv64_regs[riscv64_a0] = (qword_t) (sqword_t) _EINTR;
+            break;
+        case GUEST_ABI_I386:
+        default:
+            cpu->eip += 2;
+            cpu->eax = (dword_t) _EINTR;
+            break;
+    }
 }
 
 static sdword_t syscall_result_errno(dword_t result) {

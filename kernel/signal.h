@@ -195,6 +195,7 @@ void send_signal(struct task *task, int sig, struct siginfo_ info);
 void deliver_signal(struct task *task, int sig, struct siginfo_ info);
 // true when the next unblocked pending signal would run a handler with SA_RESTART
 bool signal_should_restart_syscall(void);
+bool signal_should_restart_syscall_nohand(void);
 
 // Turn a wait's _EINTR into _ERESTART when the handler that interrupted it was
 // installed with SA_RESTART, so the dispatcher re-executes the syscall and the
@@ -211,6 +212,15 @@ bool signal_should_restart_syscall(void);
 static inline int_t signal_restart_or_eintr(int_t res) {
     if (res == _EINTR && signal_should_restart_syscall())
         return _ERESTART;
+    return res;
+}
+
+// The ERESTARTNOHAND form, for signal(7)'s never-restarted interfaces: a
+// running handler still gives the guest its EINTR, but a job-control stop
+// resumes the syscall transparently, exactly as Linux does.
+static inline int_t signal_restart_or_eintr_nohand(int_t res) {
+    if (res == _EINTR && signal_should_restart_syscall_nohand())
+        return _ERESTART_NOHAND;
     return res;
 }
 // send a signal to current if it's not blocked or ignored, return whether that worked

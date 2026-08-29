@@ -169,7 +169,9 @@ sqword_t native_syscall_args(unsigned num, const qword_t args[6]) {
         // _ERESTART is the kernel asking for the instruction to be re-executed
         // after a signal. A guest gets its PC rewound; a native caller just
         // issues the call again, which is the same thing one level up.
-        if (result != _ERESTART)
+        // Both restart flavours mean "issue it again"; a native caller has no
+        // PC to rewind, so the NOHAND cancellation has nothing to undo.
+        if (result != _ERESTART && result != _ERESTART_NOHAND)
             return result;
     }
 }
