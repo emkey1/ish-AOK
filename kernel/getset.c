@@ -238,7 +238,23 @@ int_t sys_getresuid_guest(guest_addr_t ruid_addr, guest_addr_t euid_addr, guest_
 }
 
 int_t sys_setreuid(uid_t_ ruid, uid_t_ euid) {
-    return sys_setresuid(ruid, euid, -1);
+    // setreuid(2): "If the real user ID is set, or the effective user ID is
+    // set to a value not equal to the previous real user ID, the saved
+    // set-user-ID will be set to the new effective user ID."
+    //
+    // Passing -1 left the saved id at its OLD value, so a process that dropped
+    // privilege with setreuid(1000, 1000) kept suid 0 and could call setuid(0)
+    // to become root again. Making the drop permanent is the entire reason to
+    // call setreuid, so this was worth more than its severity suggests.
+    //
+    // The computed saved value is always the NEW euid, which sys_setresuid's
+    // own euid check has already validated, so passing it explicitly cannot
+    // turn a permitted call into EPERM.
+    uid_t_ new_euid = (euid == (uid_t_) -1) ? current->euid : euid;
+    uid_t_ suid = (uid_t_) -1;
+    if (ruid != (uid_t_) -1 || new_euid != current->uid)
+        suid = new_euid;
+    return sys_setresuid(ruid, euid, suid);
 }
 
 uid_t_ sys_setfsuid(uid_t_ uid) {
@@ -330,7 +346,12 @@ int_t sys_getresgid_guest(guest_addr_t rgid_addr, guest_addr_t egid_addr, guest_
 }
 
 int_t sys_setregid(uid_t_ rgid, uid_t_ egid) {
-    return sys_setresgid(rgid, egid, -1);
+    // The gid half of the same rule; see sys_setreuid.
+    uid_t_ new_egid = (egid == (uid_t_) -1) ? current->egid : egid;
+    uid_t_ sgid = (uid_t_) -1;
+    if (rgid != (uid_t_) -1 || new_egid != current->gid)
+        sgid = new_egid;
+    return sys_setresgid(rgid, egid, sgid);
 }
 
 uid_t_ sys_setfsgid(uid_t_ gid) {

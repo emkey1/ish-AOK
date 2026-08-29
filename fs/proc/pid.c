@@ -408,6 +408,13 @@ static int proc_pid_auxv_show(struct proc_entry *entry, struct proc_data *buf) {
         proc_put_task(task);
         return _ESRCH;
     }
+    // Same credential rule as /proc/<pid>/mem: this is the target's address
+    // space by another name. environ in particular carries whatever secrets a
+    // process was started with.
+    if (!current_may_access_task_mem(task)) {
+        proc_put_task(task);
+        return _EACCES;
+    }
     // task is ref-pinned by proc_get_task() above and dropped by proc_put_task() below
     int err = 0;
     struct mm *mm = NULL;
@@ -502,6 +509,13 @@ static int proc_pid_environ_show(struct proc_entry *entry, struct proc_data *buf
     if ((task == NULL) || (task->exiting == true)) {
         proc_put_task(task);
         return _ESRCH;
+    }
+    // Same credential rule as /proc/<pid>/mem: this is the target's address
+    // space by another name. environ in particular carries whatever secrets a
+    // process was started with.
+    if (!current_may_access_task_mem(task)) {
+        proc_put_task(task);
+        return _EACCES;
     }
 
     int err = 0;
@@ -1434,12 +1448,14 @@ static int proc_pid_root_readlink(struct proc_entry *entry, char *buf) {
 }
 
 struct proc_children proc_pid_children = PROC_CHILDREN({
-    {"auxv", .show = proc_pid_auxv_show},
+    // 0400 like Linux, not the 0444 default.
+    {"auxv", S_IFREG | 0400, .show = proc_pid_auxv_show},
     {"cgroup", .show = proc_pid_cgroup_show},
     {"cmdline", .show = proc_pid_cmdline_show},
     {"comm", .show = proc_pid_comm_show},
     {"cwd", S_IFLNK, .readlink = proc_pid_cwd_readlink},
-    {"environ", .show = proc_pid_environ_show},
+    // 0400 like Linux, not the 0444 default.
+    {"environ", S_IFREG | 0400, .show = proc_pid_environ_show},
     {"exe", S_IFLNK, .readlink = proc_pid_exe_readlink},
     {"fd", S_IFDIR, .readdir = proc_pid_fd_readdir},
     {"fdinfo", S_IFDIR, .readdir = proc_pid_fdinfo_readdir},

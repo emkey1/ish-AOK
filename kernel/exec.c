@@ -1275,8 +1275,21 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     current->exec_auxv_egid = (stat.mode & S_ISGID) ? stat.gid : current->egid;
 
     err = format_exec(fd, file, argv, envp);
-    if (err == _ENOEXEC)
+    if (err == _ENOEXEC) {
+        // Linux ignores set-id bits on a #! script -- the interpreter runs
+        // with the caller's credentials. We were applying the SCRIPT's bits in
+        // the credential change below, so a root-owned mode-4755 script with a
+        // cooperative interpreter handed any local user a root shell.
+        //
+        // Clear them before shebang_exec, which builds the interpreter's aux
+        // vector from the staged values above, so the interpreter is neither
+        // marked secure-execution nor given the script's owner as its euid.
+        stat.mode &= ~(mode_t_) (S_ISUID | S_ISGID);
+        current->exec_secure = false;
+        current->exec_auxv_euid = current->euid;
+        current->exec_auxv_egid = current->egid;
         err = shebang_exec(fd, file, argv, envp);
+    }
     fd_close(fd);
     if (err < 0) {
         amd64_trace_exec_loader_failure("do-execve", file, current->abi, NULL, 0, NULL, err, NULL);
