@@ -167,9 +167,14 @@ struct task {
     // via the struct copy, like the other sets.
     dword_t cap_ambient[2];
     bool keepcaps;
-#define MAX_GROUPS 32
+// Linux's NGROUPS_MAX. The array is heap-allocated because an inline one of
+// this size would be 256KB in every task struct; it is NULL when ngroups is 0.
+// OWNED, and `*task = *parent` in task_create_ is a shallow copy, so it is
+// duplicated there and freed in task_free_final -- see the long comment beside
+// native_env there for what aliasing an owned pointer across fork costs.
+#define MAX_GROUPS 65536
     unsigned ngroups;
-    uid_t_ groups[MAX_GROUPS];
+    uid_t_ *groups;
     char comm[16] __strncpy_safe; // locked by general_lock
     bool did_exec; // for that one annoying setsid edge case
 

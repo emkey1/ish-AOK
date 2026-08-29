@@ -5972,7 +5972,12 @@ static int_t sys_setsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
 
     int real_opt = sock_opt_to_real(option, level);
     if (real_opt < 0)
-        return sockopt_is_linux_soft_unsupported(level, option) ? _ENOPROTOOPT : _EINVAL;
+        // Linux reports an option the level does not recognise as
+        // ENOPROTOOPT; EINVAL is for a malformed argument. Probing code
+        // treats ENOPROTOOPT as "not available, carry on" and EINVAL as a
+        // hard error, so the distinction is load-bearing. (The soft-unsupported
+        // list this replaces was the same fix applied one option at a time.)
+        return _ENOPROTOOPT;
     int real_level = sock_level_to_real(level);
     if (real_level < 0)
         return _EINVAL;
@@ -6007,7 +6012,11 @@ static void sockopt_store_value(void *dst, dword_t dst_len, dword_t *result_len,
     size_t copy_len = dst_len < src_len ? dst_len : src_len;
     if (copy_len != 0)
         memcpy(dst, src, copy_len);
-    *result_len = src_len;
+    // Linux clamps the option's natural size to the caller's buffer and writes
+    // THAT back through optlen -- a short buffer truncates silently, it is not
+    // an error. Reporting the natural size instead told the caller more bytes
+    // had been written than the buffer could hold.
+    *result_len = (dword_t) copy_len;
 }
 
 static bool sockopt_is_linux_soft_unsupported(dword_t level, dword_t option) {
@@ -6259,7 +6268,12 @@ static int_t sys_getsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
     } else {
         int real_opt = sock_opt_to_real(option, level);
         if (real_opt < 0)
-            return sockopt_is_linux_soft_unsupported(level, option) ? _ENOPROTOOPT : _EINVAL;
+            // Linux reports an option the level does not recognise as
+        // ENOPROTOOPT; EINVAL is for a malformed argument. Probing code
+        // treats ENOPROTOOPT as "not available, carry on" and EINVAL as a
+        // hard error, so the distinction is load-bearing. (The soft-unsupported
+        // list this replaces was the same fix applied one option at a time.)
+        return _ENOPROTOOPT;
         int real_level = sock_level_to_real(level);
         if (real_level < 0)
             return _EINVAL;

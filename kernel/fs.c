@@ -360,14 +360,27 @@ static void apply_umask(mode_t_ *mode) {
 static bool current_in_group(uid_t_ gid) {
     if (current->fsgid == gid)
         return true;
-    for (unsigned i = 0; i < current->ngroups && i < MAX_GROUPS; i++)
+    for (unsigned i = 0; current->groups != NULL && i < current->ngroups; i++)
         if (current->groups[i] == gid)
             return true;
     return false;
 }
 
 int access_check(struct statbuf *stat, int check) {
-    if (superuser()) return 0;
+    if (superuser()) {
+        // Linux's generic_permission(): CAP_DAC_OVERRIDE does not conjure
+        // execute permission out of nothing. Root may read or write anything,
+        // but X_OK on a regular file still needs at least one execute bit --
+        // otherwise every file in the tree looks executable to root, and
+        // `test -x`, configure scripts and PATH searches all believe it.
+        // Directories are exempt: search permission is always root's.
+        // exec() enforces the same rule separately (kernel/exec.c), which is
+        // why this gap showed up in access(2) rather than as a way to run
+        // non-executable files.
+        if ((check & AC_X) && !S_ISDIR(stat->mode) && !(stat->mode & 0111))
+            return _EACCES;
+        return 0;
+    }
     if (check == 0) return 0;
     // Align check with the correct bits in mode
     if (current->fsuid == stat->uid) {
@@ -2085,7 +2098,36 @@ dword_t sys_flock(fd_t f, dword_t operation) {
     return (dword_t) signal_restart_or_eintr((int_t) err);   // SA_RESTART
 }
 
+// The two sentinels utimensat(2) puts in tv_nsec. Nothing below this function
+// understands them, so they have to be resolved here: passed through, the
+// sentinel is written as a literal nanosecond count, and UTIME_OMIT -- whose
+// whole job is to leave a timestamp alone -- instead set it to 1970-01-01
+// 00:00:01 (1073741822ns carried into 1s). That is what `touch -m`, `cp -p`,
+// tar and rsync all use to preserve the timestamp they are not setting.
+#define UTIME_NOW_  0x3fffffff
+#define UTIME_OMIT_ 0x3ffffffe
+
+static bool utime_nsec_valid(struct timespec ts) {
+    return ts.tv_nsec == UTIME_NOW_ || ts.tv_nsec == UTIME_OMIT_ ||
+        (ts.tv_nsec >= 0 && ts.tv_nsec < 1000000000L);
+}
+
 static dword_t sys_utime_common(fd_t at_f, guest_addr_t path_addr, struct timespec atime, struct timespec mtime, dword_t flags) {
+    // Linux's do_utimensat validates before touching anything: only
+    // AT_SYMLINK_NOFOLLOW is a legal flag, and each tv_nsec must be in range
+    // or one of the two sentinels. The older utime/utimes/futimesat entry
+    // points all pass flags == 0 and microsecond-derived nanoseconds, so this
+    // is a no-op for them.
+    if (flags & ~(dword_t) AT_SYMLINK_NOFOLLOW_)
+        return _EINVAL;
+    if (!utime_nsec_valid(atime) || !utime_nsec_valid(mtime))
+        return _EINVAL;
+    bool omit_atime = atime.tv_nsec == UTIME_OMIT_;
+    bool omit_mtime = mtime.tv_nsec == UTIME_OMIT_;
+    if (atime.tv_nsec == UTIME_NOW_)
+        atime = timespec_now(CLOCK_REALTIME);
+    if (mtime.tv_nsec == UTIME_NOW_)
+        mtime = timespec_now(CLOCK_REALTIME);
     char path[MAX_PATH];
     if (path_addr != 0) {
         int path_err = user_read_path(path_addr, path, sizeof(path));
@@ -2099,6 +2141,32 @@ static dword_t sys_utime_common(fd_t at_f, guest_addr_t path_addr, struct timesp
     struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
+
+    // Fill an omitted timestamp in from the file's current one. The mount ops
+    // below take both values or neither, so "leave this one alone" has to be
+    // expressed as "set it to what it already is". Not atomic the way Linux's
+    // single setattr is -- a concurrent write between the stat and the set
+    // would be overwritten -- but the alternative is threading an omit mask
+    // through every filesystem's utime op.
+    if (omit_atime || omit_mtime) {
+        struct statbuf cur = {};
+        int stat_err;
+        if (path_addr == 0)
+            stat_err = at == AT_PWD ? _EFAULT : generic_fstat(at, &cur);
+        else
+            stat_err = generic_statat(at, path, &cur,
+                    (flags & AT_SYMLINK_NOFOLLOW_) ? AT_SYMLINK_NOFOLLOW_ : 0);
+        if (stat_err < 0)
+            return stat_err;
+        if (omit_atime)
+            atime = (struct timespec) { .tv_sec = cur.atime, .tv_nsec = cur.atime_nsec };
+        if (omit_mtime)
+            mtime = (struct timespec) { .tv_sec = cur.mtime, .tv_nsec = cur.mtime_nsec };
+        // Both omitted is a legal call that changes nothing; Linux returns
+        // after the same permission check the stat above already did.
+        if (omit_atime && omit_mtime)
+            return 0;
+    }
 
     if (path_addr == 0) {
         // The futimens(fd) form: utimensat(fd, NULL, times, 0). Linux does no

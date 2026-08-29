@@ -481,6 +481,22 @@ struct task *task_create_(struct task *parent) {
     // program asking before then gets an empty vector from native_env_slot.
     task->native_env = NULL;
     task->native_exec = NULL;
+    // Supplementary groups ARE inherited across fork (unlike the two above),
+    // so this one is duplicated rather than dropped -- but duplicated it must
+    // be, for the same shallow-copy reason.
+    if (task->ngroups != 0 && task->groups != NULL) {
+        size_t bytes = (size_t) task->ngroups * sizeof(uid_t_);
+        uid_t_ *copy = malloc(bytes);
+        if (copy == NULL) {
+            free(task);
+            return NULL;
+        }
+        memcpy(copy, task->groups, bytes);
+        task->groups = copy;
+    } else {
+        task->groups = NULL;
+        task->ngroups = 0;
+    }
     // The shim's signal bookkeeping describes the native program running in
     // the PARENT; a fresh task has none until it becomes one.
     task->native_prog_blocked = 0;
@@ -575,6 +591,8 @@ static void task_free_final(struct task *task) {
         free(task->group);
         task->group = NULL;
     }
+    free(task->groups);
+    task->groups = NULL;
     free(task);
 }
 

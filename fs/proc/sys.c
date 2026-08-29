@@ -362,9 +362,19 @@ static int sys_show_kernel_threads_max(struct proc_entry *UNUSED(entry), struct 
     return 0;
 }
 
+static int sys_show_kernel_ngroups_max(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    // The real ceiling setgroups() enforces (kernel/task.h), not a number
+    // chosen to look like Linux's. glibc reads this file for
+    // sysconf(_SC_NGROUPS_MAX); musl answers from its own constant and never
+    // asks, which is why the guest may still report 32.
+    proc_printf(buf, "%d\n", MAX_GROUPS);
+    return 0;
+}
+
 struct proc_dir_entry proc_sys_kernel[] = {
     {"cap_last_cap", .show = sys_show_kernel_cap_last_cap},
     {"hostname", .show = sys_show_net_unix_hostname},
+    {"ngroups_max", .show = sys_show_kernel_ngroups_max},
     {"osrelease", .show = sys_show_kernel_osrelease},
     {"pid_max", S_IFREG | 0644, .show = sys_show_kernel_pid_max},
     {"random", S_IFDIR, .readdir = proc_sys_kernel_random_readdir},

@@ -391,10 +391,22 @@ int_t sys_setgroups_guest(dword_t size, guest_addr_t list) {
         return _EPERM;
     if (size > MAX_GROUPS)
         return _EINVAL;
-    if (user_read(list, current->groups, size * sizeof(uid_t_)))
-        return _EFAULT;
+    // Built to the side and swapped in, so a faulting list leaves the current
+    // group set intact rather than half-overwritten.
+    uid_t_ *groups = NULL;
+    if (size != 0) {
+        groups = malloc((size_t) size * sizeof(uid_t_));
+        if (groups == NULL)
+            return _ENOMEM;
+        if (user_read(list, groups, (size_t) size * sizeof(uid_t_))) {
+            free(groups);
+            return _EFAULT;
+        }
+    }
     for (unsigned i = 0; i < size; i++)
-        STRACE(" %d", current->groups[i]);
+        STRACE(" %d", groups[i]);
+    free(current->groups);
+    current->groups = groups;
     current->ngroups = size;
     return 0;
 }
