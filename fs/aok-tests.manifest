@@ -132,6 +132,8 @@ inotify_events.c
 posix_timer_exec.c
 sock_options.c
 ptrace_attach.c
+inet_nat_bind.c
+signal_process_target.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c
 timerfd_settime_readiness.c

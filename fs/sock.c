@@ -4086,6 +4086,7 @@ struct inet_nat_entry {
     uint16_t guest_port;   // network byte order
     uint16_t host_port;    // network byte order
     int type;              // SOCK_STREAM_ / SOCK_DGRAM_
+    bool reuseport;        // owner had SO_REUSEPORT set at bind time
     struct fd *owner;
 };
 
@@ -4094,6 +4095,42 @@ static struct list inet_nat_table = LIST_INITIALIZER(inet_nat_table);
 
 static bool inet_addr_is_loopback(uint32_t addr_be) {
     return (ntohl(addr_be) >> 24) == 127;
+}
+
+// Does this guest endpoint collide with one already NAT'd? The host cannot
+// answer that for us: every NAT'd bind lands on 127.0.0.1:<ephemeral>, a
+// different port each time, so two guests asking for the SAME 127.x alias and
+// port both succeed at the host and each believes it owns the endpoint --
+// while only one of them can ever be reached. Linux says EADDRINUSE.
+//
+// Same overlap rule as an ordinary bind: identical address and port collide,
+// and a wildcard collides with any specific address on that port. Port 0 is
+// an ephemeral request and never collides. Two sockets that both asked for
+// SO_REUSEPORT may share, as they may on Linux.
+//
+// Caller must NOT hold inet_nat_lock.
+static bool inet_nat_endpoint_taken(uint32_t guest_addr, uint16_t guest_port,
+        int type, bool reuseport) {
+    if (guest_port == 0)
+        return false;
+    bool taken = false;
+    lock(&inet_nat_lock, 0);
+    struct inet_nat_entry *entry;
+    list_for_each_entry(&inet_nat_table, entry, list) {
+        if (entry->guest_port != guest_port || entry->type != type)
+            continue;
+        bool same_addr = entry->guest_addr == guest_addr;
+        bool wildcard = entry->guest_addr == htonl(INADDR_ANY) ||
+                        guest_addr == htonl(INADDR_ANY);
+        if (!same_addr && !wildcard)
+            continue;
+        if (reuseport && entry->reuseport)
+            continue;
+        taken = true;
+        break;
+    }
+    unlock(&inet_nat_lock);
+    return taken;
 }
 
 // Try to recover a failed AF_INET bind by re-binding to
@@ -4110,6 +4147,12 @@ static int inet_nat_bind_fallback(struct fd *sock, struct sockaddr_in *sin, int 
 
     uint32_t guest_addr = sin->sin_addr.s_addr;
     uint16_t guest_port = sin->sin_port;
+
+    // Checked before the host bind, so a rejected duplicate leaves the socket
+    // exactly as it was rather than bound to a stray ephemeral port.
+    bool reuseport = sock->socket.reuseport;
+    if (inet_nat_endpoint_taken(guest_addr, guest_port, sock->socket.type, reuseport))
+        return _EADDRINUSE;
 
     struct sockaddr_in host_sin = *sin;
     if (loopback)
@@ -4128,6 +4171,7 @@ static int inet_nat_bind_fallback(struct fd *sock, struct sockaddr_in *sin, int 
     entry->guest_port = guest_port;
     entry->host_port = host_sin.sin_port;
     entry->type = sock->socket.type;
+    entry->reuseport = reuseport;
     entry->owner = sock;
     lock(&inet_nat_lock, 0);
     list_add_tail(&inet_nat_table, &entry->list);
