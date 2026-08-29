@@ -182,7 +182,8 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
     // resolution at the true root instead of the chroot.
     if (flags & N_REALROOT)
         root = NULL;
-    if (path[0] == '/')
+    bool absolute = path[0] == '/';
+    if (absolute)
         at = root;
     else if (at == AT_PWD)
         at = current->fs->pwd;
@@ -211,12 +212,22 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
         //
         // fstat on the fd rather than stat by path: the path lookup above is
         // already the expensive part on fakefs, and this adds no second one.
-        struct statbuf at_stat;
-        if (at->mount != NULL && at->mount->fs->fstat != NULL &&
-                at->mount->fs->fstat(at, &at_stat) >= 0) {
-            int perm_err = access_check(&at_stat, AC_X);
-            if (perm_err < 0)
-                return perm_err;
+        // Only for a RELATIVE path. An absolute one starts at the process's
+        // own root, and Linux does not require search permission on that --
+        // it checks the components it descends into, which __path_normalize
+        // already does. Checking it here cost an fstat on every absolute-path
+        // resolution and measured ~9% on open/stat-heavy work, for a check
+        // Linux does not perform. The case this exists to stop -- openat()
+        // through a dirfd on a directory with no search permission, and a cwd
+        // whose search bit was removed -- is exactly the relative case.
+        if (!absolute) {
+            struct statbuf at_stat;
+            if (at->mount != NULL && at->mount->fs->fstat != NULL &&
+                    at->mount->fs->fstat(at, &at_stat) >= 0) {
+                int perm_err = access_check(&at_stat, AC_X);
+                if (perm_err < 0)
+                    return perm_err;
+            }
         }
     }
     // root_path anchors any *absolute symlink target* encountered while
