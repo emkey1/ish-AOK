@@ -1831,6 +1831,12 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
 
         case SIGNAL_KILL:
             unlock(&sighand->lock); // do_exit must be called without this lock
+            // execve asked for THIS thread to go, not the whole group -- see
+            // exit_requested in kernel/task.h. do_exit takes a non-leader
+            // thread off the group list and destroys it without touching the
+            // other threads or notifying the parent.
+            if (__atomic_load_n(&current->exit_requested, __ATOMIC_ACQUIRE))
+                do_exit(current, sig);
             do_exit_group(sig);
     }
 

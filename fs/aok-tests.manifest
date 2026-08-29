@@ -134,6 +134,7 @@ sock_options.c
 ptrace_attach.c
 inet_nat_bind.c
 signal_process_target.c
+exec_de_thread.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c
 timerfd_settime_readiness.c

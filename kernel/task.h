@@ -312,6 +312,20 @@ struct task {
     // so a handler about to run must cancel the restart. Set by the dispatcher
     // at rewind time, consumed by receive_signal.
     bool restart_nohand_pending;
+
+    // Set on the OTHER threads of a group by execve, which must leave exactly
+    // one thread standing (Linux's de_thread). It cannot be expressed with an
+    // ordinary SIGKILL: receive_signal routes SIGKILL to do_exit_group, which
+    // would take down the exec'ing thread too. So the signal is still what
+    // wakes and reaches the thread -- all of that machinery is reused -- and
+    // this flag only changes the disposition, from "kill the group" to "exit
+    // just me". Read in kernel/signal.c's SIGNAL_KILL case.
+    bool exit_requested;
+    // Set by do_exit as its very last act, so another thread can tell "this
+    // task has left the group list" (which happens partway through do_exit)
+    // from "this task is finished with its own struct". execve's de_thread
+    // needs the second before it can release the old group leader.
+    _Atomic bool exit_finished;
     // Linux's restart_block, in the two places AOK needs it: a timed wait
     // restarted after a job-control stop -- poll/select/epoll_wait, or
     // nanosleep -- must resume the deadline it already had, not start its

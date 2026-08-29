@@ -458,6 +458,8 @@ struct task *task_create_(struct task *parent) {
     task->exit_code = 0;
     task->zombie = false;
     task->exiting = false;
+    task->exit_requested = false;
+    task->exit_finished = false;
     task->io_block = false;
     task->vfork = NULL;
     task->exit_signal = 0;

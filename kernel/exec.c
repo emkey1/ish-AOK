@@ -497,6 +497,215 @@ static bool i386_force_safe_exec_comm(const char *comm) {
         strcmp(comm, "pkcsslotd") == 0;
 }
 
+// Linux's de_thread: an execve leaves exactly one thread standing, and the
+// thread that called it becomes the group leader.
+//
+// AOK used to do neither. Every other thread kept running -- three tasks where
+// Linux has one, each still executing the OLD program, since exec here swaps
+// only the calling task's mm and the siblings hold the previous address space
+// alive by reference. And a non-leader exec left the process with
+// getpid() != gettid() forever, a state Linux only ever shows for a thread
+// that is not the leader, and the standard way a program asks "am I the main
+// thread". The new image is single-threaded, so the answer has to be yes.
+//
+// Two AOK specifics shape this:
+//
+//   - SIGKILL cannot express "just this thread": receive_signal routes
+//     SIGNAL_KILL to do_exit_group, which would kill the exec'ing thread too.
+//     So the signal still does the waking and reaching -- that machinery is
+//     subtle and worth reusing -- and task->exit_requested changes only what
+//     it does on arrival.
+//
+//   - A thread here is a child of its CREATOR, not of the leader's parent as
+//     in Linux (kernel/fork.c re-links only for CLONE_PARENT). So when the old
+//     leader exits, find_new_parent hands its children to the first live
+//     thread in the group -- which is us -- and the exec'ing thread ends up
+//     its own parent. The real parent then has no such child at all and its
+//     wait() returns ECHILD. Hence the family-tree fixup below, which has no
+//     counterpart in Linux's de_thread.
+static void exec_de_thread(void) {
+    struct tgroup *group = current->group;
+    struct task *task;
+
+    // Captured before anything is torn down: the old leader's identity is what
+    // this thread is about to inherit, and its parent must be read while the
+    // process tree is still intact.
+    struct task *leader = group->leader;
+    bool taking_over = leader != NULL && leader != current;
+    struct task *inherit_parent = NULL;
+    int inherit_exit_signal = 0;
+    if (taking_over) {
+        complex_lockt(&pids_lock, 0);
+        inherit_parent = leader->parent;
+        inherit_exit_signal = leader->exit_signal;
+        if (inherit_parent != NULL)
+            task_ref_cnt_mod(inherit_parent, 1);
+        unlock(&pids_lock);
+    }
+
+    struct zap_target {
+        struct task *task;
+        struct sighand *sighand;
+    };
+    struct zap_target stack_targets[32];
+    struct zap_target *targets = stack_targets;
+    size_t target_cap = sizeof(stack_targets) / sizeof(stack_targets[0]);
+    size_t target_count = 0;
+    bool zapped_any = false;
+
+    while (true) {
+        complex_lockt(&pids_lock, 0);
+        lock(&group->lock, 0);
+
+        size_t needed = 0;
+        list_for_each_entry(&group->threads, task, group_links) {
+            if (task != current)
+                needed++;
+        }
+        if (needed == 0) {
+            unlock(&group->lock);
+            unlock(&pids_lock);
+            break;
+        }
+        if (needed > target_cap) {
+            unlock(&group->lock);
+            unlock(&pids_lock);
+            if (targets != stack_targets)
+                free(targets);
+            targets = malloc(sizeof(*targets) * needed);
+            if (targets == NULL)
+                die("out of memory collecting exec zap targets");
+            target_cap = needed;
+            continue;
+        }
+
+        target_count = 0;
+        list_for_each_entry(&group->threads, task, group_links) {
+            if (task == current)
+                continue;
+            task_ref_cnt_mod(task, 1);
+            __atomic_store_n(&task->exit_requested, true, __ATOMIC_RELEASE);
+            targets[target_count].task = task;
+            targets[target_count].sighand = task->sighand;
+            if (targets[target_count].sighand != NULL)
+                sighand_retain(targets[target_count].sighand);
+            target_count++;
+        }
+        // A group-stopped sibling is parked in the job-control wait with
+        // nothing left to wake it; clear the stop so they can all run to their
+        // exits.
+        group->stopped = false;
+        unlock(&group->lock);
+        unlock(&pids_lock);
+        zapped_any = true;
+        break;
+    }
+
+    if (zapped_any) {
+        notify(&group->stopped_cond);
+        for (size_t i = 0; i < target_count; i++) {
+            if (targets[i].sighand != NULL) {
+                deliver_signal_with_sighand(targets[i].task, targets[i].sighand,
+                        SIGKILL_, SIGINFO_NIL);
+                sighand_release(targets[i].sighand);
+            }
+            task_ref_cnt_mod(targets[i].task, -1);
+        }
+    }
+    if (targets != stack_targets)
+        free(targets);
+
+    // Wait for them to leave the group. do_exit unlinks a thread from
+    // group->threads partway through, so this is the honest "am I alone yet"
+    // test; the ceiling keeps a sibling wedged somewhere a signal cannot reach
+    // from hanging the exec forever.
+    struct timespec zap_pause = { .tv_sec = 0, .tv_nsec = 200000 };  // 200us
+    bool alone = false;
+    for (int i = 0; i < 50000 && !alone; i++) {                      // ~10s
+        complex_lockt(&pids_lock, 0);
+        lock(&group->lock, 0);
+        size_t others = 0;
+        list_for_each_entry(&group->threads, task, group_links) {
+            if (task != current)
+                others++;
+        }
+        unlock(&group->lock);
+        unlock(&pids_lock);
+        if (others == 0)
+            alone = true;
+        else
+            nanosleep(&zap_pause, NULL);
+    }
+    if (!alone)
+        printk("WARNING: execve gave up waiting for sibling threads to exit "
+               "(pid=%d comm=%s); continuing anyway\n", current->pid, current->comm);
+
+    if (!taking_over || !alone) {
+        if (inherit_parent != NULL)
+            task_ref_cnt_mod(inherit_parent, -1);
+        return;
+    }
+
+    // do_exit drops out of group->threads partway through and keeps working on
+    // its own struct afterwards; releasing it before it is finished would be a
+    // use-after-free. Wait for the marker it sets last.
+    for (int i = 0; i < 50000; i++) {
+        if (atomic_load_explicit(&leader->exit_finished, memory_order_acquire))
+            break;
+        nanosleep(&zap_pause, NULL);
+    }
+    if (!atomic_load_explicit(&leader->exit_finished, memory_order_acquire)) {
+        printk("WARNING: execve could not retire the old thread-group leader "
+               "(pid=%d comm=%s); keeping pid %d\n", current->pid, current->comm, current->pid);
+        if (inherit_parent != NULL)
+            task_ref_cnt_mod(inherit_parent, -1);
+        return;
+    }
+
+    complex_lockt(&pids_lock, 0);
+    // Give up the tid we were allocated as a thread...
+    struct pid *own = pid_get(current->pid);
+    if (own != NULL && own->task == current) {
+        own->task = NULL;
+        list_remove(&own->alive);
+    }
+    // ...and take the leader's, which is this process's pid. Session and
+    // process-group membership hang off struct pid, so they travel with it.
+    struct pid *lead_pid = pid_get(leader->pid);
+    if (lead_pid != NULL)
+        lead_pid->task = current;
+    current->pid = leader->pid;
+    // A thread has no exit signal; the process it now is does.
+    current->exit_signal = inherit_exit_signal;
+    // Before the release below, so task_free_final does not mistake the old
+    // leader for the current one and free the tgroup out from under us.
+    group->leader = current;
+
+    // Take the leader's place in the process tree. Without this the exec'ing
+    // thread stays parented to itself (see the comment above) and its real
+    // parent's wait() reports ECHILD.
+    struct task *new_parent = inherit_parent;
+    if (new_parent == NULL || new_parent == current || new_parent->exiting)
+        new_parent = pid_get_task(1);
+    if (new_parent != NULL && new_parent != current) {
+        list_remove(&current->siblings);
+        list_add(&new_parent->children, &current->siblings);
+        current->parent = new_parent;
+    }
+
+    // The old leader is nobody's child now, and owns no pid.
+    list_remove(&leader->siblings);
+    list_remove_safe(&leader->ptrace_siblings);
+    leader->pid = 0;
+    unlock(&pids_lock);
+
+    if (inherit_parent != NULL)
+        task_ref_cnt_mod(inherit_parent, -1);
+
+    // Defers by itself if anything still holds a reference.
+    task_destroy_unlinked(leader, 2);
+}
+
 static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
     intptr_t err = 0;
     struct task *save = current;
@@ -570,6 +779,11 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         err = _ENOMEM;
         goto out_free_interp;
     }
+
+    // Every other thread in the group dies here and this thread takes over
+    // the leader's identity, before anything becomes irreversible -- the
+    // same place Linux runs de_thread.
+    exec_de_thread();
 
     // free the process's memory.
     // from this point on, if any error occurs the process will have to be
