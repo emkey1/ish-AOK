@@ -1172,6 +1172,35 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
 // less -- the write end survived an exec that never closed it, so apt sat on a
 // four-byte read while the pager sat on the stdin apt had not begun writing.
 // Neither could move. See docs/TODO.md.
+// POSIX timers (timer_create) do not survive execve on Linux: the new image
+// gets none. AOK kept them armed on the tgroup, which outlives the exec, so a
+// timer set before the exec fired into a program that never created it -- with
+// the old image's signal number and, for SIGALRM's default action, killing it
+// outright. fork() already clears them (kernel/fork.c); this is the other half.
+//
+// Freed rather than merely forgotten, since the tgroup lives on. Clearing
+// tgroup before timer_free mirrors kernel/exit.c: posix_timer_callback bails on
+// a NULL tgroup, and timer_free does not wait for a callback already in flight.
+static void exec_discard_posix_timers(void) {
+    struct tgroup *group = current->group;
+    if (group == NULL)
+        return;
+    lock(&group->lock, 0);
+    for (int i = 0; i < TIMERS_MAX; i++) {
+        struct posix_timer *pt = &group->posix_timers[i];
+        if (pt->timer == NULL)
+            continue;
+        struct timer *timer = pt->timer;
+        pt->tgroup = NULL;
+        pt->timer = NULL;
+        pt->timer_id = 0;
+        unlock(&group->lock);
+        timer_free(timer);
+        lock(&group->lock, 0);
+    }
+    unlock(&group->lock);
+}
+
 static void exec_apply_native_process_state(void) {
     // cloexec: the trigger above, and the reason this function exists.
     fdtable_do_cloexec(current->files);
@@ -1193,6 +1222,7 @@ static void exec_apply_native_process_state(void) {
     // guest table (kernel/native_libc.c). Resetting one and not the other
     // would leave the two disagreeing.
     native_sigtable_discard(current);
+    exec_discard_posix_timers();
 
     current->did_exec = true;
     current->keepcaps = false;
@@ -1377,6 +1407,7 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     // image was a native program. A no-op for every other task, which never
     // allocates one.
     native_sigtable_discard(current);
+    exec_discard_posix_timers();
 
     current->did_exec = true;
     current->keepcaps = false;
