@@ -2,6 +2,7 @@
 #include "kernel/calls.h"
 #include "kernel/fs.h"
 #include "fs/inode.h"
+#include "kernel/signal.h"
 #include <string.h>
 
 static bool file_locks_overlap(struct file_lock *a, struct file_lock *b) {
@@ -287,7 +288,9 @@ int fcntl_setlk(struct fd *fd, struct flock_ *flock, bool blocking, bool ofd) {
     }
 out:
     unlock(&inode->lock);
-    return err;
+    // SA_RESTART: F_SETLKW is restartable (signal(7)). The non-blocking
+    // commands never wait, so there is nothing here for this to convert.
+    return signal_restart_or_eintr(err);
 }
 
 int flock_lock(struct fd *fd, int operation) {

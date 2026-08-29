@@ -2,6 +2,7 @@
 #define SIGNAL_H
 
 #include "misc.h"
+#include "kernel/errno.h"   // _EINTR/_ERESTART for signal_restart_or_eintr
 #include "util/list.h"
 #include "util/sync.h"
 #include <stdatomic.h>
@@ -194,6 +195,24 @@ void send_signal(struct task *task, int sig, struct siginfo_ info);
 void deliver_signal(struct task *task, int sig, struct siginfo_ info);
 // true when the next unblocked pending signal would run a handler with SA_RESTART
 bool signal_should_restart_syscall(void);
+
+// Turn a wait's _EINTR into _ERESTART when the handler that interrupted it was
+// installed with SA_RESTART, so the dispatcher re-executes the syscall and the
+// guest never sees the interruption. Call this from the syscall entry points
+// Linux restarts -- read/write family, ioctl, open, the blocking socket calls,
+// flock and F_SETLKW, wait.
+//
+// Do NOT call it from anything in signal(7)'s never-restarted list: poll,
+// select, epoll_wait, nanosleep, the sigwait family, System V IPC (msgrcv,
+// msgsnd, semop -- these use ERESTARTNOHAND, which a running handler cancels),
+// io_getevents, or a socket call with SO_RCVTIMEO/SO_SNDTIMEO set. Those must
+// keep returning _EINTR; restarting them hangs a guest that relies on the
+// interruption to make progress.
+static inline int_t signal_restart_or_eintr(int_t res) {
+    if (res == _EINTR && signal_should_restart_syscall())
+        return _ERESTART;
+    return res;
+}
 // send a signal to current if it's not blocked or ignored, return whether that worked
 // exists specifically for sending SIGTTIN/SIGTTOU
 bool try_self_signal(int sig);

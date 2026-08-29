@@ -2133,7 +2133,14 @@ static int socket_wait_ready(struct fd *sock, short events, struct socket_io_wai
         // purely spurious poke (a TLB-shootdown SIGUSR1, or a notify for a
         // signal this task has blocked) just re-enters the wait.
         if (socket_guest_signal_pending()) {
-            err = _EINTR;
+            // SA_RESTART: the blocking socket calls are restartable, EXCEPT
+            // when SO_RCVTIMEO/SO_SNDTIMEO is armed -- signal(7) puts a
+            // timed socket wait in the never-restarted list, because a
+            // restart would silently extend a timeout the guest asked for.
+            // A NULL `wait` is one of iSH's own internal handshakes, which
+            // has no guest syscall to restart.
+            err = (wait != NULL && !wait->has_deadline)
+                    ? signal_restart_or_eintr(_EINTR) : _EINTR;
             break;
         }
     }
@@ -4610,6 +4617,9 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
 
     char sockaddr[sockaddr_len];
     int client =0;
+    // Hoisted out of the wait block below: the SA_RESTART decision on the
+    // error path needs it (a timed accept is never restarted).
+    bool has_deadline = false;
     if (!sock->socket.listening) {
         // Not a listening socket: the host accept() fails immediately
         // (EINVAL/EOPNOTSUPP) and can never block, so take the direct path.
@@ -4652,7 +4662,7 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
         socklen_t rcvtimeo_len = sizeof(rcvtimeo);
         if (getsockopt(sock->real_fd, SOL_SOCKET, SO_RCVTIMEO, &rcvtimeo, &rcvtimeo_len) < 0)
             rcvtimeo = (struct timeval) {0, 0};
-        bool has_deadline = !guest_nonblock && (rcvtimeo.tv_sec != 0 || rcvtimeo.tv_usec != 0);
+        has_deadline = !guest_nonblock && (rcvtimeo.tv_sec != 0 || rcvtimeo.tv_usec != 0);
         struct timespec deadline;
         if (has_deadline) {
             deadline = timespec_now(CLOCK_MONOTONIC);
@@ -4809,8 +4819,14 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
         if (client < 0)
             errno = fail_errno;
     }
-    if (client < 0)
-        return errno_map();
+    if (client < 0) {
+        // SA_RESTART: accept() is restartable, but not with SO_RCVTIMEO armed
+        // (signal(7)) -- restarting would silently extend the guest's timeout.
+        int mapped = errno_map();
+        if (mapped == _EINTR && !has_deadline)
+            mapped = signal_restart_or_eintr(mapped);
+        return mapped;
+    }
 
     // BSD accepted sockets inherit O_NONBLOCK from the listener (which is
     // now kept permanently nonblocking above); Linux accepted sockets start

@@ -559,6 +559,10 @@ fd_t sys_openat_guest(fd_t at_f, guest_addr_t path_addr, dword_t flags, mode_t_ 
     TASK_MAY_BLOCK {
         fd = generic_openat(at, path, flags, mode);
     }
+    // SA_RESTART: open() is restartable, which matters for the one open that
+    // blocks -- a FIFO waiting to rendezvous with its opposite end.
+    if (IS_ERR(fd) && PTR_ERR(fd) == _EINTR && signal_should_restart_syscall())
+        fd = ERR_PTR(_ERESTART);
     if (IS_ERR(fd))
         goto out;
     fd_t installed = f_install(fd, flags);
@@ -1036,6 +1040,7 @@ static dword_t sys_write_common(fd_t fd_no, guest_addr_t buf_addr, dword_t size)
     TASK_MAY_BLOCK {
         res = sys_write_buf(fd_no, buf, size);
     }
+    res = (dword_t) signal_restart_or_eintr((int_t) res);
     amd64_tty_stdio_trace("write", fd_no, buf_addr, size, res, buf, res > 0 ? (size_t) res : size);
 out:
     if (buf != stack_buf) free(buf);
@@ -1094,6 +1099,7 @@ static dword_t sys_readv_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t iov
     TASK_MAY_BLOCK {
         res = sys_read_buf(fd_no, buf, io_size);
     }
+    res = signal_restart_or_eintr((int_t) res);
     if (res < 0)
         goto error;
 
@@ -1175,6 +1181,7 @@ static dword_t sys_writev_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t io
     TASK_MAY_BLOCK {
         res = sys_write_buf(fd_no, buf, offset);
     }
+    res = signal_restart_or_eintr((int_t) res);
     amd64_tty_stdio_trace("writev", fd_no, iovec_addr, (dword_t) offset, res, buf,
             res > 0 ? (size_t) res : offset);
 error:
@@ -2075,7 +2082,7 @@ dword_t sys_flock(fd_t f, dword_t operation) {
         err = fd->mount->fs->flock(fd, operation);
     }
     fd_close(fd);
-    return err;
+    return (dword_t) signal_restart_or_eintr((int_t) err);   // SA_RESTART
 }
 
 static dword_t sys_utime_common(fd_t at_f, guest_addr_t path_addr, struct timespec atime, struct timespec mtime, dword_t flags) {
