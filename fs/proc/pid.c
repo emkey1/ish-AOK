@@ -737,6 +737,22 @@ static int proc_pid_sched_show(struct proc_entry *entry, struct proc_data *buf) 
     return 0;
 }
 
+// Emit any lazy reservation starting before `limit`, keeping proc_maps_dump's
+// output in address order. See its caller for why reservations must appear.
+static void emit_pending_maps(struct proc_data *buf, struct mem_lazy_map *pending,
+                              unsigned pending_n, unsigned *pending_i, page_t limit) {
+    while (*pending_i < pending_n && pending[*pending_i].start < limit) {
+        struct mem_lazy_map *l = &pending[(*pending_i)++];
+        proc_printf(buf, "%08llx-%08llx %c%c%c%c 00000000 00:00 %-10d \n",
+                (unsigned long long) (l->start << PAGE_BITS),
+                (unsigned long long) (l->end << PAGE_BITS),
+                l->flags & P_READ ? 'r' : '-',
+                l->flags & P_WRITE ? 'w' : '-',
+                l->flags & P_EXEC ? 'x' : '-',
+                l->flags & P_SHARED ? '-' : 'p', 0);
+    }
+}
+
 void proc_maps_dump(struct task *task, struct proc_data *buf) {
     struct mm *mm = proc_task_mm_retain(task);
     struct mem *mem = mm ? &mm->mem : NULL;
@@ -744,6 +760,24 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
         return;
 
     mem_read_lock_quiesce_aware(mem);
+
+    // Lazy reservations have no page-table entries, so the walk below cannot
+    // see them -- but the guest has them mapped, and readers of this file (the
+    // JVM sizes itself from it; sanitizers and debuggers parse it) must be
+    // told. Merge a sorted copy in: /proc/maps is in address order and parsers
+    // rely on that.
+    struct mem_lazy_map pending[MEM_LAZY_MAX];
+    unsigned pending_n = 0;
+    for (unsigned i = 0; i < mem->lazy_count; i++)
+        if (mem->lazy[i].start < mem->lazy[i].end)
+            pending[pending_n++] = mem->lazy[i];
+    for (unsigned i = 1; i < pending_n; i++)
+        for (unsigned j = i; j > 0 && pending[j - 1].start > pending[j].start; j--) {
+            struct mem_lazy_map t = pending[j - 1];
+            pending[j - 1] = pending[j]; pending[j] = t;
+        }
+    unsigned pending_i = 0;
+
     page_t page = 0;
     while (page < mem->page_limit) {
         // find a region
@@ -770,6 +804,8 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
         }
         page_t end = page;
 
+        emit_pending_maps(buf, pending, pending_n, &pending_i, start);
+
         // output info
         char path[MAX_PATH] = "";
         if (start_pt->flags & P_GROWSDOWN) {
@@ -791,6 +827,7 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
                 0, // inode
                 path);
     }
+    emit_pending_maps(buf, pending, pending_n, &pending_i, mem->page_limit);
     mem_read_unlock_quiesce_aware(mem);
     mm_release(mm);
 }

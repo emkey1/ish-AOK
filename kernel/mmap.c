@@ -227,8 +227,15 @@ static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_
         prot |= P_SHARED;
 
     if (flags & MMAP_ANONYMOUS) {
-        if ((err = pt_map_nothing(current->mem, page, pages, prot)) < 0)
-            return err;
+        // Large anonymous mappings are RESERVED, not materialised: one
+        // struct pt_entry per page is ~65 bytes of host memory, so an
+        // untouched reservation used to cost ~16.6 MB per GiB the instant it
+        // was asked for. mem_lazy_reserve declines below the size threshold
+        // and when the table is full, leaving the eager path unchanged.
+        if (!mem_lazy_reserve(current->mem, page, pages, prot)) {
+            if ((err = pt_map_nothing(current->mem, page, pages, prot)) < 0)
+                return err;
+        }
     } else {
         // fd must be valid
         struct fd *fd = f_get(fd_no);

@@ -624,6 +624,140 @@ static page_t mem_next_unmapped_page(struct mem *mem, page_t page) {
     return mem->page_limit;
 }
 
+// ---- lazy anonymous reservations ---------------------------------------
+// See struct mem_lazy_map in emu/memory.h for the contract. The rule that
+// makes this safe: a page inside a reservation has NO page-table entry, so
+// every reader that reads "no entry" as "not mapped" must consult these ranges
+// too. Those readers are the hole finder, the fault paths, and /proc/pid/maps.
+
+static bool lazy_trace(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("ISH_LAZY_TRACE"); on = (e && *e == '1'); }
+    return on == 1;
+}
+#define LAZY_TRACE(...) do { if (lazy_trace()) fprintf(stderr, "[lazy] " __VA_ARGS__); } while (0)
+
+struct mem_lazy_map *mem_lazy_find(struct mem *mem, page_t page) {
+    for (unsigned i = 0; i < mem->lazy_count; i++) {
+        struct mem_lazy_map *l = &mem->lazy[i];
+        if (l->start < l->end && page >= l->start && page < l->end)
+            return l;
+    }
+    return NULL;
+}
+
+bool mem_lazy_overlaps(struct mem *mem, page_t start, page_t end) {
+    for (unsigned i = 0; i < mem->lazy_count; i++) {
+        struct mem_lazy_map *l = &mem->lazy[i];
+        if (l->start < l->end && start < l->end && l->start < end)
+            return true;
+    }
+    return false;
+}
+
+// True iff dropping [start, end) would leave a reservation on BOTH sides --
+// the one case the no-split invariant forbids. Callers materialise instead.
+bool mem_lazy_would_split(struct mem *mem, page_t start, page_t end) {
+    for (unsigned i = 0; i < mem->lazy_count; i++) {
+        struct mem_lazy_map *l = &mem->lazy[i];
+        if (l->start < l->end && start > l->start && end < l->end)
+            return true;
+    }
+    return false;
+}
+
+bool mem_lazy_reserve(struct mem *mem, page_t start, pages_t pages, unsigned flags) {
+    if (pages < MEM_LAZY_MIN_PAGES)
+        return false;
+    // A new mapping REPLACES whatever occupied these pages, so existing
+    // reservation coverage has to go first. Without this the range ends up
+    // covered twice with different flags and mem_lazy_find returns whichever
+    // came first -- which is how the JVM died: it reserves its heap PROT_NONE
+    // and commits sub-ranges RW with MAP_FIXED, the commit added a second
+    // overlapping reservation, and a later fault materialised the PROT_NONE
+    // one over the committed pages. SEGV_ACCERR at the first write.
+    if (mem->lazy_count != 0) {
+        if (mem_lazy_would_split(mem, start, start + pages))
+            mem_lazy_materialize_range(mem, start, start + pages);
+        else
+            mem_lazy_drop(mem, start, start + pages);
+    }
+    for (unsigned i = 0; i < MEM_LAZY_MAX; i++) {
+        struct mem_lazy_map *l = &mem->lazy[i];
+        if (i >= mem->lazy_count || l->start >= l->end) {
+            l->start = start; l->end = start + pages; l->flags = flags;
+            if (i >= mem->lazy_count)
+                mem->lazy_count = i + 1;
+            LAZY_TRACE("reserve [%llx,%llx) flags=%#x\n",
+                       (unsigned long long) start, (unsigned long long) (start + pages), flags);
+            return true;
+        }
+    }
+    return false;   // table full: caller maps eagerly, i.e. today's behaviour
+}
+
+// Pure range math, no mapping. Safe to call with any lock held. Only whole
+// coverage and front/back trims are possible here -- mem_lazy_would_split must
+// have been checked by the caller.
+void mem_lazy_drop(struct mem *mem, page_t start, page_t end) {
+    for (unsigned i = 0; i < mem->lazy_count; i++) {
+        struct mem_lazy_map *l = &mem->lazy[i];
+        if (l->start >= l->end || end <= l->start || l->end <= start)
+            continue;
+        if (start <= l->start && end >= l->end)
+            l->start = l->end = 0;
+        else if (start <= l->start)
+            l->start = end;
+        else if (end >= l->end)
+            l->end = start;
+        // the both-sides case cannot occur; see mem_lazy_would_split
+    }
+}
+
+void mem_lazy_materialize_range(struct mem *mem, page_t start, page_t end) {
+    // Bounded by MEM_LAZY_MAX, never by the page count: this is called from
+    // fork's COW pass with the WHOLE address space, and a per-page scan there
+    // took a one-second compile to 216 seconds.
+    for (unsigned i = 0; i < mem->lazy_count; i++) {
+        struct mem_lazy_map *l = &mem->lazy[i];
+        if (l->start >= l->end || end <= l->start || l->end <= start)
+            continue;
+        page_t s = l->start, e = l->end;
+        unsigned flags = l->flags;
+        LAZY_TRACE("materialize_range [%llx,%llx) for req [%llx,%llx) flags=%#x\n",
+                   (unsigned long long) s, (unsigned long long) e,
+                   (unsigned long long) start, (unsigned long long) end, flags);
+        l->start = l->end = 0;          // clear BEFORE mapping: pt_map_nothing
+                                        // must not see this range as reserved
+        pt_map_nothing(mem, s, e - s, flags);
+    }
+}
+
+// Fault handler. Materialises [l->start, end of the chunk holding `page`) and
+// trims the front -- a reservation only ever shrinks from the left, never
+// splits. Caller holds the write lock.
+static bool mem_lazy_fault(struct mem *mem, page_t page) {
+    struct mem_lazy_map *l = mem_lazy_find(mem, page);
+    if (l == NULL)
+        return false;
+    page_t s = l->start;
+    page_t e = page + MEM_LAZY_CHUNK_PAGES;
+    e -= (e - l->start) % MEM_LAZY_CHUNK_PAGES;   // round up to a chunk edge
+    if (e <= page)
+        e = page + 1;
+    if (e > l->end)
+        e = l->end;
+    unsigned flags = l->flags;
+    LAZY_TRACE("fault page=%llx -> materialize [%llx,%llx) flags=%#x (res was [%llx,%llx))\n",
+               (unsigned long long) page, (unsigned long long) s, (unsigned long long) e,
+               flags, (unsigned long long) l->start, (unsigned long long) l->end);
+    if (e >= l->end)
+        l->start = l->end = 0;      // consumed entirely
+    else
+        l->start = e;               // front trim
+    return pt_map_nothing(mem, s, e - s, flags) == 0;
+}
+
 // True iff `mem` currently has an active brk-headroom reservation (see
 // struct mem's brk_reserve_start/end) that overlaps [start, start+pages).
 // A plain range check -- O(1), no page-table walk -- since the reservation
@@ -641,6 +775,17 @@ static bool overlaps_brk_reservation(struct mem *mem, page_t start, page_t end) 
 // reservation itself has no page-table entries to walk.
 static page_t next_mapped_page_with_reservation(struct mem *mem, page_t page) {
     page_t real = mem_next_mapped_page(mem, page);
+    // Lazy reservations occupy address space with no page-table entries, just
+    // like the brk headroom below, so a fresh mmap must not land inside one.
+    for (unsigned i = 0; i < mem->lazy_count; i++) {
+        struct mem_lazy_map *l = &mem->lazy[i];
+        if (l->start >= l->end)
+            continue;
+        if (page >= l->start && page < l->end)
+            return page;
+        if (page <= l->start && l->start < real)
+            real = l->start;
+    }
     if (mem->brk_reserve_start < mem->brk_reserve_end) {
         if (page <= mem->brk_reserve_start && mem->brk_reserve_start < real)
             return mem->brk_reserve_start;
@@ -651,6 +796,11 @@ static page_t next_mapped_page_with_reservation(struct mem *mem, page_t page) {
 }
 
 static page_t next_unmapped_page_with_reservation(struct mem *mem, page_t page) {
+    for (unsigned i = 0; i < mem->lazy_count; i++) {
+        struct mem_lazy_map *l = &mem->lazy[i];
+        if (l->start < l->end && page >= l->start && page < l->end)
+            page = l->end;
+    }
     if (mem->brk_reserve_start < mem->brk_reserve_end &&
             page >= mem->brk_reserve_start && page < mem->brk_reserve_end)
         page = mem->brk_reserve_end;
@@ -685,6 +835,8 @@ page_t pt_find_hole(struct mem *mem, pages_t size) {
 bool pt_is_hole(struct mem *mem, page_t start, pages_t pages) {
     if (!mem_page_range_valid(mem, start, pages))
         return false;
+    if (mem_lazy_overlaps(mem, start, start + pages))
+        return false;
     if (overlaps_brk_reservation(mem, start, start + pages))
         return false;
     for (page_t page = start; page < start + pages; page++) {
@@ -699,6 +851,25 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         return _ENOMEM;
     if (memory == MAP_FAILED)
         return errno_map();
+
+    // Anything mapped here stops being a lazy reservation, or the range ends
+    // up BOTH mapped and reserved -- and a later fault elsewhere in that
+    // reservation would re-materialise over these pages with the
+    // reservation's original flags.
+    //
+    // That is exactly how the JVM died: it reserves its heap PROT_NONE and
+    // commits sub-ranges with MAP_FIXED PROT_READ|WRITE, and a subsequent
+    // fault reset those committed pages to PROT_NONE. The crash log said
+    // SEGV_ACCERR -- mapped, wrong permission -- which is what pointed here.
+    //
+    // The materialise branch re-enters pt_map exactly once: it clears the
+    // reservation before mapping, so the inner call finds nothing to drop.
+    if (mem->lazy_count != 0) {
+        if (mem_lazy_would_split(mem, start, start + pages))
+            mem_lazy_materialize_range(mem, start, start + pages);
+        else
+            mem_lazy_drop(mem, start, start + pages);
+    }
 
     // If this fails, the munmap in pt_unmap would probably fail.
     assert(memory == NULL || (uintptr_t) memory % real_page_size == 0 || memory == vdso_data);
@@ -760,7 +931,7 @@ int pt_unmap(struct mem *mem, page_t start, pages_t pages) {
     if (!mem_page_range_valid(mem, start, pages))
         return -1;
     for (page_t page = start; page < start + pages; page++)
-        if (mem_pt(mem, page) == NULL)
+        if (mem_pt(mem, page) == NULL && mem_lazy_find(mem, page) == NULL)
             return -1;
     return pt_unmap_always(mem, start, pages);
 }
@@ -838,6 +1009,15 @@ static int pt_unmap_always_unlocked(struct mem *mem, page_t start, pages_t pages
 }
 
 int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
+    // Reservations are handled HERE, outside the JIT invalidate lock taken
+    // below, because materialising maps and pt_map_nothing takes that same
+    // lock. A hole punched through the middle of a reservation is the one
+    // case the no-split invariant forbids, so materialise it in full and let
+    // the ordinary path below tear it down.
+    if (mem_lazy_would_split(mem, start, start + pages))
+        mem_lazy_materialize_range(mem, start, start + pages);
+    else
+        mem_lazy_drop(mem, start, start + pages);
 #if ENGINE_JIT
     // Exclude CLONE_VM sibling threads still executing chained JIT code
     // before disconnecting blocks below -- see jit_invalidate_lock's
@@ -904,6 +1084,10 @@ int pt_move(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) 
 }
 
 int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
+    // mprotect rewrites per-page flags, so materialise any overlapping reservation first rather than
+    // teaching this path about them. Iterates reservations, never pages.
+    mem_lazy_materialize_range(mem, start, start + pages);
+
     if (!mem_page_range_valid(mem, start, pages))
         return _ENOMEM;
     for (page_t page = start; page < start + pages; page++)
@@ -938,6 +1122,10 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
 }
 
 int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t pages) {
+    // fork's COW pass walks real entries, so materialise any overlapping reservation first rather than
+    // teaching this path about them. Iterates reservations, never pages.
+    mem_lazy_materialize_range(src, start, start + pages);
+
     if (!mem_page_range_valid(src, start, pages) || !mem_page_range_valid(dst, start, pages))
         return -1;
     page_t end = start + pages;
@@ -1009,6 +1197,17 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
 
     page_t page = PAGE(addr);
     struct pt_entry *entry = mem_pt(mem, page);
+
+    if (entry == NULL && mem_lazy_find(mem, page) != NULL) {
+        // Lazy reservation: materialise on first touch. Same lock dance as
+        // growsdown below -- the upgrade drops the read lock, so re-check
+        // under the write lock before mapping.
+        read_to_write_lock(&mem->lock);
+        if (mem_pt(mem, page) == NULL)
+            mem_lazy_fault(mem, page);
+        write_to_read_lock(&mem->lock);
+        entry = mem_pt(mem, page);
+    }
 
     if (entry == NULL) {
         // page does not exist
@@ -1111,6 +1310,10 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
     write_lock(&mem->lock);
 
     struct pt_entry *entry = mem_pt(mem, page);
+    if (entry == NULL && mem_lazy_find(mem, page) != NULL) {
+        mem_lazy_fault(mem, page);      // write lock already held
+        entry = mem_pt(mem, page);
+    }
     if (entry == NULL) {
         if (!mem_growsdown_allowed(mem, page)) {
             write_unlock(&mem->lock);

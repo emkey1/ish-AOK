@@ -15,6 +15,40 @@ struct jit;
 
 struct pt_directory_chunk;
 
+// A reserved-but-unmaterialised anonymous range: address space the guest has
+// mapped, for which no page-table entries exist yet.
+//
+// Why: pt_map_nothing builds one struct pt_entry per page, ~65 bytes of host
+// memory each, eagerly at mmap time. Measured on this build, host RSS while
+// holding an untouched reservation is dead linear at ~16.6 MB per GiB -- 1.06
+// GB for a 64 GiB reservation -- with no ceiling below the 256 TiB page limit,
+// so one mmap can get the app OOM-killed. Linux makes the same call free.
+//
+// INVARIANT, and the reason this design is shaped the way it is: a reservation
+// is NEVER split. Materialising a fault takes the whole prefix up to the end of
+// the faulting chunk and trims the front, so a reservation only ever shrinks
+// from the left or disappears. Anything that would punch a hole in one
+// materialises it in full first, at a call site where mapping is safe. That
+// removes slot exhaustion, partial-update atomicity, and the lock recursion
+// that a splitting version has to get right.
+//
+// The cost of never splitting: a fault at the far end of a reservation
+// materialises everything before it, i.e. exactly today's eager behaviour and
+// no worse. The win is every case that reserves and touches little or nothing.
+struct mem_lazy_map {
+    page_t start, end;   // empty iff start >= end
+    unsigned flags;      // pt flags the pages get when materialised
+};
+#define MEM_LAZY_MAX 32
+// Below this the eager path is kept: ordinary programs touch 36-72% of what
+// they map (measured: bash 36%, python3 52%, gcc 72%) over mappings of a few
+// MB, where per-page faulting would cost more than the batch loop, and their
+// eager cost is trivial anyway.
+#define MEM_LAZY_MIN_PAGES ((64u * 1024 * 1024) >> PAGE_BITS)
+// Granularity of a fault: materialise at least this much past the reservation
+// start, so a sequential walk pays one fault per 2 MiB rather than per page.
+#define MEM_LAZY_CHUNK_PAGES 512u
+
 struct mem {
     _Atomic(struct pt_directory_chunk *) *pgdir_root;
     // Set-only bitmap (one bit per pgdir_root entry) of which roots have a
@@ -36,6 +70,12 @@ struct mem {
     // qualifies, so no separate "has a reservation" flag is needed).
     page_t brk_reserve_start;
     page_t brk_reserve_end;
+
+    // Lazy anonymous reservations -- same idea as brk_reserve above (a plain
+    // range, no page-table entries) but there can be several. See
+    // struct mem_lazy_map's comment for the no-split invariant.
+    struct mem_lazy_map lazy[MEM_LAZY_MAX];
+    unsigned lazy_count;
     _Atomic int quiesce_requested;
     // Parking lot for quiesce waiters (mem_quiesce_park/mem_quiesce_wake_parked,
     // memory.c). Leaf lock: nothing else is ever taken under it.
@@ -130,6 +170,18 @@ void mem_set_page_limit(struct mem *mem, page_t limit);
 void mem_set_mmap_window(struct mem *mem, page_t floor, page_t ceiling);
 // Return the pagetable entry for the given page
 struct pt_entry *mem_pt(struct mem *mem, page_t page);
+// Lazy anonymous reservations; see struct mem_lazy_map above.
+struct mem_lazy_map *mem_lazy_find(struct mem *mem, page_t page);
+bool mem_lazy_overlaps(struct mem *mem, page_t start, page_t end);
+bool mem_lazy_reserve(struct mem *mem, page_t start, pages_t pages, unsigned flags);
+// Materialise every reservation overlapping [start, end), IN FULL. Maps, so it
+// must not be called with the JIT invalidate lock held.
+void mem_lazy_materialize_range(struct mem *mem, page_t start, page_t end);
+// Drop reservation coverage of [start, end) without mapping. Only valid when
+// the range does not punch a hole in a reservation; callers use
+// mem_lazy_would_split() first.
+void mem_lazy_drop(struct mem *mem, page_t start, page_t end);
+bool mem_lazy_would_split(struct mem *mem, page_t start, page_t end);
 // Increment *page, skipping over unallocated page directories. Intended to be
 // used as the incremenent in a for loop to traverse mappings.
 void mem_next_page(struct mem *mem, page_t *page);
