@@ -288,8 +288,37 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
         if (stat_err < 0)
             return stat_err;
         int access_err = access_check(&stat, AC_W | AC_X);
-        if (access_err < 0)
+        if (access_err < 0) {
+            if (flags & N_CREATE_EEXIST_FIRST) {
+            // Linux looks the final component up BEFORE checking whether the
+            // parent may be written: filename_create() returns -EEXIST for a
+            // name that is already there, and only vfs_mkdir/vfs_link/etc.
+            // then ask may_create() for permission. So a caller that cannot
+            // write the parent still gets EEXIST, not EACCES, when the target
+            // exists -- and `mkdir -p` depends on exactly that, since it calls
+            // mkdir on every component and treats EEXIST as success. Reporting
+            // EACCES here made `mkdir -p /tmp/foo` fail outright for any
+            // unprivileged user, because "/" is not writable by them and /tmp
+            // already exists.
+            //
+            // Nothing is granted by deferring: the caller's own existence
+            // check reports EEXIST, and if the target does NOT exist the
+            // permission error below still stands.
+                char out_copy[MAX_PATH];   // find_mount_and_trim_path mutates it
+                strcpy(out_copy, out);
+                struct mount *target_mount = find_mount_and_trim_path(out_copy);
+                if (target_mount != NULL) {
+                    struct statbuf target_stat;
+                    int target_err = target_mount->fs->stat(target_mount, out_copy, &target_stat);
+                    mount_release(target_mount);
+                    if (target_err == 0)
+                        return 0;
+                }
+            }
+            // Either the target does not exist, or this is not a creating
+            // call: the permission error stands.
             return access_err;
+        }
     }
 
     return 0;

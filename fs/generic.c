@@ -501,6 +501,18 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
             return ERR_PTR(err);
         }
     } else {
+        // The target exists and O_EXCL says it must not: that is EEXIST, and
+        // Linux reports it before may_open() looks at permissions at all
+        // (do_last() bails on the excl check first). AOK left O_EXCL to the
+        // host open below, which sits after the target's own access check --
+        // so an O_CREAT|O_EXCL|O_WRONLY open of an existing file the caller
+        // cannot write reported EACCES where every Linux says EEXIST.
+        if ((flags & (O_CREAT_ | O_EXCL_)) == (O_CREAT_ | O_EXCL_)) {
+            if (!fs_blocks)
+                unlock(&inodes_lock);
+            mount_release(mount);
+            return ERR_PTR(_EEXIST);
+        }
         // O_NOFOLLOW: a final symlink we deliberately did not resolve is an
         // error -- unless O_PATH is also set, in which case Linux opens the
         // symlink ITSELF (fstat sees S_IFLNK, readlinkat(fd, "") returns the
@@ -753,7 +765,7 @@ int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, co
     if (err < 0)
         return err;
     char dst[MAX_PATH];
-    err = path_normalize(dst_at, dst_raw, dst, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
+    err = path_normalize(dst_at, dst_raw, dst, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE | N_CREATE_EEXIST_FIRST);
     if (err < 0)
         return err;
     // Pre-trim copies for inotify; see generic_openat.
@@ -979,7 +991,7 @@ int generic_symlinkat(const char *target, struct fd *at, const char *link_raw) {
     // path_final_dot().
     if (path_final_dot(link_raw))
         return _EEXIST;
-    int err = path_normalize(at, link_raw, link, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
+    int err = path_normalize(at, link_raw, link, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE | N_CREATE_EEXIST_FIRST);
     if (err < 0)
         return err;
     char guest_path[MAX_PATH]; // pre-trim path for inotify; see generic_openat
@@ -1017,7 +1029,7 @@ int generic_mknodat(struct fd *at, const char *path_raw, mode_t_ mode, dev_t_ de
         return _EPERM;
 
     char path[MAX_PATH];
-    int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
+    int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE | N_CREATE_EEXIST_FIRST);
     if (err < 0)
         return err;
     char guest_path[MAX_PATH]; // pre-trim path for inotify; see generic_openat
@@ -1121,7 +1133,7 @@ int generic_mkdirat(struct fd *at, const char *path_raw, mode_t_ mode) {
         return _EEXIST;
     // The final component is the name being created and is never followed, so
     // mkdir over an existing (even dangling) symlink reports EEXIST like Linux.
-    int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
+    int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE | N_CREATE_EEXIST_FIRST);
     if (err < 0)
         return err;
     char guest_path[MAX_PATH]; // pre-trim path for inotify; see generic_openat

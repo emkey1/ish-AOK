@@ -12,6 +12,14 @@
 // chroot-aware anchor again would double-apply it -- inside a chroot that
 // meant ENOENT/EACCES for perfectly valid paths.
 #define N_REALROOT 8
+// Paired with N_PARENT_DIR_WRITE by the operations that CREATE a new name
+// (mkdir, symlink, link, mknod). Linux looks the final component up before
+// checking whether the parent may be written -- filename_create() returns
+// -EEXIST for a name already there, and only vfs_mkdir/vfs_link then ask
+// may_create() for permission -- so an existing target reports EEXIST, not
+// EACCES. Not for unlink/rmdir/rename: there an existing target is the point
+// of the call, so the permission check is what governs and must come first.
+#define N_CREATE_EEXIST_FIRST 16
 // Require write+execute permission on the resolved parent directory of the
 // final path component. Only correct for callers where the operation always
 // creates or removes a directory entry regardless of whether the final

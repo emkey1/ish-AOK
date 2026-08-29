@@ -32,6 +32,13 @@ sh /AOK/tools/ktop/build.sh          # builds ./ktop under /tmp/ktop-build
 sh /AOK/tools/ktop/build.sh install  # also installs to /usr/local/bin/ktop
 ```
 
+Installing writes to `/usr/local/bin`, which is root-owned on a normal root, so
+run that second form as root (`sudo sh /AOK/tools/ktop/build.sh install`) or
+install the built binary yourself with
+`sudo make -C /tmp/ktop-build install PREFIX=/usr/local`. Re-running either
+form is fine: the work directory is refreshed from `/AOK` each time, so a ktop
+fix reaches an already-installed copy by building again.
+
 `/AOK` is a read-only mount, so the script copies the source to a writable
 work directory (`$WORK_DIR`, default `/tmp/ktop-build`) before running `make`.
 Or build it manually:

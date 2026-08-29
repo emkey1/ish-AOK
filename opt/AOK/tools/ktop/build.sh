@@ -23,7 +23,16 @@ PREFIX="${PREFIX:-/usr/local}"
 CC="${CC:-cc}"
 
 mkdir -p "$WORK_DIR"
+# The sources on /AOK are read-only, so the copies land read-only too and a
+# SECOND run's cp cannot overwrite them: "cp: cannot create regular file
+# '/tmp/ktop-build/ktop.c': Permission denied", and set -e stops there. That
+# broke the two-step this script's own help suggests -- build once to try it,
+# then run again with "install" -- so an already-installed ktop could not be
+# replaced without deleting the work directory by hand. Remove first, and make
+# the copies writable.
+rm -f "$WORK_DIR/ktop.c" "$WORK_DIR/Makefile"
 cp "$SRC_DIR/ktop.c" "$SRC_DIR/Makefile" "$WORK_DIR/"
+chmod u+w "$WORK_DIR/ktop.c" "$WORK_DIR/Makefile"
 
 echo "Building ktop in $WORK_DIR ..."
 make -C "$WORK_DIR" CC="$CC"
@@ -31,6 +40,16 @@ make -C "$WORK_DIR" CC="$CC"
 echo "Built: $WORK_DIR/ktop"
 
 if [ "${1:-}" = install ]; then
+    # $PREFIX/bin is root-owned on every normal root, so an ordinary user got
+    # a bare "make: *** [install] Error 1" here with nothing saying why or
+    # what to do about it. Say it plainly instead, and do NOT reach for sudo
+    # on the user's behalf.
+    if [ "$(id -u)" != 0 ] && [ ! -w "$PREFIX/bin" ]; then
+        echo "ktop: $PREFIX/bin is not writable by uid $(id -u)." >&2
+        echo "The build succeeded -- run it from $WORK_DIR/ktop, or install with:" >&2
+        echo "  sudo make -C $WORK_DIR install PREFIX=$PREFIX" >&2
+        exit 1
+    fi
     echo "Installing to $PREFIX/bin/ktop ..."
     make -C "$WORK_DIR" install PREFIX="$PREFIX"
     echo "Installed. Run: ktop"
