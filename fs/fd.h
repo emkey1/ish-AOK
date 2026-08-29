@@ -340,6 +340,9 @@ void fdtable_do_cloexec(struct fdtable *table);
 struct fd *fdtable_get(struct fdtable *table, fd_t f);
 
 struct fd *f_get(fd_t f);
+// f_get, but NULL for an O_PATH descriptor -- I/O on one is EBADF on Linux.
+// See the definition in kernel/fs.c.
+struct fd *f_get_io(fd_t f);
 // The *at() base directory for `path`, honouring the rule that an ABSOLUTE
 // path makes dirfd irrelevant -- see the definition in kernel/fs.c for why
 // that matters and what it broke. Declared here rather than duplicated because

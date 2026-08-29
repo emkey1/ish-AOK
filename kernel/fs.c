@@ -94,6 +94,20 @@ static struct fd *at_fd(fd_t f) {
     return f_get(f);
 }
 
+// Linux answers EBADF for I/O on an O_PATH descriptor: it is a handle to a
+// location, not to an open file. We were handing regular-file O_PATH opens a
+// fully working fd, and since generic_openat deliberately skips the access
+// check for O_PATH (correctly -- Linux skips it too), that made O_PATH the way
+// to read and write a file whose permissions had just refused a normal open.
+// The read/write/seek/getdents entry points resolve through this; fstat, dup,
+// fchdir and the *at() dirfd uses keep plain f_get, because Linux allows those.
+struct fd *f_get_io(fd_t f) {
+    struct fd *fd = f_get(f);
+    if (fd != NULL && (fd->flags & O_PATH_))
+        return NULL;
+    return fd;
+}
+
 // The *at() rule everyone forgets: "If the pathname given in pathname is
 // absolute, then dirfd is ignored" (openat(2), and POSIX says the same). So an
 // absolute path must NOT make us validate dirfd at all -- it can be -1, or a
@@ -858,7 +872,7 @@ dword_t sys_mknodat(fd_t at_f, addr_t path_addr, mode_t_ mode, dev_t_ dev) {
 }
 
 static ssize_t sys_read_buf(fd_t fd_no, void *buf, size_t size) {
-    struct fd *fd = f_get(fd_no);
+    struct fd *fd = f_get_io(fd_no);
     if (fd == NULL)
         return _EBADF;
     if (S_ISDIR(fd->type))
@@ -942,7 +956,7 @@ dword_t sys_read_guest(fd_t fd_no, guest_addr_t buf_addr, dword_t size) {
 }
 
 static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
-    struct fd *fd = f_get(fd_no);
+    struct fd *fd = f_get_io(fd_no);
     if (fd == NULL)
         return _EBADF;
 
@@ -1193,7 +1207,7 @@ static dword_t sys_preadv_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t io
             return _ENOMEM;
         }
     }
-    struct fd *fd = f_get(fd_no);
+    struct fd *fd = f_get_io(fd_no);
     ssize_t res;
     if (fd == NULL) {
         res = _EBADF;
@@ -1284,7 +1298,7 @@ static dword_t sys_pwritev_common(fd_t fd_no, guest_addr_t iovec_addr, dword_t i
         }
         offset += copy_len;
     }
-    struct fd *fd = f_get(fd_no);
+    struct fd *fd = f_get_io(fd_no);
     if (fd == NULL) {
         res = _EBADF;
         goto out;
@@ -1357,7 +1371,7 @@ dword_t sys_pwritev2_i386_guest(fd_t fd_no, guest_addr_t iovec_addr, dword_t iov
 }
 
 dword_t sys__llseek(fd_t f, dword_t off_high, dword_t off_low, addr_t res_addr, dword_t whence) {
-    struct fd *fd = f_get(f);
+    struct fd *fd = f_get_io(f);
     if (fd == NULL)
         return _EBADF;
     if (!fd->ops->lseek)
@@ -1390,7 +1404,7 @@ dword_t sys_lseek_amd64(fd_t f, dword_t off, dword_t whence) {
 }
 
 off_t_ sys_lseek_guest(fd_t f, off_t_ off, dword_t whence) {
-    struct fd *fd = f_get(f);
+    struct fd *fd = f_get_io(f);
     if (fd == NULL)
         return _EBADF;
     if (!fd->ops->lseek)
@@ -1410,7 +1424,7 @@ dword_t sys_pread_guest(fd_t f, guest_addr_t buf_addr, dword_t size, off_t_ off)
            (long long) off);
     if (size > MAX_RW_COUNT)
         size = MAX_RW_COUNT;
-    struct fd *fd = f_get(f);
+    struct fd *fd = f_get_io(f);
     if (fd == NULL)
         return _EBADF;
 
@@ -1494,7 +1508,7 @@ dword_t sys_pwrite_guest(fd_t f, guest_addr_t buf_addr, dword_t size, off_t_ off
            (long long) off);
     if (size > MAX_RW_COUNT)
         size = MAX_RW_COUNT;
-    struct fd *fd = f_get(f);
+    struct fd *fd = f_get_io(f);
     if (fd == NULL)
         return _EBADF;
 

@@ -105,7 +105,9 @@ static void ldconfig_trace_dirent(struct fd *fd, const struct dir_entry *entry, 
 int_t sys_getdents_common(fd_t f, guest_addr_t dirents, dword_t count,
         size_t (*fill_dirent)(void *, ino_t, off_t_, const char *, size_t, int)) {
     STRACE("getdents(%d, %#llx, %#x)", f, (unsigned long long) dirents, count);
-    struct fd *fd = f_get(f);
+    // EBADF on an O_PATH directory fd, like Linux: without this any user could
+    // enumerate a directory whose permissions refused a normal open.
+    struct fd *fd = f_get_io(f);
     if (fd == NULL)
         return _EBADF;
     if (!S_ISDIR(fd->type) || fd->ops->readdir == NULL)
