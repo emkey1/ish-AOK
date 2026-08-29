@@ -635,6 +635,13 @@ dword_t sys_process_vm_readv_guest(pid_t_ pid, guest_addr_t local_iov_addr, dwor
         task_ref_cnt_mod(task, -1);
         return _EPERM;
     }
+    // Being a parent or child is a relationship, not permission. Without this
+    // an unprivileged child read its privileged parent's entire address space
+    // -- the relationship test above was the only gate.
+    if (!current_may_access_task_mem(task)) {
+        task_ref_cnt_mod(task, -1);
+        return _EPERM;
+    }
 
     struct guest_iovec_ *local_iov = user_read_iovecs_abi(current, current->abi, local_iov_addr, liovcnt);
     if (IS_ERR(local_iov)) {

@@ -49,6 +49,26 @@ bool current_capable(unsigned cap) {
     return superuser() || current_has_cap(cap);
 }
 
+bool current_may_access_task_mem(struct task *target) {
+    if (current == NULL || target == NULL)
+        return false;
+    if (target == current)
+        return true;
+    if (current_capable(CAP_SYS_PTRACE_))
+        return true;
+    // Linux requires the caller's euid to equal ALL THREE of the target's
+    // uids, and the same for gids. Comparing only the effective ids would let
+    // a process that has temporarily dropped privilege be read by one that
+    // never held any -- it could regain that privilege later, so its memory is
+    // still privileged memory.
+    return current->euid == target->uid &&
+           current->euid == target->euid &&
+           current->euid == target->suid &&
+           current->egid == target->gid &&
+           current->egid == target->egid &&
+           current->egid == target->sgid;
+}
+
 static bool current_can_setuids(void) {
     return superuser() || current_has_cap(CAP_SETUID_);
 }

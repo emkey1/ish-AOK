@@ -1013,6 +1013,13 @@ static ssize_t proc_pid_mem_pread(struct proc_entry *entry, struct proc_data *bu
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
+    // The mode alone is not the gate: an fd opened when the credentials
+    // allowed it must not keep working after they change, and root-owned
+    // 0600 still has to be refused to a different uid.
+    if (!current_may_access_task_mem(task)) {
+        proc_put_task(task);
+        return _EACCES;
+    }
     struct mm *mm = proc_task_mm_retain(task);
     if (mm == NULL) {
         proc_put_task(task);
@@ -1028,6 +1035,13 @@ static ssize_t proc_pid_mem_pwrite(struct proc_entry *entry, struct proc_data *b
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;
+    // The mode alone is not the gate: an fd opened when the credentials
+    // allowed it must not keep working after they change, and root-owned
+    // 0600 still has to be refused to a different uid.
+    if (!current_may_access_task_mem(task)) {
+        proc_put_task(task);
+        return _EACCES;
+    }
     struct mm *mm = proc_task_mm_retain(task);
     if (mm == NULL) {
         proc_put_task(task);
@@ -1394,7 +1408,9 @@ struct proc_children proc_pid_children = PROC_CHILDREN({
     {"fdinfo", S_IFDIR, .readdir = proc_pid_fdinfo_readdir},
     {"io", .show = proc_pid_io_show},
     {"maps", .show = proc_pid_maps_show},
-    {"mem", .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite},
+    // 0600 like Linux, not the 0444 default: the mode is the first gate, and
+    // the credential check in the handlers is the second.
+    {"mem", S_IFREG | 0600, .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite},
     {"mountinfo", .show = proc_show_mountinfo},
     {"mounts", .show = proc_show_mounts},
     {"ns", S_IFDIR, .readdir = proc_pid_ns_readdir},

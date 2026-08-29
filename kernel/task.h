@@ -519,6 +519,7 @@ extern void (*halt_hook)(int status);
 #define CAP_SETGID_      6
 #define CAP_SETUID_      7
 #define CAP_SYS_CHROOT_  18
+#define CAP_SYS_PTRACE_  19
 #define CAP_SYS_ADMIN_   21
 
 // The equivalent of Linux's capable(): true if the caller holds `cap` in its
@@ -527,6 +528,13 @@ extern void (*halt_hook)(int status);
 // way it would on Linux. Implemented in kernel/getset.c, next to the capset
 // machinery that maintains the sets.
 bool current_capable(unsigned cap);
+
+// The equivalent of Linux's ptrace_may_access(PTRACE_MODE_ATTACH_FSCREDS):
+// may the caller read or write `target`'s memory? Anything that exposes one
+// task's address space to another -- /proc/<pid>/mem, process_vm_readv --
+// must ask this, because being related to a process (or merely knowing its
+// pid) is not permission to read its secrets.
+bool current_may_access_task_mem(struct task *target);
 
 // Update the thread name to match the current task, in the format "comm-pid".
 // Will ensure that the -pid part always fits, then will fit as much of comm as possible.
