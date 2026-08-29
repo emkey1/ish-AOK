@@ -33,7 +33,7 @@ lane :build do |options|
     config = "app/#{config}.xcconfig" if config
     build_app(
       project: PROJECT_PATH,
-      scheme: "iSH",
+      scheme: "iSH-AOK",
       xcconfig: config,
       xcargs: "DEVELOPMENT_TEAM=#{CredentialsManager::AppfileConfig.try_fetch_value(:team_id)}",
       output_name: options[:output],

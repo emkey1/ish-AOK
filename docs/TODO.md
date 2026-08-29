@@ -1546,7 +1546,7 @@ gunzip, zcat, curl, wget and `md <url>` all work in the app, which settles the
 that one was impossible was wrong. The project builds fine from the command
 line; it has to be driven by SCHEME, not by target:
 
-    xcodebuild -project iSH-AOK.xcodeproj -scheme iSH -configuration Release \
+    xcodebuild -project iSH-AOK.xcodeproj -scheme iSH-AOK -configuration Release \
         -sdk iphonesimulator ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build
 
 `-target` disables the implicit dependency resolution that makes the Meson and

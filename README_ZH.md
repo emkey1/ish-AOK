@@ -151,7 +151,7 @@ brew install meson ninja llvm libarchive
 ```bash
 xcodebuild \
   -project iSH-AOK.xcodeproj \
-  -scheme iSH \
+  -scheme iSH-AOK \
   -configuration Debug-ApplePleaseFixFB19282108 \
   -destination 'generic/platform=iOS' \
   -allowProvisioningUpdates build

@@ -157,7 +157,7 @@ Apple Silicon에서는 빌드가 `llvm`, `libarchive`, `unicorn`을 `/usr/local`
 ```bash
 xcodebuild \
   -project iSH-AOK.xcodeproj \
-  -scheme iSH \
+  -scheme iSH-AOK \
   -configuration Debug-ApplePleaseFixFB19282108 \
   -destination 'generic/platform=iOS' \
   -allowProvisioningUpdates build

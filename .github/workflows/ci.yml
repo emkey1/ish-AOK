@@ -75,7 +75,7 @@ jobs:
         run: |
           xcodebuild build \
             -project iSH-AOK.xcodeproj \
-            -scheme iSH \
+            -scheme iSH-AOK \
             -configuration Release \
             -arch arm64 -sdk iphoneos \
             -derivedDataPath build \

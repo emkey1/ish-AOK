@@ -3,7 +3,7 @@ set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 project="$repo_root/iSH-AOK.xcodeproj"
-scheme="iSH"
+scheme="iSH-AOK"
 configuration="Release"
 export_options="$repo_root/AppStoreExportOptions.plist"
 brew_ruby33_bin="/opt/homebrew/opt/ruby@3.3/bin"
