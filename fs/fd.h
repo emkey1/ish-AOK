@@ -137,6 +137,22 @@ struct fd {
             uint32_t icmp6_filter[8];
             dword_t tcp_defer_accept;
             char tcp_congestion[16];
+            // Linux accepts these unconditionally and BSD has no equivalent
+            // knob. Returning ENOPROTOOPT is a state real Linux never produces
+            // -- a program tuning a connection sees an error where every Linux
+            // gives success -- so the value is kept and reported back, the same
+            // way tcp_defer_accept above already is. They are advisory
+            // (retry/timeout/window hints), so a host stack that does not act
+            // on them degrades gracefully; TCP_USER_TIMEOUT is the one with
+            // real teeth, and a connection simply keeps Darwin's own timeout.
+            dword_t tcp_syncnt;
+            dword_t tcp_linger2;
+            dword_t tcp_window_clamp;
+            dword_t tcp_user_timeout;
+            dword_t tcp_quickack;
+            dword_t tcp_maxseg;
+            dword_t tcp_fastopen;
+            bool tcp_quickack_set;
 
             // Guest-loopback NAT (fs/sock.c inet_nat_*): when a guest
             // bind() asks for a loopback endpoint the host can't provide

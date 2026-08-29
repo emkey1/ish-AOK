@@ -48,13 +48,18 @@ int main(void) {
     if (setsockopt(tcp, IPPROTO_TCP, TCP_CONGESTION, congestion, sizeof(congestion)) < 0)
         fail("TCP_CONGESTION set failed");
 
-    char actual[32] = {};
+    // Linux reports TCP_CA_NAME_MAX (16) bytes, NUL-padded -- not strlen().
+    // Verified on x86_64 glibc, Linux 6.12: a 32-byte buffer comes back with
+    // optlen 16, and so does a 16-byte one. This used to assert strlen(), which
+    // is what AOK did and what no Linux does.
+    char actual[32];
+    memset(actual, 0xaa, sizeof(actual));
     socklen_t actual_len = sizeof(actual);
     if (getsockopt(tcp, IPPROTO_TCP, TCP_CONGESTION, actual, &actual_len) < 0)
         fail("TCP_CONGESTION get failed");
-    if (actual_len != strlen(congestion))
+    if (actual_len != 16)
         fail("TCP_CONGESTION length mismatch");
-    if (memcmp(actual, congestion, strlen(congestion)) != 0)
+    if (strncmp(actual, congestion, sizeof(actual)) != 0)
         fail("TCP_CONGESTION value mismatch");
 
     expect_int_sockopt(tcp, IPPROTO_TCP, TCP_DEFER_ACCEPT, 7, "TCP_DEFER_ACCEPT");

@@ -5714,9 +5714,54 @@ static int_t sys_setsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
         sock->socket.tcp_defer_accept = *(dword_t *) value;
         return 0;
     }
+    // Linux takes TCP_MAXSEG as an advisory cap at any time; Darwin refuses it
+    // on an unconnected socket (EINVAL). Remember the guest's value and pass it
+    // to the host on a best-effort basis, so the set succeeds and the get
+    // reports what was asked for rather than the host's current MSS.
+    if (level == IPPROTO_TCP && option == TCP_MAXSEG_) {
+        if (value_len < sizeof(dword_t))
+            return _EINVAL;
+        dword_t mss = *(dword_t *) value;
+        if ((int_t) mss < 0)
+            return _EINVAL;
+        sock->socket.tcp_maxseg = mss;
+        int real_mss = (int) mss;
+        (void) setsockopt(sock->real_fd, IPPROTO_TCP, TCP_MAXSEG, &real_mss, sizeof(real_mss));
+        return 0;
+    }
+
+    // See the block in fs/fd.h: Linux always accepts these, so accepting and
+    // remembering them is closer than an ENOPROTOOPT no Linux ever returns.
+    if (level == IPPROTO_TCP &&
+            (option == TCP_SYNCNT_ || option == TCP_LINGER2_ ||
+             option == TCP_WINDOW_CLAMP_ || option == TCP_USER_TIMEOUT_ ||
+             option == TCP_QUICKACK_)) {
+        if (value_len < sizeof(dword_t))
+            return _EINVAL;
+        dword_t v = *(dword_t *) value;
+        switch (option) {
+            case TCP_SYNCNT_:
+                // Linux: 1..MAXSYNRETRIES(127), anything else EINVAL.
+                if (v == 0 || v > 127) return _EINVAL;
+                sock->socket.tcp_syncnt = v; break;
+            case TCP_LINGER2_: sock->socket.tcp_linger2 = v; break;
+            case TCP_WINDOW_CLAMP_: sock->socket.tcp_window_clamp = v; break;
+            case TCP_USER_TIMEOUT_:
+                if ((int_t) v < 0) return _EINVAL;
+                sock->socket.tcp_user_timeout = v; break;
+            case TCP_QUICKACK_:
+                sock->socket.tcp_quickack = v != 0;
+                sock->socket.tcp_quickack_set = true;
+                break;
+        }
+        return 0;
+    }
     if (level == IPPROTO_TCP && option == TCP_FASTOPEN_) {
         if (value_len < sizeof(dword_t))
             return _EINVAL;
+        // Remember the queue length so the get reports it, as Linux does;
+        // it was discarded and the get hardcoded 0.
+        sock->socket.tcp_fastopen = *(dword_t *) value;
         return 0;
     }
 
@@ -6214,12 +6259,35 @@ static int_t sys_getsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
     } else if (level == IPPROTO_TCP && option == TCP_DEFER_ACCEPT_) {
         dword_t defer_accept = sock->socket.tcp_defer_accept;
         sockopt_store_value(value, user_value_len, &value_len, &defer_accept, sizeof(defer_accept));
+    } else if (level == IPPROTO_TCP && option == TCP_MAXSEG_ && sock->socket.tcp_maxseg != 0) {
+        dword_t mss = sock->socket.tcp_maxseg;
+        sockopt_store_value(value, user_value_len, &value_len, &mss, sizeof(mss));
+    } else if (level == IPPROTO_TCP &&
+            (option == TCP_SYNCNT_ || option == TCP_LINGER2_ ||
+             option == TCP_WINDOW_CLAMP_ || option == TCP_USER_TIMEOUT_ ||
+             option == TCP_QUICKACK_)) {
+        dword_t v = 0;
+        switch (option) {
+            // Linux's defaults, so an untouched socket reads back what a
+            // Linux one would rather than a bare zero.
+            case TCP_SYNCNT_: v = sock->socket.tcp_syncnt ? sock->socket.tcp_syncnt : 6; break;
+            case TCP_LINGER2_: v = sock->socket.tcp_linger2 ? sock->socket.tcp_linger2 : 60; break;
+            case TCP_WINDOW_CLAMP_: v = sock->socket.tcp_window_clamp; break;
+            case TCP_USER_TIMEOUT_: v = sock->socket.tcp_user_timeout; break;
+            // QUICKACK is on by default on Linux until something clears it.
+            case TCP_QUICKACK_: v = sock->socket.tcp_quickack_set ? sock->socket.tcp_quickack : 1; break;
+        }
+        sockopt_store_value(value, user_value_len, &value_len, &v, sizeof(v));
     } else if (level == IPPROTO_TCP && option == TCP_FASTOPEN_) {
-        dword_t fastopen = 0;
+        dword_t fastopen = sock->socket.tcp_fastopen;
         sockopt_store_value(value, user_value_len, &value_len, &fastopen, sizeof(fastopen));
     } else if (level == IPPROTO_TCP && option == TCP_CONGESTION_) {
-        sockopt_store_value(value, user_value_len, &value_len,
-                sock->socket.tcp_congestion, strlen(sock->socket.tcp_congestion));
+        // Linux hands back TCP_CA_NAME_MAX bytes, NUL-padded, not strlen():
+        // callers size a 16-byte buffer and use the returned length.
+        char ca[16];
+        memset(ca, 0, sizeof(ca));
+        strncpy(ca, sock->socket.tcp_congestion, sizeof(ca) - 1);
+        sockopt_store_value(value, user_value_len, &value_len, ca, sizeof(ca));
 #if defined(__APPLE__)
     } else if (level == IPPROTO_TCP && option == TCP_INFO_) {
         // This one's fun. On Linux, the struct is not ABI dependent, so no
@@ -6283,6 +6351,15 @@ static int_t sys_getsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
         if (err < 0)
             return errno_map();
         value_len = host_value_len;
+        // Normalise the flag options to 0/1. BSD hands back the option's own
+        // bit from so_options, so an enabled SO_KEEPALIVE reads as 8 and an
+        // enabled TCP_NODELAY as 4; Linux reports 1 for both.
+        if (sock_opt_is_boolean(option, level) && value_len == sizeof(int)) {
+            int raw;
+            memcpy(&raw, value, sizeof(raw));
+            int norm = raw != 0;
+            memcpy(value, &norm, sizeof(norm));
+        }
     }
 
     if (user_put(len_addr, value_len))

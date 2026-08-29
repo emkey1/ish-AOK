@@ -313,7 +313,10 @@ static inline int sock_flags_from_real(int real) {
 #define NETLINK_EXT_ACK_ 11
 #define NETLINK_GET_STRICT_CHK_ 12
 
+#define SO_DEBUG_ 1
 #define SO_REUSEADDR_ 2
+#define SO_DONTROUTE_ 5
+#define SO_OOBINLINE_ 10
 #define SO_TYPE_ 3
 #define SO_ERROR_ 4
 #define SO_BROADCAST_ 6
@@ -358,6 +361,16 @@ static inline int sock_flags_from_real(int real) {
 #define IP_MTU_ 14
 #define IP_RECVTOS_ 13
 #define TCP_NODELAY_ 1
+#define TCP_MAXSEG_ 2
+#define TCP_CORK_ 3
+#define TCP_KEEPIDLE_ 4
+#define TCP_KEEPINTVL_ 5
+#define TCP_KEEPCNT_ 6
+#define TCP_QUICKACK_ 12
+#define TCP_SYNCNT_ 7
+#define TCP_LINGER2_ 8
+#define TCP_WINDOW_CLAMP_ 10
+#define TCP_USER_TIMEOUT_ 18
 #define TCP_DEFER_ACCEPT_ 9
 #define TCP_INFO_ 11
 #define TCP_CONGESTION_ 13
@@ -372,6 +385,46 @@ static inline int sock_flags_from_real(int real) {
 #define IPV6_RECVPKTINFO_ 49
 #define IPV6_TCLASS_ 67
 #define ICMP6_FILTER_ 1
+
+// Options whose value Linux always reports as exactly 0 or 1. BSD returns the
+// masked option bit out of so_options instead -- SO_REUSEADDR reads back as 4,
+// SO_KEEPALIVE as 8, SO_BROADCAST as 32, SO_REUSEPORT as 512, TCP_NODELAY as
+// 4 -- so a guest doing the very ordinary `if (val == 1)` sees false for an
+// option it just enabled.
+static inline bool sock_opt_is_boolean(int fake, int level) {
+    switch (level) {
+        case SOL_SOCKET_: switch (fake) {
+            case SO_DEBUG_:
+            case SO_REUSEADDR_:
+            case SO_DONTROUTE_:
+            case SO_BROADCAST_:
+            case SO_KEEPALIVE_:
+            case SO_OOBINLINE_:
+            case SO_REUSEPORT_:
+            case SO_ACCEPTCONN_:
+            case SO_TIMESTAMP_:
+            case SO_PASSCRED_:
+                return true;
+        } break;
+        case IPPROTO_TCP: switch (fake) {
+            case TCP_NODELAY_:
+            case TCP_CORK_:
+            case TCP_QUICKACK_:
+                return true;
+        } break;
+        case IPPROTO_IP: switch (fake) {
+            case IP_HDRINCL_:
+            case IP_RECVTTL_:
+            case IP_RECVTOS_:
+                return true;
+        } break;
+        case IPPROTO_IPV6: switch (fake) {
+            case IPV6_V6ONLY_:
+                return true;
+        } break;
+    }
+    return false;
+}
 
 static inline int sock_opt_to_real(int fake, int level) {
     switch (level) {
@@ -391,6 +444,9 @@ static inline int sock_opt_to_real(int fake, int level) {
 #endif
             case SO_TIMESTAMP_: return SO_TIMESTAMP;
             case SO_ACCEPTCONN_: return SO_ACCEPTCONN;
+            case SO_DEBUG_: return SO_DEBUG;
+            case SO_DONTROUTE_: return SO_DONTROUTE;
+            case SO_OOBINLINE_: return SO_OOBINLINE;
             case SO_RCVTIMEO_OLD_:
             case SO_RCVTIMEO_: return SO_RCVTIMEO;
             case SO_SNDTIMEO_OLD_:
@@ -398,7 +454,31 @@ static inline int sock_opt_to_real(int fake, int level) {
         } break;
         case IPPROTO_TCP: switch (fake) {
             case TCP_NODELAY_: return TCP_NODELAY;
-            case TCP_DEFER_ACCEPT_: return 0; // unimplemented
+            case TCP_MAXSEG_: return TCP_MAXSEG;
+#ifdef TCP_NOPUSH
+            // Darwin spells Linux's TCP_CORK TCP_NOPUSH; same semantics
+            // (hold partial segments back until it is cleared).
+            case TCP_CORK_: return TCP_NOPUSH;
+#elif defined(TCP_CORK)
+            case TCP_CORK_: return TCP_CORK;
+#endif
+#ifdef TCP_KEEPALIVE
+            // Darwin's TCP_KEEPALIVE is idle-time-before-first-probe in
+            // seconds, which is exactly Linux's TCP_KEEPIDLE.
+            case TCP_KEEPIDLE_: return TCP_KEEPALIVE;
+#elif defined(TCP_KEEPIDLE)
+            case TCP_KEEPIDLE_: return TCP_KEEPIDLE;
+#endif
+#ifdef TCP_KEEPINTVL
+            case TCP_KEEPINTVL_: return TCP_KEEPINTVL;
+#endif
+#ifdef TCP_KEEPCNT
+            case TCP_KEEPCNT_: return TCP_KEEPCNT;
+#endif
+            // NOT 0: that is a valid option number, so returning it sent the
+            // host a setsockopt for TCP option 0 instead of reporting the
+            // option unmapped. -1 is what the callers test for.
+            case TCP_DEFER_ACCEPT_: return -1; // handled in fs/sock.c
 #if defined(__linux__)
             case TCP_INFO_: return TCP_INFO;
             case TCP_CONGESTION_: return TCP_CONGESTION;

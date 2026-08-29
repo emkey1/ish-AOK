@@ -130,6 +130,7 @@ creds_groups_access.c
 sock_optlen.c
 inotify_events.c
 posix_timer_exec.c
+sock_options.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c
 timerfd_settime_readiness.c
