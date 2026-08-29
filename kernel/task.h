@@ -145,6 +145,17 @@ struct task {
     uid_t_ euid, egid;
     uid_t_ suid, sgid;
     uid_t_ fsuid, fsgid;
+
+    // What the credentials WILL be after the exec currently in progress, and
+    // whether it is a privileged (setuid/setgid) one. __do_execve fills these
+    // from the executable's stat immediately before the image is loaded, and
+    // elf_exec reads them when it builds the aux vector -- which is built
+    // before the real credential change below it, so it cannot just read the
+    // fields above. AT_SECURE is what tells libc to drop LD_PRELOAD and
+    // friends; hardcoding it to 0 made every setuid-root binary loadable with
+    // an attacker's shared object.
+    bool exec_secure;
+    uid_t_ exec_auxv_uid, exec_auxv_euid, exec_auxv_gid, exec_auxv_egid;
     dword_t cap_effective[2];
     dword_t cap_permitted[2];
     dword_t cap_inheritable[2];

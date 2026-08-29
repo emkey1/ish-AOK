@@ -776,11 +776,11 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             {AX_BASE, interp_base},
             {AX_FLAGS, 0},
             {AX_ENTRY, bias + header.entry_point},
-            {AX_UID, 0},
-            {AX_EUID, 0},
-            {AX_GID, 0},
-            {AX_EGID, 0},
-            {AX_SECURE, 0},
+            {AX_UID, current->exec_auxv_uid},
+            {AX_EUID, current->exec_auxv_euid},
+            {AX_GID, current->exec_auxv_gid},
+            {AX_EGID, current->exec_auxv_egid},
+            {AX_SECURE, current->exec_secure ? 1 : 0},
             {AX_RANDOM, random_addr},
             {AX_HWCAP2, 0},
             {AX_EXECFN, file_addr},
@@ -866,11 +866,11 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             {AX_BASE, interp_base},
             {AX_FLAGS, 0},
             {AX_ENTRY, bias + header.entry_point},
-            {AX_UID, 0},
-            {AX_EUID, 0},
-            {AX_GID, 0},
-            {AX_EGID, 0},
-            {AX_SECURE, 0},
+            {AX_UID, current->exec_auxv_uid},
+            {AX_EUID, current->exec_auxv_euid},
+            {AX_GID, current->exec_auxv_gid},
+            {AX_EGID, current->exec_auxv_egid},
+            {AX_SECURE, current->exec_secure ? 1 : 0},
             {AX_RANDOM, random_addr},
             {AX_HWCAP2, 0},
             {AX_EXECFN, file_addr},
@@ -1259,6 +1259,20 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
             return 0;
         }
     }
+
+    // Stage what the credentials will be once this exec commits, for the aux
+    // vector elf_exec is about to build. The real change stays below, after
+    // the image is loaded: doing it here would leave a FAILED exec holding
+    // elevated privilege. musl and glibc both decide a process is
+    // secure-execution from AT_SECURE, and musl additionally from
+    // AT_UID == AT_EUID && AT_GID == AT_EGID -- all four were hardcoded 0, so
+    // a setuid-root binary looked like an ordinary one and honoured
+    // LD_PRELOAD, giving any local user root.
+    current->exec_secure = (stat.mode & (S_ISUID | S_ISGID)) != 0;
+    current->exec_auxv_uid  = current->uid;
+    current->exec_auxv_gid  = current->gid;
+    current->exec_auxv_euid = (stat.mode & S_ISUID) ? stat.uid : current->euid;
+    current->exec_auxv_egid = (stat.mode & S_ISGID) ? stat.gid : current->egid;
 
     err = format_exec(fd, file, argv, envp);
     if (err == _ENOEXEC)
