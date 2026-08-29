@@ -257,8 +257,15 @@ int mount_snapshot(struct mount_info **out, size_t *count_out) {
     lock(&mounts_lock, 0);
     size_t count = 0;
     struct mount *mount;
+    // Detached fsmount()s are not part of any mount listing until move_mount
+    // places them -- the same rule /proc/mounts and mountinfo follow. This is
+    // the list a native `df` walks (kernel/native_libc.c's getmntinfo), and
+    // it was showing the private 0700 staging path: df then tried to statfs a
+    // directory an unprivileged guest cannot enter and printed
+    // "df: /.ish-fsmount/N: Permission denied" for a mount Linux never lists.
     list_for_each_entry(&mounts, mount, mounts)
-        count++;
+        if (!mount->detached)
+            count++;
     struct mount_info *info = calloc(count > 0 ? count : 1, sizeof(*info));
     if (info == NULL) {
         unlock(&mounts_lock);
@@ -268,6 +275,8 @@ int mount_snapshot(struct mount_info **out, size_t *count_out) {
     list_for_each_entry(&mounts, mount, mounts) {
         if (i >= count)
             break;
+        if (mount->detached)
+            continue;
         const char *from = mount->display_source != NULL ? mount->display_source
                                                          : mount->source;
         snprintf(info[i].source, sizeof(info[i].source), "%s",
@@ -821,6 +830,8 @@ lock_t mounts_lock = LOCK_INITIALIZER;
 // filesystem, immediately fsmount'd and then move_mount'd into place via
 // MOVE_MOUNT_F_EMPTY_PATH) -- not open_tree-sourced moves or in-place
 // (MOVE_MOUNT_T_EMPTY_PATH) placement, which remain unimplemented.
+static struct mount *mount_at_point_locked(const char *point);
+
 struct fscontext_data {
     const struct fs_ops *fs;
     bool created;
@@ -935,6 +946,12 @@ dword_t sys_fsconfig_guest(fd_t f, dword_t cmd, guest_addr_t key_addr, guest_add
             lock(&mounts_lock, 0);
             int err = do_mount(data->fs, "", data->point, "",
                     data->readonly ? MS_READONLY_ : 0);
+            if (err >= 0) {
+                // Detached until move_mount places it; see struct mount.
+                struct mount *staged = mount_at_point_locked(data->point);
+                if (staged != NULL)
+                    staged->detached = true;
+            }
             unlock(&mounts_lock);
             if (err < 0)
                 return err;
@@ -1001,6 +1018,26 @@ fd_t sys_fsmount(fd_t f, dword_t flags, dword_t attr_flags) {
 }
 
 // The filesystem backing the mount rooted exactly at `point`, or NULL.
+// Caller must hold mounts_lock.
+static struct mount *mount_at_point_locked(const char *point) {
+    struct mount *mount;
+    list_for_each_entry(&mounts, mount, mounts) {
+        if (strcmp(mount->point, point) == 0)
+            return mount;
+    }
+    return NULL;
+}
+
+// Clear the detached mark once a mount has a real mountpoint: from here on it
+// belongs in /proc/mounts and mountinfo like any other.
+static void mount_mark_attached(const char *point) {
+    lock(&mounts_lock, 0);
+    struct mount *mount = mount_at_point_locked(point);
+    if (mount != NULL)
+        mount->detached = false;
+    unlock(&mounts_lock);
+}
+
 static const struct fs_ops *mount_fs_at(const char *point) {
     lock(&mounts_lock, 0);
     struct mount *mount;
@@ -1122,8 +1159,10 @@ dword_t sys_move_mount_guest(fd_t from_dfd, guest_addr_t from_path_addr, fd_t to
     }
 
     err = mount_relocate(from_point, to_point);
-    if (err >= 0)
+    if (err >= 0) {
+        mount_mark_attached(to_point);
         proc_mountinfo_notify_changed();
+    }
     return err;
 }
 

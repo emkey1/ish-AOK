@@ -140,6 +140,15 @@ struct mount {
     // snapshot taken here would go stale.
     const char *display_source;
     const char *info;
+    // A mount created by fsmount() but not yet placed by move_mount(). Linux
+    // has no mountpoint for one of these at all -- it exists only as the fd --
+    // so it appears in no mount listing until it is moved. AOK has no mount
+    // namespaces and models it as a real mount at a hidden staging path
+    // (/.ish-fsmount/<n>, fs/mount.c), which made it visible in /proc/mounts
+    // and mountinfo. df then tried to statfs a 0700 staging directory it could
+    // not enter and printed "Permission denied" for a mount Linux never would
+    // have shown. Listed again the moment move_mount gives it a real point.
+    bool detached;
     int flags;
     const struct fs_ops *fs;
     unsigned refcount;

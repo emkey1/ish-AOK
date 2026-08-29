@@ -58,6 +58,46 @@ static int raw_move_mount(int from_dfd, const char *from_path, int to_dfd,
     return syscall(SYS_move_mount, from_dfd, from_path, to_dfd, to_path, flags);
 }
 
+
+// A detached mount -- fsmount'd but not yet placed -- has no mountpoint at all
+// on Linux and therefore appears in NO mount listing. AOK has no mount
+// namespaces and models it as a real mount at a private staging path
+// (/.ish-fsmount/<n>), which used to leave it visible in /proc/mounts,
+// /proc/self/mountinfo and the table a native `df` walks. The staging
+// directory is 0700 and root-owned, so an unprivileged df tried to statfs a
+// directory it could not enter and printed
+//   df: /.ish-fsmount/11: Permission denied
+// for a mount Linux would never have shown it. Reported from a device, 2026-08-29.
+static int count_lines_matching(const char *file, const char *needle) {
+    FILE *f = fopen(file, "r");
+    if (f == NULL)
+        return -1;
+    char line[2048];
+    int n = 0;
+    while (fgets(line, sizeof line, f) != NULL)
+        if (strstr(line, needle) != NULL)
+            n++;
+    fclose(f);
+    return n;
+}
+
+static void check_staging_hidden(const char *when, int want) {
+    static const char *files[] = { "/proc/mounts", "/proc/self/mountinfo" };
+    for (unsigned i = 0; i < sizeof files / sizeof files[0]; i++) {
+        int n = count_lines_matching(files[i], "ish-fsmount");
+        if (n < 0) {
+            test_logf("  %s: unreadable, skipped\n", files[i]);
+            continue;
+        }
+        if (n != want) {
+            printf("FAIL: %s lists %d staging mount(s) %s, want %d\n",
+                   files[i], n, when, want);
+            failures_total++;
+        }
+        test_logf("  %-24s %s: %d (want %d)\n", files[i], when, n, want);
+    }
+}
+
 int main(int argc, char **argv) {
     test_init(argc, argv);
     TEST_SKIP_IF_FOREIGN_PROC("fsopen_move_mount");
@@ -112,6 +152,9 @@ int main(int argc, char **argv) {
     }
     close(wfd);
 
+    // Detached: usable through its fd (just proven), and invisible everywhere.
+    check_staging_hidden("while detached", 0);
+
     r = raw_fsconfig(fs_fd, FSCONFIG_SET_FLAG, "ro", NULL, 0);
     test_log_if(r == 0, "fsconfig(SET_FLAG, \"ro\") ok\n");
     if (r != 0) {
@@ -131,6 +174,10 @@ int main(int argc, char **argv) {
         printf("FAIL: move_mount() -> %d (%s)\n", r, strerror(errno));
         return 1;
     }
+
+    // Placed: the staging path is gone for good, and the mount is listed at
+    // its real point (checked below by reading the file back through it).
+    check_staging_hidden("after move_mount", 0);
 
     char path[512];
     snprintf(path, sizeof(path), "%s/hello", target);

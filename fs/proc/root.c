@@ -589,6 +589,10 @@ static void proc_print_escaped(struct proc_data *buf, const char *str) {
 int proc_show_mounts(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     struct mount *mount;
     list_for_each_entry(&mounts, mount, mounts) {
+        // A detached fsmount() has no mountpoint on Linux and appears in no
+        // listing until move_mount places it. See struct mount.
+        if (mount->detached)
+            continue;
         const char *point = mount->point;
         if (point[0] == '\0')
             point = "/";
@@ -647,6 +651,10 @@ static int proc_mountinfo_parent_id(struct mount *target) {
 int proc_show_mountinfo(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     struct mount *mount;
     list_for_each_entry(&mounts, mount, mounts) {
+        // Same as proc_show_mounts: a detached fsmount() is not in any mount
+        // listing until move_mount gives it a point.
+        if (mount->detached)
+            continue;
         const char *point = mount->point;
         if (point[0] == '\0')
             point = "/";
