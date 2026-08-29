@@ -93,6 +93,12 @@ struct fd {
             bool unix_initctl_sink;
             bool reuseaddr;
             bool reuseport;
+            // euid at bind() time. SO_REUSEPORT lets several sockets share a
+            // port, and Linux requires every member of the group to have the
+            // same effective uid -- otherwise any user could join a root
+            // daemon's port and take its connections. Only meaningful once
+            // the socket is bound.
+            uid_t_ bind_euid;
             bool listening; // listen() called: SO_ACCEPTCONN (Darwin can't report it)
             // The host description is kept nonblocking whenever a guest call
             // that may block has run on it, so no guest task can ever wedge

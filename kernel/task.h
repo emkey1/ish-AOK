@@ -531,6 +531,7 @@ extern void (*halt_hook)(int status);
 #define CAP_SETUID_      7
 #define CAP_SYS_CHROOT_  18
 #define CAP_SYS_PTRACE_  19
+#define CAP_NET_BIND_SERVICE_ 10
 #define CAP_SYS_ADMIN_   21
 
 // The equivalent of Linux's capable(): true if the caller holds `cap` in its

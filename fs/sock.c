@@ -2806,7 +2806,12 @@ static bool sock_bound_inet_conflicts(struct fd *sock, const struct inet_bind_in
                 continue;
             if (!inet_bind_addr_overlaps(candidate, &other_info))
                 continue;
-            if (sock->socket.reuseport && other->socket.reuseport)
+            // Linux has required identical socket euid across an
+            // SO_REUSEPORT group since v3.9, precisely so an unprivileged user
+            // cannot join a root daemon's port and take its connections. We
+            // checked only that both had the flag set.
+            if (sock->socket.reuseport && other->socket.reuseport &&
+                    sock->socket.bind_euid == other->socket.bind_euid)
                 continue;
             conflict = true;
             break;
@@ -4240,6 +4245,22 @@ static int_t sys_bind_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t so
             sock->socket.netlink_port_id = addr->nl_pid;
         return 0;
     }
+
+    // CAP_NET_BIND_SERVICE: ports below 1024 are privileged on Linux. We had no
+    // check at all, so uid 1000 could bind 127.0.0.1:80 or :53 and serve
+    // guest-local traffic there -- and because the NAT fallback below rescues a
+    // privileged-port bind the host refuses, it worked even though the host
+    // itself would never allow it. Checked before the host bind so the fallback
+    // only ever runs for a caller Linux would have permitted.
+    if (sock->socket.domain == AF_INET_ || sock->socket.domain == AF_INET6_) {
+        struct inet_bind_info want = {};
+        if (inet_bind_info_from_sockaddr((const struct sockaddr *) &sockaddr, &want) &&
+                want.port != 0 && ntohs(want.port) < 1024 &&
+                !current_capable(CAP_NET_BIND_SERVICE_))
+            return _EACCES;
+    }
+    // Remember who bound this socket, for the SO_REUSEPORT same-uid rule.
+    sock->socket.bind_euid = current->euid;
 
 #if defined(__APPLE__)
     if ((sock->socket.domain == AF_INET_ || sock->socket.domain == AF_INET6_) &&
