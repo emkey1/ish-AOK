@@ -2038,16 +2038,29 @@ dword_t sys_fstatfs64(fd_t f, dword_t buf_size, addr_t buf_addr) {
 }
 
 dword_t sys_flock(fd_t f, dword_t operation) {
-    struct fd *fd = f_get(f);
+    // f_get_retain, not f_get: flock_lock() below can sleep indefinitely
+    // waiting for the lock, and the struct fd is recorded as the lock's OWNER.
+    // Without a reference a concurrent close() frees it mid-wait, and the lock
+    // is then granted and filed under a dangling pointer -- nothing can ever
+    // match it again, so it is held forever: not by a later close, not by
+    // LOCK_UN from a new fd, not by process exit. sys_fcntl_common already
+    // does this; flock was the odd one out. Linux's fdget/fput give the same
+    // guarantee.
+    struct fd *fd = f_get_retain(f);
     if (fd == NULL)
         return _EBADF;
-    if (fd->inode != NULL)
-        return flock_lock(fd, operation);
-    // TODO: POSIX doesn't allow flock to fail in this way. The check is here
-    // because a segfault is worse.
-    if (fd->mount->fs->flock == NULL)
-        return _EBADF;
-    return fd->mount->fs->flock(fd, operation);
+    dword_t err;
+    if (fd->inode != NULL) {
+        err = flock_lock(fd, operation);
+    } else if (fd->mount->fs->flock == NULL) {
+        // TODO: POSIX doesn't allow flock to fail in this way. The check is
+        // here because a segfault is worse.
+        err = _EBADF;
+    } else {
+        err = fd->mount->fs->flock(fd, operation);
+    }
+    fd_close(fd);
+    return err;
 }
 
 static dword_t sys_utime_common(fd_t at_f, guest_addr_t path_addr, struct timespec atime, struct timespec mtime, dword_t flags) {

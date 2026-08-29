@@ -727,16 +727,18 @@ static bool time_warning_trace_enabled(void) {
     return false;
 }
 
-static void itimer_notify(struct task *task) {
+// The timer carries the TGROUP, not the arming task. ITIMER_REAL is
+// process-directed on Linux: any eligible thread may take SIGALRM, and the
+// timer outlives whichever thread happened to arm it. Carrying a struct task
+// meant the signal went only to that thread's private queue -- so it was lost
+// if that thread had it blocked, and the callback dereferenced a FREED task if
+// that thread exited while the timer was still armed. The group is safe to
+// hold: exit_tgroup frees these timers when the group dies.
+static void itimer_notify(struct tgroup *group) {
     struct siginfo_ info = {
         .code = SI_TIMER_,
     };
-    if (time_warning_trace_enabled())
-        printk("WARNING: itimer_notify pid=%d tgid=%d comm=%s sig=%d pending=%#llx blocked=%#llx\n",
-               task->pid, task->tgid, task->comm, SIGALRM_,
-               (unsigned long long) task->pending,
-               (unsigned long long) task->blocked);
-    send_signal(task, SIGALRM_, info);
+    send_signal_to_group(group, SIGALRM_, info);
 }
 
 // ITIMER_VIRTUAL/PROF: neither has a native CPU-time clock this codebase's
@@ -779,9 +781,10 @@ static bool itimer_vprof_maybe_fire(struct cpu_itimer_state *state, struct times
     return true;
 }
 
+// Same as itimer_notify: the group, not a thread. SIGVTALRM/SIGPROF are
+// process-directed too.
 static void itimer_vprof_sampler_notify(void *data) {
-    struct task *task = data;
-    struct tgroup *group = task->group;
+    struct tgroup *group = data;
 
     struct timespec cpu_user = cpu_time_now_of(group, false);
     struct timespec cpu_total = cpu_time_now_of(group, true);
@@ -793,9 +796,9 @@ static void itimer_vprof_sampler_notify(void *data) {
 
     struct siginfo_ info = { .code = SI_TIMER_ };
     if (fire_virtual)
-        send_signal(task, SIGVTALRM_, info);
+        send_signal_to_group(group, SIGVTALRM_, info);
     if (fire_prof)
-        send_signal(task, SIGPROF_, info);
+        send_signal_to_group(group, SIGPROF_, info);
 }
 
 // Must be called with group->lock held (matches itimer_set's caller).
@@ -831,7 +834,7 @@ static long itimer_vprof_set(struct tgroup *group, int which, struct timer_spec 
     state->interval = spec.interval;
 
     if (group->itimer_vprof_sampler == NULL) {
-        struct timer *sampler = timer_new(CLOCK_MONOTONIC, itimer_vprof_sampler_notify, current);
+        struct timer *sampler = timer_new(CLOCK_MONOTONIC, itimer_vprof_sampler_notify, group);
         if (IS_ERR(sampler))
             return PTR_ERR(sampler);
         group->itimer_vprof_sampler = sampler;
@@ -855,7 +858,7 @@ static long itimer_set(struct tgroup *group, int which, struct timer_spec spec, 
         return _EINVAL;
 
     if (!group->itimer) {
-        struct timer *timer = timer_new(CLOCK_REALTIME, (timer_callback_t) itimer_notify, current);
+        struct timer *timer = timer_new(CLOCK_REALTIME, (timer_callback_t) itimer_notify, group);
         if (IS_ERR(timer))
             return PTR_ERR(timer);
         group->itimer = timer;
