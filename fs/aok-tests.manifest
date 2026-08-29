@@ -122,6 +122,7 @@ proc_stat_monotonic.c
 proc_field_layout.c
 sock_conn_error.c
 sock_getfd_errno.c
+sock_nosignal.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c
 timerfd_settime_readiness.c

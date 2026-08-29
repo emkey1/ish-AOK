@@ -1,4 +1,5 @@
 #ifndef SYS_ERRNO_H
+#include <stdbool.h>   // errno_map_flags
 #define SYS_ERRNO_H
 
 #include <errno.h>
@@ -118,5 +119,8 @@
 
 int err_map(int err);
 int errno_map(void);
+// errno_map, but MSG_NOSIGNAL-aware: pass true to return EPIPE without
+// raising the guest's SIGPIPE. See kernel/errno.c.
+int errno_map_flags(bool suppress_sigpipe);
 
 #endif

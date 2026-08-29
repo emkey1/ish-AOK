@@ -5286,7 +5286,8 @@ static int_t sys_sendto_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t l
             sock_x11_event("sendto-eagain", sock, -1, _EAGAIN, len);
             return _EAGAIN;
         }
-        int mapped_err = errno_map();
+        // MSG_NOSIGNAL: EPIPE without the guest's SIGPIPE.
+        int mapped_err = errno_map_flags(flags & MSG_NOSIGNAL_);
         sock_translate_err(sock, &mapped_err);
         // Linux returns ENOTCONN for a send() on an unconnected AF_UNIX
         // datagram socket with no destination address; Darwin returns
@@ -6990,7 +6991,7 @@ static int_t sys_sendmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
             sock_x11_event("sendmsg-eagain", sock, -1, err, requested);
             goto out_free_scm;
         }
-        err = errno_map();
+        err = errno_map_flags(flags & MSG_NOSIGNAL_);   // MSG_NOSIGNAL
         // A /dev/log or initctl path whose socket exists but has no live reader
         // falls back to discarding rather than failing the send.
         if (sendmsg_devlog_fallback &&

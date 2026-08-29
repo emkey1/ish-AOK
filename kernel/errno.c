@@ -98,8 +98,12 @@ int err_map(int err) {
     return -(err | 0x1000);
 }
 
-int errno_map() {
-    if (errno == EPIPE) {
+// suppress_sigpipe is MSG_NOSIGNAL: the caller asked for EPIPE without the
+// signal. Linux decides this per-send, which is why it cannot live in the
+// signal disposition -- a library doing send(..., MSG_NOSIGNAL) must not have
+// to alter process-wide state that its caller can observe.
+int errno_map_flags(bool suppress_sigpipe) {
+    if (errno == EPIPE && !suppress_sigpipe) {
         if(strcmp(current->comm, "dpkg-deb") != 0) { // Suppress SIGPIPE only for dpkg-deb.
             send_signal(current, SIGPIPE_, SIGINFO_NIL);
         } else {
@@ -108,4 +112,8 @@ int errno_map() {
         }
     }
     return err_map(errno);
+}
+
+int errno_map() {
+    return errno_map_flags(false);
 }

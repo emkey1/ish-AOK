@@ -264,6 +264,11 @@ static inline int sock_type_to_real(int type, int protocol) {
 #define MSG_EOR_    0x80
 #define MSG_WAITALL_ 0x100
 #define MSG_ERRQUEUE_ 0x2000
+// Suppress SIGPIPE for this send only. Nothing is passed to the host: host
+// SIGPIPE is already SIG_IGN process-wide (kernel/init.c), and Darwin has no
+// MSG_NOSIGNAL anyway. What it controls is whether the GUEST gets the signal,
+// which is decided when the host errno is mapped -- see errno_map_flags().
+#define MSG_NOSIGNAL_ 0x4000
 
 static inline int sock_flags_to_real(int fake) {
     int real = 0;
@@ -274,7 +279,7 @@ static inline int sock_flags_to_real(int fake) {
     if (fake & MSG_DONTWAIT_) real |= MSG_DONTWAIT;
     if (fake & MSG_EOR_) real |= MSG_EOR;
     if (fake & MSG_WAITALL_) real |= MSG_WAITALL;
-    if (fake & ~(MSG_OOB_|MSG_PEEK_|MSG_CTRUNC_|MSG_TRUNC_|MSG_DONTWAIT_|MSG_EOR_|MSG_WAITALL_|MSG_ERRQUEUE_))
+    if (fake & ~(MSG_OOB_|MSG_PEEK_|MSG_CTRUNC_|MSG_TRUNC_|MSG_DONTWAIT_|MSG_EOR_|MSG_WAITALL_|MSG_ERRQUEUE_|MSG_NOSIGNAL_))
         TRACE("unimplemented socket flags %d\n", fake);
     return real;
 }
