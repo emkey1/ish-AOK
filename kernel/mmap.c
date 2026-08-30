@@ -1,4 +1,5 @@
 #include <string.h>
+#include <sys/mman.h>
 #include "debug.h"
 #include "kernel/calls.h"
 #include "kernel/errno.h"
@@ -338,21 +339,104 @@ addr_t sys_mmap2(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_
 
 enum membarrier_cmd {
     MEMBARRIER_CMD_QUERY = 0,
-    MEMBARRIER_SUPPORTS_ALL = 31, // lies
+    MEMBARRIER_CMD_GLOBAL = 1 << 0,
+    MEMBARRIER_CMD_GLOBAL_EXPEDITED = 1 << 1,
+    MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED = 1 << 2,
+    MEMBARRIER_CMD_PRIVATE_EXPEDITED = 1 << 3,
+    MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED = 1 << 4,
 };
+// Exactly what is implemented below -- no more. The SYNC_CORE and RSEQ
+// commands Linux also offers are deliberately absent rather than claimed.
+#define MEMBARRIER_SUPPORTED \
+    (MEMBARRIER_CMD_GLOBAL | MEMBARRIER_CMD_GLOBAL_EXPEDITED | \
+     MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED | \
+     MEMBARRIER_CMD_PRIVATE_EXPEDITED | \
+     MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED)
+
+// membarrier's whole contract is that when it returns, every OTHER thread has
+// executed a full memory barrier. What was here was a fence in the calling
+// thread -- which provides none of that, and the comment beside the advertised
+// mask said "lies" outright.
+//
+// It matters because the libraries that use this query the mask and skip their
+// own fallback when the kernel claims support: crossbeam-epoch (transitively
+// under much of the Rust ecosystem), liburcu, and .NET's
+// FlushProcessWriteBuffers all do exactly that. Claiming the feature and not
+// providing it is worse than not claiming it, because it disables the
+// fallback that would have worked.
+//
+// The barrier is imposed here the way those same libraries impose it when
+// membarrier is unavailable: an mprotect round trip on a private page.
+// Changing a mapping's protection makes the host kernel shoot down that entry
+// on every core currently running one of our threads, and the interrupt that
+// does it is a full barrier on that core; a thread not currently running
+// executed one when it was descheduled. AOK's guest threads are host threads
+// sharing one address space, so that covers exactly the set membarrier is
+// defined over.
+static void membarrier_impose(void) {
+    static lock_t page_lock = LOCK_INITIALIZER;
+    static void *page;
+    lock(&page_lock, 0);
+    if (page == NULL) {
+        void *p = mmap(NULL, real_page_size, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p != MAP_FAILED) {
+            *(volatile char *) p = 0;      // fault it in, so there is an entry to shoot down
+            page = p;
+        }
+    }
+    if (page != NULL) {
+        mprotect(page, real_page_size, PROT_READ);
+        mprotect(page, real_page_size, PROT_READ | PROT_WRITE);
+    }
+    unlock(&page_lock);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
 
 dword_t sys_membarrier(dword_t cmd, dword_t flags, dword_t cpuid) {
     STRACE("membarrier(0x%x, 0x%x, 0x%x)", cmd, flags, cpuid);
+    // Only MEMBARRIER_CMD_PRIVATE_EXPEDITED_RSEQ takes a flag, and that is not
+    // implemented, so any nonzero flags word is EINVAL -- as on Linux, which
+    // is how a caller probes for the commands it can use.
+    if (flags != 0)
+        return _EINVAL;
     switch (cmd) {
         case MEMBARRIER_CMD_QUERY:
-            return MEMBARRIER_SUPPORTS_ALL;
-            //errno = ENOSYS;
-            //return -1;
+            return MEMBARRIER_SUPPORTED;
+
+        case MEMBARRIER_CMD_PRIVATE_EXPEDITED: {
+            // Refused until the process has registered, which is how a runtime
+            // learns that it must.
+            lock(&current->group->lock, 0);
+            bool registered = current->group->membarrier_private_expedited;
+            unlock(&current->group->lock);
+            if (!registered)
+                return _EPERM;
+            membarrier_impose();
+            return 0;
+        }
+
+        case MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED:
+            lock(&current->group->lock, 0);
+            current->group->membarrier_private_expedited = true;
+            unlock(&current->group->lock);
+            return 0;
+
+        case MEMBARRIER_CMD_GLOBAL:
+        case MEMBARRIER_CMD_GLOBAL_EXPEDITED:
+            membarrier_impose();
+            return 0;
+
+        case MEMBARRIER_CMD_REGISTER_GLOBAL_EXPEDITED:
+            // Linux needs no per-process state for the global variant either.
+            return 0;
+
         default:
-	 __atomic_thread_fence(__ATOMIC_SEQ_CST);
-            // __asm__ __volatile__("" : : : "memory");
+            // An unknown or unimplemented command is EINVAL. Returning success
+            // told a caller that a future command it does not have a fallback
+            // for had been honoured.
+            return _EINVAL;
     }
-    return 0;
 }
 
 struct mmap_arg_struct {
@@ -432,12 +516,55 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
         return _EINVAL;
     pages_t old_pages = PAGE_ROUND_UP(old_len);
     pages_t new_pages = PAGE_ROUND_UP(new_len);
+    // A zero new_len is EINVAL, and the original mapping is left alone. Without
+    // this the shrink path below unmapped every page of the mapping and then
+    // returned `addr` -- a success value, not in the errno window, so the
+    // caller could not even tell. Any size computation that rounds or
+    // underflows to zero silently destroyed the mapping it meant to resize.
+    if (new_pages == 0)
+        return _EINVAL;
     // Same jetsam-headroom backpressure as mmap_common_guest (grow only).
     if (new_pages > old_pages && host_mem_headroom_low())
         return _ENOMEM;
     guest_addr_t res = _ENOMEM;
 
     mem_write_lock_with_pokes(current->mem);
+
+    // old_len == 0 is not a resize at all: it asks for a second mapping of the
+    // same pages. Linux permits it only for a SHARED mapping, because aliasing
+    // a private one would quietly break its privacy, and returns EINVAL
+    // otherwise. AOK checked nothing, so the private case produced a stray
+    // detached mapping (64 calls, 64 leaked regions), and the legitimate
+    // shared case "succeeded" with a fresh zero page instead of an alias --
+    // the caller lost coherence with the original and was told it had not.
+    if (old_pages == 0) {
+        struct pt_entry *entry = mem_pt(current->mem, PAGE(addr));
+        if (entry == NULL) {
+            res = _EFAULT;
+            goto out;
+        }
+        if (!(entry->flags & P_SHARED)) {
+            res = _EINVAL;
+            goto out;
+        }
+        page_t dest;
+        if (flags & MREMAP_FIXED_) {
+            dest = PAGE(new_addr);
+            if (pt_unmap(current->mem, dest, new_pages) < 0) {
+                res = _ENOMEM;
+                goto out;
+            }
+        } else {
+            dest = pt_find_hole(current->mem, new_pages);
+            if (dest == BAD_PAGE) {
+                res = _ENOMEM;
+                goto out;
+            }
+        }
+        int dup_err = pt_dup(current->mem, PAGE(addr), dest, new_pages);
+        res = dup_err < 0 ? (guest_addr_t) dup_err : (guest_addr_t) (dest << PAGE_BITS);
+        goto out;
+    }
 
     if (flags & MREMAP_FIXED_) {
         page_t src_page = PAGE(addr);
@@ -850,12 +977,73 @@ int_t sys_munlockall(void) {
 #define MS_INVALIDATE_ 2
 #define MS_SYNC_       4
 
+// Write the file-backed shared pages of a range back to the host file.
+//
+// Only those: a private mapping has nothing to write back, and an anonymous
+// shared one has no file behind it. Contiguous runs of the same backing are
+// coalesced so a large msync is a handful of host calls rather than one per
+// guest page, and each run is widened to the host's page granularity, which on
+// this platform is larger than the guest's.
+//
+// Done with the memory read lock still held. A concurrent munmap would need
+// the write lock, so the host mappings cannot be pulled out from under us;
+// the cost is that a slow MS_SYNC delays a writer, which is the right trade
+// for an explicit, rare durability request.
+//
+// Caller holds mem_read_lock_quiesce_aware and has already validated the range.
+static void msync_writeback(struct mem *mem, page_t start, page_t end, int_t flags) {
+    int host_flags = (flags & MS_SYNC_) ? MS_SYNC : MS_ASYNC;
+    page_t page = start;
+    while (page < end) {
+        struct pt_entry *e = mem_pt(mem, page);
+        if (e == NULL || e->data == NULL || e->data->data == NULL ||
+                !(e->flags & P_SHARED) || e->data->fd == NULL) {
+            page++;
+            continue;
+        }
+        // Extend over the pages that continue this same host region.
+        struct data *data = e->data;
+        size_t first_offset = e->offset;
+        page_t run_end = page + 1;
+        while (run_end < end) {
+            struct pt_entry *next = mem_pt(mem, run_end);
+            if (next == NULL || next->data != data ||
+                    next->offset != first_offset + (size_t) (run_end - page) * PAGE_SIZE)
+                break;
+            run_end++;
+        }
+
+        // Widen to host pages: the host refuses an unaligned address, and the
+        // guest's page size is the smaller of the two here.
+        char *base = (char *) data->data + first_offset;
+        size_t length = (size_t) (run_end - page) * PAGE_SIZE;
+        uintptr_t aligned = (uintptr_t) base & ~(uintptr_t) (real_page_size - 1);
+        size_t head = (uintptr_t) base - aligned;
+        size_t span = (length + head + real_page_size - 1) & ~(size_t) (real_page_size - 1);
+        // ...but never past the end of the host region backing it.
+        if (aligned + span > (uintptr_t) data->data + data->size)
+            span = ((uintptr_t) data->data + data->size) - aligned;
+        // Return value deliberately dropped: Linux reports msync failures from
+        // the filesystem, and there is no filesystem error here to report --
+        // a host EINVAL would mean this walk computed a bad range, which is a
+        // bug to fix rather than an errno to hand the guest.
+        (void) msync((void *) aligned, span, host_flags);
+        page = run_end;
+    }
+}
+
 int_t sys_msync_guest(guest_addr_t addr, qword_t len, int_t flags) {
     STRACE("msync(%#llx, %#llx, 0x%x)", (unsigned long long) addr,
            (unsigned long long) len, flags);
-    // iSH has no separate dirty-page write-back step (anonymous and shared
-    // mappings share their host pages), so the data side of msync is a no-op.
-    // But Linux still validates the arguments, and software checks those errors:
+    // Coherence between the guest's mappings needs nothing here -- anonymous
+    // and shared mappings share their host pages, so a store is already
+    // visible everywhere. DURABILITY is what msync is for, and that was
+    // missing: the guest's stores reached the host page cache and no writeback
+    // was ever issued, so a program that msync'd and then lost power (or, more
+    // often, was killed) had nothing on disk. It was observable from an
+    // ordinary guest program -- the file's mtime never moved, at any point.
+    //
+    // Linux still validates the arguments too, and software checks those:
     //   - an unknown flag bit -> EINVAL;
     //   - MS_SYNC and MS_ASYNC together -> EINVAL (mutually exclusive);
     //   - an unaligned address -> EINVAL;
@@ -885,6 +1073,8 @@ int_t sys_msync_guest(guest_addr_t addr, qword_t len, int_t flags) {
             }
         }
     }
+    if (err == 0 && (flags & (MS_SYNC_ | MS_ASYNC_)))
+        msync_writeback(mem, start, end, flags);
     mem_read_unlock_quiesce_aware(mem);
     return err;
 }

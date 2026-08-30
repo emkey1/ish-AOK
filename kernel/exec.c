@@ -1438,6 +1438,13 @@ static void exec_apply_native_process_state(void) {
     native_sigtable_discard(current);
     exec_discard_posix_timers();
 
+    // Linux clears the membarrier registration on exec (membarrier_exec_mmap):
+    // the new image has not asked for expedited barriers and must find out it
+    // needs to register, via the EPERM, exactly as a fresh process would.
+    lock(&current->group->lock, 0);
+    current->group->membarrier_private_expedited = false;
+    unlock(&current->group->lock);
+
     current->did_exec = true;
     current->keepcaps = false;
     // A vfork parent is released by its child's exec, not by its exit. Without
@@ -1622,6 +1629,13 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     // allocates one.
     native_sigtable_discard(current);
     exec_discard_posix_timers();
+
+    // Linux clears the membarrier registration on exec (membarrier_exec_mmap):
+    // the new image has not asked for expedited barriers and must find out it
+    // needs to register, via the EPERM, exactly as a fresh process would.
+    lock(&current->group->lock, 0);
+    current->group->membarrier_private_expedited = false;
+    unlock(&current->group->lock);
 
     current->did_exec = true;
     current->keepcaps = false;

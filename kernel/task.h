@@ -481,6 +481,11 @@ struct tgroup {
     // find_new_parent (kernel/exit.c). Inherited across fork like Linux, and
     // cleared by the child of a subreaper only if it clears it itself.
     bool child_subreaper;
+    // membarrier(MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED) has been called for
+    // this process. Linux refuses PRIVATE_EXPEDITED with EPERM until it has,
+    // and a runtime uses that EPERM to learn it must register. Lock:
+    // group->lock. Inherited across fork like the rest of the group state.
+    bool membarrier_private_expedited;
     dword_t group_exit_code;
 
     // Set under group->lock when SIGCONT resumes a stopped group; reported once

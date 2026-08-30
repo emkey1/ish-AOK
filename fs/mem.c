@@ -77,12 +77,27 @@ static ssize_t zero_read(struct fd *UNUSED(fd), void *buf, size_t bufsize) {
 static ssize_t zero_write(struct fd *UNUSED(fd), const void *UNUSED(buf), size_t bufsize) {
     return bufsize;
 }
+// mmap of /dev/zero is a plain zero-filled mapping -- exactly MAP_ANONYMOUS,
+// which is what Linux does with it (mmap_zero in drivers/char/mem.c). Without
+// an .mmap op the generic path returned ENODEV, so the oldest portable idiom
+// for getting anonymous memory failed outright.
+//
+// Only /dev/zero. /dev/null and /dev/full have no mmap in Linux either and
+// keep returning ENODEV; that was measured, not assumed.
+static int zero_mmap(struct fd *UNUSED(fd), struct mem *mem, page_t start,
+                     pages_t pages, off_t UNUSED(offset), int prot, int UNUSED(flags)) {
+    // prot already carries P_SHARED when the caller asked for MAP_SHARED, so a
+    // shared mapping of /dev/zero is shared anonymous memory, as on Linux.
+    return pt_map_nothing(mem, start, pages, prot);
+}
+
 struct dev_ops zero_dev = {
     .open = null_open,
     .fd.read = zero_read,
     .fd.write = zero_write,
     .fd.lseek = null_lseek,
     .fd.poll = ready_poll,
+    .fd.mmap = zero_mmap,
 };
 
 static ssize_t full_write(struct fd *UNUSED(fd), const void *UNUSED(buf), size_t UNUSED(bufsize)) {

@@ -261,6 +261,9 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
 int pt_map_nothing(struct mem *mem, page_t page, pages_t pages, unsigned flags);
 // Move an existing mapped range into a hole.
 int pt_move(struct mem *mem, page_t old_start, page_t new_start, pages_t pages);
+// Like pt_move, but leaves the source mapped: both addresses end up aliasing
+// the same pages. Only valid for shared mappings -- see the definition.
+int pt_dup(struct mem *mem, page_t old_start, page_t new_start, pages_t pages);
 // Unmap fake memory, return -1 if any part of the range isn't mapped and 0 otherwise
 int pt_unmap(struct mem *mem, page_t start, pages_t pages);
 // like pt_unmap but doesn't care if part of the range isn't mapped

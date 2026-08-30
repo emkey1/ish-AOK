@@ -1060,6 +1060,40 @@ int pt_map_nothing(struct mem *mem, page_t start, pages_t pages, unsigned flags)
     return pt_map(mem, start, pages, memory, 0, flags | P_ANONYMOUS);
 }
 
+// Alias a range at a second address: same backing, same offsets, both live.
+// This is pt_move without the unmap of the source -- which is exactly what
+// mremap's old_len == 0 form asks for, and Linux allows only for a shared
+// mapping, because aliasing a private one would silently break its privacy.
+//
+// The caller is responsible for that check; this routine will alias anything
+// it is handed.
+int pt_dup(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) {
+    if (!mem_page_range_valid(mem, old_start, pages) ||
+            !mem_page_range_valid(mem, new_start, pages))
+        return _ENOMEM;
+    if (!pt_is_hole(mem, new_start, pages))
+        return _ENOMEM;
+    for (page_t page = old_start; page < old_start + pages; page++)
+        if (mem_pt(mem, page) == NULL)
+            return _EFAULT;
+
+    pages_t mapped = 0;
+    for (; mapped < pages; mapped++) {
+        struct pt_entry *src = mem_pt(mem, old_start + mapped);
+        struct pt_entry *dst = mem_pt_new(mem, new_start + mapped);
+        if (dst == NULL) {
+            pt_unmap_always(mem, new_start, mapped);
+            return _ENOMEM;
+        }
+        src->data->refcount++;
+        dst->data = src->data;
+        dst->offset = src->offset;
+        dst->flags = src->flags;
+    }
+    mem_changed(mem);
+    return 0;
+}
+
 int pt_move(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) {
     if (!mem_page_range_valid(mem, old_start, pages) ||
             !mem_page_range_valid(mem, new_start, pages))
