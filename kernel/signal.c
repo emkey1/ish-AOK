@@ -2223,6 +2223,20 @@ void receive_signals(void) {
                 notify(&parent->group->child_exit);
             }
             unlock(&pids_lock);
+            // SA_NOCLDSTOP: the parent asked NOT to be told when a child
+            // merely stops or continues. Only the stop notification is
+            // suppressed -- the child's eventual exit still raises SIGCHLD --
+            // and wait(WUNTRACED) still reports the stop, because the flag is
+            // about the signal, not about waitability.
+            if (parent != NULL && signal_no == SIGCHLD_) {
+                struct sighand *psighand = parent->sighand;
+                if (psighand != NULL) {
+                    lock(&psighand->lock, 0);
+                    if (psighand->action[SIGCHLD_].flags & SA_NOCLDSTOP_)
+                        signal_no = 0;
+                    unlock(&psighand->lock);
+                }
+            }
             if (parent != NULL) {
                 // The stop SIGCHLD must carry CLD_STOPPED + the stop signal and
                 // the child's pid/uid, not SIGINFO_NIL (which a SA_SIGINFO

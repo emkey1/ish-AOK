@@ -14,6 +14,8 @@ typedef qword_t sigset_t_;
 #define SIG_DFL_ 0
 #define SIG_IGN_ 1
 
+#define SA_NOCLDSTOP_ 1
+#define SA_NOCLDWAIT_ 2
 #define SA_SIGINFO_ 4
 #define SA_ONSTACK_ 0x08000000
 #define SA_RESTART_ 0x10000000

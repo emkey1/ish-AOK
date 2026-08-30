@@ -154,11 +154,33 @@ static void exit_wait_backoff(struct timespec *pause) {
 
 // Finds a new parent for the children of a task that is exiting. If no suitable parent
 // is found within the task's group, it returns the 'init' task.
+// Who inherits `task`'s children. A surviving thread of its own group first --
+// the process is not really gone while one of those is running -- then the
+// nearest ancestor that asked to be a subreaper (PR_SET_CHILD_SUBREAPER),
+// then init. Without the subreaper step every orphan went straight to init,
+// so a service manager that had set the flag never saw its own descendants
+// die and could not reap them.
+//
+// Caller holds pids_lock, which is what keeps the ancestor walk's pointers
+// alive.
 static struct task *find_new_parent(struct task *task) {
     struct task *new_parent;
     list_for_each_entry(&task->group->threads, new_parent, group_links) {
         if (!new_parent->exiting)
             return new_parent;
+    }
+    // Walk up from the dying process's own parent. A subreaper that is itself
+    // exiting is no use, and the loop is bounded by the tree's depth -- plus a
+    // hard cap, because a corrupted parent chain must not spin here forever.
+    struct task *ancestor = task->group->leader != NULL ? task->group->leader->parent : NULL;
+    for (int depth = 0; ancestor != NULL && depth < MAX_PID; depth++) {
+        if (ancestor->group != NULL && ancestor->group->child_subreaper &&
+                !ancestor->exiting && !ancestor->zombie)
+            return ancestor;
+        if (ancestor->group != NULL && ancestor->group->leader == ancestor &&
+                ancestor->parent == ancestor)
+            break;                      // self-parented: nothing above it
+        ancestor = ancestor->parent;
     }
     return pid_get_task(1);
 }
@@ -250,6 +272,10 @@ static void exit_hangup_session_tty(struct task *leader) {
 // all locks are released before proceeding.  At least in theory
 noreturn void do_exit(struct task *task, int status) {
     if(task->reference.ready_to_be_freed) {
+        // Already queued for deletion by someone else, but the struct is still
+        // alive on that queue -- publish here too, or a de_thread waiting on
+        // this task would spin out its whole timeout for nothing.
+        atomic_store_explicit(&task->exit_finished, true, memory_order_release);
         goto EXIT;
     }
     bool was_already_exiting = task->exiting;
@@ -361,6 +387,10 @@ noreturn void do_exit(struct task *task, int status) {
     int signal_no = 0;
     struct sighand *old_sighand = NULL;
     bool destroy_unlinked_task = false;
+    // Set when the parent has disclaimed this child (SIGCHLD ignored or
+    // SA_NOCLDWAIT): no zombie is left behind for a wait() that will
+    // never come.
+    bool autoreap = false;
 
     complex_lockt(&pids_lock, 0);
 
@@ -416,7 +446,30 @@ noreturn void do_exit(struct task *task, int status) {
             task_ref_cnt_mod(parent, 1);
             signal_parent = parent;
             signal_no = leader->exit_signal;
-            leader->zombie = true;
+            // POSIX/Linux autoreap: a parent that has SIGCHLD set to SIG_IGN,
+            // or SA_NOCLDWAIT on its handler, has said it will never wait --
+            // so no zombie is left for it and its wait() returns ECHILD. AOK
+            // left the zombie regardless, so a parent using the idiom
+            // accumulated one per child for the life of the process.
+            //
+            // Only when this task IS the leader: that is the ordinary "a
+            // process exited" case. When the leader died first and a sibling
+            // thread finishes last, the leader is a separate struct that this
+            // path does not own, and leaving that zombie for wait() is the
+            // safe answer rather than reaching across to free it.
+            if (task == leader && signal_no == SIGCHLD_) {
+                struct sighand *psighand = parent->sighand;
+                if (psighand != NULL) {
+                    lock(&psighand->lock, 0);
+                    struct sigaction_ *pact = &psighand->action[SIGCHLD_];
+                    // SIG_IGN outright, or a handler that asked for no zombie.
+                    if (pact->handler == SIG_IGN_ || (pact->flags & SA_NOCLDWAIT_))
+                        autoreap = true;
+                    unlock(&psighand->lock);
+                }
+            }
+            if (!autoreap)
+                leader->zombie = true;
             notify(&parent->group->child_exit);
             pidfd_notify_exit(leader);
             // The SIGCHLD a handler/sigwaitinfo/signalfd sees must carry a CLD_*
@@ -441,7 +494,7 @@ noreturn void do_exit(struct task *task, int status) {
 
     unlock(&task->general_lock);
     
-    if(task != leader) {
+    if(task != leader || autoreap) {
         task_unlink_locked(task);
         destroy_unlinked_task = true;
     }
@@ -469,14 +522,18 @@ noreturn void do_exit(struct task *task, int status) {
         task_ref_cnt_mod(signal_parent, -1);
     }
 
+    // Published BEFORE the destroy below, not after: task_destroy_unlinked
+    // can free(task) outright, and a store into the struct after that is a
+    // use-after-free. It says "this struct is no longer being used by its own
+    // thread", which is true from here on -- everything below is teardown that
+    // does not read it. execve's de_thread waits on this before releasing a
+    // group leader whose identity it is taking (kernel/exec.c).
+    atomic_store_explicit(&task->exit_finished, true, memory_order_release);
+
     if (destroy_unlinked_task)
         task_destroy_unlinked(task, 1);
     
 EXIT:
-    // Last thing before the thread is gone: publish that this struct is no
-    // longer being used by its own thread. execve's de_thread waits on this
-    // before releasing a group leader it is taking the identity of.
-    atomic_store_explicit(&task->exit_finished, true, memory_order_release);
     // The crash this instruments is a fault inside the pthread_exit below, so
     // this is the one check with no race in it at all: the thread validates
     // its own struct on its own stack, an instant before handing it to

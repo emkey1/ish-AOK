@@ -472,6 +472,11 @@ struct tgroup {
     // https://twitter.com/tblodt/status/957706819236904960
     // TODO locking
     bool doing_group_exit;
+    // PR_SET_CHILD_SUBREAPER: this process collects the orphans of its whole
+    // descendant tree instead of letting them go to init. Consulted by
+    // find_new_parent (kernel/exit.c). Inherited across fork like Linux, and
+    // cleared by the child of a subreaper only if it clears it itself.
+    bool child_subreaper;
     dword_t group_exit_code;
 
     // Set under group->lock when SIGCONT resumes a stopped group; reported once

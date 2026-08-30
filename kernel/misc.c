@@ -187,9 +187,17 @@ int_t sys_prctl_guest(dword_t option, qword_t arg2, qword_t arg3, qword_t UNUSED
         case PRCTL_SET_CHILD_SUBREAPER_:
             if (arg2 > 1)
                 return _EINVAL;
+            // Was accepted and discarded, which is the worst of both: a
+            // service manager set it, believed it, and then lost every
+            // orphaned grandchild to init.
+            lock(&current->group->lock, 0);
+            current->group->child_subreaper = arg2 != 0;
+            unlock(&current->group->lock);
             return 0;
         case PRCTL_GET_CHILD_SUBREAPER_: {
-            dword_t value = 0;
+            lock(&current->group->lock, 0);
+            dword_t value = current->group->child_subreaper ? 1 : 0;
+            unlock(&current->group->lock);
             if (user_write((guest_addr_t) arg2, &value, sizeof(value)))
                 return _EFAULT;
             return 0;
