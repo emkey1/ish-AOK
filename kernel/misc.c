@@ -100,8 +100,17 @@ int_t sys_prctl_guest(dword_t option, qword_t arg2, qword_t arg3, qword_t UNUSED
             return 0;
         case PRCTL_SET_NAME_: {
             char name[16];
-            if (user_read_string((guest_addr_t) arg2, name, sizeof(name) - 1))
-                return _EFAULT;
+            if (user_read_string((guest_addr_t) arg2, name, sizeof(name) - 1)) {
+                // user_read_string fails both on a fault AND on a string that
+                // does not fit. Linux TRUNCATES here rather than failing -- the
+                // comm field is 16 bytes and prctl(2) says so -- and AOK was
+                // dropping the update with EFAULT for any name of 15+ chars,
+                // which is an ordinary length for a thread name. Retry as a
+                // fixed-size read: if those 15 bytes are readable the name was
+                // merely long; if they are not, this is a real fault.
+                if (user_read((guest_addr_t) arg2, name, sizeof(name) - 1))
+                    return _EFAULT;
+            }
             name[sizeof(name) - 1] = '\0';
             STRACE("prctl(PRCTL_SET_NAME, \"%s\")", name);
             lock(&current->general_lock, 0);

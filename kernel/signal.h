@@ -27,7 +27,12 @@ struct sigaction_ {
     sigset_t_ mask;
 };
 
-#define NUM_SIGS 64
+// One past the highest signal number, so a valid signal is 1 <= sig < NUM_SIGS
+// -- which is how every bound in the tree spells it. Linux's highest is
+// SIGRTMAX == 64, so this is 65: at 64, signal 64 itself did not exist and
+// sigaction/kill/tgkill all returned EINVAL for it. sig_mask(64) is 1 << 63,
+// which still fits sigset_t_ (uint64_t).
+#define NUM_SIGS 65
 
 #define	SIGHUP_    1
 #define	SIGINT_    2
