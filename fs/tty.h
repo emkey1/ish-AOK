@@ -110,6 +110,13 @@ struct termios2_ {
 #define TCSETS2_ 0x402c542b
 #define TCSETSW2_ 0x402c542c
 #define TCSETSF2_ 0x402c542d
+// tcflow() actions, passed to TCXONC by value.
+#define TCOOFF_ 0
+#define TCOON_  1
+#define TCIOFF_ 2
+#define TCION_  3
+#define TCSBRK_ 0x5409
+#define TCXONC_ 0x540a
 #define TCFLSH_ 0x540b
 #define TIOCSCTTY_ 0x540e
 #define TIOCGSID_ 0x5429
@@ -122,6 +129,11 @@ struct termios2_ {
 #define TIOCGPTN_ 0x80045430
 #define TIOCSPTLCK_ 0x40045431
 #define TIOCGPKT_ 0x80045438
+#define TIOCOUTQ_ 0x5411
+#define TIOCNOTTY_ 0x5422
+#define TIOCEXCL_ 0x540c
+#define TIOCNXCL_ 0x540d
+#define TIOCGEXCL_ 0x80045440
 
 #define TCIFLUSH_ 0
 #define TCOFLUSH_ 1
@@ -184,6 +196,9 @@ struct tty {
     dword_t mtime;
     dword_t ctime;
 
+    // TIOCEXCL: while set, only a privileged process may open this terminal
+    // again. Guarded by tty->lock like the rest of this struct.
+    bool excl;
     pid_t_ session;
     pid_t_ fg_group;
 

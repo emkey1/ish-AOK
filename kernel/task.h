@@ -495,6 +495,18 @@ struct tgroup {
     lock_t lock;
 };
 
+// Is this thread group the leader of its session? Linux keeps this as a
+// per-thread-group flag (signal->leader), so it is a property of the PROCESS
+// and not of the calling thread -- a thread of a session leader is inside a
+// session leader. Comparing the sid against the CALLING task's pid gets that
+// wrong for every thread but one; compare against the group leader's.
+//
+// Caller must hold tgroup->lock (sid) -- leader is immutable.
+static inline bool tgroup_is_session_leader(struct tgroup *tgroup) {
+    return tgroup->sid == tgroup->leader->pid;
+}
+
+
 static inline bool task_is_leader(struct task *task) {
     return task->group->leader == task;
 }

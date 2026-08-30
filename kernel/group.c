@@ -62,7 +62,7 @@ dword_t sys_setpgid(pid_t_ id, pid_t_ pgid) {
         goto out;
     // a session leader cannot create a process group
     err = _EPERM;
-    if (tgroup->sid == tgroup->leader->pid)
+    if (tgroup_is_session_leader(tgroup))
         goto out;
 
     if (tgroup->pgid != pgid) {
