@@ -10,6 +10,51 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### PROT_EXEC is never enforced -- no NX for guest pages
+
+`emu/memory.h` says "P_READ and P_EXEC are ignored for now", and P_EXEC really
+is: it is stored, printed in `/proc/<pid>/maps`, reconstructed by mremap, and
+never once consulted. Measured against Linux 6.12 (arm64 `mov w0,#42; ret` in a
+PROT_READ|PROT_WRITE page):
+
+| | Linux | AOK |
+|---|---|---|
+| call into a never-PROT_EXEC page | SIGSEGV | returns 42 |
+| `mprotect(PROT_READ)` over a PROT_EXEC page, then call | SIGSEGV | returns 42 |
+
+So every guest `.data`/`.bss` page is executable and any guest JIT's W^X
+discipline is decorative. Graded a mitigation gap rather than a hole: it takes
+a separate memory-corruption bug in guest software to matter.
+
+**Why it is not fixed here, and what it would take.** The instruction-fetch
+path has no access type of its own -- `emu/tlb.h` fills the TLB for a fetch
+with `MEM_READ` -- so there is nothing for a check to hang off. Two designs
+were considered:
+
+- *A TLB bit.* `struct tlb_entry` is `page`, `page_if_writable`,
+  `data_minus_addr` -- 16 bytes, 1024 entries. Adding `page_if_executable`
+  pushes it to 24 and grows the emulator's hottest structure by half. Rejected
+  on cost.
+
+- *Check once per compiled block, invalidate on revoke.* This is the right
+  shape and is nearly free: `jit_block_compile_common` runs once per block, so
+  the check lands exactly where Linux's fault-on-fetch would, and
+  `jit_invalidate_page` (already used for self-modifying code) handles the
+  revoke half when `pt_set_flags` clears P_EXEC.
+
+  The obstacle is fault delivery. `jit_block_compile*` returning NULL already
+  means OOM, and every dispatch loop responds by flushing the entire JIT,
+  retrying, and then killing the task with a "JIT OOM" printk. A non-executable
+  page needs a *distinct* signal threaded out to raise INT_PF with the faulting
+  address instead -- and there are four dispatch loops (i386, amd64, arm64,
+  riscv64), each with its own OOM and crash-unwind structure. The interpreter
+  build needs its own check as well.
+
+That is a contained project rather than a patch, and it touches the one path
+where a mistake stops every guest from running. Worth doing deliberately, with
+its own before/after benchmark run, rather than folded into a conformance
+sweep.
+
 ### `fcntl(F_GETFL)` on a pipe reports an O_NONBLOCK the guest never set
 
 Found 2026-08-23 while writing `native_ptrace_group_stop.c`, whose drain step
