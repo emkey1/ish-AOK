@@ -10,4 +10,4 @@ CODE_SIGN_ENTITLEMENTS = app/iSH.entitlements
 
 HEADER_SEARCH_PATHS = $(inherited) $(SRCROOT) $(SRCROOT)/deps/libarchive/libarchive
 // AccessibilityFixes.m contains a static constructor that we don't want removed
-OTHER_LDFLAGS = -ObjC $(LINUX_APP_LDFLAGS) -u _accessibilityfixes_init
+OTHER_LDFLAGS = -ObjC -u _accessibilityfixes_init
