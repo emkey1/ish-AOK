@@ -269,6 +269,10 @@ static inline int sock_type_to_real(int type, int protocol) {
 // MSG_NOSIGNAL anyway. What it controls is whether the GUEST gets the signal,
 // which is decided when the host errno is mapped -- see errno_map_flags().
 #define MSG_NOSIGNAL_ 0x4000
+// recvmsg only: mark every fd received through SCM_RIGHTS close-on-exec. It
+// exists because there is no race-free way to do it afterwards -- an exec
+// between the recvmsg and the fcntl leaks the descriptor.
+#define MSG_CMSG_CLOEXEC_ 0x40000000
 
 static inline int sock_flags_to_real(int fake) {
     int real = 0;
@@ -337,6 +341,16 @@ static inline int sock_flags_from_real(int real) {
 #define SO_DETACH_FILTER_ 27
 #define SO_TIMESTAMP_ 29
 #define SO_ACCEPTCONN_ 30
+// Linux SOL_SOCKET options with no Darwin equivalent. Accepted and remembered
+// rather than refused: ENOPROTOOPT here is a state real Linux never produces,
+// and a program tuning a socket sees an error where every Linux gives success.
+// Same treatment tcp_syncnt and friends already get.
+#define SO_NO_CHECK_ 11
+#define SO_PRIORITY_ 12
+#define SO_TIMESTAMPNS_ 35
+#define SO_MARK_ 36
+#define SO_BUSY_POLL_ 46
+
 #define SO_PEERSEC_ 31
 #define SO_SNDBUFFORCE_ 32
 #define SO_RCVBUFFORCE_ 33
@@ -533,6 +547,26 @@ static inline int sock_opt_to_real(int fake, int level) {
 #define IPV6_MULTICAST_LOOP_ 19
 #define IPV6_ADD_MEMBERSHIP_ 20
 #define IPV6_DROP_MEMBERSHIP_ 21
+
+// Levels this kernel implements. Needed because sock_level_to_real passes an
+// unknown level straight through, so "no mapping" cannot mean "unknown level"
+// -- the option lookup would fail first and report the wrong errno for it.
+// Linux distinguishes the two, and asymmetrically: an unknown LEVEL is
+// EOPNOTSUPP to getsockopt and ENOPROTOOPT to setsockopt, while an unknown
+// OPTION at a known level is ENOPROTOOPT to both.
+static inline bool sock_level_is_known(int fake) {
+    switch (fake) {
+        case SOL_SOCKET_:
+        case IPPROTO_TCP:
+        case IPPROTO_IP:
+        case IPPROTO_IPV6:
+        case IPPROTO_ICMPV6:
+        case IPPROTO_UDP:
+        case SOL_NETLINK_:
+            return true;
+    }
+    return false;
+}
 
 static inline int sock_level_to_real(int fake) {
     if (fake == SOL_SOCKET_)

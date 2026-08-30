@@ -2402,7 +2402,19 @@ static fd_t sock_fd_create(int sock_fd, int domain, int type, int protocol) {
     fd->real_fd = sock_fd;
     fd->socket.domain = domain;
     fd->socket.type = type & SOCKET_TYPE_MASK;
+    // SO_PROTOCOL reports the protocol the socket ACTUALLY speaks, which for
+    // the usual socket(AF_INET, SOCK_STREAM, 0) form is the family/type
+    // default rather than the 0 that was passed in. Storing the raw argument
+    // meant every default-protocol socket reported 0, so a caller using
+    // SO_PROTOCOL to find out what it had -- which is what the option is for
+    // -- learned nothing. Resolved once, here, where the type is known.
     fd->socket.protocol = protocol;
+    if (protocol == 0 && (domain == AF_INET_ || domain == AF_INET6_)) {
+        switch (type & SOCKET_TYPE_MASK) {
+            case SOCK_STREAM_: fd->socket.protocol = IPPROTO_TCP; break;
+            case SOCK_DGRAM_:  fd->socket.protocol = IPPROTO_UDP; break;
+        }
+    }
     sock_init_emulation_defaults(fd);
     if (domain == AF_LOCAL_) {
         cond_init(&fd->socket.unix_got_peer);
@@ -2475,12 +2487,42 @@ int_t sys_socket(dword_t domain, dword_t type, dword_t protocol) {
         netlink_notify_register(fd);
         return f_install(fd, type & ~SOCKET_TYPE_MASK);
     }
+    // Three different failures were all reported as EINVAL, and a program
+    // probing for what this kernel supports could not tell them apart. Linux
+    // is specific, and the distinction is the point of having these errnos:
+    //   an address family that does not exist   -> EAFNOSUPPORT
+    //   a type that is not a socket type at all -> EINVAL
+    //   a protocol the family/type cannot speak -> EPROTONOSUPPORT
+    //
+    // The AF_UNIX normalisation is Linux's unix_create: protocol 0 and PF_UNIX
+    // (1) are both accepted, anything else is EPROTONOSUPPORT. Without it
+    // socket(AF_UNIX, SOCK_STREAM, 1) failed, and libraries do write that.
+    // socketpair() below gets the same treatment -- it shares __sock_create on
+    // Linux, so it shares the rules.
     int real_domain = sock_family_to_real(domain);
     if (real_domain < 0)
+        return _EAFNOSUPPORT;
+    // Both halves of the type word: the low bits name a socket type, the high
+    // bits are SOCK_NONBLOCK/SOCK_CLOEXEC and nothing else. Linux checks the
+    // flag half first, which is why socket(AF_INET, 99, 0) is EINVAL even
+    // though 99 & SOCK_TYPE_MASK is a perfectly good type.
+    if (type & ~(SOCKET_TYPE_MASK | SOCK_NONBLOCK_ | SOCK_CLOEXEC_))
         return _EINVAL;
+    switch (type & SOCKET_TYPE_MASK) {
+        case SOCK_STREAM_: case SOCK_DGRAM_:
+        case SOCK_RAW_: case SOCK_SEQPACKET_:
+            break;
+        default:
+            return _EINVAL;
+    }
+    if (domain == PF_LOCAL_) {
+        if (protocol != 0 && protocol != PF_LOCAL_)
+            return _EPROTONOSUPPORT;
+        protocol = 0;
+    }
     int real_type = sock_type_to_real(type, protocol);
     if (real_type < 0)
-        return _EINVAL;
+        return _EPROTONOSUPPORT;
 
     // this hack makes mtr work
     if (type == SOCK_RAW_ && protocol == IPPROTO_RAW)
@@ -5127,10 +5169,28 @@ static int_t sys_socketpair_common(dword_t domain, dword_t type, dword_t protoco
             (unsigned long long) sockets_addr);
     int real_domain = sock_family_to_real(domain);
     if (real_domain < 0)
+        return _EAFNOSUPPORT;
+    // Both halves of the type word: the low bits name a socket type, the high
+    // bits are SOCK_NONBLOCK/SOCK_CLOEXEC and nothing else. Linux checks the
+    // flag half first, which is why socket(AF_INET, 99, 0) is EINVAL even
+    // though 99 & SOCK_TYPE_MASK is a perfectly good type.
+    if (type & ~(SOCKET_TYPE_MASK | SOCK_NONBLOCK_ | SOCK_CLOEXEC_))
         return _EINVAL;
+    switch (type & SOCKET_TYPE_MASK) {
+        case SOCK_STREAM_: case SOCK_DGRAM_:
+        case SOCK_RAW_: case SOCK_SEQPACKET_:
+            break;
+        default:
+            return _EINVAL;
+    }
+    if (domain == PF_LOCAL_) {
+        if (protocol != 0 && protocol != PF_LOCAL_)
+            return _EPROTONOSUPPORT;
+        protocol = 0;
+    }
     int real_type = sock_type_to_real(type, protocol);
     if (real_type < 0)
-        return _EINVAL;
+        return _EPROTONOSUPPORT;
 
     int sockets[2];
     int err;
@@ -5652,8 +5712,19 @@ int_t sys_shutdown(fd_t sock_fd, dword_t how) {
     if (sock == NULL)
         return sock_err;
     int err = shutdown(sock->real_fd, how);
-    if (err < 0)
+    if (err < 0) {
+        // Linux shuts a LISTENING socket down cleanly -- inet_shutdown's
+        // TCP_LISTEN arm disconnects and returns 0 -- and reserves ENOTCONN
+        // for a socket that never had a peer (TCP_CLOSE). Darwin makes no such
+        // distinction and refuses both, so the ordinary "stop accepting, wake
+        // everyone polling this listener" idiom failed here.
+        // Asked of the fd, not of the host: Darwin has no SO_ACCEPTCONN at all
+        // (getsockopt on it returns ENOPROTOOPT), which is why sys_listen
+        // records this in the first place.
+        if (errno == ENOTCONN && sock->socket.listening)
+            return 0;
         return errno_map();
+    }
     return 0;
 }
 
@@ -5776,6 +5847,42 @@ static int_t sys_setsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
 
     // See the block in fs/fd.h: Linux always accepts these, so accepting and
     // remembering them is closer than an ENOPROTOOPT no Linux ever returns.
+    // SOL_SOCKET options Linux accepts unconditionally and Darwin has no knob
+    // for. Remembered and reported back, the same way the TCP block below
+    // already does -- refusing them with ENOPROTOOPT is a state real Linux
+    // never produces.
+    if (level == SOL_SOCKET_ &&
+            (option == SO_PRIORITY_ || option == SO_MARK_ ||
+             option == SO_BUSY_POLL_ || option == SO_NO_CHECK_ ||
+             option == SO_TIMESTAMPNS_)) {
+        if (value_len < sizeof(dword_t))
+            return _EINVAL;
+        dword_t v = *(dword_t *) value;
+        switch (option) {
+            case SO_PRIORITY_:
+                // Linux: 0..6 unprivileged, above that needs CAP_NET_ADMIN.
+                if (v > 6 && !superuser())
+                    return _EPERM;
+                sock->socket.so_priority = v;
+                break;
+            case SO_MARK_:
+                // Routing marks are CAP_NET_ADMIN on Linux, and EPERM is what
+                // a caller checks for -- never EINVAL.
+                if (!superuser())
+                    return _EPERM;
+                sock->socket.so_mark = v;
+                break;
+            case SO_BUSY_POLL_:
+                if (!superuser() && v != 0)
+                    return _EPERM;
+                sock->socket.so_busy_poll = v;
+                break;
+            case SO_NO_CHECK_: sock->socket.so_no_check = v != 0; break;
+            case SO_TIMESTAMPNS_: sock->socket.so_timestampns = v != 0; break;
+        }
+        return 0;
+    }
+
     if (level == IPPROTO_TCP &&
             (option == TCP_SYNCNT_ || option == TCP_LINGER2_ ||
              option == TCP_WINDOW_CLAMP_ || option == TCP_USER_TIMEOUT_ ||
@@ -6068,8 +6175,6 @@ static int_t sys_setsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
         // list this replaces was the same fix applied one option at a time.)
         return _ENOPROTOOPT;
     int real_level = sock_level_to_real(level);
-    if (real_level < 0)
-        return _EINVAL;
 
     if (real_opt == 0)
         return _ENOPROTOOPT;
@@ -6300,6 +6405,46 @@ static int_t sys_getsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
             socket_error = real_error == 0 ? 0 : -err_map(real_error);
         }
         sockopt_store_value(value, user_value_len, &value_len, &socket_error, sizeof(socket_error));
+    } else if (level == SOL_SOCKET_ &&
+            (option == SO_PRIORITY_ || option == SO_MARK_ ||
+             option == SO_BUSY_POLL_ || option == SO_NO_CHECK_ ||
+             option == SO_TIMESTAMPNS_)) {
+        // The remembered value, as set above. These have no Darwin knob to
+        // read back from, so this IS the state.
+        dword_t v = 0;
+        switch (option) {
+            case SO_PRIORITY_: v = sock->socket.so_priority; break;
+            case SO_MARK_: v = sock->socket.so_mark; break;
+            case SO_BUSY_POLL_: v = sock->socket.so_busy_poll; break;
+            case SO_NO_CHECK_: v = sock->socket.so_no_check; break;
+            case SO_TIMESTAMPNS_: v = sock->socket.so_timestampns; break;
+        }
+        sockopt_store_value(value, user_value_len, &value_len, &v, sizeof(v));
+    } else if ((level == IPPROTO_IP &&
+                (option == IP_MULTICAST_TTL_ || option == IP_MULTICAST_LOOP_)) ||
+               (level == IPPROTO_IPV6 &&
+                (option == IPV6_MULTICAST_HOPS_ || option == IPV6_MULTICAST_LOOP_))) {
+        // setsockopt forwards these to the host, so the host has the answer;
+        // only the read side was missing, which left them settable and not
+        // readable. Darwin's IPv4 pair are u_char and the IPv6 pair int, while
+        // Linux reports an int for all four -- so widen on the way out.
+        dword_t out = 0;
+        if (level == IPPROTO_IP) {
+            unsigned char host_val = 0;
+            socklen_t host_len = sizeof(host_val);
+            int real_opt = option == IP_MULTICAST_TTL_ ? IP_MULTICAST_TTL : IP_MULTICAST_LOOP;
+            if (getsockopt(sock->real_fd, IPPROTO_IP, real_opt, &host_val, &host_len) < 0)
+                return errno_map();
+            out = host_val;
+        } else {
+            int host_val = 0;
+            socklen_t host_len = sizeof(host_val);
+            int real_opt = option == IPV6_MULTICAST_HOPS_ ? IPV6_MULTICAST_HOPS : IPV6_MULTICAST_LOOP;
+            if (getsockopt(sock->real_fd, IPPROTO_IPV6, real_opt, &host_val, &host_len) < 0)
+                return errno_map();
+            out = (dword_t) host_val;
+        }
+        sockopt_store_value(value, user_value_len, &value_len, &out, sizeof(out));
     } else if (level == IPPROTO_TCP && option == TCP_DEFER_ACCEPT_) {
         dword_t defer_accept = sock->socket.tcp_defer_accept;
         sockopt_store_value(value, user_value_len, &value_len, &defer_accept, sizeof(defer_accept));
@@ -6378,17 +6523,20 @@ static int_t sys_getsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
         sockopt_store_value(value, user_value_len, &value_len, &info, sizeof(info));
 #endif
     } else {
+        // Level before option, and the two failures are different errnos.
+        // Linux's ip_getsockopt opens with `if (level != SOL_IP) return
+        // -EOPNOTSUPP`, so an unrecognised LEVEL is EOPNOTSUPP on the read
+        // side (the write side gives ENOPROTOOPT -- measured, and it really is
+        // asymmetric). An unrecognised OPTION at a level that does exist is
+        // ENOPROTOOPT either way; EINVAL is for a malformed argument, and
+        // probing code treats ENOPROTOOPT as "not available, carry on" while
+        // EINVAL is a hard error, so the distinction is load-bearing.
+        if (!sock_level_is_known((int) level))
+            return _EOPNOTSUPP;
+        int real_level = sock_level_to_real(level);
         int real_opt = sock_opt_to_real(option, level);
         if (real_opt < 0)
-            // Linux reports an option the level does not recognise as
-        // ENOPROTOOPT; EINVAL is for a malformed argument. Probing code
-        // treats ENOPROTOOPT as "not available, carry on" and EINVAL as a
-        // hard error, so the distinction is load-bearing. (The soft-unsupported
-        // list this replaces was the same fix applied one option at a time.)
-        return _ENOPROTOOPT;
-        int real_level = sock_level_to_real(level);
-        if (real_level < 0)
-            return _EINVAL;
+            return _ENOPROTOOPT;
 
         socklen_t host_value_len = user_value_len;
         int err = getsockopt(sock->real_fd, real_level, real_opt, value, &host_value_len);
@@ -7369,6 +7517,12 @@ static ssize_t recvmsg_ipv6_errqueue(struct fd *sock, struct msghdr *msg, int re
 static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t flags,
         enum guest_abi abi) {
     STRACE("recvmsg(%d, %#llx, %d)", sock_fd, (unsigned long long) msghdr_addr, flags);
+    // MSG_CMSG_CLOEXEC applies to every fd this call installs from SCM_RIGHTS.
+    // It was ignored, so a descriptor a program had explicitly asked to be
+    // close-on-exec arrived without it and leaked into the next exec -- and
+    // there is no race-free way for the caller to repair that afterwards,
+    // which is the entire reason the flag exists.
+    int scm_install_flags = (flags & MSG_CMSG_CLOEXEC_) ? O_CLOEXEC_ : 0;
     int_t sock_err;
     struct fd *sock = sock_getfd(sock_fd, &sock_err);
     if (sock == NULL)
@@ -7872,7 +8026,7 @@ out_recvmsg_done:
                     fd_t fds[scm->num_fds];
                     for (unsigned i = 0; i < scm->num_fds; i++) {
                         fd_retain(scm->fds[i]); // f_install takes ownership; scm_free releases separately
-                        fds[i] = f_install(scm->fds[i], 0);
+                        fds[i] = f_install(scm->fds[i], scm_install_flags);
                         STRACE(" receiving fd %d", fds[i]);
                     }
                     bool appended = guest_cmsg_append(abi, guest_msg_control, required_msg_control, &guest_msg_control_len,
@@ -7899,7 +8053,7 @@ out_recvmsg_done:
                 fd_t fds[dgram_scm->num_fds];
                 for (unsigned i = 0; i < dgram_scm->num_fds; i++) {
                     fd_retain(dgram_scm->fds[i]); // f_install takes ownership; scm_free releases separately
-                    fds[i] = f_install(dgram_scm->fds[i], 0);
+                    fds[i] = f_install(dgram_scm->fds[i], scm_install_flags);
                     STRACE(" receiving dgram fd %d", fds[i]);
                 }
                 bool appended = guest_cmsg_append(abi, guest_msg_control, required_msg_control, &guest_msg_control_len,

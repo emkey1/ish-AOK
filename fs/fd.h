@@ -154,6 +154,14 @@ struct fd {
             dword_t tcp_fastopen;
             bool tcp_quickack_set;
 
+            // SOL_SOCKET options Darwin has no knob for, kept so the get
+            // reports what the set was given (see fs/sock.h).
+            dword_t so_priority;
+            dword_t so_mark;
+            dword_t so_busy_poll;
+            bool so_no_check;
+            bool so_timestampns;
+
             // Guest-loopback NAT (fs/sock.c inet_nat_*): when a guest
             // bind() asks for a loopback endpoint the host can't provide
             // (a 127.x.y.z alias macOS doesn't have, or a privileged
