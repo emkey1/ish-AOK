@@ -409,6 +409,10 @@ void task_never_ran_destroy(struct task *task);
 void vfork_notify(struct task *task);
 pid_t_ task_setsid(struct task *task);
 void task_leave_session(struct task *task);
+// True when no member of this process group has a parent elsewhere in the same
+// session -- so nothing outside it could continue it after a stop. Requires
+// pids_lock.
+bool pgroup_is_orphaned(pid_t_ pgid, pid_t_ sid);
 
 struct posix_timer {
     struct timer *timer;

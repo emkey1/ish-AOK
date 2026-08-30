@@ -185,15 +185,6 @@ static struct task *find_new_parent(struct task *task) {
     return pid_get_task(1);
 }
 
-static bool session_has_other_live_groups(struct pid *sid_pid, struct tgroup *group) {
-    struct tgroup *session_group;
-    list_for_each_entry(&sid_pid->session, session_group, session) {
-        if (session_group != group && !list_empty(&session_group->threads))
-            return true;
-    }
-    return false;
-}
-
 static void ptrace_detach_from_tracer(struct task *tracer, struct task *tracee) {
     bool traced_by_tracer = tracee->ptrace.tracer == tracer ||
         (tracee->ptrace.traced && tracee->ptrace.tracer == NULL && tracee->parent == tracer);
@@ -221,11 +212,34 @@ static void ptrace_detach_from_tracer(struct task *tracer, struct task *tracee) 
     list_remove_safe(&tracee->ptrace_siblings);
 }
 
-// Hang up the controlling terminal as soon as the session leader exits, but
-// only once the session is otherwise empty. Waiting until the zombie is reaped
-// is too late for PTY users such as script, but hanging up while sshd still
-// has a child shell running tears down the remote login immediately.
-static void exit_hangup_session_tty(struct task *leader) {
+// A session leader's death takes the controlling terminal away from the whole
+// session. Linux (disassociate_ctty) does this unconditionally, and does two
+// separate things that AOK had run together:
+//
+//   the SESSION is disassociated -- every member loses its tty pointer and the
+//   terminal forgets its session -- always, for every kind of terminal;
+//
+//   the DEVICE is hung up (reads and writes start failing) only for a real
+//   terminal. A pty is left working; its foreground group just gets a SIGHUP.
+//
+// AOK hung the device up in both cases, and then guarded the whole thing on
+// the session being otherwise empty to stop that from tearing down a remote
+// login while sshd still had a shell running. The guard cured the symptom and
+// left the terminal permanently unusable: tty->session stayed set with nobody
+// able to clear it, so every later TIOCSCTTY on that pts got EPERM -- for the
+// life of the emulator, since the other release path only runs at reap time
+// and only for the last member of the session.
+//
+// Splitting the two puts the guard out of a job. Measured on Linux 6.12: after
+// the leader exits, a surviving session member can still write to the pts and
+// sees no POLLHUP, but /dev/tty stops resolving for it and a fresh session can
+// claim the terminal.
+//
+// The SIGHUP is not sent from here -- do_exit is holding pids_lock. Like the
+// parent's SIGCHLD beside it, the target goes back to the caller, which sends
+// it once the lock is released. Linux sends no SIGCONT on this path (it passes
+// on_exit=1, which suppresses it), so neither do we.
+static void exit_hangup_session_tty(struct task *leader, struct tty_hangup_targets *hup) {
     struct tgroup *group = leader->group;
     lock(&group->lock, 0);
     struct tty *tty = group->tty;
@@ -236,8 +250,6 @@ static void exit_hangup_session_tty(struct task *leader) {
 
     struct pid *sid_pid = pid_get(sid);
     if (sid_pid == NULL)
-        return;
-    if (session_has_other_live_groups(sid_pid, group))
         return;
 
     int tty_release_count = 0;
@@ -253,14 +265,14 @@ static void exit_hangup_session_tty(struct task *leader) {
 
     lock(&ttys_lock, 0);
     lock(&tty->lock, 0);
+    hup->fg_group = tty->fg_group;
+    hup->session = 0;
     tty->session = 0;
     tty->fg_group = 0;
-    // Return value deliberately dropped. This is the session leader giving up
-    // its own controlling terminal on the way out, and tty->session and
-    // tty->fg_group are cleared just above, so there is nobody left to signal.
-    // Signalling from inside do_exit would also mean sending under the exit
-    // path's own locks, which is not a thing to do untested.
-    (void) tty_hangup(tty);
+    // Only a real terminal is hung up as a device. Doing it to a pty is what
+    // made this dangerous enough to need the guard that bricked it.
+    if (tty->type != TTY_PSEUDO_MASTER_MAJOR && tty->type != TTY_PSEUDO_SLAVE_MAJOR)
+        (void) tty_hangup(tty);
     unlock(&tty->lock);
     while (tty_release_count-- > 0)
         tty_release(tty);
@@ -383,6 +395,9 @@ noreturn void do_exit(struct task *task, int status) {
     }
 
     struct task *signal_parent = NULL;
+    // Filled in when this task's exit takes a controlling terminal away from
+    // its session; the SIGHUP goes out below, once pids_lock is released.
+    struct tty_hangup_targets tty_hup = { .fg_group = 0, .session = 0 };
     struct siginfo_ signal_info = {};
     int signal_no = 0;
     struct sighand *old_sighand = NULL;
@@ -430,7 +445,7 @@ noreturn void do_exit(struct task *task, int status) {
     list_for_each_entry_safe(&task->ptracees, child, tmp, ptrace_siblings)
         ptrace_detach_from_tracer(task, child);
     if (exit_tgroup(task)) {
-        exit_hangup_session_tty(leader);
+        exit_hangup_session_tty(leader, &tty_hup);
         // notify parent that we died
         struct task *parent = leader->parent;
         if (parent == NULL) {
@@ -509,6 +524,9 @@ noreturn void do_exit(struct task *task, int status) {
         list_remove(&sigqueue->queue);
         free(sigqueue);
     }
+
+    if (tty_hup.fg_group != 0)
+        send_group_signal(tty_hup.fg_group, SIGHUP_, SIGINFO_NIL);
 
     if (signal_parent != NULL) {
         // Process-directed: the parent may be multithreaded, and the thread

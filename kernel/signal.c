@@ -1420,17 +1420,22 @@ bool signal_should_restart_syscall(void) {
     return restart;
 }
 
-bool try_self_signal(int sig) {
-    assert(sig == SIGTTIN_ || sig == SIGTTOU_);
-
+// Whether a signal would go nowhere if sent to us right now. The terminal
+// job-control checks need to know this WITHOUT sending anything: Linux treats
+// an ignored or blocked SIGTTOU as permission to proceed, and only turns an
+// ignored SIGTTIN into EIO.
+//
+// This replaced a try_self_signal() that decided and delivered in one step,
+// and delivered only to the calling task. Linux signals the whole process
+// group (kill_pgrp), so a background job stops entirely rather than losing one
+// thread -- the caller now does that, once it is holding no locks.
+bool signal_is_ignored_or_blocked(int sig) {
     struct sighand *sighand = current->sighand;
     lock(&sighand->lock, 0);
-    bool can_send = signal_action(sighand, sig) != SIGNAL_IGNORE &&
-        !sigset_has(current->blocked, sig);
-    if (can_send)
-        deliver_signal_unlocked_locked(current, current->sighand, sig, SIGINFO_NIL);
+    bool ignored = signal_action(sighand, sig) == SIGNAL_IGNORE ||
+        sigset_has(current->blocked, sig);
     unlock(&sighand->lock);
-    return can_send;
+    return ignored;
 }
 
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info) {

@@ -54,14 +54,14 @@ static void ck(const char *label, int rc, int er, int want_rc, int want_errno) {
 
 // Run body in a child so a session change or a stolen terminal cannot poison
 // the rest of the suite, and fold its failures back into ours.
-#define IN_CHILD(body) do {                                                    \
+#define IN_CHILD(...) do {                                                    \
         fflush(NULL);                                                          \
         pid_t c_ = fork();                                                     \
         if (c_ == 0) {                                                         \
             /* report only OUR failures: inheriting the parent's count and     \
                adding it back makes a single failure double per block. */      \
             failures_total = 0;                                                \
-            body;                                                              \
+            __VA_ARGS__;                                                       \
             fflush(NULL);                                                      \
             _exit(failures_total > 250 ? 250 : (int) failures_total);          \
         }                                                                      \

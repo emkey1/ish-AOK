@@ -64,6 +64,7 @@ struct termios2_ {
 #define ECHOE_ (1 << 4)
 #define ECHOK_ (1 << 5)
 #define NOFLSH_ (1 << 7)
+#define TOSTOP_ (1 << 8)
 #define ECHOCTL_ (1 << 9)
 // Real Linux/glibc termios c_lflag bit (0004000 octal); was previously
 // misdefined as (1 << 6), which is actually ECHONL's position -- that bug
@@ -76,6 +77,8 @@ struct termios2_ {
 #define IGNCR_ (1 << 7)
 #define ICRNL_ (1 << 8)
 #define IXON_ (1 << 10)
+#define IXANY_ (1 << 11)
+#define IXOFF_ (1 << 12)
 
 #define OPOST_ (1 << 0)
 #define ONLCR_ (1 << 2)
@@ -187,6 +190,8 @@ struct tty {
     uint8_t packet_flags;
     cond_t produced;
     cond_t consumed;
+    // Woken when output flow control is released (^Q, IXANY, TCOON).
+    cond_t flow_resumed;
 
     struct winsize_ winsize;
     struct termios_ termios;
@@ -196,6 +201,12 @@ struct tty {
     dword_t mtime;
     dword_t ctime;
 
+    // XON/XOFF output flow control. `stopped` is what actually gates writes;
+    // `tco_stopped` records that tcflow(TCOOFF) was what stopped them, because
+    // TCOON restarts only output it stopped itself -- a ^S is cleared by ^Q,
+    // never by tcflow. Both measured against Linux 6.12.
+    bool stopped;
+    bool tco_stopped;
     // TIOCEXCL: while set, only a privileged process may open this terminal
     // again. Guarded by tty->lock like the rest of this struct.
     bool excl;

@@ -232,7 +232,7 @@ static inline int_t signal_restart_or_eintr_nohand(int_t res) {
 }
 // send a signal to current if it's not blocked or ignored, return whether that worked
 // exists specifically for sending SIGTTIN/SIGTTOU
-bool try_self_signal(int sig);
+bool signal_is_ignored_or_blocked(int sig);
 // send a signal to all processes in a group, could return ESRCH
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info);
 // check for and deliver pending signals on current

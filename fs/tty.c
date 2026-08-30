@@ -66,6 +66,7 @@ struct tty *tty_alloc(struct tty_driver *driver, int type, int num) {
     lock_init(&tty->fds_lock, "tty_alloc_fds\0");
     cond_init(&tty->produced);
     cond_init(&tty->consumed);
+    cond_init(&tty->flow_resumed);
     memset(tty->buf_flag, false, sizeof(tty->buf_flag));
     tty->bufsize = 0;
     tty->packet_flags = 0;
@@ -433,6 +434,44 @@ static bool tty_trace_timed_raw_enabled(struct tty *tty) {
     return !(tty->termios.lflags & ICANON_) && tty->termios.cc[VTIME_] > 0;
 }
 
+static void tty_stop_output_locked(struct tty *tty) {
+    tty->stopped = true;
+}
+
+static void tty_start_output_locked(struct tty *tty) {
+    tty->stopped = false;
+    notify(&tty->flow_resumed);
+}
+
+// XON/XOFF input processing: ^S stops this terminal's output, ^Q restarts it,
+// and with IXANY any character at all restarts it. Returns true when the
+// character WAS flow control and so must not reach the reader.
+//
+// AOK never looked at VSTART/VSTOP outside echo rendering, so ^S and ^Q were
+// delivered to the program as literal 0x13/0x11 and stopped nothing -- someone
+// pressing ^S to pause a scrolling listing got two junk bytes into whatever
+// was reading, and no pause.
+//
+// Not called before the VLNEXT check: ^V quotes a ^S into ordinary data, and
+// output keeps flowing. Measured that way round on Linux.
+static bool tty_flow_control(struct tty *tty, char ch, dword_t iflags,
+                             const unsigned char *cc) {
+    if (!(iflags & IXON_) || ch == '\0')
+        return false;
+    if (ch == (char) cc[VSTART_]) {
+        tty_start_output_locked(tty);
+        return true;
+    }
+    if (ch == (char) cc[VSTOP_]) {
+        tty_stop_output_locked(tty);
+        return true;
+    }
+    // IXANY: any character resumes, and is still delivered as data.
+    if (iflags & IXANY_)
+        tty_start_output_locked(tty);
+    return false;
+}
+
 static bool tty_send_input_signal(struct tty *tty, char ch, sigset_t_ *queue) {
     if (!(tty->termios.lflags & ISIG_))
         return false;
@@ -498,6 +537,9 @@ ssize_t tty_input(struct tty *tty, const char *input, size_t size, bool blocking
                 tty->lnext_pending = false;
                 goto no_special;
             }
+
+            if (tty_flow_control(tty, ch, iflags, cc))
+                continue;
             if (ch == '\0') {
                 // '\0' is used to disable cc entries
                 goto no_special;
@@ -616,6 +658,8 @@ no_special:
     } else {
         for (size_t i = 0; i < size; i++) {
             done_size++;
+            if (tty_flow_control(tty, input[i], iflags, cc))
+                continue;
             if (tty_send_input_signal(tty, input[i], &queue))
                 continue;
             while (tty->bufsize >= sizeof(tty->buf)) {
@@ -699,20 +743,61 @@ static bool tty_is_current(struct tty *tty) {
 }
 
 // must call with tty->lock
-static int tty_signal_if_background_locked(struct tty *tty, int sig) {
-    pid_t_ current_pgid;
-    bool is_current;
+// Linux's tty_check_change: may this process touch the terminal right now?
+//
+// A process in the terminal's foreground group always may. A BACKGROUND
+// process is stopped instead -- SIGTTIN for reading, SIGTTOU for writing or
+// for changing the terminal's settings -- so that it cannot race the
+// foreground job for the keyboard. Three exceptions, in Linux's order:
+//
+//   the signal is ignored or blocked: the caller has said it does not want to
+//   be stopped, so SIGTTOU simply proceeds. SIGTTIN cannot -- there is no
+//   sensible input to hand back -- and becomes EIO;
+//
+//   the process group is orphaned: nothing outside it could ever continue it,
+//   so stopping it would wedge it forever. EIO instead;
+//
+//   otherwise the whole group is stopped and the syscall restarts afterwards
+//   (Linux returns ERESTARTSYS, so the stop is invisible to the caller).
+//
+// AOK had only a partial version of this on the read path: it signalled the
+// calling task alone rather than the group, treated an ignored SIGTTOU as EIO
+// rather than as permission, had no orphan test, and returned EINTR where
+// Linux restarts. It was not called from the write or ioctl paths at all.
+//
+// Caller holds tty->lock. It is dropped and retaken here: the ordering in this
+// file is pids_lock before tty->lock, and the group signal goes out holding
+// neither.
+static int tty_check_change_locked(struct tty *tty, int sig) {
+    unlock(&tty->lock);
+    complex_lockt(&pids_lock, 0);
     lock(&current->group->lock, 0);
-    is_current = current->group->tty == tty;
-    current_pgid = current->group->pgid;
+    bool is_current = current->group->tty == tty;
+    pid_t_ pgid = current->group->pgid;
+    pid_t_ sid = current->group->sid;
     unlock(&current->group->lock);
-    if (!is_current)
-        return 0;
-    if (tty->fg_group == 0 || current_pgid == tty->fg_group)
-        return 0;
-    if (!try_self_signal(sig))
-        return _EIO;
-    return _EINTR;
+
+    lock(&tty->lock, 0);
+    pid_t_ fg_group = tty->fg_group;
+    unlock(&tty->lock);
+
+    int err = 0;
+    pid_t_ stop_pgid = 0;
+    if (is_current && fg_group != 0 && pgid != fg_group) {
+        if (signal_is_ignored_or_blocked(sig))
+            err = sig == SIGTTIN_ ? _EIO : 0;
+        else if (pgroup_is_orphaned(pgid, sid))
+            err = _EIO;
+        else
+            stop_pgid = pgid, err = _ERESTART;
+    }
+    unlock(&pids_lock);
+
+    if (stop_pgid != 0)
+        send_group_signal(stop_pgid, sig, SIGINFO_NIL);
+
+    lock(&tty->lock, 0);
+    return err;
 }
 
 static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
@@ -727,7 +812,7 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
         goto error;
     }
 
-    err = tty_signal_if_background_locked(tty, SIGTTIN_);
+    err = tty_check_change_locked(tty, SIGTTIN_);
     if (err < 0)
         goto error;
 
@@ -865,7 +950,38 @@ static ssize_t tty_write(struct fd *fd, const void *buf, size_t bufsize) {
         return _EIO;
     }
 
+    // A background process writing to its controlling terminal is stopped by
+    // SIGTTOU, but only when the terminal asks for it with TOSTOP -- unlike the
+    // read side, where SIGTTIN is unconditional. There was no check here at
+    // all, so a background job scribbled over the foreground one's screen.
+    if (tty->termios.lflags & TOSTOP_) {
+        int bg = tty_check_change_locked(tty, SIGTTOU_);
+        if (bg < 0) {
+            unlock(&tty->lock);
+            return bg;
+        }
+    }
+
     bool blocking = !(fd->flags & O_NONBLOCK_);
+
+    // Output held by ^S (or by tcflow(TCOOFF)) waits here. This is the point
+    // of flow control: the writer stops until the reader says go.
+    while (tty->stopped) {
+        if (!blocking) {
+            unlock(&tty->lock);
+            return _EAGAIN;
+        }
+        int ferr = wait_for(&tty->flow_resumed, &tty->lock, NULL);
+        if (ferr < 0) {
+            unlock(&tty->lock);
+            return ferr;
+        }
+        if (tty_fd_hung_up(fd)) {
+            unlock(&tty->lock);
+            return _EIO;
+        }
+    }
+
     dword_t oflags = tty->termios.oflags;
     // we have to unlock it now to avoid lock ordering problems with ptys
     // the code below is safe because it only accesses tty->driver which is immutable
@@ -983,6 +1099,74 @@ static ssize_t tty_ioctl_size(int cmd) {
             return 0;
     }
     return -1;
+}
+
+// tcsetpgrp(): make a process group the terminal's foreground group. AOK
+// validated nothing -- the literal TODO here said so -- and stored whatever
+// number it was handed, so a shell could point a terminal at a process group
+// that does not exist, or at one in somebody else's session, and tcgetpgrp
+// would then cheerfully report it back. A job-control shell uses that value to
+// decide who owns the keyboard; pointing it at a stranger means ^C goes to
+// them.
+//
+// Linux checks three things in this order, all measured: a negative pgid is
+// EINVAL, one that names no live process group is ESRCH, and one belonging to
+// another session is EPERM. The foreground group is left untouched whenever
+// the call fails.
+static int tiocspgrp(struct tty *tty, pid_t_ pgid) {
+    int err = 0;
+    unlock(&tty->lock);
+    complex_lockt(&pids_lock, 0);
+    lock(&current->group->lock, 0);
+    lock(&tty->lock, 0);
+    pid_t_ sid = current->group->sid;
+    bool is_current = current->group->tty == tty;
+    unlock(&current->group->lock);
+
+    if (!is_current || sid != tty->session) {
+        err = _ENOTTY;
+        goto out;
+    }
+    if (pgid < 0) {
+        err = _EINVAL;
+        goto out;
+    }
+
+    // A pid nothing lives under any more has an empty pgroup list, and is
+    // ESRCH exactly like one that was never allocated. pgid 0 lands here too:
+    // Linux looks it up like any other and finds nothing.
+    struct pid *pid = pid_get(pgid);
+    if (pid == NULL || list_empty(&pid->pgroup)) {
+        err = _ESRCH;
+        goto out;
+    }
+
+    // Every member of a process group shares its session, so one member
+    // settles it. Our own group's sid is already in hand and its lock is
+    // released, so don't retake it.
+    struct tgroup *tgroup;
+    list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
+        pid_t_ member_sid;
+        if (tgroup == current->group) {
+            member_sid = sid;
+        } else {
+            lock(&tgroup->lock, 0);
+            member_sid = tgroup->sid;
+            unlock(&tgroup->lock);
+        }
+        if (member_sid != tty->session)
+            err = _EPERM;
+        break;
+    }
+    if (err < 0)
+        goto out;
+
+    tty->fg_group = pgid;
+    STRACE("tty group set to = %d\n", tty->fg_group);
+
+out:
+    unlock(&pids_lock);
+    return err;
 }
 
 static int tiocsctty(struct tty *tty, int force) {
@@ -1171,6 +1355,12 @@ static int tty_mode_ioctl(struct tty *in_tty, int cmd, void *arg) {
             // we have no output buffer currently
         case TCSETS_:
             tty->termios = *(struct termios_ *) arg;
+            // Turning IXON off releases output that a ^S was holding: with no
+            // flow control in effect there is nothing left to honour the stop,
+            // and a ^Q can no longer arrive to lift it. A tcflow(TCOOFF) stop
+            // is not IXON's to release, so it stays. Measured both ways.
+            if (!(tty->termios.iflags & IXON_) && tty->stopped && !tty->tco_stopped)
+                tty_start_output_locked(tty);
             break;
 
         // termios2 variants: same fields as termios_ above, plus explicit
@@ -1225,6 +1415,21 @@ static int tty_mode_ioctl(struct tty *in_tty, int cmd, void *arg) {
     return err;
 }
 
+// Which ioctls count as changing the terminal, and so may not be issued from
+// a background process. Linux calls tty_check_change() from inside each of
+// these handlers; the set is the same gathered in one place. Note TIOCSWINSZ
+// is deliberately absent -- Linux does not check it -- and that unlike a
+// write, none of these consult TOSTOP.
+static bool tty_ioctl_modifies_terminal(int cmd) {
+    switch (cmd) {
+        case TCSETS_: case TCSETSW_: case TCSETSF_:
+        case TCFLSH_: case TCSBRK_: case TCXONC_:
+        case TIOCSPGRP_:
+            return true;
+    }
+    return false;
+}
+
 static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
     int err = 0;
     struct tty *tty = fd->tty;
@@ -1237,6 +1442,18 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
         if (cmd == TIOCSPGRP_)
             return _ENOTTY;
         return _EIO;
+    }
+
+    if (tty_ioctl_modifies_terminal(cmd)) {
+        err = tty_check_change_locked(tty, SIGTTOU_);
+        if (err < 0) {
+            unlock(&tty->lock);
+            // Only TIOCSPGRP renames the refusal; every other caller sees the
+            // EIO that tty_check_change produced.
+            if (err == _EIO && cmd == TIOCSPGRP_)
+                return _ENOTTY;
+            return err;
+        }
     }
 
     switch (cmd) {
@@ -1270,13 +1487,30 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
             break;
 
         case TCXONC_:
-            // tcflow(): suspend/resume transmission or reception. AOK does not
-            // model XON/XOFF flow control, so the two "resume" actions are
-            // already the state we are in, and the "suspend" ones are accepted
-            // without stopping anything. Reported honestly in the docs rather
-            // than pretended to work.
+            // tcflow(): suspend or resume transmission. TCOON restarts only
+            // output that TCOOFF stopped -- it deliberately does NOT clear a
+            // ^S, which is why tco_stopped is tracked separately from stopped.
+            // Measured: after a ^S, tcflow(TCOON) leaves output stopped, while
+            // after a TCOOFF it releases it.
+            //
+            // TCIOFF/TCION are the input direction: they transmit a STOP or
+            // START character to the other end. AOK has no modem to send one
+            // to, so they are accepted and do nothing, as they do for any
+            // terminal that is not a serial line.
             switch ((uintptr_t) arg) {
-                case TCOOFF_: case TCOON_: case TCIOFF_: case TCION_:
+                case TCOOFF_:
+                    if (!tty->tco_stopped) {
+                        tty->tco_stopped = true;
+                        tty_stop_output_locked(tty);
+                    }
+                    break;
+                case TCOON_:
+                    if (tty->tco_stopped) {
+                        tty->tco_stopped = false;
+                        tty_start_output_locked(tty);
+                    }
+                    break;
+                case TCIOFF_: case TCION_:
                     break;
                 default:
                     err = _EINVAL;
@@ -1325,19 +1559,7 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
             break;
 
         case TIOCSPGRP_:
-            unlock(&tty->lock);
-            lock(&current->group->lock, 0);
-            lock(&tty->lock, 0);
-            pid_t_ sid = current->group->sid;
-            bool is_current = current->group->tty == tty;
-            unlock(&current->group->lock);
-            if (!is_current || sid != tty->session) {
-                err = _ENOTTY;
-                break;
-            }
-            // TODO group must be in the right session
-            tty->fg_group = *(dword_t *) arg;
-            STRACE("tty group set to = %d\n", tty->fg_group);
+            err = tiocspgrp(tty, *(pid_t_ *) arg);
             break;
 
         case FIONREAD_:
@@ -1398,6 +1620,9 @@ struct tty_hangup_targets tty_hangup(struct tty *tty) {
     // its conditions, so a missed edge here is harmless).
     notify(&tty->produced);
     notify(&tty->consumed);
+    // ...including a writer parked on flow control, which nothing else will
+    // ever wake now: the ^Q that would have released it can no longer arrive.
+    notify(&tty->flow_resumed);
     if (tty->driver == &pty_slave && tty->pty.other != NULL) {
         tty_poll_wakeup_unlocked(tty->pty.other, POLL_READ | POLL_HUP);
         notify(&tty->pty.other->produced);

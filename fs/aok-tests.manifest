@@ -142,6 +142,7 @@ proc_conformance.c
 fcntl_lock_validation.c
 tty_line_discipline.c
 tty_ctty_ioctls.c
+tty_job_control.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c
 timerfd_settime_readiness.c
