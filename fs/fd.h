@@ -161,6 +161,10 @@ struct fd {
             dword_t so_busy_poll;
             bool so_no_check;
             bool so_timestampns;
+            // SO_BINDTODEVICE: the interface name this socket was bound to,
+            // empty when it never was. Reported back by getsockopt, which is
+            // what a caller checks after setting it.
+            char so_bindtodevice[16];
 
             // Guest-loopback NAT (fs/sock.c inet_nat_*): when a guest
             // bind() asks for a loopback endpoint the host can't provide

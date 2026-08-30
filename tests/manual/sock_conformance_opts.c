@@ -40,6 +40,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <net/if.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -220,6 +221,59 @@ int main(int argc, char **argv) {
             ck("  with FD_CLOEXEC set", got >= 0 ? (fcntl(got, F_GETFD) & FD_CLOEXEC) != 0 : 0, 1);
             if (got >= 0) close(got);
             close(payload); close(sv[0]); close(sv[1]);
+        }
+    }
+
+    // ---- SO_BINDTODEVICE ---------------------------------------------------
+    {
+        // setsockopt refused it with ENOPROTOOPT while getsockopt reported
+        // success with an empty name, so a program that bound to an interface
+        // and then checked was told the bind had happened when it never did.
+        // `ping -I <iface>` failed outright with "can't bind to interface".
+        //
+        // The loopback interface is not called the same thing everywhere --
+        // "lo" on Linux, "lo0" on Darwin, which the guest sees through -- so
+        // it is discovered rather than assumed.
+        const char *dev = NULL;
+        static const char *candidates[] = { "lo", "lo0" };
+        for (unsigned i = 0; i < 2 && dev == NULL; i++)
+            if (if_nametoindex(candidates[i]) != 0)
+                dev = candidates[i];
+        if (dev == NULL) {
+            test_logf("  (no loopback interface found; skipping SO_BINDTODEVICE)\n");
+        } else {
+            int s = socket(AF_INET, SOCK_DGRAM, 0);
+            char buf[32];
+            memset(buf, 0xAA, sizeof buf);
+            socklen_t l = sizeof buf;
+            errno = 0;
+            ck("SO_BINDTODEVICE on a never-bound socket succeeds",
+               getsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, buf, &l) < 0 ? errno : 0, 0);
+            ck("  and reports an empty name", (long) l, 0);
+            errno = 0;
+            ck("  binding to the loopback interface succeeds",
+               setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, dev, strlen(dev)) < 0 ? errno : 0, 0);
+            memset(buf, 0xAA, sizeof buf);
+            l = sizeof buf;
+            errno = 0;
+            ck("  and it reads back",
+               getsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, buf, &l) < 0 ? errno : 0, 0);
+            ck("    with the name's length including its NUL",
+               (long) l, (long) strlen(dev) + 1);
+            ck("    and the name itself", strcmp(buf, dev) == 0, 1);
+            errno = 0;
+            ck("  an interface that does not exist is ENODEV",
+               setsockopt(s, SOL_SOCKET, SO_BINDTODEVICE, "nosuchif0", 9) < 0 ? errno : 0,
+               ENODEV);
+            // ...and the socket is still usable, which is the point of binding it
+            struct sockaddr_in a;
+            memset(&a, 0, sizeof a);
+            a.sin_family = AF_INET;
+            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            errno = 0;
+            ck("  the bound socket still binds an address",
+               bind(s, (struct sockaddr *) &a, sizeof a) < 0 ? errno : 0, 0);
+            close(s);
         }
     }
 

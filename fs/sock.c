@@ -5859,6 +5859,44 @@ static int_t sys_setsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
 
     // See the block in fs/fd.h: Linux always accepts these, so accepting and
     // remembering them is closer than an ENOPROTOOPT no Linux ever returns.
+    // SO_BINDTODEVICE: send and receive only through the named interface.
+    // setsockopt refused it with ENOPROTOOPT while getsockopt reported success
+    // with an empty name, so a program that bound to an interface and then
+    // checked was told the bind had happened when it never did. `ping -I lo0`
+    // failed outright with "can't bind to interface".
+    //
+    // Darwin spells it IP_BOUND_IF / IPV6_BOUND_IF and takes an interface
+    // INDEX, so the name is resolved here. The guest sees the host's own
+    // interface names (lo0, en0, ...), so no translation is needed beyond
+    // that. An empty name unbinds, which is how Linux clears it.
+    if (level == SOL_SOCKET_ && option == SO_BINDTODEVICE_) {
+        char name[sizeof(sock->socket.so_bindtodevice)];
+        size_t copy = value_len < sizeof(name) - 1 ? value_len : sizeof(name) - 1;
+        memcpy(name, value, copy);
+        name[copy] = '\0';
+
+        unsigned index = 0;
+        if (name[0] != '\0') {
+            index = if_nametoindex(name);
+            // A name that matches no interface is ENODEV, not EINVAL: the
+            // request was well formed, the device just is not there.
+            if (index == 0)
+                return _ENODEV;
+        }
+        // A fake socket (netlink, the devlog sink) has no host fd and nothing
+        // to bind; the name is still recorded so the get reports it.
+        if (sock->real_fd >= 0 &&
+                (sock->socket.domain == AF_INET_ || sock->socket.domain == AF_INET6_)) {
+            int host_opt = sock->socket.domain == AF_INET6_ ? IPV6_BOUND_IF : IP_BOUND_IF;
+            int host_level = sock->socket.domain == AF_INET6_ ? IPPROTO_IPV6 : IPPROTO_IP;
+            int idx = (int) index;
+            if (setsockopt(sock->real_fd, host_level, host_opt, &idx, sizeof(idx)) < 0)
+                return errno_map();
+        }
+        strcpy(sock->socket.so_bindtodevice, name);
+        return 0;
+    }
+
     // SOL_SOCKET options Linux accepts unconditionally and Darwin has no knob
     // for. Remembered and reported back, the same way the TCP block below
     // already does -- refusing them with ENOPROTOOPT is a state real Linux
@@ -6229,7 +6267,6 @@ static bool sockopt_is_linux_soft_unsupported(dword_t level, dword_t option) {
     if (level != SOL_SOCKET_)
         return false;
     switch (option) {
-        case SO_BINDTODEVICE_:
         case SO_PEERSEC_:
         case SO_PASSSEC_:
         case SO_PEERGROUPS_:
@@ -6328,13 +6365,18 @@ static int_t sys_getsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
             return _ENOPROTOOPT;
         }
     } else if (level == SOL_SOCKET_ && option == SO_BINDTODEVICE_) {
-        // Linux reports an unbound socket as success with an empty interface
-        // name (optlen = 0), and nothing under iSH can bind a socket to a
-        // device, so every socket is unbound. Returning ENOPROTOOPT here made
-        // OpenSSH's sys_get_rdomain() VRF probe log "cannot determine VRF for
-        // fd=N : Protocol not available" on every ssh session. setsockopt
-        // still rejects it via the soft-unsupported list below.
-        value_len = 0;
+        // The interface name this socket was bound to, or nothing (optlen 0)
+        // if it never was -- which is what Linux reports for an unbound
+        // socket, and what OpenSSH's sys_get_rdomain() VRF probe expects. It
+        // used to report that unconditionally, while setsockopt refused the
+        // bind outright, so a caller was told a bind had happened that never
+        // could.
+        size_t name_len = strlen(sock->socket.so_bindtodevice);
+        if (name_len == 0)
+            value_len = 0;
+        else
+            sockopt_store_value(value, user_value_len, &value_len,
+                    sock->socket.so_bindtodevice, (dword_t) name_len + 1);
     } else if (sockopt_is_linux_soft_unsupported(level, option)) {
         return _ENOPROTOOPT;
     } else if (level == SOL_SOCKET_ && (option == SO_RCVTIMEO_OLD_ || option == SO_SNDTIMEO_OLD_)) {
