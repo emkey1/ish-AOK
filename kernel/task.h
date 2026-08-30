@@ -512,6 +512,12 @@ struct pid {
 // to avoid having this head element in your cycle.
 extern struct list alive_pids_list;
 
+// Every task ever created, cumulative and monotonic -- /proc/stat's
+// "processes" field. It reported the CURRENT live count instead, so it never
+// grew and anything sampling it to derive a fork rate (vmstat, sar, monitoring
+// agents) saw a flat zero forever.
+extern _Atomic uint64_t total_forks;
+
 struct task_snapshot {
     struct task **tasks;
     unsigned count;

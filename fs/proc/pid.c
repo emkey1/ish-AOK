@@ -33,7 +33,13 @@ static char proc_task_state_char_from_snapshot(pid_t_ pid, bool zombie, bool io_
 }
 
 static struct task *proc_get_task(struct proc_entry *entry) {
-    return pid_get_task_ref(entry->pid);
+    // Zombies included. An exited-but-unreaped process still has a /proc entry
+    // on Linux -- that is where ps gets the "Z" it shows and where a monitor
+    // notices something died and was never reaped. AOK answered ENOENT for the
+    // whole directory, so a zombie was invisible to every tool. The handlers
+    // below were already written for one (proc_task_state_char_from_snapshot
+    // takes a `zombie` flag and returns 'Z'); they simply never received it.
+    return pid_get_task_zombie_ref(entry->pid);
 }
 static void proc_put_task(struct task *task) {
     if (task != NULL)
@@ -172,12 +178,17 @@ static int proc_kthread_status(pid_t_ pid, const char *name, struct proc_data *b
     return 0;
 }
 
+// A zombie is still shown: it is what ps reports as state Z, and the only way
+// a monitor learns something exited and was never reaped. Only a task that is
+// mid-exit and not yet a zombie is refused, because its fields are still
+// changing under us. The files that need a live address space (exe, maps, mem,
+// fd) keep the stricter guard -- Linux has nothing to show for those either.
 static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     const char *kname;
     if (pid_is_kthread((dword_t) entry->pid, &kname))
         return proc_kthread_stat(entry->pid, kname, buf);
     struct task *task = proc_get_task(entry);
-    if ((task == NULL) || (task->exiting == true)) {
+    if ((task == NULL) || (task->exiting == true && !task->zombie)) {
         proc_put_task(task);
         return _ESRCH;
     }
@@ -548,7 +559,7 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     if (pid_is_kthread((dword_t) entry->pid, &kname))
         return proc_kthread_status(entry->pid, kname, buf);
     struct task *task = proc_get_task(entry);
-    if ((task == NULL) || (task->exiting == true)) {
+    if ((task == NULL) || (task->exiting == true && !task->zombie)) {
         proc_put_task(task);
         return _ESRCH;
     }
@@ -1467,7 +1478,11 @@ struct proc_children proc_pid_children = PROC_CHILDREN({
     {"mountinfo", .show = proc_show_mountinfo},
     {"mounts", .show = proc_show_mounts},
     {"ns", S_IFDIR, .readdir = proc_pid_ns_readdir},
-    {"oom_score_adj", .show = proc_pid_oom_score_adj_show, .update = proc_pid_oom_score_adj_update},
+    // 0644, as Linux has it: writing is how a process lowers its own OOM
+    // score, and the update handler below has always worked -- only the
+    // advertised mode said read-only, so anything that checked before writing
+    // gave up without trying.
+    {"oom_score_adj", S_IFREG | 0644, .show = proc_pid_oom_score_adj_show, .update = proc_pid_oom_score_adj_update},
     {"root", S_IFLNK, .readlink = proc_pid_root_readlink},
     {"sched", .show = proc_pid_sched_show},
     {"smaps", .show = proc_pid_smaps_show},

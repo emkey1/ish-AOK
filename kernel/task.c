@@ -101,6 +101,8 @@ static bool pid_empty(struct pid *pid) {
     return pid->task == NULL && list_empty(&pid->session) && list_empty(&pid->pgroup);
 }
 
+_Atomic uint64_t total_forks = 0;
+
 struct pid *pid_get(dword_t id) {
     if (id >= sizeof(pids)/sizeof(pids[0]))
         return NULL;
@@ -440,6 +442,7 @@ struct task *task_create_(struct task *parent) {
     }
     task->cpu_time_banked = false; // per-task, not inherited via the parent copy
     task->host_thread_started = false; // ditto; task_start sets it
+    atomic_fetch_add_explicit(&total_forks, 1, memory_order_relaxed);
     list_init(&task->group_links);
     list_init(&task->children);
     list_init(&task->siblings);

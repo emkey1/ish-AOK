@@ -320,7 +320,10 @@ static int proc_show_stat(struct proc_entry *UNUSED(entry), struct proc_data *bu
     struct timespec uptime_ts = {.tv_sec = btime.uptime_ticks / 100, .tv_nsec = btime.uptime_ticks % 100};
     struct timespec boot_time = timespec_subtract(timespec_now(CLOCK_REALTIME), uptime_ts);
     proc_printf(buf, "btime %ld\n", boot_time.tv_sec);
-    proc_printf(buf, "processes %d\n", alive_task_count);
+    // Cumulative, not the live count: Linux's "processes" is the number of
+    // forks since boot and only ever grows. See total_forks in kernel/task.h.
+    proc_printf(buf, "processes %"PRIu64"\n",
+            atomic_load_explicit(&total_forks, memory_order_relaxed));
     proc_printf(buf, "procs_running %d\n", alive_task_count - blocked_task_count);
     proc_printf(buf, "procs_blocked %d\n", blocked_task_count);
     proc_printf(buf, "softirq 0 0 0 0 0 0 0 0 0 0 0\n");
@@ -329,7 +332,12 @@ static int proc_show_stat(struct proc_entry *UNUSED(entry), struct proc_data *bu
 }
 
 static void show_kb(struct proc_data *buf, const char *name, uint64_t value) {
-    proc_printf(buf, "%s%8"PRIu64" kB\n", name, value / 1000);
+    // /proc/meminfo's "kB" is 1024 bytes, not 1000 -- Linux prints
+    // pages << (PAGE_SHIFT - 10). Dividing by 1000 overstated every figure by
+    // 2.4% and put MemTotal at odds with the guest's own sysinfo(2), which
+    // does use 1024. Anything comparing the two (or trusting free(1) against a
+    // cgroup limit) saw memory that does not exist.
+    proc_printf(buf, "%s%8"PRIu64" kB\n", name, value / 1024);
 }
 
 struct mem_page_class_totals {
@@ -725,8 +733,9 @@ static void proc_root_refresh_pid_snapshot(struct proc_entry *entry) {
     complex_lockt(&pids_lock, 0);
     struct pid *pid_entry;
     list_for_each_entry(&alive_pids_list, pid_entry, alive) {
-        struct task *task = pid_entry->task;
-        if (task == NULL || task->zombie)
+        // Zombies are listed too: an unreaped process still exists, still owns
+        // its pid, and ps must be able to show it.
+        if (pid_entry->task == NULL)
             continue;
         used++;
     }
@@ -749,8 +758,7 @@ static void proc_root_refresh_pid_snapshot(struct proc_entry *entry) {
         pids[filled++] = (dword_t) pid_kthread_at(k);
     complex_lockt(&pids_lock, 0);
     list_for_each_entry(&alive_pids_list, pid_entry, alive) {
-        struct task *task = pid_entry->task;
-        if (task == NULL || task->zombie)
+        if (pid_entry->task == NULL)
             continue;
         if (filled >= used)
             break;

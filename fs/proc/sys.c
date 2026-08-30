@@ -264,6 +264,31 @@ static int sys_show_net_unix_hostname(struct proc_entry * UNUSED(entry), struct 
     return 0;
 }
 
+// Writing /proc/sys/kernel/hostname sets the hostname, exactly as
+// sethostname(2) does -- which is how `hostname foo` works on a system whose
+// hostname(1) writes the file rather than making the syscall. The file was
+// mode 0444 with no update handler at all, so those simply failed.
+static int sys_update_kernel_hostname(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    if (!superuser())
+        return _EPERM;
+    struct uname uts;
+    size_t len = data->size;
+    // A trailing newline is what `echo foo > hostname` writes; it is not part
+    // of the name.
+    while (len > 0 && (data->data[len - 1] == '\n' || data->data[len - 1] == '\r'))
+        len--;
+    if (len >= sizeof(uts.hostname))
+        return _EINVAL;
+    char new_hostname[sizeof(uts.hostname)];
+    memcpy(new_hostname, data->data, len);
+    new_hostname[len] = '\0';
+    struct uts_namespace *ns = uts_ns_current();
+    lock(&ns->lock, 0);
+    memcpy(ns->hostname, new_hostname, len + 1);
+    unlock(&ns->lock);
+    return 0;
+}
+
 static int sys_show_net_version(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     proc_printf(buf, "%s\n", proc_ish_version);
     return 0;
@@ -373,7 +398,7 @@ static int sys_show_kernel_ngroups_max(struct proc_entry *UNUSED(entry), struct 
 
 struct proc_dir_entry proc_sys_kernel[] = {
     {"cap_last_cap", .show = sys_show_kernel_cap_last_cap},
-    {"hostname", .show = sys_show_net_unix_hostname},
+    {"hostname", S_IFREG | 0644, .show = sys_show_net_unix_hostname, .update = sys_update_kernel_hostname},
     {"ngroups_max", .show = sys_show_kernel_ngroups_max},
     {"osrelease", .show = sys_show_kernel_osrelease},
     {"pid_max", S_IFREG | 0644, .show = sys_show_kernel_pid_max},
