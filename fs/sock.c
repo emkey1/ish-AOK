@@ -6019,11 +6019,24 @@ static int_t sys_setsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
         // to bind; the name is still recorded so the get reports it.
         if (sock->real_fd >= 0 &&
                 (sock->socket.domain == AF_INET_ || sock->socket.domain == AF_INET6_)) {
+#if defined(IP_BOUND_IF) && defined(IPV6_BOUND_IF)
+            // Darwin: bind by interface INDEX.
             int host_opt = sock->socket.domain == AF_INET6_ ? IPV6_BOUND_IF : IP_BOUND_IF;
             int host_level = sock->socket.domain == AF_INET6_ ? IPPROTO_IPV6 : IPPROTO_IP;
             int idx = (int) index;
             if (setsockopt(sock->real_fd, host_level, host_opt, &idx, sizeof(idx)) < 0)
                 return errno_map();
+#elif defined(SO_BINDTODEVICE)
+            // Building on Linux, where the host has the real thing and takes
+            // the NAME. Binding to a device is privileged there, and a guest
+            // that is not privileged on the host should not fail for that
+            // reason alone -- the name is recorded either way, which is what
+            // the guest can observe.
+            (void) setsockopt(sock->real_fd, SOL_SOCKET, SO_BINDTODEVICE,
+                              name, (socklen_t) strlen(name));
+#else
+            (void) index;
+#endif
         }
         strcpy(sock->socket.so_bindtodevice, name);
         return 0;
