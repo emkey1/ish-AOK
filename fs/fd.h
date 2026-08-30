@@ -166,6 +166,18 @@ struct fd {
             // what a caller checks after setting it.
             char so_bindtodevice[16];
 
+            // A TCP bind() that has NOT been handed to the host yet. Linux
+            // refuses connections to a bound-but-not-listening socket (RST);
+            // Darwin silently drops the SYN, so the client hangs for ~8s
+            // instead of getting ECONNREFUSED. Holding the port is what causes
+            // that, so it is not held until listen() or connect() needs it.
+            // The address is kept here so getsockname can still answer.
+            bool bind_deferred;
+            // Raw bytes rather than struct sockaddr_max_: fs/fd.h does not
+            // include fs/sock.h, and this only ever travels back to bind().
+            char deferred_addr[128];
+            uint_t deferred_addr_len;
+
             // Guest-loopback NAT (fs/sock.c inet_nat_*): when a guest
             // bind() asks for a loopback endpoint the host can't provide
             // (a 127.x.y.z alias macOS doesn't have, or a privileged

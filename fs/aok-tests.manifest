@@ -149,6 +149,7 @@ fs_permission_rules.c
 fs_at_validation.c
 sock_conformance_opts.c
 poll_rdhup_bounds.c
+sock_bind_refuse.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c
 timerfd_settime_readiness.c

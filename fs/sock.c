@@ -2856,12 +2856,25 @@ static bool sock_bound_inet_conflicts(struct fd *sock, const struct inet_bind_in
             // accepted socket returns the same local port), so without this
             // check any live connection -- e.g. the very ssh session used to
             // restart sshd -- would falsely block a fresh bind() on that port.
-            if (!other->socket.listening)
-                continue;
+            //
+            // A DEFERRED bind counts too, and has to: it holds the slot from
+            // the guest's point of view while deliberately not holding it on
+            // the host, so the host can no longer be the thing that reports
+            // the conflict. Its address comes from what bind() was told,
+            // because the host does not have one for it yet.
             struct sockaddr_storage other_addr = {};
             socklen_t other_addr_len = sizeof(other_addr);
-            if (getsockname(other->real_fd, (struct sockaddr *) &other_addr, &other_addr_len) < 0)
+            if (other->socket.bind_deferred) {
+                other_addr_len = other->socket.deferred_addr_len;
+                if (other_addr_len > sizeof(other_addr))
+                    other_addr_len = sizeof(other_addr);
+                memcpy(&other_addr, other->socket.deferred_addr, other_addr_len);
+            } else if (!other->socket.listening) {
                 continue;
+            } else if (getsockname(other->real_fd, (struct sockaddr *) &other_addr,
+                        &other_addr_len) < 0) {
+                continue;
+            }
             struct inet_bind_info other_info = {};
             if (!inet_bind_info_from_sockaddr((const struct sockaddr *) &other_addr, &other_info))
                 continue;
@@ -4329,6 +4342,83 @@ static void release_unix_names(struct fd *fd) {
     }
 }
 
+// Linux refuses a connection to a socket that is bound but not yet listening:
+// the port is in the bound hash but not the listening one, so the SYN gets an
+// RST and the client's connect() returns ECONNREFUSED immediately. Darwin
+// silently DROPS that SYN instead, so the client retries and times out about
+// eight seconds later. Measured on the host, in the CLI guest, and on the
+// device with an external client and a listening control.
+//
+// What causes it is holding the port on the host in that state, so AOK stops
+// holding it: a plain TCP bind() is validated with a throwaway socket and then
+// remembered rather than applied, and the real host bind happens when the
+// socket is about to become reachable -- at listen(), or at connect() where
+// the bind is the source address.
+//
+// Validating with a probe keeps every existing bind() error exactly as it was.
+// If the probe bind fails for any reason the caller falls through to the
+// original path -- real host bind, NAT fallback for the loopback-alias and
+// privileged-port cases, and the errno that produced -- so nothing about the
+// hard cases changes. Only the case that would plainly have succeeded is
+// deferred.
+static bool sock_bind_should_defer(struct fd *sock, const void *addr) {
+    if (sock->socket.domain != AF_INET_ && sock->socket.domain != AF_INET6_)
+        return false;
+    if (sock->socket.type != SOCK_STREAM_ || sock->real_fd < 0)
+        return false;
+    // Never a port-0 bind: the port is assigned BY the bind, and getsockname
+    // has to report the assigned one straight away. Deferring would have it
+    // answer 0, and nothing can connect blind to an ephemeral port anyway, so
+    // there is nothing to gain.
+    struct inet_bind_info want = {};
+    if (!inet_bind_info_from_sockaddr((const struct sockaddr *) addr, &want))
+        return false;
+    return want.port != 0;
+}
+
+// Would this bind have succeeded? Answered on a socket of its own so the port
+// is not left held. Returns true only when it plainly would.
+static bool sock_bind_probe_ok(struct fd *sock, const void *addr, uint_t addr_len) {
+    int probe = socket(sock_family_to_real(sock->socket.domain), SOCK_STREAM, 0);
+    if (probe < 0)
+        return false;
+    // The reuse flags decide whether a bind conflicts, so the probe has to
+    // carry the same ones or it answers a different question.
+    int on = 0;
+    socklen_t on_len = sizeof(on);
+    if (getsockopt(sock->real_fd, SOL_SOCKET, SO_REUSEADDR, &on, &on_len) == 0 && on)
+        setsockopt(probe, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+#ifdef SO_REUSEPORT
+    on = 0; on_len = sizeof(on);
+    if (getsockopt(sock->real_fd, SOL_SOCKET, SO_REUSEPORT, &on, &on_len) == 0 && on)
+        setsockopt(probe, SOL_SOCKET, SO_REUSEPORT, &on, sizeof(on));
+#endif
+#ifdef IPV6_V6ONLY
+    if (sock->socket.domain == AF_INET6_) {
+        on = 0; on_len = sizeof(on);
+        if (getsockopt(sock->real_fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, &on_len) == 0)
+            setsockopt(probe, IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on));
+    }
+#endif
+    bool ok = bind(probe, (const struct sockaddr *) addr, addr_len) == 0;
+    close(probe);
+    return ok;
+}
+
+// Hand a deferred bind to the host. Called when the socket is about to become
+// reachable; a no-op for every other socket.
+static int sock_bind_materialize(struct fd *sock) {
+    if (!sock->socket.bind_deferred)
+        return 0;
+    sock->socket.bind_deferred = false;
+    if (bind(sock->real_fd, (struct sockaddr *) sock->socket.deferred_addr,
+                sock->socket.deferred_addr_len) < 0)
+        // Somebody else took the port in the window. Narrow, and an honest
+        // error here beats silently swallowing connections for eight seconds.
+        return errno_map();
+    return 0;
+}
+
 static int_t sys_bind_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t sockaddr_len) {
     STRACE("bind(%d, 0x%llx, %d)", sock_fd, (unsigned long long) sockaddr_addr, sockaddr_len);
     int_t sock_err;
@@ -4377,6 +4467,17 @@ static int_t sys_bind_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t so
         }
     }
 #endif
+
+    if (sock_bind_should_defer(sock, &sockaddr) &&
+            sock_bind_probe_ok(sock, &sockaddr, sockaddr_len)) {
+        memcpy(sock->socket.deferred_addr, &sockaddr,
+               sockaddr_len < sizeof(sock->socket.deferred_addr)
+                   ? sockaddr_len : sizeof(sock->socket.deferred_addr));
+        sock->socket.deferred_addr_len = sockaddr_len;
+        sock->socket.bind_deferred = true;
+        sock->socket.unix_name_inode = inode;
+        return 0;
+    }
 
     err = bind(sock->real_fd, (void *) &sockaddr, sockaddr_len);
     if (err < 0) {
@@ -4502,6 +4603,12 @@ static int_t sys_connect_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t
         connect_initctl_target = !connect_devlog_target &&
             guest_sockaddr_is_initctl(sockaddr_addr, sockaddr_len);
     }
+    // A deferred bind is this connection's source address, so it has to be
+    // real before we connect.
+    int deferred_err = sock_bind_materialize(sock);
+    if (deferred_err < 0)
+        return deferred_err;
+
     struct sockaddr_max_ sockaddr;
     int err = sockaddr_read(sockaddr_addr, &sockaddr, &sockaddr_len);
     if (err < 0) {
@@ -4680,6 +4787,11 @@ int_t sys_listen(fd_t sock_fd, int_t backlog) {
     struct fd *sock = sock_getfd(sock_fd, &sock_err);
     if (sock == NULL)
         return sock_err;
+    // The bind was deferred so the port would not sit on the host in a state
+    // where Darwin swallows connections; this is the moment it must be real.
+    int bind_err = sock_bind_materialize(sock);
+    if (bind_err < 0)
+        return bind_err;
     int err = listen(sock->real_fd, backlog);
     if (err < 0)
         return errno_map();
@@ -5019,6 +5131,26 @@ static int_t sys_getsockname_common(fd_t sock_fd, guest_addr_t sockaddr_addr, gu
     // unsigned-underflow-driven out-of-bounds memset/memcpy (PF_LOCAL path)
     // whenever the guest asked for a very small buffer.
     char sockaddr[sizeof(struct sockaddr_storage)];
+
+    // A deferred bind is not on the host yet, so the host has no name to give
+    // -- answer from what bind() was told. Through sockaddr_write, NOT a raw
+    // copy: what we stored is in HOST layout (sockaddr_read_bind converted it
+    // on the way in), and Darwin's sockaddr_in starts with a one-byte sin_len
+    // where Linux has a two-byte family. Writing those bytes back unconverted
+    // handed the guest a mangled address -- python's http.server read the
+    // host part of getsockname() as an int and died in socket.getfqdn().
+    if (sock->socket.bind_deferred) {
+        dword_t real_len = sock->socket.deferred_addr_len;
+        if (real_len > sizeof(sockaddr))
+            real_len = sizeof(sockaddr);
+        memcpy(sockaddr, sock->socket.deferred_addr, real_len);
+        int err = sockaddr_write(sockaddr_addr, sockaddr, sockaddr_len, &real_len);
+        if (err < 0)
+            return err;
+        if (user_put(sockaddr_len_addr, real_len))
+            return _EFAULT;
+        return 0;
+    }
 
     if (sock->socket.domain == AF_NETLINK_) {
         if (sockaddr_len < sizeof(struct sockaddr_nl_))
