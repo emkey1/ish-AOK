@@ -20,7 +20,6 @@
 #import "WorkspaceViewController.h"
 #import "ShellFileBrowser.h"
 #import "SceneDelegate.h"
-#import "LinuxInterop.h"
 #import <GameController/GameController.h>
 #include "kernel/init.h"
 #include "kernel/task.h"
@@ -62,7 +61,6 @@ static UISceneSession *ISHFindExistingWorkspaceSceneSession(UISceneSession *excl
     return bestSession;
 }
 
-#if !ISH_LINUX
 static BOOL ISHCommandIsDefaultLogin(NSArray<NSString *> *command) {
     return command.count == 3 &&
             [command[0] isEqualToString:@"/bin/login"] &&
@@ -193,7 +191,6 @@ static NSArray<NSString *> *ISHSessionCommandWithFallback(NSArray<NSString *> *c
                                             @"attempts": attempts}];
     return command;
 }
-#endif
 
 @interface TerminalViewController () <UIGestureRecognizerDelegate, UITextFieldDelegate, ISHShellFileBrowserDelegate>
 
@@ -363,7 +360,6 @@ static const NSInteger kMaximumTerminalFontSize = 72;
     [super viewDidLoad];
     [self _installTerminalStartupOverlay];
 
-#if !ISH_LINUX
     if (!Roots.instance.needsInitialRootSelection) {
         intptr_t bootError = [AppDelegate ensureBooted];
         if (bootError < 0) {
@@ -375,7 +371,6 @@ static const NSInteger kMaximumTerminalFontSize = 72;
             NSLog(@"boot failed: %@", subtitle);
         }
     }
-#endif
 
     [self _applyCurrentTerminalToViewIfPossible];
     if (UserPreferences.shared.autoShowKeyboard)
@@ -1114,17 +1109,10 @@ static const CGFloat kFindBarHeight = 44;
 
 - (void)awakeFromNib {
     [super awakeFromNib];
-#if !ISH_LINUX
     [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(processExited:)
                                                name:ProcessExitedNotification
                                              object:nil];
-#else
-    [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(kernelPanicked:)
-                                               name:KernelPanicNotification
-                                             object:nil];
-#endif
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -1251,7 +1239,6 @@ static const CGFloat kFindBarHeight = 44;
 	    self.sessionFailureMessage = nil;
 	    self.sessionFailureOverlayText = nil;
 
-#if !ISH_LINUX
 	    intptr_t err = [AppDelegate ensureBooted];
 	    if (err < 0) {
 	        [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.start.failed"
@@ -1359,35 +1346,6 @@ static const CGFloat kFindBarHeight = 44;
         task_never_ran_destroy(failed);
         return _EAGAIN;
     }
-#else
-    const char *argv_arr[command.count + 1];
-    for (NSUInteger i = 0; i < command.count; i++)
-        argv_arr[i] = command[i].UTF8String;
-    argv_arr[command.count] = NULL;
-    const char *envp_arr[] = {
-        "TERM=screen-256color",
-        NULL,
-    };
-    const char *const *argv = argv_arr;
-    const char *const *envp = envp_arr;
-    __block Terminal *terminal = nil;
-    __block int sessionPid = 0;
-    __block int err = 1;
-    sync_do_in_workqueue(^(void (^done)(void)) {
-        linux_start_session(argv[0], argv, envp, ^(int retval, int pid, nsobj_t term) {
-            err = retval;
-            if (term)
-                terminal = CFBridgingRelease(term);
-            sessionPid = pid;
-            done();
-        });
-    });
-    NSAssert(err <= 0, @"session start did not finish??");
-    if (err < 0)
-        return err;
-    self.sessionTerminal = terminal;
-    self.sessionPid = sessionPid;
-#endif
     return 0;
 }
 
@@ -1399,7 +1357,6 @@ static const NSTimeInterval kQuickSessionExitThreshold = 2.0;
 // app in a tight respawn loop that burns CPU until iOS's watchdog kills it.
 static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
 
-#if !ISH_LINUX
 - (void)processExited:(NSNotification *)notif {
     int pid = [notif.userInfo[@"pid"] intValue];
     if (pid != self.sessionPid)
@@ -1449,15 +1406,7 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
     }
     [self startNewSession];
 }
-#endif
 
-#if ISH_LINUX
-- (void)kernelPanicked:(NSNotification *)notif {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"panik" message:notif.userInfo[@"message"] preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-    [self presentViewController:alert animated:YES completion:nil];
-}
-#endif
 
 - (void)showMessage:(NSString *)message subtitle:(NSString *)subtitle {
     dispatch_async(dispatch_get_main_queue(), ^{

@@ -12,14 +12,10 @@
 #include "fs/path.h"
 #include "debug.h"
 
-#ifdef ISH_LINUX
-#import "LinuxInterop.h"
-#endif
 
 int fs_ish_version;
 int fs_ish_apk_version;
 
-#if !ISH_LINUX
 static ssize_t read_file(const char *path, char *buf, size_t size) {
     struct fd *fd = generic_open(path, O_RDONLY_, 0);
     if (IS_ERR(fd))
@@ -150,15 +146,6 @@ static void maybe_normalize_unmanaged_apk_repositories(void) {
     }
 
 }
-#else
-#define read_file linux_read_file
-#define write_file linux_write_file
-#define remove_directory linux_remove_directory
-static void maybe_restore_login_binary(void) {
-}
-static void maybe_normalize_unmanaged_apk_repositories(void) {
-}
-#endif
 
 void FsInitialize(void) {
     maybe_restore_login_binary();

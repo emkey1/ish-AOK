@@ -21,11 +21,9 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
-		038E6826142CC067416D4684 /* DisplayRFBShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = C64EFBFD4819B3516B73356F /* DisplayRFBShaders.metal */; };
 		07430ECDFB3BADD4102D3854 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EDE84B56A5A0D9AC87E4DABB /* MediaPlayer.framework */; };
 		0FC2383C2991FBA6004C09EC /* mmx.c in Sources */ = {isa = PBXBuildFile; fileRef = 0FC2383B2991FB82004C09EC /* mmx.c */; };
 		1A4DC4F2374508A4B1CEC666 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = B943617711E6F6314E471864 /* manifest.json */; };
-		29DEBACFDDF2AA4566B488EF /* audiocodecs.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3F264C7242E0E51BAA5B5CF3 /* audiocodecs.xcframework */; };
 		2E93B4EE793B2F3424392363 /* DisplayViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 336DFB895C466449FA941BEF /* DisplayViewController.m */; };
 		3507455F518BE9C7E4BBB938 /* AudioPCMDecoder_Vorbis.m in Sources */ = {isa = PBXBuildFile; fileRef = 340B757F7B6F0A41BD73AE7D /* AudioPCMDecoder_Vorbis.m */; };
 		3CFB2CDE11FC08241BE3BAA3 /* GuestFileBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 04D500F4AD345B478159A9D2 /* GuestFileBridge.m */; };
@@ -135,9 +133,7 @@
 		7D1582A708E54A98CEF01901 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 27540C36CB55E575C077AB88 /* AVFoundation.framework */; };
 		826E8F9723237C5BAA6FDD6A /* WorkspaceMarkdownViewer.m in Sources */ = {isa = PBXBuildFile; fileRef = 3A510B0EF1C9B96522FE6860 /* WorkspaceMarkdownViewer.m */; };
 		8373773A4AE4AA88C0E3CCBC /* AudioLibrary.m in Sources */ = {isa = PBXBuildFile; fileRef = F9B4AFAD2A89EB3E27D10A36 /* AudioLibrary.m */; };
-		8C4DBEDCCB7D84AA66E57324 /* FoundationModels.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1C46BFA5283C8409E80F5EC /* FoundationModels.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		8D457CFF8048C780CA8A5561 /* DisplayRFBView.m in Sources */ = {isa = PBXBuildFile; fileRef = F849D89896B2C39F45F1E7E5 /* DisplayRFBView.m */; };
-		97ABBD170D9DA6A9B0481FE5 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EDE84B56A5A0D9AC87E4DABB /* MediaPlayer.framework */; };
 		9C2BEE382C85ECD21A4672CA /* AudioPCMDecoder_Opus.m in Sources */ = {isa = PBXBuildFile; fileRef = 0877CBCD3AD3639A48727F42 /* AudioPCMDecoder_Opus.m */; };
 		9E0E330D31CAA2DC36F0F208 /* FoundationModels.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1C46BFA5283C8409E80F5EC /* FoundationModels.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		A143B4E425BDFAE03A1725CD /* AOKFoundationModelsBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F681FC66C14DDED4FBD7BD6 /* AOKFoundationModelsBridge.swift */; };
@@ -151,8 +147,6 @@
 		BB0F552E239F8A790032A2A1 /* Icons.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB0F552D239F8A790032A2A1 /* Icons.plist */; };
 		BB10E5C9248DBAAC009C7A74 /* libarchive.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BB10E5C8248DBAA1009C7A74 /* libarchive.a */; platformFilter = ios; };
 		BB10E5D0248DC21D009C7A74 /* Roots.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BB10E5CF248DC21D009C7A74 /* Roots.storyboard */; };
-		BB123ACC26C9EFD900419CDA /* LinuxTTY.c in Sources */ = {isa = PBXBuildFile; fileRef = BB123ACB26C9EFD900419CDA /* LinuxTTY.c */; };
-		BB123ACE26C9F13500419CDA /* IOSCalls.m in Sources */ = {isa = PBXBuildFile; fileRef = BB123ACD26C9F13500419CDA /* IOSCalls.m */; };
 		BB13F7EA200ADCED003D1C4D /* libish.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BB13F7DC200AD81D003D1C4D /* libish.a */; platformFilter = ios; };
 		BB21A1702689048200BD19B4 /* libfakefs.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BB21A16F2689041500BD19B4 /* libfakefs.a */; platformFilter = ios; };
 		BB21A18426890C7E00BD19B4 /* libfakefs.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BB21A16F2689041500BD19B4 /* libfakefs.a */; platformFilter = ios; };
@@ -190,11 +184,6 @@
 		BB2B4DAD231D998300CB578B /* term.js in Resources */ = {isa = PBXBuildFile; fileRef = BB4A539C1FAA490C00A72ACE /* term.js */; };
 		BB2B4DAE231D998300CB578B /* term.css in Resources */ = {isa = PBXBuildFile; fileRef = BB4A53AF1FAA787900A72ACE /* term.css */; };
 		BB2B4DAF231D998300CB578B /* term.html in Resources */ = {isa = PBXBuildFile; fileRef = BB4A53A91FAA496700A72ACE /* term.html */; };
-		BB38597827BCEC70000A1082 /* circular.png in Resources */ = {isa = PBXBuildFile; fileRef = BB38597627BCEC70000A1082 /* circular.png */; };
-		BB38597D27BCEC78000A1082 /* dollarblock1.png in Resources */ = {isa = PBXBuildFile; fileRef = BB38597927BCEC78000A1082 /* dollarblock1.png */; };
-		BB38597F27BCEC78000A1082 /* dollarblock2.png in Resources */ = {isa = PBXBuildFile; fileRef = BB38597A27BCEC78000A1082 /* dollarblock2.png */; };
-		BB38598127BCEC78000A1082 /* freeiosterminal.png in Resources */ = {isa = PBXBuildFile; fileRef = BB38597B27BCEC78000A1082 /* freeiosterminal.png */; };
-		BB38598527BCEC84000A1082 /* ishcolontildehash.png in Resources */ = {isa = PBXBuildFile; fileRef = BB38598227BCEC83000A1082 /* ishcolontildehash.png */; };
 		BB38599327BCEE6B000A1082 /* notsurewhatthisis.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0B88202589734A00208600 /* notsurewhatthisis.png */; };
 		BB38599427BCEE6B000A1082 /* pydann1.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0F553123A0AB9B0032A2A1 /* pydann1.png */; };
 		BB38599527BCEE6B000A1082 /* pydann2.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0F553523A0ACFC0032A2A1 /* pydann2.png */; };
@@ -216,7 +205,6 @@
 		BB3859A527BCEE6B000A1082 /* reworked.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0B88172589662A00208600 /* reworked.png */; };
 		BB3859A627BCEE6B000A1082 /* colontildehash.png in Resources */ = {isa = PBXBuildFile; fileRef = BB4A922F24EDA55C002F5A96 /* colontildehash.png */; };
 		BB3859A727BCEE6B000A1082 /* uninspired.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0F552F239F8B360032A2A1 /* uninspired.png */; };
-		BB3859A827BCEE6C000A1082 /* is.png in Resources */ = {isa = PBXBuildFile; fileRef = BB38598327BCEC83000A1082 /* is.png */; };
 		BB41591F255EF9E300E0950C /* UITests.m in Sources */ = {isa = PBXBuildFile; fileRef = BB41591E255EF9E300E0950C /* UITests.m */; };
 		BB6DB261216435340047A611 /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BB6DB260216435330047A611 /* libiconv.tbd */; };
 		BB77636726E486A7008DB44A /* fakefs.c in Sources */ = {isa = PBXBuildFile; fileRef = BB10E5C2248DBA7B009C7A74 /* fakefs.c */; };
@@ -227,64 +215,20 @@
 		BB88F4972154760800A341FD /* FileProviderItem.m in Sources */ = {isa = PBXBuildFile; fileRef = BB88F4962154760800A341FD /* FileProviderItem.m */; };
 		BB88F49A2154760800A341FD /* FileProviderEnumerator.m in Sources */ = {isa = PBXBuildFile; fileRef = BB88F4992154760800A341FD /* FileProviderEnumerator.m */; };
 		BB88F49F2154760800A341FD /* iSH-AOK.FileProvider.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BB88F4902154760800A341FD /* iSH-AOK.FileProvider.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-		BB8C3AFF26B7B8CF00E38DDC /* fakefs.c in Sources */ = {isa = PBXBuildFile; fileRef = BB8C3AFD26B7B8AF00E38DDC /* fakefs.c */; };
 		BB9C7B87240A2B1E00F5D4F0 /* AppGroup.m in Sources */ = {isa = PBXBuildFile; fileRef = BB9C7B84240A240E00F5D4F0 /* AppGroup.m */; };
 		BBA110ED2A1B2C3D4E5F0002 /* liblzma.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = BBA110ED2A1B2C3D4E5F0001 /* liblzma.xcframework */; };
-		BBA110ED2A1B2C3D4E5F0003 /* liblzma.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = BBA110ED2A1B2C3D4E5F0001 /* liblzma.xcframework */; };
 		BBA8E2C1236FF5EA00515F76 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BBA8E2C0236FF5EA00515F76 /* SystemConfiguration.framework */; };
 		BBAEE339249B58E80069EBB5 /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BBAEE338249B58E80069EBB5 /* libbz2.tbd */; };
 		C0A000012E00000100000011 /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = C0A000012E00000100000010 /* libz.tbd */; };
 		C0A000012E00000100000012 /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = C0A000012E00000100000010 /* libz.tbd */; };
 		BBBCE7E321D2F02200CA00B3 /* About.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BBBCE7E521D2F02200CA00B3 /* About.storyboard */; };
-		BBBD741426B7BE2E00321AC5 /* libfakefs.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BB21A16F2689041500BD19B4 /* libfakefs.a */; };
 		BBBF7B5C2415CDBB00EC4C14 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = BBBF7B5B2415CDBB00EC4C14 /* Settings.bundle */; };
-		BBBF9CBD27C217B6002A30F7 /* PasteboardDeviceLinux.c in Sources */ = {isa = PBXBuildFile; fileRef = BBBF9CBB27C217A6002A30F7 /* PasteboardDeviceLinux.c */; };
-		BBBF9CBF27C44114002A30F7 /* iSH-AOK.FileProvider.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BB88F4902154760800A341FD /* iSH-AOK.FileProvider.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		BBBFE94921C5CFF100509DD5 /* NSError+ISHErrno.m in Sources */ = {isa = PBXBuildFile; fileRef = BB13F4DD21C5770000343E17 /* NSError+ISHErrno.m */; };
 		BBC3863E276817A900CC8C2E /* UpgradeRootViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = BBA5D87D27536E7600B39D77 /* UpgradeRootViewController.m */; };
 		BBC3863F276817AD00CC8C2E /* CurrentRoot.m in Sources */ = {isa = PBXBuildFile; fileRef = BB565EA32734F1FB00C93EAE /* CurrentRoot.m */; };
 		BBD23D5F258DA450003DCB40 /* Screenshots.m in Sources */ = {isa = PBXBuildFile; fileRef = BBD23D5E258DA450003DCB40 /* Screenshots.m */; };
 		BBD23D77258DA4BC003DCB40 /* SnapshotHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBD23D76258DA4BC003DCB40 /* SnapshotHelper.swift */; };
-		BBECF3AD269132F400DEC937 /* LinuxInterop.c in Sources */ = {isa = PBXBuildFile; fileRef = BBECF39D2691313B00DEC937 /* LinuxInterop.c */; };
-		BBECF3AE2691330F00DEC937 /* libiSH-AOKLinux.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BBECF3A22691314C00DEC937 /* libiSH-AOKLinux.a */; };
-		BBECF3B9269136FB00DEC937 /* liblinux.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BBECF3B8269136E100DEC937 /* liblinux.a */; };
 		BBECF3BC26913F1600DEC937 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = BB792B541F96D90D00FFB7A4 /* AppDelegate.m */; };
-		BBEEA9E8277D25090069495B /* LinuxRoot.c in Sources */ = {isa = PBXBuildFile; fileRef = BBEEA9E7277D25090069495B /* LinuxRoot.c */; };
-		BBEEA9EA277DAB400069495B /* LinuxPTY.c in Sources */ = {isa = PBXBuildFile; fileRef = BBEEA9E9277DAB400069495B /* LinuxPTY.c */; };
-		BBEF1970268066D1001225BD /* libiSH-AOKApp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BBEF191E26806364001225BD /* libiSH-AOKApp.a */; };
-		BBEF1972268066D1001225BD /* libish_emu.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BBFB2C5B2590257E00545EAB /* libish_emu.a */; };
-		BBEF1973268066D1001225BD /* libarchive.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BB10E5C8248DBAA1009C7A74 /* libarchive.a */; };
-		BBEF1974268066D1001225BD /* CoreLocation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BB235536235D49B300139E00 /* CoreLocation.framework */; };
-		BBEF1975268066D1001225BD /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BBA8E2C0236FF5EA00515F76 /* SystemConfiguration.framework */; };
-		BBEF1976268066D1001225BD /* libbz2.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BBAEE338249B58E80069EBB5 /* libbz2.tbd */; };
-		BBEF1977268066D1001225BD /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BB6DB260216435330047A611 /* libiconv.tbd */; };
-		BBEF1978268066D1001225BD /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BBFB55652158644C00DFE6DE /* libresolv.tbd */; };
-		BBEF197D268066D1001225BD /* 3d.png in Resources */ = {isa = PBXBuildFile; fileRef = BB4A923124EDA560002F5A96 /* 3d.png */; };
-		BBEF197E268066D1001225BD /* colontildehash.png in Resources */ = {isa = PBXBuildFile; fileRef = BB4A922F24EDA55C002F5A96 /* colontildehash.png */; };
-		BBEF197F268066D1001225BD /* metal.png in Resources */ = {isa = PBXBuildFile; fileRef = BBC8298624EE5853009D042C /* metal.png */; };
-		BBEF1980268066D1001225BD /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BB792B5C1F96D90D00FFB7A4 /* Assets.xcassets */; };
-		BBEF1981268066D1001225BD /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BB792B5E1F96D90D00FFB7A4 /* LaunchScreen.storyboard */; };
-		BBEF1982268066D1001225BD /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = BBBF7B5B2415CDBB00EC4C14 /* Settings.bundle */; };
-		BBEF1983268066D1001225BD /* pydann1.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0F553123A0AB9B0032A2A1 /* pydann1.png */; };
-		BBEF1984268066D1001225BD /* About.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BBBCE7E521D2F02200CA00B3 /* About.storyboard */; };
-		BBEF1985268066D1001225BD /* Terminal.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BB792B591F96D90D00FFB7A4 /* Terminal.storyboard */; };
-		BBEF1986268066D1001225BD /* Icons.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB0F552D239F8A790032A2A1 /* Icons.plist */; };
-		BBEF1987268066D1001225BD /* uninspired.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0F552F239F8B360032A2A1 /* uninspired.png */; };
-		BBEF1988268066D1001225BD /* iinhash.png in Resources */ = {isa = PBXBuildFile; fileRef = BBC8298024EDACBB009D042C /* iinhash.png */; };
-		BBEF1989268066D1001225BD /* pydann2.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0F553523A0ACFC0032A2A1 /* pydann2.png */; };
-		BBEF198A268066D1001225BD /* ihash1.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0F553323A0AC760032A2A1 /* ihash1.png */; };
-		BBEF198B268066D1001225BD /* term.html in Resources */ = {isa = PBXBuildFile; fileRef = BB4A53A91FAA496700A72ACE /* term.html */; };
-		BBEF198C268066D1001225BD /* notsurewhatthisis.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0B88202589734A00208600 /* notsurewhatthisis.png */; };
-		BBEF198D268066D1001225BD /* reworked.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0B88172589662A00208600 /* reworked.png */; };
-		BBEF198E268066D1001225BD /* Roots.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = BB10E5CF248DC21D009C7A74 /* Roots.storyboard */; };
-		BBEF198F268066D1001225BD /* idollarhash.png in Resources */ = {isa = PBXBuildFile; fileRef = BBC8297D24EDAC11009D042C /* idollarhash.png */; };
-		BBEF1990268066D1001225BD /* hterm_all.js in Resources */ = {isa = PBXBuildFile; fileRef = BB2B4DAB231D94C300CB578B /* hterm_all.js */; };
-		BBEF1991268066D1001225BD /* icon1337.png in Resources */ = {isa = PBXBuildFile; fileRef = BB4A922D24EDA461002F5A96 /* icon1337.png */; };
-		BBEF1992268066D1001225BD /* rgb.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0B88052589661A00208600 /* rgb.png */; };
-		BBEF1993268066D1001225BD /* term.css in Resources */ = {isa = PBXBuildFile; fileRef = BB4A53AF1FAA787900A72ACE /* term.css */; };
-		BBEF1994268066D1001225BD /* term.js in Resources */ = {isa = PBXBuildFile; fileRef = BB4A539C1FAA490C00A72ACE /* term.js */; };
-		BBEF1995268066D1001225BD /* sprite64.png in Resources */ = {isa = PBXBuildFile; fileRef = BB0B880E2589662200208600 /* sprite64.png */; };
-		BBEF1996268066D1001225BD /* icon.png in Resources */ = {isa = PBXBuildFile; fileRef = BB1B9A4223A5E96900414052 /* icon.png */; };
 		BBFB2C7E259026C200545EAB /* libish_emu.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BBFB2C5B2590257E00545EAB /* libish_emu.a */; };
 		BBFB2CEC2590296B00545EAB /* libish_emu.a in Frameworks */ = {isa = PBXBuildFile; fileRef = BBFB2C5B2590257E00545EAB /* libish_emu.a */; platformFilter = ios; };
 		BBFB55662158644C00DFE6DE /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = BBFB55652158644C00DFE6DE /* libresolv.tbd */; };
@@ -292,18 +236,12 @@
 		C0A000012E00000100000001 /* AudioDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A000012E00000100000005 /* AudioDevice.m */; };
 		C0A000012E00000100000002 /* AudioOutput.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A000012E00000100000007 /* AudioOutput.m */; };
 		C0A000012E00000100000003 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0A000012E00000100000009 /* AudioToolbox.framework */; };
-		C0A000012E00000100000004 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C0A000012E00000100000009 /* AudioToolbox.framework */; };
 		C0A000022E00000200000001 /* aok.c in Sources */ = {isa = PBXBuildFile; fileRef = C0A000022E00000200000002 /* aok.c */; };
 		C0A000022E00000200000003 /* test-tone-48k-s16le-stereo.raw in Resources */ = {isa = PBXBuildFile; fileRef = C0A000022E00000200000007 /* test-tone-48k-s16le-stereo.raw */; };
 		C0A000022E00000200000004 /* test-tone-48k-s16le-stereo.wav in Resources */ = {isa = PBXBuildFile; fileRef = C0A000022E00000200000008 /* test-tone-48k-s16le-stereo.wav */; };
-		C0A000022E00000200000005 /* test-tone-48k-s16le-stereo.raw in Resources */ = {isa = PBXBuildFile; fileRef = C0A000022E00000200000007 /* test-tone-48k-s16le-stereo.raw */; };
-		C0A000022E00000200000006 /* test-tone-48k-s16le-stereo.wav in Resources */ = {isa = PBXBuildFile; fileRef = C0A000022E00000200000008 /* test-tone-48k-s16le-stereo.wav */; };
 		C0A000032E00000300000001 /* WorkspaceViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = C0A000032E00000300000003 /* WorkspaceViewController.m */; };
 		C0A000042E00000400000001 /* iSH_benchmark.tgz in Resources */ = {isa = PBXBuildFile; fileRef = C0A000042E00000400000003 /* iSH_benchmark.tgz */; };
-		C0A000042E00000400000002 /* iSH_benchmark.tgz in Resources */ = {isa = PBXBuildFile; fileRef = C0A000042E00000400000003 /* iSH_benchmark.tgz */; };
 		C3060403DA76F382061A1170 /* DisplayRFBClient.m in Sources */ = {isa = PBXBuildFile; fileRef = 704575CA466EF25ECC14EA7B /* DisplayRFBClient.m */; };
-		CB0A85D17BF34C213CC1D019 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = B943617711E6F6314E471864 /* manifest.json */; };
-		D655F8B9294AA603BF1C430A /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 27540C36CB55E575C077AB88 /* AVFoundation.framework */; };
 		DC09D58C8595F3ACD279A0D2 /* AudioPlayerEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 59516B05C7A2120D1EE19975 /* AudioPlayerEngine.m */; };
 		E02D963E8F2A7D5D58954A0D /* MarkdownRenderer.m in Sources */ = {isa = PBXBuildFile; fileRef = 57D6250B1A93D2423FF389EB /* MarkdownRenderer.m */; };
 		F8AF2E023A182D2DF0E331A0 /* DisplayRFBShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = C64EFBFD4819B3516B73356F /* DisplayRFBShaders.metal */; };
@@ -400,47 +338,12 @@
 			remoteGlobalIDString = BB88F48F2154760800A341FD;
 			remoteInfo = iSHFiles;
 		};
-		BBECF3B1269136E100DEC937 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = BB792B461F96D8E000FFB7A4 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = BB13F7D0200ACCA2003D1C4D;
-			remoteInfo = Ninja;
-		};
-		BBECF3BD2691417C00DEC937 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = BB792B461F96D8E000FFB7A4 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = BBECF3AF269136E100DEC937;
-			remoteInfo = liblinux;
-		};
 		BBEF1928268063FD001225BD /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = BB792B461F96D8E000FFB7A4 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = BBEF191D26806364001225BD;
 			remoteInfo = libiSH;
-		};
-		BBEF1966268066D1001225BD /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = BB792B461F96D8E000FFB7A4 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = BB4A922324ED9402002F5A96;
-			remoteInfo = "iSH pre";
-		};
-		BBEF1968268066D1001225BD /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = BB792B461F96D8E000FFB7A4 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = BBEF191D26806364001225BD;
-			remoteInfo = libiSH;
-		};
-		BBEF196A268066D1001225BD /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = BB10E0C1248DA5B0009C7A74 /* libarchive.xcodeproj */;
-			proxyType = 1;
-			remoteGlobalIDString = BB10E0D5248DA67B009C7A74;
-			remoteInfo = libarchive;
 		};
 		BBFB2C562590257E00545EAB /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -468,17 +371,6 @@
 			dstSubfolderSpec = 13;
 			files = (
 				BB88F49F2154760800A341FD /* iSH-AOK.FileProvider.appex in Embed Foundation Extensions */,
-			);
-			name = "Embed Foundation Extensions";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		BBEF1997268066D1001225BD /* Embed Foundation Extensions */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 13;
-			files = (
-				BBBF9CBF27C44114002A30F7 /* iSH-AOK.FileProvider.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -740,8 +632,6 @@
 		BB10E5CF248DC21D009C7A74 /* Roots.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = Roots.storyboard; sourceTree = "<group>"; };
 		BB10E5D1248DCFEA009C7A74 /* RootsTableViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RootsTableViewController.h; sourceTree = "<group>"; };
 		BB10E5D2248DCFEA009C7A74 /* RootsTableViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = RootsTableViewController.m; sourceTree = "<group>"; };
-		BB123ACB26C9EFD900419CDA /* LinuxTTY.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = LinuxTTY.c; sourceTree = "<group>"; };
-		BB123ACD26C9F13500419CDA /* IOSCalls.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = IOSCalls.m; sourceTree = "<group>"; };
 		BB13F4DC21C5770000343E17 /* NSError+ISHErrno.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "NSError+ISHErrno.h"; sourceTree = "<group>"; };
 		BB13F4DD21C5770000343E17 /* NSError+ISHErrno.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "NSError+ISHErrno.m"; sourceTree = "<group>"; };
 		BB13F7C8200ACC24003D1C4D /* xcode-meson.sh */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.sh; path = "xcode-meson.sh"; sourceTree = "<group>"; };
@@ -752,7 +642,6 @@
 		BB1D9D91234A8FE100F364E8 /* AboutNavigationController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AboutNavigationController.h; sourceTree = "<group>"; };
 		BB1D9D92234A8FE100F364E8 /* AboutNavigationController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AboutNavigationController.m; sourceTree = "<group>"; };
 		BB21A16F2689041500BD19B4 /* libfakefs.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libfakefs.a; sourceTree = BUILT_PRODUCTS_DIR; };
-		BB21A18C268951CA00BD19B4 /* NotLinux.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = NotLinux.xcconfig; sourceTree = "<group>"; };
 		BB235533235D488400139E00 /* LocationDevice.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = LocationDevice.m; sourceTree = "<group>"; };
 		BB235535235D489400139E00 /* LocationDevice.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LocationDevice.h; sourceTree = "<group>"; };
 		BB235536235D49B300139E00 /* CoreLocation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreLocation.framework; path = System/Library/Frameworks/CoreLocation.framework; sourceTree = SDKROOT; };
@@ -760,8 +649,6 @@
 		BB23F58C231E1D1400585522 /* ScrollbarView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ScrollbarView.m; sourceTree = "<group>"; };
 		BB267FA423A48F1500ED7CAF /* AltIconViewController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AltIconViewController.h; sourceTree = "<group>"; };
 		BB267FA523A48F1500ED7CAF /* AltIconViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AltIconViewController.m; sourceTree = "<group>"; };
-		BB28C7522689522700BDC834 /* ProjectReleaseLinux.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ProjectReleaseLinux.xcconfig; sourceTree = "<group>"; };
-		BB28C7532689522C00BDC834 /* ProjectDebugLinux.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ProjectDebugLinux.xcconfig; sourceTree = "<group>"; };
 		BB28C755268956C900BDC834 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS15.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		BB2B4DAB231D94C300CB578B /* hterm_all.js */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.javascript; name = hterm_all.js; path = ../../deps/libapps/hterm/dist/js/hterm_all.js; sourceTree = "<group>"; };
 		BB38597627BCEC70000A1082 /* circular.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = circular.png; sourceTree = "<group>"; };
@@ -814,7 +701,6 @@
 		BB88F49B2154760800A341FD /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BB88F49C2154760800A341FD /* iSHFileProvider.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iSHFileProvider.entitlements; sourceTree = "<group>"; };
 		BB88F4A4215476BA00A341FD /* iSH.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iSH.entitlements; sourceTree = "<group>"; };
-		BB8C3AFD26B7B8AF00E38DDC /* fakefs.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = fakefs.c; path = linux/fakefs.c; sourceTree = SOURCE_ROOT; };
 		BB9C7B84240A240E00F5D4F0 /* AppGroup.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppGroup.m; sourceTree = "<group>"; };
 		BB9C7B86240A29DE00F5D4F0 /* AppGroup.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppGroup.h; sourceTree = "<group>"; };
 		BB9C7B88240A343400F5D4F0 /* iSH.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = iSH.xcconfig; path = app/iSH.xcconfig; sourceTree = "<group>"; };
@@ -828,7 +714,6 @@
 		BBAEE33B249BDADC0069EBB5 /* ProgressReportViewController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ProgressReportViewController.m; sourceTree = "<group>"; };
 		BBBCE7E421D2F02200CA00B3 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/About.storyboard; sourceTree = "<group>"; };
 		BBBF7B5B2415CDBB00EC4C14 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
-		BBBF9CBB27C217A6002A30F7 /* PasteboardDeviceLinux.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = PasteboardDeviceLinux.c; sourceTree = "<group>"; };
 		BBBF9CC027C441C0002A30F7 /* fix_path.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = fix_path.h; sourceTree = "<group>"; };
 		BBBF9CC127C441C0002A30F7 /* fake-db.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "fake-db.h"; sourceTree = "<group>"; };
 		BBBF9CC227C448D5002A30F7 /* fake-db.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "fake-db.c"; sourceTree = "<group>"; };
@@ -842,17 +727,8 @@
 		BBD23D5E258DA450003DCB40 /* Screenshots.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Screenshots.m; sourceTree = "<group>"; };
 		BBD23D76258DA4BC003DCB40 /* SnapshotHelper.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = SnapshotHelper.swift; path = fastlane/SnapshotHelper.swift; sourceTree = SOURCE_ROOT; };
 		BBD23D95258DEF6B003DCB40 /* Screenshots.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = Screenshots.xctestplan; sourceTree = "<group>"; };
-		BBECF39B2691311D00DEC937 /* LinuxInterop.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LinuxInterop.h; sourceTree = "<group>"; };
-		BBECF39D2691313B00DEC937 /* LinuxInterop.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = LinuxInterop.c; sourceTree = "<group>"; };
-		BBECF3A22691314C00DEC937 /* libiSH-AOKLinux.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libiSH-AOKLinux.a"; sourceTree = BUILT_PRODUCTS_DIR; };
-		BBECF3B8269136E100DEC937 /* liblinux.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = liblinux.a; sourceTree = BUILT_PRODUCTS_DIR; };
-		BBECF3BA2691379100DEC937 /* StaticLibLinux.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = StaticLibLinux.xcconfig; sourceTree = "<group>"; };
-		BBEEA9E7277D25090069495B /* LinuxRoot.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = LinuxRoot.c; sourceTree = "<group>"; };
-		BBEEA9E9277DAB400069495B /* LinuxPTY.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = LinuxPTY.c; sourceTree = "<group>"; };
 		BBEF191E26806364001225BD /* libiSH-AOKApp.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libiSH-AOKApp.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		BBEF192C26806546001225BD /* AppLib.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = AppLib.xcconfig; sourceTree = "<group>"; };
-		BBEF199C268066D1001225BD /* iSH-AOK.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "iSH-AOK.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		BBEF19BA26806D7E001225BD /* Linux.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Linux.xcconfig; sourceTree = "<group>"; };
 		BBFB2C5B2590257E00545EAB /* libish_emu.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libish_emu.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = StaticLib.xcconfig; sourceTree = "<group>"; };
 		BBFB55652158644C00DFE6DE /* libresolv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; };
@@ -941,30 +817,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		BBEF196F268066D1001225BD /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				BBECF3B9269136FB00DEC937 /* liblinux.a in Frameworks */,
-				BBECF3AE2691330F00DEC937 /* libiSH-AOKLinux.a in Frameworks */,
-				BBEF1970268066D1001225BD /* libiSH-AOKApp.a in Frameworks */,
-				C0A000012E00000100000004 /* AudioToolbox.framework in Frameworks */,
-				BBBD741426B7BE2E00321AC5 /* libfakefs.a in Frameworks */,
-				BBEF1972268066D1001225BD /* libish_emu.a in Frameworks */,
-				BBEF1973268066D1001225BD /* libarchive.a in Frameworks */,
-				BBEF1974268066D1001225BD /* CoreLocation.framework in Frameworks */,
-				BBEF1975268066D1001225BD /* SystemConfiguration.framework in Frameworks */,
-				BBEF1976268066D1001225BD /* libbz2.tbd in Frameworks */,
-				BBA110ED2A1B2C3D4E5F0003 /* liblzma.xcframework in Frameworks */,
-				BBEF1977268066D1001225BD /* libiconv.tbd in Frameworks */,
-				BBEF1978268066D1001225BD /* libresolv.tbd in Frameworks */,
-				D655F8B9294AA603BF1C430A /* AVFoundation.framework in Frameworks */,
-				97ABBD170D9DA6A9B0481FE5 /* MediaPlayer.framework in Frameworks */,
-				29DEBACFDDF2AA4566B488EF /* audiocodecs.xcframework in Frameworks */,
-				8C4DBEDCCB7D84AA66E57324 /* FoundationModels.framework in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -1046,15 +898,10 @@
 				BBEF192C26806546001225BD /* AppLib.xcconfig */,
 				493B378F290F5320000C41ED /* CLI.xcconfig */,
 				BB0B86D52587009D00208600 /* iOS.xcconfig */,
-				BBEF19BA26806D7E001225BD /* Linux.xcconfig */,
-				BB21A18C268951CA00BD19B4 /* NotLinux.xcconfig */,
 				BB0B85AD2586F3EB00208600 /* Project.xcconfig */,
 				BB0B85A42586F1CB00208600 /* ProjectDebug.xcconfig */,
-				BB28C7532689522C00BDC834 /* ProjectDebugLinux.xcconfig */,
 				BB0B85A52586F1E100208600 /* ProjectRelease.xcconfig */,
-				BB28C7522689522700BDC834 /* ProjectReleaseLinux.xcconfig */,
 				BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */,
-				BBECF3BA2691379100DEC937 /* StaticLibLinux.xcconfig */,
 				BB0B859B2586F13200208600 /* XcodeDebug.xcconfig */,
 				BB0B848E2586A4CF00208600 /* XcodeDefault.xcconfig */,
 				BB0B859C2586F19000208600 /* XcodeRelease.xcconfig */,
@@ -1133,7 +980,6 @@
 				C0A000012E00000100000007 /* AudioOutput.m */,
 				650B337222EA235C00B4C03E /* PasteboardDevice.h */,
 				650B337322EA235C00B4C03E /* PasteboardDevice.m */,
-				BBBF9CBB27C217A6002A30F7 /* PasteboardDeviceLinux.c */,
 				BB235535235D489400139E00 /* LocationDevice.h */,
 				BB235533235D488400139E00 /* LocationDevice.m */,
 				408A263B23644102008A4E81 /* iOSFS.h */,
@@ -1219,10 +1065,7 @@
 				497F6D47254E605F00C82F46 /* ish */,
 				497F6CE4254E5E4C00C82F46 /* MakeXcodeAutoCompleteWork */,
 				BBEF191E26806364001225BD /* libiSH-AOKApp.a */,
-				BBEF199C268066D1001225BD /* iSH-AOK.app */,
 				BB21A16F2689041500BD19B4 /* libfakefs.a */,
-				BBECF3A22691314C00DEC937 /* libiSH-AOKLinux.a */,
-				BBECF3B8269136E100DEC937 /* liblinux.a */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -1250,7 +1093,6 @@
 				BB0FC5911F980A6B00803272 /* Terminal.m */,
 				BB23F58B231E1D1400585522 /* ScrollbarView.h */,
 				BB23F58C231E1D1400585522 /* ScrollbarView.m */,
-				BBECF39C2691312500DEC937 /* LinuxInterop */,
 				BB4A53991FAA40FD00A72ACE /* terminal */,
 				BB235532235D472F00139E00 /* Devices */,
 				BBFB557321586C7600DFE6DE /* About */,
@@ -1525,20 +1367,6 @@
 			path = FileProvider;
 			sourceTree = "<group>";
 		};
-		BBECF39C2691312500DEC937 /* LinuxInterop */ = {
-			isa = PBXGroup;
-			children = (
-				BBECF39B2691311D00DEC937 /* LinuxInterop.h */,
-				BB123ACD26C9F13500419CDA /* IOSCalls.m */,
-				BBECF39D2691313B00DEC937 /* LinuxInterop.c */,
-				BB123ACB26C9EFD900419CDA /* LinuxTTY.c */,
-				BBEEA9E9277DAB400069495B /* LinuxPTY.c */,
-				BBEEA9E7277D25090069495B /* LinuxRoot.c */,
-				BB8C3AFD26B7B8AF00E38DDC /* fakefs.c */,
-			);
-			name = LinuxInterop;
-			sourceTree = "<group>";
-		};
 		BBFB557221586C6600DFE6DE /* Utilities */ = {
 			isa = PBXGroup;
 			children = (
@@ -1777,41 +1605,6 @@
 			productReference = BB88F4902154760800A341FD /* iSH-AOK.FileProvider.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
-		BBECF3A12691314C00DEC937 /* libiSH-AOKLinux */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = BBECF3A82691314C00DEC937 /* Build configuration list for PBXNativeTarget "libiSH-AOKLinux" */;
-			buildPhases = (
-				BBECF39E2691314C00DEC937 /* Sources */,
-				076D17607BBC278AD9F02661 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				BBECF3BE2691417C00DEC937 /* PBXTargetDependency */,
-			);
-			name = "libiSH-AOKLinux";
-			productName = iSHLinux;
-			productReference = BBECF3A22691314C00DEC937 /* libiSH-AOKLinux.a */;
-			productType = "com.apple.product-type.library.static";
-		};
-		BBECF3AF269136E100DEC937 /* liblinux */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = BBECF3B3269136E100DEC937 /* Build configuration list for PBXNativeTarget "liblinux" */;
-			buildPhases = (
-				BBECF3B2269136E100DEC937 /* ShellScript */,
-				00633A74044F0BECC71926BC /* Sources */,
-				D66BFFC6A6553D51454780C2 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				BBECF3B0269136E100DEC937 /* PBXTargetDependency */,
-			);
-			name = liblinux;
-			productName = libish;
-			productReference = BBECF3B8269136E100DEC937 /* liblinux.a */;
-			productType = "com.apple.product-type.library.static";
-		};
 		BBEF191D26806364001225BD /* libiSH-AOKApp */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = BBEF192626806364001225BD /* Build configuration list for PBXNativeTarget "libiSH-AOKApp" */;
@@ -1828,30 +1621,6 @@
 			productName = libiSH;
 			productReference = BBEF191E26806364001225BD /* libiSH-AOKApp.a */;
 			productType = "com.apple.product-type.library.static";
-		};
-		BBEF1964268066D1001225BD /* iSH-AOK+Linux */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = BBEF1999268066D1001225BD /* Build configuration list for PBXNativeTarget "iSH-AOK+Linux" */;
-			buildPhases = (
-				BB21A1722689084800BD19B4 /* Sources */,
-				BBEF196F268066D1001225BD /* Frameworks */,
-				BBEF1979268066D1001225BD /* Download Root */,
-				BBEF197A268066D1001225BD /* Generate APK Repositories File */,
-				BBEF197B268066D1001225BD /* Compile JavaScript */,
-				BBEF197C268066D1001225BD /* Resources */,
-				BBEF1997268066D1001225BD /* Embed Foundation Extensions */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				BBEF1965268066D1001225BD /* PBXTargetDependency */,
-				BBEF1967268066D1001225BD /* PBXTargetDependency */,
-				BBEF1969268066D1001225BD /* PBXTargetDependency */,
-			);
-			name = "iSH-AOK+Linux";
-			productName = iSH;
-			productReference = BBEF199C268066D1001225BD /* iSH-AOK.app */;
-			productType = "com.apple.product-type.application";
 		};
 		BBFB2C542590257E00545EAB /* libish_emu */ = {
 			isa = PBXNativeTarget;
@@ -1928,9 +1697,6 @@
 							};
 						};
 					};
-					BBECF3A12691314C00DEC937 = {
-						CreatedOnToolsVersion = 13.0;
-					};
 					BBEF191D26806364001225BD = {
 						CreatedOnToolsVersion = 13.0;
 					};
@@ -1957,8 +1723,6 @@
 			targets = (
 				BB792B4F1F96D90D00FFB7A4 /* iSH-AOK */,
 				BBEF191D26806364001225BD /* libiSH-AOKApp */,
-				BBEF1964268066D1001225BD /* iSH-AOK+Linux */,
-				BBECF3A12691314C00DEC937 /* libiSH-AOKLinux */,
 				BB88F48F2154760800A341FD /* iSH-AOK.FileProvider */,
 				BB41591B255EF9E300E0950C /* iSH-AOKUITests */,
 				BB13F7CA200ACC31003D1C4D /* Meson */,
@@ -1966,7 +1730,6 @@
 				BB13F7DB200AD81D003D1C4D /* libish */,
 				BB21A1662689041500BD19B4 /* libfakefs */,
 				BBFB2C542590257E00545EAB /* libish_emu */,
-				BBECF3AF269136E100DEC937 /* liblinux */,
 				BB4A922324ED9402002F5A96 /* iSH-AOK pre */,
 				497F6CE3254E5E4C00C82F46 /* MakeXcodeAutoCompleteWork */,
 				497F6D46254E605F00C82F46 /* ish-AOK */,
@@ -1985,13 +1748,6 @@
 /* End PBXReferenceProxy section */
 
 /* Begin PBXResourcesBuildPhase section */
-		076D17607BBC278AD9F02661 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		206602012DF37FE8D709FE07 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -2077,57 +1833,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		BBEF197C268066D1001225BD /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				BBEF197D268066D1001225BD /* 3d.png in Resources */,
-				BBEF197E268066D1001225BD /* colontildehash.png in Resources */,
-				BBEF197F268066D1001225BD /* metal.png in Resources */,
-				BBEF1980268066D1001225BD /* Assets.xcassets in Resources */,
-				BBEF1981268066D1001225BD /* LaunchScreen.storyboard in Resources */,
-				BB38597D27BCEC78000A1082 /* dollarblock1.png in Resources */,
-				BBEF1982268066D1001225BD /* Settings.bundle in Resources */,
-				BBEF1983268066D1001225BD /* pydann1.png in Resources */,
-				BBEF1984268066D1001225BD /* About.storyboard in Resources */,
-				BBEF1985268066D1001225BD /* Terminal.storyboard in Resources */,
-				BBEF1986268066D1001225BD /* Icons.plist in Resources */,
-				BBEF1987268066D1001225BD /* uninspired.png in Resources */,
-				BB38598527BCEC84000A1082 /* ishcolontildehash.png in Resources */,
-				BBEF1988268066D1001225BD /* iinhash.png in Resources */,
-				BBEF1989268066D1001225BD /* pydann2.png in Resources */,
-				BBEF198A268066D1001225BD /* ihash1.png in Resources */,
-				BBEF198B268066D1001225BD /* term.html in Resources */,
-				BBEF198C268066D1001225BD /* notsurewhatthisis.png in Resources */,
-				BBEF198D268066D1001225BD /* reworked.png in Resources */,
-				BBEF198E268066D1001225BD /* Roots.storyboard in Resources */,
-				BBEF198F268066D1001225BD /* idollarhash.png in Resources */,
-				BB3859A827BCEE6C000A1082 /* is.png in Resources */,
-				BB38597F27BCEC78000A1082 /* dollarblock2.png in Resources */,
-				BBEF1990268066D1001225BD /* hterm_all.js in Resources */,
-				BB38597827BCEC70000A1082 /* circular.png in Resources */,
-				BBEF1991268066D1001225BD /* icon1337.png in Resources */,
-				BBEF1992268066D1001225BD /* rgb.png in Resources */,
-				BBEF1993268066D1001225BD /* term.css in Resources */,
-				BBEF1994268066D1001225BD /* term.js in Resources */,
-				BBEF1995268066D1001225BD /* sprite64.png in Resources */,
-				BBEF1996268066D1001225BD /* icon.png in Resources */,
-				BB38598127BCEC78000A1082 /* freeiosterminal.png in Resources */,
-				C0A000022E00000200000005 /* test-tone-48k-s16le-stereo.raw in Resources */,
-				C0A000022E00000200000006 /* test-tone-48k-s16le-stereo.wav in Resources */,
-				C0A000042E00000400000002 /* iSH_benchmark.tgz in Resources */,
-				CB0A85D17BF34C213CC1D019 /* manifest.json in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		CCE244F869F2925165C7AFA5 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		D66BFFC6A6553D51454780C2 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -2237,81 +1943,6 @@
 			shellPath = /bin/sh;
 			shellScript = "python3 \"$SRCROOT/tools/generate-ios-alt-icons.py\" \\\n  --icons-plist \"$SRCROOT/app/Icons/Icons.plist\" \\\n  --info-header \"$BUILT_PRODUCTS_DIR/infoplisticons.h\"\n";
 		};
-		BBECF3B2269136E100DEC937 /* ShellScript */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-				"$(MESON_BUILD_DIR)/$(PRODUCT_NAME).a",
-			);
-			outputPaths = (
-				"$(CONFIGURATION_BUILD_DIR)/$(PRODUCT_NAME).a",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "mkdir -p \"$CONFIGURATION_BUILD_DIR\"\nln -sf \"$MESON_BUILD_DIR/deps/$PRODUCT_NAME.a\" \"$CONFIGURATION_BUILD_DIR/$PRODUCT_NAME.a\"\n";
-		};
-		BBEF1979268066D1001225BD /* Download Root */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/alpine-minirootfs-3.23.3-aarch64.tar.xz",
-				"$(SRCROOT)/devuan-minirootfs-6.0-aarch64.tar.xz",
-			);
-			name = "Download Root";
-			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/alpine-minirootfs-3.23.3-aarch64.tar.xz",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/devuan-minirootfs-6.0-aarch64.tar.xz",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "RESOURCES_DIR=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nmkdir -p \"$RESOURCES_DIR\"\nrm -f \"$RESOURCES_DIR/root.tar.gz\"\nrm -f \"$RESOURCES_DIR/Alpine3.23.3(x86_64).tar.gz\"\nrm -f \"$RESOURCES_DIR/alpine-minirootfs-3.23.3-x86.tar.xz\"\nrm -f \"$RESOURCES_DIR/alpine-minirootfs-3.23.3-x86_64.tar.xz\"\nrm -f \"$RESOURCES_DIR/devuan-minirootfs-6.0-x86.tar.xz\"\nrm -f \"$RESOURCES_DIR/devuan-minirootfs-6.0-x86_64.tar.xz\"\nrm -f \"$RESOURCES_DIR/alpine-minirootfs-3.23.3-aarch64.tar.xz\"\nrm -f \"$RESOURCES_DIR/devuan-minirootfs-6.0-aarch64.tar.xz\"\ninstall -m 0644 \"$SRCROOT/alpine-minirootfs-3.23.3-aarch64.tar.xz\" \"$RESOURCES_DIR/alpine-minirootfs-3.23.3-aarch64.tar.xz\"\ninstall -m 0644 \"$SRCROOT/devuan-minirootfs-6.0-aarch64.tar.xz\" \"$RESOURCES_DIR/devuan-minirootfs-6.0-aarch64.tar.xz\"\nxattr -c \"$RESOURCES_DIR/alpine-minirootfs-3.23.3-aarch64.tar.xz\" \"$RESOURCES_DIR/devuan-minirootfs-6.0-aarch64.tar.xz\" 2>/dev/null || true\n";
-			showEnvVarsInLog = 0;
-		};
-		BBEF197A268066D1001225BD /* Generate APK Repositories File */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/deps/aports/main/x86/index.txt",
-				"$(SRCROOT)/deps/aports/community/x86/index.txt",
-				"$(SRCROOT)/app/gen_apk_repositories.py",
-			);
-			name = "Generate APK Repositories File";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/repositories.txt",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /usr/bin/python3;
-			shellScript = "import os\ndef trim(x, start, end):\n    assert x.startswith(start)\n    assert x.endswith(end)\n    return x[len(start):-len(end)]\nrepos_file = []\nfor repo in ['main', 'community']:\n    with open(f'{os.environ[\"SRCROOT\"]}/deps/aports/{repo}/x86/index.txt') as f:\n        index_name = f.read()\n    index_name = trim(index_name, 'APKINDEX-', '.tar.gz\\n')\n    repos_file.append(f'http://apk.ish.app/{index_name}/{repo}')\nresources_dir = os.path.join(os.environ['TARGET_BUILD_DIR'], os.environ['UNLOCALIZED_RESOURCES_FOLDER_PATH'])\nos.makedirs(resources_dir, exist_ok=True)\nwith open(os.path.join(resources_dir, 'repositories.txt'), 'w') as f:\n    for line in repos_file:\n        print(line, file=f)\n";
-		};
-		BBEF197B268066D1001225BD /* Compile JavaScript */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-				"$(SRCROOT)/deps/libapps/hterm/dist/js/hterm_all.js",
-			);
-			name = "Compile JavaScript";
-			outputPaths = (
-				"$(DERIVED_FILE_DIR)/hterm_all.js.stamp",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "# The bundle is generated by xcode-meson.sh (the Meson legacy target), which is\n# not sandboxed and can actually run hterm/bin/mkdist. This phase only asserts\n# the result, because ENABLE_USER_SCRIPT_SANDBOXING denies a script phase even\n# reading mkdist.\ntest -f \"$SRCROOT/deps/libapps/hterm/dist/js/hterm_all.js\"\nmkdir -p \"$DERIVED_FILE_DIR\"\n: > \"$DERIVED_FILE_DIR/hterm_all.js.stamp\"\n";
-			showEnvVarsInLog = 0;
-		};
 		BBF1248B1FA7BF530088FB50 /* Download Root */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -2374,13 +2005,6 @@
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		00633A74044F0BECC71926BC /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		497F6CE0254E5E4C00C82F46 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -2488,14 +2112,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		BB21A1722689084800BD19B4 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				038E6826142CC067416D4684 /* DisplayRFBShaders.metal in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		BB21A17826890A5B00BD19B4 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -2539,19 +2155,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		BBECF39E2691314C00DEC937 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				BBECF3AD269132F400DEC937 /* LinuxInterop.c in Sources */,
-				BBBF9CBD27C217B6002A30F7 /* PasteboardDeviceLinux.c in Sources */,
-				BB8C3AFF26B7B8CF00E38DDC /* fakefs.c in Sources */,
-				BBEEA9E8277D25090069495B /* LinuxRoot.c in Sources */,
-				BB123ACC26C9EFD900419CDA /* LinuxTTY.c in Sources */,
-				BBEEA9EA277DAB400069495B /* LinuxPTY.c in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		BBEF191A26806364001225BD /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -2565,7 +2168,6 @@
 				496C7AB227CC697E005D7613 /* Theme.m in Sources */,
 				BB28C79426896B1F00BDC834 /* AboutNavigationController.m in Sources */,
 				BB28C79526896B1F00BDC834 /* TerminalViewController.m in Sources */,
-				BB123ACE26C9F13500419CDA /* IOSCalls.m in Sources */,
 				BBC3863F276817AD00CC8C2E /* CurrentRoot.m in Sources */,
 				BB28C79626896B1F00BDC834 /* ProgressReportViewController.m in Sources */,
 				BB28C79726896B1F00BDC834 /* TerminalView.m in Sources */,
@@ -2683,36 +2285,11 @@
 			target = BB88F48F2154760800A341FD /* iSH-AOK.FileProvider */;
 			targetProxy = BB88F49D2154760800A341FD /* PBXContainerItemProxy */;
 		};
-		BBECF3B0269136E100DEC937 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = BB13F7D0200ACCA2003D1C4D /* Ninja */;
-			targetProxy = BBECF3B1269136E100DEC937 /* PBXContainerItemProxy */;
-		};
-		BBECF3BE2691417C00DEC937 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = BBECF3AF269136E100DEC937 /* liblinux */;
-			targetProxy = BBECF3BD2691417C00DEC937 /* PBXContainerItemProxy */;
-		};
 		BBEF1929268063FD001225BD /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			platformFilter = ios;
 			target = BBEF191D26806364001225BD /* libiSH-AOKApp */;
 			targetProxy = BBEF1928268063FD001225BD /* PBXContainerItemProxy */;
-		};
-		BBEF1965268066D1001225BD /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = BB4A922324ED9402002F5A96 /* iSH-AOK pre */;
-			targetProxy = BBEF1966268066D1001225BD /* PBXContainerItemProxy */;
-		};
-		BBEF1967268066D1001225BD /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = BBEF191D26806364001225BD /* libiSH-AOKApp */;
-			targetProxy = BBEF1968268066D1001225BD /* PBXContainerItemProxy */;
-		};
-		BBEF1969268066D1001225BD /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			name = libarchive;
-			targetProxy = BBEF196A268066D1001225BD /* PBXContainerItemProxy */;
 		};
 		BBFB2C552590257E00545EAB /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -2865,14 +2442,6 @@
 			};
 			name = "Debug-ApplePleaseFixFB19282108";
 		};
-		BB21A16C2689041500BD19B4 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = DebugLinux;
-		};
 		BB21A16D2689041500BD19B4 /* Release */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
@@ -2880,14 +2449,6 @@
 				DEAD_CODE_STRIPPING = YES;
 			};
 			name = Release;
-		};
-		BB21A16E2689041500BD19B4 /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = ReleaseLinux;
 		};
 		BB415923255EF9E300E0950C /* Debug-ApplePleaseFixFB19282108 */ = {
 			isa = XCBuildConfiguration;
@@ -3038,200 +2599,6 @@
 			};
 			name = Release;
 		};
-		BB7F62052688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB28C7532689522C00BDC834 /* ProjectDebugLinux.xcconfig */;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				CURRENT_PROJECT_VERSION = 551;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-			};
-			name = DebugLinux;
-		};
-		BB7F62062688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86CD2586FD8800208600 /* App.xcconfig */;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 551;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
-				ENABLE_RESOURCE_ACCESS_LOCATION = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "iSH-AOK";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
-				PRODUCT_NAME = "iSH-AOK";
-				PROVISIONING_PROFILE_SPECIFIER = "";
-				SUPPORTS_MACCATALYST = NO;
-				SWIFT_OBJC_BRIDGING_HEADER = "fs/proc/iSH-AOK-Bridging-Header.h";
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = DebugLinux;
-		};
-		BB7F62072688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86CD2586FD8800208600 /* App.xcconfig */;
-			buildSettings = {
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_APP_SANDBOX = YES;
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
-				PRODUCT_NAME = "iSH-AOK";
-				PROVISIONING_PROFILE_SPECIFIER = "";
-			};
-			name = DebugLinux;
-		};
-		BB7F62082688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBEF192C26806546001225BD /* AppLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/deps/audiocodecs-static/Headers",
-					"$(SRCROOT)/deps/audiocodecs-static/Headers/opus",
-				);
-				PRODUCT_NAME = "libiSH-AOKApp";
-				SWIFT_VERSION = 5.0;
-			};
-			name = DebugLinux;
-		};
-		BB7F62092688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86D52587009D00208600 /* iOS.xcconfig */;
-			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = app/FileProvider/iSHFileProvider.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
-				INFOPLIST_FILE = app/FileProvider/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK.FileProvider";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "";
-				SKIP_INSTALL = YES;
-				SUPPORTS_MACCATALYST = NO;
-			};
-			name = DebugLinux;
-		};
-		BB7F620A2688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86D52587009D00208600 /* iOS.xcconfig */;
-			buildSettings = {
-				CLANG_ENABLE_MODULES = YES;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				INFOPLIST_FILE = app/UITests/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = "$(PRODUCT_BUNDLE_IDENTIFIER).UITests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = "iSH-AOK";
-			};
-			name = DebugLinux;
-		};
-		BB7F620B2688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = DebugLinux;
-		};
-		BB7F620C2688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = DebugLinux;
-		};
-		BB7F620D2688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = DebugLinux;
-		};
-		BB7F620E2688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = DebugLinux;
-		};
-		BB7F620F2688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = DebugLinux;
-		};
-		BB7F62102688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86D52587009D00208600 /* iOS.xcconfig */;
-			buildSettings = {
-				HEADER_SEARCH_PATHS = "$(SRCROOT)";
-				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_IDENTITY = "-";
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
-				SWIFT_OBJC_BRIDGING_HEADER = "fs/proc/MakeXcodeAutoCompleteWork-Bridging-Header.h";
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 5.0;
-			};
-			name = DebugLinux;
-		};
-		BB7F62112688EAB5003C0220 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = 493B378F290F5320000C41ED /* CLI.xcconfig */;
-			buildSettings = {
-				CODE_SIGN_IDENTITY = "-";
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_HARDENED_RUNTIME = YES;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)";
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
-			};
-			name = DebugLinux;
-		};
 		BB88F4A02154760800A341FD /* Debug-ApplePleaseFixFB19282108 */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = BB0B86D52587009D00208600 /* iOS.xcconfig */;
@@ -3270,74 +2637,6 @@
 			};
 			name = Release;
 		};
-		BBECF3A92691314C00DEC937 /* Debug-ApplePleaseFixFB19282108 */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBECF3BA2691379100DEC937 /* StaticLibLinux.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-				PRODUCT_NAME = "libiSH-AOKLinux";
-			};
-			name = "Debug-ApplePleaseFixFB19282108";
-		};
-		BBECF3AA2691314C00DEC937 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBECF3BA2691379100DEC937 /* StaticLibLinux.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-				PRODUCT_NAME = "libiSH-AOKLinux";
-			};
-			name = DebugLinux;
-		};
-		BBECF3AB2691314C00DEC937 /* Release */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBECF3BA2691379100DEC937 /* StaticLibLinux.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-				PRODUCT_NAME = "libiSH-AOKLinux";
-			};
-			name = Release;
-		};
-		BBECF3AC2691314C00DEC937 /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBECF3BA2691379100DEC937 /* StaticLibLinux.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-				PRODUCT_NAME = "libiSH-AOKLinux";
-			};
-			name = ReleaseLinux;
-		};
-		BBECF3B4269136E100DEC937 /* Debug-ApplePleaseFixFB19282108 */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = "Debug-ApplePleaseFixFB19282108";
-		};
-		BBECF3B5269136E100DEC937 /* DebugLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = DebugLinux;
-		};
-		BBECF3B6269136E100DEC937 /* Release */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = Release;
-		};
-		BBECF3B7269136E100DEC937 /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = ReleaseLinux;
-		};
 		BBEF192426806364001225BD /* Debug-ApplePleaseFixFB19282108 */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = BBEF192C26806546001225BD /* AppLib.xcconfig */;
@@ -3368,234 +2667,6 @@
 			};
 			name = Release;
 		};
-		BBEF199A268066D1001225BD /* Debug-ApplePleaseFixFB19282108 */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86CD2586FD8800208600 /* App.xcconfig */;
-			buildSettings = {
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_APP_SANDBOX = YES;
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
-				PRODUCT_NAME = "iSH-AOK";
-				PROVISIONING_PROFILE_SPECIFIER = "";
-			};
-			name = "Debug-ApplePleaseFixFB19282108";
-		};
-		BBEF199B268066D1001225BD /* Release */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86CD2586FD8800208600 /* App.xcconfig */;
-			buildSettings = {
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_APP_SANDBOX = YES;
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
-				PRODUCT_NAME = "iSH-AOK";
-				PROVISIONING_PROFILE_SPECIFIER = "";
-			};
-			name = Release;
-		};
-		BBEF19AB26806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB28C7522689522700BDC834 /* ProjectReleaseLinux.xcconfig */;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				CURRENT_PROJECT_VERSION = 551;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_COMPILATION_MODE = wholemodule;
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19AC26806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86CD2586FD8800208600 /* App.xcconfig */;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 551;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
-				ENABLE_RESOURCE_ACCESS_LOCATION = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "iSH-AOK";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
-				PRODUCT_NAME = "iSH-AOK";
-				PROVISIONING_PROFILE_SPECIFIER = "";
-				SUPPORTS_MACCATALYST = NO;
-				SWIFT_OBJC_BRIDGING_HEADER = "fs/proc/iSH-AOK-Bridging-Header.h";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19AD26806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86CD2586FD8800208600 /* App.xcconfig */;
-			buildSettings = {
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_APP_SANDBOX = YES;
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME)",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
-				PRODUCT_NAME = "iSH-AOK";
-				PROVISIONING_PROFILE_SPECIFIER = "";
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19AE26806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBEF192C26806546001225BD /* AppLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(SRCROOT)/deps/audiocodecs-static/Headers",
-					"$(SRCROOT)/deps/audiocodecs-static/Headers/opus",
-				);
-				PRODUCT_NAME = "libiSH-AOKApp";
-				SWIFT_VERSION = 5.0;
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19AF26806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86D52587009D00208600 /* iOS.xcconfig */;
-			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = app/FileProvider/iSHFileProvider.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
-				INFOPLIST_FILE = app/FileProvider/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK.FileProvider";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "";
-				SKIP_INSTALL = YES;
-				SUPPORTS_MACCATALYST = NO;
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19B026806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86D52587009D00208600 /* iOS.xcconfig */;
-			buildSettings = {
-				CLANG_ENABLE_MODULES = YES;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				INFOPLIST_FILE = app/UITests/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = "$(PRODUCT_BUNDLE_IDENTIFIER).UITests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = "iSH-AOK";
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19B126806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19B226806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19B326806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19B426806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19B526806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				DEAD_CODE_STRIPPING = YES;
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19B626806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = BB0B86D52587009D00208600 /* iOS.xcconfig */;
-			buildSettings = {
-				HEADER_SEARCH_PATHS = "$(SRCROOT)";
-				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_IDENTITY = "-";
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
-				SWIFT_OBJC_BRIDGING_HEADER = "fs/proc/MakeXcodeAutoCompleteWork-Bridging-Header.h";
-				SWIFT_VERSION = 5.0;
-			};
-			name = ReleaseLinux;
-		};
-		BBEF19B726806D1F001225BD /* ReleaseLinux */ = {
-			isa = XCBuildConfiguration;
-			baseConfigurationReference = 493B378F290F5320000C41ED /* CLI.xcconfig */;
-			buildSettings = {
-				CODE_SIGN_IDENTITY = "-";
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = UYU5FM4LQ4;
-				ENABLE_HARDENED_RUNTIME = YES;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)";
-				PRODUCT_BUNDLE_IDENTIFIER = "app.ish.iSH-AOK";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SUPPORTED_PLATFORMS = macosx;
-			};
-			name = ReleaseLinux;
-		};
 		BBFB2C592590257E00545EAB /* Debug-ApplePleaseFixFB19282108 */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = BBFB2CDA259028DC00545EAB /* StaticLib.xcconfig */;
@@ -3619,9 +2690,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				497F6CE8254E5E4C00C82F46 /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F62102688EAB5003C0220 /* DebugLinux */,
 				497F6CE9254E5E4C00C82F46 /* Release */,
-				BBEF19B626806D1F001225BD /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -3630,8 +2699,6 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				497F6D4C254E605F00C82F46 /* Release */,
-				BB7F62112688EAB5003C0220 /* DebugLinux */,
-				BBEF19B726806D1F001225BD /* ReleaseLinux */,
 				5D09CC092923DDA10054A524 /* Debug-ApplePleaseFixFB19282108 */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3641,9 +2708,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BB13F7CC200ACC31003D1C4D /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F620B2688EAB5003C0220 /* DebugLinux */,
 				BB13F7CD200ACC31003D1C4D /* Release */,
-				BBEF19B126806D1F001225BD /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -3652,9 +2717,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BB13F7D2200ACCA2003D1C4D /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F620C2688EAB5003C0220 /* DebugLinux */,
 				BB13F7D3200ACCA2003D1C4D /* Release */,
-				BBEF19B226806D1F001225BD /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -3663,9 +2726,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BB13F7E3200AD81E003D1C4D /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F620D2688EAB5003C0220 /* DebugLinux */,
 				BB13F7E4200AD81E003D1C4D /* Release */,
-				BBEF19B326806D1F001225BD /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -3674,9 +2735,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BB21A16B2689041500BD19B4 /* Debug-ApplePleaseFixFB19282108 */,
-				BB21A16C2689041500BD19B4 /* DebugLinux */,
 				BB21A16D2689041500BD19B4 /* Release */,
-				BB21A16E2689041500BD19B4 /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -3685,9 +2744,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BB415923255EF9E300E0950C /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F620A2688EAB5003C0220 /* DebugLinux */,
 				BB415924255EF9E300E0950C /* Release */,
-				BBEF19B026806D1F001225BD /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -3696,9 +2753,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BB4A922524ED9402002F5A96 /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F620F2688EAB5003C0220 /* DebugLinux */,
 				BB4A922624ED9402002F5A96 /* Release */,
-				BBEF19B526806D1F001225BD /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -3707,9 +2762,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BB792B4A1F96D8E000FFB7A4 /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F62052688EAB5003C0220 /* DebugLinux */,
 				BB792B4B1F96D8E000FFB7A4 /* Release */,
-				BBEF19AB26806D1F001225BD /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -3718,9 +2771,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BB792B641F96D90D00FFB7A4 /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F62062688EAB5003C0220 /* DebugLinux */,
 				BB792B651F96D90D00FFB7A4 /* Release */,
-				BBEF19AC26806D1F001225BD /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -3729,31 +2780,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BB88F4A02154760800A341FD /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F62092688EAB5003C0220 /* DebugLinux */,
 				BB88F4A12154760800A341FD /* Release */,
-				BBEF19AF26806D1F001225BD /* ReleaseLinux */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		BBECF3A82691314C00DEC937 /* Build configuration list for PBXNativeTarget "libiSH-AOKLinux" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				BBECF3A92691314C00DEC937 /* Debug-ApplePleaseFixFB19282108 */,
-				BBECF3AA2691314C00DEC937 /* DebugLinux */,
-				BBECF3AB2691314C00DEC937 /* Release */,
-				BBECF3AC2691314C00DEC937 /* ReleaseLinux */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		BBECF3B3269136E100DEC937 /* Build configuration list for PBXNativeTarget "liblinux" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				BBECF3B4269136E100DEC937 /* Debug-ApplePleaseFixFB19282108 */,
-				BBECF3B5269136E100DEC937 /* DebugLinux */,
-				BBECF3B6269136E100DEC937 /* Release */,
-				BBECF3B7269136E100DEC937 /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -3762,20 +2789,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BBEF192426806364001225BD /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F62082688EAB5003C0220 /* DebugLinux */,
 				BBEF192526806364001225BD /* Release */,
-				BBEF19AE26806D1F001225BD /* ReleaseLinux */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		BBEF1999268066D1001225BD /* Build configuration list for PBXNativeTarget "iSH-AOK+Linux" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				BBEF199A268066D1001225BD /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F62072688EAB5003C0220 /* DebugLinux */,
-				BBEF199B268066D1001225BD /* Release */,
-				BBEF19AD26806D1F001225BD /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -3784,9 +2798,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				BBFB2C592590257E00545EAB /* Debug-ApplePleaseFixFB19282108 */,
-				BB7F620E2688EAB5003C0220 /* DebugLinux */,
 				BBFB2C5A2590257E00545EAB /* Release */,
-				BBEF19B426806D1F001225BD /* ReleaseLinux */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

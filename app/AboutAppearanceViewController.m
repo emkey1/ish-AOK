@@ -76,12 +76,10 @@ char *previewString = "# cat /proc/ish/colors\r\n"
     }];
     [self updateOtherControls];
 
-#if !ISH_LINUX
     if (![NSUserDefaults.standardUserDefaults boolForKey:@"recovery"]) {
         _terminal = [Terminal createPseudoTerminal:&_tty];
         [_terminal sendOutput:previewString length:(int)strlen(previewString)];
     }
-#endif
 }
 
 - (void)viewDidAppear:(BOOL)animated {

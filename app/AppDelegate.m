@@ -100,9 +100,6 @@ static void ISHDispatchBootWork(NSString *name, void (^work)(void)) {
     });
 }
 
-#if ISH_LINUX
-#import "LinuxInterop.h"
-#endif
 
 @class ISHMetricKitSubscriber;
 
@@ -127,7 +124,6 @@ static void ISHDispatchBootWork(NSString *name, void (^work)(void)) {
 
 @end
 
-#if !ISH_LINUX
 #pragma pack(push, 4)
 typedef struct {
     struct in_addr address;
@@ -434,9 +430,7 @@ static NSData *ISHBuildBonjourDnsResponse(const uint8_t *queryBytes, size_t quer
     }
     return response;
 }
-#endif
 
-#if !ISH_LINUX
 static void ios_handle_exit(struct task *task, int code) {
     // we are interested in init and in children of init
     // this is called with pids_lock as an implementation side effect, please do not cite as an example of good API design
@@ -508,14 +502,6 @@ static void ios_handle_die(const char *msg) {
     pthread_setname_np(newName.UTF8String);
     ISHDiagnosticsRecordGuestFatalSync("die", msg, NULL);
 }
-#elif ISH_LINUX
-void ReportPanic(const char *message) {
-    NSDictionary *userInfo = message != NULL ? @{@"message": @(message)} : nil;
-    [NSNotificationCenter.defaultCenter postNotificationName:KernelPanicNotification
-                                                      object:nil
-                                                    userInfo:userInfo];
-}
-#endif
 
 static intptr_t bootError;
 static NSString *bootFailureTitle;
@@ -2411,7 +2397,6 @@ static TerminalViewController *CreateTerminalViewController(void) {
 }
 
 - (intptr_t)boot {
-#if !ISH_LINUX
     [ISHDiagnosticsStore recordLaunchStage:@"boot.begin"];
     NSString *defaultRoot = Roots.instance.defaultRoot;
     if (defaultRoot == nil) {
@@ -2975,118 +2960,10 @@ static TerminalViewController *CreateTerminalViewController(void) {
         ISHAppGroupReleaseLock(rootLockFd);
     }
 
-#else
-    // On first launch, this will trigger the import of the default root. Make sure to do this before entering the kernel, because it needs to run something on the main thread, and that would deadlock.
-    [Roots instance];
-    NSArray<NSString *> *args = @[];
-    actuate_kernel([args componentsJoinedByString:@" "].UTF8String);
-#endif
     
     return 0;
 }
 
-#if ISH_LINUX
-const char *DefaultRootPath() {
-    return [Roots.instance rootUrl:Roots.instance.defaultRoot].fileSystemRepresentation;
-}
-
-static BOOL GuestHostnameFromFile(char *hostname, size_t size) {
-    if (size == 0)
-        return NO;
-
-    ssize_t len = linux_read_file("/etc/hostname", hostname, size - 1);
-    if (len <= 0)
-        return NO;
-
-    hostname[len] = '\0';
-    while (len > 0 && isspace((unsigned char) hostname[len - 1])) {
-        hostname[--len] = '\0';
-    }
-    size_t start = 0;
-    while (hostname[start] != '\0' && isspace((unsigned char) hostname[start])) {
-        start++;
-    }
-    if (start != 0) {
-        memmove(hostname, hostname + start, len - start + 1);
-    }
-    return hostname[0] != '\0';
-}
-
-static void EnsureGuestHostsEntry(const char *hostname) {
-    if (hostname == NULL || hostname[0] == '\0')
-        return;
-
-    struct task *previousCurrent;
-    if (!PushInitTaskAsCurrent(&previousCurrent))
-        return;
-
-    char hosts[8192];
-    ssize_t len = linux_read_file("/etc/hosts", hosts, sizeof(hosts) - 1);
-    NSMutableString *updatedHosts = nil;
-    BOOL hasHostname = NO;
-
-    if (len >= 0) {
-        hosts[len] = '\0';
-        NSString *existingHosts = [[NSString alloc] initWithBytes:hosts
-                                                           length:len
-                                                         encoding:NSUTF8StringEncoding];
-        if (existingHosts == nil) {
-            existingHosts = [[NSString alloc] initWithCString:hosts encoding:NSISOLatin1StringEncoding];
-        }
-        if (existingHosts != nil) {
-            NSArray<NSString *> *lines = [existingHosts componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
-            for (NSString *line in lines) {
-                NSString *content = [[line componentsSeparatedByString:@"#"] firstObject];
-                NSArray<NSString *> *fields = [content componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
-                for (NSString *field in fields) {
-                    if ([field length] == 0)
-                        continue;
-                    if ([field isEqualToString:@(hostname)]) {
-                        hasHostname = YES;
-                        break;
-                    }
-                }
-                if (hasHostname)
-                    break;
-            }
-            updatedHosts = [existingHosts mutableCopy];
-        }
-    }
-
-    if (hasHostname)
-        goto out;
-
-    if (updatedHosts == nil) {
-        updatedHosts = [NSMutableString stringWithString:@"127.0.0.1\tlocalhost\n"];
-    } else if (![updatedHosts hasSuffix:@"\n"]) {
-        [updatedHosts appendString:@"\n"];
-    }
-    [updatedHosts appendFormat:@"127.0.1.1\t%s\n", hostname];
-
-    struct fd *fd = generic_open("/etc/hosts", O_WRONLY_ | O_CREAT_ | O_TRUNC_, 0644);
-    if (IS_ERR(fd)) {
-        NSLog(@"failed to write /etc/hosts: %d", PTR_ERR(fd));
-        goto out;
-    }
-    fd->ops->write(fd, updatedHosts.UTF8String, [updatedHosts lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
-    fd_close(fd);
-
-out:
-    PopCurrentTask(previousCurrent);
-}
-
-void SyncHostname(void) {
-    async_do_in_workqueue(^{
-        char hostname[256];
-        if (!GuestHostnameFromFile(hostname, sizeof(hostname))) {
-            if (gethostname(hostname, sizeof(hostname)) < 0)
-                return;
-        }
-        linux_sethostname(hostname);
-        EnsureGuestHostsEntry(hostname);
-    });
-}
-#endif
 
 - (NSData *)forwardDnsQuery:(const uint8_t *)queryBytes
                      length:(size_t)queryLength
@@ -3148,7 +3025,6 @@ void SyncHostname(void) {
 }
 
 - (void)stopLocalDnsServer {
-#if !ISH_LINUX
     int fd = self.localDnsServerFD;
     self.localDnsServerFD = -1;
     if (self.localDnsServerReadSource != nil) {
@@ -3158,13 +3034,9 @@ void SyncHostname(void) {
         close(fd);
     }
     self.localDnsServerRunning = NO;
-#endif
 }
 
 - (BOOL)ensureLocalDnsServer {
-#if ISH_LINUX
-    return NO;
-#else
     if (self.localDnsServerRunning && self.localDnsServerFD >= 0)
         return YES;
 
@@ -3214,11 +3086,9 @@ void SyncHostname(void) {
     [ISHDiagnosticsStore recordBreadcrumb:@"dns.localServer.started"
                                   details:@{@"address": @"127.0.0.1:53"}];
     return YES;
-#endif
 }
 
 - (void)configureDns {
-#if !ISH_LINUX
     [ISHDiagnosticsStore recordBreadcrumb:@"dns.configure.begin"];
     [self ensureLocalDnsServer];
     [self scheduleDnsRefresh:@"manual"];
@@ -3282,17 +3152,13 @@ void SyncHostname(void) {
         }
     }
 #endif
-#endif
 }
 
 - (void)refreshDnsConfiguration {
-#if !ISH_LINUX
     [self scheduleDnsRefresh:@"preference-change"];
-#endif
 }
 
 - (void)scheduleDnsRefresh:(NSString *)reason {
-#if !ISH_LINUX
     @synchronized (self) {
         if (self.dnsRefreshRunning) {
             self.dnsRefreshQueued = YES;
@@ -3306,11 +3172,9 @@ void SyncHostname(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         [self performDnsRefresh:reasonCopy];
     });
-#endif
 }
 
 - (void)performDnsRefresh:(NSString *)reason {
-#if !ISH_LINUX
     NSString *dnsSource = @"dnsinfo";
     NSMutableString *resolvConf = nil;
     BOOL customOverrideActive = NO;
@@ -3445,11 +3309,9 @@ void SyncHostname(void) {
     }
     PopCurrentTask(previousCurrent);
     [self finishDnsRefreshAndRescheduleIfNeeded:reason];
-#endif
 }
 
 - (void)finishDnsRefreshAndRescheduleIfNeeded:(NSString *)reason {
-#if !ISH_LINUX
     BOOL shouldReschedule = NO;
     @synchronized (self) {
         shouldReschedule = self.dnsRefreshQueued;
@@ -3460,7 +3322,6 @@ void SyncHostname(void) {
         NSString *nextReason = [NSString stringWithFormat:@"%@-coalesced", reason ?: @"dns"];
         [self scheduleDnsRefresh:nextReason];
     }
-#endif
 }
 
 + (intptr_t)bootError {
@@ -3521,12 +3382,6 @@ void SyncHostname(void) {
                                        details:bootCheckDetails];
     }
 
-#if ISH_LINUX
-    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationWillEnterForegroundNotification object:UIApplication.sharedApplication queue:nil usingBlock:^(NSNotification * _Nonnull note) {
-        SyncHostname();
-    }];
-    SyncHostname();
-#endif
 
     return YES;
 }
@@ -3575,7 +3430,6 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
     if ([NSUserDefaults.standardUserDefaults boolForKey:@"FASTLANE_SNAPSHOT"])
         [UIView setAnimationsEnabled:NO];
 
-#if !ISH_LINUX
     self.localDnsServerFD = -1;
     NSString *ishVersion = [NSString stringWithFormat:@"iSH-AOK %@ (%@)",
                          [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"],
@@ -3592,7 +3446,6 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
     if (hostnameOverride) {
         uts_set_boot_hostname(hostnameOverride.UTF8String);
     }
-#endif
     
     [UserPreferences.shared observe:@[@"shouldDisableDimming"] options:NSKeyValueObservingOptionInitial
                               owner:self usingBlock:^(typeof(self) self) {
@@ -3878,8 +3731,4 @@ void ISHSuspendGuardEnterForeground(void) {
 
 @end
 
-#if !ISH_LINUX
 NSString *const ProcessExitedNotification = @"ProcessExitedNotification";
-#else
-NSString *const KernelPanicNotification = @"KernelPanicNotification";
-#endif

@@ -193,9 +193,6 @@ NSString *const ThemeUpdatedNotification = @"ThemeUpdatedNotification";
 @end
 
 // TODO: Move these to Linux
-#if ISH_LINUX
-char *(*get_documents_directory)(void);
-#endif
 
 @implementation Theme
 + (void)initialize {

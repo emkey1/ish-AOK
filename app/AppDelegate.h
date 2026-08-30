@@ -16,7 +16,6 @@ struct task;
 @property (strong, nonatomic) UIWindow *window;
 - (void)exitApp;
 
-#if !ISH_LINUX
 + (intptr_t)bootError;
 + (NSString * _Nonnull)descriptionForISHErrno:(intptr_t)err;
 + (NSString * _Nullable)bootFailureTitle;
@@ -39,21 +38,14 @@ struct task;
 // GUI creates to the account the user's sessions run as. NO under the same conditions
 // headlessCommandAccountName answers nil: preference off, or no such account.
 + (BOOL)headlessCommandAccountOwner:(NSInteger * _Nullable)uid gid:(NSInteger * _Nullable)gid;
-#endif
 
 + (void)maybePresentStartupMessageOnViewController:(UIViewController *)vc;
 
-#if !ISH_LINUX
 - (void)refreshDnsConfiguration;
-#endif
 
 @end
 
-#if !ISH_LINUX
 extern NSString *const ProcessExitedNotification;
-#else
-extern NSString *const KernelPanicNotification;
-#endif
 
 // Suspension handling for the fakefs; implemented in AppDelegate.m.
 //

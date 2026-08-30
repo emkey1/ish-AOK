@@ -28,7 +28,6 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-#if !ISH_LINUX
     if ([AppDelegate ensureBooted] < 0)
         return;
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(processExited:) name:ProcessExitedNotification object:nil];
@@ -40,7 +39,6 @@
     }
     
     self.terminalView.terminal = self.terminal;
-#endif
     self.upgradeButton.enabled = NO;
     if (FsNeedsRepositoryUpdate()) {
         self.upgradeButton.enabled = YES;
@@ -66,7 +64,6 @@
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-#if !ISH_LINUX
 - (void)processExited:(NSNotification *)notif {
     int pid = [notif.userInfo[@"pid"] intValue];
     if (pid != self.upgradePid)
@@ -87,12 +84,10 @@
     [self.terminal destroy];
     self.terminal = nil;
 }
-#endif
 
 - (intptr_t)startUpgrade {
     if (self.upgradePid != 0)
         return _EEXIST;
-#if !ISH_LINUX
     intptr_t err = [AppDelegate ensureBooted];
     if (err < 0)
         return err;
@@ -117,9 +112,6 @@
     }
     current = NULL;
     return 0;
-#else
-    return _ENOSYS;
-#endif
 }
 
 - (IBAction)upgrade:(id)sender {

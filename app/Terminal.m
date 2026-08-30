@@ -9,7 +9,6 @@
 #import "DelayedUITask.h"
 #import "Diagnostics.h"
 #import "UserPreferences.h"
-#include "LinuxInterop.h"
 #include "fs/dev.h"
 #include "fs/devices.h"
 #include "fs/tty.h"
@@ -20,21 +19,15 @@
 
 extern struct tty_driver ios_pty_driver;
 
-#if !ISH_LINUX
 typedef struct tty *tty_t;
-#else
-typedef struct linux_tty *tty_t;
-#endif
 
 NSNotificationName const TerminalLoadFailedNotification = @"TerminalLoadFailedNotification";
 NSNotificationName const TerminalDidLoadNotification = @"TerminalDidLoadNotification";
 NSNotificationName const TerminalRegistryDidChangeNotification = @"TerminalRegistryDidChangeNotification";
 
 @interface Terminal () <WKScriptMessageHandler, WKNavigationDelegate> {
-#if !ISH_LINUX
     lock_t _dataLock;
     cond_t _dataConsumed;
-#endif
 }
 
 @property BOOL loaded;
@@ -277,16 +270,8 @@ int Terminal_debugSendInputUTF8Sync(int type, int number, const char *input) {
                                              @"firstByte": [NSString stringWithFormat:@"%#x", first]}];
         }
 
-#if !ISH_LINUX
         tty_input(terminal.tty, copy, length, 0);
         free(copy);
-#else
-        sync_do_in_workqueue(^(void (^done)(void)) {
-            terminal.tty->ops->send_input(terminal.tty, copy, length);
-            free(copy);
-            done();
-        });
-#endif
         return 0;
     }
 }
@@ -308,10 +293,8 @@ static void NotifyTerminalRegistryChanged(void) {
             self.pendingData = [[NSMutableData alloc] initWithCapacity:BUF_SIZE];
             self.refreshTask = [[DelayedUITask alloc] initWithTarget:self action:@selector(refresh)];
             self.scrollToBottomTask = [[DelayedUITask alloc] initWithTarget:self action:@selector(scrollToBottom)];
-#if !ISH_LINUX
             lock_init(&_dataLock, "datalock\0");
             cond_init(&_dataConsumed);
-#endif
 
             [terminals setObject:self forKey:self.terminalsKey];
             self.uuid = [NSUUID UUID];
@@ -356,17 +339,10 @@ static void NotifyTerminalRegistryChanged(void) {
 - (void)recoverTerminalWebViewWithReason:(NSString *)reason error:(NSError *)error {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSUInteger pendingBytes = 0;
-#if !ISH_LINUX
         lock(&self->_dataLock, 0);
         [self resetOutputStateAndRequeueInFlightDataLocked];
         pendingBytes = self.pendingData.length;
         unlock(&self->_dataLock);
-#else
-        @synchronized (self) {
-            [self resetOutputStateAndRequeueInFlightDataLocked];
-            pendingBytes = self.pendingData.length;
-        }
-#endif
         [self recordLifecycleEvent:@"terminal.webview.recover"
                            details:@{@"reason": reason ?: @"unknown",
                                      @"pendingBytes": @(pendingBytes),
@@ -425,14 +401,12 @@ static void NotifyTerminalRegistryChanged(void) {
     return _webView;
 }
 
-#if !ISH_LINUX
 + (Terminal *)createPseudoTerminal:(struct tty **)tty {
     *tty = pty_open_fake(&ios_pty_driver);
     if (IS_ERR(*tty))
         return nil;
     return (__bridge Terminal *) (*tty)->data;
 }
-#endif
 
 - (void)setTty:(tty_t)tty {
     @synchronized (self) {
@@ -515,7 +489,6 @@ static void NotifyTerminalRegistryChanged(void) {
         }
         if (tty == NULL)
             return;
-#if !ISH_LINUX
         // Not enough on its own: tty_release frees the struct, so even a
         // correctly-read pointer can go stale before it is dereferenced. Re-find
         // the tty under ttys_lock -- the lock that free is required to hold --
@@ -529,11 +502,6 @@ static void NotifyTerminalRegistryChanged(void) {
         tty_set_winsize(tty, (struct winsize_) {.col = cols, .row = rows});
         unlock(&tty->lock);
         tty_put(tty);
-#else
-        async_do_in_workqueue(^{
-            tty->ops->resize(tty, cols, rows);
-        });
-#endif
     }];
 }
 
@@ -548,7 +516,6 @@ static void NotifyTerminalRegistryChanged(void) {
 
 - (int)sendOutput:(const void *)buf length:(int)len {
     TerminalDebugMirrorOutput(self, buf, len);
-#if !ISH_LINUX
     lock(&_dataLock, 0);
     if (!NSThread.isMainThread) {
         if (!self.loaded) {
@@ -579,29 +546,9 @@ static void NotifyTerminalRegistryChanged(void) {
     [_pendingData appendBytes:buf length:(NSUInteger) len];
     [self.refreshTask schedule];
     unlock(&_dataLock);
-#else
-    @synchronized (self) {
-        int room = [self roomForOutput];
-        if (len > room)
-            len = room;
-        if (len > 0) {
-            [_pendingData appendBytes:buf length:(NSUInteger) len];
-            [_refreshTask schedule];
-        }
-    }
-#endif
     return len;
 }
 
-#if ISH_LINUX
-- (int)roomForOutput {
-    @synchronized (self) {
-        if (_pendingData.length > BUF_SIZE)
-            return 0;
-        return BUF_SIZE - (int) _pendingData.length;
-    }
-}
-#endif
 
 - (void)sendInput:(NSData *)input {
     tty_t tty;
@@ -616,7 +563,6 @@ static void NotifyTerminalRegistryChanged(void) {
                            details:@{@"bytes": @(input.length),
                                      @"firstByte": [NSString stringWithFormat:@"%#x", first]}];
     }
-#if !ISH_LINUX
     // Hold a reference across tty_input rather than dereferencing the unowned
     // back-pointer, which tty_release can free between the check above and the
     // call (see -syncWindowSize). A reference rather than holding ttys_lock
@@ -625,22 +571,14 @@ static void NotifyTerminalRegistryChanged(void) {
     tty = tty_lookup_ref(self.type, self.number, tty);
     if (tty != NULL)
         tty_input(tty, input.bytes, input.length, 0);
-#else
-    async_do_in_workqueue(^{
-        NSData *inputRef = input;
-        self.tty->ops->send_input(self.tty, inputRef.bytes, inputRef.length);
-    });
-#endif
     if (self.loaded) {
         [self.webView evaluateJavaScript:@"exports.setUserGesture()" completionHandler:nil];
         [self.scrollToBottomTask schedule];
     }
-#if !ISH_LINUX
     // Last, and after every use of self: if this drops the final reference,
     // tty_release runs ios_tty_cleanup, whose CFBridgingRelease releases the
     // tty's own strong reference to this Terminal.
     tty_put(tty);
-#endif
 }
 
 - (void)requestRefresh {
@@ -663,7 +601,6 @@ static void NotifyTerminalRegistryChanged(void) {
     if (!self.loaded)
         return;
 
-#if !ISH_LINUX
     lock(&_dataLock, 0);
     CFTimeInterval now = ISHTerminalNowMonotonic();
     if (_outputInProgress) {
@@ -702,46 +639,8 @@ static void NotifyTerminalRegistryChanged(void) {
     NSUInteger generation = ++self.outputGeneration;
     notify(&self->_dataConsumed);
     unlock(&_dataLock);
-#else
-    NSData *data;
-    NSUInteger generation;
-    @synchronized (self) {
-        if (_outputInProgress) {
-            CFTimeInterval now = ISHTerminalNowMonotonic();
-            if (_outputStartedAt > 0 && now - _outputStartedAt > ISHTerminalOutputWatchdogSeconds) {
-                // See the !ISH_LINUX branch above: do NOT re-queue the in-flight
-                // data. evaluateJavaScript can't be cancelled, so a merely-slow
-                // write may still apply; re-sending it would draw the bytes twice
-                // and corrupt partial-redraw TUIs (doubled/garbled regions that
-                // persist until ^L).
-                NSUInteger droppedBytes = self.inFlightData.length;
-                self.inFlightData = nil;
-                _outputInProgress = NO;
-                _outputStartedAt = 0;
-                self.outputGeneration++;
-                [self recordLifecycleEvent:@"terminal.output.watchdog"
-                                   details:@{@"pendingBytes": @(_pendingData.length),
-                                             @"inFlightBytes": @(droppedBytes)}];
-            } else {
-                [self.refreshTask schedule];
-                return;
-            }
-        }
-        data = _pendingData;
-        _pendingData = [[NSMutableData alloc] initWithCapacity:BUF_SIZE];
-        _outputInProgress = YES;
-        self.inFlightData = data;
-        _outputStartedAt = ISHTerminalNowMonotonic();
-        generation = ++self.outputGeneration;
-        if (self->_tty)
-            async_do_in_irq(^{
-                self->_tty->ops->can_output(self->_tty);
-            });
-    }
-#endif
 
     if (data.length == 0) {
-#if !ISH_LINUX
         lock(&_dataLock, 0);
         if (self.outputGeneration == generation) {
             _outputInProgress = NO;
@@ -749,22 +648,12 @@ static void NotifyTerminalRegistryChanged(void) {
             _outputStartedAt = 0;
         }
         unlock(&_dataLock);
-#else
-        @synchronized (self) {
-            if (self.outputGeneration == generation) {
-                _outputInProgress = NO;
-                self.inFlightData = nil;
-                _outputStartedAt = 0;
-            }
-        }
-#endif
         return;
     }
 
     NSString *dataString = ISHJavaScriptLiteralForTerminalData(data);
     NSString *jsToEvaluate = [NSString stringWithFormat:@"exports.write(\"%@\")", dataString];
     [self.webView evaluateJavaScript:jsToEvaluate completionHandler:^(id result, NSError *error) {
-#if !ISH_LINUX
         lock(&self->_dataLock, 0);
         if (self.outputGeneration == generation) {
             self->_outputInProgress = NO;
@@ -772,25 +661,6 @@ static void NotifyTerminalRegistryChanged(void) {
             self->_outputStartedAt = 0;
         }
         unlock(&self->_dataLock);
-#else
-        bool hasPendingData;
-        @synchronized (self) {
-            if (self.outputGeneration == generation) {
-                self->_outputInProgress = NO;
-                self.inFlightData = nil;
-                self->_outputStartedAt = 0;
-            }
-            hasPendingData = self->_pendingData.length > 0;
-        }
-        if (self->_tty != NULL) {
-            async_do_in_irq(^{
-                if (self->_tty != NULL)
-                    self->_tty->ops->can_output(self->_tty);
-            });
-        }
-        if (hasPendingData)
-            [self.refreshTask schedule];
-#endif
         if (error != nil) {
             NSLog(@"error sending bytes to the terminal: %@", error);
             [self recordLifecycleEvent:@"terminal.output.writeFailed"
@@ -799,13 +669,11 @@ static void NotifyTerminalRegistryChanged(void) {
             [self recoverTerminalWebViewWithReason:@"writeFailed" error:error];
             return;
         }
-#if !ISH_LINUX
         lock(&self->_dataLock, 0);
         bool hasPendingData = self->_pendingData.length > 0;
         unlock(&self->_dataLock);
         if (hasPendingData)
             [self.refreshTask schedule];
-#endif
     }];
 }
 
@@ -879,29 +747,24 @@ static void NotifyTerminalRegistryChanged(void) {
     @synchronized (self) {
         tty = self->_tty;
     }
-#if !ISH_LINUX
     // Own a reference for as long as this method touches the tty. Everything
     // below dereferences it, and tty_release can free it concurrently -- see
     // -syncWindowSize for why the unowned back-pointer alone isn't enough.
     tty = tty_lookup_ref(self.type, self.number, tty);
-#endif
     NSString *reason = self.pendingDestroyReason ?: @"unspecified";
     self.pendingDestroyReason = nil;
     NSMutableDictionary<NSString *, id> *details = [NSMutableDictionary dictionaryWithDictionary:@{
         @"reason": reason,
         @"ttyAttached": ISHStringFromBOOL(tty != NULL),
     }];
-#if !ISH_LINUX
     if (tty != NULL) {
         details[@"ttyHungUp"] = ISHStringFromBOOL(tty->hung_up);
         details[@"ttyEverOpened"] = ISHStringFromBOOL(tty->ever_opened);
         details[@"ttySession"] = @(tty->session);
         details[@"ttyFgGroup"] = @(tty->fg_group);
     }
-#endif
     [self recordLifecycleEvent:@"terminal.destroy" details:details];
     if (tty != NULL) {
-#if !ISH_LINUX
         if (tty != NULL) {
             lock(&tty->lock, 0);
             [self recordLifecycleEvent:@"terminal.destroy.hangup"
@@ -910,9 +773,6 @@ static void NotifyTerminalRegistryChanged(void) {
             tty_hangup(tty);
             unlock(&tty->lock);
         }
-#else
-        tty->ops->hangup(tty);
-#endif
     }
     @synchronized (Terminal.class) {
         [terminals removeObjectForKey:self.terminalsKey];
@@ -920,13 +780,11 @@ static void NotifyTerminalRegistryChanged(void) {
             [terminalsByUUID removeObjectForKey:self.uuid];
     }
     NotifyTerminalRegistryChanged();
-#if !ISH_LINUX
     // Drop the reference taken above, last and after every use of self: if this
     // drops the final reference, tty_release runs ios_tty_cleanup, whose
     // CFBridgingRelease releases the tty's own strong reference to this
     // Terminal -- which for a terminal being destroyed may well be the last one.
     tty_put(tty);
-#endif
 }
 
 + (void)initialize {
@@ -938,22 +796,7 @@ static void NotifyTerminalRegistryChanged(void) {
 
 @end
 
-#if ISH_LINUX
-nsobj_t Terminal_terminalWithType_number(int type, int number) {
-    return CFBridgingRetain([Terminal terminalWithType:type number:number]);
-}
-int Terminal_sendOutput_length(nsobj_t _self, const char *data, int size) {
-    return [(__bridge Terminal *) _self sendOutput:data length:size];
-}
-int Terminal_roomForOutput(nsobj_t _self) {
-    return [(__bridge Terminal *) _self roomForOutput];
-}
-void Terminal_setLinuxTTY(nsobj_t _self, struct linux_tty *tty) {
-    return [(__bridge Terminal *) _self setTty:tty];
-}
-#endif
 
-#if !ISH_LINUX
 static int ios_tty_init(struct tty *tty) {
     // This is called with ttys_lock but that results in deadlock since the main thread can also acquire ttys_lock. So release it.
     unlock(&ttys_lock);
@@ -989,4 +832,3 @@ struct tty_driver_ops ios_tty_ops = {
 };
 DEFINE_TTY_DRIVER(ios_console_driver, &ios_tty_ops, TTY_CONSOLE_MAJOR, 64);
 struct tty_driver ios_pty_driver = {.ops = &ios_tty_ops};
-#endif

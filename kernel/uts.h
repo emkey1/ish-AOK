@@ -39,7 +39,7 @@ struct uts_namespace *uts_ns_copy(struct uts_namespace *ns);
 struct uts_namespace *uts_ns_current(void);
 
 // Set the initial namespace's hostname from the host side (app settings,
-// /etc/hostname seeding, the ISH_LINUX kernel shim). Truncates as sethostname
+// /etc/hostname seeding). Truncates as sethostname
 // would; a NULL or empty name clears the override.
 void uts_set_boot_hostname(const char *hostname);
 bool uts_boot_hostname_is_set(void);

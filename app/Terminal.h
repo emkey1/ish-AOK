@@ -14,10 +14,8 @@ struct tty;
 
 + (Terminal *)terminalWithType:(int)type number:(int)number;
 + (NSArray<Terminal *> *)activeTerminals;
-#if !ISH_LINUX
 // Returns a strong struct tty and a Terminal that has a weak reference to the same tty
 + (Terminal *)createPseudoTerminal:(struct tty **)tty;
-#endif
 
 + (Terminal *)terminalWithUUID:(NSUUID *)uuid;
 @property (readonly) NSUUID *uuid;

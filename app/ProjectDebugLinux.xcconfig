@@ -1,3 +1,0 @@
-#include "XcodeDebug.xcconfig"
-#include "Project.xcconfig"
-#include "Linux.xcconfig"
