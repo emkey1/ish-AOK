@@ -168,6 +168,9 @@ struct tty {
     // A flag is a marker indicating the end of a canonical mode input. Flags
     // are created by EOL and EOF characters. You can't backspace past a flag.
     bool buf_flag[TTY_BUF_SIZE];
+    // VLNEXT (^V) latch: the NEXT input character is taken literally, with no
+    // special meaning at all. One-shot, cleared as soon as it is consumed.
+    bool lnext_pending;
     dword_t bufsize;
     uint8_t packet_flags;
     cond_t produced;

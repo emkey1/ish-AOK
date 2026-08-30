@@ -479,9 +479,52 @@ ssize_t tty_input(struct tty *tty, const char *input, size_t size, bool blocking
             if (iflags & IGNCR_ && ch == '\r')
                 continue;
 
+            if (tty->lnext_pending) {
+                // VLNEXT armed: this character is data, whatever it is.
+                tty->lnext_pending = false;
+                goto no_special;
+            }
             if (ch == '\0') {
                 // '\0' is used to disable cc entries
                 goto no_special;
+            } else if ((lflags & IEXTEN_) && ch == cc[VLNEXT_]) {
+                // ^V quotes the next character. It was not implemented at all,
+                // so the ^V itself reached the reader as data AND the character
+                // it was quoting kept its special meaning -- wrong both ways.
+                tty->lnext_pending = true;
+                if (echo && (lflags & ECHO_) && (lflags & ECHOCTL_)) {
+                    // Linux echoes "^" and then backs over it once the quoted
+                    // character arrives; showing the caret alone is the visible
+                    // half and needs no cursor bookkeeping.
+                    tty_echo_buffered(tty, echo_buf, sizeof(echo_buf), &echo_len, "^", 1);
+                    tty_echo_buffered(tty, echo_buf, sizeof(echo_buf), &echo_len, "\b", 1);
+                }
+                echo = false;
+                continue;
+            } else if ((lflags & IEXTEN_) && ch == cc[VWERASE_] && (lflags & ICANON_)) {
+                // ^W erases the previous WORD: trailing whitespace first, then
+                // the run of non-whitespace before it. Not implemented before,
+                // so ^W was simply dropped and the word stayed.
+                bool visual = (lflags & ECHO_) && (lflags & ECHOE_);
+                while (tty->bufsize > 0 && !tty->buf_flag[tty->bufsize - 1] &&
+                        (tty->buf[tty->bufsize - 1] == ' ' ||
+                         tty->buf[tty->bufsize - 1] == '\t')) {
+                    tty->bufsize--;
+                    if (visual)
+                        tty_echo_buffered(tty, echo_buf, sizeof(echo_buf), &echo_len, "\b \b", 3);
+                }
+                while (tty->bufsize > 0 && !tty->buf_flag[tty->bufsize - 1] &&
+                        tty->buf[tty->bufsize - 1] != ' ' &&
+                        tty->buf[tty->bufsize - 1] != '\t') {
+                    tty->bufsize--;
+                    if (visual) {
+                        tty_echo_buffered(tty, echo_buf, sizeof(echo_buf), &echo_len, "\b \b", 3);
+                        if (SHOULD_ECHOCTL(tty->buf[tty->bufsize]))
+                            tty_echo_buffered(tty, echo_buf, sizeof(echo_buf), &echo_len, "\b \b", 3);
+                    }
+                }
+                echo = false;
+                continue;
             } else if (ch == cc[VERASE_] || ch == cc[VKILL_]) {
                 echo = lflags & ECHOK_;
                 ssize_t count = tty->bufsize;
@@ -733,6 +776,28 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
         struct timespec *timeout_ptr = &timeout;
         if (time == 0)
             timeout_ptr = NULL;
+
+        // MIN==0 with TIME>0 is a read-with-timeout: wait up to TIME tenths
+        // for the FIRST byte, then return whatever arrived -- possibly none.
+        // The loop below is bounded by `min`, so at min==0 it never ran at all
+        // and the read came back instantly with nothing, which is the MIN=0
+        // TIME=0 (pure poll) behaviour instead.
+        if (min == 0 && time > 0) {
+            while (tty->bufsize == 0) {
+                err = _EIO;
+                if (pty_is_half_closed_master(tty))
+                    goto error;
+                err = _EAGAIN;
+                if (fd->flags & O_NONBLOCK_)
+                    goto error;
+                err = wait_for(&tty->produced, &tty->lock, timeout_ptr);
+                if (err == _ETIMEDOUT)
+                    break;
+                if (err < 0)
+                    goto error;
+            }
+            err = 0;
+        }
 
         while (tty->bufsize < min) {
             err = _EIO;
