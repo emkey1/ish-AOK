@@ -207,7 +207,7 @@ struct rusage_ rusage_get_current(void) {
 // only report the *calling* host thread's own usage (getrusage(RUSAGE_THREAD)
 // and mach_thread_self() are both self-only) -- summing across a whole thread
 // group needs a way to query a different thread's host pthread from here.
-static struct rusage_ rusage_get_task(struct task *task) {
+struct rusage_ rusage_get_task(struct task *task) {
     if (task == current)
         return rusage_get_current();
 

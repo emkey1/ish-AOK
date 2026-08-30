@@ -603,6 +603,7 @@ extern void (*halt_hook)(int status);
 #define CAP_SYS_PTRACE_  19
 #define CAP_NET_BIND_SERVICE_ 10
 #define CAP_SYS_ADMIN_   21
+#define CAP_WAKE_ALARM_  35
 
 // The equivalent of Linux's capable(): true if the caller holds `cap` in its
 // effective set, or is root. Privileged syscalls gate on this rather than on

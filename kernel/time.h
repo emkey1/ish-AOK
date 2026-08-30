@@ -37,6 +37,12 @@ dword_t sys_stime(addr_t time);
 #define CLOCK_REALTIME_COARSE_ 5
 #define CLOCK_MONOTONIC_COARSE_ 6
 #define CLOCK_BOOTTIME_ 7
+// Linux's alarm clocks. They read exactly like their non-alarm counterparts;
+// the difference is only that a TIMER on one of them may wake a suspended
+// system, which needs CAP_WAKE_ALARM. clock_gettime/clock_getres on them are
+// unprivileged and must not fail.
+#define CLOCK_REALTIME_ALARM_ 8
+#define CLOCK_BOOTTIME_ALARM_ 9
 #define CLOCK_TAI_ 11
 dword_t sys_clock_gettime(dword_t clock, addr_t tp);
 dword_t sys_clock_gettime_guest(dword_t clock, guest_addr_t tp);

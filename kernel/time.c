@@ -16,6 +16,51 @@
 #include <limits.h>
 #include <sys/poll.h>
 
+// Linux encodes a per-process or per-thread CPU clock into a NEGATIVE clockid:
+//
+//     MAKE_PROCESS_CPUCLOCK(pid, which) = (~(clockid_t) pid << 3) | which
+//
+// with the per-thread form ORing in CPUCLOCK_PERTHREAD_MASK.
+// clock_getcpuclockid() and pthread_getcpuclockid() hand these out, and the C
+// library validates one by calling clock_getres on it -- so rejecting them
+// with EINVAL made both of those functions fail outright, and nothing could
+// read another process's CPU time.
+#define CPUCLOCK_PERTHREAD_MASK 4
+#define CPUCLOCK_CLOCK_MASK 3
+#define CPUCLOCK_MAX 3
+
+static bool cpuclock_decode(uint_t clock, pid_t_ *pid, bool *perthread) {
+    int32_t c = (int32_t) clock;
+    if (c >= 0)
+        return false;                       // an ordinary CLOCK_* id
+    if ((c & CPUCLOCK_CLOCK_MASK) >= CPUCLOCK_MAX)
+        return false;
+    *pid = (pid_t_) ~(c >> 3);              // arithmetic shift, as Linux does
+    *perthread = (c & CPUCLOCK_PERTHREAD_MASK) != 0;
+    return true;
+}
+
+// The CPU time this clock names. Total user+system, the same thing
+// CLOCK_PROCESS_CPUTIME_ID reports.
+static int cpuclock_gettime(pid_t_ pid, bool perthread, struct timespec *ts) {
+    // Resolve under pids_lock and take a reference, then RELEASE it before
+    // reading the usage: rusage_get_group_of takes pids_lock itself and it is
+    // not recursive, so holding it across the call deadlocks the caller
+    // against itself -- which wedged any process that asked for a CPU clock,
+    // including the one asking on its own behalf.
+    struct task *task = pid_get_task_ref(pid);
+    if (task == NULL)
+        return _ESRCH;
+    struct rusage_ rusage = perthread ? rusage_get_task(task)
+                                      : rusage_get_group_of(task->group);
+    task_ref_cnt_mod(task, -1);
+    int64_t usec = (int64_t) rusage.utime.sec * 1000000 + rusage.utime.usec
+                 + (int64_t) rusage.stime.sec * 1000000 + rusage.stime.usec;
+    ts->tv_sec = usec / 1000000;
+    ts->tv_nsec = (usec % 1000000) * 1000;
+    return 0;
+}
+
 static int clockid_to_real(uint_t clock, clockid_t *real) {
     switch (clock) {
         case CLOCK_REALTIME_:
@@ -37,6 +82,19 @@ static int clockid_to_real(uint_t clock, clockid_t *real) {
         case CLOCK_BOOTTIME_:
             // CLOCK_BOOTTIME (includes suspend time) is boot-relative like
             // MONOTONIC; use the host's when available, else MONOTONIC.
+#ifdef CLOCK_BOOTTIME
+            *real = CLOCK_BOOTTIME; break;
+#else
+            *real = CLOCK_MONOTONIC; break;
+#endif
+        case CLOCK_REALTIME_ALARM_:
+            // Reads identically to its non-alarm counterpart -- the only
+            // difference is that a TIMER on one may wake a suspended system,
+            // which is a permission question handled where timers are created,
+            // not here. Rejecting these made clock_gettime and clock_getres
+            // fail with EINVAL, which Linux never does for any user.
+            *real = CLOCK_REALTIME; break;
+        case CLOCK_BOOTTIME_ALARM_:
 #ifdef CLOCK_BOOTTIME
             *real = CLOCK_BOOTTIME; break;
 #else
@@ -311,6 +369,47 @@ static dword_t clock_nanosleep_common(dword_t clock, int_t flags, struct timespe
         return _EINVAL;
 
     struct timespec rem = {0};
+
+    // A CPU-time clock measures CPU CONSUMED, not wall time, and sleeping on
+    // one has to wait for the process to actually spend it. Sleeping wall time
+    // instead meant an idle process returned immediately from a request Linux
+    // would never complete, and a busy one returned far too early -- exactly
+    // backwards for the thing this clock exists to measure.
+    //
+    // There is nothing to hand the host: Darwin has no CPU-time sleep. So it
+    // is a wait against our own accounting. Polled rather than event-driven,
+    // because CPU time is only observable by asking -- 10ms is fine enough not
+    // to overshoot meaningfully and coarse enough not to spin, and an idle
+    // process simply never reaches its target, as on Linux.
+    pid_t_ cpu_pid;
+    bool cpu_perthread;
+    bool is_cpu_clock = clock == CLOCK_PROCESS_CPUTIME_ID_ ||
+        (cpuclock_decode(clock, &cpu_pid, &cpu_perthread) && !cpu_perthread);
+    if (is_cpu_clock) {
+        if (clock == CLOCK_PROCESS_CPUTIME_ID_)
+            cpu_pid = current->pid;
+        struct timespec consumed;
+        int cpu_err = cpuclock_gettime(cpu_pid, false, &consumed);
+        if (cpu_err < 0)
+            return cpu_err;
+        struct timespec target = (flags & TIMER_ABSTIME_)
+            ? req : timespec_add(consumed, req);
+        for (;;) {
+            cpu_err = cpuclock_gettime(cpu_pid, false, &consumed);
+            if (cpu_err < 0)
+                return cpu_err;
+            if (!timespec_positive(timespec_subtract(target, consumed)))
+                return 0;
+            struct timespec slice = { .tv_sec = 0, .tv_nsec = 10000000 };
+            if (host_sleep_interruptible(slice, &rem) < 0) {
+                int err = errno_map();
+                if (err == _EINTR)
+                    return signal_restart_or_eintr_nohand(err);
+                return err;
+            }
+        }
+    }
+
     if (flags & TIMER_ABSTIME_) {
         req = timespec_subtract(req, timespec_now(clock_id));
         if (!timespec_positive(req))
@@ -502,7 +601,13 @@ static dword_t sys_clock_gettime_guest_abi(dword_t clock, guest_addr_t tp, enum 
     STRACE("clock_gettime(%d, 0x%x)", clock, tp);
 
     struct timespec ts;
-    if (clock == CLOCK_PROCESS_CPUTIME_ID_) {
+    pid_t_ cpuclock_pid;
+    bool cpuclock_perthread;
+    if (cpuclock_decode(clock, &cpuclock_pid, &cpuclock_perthread)) {
+        int cpuclock_err = cpuclock_gettime(cpuclock_pid, cpuclock_perthread, &ts);
+        if (cpuclock_err < 0)
+            return cpuclock_err;
+    } else if (clock == CLOCK_PROCESS_CPUTIME_ID_) {
         // Real CLOCK_PROCESS_CPUTIME_ID measures total (user+system) CPU time
         // consumed by every thread in the process, not just the caller's.
         struct rusage_ rusage = rusage_get_group();
@@ -542,7 +647,13 @@ dword_t sys_clock_gettime64_guest(dword_t clock, guest_addr_t tp) {
     STRACE("clock_gettime64(%d, 0x%x)", clock, tp);
 
     struct timespec ts;
-    if (clock == CLOCK_PROCESS_CPUTIME_ID_) {
+    pid_t_ cpuclock_pid;
+    bool cpuclock_perthread;
+    if (cpuclock_decode(clock, &cpuclock_pid, &cpuclock_perthread)) {
+        int cpuclock_err = cpuclock_gettime(cpuclock_pid, cpuclock_perthread, &ts);
+        if (cpuclock_err < 0)
+            return cpuclock_err;
+    } else if (clock == CLOCK_PROCESS_CPUTIME_ID_) {
         // Real CLOCK_PROCESS_CPUTIME_ID measures total (user+system) CPU time
         // consumed by every thread in the process, not just the caller's.
         struct rusage_ rusage = rusage_get_group();
@@ -572,10 +683,26 @@ dword_t sys_clock_getres(dword_t clock, addr_t res_addr) {
 
 static dword_t sys_clock_getres_guest_abi(dword_t clock, guest_addr_t res_addr, enum guest_abi abi) {
     STRACE("clock_getres(%d, %#x)", clock, res_addr);
+    struct timespec res;
+    pid_t_ cpuclock_pid;
+    bool cpuclock_perthread;
+    if (cpuclock_decode(clock, &cpuclock_pid, &cpuclock_perthread)) {
+        // This is the call the C library makes to decide whether the id it
+        // just computed is usable, so it must answer for a live pid and fail
+        // for a dead one. Linux reports 1ns for the CPU clocks.
+        struct timespec ignored;
+        int cpuclock_err = cpuclock_gettime(cpuclock_pid, cpuclock_perthread, &ignored);
+        if (cpuclock_err < 0)
+            return cpuclock_err;
+        res.tv_sec = 0;
+        res.tv_nsec = 1;
+        if (write_guest_timespec_abi(abi, res_addr, &res))
+            return _EFAULT;
+        return 0;
+    }
     clockid_t clock_id;
     if (clockid_to_real(clock, &clock_id)) return _EINVAL;
 
-    struct timespec res;
     int err = clock_getres(clock_id, &res);
     if (err < 0)
         return errno_map();
@@ -1113,6 +1240,13 @@ static dword_t sys_nanosleep_guest_abi(guest_addr_t req_addr, guest_addr_t rem_a
     if (read_guest_timespec_abi(abi, req_addr, &req_ts))
         return _EFAULT;
     STRACE("nanosleep({%lld, %ld}, 0x%x", (long long) req_ts.tv_sec, req_ts.tv_nsec, rem_addr);
+    // The same validation clock_nanosleep_common already does, which plain
+    // nanosleep never had: a tv_nsec outside [0, 999999999] or a negative
+    // tv_sec is EINVAL and nothing is slept. Accepting them returned success
+    // without sleeping, so a caller that had computed a bad duration -- which
+    // is the whole reason the check exists -- was told its sleep happened.
+    if (!timespec_is_valid(req_ts))
+        return _EINVAL;
     bool trace_short_sleep = wait_trace_enabled() && req_ts.tv_sec >= 0 && req_ts.tv_sec <= 2;
     if (trace_short_sleep) {
         printk("INFO: wait nanosleep enter pid=%d comm=%s req=%llds.%09ld rem=%#x\n",
@@ -1176,13 +1310,28 @@ dword_t sys_nanosleep_amd64_guest(guest_addr_t req_addr, guest_addr_t rem_addr) 
 dword_t sys_times_guest(guest_addr_t tbuf) {
     STRACE("times(0x%x)", tbuf);
     if (tbuf) {
-        struct rusage_ rusage = rusage_get_current();
+        struct rusage_ rusage = rusage_get_group();
         clock_t_ utime = clock_from_timeval(rusage.utime);
         clock_t_ stime = clock_from_timeval(rusage.stime);
-        if (current->abi == GUEST_ABI_AMD64) {
-            // amd64 struct tms has 64-bit (long) fields, vs the 32-bit i386 layout.
+        // tms_cutime/tms_cstime are the REAPED CHILDREN's accumulated time,
+        // not a second copy of our own -- which is what they were, so a shell
+        // or a build tool asking how long its children took was handed its own
+        // CPU time instead. The accounting already exists and is already right
+        // (getrusage(RUSAGE_CHILDREN) reports it); it just was not being read.
+        lock(&current->group->lock, 0);
+        struct rusage_ children = current->group->children_rusage;
+        unlock(&current->group->lock);
+        clock_t_ cutime = clock_from_timeval(children.utime);
+        clock_t_ cstime = clock_from_timeval(children.stime);
+        // struct tms is four `clock_t` (long) fields, so its layout follows the
+        // ABI's word size -- 64-bit on arm64 and riscv64 just as much as on
+        // amd64. Testing only for amd64 wrote the 32-bit layout to an arm64
+        // guest, which then read four 64-bit fields out of sixteen bytes:
+        // tms_utime happened to survive whenever tms_stime was 0, and
+        // tms_cutime came back as garbage.
+        if (guest_abi_is_64bit(current->abi)) {
             struct amd64_tms { qword_t utime, stime, cutime, cstime; } tmp = {
-                .utime = utime, .stime = stime, .cutime = utime, .cstime = stime,
+                .utime = utime, .stime = stime, .cutime = cutime, .cstime = cstime,
             };
             if (user_put(tbuf, tmp))
                 return _EFAULT;
@@ -1190,13 +1339,19 @@ dword_t sys_times_guest(guest_addr_t tbuf) {
             struct tms_ tmp;
             tmp.tms_utime = utime;
             tmp.tms_stime = stime;
-            tmp.tms_cutime = utime;
-            tmp.tms_cstime = stime;
+            tmp.tms_cutime = cutime;
+            tmp.tms_cstime = cstime;
             if (user_put(tbuf, tmp))
                 return _EFAULT;
         }
     }
-    return 0;
+    // Linux returns the number of clock ticks since an arbitrary point in the
+    // past -- in practice boot -- and callers use the DIFFERENCE between two
+    // calls to measure elapsed time. Returning a constant 0 made every such
+    // measurement come out as zero, which is what `time` in a shell without a
+    // builtin, and any benchmark using times(), reports.
+    struct timespec up = timespec_now(CLOCK_MONOTONIC);
+    return (dword_t) (up.tv_sec * 100 + up.tv_nsec / 10000000);
 }
 
 dword_t sys_times(addr_t tbuf) {
@@ -1598,8 +1753,17 @@ fd_t sys_timerfd_create(int_t clockid, int_t flags) {
     // Linux timerfd only accepts the wall/uptime clocks; the CPU-time and
     // COARSE clocks (and unknown ids) are rejected with EINVAL even though
     // clockid_to_real would happily map some of them.
-    if (clockid != CLOCK_REALTIME_ && clockid != CLOCK_MONOTONIC_ && clockid != CLOCK_BOOTTIME_)
+    if (clockid == CLOCK_REALTIME_ALARM_ || clockid == CLOCK_BOOTTIME_ALARM_) {
+        // The alarm clocks exist for timerfd, but arming one may wake a
+        // suspended system, so Linux requires CAP_WAKE_ALARM and answers EPERM
+        // without it -- never EINVAL, which is what a caller reads as "this
+        // kernel has no such clock" and gives up on entirely.
+        if (!current_capable(CAP_WAKE_ALARM_))
+            return _EPERM;
+    } else if (clockid != CLOCK_REALTIME_ && clockid != CLOCK_MONOTONIC_ &&
+               clockid != CLOCK_BOOTTIME_) {
         return _EINVAL;
+    }
     // Only TFD_NONBLOCK / TFD_CLOEXEC are valid (== O_NONBLOCK / O_CLOEXEC);
     // unknown flag bits -> EINVAL (was previously ignored).
     if (flags & ~(O_NONBLOCK_ | O_CLOEXEC_))
