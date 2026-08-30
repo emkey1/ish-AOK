@@ -249,6 +249,9 @@ struct pt_entry {
 #define P_ANONYMOUS (1 << 6)
 // mapping was created with MAP_SHARED, should not CoW
 #define P_SHARED (1 << 7)
+// madvise(MADV_WIPEONFORK): a child of fork() gets fresh zero pages here
+// instead of inheriting the parent's data. Cleared by MADV_KEEPONFORK.
+#define P_WIPEONFORK (1 << 8)
 
 bool pt_is_hole(struct mem *mem, page_t start, pages_t pages);
 page_t pt_find_hole(struct mem *mem, pages_t size);

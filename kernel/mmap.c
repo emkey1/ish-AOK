@@ -735,6 +735,31 @@ int_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags, a
     return (int_t) sys_mremap_guest(addr, old_len, new_len, flags, new_addr);
 }
 
+// Adding PROT_WRITE to a shared mapping of a file that was not opened for
+// writing is EACCES. Linux decides this from VM_MAYWRITE, fixed at mmap time:
+// a private mapping always has it (the write is a copy), a shared one only if
+// the file itself is writable.
+//
+// AOK recorded nothing of the sort, so mprotect returned 0 and the store that
+// followed hit a read-only host mapping and killed the process with SIGBUS.
+// A program that checks the mprotect return -- as it should -- had no way to
+// see that coming. mmap already refused the same thing at map time; this is
+// the door it left open.
+//
+// Caller holds the memory write lock.
+static bool mprotect_write_forbidden(struct mem *mem, page_t start, pages_t pages) {
+    for (page_t page = start; page < start + pages; page++) {
+        struct pt_entry *e = mem_pt(mem, page);
+        if (e == NULL || !(e->flags & P_SHARED) || e->data == NULL)
+            continue;
+        // Shared ANONYMOUS memory has no file behind it and is always writable.
+        struct fd *fd = e->data->fd;
+        if (fd != NULL && (fd->flags & O_ACCMODE_) == O_RDONLY_)
+            return true;
+    }
+    return false;
+}
+
 int_t sys_mprotect_guest(guest_addr_t addr, qword_t len, int_t prot) {
     STRACE("mprotect(%#llx, %#llx, 0x%x)", (unsigned long long) addr,
            (unsigned long long) len, prot);
@@ -744,6 +769,10 @@ int_t sys_mprotect_guest(guest_addr_t addr, qword_t len, int_t prot) {
         return _EINVAL;
     pages_t pages = PAGE_ROUND_UP(len);
     mem_write_lock_with_pokes(current->mem);
+    if ((prot & P_WRITE) && mprotect_write_forbidden(current->mem, PAGE(addr), pages)) {
+        mem_write_unlock_with_pokes(current->mem);
+        return _EACCES;
+    }
     int err = pt_set_flags(current->mem, PAGE(addr), pages, prot);
     mem_write_unlock_with_pokes(current->mem);
     if (err == _ENOMEM)
@@ -756,6 +785,9 @@ int_t sys_mprotect(addr_t addr, uint_t len, int_t prot) {
 }
 
 #define MADV_DONTNEED_ 4
+#define MADV_REMOVE_ 9
+#define MADV_WIPEONFORK_ 18
+#define MADV_KEEPONFORK_ 19
 
 // Advices Linux's madvise() accepts. Linux validates the argument up front and
 // returns EINVAL for anything it does not recognize, independent of whether the
@@ -828,6 +860,50 @@ dword_t sys_madvise_guest(guest_addr_t addr, qword_t len, dword_t advice) {
             page++;
             continue;
         }
+        // MADV_WIPEONFORK marks the range so a child of fork() gets fresh zero
+        // pages instead of the parent's data. The point is a page holding
+        // something that must not cross a fork -- a PRNG state, a key -- so
+        // accepting the advice and inheriting anyway, which is what happened,
+        // is exactly the failure the caller asked to be protected from.
+        //
+        // Private anonymous memory only; anything else is EINVAL, as on Linux.
+        if (advice == MADV_WIPEONFORK_ || advice == MADV_KEEPONFORK_) {
+            if (!(pt->flags & P_ANONYMOUS) || (pt->flags & P_SHARED)) {
+                err = _EINVAL;
+                break;
+            }
+            if (advice == MADV_WIPEONFORK_)
+                pt->flags |= P_WIPEONFORK;
+            else
+                pt->flags &= ~P_WIPEONFORK;
+            page++;
+            continue;
+        }
+
+        // MADV_REMOVE punches a hole: the range must read back as zero for
+        // every mapper, and through read() for a file. It was a pure no-op
+        // that still returned 0, so the data stayed. Linux allows it only
+        // where there is something shared to punch -- a private mapping has
+        // no backing to remove from and is EINVAL.
+        if (advice == MADV_REMOVE_) {
+            if (!(pt->flags & P_SHARED)) {
+                err = _EINVAL;
+                break;
+            }
+            // Zero it in place rather than remapping: these pages are shared,
+            // and replacing them would break the sharing that makes the
+            // zeroing visible to the other mappers in the first place. For a
+            // file mapping the zeroes travel to the file through the same
+            // shared host mapping, which is the observable half of punching a
+            // hole; the blocks are not deallocated, which is the half nothing
+            // can see.
+            if (pt->data != NULL && pt->data->data != NULL &&
+                    pt->offset + PAGE_SIZE <= pt->data->size)
+                memset((char *) pt->data->data + pt->offset, 0, PAGE_SIZE);
+            page++;
+            continue;
+        }
+
         if (advice != MADV_DONTNEED_ ||
                 !(pt->flags & P_ANONYMOUS) || (pt->flags & P_SHARED)) {
             page++; // file-backed / shared / non-DONTNEED: nothing to discard

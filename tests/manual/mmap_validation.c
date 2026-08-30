@@ -40,6 +40,12 @@
 
 #include "test_common.h"
 
+// Spelled out rather than taken from the host headers, which do not have them
+// on every platform this is compiled for.
+#define MADV_REMOVE_       9
+#define MADV_WIPEONFORK_  18
+#define MADV_KEEPONFORK_  19
+
 #define MEMBARRIER_CMD_QUERY                       0
 #define MEMBARRIER_CMD_PRIVATE_EXPEDITED           (1 << 3)
 #define MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED  (1 << 4)
@@ -64,6 +70,19 @@ static int readable(void *p) {
     if (waitpid(c, &st, 0) != c)
         return -1;
     return WIFEXITED(st) && WEXITSTATUS(st) == 0;
+}
+
+// What byte does a forked child see at p[0]? Returned through the exit status,
+// so the parent's own copy is never consulted.
+static int child_byte(char *p) {
+    fflush(NULL);
+    pid_t c = fork();
+    if (c == 0)
+        _exit((unsigned char) p[0]);
+    int st;
+    if (waitpid(c, &st, 0) != c)
+        return -1;
+    return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
 }
 
 static long mb(int cmd, int flags) {
@@ -274,6 +293,147 @@ int main(int argc, char **argv) {
                 ck("  len 0 succeeds", msync(p, 0, MS_SYNC), 0);
                 ck("  MS_ASYNC succeeds", msync(p, 4096, MS_ASYNC), 0);
                 munmap(p, 4096);
+            }
+            close(fd);
+            unlink(path);
+        }
+    }
+
+    // ---- PROT_WRITE on a shared mapping of a read-only file ---------------
+    {
+        // mmap already refused this at map time; mprotect was the door it left
+        // open. It returned 0 and the store that followed hit a read-only host
+        // mapping and killed the process with SIGBUS, so a program that checks
+        // the return -- as it should -- had no way to see it coming.
+        char path[128];
+        snprintf(path, sizeof path, "/tmp/prot-check-%d.bin", (int) getpid());
+        unlink(path);
+        int w = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+        ck("prot: the scratch file opens", w >= 0, 1);
+        if (w >= 0) {
+            char filler[4096];
+            memset(filler, 'F', sizeof filler);
+            ck("  and can be filled", write(w, filler, sizeof filler) == sizeof filler, 1);
+            close(w);
+
+            int ro = open(path, O_RDONLY);
+            errno = 0;
+            char *p = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, ro, 0);
+            ck("mmap(PROT_WRITE, MAP_SHARED) of an O_RDONLY fd is EACCES",
+               p == MAP_FAILED ? errno : 0, EACCES);
+            if (p != MAP_FAILED)
+                munmap(p, 4096);
+
+            p = mmap(NULL, 4096, PROT_READ, MAP_SHARED, ro, 0);
+            ck("mmap(PROT_READ, MAP_SHARED) of an O_RDONLY fd succeeds",
+               p != MAP_FAILED, 1);
+            if (p != MAP_FAILED) {
+                errno = 0;
+                ck("  mprotect(PROT_WRITE) on it is EACCES",
+                   mprotect(p, 4096, PROT_READ | PROT_WRITE) < 0 ? errno : 0, EACCES);
+                munmap(p, 4096);
+            }
+
+            // A private mapping of the same fd may be made writable: the write
+            // is a copy, so the file is not at risk.
+            p = mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, ro, 0);
+            if (p != MAP_FAILED) {
+                errno = 0;
+                ck("mprotect(PROT_WRITE) on a PRIVATE mapping is allowed",
+                   mprotect(p, 4096, PROT_READ | PROT_WRITE) < 0 ? errno : 0, 0);
+                p[0] = 'w';
+                ck("  and the store works", p[0] == 'w', 1);
+                munmap(p, 4096);
+            }
+            close(ro);
+
+            // A writable fd, and shared anonymous memory, are both fine.
+            int rw = open(path, O_RDWR);
+            p = mmap(NULL, 4096, PROT_READ, MAP_SHARED, rw, 0);
+            if (p != MAP_FAILED) {
+                errno = 0;
+                ck("mprotect(PROT_WRITE) on a SHARED map of an O_RDWR fd is allowed",
+                   mprotect(p, 4096, PROT_READ | PROT_WRITE) < 0 ? errno : 0, 0);
+                munmap(p, 4096);
+            }
+            close(rw);
+            unlink(path);
+
+            p = mmap(NULL, 4096, PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+            if (p != MAP_FAILED) {
+                errno = 0;
+                ck("mprotect(PROT_WRITE) on shared ANONYMOUS is allowed",
+                   mprotect(p, 4096, PROT_READ | PROT_WRITE) < 0 ? errno : 0, 0);
+                munmap(p, 4096);
+            }
+        }
+    }
+
+    // ---- MADV_WIPEONFORK and MADV_REMOVE ----------------------------------
+    {
+        // WIPEONFORK exists for a page holding something that must not cross a
+        // fork -- a PRNG state, a key. It was accepted and ignored, so the
+        // child inherited exactly what the caller asked to have withheld.
+        char *m = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        ck("madv: a private anonymous page maps", m != MAP_FAILED, 1);
+        if (m != MAP_FAILED) {
+            memset(m, 'A', 4096);
+            errno = 0;
+            ck("madvise(MADV_WIPEONFORK) succeeds",
+               madvise(m, 4096, MADV_WIPEONFORK_) < 0 ? errno : 0, 0);
+            ck("  the child sees zeroes", child_byte(m), 0);
+            ck("  the parent keeps its data", (unsigned char) m[0], 'A');
+            ck("madvise(MADV_KEEPONFORK) succeeds",
+               madvise(m, 4096, MADV_KEEPONFORK_) < 0 ? errno : 0, 0);
+            ck("  and the child inherits again", child_byte(m), 'A');
+            munmap(m, 4096);
+        }
+        char *sh = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                        MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        if (sh != MAP_FAILED) {
+            errno = 0;
+            ck("MADV_WIPEONFORK on a SHARED mapping is EINVAL",
+               madvise(sh, 4096, MADV_WIPEONFORK_) < 0 ? errno : 0, EINVAL);
+            // MADV_REMOVE punches a hole: zero for every mapper.
+            memset(sh, 'A', 4096);
+            errno = 0;
+            ck("MADV_REMOVE on shared anonymous succeeds",
+               madvise(sh, 4096, MADV_REMOVE_) < 0 ? errno : 0, 0);
+            ck("  and the range reads back as zero", (unsigned char) sh[0], 0);
+            munmap(sh, 4096);
+        }
+        char *pv = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (pv != MAP_FAILED) {
+            memset(pv, 'A', 4096);
+            errno = 0;
+            ck("MADV_REMOVE on private anonymous is EINVAL",
+               madvise(pv, 4096, MADV_REMOVE_) < 0 ? errno : 0, EINVAL);
+            ck("  and leaves the data alone", (unsigned char) pv[0], 'A');
+            munmap(pv, 4096);
+        }
+        // ...and on a shared FILE mapping the zeroes reach the file.
+        char path[128];
+        snprintf(path, sizeof path, "/tmp/madv-check-%d.bin", (int) getpid());
+        unlink(path);
+        int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            char filler[4096];
+            memset(filler, 'Z', sizeof filler);
+            if (write(fd, filler, sizeof filler) == sizeof filler) {
+                char *fm = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+                ck("madv: a shared file mapping maps", fm != MAP_FAILED, 1);
+                if (fm != MAP_FAILED) {
+                    errno = 0;
+                    ck("MADV_REMOVE on a shared FILE mapping succeeds",
+                       madvise(fm, 4096, MADV_REMOVE_) < 0 ? errno : 0, 0);
+                    ck("  the mapping reads back as zero", (unsigned char) fm[0], 0);
+                    char one = 1;
+                    pread(fd, &one, 1, 0);
+                    ck("  and so does the file itself", (unsigned char) one, 0);
+                    munmap(fm, 4096);
+                }
             }
             close(fd);
             unlink(path);

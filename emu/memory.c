@@ -1193,6 +1193,20 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
             ret = -1;
             break;
         }
+        // MADV_WIPEONFORK: the child gets fresh zero pages rather than the
+        // parent's data. The point is a page holding something the parent
+        // must not leak across a fork -- a PRNG state, a key -- so silently
+        // inheriting it, which is what happened before, is the failure the
+        // caller asked to be protected from.
+        if (entry->flags & P_WIPEONFORK) {
+            // The ATTRIBUTE is inherited -- Linux copies vm_flags, so a
+            // grandchild is wiped too. Measured.
+            if (pt_map_nothing(dst, page, 1, entry->flags & ~P_COW) < 0) {
+                ret = -1;
+                break;
+            }
+            continue;
+        }
         if (!(entry->flags & P_SHARED))
             entry->flags |= P_COW;
         entry->data->refcount++;
