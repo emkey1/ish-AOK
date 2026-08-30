@@ -277,10 +277,17 @@ int helix_native_main(int argc, char *const argv[], char *const envp[]);
 // is nothing to gate it on -- unlike helix or bash, which bring a toolchain and
 // a licence question with them.
 int native_motepad_main(int argc, char *const argv[], char *const envp[]);
+int native_bmm_main(int argc, char *const argv[], char *const envp[]);
+int native_bmt_main(int argc, char *const argv[], char *const envp[]);
 
 static const struct native_program native_programs[] = {
     { "smallclue", smallclue_real_main },
     { "motepad", native_motepad_main },
+    // The /AOK/tools benchmarks, so the same workload can be timed with and
+    // without emulation. kernel/native_bench.c explains what that comparison
+    // is, and what it is not.
+    { "bmm", native_bmm_main },
+    { "bmt", native_bmt_main },
 #ifdef ISH_NATIVE_RUST
     // Rust, reached by rewriting its libc imports onto the shim rather than by
     // the #define redirection that only covers what AOK compiles. See

@@ -486,6 +486,7 @@ src = [
     'kernel/fork.c',
     'kernel/exec.c',
     'kernel/native.c',
+    'kernel/native_bench.c',
     'kernel/native_io.c',
     'kernel/native_libc.c',
     'kernel/native_kqueue.c',

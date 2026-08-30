@@ -19,6 +19,40 @@ stack-slot code paths more than an optimized build would):
 - **`bmt`** ("benchmark threads") — spawns and joins 10,000 near-no-op
   pthreads back-to-back, timing total thread create/destroy overhead.
 
+### The native versions
+
+The same two workloads are also compiled into iSH-AOK and reachable as
+native programs, which need no compiler in the guest and work on every guest
+architecture:
+
+```sh
+/AOK/native/bmm          # 1e9 iterations, as the guest build defaults to
+/AOK/native/bmt          # 10,000 threads
+/AOK/native/bmm 20000000 # or pass a smaller count
+/AOK/native/bmt 500
+```
+
+The count can also come from `ISH_BENCH_ITERATIONS` / `ISH_BENCH_THREADS`.
+
+Running one of these against the guest-built binary of the same workload is
+the measurement the benchmark exists for -- identical code, with and without
+emulation. On an M4 Mac with an arm64 guest, 20M iterations:
+
+| | integer loop | float loop |
+|---|---|---|
+| guest `bmm2` (`-O2`, emulated) | 0.191 s | 0.370 s |
+| `/AOK/native/bmm` | 0.024 s | 0.211 s |
+
+Two things to keep in mind when reading those numbers:
+
+- The native build uses iSH-AOK's own compiler flags, so it corresponds to
+  the `-O2` variants (`bmm2`/`bmt2`). Against the `-O0` builds it is not a
+  like-for-like comparison.
+- Native `bmt` creates **host** threads, not guest tasks. That is exactly the
+  quantity worth comparing -- guest `clone()` against host `pthread_create` --
+  but they are different kinds of object, and a host that refuses at some
+  depth is reported rather than hidden.
+
 ### Building and running
 
 A companion script, `/AOK/tools/setup-ish-benchmark.sh`, extracts the
