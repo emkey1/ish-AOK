@@ -18,6 +18,7 @@
 #include "kernel/task.h"
 #include "fs/fd.h"
 #include "fs/mmap_cache.h"
+#include "kernel/calls.h"
 #include "util/sync.h"
 #include <dlfcn.h>
 
@@ -1007,6 +1008,10 @@ static int pt_unmap_always_unlocked(struct mem *mem, page_t start, pages_t pages
                 }
             }
             if (data->fd != NULL) {
+                // The last reference to this mapping is going away; if it was
+                // holding a memfd's write seal off, stop holding it.
+                if (data->memfd_shared_mapped)
+                    memfd_mapping_released(data->fd);
                 fd_close(data->fd);
             }
             mmap_cache_unregister(data->cache_entry);
@@ -1127,6 +1132,45 @@ int pt_move(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) 
     return 0;
 }
 
+// Give a shared, still-unbacked struct data its host memory -- once, for every
+// mapper at the same time.
+//
+// A MAP_SHARED PROT_NONE anonymous region is reserved with data == NULL and one
+// struct data that every mapper's page-table entry points at. The first side to
+// make it accessible used to allocate a page for ITSELF, ending the sharing at
+// the exact moment the mapping first became usable: two processes that
+// mprotected such a region after fork each got a private page and never saw
+// each other's writes again. Doing it here, in the shared struct, keeps every
+// mapper resolving to the same memory.
+//
+// Its own lock, because the struct is reachable from more than one process's
+// page tables while each of those processes holds only its OWN memory lock.
+static int mem_materialize_shared_data(struct data *data) {
+    static lock_t shared_materialize_lock = LOCK_INITIALIZER;
+    lock(&shared_materialize_lock, 0);
+    int err = 0;
+    if (data->data == NULL) {
+        void *memory = mmap(NULL, data->size, PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (memory == MAP_FAILED) {
+            err = errno_map();
+        } else {
+            // Every guest process is a thread of one host process, so host
+            // MAP_PRIVATE memory is already common to all of them -- what makes
+            // this shared is that they reach it through the same struct data.
+            if (mem_uses_host_page_mirroring()) {
+                size_t host_pages = (data->size + real_page_size - 1) / real_page_size;
+                data->host_page_prot = calloc(host_pages, 1);
+                // A NULL host_page_prot only costs the protection cache, which
+                // mem_mirror_host_page_protection already tolerates.
+            }
+            data->data = memory;
+        }
+    }
+    unlock(&shared_materialize_lock);
+    return err;
+}
+
 int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
     // mprotect rewrites per-page flags, so materialise any overlapping reservation first rather than
     // teaching this path about them. Iterates reservations, never pages.
@@ -1144,14 +1188,23 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
         int new_flags = keep_flags | flags;
 
         // Reserve guest PROT_NONE anonymous mappings without host backing.
-        // If they later become accessible, allocate a real host page here.
+        // If they later become accessible, allocate a real host page here --
+        // except for a SHARED one, whose backing belongs to every mapper and
+        // so has to be filled in on the struct they share. See above.
         if (entry->data->data == NULL && (new_flags & P_RWX) != 0) {
-            void *memory = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE,
-                    MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
-            int err = pt_map(mem, page, 1, memory, 0, new_flags);
-            if (err < 0)
-                return err;
-            continue;
+            if (entry->flags & P_SHARED) {
+                int err = mem_materialize_shared_data(entry->data);
+                if (err < 0)
+                    return err;
+                // ...then fall through to the ordinary flag update below.
+            } else {
+                void *memory = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+                int err = pt_map(mem, page, 1, memory, 0, new_flags);
+                if (err < 0)
+                    return err;
+                continue;
+            }
         }
 
         entry->flags = new_flags;
@@ -1294,8 +1347,18 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
             return NULL;
         
         if (type == MEM_WRITE_PTRACE) {
-            // TODO: Is P_WRITE really correct? The page shouldn't be writable without ptrace.
-            entry->flags |= P_WRITE | P_COW;
+            // A debugger's poke has to be able to write a page the tracee has
+            // marked read-only, hence P_WRITE.
+            //
+            // P_COW, though, only for a PRIVATE page. Copying a SHARED one
+            // gives this process a private duplicate and quietly severs it
+            // from everybody else: the poke never reached the file, and every
+            // store the TRACEE itself made afterwards was lost too, with no
+            // error anywhere. On Linux the poke lands in the shared page and
+            // the mapping keeps its file. Measured.
+            entry->flags |= P_WRITE;
+            if (!(entry->flags & P_SHARED))
+                entry->flags |= P_COW;
         }
 #if ENGINE_JIT
         // get rid of any compiled blocks in this page
@@ -1386,8 +1449,13 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
             write_unlock(&mem->lock);
             return NULL;
         }
-        if (type == MEM_WRITE_PTRACE)
-            entry->flags |= P_WRITE | P_COW;
+        if (type == MEM_WRITE_PTRACE) {
+            // Same as the other write-fault path above: never COW a shared
+            // page, or the poke detaches the tracee from its own mapping.
+            entry->flags |= P_WRITE;
+            if (!(entry->flags & P_SHARED))
+                entry->flags |= P_COW;
+        }
 #if ENGINE_JIT
         jit_invalidate_page(mem->mmu.jit, page);
 #endif

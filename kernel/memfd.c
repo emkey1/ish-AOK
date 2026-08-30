@@ -37,6 +37,18 @@ struct memfd_state {
     char *name;
     int host_fd;
     int seals; // F_SEAL_*, guarded by lock; F_SEAL_SEAL_ set = sealing forbidden
+    // How many live SHARED mappings of this memfd exist. F_SEAL_WRITE is
+    // refused with EBUSY while it is nonzero -- sealing against writes while
+    // somebody holds a shared window onto the data would be a guarantee the
+    // kernel cannot keep.
+    //
+    // Any shared mapping counts, not just a currently-writable one: a
+    // PROT_READ MAP_SHARED mapping of a memfd can be mprotected to writable
+    // afterwards, so it is just as much of a hole. Measured -- Linux refuses
+    // for a read-only shared mapping too, and allows it for a writable PRIVATE
+    // one, which is the opposite of what "writable" would suggest. Guarded by
+    // lock.
+    unsigned shared_maps;
     lock_t lock;
 };
 
@@ -166,7 +178,34 @@ static int memfd_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t page
     if ((flags & MMAP_SHARED) && (prot & P_WRITE) &&
             (seals & (F_SEAL_WRITE_ | F_SEAL_FUTURE_WRITE_)))
         return _EPERM;
-    return host_fd_mmap(state->host_fd, mem, start, pages, offset, prot, flags);
+    int err = host_fd_mmap(state->host_fd, mem, start, pages, offset, prot, flags);
+    if (err < 0)
+        return err;
+
+    // Count a live writable shared mapping, so a later F_SEAL_WRITE can refuse
+    // with EBUSY rather than granting a seal this mapping can walk straight
+    // through. The marker goes on the mapping itself because the count has to
+    // come off when the mapping does, and that happens in emu/memory.c.
+    if (flags & MMAP_SHARED) {
+        struct pt_entry *entry = mem_pt(mem, start);
+        if (entry != NULL && entry->data != NULL && !entry->data->memfd_shared_mapped) {
+            entry->data->memfd_shared_mapped = true;
+            lock(&state->lock, 0);
+            state->shared_maps++;
+            unlock(&state->lock);
+        }
+    }
+    return 0;
+}
+
+void memfd_mapping_released(struct fd *fd) {
+    if (fd == NULL || fd->ops != &memfd_ops)
+        return;
+    struct memfd_state *state = memfd_state_get(fd);
+    lock(&state->lock, 0);
+    if (state->shared_maps > 0)
+        state->shared_maps--;
+    unlock(&state->lock);
 }
 
 static int memfd_poll(struct fd *UNUSED(fd)) {
@@ -259,9 +298,15 @@ int_t memfd_add_seals(struct fd *fd, uint_t arg) {
         unlock(&state->lock);
         return _EPERM;
     }
-    // Linux also fails F_SEAL_WRITE with EBUSY while writable shared mappings
-    // exist; mappings aren't tracked per-fd here, so that check is skipped
-    // (callers that seal WRITE before sharing the fd are unaffected).
+    // F_SEAL_WRITE while a shared mapping is live is EBUSY. Granting it was
+    // worse than not implementing sealing at all: F_GET_SEALS then reported a
+    // guarantee that was not being kept, stores through the live mapping still
+    // landed, and a receiver that mapped the "sealed" fd afterwards saw the
+    // mutations.
+    if ((arg & F_SEAL_WRITE_) && state->shared_maps > 0) {
+        unlock(&state->lock);
+        return _EBUSY;
+    }
     state->seals |= arg;
     unlock(&state->lock);
     return 0;

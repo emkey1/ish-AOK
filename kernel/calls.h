@@ -230,6 +230,9 @@ int_t sys_inotify_rm_watch(fd_t fd, int_t wd);
 int_t sys_memfd_create(addr_t name_addr, uint_t flags);
 int_t sys_memfd_create_guest(guest_addr_t name_addr, uint_t flags);
 struct fd;
+// Called from emu/memory.c when a mapping that was counted as a live writable
+// shared mapping of a memfd is torn down. A no-op for any other kind of fd.
+void memfd_mapping_released(struct fd *fd);
 int_t memfd_add_seals(struct fd *fd, uint_t arg);
 int_t memfd_get_seals(struct fd *fd);
 

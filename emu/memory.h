@@ -209,6 +209,12 @@ struct data {
     // lets /proc/<pid>/smaps see cross-process sharing this refcount can't.
     struct mmap_cache_entry *cache_entry;
 
+    // This mapping was counted as a live SHARED mapping of its memfd
+    // (kernel/memfd.c), which is what holds F_SEAL_WRITE off. Recorded here
+    // because the count has to come off when the mapping does, and that
+    // happens here and nowhere else.
+    bool memfd_shared_mapped;
+
     // for display in /proc/pid/maps
     struct fd *fd;
     size_t file_offset;

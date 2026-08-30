@@ -144,6 +144,7 @@ tty_line_discipline.c
 tty_ctty_ioctls.c
 tty_job_control.c
 mmap_validation.c
+mmap_shared_integrity.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c
 timerfd_settime_readiness.c
