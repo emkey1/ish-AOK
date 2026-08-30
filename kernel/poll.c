@@ -216,6 +216,22 @@ static int read_ppoll_timeout(enum guest_abi abi, guest_addr_t timeout_addr, str
 
 static dword_t sys_select_common(fd_t nfds, guest_addr_t readfds_addr, guest_addr_t writefds_addr,
         guest_addr_t exceptfds_addr, const struct timespec *timeout_ts_ptr) {
+    // nfds is entirely the guest's, and everything below is sized from it on
+    // the STACK -- three bitmap VLAs and an array of fd pointers. A negative
+    // nfds made BITS_SIZE compute an enormous size and the memset walked off
+    // the stack, taking the whole emulator down with SIGBUS; a merely huge one
+    // did the same more slowly. Linux checks both, differently: negative is
+    // EINVAL, and anything past the fd table is clamped rather than refused
+    // (core_sys_select), so a caller passing FD_SETSIZE on a small table still
+    // works.
+    if (nfds < 0)
+        return _EINVAL;
+    lock(&current->files->lock, 0);
+    fd_t max_fds = (fd_t) current->files->size;
+    unlock(&current->files->lock);
+    if (nfds > max_fds)
+        nfds = max_fds;
+
     size_t fdset_size = BITS_SIZE(nfds);
     char readfds[fdset_size];
     if (user_read_or_zero(readfds_addr, readfds, fdset_size))
@@ -476,6 +492,11 @@ static int poll_event_callback(void *context, int types, union poll_fd_info info
 }
 dword_t sys_poll_common(guest_addr_t fds, dword_t nfds, const struct timespec *timeout_ts_ptr, int_t timeout_trace) {
     STRACE("poll(%#llx, %d, %d)", (unsigned long long) fds, nfds, timeout_trace);
+    // Same stack-VLA exposure as select above, and Linux bounds it the other
+    // way: do_sys_poll refuses anything over RLIMIT_NOFILE outright rather
+    // than clamping, because a pollfd array that large is a caller bug.
+    if (nfds > (dword_t) rlimit(RLIMIT_NOFILE_))
+        return _EINVAL;
     struct pollfd_ polls[nfds];
     if (fds != 0 || nfds != 0)
         if (user_read(fds, polls, sizeof(struct pollfd_) * nfds))

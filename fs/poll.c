@@ -1043,15 +1043,29 @@ static int real_poll_check_receipts(struct kevent *events, int count) {
 }
 
 static int real_poll_update(struct real_poll *real, int fd, int types, void *data) {
+    // The write filter is registered for HUP and RDHUP as well as for WRITE:
+    // it is the only thing that distinguishes a half-close from a full one.
+    // kqueue sets EV_EOF on EVFILT_READ as soon as the peer stops writing, and
+    // on EVFILT_WRITE only once our own direction is down too, so the pair
+    // together says which happened. Measured on Darwin.
+    bool want_read = types & (POLL_READ | POLL_HUP | POLL_RDHUP);
+    bool want_write = types & (POLL_WRITE | POLL_HUP | POLL_RDHUP);
     struct kevent e[3] = {
-        {.filter = EVFILT_READ, .flags = types & (POLL_READ | POLL_HUP) ? EV_ADD : EV_DELETE},
-        {.filter = EVFILT_WRITE, .flags = types & POLL_WRITE ? EV_ADD : EV_DELETE},
+        {.filter = EVFILT_READ, .flags = want_read ? EV_ADD : EV_DELETE},
+        {.filter = EVFILT_WRITE, .flags = want_write ? EV_ADD : EV_DELETE},
         {.filter = EVFILT_EXCEPT, .flags = types & POLL_ERR ? EV_ADD : EV_DELETE},
     };
-    if (!(types & POLL_READ) && types & POLL_HUP) {
-        // Set the low water mark really high so we'll only get woken up on a hangup
+    // Set the low water mark really high so we'll only get woken up on a hangup
+    if (!(types & POLL_READ) && want_read) {
         e[0].fflags = NOTE_LOWAT;
         e[0].data = INT_MAX;
+    }
+    // Same for the write side, and here it matters more: EVFILT_WRITE is level
+    // triggered, so a registration that only wants the hangup would otherwise
+    // fire continuously for as long as the socket had send buffer free.
+    if (!(types & POLL_WRITE) && want_write) {
+        e[1].fflags = NOTE_LOWAT;
+        e[1].data = INT_MAX;
     }
     for (int i = 0; i < 3; i++) {
         e[i].ident = fd;
@@ -1084,15 +1098,29 @@ static int rpe_events(struct real_poll_event *rpe, struct poll_fd *pfd) {
             return POLL_NVAL;
         return POLL_ERR;
     }
+    // Whether end-of-input is a HANGUP depends on what this is. For a pipe or
+    // a fifo the writer closing is the hangup, full stop. For a SOCKET it is
+    // only half of one: the peer may have shut down writing and still be
+    // reading, and Linux says EPOLLRDHUP for that and reserves EPOLLHUP for
+    // both directions being down. Reporting HUP for a half-close was provably
+    // wrong -- the same socket was still writable -- and EPOLLHUP is what a
+    // program treats as "connection over".
+    bool is_socket = pfd != NULL && pfd->fd != NULL && S_ISSOCK(pfd->fd->type);
     if (rpe->real.filter == EVFILT_READ) {
         int events = 0;
         if (rpe->real.data > 0)
             events |= POLL_READ;
         if (rpe->real.flags & EV_EOF)
-            events |= POLL_HUP;
+            events |= is_socket ? POLL_RDHUP : POLL_HUP;
         return events;
     }
-    if (rpe->real.filter == EVFILT_WRITE) return POLL_WRITE;
+    if (rpe->real.filter == EVFILT_WRITE) {
+        // EV_EOF here means our own direction is down too, so the connection
+        // really is finished: that is the HUP, and it implies the RDHUP.
+        if (is_socket && (rpe->real.flags & EV_EOF))
+            return POLL_WRITE | POLL_HUP | POLL_RDHUP;
+        return POLL_WRITE;
+    }
     if (rpe->real.filter == EVFILT_EXCEPT) {
         // Darwin's EVFILT_EXCEPT fires on ordinary, healthy TCP sockets under
         // normal traffic with no real error condition -- confirmed live

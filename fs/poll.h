@@ -81,6 +81,13 @@ struct poll_fd {
 #define POLL_ERR 8
 #define POLL_HUP 16
 #define POLL_NVAL 32
+// Guest EPOLLRDHUP / POLLRDHUP: the PEER shut down its writing end, which for
+// a socket is not the same thing as a hangup and Linux reports separately.
+// There was no bit for it at all, so nothing could ever produce one -- and the
+// half-close was reported as POLL_HUP instead, on a socket that was still
+// perfectly writable. Only delivered when the registration asked for it, which
+// is why it is deliberately NOT in POLL_ALWAYS_LISTENING.
+#define POLL_RDHUP 0x2000
 #define POLL_ONESHOT (1 << 30)
 #define POLL_EDGETRIGGERED (1ul << 31)
 // Matches guest EPOLLEXCLUSIVE (1 << 28); ADD/MOD store the raw guest event

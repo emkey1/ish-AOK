@@ -203,7 +203,30 @@ int_t sys_epoll_ctl_guest(fd_t epoll_f, int_t op, fd_t f, guest_addr_t event_add
 
     int_t res;
     if (op == EPOLL_CTL_ADD_) {
-        if (poll_has_fd(epoll->epollfd.poll, fd, f))
+        // Not everything can be polled, and Linux answers EPERM for the
+        // things that cannot. Accepting them is worse than an error: an event
+        // that can never arrive looks exactly like an idle fd, so a program
+        // waiting on a file it should have been told to just read blocks
+        // forever with no indication why.
+        //
+        // Linux decides per-file, on whether the entry has an f_op->poll, and
+        // its synthetic filesystems are not uniform about it -- measured:
+        // /proc/self/mountinfo, /proc/cpuinfo, /proc/uptime and
+        // /sys/kernel/profiling are all accepted while /proc/self/stat is
+        // EPERM, and every DIRECTORY is EPERM including /proc itself.
+        //
+        // This is deliberately the coarser rule: a directory always, and a
+        // regular file on an ordinary filesystem. That gets every real file
+        // and every directory right, keeps procfs and sysfs working (which is
+        // what mount-change notification needs -- the guest suite's
+        // mountinfo_epollet and epoll_nested both poll /proc/self/mountinfo),
+        // and over-permits a handful of procfs entries rather than breaking
+        // the ones that matter.
+        bool synthetic_fs = fd->mount != NULL &&
+            (fd->mount->fs == &procfs || fd->mount->fs == &sysfs);
+        if (S_ISDIR(fd->type) || (S_ISREG(fd->type) && !synthetic_fs))
+            res = _EPERM;
+        else if (poll_has_fd(epoll->epollfd.poll, fd, f))
             res = _EEXIST;
         else if (epoll_would_loop(epoll, fd, 0))
             res = _ELOOP;

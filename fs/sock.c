@@ -2399,6 +2399,12 @@ static fd_t sock_fd_create(int sock_fd, int domain, int type, int protocol) {
     if (fd == NULL)
         return _ENOMEM;
     fd->stat.mode = S_IFSOCK | 0666;
+    // fd->type is set by generic_open for path-opened files; a socket() fd
+    // never goes through that, so it was left 0 and every S_ISSOCK(fd->type)
+    // test in the tree read false for an actual socket -- including the poll
+    // layer's, which needs it to tell a half-close from a hangup, and the
+    // inotify close notification, which Linux does not emit for sockets.
+    fd->type = S_IFSOCK;
     fd->real_fd = sock_fd;
     fd->socket.domain = domain;
     fd->socket.type = type & SOCKET_TYPE_MASK;
@@ -2477,6 +2483,12 @@ int_t sys_socket(dword_t domain, dword_t type, dword_t protocol) {
         if (fd == NULL)
             return _ENOMEM;
         fd->stat.mode = S_IFSOCK | 0666;
+    // fd->type is set by generic_open for path-opened files; a socket() fd
+    // never goes through that, so it was left 0 and every S_ISSOCK(fd->type)
+    // test in the tree read false for an actual socket -- including the poll
+    // layer's, which needs it to tell a half-close from a hangup, and the
+    // inotify close notification, which Linux does not emit for sockets.
+    fd->type = S_IFSOCK;
         fd->real_fd = -1;
         fd->socket.domain = domain;
         fd->socket.type = socket_type;
@@ -8315,6 +8327,26 @@ static int sock_poll(struct fd *fd) {
     if (fd->socket.conn_dead)
         return POLL_ERR | POLL_HUP;
     int types = realfs_poll(fd);
+    // Darwin's poll() answers POLLHUP the moment the peer stops writing and
+    // gives no way to tell that from a connection that is actually finished.
+    // Linux keeps them apart: EPOLLRDHUP for the peer's half, EPOLLHUP only
+    // once both directions are down. Reporting HUP for a half-close is
+    // provably wrong -- the socket is still writable, and a program treats
+    // EPOLLHUP as "connection over" and drops it.
+    //
+    // A zero-length send is the discriminator, and it is a single syscall with
+    // nothing to clean up: it transmits no segment, leaves pending inbound
+    // data alone, and returns EPIPE exactly when our own write direction has
+    // gone. (SIGPIPE is ignored process-wide -- kernel/init.c -- so it cannot
+    // fire here.) Only for connection-oriented sockets: on a datagram socket a
+    // zero-length send would put an empty datagram on the wire.
+    if ((types & POLL_HUP) &&
+            (fd->socket.type == SOCK_STREAM_ || fd->socket.type == SOCK_SEQPACKET_)) {
+        types &= ~POLL_HUP;
+        types |= POLL_RDHUP;
+        if (send(fd->real_fd, "", 0, MSG_DONTWAIT) < 0 && errno == EPIPE)
+            types |= POLL_HUP;
+    }
 #if defined(__APPLE__)
     if (types & POLL_WRITE)
         sock_trace_tcp_info("poll-write", fd);
