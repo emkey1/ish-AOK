@@ -139,6 +139,7 @@ tty_hangup_signal.c
 create_eexist_first.c
 sigchld_disposition.c
 proc_conformance.c
+fcntl_lock_validation.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c
 timerfd_settime_readiness.c

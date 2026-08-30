@@ -148,6 +148,71 @@ static int file_lock_acquire(struct inode_data *inode, struct file_lock *request
 
 #define OFF_T_MAX ~(1l << (sizeof(off_t) * 8 - 1))
 
+
+// Deadlock detection for F_SETLKW, which had none: two processes each holding
+// what the other wants simply waited forever, and the wait is uninterruptible
+// by anything short of a signal. Linux returns EDEADLK instead, and callers
+// rely on getting it rather than hanging.
+//
+// The graph is "owner X is blocked on a lock held by owner Y". Before blocking
+// we add ourselves and walk from the owner we would wait for: if the walk
+// reaches us, the edge we are about to add closes a cycle. Owners are the same
+// opaque pointers file_lock uses (a struct fdtable * for process locks, a
+// struct fd * for OFD ones), so the two kinds participate in one graph and a
+// cycle spanning both is found too.
+//
+// A separate lock from inode->lock, always taken inside it, because a cycle
+// spans several inodes by definition and no single inode lock can cover it.
+struct lock_waiter {
+    void *owner;        // who is waiting
+    void *blocked_on;   // the owner of the lock being waited for
+    struct list list;
+};
+static lock_t lock_waiters_lock = LOCK_INITIALIZER;
+static struct list lock_waiters = LIST_INITIALIZER(lock_waiters);
+
+static bool posix_lock_would_deadlock(void *self, void *blocker) {
+    if (self == NULL || blocker == NULL || self == blocker)
+        return false;
+    bool cycle = false;
+    lock(&lock_waiters_lock, 0);
+    void *cur = blocker;
+    // Bounded: a corrupted or racing list must not spin here forever. The
+    // depth is the length of a waiter chain, which is tiny in practice.
+    for (int depth = 0; cur != NULL && depth < 1024; depth++) {
+        if (cur == self) {
+            cycle = true;
+            break;
+        }
+        void *next = NULL;
+        struct lock_waiter *w;
+        list_for_each_entry(&lock_waiters, w, list) {
+            if (w->owner == cur) {
+                next = w->blocked_on;
+                break;
+            }
+        }
+        cur = next;
+    }
+    unlock(&lock_waiters_lock);
+    return cycle;
+}
+
+static void posix_lock_waiter_add(struct lock_waiter *w, void *self, void *blocker) {
+    w->owner = self;
+    w->blocked_on = blocker;
+    list_init(&w->list);
+    lock(&lock_waiters_lock, 0);
+    list_add(&lock_waiters, &w->list);
+    unlock(&lock_waiters_lock);
+}
+
+static void posix_lock_waiter_remove(struct lock_waiter *w) {
+    lock(&lock_waiters_lock, 0);
+    list_remove_safe(&w->list);
+    unlock(&lock_waiters_lock);
+}
+
 static int file_lock_from_flock(struct fd *fd, struct flock_ *flock, struct file_lock *lock, bool ofd) {
     off_t_ offset;
     switch (flock->whence) {
@@ -183,15 +248,31 @@ static int file_lock_from_flock(struct fd *fd, struct flock_ *flock, struct file
             return _EINVAL;
     }
 
-    lock->start = flock->start + offset;
+    // Range validation, in the order and with the errnos Linux's
+    // flock_to_posix_lock uses. There was none at all: a negative l_start, a
+    // negative l_len reaching below zero, a SEEK_END whose offset underflows,
+    // and a l_start+l_len that overflows off_t were all accepted and turned
+    // into a lock over some other range entirely -- so a caller could take a
+    // lock it had not asked for, and a subsequent F_GETLK would report a
+    // conflict that had nothing to do with the range it was asked about.
+    if (flock->start > OFF_T_MAX - offset)
+        return _EOVERFLOW;
+    off_t_ start = offset + flock->start;
+    if (start < 0)
+        return _EINVAL;
+    off_t_ end = OFF_T_MAX;
     if (flock->len > 0) {
-        lock->end = lock->start + flock->len - 1;
+        if (flock->len - 1 > OFF_T_MAX - start)
+            return _EOVERFLOW;
+        end = start + flock->len - 1;
     } else if (flock->len < 0) {
-        lock->end = lock->start - 1;
-        lock->start = lock->end + flock->len + 1;
-    } else {
-        lock->end = OFF_T_MAX;
+        if (start + flock->len < 0)
+            return _EINVAL;
+        end = start - 1;
+        start += flock->len;
     }
+    lock->start = start;
+    lock->end = end;
     lock->type = flock->type;
     if (ofd) {
         // Open file description lock (F_OFD_*): owned by the open file
@@ -206,7 +287,11 @@ static int file_lock_from_flock(struct fd *fd, struct flock_ *flock, struct file
         lock->pid = -1;
     } else {
         lock->owner = current->files;
-        lock->pid = current->pid;
+        // The PROCESS, not the thread. fcntl(2) says l_pid is "the PID of the
+        // process holding the lock", and current->pid is a tid for any
+        // non-leader thread -- so a lock taken by a worker thread was reported
+        // under a pid the reader could not kill, wait for, or find in ps.
+        lock->pid = current->tgid;
     }
     strncpy(lock->comm, current->comm, 16);
     return 0;
@@ -281,7 +366,17 @@ int fcntl_setlk(struct fd *fd, struct flock_ *flock, bool blocking, bool ofd) {
         while ((err = file_lock_acquire(inode, &request)) == _EAGAIN) {
             if (!blocking)
                 break;
+            // Who is in the way, and would waiting for them close a cycle?
+            struct file_lock *blocker = file_lock_test(inode, &request);
+            void *blocker_owner = blocker != NULL ? blocker->owner : NULL;
+            if (posix_lock_would_deadlock(request.owner, blocker_owner)) {
+                err = _EDEADLK;
+                break;
+            }
+            struct lock_waiter waiter;
+            posix_lock_waiter_add(&waiter, request.owner, blocker_owner);
             err = wait_for(&inode->posix_unlock, &inode->lock, NULL);
+            posix_lock_waiter_remove(&waiter);
             if (err < 0)
                 break;
         }
