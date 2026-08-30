@@ -36,8 +36,8 @@ note_problem() { problems="$problems
   - $1"; }
 
 # --- submodules ---------------------------------------------------------
-# Non-recursive, matching the green Actions job. deps/linux is "update = none"
-# in .gitmodules and stays unfetched. A no-op if Xcode Cloud already did it.
+# Non-recursive, matching the green Actions job. A no-op if Xcode Cloud
+# already did it.
 # Every submodule URL is a public GitHub repo, verified, so this needs no
 # credentials.
 git submodule update --init || note_problem "git submodule update --init failed"

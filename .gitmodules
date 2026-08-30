@@ -4,11 +4,6 @@
 [submodule "deps/libarchive"]
 	path = deps/libarchive
 	url = https://github.com/libarchive/libarchive
-[submodule "deps/linux"]
-	path = deps/linux
-	url = https://github.com/ish-app/linux
-	update = none
-	shallow = true
 [submodule "deps/rootfs-manifest"]
 	path = deps/rootfs-manifest
 	url = https://github.com/emkey1/ish-AOK-rootfs.git

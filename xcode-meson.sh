@@ -315,11 +315,6 @@ EOF
     fi
     log=${ISH_LOG:-}
     log_handler=${ISH_LOGGER:-}
-    kernel=ish
-    if [[ -n "${ISH_KERNEL:-}" ]]; then
-        kernel=$ISH_KERNEL
-    fi
-    kconfig=""
     # Guest architectures the app build supports; comma-separated subset of
     # i386,amd64,arm64. Set ISH_GUEST_ARCHS in iSH.xcconfig (or the scheme
     # environment) to trim the emulator; meson rejects an empty list.
@@ -349,7 +344,7 @@ EOF
         fi
     done
 
-    for var in buildtype log b_ndebug b_sanitize log_handler kernel kconfig guest_archs arm64_gret; do
+    for var in buildtype log b_ndebug b_sanitize log_handler guest_archs arm64_gret; do
         if ! old_value=$(python3 -c "import sys, json; v = next(x['value'] for x in json.load(sys.stdin) if x['name'] == '$var'); print(str(v).lower() if isinstance(v, bool) else ','.join(v) if isinstance(v, list) else v)" <<< "$config" 2>/dev/null); then
             # The option is missing from this build dir's cached
             # configuration: it was added to meson_options.txt after the

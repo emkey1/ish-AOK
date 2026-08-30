@@ -277,8 +277,7 @@ objects remain with the registry entry deleted. Only the build option removes
 them.
 
 Nothing else in the binary is third-party GPL: SmallCLUE is MIT, OpenSSH and
-libarchive are BSD, liblzma is public domain, and `deps/linux` is not compiled
-into this target.
+libarchive are BSD, and liblzma is public domain.
 
 ## Native zsh
 

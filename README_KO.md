@@ -281,8 +281,7 @@ GPL 도구와 동일한 단순 병합(mere aggregation) 입장입니다.
 이를 제거합니다.
 
 바이너리의 나머지에는 서드파티 GPL 이 없습니다. SmallCLUE 는 MIT, OpenSSH 와
-libarchive 는 BSD, liblzma 는 퍼블릭 도메인이며, `deps/linux` 는 이 타깃에
-컴파일되지 않습니다.
+libarchive 는 BSD, liblzma 는 퍼블릭 도메인입니다.
 
 ## 네이티브 zsh
 

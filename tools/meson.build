@@ -1,54 +1,52 @@
-if get_option('kernel') == 'ish'
-    # these tools are specific to x86_64 linux
-    if host_machine.system() == 'linux' and host_machine.cpu() == 'x86_64'
-        transplant_src = [
-            'vdso-transplant.c',
-            'ptutil.c',
-        ]
-        executable('ptraceomatic', ['ptraceomatic.c', 'undefined-flags.c', transplant_src], dependencies: [ish])
-        configure_file(input: 'ptraceomatic-gdb.gdb', output: '@PLAINNAME@', copy: true)
+# these tools are specific to x86_64 linux
+if host_machine.system() == 'linux' and host_machine.cpu() == 'x86_64'
+    transplant_src = [
+        'vdso-transplant.c',
+        'ptutil.c',
+    ]
+    executable('ptraceomatic', ['ptraceomatic.c', 'undefined-flags.c', transplant_src], dependencies: [ish])
+    configure_file(input: 'ptraceomatic-gdb.gdb', output: '@PLAINNAME@', copy: true)
 
-        # tools for messing with vdsos
-        # executable('vdso-dump', ['vdso-dump.c'], c_args: ['-m32'], link_args: ['-m32'])
-        executable('vdso-transplant', ['vdso-transplant-main.c', transplant_src],
-            include_directories: includes)
+    # tools for messing with vdsos
+    # executable('vdso-dump', ['vdso-dump.c'], c_args: ['-m32'], link_args: ['-m32'])
+    executable('vdso-transplant', ['vdso-transplant-main.c', transplant_src],
+        include_directories: includes)
+endif
+
+unicorn = disabler()
+# pkg-config first: unicorn ships a .pc, and it is the only source here that
+# supplies the include path as well as the library.
+unicorn = dependency('unicorn', required: false)
+if not unicorn.found() and host_machine.system() == 'darwin'
+    # Homebrew, native prefix first. Each candidate carries its own include
+    # directory: the library alone is not enough, and pairing a library from
+    # one prefix with whatever header happens to be reachable is how this
+    # broke. /usr/local/include is an implicit clang search path on macOS, so
+    # an Intel Homebrew's unicorn header satisfied the compile with no -I
+    # flag and left nothing in build.ninja to notice it by -- the build only
+    # failed once that stale prefix was deleted, long after anything pointed
+    # at it.
+    if host_machine.cpu_family() == 'aarch64'
+        unicorn_prefixes = ['/opt/homebrew/opt/unicorn', '/opt/homebrew', '/usr/local']
+    else
+        unicorn_prefixes = ['/usr/local/opt/unicorn', '/usr/local', '/opt/homebrew/opt/unicorn']
     endif
-
-    unicorn = disabler()
-    # pkg-config first: unicorn ships a .pc, and it is the only source here that
-    # supplies the include path as well as the library.
-    unicorn = dependency('unicorn', required: false)
-    if not unicorn.found() and host_machine.system() == 'darwin'
-        # Homebrew, native prefix first. Each candidate carries its own include
-        # directory: the library alone is not enough, and pairing a library from
-        # one prefix with whatever header happens to be reachable is how this
-        # broke. /usr/local/include is an implicit clang search path on macOS, so
-        # an Intel Homebrew's unicorn header satisfied the compile with no -I
-        # flag and left nothing in build.ninja to notice it by -- the build only
-        # failed once that stale prefix was deleted, long after anything pointed
-        # at it.
-        if host_machine.cpu_family() == 'aarch64'
-            unicorn_prefixes = ['/opt/homebrew/opt/unicorn', '/opt/homebrew', '/usr/local']
-        else
-            unicorn_prefixes = ['/usr/local/opt/unicorn', '/usr/local', '/opt/homebrew/opt/unicorn']
-        endif
-        foreach prefix : unicorn_prefixes
-            if not unicorn.found()
-                unicorn_lib = cc.find_library('unicorn', dirs: [prefix + '/lib'], required: false)
-                if unicorn_lib.found() and cc.has_header('unicorn/unicorn.h',
-                        include_directories: include_directories([prefix + '/include']))
-                    unicorn = declare_dependency(dependencies: [unicorn_lib],
-                        include_directories: include_directories([prefix + '/include']))
-                endif
+    foreach prefix : unicorn_prefixes
+        if not unicorn.found()
+            unicorn_lib = cc.find_library('unicorn', dirs: [prefix + '/lib'], required: false)
+            if unicorn_lib.found() and cc.has_header('unicorn/unicorn.h',
+                    include_directories: include_directories([prefix + '/include']))
+                unicorn = declare_dependency(dependencies: [unicorn_lib],
+                    include_directories: include_directories([prefix + '/include']))
             endif
-        endforeach
-    elif not unicorn.found()
-        unicorn = cc.find_library('unicorn', required: false)
-    endif
-    if unicorn.found()
-        executable('unicornomatic', ['unicornomatic.c', 'undefined-flags.c'], dependencies: [ish, unicorn])
-        configure_file(input: 'ptraceomatic-gdb.gdb', output: 'unicornomatic-gdb.gdb', copy: true)
-    endif
+        endif
+    endforeach
+elif not unicorn.found()
+    unicorn = cc.find_library('unicorn', required: false)
+endif
+if unicorn.found()
+    executable('unicornomatic', ['unicornomatic.c', 'undefined-flags.c'], dependencies: [ish, unicorn])
+    configure_file(input: 'ptraceomatic-gdb.gdb', output: 'unicornomatic-gdb.gdb', copy: true)
 endif
 
 libarchive = dependency('libarchive', required: false)

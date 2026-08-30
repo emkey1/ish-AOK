@@ -262,7 +262,7 @@ Licensing
 只有构建选项能真正移除它们。
 
 二进制中的其余部分不含第三方 GPL：SmallCLUE 是 MIT，OpenSSH 和 libarchive 是 BSD，
-liblzma 属于公有领域，而 `deps/linux` 不会被编译进这个目标。
+liblzma 属于公有领域。
 
 ## 原生 zsh
 
