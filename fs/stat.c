@@ -393,7 +393,18 @@ int generic_statat(struct fd *at, const char *path_raw, struct statbuf *stat, in
 }
 
 // The `flags` parameter accepts AT_ flags
+// Linux's vfs_statx rejects any flag outside this set with EINVAL, up front.
+// AOK accepted whatever it was handed and silently ignored the bits it did not
+// know, so a caller probing for a flag this kernel does not implement was told
+// it worked -- and then got the behaviour of not having asked.
+static bool statat_flags_valid(int flags) {
+    return (flags & ~(AT_SYMLINK_NOFOLLOW_ | AT_NO_AUTOMOUNT_ |
+                      AT_EMPTY_PATH_ | AT_STATX_SYNC_TYPE_)) == 0;
+}
+
 static dword_t sys_stat_path(fd_t at_f, addr_t path_addr, addr_t statbuf_addr, int flags) {
+    if (!statat_flags_valid(flags))
+        return _EINVAL;
     int err;
     char path[MAX_PATH];
     int path_err = user_read_path(path_addr, path, sizeof(path));
@@ -420,6 +431,8 @@ static dword_t sys_stat_path(fd_t at_f, addr_t path_addr, addr_t statbuf_addr, i
 }
 
 static dword_t sys_stat_path_amd64_guest(fd_t at_f, guest_addr_t path_addr, guest_addr_t statbuf_addr, int flags) {
+    if (!statat_flags_valid(flags))
+        return _EINVAL;
     int err;
     char path[MAX_PATH];
     int path_err = user_read_path(path_addr, path, sizeof(path));
@@ -463,6 +476,8 @@ dword_t sys_newfstatat_amd64(fd_t at, addr_t path_addr, addr_t statbuf_addr, dwo
 // above, marshalled through struct arm64_stat_ (fs/stat.h) — the
 // asm-generic layout, which genuinely differs from amd64's.
 dword_t sys_newfstatat_arm64_guest(fd_t at_f, guest_addr_t path_addr, guest_addr_t statbuf_addr, dword_t flags) {
+    if (!statat_flags_valid((int) flags))
+        return _EINVAL;
     int err;
     char path[MAX_PATH];
     int path_err = user_read_path(path_addr, path, sizeof(path));
@@ -552,6 +567,8 @@ dword_t sys_fstat_amd64(fd_t fd_no, addr_t statbuf_addr) {
 
 // Legacy i386 stat ABI.
 static dword_t sys_stat_path_legacy(fd_t at_f, addr_t path_addr, addr_t statbuf_addr, int flags) {
+    if (!statat_flags_valid(flags))
+        return _EINVAL;
     int err;
     char path[MAX_PATH];
     int path_err = user_read_path(path_addr, path, sizeof(path));

@@ -244,6 +244,15 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
             struct statbuf at_stat;
             if (at->mount != NULL && at->mount->fs->fstat != NULL &&
                     at->mount->fs->fstat(at, &at_stat) >= 0) {
+                // What KIND of thing it is comes before whether we may search
+                // it. A regular file as the dirfd of an *at() call is ENOTDIR
+                // on Linux, decided before any lookup; falling straight into
+                // the search check reported EACCES instead, because a 0644
+                // file has no execute bit -- a plausible-looking errno for
+                // entirely the wrong reason, and one that sends a caller
+                // looking at permissions rather than at the fd it passed.
+                if (!S_ISDIR(at_stat.mode))
+                    return _ENOTDIR;
                 int perm_err = access_check(&at_stat, AC_X);
                 if (perm_err < 0)
                     return perm_err;

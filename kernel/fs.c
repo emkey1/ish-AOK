@@ -683,6 +683,12 @@ static dword_t sys_readlinkat_common(fd_t at_f, guest_addr_t path_addr, guest_ad
     struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
+    // Linux: bufsiz <= 0 is EINVAL, and nothing is written. The parameter
+    // arrives unsigned, so a negative size read as an enormous one, got
+    // clamped to MAX_PATH, and the whole target was written into a buffer the
+    // caller had said was not there -- past the end of whatever it did have.
+    if ((int) bufsize <= 0)
+        return _EINVAL;
     if (bufsize > MAX_PATH)
         bufsize = MAX_PATH;
     char buf[bufsize];
@@ -1946,6 +1952,23 @@ int mount_statfs(struct mount *mount, struct statfsbuf *stat) {
     return err;
 }
 
+// statfs asks which filesystem a path is on, so it follows the final symlink
+// -- a link to /proc reports procfs, not the filesystem the link itself lives
+// on -- and the path has to exist. Neither was true: resolution used
+// N_SYMLINK_NOFOLLOW, and path_normalize does not require the last component
+// to be there (which is right for open(O_CREAT) and wrong here). So
+// `df /no/such/file` printed a filesystem and exited 0.
+static int statfs_resolve(const char *path_raw, char *path) {
+    // Existence is checked against the RAW path, not the normalized one: a
+    // normalized "/" is the empty string here, which generic_statat rejects,
+    // so checking the output instead made `df /` report ENOENT.
+    struct statbuf stat;
+    int err = generic_statat(AT_PWD, path_raw, &stat, 0);
+    if (err < 0)
+        return err;
+    return path_normalize(AT_PWD, path_raw, path, N_SYMLINK_FOLLOW);
+}
+
 static int_t statfs_mount(struct mount *mount, addr_t buf_addr) {
     struct statfsbuf buf = {};
     int err = mount_statfs(mount, &buf);
@@ -2022,7 +2045,7 @@ dword_t sys_statfs(addr_t path_addr, addr_t buf_addr) {
         return path_err;
     STRACE("statfs(\"%s\", %#x)", path_raw, buf_addr);
     char path[MAX_PATH];
-    int err = path_normalize(AT_PWD, path_raw, path, N_SYMLINK_NOFOLLOW);
+    int err = statfs_resolve(path_raw, path);
     if (err < 0)
         return err;
     struct mount *mount = mount_find(path);
@@ -2040,7 +2063,7 @@ static dword_t sys_statfs_amd64_common(guest_addr_t path_addr, guest_addr_t buf_
         return path_err;
     STRACE("statfs_amd64(\"%s\", %#x)", path_raw, buf_addr);
     char path[MAX_PATH];
-    int err = path_normalize(AT_PWD, path_raw, path, N_SYMLINK_NOFOLLOW);
+    int err = statfs_resolve(path_raw, path);
     if (err < 0)
         return err;
     struct mount *mount = mount_find(path);
@@ -2066,7 +2089,7 @@ dword_t sys_statfs64(addr_t path_addr, dword_t buf_size, addr_t buf_addr) {
     if (buf_size != sizeof(struct statfs64_))
         return _EINVAL;
     char path[MAX_PATH];
-    int err = path_normalize(AT_PWD, path_raw, path, N_SYMLINK_NOFOLLOW);
+    int err = statfs_resolve(path_raw, path);
     if (err < 0)
         return err;
     struct mount *mount = mount_find(path);
@@ -2589,6 +2612,11 @@ static dword_t sys_fchownat_common(fd_t at_f, guest_addr_t path_addr, dword_t ow
     if (path_err)
         return path_err;
     STRACE("fchownat(%d, \"%s\", %d, %d, %d)", at_f, path, owner, group, flags);
+    // Linux: only these two flags exist here, and anything else is EINVAL
+    // before any lookup. Accepting an unknown bit and ignoring it tells a
+    // caller its request was honoured when it was not.
+    if (flags & ~(AT_SYMLINK_NOFOLLOW_ | AT_EMPTY_PATH_))
+        return _EINVAL;
     struct fd *at = at_fd_for_path(at_f, path);
     if (at == NULL)
         return _EBADF;
@@ -2930,6 +2958,19 @@ static dword_t fd_copy_range(fd_t in_no, off_t_ *in_off, fd_t out_no, off_t_ *ou
 // in_fd (read side); out_fd always uses its current position. off64 selects the
 // width of the guest *offset (i386 sendfile is 32-bit, sendfile64/amd64 64-bit).
 static dword_t do_sendfile(fd_t out_fd, fd_t in_fd, guest_addr_t offset_addr, uint64_t count, bool off64) {
+    // sendfile's input must be something mmap-like -- a regular file or a
+    // character device -- because Linux needs to seek it. A pipe, FIFO or
+    // socket is EINVAL, immediately. AOK checked nothing and went straight to
+    // a blocking read, so `sendfile(out, pipe_fd, ...)` sat there until
+    // somebody wrote enough bytes to the pipe, which for a caller expecting an
+    // immediate error is never. (The output end is unrestricted -- targeting a
+    // socket is sendfile's whole purpose.)
+    struct fd *in_f = f_get(in_fd);
+    if (in_f == NULL)
+        return _EBADF;
+    if (!S_ISREG(in_f->type) && !S_ISCHR(in_f->type))
+        return _EINVAL;
+
     off_t_ off = 0;
     off_t_ *off_ptr = NULL;
     if (offset_addr != 0) {
@@ -2995,6 +3036,15 @@ static dword_t do_copy_file_range(fd_t in_fd, guest_addr_t in_off_addr, fd_t out
     struct fd *out_f = f_get(out_fd);
     if (in_f == NULL || out_f == NULL)
         return _EBADF;
+    // Linux's order, which matters because each errno tells the caller a
+    // different thing: a directory is EISDIR (it named the wrong object), an
+    // O_APPEND output is EBADF (the fd cannot honour an offset, so writing at
+    // the requested one would put the bytes somewhere else -- which is what
+    // happened, silently), and only then is anything else EINVAL.
+    if (S_ISDIR(in_f->type) || S_ISDIR(out_f->type))
+        return _EISDIR;
+    if (out_f->flags & O_APPEND_)
+        return _EBADF;
     if (!S_ISREG(in_f->type) || !S_ISREG(out_f->type))
         return _EINVAL;
     off_t_ in_off = 0, out_off = 0;
@@ -3009,6 +3059,10 @@ static dword_t do_copy_file_range(fd_t in_fd, guest_addr_t in_off_addr, fd_t out
             return _EFAULT;
         out_ptr = &out_off;
     }
+    // A negative offset is EOVERFLOW, not EINVAL: Linux distinguishes "this
+    // offset cannot be represented" from "these arguments do not go together".
+    if ((in_ptr != NULL && in_off < 0) || (out_ptr != NULL && out_off < 0))
+        return _EOVERFLOW;
     dword_t res = fd_copy_range(in_fd, in_ptr, out_fd, out_ptr, len);
     if ((sdword_t) res >= 0) {
         if (in_ptr != NULL && user_put(in_off_addr, in_off))
