@@ -19,6 +19,9 @@
 // may_create() for permission -- so an existing target reports EEXIST, not
 // EACCES. Not for unlink/rmdir/rename: there an existing target is the point
 // of the call, so the permission check is what governs and must come first.
+// Linux's MAXSYMLINKS: how many symlinks one path resolution may follow.
+#define MAX_SYMLINKS 40
+
 #define N_CREATE_EEXIST_FIRST 16
 // Require write+execute permission on the resolved parent directory of the
 // final path component. Only correct for callers where the operation always

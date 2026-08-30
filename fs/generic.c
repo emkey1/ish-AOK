@@ -541,7 +541,10 @@ static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int f
         }
         // O_PATH ignores the access mode: Linux performs no read/write
         // permission check for O_PATH opens (the fd can't do I/O anyway).
-        if (!(flags & O_PATH_)) {
+        // O_NOACCESS_CHECK_ is internal (open_dir, for chdir/chroot): the
+        // caller has already applied the permission rule that governs it, and
+        // it is not this one.
+        if (!(flags & (O_PATH_ | O_NOACCESS_CHECK_))) {
             int accmode;
             if (flags & O_RDWR_) accmode = AC_R | AC_W;
             else if (flags & O_WRONLY_) accmode = AC_W;

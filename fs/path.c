@@ -82,7 +82,16 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
                 res = mount->fs->readlink(mount, possible_symlink, c, MAX_PATH - (c - out));
             if (res >= 0) {
                 mount_release(mount);
-                if (levels >= 5)
+                // Linux's MAXSYMLINKS. Five was low enough that ordinary
+                // /etc/alternatives-style chains hit ELOOP: `levels` counts
+                // every link followed across the whole resolution, including
+                // symlinked directory components, so a handful of them in a
+                // path exhausted it. Measured: Linux resolves 8 fine, AOK
+                // failed from 6.
+                //
+                // The recursion is one 4KB frame per level, so 40 costs about
+                // 170KB against a 4MB task stack.
+                if (levels >= MAX_SYMLINKS)
                     return _ELOOP;
                 // readlink does not null terminate
                 c[res] = '\0';
@@ -115,18 +124,29 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
                 return __path_normalize(root_path, next_at_path, expanded_path, out, flags, levels + 1);
             }
 
-            // if there's a slash after this component, ensure that if it
-            // exists, it's a directory and that we have execute perms on it
+            // A slash after this component means it must be a directory. It
+            // means we need SEARCH permission on it only if there is something
+            // after it to reach: a trailing slash asks "is this a directory",
+            // not "let me traverse into it".
+            //
+            // p has already been advanced past the run of slashes, so the
+            // final component of "dir/" satisfies this test too, and used to
+            // collect an execute check Linux never applies -- stat("/root/")
+            // was EACCES for an ordinary user where stat("/root") succeeded,
+            // and `test -d /root/` and `ls -d /root/` failed with it.
             if (*(p - 1) == '/') {
+                bool traversing = *p != '\0';
                 struct statbuf stat;
                 int err = mount->fs->stat(mount, possible_symlink, &stat);
                 mount_release(mount);
                 if (err >= 0) {
                     if (!S_ISDIR(stat.mode))
                         return _ENOTDIR;
-                    err = access_check(&stat, AC_X);
-                    if (err < 0)
-                        return err;
+                    if (traversing) {
+                        err = access_check(&stat, AC_X);
+                        if (err < 0)
+                            return err;
+                    }
                 } else if (*p != '\0') {
                     // A non-final component must exist and be a directory. Don't
                     // silently skip a missing one, or a following ".." would pop

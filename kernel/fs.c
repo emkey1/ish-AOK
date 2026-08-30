@@ -367,7 +367,16 @@ static bool current_in_group(uid_t_ gid) {
 }
 
 int access_check(struct statbuf *stat, int check) {
-    if (superuser()) {
+    // fsuid, not euid. Every permission decision below is made against fsuid,
+    // and so is Linux's -- the override has to agree with them or it is
+    // overriding a different question than the one being asked.
+    //
+    // access(2) is where the difference shows: it deliberately swaps fsuid to
+    // the REAL uid so a setuid-root program can ask "could the user who ran me
+    // read this?". Consulting euid there answered yes for everything, which is
+    // the opposite of what the caller wanted to know and exactly the check
+    // setuid programs use before opening a file on the user's behalf.
+    if (current != NULL && current->fsuid == 0) {
         // Linux's generic_permission(): CAP_DAC_OVERRIDE does not conjure
         // execute permission out of nothing. Root may read or write anything,
         // but X_OK on a regular file still needs at least one execute bit --
@@ -1815,7 +1824,21 @@ static struct fd *open_dir(const char *path) {
     if (!(stat.mode & S_IFDIR))
         return ERR_PTR(_ENOTDIR);
 
-    return generic_open(path, O_RDONLY_, 0);
+    // chdir() and chroot() need SEARCH permission on the directory, not read:
+    // Linux's SYSCALL_DEFINE1(chdir) does path_permission(MAY_EXEC) and
+    // nothing else. Opening it O_RDONLY asked for read as well, so an ordinary
+    // user could not cd into a 0711 directory -- the standard shape for a home
+    // directory or a shared drop-box, where traversal is granted and listing
+    // is not. `cd /some/0711/dir` simply failed with Permission denied.
+    //
+    // Checked here against the stat we already have, so the open below is only
+    // asked for the descriptor. A directory nobody may search still fails: the
+    // check is real, just the right one.
+    err = access_check(&stat, AC_X);
+    if (err < 0)
+        return ERR_PTR(err);
+
+    return generic_open(path, O_RDONLY_ | O_DIRECTORY_ | O_NOACCESS_CHECK_, 0);
 }
 
 void fs_chdir(struct fs_info *fs, struct fd *fd) {
@@ -2132,6 +2155,11 @@ static dword_t sys_utime_common(fd_t at_f, guest_addr_t path_addr, struct timesp
         return _EINVAL;
     bool omit_atime = atime.tv_nsec == UTIME_OMIT_;
     bool omit_mtime = mtime.tv_nsec == UTIME_OMIT_;
+    // Which permission rule applies is decided by the caller's REQUEST, not by
+    // the values, so it has to be recorded before the sentinels are resolved
+    // to a concrete time just below.
+    bool times_are_now = (atime.tv_nsec == UTIME_NOW_ || omit_atime) &&
+                         (mtime.tv_nsec == UTIME_NOW_ || omit_mtime);
     if (atime.tv_nsec == UTIME_NOW_)
         atime = timespec_now(CLOCK_REALTIME);
     if (mtime.tv_nsec == UTIME_NOW_)
@@ -2176,6 +2204,35 @@ static dword_t sys_utime_common(fd_t at_f, guest_addr_t path_addr, struct timesp
             return 0;
     }
 
+    // Timestamps are file metadata and are protected like any other, and
+    // nothing checked them at all -- generic_utime went straight to the
+    // filesystem, unlike generic_setattrat beside it. Any user could restamp
+    // any file on the system, including root-owned ones they could not write,
+    // which is enough on its own to mislead make, rsync, tar and every backup
+    // tool that trusts an mtime.
+    //
+    // Linux (setattr_prepare): setting EXPLICIT times requires ownership or
+    // CAP_FOWNER, and is EPERM otherwise; setting them to "now" requires
+    // ownership OR write permission, and is EACCES otherwise. Both measured.
+    if (!(current != NULL && current->fsuid == 0)) {
+        struct statbuf owner = {};
+        int owner_err;
+        if (path_addr == 0)
+            owner_err = at == AT_PWD ? _EFAULT : generic_fstat(at, &owner);
+        else
+            owner_err = generic_statat(at, path, &owner,
+                    (flags & AT_SYMLINK_NOFOLLOW_) ? AT_SYMLINK_NOFOLLOW_ : 0);
+        if (owner_err < 0)
+            return owner_err;
+        if (current->fsuid != owner.uid) {
+            if (!times_are_now)
+                return _EPERM;
+            int perm_err = access_check(&owner, AC_W);
+            if (perm_err < 0)
+                return perm_err;
+        }
+    }
+
     if (path_addr == 0) {
         // The futimens(fd) form: utimensat(fd, NULL, times, 0). Linux does no
         // path resolution here -- it operates on the open fd itself -- so it
@@ -2202,7 +2259,7 @@ dword_t sys_utimensat64(fd_t at_f, addr_t path_addr, addr_t times_addr, dword_t 
     struct timespec atime;
     struct timespec mtime;
     if (times_addr == 0) {
-        atime = mtime = timespec_now(CLOCK_REALTIME);
+        atime = mtime = (struct timespec) { .tv_nsec = UTIME_NOW_ };
     } else {
         size_t stride = sizeof(struct timespec64_);
         if (read_guest_timespec_abi(GUEST_ABI_AMD64, times_addr, &atime) ||
@@ -2216,7 +2273,7 @@ dword_t sys_utimensat_amd64_guest(fd_t at_f, guest_addr_t path_addr, guest_addr_
     struct timespec atime;
     struct timespec mtime;
     if (times_addr == 0) {
-        atime = mtime = timespec_now(CLOCK_REALTIME);
+        atime = mtime = (struct timespec) { .tv_nsec = UTIME_NOW_ };
     } else {
         size_t stride = guest_timespec_size(GUEST_ABI_AMD64);
         if (read_guest_timespec_abi(GUEST_ABI_AMD64, times_addr, &atime) ||
@@ -2234,7 +2291,7 @@ dword_t sys_utimensat_guest(fd_t at_f, guest_addr_t path_addr, guest_addr_t time
     struct timespec atime;
     struct timespec mtime;
     if (times_addr == 0) {
-        atime = mtime = timespec_now(CLOCK_REALTIME);
+        atime = mtime = (struct timespec) { .tv_nsec = UTIME_NOW_ };
     } else {
         size_t stride = guest_timespec_size(GUEST_ABI_I386);
         if (read_guest_timespec_abi(GUEST_ABI_I386, times_addr, &atime) ||
@@ -2251,7 +2308,7 @@ dword_t sys_utimes_amd64_guest(guest_addr_t path_addr, guest_addr_t times_addr) 
     struct timespec atime;
     struct timespec mtime;
     if (times_addr == 0) {
-        atime = mtime = timespec_now(CLOCK_REALTIME);
+        atime = mtime = (struct timespec) { .tv_nsec = UTIME_NOW_ };
     } else {
         size_t stride = guest_timeval_size(GUEST_ABI_AMD64);
         struct timeval time_a;
@@ -2275,7 +2332,7 @@ dword_t sys_utimes_guest(guest_addr_t path_addr, guest_addr_t times_addr) {
     struct timespec atime;
     struct timespec mtime;
     if (times_addr == 0) {
-        atime = mtime = timespec_now(CLOCK_REALTIME);
+        atime = mtime = (struct timespec) { .tv_nsec = UTIME_NOW_ };
     } else {
         size_t stride = guest_timeval_size(GUEST_ABI_I386);
         struct timeval time_a;
@@ -2298,7 +2355,7 @@ dword_t sys_futimesat_amd64_guest(fd_t at_f, guest_addr_t path_addr, guest_addr_
     struct timespec atime;
     struct timespec mtime;
     if (times_addr == 0) {
-        atime = mtime = timespec_now(CLOCK_REALTIME);
+        atime = mtime = (struct timespec) { .tv_nsec = UTIME_NOW_ };
     } else {
         size_t stride = guest_timeval_size(GUEST_ABI_AMD64);
         struct timeval time_a;
@@ -2322,7 +2379,7 @@ dword_t sys_futimesat_guest(fd_t at_f, guest_addr_t path_addr, guest_addr_t time
     struct timespec atime;
     struct timespec mtime;
     if (times_addr == 0) {
-        atime = mtime = timespec_now(CLOCK_REALTIME);
+        atime = mtime = (struct timespec) { .tv_nsec = UTIME_NOW_ };
     } else {
         size_t stride = guest_timeval_size(GUEST_ABI_I386);
         struct timeval time_a;
@@ -2345,7 +2402,7 @@ dword_t sys_utime_amd64_guest(guest_addr_t path_addr, guest_addr_t times_addr) {
     struct timespec atime;
     struct timespec mtime;
     if (times_addr == 0) {
-        atime = mtime = timespec_now(CLOCK_REALTIME);
+        atime = mtime = (struct timespec) { .tv_nsec = UTIME_NOW_ };
     } else {
         struct amd64_utimbuf_ {
             qword_t actime;
@@ -2369,7 +2426,7 @@ dword_t sys_utime_guest(guest_addr_t path_addr, guest_addr_t times_addr) {
     struct timespec atime;
     struct timespec mtime;
     if (times_addr == 0) {
-        atime = mtime = timespec_now(CLOCK_REALTIME);
+        atime = mtime = (struct timespec) { .tv_nsec = UTIME_NOW_ };
     } else {
         struct utimbuf_ {
             time_t_ actime;

@@ -245,6 +245,10 @@ bool mount_param_flag(const char *info, const char *flag);
 
 // open flags
 #define O_ACCMODE_ 3
+// Internal only, never from the guest: the caller has already made the access
+// decision that applies (see open_dir), so generic_open must not add its own.
+// Chosen above every real O_* bit so it cannot collide with a guest flag word.
+#define O_NOACCESS_CHECK_ (1 << 30)
 #define O_RDONLY_ 0
 #define O_WRONLY_ (1 << 0)
 #define O_RDWR_ (1 << 1)
