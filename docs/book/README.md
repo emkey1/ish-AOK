@@ -21,8 +21,12 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 | 13 | [Memory management from the kernel side](ch13-memory-from-the-kernel.md) | draft |
 | 14 | [Waiting](ch14-waiting.md) | draft |
 | 15 | [Loading a program](ch15-loading-a-program.md) | draft |
+| 16 | [The VFS](ch16-the-vfs.md) | draft |
+| 17 | [fakefs: a filesystem in a database](ch17-fakefs.md) | draft |
+| 18 | [The synthetic filesystems](ch18-synthetic-filesystems.md) | draft |
+| 19 | [Sockets and networking](ch19-sockets.md) | draft |
 
-Chapters 16–42 follow the outline. Parts II (5–9) and III (10–15) are complete. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
+Chapters 20–42 follow the outline. Parts II (5–9) and III (10–15) are complete; Part IV is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
 project and `upstream iSH` for `ish-app/ish`; guest means the emulated Linux
 side, host means iOS/macOS; every chapter ends with an `Anchors:` line, and
 chapters that exist because of a specific failure end with a `Story:` line.
