@@ -29,8 +29,12 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 | 20 | [FUSE](ch20-fuse.md) | draft |
 | 21 | [/AOK: a filesystem compiled into the binary](ch21-the-aok-filesystem.md) | draft |
 | 22 | [A native program is a function call](ch22-a-native-program-is-a-function-call.md) | draft |
+| 23 | [The shim: answering questions about the guest](ch23-the-shim.md) | draft |
+| 24 | [The thing that cannot fork](ch24-the-thing-that-cannot-fork.md) | draft |
+| 25 | [The catalogue](ch25-the-catalogue.md) | draft |
+| 26 | [Licensing, honestly](ch26-licensing-honestly.md) | draft |
 
-Chapters 23–42 follow the outline. Parts II (5–9), III (10–15) and IV (16–21) are complete; Part V is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
+Chapters 27–42 follow the outline. Parts II (5–9), III (10–15) and IV (16–21) are complete; Part V is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
 project and `upstream iSH` for `ish-app/ish`; guest means the emulated Linux
 side, host means iOS/macOS; every chapter ends with an `Anchors:` line, and
 chapters that exist because of a specific failure end with a `Story:` line.
