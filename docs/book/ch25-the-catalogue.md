@@ -181,6 +181,21 @@ state to a copy of itself, it is a privileged process dropping privilege in a
 child while retaining it in the parent. The decision recorded in the tree was to
 choose re-launch over patching privilege separation out, and it remains open.
 
+It is also less costly than it sounds, because the emulated cost is not spread
+evenly. An `ssh` session is **cipher-bound** — measured, when somebody asked
+"would large `scp`s benefit?" — and the cipher is precisely what the crypto
+accelerator of Chapter 33 takes out of the emulator. The guest's OpenSSL routes
+ChaCha20-Poly1305 and AES-GCM through a private syscall to a host-native
+implementation, and OpenSSH's own default cipher was specific enough that the
+accelerator grew a dedicated `EVP_chacha20`-compatible raw stream operation to
+serve it. Measured on an A10X iPad: about 8.8 MB/s to about 19 MB/s, and
+1.15–1.86x on real transfers depending on device and cipher.
+
+So the honest summary is not "sshd is slow because it is not native". It is that
+the part of `sshd` worth accelerating has been accelerated by a different
+mechanism, and what remains emulated is connection setup and protocol
+bookkeeping rather than the bulk work.
+
 ## 25.8 The class of bug this part is about
 
 Read the catalogue back and one pattern accounts for most of it.
