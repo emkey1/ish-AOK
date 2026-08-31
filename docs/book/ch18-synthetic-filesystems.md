@@ -165,7 +165,26 @@ a Docker-exported rootfs cannot ship real device nodes and arrives with a plain
 regular file at `/dev/null` — which then silently accumulates every byte anything
 ever writes to it.
 
-Two of those nodes are worth a note. `/dev/kmsg` is the kernel log, which the
+A second family of nodes exists only in the app, and they are the sharpest
+expression of this chapter's design idea: an iOS capability exposed as a device
+node. `/dev/clipboard` reads and writes the system pasteboard.
+`/dev/location` answers with the device's position. And `/dev/url` opens a
+link — write to it and iOS acts as though the user had tapped one:
+
+```sh
+echo https://example.com > /dev/url
+echo 'shortcuts://run-shortcut?name=Goodnight' > /dev/url
+```
+
+That last line is the point of it. Chapter 32's Shortcuts integration lets a
+shortcut run a guest command; this is the return path, so anything automated on
+the phone is reachable from a shell script. And the commit's own justification
+for the shape is the argument of Section 18.4 restated: a device rather than a
+command, because it "composes with redirection and pipes the way a shell expects,
+and needs no binary in the guest filesystem". The command-line build has no iOS
+to ask, so these three exist only in the app.
+
+Two of the standard nodes are worth a note too. `/dev/kmsg` is the kernel log, which the
 driver had always implemented and no rootfs had ever had a node for, so every
 syslog daemon failed at startup on a file that was simply missing. And it is
 created 0644 rather than 0666, matching Linux's 1:11 node, because an
