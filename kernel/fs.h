@@ -178,6 +178,8 @@ struct mount {
     const char *bind_prefix;
 };
 extern lock_t mounts_lock;
+// mount_id with mounts_lock already held by the caller.
+int mount_id_locked(struct mount *target);
 
 // returns a reference, which must be released
 struct mount *mount_find(char *path);

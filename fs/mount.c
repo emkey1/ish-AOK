@@ -147,19 +147,24 @@ void mount_release(struct mount *mount) {
 // Mount ID as exposed in /proc/self/mountinfo and statx's stx_mnt_id:
 // 1-based position in the mounts list. The two consumers must agree --
 // systemd cross-checks statx STATX_MNT_ID against mountinfo.
-int mount_id(struct mount *target) {
-    lock(&mounts_lock, 0);
+// Caller holds mounts_lock. /proc/self/mountinfo asks for every entry's id
+// from inside its own walk of the list, so it cannot take the lock again.
+int mount_id_locked(struct mount *target) {
     int id = 1;
     struct mount *mount;
     list_for_each_entry(&mounts, mount, mounts) {
-        if (mount == target) {
-            unlock(&mounts_lock);
+        if (mount == target)
             return id;
-        }
         id++;
     }
-    unlock(&mounts_lock);
     return 1;
+}
+
+int mount_id(struct mount *target) {
+    lock(&mounts_lock, 0);
+    int id = mount_id_locked(target);
+    unlock(&mounts_lock);
+    return id;
 }
 
 // The device files on this mount report through stat(2)'s st_dev, which is

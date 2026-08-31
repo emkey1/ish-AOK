@@ -597,6 +597,11 @@ static void proc_print_escaped(struct proc_data *buf, const char *str) {
 
 int proc_show_mounts(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     struct mount *mount;
+    // The mounts list is mutated under mounts_lock (fs/mount.c) and was walked
+    // here without it, so a concurrent mount or umount could free the entry
+    // this loop was standing on -- a use-after-free reachable from an ordinary
+    // `cat /proc/mounts`, and systemd reads mountinfo on every mount change.
+    lock(&mounts_lock, 0);
     list_for_each_entry(&mounts, mount, mounts) {
         // A detached fsmount() has no mountpoint on Linux and appears in no
         // listing until move_mount places it. See struct mount.
@@ -629,13 +634,17 @@ int proc_show_mounts(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
             proc_printf_comma(buf, &at_start, "%s", mount->info);
         proc_printf(buf, " 0 0\n");
     };
+    unlock(&mounts_lock);
     return 0;
 }
 
+// Caller holds mounts_lock, like proc_mountinfo_parent_id below.
 static int proc_mountinfo_id(struct mount *target) {
-    return mount_id(target);
+    return mount_id_locked(target);
 }
 
+// Caller holds mounts_lock: this walks the same list its caller is iterating,
+// so it must not take the lock again.
 static int proc_mountinfo_parent_id(struct mount *target) {
     const char *point = target->point;
     if (point[0] == '\0')
@@ -659,6 +668,9 @@ static int proc_mountinfo_parent_id(struct mount *target) {
 
 int proc_show_mountinfo(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     struct mount *mount;
+    // See proc_show_mounts. Held across proc_mountinfo_parent_id's own walk of
+    // the list, which is why that one must not lock.
+    lock(&mounts_lock, 0);
     list_for_each_entry(&mounts, mount, mounts) {
         // Same as proc_show_mounts: a detached fsmount() is not in any mount
         // listing until move_mount gives it a point.
@@ -692,6 +704,7 @@ int proc_show_mountinfo(struct proc_entry *UNUSED(entry), struct proc_data *buf)
             proc_printf(buf, ",%s", mount->info);
         proc_printf(buf, "\n");
     }
+    unlock(&mounts_lock);
     return 0;
 }
 

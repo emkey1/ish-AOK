@@ -247,12 +247,20 @@ bool contains_mount_point(const char *path) {
     struct mount *mount;
     // Optimization: hoist strlen(path) outside the loop to avoid redundant O(N) recalculations
     int n = strlen(path);
+    // mounts_lock, like every other walk of this list: it is mutated under
+    // that lock, and rmdir/rename ask this question about a path while another
+    // thread may be mounting or unmounting.
+    bool found = false;
+    lock(&mounts_lock, 0);
     list_for_each_entry(&mounts, mount, mounts) {
         if (strncmp(path, mount->point, n) == 0 &&
-                (mount->point[n] == '\0' || mount->point[n] == '/'))
-            return true;
+                (mount->point[n] == '\0' || mount->point[n] == '/')) {
+            found = true;
+            break;
+        }
     }
-    return false;
+    unlock(&mounts_lock);
+    return found;
 }
 
 // fd referring to a symlink itself, from openat(O_PATH|O_NOFOLLOW) on a
