@@ -725,6 +725,30 @@ static size_t tty_canon_size(struct tty *tty) {
     return flag_ptr - tty->buf_flag + 1;
 }
 
+// Bytes FIONREAD reports under ICANON: everything up to and including the
+// LAST line delimiter, minus the EOF delimiters in that span -- Linux's
+// inq_canon. Not the first line: a read returns one line at a time, but the
+// question FIONREAD answers is "how much input is available", and every
+// complete line is. A partial line at the end is not available at all, and a
+// typed EOF is a delimiter that yields no byte, so it is subtracted.
+static size_t tty_canon_inq(struct tty *tty) {
+    size_t last_delim = 0;
+    bool any = false;
+    for (size_t i = 0; i < tty->bufsize; i++) {
+        if (tty->buf_flag[i]) {
+            last_delim = i;
+            any = true;
+        }
+    }
+    if (!any)
+        return 0;
+    size_t count = last_delim + 1;
+    for (size_t i = 0; i <= last_delim; i++)
+        if (tty->buf_flag[i] && tty->buf[i] == '\0')
+            count--;
+    return count;
+}
+
 static bool pty_is_half_closed_master(struct tty *tty) {
     if (tty->driver != &pty_master)
         return false;
@@ -816,6 +840,10 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
     if (err < 0)
         goto error;
 
+    // Whether the line THIS read is taking is terminated by a typed EOF, as
+    // opposed to a newline with an EOF queued behind it. Only in the first
+    // case does the EOF belong to this read; see the cleanup at the end.
+    bool eof_ends_this_line = false;
     int bufsize_extra = 0;
     if (tty->driver == &pty_master && tty->pty.packet_mode) {
         char *cbuf = buf;
@@ -848,8 +876,10 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
                 goto error;
         }
         // null byte means eof was typed
-        if (tty->buf[canon_size-1] == '\0')
+        if (tty->buf[canon_size-1] == '\0') {
             canon_size--;
+            eof_ends_this_line = true;
+        }
 
         if (bufsize > canon_size)
             bufsize = canon_size;
@@ -928,8 +958,18 @@ static ssize_t tty_read(struct fd *fd, void *buf, size_t bufsize) {
     if (bufsize > tty->bufsize)
         bufsize = tty->bufsize;
     tty_read_into_buf(tty, buf, bufsize);
-    if (tty->bufsize > 0 && tty->buf[0] == '\0' && tty->buf_flag[0]) {
-        // remove the eof so the next read can succeed
+    // The EOF that ended THIS line is consumed with it -- typing "abc^D"
+    // delivers "abc" and the ^D is gone, and a bare ^D delivers 0 bytes and
+    // must not deliver 0 forever after.
+    //
+    // But only that one. An EOF sitting behind a COMPLETED line ("hi\n^D") is
+    // the next read's answer, and eating it here is what made that read block
+    // instead of returning 0: the ^D that ends a shell's here-document, or
+    // ends input to any program reading a terminal line at a time, simply
+    // vanished and the program waited forever. poll agrees, because
+    // tty_canon_size still sees the queued delimiter.
+    if (eof_ends_this_line &&
+            tty->bufsize > 0 && tty->buf[0] == '\0' && tty->buf_flag[0]) {
         char dummy;
         tty_read_into_buf(tty, &dummy, 1);
     }
@@ -1563,7 +1603,19 @@ static int tty_ioctl(struct fd *fd, int cmd, void *arg) {
             break;
 
         case FIONREAD_:
-            *(dword_t *) arg = tty->bufsize;
+            // Under ICANON a read cannot return anything until a whole line
+            // is ready, so the count is the first COMPLETE line -- 0 while a
+            // partial line is still being typed. Reporting the raw buffer
+            // told a caller that sizes its read from FIONREAD, or that uses
+            // it to decide whether to read at all, about characters the next
+            // read would have blocked on. Matches Linux's inq_canon, which
+            // also skips the EOF delimiter: the number is exactly what a read
+            // would hand back.
+            if (tty->termios.lflags & ICANON_) {
+                *(dword_t *) arg = (dword_t) tty_canon_inq(tty);
+            } else {
+                *(dword_t *) arg = tty->bufsize;
+            }
             break;
 
         default:
