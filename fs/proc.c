@@ -239,7 +239,14 @@ static ssize_t proc_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t
     if (!fd->proc.entry.meta->update) {
         return _EPERM;
     }
-    
+
+    // A zero-length write is write(2)'s business, not the file's: it writes
+    // nothing and returns 0, and Linux's proc_sys_call_handler short-circuits
+    // before the handler is ever asked. Passing it through made every sysctl
+    // answer EINVAL for `write(fd, buf, 0)`, which is not an error anywhere.
+    if (bufsize == 0)
+        return 0;
+
     struct proc_data data = {(char *)buf, bufsize, bufsize};
     int err = fd->proc.entry.meta->update(&fd->proc.entry, &data);
     if (err < 0)

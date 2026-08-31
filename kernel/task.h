@@ -610,6 +610,11 @@ int get_emulated_per_cpu_usage(struct cpu_usage **cpus_usage);
 
 #define MAX_PID (1 << 15) // oughta be enough
 
+// The wrap point for pid allocation, settable through
+// /proc/sys/kernel/pid_max. Bounded by MAX_PID, which sizes the table.
+dword_t task_pid_max(void);
+int task_set_pid_max(dword_t value);
+
 // Spawn the host thread that runs the task. Returns 0 on success or
 // _EAGAIN if the host cannot create another thread (thread limit/memory);
 // on failure the task has NOT started and the caller must unwind it.

@@ -46,6 +46,26 @@ __thread struct task *current;
 
 static dword_t last_allocated_pid = 0;
 static struct pid pids[MAX_PID + 1] = {};
+
+// The pid the allocator wraps at, which /proc/sys/kernel/pid_max sets. The
+// table is sized at compile time, so this can only ever be lowered from
+// MAX_PID -- but lowering it is what the knob is actually used for (keeping a
+// container's pids in a small range), and a knob that refuses every write while
+// advertising mode 0644 is worse than one with a ceiling.
+static _Atomic dword_t pid_max_value = MAX_PID;
+
+dword_t task_pid_max(void) {
+    return atomic_load_explicit(&pid_max_value, memory_order_relaxed);
+}
+
+int task_set_pid_max(dword_t value) {
+    // Linux's own floor is 301 (PIDS_PER_CPU_MIN); above the table size there
+    // is nothing to hand out, so that is the ceiling.
+    if (value < 301 || value > MAX_PID)
+        return _EINVAL;
+    atomic_store_explicit(&pid_max_value, value, memory_order_relaxed);
+    return 0;
+}
 lock_t pids_lock;
 lock_t block_lock;
 struct list alive_pids_list;
@@ -555,7 +575,7 @@ struct task *task_create_(struct task *parent) {
     complex_lockt(&pids_lock, 0);
     do {
         last_allocated_pid++;
-        if (last_allocated_pid > MAX_PID) last_allocated_pid = 1;
+        if (last_allocated_pid >= task_pid_max()) last_allocated_pid = 1;
         // Reserved for a synthetic kernel thread: handing it to a real task
         // would make two different processes answer to one pid.
     } while (!pid_empty(&pids[last_allocated_pid]) ||

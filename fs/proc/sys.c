@@ -56,14 +56,70 @@ static bool sys_show_user(struct proc_entry *UNUSED(entry), unsigned long *UNUSE
 struct sys_scalar {
     const char *name;
     _Atomic long value;
+    // The range Linux's proc_dointvec_minmax enforces for this knob. A write
+    // outside it is EINVAL and leaves the stored value alone. Left as {0,0}
+    // the knob takes any non-negative integer, which is what most of them do.
+    long min;
+    long max;
 };
 
-static long proc_sys_scalar_parse(struct proc_data *data) {
-    char tmp[32];
+// Parse a sysctl write the way Linux does, into *out. Returns 0, or _EINVAL.
+//
+// There was no validation at all: strtol's return was stored whatever it had
+// parsed, so "notanumber" became 0 and "-5" was kept verbatim -- and the write
+// reported the full byte count either way. A program that sets a knob and
+// reads it back to confirm got confirmation of a value the kernel had invented,
+// which is worse than the write failing.
+//
+// Linux accepts leading whitespace and one optional sign, requires at least one
+// digit, and allows trailing whitespace or a newline and nothing else.
+static int proc_sys_scalar_parse(struct proc_data *data, long min, long max, long *out) {
+    char tmp[64];
     size_t n = data->size < sizeof(tmp) - 1 ? data->size : sizeof(tmp) - 1;
     memcpy(tmp, data->data, n);
     tmp[n] = '\0';
-    return strtol(tmp, NULL, 10);
+
+    const char *p = tmp;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    const char *digits_start = p;
+    if (*p == '-' || *p == '+')
+        p++;
+    if (*p < '0' || *p > '9')
+        return _EINVAL;   // no digits at all: "notanumber", "", "-"
+
+    errno = 0;
+    char *end = NULL;
+    long value = strtol(digits_start, &end, 10);
+    if (errno == ERANGE)
+        return _EINVAL;
+    // Anything after the number that is not whitespace makes the whole write
+    // invalid -- "12abc" is not 12.
+    while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r')
+        end++;
+    if (*end != '\0')
+        return _EINVAL;
+
+    if (max == 0 && min == 0) {
+        // The default: non-negative. Every knob in these tables is a count, a
+        // size or a boolean, and none of them is meaningful below zero.
+        if (value < 0)
+            return _EINVAL;
+    } else if (value < min || value > max) {
+        return _EINVAL;
+    }
+    *out = value;
+    return 0;
+}
+
+// Shared body for the scalar tables below: validate, and only then store.
+static int proc_sys_scalar_update(struct sys_scalar *scalar, struct proc_data *data) {
+    long value;
+    int err = proc_sys_scalar_parse(data, scalar->min, scalar->max, &value);
+    if (err < 0)
+        return err;
+    atomic_store_explicit(&scalar->value, value, memory_order_relaxed);
+    return 0;
 }
 
 static struct sys_scalar proc_sys_vm_scalars[] = {
@@ -86,8 +142,7 @@ static int proc_sys_vm_show(struct proc_entry *entry, struct proc_data *buf) {
     return 0;
 }
 static int proc_sys_vm_update(struct proc_entry *entry, struct proc_data *data) {
-    atomic_store_explicit(&proc_sys_vm_scalars[entry->fd].value, proc_sys_scalar_parse(data), memory_order_relaxed);
-    return 0;
+    return proc_sys_scalar_update(&proc_sys_vm_scalars[entry->fd], data);
 }
 static bool sys_show_vm(struct proc_entry *UNUSED(entry), unsigned long *index, struct proc_entry *next_entry) {
     if (*index >= PROC_SYS_VM_SCALARS_LEN)
@@ -99,36 +154,48 @@ static bool sys_show_vm(struct proc_entry *UNUSED(entry), unsigned long *index, 
 static struct proc_dir_entry proc_sys_vm_entry = {NULL, S_IFREG | 0644,
     .getname = proc_sys_vm_getname, .show = proc_sys_vm_show, .update = proc_sys_vm_update};
 
-static int proc_binfmt_misc_status_show(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
-    proc_printf(buf, "enabled\n");
-    return 0;
-}
-
-static int proc_binfmt_misc_empty_show(struct proc_entry *UNUSED(entry), struct proc_data *UNUSED(buf)) {
-    return 0;
-}
-
-static int proc_binfmt_misc_noop_update(struct proc_entry *UNUSED(entry), struct proc_data *UNUSED(data)) {
-    return 0;
-}
-
-static struct proc_dir_entry proc_binfmt_misc_entries[] = {
-    {"register", S_IFREG | 0200, .show = proc_binfmt_misc_empty_show, .update = proc_binfmt_misc_noop_update},
-    {"status", S_IFREG | 0644, .show = proc_binfmt_misc_status_show, .update = proc_binfmt_misc_noop_update},
-};
-
-#define PROC_BINFMT_MISC_LEN sizeof(proc_binfmt_misc_entries) / sizeof(proc_binfmt_misc_entries[0])
-
-static bool proc_binfmt_misc_readdir(struct proc_entry *UNUSED(entry), unsigned long *index, struct proc_entry *next_entry) {
-    if (*index < PROC_BINFMT_MISC_LEN) {
-        *next_entry = (struct proc_entry) {&proc_binfmt_misc_entries[*index], *index, NULL, NULL, 0, 0, NULL};
-        (*index)++;
-        return true;
-    }
+// /proc/sys/fs/binfmt_misc: an EMPTY directory, which is exactly what Linux
+// shows until the binfmt_misc filesystem is mounted on it.
+//
+// It used to present `register` and `status` unconditionally, with nothing
+// behind them. `status` read "enabled" always; a `register` write returned the
+// full byte count and was discarded, so no file for the format appeared and
+// execve never consulted it; and writing 0 to `status` reported success and
+// left it reading "enabled".
+//
+// That is the worst of the three possible answers. update-binfmts and
+// systemd-binfmt both check `status`, register their formats, and believe the
+// success they are handed -- so a guest configured to run, say, foreign
+// binaries through an interpreter looked configured and then silently ran
+// nothing. An empty directory is the truthful state and one those tools
+// already handle: it is what every kernel without CONFIG_BINFMT_MISC, and
+// every system that has not mounted it yet, looks like.
+static bool proc_binfmt_misc_readdir(struct proc_entry *UNUSED(entry), unsigned long *UNUSED(index),
+        struct proc_entry *UNUSED(next_entry)) {
     return false;
 }
 
+// Set once written, computed from memory otherwise: a value nothing enforces,
+// but one `sysctl -p` can set without aborting the rest of the file.
+static _Atomic long fs_file_max_override = 0;
+
+static int sys_update_fs_file_max(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    if (!superuser())
+        return _EPERM;
+    long value;
+    int err = proc_sys_scalar_parse(data, 1, INT64_MAX, &value);
+    if (err < 0)
+        return err;
+    atomic_store_explicit(&fs_file_max_override, value, memory_order_relaxed);
+    return 0;
+}
+
 static int sys_show_fs_file_max(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    long override = atomic_load_explicit(&fs_file_max_override, memory_order_relaxed);
+    if (override != 0) {
+        proc_printf(buf, "%ld\n", override);
+        return 0;
+    }
     // Real kernels size this roughly proportional to installed memory; iSH
     // enforces no such ceiling, so this is a plausible value for software
     // that only inspects it rather than one derived from a real limit.
@@ -140,15 +207,35 @@ static int sys_show_fs_file_max(struct proc_entry *UNUSED(entry), struct proc_da
     return 0;
 }
 
+// The ceiling RLIMIT_NOFILE may be raised to. Stored and reported; the fd table
+// grows on demand rather than being preallocated, so there is no separate
+// structure to resize when it changes.
+static _Atomic long fs_nr_open = 1048576;
+
+long fs_nr_open_value(void) {
+    return atomic_load_explicit(&fs_nr_open, memory_order_relaxed);
+}
+
 static int sys_show_fs_nr_open(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
-    proc_printf(buf, "1048576\n");
+    proc_printf(buf, "%ld\n", fs_nr_open_value());
+    return 0;
+}
+
+static int sys_update_fs_nr_open(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    if (!superuser())
+        return _EPERM;
+    long value;
+    int err = proc_sys_scalar_parse(data, 1, INT32_MAX, &value);
+    if (err < 0)
+        return err;
+    atomic_store_explicit(&fs_nr_open, value, memory_order_relaxed);
     return 0;
 }
 
 static struct proc_dir_entry proc_sys_fs_entries[] = {
     {"binfmt_misc", S_IFDIR, .readdir = proc_binfmt_misc_readdir},
-    {"file-max", S_IFREG | 0644, .show = sys_show_fs_file_max},
-    {"nr_open", S_IFREG | 0644, .show = sys_show_fs_nr_open},
+    {"file-max", S_IFREG | 0644, .show = sys_show_fs_file_max, .update = sys_update_fs_file_max},
+    {"nr_open", S_IFREG | 0644, .show = sys_show_fs_nr_open, .update = sys_update_fs_nr_open},
 };
 
 #define PROC_SYS_FS_LEN sizeof(proc_sys_fs_entries) / sizeof(proc_sys_fs_entries[0])
@@ -179,8 +266,7 @@ static int proc_sys_net_core_show(struct proc_entry *entry, struct proc_data *bu
     return 0;
 }
 static int proc_sys_net_core_update(struct proc_entry *entry, struct proc_data *data) {
-    atomic_store_explicit(&proc_sys_net_core_scalars[entry->fd].value, proc_sys_scalar_parse(data), memory_order_relaxed);
-    return 0;
+    return proc_sys_scalar_update(&proc_sys_net_core_scalars[entry->fd], data);
 }
 static bool sys_show_net_core(struct proc_entry *UNUSED(entry), unsigned long *index, struct proc_entry *next_entry) {
     if (*index >= PROC_SYS_NET_CORE_SCALARS_LEN)
@@ -209,8 +295,7 @@ static int proc_sys_net_ipv4_show(struct proc_entry *entry, struct proc_data *bu
     return 0;
 }
 static int proc_sys_net_ipv4_update(struct proc_entry *entry, struct proc_data *data) {
-    atomic_store_explicit(&proc_sys_net_ipv4_scalars[entry->fd].value, proc_sys_scalar_parse(data), memory_order_relaxed);
-    return 0;
+    return proc_sys_scalar_update(&proc_sys_net_ipv4_scalars[entry->fd], data);
 }
 static bool sys_show_net_ipv4(struct proc_entry *UNUSED(entry), unsigned long *index, struct proc_entry *next_entry) {
     if (*index >= PROC_SYS_NET_IPV4_SCALARS_LEN)
@@ -376,14 +461,50 @@ static bool proc_sys_kernel_random_readdir(struct proc_entry *UNUSED(entry), uns
     return false;
 }
 
+// These four advertised mode 0644 and then refused every write with EPERM,
+// even for root, because they had no .update at all. `sysctl -w
+// kernel.pid_max=...` failed, and worse, `sysctl -p` aborts at the first
+// failing key -- so one unwritable knob in /etc/sysctl.conf silently dropped
+// every setting after it. A file that says it is writable has to either take
+// the write or say why.
 static int sys_show_kernel_pid_max(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
-    proc_printf(buf, "%d\n", MAX_PID);
+    proc_printf(buf, "%u\n", task_pid_max());
     return 0;
 }
 
+static int sys_update_kernel_pid_max(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    if (!superuser())
+        return _EPERM;
+    long value;
+    // The table is sized at compile time, so MAX_PID is a hard ceiling; Linux's
+    // own floor is 301. Out of range is EINVAL, which is what Linux answers too
+    // -- it is not silently clamped.
+    int err = proc_sys_scalar_parse(data, 301, MAX_PID, &value);
+    if (err < 0)
+        return err;
+    return task_set_pid_max((dword_t) value);
+}
+
+// AOK has no thread-count cap distinct from the pid space, so this reports and
+// accepts a value without a separate limit behind it. Accepting the write is
+// still the right answer: the alternative is failing `sysctl -p` over a knob
+// whose only common use is being raised, and a raised ceiling AOK does not
+// enforce refuses nothing that would otherwise have worked.
+static _Atomic long kernel_threads_max = MAX_PID;
+
 static int sys_show_kernel_threads_max(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
-    // iSH has no separate thread-count cap distinct from the pid space.
-    proc_printf(buf, "%d\n", MAX_PID);
+    proc_printf(buf, "%ld\n", atomic_load_explicit(&kernel_threads_max, memory_order_relaxed));
+    return 0;
+}
+
+static int sys_update_kernel_threads_max(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    if (!superuser())
+        return _EPERM;
+    long value;
+    int err = proc_sys_scalar_parse(data, 1, INT32_MAX, &value);
+    if (err < 0)
+        return err;
+    atomic_store_explicit(&kernel_threads_max, value, memory_order_relaxed);
     return 0;
 }
 
@@ -401,9 +522,9 @@ struct proc_dir_entry proc_sys_kernel[] = {
     {"hostname", S_IFREG | 0644, .show = sys_show_net_unix_hostname, .update = sys_update_kernel_hostname},
     {"ngroups_max", .show = sys_show_kernel_ngroups_max},
     {"osrelease", .show = sys_show_kernel_osrelease},
-    {"pid_max", S_IFREG | 0644, .show = sys_show_kernel_pid_max},
+    {"pid_max", S_IFREG | 0644, .show = sys_show_kernel_pid_max, .update = sys_update_kernel_pid_max},
     {"random", S_IFDIR, .readdir = proc_sys_kernel_random_readdir},
-    {"threads-max", S_IFREG | 0644, .show = sys_show_kernel_threads_max},
+    {"threads-max", S_IFREG | 0644, .show = sys_show_kernel_threads_max, .update = sys_update_kernel_threads_max},
     {"version", .show = sys_show_net_version},
 };
 
@@ -472,11 +593,8 @@ void proc_sys_init(struct proc_dir_entry *root_entry) {
         proc_set_entries_parent(proc_sys_debug, PROC_SYS_DEBUG_LEN, debug_dir);
 
     fs_dir = proc_children_find(&proc_sys_children, "fs");
-    if (fs_dir != NULL) {
+    if (fs_dir != NULL)
         proc_set_entries_parent(proc_sys_fs_entries, PROC_SYS_FS_LEN, fs_dir);
-        proc_set_entries_parent(proc_binfmt_misc_entries, PROC_BINFMT_MISC_LEN,
-                proc_find_entry(proc_sys_fs_entries, PROC_SYS_FS_LEN, "binfmt_misc"));
-    }
 
     kernel_dir = proc_children_find(&proc_sys_children, "kernel");
     if (kernel_dir != NULL) {
