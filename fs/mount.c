@@ -211,9 +211,18 @@ dev_t_ mount_dev(struct mount *mount) {
 }
 
 int do_mount(const struct fs_ops *fs, const char *source, const char *point, const char *info, int flags) {
-    struct mount *new_mount = malloc(sizeof(struct mount));
+    // calloc, not malloc: every field below is assigned by hand, and a field
+    // added to struct mount later that nobody remembers to add HERE is
+    // whatever the allocator left behind. That is not hypothetical -- adding
+    // `lazy_umount` did exactly this, and under MALLOC_PERTURB_ (which meson
+    // sets for the e2e suite) it read back as true on a brand-new mount, so
+    // the first mount_release tore down a mount that was still in use. Zero
+    // is the right default for every field here, so start from it.
+    struct mount *new_mount = calloc(1, sizeof(struct mount));
     if (new_mount == NULL)
         return _ENOMEM;
+    // Not a valid descriptor until the filesystem's own mount() opens one.
+    new_mount->root_fd = -1;
     new_mount->point = strdup(point);
     new_mount->point_len = strlen(point);
     new_mount->source = strdup(source);
@@ -544,7 +553,8 @@ static int do_bind_mount(const char *norm_source, const char *point, const char 
     if (origin == NULL)
         return _EINVAL;
 
-    struct mount *bind = malloc(sizeof(struct mount));
+    // calloc for the same reason as do_mount above.
+    struct mount *bind = calloc(1, sizeof(struct mount));
     if (bind == NULL) {
         mount_release(origin);
         return _ENOMEM;

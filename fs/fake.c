@@ -237,7 +237,11 @@ static int fakefs_getpath(struct fd *fd, char *buf) {
                 FAKEFS_UNLOCK_READ(fs);
                 return _ENAMETOOLONG;
             }
-            memcpy(buf, path_blob, (size_t) path_len);
+            // sqlite3_column_blob returns NULL for a zero-length blob, and
+            // memcpy from NULL is undefined even for zero bytes (UBSan flags
+            // it: "null pointer passed as argument 2").
+            if (path_len > 0)
+                memcpy(buf, path_blob, (size_t) path_len);
             buf[path_len] = '\0';
             db_reset(fs, stmt);
             FAKEFS_UNLOCK_READ(fs);
