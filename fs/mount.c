@@ -138,9 +138,16 @@ void mount_retain(struct mount *mount) {
     unlock(&mounts_lock);
 }
 
+static void mount_destroy(struct mount *mount);
+
 void mount_release(struct mount *mount) {
     lock(&mounts_lock, 0);
     mount->refcount--;
+    // The last user of a lazily-unmounted mount finishes the unmount. Nothing
+    // else can be about to take a reference: it has not been reachable through
+    // the mount table since the umount2 call.
+    if (mount->lazy_umount && mount->refcount == 0)
+        mount_destroy(mount);
     unlock(&mounts_lock);
 }
 
@@ -336,10 +343,10 @@ int mount_set_display_source(const char *point, const char *display_source) {
     return _ENOENT;
 }
 
-int mount_remove(struct mount *mount) {
-    if (mount->refcount != 0)
-        return _EBUSY;
-
+// The teardown half of mount_remove, once nothing is using the mount. Caller
+// holds mounts_lock; list_remove on an already-removed, re-initialised node is
+// a no-op, so this is safe for both entry points below.
+static void mount_destroy(struct mount *mount) {
     if (mount->bind_origin != NULL) {
         // A bind owns one reference on its origin. We hold mounts_lock here
         // (do_umount / exit unmount), so drop it directly rather than via
@@ -355,10 +362,35 @@ int mount_remove(struct mount *mount) {
     free((void *) mount->display_source);
     free((void *) mount->point);
     free(mount);
+}
+
+int mount_remove(struct mount *mount) {
+    if (mount->refcount != 0)
+        return _EBUSY;
+    mount_destroy(mount);
     return 0;
 }
 
-int do_umount(const char *point) {
+// umount2(MNT_DETACH) -- `umount -l`. The point of a lazy unmount is that it
+// works on a BUSY mount: it comes out of the tree at once so nothing new can
+// reach it, and the filesystem is released when whoever is still holding it
+// lets go. Without it a busy mount can only be unmounted by finding and
+// stopping every user, which is exactly the situation `umount -l` exists for
+// -- and the flag was ignored, so it answered EBUSY like a plain umount.
+int mount_remove_lazy(struct mount *mount) {
+    if (mount->refcount == 0) {
+        mount_destroy(mount);
+        return 0;
+    }
+    // Out of the namespace now; re-initialising the node keeps the later
+    // list_remove in mount_destroy harmless.
+    list_remove(&mount->mounts);
+    list_init(&mount->mounts);
+    mount->lazy_umount = true;
+    return 0;
+}
+
+static int do_umount_flags(const char *point, bool lazy) {
     struct mount *mount;
     bool found = false;
     list_for_each_entry(&mounts, mount, mounts) {
@@ -369,8 +401,16 @@ int do_umount(const char *point) {
     }
     if (!found)
         return _EINVAL;
-    return mount_remove(mount);
+    return lazy ? mount_remove_lazy(mount) : mount_remove(mount);
 }
+
+#define MNT_DETACH_ 2
+
+int do_umount(const char *point) {
+    return do_umount_flags(point, false);
+}
+
+
 
 // Mount and unmount for callers outside fs/, where do_mount/do_umount's
 // "caller holds mounts_lock" contract is easy to miss. The app is exactly such
@@ -658,7 +698,11 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
     // before taking mounts_lock (path_normalize / find_mount_and_trim_path
     // re-enter mount_find, which takes the lock).
     char op_source[MAX_PATH];
-    if (flags & (MS_MOVE_ | MS_BIND_)) {
+    // MS_REMOUNT names an existing mount by its POINT and ignores the source
+    // -- callers pass NULL for it -- so resolving one would be resolving
+    // nothing. MS_REMOUNT|MS_BIND is the common shape here: it means "change
+    // the flags on the bind mounted at this point", not "make a bind".
+    if ((flags & (MS_MOVE_ | MS_BIND_)) && !(flags & MS_REMOUNT_)) {
         err = path_normalize(AT_PWD, source, op_source, N_SYMLINK_FOLLOW);
         if (err < 0)
             return err;
@@ -666,7 +710,15 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
 
     // A bind shares the source mount's backing; do_bind_mount resolves the source
     // and takes mounts_lock itself, so dispatch it before we lock here.
-    if (flags & MS_BIND_) {
+    //
+    // Not when MS_REMOUNT is also set. `mount -o remount,bind,ro <point>` --
+    // how every caller makes an existing bind read-only, and what a container
+    // runtime does for each of its read-only bind mounts -- took this branch
+    // and tried to CREATE a bind from a source that was never given, so it
+    // failed and the mount stayed writable. It belongs to the MS_REMOUNT
+    // handling below, which changes the flags on the mount already at that
+    // point.
+    if ((flags & MS_BIND_) && !(flags & MS_REMOUNT_)) {
         struct statbuf source_stat;
         err = generic_statat(AT_PWD, source, &source_stat, 0);
         if (err < 0)
@@ -799,7 +851,7 @@ dword_t sys_umount2_guest(guest_addr_t target_addr, dword_t flags) {
         return err;
 
     lock(&mounts_lock, 0);
-    err = do_umount(target);
+    err = do_umount_flags(target, (flags & MNT_DETACH_) != 0);
     unlock(&mounts_lock);
     if (err >= 0)
         proc_mountinfo_notify_changed();

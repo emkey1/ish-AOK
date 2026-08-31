@@ -22,6 +22,7 @@ struct fd *fd_create(const struct fd_ops *ops) {
     fd->refcount = 1;
     fd->flags = 0;
     fd->mount = NULL;
+    fd->mount_flags = 0;
     fd->offset = 0;
     fd->stat.ctime = (dword_t)time(NULL);
     list_init(&fd->poll_fds);

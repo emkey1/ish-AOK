@@ -201,10 +201,32 @@ bool procfd_statat(struct fd *at, const char *path_raw, struct statbuf *stat, in
     return true;
 }
 
+// The mount flags in force for `path`, which are NOT always the returned
+// mount's own: see find_mount_and_trim_path_flags.
 struct mount *find_mount_and_trim_path(char *path) {
+    return find_mount_and_trim_path_flags(path, NULL);
+}
+
+// `mount_flags`, when non-NULL, receives the flags governing this path.
+//
+// ro/nosuid/nodev/noexec are per-MOUNT in Linux, not per-superblock: two binds
+// of the same directory can differ, which is the entire point of
+// `mount -o remount,bind,ro`. A bind here resolves to its origin for storage,
+// and the origin's flags are not the bind's -- reading them off the returned
+// mount answered every permission question about the ORIGIN. A read-only bind
+// was therefore writable, and a nosuid or nodev one was neither.
+//
+// The bind's restrictions are added to the origin's rather than replacing
+// them: a bind can be more restrictive than what it aliases, never less. A
+// bind of a read-only filesystem stays read-only.
+struct mount *find_mount_and_trim_path_flags(char *path, int *mount_flags) {
+    if (mount_flags != NULL)
+        *mount_flags = 0;
     struct mount *mount = mount_find(path);
     if (mount == NULL)
         return NULL;
+    if (mount_flags != NULL)
+        *mount_flags = mount->flags;
     char *dst = path;
     const char *src = path + mount->point_len;
     while (*src != '\0')
@@ -229,6 +251,8 @@ struct mount *find_mount_and_trim_path(char *path) {
         strcpy(path, redirected);
         mount_retain(origin);
         mount_release(mount);
+        if (mount_flags != NULL)
+            *mount_flags |= origin->flags;
         return origin;
     }
     return mount;
@@ -238,8 +262,11 @@ struct mount *find_mount_and_trim_path(char *path) {
 // flag was recorded at mount time and never consulted anywhere, so read-only
 // was purely cosmetic: only /proc/mounts said "ro" while creates, writes,
 // unlinks and renames all went through.
-static bool mount_is_readonly(struct mount *mount) {
-    return mount != NULL && (mount->flags & MS_READONLY_) != 0;
+//
+// Takes the flags rather than the mount because for a bind they differ; see
+// find_mount_and_trim_path_flags.
+static bool mount_flags_readonly(int mount_flags) {
+    return (mount_flags & MS_READONLY_) != 0;
 }
 
 
@@ -470,14 +497,15 @@ struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, i
     // A trailing slash demands a directory; open() must not create through it.
     size_t raw_len = strlen(path_raw);
     bool trailing_slash = raw_len > 0 && path_raw[raw_len - 1] == '/';
-    struct mount *mount = find_mount_and_trim_path(path);
+    int mflags;
+    struct mount *mount = find_mount_and_trim_path_flags(path, &mflags);
     if (mount == NULL)
         return ERR_PTR(_ENOENT);
     // Refusing the write-mode open is what Linux does for a read-only mount,
     // and it is sufficient: an fd that cannot be opened for writing cannot be
     // written through. O_TRUNC counts as a modification even with O_RDONLY,
     // for the same reason it needs write permission.
-    if (mount_is_readonly(mount) &&
+    if (mount_flags_readonly(mflags) &&
             ((flags & (O_WRONLY_ | O_RDWR_ | O_CREAT_ | O_TRUNC_)) != 0)) {
         mount_release(mount);
         return ERR_PTR(_EROFS);
@@ -646,6 +674,22 @@ struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, i
             pfd->flags = flags;
             return pfd;
         }
+
+        // MS_NODEV: on such a mount a device node is not a device, and Linux
+        // refuses to open it at all (may_open_dev -> EACCES). AOK recorded the
+        // flag and printed it in /proc/mounts but never consulted it, so
+        // `mount -o nodev` on untrusted media -- and every container runtime
+        // that relies on it -- got a mount that opened character and block
+        // devices exactly as if the flag had never been passed. O_PATH is
+        // exempt because it opens no device: it makes a path handle, and
+        // Linux skips may_open for it entirely.
+        if ((mflags & MS_NODEV_) && !(flags & O_PATH_) &&
+                (S_ISCHR(stat.mode) || S_ISBLK(stat.mode))) {
+            if (!fs_blocks)
+                unlock(&inodes_lock);
+            mount_release(mount);
+            return ERR_PTR(_EACCES);
+        }
     }
 
     // mount->fs->open can issue a host open() that blocks indefinitely -- most
@@ -675,6 +719,7 @@ struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, i
         return fd;
     }
     fd->mount = mount;
+    fd->mount_flags = mflags;
 
     err = fd->mount->fs->fstat(fd, &stat);
     if (err < 0) {
@@ -824,8 +869,10 @@ int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, co
     char guest_src[MAX_PATH], guest_dst[MAX_PATH];
     strcpy(guest_src, src);
     strcpy(guest_dst, dst);
-    struct mount *mount = find_mount_and_trim_path(src);
-    struct mount *dst_mount = find_mount_and_trim_path(dst);
+    int mflags;
+    struct mount *mount = find_mount_and_trim_path_flags(src, &mflags);
+    int dst_mflags;
+    struct mount *dst_mount = find_mount_and_trim_path_flags(dst, &dst_mflags);
     if (mount == NULL || dst_mount == NULL) {
         if (mount != NULL)
             mount_release(mount);
@@ -833,7 +880,7 @@ int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, co
             mount_release(dst_mount);
         return _ENOENT;
     }
-    if (mount_is_readonly(mount) || mount_is_readonly(dst_mount)) {
+    if (mount_flags_readonly(mflags) || mount_flags_readonly(dst_mflags)) {
         mount_release(mount);
         mount_release(dst_mount);
         return _EROFS;
@@ -912,10 +959,11 @@ int generic_unlinkat(struct fd *at, const char *path_raw) {
         return err;
     char guest_path[MAX_PATH]; // pre-trim path for inotify; see generic_openat
     strcpy(guest_path, path);
-    struct mount *mount = find_mount_and_trim_path(path);
+    int mflags;
+    struct mount *mount = find_mount_and_trim_path_flags(path, &mflags);
     if (mount == NULL)
         return _ENOENT;
-    if (mount_is_readonly(mount)) {
+    if (mount_flags_readonly(mflags)) {
         mount_release(mount);
         return _EROFS;
     }
@@ -982,8 +1030,10 @@ int generic_renameat(struct fd *src_at, const char *src_raw, struct fd *dst_at, 
     char guest_src[MAX_PATH], guest_dst[MAX_PATH]; // pre-trim paths for inotify
     strcpy(guest_src, src);
     strcpy(guest_dst, dst);
-    struct mount *mount = find_mount_and_trim_path(src);
-    struct mount *dst_mount = find_mount_and_trim_path(dst);
+    int mflags;
+    struct mount *mount = find_mount_and_trim_path_flags(src, &mflags);
+    int dst_mflags;
+    struct mount *dst_mount = find_mount_and_trim_path_flags(dst, &dst_mflags);
     if (mount == NULL || dst_mount == NULL) {
         if (mount != NULL)
             mount_release(mount);
@@ -991,7 +1041,7 @@ int generic_renameat(struct fd *src_at, const char *src_raw, struct fd *dst_at, 
             mount_release(dst_mount);
         return _ENOENT;
     }
-    if (mount_is_readonly(mount) || mount_is_readonly(dst_mount)) {
+    if (mount_flags_readonly(mflags) || mount_flags_readonly(dst_mflags)) {
         mount_release(mount);
         mount_release(dst_mount);
         return _EROFS;
@@ -1048,10 +1098,11 @@ int generic_symlinkat(const char *target, struct fd *at, const char *link_raw) {
         return err;
     char guest_path[MAX_PATH]; // pre-trim path for inotify; see generic_openat
     strcpy(guest_path, link);
-    struct mount *mount = find_mount_and_trim_path(link);
+    int mflags;
+    struct mount *mount = find_mount_and_trim_path_flags(link, &mflags);
     if (mount == NULL)
         return _ENOENT;
-    if (mount_is_readonly(mount)) {
+    if (mount_flags_readonly(mflags)) {
         mount_release(mount);
         return _EROFS;
     }
@@ -1086,10 +1137,11 @@ int generic_mknodat(struct fd *at, const char *path_raw, mode_t_ mode, dev_t_ de
         return err;
     char guest_path[MAX_PATH]; // pre-trim path for inotify; see generic_openat
     strcpy(guest_path, path);
-    struct mount *mount = find_mount_and_trim_path(path);
+    int mflags;
+    struct mount *mount = find_mount_and_trim_path_flags(path, &mflags);
     if (mount == NULL)
         return _ENOENT;
-    if (mount_is_readonly(mount)) {
+    if (mount_flags_readonly(mflags)) {
         mount_release(mount);
         return _EROFS;
     }
@@ -1117,10 +1169,11 @@ int generic_setattrat(struct fd *at, const char *path_raw, struct attr attr, boo
         return err;
     char guest_path[MAX_PATH]; // pre-trim path for inotify; see generic_openat
     strcpy(guest_path, path);
-    struct mount *mount = find_mount_and_trim_path(path);
+    int mflags;
+    struct mount *mount = find_mount_and_trim_path_flags(path, &mflags);
     if (mount == NULL)
         return _ENOENT;
-    if (mount_is_readonly(mount)) {
+    if (mount_flags_readonly(mflags)) {
         mount_release(mount);
         return _EROFS;
     }
@@ -1150,10 +1203,11 @@ int generic_utime(struct fd *at, const char *path_raw, struct timespec atime, st
     int err = path_normalize(at, path_raw, path, follow_links ? N_SYMLINK_FOLLOW : N_SYMLINK_NOFOLLOW);
     if (err < 0)
         return err;
-    struct mount *mount = find_mount_and_trim_path(path);
+    int mflags;
+    struct mount *mount = find_mount_and_trim_path_flags(path, &mflags);
     if (mount == NULL)
         return _ENOENT;
-    if (mount_is_readonly(mount)) {
+    if (mount_flags_readonly(mflags)) {
         mount_release(mount);
         return _EROFS;
     }
@@ -1169,7 +1223,8 @@ ssize_t generic_readlinkat(struct fd *at, const char *path_raw, char *buf, size_
     int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW);
     if (err < 0)
         return err;
-    struct mount *mount = find_mount_and_trim_path(path);
+    int mflags;
+    struct mount *mount = find_mount_and_trim_path_flags(path, &mflags);
     if (mount == NULL)
         return _ENOENT;
     err = _EINVAL;
@@ -1190,10 +1245,11 @@ int generic_mkdirat(struct fd *at, const char *path_raw, mode_t_ mode) {
         return err;
     char guest_path[MAX_PATH]; // pre-trim path for inotify; see generic_openat
     strcpy(guest_path, path);
-    struct mount *mount = find_mount_and_trim_path(path);
+    int mflags;
+    struct mount *mount = find_mount_and_trim_path_flags(path, &mflags);
     if (mount == NULL)
         return _ENOENT;
-    if (mount_is_readonly(mount)) {
+    if (mount_flags_readonly(mflags)) {
         mount_release(mount);
         return _EROFS;
     }
@@ -1245,10 +1301,11 @@ int generic_rmdirat(struct fd *at, const char *path_raw) {
         return _EBUSY;
     char guest_path[MAX_PATH]; // pre-trim path for inotify; see generic_openat
     strcpy(guest_path, path);
-    struct mount *mount = find_mount_and_trim_path(path);
+    int mflags;
+    struct mount *mount = find_mount_and_trim_path_flags(path, &mflags);
     if (mount == NULL)
         return _ENOENT;
-    if (mount_is_readonly(mount)) {
+    if (mount_flags_readonly(mflags)) {
         mount_release(mount);
         return _EROFS;
     }

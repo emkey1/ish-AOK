@@ -161,6 +161,8 @@ splice_vmsplice.c
 privs_syscall_misc.c
 timeout_and_cpu_timer.c
 open_tmpfile.c
+mount_flag_perms.c
+sgid_inherit.c
 exec_perm_rules.c
 sock_bind_refuse.c
 time_clocks_ticks.c

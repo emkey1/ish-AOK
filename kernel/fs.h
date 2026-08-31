@@ -152,6 +152,10 @@ struct mount {
     // not enter and printed "Permission denied" for a mount Linux never would
     // have shown. Listed again the moment move_mount gives it a real point.
     bool detached;
+    // umount2(MNT_DETACH): taken out of the mount table immediately so no new
+    // lookup can reach it, but not torn down until the last reference on it
+    // goes. See mount_remove_lazy in fs/mount.c.
+    bool lazy_umount;
     int flags;
     const struct fs_ops *fs;
     unsigned refcount;
@@ -346,6 +350,9 @@ struct fs_ops {
 };
 
 struct mount *find_mount_and_trim_path(char *path);
+// Same, but also reports the mount flags governing the path. For a bind these
+// are NOT the returned mount's own -- see fs/generic.c. Pass NULL to ignore.
+struct mount *find_mount_and_trim_path_flags(char *path, int *mount_flags);
 
 // adhoc fs
 struct fd *adhoc_fd_create(const struct fd_ops *ops);

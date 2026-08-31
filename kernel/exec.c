@@ -1325,10 +1325,26 @@ static struct fd *open_exec(const char *file, struct statbuf *stat) {
     if (IS_ERR(fd))
         return fd;
 
-    if (fd->mount != NULL && (fd->mount->flags & MS_NOEXEC_)) {
+    // fd->mount_flags, not fd->mount->flags: for a bind, fd->mount is the
+    // origin the bind aliases, and noexec on the bind is not noexec on the
+    // origin -- reading it off the mount asked about the wrong one, so
+    // `mount -o remount,bind,noexec` executed anyway.
+    if (fd->mount_flags & MS_NOEXEC_) {
         fd_close(fd);
         return ERR_PTR(_EACCES);
     }
+
+    // MS_NOSUID: the set-id bits on a file here do not apply. Linux drops them
+    // in bprm_fill_uid before anything reads them, so the binary still runs --
+    // just without the privilege. Stripping them from the stat we return does
+    // the same, because every decision downstream (the credential change, and
+    // the AT_SECURE/AT_EUID aux vector) is made from these bits and nothing
+    // else. Nosuid was recorded and printed and never enforced, which is worse
+    // than not supporting it: a caller that mounts untrusted media nosuid,
+    // reads /proc/mounts, and sees "nosuid" has been told a thing that is not
+    // true about a decision it cannot re-check.
+    if (fd->mount_flags & MS_NOSUID_)
+        stat->mode &= ~(mode_t_) (S_ISUID | S_ISGID);
     return fd;
 }
 

@@ -290,6 +290,47 @@ static struct fd *fakefs_open_initctl(const char *path, int flags) {
     return fd;
 }
 
+// Linux's inode_init_owner: a newly created object takes the creating
+// process's group -- UNLESS the directory it is created in is setgid, in which
+// case it takes the DIRECTORY's group, and a new subdirectory inherits the
+// setgid bit as well.
+//
+// That rule is the whole mechanism behind a shared group directory: everything
+// created inside it belongs to the group whoever made it, so the next person
+// can read and write it. AOK stamped the creator's own egid on every new
+// object and never copied the bit down, so a shared directory stopped being
+// shared the moment anybody with a different primary group created something
+// in it -- and the subdirectory they made was not shared either, so the damage
+// spread downwards.
+//
+// `path` is the mount-relative path of the object about to be created; the
+// parent is everything before its last slash. Caller is inside the same db
+// transaction, so this is a read against uncommitted-but-consistent state.
+static void fakefs_inherit_group(struct fakefs_db *fs, const char *path,
+                                 uint32_t *mode, uint32_t *gid) {
+    const char *slash = strrchr(path, '/');
+    if (slash == NULL)
+        return;
+    char parent[MAX_PATH];
+    size_t len = (size_t) (slash - path);
+    // A child of the mount root: the parent path is "", which is how this
+    // filesystem spells its own root.
+    if (len >= sizeof(parent))
+        return;
+    memcpy(parent, path, len);
+    parent[len] = '\0';
+
+    struct ish_stat parent_stat;
+    if (!path_read_stat(fs, parent, &parent_stat, NULL))
+        return;
+    if (!S_ISDIR(parent_stat.mode) || !(parent_stat.mode & S_ISGID))
+        return;
+
+    *gid = parent_stat.gid;
+    if (S_ISDIR(*mode))
+        *mode |= S_ISGID;
+}
+
 static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, int mode) {
     if (fakefs_initctl_info(path, NULL, NULL))
         return fakefs_open_initctl(path, flags);
@@ -354,6 +395,7 @@ retry:
         ishstat.mode = mode | S_IFREG;
         ishstat.uid = current->euid;
         ishstat.gid = current->egid;
+        fakefs_inherit_group(fs, path, &ishstat.mode, &ishstat.gid);
         ishstat.rdev = 0;
         if (fd->fake_inode == 0)
             fd->fake_inode = path_create(fs, path, &ishstat);
@@ -551,6 +593,7 @@ static int fakefs_symlink(struct mount *mount, const char *target, const char *l
     ishstat.mode = S_IFLNK | 0777; // symlinks always have full permissions
     ishstat.uid = current->euid;
     ishstat.gid = current->egid;
+    fakefs_inherit_group(fs, link, &ishstat.mode, &ishstat.gid);
     ishstat.rdev = 0;
     if (path_create(fs, link, &ishstat) == 0) {
         // Without its metadata row the host file is not a symlink at all, just
@@ -585,6 +628,7 @@ static int fakefs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev
     stat.mode = mode;
     stat.uid = current->euid;
     stat.gid = current->egid;
+    fakefs_inherit_group(fs, path, &stat.mode, &stat.gid);
     stat.rdev = 0;
     if (S_ISBLK(mode) || S_ISCHR(mode))
         stat.rdev = dev;
@@ -732,6 +776,7 @@ static int fakefs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
     ishstat.mode = mode | S_IFDIR;
     ishstat.uid = current->euid;
     ishstat.gid = current->egid;
+    fakefs_inherit_group(fs, path, &ishstat.mode, &ishstat.gid);
     ishstat.rdev = 0;
     if (path_create(fs, path, &ishstat) == 0) {
         // See fakefs_mknod: a host entry with no metadata row behind it is

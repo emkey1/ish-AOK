@@ -272,6 +272,11 @@ struct fd {
 
     // fs/inode data
     struct mount *mount;
+    // The mount flags in force when this fd was opened. Not mount->flags: for
+    // a bind, `mount` is the ORIGIN it aliases and carries the origin's flags,
+    // while ro/nosuid/nodev/noexec belong to the bind. See
+    // find_mount_and_trim_path_flags.
+    int mount_flags;
     int real_fd; // seeks on this fd require the lock TODO think about making a special lock just for that
     bool realfs_fifo_had_data;
     // Whether the setuid/setgid strip on first write has already been done for
