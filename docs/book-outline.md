@@ -4,6 +4,21 @@
 **Subtitle:** How a Linux userland runs on an iPhone, from one interpreted x86
 instruction in 2017 to four JIT'd guest architectures and native host programs in 2026.
 
+## Foreword: on standing somewhere
+
+Written before Chapter 1 and addressed to the same reader. iSH-AOK is a fork of
+upstream iSH, and nearly every mechanism this book describes as "how AOK works"
+was created by Theodore Dubois (`tbodt`) and the upstream contributors between
+2017 and 2023 — the emulated CPU, ptraceomatic, fakefs, the task model, the
+gadget JIT, the terminal, sockrestart. `gen()`, the twelve lines Chapter 6 calls
+the entire code generator, dates from May 2018 and has not needed to change.
+
+The foreword names the contributions individually, with handles and dates
+checkable from the tree, and covers the two licence documents that make a
+derived app possible at all: the GPLv2 relicensing roll of twenty-five
+signatories, and LICENSE.IOS's explicit commitment not to enforce the App Store
+conflict against *derived* apps.
+
 ## Premise
 
 iSH-AOK is a Linux kernel reimplemented as an ordinary iOS application. There is
