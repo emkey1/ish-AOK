@@ -6,7 +6,7 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 
 | ch | title | status |
 |---|---|---|
-| — | [Foreword: on standing somewhere](foreword.md) | draft |
+| 0 | [Foreword: on standing somewhere](ch00-foreword.md) | draft |
 | 1 | [The impossible app](ch01-the-impossible-app.md) | draft |
 | 2 | Upstream iSH, 2017–2023 | — |
 | 3 | The fork | — |
