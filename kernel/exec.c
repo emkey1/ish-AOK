@@ -1281,6 +1281,57 @@ static int format_exec(struct fd *fd, const char *file, struct exec_args argv, s
     return _ENOEXEC;
 }
 
+// Open a file for execution, the way Linux's open_exec does: resolve the
+// caller's execute permission BEFORE opening, and refuse anything that is not
+// an ordinary file on a mount that allows execution. Fills *stat with the file
+// it decided on, because the caller needs the set-id bits from the same stat
+// the decision was made on. Returns an ERR_PTR on refusal.
+//
+// It used to be an ordinary O_RDONLY open with no permission question asked at
+// all, which got three separate things wrong. The read check is a different
+// question from the execute check, so a 0644 file the caller could read was
+// executed and a 0711 file -- executable but not readable -- was refused. The
+// type was never checked, so a directory reached the ELF loader and came back
+// EIO while a FIFO reached open(2) and BLOCKED, hanging the task forever with
+// no way to tell it from a slow program. And MS_NOEXEC was recorded on the
+// mount, reported in /proc/mounts, and then never consulted, so `mount -o
+// noexec` was purely decorative -- worse than not supporting it, because the
+// whole point is that somebody is relying on it to hold.
+//
+// The extra stat costs one path resolution per exec. That is the honest price
+// of asking the questions in the right order; exec is not a hot path next to
+// open and stat.
+static struct fd *open_exec(const char *file, struct statbuf *stat) {
+    int err = generic_statat(AT_PWD, file, stat, 0);
+    if (err < 0)
+        return ERR_PTR(err);
+
+    // Only a regular file is ever executable. Linux reports EACCES for a
+    // directory, a fifo or a device alike.
+    if (!S_ISREG(stat->mode))
+        return ERR_PTR(_EACCES);
+
+    // The CALLER's execute permission, not anybody's. access_check keeps
+    // Linux's rule that even root needs at least one execute bit on a
+    // non-directory, which is what the old test got right by accident.
+    err = access_check(stat, AC_X);
+    if (err < 0)
+        return ERR_PTR(err);
+
+    // O_NOACCESS_CHECK_ because the execute check above is the one that
+    // governs: an execute-only file has to load despite being unreadable,
+    // which is why Linux opens it with FMODE_EXEC rather than for reading.
+    struct fd *fd = generic_open(file, O_RDONLY | O_NOACCESS_CHECK_, 0);
+    if (IS_ERR(fd))
+        return fd;
+
+    if (fd->mount != NULL && (fd->mount->flags & MS_NOEXEC_)) {
+        fd_close(fd);
+        return ERR_PTR(_EACCES);
+    }
+    return fd;
+}
+
 static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
     // read the first 128 bytes to get the shebang line out of
     if (fd->ops->lseek(fd, 0, SEEK_SET))
@@ -1362,7 +1413,13 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     memcpy(new_argv_buf + n, argv_rest.args, args_rest_size);
     new_argv.count += argv_rest.count;
 
-    struct fd *interpreter_fd = generic_open(interpreter, O_RDONLY_, 0);
+    // The interpreter is executed, so it faces the same rules as any other
+    // program: the caller must have execute permission on it, it must be an
+    // ordinary file, and its mount must allow execution. This was a plain
+    // O_RDONLY open, so a script could run an interpreter the caller was not
+    // allowed to execute -- Linux answers EACCES.
+    struct statbuf interpreter_stat;
+    struct fd *interpreter_fd = open_exec(interpreter, &interpreter_stat);
     if (IS_ERR(interpreter_fd)) {
         free(new_argv_buf);
         return (int)PTR_ERR(interpreter_fd);
@@ -1454,22 +1511,15 @@ static void exec_apply_native_process_state(void) {
 }
 
 int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) {
-    struct fd *fd = generic_open(file, O_RDONLY, 0);
+    // open_exec decides what the file IS and whether this caller may execute
+    // it before opening it, which is Linux's do_open_execat order. This used
+    // to open first and then ask only whether ANY execute bit was set, so a
+    // root-owned 0744 binary was executable by every user on the system.
+    struct statbuf stat;
+    struct fd *fd = open_exec(file, &stat);
     if (IS_ERR(fd))
         return (int) PTR_ERR(fd);
-
-    struct statbuf stat;
-    int err = fd->mount->fs->fstat(fd, &stat);
-    if (err < 0) {
-        fd_close(fd);
-        return err;
-    }
-
-    // if nobody has permission to execute, it should be safe to not execute
-    if (!(stat.mode & 0111)) {
-        fd_close(fd);
-        return _EACCES;
-    }
+    int err;
 
     // Natively-implemented programs (/AOK/native/*, kernel/native.h) are
     // dispatched here: after the existence and permission checks above, so
@@ -1564,6 +1614,27 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
         current->egid = stat.gid;
         current->sgid = stat.gid;  // saved-set-gid = new egid, not old
         current->fsgid = current->egid;
+    }
+
+    // Capabilities do not survive an ordinary exec. Linux recomputes them from
+    // the file's own capabilities and the ambient set; with no file
+    // capabilities and a caller that is not root, permitted and effective
+    // collapse to the ambient set, which is normally empty.
+    //
+    // Nothing dropped them here, so a process that had lowered its uid while
+    // holding capabilities -- exactly what prctl(PR_SET_KEEPCAPS) plus
+    // setresuid is for -- handed the full set to whatever it exec'd next. That
+    // is the escalation the recomputation exists to prevent.
+    //
+    // The AMBIENT set is preserved, which is the supported way to carry a
+    // capability across an exec deliberately, and the root path is left
+    // exactly as it was: Linux re-grants there too (handle_privileged_root),
+    // and the setuid-root branch above depends on it.
+    if (current->euid != 0 && current->uid != 0) {
+        current->cap_permitted[0] = current->cap_ambient[0];
+        current->cap_permitted[1] = current->cap_ambient[1];
+        current->cap_effective[0] = current->cap_ambient[0];
+        current->cap_effective[1] = current->cap_ambient[1];
     }
 
     // save current->comm
