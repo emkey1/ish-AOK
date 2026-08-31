@@ -13,11 +13,6 @@
 #include "fs/devices.h"
 #include "fs/tty.h"
 
-extern bool doEnableExtraLocking;
-extern pthread_mutex_t extra_lock;
-extern dword_t extra_lock_pid;
-extern const char extra_lock_comm;
-
 static void halt_system_locked(void);
 
 static bool trace_session_exit_task(struct task *UNUSED(task)) {

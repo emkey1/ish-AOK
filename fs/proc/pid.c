@@ -16,11 +16,6 @@
 #include "platform/platform.h"
 #include "util/sync.h"
 
-extern pthread_mutex_t extra_lock;
-extern bool doEnableExtraLocking;
-extern dword_t extra_lock_pid;
-extern const char extra_lock_comm;
-
 static void proc_pid_getname(struct proc_entry *entry, char *buf) {
     snprintf(buf, 256, "%d", entry->pid);
 }

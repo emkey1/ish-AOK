@@ -55,8 +55,6 @@
                      FUTEX_PRIVATE_FLAG_)
 //#define FUTEX_CMD_MASK_ ~(FUTEX_PRIVATE_FLAG_)
 
-extern bool doEnableMulticore;
-
 struct futex {
     atomic_uint refcount;
     struct mem *mem;

@@ -3463,8 +3463,6 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
     extern void uts_set_boot_hostname(const char *hostname);
     extern bool doEnableMulticore;
     extern bool doEnableExtraLocking;
-    extern pthread_mutex_t multicore_lock;
-    extern pthread_mutex_t extra_lock;
     NSString *hostnameOverride = [NSUserDefaults.standardUserDefaults stringForKey:@"hostnameOverride"];
     if (hostnameOverride) {
         uts_set_boot_hostname(hostnameOverride.UTF8String);

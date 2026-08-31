@@ -23,8 +23,6 @@ extern void modify_locks_held_count(struct task *task, int value);
 // The following is in task.c
 extern struct pid *pid_get(dword_t id);
 
-extern bool doEnableExtraLocking;
-
 extern struct timespec lock_pause;
 
 extern lock_t atomic_l_lock; // Used to make lock state transitions atomic.

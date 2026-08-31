@@ -10,11 +10,6 @@
 #include "jit/jit.h"
 #include "task.h"
 
-// Helpers for cleanup when extra locking is disabled.
-extern bool doEnableExtraLocking;
-extern lock_t pids_lock;
-extern struct list alive_pids_list;
-
 // IMPORTANT: If you add a constant here and expose it via UserPreferences,
 // consider if it also needs to be exposed as a friendly preference and included
 // in the KVO list below. (In most circumstances, the answer is "yes".)
@@ -73,7 +68,6 @@ NSDictionary<NSString *, NSString *> *friendlyPreferenceMapping;
 NSDictionary<NSString *, NSString *> *friendlyPreferenceReverseMapping;
 NSDictionary<NSString *, NSString *> *kvoProperties;
 
-extern bool doEnableMulticore;
 static NSString *const kSystemMonospacedFontName = @"ui-monospace";
 
 @interface UserPreferences ()
@@ -847,12 +841,10 @@ void amd64_jit_preference_set(bool enabled) {
 }
 
 - (BOOL)validateShouldEnableExtraLocking:(id *)value error:(NSError **)error {
-    // Toggling this at runtime still needs coordinated cleanup of active tasks.
-    if(doEnableExtraLocking == true) {
-//        complex_lockt(&pids_lock, 0, __FILE__, __LINE__);
- //       zero_critical_regions_count();
-  //      unlock(&pids_lock);
-    }
+    // Note: doEnableExtraLocking no longer gates anything in the kernel -- the
+    // reference counts it used to switch off are maintained unconditionally
+    // (see task_ref_cnt_mod). Flipping it at runtime is a no-op; any future
+    // use would need coordinated cleanup of active tasks.
     return [*value isKindOfClass:NSNumber.class];
 }
 

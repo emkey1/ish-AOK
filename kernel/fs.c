@@ -85,8 +85,6 @@ static void io_account_write(struct fd *fd, ssize_t res) {
     }
 }
 
-extern bool doEnableExtraLocking;
-extern pthread_mutex_t extra_lock;
 extern bool isGlibC;
 
 static struct fd *at_fd(fd_t f) {

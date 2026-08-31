@@ -26,11 +26,7 @@
 
 #define GRACE_PERIOD 2 // How long we want to deallocate tasks that have exited
 
-pthread_mutex_t multicore_lock = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t extra_lock = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t delay_lock = PTHREAD_MUTEX_INITIALIZER;
 extern lock_t atomic_l_lock;
-pthread_mutex_t wait_for_lock = PTHREAD_MUTEX_INITIALIZER;
 time_t boot_time;  // Store the boot time.
 
 struct list tasks_pending_deletion_queue;
@@ -40,7 +36,11 @@ int iOSMajorRelease;
 
 bool doEnableMulticore; // Enable multicore if toggled, should default to false
 bool isGlibC = false; // Try to guess if we're running a non-musl distro.
-bool doEnableExtraLocking; // Enable extra locking if toggled, should default to true
+// Set from the "Enable Additional Locking" preference, but nothing in the
+// kernel reads it any more: the reference counts it used to switch off are
+// maintained unconditionally (see task_ref_cnt_mod and mem_ref_cnt_mod).
+// Kept so the preference still round-trips; retire the setting to drop it.
+bool doEnableExtraLocking;
 
 __thread struct task *current;
 
@@ -67,7 +67,6 @@ int task_set_pid_max(dword_t value) {
     return 0;
 }
 lock_t pids_lock;
-lock_t block_lock;
 struct list alive_pids_list;
 
 void init_pending_queues(void) {
@@ -695,7 +694,6 @@ void run_at_boot(void) {  // Stuff we run only once, at boot time.
     do_uname(&uts);
     unsigned short ncpu = get_cpu_count();
     lock_init(&pids_lock, "pids");
-    lock_init(&block_lock, "block");
     lock_init(&atomic_l_lock, "run_at_boot");
     // No guest arch named here: this runs once at boot, and one session
     // can run i386, x86_64, and arm64 guests (per-task ABI).

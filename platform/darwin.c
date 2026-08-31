@@ -11,8 +11,6 @@
 
 typedef double CFTimeInterval;
 
-extern bool doEnableMulticore;
-
 struct cpu_usage get_total_cpu_usage(void) {
     // HOST_CPU_LOAD_INFO reports the ENTIRE PHYSICAL DEVICE's system-wide CPU
     // load (every app on the device, not just us) -- guest tools reading

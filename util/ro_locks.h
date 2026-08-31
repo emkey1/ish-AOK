@@ -47,7 +47,6 @@ typedef struct {
 } lock_t;
 
 extern lock_t atomic_l_lock; // Used to make lock state transitions atomic.
-extern bool doEnableExtraLocking;
 
 void lock_init(lock_t *lock, char lname[16]);
 
@@ -111,32 +110,6 @@ static inline void mylock(lock_t *lock, int log_lock) {
     mylock_at(lock, log_lock, NULL);
 }
 
-#define LOCK_TIMEOUT_SECONDS 5
-
-static inline int mylock_with_timeout(lock_t *lock, int UNUSED(log_lock)) {
-    struct timespec timeout;
-    clock_gettime(CLOCK_REALTIME, &timeout);
-    timeout.tv_sec += LOCK_TIMEOUT_SECONDS;
-
-    pthread_mutex_lock(&lock->m);
-    while (lock->wait4) {
-        int res = pthread_cond_timedwait(&lock->cond, &lock->m, &timeout);
-        if (res == ETIMEDOUT) {
-            // Handle timeout: unlock mutex and return error code
-            pthread_mutex_unlock(&lock->m);
-            printk("ERROR: lock(%d) timeout\n", lock);
-            return ETIMEDOUT;
-        }
-    }
-    lock->wait4 = true;
-    pthread_mutex_unlock(&lock->m);
-
-    // Rest of the locking logic
-    lock->owner = pthread_self();
-
-    return 0; // Success
-}
-
 // Not a macro, so this one is attributed to itself rather than to its caller.
 // It still has to push a frame: unlock() is instrumented and would otherwise
 // count every release from here as unmatched.
@@ -189,39 +162,11 @@ static inline int trylock(lock_t *lock) {
     return status;
 }
 
-static inline int trylocknl(lock_t *lock, char *comm, int pid) {
-    //Don't log, avoid recursion
-    int status = pthread_mutex_trylock(&lock->m);
-#if LOCK_DEBUG
-    if (!status) {
-        lock->debug.file = file;
-        lock->debug.line = line;
-        extern int current_pid(current);
-        lock->debug.pid = current_pid(current);
-    }
-#endif
-    if(!status) {
-        modify_locks_held_count(current, 1);
-        lock->owner = pthread_self();
-        //STRACE("trylock(%x, %s(%d), %s, %d\n", lock, lock->comm, lock->pid, file, line);
-        lock->pid = pid;
-        strncpy(lock->comm, comm, 16);
-        lock->comm[sizeof(lock->comm) - 1] = '\0';
-    }
-    return status;
-}
-
-//#define complex_lockt(lock, log_lock) mylock_with_timeout(lock, log_lock)  // Lets try simplifying locking for now
-//#define complex_lockt(lock, log_lock) mylock(lock, log_lock)  // Lets try simplifying locking for now
-
 #define lock(l, log_lock) do {                                               \
     static struct lock_site *_ls_site;                                        \
     if (lockstats_on && _ls_site == NULL)                                     \
         _ls_site = lockstats_site(lock_group_name(l), __func__);              \
     mylock_at((l), (log_lock), lockstats_on ? _ls_site : NULL);               \
 } while (0)
-//#define lock(lock, log_lock) mylock_with_timeout(lock, log_lock)
-//#define trylock(lock) trylock(lock, __FILE__, __LINE__)
-//#define trylocknl(lock, comm, pid) trylocknl(lock, comm, pid, __FILE__, __LINE__)
 
 #endif

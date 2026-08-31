@@ -11,7 +11,6 @@
 #include "kernel/mm.h"
 #include "util/sync.h"
 
-extern bool doEnableExtraLocking;
 extern struct timespec lock_pause;
 
 extern _Atomic long quiesce_barriers;

@@ -22,8 +22,6 @@
 #include "util/sync.h"
 #include <dlfcn.h>
 
-// The Evil global lock.  Use sparingly or not at all
-extern pthread_mutex_t multicore_lock;
 // Time to wait between non blocking lock attempts
 struct timespec lock_pause = {0 /*secs*/, WAIT_SLEEP /*nanosecs*/};
 
@@ -74,11 +72,6 @@ void mem_quiesce_wake_parked(struct mem *mem) {
     pthread_cond_broadcast(&mem->quiesce_park_cond);
     pthread_mutex_unlock(&mem->quiesce_park_lock);
 }
-
-extern bool doEnableExtraLocking;
-extern pthread_mutex_t extra_lock;
-extern dword_t extra_lock_pid;
-extern const char extra_lock_comm;
 
 static bool amd64_jit_debug_enabled(void) {
     static int enabled = -1;

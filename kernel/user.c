@@ -8,9 +8,6 @@
 #define IOV_MAX 1024 // glibc only exposes IOV_MAX under _XOPEN_SOURCE
 #endif
 
-extern bool doEnableExtraLocking;
-extern pthread_mutex_t extra_lock;
-
 #define HTOP_RBX_FIELD_ABS_ADDR ((guest_addr_t) 0xf7f019e0u)
 #define HTOP_RBX_FIELD_SIZE 8
 
