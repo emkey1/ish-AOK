@@ -2718,7 +2718,7 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 107: result = (dword_t) sys_timer_create_amd64_guest( (dword_t) raw_args[0], raw_args[1], raw_args[2]); break; // timer_create
     case 108: result = (dword_t) sys_timer_gettime64_guest( (dword_t) raw_args[0], raw_args[1]); break; // timer_gettime
     case 110: result = (dword_t) sys_timer_settime64_guest( (dword_t) raw_args[0], (int_t) raw_args[1], raw_args[2], raw_args[3]); break; // timer_settime
-    case 112: result = (dword_t) sys_clock_settime( (dword_t) raw_args[0], 0); break; // clock_settime
+    case 112: result = (dword_t) sys_clock_settime( (dword_t) raw_args[0], raw_args[1]); break; // clock_settime
     case 114: result = (dword_t) sys_clock_getres_amd64_guest( (dword_t) raw_args[0], raw_args[1]); break; // clock_getres
     case 115: result = (dword_t) sys_clock_nanosleep_amd64_guest( (dword_t) raw_args[0], (int_t) raw_args[1], raw_args[2], raw_args[3]); break; // clock_nanosleep
     case 117: result = (dword_t) sys_ptrace_guest( (dword_t) raw_args[0], (dword_t) raw_args[1], raw_args[2], raw_args[3]); break; // ptrace
@@ -3306,15 +3306,19 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
                 (dword_t) raw_args[0], raw_args[1]));
         return true;
     case 227:
-        // clock_settime: iSH cannot set host clocks, so sys_clock_settime
-        // validates only the clock id and ignores the timespec. Handle it
-        // natively like clock_gettime(228) so the legacy 32-bit arg marshaller
-        // does not reject the 64-bit guest timespec pointer with "needs
-        // full-width args" and raise SIGSYS (observed: a process that calls
-        // clock_settime dies with "Bad system call" instead of returning the
-        // EINVAL/EPERM the clock id warrants).
+        // clock_settime: handled natively like clock_gettime(228) so the
+        // legacy 32-bit arg marshaller does not reject the 64-bit guest
+        // timespec pointer with "needs full-width args" and raise SIGSYS
+        // (observed: a process that calls clock_settime dies with "Bad system
+        // call" instead of returning the EINVAL/EPERM the clock id warrants).
+        //
+        // The pointer is passed through. It used to be hardcoded 0 here,
+        // because iSH cannot set a host clock and the implementation ignored
+        // the timespec entirely -- but it now reads and range-checks it before
+        // refusing, the way Linux orders EFAULT, EINVAL and EPERM, and a
+        // hardcoded 0 made every well-formed call report EFAULT.
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_clock_settime(
-                (dword_t) raw_args[0], 0));
+                (dword_t) raw_args[0], raw_args[1]));
         return true;
     case 228:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_clock_gettime_amd64_guest(

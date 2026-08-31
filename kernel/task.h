@@ -447,6 +447,13 @@ struct posix_timer {
     pid_t_ thread_pid;
     int_t signal;
     union sigval_ sig_value;
+    // Overruns counted onto the signal currently queued for this timer, which
+    // is what timer_getoverrun reports. Reset when a fresh signal is queued,
+    // so a handler that reads it sees the count for the expiration it was
+    // just woken for -- the call's only real use. (Linux latches the value at
+    // delivery rather than at queueing, so the two differ only for a caller
+    // that asks while its own timer signal is still blocked and pending.)
+    int_t last_overrun;
 };
 
 // struct thread_group is way too long to type comfortably
@@ -494,7 +501,14 @@ struct tgroup {
         struct timespec deadline; // accumulated CPU time (rusage_get_group) at which to next fire
         struct timespec interval; // rearm interval in CPU-time units; zero = one-shot
     } itimer_virtual, itimer_prof;
-#define TIMERS_MAX 16
+// POSIX timers per process. Linux has no small fixed cap -- the bound is
+// RLIMIT_SIGPENDING, tens of thousands -- and 16 was low enough that an event
+// framework holding one timer per source ran out. This is still a fixed array
+// (its entries are handed to the timer thread as callback pointers, so it
+// cannot be reallocated) but at a size no real program reaches; exhaustion
+// reports EAGAIN, which is what Linux gives when it hits its own limit and
+// what callers check for.
+#define TIMERS_MAX 128
     struct posix_timer posix_timers[TIMERS_MAX];
 
     struct rlimit_ limits[RLIMIT_NLIMITS_];

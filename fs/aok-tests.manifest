@@ -165,6 +165,7 @@ mount_flag_perms.c
 sgid_inherit.c
 sockopt_conventions.c
 tty_canon_queue.c
+timer_conventions.c
 exec_perm_rules.c
 sock_bind_refuse.c
 time_clocks_ticks.c

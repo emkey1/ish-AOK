@@ -1331,6 +1331,48 @@ int_t sys_signalfd_guest(int_t fd, guest_addr_t mask_addr, dword_t sigsetsize) {
     return sys_signalfd4_guest(fd, mask_addr, sigsetsize, 0);
 }
 
+// A POSIX timer never has more than one signal outstanding. When it expires
+// again while its last signal is still queued, Linux does not queue a second
+// one -- it counts the missed expiration on the queued siginfo's si_overrun,
+// which is the whole reason that field exists: a periodic timer whose signal
+// is blocked, or whose handler is slow, tells the program how many periods it
+// missed rather than burying it in a signal storm.
+//
+// AOK queued one signal per expiration. A 5ms timer left blocked for a second
+// queued two hundred, and si_overrun was hardcoded 0, so a program could
+// neither find out how far behind it was nor survive catching up.
+//
+// Returns the new overrun count if an entry for this timer was found and
+// counted, or -1 if there was none and the caller should queue a signal.
+int signal_timer_count_overrun(struct task *task, int sig, int timer_id) {
+    struct sighand *sighand = task->sighand;
+    if (sighand == NULL)
+        return -1;
+    int overrun = -1;
+    lock(&sighand->lock, 0);
+    struct sigqueue *sigqueue;
+    // Thread-directed (send_signal) first, then the shared process queue:
+    // a timer's signal goes to one or the other depending on how it was set
+    // up, and either way there is at most one.
+    list_for_each_entry(&task->queue, sigqueue, queue) {
+        if (sigqueue->info.sig == sig && sigqueue->info.code == SI_TIMER_ &&
+                sigqueue->info.timer.timer == timer_id) {
+            overrun = ++sigqueue->info.timer.overrun;
+            goto out;
+        }
+    }
+    list_for_each_entry(&sighand->queue, sigqueue, queue) {
+        if (sigqueue->info.sig == sig && sigqueue->info.code == SI_TIMER_ &&
+                sigqueue->info.timer.timer == timer_id) {
+            overrun = ++sigqueue->info.timer.overrun;
+            goto out;
+        }
+    }
+out:
+    unlock(&sighand->lock);
+    return overrun;
+}
+
 void send_signal(struct task *task, int sig, struct siginfo_ info) {
     struct sighand *sighand = task->sighand;
     if (sighand == NULL)
