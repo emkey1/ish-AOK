@@ -49,7 +49,12 @@ Per `struct sighand`, shared across the group: the `action` table — 64
 > object the sender happened to address.
 
 That distinction is the whole of "a signal sent to a process is delivered to
-some thread of that process". `kill(pid, SIGTERM)` does not target a thread; it
+some thread of that process", and getting it wrong is not academic: `sigqueue`
+was once delivered thread-directed, straight into the resolved task's private
+queue. Linux routes it through the process, so any thread that can take the
+signal is a legitimate destination — and a sibling parked in `sigwait` is the
+entire reason a program uses `sigqueue`. That thread sat out its full timeout
+while the signal waited, undeliverable, beside it. `kill(pid, SIGTERM)` does not target a thread; it
 targets the group, and whichever thread has `SIGTERM` unblocked and gets there
 first handles it. Modelling that as "deliver to the leader" works until the
 leader has the signal blocked, at which point a program that carefully dedicates
@@ -215,6 +220,21 @@ The write side has a second asymmetry, and a bug behind it:
 > `SIGTTOU`, but only when the terminal asks for it with `TOSTOP` — unlike the
 > read side, where `SIGTTIN` is unconditional. There was no check here at all,
 > so a background job scribbled over the foreground one's screen.
+
+> **The bug that taught us this**
+>
+> Job control has a permission exception, and AOK had the rule without it.
+>
+> Linux's `check_kill_permission` normally requires matching credentials, but
+> lets `SIGCONT` reach any process in the same **session** whatever its
+> credentials — and job control is built on that exception. A shell that starts
+> a privileged job keeps the stopped process in its session but not under its
+> uid, so without the exception `fg` could not resume anything that had gone
+> through `sudo`, and `kill_group` inherited the same refusal for the whole
+> group.
+>
+> The check existed in two copies, which is Chapter 11's rule arriving again;
+> they are one function now.
 
 Input drives the rest: `^C` sends `SIGINT` to the foreground group, `^Z` sends
 `SIGTSTP`, `^\` sends `SIGQUIT`, and the group's `stopped` flag — the
