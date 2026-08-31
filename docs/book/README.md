@@ -35,8 +35,10 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 | 26 | [Licensing, honestly](ch26-licensing-honestly.md) | draft |
 | 27 | [What native programs cost](ch27-what-native-programs-cost.md) | draft |
 | 28 | [The iOS app around the kernel](ch28-the-app-around-the-kernel.md) | draft |
+| 29 | [The terminal](ch29-the-terminal.md) | draft |
+| 30 | [Roots](ch30-roots.md) | draft |
 
-Chapters 29–42 follow the outline. Parts II (5–9), III (10–15), IV (16–21) and V (22–27) are complete; Part VI is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
+Chapters 31–42 follow the outline. Parts II (5–9), III (10–15), IV (16–21) and V (22–27) are complete; Part VI is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
 project and `upstream iSH` for `ish-app/ish`; guest means the emulated Linux
 side, host means iOS/macOS; every chapter ends with an `Anchors:` line, and
 chapters that exist because of a specific failure end with a `Story:` line.
