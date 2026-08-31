@@ -275,6 +275,11 @@ bool mount_param_flag(const char *info, const char *flag);
 // links" for /etc/os-release and, fatally, the /etc/localtime timezone
 // watch during Arch aarch64 boot).
 #define O_PATH_ (1 << 21)
+// O_TMPFILE is this bit PLUS O_DIRECTORY, on every ABI: the directory bit is
+// what makes an old kernel reject it rather than create a file called
+// whatever the path said. The arm64 translation relocates O_DIRECTORY and
+// leaves this one alone, so the internal value is the same for both guests.
+#define O_TMPFILE_ (1 << 22)
 
 // generic ioctls
 // On sockets 0x5411 is SIOCOUTQ (bytes queued in the send buffer); it shares

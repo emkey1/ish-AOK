@@ -387,9 +387,50 @@ bool procns_statat(struct fd *at, const char *path_raw, struct statbuf *stat, in
     return true;
 }
 
+// O_TMPFILE: create an unnamed file on the filesystem holding the named
+// directory. AOK cannot do this, and says so.
+//
+// It used to arrive as O_DIRECTORY plus an unrecognised bit, so the directory
+// was opened and the write mode then failed it with EISDIR -- an errno that
+// tells the caller it passed a directory, which is exactly what it meant to
+// do, and gives it nothing to act on.
+//
+// EOPNOTSUPP is the answer Linux gives when the filesystem has no ->tmpfile,
+// and it is the state AOK is actually in. It matters that this is a REFUSAL
+// rather than a partial implementation: the anonymous file itself would be
+// easy (create a hidden name, open it, unlink it), but a tmpfile opened
+// without O_EXCL can be given a name afterwards with
+// linkat("/proc/self/fd/N", ..., AT_SYMLINK_FOLLOW), and that needs linking an
+// inode that has none -- machinery AOK does not have. Callers commit to the
+// whole contract the moment open succeeds: systemd's open_tmpfile_linkable()
+// falls back to a named temporary file if the open fails, and calls
+// link_tmpfile() if it does not. Succeeding at open and failing at linkat
+// would break exactly the callers that handle the refusal correctly today.
+static struct fd *generic_open_tmpfile(struct fd *at, const char *path_raw, int flags) {
+    // Linux checks the access mode in the open flags before the filesystem is
+    // consulted: an unnamed file you cannot write is of no use to anyone.
+    if (!(flags & (O_WRONLY_ | O_RDWR_)))
+        return ERR_PTR(_EINVAL);
+    // ...and then that the path really is a directory, so the caller can tell
+    // "you named the wrong thing" from "this filesystem cannot do it".
+    char path[MAX_PATH];
+    int err = path_normalize(at, path_raw, path, N_SYMLINK_FOLLOW);
+    if (err < 0)
+        return ERR_PTR(err);
+    struct statbuf stat;
+    err = generic_statat(at, path_raw, &stat, 0);
+    if (err < 0)
+        return ERR_PTR(err);
+    if (!S_ISDIR(stat.mode))
+        return ERR_PTR(_ENOTDIR);
+    return ERR_PTR(_EOPNOTSUPP);
+}
+
 struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, int mode, int extra_norm) {
     if (flags & O_RDWR_ && flags & O_WRONLY_)
         return ERR_PTR(_EINVAL);
+    if (flags & O_TMPFILE_)
+        return generic_open_tmpfile(at, path_raw, flags);
 
     struct fd *procfd = procfd_openat(at, path_raw, flags);
     if (procfd != NULL)

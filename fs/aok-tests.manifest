@@ -160,6 +160,7 @@ openat2_resolve.c
 splice_vmsplice.c
 privs_syscall_misc.c
 timeout_and_cpu_timer.c
+open_tmpfile.c
 exec_perm_rules.c
 sock_bind_refuse.c
 time_clocks_ticks.c
