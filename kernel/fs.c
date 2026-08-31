@@ -2779,16 +2779,154 @@ dword_t sys_ftruncate(fd_t f, dword_t size) {
     return generic_fsetattr(fd, make_attr(size, size));
 }
 
-dword_t sys_fallocate(fd_t f, dword_t UNUSED(mode), dword_t offset_low, dword_t offset_high, dword_t len_low, dword_t len_high) {
-    off_t_ offset = ((qword_t) offset_high << 32) | offset_low;
-    off_t_ len = ((qword_t) len_high << 32) | len_low;
+#define FALLOC_FL_KEEP_SIZE_      0x01
+#define FALLOC_FL_PUNCH_HOLE_     0x02
+#define FALLOC_FL_COLLAPSE_RANGE_ 0x08
+#define FALLOC_FL_ZERO_RANGE_     0x10
+#define FALLOC_FL_INSERT_RANGE_   0x20
+
+// Overwrite [offset, offset+len) with zeros. The file already extends that
+// far; this is the "make it read as a hole" half of PUNCH_HOLE and ZERO_RANGE.
+// AOK stores every regular file densely, so a hole is written zeros rather
+// than unallocated space -- indistinguishable through read(2), which is the
+// only thing the caller can observe.
+static int fallocate_zero_range(struct fd *fd, off_t_ offset, off_t_ len) {
+    static const size_t CHUNK = 64 * 1024;
+    char *zeros = calloc(1, CHUNK);
+    if (zeros == NULL)
+        return _ENOMEM;
+    int err = 0;
+    off_t_ pos = offset;
+    off_t_ end = offset + len;
+    while (pos < end) {
+        size_t n = (size_t) (end - pos);
+        if (n > CHUNK)
+            n = CHUNK;
+        ssize_t wrote;
+        if (fd->ops->pwrite != NULL) {
+            wrote = fd->ops->pwrite(fd, zeros, n, pos);
+        } else {
+            // No pwrite: seek and write, restoring the position afterwards so
+            // fallocate stays the side-effect-free call it is documented to be.
+            if (fd->ops->lseek == NULL) {
+                err = _EOPNOTSUPP;
+                break;
+            }
+            off_t_ saved = fd->ops->lseek(fd, 0, LSEEK_CUR);
+            if (saved < 0) { err = (int) saved; break; }
+            off_t_ sought = fd->ops->lseek(fd, pos, LSEEK_SET);
+            if (sought < 0) { err = (int) sought; break; }
+            wrote = fd->ops->write(fd, zeros, n);
+            fd->ops->lseek(fd, saved, LSEEK_SET);
+        }
+        if (wrote < 0) { err = (int) wrote; break; }
+        if (wrote == 0) { err = _EIO; break; }
+        pos += wrote;
+    }
+    free(zeros);
+    return err;
+}
+
+// mode was UNUSED: every fallocate did the same thing, which is "extend the
+// file if the range runs past the end". So FALLOC_FL_PUNCH_HOLE -- whose whole
+// purpose is to zero a range -- left the old bytes in place and reported
+// success, and FALLOC_FL_KEEP_SIZE, whose entire meaning is "do not change the
+// size", grew the file. Both are silent data bugs: a caller punching a hole to
+// erase something still had it, and a caller preallocating with KEEP_SIZE
+// found its file the wrong length.
+//
+// Argument order follows Linux's vfs_fallocate: range first, then the mode
+// combinations, then the fd's own capabilities.
+dword_t sys_fallocate(fd_t f, dword_t mode, dword_t offset_low, dword_t offset_high, dword_t len_low, dword_t len_high) {
+    off_t_ offset = (off_t_) (((qword_t) offset_high << 32) | offset_low);
+    off_t_ len = (off_t_) (((qword_t) len_high << 32) | len_low);
+    STRACE("fallocate(%d, %#x, %lld, %lld)", f, mode, (long long) offset, (long long) len);
+    if (offset < 0 || len <= 0)
+        return _EINVAL;
+
+    // Linux 6.12's vfs_fallocate treats the mode bits as an enum with
+    // KEEP_SIZE as the one modifier flag, and answers EOPNOTSUPP for every
+    // combination outside that -- EINVAL is reserved for the range above.
+    // (Measured, not assumed: older kernels used EINVAL for some of these and
+    // 6.12 does not.)
+    switch (mode & ~FALLOC_FL_KEEP_SIZE_) {
+        case 0:                        // plain allocation
+        case FALLOC_FL_ZERO_RANGE_:
+            break;
+        case FALLOC_FL_PUNCH_HOLE_:
+            // A punch that does not keep the size is not a punch.
+            if (!(mode & FALLOC_FL_KEEP_SIZE_))
+                return _EOPNOTSUPP;
+            break;
+        case FALLOC_FL_COLLAPSE_RANGE_:
+        case FALLOC_FL_INSERT_RANGE_:
+            // These move the file's contents; keeping the size is meaningless.
+            if (mode & FALLOC_FL_KEEP_SIZE_)
+                return _EOPNOTSUPP;
+            break;
+        default:
+            // Unknown bits, and any two modes at once.
+            return _EOPNOTSUPP;
+    }
+
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
+    // An fd opened for reading cannot be fallocated however valid the range.
+    if ((fd_getflags(fd) & O_ACCMODE_) == O_RDONLY_)
+        return _EBADF;
+    if (S_ISFIFO(fd->type))
+        return _ESPIPE;
+    if (S_ISDIR(fd->type))
+        return _EISDIR;
+    if (!S_ISREG(fd->type))
+        return _ENODEV;
+
+    // Shifting the file's contents around. Real filesystems disagree about
+    // these -- ext4 and xfs implement them, most others answer EOPNOTSUPP --
+    // so refusing is a state callers already handle, and far better than the
+    // silent wrong answer of treating them as a plain allocation.
+    if (mode & (FALLOC_FL_COLLAPSE_RANGE_ | FALLOC_FL_INSERT_RANGE_))
+        return _EOPNOTSUPP;
+
     struct statbuf statbuf;
     int err = fd->mount->fs->fstat(fd, &statbuf);
     if (err < 0)
         return err;
+
+    if (mode & FALLOC_FL_PUNCH_HOLE_) {
+        // Entirely past the end: there is nothing to punch, and the size must
+        // not move. Linux returns 0.
+        if ((uint64_t) offset >= statbuf.size)
+            return 0;
+        uint64_t end = (uint64_t) offset + (uint64_t) len;
+        if (end > statbuf.size)
+            end = statbuf.size;
+        return fallocate_zero_range(fd, offset, (off_t_) (end - (uint64_t) offset));
+    }
+
+    if (mode & FALLOC_FL_ZERO_RANGE_) {
+        // Unlike a punch, this one may extend the file -- unless KEEP_SIZE.
+        uint64_t end = (uint64_t) offset + (uint64_t) len;
+        if (end > statbuf.size && !(mode & FALLOC_FL_KEEP_SIZE_)) {
+            err = generic_fsetattr(fd, make_attr(size, (off_t_) end));
+            if (err < 0)
+                return err;
+        }
+        uint64_t zero_end = end;
+        if (mode & FALLOC_FL_KEEP_SIZE_) {
+            if ((uint64_t) offset >= statbuf.size)
+                return 0;
+            if (zero_end > statbuf.size)
+                zero_end = statbuf.size;
+        }
+        return fallocate_zero_range(fd, offset, (off_t_) (zero_end - (uint64_t) offset));
+    }
+
+    // Plain allocation. AOK reserves nothing, so the only observable part is
+    // the size -- which KEEP_SIZE says to leave alone.
+    if (mode & FALLOC_FL_KEEP_SIZE_)
+        return 0;
     if ((uint64_t) offset + (uint64_t) len > statbuf.size)
         return generic_fsetattr(fd, make_attr(size, offset + len));
     return 0;

@@ -10,6 +10,11 @@ static fd_t pipe_f_create(int pipe_fd, int flags) {
     if (fd == NULL)
         return _ENOMEM;
     fd->real_fd = pipe_fd;
+    // fd->type as well as stat.mode: it is the field the rest of the kernel
+    // asks "what kind of thing is this fd", and it was left 0 here, so a pipe
+    // answered "not a fifo, not a directory, not a regular file" to anything
+    // that checked -- fallocate on a pipe came back ENODEV instead of ESPIPE.
+    fd->type = S_IFIFO;
     fd->stat.mode = S_IFIFO | 0660;
     fd->stat.uid = current->uid;
     fd->stat.gid = current->gid;
