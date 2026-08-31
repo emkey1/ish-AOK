@@ -8,9 +8,9 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 |---|---|---|
 | 0 | [Foreword: on standing somewhere](ch00-foreword.md) | draft |
 | 1 | [The impossible app](ch01-the-impossible-app.md) | draft |
-| 2 | Upstream iSH, 2017–2023 | — |
-| 3 | The fork | — |
-| 4 | 2026: the year the tree tripled | — |
+| 2 | [Upstream iSH, 2017–2023](ch02-upstream-ish.md) | draft |
+| 3 | [The fork](ch03-the-fork.md) | draft |
+| 4 | [2026: the year the tree tripled](ch04-the-year-the-tree-tripled.md) | draft |
 | 5 | [The guest machine](ch05-the-guest-machine.md) | draft |
 | 6 | [Threaded code: the JIT that is not a JIT](ch06-threaded-code.md) | draft |
 | 7 | [Four guests](ch07-four-guests.md) | draft |
@@ -50,7 +50,7 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 | 41 | [The honest gaps](ch41-the-honest-gaps.md) | draft |
 | 42 | [Where it could go](ch42-where-it-could-go.md) | draft |
 
-All 42 chapters are drafted. The appendices (A–H in the outline) remain. Parts II (5–9), III (10–15), IV (16–21), V (22–27) VI (28–33), VII (34–37), VIII (38–39) and IX (40–42) are complete. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
+All 42 chapters are drafted. The appendices (A–H in the outline) remain. Parts II (5–9), III (10–15), IV (16–21), V (22–27) VI (28–33), VII (34–37), VIII (38–39) and IX (40–42) are complete, as is Part I (1–4). Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
 project and `upstream iSH` for `ish-app/ish`; guest means the emulated Linux
 side, host means iOS/macOS; every chapter ends with an `Anchors:` line, and
 chapters that exist because of a specific failure end with a `Story:` line.
