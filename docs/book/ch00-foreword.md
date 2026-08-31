@@ -71,8 +71,9 @@ and `app/TerminalView.m` and the decision to run hterm in a web view;
 Discord server for its name. All upstream. All still here.
 
 Counted crudely: of the 255 source files in `emu/`, `jit/`, `kernel/`, `fs/`,
-`util/` and `platform/`, 149 were created upstream and 106 by this fork. But that count understates the debt rather than measuring it, because
-the fork's files are mostly *additions* — a fourth guest architecture, native
+`util/` and `platform/`, 149 were created upstream and 106 by this fork. 
+But that count understates the debt rather than measuring it, because
+the fork's files are mostly *additions* — additional guest architecture, native
 programs, accelerators — while the inherited ones are the load-bearing ones. The
 line counts point the other way for the same reason: `kernel/calls.c` is
 overwhelmingly fork code today, because it grew from one syscall table to four.
