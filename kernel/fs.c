@@ -1062,6 +1062,53 @@ dword_t sys_read_guest(fd_t fd_no, guest_addr_t buf_addr, dword_t size) {
 //
 // Regular files only. A pipe, socket or device has no size for a size limit to
 // mean anything about, and Linux does not check them.
+static int generic_fsetattr(struct fd *fd, struct attr attr);
+
+// Linux's file_remove_privs: writing to a file drops its setuid bit, because a
+// setuid program whose contents just changed is a setuid program somebody else
+// wrote. Nothing did this, so a user with write access to a setuid-root binary
+// could replace its contents and keep the bit -- which is the whole attack the
+// rule exists to stop.
+//
+// The exact shape, measured on Linux 6.12 as an unprivileged user:
+//   4755 -> 0755   suid always goes
+//   4644 -> 0644   ...even with no execute bit at all
+//   2755 -> 0755   sgid goes when the group-execute bit is set
+//   2644 -> 2644   ...but NOT without it: that combination is a mandatory
+//                  locking marker, not a privilege, and Linux leaves it
+//   6755 -> 0755
+// and root keeps all of them, because CAP_FSETID skips the whole thing.
+// ftruncate counts as a write for this.
+//
+// Done once per descriptor rather than once per write: the fstat is not free
+// on a fakefs (a metadata lookup), and the case that matters opens a file that
+// is ALREADY setuid, so the first write through the fd is where it must land.
+// A file that gains the bits after this fd's first write keeps them, which
+// needs chmod on the file -- and anyone holding that does not need the write.
+static void file_remove_privs(struct fd *fd) {
+    if (fd->privs_checked)
+        return;
+    fd->privs_checked = true;
+    if (!S_ISREG(fd->type))
+        return;
+    // CAP_FSETID is the whole exemption: root writing a setuid file keeps it.
+    if (current_capable(CAP_FSETID_))
+        return;
+    if (fd->mount == NULL || fd->mount->fs == NULL || fd->mount->fs->fstat == NULL)
+        return;
+    struct statbuf stat;
+    if (fd->mount->fs->fstat(fd, &stat) < 0)
+        return;
+    mode_t_ strip = 0;
+    if (stat.mode & S_ISUID)
+        strip |= S_ISUID;
+    if ((stat.mode & S_ISGID) && (stat.mode & S_IXGRP))
+        strip |= S_ISGID;
+    if (strip == 0)
+        return;
+    generic_fsetattr(fd, make_attr(mode, stat.mode & ~strip & ~S_IFMT));
+}
+
 static int fsize_limit_check(struct fd *fd, size_t *size) {
     // The default is unlimited, so nothing below is on the ordinary write
     // path: only a process that actually set `ulimit -f` pays for the seek.
@@ -1099,6 +1146,7 @@ static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
     int limit_err = fsize_limit_check(fd, &size);
     if (limit_err < 0)
         return limit_err;
+    file_remove_privs(fd);
 
     ssize_t res;
     uint64_t delay_start = io_delay_start(fd);
@@ -2800,6 +2848,9 @@ dword_t sys_ftruncate64(fd_t f, dword_t size_low, dword_t size_high) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
+    // Truncation changes the contents too, so it drops the privilege bits the
+    // same way a write does.
+    file_remove_privs(fd);
     return generic_fsetattr(fd, make_attr(size, size));
 }
 

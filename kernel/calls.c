@@ -4821,9 +4821,20 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
         return;
     }
     if (syscall_num >= dispatch->num_syscalls) {
+        // ENOSYS, not SIGSYS. Linux answers an unknown syscall number with
+        // -ENOSYS and nothing else -- SIGSYS is seccomp's, and a kernel does
+        // not raise it on its own. Killing the caller instead breaks the
+        // ordinary way a program finds out whether a syscall exists: glibc,
+        // libseccomp's own tests and every "call it and see" feature probe do
+        // exactly this, and here they died mid-probe with no way to catch it.
+        // A caller that has genuinely gone off the rails still learns so from
+        // the errno.
+        //
+        // Left as a printk because a guest reaching this is usually a real
+        // gap worth seeing in the log, just not worth a signal.
         printk("ERROR: %d(%s) missing %s syscall %d\n",
                current->pid, current->comm, dispatch->name, (int) syscall_num);
-        deliver_signal(current, SIGSYS_, SIGINFO_NIL);
+        dispatch->syscall_result(cpu, _ENOSYS);
         return;
     }
 

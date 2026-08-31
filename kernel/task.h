@@ -634,6 +634,7 @@ extern void (*halt_hook)(int status);
 
 // Linux capability numbers, for the gates below. Only the ones something
 // actually checks are listed; add as needed rather than transcribing all 40.
+#define CAP_FSETID_      4
 #define CAP_SETGID_      6
 #define CAP_SETUID_      7
 #define CAP_SYS_CHROOT_  18

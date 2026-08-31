@@ -517,15 +517,26 @@ int_t sys_capset_guest(guest_addr_t header_addr, guest_addr_t data_addr) {
 }
 
 // minimal version according to Linux sys/personality.h
+// personality() sets the execution domain and returns the PREVIOUS value.
+// Linux accepts whatever it is given -- the low byte is the domain, the upper
+// bits are flags -- and 0xffffffff is the conventional "just tell me" query
+// because it sets nothing anybody uses.
+//
+// This used to refuse everything except ADDR_NO_RANDOMIZE with EINVAL,
+// including personality(0), which is the single most common call: it is what
+// `setarch --uname-2.6`, ancient-binary wrappers and every "restore the
+// default domain" path do. They all failed.
 int_t sys_personality(dword_t persona) {
     STRACE("personality(%#x)", persona);
-    // Get the personality
+    dword_t previous = current->group->personality;
     if (persona == 0xffffffff)
-        return current->group->personality;
+        return previous;
 
-    // ADDR_NO_RANDOMIZE is the only thing we support, and you can't turn it off
-    if (persona != ADDR_NO_RANDOMIZE_)
-        return _EINVAL;
-
-    return current->group->personality;
+    // ADDR_NO_RANDOMIZE stays set whatever the caller asks for. AOK does not
+    // randomize the address space at all, so reporting the bit clear would
+    // claim a randomization that does not happen -- and a program that checks
+    // it before deciding whether to re-exec itself under setarch would then
+    // loop. Everything else is stored as given and reported back.
+    current->group->personality = persona | ADDR_NO_RANDOMIZE_;
+    return previous;
 }
