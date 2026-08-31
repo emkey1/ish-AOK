@@ -363,6 +363,10 @@ dword_t sys_sendfile(fd_t out_fd, fd_t in_fd, addr_t offset_addr, dword_t count)
 dword_t sys_sendfile64(fd_t out_fd, fd_t in_fd, addr_t offset_addr, dword_t count);
 dword_t sys_sendfile_guest(fd_t out_fd, fd_t in_fd, guest_addr_t offset_addr, uint64_t count);
 dword_t sys_splice(fd_t in_fd, addr_t in_off_addr, fd_t out_fd, addr_t out_off_addr, dword_t count, dword_t flags);
+dword_t sys_splice_guest(fd_t in_fd, guest_addr_t in_off_addr, fd_t out_fd, guest_addr_t out_off_addr, uint64_t count, dword_t flags);
+dword_t sys_vmsplice(fd_t f, addr_t iov_addr, dword_t iov_count, dword_t flags);
+dword_t sys_vmsplice_guest(fd_t f, guest_addr_t iov_addr, uint64_t iov_count, dword_t flags);
+dword_t sys_tee(fd_t in_fd, fd_t out_fd, dword_t count, dword_t flags);
 dword_t sys_copy_file_range(fd_t in_fd, addr_t in_off, fd_t out_fd, addr_t out_off, dword_t len, uint_t flags);
 dword_t sys_copy_file_range_guest(fd_t in_fd, guest_addr_t in_off, fd_t out_fd, guest_addr_t out_off, uint64_t len, uint_t flags);
 

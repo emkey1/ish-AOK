@@ -1152,6 +1152,8 @@ static syscall_t i386_syscall_table[] = {
     [311] = (syscall_t) sys_set_robust_list,
     [312] = (syscall_t) sys_get_robust_list,
     [313] = (syscall_t) sys_splice,
+    [315] = (syscall_t) sys_tee,
+    [316] = (syscall_t) sys_vmsplice,
     [314] = (syscall_t) syscall_success_stub, // sync_file_range
     [318] = (syscall_t) syscall_success_stub, // getcpu
     [319] = (syscall_t) sys_epoll_pwait,
@@ -1604,6 +1606,8 @@ static syscall_t amd64_syscall_table[470] = {
     [273] = (syscall_t) sys_set_robust_list_amd64,
     [274] = (syscall_t) sys_get_robust_list_amd64,
     [275] = (syscall_t) sys_splice,
+    [276] = (syscall_t) sys_tee,
+    [278] = (syscall_t) sys_vmsplice,
     [277] = (syscall_t) syscall_success_stub, // sync_file_range
     [317] = (syscall_t) syscall_eopnotsupp_stub, // seccomp
     [280] = (syscall_t) sys_utimensat_amd64,
@@ -1803,7 +1807,9 @@ static syscall_t arm64_syscall_table[470] = {
     [71]  = (syscall_t) sys_sendfile64,
     [72]  = (syscall_t) sys_pselect_amd64,
     [73]  = (syscall_t) sys_ppoll_amd64,
+    [75]  = (syscall_t) sys_vmsplice,
     [76]  = (syscall_t) sys_splice,
+    [77]  = (syscall_t) sys_tee,
     [78]  = (syscall_t) sys_readlinkat,
     [79]  = (syscall_t) sys_newfstatat_amd64,
     [80]  = (syscall_t) sys_fstat_amd64,
@@ -2749,10 +2755,21 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 435: result = (dword_t) sys_clone3_guest( raw_args[0], (dword_t) raw_args[1]); break; // clone3
     case 437: result = (dword_t) sys_openat2_guest( (fd_t) raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3]); break; // openat2
     case 441: result = (dword_t) sys_epoll_pwait2_guest( (fd_t) raw_args[0], raw_args[1], (int_t) raw_args[2], raw_args[3], raw_args[4], (dword_t) raw_args[5]); break; // epoll_pwait2
-    // splice and settimeofday are argument-ignoring stubs (EINVAL/EPERM);
-    // dispatch natively with zeros so 64-bit pointers can't be rejected or
-    // truncated on the way to code that never reads them.
-    case 76: result = sys_splice(0, 0, 0, 0, 0, 0); break; // splice (stub)
+    // splice takes two 64-bit loff_t pointers and a 64-bit count, so it has to
+    // be dispatched natively rather than through the legacy marshaller -- and
+    // with the REAL arguments. It used to be called with zeros here because it
+    // was a stub that read none of them; leaving that in place after
+    // implementing it would have made every arm64 and riscv64 splice an EINVAL
+    // on a null pipe fd, with nothing to say why.
+    case 76: result = (dword_t) sys_splice_guest((fd_t) raw_args[0], raw_args[1],
+                 (fd_t) raw_args[2], raw_args[3], raw_args[4], (dword_t) raw_args[5]); break; // splice
+    case 75: result = (dword_t) sys_vmsplice_guest((fd_t) raw_args[0], raw_args[1],
+                 raw_args[2], (dword_t) raw_args[3]); break; // vmsplice
+    case 77: result = (dword_t) sys_tee((fd_t) raw_args[0], (fd_t) raw_args[1],
+                 (dword_t) raw_args[2], (dword_t) raw_args[3]); break; // tee
+    // settimeofday is an argument-ignoring stub (EPERM); dispatch natively
+    // with zeros so 64-bit pointers can't be rejected or truncated on the way
+    // to code that never reads them.
     case 170: result = sys_settimeofday(0, 0); break; // settimeofday (stub)
     case 148: result = (dword_t) sys_getresuid_guest(raw_args[0], raw_args[1], raw_args[2]); break; // getresuid
     case 150: result = (dword_t) sys_getresgid_guest(raw_args[0], raw_args[1], raw_args[2]); break; // getresgid
@@ -2821,7 +2838,7 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     // ENOSYS list, which is why wiring arm64_syscall_table alone changed
     // nothing: this native list runs first and answered for them.)
     case 18: case 41: case 42:
-    case 60: case 75: case 77: case 89: case 104: case 105: case 106:
+    case 60: case 89: case 104: case 105: case 106:
     case 128:
     case 180: case 181: case 182: case 183: case 184: case 185:
     // (186-193 are the real SysV msg/sem implementations above)

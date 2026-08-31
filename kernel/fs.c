@@ -14,6 +14,7 @@
 #include "fs/inode.h"
 #include "fs/real.h"
 #include "fs/path.h"
+#include "fs/poll.h"
 #include "fs/dev.h"
 #include "fs/devices.h"
 #include "fs/tty.h"
@@ -3234,8 +3235,207 @@ dword_t sys_sendfile_guest(fd_t out_fd, fd_t in_fd, guest_addr_t offset_addr, ui
            (unsigned long long) count);
     return do_sendfile(out_fd, in_fd, offset_addr, count, true); // amd64 off_t is 64-bit
 }
-dword_t sys_splice(fd_t UNUSED(in_fd), addr_t UNUSED(in_off_addr), fd_t UNUSED(out_fd), addr_t UNUSED(out_off_addr), dword_t UNUSED(count), dword_t UNUSED(flags)) {
-    return _EINVAL;
+#define SPLICE_F_MOVE_     0x01
+#define SPLICE_F_NONBLOCK_ 0x02
+#define SPLICE_F_MORE_     0x04
+#define SPLICE_F_GIFT_     0x08
+
+// splice(2) was an unconditional EINVAL, so every caller of it -- and of the
+// `cat < file > pipe`-shaped fast paths libraries build on it -- fell back or
+// failed.
+//
+// What splice guarantees to the caller is which bytes move where, not that
+// they move without being copied: the zero-copy is why it exists on Linux, but
+// it is not observable through the syscall. So this moves them through the
+// same buffered engine sendfile and copy_file_range use, which already handles
+// the short-write case that would otherwise lose data taken out of a pipe.
+//
+// tee(2) stays unimplemented on purpose -- see sys_tee below.
+static dword_t do_splice(fd_t in_no, guest_addr_t in_off_addr, fd_t out_no,
+        guest_addr_t out_off_addr, uint64_t count, dword_t flags) {
+    if (flags & ~(SPLICE_F_MOVE_ | SPLICE_F_NONBLOCK_ | SPLICE_F_MORE_ | SPLICE_F_GIFT_))
+        return _EINVAL;
+
+    struct fd *in_fd = f_get(in_no);
+    struct fd *out_fd = f_get(out_no);
+    if (in_fd == NULL || out_fd == NULL)
+        return _EBADF;
+
+    // At least one end must be a pipe: splice moves data *through* a pipe, and
+    // with neither end one there is nothing it does that read+write does not.
+    bool in_is_pipe = S_ISFIFO(in_fd->type);
+    bool out_is_pipe = S_ISFIFO(out_fd->type);
+    if (!in_is_pipe && !out_is_pipe)
+        return _EINVAL;
+    // A pipe has no seekable position, so naming an offset for one is a
+    // contradiction rather than an out-of-range value.
+    if (in_is_pipe && in_off_addr != 0)
+        return _ESPIPE;
+    if (out_is_pipe && out_off_addr != 0)
+        return _ESPIPE;
+
+    if (count == 0)
+        return 0;
+
+    off_t_ in_off = 0, out_off = 0;
+    off_t_ *in_ptr = NULL, *out_ptr = NULL;
+    if (in_off_addr != 0) {
+        if (user_get(in_off_addr, in_off))
+            return _EFAULT;
+        in_ptr = &in_off;
+    }
+    if (out_off_addr != 0) {
+        if (user_get(out_off_addr, out_off))
+            return _EFAULT;
+        out_ptr = &out_off;
+    }
+    if ((in_ptr != NULL && in_off < 0) || (out_ptr != NULL && out_off < 0))
+        return _EINVAL;
+
+    // SPLICE_F_NONBLOCK is about the pipe end, not about the file: with
+    // nothing to read the answer is EAGAIN rather than a blocking wait. The
+    // buffered engine below would block, so ask first.
+    if ((flags & SPLICE_F_NONBLOCK_) && in_is_pipe && in_fd->ops->poll != NULL) {
+        if (!(in_fd->ops->poll(in_fd) & (POLL_READ | POLL_HUP | POLL_ERR)))
+            return _EAGAIN;
+    }
+
+    dword_t res = fd_copy_range(in_no, in_ptr, out_no, out_ptr, count);
+    if ((sdword_t) res >= 0) {
+        if (in_ptr != NULL && user_put(in_off_addr, in_off))
+            return _EFAULT;
+        if (out_ptr != NULL && user_put(out_off_addr, out_off))
+            return _EFAULT;
+    }
+    return res;
+}
+
+dword_t sys_splice(fd_t in_fd, addr_t in_off_addr, fd_t out_fd, addr_t out_off_addr, dword_t count, dword_t flags) {
+    STRACE("splice(%d, %#x, %d, %#x, %u, %#x)", in_fd, in_off_addr, out_fd, out_off_addr, count, flags);
+    return do_splice(in_fd, in_off_addr, out_fd, out_off_addr, count, flags);
+}
+
+dword_t sys_splice_guest(fd_t in_fd, guest_addr_t in_off_addr, fd_t out_fd, guest_addr_t out_off_addr, uint64_t count, dword_t flags) {
+    STRACE("splice(%d, %#llx, %d, %#llx, %llu, %#x)", in_fd,
+           (unsigned long long) in_off_addr, out_fd,
+           (unsigned long long) out_off_addr, (unsigned long long) count, flags);
+    return do_splice(in_fd, in_off_addr, out_fd, out_off_addr, count, flags);
+}
+
+// vmsplice(2): move an iovec into a pipe, or out of one. Linux does it by
+// mapping the caller's pages into the pipe buffer, which is what makes it
+// worth having; the observable result is that the bytes are in the pipe (or in
+// the iovec), and that is what this does. SPLICE_F_GIFT is the caller offering
+// its pages, which is meaningless without the mapping and is ignored -- Linux
+// ignores it too unless the pages are page-aligned.
+static dword_t do_vmsplice(fd_t f, guest_addr_t iov_addr, uint64_t iov_count, dword_t flags,
+        enum guest_abi abi) {
+    if (flags & ~(SPLICE_F_MOVE_ | SPLICE_F_NONBLOCK_ | SPLICE_F_MORE_ | SPLICE_F_GIFT_))
+        return _EINVAL;
+    struct fd *fd = f_get(f);
+    if (fd == NULL)
+        return _EBADF;
+    // Not a pipe is EBADF here, not EINVAL: Linux decides this by looking at
+    // whether the file has pipe operations at all.
+    if (!S_ISFIFO(fd->type))
+        return _EBADF;
+    // Linux's UIO_MAXIOV.
+    if (iov_count > 1024)
+        return _EINVAL;
+    if (iov_count == 0)
+        return 0;
+
+    struct guest_iovec_ *iovec = user_read_iovecs_abi(current, abi, iov_addr, (dword_t) iov_count);
+    if (IS_ERR(iovec))
+        return (dword_t) PTR_ERR(iovec);
+
+    // Which direction depends on which end of the pipe this is: the write end
+    // takes data in, the read end hands it out.
+    bool writing = (fd_getflags(fd) & O_ACCMODE_) != O_RDONLY_;
+    size_t total_size = 0;
+    for (uint64_t i = 0; i < iov_count; i++)
+        total_size += iovec[i].len;
+    if (total_size > MAX_RW_COUNT)
+        total_size = MAX_RW_COUNT;
+    if (total_size == 0) {
+        free(iovec);
+        return 0;
+    }
+
+    char *buf = malloc(total_size);
+    if (buf == NULL) {
+        free(iovec);
+        return _ENOMEM;
+    }
+
+    dword_t res;
+    if (writing) {
+        size_t off = 0;
+        for (uint64_t i = 0; i < iov_count && off < total_size; i++) {
+            size_t n = iovec[i].len;
+            if (n > total_size - off)
+                n = total_size - off;
+            if (user_read(iovec[i].base, buf + off, n)) {
+                free(buf);
+                free(iovec);
+                return _EFAULT;
+            }
+            off += n;
+        }
+        ssize_t wrote;
+        TASK_MAY_BLOCK {
+            wrote = fd->ops->write(fd, buf, total_size);
+        }
+        res = (dword_t) wrote;
+    } else {
+        ssize_t got;
+        TASK_MAY_BLOCK {
+            got = fd->ops->read(fd, buf, total_size);
+        }
+        if (got > 0) {
+            size_t off = 0;
+            for (uint64_t i = 0; i < iov_count && off < (size_t) got; i++) {
+                size_t n = iovec[i].len;
+                if (n > (size_t) got - off)
+                    n = (size_t) got - off;
+                if (user_write(iovec[i].base, buf + off, n)) {
+                    free(buf);
+                    free(iovec);
+                    return _EFAULT;
+                }
+                off += n;
+            }
+        }
+        res = (dword_t) got;
+    }
+    free(buf);
+    free(iovec);
+    return res;
+}
+
+dword_t sys_vmsplice(fd_t f, addr_t iov_addr, dword_t iov_count, dword_t flags) {
+    STRACE("vmsplice(%d, %#x, %u, %#x)", f, iov_addr, iov_count, flags);
+    return do_vmsplice(f, iov_addr, iov_count, flags, GUEST_ABI_I386);
+}
+
+dword_t sys_vmsplice_guest(fd_t f, guest_addr_t iov_addr, uint64_t iov_count, dword_t flags) {
+    STRACE("vmsplice(%d, %#llx, %llu, %#x)", f, (unsigned long long) iov_addr,
+           (unsigned long long) iov_count, flags);
+    return do_vmsplice(f, iov_addr, iov_count, flags, current->abi);
+}
+
+// tee(2) duplicates between two pipes WITHOUT consuming the source, which is a
+// statement about the pipe's own buffer: Linux implements it by taking another
+// reference to the pages already sitting in it.
+//
+// AOK's pipes are host pipes -- the guest fd is a real pipe fd, and the buffer
+// belongs to the host kernel, which offers no way to read without consuming.
+// Emulating it by reading and writing the bytes back would reorder anything
+// else already queued, and would deadlock outright against a full pipe. So
+// this stays ENOSYS: a caller that gets it falls back to read+write, which is
+// what it must already do for the kernels that predate tee.
+dword_t sys_tee(fd_t UNUSED(in_fd), fd_t UNUSED(out_fd), dword_t UNUSED(count), dword_t UNUSED(flags)) {
+    return _ENOSYS;
 }
 // copy_file_range(fd_in, off_in, fd_out, off_out, len, flags). off_in/off_out
 // are loff_t* (64-bit on both ABIs) or NULL. flags must be 0.
