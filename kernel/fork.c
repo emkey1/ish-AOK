@@ -441,6 +441,21 @@ static dword_t sys_clone_common(dword_t flags, guest_addr_t stack, guest_addr_t 
     if (flags & CLONE_PIDFD_ && flags & CLONE_THREAD_)
         return _EINVAL;
 
+    // RLIMIT_NPROC caps how many processes ONE USER may have, so a runaway
+    // fork loop cannot take the whole system down with it. It was stored and
+    // reported and never consulted, so `ulimit -u` was decorative. Threads do
+    // not count against it -- Linux charges the limit in copy_process, which
+    // CLONE_THREAD reaches too, but the count it compares against is of
+    // processes; keeping threads out of both sides is the same answer with
+    // less bookkeeping. root is exempt, as there.
+    if (!(flags & CLONE_THREAD_)) {
+        rlim_t_ nproc = rlimit(RLIMIT_NPROC_);
+        if (nproc != RLIM_INFINITY_ && !current_capable(CAP_SYS_RESOURCE_) &&
+                !current_capable(CAP_SYS_ADMIN_) &&
+                task_count_for_uid(current->uid) >= nproc)
+            return _EAGAIN;
+    }
+
     struct task *task = task_create_(current);
     if (task == NULL)
         return _ENOMEM;

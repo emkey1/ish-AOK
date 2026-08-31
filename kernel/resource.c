@@ -102,16 +102,23 @@ dword_t sys_old_getrlimit32(dword_t resource, addr_t rlim_addr) {
     return 0;
 }
 
-static int check_setrlimit(int resource, struct rlimit_ new_limit) {
+// The task whose limit is being raised, not the caller: prlimit64 can target
+// another process, and the "may not raise your own hard limit" rule is about
+// the TARGET's ceiling.
+static int check_setrlimit_task(struct task *task, int resource, struct rlimit_ new_limit) {
     if (superuser())
         return 0;
     struct rlimit_ old_limit;
-    int err = rlimit_get(current, resource, &old_limit);
+    int err = rlimit_get(task, resource, &old_limit);
     if (err < 0)
         return err;
     if (new_limit.max > old_limit.max)
         return _EPERM;
     return 0;
+}
+
+static int check_setrlimit(int resource, struct rlimit_ new_limit) {
+    return check_setrlimit_task(current, resource, new_limit);
 }
 
 dword_t sys_setrlimit32(dword_t resource, addr_t rlim_addr) {
@@ -145,30 +152,91 @@ dword_t sys_prlimit64(pid_t_ pid, dword_t resource, addr_t new_limit_addr, addr_
 
 dword_t sys_prlimit64_guest(pid_t_ pid, dword_t resource, guest_addr_t new_limit_addr, guest_addr_t old_limit_addr) {
     STRACE("prlimit64(%d, %d)", pid, resource);
-    if (pid != 0)
-        return _EINVAL;
+    // Any nonzero pid was EINVAL -- including the caller's OWN pid, which is
+    // the form glibc's prlimit(2) wrapper and the read-and-write-in-one-call
+    // idiom both use, and what `prlimit --pid N` passes.
+    struct task *task = current;
+    bool release = false;
+    if (pid != 0 && pid != current->pid) {
+        // See sched_task_for: pid_get_task_ref locks internally.
+        task = pid_get_task_ref(pid);
+        if (task == NULL)
+            return _ESRCH;
+        release = true;
+        // Another process's limits are readable and writable only by a
+        // matching real uid, or CAP_SYS_RESOURCE.
+        if (!current_capable(CAP_SYS_RESOURCE_) && task->uid != current->uid) {
+            task_ref_cnt_mod(task, -1);
+            return _EPERM;
+        }
+    }
+#define PRLIMIT_RETURN(v) do { \
+        int r_ = (v); \
+        if (release) task_ref_cnt_mod(task, -1); \
+        return r_; \
+    } while (0)
 
     if (old_limit_addr != 0) {
         struct rlimit_ rlimit;
-        int err = rlimit_get(current, resource, &rlimit);
+        int err = rlimit_get(task, resource, &rlimit);
         if (err < 0)
-            return err;
+            PRLIMIT_RETURN(err);
         STRACE(" old={cur=%#llx, max=%#llx}", (unsigned long long) rlimit.cur, (unsigned long long) rlimit.max);
         if (user_put(old_limit_addr, rlimit))
-            return _EFAULT;
+            PRLIMIT_RETURN(_EFAULT);
     }
 
     if (new_limit_addr != 0) {
         struct rlimit_ rlimit;
         if (user_get(new_limit_addr, rlimit))
-            return _EFAULT;
+            PRLIMIT_RETURN(_EFAULT);
         STRACE(" new={cur=%#llx, max=%#llx}", (unsigned long long) rlimit.cur, (unsigned long long) rlimit.max);
-        int err = check_setrlimit(resource, rlimit);
+        int err = check_setrlimit_task(task, resource, rlimit);
         if (err < 0)
-            return err;
-        return rlimit_set(current, resource, rlimit);
+            PRLIMIT_RETURN(err);
+        PRLIMIT_RETURN(rlimit_set(task, resource, rlimit));
     }
-    return 0;
+    PRLIMIT_RETURN(0);
+#undef PRLIMIT_RETURN
+}
+
+// Peak resident size in KB. Samples the address space's current mapped-page
+// count and folds it into the high-water mark kept on the mm, so a later read
+// never reports less than an earlier one saw -- which is what "max" means.
+size_t task_maxrss_kb(struct task *task) {
+    struct mm *mm = task->mm;
+    if (mm != NULL) {
+        size_t pages = mem_mapped_page_count(&mm->mem);
+        if (pages > mm->rss_pages_hwm)
+            mm->rss_pages_hwm = pages;
+        size_t kb = mm->rss_pages_hwm * (PAGE_SIZE / 1024);
+        if (kb > task->maxrss_kb)
+            task->maxrss_kb = kb;
+    }
+    // With the address space already gone (do_exit), the latched value is all
+    // there is -- and it is the right answer.
+    return task->maxrss_kb;
+}
+
+// Everything getrusage reports that is not CPU time. Only utime/stime were
+// ever filled, so every other field came back 0 -- and 0 is a value Linux
+// cannot produce for a process that has run at all: `time -v` printed a peak
+// RSS of 0 KB, Python's resource module reported no faults, and wait4
+// supervisors measuring a child's memory saw nothing.
+//
+// ru_majflt stays 0 on purpose. A major fault means the page had to come from
+// storage; AOK's guest memory is host memory throughout, so no fault here ever
+// does, and inventing them would be worse than reporting none.
+static void rusage_fill_task_counters(struct rusage_ *rusage, struct task *task) {
+    if (task == NULL)
+        return;
+    rusage->minflt = (dword_t) task->minflt;
+    rusage->nvcsw = (dword_t) task->nvcsw;
+    // Linux counts these in 512-byte blocks, from the same file-backed traffic
+    // /proc/<pid>/io reports as read_bytes/write_bytes.
+    rusage->inblock = (dword_t) (atomic_load_explicit(&task->io.read_bytes, memory_order_relaxed) / 512);
+    rusage->oublock = (dword_t) (atomic_load_explicit(&task->io.write_bytes, memory_order_relaxed) / 512);
+    rusage->maxrss = (dword_t) task_maxrss_kb(task);
 }
 
 struct rusage_ rusage_get_current(void) {
@@ -199,6 +267,7 @@ struct rusage_ rusage_get_current(void) {
     rusage.stime.sec = info.system_time.seconds;
     rusage.stime.usec = info.system_time.microseconds;
 #endif
+    rusage_fill_task_counters(&rusage, current);
     return rusage;
 }
 
@@ -213,6 +282,9 @@ struct rusage_ rusage_get_task(struct task *task) {
 
     struct rusage_ rusage;
     memset(&rusage, 0, sizeof(rusage));
+    // The non-CPU counters live on the task and are readable from here; only
+    // the user/system split needs the host thread.
+    rusage_fill_task_counters(&rusage, task);
 #if __linux__
     // pthread_getcpuclockid's clock only reports combined user+system time --
     // unlike getrusage(RUSAGE_THREAD), there's no Linux API to read another
@@ -258,6 +330,20 @@ static void timeval_add(struct timeval_ *dst, struct timeval_ *src) {
 void rusage_add(struct rusage_ *dst, struct rusage_ *src) {
     timeval_add(&dst->utime, &src->utime);
     timeval_add(&dst->stime, &src->stime);
+    // Everything but the CPU times used to be dropped here, so even once the
+    // per-task counters existed a RUSAGE_SELF (which sums the process's
+    // threads) or a RUSAGE_CHILDREN total came back at zero again.
+    dst->minflt += src->minflt;
+    dst->majflt += src->majflt;
+    dst->nvcsw += src->nvcsw;
+    dst->nivcsw += src->nivcsw;
+    dst->inblock += src->inblock;
+    dst->oublock += src->oublock;
+    dst->nsignals += src->nsignals;
+    // maxrss is a peak, not a total: Linux reports the largest any one of them
+    // reached, and summing would claim a footprint that never existed.
+    if (src->maxrss > dst->maxrss)
+        dst->maxrss = src->maxrss;
 }
 
 // Process-wide usage: real Linux's getrusage(RUSAGE_SELF) and
@@ -404,16 +490,96 @@ int_t sys_sched_setaffinity_guest(pid_t_ pid, dword_t cpusetsize, guest_addr_t c
     return sys_sched_setaffinity(pid, cpusetsize, (addr_t) cpuset_addr);
 }
 
-int_t sys_getpriority(int_t which, pid_t_ who) {
-    // Since changing process priority is not supported in iOS,
-    // this function can return a default priority value.
-    // The default nice value in Linux ranges from -20 (highest priority) to 19 (lowest priority).
-    STRACE("getpriority(%d, %d)", which, who);
-    return 0;
+// AOK does not act on nice at all -- there is no scheduler here to bias. What
+// it must do is REMEMBER it. getpriority returned a flat 0 on the raw syscall,
+// and the raw syscall's convention is 20-nice, so libc decoded that as
+// niceness 20 -- a value Linux cannot produce (the range is -20..19). `nice`,
+// `renice` and every runtime that reads its own niceness back saw a process
+// that was somehow below the lowest possible priority, and setpriority
+// accepted anything and changed nothing, so `renice 5 $$` reported success and
+// the next read still said 20.
+#define PRIO_PROCESS_ 0
+#define PRIO_PGRP_    1
+#define PRIO_USER_    2
+
+static bool prio_target_matches(struct task *task, int_t which, pid_t_ who) {
+    switch (which) {
+        case PRIO_PROCESS_:
+            return who == 0 ? task == current : task->pid == who;
+        case PRIO_PGRP_:
+            return task->group->pgid == (who == 0 ? current->group->pgid : (pid_t_) who);
+        case PRIO_USER_:
+            // The REAL uid, as Linux matches it.
+            return task->uid == (who == 0 ? current->uid : (uid_t_) who);
+    }
+    return false;
 }
+
+static bool prio_which_valid(int_t which) {
+    return which >= PRIO_PROCESS_ && which <= PRIO_USER_;
+}
+
+int_t sys_getpriority(int_t which, pid_t_ who) {
+    STRACE("getpriority(%d, %d)", which, who);
+    if (!prio_which_valid(which))
+        return _EINVAL;
+    int_t best = 0;
+    bool found = false;
+    lock(&pids_lock, 0);
+    for (dword_t p = 1; p < MAX_PID; p++) {
+        struct task *task = pid_get_task(p);
+        if (task == NULL || !prio_target_matches(task, which, who))
+            continue;
+        if (!found || task->nice < best)
+            best = task->nice;
+        found = true;
+    }
+    unlock(&pids_lock);
+    if (!found)
+        return _ESRCH;
+    // Linux reports the highest priority (lowest nice) of everything matched,
+    // biased by 20 so the raw syscall never returns a negative for a call that
+    // succeeded. libc subtracts it back out.
+    return 20 - best;
+}
+
 int_t sys_setpriority(int_t which, pid_t_ who, int_t prio) {
     STRACE("setpriority(%d, %d, %d)", which, who, prio);
-    return 0;
+    if (!prio_which_valid(which))
+        return _EINVAL;
+    // Linux clamps rather than refusing: setpriority(..., 99) succeeds and
+    // leaves the process at 19.
+    if (prio > 19)
+        prio = 19;
+    if (prio < -20)
+        prio = -20;
+
+    int_t err = 0;
+    bool found = false;
+    bool privileged = current_capable(CAP_SYS_NICE_);
+    lock(&pids_lock, 0);
+    for (dword_t p = 1; p < MAX_PID; p++) {
+        struct task *task = pid_get_task(p);
+        if (task == NULL || !prio_target_matches(task, which, who))
+            continue;
+        found = true;
+        // Somebody else's process is not yours to renice.
+        if (!privileged && task->uid != current->uid && task->uid != current->euid) {
+            err = _EPERM;
+            continue;
+        }
+        // Raising priority -- lowering the nice value -- needs CAP_SYS_NICE.
+        // Linux answers EACCES here, not EPERM.
+        if (!privileged && prio < task->nice) {
+            err = _EACCES;
+            continue;
+        }
+        task->nice = prio;
+    }
+    unlock(&pids_lock);
+    if (!found)
+        return _ESRCH;
+    return err;
 }
 
 // realtime scheduling stubs
@@ -435,6 +601,30 @@ int_t sys_sched_getparam_guest(pid_t_ pid, guest_addr_t param_addr) {
     return 0;
 }
 #define SCHED_OTHER_ 0
+#define SCHED_FIFO_  1
+#define SCHED_RR_    2
+#define SCHED_BATCH_ 3
+#define SCHED_IDLE_  5
+#define SCHED_RESET_ON_FORK_ 0x40000000
+
+// Resolve a pid argument the way the sched_* calls take one: 0 means the
+// caller. Returns a task with a reference taken (release with
+// task_ref_cnt_mod(-1)), or NULL with *err set.
+static struct task *sched_task_for(pid_t_ pid, int_t *err) {
+    *err = 0;
+    if (pid == 0 || pid == current->pid) {
+        task_ref_cnt_mod(current, 1);
+        return current;
+    }
+    // NOT under pids_lock: pid_get_task_ref takes it itself, and it is not
+    // recursive. (pid_get_task, the non-ref form, is the one that requires the
+    // caller to hold it -- the header comment covers both and means the
+    // second.)
+    struct task *task = pid_get_task_ref(pid);
+    if (task == NULL)
+        *err = _ESRCH;
+    return task;
+}
 
 int_t sys_sched_setparam(pid_t_ pid, addr_t param_addr) {
     return sys_sched_setparam_guest(pid, param_addr);
@@ -475,36 +665,105 @@ int_t sys_sched_rr_get_interval_guest(pid_t_ pid, guest_addr_t tp_addr) {
     return 0;
 }
 
-int_t sys_sched_getscheduler(pid_t_ UNUSED(pid)) {
-    return SCHED_OTHER_;
+int_t sys_sched_getscheduler(pid_t_ pid) {
+    STRACE("sched_getscheduler(%d)", pid);
+    int_t err;
+    struct task *task = sched_task_for(pid, &err);
+    if (task == NULL)
+        return err;
+    // Including the SCHED_RESET_ON_FORK flag, which is what Linux returns.
+    int_t policy = task->sched_policy;
+    task_ref_cnt_mod(task, -1);
+    return policy;
 }
 int_t sys_sched_setscheduler(pid_t_ pid, int_t policy, addr_t param_addr) {
     return sys_sched_setscheduler_guest(pid, policy, param_addr);
 }
 
-int_t sys_sched_setscheduler_guest(pid_t_ UNUSED(pid), int_t policy, guest_addr_t param_addr) {
-    if (policy != SCHED_OTHER_)
-        return _EINVAL;
+// AOK runs every task on a host thread and does not schedule them itself, so a
+// policy is recorded rather than acted on. Recording it is still the point:
+// SCHED_BATCH and SCHED_IDLE were refused outright with EINVAL, so `chrt -b`,
+// `chrt -i`, background indexers demoting themselves and anything setting
+// SCHED_RESET_ON_FORK (pipewire clients, the chromium sandbox) got a hard
+// failure from a call Linux always accepts from an unprivileged process.
+//
+// The realtime policies stay refused, with EPERM rather than EINVAL. Nothing
+// here can preempt, so accepting SCHED_FIFO would be a promise of latency AOK
+// cannot keep -- and EPERM is what an unprivileged process gets on Linux
+// anyway, so it is a state callers already handle.
+int_t sys_sched_setscheduler_guest(pid_t_ pid, int_t policy, guest_addr_t param_addr) {
+    STRACE("sched_setscheduler(%d, %#x)", pid, policy);
     int_t sched_priority;
     if (user_get(param_addr, sched_priority))
         return _EFAULT;
-    if (sched_priority != 0)
+
+    int_t base = policy & ~SCHED_RESET_ON_FORK_;
+    bool realtime;
+    switch (base) {
+        case SCHED_OTHER_:
+        case SCHED_BATCH_:
+        case SCHED_IDLE_:
+            realtime = false;
+            break;
+        case SCHED_FIFO_:
+        case SCHED_RR_:
+            realtime = true;
+            break;
+        default:
+            return _EINVAL;
+    }
+
+    // A non-realtime policy takes priority 0 and nothing else; a realtime one
+    // takes 1..99. Measured on Linux 6.12: SCHED_BATCH with priority 1 is
+    // EINVAL, SCHED_FIFO with priority 0 is EINVAL.
+    if (!realtime && sched_priority != 0)
         return _EINVAL;
+    if (realtime && (sched_priority < 1 || sched_priority > 99))
+        return _EINVAL;
+    if (realtime)
+        return _EPERM;
+
+    int_t err;
+    struct task *task = sched_task_for(pid, &err);
+    if (task == NULL)
+        return err;
+    if (task != current && !current_capable(CAP_SYS_NICE_) &&
+            task->uid != current->uid && task->uid != current->euid) {
+        task_ref_cnt_mod(task, -1);
+        return _EPERM;
+    }
+    // Leaving SCHED_IDLE for anything else is a priority increase, so it needs
+    // CAP_SYS_NICE -- measured: SCHED_IDLE then SCHED_BATCH is EPERM.
+    if ((task->sched_policy & ~SCHED_RESET_ON_FORK_) == SCHED_IDLE_ &&
+            base != SCHED_IDLE_ && !current_capable(CAP_SYS_NICE_)) {
+        task_ref_cnt_mod(task, -1);
+        return _EPERM;
+    }
+    task->sched_policy = policy;
+    task_ref_cnt_mod(task, -1);
     return 0;
 }
 
+// A constant table on Linux -- it says what the policy's range IS, not what
+// this caller may set. Reporting EINVAL for SCHED_FIFO made a runtime that
+// asks the range before deciding whether to try conclude the policy does not
+// exist, which is a different thing from not being allowed to use it.
 int_t sys_sched_get_priority_max(int_t policy) {
     STRACE("sched_get_priority_max(%d)", policy);
-    if (policy == 0)
-        return 0;
-    return _EINVAL;
+    switch (policy) {
+        case SCHED_OTHER_: case SCHED_BATCH_: case SCHED_IDLE_: return 0;
+        case SCHED_FIFO_: case SCHED_RR_: return 99;
+        default: return _EINVAL;
+    }
 }
 
 int_t sys_sched_get_priority_min(int_t policy) {
     STRACE("sched_get_priority_min(%d)", policy);
-    if (policy == 0)
-        return 0;
-    return _EINVAL;
+    switch (policy) {
+        case SCHED_OTHER_: case SCHED_BATCH_: case SCHED_IDLE_: return 0;
+        case SCHED_FIFO_: case SCHED_RR_: return 1;
+        default: return _EINVAL;
+    }
 }
 
 int_t sys_ioprio_get(int_t UNUSED(which), int_t UNUSED(who), int_t UNUSED(ioprio)) {

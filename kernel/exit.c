@@ -3,6 +3,7 @@
 #include <string.h>
 #include "emu/cpu.h"
 #include "kernel/calls.h"
+#include "kernel/resource.h"
 #include "kernel/mm.h"
 #include "kernel/futex.h"
 #include "kernel/ptrace.h"
@@ -361,6 +362,9 @@ noreturn void do_exit(struct task *task, int status) {
         exit_wait_backoff(&mm_wait_pause);
         exit_wait_backoff(&mm_wait_pause);
     } while (exit_wait_needed(task)); // Wait for now, task is in one or more critical
+    // Last chance to read the address space: the exit-time usage snapshot
+    // below runs after this, and a peak RSS read from a released mm is 0.
+    task_maxrss_kb(task);
     mm_release(task->mm);
     task->mm = NULL;
     task->mem = NULL;

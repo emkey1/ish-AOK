@@ -1314,8 +1314,12 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
         // growsdown below -- the upgrade drops the read lock, so re-check
         // under the write lock before mapping.
         read_to_write_lock(&mem->lock);
-        if (mem_pt(mem, page) == NULL)
+        if (mem_pt(mem, page) == NULL) {
             mem_lazy_fault(mem, page);
+            // A reservation becoming a real page is exactly a minor fault:
+            // resolved from memory, nothing read from storage.
+            task_count_minflt();
+        }
         write_to_read_lock(&mem->lock);
         entry = mem_pt(mem, page);
     }
@@ -1334,8 +1338,10 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
         // The upgrade drops the read lock before taking the write lock, so
         // another thread faulting the same growsdown page can map it first.
         // Mapping again would discard anything that thread already wrote.
-        if (mem_pt(mem, page) == NULL)
+        if (mem_pt(mem, page) == NULL) {
             pt_map_nothing(mem, page, 1, P_WRITE | P_GROWSDOWN);
+            task_count_minflt();
+        }
         write_to_read_lock(&mem->lock);
 
         entry = mem_pt(mem, page);
@@ -1368,6 +1374,9 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
         // if page is cow, ~~milk~~ copy it
         
         if (entry->flags & P_COW) {
+            // Breaking a copy-on-write page is a minor fault, and after a fork
+            // it is most of the process's fault count.
+            task_count_minflt();
             bool locked_general_lock = false;
             // Some callers, including do_exit() via clear_tid, already hold
             // general_lock. Re-locking it here self-deadlocks while trying to
@@ -1460,6 +1469,9 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
         jit_invalidate_page(mem->mmu.jit, page);
 #endif
         if (entry->flags & P_COW) {
+            // Breaking a copy-on-write page is a minor fault, and after a fork
+            // it is most of the process's fault count.
+            task_count_minflt();
             bool locked_general_lock = false;
             if (current != NULL && !pthread_equal(current->general_lock.owner, pthread_self())) {
                 lock(&current->general_lock, 0);

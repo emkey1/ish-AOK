@@ -1010,10 +1010,55 @@ dword_t sys_read_guest(fd_t fd_no, guest_addr_t buf_addr, dword_t size) {
     return sys_read_common(fd_no, buf_addr, size);
 }
 
+// RLIMIT_FSIZE, which was stored, reported through getrlimit and /proc, and
+// then never consulted -- so `ulimit -f` was decorative and a runaway process
+// filled the disk exactly as if no limit had been set.
+//
+// Linux applies it in generic_write_check_limits, and the shape is easy to get
+// wrong: a write that would CROSS the limit is not refused, it is truncated to
+// what fits and reports that shorter count (measured on Linux 6.12: a 4096-byte
+// write against a 64-byte limit returns 64 with no error and no signal). Only
+// a write starting at or past the limit fails, with EFBIG and a SIGXFSZ.
+//
+// Regular files only. A pipe, socket or device has no size for a size limit to
+// mean anything about, and Linux does not check them.
+static int fsize_limit_check(struct fd *fd, size_t *size) {
+    // The default is unlimited, so nothing below is on the ordinary write
+    // path: only a process that actually set `ulimit -f` pays for the seek.
+    rlim_t_ limit = rlimit(RLIMIT_FSIZE_);
+    if (limit == RLIM_INFINITY_)
+        return 0;
+    if (!S_ISREG(fd->type))
+        return 0;
+    // fd->offset is not where a regular file's position lives -- the fd ops
+    // keep it on the host descriptor and sys_write_buf never writes it back
+    // for the ->write branch. Reading the stale copy meant every write
+    // believed it was starting at 0, so a limited file could be extended 64
+    // bytes at a time forever instead of refusing once it was full.
+    if (fd->ops->lseek == NULL)
+        return 0;
+    off_t_ pos = fd->ops->lseek(fd, 0, LSEEK_CUR);
+    if (pos < 0)
+        return 0;
+    off_t offset = (off_t) pos;
+    if ((uint64_t) offset >= limit) {
+        send_signal(current, SIGXFSZ_, SIGINFO_NIL);
+        return _EFBIG;
+    }
+    uint64_t room = limit - (uint64_t) offset;
+    if (*size > room)
+        *size = (size_t) room;
+    return 0;
+}
+
 static ssize_t sys_write_buf(fd_t fd_no, void *buf, size_t size) {
     struct fd *fd = f_get_io(fd_no);
     if (fd == NULL)
         return _EBADF;
+
+    int limit_err = fsize_limit_check(fd, &size);
+    if (limit_err < 0)
+        return limit_err;
 
     ssize_t res;
     uint64_t delay_start = io_delay_start(fd);

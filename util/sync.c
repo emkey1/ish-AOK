@@ -205,6 +205,12 @@ int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout) {
 
 static int wait_for_internal(cond_t *cond, lock_t *lock, struct timespec *timeout, bool interruptible) {
     if (current) {
+        // A voluntary context switch, in the sense getrusage means: the task
+        // gave up the CPU to wait for something rather than being preempted.
+        // This is the honest place to count it -- TASK_MAY_BLOCK wraps every
+        // read and write whether or not it actually sleeps, so counting there
+        // would report a switch per syscall.
+        current->nvcsw++;
         lock(&current->waiting_cond_lock, 0);
         current->waiting_cond = cond;
         current->waiting_lock = lock;

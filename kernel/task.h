@@ -146,6 +146,29 @@ struct task {
     uid_t_ suid, sgid;
     uid_t_ fsuid, fsgid;
 
+    // Scheduling, which AOK does not act on but must report back faithfully:
+    // a process that sets SCHED_IDLE or a nice level and then reads back
+    // something else concludes the call failed. Both are per-thread on Linux.
+    // nice is the Linux nice value (-20..19); getpriority reports 20 - nice.
+    int_t nice;
+    // Minor faults and voluntary context switches, for getrusage. Every field
+    // but utime/stime was a hard 0 -- a value Linux never produces for a
+    // process that has run at all -- so `time -v`, Python's resource module
+    // and every wait4 supervisor reported a process that had touched no memory
+    // and never blocked. Written only by the owning thread; read by others
+    // under pids_lock via rusage_get_task.
+    unsigned long minflt;
+    unsigned long nvcsw;
+    // Peak resident size in KB, latched here as well as on the mm: do_exit
+    // releases the address space before it snapshots the task's final usage,
+    // so a maxrss read only from the mm is 0 by then -- which is exactly the
+    // value wait4 and getrusage(RUSAGE_CHILDREN) report, and exactly the
+    // consumer (`time -v prog`) that cares most.
+    unsigned long maxrss_kb;
+    // Policy with the SCHED_RESET_ON_FORK flag still in it, which is exactly
+    // what sched_getscheduler returns.
+    int_t sched_policy;
+
     // What the credentials WILL be after the exec currently in progress, and
     // whether it is a privileged (setuid/setgid) one. __do_execve fills these
     // from the executable's stat immediately before the image is loaded, and
@@ -557,6 +580,15 @@ int task_snapshot_collect(struct task_snapshot *snapshot, bool leaders_only);
 void task_snapshot_release(struct task_snapshot *snapshot);
 
 dword_t get_count_of_blocked_tasks(void);
+// Live processes (thread group leaders) owned by one real uid, for
+// RLIMIT_NPROC.
+dword_t task_count_for_uid(uid_t_ uid);
+// Count one minor fault against the running task, if there is one. Called from
+// the emulator's fault paths, which can also run with no current task.
+static inline void task_count_minflt(void) {
+    if (current != NULL)
+        current->minflt++;
+}
 dword_t get_count_of_alive_tasks(void);
 void get_guest_loadavg(uint64_t out[3]);
 
@@ -603,6 +635,8 @@ extern void (*halt_hook)(int status);
 #define CAP_SYS_PTRACE_  19
 #define CAP_NET_BIND_SERVICE_ 10
 #define CAP_SYS_ADMIN_   21
+#define CAP_SYS_NICE_    23
+#define CAP_SYS_RESOURCE_ 24
 #define CAP_WAKE_ALARM_  35
 
 // The equivalent of Linux's capable(): true if the caller holds `cap` in its

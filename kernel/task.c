@@ -232,6 +232,20 @@ inline void task_ref_cnt_mod(struct task *task, int value) { // value should onl
                                                     memory_order_acq_rel, memory_order_relaxed));
 }
 
+// How many PROCESSES one user has, for RLIMIT_NPROC. Thread group leaders
+// only: a threaded process is one process however many host threads it runs.
+dword_t task_count_for_uid(uid_t_ uid) {
+    dword_t count = 0;
+    complex_lockt(&pids_lock, 0);
+    for (dword_t id = 1; id < MAX_PID; id++) {
+        struct task *task = pid_get_task(id);
+        if (task != NULL && task->uid == uid && task->pid == task->tgid)
+            count++;
+    }
+    unlock(&pids_lock);
+    return count;
+}
+
 dword_t get_count_of_blocked_tasks(void) {
     // task_ref_cnt_mod(current, 1);  // Not needed?
     dword_t res = 0;

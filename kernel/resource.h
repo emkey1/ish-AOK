@@ -34,6 +34,11 @@ struct rlimit32_ {
 #define RLIMIT_RTTIME_ 15
 #define RLIMIT_NLIMITS_ 16
 
+// Peak resident size of a task's address space, in KB. Updates the mm's
+// high-water mark as a side effect of sampling.
+struct task;
+size_t task_maxrss_kb(struct task *task);
+
 dword_t sys_getrlimit32(dword_t resource, addr_t rlim_addr);
 dword_t sys_getrlimit64(dword_t resource, addr_t rlim_addr);
 dword_t sys_getrlimit64_guest(dword_t resource, guest_addr_t rlim_addr);

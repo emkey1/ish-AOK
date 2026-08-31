@@ -24,6 +24,14 @@ struct mm {
     guest_addr_t auxv_end;
     guest_addr_t stack_start;
     dword_t mlockall_flags;
+    // Peak mapped-page count this address space has been observed at, for
+    // getrusage's ru_maxrss. Sampled rather than maintained incrementally: the
+    // page count comes from a page-table walk, and there is no single choke
+    // point through which every mapping change passes. So it is a high-water
+    // mark over the samples actually taken -- which for the consumers that
+    // matter (a wait4 supervisor reading a child's usage, `time -v`) includes
+    // the sample taken at exit.
+    size_t rss_pages_hwm;
     struct fd *exefile;
 };
 

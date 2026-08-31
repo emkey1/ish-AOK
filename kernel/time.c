@@ -331,6 +331,13 @@ static int host_sleep_interruptible(struct timespec req, struct timespec *rem) {
             slice = (struct timespec) {.tv_sec = 0, .tv_nsec = SLEEP_SLICE_NS};
 
         int res;
+        // Sleeping is a voluntary context switch in the sense getrusage means:
+        // the task gave up the CPU rather than being preempted. This sleep
+        // does not go through wait_for (it is a host nanosleep in slices), so
+        // it has to say so itself or a process whose whole life is sleep+poll
+        // reports having never yielded.
+        if (current != NULL)
+            current->nvcsw++;
         TASK_MAY_BLOCK { res = nanosleep(&slice, NULL); }
         if (res < 0 && errno != EINTR) {
             // Only EINVAL is possible (a bad slice would be our own bug), but
