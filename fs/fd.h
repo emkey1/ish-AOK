@@ -161,6 +161,35 @@ struct fd {
             dword_t so_busy_poll;
             bool so_no_check;
             bool so_timestampns;
+            // SO_INCOMING_CPU reports which CPU last received on this
+            // socket. Linux answers -1 until one has, and AOK never steers by
+            // CPU, so -1 is the honest and permanent answer -- a state real
+            // Linux produces for every socket that has not received yet. A
+            // value the guest sets is kept and reported back, as Linux does
+            // (there it is a hint for SO_REUSEPORT group selection, which a
+            // stack is free to ignore).
+            dword_t so_incoming_cpu;
+            // SO_PEEK_OFF, but only ever a value that asks for nothing: -1
+            // (disabled) or 0 (peek from the front, which is what AOK does).
+            // A positive offset is refused rather than stored -- see
+            // sys_setsockopt_guest_abi.
+            dword_t so_peek_off;
+            // IP_RETOPTS: whether to attach received IP options to messages.
+            // Darwin cannot deliver them, but the flag itself round-trips --
+            // ping reads it back after setting it.
+            bool ip_retopts;
+            // SO_RCVBUF/SO_SNDBUF as LINUX reports them, once the guest has
+            // set one. Linux stores twice what you ask for (the second half
+            // is its own bookkeeping overhead) with a floor and a cap, and
+            // getsockopt returns that doubled number -- so a program that
+            // sets 8192 and reads back 8192 concludes its request was
+            // silently truncated. Untouched until a set arrives, so the
+            // default keeps coming from the host and stays whatever the host
+            // stack chose.
+            dword_t so_rcvbuf;
+            dword_t so_sndbuf;
+            bool so_rcvbuf_set;
+            bool so_sndbuf_set;
             // SO_BINDTODEVICE: the interface name this socket was bound to,
             // empty when it never was. Reported back by getsockopt, which is
             // what a caller checks after setting it.

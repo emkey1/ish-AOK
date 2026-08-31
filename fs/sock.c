@@ -1341,6 +1341,16 @@ static lock_t peer_lock = LOCK_INITIALIZER;
 #define DEFAULT_TCP_CONGESTION "cubic"
 
 static void sock_init_emulation_defaults(struct fd *fd);
+// Linux's socket-buffer conventions, as the guest observes them.
+// SOCK_MIN_RCVBUF/SOCK_MIN_SNDBUF are the floors sock_setsockopt applies
+// after doubling; SOCK_MEM_MAX is net.core.{r,w}mem_max, which AOK already
+// reports as 212992 in /proc/sys/net/core (fs/proc/sys.c) -- the two have to
+// agree, or a program that reads the limit and then sets it gets a different
+// number back.
+#define SOCK_MIN_RCVBUF 2304
+#define SOCK_MIN_SNDBUF 4608
+#define SOCK_MEM_MAX 212992
+
 static bool sockopt_is_linux_soft_unsupported(dword_t level, dword_t option);
 static ssize_t sock_ioctl_size(int cmd);
 
@@ -5876,6 +5886,10 @@ static void sock_init_emulation_defaults(struct fd *fd) {
     strcpy(fd->socket.tcp_congestion, DEFAULT_TCP_CONGESTION);
     fd->socket.ipv6_recverr_fd = -1;
     // Linux's net.core.rmem_default/wmem_default default.
+    // SO_INCOMING_CPU is -1 until a packet arrives, which for AOK is always.
+    fd->socket.so_incoming_cpu = (dword_t) -1;
+    // Linux's default: no peek offset.
+    fd->socket.so_peek_off = (dword_t) -1;
     fd->socket.netlink_rcvbuf = 212992;
     fd->socket.netlink_sndbuf = 212992;
     lock_init(&fd->socket.netlink_reply_lock, "netlink_reply\0");
@@ -5956,7 +5970,14 @@ static int_t sys_setsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
     if (level == IPPROTO_IP && option == IP_RETOPTS_) {
         // Linux ping probes this on IPv4 sockets. Darwin raw sockets do not
         // provide a compatible implementation, and the option is not required
-        // for basic echo functionality.
+        // for basic echo functionality -- but the flag itself has to survive a
+        // set/get round trip. It was accepted and thrown away, and the get had
+        // no handler at all, so it reported optlen 0 and left the caller's
+        // buffer untouched: whatever uninitialised value was already there
+        // read back as the answer.
+        if (value_len < sizeof(dword_t))
+            return _EINVAL;
+        sock->socket.ip_retopts = *(dword_t *) value != 0;
         return 0;
     }
     if (level == IPPROTO_TCP && option == TCP_CONGESTION_) {
@@ -6049,7 +6070,7 @@ static int_t sys_setsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
     if (level == SOL_SOCKET_ &&
             (option == SO_PRIORITY_ || option == SO_MARK_ ||
              option == SO_BUSY_POLL_ || option == SO_NO_CHECK_ ||
-             option == SO_TIMESTAMPNS_)) {
+             option == SO_TIMESTAMPNS_ || option == SO_INCOMING_CPU_)) {
         if (value_len < sizeof(dword_t))
             return _EINVAL;
         dword_t v = *(dword_t *) value;
@@ -6074,6 +6095,90 @@ static int_t sys_setsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
                 break;
             case SO_NO_CHECK_: sock->socket.so_no_check = v != 0; break;
             case SO_TIMESTAMPNS_: sock->socket.so_timestampns = v != 0; break;
+            case SO_INCOMING_CPU_: sock->socket.so_incoming_cpu = v; break;
+        }
+        return 0;
+    }
+
+    // Three options whose whole value is a promise to deliver something
+    // later, and AOK cannot deliver any of it. Turning them ON is refused
+    // rather than accepted-and-ignored, because a caller that succeeds here
+    // goes on to WAIT for what it was promised:
+    //
+    //   SO_ZEROCOPY makes send(MSG_ZEROCOPY) return before the data is
+    //   copied and report completion on the error queue. Without the
+    //   notification the sender never learns its buffer is free again and
+    //   blocks on a completion that is never coming.
+    //
+    //   SO_TIMESTAMPING's transmit flags do the same through the error
+    //   queue, and its receive flags promise SCM_TIMESTAMPING control
+    //   messages that would never arrive.
+    //
+    //   SO_PEEK_OFF makes recv(MSG_PEEK) start N bytes into the queue. AOK
+    //   peeks from the front, so a caller that set an offset would silently
+    //   read the wrong bytes -- the one failure mode with no symptom.
+    //
+    // EOPNOTSUPP is what Linux itself returns for SO_ZEROCOPY on a family
+    // that cannot do it, so callers already handle it. Turning them OFF, and
+    // SO_PEEK_OFF's disabled value of -1, are accepted: they ask for nothing.
+    if (level == SOL_SOCKET_ &&
+            (option == SO_ZEROCOPY_ || option == SO_TIMESTAMPING_ ||
+             option == SO_PEEK_OFF_)) {
+        if (value_len < sizeof(dword_t))
+            return _EINVAL;
+        dword_t v = *(dword_t *) value;
+        // Offset 0 asks to peek from the front, which is what AOK does
+        // anyway, so it is accepted along with the -1 that disables it.
+        // Only a positive offset would move data the guest sees.
+        bool asking_for_nothing = option == SO_PEEK_OFF_
+            ? (int32_t) v <= 0
+            : v == 0;
+        if (!asking_for_nothing)
+            return _EOPNOTSUPP;
+        if (option == SO_PEEK_OFF_)
+            sock->socket.so_peek_off = v;
+        return 0;
+    }
+
+    // SO_RCVBUF/SO_SNDBUF: Linux stores TWICE what it is asked for and
+    // reports the doubled number back, so a program that sets 8192 and reads
+    // 8192 concludes the kernel truncated its request. It also clamps -- to
+    // net.core.{r,w}mem_max on the way in (the FORCE variants skip that and
+    // need CAP_NET_ADMIN) and to a floor on the way out, so a request of 0
+    // is legal and yields the minimum rather than EINVAL.
+    //
+    // The host is still asked for the undoubled size, best-effort: Darwin has
+    // its own limits and rejects 0 outright, and the guest-visible number is
+    // the one that has to follow Linux's rules.
+    if (level == SOL_SOCKET_ && sock->real_fd >= 0 &&
+            (option == SO_RCVBUF_ || option == SO_SNDBUF_ ||
+             option == SO_RCVBUFFORCE_ || option == SO_SNDBUFFORCE_)) {
+        if (value_len < sizeof(dword_t))
+            return _EINVAL;
+        bool force = option == SO_RCVBUFFORCE_ || option == SO_SNDBUFFORCE_;
+        bool rcv = option == SO_RCVBUF_ || option == SO_RCVBUFFORCE_;
+        if (force && !superuser())
+            return _EPERM;
+        uint32_t v = *(dword_t *) value;
+        if (v > (uint32_t) INT32_MAX / 2)
+            v = (uint32_t) INT32_MAX / 2;
+        if (!force && v > SOCK_MEM_MAX)
+            v = SOCK_MEM_MAX;
+        uint32_t doubled = v * 2;
+        uint32_t floor = rcv ? SOCK_MIN_RCVBUF : SOCK_MIN_SNDBUF;
+        if (doubled < floor)
+            doubled = floor;
+        // Best-effort on the host; its own clamps are its business, and a
+        // rejection must not fail a call Linux always accepts.
+        int host_val = (int) (v == 0 ? floor / 2 : v);
+        (void) setsockopt(sock->real_fd, SOL_SOCKET,
+                          rcv ? SO_RCVBUF : SO_SNDBUF, &host_val, sizeof(host_val));
+        if (rcv) {
+            sock->socket.so_rcvbuf = doubled;
+            sock->socket.so_rcvbuf_set = true;
+        } else {
+            sock->socket.so_sndbuf = doubled;
+            sock->socket.so_sndbuf_set = true;
         }
         return 0;
     }
@@ -6118,8 +6223,11 @@ static int_t sys_setsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
             sock->socket.unix_passcred = (*(dword_t *) value) != 0;
             return 0;
         }
-        if (sock->socket.domain != AF_LOCAL_)
-            return _ENOPROTOOPT;
+        // Accepted on every family, as Linux does. It only MEANS anything
+        // where credentials travel (AF_UNIX, netlink) -- setting it on a TCP
+        // socket is a no-op there too -- but refusing it was a state real
+        // Linux never produces, and libraries that set it unconditionally
+        // before deciding what kind of socket they have saw an error.
         sock->socket.unix_passcred = (*(dword_t *) value) != 0;
         return 0;
     }
@@ -6470,13 +6578,10 @@ static int_t sys_getsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
         sockopt_store_value(value, user_value_len, &value_len, &cred, sizeof(cred));
     } else if (level == SOL_SOCKET_ && option == SO_PASSCRED_) {
         dword_t passcred;
-        if (sock->socket.domain == AF_NETLINK_) {
-            passcred = sock->socket.unix_passcred;
-        } else if (sock->socket.domain != AF_LOCAL_) {
-            return _ENOPROTOOPT;
-        } else {
-            passcred = sock->socket.unix_passcred;
-        }
+        // Readable on every family, as Linux is: setsockopt accepts it
+        // everywhere (it only MEANS anything where credentials travel), so
+        // the read has to answer everywhere too.
+        passcred = sock->socket.unix_passcred;
         sockopt_store_value(value, user_value_len, &value_len, &passcred, sizeof(passcred));
     } else if (level == SOL_SOCKET_ && option == SO_ACCEPTCONN_) {
         // Report our own tracked listen() state. Darwin's getsockopt does not
@@ -6576,6 +6681,37 @@ static int_t sys_getsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
             return _ENOTCONN;
         dword_t mtu = 1500;
         sockopt_store_value(value, user_value_len, &value_len, &mtu, sizeof(mtu));
+    } else if (level == SOL_SOCKET_ &&
+               (option == SO_ZEROCOPY_ || option == SO_TIMESTAMPING_ ||
+                option == SO_PEEK_OFF_)) {
+        // setsockopt refuses to turn these on (see there), so the answer is
+        // always the off value -- 0, and -1 for the peek offset, which is how
+        // Linux spells "no offset". Answering at all is the point: a caller
+        // that reads back what it set is entitled to a number, not EINVAL.
+        dword_t v = option == SO_PEEK_OFF_ ? sock->socket.so_peek_off : 0;
+        sockopt_store_value(value, user_value_len, &value_len, &v, sizeof(v));
+    } else if (level == IPPROTO_IP && option == IP_RETOPTS_) {
+        dword_t retopts = sock->socket.ip_retopts;
+        sockopt_store_value(value, user_value_len, &value_len, &retopts, sizeof(retopts));
+    } else if (level == SOL_SOCKET_ &&
+               (option == SO_RCVBUF_ || option == SO_SNDBUF_) &&
+               (option == SO_RCVBUF_ ? sock->socket.so_rcvbuf_set
+                                     : sock->socket.so_sndbuf_set)) {
+        // What the guest last asked for, in Linux's doubled-and-clamped form.
+        // Only once it HAS asked: before that the host's own default is the
+        // better answer, and it already matches.
+        dword_t v = option == SO_RCVBUF_ ? sock->socket.so_rcvbuf
+                                         : sock->socket.so_sndbuf;
+        sockopt_store_value(value, user_value_len, &value_len, &v, sizeof(v));
+    } else if (level == IPPROTO_IPV6 && sock->socket.domain != AF_INET6_) {
+        // An IPv6 option on a socket that is not IPv6 is not a bad option --
+        // it is a level this socket does not have. Linux dispatches socket
+        // options by family and lands in no IPv6 handler at all, which is
+        // EOPNOTSUPP, the same answer it gives for a wholly unknown level.
+        // AOK recognised the level regardless of the family and reported
+        // ENOPROTOOPT ("no such option"), which tells a caller probing for
+        // IPv6 support the wrong thing about why.
+        return _EOPNOTSUPP;
     } else if (level == IPPROTO_IP && option == IP_RECVERR_) {
         dword_t recverr = sock->socket.ip_recverr;
         sockopt_store_value(value, user_value_len, &value_len, &recverr, sizeof(recverr));
@@ -6607,7 +6743,7 @@ static int_t sys_getsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
     } else if (level == SOL_SOCKET_ &&
             (option == SO_PRIORITY_ || option == SO_MARK_ ||
              option == SO_BUSY_POLL_ || option == SO_NO_CHECK_ ||
-             option == SO_TIMESTAMPNS_)) {
+             option == SO_TIMESTAMPNS_ || option == SO_INCOMING_CPU_)) {
         // The remembered value, as set above. These have no Darwin knob to
         // read back from, so this IS the state.
         dword_t v = 0;
@@ -6617,6 +6753,7 @@ static int_t sys_getsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
             case SO_BUSY_POLL_: v = sock->socket.so_busy_poll; break;
             case SO_NO_CHECK_: v = sock->socket.so_no_check; break;
             case SO_TIMESTAMPNS_: v = sock->socket.so_timestampns; break;
+            case SO_INCOMING_CPU_: v = sock->socket.so_incoming_cpu; break;
         }
         sockopt_store_value(value, user_value_len, &value_len, &v, sizeof(v));
     } else if ((level == IPPROTO_IP &&
