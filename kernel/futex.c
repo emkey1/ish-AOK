@@ -679,8 +679,22 @@ static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2
     return (int) woken;
 }
 
+// FUTEX_CMP_REQUEUE: check *uaddr1 against val3, wake up to val waiters, and
+// move up to val2 of the rest onto uaddr2.
+//
+// All three parts were wrong. The comparison used `val` -- the number to wake
+// -- instead of val3, so the guard fired on entirely unrelated values: a
+// caller doing the ordinary thing (word == val3) got a spurious EAGAIN, and a
+// caller whose word happened to equal the wake count sailed past a check that
+// should have stopped it. Nothing was woken at all, only requeued, so a
+// broadcast lost every wakeup it was supposed to deliver. And the return value
+// counted only the requeued waiters, where Linux returns woken + requeued.
+//
+// This is what a pre-2.25 glibc condvar broadcast and Bionic-style runtimes
+// use. Current musl is unaffected -- it uses plain FUTEX_REQUEUE, which goes
+// through futex_wakelike -- which is why it took a probe to find.
 static int futex_cmp_requeue(guest_addr_t uaddr1, dword_t op, dword_t val, guest_addr_t uaddr2, dword_t val2,
-        dword_t UNUSED(val3)) {
+        dword_t val3) {
     struct futex *futex1 = futex_get(uaddr1, op);
     struct futex *futex2 = futex_get_unlocked(uaddr2, op);
     int err = 0;
@@ -688,21 +702,31 @@ static int futex_cmp_requeue(guest_addr_t uaddr1, dword_t op, dword_t val, guest
 
     if (futex_load(uaddr1, &tmp)) {
         err = _EFAULT;
-    } else if (tmp != val) {
+    } else if (tmp != val3) {
         err = _EAGAIN;
     } else {
         struct futex_wait *wait, *tmp_wait;
+        dword_t woken = 0;
         dword_t requeued = 0;
         list_for_each_entry_safe(&futex1->queue, wait, tmp_wait, queue) {
-            if (requeued >= val2) {
-                break;
+            if (!futex_wait_is_live(wait, "cmp_requeue")) {
+                list_remove(&wait->queue);
+                continue;
             }
+            if (woken < val) {
+                notify(&wait->cond);
+                list_remove(&wait->queue);
+                woken++;
+                continue;
+            }
+            if (requeued >= val2)
+                break;
             list_remove(&wait->queue);
             list_add_tail(&futex2->queue, &wait->queue);
             wait->futex = futex2;
             requeued++;
         }
-        err = requeued;
+        err = (int) (woken + requeued);
     }
 
     futex_put(futex1);
@@ -874,6 +898,85 @@ dword_t sys_futex_time64(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_o
     return sys_futex_common(uaddr, op, val, timeout_or_val2, uaddr2, val3, true);
 }
 
+// Bits userspace keeps in a robust mutex's lock word (linux/futex.h).
+#define FUTEX_WAITERS_    0x80000000
+#define FUTEX_OWNER_DIED_ 0x40000000
+#define FUTEX_TID_MASK_   0x3fffffff
+// Linux's ROBUST_LIST_LIMIT: a corrupt or hostile list must not walk forever.
+#define ROBUST_LIST_LIMIT 2048
+
+// One word of the robust list, whose width follows the ABI.
+static bool robust_read(guest_addr_t addr, bool is64, uint64_t *out) {
+    if (is64) {
+        qword_t v;
+        if (user_get(addr, v))
+            return false;
+        *out = v;
+    } else {
+        dword_t v;
+        if (user_get(addr, v))
+            return false;
+        *out = v;
+    }
+    return true;
+}
+
+// A lock word this dying thread still owns: mark it, and wake somebody.
+//
+// Linux clears the TID, sets FUTEX_OWNER_DIED, keeps FUTEX_WAITERS, and wakes
+// one waiter if there was one -- which is what turns a waiter's blocking lock
+// into an immediate EOWNERDEAD instead of a hang forever. Nothing here walked
+// the list at all, so a thread dying while holding a robust mutex left every
+// waiter blocked for good; the whole point of a robust mutex is that it does
+// not.
+static void robust_handle_death(guest_addr_t futex_addr, pid_t_ tid) {
+    dword_t uval;
+    if (user_get(futex_addr, uval))
+        return;
+    if ((uval & FUTEX_TID_MASK_) != (dword_t) tid)
+        return;
+    dword_t nval = (uval & FUTEX_WAITERS_) | FUTEX_OWNER_DIED_;
+    if (user_put(futex_addr, nval))
+        return;
+    if (nval & FUTEX_WAITERS_)
+        futex_wake(futex_addr, 1);
+}
+
+// Walk the list this thread registered with set_robust_list and release every
+// lock it still holds. Runs on the dying thread itself, before its address
+// space goes away -- the same place Linux runs exit_robust_list.
+void futex_exit_robust_list(struct task *task) {
+    guest_addr_t head = task->robust_list;
+    if (head == 0)
+        return;
+    bool is64 = guest_abi_is_64bit(task->abi);
+    size_t word = is64 ? 8 : 4;
+
+    // struct robust_list_head is { list.next, futex_offset, list_op_pending }.
+    uint64_t entry, futex_offset, pending;
+    if (!robust_read(head, is64, &entry))
+        return;
+    if (!robust_read(head + word, is64, &futex_offset))
+        return;
+    if (!robust_read(head + 2 * word, is64, &pending))
+        return;
+
+    // The list is circular through the head, so that is the terminator.
+    for (unsigned limit = ROBUST_LIST_LIMIT; entry != head && limit > 0; limit--) {
+        uint64_t next;
+        bool have_next = robust_read((guest_addr_t) entry, is64, &next);
+        // The pending entry is handled after the loop: it is mid-operation,
+        // and Linux deliberately leaves it until last.
+        if (entry != pending)
+            robust_handle_death((guest_addr_t) (entry + futex_offset), task->pid);
+        if (!have_next)
+            return;
+        entry = next;
+    }
+    if (pending != 0)
+        robust_handle_death((guest_addr_t) (pending + futex_offset), task->pid);
+}
+
 static dword_t robust_list_head_size(enum guest_abi abi) {
     return abi == GUEST_ABI_AMD64 ? 24 : 12;
 }
@@ -891,10 +994,18 @@ static int_t sys_get_robust_list_common(pid_t_ pid, guest_addr_t robust_list_ptr
     STRACE("get_robust_list(%d, %#llx, %#llx)", pid,
             (unsigned long long) robust_list_ptr, (unsigned long long) len_ptr);
 
-    struct task *task = pid_get_task_ref(pid);
-    bool is_current = task == current;
-    if (task != NULL)
-        task_ref_cnt_mod(task, -1);
+    // pid 0 means the calling thread, as everywhere else in the API. It was
+    // looked up like any other pid, and pid 0 is never allocated, so it came
+    // back EPERM -- and musl gates ALL robust-mutex support on exactly this
+    // probe succeeding once, so no musl program on AOK could create a robust
+    // mutex at all.
+    bool is_current = pid == 0;
+    if (!is_current) {
+        struct task *task = pid_get_task_ref(pid);
+        is_current = task == current;
+        if (task != NULL)
+            task_ref_cnt_mod(task, -1);
+    }
     if (!is_current)
         return _EPERM;
 

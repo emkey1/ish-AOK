@@ -335,6 +335,12 @@ noreturn void do_exit(struct task *task, int status) {
     while (exit_wait_needed(task)) { // Wait for other references and locks, but ignore extra pending signals while exiting.
         exit_wait_backoff(&exit_wait_pause);
     }
+    // Release the robust mutexes this thread still holds, before its address
+    // space goes away. Linux runs exit_robust_list here for the same reason:
+    // the lock words live in guest memory, and a waiter needs FUTEX_OWNER_DIED
+    // written into them or it blocks for good.
+    futex_exit_robust_list(task);
+
     guest_addr_t clear_tid = task->clear_tid;
     if (clear_tid) {
         pid_t_ zero = 0;
