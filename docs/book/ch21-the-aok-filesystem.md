@@ -157,7 +157,7 @@ as a limitation — nothing container-shaped works, and that is architectural.
 `/AOK` is where the same fact reads as an advantage, and the in-app overview
 states it directly:
 
-> iSH-AOK has no mount or PID namespaces — there's exactly one Linux kernel
+> iSH-AOK has no mount or PID namespaces — there's exactly one emulated Linux kernel
 > underneath everything, so `/proc`, `/sys`, and `/dev` always reflect the
 > single true system state no matter which root or chroot you're looking at them
 > from.
