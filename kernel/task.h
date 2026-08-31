@@ -438,6 +438,9 @@ void task_leave_session(struct task *task);
 bool pgroup_is_orphaned(pid_t_ pgid, pid_t_ sid);
 
 struct posix_timer {
+    // For a CLOCK_THREAD_CPUTIME_ID timer: the thread whose CPU clock it
+    // counts against. See posix_timer_thread_cpu_now in kernel/time.c.
+    pid_t_ cpu_clock_pid;
     struct timer *timer;
     int_t timer_id;
     struct tgroup *tgroup;

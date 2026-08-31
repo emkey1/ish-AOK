@@ -57,8 +57,20 @@ static inline struct timespec timespec_normalize(struct timespec ts) {
 }
 
 typedef void (*timer_callback_t)(void *data);
+// Where a timer reads "now" from. Almost every timer just calls
+// timespec_now(clockid) on its own thread, which is right for the wall clocks
+// and for the process CPU clock (the timer thread is in the same process). It
+// is NOT right for CLOCK_THREAD_CPUTIME_ID: that clock belongs to a specific
+// thread, and the timer's own thread is asleep, so its value never advances
+// and the deadline never arrives. A timer on that clock supplies a sampler
+// that reads the clock of the task that armed it.
+typedef struct timespec (*timer_clock_fn)(void *data);
+
 struct timer {
     clockid_t clockid;
+    // NULL means timespec_now(clockid).
+    timer_clock_fn clock_now;
+    void *clock_data;
     struct timespec start;
     struct timespec end;
     struct timespec interval;
@@ -75,6 +87,9 @@ struct timer {
 };
 
 struct timer *timer_new(clockid_t clockid, timer_callback_t callback, void *data);
+// Override where this timer reads the current time from. Must be called before
+// the timer is armed.
+void timer_set_clock_source(struct timer *timer, timer_clock_fn fn, void *data);
 void timer_free(struct timer *timer);
 // value is how long to wait until the next fire
 // interval is how long after that to wait until the next fire (if non-zero)

@@ -9,6 +9,20 @@ static bool timer_warning_trace_enabled(void) {
     return false;
 }
 
+// The timer's idea of now: its own clock unless a sampler was installed.
+static struct timespec timer_now(struct timer *timer) {
+    if (timer->clock_now != NULL)
+        return timer->clock_now(timer->clock_data);
+    return timespec_now(timer->clockid);
+}
+
+void timer_set_clock_source(struct timer *timer, timer_clock_fn fn, void *data) {
+    lock(&timer->lock, 0);
+    timer->clock_now = fn;
+    timer->clock_data = data;
+    unlock(&timer->lock);
+}
+
 struct timer *timer_new(clockid_t clockid, timer_callback_t callback, void *data) {
 //    assert(clockid == CLOCK_MONOTONIC || clockid == CLOCK_REALTIME);
     struct timer *timer = malloc(sizeof(struct timer));
@@ -59,7 +73,7 @@ static void *timer_thread(void *param) {
         uint64_t generation = timer->generation;
         struct timespec end = timer->end;
         struct timespec interval = timer->interval;
-        struct timespec remaining = timespec_subtract(timer->end, timespec_now(timer->clockid));
+        struct timespec remaining = timespec_subtract(timer->end, timer_now(timer));
         while (timer->active &&
                 timer->generation == generation &&
                 timespec_positive(remaining)) {
@@ -76,7 +90,7 @@ static void *timer_thread(void *param) {
             }
             nanosleep(&nap, NULL);
             lock(&timer->lock, 0);
-            remaining = timespec_subtract(timer->end, timespec_now(timer->clockid));
+            remaining = timespec_subtract(timer->end, timer_now(timer));
         }
         if (!timer->active)
             break;
@@ -85,7 +99,7 @@ static void *timer_thread(void *param) {
 
         // Only fire the callback for the arm we actually slept on. A later
         // arm/cancel updates the generation and should not inherit this wakeup.
-        if (timespec_positive(timespec_subtract(timer->end, timespec_now(timer->clockid))))
+        if (timespec_positive(timespec_subtract(timer->end, timer_now(timer))))
             continue;
 
         if (timer_warning_trace_enabled()) {
@@ -110,7 +124,7 @@ static void *timer_thread(void *param) {
         if (timer->generation != generation)
             continue;
         if (timer->active && timespec_positive(interval)) {
-            struct timespec now = timespec_now(timer->clockid);
+            struct timespec now = timer_now(timer);
             timer->start = end;
             timer->end = timespec_add(timer->start, interval);
             if (!timespec_positive(timespec_subtract(timer->end, now))) {
@@ -135,7 +149,7 @@ static void *timer_thread(void *param) {
 
 int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *oldspec) {
     lock(&timer->lock, 0);
-    struct timespec now = timespec_now(timer->clockid);
+    struct timespec now = timer_now(timer);
     if (oldspec != NULL) {
         *oldspec = (struct timer_spec) {};
         if (timer->active) {

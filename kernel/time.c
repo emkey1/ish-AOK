@@ -237,8 +237,16 @@ int write_guest_timeval_abi(enum guest_abi abi, guest_addr_t addr, const struct 
     return 0;
 }
 
+// The `abi` argument selects the LAYOUT, and every caller in the tree names it
+// explicitly (GUEST_ABI_I386 for the 32-bit struct, GUEST_ABI_AMD64 for the
+// 64-bit one) rather than passing the guest's real ABI. Testing for AMD64 by
+// name therefore worked -- right up until a new caller passed current->abi,
+// which for an arm64 guest is neither, so a 64-bit timespec was read as a
+// 32-bit one: tv_nsec came out of the high half of tv_sec, i.e. zero, and a
+// semtimedop asked to wait 200ms timed out instantly. Ask whether the ABI is
+// 64-bit instead, which is true for the explicit AMD64 callers as well.
 int read_guest_timespec_abi(enum guest_abi abi, guest_addr_t addr, struct timespec *out) {
-    if (abi == GUEST_ABI_AMD64) {
+    if (guest_abi_is_64bit(abi)) {
         struct timespec64_ guest;
         if (user_get(addr, guest))
             return _EFAULT;
@@ -252,8 +260,9 @@ int read_guest_timespec_abi(enum guest_abi abi, guest_addr_t addr, struct timesp
     return 0;
 }
 
+// Same as read_guest_timespec_abi above.
 int write_guest_timespec_abi(enum guest_abi abi, guest_addr_t addr, const struct timespec *in) {
-    if (abi == GUEST_ABI_AMD64) {
+    if (guest_abi_is_64bit(abi)) {
         struct timespec64_ guest = timespec_to_guest64(*in);
         if (user_put(addr, guest))
             return _EFAULT;
@@ -1422,6 +1431,31 @@ dword_t sys_adjtimex_guest(guest_addr_t tx_addr) {
     return clock_adjtime_read(tx_addr, guest_abi_is_64bit(current->abi));
 }
 
+// Read the owning thread's CPU clock, by pid rather than by pointer: the timer
+// outlives nothing, but the thread can exit while the timer is armed, and a
+// stored task pointer would be dangling by the time this ran. A thread that is
+// gone reports its clock as far in the future, so an armed timer stops
+// counting down rather than firing spuriously -- Linux disarms such a timer,
+// and never firing is the same observable outcome.
+static struct timespec posix_timer_thread_cpu_now(void *data) {
+    struct posix_timer *timer = data;
+    struct task *task = pid_get_task_ref(timer->cpu_clock_pid);
+    if (task == NULL) {
+        struct timespec forever = { .tv_sec = INT64_MAX / 2, .tv_nsec = 0 };
+        return forever;
+    }
+    unsigned long utime = 0, stime = 0;
+    task_thread_cpu_time(task, &utime, &stime);
+    task_ref_cnt_mod(task, -1);
+    // task_thread_cpu_time counts in jiffies at USER_HZ = 100.
+    unsigned long ticks = utime + stime;
+    struct timespec now = {
+        .tv_sec = (time_t) (ticks / 100),
+        .tv_nsec = (long) ((ticks % 100) * 10000000L),
+    };
+    return now;
+}
+
 static void posix_timer_callback(struct posix_timer *timer) {
     if (timer->tgroup == NULL)
         return;
@@ -1558,6 +1592,17 @@ static int_t sys_timer_create_guest_abi(dword_t clock, guest_addr_t sigevent_add
     if (default_sigevent)
         sigev.value.sv_ptr = timer_id;
     timer->timer = timer_new(real_clockid, (timer_callback_t) posix_timer_callback, timer);
+    // CLOCK_THREAD_CPUTIME_ID belongs to ONE thread, and the timer runs on its
+    // own -- which is asleep, so its thread clock never advances and the
+    // deadline never arrives. The timer was created and armed and reported
+    // success and then simply never fired, which is the worst of the three
+    // possible answers. Sample the clock of the thread that created it
+    // instead. (The process CPU clock needs none of this: the timer thread is
+    // in the same process, so reading it on any thread gives the same number.)
+    if (real_clockid == CLOCK_THREAD_CPUTIME_ID) {
+        timer->cpu_clock_pid = current->pid;
+        timer_set_clock_source(timer->timer, posix_timer_thread_cpu_now, timer);
+    }
     timer->signal = sigev.signo;
     timer->sig_value = sigev.value;
     timer->tgroup = NULL;
