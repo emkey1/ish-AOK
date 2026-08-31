@@ -387,7 +387,7 @@ bool procns_statat(struct fd *at, const char *path_raw, struct statbuf *stat, in
     return true;
 }
 
-static struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, int mode, int extra_norm) {
+struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, int mode, int extra_norm) {
     if (flags & O_RDWR_ && flags & O_WRONLY_)
         return ERR_PTR(_EINVAL);
 

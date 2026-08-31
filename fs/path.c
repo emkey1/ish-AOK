@@ -82,6 +82,11 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
                 res = mount->fs->readlink(mount, possible_symlink, c, MAX_PATH - (c - out));
             if (res >= 0) {
                 mount_release(mount);
+                // RESOLVE_NO_SYMLINKS: the caller asked for a resolution with
+                // no symlink in it at all, so finding one is the answer, not
+                // something to follow.
+                if (flags & N_NO_SYMLINKS)
+                    return _ELOOP;
                 // Linux's MAXSYMLINKS. Five was low enough that ordinary
                 // /etc/alternatives-style chains hit ELOOP: `levels` counts
                 // every link followed across the whole resolution, including

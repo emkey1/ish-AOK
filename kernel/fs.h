@@ -56,6 +56,9 @@ struct attr {
 
 struct fd *generic_open(const char *path, int flags, int mode);
 struct fd *generic_openat(struct fd *at, const char *path, int flags, int mode);
+// generic_openat with extra path_normalize flags (fs/path.h's N_*). openat2's
+// RESOLVE_* constraints ride in here.
+struct fd *generic_openat_norm(struct fd *at, const char *path, int flags, int mode, int extra_norm);
 // For stored, already-normalized paths (chroot prefix included): anchors at
 // the real root instead of the caller's chroot. See fs/generic.c.
 struct fd *generic_open_realroot(const char *path, int flags, int mode);

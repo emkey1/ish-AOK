@@ -23,6 +23,11 @@
 #define MAX_SYMLINKS 40
 
 #define N_CREATE_EEXIST_FIRST 16
+// Refuse to traverse a symlink anywhere in the path, final component
+// included, answering ELOOP instead of following it. openat2's
+// RESOLVE_NO_SYMLINKS, which exists so a caller can open a path it does not
+// control without a symlink in it redirecting the open somewhere else.
+#define N_NO_SYMLINKS 32
 // Require write+execute permission on the resolved parent directory of the
 // final path component. Only correct for callers where the operation always
 // creates or removes a directory entry regardless of whether the final

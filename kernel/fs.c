@@ -564,7 +564,13 @@ dword_t sys_faccessat(fd_t at_f, addr_t path_addr, mode_t_ mode, dword_t flags) 
     return sys_faccessat_guest(at_f, path_addr, mode, flags);
 }
 
+static fd_t sys_openat_norm(fd_t at_f, guest_addr_t path_addr, dword_t flags, mode_t_ mode, int extra_norm);
+
 fd_t sys_openat_guest(fd_t at_f, guest_addr_t path_addr, dword_t flags, mode_t_ mode) {
+    return sys_openat_norm(at_f, path_addr, flags, mode, 0);
+}
+
+static fd_t sys_openat_norm(fd_t at_f, guest_addr_t path_addr, dword_t flags, mode_t_ mode, int extra_norm) {
     char path[MAX_PATH];
     int path_err = user_read_path(path_addr, path, sizeof(path));
     if (path_err)
@@ -579,7 +585,7 @@ fd_t sys_openat_guest(fd_t at_f, guest_addr_t path_addr, dword_t flags, mode_t_ 
         return _EBADF;
     struct fd *fd;
     TASK_MAY_BLOCK {
-        fd = generic_openat(at, path, flags, mode);
+        fd = generic_openat_norm(at, path, flags, mode, extra_norm);
     }
     // SA_RESTART: open() is restartable, which matters for the one open that
     // blocks -- a FIFO waiting to rendezvous with its opposite end.
@@ -639,8 +645,41 @@ fd_t sys_openat2_guest(fd_t at_f, guest_addr_t path_addr, guest_addr_t how_addr,
 
     if ((how.flags >> 32) != 0 || (how.mode >> 32) != 0)
         return _EINVAL;
-    if (how.resolve != 0)
+
+    // Every RESOLVE_* bit was rejected outright, so openat2's whole reason for
+    // existing over openat -- constraining how the path is allowed to resolve
+    // -- was unusable.
+    //
+    // The two implemented here are the two AOK can enforce exactly.
+    // NO_SYMLINKS is answered inside path resolution itself, and CACHED's
+    // "only if this is already cached, else EAGAIN" is a promise about speed
+    // that is honest to decline: every caller of it has a slow path, because
+    // on Linux the answer depends on what happens to be in the dcache.
+    //
+    // BENEATH, IN_ROOT, NO_XDEV and NO_MAGICLINKS stay refused with EINVAL,
+    // which is what a kernel without them says and what every caller already
+    // handles -- openat2 itself is Linux 5.6+, so nothing may assume it. They
+    // are not refused for lack of effort: they are SANDBOXES, and the property
+    // they promise is that no intermediate step of the resolution escaped,
+    // which is a statement about the resolution as it happens. AOK resolves
+    // the path and then opens it in a second pass, so anything checked in
+    // between is checked against a path that could have changed underneath --
+    // exactly the time-of-check-to-time-of-use hole RESOLVE_BENEATH exists to
+    // close. A sandbox that reports success without holding is worse than one
+    // that says it is not available.
+#define RESOLVE_NO_XDEV_       0x01
+#define RESOLVE_NO_MAGICLINKS_ 0x02
+#define RESOLVE_NO_SYMLINKS_   0x04
+#define RESOLVE_BENEATH_       0x08
+#define RESOLVE_IN_ROOT_       0x10
+#define RESOLVE_CACHED_        0x20
+    static const qword_t resolve_implemented =
+        RESOLVE_NO_SYMLINKS_ | RESOLVE_CACHED_;
+    if (how.resolve & ~resolve_implemented)
         return _EINVAL;
+    if (how.resolve & RESOLVE_CACHED_)
+        return _EAGAIN;
+    int extra_norm = (how.resolve & RESOLVE_NO_SYMLINKS_) ? N_NO_SYMLINKS : 0;
 
     dword_t flags = (dword_t) how.flags;
     // The struct is read here rather than at the dispatch site, so plain
@@ -652,7 +691,7 @@ fd_t sys_openat2_guest(fd_t at_f, guest_addr_t path_addr, guest_addr_t how_addr,
     if (current->abi == GUEST_ABI_ARM64)
         flags = arm64_open_flags_to_internal(flags);
 
-    return sys_openat_guest(at_f, path_addr, flags, (mode_t_) how.mode);
+    return sys_openat_norm(at_f, path_addr, flags, (mode_t_) how.mode, extra_norm);
 }
 
 fd_t sys_openat2(fd_t at_f, addr_t path_addr, addr_t how_addr, dword_t size) {

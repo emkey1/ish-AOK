@@ -156,6 +156,7 @@ signal_routing_perms.c
 mounts_list_race.c
 sysctl_write_rules.c
 fallocate_modes.c
+openat2_resolve.c
 exec_perm_rules.c
 sock_bind_refuse.c
 time_clocks_ticks.c
