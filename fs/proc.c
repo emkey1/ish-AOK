@@ -182,7 +182,7 @@ static off_t_ proc_seek(struct fd *fd, off_t_ off, int whence) {
 static ssize_t proc_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {
     if (fd->proc.entry.meta->pread) {
         struct proc_data data = {buf, bufsize, bufsize};
-        return fd->proc.entry.meta->pread(&fd->proc.entry, &data, off);
+        return fd->proc.entry.meta->pread(&fd->proc.entry, &data, off, fd->flags);
     }
     
     int err = proc_refresh_data(fd);
@@ -279,7 +279,9 @@ static int proc_close(struct fd *fd) {
 // mask (fs/poll.c triggered_types) suppresses re-delivery after the first
 // event, and proc_mountinfo_notify_changed's poll_wakeup re-arms it per
 // mount-table change.
-static int proc_poll(struct fd *UNUSED(fd)) {
+static int proc_poll(struct fd *fd) {
+    if (fd->proc.entry.meta->poll != NULL)
+        return fd->proc.entry.meta->poll(&fd->proc.entry, (off_t) fd->offset);
     return POLL_READ;
 }
 

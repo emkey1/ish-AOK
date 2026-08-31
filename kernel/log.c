@@ -10,6 +10,7 @@
 #include "util/sync.h"
 #include "util/fifo.h"
 #include "kernel/task.h"
+#include "fs/mem.h"
 #include "misc.h"
 
 #define LOG_BUF_SHIFT 20
@@ -17,6 +18,15 @@ static char log_buffer[1 << LOG_BUF_SHIFT];
 static struct fifo log_buf = FIFO_INIT(log_buffer);
 static size_t log_max_since_clear = 0;
 static lock_t log_lock = LOCK_INITIALIZER;
+// Total bytes ever appended. The fifo overwrites when it fills, so its own
+// size stops growing and an offset INTO it stops meaning anything -- a reader
+// parked at the end would never see another byte once the buffer had wrapped
+// once. Stream readers position themselves against this instead, which keeps
+// counting, and the window still in the buffer is [total - fifo_size, total).
+static uint64_t log_total_written = 0;
+// Signalled whenever a line lands, so a blocking reader wakes instead of
+// spinning on a zero-length read.
+static cond_t log_cond = COND_INITIALIZER;
 
 #define SYSLOG_ACTION_CLOSE_ 0
 #define SYSLOG_ACTION_OPEN_ 1
@@ -85,6 +95,63 @@ ssize_t ish_log_read_bytes(size_t offset, void *buf, size_t len) {
     return (ssize_t) len;
 }
 
+// Oldest absolute position still held in the ring buffer. Caller holds
+// log_lock.
+static uint64_t log_oldest_locked(void) {
+    return log_total_written - fifo_size(&log_buf);
+}
+
+uint64_t ish_log_total_written(void) {
+    lock(&log_lock, 0);
+    uint64_t total = log_total_written;
+    unlock(&log_lock);
+    return total;
+}
+
+// Copy out from an ABSOLUTE position, advancing *pos past what was copied.
+// Returns 0 when *pos is already at the end. A position that has fallen off
+// the back of the buffer is moved forward to the oldest byte still there
+// rather than failing: Linux's /dev/kmsg reports that overrun with EPIPE, but
+// a stream this coarse (bytes, not records) cannot say where the loss began,
+// and silently resuming beats handing a log daemon an error it will treat as
+// fatal.
+ssize_t ish_log_read_at(uint64_t *pos, void *buf, size_t len) {
+    lock(&log_lock, 0);
+    uint64_t oldest = log_oldest_locked();
+    if (*pos < oldest)
+        *pos = oldest;
+    if (*pos >= log_total_written) {
+        unlock(&log_lock);
+        return 0;
+    }
+    if (len > log_total_written - *pos)
+        len = (size_t) (log_total_written - *pos);
+
+    size_t start = (log_buf.start + (size_t) (*pos - oldest)) % log_buf.capacity;
+    size_t first_copy_size = log_buf.capacity - start;
+    if (first_copy_size > len)
+        first_copy_size = len;
+    memcpy(buf, &log_buf.buf[start], first_copy_size);
+    memcpy((char *) buf + first_copy_size, &log_buf.buf[0], len - first_copy_size);
+    *pos += len;
+    unlock(&log_lock);
+    return (ssize_t) len;
+}
+
+// Block until something lands past pos. Returns 0, or _EINTR if a guest
+// signal arrived first.
+int ish_log_wait_past(uint64_t pos) {
+    lock(&log_lock, 0);
+    int err = 0;
+    while (log_total_written <= pos) {
+        err = wait_for(&log_cond, &log_lock, NULL);
+        if (err < 0)
+            break;
+    }
+    unlock(&log_lock);
+    return err;
+}
+
 static size_t do_syslog(int type, guest_addr_t buf_addr, int_t len) {
     int res;
     switch (type) {
@@ -136,9 +203,13 @@ size_t sys_syslog_guest(int_t type, guest_addr_t buf_addr, int_t len) {
 
 static void log_buf_append(const char *msg) {
     fifo_write(&log_buf, msg, strlen(msg), FIFO_OVERWRITE);
+    log_total_written += strlen(msg);
     log_max_since_clear += strlen(msg);
     if (log_max_since_clear > fifo_capacity(&log_buf))
         log_max_since_clear = fifo_capacity(&log_buf);
+    // Called with log_lock held (ish_vprintk), which is what wait_for below
+    // releases while it sleeps.
+    notify(&log_cond);
 }
 
 static void log_line(const char *line);
@@ -181,6 +252,7 @@ void ish_vprintk(const char *msg, va_list args) {
     }
 
     // output up to the last newline, leave the rest in the buffer
+    bool logged = false;
     complex_lockt(&log_lock, 1);
     char *b = buf;
     char *p;
@@ -190,6 +262,7 @@ void ish_vprintk(const char *msg, va_list args) {
         *p = '\n';
         buf_size -= p + 1 - b;
         b = p + 1;
+        logged = true;
     }
 
     if (buf_size >= sizeof(buf) - 1) {
@@ -197,9 +270,15 @@ void ish_vprintk(const char *msg, va_list args) {
         buf_size = 0;
         b = buf + sizeof(buf) - 1;
         buf[0] = '\0';
+        logged = true;
     }
 
     unlock(&log_lock);
+    // Only once log_lock is clear: waking a poller reaches into the poll
+    // machinery, which logs on its own error paths, and doing that under the
+    // log lock would deadlock the first time it did.
+    if (logged)
+        kmsg_notify_readers();
     memmove(buf, b, strlen(b) + 1);
 }
 

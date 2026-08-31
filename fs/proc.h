@@ -35,8 +35,11 @@ struct proc_dir_entry {
     // file with a custom write function
     int (*update)(struct proc_entry *entry, struct proc_data *data);
     
-    // file with custom pread functionality
-    ssize_t (*pread)(struct proc_entry *entry, struct proc_data *data, off_t off);
+    // file with custom pread functionality. flags are the opening fd's, so a
+    // streaming entry can honour O_NONBLOCK -- /proc/kmsg blocks until there
+    // is a new message otherwise, and a caller that asked not to block gets
+    // exactly the hang it opened O_NONBLOCK to avoid.
+    ssize_t (*pread)(struct proc_entry *entry, struct proc_data *data, off_t off, int flags);
     
     // file with custom pwrite functionality
     ssize_t (*pwrite)(struct proc_entry *entry, struct proc_data *data, off_t off);
@@ -44,6 +47,11 @@ struct proc_dir_entry {
     // symlink
     int (*readlink)(struct proc_entry *entry, char *buf);
     
+    // file whose readiness is not simply "always". Without this every procfs
+    // file reports POLL_READ, which is right for the ones that answer from a
+    // snapshot and wrong for a stream that can be caught up.
+    int (*poll)(struct proc_entry *entry, off_t off);
+
     // remove
     int (*unlink)(struct proc_entry *entry);
 

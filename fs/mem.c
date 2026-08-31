@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <string.h>
 #include "kernel/errno.h"
 #include "kernel/log.h"
@@ -159,26 +160,148 @@ struct dev_ops random_dev = {
     .fd.ioctl = random_ioctl,
 };
 
-static ssize_t kmsg_read(struct fd *fd, void *buf, size_t bufsize) {
-    ssize_t res = ish_log_read_bytes(fd->offset, buf, bufsize);
-    if (res > 0)
-        fd->offset += (unsigned long) res;
-    return res;
+// Open /dev/kmsg fds. A log line arrives from anywhere in the emulator and
+// has no idea who is watching, so the watchers are kept here -- the same shape
+// as fs/proc.c's mountinfo watch list, for the same reason.
+static struct list kmsg_fds = LIST_INITIALIZER(kmsg_fds);
+static lock_t kmsg_fds_lock = LOCK_INITIALIZER;
+
+static int kmsg_open(int UNUSED(major), int UNUSED(minor), struct fd *fd) {
+    // Start at the oldest line still buffered rather than at 0: a fresh open
+    // of /dev/kmsg reads the buffer from its start on Linux too, and
+    // ish_log_read_at clamps a position that has fallen off the back anyway.
+    fd->offset = 0;
+    lock(&kmsg_fds_lock, 0);
+    list_add(&kmsg_fds, &fd->kmsg.link);
+    unlock(&kmsg_fds_lock);
+    return 0;
 }
 
-static ssize_t kmsg_write(struct fd *UNUSED(fd), const void *UNUSED(buf), size_t UNUSED(bufsize)) {
-    return _EPERM;
+static int kmsg_close(struct fd *fd) {
+    lock(&kmsg_fds_lock, 0);
+    if (!list_null(&fd->kmsg.link))
+        list_remove(&fd->kmsg.link);
+    unlock(&kmsg_fds_lock);
+    return 0;
+}
+
+void kmsg_notify_readers(void) {
+    // ish_vprintk calls this with log_lock released, so nothing here can be
+    // waiting on it. poll_wakeup's FIXME path logs, though, which would come
+    // straight back in and try to take a poll_lock this thread already holds.
+    static __thread bool notifying = false;
+    if (notifying)
+        return;
+    notifying = true;
+    lock(&kmsg_fds_lock, 0);
+    struct fd *fd;
+    list_for_each_entry(&kmsg_fds, fd, kmsg.link)
+        poll_wakeup(fd, POLL_READ);
+    unlock(&kmsg_fds_lock);
+    notifying = false;
+}
+
+// A stream of the kernel log, shared with /proc/kmsg (fs/proc/root.c).
+// Positions are absolute -- see ish_log_read_at.
+ssize_t kmsg_stream_read(unsigned long *pos, void *buf, size_t bufsize, bool nonblock) {
+    for (;;) {
+        uint64_t at = *pos;
+        uint64_t started_at = at;
+        ssize_t res = ish_log_read_at(&at, buf, bufsize);
+        if (res != 0) {
+            if (res > 0) {
+                // Linux hands back exactly one record per read from
+                // /dev/kmsg. This is a byte stream, so a reader whose buffer
+                // did not land on a record boundary got a partial line and
+                // printed it as one -- busybox's klogd logged the tail of a
+                // timestamp as its own syslog entry. Stop at the first
+                // newline so a record is never split across two reads.
+                const char *nl = memchr(buf, '\n', (size_t) res);
+                if (nl != NULL) {
+                    size_t upto = (size_t) (nl - (const char *) buf) + 1;
+                    if (upto < (size_t) res) {
+                        res = (ssize_t) upto;
+                        at = started_at + upto;
+                    }
+                }
+                *pos = (unsigned long) at;
+            }
+            return res;
+        }
+        // Nothing new. Linux blocks here, and a log daemon's entire main loop
+        // is this read: answering 0 turned that loop into a spin, which is
+        // why the device node was never created in the first place.
+        if (nonblock)
+            return _EAGAIN;
+        int err = ish_log_wait_past(*pos);
+        if (err < 0)
+            return err;
+    }
+}
+
+int kmsg_stream_poll(unsigned long pos) {
+    return ish_log_total_written() > pos ? POLL_READ : 0;
+}
+
+static ssize_t kmsg_read(struct fd *fd, void *buf, size_t bufsize) {
+    return kmsg_stream_read(&fd->offset, buf, bufsize,
+                            (fd->flags & O_NONBLOCK_) != 0);
+}
+
+static int kmsg_poll(struct fd *fd) {
+    return kmsg_stream_poll(fd->offset);
+}
+
+// Linux injects a write into the ring buffer, which is how `echo x >
+// /dev/kmsg` and `logger --kernel` put a line in dmesg -- boot scripts and
+// initramfs hooks use it to say where they got to. The node's 0644 keeps it
+// to root, as there.
+//
+// A leading "<N>" is the syslog priority/facility, which Linux strips from
+// the stored text. There is nowhere to route the level here, so honour the
+// syntax -- a line beginning "<6>" must not appear with the marker still on
+// it -- and drop the value.
+#define KMSG_WRITE_MAX 4096
+static ssize_t kmsg_write(struct fd *UNUSED(fd), const void *buf, size_t bufsize) {
+    if (bufsize == 0)
+        return 0;
+    const char *msg = buf;
+    size_t len = bufsize > KMSG_WRITE_MAX ? KMSG_WRITE_MAX : bufsize;
+    size_t skip = 0;
+    if (len > 2 && msg[0] == '<') {
+        size_t i = 1;
+        while (i < len && msg[i] >= '0' && msg[i] <= '9')
+            i++;
+        if (i > 1 && i < len && msg[i] == '>')
+            skip = i + 1;
+    }
+    size_t n = len - skip;
+    // printk stores one line per call; a trailing newline of our own would
+    // leave a blank line between every injected message.
+    while (n > 0 && msg[skip + n - 1] == '\n')
+        n--;
+    if (n > 0)
+        // Never as the format string itself: the text is the guest's.
+        ish_printk("%.*s\n", (int) n, msg + skip);
+    // Linux reports the whole write consumed even where it truncated.
+    return (ssize_t) bufsize;
 }
 
 static off_t_ kmsg_lseek(struct fd *fd, off_t_ off, int whence) {
+    // Offsets the guest names are relative to the oldest line still buffered,
+    // which is what Linux's SEEK_SET on /dev/kmsg means; the position we keep
+    // is absolute so a wrap cannot strand it.
+    uint64_t total = ish_log_total_written();
     size_t size = ish_log_size();
+    uint64_t oldest = total - size;
     off_t_ target;
     switch (whence) {
         case LSEEK_SET:
             target = off;
             break;
         case LSEEK_CUR:
-            target = (off_t_) fd->offset + off;
+            target = (off_t_) ((uint64_t) fd->offset > oldest
+                               ? (uint64_t) fd->offset - oldest : 0) + off;
             break;
         case LSEEK_END:
             target = (off_t_) size + off;
@@ -188,14 +311,15 @@ static off_t_ kmsg_lseek(struct fd *fd, off_t_ off, int whence) {
     }
     if (target < 0)
         return _EINVAL;
-    fd->offset = (unsigned long) target;
+    fd->offset = (unsigned long) (oldest + (uint64_t) target);
     return target;
 }
 
 struct dev_ops kmsg_dev = {
-    .open = null_open,
+    .open = kmsg_open,
     .fd.read = kmsg_read,
     .fd.write = kmsg_write,
     .fd.lseek = kmsg_lseek,
-    .fd.poll = ready_poll,
+    .fd.poll = kmsg_poll,
+    .fd.close = kmsg_close,
 };

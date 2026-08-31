@@ -8,6 +8,7 @@
 #endif
 #include "kernel/calls.h"
 #include "kernel/task.h"
+#include "fs/mem.h"
 #include "fs/proc.h"
 #include "fs/proc/net.h"
 #include "fs/dev.h"
@@ -694,6 +695,23 @@ int proc_show_mountinfo(struct proc_entry *UNUSED(entry), struct proc_data *buf)
     return 0;
 }
 
+// /proc/kmsg: the kernel log as a stream, which is the file the older syslog
+// daemons open ("cannot open kernel log (/proc/kmsg)" when it is missing).
+// Linux makes it root-only and CONSUMING -- each read takes messages out of
+// the buffer -- and blocks when there is nothing new. This shares the same
+// stream as /dev/kmsg (fs/mem.c) and is per-reader rather than consuming, so
+// two readers each see everything instead of racing for it. That is strictly
+// friendlier and nothing depends on the destruction; the blocking is what
+// matters, because a daemon's whole loop is this read.
+static ssize_t proc_kmsg_pread(struct proc_entry *UNUSED(entry), struct proc_data *buf, off_t off, int flags) {
+    unsigned long pos = (unsigned long) off;
+    return kmsg_stream_read(&pos, buf->data, buf->capacity, (flags & O_NONBLOCK_) != 0);
+}
+
+static int proc_kmsg_poll(struct proc_entry *UNUSED(entry), off_t off) {
+    return kmsg_stream_poll((unsigned long) off);
+}
+
 // in alphabetical order
 struct proc_dir_entry proc_root_entries[] = {
     {"cmdline", .show = proc_show_cmdline},
@@ -702,6 +720,7 @@ struct proc_dir_entry proc_root_entries[] = {
     {"diskstats", .show = proc_show_diskstats},
     {"filesystems", .show = proc_show_filesystems},
     {"ish", S_IFDIR, .children = &proc_ish_children},
+    {"kmsg", S_IFREG | 0400, .pread = proc_kmsg_pread, .poll = proc_kmsg_poll},
     {"loadavg", .show = proc_show_loadavg},
     {"meminfo", .show = proc_show_meminfo},
     {"mountinfo", .show = proc_show_mountinfo},

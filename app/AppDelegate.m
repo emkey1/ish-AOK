@@ -2533,6 +2533,12 @@ static TerminalViewController *CreateTerminalViewController(void) {
     EnsureCharacterDevice("/dev/random", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_RANDOM_MINOR));
     EnsureCharacterDevice("/dev/urandom", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_URANDOM_MINOR));
     EnsureCharacterDevice("/dev/fuse", S_IFCHR|0666, dev_make(MISC_MAJOR, DEV_FUSE_MINOR));
+    // The kernel log. The driver has always been here (fs/mem.c) but the node
+    // never was, so every syslog daemon that starts with "open the kernel log"
+    // failed on it -- busybox's klogd and rsyslog's imklog both read
+    // /dev/kmsg. Mode matches Linux's 1:11 node: world-readable, and writes
+    // are refused for everyone.
+    EnsureCharacterDevice("/dev/kmsg", S_IFCHR|0644, dev_make(MEM_MAJOR, DEV_KMSG_MINOR));
 
     // Same idea one level up: the root is a device now (/proc/diskstats,
     // /sys/block, and / reporting /dev/sda), and a rootfs image has never

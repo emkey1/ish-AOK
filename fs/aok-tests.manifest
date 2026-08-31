@@ -150,6 +150,7 @@ fs_at_validation.c
 sock_conformance_opts.c
 poll_rdhup_bounds.c
 poll_default_mask.c
+kmsg_stream.c
 exec_perm_rules.c
 sock_bind_refuse.c
 time_clocks_ticks.c

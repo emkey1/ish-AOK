@@ -1071,7 +1071,7 @@ static int proc_pid_smaps_rollup_show(struct proc_entry *entry, struct proc_data
     return 0;
 }
 
-static ssize_t proc_pid_mem_pread(struct proc_entry *entry, struct proc_data *buf, off_t offset) {
+static ssize_t proc_pid_mem_pread(struct proc_entry *entry, struct proc_data *buf, off_t offset, int UNUSED(flags)) {
     struct task *task = proc_get_task(entry);
     if (task == NULL)
         return _ESRCH;

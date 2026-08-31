@@ -252,6 +252,13 @@ struct fd {
             struct list mountinfo_link;
         } proc;
         struct {
+            // Open /dev/kmsg fds, linked into the global kernel-log watch
+            // list (fs/mem.c) so a newly logged line can poll_wakeup them --
+            // `dmesg --follow` and systemd-journald both epoll this rather
+            // than sitting in a blocking read.
+            struct list link;
+        } kmsg;
+        struct {
             int num;
         } devpts;
         struct {

@@ -184,7 +184,7 @@ static void ignore_eexist(int err) {
 // then just accumulates real bytes on the fakefs backing store forever
 // instead of discarding them. Repair the standard set here at every boot so
 // it doesn't matter what the source tarball shipped.
-static void ensure_dev_node(const char *path, int major, int minor) {
+static void ensure_dev_node_mode(const char *path, int major, int minor, mode_t_ mode) {
     dev_t_ dev = dev_make(major, minor);
     struct statbuf stat;
     int err = generic_statat(AT_PWD, path, &stat, false);
@@ -192,7 +192,11 @@ static void ensure_dev_node(const char *path, int major, int minor) {
         return;
     if (err == 0)
         generic_unlinkat(AT_PWD, path);
-    ignore_eexist(generic_mknodat(AT_PWD, path, S_IFCHR | 0666, dev));
+    ignore_eexist(generic_mknodat(AT_PWD, path, S_IFCHR | mode, dev));
+}
+
+static void ensure_dev_node(const char *path, int major, int minor) {
+    ensure_dev_node_mode(path, major, minor, 0666);
 }
 
 static void setup_host_mounts(void) {
@@ -205,6 +209,13 @@ static void setup_host_mounts(void) {
     ensure_dev_node("/dev/tty", TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR);
     ensure_dev_node("/dev/ptmx", TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR);
     ensure_dev_node("/dev/fuse", MISC_MAJOR, DEV_FUSE_MINOR);
+    // The kernel log, which the driver has always implemented (fs/mem.c) and
+    // no root has ever had a node for: every syslog daemon starts by opening
+    // it, and busybox's klogd and rsyslog's imklog both want /dev/kmsg.
+    // 0644, matching Linux's 1:11 node: an unprivileged process may read the
+    // log but not write it, and a 0666 node would let it open for writing and
+    // only then be refused.
+    ensure_dev_node_mode("/dev/kmsg", MEM_MAJOR, DEV_KMSG_MINOR, 0644);
     // systemd's getty@tty1.service (and friends) carry
     // ConditionPathExists=/dev/tty0 -- the Linux "current VT" alias -- and
     // silently skip without it, so a systemd guest finishes booting with no
