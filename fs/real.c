@@ -753,6 +753,20 @@ off_t realfs_lseek(struct fd *fd, off_t offset, int whence) {
 }
 
 int realfs_poll(struct fd *fd) {
+    // Linux has no ->poll operation for a regular file or a directory, so both
+    // are polled through DEFAULT_POLLMASK: always readable and always
+    // writable, never POLLPRI, whatever the open access mode (measured on
+    // Linux 6.12 -- an O_RDONLY file still reports POLLOUT and an O_WRONLY one
+    // still reports POLLIN). Asking the host gets a different answer to a
+    // different question: Darwin reports a spurious POLLPRI on a regular file,
+    // and poll(2) only ever returns bits that were requested, so the
+    // access-mode gating below turned an O_RDONLY file into "readable but not
+    // writable" and an O_WRONLY one into "writable but not readable". Answer
+    // these ourselves. (Host poll bits, like every other return below --
+    // POLLIN/POLLOUT and POLL_READ/POLL_WRITE are the same values.)
+    if (S_ISREG(fd->stat.mode) || S_ISDIR(fd->stat.mode))
+        return POLLIN | POLLOUT;
+
     struct pollfd p = {.fd = fd->real_fd, .events = 0};
 #if defined(__APPLE__)
     // Anonymous pipes (adhoc fds) and named FIFOs (realfs-backed, e.g. a GNU
@@ -805,12 +819,34 @@ int realfs_poll(struct fd *fd) {
         // separately and ignore a POLLNVAL.
         // This is no longer atomic but I don't really know what to do about that.
         int events = 0;
+        bool nval[3] = {false, false, false};
         static const int pollbits[] = {POLLIN, POLLOUT, POLLPRI};
         for (unsigned i = 0; i < sizeof(pollbits)/sizeof(pollbits[0]); i++) {
             p.events = pollbits[i];
-            if (poll(&p, 1, 0) > 0 && !(p.revents & POLLNVAL))
-                events |= p.revents;
+            if (poll(&p, 1, 0) > 0) {
+                if (p.revents & POLLNVAL)
+                    nval[i] = true;
+                else
+                    events |= p.revents;
+            }
         }
+        // Darwin has no poll implementation at all for some host objects --
+        // character devices other than ttys, so /dev/null, /dev/zero and
+        // /dev/random -- and every single-bit probe above comes back POLLNVAL
+        // rather than a readiness answer. Linux polls those through
+        // DEFAULT_POLLMASK, the same always-ready answer the regular-file case
+        // above takes (measured on Linux 6.12: /dev/null, /dev/zero and
+        // /dev/full are all POLLIN|POLLOUT). Reporting "not ready" here made a
+        // guest poll on such an fd block until its timeout, and, together with
+        // the registration error real_poll_check_receipts used to pass on,
+        // made musl's AT_SECURE startup -- which polls fds 0, 1 and 2 --
+        // a_crash() in any setuid binary whose stdio was a host device node.
+        //
+        // Only when *both* the read and write probes were refused: an object
+        // Darwin can poll answers "not ready" (0), not POLLNVAL, and must keep
+        // that answer.
+        if (nval[0] && nval[1])
+            events |= POLLIN | POLLOUT;
         assert(!(events & POLLNVAL));
         return events;
     }

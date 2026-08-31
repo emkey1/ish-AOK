@@ -188,7 +188,14 @@ static int poll_deliver_ready_locked(struct poll *poll_, struct poll_fd *poll_fd
                phase, current->pid, current->comm,
                fd != NULL ? fd->real_fd : -1, poll_types, handled);
     }
-    int res = handled == 1 ? 1 : 0;
+    // The callback returns how many *results* this readiness produced, not
+    // just whether it produced any: select counts an fd once per descriptor
+    // set it is ready in, and poll counts it once per pollfd entry naming it,
+    // so one fd can legitimately contribute more than one to the return value
+    // (measured on Linux 6.12: an fd ready for read and write in both sets
+    // makes select return 2, and the same fd in three pollfd entries makes
+    // poll return 3). Clamping to 1 here undercounted both.
+    int res = handled > 0 ? handled : 0;
 
     // The real poll does not actually get the FDs set as oneshot.
     // But this loop is done while holding the lock, so only one
@@ -1030,11 +1037,23 @@ static int real_poll_check_receipts(struct kevent *events, int count) {
         // Deleting a filter that was never installed is harmless.
         if (events[i].data == ENOENT)
             continue;
-        // EVFILT_EXCEPT is not supported for all Darwin fd types, including
-        // regular files. Treat that as "filter unavailable" rather than
-        // failing the whole poll registration.
-        if (events[i].filter == EVFILT_EXCEPT &&
-                (events[i].data == EINVAL || events[i].data == ENOTSUP || events[i].data == EPERM))
+        // Darwin's kqueue does not implement every filter for every fd type:
+        // EVFILT_EXCEPT is missing on regular files, and character devices
+        // other than ttys (/dev/null, /dev/zero, /dev/random) and directories
+        // support no filter at all. Treat that as "filter unavailable" rather
+        // than failing the whole registration -- returning EINVAL out of the
+        // guest's poll()/select()/epoll_ctl() is not something Linux ever does
+        // for a valid fd, and it made musl's AT_SECURE startup (which polls
+        // fds 0, 1 and 2 and a_crash()es if that fails) kill every setuid
+        // binary whose stdio was a host device node, e.g. `sudo ... >/dev/null`
+        // under the command-line build. Nothing is lost by not registering:
+        // realfs_poll reports exactly these objects as permanently ready, so
+        // poll_wait's readiness scan returns before it ever blocks, and no
+        // wakeup is needed to notice a readiness that is always there.
+        if ((events[i].data == EINVAL || events[i].data == ENOTSUP || events[i].data == EPERM) &&
+                (events[i].filter == EVFILT_EXCEPT ||
+                 events[i].filter == EVFILT_READ ||
+                 events[i].filter == EVFILT_WRITE))
             continue;
         errno = (int) events[i].data;
         return -1;

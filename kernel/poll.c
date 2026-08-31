@@ -120,15 +120,23 @@ struct select_context {
 };
 static int select_event_callback(void *context, int types, union poll_fd_info info) {
     struct select_context *c = context;
-    if (types & SELECT_READ)
+    // Linux's core_sys_select bumps the return count once per descriptor set
+    // the fd is reported in, so an fd that is both readable and writable
+    // contributes 2. Count the sets rather than the fd.
+    int count = 0;
+    if (types & SELECT_READ) {
         bit_set(info.fd, c->readfds);
-    if (types & SELECT_WRITE)
+        count++;
+    }
+    if (types & SELECT_WRITE) {
         bit_set(info.fd, c->writefds);
-    if (types & SELECT_EX)
+        count++;
+    }
+    if (types & SELECT_EX) {
         bit_set(info.fd, c->exceptfds);
-    if (!(types & (SELECT_READ | SELECT_WRITE | SELECT_EX)))
-        return 0;
-    return 1;
+        count++;
+    }
+    return count;
 }
 
 static void select_trace_net_fd(struct fd *fd, int requested, int ready, const char *phase) {
@@ -481,11 +489,16 @@ static int poll_event_callback(void *context, int types, union poll_fd_info info
     struct poll_context *c = context;
     struct pollfd_ *polls = c->polls;
     int nfds = c->nfds;
+    // Linux's do_sys_poll counts every pollfd entry that ends up with a
+    // non-zero revents, so the same fd listed several times counts once per
+    // entry. An entry whose ready types are all masked out by its own events
+    // is not ready and must not be counted.
     int res = 0;
     for (int i = 0; i < nfds; i++) {
         if (c->files[i] == info.ptr) {
             polls[i].revents = types & (polls[i].events | POLL_ALWAYS_LISTENING);
-            res = 1;
+            if (polls[i].revents != 0)
+                res++;
         }
     }
     return res;
