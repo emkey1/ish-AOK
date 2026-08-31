@@ -47,8 +47,10 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 | 38 | [Where the time actually goes](ch38-where-the-time-goes.md) | draft |
 | 39 | [Six optimizations, in full](ch39-six-optimizations.md) | draft |
 | 40 | [What this project believes](ch40-what-this-project-believes.md) | draft |
+| 41 | [The honest gaps](ch41-the-honest-gaps.md) | draft |
+| 42 | [Where it could go](ch42-where-it-could-go.md) | draft |
 
-Chapters 41–42 and the appendices follow the outline. Parts II (5–9), III (10–15), IV (16–21), V (22–27) VI (28–33), VII (34–37) and VIII (38–39) are complete; Part IX is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
+All 42 chapters are drafted. The appendices (A–H in the outline) remain. Parts II (5–9), III (10–15), IV (16–21), V (22–27) VI (28–33), VII (34–37), VIII (38–39) and IX (40–42) are complete. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
 project and `upstream iSH` for `ish-app/ish`; guest means the emulated Linux
 side, host means iOS/macOS; every chapter ends with an `Anchors:` line, and
 chapters that exist because of a specific failure end with a `Story:` line.
