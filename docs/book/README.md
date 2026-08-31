@@ -14,8 +14,9 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 | 6 | [Threaded code: the JIT that is not a JIT](ch06-threaded-code.md) | draft |
 | 7 | [Four guests](ch07-four-guests.md) | draft |
 | 8 | [High-level emulation](ch08-high-level-emulation.md) | draft |
+| 9 | [Proving an emulator right](ch09-proving-it-right.md) | draft |
 
-Chapters 9–42 follow the outline. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
+Chapters 10–42 follow the outline. Part II (5–9) is complete. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
 project and `upstream iSH` for `ish-app/ish`; guest means the emulated Linux
 side, host means iOS/macOS; every chapter ends with an `Anchors:` line, and
 chapters that exist because of a specific failure end with a `Story:` line.
