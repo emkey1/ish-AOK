@@ -26,8 +26,11 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 | 17 | [fakefs: a filesystem in a database](ch17-fakefs.md) | draft |
 | 18 | [The synthetic filesystems](ch18-synthetic-filesystems.md) | draft |
 | 19 | [Sockets and networking](ch19-sockets.md) | draft |
+| 20 | [FUSE](ch20-fuse.md) | draft |
+| 21 | [/AOK: a filesystem compiled into the binary](ch21-the-aok-filesystem.md) | draft |
+| 22 | [A native program is a function call](ch22-a-native-program-is-a-function-call.md) | draft |
 
-Chapters 20–42 follow the outline. Parts II (5–9) and III (10–15) are complete; Part IV is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
+Chapters 23–42 follow the outline. Parts II (5–9), III (10–15) and IV (16–21) are complete; Part V is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
 project and `upstream iSH` for `ish-app/ish`; guest means the emulated Linux
 side, host means iOS/macOS; every chapter ends with an `Anchors:` line, and
 chapters that exist because of a specific failure end with a `Story:` line.
