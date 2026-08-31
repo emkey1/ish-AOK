@@ -37,8 +37,10 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 | 28 | [The iOS app around the kernel](ch28-the-app-around-the-kernel.md) | draft |
 | 29 | [The terminal](ch29-the-terminal.md) | draft |
 | 30 | [Roots](ch30-roots.md) | draft |
+| 31 | [Files, Workspace, and the app-side tools](ch31-files-workspace-tools.md) | draft |
+| 32 | [Devices and system integration](ch32-devices-and-integrations.md) | draft |
 
-Chapters 31–42 follow the outline. Parts II (5–9), III (10–15), IV (16–21) and V (22–27) are complete; Part VI is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
+Chapters 33–42 follow the outline. Parts II (5–9), III (10–15), IV (16–21) and V (22–27) are complete; Part VI is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
 project and `upstream iSH` for `ish-app/ish`; guest means the emulated Linux
 side, host means iOS/macOS; every chapter ends with an `Anchors:` line, and
 chapters that exist because of a specific failure end with a `Story:` line.
