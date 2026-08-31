@@ -51,6 +51,7 @@ const struct dev_node_spec dev_dynamic_nodes[] = {
     {"clipboard", 0666, DYN_DEV_MAJOR, DEV_CLIPBOARD_MINOR},
     {"location",  0666, DYN_DEV_MAJOR, DEV_LOCATION_MINOR},
     {"dsp",       0666, DYN_DEV_MAJOR, DEV_DSP_MINOR},
+    {"url",       0666, DYN_DEV_MAJOR, DEV_URL_MINOR},
 };
 const size_t dev_dynamic_nodes_count = sizeof(dev_dynamic_nodes)/sizeof(dev_dynamic_nodes[0]);
 

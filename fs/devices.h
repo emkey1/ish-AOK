@@ -53,5 +53,7 @@
 #define DEV_LOCATION_MINOR 1
 // /dev/dsp
 #define DEV_DSP_MINOR 3
+// /dev/url
+#define DEV_URL_MINOR 4
 
 #endif

@@ -35,6 +35,7 @@
 #import "SceneDelegate.h"
 #import "AudioDevice.h"
 #import "PasteboardDevice.h"
+#import "URLDevice.h"
 #import "LocationDevice.h"
 #import "NSObject+SaneKVO.h"
 #import "Roots.h"
@@ -2625,6 +2626,22 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                    @"path": @"/dev/location"});
     }
     EnsureCharacterDevice("/dev/location", S_IFCHR|0666, dev_make(DYN_DEV_MAJOR, DEV_LOCATION_MINOR));
+
+    // /dev/url: write a URL, iOS opens it. Registered like the others rather
+    // than exposed as a command, so it composes with redirection and needs no
+    // binary in the guest filesystem.
+    err = dyn_dev_register(&url_dev, DEV_CHAR, DYN_DEV_MAJOR, DEV_URL_MINOR);
+    if (err != 0) {
+        return RecordBootFailure(err,
+                                 @"boot.device.url.failed",
+                                 @"Boot failed while registering URL device",
+                                 @"The filesystem was mounted, but iSH-AOK could not register /dev/url.",
+                                 @"Restart iSH-AOK. If this repeats, open Diagnostics from recovery mode.",
+                                 @{@"root": defaultRoot,
+                                   @"guestABI": guestABI ?: @"",
+                                   @"path": @"/dev/url"});
+    }
+    EnsureCharacterDevice("/dev/url", S_IFCHR|0666, dev_make(DYN_DEV_MAJOR, DEV_URL_MINOR));
 
     err = dyn_dev_register((struct dev_ops *) &audio_dev, DEV_CHAR, DYN_DEV_MAJOR, DEV_DSP_MINOR);
     if (err != 0) {

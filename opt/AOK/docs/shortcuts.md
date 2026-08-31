@@ -44,9 +44,49 @@ the Workspace dashboard, the Session Shell, the system console, the
 browser, themes, or boot images. Each destination is also available as an
 App Shortcut with a Siri phrase, e.g. "Open session shell in iSH-AOK".
 
+## The other direction: /dev/url
+
+Everything above is Shortcuts calling *into* iSH-AOK. `/dev/url` is the
+way back out: write a URL to it and iOS opens it, exactly as if you had
+tapped a link.
+
+    echo https://example.com > /dev/url      # opens Safari
+    echo youtube:// > /dev/url               # opens the YouTube app
+    echo 'shortcuts://run-shortcut?name=Goodnight' > /dev/url
+
+That last form is the interesting one, because it closes the loop: a
+shortcut can run a guest command, and a guest command can run a shortcut
+— so anything you have automated on the phone is reachable from a shell
+script. Any scheme an installed app claims works; `tel:`, `sms:`, `maps:`
+and `mailto:` are all just URLs.
+
+It is a device rather than a command so it composes the way a shell
+expects — redirect into it, pipe into it, use it from a script with no
+extra binary to install. Like `/dev/clipboard` and `/dev/location`, it
+exists only in the app; the command-line build has no iOS to ask.
+
+What it will tell you:
+
+- The write returns only once iOS has answered, so a **successful write
+  means the URL really was opened**. It is not a fire-and-forget that
+  always reports success.
+- A URL with no scheme is `EINVAL` — `echo youtube.com > /dev/url` is an
+  error, `echo https://youtube.com > /dev/url` is not.
+- `EPERM` means iOS refused: no installed app claims the scheme, or
+  iSH-AOK was not in the foreground. iOS does not allow a background app
+  to open URLs, so this will not work from a Shortcuts automation that
+  runs while the app is closed.
+- A trailing newline is trimmed for you, so plain `echo` is fine.
+- Reading it gives nothing; there is no state to read back.
+
 ## A note on trust
 
 A shortcut runs whatever command it was built with, as root. That is the
 point — but treat shortcuts you import from other people like scripts you
 found on the internet, and read what they run before running them. If you
 never use this, turn the gate off in Settings.
+
+`/dev/url` deserves the same care from the other side: anything running
+in the guest can open a URL, which means it can launch apps and trigger
+your shortcuts. It cannot do so silently — iOS switches away from
+iSH-AOK to whatever it opened, so you always see it happen.

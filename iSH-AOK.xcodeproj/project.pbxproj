@@ -179,6 +179,7 @@
 		BB28C7BA268975AA00BDC834 /* iOSFS.m in Sources */ = {isa = PBXBuildFile; fileRef = 408A2639236440F8008A4E81 /* iOSFS.m */; };
 		BB28C7BB268975AE00BDC834 /* LocationDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = BB235533235D488400139E00 /* LocationDevice.m */; };
 		BB28C7BC268975B000BDC834 /* PasteboardDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = 650B337322EA235C00B4C03E /* PasteboardDevice.m */; };
+		AA01URLDEV0000000000BB01 /* URLDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = AA02URLDEV0000000000BB02 /* URLDevice.m */; };
 		BB28C7BF2689799800BDC834 /* Roots.m in Sources */ = {isa = PBXBuildFile; fileRef = BB10E5CD248DBE66009C7A74 /* Roots.m */; };
 		BB2B4DAC231D94C300CB578B /* hterm_all.js in Resources */ = {isa = PBXBuildFile; fileRef = BB2B4DAB231D94C300CB578B /* hterm_all.js */; };
 		BB2B4DAD231D998300CB578B /* term.js in Resources */ = {isa = PBXBuildFile; fileRef = BB4A539C1FAA490C00A72ACE /* term.js */; };
@@ -584,6 +585,8 @@
 		5DD383EC2AAE33920013A847 /* UIDevice.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = UIDevice.h; sourceTree = "<group>"; };
 		650B337222EA235C00B4C03E /* PasteboardDevice.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = PasteboardDevice.h; sourceTree = "<group>"; };
 		650B337322EA235C00B4C03E /* PasteboardDevice.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = PasteboardDevice.m; sourceTree = "<group>"; };
+		AA02URLDEV0000000000BB02 /* URLDevice.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = URLDevice.m; sourceTree = "<group>"; };
+		AA03URLDEV0000000000BB03 /* URLDevice.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = URLDevice.h; sourceTree = "<group>"; };
 		6F681FC66C14DDED4FBD7BD6 /* AOKFoundationModelsBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AOKFoundationModelsBridge.swift; sourceTree = "<group>"; };
 		C0A200042F2F000100000002 /* ISHAppShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISHAppShortcuts.swift; sourceTree = "<group>"; };
 		C0A200042F2F000100000004 /* ISHRunCommandIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ISHRunCommandIntent.swift; sourceTree = "<group>"; };
@@ -980,6 +983,8 @@
 				C0A000012E00000100000007 /* AudioOutput.m */,
 				650B337222EA235C00B4C03E /* PasteboardDevice.h */,
 				650B337322EA235C00B4C03E /* PasteboardDevice.m */,
+				AA02URLDEV0000000000BB02 /* URLDevice.m */,
+				AA03URLDEV0000000000BB03 /* URLDevice.h */,
 				BB235535235D489400139E00 /* LocationDevice.h */,
 				BB235533235D488400139E00 /* LocationDevice.m */,
 				408A263B23644102008A4E81 /* iOSFS.h */,
@@ -2127,6 +2132,7 @@
 				5D8ACEFD284CE096003C50D3 /* sys.c in Sources */,
 				BB28C7BA268975AA00BDC834 /* iOSFS.m in Sources */,
 				BB28C7BC268975B000BDC834 /* PasteboardDevice.m in Sources */,
+				AA01URLDEV0000000000BB01 /* URLDevice.m in Sources */,
 				5DABED382B41E2150078F3FB /* hostinfo.m in Sources */,
 				F8AF2E023A182D2DF0E331A0 /* DisplayRFBShaders.metal in Sources */,
 			);
