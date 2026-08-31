@@ -279,16 +279,30 @@ precisely than any document does.
 
 Two things about it will catch a new contributor.
 
-**There are two registration points.** A test must be listed in
-`fs/aok-tests.manifest` to be published to `/AOK/tests` at build time, and in
-`setup-regressions.sh` to be built and run. A test missing from the first is
-*silently absent on the device* — it does not fail, it does not appear, and the
-run reports success without it.
+**There are three registration points, in two files.** A test must be listed in
+`fs/aok-tests.manifest`, or its source is never embedded into the binary and
+`/AOK/tests/<name>.c` does not exist in the guest at all; and it must appear
+*twice* in `setup-regressions.sh` — once in the `need_file` copy-in check and
+once in the `all_tests=` run list.
+
+The manifest is the quiet one. The two `setup-regressions.sh` lines are in the
+same file and get edited together, and then the script cannot find a source that
+was never shipped. A test missing from the manifest is **silently absent on the
+device**: it does not fail, it does not appear, and the run reports success
+without it. Confirm with `ls /AOK/tests/<name>.c` in the guest after a rebuild —
+and note that `ninja` must actually have run, because the manifest is compiled
+in (Chapter 21).
 
 **tier0 registration is automatic, and cannot be opted out of.** The conductor's
 discovery picks up every `tests/manual/*.c` that includes `test_common.h`, so a
-new test joins that sweep with no registration at all. Two mechanisms, opposite
-defaults, in the same directory.
+new test joins that sweep with no registration at all.
+
+Two mechanisms, opposite defaults, in the same directory — and the trap that
+falls out of the combination is worth stating plainly: **"tier0: N passed" is not
+evidence that the guest suite runs your test.** `at_absolute_path`, the
+regression pinning Chapter 16's MariaDB `EBADF` bug, was verified through tier0
+and shipped registered in *neither* of the other places, invisible to the guest
+suite until somebody noticed.
 
 > **What the guest believes**
 >

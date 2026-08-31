@@ -74,9 +74,9 @@ simply be there again on the next boot.
 And the trap, which catches every new contributor once: **a file not listed in a
 manifest is silently absent on the device.** It does not fail to build. It does
 not produce a warning. It is simply not there when you go looking, on a device,
-after a twenty-minute build. Chapter 9 mentioned the same hazard for tests —
-which need to be in both the manifest and the runner — and this is where the
-first half of that lives.
+after a twenty-minute build. Chapter 9 mentioned the same hazard for tests,
+which need registering in three places across two files; this is where the
+quietest of the three lives.
 
 ## 21.3 `/AOK/fixes`, and where a workaround should live
 
