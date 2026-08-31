@@ -45,8 +45,10 @@ tree; every measurement quoted was re-run on `working` at drafting time.
 | 36 | [Debugging a system with no debugger](ch36-debugging.md) | draft |
 | 37 | [Releasing](ch37-releasing.md) | draft |
 | 38 | [Where the time actually goes](ch38-where-the-time-goes.md) | draft |
+| 39 | [Six optimizations, in full](ch39-six-optimizations.md) | draft |
+| 40 | [What this project believes](ch40-what-this-project-believes.md) | draft |
 
-Chapters 39–42 follow the outline. Parts II (5–9), III (10–15), IV (16–21), V (22–27) VI (28–33) and VII (34–37) are complete; Part VIII is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
+Chapters 41–42 and the appendices follow the outline. Parts II (5–9), III (10–15), IV (16–21), V (22–27) VI (28–33), VII (34–37) and VIII (38–39) are complete; Part IX is in progress. Drafting order is Part II first (the engine), per the outline's own production note. Conventions: `iSH-AOK`/`AOK` for this
 project and `upstream iSH` for `ish-app/ish`; guest means the emulated Linux
 side, host means iOS/macOS; every chapter ends with an `Anchors:` line, and
 chapters that exist because of a specific failure end with a `Story:` line.
