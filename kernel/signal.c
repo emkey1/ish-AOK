@@ -1082,24 +1082,58 @@ int siginfo_to_user(struct task *task, guest_addr_t user_addr, const struct sigi
     return 0;
 }
 
+// siginfo is a UNION: only the arm matching the signal's layout holds anything
+// real, and reading the others back out hands the caller whatever bytes that
+// arm happened to store. Every member was copied for every signal, so a
+// sigqueue'd SIGUSR1 arrived with ssi_status, ssi_addr and ssi_tid carrying
+// pieces of its own sigval, and ssi_fd was the constant -1 -- a value Linux
+// only ever produces for a real SIGPOLL fd, and never a negative one.
+//
+// Linux's signalfd_copyinfo switches on siginfo_layout(sig, si_code) and
+// leaves everything else at the memset zero. Same here.
 static void signalfd_info_from_siginfo(struct signalfd_siginfo_ *out, struct siginfo_ *info) {
     memset(out, 0, sizeof(*out));
     out->signo = info->sig;
     out->sig_errno = info->sig_errno;
     out->code = info->code;
-    out->pid = info->code == SI_QUEUE_ ? info->rt.pid : info->kill.pid;
-    out->uid = info->code == SI_QUEUE_ ? info->rt.uid : info->kill.uid;
-    out->status = info->child.status;
-    out->sig_int = info->code == SI_QUEUE_ ? info->rt.value.sv_int : info->timer.value.sv_int;
-    out->sig_ptr = info->code == SI_QUEUE_ ? info->rt.value.sv_ptr : info->timer.value.sv_ptr;
-    out->utime = info->child.utime;
-    out->stime = info->child.stime;
-    out->addr = info->fault.addr;
-    out->overrun = info->timer.overrun;
-    out->tid = info->timer.timer;
-    out->fd = -1;
-    out->syscall = info->sigsys.syscall;
-    out->call_addr = info->sigsys.addr;
+
+    // A negative code below SI_TKILL_ is one of the kernel's own queued
+    // sources (SI_ASYNCIO, SI_MESGQ, ...); Linux gives them the same RT layout
+    // as SI_QUEUE.
+    bool rt_layout = info->code == SI_QUEUE_ || info->code <= SI_TKILL_;
+
+    if (info->code == SI_TIMER_) {
+        out->tid = info->timer.timer;
+        out->overrun = info->timer.overrun;
+        out->sig_int = info->timer.value.sv_int;
+        out->sig_ptr = info->timer.value.sv_ptr;
+    } else if (info->sig == SIGCHLD_ && info->code > 0) {
+        out->pid = info->child.pid;
+        out->uid = info->child.uid;
+        out->status = info->child.status;
+        out->utime = info->child.utime;
+        out->stime = info->child.stime;
+    } else if (info->sig == SIGSYS_ && info->code > 0) {
+        out->call_addr = info->sigsys.addr;
+        out->syscall = info->sigsys.syscall;
+    } else if (info->code > 0 &&
+               (info->sig == SIGILL_ || info->sig == SIGFPE_ ||
+                info->sig == SIGSEGV_ || info->sig == SIGBUS_ ||
+                info->sig == SIGTRAP_)) {
+        // A fault code (SEGV_MAPERR and friends) is the only thing that makes
+        // ssi_addr meaningful; a SIGSEGV someone merely kill()ed you with has
+        // no address.
+        out->addr = info->fault.addr;
+    } else if (rt_layout) {
+        out->pid = info->rt.pid;
+        out->uid = info->rt.uid;
+        out->sig_int = info->rt.value.sv_int;
+        out->sig_ptr = info->rt.value.sv_ptr;
+    } else {
+        // SI_USER, SI_KERNEL and the rest: sender identity only.
+        out->pid = info->kill.pid;
+        out->uid = info->kill.uid;
+    }
 }
 
 static struct fdtable *signalfd_task_files_retain(struct task *task) {
@@ -1161,30 +1195,36 @@ static void signalfd_wakeup_task(struct task *task, int sig) {
     fdtable_release(files);
 }
 
+// Is anything this signalfd watches already queued? Both queues: a
+// process-directed signal (e.g. SIGCHLD via send_signal_to_group) lives in the
+// shared one, not this thread's own, and a signalfd on any sibling thread must
+// still see it. Caller must NOT hold sighand->lock.
+static bool signalfd_has_pending(sigset_t_ mask) {
+    bool found = false;
+    struct sigqueue *sigqueue;
+    lock(&current->sighand->lock, 0);
+    list_for_each_entry(&current->queue, sigqueue, queue) {
+        if (sigset_has(mask, sigqueue->info.sig)) {
+            found = true;
+            goto out;
+        }
+    }
+    list_for_each_entry(&current->sighand->queue, sigqueue, queue) {
+        if (sigset_has(mask, sigqueue->info.sig)) {
+            found = true;
+            goto out;
+        }
+    }
+out:
+    unlock(&current->sighand->lock);
+    return found;
+}
+
 static int signalfd_poll(struct fd *fd) {
     struct signalfd_state *state = fd->data;
     if (state == NULL)
         return POLL_ERR;
-
-    lock(&current->sighand->lock, 0);
-    struct sigqueue *sigqueue;
-    list_for_each_entry(&current->queue, sigqueue, queue) {
-        if (sigset_has(state->mask, sigqueue->info.sig)) {
-            unlock(&current->sighand->lock);
-            return POLL_READ;
-        }
-    }
-    // A process-directed signal (e.g. SIGCHLD delivered via
-    // send_signal_to_group) lives in the shared queue, not this thread's own
-    // -- a signalfd on any sibling thread must still see it.
-    list_for_each_entry(&current->sighand->queue, sigqueue, queue) {
-        if (sigset_has(state->mask, sigqueue->info.sig)) {
-            unlock(&current->sighand->lock);
-            return POLL_READ;
-        }
-    }
-    unlock(&current->sighand->lock);
-    return 0;
+    return signalfd_has_pending(state->mask) ? POLL_READ : 0;
 }
 
 static ssize_t signalfd_read(struct fd *fd, void *buf, size_t bufsize) {
@@ -1215,8 +1255,19 @@ static ssize_t signalfd_read(struct fd *fd, void *buf, size_t bufsize) {
         }
         int err = wait_for(&fd->cond, &fd->lock, NULL);
         if (err != 0) {
-            unlock(&fd->lock);
-            return err;
+            // A signal this fd watches is BLOCKED in the caller -- that is what
+            // makes signalfd work at all -- so its arrival is the event being
+            // waited for, not an interruption. wait_for reports ANY pending
+            // signal as _EINTR without asking which, so a read that was
+            // already blocking when the signal landed came back EINTR and the
+            // record stayed queued: the ordinary signal-driven event loop
+            // (block, signalfd, read) failed exactly when it was doing its job,
+            // and only a read issued after the signal had already arrived
+            // worked. Re-check before believing the interruption.
+            if (!signalfd_has_pending(state->mask)) {
+                unlock(&fd->lock);
+                return err;
+            }
         }
     }
     unlock(&fd->lock);
@@ -2845,15 +2896,39 @@ int_t sys_rt_sigtimedwait_time64_guest(guest_addr_t set_addr, guest_addr_t info_
     return sys_rt_sigtimedwait_common(set_addr, info_addr, timeout_addr, set_size, true);
 }
 
+// Linux's check_kill_permission. The credential rule is the obvious part; the
+// exception is not, and it was missing entirely: SIGCONT may be sent to ANY
+// process in the same SESSION whatever its credentials.
+//
+// That exception is what job control is built on. A shell that started a
+// privileged job -- `sudo something`, or any setuid program -- keeps the
+// stopped process in its own session but not under its own uid, so without it
+// `fg` could not resume anything privileged, and kill_group inherited the same
+// refusal for the whole process group.
+static bool may_signal_task(struct task *task, dword_t sig) {
+    if (superuser())
+        return true;
+    // A thread signalling its own process never needs a credential check.
+    if (task->tgid == current->tgid)
+        return true;
+    if (current->uid == task->uid || current->uid == task->suid ||
+            current->euid == task->uid || current->euid == task->suid)
+        return true;
+    if (sig == SIGCONT_) {
+        lock(&task->group->lock, 0);
+        pid_t_ target_sid = task->group->sid;
+        unlock(&task->group->lock);
+        // A target with no session is reachable too, as in Linux.
+        if (target_sid == 0 || target_sid == current->group->sid)
+            return true;
+    }
+    return false;
+}
+
 int signal_kill_task(struct task *task, dword_t sig, int si_code) {
     // FIXME: Need to check references to kernel here to be sure they are zero
-    if (!superuser() &&
-            current->uid != task->uid &&
-            current->uid != task->suid &&
-            current->euid != task->uid &&
-            current->euid != task->suid) {
+    if (!may_signal_task(task, sig))
         return _EPERM;
-    }
     // kill(2) reports SI_USER; tkill/tgkill(2) report SI_TKILL. A handler that
     // inspects si_code (or si_pid, which is meaningless for SI_TKILL) must see
     // the right one — glibc raise() routes through tgkill, so this is common.
@@ -2868,13 +2943,8 @@ int signal_kill_task(struct task *task, dword_t sig, int si_code) {
 }
 
 static int queue_signal_task(struct task *task, dword_t sig, struct siginfo_ info) {
-    if (!superuser() &&
-            current->uid != task->uid &&
-            current->uid != task->suid &&
-            current->euid != task->uid &&
-            current->euid != task->suid) {
+    if (!may_signal_task(task, sig))
         return _EPERM;
-    }
 
     send_signal(task, sig, info);
     return 0;
@@ -3185,10 +3255,21 @@ dword_t sys_rt_sigqueueinfo_guest(pid_t_ pid, dword_t sig, guest_addr_t uinfo_ad
     info.rt.pid = current->pid;
     info.rt.uid = current->uid;
 
-    struct task *task = pid_get_task_ref(pid);
+    // Process-directed, exactly as kill(2) is: Linux routes rt_sigqueueinfo
+    // through kill_proc_info/group_send_sig_info, so any thread of the target
+    // that can take the signal is a legitimate destination. Queueing straight
+    // into the resolved task's private queue meant a sibling already parked in
+    // sigwait()/sigtimedwait() -- the whole reason a program uses sigqueue --
+    // waited out its timeout while the signal sat undeliverable beside it.
+    complex_lockt(&pids_lock, 0);
+    struct task *task = pid_get_task(pid);
     if (task == NULL) {
+        unlock(&pids_lock);
         return _ESRCH;
     }
+    task = pick_process_directed_target(task, sig);
+    task_ref_cnt_mod(task, 1);
+    unlock(&pids_lock);
 
     err = queue_signal_task(task, sig, info);
     task_ref_cnt_mod(task, -1);

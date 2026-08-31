@@ -152,6 +152,7 @@ poll_rdhup_bounds.c
 poll_default_mask.c
 kmsg_stream.c
 resource_limits_sched.c
+signal_routing_perms.c
 exec_perm_rules.c
 sock_bind_refuse.c
 time_clocks_ticks.c
