@@ -171,6 +171,7 @@ fd_conventions.c
 proc_files.c
 signal_conventions.c
 dir_tmpfs.c
+futex_validation.c
 exec_perm_rules.c
 sock_bind_refuse.c
 time_clocks_ticks.c

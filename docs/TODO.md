@@ -10,6 +10,30 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### PI futexes are ENOSYS
+
+Measured 2026-09-01 alongside the futex argument-validation work
+(`tests/manual/futex_validation.c`, which closed alignment, the expired
+absolute deadline, and the WAKE_OP encoding). FUTEX_LOCK_PI, FUTEX_UNLOCK_PI,
+FUTEX_TRYLOCK_PI and FUTEX_WAIT_REQUEUE_PI all return ENOSYS, so a glibc
+PTHREAD_PRIO_INHERIT mutex fails at `pthread_mutex_lock`. (musl does not
+implement PI mutexes at all -- `pthread_mutexattr_setprotocol` returns ENOSYS
+in userspace -- so this is only reachable from a glibc guest: Debian, Arch.)
+
+The locking half is implementable and is what programs actually depend on:
+the word holds the owner's TID with FUTEX_WAITERS and FUTEX_OWNER_DIED as the
+top two bits, TRYLOCK_PI is a compare-exchange from 0 to the caller's TID,
+LOCK_PI sets FUTEX_WAITERS and blocks, UNLOCK_PI checks ownership and hands
+off. That needs an owner field per futex and interacts with the robust-list
+FUTEX_OWNER_DIED path already implemented here.
+
+The INHERITANCE half is not implementable and would not be even if it were
+written: iSH has no scheduler priority to donate -- realtime scheduling
+classes are already refused with EPERM (kernel/resource.c). So the honest
+shape is working mutual exclusion with the priority boost documented as a
+no-op, which is strictly better than a lock that cannot be taken at all --
+but it should be written knowing that, not discovered later.
+
 ### tmpfs size= is accepted and not enforced
 
 Measured 2026-09-01. `mount -t tmpfs -o size=1M` takes the option and then

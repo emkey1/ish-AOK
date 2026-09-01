@@ -600,12 +600,17 @@ static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2
     int32_t cmparg = futex_op_sign_extend12(encoded_op);
     bool shift = raw_op & FUTEX_OP_OPARG_SHIFT_;
     unsigned op = raw_op & ~FUTEX_OP_OPARG_SHIFT_;
+    // An op or comparison this kernel does not know is ENOSYS, not EINVAL:
+    // the encoding names an operation, and "I do not implement that one" is
+    // what Linux says. EINVAL means the caller passed a bad VALUE, which is a
+    // different thing to go looking for.
     if (op > FUTEX_OP_XOR_ || cmp > FUTEX_OP_CMP_GE_)
-        return _EINVAL;
+        return _ENOSYS;
     if (shift) {
-        if (oparg < 0 || oparg > 31)
-            return _EINVAL;
-        oparg = 1 << oparg;
+        // FUTEX_OP_OPARG_SHIFT means "the argument is a shift count", and
+        // Linux masks it to the register width rather than refusing: oparg 40
+        // becomes 8. Rejecting it turned a legal encoding into an error.
+        oparg = 1 << (oparg & 31);
     }
 
     struct futex *futex1 = futex_get(uaddr, FUTEX_WAKE_OP_);
@@ -805,6 +810,21 @@ dword_t sys_futex_common(guest_addr_t uaddr, dword_t op, dword_t val, guest_addr
     if (!(op & FUTEX_PRIVATE_FLAG_)) {
         STRACE("!FUTEX_PRIVATE ");
     }
+    // A futex word is a 32-bit value and every operation on it has to be
+    // atomic, so it must be 4-byte aligned; get_futex_key rejects anything
+    // else outright. Accepting an unaligned address meant the atomicity the
+    // whole interface rests on quietly did not hold, and a caller that had
+    // miscomputed its address got a lock that sometimes worked.
+    if (uaddr % 4 != 0)
+        return _EINVAL;
+    switch (op & FUTEX_CMD_MASK_) {
+        case FUTEX_REQUEUE_:
+        case FUTEX_CMP_REQUEUE_:
+        case FUTEX_WAKE_OP_:
+            if (uaddr2 % 4 != 0)
+                return _EINVAL;
+            break;
+    }
     struct timespec timeout = {0};
     if (((op & FUTEX_CMD_MASK_) == FUTEX_WAIT_ || (op & FUTEX_CMD_MASK_) == FUTEX_WAIT_BITSET_) && timeout_or_val2) {
         int err = futex_read_timeout(timeout_or_val2, timeout_time64, &timeout);
@@ -813,8 +833,16 @@ dword_t sys_futex_common(guest_addr_t uaddr, dword_t op, dword_t val, guest_addr
         if ((op & FUTEX_CMD_MASK_) == FUTEX_WAIT_BITSET_) {
             clockid_t clock = (op & FUTEX_CLOCK_REALTIME_) ? CLOCK_REALTIME : CLOCK_MONOTONIC;
             timeout = timespec_subtract(timeout, timespec_now(clock));
+            // An already-expired deadline does NOT short-circuit to
+            // ETIMEDOUT. Linux runs futex_wait_setup first, so a value that
+            // does not match is EAGAIN and an unreadable address is EFAULT --
+            // and only a caller whose word DID match gets ETIMEDOUT. Returning
+            // ETIMEDOUT for all three told a caller its lock was contended
+            // when the truth was that it had passed the wrong value or a bad
+            // pointer, which is the difference between retrying forever and
+            // reporting a bug.
             if (!timespec_positive(timeout))
-                return _ETIMEDOUT;
+                timeout = (struct timespec) {0};
         }
     }
     
