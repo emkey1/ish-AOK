@@ -3885,6 +3885,7 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     pip.layer.shadowRadius = 6.0;
     pip.layer.shadowOffset = CGSizeMake(0.0, 2.0);
     pip.accessibilityLabel = @"Workspace menu";
+    pip.accessibilityHint = @"Opens the desktop menu for window management.";
     [pip addTarget:self action:@selector(menuPipTapped:) forControlEvents:UIControlEventTouchUpInside];
     pip.hidden = !ISHWorkspaceUsesModernStyle();
     return pip;
