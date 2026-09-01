@@ -48,14 +48,23 @@ struct jit_frame {
     // (jit/guest-arm64/simd.S). i386/amd64 use at most 16 of it.
     uint64_t value[4]; // buffer for crosspage crap
     struct jit_block *last_block;
-    // backward-chaining budget: decremented by arm64_chain
-    // (jit/guest-arm64/control.S), riscv64_chain and amd64_chain
-    // (jit/gadgets-aarch64/control.S) on every chained block-to-block
-    // dispatch; on expiry the chain exits to C so the cycle counter,
-    // poke checks, and jetsam writers all get their turn. This is what
-    // lets those engines chain BACKWARD edges (loops) safely. The i386
-    // loop has no such budget, so it still forbids backward links
-    // outright and pays an exit-to-C round trip per loop iteration.
+    // backward-chaining budget: reset to 8192 before every jit_enter and
+    // decremented on every chained block-to-block dispatch, by EVERY engine
+    // and on both hosts --
+    //   arm64_chain   (jit/guest-arm64/control.S)
+    //   riscv64_chain (jit/guest-riscv64/core.S)
+    //   amd64_chain   (jit/gadgets-aarch64/control.S)
+    //   i386          jit_ret_chain (jit/gadgets-{aarch64,x86_64}/entry.S)
+    //                 and the ret gadget's return-cache path
+    //                 (jit/gadgets-{aarch64,x86_64}/control.S), which is a
+    //                 second way into another block without going through C
+    // -- on expiry the chain exits to C so the cycle counter, poke checks,
+    // and jetsam writers all get their turn. This is what lets every engine
+    // chain BACKWARD edges (loops) safely: i386 gained backward-edge linking
+    // (including the self-loop `1: dec; jnz 1b`) in 2026-08, gated on
+    // i386_jit_back_chaining_enabled() in jit.c, where the reasoning lives.
+    // ISH_I386_NOBACKCHAIN=1 restores the forward-only behaviour that
+    // predates it, for bisection.
     long chain_budget;
     // Guest-address-keyed dispatch cache, shared by two engines that store
     // DIFFERENT things in it. Do not unify them without reading both.
