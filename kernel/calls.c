@@ -2935,10 +2935,25 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_rt_sigprocmask_guest(
                 (dword_t) raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3]));
         return true;
+    // Through the restart protocol, not straight into the result register.
+    // These are the ERESTARTNOHAND waits: interrupted by a job-control stop
+    // they return _ERESTART_NOHAND (-512), which is an INTERNAL code. The
+    // caller is meant to either rewind the PC and re-execute, or -- if a
+    // handler ran -- convert it to EINTR. Written directly to rax it was
+    // neither, so an amd64 guest Ctrl-Z'd inside poll() and resumed got
+    // errno 512 back out of poll(). Every one of these leaked it, with and
+    // without a handler. arm64 never did: its legacy switch routes them
+    // through this same predicate. read (case 0) above is the shape.
     case 7:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_poll_guest(
-                raw_args[0], (dword_t) raw_args[1], (int_t) raw_args[2]));
+    {
+        dword_t result = sys_poll_guest(
+                    raw_args[0], (dword_t) raw_args[1], (int_t) raw_args[2]);
+        if (syscall_result_should_restart(result))
+            prepare_syscall_restart(cpu, &amd64_syscall_dispatch, syscall_num, raw_args[0]);
+        else
+            amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) result);
         return true;
+    }
     case 16:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_ioctl_guest(
                 (fd_t) raw_args[0], (dword_t) raw_args[1], raw_args[2]));
@@ -2990,9 +3005,15 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
                 raw_args[0]));
         return true;
     case 23:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_select_amd64_guest(
-                (fd_t) raw_args[0], raw_args[1], raw_args[2], raw_args[3], raw_args[4]));
+    {
+        dword_t result = sys_select_amd64_guest(
+                    (fd_t) raw_args[0], raw_args[1], raw_args[2], raw_args[3], raw_args[4]);
+        if (syscall_result_should_restart(result))
+            prepare_syscall_restart(cpu, &amd64_syscall_dispatch, syscall_num, raw_args[0]);
+        else
+            amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) result);
         return true;
+    }
     case 293:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_pipe2(
                 raw_args[0], (int_t) raw_args[1]));
@@ -3349,9 +3370,15 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
                 raw_args[0], (dword_t) raw_args[1], (dword_t) raw_args[2]));
         return true;
     case 232:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_epoll_wait_guest(
-                (fd_t) raw_args[0], raw_args[1], (int_t) raw_args[2], (int_t) raw_args[3]));
+    {
+        dword_t result = sys_epoll_wait_guest(
+                    (fd_t) raw_args[0], raw_args[1], (int_t) raw_args[2], (int_t) raw_args[3]);
+        if (syscall_result_should_restart(result))
+            prepare_syscall_restart(cpu, &amd64_syscall_dispatch, syscall_num, raw_args[0]);
+        else
+            amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) result);
         return true;
+    }
     case 233:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_epoll_ctl_guest(
                 (fd_t) raw_args[0], (int_t) raw_args[1], (fd_t) raw_args[2], raw_args[3]));
@@ -3426,13 +3453,25 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
                 (fd_t) raw_args[0], raw_args[1], (mode_t_) raw_args[2], (dword_t) raw_args[3]));
         return true;
     case 270:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_pselect_amd64_guest(
-                (fd_t) raw_args[0], raw_args[1], raw_args[2], raw_args[3], raw_args[4], raw_args[5]));
+    {
+        dword_t result = sys_pselect_amd64_guest(
+                    (fd_t) raw_args[0], raw_args[1], raw_args[2], raw_args[3], raw_args[4], raw_args[5]);
+        if (syscall_result_should_restart(result))
+            prepare_syscall_restart(cpu, &amd64_syscall_dispatch, syscall_num, raw_args[0]);
+        else
+            amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) result);
         return true;
+    }
     case 271:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_ppoll_amd64_guest(
-                raw_args[0], (dword_t) raw_args[1], raw_args[2], raw_args[3], (dword_t) raw_args[4]));
+    {
+        dword_t result = sys_ppoll_amd64_guest(
+                    raw_args[0], (dword_t) raw_args[1], raw_args[2], raw_args[3], (dword_t) raw_args[4]);
+        if (syscall_result_should_restart(result))
+            prepare_syscall_restart(cpu, &amd64_syscall_dispatch, syscall_num, raw_args[0]);
+        else
+            amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) result);
         return true;
+    }
     case 273:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_set_robust_list_amd64_guest(
                 raw_args[0], (dword_t) raw_args[1]));
@@ -3450,10 +3489,16 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
                 (int_t) raw_args[0], raw_args[1], (dword_t) raw_args[2]));
         return true;
     case 281:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_epoll_pwait_guest(
-                (fd_t) raw_args[0], raw_args[1], (int_t) raw_args[2], (int_t) raw_args[3],
-                raw_args[4], (dword_t) raw_args[5]));
+    {
+        dword_t result = sys_epoll_pwait_guest(
+                    (fd_t) raw_args[0], raw_args[1], (int_t) raw_args[2], (int_t) raw_args[3],
+                    raw_args[4], (dword_t) raw_args[5]);
+        if (syscall_result_should_restart(result))
+            prepare_syscall_restart(cpu, &amd64_syscall_dispatch, syscall_num, raw_args[0]);
+        else
+            amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) result);
         return true;
+    }
     case 283:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_timerfd_create(
                 (int_t) raw_args[0], (int_t) raw_args[1]));
@@ -3732,10 +3777,16 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
                 (dword_t) raw_args[0], raw_args[1]));
         return true;
     case 441:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_epoll_pwait2_guest(
-                (fd_t) raw_args[0], raw_args[1], (int_t) raw_args[2], raw_args[3], raw_args[4],
-                (dword_t) raw_args[5]));
+    {
+        dword_t result = sys_epoll_pwait2_guest(
+                    (fd_t) raw_args[0], raw_args[1], (int_t) raw_args[2], raw_args[3], raw_args[4],
+                    (dword_t) raw_args[5]);
+        if (syscall_result_should_restart(result))
+            prepare_syscall_restart(cpu, &amd64_syscall_dispatch, syscall_num, raw_args[0]);
+        else
+            amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) result);
         return true;
+    }
     case 452:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_fchmodat2_guest(
                 (fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2], (dword_t) raw_args[3]));
