@@ -13,6 +13,9 @@
 // Linux's default pipe capacity is 16 pages; match it. Allocated on first write
 // so an idle FIFO (e.g. /run/initctl sitting open) costs almost nothing.
 #define FIFO_FILE_CAPACITY (64 * 1024)
+// Linux's PIPE_BUF. Darwin's is 512, which is why the atomicity below has to
+// be imposed here rather than inherited from the host.
+#define PIPE_BUF_ 4096
 
 struct fifo_file {
     lock_t lock;        // protects buf, size, start, readers, writers
@@ -188,6 +191,15 @@ ssize_t fifo_file_write(struct fifo_file *fifo, struct fd *fd, const void *buf, 
             return _EPIPE;
         }
         size_t space = fifo->cap - fifo->size;
+        // POSIX and Linux guarantee a write of at most PIPE_BUF is ATOMIC:
+        // with insufficient room it writes nothing at all and blocks (or
+        // returns EAGAIN), rather than putting in what fits. That guarantee
+        // is the entire reason several processes may share one FIFO for log
+        // lines or records -- a partial write splits a record and the next
+        // writer's bytes land in the middle of it. A write LARGER than
+        // PIPE_BUF may still be partial, which is why the rule is bounded.
+        if (bufsize <= PIPE_BUF_ && space < bufsize)
+            space = 0;
         if (space > 0) {
             size_t n = bufsize - written;
             if (n > space)

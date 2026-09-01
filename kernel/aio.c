@@ -489,13 +489,15 @@ int_t sys_io_getevents_guest(guest_addr_t ctx_id, sqword_t min_nr, sqword_t nr,
     struct timespec timeout_mem;
     struct timespec *timeout = NULL;
     if (timeout_addr != 0) {
-        struct timespec_ guest_timeout;
-        if (user_get(timeout_addr, guest_timeout)) {
+        // The 32-bit timespec was read out of a 64-bit guest's buffer, so
+        // tv_sec swallowed both halves and tv_nsec came back 0: every
+        // sub-second timeout became "no timeout at all" and io_getevents
+        // returned immediately instead of waiting. A caller polling an
+        // otherwise-idle context with a 500ms budget got a busy loop.
+        if (read_guest_timespec_abi(current->abi, timeout_addr, &timeout_mem)) {
             aio_ctx_put(ctx);
             return _EFAULT;
         }
-        timeout_mem.tv_sec = guest_timeout.sec;
-        timeout_mem.tv_nsec = guest_timeout.nsec;
         timeout = &timeout_mem;
     }
 

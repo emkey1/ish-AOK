@@ -104,11 +104,19 @@ static struct inotify_watch *inotify_find_watch_by_wd(struct inotify_state *stat
     return NULL;
 }
 
+// Every event's name field is padded to a multiple of sizeof(struct
+// inotify_event) -- 16 -- not to 4. Linux's roundup keeps each record
+// 16-byte aligned so a reader can walk the buffer by casting each record in
+// place, which is exactly how the documented read loop is written. Padding to
+// 4 left records at addresses the struct is not aligned for, and made every
+// event a different size from what a reader computing lengths for itself
+// would predict.
 static dword_t inotify_name_len(const char *name) {
     if (name == NULL || *name == '\0')
         return 0;
     dword_t len = strlen(name) + 1;
-    return (len + sizeof(dword_t) - 1) & ~(sizeof(dword_t) - 1);
+    dword_t align = sizeof(struct inotify_event_);
+    return (len + align - 1) & ~(align - 1);
 }
 
 static void inotify_parent_and_name(const char *path, char *parent, const char **name_out) {

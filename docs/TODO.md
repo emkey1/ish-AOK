@@ -10,6 +10,38 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### PIPE_BUF atomicity cannot be imposed on a HOST pipe
+
+Measured 2026-09-01. A write of at most PIPE_BUF is atomic on Linux: with
+insufficient room it writes NOTHING and blocks or returns EAGAIN, rather than
+putting in what fits. That is why several processes may share one pipe for log
+lines -- a partial write splits a record and the next writer's bytes land in
+the middle of it.
+
+AOK's own FIFO buffer now honours it (`fs/fifo.c`, covered by
+`tests/manual/fd_conventions.c`), which is every FIFO on a tmpfs. A `pipe(2)`
+pair is different: `fs/pipe.c` hands the guest a HOST pipe and writes go
+straight through `realfs_fdops`, so the guarantee is Darwin's, and Darwin's
+PIPE_BUF is **512**, not 4096. A guest write between 513 and 4096 bytes can
+come back short where Linux would have refused it whole -- measured directly
+on the host: a 1024-byte write with ~600 bytes free returns 600.
+
+Enforcing it from here needs the free space BEFORE the write, and Darwin does
+not offer it. What it does offer, measured:
+
+- `PIPE_BUF` is 512; capacity starts at 16K and grows to 64K on demand
+- `fstat(fd).st_size` on EITHER end reports the bytes currently buffered
+- `ioctl(FIONREAD)` works on the read end only; the write end answers 0
+- there is no `FIONSPACE`, and no `F_GETPIPE_SZ`/`F_SETPIPE_SZ`
+
+So the buffered count is available but the capacity is not, and free space is
+capacity minus buffered. A running estimate of capacity would be a lower
+bound, which makes the check refuse writes that had room -- wrong in the other
+direction. The real fix is to stop delegating: give `pipe(2)` AOK's own
+buffer, the way tmpfs FIFOs already have one. That is a large change (pipes
+are handed to native code and to the host across `exec`), so it is recorded
+rather than attempted here.
+
 ### Three file-mapping behaviours that need what the memory model does not keep
 
 Measured against Linux 6.12 on 2026-09-01, alongside the mmap conformance work
