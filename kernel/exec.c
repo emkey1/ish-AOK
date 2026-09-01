@@ -962,6 +962,15 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     struct guest_vm_layout vm_layout = guest_abi_vm_layout(save->abi);
     if ((err = pt_map_nothing(save->mem, vm_layout.stack_page, 1, P_WRITE | P_GROWSDOWN)) < 0)
         goto beyond_hope;
+    // Record where the stack starts and how far down it may grow. Linux bounds
+    // stack expansion at RLIMIT_STACK measured from the stack's top; without
+    // this the only thing stopping a runaway recursion is whatever it collides
+    // with, which on a 64-bit guest is hundreds of megabytes away. See
+    // mem_growsdown_allowed. RLIM_INFINITY is passed through as 0, meaning
+    // "no rlimit bound" -- the guard gap still applies.
+    rlim_t_ stack_limit = rlimit(RLIMIT_STACK_);
+    mem_set_stack_bounds(save->mem, vm_layout.stack_page + 1,
+                         stack_limit == RLIM_INFINITY_ ? 0 : (uint64_t) stack_limit);
     write_unlock(&save->mem->lock);
     mem_locked = false;
 

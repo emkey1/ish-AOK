@@ -160,6 +160,10 @@ struct mm *mm_copy(struct mm *mm) {
     mem_init(&new_mm->mem);
     mem_set_page_limit(&new_mm->mem, mm->mem.page_limit);
     mem_set_mmap_window(&new_mm->mem, mm->mem.mmap_floor, mm->mem.mmap_ceiling);
+    // mem_init cleared these out of the wholesale struct copy above; a fork's
+    // child runs the same image on the same stack under the same limit.
+    mem_set_stack_bounds(&new_mm->mem, mm->mem.stack_top,
+                         (uint64_t) atomic_load(&mm->mem.stack_limit_pages) << PAGE_BITS);
     ipc_mm_init(new_mm);
     // NULL when the task's first exec was a native program (e.g. the Shortcuts
     // runner exec'ing /AOK/native/zsh directly): no guest image was ever

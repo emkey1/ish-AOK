@@ -71,6 +71,24 @@ struct mem {
     page_t brk_reserve_start;
     page_t brk_reserve_end;
 
+    // The main stack, for bounding its growth the way Linux's
+    // expand_downwards() does. stack_top is the exclusive top page, recorded
+    // by exec; stack_limit_pages is RLIMIT_STACK in pages. Either being 0
+    // means "no bound known", which is the pre-exec state.
+    //
+    // Cached here rather than read from the task's rlimits at fault time, and
+    // that is deliberate: the fault path already holds mem->lock, rlimit_get()
+    // takes group->lock, and better than a hundred sites take group->lock
+    // before touching guest memory. Taking them in that order here would
+    // invert the nesting against every one of them.
+    //
+    // Atomic because setrlimit stores it from a different thread than the one
+    // faulting. mm_copy copies the whole struct and then calls mem_init, which
+    // clears these, so it restores them explicitly afterwards -- a fork's
+    // child keeps its parent's stack and limit.
+    page_t stack_top;
+    _Atomic page_t stack_limit_pages;
+
     // Lazy anonymous reservations -- same idea as brk_reserve above (a plain
     // range, no page-table entries) but there can be several. See
     // struct mem_lazy_map's comment for the no-split invariant.
@@ -189,6 +207,7 @@ void mem_close_deferred_fds(struct mem *mem);
 void mem_destroy(struct mem *mem);
 void mem_set_page_limit(struct mem *mem, page_t limit);
 void mem_set_mmap_window(struct mem *mem, page_t floor, page_t ceiling);
+void mem_set_stack_bounds(struct mem *mem, page_t top, uint64_t limit_bytes);
 // Return the pagetable entry for the given page
 struct pt_entry *mem_pt(struct mem *mem, page_t page);
 // Lazy anonymous reservations; see struct mem_lazy_map above.

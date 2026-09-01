@@ -37,6 +37,20 @@ static int rlimit_set(struct task *task, int resource, struct rlimit_ limit) {
     lock(&group->lock, 0);
     group->limits[resource] = limit;
     unlock(&group->lock);
+    // The stack bound is cached in the address space, because the page-fault
+    // path cannot take group->lock (see struct mem's stack_top comment), so a
+    // change to RLIMIT_STACK has to be pushed there. gnulib's "working
+    // sigaltstack" probe does exactly this -- drops the limit to 1 MB and then
+    // overflows on purpose -- so honouring it only at exec would miss the
+    // case this exists for.
+    //
+    // Only for the calling task: reading another task's ->mm here would need
+    // general_lock, and prlimit64 against a third party is rare enough that
+    // picking the change up at its next exec is the better trade. Its stack
+    // stays bounded by the guard gap meanwhile.
+    if (resource == RLIMIT_STACK_ && task == current && current->mm != NULL)
+        mem_set_stack_bounds(&current->mm->mem, 0,
+                             limit.cur == RLIM_INFINITY_ ? 0 : (uint64_t) limit.cur);
     return 0;
 }
 

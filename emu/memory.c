@@ -378,6 +378,37 @@ static page_t mem_next_mapped_page(struct mem *mem, page_t page) {
 // still behaves, while a wild pointer far below the stack does not.
 #define MEM_GROWSDOWN_MAX_PAGES ((page_t) ((32 * 1024 * 1024) >> PAGE_BITS))
 
+// Linux keeps a gap between the stack and whatever is mapped below it --
+// stack_guard_gap, 256 pages, enforced by expand_downwards():
+//
+//     if (address - prev->vm_end < stack_guard_gap) return -ENOMEM;
+//
+// The bound above is on the DISTANCE TO THE NEIGHBOUR ABOVE, and a runaway
+// recursion never trips it: each fault lands one page below the page the last
+// fault mapped, so the gap is always one page and growth is always allowed.
+// Nothing then stops the stack descending until it reaches whatever is mapped
+// beneath it -- and at that point it does not fault at all. Those pages are
+// present and writable, so the frames simply land IN the neighbouring mapping
+// and quietly destroy it.
+//
+// On a 64-bit guest that costs nothing, because the stack is the lowest thing
+// in a mostly empty address space. On i386 the address space is 4 GiB and
+// crowded: the stack starts just under 0xffffe000 and musl's thread block sits
+// around 0xf7ffc000, ~134 MiB below. gnulib's "checking for working
+// sigaltstack" probe recurses without bound to provoke a stack overflow, and
+// AOK walked the stack straight through that thread block. The SIGSEGV, when
+// it finally came, was delivered correctly onto the alternate stack -- and the
+// handler died on its first libc call, because the thread pointer it needed
+// had been overwritten by the recursion. Measured: %gs:0 read 0xf7ffcc64
+// before the fault and 0x00400080 inside the handler.
+//
+// That is what took iSH-AOK down during a Buildroot build (issue #521): the
+// probe is the first thing in a gnulib configure that overflows a stack on
+// purpose, and every package configured after it inherited the crash.
+#define MEM_STACK_GUARD_GAP_PAGES ((page_t) ((1024 * 1024) >> PAGE_BITS))
+
+static page_t next_mapped_page_with_reservation(struct mem *mem, page_t page);
+
 // May this unmapped page be materialized by extending a MAP_GROWSDOWN region
 // (i.e. the stack) down onto it?
 //
@@ -409,7 +440,73 @@ static bool mem_growsdown_allowed(struct mem *mem, page_t page) {
     if (p - page > MEM_GROWSDOWN_MAX_PAGES)
         return false;
     struct pt_entry *next = mem_pt(mem, p);
-    return next != NULL && (next->flags & P_GROWSDOWN);
+    if (next == NULL || !(next->flags & P_GROWSDOWN))
+        return false;
+
+    // ...the stack may not grow past RLIMIT_STACK, which is Linux's other
+    // half of this test:
+    //
+    //     if (size > rlimit(RLIMIT_STACK)) return -ENOMEM;   // size = vm_end - address
+    //
+    // Without it the guard gap alone bounds the stack by WHERE ITS NEIGHBOUR
+    // HAPPENS TO BE, which on a 64-bit guest is nowhere near. Measured on an
+    // otherwise idle arm64 guest: a runaway recursion drove the emulator to
+    // 1.42 GB of resident memory before the descent reached anything, and on
+    // an iPad that is not a fault, it is the app being killed by jetsam.
+    // Linux would have stopped the same program at the default 8 MB. So this
+    // is not only conformance -- it is what stops any guest program with an
+    // unbounded recursion from taking the whole app down with it.
+    //
+    // Only the main stack is ever P_GROWSDOWN (kernel/mmap.c does not honour
+    // MAP_GROWSDOWN), so stack_top is unambiguous and no VMA lookup is needed.
+    page_t stack_limit = atomic_load(&mem->stack_limit_pages);
+    if (stack_limit != 0 && mem->stack_top != 0 && page < mem->stack_top &&
+            mem->stack_top - page > stack_limit)
+        return false;
+
+    // ...and nothing may occupy the guard gap below the page being claimed.
+    // A neighbour inside the gap means this fault is the stack arriving at its
+    // floor, and refusing it is what turns a silent descent into another
+    // mapping into the SIGSEGV the guest is entitled to.
+    //
+    // The stack's OWN pages do not count as that neighbour, which is the
+    // clause Linux spells out as !(prev->vm_flags & VM_GROWSDOWN). They turn
+    // up here whenever a frame with a large local skips over a page on its way
+    // down: the jumped-over page faults later with already-grown stack sitting
+    // just below it, and refusing to fill that hole would kill a program doing
+    // nothing wrong. Measured, before this clause existed: a plain `gcc
+    // hello.c` died at page 0xffffb with the stack's own 0xffffa one page
+    // under it.
+    //
+    // Hence a walk rather than a single lookup -- but one that costs a single
+    // lookup in the ordinary case. The gap below a growing stack is empty, so
+    // the first probe returns either BAD_PAGE or a page above `page` and the
+    // loop breaks immediately; only hole-filling iterates, and only past the
+    // few stack pages actually below the hole. The scan skips whole
+    // unallocated page-table leaves, so an empty gap is not walked page by
+    // page, and the loop is bounded by the gap regardless.
+    //
+    // ...with_reservation, not the bare page-table scan: a lazy anonymous
+    // reservation and the brk headroom hold address space with no page-table
+    // entries behind them. Growing the stack into either would map pages that
+    // are already spoken for -- and a page both mapped and reserved is exactly
+    // the state the lazy-mapping invariant forbids.
+    page_t gap_bottom = page > MEM_STACK_GUARD_GAP_PAGES + MEM_MIN_MAP_PAGE
+        ? page - MEM_STACK_GUARD_GAP_PAGES
+        : MEM_MIN_MAP_PAGE;
+    page_t scan = gap_bottom;
+    while (scan < page) {
+        page_t occupied = next_mapped_page_with_reservation(mem, scan);
+        if (occupied == BAD_PAGE || occupied >= page)
+            break;                      // open space the rest of the way down
+        struct pt_entry *entry = mem_pt(mem, occupied);
+        // A reservation has no page-table entry behind it and is never the
+        // stack, so a NULL here is a blocker rather than something to skip.
+        if (entry == NULL || !(entry->flags & P_GROWSDOWN))
+            return false;
+        scan = occupied + 1;
+    }
+    return true;
 }
 
 void mem_init(struct mem *mem) {
@@ -438,6 +535,10 @@ void mem_init(struct mem *mem) {
     mem->deferred_fds = NULL;
     mem->deferred_count = mem->deferred_cap = 0;
     pthread_mutex_init(&mem->deferred_lock, NULL);
+    // Cleared for the same mm_copy reason as the two above, and restored by
+    // mm_copy immediately after this returns -- see mem_set_stack_bounds.
+    mem->stack_top = 0;
+    atomic_init(&mem->stack_limit_pages, 0);
     atomic_init(&mem->quiesce_requested, 0);
     pthread_mutex_init(&mem->quiesce_park_lock, NULL);
     pthread_cond_init(&mem->quiesce_park_cond, NULL);
@@ -536,6 +637,17 @@ void mem_set_page_limit(struct mem *mem, page_t limit) {
 void mem_set_mmap_window(struct mem *mem, page_t floor, page_t ceiling) {
     mem->mmap_floor = floor;
     mem->mmap_ceiling = ceiling;
+}
+
+// Records the main stack's extent, for the RLIMIT_STACK half of
+// mem_growsdown_allowed. `limit_bytes` is RLIMIT_STACK's soft limit, with
+// RLIM_INFINITY passed as 0 by the caller to mean "no rlimit bound" -- the
+// guard gap still applies in that case. A `top` of 0 leaves the recorded top
+// alone, so setrlimit can update the limit without knowing the layout.
+void mem_set_stack_bounds(struct mem *mem, page_t top, uint64_t limit_bytes) {
+    if (top != 0)
+        mem->stack_top = top;
+    atomic_store(&mem->stack_limit_pages, (page_t) (limit_bytes >> PAGE_BITS));
 }
 
 static struct pt_entry *mem_pt_new(struct mem *mem, page_t page) {
