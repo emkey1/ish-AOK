@@ -14,7 +14,6 @@
 #include "fs/dev.h"
 #include "kernel/sysvipc.h"
 #include "fs/devices.h"
-#include "fs/poll.h"
 #include "fs/real.h"
 #include "platform/platform.h"
 #include <sys/param.h> // for MIN and MAX
@@ -22,6 +21,12 @@
 #include "kernel/abi.h"
 #include "kernel/init.h"
 #include "kernel/hostinfo.h"
+// Last, deliberately: this header #defines POLL_* over the SIGPOLL si_code
+// constants glibc declares as an ENUM, so any system header pulled in after
+// it turns those enumerators into numeric literals. Clang on Darwin never
+// sees it; gcc on Linux fails the build outright. fs/proc.c orders it the
+// same way for the same reason.
+#include "fs/poll.h"
 
 extern int console_major;
 extern int console_minor;
