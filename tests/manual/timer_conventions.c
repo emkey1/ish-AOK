@@ -43,6 +43,28 @@
 
 #include "test_common.h"
 
+// i386's syscall table predates 64-bit time_t. musl there defines only the
+// *_time64 numbers -- SYS_clock_nanosleep and SYS_clock_settime simply do not
+// exist -- while its struct timespec already has a 64-bit tv_sec. The plain
+// 32-bit numbers (SYS_clock_settime32) are therefore the WRONG ones to pair
+// with it: the kernel would read a 32-bit timespec out of a 64-bit one.
+//
+// So alias to the *_time64 numbers, which is exactly what musl itself issues
+// on that ABI. The calls below stay raw syscalls -- the point of this test is
+// to reach the kernel's own validation without musl's wrapper sanitising the
+// arguments first, and a wrapper could not be used for the bad-pointer cases
+// anyway, since it would fault reading the timespec before any syscall.
+//
+// Until this existed the i386 leg of the release gate never ran at all: the
+// runner stops on the first build failure, so a single unbuildable test took
+// the whole architecture's suite with it.
+#ifndef SYS_clock_nanosleep
+#define SYS_clock_nanosleep SYS_clock_nanosleep_time64
+#endif
+#ifndef SYS_clock_settime
+#define SYS_clock_settime SYS_clock_settime64
+#endif
+
 static int on_ish;
 
 static void ck(const char *label, long got, long want) {

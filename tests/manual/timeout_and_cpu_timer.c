@@ -94,6 +94,25 @@ static int timer_fires_on(clockid_t clk) {
     return fired ? 1 : 0;
 }
 
+// i386 has no semtimedop syscall of its own -- SysV IPC goes through the ipc()
+// multiplexer there -- so musl does not define that syscall number on the ABI
+// and the raw form below does not even compile. That aborted the whole i386
+// regression run at build time, since the runner stops on the first failure.
+//
+// The raw syscall is deliberate everywhere it works: musl's wrapper has hidden
+// kernel behaviour from these tests before. Where it cannot work, libc's
+// wrapper is not a workaround but the real path -- an i386 guest reaches
+// semtimedop through ipc() no matter who makes the call, so the kernel side
+// under test is the same one either way.
+static long do_semtimedop(int id, struct sembuf *ops, size_t nops,
+                          struct timespec *timeout) {
+#ifdef SYS_semtimedop
+    return syscall(SYS_semtimedop, id, ops, nops, timeout);
+#else
+    return semtimedop(id, ops, nops, timeout);
+#endif
+}
+
 int main(int argc, char **argv) {
     test_init(argc, argv);
     alarm(test_watchdog_secs(120));
@@ -110,7 +129,7 @@ int main(int argc, char **argv) {
             struct timespec start;
             clock_gettime(CLOCK_MONOTONIC, &start);
             errno = 0;
-            long r = syscall(SYS_semtimedop, id, &op, (size_t) 1, &ts);
+            long r = do_semtimedop(id, &op, 1, &ts);
             double took = elapsed_since(start);
             int e = errno;
             ck("semtimedop on a blocked op fails", r < 0 ? 1 : 0, 1);
@@ -125,7 +144,7 @@ int main(int argc, char **argv) {
             struct timespec zero = { 0, 0 };
             clock_gettime(CLOCK_MONOTONIC, &start);
             errno = 0;
-            r = syscall(SYS_semtimedop, id, &op, (size_t) 1, &zero);
+            r = do_semtimedop(id, &op, 1, &zero);
             e = errno;
             took = elapsed_since(start);
             ck("a zero timeout is EAGAIN too", r < 0 ? e : 0, EAGAIN);
@@ -137,7 +156,7 @@ int main(int argc, char **argv) {
             // would pass without the validation existing at all.
             struct timespec bad = { 0, 1000000000 };
             errno = 0;
-            r = syscall(SYS_semtimedop, id, &op, (size_t) 1, &bad);
+            r = do_semtimedop(id, &op, 1, &bad);
             ck("an out-of-range tv_nsec is EINVAL", r < 0 ? errno : 0, EINVAL);
 
             // An operation that CAN proceed must still succeed with a timeout
@@ -145,7 +164,7 @@ int main(int argc, char **argv) {
             // above.
             struct sembuf up = { 0, 1, 0 };
             ck("an op that can proceed still succeeds",
-               (long) syscall(SYS_semtimedop, id, &up, (size_t) 1, &ts), 0);
+               do_semtimedop(id, &up, 1, &ts), 0);
 
             semctl(id, 0, IPC_RMID);
         }
