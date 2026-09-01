@@ -168,6 +168,7 @@ tty_canon_queue.c
 timer_conventions.c
 mmap_conventions.c
 fd_conventions.c
+proc_files.c
 exec_perm_rules.c
 sock_bind_refuse.c
 time_clocks_ticks.c

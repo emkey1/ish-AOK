@@ -224,6 +224,7 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
         env_start = (addr_t)mm->env_start;
         env_end = (addr_t)mm->env_end;
     }
+    uint64_t start_time_ticks = task->start_time_ticks;
     pid = task->pid;
     strncpy(comm, task->comm, sizeof(task->comm));
     comm[sizeof(task->comm)] = '\0';
@@ -290,7 +291,7 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     proc_printf(buf, "%ld ", 0l); // nice (also not adjustable)
     proc_printf(buf, "%ld ", thread_count);
     proc_printf(buf, "%ld ", 0l); // itimer value (deprecated, always 0)
-    proc_printf(buf, "%lld ", 0ll); // jiffies on process start
+    proc_printf(buf, "%llu ", (unsigned long long) start_time_ticks); // starttime
 
     proc_printf(buf, "%lu ", (unsigned long)(page_count * PAGE_SIZE)); // vsize in bytes
     proc_printf(buf, "%ld ", (long)page_count); // rss in pages
@@ -620,6 +621,16 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     proc_printf(buf, "VmHWM:\t%lu kB\n", vm_kb);
     proc_printf(buf, "VmRSS:\t%lu kB\n", vm_kb);
     proc_printf(buf, "Threads:\t%lu\n", thread_count);
+    // Linux prints Umask between Name and State; it was missing entirely, and
+    // it is the only place a process's umask is observable from outside.
+    // The umask lives on the (possibly shared) fs_info, not the task.
+    mode_t_ umask = 0;
+    if (task->fs != NULL) {
+        lock(&task->fs->lock, 0);
+        umask = task->fs->umask;
+        unlock(&task->fs->lock);
+    }
+    proc_printf(buf, "Umask:\t%04o\n", umask & 07777);
     proc_printf(buf, "SigQ:\t0/0\n");
     // Linux's render_sigset_t() prints the whole 64-bit sigset, all 16 hex
     // digits of it. sigset_t_ is 64 bits here too, so %08x both under-read the
@@ -627,8 +638,24 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     proc_printf(buf, "SigPnd:\t%016llx\n", (unsigned long long)pending);
     proc_printf(buf, "ShdPnd:\t0000000000000000\n");
     proc_printf(buf, "SigBlk:\t%016llx\n", (unsigned long long)blocked);
-    proc_printf(buf, "SigIgn:\t0000000000000000\n");
-    proc_printf(buf, "SigCgt:\t0000000000000000\n");
+    // Hardcoded zero before, which told every reader the process ignored
+    // nothing and caught nothing -- the two fields a debugger or a supervisor
+    // reads to find out which signals will actually reach it. Built from the
+    // dispositions, the way Linux's collect_sigign_sigcatch does.
+    sigset_t_ ignored = 0, caught = 0;
+    if (task->sighand != NULL) {
+        lock(&task->sighand->lock, 0);
+        for (int sig = 1; sig < NUM_SIGS; sig++) {
+            guest_addr_t handler = task->sighand->action[sig].handler;
+            if (handler == SIG_IGN_)
+                ignored |= (sigset_t_) 1 << (sig - 1);
+            else if (handler != SIG_DFL_)
+                caught |= (sigset_t_) 1 << (sig - 1);
+        }
+        unlock(&task->sighand->lock);
+    }
+    proc_printf(buf, "SigIgn:\t%016llx\n", (unsigned long long) ignored);
+    proc_printf(buf, "SigCgt:\t%016llx\n", (unsigned long long) caught);
     proc_printf(buf, "CapInh:\t%08x%08x\n", task->cap_inheritable[1], task->cap_inheritable[0]);
     proc_printf(buf, "CapPrm:\t%08x%08x\n", task->cap_permitted[1], task->cap_permitted[0]);
     proc_printf(buf, "CapEff:\t%08x%08x\n", task->cap_effective[1], task->cap_effective[0]);

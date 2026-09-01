@@ -23,6 +23,23 @@ mode_t_ proc_entry_mode(struct proc_entry *entry) {
 int proc_entry_stat(struct proc_entry *entry, struct statbuf *stat) {
     memset(stat, 0, sizeof(*stat));
     stat->mode = proc_entry_mode(entry);
+    // Every procfs inode reported nlink 0, which is what a DELETED inode looks
+    // like: `find` and `du` read it, and tools checking "is this still there"
+    // read it. A file or symlink has one link; a directory has at least two
+    // (itself and its parent) plus one per subdirectory, which is the number
+    // find's leaf optimisation counts down. Subdirectories are counted from
+    // the static child table where there is one; a directory listed by a
+    // readdir callback (/proc itself, /proc/<pid>) reports the floor rather
+    // than walking the pid table on every stat.
+    stat->nlink = 1;
+    if (S_ISDIR(stat->mode)) {
+        stat->nlink = 2;
+        const struct proc_children *children = entry->meta != NULL ? entry->meta->children : NULL;
+        if (children != NULL)
+            for (size_t i = 0; i < children->count; i++)
+                if (S_ISDIR(children->entries[i].mode))
+                    stat->nlink++;
+    }
 
     struct task *task = pid_get_task_ref(entry->pid);
     if (task != NULL) {

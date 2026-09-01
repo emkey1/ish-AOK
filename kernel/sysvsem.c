@@ -16,6 +16,7 @@
 #include "util/timer.h"
 #include "kernel/errno.h"
 #include "kernel/sysvipc.h"
+#include "fs/proc.h"
 #include "kernel/task.h"
 #include "util/list.h"
 #include "util/sync.h"
@@ -75,6 +76,7 @@ struct sem_set {
 };
 
 static struct list sem_sets = LIST_INITIALIZER(sem_sets);
+
 static lock_t sem_lock = LOCK_INITIALIZER;
 static int sem_next_id = 1;
 
@@ -606,4 +608,26 @@ int_t sys_semtimedop(int_t semid, addr_t sops, dword_t nsops, addr_t timeout) {
 }
 int_t sys_semctl(int_t semid, int_t semnum, int_t cmd, addr_t arg) {
     return sys_semctl_guest(semid, semnum, cmd, arg);
+}
+
+// /proc/sysvipc/sem. Written here, where the list and its lock are, rather
+// than reaching into them from procfs. ipcs(1) reads this file and nothing
+// else -- with it absent, `ipcs -s` reported an empty system no matter how
+// many semaphore sets existed, which is the one answer that makes the tool
+// useless for finding a leak.
+void proc_sysvipc_show_sem(struct proc_data *buf) {
+    proc_printf(buf, "%10s %10s %-10s %10s %5s %5s %5s %5s %10s %10s\n",
+                "key", "semid", "perms", "nsems", "uid", "gid", "cuid", "cgid",
+                "otime", "ctime");
+    lock(&sem_lock, 0);
+    struct sem_set *set;
+    list_for_each_entry(&sem_sets, set, slist) {
+        if (set->removed)
+            continue;
+        proc_printf(buf, "%10d %10d %-10o %10u %5u %5u %5u %5u %10lld %10lld\n",
+                    (int) set->key, set->id, set->mode & 0777, set->nsems,
+                    set->uid, set->gid, set->cuid, set->cgid,
+                    (long long) set->otime, (long long) set->ctime);
+    }
+    unlock(&sem_lock);
 }

@@ -10,6 +10,36 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### What is still missing from procfs
+
+Added 2026-09-01 alongside the procfs work in `tests/manual/proc_files.c`,
+which closed /proc/{devices,partitions,swaps,modules,cgroups,interrupts,
+thread-self,sysvipc/*}, /proc/sys/fs/inotify/*, procfs link counts, and
+status's Umask/SigIgn/SigCgt plus stat's starttime. What is left, measured
+against Linux 6.12:
+
+**`/proc/locks` does not exist.** Linux lists every POSIX, OFD and FLOCK lock
+with type, holder pid, major:minor:inode and byte range; `lslocks(8)` and
+`lsof` read it and see nothing without it. AOK has all of this in `fs/lock.c`
+-- the work is enumerating the per-inode lock lists safely from procfs, which
+means a lock-ordering question (procfs read -> inode locks) rather than
+missing data.
+
+**`/proc/sys` is 29 keys against Linux's ~1355.** The audit called this out
+and it stays a deliberate non-implementation: the keys that exist are the ones
+something reads, and inventing the rest would mean 1300 files whose values are
+made up. Adding a key is cheap when a real consumer turns up.
+
+**A directory listed by a readdir callback reports nlink 2, not 2 + its
+subdirectories.** /proc itself and /proc/<pid> are built by callback rather
+than a static child table, and counting their subdirectories means walking the
+pid table on every stat. Linux reports 219 for /proc and 9 for /proc/<pid>;
+2 is the honest floor, and no longer 0, which is what a deleted inode looks
+like.
+
+**System V shared memory is unimplemented**, so /proc/sysvipc/shm is its
+header alone. Semaphores and message queues are listed for real.
+
 ### PIPE_BUF atomicity cannot be imposed on a HOST pipe
 
 Measured 2026-09-01. A write of at most PIPE_BUF is atomic on Linux: with

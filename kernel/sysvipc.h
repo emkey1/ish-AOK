@@ -46,3 +46,9 @@ struct ipc_perm_amd64_ {
 static_assert(sizeof(struct ipc_perm_amd64_) == 48, "amd64 ipc_perm size");
 
 #endif
+
+// /proc/sysvipc/{sem,msg}: written by the modules that own the lists, so the
+// content and the lock that guards it stay together. See kernel/sysvsem.c.
+struct proc_data;
+void proc_sysvipc_show_sem(struct proc_data *buf);
+void proc_sysvipc_show_msg(struct proc_data *buf);

@@ -67,6 +67,11 @@ struct native_exec_pending; // opaque; defined in kernel/native.c
 
 struct task {
     enum guest_abi abi;
+    // Ticks since boot when this task was created -- /proc/<pid>/stat field 22
+    // (starttime), which was hardcoded 0. It is the only source for a
+    // process's age: ps -o etime, ps -o lstart and top's uptime column are all
+    // derived from it, and with 0 every process looked as old as the kernel.
+    uint64_t start_time_ticks;
     struct cpu_state cpu;
     bool force_single_step;
     bool force_no_jit_cache;

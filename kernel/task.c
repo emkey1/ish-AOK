@@ -475,6 +475,9 @@ struct task *task_create_(struct task *parent) {
     }
     task->cpu_time_banked = false; // per-task, not inherited via the parent copy
     task->host_thread_started = false; // ditto; task_start sets it
+    // Not inherited either: the copy above would give a child its parent's
+    // age. /proc/<pid>/stat field 22, which was hardcoded 0.
+    task->start_time_ticks = get_uptime().uptime_ticks;
     atomic_fetch_add_explicit(&total_forks, 1, memory_order_relaxed);
     list_init(&task->group_links);
     list_init(&task->children);

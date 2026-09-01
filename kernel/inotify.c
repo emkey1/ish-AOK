@@ -28,7 +28,8 @@
 // that stalls is enough, and nothing ever told the reader it had missed
 // anything. Linux caps the queue and appends one synthetic overflow event
 // meaning "rescan, I stopped keeping track".
-#define INOTIFY_MAX_QUEUED_EVENTS 16384
+// Declared in kernel/inotify.h so /proc/sys/fs/inotify reports this exact
+// number rather than a second copy of it.
 #define IN_ISDIR_ 0x40000000
 
 struct inotify_watch {

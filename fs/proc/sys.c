@@ -5,6 +5,7 @@
 #endif
 #include <inttypes.h>
 #include "kernel/calls.h"
+#include "kernel/inotify.h"
 #include "kernel/random.h"
 #include "kernel/task.h"
 #include "kernel/hostinfo.h"
@@ -232,8 +233,52 @@ static int sys_update_fs_nr_open(struct proc_entry *UNUSED(entry), struct proc_d
     return 0;
 }
 
+// fs.inotify.*. The queue cap is real and enforced (kernel/inotify.c drops
+// events at it and appends IN_Q_OVERFLOW), so reporting it is reporting a
+// fact. It was absent entirely although inotify has been implemented for a
+// long time, and the absence is what a caller notices: inotifywait and
+// watchman read max_user_watches to size their watch set, and a missing file
+// makes them assume the smallest possible limit or fail outright.
+static int sys_show_inotify_max_queued(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "%d\n", INOTIFY_MAX_QUEUED_EVENTS);
+    return 0;
+}
+
+// No per-user cap on instances or watches is enforced here; Linux's defaults
+// are reported so a caller sizing itself against them behaves as it would
+// there, and nothing is refused that Linux would have allowed.
+static int sys_show_inotify_max_instances(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "128\n");
+    return 0;
+}
+
+static int sys_show_inotify_max_watches(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "65536\n");
+    return 0;
+}
+
+static struct proc_dir_entry proc_sys_fs_inotify_entries[] = {
+    {"max_queued_events", S_IFREG | 0644, .show = sys_show_inotify_max_queued},
+    {"max_user_instances", S_IFREG | 0644, .show = sys_show_inotify_max_instances},
+    {"max_user_watches", S_IFREG | 0644, .show = sys_show_inotify_max_watches},
+};
+
+#define PROC_SYS_FS_INOTIFY_LEN \
+    sizeof(proc_sys_fs_inotify_entries) / sizeof(proc_sys_fs_inotify_entries[0])
+
+static bool proc_sys_fs_inotify_readdir(struct proc_entry *UNUSED(entry), unsigned long *index,
+        struct proc_entry *next_entry) {
+    if (*index < PROC_SYS_FS_INOTIFY_LEN) {
+        *next_entry = (struct proc_entry) {&proc_sys_fs_inotify_entries[*index], *index, NULL, NULL, 0, 0, NULL};
+        (*index)++;
+        return true;
+    }
+    return false;
+}
+
 static struct proc_dir_entry proc_sys_fs_entries[] = {
     {"binfmt_misc", S_IFDIR, .readdir = proc_binfmt_misc_readdir},
+    {"inotify", S_IFDIR, .readdir = proc_sys_fs_inotify_readdir},
     {"file-max", S_IFREG | 0644, .show = sys_show_fs_file_max, .update = sys_update_fs_file_max},
     {"nr_open", S_IFREG | 0644, .show = sys_show_fs_nr_open, .update = sys_update_fs_nr_open},
 };

@@ -12,6 +12,7 @@
 #include "fs/proc.h"
 #include "fs/proc/net.h"
 #include "fs/dev.h"
+#include "kernel/sysvipc.h"
 #include "fs/devices.h"
 #include "fs/real.h"
 #include "platform/platform.h"
@@ -578,6 +579,132 @@ static int proc_readlink_self(struct proc_entry *UNUSED(entry), char *buf) {
     return 0;
 }
 
+// /proc/thread-self points at the CALLING THREAD's directory
+// (<tgid>/task/<tid>), where /proc/self points at the process. A threaded
+// program that wants its own stack, status or comm -- not the leader's --
+// has no other way to name itself, and glibc's sched_getcpu and several
+// tracing libraries open it by name. It did not exist at all.
+static int proc_readlink_thread_self(struct proc_entry *UNUSED(entry), char *buf) {
+    snprintf(buf, MAX_PATH, "%d/task/%d", current->tgid, current->pid);
+    return 0;
+}
+
+// /proc/modules. There are no loadable modules here and never will be, which
+// is a real answer: Linux prints an empty file on a kernel with none loaded,
+// and lsmod prints its header and nothing else. The file's ABSENCE is what
+// lsmod cannot handle -- it fails with "libkmod: could not open moddep".
+static int proc_show_modules(struct proc_entry *UNUSED(entry), struct proc_data *UNUSED(buf)) {
+    return 0;
+}
+
+// /proc/swaps. Nothing is swapped from inside the guest -- iOS manages its own
+// memory -- so the file is the header alone, which is exactly what Linux shows
+// on a system with no swap configured. swapon --show and free(1) read it.
+static int proc_show_swaps(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
+    return 0;
+}
+
+// /proc/partitions. The guest has no block devices to partition; the header
+// alone is what Linux shows for a system with none, and it is what fdisk -l
+// and lsblk parse.
+static int proc_show_partitions(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "major minor  #blocks  name\n\n");
+    return 0;
+}
+
+// /proc/devices: the character and block majors that are actually dispatched.
+// Built from the same table that publishes /dev, so it cannot drift from what
+// is really there. MAKEDEV and udev-style tooling read it to decide what
+// nodes to create, and a missing file makes them create nothing.
+static const char *proc_dev_major_name(int major) {
+    switch (major) {
+        case MEM_MAJOR: return "mem";
+        case TTY_CONSOLE_MAJOR: return "tty";
+        case TTY_ALTERNATE_MAJOR: return "ttyprintk";
+        case MISC_MAJOR: return "misc";
+        case TTY_PSEUDO_MASTER_MAJOR: return "ptm";
+        case TTY_PSEUDO_SLAVE_MAJOR: return "pts";
+        case DYN_DEV_MAJOR: return "ish";
+        case DEV_RTC_MAJOR: return "rtc";
+        default: return "unknown";
+    }
+}
+
+static int proc_show_devices(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "Character devices:\n");
+    bool seen[256] = {};
+    for (size_t i = 0; i < dev_standard_nodes_count; i++) {
+        int major = dev_standard_nodes[i].major;
+        if (major < 0 || major > 255 || seen[major])
+            continue;
+        seen[major] = true;
+        proc_printf(buf, "%3d %s\n", major, proc_dev_major_name(major));
+    }
+    // The pty majors have no /dev node of their own (devpts makes them on
+    // demand), so they are not in the table above, but they are dispatched
+    // and a caller enumerating character devices needs to see them.
+    static const int extra[] = { TTY_PSEUDO_MASTER_MAJOR, TTY_PSEUDO_SLAVE_MAJOR };
+    for (size_t i = 0; i < sizeof extra / sizeof extra[0]; i++)
+        if (!seen[extra[i]]) {
+            seen[extra[i]] = true;
+            proc_printf(buf, "%3d %s\n", extra[i], proc_dev_major_name(extra[i]));
+        }
+    proc_printf(buf, "\nBlock devices:\n");
+    return 0;
+}
+
+// /proc/cgroups: the v2 controllers this kernel presents, in the v1-shaped
+// table Linux still writes here. systemd reads it during startup to decide
+// which controllers exist.
+static int proc_show_cgroups(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "#subsys_name\thierarchy\tnum_cgroups\tenabled\n");
+    static const char *const controllers[] = { "cpu", "io", "memory", "pids" };
+    for (size_t i = 0; i < sizeof controllers / sizeof controllers[0]; i++)
+        proc_printf(buf, "%s\t0\t1\t1\n", controllers[i]);
+    return 0;
+}
+
+static int proc_show_sysvipc_sem(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_sysvipc_show_sem(buf);
+    return 0;
+}
+
+static int proc_show_sysvipc_msg(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_sysvipc_show_msg(buf);
+    return 0;
+}
+
+// System V shared memory is not implemented here, so the file is its header
+// alone -- which is what Linux shows when no segment exists, and what `ipcs
+// -m` prints. The header is the part ipcs needs to parse the file at all.
+static int proc_show_sysvipc_shm(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "%10s %10s %-10s %20s %5s %5s %6s %5s %5s %5s %5s %10s %10s %10s %20s %20s\n",
+                "key", "shmid", "perms", "size", "cpid", "lpid", "nattch",
+                "uid", "gid", "cuid", "cgid", "atime", "dtime", "ctime",
+                "rss", "swap");
+    return 0;
+}
+
+static struct proc_children proc_sysvipc_children = PROC_CHILDREN({
+    {"msg", .show = proc_show_sysvipc_msg},
+    {"sem", .show = proc_show_sysvipc_sem},
+    {"shm", .show = proc_show_sysvipc_shm},
+});
+
+// /proc/interrupts. There is no interrupt controller behind a usermode
+// kernel, so the honest answer is the CPU header and no lines -- the shape
+// Linux gives, with nothing claimed. It was absent, and absent is what breaks
+// a reader: procps and several monitoring agents treat a missing file as an
+// error rather than as "no interrupts".
+static int proc_show_interrupts(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    unsigned cpus = get_cpu_count();
+    for (unsigned i = 0; i < cpus; i++)
+        proc_printf(buf, "           CPU%u", i);
+    proc_printf(buf, "\n");
+    return 0;
+}
+
 static void proc_print_escaped(struct proc_data *buf, const char *str) {
     for (size_t i = 0; str[i]; i++) {
         switch (str[i]) {
@@ -727,11 +854,14 @@ static int proc_kmsg_poll(struct proc_entry *UNUSED(entry), off_t off) {
 
 // in alphabetical order
 struct proc_dir_entry proc_root_entries[] = {
+    {"cgroups", .show = proc_show_cgroups},
     {"cmdline", .show = proc_show_cmdline},
     {"consoles", .show = proc_show_consoles},
     {"cpuinfo", .show = proc_show_cpuinfo},
+    {"devices", .show = proc_show_devices},
     {"diskstats", .show = proc_show_diskstats},
     {"filesystems", .show = proc_show_filesystems},
+    {"interrupts", .show = proc_show_interrupts},
     {"ish", S_IFDIR, .children = &proc_ish_children},
     {"kmsg", S_IFREG | 0400, .pread = proc_kmsg_pread, .poll = proc_kmsg_poll},
     {"loadavg", .show = proc_show_loadavg},
@@ -739,9 +869,14 @@ struct proc_dir_entry proc_root_entries[] = {
     {"mountinfo", .show = proc_show_mountinfo},
     {"mounts", .show = proc_show_mounts},
     {"net", S_IFDIR, .children = &proc_net_children},
+    {"modules", .show = proc_show_modules},
+    {"partitions", .show = proc_show_partitions},
     {"self", S_IFLNK, .readlink = proc_readlink_self},
     {"stat", .show = proc_show_stat},
+    {"swaps", .show = proc_show_swaps},
     {"sys", S_IFDIR, .children = &proc_sys_children},
+    {"sysvipc", S_IFDIR, .children = &proc_sysvipc_children},
+    {"thread-self", S_IFLNK, .readlink = proc_readlink_thread_self},
     {"uptime", .show = proc_show_uptime},
     {"version", .show = proc_show_version},
     {"vmstat", .show = proc_show_vmstat},

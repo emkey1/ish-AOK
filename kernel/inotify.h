@@ -1,6 +1,11 @@
 #ifndef KERNEL_INOTIFY_H
 #define KERNEL_INOTIFY_H
 
+// fs.inotify.max_queued_events. Enforced in kernel/inotify.c -- at the cap an
+// event is dropped and a single IN_Q_OVERFLOW is appended -- and reported by
+// /proc/sys/fs/inotify/max_queued_events, which has to be the same number.
+#define INOTIFY_MAX_QUEUED_EVENTS 16384
+
 #include <stdbool.h>
 
 // True when at least one inotify instance exists. Callers on hot paths use
