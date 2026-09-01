@@ -20,7 +20,7 @@ no kernel/user boundary, so `struct task` simply contains everything.
 It holds the guest CPU (`struct cpu_state cpu`, not a pointer — Chapter 5), the
 memory map, the host thread that runs it, the file descriptor table, the
 filesystem context, the UTS namespace, signal state and dispositions, ptrace
-state, four sets of credentials, five sets of capabilities, scheduling values,
+state, four sets of credentials, four sets of capabilities, scheduling values,
 I/O counters, the family tree, and — unique to this fork — a block of fields
 describing a native program that may be running on this task's thread
 (Part V).
@@ -371,7 +371,42 @@ a plausible value for something you do not implement is not a lie, it is an
 implementation of the observable contract, and it is often the only part of the
 feature anyone needed.
 
-## 10.11 What the next chapter needs from this one
+## 10.11 The other half: limits that stopped being decorative
+
+Reporting faithfully is half the contract. The other half is that a limit a
+process *sets* has to bite, and for a long time several did not — `struct task`
+stored the `rlimit` array, `getrlimit` read it back correctly, and nothing ever
+consulted it.
+
+- **`RLIMIT_FSIZE`.** A write that crosses the limit is now truncated to what
+  fits, and a write starting at or past the limit gets `SIGXFSZ` and `EFBIG`
+  ([kernel/fs.c](../../kernel/fs.c), `fsize_limit_check`) — the shape Linux
+  has, and the one `ulimit -f` users expect. The default is unlimited, so the
+  check costs nothing until a process actually sets one. The subtle part is
+  where the file position comes from: a regular file's offset lives on the host
+  descriptor, not in `fd->offset`, and reading the stale copy meant every write
+  believed it was starting at 0 — so a full file could be extended sixty-four
+  bytes at a time forever.
+- **`RLIMIT_NPROC`.** `fork` now refuses with `EAGAIN` once the calling user
+  already has that many processes ([kernel/fork.c](../../kernel/fork.c)).
+  Threads are charged on neither side of the comparison, and `CAP_SYS_RESOURCE`
+  or `CAP_SYS_ADMIN` is exempt, as on Linux. Note the default is 1024
+  (`init_rlimits` in [kernel/init.c](../../kernel/init.c)), so a parallel build
+  that previously ran unbounded can now meet it without anyone having asked for
+  a limit.
+
+`prlimit64` grew the matching reach. Any nonzero pid used to be `EINVAL`,
+*including the caller's own* — which is the form glibc's `prlimit(2)` wrapper
+uses and what `prlimit --pid N` passes, so the modern interface failed on the
+common call. It now targets another task, readable and writable by a matching
+real uid or `CAP_SYS_RESOURCE`, and the "may not raise a hard limit" rule is
+checked against the *target's* ceiling rather than the caller's.
+
+The general shape is the same as the section above, seen from the other
+direction: a value that is stored and reported but never enforced describes a
+system that does not exist either.
+
+## 10.12 What the next chapter needs from this one
 
 Three facts carry forward.
 

@@ -155,10 +155,12 @@ unconditionally, which is what makes `start-wayland.sh` able to export
 
 The accelerator syscalls live above every real syscall range, so they fail the
 range check and must be intercepted before it — for **every** guest ABI.
-Chapter 11 told what happened when they were not: an unknown syscall gets
-`SIGSYS` here rather than Linux's `ENOSYS`, so probing for an accelerator that
-was wired only for arm64 and riscv64 *killed* the probing process on x86 guests,
-and every consumer's "probe once, fall back on ENOSYS" story died at the probe.
+Chapter 11 told what happened when they were not: at the time an unknown syscall
+got `SIGSYS` here rather than Linux's `ENOSYS`, so probing for an accelerator
+that was wired only for arm64 and riscv64 *killed* the probing process on x86
+guests, and every consumer's "probe once, fall back on ENOSYS" story died at the
+probe. (Unknown syscall numbers answer `ENOSYS` now, which is the other half of
+the same fix.)
 
 Two more hazards in the same dispatch were found while designing a *third*
 accelerator, and both are silent:

@@ -102,7 +102,7 @@ if (current->comm[0] == 'a' && strcmp(current->comm, "as") == 0)
 That is a containment measure from commit `b71ce84d`, for real crashes under
 the amd64 JIT front end that were never root-caused. It is a workaround, it is
 labelled as one, and there is a probe harness
-(`tests/manual/amd64_gas_probe.sh`) sitting in the tree waiting for someone to
+(`tests/manual/x86/amd64_gas_probe.sh`) sitting in the tree waiting for someone to
 re-run the assembler under the JIT and either reproduce the crash or show it
 gone. Chapter 40 has something to say about workarounds that are documented
 versus workarounds that are absorbed.

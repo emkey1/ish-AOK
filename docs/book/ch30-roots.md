@@ -83,6 +83,19 @@ also what makes the obvious paradox work: *you can install a root from inside th
 root you are using.* `--exit-app` quits the app for you, through the same
 shutdown a suspension takes (Chapter 28), so nothing is left half-written.
 
+**Which means "the current root" is two things, and the screen says which.** The
+root you are *running* is mounted at `/`, and the Filesystems screen draws its
+row in green with a bold name and a filled dot reading "IN USE — mounted at / ·
+can't be deleted". The root that boots *next* is a separate choice — what
+`op=default` sets. Neither can be deleted or renamed: doing either to the running
+root would move `/` out from under the live guest, and doing it to the default
+would leave the next launch with nothing to boot. Keying the screen's marker off
+the running root rather than the default one is the fix, not a decoration; the
+guard against deleting `/` had been checking only the default, so choosing a
+different one and then acting on the running root walked straight past it.
+`/proc/ish/roots` reports only the second of the two — `root default=1` and
+`default name=` — so which root actually booted is app-side knowledge today.
+
 **An install keeps running if you walk away.** The download and unpack belong to
 the app, not to the shell that asked for them. Ctrl-C, a dropped `ssh` session,
 or a second invocation of `manage-roots.sh status` all find the same job still

@@ -17,12 +17,18 @@ the background for the duration of the command.
 
 Details worth knowing:
 
-- The command runs as `-c` of the **native zsh** (`/AOK/native/zsh`), as
-  root, as a fresh child of init — not inside any terminal session you may
-  have open. If the native zsh cannot start, the action falls back to
-  `/bin/sh`.
-- stdin is `/dev/null`, `TERM=dumb`, and `PATH` is the standard system
-  path plus `/AOK/persist/bin`.
+- By default the command runs as `-c` of the **native zsh**
+  (`/AOK/native/zsh`), as root, as a fresh child of init — not inside any
+  terminal session you may have open. If the native zsh cannot start, the
+  action falls back to `/bin/sh`.
+- With **Open Everything as Default User** turned on it runs instead as
+  `/bin/su - <account> -c`, as the default user account, using that
+  account's login shell. There is no fallback on that path: if `su` is
+  missing or the account cannot log in, the action fails rather than
+  silently running as root.
+- As root, stdin is `/dev/null`, `TERM=dumb`, `HOME=/root`, and `PATH` is
+  `/AOK/persist/bin` followed by the standard system path. Under `su -`
+  the login shell sets its own `PATH` and `HOME`.
 - **Timeout** (default 20 s, max 120 s): when it expires the command is
   killed and the action fails, reporting any partial output. iOS gives a
   background launch limited runtime, so keep unattended commands well
@@ -67,21 +73,25 @@ exists only in the app; the command-line build has no iOS to ask.
 
 What it will tell you:
 
-- The write returns only once iOS has answered, so a **successful write
-  means the URL really was opened**. It is not a fire-and-forget that
-  always reports success.
+- The write waits up to 5 seconds for iOS to answer, so a **successful
+  write means the URL really was opened**. It is not a fire-and-forget
+  that always reports success.
 - A URL with no scheme is `EINVAL` — `echo youtube.com > /dev/url` is an
   error, `echo https://youtube.com > /dev/url` is not.
 - `EPERM` means iOS refused: no installed app claims the scheme, or
   iSH-AOK was not in the foreground. iOS does not allow a background app
   to open URLs, so this will not work from a Shortcuts automation that
   runs while the app is closed.
+- `ETIMEDOUT` means iOS did not answer within those 5 seconds. The write
+  is bounded on purpose — a guest write must never become an unkillable
+  wait on the UI thread.
 - A trailing newline is trimmed for you, so plain `echo` is fine.
 - Reading it gives nothing; there is no state to read back.
 
 ## A note on trust
 
-A shortcut runs whatever command it was built with, as root. That is the
+A shortcut runs whatever command it was built with — as root, or as the
+default user account if you have that setting on. That is the
 point — but treat shortcuts you import from other people like scripts you
 found on the internet, and read what they run before running them. If you
 never use this, turn the gate off in Settings.

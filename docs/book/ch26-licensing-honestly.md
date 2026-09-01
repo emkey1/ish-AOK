@@ -69,8 +69,8 @@ Upstream iSH's answer is the document the Foreword called a gift:
 > the conflict between the GNU GPLv2 or v3 and the Apple App Store terms of
 > service.
 
-That is what makes iSH-AOK distributable at all. It is a promise by iSH's own
-copyright holders about iSH's own code.
+That is what makes iSH-AOK distributable at all. It is a promise by upstream
+iSH's own copyright holders about upstream iSH's own code.
 
 And it binds nobody else. The FSF holds bash's copyright. `LICENSE.IOS` cannot
 waive anything on the FSF's behalf, and the FSF has twice done exactly what the

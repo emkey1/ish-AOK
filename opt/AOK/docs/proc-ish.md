@@ -5,10 +5,14 @@ the host device, your settings, the JIT's state. It is AOK's own addition to
 procfs; nothing on real Linux has it.
 
 ```sh
-cat /proc/ish/version        # iSH-AOK 1.3 (549)
+cat /proc/ish/version        # iSH-AOK 1.3 (552)
 cat /proc/ish/host_info      # the Mac or iPad underneath: OS, release, hardware
 cat /proc/ish/ips            # this device's network interfaces
 cat /proc/ish/colors         # the 16 ANSI colours, drawn -- a quick theme check
+cat /proc/ish/BAT0_capacity  # battery charge, 0-100
+cat /proc/ish/BAT0_status    # Charging / Discharging / Full
+cat /proc/ish/BAT0           # both of those plus low-power mode, one per line
+cat /proc/ish/UIDevice       # the UIDevice the app sees: model, OS, orientation
 ```
 
 ## Your settings, from the guest

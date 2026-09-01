@@ -128,7 +128,7 @@ regions in bulk.
 
 Every guest load and store goes through a software TLB. It is per-thread, it
 lives on the task thread's stack (`struct tlb tlb = {}` in
-[kernel/task.c:796](../../kernel/task.c#L796)), it has 1024 entries, and an
+[kernel/task.c:817](../../kernel/task.c#L817)), it has 1024 entries, and an
 entry is three words:
 
 ```c
@@ -392,7 +392,7 @@ turns out to be fast enough to run Alpine.
 [emu/memory.c](../../emu/memory.c), [emu/mmu.h](../../emu/mmu.h),
 [emu/tlb.h](../../emu/tlb.h), [emu/tlb.c](../../emu/tlb.c),
 [emu/float80.h](../../emu/float80.h), [emu/avx.h](../../emu/avx.h),
-[kernel/task.h](../../kernel/task.h), [kernel/task.c:796](../../kernel/task.c#L796),
+[kernel/task.h](../../kernel/task.h), [kernel/task.c:817](../../kernel/task.c#L817),
 `tests/manual/mmap_shared_integrity.c`.
 
 *Story:* three ways a `MAP_SHARED` mapping stopped being shared — a ptrace poke

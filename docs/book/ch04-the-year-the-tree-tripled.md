@@ -9,11 +9,11 @@
 | 2021 | 609 |
 | 2022 | 759 |
 | 2023 | 221 |
-| **2026** | **2,216** |
+| **2026** | **2,311** |
 
 Six years of upstream and fork together produced about 3,900 commits. 2026
-produced 2,216 — more than half the project's history, in one year, on a tree
-that was already mature.
+produced more than 2,300 — more than half the project's history, in one year,
+on a tree that was already mature.
 
 This chapter is about what that year contained and how it was worked, because
 the *method* is what made the volume possible and it is the part that
@@ -97,11 +97,11 @@ in 2026 because they were violated in 2026.
 
 The year's most valuable artifact may not be the code.
 
-`docs/TODO.md` is 2,163 lines and it is not a task list. It is a lab notebook:
-diagnosed-but-unfixed entries with measurements and rejected designs; closed
-entries carrying their full investigation, including the wrong first hypothesis;
-and a "Deferred on purpose" section holding work that was built and judged
-inadequate (Chapter 41).
+`docs/TODO.md` is about 2,400 lines and it is not a task list. It is a lab
+notebook: diagnosed-but-unfixed entries with measurements and rejected designs;
+closed entries carrying their full investigation, including the wrong first
+hypothesis; and a "Deferred on purpose" section holding work that was built and
+judged inadequate (Chapter 41).
 
 The release notes for builds 521 through 551 are a second record, written for
 users and detailed enough to reconstruct the engineering (Chapter 37).

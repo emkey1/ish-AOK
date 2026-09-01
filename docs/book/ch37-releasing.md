@@ -80,6 +80,23 @@ tools use to decide what your app is allowed to do. Anything that re-signs is a
 second build system you do not control and cannot see, and its inputs are
 whatever your build left in the bundle.
 
+**The fix, and the shape of it.** The release workflow now has an "Embed
+entitlements (ad-hoc signature)" step between the build and the packaging, which
+runs `tools/adhoc-sign-app.sh` on the built `.app`. An ad-hoc signature needs no
+certificate and no keychain, and the re-signer replaces it wholesale exactly as
+it would a real App Store signature — so all this leaves behind is the one thing
+that was missing, a readable entitlements blob for AltStore, SideStore and
+Sideloadly to read. The script expands `$(PRODUCT_APP_GROUP_IDENTIFIER)` and
+`$(PRODUCT_BUNDLE_IDENTIFIER)` itself, because Xcode's packaging step is what
+normally does that and it does not run when signing is off; substituting an
+empty value would ship an entitlement for the group named `""`, so it refuses
+instead. And the app gained a private-container fallback, so a missing App Group
+now costs the Files integration rather than the boot.
+
+Both halves are worth having. The signature fixes the cause; the fallback means
+the next tool that decides something different about the bundle degrades a
+feature instead of bricking the install.
+
 ## 37.3 `release-aok.sh`
 
 `tools/release-aok.sh` wraps the local half:
@@ -100,10 +117,10 @@ and fastlane setup plus signing and authentication secrets — which is the part
 of this pipeline most likely to be broken on any given day, for reasons entirely
 outside the project.
 
-## 37.4 Two checklists that are not code
+## 37.4 Three checklists that are not code
 
-Everything above is automatable and mostly automated. Two things are not, and
-both were added to the process after being missed.
+Everything above is automatable and mostly automated. Three things are not, and
+each was added to the process after being missed.
 
 **The documentation is compiled into the app.** `opt/AOK/docs/*.md` →
 `fs/aok-docs.manifest` → `tools/gen-aokfs.py` → served by `fs/aok.c`
@@ -131,6 +148,26 @@ devices surfaces and nowhere else in this repository.
 
 That last one is the only view the project has of failures on hardware it does
 not own, which makes it the highest-value item on a list nobody enjoys.
+
+**The release gate is wider than the pre-push one.** Chapter 35's pre-push rule
+asks for both suites plus the JVM on a single guest. Before a tag, the full
+guest regression suite runs on **all four guests** — i386, amd64, arm64 and
+riscv64 — on the Mac and again on real hardware, with the end-to-end suite and
+the JVM smoke test.
+
+Each axis earns its place by having caught something nothing else could. The
+four wrong tests fixed in 552 were visible only on **i386**: a `PTRACE_POKEDATA`
+payload that assumed a 64-bit word, a `fallocate` call made in the 64-bit
+argument shape when the 32-bit ABI splits each `loff_t` into a pair, a musl
+`timespec` that is not the kernel's on a 32-bit guest, and a `RLIMIT_FSIZE`
+interaction that only fired because the runner's log had grown past the limit —
+verbosity-dependent, and therefore hidden on every other guest. And a regression
+that only appears on a device surfaces nowhere else in this repository at all.
+
+Section 35.5's moral applies to this list as much as to CI: a gate somebody has
+to remember is a gate that eventually stops running, and one that is not written
+down anywhere is most of the way there already. Which is why it is written down
+here.
 
 ## 37.5 The release notes are a design record
 
@@ -179,6 +216,7 @@ it shipped.
 ---
 
 *Anchors:* [tools/release-aok.sh](../../tools/release-aok.sh),
+[tools/adhoc-sign-app.sh](../../tools/adhoc-sign-app.sh),
 [.github/workflows/build-release-ipa.yml](../../.github/workflows/build-release-ipa.yml),
 [.github/workflows/build-dev-ipa.yml](../../.github/workflows/build-dev-ipa.yml),
 [fastlane/](../../fastlane), [AppStoreExportOptions.plist](../../AppStoreExportOptions.plist),

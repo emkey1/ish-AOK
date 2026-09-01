@@ -20,8 +20,8 @@ native, emulated or unavailable. Chapter 42.
 The book was written almost entirely from primary sources, and these are the
 ones worth reading directly:
 
-**`docs/TODO.md`** — 2,163 lines of lab notebook. Diagnosed-but-unfixed entries
-with measurements and rejected designs; closed entries with their full
+**`docs/TODO.md`** — some 2,400 lines of lab notebook. Diagnosed-but-unfixed
+entries with measurements and rejected designs; closed entries with their full
 investigation, including the wrong first hypothesis; and a "Deferred on purpose"
 section. The single most informative file in the tree.
 

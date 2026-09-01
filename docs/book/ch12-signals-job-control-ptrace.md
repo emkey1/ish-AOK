@@ -172,7 +172,8 @@ when the handler returns, does the syscall resume, or does it fail with `EINTR`?
 
 Linux answers with a small taxonomy, and AOK implements it:
 
-- `ERESTARTSYS` — restart if the handler was installed with `SA_RESTART`,
+- `ERESTART` (Linux calls it `ERESTARTSYS`; AOK spells it `_ERESTART` in
+  `kernel/errno.h`) — restart if the handler was installed with `SA_RESTART`,
   otherwise `EINTR`.
 - `ERESTART_NOHAND` — restart across a job-control stop, but **never** across a
   handler. `poll`, `select` and `epoll_wait` use this: a stopped-and-continued
@@ -276,6 +277,18 @@ determines how a job-control group-stop is reported: a seized tracee gets a
 stop signal. `deliver_sig` records a signal the tracer injected, which must be
 *delivered* on the next receive rather than re-trapped through
 `signal_delivery_stop` — otherwise an injected signal loops forever.
+
+`PTRACE_ATTACH` — the request `gdb -p` and `strace -p` use — was missing until
+this cycle, and fell through to the default arm's `EPERM`, so a debugger could
+not be pointed at a running guest process at all. It shares its implementation
+with `SEIZE` and differs in two ways the rest of the sub-struct keys off. It
+takes no options, so `seized` stays false and the tracee reports group-stops
+classically; and it *stops* the tracee, by sending a `SIGSTOP` — after
+`ptrace.traced` is set, so the stop is reported to the tracer rather than being
+an ordinary job-control stop — which the tracer collects from its first `wait`.
+`PTRACE_INTERRUPT` is now gated on `seized` the way Linux gates it: an attached
+tracee gets `EIO`. `gdb -p <pid>` against a running guest process attaches,
+walks the stack, evaluates and detaches as a result.
 
 > **The bug that taught us this**
 >

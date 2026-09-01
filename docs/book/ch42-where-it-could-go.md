@@ -125,11 +125,11 @@ read their probe rather than to assume the report is wrong.
 
 ## 42.6 The thought experiment
 
-`docs/wasm_browser_architecture.md` works through what a WebKit-hosted iSH would
-look like: a native shell app with a `WKWebView`, a terminal UI in JavaScript,
-the CPU core compiled to WebAssembly, and syscalls handled by a JavaScript shim
-that either maps onto browser storage and network APIs or bridges back to native
-code.
+`docs/wasm_browser_architecture.md` works through what a WebKit-hosted iSH-AOK
+would look like: a native shell app with a `WKWebView`, a terminal UI in
+JavaScript, the CPU core compiled to WebAssembly, and syscalls handled by a
+JavaScript shim that either maps onto browser storage and network APIs or
+bridges back to native code.
 
 It is filed as an architecture note rather than a plan, and it earns its place
 in the tree for a reason worth naming: **writing down the design you are not
@@ -184,9 +184,9 @@ empty because a completion library turned an option off.
 Each of those was found by somebody running real software and asking why. None
 of them was found by reading the specification. And the system is trustworthy in
 proportion to how many of them have been found — which is why the most valuable
-artifacts in this repository are not the JIT or the shim, but 170 small
-programs in `tests/manual/`, each one a thing somebody once believed and was
-wrong about.
+artifacts in this repository are not the JIT or the shim, but over two hundred
+small programs in `tests/manual/`, each one a thing somebody once believed and
+was wrong about.
 
 The book's last recommendation is therefore the same as Chapter 40's, and it is
 the only one that transfers to any system at all: **check the thing itself.**

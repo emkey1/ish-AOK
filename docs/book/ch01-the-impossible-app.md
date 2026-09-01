@@ -79,8 +79,10 @@ compilation, and with it any hope of running an emulator at a tolerable speed.
 
 iSH-AOK has a JIT anyway, because its JIT never writes an instruction. Compiling
 a block of guest code means appending `unsigned long` values to an array —
-`gen()` at [jit/gen.c:311](../../jit/gen.c#L311) is nine lines long and its
-entire body is a bounds check, a `realloc`, and `state->block->code[state->size++] = thing`.
+`gen()` at [jit/gen.c:311](../../jit/gen.c#L311) is eighteen lines long —
+thirteen of them as written in 2018, plus a later out-of-memory recovery
+branch — and its entire body is a bounds check, a `realloc`, and
+`state->block->code[state->size++] = thing`.
 The values it appends are the addresses of small assembly routines that were
 compiled, linked and code-signed at build time, interleaved with the immediates
 those routines need. Running the block means loading the next pointer and
@@ -286,9 +288,9 @@ believes and what is actually true. Here is the smallest complete example.
 > The obvious implementation is Mach's `HOST_CPU_LOAD_INFO`, which reports
 > exactly that: total user, system, idle and nice ticks for the whole device.
 > It is also wrong, and wrong in a way that looks right in testing. On a phone
-> that is running other applications, the device is mostly idle even while iSH
-> is pinning a core, so the guest's `top` reported an idle system while the
-> guest was flat out — and every load-sensitive script in the guest drew the
+> that is running other applications, the device is mostly idle even while
+> iSH-AOK is pinning a core, so the guest's `top` reported an idle system while
+> the guest was flat out — and every load-sensitive script in the guest drew the
 > wrong conclusion.
 >
 > `get_total_cpu_usage()` in

@@ -30,10 +30,12 @@ rules out cross-core races as the cause by construction.
 ## `ISH_GUEST_MEM_HEADROOM_MB`
 
 Sets the free-memory threshold (in MB) below which iSH-AOK stops handing the
-guest new memory: once the app's available-memory budget drops under it, `mmap`
-and `mremap` growth are **refused with `ENOMEM`** — rather than throttled — so a
-runaway guest cannot get the whole app jetsammed. Defaults to 192 MB; set it to
-`0` to disable the guard entirely.
+guest new memory: once the app's available-memory budget drops under it, `mmap`,
+`mremap` and `brk` growth are **refused** — rather than throttled — so a
+runaway guest cannot get the whole app jetsammed. `mmap` and `mremap` fail with
+`ENOMEM`; `brk` returns the break unchanged, which is how `malloc` sees it, so
+plain heap growth stops working too. Defaults to 192 MB; set it to `0` to
+disable the guard entirely.
 
 This guard is **iOS-only**. On a macOS or Linux host there is no per-process
 jetsam budget, so it is compiled out and the variable has no effect on the

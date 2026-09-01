@@ -4,7 +4,10 @@
 
 # Appendix F. The regression suite, annotated
 
-178 C programs in `tests/manual/`, of which **164 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+230 C programs in `tests/manual/`, of which **213 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+
+A row with a directory prefix is a per-architecture or accelerator test, kept
+in a subdirectory of `tests/manual/` and registered under that same prefix.
 
 A test missing from the manifest is silently absent on device — it does not
 fail, it does not appear, and the run reports success without it (Chapter 9).
@@ -13,29 +16,46 @@ does not say what it is for.
 
 | test | ships | what it is for |
 |---|:-:|---|
-| `accept_kill.c` | yes | A task blocked in accept(2) on a listening socket with no incoming connection must die promptly on a fatal signal. Under iSH it could survive kill... |
+| `accept_kill.c` | yes | A task blocked in accept(2) on a listening socket with no incoming connection must die promptly on a fatal signal. Under AOK it could survive kill... |
 | `accept_rcvtimeo.c` | yes | Linux accept(2) honors the listening socket's SO_RCVTIMEO: a blocking accept4() on a listener with a receive timeout returns EAGAIN when the... |
 | `aes_gcm_accel.c` | yes | AES-256-GCM through the iSH-AOK crypto accelerator syscall (ISH_SYS_AEAD, alg 2 -- kernel/ish_accel.c + kernel/ish_accel_aes.c). |
 | `aio_basic.c` | yes | Linux native AIO (the io_* family), which iSH-AOK stubbed to ENOSYS until MariaDB dereferenced the nullptr that came back and crash-looped on install. |
 | `aio_threads.c` | yes | AIO under concurrency, which is the way MariaDB uses it: many threads sharing one context, and a teardown that can land while they are still... |
 | `ambient_caps.c` | yes | Ambient capabilities + SECBIT_KEEP_CAPS across a root-to-nonroot uid transition -- the exact sequence systemd's executor runs for every service... |
+| `arm64/ands_bcond_fusion.c` | yes | Regression coverage for jit/guest-arm64/control.S's ANDS+B.cond gadget fusion (fused_andsi/fused_andsr, wired in gen.c's opc==3 peek-ahead in... |
+| `arm64/arm64_regress.c` | yes | arm64 guest regressions: one check per real bug class found while bringing up the AArch64 JIT (the counterpart of x86/amd64_regress.c). |
+| `arm64/atomics64.c` | yes | arm64 atomics umbrella: the AArch64 counterpart of x86/atomics32.c. |
+| `arm64/dc_zva.c` | yes | dc_zva.c — DC ZVA (data cache zero by VA) on an arm64 guest. |
+| `arm64/hle_loop.c` | yes | Correctness test for the JIT copy/fill loop idiom recognition (jit/hle.c), arm64 guest. Each loop is written in inline asm so the exact recognized... |
+| `arm64/ptrace_singlestep.c` | yes | ptrace_singlestep (arm64-only): PTRACE_SINGLESTEP must execute exactly one guest instruction and stop, not run the tracee to completion. |
+| `arm64/ret_retcache.c` | yes | ret_retcache.c -- the arm64 JIT's br/blr/ret target cache. The aarch64 twin of tests/manual/riscv64/jalr_retcache.c; read that one's header for... |
+| `arm64/smc_stale_block.c` | yes | smc_stale_block.c — stale JIT translation surviving code invalidation. |
+| `arm64/stlr_ldar_publish.c` | yes | stlr_ldar_publish.c — LDAR/STLR cross-thread publication ordering. |
+| `arm64/vector_smoke.c` | yes | arm64 NEON smoke: compare compiler-generated vector instructions against scalar reference loops computed on the same inputs. The scalar side is... |
 | `at_absolute_path.c` | yes | "If the pathname given in pathname is absolute, then dirfd is ignored." -- openat(2), and POSIX says the same for the whole *at() family. The... |
 | `at_empty_path.c` | yes | AT_EMPTY_PATH support for the *at metadata syscalls (fchownat/fchmodat). |
 | `cat.c` | — |  |
 | `cgroup2_rmdir.c` | yes | An empty cgroup must be removable with rmdir(2). |
 | `chroot_getcwd.c` | yes | chroot() rebases getcwd() to the process root (Linux semantics). |
 | `clone_error_cleanup.c` | yes | clone_error_cleanup.c — regression for the clone() error-path session/pgroup corruption (issue #423 Tier 2). |
+| `concurrent_dir_futex.c` | yes | Two read-modify-writes that were not atomic against other threads. |
 | `concurrent_exec_tlb.c` | yes | concurrent_exec_tlb.c — regression for the stale-TLB use-after-free on execve (issue #469: arm64 cargo/rustc SIGILL at pc 0, host SIGSEGV). |
 | `copy_file_range.c` | yes | copy_file_range(): real data-copy behavior, including offset semantics. |
 | `create_eexist_first.c` | yes | Creating a name that already exists, in a directory you cannot write. |
 | `creds_groups_access.c` | yes | Supplementary groups past the old 32 cap, and the one execute rule root does not get to bypass. |
+| `cross_process_state.c` | yes | Four things that cross a process boundary, and were all found correct. |
+| `crypto/accel_test.c` | — | Guest test for the AOK crypto accelerator (ISH_SYS_AEAD syscall): 1. RFC 8439 2.8.2 vector (bit-exact correctness) 2. differential vs the guest's... |
+| `crypto/chacha20_poly1305_bench.c` | — | ChaCha20-Poly1305 via OpenSSL EVP: RFC 8439 sect 2.8.2 test vector (correctness ground truth) + throughput loop (timing). Links libcrypto. |
+| `crypto/chacha20_stream_test.c` | — |  |
 | `devtmpfs_mount.c` | yes | devtmpfs_mount.c — regression lock for mounting devtmpfs. |
+| `dir_tmpfs.c` | yes | Directory records, a faulting read, and two things tmpfs could not do. |
+| `dirfd_position.c` | yes | A directory's position is a cookie, and lseek has to report it. |
 | `epoll_data_layout.c` | yes | epoll_event guest-ABI layout: epoll_data must round-trip epoll_ctl -> epoll_wait bit-exact (kernel/epoll.c). Linux packs struct epoll_event (12... |
 | `epoll_dup_add.c` | yes | epoll_dup_add: Linux keys epoll membership by the (fd number, open file description) pair, so dup'd fds -- stdout and stderr are typically dups of... |
 | `epoll_eloop.c` | yes | epoll_ctl(EPOLL_CTL_ADD) nesting-cycle detection. |
 | `epoll_exclusive.c` | yes | EPOLLEXCLUSIVE (bit 28, 1<<28) EINVAL validation. |
 | `epoll_mod_spurious_wake.c` | yes | epoll_mod_spurious_wake: EPOLL_CTL_MOD on an emulated fd (eventfd) that is NOT currently ready must NOT wake a thread blocked in epoll_wait() on... |
-| `epoll_mod_wake.c` | yes | epoll_mod_wake: arming an already-ready emulated fd (eventfd) via EPOLL_CTL_MOD must wake a thread already blocked in epoll_wait on that set. iSH... |
+| `epoll_mod_wake.c` | yes | epoll_mod_wake: arming an already-ready emulated fd (eventfd) via EPOLL_CTL_MOD must wake a thread already blocked in epoll_wait on that set. AOK... |
 | `epoll_nested.c` | yes | Epoll-inside-epoll readiness, the exact topology systemd boots with: sd-event's epoll registers libmount's mount-monitor epoll fd (level-triggered... |
 | `epoll_oneshot_rearm.c` | yes | epoll_oneshot_rearm: after an EPOLLONESHOT event is delivered, the fd must stay REGISTERED in the epoll so EPOLL_CTL_MOD can re-arm it (Linux... |
 | `eventfd_interrupt.c` | yes |  |
@@ -50,6 +70,7 @@ does not say what it is for.
 | `fcntl_lock_validation.c` | yes | POSIX byte-range locks: what the range means, who holds it, and what happens when two holders want each other's. |
 | `fcntl_ofd.c` | yes | Open file description lock (F_OFD_GETLK / F_OFD_SETLK / F_OFD_SETLKW) test. |
 | `fcntl_setown.c` | yes | fcntl(F_SETOWN)/fcntl(F_GETOWN) were entirely unimplemented -- every call fell through sys_fcntl_common's default case to EINVAL. stress-ng's... |
+| `fd_conventions.c` | yes | Four interfaces that reported the wrong shape or the wrong reason. |
 | `fibbonaci.c` | — |  |
 | `fifo_open_creat_deadlock.c` | yes | Regression test: open(O_WRONLY\|O_CREAT) of an EXISTING FIFO racing the reader's open(O_RDONLY) must not deadlock the whole filesystem. |
 | `file_perms.c` | yes | Ownership and sticky-bit enforcement on metadata changes and deletions. |
@@ -60,8 +81,10 @@ does not say what it is for.
 | `fsopen_move_mount.c` | yes | The "new mount API" (fsopen/fsconfig/fsmount/move_mount, kernel 5.2+): before this fix all four were silent ENOSYS stubs, so systemd >= 254's... |
 | `ftruncate_fd_mode.c` | yes | ftruncate(2) takes its permission from the DESCRIPTOR, not from the inode's mode bits. Linux's do_sys_ftruncate checks only FMODE_WRITE, and... |
 | `fuse_basic.c` | yes | fuse_basic.c — self-checking regression lock for iSH-AOK's FUSE support (fs/fuse.c): the /dev/fuse device, the "fuse" filesystem type, and the... |
+| `fuse_threaded_daemon.c` | yes | fuse_threaded_daemon.c — the FUSE daemon is a THREAD of the process using the mount, rather than a separate process. |
 | `futex_core.c` | yes |  |
 | `futex_robust_requeue.c` | yes | Three futex defects, one of which disabled an entire POSIX feature. |
+| `futex_validation.c` | yes | Three things futex(2) got wrong about its own arguments. |
 | `getdents.c` | — |  |
 | `getpeername_smallbuf.c` | yes | getpeername()/getsockname() with a small or zero-length caller buffer. |
 | `getppid_thread.c` | yes | getppid_thread.c — the parent reported to a child must be the parent PROCESS, not the parent THREAD. |
@@ -76,20 +99,22 @@ does not say what it is for.
 | `inotify_mount_paths.c` | yes |  |
 | `iovec_abi_marshal.c` | yes | iovec ABI marshaling: readv/writev/preadv/pwritev/process_vm_readv all funnel through kernel/user.c's user_read_iovecs_abi() to decode the guest's... |
 | `jit_bench.c` | yes | jit_bench.c -- the two compute workloads jit_fuse_ab.sh drives, in the two shapes the JIT's control-flow machinery is actually sensitive to. |
-| `kcmp.c` | yes | kcmp(2): compare whether two processes share a kernel resource. systemd uses KCMP_FILE heavily (fd-store dedup, serialization across re-exec); iSH... |
+| `kcmp.c` | yes | kcmp(2): compare whether two processes share a kernel resource. systemd uses KCMP_FILE heavily (fd-store dedup, serialization across re-exec); AOK... |
 | `keyctl_link.c` | yes | keyctl(KEYCTL_LINK, ...) must not ENOSYS: systemd-executor's setup_keyring() runs this for every service with the default KeyringMode=shared (link... |
 | `kmsg_stream.c` | yes | The kernel log, as the two files every syslog daemon opens. |
 | `looper.c` | — |  |
 | `mem_conformance.c` | yes | mem_conformance.c — self-checking regression lock for the memory-management conformance fixes found by differential testing against real Linux... |
-| `memchurn.c` | — | memchurn — models musl mallocng's mmap/munmap churn in a multithreaded process, the workload that makes iSH's mem-quiesce barrier "horrific". |
+| `memchurn.c` | — | memchurn — models musl mallocng's mmap/munmap churn in a multithreaded process, the workload that makes AOK's mem-quiesce barrier "horrific". |
 | `memfd_mmap.c` | yes | memfd_create + mmap: anonymous memory-backed files. |
+| `mmap_conventions.c` | yes | Memory-mapping calls that answered without looking. |
 | `mmap_shared_integrity.c` | yes | Three ways a MAP_SHARED mapping quietly stopped being shared. |
 | `mmap_truncate_sigbus.c` | yes | mmap-then-truncate-then-access => guest SIGBUS (not emulator crash). |
 | `mmap_validation.c` | yes | mmap/mremap/membarrier argument handling, and three things AOK got wrong in ways a caller could not detect. |
 | `modify.c` | — |  |
 | `mount_bind_rbind.c` | yes | mount_bind_rbind.c — self-checking regression lock for non-directory bind mounts and recursive binds (MS_REC), the two bind behaviors... |
 | `mount_cross_dev.c` | yes | (st_dev, st_ino) must uniquely identify a file ACROSS mounts, not just within one. |
-| `mount_flags.c` | yes | mount_flags.c — self-checking regression lock for the mount(2) flag work. Asserts the behavior iSH now implements: |
+| `mount_flag_perms.c` | yes | What the per-mount flags MEAN, and lazy unmount. |
+| `mount_flags.c` | yes | mount_flags.c — self-checking regression lock for the mount(2) flag work. Asserts the behavior AOK now implements: |
 | `mount_stdev.c` | yes | st_dev semantics for virtual filesystem mounts (tmpfs, proc, binds). |
 | `mountinfo_epollet.c` | yes | /proc/self/mountinfo must generate an epoll EPOLLIN\|EPOLLET edge on every mount-table change -- the exact contract libmount's kernel mount monitor... |
 | `mounts_list_race.c` | yes | Reading the mount table while the mount table changes. |
@@ -102,22 +127,26 @@ does not say what it is for.
 | `null_page_fault.c` | yes | A dereference of an unmapped low address must fault, and must NOT be quietly turned into a fresh zero page by the stack's MAP_GROWSDOWN region. |
 | `oom_score_adj.c` | yes | /proc/<pid>/oom_score_adj was entirely unimplemented (missing from proc_pid_children) -- every systemd-executor-spawned service opened... |
 | `opath_symlink_pidfd_wait.c` | yes | O_PATH symlink fds + waitid(P_PIDFD): the systemd >= 260 boot layer after statx_mnt_id_timerfd. |
+| `open_tmpfile.c` | yes | O_TMPFILE: create an unnamed file on the filesystem holding a directory. |
 | `openat2_resolve.c` | yes | openat2's RESOLVE_* constraints. |
+| `orphan_pgrp_wait.c` | yes | Two things about who can be waited for, and who resumes a stopped job. |
 | `pidfd_clone.c` | yes | pidfd functional behavior (issue #423 Tier 1b): CLONE_PIDFD, pidfd_open, and pidfd_send_signal (kernel/pidfd.c, kernel/fork.c). Complements... |
 | `pidfd_epoll_deadlock.c` | yes | AB-BA deadlock between an epoll_wait scan over a pidfd and a task exiting. |
 | `pidfd_fdinfo_pid.c` | yes | /proc/<pid>/fdinfo/<fd> for a pidfd must include a "Pid:\t<pid>\n" line, matching real Linux's pidfd_show_fdinfo (fs/proc/fd.c). glibc's... |
 | `pidfd_open.c` | yes | pidfd_open (and the io_uring stub family) must not SIGSYS on amd64. |
 | `pidfd_self_exit_deadlock.c` | yes | A task that opens a pidfd on ITSELF and never closes it before exiting must not deadlock. Two related bugs found booting Arch Linux ARM's aarch64... |
 | `pidfd_zombie.c` | yes | pidfd_open(2) on a task that has exited but not been reaped. |
-| `pixman_accel.c` | yes | Differential test for the iSH pixman accelerator (ISH_SYS_PIXOP syscall, kernel/ish_accel_pix.c): every FILL/COPY/OVER result the accelerator... |
+| `pixman_accel.c` | yes | Differential test for the AOK pixman accelerator (ISH_SYS_PIXOP syscall, kernel/ish_accel_pix.c): every FILL/COPY/OVER result the accelerator... |
 | `poll_default_mask.c` | yes | What poll and select say about files that have no poll operation, and how many results they count. |
 | `poll_rdhup_bounds.c` | yes | What poll and epoll report, and what they will accept being asked. |
 | `posix_timer_exec.c` | yes | POSIX timers (timer_create) do not survive execve. |
-| `posix_timer_fork.c` | yes | posix_timer_fork.c — POSIX timers (timer_create) must NOT be inherited across fork(). iSH's tgroup_copy shallow-copied the parent's posix_timers[]... |
+| `posix_timer_fork.c` | yes | posix_timer_fork.c — POSIX timers (timer_create) must NOT be inherited across fork(). AOK's tgroup_copy shallow-copied the parent's posix_timers[]... |
 | `prctl_capbset_drop.c` | yes | prctl(PR_CAPBSET_DROP) was entirely unimplemented -- fell through to the default EINVAL case. Real-world trigger: systemd's per-unit... |
 | `pread_stack_thread_race.c` | — | pread_stack_thread_race.c — stress repro attempt for a device crash: nvim's libuv worker thread (a CLONE_VM sibling of the main thread) SIGABRT'd... |
+| `privs_syscall_misc.c` | yes | Four unrelated findings that share one shape: answering with something the caller cannot act on. |
 | `proc_conformance.c` | yes | /proc facts that ordinary tools read. |
 | `proc_field_layout.c` | yes |  |
+| `proc_files.c` | yes | procfs files that tools read, and two fields inside /proc/<pid>/status. |
 | `proc_pid_io.c` | yes | proc_pid_io.c — self-checking regression lock for per-task I/O accounting (/proc/<pid>/io) and the /proc/vmstat pgpgin/pgpgout totals that feed... |
 | `proc_stat_monotonic.c` | yes |  |
 | `process_conformance.c` | yes |  |
@@ -131,13 +160,17 @@ does not say what it is for.
 | `pty_line_discipline.c` | yes | Covers a set of related pty/tty line-discipline gaps (the first three from issue #423 Tier 3): 1. ECHOKE vs plain ECHOK on VKILL -- and the fact... |
 | `random_seed.c` | yes |  |
 | `resource_limits_sched.c` | yes | Resource limits, scheduling policy, nice, and the half of getrusage that is not CPU time. |
+| `riscv64/jalr_retcache.c` | yes | jalr_retcache.c -- the riscv64 JIT's jalr target/return cache. |
+| `riscv64/ptrace_regset.c` | yes | ptrace_regset (riscv64-only): PTRACE_GETREGSET/SETREGSET(NT_PRSTATUS) must report and accept the real riscv64 register file. iSH-AOK's riscv64... |
 | `scm_rights_pidfd.c` | yes |  |
-| `scm_rights_stress.c` | yes | AF_UNIX SCM_RIGHTS fd-passing must never desync iSH's two-channel bookkeeping (a host "sentinel" fd carrying the message + an internal struct-scm... |
+| `scm_rights_stress.c` | yes | AF_UNIX SCM_RIGHTS fd-passing must never desync AOK's two-channel bookkeeping (a host "sentinel" fd carrying the message + an internal struct-scm... |
 | `sendfile_vhangup.c` | yes | amd64 sendfile real copy (+ no SIGSYS on 64-bit count), and vhangup wired. |
+| `sgid_inherit.c` | yes | A setgid directory hands its group to everything created inside it. |
 | `sigchld_disposition.c` | yes | What a parent's SIGCHLD disposition changes about its children. |
 | `signal.c` | — |  |
 | `signal_altstack.c` | yes |  |
 | `signal_child_burst.c` | yes | Burst of near-simultaneous child exits must never strand a shell's sigsuspend()/wait4() reaper loop -- the standard "wait" builtin / job control... |
+| `signal_conventions.c` | yes | Signal and wait behaviours that reported the wrong thing, or nothing. |
 | `signal_core.c` | yes |  |
 | `signal_forced_trap.c` | yes | signal_forced_trap: synchronous fault signals that arrive blocked (or ignored) must force-default and KILL, exactly like Linux's... |
 | `signal_poll.c` | yes |  |
@@ -151,7 +184,7 @@ does not say what it is for.
 | `signalfd_epoll_deadlock.c` | yes | signalfd_epoll_deadlock: an exiting child delivering SIGCHLD to its parent (send_signal_with_sighand -> deliver_signal_unlocked_locked ->... |
 | `signalfd_thread_group.c` | yes | signalfd_thread_group: a SIGCHLD generated by one thread's fork()+_exit() must be observable via a signalfd read on a DIFFERENT thread of the same... |
 | `sigwait_kill.c` | yes | kill() is PROCESS-directed: it must be deliverable to any thread in the group that is not blocking the signal -- including one parked in sigwait()... |
-| `siocoutq.c` | yes | Linux SIOCOUTQ (== TIOCOUTQ, 0x5411) on a socket reports the number of bytes still queued in the send buffer. iSH's sock_ioctl had no handler for... |
+| `siocoutq.c` | yes | Linux SIOCOUTQ (== TIOCOUTQ, 0x5411) on a socket reports the number of bytes still queued in the send buffer. AOK's sock_ioctl had no handler for... |
 | `sock_bind_refuse.c` | yes | A TCP port that is bound but not yet listening must REFUSE connections. |
 | `sock_conformance.c` | yes |  |
 | `sock_conformance_opts.c` | yes | Socket option and socket() argument conformance: ten things AOK reported differently from Linux, and one that could not be read back at all. |
@@ -160,23 +193,30 @@ does not say what it is for.
 | `sock_nosignal.c` | yes | MSG_NOSIGNAL: send()/sendmsg() on a broken connection must return -1/EPIPE WITHOUT raising SIGPIPE in the caller, while the same call without the... |
 | `sock_options.c` | yes | Socket option values as Linux reports them. |
 | `sock_optlen.c` | yes | getsockopt's length contract, and the errno for an option that does not exist. |
-| `socket_kill.c` | yes | A task blocked in recv(2) or send(2) must die promptly on a fatal signal. Under iSH it could survive kill -9 forever, the same defect... |
+| `socket_kill.c` | yes | A task blocked in recv(2) or send(2) must die promptly on a fatal signal. Under AOK it could survive kill -9 forever, the same defect... |
+| `sockopt_conventions.c` | yes | Socket options whose ANSWER is the contract, not just their acceptance. |
+| `splice_vmsplice.c` | yes | splice(2) and vmsplice(2), and what tee(2) says when it cannot be done. |
+| `stack_guard_gap.c` | yes | stack_guard_gap.c — regression for the stack growing into its neighbours (issue #521). |
 | `stat.c` | — |  |
 | `statx_mnt_id_timerfd.c` | yes | systemd >= 260 boot prerequisites: statx STATX_MNT_ID and timerfd TFD_TIMER_CANCEL_ON_SET. |
 | `syscall_wiring.c` | yes | Syscalls that were implemented but not reachable, because the per-ABI table entry was missing. The implementation existing is not the same as the... |
 | `sysctl_write_rules.c` | yes | What /proc/sys accepts, what it refuses, and what it admits to not having. |
 | `sysfs_cpu_topology.c` | yes | /sys/devices/system/cpu: per-CPU topology and cache attributes. |
+| `sysfs_dev_ns.c` | yes | sysfs_dev_ns.c — the sysfs and nsfs surfaces three util-linux tools need. |
 | `sysv_ipc.c` | yes | SysV message queues + semaphores (fakeroot's IPC substrate). |
 | `taskstats_genl.c` | yes |  |
 | `thread.c` | — |  |
 | `time_clocks_ticks.c` | yes | Six things the time syscalls got wrong, several of which silently produced a plausible-looking wrong answer rather than an error. |
 | `time_conformance.c` | yes | time_conformance.c — self-checking regression lock for the time/clock/timer conformance fixes found by differential testing against real Linux... |
+| `timeout_and_cpu_timer.c` | yes | Two calls that were given a deadline and ignored it. |
+| `timer_conventions.c` | yes | Sleeps and timers: what they write, what they count, what they refuse. |
 | `timerfd_settime_readiness.c` | yes | timerfd_settime must reset the expiration counter -- and therefore poll/ epoll readiness -- on EVERY call, including a disarm (it_value = {0,0}).... |
 | `tmpfs_append.c` | yes | O_APPEND on tmpfs mounts (/tmp, /run, /dev/shm) -- and the same asserts on a non-tmpfs filesystem and on a memfd as controls. |
 | `tmpfs_exec.c` | yes | execve of a binary that lives on tmpfs, plus positional I/O on tmpfs. |
 | `tmpfs_mmap.c` | yes | tmpfs mmap: file-backed mappings on tmpfs mounts (/tmp, /run, /dev/shm). |
 | `tmpfs_nlink.c` | yes | tmpfs st_nlink maintenance. Was: fs/tmp.c never set stat.nlink, so every tmpfs file reported st_nlink == 0 -- which systemd-journald's... |
 | `tmpfs_statfs.c` | yes | tmpfs statfs: block/inode counts for tmpfs mounts (/tmp, /run, /dev/shm). |
+| `tty_canon_queue.c` | yes | What a canonical terminal says is waiting, and what it hands over. |
 | `tty_ctty_ioctls.c` | yes | Controlling-terminal ownership, and the terminal ioctls AOK never wired up. |
 | `tty_hangup_reopen.c` | yes | A hangup is scoped to the descriptors open when it happened. Linux hands a fresh open() of the same terminal a WORKING tty; the EIO belongs to the... |
 | `tty_hangup_signal.c` | yes | A terminal going away signals the session leader and foreground group. |
@@ -191,6 +231,21 @@ does not say what it is for.
 | `vfork_exec_stale_jit_peer.c` | yes | vfork_exec_stale_jit_peer.c -- the program vfork_exec_stale_jit.c execs. |
 | `vfork_fatal_signal.c` | yes | vfork_fatal_signal.c — the vfork(2) parent wait: what wakes it, what does not, and the lifetime of the handoff struct it waits on. |
 | `wayland_scm_shm.c` | yes | Wayland substrate: SCM_RIGHTS fd-passing shape + memfd seals, the two emulator bugs found bringing up a real Wayland compositor (wlroots/cage) +... |
+| `x86/amd64_incdec.c` | yes | INC (FF /0) and DEC (FF /1) on a REGISTER operand -- the amd64 form that in long mode is the ONLY way to spell `inc`/`dec` of a register, because... |
+| `x86/amd64_regress.c` | yes |  |
+| `x86/atomic_cmpxchg32.c` | yes |  |
+| `x86/atomic_cmpxchg8b.c` | yes |  |
+| `x86/atomic_logic32.c` | yes |  |
+| `x86/atomic_xadd32.c` | yes |  |
+| `x86/atomics32.c` | yes |  |
+| `x86/avx32_smoke.c` | yes |  |
+| `x86/avx_regress.c` | yes |  |
+| `x86/bcd_adjust.c` | yes | The packed/unpacked BCD adjust instructions: aaa (0x37), aas (0x3f), daa (0x27), das (0x2f), aam (0xd4 ib) and aad (0xd5 ib). |
+| `x86/cow_atomic_fault.c` | yes | cow_atomic_fault (i386/amd64): a LOCK-prefixed atomic on a page that is P_COW at fault time but resolved (COW-broken by a sibling thread) before... |
+| `x86/cpuid_xsave.c` | yes | cpuid_xsave -- every CPUID feature bit AOK advertises must name an instruction the guest can actually execute. |
+| `x86/port_io_gpf.c` | yes | IN/OUT: the port-I/O opcodes e4/e5 (in al/eax, imm8), e6/e7 (out imm8, al/eax), ec/ed (in al/eax, dx) and ee/ef (out dx, al/eax). |
+| `x86/x86_loop.c` | yes | LOOP (0xe2), LOOPE/LOOPZ (0xe1) and LOOPNE/LOOPNZ (0xe0). |
+| `x86/x87_fpu.c` | yes | x87 semantics that emulation got wrong in ways ordinary arithmetic tests miss: control-word precision, the status-word C2 bit, the memory form of... |
 
 ---
 

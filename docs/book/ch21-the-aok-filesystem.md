@@ -27,6 +27,7 @@ of them.
 /AOK/tests/          the guest-side regression suite
 /AOK/fixes/          canned fixes for known upstream-distro bugs
 /AOK/native/         programs compiled into the app
+/AOK/native/libs/    support files those programs read (helix grammars, themes)
 /AOK/persist/        writable, host-backed, survives everything
 /AOK/fakefs/         writable, survives everything, keeps full Linux metadata
 /AOK/roots/          your other installed roots, read-write
@@ -38,12 +39,12 @@ The unusual part is where the content comes from. `/AOK/docs`, `/AOK/tools` and
 `/AOK/tests` are not copied onto the device at install time and they are not
 extracted on first boot. They are compiled into the application.
 
-Three manifest files list what ships:
+Four manifest files list what ships:
 
 ```
 fs/aok-docs.manifest     27 lines
 fs/aok-tools.manifest    32 lines
-fs/aok-tests.manifest   210 lines
+fs/aok-tests.manifest   ~235 lines  (it grows every cycle)
 fs/aok-libs.manifest    334 lines   (grammars and support files for helix)
 ```
 
@@ -126,12 +127,15 @@ documentation says so in those terms rather than making you infer it.
 `chroot` from an arm64 Alpine into an x86_64 Devuan without leaving the guest.
 Chapter 30 covers what that is for.
 
-## 21.5 `/AOK/native` has no manifest
+## 21.5 `/AOK/native`'s programs have no manifest
 
-The last directory works differently from all of them. There is no manifest,
-because there are no files: each entry corresponds to one program compiled into
-the application and registered in `kernel/native.c`, and `execve` of the path
-runs that host code instead of loading an image (Part V).
+The last directory works differently from all of them. Its program entries have
+no manifest, because there are no files: each corresponds to one program compiled
+into the application and registered in `kernel/native.c`, and `execve` of the
+path runs that host code instead of loading an image (Part V). The one
+manifest-driven part of it is `/AOK/native/libs`, from `fs/aok-libs.manifest` —
+helix's tree-sitter grammars and themes, which are ordinary files a native
+program reads.
 
 The design decision worth naming is what happens for a program this build does
 not carry:

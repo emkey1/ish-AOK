@@ -70,7 +70,7 @@ And in the same period, the terminal: `app/Terminal.m` in October 2017,
 
 ## 2.3 The TestFlight years
 
-`docs/CHANGELOG.md` preserves the user-facing release notes from builds 22
+`docs/CHANGELOG.md` preserves the user-facing release notes from builds 33
 through 48, and they are the best available record of what actually broke for
 people. Read in order, they are a compressed history of what "being Linux"
 demands:
@@ -102,8 +102,9 @@ On **3 May 2018**, almost exactly a year after the first commit:
 
 `jit/gen.c` and `jit/jit.c` follow on 14 June; the aarch64 gadget files and
 `jit_enter` on 17 August. Chapter 6 is about what that architecture is and why
-it works on a platform that forbids JITs — and about `gen()`, the twelve-line
-function written on 26 May 2018 that has not needed to change since.
+it works on a platform that forbids JITs — and about `gen()`, the function
+written on 26 May 2018 whose thirteen original lines have not needed to change
+since.
 
 What is worth adding here is the *timing*. The JIT arrives a year in, after the
 kernel is real enough to run a distribution. That is the right order and not the

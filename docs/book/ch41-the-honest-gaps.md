@@ -105,6 +105,21 @@ And yet:
   crashes that were never root-caused — with a probe harness in the tree waiting
   for somebody to re-run it.
 - It is still where AVX semantics execute for amd64 (Chapter 5).
+- And it is still where **every `lock`-prefixed instruction** executes. Every
+  eligibility predicate in `jit/gen.c`'s amd64 front-end requires the lock
+  prefix to be absent, so a locked `xadd` or `cmpxchg` drops out of the JIT and
+  is interpreted under the global `atomic_l_lock` — where the i386 JIT compiles
+  the same instructions into `ldaxr`/`stlxr` gadgets that use real host atomics.
+
+That last one costs twice. It is a throughput gap, because locked instructions
+are not rare — they are every uncontended mutex acquire, every refcount and
+every `std::atomic`, and each one leaves the JIT and serialises the whole
+emulator on one global lock. And it is a correctness gap, because it leaves two
+implementations of guest atomicity that do not interlock: a kernel-side
+read-modify-write on guest memory using a host atomic does not serialise against
+an amd64 guest's own atomics. `FUTEX_WAKE_OP` lost 1107 of 40,000 increments
+that way, and the fix for 552 was `kernel/futex.c` taking `atomic_l_lock`
+itself — agreement with the weaker mechanism rather than a repair of it.
 
 `emu/arm64_interp.c` survives for a different reason: as a bisection escape
 hatch behind `ISH_ARM64_FORCE_INTERP=1`, with a comment that is candid about
@@ -131,11 +146,6 @@ zero.
 **Unrouted host symbols** remain, and are enumerated on demand — Chapter 23's
 gate has a `--report` mode whose third list is exactly the outstanding work.
 
-**Process substitution** — `<(...)` and `>(...)` — fails on Alpine, and that is
-a property of the *rootfs* rather than of the shell: it needs `/dev/fd`, which
-Alpine does not ship, so it fails identically under the emulated `/bin/bash`
-there and works under both shells on Devuan.
-
 **Two divergences are genuinely the shell's**: a pattern compiled at first use
 is cached in the parse tree with nothing recording the options in force at the
 time, so a re-launched child can compile it under different options than its
@@ -148,11 +158,9 @@ cipher out of the emulator and the cipher is what an ssh session is bound by.
 
 ## 41.6 FUSE, stated as absences
 
-No `mmap`, so no executing a program stored on a FUSE mount — binaries and
-AppImages have to be copied off first. No `FUSE_INTERRUPT`, so a daemon is never
-told a request was abandoned. No `FORGET`, which is the deliberate trade behind
-not caching nodeids (Chapter 20). No `readdirplus`, no splice, no fd-passing
-mount API.
+No `readdirplus`, which needs an attribute cache to be worth having. No splice.
+No `fsopen()`-based mount API. That is the whole list — `fs/fuse.c`'s own header
+comment names those three and nothing else.
 
 All of them are missing *visibly*, which Chapter 40 explains is the whole
 difference between an unfinished feature and a capability lie.
@@ -227,6 +235,15 @@ Every entry here shares one property: **it is written down somewhere a person
 would find it**, usually in `docs/TODO.md`, usually with a measurement, often
 with the designs that were rejected and why.
 
+The 552 release added a second such file. `docs/build_553_musts.md` carries the
+work deferred out of that release with the diagnosis already done, so nobody has
+to re-derive it: the amd64 locked-instruction path of Section 41.4, and
+`prlimit64` not pushing a lowered `RLIMIT_STACK` down into *another* process's
+address space, where the cached bound in `struct mem` is only refreshed for the
+calling task and the third party picks the change up at its next exec. Each
+entry says what is established, what the next step is, and how to prove it
+afterwards.
+
 That turns a gap into a decision. `PROT_EXEC` is not "we never got to NX" — it
 is a two-row table against Linux 6.12, a severity grade, two candidate designs
 and a reason. The external display is not an abandoned branch — it is a
@@ -241,6 +258,7 @@ first.
 
 *Anchors:* [docs/TODO.md](../../docs/TODO.md) ("Diagnosed, not fixed",
 "Deferred on purpose", "Native program candidates", "Reported issues"),
+[docs/build_553_musts.md](../../docs/build_553_musts.md),
 [emu/memory.h](../../emu/memory.h) (`P_EXEC`), [fs/real.c](../../fs/real.c)
 (`realfs_getflags`, `realfs_read`), [emu/amd64_interp.c](../../emu/amd64_interp.c),
 [jit/jit.c](../../jit/jit.c) (the `as` bypass), [fs/fuse.c](../../fs/fuse.c),

@@ -21,6 +21,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 - iOS를 통해 게스트 파일을 노출하는 File Provider 지원.
 - **FUSE**: `/dev/fuse` 와 `fuse` 파일시스템 타입(프로토콜 7.31)을 제공하므로, 게스트의 `libfuse2`/`libfuse3` 데몬이 수정 없이 파일시스템을 마운트하고 제공합니다. 게스트가 이미 fake-root 이므로 setuid `fusermount` 는 쓰이지 않고, libfuse 가 `mount(2)` 를 직접 호출합니다. `/AOK/docs/fuse.md` 참고.
 - **Apple 단축어(Shortcuts) 액션** (iOS 16+): 앱을 열지 않고도 네이티브 zsh로 게스트에서 명령을 실행하고 그 출력을 단축어로 돌려주는 "Run Command" 액션과, Siri 문구가 지원되는 "Open iSH-AOK" 대상들. `/AOK/docs/shortcuts.md` 참고.
+- **`/dev/url`**: 게스트가 URL을 써 넣으면 그 URL을 iOS가 열도록 넘겨주는 문자 장치. `shortcuts://` 링크도 되므로 게스트 스크립트가 단축어를 실행할 수 있습니다. `app/URLDevice.m` 참고.
 - 선택적 가속기: 자주 쓰이는 libc 루틴의 네이티브 대체, 암호화 및 pixman 오프로드.
 - 이 포크 전용의 추가 진단 및 운영 관련 변경 사항.
 
@@ -98,6 +99,7 @@ HLE의 영향이 가장 크지만, arm64와 riscv64 게스트에 한정됩니다
 - `jit/`: gadget JIT와 게스트별 변환기.
 - `tests/`: 엔드투엔드 테스트와 게스트 측 회귀 스위트.
 - `tools/`: 개발자 도구 및 호스트 측 헬퍼.
+- `docs/`: 설계 노트, 이식 계획, 릴리스 노트, 그리고 [책](docs/book/README.md) — iSH-AOK 의 동작을 다루는 43개 장과 8개 부록.
 
 ## 클론
 
@@ -144,7 +146,7 @@ Apple Silicon에서는 빌드가 `llvm`, `libarchive`, `unicorn`을 `/usr/local`
 
 ## iOS 앱 빌드
 
-[iSH-AOK.xcodeproj](iSH-AOK.xcodeproj)를 Xcode에서 열고 `iSH` 스킴을 빌드하세요.
+[iSH-AOK.xcodeproj](iSH-AOK.xcodeproj)를 Xcode에서 열고 `iSH-AOK` 스킴을 빌드하세요.
 
 포크 전용 설정 중 중요한 것:
 
@@ -197,8 +199,8 @@ ninja -C build
 아래의 경로를 `execve` 하면 게스트 이미지를 적재하는 대신 iSH-AOK 내부의 함수로
 디스패치되며, 호출한 쪽은 그 차이를 알 수 없습니다. `/AOK/native` 에는
 레지스트리(`kernel/native.c`)에 등록된 프로그램마다 항목이 하나씩 있고 —
-`smallclue`, `motepad`, `hx`, `rust-probe`, `bash`, `zsh`, `zsh-multio` —
-나머지는 모두 그중 하나를 가리키는 심볼릭 링크입니다. busybox 와 똑같이 링크
+`smallclue`, `motepad`, `bmm`, `bmt`, `hx`, `rust-probe`, `bash`, `zsh`,
+`zsh-multio` — 나머지는 모두 그중 하나를 가리키는 심볼릭 링크입니다. busybox 와 똑같이 링크
 이름이 애플릿을 고릅니다:
 
 | 프로그램 | 설명 |
@@ -207,6 +209,7 @@ ninja -C build
 | `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id` | OpenSSH, SmallCLUE 의 애플릿 (OpenSSL 없이 빌드) |
 | `vi` | Nextvi 편집기, SmallCLUE 의 애플릿 |
 | `/AOK/native/motepad` | 모드가 없는 터미널 텍스트 편집기, Workspace 의 MotePad 애플릿에 대응 |
+| `/AOK/native/bmm`, `/AOK/native/bmt` | `/AOK/tools` 의 벤치마크를 호스트 코드로 컴파일해 넣은 것. 같은 작업을 에뮬레이션이 있을 때와 없을 때로 재어 볼 수 있습니다 (`kernel/native_bench.c`) |
 | `/AOK/native/hx` | [helix](https://helix-editor.com), 구문 강조를 지원하는 모달 편집기. MPL-2.0 이라 bash 처럼 빌드 스위치(`-Dnative_helix`)가 있으며, 문법 파일은 `/AOK/native/libs` 에 있습니다 |
 | `/AOK/native/rust-probe` | `hx` 가 딛고 있는 Rust-온-shim 경로를 검증하는 프로브. 직접 쓸 일은 없습니다 |
 | `/AOK/native/bash` | [네이티브 bash와 라이선스](#네이티브-bash와-라이선스) 참고 |
@@ -313,7 +316,7 @@ MULTIOS 리다이렉션은 동반 네이티브 프로그램인 `zsh-multio` 를 
 
 119개의 차등 테스트가 게스트의 `/AOK/tests/native_zsh_fork_state.sh` 에 들어
 있습니다. 기대값은 그럴듯해 보이는 것이 아니라 실제 zsh 가 출력하는 것에서
-가져왔으며, 그중 116개가 통과합니다. 실패하는 둘은 **프로세스 치환** — `<(...)` 과
+가져왔으며, 그중 116개가 통과합니다. 실패하는 셋은 **프로세스 치환** — `<(...)` 과
 `>(...)` — 이고, 이는 셸이 아니라 루트 파일시스템의 속성입니다. `/dev/fd` 가
 필요한데 Alpine 이미지에는 없어서 그곳에서는 에뮬레이트되는 `/bin/bash` 에서도
 똑같이 실패하고, `/dev/fd` 가 `/proc/self/fd` 심볼릭 링크인 Devuan 에서는 두 셸
@@ -353,7 +356,7 @@ x86_64 호스트에서는 전부 실행됩니다.
 
 게스트 측 스위트가 주된 회귀 게이트입니다. [tests/manual/](tests/manual)에 있으며
 게스트 안에서는 `/AOK/tests`에 읽기 전용으로 제공됩니다. 시그널, futex, 프로세스
-라이프사이클, 파일시스템 계층, JIT, 아키텍처별 명령어 동작을 다루는 약 120개의
+라이프사이클, 파일시스템 계층, JIT, 아키텍처별 명령어 동작을 다루는 약 200개의
 프로그램으로 구성되어 있습니다. 각 프로그램은 실패 시 0이 아닌 값으로 종료하며 `-v`를
 지원합니다.
 

@@ -36,12 +36,13 @@ a native one. On a current build it links about 110 applets and skips a couple
 of dozen it knows do not work.
 
 It links the **standalone** native programs too, not only SmallCLUE's applets —
-`bash`, `zsh`, and [`motepad`](motepad.md) each get a link pointing at their own
-file. Three names are deliberately left out: `smallclue` itself (its applets are
-linked by name, so a bare `smallclue` link would only print the banner),
-`zsh-multio` (an internal helper, not a second shell), and `rust-probe` (a
-diagnostic nobody types). Exclusion there is not a judgement about whether the
-program works.
+`bash`, `zsh`, [`motepad`](motepad.md), `hx` and the `bmm`/`bmt` benchmarks each
+get a link pointing at their own file. It enumerates `/AOK/native` rather than
+naming them, so a program this build does not have is simply absent. Three names
+are deliberately left out: `smallclue` itself (its applets are linked by name,
+so a bare `smallclue` link would only print the banner), `zsh-multio` (an
+internal helper, not a second shell), and `rust-probe` (a diagnostic nobody
+types). Exclusion there is not a judgement about whether the program works.
 
 Look before you leap — `--list` changes nothing and prints exactly what would
 happen:
@@ -53,7 +54,7 @@ sh /AOK/tools/native-links.sh --list
 The last lines are the summary worth reading:
 
 ```
-would link 110 applet(s) and 3 program(s), leave 0 in place, skip 20 excluded, 0 already linked, unlink 0 now-excluded
+would link 110 applet(s) and 6 program(s), leave 0 in place, skip 20 excluded, 0 already linked, unlink 0 now-excluded
   would put /usr/local/native-bin first on PATH via /etc/profile.d/05-aok-native-bin.sh
   would make zsh read it too, via /etc/zprofile
   nu already uses /AOK/native/bash

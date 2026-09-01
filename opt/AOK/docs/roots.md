@@ -71,8 +71,15 @@ echo op=remove >&3; echo name=Experiment >&3; echo confirm=yes >&3; echo run >&3
 The **Filesystems** screen — in app settings, and the same screen as the **Boot
 Images** applet in Workspace — lists four groups:
 
-- **Installed Filesystems** — the roots you already have, with the one that
-  boots next marked. Swipe to delete one.
+- **Installed Filesystems** — the roots you already have. The one currently
+  running as `/` is tinted and bold, and reads "● IN USE — mounted at / ·
+  can't be deleted"; the others read "Mounted at `/AOK/roots/<name>`", or
+  carry no subtitle at all if their mount failed. The root set to boot next
+  is usually that same row but need not be — choosing a different default
+  takes effect immediately while `/` stays where it is until the next launch
+  — and neither of those two can be deleted or renamed while it is in use. To
+  delete or rename one, tap it and use the detail screen — swipe-to-delete
+  applies to the cached archives below, not to installed roots.
 - **Root Cached Filesystems (`/AOK/persist/roots`)** — any root archives
   sitting in that shared, persistent folder, whether they got there via
   automatic download or because you (or the Files app) dropped a
@@ -113,8 +120,8 @@ booted into.
 
 Being visible under `/AOK/roots/<name>` isn't enough to actually run
 programs from another root the way a distro install would expect —
-`/proc`, `/sys`, `/dev`, and `/dev/pts` still need to be bind-mounted in so
-guest tools see the same view of the (single, shared) kernel that the
+`/proc`, `/sys`, `/dev`, `/dev/pts` and `/run` still need to be bind-mounted
+in so guest tools see the same view of the (single, shared) kernel that the
 outer root sees. `/AOK/tools/mount-root.sh` does that bind-mounting and
 then chroots you in.
 
@@ -135,9 +142,12 @@ sh /AOK/tools/mount-root.sh --unmount Devuan6-x86_64
 sh /AOK/tools/mount-root.sh --unmount all
 ```
 
-The script also bind-mounts `/AOK/tools` itself into the chroot, so
-`mount-root.sh` and `ktop` stay reachable from inside it. Root names are
-sanity-checked to reject `/`, `.`, and `..`.
+The script also bind-mounts `/AOK/tools` and `/AOK/tests` into the chroot, so
+`mount-root.sh`, `ktop` and the guest regression suite stay reachable from
+inside it — `/AOK` is the booted root's aokfs mount and does not otherwise
+exist in another root, which is what makes
+`mount-root.sh <root> -- sh /AOK/tests/setup-regressions.sh --run`
+possible at all. Root names are sanity-checked to reject `/`, `.`, and `..`.
 
 Because there's only one real kernel underneath, a process started inside
 a `mount-root.sh` chroot is a completely ordinary process from the outer

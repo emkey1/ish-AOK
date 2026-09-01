@@ -13,8 +13,8 @@ so a NULL check passes — editing it changes nothing.
 
 | table | entries | implemented | native dispatch | stubs |
 |---|--:|--:|--:|--:|
-| i386 | 350 | 313 | 0 | 37 |
-| amd64 | 323 | 288 | 1 | 34 |
+| i386 | 352 | 315 | 0 | 37 |
+| amd64 | 325 | 290 | 1 | 34 |
 | arm64 / riscv64 | 312 | 223 | 2 | 87 |
 
 riscv64 shares arm64's table: both are asm-generic ABIs with identical
@@ -247,6 +247,8 @@ numbering (Chapter 7).
 | 312 | `sys_get_robust_list` | implemented |  |
 | 313 | `sys_splice` | implemented |  |
 | 314 | `syscall_success_stub` | implemented | sync_file_range |
+| 315 | `sys_tee` | implemented |  |
+| 316 | `sys_vmsplice` | implemented |  |
 | 318 | `syscall_success_stub` | implemented | getcpu |
 | 319 | `sys_epoll_pwait` | implemented |  |
 | 320 | `sys_utimensat` | implemented |  |
@@ -602,7 +604,9 @@ numbering (Chapter 7).
 | 273 | `sys_set_robust_list_amd64` | implemented |  |
 | 274 | `sys_get_robust_list_amd64` | implemented |  |
 | 275 | `sys_splice` | implemented |  |
+| 276 | `sys_tee` | implemented |  |
 | 277 | `syscall_success_stub` | implemented | sync_file_range |
+| 278 | `sys_vmsplice` | implemented |  |
 | 280 | `sys_utimensat_amd64` | implemented |  |
 | 281 | `sys_epoll_pwait` | implemented |  |
 | 282 | `sys_signalfd` | implemented |  |

@@ -110,7 +110,7 @@ registers in host registers across many instructions; a peephole pass can fold
 the flag computation nobody reads.
 
 This is what QEMU does, what every JavaScript engine does, and what a
-hypothetical iSH would do if it could. The cost is that it requires writing
+hypothetical iSH-AOK would do if it could. The cost is that it requires writing
 instructions into memory and then executing them, which is the definition of a
 W^X violation.
 
@@ -442,14 +442,13 @@ The answer is a budget, kept in the frame:
 
 8,192 chained dispatches, reset before every `jit_enter`, decremented on each
 block-to-block chain; on expiry the chain exits to C so the cycle counter fires,
-pokes are seen, and lock waiters get their turn. The arm64, riscv64 and amd64
-engines all use it.
+pokes are seen, and lock waiters get their turn. Every engine uses it.
 
-The i386 engine does not have one, so it forbids backward links outright and
-pays an exit-to-C round trip on every iteration of every loop. That is a real,
-measurable cost that the newer engines do not pay, sitting in the tree next to
-the mechanism that fixes it — a good example of how a system of this age carries
-its own history in its performance profile.
+The i386 engine gained backward-edge linking in August 2026 for exactly this
+reason — an unlinked backward edge did not merely round-trip to C, it re-took
+`jit->lock` on every loop iteration only to rediscover the edge and refuse it,
+which put `pthread_mutex_lock` in the profile of a pure-compute guest loop.
+`ISH_I386_NOBACKCHAIN=1` restores the old forward-only behaviour for bisection.
 
 ## 6.11 The return cache, and an optimization that can fail silently
 

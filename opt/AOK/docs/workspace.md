@@ -12,11 +12,14 @@ guest Linux processes; the window chrome, dock, and most applets are pure
 native code. That's also why Workspace works on iPhone, not just iPad: it
 doesn't depend on iOS Scenes or Stage Manager multi-window support.
 
-## What's in the dock
+## Reaching the applets
 
-The dock itself has two tiles: **Terminal** and **Utils**. Long-press either for
-its menu — Terminal lists your sessions, Utils lists every applet, in five
-groups:
+Which controls you get depends on the **Workspace Style** preference. The
+default, **Modern**, has no dock: tap the ☰ button at the bottom-right, or
+long-press the bare desktop (two fingers works anywhere, even over a window),
+and pick **Utilities…**. **Classic** shows a dock instead, with two tiles —
+**Terminal** and **Utils** — that you long-press for the same menus. Either way,
+Terminal lists your sessions and Utils lists every applet, in five groups:
 
 - **Workspace** — Layout Manager, Desktops, Launcher, Quick Actions, Browser,
   Music, MotePad, File Manager, Sessions, Themes, and LLM Chat when it is
@@ -141,11 +144,10 @@ gone before the window appears. `motepad` and the `ws-*` launchers resolve yours
 for you.
 
 The file is `0666` and owned by root — unlike `/proc/ish/roots`, which is
-`0644`. Reading it works
-for anyone, writing to it needs root. The app logs you in as root, so this is
-usually invisible; it is worth knowing if you run a `ws-*` launcher as the
-UID 1000 user and get `Permission denied` from a command that works fine in your
-own terminal.
+`0644`. Reading *and writing* work for any uid, and that asymmetry is
+deliberate: managing roots is administrative, opening a window is not, so a
+`ws-*` launcher run as the UID 1000 user works exactly as it does in a root
+terminal.
 
 One thing the return value does *not* tell you. A successful write means
 **accepted**, not on screen. UIKit cannot be touched from a guest task's thread,

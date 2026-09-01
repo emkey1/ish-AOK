@@ -13,7 +13,7 @@ You reach them through `/AOK/native`:
 
 ```sh
 ls /AOK/native
-# bash  hx  libs  motepad  rust-probe  smallclue  zsh  zsh-multio
+# bash  bmm  bmt  hx  libs  motepad  rust-probe  smallclue  zsh  zsh-multio
 ```
 
 Everything else — `ssh`, `wc`, `vi` — is a symlink to
@@ -82,10 +82,10 @@ which is how a build leaves bash's GPLv3 code out of the binary. When that
 happens the registry entry is empty and **`/AOK/native/bash` simply does not
 exist**, rather than existing and failing.
 
-Not everything here has a switch. `smallclue` and `motepad` are unconditional,
-because there is nothing to gate them on: neither drags in a toolchain or a
-licence question the way bash, zsh and helix do. So a script may reasonably
-assume those two and should check for the rest.
+Not everything here has a switch. `smallclue`, `motepad` and the `bmm`/`bmt`
+benchmarks are unconditional, because there is nothing to gate them on: none
+drags in a toolchain or a licence question the way bash, zsh and helix do. So a
+script may reasonably assume those and should check for the rest.
 
 The files that *do* exist are worth a look:
 
@@ -113,6 +113,7 @@ diagnostic rather than a program.
 | `/AOK/native/motepad` | a modeless terminal text editor, the counterpart to Workspace's MotePad applet — see [motepad.md](motepad.md) |
 | `/AOK/native/hx` | [helix](https://helix-editor.com), a modal editor with syntax highlighting and multiple selections. MPL-2.0, so like bash it has a build switch; registered as `hx`, which is what helix calls itself. Its grammars and themes are served from `/AOK/native/libs` |
 | `/AOK/native/rust-probe` | a probe that exercises the Rust-on-the-shim path, not a tool you have a use for. Present because the Rust support it checks is what `hx` is built on |
+| `/AOK/native/bmm`, `/AOK/native/bmt` | the CPU and thread microbenchmarks, so the same workload can be timed with and without emulation — see [benchmarks.md](benchmarks.md) |
 
 SmallCLUE's applets are *smaller* implementations, not drop-in replacements for
 the distro's. They cover the common cases and diverge on individual flags — the

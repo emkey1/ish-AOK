@@ -123,7 +123,55 @@ The escape hatch is `ISH_NO_MMAP_GROWTH_FAST`, and its presence is deliberate:
 a fast path with a subtle correctness argument should be switchable at run time,
 so that "is it this?" can be answered in one A/B rather than by reasoning.
 
-## 13.4 `brk`, and a one-page off-by-one everybody meets
+## 13.4 Growing the stack downward, and the two bounds on it
+
+Everything above grows the address space upward. The stack grows the other way,
+and it is the one mapping a guest extends by *faulting below it*: a page under a
+`P_GROWSDOWN` region is materialized on demand rather than refused.
+`mem_growsdown_allowed` ([emu/memory.c:434](../../emu/memory.c#L434)) decides
+which faults get that treatment, and it used to have almost no opinion — any
+unmapped page whose next mapped neighbour anywhere above it happened to be
+growsdown was mapped on demand.
+
+That is worse than it sounds, in both guest widths. On a 64-bit guest the stack
+is the *lowest* mapping in the address space, so every address below it — the
+NULL page included — quietly allocated zero-filled memory instead of faulting.
+A guest NULL store succeeded, and the crash arrived later, somewhere unrelated.
+On i386 the address space is crowded: the stack starts just under `0xffffe000`
+and musl's thread block sits about 134 MiB below it, so a runaway recursion
+walked straight through that thread block. gnulib's "checking for working
+sigaltstack" probe recurses without bound on purpose to provoke an overflow;
+the `SIGSEGV` was delivered correctly onto the alternate stack, and the handler
+then died on its first libc call, because the thread pointer it needed had been
+overwritten on the way down. Every package configured after that one inherited
+the crash, which is what took a Buildroot build down (issue #521).
+
+Two Linux checks now bound the descent.
+
+- **The guard gap.** Linux keeps `stack_guard_gap` — 256 pages — between the
+  stack and whatever is mapped below it, and `expand_downwards` refuses a fault
+  that would close it. AOK walks that gap rather than probing a single page,
+  because the stack's *own* pages turn up inside it whenever a frame with a
+  large local skips over a page on the way down; that hole must stay fillable,
+  which is the clause Linux spells as `!(prev->vm_flags & VM_GROWSDOWN)`. The
+  walk counts lazy reservations too (Chapter 5), since growing into one would
+  leave a page both mapped and reserved — the state the lazy-mapping invariant
+  forbids.
+- **`RLIMIT_STACK`.** The gap alone bounds the stack by *where its neighbour
+  happens to be*, which on a 64-bit guest is nowhere near. `exec`
+  ([kernel/exec.c:966](../../kernel/exec.c#L966)) records the stack top and the
+  soft limit — 8 MiB by default — and a fault more than that many pages below
+  the top is refused. Measured before this existed: a runaway
+  recursion drove the emulator to 1.42 GB resident before the descent reached
+  anything, and on an iPad that is not a fault, it is jetsam killing the app.
+
+`RLIM_INFINITY` passes through as "no bound known", and the guard gap still
+applies. Two things change for a user: a runaway recursion now faults instead
+of silently overwriting its neighbour, and `ulimit -s` actually bounds the guest
+stack where it previously did nothing. `tests/manual/stack_guard_gap.c` is the
+regression.
+
+## 13.5 `brk`, and a one-page off-by-one everybody meets
 
 `brk` is the older, simpler heap interface, and its specification contains a
 trap that every implementation rediscovers. The comment in `sys_brk_guest`
@@ -144,7 +192,7 @@ page-table entries, which `sys_brk_guest` claims prefixes of as the heap grows.
 `pt_is_hole` and `pt_find_hole` treat that reservation as occupied, so nothing
 else takes the space, and `fork` has nothing extra to copy.
 
-## 13.5 `mremap`, and what has to survive a move
+## 13.6 `mremap`, and what has to survive a move
 
 Moving a mapping is the most structurally invasive thing in this file: page
 table entries move, the JIT blocks compiled from those pages must be
@@ -164,7 +212,7 @@ destination, which is what makes it dangerous and why it requires
 `MREMAP_MAYMOVE` to be set alongside it — the API forces the caller to
 acknowledge that a move can happen before letting them name where.
 
-## 13.6 `madvise`: advice, and the parts that are not advice
+## 13.7 `madvise`: advice, and the parts that are not advice
 
 Most of `madvise` is genuinely advisory and can be honestly implemented as a
 no-op: `MADV_WILLNEED`, `MADV_SEQUENTIAL`, `MADV_RANDOM` describe intentions
@@ -186,7 +234,7 @@ not may be ignored — but the *return value* has to be right either way, becaus
 a caller that gets `EINVAL` from an advisory call concludes the feature is
 missing.
 
-## 13.7 `memfd` and sealing
+## 13.8 `memfd` and sealing
 
 Chapter 5 told the sealing story from the page-table side. From the syscall
 side, `memfd_create` produces an anonymous file that can be mapped and passed
@@ -203,7 +251,7 @@ private mapping does not, because writes to it never reach the file. That is the
 opposite of what the names suggest, which is why the conformance test checks the
 whole matrix instead of the cases somebody expected to matter.
 
-## 13.8 The gap: `PROT_EXEC` is never enforced
+## 13.9 The gap: `PROT_EXEC` is never enforced
 
 This is the largest known hole in AOK's memory model, and the way it is recorded
 in the tree is a model for how to document one.
@@ -266,7 +314,7 @@ and the two candidate designs are written down with the specific reason each was
 or was not taken, so the next person starts from the second design rather than
 rediscovering the first.
 
-## 13.9 What this layer is actually defending
+## 13.10 What this layer is actually defending
 
 Put the chapter together and the priorities are visible in the order the checks
 run.
@@ -290,9 +338,11 @@ it is running inside.
 
 *Anchors:* [kernel/mmap.c](../../kernel/mmap.c), [kernel/memfd.c](../../kernel/memfd.c),
 [emu/memory.c](../../emu/memory.c), [emu/memory.h](../../emu/memory.h),
-[emu/tlb.h](../../emu/tlb.h), [platform/platform.h](../../platform/platform.h)
+[emu/tlb.h](../../emu/tlb.h), [kernel/exec.c](../../kernel/exec.c)
+(`mem_set_stack_bounds`), [platform/platform.h](../../platform/platform.h)
 (`host_mem_headroom_low`), [docs/TODO.md](../../docs/TODO.md) ("PROT_EXEC is
-never enforced"), `tests/manual/mmap_shared_integrity.c`.
+never enforced"), `tests/manual/mmap_shared_integrity.c`,
+`tests/manual/stack_guard_gap.c`.
 
 *Story:* the silent headroom guard — every `mmap` in the application beginning
 to fail with a clean `ENOMEM` and nothing anywhere saying why, diagnosed from a

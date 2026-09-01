@@ -20,6 +20,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 - 通过 iOS 系统 API 暴露客户机文件的 File Provider 支持。
 - **FUSE**：提供 `/dev/fuse` 与 `fuse` 文件系统类型（协议 7.31），因此客户机的 `libfuse2`/`libfuse3` 守护进程无需修改即可挂载并提供文件系统。由于客户机本身已是 fake-root，不涉及 setuid 的 `fusermount`，libfuse 会直接调用 `mount(2)`。参见 `/AOK/docs/fuse.md`。
 - **Apple 快捷指令（Shortcuts）操作**（iOS 16+）：无需打开应用即可通过原生 zsh 在客户机中执行命令并把输出返回给快捷指令的 "Run Command" 操作，以及带有 Siri 短语的 "Open iSH-AOK" 目标页面。参见 `/AOK/docs/shortcuts.md`。
+- **`/dev/url`**：一个字符设备，客户机往里写一个 URL，就把它交给 iOS 打开——包括 `shortcuts://` 链接，因此客户机脚本可以驱动一个快捷指令。参见 `app/URLDevice.m`。
 - 可选加速器：用原生代码替换热点 libc 例程，以及加密与 pixman 卸载。
 - 该分支专属的额外诊断与运维相关改动。
 
@@ -93,6 +94,7 @@ i386 或 amd64 客户机根本不会走这条路径，在那里设置 `ISH_HLE=1
 - `jit/`: gadget JIT 及各客户机的翻译器。
 - `tests/`: 端到端测试与客户机侧回归套件。
 - `tools/`: 开发者工具与宿主机侧辅助脚本。
+- `docs/`: 设计笔记、移植计划、发布说明，以及[这本书](docs/book/README.md)——讲述 iSH-AOK 如何工作的 43 章和 8 个附录。
 
 ## 克隆
 
@@ -138,7 +140,7 @@ brew install meson ninja llvm libarchive
 
 ## 构建 iOS 应用
 
-用 Xcode 打开 [iSH-AOK.xcodeproj](iSH-AOK.xcodeproj) 并构建 `iSH` scheme。
+用 Xcode 打开 [iSH-AOK.xcodeproj](iSH-AOK.xcodeproj) 并构建 `iSH-AOK` scheme。
 
 分支专属的重要设置：
 
@@ -190,8 +192,8 @@ ninja -C build
 原生程序是编译进应用内部的宿主代码。对 `/AOK/native` 下的路径执行 `execve`，不会去
 加载一个客户机镜像，而是直接分发到 iSH-AOK 内部的一个函数，调用方察觉不到区别。
 `/AOK/native` 中每个注册表（`kernel/native.c`）里的程序各占一项 —— `smallclue`、
-`motepad`、`hx`、`rust-probe`、`bash`、`zsh`、`zsh-multio` —— 其余全是指向它们的符号
-链接，和 busybox 一样由链接名选择 applet：
+`motepad`、`bmm`、`bmt`、`hx`、`rust-probe`、`bash`、`zsh`、`zsh-multio` —— 其余全是
+指向它们的符号链接，和 busybox 一样由链接名选择 applet：
 
 | 程序 | 说明 |
 |---|---|
@@ -199,6 +201,7 @@ ninja -C build
 | `ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id` | OpenSSH，作为 SmallCLUE 的 applet（构建时不含 OpenSSL） |
 | `vi` | Nextvi 编辑器，SmallCLUE 的一个 applet |
 | `/AOK/native/motepad` | 无模式的终端文本编辑器，对应 Workspace 的 MotePad applet |
+| `/AOK/native/bmm`、`/AOK/native/bmt` | 把 `/AOK/tools` 的基准测试作为宿主代码编译进来，因此同一份负载可以在有无模拟两种情况下计时（`kernel/native_bench.c`） |
 | `/AOK/native/hx` | [helix](https://helix-editor.com)，带语法高亮的模式化编辑器。采用 MPL-2.0，因此和 bash 一样有构建开关（`-Dnative_helix`）；其语法文件位于 `/AOK/native/libs` |
 | `/AOK/native/rust-probe` | 用于验证 `hx` 所依赖的 Rust-on-shim 路径的探针，日常用不到 |
 | `/AOK/native/bash` | 见[原生 bash 与许可证](#原生-bash-与许可证) |
@@ -291,7 +294,7 @@ MULTIOS 重定向使用配套的原生程序 `zsh-multio`，因为那些描述�
 `/AOK/tools/native-links.sh --shell zsh` 可以把它设为登录 shell。
 
 客户机中随附了 119 个差分用例，位于 `/AOK/tests/native_zsh_fork_state.sh`，每一条
-期望值都取自真实 zsh 的输出，而不是「看起来合理」的结果；其中 116 条通过。失败的两条
+期望值都取自真实 zsh 的输出，而不是「看起来合理」的结果；其中 116 条通过。失败的三条
 是**进程替换** —— `<(...)` 和 `>(...)` —— 而这属于根文件系统而非 shell 的性质：它需要
 `/dev/fd`，Alpine 镜像没有提供，因此在那里用模拟执行的 `/bin/bash` 也同样失败；而在
 `/dev/fd` 是指向 `/proc/self/fd` 的符号链接的 Devuan 上，两个 shell 都正常。两个确实
@@ -327,7 +330,7 @@ meson test -C build
 于这种情况，因为那里根本没有可供比较的参考值。在 x86_64 宿主机上它会完整运行。
 
 客户机侧套件是主要的回归关卡。它位于 [tests/manual/](tests/manual)，在客户机内以只读
-方式提供于 `/AOK/tests`，包含约 120 个专项程序，覆盖信号、futex、进程生命周期、文件
+方式提供于 `/AOK/tests`，包含约 200 个专项程序，覆盖信号、futex、进程生命周期、文件
 系统层、JIT 以及各架构的指令行为。每个程序在失败时以非零值退出，并支持 `-v`。
 
 在客户机内：

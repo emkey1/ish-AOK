@@ -6,7 +6,7 @@ emulator's only obligation was to compute the same answers the hardware would.
 At the syscall boundary the guest asks a question that only an operating system
 can answer, and iSH-AOK has to be that operating system.
 
-`kernel/calls.c` is 6,417 lines long and it is the front door. This chapter is
+`kernel/calls.c` is about 6,500 lines long and it is the front door. This chapter is
 about what happens between the guest's `svc #0` and the value that lands back in
 `x0`.
 
@@ -321,10 +321,10 @@ centre is what the handlers do: take locks that other guest threads want
 parking a host thread and later needing the wake machinery of Chapter 10.
 
 The thread benchmark of Chapter 7 is the clean measurement of the floor —
-5,000 `clone`s and joins land within 4.5% across all four guests, because that
-time is spent in shared kernel code rather than in translation. When a workload
-is syscall-bound, the guest architecture stops mattering and everything in
-Part III starts to.
+5,000 `clone`s and joins land within 4.5% across all three guests measured
+(i386, amd64, arm64), because that time is spent in shared kernel code rather
+than in translation. When a workload is syscall-bound, the guest architecture
+stops mattering and everything in Part III starts to.
 
 ---
 

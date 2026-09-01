@@ -32,6 +32,8 @@ same things. See [00-overview.md](00-overview.md) for where both sit.
 | `/AOK/persist/llm-extracts/` | Saved extracted content from the LLM assistant. |
 | `/AOK/persist/llm-prompts/` | User-editable prompt templates for the LLM assistant. |
 
+| Path | Created empty for you to fill |
+|---|---|
 | `/AOK/persist/bin` | Your own programs. **First on the default `PATH`.** |
 | `/AOK/persist/lib` | Shared libraries for them, if they are not static. |
 | `/AOK/persist/etc` | Their configuration. |

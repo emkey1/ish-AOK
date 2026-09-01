@@ -122,9 +122,9 @@ failed.
 
 ## 28.5 Diagnostics as a subsystem
 
-`AppDelegate.m` is 3,757 lines, and a striking fraction of it is not the app at
-all — it is `ISHDiagnosticsStore`, which exists because an emulator shipped to
-other people has to be able to explain its own death.
+`AppDelegate.m` is about 3,700 lines, and a striking fraction of it is not the
+app at all — it is `ISHDiagnosticsStore`, which exists because an emulator
+shipped to other people has to be able to explain its own death.
 
 It records:
 

@@ -262,21 +262,32 @@ def gen_f():
     for line in manifest.split("\n"):
         line = line.strip()
         if line and not line.startswith("#"):
-            listed.add(os.path.basename(line))
+            listed.add(line)
+
+    # Walk, do not listdir: the per-architecture tests live in tests/manual/x86,
+    # arm64, riscv64 and crypto, the manifest carries them with those prefixes,
+    # and a flat listing would silently drop them from the table and the count.
+    names = []
+    for dirpath, dirnames, filenames in os.walk(tests_dir):
+        dirnames.sort()
+        for fn in filenames:
+            if fn.endswith(".c"):
+                names.append(os.path.relpath(os.path.join(dirpath, fn), tests_dir))
 
     rows = []
-    for fn in sorted(os.listdir(tests_dir)):
-        if not fn.endswith(".c"):
-            continue
-        with open(os.path.join(tests_dir, fn), errors="replace") as f:
+    for rel in sorted(names):
+        with open(os.path.join(tests_dir, rel), errors="replace") as f:
             text = f.read()
-        rows.append((fn, first_comment(text), fn in listed))
+        rows.append((rel, first_comment(text), rel in listed))
 
     shipped = sum(1 for _, _, s in rows if s)
     out = [HEADER, "# Appendix F. The regression suite, annotated\n",
            "%d C programs in `tests/manual/`, of which **%d are listed in "
            "`fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`."
            % (len(rows), shipped),
+           "",
+           "A row with a directory prefix is a per-architecture or accelerator test, kept",
+           "in a subdirectory of `tests/manual/` and registered under that same prefix.",
            "",
            "A test missing from the manifest is silently absent on device — it does not",
            "fail, it does not appear, and the run reports success without it (Chapter 9).",

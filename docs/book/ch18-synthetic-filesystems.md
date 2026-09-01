@@ -182,7 +182,7 @@ passes there too: 38 of its checks fail on the commit before this one.
 The fork adds a directory that no Linux has:
 
 ```sh
-cat /proc/ish/version        # iSH-AOK 1.3 (549)
+cat /proc/ish/version        # iSH-AOK 1.3 (552)
 cat /proc/ish/host_info      # the Mac or iPad underneath: OS, release, hardware
 cat /proc/ish/ips            # this device's network interfaces
 cat /proc/ish/colors         # the 16 ANSI colours, drawn -- a quick theme check
@@ -214,18 +214,21 @@ There is no device model underneath any of this. A device node is an inode whose
 mode says `S_IFCHR` and whose `rdev` says which driver — and the driver is a C
 struct in `fs/dev.c`.
 
-The standard set is small: `null`, `zero`, `full`, `random`, `urandom`, `tty`,
-`ptmx`, `console`, `kmsg`, `fuse`. `fs/dyndev.c` adds dynamically registered
-ones. Chapter 1 listed the repair loop that recreates them at every boot, because
-a Docker-exported rootfs cannot ship real device nodes and arrives with a plain
-regular file at `/dev/null` — which then silently accumulates every byte anything
-ever writes to it.
+The standard set is small, and it is one table (`dev_standard_nodes` in
+`fs/dev.c`): `null`, `zero`, `full`, `random`, `urandom`, `tty`, `ptmx`,
+`console`, `kmsg`, `fuse`, `rtc0`, and the virtual-console set `tty0`–`tty7`
+that systemd's `getty@tty1.service` and `agetty` need. `fs/dyndev.c` adds
+dynamically registered ones. Chapter 1 listed the repair loop that recreates
+them at every boot, because a Docker-exported rootfs cannot ship real device
+nodes and arrives with a plain regular file at `/dev/null` — which then silently
+accumulates every byte anything ever writes to it.
 
 A second family of nodes exists only in the app, and they are the sharpest
 expression of this chapter's design idea: an iOS capability exposed as a device
-node. `/dev/clipboard` reads and writes the system pasteboard.
-`/dev/location` answers with the device's position. And `/dev/url` opens a
-link — write to it and iOS acts as though the user had tapped one:
+node. `/dev/clipboard` reads and writes the system pasteboard. `/dev/location`
+answers with the device's position. `/dev/dsp` is the audio output (Chapter 32).
+And `/dev/url` opens a link — write to it and iOS acts as though the user had
+tapped one:
 
 ```sh
 echo https://example.com > /dev/url
@@ -238,7 +241,7 @@ the phone is reachable from a shell script. And the commit's own justification
 for the shape is the argument of Section 18.4 restated: a device rather than a
 command, because it "composes with redirection and pipes the way a shell expects,
 and needs no binary in the guest filesystem". The command-line build has no iOS
-to ask, so these three exist only in the app.
+to ask, so these four exist only in the app.
 
 Two of the standard nodes are worth a note too. `/dev/kmsg` is the kernel log, which the
 driver had always implemented and no rootfs had ever had a node for, so every

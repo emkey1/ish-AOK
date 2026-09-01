@@ -43,20 +43,24 @@ Everything else under `/AOK` is baked into the app at build time:
 
 ## Where the content actually comes from
 
-`/AOK/docs`, `/AOK/tools`, and `/AOK/tests` are generated from plain files
-in the iSH-AOK git repository, not copied onto your device at runtime:
+`/AOK/docs`, `/AOK/tools`, `/AOK/tests` and `/AOK/native/libs` are generated
+from plain files in the iSH-AOK git repository, not copied onto your device
+at runtime:
 
 - Doc sources live under `opt/AOK/docs/` in the repo (this file included).
 - Tool sources live under `opt/AOK/tools/`.
 - Test sources live under `tests/manual/`.
+- Native-program support files live under `deps/helix/runtime/`, and are
+  served at `/AOK/native/libs`.
 
-Three manifest files (`fs/aok-docs.manifest`, `fs/aok-tools.manifest`,
-`fs/aok-tests.manifest`) list exactly which files from those directories
-get shipped. At build time, `tools/gen-aokfs.py` reads each manifest and
-embeds the listed files' contents directly into the compiled emulator as C
-string tables, which `fs/aok.c` then serves at `/AOK/docs`, `/AOK/tools`,
-and `/AOK/tests`. There is no on-device copy step — the bytes you're
-reading right now were compiled into the app binary.
+Four manifest files (`fs/aok-docs.manifest`, `fs/aok-tools.manifest`,
+`fs/aok-tests.manifest`, and `fs/aok-libs.manifest` for `/AOK/native/libs`)
+list exactly which files get shipped. At build time, `tools/gen-aokfs.py`
+reads each manifest and embeds the listed files' contents directly into the
+compiled emulator as C string tables, which `fs/aok.c` then serves at
+`/AOK/docs`, `/AOK/tools`, `/AOK/tests` and `/AOK/native/libs`. There is no
+on-device copy step — the bytes you're reading right now were compiled into
+the app binary.
 
 A couple of things fall out of that:
 
@@ -66,11 +70,18 @@ A couple of things fall out of that:
   show up under `/AOK`, it has to be listed in the matching manifest file,
   or it won't be embedded.
 
-`/AOK/native` is different again: it has no manifest. Each entry is one program
-compiled into the app and registered in `kernel/native.c`, and `execve` of the
-path runs that host code instead of loading a guest image. A program this build
-does not carry has no entry at all, rather than an entry that fails. See
-[native-programs.md](native-programs.md) and [native-setup.md](native-setup.md).
+`/AOK/native` is different again: its program entries have no manifest. Each is
+one program compiled into the app and registered in `kernel/native.c`, and
+`execve` of the path runs that host code instead of loading a guest image. A
+program this build does not carry has no entry at all, rather than an entry that
+fails. See [native-programs.md](native-programs.md) and
+[native-setup.md](native-setup.md).
+
+The one exception is `/AOK/native/libs` — support files a native program reads
+at runtime, such as helix's tree-sitter queries and themes. Those *are*
+manifest-driven, from `fs/aok-libs.manifest`, and unlike the other manifests its
+paths may nest arbitrarily deep: the directories under `/AOK/native/libs` are
+derived from the listed paths rather than declared in `fs/aok.c`.
 
 ## A note on `/proc`, `/sys`, and `/dev`
 

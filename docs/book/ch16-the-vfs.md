@@ -110,6 +110,34 @@ It is worth noticing who found two of those: `stress-ng`, which passes garbage
 to syscalls on purpose. A fuzzer for this layer is not a hypothetical piece of
 future tooling; it is a package in the guest's own repository.
 
+**And one caller can ask for more than the rules give it.** `openat2` takes a
+`struct open_how` carrying a `resolve` mask, which is the whole reason it exists
+over `openat`: it constrains *how* the path is allowed to resolve. AOK used to
+reject every bit in that mask, which left `openat2` doing nothing `openat` did
+not already do. Two of the bits are honoured now, and the other four are refused
+rather than pretended:
+
+- **`RESOLVE_NO_SYMLINKS`** is answered inside path resolution itself. A symlink
+  anywhere in the path — a directory component included — is the answer rather
+  than something to follow, and the call fails with `ELOOP`.
+- **`RESOLVE_CACHED`** returns `EAGAIN`, which is exactly what it asks for:
+  "only if this is already cached." Declining is honest, because on Linux the
+  answer depends on what happens to be in the dcache, so every caller of it has
+  a slow path already.
+- **`RESOLVE_BENEATH`, `RESOLVE_IN_ROOT`, `RESOLVE_NO_XDEV` and
+  `RESOLVE_NO_MAGICLINKS`** are refused with `EINVAL`, and the refusal is the
+  interesting part. Those four are *sandboxes*, and what they promise is that no
+  intermediate step of the resolution escaped — a statement about the resolution
+  as it happens. AOK resolves the path and then opens it in a second pass, so
+  anything checked in between is checked against a path that could have changed
+  underneath, which is exactly the time-of-check-to-time-of-use hole
+  `RESOLVE_BENEATH` exists to close. `EINVAL` is what a kernel without them
+  says, and `openat2` is Linux 5.6+, so nothing may assume it is there.
+
+A sandbox that reports success without holding is worse than one that says it is
+not available — Chapter 40's capability-honesty rule applied to a security
+primitive.
+
 ## 16.4 A permission check, and the measurement that scoped it
 
 Here is a subtle hole that most implementations have at some point had.

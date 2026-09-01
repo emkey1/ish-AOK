@@ -12,8 +12,8 @@ to 1.86x on real transfers depending on the device and cipher.
 
 Nothing uses it automatically. Two pieces have to be in place:
 
-1. **The toggle**, in iSH-AOK Settings, called *Enable Crypto Accel*. This
-   controls the syscall itself. Off by default.
+1. **The toggle**, in iSH-AOK Settings, called *Crypto Accel (ssh,
+   arm64/riscv64)*. This controls the syscall itself. Off by default.
 2. **The OpenSSL provider**, a small shared library installed *inside your root
    filesystem*, which is what actually routes OpenSSL's ciphers to the syscall.
 

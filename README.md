@@ -18,6 +18,7 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
 - File Provider support for exposing guest files through iOS.
 - **FUSE**: `/dev/fuse` and a `fuse` filesystem type (protocol 7.31), so guest `libfuse2`/`libfuse3` daemons mount and serve filesystems unmodified. No setuid `fusermount` is involved — the guest is already fake-root, so libfuse calls `mount(2)` directly. See `/AOK/docs/fuse.md`.
 - **Apple Shortcuts actions** (iOS 16+): a headless "Run Command" action that executes a command in the guest under the native zsh and returns its output to the shortcut — the app never has to come to the foreground — plus "Open iSH-AOK" destinations with Siri phrases. See `/AOK/docs/shortcuts.md`.
+- **`/dev/url`**: a character device the guest writes a URL to, handing it to iOS to open — including `shortcuts://` links, so a guest script can drive a Shortcut. See `app/URLDevice.m`.
 - Optional accelerators: native replacement of hot libc routines, and crypto and pixman offload.
 - Extra diagnostics and operational changes that are specific to this fork.
 
@@ -97,6 +98,7 @@ simply never matches and falls through to ordinary translation.
 - `jit/`: the gadget JIT and its per-guest translators.
 - `tests/`: end-to-end tests and the guest-side regression suite.
 - `tools/`: developer tools and host-side helpers.
+- `docs/`: design notes, port plans, release notes, and [the book](docs/book/README.md) — 43 chapters and 8 appendices on how iSH-AOK works.
 
 ## Clone
 
@@ -143,7 +145,7 @@ still installed, its x86_64 copies are not used.
 
 ## Build the iOS App
 
-Open [iSH-AOK.xcodeproj](iSH-AOK.xcodeproj) in Xcode and build the `iSH` scheme.
+Open [iSH-AOK.xcodeproj](iSH-AOK.xcodeproj) in Xcode and build the `iSH-AOK` scheme.
 
 Important fork-specific settings:
 
@@ -196,9 +198,9 @@ A native program is host code compiled into the app. `execve` of a path under
 `/AOK/native` dispatches to a function inside iSH-AOK rather than loading a
 guest image, and the caller cannot tell the difference. `/AOK/native` holds one
 entry per program in the registry (`kernel/native.c`) — `smallclue`, `motepad`,
-`hx`, `rust-probe`, `bash`, `zsh`, `zsh-multio` — and everything else is a
-symlink to one of those, the link name selecting the applet exactly as busybox
-does:
+`bmm`, `bmt`, `hx`, `rust-probe`, `bash`, `zsh`, `zsh-multio` — and everything
+else is a symlink to one of those, the link name selecting the applet exactly as
+busybox does:
 
 | program | what it is |
 |---|---|
@@ -206,6 +208,7 @@ does:
 | `ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id` | OpenSSH, applets of SmallCLUE (built without OpenSSL) |
 | `vi` | the Nextvi editor, an applet of SmallCLUE |
 | `/AOK/native/motepad` | a modeless terminal text editor, the counterpart to Workspace's MotePad applet |
+| `/AOK/native/bmm`, `/AOK/native/bmt` | the `/AOK/tools` benchmarks compiled in as host code, so the same workload can be timed with and without emulation (`kernel/native_bench.c`) |
 | `/AOK/native/hx` | [helix](https://helix-editor.com), a modal editor with syntax highlighting. MPL-2.0, so like bash it has a build switch (`-Dnative_helix`); its grammars live under `/AOK/native/libs` |
 | `/AOK/native/rust-probe` | exercises the Rust-on-the-shim path that `hx` is built on; not a tool you have a use for |
 | `/AOK/native/bash` | see [Native bash and licensing](#native-bash-and-licensing) |
@@ -311,7 +314,7 @@ descriptors have to be held by something that is not the shell.
 119 differential cases ship in the guest at
 `/AOK/tests/native_zsh_fork_state.sh`, with every expectation taken from what
 real zsh prints rather than from what looked reasonable; 116 of them pass. The
-two that fail are **process substitution** — `<(...)` and `>(...)` — and that is
+three that fail are **process substitution** — `<(...)` and `>(...)` — and that is
 a property of the rootfs rather than of the shell: it needs `/dev/fd`, which the
 Alpine image does not provide, so it fails identically under the emulated
 `/bin/bash` there and works under both shells on Devuan, where `/dev/fd` is a
@@ -353,7 +356,7 @@ in full on an x86_64 host.
 
 The guest-side suite is the primary regression gate. It lives in
 [tests/manual/](tests/manual) and is served read-only inside the guest at
-`/AOK/tests`, with roughly 120 focused programs covering signals, futexes,
+`/AOK/tests`, with roughly 200 focused programs covering signals, futexes,
 process lifecycle, the filesystem layer, the JIT, and per-architecture
 instruction behavior. Each exits non-zero on failure and accepts `-v`.
 

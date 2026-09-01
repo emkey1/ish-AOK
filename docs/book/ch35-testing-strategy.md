@@ -10,7 +10,7 @@ automatically, and the specific ways a testing system can be green and wrong.
 | tier | what it is | what only it can see |
 |---|---|---|
 | host unit tests | `meson test -C build` | pure logic — `float80`, decoders, utilities |
-| guest suite | ~170 C programs run **inside** a guest at `/AOK/tests` | kernel behaviour as a real userland experiences it |
+| guest suite | ~190 C programs run **inside** a guest at `/AOK/tests` | kernel behaviour as a real userland experiences it |
 | end-to-end | boot an i686 Alpine, compile C in it, run the result | fork- and exec-heavy work on an architecture daily testing never touches |
 | differential | ptraceomatic, unicornomatic, the conductor | instruction- and program-level divergence from real Linux |
 
@@ -42,6 +42,11 @@ having in one place:
 > the JVM (`java -version` in the alpine root) for anything touching memory or
 > exec.
 
+That is the *pre-push* gate: both suites and the JVM, on one guest. The
+*release* gate is wider — all four guests, on the Mac and again on real
+hardware, because a 32-bit ABI difference is invisible on the other three and a
+device regression is invisible everywhere else. Section 37.4 has it.
+
 The JVM is in that list for a specific reason: it is the most demanding ordinary
 program available. It threads heavily, maps aggressively, and uses `exec` and
 signals in combinations nothing else does — so it functions as a
@@ -49,7 +54,7 @@ whole-system smoke test that no hand-written case would cover.
 
 ## 35.3 What runs automatically
 
-Seven workflows, and the interesting thing is which of them gate anything:
+Eight workflows, and the interesting thing is which of them gate anything:
 
 - **`ci.yml`** — a Linux build on `ubuntu-24.04`, with a matrix of **clang and
   gcc**. This is the one that catches things.
@@ -60,11 +65,16 @@ Seven workflows, and the interesting thing is which of them gate anything:
   them back. Section 35.5 is about what that means.
 - **`deploy-site.yml`**, **`update-alpine-repo.yml`** (scheduled),
   **`autolabel.yml`** — supporting infrastructure.
+- **`upload-build.yml`** — inherited from upstream, gated on
+  `github.repository == 'ish-app/ish'` and pinned to a retired `macos-12`
+  runner, so it never runs here at all.
 
-Note what is *not* in that list: the guest regression suite, the end-to-end
-suite, and the differential harnesses. All three need a booted guest and, in
-practice, a device or a Mac with a real toolchain — so they are run by a person,
-deliberately, before a push and before a release.
+Note what is *not* in that list: the guest regression suite and the differential
+harnesses. The end-to-end suite *is* in CI — `ci.yml`'s Linux job finishes with
+`meson test -C build e2e`, which is how Section 35.2's fork bug was caught. The
+other two need a booted guest and, in practice, a device or a Mac with a real
+toolchain — so they are run by a person, deliberately, before a push and before
+a release.
 
 That is an honest limitation rather than a boast. A gate somebody has to
 remember is a gate that will occasionally be skipped, and Section 35.5 is about

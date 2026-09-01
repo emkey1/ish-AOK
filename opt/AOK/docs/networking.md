@@ -11,6 +11,9 @@ privileged: the operating system refuses to let a non-root process bind
 them. That refusal happens at the *host* level, underneath the emulated
 kernel, so there is nothing the guest's own root account can do about it —
 being `root` inside the guest doesn't make the app privileged outside it.
+An unprivileged guest process — the UID 1000 user, an `ssh` login as a normal
+user — is refused a step earlier still, by the emulated kernel itself; see
+"What is *not* affected" below.
 
 When a guest daemon binds a privileged port on the IPv4 wildcard address
 (`0.0.0.0`), iSH-AOK doesn't fail the call. It quietly rebinds the socket to
@@ -63,11 +66,21 @@ substituted. It is the single most common cause.
 ## What is *not* affected
 
 Binding a loopback address — `127.0.0.1`, or any `127.x.y.z` alias — is
-fine at **any** port number, privileged or not. Those binds are also
-substituted internally, but to something with identical reachability: a
-loopback listener is only reachable locally either way, so nothing changes
-for the guest and no warning is logged.
+fine at **any** port number, privileged or not, **as root inside the
+guest**. Those binds are also substituted internally, but to something with
+identical reachability: a loopback listener is only reachable locally either
+way, so nothing changes for the guest and no warning is logged.
+
+The "as root" is not decoration: the emulated kernel enforces
+`CAP_NET_BIND_SERVICE` itself, the way Linux does. A guest process running as
+root still gets the loopback substitution described above; an unprivileged one
+— the UID 1000 user a session opened with "Open Everything as Default User"
+runs as, an `ssh` login as a normal user — gets a real `EACCES` from `bind(2)`
+on any port below 1024, loopback included, before the host is consulted at
+all. `SO_REUSEPORT` carries the matching Linux rule: every socket in a
+reuseport group must have been bound by the same euid, so an unprivileged
+process can no longer join a root daemon's group and take its connections.
 
 So a service you only talk to from inside the guest can use port 80 or 22
-quite happily. The rule only matters when you want the outside world to
-reach it.
+quite happily, as long as it runs as root. The port ≥ 1024 rule only matters
+when you want the outside world to reach it.
