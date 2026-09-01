@@ -23,7 +23,7 @@ commits named are the ones that mark a turn rather than the largest ones.
 | | |
 |---|---|
 | **January** | Thread groups; `CLONE_THREAD`; fakefs schema redesigned for hardlinks |
-| January–April | TestFlight builds 22–25 (`docs/CHANGELOG.md`) |
+| January–April | TestFlight builds 22–25 (`docs/historical/upstream-ish-changelog.md`) |
 | **3 May** | "Foundations of jit, no actual compiling yet" |
 | **26 May** | `gen()` written — unchanged since (Chapter 6) |
 | 14 June | `jit/gen.c`, `jit/jit.c`, `jit/frame.h` |

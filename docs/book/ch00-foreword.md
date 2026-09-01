@@ -190,7 +190,7 @@ happened next.
 ---
 
 *Anchors:* `git log --reverse`, [LICENSE.md](../../LICENSE.md),
-[LICENSE.IOS](../../LICENSE.IOS), [docs/CHANGELOG.md](../../docs/CHANGELOG.md)
+[LICENSE.IOS](../../LICENSE.IOS), [docs/historical/upstream-ish-changelog.md](../../docs/historical/upstream-ish-changelog.md)
 (upstream's TestFlight-era build notes, 2017–2018),
 [docs/CREDITS-aarch64.md](../../docs/CREDITS-aarch64.md) (the fork's separate
 debt, to `OpenMinis/ish-arm64`), [jit/gen.c](../../jit/gen.c),

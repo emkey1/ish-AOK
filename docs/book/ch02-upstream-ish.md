@@ -70,7 +70,7 @@ And in the same period, the terminal: `app/Terminal.m` in October 2017,
 
 ## 2.3 The TestFlight years
 
-`docs/CHANGELOG.md` preserves the user-facing release notes from builds 33
+`docs/historical/upstream-ish-changelog.md` preserves the user-facing release notes from builds 33
 through 48, and they are the best available record of what actually broke for
 people. Read in order, they are a compressed history of what "being Linux"
 demands:
@@ -172,7 +172,7 @@ what it was added to.
 
 ---
 
-*Anchors:* `git log --reverse`, [docs/CHANGELOG.md](../../docs/CHANGELOG.md),
+*Anchors:* `git log --reverse`, [docs/historical/upstream-ish-changelog.md](../../docs/historical/upstream-ish-changelog.md),
 [tools/ptraceomatic.c](../../tools/ptraceomatic.c), [fs/fake.c](../../fs/fake.c),
 [jit/gen.c](../../jit/gen.c), [app/Terminal.m](../../app/Terminal.m),
 [LICENSE.md](../../LICENSE.md), [LICENSE.IOS](../../LICENSE.IOS),

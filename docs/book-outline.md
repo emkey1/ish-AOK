@@ -75,7 +75,7 @@ which is why this outline is worth trusting:
 - `opt/AOK/docs/` — the 21 user-facing documents compiled into the app.
 - `tests/manual/` — ~196 focused regression programs, each one a specification of
   a behavior somebody got wrong once.
-- The upstream `docs/CHANGELOG.md`, which preserves the 2017–2018 TestFlight-era
+- The upstream `docs/historical/upstream-ish-changelog.md`, which preserves the 2017–2018 TestFlight-era
   build notes.
 
 ---
@@ -113,7 +113,7 @@ which is why this outline is worth trusting:
   rather than an interpreter — fds with thread-safe refcounts (Dec 2017), thread
   groups and `CLONE_THREAD` (Jan–Feb 2018), fakefs with a real metadata database
   and hardlink support (Jan 2018).
-- The TestFlight era: builds 22–48 in `docs/CHANGELOG.md`, read as an archaeology
+- The TestFlight era: builds 22–48 in `docs/historical/upstream-ish-changelog.md`, read as an archaeology
   of what users hit first — pty semantics for zsh, `RLIM_INFINITY`, `#!` argument
   passing, "very serious problems caused by renaming directories".
 - May 2018: "Foundations of jit, no actual compiling yet" — the turn from
@@ -123,7 +123,7 @@ which is why this outline is worth trusting:
   from the start.
 - 2019–2023: consolidation, then quiet.
 
-*Anchors:* `tools/ptraceomatic.c`, `docs/CHANGELOG.md`, `git log --reverse`.
+*Anchors:* `tools/ptraceomatic.c`, `docs/historical/upstream-ish-changelog.md`, `git log --reverse`.
 
 ## Chapter 3. The fork
 

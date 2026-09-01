@@ -1,4 +1,18 @@
-# Changelog
+# Upstream iSH changelog (archived, not maintained)
+
+**This file is history, not a release log.** It is upstream iSH's own
+TestFlight-era release notes, builds 33 to 48, preserved because the book cites
+it as a primary source for what that period looked like from a user's side. It
+stopped being updated long before this fork existed, and nothing adds to it.
+
+iSH-AOK's release notes live in `docs/release-notes-since-iSH-AOK_<N>.md`, one
+file per build, named for the build being shipped. The published GitHub release
+for a build carries the same text.
+
+---
+
+## Original contents
+
 
 ## Build 48
 ### Fixed
