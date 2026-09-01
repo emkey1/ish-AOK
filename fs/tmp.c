@@ -220,7 +220,16 @@ static int tmpfs_dir_lookup_existence(struct tmp_dirent *dir, const char *name) 
 }
 
 static int tmpfs_init_regular_file(struct tmp_inode *inode, const char *contents) {
-    assert(S_ISREG(inode->stat.mode));
+    // An invariant today rather than a guest-reachable case: the one caller
+    // builds the inode with tmp_inode_new(S_IFREG | mode) immediately above,
+    // and every mode it passes is a compile-time constant with no type bits.
+    // Refused rather than asserted all the same, for the reason tmpfs_write
+    // gives at length -- an assert on this predicate turns one odd inode into
+    // an abort for every guest in the app, and that is not a hypothetical
+    // here: it is what reached users through mknod. Closing the source of
+    // typeless inodes was the fix; declining to abort is the belt to it.
+    if (!S_ISREG(inode->stat.mode))
+        return _EINVAL;
     if (contents == NULL || contents[0] == '\0')
         return 0;
 
@@ -1696,7 +1705,16 @@ static unsigned long tmpfs_telldir(struct fd *fd) {
 static void tmpfs_seekdir(struct fd *fd, unsigned long ptr) {
     struct tmp_dirent *dir = fd->tmpfs.dirent;
     lock(&dir->lock, 0);
-    assert(S_ISDIR(dir->inode->stat.mode));
+    // Same reasoning as tmpfs_init_regular_file: an invariant, since fs/dir.c
+    // answers ENOTDIR before any of this is reachable for a descriptor whose
+    // type is not a directory. Seeking a directory that somehow is not one is
+    // a no-op -- there is no error to return through a void function, and
+    // leaving the cursor untouched is what a caller can survive. Aborting the
+    // whole app is not.
+    if (!S_ISDIR(dir->inode->stat.mode)) {
+        unlock(&dir->lock);
+        return;
+    }
     if (ptr == TMPFS_DIROFF_DOT || ptr == TMPFS_DIROFF_DOTDOT) {
         fd->tmpfs.dots_pos = (unsigned) ptr;
         tmpfs_dir_pos_first(fd, dir);
