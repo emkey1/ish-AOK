@@ -97,6 +97,23 @@ static void tmpfs_update_ctime(struct tmp_inode *inode) {
     inode->stat.ctime_nsec = now.tv_nsec;
 }
 
+// relatime, which is the default everywhere: a read advances atime only when
+// atime is at or behind mtime/ctime, or is more than a day old. tmpfs never
+// touched atime at all, so a reader could not tell a file that had just been
+// read from one nobody had opened since boot -- which is the one thing atime
+// is for, and what mutt, procmail and every "has this been read" check use.
+// Caller holds inode->lock.
+#define TMPFS_RELATIME_DAY 86400
+static void tmpfs_update_atime_relatime(struct tmp_inode *inode) {
+    struct timespec now = timespec_now(CLOCK_REALTIME);
+    if (inode->stat.atime > inode->stat.mtime &&
+            inode->stat.atime > inode->stat.ctime &&
+            (uint64_t) now.tv_sec < (uint64_t) inode->stat.atime + TMPFS_RELATIME_DAY)
+        return;
+    inode->stat.atime = now.tv_sec;
+    inode->stat.atime_nsec = now.tv_nsec;
+}
+
 static void tmpfs_update_mtime_and_ctime(struct tmp_inode *inode) {
     struct timespec now = timespec_now(CLOCK_REALTIME);
     inode->stat.mtime = now.tv_sec;
@@ -1058,6 +1075,54 @@ out:
     return err;
 }
 
+// link(2). A tmpfs inode is already refcounted and named by a separate dirent,
+// so a second name for the same inode is what the structure was built for --
+// it just had no entry point, and link() came back EPERM, the errno Linux uses
+// for "this filesystem cannot do links at all". Anything that makes a
+// temporary file and links it into place (dpkg, rename-by-link, maildir
+// delivery, GNU ln) failed on a tmpfs.
+static int tmpfs_link(struct mount *mount, const char *src, const char *dst) {
+    struct tmp_dirent *src_dirent = tmpfs_lookup(mount, src);
+    if (IS_ERR(src_dirent))
+        return PTR_ERR(src_dirent);
+    // Linking a directory is EPERM on every filesystem: it would make a cycle
+    // nothing can unwind.
+    if (S_ISDIR(src_dirent->inode->stat.mode)) {
+        tmp_dirent_release(src_dirent);
+        return _EPERM;
+    }
+
+    const char *filename;
+    struct tmp_dirent *parent = tmpfs_lookup_parent(mount, dst, &filename);
+    if (IS_ERR(parent)) {
+        tmp_dirent_release(src_dirent);
+        return PTR_ERR(parent);
+    }
+    if (parent == NULL) {
+        tmp_dirent_release(src_dirent);
+        return _EPERM;
+    }
+
+    lock(&parent->lock, 0);
+    int err = tmpfs_dir_lookup_existence(parent, filename);
+    if (err < 0)
+        goto out;
+    // tmpfs_dir_link consumes a reference on the inode on failure and retains
+    // one on success, so hand it one of its own.
+    err = tmpfs_dir_link(parent, filename, tmp_inode_retain(src_dirent->inode), NULL);
+    if (err == 0) {
+        lock(&src_dirent->inode->lock, 0);
+        src_dirent->inode->stat.nlink++;
+        tmpfs_update_ctime(src_dirent->inode);
+        unlock(&src_dirent->inode->lock);
+    }
+out:
+    unlock(&parent->lock);
+    tmp_dirent_release(parent);
+    tmp_dirent_release(src_dirent);
+    return err;
+}
+
 static int tmpfs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev_t_ dev) {
     const char *filename;
     struct tmp_dirent *parent = tmpfs_lookup_parent(mount, path, &filename);
@@ -1211,6 +1276,8 @@ static ssize_t tmpfs_read(struct fd *fd, void *buf, size_t bufsize) {
     res = _EINVAL;
     if (!S_ISREG(inode->stat.mode))
         goto out;
+
+    tmpfs_update_atime_relatime(inode);
 
     // Snapshot fd->offset once (see tmpfs_write): a concurrent lseek/pwrite on
     // a shared fd could otherwise move it between the clamp and the memcpy,
@@ -1724,6 +1791,7 @@ const struct fs_ops tmpfs = {
     .futime = tmpfs_futime,
     .getpath = tmpfs_getpath,
     .mkdir = tmpfs_mkdir,
+    .link = tmpfs_link,
     .mknod = tmpfs_mknod,
     .symlink = tmpfs_symlink,
     .readlink = tmpfs_readlink,
@@ -1750,6 +1818,7 @@ const struct fs_ops devtmpfs = {
     .futime = tmpfs_futime,
     .getpath = tmpfs_getpath,
     .mkdir = tmpfs_mkdir,
+    .link = tmpfs_link,
     .mknod = tmpfs_mknod,
     .symlink = tmpfs_symlink,
     .readlink = tmpfs_readlink,
@@ -1772,6 +1841,7 @@ const struct fs_ops cgroupfs = {
     .futime = tmpfs_futime,
     .getpath = tmpfs_getpath,
     .mkdir = tmpfs_mkdir,
+    .link = tmpfs_link,
     .mknod = tmpfs_mknod,
     .symlink = tmpfs_symlink,
     .readlink = tmpfs_readlink,
@@ -1794,6 +1864,7 @@ const struct fs_ops cgroup2fs = {
     .futime = tmpfs_futime,
     .getpath = tmpfs_getpath,
     .mkdir = tmpfs_mkdir,
+    .link = tmpfs_link,
     .mknod = tmpfs_mknod,
     .symlink = tmpfs_symlink,
     .readlink = tmpfs_readlink,

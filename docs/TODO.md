@@ -10,6 +10,40 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### tmpfs size= is accepted and not enforced
+
+Measured 2026-09-01. `mount -t tmpfs -o size=1M` takes the option and then
+lets the filesystem grow without limit: 4 MiB written to a size=1M mount with
+no ENOSPC, where Linux accepts 1044480 bytes and then fails. It matters more
+here than on a desktop -- an unbounded /tmp or /dev/shm is host memory on a
+device with a jetsam budget.
+
+The obstacle is accounting, not the check. `tmpfs_file_resize(inode, size)`
+takes no mount, and `struct tmp_inode` has no way back to one, so there is
+nowhere to add up a mount's bytes. `tmpfs_statfs` already walks the whole tree
+with `tmpfs_count_tree` to answer df, which is fine once per statfs and
+hopeless per write. The fix is a per-mount used-bytes counter that
+`tmpfs_file_resize` and the write path adjust, which means giving the inode a
+pointer to its mount's accounting (set at creation, since every inode is
+created under a known parent) and threading it through the four resize call
+sites.
+
+### A directory walk still costs more per entry the larger the directory
+
+Measured 2026-09-01: 2000 entries at 5.28 us each, 8000 at 8.61 us -- a 1.63x
+per-entry increase for 4x the entries, where Linux is flat (0.43 vs 0.41).
+
+`fs/dir.c` used to call the host `telldir()` twice per entry and now calls it
+once (the position after entry N is the position before entry N+1, so it is
+carried forward). That halved the calls and moved the ratio only from 1.75x to
+1.63x, so the per-call cost of telldir is NOT the dominant term and the
+remaining superlinearity is somewhere else -- most likely the per-entry
+metadata lookup in the fakefs backing this measurement rather than the dirent
+loop itself. Worth re-measuring against a realfs directory and a tmpfs one
+separately before changing anything: the audit files this as two findings (a
+quadratic telldir and an unindexed tmpfs directory scan) and the evidence so
+far does not clearly implicate either.
+
 ### What is still missing from procfs
 
 Added 2026-09-01 alongside the procfs work in `tests/manual/proc_files.c`,

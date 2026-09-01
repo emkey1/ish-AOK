@@ -7,8 +7,9 @@
 //   AOK left the zombie regardless, so a parent using that very common idiom
 //   accumulated one per child for its whole life.
 //
-//   SA_NOCLDSTOP asks not to be told when a child merely stops. AOK sent the
-//   CLD_STOPPED SIGCHLD anyway.
+//   SA_NOCLDSTOP asks not to be told when a child merely stops OR continues.
+//   AOK sent the CLD_STOPPED SIGCHLD anyway (the continue side raised no
+//   signal at all until later; see tests/manual/signal_conventions.c).
 //
 //   PR_SET_CHILD_SUBREAPER was accepted and discarded -- the worst of both,
 //   since a service manager set it, believed it, and then lost every orphaned
@@ -120,11 +121,17 @@ static void case_nocldstop(void) {
     // With SA_NOCLDSTOP, no signal for the stop.
     sa.sa_flags = SA_SIGINFO | SA_NOCLDSTOP;
     sigaction(SIGCHLD, &sa, NULL);
-    hits = 0;
     fflush(NULL);
     c = fork();
     if (c == 0) { for (int i = 0; i < 200; i++) nap(50); _exit(0); }
     nap(300);
+    // Zeroed HERE rather than before the fork. The SIGCONT above raises a
+    // CLD_CONTINUED SIGCHLD from the resumed child's own context -- Linux
+    // does the same, from get_signal -- so it can still be in flight when
+    // this case starts, and would be counted as the stop notification this
+    // case is about. The previous child's exit signal is in the same
+    // position.
+    hits = 0;
     kill(c, SIGSTOP);
     nap(500);
     check("SA_NOCLDSTOP: no SIGCHLD for the stop", (long) hits, 0);
