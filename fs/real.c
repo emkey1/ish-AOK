@@ -738,6 +738,21 @@ off_t realfs_lseek(struct fd *fd, off_t offset, int whence) {
         return offset;
     }
 
+    if (whence == LSEEK_DATA || whence == LSEEK_HOLE) {
+        // Darwin has no SEEK_DATA/SEEK_HOLE, so answer as a filesystem with
+        // no holes does: past EOF is ENXIO for both, DATA is the offset
+        // itself, and the only HOLE is the one at EOF. Conservative and
+        // truthful -- a caller told "no holes here" copies every byte, which
+        // is correct; one told EINVAL cannot use the interface at all.
+        struct stat st;
+        if (fstat(fd->real_fd, &st) < 0)
+            return errno_map();
+        if (offset < 0)
+            return _EINVAL;
+        if (offset >= st.st_size)
+            return _ENXIO;
+        return whence == LSEEK_DATA ? offset : st.st_size;
+    }
     if (whence == LSEEK_SET)
         whence = SEEK_SET;
     else if (whence == LSEEK_CUR)

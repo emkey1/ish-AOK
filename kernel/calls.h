@@ -78,6 +78,14 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk);
 
 #define MMAP_SHARED 0x1
 #define MMAP_PRIVATE 0x2
+// MAP_SHARED_VALIDATE is spelled as both bits together: MAP_SHARED with
+// strict rejection of flags the kernel does not recognise.
+#define MMAP_SHARED_VALIDATE 0x3
+// PROT_SEM asks for a mapping usable for atomics. Every mapping here already
+// is, and Linux accepts and ignores it on every architecture -- but its guest
+// value collides with P_GROWSDOWN in the internal page flags, so it must be
+// stripped rather than passed through.
+#define PROT_SEM_ 0x8
 #define MMAP_FIXED 0x10
 #define MMAP_ANONYMOUS 0x20
 #define MMAP_FIXED_NOREPLACE 0x100000

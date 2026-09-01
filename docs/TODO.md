@@ -10,6 +10,33 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### Three file-mapping behaviours that need what the memory model does not keep
+
+Measured against Linux 6.12 on 2026-09-01, alongside the mmap conformance work
+that closed seven of the group (`tests/manual/mmap_conventions.c`). These three
+were left because each needs state `emu/memory.c` does not carry, not because
+the behaviour is in doubt.
+
+**`MADV_DONTNEED` on a MAP_PRIVATE FILE mapping keeps the COW copy.** Linux
+drops the private page so the next read comes back from the file: write 'Z'
+over a file byte 'A' through a private mapping, `madvise(MADV_DONTNEED)`, read
+again, and Linux gives 'A'. AOK gives 'Z'. `kernel/mmap.c` already handles the
+anonymous case (jemalloc depends on it) and says so in a comment; the file case
+needs the page's ORIGIN to still be reachable after the copy-on-write, and a
+`struct pt_entry` that has been written keeps only the private copy. Doing it
+properly means remembering the file-backed `struct data` per COW page.
+
+**A load or store wholly past EOF in a file mapping does not SIGBUS.** Linux
+faults both; AOK reads zeroes and lets stores land, and they become file
+content if the file later grows. The fault handler would have to know the
+backing file's current size at fault time, which means carrying the file
+identity into the page fault path rather than just the host memory.
+
+**`remap_file_pages` is ENOSYS.** Linux has emulated it over mmap since 3.16
+and a linear remap returns 0. Implementing the emulation means splitting a
+mapping into per-page mappings with independent offsets, which the reservation
+model (never split -- see `struct mem_lazy_map`) is built to avoid.
+
 ### PROT_EXEC is never enforced -- no NX for guest pages
 
 `emu/memory.h` says "P_READ and P_EXEC are ignored for now", and P_EXEC really

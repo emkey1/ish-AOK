@@ -327,8 +327,17 @@ int_t sys_memfd_create(addr_t name_addr, uint_t flags) {
 }
 
 int_t sys_memfd_create_guest(guest_addr_t name_addr, uint_t flags) {
+    // user_read_path rather than user_read_string, because it tells a name
+    // that is merely too long apart from one that faulted -- the two are the
+    // same return value from user_read_string, and reporting EFAULT for a
+    // long name sent the caller looking for a bad pointer it did not have.
+    // Linux's is a plain length check: strncpy_from_user into a
+    // MFD_NAME_MAX_LEN+1 buffer, EINVAL if it does not fit.
     char name[MEMFD_MAX_NAME + 1];
-    if (user_read_string(name_addr, name, sizeof(name)))
+    int name_err = user_read_path(name_addr, name, sizeof(name));
+    if (name_err == _ENAMETOOLONG)
+        return _EINVAL;
+    if (name_err < 0)
         return _EFAULT;
     STRACE("memfd_create(\"%s\", %#x)", name, flags);
 

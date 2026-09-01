@@ -362,6 +362,15 @@ static inline byte_t dir_entry_type_for_mode(mode_t_ mode) {
 #define LSEEK_SET 0
 #define LSEEK_CUR 1
 #define LSEEK_END 2
+// SEEK_DATA/SEEK_HOLE. A filesystem is always allowed to report that a file
+// has no holes -- that is what a fully-allocated file looks like, and it is
+// the answer the generic path gives: DATA is wherever you already are, and
+// the only HOLE is the implicit one at EOF. Returning EINVAL instead told
+// callers the file was not seekable that way at all, and tools that use them
+// to copy sparsely (cp --sparse, tar, rsync, systemd-journald's compaction)
+// fall back to a whole-file scan or fail outright.
+#define LSEEK_DATA 3
+#define LSEEK_HOLE 4
 
 struct fd_ops {
     // required for files

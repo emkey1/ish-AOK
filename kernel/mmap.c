@@ -195,6 +195,16 @@ static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_
     if (!pages) return _EINVAL;
     page_t page = 0;
     bool fixed = flags & (MMAP_FIXED | MMAP_FIXED_NOREPLACE);
+    // MAP_FIXED means "here or nowhere". Address 0 fell straight past the
+    // block below into the pick-any-hole path, so a request to map at 0 was
+    // silently answered with a mapping somewhere else and reported as
+    // success -- the one thing MAP_FIXED exists to rule out. A caller that
+    // asks for 0 is either probing (and needs the refusal) or is about to
+    // write through a pointer it believes is at 0. Linux refuses it on any
+    // default system: mmap_min_addr keeps the first 64K unmappable, and the
+    // answer is EPERM.
+    if (fixed && addr == 0)
+        return _EPERM;
     if (addr != 0) {
         // A non-FIXED address is only a hint: Linux rounds an unaligned value
         // down to a page boundary rather than rejecting it. MAP_FIXED and
@@ -280,6 +290,9 @@ static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t pr
            (unsigned long long) offset);
     if (len == 0)
         return _EINVAL;
+    // Accepted and ignored, as Linux does. See PROT_SEM_ in kernel/calls.h
+    // for why it is stripped rather than passed through.
+    prot &= ~(dword_t) PROT_SEM_;
     if (prot & ~P_RWX)
         return _EINVAL;
     // Refuse guest memory growth when the app is close to its jetsam budget:
@@ -300,6 +313,12 @@ static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t pr
                    current->pid, current->comm, (unsigned long long) len);
         return _ENOMEM;
     }
+    // MAP_SHARED_VALIDATE maps onto plain MAP_SHARED: the strict flag
+    // checking it asks for is what this function already does. Rejecting it
+    // with EINVAL denied the mapping entirely to callers using the safer of
+    // the two spellings.
+    if ((flags & MMAP_SHARED_VALIDATE) == MMAP_SHARED_VALIDATE)
+        flags &= ~(dword_t) MMAP_PRIVATE;
     if ((flags & MMAP_PRIVATE) && (flags & MMAP_SHARED))
         return _EINVAL;
     // exactly one of MAP_PRIVATE / MAP_SHARED is required
@@ -764,6 +783,7 @@ int_t sys_mprotect_guest(guest_addr_t addr, qword_t len, int_t prot) {
            (unsigned long long) len, prot);
     if (PGOFFSET(addr) != 0)
         return _EINVAL;
+    prot &= ~(int_t) PROT_SEM_;    // see mmap_common_guest
     if (prot & ~P_RWX)
         return _EINVAL;
     pages_t pages = PAGE_ROUND_UP(len);
@@ -958,13 +978,39 @@ dword_t sys_mincore_guest(guest_addr_t addr, qword_t len, guest_addr_t vec_addr)
         return _ENOMEM;
     mem_read_lock_quiesce_aware(current->mem);
     for (pages_t i = 0; i < pages; i++) {
-        struct pt_entry *entry = mem_pt(current->mem, start + i);
+        page_t pg = start + i;
+        struct pt_entry *entry = mem_pt(current->mem, pg);
         if (entry == NULL) {
+            // A lazy anonymous reservation IS mapped as far as the guest is
+            // concerned -- it just has no page table entry yet, which is
+            // exactly what "not resident" means. Only a genuine hole is
+            // ENOMEM. (emu/memory.h, struct mem_lazy_map.)
+            if (mem_lazy_find(current->mem, pg) != NULL) {
+                vec[i] = 0;
+                continue;
+            }
             mem_read_unlock_quiesce_aware(current->mem);
             free(vec);
             return _ENOMEM;
         }
-        vec[i] = 1;
+        // Every mapped page reported 1, so mincore said the whole address
+        // space was resident. Programs that use it to decide what to touch --
+        // an allocator sizing a madvise, a GC choosing pages to scan, a
+        // prefaulting loader -- were told there was nothing to bring in.
+        //
+        // The residency answer belongs to the host: the guest page is backed
+        // by host memory, and the host knows whether that memory is in RAM.
+        // A page with no backing at all (a PROT_NONE reservation) is not
+        // resident by definition.
+        vec[i] = 0;
+        if (entry->data != NULL && entry->data->data != NULL) {
+            char host_vec = 0;
+            void *host = (char *) entry->data->data + entry->offset;
+            if (mincore(host, PAGE_SIZE, &host_vec) == 0)
+                vec[i] = host_vec & 1;
+            else
+                vec[i] = 1;   // host cannot say; it is mapped, assume resident
+        }
     }
     mem_read_unlock_quiesce_aware(current->mem);
     int err = user_write(vec_addr, vec, pages) ? _EFAULT : 0;
@@ -1003,16 +1049,44 @@ long sys_set_mempolicy_guest(int UNUSED(mode), guest_addr_t UNUSED(nodemask_addr
     return 0;
 }
 
-int_t sys_mlock_guest(guest_addr_t UNUSED(addr), qword_t UNUSED(len)) {
-    return 0;
+// Linux checks the range before doing anything: a range with an unmapped
+// page in it is ENOMEM, for mlock and munlock alike. AOK returned 0 for any
+// range at all, so a caller that locked a region it had got wrong -- the
+// usual reason to call mlock is keeping a secret out of swap -- was told it
+// had succeeded.
+//
+// The locking itself stays a no-op: iSH cannot pin host pages, and a lock is
+// advisory against swap, which iOS manages itself. Claiming a range EXISTS
+// when it does not is a different kind of answer.
+static int_t mlock_range_check(guest_addr_t addr, qword_t len) {
+    if (len == 0)
+        return 0;
+    if (PGOFFSET(addr) != 0)
+        return _EINVAL;
+    pages_t pages = PAGE_ROUND_UP(len);
+    page_t start = PAGE(addr);
+    int_t err = 0;
+    mem_read_lock_quiesce_aware(current->mem);
+    for (pages_t i = 0; i < pages; i++) {
+        if (mem_pt(current->mem, start + i) == NULL) {
+            err = _ENOMEM;
+            break;
+        }
+    }
+    mem_read_unlock_quiesce_aware(current->mem);
+    return err;
+}
+
+int_t sys_mlock_guest(guest_addr_t addr, qword_t len) {
+    return mlock_range_check(addr, len);
 }
 
 int_t sys_mlock(addr_t addr, dword_t len) {
     return sys_mlock_guest(addr, len);
 }
 
-int_t sys_munlock_guest(guest_addr_t UNUSED(addr), qword_t UNUSED(len)) {
-    return 0;
+int_t sys_munlock_guest(guest_addr_t addr, qword_t len) {
+    return mlock_range_check(addr, len);
 }
 
 int_t sys_munlock(addr_t addr, dword_t len) {
