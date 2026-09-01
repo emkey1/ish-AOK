@@ -3775,6 +3775,23 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
                 (fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2],
                 (off_t_) (raw_args[3] | (raw_args[4] << 32)), (uint_t) raw_args[5]));
         return true;
+    // vmsplice(fd, iov, iovcnt, flags). The legacy table routed this to
+    // sys_vmsplice, which is the i386 entry point: it takes a 32-bit addr_t
+    // and, worse, hardcodes GUEST_ABI_I386 for the iovec layout. An amd64
+    // iovec is {void *64, size_t 64}; read as i386's {u32, u32}, the base and
+    // length of every entry come out of the wrong halves, so the call failed
+    // with EFAULT on addresses that were perfectly valid. The legacy dispatch's
+    // dword-fit check could never have caught it: a guest stack address does
+    // fit in 32 bits, and it was the STRUCT being misread, not the pointer.
+    //
+    // sys_vmsplice_guest takes the full-width address and uses current->abi,
+    // which is how arm64 has always reached it (case 75 of the arm64 legacy
+    // switch, which is why only amd64 failed). readv/writev above are the
+    // same shape.
+    case 278:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_vmsplice_guest(
+                (fd_t) raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3]));
+        return true;
     // fsopen/fsconfig/move_mount (new mount API, fs/mount.c) carry real
     // 64-bit guest pointer args (fsname/key/value/from_path/to_path) that
     // would trip the legacy marshalled dispatch's dword-fit check on a
