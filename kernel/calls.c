@@ -4946,6 +4946,47 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
     if (dispatch->abi == GUEST_ABI_AMD64 &&
             handle_amd64_native_memory_syscall(cpu, syscall_num, raw_args)) {
         qword_t result = dispatch->abi == GUEST_ABI_AMD64 ? cpu->amd64_regs[amd64_rax] : cpu->eax;
+        // A restart code must never survive as the syscall's answer. Of the
+        // ~220 cases in the handler above, only a handful run the result
+        // through syscall_result_should_restart themselves; every other one
+        // writes it straight to RAX, so an _ERESTART came back to the guest as
+        // errno 85 and an _ERESTART_NOHAND as errno 512. Measured: on an amd64
+        // guest, ^Z a program writing to a pipe and its write(2) fails with
+        // "errno 85 (No error information)" -- because realfs_write returns
+        // EINTR the moment a signal is pending, sys_write_common turns that
+        // into _ERESTART meaning "restart transparently", and nothing ever
+        // did. i386/arm64/riscv64 route the same calls through the legacy
+        // path, which has always checked, which is why this was amd64-only.
+        //
+        // Catching it here rather than in each case: one place cannot be
+        // forgotten by the next syscall someone adds to that switch. The
+        // cases that DO handle it already leave a normal value in RAX, so
+        // they fall straight through.
+        //
+        // Compared at FULL WIDTH, not truncated to 32 bits. A 64-bit return --
+        // an mmap address, a large lseek offset -- can perfectly well have low
+        // bits of 0xffffffab, and truncating would turn one of those into a
+        // spurious restart.
+        // Only ever SET the flag here, never clear it. The cases that handle
+        // their own restart call syscall_result_should_restart inside the
+        // handler -- which sets it -- and then leave a normal value in RAX;
+        // clearing it on the way past destroyed it before the handler-setup
+        // path could read it, turning every handler-cancelled ERESTARTNOHAND
+        // back into a restart. That regressed all five of the poll-family
+        // cases this backstop was not even meant to touch.
+        bool restart_pending =
+            (sqword_t) result == (sqword_t) (sdword_t) _ERESTART ||
+            (sqword_t) result == (sqword_t) (sdword_t) _ERESTART_NOHAND;
+        if (restart_pending) {
+            if (current != NULL)
+                current->restart_nohand_pending =
+                    (sqword_t) result == (sqword_t) (sdword_t) _ERESTART_NOHAND;
+            prepare_syscall_restart(cpu, &amd64_syscall_dispatch, syscall_num, raw_args[0]);
+            if (current->ptrace.traced && current->ptrace.stop_at_syscall &&
+                    current->ptrace.syscall_stopped)
+                ptrace_syscall_stop(cpu);
+            return;
+        }
         amd64_trace_track_child(syscall_num, result);
         amd64_tty_process_trace(syscall_num, raw_args, result);
         amd64_tracked_enoent_path_trace(syscall_num, raw_args, result);

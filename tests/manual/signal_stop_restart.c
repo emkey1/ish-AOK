@@ -187,6 +187,69 @@ static void case_deadline(const char *label, enum what what) {
     test_logf("  %-22s took %.2fs (budget %.1fs, ceiling %.2fs)\n", label, took, budget, ceiling);
 }
 
+// A write(2) interrupted by a job-control stop must restart transparently or
+// give EINTR -- never an internal restart code. On amd64 it gave errno 85:
+// realfs_write returns EINTR as soon as a signal is pending (pipe fullness is
+// not involved), sys_write_common turns that into _ERESTART meaning "restart
+// transparently", and the amd64 native dispatch wrote that straight to RAX.
+// A user hit it by pressing ^Z on anything writing to a pipe.
+//
+// Deliberately not routed through case_eintr: this is about the WRITING side,
+// and the child must keep writing across several stop/continue rounds for the
+// window to be hit at all.
+static void case_write_across_stop(const char *label) {
+    int fd[2];
+    if (pipe(fd) < 0) {
+        printf("  %-22s SKIP (pipe unavailable)\n", label);
+        return;
+    }
+    fflush(NULL);
+    pid_t c = fork();
+    if (c == 0) {
+        close(fd[0]);
+        char buf[64];
+        memset(buf, 'x', sizeof buf);
+        for (int i = 0; i < 400; i++) {
+            errno = 0;
+            if (write(fd[1], buf, sizeof buf) < 0) {
+                if (errno == EINTR)
+                    continue;
+                // 250 caps the exit status; anything above 200 is the bug.
+                _exit(errno > 200 ? 200 : errno);
+            }
+            nap(2);
+        }
+        _exit(0);
+    }
+    close(fd[1]);
+    for (int i = 0; i < 6; i++) {
+        nap(60); kill(c, SIGSTOP);
+        nap(60); kill(c, SIGCONT);
+        char b[512];
+        if (read(fd[0], b, sizeof b) <= 0)
+            break;
+    }
+    int st = 0;
+    for (;;) {
+        if (waitpid(c, &st, WNOHANG) == c)
+            break;
+        char b[512];
+        if (read(fd[0], b, sizeof b) <= 0)
+            break;
+    }
+    while (waitpid(c, &st, 0) < 0 && errno == EINTR)
+        continue;
+    int code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+    if (code != 0) {
+        printf("FAIL: %s: write returned errno %d across a stop -- %s\n", label, code,
+               code == 200 ? "an internal restart code reached the guest"
+                           : "neither success nor EINTR");
+        failf(label, (uint64_t) code, 0, 0, 0, 0, 0);
+    }
+    test_logf("  %-22s exit=%d\n", label, code);
+    close(fd[0]);
+}
+
 int main(int argc, char **argv) {
     test_init(argc, argv);
     alarm(test_watchdog_secs(300));
@@ -207,8 +270,16 @@ int main(int argc, char **argv) {
     case_eintr("select, no handler",    W_SELECT,  0, 0);
     case_eintr("pselect, SIGCONT hdlr", W_PSELECT, 1, 1);
     case_eintr("pselect, no handler",   W_PSELECT, 0, 0);
+    // epoll is EINTR either way, unlike every other member of this family.
+    // Linux's ep_poll() breaks out with -EINTR the moment a signal is pending
+    // and never reaches the restart machinery, so a job-control stop that
+    // leaves poll() completing gives epoll_wait() EINTR whether a handler ran
+    // or not. Measured on Devuan 6 / Linux 6.12; AOK used to share poll's
+    // restart path and complete, which is what this pair now pins down.
     case_eintr("epoll, SIGCONT hdlr",   W_EPOLL,   1, 1);
-    case_eintr("epoll, no handler",     W_EPOLL,   0, 0);
+    case_eintr("epoll, no handler",     W_EPOLL,   0, 1);
+
+    case_write_across_stop("write across a stop");
 
     case_deadline("poll deadline",      W_POLL);
     case_deadline("nanosleep deadline", W_READ);

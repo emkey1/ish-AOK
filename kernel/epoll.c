@@ -311,6 +311,16 @@ static int epoll_wait_common(fd_t epoll_f, guest_addr_t events_addr, int_t max_e
         res = poll_wait(epoll->epollfd.poll, epoll_callback, &context,
                         guest_infinite ? &bounded : timeout_ts_ptr);
     } while (guest_infinite && res == 0);
+    // epoll_wait is EINTR on a pending signal, full stop -- it does not
+    // restart. Linux's ep_poll() breaks out with -EINTR the moment
+    // signal_pending() is true and never reaches the restart machinery, while
+    // poll and select resume transparently through their restart block. The
+    // difference is visible with nothing more than a job-control stop: on
+    // Devuan 6 / Linux 6.12, ^Z-ing a process waiting in poll() and resuming
+    // leaves the poll completing, and the same treatment of epoll_wait()
+    // returns EINTR. AOK shared poll_wait() for both and so restarted both.
+    if (res == _ERESTART || res == _ERESTART_NOHAND)
+        res = _EINTR;
     STRACE("%d end epoll_wait", current->pid);
     if (res >= 0) {
         for (int i = 0; i < res; i++) {
