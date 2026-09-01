@@ -219,7 +219,13 @@ static void test_aio_timeout(void) {
         printf("fd_conventions: NOTE io_setup unavailable (%s); skipping aio\n", strerror(errno));
         return;
     }
-    struct timespec ts = { 0, 500000000 };
+    // SYS_io_getevents takes the KERNEL's timespec -- old_timespec32 on a
+    // 32-bit ABI, __kernel_timespec on a 64-bit one -- which is two longs
+    // either way. musl on i386 has 64-bit time_t, so ITS struct timespec is 16
+    // bytes with tv_nsec at offset 8, and the kernel read {0,0} out of the two
+    // halves of a zero tv_sec: "poll, do not wait". Two longs tracks the ABI
+    // automatically. Verified against Linux 6.12, which does the same thing.
+    struct { long tv_sec; long tv_nsec; } ts = { 0, 500000000 };
     struct timespec a, b;
     clock_gettime(CLOCK_MONOTONIC, &a);
     errno = 0;

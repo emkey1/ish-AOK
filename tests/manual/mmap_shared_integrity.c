@@ -158,14 +158,24 @@ int main(int argc, char **argv) {
                 int st;
                 waitpid(c, &st, WUNTRACED);
                 ck("  and stopped for us", WIFSTOPPED(st), 1);
+                // PTRACE_POKEDATA moves exactly one machine word, so the
+                // payload and the check both have to be sizeof(long) -- 4 on
+                // a 32-bit guest, 8 elsewhere. A fixed 7-byte payload
+                // overflowed `word` on i386 (UB, and gcc says so), poked only
+                // "KOPE", and then compared 7 bytes that could never match.
+                // Real Linux fails it identically under gcc -m32: the
+                // assertion was unsatisfiable on any 32-bit platform, which is
+                // a test bug and not a kernel one.
+                static const char poke[] = "KOPEDATA";   // 8 bytes of payload
                 long word = 0;
-                memcpy(&word, "KOPEDAT", 7);
+                memcpy(&word, poke, sizeof word);
                 errno = 0;
                 ck("  PTRACE_POKEDATA succeeds",
                    ptrace(PTRACE_POKEDATA, c, addr, (void *) word) < 0 ? errno : 0, 0);
                 char buf[16] = { 0 };
-                pread(fd, buf, 7, 0);
-                ck("  the poke reached the file", memcmp(buf, "KOPEDAT", 7) == 0, 1);
+                pread(fd, buf, sizeof word, 0);
+                ck("  the poke reached the file",
+                   memcmp(buf, poke, sizeof word) == 0, 1);
                 ptrace(PTRACE_CONT, c, NULL, NULL);
                 waitpid(c, &st, 0);
                 ck("  the tracee ran to completion",

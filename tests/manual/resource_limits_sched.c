@@ -87,6 +87,17 @@ static long raw(long nr, long a, long b, long c) {
     return r < 0 ? -errno : r;
 }
 
+// prlimit64 takes FOUR arguments (pid, resource, new_limit, old_limit), and
+// raw() above passes three -- so the fourth slot was whatever happened to be
+// in the register or on the stack, and the kernel dutifully faulted on it.
+// EFAULT was the correct answer to the call actually being made. Real Linux
+// returns EFAULT for it too, so this was never a kernel defect.
+static long raw4(long nr, long a, long b, long c, long d) {
+    errno = 0;
+    long r = syscall(nr, a, b, c, d);
+    return r < 0 ? -errno : r;
+}
+
 int main(int argc, char **argv) {
     test_init(argc, argv);
     alarm(test_watchdog_secs(120));
@@ -96,9 +107,19 @@ int main(int argc, char **argv) {
     // CROSS the limit is short, not failed. Only one starting at or past it
     // fails, with EFBIG and a SIGXFSZ.
     IN_CHILD({
+        // Ignore SIGXFSZ BEFORE the limit exists, not after. RLIMIT_FSIZE is
+        // per-process and covers every regular file the child writes --
+        // including its own stdout, which the suite runner redirects to a log
+        // file already far past 64 bytes. So the very next diagnostic line
+        // started beyond the limit and the child was killed by SIGXFSZ before
+        // it reached the signal() call meant to protect it. Real Linux kills
+        // it in exactly the same place. With the disposition set first, that
+        // write fails with EFBIG instead, the child survives, and its
+        // assertions still run -- IN_CHILD carries the verdict out in the exit
+        // status, not in the output.
+        signal(SIGXFSZ, SIG_IGN);
         struct rlimit rl = { 64, 64 };
         ck("setrlimit(RLIMIT_FSIZE, 64)", setrlimit(RLIMIT_FSIZE, &rl), 0);
-        signal(SIGXFSZ, SIG_IGN);
         char path[64];
         snprintf(path, sizeof path, "/tmp/rls-fsize-%d", (int) getpid());
         int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -121,6 +142,8 @@ int main(int argc, char **argv) {
 
     // ...and a pipe has no size for a size limit to be about.
     IN_CHILD({
+        // Same reason as above: this child never set the disposition at all.
+        signal(SIGXFSZ, SIG_IGN);
         struct rlimit rl = { 64, 64 };
         setrlimit(RLIMIT_FSIZE, &rl);
         int pf[2];
@@ -158,7 +181,8 @@ int main(int argc, char **argv) {
     // ---- prlimit64 -------------------------------------------------------
     {
         struct rlimit out;
-        ck("prlimit64(0, ...)", raw(SYS_prlimit64, 0, RLIMIT_NOFILE, 0), 0);
+        ck("prlimit64(0, ...)",
+           raw4(SYS_prlimit64, 0, RLIMIT_NOFILE, 0, 0), 0);
         errno = 0;
         ck("prlimit64 on the caller's OWN pid",
            (long) syscall(SYS_prlimit64, (long) getpid(), RLIMIT_NOFILE, NULL, &out) < 0 ? -errno : 0, 0);

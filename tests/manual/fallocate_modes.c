@@ -27,6 +27,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include <stdint.h>
 #include "test_common.h"
 
 #ifndef FALLOC_FL_KEEP_SIZE
@@ -75,9 +76,23 @@ static int fresh(void) {
     return fd;
 }
 
-static long fallocate_raw(int fd, int mode, long off, long len) {
+// fallocate is SYSCALL_DEFINE4(fd, mode, loff_t, loff_t) on a 64-bit ABI, but
+// a 32-bit one splits each loff_t into a (low, high) dword pair -- so the i386
+// kernel entry takes SIX arguments, and AOK implements exactly that
+// (kernel/fs.c's sys_fallocate). libc's syscall() reads six argument slots
+// whichever ABI it is on, so passing four handed the kernel two words of stack
+// garbage as the high halves of offset and length. Real Linux fails the same
+// way under gcc -m32; this was never a kernel bug.
+static long fallocate_raw(int fd, int mode, long long off, long long len) {
     errno = 0;
-    long r = syscall(SYS_fallocate, fd, mode, off, len);
+    long r;
+#if defined(__i386__) || (defined(__SIZEOF_LONG__) && __SIZEOF_LONG__ == 4)
+    r = syscall(SYS_fallocate, fd, mode,
+                (long) (uint32_t) (uint64_t) off,  (long) (uint32_t) ((uint64_t) off >> 32),
+                (long) (uint32_t) (uint64_t) len,  (long) (uint32_t) ((uint64_t) len >> 32));
+#else
+    r = syscall(SYS_fallocate, fd, mode, (long) off, (long) len);
+#endif
     return r < 0 ? -errno : r;
 }
 
