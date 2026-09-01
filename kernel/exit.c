@@ -945,6 +945,14 @@ dword_t sys_waitid(int_t idtype, pid_t_ id, addr_t info_addr, int_t options) {
 
 dword_t sys_waitid_guest(int_t idtype, pid_t_ id, guest_addr_t info_addr, int_t options) {
     STRACE("waitid(%d, %d, %#x, %#x)", idtype, id, info_addr, options);
+    // waitid must be told WHICH state changes to wait for; unlike wait4 there
+    // is no default. (WSTOPPED is waitid's name for the bit wait4 calls
+    // WUNTRACED -- the same value.) With none of them the call can never report anything, so
+    // Linux refuses it immediately rather than blocking forever or -- as here
+    // -- returning ECHILD, which tells the caller it has no children when the
+    // real problem is its own argument.
+    if ((options & (WEXITED_ | WUNTRACED_ | WCONTINUED_)) == 0)
+        return _EINVAL;
     // waitid(P_PIDFD, pidfd, ...): wait on the process the pidfd references.
     // systemd >= 260 waits for every child (generators, executor forks) this
     // way; without it each wait failed EINVAL ("Failed to wait for ...").

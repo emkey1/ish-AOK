@@ -491,8 +491,15 @@ int signal_action(struct sighand *sighand, int sig) {
     switch (sig) {
         // Linux defaults SIGURG to ignore; it arrives with out-of-band TCP
         // data, so defaulting it to kill terminates innocent network users.
+        // Linux's default-ignore set is exactly SIGCHLD, SIGCONT, SIGURG and
+        // SIGWINCH. SIGURG is here for the reason below; SIGIO is NOT --
+        // Linux terminates on it, and treating it as ignored meant a process
+        // that had asked for async I/O notification and then failed to handle
+        // it kept running as if nothing had happened, where every Linux would
+        // have killed it. Nothing in this kernel raises SIGIO on its own; it
+        // only arrives when the guest set it up with F_SETOWN/FASYNC.
         case SIGCONT_: case SIGCHLD_: case SIGURG_:
-        case SIGIO_: case SIGWINCH_:
+        case SIGWINCH_:
             return SIGNAL_IGNORE;
 
         case SIGSTOP_: case SIGTSTP_: case SIGTTIN_: case SIGTTOU_:
@@ -2213,11 +2220,46 @@ void group_stop_wait(void) {
     // Done from our own context -- never the signal sender's -- so taking
     // pids_lock here respects the pids_lock -> group->lock ordering.
     if (group->continued) {
+        struct task *parent = NULL;
+        int signal_no = 0;
         complex_lockt(&pids_lock, 0);
-        struct task *parent = current->group->leader->parent;
-        if (parent != NULL)
+        parent = current->group->leader->parent;
+        if (parent != NULL) {
+            task_ref_cnt_mod(parent, 1);
+            signal_no = current->group->leader->exit_signal;
             notify(&parent->group->child_exit);
+        }
         unlock(&pids_lock);
+        // A resume is a reportable event in its own right, and the SIGCHLD
+        // that carries it is how a shell learns a job it backgrounded is
+        // running again -- without it the parent's handler never fires and
+        // only a WCONTINUED wait ever notices. The stop side of this already
+        // existed (see receive_signals); the continue side did not, so
+        // si_code was never CLD_CONTINUED.
+        //
+        // SA_NOCLDSTOP suppresses it, exactly as it does the stop: the flag
+        // is about stop AND continue notifications, not stops alone.
+        if (parent != NULL) {
+            if (signal_no == SIGCHLD_) {
+                struct sighand *psighand = parent->sighand;
+                if (psighand != NULL) {
+                    lock(&psighand->lock, 0);
+                    if (psighand->action[SIGCHLD_].flags & SA_NOCLDSTOP_)
+                        signal_no = 0;
+                    unlock(&psighand->lock);
+                }
+            }
+            if (signal_no != 0) {
+                struct siginfo_ info = {
+                    .code = CLD_CONTINUED_,
+                    .child.pid = current->group->leader->pid,
+                    .child.uid = current->uid,
+                    .child.status = SIGCONT_,
+                };
+                send_signal(parent, signal_no, info);
+            }
+            task_ref_cnt_mod(parent, -1);
+        }
     }
 }
 
@@ -2549,6 +2591,12 @@ dword_t sys_rt_sigaction(dword_t signum, addr_t action_addr, addr_t oldaction_ad
 dword_t sys_rt_sigaction_guest(dword_t signum, guest_addr_t action_addr, guest_addr_t oldaction_addr, dword_t sigset_size) {
     if (sigset_size != sizeof(sigset_t_))
         return _EINVAL;
+    // Signal 0 is the "does this process exist" probe for kill(2); it has no
+    // disposition to set or read. Accepting it here reported success for a
+    // call that did nothing, so a caller checking whether a signal number is
+    // usable by round-tripping it through sigaction was told 0 was.
+    if (signum == 0)
+        return _EINVAL;
     struct sigaction_ action = {};
     struct sigaction_ oldaction = {};
     if (action_addr != 0) {
@@ -2800,6 +2848,13 @@ dword_t sys_sigaltstack(guest_addr_t ss_addr, guest_addr_t old_ss_addr) {
         if (err < 0) {
             unlock(&sighand->lock);
             return err;
+        }
+        // Only SS_DISABLE and SS_ONSTACK are defined; anything else is a
+        // caller that got the struct wrong, and Linux says so rather than
+        // installing a stack from a request it did not understand.
+        if (flags & ~(dword_t) (SS_DISABLE_ | SS_ONSTACK_)) {
+            unlock(&sighand->lock);
+            return _EINVAL;
         }
         if (flags & SS_DISABLE_) {
             current->altstack = 0;
@@ -3120,16 +3175,19 @@ retry:
     }
     unlock(&pids_lock);
 
-    int err = _EPERM;
+    // Linux never reports EPERM for the broadcast form: kill(-1) returns 0
+    // whenever at least one process was CONSIDERED -- even if every send was
+    // denied -- and ESRCH only when nothing matched at all. Starting from
+    // EPERM meant a caller with nothing to signal was told it lacked
+    // permission, and one that legitimately could not signal a privileged
+    // process was told the same thing about a broadcast that had worked.
     for (size_t i = 0; i < target_count; i++) {
-        int kill_err = signal_kill_task(targets[i].task, sig, si_code);
+        (void) signal_kill_task(targets[i].task, sig, si_code);
         task_ref_cnt_mod(targets[i].task, -1);
-        if (err == _EPERM)
-            err = kill_err;
     }
     if (targets != stack_targets)
         free(targets);
-    return err;
+    return target_count > 0 ? 0 : _ESRCH;
 }
 
 // si_code distinguishes the sender: SI_USER for kill(2), SI_TKILL for
