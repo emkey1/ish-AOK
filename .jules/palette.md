@@ -33,3 +33,6 @@
 ## 2024-06-05 - Accessibility Labels for Factory-Generated Buttons
 **Learning:** When using a factory method to generate icon-only buttons with fallback text strings (like "M", "|<", ">|"), setting `accessibilityLabel` equal to the abbreviated fallback text does not provide enough context for VoiceOver users.
 **Action:** In button generation methods, expand abbreviated text placeholders into clear, descriptive `accessibilityLabel` values (e.g., mapping "M" to "Menu", ">|" to "Next Track") so VoiceOver users understand the button's purpose without relying on visual context.
+## 2026-09-01 - Added accessibilityHint to Modern Menu Pip
+**Learning:** VoiceOver screen reader users need additional context on what the "Workspace menu" button does. A label alone doesn't clarify its function.
+**Action:** Added an `accessibilityHint` explaining that the button opens the desktop menu for window management.
