@@ -208,6 +208,53 @@ static void ptrace_detach_from_tracer(struct task *tracer, struct task *tracee) 
     list_remove_safe(&tracee->ptrace_siblings);
 }
 
+// POSIX: when a process's exit leaves a process group ORPHANED and that group
+// still holds a stopped member, the group is sent SIGHUP and then SIGCONT.
+//
+// A group is orphaned when no member has a parent that is in a different
+// group of the SAME session -- i.e. nobody outside the group is left who
+// could resume it. Its stopped members would otherwise stay stopped for ever
+// with no one able to continue them: the shell that stopped them is gone.
+// That is the whole point of the rule, and AOK did not implement it, so a
+// ^Z'd job whose shell then exited sat in state T until the guest was
+// rebooted.
+//
+// Both helpers run under pids_lock. The signals are sent afterwards, from the
+// same place the controlling-terminal SIGHUP is (see do_exit), because
+// sending under pids_lock would take sighand->lock inside it.
+static bool pgrp_is_orphaned_locked(dword_t pgid, struct task *ignore, dword_t sid) {
+    struct pid *entry;
+    list_for_each_entry(&alive_pids_list, entry, alive) {
+        struct task *t = entry->task;
+        if (t == NULL || t == ignore || t->exiting || t->zombie)
+            continue;
+        if (!task_is_leader(t) || t->group == NULL)
+            continue;
+        if (t->group->pgid != pgid || t->group->sid != sid)
+            continue;
+        struct task *parent = t->parent;
+        if (parent == NULL || parent == ignore || parent->group == NULL)
+            continue;
+        // Someone outside this group, but inside the session, can still
+        // resume it -- so it is not orphaned.
+        if (parent->group->sid == sid && parent->group->pgid != pgid)
+            return false;
+    }
+    return true;
+}
+
+static bool pgrp_has_stopped_member_locked(dword_t pgid, dword_t sid) {
+    struct pid *entry;
+    list_for_each_entry(&alive_pids_list, entry, alive) {
+        struct task *t = entry->task;
+        if (t == NULL || t->group == NULL || !task_is_leader(t))
+            continue;
+        if (t->group->pgid == pgid && t->group->sid == sid && t->group->stopped)
+            return true;
+    }
+    return false;
+}
+
 // A session leader's death takes the controlling terminal away from the whole
 // session. Linux (disassociate_ctty) does this unconditionally, and does two
 // separate things that AOK had run together:
@@ -437,6 +484,23 @@ noreturn void do_exit(struct task *task, int status) {
     
     struct task *leader = task->group->leader;
 
+    // Does this exit orphan our own process group and leave stopped members
+    // in it? Computed here, while the group still describes the pre-exit
+    // state and pids_lock is held; the signals go out below, after the locks.
+    dword_t orphan_pgid = 0;
+    if (leader != NULL && leader->group != NULL) {
+        dword_t pgid = leader->group->pgid;
+        dword_t sid = leader->group->sid;
+        struct task *parent = leader->parent;
+        // Only if we were the one holding it together: a parent already in
+        // the group cannot have been the outside link.
+        if (parent != NULL && parent->group != NULL &&
+                parent->group->pgid != pgid && parent->group->sid == sid &&
+                pgrp_is_orphaned_locked(pgid, leader, sid) &&
+                pgrp_has_stopped_member_locked(pgid, sid))
+            orphan_pgid = pgid;
+    }
+
     // reparent children
     struct task *new_parent = find_new_parent(task);
     struct task *child, *tmp;
@@ -532,6 +596,15 @@ noreturn void do_exit(struct task *task, int status) {
 
     if (tty_hup.fg_group != 0)
         send_group_signal(tty_hup.fg_group, SIGHUP_, SIGINFO_NIL);
+
+    // The orphaned-group rule: SIGHUP tells the stopped members the world
+    // they were stopped in is gone, and SIGCONT is what lets them run far
+    // enough to act on it. Order matters -- SIGCONT first would resume them
+    // into a session with no one to talk to.
+    if (orphan_pgid != 0) {
+        send_group_signal(orphan_pgid, SIGHUP_, SIGINFO_NIL);
+        send_group_signal(orphan_pgid, SIGCONT_, SIGINFO_NIL);
+    }
 
     if (signal_parent != NULL) {
         // Process-directed: the parent may be multithreaded, and the thread
@@ -881,6 +954,20 @@ retry:
         err = _ECHILD;
         if (task == NULL)
             goto error;
+        // A thread id is not a waitable child. Linux's wait_task_zombie and
+        // wait_task_stopped match only thread-group LEADERS for a non-tracer,
+        // so waiting on a child's thread tid fails immediately with ECHILD.
+        // Resolving the tid to its leader instead made the leader look like
+        // the match: WNOHANG returned 0 as though the child were merely still
+        // running, which tells a caller to keep polling a pid that will never
+        // be reportable. A tracer may still wait on a thread it traces.
+        bool id_is_thread = !task_is_leader(task);
+        bool traced_by_us = task->ptrace.tracer != NULL &&
+            task->ptrace.tracer->group == current->group;
+        if (id_is_thread && !traced_by_us) {
+            err = _ECHILD;
+            goto error;
+        }
         task = task->group->leader;
         info->child.pid = id;
         bool is_child = task->parent != NULL && task->parent->group == current->group;
