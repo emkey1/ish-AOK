@@ -36,7 +36,20 @@ static inline dev_t_ dev_fake_from_real(dev_t dev) {
 // mount. Note dev_make(0, m) == m for m < 256, so the static-mount
 // initializers can use these constants directly.
 #define FAKE_DEV_MINOR_MEMFD 1
+// anon_inodefs: eventfd, epoll, timerfd, signalfd, pidfd, fscontext. Linux
+// keeps all of these on ONE internal filesystem, so they share a device --
+// verified against Devuan, where every one of them reports the same 0:16.
 #define FAKE_DEV_MINOR_ADHOC 2
+// The kinds Linux gives a filesystem of their own, and therefore a device of
+// their own: pipefs, sockfs and nsfs. Splitting them apart is not cosmetic.
+// A program cannot ask "what kind of thing is this descriptor?" directly, so
+// it asks which filesystem the descriptor lives on -- lsns reads the device
+// number off /proc/self/ns/net and then examines exactly the descriptors that
+// match it. With one device shared by everything anonymous, that filter
+// selected every pipe and socket on the machine.
+#define FAKE_DEV_MINOR_PIPEFS 3
+#define FAKE_DEV_MINOR_SOCKFS 4
+#define FAKE_DEV_MINOR_NSFS 5
 #define FAKE_DEV_MINOR_DYNAMIC 15
 
 #define DEV_BLOCK 0

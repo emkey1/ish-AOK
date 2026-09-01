@@ -39,8 +39,36 @@ struct fd *adhoc_fd_create(const struct fd_ops *ops) {
     return fd;
 }
 
+// Which anonymous filesystem this descriptor belongs on.
+//
+// Linux has no single "anonymous" filesystem: pipes live on pipefs, sockets
+// on sockfs, namespaces on nsfs, and the eventfd/epoll/timerfd/signalfd
+// family on anon_inodefs. Each has its own anonymous device number, and that
+// number is how a program tells the kinds apart without opening anything.
+//
+// Measured on Devuan: nsfs 0:4, sockfs 0:9, pipefs 0:15, anon_inodefs 0:16 --
+// four devices, with the last shared by all four of its members. AOK reported
+// one device for all of them, which is what sent lsns interrogating every
+// pipe and socket it could find: it takes the device number from
+// /proc/self/ns/net and probes everything that matches, so everything matched.
+static dev_t_ adhoc_anon_dev(struct fd *fd) {
+    if (S_ISSOCK(fd->stat.mode))
+        return FAKE_DEV_MINOR_SOCKFS;
+    if (S_ISFIFO(fd->stat.mode))
+        return FAKE_DEV_MINOR_PIPEFS;
+    if (fd->ops != NULL && fd->ops->anon_inode_class != NULL &&
+            strcmp(fd->ops->anon_inode_class, "nsfs") == 0)
+        return FAKE_DEV_MINOR_NSFS;
+    return FAKE_DEV_MINOR_ADHOC;
+}
+
 static int adhoc_fstat(struct fd *fd, struct statbuf *stat) {
     *stat = fd->stat;
+    // Left at 0 by everything that creates one of these, so the choice is
+    // made here, where the descriptor's kind is finally known -- sockets and
+    // pipes set their own type bits after adhoc_fd_create returns.
+    if (stat->dev == 0)
+        stat->dev = adhoc_anon_dev(fd);
     return 0;
 }
 
@@ -113,5 +141,7 @@ static const struct fs_ops adhoc_fs = {
 static struct mount adhoc_mount = {
     .fs = &adhoc_fs,
     .point = "",
-    .fake_dev = FAKE_DEV_MINOR_ADHOC, // pipes/sockets live on an anon dev like Linux's pipefs/sockfs
+    // The fallback for anything reaching stat_stamp_fake_dev without having
+    // gone through adhoc_fstat; the per-kind devices are chosen there.
+    .fake_dev = FAKE_DEV_MINOR_ADHOC,
 };

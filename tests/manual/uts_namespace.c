@@ -137,11 +137,95 @@ static void check_ns_probe(void) {
     }
 }
 
+// Every namespace this kernel does not provide has to refuse the same way.
+//
+// The errno itself is not portable -- on a real Linux run as root each of
+// these SUCCEEDS -- so what is asserted is the agreement between them, which
+// holds on both kernels. That is also exactly the property that broke:
+// CLONE_NEWTIME was missing from unshare's flag tables entirely, so six of
+// the seven answered "not implemented" and the seventh answered "invalid
+// argument". A command naming several namespaces at once then reported a
+// malformed argument rather than a missing feature, which is a very
+// different thing to be told:
+//
+//   unshare -U -u -m -i -n -p -C -T --map-auto --fork /bin/bash
+//   unshare: unshare failed: Invalid argument
+//
+// Reported from a device, and the -T is what decided the message.
+#define UNSHARE_NEWTIME 0x00000080
+#define UNSHARE_NEWNS 0x00020000
+#define UNSHARE_NEWCGROUP 0x02000000
+#define UNSHARE_NEWIPC 0x08000000
+#define UNSHARE_NEWUSER 0x10000000
+#define UNSHARE_NEWPID 0x20000000
+#define UNSHARE_NEWNET 0x40000000
+
+// 0 if the unshare succeeded, else the errno. Run in a child, because a
+// namespace this kernel DOES create must not follow us out of the check.
+static int unshare_result(int flag) {
+    fflush(NULL);
+    pid_t pid = fork();
+    if (pid < 0)
+        return -1;
+    if (pid == 0) {
+        errno = 0;
+        int r = unshare(flag);
+        _exit(r == 0 ? 0 : (errno > 120 ? 120 : errno));
+    }
+    int st = 0;
+    if (waitpid(pid, &st, 0) != pid || !WIFEXITED(st))
+        return -1;
+    return WEXITSTATUS(st);
+}
+
+static void check_unshare_consistency(void) {
+    static const struct {
+        const char *name;
+        int flag;
+    } ns[] = {
+        {"CLONE_NEWNS", UNSHARE_NEWNS},
+        {"CLONE_NEWCGROUP", UNSHARE_NEWCGROUP},
+        {"CLONE_NEWIPC", UNSHARE_NEWIPC},
+        {"CLONE_NEWUSER", UNSHARE_NEWUSER},
+        {"CLONE_NEWPID", UNSHARE_NEWPID},
+        {"CLONE_NEWNET", UNSHARE_NEWNET},
+        {"CLONE_NEWTIME", UNSHARE_NEWTIME},
+    };
+    int first = unshare_result(ns[0].flag);
+    int agree = 1;
+    for (unsigned i = 1; i < sizeof(ns) / sizeof(ns[0]); i++) {
+        int r = unshare_result(ns[i].flag);
+        if (r != first) {
+            printf("FAIL unshare_flags_disagree: %s gives %s, %s gives %s\n",
+                   ns[0].name, first == 0 ? "success" : strerror(first),
+                   ns[i].name, r == 0 ? "success" : strerror(r));
+            agree = 0;
+            failures_total++;
+        }
+    }
+    if (agree)
+        test_logf("ok   every unimplemented namespace refuses alike (%s)\n",
+                  first == 0 ? "all supported here" : strerror(first));
+
+    // ...and a bit that is not a namespace at all is a malformed request, on
+    // both kernels. This is the answer CLONE_NEWTIME was wrongly getting, so
+    // it has to stay distinguishable from the one above.
+    int bogus = unshare_result(0x00000001);
+    if (bogus == EINVAL)
+        test_logf("ok   an undefined unshare flag is EINVAL\n");
+    else {
+        printf("FAIL undefined_unshare_flag: got %s, wanted EINVAL\n",
+               bogus == 0 ? "success" : strerror(bogus));
+        failures_total++;
+    }
+}
+
 int main(int argc, char **argv) {
     test_init(argc, argv);
     alarm(test_watchdog_secs(10));
 
     check_ns_probe();
+    check_unshare_consistency();
 
     // The namespace-containment cases below need root; the procfs probe above
     // does not, so report its result either way rather than skipping outright.

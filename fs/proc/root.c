@@ -14,6 +14,7 @@
 #include "fs/dev.h"
 #include "kernel/sysvipc.h"
 #include "fs/devices.h"
+#include "fs/poll.h"
 #include "fs/real.h"
 #include "platform/platform.h"
 #include <sys/param.h> // for MIN and MAX
@@ -990,6 +991,14 @@ enum sysfs_node_kind {
     sysfs_devices,
     sysfs_system,
     sysfs_cpu,
+    sysfs_memory,
+    sysfs_memory_block_size,
+    sysfs_memory_block,
+    sysfs_memory_block_state,
+    sysfs_memory_block_removable,
+    sysfs_memory_block_valid_zones,
+    sysfs_memory_block_phys_index,
+    sysfs_memory_block_phys_device,
     sysfs_online,
     sysfs_possible,
     sysfs_present,
@@ -1027,10 +1036,18 @@ enum sysfs_node_kind {
     sysfs_cgroup,
     sysfs_cgroup_unified,
     sysfs_cgroup_elogind,
+    sysfs_dev,
+    sysfs_dev_block,
+    sysfs_dev_char,
+    sysfs_dev_block_link,
     sysfs_block,
     sysfs_block_dev_dir,
     sysfs_block_dev_devno,
     sysfs_block_dev_stat,
+    sysfs_block_dev_size,
+    sysfs_block_dev_removable,
+    sysfs_block_dev_ro,
+    sysfs_block_dev_hidden,
     sysfs_class,
     sysfs_class_block,
     sysfs_class_block_dev,
@@ -1078,6 +1095,9 @@ struct sysfs_node_desc {
 
 #define SYSFS_DIR (S_IFDIR | 0555)
 #define SYSFS_REG (S_IFREG | 0444)
+// Linux gives every sysfs symlink 0777; nothing checks it, but a link
+// reporting a directory's 0555 looks like a link nobody may follow.
+#define SYSFS_LNK (S_IFLNK | 0777)
 
 static const struct sysfs_node_desc sysfs_node_descs[] = {
     {sysfs_root, sysfs_root, "", SYSFS_DIR},
@@ -1088,6 +1108,24 @@ static const struct sysfs_node_desc sysfs_node_descs[] = {
 
     {sysfs_system, sysfs_devices, "system", SYSFS_DIR},
     {sysfs_cpu, sysfs_system, "cpu", SYSFS_DIR},
+
+    // /sys/devices/system/memory: the memory-hotplug view of RAM, divided
+    // into fixed-size blocks. lsmem is built entirely on it and said
+    //
+    //     lsmem: cannot open /sys/devices/system/memory: No such file or directory
+    //
+    // Every block is online and none is removable, which is the truth: guest
+    // memory is the app's address space and there is no mechanism by which a
+    // piece of it could be taken offline.
+    {sysfs_memory, sysfs_system, "memory", SYSFS_DIR},
+    {sysfs_memory_block_size, sysfs_memory, "block_size_bytes", SYSFS_REG},
+    {sysfs_memory_block, sysfs_memory, NULL, SYSFS_DIR},
+
+    {sysfs_memory_block_state, sysfs_memory_block, "state", SYSFS_REG},
+    {sysfs_memory_block_removable, sysfs_memory_block, "removable", SYSFS_REG},
+    {sysfs_memory_block_valid_zones, sysfs_memory_block, "valid_zones", SYSFS_REG},
+    {sysfs_memory_block_phys_index, sysfs_memory_block, "phys_index", SYSFS_REG},
+    {sysfs_memory_block_phys_device, sysfs_memory_block, "phys_device", SYSFS_REG},
 
     {sysfs_online, sysfs_cpu, "online", SYSFS_REG},
     {sysfs_possible, sysfs_cpu, "possible", SYSFS_REG},
@@ -1135,6 +1173,29 @@ static const struct sysfs_node_desc sysfs_node_descs[] = {
     {sysfs_block_dev_dir, sysfs_block, GUEST_DISK_NAME, SYSFS_DIR},
     {sysfs_block_dev_devno, sysfs_block_dev_dir, "dev", SYSFS_REG},
     {sysfs_block_dev_stat, sysfs_block_dev_dir, "stat", SYSFS_REG},
+    // The four attributes lsblk reads about a device once it has found it.
+    // Without `size` it printed "1638P" -- not a refusal, a number, and a
+    // wrong one, which is the failure mode worth avoiding most.
+    {sysfs_block_dev_size, sysfs_block_dev_dir, "size", SYSFS_REG},
+    {sysfs_block_dev_removable, sysfs_block_dev_dir, "removable", SYSFS_REG},
+    {sysfs_block_dev_ro, sysfs_block_dev_dir, "ro", SYSFS_REG},
+    {sysfs_block_dev_hidden, sysfs_block_dev_dir, "hidden", SYSFS_REG},
+
+    // /sys/dev/{block,char}: the device tree indexed by major:minor rather
+    // than by name. lsblk starts here rather than at /sys/block -- it builds
+    // its list by opening /sys/dev/block/<maj>:<min> and reading the LINK to
+    // learn the device's name -- and gave up outright without it:
+    //
+    //     lsblk: failed to access sysfs directory: /sys/dev/block
+    //
+    // char/ is present and empty because that is what AOK can honestly say:
+    // it models no character devices in sysfs at all, and /sys/class does not
+    // list them either. An absent directory would be a different claim, and
+    // the wrong one -- Linux always has both.
+    {sysfs_dev, sysfs_root, "dev", SYSFS_DIR},
+    {sysfs_dev_block, sysfs_dev, "block", SYSFS_DIR},
+    {sysfs_dev_char, sysfs_dev, "char", SYSFS_DIR},
+    {sysfs_dev_block_link, sysfs_dev_block, NULL, SYSFS_LNK},
 
     // /sys/class exists on every Linux system, and its absence is not cosmetic.
     // Devuan's /etc/init.d/eudev tests `[ ! -d /sys/class/ ]` and reports
@@ -1202,6 +1263,29 @@ static inline struct sysfs_node sysfs_decode_node(void *value) {
 
 static struct sysfs_node sysfs_node_make(enum sysfs_node_kind kind, int cpu, int index) {
     return (struct sysfs_node) {.kind = kind, .cpu = cpu, .index = index};
+}
+
+// Linux divides memory into fixed-size blocks for hotplug purposes and
+// reports the size, in hex, in block_size_bytes. 128 MiB is what x86_64 and
+// arm64 both use, and lsmem's whole output is arithmetic on it.
+#define SYSFS_MEMORY_BLOCK_BYTES (128ULL * 1024 * 1024)
+
+// How many blocks the guest's RAM comes to, rounded up: a machine whose
+// memory is not a whole number of blocks still has to account for the last
+// partial one, and Linux rounds the same way.
+static int sysfs_memory_block_count(void) {
+    struct mem_usage usage = get_mem_usage();
+    uint64_t total = usage.total;
+    if (total == 0)
+        return 1;
+    uint64_t blocks = (total + SYSFS_MEMORY_BLOCK_BYTES - 1) / SYSFS_MEMORY_BLOCK_BYTES;
+    if (blocks < 1)
+        blocks = 1;
+    // Same 12-bit ceiling the cpu number is held to; 4094 blocks is 511 GiB,
+    // far past any device this runs on.
+    if (blocks > 4094)
+        blocks = 4094;
+    return (int) blocks;
 }
 
 static int sysfs_cpu_count(void) {
@@ -1288,6 +1372,8 @@ static int sysfs_node_multiplicity(enum sysfs_node_kind kind) {
         return sysfs_cpu_count();
     if (kind == sysfs_net_dir)
         return sysfs_net_count();
+    if (kind == sysfs_memory_block)
+        return sysfs_memory_block_count();
     if (kind == sysfs_cache_index) {
         struct sysfs_cache_desc descs[3];
         return sysfs_cache_descs(descs);
@@ -1296,8 +1382,13 @@ static int sysfs_node_multiplicity(enum sysfs_node_kind kind) {
 }
 
 static bool sysfs_node_name(struct sysfs_node node, char *buf, size_t bufsize) {
+    if (node.kind == sysfs_dev_block_link)
+        return snprintf(buf, bufsize, "%d:%d",
+                        GUEST_DISK_MAJOR, GUEST_DISK_MINOR) >= 0;
     if (node.kind == sysfs_cpu_dir)
         return snprintf(buf, bufsize, "cpu%d", node.cpu) >= 0;
+    if (node.kind == sysfs_memory_block)
+        return snprintf(buf, bufsize, "memory%d", node.cpu) >= 0;
     if (node.kind == sysfs_net_dir) {
         struct net_iface_stats iface;
         if (!sysfs_net_iface_at(node.cpu, &iface))
@@ -1356,6 +1447,21 @@ static bool sysfs_lookup_child(struct sysfs_node parent, const char *name, size_
             continue;
         }
 
+        // Generated name: a major:minor pair. There is nothing to parse an
+        // index out of -- one device means one name -- so it is produced and
+        // compared, the same way an interface name is above.
+        if (desc->kind == sysfs_dev_block_link) {
+            struct sysfs_node candidate =
+                sysfs_node_make(desc->kind, parent.cpu, parent.index);
+            char devno[32];
+            if (!sysfs_node_name(candidate, devno, sizeof(devno)))
+                continue;
+            if (strlen(devno) != namelen || strncmp(devno, name, namelen) != 0)
+                continue;
+            *child_out = candidate;
+            return true;
+        }
+
         // Generated name: cpuN or indexN.
         char scratch[32];
         if (namelen >= sizeof(scratch))
@@ -1365,12 +1471,13 @@ static bool sysfs_lookup_child(struct sysfs_node parent, const char *name, size_
 
         int n = -1;
         int consumed = 0;
-        const char *prefix = desc->kind == sysfs_cpu_dir ? "cpu%d%n" : "index%d%n";
+        const char *prefix = desc->kind == sysfs_cpu_dir ? "cpu%d%n" :
+                             desc->kind == sysfs_memory_block ? "memory%d%n" : "index%d%n";
         if (sscanf(scratch, prefix, &n, &consumed) != 1 || consumed != (int) namelen)
             continue;
         if (n < 0 || n >= sysfs_node_multiplicity(desc->kind))
             continue;
-        if (desc->kind == sysfs_cpu_dir)
+        if (desc->kind == sysfs_cpu_dir || desc->kind == sysfs_memory_block)
             *child_out = sysfs_node_make(desc->kind, n, parent.index);
         else
             *child_out = sysfs_node_make(desc->kind, parent.cpu, n);
@@ -1437,6 +1544,27 @@ static size_t sysfs_format_cpulist(char *buf, size_t bufsize, int first, int las
 // Real Linux keeps this at /sys/block/<dev>/stat: the same 11 diskstats
 // fields as /proc/diskstats, minus the leading major/minor/name -- backed by
 // the same realfs_io_stats counters as proc_show_diskstats.
+// The guest disk's size in 512-byte sectors, which is the unit
+// /sys/block/<dev>/size is always in.
+//
+// AOK's sda is one synthetic device standing for all of the guest's storage,
+// so its size is the root filesystem's -- the same number df prints, and the
+// only honest answer available. A device that reported nothing here made
+// lsblk invent one.
+static size_t sysfs_guest_disk_size_format(char *buf, size_t bufsize) {
+    uint64_t sectors = 0;
+    char root_path[] = "/";
+    struct mount *root = mount_find(root_path);
+    if (root != NULL) {
+        struct statfsbuf stat;
+        memset(&stat, 0, sizeof(stat));
+        if (mount_statfs(root, &stat) == 0 && stat.bsize > 0)
+            sectors = stat.blocks * (uint64_t) stat.bsize / 512;
+        mount_release(root);
+    }
+    return snprintf(buf, bufsize, "%"PRIu64"\n", sectors);
+}
+
 static size_t sysfs_guest_disk_stat_format(char *buf, size_t bufsize) {
     uint64_t read_ops = atomic_load_explicit(&realfs_io_stats.read_ops, memory_order_relaxed);
     uint64_t read_sectors = atomic_load_explicit(&realfs_io_stats.read_bytes, memory_order_relaxed) / 512;
@@ -1554,9 +1682,34 @@ static size_t sysfs_file_data(struct sysfs_node node, char *buf, size_t bufsize)
             return sysfs_net_file_data(node, buf, bufsize);
 
         case sysfs_block_dev_devno:
-            return snprintf(buf, bufsize, "8:0\n");
+            return snprintf(buf, bufsize, "%d:%d\n",
+                            GUEST_DISK_MAJOR, GUEST_DISK_MINOR);
         case sysfs_block_dev_stat:
             return sysfs_guest_disk_stat_format(buf, bufsize);
+        case sysfs_memory_block_size:
+            // Hex, no 0x, exactly as Linux writes it.
+            return snprintf(buf, bufsize, "%llx\n",
+                            (unsigned long long) SYSFS_MEMORY_BLOCK_BYTES);
+        case sysfs_memory_block_state:
+            return snprintf(buf, bufsize, "online\n");
+        case sysfs_memory_block_removable:
+            return snprintf(buf, bufsize, "0\n");
+        case sysfs_memory_block_valid_zones:
+            // What Devuan reports for a block that cannot move between zones.
+            return snprintf(buf, bufsize, "none\n");
+        case sysfs_memory_block_phys_index:
+            return snprintf(buf, bufsize, "%08x\n", (unsigned) node.cpu);
+        case sysfs_memory_block_phys_device:
+            return snprintf(buf, bufsize, "0\n");
+        case sysfs_block_dev_size:
+            return sysfs_guest_disk_size_format(buf, bufsize);
+        case sysfs_block_dev_removable:
+            // Built-in storage: it cannot be ejected.
+            return snprintf(buf, bufsize, "0\n");
+        case sysfs_block_dev_ro:
+            return snprintf(buf, bufsize, "0\n");
+        case sysfs_block_dev_hidden:
+            return snprintf(buf, bufsize, "0\n");
         default:
             return 0;
     }
@@ -1650,6 +1803,59 @@ static int sysfs_stat_common(struct sysfs_node node, struct statbuf *stat) {
     stat->nlink = S_ISDIR(stat->mode) ? 2 : 1;
     stat->size = sysfs_file_size(node);
     return 0;
+}
+
+// Where a sysfs symlink points. Relative, and relative in the same shape
+// Linux uses (../../<real path>), because that is what a caller resolving it
+// against the link's own directory expects -- and because lsblk takes the
+// BASENAME of the target as the device's name, so the last component has to
+// be the device rather than a path that merely reaches it.
+static ssize_t sysfs_readlink(struct mount *UNUSED(mount), const char *path,
+                              char *buf, size_t bufsize) {
+    // Cheap rejection first, before any tree walk.
+    //
+    // Registering a ->readlink at all means fs/path.c now calls it for EVERY
+    // component of EVERY /sys path, where before it went straight to ->stat.
+    // That doubles the resolution work, and one branch of the walk is far
+    // from free: an interface name under /sys/class/net is matched by
+    // producing the live interface list, which is a fresh getifaddrs plus an
+    // ioctl per interface, once per candidate index. Measured before this
+    // early-out, on a host with 20 interfaces: 11.3 ms for a single read of
+    // /sys/class/net/utun15/statistics/rx_bytes, against 19 us for
+    // /sys/block/sda/size. btop reads six such counters per interface.
+    //
+    // Every symlink in this tree lives under /sys/dev/block/, and there is
+    // exactly one kind of them, so anything that cannot be one is refused
+    // without walking anywhere.
+    static const char dev_block_prefix[] = "dev/block/";
+    const char *p = path;
+    while (*p == '/')
+        p++;
+    if (strncmp(p, dev_block_prefix, sizeof(dev_block_prefix) - 1) != 0)
+        return _EINVAL;     // not a symlink: readlink(2)'s answer for one
+
+    struct sysfs_node node;
+    if (!sysfs_lookup_node(path, &node))
+        return _ENOENT;
+    if (!S_ISLNK(sysfs_node_mode(node)))
+        return _EINVAL;     // readlink(2) on a non-symlink
+    char target[MAX_PATH];
+    int len;
+    switch (node.kind) {
+        case sysfs_dev_block_link:
+            // /sys/dev/block/8:0 -> ../../block/sda
+            len = snprintf(target, sizeof(target), "../../block/%s", GUEST_DISK_NAME);
+            break;
+        default:
+            return _EINVAL;
+    }
+    if (len < 0 || (size_t) len >= sizeof(target))
+        return _EIO;
+    size_t copy = (size_t) len;
+    if (copy > bufsize)
+        copy = bufsize;
+    memcpy(buf, target, copy);
+    return (ssize_t) copy;
 }
 
 static int sysfs_stat(struct mount *UNUSED(mount), const char *path, struct statbuf *stat) {
@@ -1750,7 +1956,8 @@ static int sysfs_readdir(struct fd *fd, struct dir_entry *entry) {
         const struct sysfs_node_desc *desc = sysfs_desc(node.kind);
         struct sysfs_node parent = node;
         if (desc != NULL && node.kind != sysfs_root) {
-            int cpu = (node.kind == sysfs_cpu_dir || node.kind == sysfs_net_dir) ? -1 : node.cpu;
+            int cpu = (node.kind == sysfs_cpu_dir || node.kind == sysfs_net_dir ||
+                       node.kind == sysfs_memory_block) ? -1 : node.cpu;
             int idx = node.kind == sysfs_cache_index ? -1 : node.index;
             parent = sysfs_node_make(desc->parent, cpu, idx);
         }
@@ -1773,7 +1980,8 @@ static int sysfs_readdir(struct fd *fd, struct dir_entry *entry) {
         }
 
         struct sysfs_node child;
-        if (desc->kind == sysfs_cpu_dir || desc->kind == sysfs_net_dir)
+        if (desc->kind == sysfs_cpu_dir || desc->kind == sysfs_net_dir ||
+                desc->kind == sysfs_memory_block)
             child = sysfs_node_make(desc->kind, (int) remaining, node.index);
         else if (desc->kind == sysfs_cache_index)
             child = sysfs_node_make(desc->kind, node.cpu, (int) remaining);
@@ -1792,7 +2000,26 @@ static int sysfs_close(struct fd *UNUSED(fd)) {
     return 0;
 }
 
+// A sysfs attribute is always ready, and saying so is not optional.
+//
+// fd_ops with no ->poll read back as NEVER READY (kernel/poll.c asks
+// `ops->poll ? ops->poll(fd) : 0`), and busybox ash's `read` builtin polls
+// before every read even with no timeout -- so `read x < /sys/anything` hung
+// forever, at zero CPU, on the most ordinary way there is to consult a sysfs
+// file. `cat` worked, which is what made it look like the file was fine.
+//
+// The mask is sysfs's own, measured on Devuan rather than assumed: an
+// attribute reports POLLIN|POLLOUT|POLLPRI|POLLERR (0xf), where a procfs file
+// reports the plain DEFAULT_POLLMASK of POLLIN|POLLOUT (0x5). The extra two
+// are how sysfs signals "this attribute may have changed" to a poller camped
+// on it; reporting them keeps a caller that distinguishes the two kinds of
+// file seeing what it would see on Linux.
+static int sysfs_poll(struct fd *UNUSED(fd)) {
+    return POLL_READ | POLL_WRITE | POLL_PRI | POLL_ERR;
+}
+
 static const struct fd_ops sysfs_fdops = {
+    .poll = sysfs_poll,
     .read = sysfs_read,
     .write = sysfs_write,
     .pread = sysfs_pread,
@@ -1806,6 +2033,7 @@ const struct fs_ops sysfs = {
     .name = "sysfs",
     .magic = 0x62656572,
     .open = sysfs_open,
+    .readlink = sysfs_readlink,
     .stat = sysfs_stat,
     .fstat = sysfs_fstat,
     .getpath = sysfs_getpath,

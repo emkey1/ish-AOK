@@ -105,6 +105,9 @@ struct audit_features_ {
 
 #define SOCK_DIAG_BY_FAMILY_ 20
 
+// A socket's network namespace, as an nsfs fd. Privileged on Linux -- it
+// needs CAP_SYS_ADMIN in the target namespace -- and EPERM without it.
+#define SIOCGSKNS_ 0x894c
 #define SIOCGIFNAME_ 0x8910
 #define SIOCGIFCONF_ 0x8912
 #define SIOCGIFFLAGS_ 0x8913
@@ -8908,6 +8911,24 @@ out_write:
 }
 
 static int sock_ioctl(struct fd *fd, int cmd, void *arg) {
+    if (cmd == SIOCGSKNS_) {
+        // Which network namespace this socket lives in. There is exactly one
+        // here, so the answer is always the same fd the /proc/<pid>/ns/net
+        // link opens -- which is the truthful answer, not a stand-in.
+        //
+        // Worth having because it is how lsns learns that a socket belongs to
+        // a namespace at all. Refused, it falls back to opening every
+        // descriptor of every process and asking each one whether it is a
+        // namespace, which is noisy and much slower.
+        if (!superuser())
+            return _EPERM;
+        struct fd *ns = proc_ns_open(current->pid, "net");
+        if (ns == NULL)
+            return _EINVAL;
+        if (IS_ERR(ns))
+            return PTR_ERR(ns);
+        return f_install(ns, O_CLOEXEC_);
+    }
     if (cmd == SIOCGIFNAME_)
         return sock_ifreq_name_from_index(arg);
     if (cmd == SIOCGIFCONF_)
@@ -8968,6 +8989,8 @@ static int sock_ioctl(struct fd *fd, int cmd, void *arg) {
 
 static ssize_t sock_ioctl_size(int cmd) {
     switch (cmd) {
+        case SIOCGSKNS_:
+            return 0;   // no argument; the answer is the returned descriptor
         case SIOCOUTQ_:
             return sizeof(dword_t);
         case SIOCGIFNAME_:

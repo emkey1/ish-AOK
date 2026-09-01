@@ -26,6 +26,11 @@
 #define CLONE_DETACHED_ 0x00400000
 #define CLONE_UNTRACED_ 0x00800000
 #define CLONE_CHILD_SETTID_ 0x01000000
+// Time namespaces. Note the value: 0x80 lies INSIDE CSIGNAL, so plain
+// clone(2) cannot express this flag at all -- its low byte is the exit
+// signal. Only unshare(2) and clone3(2) can ask for one, which is why this
+// appears in sys_unshare's flag sets and not in the clone path's.
+#define CLONE_NEWTIME_ 0x00000080
 #define CLONE_NEWCGROUP_ 0x02000000
 #define CLONE_NEWUTS_ 0x04000000
 #define CLONE_NEWIPC_ 0x08000000
@@ -788,8 +793,22 @@ dword_t sys_unshare(dword_t flags) {
     STRACE("unshare(%#x)", flags);
 
     const dword_t supported = CLONE_FILES_ | CLONE_FS_ | CLONE_SYSVSEM_ | CLONE_NEWUTS_;
+    // Recognized, and not provided. The distinction from the ~known case
+    // below is the whole point: a flag listed here is a real thing this
+    // kernel does not have (ENOSYS), while one that is not listed at all is a
+    // malformed request (EINVAL). CLONE_NEWTIME was missing from both lists,
+    // so `unshare -T` -- and therefore any command including it -- came back
+    // "Invalid argument", which reads as "you typed something wrong" rather
+    // than "this kernel has no time namespaces". Reported from a device
+    // running exactly that:
+    //
+    //   unshare -U -u -m -i -n -p -C -T --map-auto --fork /bin/bash
+    //   unshare: unshare failed: Invalid argument
+    //
+    // Six of those eight namespaces already answered ENOSYS; the odd one out
+    // decided the message.
     const dword_t known_unsupported = CLONE_VM_ | CLONE_SIGHAND_ | CLONE_THREAD_ |
-        CLONE_NEWNS_ | CLONE_NEWCGROUP_ | CLONE_NEWIPC_ |
+        CLONE_NEWNS_ | CLONE_NEWCGROUP_ | CLONE_NEWIPC_ | CLONE_NEWTIME_ |
         CLONE_NEWUSER_ | CLONE_NEWPID_ | CLONE_NEWNET_ | CLONE_IO_;
     const dword_t known = supported | known_unsupported;
 

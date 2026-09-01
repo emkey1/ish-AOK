@@ -121,6 +121,62 @@ before continuing without device management. The fix was not about containers or
 namespaces, which is where the investigation started; it was about what eudev
 checks for when it looks at `/sys`.
 
+### What a user found by asking the machine what it was made of
+
+A TestFlight report arrived as a screenshot of three commands, one after
+another, each failing differently:
+
+```
+lsblk: failed to access sysfs directory: /sys/dev/block: No such file or directory
+lsns: Unsupported ioctl NS_GET_USERNS
+lsmem: cannot open /sys/devices/system/memory: No such file or directory
+```
+
+They have nothing in common as code and everything in common as a question. All
+three are what a person runs to find out what a machine *is* — its disks, its
+namespaces, its memory — and in every case AOK had the answer and no way to hand
+it over.
+
+**`lsblk`** does not walk `/sys/block`, which AOK had. It starts from
+`/sys/dev/block/<major>:<minor>`, the same devices indexed by number, and takes
+the *basename of the symlink target* as each device's name. So the missing piece
+was not the data but a second way in, which meant sysfs needed something it had
+never had: symlinks. There are now real ones, `8:0 -> ../../block/sda`.
+
+Fixing the error revealed a worse thing behind it. `lsblk` then ran and printed
+a size of **1638P**, because `/sys/block/sda/size` did not exist and it had made
+something up rather than leave the column blank. A tool that refuses is easy to
+diagnose; a tool that answers wrongly is not. `size` now comes from a `statfs`
+of the root — the same number `df` prints — alongside the `removable`, `ro` and
+`hidden` flags that go straight into `lsblk`'s columns.
+
+**`lsmem`** wanted the memory-hotplug view: RAM divided into fixed-size blocks,
+each with a state. AOK has one honest thing to say there — every block is
+present and none can be taken away, because guest memory is the application's
+address space — and now says it, in 128 MiB blocks counted from `MemTotal`.
+
+**`lsns`** is the interesting one, because the missing piece was not a file at
+all. AOK already published all ten `/proc/<pid>/ns/*` links; what it did not do
+was answer questions *about* them. `lsns` is built almost entirely out of four
+ioctls, and `ENOTTY` to the first one made it give up and print nothing. The
+answers are all constrained by a fact AOK cannot change — there is exactly one
+namespace of each kind — and that turns out to be enough, because it is also
+true of a Linux box that has never created one. The distinctions matter, though:
+`NS_GET_PARENT` is `EINVAL` for a kind that does not nest and `EPERM` for one
+that does but whose parent you may not see, and `lsns` uses exactly that
+difference to decide what is a hierarchy root. Reporting one for the other would
+have been a plausible-looking lie.
+
+`SIOCGSKNS` — which network namespace a socket belongs to — came along with it,
+for a reason that only showed up in a trace: refused it, `lsns` falls back to
+opening *every descriptor of every process* and asking each one whether it is a
+namespace.
+
+`tests/manual/sysfs_dev_ns.c` asks all of those questions directly rather than
+running the tools, so a regression names the missing fact instead of a tool's
+opinion of it. Every expectation in it was measured on Devuan first, and it
+passes there too: 38 of its checks fail on the commit before this one.
+
 ## 18.4 `/proc/ish`: asking the app about itself
 
 The fork adds a directory that no Linux has:

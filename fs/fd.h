@@ -43,6 +43,13 @@ struct fd {
         struct {
             struct poll *poll;
         } epollfd;
+        // /proc/<pid>/ns/<type>. Only an index into fs/proc/pid.c's
+        // proc_ns_types, because AOK has exactly one namespace of each type
+        // and the fd's whole identity is which type it names. Read by the
+        // nsfs ioctls (NS_GET_NSTYPE and friends).
+        struct {
+            unsigned type_index;
+        } nsfs;
         struct {
             uint64_t val;
             bool semaphore; // EFD_SEMAPHORE: read returns 1 and decrements by 1

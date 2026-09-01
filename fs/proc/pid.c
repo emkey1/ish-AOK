@@ -1344,22 +1344,37 @@ static bool proc_pid_task_readdir(struct proc_entry *entry, unsigned long *index
 // namespaces in use) with symlinks to the initial namespaces' well-known inode
 // numbers, so we can report the identical values for every task rather than
 // inventing per-task ones.
+// The CLONE_NEW* flag each kind corresponds to, which is what NS_GET_NSTYPE
+// reports. Defined here rather than shared with kernel/fork.c's copies
+// because that file's are its own argument-validation constants; these are
+// wire values handed to the guest. CLONE_NEWTIME has no entry there at all,
+// since unshare rejects it along with the rest.
+#define CLONE_NEWTIME_ 0x00000080
+#define CLONE_NEWNS_ 0x00020000
+#define CLONE_NEWCGROUP_ 0x02000000
+#define CLONE_NEWUTS_ 0x04000000
+#define CLONE_NEWIPC_ 0x08000000
+#define CLONE_NEWUSER_ 0x10000000
+#define CLONE_NEWPID_ 0x20000000
+#define CLONE_NEWNET_ 0x40000000
+
 struct proc_ns_type {
     const char *name;
     unsigned long inode;
+    unsigned nstype;
 };
 
 static const struct proc_ns_type proc_ns_types[] = {
-    {"cgroup", 4026531835},
-    {"ipc", 4026531839},
-    {"mnt", 4026531840},
-    {"net", 4026531956},
-    {"pid", 4026531836},
-    {"pid_for_children", 4026531836},
-    {"time", 4026531834},
-    {"time_for_children", 4026531834},
-    {"user", 4026531837},
-    {"uts", 4026531838},
+    {"cgroup", 4026531835, CLONE_NEWCGROUP_},
+    {"ipc", 4026531839, CLONE_NEWIPC_},
+    {"mnt", 4026531840, CLONE_NEWNS_},
+    {"net", 4026531956, CLONE_NEWNET_},
+    {"pid", 4026531836, CLONE_NEWPID_},
+    {"pid_for_children", 4026531836, CLONE_NEWPID_},
+    {"time", 4026531834, CLONE_NEWTIME_},
+    {"time_for_children", 4026531834, CLONE_NEWTIME_},
+    {"user", 4026531837, CLONE_NEWUSER_},
+    {"uts", 4026531838, CLONE_NEWUTS_},
 };
 #define PROC_NS_TYPES_LEN (sizeof(proc_ns_types) / sizeof(proc_ns_types[0]))
 
@@ -1402,10 +1417,111 @@ static int proc_pid_ns_readlink(struct proc_entry *entry, char *buf) {
 static ssize_t proc_ns_read(struct fd *UNUSED(fd), void *UNUSED(buf), size_t UNUSED(bufsize)) {
     return _EINVAL;
 }
+// The nsfs ioctls (linux/nsfs.h). A namespace fd cannot be read or written,
+// but it can be ASKED things, and lsns is built entirely out of asking: it
+// opens every /proc/<pid>/ns/* link and calls NS_GET_USERNS on each to group
+// namespaces by owner. Answering ENOTTY made it give up with "Unsupported
+// ioctl NS_GET_USERNS" and print nothing at all.
+//
+// Every answer below is what Devuan gives for the INITIAL namespaces, which
+// is the situation AOK is permanently in -- one namespace of each kind, owned
+// by root, with no parent anybody may look at. Measured, not assumed:
+//
+//   NS_GET_USERNS     an fd for the owning user namespace; EPERM when asked
+//                     of a user namespace that is its own owner
+//   NS_GET_PARENT     EINVAL for the flat kinds (mnt, net, uts, ipc, cgroup,
+//                     time), EPERM for the hierarchical ones (pid, user)
+//                     whose parent is outside what the caller may see
+//   NS_GET_NSTYPE     the CLONE_NEW* flag for the kind
+//   NS_GET_OWNER_UID  the owner's uid, and only for a user namespace --
+//                     EINVAL for every other kind
+//
+// The distinction between EINVAL and EPERM on NS_GET_PARENT is not cosmetic:
+// EINVAL means "this kind of namespace has no parent" and EPERM means "it has
+// one and you may not see it", and lsns uses exactly that to decide whether a
+// namespace is a hierarchy root.
+#define NS_GET_USERNS_ 0xb701
+#define NS_GET_PARENT_ 0xb702
+#define NS_GET_NSTYPE_ 0xb703
+#define NS_GET_OWNER_UID_ 0xb704
+
+static ssize_t proc_ns_ioctl_size(int cmd) {
+    // Only NS_GET_OWNER_UID takes a pointer; the rest carry their answer in
+    // the return value.
+    if (cmd == NS_GET_OWNER_UID_)
+        return sizeof(uid_t_);
+    return 0;
+}
+
+static struct fd *proc_ns_fd_for_index(unsigned index);
+
+static int proc_ns_ioctl(struct fd *fd, int cmd, void *arg) {
+    unsigned index = fd->nsfs.type_index;
+    if (index >= PROC_NS_TYPES_LEN)
+        return _EINVAL;
+    unsigned nstype = proc_ns_types[index].nstype;
+    switch (cmd) {
+        case NS_GET_NSTYPE_:
+            return (int) nstype;
+
+        case NS_GET_OWNER_UID_:
+            // A user namespace is owned by the uid that created it, and the
+            // initial one is root's. Asking any other kind is EINVAL -- the
+            // question only means something about a user namespace.
+            if (nstype != CLONE_NEWUSER_)
+                return _EINVAL;
+            *(uid_t_ *) arg = 0;
+            return 0;
+
+        case NS_GET_PARENT_:
+            // Only user and pid namespaces nest. For the rest the question is
+            // malformed; for these two the parent of the initial namespace is
+            // itself, which the caller is not permitted to be handed.
+            if (nstype != CLONE_NEWUSER_ && nstype != CLONE_NEWPID_)
+                return _EINVAL;
+            return _EPERM;
+
+        case NS_GET_USERNS_: {
+            // Everything here is owned by the one user namespace. Asking that
+            // namespace who owns IT walks off the top, which Linux refuses.
+            if (nstype == CLONE_NEWUSER_)
+                return _EPERM;
+            unsigned user_index;
+            for (user_index = 0; user_index < PROC_NS_TYPES_LEN; user_index++)
+                if (proc_ns_types[user_index].nstype == CLONE_NEWUSER_)
+                    break;
+            if (user_index == PROC_NS_TYPES_LEN)
+                return _EINVAL;
+            struct fd *userns = proc_ns_fd_for_index(user_index);
+            if (IS_ERR(userns))
+                return PTR_ERR(userns);
+            // A namespace fd handed out by an ioctl is close-on-exec on
+            // Linux, and lsns leaks one per namespace per process without it.
+            return f_install(userns, O_CLOEXEC_);
+        }
+    }
+    return _ENOTTY;
+}
+
 static const struct fd_ops proc_ns_fdops = {
     .read = proc_ns_read,
+    .ioctl_size = proc_ns_ioctl_size,
+    .ioctl = proc_ns_ioctl,
     .anon_inode_class = "nsfs",
 };
+
+// One namespace fd, for the kind at `index`. The fd carries nothing but which
+// kind it is: there is exactly one namespace of each, so the kind IS the
+// identity, and its inode number is the one Linux gives the initial namespace.
+static struct fd *proc_ns_fd_for_index(unsigned index) {
+    struct fd *fd = adhoc_fd_create(&proc_ns_fdops);
+    if (fd == NULL)
+        return ERR_PTR(_ENOMEM);
+    fd->stat.mode = S_IFREG | 0444;
+    fd->stat.inode = proc_ns_types[index].inode;
+    fd->nsfs.type_index = index;
+    return fd;
+}
 
 // On Linux the /proc/pid/ns/* entries are nsfs magic links: following them
 // with open(2) yields a namespace fd, not a lookup of the "mnt:[inode]"
@@ -1424,12 +1540,7 @@ struct fd *proc_ns_open(int pid, const char *name) {
     if (task == NULL)
         return ERR_PTR(_ENOENT);
     task_ref_cnt_mod(task, -1);
-    struct fd *fd = adhoc_fd_create(&proc_ns_fdops);
-    if (fd == NULL)
-        return ERR_PTR(_ENOMEM);
-    fd->stat.mode = S_IFREG | 0444;
-    fd->stat.inode = proc_ns_types[i].inode;
-    return fd;
+    return proc_ns_fd_for_index((unsigned) i);
 }
 
 static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
