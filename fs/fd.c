@@ -28,6 +28,7 @@ struct fd *fd_create(const struct fd_ops *ops) {
     list_init(&fd->poll_fds);
     lock_init(&fd->poll_lock, "fd_create_poll\0");
     lock_init(&fd->lock, "fd_create\0");
+    lock_init(&fd->dir_pos_lock, "fd_dirpos\0");
     cond_init(&fd->cond);
     return fd;
 }

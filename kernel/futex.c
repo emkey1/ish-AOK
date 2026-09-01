@@ -1,3 +1,4 @@
+#include <stdatomic.h>
 #include "kernel/calls.h"
 #include <pthread.h>
 #include "futex.h"
@@ -624,17 +625,34 @@ static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2
         futex_put(futex1);
         return _EFAULT;
     }
-    int32_t oldval = (int32_t) *ptr;
+    // The operation on *uaddr2 is a read-modify-write and it has to be ATOMIC
+    // against the guest's own atomic instructions -- Linux does it with an
+    // arch cmpxchg loop (futex_atomic_op_inuser), and the whole point of
+    // WAKE_OP is to combine that update with a wake without a window in
+    // between. A plain load, compute, store lost updates to any guest thread
+    // touching the same word: measured 594 lost out of 40000 with one thread
+    // doing atomic adds and another doing WAKE_OP adds, where Linux loses
+    // none. The emulator implements guest atomics with host atomics on this
+    // same memory, so a host compare-exchange loop here interlocks with them.
+    _Atomic int32_t *aptr = (_Atomic int32_t *) ptr;
+    int32_t oldval = atomic_load_explicit(aptr, memory_order_relaxed);
     int32_t newval;
-    switch (op) {
-        case FUTEX_OP_SET_:  newval = oparg; break;
-        case FUTEX_OP_ADD_:  newval = oldval + oparg; break;
-        case FUTEX_OP_OR_:   newval = oldval | oparg; break;
-        case FUTEX_OP_ANDN_: newval = oldval & ~oparg; break;
-        default: /* FUTEX_OP_XOR_, the only value left after the range check above */
-                              newval = oldval ^ oparg; break;
+    if (op == FUTEX_OP_SET_) {
+        oldval = atomic_exchange_explicit(aptr, oparg, memory_order_acq_rel);
+        newval = oparg;
+    } else {
+        do {
+            switch (op) {
+                case FUTEX_OP_ADD_:  newval = oldval + oparg; break;
+                case FUTEX_OP_OR_:   newval = oldval | oparg; break;
+                case FUTEX_OP_ANDN_: newval = oldval & ~oparg; break;
+                default: /* FUTEX_OP_XOR_, the only value left after the check above */
+                                     newval = oldval ^ oparg; break;
+            }
+        } while (!atomic_compare_exchange_weak_explicit(aptr, &oldval, newval,
+                                                        memory_order_acq_rel,
+                                                        memory_order_relaxed));
     }
-    *ptr = (dword_t) newval;
     mem_read_unlock_quiesce_aware(current->mem);
 
     unsigned woken = 0;

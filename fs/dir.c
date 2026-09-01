@@ -137,6 +137,14 @@ int_t sys_getdents_common(fd_t f, guest_addr_t dirents, dword_t count,
 
     dword_t orig_count = count;
 
+    // One getdents at a time on this descriptor. The loop below is a
+    // read-modify-write of the stream position -- tell, read, tell -- and two
+    // threads sharing the fd interleaved it: entries came back twice and
+    // others were skipped. Measured on a 400-entry directory read by four
+    // threads: 37 duplicates and one lost entry, where Linux delivers every
+    // entry exactly once to exactly one caller.
+    lock(&fd->dir_pos_lock, 0);
+
     if (fd->ops->readdir_begin)
         fd->ops->readdir_begin(fd);
 
@@ -213,6 +221,7 @@ int_t sys_getdents_common(fd_t f, guest_addr_t dirents, dword_t count,
 out:
     if (fd->ops->readdir_end)
         fd->ops->readdir_end(fd);
+    unlock(&fd->dir_pos_lock);
     return err;
 }
 

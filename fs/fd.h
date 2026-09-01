@@ -320,6 +320,16 @@ struct fd {
     // these are used for a variety of things related to the fd
     lock_t lock;
     cond_t cond;
+
+    // Serializes getdents on this descriptor. A directory read is a
+    // read-modify-write of the stream position -- tell, read, tell -- and two
+    // threads sharing the fd interleaved it, so entries came back twice and
+    // others were skipped entirely. Linux holds f_pos_lock across the whole
+    // call for exactly this.
+    //
+    // Separate from `lock` above because tmpfs_readdir takes that one itself
+    // to guard its own dir_pos, and this has to wrap the readdir call.
+    lock_t dir_pos_lock;
 };
 
 typedef sdword_t fd_t;

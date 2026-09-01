@@ -733,9 +733,30 @@ void realfs_seekdir(struct fd *fd, unsigned long ptr) {
 }
 
 off_t realfs_lseek(struct fd *fd, off_t offset, int whence) {
-    if (fd->dir != NULL && whence == LSEEK_SET) {
-        realfs_seekdir(fd, offset);
-        return offset;
+    // A directory's position is a COOKIE, not a byte offset: it is whatever
+    // the last getdents d_off said, and the only thing it is good for is
+    // being handed back. SEEK_SET already did that; SEEK_CUR fell through to
+    // the host lseek on the underlying descriptor, which knows nothing about
+    // the DIR stream and answered with a byte offset (INT32_MAX in practice).
+    //
+    // A caller that saves its place with lseek(dirfd, 0, SEEK_CUR) and
+    // restores it later -- which is how a directory walk is resumed, and what
+    // seekdir(3) is built on -- got a number that meant nothing, and restoring
+    // it moved the stream somewhere unrelated.
+    if (fd->dir != NULL) {
+        if (whence == LSEEK_SET) {
+            realfs_seekdir(fd, offset);
+            return offset;
+        }
+        if (whence == LSEEK_CUR) {
+            off_t cur = (off_t) realfs_telldir(fd);
+            if (offset == 0)
+                return cur;
+            // A nonzero SEEK_CUR is only meaningful against a cookie the
+            // caller already has; arithmetic on one is not, so it is refused
+            // rather than silently landing somewhere.
+            return _EINVAL;
+        }
     }
 
     if (whence == LSEEK_DATA || whence == LSEEK_HOLE) {
