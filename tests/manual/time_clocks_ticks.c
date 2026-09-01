@@ -45,6 +45,23 @@
 #include <sys/wait.h>
 #include <time.h>
 
+#include <sys/syscall.h>
+#include <signal.h>
+#include <string.h>
+// i386's syscall table predates 64-bit time_t, so musl there defines only the
+// *_time64 numbers for the clock calls -- SYS_clock_gettime and
+// SYS_clock_getres do not exist -- while its struct timespec already has a
+// 64-bit tv_sec. The plain 32-bit numbers (SYS_clock_gettime32) are therefore
+// the WRONG ones to pair with it: the kernel would read a 32-bit timespec out
+// of a 64-bit one. Alias to the *_time64 numbers, which is what musl itself
+// issues on that ABI. Same reasoning as timer_conventions.c.
+#ifndef SYS_clock_gettime
+#define SYS_clock_gettime SYS_clock_gettime64
+#endif
+#ifndef SYS_clock_getres
+#define SYS_clock_getres SYS_clock_getres_time64
+#endif
+
 #include "test_common.h"
 
 #ifndef CLOCK_REALTIME_ALARM
@@ -216,6 +233,68 @@ int main(int argc, char **argv) {
         errno = 0;
         int r = clock_getcpuclockid(999999, &cid);
         ck("  and a pid that does not exist fails", r != 0, 1);
+    }
+
+    // ---- the DYNAMIC cpu-clock encoding, reached without the library ------
+    //
+    // These have to be raw syscalls. musl passes the plain
+    // CLOCK_PROCESS_CPUTIME_ID constant straight through, so on an Alpine root
+    // nothing above ever sends the kernel the dynamic form -- while glibc
+    // turns the same constant into MAKE_PROCESS_CPUCLOCK(0, SCHED) first:
+    // 0xfffffffa (-6) for the process, 0xfffffffe (-2) per-thread. The kernel
+    // decoded those for clock_gettime but not for timer_create or a NULL
+    // clock_getres, so every CPU-time timer a glibc program created came back
+    // EINVAL and clock_getcpuclockid came back EFAULT -- on a Devuan guest,
+    // invisibly to any suite run only on Alpine.
+    {
+        const int PROC_CLK = -6;    // pid 0, process-wide
+        const int THRD_CLK = -2;    // pid 0, this thread
+        struct timespec ts;
+
+        errno = 0;
+        ck("dynamic process cpu-clock reads",
+           syscall(SYS_clock_gettime, PROC_CLK, &ts) < 0 ? errno : 0, 0);
+        errno = 0;
+        ck("dynamic thread cpu-clock reads",
+           syscall(SYS_clock_gettime, THRD_CLK, &ts) < 0 ? errno : 0, 0);
+
+        // clock_getres(2): "if res is NULL, the resolution is not returned" --
+        // so a NULL is a pure "is this clock usable?" question, and it is
+        // exactly how the C library validates an id it just computed.
+        errno = 0;
+        ck("clock_getres(dynamic, NULL) is legal",
+           syscall(SYS_clock_getres, PROC_CLK, NULL) < 0 ? errno : 0, 0);
+        errno = 0;
+        ck("clock_getres(CLOCK_MONOTONIC, NULL) too",
+           syscall(SYS_clock_getres, CLOCK_MONOTONIC, NULL) < 0 ? errno : 0, 0);
+
+        // ...and a timer can be built on one, which is what glibc's
+        // timer_create(CLOCK_PROCESS_CPUTIME_ID, ...) actually asks for.
+        struct sigevent sev;
+        memset(&sev, 0, sizeof sev);
+        sev.sigev_notify = SIGEV_SIGNAL;
+        sev.sigev_signo = SIGALRM;
+        int tid = 0;
+        errno = 0;
+        if (syscall(SYS_timer_create, PROC_CLK, &sev, &tid) < 0) {
+            ck("timer_create on a dynamic process cpu-clock", errno, 0);
+        } else {
+            ck("timer_create on a dynamic process cpu-clock", 0, 0);
+            syscall(SYS_timer_delete, tid);
+        }
+        errno = 0;
+        if (syscall(SYS_timer_create, THRD_CLK, &sev, &tid) < 0) {
+            ck("timer_create on a dynamic thread cpu-clock", errno, 0);
+        } else {
+            ck("timer_create on a dynamic thread cpu-clock", 0, 0);
+            syscall(SYS_timer_delete, tid);
+        }
+
+        // Another process's CPU clock is not something a timer may name.
+        errno = 0;
+        int other = (int) (~(pid_t) 999999 << 3) | 2;
+        ck("  but not another process's",
+           syscall(SYS_timer_create, other, &sev, &tid) < 0 ? 1 : 0, 1);
     }
 
     return finish_suite("time_clocks_ticks");

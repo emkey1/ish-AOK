@@ -48,12 +48,26 @@ static int cpuclock_gettime(pid_t_ pid, bool perthread, struct timespec *ts) {
     // not recursive, so holding it across the call deadlocks the caller
     // against itself -- which wedged any process that asked for a CPU clock,
     // including the one asking on its own behalf.
-    struct task *task = pid_get_task_ref(pid);
+    // pid 0 names the CALLER, exactly as MAKE_PROCESS_CPUCLOCK(0, ...) does on
+    // Linux -- and that is the form the C library actually uses.
+    // clock_getcpuclockid(0) builds -6 (process) or -2 (per-thread) and then
+    // validates it with clock_getres, so pid_get_task_ref(0) finding no task
+    // made both come back ESRCH. Measured against Devuan 6 / glibc 2.41, where
+    // clock_getcpuclockid(0) returns -6 and reads fine.
+    struct task *task;
+    bool borrowed = false;
+    if (pid == 0) {
+        task = current;
+    } else {
+        task = pid_get_task_ref(pid);
+        borrowed = true;
+    }
     if (task == NULL)
         return _ESRCH;
     struct rusage_ rusage = perthread ? rusage_get_task(task)
                                       : rusage_get_group_of(task->group);
-    task_ref_cnt_mod(task, -1);
+    if (borrowed)
+        task_ref_cnt_mod(task, -1);
     int64_t usec = (int64_t) rusage.utime.sec * 1000000 + rusage.utime.usec
                  + (int64_t) rusage.stime.sec * 1000000 + rusage.stime.usec;
     ts->tv_sec = usec / 1000000;
@@ -712,7 +726,15 @@ static dword_t sys_clock_getres_guest_abi(dword_t clock, guest_addr_t res_addr, 
             return cpuclock_err;
         res.tv_sec = 0;
         res.tv_nsec = 1;
-        if (write_guest_timespec_abi(abi, res_addr, &res))
+        // A NULL res is legal: clock_getres(2) says "if res is NULL, the
+        // resolution is not returned", and the call becomes a pure "is this
+        // clock usable?" question. That is precisely how the C library uses
+        // it -- glibc's clock_getcpuclockid computes the dynamic id and then
+        // validates it with clock_getres(id, NULL) -- so faulting on the NULL
+        // made clock_getcpuclockid fail with EFAULT on every glibc guest.
+        // Verified against Devuan 6 / glibc 2.41, where clock_getres(-6, NULL)
+        // returns 0.
+        if (res_addr != 0 && write_guest_timespec_abi(abi, res_addr, &res))
             return _EFAULT;
         return 0;
     }
@@ -722,7 +744,7 @@ static dword_t sys_clock_getres_guest_abi(dword_t clock, guest_addr_t res_addr, 
     int err = clock_getres(clock_id, &res);
     if (err < 0)
         return errno_map();
-    if (write_guest_timespec_abi(abi, res_addr, &res))
+    if (res_addr != 0 && write_guest_timespec_abi(abi, res_addr, &res))
         return _EFAULT;
     return 0;
 }
@@ -745,14 +767,33 @@ dword_t sys_clock_getres_time64(dword_t clock, addr_t res_addr) {
 
 dword_t sys_clock_getres_time64_guest(dword_t clock, guest_addr_t res_addr) {
     STRACE("clock_getres_time64(%d, %#x)", clock, res_addr);
-    clockid_t clock_id;
-    if (clockid_to_real(clock, &clock_id))
-        return _EINVAL;
-
+    // This is a SECOND body, not a wrapper, so both of the fixes in
+    // sys_clock_getres_guest_abi have to exist here too -- and on i386 this is
+    // the one that runs. musl there defines only the *_time64 numbers for the
+    // clock calls, so every i386 clock_getres arrives at this entry and not
+    // the one above.
     struct timespec res;
-    int err = clock_getres(clock_id, &res);
-    if (err < 0)
-        return errno_map();
+    pid_t_ cpuclock_pid;
+    bool cpuclock_perthread;
+    if (cpuclock_decode(clock, &cpuclock_pid, &cpuclock_perthread)) {
+        struct timespec ignored;
+        int cpuclock_err = cpuclock_gettime(cpuclock_pid, cpuclock_perthread, &ignored);
+        if (cpuclock_err < 0)
+            return cpuclock_err;
+        res.tv_sec = 0;
+        res.tv_nsec = 1;
+    } else {
+        clockid_t clock_id;
+        if (clockid_to_real(clock, &clock_id))
+            return _EINVAL;
+        int err = clock_getres(clock_id, &res);
+        if (err < 0)
+            return errno_map();
+    }
+    // NULL means "do not return the resolution", which makes the call a pure
+    // validity check -- see the comment in sys_clock_getres_guest_abi.
+    if (res_addr == 0)
+        return 0;
     struct timespec64_ t = timespec_to_guest64(res);
     if (user_put(res_addr, t))
         return _EFAULT;
@@ -1585,9 +1626,30 @@ static int_t sys_timer_create_guest_abi(dword_t clock, guest_addr_t sigevent_add
     if (time_warning_trace_enabled())
         printk("WARNING: timer_create pid=%d tgid=%d comm=%s clock=%u sigevent=%#x timer_addr=%#x\n",
                current->pid, current->tgid, current->comm, clock, sigevent_addr, timer_addr);
+    // The C library does not hand timer_create the plain CLOCK_*_CPUTIME_ID
+    // constant -- it hands over the DYNAMIC cpu-clock encoding, the same one
+    // clock_getcpuclockid returns. glibc turns CLOCK_PROCESS_CPUTIME_ID into
+    // 0xfffffffa (-6) and CLOCK_THREAD_CPUTIME_ID into 0xfffffffe (-2) before
+    // the syscall; strace on Devuan shows exactly that. clockid_to_real knows
+    // only the constants, so every CPU-time timer a glibc program created came
+    // back EINVAL -- while the same call through musl, which passes the
+    // constant, worked. That is why the Alpine test roots never saw it and the
+    // Devuan guest did.
     clockid_t real_clockid;
-    if (clockid_to_real(clock, &real_clockid))
+    pid_t_ cpu_pid;
+    bool cpu_perthread;
+    if (cpuclock_decode(clock, &cpu_pid, &cpu_perthread)) {
+        // Only the caller's own clocks. Linux allows a timer on another
+        // process's CPU clock only for a process you already control, and
+        // nothing in the guest asks for it; EINVAL is what it answers when the
+        // clock names someone else.
+        if (cpu_pid != 0 && cpu_pid != current->tgid && cpu_pid != current->pid)
+            return _EINVAL;
+        real_clockid = cpu_perthread ? CLOCK_THREAD_CPUTIME_ID
+                                     : CLOCK_PROCESS_CPUTIME_ID;
+    } else if (clockid_to_real(clock, &real_clockid)) {
         return _EINVAL;
+    }
     struct sigevent_ sigev = {};
     // timer_create(2): "If evp is NULL ... the default sigevent is
     // sigev_notify = SIGEV_SIGNAL, sigev_signo = SIGALRM, and sigev_value.
