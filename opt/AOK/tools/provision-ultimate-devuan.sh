@@ -163,13 +163,27 @@ log "Locale -> C.UTF-8"
 # Devuan/Debian minirootfs images ship no locale set, so plain UTF-8-aware
 # tools (less, python3, git, man-db) fall back to the C/POSIX locale and mangle
 # non-ASCII. glibc on this base has C.UTF-8 built in (no locale-gen needed);
-# set it as the system default via the standard Debian /etc/default/locale and
-# /etc/environment (PAM reads both) so it applies system-wide, not just to
-# interactive shells.
+# the locale just has to be named.
+#
+# /etc/default/locale is where Debian keeps it, and it is enough: every PAM
+# service that matters reads it by name --
+#
+#     /etc/pam.d/login:  session required pam_env.so readenv=1 envfile=/etc/default/locale
+#     /etc/pam.d/su, /etc/pam.d/sshd, /etc/pam.d/cron:  the same
+#
+# This used to write the locale into /etc/environment as well, on the theory
+# that pam_env reads that one with no configuration. It does -- but Debian
+# treats locale variables there as deprecated and complains about each one at
+# every boot, from cron's init script of all places:
+#
+#     /etc/environment has been deprecated for locale information;
+#       use /etc/default/locale for LANG=C.UTF-8 instead ... (warning).
+#
+# (/etc/init.d/cron, and a stock Devuan install leaves /etc/environment empty
+# for exactly this reason.) It also set LC_ALL, which outranks every
+# per-category variable and would have stopped anyone ever setting, say,
+# LC_TIME on their own machine. Neither belongs here.
 printf 'LANG=C.UTF-8\n' > /etc/default/locale
-if ! grep -q '^LANG=' /etc/environment 2>/dev/null; then
-    printf 'LANG=C.UTF-8\nLC_ALL=C.UTF-8\n' >> /etc/environment
-fi
 update-locale LANG=C.UTF-8 2>/dev/null || true
 # Both files above are PAM's, and ssh does not go through PAM here: Excalibur's
 # stock sshd_config leaves UsePAM at the upstream default of "no" (`sshd -T`
@@ -185,7 +199,7 @@ cat > /etc/profile.d/00-aok-locale.sh <<'LOCALESH'
 [ -n "${LANG:-}" ] || export LANG=C.UTF-8
 LOCALESH
 chmod 0644 /etc/profile.d/00-aok-locale.sh
-note "LANG=C.UTF-8 (via /etc/default/locale, /etc/environment, /etc/profile.d)"
+note "LANG=C.UTF-8 (via /etc/default/locale, /etc/profile.d)"
 
 # ===========================================================================
 log "machine-id"

@@ -219,11 +219,20 @@ fi
 # It takes two mechanisms to name it, because the two ways into these images
 # build their environment differently:
 #
-#   /etc/default/locale + /etc/environment  reach anything that goes through
-#     PAM -- pam_env reads /etc/environment with no configuration at all and
-#     /etc/default/locale through the explicit envfile= line in
-#     /etc/pam.d/{login,su}. That is the app's default "/bin/login -f root"
-#     launch command.
+#   /etc/default/locale  reaches anything that goes through PAM: every
+#     service that matters names the file explicitly, with
+#     `pam_env.so readenv=1 envfile=/etc/default/locale` in
+#     /etc/pam.d/{login,su,sshd,cron}. That covers the app's default
+#     "/bin/login -f root" launch command.
+#
+#     NOT /etc/environment, though pam_env reads that one unconfigured.
+#     Debian considers locale variables there deprecated and says so at every
+#     boot, once per variable, out of cron's init script:
+#
+#       /etc/environment has been deprecated for locale information;
+#         use /etc/default/locale for LANG=C.UTF-8 instead ... (warning).
+#
+#     A stock Devuan install leaves /etc/environment empty for that reason.
 #
 #   /etc/profile.d/00-aok-locale.sh  reaches everything else, and ssh is
 #     "everything else": Excalibur's stock sshd_config leaves UsePAM at the
@@ -236,10 +245,9 @@ fi
 #
 # Only LANG is set, never LC_ALL: LC_ALL outranks every per-category variable,
 # so seeding it would stop a user ever setting, say, LC_TIME=en_GB.UTF-8. A
-# LANG line here also settles the question for the whole image, because
-# provision-ultimate-devuan.sh's own locale step appends to /etc/environment
-# only when `grep -q '^LANG='` finds nothing.
-LOCALE_HOOK='mkdir -p "$1/etc/default" "$1/etc/profile.d"; printf "LANG=C.UTF-8\n" > "$1/etc/default/locale"; grep -q "^LANG=" "$1/etc/environment" 2>/dev/null || printf "LANG=C.UTF-8\n" >> "$1/etc/environment"; printf "%s\n" "# iSH-AOK: default to a UTF-8 locale when nothing else named one." "# Reaches sessions PAM never touches -- ssh (stock sshd has UsePAM no)." "[ -n \"\${LANG:-}\" ] || export LANG=C.UTF-8" > "$1/etc/profile.d/00-aok-locale.sh"; chmod 0644 "$1/etc/profile.d/00-aok-locale.sh"; true'
+# LANG line here also settles the question for the whole image:
+# provision-ultimate-devuan.sh writes the same file and the same value.
+LOCALE_HOOK='mkdir -p "$1/etc/default" "$1/etc/profile.d"; printf "LANG=C.UTF-8\n" > "$1/etc/default/locale"; printf "%s\n" "# iSH-AOK: default to a UTF-8 locale when nothing else named one." "# Reaches sessions PAM never touches -- ssh (stock sshd has UsePAM no)." "[ -n \"\${LANG:-}\" ] || export LANG=C.UTF-8" > "$1/etc/profile.d/00-aok-locale.sh"; chmod 0644 "$1/etc/profile.d/00-aok-locale.sh"; true'
 
 build_one() {  # <deb-arch>
     arch="$1"

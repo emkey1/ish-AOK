@@ -130,8 +130,10 @@ log "Locale -> C.UTF-8"
 # /etc/environment (read by busybox login for both interactive and
 # non-interactive sessions) so it's not limited to shells that source
 # /etc/profile.d.
+# LANG only, never LC_ALL: LC_ALL outranks every per-category variable, so
+# seeding it would stop anyone setting, say, LC_TIME=en_GB.UTF-8 afterwards.
 if ! grep -q '^LANG=' /etc/environment 2>/dev/null; then
-    printf 'LANG=C.UTF-8\nLC_ALL=C.UTF-8\n' >> /etc/environment
+    printf 'LANG=C.UTF-8\n' >> /etc/environment
 fi
 note "LANG=C.UTF-8 (via /etc/environment)"
 

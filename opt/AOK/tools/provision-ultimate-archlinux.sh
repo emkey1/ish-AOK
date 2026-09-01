@@ -316,8 +316,10 @@ log "Locale -> C.UTF-8"
 if ! grep -q '^LANG=' /etc/locale.conf 2>/dev/null; then
     printf 'LANG=C.UTF-8\n' >> /etc/locale.conf
 fi
+# LANG only, never LC_ALL: LC_ALL outranks every per-category variable, so
+# seeding it would stop anyone setting, say, LC_TIME=en_GB.UTF-8 afterwards.
 if ! grep -q '^LANG=' /etc/environment 2>/dev/null; then
-    printf 'LANG=C.UTF-8\nLC_ALL=C.UTF-8\n' >> /etc/environment
+    printf 'LANG=C.UTF-8\n' >> /etc/environment
 fi
 note "LANG=C.UTF-8 (via /etc/locale.conf, /etc/environment)"
 
