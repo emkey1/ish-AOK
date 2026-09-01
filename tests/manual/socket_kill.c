@@ -1,5 +1,5 @@
 // A task blocked in recv(2) or send(2) must die promptly on a fatal signal.
-// Under iSH it could survive kill -9 forever, the same defect accept_kill.c
+// Under AOK it could survive kill -9 forever, the same defect accept_kill.c
 // covers for accept(2) and the rest of the bug class that fix deliberately
 // left open.
 //
@@ -41,7 +41,7 @@
 //
 // A/B: unfixed fails the parallel rounds (7 of 8 parked tasks survive SIGKILL
 // on both AF_UNIX and TCP); fixed passes. The semantic half also passes on
-// real Linux, where it is checking that iSH still behaves like the kernel.
+// real Linux, where it is checking that AOK still behaves like the kernel.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -241,7 +241,7 @@ static void test_parallel_kill(int sig, int unix_domain, enum park_kind kind,
 // ----------------------------------------------------- semantics guards
 
 // A blocking send on a stream must transmit the whole request. Once the host
-// fd is nonblocking the host returns a partial count, so iSH has to finish the
+// fd is nonblocking the host returns a partial count, so AOK has to finish the
 // job itself; getting this wrong silently truncates guest writes.
 static void test_blocking_send_is_complete(int use_write, const char *label) {
     int sv[2];
@@ -344,7 +344,7 @@ static void test_blocking_writev_is_complete(void) {
 
 // MSG_WAITALL must fill the buffer even when the data dribbles in. Passing the
 // flag to a nonblocking host socket returns EAGAIN instead of a short read, so
-// iSH strips it and accumulates; a mistake here hangs or short-reads.
+// AOK strips it and accumulates; a mistake here hangs or short-reads.
 static void test_waitall_fills(void) {
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
@@ -423,7 +423,7 @@ static long ms_since(const struct timespec *start) {
 }
 
 // SO_RCVTIMEO/SO_SNDTIMEO were enforced by the host kernel only because the
-// host call was the blocking one. With the wait emulated they are iSH's to
+// host call was the blocking one. With the wait emulated they are AOK's to
 // honor, and a missed deadline means an unbounded block -- so both checks run
 // in a child under a bounded reap. Without that, the failure they are built to
 // catch takes out the whole suite with the watchdog instead of naming itself:

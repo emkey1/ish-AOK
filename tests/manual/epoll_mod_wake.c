@@ -1,6 +1,6 @@
 // epoll_mod_wake: arming an already-ready emulated fd (eventfd) via
 // EPOLL_CTL_MOD must wake a thread already blocked in epoll_wait on that set.
-// iSH bug: emulated fds have no host-side wait queue and no periodic rescan, and
+// AOK bug: emulated fds have no host-side wait queue and no periodic rescan, and
 // poll_mod_fd never poked the notify pipe -- so the blocked epoll_wait slept
 // until its timeout instead of waking on the MOD. This is the lost wakeup that
 // wedged syslog-ng/ivykis (a worker re-arms an eventfd to notify the writer

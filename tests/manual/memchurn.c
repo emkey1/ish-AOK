@@ -1,5 +1,5 @@
 // memchurn — models musl mallocng's mmap/munmap churn in a multithreaded
-// process, the workload that makes iSH's mem-quiesce barrier "horrific".
+// process, the workload that makes AOK's mem-quiesce barrier "horrific".
 //
 //   ./memchurn <allocators> <workers> <iters> [forkers]
 //

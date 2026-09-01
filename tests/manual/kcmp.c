@@ -1,6 +1,6 @@
 // kcmp(2): compare whether two processes share a kernel resource. systemd
 // uses KCMP_FILE heavily (fd-store dedup, serialization across re-exec);
-// iSH stubbed the syscall, so PID 1 logged an "arm64 stub syscall 272"
+// AOK stubbed the syscall, so PID 1 logged an "arm64 stub syscall 272"
 // ERROR line for every probe and systemd fell back to treating every fd as
 // distinct. Linux's contract for the comparison types is an ordering:
 // 0 == same object, 1/2 give a consistent (obfuscated) order, so equality

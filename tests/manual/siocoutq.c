@@ -1,11 +1,11 @@
 // Linux SIOCOUTQ (== TIOCOUTQ, 0x5411) on a socket reports the number of
-// bytes still queued in the send buffer. iSH's sock_ioctl had no handler for
+// bytes still queued in the send buffer. AOK's sock_ioctl had no handler for
 // it, so it fell through to realfs_ioctl and returned ENOTTY.
 //
 // dbus-broker is built on this ioctl: socket_dispatch_write()
 // (src/dbus/socket.c) calls ioctl(fd, SIOCOUTQ) whenever a connection has
 // fd-carrying messages in its pending queue, and treats ANY failure as fatal
-// (error_origin -> main-loop exit 1). Under iSH that meant the system bus
+// (error_origin -> main-loop exit 1). Under AOK that meant the system bus
 // died with exit-code 1 the first time a connection's output backed up --
 // which is exactly what systemd-logind's session-scope creation traffic does
 // on every login (ssh or console): pam_systemd CreateSession -> logind

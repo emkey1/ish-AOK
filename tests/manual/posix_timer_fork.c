@@ -1,5 +1,5 @@
 // posix_timer_fork.c — POSIX timers (timer_create) must NOT be inherited across
-// fork(). iSH's tgroup_copy shallow-copied the parent's posix_timers[] array
+// fork(). AOK's tgroup_copy shallow-copied the parent's posix_timers[] array
 // (including the internal struct timer * pointers), so a forked child that
 // called timer_delete on the inherited id freed a timer the parent still owned
 // -- a double free / use-after-free of the running timer thread that crashed
@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
         // succeed and free the parent's timer. (Before the fix this returned
         // success, double-freed, and crashed the whole emulator.) Test the
         // non-zero return rather than a specific errno -- musl's timer_delete
-        // wrapper doesn't normalize errno uniformly across iSH's return path.
+        // wrapper doesn't normalize errno uniformly across AOK's return path.
         int deleted_inherited = (timer_delete(t) == 0);
         // The child can create and delete its OWN timer on the copied group.
         timer_t ct;

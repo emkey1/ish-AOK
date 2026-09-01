@@ -1,5 +1,5 @@
 // mount_flags.c — self-checking regression lock for the mount(2) flag work.
-// Asserts the behavior iSH now implements:
+// Asserts the behavior AOK now implements:
 //
 //   - MS_BIND creates a bind that shares the source's backing (reads and writes
 //     are visible through both the source and the bind target)
@@ -7,7 +7,7 @@
 //   - statfs/fstatfs on a bind report the origin's filesystem, not EBADF
 //   - "ignored" option flags (MS_REC/MS_SILENT/...) don't break a valid mount
 //   - propagation-only changes (MS_PRIVATE/SHARED/SLAVE/UNBINDABLE) are accepted
-//     no-ops (iSH has no mount namespaces, so the change has no observable effect)
+//     no-ops (AOK has no mount namespaces, so the change has no observable effect)
 //   - MS_MOVE relocates an existing mount
 //   - a genuinely-unknown flag is still rejected with EINVAL
 //
@@ -172,7 +172,7 @@ int main(int argc, char **argv) {
     is_ok("move", mount("dst", "moved", NULL, MS_MOVE, NULL));
     check("move.reads", file_has("moved/file", "hello"));
 
-    // A genuinely-unknown flag is still rejected (iSH only; real Linux ignores it).
+    // A genuinely-unknown flag is still rejected (AOK only; real Linux ignores it).
     if (access("/proc/ish", F_OK) == 0)
         eq_errno("unknown_flag.rejected", mount("src", "dst4", NULL, (unsigned long) 1 << 29, NULL), EINVAL);
 

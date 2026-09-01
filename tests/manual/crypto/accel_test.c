@@ -1,4 +1,4 @@
-// Guest test for the iSH crypto accelerator (ISH_SYS_AEAD syscall):
+// Guest test for the AOK crypto accelerator (ISH_SYS_AEAD syscall):
 //  1. RFC 8439 2.8.2 vector (bit-exact correctness)
 //  2. differential vs the guest's own OpenSSL over random inputs
 //  3. throughput: accel syscall vs emulated OpenSSL EVP

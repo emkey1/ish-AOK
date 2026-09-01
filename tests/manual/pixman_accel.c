@@ -1,4 +1,4 @@
-// Differential test for the iSH pixman accelerator (ISH_SYS_PIXOP syscall,
+// Differential test for the AOK pixman accelerator (ISH_SYS_PIXOP syscall,
 // kernel/ish_accel_pix.c): every FILL/COPY/OVER result the accelerator
 // produces must be bit-identical to real pixman's own composite/fill, or
 // the accelerator must decline (a negative errno) rather than approximate.
@@ -317,7 +317,7 @@ static void test_composite_mask(int src_opaque, int dst_opaque,
     free_canvas(&dst_oracle);
 }
 
-// Probing for ISH_SYS_PIXOP is not simply "call it and read errno": iSH
+// Probing for ISH_SYS_PIXOP is not simply "call it and read errno": AOK
 // answers a syscall number it doesn't know with SIGSYS, not real Linux's
 // ENOSYS, and 0xacc1 is unknown to any guest ABI the emulator hasn't wired it
 // into (it was arm64/riscv64-only until the x86 ABIs were added alongside this

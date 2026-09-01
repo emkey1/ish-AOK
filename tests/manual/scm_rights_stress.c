@@ -1,4 +1,4 @@
-// AF_UNIX SCM_RIGHTS fd-passing must never desync iSH's two-channel
+// AF_UNIX SCM_RIGHTS fd-passing must never desync AOK's two-channel
 // bookkeeping (a host "sentinel" fd carrying the message + an internal
 // struct-scm queue carrying the real guest fds). A desync where the host
 // sentinel arrives with no queued scm used to abort the WHOLE emulator via
@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
     close(cli); close(srv); close(lsn); unlink(path);
 
     // 4) connected DGRAM socketpair -- exercises the in-band cred-header
-    // path (iSH prepends a sender-cred header to every unix datagram) while
+    // path (AOK prepends a sender-cred header to every unix datagram) while
     // ALSO passing SCM_RIGHTS, the combination most likely to desync the
     // fd-passing accounting. Interleave fd and plain-data datagrams.
     int dp[2];
@@ -204,7 +204,7 @@ int main(int argc, char **argv) {
     // dbus/systemd do (peek to size the message, then read it for real).
     // The peek must not consume the sender's message, and the following real
     // recv must still deliver its data. On Linux each peek also duplicates
-    // the fds into the receiver; iSH need only avoid crashing and deliver the
+    // the fds into the receiver; AOK need only avoid crashing and deliver the
     // data intact on the real recv.
     int pk[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pk) != 0) { perror("socketpair peek"); return 1; }

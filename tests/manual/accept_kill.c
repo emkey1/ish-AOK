@@ -1,5 +1,5 @@
 // A task blocked in accept(2) on a listening socket with no incoming
-// connection must die promptly on a fatal signal. Under iSH it could survive
+// connection must die promptly on a fatal signal. Under AOK it could survive
 // kill -9 forever: `nc -l -p 9999` sat in state S with SIGKILL pending
 // (/proc/PID/status SigPnd bit 9 set, SigBlk/SigIgn/SigCgt all zero) and
 // nothing could reap it short of killing the whole emulator.
@@ -17,7 +17,7 @@
 //      and socket_blocking_syscall_begin force-unblock it), and with no unwind
 //      point armed the wake depended entirely on the host poll() returning
 //      EINTR. Nothing else in the tree relies on that.
-//   2. The pending-signal check and the sleep were not atomic. iSH wakes a
+//   2. The pending-signal check and the sleep were not atomic. AOK wakes a
 //      blocked task by setting the pending bit and poking it with SIGUSR1
 //      (kernel/signal.c signal_wake_task). A poke landing between the
 //      accept() EAGAIN and the poll() ran a handler that did nothing, and the
