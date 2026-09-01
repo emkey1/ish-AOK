@@ -520,6 +520,42 @@ static BOOL ISHRunningAsIOSAppOnMac(void) {
     return nil;
 }
 
+// The row for the filesystem actually running as / is tinted, not merely
+// annotated. A subtitle among identical-looking subtitles is something you
+// read only if you already suspect the rows differ; the whole failure in
+// issue #575 was someone reasonably not suspecting that, tapping the running
+// root, and reading its disabled Delete button as "AOK cannot delete
+// filesystems" rather than "not this one".
+//
+// Green rather than the tint colour: this says "live", and it must not be
+// mistaken for selection or for the separate "default root" checkmark, which
+// marks a preference about the NEXT launch and is a different row as often as
+// not. Written as a dynamic provider so it resolves per trait collection --
+// a single literal colour legible on white is close to invisible on black.
+//
+// The values are picked against the grouped-cell background each mode actually
+// renders, measured from a screenshot rather than assumed: #FFFFFF in light
+// and #2C2C2E in dark. The dark one is the reason these are not simply a
+// colour and a darker version of it -- an earlier dark green sat at a 1.13
+// luminance ratio against its neighbours, which is a tint you find only once
+// you already know to look. These give roughly 1.31 (light) and 1.73 (dark),
+// and keep the subtitle above the WCAG AA 4.5 threshold on both.
+static UIColor *RootRowInUseBackgroundColor(void) {
+    return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+        return traits.userInterfaceStyle == UIUserInterfaceStyleDark
+            ? [UIColor colorWithRed:0.08 green:0.36 blue:0.19 alpha:1.0]
+            : [UIColor colorWithRed:0.76 green:0.92 blue:0.79 alpha:1.0];
+    }];
+}
+
+static UIColor *RootRowInUseAccentColor(void) {
+    return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+        return traits.userInterfaceStyle == UIUserInterfaceStyleDark
+            ? [UIColor colorWithRed:0.55 green:0.93 blue:0.65 alpha:1.0]
+            : [UIColor colorWithRed:0.03 green:0.40 blue:0.16 alpha:1.0];
+    }];
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     if ([self sectionShowsOfficialChoices:indexPath.section] || [self sectionShowsCommunityChoices:indexPath.section]) {
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"BundledRootChoice"];
@@ -591,22 +627,78 @@ static BOOL ISHRunningAsIOSAppOnMac(void) {
     // attempt already made, because only the mount table knows whether the
     // attempt actually succeeded. The mount point directory is created before
     // do_mount runs, so its existence proves nothing.
-    NSString *mountPoint = isDefaultRoot
+    //
+    // Which root is at / is bootedRoot, NOT defaultRoot. They are the same
+    // until the user picks a different default, and from then until the next
+    // launch the list said the newly-chosen root was mounted at / -- it isn't
+    // yet -- and filed the root actually running underneath them in with the
+    // ordinary ones under /AOK/roots. Every entry then reads "Mounted at ...",
+    // so the one that cannot be deleted looks exactly like the ones that can.
+    // That is how someone came to try deleting the filesystem they had booted
+    // from, and to conclude from the disabled button that AOK had no delete
+    // feature at all (issue #575).
+    //
+    // Falls back to defaultRoot only while bootedRoot is still nil, which is
+    // the pre-boot state; once the app has booted a root it is authoritative.
+    NSString *bootedRoot = Roots.instance.bootedRoot;
+    BOOL isBootedRoot = bootedRoot != nil
+        ? [rootName isEqualToString:bootedRoot]
+        : isDefaultRoot;
+    NSString *mountPoint = isBootedRoot
         ? @"/"
         : [@"/AOK/roots/" stringByAppendingString:rootName];
     BOOL mounted = mount_exists_at_point(mountPoint.UTF8String);
-    cell.detailTextLabel.text = mounted
-        ? [NSString stringWithFormat:@"Mounted at %@", mountPoint]
-        : nil;
+    // Say outright that this one is the running system and why it is the one
+    // entry that will not delete, rather than leaving the disabled button to
+    // be interpreted -- and colour the row so the difference is visible before
+    // anything is read at all.
+    //
+    // Both branches set every property the other one touches. These cells come
+    // from dequeueReusableCellWithIdentifier, so a tint applied here and not
+    // undone reappears on whichever ordinary root later inherits the cell --
+    // which would point at the wrong filesystem, a worse failure than the one
+    // being fixed. Keyed on isBootedRoot alone rather than (mounted &&
+    // isBootedRoot): if the running root ever fails to show up in the mount
+    // table, losing the warning is the last thing that should happen.
+    //
+    // The point sizes match the storyboard prototype (17 and 11); the bold
+    // weight and the accent are the only differences, so nothing reflows
+    // between the two states.
+    if (isBootedRoot) {
+        cell.backgroundColor = RootRowInUseBackgroundColor();
+        cell.textLabel.font = [UIFont boldSystemFontOfSize:17];
+        cell.detailTextLabel.font = [UIFont boldSystemFontOfSize:11];
+        cell.detailTextLabel.textColor = RootRowInUseAccentColor();
+        // A filled dot as well as the colour: the same distinction has to
+        // survive greyscale, and a colour-blind reader gets no cue from green.
+        cell.detailTextLabel.text =
+            @"\u25cf IN USE \u2014 mounted at / \u00b7 can't be deleted";
+    } else {
+        // secondarySystemGrouped, not nil: this is a grouped table, and a nil
+        // background is transparent rather than default -- the cell would lose
+        // its card and show the table's own backdrop through.
+        cell.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
+        cell.textLabel.font = [UIFont systemFontOfSize:17];
+        cell.detailTextLabel.font = [UIFont systemFontOfSize:11];
+        cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+        cell.detailTextLabel.text = mounted
+            ? [NSString stringWithFormat:@"Mounted at %@", mountPoint]
+            : nil;
+    }
 
     if (isDefaultRoot) {
         cell.accessibilityTraits |= UIAccessibilityTraitSelected;
     } else {
         cell.accessibilityTraits &= ~UIAccessibilityTraitSelected;
     }
-    cell.accessibilityLabel = mounted
-        ? [NSString stringWithFormat:@"%@, mounted at %@", rootName, mountPoint]
-        : [NSString stringWithFormat:@"%@, not mounted", rootName];
+    if (isBootedRoot)
+        cell.accessibilityLabel = [NSString stringWithFormat:
+            @"%@, in use, mounted at /, can't be deleted", rootName];
+    else if (mounted)
+        cell.accessibilityLabel = [NSString stringWithFormat:
+            @"%@, mounted at %@", rootName, mountPoint];
+    else
+        cell.accessibilityLabel = [NSString stringWithFormat:@"%@, not mounted", rootName];
     return cell;
 }
 
