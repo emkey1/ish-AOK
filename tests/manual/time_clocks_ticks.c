@@ -55,6 +55,9 @@
 // the WRONG ones to pair with it: the kernel would read a 32-bit timespec out
 // of a 64-bit one. Alias to the *_time64 numbers, which is what musl itself
 // issues on that ABI. Same reasoning as timer_conventions.c.
+#ifndef SYS_clock_nanosleep
+#define SYS_clock_nanosleep SYS_clock_nanosleep_time64
+#endif
 #ifndef SYS_clock_gettime
 #define SYS_clock_gettime SYS_clock_gettime64
 #endif
@@ -295,6 +298,30 @@ int main(int argc, char **argv) {
         int other = (int) (~(pid_t) 999999 << 3) | 2;
         ck("  but not another process's",
            syscall(SYS_timer_create, other, &sev, &tid) < 0 ? 1 : 0, 1);
+
+        // ...and a CPU-time SLEEP takes the dynamic form too. Absolute, with a
+        // target of zero, so it is already satisfied and returns at once --
+        // the point is that the id is ACCEPTED, not that time passes. Asking
+        // relatively here would hang: an idle process never finishes a
+        // CPU-time sleep, which is exactly what the cases further up assert.
+        struct timespec zero = { 0, 0 };
+        errno = 0;
+        ck("clock_nanosleep on a dynamic process cpu-clock",
+           syscall(SYS_clock_nanosleep, PROC_CLK, TIMER_ABSTIME, &zero, NULL) < 0 ? errno : 0, 0);
+
+        // A THREAD cpu clock is not sleepable -- a thread cannot wait for its
+        // own CPU time to advance while it is not running. Linux refuses it
+        // and so must we, whichever way the clock is spelled.
+        errno = 0;
+        ck("  but a thread cpu-clock is not sleepable",
+           syscall(SYS_clock_nanosleep, THRD_CLK, TIMER_ABSTIME, &zero, NULL) < 0 ? errno : 0, EINVAL);
+        // Not the same errno, though: Linux routes the CONSTANT through a
+        // different k_clock than the dynamic id, and thread_cpu_nsleep answers
+        // EOPNOTSUPP where posix_cpu_nsleep answers EINVAL. Measured, not
+        // assumed -- the oracle rejected the guess that they matched.
+        errno = 0;
+        ck("  and its constant name says ENOTSUP, not EINVAL",
+           syscall(SYS_clock_nanosleep, CLOCK_THREAD_CPUTIME_ID, TIMER_ABSTIME, &zero, NULL) < 0 ? errno : 0, EOPNOTSUPP);
     }
 
     return finish_suite("time_clocks_ticks");

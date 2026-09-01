@@ -390,9 +390,33 @@ static int host_sleep_interruptible(struct timespec req, struct timespec *rem) {
 
 static dword_t clock_nanosleep_common(dword_t clock, int_t flags, struct timespec req,
         guest_addr_t rem_addr, bool rem_time64) {
-    clockid_t clock_id;
-    if (clockid_to_real(clock, &clock_id))
+    // Decode the dynamic cpu-clock form BEFORE clockid_to_real, which knows
+    // only the plain constants and would reject it outright -- the same shape
+    // of bug as timer_create had. glibc turns CLOCK_PROCESS_CPUTIME_ID into
+    // the dynamic id before the syscall, so every CPU-time sleep a glibc
+    // program asked for returned EINVAL instead of sleeping, while the same
+    // call through musl worked. The CPU-clock wait further down already
+    // handles both spellings; it simply never got the chance.
+    clockid_t clock_id = 0;
+    pid_t_ dyn_pid;
+    bool dyn_perthread;
+    if (cpuclock_decode(clock, &dyn_pid, &dyn_perthread)) {
+        // Linux does not permit sleeping on a THREAD cpu clock -- a thread
+        // cannot wait for its own CPU time to advance while it is not running,
+        // and posix_cpu_nsleep refuses it. EINVAL, as there.
+        if (dyn_perthread)
+            return _EINVAL;
+    } else if (clockid_to_real(clock, &clock_id)) {
         return _EINVAL;
+    }
+    // ...and the two spellings do NOT give the same errno. Linux routes the
+    // constant through its own k_clock, whose nsleep is thread_cpu_nsleep and
+    // returns EOPNOTSUPP, while the dynamic per-thread id goes through
+    // posix_cpu_nsleep and returns EINVAL. Measured on Devuan 6 / Linux 6.12,
+    // which answers 95 here and 22 there; assuming they matched is what this
+    // comment exists to stop the next person doing.
+    if (clock == CLOCK_THREAD_CPUTIME_ID_)
+        return _EOPNOTSUPP;
     if (flags & ~TIMER_ABSTIME_)
         return _EINVAL;
     if (!timespec_is_valid(req))
