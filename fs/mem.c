@@ -204,6 +204,21 @@ void kmsg_notify_readers(void) {
 // A stream of the kernel log, shared with /proc/kmsg (fs/proc/root.c).
 // Positions are absolute -- see ish_log_read_at.
 ssize_t kmsg_stream_read(unsigned long *pos, void *buf, size_t bufsize, bool nonblock) {
+    // A zero-length read returns 0 at once. POSIX says so, every Linux driver
+    // implements it, and here it is load-bearing rather than pedantic: the
+    // loop below cannot terminate without it. ish_log_read_at can only ever
+    // copy zero bytes for a zero-length buffer, which this loop reads as
+    // "nothing new", so it waits -- and wakes immediately, because there IS
+    // something new -- and asks again, forever.
+    //
+    // rsyslogd probes /proc/kmsg with exactly this call at startup, and the
+    // spin sits inside kernel code with no syscall boundary in it, so no
+    // guest signal can land and the task cannot even be killed. Boot stopped
+    // there: rsyslogd never answered, and init gave up on it sixty seconds
+    // later having pinned a CPU the whole time.
+    if (bufsize == 0)
+        return 0;
+
     for (;;) {
         uint64_t at = *pos;
         uint64_t started_at = at;
@@ -244,6 +259,14 @@ int kmsg_stream_poll(unsigned long pos) {
 }
 
 static ssize_t kmsg_read(struct fd *fd, void *buf, size_t bufsize) {
+    // /dev/kmsg hands back one whole RECORD per read, so a buffer too small to
+    // hold one is a bad argument rather than an empty answer -- Linux answers
+    // EINVAL, and a zero-length buffer can never hold a record. Measured on
+    // Devuan, where the same read of /proc/kmsg returns 0 instead: /proc/kmsg
+    // is a byte stream and has nothing to complain about. The two share an
+    // implementation here, so the distinction lives at this end of it.
+    if (bufsize == 0)
+        return _EINVAL;
     return kmsg_stream_read(&fd->offset, buf, bufsize,
                             (fd->flags & O_NONBLOCK_) != 0);
 }

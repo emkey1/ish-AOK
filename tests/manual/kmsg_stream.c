@@ -81,6 +81,39 @@ int main(int argc, char **argv) {
         }
     }
 
+    // ---- a zero-length read answers at once, and never blocks -------------
+    //
+    // POSIX: read() with a count of zero "returns zero and has no other
+    // results". rsyslogd starts by doing exactly that to /proc/kmsg, and here
+    // it stopped a device booting: the stream's read loop could only ever copy
+    // zero bytes, read that as "nothing new", wait, wake immediately because
+    // there WAS something new, and go round again -- inside kernel code with
+    // no syscall boundary, so no signal could land and the task could not be
+    // killed. init gave up on rsyslogd sixty seconds later.
+    //
+    // The two nodes answer differently, and both answers are Devuan's:
+    // /proc/kmsg is a byte stream and has nothing to object to, while
+    // /dev/kmsg hands back one whole record per read and calls a buffer too
+    // small to hold one a bad argument.
+    {
+        // A watchdog well under the suite's, because the failure being
+        // guarded against is an unkillable spin: a child that hangs here has
+        // to be reaped by the alarm rather than waited for.
+        int fd = open("/proc/kmsg", O_RDONLY | O_NONBLOCK);
+        if (fd >= 0) {
+            char one;
+            ck("/proc/kmsg zero-length read returns 0", read(fd, &one, 0), 0);
+            close(fd);
+        }
+        fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK);
+        if (fd >= 0) {
+            char one;
+            ssize_t r = read(fd, &one, 0);
+            ck("/dev/kmsg zero-length read is EINVAL", r < 0 ? -errno : r, -EINVAL);
+            close(fd);
+        }
+    }
+
     // ---- a caught-up reader is told to wait, not handed a zero ------------
     // This is the whole reason the node could not simply be created: a daemon
     // reading in a loop would have burned a core on zero-length reads.
