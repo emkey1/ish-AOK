@@ -971,6 +971,17 @@ dword_t sys_futex_time64(addr_t uaddr, dword_t op, dword_t val, addr_t timeout_o
 // Linux's ROBUST_LIST_LIMIT: a corrupt or hostile list must not walk forever.
 #define ROBUST_LIST_LIMIT 2048
 
+// entry + futex_offset, wrapped at the guest's pointer width. The offset is
+// negative, so on a 32-bit guest the sum must wrap around 2^32 exactly as it
+// does in the guest's own arithmetic rather than borrowing into the upper half
+// of the 64-bit guest_addr_t.
+static guest_addr_t robust_futex_addr(uint64_t entry, int64_t offset, bool is64) {
+    uint64_t sum = entry + (uint64_t) offset;
+    if (!is64)
+        sum &= 0xffffffffu;
+    return (guest_addr_t) sum;
+}
+
 // One word of the robust list, whose width follows the ABI.
 static bool robust_read(guest_addr_t addr, bool is64, uint64_t *out) {
     if (is64) {
@@ -1019,13 +1030,25 @@ void futex_exit_robust_list(struct task *task) {
     size_t word = is64 ? 8 : 4;
 
     // struct robust_list_head is { list.next, futex_offset, list_op_pending }.
-    uint64_t entry, futex_offset, pending;
+    uint64_t entry, offset_raw, pending;
     if (!robust_read(head, is64, &entry))
         return;
-    if (!robust_read(head + word, is64, &futex_offset))
+    if (!robust_read(head + word, is64, &offset_raw))
         return;
     if (!robust_read(head + 2 * word, is64, &pending))
         return;
+
+    // futex_offset is a SIGNED long in the guest, and in practice it is always
+    // negative: it is the distance from the list link back to the lock word,
+    // and the lock word comes first in every real mutex layout (musl and glibc
+    // both register -12 on a 32-bit ABI). robust_read zero-extends, so on a
+    // 32-bit guest -4 arrived as 0x00000000fffffffc; added to an entry address
+    // it produced something past 4 GiB, user_get failed, and NOT ONE robust
+    // futex was ever marked. The owner-died bit is how the next waiter learns
+    // the holder died mid-critical-section, so this was silent: no error, just
+    // a lock nobody recovers.
+    int64_t futex_offset = is64 ? (int64_t) offset_raw
+                                : (int64_t) (int32_t) (uint32_t) offset_raw;
 
     // The list is circular through the head, so that is the terminator.
     for (unsigned limit = ROBUST_LIST_LIMIT; entry != head && limit > 0; limit--) {
@@ -1034,13 +1057,13 @@ void futex_exit_robust_list(struct task *task) {
         // The pending entry is handled after the loop: it is mid-operation,
         // and Linux deliberately leaves it until last.
         if (entry != pending)
-            robust_handle_death((guest_addr_t) (entry + futex_offset), task->pid);
+            robust_handle_death(robust_futex_addr(entry, futex_offset, is64), task->pid);
         if (!have_next)
             return;
         entry = next;
     }
     if (pending != 0)
-        robust_handle_death((guest_addr_t) (pending + futex_offset), task->pid);
+        robust_handle_death(robust_futex_addr(pending, futex_offset, is64), task->pid);
 }
 
 static dword_t robust_list_head_size(enum guest_abi abi) {

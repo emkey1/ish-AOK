@@ -64,9 +64,15 @@ struct amd64_timeval_ {
     int64_t sec;
     int64_t usec;
 };
+// SIGNED, like Linux's struct __kernel_old_timespec, whose tv_sec and tv_nsec
+// are both signed 32-bit longs -- and like struct timespec64_ below, which got
+// this right. Unsigned, a guest passing tv_sec = -1 arrived as 4294967295, so
+// timespec_is_valid()'s ts.tv_sec >= 0 check waved it through and nanosleep
+// slept for 136 years instead of returning EINVAL. On the i386 guest that hung
+// the whole regression run.
 struct timespec_ {
-    dword_t sec;
-    dword_t nsec;
+    sdword_t sec;
+    sdword_t nsec;
 };
 struct timespec64_ {
     int64_t sec;

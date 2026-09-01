@@ -590,7 +590,13 @@ static int_t sys_ipc_common(uint_t call, int_t first, int_t second, guest_addr_t
         case IPCOP_SEMOP_:
             return sys_semop_guest(first, ptr, (uint_t) second);
         case IPCOP_SEMTIMEDOP_:
-            return sys_semtimedop_guest(first, ptr, (uint_t) second, (guest_addr_t) fifth);
+            // Through uint_t first: `fifth` is int_t (signed 32-bit) but for
+            // SEMTIMEDOP it carries the TIMESPEC POINTER, and a 32-bit guest
+            // address with bit 31 set sign-extended into 0xffffffff_xxxxxxxx,
+            // which user_get then refused. semtimedop returned EFAULT for any
+            // timeout living in the upper 2 GiB of an i386 address space.
+            return sys_semtimedop_guest(first, ptr, (uint_t) second,
+                                        (guest_addr_t) (uint_t) fifth);
         case IPCOP_SEMCTL_: {
             // The semun union is passed indirectly: ptr points at it.
             addr_t arg;
