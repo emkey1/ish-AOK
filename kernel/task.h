@@ -282,6 +282,14 @@ struct task {
     dword_t exit_code;
     bool zombie;
     bool exiting;
+    // Set while this task is tearing an address space down -- exit, or the
+    // execve that replaces one mm with another. A filesystem ->close reached
+    // from that teardown must not wait indefinitely for a guest process: the
+    // mm is dead either way, and anything that would have answered from a
+    // thread of this process has already been reaped. `exiting` covers the
+    // exit case on its own; this covers execve, where the task is very much
+    // not exiting. See fs/fuse.c's bounded wait.
+    bool mm_teardown;
     bool io_block;
     // Set once do_exit has banked this task's final thread CPU time into its
     // per-virtual-CPU accounting slot (task_bank_cpu_time); tells the

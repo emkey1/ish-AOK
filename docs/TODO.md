@@ -10,6 +10,98 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### A FUSE daemon on a thread of its own caller deadlocked -- FIXED 2026-09-01
+
+Found by writing the test that had been missing rather than by reading code:
+`tests/manual/fuse_basic.c` forks its daemon, and a daemon in a separate
+process shares neither an fd table nor an address space with its callers, so
+a whole class of bug was invisible to it. `tests/manual/fuse_threaded_daemon.c`
+runs the daemon on a **thread** of the process using the mount -- which is
+what libfuse's multi-threaded loop produces, and what any program that mounts
+a filesystem for its own use looks like. On the parent commit it hangs before
+printing its second line.
+
+The bug had nothing to do with the mmap work it was written to check. `f_close`
+held `files->lock` across the filesystem's `->close` (fs/fd.c). For a FUSE file
+that `->close` sends FUSE_FLUSH and waits for the daemon, and the daemon's next
+read of `/dev/fuse` needs that same lock to look its own descriptor up. Traced
+directly: the daemon answered the READ, never received the FLUSH, and both
+threads stopped for good. It predates the mmap work -- reproduced on
+e7f21f0b6 with no mapping involved at all.
+
+Fixed by splitting the slot from the work: `fdtable_detach` clears the table
+entry under the lock and hands the descriptor back, and `fdtable_finish_close`
+runs the filesystem's `->close` with the lock released. Applied at `f_close`,
+`dup2`'s replacement of an occupied slot, and `close_range`. The two remaining
+in-lock callers are safe by construction and say so: `fdtable_release` runs
+when the last reference to the table is gone, and `fdtable_do_cloexec` runs on
+execve after the other threads are reaped.
+
+**The rule: `table->lock` covers the SLOT, never the filesystem work behind
+it.** Any `->close` may block on something arbitrary, and FUSE is only the
+first filesystem here where "arbitrary" means a guest process. A socket close
+that lingers is the same shape.
+
+The address space has the same rule and got the same treatment: `pt_unmap`
+drops a mapping's reference to its descriptor, which after the guest's own
+`close(2)` is the last one, so `->close` ran from inside the page-table
+teardown under the write lock with the process's threads quiesced. Fixing it
+in `sys_munmap_guest` alone would have missed `MAP_FIXED`'s overwrite,
+`mremap`'s shrink and `brk`, so the deferral lives in `pt_unmap` itself
+(`struct mem`'s `deferred_fds`) and is drained by
+`mem_write_unlock_with_pokes`.
+
+### Still open: SEEK_DATA/SEEK_HOLE is EINVAL on tmpfs and realfs
+
+Noticed while giving fusefs a real implementation, and NOT fixed there.
+`generic_seek` (fs/generic.c) answers `_EINVAL` for any whence that is not
+SET/CUR/END, and tmpfs routes `SEEK_DATA`/`SEEK_HOLE` straight into it.
+
+Measured on Devuan for a 4096-byte file with no holes: `SEEK_DATA(1000)` is
+1000, `SEEK_HOLE(1000)` is 4096, a negative offset is `ENXIO`, and **both
+reposition the file offset** like any other whence. `EINVAL` tells a caller the
+interface does not exist at all, which is what the sparse-copy paths in `cp`,
+`tar` and `rsync` act on -- the same reasoning that made it worth fixing for
+FUSE. The fix is the same shape: answer from the file's size in
+`generic_seek`, and set `fd->offset`. Left out of the FUSE change to keep that
+one reviewable.
+
+### FUSE has no attribute cache, and three absences follow from it
+
+Measured against Devuan (Linux 6.12) on 2026-09-01, when mmap, FUSE_FORGET and
+FUSE_INTERRUPT were added (`fs/fuse.c`, `tests/manual/fuse_basic.c`).
+
+AOK's VFS is path-based, so every FUSE operation walks from the root nodeid
+with one `LOOKUP` per component and forgets each node behind it. There is no
+dentry cache and no attribute cache. Three things follow, and all three are
+currently absences rather than half-implementations:
+
+- **`readdirplus` would cost more than it saves.** It returns each entry's
+  attributes with its name, which is what makes `ls -l` one request instead of
+  N. With nowhere to keep them the attributes would be fetched and dropped,
+  while every entry it returned would still be a reference to forget. Nothing
+  to do here until there is a cache.
+- **A path five components deep is six requests.** Same cause. The design note
+  in `fs/fuse.c` argues the trade was right to make first, and it was, but the
+  measured cost is real on a deep tree.
+- **A mapping and `read()` are coherent only at sync points.** `mmap` is backed
+  by a per-nodeid host stand-in for the page cache (see the chapter), while
+  `read`/`write` go straight to the daemon. Linux's page cache makes the two
+  coherent continuously. Routing reads through the stand-in would change
+  behaviour for daemons that return different bytes on each read, so it needs
+  the same cache design rather than a local patch.
+
+The one change behind all three is a real dentry/attribute cache with FUSE's
+`entry_valid`/`attr_valid` timeouts honoured -- which also means owning node
+lifetimes across a boundary where the other side may crash. The reference
+accounting that makes that safe now exists and is asserted by the test (no node
+is ever forgotten more times than it was handed out), so the groundwork is
+there; the cache is not.
+
+Two other absences are unrelated to this and are simply not worth it: **splice**
+on `/dev/fuse` (the transfers are not copy-bound) and the **`fsopen()`-based
+mount API** (a whole syscall family, and libfuse falls back cleanly).
+
 ### PI futexes are ENOSYS
 
 Measured 2026-09-01 alongside the futex argument-validation work

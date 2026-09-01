@@ -91,6 +91,24 @@ struct mem {
         bool ready_to_be_freed; // Should be false initially
     } reference;
 
+    // Descriptors whose last reference was dropped by an unmap, parked until
+    // the address-space lock is gone.
+    //
+    // Closing one runs the filesystem's ->close, and that is allowed to BLOCK
+    // on a guest process: fusefs sends FUSE_FLUSH and waits for its daemon's
+    // answer. Every unmap runs under this mem's write lock with the process's
+    // other threads quiesced -- and when the daemon is one of those threads,
+    // it can no longer answer. Doing the close here rather than there is what
+    // keeps that from being a hang.
+    //
+    // Guarded by its own leaf lock so a deferral made under the write lock and
+    // a drain made after it need not share one. Drained by
+    // mem_close_deferred_fds(). MUST be cleared in mem_init: mm_copy does a
+    // whole-struct copy and then calls it on the child (see mem->lazy).
+    struct fd **deferred_fds;
+    unsigned deferred_count, deferred_cap;
+    pthread_mutex_t deferred_lock;
+
     wrlock_t lock;
     // Serializes every structural page-table mutation (map/unmap/protect/COW).
     // Evicting writers hold this *and* take `lock` in write mode + poke siblings.
@@ -164,6 +182,9 @@ static inline void mem_read_unlock_quiesce_aware(struct mem *mem) {
 
 // Initialize the address space
 void mem_init(struct mem *mem);
+// Close the descriptors an unmap parked. MUST be called with no address-space
+// lock held; see struct mem's deferred_fds.
+void mem_close_deferred_fds(struct mem *mem);
 // Uninitialize the address space
 void mem_destroy(struct mem *mem);
 void mem_set_page_limit(struct mem *mem, page_t limit);

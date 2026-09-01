@@ -78,6 +78,11 @@ static void mem_write_unlock_with_pokes(struct mem *mem) {
     atomic_fetch_sub_explicit(&mem->quiesce_requested, 1, memory_order_acq_rel);
     mem_quiesce_wake_parked(mem); // release the condvar-parked waiters (memory.h)
     mem_struct_unlock(mem);
+    // Anything the unmap under that lock decided to close, closed now that it
+    // is gone. Doing it here rather than at each unmap site is what makes it
+    // cover mremap, MAP_FIXED's overwrite and brk's shrink as well as munmap.
+    // See struct mem's deferred_fds.
+    mem_close_deferred_fds(mem);
 }
 
 static bool amd64_vm_failure_trace_enabled(void) {
@@ -339,6 +344,27 @@ static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t pr
         return res;
     }
 
+    // Anything the filesystem has to fetch from outside the kernel happens
+    // here, with no address-space lock held -- see fd_ops.mmap_prepare. Doing
+    // it below, inside do_mmap, would freeze this process's other threads for
+    // the fetch and deadlock when one of them is the one being waited on.
+    if (!(flags & MMAP_ANONYMOUS)) {
+        // Retained, not borrowed: mmap_prepare can block for as long as a
+        // guest daemon takes, with no lock held, and close(2) no longer waits
+        // on the fd table while it runs its own ->close (fs/fd.c). A borrowed
+        // pointer here would be a use-after-free the moment a sibling thread
+        // closed this descriptor mid-fetch.
+        struct fd *pfd = f_get_retain(fd_no);
+        if (pfd != NULL) {
+            int perr = 0;
+            if (pfd->ops->mmap_prepare != NULL)
+                perr = pfd->ops->mmap_prepare(pfd, (off_t) offset, (size_t) len);
+            fd_close(pfd);
+            if (perr < 0)
+                return (guest_addr_t) perr;
+        }
+    }
+
     mem_write_lock_with_pokes(current->mem);
     guest_addr_t res = do_mmap(addr, len, prot, flags, fd_no, offset);
     mem_write_unlock_with_pokes(current->mem);
@@ -474,6 +500,52 @@ addr_t sys_mmap_amd64(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_
     return (addr_t) mmap_common_guest(addr, len, prot, flags, fd_no, offset);
 }
 
+// Distinct fds seen during a writeback walk, retained so they can be used
+// after the address-space lock is dropped.
+struct msync_fds {
+    struct fd **fds;
+    unsigned n, cap;
+    bool oom;
+};
+
+static void msync_fds_add(struct msync_fds *list, struct fd *fd) {
+    if (fd == NULL)
+        return;
+    for (unsigned i = 0; i < list->n; i++)
+        if (list->fds[i] == fd)
+            return;
+    if (list->n == list->cap) {
+        unsigned cap = list->cap == 0 ? 4 : list->cap * 2;
+        struct fd **grown = realloc(list->fds, cap * sizeof(*grown));
+        if (grown == NULL) {
+            list->oom = true;
+            return;
+        }
+        list->fds = grown;
+        list->cap = cap;
+    }
+    list->fds[list->n++] = fd_retain(fd);
+}
+
+// Push a walk's noted descriptors at their filesystems, and release them.
+// Call with NO address-space lock held: this is a round trip to a guest
+// process. Returns the first error, which msync is required to report --
+// "the data did not reach the filesystem" is exactly what a caller of
+// msync(MS_SYNC) is asking about.
+static int flush_backing_fds(struct msync_fds *seen) {
+    int err = 0;
+    for (unsigned i = 0; i < seen->n; i++) {
+        int one = fuse_fd_msync_writeback(seen->fds[i]);
+        if (one < 0 && err == 0)
+            err = one;
+        fd_close(seen->fds[i]);
+    }
+    free(seen->fds);
+    seen->fds = NULL;
+    seen->n = seen->cap = 0;
+    return err;
+}
+
 int_t sys_munmap_guest(guest_addr_t addr, qword_t len) {
     STRACE("munmap(%#llx, %#llx)", (unsigned long long) addr, (unsigned long long) len);
     if (PGOFFSET(addr) != 0)
@@ -481,10 +553,14 @@ int_t sys_munmap_guest(guest_addr_t addr, qword_t len) {
     if (len == 0)
         return _EINVAL;
     
+    // Dropping the last reference to a mapped file's descriptor runs its
+    // ->close, which may block on a guest process. That does not happen here:
+    // pt_unmap parks such closes and mem_write_unlock_with_pokes runs them
+    // once the lock is gone. See struct mem's deferred_fds.
     mem_write_lock_with_pokes(current->mem);
     int err = pt_unmap_always(current->mem, PAGE(addr), PAGE_ROUND_UP(len));
     mem_write_unlock_with_pokes(current->mem);
-    
+
     if (err < 0)
         return _EINVAL;
     return 0;
@@ -1140,7 +1216,8 @@ int_t sys_munlockall(void) {
 // for an explicit, rare durability request.
 //
 // Caller holds mem_read_lock_quiesce_aware and has already validated the range.
-static void msync_writeback(struct mem *mem, page_t start, page_t end, int_t flags) {
+static void msync_writeback(struct mem *mem, page_t start, page_t end, int_t flags,
+        struct msync_fds *seen) {
     int host_flags = (flags & MS_SYNC_) ? MS_SYNC : MS_ASYNC;
     page_t page = start;
     while (page < end) {
@@ -1177,6 +1254,13 @@ static void msync_writeback(struct mem *mem, page_t start, page_t end, int_t fla
         // a host EINVAL would mean this walk computed a bad range, which is a
         // bug to fix rather than an errno to hand the guest.
         (void) msync((void *) aligned, span, host_flags);
+        // A FUSE mapping is backed by a host stand-in for the page cache, so
+        // the host msync above only got the stores as far as that stand-in --
+        // Linux writes a shared mapping's dirty pages back to the filesystem
+        // from msync, so the daemon has to hear about them too. That is a
+        // round trip to a guest process, which must not happen under this
+        // lock: note the fd and do it once the walk is done.
+        msync_fds_add(seen, data->fd);
         page = run_end;
     }
 }
@@ -1222,9 +1306,22 @@ int_t sys_msync_guest(guest_addr_t addr, qword_t len, int_t flags) {
             }
         }
     }
+    struct msync_fds seen = {0};
     if (err == 0 && (flags & (MS_SYNC_ | MS_ASYNC_)))
-        msync_writeback(mem, start, end, flags);
+        msync_writeback(mem, start, end, flags, &seen);
     mem_read_unlock_quiesce_aware(mem);
+
+    // Now that no address-space lock is held, let any filesystem that keeps
+    // the real copy of these bytes somewhere else go and update it. Only
+    // fusefs does today, and for anything else this is a call that returns 0.
+    int flush_err = flush_backing_fds(&seen);
+    // Linux's msync reports the filesystem's error. Reporting success when
+    // the daemon rejected every write would tell a caller its data is safe
+    // when it is not, which is the whole question msync(MS_SYNC) asks.
+    if (err == 0)
+        err = flush_err;
+    if (seen.oom && err == 0)
+        err = _ENOMEM;
     return err;
 }
 

@@ -304,6 +304,23 @@ static int load_entry(enum guest_abi abi, struct elf_prg_info ph, guest_addr_t b
 
     // Map the file-backed portion of the segment.
     if (fb_pages > 0) {
+        // See fd_ops.mmap_prepare: the filesystem fetches what the mapping
+        // will need, and ->mmap is entitled to assume it has run. This is the
+        // path that loads a program off a FUSE mount, so it is the one that
+        // most needs it.
+        //
+        // The address-space write lock IS held here (elf_exec takes it before
+        // calling this), which for any other caller would be the exact thing
+        // mmap_prepare exists to avoid. It is harmless here alone: exec_de_thread
+        // has already reaped this process's other threads, and the mem being
+        // locked is the freshly created one no other thread has ever seen, so
+        // the quiesce has nothing to stop.
+        if (fd->ops->mmap_prepare != NULL &&
+                (err = fd->ops->mmap_prepare(fd, map_file_start,
+                        (size_t) fb_pages << PAGE_BITS)) < 0) {
+            amd64_trace_exec_loader_failure("segment-mmap-prepare", NULL, abi, &ph, bias, fd, err, NULL);
+            return err;
+        }
         if ((err = fd->ops->mmap(fd, current->mem, PAGE(addr), fb_pages,
                         map_file_start, flags, MMAP_PRIVATE)) < 0) {
             amd64_trace_exec_loader_failure("segment-mmap", NULL, abi, &ph, bias, fd, err, NULL);

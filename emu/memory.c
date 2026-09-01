@@ -12,6 +12,7 @@
 #include "kernel/errno.h"
 #include "kernel/signal.h"
 #include "emu/memory.h"
+#include "fs/fd.h"
 #include "emu/tlb.h"
 #include "jit/jit.h"
 #include "kernel/vdso.h"
@@ -431,6 +432,12 @@ void mem_init(struct mem *mem) {
     // first.
     memset(mem->lazy, 0, sizeof(mem->lazy));
     mem->lazy_count = 0;
+    // Same reason as mem->lazy above: mm_copy copies the whole struct and then
+    // calls this on the child, so an inherited pointer here would be a double
+    // free of the parent's array and a double close of its descriptors.
+    mem->deferred_fds = NULL;
+    mem->deferred_count = mem->deferred_cap = 0;
+    pthread_mutex_init(&mem->deferred_lock, NULL);
     atomic_init(&mem->quiesce_requested, 0);
     pthread_mutex_init(&mem->quiesce_park_lock, NULL);
     pthread_cond_init(&mem->quiesce_park_cond, NULL);
@@ -473,6 +480,26 @@ void mem_destroy(struct mem *mem) {
     (void) jit_teardown_lock(mem->mmu.jit);
 #endif
     pt_unmap_always(mem, 0, mem->page_limit);
+    // The parked closes have to run somewhere, and this is the last chance:
+    // nothing else will ever unlock this mem (the write lock above and the
+    // JIT teardown lock are both deliberately never released -- see their
+    // comments), so the usual drain in mem_write_unlock_with_pokes cannot
+    // happen. Holding those locks across the closes is harmless here for the
+    // reason they are held at all: this runs when the mm's refcount has hit
+    // zero, so no thread can still be using this address space.
+    //
+    // What is NOT harmless is waiting forever. A ->close reached from here
+    // may be a FUSE flush, and whatever would have answered it -- if it was a
+    // thread of this process -- is already gone. mm_teardown makes that wait
+    // bounded; `exiting` alone would not, because execve reaches here with
+    // the task very much alive.
+    bool saved_teardown = current != NULL && current->mm_teardown;
+    if (current != NULL)
+        current->mm_teardown = true;
+    mem_close_deferred_fds(mem);
+    if (current != NULL)
+        current->mm_teardown = saved_teardown;
+    pthread_mutex_destroy(&mem->deferred_lock);
 
 #if ENGINE_JIT
     jit_free(mem->mmu.jit);
@@ -970,6 +997,49 @@ static bool mem_quarantine_freed_pages(void) {
 // pt_copy_on_write) can use this directly to avoid a lock acquire/release
 // per page. Callers for a live, potentially-multithreaded mem must go
 // through pt_unmap_always instead.
+// Park a descriptor for mem_close_deferred_fds. See struct mem's deferred_fds.
+//
+// The drain happens at the next mem_write_unlock_with_pokes, or at
+// mem_destroy, whichever comes first -- so a descriptor parked by a path that
+// releases the write lock some other way (the COW break in mem_ptr upgrades
+// and downgrades in place, and cannot drain while still holding the read
+// lock) waits for the process's next address-space change. That is a delayed
+// close, never a lost one: teardown always drains.
+static void mem_defer_fd_close(struct mem *mem, struct fd *fd) {
+    pthread_mutex_lock(&mem->deferred_lock);
+    if (mem->deferred_count == mem->deferred_cap) {
+        unsigned cap = mem->deferred_cap == 0 ? 4 : mem->deferred_cap * 2;
+        struct fd **grown = realloc(mem->deferred_fds, cap * sizeof(*grown));
+        if (grown == NULL) {
+            // Out of memory for a four-pointer array means the process is
+            // finished anyway. Close it here rather than leak the descriptor;
+            // the hang this defers is the lesser risk at that point.
+            pthread_mutex_unlock(&mem->deferred_lock);
+            fd_close(fd);
+            return;
+        }
+        mem->deferred_fds = grown;
+        mem->deferred_cap = cap;
+    }
+    mem->deferred_fds[mem->deferred_count++] = fd;
+    pthread_mutex_unlock(&mem->deferred_lock);
+}
+
+void mem_close_deferred_fds(struct mem *mem) {
+    // Take the whole list before closing anything: a ->close can itself unmap
+    // (a filesystem freeing a mapping of its own), and would otherwise be
+    // appending to the array being walked.
+    pthread_mutex_lock(&mem->deferred_lock);
+    struct fd **fds = mem->deferred_fds;
+    unsigned count = mem->deferred_count;
+    mem->deferred_fds = NULL;
+    mem->deferred_count = mem->deferred_cap = 0;
+    pthread_mutex_unlock(&mem->deferred_lock);
+    for (unsigned i = 0; i < count; i++)
+        fd_close(fds[i]);
+    free(fds);
+}
+
 static int pt_unmap_always_unlocked(struct mem *mem, page_t start, pages_t pages) {
     if (!mem_page_range_valid(mem, start, pages))
         return -1;
@@ -1005,7 +1075,10 @@ static int pt_unmap_always_unlocked(struct mem *mem, page_t start, pages_t pages
                 // holding a memfd's write seal off, stop holding it.
                 if (data->memfd_shared_mapped)
                     memfd_mapping_released(data->fd);
-                fd_close(data->fd);
+                // NOT fd_close: this runs under the address-space write lock
+                // with the other threads quiesced, and a ->close may block on
+                // one of them. See struct mem's deferred_fds.
+                mem_defer_fd_close(mem, data->fd);
             }
             mmap_cache_unregister(data->cache_entry);
             free(data->host_page_prot);

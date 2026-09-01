@@ -407,6 +407,20 @@ struct fd_ops {
 
     // map the file
     int (*mmap)(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off_t offset, int prot, int flags);
+    // Fetch whatever ->mmap will need for [offset, offset+len) BEFORE the
+    // address space is locked, and report any error that fetch produces.
+    //
+    // ->mmap itself runs under the address-space WRITE lock with the
+    // process's other threads quiesced, so a filesystem whose bytes live
+    // outside the kernel cannot go and get them there: it would freeze every
+    // sibling thread for the duration, and deadlock outright when the thread
+    // it is waiting on is one of them -- which is exactly the shape of a
+    // program that mounts a FUSE filesystem and then maps a file on it.
+    // Linux has no such problem because it faults pages in lazily; AOK maps
+    // eagerly, so the fetch is hoisted out to here instead.
+    //
+    // Optional. NULL means ->mmap needs no preparation.
+    int (*mmap_prepare)(struct fd *fd, off_t offset, size_t len);
 
     // returns a bitmask of operations that won't block
     int (*poll)(struct fd *fd);
@@ -464,5 +478,10 @@ struct fd *f_get_retain(fd_t f);
 // flags is checked for O_CLOEXEC and O_NONBLOCK
 fd_t f_install(struct fd *fd, int flags);
 int f_close(fd_t f);
+
+// Write a FUSE file's shared mapping back to its daemon (fs/fuse.c). A no-op
+// for every other kind of fd, so msync can call it for any file-backed
+// mapping without knowing what is behind it.
+int fuse_fd_msync_writeback(struct fd *fd);
 
 #endif

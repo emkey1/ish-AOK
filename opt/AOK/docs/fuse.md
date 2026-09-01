@@ -46,27 +46,58 @@ behaves exactly like a privileged one.
 
 ## Things worth knowing
 
-- **You cannot execute a program stored on a FUSE mount.** `mmap` is not
-  modeled, and loading an executable needs it, so binaries and AppImages must
-  be copied off the mount before they will run. Reading, writing, and every
-  other ordinary file operation are unaffected.
+- **Programs stored on a FUSE mount run.** `mmap` works — private mappings,
+  shared read-only mappings, and shared writable ones, which is what the ELF
+  loader needs. A store through a writable shared mapping reaches the daemon
+  as a `FUSE_WRITE`, on `msync()`, on `fsync()`, and at the last close of the
+  file. Only the pages that actually changed are sent.
+- **Sparse files work if your daemon implements them.** `SEEK_DATA` and
+  `SEEK_HOLE` are forwarded as `FUSE_LSEEK`; a daemon that answers `ENOSYS`
+  (most do) gets the standard fallback instead — the whole file is data, the
+  only hole is at EOF — and is not asked again on that connection.
+- **A mapping and a `read()` agree at those sync points, not continuously.**
+  Reads and writes go straight to the daemon rather than through the mapping's
+  backing, so a program that stores through a mapping and expects a concurrent
+  `read()` on another descriptor to see it should `msync()` first. On Linux the
+  page cache makes the two coherent at all times. Anything that maps a file,
+  works on it, and syncs before handing it on — which is the ordinary
+  pattern — sees no difference.
+- **Serving a filesystem from a thread of the process that uses it works.**
+  That is what libfuse's multi-threaded loop gives you, and what a program
+  that mounts a filesystem for its own use looks like. It used to deadlock —
+  `close()` on the mount held a lock the daemon thread needed to receive the
+  request — and does not any more. A daemon in a separate process was never
+  affected.
 - **The daemon is the filesystem.** If it exits or crashes, in-flight requests
   fail with `ENOTCONN` and every later operation on that mount answers
   `ENOTCONN` too, until you unmount it — the same behaviour Linux gives you.
   Unmounting makes the daemon's next read return `ENODEV`, which is how
   libfuse's event loop knows to exit.
-- **Paths are walked, not cached.** AOK's VFS is path-based, so each operation
-  performs a `FUSE_LOOKUP` walk from the root nodeid rather than reusing a
-  cached one. `FUSE_FORGET` is therefore never sent, and a daemon's nodeid
-  table grows with the size of the tree it has served rather than shrinking.
-  For the tree sizes a device holds this is fine; a daemon that assumes
-  `FORGET` will arrive should not depend on it for correctness.
-- **Interrupts do not reach the daemon.** `FUSE_INTERRUPT` is not sent. A guest
-  process blocked on a FUSE call can still be interrupted by a signal, but the
-  daemon is not told, so a long operation continues on its side.
+- **Paths are walked, not cached — but references are returned.** AOK's VFS is
+  path-based, so each operation performs a `FUSE_LOOKUP` walk from the root
+  nodeid rather than reusing a cached one, and sends `FUSE_FORGET` for each
+  node as it finishes with it. Because there is no node cache, forgets arrive
+  promptly and in far greater number than a real kernel's — a session that
+  sends Linux two may send several dozen here. That is legal, and a daemon that
+  keeps an honest lookup count per node will not notice; one that assumes
+  `FORGET` arrives only in bulk at unmount will.
+- **Interrupts reach the daemon.** `FUSE_INTERRUPT` is sent for a request the
+  daemon has already read, naming it, so a daemon that implements interrupts
+  can abandon expensive work when the caller is signalled. A request still
+  queued is dropped instead, since the daemon has never seen it.
+- **A signalled caller stops waiting.** This is the one place AOK chooses not
+  to match Linux, where a process blocked on a daemon that never answers sits
+  in state `D` and cannot be killed even with `SIGKILL`. There is no root shell
+  here to `umount -f` its way out, so an unkillable task would be permanent;
+  the caller gets `EINTR` instead. The daemon may still answer afterwards, and
+  the answer is discarded.
 - **`readdirplus`, splice, and the newer `fsopen()`-based mount API are not
   wired up.** libfuse falls back cleanly on all three; no daemon needs
-  changing.
+  changing. `FUSE_INIT` negotiates none of them, so a daemon is never told a
+  capability is present when it is not. `readdirplus` is the one with real
+  performance on the table, and it waits on an attribute cache: without
+  somewhere to keep the attributes it returns, they would be fetched and
+  discarded while each entry still had to be forgotten.
 
 ## When something is wrong
 
