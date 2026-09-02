@@ -17,7 +17,15 @@
 #   tools/run-guest-gate.sh                 # every local root found, then e2e
 #   tools/run-guest-gate.sh --no-e2e        # skip the end-to-end suite
 #   tools/run-guest-gate.sh --only arm64    # one root, by name
+#   tools/run-guest-gate.sh --parallel      # run the local legs at once
 #   tools/run-guest-gate.sh --device m4pt   # also run it on a device over ssh
+#
+# --parallel runs the five local legs concurrently instead of one after
+# another: roughly 45 minutes rather than three hours on an 8-core Mac, and the
+# way this project has run multi-arch sweeps historically. The cost is load, and
+# load makes the timing-sensitive tests flake -- so treat a failure under
+# --parallel as a question, not an answer, and re-run that leg on a quiet
+# machine before believing it.
 #
 # Exits non-zero if any leg reports a failure, so it can gate a release script.
 
@@ -28,6 +36,7 @@ REPO=$(pwd)
 LOGDIR=${GATE_LOGDIR:-$REPO/build/gate-logs}
 ISH=$REPO/build/ish
 RUN_E2E=1
+PARALLEL=0
 ONLY=
 DEVICE=
 DEVICE_PORT=${GATE_DEVICE_PORT:-1022}
@@ -35,6 +44,7 @@ DEVICE_PORT=${GATE_DEVICE_PORT:-1022}
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-e2e)  RUN_E2E=0 ;;
+        --parallel|-j) PARALLEL=1 ;;
         --only)    shift; ONLY=${1:-} ;;
         --device)  shift; DEVICE=${1:-} ;;
         --port)    shift; DEVICE_PORT=${1:-1022} ;;
@@ -48,21 +58,32 @@ done
 mkdir -p "$LOGDIR" || exit 1
 # Stale logs from a previous run are worse than none: a summary that greps the
 # directory will happily report yesterday's failures as today's.
-rm -f "$LOGDIR"/*.log
+rm -f "$LOGDIR"/*.log "$LOGDIR"/*.rc
 
 fail_total=0
 legs_run=0
 
-run_leg() {
+# Is this leg wanted, and does its root exist?
+leg_wanted() {
+    [ -d "$2" ] || return 1
+    if [ -n "$ONLY" ] && [ "$ONLY" != "$1" ]; then return 1; fi
+    return 0
+}
+
+# The suite run itself, with its exit status left in $LOGDIR/<name>.rc so the
+# parallel path can score it after waiting.
+leg_run() {
+    "$ISH" -f "$2" /bin/sh -c '/AOK/tests/setup-regressions.sh --run 2>&1' \
+        > "$LOGDIR/$1.log" 2>&1
+    echo $? > "$LOGDIR/$1.rc"
+}
+
+# Score a finished leg from its log. Separated from leg_run so it is identical
+# whether the leg ran alone or alongside four others.
+leg_report() {
     name=$1
-    root=$2
-    [ -d "$root" ] || return 0
-    if [ -n "$ONLY" ] && [ "$ONLY" != "$name" ]; then return 0; fi
     log=$LOGDIR/$name.log
-    printf '########## %s ##########\n' "$name"
-    "$ISH" -f "$root" /bin/sh -c '/AOK/tests/setup-regressions.sh --run 2>&1' \
-        > "$log" 2>&1
-    rc=$?
+    rc=$(cat "$LOGDIR/$name.rc" 2>/dev/null || echo 1)
     # The runner stops at the first BUILD failure, so a short log is a leg that
     # never really ran -- count it as a failure rather than a clean sweep.
     p=$(grep -cE '^[a-z0-9_]+: PASS$' "$log")
@@ -80,8 +101,43 @@ run_leg() {
     return 0
 }
 
+# One leg, start to finish, the way it has always worked.
+run_leg() {
+    leg_wanted "$1" "$2" || return 0
+    printf '########## %s ##########\n' "$1"
+    leg_run "$1" "$2"
+    leg_report "$1"
+}
+
 echo "logs: $LOGDIR"
 echo
+
+LEG_NAMES="arm64 i386 amd64 riscv64 devuan-arm64"
+leg_root() {
+    case "$1" in
+        arm64)        echo "$REPO/build/alpine-arm64-test" ;;
+        i386)         echo "$REPO/build/alpine-i386-test" ;;
+        amd64)        echo "$REPO/build/alpine-amd64-test" ;;
+        riscv64)      echo "$REPO/build/alpine-riscv64-test" ;;
+        devuan-arm64) echo "$REPO/build/devuan-arm64-test" ;;
+    esac
+}
+
+if [ "$PARALLEL" -eq 1 ]; then
+    started=
+    for name in $LEG_NAMES; do
+        root=$(leg_root "$name")
+        leg_wanted "$name" "$root" || continue
+        printf '########## %s (started) ##########\n' "$name"
+        leg_run "$name" "$root" &
+        started="$started $name"
+    done
+    wait
+    for name in $started; do
+        printf '########## %s ##########\n' "$name"
+        leg_report "$name"
+    done
+else
 
 # The four architectures, on musl.
 run_leg arm64   "$REPO/build/alpine-arm64-test"
@@ -94,6 +150,8 @@ run_leg riscv64 "$REPO/build/alpine-riscv64-test"
 #   build/ish -f build/devuan-arm64-test /bin/sh -c \
 #       'apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev'
 run_leg devuan-arm64 "$REPO/build/devuan-arm64-test"
+
+fi
 
 if [ -n "$DEVICE" ]; then
     printf '########## device: %s ##########\n' "$DEVICE"
