@@ -93,8 +93,24 @@
         andl $~(\size-1), %r14d
         shrl $3, %r14d
         addl %r14d, %_addr
-        read_prep \size, \op\size\()_mem
+        # bt only reads its memory operand; btc/bts/btr modify it in place and
+        # so need write_prep/write_done, exactly as the aarch64 host's copy of
+        # this macro has always done (jit/gadgets-aarch64/bits.S). read_prep
+        # for all four resolved the address through the READ tlb entry, which
+        # skips the P_WRITE check and the copy-on-write break -- so a bts onto
+        # a read-only or a not-yet-broken private page wrote to it -- and left
+        # no write_done, so a page-straddling one modified the staging buffer
+        # and dropped it on the floor.
+        .ifin(\op, bt)
+            read_prep \size, \op\size\()_mem
+        .endifin
+        .ifin(\op, btc,bts,btr)
+            write_prep \size, \op\size\()_mem
+        .endifin
         do_bt_op \op, (%_addrq), \size, \s, \ss
+        .ifin(\op, btc,bts,btr)
+            write_done \size, \op\size\()_mem
+        .endifin
         gret 1
 
     .macro x name reg
@@ -121,10 +137,11 @@
         andl $~(\size-1), %r14d
         shrl $3, %r14d
         addl %r14d, %_addr
-        read_prep \size, atomic_\op\size\()_mem
+        write_prep \size, atomic_\op\size\()_mem
         and\ss $(\size-1), %tmp\s
         lock \op\ss %tmp\s, (%_addrq)
         setf_c
+        write_done \size, atomic_\op\size\()_mem
         gret 1
 .endm
 
