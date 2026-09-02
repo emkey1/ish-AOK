@@ -203,13 +203,41 @@ static int futex_load(guest_addr_t addr, dword_t *out) {
     // sibling futex waits reproduced writers asleep on a FREE lock).
     // Parking here instead is deadlock-free: the barrier writer never takes
     // futex_lock, so it completes and its release broadcast wakes us.
+    //
+    // That comment is about WHICH lock to take. Separately, the load below has
+    // to happen INSIDE it, and has to stay there. It used to sit after the
+    // unlock, which made this a use-after-free: the pointer mem_ptr returns is
+    // minted from the page table and is only alive while the read lock is
+    // held. A sibling munmap takes the address-space barrier the instant we
+    // let go and munmaps the backing (pt_unmap_always_unlocked, emu/memory.c),
+    // and the stale load then goes one of two ways, decided only by what the
+    // host has already done with the freed range.
+    //
+    // Range re-taken, the common case: the load does not fault. Task threads
+    // take their 4 MB stacks from the same host arena those pages go back to
+    // -- the reuse the ISH_MEM_QUARANTINE comment in emu/memory.c describes,
+    // there for a write scribbling on a live thread's bookkeeping, here for a
+    // read, so we collect the garbage instead of causing it. Whatever now
+    // occupies the address goes straight into FUTEX_WAIT's "does the word
+    // still say val?" check, so the damage is a wrong answer to that one
+    // question: a waiter that should have blocked gets EAGAIN, or one whose
+    // word had already changed blocks with nobody left to wake it. That half
+    // is a hang with no crash report to point at.
+    //
+    // Range still unmapped: the same load is a host bad access, taken in
+    // kernel context, where the JIT's crash recovery is disarmed --
+    // jit_crash_unwind_active and jit_crash_lock are set only inside the JIT
+    // loop (jit/jit.c) -- so nothing converts it into a guest signal: on
+    // device jit_crash_bus_fn reaches its abort(), and the CLI installs no
+    // SIGSEGV handler at all. That half is loud, but the report names this
+    // load rather than the sibling unmap that made it stale.
     mem_read_lock_quiesce_aware(current->mem);
     dword_t *ptr = mem_ptr(current->mem, addr, MEM_READ);
+    bool fault = ptr == NULL;
+    if (!fault)
+        *out = *ptr;
     mem_read_unlock_quiesce_aware(current->mem);
-    if (ptr == NULL)
-        return 1;
-    *out = *ptr;
-    return 0;
+    return fault;
 }
 
 static bool futex_wait_has_pending_signal(void) {

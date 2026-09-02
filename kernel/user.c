@@ -21,17 +21,25 @@ static inline bool htop_watch_intersects(guest_addr_t addr, size_t count) {
     return start < watch_end && end > watch_start;
 }
 
-static inline void trace_htop_user_write(struct task *task, struct mem *mem,
+// Returns true iff it resolved a guest pointer of its own, which is the
+// caller's signal that the mem read lock may have been dropped and retaken
+// underneath it: mem_ptr upgrades to the write lock to materialise a lazy
+// reservation, grow a stack down, or break COW (emu/memory.c, via
+// read_to_write_lock), and a sibling munmap can free host backing in that
+// window. __user_write_task_mem calls this with a host pointer already minted,
+// so it has to re-mint it afterwards. Same trap as the multi-pointer walks
+// below; see user_transform_two's comment for the full account.
+static inline bool trace_htop_user_write(struct task *task, struct mem *mem,
         guest_addr_t addr, const void *buf, size_t count, bool ptrace) {
     static int enabled = -1;
     if (enabled < 0)
         enabled = getenv("ISH_TRACE_HTOP_USER_WRITE") != NULL ? 1 : 0;
     if (!enabled)
-        return;
+        return false;
     if (task == NULL || strcmp(task->comm, "htop") != 0)
-        return;
+        return false;
     if (!htop_watch_intersects(addr, count))
-        return;
+        return false;
 
     uint8_t field[HTOP_RBX_FIELD_SIZE] = {};
     bool have_field = false;
@@ -53,6 +61,7 @@ static inline void trace_htop_user_write(struct task *task, struct mem *mem,
                field[0], field[1], field[2], field[3],
                field[4], field[5], field[6], field[7]);
     }
+    return true;
 }
 
 struct task_mem_read_handle {
@@ -136,7 +145,14 @@ static int __user_write_task_mem(struct task *task, struct mem *mem, guest_addr_
         char *ptr = mem_ptr(mem, p, ptrace ? MEM_WRITE_PTRACE : MEM_WRITE);
         if (ptr == NULL)
             return 1;
-        trace_htop_user_write(task, mem, p, &cbuf[p - addr], chunk_end - p, ptrace);
+        if (trace_htop_user_write(task, mem, p, &cbuf[p - addr], chunk_end - p, ptrace)) {
+            // The tracer resolved a pointer of its own, so ptr may have been
+            // freed while the read lock was briefly dropped. Re-mint it before
+            // the memcpy rather than trusting the pre-trace value.
+            ptr = mem_ptr(mem, p, ptrace ? MEM_WRITE_PTRACE : MEM_WRITE);
+            if (ptr == NULL)
+                return 1;
+        }
         memcpy(ptr, &cbuf[p - addr], chunk_end - p);
         p = (guest_addr_t) chunk_end;
     }
@@ -245,18 +261,76 @@ int user_read_walk(guest_addr_t addr, size_t count,
     return res;
 }
 
+// The address-space change counter, sampled by the multi-pointer walks below
+// around the window in which they hold more than one live host pointer. Every
+// structural page-table mutation bumps it (pt_map, pt_unmap_always, pt_dup,
+// pt_move, pt_set_flags, pt_copy_on_write, all via mem_changed) before it
+// releases the lock it mutated under, so a walk that reads the same value
+// before and after a mem_ptr call knows no writer ran in between. The one
+// bumper that is not a write-lock holder is the growth-mmap fast path
+// (kernel/mmap.c mem_growth_lock, which takes pt_alloc_lock and the READ
+// lock); it only ever adds pages and frees nothing, so its bumps can cost this
+// walk a retry but can never be the thing the walk needs to catch. Relaxed is
+// enough: the lock the writer released and we re-acquired supplies the
+// ordering, and this value is only ever compared against itself.
+static inline uint64_t mem_change_id(struct mem *mem) {
+    return atomic_load_explicit(&mem->mmu.changes, memory_order_relaxed);
+}
+
 // Walk two guest buffers ([in, count) read, [out, count) write) in lockstep
 // spans -- each bounded by BOTH buffers' page boundaries -- and hand the
 // caller DIRECT host pointers for each span, so a bulk transform (e.g. the
 // crypto accelerator) runs straight over guest memory with no bounce buffer.
 //
-// Safe against mem_ptr's internal lock upgrades (COW on the write side,
-// growsdown): the mem read lock is held throughout, and within each span the
-// write pointer is resolved FIRST (it's the one that can COW-upgrade, which
-// briefly drops/retakes the lock) while no other pointer is live, then the
-// read pointer (which never upgrades for an already-resident buffer). No
-// resolved pointer is ever held across the next span's resolve. Returns 0 on
-// success, 1 on fault (a partial prefix of out may have been written -- the
+// Safe against mem_ptr's internal lock upgrades, and that is the subtle part
+// of this function. mem_ptr drops the mem read lock and retakes it as a writer
+// whenever it has to change the page table -- its lazy-reservation, growsdown
+// and COW branches (emu/memory.c) all go through read_to_write_lock
+// (util/rw_locks.h), which drops our reader and then waits for the remaining
+// readers to drain. It does that under its own mutex, but the condvar sleep
+// releases that mutex, so another writer can take the lock ahead of us -- in
+// particular mem_write_lock_with_pokes' trylockw (util/rw_locks.h), which
+// never registers write intent and succeeds the instant the reader count hits
+// zero. In that window a sibling thread's munmap can take the barrier and free
+// the host backing, so any pointer already minted for this span is only
+// trustworthy if no writer ran while it was live.
+//
+// This used to be handled by ordering alone: resolve the write pointer first,
+// on the theory that it is the only one that can upgrade, then the read
+// pointer, "which never upgrades for an already-resident buffer". The
+// already-resident premise is false, and that was the bug. The lazy and
+// growsdown upgrades fire for MEM_READ too, keyed only on the entry being
+// absent, so resolving the read pointer could drop the lock with the write
+// pointer live and then hand fn() a dangling out_host.
+// tests/manual/pread_stack_thread_race.c documents that crash shape (a host
+// EXC_BAD_ACCESS inside a memcpy over a pointer mem_ptr had just validated)
+// and already suspected the upgrade.
+//
+// What holds now: the write pointer is still resolved first (COW ordering, and
+// its upgrade is free because no other pointer is live yet), and
+// mem->mmu.changes is sampled around every resolve made after it. If the
+// counter moved, some structural writer ran while out_host was live, so both
+// pointers are dropped and the span is resolved again. fn() is never called on
+// a span whose pointers straddle a page-table change and never runs twice on
+// the same span, which matters because the accelerator's callbacks carry
+// streaming cipher state across spans. In the steady state (both buffers
+// resident) mem_ptr performs no upgrade at all, so the window between the two
+// loads holds a page-table lookup and, on the first touch of a host page under
+// protection mirroring, one mprotect from mem_ensure_host_writable
+// (emu/memory.c -- mem_ptr's done_write_fault tail runs it for MEM_READ too,
+// on any resident page carrying P_WRITE), after which the host_page_prot cache
+// makes it a compare. The check itself costs two relaxed loads per span --
+// this runs over megabytes of AES and pixel work, so the fast path had to stay
+// a fast path.
+//
+// A retry costs one more resolve of each pointer, on pages that are resident
+// by then, and only happens when the counter really moved: an upgrade here, or
+// an unrelated sibling, because the growth-mmap fast path (kernel/mmap.c
+// mem_growth_lock) bumps the counter while holding only the read lock and so
+// can run alongside us. Either way the event that forced the retry is far more
+// expensive than the retry, so this is a seqlock read side rather than a spin.
+// No resolved pointer is ever held across the next span's resolve. Returns 0
+// on success, 1 on fault (a partial prefix of out may have been written -- the
 // caller treats that as EFAULT, same as a torn user_write).
 int user_transform_two(guest_addr_t in, guest_addr_t out, size_t count,
         void (*fn)(const void *in_host, void *out_host, size_t span, void *ctx),
@@ -277,8 +351,22 @@ int user_transform_two(guest_addr_t in, guest_addr_t out, size_t count,
         size_t span = left;
         if (span > in_page_end - ip)   span = in_page_end - ip;
         if (span > out_page_end - op)  span = out_page_end - op;
-        void *out_host = mem_ptr(mem, op, MEM_WRITE); // resolve write first
-        const void *in_host = out_host ? mem_ptr(mem, ip, MEM_READ) : NULL;
+        void *out_host = NULL;
+        const void *in_host = NULL;
+        for (;;) {
+            in_host = NULL;
+            out_host = mem_ptr(mem, op, MEM_WRITE); // resolve write first (COW ordering)
+            if (out_host == NULL)
+                break;
+            // out_host is live from here on, so any lock drop inside the
+            // resolve below can invalidate it.
+            uint64_t gen = mem_change_id(mem);
+            in_host = mem_ptr(mem, ip, MEM_READ);
+            if (in_host == NULL)
+                break;
+            if (mem_change_id(mem) == gen)
+                break; // nothing moved while both pointers were live
+        }
         if (out_host == NULL || in_host == NULL) { res = 1; break; }
         fn(in_host, out_host, span, ctx);
         ip += span; op += span; left -= span;
@@ -343,8 +431,12 @@ int user_transform_rect(guest_addr_t base, uint32_t stride, uint32_t bpp,
 // in lockstep, each span bounded by BOTH images' independent page grids (a
 // dst page boundary and a src page boundary at different guest addresses
 // don't line up in general). Per span, the write pointer is resolved before
-// the read pointer -- same COW-safety ordering user_transform_two documents
-// -- and neither pointer is held across the next span's resolve. The
+// the read pointer and the resolves are then re-run if mem->mmu.changes moved
+// while both were live -- same lock-upgrade safety user_transform_two
+// documents at length, and the same bug before this was added: resolving the
+// src pointer can materialise a lazy or growsdown page, which drops the read
+// lock with dst_host already minted and lets a sibling munmap free it under
+// us. Neither pointer is held across the next span's resolve. The
 // caller must have already declined self-overlapping src==dst regions
 // (this walk has no memmove-direction logic); it only ever does the
 // requested op forward, left-to-right, top-to-bottom.
@@ -378,8 +470,20 @@ int user_transform_rect_two(
             if (span > d_max) span = d_max;
             if (span > s_max) span = s_max;
             if (span == 0) { res = 1; break; }
-            void *dst_host = mem_ptr(mem, daddr, MEM_WRITE); // resolve write first (COW ordering)
-            const void *src_host = dst_host != NULL ? mem_ptr(mem, saddr, MEM_READ) : NULL;
+            void *dst_host = NULL;
+            const void *src_host = NULL;
+            for (;;) {
+                src_host = NULL;
+                dst_host = mem_ptr(mem, daddr, MEM_WRITE); // resolve write first (COW ordering)
+                if (dst_host == NULL)
+                    break;
+                uint64_t gen = mem_change_id(mem); // dst_host is live from here on
+                src_host = mem_ptr(mem, saddr, MEM_READ);
+                if (src_host == NULL)
+                    break;
+                if (mem_change_id(mem) == gen)
+                    break; // nothing moved while both pointers were live
+            }
             if (dst_host == NULL || src_host == NULL) { res = 1; break; }
             fn(src_host, dst_host, span, ctx);
             dcx += (int32_t) span; scx += (int32_t) span;
@@ -395,8 +499,12 @@ int user_transform_rect_two(
 // resolves a THIRD (mask) sub-rectangle in lockstep too, with its own bpp
 // (the a8 mask is 1 byte/pixel, vs dst/src's 4) and its own independent
 // page grid. Per span, dst (write) is resolved first, then src and mask
-// (both read) -- same COW-safety ordering as the two-image walk -- and no
-// resolved pointer is ever held across the next span's resolve.
+// (both read), and the whole span is re-resolved if mem->mmu.changes moved
+// while any of them was live -- same lock-upgrade safety the two-image walk
+// uses and user_transform_two explains. This one had the widest exposure of
+// the three: the mask resolve is the third, so before this it could drop the
+// read lock with two live pointers already minted. No resolved pointer is
+// ever held across the next span's resolve.
 int user_transform_rect_three(
         guest_addr_t dst_base, uint32_t dst_stride, int32_t dst_x, int32_t dst_y, uint32_t dst_bpp,
         guest_addr_t src_base, uint32_t src_stride, int32_t src_x, int32_t src_y, uint32_t src_bpp,
@@ -434,9 +542,23 @@ int user_transform_rect_three(
             if (span > s_max) span = s_max;
             if (span > m_max) span = m_max;
             if (span == 0) { res = 1; break; }
-            void *dst_host = mem_ptr(mem, daddr, MEM_WRITE); // resolve write first (COW ordering)
-            const void *src_host = dst_host != NULL ? mem_ptr(mem, saddr, MEM_READ) : NULL;
-            const void *mask_host = src_host != NULL ? mem_ptr(mem, maddr, MEM_READ) : NULL;
+            void *dst_host = NULL;
+            const void *src_host = NULL, *mask_host = NULL;
+            for (;;) {
+                src_host = mask_host = NULL;
+                dst_host = mem_ptr(mem, daddr, MEM_WRITE); // resolve write first (COW ordering)
+                if (dst_host == NULL)
+                    break;
+                uint64_t gen = mem_change_id(mem); // dst_host is live from here on
+                src_host = mem_ptr(mem, saddr, MEM_READ);
+                if (src_host == NULL)
+                    break;
+                mask_host = mem_ptr(mem, maddr, MEM_READ);
+                if (mask_host == NULL)
+                    break;
+                if (mem_change_id(mem) == gen)
+                    break; // nothing moved while all three pointers were live
+            }
             if (dst_host == NULL || src_host == NULL || mask_host == NULL) { res = 1; break; }
             fn(src_host, mask_host, dst_host, span, ctx);
             dcx += (int32_t) span; scx += (int32_t) span; mcx += (int32_t) span;

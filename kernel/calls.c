@@ -5226,6 +5226,9 @@ static void dump_fault_pt_state(guest_addr_t addr) {
         return;
     fault_pt_log_count++;
 
+    // Bare read_lock, not the quiesce-aware pair dump_addr_backing uses: this
+    // site, i386_gpf_addr_needs_page_fault and handle_i386_stack_store_gpf are
+    // docs/simulated_swap_plan.md item 11, deliberately untouched here.
     read_lock(&current->mem->lock);
     page_t center = PAGE(addr);
     page_t start = center > 1 ? center - 1 : center;
@@ -5667,28 +5670,87 @@ static bool amd64_verbose_fault_trace_enabled(void) {
 // whether a faulting PC lives in a mapped file (libc/node .text) vs an
 // anonymous region (V8's own JIT-generated code), and the file offset so the
 // exact instruction can be disassembled from the on-disk binary.
+//
+// The page-table read has to be under the mem lock. A leaf is immortal once
+// allocated, but the `struct data` it points at is not: a sibling thread's
+// munmap drops the last refcount and free()s it in pt_unmap_always_unlocked
+// (emu/memory.c), so the lockless pt->data->{name,fd,file_offset} reads this
+// used to do were a use-after-free on a path any guest can reach by faulting.
+// A fault in one thread says nothing about what its siblings are doing to the
+// address space at that instant; a dull single-threaded guest was measured
+// freeing 267-457 of these per second.
+//
+// The path lookup must NOT be under that lock. generic_getpath on a fakefs
+// root takes the fakefs metadata lock and runs a SQLite query (fs/fake.c,
+// fakefs_getpath), and holding an address-space lock across filesystem work
+// that can block on another guest thread is a shape this codebase has already
+// been bitten by. So take a counted reference to the fd while the lock is
+// held and resolve the path after dropping it. Plain fd_retain, not
+// fd_retain_if_live: the data struct owns a reference of its own (kernel/mmap.c
+// stores `fd_retain(fd)`) and the read lock keeps the data struct alive, so
+// the refcount cannot already have reached zero here.
+//
+// Dropping that reference again at the end can be the LAST one: a sibling that
+// unmapped the region while we were printing has already handed the data
+// struct's own reference to mem->deferred_fds (pt_unmap_always_unlocked, in
+// emu/memory.c) and mem_write_unlock_with_pokes has drained it. So ->close can
+// run from inside a fatal fault report, and for a FUSE-backed mapping that is
+// a cache writeback plus a FLUSH the daemon has to answer (fusefs_close in
+// fs/fuse.c) -- a round trip to another guest process, in the middle of
+// printing a crash. That is acceptable here only because no lock is held at
+// that point: the mem read lock is released above, and the whole report runs
+// from handle_interrupt, which task_run_current (kernel/task.c) calls after
+// read_unlocking the address space. Holding nothing is exactly the condition
+// mem_defer_fd_close exists to buy for the munmap path, where the write lock
+// IS held (see sys_munmap_guest in kernel/mmap.c).
 static void dump_addr_backing(const char *label, guest_addr_t addr) {
     struct mem *mem = current != NULL ? current->mem : NULL;
     if (mem == NULL)
         return;
+
+    char path[MAX_PATH] = "";
+    struct fd *path_fd = NULL;
+    bool mapped = false;
+    bool anonymous = false;
+    unsigned flags = 0;
+    size_t data_off = 0;
+    size_t file_off = 0;
+
+    mem_read_lock_quiesce_aware(mem);
     struct pt_entry *pt = mem_pt(mem, PAGE(addr));
-    if (pt == NULL || pt->data == NULL) {
+    if (pt != NULL && pt->data != NULL) {
+        struct data *data = pt->data;
+        mapped = true;
+        anonymous = data->fd == NULL && data->name == NULL;
+        flags = pt->flags;
+        data_off = pt->offset;
+        file_off = data->file_offset;
+        if (data->name != NULL) {
+            // The characters outlive the struct (data->name is only ever set
+            // to a literal -- kernel/exec.c's "[vdso]" and "[vvar]"), but the
+            // pointer to them lives in the struct, so it is read here.
+            strncpy(path, data->name, sizeof(path) - 1);
+        } else if (data->fd != NULL) {
+            path_fd = fd_retain(data->fd);
+        }
+    }
+    mem_read_unlock_quiesce_aware(mem);
+
+    if (!mapped) {
         printk("%s %#llx: unmapped\n", label, (unsigned long long) addr);
         return;
     }
-    struct data *data = pt->data;
-    char path[MAX_PATH] = "";
-    if (data->name != NULL)
-        strncpy(path, data->name, sizeof(path) - 1);
-    else if (data->fd != NULL)
-        generic_getpath(data->fd, path);
+    if (path_fd != NULL) {
+        generic_getpath(path_fd, path);
+        fd_close(path_fd);
+    }
     // file_offset is the region's offset at its first page; add the address's
     // distance into this page's mapping via pt->offset (offset within data).
     printk("%s %#llx: %s%s flags=%#x data_off=%zu file_off=%zu\n",
            label, (unsigned long long) addr,
            path[0] ? path : "[anon]",
-           (data->fd == NULL && data->name == NULL) ? " (anonymous/JIT)" : "",
-           pt->flags, (size_t) pt->offset, (size_t) data->file_offset);
+           anonymous ? " (anonymous/JIT)" : "",
+           flags, data_off, file_off);
 }
 
 static void dump_opcode_window(guest_addr_t ip) {
