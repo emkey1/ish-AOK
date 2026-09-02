@@ -950,6 +950,21 @@ int host_fd_mmap(int host_fd, struct mem *mem, page_t start, pages_t pages, off_
     if (memory == MAP_FAILED && try_prot != mmap_prot)
         memory = mmap(NULL, map_len, mmap_prot, mmap_flags, host_fd, real_offset);
     int err = pt_map(mem, start, pages, memory, correction, prot);
+    if (err < 0) {
+        // pt_map takes ownership of `memory` only when it succeeds, and every
+        // one of its error returns happens before it publishes a single entry
+        // (emu/memory.h), so nothing anywhere is pointing at this mapping.
+        // Releasing it here is what keeps a failed mmap from leaking the host
+        // range for the life of the process -- the old code returned straight
+        // out and the range was never reachable again to be unmapped.
+        //
+        // The length is map_len, NOT pages * PAGE_SIZE: the host mapping
+        // starts at the page-aligned real_offset and carries `correction`
+        // bytes of slack in front of the guest's first page.
+        if (memory != MAP_FAILED)
+            munmap(memory, map_len);
+        return err;
+    }
     // Never-writable file-backed mappings can't be COW-broken or otherwise
     // mutated by the guest (write faults check P_WRITE before touching
     // anything), so it's always safe to register them: the underlying host

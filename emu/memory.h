@@ -240,8 +240,32 @@ bool mem_host_addr_to_guest(struct mem *mem, void *host_addr, guest_addr_t *gues
 struct mmap_cache_entry;
 
 struct data {
-    void *data; // immutable
-    size_t size; // also immutable
+    // NOT immutable, whatever this field used to claim. pt_map sets it when the
+    // struct is built, but a MAP_SHARED anonymous region reserved with no host
+    // backing starts out NULL here, and mem_materialize_shared_data
+    // (emu/memory.c) fills it in later, under a private static lock of its own.
+    //
+    // The writer does hold a mem write lock -- its OWN: the only path in is
+    // pt_set_flags, called by sys_mprotect_guest under
+    // mem_write_lock_with_pokes. That lock excludes nothing that matters here,
+    // because one struct data is reachable from several address spaces at once:
+    // pt_copy_on_write points the child's page-table entry at the parent's
+    // struct on every fork. A thread walking a forked sibling's page table
+    // under THAT mem's read lock is not held off at all. Hence the private
+    // lock, which is the only thing that covers the transition.
+    //
+    // What is guaranteed: the value moves one way only, NULL -> non-NULL, and
+    // never changes again. So a reader that has already loaded a non-NULL
+    // pointer holds one that stays valid for as long as its own reference to
+    // this struct does.
+    //
+    // What is NOT guaranteed, and what a design must not assume: that a reader
+    // which sees NULL will still see NULL a moment later, or that holding the
+    // lock of the mem being walked orders this field in any way at all.
+    // Deciding anything on "still unbacked" means going through
+    // mem_materialize_shared_data.
+    void *data;
+    size_t size; // immutable: pt_map sets it, nothing ever changes it
     atomic_uint refcount;
     uintptr_t shared_key;
     uint8_t *host_page_prot; // cached mirrored host protections, one per host page
@@ -302,9 +326,36 @@ struct pt_entry {
 bool pt_is_hole(struct mem *mem, page_t start, pages_t pages);
 page_t pt_find_hole(struct mem *mem, pages_t size);
 
-// Map memory + offset into fake memory, unmapping existing mappings. Takes
-// ownership of memory. It will be freed with:
-// munmap(memory, pages * PAGE_SIZE)
+// Map memory + offset into fake memory, unmapping existing mappings.
+//
+// Takes ownership of `memory` ONLY when it returns 0. It is then freed with
+// munmap(memory, pages * PAGE_SIZE + offset) once the last page referring to it
+// is unmapped.
+//
+// On EVERY error return, `memory` is still the caller's, and pt_map does NOT
+// munmap it -- the caller must. That split is not a stylistic choice:
+// kernel/ipc.c's shmat already unmaps the segment itself when pt_map fails, and
+// munmapping here as well would be a double munmap of an address range the host
+// is free to have handed to something else in between.
+//
+// Every error return happens BEFORE the first page-table entry is published:
+// pt_map allocates all the page-table leaves the range needs up front, which
+// leaves the publication loop with no failure path. So an error means no entry
+// ever named `memory`, no entry that existed before was disturbed, and the
+// caller's munmap cannot race a sibling thread that resolved a pointer into the
+// range. That ordering is load-bearing on the pure-growth mmap fast path, which
+// runs pt_map with only the mem READ lock held; see the pre-pass comment in
+// pt_map for the full argument.
+//
+// Two caveats on that ownership split. `memory` may legitimately be NULL (the
+// PROT_NONE branch of pt_map_nothing) or vdso_data (kernel/exec.c), and neither
+// is ever munmapped: pt_unmap_always_unlocked skips both, so a caller passing
+// one has nothing to release on an error return either.
+//
+// And on any path that gets past the two validation checks at the top, an error
+// return does not undo one thing: a lazy anonymous reservation overlapping the
+// range has already been dropped or materialised, because that happens up front
+// too. Long-standing, and unrelated to `memory`.
 int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t offset, unsigned flags);
 // Map empty space into fake memory
 int pt_map_nothing(struct mem *mem, page_t page, pages_t pages, unsigned flags);

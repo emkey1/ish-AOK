@@ -313,7 +313,7 @@ static page_t mem_next_allocated_leaf_base(struct mem *mem, page_t page) {
         struct pt_directory_chunk *chunk =
             atomic_load_explicit(&mem->pgdir_root[root], memory_order_acquire);
         if (chunk == NULL)
-            continue; // bitmap bit set just ahead of the chunk store (proc/maps race)
+            continue; // defensive: mem_pgdir_chunk_new publishes the chunk before setting the bit
         for (mid = mem_next_leaf_mid(chunk, mid); mid < MEM_PGDIR_MID_SIZE;
                 mid = mem_next_leaf_mid(chunk, mid + 1)) {
             page_t base = PGDIR_LEAF_BASE(root, mid);
@@ -717,17 +717,41 @@ void mem_next_page(struct mem *mem, page_t *page) {
     *page = next;
 }
 
+// Count the pages with a live entry. Guest-visible through /proc/<pid>/stat,
+// statm and status, and through ru_maxrss, so top/htop/ps pay this every
+// refresh.
+//
+// The walk is driven by pgdir_root_bitmap and leaf_bitmap rather than by a
+// linear probe of every slot, which is what it used to do. Page-table chunks
+// and leaves are immortal (nothing below mem_destroy ever frees one), so the
+// linear version's cost was set by the process's HIGH-WATER footprint and never
+// came back down: measured at 4.9-11.6 ms per pass for a 4 GiB address space
+// with 512 KiB touched, and still 4.0-7.1 ms per pass after all of it was
+// unmapped, at 236 kB resident -- almost all of it spent loading the 64 KiB of
+// leaves[] pointers behind each allocated chunk to find a handful of non-NULL
+// ones. Reading 1 KiB of bitmap per chunk instead brings that to roughly 38 us
+// per allocated chunk.
+//
+// The bitmaps are SET-ONLY: a bit says a leaf exists, never that anything in it
+// is mapped. So this can skip empty regions in bulk but still has to look at
+// every entry of every leaf it lands on, and the count it returns is unchanged.
 size_t mem_mapped_page_count(struct mem *mem) {
     if (mem == NULL)
         return 0;
 
     size_t count = 0;
-    for (size_t root = 0; root < MEM_PGDIR_ROOT_SIZE; root++) {
+    for (page_t root = mem_next_chunk_root(mem, 0); root < MEM_PGDIR_ROOT_SIZE;
+            root = mem_next_chunk_root(mem, root + 1)) {
+        // Roots ascend, so the first one whose lowest page is past the limit
+        // ends the walk -- a 32-bit address space only ever populates root 0.
+        if (PGDIR_LEAF_BASE(root, 0) >= mem->page_limit)
+            return count;
         struct pt_directory_chunk *chunk =
             atomic_load_explicit(&mem->pgdir_root[root], memory_order_acquire);
         if (chunk == NULL)
-            continue;
-        for (size_t mid = 0; mid < MEM_PGDIR_MID_SIZE; mid++) {
+            continue; // defensive: mem_pgdir_chunk_new publishes the chunk before setting the bit
+        for (page_t mid = mem_next_leaf_mid(chunk, 0); mid < MEM_PGDIR_MID_SIZE;
+                mid = mem_next_leaf_mid(chunk, mid + 1)) {
             struct pt_entry *entries =
                 atomic_load_explicit(&chunk->leaves[mid], memory_order_acquire);
             if (entries == NULL)
@@ -1051,17 +1075,71 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         memset(data->host_page_prot, 0, host_pages);
     }
 
+    // Allocate every page-table leaf the range needs BEFORE publishing a single
+    // entry. This is what makes the loop below infallible, and it is the last
+    // thing in this function that can fail.
+    //
+    // Publication has to be infallible rather than reversible, because a
+    // rollback that unpublished entries would break the safety argument the
+    // pure-growth mmap fast path rests on. mem_growth_lock (kernel/mmap.c)
+    // holds only pt_alloc_lock and the mem READ lock, so the sibling threads
+    // keep running and keep resolving guest addresses through this page table
+    // while pt_map runs; what makes that safe is stated there, and it is that
+    // growth only ever publishes new chunks and entries and frees nothing.
+    // Removing an entry already published would violate exactly that: a sibling
+    // can have resolved it into a host pointer a microsecond earlier, and
+    // pt_map_nothing munmaps the host range on the error return. The sibling
+    // would not even be told to re-resolve, because emu/tlb.h only flushes a
+    // cached translation when mmu.changes moves. (The pre-change code was safe
+    // here only because it leaked: it left the entries published and munmapped
+    // nothing.)
+    //
+    // Allocating leaves is the one page-table mutation that path already
+    // permits. Leaves and chunks are immortal -- mem_destroy is the only place
+    // in this file that frees one -- and mem_pt_leaf_new hands back an existing
+    // leaf instead of replacing it, so this pre-pass is idempotent and the
+    // mem_pt_new below is just a re-fetch. An empty leaf left behind when this
+    // fails is harmless: the bitmaps are set-only and every walker already
+    // tolerates an all-NULL leaf.
+    //
+    // One call per LEAF, not per page: mem_pt_new allocates the whole
+    // 1024-entry leaf at once, so touching every page here would add a third
+    // page-table descent per page to a loop that already does two, for no
+    // effect after the first page of each leaf. A 1 GiB anonymous mmap is
+    // 262144 pages and 256 leaves.
+    for (page_t page = start; page < start + pages;
+            page = (page | (MEM_PTDIR_SIZE - 1)) + 1) {
+        if (mem_pt_new(mem, page) == NULL) {
+            // Nothing was published, so this is the complete teardown: fd, name
+            // and cache_entry are filled in by the caller only AFTER a
+            // successful return, and `memory` stays the caller's (see the
+            // ownership contract in emu/memory.h). host_page_prot in particular
+            // was leaked by the old rollback, which called free(data) alone.
+            free(data->host_page_prot);
+            free(data);
+            return _ENOMEM;
+        }
+    }
+
     for (page_t page = start; page < start + pages; page++) {
         if (mem_pt(mem, page) != NULL)
             pt_unmap(mem, page, 1);
         data->refcount++;
+        // Cannot be NULL: both of mem_pt_new's failure conditions are already
+        // excluded. The page is below page_limit, because mem_page_range_valid
+        // checked the whole range at the top and page_limit is set once when
+        // the mm is created (kernel/mmap.c, mm_new/mm_copy) and never moves.
+        // And its leaf exists, because the pre-pass allocated one per leaf and
+        // nothing frees a leaf while the mem is alive -- the pt_unmap just
+        // above releases entries, never the leaf that holds them.
         struct pt_entry *pt = mem_pt_new(mem, page);
-        if (pt == NULL) {
-            data->refcount--;
-            if (data->refcount == 0)
-                free(data);
-            return _ENOMEM;
-        }
+        // Not an assert: assert compiles out under NDEBUG, and the comment
+        // above is a list of invariants a future change could break. A release
+        // build that broke one would get a NULL dereference on the next line
+        // instead of a diagnosable stop naming the page.
+        if (pt == NULL)
+            die("pt_map: leaf vanished at page %llx after the pre-pass allocated it",
+                (unsigned long long) page);
         pt->data = data;
         pt->offset = ((page - start) << PAGE_BITS) + offset;
         pt->flags = flags;
@@ -1240,7 +1318,20 @@ int pt_map_nothing(struct mem *mem, page_t start, pages_t pages, unsigned flags)
 #endif
     void *memory = mmap(NULL, pages * PAGE_SIZE,
             PROT_READ | PROT_WRITE, mmap_flags, 0, 0);
-    return pt_map(mem, start, pages, memory, 0, flags | P_ANONYMOUS);
+    int err = pt_map(mem, start, pages, memory, 0, flags | P_ANONYMOUS);
+    // pt_map only takes ownership of `memory` when it succeeds (emu/memory.h),
+    // so give the host mapping back here or it is leaked for the life of the
+    // process. MAP_FAILED is the one case with nothing to release: pt_map
+    // turned it into an errno without ever looking at it.
+    //
+    // Safe to munmap even on the growth fast path, where sibling threads are
+    // running concurrently under the read lock, precisely because pt_map fails
+    // only before it publishes anything (see the leaf pre-pass there): no
+    // page-table entry ever named this range, so no sibling can be holding a
+    // pointer into it.
+    if (err < 0 && memory != MAP_FAILED)
+        munmap(memory, pages * PAGE_SIZE);
+    return err;
 }
 
 // Alias a range at a second address: same backing, same offsets, both live.
@@ -1379,8 +1470,12 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
                 void *memory = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
                 int err = pt_map(mem, page, 1, memory, 0, new_flags);
-                if (err < 0)
+                if (err < 0) {
+                    // Ownership only transfers on success -- see pt_map_nothing.
+                    if (memory != MAP_FAILED)
+                        munmap(memory, PAGE_SIZE);
                     return err;
+                }
                 continue;
             }
         }
@@ -1593,7 +1688,18 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
                 return NULL;
             }
             memcpy(copy, data, PAGE_SIZE);
-            pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW);
+            if (pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW) < 0) {
+                // Same answer as the mmap failure just above: the COW break did
+                // not happen, so there is no private page to hand back, and
+                // returning the still-shared one would let the guest's write
+                // land in the parent's (or a sibling's) memory. pt_map maps
+                // nothing when it fails, so the copy is still ours to release.
+                munmap(copy, PAGE_SIZE);
+                if (locked_general_lock)
+                    unlock(&current->general_lock);
+                write_to_read_lock(&mem->lock);
+                return NULL;
+            }
             if (locked_general_lock)
                 unlock(&current->general_lock);
             write_to_read_lock(&mem->lock);
@@ -1679,7 +1785,15 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
                     return NULL;
                 }
                 memcpy(copy, data, PAGE_SIZE);
-                pt_map(mem, page, 1, copy, 0, entry->flags & ~P_COW);
+                if (pt_map(mem, page, 1, copy, 0, entry->flags & ~P_COW) < 0) {
+                    // See the identical path in mem_ptr: no private page means
+                    // no writable pointer, and the copy is still ours to free.
+                    munmap(copy, PAGE_SIZE);
+                    if (locked_general_lock)
+                        unlock(&current->general_lock);
+                    write_unlock(&mem->lock);
+                    return NULL;
+                }
                 entry = mem_pt(mem, page);
             }
             if (locked_general_lock)
@@ -1769,9 +1883,27 @@ void mem_coredump(struct mem *mem, const char *file) {
     }
     if (ftruncate(fd, 0xffffffff) < 0) {
         perror("ftruncate");
+        close(fd);
         return;
     }
 
+    // The walk reads entry->data and then dereferences it, and a sibling's
+    // munmap frees that struct data (pt_unmap_always_unlocked) under the write
+    // lock, so this needs the read lock for exactly the reason the /proc
+    // walkers take it. Quiesce-aware, or a writer already inside the
+    // mem-quiesce barrier is left waiting on a reader it cannot evict.
+    //
+    // Two things a reviver has to know, because the lock is then held across an
+    // unbounded run of lseek()/write() calls -- the shape this codebase has
+    // been bitten by before (mem_defer_fd_close exists because pt_unmap held
+    // this lock across a guest fd's ->close). First, why it is tolerable here:
+    // `fd` is a HOST descriptor, opened at the top of this function, so the
+    // writes go straight to the host filesystem and can never block waiting on
+    // a guest process the way a guest ->close can. Second, the precondition:
+    // the caller must not already hold mem->lock in write mode, or this
+    // deadlocks outright. A crash handler is the likeliest reviver, and a crash
+    // handler is exactly the code that might already be inside the write lock.
+    mem_read_lock_quiesce_aware(mem);
     int pages = 0;
     for (page_t page = mem_next_mapped_page(mem, 0);
          page != BAD_PAGE && page < mem->page_limit;
@@ -1784,13 +1916,21 @@ void mem_coredump(struct mem *mem, const char *file) {
             continue;
         if (lseek(fd, page << PAGE_BITS, SEEK_SET) < 0) {
             perror("lseek");
-            return;
+            break;
         }
-        if (write(fd, entry->data->data, PAGE_SIZE) < 0) {
+        // entry->offset is this page's byte offset INTO the mapping's host
+        // memory, set per page by pt_map. Writing data->data without it dumped
+        // the mapping's FIRST page for every page of the mapping: a 1 MiB
+        // mapping wrote page 0 into 256 different file offsets. mem_ptr and the
+        // COW break (both in this file) get this right; this one did not, and
+        // it has no caller, so nothing was going to notice until somebody
+        // revived it.
+        if (write(fd, (char *) entry->data->data + entry->offset, PAGE_SIZE) < 0) {
             perror("write");
-            return;
+            break;
         }
     }
+    mem_read_unlock_quiesce_aware(mem);
     printk("WARNING: dumped %d pages\n", pages);
     close(fd);
 }
