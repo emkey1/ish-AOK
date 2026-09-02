@@ -119,9 +119,24 @@ if [ "$RUN_E2E" -eq 1 ] && [ -z "$ONLY" ]; then
     # From scratch: a stale e2e_out silently reuses a tree the current build
     # never produced.
     rm -rf "$REPO/build/e2e_out"
-    if meson test -C "$REPO/build" e2e 2>&1 | tail -6; then :; else
+    # Capture the status of MESON, not of the tail at the end of the pipe.
+    # `if meson test ... | tail -6` tests tail's exit status, which is always 0,
+    # so a failed e2e leg never reached fail_total and the script signed off
+    # "GATE CLEAN" with a red leg on the screen above it. That is the one thing
+    # a release gate must never do.
+    meson test -C "$REPO/build" e2e > "$LOGDIR/e2e.log" 2>&1
+    e2e_rc=$?
+    tail -6 "$LOGDIR/e2e.log"
+    if [ "$e2e_rc" -ne 0 ]; then
+        # A missing build/tools/fakefsify is a build-dir that never had a bare
+        # `ninja -C build` run in it, not a regression -- say so, because the
+        # meson output alone reads like a test failure.
+        if grep -q "fakefsify: No such file" "$LOGDIR/e2e.log"; then
+            echo "  e2e: build/tools/fakefsify missing -- run a BARE 'ninja -C build' once"
+        fi
         fail_total=$((fail_total + 1))
     fi
+    legs_run=$((legs_run + 1))
 fi
 
 echo
