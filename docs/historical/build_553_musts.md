@@ -1,4 +1,18 @@
-# build 553 musts
+# build 553 musts (archived, not maintained)
+
+**This file is history.** It is the deferred-work list written during the 552
+release run for build 553, kept because 553's own list records what this one
+got wrong and the reasoning is worth being able to check. Nothing adds to it.
+
+The live list is `docs/build_554_musts.md`. Items here that are still open were
+carried forward into it; items that are closed are listed in its *Closed in 553*
+section — including this file's amd64-atomics entry, whose diagnosis was
+materially incomplete: it asserted that every eligibility predicate in the amd64
+JIT rejects the lock prefix. One does not, and the family it compiles was losing
+guest data, so what is described below as a performance gap was a live
+correctness bug.
+
+---
 
 Work deliberately deferred out of 552, with the diagnosis already done so
 nobody has to re-derive it. Each entry says what is **established**, what the

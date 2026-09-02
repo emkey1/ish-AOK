@@ -213,7 +213,7 @@ static int iosfs_mount(struct mount *mount) {
         // strictly better than persisting a key that cannot work, and the
         // classic mount path -- where mount->point is already the real
         // location -- is unaffected. Re-keying at move_mount is the proper
-        // fix; see docs/build_553_musts.md.
+        // fix; see docs/historical/build_553_musts.md.
         if ([path hasPrefix:@"/.ish-fsmount/"])
             bookmark = nil;
         if (bookmark != nil) {

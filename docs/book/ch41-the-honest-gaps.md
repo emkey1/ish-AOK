@@ -256,7 +256,7 @@ The 552 release added a second such file, and 553 kept the habit:
 diagnosis already done, so nobody has to re-derive it. Each entry says what is
 established, what the next step is, and how to prove it afterwards.
 
-The habit paid for itself immediately. `docs/build_553_musts.md`'s entry on the
+The habit paid for itself immediately. `docs/historical/build_553_musts.md`'s entry on the
 amd64 locked-instruction path is what got that path opened up at all — and the
 first thing the work found was that the entry's own diagnosis was wrong in the
 optimistic direction, describing as a performance gap something that was losing

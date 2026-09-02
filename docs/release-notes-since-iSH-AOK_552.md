@@ -138,7 +138,7 @@ filesystems at all" (#575). The booted one is now tinted, bold, and labelled.
 
 - The amd64 guest never JIT-compiles a locked instruction, so every atomic
   falls back to the interpreter and serialises on one global lock. It is
-  correct, and it is slow. See `docs/build_553_musts.md`.
+  correct, and it is slow. See `docs/historical/build_553_musts.md`.
 - An iosfs mount made through the new mount API (`fsopen`/`fsmount`/
   `move_mount`, which util-linux 2.39's `mount(8)` uses) no longer survives a
   relaunch. It used to "survive" as a phantom mount at a private staging path

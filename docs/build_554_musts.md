@@ -5,7 +5,7 @@ nobody has to re-derive it. Each entry says what is **established**, what the
 **next step** is, and how to **prove** it afterwards.
 
 Started 2026-09-02, during the 553 release run. Supersedes
-`docs/build_553_musts.md`, whose atomics item is closed — see the *Closed in
+`docs/historical/build_553_musts.md`, whose atomics item is closed — see the *Closed in
 553* section at the bottom for what actually turned out to be wrong there,
 because the diagnosis in that file was materially incomplete.
 
@@ -26,7 +26,7 @@ gdb attaches and then waits; it requires the wait to report the pid it attached
 to. AOK reported a different one. That is very likely the same root cause as
 `strace`'s: this kernel makes threads children of their **creator** rather than
 of the leader's parent (see the note of that name in
-`docs/build_553_musts.md`-era work and `kernel/task.c`), so a wait after
+`docs/historical/build_553_musts.md`-era work and `kernel/task.c`), so a wait after
 attaching to a non-leader thread resolves to the wrong task.
 
 This is why the CPU-spin hunt below had to be settled from `/proc/<pid>/io`
@@ -184,7 +184,7 @@ defensible and must not corrupt the process table.
 
 ## An iosfs mount made through the new mount API does not persist
 
-Carried forward unchanged from `docs/build_553_musts.md`; nothing about it
+Carried forward unchanged from `docs/historical/build_553_musts.md`; nothing about it
 changed in 553. The short version: iosfs keys its security-scoped bookmark on
 `mount->point` at mount time, and a mount made through
 `fsopen`/`fsconfig`/`fsmount`/`move_mount` is created at a private staging path
@@ -240,7 +240,7 @@ whole i386 atomics set, since the gadget macro is shared.
 
 ## RLIMIT_STACK is not pushed down for a third party
 
-Carried forward unchanged from `docs/build_553_musts.md`. `prlimit64` against
+Carried forward unchanged from `docs/historical/build_553_musts.md`. `prlimit64` against
 another process updates that process's limits without updating its address
 space, so a lowered `RLIMIT_STACK` takes effect at its next exec rather than
 immediately. Deliberate: reading another task's `->mm` needs `general_lock`, and
@@ -279,7 +279,7 @@ before and after. The correctness tests must stay green throughout:
 
 ## Closed in 553
 
-`docs/build_553_musts.md`'s amd64-atomics item is done, but its diagnosis was
+`docs/historical/build_553_musts.md`'s amd64-atomics item is done, but its diagnosis was
 incomplete in a way worth recording, because the same mistake is easy to repeat:
 it asserted that "every eligibility predicate in the amd64 JIT front-end
 requires the lock prefix to be absent". Every predicate *it listed* did. The one
