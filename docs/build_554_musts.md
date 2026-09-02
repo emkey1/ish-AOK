@@ -106,6 +106,18 @@ device, where it had been failing every run.
 **The unsafe walk itself is unchanged**, and the bound is not airtight: a
 garbage sample that happens to land UNDER physical memory still latches.
 
+**A second source of a bad latch was found and closed on 2026-09-02**, while
+giving native programs their own address space. `mm_new` allocated `struct mm`
+with `malloc` and assigned only some of it -- `rss_pages_hwm` was never
+initialized on any path, so a fresh address space started its high-water mark at
+whatever was in that heap word. Nothing corrects it afterwards, by design: the
+latch only ever goes up. It stayed quiet because malloc mostly hands back fresh
+zero pages, which is luck rather than a guarantee, and it means the 553
+diagnosis (a torn read of a leaf array) was not necessarily the whole story for
+the 2.7 TB report. `mm_new` uses `calloc` now, which also fixes the uninitialized
+`vdso` and the argv/env/auxv/stack bounds procfs reports -- those had been
+covered up by `elf_exec` overwriting them, which a native exec does not do.
+
 **Next step.** Take `mem->lock` for read around the walk, or restructure it to
 be genuinely safe against a concurrent leaf free (hazard pointer, RCU-ish
 grace period, or simply not freeing leaves). The reason it was not done in 553:
@@ -116,6 +128,37 @@ is the wrong time for one.
 **Prove it.** A thread hammering mmap/munmap while another reads
 `/proc/<pid>/statm` and `getrusage` in a loop, with no impossible counts and no
 sanitizer report, for long enough to have hit the old race many times over.
+
+---
+
+## Native bash intermittently reports EINTR from a write
+
+**Established.** Reproduced locally on 2026-09-02, on the arm64 root, running a
+40-iteration loop of `x=$(echo hi)` under `/AOK/native/bash`:
+
+    /tmp/g.sh: line 4: echo: write error: Interrupted system call
+
+**2 runs in 8** on the parent commit (`ish` built with `native_bash=enabled`,
+before the native-exec address-space work), **1 in 8** with that work applied,
+and **0 in 8** for native zsh doing the same thing. So it predates the change and
+is bash-specific, not a regression and not a shell-agnostic problem. It is the
+shell's own diagnostic, so bash saw a short/failed write and reported it rather
+than retrying.
+
+The obvious suspect is SIGCHLD from the very children the loop is reaping: the
+write is interrupted, and the shim hands the caller `EINTR` unless the kernel
+answered `_ERESTART` (`native_syscall_args`, kernel/native_syscall.c, restarts
+only on the two restart codes). A handler installed with `SA_RESTART` should not
+produce a visible `EINTR` at all. **Not verified** -- nobody has yet looked at
+what the pipe write actually returns.
+
+**Next step.** Reproduce under `exec 555>trace.log` and read what the
+interrupted `write` returned and what signal was pending: if it is `_EINTR` from
+a path that should have restarted, the fix is in that path, not in the shim. Then
+check whether bash installs its SIGCHLD handler with `SA_RESTART` here and
+whether AOK honours it for this write.
+
+**Prove it.** The same 40-iteration loop, 30 runs, no `write error` line.
 
 ---
 
@@ -164,6 +207,14 @@ state and correct `%CPU`. Measured in an arm64 guest: a native `bash` spinning
 showed at 99.5%, a native `zsh` alongside it at 0.0%, both with the right
 `COMMAND`. So the guest-process half of "native apps should show up in
 top/htop/btop/ktop" already works.
+
+Half of that was the `comm` column only. The ARGUMENTS column was the parent's,
+because /proc/<pid>/cmdline was read out of an address space the native exec had
+never replaced -- `ps` showed a backgrounded `/AOK/native/smallclue sleep 3` as
+`{smallclue} /bin/sh -c ...`, the shell's entire command line. Fixed 2026-09-02
+alongside the native address-space work: the exec records the program's own argv
+on the task and procfs answers from it, so the same process now reads
+`/AOK/native/smallclue sleep 3`.
 
 What does not appear is the **Launcher applets** -- File Manager, MotePad, LLM
 Chat, Markdown, Clock, Music, Settings, Wayland. Those are not guest processes
