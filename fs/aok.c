@@ -94,6 +94,7 @@ static void *aokfs_encode_node(enum aokfs_node_kind node) {
 #include "aok_generated_tests.inc"
 #include "aok_generated_tools.inc"
 #include "aok_generated_docs.inc"
+#include "aok_generated_book.inc"
 #include "aok_generated_libs.inc"
 // Native programs are addressed like the generated files above: a base plus an
 // index into kernel/native.c's registry, rather than one enum constant per
@@ -124,6 +125,10 @@ static const struct native_program *aokfs_node_native(enum aokfs_node_kind node)
 // else in this file has to learn about it.
 #define AOKFS_GEN_LIBS_BASE 0x50000
 #define AOKFS_GEN_LIBSDIR_BASE 0x60000
+// The book, at /docs/book. Nested (appendices/), so it needs a directory table
+// of its own the way /native/libs does -- a flat table cannot name /docs/book.
+#define AOKFS_GEN_BOOK_BASE 0x70000
+#define AOKFS_GEN_BOOKDIR_BASE 0x80000
 static bool aokfs_node_is_gen_tools(enum aokfs_node_kind node) {
     return (unsigned) node >= AOKFS_GEN_TOOLS_BASE &&
         (unsigned) node < AOKFS_GEN_TOOLS_BASE + AOKFS_GEN_FILE_COUNT_tools;
@@ -136,6 +141,14 @@ static bool aokfs_node_is_gen_libs(enum aokfs_node_kind node) {
     return (unsigned) node >= AOKFS_GEN_LIBS_BASE &&
         (unsigned) node < AOKFS_GEN_LIBS_BASE + AOKFS_GEN_FILE_COUNT_libs;
 }
+static bool aokfs_node_is_gen_book(enum aokfs_node_kind node) {
+    return (unsigned) node >= AOKFS_GEN_BOOK_BASE &&
+        (unsigned) node < AOKFS_GEN_BOOK_BASE + AOKFS_GEN_FILE_COUNT_book;
+}
+static bool aokfs_node_is_gen_bookdir(enum aokfs_node_kind node) {
+    return (unsigned) node >= AOKFS_GEN_BOOKDIR_BASE &&
+        (unsigned) node < AOKFS_GEN_BOOKDIR_BASE + AOKFS_GEN_DIR_COUNT_book;
+}
 static bool aokfs_node_is_gen_libsdir(enum aokfs_node_kind node) {
     return (unsigned) node >= AOKFS_GEN_LIBSDIR_BASE &&
         (unsigned) node < AOKFS_GEN_LIBSDIR_BASE + AOKFS_GEN_DIR_COUNT_libs;
@@ -144,7 +157,7 @@ static bool aokfs_node_is_gen(enum aokfs_node_kind node) {
     return ((unsigned) node >= AOKFS_GEN_BASE &&
             (unsigned) node < AOKFS_GEN_BASE + AOKFS_GEN_FILE_COUNT) ||
         aokfs_node_is_gen_tools(node) || aokfs_node_is_gen_docs(node) ||
-        aokfs_node_is_gen_libs(node);
+        aokfs_node_is_gen_libs(node) || aokfs_node_is_gen_book(node);
 }
 static const struct aokfs_gen_file *aokfs_gen_entry(enum aokfs_node_kind node) {
     if (aokfs_node_is_gen_tools(node))
@@ -153,6 +166,8 @@ static const struct aokfs_gen_file *aokfs_gen_entry(enum aokfs_node_kind node) {
         return &aokfs_gen_files_docs[(unsigned) node - AOKFS_GEN_DOCS_BASE];
     if (aokfs_node_is_gen_libs(node))
         return &aokfs_gen_files_libs[(unsigned) node - AOKFS_GEN_LIBS_BASE];
+    if (aokfs_node_is_gen_book(node))
+        return &aokfs_gen_files_book[(unsigned) node - AOKFS_GEN_BOOK_BASE];
     return &aokfs_gen_files[(unsigned) node - AOKFS_GEN_BASE];
 }
 
@@ -161,8 +176,13 @@ static const char *aokfs_gen_libsdir_path(enum aokfs_node_kind node) {
     return aokfs_gen_dirs_libs[(unsigned) node - AOKFS_GEN_LIBSDIR_BASE];
 }
 
+// ...and of a derived /docs/book directory.
+static const char *aokfs_gen_bookdir_path(enum aokfs_node_kind node) {
+    return aokfs_gen_dirs_book[(unsigned) node - AOKFS_GEN_BOOKDIR_BASE];
+}
+
 static bool aokfs_node_is_dir(enum aokfs_node_kind node) {
-    if (aokfs_node_is_gen_libsdir(node))
+    if (aokfs_node_is_gen_libsdir(node) || aokfs_node_is_gen_bookdir(node))
         return true;
     return node == aokfs_root ||
         node == aokfs_fixes_dir ||
@@ -217,6 +237,8 @@ static const char *aokfs_node_path(enum aokfs_node_kind node) {
         return aokfs_gen_entry(node)->path;
     if (aokfs_node_is_gen_libsdir(node))
         return aokfs_gen_libsdir_path(node);
+    if (aokfs_node_is_gen_bookdir(node))
+        return aokfs_gen_bookdir_path(node);
     switch (node) {
         case aokfs_root:
             return "";
@@ -363,6 +385,18 @@ static bool aokfs_lookup_node(const char *path, enum aokfs_node_kind *node_out) 
     for (size_t i = 0; i < AOKFS_GEN_FILE_COUNT_libs; i++) {
         if (strcmp(path, aokfs_gen_files_libs[i].path) == 0) {
             *node_out = (enum aokfs_node_kind) (AOKFS_GEN_LIBS_BASE + i);
+            return true;
+        }
+    }
+    for (size_t i = 0; i < AOKFS_GEN_FILE_COUNT_book; i++) {
+        if (strcmp(path, aokfs_gen_files_book[i].path) == 0) {
+            *node_out = (enum aokfs_node_kind) (AOKFS_GEN_BOOK_BASE + i);
+            return true;
+        }
+    }
+    for (size_t i = 0; i < AOKFS_GEN_DIR_COUNT_book; i++) {
+        if (strcmp(path, aokfs_gen_dirs_book[i]) == 0) {
+            *node_out = (enum aokfs_node_kind) (AOKFS_GEN_BOOKDIR_BASE + i);
             return true;
         }
     }
@@ -1004,6 +1038,36 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
     // subdirectories, then the files that sit directly in this directory.
     // Both tables are sorted, so the order is stable between calls and a
     // reader part way through does not see an entry twice.
+    if (aokfs_node_is_gen_bookdir(node)) {
+        const char *base = aokfs_node_path(node);
+        size_t blen = strlen(base);
+        size_t want = (size_t) fd->offset++;
+        size_t seen = 0;
+        for (size_t i = 0; i < AOKFS_GEN_DIR_COUNT_book; i++) {
+            const char *d = aokfs_gen_dirs_book[i];
+            if (strncmp(d, base, blen) != 0 || d[blen] != '/')
+                continue;
+            if (strchr(d + blen + 1, '/') != NULL)
+                continue;                       // a grandchild, not a child
+            if (seen++ == want) {
+                child = (enum aokfs_node_kind) (AOKFS_GEN_BOOKDIR_BASE + i);
+                goto emit;
+            }
+        }
+        for (size_t i = 0; i < AOKFS_GEN_FILE_COUNT_book; i++) {
+            const char *f = aokfs_gen_files_book[i].path;
+            if (strncmp(f, base, blen) != 0 || f[blen] != '/')
+                continue;
+            if (strchr(f + blen + 1, '/') != NULL)
+                continue;
+            if (seen++ == want) {
+                child = (enum aokfs_node_kind) (AOKFS_GEN_BOOK_BASE + i);
+                goto emit;
+            }
+        }
+        return 0;
+    }
+
     if (aokfs_node_is_gen_libsdir(node)) {
         const char *base = aokfs_node_path(node);
         size_t blen = strlen(base);
@@ -1155,13 +1219,22 @@ static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
             break;
         }
         case aokfs_docs_dir: {
-            // Flat: no subdirectories under /docs, so this is just the
-            // generated-table scan, no prefix-skipping ktop-style logic.
+            // The doc files themselves, which are flat, and then `book` --
+            // the one subdirectory, whose node comes from the book table's own
+            // derived-directory list rather than from an enum constant.
             size_t want = (size_t) fd->offset++;
-            if (want >= AOKFS_GEN_FILE_COUNT_docs)
-                return 0;
-            child = (enum aokfs_node_kind) (AOKFS_GEN_DOCS_BASE + want);
-            break;
+            if (want < AOKFS_GEN_FILE_COUNT_docs) {
+                child = (enum aokfs_node_kind) (AOKFS_GEN_DOCS_BASE + want);
+                break;
+            }
+            if (want == AOKFS_GEN_FILE_COUNT_docs && AOKFS_GEN_DIR_COUNT_book > 0) {
+                enum aokfs_node_kind book;
+                if (!aokfs_lookup_node("/docs/book", &book))
+                    return 0;
+                child = book;
+                break;
+            }
+            return 0;
         }
         case aokfs_tests_dir:
         case aokfs_tests_x86_dir:

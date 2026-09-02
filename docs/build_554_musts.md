@@ -44,6 +44,42 @@ seconds leaves the target alive.
 
 ---
 
+## A NULL dereference in the ptrace memory-write path
+
+**Established.** A local crash report from 2026-09-02 (`ish` CLI, SIGSEGV,
+`KERN_INVALID_ADDRESS at 0x0`) with this stack:
+
+    _platform_memmove
+    mem_ptr
+    __user_write_task_mem
+    user_write_task_ptrace
+    sys_ptrace_guest
+    handle_asm_generic_native_syscall
+
+`mem_ptr` returned NULL and the caller memmove'd through it. A ptrace poke at an
+address the tracee has not mapped is an ordinary thing for a debugger to do and
+must return EIO or EFAULT, never take the emulator down -- and it takes down the
+whole app, not just the guest process, because every guest task is a thread of
+one host process.
+
+Not attributed to a specific reproducer: the report was found during the 553
+release run, on a machine where more than one session was working, and the
+faulting thread was named `pk-10`. The stack is unambiguous regardless of who
+provoked it, and it is in a path 553 did not touch.
+
+Probably the same area as the entry above -- both are ptrace, and a kernel that
+resolves the wrong task for a thread is a plausible source of a NULL `mem_ptr`
+for the task it then writes to.
+
+**Next step.** Check every `mem_ptr` return in `user_write_task_ptrace` /
+`__user_write_task_mem` for a NULL test, and make the syscall return EIO the way
+Linux does for an unmapped `PTRACE_POKEDATA`.
+
+**Prove it.** A test that attaches to a child, pokes an address the child has
+not mapped, and requires EIO with both processes still alive.
+
+---
+
 ## POLLHUP without POLLIN on a closed socket
 
 **Established.** Noticed while fixing the idle-poll spin, not chased. On a unix
@@ -89,31 +125,6 @@ reads `applet`) is more honest than pretending they are processes.
 
 **Prove it.** Whatever is decided, `kill -9` on such an entry must do something
 defensible and must not corrupt the process table.
-
----
-
-## `docs/book` is not shipped at /AOK/docs
-
-**Established.** The book is 45 files and ~630 KB of Markdown under
-`docs/book/` (plus eight appendices, four of them generated). `/AOK/docs` ships
-21 files from `opt/AOK/docs/` via `fs/aok-docs.manifest`, and every one of them
-is present and correctly listed -- the docs set itself has no gaps.
-
-`tools/gen-aokfs.py` already handles manifest entries with slashes in them, and
-`fs/aok.c` synthesizes the intermediate directory nodes, so the *mechanism*
-supports `book/ch01-....md` served at `/AOK/docs/book/`. What it needs is a
-manifest whose source directory is `docs/book/` rather than `opt/AOK/docs/`,
-which means a second `custom_target` and a second generated `.inc` -- and the
-matching change in the Xcode project, which is the build that actually ships
-(`meson`/`ninja` is a convenience).
-
-**Next step.** Add `fs/aok-book.manifest` with `docs/book` as its source dir and
-`/docs/book` as its dest prefix, wire the new `.inc` through `meson.build` and
-`fs/aok.c`, then add it to `iSH-AOK.xcodeproj`. Deferred out of 553 only because
-it touches the pbxproj mid-release; there is nothing hard in it.
-
-**Prove it.** `ls /AOK/docs/book` on a device build lists the chapters, and
-`wc -c` on one of them matches the repo file byte for byte.
 
 ---
 
@@ -233,6 +244,11 @@ their compare-exchange retry loop, which the arithmetic overwrites.
 The lesson, and the reason `atomic_lock_contended` exists: a lost update is the
 only symptom a broken atomic has, and no single-threaded test can produce one.
 Every existing x86 atomics test passed throughout all of the above.
+
+`docs/book` now ships at `/AOK/docs/book` -- 53 files, nested appendices and
+all -- so that entry is closed too. It needed no Xcode project change after all:
+the app builds through a Meson legacy target, so wiring meson.build and
+fs/aok.c was the whole job. The risk that deferred it was imaginary.
 
 The idle-poll spin closed in 553 has the same shape and the same lesson. Every
 functional poll/select test passed while a blocking `poll()` on a quiet socket

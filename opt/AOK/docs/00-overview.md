@@ -28,7 +28,7 @@ Everything else under `/AOK` is baked into the app at build time:
 ```
 /AOK/README.txt           what this filesystem is, in a dozen lines
 /AOK/VERSION              build identifier
-/AOK/docs/                this documentation set
+/AOK/docs/                this documentation set, and book/ -- the whole book
 /AOK/tools/               scripts and utilities (native-links.sh, persist-links.sh,
                           manage-roots.sh, mount-root.sh, ktop, benchmarks,
                           provisioning, Wayland)
@@ -129,6 +129,15 @@ six of them were not linked from anywhere at all.
 | [crypto-accel.md](crypto-accel.md) | routing OpenSSL through the host's crypto instructions |
 | [benchmarks.md](benchmarks.md) | the bundled microbenchmarks, and how to run them |
 | [tuning-knobs.md](tuning-knobs.md) | `ISH_GUEST_CPU_COUNT` and friends, for the CLI build and Xcode schemes |
+
+**The book**
+
+`/AOK/docs/book` is the full iSH-AOK book -- 43 chapters and 8 appendices on
+how the whole thing works, from the emulator and its four guests through the
+VFS, native programs, the iOS app, testing and releasing, to an honest account
+of what is still wrong. It ships here because a reader with a terminal and no
+browser is exactly who it was written for. Start at
+[book/README.md](book/README.md), or [book/ch00-foreword.md](book/ch00-foreword.md).
 
 **Looking inside**
 

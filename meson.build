@@ -363,6 +363,25 @@ aok_generated_docs = custom_target('aok_generated_docs',
               meson.current_source_dir() / 'opt' / 'AOK' / 'docs', '@OUTPUT@',
               '/docs', '_docs'])
 
+# The book (docs/book/) ships at /AOK/docs/book. Same generator, a different
+# source root -- the book is written in the repository proper, not under
+# opt/AOK/docs, and copying it there to ship it would be two copies to keep in
+# step. Nested paths (appendices/) are fine: gen-aokfs.py derives the
+# intermediate directory entries.
+aok_book_srcs = []
+foreach line : fs_mod.read('fs/aok-book.manifest').strip().split('\n')
+    entry = line.strip()
+    if entry != '' and not entry.startswith('#')
+        aok_book_srcs += files('docs/book' / entry.split()[0])
+    endif
+endforeach
+aok_generated_book = custom_target('aok_generated_book',
+    output: 'aok_generated_book.inc',
+    input: [files('tools/gen-aokfs.py', 'fs/aok-book.manifest')] + aok_book_srcs,
+    command: [python, '@INPUT0@', '@INPUT1@',
+              meson.current_source_dir() / 'docs' / 'book', '@OUTPUT@',
+              '/docs/book', '_book'])
+
 # Same mechanism for /AOK/native/libs, from fs/aok-libs.manifest with sources
 # under deps/helix/runtime/. Unlike the three above, its names NEST -- the
 # directories are derived from the paths by the generator rather than declared
@@ -518,6 +537,7 @@ src = [
     'kernel/fs.c',
     'kernel/fs_info.c',
     'fs/aok.c', aok_generated_libs, aok_generated_tests, aok_generated_tools, aok_generated_docs,
+    aok_generated_book,
     'fs/mount.c',
     'fs/fd.c',
     'fs/inode.c',

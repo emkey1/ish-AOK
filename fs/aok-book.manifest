@@ -1,0 +1,63 @@
+# Files exposed read-only at /AOK/docs/book, embedded into the kernel by
+# tools/gen-aokfs.py at build time (see meson.build / fs/aok.c).
+#
+# One path per line, relative to docs/book/. Blank lines and lines starting
+# with # are ignored. Paths may nest (appendices/), and the intermediate
+# directory nodes are derived from them rather than declared here.
+#
+# This is the book that lives in docs/book/ in the repository. It ships on the
+# device because a reader with a terminal and no browser is exactly who it was
+# written for.
+README.md
+appendices/README.md
+appendices/appendix-a-timeline.md
+appendices/appendix-b-repository-map.md
+appendices/appendix-c-syscall-coverage.md
+appendices/appendix-d-proc-ish.md
+appendices/appendix-e-knobs.md
+appendices/appendix-f-regression-suite.md
+appendices/appendix-g-glossary.md
+appendices/appendix-h-further-reading.md
+ch00-foreword.md
+ch01-the-impossible-app.md
+ch02-upstream-ish.md
+ch03-the-fork.md
+ch04-the-year-the-tree-tripled.md
+ch05-the-guest-machine.md
+ch06-threaded-code.md
+ch07-four-guests.md
+ch08-high-level-emulation.md
+ch09-proving-it-right.md
+ch10-processes-and-threads.md
+ch11-syscalls.md
+ch12-signals-job-control-ptrace.md
+ch13-memory-from-the-kernel.md
+ch14-waiting.md
+ch15-loading-a-program.md
+ch16-the-vfs.md
+ch17-fakefs.md
+ch18-synthetic-filesystems.md
+ch19-sockets.md
+ch20-fuse.md
+ch21-the-aok-filesystem.md
+ch22-a-native-program-is-a-function-call.md
+ch23-the-shim.md
+ch24-the-thing-that-cannot-fork.md
+ch25-the-catalogue.md
+ch26-licensing-honestly.md
+ch27-what-native-programs-cost.md
+ch28-the-app-around-the-kernel.md
+ch29-the-terminal.md
+ch30-roots.md
+ch31-files-workspace-tools.md
+ch32-devices-and-integrations.md
+ch33-accelerators.md
+ch34-two-builds.md
+ch35-testing-strategy.md
+ch36-debugging.md
+ch37-releasing.md
+ch38-where-the-time-goes.md
+ch39-six-optimizations.md
+ch40-what-this-project-believes.md
+ch41-the-honest-gaps.md
+ch42-where-it-could-go.md
