@@ -1,6 +1,6 @@
 // fs_conformance.c — self-checking regression lock for the filesystem/VFS
 // conformance fixes found by differential testing against real Linux (mint).
-// Each check asserts the documented Linux behavior that iSH now matches:
+// Each check asserts the documented Linux behavior that AOK now matches:
 //
 //   - O_NOFOLLOW on a final symlink -> ELOOP
 //   - rmdir of a symlink-to-dir -> ENOTDIR (final symlink not followed)
@@ -16,7 +16,7 @@
 //   - readlink("/proc/self") is the bare numeric pid (no trailing slash)
 //   - dup clears FD_CLOEXEC; dup3(O_CLOEXEC) sets it
 //
-// The same source is a Tier-0 functional gate (run under iSH, no oracle) and a
+// The same source is a Tier-0 functional gate (run under AOK, no oracle) and a
 // portable check that also passes on a real Linux kernel.
 #define _GNU_SOURCE
 #include <errno.h>
@@ -118,7 +118,7 @@ int main(int argc, char **argv) {
 
     // ---- fchdir requires a directory fd ----
     // fchdir on a non-directory (socket) must return ENOTDIR and leave the cwd
-    // untouched. iSH used to skip the type check and pin the fd as cwd; a
+    // untouched. AOK used to skip the type check and pin the fd as cwd; a
     // listening socket pinned this way never released its host port, so
     // stress-ng --sockabuse spun on EADDRINUSE for minutes.
     int cdd = open("d", O_RDONLY | O_DIRECTORY);

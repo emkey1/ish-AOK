@@ -2,13 +2,13 @@
 //
 // History: sys_getcwd returned generic_getpath(pwd) -- the full mount-absolute
 // path -- without stripping the process's chroot root, so after chroot("/jail")
-// + chdir("/") getcwd() returned "/jail" instead of "/". iSH already resolves
+// + chdir("/") getcwd() returned "/jail" instead of "/". AOK already resolves
 // paths relative to the chroot root (fs/path.c passes it to __path_normalize),
 // so only the getcwd query was wrong. This matters because chroot into an
-// i386/amd64/aarch64 rootfs is how iSH runs another guest arch, and tools that
+// i386/amd64/aarch64 rootfs is how AOK runs another guest arch, and tools that
 // consult getcwd after chrooting (build systems, package managers) misbehaved.
 //
-// Requires privilege to chroot(): run as root (iSH runs guests as uid 0) or,
+// Requires privilege to chroot(): run as root (AOK runs guests as uid 0) or,
 // on a real Linux oracle, under `unshare -r` (a user namespace grants
 // CAP_SYS_CHROOT). Each case runs in its own child so the (irreversible)
 // chroot doesn't bleed across cases.
@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
 
     if (geteuid() != 0) {
         // Can't chroot without privilege; skip rather than fail so the suite
-        // stays green on an unprivileged host (the iSH suite runs as uid 0).
+        // stays green on an unprivileged host (the AOK suite runs as uid 0).
         printf("chroot_getcwd: SKIP (not privileged: euid=%d)\n", (int) geteuid());
         return 0;
     }

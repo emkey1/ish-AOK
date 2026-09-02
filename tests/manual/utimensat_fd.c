@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
         check_futimens_ok("socket", s);
     }
 
-    // Pipe fd (also an adhoc/anon fd in iSH).
+    // Pipe fd (also an adhoc/anon fd in AOK).
     int p[2];
     if (pipe(p) != 0) {
         printf("FAIL: pipe: %s\n", strerror(errno));

@@ -4,7 +4,7 @@
 // emu/memory.c's mem_ptr()/mem_ptr_fault() extend a growsdown region onto an
 // unmapped page whenever the next mapped page ANYWHERE above it is growsdown.
 // Linux's expand_downwards() bounds that two ways -- never below mmap_min_addr
-// (65536), and never more than RLIMIT_STACK below the stack -- but iSH had no
+// (65536), and never more than RLIMIT_STACK below the stack -- but AOK had no
 // bound at all. In every 64-bit guest layout the stack (~4 GiB) is the LOWEST
 // mapping in the address space, with the executable and all libraries far
 // above it at 0x7fff_...., so *every* address below the stack, the whole NULL
@@ -109,7 +109,7 @@ static void check_faults(uintptr_t addr, const char *what) {
 
 // Recurse with a large-ish frame so the main stack really has to grow. 60 x
 // 64 KiB stays under the 8 MiB default RLIMIT_STACK, so this is required to
-// work on Linux and under iSH alike.
+// work on Linux and under AOK alike.
 static volatile unsigned char stack_sink;
 static void grow_stack(int depth) {
     char frame[64 * 1024];

@@ -3,13 +3,13 @@
 // Linux (timerfd_settime(2)): "the counter of expirations is reset to zero"
 // whenever the timer is set.
 //
-// iSH only ever cleared expirations in read(), so an expiration that was
+// AOK only ever cleared expirations in read(), so an expiration that was
 // never read() survived a disarm and left the fd permanently POLL_READ.
 // Real-world casualty: libwayland's event loop multiplexes all wl_event_loop
 // timers onto ONE shared timerfd (timer heap). When the last armed timer is
 // removed after an expiration that nobody read (labwc's pipemenu 4s timeout
 // firing is exactly that), it disarms with settime(fd, 0, {0,0}) expecting
-// readiness to clear. Under iSH the fd stayed hot, so labwc's epoll loop
+// readiness to clear. Under AOK the fd stayed hot, so labwc's epoll loop
 // dispatched a phantom timer forever: ~3000 epoll_pwait+timerfd_settime
 // cycles/second, one guest CPU pinned, on-device (Arch aarch64, labwc
 // 0.20.1). Found while debugging the Display applet's empty Applications

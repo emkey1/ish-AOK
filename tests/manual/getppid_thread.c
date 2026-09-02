@@ -4,7 +4,7 @@
 // Linux reports `real_parent->tgid` everywhere a parent pid is user-visible:
 // getppid(2) is task_tgid_vnr(real_parent), /proc/<pid>/stat field 4 and
 // /proc/<pid>/status PPid go through task_ppid_nr() == task_tgid_nr(
-// real_parent), and taskstats ac_ppid is task_tgid_nr_ns(real_parent). iSH
+// real_parent), and taskstats ac_ppid is task_tgid_nr_ns(real_parent). AOK
 // reported `parent->pid`, which is the parent's THREAD id (sys_gettid's value,
 // not sys_getpid's). The two are identical whenever the forking task is its
 // group's leader, which is why this hid: it only diverges when a NON-LEADER

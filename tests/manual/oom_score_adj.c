@@ -77,7 +77,7 @@ int main(int argc, char **argv) {
     // Everything past here writes the file, which needs privilege: on Linux
     // *lowering* oom_score_adj needs CAP_SYS_RESOURCE (EACCES without it, and
     // an unprivileged task can never walk a raised value back down), and under
-    // iSH the procfs entry is mode 0444 so every write needs root. Skip rather
+    // AOK the procfs entry is mode 0444 so every write needs root. Skip rather
     // than fail so an unprivileged run stays green -- the on-device suite runs
     // as uid 1000. Same convention as ambient_caps.c / chroot_getcwd.c.
     if (geteuid() != 0) {

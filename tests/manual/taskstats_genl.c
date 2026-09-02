@@ -314,7 +314,7 @@ int main(int argc, char **argv) {
             check("get.pid.write_char", ts.write_char >= (uint64_t) CHUNK * CHUNKS);
             check("get.pid.write_bytes", ts.write_bytes >= (uint64_t) CHUNK * CHUNKS);
             /* not asserted: read/write_syscalls are zero on some real
-             * kernels (config-dependent), though iSH fills them */
+             * kernels (config-dependent), though AOK fills them */
             check("get.pid.comm", ts.ac_comm[0] != '\0');
             test_logf("     comm=%s uid=%u write_char=%llu write_bytes=%llu blkio_count=%llu blkio_delay=%lluns\n",
                     ts.ac_comm, ts.ac_uid,
@@ -327,7 +327,7 @@ int main(int argc, char **argv) {
         }
 
         /* TGID aggregate parses too. Real kernels only aggregate delay
-         * fields for TGID queries (io stays zero); iSH fills io as a
+         * fields for TGID queries (io stays zero); AOK fills io as a
          * superset, so io contents are logged, not asserted. */
         r = taskstats_get(fd, family, 1, (uint32_t) getpid(), 4, &ts, &out_id, &nl_errno);
         if (check("get.tgid.ok", r == 0)) {

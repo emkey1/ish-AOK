@@ -137,7 +137,7 @@ int main(int argc, char **argv) {
     check("file.syscw", after.syscw >= before.syscw + CHUNKS);
     check("file.write_bytes", after.write_bytes >= before.write_bytes + (unsigned long long) wrote);
 
-    // ---- file reads count in rchar/syscr (read_bytes exact under iSH,
+    // ---- file reads count in rchar/syscr (read_bytes exact under AOK,
     //      cache-dependent on real Linux, so only rchar is asserted) ----
     before = after;
     fd = open(path, O_RDONLY);
@@ -234,7 +234,7 @@ int main(int argc, char **argv) {
 
     // ---- vmstat pgpgout moved with all that file writing (KiB units) ----
     // On real Linux pgpgout only moves at writeback time; force it so the
-    // check is portable. Under iSH the accounting is immediate and sync is
+    // check is portable. Under AOK the accounting is immediate and sync is
     // harmless.
     sync();
     unsigned long long pgpgout1 = read_vmstat_field("pgpgout");

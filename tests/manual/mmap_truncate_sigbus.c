@@ -3,7 +3,7 @@
 // History: a file-backed guest mmap (tmpfs host_fd backing from fs/tmp.c, or
 // realfs real_fd from fs/real.c) is a host mmap of a host file. If a racing
 // thread ftruncate's the backing file smaller under a live mapping, a guest
-// store/load to the now-past-EOF page raises a HOST SIGBUS. iSH's JIT does
+// store/load to the now-past-EOF page raises a HOST SIGBUS. AOK's JIT does
 // direct host memory accesses in its store/load gadgets and originally had no
 // host-fault translation, so the whole emulator process died with
 // "FS pagein error" instead of delivering SIGBUS to the guest program -- unlike
@@ -148,7 +148,7 @@ static int run_in_dir(const char *label, const char *dir, int do_write) {
         check(bus_code == BUS_ADRERR, "SIGBUS si_code is BUS_ADRERR");
         // si_addr must fall inside the mapping, at or past the surviving first
         // page (i.e. in the truncated region). Exact-byte on real Linux; on
-        // iSH the host reports the pagein fault at host-page (16K) granularity,
+        // AOK the host reports the pagein fault at host-page (16K) granularity,
         // so si_addr is rounded down to a host page within the truncated
         // region -- still inside the mapping, which is what callers key off.
         test_logf("  si_addr offset in mapping = %#lx (faulted at %#x)\n",

@@ -2,7 +2,7 @@
 // statx_mnt_id_timerfd.
 //
 // Three regressions, all found booting Arch Linux ARM aarch64 systemd as
-// PID 1 on iSH:
+// PID 1 on AOK:
 //
 // 1. openat(link, O_PATH|O_NOFOLLOW) returned ELOOP; Linux opens the symlink
 //    ITSELF. systemd's chase() opens every path component this way, so any
@@ -17,7 +17,7 @@
 //    P_ALL/P_PID/P_PGID ("Failed to wait for ...10-arch: Invalid argument").
 //
 // Known deviations NOT asserted: read() on a non-symlink O_PATH fd succeeds
-// on iSH (Linux: EBADF); openat2 resolve flags return EINVAL (systemd falls
+// on AOK (Linux: EBADF); openat2 resolve flags return EINVAL (systemd falls
 // back to openat). Also passes on real Linux.
 #define _GNU_SOURCE
 #include <stdio.h>

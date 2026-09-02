@@ -2,7 +2,7 @@
  * avx_regress -- AVX/AVX2 (VEX-encoded) instruction coverage for the amd64
  * guest (GH #525).
  *
- * Motivation: Bun-based CLI tools crashed with SIGILL under iSH because the
+ * Motivation: Bun-based CLI tools crashed with SIGILL under AOK because the
  * emulator had no VEX decode at all. Disassembling the real binary showed
  * pervasive compiler/stdlib function-multiversioning -- baseline/AVX2/AVX-512
  * variants of hot routines coexisting in one image, selected by a runtime

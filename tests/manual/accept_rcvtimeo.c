@@ -2,15 +2,15 @@
 // accept4() on a listener with a receive timeout returns EAGAIN when the
 // timeout elapses with no pending connection. Darwin's accept() ignores
 // SO_RCVTIMEO entirely (it applies to recv-family calls only there), and
-// iSH's sys_accept4_common used to call the blocking host accept() directly,
-// so under iSH the timeout never fired.
+// AOK's sys_accept4_common used to call the blocking host accept() directly,
+// so under AOK the timeout never fired.
 //
 // systemd-userdbd's userwork workers (systemd >= 250, src/userdb/userwork.c)
 // are built on exactly this contract: a BLOCKING listener with SO_RCVTIMEO
 // armed by the manager, where the periodic EAGAIN tick drives the entire
 // worker lifecycle -- idle exit after listen_idle_usec, retirement after
 // ITERATIONS_MAX/RUNTIME_MAX, and the manager's respawn logic downstream of
-// those exits. Under iSH all three pre-spawned workers blocked forever
+// those exits. Under AOK all three pre-spawned workers blocked forever
 // inside the host accept() (observed via lldb on device during the Arch
 // aarch64 systemd-260 boot wedge at "Starting D-Bus System Message Bus..."),
 // so no worker ever exited, no maintenance ran, and userdb varlink queries
@@ -103,7 +103,7 @@ int main(int argc, char **argv) {
     check(dt >= 0.5 && dt <= 10.0, "rcvtimeo accept waited ~1s (%.2fs)", dt);
 
     // 2. guest F_GETFL on the listener must NOT show O_NONBLOCK (the guest
-    // never set it; only iSH's internal host-side flag is nonblocking)
+    // never set it; only AOK's internal host-side flag is nonblocking)
     int fl = fcntl(lfd, F_GETFL);
     check(fl >= 0 && !(fl & O_NONBLOCK), "listener F_GETFL has no O_NONBLOCK (%#x)", fl);
 

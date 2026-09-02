@@ -192,7 +192,7 @@ static ssize_t master_slurp(int master, char *buf, size_t cap) {
 
 // A pty is created with packet mode off, and a previous pty that turned it on
 // must not be able to leave it on for the next one. The "previous" pty is
-// closed first so its kernel-side state is freed (and, on iSH, its struct tty
+// closed first so its kernel-side state is freed (and, on AOK, its struct tty
 // block recycled) before the fresh one is opened.
 static void test_fresh_pty_packet_mode(void) {
     int master, slave;

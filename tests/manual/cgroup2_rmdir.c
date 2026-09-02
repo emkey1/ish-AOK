@@ -4,7 +4,7 @@
 // (cgroup.procs, cgroup.controllers, cgroup.events, ...). They belong to the
 // filesystem, not to the guest: on Linux they do not count toward the
 // directory's emptiness, so rmdir on a cgroup with no processes and no child
-// cgroups succeeds. iSH backs cgroup2 with tmpfs (fs/tmp.c) and created those
+// cgroups succeeds. AOK backs cgroup2 with tmpfs (fs/tmp.c) and created those
 // interface files as ordinary tmpfs files, so the generic emptiness test saw
 // seven children and every rmdir answered ENOTEMPTY -- for EVERY cgroup, since
 // a cgroup is born holding them:

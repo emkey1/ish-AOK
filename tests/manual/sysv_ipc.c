@@ -1,6 +1,6 @@
 // SysV message queues + semaphores (fakeroot's IPC substrate).
 //
-// iSH stubbed msgget/msgsnd/msgrcv/msgctl and semget/semop/semtimedop/semctl
+// AOK stubbed msgget/msgsnd/msgrcv/msgctl and semget/semop/semtimedop/semctl
 // to ENOSYS, so fakeroot's faked daemon ("while creating message channels:
 // Function not implemented") could never start -- which killed every
 // makepkg/dpkg-buildpackage package() stage, i.e. all AUR builds under

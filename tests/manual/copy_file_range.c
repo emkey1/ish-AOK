@@ -106,7 +106,7 @@ out:
 // Regression for stress-ng --sockabuse: on Linux, copy_file_range() only
 // ever supports regular files (pipes on some kernels via a splice fallback
 // we don't implement) and rejects anything else -- sockets included -- with
-// EINVAL before touching either fd. iSH's fd_copy_range had no such check,
+// EINVAL before touching either fd. AOK's fd_copy_range had no such check,
 // so a socket fell through to a real blocking read() with none of
 // sys_recvfrom's signal-interruptible wrapping: if nothing ever wrote to the
 // socket (exactly the case here -- and the case sockabuse hits, since real

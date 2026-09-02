@@ -418,7 +418,7 @@ static void test_link_dump_family_filter(void) {
     /* AF_BRIDGE is the one family Linux answers differently: rtnl_bridge_getlink
      * emits bridge ports only. iSH-AOK has no bridge devices, so the reply must
      * be empty. On a real kernel that is only true when the host has no bridge
-     * (a docker host has docker0), so assert the exact count under iSH and
+     * (a docker host has docker0), so assert the exact count under AOK and
      * merely a subset elsewhere -- otherwise this suite fails on any Linux box
      * that happens to run containers. */
     int bridge = count_dump_family(RTM_GETLINK_, RTM_NEWLINK_, 7);

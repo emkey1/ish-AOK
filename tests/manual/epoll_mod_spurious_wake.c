@@ -1,6 +1,6 @@
 // epoll_mod_spurious_wake: EPOLL_CTL_MOD on an emulated fd (eventfd) that is
 // NOT currently ready must NOT wake a thread blocked in epoll_wait() on that
-// set. iSH bug (introduced by the fix for epoll_mod_wake, commit 3e5903a0):
+// set. AOK bug (introduced by the fix for epoll_mod_wake, commit 3e5903a0):
 // poll_add_fd/poll_mod_fd poked the poll's notify pipe on EVERY ADD/MOD of an
 // emulated fd, regardless of whether the newly-armed interest was actually
 // satisfied. Real Linux (ep_insert/ep_modify) only wakes waiters when the

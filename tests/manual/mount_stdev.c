@@ -1,6 +1,6 @@
 // st_dev semantics for virtual filesystem mounts (tmpfs, proc, binds).
 //
-// History: iSH's tmpfs/proc/devpts/sysfs inodes never set stat.dev, so every
+// History: AOK's tmpfs/proc/devpts/sysfs inodes never set stat.dev, so every
 // virtual mount reported st_dev=0. busybox df matches a path to a mount by
 // comparing st_dev of the path against st_dev of each mountpoint in
 // /proc/mounts; with everything at dev 0 the LAST 0-dev mount won, so
@@ -15,7 +15,7 @@
 //
 // The same device has to be reported by the two places that name it, so this
 // also checks /proc/self/mountinfo's field 3 (major:minor) against st_dev of
-// each mount point. iSH printed a hardcoded "0:0" there, which agreed with
+// each mount point. AOK printed a hardcoded "0:0" there, which agreed with
 // nothing once every mount got its own anonymous device -- `stat /` said 0:15
 // while the mountinfo line for / still said 0:0.
 //
@@ -246,7 +246,7 @@ static void test_anon_fd_devs(void) {
 // Every mount already in the table: mountinfo's device field must be the
 // major:minor of st_dev of that mount's own mount point. The two are the same
 // number on Linux by construction -- field 3 is defined as the device of the
-// filesystem mounted there -- but iSH printed a literal "0:0" on every line,
+// filesystem mounted there -- but AOK printed a literal "0:0" on every line,
 // which agreed with nothing once each mount got its own anonymous device.
 // findmnt and anything else parsing the field saw that wrong number.
 static void test_mountinfo_dev_field(void) {
@@ -297,7 +297,7 @@ static void test_mountinfo_dev_field(void) {
     // Guard against a vacuous pass: "/" is the reported case (its line said
     // 0:0 while stat / said 0:15) and is never escaped, never overmounted and
     // never unreadable, so a run that skipped it skipped everything that
-    // matters. Under iSH the floor is /, /proc and /sys; a real kernel has
+    // matters. Under AOK the floor is /, /proc and /sys; a real kernel has
     // many more.
     check(checked_root, "the / line was among the lines checked");
     check(checked >= 3, "at least 3 mountinfo lines were checkable");

@@ -4,7 +4,7 @@
 
 # Appendix F. The regression suite, annotated
 
-230 C programs in `tests/manual/`, of which **213 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+231 C programs in `tests/manual/`, of which **214 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
 
 A row with a directory prefix is a per-architecture or accelerator test, kept
 in a subdirectory of `tests/manual/` and registered under that same prefix.
@@ -235,6 +235,7 @@ does not say what it is for.
 | `x86/amd64_regress.c` | yes |  |
 | `x86/atomic_cmpxchg32.c` | yes |  |
 | `x86/atomic_cmpxchg8b.c` | yes |  |
+| `x86/atomic_lock_contended.c` | yes | Do LOCK-prefixed instructions actually interlock? |
 | `x86/atomic_logic32.c` | yes |  |
 | `x86/atomic_xadd32.c` | yes |  |
 | `x86/atomics32.c` | yes |  |

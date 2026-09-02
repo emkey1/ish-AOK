@@ -118,7 +118,7 @@ static int pick_tmpfs_dir(void) {
 }
 
 // A writable directory that is NOT tmpfs, so the same asserts run against the
-// filesystem that was already correct (fakefs/realfs under iSH, disk on Linux).
+// filesystem that was already correct (fakefs/realfs under AOK, disk on Linux).
 static int pick_other_dir(void) {
     static const char *candidates[] = { "/tmp", "/var/tmp", "/root", "." };
     struct statfs sfs;

@@ -1,7 +1,7 @@
 // epoll_dup_add: Linux keys epoll membership by the (fd number, open file
 // description) pair, so dup'd fds -- stdout and stderr are typically dups of
 // one tty description -- may each carry their own registration on the same
-// epoll instance, each with its own event mask and data. iSH bug: membership
+// epoll instance, each with its own event mask and data. AOK bug: membership
 // was keyed by the underlying open file description (struct fd) alone, so the
 // second EPOLL_CTL_ADD returned EEXIST. Bun's event loop registers stdout and
 // stderr separately, so any Bun binary with both wired to the same tty/pipe
@@ -62,7 +62,7 @@ static void add_fd(const char *label, int ep, int fd, uint64_t data, uint32_t ev
         failf(label, (uint64_t) errno, 0, 0, 0, 0, 0);
 }
 
-// The scenario from the bug report, on an emulated-in-iSH fd (pipe).
+// The scenario from the bug report, on an emulated-in-AOK fd (pipe).
 static void test_pipe_dup(void) {
     int p[2];
     if (pipe(p) != 0) { failf("pipe", (uint64_t) errno, 0, 0, 0, 0, 0); return; }

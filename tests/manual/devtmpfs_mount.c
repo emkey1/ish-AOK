@@ -1,19 +1,19 @@
 // devtmpfs_mount.c — regression lock for mounting devtmpfs.
 //
-// iSH used to accept a devtmpfs mount as an unconditional no-op: the call
+// AOK used to accept a devtmpfs mount as an unconditional no-op: the call
 // returned 0, but nothing was mounted and nothing was populated. On the main
-// /dev that was harmless (iSH creates its device nodes there at startup), but
+// /dev that was harmless (AOK creates its device nodes there at startup), but
 // anywhere else it was worse than an error, because the caller had no way to
 // tell. A guest that mounted devtmpfs onto a fresh directory -- switch_root
-// and chroot boots, iSH's own /AOK/roots multi-arch chroots, any rootfs whose
+// and chroot boots, AOK's own /AOK/roots multi-arch chroots, any rootfs whose
 // tarball could not carry real device nodes -- got an EMPTY directory back,
 // and the first `> /dev/null` on it then created a REGULAR FILE that
 // accumulated every byte ever written to it, forever.
 //
-// devtmpfs is now a real filesystem (tmpfs that publishes iSH's device nodes
+// devtmpfs is now a real filesystem (tmpfs that publishes AOK's device nodes
 // at mount time, the way the real one mirrors the kernel's device model),
 // with one deliberate exception: mounting it over a /dev that is ALREADY
-// populated stays a no-op, because iSH's main /dev holds live state (POSIX
+// populated stays a no-op, because AOK's main /dev holds live state (POSIX
 // shared memory under /dev/shm, the devpts mount, whatever the user put
 // there) that a fresh mount cannot carry over. That case repairs any missing
 // nodes in place instead.
@@ -26,9 +26,9 @@
 //   - the mount is recorded: it shows in /proc/mounts, and umount undoes it
 //   - mode= is honored on the mount root
 //   - fsopen("devtmpfs") resolves instead of failing ENODEV
-//   - [iSH] a mount over an already-populated /dev is a no-op that preserves
+//   - [AOK] a mount over an already-populated /dev is a no-op that preserves
 //     the existing contents, and repairs missing nodes in place
-//   - [iSH] a directory holding a regular-file stand-in at "null" does NOT
+//   - [AOK] a directory holding a regular-file stand-in at "null" does NOT
 //     count as populated, so it gets a real mount
 //
 // Portable: the non-gated checks also pass on a real Linux kernel run as root
@@ -160,7 +160,7 @@ static void check_nodes_work(const char *dir) {
     }
 
     // Presence only for the rest: a real devtmpfs carries far more than this,
-    // so anything stronger than "these exist" would be asserting iSH's set.
+    // so anything stronger than "these exist" would be asserting AOK's set.
     static const char *expected[] = {"full", "random", "urandom", "tty", "console", "ptmx"};
     for (size_t i = 0; i < sizeof expected / sizeof expected[0]; i++) {
         snprintf(path, sizeof path, "%s/%s", dir, expected[i]);
@@ -226,12 +226,12 @@ int main(int argc, char **argv) {
     }
 
     if (!under_ish()) {
-        test_logf("skip: /dev-preservation checks are iSH-specific\n");
+        test_logf("skip: /dev-preservation checks are AOK-specific\n");
         return finish_suite("devtmpfs_mount");
     }
 
-    // --- iSH: a mount over an already-populated /dev preserves it ---
-    // Real Linux would cover the directory; iSH must not, because its main
+    // --- AOK: a mount over an already-populated /dev preserves it ---
+    // Real Linux would cover the directory; AOK must not, because its main
     // /dev is created before init runs and carries live state.
     mkdir("live", 0755);
     if (mknod("live/tty", S_IFCHR | 0666, makedev(5, 0)) != 0) {
@@ -277,7 +277,7 @@ int main(int argc, char **argv) {
             close(mfd);
             // Known deviation, asserted as a deviation so it can't drift
             // unnoticed: the rejected mount stays parked at its private
-            // staging path and is visible in /proc/mounts there. iSH cannot
+            // staging path and is visible in /proc/mounts there. AOK cannot
             // free it while the caller's own fsmount fd still references it
             // (that would leave the fd dangling), and it has no lazy-detach.
             // Cosmetic, because it never reaches the target -- which the
@@ -288,7 +288,7 @@ int main(int argc, char **argv) {
         close(fsfd2);
     }
 
-    // --- iSH: a regular-file stand-in does not count as populated ---
+    // --- AOK: a regular-file stand-in does not count as populated ---
     // Docker-exported tarballs cannot carry device nodes and ship a plain file
     // at "null" instead. That directory is broken, not populated, so it must
     // get a real mount rather than being left alone.

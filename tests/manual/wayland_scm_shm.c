@@ -1,6 +1,6 @@
 // Wayland substrate: SCM_RIGHTS fd-passing shape + memfd seals, the two
 // emulator bugs found bringing up a real Wayland compositor (wlroots/cage) +
-// client (foot) + VNC bridge (wayvnc) stack under iSH.
+// client (foot) + VNC bridge (wayvnc) stack under AOK.
 //
 // History: (1) libwayland's wl_connection_flush sets msg_controllen to the
 // UNPADDED CMSG_LEN(n), not CMSG_SPACE(n) -- the last cmsg in a sendmsg

@@ -128,7 +128,7 @@ static void drive_tracee(pid_t child, int want_exit, const char *label) {
 
         if (event == PTRACE_EVENT_STOP) {
             // The group-stop report. Lift job control (SIGCONT for real-Linux
-            // listener semantics; harmless on iSH) and continue.
+            // listener semantics; harmless on AOK) and continue.
             saw_group_stop = 1;
             kill(child, SIGCONT);
             if (ptrace(PTRACE_CONT, child, 0, 0) != 0) {

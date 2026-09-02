@@ -22,7 +22,7 @@
 //    timer_set, Darwin nanosleep ns-conversion overflow busy-spin), both now
 //    guarded -- the sentinel arm must neither fire nor spin.
 //
-// Arch-neutral (i386 note: iSH's i386 statx deliberately returns ENOSYS --
+// Arch-neutral (i386 note: AOK's i386 statx deliberately returns ENOSYS --
 // glibc then falls back to fstatat64, which the `working` branch relies on
 // for dpkg on APFS-backed roots -- so the statx checks are skipped there and
 // only the timerfd half is exercised).

@@ -91,7 +91,7 @@ static void probe(const char *what, void (*run)(void), unsigned want_byte) {
               what, fault_code, (void *) fault_addr);
 
     // si_code: Linux reports SI_KERNEL for a #GP that is not a memory fault.
-    // Asserted only under iSH -- it is the emulator's own classification, and
+    // Asserted only under AOK -- it is the emulator's own classification, and
     // a real kernel is entitled to describe the same #GP differently.
     if (on_ish && fault_code != SI_KERNEL) {
         printf("FAIL: %s si_code=%d, want SI_KERNEL(%d)\n",
@@ -205,7 +205,7 @@ int main(int argc, char **argv) {
 
     if (uname(&uts) == 0 && strstr(uts.release, "ish") != NULL)
         on_ish = 1;
-    test_logf("running on %s (iSH=%d)\n", uts.release, on_ish);
+    test_logf("running on %s (AOK=%d)\n", uts.release, on_ish);
 
     probe("in eax, dx (ed)",    run_in_dx_32,   0xed);
     probe("in al, dx (ec)",     run_in_dx_8,    0xec);

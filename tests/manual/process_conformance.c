@@ -213,7 +213,7 @@ static void test_fork_shared_offset(void) {
 }
 
 // kill() on an exited-but-unreaped (zombie) child returns 0 on Linux -- the
-// process still exists until reaped; the signal is just discarded. iSH
+// process still exists until reaped; the signal is just discarded. AOK
 // returned ESRCH, which stress-ng hits with kill(child, SIGKILL) right
 // before wait4().
 static void test_kill_zombie(void) {

@@ -9,7 +9,7 @@
 //   setresuid(uid, uid, uid) ->
 //   capset(re-assert cap in effective+permitted+inheritable)
 //
-// Was, in iSH: PR_CAP_AMBIENT_RAISE was accepted but recorded nothing,
+// Was, in AOK: PR_CAP_AMBIENT_RAISE was accepted but recorded nothing,
 // PR_SET_SECUREBITS was accepted but never armed keepcaps, and capset's
 // inheritable check demanded pI' be a subset of pI alone (Linux allows
 // pI | pP). Net effect: the setresuid wiped the permitted set, the

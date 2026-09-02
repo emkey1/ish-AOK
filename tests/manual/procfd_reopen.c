@@ -1,7 +1,7 @@
 // /proc/<pid>/fd/N "magic link" opens must honor the CALLER's open flags,
 // like Linux: opening /proc/self/fd/N is a fresh open of the target file
 // with the flags passed to open(2), not a clone of the original
-// descriptor's mode. iSH's procfd_openat (fs/generic.c) reopened the target
+// descriptor's mode. AOK's procfd_openat (fs/generic.c) reopened the target
 // with the ORIGINAL descriptor's flags instead, so upgrading an O_PATH fd to
 // O_RDWR via /proc/self/fd -- systemd's fd_reopen(), used by xopenat_full
 // (path=NULL) -- silently returned a read-only description: F_GETFL showed
@@ -21,7 +21,7 @@
 // behavior), O_NOFOLLOW -> ELOOP on the magic link, O_TRUNC honored, and
 // the deleted-file fallback (same accmode) still works. Deviation not
 // asserted: reopening a DELETED file with a WIDER accmode than the original
-// fd succeeds on Linux (inode reopen) but fails EACCES under iSH (no stable
+// fd succeeds on Linux (inode reopen) but fails EACCES under AOK (no stable
 // path to reopen; a loud error beats a silently read-only fd).
 //
 // Also passes on real Linux (mint oracle, verified).

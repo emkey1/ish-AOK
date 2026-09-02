@@ -12,7 +12,7 @@
 // Detection is per-trial rather than "does the whole run hang", so the test is
 // deterministic and fast: each trial fires exactly one SIGSTOP then one SIGCONT
 // at a child that is busy-advancing a shared counter, and checks whether the
-// child keeps running. On a correct kernel (real Linux, or fixed iSH) the pair
+// child keeps running. On a correct kernel (real Linux, or fixed AOK) the pair
 // nets out to "running" and the counter always advances promptly. On the buggy
 // build the race leaves the child stopped with no further SIGCONT; the trial
 // detects the freeze, confirms it (a rescue SIGCONT is required to un-stick the

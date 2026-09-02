@@ -24,7 +24,7 @@
 // the original bug is the npm-install repro. A violation, however, is
 // always a real bug, and this also pins decode coverage for LDAR/STLR.
 //
-// Passes on real Linux and on fixed iSH. Exits non-zero on any violation.
+// Passes on real Linux and on fixed AOK. Exits non-zero on any violation.
 
 #include <pthread.h>
 #include <stdatomic.h>

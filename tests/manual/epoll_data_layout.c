@@ -1,7 +1,7 @@
 // epoll_event guest-ABI layout: epoll_data must round-trip epoll_ctl ->
 // epoll_wait bit-exact (kernel/epoll.c). Linux packs struct epoll_event
 // (12 bytes, data at offset 4) ONLY on x86; every other arch uses the
-// naturally-aligned 16-byte layout (data at offset 8). iSH marshals the
+// naturally-aligned 16-byte layout (data at offset 8). AOK marshals the
 // two layouts by guest ABI (epoll_event_aligned): arm64 was added for the
 // Go netpoll SIGSEGV, but riscv64 was missed, so riscv64 guests read/wrote
 // epoll_event with the packed x86 layout -- both the registered data and

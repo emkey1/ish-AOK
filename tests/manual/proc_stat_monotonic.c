@@ -1,7 +1,7 @@
 /*
  * proc_stat_monotonic -- /proc/stat per-CPU counters must never go backward.
  *
- * iSH synthesizes /proc/stat's cpuN lines by bucketing each guest task into a
+ * AOK synthesizes /proc/stat's cpuN lines by bucketing each guest task into a
  * virtual-CPU slot (pid % ncpu): live tasks are sampled on every read, and
  * do_exit "banks" an exiting task's final thread time into per-slot dead
  * totals (kernel/task.c). The banking was not serialized against the reader:
@@ -23,7 +23,7 @@
  * This test churns short-lived CPU-burning children (so every exit banks a
  * nonzero tick count) while hammering /proc/stat reads, and fails on any
  * decrease in a cpuN line's user or system field. idle is deliberately NOT
- * checked: iSH's synthetic per-slot idle (uptime - slot busy) can legitimately
+ * checked: AOK's synthetic per-slot idle (uptime - slot busy) can legitimately
  * dip when a slot holds more than one busy task.
  *
  * Also passes on real Linux (counters there are monotonic by construction).

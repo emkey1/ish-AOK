@@ -1,7 +1,7 @@
 // Per-datagram SCM_CREDENTIALS on AF_UNIX SOCK_DGRAM sockets. Linux attaches
 // the SENDER's credentials to every unix datagram; a receiver with
 // SO_PASSCRED set gets them as an SCM_CREDENTIALS cmsg carrying the sender's
-// real pid. iSH only tracked the CONNECTED PEER's cred, which is undefined
+// real pid. AOK only tracked the CONNECTED PEER's cred, which is undefined
 // for many-senders-one-receiver datagram sockets -- exactly the shape of
 // systemd's /run/systemd/notify. Without per-datagram creds, systemd dropped
 // every sd_notify READY=1 ("Got notification datagram lacking valid
@@ -147,7 +147,7 @@ int main(int argc, char **argv) {
     }
 
     // Datagram 3: a small message received with MSG_TRUNC and a large buffer
-    // must NOT come back with MSG_TRUNC set. iSH prepends a 16-byte in-band
+    // must NOT come back with MSG_TRUNC set. AOK prepends a 16-byte in-band
     // cred header to every unix datagram; a naive implementation lets the
     // host's own MSG_TRUNC (computed against header+buffer, and on macOS
     // echoed from the input flag) leak through -- and systemd treats a

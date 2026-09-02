@@ -51,7 +51,7 @@
 //
 // THE EXEC TARGET'S SIZE IS THE WHOLE DIFFICULTY, and it is why this execs a
 // sweep of purpose-built peers rather than one binary, let alone a system one.
-// iSH asks pt_find_hole() for an image's total mapped page span (kernel/exec.c
+// AOK asks pt_find_hole() for an image's total mapped page span (kernel/exec.c
 // find_hole_for_elf), so two images share a load address if and only if they
 // round to the same number of pages -- and the cache is keyed by address, so
 // only an image that lands on top of this one can reuse its translations.

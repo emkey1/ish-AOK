@@ -138,7 +138,7 @@ static void trial_fatal_wakes_wait(int trial) {
             WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
 
     // Linux leaves the vfork child running when the parent takes a fatal
-    // signal. If iSH tore the shared mm down with the parent, or killed the
+    // signal. If AOK tore the shared mm down with the parent, or killed the
     // child outright, this second report never arrives.
     c = 0;
     is_true("fatal.child_outlived_parent",

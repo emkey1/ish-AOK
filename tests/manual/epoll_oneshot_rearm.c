@@ -1,6 +1,6 @@
 // epoll_oneshot_rearm: after an EPOLLONESHOT event is delivered, the fd must
 // stay REGISTERED in the epoll so EPOLL_CTL_MOD can re-arm it (Linux semantics).
-// iSH bug: delivering a oneshot event removed+freed the registration, so the
+// AOK bug: delivering a oneshot event removed+freed the registration, so the
 // re-arm MOD returned ENOENT. ivykis's iv_fd_epoll uses an EPOLLONESHOT eventfd
 // as its cross-thread wakeup and re-arms it with MOD -- the ENOENT iv_fatal'd
 // and aborted syslog-ng, and the premature free fed a use-after-free in the

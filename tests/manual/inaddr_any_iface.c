@@ -70,7 +70,7 @@
 //
 // Portable to Darwin as well as Linux, deliberately: the same binary run
 // natively on macOS answers whether a wildcard socket serving a
-// later-added address is something iSH breaks or something it inherits.
+// later-added address is something AOK breaks or something it inherits.
 
 #define _GNU_SOURCE
 
@@ -363,7 +363,7 @@ int main(int argc, char **argv) {
     if (bind(listen_fd, (struct sockaddr *) &sin, sizeof(sin)) < 0) {
         // A privileged port the host genuinely refuses to a non-root process
         // is the tester's own choice, not a defect -- skip rather than fail.
-        // (Under iSH this branch is rare: the bind fallback usually absorbs
+        // (Under AOK this branch is rare: the bind fallback usually absorbs
         // the refusal, which is precisely what the coverage probe then
         // exposes as loopback-only reachability.)
         if (probe_port != 0 && probe_port < 1024 && (errno == EACCES || errno == EPERM)) {
@@ -379,7 +379,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // What the guest believes it bound. Under iSH this is rewritten back from
+    // What the guest believes it bound. Under AOK this is rewritten back from
     // the NAT table when a fallback fired, so it reports the wildcard either
     // way -- which is exactly why the coverage probe below is the only way to
     // tell a real wildcard bind from a loopback-only one.

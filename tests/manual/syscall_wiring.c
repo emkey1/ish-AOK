@@ -57,7 +57,7 @@
 #include "test_common.h"
 
 // A 32-bit ABI splits every 64-bit syscall offset into a (low, high) dword
-// pair. On i386 -- the only 32-bit ABI iSH runs -- the pair goes in two
+// pair. On i386 -- the only 32-bit ABI AOK runs -- the pair goes in two
 // consecutive argument registers with no padding, because x86-32 has no
 // even-register-pair alignment rule (compare arm/mips, which insert a dummy
 // arg). 64-bit ABIs pass the offset whole in one register.
@@ -77,7 +77,7 @@
 // leave in that register, and Linux rejects an unrecognised RWF_* bit. That
 // is not theoretical: on a real x86_64 kernel (Devuan 6, Linux 6.12) the very
 // same 5-argument call returns 14 from one program and -1 from another,
-// purely on register garbage. iSH ignores the flags word, so this only ever
+// purely on register garbage. AOK ignores the flags word, so this only ever
 // misbehaves against the oracle.
 #if __SIZEOF_POINTER__ == 8
 #define OFF_PAIR(off) ((long) (off)), 0L
@@ -217,7 +217,7 @@ static void check_positioned_io(void) {
     // --- preadv2/pwritev2 -------------------------------------------------
     // Same as preadv/pwritev plus a trailing flags word, and an offset of -1
     // meaning "use and advance the file position" instead of a positioned
-    // access. Flags stay 0: RWF_* are all performance/durability hints iSH
+    // access. Flags stay 0: RWF_* are all performance/durability hints AOK
     // accepts and ignores.
 #ifdef SYS_preadv2
     {
@@ -226,7 +226,7 @@ static void check_positioned_io(void) {
         memset(buf, 0, sizeof buf);
         errno = 0;
         // No ENOSYS escape hatch here: an unwired table entry IS the bug this
-        // file is for, and iSH implements preadv2 on every ABI. A libc that
+        // file is for, and AOK implements preadv2 on every ABI. A libc that
         // doesn't know the number is already excluded by the #ifdef.
         r = syscall(SYS_preadv2, fd, iov, 1, OFF_PAIR(OFF_HI), 0);
         check("raw SYS_preadv2 at 5GiB", r, MARK_LEN);
@@ -280,7 +280,7 @@ static void check_positioned_io(void) {
 // on Linux 6.12/x86_64; glibc's own semctl(3) does not set it either). i386's
 // 394 is sys_old_semctl, which does run ipc_parse_version and would accept
 // either, but IPC_64 there only selects the semid_ds layout -- irrelevant to
-// the layout-free commands used here. iSH masks IPC_64 off for every ABI, so
+// the layout-free commands used here. AOK masks IPC_64 off for every ABI, so
 // it accepts both; the portable form is the one worth asserting on.
 static void check_sysv_semctl(void) {
 #if defined(SYS_semget) && defined(SYS_semctl)
@@ -313,7 +313,7 @@ static void check_sched_and_domainname(void) {
         errno = 0;
         long r = syscall(SYS_sched_setparam, 0, &param);
         check("raw SYS_sched_setparam priority 0", r, 0);
-        // iSH is SCHED_OTHER-only, and Linux rejects a non-zero priority there.
+        // AOK is SCHED_OTHER-only, and Linux rejects a non-zero priority there.
         param = 1;
         errno = 0;
         r = syscall(SYS_sched_setparam, 0, &param);
@@ -335,12 +335,12 @@ static void check_sched_and_domainname(void) {
         long r = syscall(SYS_sched_rr_get_interval, 0, &tp);
         check("raw SYS_sched_rr_get_interval", r, 0);
         if (r == 0) {
-            // Only the shape is portable, not the value. iSH reports a fixed
+            // Only the shape is portable, not the value. AOK reports a fixed
             // 100ms quantum; real Linux gives a SCHED_OTHER task whatever
             // get_rr_interval_fair() computes, which is 0 on an idle runqueue
             // (measured: {0, 0} on Linux 6.12/x86_64), and an unprivileged
             // caller cannot switch to SCHED_RR to see a real slice. Asserting
-            // 100000000 here would be asserting an iSH-ism.
+            // 100000000 here would be asserting an AOK-ism.
             //
             // The 0xa5 poison is the real check: it catches a handler that
             // writes nothing, and -- on a 64-bit ABI -- one that writes only a

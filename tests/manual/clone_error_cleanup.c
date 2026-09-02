@@ -12,7 +12,7 @@
 // and killpg. On a buggy build the walk dereferences freed nodes and crashes; a
 // fixed build unlinks the group in the error path and survives.
 //
-// iSH fails the clone with EFAULT before any child is created; a real Linux
+// AOK fails the clone with EFAULT before any child is created; a real Linux
 // kernel may instead create the child (then fault) -- the test tolerates both
 // and only asserts that the process survives the list walks.
 #define _GNU_SOURCE
@@ -46,7 +46,7 @@ static int bad_clone_once(void) {
         waitpid((pid_t) rc, NULL, 0);   // real Linux may create+fault; reap it
         return 0;
     }
-    return 1;                  // rc < 0: EFAULT error path (iSH)
+    return 1;                  // rc < 0: EFAULT error path (AOK)
 }
 
 int main(int argc, char **argv) {
@@ -79,7 +79,7 @@ int main(int argc, char **argv) {
                   r, per_round, per_round);
     }
 
-    // On iSH the bad clones must reach the post-linking error path; if none did,
+    // On AOK the bad clones must reach the post-linking error path; if none did,
     // the trigger has regressed and the test is no longer exercising the bug.
     if (is_ish && faulted_total == 0) {
         printf("FAIL: no clone reached the error path (trigger ineffective)\n");

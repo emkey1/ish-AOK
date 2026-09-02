@@ -1,6 +1,6 @@
 // /sys/devices/system/cpu: per-CPU topology and cache attributes.
 //
-// History: iSH published /sys/devices/system/cpu with the summary files
+// History: AOK published /sys/devices/system/cpu with the summary files
 // (online/possible/present/kernel_max/offline) and a cpuN directory per CPU,
 // but every cpuN directory was EMPTY -- no topology/, no cache/. lscpu reads
 // those, so on-device it printed "Thread(s) per core: 0", "Core(s) per
@@ -12,8 +12,8 @@
 //
 // The topology published is deliberately FLAT -- one package, one cluster,
 // every CPU its own core, no SMT -- even though the host is a big.LITTLE part
-// whose performance/efficiency split iSH does know (the "host cores" line in
-// /proc/cpuinfo). iSH's CPUs are host pthreads that the host scheduler
+// whose performance/efficiency split AOK does know (the "host cores" line in
+// /proc/cpuinfo). AOK's CPUs are host pthreads that the host scheduler
 // migrates across clusters at will and sched_setaffinity is a no-op, so
 // advertising clusters would invite hwloc and libgomp to make placement
 // decisions that cannot take effect.
@@ -21,7 +21,7 @@
 // Runs on real Linux too: the universal half asserts only things any kernel
 // guarantees (masks and lists describing the same CPU set, self-membership,
 // sane cache geometry, stat size matching read length, dot entries present).
-// The flat-topology assertions are gated on running under iSH.
+// The flat-topology assertions are gated on running under AOK.
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
@@ -263,7 +263,7 @@ static void test_stat_size_matches(void) {
         checkf(st.st_size >= n, "%s: stat size %lld >= read length %lld",
                files[i], (long long) st.st_size, (long long) n);
         if (on_ish)
-            checkf(st.st_size == n, "%s: stat size %lld == read length %lld (iSH reports exact)",
+            checkf(st.st_size == n, "%s: stat size %lld == read length %lld (AOK reports exact)",
                    files[i], (long long) st.st_size, (long long) n);
     }
 }
@@ -308,7 +308,7 @@ static void test_topology(const struct cpuset *online) {
         if (!on_ish)
             continue;
 
-        // iSH's flat model: one package, one cluster, one thread per core.
+        // AOK's flat model: one package, one cluster, one thread per core.
         checkf(package == 0, "cpu%d: physical_package_id is 0, got %ld", cpu, package);
         checkf(core_id == cpu, "cpu%d: core_id equals the cpu number, got %ld", cpu, core_id);
         checkf(threads.count == 1, "cpu%d: exactly one thread sibling (no SMT), got %d",
@@ -419,7 +419,7 @@ static void test_agrees_with_cpuinfo(const struct cpuset *online) {
     }
     fclose(f);
     // riscv64 emits BOTH a "processor" and a "hart" line per CPU -- that is the
-    // real riscv kernel's format, and iSH matches it -- so counting either kind
+    // real riscv kernel's format, and AOK matches it -- so counting either kind
     // as a CPU counts every riscv64 CPU twice. Count processors, falling back to
     // harts only for a kernel that omits the processor line entirely.
     if (processors == 0)
@@ -436,7 +436,7 @@ int main(int argc, char **argv) {
     struct utsname uts;
     if (uname(&uts) == 0 && strstr(uts.release, "ish") != NULL)
         on_ish = 1;
-    test_logf("running on %s (iSH=%d)\n", uts.release, on_ish);
+    test_logf("running on %s (AOK=%d)\n", uts.release, on_ish);
 
     struct stat st;
     if (stat(CPU_ROOT, &st) != 0) {

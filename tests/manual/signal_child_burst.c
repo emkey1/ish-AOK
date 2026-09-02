@@ -3,7 +3,7 @@
 // control pattern used by every POSIX shell.
 //
 // SIGCHLD is a standard (non-realtime) signal: Linux never queues a second
-// instance while one is already pending, and iSH's deliver_signal_unlocked_locked
+// instance while one is already pending, and AOK's deliver_signal_unlocked_locked
 // / deliver_signal_to_group_locked correctly mirror that for the *queue*. But
 // they used to treat "already pending" as a reason to skip the *wake* too,
 // via a single early return covering both. sigset_has(pending, SIGCHLD) here

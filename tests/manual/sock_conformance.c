@@ -250,7 +250,7 @@ static void test_inet_tcp(void) {
 
 // A wildcard *destination* means "this host" on Linux: sendto(0.0.0.0:port)
 // must reach a local listener. Darwin fails such sends with EHOSTUNREACH, so
-// iSH rewrites the destination (fs/sock.c sockaddr_read). stress-ng --udp's
+// AOK rewrites the destination (fs/sock.c sockaddr_read). stress-ng --udp's
 // client targets 0.0.0.0 and died instantly, stranding its server.
 static void test_sendto_wildcard_dest(void) {
     int srv = socket(AF_INET, SOCK_DGRAM, 0);
@@ -281,7 +281,7 @@ static void test_sendto_wildcard_dest(void) {
 // Linux's ip_setsockopt accepts EITHER a single byte or an int for
 // IP_MULTICAST_TTL / IP_MULTICAST_LOOP (optlen >= 1 reads one byte,
 // optlen >= sizeof(int) reads an int); optlen 0 is EINVAL. avahi-daemon
-// passes a uint8_t TTL -- iSH rejecting the 1-byte form made its IPv4
+// passes a uint8_t TTL -- AOK rejecting the 1-byte form made its IPv4
 // mDNS socket setup fail and dropped it to IPv6-only mode.
 static void test_multicast_optlen(void) {
     int s = socket(AF_INET, SOCK_DGRAM, 0);

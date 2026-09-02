@@ -8,7 +8,7 @@
 //   mlock and munlock returned 0 for any range at all, including one that was
 //   not mapped. The usual reason to call mlock is keeping a secret out of
 //   swap, and a caller that got its range wrong was told it had succeeded.
-//   (The locking itself is still a no-op -- iSH cannot pin host pages, and a
+//   (The locking itself is still a no-op -- AOK cannot pin host pages, and a
 //   lock is advisory against swap, which iOS manages itself. Claiming a range
 //   EXISTS when it does not is a different kind of answer.)
 //

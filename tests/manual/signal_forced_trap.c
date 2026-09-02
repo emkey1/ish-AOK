@@ -4,7 +4,7 @@
 // SIG_DFL, since we do not want to have a signal handler that was blocked be
 // invoked when user space had explicitly blocked it."
 //
-// The iSH bug (found via npm/node on arm64): deliver_signal only
+// The AOK bug (found via npm/node on arm64): deliver_signal only
 // force-defaulted the ignored and blocked-with-SIG_DFL cases. A synchronous
 // SIGSEGV arriving while blocked WITH A CUSTOM HANDLER installed was queued
 // and skipped, so the faulting instruction re-executed forever: the guest

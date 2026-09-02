@@ -7,14 +7,14 @@
 // space on a tmpfs filesystem", and df showed a 0-size filesystem. Fixed by
 // implementing tmpfs_statfs mirroring real Linux semantics (ground-truthed on
 // a real kernel): f_bsize = f_frsize = 4096, f_blocks = the mount's size cap
-// (Linux defaults to half of RAM; iSH reports half of host RAM), f_bfree =
+// (Linux defaults to half of RAM; AOK reports half of host RAM), f_bfree =
 // f_bavail = cap minus pages actually stored, f_files/f_ffree the same cap
 // minus inodes in use (the root directory counts as one), f_namelen = 255.
 // cgroup/cgroup2 mounts got a statfs reporting what Linux reports for them:
 // zero blocks/inodes, just f_bsize 4096 and f_namelen 255.
 //
 // Known deviation (not asserted here): Linux charges only pages actually
-// allocated, so a sparse ftruncate consumes no blocks; iSH's tmpfs backing is
+// allocated, so a sparse ftruncate consumes no blocks; AOK's tmpfs backing is
 // dense, so block usage tracks file size. write()n data is charged the same
 // on both, which is what this test uses.
 #define _GNU_SOURCE

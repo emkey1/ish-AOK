@@ -1,6 +1,6 @@
 // time_conformance.c — self-checking regression lock for the time/clock/timer
 // conformance fixes found by differential testing against real Linux (mint).
-// Each check asserts the documented Linux behavior that iSH now matches:
+// Each check asserts the documented Linux behavior that AOK now matches:
 //
 //   - getitimer(ITIMER_REAL) works: unset -> {0,0}; after setitimer it reports
 //     the remaining value; a bogus `which` -> EINVAL (was unwired -> SIGSYS)
@@ -15,7 +15,7 @@
 //   - CLOCK_TAI reads epoch-based time (not boot-relative MONOTONIC)
 //   - clock_settime(CLOCK_MONOTONIC) -> EINVAL (a non-settable clock), not EPERM
 //
-// The same source is a Tier-0 functional gate (run under iSH, no oracle) and a
+// The same source is a Tier-0 functional gate (run under AOK, no oracle) and a
 // portable check that also passes on a real Linux kernel. NOTE: it deliberately
 // does NOT exercise the privileged setters that actually change the wall clock
 // (settimeofday / clock_settime(CLOCK_REALTIME)); those are covered by the

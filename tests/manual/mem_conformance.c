@@ -1,6 +1,6 @@
 // mem_conformance.c — self-checking regression lock for the memory-management
 // conformance fixes found by differential testing against real Linux (mint).
-// Each check asserts the documented Linux behavior that iSH now matches:
+// Each check asserts the documented Linux behavior that AOK now matches:
 //
 //   - PROT_NONE is enforced on READS, not just writes: a page mprotect'd from
 //     RW down to PROT_NONE faults on read (it used to keep its host backing and
@@ -18,7 +18,7 @@
 //   - fork copy-on-write: a child's write to a MAP_PRIVATE page leaves the
 //     parent's copy unchanged; a MAP_SHARED write is visible in the parent.
 //
-// The same source is a Tier-0 functional gate (run under iSH, no oracle) and a
+// The same source is a Tier-0 functional gate (run under AOK, no oracle) and a
 // portable check that also passes on a real Linux kernel.
 #define _GNU_SOURCE
 #include <errno.h>

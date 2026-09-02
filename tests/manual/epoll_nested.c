@@ -6,7 +6,7 @@
 // the inner epoll must (a) wake a blocked epoll_wait on the OUTER epoll and
 // (b) show the inner fd as readable in a later outer scan.
 //
-// iSH's epoll fds had no .poll callback and poll_wakeup did not cascade
+// AOK's epoll fds had no .poll callback and poll_wakeup did not cascade
 // through an owning epoll, so the edge died inside the inner epoll: the
 // outer epoll_wait slept through it, systemd's mountinfo rescan never ran,
 // and every boot-time mount unit "protocol"-failed

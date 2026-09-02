@@ -22,7 +22,7 @@
 //      with C11 release/acquire; the executor calls and must observe the
 //      new return value (the V8 concurrent-compile shape).
 //
-// A/B: unfixed iSH returns the OLD value (fails on the first same-thread
+// A/B: unfixed AOK returns the OLD value (fails on the first same-thread
 // round); fixed passes. Also passes on real Linux.
 
 #include <pthread.h>

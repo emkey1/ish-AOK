@@ -1,6 +1,6 @@
 // ptrace_thread_follow: a tracer using PTRACE_O_TRACECLONE + wait4(__WALL) must
 // be able to follow a CLONE_THREAD worker of its tracee. This is the path
-// strace -f uses to follow threads; the iSH do_wait bug skipped non-leader
+// strace -f uses to follow threads; the AOK do_wait bug skipped non-leader
 // ptracees (and ignored __WALL), so a thread's ptrace-stop was never reported
 // and the tracer hung in wait4 forever -- freezing any traced multithreaded
 // program (e.g. syslog-ng under strace -f).

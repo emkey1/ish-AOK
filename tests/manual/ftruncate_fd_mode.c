@@ -4,7 +4,7 @@
 // path-based truncate(2) consults the inode, because only it has to resolve a
 // path in the first place.
 //
-// iSH briefly ran the inode check on both. generic_fsetattr, which backs
+// AOK briefly ran the inode check on both. generic_fsetattr, which backs
 // ftruncate/fchmod/fchown, called setattr_check(), whose attr_size case is
 // access_check(AC_W). A writable descriptor to a file whose mode bits deny
 // writing therefore failed, even though write(2) on the very same descriptor

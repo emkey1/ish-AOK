@@ -1,5 +1,5 @@
 // ptrace_exit_kill: a traced task with PTRACE_O_TRACEEXIT that receives SIGKILL
-// while stopped in its PTRACE_EVENT_EXIT report must die cleanly. The iSH bug:
+// while stopped in its PTRACE_EVENT_EXIT report must die cleanly. The AOK bug:
 // do_exit reported EVENT_EXIT, ptrace_stop_common saw the pending SIGKILL and
 // called do_exit_group again, which re-reported EVENT_EXIT -> infinite recursion
 // -> stack overflow -> whole-emulator crash. With the fix the child dies once.

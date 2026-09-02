@@ -298,7 +298,7 @@ int main(int argc, char **argv) {
         ck("  an unknown clock is EINVAL", r < 0 ? errno : 0, EINVAL);
     }
     if (on_ish) {
-        // A well-formed request is refused, not silently accepted: iSH cannot
+        // A well-formed request is refused, not silently accepted: AOK cannot
         // move the host clock. Safe to issue here precisely because it does
         // nothing.
         struct timespec now;
