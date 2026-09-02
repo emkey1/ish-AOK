@@ -11,41 +11,58 @@ because the diagnosis in that file was materially incomplete.
 
 ---
 
-## Two daemons burn 100% CPU each, spinning in userspace
+## strace and gdb kill the process they attach to
 
-**Established.** On the test iPad (Devuan arm64, glibc), `rsyslogd`'s
-`in:imuxsock` thread and `chronyd` each accumulate CPU at ~102% indefinitely.
-This is not a reporting artifact: sampled twice five seconds apart,
-`/proc/<pid>/stat` utime+stime grew by 511 and 510 jiffies against 5 seconds of
-wall clock. Two of eight cores pegged for the whole uptime, and it survives
-across sessions.
+**Established.** Attaching to a **thread** (not a thread-group leader) with
+either tool fails, and takes the target with it. On the test iPad, `strace -c -p
+623` on chronyd ran for six seconds and then the process was gone from `ps`; a
+second attach reported `PTRACE_SEIZE: No such process`. `gdb -p 653` on
+rsyslogd's `in:imuxsock` thread hit gdb's own internal assertion:
 
-They are spinning in **userspace**, not on a syscall: `strace -c -p 623` for six
-seconds recorded **two** syscalls total, both `clock_gettime`. Both processes
-are reported `S` (sleeping) throughout, which is consistent -- they are not
-blocked in the kernel, they are running.
+    linux-nat.c:1027: internal-error: linux_nat_post_attach_wait:
+    Assertion `pid == new_pid' failed.
 
-The `clock_gettime`-only trace is the interesting part, and chronyd is a *clock*
-daemon. `strace`'s own `-c` summary reported nonsense for those two calls
-(79610536 seconds across 2 calls), which is worth understanding rather than
-dismissing: it may be strace's arithmetic on a bad time value, or it may be the
-value the guest actually returned.
+gdb attaches and then waits; it requires the wait to report the pid it attached
+to. AOK reported a different one. That is very likely the same root cause as
+`strace`'s: this kernel makes threads children of their **creator** rather than
+of the leader's parent (see the note of that name in
+`docs/build_553_musts.md`-era work and `kernel/task.c`), so a wait after
+attaching to a non-leader thread resolves to the wrong task.
 
-Attaching strace to `chronyd` (pid 623) **killed it** -- the subsequent
-`PTRACE_SEIZE` reported *No such process* and the pid was gone from `ps`. That
-is a second defect, and possibly the more serious one.
+This is why the CPU-spin hunt below had to be settled from `/proc/<pid>/io`
+counters instead: the two tools that would normally answer it destroy the
+evidence.
 
-**Next step.** Reproduce locally rather than on the device: a Devuan arm64 root
-with chrony installed, under the CLI harness, where a host-side profiler can see
-which guest code is looping. Compare what `clock_gettime` returns to the oracle
-for the same clock id -- the 552 cycle's four `CLOCK_PROCESS_CPUTIME_ID` bugs
-were all glibc-only and all invisible on Alpine roots, and this is the same
-shape (glibc device, musl test roots). Separately, reproduce the strace-kills-
-the-tracee case, which should be a small ptrace test.
+**Next step.** A test that attaches to a non-leader thread with `PTRACE_ATTACH`,
+then `waitpid(-1, ..., __WALL)`, and requires the returned pid to be the thread
+attached to -- and requires the thread to still be alive afterwards. Then follow
+it into `do_wait`.
 
-**Prove it.** An idle Devuan guest whose `chronyd` and `rsyslogd` sit at ~0%
-CPU, and a ptrace test that attaches to a live process and detaches without
-killing it.
+**Prove it.** `gdb -p <tid>` on a live multithreaded guest process prints a
+backtrace and detaches with the process still running. `strace -p <tid>` for ten
+seconds leaves the target alive.
+
+---
+
+## POLLHUP without POLLIN on a closed socket
+
+**Established.** Noticed while fixing the idle-poll spin, not chased. On a unix
+socketpair whose peer has closed, `poll(POLLIN)` returns `revents=0x10`
+(POLLHUP alone) under AOK and `0x11` (POLLIN|POLLHUP) on Linux 6.12 -- measured
+against the oracle by `tests/manual/poll_idle_cpu.c`, which accepts either
+because it is testing something else.
+
+Linux sets POLLIN as well because a closed socket **is** readable: a read
+returns 0 for EOF. A program that waits for POLLIN before reading, and treats
+POLLHUP as merely informational, will not read the EOF it is being told about.
+
+**Next step.** Find where sock_poll composes the hangup result and add POLL_READ
+alongside POLL_HUP for a peer-closed socket. Check the half-close case
+separately -- `fs/sock.c` already has careful reasoning about EPOLLRDHUP vs
+EPOLLHUP that must not be disturbed.
+
+**Prove it.** A test asserting `revents == POLLIN|POLLHUP` after the peer
+closes, checked against the oracle first.
 
 ---
 
@@ -216,3 +233,9 @@ their compare-exchange retry loop, which the arithmetic overwrites.
 The lesson, and the reason `atomic_lock_contended` exists: a lost update is the
 only symptom a broken atomic has, and no single-threaded test can produce one.
 Every existing x86 atomics test passed throughout all of the above.
+
+The idle-poll spin closed in 553 has the same shape and the same lesson. Every
+functional poll/select test passed while a blocking `poll()` on a quiet socket
+burned 97% of a host core, because the guest-visible answer was correct -- it
+returned 0 after exactly its timeout. Only the COST was wrong, and nothing in
+the suite measured cost. `tests/manual/poll_idle_cpu.c` now does.
