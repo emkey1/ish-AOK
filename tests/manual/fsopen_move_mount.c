@@ -81,20 +81,47 @@ static int count_lines_matching(const char *file, const char *needle) {
     return n;
 }
 
+static const char *staging_files[] = { "/proc/mounts", "/proc/self/mountinfo" };
+static int staging_baseline[2] = { 0, 0 };
+
+// What the mount table already said before this test created anything. The
+// check below is RELATIVE to it, because the assertion is about our own mount
+// and the count is a substring match over the whole table.
+//
+// It used to demand an absolute zero, which made it an assertion about the
+// entire system: any pre-existing mount whose path contains "ish-fsmount"
+// failed it, no matter what this test did. The Alpine test roots have an
+// almost-empty mount table and passed by luck of environment; the iPad had one
+// such mount parked at /.ish-fsmount/11 -- an iCloud Drive iosfs, nothing to do
+// with this test -- and failed all four checks by exactly 1, while its own
+// staging mount was correctly hidden the whole time.
+static void snapshot_staging_baseline(void) {
+    for (unsigned i = 0; i < sizeof staging_files / sizeof staging_files[0]; i++) {
+        int n = count_lines_matching(staging_files[i], "ish-fsmount");
+        staging_baseline[i] = n < 0 ? 0 : n;
+        test_logf("  %-24s baseline: %d\n", staging_files[i], staging_baseline[i]);
+    }
+}
+
 static void check_staging_hidden(const char *when, int want) {
-    static const char *files[] = { "/proc/mounts", "/proc/self/mountinfo" };
-    for (unsigned i = 0; i < sizeof files / sizeof files[0]; i++) {
+    static const char **files = staging_files;
+    for (unsigned i = 0; i < sizeof staging_files / sizeof staging_files[0]; i++) {
         int n = count_lines_matching(files[i], "ish-fsmount");
         if (n < 0) {
             test_logf("  %s: unreadable, skipped\n", files[i]);
             continue;
         }
-        if (n != want) {
-            printf("FAIL: %s lists %d staging mount(s) %s, want %d\n",
-                   files[i], n, when, want);
+        // want is how many of OUR mounts should be visible; anything that was
+        // there before us is not ours to account for.
+        int mine = n - staging_baseline[i];
+        if (mine != want) {
+            printf("FAIL: %s lists %d staging mount(s) of ours %s, want %d "
+                   "(total %d, baseline %d)\n",
+                   files[i], mine, when, want, n, staging_baseline[i]);
             failures_total++;
         }
-        test_logf("  %-24s %s: %d (want %d)\n", files[i], when, n, want);
+        test_logf("  %-24s %s: %d of ours (want %d, total %d)\n",
+                  files[i], when, mine, want, n);
     }
 }
 
@@ -116,6 +143,9 @@ int main(int argc, char **argv) {
         perror("mkdtemp");
         return 1;
     }
+
+    // Before anything of ours exists.
+    snapshot_staging_baseline();
 
     int fs_fd = raw_fsopen("tmpfs", FSOPEN_CLOEXEC);
     test_logf("fsopen(\"tmpfs\") -> %d\n", fs_fd);

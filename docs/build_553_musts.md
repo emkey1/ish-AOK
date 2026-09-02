@@ -108,3 +108,41 @@ task to apply at its next syscall boundary.
 **Prove it.** A test that lowers another process's RLIMIT_STACK with
 `prlimit64` while it is running, then makes it recurse, and requires the fault
 at the new limit rather than the old one.
+
+---
+
+## An iosfs mount made through the new mount API does not persist
+
+**Established.** iosfs stores its security-scoped bookmark in NSUserDefaults
+keyed by `mount->point` *at mount time* (`app/iOSFS.m`). Through the classic
+mount path that is the real location and everything works. Through the new
+mount API — `fsopen`/`fsconfig`/`fsmount`/`move_mount`, which util-linux 2.39's
+`mount(8)` uses — `FSCONFIG_CMD_CREATE` mounts at a private staging path first
+(`fs/mount.c`, `/.ish-fsmount/<n>`) and `move_mount` relocates it later, and
+nothing re-keys the bookmark in between.
+
+Persisting that key was actively harmful: `iosfs_init()` restored a mount at
+`/.ish-fsmount/<n>` on every launch, forever. That mount is attached, not
+detached, so none of the staging-path filtering hides it — it showed up in
+`/proc/mounts` for good. One was found parked on the test iPad, an iCloud Drive
+mount at `/.ish-fsmount/11`, where `busybox df` reported
+
+    df: /.ish-fsmount/11: Permission denied
+
+because the staging directory is `0700 root`. That is the same user-visible
+symptom `648421ffc` was written to remove, arriving by a different route.
+
+552 stops persisting a bookmark whose key is a staging path, and drops any such
+key it finds at startup so existing installs heal themselves. The consequence
+is the gap in the heading: such a mount no longer survives a relaunch.
+
+**Next step.** Re-key at relocation instead. `mount_relocate` (`fs/mount.c`)
+has the mount and both paths; an optional `relocated(mount, old_point)` in
+`struct fs_ops` (`kernel/fs.h`) would let iosfs move the bookmark to the real
+path, restoring persistence without ever writing a staging key. Note
+`mount_relocate` runs under `mounts_lock`, so call the hook after unlocking.
+
+**Prove it.** Mount an iCloud directory with a util-linux `mount(8)` new enough
+to use the new API, relaunch the app, and require the mount back at the path
+the user asked for — with nothing under `/.ish-fsmount/` in `/proc/mounts`
+either before or after.

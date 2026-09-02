@@ -133,6 +133,17 @@ void iosfs_init(void) {
     if (ios_mount_bookmarks == nil)
         ios_mount_bookmarks = [NSMutableDictionary new];
 
+    // Drop any bookmark stored against a staging path before restoring. Older
+    // builds persisted those (see the comment in the mount path below), and
+    // restoring one re-creates the phantom mount on every launch -- so it
+    // outlives the fix unless it is cleared here.
+    for (NSString *stale in ios_mount_bookmarks.allKeys) {
+        if ([stale hasPrefix:@"/.ish-fsmount/"]) {
+            NSLog(@"dropping stale staging-path bookmark %@", stale);
+            [ios_mount_bookmarks removeObjectForKey:stale];
+        }
+    }
+
     mount_from_bookmarks = true;
     for (NSString *path in ios_mount_bookmarks.allKeys) {
         const char *point = [path cStringUsingEncoding:BOOKMARK_PATH_ENCODING];
@@ -186,6 +197,25 @@ static int iosfs_mount(struct mount *mount) {
     if (!mount_from_bookmarks) {
         NSData *bookmark = [url bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil relativeToURL:nil error:nil];
         NSString *path = [NSString stringWithCString:mount->point encoding:BOOKMARK_PATH_ENCODING];
+        // Not while the mount is still at its staging path. A mount made
+        // through the new mount API (fsopen/fsconfig/fsmount/move_mount, which
+        // util-linux 2.39's mount(8) uses) is created at "/.ish-fsmount/<n>"
+        // and only relocated later by move_mount, so mount->point here is that
+        // private path -- and nothing re-keys the bookmark afterwards. Storing
+        // it meant iosfs_init() re-mounted at "/.ish-fsmount/<n>" on every
+        // subsequent launch, forever: a real, attached, visible mount in
+        // /proc/mounts that no filtering hides, which is exactly the symptom
+        // 648421ffc set out to remove. One was found parked on the test iPad,
+        // where `busybox df` reported "df: /.ish-fsmount/11: Permission
+        // denied" because the staging directory is 0700 root.
+        //
+        // The cost is that such a mount does not survive a relaunch. That is
+        // strictly better than persisting a key that cannot work, and the
+        // classic mount path -- where mount->point is already the real
+        // location -- is unaffected. Re-keying at move_mount is the proper
+        // fix; see docs/build_553_musts.md.
+        if ([path hasPrefix:@"/.ish-fsmount/"])
+            bookmark = nil;
         if (bookmark != nil) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 ios_mount_bookmarks[path] = bookmark;
