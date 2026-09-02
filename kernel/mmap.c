@@ -49,13 +49,57 @@ static void mem_write_lock_with_pokes(struct mem *mem) {
     mem_struct_lock(mem);
     atomic_fetch_add_explicit(&quiesce_barriers, 1, memory_order_relaxed);
     atomic_fetch_add_explicit(&mem->quiesce_requested, 1, memory_order_acq_rel);
-    // Once quiesce_requested is up, no new reader can enter (they wait in
-    // mem_*_quiesce_aware); we only need the readers already mid-block to drain.
-    // cpu_poke sets a sticky flag they check at the next block boundary, so a
-    // poke up front + periodic re-pokes (covering a sibling that raced in just
-    // before the bump) suffice -- no need to re-signal every spin. sched_yield()
-    // hands the core to those readers so they release in microseconds; only a
-    // stubborn hold falls through to nanosleep, then to a blocking write_lock.
+    // quiesce_requested holds off the quiesce-aware readers -- the syscall
+    // side's mem_read_lock_quiesce_aware (emu/memory.h) and the guest-execution
+    // side's task_wait_for_mem_quiesce (kernel/task.c), the latter being the
+    // one this barrier is really racing and the reason a poke-and-drain scheme
+    // works at all. It is NOT a blanket "no new reader can enter" guarantee,
+    // and reading it as one is wrong three times over.
+    //
+    // First, the two helpers do not give the same thing.
+    // mem_read_lock_quiesce_aware re-checks quiesce_requested after acquiring
+    // and backs out if it went up, so it can never be inside the lock while we
+    // are here. task_wait_for_mem_quiesce re-checks nothing: it waits for the
+    // count to reach zero and its caller (task_run_current's loop) then takes a
+    // plain read_lock, so a sibling that cleared that wait microseconds before
+    // the bump just above is already inside. That is exactly the race the
+    // re-pokes in the loop below cover.
+    //
+    // Second, four sites on production paths take mem->lock raw and never
+    // consult quiesce_requested at all: kernel/calls.c's amd64 fault-state dump
+    // (dump_fault_pt_state) and its two i386 GPF decoders
+    // (i386_gpf_addr_needs_page_fault and handle_i386_stack_store_gpf), and
+    // jit_x86_gpf_addr_accessible in jit/jit.c, which uses trylockr. Two more
+    // families of raw acquire exist and are excluded for their own reasons, not
+    // by this protocol: the amd64 trace probes in emu/amd64_interp.c, seven
+    // more trylockr acquisitions of the same lock, every one of them reached
+    // only when an ISH_TRACE_AMD64_* env knob is set (and one of them,
+    // amd64_as_scan_template_probe, memcmps the ENTIRE page table while holding
+    // it, so they must stay debug-only); and mem_growth_lock just above in this
+    // file, which the pt_alloc_lock taken at the top of this function already
+    // excludes.
+    //
+    // Third, writer preference does not cover for those four either, because
+    // trylockw (util/rw_locks.h) never touches writers_waiting -- for the whole
+    // spin below this writer is invisible to both reader predicates, so those
+    // four can and do acquire mid-spin. They still do not livelock us. Three of
+    // them are bounded page-table peeks with no blocking in them. The fourth,
+    // handle_i386_stack_store_gpf's `mov [esp], r32` decoder, is bounded for a
+    // different reason and must not be mistaken for a peek: it calls
+    // mem_ptr(.., MEM_WRITE), which on a P_COW or growsdown page upgrades via
+    // read_to_write_lock, blocks for the other readers to drain, and mutates
+    // the page table (an mmap plus a page memcpy for a COW break). That upgrade
+    // does bump writers_waiting, so unlike the trylockr sites it is not
+    // invisible once it commits, and it completes in one page copy. The
+    // fall-through past the loop then uses the blocking write_lock, which
+    // finally registers write intent and shuts all of them out.
+    //
+    // cpu_poke sets a sticky flag the quiesce-aware readers check at the next
+    // block boundary, so a poke up front + periodic re-pokes (covering a
+    // sibling that raced in just before the bump) suffice -- no need to
+    // re-signal every spin. sched_yield() hands the core to those readers so
+    // they release in microseconds; only a stubborn hold falls through to
+    // nanosleep, then to a blocking write_lock.
     for (int attempts = 0; attempts < 1024; attempts++) {
         if ((attempts & 63) == 0)
             task_poke_shared_mem(current, mem);
@@ -200,9 +244,59 @@ struct mm *mm_copy(struct mm *mm) {
     // them exit at the next block boundary. A plain write_lock can stall fork
     // behind a guest busy-loop indefinitely.
     mem_write_lock_with_pokes(&mm->mem);
-    pt_copy_on_write(&mm->mem, &new_mm->mem, 0, mm->mem.page_limit);
-    ipc_mm_copy(new_mm, mm);
+    int copy_err = pt_copy_on_write(&mm->mem, &new_mm->mem, 0, mm->mem.page_limit);
+    if (copy_err == 0)
+        ipc_mm_copy(new_mm, mm);
     mem_write_unlock_with_pokes(&mm->mem);
+
+    // pt_copy_on_write stops at the first page-table allocation it cannot make
+    // -- mem_pt_new returning NULL out of a failed calloc for a leaf or a
+    // chunk (emu/memory.c) -- and says so. That return used to be dropped, and
+    // the half-copied child was handed back as a success: kernel/fork.c only
+    // checks for NULL, so fork() returned a pid for a child whose address
+    // space was a PREFIX of the parent's. On i386 the stack sits at the top of
+    // the address space, so the pages that got dropped were the stack and the
+    // high libraries essentially every time, and the child died on its first
+    // instruction with nothing said about why. ENOMEM out of fork() is a
+    // failure a guest knows how to handle; a truncated child is not.
+    //
+    // mm_release is the correct teardown here and not a double free: the
+    // refcount is still the 1 set above, no task has ever pointed at this mm,
+    // and it owns exactly what mm_release drops -- the exefile reference
+    // retained above (or NULL, which mm_release tolerates), an shm_regions
+    // list that ipc_mm_init left empty because ipc_mm_copy is skipped on this
+    // path, and the mem whose partially built page table mem_destroy unmaps,
+    // which is also what returns the per-page data->refcount that
+    // pt_copy_on_write took on each page it did manage to copy.
+    //
+    // Deliberately after the parent's lock is released: the teardown walks the
+    // whole child page table and can close deferred descriptors, and none of
+    // that wants the parent's sibling threads held at the quiesce barrier.
+    // What it does NOT undo is the P_COW bit pt_copy_on_write set on the
+    // parent's own entries before it broke off. Once the child's references are
+    // gone, the parent's next write to such a page takes one extra copy and
+    // clears the bit -- but that copy is itself an mmap(PAGE_SIZE), in the COW
+    // break shared by mem_ptr and mem_ptr_fault (emu/memory.c), made under the
+    // very memory pressure that just failed the child's page-table allocation.
+    // Both answer a MAP_FAILED with NULL, and NULL out of mem_ptr_fault is what
+    // handle_page_fault_interrupt turns into a guest SIGSEGV. So the residue can
+    // turn a survivable ENOMEM-from-fork into faults in the PARENT, which is the
+    // process that was supposed to be fine. It is left alone anyway: it is
+    // bit-for-bit the state the pre-change code returned in too, and clearing
+    // the bits would mean retaking the barrier for a second full walk of the
+    // address space on the one path where memory is already gone.
+    if (copy_err < 0) {
+        // Rate-limited like host_mem_headroom_low's warning in do_mmap below: a
+        // guest that keeps retrying fork() under memory pressure must not turn
+        // the one diagnostic into a flood.
+        static _Atomic unsigned fork_oom_log_count;
+        if (atomic_fetch_add_explicit(&fork_oom_log_count, 1, memory_order_relaxed) < 8)
+            printk("WARNING: %d(%s) fork failed, out of memory copying the address space\n",
+                   current != NULL ? current->pid : 0,
+                   current != NULL ? current->comm : "?");
+        mm_release(new_mm);
+        return NULL;
+    }
     return new_mm;
 }
 
