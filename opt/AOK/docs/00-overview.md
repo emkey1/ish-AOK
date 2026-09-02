@@ -91,3 +91,49 @@ single true system state no matter which root or chroot you're looking at
 them from. That's what makes tools like [ktop](ktop.md) useful from outside
 a chroot: they see every process across every currently-mounted root,
 labeled by guest architecture.
+
+## The rest of this documentation set
+
+Everything under `/AOK/docs`, in the order most people want it. Two thirds of
+these files were reachable only by `ls /AOK/docs` before this index existed —
+six of them were not linked from anywhere at all.
+
+**Getting things done**
+
+| file | what it covers |
+| --- | --- |
+| [roots.md](roots.md) | installing, switching between and chrooting into several Linux root filesystems |
+| [persist.md](persist.md) | `/AOK/persist` and `/AOK/fakefs` — the two places that survive root switches, app updates and reinstalls |
+| [networking.md](networking.md) | reaching the device from another machine, and what the guest can and cannot listen on |
+| [files-app-integration.md](files-app-integration.md) | the File Provider extension, and how iSH-AOK appears in the iOS Files app |
+| [shortcuts.md](shortcuts.md) | driving iSH-AOK from Apple's Shortcuts app |
+
+**The app around the emulator**
+
+| file | what it covers |
+| --- | --- |
+| [workspace.md](workspace.md) | the in-app multi-window desktop, its applets and saved layouts |
+| [file-browser.md](file-browser.md) | the quick file picker on the keyboard bar (Cmd-B) |
+| [motepad.md](motepad.md) | the built-in text editor |
+| [md.md](md.md) | the Markdown viewer |
+| [themes.md](themes.md) | the fourteen bundled themes and writing your own |
+| [llm-chat.md](llm-chat.md) | the in-app LLM chat client |
+| [ktop.md](ktop.md) | the bundled process viewer, and building it from the source shipped here |
+
+**Going faster, and going native**
+
+| file | what it covers |
+| --- | --- |
+| [native-programs.md](native-programs.md) | what a native program is and why one is not emulated |
+| [native-setup.md](native-setup.md) | putting the native programs on your `PATH` |
+| [crypto-accel.md](crypto-accel.md) | routing OpenSSL through the host's crypto instructions |
+| [benchmarks.md](benchmarks.md) | the bundled microbenchmarks, and how to run them |
+| [tuning-knobs.md](tuning-knobs.md) | `ISH_GUEST_CPU_COUNT` and friends, for the CLI build and Xcode schemes |
+
+**Looking inside**
+
+| file | what it covers |
+| --- | --- |
+| [proc-ish.md](proc-ish.md) | `/proc/ish` — the build, the settings, and the guest-side preference surface |
+| [fuse.md](fuse.md) | the FUSE implementation, `/dev/fuse`, and what it supports |
+| [riscv64-vendor-extensions.md](riscv64-vendor-extensions.md) | how non-standard riscv64 vendor extensions are handled |
