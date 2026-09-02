@@ -1,0 +1,135 @@
+#!/bin/sh
+# Run the guest regression suite across every guest root, and report totals.
+#
+# This is the release gate. The rule it exists to enforce is that a release
+# runs the full suite on ALL FOUR architectures AND on real hardware -- and,
+# since 552, on a glibc root as well as the musl ones.
+#
+# That last part is the lesson of the 552 cycle. build/alpine-*-test are four
+# architectures but only ONE libc, and four kernel bugs shipped through that
+# gap in a single release: glibc rewrites CLOCK_PROCESS_CPUTIME_ID into a
+# dynamic clock id before the syscall while musl passes the constant, so
+# timer_create, clock_nanosleep, clock_getcpuclockid and clock_getres(NULL)
+# were all broken for glibc programs and green on every Alpine root. A fifth
+# leg on build/devuan-arm64-test costs one more suite run and closes it.
+#
+# Usage:
+#   tools/run-guest-gate.sh                 # every local root found, then e2e
+#   tools/run-guest-gate.sh --no-e2e        # skip the end-to-end suite
+#   tools/run-guest-gate.sh --only arm64    # one root, by name
+#   tools/run-guest-gate.sh --device m4pt   # also run it on a device over ssh
+#
+# Exits non-zero if any leg reports a failure, so it can gate a release script.
+
+set -u
+
+cd "$(dirname "$0")/.." || exit 1
+REPO=$(pwd)
+LOGDIR=${GATE_LOGDIR:-$REPO/build/gate-logs}
+ISH=$REPO/build/ish
+RUN_E2E=1
+ONLY=
+DEVICE=
+DEVICE_PORT=${GATE_DEVICE_PORT:-1022}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --no-e2e)  RUN_E2E=0 ;;
+        --only)    shift; ONLY=${1:-} ;;
+        --device)  shift; DEVICE=${1:-} ;;
+        --port)    shift; DEVICE_PORT=${1:-1022} ;;
+        -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+        *) echo "unknown option: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+[ -x "$ISH" ] || { echo "no build/ish -- run: ninja -C build ish" >&2; exit 1; }
+mkdir -p "$LOGDIR" || exit 1
+# Stale logs from a previous run are worse than none: a summary that greps the
+# directory will happily report yesterday's failures as today's.
+rm -f "$LOGDIR"/*.log
+
+fail_total=0
+legs_run=0
+
+run_leg() {
+    name=$1
+    root=$2
+    [ -d "$root" ] || return 0
+    if [ -n "$ONLY" ] && [ "$ONLY" != "$name" ]; then return 0; fi
+    log=$LOGDIR/$name.log
+    printf '########## %s ##########\n' "$name"
+    "$ISH" -f "$root" /bin/sh -c '/AOK/tests/setup-regressions.sh --run 2>&1' \
+        > "$log" 2>&1
+    rc=$?
+    # The runner stops at the first BUILD failure, so a short log is a leg that
+    # never really ran -- count it as a failure rather than a clean sweep.
+    p=$(grep -cE '^[a-z0-9_]+: PASS$' "$log")
+    f=$(grep -cE '^[a-z0-9_]+: FAIL' "$log")
+    s=$(grep -cE ': SKIP' "$log")
+    if [ "$p" -eq 0 ] && [ "$f" -eq 0 ]; then
+        echo "  $name: NOTHING RAN (rc=$rc) -- almost certainly a build failure:"
+        grep -E 'error:' "$log" | head -3
+        f=1
+    fi
+    echo "  $name  PASS=$p FAIL=$f SKIP=$s  (rc=$rc)"
+    [ "$f" -gt 0 ] && grep -E '^[a-z0-9_]+: FAIL' "$log"
+    fail_total=$((fail_total + f))
+    legs_run=$((legs_run + 1))
+    return 0
+}
+
+echo "logs: $LOGDIR"
+echo
+
+# The four architectures, on musl.
+run_leg arm64   "$REPO/build/alpine-arm64-test"
+run_leg i386    "$REPO/build/alpine-i386-test"
+run_leg amd64   "$REPO/build/alpine-amd64-test"
+run_leg riscv64 "$REPO/build/alpine-riscv64-test"
+
+# ...and the same kernel against a different libc. Not optional at release
+# time: see the header. Needs a toolchain in the root --
+#   build/ish -f build/devuan-arm64-test /bin/sh -c \
+#       'apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev'
+run_leg devuan-arm64 "$REPO/build/devuan-arm64-test"
+
+if [ -n "$DEVICE" ]; then
+    printf '########## device: %s ##########\n' "$DEVICE"
+    # Under sudo: the suite expects to be root, as the app's own sessions are.
+    # An unprivileged run fails a batch of tests for reasons that have nothing
+    # to do with the kernel under test.
+    ssh -p "$DEVICE_PORT" "$DEVICE" \
+        'sudo sh -c "/AOK/tests/setup-regressions.sh --run"' \
+        > "$LOGDIR/device.log" 2>&1
+    rc=$?
+    p=$(grep -cE '^[a-z0-9_]+: PASS$' "$LOGDIR/device.log")
+    f=$(grep -cE '^[a-z0-9_]+: FAIL' "$LOGDIR/device.log")
+    s=$(grep -cE ': SKIP' "$LOGDIR/device.log")
+    echo "  device  PASS=$p FAIL=$f SKIP=$s  (rc=$rc)"
+    [ "$f" -gt 0 ] && grep -E '^[a-z0-9_]+: FAIL' "$LOGDIR/device.log"
+    fail_total=$((fail_total + f))
+    legs_run=$((legs_run + 1))
+fi
+
+if [ "$RUN_E2E" -eq 1 ] && [ -z "$ONLY" ]; then
+    echo
+    echo '########## e2e ##########'
+    # From scratch: a stale e2e_out silently reuses a tree the current build
+    # never produced.
+    rm -rf "$REPO/build/e2e_out"
+    if meson test -C "$REPO/build" e2e 2>&1 | tail -6; then :; else
+        fail_total=$((fail_total + 1))
+    fi
+fi
+
+echo
+echo "=================================================="
+if [ "$fail_total" -eq 0 ]; then
+    echo "GATE CLEAN -- $legs_run leg(s), no failures"
+else
+    echo "GATE FAILED -- $fail_total failure(s) across $legs_run leg(s)"
+fi
+echo "=================================================="
+[ "$fail_total" -eq 0 ]
