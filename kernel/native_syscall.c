@@ -32,6 +32,23 @@ struct native_arena {
     guest_addr_t base;
     size_t size;
     size_t used;
+    // Which address space `base' is an address in (struct mm's id, so a freed
+    // and reallocated mm can never be mistaken for this one). A guest address
+    // means nothing without one, and neither a task nor a thread keeps the same
+    // address space for life:
+    //
+    //   - exec hands the task a fresh, empty mm (kernel/exec.c);
+    //   - a host thread does not always act for its own task. native_spawn_opts
+    //     (kernel/native_io.c) borrows the CALLING thread and points `current`
+    //     at the child across its exec, the same impersonation kernel/init.c
+    //     uses. While that lasts, this thread's arena belongs to a space that
+    //     is not the one `current` names.
+    //
+    // So every use of the arena is guarded by this, and a mismatch means hands
+    // off entirely: the bump pointer must not be used (the address means
+    // something else over there) and must not be dropped either (its owner is
+    // still using it).
+    uint64_t mm_id;
 };
 static __thread struct native_arena arena;
 
@@ -44,6 +61,53 @@ struct native_scratch_big {
 };
 
 static __thread struct native_frame *frame_top;
+
+// The address space this thread is acting for right now, or 0 if there is none.
+static uint64_t native_current_mm_id(void) {
+    if (!native_have_task() || current->mm == NULL)
+        return 0;
+    return current->mm->id;
+}
+
+// Give the arena back to the address space it came from.
+//
+// It used to be per-thread and never released, so it was a permanent megabyte
+// hole in whatever mm the thread first marshalled a syscall in. That is
+// invisible when the mm dies with the program and a real leak when it does
+// not. Measured: native bash running a 40-command script created and finished
+// about thirty threads, each of which mapped an arena into the one address
+// space the shell was running in and left it there. The same shape applies to
+// any task sharing an address space with the one that made it (CLONE_VM, which
+// is what vfork and posix_spawn use), where the arena outlives its mapper by
+// the whole life of the other party.
+//
+// Strictly this thread's own arena, and only in the space it was mapped in --
+// so a thread tearing its own down can never unmap memory another thread is
+// still bump-allocating from, which is the one way this could go badly wrong.
+void native_arena_release(void) {
+    if (arena.base == 0)
+        return;
+    // Not the space the arena is in -- this thread is impersonating another
+    // task (see struct native_arena). Leave it entirely alone: unmapping would
+    // punch a hole in the wrong address space, and merely forgetting would
+    // strand a megabyte in the right one. This is not hypothetical; it is what
+    // every command a native shell runs goes through, and forgetting here cost
+    // the shell a megabyte per child until the guard was added.
+    if (arena.mm_id != native_current_mm_id())
+        return;
+    // Live frames still hold marks into it. No caller does this today (every
+    // release point is outside any shim call), and the guard is here so that
+    // stays true by construction rather than by everyone remembering.
+    if (frame_top != NULL)
+        return;
+    guest_addr_t base = arena.base;
+    size_t size = arena.size;
+    arena.base = 0;
+    arena.size = 0;
+    arena.used = 0;
+    arena.mm_id = 0;
+    native_syscall(NATIVE_SYS_munmap, base, size);
+}
 
 void native_frame_push(struct native_frame *frame) {
     frame->prev = frame_top;
@@ -80,21 +144,30 @@ guest_addr_t native_scratch_alloc(size_t size) {
         size = 1;
     size = (size + NATIVE_SCRATCH_ALIGN - 1) & ~(size_t) (NATIVE_SCRATCH_ALIGN - 1);
 
+    uint64_t mm_id = native_current_mm_id();
+    if (mm_id == 0)
+        return 0;
+
     if (arena.base == 0) {
         arena.base = native_map_anon(NATIVE_ARENA_SIZE);
         if (arena.base == 0)
             return 0;
         arena.size = NATIVE_ARENA_SIZE;
         arena.used = 0;
+        arena.mm_id = mm_id;
     }
 
-    if (size <= arena.size - arena.used) {
+    if (arena.mm_id == mm_id && size <= arena.size - arena.used) {
         guest_addr_t addr = arena.base + arena.used;
         arena.used += size;
         return addr;
     }
 
-    // Oversized, or the arena is full inside a deeply nested frame.
+    // Oversized, the arena is full inside a deeply nested frame, or the arena
+    // is in another address space entirely (see struct native_arena) -- in
+    // which case a mapping the frame owns is not merely the fallback, it is the
+    // only shape that is right: it is made here, in the space `current` names,
+    // and released by the frame that asked for it.
     if (frame_top == NULL)
         return 0;   // nothing would ever release it
     struct native_scratch_big *big = malloc(sizeof(*big));

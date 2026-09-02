@@ -22,8 +22,11 @@
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 
@@ -100,6 +103,89 @@ static pid_t spawn(const char *mode) {
     pthread_create(&e, NULL, exec_thread, (void *) mode);
     for (;;)
         nap(20);
+}
+
+// iSH-AOK's native dispatch (kernel/native.h) runs a program as host code in
+// place of the image the ELF loader would have mapped, and it used to return
+// from __do_execve before reaching any of this -- so a native exec killed no
+// siblings and swapped no address space. That was survivable only while the
+// surviving threads went on sharing the exec'ing thread's mm; once a native
+// exec gets an address space of its own, a thread group straddling two of them
+// is not a state it can be in. Skipped where /AOK/native does not exist, which
+// is everywhere but here.
+#define NATIVE_SMALLCLUE "/AOK/native/smallclue"
+
+static void *exec_native_thread(void *arg) {
+    (void) arg;
+    execl(NATIVE_SMALLCLUE, "cat", (char *) NULL);
+    _exit(127);
+    return NULL;
+}
+
+// Same shape as spawn(), except the exec'ing thread runs a native program and
+// the child's stdin is a pipe nobody writes to, so it stays there to be looked
+// at. *keep_open is the write end, which the caller closes after reaping.
+static pid_t spawn_native(int *keep_open) {
+    int stdin_pipe[2];
+    if (pipe(stdin_pipe) < 0)
+        return -1;
+    fflush(NULL);
+    pid_t c = fork();
+    if (c < 0) {
+        close(stdin_pipe[0]); close(stdin_pipe[1]);
+        return -1;
+    }
+    if (c != 0) {
+        close(stdin_pipe[0]);
+        *keep_open = stdin_pipe[1];
+        return c;
+    }
+    close(stdin_pipe[1]);
+    dup2(stdin_pipe[0], STDIN_FILENO);
+    if (stdin_pipe[0] != STDIN_FILENO)
+        close(stdin_pipe[0]);
+    int fd[2];
+    if (pipe(fd) < 0)
+        _exit(90);
+    pthread_t a, b, d, e;
+    pthread_create(&a, NULL, blocked_thread, fd);
+    pthread_create(&b, NULL, spinning_thread, NULL);
+    pthread_create(&d, NULL, sleeping_thread, NULL);
+    nap(20);
+    pthread_create(&e, NULL, exec_native_thread, NULL);
+    for (;;)
+        nap(20);
+}
+
+// Threads of another process, from its /proc entry. -1 if it cannot be read.
+static int count_tasks_of(pid_t pid) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/task", (int) pid);
+    DIR *d = opendir(path);
+    if (d == NULL)
+        return -1;
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL)
+        if (e->d_name[0] != '.')
+            n++;
+    closedir(d);
+    return n;
+}
+
+static int comm_is(pid_t pid, const char *want) {
+    char path[64], comm[64];
+    snprintf(path, sizeof path, "/proc/%d/comm", (int) pid);
+    FILE *f = fopen(path, "r");
+    if (f == NULL)
+        return 0;
+    if (fgets(comm, sizeof comm, f) == NULL)
+        comm[0] = '\0';
+    fclose(f);
+    size_t n = strlen(comm);
+    while (n > 0 && (comm[n - 1] == '\n' || comm[n - 1] == ' '))
+        comm[--n] = '\0';
+    return strcmp(comm, want) == 0;
 }
 
 static pid_t reap(pid_t c, int *st) {
@@ -183,6 +269,42 @@ int main(int argc, char **argv) {
                 wrong++;
         }
         check("8 more non-leader execs, all consistent", wrong, 0);
+    }
+
+    // 6. The same, for a program iSH-AOK runs as host code rather than loading.
+    {
+        struct stat st_native;
+        if (stat(NATIVE_SMALLCLUE, &st_native) != 0) {
+            test_logf("  no %s here, native half skipped\n", NATIVE_SMALLCLUE);
+        } else {
+            int keep_open = -1;
+            pid_t c = spawn_native(&keep_open);
+            if (c < 0) {
+                test_logf("  could not fork for the native exec, skipped\n");
+            } else {
+                // comm under the process's own pid is the check, not just a
+                // wait for readiness: it only becomes the applet's name if the
+                // exec'ing thread took over the leader's identity. Without
+                // de_thread the leader is still the old image and this never
+                // changes, which is the failure, not a reason to skip.
+                int landed = 0;
+                for (int i = 0; i < 500 && !landed; i++) {
+                    landed = comm_is(c, "cat");
+                    if (!landed)
+                        nap(20);
+                }
+                check("native exec takes over the leader's identity", landed, 1);
+                if (landed) {
+                    nap(200);   // give any survivor time to show itself
+                    check("native exec leaves exactly one task", count_tasks_of(c), 1);
+                }
+                kill(c, SIGKILL);
+                int st = 0;
+                pid_t w = reap(c, &st);
+                check("wait() finds the native exec'd pid", w == c, 1);
+                close(keep_open);
+            }
+        }
     }
 
     return finish_suite("exec_de_thread");

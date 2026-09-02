@@ -36,9 +36,9 @@
  * -----------------------------------
  * sys_* handlers take GUEST addresses and go through user_read/user_write. A
  * native program's buffers are host memory, which those cannot reach. The task
- * still has an mm -- exec intercepts before the image would have been replaced
- * (kernel/exec.c), so the address space it inherited from its parent is intact
- * -- so this reserves a region in it and marshals through:
+ * still has an mm -- exec gives a native program a fresh, empty address space
+ * rather than no address space at all, precisely so this has somewhere to live
+ * (kernel/exec.c) -- so this reserves a region in it and marshals through:
  *
  *     host buffer -> guest scratch -> syscall -> guest scratch -> host buffer
  *
@@ -104,6 +104,21 @@ guest_addr_t native_scratch_put(const void *src, size_t size);
 guest_addr_t native_scratch_str(const char *str);
 // Copies back out. 0, or a negative errno.
 int native_scratch_get(void *dst, guest_addr_t src, size_t size);
+
+// Hand this thread's arena back to the address space it was mapped in.
+//
+// The arena is created on first use and then kept, because re-mapping a
+// megabyte per shim call would cost two syscalls on the hot path for nothing.
+// Kept is not the same as kept forever, though: the region belongs to a guest
+// address space that can outlive the thread's interest in it, so there are
+// three points where the thread is definitively done with it and says so --
+// when a native program's main returns (kernel/native.c), when a thread the
+// program created finishes (kernel/native_libc.c), and just before exec swaps
+// the task's address space out from under it (kernel/exec.c).
+//
+// Safe on a thread that never had an arena, and safe after the space it was
+// mapped in has gone: it unmaps only when the task is still in that same space.
+void native_arena_release(void);
 
 // ------------------------------------------------------------------- numbers
 //

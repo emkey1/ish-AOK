@@ -20,6 +20,7 @@
 #include "fs/path.h"
 #include "kernel/elf.h"
 #include "kernel/native.h"
+#include "kernel/native_syscall.h"
 #include "kernel/vdso.h"
 #include "jit/jit.h"
 #include "tools/ptraceomatic-config.h"
@@ -1514,7 +1515,49 @@ static void exec_discard_posix_timers(void) {
     unlock(&group->lock);
 }
 
-static void exec_apply_native_process_state(void) {
+// Everything execve does to the PROCESS once a native program is committed to.
+// The image half has no work -- there is no ELF to load -- but a process is
+// more than its image, and each of these was missing for native programs until
+// something noticed out loud.
+//
+// new_mm is the address space the program will run in, already built by the
+// caller so that an out-of-memory failure can still be reported as one.
+static void exec_apply_native_process_state(struct mm *new_mm) {
+    // Every other thread of the process dies here, as it does for an ELF exec
+    // (exec_de_thread, and Linux's de_thread). Skipping it left siblings
+    // running the old image -- which was survivable only for as long as they
+    // went on sharing the exec'ing thread's address space. They do not any
+    // more: the swap below would leave one thread group straddling two address
+    // spaces, which is not a state a thread group can be in.
+    exec_de_thread();
+
+    // The new image gets a new address space, exactly as an ELF one does.
+    //
+    // This was missing entirely, and the effect was that a native program ran
+    // in whatever space it inherited: `/AOK/native/zsh` kept /bin/busybox and
+    // the musl loader mapped for its whole run, holding the memory of a program
+    // that had already been replaced. That is the ordinary read of the bug. The
+    // sharper one is vfork: the parent resumes at vfork_notify below, and until
+    // the swap it resumed into an address space its child was still writing
+    // guest scratch into (kernel/native_syscall.h).
+    //
+    // Empty rather than absent. A native program is host code, but it reaches
+    // the kernel through the same syscalls a guest does, and those take guest
+    // addresses -- so it needs somewhere in the guest to marshal through. What
+    // it does not need is anything that was there before.
+    //
+    // This thread's own scratch goes back to the OLD space first, while it is
+    // still the space that address means something in.
+    native_arena_release();
+    // general_lock protects current->mm against a concurrent procfs read, the
+    // same way elf_exec's swap does.
+    lock(&current->general_lock, 0);
+    struct mm *old_mm = current->mm;
+    task_set_mm(current, new_mm);
+    unlock(&current->general_lock);
+    if (old_mm != NULL)
+        mm_release(old_mm);
+
     // cloexec: the trigger above, and the reason this function exists.
     fdtable_do_cloexec(current->files);
 
@@ -1583,6 +1626,21 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
                 fd_close(fd);
                 return _ENOMEM;
             }
+            // Built here, before anything is committed, for the same reason
+            // elf_exec builds its new_mm before exec_de_thread: past the
+            // commit point a failure has nowhere to go but a dead process.
+            struct mm *native_mm = mm_new(current->abi);
+            if (native_mm == NULL) {
+                free(native_argv);
+                free(native_envp);
+                fd_close(fd);
+                return _ENOMEM;
+            }
+            // /proc/<pid>/exe should name what was exec'd. Inheriting the mm
+            // meant it named the PARENT's binary -- /bin/busybox for anything
+            // a shell started -- which is worse than either the truth or
+            // nothing.
+            native_mm->exefile = fd_retain(fd);
             fd_close(fd);
             // Recorded rather than run here. Running a native program never
             // returns, so doing it at this point would strand every buffer the
@@ -1594,11 +1652,13 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
                     native_argv, native_envp);
             free(native_argv);
             free(native_envp);
-            if (perr < 0)
+            if (perr < 0) {
+                mm_release(native_mm);
                 return perr;
+            }
             // Only once the record is safely taken: everything below commits
             // the exec, and there is no undoing a closed descriptor.
-            exec_apply_native_process_state();
+            exec_apply_native_process_state(native_mm);
             return 0;
         }
     }

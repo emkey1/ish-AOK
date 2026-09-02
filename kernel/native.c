@@ -13,6 +13,7 @@
 #include "kernel/native_io.h"
 #include "kernel/signal.h"
 #include "kernel/native_libc.h"
+#include "kernel/native_syscall.h"
 #include "kernel/task.h"
 #include "debug.h"
 
@@ -418,6 +419,43 @@ int native_exec_set_pending(const struct native_program *prog, int argc,
     return 0;
 }
 
+// argv, flattened the way /proc/<pid>/cmdline is defined: each argument
+// NUL-terminated, back to back. See struct task's native_cmdline.
+static void native_cmdline_publish(int argc, char *const argv[]) {
+    size_t len = 0;
+    for (int i = 0; i < argc; i++)
+        if (argv[i] != NULL)
+            len += strlen(argv[i]) + 1;
+    char *buf = NULL;
+    if (len != 0 && (buf = malloc(len)) != NULL) {
+        size_t n = 0;
+        for (int i = 0; i < argc; i++) {
+            if (argv[i] == NULL)
+                continue;
+            size_t one = strlen(argv[i]) + 1;
+            memcpy(buf + n, argv[i], one);
+            n += one;
+        }
+    }
+    lock(&current->general_lock, 0);
+    char *old = current->native_cmdline;
+    current->native_cmdline = buf;
+    current->native_cmdline_len = buf != NULL ? len : 0;
+    unlock(&current->general_lock);
+    free(old);   // an exec over an exec; the reader is done with it by now
+}
+
+void native_cmdline_discard(struct task *task) {
+    if (task == NULL)
+        return;
+    lock(&task->general_lock, 0);
+    char *old = task->native_cmdline;
+    task->native_cmdline = NULL;
+    task->native_cmdline_len = 0;
+    unlock(&task->general_lock);
+    free(old);
+}
+
 void native_exec_run_pending(void) {
     struct native_exec_pending *pending = current != NULL ? current->native_exec : NULL;
     if (pending == NULL)
@@ -443,6 +481,8 @@ void native_exec_run_pending(void) {
     // Before the program runs: getenv() in host code would otherwise answer
     // about the Mac (kernel/native.h).
     native_env_init(envp);
+    // ...and before it runs, because procfs can be asked the moment it does.
+    native_cmdline_publish(argc, argv);
     // Published for the same reason and for exactly the call's lifetime:
     // argv is freed below, so a slot left pointing at it would dangle.
     current->native_argv = argv;
@@ -459,6 +499,13 @@ void native_exec_run_pending(void) {
     current->native_argc = 0;
     native_free_vector(argv);
     native_free_vector(envp);
+
+    // The syscall marshalling arena this thread has been using lives in the
+    // guest address space, and nothing below needs it. Handing it back here
+    // rather than leaving it to the teardown keeps the release beside the run
+    // that owns it -- and covers the case where the address space outlives the
+    // program (kernel/native_syscall.h).
+    native_arena_release();
 
     // A fatal signal deferred while the program was inside host stdio (see
     // nlibc_stdio_defer_fatal) is still pending. The program has unwound and

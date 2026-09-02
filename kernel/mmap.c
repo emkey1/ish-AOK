@@ -125,6 +125,12 @@ static void amd64_vm_failure_trace(const char *syscall, qword_t result,
     }
 }
 
+// Never 0 and never repeated, for the life of the process. See struct mm's id.
+static uint64_t mm_next_id(void) {
+    static _Atomic uint64_t next;
+    return atomic_fetch_add_explicit(&next, 1, memory_order_relaxed) + 1;
+}
+
 static void mm_apply_abi_layout(struct mm *mm, enum guest_abi abi) {
     struct guest_vm_layout layout = guest_abi_vm_layout(abi);
     mem_set_page_limit(&mm->mem, layout.page_limit);
@@ -132,13 +138,27 @@ static void mm_apply_abi_layout(struct mm *mm, enum guest_abi abi) {
 }
 
 struct mm *mm_new(enum guest_abi abi) {
-    struct mm *mm = malloc(sizeof(struct mm));
+    // Zeroed, not merely allocated. Only some of struct mm is assigned below;
+    // the rest was whatever malloc handed back -- vdso, the argv/env/auxv/stack
+    // bounds procfs reports, and rss_pages_hwm.
+    //
+    // rss_pages_hwm is the one that cannot be left to luck, because it is a
+    // HIGH-WATER MARK: task_maxrss_kb only ever raises it and then reports it,
+    // so an initial value larger than anything real is never corrected by a
+    // later honest sample -- it is simply what getrusage answers for the life
+    // of the address space. Nothing on any path has ever initialized it. It has
+    // stayed quiet because malloc mostly hands back fresh, already-zero pages,
+    // which is not a guarantee and not something to keep relying on.
+    //
+    // The procfs bounds are overwritten by elf_exec while it loads an image; a
+    // native exec (kernel/exec.c) loads none and overwrites none of them.
+    struct mm *mm = calloc(1, sizeof(struct mm));
     if (mm == NULL)
         return NULL;
     mem_init(&mm->mem);
     // mem_init deliberately leaves these alone (so mm_copy's shallow struct
-    // copy can hand them down to a fork()'d child); malloc doesn't zero, so
-    // a genuinely new mm has to clear them itself.
+    // copy can hand them down to a fork()'d child), and it runs after the
+    // calloc above, so a genuinely new mm still has to clear them itself.
     mm->mem.brk_reserve_start = mm->mem.brk_reserve_end = 0;
     mm_apply_abi_layout(mm, abi);
     ipc_mm_init(mm);
@@ -146,6 +166,7 @@ struct mm *mm_new(enum guest_abi abi) {
     mm->mlockall_flags = 0;
     mm->exefile = NULL;
     mm->refcount = 1;
+    mm->id = mm_next_id();
     return mm;
 }
 
@@ -154,6 +175,9 @@ struct mm *mm_copy(struct mm *mm) {
     if (new_mm == NULL)
         return NULL;
     *new_mm = *mm;
+    // A copy is a different address space, whatever it holds. The struct copy
+    // above would otherwise hand it the original's identity.
+    new_mm->id = mm_next_id();
     // Fix wrlock_init failing because it thinks it's reinitializing the same lock
     memset(&new_mm->mem.lock, 0, sizeof(new_mm->mem.lock));
     new_mm->refcount = 1;
@@ -165,9 +189,10 @@ struct mm *mm_copy(struct mm *mm) {
     mem_set_stack_bounds(&new_mm->mem, mm->mem.stack_top,
                          (uint64_t) atomic_load(&mm->mem.stack_limit_pages) << PAGE_BITS);
     ipc_mm_init(new_mm);
-    // NULL when the task's first exec was a native program (e.g. the Shortcuts
-    // runner exec'ing /AOK/native/zsh directly): no guest image was ever
-    // loaded, and mm_release already tolerates that.
+    // NULL for a task that has not exec'd anything yet, and mm_release already
+    // tolerates that. A native exec is no longer one of those cases: it takes
+    // the /AOK/native/<name> descriptor so /proc/<pid>/exe names the program
+    // (kernel/exec.c), where it used to leave whatever the parent had.
     if (new_mm->exefile != NULL)
         fd_retain(new_mm->exefile);
     // Use the quiesce/poke protocol: sibling threads sharing this mm hold the

@@ -140,6 +140,7 @@ void nlibc_invocation_token_assign(void);
 // Seeded from execve's envp; owned by the task from then on.
 void native_env_init(char *const envp[]);
 void native_env_discard(struct task *task);
+void native_cmdline_discard(struct task *task);
 void native_sigtable_discard(struct task *task);
 
 // NULL-terminated, and never NULL itself -- an empty environment is an array

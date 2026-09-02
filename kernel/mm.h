@@ -8,6 +8,14 @@
 // uses mem.lock instead of having a lock of its own
 struct mm {
     atomic_uint refcount;
+    // A number that identifies this address space and is never reused, so code
+    // holding a guest address can ask "is this still the space that address
+    // meant something in?" without keeping the mm alive to compare pointers
+    // against. A released mm is freed, and the allocator hands its address to
+    // the next one; answering yes about the wrong space means reading or
+    // unmapping memory that belongs to somebody else. The native marshalling
+    // arena asks exactly this (kernel/native_syscall.c).
+    uint64_t id;
     struct mem mem;
     struct list shm_regions;
 

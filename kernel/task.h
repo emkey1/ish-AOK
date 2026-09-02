@@ -97,6 +97,14 @@ struct task {
     // otherwise get the iSH app's command line.
     char **native_argv;
     int native_argc;
+    // The same argv flattened into the NUL-separated block /proc/<pid>/cmdline
+    // is defined to be. A native program has no guest argv region for procfs to
+    // read -- its address space holds no image and no stack, only the scratch
+    // the shim marshals through -- so without this every native program shows
+    // an empty command line to ps, top and anything else that asks. Owned by
+    // the task; written under general_lock because procfs reads it there.
+    char *native_cmdline;
+    size_t native_cmdline_len;
     // The native program's signal dispositions, owned by kernel/native_libc.c
     // (struct nlibc_sigtable). Here rather than in that file's thread-local
     // storage because a native program's THREADS share one task, and the

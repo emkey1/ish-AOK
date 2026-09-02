@@ -3103,7 +3103,15 @@ static void *nlibc_thread_trampoline(void *opaque) {
     void *(*fn)(void *) = start->fn;
     void *arg = start->arg;
     free(start);
-    return fn(arg);
+    void *result = fn(arg);
+    // This thread's syscall marshalling arena is a megabyte of the guest
+    // address space, and the program that created the thread is still running
+    // in that space. Left behind, a program that starts and finishes threads
+    // grows the address space by a megabyte at a time for as long as it runs.
+    // (A thread that leaves through pthread_exit or cancellation misses this;
+    // the arena then goes when the address space does, as it always did.)
+    native_arena_release();
+    return result;
 }
 
 int nlibc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,

@@ -465,14 +465,38 @@ static int proc_pid_cmdline_show(struct proc_entry *entry, struct proc_data *buf
     addr_t env_end = 0;
     size_t size = 0;
     lock(&task->general_lock, 0);
-    
+
+    if (task->mm != NULL) {
+        start = task->mm->argv_start;
+        size = task->mm->argv_end - start;
+        env_start = task->mm->env_start;
+        env_end = task->mm->env_end;
+    }
+
+    // A natively-implemented program (kernel/native.h) has no guest argv region
+    // to read: its address space carries no image and no stack, because there
+    // was no image to load. Its arguments are kept on the task instead, already
+    // in this file's format. Before the mm == NULL bail below, since a task can
+    // be running one with no address space left at all.
+    if (size == 0 && task->native_cmdline != NULL && task->native_cmdline_len != 0) {
+        size_t len = task->native_cmdline_len;
+        char *copy = malloc(len);
+        if (copy != NULL)
+            memcpy(copy, task->native_cmdline, len);
+        unlock(&task->general_lock);
+        if (copy == NULL) {
+            proc_put_task(task);
+            return _ENOMEM;
+        }
+        proc_buf_append(buf, copy, len);
+        free(copy);
+        proc_put_task(task);
+        return 0;
+    }
+
     if (task->mm == NULL)
         goto out_free_task;
 
-    start = task->mm->argv_start;
-    size = task->mm->argv_end - start;
-    env_start = task->mm->env_start;
-    env_end = task->mm->env_end;
     mm = task->mm;
     mm_retain(mm);
     unlock(&task->general_lock);

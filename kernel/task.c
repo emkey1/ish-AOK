@@ -533,6 +533,14 @@ struct task *task_create_(struct task *parent) {
     // program asking before then gets an empty vector from native_env_slot.
     task->native_env = NULL;
     task->native_exec = NULL;
+    // Same shallow-copy hazard, same answer. These describe the arguments of a
+    // program running in the PARENT, and native_cmdline is an owned allocation
+    // that task_free_final frees -- two tasks holding the pointer is a double
+    // free, on top of a child reporting its parent's command line to procfs.
+    task->native_argv = NULL;
+    task->native_argc = 0;
+    task->native_cmdline = NULL;
+    task->native_cmdline_len = 0;
     // Supplementary groups ARE inherited across fork (unlike the two above),
     // so this one is duplicated rather than dropped -- but duplicated it must
     // be, for the same shallow-copy reason.
@@ -633,6 +641,7 @@ static void task_free_final(struct task *task) {
     // between the exec and its first execution (task_start failing, say).
     native_exec_discard_pending(task);
     native_env_discard(task);
+    native_cmdline_discard(task);
     native_sigtable_discard(task);
     if (task != NULL && task_is_leader(task) && task->group != NULL) {
         // Before the group struct goes: an AIO context is keyed by a guest
