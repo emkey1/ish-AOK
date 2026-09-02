@@ -92,10 +92,19 @@ into a **high-water mark**, so one torn read becomes the permanent answer:
 `ru_maxrss` reported 2,819,362,696 KB (2.7 TB) for a process whose real peak was
 about 4 MB, on device, for every process in one shell's subtree.
 
-553 fixed the two things that made that observable -- the latch now refuses a
-sample larger than the address space, and a forked child no longer inherits its
-parent's peak (`kernel/task.c`, and Linux is the reference: the oracle reports a
-child peak below its parent's). **The unsafe walk itself is unchanged.**
+553 fixed the two things that made that observable: a forked child no longer
+inherits its parent's peak (`kernel/task.c`, and Linux is the reference -- the
+oracle reports a child peak below its parent's), and the latch now refuses a
+sample larger than **physical memory**. Note the second one took two attempts.
+The first bounded by `mm->mem.page_limit`, which for a 64-bit guest is the whole
+address space -- so it accepted everything, rejected nothing, and the next
+device run reported 2.7 TB again. A resident set cannot exceed the memory that
+exists; that is the bound that works (7.28 GB of device RAM is ~1.9M pages
+against a bad sample of ~695M, over by 364x). Verified 12/12 under fork load on
+device, where it had been failing every run.
+
+**The unsafe walk itself is unchanged**, and the bound is not airtight: a
+garbage sample that happens to land UNDER physical memory still latches.
 
 **Next step.** Take `mem->lock` for read around the walk, or restructure it to
 be genuinely safe against a concurrent leaf free (hazard pointer, RCU-ish
