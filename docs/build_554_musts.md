@@ -328,6 +328,61 @@ before and after. The correctness tests must stay green throughout:
 
 ---
 
+## Found and closed in 554
+
+### The x87 state instructions checked four bytes and moved up to 512
+
+The i386 JIT reaches FXSAVE, FXRSTOR, FNSAVE, FRSTOR, FNSTENV and FLDENV
+through the generic memory-helper gadget. That gadget runs a TLB check of a
+width the front end chooses, then hands the helper a host pointer -- and
+`jit/gen.c` chose the width from the **helper's name suffix**, `fpu_save32` /
+`fpu_fxsave32`, which is the x87 mode, not the operand size. So every one of
+the six got a four-byte check in front of a 28-, 108- or 512-byte access.
+
+Four bytes is precisely the check that passes when the real one would not:
+
+* a 512-byte FXSAVE at page offset `0xf00` passed, got a pointer good for the
+  256 bytes left in the page, and wrote 512 -- through the second page's
+  `P_WRITE` bit, through its copy-on-write sharing, and, when that page was the
+  last one mapped, off the end of the host region. A guest running that
+  instruction **took the host process down with SIGSEGV**, which is what makes
+  this a memory-safety bug rather than an emulation-accuracy one;
+* where the four-byte check *did* say "page-straddling", the gadget staged four
+  bytes into `jit_frame`'s crosspage buffer, let the helper write 108 or 512
+  bytes into a **32-byte** buffer -- over `last_block` and `chain_budget` -- and
+  then flushed four of them back to the guest. A crosspage `fnsave` landed 4 of
+  its 108 bytes; the other 104 went into the JIT's own frame.
+
+The load forms carried a second bug on top: FLDENV and FRSTOR were emitted as
+*writes*, so they demanded write permission on memory they only read. Measured
+on the unfixed build: both raise SIGSEGV from a `PROT_READ` page that the amd64
+engine loads from happily.
+
+The fix is to name the true width at the call site (`h_read_bits`/`h_write_bits`
+in `jit/gen.c`), add the three widths to the helper-gadget size list on **both**
+hosts, and grow the crosspage staging buffer to 512 bytes so the widest access
+it can be asked to stage actually fits. `tests/manual/x86/fpu_state_span.c`
+holds both x86 guests to the same answers; on the unfixed build its first check
+fails and its second kills the host.
+
+The lesson is the same one the atomics item below records, in a different
+register: **a size that is right for the helper is not automatically right for
+the access**, and nothing about the old spelling looked wrong -- `h_write(fpu_save, z)`
+reads as if `z` were the operand size, and for the fifteen other x87 memory
+helpers it is.
+
+### Related: bts/btr/btc on the x86_64 host used read_prep
+
+Found in the same sweep, and separate: `jit/gadgets-x86_64/bits.S` resolved the
+memory destination of `bts`, `btr` and `btc` (and their `lock` forms) through
+the **read** TLB entry, so those instructions skipped the `P_WRITE` check and
+the copy-on-write break, and had no `write_done` -- a page-straddling one
+modified the staging buffer and dropped it. The aarch64 copy of the same macro
+has always used `write_prep`/`write_done`; this is now a straight port of it.
+x86_64-host only, so it affects the Linux CLI and CI and not iOS.
+
+---
+
 ## Closed in 553
 
 `docs/historical/build_553_musts.md`'s amd64-atomics item is done, but its diagnosis was
