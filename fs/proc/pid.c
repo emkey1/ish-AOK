@@ -847,7 +847,29 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
             // region continues if data is the same or both are anonymous
             if (!(pt->data == data || (pt->flags & P_ANONYMOUS && start_pt->flags & P_ANONYMOUS)))
                 break;
+            page_t prev = page;
             mem_next_page(mem, &page);
+            // mem_next_page is a SPARSE walk: from the last page of a leaf it
+            // jumps over every unallocated leaf that follows, landing on the
+            // next mapped page or on page_limit. That is what the hole-skipping
+            // loop above wants and the exact opposite of what this one does --
+            // the jump clears the pt == NULL test above, the both-anonymous
+            // test passes, and the skipped hole disappears into the middle of a
+            // region that claims to cover it.
+            //
+            // A native shell with one mapped megabyte at the top of its address
+            // space reported a single 33 MB anonymous region ending at the
+            // address ceiling: 256 live pages and 8192 holes, printed as one
+            // extent. VmSize, which counts page-table entries rather than
+            // walking regions, said 1024 kB alongside it. Parsers of this file
+            // size themselves from these extents.
+            //
+            // Rewind to the page after the last mapped one: that is where the
+            // region really ends, and where the outer loop should resume.
+            if (page != prev + 1) {
+                page = prev + 1;
+                break;
+            }
         }
         page_t end = page;
 
@@ -1029,7 +1051,15 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
                 break;
             if (!(pt->data == data || (pt->flags & P_ANONYMOUS && start_pt->flags & P_ANONYMOUS)))
                 break;
+            page_t prev = page;
             mem_next_page(mem, &page);
+            // Same sparse-walk trap as proc_maps_dump; see the comment there.
+            // Here it also inflated every total this file reports, since a
+            // region's Rss is computed from its extent.
+            if (page != prev + 1) {
+                page = prev + 1;
+                break;
+            }
         }
         page_t end = page;
 
