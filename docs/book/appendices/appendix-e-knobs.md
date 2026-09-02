@@ -117,6 +117,7 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_TRACE_LDCONFIG_STAT` | `fs/stat.c` |
 | `ISH_TRACE_POLL_NET` | `kernel/poll.c` |
 | `ISH_TRACE_POLL_WAIT` | `fs/poll.c`, `kernel/poll.c` |
+| `ISH_TRACE_POLL_WAIT_COMM` | `fs/poll.c` |
 | `ISH_TRACE_REALFS_IO` | `fs/real.c` |
 | `ISH_TRACE_SIGNAL_EINTR` | `fs/real.c` |
 | `ISH_TRACE_SOCK_DEBUG` | `fs/sock.c` |

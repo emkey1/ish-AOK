@@ -4,7 +4,7 @@
 
 # Appendix F. The regression suite, annotated
 
-231 C programs in `tests/manual/`, of which **214 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+232 C programs in `tests/manual/`, of which **215 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
 
 A row with a directory prefix is a per-architecture or accelerator test, kept
 in a subdirectory of `tests/manual/` and registered under that same prefix.
@@ -138,6 +138,7 @@ does not say what it is for.
 | `pidfd_zombie.c` | yes | pidfd_open(2) on a task that has exited but not been reaped. |
 | `pixman_accel.c` | yes | Differential test for the AOK pixman accelerator (ISH_SYS_PIXOP syscall, kernel/ish_accel_pix.c): every FILL/COPY/OVER result the accelerator... |
 | `poll_default_mask.c` | yes | What poll and select say about files that have no poll operation, and how many results they count. |
+| `poll_idle_cpu.c` | yes | A blocking poll() on a quiet socket must not burn CPU. |
 | `poll_rdhup_bounds.c` | yes | What poll and epoll report, and what they will accept being asked. |
 | `posix_timer_exec.c` | yes | POSIX timers (timer_create) do not survive execve. |
 | `posix_timer_fork.c` | yes | posix_timer_fork.c — POSIX timers (timer_create) must NOT be inherited across fork(). AOK's tgroup_copy shallow-copied the parent's posix_timers[]... |
