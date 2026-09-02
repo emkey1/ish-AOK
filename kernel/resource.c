@@ -214,6 +214,24 @@ dword_t sys_prlimit64_guest(pid_t_ pid, dword_t resource, guest_addr_t new_limit
 #undef PRLIMIT_RETURN
 }
 
+// The largest resident page count that could possibly be true: every page of
+// host RAM. Cached -- get_mem_usage() is a host call and this is a constant for
+// the life of the process, while getrusage is not especially rare.
+//
+// This is a plausibility bound, not a fix for what produces an implausible
+// sample. That is a lock-free page-table walk that can read a leaf array
+// another thread is freeing (see the comment in task_maxrss_kb, and
+// docs/build_554_musts.md). What the bound does is stop one torn read becoming
+// a permanent, latched, user-visible lie.
+static size_t maxrss_plausible_pages(void) {
+    static size_t cached;
+    if (cached == 0) {
+        uint64_t total = get_mem_usage().total;        // bytes of host RAM
+        cached = total > 0 ? (size_t) (total / PAGE_SIZE) : (size_t) -1;
+    }
+    return cached;
+}
+
 // Peak resident size in KB. Samples the address space's current mapped-page
 // count and folds it into the high-water mark kept on the mm, so a later read
 // never reports less than an earlier one saw -- which is what "max" means.
@@ -232,11 +250,13 @@ size_t task_maxrss_kb(struct task *task) {
         // from a process whose real peak was about 4 MB, reproducibly for
         // every process in one shell's subtree and never in a fresh one.
         //
-        // A count larger than the address space itself is impossible, so
-        // refuse to latch it. Dropping a bad sample costs nothing: the next
-        // read takes another one, and any real peak is still there to be
-        // observed.
-        if (pages <= mm->mem.page_limit && pages > mm->rss_pages_hwm)
+        // Refuse to latch a sample that cannot be real. The bound has to be
+        // PHYSICAL memory, not the address space: a 64-bit guest's page_limit
+        // is astronomical, so bounding by it accepts everything and catches
+        // nothing -- which is exactly what a first attempt at this did, and it
+        // let 2.7 TB through again on the next device run. Resident memory, by
+        // definition, cannot exceed the memory that exists.
+        if (pages <= maxrss_plausible_pages() && pages > mm->rss_pages_hwm)
             mm->rss_pages_hwm = pages;
         size_t kb = mm->rss_pages_hwm * (PAGE_SIZE / 1024);
         if (kb > task->maxrss_kb)
