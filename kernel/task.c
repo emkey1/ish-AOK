@@ -514,6 +514,55 @@ struct task *task_create_(struct task *parent) {
     // device-only bug that would not reproduce.
     task->maxrss_kb = 0;
 
+    // The rest of the same ledger, missed when maxrss was fixed. `*task =
+    // *parent` above hands a child its parent's LIFETIME resource counters,
+    // and nothing here was zeroing them. Linux's copy_process() zeroes
+    // p->min_flt, p->maj_flt, p->nvcsw and p->nivcsw and calls
+    // task_io_accounting_init() on p->ioac, for every new task -- fork, vfork
+    // and clone alike, CLONE_VM and CLONE_THREAD included -- so a fresh task
+    // always starts at 0 and a process's counters are its own.
+    //
+    // MEASURED on build/alpine-arm64-test with the pre-fix binary, running
+    // `busybox time -v /bin/true` at the bottom of a chain of d nested
+    // fork+exec'd /bin/sh: 29, 47, 61, 75, 89, 103, 117, 131, 145, 159, 173
+    // minor faults for d = 0..10 -- 29, 47, then a flat +14 for every further
+    // level. /bin/true does identical work at every depth and each nested sh
+    // execs into a fresh address space, so every extra fault there is ancestor
+    // history the child never took. The I/O counters show the same shape from
+    // the same struct copy: `cat /proc/self/io` reported rchar 87 (the size of
+    // the script each shell reads) at depth 0 and 783 -- nine times that -- at
+    // depth 8, for a cat that read the same 87 bytes in both runs.
+    //
+    // This is not a display nit, because these are not independent numbers.
+    // rusage_fill_task_counters (kernel/resource.c) builds ONE
+    // struct rusage_ out of task->minflt, task->nvcsw, task->io and
+    // task->maxrss_kb, and `time -v` prints them one under the other; a
+    // process's peak RSS was already its own while its fault count was its
+    // grandparent's. A half-honest block is worse than a uniformly wrong one:
+    // no consumer has ever been tested against that combination, because no
+    // Linux can produce it. Threads make it worse than depth alone suggests --
+    // a task that clones N threads used to have each one start life holding a
+    // full copy of the creator's counts, and /proc/<tgid>/stat and
+    // /proc/<tgid>/io sum the group.
+    //
+    // NOT reset on exec, deliberately, because Linux does not reset there
+    // either: execve keeps the task_struct, so min_flt and ioac survive the
+    // image swap and the faults taken loading the new image belong to the
+    // process that took them. The reset belongs here, at the one funnel every
+    // task passes through: task_create_'s only callers are
+    // sys_clone_common_ and task_fork_for_exec, both in kernel/fork.c, plus
+    // construct_task in kernel/init.c. sys_fork, sys_vfork, sys_clone and
+    // sys_clone3 all route through sys_clone_common_, so CLONE_VM and
+    // CLONE_THREAD are covered -- and the malloc above is the only allocation
+    // of a struct task in the tree, so there is no fourth path to miss.
+    task->minflt = 0;
+    task->nvcsw = 0;
+    // memset rather than a struct assignment because the members are _Atomic;
+    // kernel/exit.c clears the same struct the same way when it rolls a dying
+    // thread's I/O into the group. Nothing else has a pointer to this task
+    // yet, so there is no publication to order against.
+    memset(&task->io, 0, sizeof(task->io));
+
     // Both of these are OWNED heap pointers, and `*task = *parent` above is a
     // shallow copy, so leaving them aliased gives two tasks one allocation and
     // whichever dies first frees it under the other. task_free_final does
