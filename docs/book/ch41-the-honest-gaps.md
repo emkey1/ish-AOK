@@ -105,21 +105,37 @@ And yet:
   crashes that were never root-caused — with a probe harness in the tree waiting
   for somebody to re-run it.
 - It is still where AVX semantics execute for amd64 (Chapter 5).
-- And it is still where **every `lock`-prefixed instruction** executes. Every
-  eligibility predicate in `jit/gen.c`'s amd64 front-end requires the lock
-  prefix to be absent, so a locked `xadd` or `cmpxchg` drops out of the JIT and
-  is interpreted under the global `atomic_l_lock` — where the i386 JIT compiles
-  the same instructions into `ldaxr`/`stlxr` gadgets that use real host atomics.
+- And it is still where **almost every `lock`-prefixed instruction** executes.
+  Nearly every eligibility predicate in `jit/gen.c`'s amd64 front-end requires
+  the lock prefix to be absent, so a locked `xadd` or `cmpxchg` drops out of the
+  JIT and is interpreted — where the i386 JIT compiles the same instructions
+  into `ldaxr`/`stlxr` gadgets.
 
-That last one costs twice. It is a throughput gap, because locked instructions
-are not rare — they are every uncontended mutex acquire, every refcount and
-every `std::atomic`, and each one leaves the JIT and serialises the whole
-emulator on one global lock. And it is a correctness gap, because it leaves two
-implementations of guest atomicity that do not interlock: a kernel-side
-read-modify-write on guest memory using a host atomic does not serialise against
-an amd64 guest's own atomics. `FUTEX_WAKE_OP` lost 1107 of 40,000 increments
-that way, and the fix for 552 was `kernel/futex.c` taking `atomic_l_lock`
-itself — agreement with the weaker mechanism rather than a repair of it.
+That last one used to cost twice, and the correctness half is now paid. Until
+553 the interpreter serialised locked instructions on the global
+`atomic_l_lock`, which does not interlock with a host atomic — so a kernel-side
+read-modify-write on guest memory raced with an amd64 guest's own atomics.
+`FUTEX_WAKE_OP` lost 1107 of 40,000 increments that way, and the fix for 552 was
+`kernel/futex.c` taking `atomic_l_lock` itself: agreement with the weaker
+mechanism rather than a repair of it.
+
+Writing this section down is what got it repaired, and the repair found that the
+description above had been too kind. One predicate did **not** reject the
+prefix — the block that emits `amd64_jit_mem_op`, which is the only
+implementation of `<alu> [mem], reg` the JIT has. It compiled the instruction
+and discarded the prefix, so that whole family was not atomic against anything,
+including other guest threads: four of them lost 3876 of 200,000 increments.
+`xchg reg, [mem]` was worse still — under the global lock it did not merely
+weaken, it **livelocked**. Both had been true for the whole life of the amd64
+JIT and no test could see them, because every x86 atomics test in the tree was
+single-threaded and a lost update is the only symptom a broken atomic has.
+
+553 routes every locked amd64 site through real host atomics
+(`x86_atomic_rmw` and friends in `emu/tlb.c`), `atomic_l_lock` is gone from that
+path, `kernel/futex.c` is back to a plain compare-exchange, and
+`tests/manual/x86/atomic_lock_contended.c` runs nineteen locked forms from four
+threads at once. What remains is the throughput half: a locked instruction still
+leaves the JIT for a C helper instead of becoming a gadget.
 
 `emu/arm64_interp.c` survives for a different reason: as a bisection escape
 hatch behind `ISH_ARM64_FORCE_INTERP=1`, with a comment that is candid about
@@ -235,14 +251,18 @@ Every entry here shares one property: **it is written down somewhere a person
 would find it**, usually in `docs/TODO.md`, usually with a measurement, often
 with the designs that were rejected and why.
 
-The 552 release added a second such file. `docs/build_553_musts.md` carries the
-work deferred out of that release with the diagnosis already done, so nobody has
-to re-derive it: the amd64 locked-instruction path of Section 41.4, and
-`prlimit64` not pushing a lowered `RLIMIT_STACK` down into *another* process's
-address space, where the cached bound in `struct mem` is only refreshed for the
-calling task and the third party picks the change up at its next exec. Each
-entry says what is established, what the next step is, and how to prove it
-afterwards.
+The 552 release added a second such file, and 553 kept the habit:
+`docs/build_554_musts.md` carries the work deferred out of that release with the
+diagnosis already done, so nobody has to re-derive it. Each entry says what is
+established, what the next step is, and how to prove it afterwards.
+
+The habit paid for itself immediately. `docs/build_553_musts.md`'s entry on the
+amd64 locked-instruction path is what got that path opened up at all — and the
+first thing the work found was that the entry's own diagnosis was wrong in the
+optimistic direction, describing as a performance gap something that was losing
+guest data. A written-down gap is not just a reminder; it is a claim someone can
+go and check. That file's closing section now records what it got wrong, which
+is the more useful half.
 
 That turns a gap into a decision. `PROT_EXEC` is not "we never got to NX" — it
 is a two-row table against Linux 6.12, a severity grade, two candidate designs
@@ -258,7 +278,7 @@ first.
 
 *Anchors:* [docs/TODO.md](../../docs/TODO.md) ("Diagnosed, not fixed",
 "Deferred on purpose", "Native program candidates", "Reported issues"),
-[docs/build_553_musts.md](../../docs/build_553_musts.md),
+[docs/build_554_musts.md](../../docs/build_554_musts.md),
 [emu/memory.h](../../emu/memory.h) (`P_EXEC`), [fs/real.c](../../fs/real.c)
 (`realfs_getflags`, `realfs_read`), [emu/amd64_interp.c](../../emu/amd64_interp.c),
 [jit/jit.c](../../jit/jit.c) (the `as` bypass), [fs/fuse.c](../../fs/fuse.c),
