@@ -486,6 +486,31 @@ static void fill_cpu_deltas(struct proc_sample *cur, int cur_n,
     }
 }
 
+// %CPU is jiffies-used divided by jiffies-ELAPSED, and the elapsed part is the
+// wall time between the two samples -- NOT one second.
+//
+// This used to divide by clk_tck alone, i.e. it assumed the sample interval was
+// exactly 1s while the default delay is 3s. Everything on screen was therefore
+// multiplied by the delay: a process genuinely using one whole CPU was reported
+// at 301%, which is what it looked like on an 8-core iPad -- two processes each
+// pinning a core, each labelled 301%. The CPU burn was real; the number was
+// three times too big, and changing -d changed every reading.
+static double cpu_percent(unsigned long long cpu_delta, long clk_tck,
+                          double elapsed_sec) {
+    if (clk_tck <= 0 || elapsed_sec <= 0)
+        return 0;
+    return (double) cpu_delta * 100.0 / ((double) clk_tck * elapsed_sec);
+}
+
+// Seconds between two CLOCK_MONOTONIC readings.
+static double elapsed_since(const struct timespec *then) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    double d = (double) (now.tv_sec - then->tv_sec)
+             + (double) (now.tv_nsec - then->tv_nsec) / 1e9;
+    return d > 0 ? d : 0;
+}
+
 // ---- sorting ----------------------------------------------------------------
 
 enum sort_mode { SORT_CPU, SORT_MEM, SORT_TIME, SORT_PID };
@@ -942,7 +967,7 @@ static void draw_interactive(struct proc_sample *procs, int n,
                              int ncpu, const struct cpu_ticks *cur_cpu,
                              const struct cpu_ticks *prev_cpu,
                              const struct meminfo *mi,
-                             long clk_tck, long page_kb,
+                             long clk_tck, long page_kb, double elapsed_sec,
                              int selected, int *scroll_top) {
     int rows, cols;
     term_size(&rows, &cols);
@@ -984,9 +1009,7 @@ static void draw_interactive(struct proc_sample *procs, int n,
             putchar('\n');
             continue;
         }
-        double cpu_pct = 0;
-        if (clk_tck > 0)
-            cpu_pct = (double) procs[i].cpu_delta * 100.0 / (double) clk_tck;
+        double cpu_pct = cpu_percent(procs[i].cpu_delta, clk_tck, elapsed_sec);
         double mem_pct = mi->total_kb > 0
             ? (double) procs[i].rss_pages * (double) page_kb * 100.0 / (double) mi->total_kb
             : 0;
@@ -1084,7 +1107,7 @@ static void kill_prompt(pid_t pid, const char *comm, int rows, int cols) {
 
 static void print_batch(struct proc_sample *cur, int cur_n,
                         const struct meminfo *mi,
-                        long clk_tck, long page_kb) {
+                        long clk_tck, long page_kb, double elapsed_sec) {
     time_t now = time(NULL);
     struct tm tm_now;
     localtime_r(&now, &tm_now);
@@ -1119,9 +1142,7 @@ static void print_batch(struct proc_sample *cur, int cur_n,
            "PID", "USER", "PR", "NI", "VIRT(K)", "RES(K)", "ARCH", "%CPU", "%MEM", "COMMAND");
 
     for (int i = 0; i < cur_n; i++) {
-        double cpu_pct = 0;
-        if (clk_tck > 0)
-            cpu_pct = (double) cur[i].cpu_delta * 100.0 / (double) clk_tck;
+        double cpu_pct = cpu_percent(cur[i].cpu_delta, clk_tck, elapsed_sec);
         double mem_pct = mi->total_kb > 0
             ? (double) cur[i].rss_pages * (double) page_kb * 100.0 / (double) mi->total_kb
             : 0;
@@ -1193,23 +1214,30 @@ int main(int argc, char **argv) {
 
     if (batch) {
         // ---- original plain-top behavior, unchanged for scripts ----
+        struct timespec sampled_at;
+        clock_gettime(CLOCK_MONOTONIC, &sampled_at);
         counts[cur_buf] = collect(bufs[cur_buf], MAX_PROCS);
         fill_cpu_deltas(bufs[cur_buf], counts[cur_buf], NULL, 0);
         sort_mode = SORT_CPU;
         qsort(bufs[cur_buf], (size_t) counts[cur_buf], sizeof(bufs[0][0]), cmp_procs);
         read_meminfo(&mi);
-        print_batch(bufs[cur_buf], counts[cur_buf], &mi, clk_tck, page_kb);
+        // First snapshot has no previous sample, so every delta is 0 and the
+        // elapsed value is irrelevant -- pass the delay so the column is 0.0
+        // rather than a division by zero.
+        print_batch(bufs[cur_buf], counts[cur_buf], &mi, clk_tck, page_kb, delay);
         for (int iter = 1; iterations < 0 || iter < iterations; iter++) {
             struct timespec ts = {(time_t) delay, (long) ((delay - (time_t) delay) * 1e9)};
             nanosleep(&ts, NULL);
             int prev_buf = cur_buf;
             cur_buf ^= 1;
+            double elapsed = elapsed_since(&sampled_at);
+            clock_gettime(CLOCK_MONOTONIC, &sampled_at);
             counts[cur_buf] = collect(bufs[cur_buf], MAX_PROCS);
             fill_cpu_deltas(bufs[cur_buf], counts[cur_buf],
                             bufs[prev_buf], counts[prev_buf]);
             qsort(bufs[cur_buf], (size_t) counts[cur_buf], sizeof(bufs[0][0]), cmp_procs);
             read_meminfo(&mi);
-            print_batch(bufs[cur_buf], counts[cur_buf], &mi, clk_tck, page_kb);
+            print_batch(bufs[cur_buf], counts[cur_buf], &mi, clk_tck, page_kb, elapsed);
         }
         return 0;
     }
@@ -1240,9 +1268,15 @@ int main(int argc, char **argv) {
     pid_t selected_pid = counts[cur_buf] > 0 ? bufs[cur_buf][0].pid : -1;
     int iter = 1;
 
+    // Wall time covered by the deltas currently on screen. The first draw has
+    // no previous sample (all deltas 0), so any positive value does.
+    double sample_elapsed = delay;
+    struct timespec sampled_at;
+    clock_gettime(CLOCK_MONOTONIC, &sampled_at);
+
     draw_interactive(bufs[cur_buf], counts[cur_buf], ncpu,
                      cpu_bufs[cur_cpu_buf], cpu_bufs[cur_cpu_buf ^ 1],
-                     &mi, clk_tck, page_kb, selected, &scroll_top);
+                     &mi, clk_tck, page_kb, sample_elapsed, selected, &scroll_top);
 
     struct timespec next_refresh;
     clock_gettime(CLOCK_MONOTONIC, &next_refresh);
@@ -1261,6 +1295,10 @@ int main(int argc, char **argv) {
                 break;
             int prev_buf = cur_buf;
             cur_buf ^= 1;
+            // Measured, not assumed: a redraw can be late (a slow /proc walk,
+            // a busy device), and the reading must stay honest when it is.
+            sample_elapsed = elapsed_since(&sampled_at);
+            clock_gettime(CLOCK_MONOTONIC, &sampled_at);
             counts[cur_buf] = collect(bufs[cur_buf], MAX_PROCS);
             fill_cpu_deltas(bufs[cur_buf], counts[cur_buf],
                             bufs[prev_buf], counts[prev_buf]);
@@ -1373,7 +1411,8 @@ int main(int argc, char **argv) {
         if (need_redraw) {
             draw_interactive(bufs[cur_buf], counts[cur_buf], ncpu,
                              cpu_bufs[cur_cpu_buf], cpu_bufs[cur_cpu_buf ^ 1],
-                             &mi, clk_tck, page_kb, selected, &scroll_top);
+                             &mi, clk_tck, page_kb, sample_elapsed,
+                             selected, &scroll_top);
         }
     }
 done:
