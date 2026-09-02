@@ -1481,3 +1481,59 @@ worth building. It is a smaller capability than the study's headline throughput
 number implied, and the difference is exactly the gap between a barrier measured
 from the caller's side on an idle machine and a barrier measured from the victim's
 side under load.
+
+---
+
+## 11. Phase 0 as built, and what was deferred
+
+Recorded 2026-09-03, after building Phase 0 against this plan.
+
+**Landed.** The parts that stand on their own and do not change what MemTotal
+means: the `MemAvailable` truncation fix and the Darwin speculative
+double-count, the Linux `get_mem_usage` fixes (five of nine fields were
+uninitialised, so guests were reading host stack garbage, and the kB figures
+were being stored where callers read bytes), the removal of the host-wide
+counter leaks, `ISH_GUEST_MEM_BUDGET_MB`, and the per-task resource-counter
+reset on fork.
+
+**Deferred: `MemTotal := the app budget`.** Four review rounds rejected it, and
+each round found the same class of problem one surface further out. The change
+is not the size this plan assumed.
+
+The reason is structural rather than a matter of care. AOK builds page-table
+entries EAGERLY at `mmap()` time, for file mappings in `host_fd_mmap` and for
+anonymous mappings below the 64 MiB lazy threshold in `pt_map_nothing`, and no
+`pt_entry` field records whether a page was ever touched. So every "resident"
+figure AOK reports is really a count of mapped address space. While MemTotal is
+the machine's RAM that over-reporting is invisible, because the machine is
+large. The moment MemTotal becomes the app's budget, every one of those figures
+can exceed it, and each is a state Linux cannot produce:
+
+- `/proc/meminfo` AnonPages, Mapped and Shmem, which count every entry.
+- `/proc/<pid>/status` VmRSS and VmHWM, statm field 2, stat field 24. Measured:
+  an untouched 1 GiB file mapping took VmRSS from 2124 kB to 1050700 kB.
+- `smaps` and `smaps_rollup` Rss, which Linux derives from the same counter as
+  VmRSS and which therefore must agree with it.
+- `getrusage`'s `ru_maxrss`, bounded in kernel/resource.c against the HOST
+  machine's RAM.
+
+Bounding each one against MemTotal is what the rejected rounds tried. It
+removes the impossible value and replaces it with an inconsistent pair, because
+two surfaces bounded independently disagree with each other.
+
+**The prerequisite is `mem_resident_page_count`,** which section 3.3 already
+schedules as phase 1 work in emu/memory.c: a per-entry state byte, which the
+pager needs anyway to know what it may evict. With a real resident count every
+one of the figures above becomes a measurement rather than a bound, and they
+agree by construction because they share a source. Sequence the MemTotal change
+after it, not before.
+
+Two things to carry forward regardless:
+
+- The fork-inheritance family is wider than the one counter fixed here.
+  `group->rusage` is not reset in `tgroup_copy` (kernel/fork.c), and
+  `ru_maxrss` is re-derived from `mm->rss_pages_hwm` so the reset in
+  `task_create_` does not reach it. Both are pre-existing and both are visible
+  through `getrusage` and `times(2)` today.
+- `kernel/mmap.c`'s comment on the headroom guard still says "No-op outside
+  iOS", which stopped being true when `ISH_GUEST_MEM_BUDGET_MB` landed.
