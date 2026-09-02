@@ -617,17 +617,10 @@ static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2
     struct futex *futex1 = futex_get(uaddr, FUTEX_WAKE_OP_);
     struct futex *futex2 = futex_get_unlocked(uaddr2, FUTEX_WAKE_OP_);
 
-    // atomic_l_lock BEFORE the address-space lock, because that is the order
-    // the emulator takes them: a locked instruction grabs atomic_l_lock and
-    // then reads its operand through the TLB, which takes mem->lock on a
-    // miss. Taking them the other way round here would be an inversion
-    // against every locked instruction an amd64 guest executes.
-    lock(&atomic_l_lock, 0);
     mem_read_lock_quiesce_aware(current->mem);
     dword_t *ptr = mem_ptr(current->mem, uaddr2, MEM_WRITE);
     if (ptr == NULL) {
         mem_read_unlock_quiesce_aware(current->mem);
-        unlock(&atomic_l_lock);
         futex_put_unlocked(futex2);
         futex_put(futex1);
         return _EFAULT;
@@ -639,22 +632,25 @@ static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2
     // between. A plain load, compute, store lost updates to any guest thread
     // touching the same word: measured 594 lost out of 40000 with one thread
     // doing atomic adds and another doing WAKE_OP adds, where Linux loses
-    // none. The emulator implements guest atomics with host atomics on this
-    // same memory, so a host compare-exchange loop here interlocks with them.
-    // ...and the host compare-exchange below is NOT sufficient on its own.
-    // It interlocks with a guest atomic only where the emulator implements
-    // guest atomics with host atomics on the same word. The amd64 interpreter
-    // does not: it serialises locked xadd/cmpxchg by taking atomic_l_lock,
-    // a global software lock (see emu/amd64_interp.c), so a host CAS here
-    // raced with it and simply lost updates -- 1107 of 40000 measured, with
-    // one guest thread doing atomic adds while another drove WAKE_OP. The
-    // i386 JIT uses real host atomics for 32-bit ops, which is why only the
-    // amd64 guest lost them, and why this went unnoticed.
+    // none.
     //
-    // Holding atomic_l_lock makes this participate in the protocol the
-    // emulator actually uses. The atomics below are kept as well: they cost
-    // nothing under the lock and they remain correct against any path that
-    // does use host atomics on this word.
+    // A host compare-exchange interlocks with the guest only where the
+    // emulator implements guest atomics with host atomics on the same word.
+    // Until 553 the amd64 path did not -- it serialised locked instructions
+    // on the global atomic_l_lock -- so this function had to take that lock
+    // too, agreeing with the weaker mechanism rather than relying on the
+    // stronger one (1107 of 40000 updates lost without it). Every aligned
+    // locked instruction on both x86 guests is now a real host atomic
+    // (x86_atomic_rmw, emu/tlb.c), so the CAS below is sufficient on its own
+    // and the global lock is gone.
+    //
+    // What that rests on: a futex word is rejected unless it is 4-byte
+    // aligned (sys_futex_common), and an aligned access is exactly the case
+    // the emulator does with a host atomic. The residual is a guest doing a
+    // MISALIGNED locked access that happens to overlap a futex word -- that
+    // one still falls back to atomic_l_lock and would not interlock. No real
+    // program does it, and Linux on real hardware is atomic there because the
+    // CPU is, so it is a gap in the emulation rather than in this function.
     _Atomic int32_t *aptr = (_Atomic int32_t *) ptr;
     int32_t oldval = atomic_load_explicit(aptr, memory_order_relaxed);
     int32_t newval;
@@ -675,7 +671,6 @@ static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2
                                                         memory_order_relaxed));
     }
     mem_read_unlock_quiesce_aware(current->mem);
-    unlock(&atomic_l_lock);
 
     unsigned woken = 0;
     struct futex_wait *wait, *tmp;
