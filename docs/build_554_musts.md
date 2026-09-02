@@ -80,6 +80,51 @@ not mapped, and requires EIO with both processes still alive.
 
 ---
 
+## mem_mapped_page_count walks a page table without the lock
+
+**Established.** It is called with no `mem->lock` held and reads
+`entries[i].data` out of a leaf array that another thread can be freeing --
+`proc_mem_count_pages` says the lock-free-ness is intentional, and for /proc it
+is: a stale count costs nothing there.
+
+553 found out what it costs elsewhere. `task_maxrss_kb` folds the same count
+into a **high-water mark**, so one torn read becomes the permanent answer:
+`ru_maxrss` reported 2,819,362,696 KB (2.7 TB) for a process whose real peak was
+about 4 MB, on device, for every process in one shell's subtree.
+
+553 fixed the two things that made that observable -- the latch now refuses a
+sample larger than the address space, and a forked child no longer inherits its
+parent's peak (`kernel/task.c`, and Linux is the reference: the oracle reports a
+child peak below its parent's). **The unsafe walk itself is unchanged.**
+
+**Next step.** Take `mem->lock` for read around the walk, or restructure it to
+be genuinely safe against a concurrent leaf free (hazard pointer, RCU-ish
+grace period, or simply not freeing leaves). The reason it was not done in 553:
+the fault path already holds `mem->lock`, so adding an acquisition on the
+getrusage/exit paths is a lock-ordering change, and the last hour of a release
+is the wrong time for one.
+
+**Prove it.** A thread hammering mmap/munmap while another reads
+`/proc/<pid>/statm` and `getrusage` in a loop, with no impossible counts and no
+sanitizer report, for long enough to have hit the old race many times over.
+
+---
+
+## tty_hangup_signal failed once on device, under suite load
+
+**Established.** It failed in the device suite run for 553 -- "still alive 6s
+after the hangup" -- and then passed **3 runs out of 3** standalone on the same
+device minutes later, and passes on all five local legs. The test gives the
+hangup a 6-second budget and the device was running the rest of a 188-test suite
+at the time.
+
+Recorded rather than dismissed, because "passes alone, fails in the suite" is
+NOT by itself proof of a load flake -- that exact shape was a real bug once
+before (GH #542, `ptrace_group_stop`). If it recurs, A/B the suspected cause in
+one binary before re-running anything.
+
+---
+
 ## POLLHUP without POLLIN on a closed socket
 
 **Established.** Noticed while fixing the idle-poll spin, not chased. On a unix
@@ -244,6 +289,9 @@ their compare-exchange retry loop, which the arithmetic overwrites.
 The lesson, and the reason `atomic_lock_contended` exists: a lost update is the
 only symptom a broken atomic has, and no single-threaded test can produce one.
 Every existing x86 atomics test passed throughout all of the above.
+
+`ru_maxrss` no longer latches a garbage sample and no longer hands it to every
+descendant; what remains of that one is the unsafe walk above.
 
 `docs/book` now ships at `/AOK/docs/book` -- 53 files, nested appendices and
 all -- so that entry is closed too. It needed no Xcode project change after all:
