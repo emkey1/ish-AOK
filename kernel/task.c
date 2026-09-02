@@ -1953,6 +1953,22 @@ __attribute__((constructor)) static void create_attr(void) {
     // the main thread and starve the terminal/UI, making the app unresponsive
     // for the duration of the burst. USER_INITIATED still runs guest work
     // promptly on the performance cores but lets the UI preempt it.
+    //
+    // There is a second reason this exact band is load-bearing, and it is not
+    // the reason the line was written: XNU derives a thread's disk I/O
+    // THROTTLE TIER from its QoS as well as its CPU band. USER_INITIATED maps
+    // to tier 0, which is unthrottled; UTILITY maps to tier 1 and BACKGROUND
+    // to tier 2, and tiers 1 through 3 sleep I/O for 5, 15 and 25 ms per
+    // throttle period (debug.lowpri_throttle_tier{1,2,3}_io_period_ssd_msecs).
+    // Measured on macOS, same file and same reads, only the policy changed:
+    // p90 119 us at IOPOL_IMPORTANT against 2888-2962 us at
+    // IOPOL_STANDARD/UTILITY/THROTTLE. That is a 25x latency regression paid
+    // by every guest read and write that reaches media on these threads, and
+    // nothing in the test suite measures I/O latency, so it would ship. So do
+    // not lower this band while "tidying", and do not move blocking guest I/O
+    // onto a background or utility queue: the CPU-scheduling argument above
+    // survives that move and the latency does not. Numbers and the XNU
+    // mapping are in docs/simulated_swap_plan.md, section 2.7.
     pthread_attr_set_qos_class_np(&task_thread_attr, QOS_CLASS_USER_INITIATED, 0);
 #endif
 }
