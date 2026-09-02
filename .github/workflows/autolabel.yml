@@ -2,17 +2,32 @@ name: Auto-Label
 on:
   issues:
     types: [opened]
+
+# Only what this needs. The repo default is write-all, so this narrows it
+# rather than relying on that staying true.
+permissions:
+  issues: write
+
 jobs:
   label:
     runs-on: ubuntu-latest
     steps:
-      - uses: satackey/action-js-inline@bf6fcaf35de1ed03bcfd25a0a8b1fa4c551ec908
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # actions/github-script, not satackey/action-js-inline. The old wrapper
+      # existed to run inline JS before GitHub shipped one, and it had been
+      # failing every run since at least 2026-08-24: it npm-installs
+      # actions-exec-listener, whose peer dependency on @actions/exec no longer
+      # resolves under npm 7+'s strict rules, so the step died before the
+      # script ran at all. Nothing was labelled for months, silently, because a
+      # failing issue-labeller reports only to the Actions tab.
+      #
+      # github-script supplies an authenticated `github` and `context`, so the
+      # token plumbing goes away with it.
+      - uses: actions/github-script@v7
         with:
           script: |
-            const core = require('@actions/core');
-            const github = require('@actions/github');
-            const octokit = github.getOctokit(process.env.GITHUB_TOKEN);
-            const {repo, owner, number} = github.context.issue;
-            await octokit.rest.issues.addLabels({repo, owner, issue_number: number, labels: ['unconfirmed']});
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ['unconfirmed'],
+            });
