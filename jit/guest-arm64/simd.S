@@ -99,7 +99,9 @@ vload_literal vload_lit_q,  128, ldr, q31
 // ---- Vector/FP register pair load/store (LDP/STP, V=1) ------------------
 // Same code-stream format as memory.S's integer pair gadgets:
 // [rt | rt2<<8 | rn<<16 | mode<<24 (1=post,2=offset,3=pre)][scaled offset].
-// The 256-bit Q-pair case is why jit_frame.value is 32 bytes.
+// The 256-bit Q-pair case is the widest crosspage access this guest can
+// stage into jit_frame.value; the i386 guest's 512-byte FXSAVE is what
+// actually sizes that buffer.
 .macro vldp_gadget name, bits, bytes, ldinsn, vreg1, vreg2
 .gadget \name
     ldr x8, [_ip]

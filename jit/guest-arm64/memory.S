@@ -278,11 +278,13 @@ arm64_crosspage_store:
 // Aligning the address down BEFORE write_prep is what makes that macro's
 // crosspage branch dead code: a 64-byte-aligned address has a page offset
 // of at most 0xfc0, which is precisely write_prep's `cmp x9, #(0x1000-64)`
-// bound, so its `b.hi` can never be taken. That is load-bearing, not a
-// nicety — the crosspage buffer (LOCAL_value, jit/frame.h) is 32 bytes,
-// and a 64-byte crosspage access would run off the end of it. The TLB
-// MISS path is very much live, though, so write_bullshit still has to be
-// here.
+// bound, so its `b.hi` can never be taken. It used to be load-bearing:
+// the crosspage buffer (LOCAL_value, jit/frame.h) was 32 bytes, and a
+// 64-byte stage would have run off the end of it. That buffer is 512 bytes
+// now — the i386 guest's FXSAVE area is what sizes it — so the branch
+// would survive being reached. It is still never reached, and has never
+// been exercised. The TLB MISS path is very much live, though, so
+// write_bullshit still has to be here.
 //
 // Xt = 31 is XZR, not SP, in this encoding: DC ZVA of address 0 is
 // well-formed and faults like any other unmapped write.

@@ -1193,8 +1193,9 @@ scalar_fp_pairwise sfminnmp, fminnmp
     gret
 
 // EXT Vd.16B, Vn.16B, Vm.16B, #imm: concatenate Vn:Vm in the frame's
-// LOCAL_value scratch (32 bytes) and reload 16 (or 8) bytes at the
-// runtime byte offset. [gadget][rd | rn<<8 | rm<<16 | imm<<24 (4b) | q<<28]
+// LOCAL_value scratch (the first 32 bytes of it) and reload 16 (or 8) bytes
+// at the runtime byte offset.
+// [gadget][rd | rn<<8 | rm<<16 | imm<<24 (4b) | q<<28]
 .gadget ext
     ldr x8, [_ip]
     add _ip, _ip, #8

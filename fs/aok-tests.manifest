@@ -30,6 +30,7 @@ x86/x86_loop.c
 x86/bcd_adjust.c
 x86/port_io_gpf.c
 x86/cpuid_xsave.c
+x86/fpu_state_span.c
 signal_core.c
 signal_restart.c
 signal_realtime.c

@@ -43,10 +43,19 @@ struct jit_frame {
     // 32 bits (str w/ldr w against the same symbolic LOCAL_value_addr
     // offset), which stays correct on a little-endian 64-bit field.
     uint64_t value_addr;
-    // 32 bytes: sized for the largest crosspage access any gadget can
-    // produce — an arm64 STP/LDP of two 128-bit Q registers
-    // (jit/guest-arm64/simd.S). i386/amd64 use at most 16 of it.
-    uint64_t value[4]; // buffer for crosspage crap
+    // 512 bytes: sized for the largest crosspage access any gadget can
+    // produce, which is the i386 guest's FXSAVE/FXRSTOR area (emu/fxsave.h).
+    // The next largest is an arm64 STP/LDP of two 128-bit Q registers
+    // (jit/guest-arm64/simd.S) at 32, and the widest x86 vector store at 32.
+    //
+    // This is a hard bound, not a comfort margin: read_prep/write_prep hand
+    // the helper a pointer INTO this buffer for a page-straddling access and
+    // the helper then writes its whole operand there, so a buffer narrower
+    // than the widest operand is an overflow into last_block/chain_budget --
+    // which is exactly what a crosspage FNSAVE did while the FPU state
+    // instructions still checked only 4 bytes. Anything wider than 512 added
+    // here must grow this array with it.
+    uint64_t value[64]; // buffer for crosspage crap
     struct jit_block *last_block;
     // backward-chaining budget: reset to 8192 before every jit_enter and
     // decremented on every chained block-to-block dispatch, by EVERY engine

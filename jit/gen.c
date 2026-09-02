@@ -10289,6 +10289,22 @@ typedef void (*gadget_t)(void);
 #define ht_retint(h) gg(helper_tlb_0_retint, h)
 #define h_read(h, z) do { g_addr(); ggg(helper_read##z, state->orig_ip, h##z); } while (0)
 #define h_write(h, z) do { g_addr(); ggg(helper_write##z, state->orig_ip, h##z); } while (0)
+// Same, for a memory operand whose width is fixed by the INSTRUCTION rather
+// than by the operand-size suffix on the helper's name. `z` still names the
+// helper (fpu_save32); `bits` is the real width of the access, and it is what
+// picks the read_prep/write_prep gadget -- so the TLB check, the page
+// permission check, the COW break and the crosspage staging all cover the
+// bytes the helper is actually going to touch.
+//
+// Passing the helper's own suffix here (the h_read/h_write shorthand) is only
+// correct when the two agree. The FPU state instructions are where they do
+// not, and getting a 4-byte check in front of a 512-byte store meant FXSAVE
+// wrote 512 bytes through a pointer validated for four: no permission check
+// and no COW break past the first dword, an overrun off the end of the host
+// region, and -- when the 4-byte check said "crosspage" -- all 512 bytes into
+// a 32-byte staging buffer, with 4 of them flushed back out.
+#define h_read_bits(h, z, bits) do { g_addr(); ggg(helper_read##bits, state->orig_ip, h##z); } while (0)
+#define h_write_bits(h, z, bits) do { g_addr(); ggg(helper_write##bits, state->orig_ip, h##z); } while (0)
 #define UNDEFINED do { gggg(interrupt, INT_UNDEFINED, state->orig_ip, state->orig_ip); return false; } while (0)
 #define SEGFAULT do { gggg(interrupt, INT_GPF, state->orig_ip, tlb->segfault_addr); return false; } while (0)
 #define SYSCALL_AMD64 do { gggg(interrupt, INT_AMD64_SYSCALL, state->ip, 0); return false; } while (0)
@@ -11150,18 +11166,29 @@ void helper_rdtsc(struct cpu_state *cpu);
 #define FSTSW(dst) if (arg_##dst == arg_reg_a) g(fstsw_ax); else h_write(fpu_stsw, 16)
 #define FSTCW(dst) if (arg_##dst == arg_reg_a) UNDEFINED; else h_write(fpu_stcw, 16)
 #define FLDCW(dst) if (arg_##dst == arg_reg_a) UNDEFINED; else h_read(fpu_ldcw, 16)
-#define FSTENV(val,z) h_write(fpu_stenv, z)
-#define FLDENV(val,z) h_write(fpu_ldenv, z)
-#define FSAVE(val,z) h_write(fpu_save, z)
-#define FRESTORE(val,z) h_write(fpu_restore, z)
-// The 0f ae memory forms. Sizes are fixed by the instruction rather than by
-// the operand-size prefix, so these pass a literal 32 instead of `oz`: decode.h
-// is compiled once per OP_SIZE and both passes must reach the same helper.
-// FXSAVE/FXRSTOR move 512 bytes and LDMXCSR/STMXCSR four; the size here only
-// selects the TLB-check width of the helper gadget, exactly as it already does
-// for the 108-byte FSAVE above.
-#define FXSAVE()  h_write(fpu_fxsave, 32)
-#define FXRSTOR() h_read(fpu_fxrestore, 32)
+// The x87 state-area instructions. The width in the third argument is the
+// architectural size of the memory operand -- 28 bytes for the environment
+// (struct fpu_env32), 108 for the full state (struct fpu_state32) -- and NOT
+// the 32 in the helper's name, which is the FPU-mode suffix. The decoder only
+// ever reaches the 32-bit forms (emu/decode.h passes a literal 32), so `z` is
+// always 32 and the two used to look interchangeable; they never were.
+//
+// The load forms are h_read, not h_write. They were h_write, which asked for
+// write permission on memory the instruction only reads -- so FLDENV/FRSTOR
+// from a read-only mapping raised a spurious #GP, and one from a private
+// clean page broke COW and dirtied it -- and then flushed the staging buffer
+// back out over the source bytes on the crosspage path.
+#define FSTENV(val,z) h_write_bits(fpu_stenv, z, 224)
+#define FLDENV(val,z) h_read_bits(fpu_ldenv, z, 224)
+#define FSAVE(val,z) h_write_bits(fpu_save, z, 864)
+#define FRESTORE(val,z) h_read_bits(fpu_restore, z, 864)
+// The 0f ae memory forms. The helper suffix is a literal 32 rather than `oz`
+// because these instructions have no operand-size form and decode.h is
+// compiled once per OP_SIZE, so both passes must reach the same helper.
+// FXSAVE/FXRSTOR move 512 bytes; LDMXCSR/STMXCSR move four, which is the one
+// case here where the helper suffix and the access width do coincide.
+#define FXSAVE()  h_write_bits(fpu_fxsave, 32, 4096)
+#define FXRSTOR() h_read_bits(fpu_fxrestore, 32, 4096)
 #define STMXCSR() h_write(fpu_stmxcsr, 32)
 #define LDMXCSR() h_read(fpu_ldmxcsr, 32)
 #define FINIT() h(fpu_init)

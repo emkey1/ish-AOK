@@ -193,7 +193,14 @@
 do_helper 0
 do_helper 1
 do_helper 2
-.irp size, SIZE_LIST,64,80
+# The FPU state-save/restore area widths (bits, so /8 gives bytes): FSTENV and
+# FLDENV move 28 bytes, FNSAVE and FRSTOR 108, FXSAVE and FXRSTOR 512. These
+# are fixed by the instruction, not by an operand-size prefix, and they are
+# what read_prep/write_prep must check -- the four-byte check these used to get
+# validated one dword and let the helper write the rest through it, past the
+# end of the page and, on the crosspage path, past the end of the staging
+# buffer. See jit/gen.c's h_read_bits/h_write_bits.
+.irp size, SIZE_LIST,64,80,224,864,4096
     do_helper read, \size
     do_helper write, \size
 .endr
@@ -339,9 +346,10 @@ do_helper_tlb_retint 2
     .irp rm, reg,imm
         do_vec_helper \rm, \_imm
     .endr
-    # 256 is for AVX (GH #525): a 256-bit memory operand. The crosspage
-    # staging buffer (jit/frame.h value[4]) is exactly 32 bytes, so this is
-    # the widest access these gadgets can stage.
+    # 256 is for AVX (GH #525): a 256-bit memory operand, which is the widest
+    # vector operand the i386 front end emits. The crosspage staging buffer
+    # (jit/frame.h value) is 512 bytes and so is not the constraint here --
+    # it is sized for FXSAVE, which is wider than any vector form.
     .irp size, SIZE_LIST,64,128,256
         do_vec_helper read, \_imm, \size
         do_vec_helper write, \_imm, \size
