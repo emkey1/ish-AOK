@@ -2236,6 +2236,19 @@ amd64_gen_shift_count shift_count64, 8
         .endif
         dmb ish
         ldr\s w12, [_xaddr]
+        .ifin(\op, adc,sbc)
+            # CF is an INPUT to adc/sbb -- but do_add below OVERWRITES CPU_cf
+            # with the carry the operation produces. This is a compare-exchange
+            # loop, so a contended retry re-enters the body at 1b and would
+            # read that result CF as its input, silently computing a different
+            # instruction. Snapshot the real input once, out here.
+            #
+            # Only ever wrong under contention, which is why every
+            # single-threaded atomics test passed over it: measured as ~841 of
+            # 80000 `stc; lock sbbl` iterations taking the wrong carry with
+            # four guest threads on one word.
+            ldrb w14, [_cpu, CPU_cf]
+        .endifin
     1:
         mov w8, w12
 
@@ -2249,7 +2262,7 @@ amd64_gen_shift_count shift_count64, 8
             clearf_oc
         .endifin
         .ifin(\op, adc,sbc)
-            ldrb w10, [_cpu, CPU_cf]
+            mov w10, w14
             .ifc \op,adc
                 cmp w10, 1
             .else

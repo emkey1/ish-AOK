@@ -381,6 +381,203 @@ int arm64_stxp(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// x86 LOCK-prefixed read-modify-write, done with REAL host atomics.
+//
+// Every locked instruction an x86 guest executes has to be atomic against two
+// different things, and until build 553 the amd64 path was wrong about both:
+//
+//   * other guest threads -- each of which runs on its own host pthread, so
+//     "atomic" here means the host CPU must see one indivisible RMW; and
+//   * the kernel's own read-modify-writes on guest memory (FUTEX_WAKE_OP is
+//     the live example), which are plain C11 atomics on the host pointer.
+//
+// The amd64 interpreter used to serialise locked instructions on the global
+// `atomic_l_lock` instead. That is slow (one global mutex for the whole
+// emulator), it does not interlock with a host atomic at all, and several
+// forms -- `lock add [mem], reg` and its OR/AND/XOR/SUB/ADC/SBB siblings --
+// never took the lock in the first place, so they lost updates even against
+// other guest threads (measured: 3876 of 200000 increments dropped with four
+// threads on `lock addl %reg, (mem)`).
+//
+// The rule these helpers implement:
+//
+//   aligned  -> one host atomic on the resolved host pointer. A naturally
+//               aligned access of 1/2/4/8/16 bytes cannot cross a page, so a
+//               single resolved page always covers it.
+//   unaligned-> fall back to atomic_l_lock around a read/compute/write pair.
+//               x86 permits a misaligned LOCK (unlike arm64's LSE atomics, so
+//               unlike arm64_lse_rmw above we cannot just fault), but such an
+//               access can straddle two pages and no host atomic spans that.
+//               It stays as weak as it was -- it does not interlock with a
+//               host atomic -- but it is vanishingly rare in real code and it
+//               is at least correct against other guest threads.
+//
+// `fn` computes the new value from the observed old one and MUST BE PURE: on
+// the aligned path it is re-run for every compare-exchange retry. Flags are
+// the caller's job, computed once from the *old_out / *new_out this returns.
+//
+// Returns 0, or INT_PF with cpu->segfault_addr/was_write set.
+
+typedef qword_t (*x86_atomic_fn)(qword_t old, void *ctx);
+
+static int x86_atomic_fault(struct cpu_state *cpu, struct tlb *tlb) {
+    cpu->segfault_addr = tlb->segfault_addr;
+    cpu->segfault_was_write = true;
+    return INT_PF;
+}
+
+// The unaligned path, shared by every helper below: one global-lock-guarded
+// read/compute/write. Split out so the fast paths stay readable.
+static int x86_atomic_rmw_locked(struct cpu_state *cpu, struct tlb *tlb,
+        guest_addr_t addr, unsigned size_bytes, x86_atomic_fn fn, void *ctx,
+        qword_t *old_out, qword_t *new_out) {
+    uint64_t old = 0, neu;
+    int err = 0;
+    lock(&atomic_l_lock, 0);
+    if (!tlb_read(tlb, addr, &old, size_bytes)) {
+        cpu->segfault_addr = tlb->segfault_addr;
+        cpu->segfault_was_write = false;
+        err = INT_PF;
+        goto out;
+    }
+    neu = fn(old, ctx);
+    if (!tlb_write(tlb, addr, &neu, size_bytes)) {
+        err = x86_atomic_fault(cpu, tlb);
+        goto out;
+    }
+    *old_out = old;
+    *new_out = neu;
+out:
+    unlock(&atomic_l_lock);
+    return err;
+}
+
+int x86_atomic_rmw(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
+                   unsigned size_bytes, x86_atomic_fn fn, void *ctx,
+                   qword_t *old_out, qword_t *new_out) {
+    if (addr & (size_bytes - 1))
+        return x86_atomic_rmw_locked(cpu, tlb, addr, size_bytes, fn, ctx,
+                                     old_out, new_out);
+    void *ptr = tlb_write_ptr_slow(tlb, addr);
+    if (ptr == NULL)
+        return x86_atomic_fault(cpu, tlb);
+
+#define X86_RMW_AT(TYPE) do {                                            \
+        TYPE *p = ptr;                                                   \
+        TYPE old = __atomic_load_n(p, __ATOMIC_RELAXED), neu;            \
+        do {                                                             \
+            neu = (TYPE) fn((qword_t) old, ctx);                         \
+        } while (!__atomic_compare_exchange_n(p, &old, neu, true,        \
+                     __ATOMIC_SEQ_CST, __ATOMIC_RELAXED));               \
+        *old_out = (qword_t) old;                                        \
+        *new_out = (qword_t) neu;                                        \
+    } while (0)
+    switch (size_bytes) {
+        case 1: X86_RMW_AT(uint8_t); break;
+        case 2: X86_RMW_AT(uint16_t); break;
+        case 4: X86_RMW_AT(uint32_t); break;
+        default: X86_RMW_AT(uint64_t); break;
+    }
+#undef X86_RMW_AT
+    return 0;
+}
+
+// LOCK CMPXCHG / CMPXCHG8B. Compares [addr] against `expected`; on equal
+// stores `desired`. *old_out always receives the observed value -- which is
+// what CMPXCHG loads into the accumulator when the compare fails, and what
+// its flags are computed from either way.
+int x86_atomic_cas(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
+                   unsigned size_bytes, qword_t expected, qword_t desired,
+                   qword_t *old_out, bool *swapped) {
+    if (addr & (size_bytes - 1)) {
+        // No pure-function shape here: whether we store depends on the value
+        // we read, so the locked fallback is written out rather than reusing
+        // x86_atomic_rmw_locked.
+        uint64_t old = 0;
+        int err = 0;
+        lock(&atomic_l_lock, 0);
+        if (!tlb_read(tlb, addr, &old, size_bytes)) {
+            cpu->segfault_addr = tlb->segfault_addr;
+            cpu->segfault_was_write = false;
+            err = INT_PF;
+            goto out;
+        }
+        *old_out = old;
+        *swapped = old == expected;
+        if (*swapped && !tlb_write(tlb, addr, &desired, size_bytes))
+            err = x86_atomic_fault(cpu, tlb);
+out:
+        unlock(&atomic_l_lock);
+        return err;
+    }
+    void *ptr = tlb_write_ptr_slow(tlb, addr);
+    if (ptr == NULL)
+        return x86_atomic_fault(cpu, tlb);
+#define X86_CAS_AT(TYPE) do {                                            \
+        TYPE exp = (TYPE) expected;                                      \
+        bool ok = __atomic_compare_exchange_n((TYPE *) ptr, &exp,        \
+                     (TYPE) desired, false, __ATOMIC_SEQ_CST,            \
+                     __ATOMIC_SEQ_CST);                                  \
+        *swapped = ok;                                                   \
+        *old_out = (qword_t) exp; /* CAS writes the observed value back */ \
+    } while (0)
+    switch (size_bytes) {
+        case 1: X86_CAS_AT(uint8_t); break;
+        case 2: X86_CAS_AT(uint16_t); break;
+        case 4: X86_CAS_AT(uint32_t); break;
+        default: X86_CAS_AT(uint64_t); break;
+    }
+#undef X86_CAS_AT
+    return 0;
+}
+
+// LOCK CMPXCHG16B. The instruction already requires 16-byte alignment (the
+// caller raises #GP otherwise), so there is no unaligned path -- and that
+// alignment is also what guarantees the single resolved page covers all 16
+// bytes. expected/desired/old_out are {low qword, high qword}.
+int x86_atomic_cas16b(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
+                      const qword_t expected[2], const qword_t desired[2],
+                      qword_t old_out[2], bool *swapped) {
+    void *ptr = tlb_write_ptr_slow(tlb, addr);
+    if (ptr == NULL)
+        return x86_atomic_fault(cpu, tlb);
+    unsigned __int128 exp = ((unsigned __int128) expected[1] << 64) | expected[0];
+    unsigned __int128 des = ((unsigned __int128) desired[1] << 64) | desired[0];
+    bool ok = __atomic_compare_exchange_n((unsigned __int128 *) ptr, &exp, des,
+                 false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    *swapped = ok;
+    old_out[0] = (qword_t) exp;
+    old_out[1] = (qword_t) (exp >> 64);
+    return 0;
+}
+
+// XCHG with a memory operand -- implicitly locked on x86, prefix or not.
+// A direct host exchange rather than a compare-exchange loop, because this
+// one is hot: it is the store half of every spinlock acquire.
+static qword_t x86_atomic_swap_fn(qword_t old, void *ctx) {
+    (void) old;
+    return *(qword_t *) ctx;
+}
+int x86_atomic_xchg(struct cpu_state *cpu, struct tlb *tlb, guest_addr_t addr,
+                    unsigned size_bytes, qword_t value, qword_t *old_out) {
+    if (addr & (size_bytes - 1)) {
+        qword_t neu;
+        return x86_atomic_rmw_locked(cpu, tlb, addr, size_bytes,
+                x86_atomic_swap_fn, &value, old_out, &neu);
+    }
+    void *ptr = tlb_write_ptr_slow(tlb, addr);
+    if (ptr == NULL)
+        return x86_atomic_fault(cpu, tlb);
+    switch (size_bytes) {
+        case 1: *old_out = __atomic_exchange_n((uint8_t *) ptr, (uint8_t) value, __ATOMIC_SEQ_CST); break;
+        case 2: *old_out = __atomic_exchange_n((uint16_t *) ptr, (uint16_t) value, __ATOMIC_SEQ_CST); break;
+        case 4: *old_out = __atomic_exchange_n((uint32_t *) ptr, (uint32_t) value, __ATOMIC_SEQ_CST); break;
+        default: *old_out = __atomic_exchange_n((uint64_t *) ptr, (uint64_t) value, __ATOMIC_SEQ_CST); break;
+    }
+    return 0;
+}
+
 // Soft fallbacks for arm64-guest gadgets whose native instructions are
 // optional host extensions: FEAT_SHA512 arrived with A13 and FEAT_CRC32
 // with A10, but we support devices back to A7-class hardware. gen.c

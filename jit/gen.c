@@ -61,6 +61,7 @@ enum amd64_jit_mem_meta {
     AMD64_JIT_MEM_RIP_REL = 1ul << 32,
     AMD64_JIT_MEM_FS = 1ul << 33,
     AMD64_JIT_MEM_REX_PRESENT = 1ul << 34,
+    AMD64_JIT_MEM_LOCK = 1ul << 35,
 };
 
 static inline byte_t amd64_modrm_mod(byte_t modrm) {
@@ -9863,10 +9864,27 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_fallback_to_interp = true;
             return false;
         }
+        // This block is the one amd64 JIT path that accepts a LOCK prefix --
+        // every other predicate rejects it (amd64_jit_plain_prefixes and its
+        // siblings) and bridges to the interpreter. It has to, because the
+        // helper it emits is the only implementation of `<alu> [mem], reg`
+        // the JIT has; but until 553 the prefix was simply dropped on the
+        // floor and the helper did a plain read/compute/write, so `lock addl
+        // %reg, (mem)` was not atomic against anything at all. Carry it in
+        // the meta word and let the helper do a host atomic.
+        //
+        // Only the seven RMW directions take it. LOCK on cmp/test/mov/lea, or
+        // on a reg-destination direction, is #UD on hardware; this path has
+        // always executed those and keeps doing so rather than introducing a
+        // new SIGILL for something no correct program emits.
+        if (insn.lock_prefix &&
+                (insn.opcode & 7) <= 1 && insn.opcode < 0x38)
+            meta |= AMD64_JIT_MEM_LOCK;
         state->amd64_ip = next_ip;
-        amd64_jit_debug("mem-op-helper ip=%llx opcode=%02x meta=%lx disp=%lx next=%llx",
+        amd64_jit_debug("mem-op-helper ip=%llx opcode=%02x%s meta=%lx disp=%lx next=%llx",
                 (unsigned long long) insn.start_ip,
                 insn.opcode,
+                (meta & AMD64_JIT_MEM_LOCK) ? " lock" : "",
                 meta,
                 disp,
                 (unsigned long long) next_ip);

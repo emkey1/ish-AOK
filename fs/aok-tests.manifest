@@ -23,6 +23,7 @@ x86/atomic_xadd32.c
 x86/atomic_cmpxchg32.c
 x86/atomic_cmpxchg8b.c
 x86/atomic_logic32.c
+x86/atomic_lock_contended.c
 x86/cow_atomic_fault.c
 x86/x87_fpu.c
 x86/x86_loop.c

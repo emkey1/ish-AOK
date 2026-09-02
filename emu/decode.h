@@ -1669,6 +1669,17 @@ restart:
         default: TRACE("undefined"); UNDEFINED; \
     }
 
+                // LOCK XCHG. XCHG with a memory operand is atomic with or
+                // without the prefix, so this decodes to the ordinary XCHG --
+                // whose gadget already uses a real ldaxr/stlxr pair. It was
+                // simply missing from this table, so an explicit `lock xchg`
+                // (which hand-written asm does emit) fell through to
+                // UNDEFINED and killed the guest with SIGILL.
+                case 0x86: TRACEI("lock xchg reg8, modrm8");
+                           READMODRM_MEM; XCHG(modrm_reg, modrm_val,8); break;
+                case 0x87: TRACEI("lock xchg reg, modrm");
+                           READMODRM_MEM; XCHG(modrm_reg, modrm_val,oz); break;
+
                 case 0xfe: TRACEI("lock grp5 modrm8\t");
                            READMODRM_MEM; GRP5_ATOMIC(modrm_val,8); break;
                 case 0xff: TRACEI("lock grp5 modrm\t");

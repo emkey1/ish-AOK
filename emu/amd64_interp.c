@@ -4203,6 +4203,210 @@ static inline bool amd64_write_rm(struct cpu_state *cpu, struct tlb *tlb,
     }
 }
 
+// ---- LOCK-prefixed memory operands ----------------------------------------
+//
+// These wrap the host-atomic primitives in emu/tlb.c (x86_atomic_*) with the
+// two things the amd64 guest adds on top of a raw guest address: the canonical
+// address check, and the sizes-in-bits convention the interpreter uses
+// everywhere else.
+//
+// Before build 553 every locked instruction on an amd64 guest was interpreted
+// as a plain read/compute/write serialised on the global `atomic_l_lock` --
+// which does not interlock with a host atomic (the kernel does those on guest
+// memory; FUTEX_WAKE_OP is the live case) -- and the whole `<alu> [mem], reg`
+// family did not even take that lock, so it lost updates against other guest
+// threads. See the comment over x86_atomic_rmw in emu/tlb.c.
+//
+// Every one of these returns false with cpu->segfault_addr/was_write set on a
+// fault, matching amd64_read_rm/amd64_write_rm.
+
+static bool amd64_atomic_addr_ok(struct cpu_state *cpu, struct tlb *tlb,
+        qword_t guest_addr, unsigned size, guest_addr_t *addr_out) {
+    if (!amd64_guest_addr_ok(guest_addr, size / 8, addr_out)) {
+        cpu->segfault_addr = guest_addr;
+        cpu->segfault_was_write = true;
+        return false;
+    }
+    tlb->segfault_addr = 0;
+    return true;
+}
+
+// A fault out of the atomic helpers reports tlb->segfault_addr, which is 0
+// when the failure was not a TLB miss on this exact address; fall back to the
+// operand address so the page-fault handler has something to resolve.
+static bool amd64_atomic_faulted(struct cpu_state *cpu, guest_addr_t addr) {
+    if (cpu->segfault_addr == 0)
+        cpu->segfault_addr = addr;
+    return false;
+}
+
+// alu_op is the x86 /r group index, which is also (opcode >> 3) & 7 for the
+// 00-3B one-byte forms: 0 add, 1 or, 2 adc, 3 sbb, 4 and, 5 sub, 6 xor.
+// (7 is cmp, which writes nothing and so is never locked -- #UD.)
+struct amd64_alu_atomic_ctx {
+    unsigned alu_op;
+    qword_t rhs;
+    unsigned size;
+    unsigned carry_in;
+};
+
+// Pure, as x86_atomic_rmw requires: the aligned path re-runs it per CAS retry.
+static qword_t amd64_alu_atomic_fn(qword_t old, void *ctxp) {
+    const struct amd64_alu_atomic_ctx *c = ctxp;
+    switch (c->alu_op) {
+    case 0: return amd64_trunc(old + c->rhs, c->size);
+    case 1: return amd64_trunc(old | c->rhs, c->size);
+    case 2: return amd64_trunc(old + c->rhs + c->carry_in, c->size);
+    case 3: return amd64_trunc(old - c->rhs - c->carry_in, c->size);
+    case 4: return amd64_trunc(old & c->rhs, c->size);
+    case 5: return amd64_trunc(old - c->rhs, c->size);
+    default: return amd64_trunc(old ^ c->rhs, c->size);
+    }
+}
+
+static void amd64_set_alu_flags(struct cpu_state *cpu, unsigned alu_op,
+        qword_t lhs, qword_t rhs, unsigned carry_in, qword_t result, unsigned size) {
+    switch (alu_op) {
+    case 0: amd64_set_add_flags(cpu, lhs, rhs, result, size); break;
+    case 2: amd64_set_adc_flags(cpu, lhs, rhs, carry_in, result, size); break;
+    case 3: amd64_set_sbb_flags(cpu, lhs, rhs, carry_in, result, size); break;
+    case 5: amd64_set_sub_flags(cpu, lhs, rhs, result, size); break;
+    default: amd64_set_logic_flags(cpu, result, size); break; /* or/and/xor */
+    }
+}
+
+// LOCK <alu> [addr], rhs. Sets the flags itself, since every caller wants
+// exactly this and the old/new pair is otherwise only useful for that.
+static bool amd64_locked_alu(struct cpu_state *cpu, struct tlb *tlb,
+        qword_t guest_addr, unsigned size, unsigned alu_op, qword_t rhs) {
+    guest_addr_t addr;
+    if (!amd64_atomic_addr_ok(cpu, tlb, guest_addr, size, &addr))
+        return false;
+    struct amd64_alu_atomic_ctx ctx = {
+        .alu_op = alu_op, .rhs = rhs, .size = size, .carry_in = cpu->cf,
+    };
+    qword_t old = 0, neu = 0;
+    if (x86_atomic_rmw(cpu, tlb, addr, size / 8, amd64_alu_atomic_fn, &ctx,
+                &old, &neu) != 0)
+        return amd64_atomic_faulted(cpu, addr);
+    amd64_set_alu_flags(cpu, alu_op, old, rhs, ctx.carry_in, neu, size);
+    return true;
+}
+
+// LOCK INC / LOCK DEC [addr]. INC and DEC set every arithmetic flag EXCEPT
+// CF, which they preserve -- the caller-visible reason this is not just
+// amd64_locked_alu with rhs = 1.
+static qword_t amd64_inc_atomic_fn(qword_t old, void *ctxp) {
+    const struct amd64_alu_atomic_ctx *c = ctxp;
+    return amd64_trunc(c->alu_op ? old - 1 : old + 1, c->size);
+}
+
+static bool amd64_locked_incdec(struct cpu_state *cpu, struct tlb *tlb,
+        qword_t guest_addr, unsigned size, bool is_inc) {
+    guest_addr_t addr;
+    if (!amd64_atomic_addr_ok(cpu, tlb, guest_addr, size, &addr))
+        return false;
+    bool saved_cf = cpu->cf;
+    struct amd64_alu_atomic_ctx ctx = { .alu_op = is_inc ? 0 : 1, .size = size };
+    qword_t old = 0, neu = 0;
+    if (x86_atomic_rmw(cpu, tlb, addr, size / 8, amd64_inc_atomic_fn, &ctx,
+                &old, &neu) != 0)
+        return amd64_atomic_faulted(cpu, addr);
+    if (is_inc)
+        amd64_set_add_flags(cpu, old, 1, neu, size);
+    else
+        amd64_set_sub_flags(cpu, old, 1, neu, size);
+    cpu->cf = saved_cf;
+    collapse_flags(cpu);
+    return true;
+}
+
+// XCHG reg, [addr] -- implicitly locked on x86, prefix or not.
+static bool amd64_locked_xchg(struct cpu_state *cpu, struct tlb *tlb,
+        qword_t guest_addr, unsigned size, qword_t value, qword_t *old_out) {
+    guest_addr_t addr;
+    if (!amd64_atomic_addr_ok(cpu, tlb, guest_addr, size, &addr))
+        return false;
+    if (x86_atomic_xchg(cpu, tlb, addr, size / 8, value, old_out) != 0)
+        return amd64_atomic_faulted(cpu, addr);
+    return true;
+}
+
+// LOCK XADD reg, [addr]: [addr] += reg, reg = old [addr].
+static bool amd64_locked_xadd(struct cpu_state *cpu, struct tlb *tlb,
+        qword_t guest_addr, unsigned size, qword_t rhs,
+        qword_t *old_out, qword_t *new_out) {
+    guest_addr_t addr;
+    if (!amd64_atomic_addr_ok(cpu, tlb, guest_addr, size, &addr))
+        return false;
+    struct amd64_alu_atomic_ctx ctx = { .alu_op = 0, .rhs = rhs, .size = size };
+    if (x86_atomic_rmw(cpu, tlb, addr, size / 8, amd64_alu_atomic_fn, &ctx,
+                old_out, new_out) != 0)
+        return amd64_atomic_faulted(cpu, addr);
+    return true;
+}
+
+// LOCK CMPXCHG reg, [addr].
+static bool amd64_locked_cmpxchg(struct cpu_state *cpu, struct tlb *tlb,
+        qword_t guest_addr, unsigned size, qword_t expected, qword_t desired,
+        qword_t *old_out, bool *swapped) {
+    guest_addr_t addr;
+    if (!amd64_atomic_addr_ok(cpu, tlb, guest_addr, size, &addr))
+        return false;
+    if (x86_atomic_cas(cpu, tlb, addr, size / 8, expected, desired,
+                old_out, swapped) != 0)
+        return amd64_atomic_faulted(cpu, addr);
+    return true;
+}
+
+// LOCK NEG / LOCK NOT [addr] (F7 /3, /2). NOT touches no flags; NEG is
+// 0 - operand, with the full sub flag rule.
+static qword_t amd64_negnot_atomic_fn(qword_t old, void *ctxp) {
+    const struct amd64_alu_atomic_ctx *c = ctxp;
+    return amd64_trunc(c->alu_op ? 0 - old : ~old, c->size);
+}
+
+static bool amd64_locked_negnot(struct cpu_state *cpu, struct tlb *tlb,
+        qword_t guest_addr, unsigned size, bool is_neg,
+        qword_t *old_out, qword_t *new_out) {
+    guest_addr_t addr;
+    if (!amd64_atomic_addr_ok(cpu, tlb, guest_addr, size, &addr))
+        return false;
+    struct amd64_alu_atomic_ctx ctx = { .alu_op = is_neg ? 1 : 0, .size = size };
+    if (x86_atomic_rmw(cpu, tlb, addr, size / 8, amd64_negnot_atomic_fn, &ctx,
+                old_out, new_out) != 0)
+        return amd64_atomic_faulted(cpu, addr);
+    return true;
+}
+
+// LOCK BTS / BTR / BTC on a memory operand. Expressed as OR / AND-NOT / XOR of
+// a one-bit mask, but it cannot go through amd64_locked_alu: the bit-test
+// instructions set CF from the old bit and touch NOTHING else, where the ALU
+// forms set the whole logic flag group. Returns the pre-image so the caller
+// can extract CF. op: 0 = BTS (set), 1 = BTR (reset), 2 = BTC (complement).
+static qword_t amd64_bitop_atomic_fn(qword_t old, void *ctxp) {
+    const struct amd64_alu_atomic_ctx *c = ctxp;
+    switch (c->alu_op) {
+    case 0: return amd64_trunc(old | c->rhs, c->size);
+    case 1: return amd64_trunc(old & ~c->rhs, c->size);
+    default: return amd64_trunc(old ^ c->rhs, c->size);
+    }
+}
+
+static bool amd64_locked_bitop(struct cpu_state *cpu, struct tlb *tlb,
+        qword_t guest_addr, unsigned size, unsigned op, qword_t mask,
+        qword_t *old_out) {
+    guest_addr_t addr;
+    if (!amd64_atomic_addr_ok(cpu, tlb, guest_addr, size, &addr))
+        return false;
+    struct amd64_alu_atomic_ctx ctx = { .alu_op = op, .rhs = mask, .size = size };
+    qword_t neu = 0;
+    if (x86_atomic_rmw(cpu, tlb, addr, size / 8, amd64_bitop_atomic_fn, &ctx,
+                old_out, &neu) != 0)
+        return amd64_atomic_faulted(cpu, addr);
+    return true;
+}
+
 // ---- AVX/AVX-512 (VEX/EVEX) support (GH #525) ----
 //
 // Ground truth (disassembly of the real Bun binary bundled by
@@ -10098,6 +10302,18 @@ restart_prefix:
                     bit_index, true, true, &lhs, &addr, &bit))
                 goto amd64_gpf_restore;
             collapse_flags(cpu);
+            // LOCK BTS/BTR/BTC on memory: one host-atomic RMW on the addressed
+            // word. The read/modify/write below is not atomic against anything,
+            // and these are exactly the instructions a bitmap lock is built on.
+            if (lock_prefix && !modrm.is_reg) {
+                unsigned bop = op2 == 0xab ? 0 : (op2 == 0xb3 ? 1 : 2);
+                if (!amd64_locked_bitop(cpu, tlb, addr, op_size, bop,
+                            1ull << bit, &lhs))
+                    goto amd64_gpf_restore;
+                cpu->cf = (amd64_trunc(lhs, op_size) >> bit) & 1;
+                cpu->cf_bit = cpu->cf;
+                break;
+            }
             cpu->cf = (amd64_trunc(lhs, op_size) >> bit) & 1;
             result = lhs;
             switch (op2) {
@@ -10141,6 +10357,15 @@ restart_prefix:
                     true, false, &lhs, &addr, &bit))
                 goto amd64_gpf_restore;
             collapse_flags(cpu);
+            // /4 is BT, which writes nothing and so is never locked.
+            if (lock_prefix && !modrm.is_reg && modrm.reg != 4) {
+                if (!amd64_locked_bitop(cpu, tlb, addr, op_size, modrm.reg - 5,
+                            1ull << bit, &lhs))
+                    goto amd64_gpf_restore;
+                cpu->cf = (amd64_trunc(lhs, op_size) >> bit) & 1;
+                cpu->cf_bit = cpu->cf;
+                break;
+            }
             cpu->cf = (amd64_trunc(lhs, op_size) >> bit) & 1;
             result = lhs;
             switch (modrm.reg) {
@@ -10200,24 +10425,20 @@ restart_prefix:
                 return INT_GPF;
             }
             atomic_locked = lock_prefix && !modrm.is_reg;
-            if (atomic_locked)
-                lock(&atomic_l_lock, 0);
-            if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, xadd_size, &lhs)) {
-                if (atomic_locked)
-                    unlock(&atomic_l_lock);
-                goto amd64_gpf_restore;
-            }
             rhs = op2 == 0xc0
                     ? amd64_reg_get_encoded8(cpu, modrm.reg, modrm.rex_present)
                     : amd64_reg_get(cpu, modrm.reg, xadd_size);
-            result = amd64_trunc(lhs + rhs, xadd_size);
-            if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, xadd_size, result)) {
-                if (atomic_locked)
-                    unlock(&atomic_l_lock);
-                goto amd64_gpf_restore;
+            if (atomic_locked) {
+                qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+                if (!amd64_locked_xadd(cpu, tlb, addr, xadd_size, rhs, &lhs, &result))
+                    goto amd64_gpf_restore;
+            } else {
+                if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, xadd_size, &lhs))
+                    goto amd64_gpf_restore;
+                result = amd64_trunc(lhs + rhs, xadd_size);
+                if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, xadd_size, result))
+                    goto amd64_gpf_restore;
             }
-            if (atomic_locked)
-                unlock(&atomic_l_lock);
             if (op2 == 0xc0)
                 amd64_reg_set_encoded8(cpu, modrm.reg, modrm.rex_present, lhs);
             else
@@ -10236,25 +10457,40 @@ restart_prefix:
                 return INT_GPF;
             }
             atomic_locked = lock_prefix && !modrm.is_reg;
-            if (atomic_locked)
-                lock(&atomic_l_lock, 0);
-            if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, cmpxchg_size, &dst)) {
-                if (atomic_locked)
-                    unlock(&atomic_l_lock);
-                goto amd64_gpf_restore;
-            }
             src = op2 == 0xb0
                     ? amd64_reg_get_encoded8(cpu, modrm.reg, modrm.rex_present)
                     : amd64_reg_get(cpu, modrm.reg, cmpxchg_size);
             acc = amd64_reg_get(cpu, amd64_rax, cmpxchg_size);
+            if (atomic_locked) {
+                // One host compare-exchange. The read/compare/write it replaces
+                // had a genuine ABA window even under the global lock's weaker
+                // guarantee: nothing stopped a host-side atomic writing between
+                // the compare and the store.
+                qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+                bool swapped = false;
+                if (!amd64_locked_cmpxchg(cpu, tlb, addr, cmpxchg_size, acc, src,
+                            &dst, &swapped))
+                    goto amd64_gpf_restore;
+                result = amd64_trunc(acc - dst, cmpxchg_size);
+                amd64_set_sub_flags(cpu, acc, dst, result, cmpxchg_size);
+                if (swapped) {
+                    if (cmpxchg_size == 64)
+                        amd64_trace_qword_store(cpu, saved_rip, 0x0f, addr, src);
+                    cpu->zf = 1;
+                } else {
+                    amd64_reg_set(cpu, amd64_rax, cmpxchg_size, dst);
+                    cpu->zf = 0;
+                }
+                cpu->zf_res = 0;
+                break;
+            }
+            if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, cmpxchg_size, &dst))
+                goto amd64_gpf_restore;
             result = amd64_trunc(acc - dst, cmpxchg_size);
             amd64_set_sub_flags(cpu, acc, dst, result, cmpxchg_size);
             if (acc == dst) {
-                if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, cmpxchg_size, src)) {
-                    if (atomic_locked)
-                        unlock(&atomic_l_lock);
+                if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, cmpxchg_size, src))
                     goto amd64_gpf_restore;
-                }
                 if (!modrm.is_reg && cmpxchg_size == 64)
                     amd64_trace_qword_store(cpu, saved_rip, 0x0f, amd64_effective_addr(cpu, &modrm, fs_prefix), src);
                 cpu->zf = 1;
@@ -10264,8 +10500,6 @@ restart_prefix:
                 cpu->zf = 0;
                 cpu->zf_res = 0;
             }
-            if (atomic_locked)
-                unlock(&atomic_l_lock);
             break;
         }
         if (op2 == 0xc7) {
@@ -10281,8 +10515,6 @@ restart_prefix:
                 return INT_UNDEFINED;
 
             atomic_locked = lock_prefix;
-            if (atomic_locked)
-                lock(&atomic_l_lock, 0);
             if (rex.w) {
                 // CMPXCHG16B: 128-bit compare-exchange. Compare RDX:RAX with the
                 // 16-byte memory operand; on equal store RCX:RBX (ZF=1), else
@@ -10291,68 +10523,74 @@ restart_prefix:
                 // CMPXCHG8B -- the 64-bit path below.)
                 qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
                 if (addr & 0xf) {
-                    if (atomic_locked)
-                        unlock(&atomic_l_lock);
                     cpu->amd64_rip = saved_rip;
                     cpu->segfault_addr = addr;
                     return INT_GPF;
                 }
+                // The 16-byte alignment enforced just above is also what lets
+                // this be a single host 128-bit compare-exchange.
+                qword_t exp128[2] = {
+                    amd64_reg_get(cpu, amd64_rax, 64),
+                    amd64_reg_get(cpu, amd64_rdx, 64),
+                };
+                qword_t des128[2] = {
+                    amd64_reg_get(cpu, amd64_rbx, 64),
+                    amd64_reg_get(cpu, amd64_rcx, 64),
+                };
                 qword_t mem128[2];  // [0] = low qword, [1] = high qword
-                if (!tlb_read(tlb, addr, mem128, 16)) {
-                    if (atomic_locked)
-                        unlock(&atomic_l_lock);
+                bool eq = false;
+                guest_addr_t checked_addr;
+                if (!amd64_atomic_addr_ok(cpu, tlb, addr, 128, &checked_addr))
+                    goto amd64_gpf_restore;
+                if (x86_atomic_cas16b(cpu, tlb, checked_addr, exp128, des128,
+                            mem128, &eq) != 0) {
+                    amd64_atomic_faulted(cpu, checked_addr);
                     goto amd64_gpf_restore;
                 }
-                bool eq = mem128[0] == amd64_reg_get(cpu, amd64_rax, 64) &&
-                          mem128[1] == amd64_reg_get(cpu, amd64_rdx, 64);
                 collapse_flags(cpu);
                 cpu->zf = eq;
                 cpu->zf_res = 0;
-                if (eq) {
-                    qword_t des128[2] = {
-                        amd64_reg_get(cpu, amd64_rbx, 64),
-                        amd64_reg_get(cpu, amd64_rcx, 64),
-                    };
-                    if (!tlb_write(tlb, addr, des128, 16)) {
-                        if (atomic_locked)
-                            unlock(&atomic_l_lock);
-                        goto amd64_gpf_restore;
-                    }
-                } else {
+                if (!eq) {
                     amd64_reg_set(cpu, amd64_rax, 64, mem128[0]);
                     amd64_reg_set(cpu, amd64_rdx, 64, mem128[1]);
                 }
-                if (atomic_locked)
-                    unlock(&atomic_l_lock);
                 break;
             }
-            if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, 64, &dst)) {
-                if (atomic_locked)
-                    unlock(&atomic_l_lock);
-                goto amd64_gpf_restore;
-            }
-
             expected = ((qword_t) (dword_t) amd64_reg_get(cpu, amd64_rdx, 32) << 32) |
                     (dword_t) amd64_reg_get(cpu, amd64_rax, 32);
             desired = ((qword_t) (dword_t) amd64_reg_get(cpu, amd64_rcx, 32) << 32) |
                     (dword_t) amd64_reg_get(cpu, amd64_rbx, 32);
+            if (atomic_locked) {
+                qword_t addr8 = amd64_effective_addr(cpu, &modrm, fs_prefix);
+                bool swapped = false;
+                if (!amd64_locked_cmpxchg(cpu, tlb, addr8, 64, expected, desired,
+                            &dst, &swapped))
+                    goto amd64_gpf_restore;
+                collapse_flags(cpu);
+                cpu->zf = swapped;
+                cpu->zf_res = 0;
+                if (swapped) {
+                    amd64_trace_qword_store(cpu, saved_rip, 0x0f, addr8, desired);
+                } else {
+                    amd64_reg_set(cpu, amd64_rax, 32, (dword_t) dst);
+                    amd64_reg_set(cpu, amd64_rdx, 32, (dword_t) (dst >> 32));
+                }
+                break;
+            }
+            if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, 64, &dst))
+                goto amd64_gpf_restore;
             collapse_flags(cpu);
             cpu->zf = expected == dst;
             cpu->zf_res = 0;
             if (expected == dst) {
-                if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, 64, desired)) {
-                    if (atomic_locked)
-                        unlock(&atomic_l_lock);
+                if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, 64, desired))
                     goto amd64_gpf_restore;
-                }
                 amd64_trace_qword_store(cpu, saved_rip, 0x0f,
                         amd64_effective_addr(cpu, &modrm, fs_prefix), desired);
             } else {
                 amd64_reg_set(cpu, amd64_rax, 32, (dword_t) dst);
                 amd64_reg_set(cpu, amd64_rdx, 32, (dword_t) (dst >> 32));
             }
-            if (atomic_locked)
-                unlock(&atomic_l_lock);
             break;
         }
         if (op2 >= 0xc8 && op2 <= 0xcf) {
@@ -10446,6 +10684,31 @@ restart_prefix:
             cpu->amd64_rip = saved_rip;
             cpu->segfault_addr = saved_rip;
             return INT_GPF;
+        }
+        // LOCK <alu> [mem], reg -- the 00/08/10/18/20/28/30 byte forms and
+        // their 01/09/... word forms, which are the only ones in this switch
+        // that both write memory and accept a LOCK prefix. Handled here rather
+        // than in each case below because the atomic form is one operation,
+        // not the read/compute/write pair the unlocked cases are.
+        //
+        // These used to fall through to the plain cases and lose updates
+        // outright: unlike xadd/cmpxchg/inc/dec nothing here ever took
+        // atomic_l_lock, so `lock addl %reg, (mem)` dropped 3876 of 200000
+        // increments across four guest threads. (LOCK with a register
+        // destination, and on the reg-destination 02/03/... directions, is #UD
+        // on hardware; the JIT rejects it and the unlocked path below is
+        // reached only without the prefix.)
+        if (lock_prefix && !modrm.is_reg &&
+                (opcode & 7) <= 1 && opcode < 0x38) {
+            unsigned alu_size = (opcode & 1) == 0 ? 8 : op_size;
+            unsigned alu_op = (opcode >> 3) & 7;
+            qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+            rhs = alu_size == 8
+                ? amd64_reg_get_encoded8(cpu, modrm.reg, modrm.rex_present)
+                : amd64_reg_get(cpu, modrm.reg, alu_size);
+            if (!amd64_locked_alu(cpu, tlb, addr, alu_size, alu_op, rhs))
+                goto amd64_gpf_restore;
+            break;
         }
         switch (opcode) {
         case 0x00:
@@ -10746,23 +11009,20 @@ restart_prefix:
         case 0x86:
         case 0x87: {
             unsigned xchg_size = opcode == 0x86 ? 8 : op_size;
-            bool atomic_locked = !modrm.is_reg;
-            if (atomic_locked)
-                lock(&atomic_l_lock, 0);
-            if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, xchg_size, &lhs)) {
-                if (atomic_locked)
-                    unlock(&atomic_l_lock);
-                goto amd64_gpf_restore;
-            }
             rhs = opcode == 0x86 ? amd64_reg_get_encoded8(cpu, modrm.reg, modrm.rex_present)
                                  : amd64_reg_get(cpu, modrm.reg, xchg_size);
-            if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, xchg_size, rhs)) {
-                if (atomic_locked)
-                    unlock(&atomic_l_lock);
-                goto amd64_gpf_restore;
+            if (!modrm.is_reg) {
+                // XCHG with a memory operand is atomic whether or not a LOCK
+                // prefix is present -- it is the store half of every spinlock.
+                qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+                if (!amd64_locked_xchg(cpu, tlb, addr, xchg_size, rhs, &lhs))
+                    goto amd64_gpf_restore;
+            } else {
+                if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, xchg_size, &lhs))
+                    goto amd64_gpf_restore;
+                if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, xchg_size, rhs))
+                    goto amd64_gpf_restore;
             }
-            if (atomic_locked)
-                unlock(&atomic_l_lock);
             if (opcode == 0x86)
                 amd64_reg_set_encoded8(cpu, modrm.reg, modrm.rex_present, lhs);
             else
@@ -11058,6 +11318,20 @@ restart_prefix:
             amd64_set_logic_flags(cpu, lhs & rhs, size);
             break;
         }
+        // LOCK NOT (/2) / LOCK NEG (/3) on memory: the only two group-3
+        // members that write their operand, and so the only ones a LOCK
+        // prefix is legal on. Nothing here was ever atomic.
+        if (lock_prefix && !modrm.is_reg &&
+                (modrm.reg == 2 || modrm.reg == 3)) {
+            qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+            qword_t old_val, new_val;
+            if (!amd64_locked_negnot(cpu, tlb, addr, size, modrm.reg == 3,
+                        &old_val, &new_val))
+                goto amd64_gpf_restore;
+            if (modrm.reg == 3)
+                amd64_set_sub_flags(cpu, 0, old_val, new_val, size);
+            break;
+        }
         result = amd64_grp3_muldiv(cpu, tlb, &modrm, fs_prefix, size);
         if (result == INT_PF)
             goto amd64_gpf_restore;
@@ -11215,6 +11489,19 @@ restart_prefix:
             if (!modrm.is_reg && op_size == 64)
                 amd64_trace_qword_store(cpu, saved_rip, opcode,
                         amd64_effective_addr(cpu, &modrm, fs_prefix), rhs);
+            break;
+        }
+
+        // LOCK <alu> [mem], imm. This is the main interpreter's OWN copy of
+        // the group -- amd64_jit_modrm_imm is a second one, reached through the
+        // JIT bridge -- and neither the lock prefix nor any atomicity was ever
+        // honoured here. /7 is CMP, which writes nothing and cannot be locked.
+        if (lock_prefix && !modrm.is_reg &&
+                (opcode == 0x80 || opcode == 0x81 || opcode == 0x83) &&
+                modrm.reg != 7) {
+            qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+            if (!amd64_locked_alu(cpu, tlb, addr, rm_size, modrm.reg, rhs))
+                goto amd64_gpf_restore;
             break;
         }
 
@@ -11816,6 +12103,12 @@ restart_prefix:
         case 1: {
             bool is_inc = modrm.reg == 0;
             bool saved_cf = cpu->cf;
+            if (lock_prefix && !modrm.is_reg) {
+                qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+                if (!amd64_locked_incdec(cpu, tlb, addr, 8, is_inc))
+                    goto amd64_gpf_restore;
+                break;
+            }
             if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, 8, &lhs))
                 goto amd64_gpf_restore;
             result = is_inc ? amd64_trunc(lhs + 1, 8) : amd64_trunc(lhs - 1, 8);
@@ -11847,6 +12140,12 @@ restart_prefix:
         case 1: {
             bool is_inc = modrm.reg == 0;
             bool saved_cf = cpu->cf;
+            if (lock_prefix && !modrm.is_reg) {
+                qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+                if (!amd64_locked_incdec(cpu, tlb, addr, op_size, is_inc))
+                    goto amd64_gpf_restore;
+                break;
+            }
             if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, op_size, &lhs))
                 goto amd64_gpf_restore;
             result = is_inc ? amd64_trunc(lhs + 1, op_size) : amd64_trunc(lhs - 1, op_size);
@@ -12294,7 +12593,7 @@ int amd64_jit_xchg_rm(struct cpu_state *cpu, struct tlb *tlb,
     byte_t byte;
     unsigned size;
     qword_t lhs, rhs;
-    bool atomic_locked;
+
 
     if (opcode != 0x86 && opcode != 0x87)
         return INT_UNDEFINED;
@@ -12339,24 +12638,24 @@ int amd64_jit_xchg_rm(struct cpu_state *cpu, struct tlb *tlb,
     if (lock_prefix && modrm.is_reg)
         return INT_UNDEFINED;
     size = opcode == 0x86 ? 8 : (operand_size_prefix ? 16 : (rex.w ? 64 : 32));
-    atomic_locked = !modrm.is_reg;
-    if (atomic_locked)
-        lock(&atomic_l_lock, 0);
-    if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, size, &lhs)) {
-        if (atomic_locked)
-            unlock(&atomic_l_lock);
-        goto amd64_xchg_rm_pf;
-    }
     rhs = opcode == 0x86
         ? amd64_reg_get_encoded8(cpu, modrm.reg, modrm.rex_present)
         : amd64_reg_get(cpu, modrm.reg, size);
-    if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, size, rhs)) {
-        if (atomic_locked)
-            unlock(&atomic_l_lock);
-        goto amd64_xchg_rm_pf;
+    // XCHG on memory is atomic with or without the prefix. It used to be a
+    // read/write pair under the global atomic_l_lock, which is not just weaker
+    // than a host atomic -- it LIVELOCKED: two guest threads contending on a
+    // one-word spinlock managed 78 acquisitions and then one spun 200 million
+    // times without ever seeing the word released.
+    if (!modrm.is_reg) {
+        qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+        if (!amd64_locked_xchg(cpu, tlb, addr, size, rhs, &lhs))
+            goto amd64_xchg_rm_pf;
+    } else {
+        if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, size, &lhs))
+            goto amd64_xchg_rm_pf;
+        if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, size, rhs))
+            goto amd64_xchg_rm_pf;
     }
-    if (atomic_locked)
-        unlock(&atomic_l_lock);
     if (opcode == 0x86)
         amd64_reg_set_encoded8(cpu, modrm.reg, modrm.rex_present, lhs);
     else
@@ -13511,6 +13810,11 @@ enum amd64_jit_mem_meta {
     AMD64_JIT_MEM_RIP_REL = 1ul << 32,
     AMD64_JIT_MEM_FS = 1ul << 33,
     AMD64_JIT_MEM_REX_PRESENT = 1ul << 34,
+    // Set for a LOCK-prefixed <alu> [mem], reg. The gen.c block that emits
+    // this helper is the one amd64 JIT path that never rejected the prefix,
+    // so a locked ALU op was compiled straight into the non-atomic
+    // read/compute/write below and lost updates against other guest threads.
+    AMD64_JIT_MEM_LOCK = 1ul << 35,
 };
 
 int amd64_jit_mem_op(struct cpu_state *cpu, struct tlb *tlb,
@@ -13581,6 +13885,18 @@ int amd64_jit_mem_op(struct cpu_state *cpu, struct tlb *tlb,
         void *dst = size == 64 ? (void *) &tmp64 :
             (size == 32 ? (void *) &tmp32 :
              (size == 16 ? (void *) &tmp16 : (void *) &tmp8));
+        // LOCK <alu> [mem], reg: one host-atomic RMW instead of the
+        // read/compute/write below, which is not atomic against anything.
+        if ((meta & AMD64_JIT_MEM_LOCK) != 0) {
+            qword_t lrhs = size == 8
+                ? amd64_reg_get_encoded8(cpu, reg, rex_present)
+                : amd64_reg_get(cpu, reg, size);
+            if (!amd64_locked_alu(cpu, tlb, addr, size, (opcode >> 3) & 7, lrhs)) {
+                amd64_sync_legacy_regs(cpu);
+                return INT_PF;
+            }
+            break;
+        }
         if (!amd64_mem_read(cpu, tlb, addr, dst, size / 8)) {
             amd64_sync_legacy_regs(cpu);
             return INT_PF;
@@ -14124,6 +14440,17 @@ amd64_0f_rm_done:
                 bit_index, true, true, &lhs, &addr, &bit))
             goto amd64_0f_rm_pf;
         collapse_flags(cpu);
+        if (lock_prefix && !modrm.is_reg) {
+            unsigned bop = op2 == 0xab ? 0 : (op2 == 0xb3 ? 1 : 2);
+            if (!amd64_locked_bitop(cpu, tlb, addr, op_size, bop,
+                        1ull << bit, &lhs))
+                goto amd64_0f_rm_pf;
+            cpu->cf = (amd64_trunc(lhs, op_size) >> bit) & 1;
+            cpu->cf_bit = cpu->cf;
+            cpu->amd64_rip = (qword_t) next_ip;
+            amd64_sync_legacy_regs(cpu);
+            return INT_NONE;
+        }
         cpu->cf = (amd64_trunc(lhs, op_size) >> bit) & 1;
         result = lhs;
         switch (op2) {
@@ -14157,6 +14484,16 @@ amd64_0f_rm_done:
                 true, false, &lhs, &addr, &bit))
             goto amd64_0f_rm_pf;
         collapse_flags(cpu);
+        if (lock_prefix && !modrm.is_reg && modrm.reg != 4) {
+            if (!amd64_locked_bitop(cpu, tlb, addr, op_size, modrm.reg - 5,
+                        1ull << bit, &lhs))
+                goto amd64_0f_rm_pf;
+            cpu->cf = (amd64_trunc(lhs, op_size) >> bit) & 1;
+            cpu->cf_bit = cpu->cf;
+            cpu->amd64_rip = (qword_t) next_ip;
+            amd64_sync_legacy_regs(cpu);
+            return INT_NONE;
+        }
         cpu->cf = (amd64_trunc(lhs, op_size) >> bit) & 1;
         result = lhs;
         switch (modrm.reg) {
@@ -14204,24 +14541,20 @@ amd64_0f_rm_done:
         unsigned xadd_size = op2 == 0xc0 ? 8 : op_size;
         qword_t lhs, rhs, result;
         bool atomic_locked = lock_prefix && !modrm.is_reg;
-        if (atomic_locked)
-            lock(&atomic_l_lock, 0);
-        if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, xadd_size, &lhs)) {
-            if (atomic_locked)
-                unlock(&atomic_l_lock);
-            goto amd64_0f_rm_pf;
-        }
         rhs = op2 == 0xc0
                 ? amd64_reg_get_encoded8(cpu, modrm.reg, modrm.rex_present)
                 : amd64_reg_get(cpu, modrm.reg, xadd_size);
-        result = amd64_trunc(lhs + rhs, xadd_size);
-        if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, xadd_size, result)) {
-            if (atomic_locked)
-                unlock(&atomic_l_lock);
-            goto amd64_0f_rm_pf;
+        if (atomic_locked) {
+            qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+            if (!amd64_locked_xadd(cpu, tlb, addr, xadd_size, rhs, &lhs, &result))
+                goto amd64_0f_rm_pf;
+        } else {
+            if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, xadd_size, &lhs))
+                goto amd64_0f_rm_pf;
+            result = amd64_trunc(lhs + rhs, xadd_size);
+            if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, xadd_size, result))
+                goto amd64_0f_rm_pf;
         }
-        if (atomic_locked)
-            unlock(&atomic_l_lock);
         if (op2 == 0xc0)
             amd64_reg_set_encoded8(cpu, modrm.reg, modrm.rex_present, lhs);
         else
@@ -14235,25 +14568,30 @@ amd64_0f_rm_done:
         unsigned cmpxchg_size = op2 == 0xb0 ? 8 : op_size;
         qword_t dst, src, acc, result;
         bool atomic_locked = lock_prefix && !modrm.is_reg;
-        if (atomic_locked)
-            lock(&atomic_l_lock, 0);
-        if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, cmpxchg_size, &dst)) {
-            if (atomic_locked)
-                unlock(&atomic_l_lock);
-            goto amd64_0f_rm_pf;
-        }
         src = op2 == 0xb0
                 ? amd64_reg_get_encoded8(cpu, modrm.reg, modrm.rex_present)
                 : amd64_reg_get(cpu, modrm.reg, cmpxchg_size);
         acc = amd64_reg_get(cpu, amd64_rax, cmpxchg_size);
+        if (atomic_locked) {
+            qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+            bool swapped = false;
+            if (!amd64_locked_cmpxchg(cpu, tlb, addr, cmpxchg_size, acc, src,
+                        &dst, &swapped))
+                goto amd64_0f_rm_pf;
+            result = amd64_trunc(acc - dst, cmpxchg_size);
+            amd64_set_sub_flags(cpu, acc, dst, result, cmpxchg_size);
+            if (!swapped)
+                amd64_reg_set(cpu, amd64_rax, cmpxchg_size, dst);
+            cpu->zf = swapped;
+            cpu->zf_res = 0;
+        } else {
+        if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, cmpxchg_size, &dst))
+            goto amd64_0f_rm_pf;
         result = amd64_trunc(acc - dst, cmpxchg_size);
         amd64_set_sub_flags(cpu, acc, dst, result, cmpxchg_size);
         if (acc == dst) {
-            if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, cmpxchg_size, src)) {
-                if (atomic_locked)
-                    unlock(&atomic_l_lock);
+            if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, cmpxchg_size, src))
                 goto amd64_0f_rm_pf;
-            }
             cpu->zf = 1;
             cpu->zf_res = 0;
         } else {
@@ -14261,8 +14599,7 @@ amd64_0f_rm_done:
             cpu->zf = 0;
             cpu->zf_res = 0;
         }
-        if (atomic_locked)
-            unlock(&atomic_l_lock);
+        }
         cpu->amd64_rip = (qword_t) next_ip;
         amd64_sync_legacy_regs(cpu);
         return INT_NONE;
@@ -16203,8 +16540,17 @@ int amd64_jit_modrm_imm(struct cpu_state *cpu, struct tlb *tlb,
     bool atomic_locked = lock_prefix && !modrm.is_reg && modrm.reg != 7;
     if (lock_prefix && (modrm.is_reg || modrm.reg == 7))
         return INT_UNDEFINED;
-    if (atomic_locked)
-        lock(&atomic_l_lock, 0);
+    // LOCK <alu> [mem], imm: one host-atomic RMW. /7 (CMP) writes nothing and
+    // so cannot be locked (rejected above), which is why every remaining group
+    // index maps straight onto amd64_locked_alu's op numbering.
+    if (atomic_locked) {
+        qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+        if (!amd64_locked_alu(cpu, tlb, addr, rm_size, modrm.reg, rhs))
+            goto amd64_modrm_imm_pf;
+        cpu->amd64_rip = (qword_t) next_ip;
+        amd64_sync_legacy_regs(cpu);
+        return INT_NONE;
+    }
 
     if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, rm_size, &lhs))
         goto amd64_modrm_imm_unlock_pf;
@@ -16264,15 +16610,11 @@ int amd64_jit_modrm_imm(struct cpu_state *cpu, struct tlb *tlb,
         return INT_UNDEFINED;
     }
 
-    if (atomic_locked)
-        unlock(&atomic_l_lock);
     cpu->amd64_rip = (qword_t) next_ip;
     amd64_sync_legacy_regs(cpu);
     return INT_NONE;
 
 amd64_modrm_imm_unlock_pf:
-    if (atomic_locked)
-        unlock(&atomic_l_lock);
 amd64_modrm_imm_pf:
     cpu->amd64_rip = saved_rip;
     amd64_sync_legacy_regs(cpu);
@@ -16423,15 +16765,20 @@ int amd64_jit_fe_group(struct cpu_state *cpu, struct tlb *tlb,
     bool is_inc = modrm.reg == 0;
     bool saved_cf = cpu->cf;
     bool atomic_locked = lock_prefix && !modrm.is_reg;
-    if (atomic_locked)
-        lock(&atomic_l_lock, 0);
+    if (atomic_locked) {
+        // amd64_locked_incdec restores CF and collapses the flags itself.
+        qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+        if (!amd64_locked_incdec(cpu, tlb, addr, 8, is_inc))
+            goto amd64_fe_group_pf;
+        cpu->amd64_rip = (qword_t) next_ip;
+        amd64_sync_legacy_regs(cpu);
+        return INT_NONE;
+    }
     if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, 8, &lhs))
         goto amd64_fe_group_unlock_pf;
     result = is_inc ? amd64_trunc(lhs + 1, 8) : amd64_trunc(lhs - 1, 8);
     if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, 8, result))
         goto amd64_fe_group_unlock_pf;
-    if (atomic_locked)
-        unlock(&atomic_l_lock);
     if (is_inc)
         amd64_set_add_flags(cpu, lhs, 1, result, 8);
     else
@@ -16443,8 +16790,6 @@ int amd64_jit_fe_group(struct cpu_state *cpu, struct tlb *tlb,
     return INT_NONE;
 
 amd64_fe_group_unlock_pf:
-    if (atomic_locked)
-        unlock(&atomic_l_lock);
 amd64_fe_group_pf:
     cpu->amd64_rip = saved_rip;
     amd64_sync_legacy_regs(cpu);
@@ -16509,15 +16854,19 @@ int amd64_jit_ff_group(struct cpu_state *cpu, struct tlb *tlb,
         bool atomic_locked = lock_prefix && !modrm.is_reg;
         if (lock_prefix && modrm.is_reg)
             return INT_UNDEFINED;
-        if (atomic_locked)
-            lock(&atomic_l_lock, 0);
+        if (atomic_locked) {
+            qword_t addr = amd64_effective_addr(cpu, &modrm, fs_prefix);
+            if (!amd64_locked_incdec(cpu, tlb, addr, op_size, is_inc))
+                goto amd64_ff_group_pf;
+            cpu->amd64_rip = (qword_t) next_ip;
+            amd64_sync_legacy_regs(cpu);
+            return INT_NONE;
+        }
         if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, op_size, &lhs))
             goto amd64_ff_group_unlock_pf;
         result = is_inc ? amd64_trunc(lhs + 1, op_size) : amd64_trunc(lhs - 1, op_size);
         if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, op_size, result))
             goto amd64_ff_group_unlock_pf;
-        if (atomic_locked)
-            unlock(&atomic_l_lock);
         if (is_inc)
             amd64_set_add_flags(cpu, lhs, 1, result, op_size);
         else
@@ -16528,8 +16877,6 @@ int amd64_jit_ff_group(struct cpu_state *cpu, struct tlb *tlb,
         amd64_sync_legacy_regs(cpu);
         return INT_NONE;
 amd64_ff_group_unlock_pf:
-        if (atomic_locked)
-            unlock(&atomic_l_lock);
         goto amd64_ff_group_pf;
     }
     case 2: {
