@@ -83,9 +83,45 @@ static bool poll_deadline_remaining(const struct timespec *deadline, struct time
     return timespec_positive(*remaining);
 }
 
+// The hardcoded list below is the package-manager/download set the tracer was
+// originally written for. It is useless for the bug the tracer is most needed
+// on -- a daemon whose poll loop burns 100% CPU -- because chronyd, rsyslogd
+// and sshd-session are not in it, and adding a name meant editing this file
+// and rebuilding the app.
+//
+// ISH_TRACE_POLL_WAIT_COMM overrides the list at runtime: a comma-separated
+// set of comms, or "*" for every process. Prefix matching, so
+// "sshd" catches "sshd-session" and "in:imuxsock" can be reached as "in:".
+static bool poll_trace_comm_env(const char *comm) {
+    static const char *list = NULL;
+    static int looked_up = 0;
+    if (!looked_up) {
+        list = getenv("ISH_TRACE_POLL_WAIT_COMM");
+        looked_up = 1;
+    }
+    if (list == NULL || *list == '\0')
+        return false;
+    if (strcmp(list, "*") == 0)
+        return true;
+    size_t comm_len = strlen(comm);
+    const char *p = list;
+    while (*p != '\0') {
+        const char *end = strchr(p, ',');
+        size_t n = end != NULL ? (size_t) (end - p) : strlen(p);
+        if (n > 0 && n <= comm_len && strncmp(comm, p, n) == 0)
+            return true;
+        if (end == NULL)
+            break;
+        p = end + 1;
+    }
+    return false;
+}
+
 static bool poll_trace_comm(const char *comm) {
     if (comm == NULL)
         return false;
+    if (getenv("ISH_TRACE_POLL_WAIT_COMM") != NULL)
+        return poll_trace_comm_env(comm);
     return strcmp(comm, "apk") == 0 ||
         strcmp(comm, "apt") == 0 ||
         strcmp(comm, "apt-get") == 0 ||
@@ -1074,17 +1110,36 @@ static int real_poll_update(struct real_poll *real, int fd, int types, void *dat
         {.filter = EVFILT_WRITE, .flags = want_write ? EV_ADD : EV_DELETE},
         {.filter = EVFILT_EXCEPT, .flags = types & POLL_ERR ? EV_ADD : EV_DELETE},
     };
-    // Set the low water mark really high so we'll only get woken up on a hangup
+    // Set the low water mark really high so we'll only get woken up on a hangup.
+    //
+    // ...except Darwin does not honour it on every object. Measured with
+    // ISH_TRACE_POLL_WAIT on a plain AF_UNIX socketpair: a registration of
+    // READ|ERR|HUP|NVAL (a guest polling POLLIN, which implies HUP) arms
+    // EVFILT_WRITE for the hangup, NOTE_LOWAT and all, and kqueue then reports
+    // it writable immediately and forever. poll_wait wakes, masks the event
+    // against what the guest asked for, gets nothing, and sleeps again -- and
+    // is woken again at once, because EVFILT_WRITE is level-triggered and the
+    // send buffer is still empty. That is a 100%-CPU spin for the whole
+    // duration of an ordinary blocking poll() on a quiet socket, and it is why
+    // an idle chronyd, an idle rsyslogd and an idle sshd-session each pinned a
+    // core on device while sitting in a poll they were entirely right to make.
+    //
+    // EV_CLEAR is the fix that keeps the hangup: the filter fires on the
+    // transition rather than on the level, so "still writable" is reported
+    // once and then stays quiet, while an actual hangup is a new transition
+    // and still wakes us. Applied only to a filter registered SOLELY for the
+    // hangup -- a registration that genuinely wants POLL_READ or POLL_WRITE
+    // must stay level-triggered, or a guest that polls without draining would
+    // miss the readiness it never consumed.
     if (!(types & POLL_READ) && want_read) {
         e[0].fflags = NOTE_LOWAT;
         e[0].data = INT_MAX;
+        e[0].flags |= EV_CLEAR;
     }
-    // Same for the write side, and here it matters more: EVFILT_WRITE is level
-    // triggered, so a registration that only wants the hangup would otherwise
-    // fire continuously for as long as the socket had send buffer free.
     if (!(types & POLL_WRITE) && want_write) {
         e[1].fflags = NOTE_LOWAT;
         e[1].data = INT_MAX;
+        e[1].flags |= EV_CLEAR;
     }
     for (int i = 0; i < 3; i++) {
         e[i].ident = fd;
