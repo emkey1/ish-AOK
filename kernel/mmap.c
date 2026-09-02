@@ -289,8 +289,25 @@ static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_
             return _ENODEV;
         if ((err = fd->ops->mmap(fd, current->mem, page, pages, offset, prot, flags)) < 0)
             return err;
-        mem_pt(current->mem, page)->data->fd = fd_retain(fd);
-        mem_pt(current->mem, page)->data->file_offset = offset;
+        // ...but not every ->mmap produces a file-backed mapping. A PRIVATE
+        // mapping of /dev/zero hands back plain anonymous memory, which is what
+        // Linux does with it too -- mmap_zero in drivers/char/mem.c calls
+        // vma_set_anonymous for exactly this case, so the mapping has no file
+        // and /proc/<pid>/maps shows none. Stamping the descriptor on anyway
+        // left pages that are anonymous by every internal test (P_ANONYMOUS is
+        // what fork, madvise and mprotect look at) while presenting as
+        // /dev/zero to everything that reads data->fd, and pinned the
+        // descriptor for the life of the mapping with no file to fault back in.
+        //
+        // A SHARED one keeps its descriptor: Linux backs that with shmem and
+        // leaves vm_file pointing at /dev/zero, so it does name a file there.
+        struct pt_entry *pt = mem_pt(current->mem, page);
+        bool private_anon = pt != NULL &&
+                (pt->flags & P_ANONYMOUS) && !(pt->flags & P_SHARED);
+        if (pt != NULL && pt->data != NULL && !private_anon) {
+            pt->data->fd = fd_retain(fd);
+            pt->data->file_offset = offset;
+        }
     }
     return mapped_addr;
 }
@@ -909,14 +926,16 @@ int_t sys_mprotect(addr_t addr, uint_t len, int_t prot) {
 }
 
 #define MADV_DONTNEED_ 4
+#define MADV_FREE_ 8
 #define MADV_REMOVE_ 9
 #define MADV_WIPEONFORK_ 18
 #define MADV_KEEPONFORK_ 19
 
 // Advices Linux's madvise() accepts. Linux validates the argument up front and
 // returns EINVAL for anything it does not recognize, independent of whether the
-// advice has any effect. iSH only acts on MADV_DONTNEED; the rest are accepted
-// as no-op hints so software that probes them does not see a spurious error.
+// advice has any effect. iSH acts on MADV_DONTNEED, MADV_FREE, MADV_REMOVE and
+// the FORK pair; the rest are accepted as no-op hints so software that probes
+// them does not see a spurious error.
 static bool madvise_advice_valid(dword_t advice) {
     switch (advice) {
         case 0:   // MADV_NORMAL
@@ -957,14 +976,14 @@ dword_t sys_madvise_guest(guest_addr_t addr, qword_t len, dword_t advice) {
     if (pages == 0)
         return 0;
 
-    // MADV_DONTNEED is the one advice with destructive (zeroing) semantics that
-    // software actually depends on -- notably jemalloc, which probes it at
-    // startup and, finding it does nothing here, permanently falls back to
-    // memset ("<jemalloc>: MADV_DONTNEED does not work"). Honor it for private
-    // anonymous pages by discarding them so the next access reads back zero,
-    // matching Linux. Other advices, and file-backed or shared mappings, stay
-    // hints / no-ops (re-faulting a file mapping would mean re-reading the file,
-    // which MADV_DONTNEED does not require us to do here).
+    // MADV_DONTNEED and MADV_FREE are the two advices with destructive
+    // semantics that software actually depends on -- notably jemalloc, which
+    // probes DONTNEED at startup and, finding it does nothing here, permanently
+    // falls back to memset ("<jemalloc>: MADV_DONTNEED does not work"). Honor
+    // both for private anonymous pages by discarding them so the next access
+    // reads back zero, matching Linux. Other advices, and file-backed or shared
+    // mappings, stay hints / no-ops (re-faulting a file mapping would mean
+    // re-reading the file, which MADV_DONTNEED does not require us to do here).
     struct mem *mem = current->mem;
     int err = 0;
     bool saw_hole = false;
@@ -1028,9 +1047,33 @@ dword_t sys_madvise_guest(guest_addr_t addr, qword_t len, dword_t advice) {
             continue;
         }
 
-        if (advice != MADV_DONTNEED_ ||
+        // MADV_FREE says the caller no longer needs the CONTENTS: the kernel
+        // may drop the pages whenever it likes, and a later read gets either
+        // the old data or zeroes. Both are conforming answers, which is why
+        // taking it as a no-op looked defensible -- a Linux with no memory
+        // pressure keeps the data too, and a probe that writes a megabyte,
+        // advises it away and reads it back gets its megabyte on both systems.
+        //
+        // What is not conforming is that the memory never comes back. This
+        // advice exists so an allocator can return pages to the system without
+        // giving up the address range, and it is how modern glibc, jemalloc and
+        // Go's runtime do exactly that. Accepting it and freeing nothing means
+        // every allocator that prefers it over MADV_DONTNEED silently stops
+        // being able to release memory at all -- and iSH has no reclaim path,
+        // so "later, under pressure" never arrives here. Freeing immediately is
+        // inside what the contract permits, and the only reading of it that
+        // does anything at all on this kernel.
+        //
+        // Private anonymous only, as on Linux (madvise_free_single_vma refuses
+        // anything else outright rather than ignoring it).
+        if (advice == MADV_FREE_ && (!(pt->flags & P_ANONYMOUS) || (pt->flags & P_SHARED))) {
+            err = _EINVAL;
+            break;
+        }
+
+        if ((advice != MADV_DONTNEED_ && advice != MADV_FREE_) ||
                 !(pt->flags & P_ANONYMOUS) || (pt->flags & P_SHARED)) {
-            page++; // file-backed / shared / non-DONTNEED: nothing to discard
+            page++; // file-backed / shared / other advice: nothing to discard
             continue;
         }
         // Coalesce a run of same-flag private anonymous pages and replace them

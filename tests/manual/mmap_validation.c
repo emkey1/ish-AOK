@@ -50,6 +50,34 @@
 #define MEMBARRIER_CMD_PRIVATE_EXPEDITED           (1 << 3)
 #define MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED  (1 << 4)
 
+// Does /proc/self/maps give the region covering `addr` a file name? 1 yes,
+// 0 no, and 0 as well when the file cannot be read at all -- this is asked
+// only where the answer "no file" is the thing being checked, and a kernel
+// with no procfs should not fail a mmap test.
+static int maps_names_a_file(const void *addr) {
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (f == NULL)
+        return 0;
+    unsigned long want = (unsigned long) (uintptr_t) addr;
+    char line[512];
+    int named = 0;
+    while (fgets(line, sizeof line, f) != NULL) {
+        unsigned long lo, hi;
+        int path_off = 0;
+        if (sscanf(line, "%lx-%lx %*s %*s %*s %*s %n", &lo, &hi, &path_off) < 2)
+            continue;
+        if (want < lo || want >= hi)
+            continue;
+        const char *path = line + path_off;
+        while (*path == ' ' || *path == '\t')
+            path++;
+        named = (*path != '\0' && *path != '\n');
+        break;
+    }
+    fclose(f);
+    return named;
+}
+
 static void ck(const char *label, long got, long want) {
     if (got != want)
         failf(label, (uint64_t) got, 0, 0, (uint64_t) want, 0, 0);
@@ -183,6 +211,17 @@ int main(int argc, char **argv) {
                     ck("  reads as zeroes", p[0] == 0 && p[8191] == 0, 1);
                     p[0] = 'X';
                     ck("  and is writable", p[0] == 'X', 1);
+                    // A PRIVATE mapping of /dev/zero is anonymous memory, and
+                    // Linux says so in /proc/self/maps -- mmap_zero calls
+                    // vma_set_anonymous, so the region names no file at all.
+                    // AOK served it as anonymous memory but kept the
+                    // descriptor attached, so it read back as /dev/zero to
+                    // anything that asks what backs a page. (The SHARED case
+                    // really is a file on Linux: shmem_zero_setup leaves
+                    // vm_file pointing at /dev/zero. Not asserted here.)
+                    if (!shared)
+                        ck("  and is anonymous in /proc/self/maps",
+                           maps_names_a_file(p), 0);
                     munmap(p, 8192);
                 }
             }
