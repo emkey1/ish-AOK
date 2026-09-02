@@ -546,10 +546,77 @@ src_for() {
     echo "$src_dir/$1.c"
 }
 
+# ---- compiled-test cache -----------------------------------------------------
+#
+# Compiling ~190 tests under emulation is most of a gate run -- 30-40 minutes a
+# leg on the Mac, and considerably worse on a device, repeated for every one of
+# the five architectures and again for every release. Almost none of it is new
+# work: between two releases the great majority of test sources are byte-for-byte
+# identical and so is the compiler.
+#
+# So key each binary on what can actually change its contents -- the source, the
+# shared headers, the compiler identity, and the machine -- and reuse it when the
+# key matches. A test that was edited, a rebuilt app whose embedded sources
+# changed, a different arch or a different toolchain all miss the cache and
+# recompile, which is the only correctness property that matters here.
+#
+# Default location is /AOK/fakefs, which is writable, survives app updates and
+# root switches, and keeps the exec bit (unlike /AOK/persist, which is
+# host-backed and flattens Linux metadata -- a cached binary there would come
+# back non-executable). Where that is not writable -- the CLI harness serves
+# /AOK/fakefs read-only -- fall back to a directory beside the work dir, which
+# still helps across repeated local runs. ISH_AOK_REGRESS_CACHE overrides it,
+# and ISH_AOK_REGRESS_NOCACHE=1 turns the whole thing off.
+cache_dir=
+cache_key_base=
+
+cache_init() {
+    [ "${ISH_AOK_REGRESS_NOCACHE:-0}" = "1" ] && return
+    command -v sha256sum >/dev/null 2>&1 || return   # no hash, no cache
+    if [ -n "${ISH_AOK_REGRESS_CACHE:-}" ]; then
+        cache_dir=$ISH_AOK_REGRESS_CACHE
+    elif [ -d /AOK/fakefs ] && (: >/AOK/fakefs/.regress-cache-probe) 2>/dev/null; then
+        rm -f /AOK/fakefs/.regress-cache-probe
+        cache_dir=/AOK/fakefs/regress-cache
+    else
+        cache_dir=$work_dir/../ish-aok-regress-cache
+    fi
+    if ! mkdir -p "$cache_dir" 2>/dev/null; then
+        cache_dir=
+        return
+    fi
+    # Everything shared by every test: the headers they all include, the
+    # compiler, and the machine. Folded in once so the per-test key is one hash.
+    cache_key_base=$(
+        {
+            cc --version 2>&1 | head -1
+            uname -m
+            cat "$src_dir"/test_common.h "$src_dir"/x86/atomic_common.h 2>/dev/null
+        } | sha256sum | cut -c1-32
+    )
+    echo "test cache: $cache_dir (key $cache_key_base)"
+}
+
+# Echo the cache path for a test, or nothing when caching is off.
+cache_path_for() {
+    [ -n "$cache_dir" ] || return
+    _h=$(sha256sum "$2" | cut -c1-32)
+    echo "$cache_dir/$1.$cache_key_base.$_h"
+}
+
 build_one() {
     name=$1
     echo "+ build $name"
     src_file=$(src_for "$name")
+
+    cached=$(cache_path_for "$name" "$src_file")
+    if [ -n "$cached" ] && [ -x "$cached" ]; then
+        if cp "$cached" "$work_dir/bin/$name" 2>/dev/null; then
+            chmod +x "$work_dir/bin/$name" 2>/dev/null
+            echo "  (cached)"
+            return
+        fi
+    fi
     # avx32_smoke is freestanding on purpose: it makes raw int $0x80 syscalls so
     # it can run on an i386 root with no libc, and defines its own _start, which
     # collides with the crt startup object under the ordinary link. It needs
@@ -559,7 +626,8 @@ build_one() {
         return
     fi
     if [ "$gas_imm_reg_workaround" -eq 0 ]; then
-        cc -O2 -pthread -I"$src_dir" -o "$work_dir/bin/$name" "$src_file" -lm -ldl
+        cc -O2 -pthread -I"$src_dir" -o "$work_dir/bin/$name" "$src_file" -lm -ldl || return
+        cache_store "$cached" "$work_dir/bin/$name"
         return
     fi
 
@@ -567,7 +635,23 @@ build_one() {
     fixed_asm=$work_dir/$name.gas-workaround.s
     cc -O2 -pthread -I"$src_dir" -S -o "$asm" "$src_file"
     awk -f "$work_dir/rewrite-gas-imm-reg.awk" "$asm" >"$fixed_asm"
-    cc -pthread -o "$work_dir/bin/$name" "$fixed_asm" -lm -ldl
+    cc -pthread -o "$work_dir/bin/$name" "$fixed_asm" -lm -ldl || return
+    cache_store "$cached" "$work_dir/bin/$name"
+}
+
+# Publish a freshly built binary into the cache. Written to a temporary name in
+# the same directory and renamed, so a concurrent run (two architectures at
+# once is routine) never sees a half-copied binary and treats it as a hit.
+cache_store() {
+    [ -n "$1" ] || return 0
+    _tmp=$1.tmp.$$
+    if cp "$2" "$_tmp" 2>/dev/null; then
+        chmod +x "$_tmp" 2>/dev/null
+        mv -f "$_tmp" "$1" 2>/dev/null || rm -f "$_tmp"
+    else
+        rm -f "$_tmp" 2>/dev/null
+    fi
+    return 0
 }
 
 all_tests="signal_core signal_restart signal_restart_coverage signal_stop_restart utimensat_omit creds_groups_access sock_optlen inotify_events posix_timer_exec sock_options ptrace_attach inet_nat_bind signal_process_target exec_de_thread tty_hangup_signal create_eexist_first sigchld_disposition proc_conformance fcntl_lock_validation tty_line_discipline tty_ctty_ioctls tty_job_control mmap_validation mmap_shared_integrity fs_permission_rules fs_at_validation sock_conformance_opts poll_rdhup_bounds poll_default_mask poll_idle_cpu exec_perm_rules kmsg_stream resource_limits_sched signal_routing_perms mounts_list_race sysctl_write_rules fallocate_modes openat2_resolve splice_vmsplice privs_syscall_misc timeout_and_cpu_timer open_tmpfile mount_flag_perms sgid_inherit sockopt_conventions tty_canon_queue timer_conventions mmap_conventions fd_conventions proc_files signal_conventions dir_tmpfs futex_validation orphan_pgrp_wait dirfd_position cross_process_state concurrent_dir_futex sock_bind_refuse time_clocks_ticks futex_robust_requeue inotify_mask_queue time_conformance signal_realtime signal_altstack signal_stop_cont signal_forced_trap signal_poll signal_child_burst eventfd_interrupt futex_core process_lifecycle pthread_sync ptrace_group_stop ptrace_thread_follow epoll_mod_wake epoll_oneshot_rearm epoll_mod_spurious_wake epoll_data_layout epoll_eloop epoll_exclusive epoll_dup_add ptrace_exit_kill fcntl_lock fcntl_ofd fcntl_setown at_empty_path at_absolute_path utimensat_fd copy_file_range name_to_handle_at sendfile_vhangup pidfd_open pidfd_zombie pidfd_clone pidfd_fdinfo_pid fsopen_move_mount keyctl_link mountinfo_epollet tmpfs_nlink unix_dgram_cred ambient_caps scm_rights_stress scm_rights_pidfd fs_conformance process_conformance time_conformance mem_conformance sock_conformance getpeername_smallbuf netlink_route netlink_audit mount_flags mount_bind_rbind fuse_basic fuse_threaded_daemon native_stdio_lock devtmpfs_mount clone_error_cleanup uts_namespace posix_timer_fork vfork_fatal_signal vfork_exec_stale_jit getppid_thread concurrent_exec_tlb exec_i386_fault_addr native_exec_cloexec native_ptrace_group_stop random_seed getrusage_group pty_line_discipline proc_pid_io taskstats_genl tmpfs_mmap tmpfs_statfs tmpfs_append memfd_mmap mount_stdev mount_cross_dev cgroup2_rmdir mmap_truncate_sigbus null_page_fault signalfd_epoll_deadlock pidfd_epoll_deadlock signalfd_thread_group wayland_scm_shm chroot_getcwd iovec_abi_marshal fakefs_type_race fakefs_casefold fakefs_inode_alias fifo_open_creat_deadlock proc_stat_monotonic proc_field_layout sock_conn_error sock_getfd_errno sock_nosignal inotify_close_race inotify_mount_paths statx_mnt_id_timerfd timerfd_settime_readiness opath_symlink_pidfd_wait pidfd_self_exit_deadlock prctl_capbset_drop oom_score_adj sysv_ipc accept_rcvtimeo accept_kill socket_kill inaddr_any_iface procfd_reopen siocoutq epoll_nested tmpfs_exec kcmp pixman_accel aes_gcm_accel file_perms ftruncate_fd_mode syscall_wiring sysfs_cpu_topology sysfs_dev_ns stack_guard_gap"
@@ -600,6 +684,8 @@ test_selected() {
         *) return 1 ;;
     esac
 }
+
+cache_init
 
 selected_tests=
 for test in $all_tests; do
