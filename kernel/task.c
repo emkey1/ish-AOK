@@ -502,6 +502,17 @@ struct task *task_create_(struct task *parent) {
     task->io_block = false;
     task->vfork = NULL;
     task->exit_signal = 0;
+    // A peak is the CHILD's own, not something it starts life owing to its
+    // parent. Linux gives a new process a fresh ru_maxrss -- its high-water
+    // mark tracks its own mm from now on -- and `*task = *parent` above had
+    // been handing it the parent's all-time peak instead.
+    //
+    // Ordinarily that is merely wrong by a bit. It stopped being merely wrong
+    // when one bad sample got latched (see task_maxrss_kb): every descendant
+    // of that task then reported 2.7 TB, for as long as the shell lived, and a
+    // fresh login looked fine -- which is exactly why it presented as a
+    // device-only bug that would not reproduce.
+    task->maxrss_kb = 0;
 
     // Both of these are OWNED heap pointers, and `*task = *parent` above is a
     // shallow copy, so leaving them aliased gives two tasks one allocation and

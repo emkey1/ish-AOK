@@ -221,7 +221,22 @@ size_t task_maxrss_kb(struct task *task) {
     struct mm *mm = task->mm;
     if (mm != NULL) {
         size_t pages = mem_mapped_page_count(&mm->mem);
-        if (pages > mm->rss_pages_hwm)
+        // That walk is deliberately lock-free (see proc_mem_count_pages): a
+        // stale count is fine for /proc. It is NOT fine here, because this is
+        // a high-water mark -- a latch. One torn read of a page table another
+        // thread is mutating becomes the permanent answer for the life of the
+        // address space, and then, because a forked child used to inherit it,
+        // for every descendant too.
+        //
+        // Seen on device: ru_maxrss reporting 2,819,362,696 KB -- 2.7 TB --
+        // from a process whose real peak was about 4 MB, reproducibly for
+        // every process in one shell's subtree and never in a fresh one.
+        //
+        // A count larger than the address space itself is impossible, so
+        // refuse to latch it. Dropping a bad sample costs nothing: the next
+        // read takes another one, and any real peak is still there to be
+        // observed.
+        if (pages <= mm->mem.page_limit && pages > mm->rss_pages_hwm)
             mm->rss_pages_hwm = pages;
         size_t kb = mm->rss_pages_hwm * (PAGE_SIZE / 1024);
         if (kb > task->maxrss_kb)
