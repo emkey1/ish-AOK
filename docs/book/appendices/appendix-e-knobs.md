@@ -49,7 +49,8 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_FORCE_WRITE_REVALIDATE` | `emu/memory.c` |
 | `ISH_FUTEX_HEAP_WAIT` | `kernel/futex.c` |
 | `ISH_GUEST_CPU_COUNT` | `platform/darwin.c` |
-| `ISH_GUEST_MEM_HEADROOM_MB` | `platform/darwin.c` |
+| `ISH_GUEST_MEM_BUDGET_MB` | `platform/darwin.c`, `platform/linux.c` |
+| `ISH_GUEST_MEM_HEADROOM_MB` | `platform/darwin.c`, `platform/linux.c` |
 | `ISH_HLE` | `main.c` |
 | `ISH_HLE_FP` | `jit/hle.c` |
 | `ISH_HLE_LOOPS` | `jit/hle.c` |

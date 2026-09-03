@@ -131,41 +131,6 @@ sanitizer report, for long enough to have hit the old race many times over.
 
 ---
 
-## exec_de_thread's native half fails ~2 runs in 3, on the glibc root only
-
-**Established.** Measured 2026-09-03 while gating an unrelated change, so the
-numbers are from a clean A/B rather than one bad run. On
-`build/devuan-arm64-test`, `exec_de_thread` fails its last case --
-
-    FAIL native exec takes over the leader's identity got=0 expected=1
-
--- on **both** the changed and unchanged binaries, interleaved run-by-run so
-machine drift cannot land on one arm: 10 PASS / 22 FAIL against 13 PASS /
-19 FAIL over 32 runs each. On `build/alpine-arm64-test` it is 10 PASS / 0 FAIL
-on both. So it is real, it is frequent, and it is **glibc-specific** -- exactly
-the gap the fifth gate leg exists to close (see the header of
-`tools/run-guest-gate.sh`: four architectures of one libc let four CPU-clock
-bugs ship in a single release).
-
-The case is the native half: a four-thread process whose NON-leader thread execs
-`/AOK/native/smallclue` as `cat`, after which `/proc/<pid>/comm` must become
-`cat` within 500 polls at 20 ms -- ten seconds. Failure means the exec'ing
-thread never took over the leader's identity in that budget. It is not a load
-flake: it fails just as often on an idle machine as under `--parallel`, and the
-musl root passes it 10/10 in the same conditions.
-
-**Next step.** Decide first whether de_thread never happened or merely took
-longer than ten seconds -- print `comm` and the thread list at the timeout
-rather than lengthening the budget, since a slow de_thread and a missing one are
-different bugs. Then follow the surviving threads: the leader is supposed to be
-reaped and its identity assumed, and glibc's pthread teardown differs from
-musl's in exactly the place that would show up here.
-
-**Prove it.** 30 interleaved runs on `build/devuan-arm64-test` with no failure,
-and the musl root still at 10/10.
-
----
-
 ## tty_hangup_signal failed once on device, under suite load
 
 **Established.** It failed in the device suite run for 553 -- "still alive 6s
@@ -543,6 +508,85 @@ non-root run reports honestly instead of five false failures that read like a
 regression.
 
 ---
+
+---
+
+### exec_de_thread's native half, and the JIT flag that should have been a count
+
+Carried into 554 as "fails ~2 runs in 3, on the glibc root only", with the
+`/AOK/native` exec as the prime suspect. The suspect was innocent: nothing in
+this is about native programs, about `de_thread`, or about glibc.
+
+The recorded next step was to decide whether de_thread never happened or merely
+took longer than the ten seconds the test allows. It is the second, and saying
+so precisely is what cracked it. A probe that keeps polling to sixty seconds
+never once saw a de_thread that failed to happen -- across ten runs, `never=0` --
+but the times it did land fell into two razor-sharp clusters, 7.4 s and 14.7 s,
+a clean 1x and 2x of about 7.35 s. The test's ten-second budget sits between
+them, so the *same* de_thread passed or failed depending only on which multiple
+of the quantum it drew. A fixed quantum, not a hang.
+
+Changing one variable at a time found the thing that cost it. With the exec'ing
+thread's siblings reduced to one at a time, a sibling parked in `read` cost 56
+ms and a sleeping one 47 ms, but the **compute-bound** sibling cost 7.0 s. Then
+the half that removed the whole original theory: the identical shape with an
+ordinary ELF image in place of the native one cost 7.5 s too. The native half of
+the test was never the defect -- it is simply the only case with a deadline.
+Sections 1 to 5 just `wait()` for as long as it takes, so they had been paying
+the same seconds all along and reporting PASS.
+
+The cost is in the JIT, in `jit_cleanup_jetsam_if_needed`'s exclusion protocol.
+`jetsam_lock` is held for read by every thread inside `jit_enter`, and a thread
+that wants to free blocks raises `write_wanted` so running engines stand aside
+at their next block boundary. **`write_wanted` was a flag, and it needed to be a
+count.** Every thread runs that cleanup after every return from the JIT, so two
+siblings of one process want the write lock constantly -- one `mmap` is enough
+to put blocks on the jetsam list that both then notice. The first of the two to
+finish stored zero while the second was still waiting, and with nothing left
+asking readers to stand aside, the compute-bound sibling re-took the read lock
+between every one of the waiter's five-millisecond `trywrlock` polls. The waiter
+ran its full five-second timeout out having freed nothing. That is the quantum,
+and two of them are the 14.7 s cluster.
+
+Measured directly, on the unfixed binary: one `pthread_create` beside a
+compute-bound sibling took **6057 ms**, and under heavier writer pressure --
+three spinners, four concurrent creators -- the worst reached **13.6 s**.
+
+Why it presented as glibc-only is worth stating carefully, because two obvious
+explanations are both wrong. It is **not** a glibc-specific code path: the
+defect is in the JIT and knows nothing about libc. Nor is it that glibc maps
+more per thread (both libcs add exactly two mappings per `pthread_create`), nor
+that the compute loop compiles differently (the two disassemblies are the same
+instructions in the same basic-block shape). What differs is how readily each
+libc's thread churn produces two would-be writers at once: glibc's does so
+constantly, and musl's did not produce a single stall even at three spinners and
+four concurrent creators, where its worst `pthread_create` stayed at 1 ms. Which
+of glibc's thread-startup mappings drives the jetsam traffic was not chased,
+because the fix removes the cost for both.
+
+The fix is `atomic_uint` and paired raise/lower on every path, and the timeout
+is no longer silent: `jetsam_write_lock_timed` says so once and counts the rest,
+the way `host_sleep_interruptible` reports a lost wake poke. That silence is the
+reason this hid for so long -- `jit_cleanup_jetsam_if_needed` treats failure as
+"try again later" and said nothing, so a thread that had just lost five seconds
+was indistinguishable, in every log and every test, from a thread that was
+merely slow.
+
+Verified interleaved run-by-run on `build/devuan-arm64-test`, so machine drift
+could not land on one arm: the unfixed binary 4 PASS / 6 FAIL, the fixed one
+10 PASS / 0 FAIL, and 30 of 30 clean on the fixed binary overall. The musl root
+stayed 10/10. The spin case itself went from 6246/6228/6250 ms to 50/49/49 ms
+across three interleaved rounds -- which is musl's number, and the shape a fix
+should have. The whole test now runs in 5 seconds rather than two minutes,
+because sections 1 to 5 had been paying seconds per exec that nobody was
+counting.
+
+Two lessons. **A test with a deadline is a measuring instrument for everything
+without one** -- the native case was not more broken than the five before it,
+only more honest, and the right response to "one case fails" was to ask what the
+passing cases were costing. And **an exclusion protocol built from a flag cannot
+survive more than one waiter**; the shape to reach for is a count, because the
+second waiter's need does not end when the first one's does.
 
 ---
 

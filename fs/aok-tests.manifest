@@ -232,6 +232,7 @@ riscv64/jalr_retcache.c
 arm64/ret_retcache.c
 jit_fuse_ab.sh
 jit_bench.c
+jit_writer_starvation.c
 aes_gcm_accel.c
 native_stdio_redirect.sh
 native_zsh_fork_state.sh

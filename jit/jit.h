@@ -47,11 +47,26 @@ struct jit {
     // Incremented after each jit_free_jetsam in OOM paths; frames compare
     // against last_block_cleanup_seq to detect stale last_block pointers.
     atomic_uint cleanup_seq;
-    // Set to true before acquiring jetsam_lock for write, cleared after. All
-    // goroutines point their cpu->poked_ptr here, so jit_ret_chain sees this
-    // flag on every block boundary and exits jit_enter, releasing the read
-    // lock promptly — even if a linked-block cycle somehow forms.
-    uint8_t write_wanted;
+    // How many threads are currently trying to take jetsam_lock for write.
+    // Raised before the attempt and lowered after; the JIT loops check it at
+    // every block boundary and exit jit_enter while it is non-zero, releasing
+    // their read locks promptly -- even if a linked-block cycle somehow forms.
+    //
+    // A COUNT rather than a flag, because the threads of one process reach the
+    // write lock independently and constantly: every return from the JIT runs
+    // jit_cleanup_jetsam_if_needed, so two siblings both find jetsam pending
+    // whenever an mmap has just invalidated blocks. As a flag, the first of
+    // them to finish stored 0 while the second was still waiting -- and with
+    // nothing then asking readers to stand aside, a sibling burning CPU in
+    // guest code re-took the read lock between every one of the waiter's 5ms
+    // trywrlock polls, so the waiter ran out its full 5s timeout having freed
+    // nothing.
+    //
+    // Measured on tests/manual/exec_de_thread.c against a glibc root: a
+    // pthread_create next to a compute-bound sibling took 6-7 SECONDS, one
+    // whole timeout, several times per run. Every raise in jit.c is paired
+    // with exactly one matching lower on every path out.
+    atomic_uint write_wanted;
 };
 
 // this is roughly the average number of instructions in a basic block according to anonymous sources

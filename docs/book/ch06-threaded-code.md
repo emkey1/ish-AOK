@@ -521,13 +521,25 @@ struct list jetsam;
 
 There is no RCU, so the grace period is built by hand. `jetsam_lock` is a
 reader-writer lock that every executing thread holds for read while inside
-`jit_enter`. A thread that wants to free sets `write_wanted` first, and every
+`jit_enter`. A thread that wants to free raises `write_wanted` first, and every
 running engine checks it at each block boundary — that is what `jit_ret_chain`
 is doing when it loads `CPU_poked_ptr` — so readers exit promptly instead of
 being waited out. Then the writer takes the lock for write, frees the jetsam
 list, bumps `cleanup_seq`, and drops it. Any thread holding a `last_block`
 pointer compares `cleanup_seq` against its own sample and discards a stale
 pointer rather than following it.
+
+`write_wanted` is a **count of waiting writers, not a flag**, and that
+distinction is load-bearing. Every thread of a process runs this cleanup after
+every return from the JIT, so two siblings routinely want the lock at once —
+one `mmap` is enough to put blocks on the jetsam list that both of them then
+notice. While it was a flag, the first of the two to finish stored zero while
+the second was still waiting, and nothing was left asking readers to stand
+aside; the write side only ever polls `pthread_rwlock_trywrlock`, so a sibling
+burning CPU in guest code re-took the read lock between every one of the
+waiter's five-millisecond polls and the waiter ran its full five-second timeout
+out having freed nothing. A `pthread_create` beside a compute-bound thread cost
+six to seven seconds, one whole timeout, and looked exactly like slowness.
 
 Teardown is the one asymmetric case, and it is asymmetric because of a bug.
 `jit_teardown_lock` acquires the write lock and **never releases it** — because

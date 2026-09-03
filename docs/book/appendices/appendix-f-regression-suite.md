@@ -4,7 +4,7 @@
 
 # Appendix F. The regression suite, annotated
 
-232 C programs in `tests/manual/`, of which **215 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+234 C programs in `tests/manual/`, of which **217 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
 
 A row with a directory prefix is a per-architecture or accelerator test, kept
 in a subdirectory of `tests/manual/` and registered under that same prefix.
@@ -99,6 +99,7 @@ does not say what it is for.
 | `inotify_mount_paths.c` | yes |  |
 | `iovec_abi_marshal.c` | yes | iovec ABI marshaling: readv/writev/preadv/pwritev/process_vm_readv all funnel through kernel/user.c's user_read_iovecs_abi() to decode the guest's... |
 | `jit_bench.c` | yes | jit_bench.c -- the two compute workloads jit_fuse_ab.sh drives, in the two shapes the JIT's control-flow machinery is actually sensitive to. |
+| `jit_writer_starvation.c` | yes | A compute-bound thread must not stall its siblings for seconds. |
 | `kcmp.c` | yes | kcmp(2): compare whether two processes share a kernel resource. systemd uses KCMP_FILE heavily (fd-store dedup, serialization across re-exec); AOK... |
 | `keyctl_link.c` | yes | keyctl(KEYCTL_LINK, ...) must not ENOSYS: systemd-executor's setup_keyring() runs this for every service with the default KeyringMode=shared (link... |
 | `kmsg_stream.c` | yes | The kernel log, as the two files every syslog daemon opens. |
@@ -245,6 +246,7 @@ does not say what it is for.
 | `x86/bcd_adjust.c` | yes | The packed/unpacked BCD adjust instructions: aaa (0x37), aas (0x3f), daa (0x27), das (0x2f), aam (0xd4 ib) and aad (0xd5 ib). |
 | `x86/cow_atomic_fault.c` | yes | cow_atomic_fault (i386/amd64): a LOCK-prefixed atomic on a page that is P_COW at fault time but resolved (COW-broken by a sibling thread) before... |
 | `x86/cpuid_xsave.c` | yes | cpuid_xsave -- every CPUID feature bit AOK advertises must name an instruction the guest can actually execute. |
+| `x86/fpu_state_span.c` | yes | fpu_state_span -- the x87/SSE state-area instructions must validate EVERY byte of their memory operand, not just the first four. |
 | `x86/port_io_gpf.c` | yes | IN/OUT: the port-I/O opcodes e4/e5 (in al/eax, imm8), e6/e7 (out imm8, al/eax), ec/ed (in al/eax, dx) and ee/ef (out dx, al/eax). |
 | `x86/x86_loop.c` | yes | LOOP (0xe2), LOOPE/LOOPZ (0xe1) and LOOPNE/LOOPNZ (0xe0). |
 | `x86/x87_fpu.c` | yes | x87 semantics that emulation got wrong in ways ordinary arithmetic tests miss: control-word precision, the status-word C2 bit, the memory form of... |
