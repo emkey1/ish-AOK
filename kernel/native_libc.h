@@ -269,6 +269,11 @@ void nlibc_deliver_signals(void);
 // handler delivery rather than risk abandoning the lock. Carries its own
 // give-up limit; see the callbacks in native_libc.c.
 bool nlibc_stdio_defer_fatal(void);
+// The same question asked without answering it -- no give-up counter bumped,
+// no state changed. For deciding whether a RESTART is worth issuing: a restart
+// re-runs the syscall on the assumption the handler ran first, and inside
+// stdio it did not.
+bool nlibc_delivery_deferred(void);
 /* The same, reporting how many handlers ran -- see nlibc_sigsuspend. */
 int nlibc_deliver_signals_count(void);
 

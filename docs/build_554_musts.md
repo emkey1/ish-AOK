@@ -131,34 +131,38 @@ sanitizer report, for long enough to have hit the old race many times over.
 
 ---
 
-## Native bash intermittently reports EINTR from a write
+## exec_de_thread's native half fails ~2 runs in 3, on the glibc root only
 
-**Established.** Reproduced locally on 2026-09-02, on the arm64 root, running a
-40-iteration loop of `x=$(echo hi)` under `/AOK/native/bash`:
+**Established.** Measured 2026-09-03 while gating an unrelated change, so the
+numbers are from a clean A/B rather than one bad run. On
+`build/devuan-arm64-test`, `exec_de_thread` fails its last case --
 
-    /tmp/g.sh: line 4: echo: write error: Interrupted system call
+    FAIL native exec takes over the leader's identity got=0 expected=1
 
-**2 runs in 8** on the parent commit (`ish` built with `native_bash=enabled`,
-before the native-exec address-space work), **1 in 8** with that work applied,
-and **0 in 8** for native zsh doing the same thing. So it predates the change and
-is bash-specific, not a regression and not a shell-agnostic problem. It is the
-shell's own diagnostic, so bash saw a short/failed write and reported it rather
-than retrying.
+-- on **both** the changed and unchanged binaries, interleaved run-by-run so
+machine drift cannot land on one arm: 10 PASS / 22 FAIL against 13 PASS /
+19 FAIL over 32 runs each. On `build/alpine-arm64-test` it is 10 PASS / 0 FAIL
+on both. So it is real, it is frequent, and it is **glibc-specific** -- exactly
+the gap the fifth gate leg exists to close (see the header of
+`tools/run-guest-gate.sh`: four architectures of one libc let four CPU-clock
+bugs ship in a single release).
 
-The obvious suspect is SIGCHLD from the very children the loop is reaping: the
-write is interrupted, and the shim hands the caller `EINTR` unless the kernel
-answered `_ERESTART` (`native_syscall_args`, kernel/native_syscall.c, restarts
-only on the two restart codes). A handler installed with `SA_RESTART` should not
-produce a visible `EINTR` at all. **Not verified** -- nobody has yet looked at
-what the pipe write actually returns.
+The case is the native half: a four-thread process whose NON-leader thread execs
+`/AOK/native/smallclue` as `cat`, after which `/proc/<pid>/comm` must become
+`cat` within 500 polls at 20 ms -- ten seconds. Failure means the exec'ing
+thread never took over the leader's identity in that budget. It is not a load
+flake: it fails just as often on an idle machine as under `--parallel`, and the
+musl root passes it 10/10 in the same conditions.
 
-**Next step.** Reproduce under `exec 555>trace.log` and read what the
-interrupted `write` returned and what signal was pending: if it is `_EINTR` from
-a path that should have restarted, the fix is in that path, not in the shim. Then
-check whether bash installs its SIGCHLD handler with `SA_RESTART` here and
-whether AOK honours it for this write.
+**Next step.** Decide first whether de_thread never happened or merely took
+longer than ten seconds -- print `comm` and the thread list at the timeout
+rather than lengthening the budget, since a slow de_thread and a missing one are
+different bugs. Then follow the surviving threads: the leader is supposed to be
+reaped and its identity assumed, and glibc's pthread teardown differs from
+musl's in exactly the place that would show up here.
 
-**Prove it.** The same 40-iteration loop, 30 runs, no `write error` line.
+**Prove it.** 30 interleaved runs on `build/devuan-arm64-test` with no failure,
+and the musl root still at 10/10.
 
 ---
 
@@ -380,6 +384,86 @@ the copy-on-write break, and had no `write_done` -- a page-straddling one
 modified the staging buffer and dropped it. The aarch64 copy of the same macro
 has always used `write_prep`/`write_done`; this is now a straight port of it.
 x86_64-host only, so it affects the Linux CLI and CI and not iOS.
+
+---
+
+### A pending signal failed a write that could not have blocked
+
+The "native bash intermittently reports EINTR from a write" item, carried into
+554 unverified. It reproduced at about one run in eight as
+
+    /tmp/g.sh: line 4: echo: write error: Interrupted system call
+
+and the suspicion recorded at the time -- SIGCHLD interrupting a pipe write,
+with `native_syscall_args` restarting only on the two `_ERESTART` codes -- was
+right about the signal and wrong about where the fault was. Two independent
+kernel defects, either of which is enough on its own.
+
+**One: `fs/real.c` decided about signals before attempting the transfer.**
+`realfs_write()` called `realfs_wait_writable()` first, and that wait answers
+EINTR the moment a guest signal is pending -- before a single byte is offered to
+the fd. So three bytes going into an *empty* 64 KiB pipe, a write that cannot
+block, were failed outright because a SIGCHLD happened to be queued. Linux only
+lets a signal cut short an operation that genuinely blocks and has transferred
+nothing; anything it can complete, it completes. `realfs_read()` had the same
+shape. The fix is to attempt first and wait only on `EAGAIN` -- the fd is
+already forced non-blocking a few lines above, so the attempt costs nothing and
+answers the only question that matters. It also takes a `poll()` off the fast
+path of every blocking read and write.
+
+**Two: a native program's `SA_RESTART` was unreachable, by construction.** The
+shim cannot hand the kernel a host function pointer, so `nlibc_set_disposition`
+blocks the signal and leaves `SIG_DFL` in `sighand->action` -- flags and all.
+`signal_should_restart_syscall()` then had nothing true to read and answered
+"do not restart" for every native program, always. Worse, the two halves
+disagreed with each other by construction: the wait side asks
+`task_wake_blocked()`, which *subtracts* the shim's held set so a held signal
+counts as pending, while the restart side asked the raw `blocked` set, where a
+held signal is invisible. Pending enough to interrupt; blocked enough not to
+restart. The shim now records the program's real `sa_flags` (and reports them
+back through `oact`, which it also used to drop), publishes the restarting
+subset as `struct task`'s `native_restart`, and the predicate uses
+`task_wake_blocked()` like everyone else and consults `native_restart` for a
+signal the shim holds.
+
+The placeholder is read in three places, and all three had to learn about it:
+`signal_should_restart_syscall()`, its `_nohand` twin, and
+`signal_note_interrupted()`, which latches the answer at delivery time for a
+wait that was actually asleep. The last two matter because a shim-held signal
+always runs a handler whatever the placeholder claims -- a native program's own
+`SIGTSTP` handler reads as `SIGNAL_STOP` there, and would have parked a `poll()`
+that Linux interrupts.
+
+One more thing falls out, and it is a place a restart would be wrong rather
+than merely absent: a restart is only meaningful if the handler runs first, and
+inside a host stdio callback delivery is deliberately deferred
+(`nlibc_stdio_defer_fatal`), so re-issuing there would meet the same pending
+signal and spin. `native_syscall_args` returns the EINTR instead, and
+`realfs_guest_signal_pending()` does not manufacture one in the first place for
+a deferred signal the program marked `SA_RESTART`. `fs/sock.c` is the other I/O
+path reachable from inside a native stdio callback and gets the same rule --
+though notably it never had the *first* defect: the socket code has always run
+the host call non-blocking and waited only on `EAGAIN`, which is exactly the
+shape `fs/real.c` has now been given. realfs was the outlier, not the pattern.
+
+That deferral is also why the window was never the microsecond race it looked
+like. Every syscall a native program makes checkpoints on entry and drains
+pending signals -- except inside stdio, and bash's `echo` flushes and then
+checks `ferror` from exactly there. The signal sits pending across the whole
+write. That made it reproducible on demand rather than one run in eight:
+
+    bash -c 'trap : USR1; kill -USR1 $$; echo x; echo y' | cat
+
+prints two `write error` lines on the unfixed build and `x`/`y` on the fixed
+one. `tests/manual/native_signal_write_eintr.sh` holds all of it, including the
+half that must NOT change: a bash trap carries no `SA_RESTART`, so a *blocked*
+read interrupted by one still has to come back and let the trap run. Every case
+in that file was checked against real bash on x86_64 Linux 6.12 first, and the
+same three shapes agree with it now.
+
+The lesson is the disagreement rather than either bug: **two predicates that
+answer "is a signal pending?" differently will eventually meet**, and the one
+that interrupts and the one that restarts are exactly the pair that must not.
 
 ---
 

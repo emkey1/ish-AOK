@@ -18,6 +18,7 @@
 #include "kernel/errno.h"
 #include "kernel/calls.h"
 #include "kernel/fs.h"
+#include "kernel/native.h"
 #include "fs/dev.h"
 #include "fs/real.h"
 #include "fs/mmap_cache.h"
@@ -40,11 +41,33 @@ static inline void realfs_count_write(ssize_t res) {
     }
 }
 
+// Is there a signal that entitles a blocking read/write here to give up?
+//
+// task_wake_blocked() rather than ->blocked, because a native program's
+// handled signals are BLOCKED in the kernel and run at a syscall checkpoint
+// instead -- a wait has to end for them or the handler never gets its turn.
+//
+// The exception is a checkpoint that is not going to happen. Inside a host
+// stdio callback, delivery is deliberately deferred (native_delivery_deferred)
+// so a handler cannot longjmp out of stdio's frames with its FILE lock held.
+// A signal the program asked to be RESTARTED through -- SA_RESTART, recorded
+// in native_restart -- must not cut the transfer short there: the handler will
+// not run, so the interruption buys nothing, and the caller sees an EINTR that
+// Linux would never have shown it. Waiting is what SA_RESTART asked for, and
+// the handler runs at the first checkpoint after stdio unwinds.
+//
+// Everything else still interrupts, which is the half that matters for safety:
+// a fatal signal is never shim-held, so a native program blocked writing to a
+// full pipe still fails its callback, unwinds stdio and dies -- the behaviour
+// the deferral was built around.
 static bool realfs_guest_signal_pending(void) {
     lock(&current->sighand->lock, 0);
-    bool signal_pending = !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
+    sigset_t_ pending = (current->pending | current->sighand->pending) &
+            ~task_wake_blocked(current);
+    if (native_delivery_deferred())
+        pending &= ~__atomic_load_n(&current->native_restart, __ATOMIC_ACQUIRE);
     unlock(&current->sighand->lock);
-    return signal_pending;
+    return !!pending;
 }
 
 // Diagnostic for realfs_wait_readable/writable's EINTR paths, added while
@@ -74,10 +97,12 @@ static void realfs_log_signal_eintr(const char *where) {
     sigset_t_ group_pending = current->sighand->pending;
     sigset_t_ blocked = current->blocked;
     unlock(&current->sighand->lock);
-    dprintf(2, "[signal-eintr] %s comm=%s pid=%d unblocked_pending=%#llx task_pending=%#llx group_pending=%#llx blocked=%#llx\n",
+    dprintf(2, "[signal-eintr] %s comm=%s pid=%d unblocked_pending=%#llx task_pending=%#llx group_pending=%#llx blocked=%#llx native_held=%#llx native_restart=%#llx\n",
             where, current->comm, current->pid,
             (unsigned long long) pending, (unsigned long long) task_pending,
-            (unsigned long long) group_pending, (unsigned long long) blocked);
+            (unsigned long long) group_pending, (unsigned long long) blocked,
+            (unsigned long long) current->native_held,
+            (unsigned long long) current->native_restart);
 }
 
 static bool realfs_trace_comm(void) {
@@ -398,6 +423,7 @@ static int realfs_wait_writable(int real_fd) {
             // one must not interrupt the write either.
             if (!realfs_guest_signal_pending())
                 continue;
+            realfs_log_signal_eintr("write/sigunwind");
             errno = EINTR;
             return errno_map();
         }
@@ -405,6 +431,7 @@ static int realfs_wait_writable(int real_fd) {
         if (realfs_guest_signal_pending()) {
             sigunwind_end();
             pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+            realfs_log_signal_eintr("write/presleep");
             errno = EINTR;
             return errno_map();
         }
@@ -416,6 +443,7 @@ static int realfs_wait_writable(int real_fd) {
             return res;
         if (res == 0) {
             if (realfs_guest_signal_pending()) {
+                realfs_log_signal_eintr("write/timeout");
                 errno = EINTR;
                 return errno_map();
             }
@@ -584,12 +612,18 @@ ssize_t realfs_read(struct fd *fd, void *buf, size_t bufsize) {
     // pipeherd hang (every stuck thread's backtrace stopped right here).
     (void) fcntl(fd->real_fd, F_SETFL, fcntl(fd->real_fd, F_GETFL, 0) | O_NONBLOCK);
 
+    // ATTEMPT FIRST, wait second. The loop used to call realfs_wait_readable()
+    // before ever touching the fd, and that wait reports EINTR the moment a
+    // guest signal is pending -- so a read that had data sitting there and
+    // would not have blocked for a microsecond came back EINTR anyway. Linux
+    // never does that: a signal is only allowed to cut short an operation that
+    // actually blocks, and one which can be satisfied immediately is satisfied.
+    // The fd is already non-blocking (just above), so the attempt is free to
+    // make and tells us which case we are in; only EAGAIN means "would block",
+    // and only then does the signal question arise at all. See the matching
+    // comment in realfs_write().
     for (;;) {
         realfs_trace_io_enter("read", fd, read_size);
-        int wait_res = realfs_wait_readable(fd->real_fd);
-        if (wait_res < 0)
-            return wait_res;
-
         ssize_t res = read(fd->real_fd, buf, read_size);
         if (res >= 0) {
             if (res > 0 && is_adhoc_fd(fd) && S_ISFIFO(fd->stat.mode))
@@ -598,11 +632,14 @@ ssize_t realfs_read(struct fd *fd, void *buf, size_t bufsize) {
             realfs_count_read(res);
             return res;
         }
-        if ((errno == EAGAIN || errno == EWOULDBLOCK) ||
-                (errno == EINTR && !realfs_guest_signal_pending())) {
+        if (errno == EINTR && !realfs_guest_signal_pending())
             continue;
-        }
-        return errno_map();
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            return errno_map();
+
+        int wait_res = realfs_wait_readable(fd->real_fd);
+        if (wait_res < 0)
+            return wait_res;
     }
 }
 
@@ -626,11 +663,28 @@ ssize_t realfs_write(struct fd *fd, const void *buf, size_t bufsize) {
     // sibling tasks sharing this same open file description (fork()).
     (void) fcntl(fd->real_fd, F_SETFL, fcntl(fd->real_fd, F_GETFL, 0) | O_NONBLOCK);
 
+    // ATTEMPT FIRST, wait second -- the fix for a native shell intermittently
+    // reporting "echo: write error: Interrupted system call" (build 554).
+    //
+    // This loop used to ask realfs_wait_writable() before ever attempting the
+    // write, and that wait answers EINTR as soon as a guest signal is pending.
+    // So three bytes going into an empty 64 KiB pipe -- a write that cannot
+    // block -- were failed outright because a SIGCHLD happened to be queued.
+    // Linux only lets a signal cut short an operation that genuinely blocks
+    // and has transferred nothing; anything it can complete, it completes.
+    //
+    // The window is not a narrow race. A native program's handled signals are
+    // held blocked by the shim and run at a syscall checkpoint instead, and
+    // that checkpoint is deliberately SKIPPED while the program is inside a
+    // host stdio callback (nlibc_stdio_defer_fatal, kernel/native_libc.c) --
+    // so bash's echo, which flushes and then checks ferror, spans the whole
+    // deferral with the signal still sitting pending. Reproduced on demand
+    // with `bash -c 'trap : USR1; kill -USR1 $$; echo x' | cat`.
+    //
+    // The fd is already non-blocking, so attempting first costs nothing and
+    // answers the only question that matters: EAGAIN means it would have
+    // blocked, and only then is a pending signal entitled to interrupt.
     for (;;) {
-        int wait_res = realfs_wait_writable(fd->real_fd);
-        if (wait_res < 0)
-            return wait_res;
-
         ssize_t res = realfs_write_host(fd->real_fd, buf, bufsize);
         if (res >= 0) {
             if (res > 0)
@@ -639,11 +693,14 @@ ssize_t realfs_write(struct fd *fd, const void *buf, size_t bufsize) {
             realfs_count_write(res);
             return res;
         }
-        if ((errno == EAGAIN || errno == EWOULDBLOCK) ||
-                (errno == EINTR && !realfs_guest_signal_pending())) {
+        if (errno == EINTR && !realfs_guest_signal_pending())
             continue;
-        }
-        return errno_map();
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            return errno_map();
+
+        int wait_res = realfs_wait_writable(fd->real_fd);
+        if (wait_res < 0)
+            return wait_res;
     }
 }
 

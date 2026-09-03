@@ -235,4 +235,5 @@ aes_gcm_accel.c
 native_stdio_redirect.sh
 native_zsh_fork_state.sh
 native_bash_fork_state.sh
+native_signal_write_eintr.sh
 stack_guard_gap.c

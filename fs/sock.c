@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include "kernel/calls.h"
+#include "kernel/native.h"
 #include "kernel/inotify.h"
 #include "kernel/task.h"
 #include "fs/fd.h"
@@ -1903,11 +1904,31 @@ static void sock_trace_tcp_info(const char *label, struct fd *sock) {
 }
 #endif
 
+// The same question realfs_guest_signal_pending() asks, and it has to be
+// answered the same way -- these are the two I/O paths a native program can be
+// blocked in from inside a host stdio callback, where signal delivery is
+// deliberately deferred (native_delivery_deferred) so a handler cannot longjmp
+// out of stdio's frames with its FILE lock held. A signal the program marked
+// SA_RESTART must not cut the transfer short there: the handler will not run,
+// so the interruption buys nothing and the caller sees an EINTR that Linux
+// would have hidden. Waiting is exactly what SA_RESTART asked for.
+//
+// Everything else still interrupts, which is the half that matters: a fatal
+// signal is never shim-held, so a native program stuck on a full socket still
+// fails its callback, unwinds stdio and dies.
+//
+// Unlike fs/real.c this path already attempted the I/O before asking -- the
+// host call runs non-blocking and only an EAGAIN reaches socket_wait_ready --
+// so the "a transfer that could not block was failed anyway" half of that bug
+// never existed here.
 static bool socket_guest_signal_pending(void) {
     lock(&current->sighand->lock, 0);
-    bool signal_pending = !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
+    sigset_t_ pending = (current->pending | current->sighand->pending) &
+            ~task_wake_blocked(current);
+    if (native_delivery_deferred())
+        pending &= ~__atomic_load_n(&current->native_restart, __ATOMIC_ACQUIRE);
     unlock(&current->sighand->lock);
-    return signal_pending;
+    return !!pending;
 }
 
 static bool socket_should_retry_io_eintr(struct fd *sock, int real_flags) {

@@ -127,6 +127,16 @@ struct task {
     sigset_t_ native_prog_blocked;
     sigset_t_ native_held;
 
+    // Of the held set, the ones whose handler the program installed with
+    // SA_RESTART. The kernel cannot read that off sighand->action: a native
+    // program's disposition THERE is the SIG_DFL placeholder the shim leaves
+    // behind (nlibc_set_disposition), flags and all, so every native program's
+    // SA_RESTART was silently a no-op -- signal_should_restart_syscall() had
+    // nothing true to find and answered "do not restart" every time, turning
+    // an interruption Linux hides into a guest-visible EINTR. Maintained
+    // beside native_held, by the same nlibc_update_held_signals().
+    sigset_t_ native_restart;
+
     struct {
         atomic_int count; // If positive, don't delete yet, wait_to_delete
         bool ready_to_be_freed; // Should be false initially

@@ -650,10 +650,20 @@ static void signal_note_interrupted(struct task *task, struct sighand *sighand, 
     // to the guest -- and because no handler runs, that holds even for the
     // interfaces SA_RESTART cannot rescue (poll, select, epoll_wait). Only a
     // handler actually running can turn a wait into a guest-visible EINTR.
-    int action = signal_action(sighand, sig);
+    //
+    // sighand->action is not the truth for a signal the native shim is holding
+    // a handler for -- what sits there is the SIG_DFL placeholder
+    // nlibc_set_disposition left behind, so a native program's own SIGTSTP
+    // handler would read as SIGNAL_STOP here and park a poll() that Linux
+    // interrupts. For those the shim's recorded flags are the answer, and a
+    // handler is always what runs, so `stops` is false by construction.
+    bool held = sigset_has(__atomic_load_n(&task->native_held, __ATOMIC_ACQUIRE), sig);
+    int action = held ? SIGNAL_CALL_HANDLER : signal_action(sighand, sig);
     bool stops = action == SIGNAL_STOP;
-    bool restart = stops || (action == SIGNAL_CALL_HANDLER &&
-        !!(sighand->action[sig].flags & SA_RESTART_));
+    bool restart = held
+        ? sigset_has(__atomic_load_n(&task->native_restart, __ATOMIC_ACQUIRE), sig)
+        : (stops || (action == SIGNAL_CALL_HANDLER &&
+            !!(sighand->action[sig].flags & SA_RESTART_)));
     __atomic_store_n(&task->restart_interrupted_syscall, restart, __ATOMIC_RELEASE);
     __atomic_store_n(&task->restart_interrupted_syscall_nohand, stops, __ATOMIC_RELEASE);
     __atomic_store_n(&task->wait_interrupted, true, __ATOMIC_RELEASE);
@@ -1436,6 +1446,52 @@ static bool restart_flags_take(bool nohand_only) {
     return nohand_only ? nohand : restart;
 }
 
+// The signal that is about to be delivered, or NULL. Selection mirrors
+// signal_take_next_locked: both queues, lowest number wins, the thread's own
+// queue first on a tie. Call with sighand->lock held.
+//
+// "Deliverable" is task_wake_blocked() rather than plain ->blocked, which is
+// the same question every other pending-signal predicate in the kernel asks
+// (fs/real.c, fs/poll.c, fs/sock.c, kernel/futex.c). Using the raw blocked set
+// here made the two halves disagree for a native program: the shim blocks
+// every signal it has a handler for and runs the handler at a checkpoint
+// instead, so the wait side counted it as pending and cut the syscall short
+// while this side counted it as blocked, found nothing, and refused to
+// restart. Native SA_RESTART was dead on arrival, and the interruption
+// surfaced as a guest-visible EINTR -- "echo: write error: Interrupted system
+// call" out of a native bash. For a translated guest native_held is 0 and this
+// is the blocked set exactly as before.
+static struct sigqueue *signal_next_deliverable_locked(struct sighand *sighand) {
+    sigset_t_ blocked = task_wake_blocked(current);
+    struct sigqueue *sigqueue;
+    struct sigqueue *best = NULL;
+    list_for_each_entry(&current->queue, sigqueue, queue) {
+        if (sigset_has(blocked, sigqueue->info.sig))
+            continue;
+        if (best == NULL || sigqueue->info.sig < best->info.sig)
+            best = sigqueue;
+    }
+    list_for_each_entry(&sighand->queue, sigqueue, queue) {
+        if (sigset_has(blocked, sigqueue->info.sig))
+            continue;
+        if (best == NULL || sigqueue->info.sig < best->info.sig)
+            best = sigqueue;
+    }
+    return best;
+}
+
+// Is SIG one the shim is holding a native handler for? Its entry in
+// sighand->action is then the SIG_DFL placeholder nlibc_set_disposition left,
+// so nothing about the program's real disposition can be read from there --
+// ask struct task's native_restart instead.
+static bool signal_native_held(int sig) {
+    return sigset_has(__atomic_load_n(&current->native_held, __ATOMIC_ACQUIRE), sig);
+}
+
+static bool signal_native_restarts(int sig) {
+    return sigset_has(__atomic_load_n(&current->native_restart, __ATOMIC_ACQUIRE), sig);
+}
+
 // ERESTARTNOHAND: restart only if the interrupting signal ran no handler. This
 // is what poll/select/epoll_wait get -- SA_RESTART never rescues them, but a
 // job-control stop still must not surface as EINTR.
@@ -1448,21 +1504,14 @@ bool signal_should_restart_syscall_nohand(void) {
 
     struct sighand *sighand = current->sighand;
     lock(&sighand->lock, 0);
-    struct sigqueue *sigqueue;
-    struct sigqueue *best = NULL;
-    list_for_each_entry(&current->queue, sigqueue, queue) {
-        if (sigset_has(current->blocked, sigqueue->info.sig))
-            continue;
-        if (best == NULL || sigqueue->info.sig < best->info.sig)
-            best = sigqueue;
-    }
-    list_for_each_entry(&sighand->queue, sigqueue, queue) {
-        if (sigset_has(current->blocked, sigqueue->info.sig))
-            continue;
-        if (best == NULL || sigqueue->info.sig < best->info.sig)
-            best = sigqueue;
-    }
-    bool stops = best != NULL && signal_action(sighand, best->info.sig) == SIGNAL_STOP;
+    struct sigqueue *best = signal_next_deliverable_locked(sighand);
+    // A shim-held signal always runs a handler, whatever the kernel's
+    // placeholder disposition claims -- and ERESTARTNOHAND is cancelled by a
+    // handler running. Without this the placeholder for, say, a native
+    // program's own SIGTSTP handler would read as SIGNAL_STOP and restart a
+    // poll() that Linux would have interrupted.
+    bool stops = best != NULL && !signal_native_held(best->info.sig) &&
+        signal_action(sighand, best->info.sig) == SIGNAL_STOP;
     unlock(&sighand->lock);
     return stops;
 }
@@ -1485,28 +1534,18 @@ bool signal_should_restart_syscall(void) {
     // fell through to the "no restart" default even when its handler had
     // SA_RESTART_ set -- turning what should be a transparent kernel-level
     // restart into a real EINTR surfacing all the way into the guest.
-    // Mirrors signal_take_next_locked's selection (both queues, lowest
-    // signal number wins, ties favor the thread's own queue since it's
-    // scanned first).
-    struct sigqueue *sigqueue;
-    struct sigqueue *best = NULL;
-    list_for_each_entry(&current->queue, sigqueue, queue) {
-        if (sigset_has(current->blocked, sigqueue->info.sig))
-            continue;
-        if (best == NULL || sigqueue->info.sig < best->info.sig)
-            best = sigqueue;
-    }
-    list_for_each_entry(&sighand->queue, sigqueue, queue) {
-        if (sigset_has(current->blocked, sigqueue->info.sig))
-            continue;
-        if (best == NULL || sigqueue->info.sig < best->info.sig)
-            best = sigqueue;
-    }
+    struct sigqueue *best = signal_next_deliverable_locked(sighand);
     if (best == NULL) {
         unlock(&sighand->lock);
         return false;
     }
     int sig = best->info.sig;
+    // A native program's handler, which the kernel is only holding a
+    // placeholder for. The shim recorded the real sa_flags.
+    if (signal_native_held(sig)) {
+        unlock(&sighand->lock);
+        return signal_native_restarts(sig);
+    }
     int action = signal_action(sighand, sig);
     if (action != SIGNAL_CALL_HANDLER) {
         // A stop resumes the syscall transparently; anything else with no

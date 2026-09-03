@@ -111,6 +111,13 @@ void native_exec_run_pending(void);
 // natively, not of any one program -- exsh will need it on the same terms.
 void native_checkpoint(void);
 
+// True while this thread is somewhere native_checkpoint() cannot deliver a
+// signal -- today, inside a host stdio callback holding a FILE lock (see
+// nlibc_stdio_defer_fatal in kernel/native_libc.c). False for a thread running
+// translated guest code, which has no such place. Callers use it to avoid
+// manufacturing an interruption whose handler is not going to run.
+bool native_delivery_deferred(void);
+
 struct task;
 // Drops a record that will never run, for a task torn down between exec and
 // first execution.

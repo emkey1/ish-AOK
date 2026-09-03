@@ -9,6 +9,7 @@
 #include "kernel/errno.h"
 #include "kernel/native.h"
 #include "kernel/native_io.h"
+#include "kernel/native_libc.h"
 #include "kernel/native_syscall.h"
 #include "kernel/task.h"
 #include "emu/memory.h"
@@ -246,5 +247,14 @@ sqword_t native_syscall_args(unsigned num, const qword_t args[6]) {
         // PC to rewind, so the NOHAND cancellation has nothing to undo.
         if (result != _ERESTART && result != _ERESTART_NOHAND)
             return result;
+        // ...unless the handler that justifies the restart cannot run yet.
+        // Inside a host stdio callback the checkpoint above deliberately
+        // delivers nothing (nlibc_stdio_defer_fatal), so re-issuing would meet
+        // the very same pending signal and be cut short again -- a spin, not a
+        // restart. The deferral's own contract is that the callback FAILS, so
+        // stdio unwinds through its unlock and the signal is taken at the next
+        // checkpoint outside it; hand the caller the EINTR that says so.
+        if (nlibc_delivery_deferred())
+            return _EINTR;
     }
 }

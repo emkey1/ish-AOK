@@ -598,6 +598,15 @@ void native_sigtable_discard(struct task *task) {
     void *t = task->native_sigtable;
     task->native_sigtable = NULL;
     free(t);
+    // The held sets are derived FROM that table (nlibc_update_held_signals),
+    // so they cannot outlive it: they would go on telling the rest of the
+    // kernel that the shim is holding handlers for a task that no longer has
+    // any. task_wake_blocked() subtracts native_held, so a stale one makes a
+    // genuinely blocked signal interrupt a wait -- the same spurious-EINTR
+    // class this pair exists to avoid, pointing the other way.
+    __atomic_store_n(&task->native_held, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&task->native_restart, 0, __ATOMIC_RELEASE);
+    task->native_prog_blocked = 0;
 }
 
 // The index of `name` in the vector, or -1. Matches on the whole name up to
@@ -665,6 +674,10 @@ int native_env_unset(const char *name) {
 }
 
 // ---------------------------------------------------------------- checkpoint
+
+bool native_delivery_deferred(void) {
+    return nlibc_delivery_deferred();
+}
 
 void native_checkpoint(void) {
     if (current == NULL)

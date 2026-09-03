@@ -610,6 +610,7 @@ struct task *task_create_(struct task *parent) {
     // the PARENT; a fresh task has none until it becomes one.
     task->native_prog_blocked = 0;
     task->native_held = 0;
+    task->native_restart = 0;
     task->native_sigtable = NULL;
 
     lock_init(&task->general_lock, "task_creat_gen\0");

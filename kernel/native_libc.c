@@ -840,6 +840,10 @@ static __thread int nlibc_stdio_depth;
 static __thread unsigned nlibc_stdio_deferred;
 #define NLIBC_STDIO_DEFER_LIMIT 1000
 
+bool nlibc_delivery_deferred(void) {
+    return nlibc_stdio_depth > 0 && nlibc_stdio_deferred <= NLIBC_STDIO_DEFER_LIMIT;
+}
+
 bool nlibc_stdio_defer_fatal(void) {
     if (nlibc_stdio_depth <= 0) {
         nlibc_stdio_deferred = 0; // safe point: death releases nothing owned
@@ -5190,6 +5194,14 @@ typedef void (*nlibc_sigaction_handler)(int, siginfo_t *, void *);
 struct nlibc_sigtable {
     nlibc_sighandler h[NSIG];
     nlibc_sigaction_handler h3[NSIG];
+    // The sa_flags the program asked for, kept because nothing else can hold
+    // them: the kernel's sighand->action for a signal the shim handles is a
+    // placeholder (nlibc_set_disposition), so SA_RESTART would otherwise be
+    // discarded at the door -- and it is exactly the flag the kernel needs
+    // back, to decide whether an interrupted syscall restarts. Also what
+    // sigaction()'s oact must report, so a get/modify/set caller does not
+    // silently drop its own flags.
+    int flags[NSIG];
 };
 
 // PER TASK, not per thread, and that distinction is the whole point.
@@ -5238,6 +5250,7 @@ static struct nlibc_sigtable *nlibc_sigtable(void) {
 }
 
 #define nlibc_handlers      (nlibc_sigtable()->h)
+#define nlibc_handler_flags (nlibc_sigtable()->flags)
 #define nlibc_info_handlers (nlibc_sigtable()->h3)
 
 // Never called. Its address is the marker, and taking one keeps the compiler
@@ -5323,9 +5336,14 @@ int nlibc_sigaction(int host_sig, const struct sigaction *act, struct sigaction 
 
     if (oact != NULL) {
         memset(oact, 0, sizeof(*oact));
+        // The recorded flags, not just SA_SIGINFO. A get/modify/set caller --
+        // bash's nojobs.c does exactly that -- read back sa_flags==0 and wrote
+        // it straight out again, so the very first such round trip erased the
+        // program's own SA_RESTART.
+        oact->sa_flags = nlibc_handler_flags[host_sig];
         if (nlibc_handlers[host_sig] == NLIBC_SIGINFO_MARKER) {
             oact->sa_sigaction = nlibc_info_handlers[host_sig];
-            oact->sa_flags = SA_SIGINFO;
+            oact->sa_flags |= SA_SIGINFO;
         } else {
             oact->sa_handler = nlibc_handlers[host_sig];
         }
@@ -5350,6 +5368,7 @@ int nlibc_sigaction(int host_sig, const struct sigaction *act, struct sigaction 
     int err = nlibc_set_disposition(guest_sig, entry);
     if (err < 0)
         return nlibc_fail(err);
+    nlibc_handler_flags[host_sig] = act->sa_flags;
     nlibc_handlers[host_sig] = entry;
     // AFTER the table is written, not before. nlibc_set_disposition also
     // updates the held set, but it runs first and computes it from a table
@@ -5381,6 +5400,13 @@ nlibc_sighandler nlibc_signal(int host_sig, nlibc_sighandler handler) {
         nlibc_fail(err);
         return SIG_ERR;
     }
+    // signal(2) is the BSD flavour on both of this shim's worlds -- glibc's is
+    // bsd_signal, Darwin's has always restarted -- so a handler installed this
+    // way carries SA_RESTART even though the caller never spelled it. Clearing
+    // it for SIG_DFL/SIG_IGN keeps nlibc_exec_reset_handlers from leaving a
+    // restart flag behind on a disposition that no longer has a handler.
+    nlibc_handler_flags[host_sig] =
+            (handler != SIG_DFL && handler != SIG_IGN) ? SA_RESTART : 0;
     nlibc_handlers[host_sig] = handler;
     nlibc_update_held_signals();   // same ordering fix as nlibc_sigaction
     return previous;
@@ -8155,6 +8181,25 @@ static sigset_t_ nlibc_shim_held_signals(void) {
     return held;
 }
 
+// Which of the held signals restart the syscall they interrupt. The kernel
+// asks this (through struct task's native_restart) and cannot answer it for
+// itself, because the disposition it holds for these is the shim's SIG_DFL
+// stand-in rather than the program's real sigaction.
+static sigset_t_ nlibc_shim_restart_signals(void) {
+    sigset_t_ restart = 0;
+    for (int sig = 1; sig < NSIG; sig++) {
+        nlibc_sighandler h = nlibc_handlers[sig];
+        if (h == NULL || h == SIG_DFL || h == SIG_IGN)
+            continue;
+        if (!(nlibc_handler_flags[sig] & SA_RESTART))
+            continue;
+        int guest_sig = nlibc_signal_to_guest(sig);
+        if (guest_sig != 0)
+            restart |= (sigset_t_) 1 << (guest_sig - 1);
+    }
+    return restart;
+}
+
 // The mask a child must start with, and it is not an attribute a caller has to
 // ask for -- it is a correction. What the kernel holds for this task includes
 // whatever the shim blocked in order to hold a handler
@@ -8187,6 +8232,8 @@ static void nlibc_update_held_signals(void) {
         return;
     __atomic_store_n(&current->native_held,
             nlibc_shim_held_signals() & ~current->native_prog_blocked,
+            __ATOMIC_RELEASE);
+    __atomic_store_n(&current->native_restart, nlibc_shim_restart_signals(),
             __ATOMIC_RELEASE);
 }
 
