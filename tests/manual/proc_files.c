@@ -26,11 +26,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/sem.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "test_common.h"
@@ -240,15 +242,62 @@ int main(int argc, char **argv) {
         // Hardcoded 0 before, which made every process look as old as the
         // kernel: ps -o etime, ps -o lstart and top's age column all derive
         // from this one number.
-        ck("starttime is nonzero", starttime > 0 ? 1 : 0, 1);
-        // ...and it is a time BEFORE now, in the same ticks-since-boot space
-        // /proc/uptime reports.
+        //
+        // It cannot be tested on OURSELVES. Under the CLI this suite is often
+        // the first thing the guest runs, so it genuinely starts inside the
+        // kernel's first clock tick and 0 is then the correct answer -- Linux
+        // reports 0 for a process started at boot too, which is why pid 1
+        // reads 0 there. Asserting nonzero here made the test fail whenever it
+        // ran early enough, and which of those it got depended on how much
+        // work the harness happened to do first.
+        //
+        // So wait for the clock to move and test a CHILD, which is the real
+        // property anyway: a process started later must report a later start.
         char up[128];
         double uptime = 0;
+        for (int i = 0; i < 300 && uptime <= 0; i++) {
+            if (slurp("/proc/uptime", up, sizeof up) > 0)
+                uptime = atof(up);
+            if (uptime <= 0)
+                usleep(10000);
+        }
+        ck("uptime advances past zero", uptime > 0 ? 1 : 0, 1);
+
+        pid_t kid = fork();
+        if (kid == 0) {
+            sleep(3);          // stay alive long enough to be read
+            _exit(0);
+        }
+        ck("  forked a child to time", kid > 0 ? 1 : 0, 1);
+        unsigned long long kid_start = 0;
+        if (kid > 0) {
+            char path[64], kbuf[4096];
+            snprintf(path, sizeof path, "/proc/%d/stat", (int) kid);
+            if (slurp(path, kbuf, sizeof kbuf) > 0) {
+                char *kafter = strrchr(kbuf, ')');
+                if (kafter != NULL) {
+                    int i = 0;
+                    for (char *t = strtok(kafter + 2, " "); t != NULL; t = strtok(NULL, " ")) {
+                        if (++i == 20) { kid_start = strtoull(t, NULL, 10); break; }
+                    }
+                }
+            }
+            kill(kid, SIGKILL);
+            waitpid(kid, NULL, 0);
+        }
+        // The child started after the clock had moved, so its starttime must
+        // have moved with it. This is what catches a hardcoded 0.
+        ck("  a child started later has a nonzero starttime", kid_start > 0 ? 1 : 0, 1);
+        // ...and it is a time BEFORE now, in the same ticks-since-boot space
+        // /proc/uptime reports. Re-read uptime: it advanced while we forked.
+        double now_up = uptime;
         if (slurp("/proc/uptime", up, sizeof up) > 0)
-            uptime = atof(up);
+            now_up = atof(up);
         ck("  and is not in the future",
-           uptime > 0 && (double) starttime <= uptime * 100 + 100 ? 1 : 0, 1);
+           (double) kid_start <= now_up * 100 + 100 ? 1 : 0, 1);
+        // The parent's own starttime stays a valid reading, just possibly 0.
+        ck("  self starttime is not in the future",
+           (double) starttime <= now_up * 100 + 100 ? 1 : 0, 1);
     }
 
     return finish_suite("proc_files");
