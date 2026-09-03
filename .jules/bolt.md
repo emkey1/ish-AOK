@@ -40,3 +40,6 @@
 ## 2024-05-25 - sys_preadv and sys_pwritev performance
 **Learning:** System calls `sys_preadv` and `sys_pwritev` in `kernel/fs.c` flatten vectorized I/O requests into a single buffer. Before, they always used `malloc()` to allocate this buffer, regardless of the size. This incurs significant performance overhead for small readv/writev calls which are very common, mirroring the issue previously fixed in `sys_readv` and `sys_writev`.
 **Action:** Implemented a fast path using an explicitly aligned `256`-byte stack buffer for small `sys_preadv` and `sys_pwritev` requests, similar to existing optimizations in `sys_readv`, `sys_writev`, `sys_read`, `sys_write`, `sys_pread` and `sys_pwrite`. Only requests larger than 256 bytes will now fall back to heap allocation.
+## $(date +%Y-%m-%d) - Optimize "." and ".." string comparisons in VFS directory iterations
+**Learning:** `strcmp` has significant function overhead when called sequentially on thousands of directory entries just to check for `.` and `..` in VFS `readdir` loops.
+**Action:** Replace `strcmp(..., ".") == 0 || strcmp(..., "..") == 0` with a direct byte comparison helper function `is_dot_or_dotdot`, which converts potential O(N) function calls into fast O(1) array accesses, significantly reducing CPU cycles in tight loops without sacrificing readability.
