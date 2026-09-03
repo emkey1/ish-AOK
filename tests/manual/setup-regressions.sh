@@ -625,25 +625,33 @@ cache_path_for() {
     echo "$cache_dir/$1.$cache_key_base.$_h"
 }
 
+# Serve $1 from the cache entry at $2 if there is one. Returns 0 on a hit (the
+# binary is in place and nothing needs compiling), 1 on a miss. Split out of
+# build_one so the vfork_exec_stale_jit_peer sweep below, which cannot use
+# build_one, still gets the cache.
+cache_try() {
+    _name=$1
+    [ -n "$2" ] && [ -x "$2" ] || return 1
+    cp "$2" "$work_dir/bin/$_name" 2>/dev/null || return 1
+    chmod +x "$work_dir/bin/$_name" 2>/dev/null
+    echo "  (cached)"
+    return 0
+}
+
 build_one() {
     name=$1
     echo "+ build $name"
     src_file=$(src_for "$name")
 
     cached=$(cache_path_for "$name" "$src_file")
-    if [ -n "$cached" ] && [ -x "$cached" ]; then
-        if cp "$cached" "$work_dir/bin/$name" 2>/dev/null; then
-            chmod +x "$work_dir/bin/$name" 2>/dev/null
-            echo "  (cached)"
-            return
-        fi
-    fi
+    cache_try "$name" "$cached" && return
     # avx32_smoke is freestanding on purpose: it makes raw int $0x80 syscalls so
     # it can run on an i386 root with no libc, and defines its own _start, which
     # collides with the crt startup object under the ordinary link. It needs
     # -mavx2 to emit VEX at all, and none of the libc flags apply.
     if [ "$name" = avx32_smoke ]; then
-        cc -O1 -mavx2 -nostdlib -static -o "$work_dir/bin/$name" "$src_file"
+        cc -O1 -mavx2 -nostdlib -static -o "$work_dir/bin/$name" "$src_file" || return
+        cache_store "$cached" "$work_dir/bin/$name"
         return
     fi
     if [ "$gas_imm_reg_workaround" -eq 0 ]; then
@@ -725,12 +733,32 @@ for test in $all_tests; do
             # Deliberately not build_one: these need a per-peer -D, and they
             # skip its gas_imm_reg_workaround path. Safe only because the peer
             # source is trivial; keep it that way.
+            #
+            # Cached like everything else, though. Skipping build_one used to
+            # mean skipping the cache with it, so these twelve were the only
+            # things a fully-warm run still compiled. Measured on
+            # alpine-arm64-test: 4s for the twelve, against a ~4.5min suite --
+            # worth removing because "a warm run compiles nothing" is a rule
+            # worth being able to state, not because it was ever the slow part.
+            # (avx32_smoke had the same gap: it looked its entry up and never
+            # stored one.) The pad is part of the cache NAME, so the twelve
+            # entries stay distinct, and the key is the peer source's hash, so they
+            # rebuild when that source (or the compiler, or the arch) changes
+            # and not otherwise. An edit to vfork_exec_stale_jit.c itself moves
+            # which peer collides with it, not what the peers are -- that is
+            # the whole reason a sweep is built rather than one.
             peer_src=$(src_for vfork_exec_stale_jit_peer)
             pad=0
             while [ "$pad" -lt 12 ]; do
-                echo "+ build vfork_exec_stale_jit_peer$pad"
-                cc -O2 -pthread -DSTALE_JIT_PAD_PAGES="$pad" \
-                    -o "$work_dir/bin/vfork_exec_stale_jit_peer$pad" "$peer_src"
+                peer_name=vfork_exec_stale_jit_peer$pad
+                echo "+ build $peer_name"
+                peer_cached=$(cache_path_for "$peer_name" "$peer_src")
+                if ! cache_try "$peer_name" "$peer_cached"; then
+                    if cc -O2 -pthread -DSTALE_JIT_PAD_PAGES="$pad" \
+                            -o "$work_dir/bin/$peer_name" "$peer_src"; then
+                        cache_store "$peer_cached" "$work_dir/bin/$peer_name"
+                    fi
+                fi
                 pad=$((pad + 1))
             done
         fi
