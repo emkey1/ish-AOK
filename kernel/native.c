@@ -281,9 +281,20 @@ int native_motepad_main(int argc, char *const argv[], char *const envp[]);
 int native_bmm_main(int argc, char *const argv[], char *const envp[]);
 int native_bmt_main(int argc, char *const argv[], char *const envp[]);
 
+// ktop (kernel/ktop_glue.c), compiled from the same opt/AOK/tools/ktop/ktop.c
+// that ships to the guest -- so /AOK/native/ktop and a ktop built from
+// /AOK/tools/ktop are the same program, and neither goes away. Unconditional
+// for the same reason motepad is: one C file, no dependency beyond the shim.
+int native_ktop_main(int argc, char *const argv[], char *const envp[]);
+
 static const struct native_program native_programs[] = {
     { "smallclue", smallclue_real_main },
     { "motepad", native_motepad_main },
+    // Same program as /AOK/tools/ktop, compiled as host code. Measured 2.7x
+    // faster per refresh on an i386 guest -- worthwhile rather than dramatic,
+    // because most of a refresh is kernel-side /proc work that was never
+    // emulated to begin with. See ktop_glue.c.
+    { "ktop", native_ktop_main },
     // The /AOK/tools benchmarks, so the same workload can be timed with and
     // without emulation. kernel/native_bench.c explains what that comparison
     // is, and what it is not.

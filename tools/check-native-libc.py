@@ -525,6 +525,14 @@ DEFAULT_TARGETS = ("build/libsmallclue.a", "build/libnextvi.a",
                    "build/libbash.a", "build/libzsh.a", "build/libopenssh.a",
                    "build/libopenssh_scp.a", "build/libopenssh_stubs.a",
                    "build/libopenssh_smult_curve25519_ref.a",
+                   # AOK's own single-file native programs. Each is built into
+                   # its own archive purely so it can carry the native_libc.h
+                   # force-include (meson.build), which is exactly the property
+                   # this checks -- so they belong here as much as the vendored
+                   # trees above. motepad had been missing since it was added;
+                   # both pass today, so this is a gate against the next edit,
+                   # not a backlog.
+                   "build/libmotepad.a", "build/libktop.a",
                    # Optional -- present only when the Rust native program is
                    # configured. main() drops targets that do not exist, so a
                    # build without cargo checks the rest and says nothing.

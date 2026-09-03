@@ -32,7 +32,12 @@
  *   k                           send a signal to the selected process
  *   q                           quit
  */
+// Guarded: AOK's own build defines this on the command line when it compiles
+// this file as a native program (meson.build), and an unguarded repeat of a
+// macro whose spelling differs is a warning.
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -86,6 +91,14 @@ static const char *C_RESET = "", *C_BAR_GREEN = "", *C_BAR_RED = "",
                   *C_BAR_BLUE = "", *C_BAR_YELLOW = "", *C_LABEL = "",
                   *C_HDR = "", *C_HDR_SORT = "", *C_SEL = "", *C_DIM = "",
                   *C_KEY = "", *C_KEYBAR = "";
+
+// The colourless defaults above are the state a run that does NOT want colour
+// expects to find. enable_colors is one-way, so restoring them is reset_state's
+// job rather than something any drawing path does.
+static void disable_colors(void) {
+    C_RESET = C_BAR_GREEN = C_BAR_RED = C_BAR_BLUE = C_BAR_YELLOW = "";
+    C_LABEL = C_HDR = C_HDR_SORT = C_SEL = C_DIM = C_KEY = C_KEYBAR = "";
+}
 
 static void enable_colors(void) {
     C_RESET = "\033[0m";
@@ -141,13 +154,21 @@ static const char *arch_from_machine(const char *machine) {
 // that, and it is whatever the booted rootfs is.
 //
 // Cached: uname does not change under us.
+// File scope rather than function-local statics purely so reset_state() can
+// clear them -- see the note there. Neither value changes under a running
+// guest, but the process can outlive the guest: switching roots restarts the
+// guest inside the same app, and the answer to both questions can differ
+// across that.
+static const char *guest_arch_cached = NULL;
+static const char *host_arch_cached = NULL;
+
 static const char *guest_arch(void) {
-    static const char *cached = NULL;
-    if (cached != NULL)
-        return cached;
+    if (guest_arch_cached != NULL)
+        return guest_arch_cached;
     struct utsname u;
-    cached = uname(&u) == 0 ? arch_from_machine(u.machine) : arch_intern("?");
-    return cached;
+    guest_arch_cached = uname(&u) == 0
+        ? arch_from_machine(u.machine) : arch_intern("?");
+    return guest_arch_cached;
 }
 
 // The architecture of the HOST iSH-AOK is running on, which is the one native
@@ -160,13 +181,12 @@ static const char *guest_arch(void) {
 // The app build appends the chip in parentheses ("arm64(Apple M4)"), so the
 // value ends at the first '(' as well as at whitespace.
 static const char *host_arch(void) {
-    static const char *cached = NULL;
-    if (cached != NULL)
-        return cached;
-    cached = arch_intern("?");
+    if (host_arch_cached != NULL)
+        return host_arch_cached;
+    host_arch_cached = arch_intern("?");
     FILE *f = fopen("/proc/cpuinfo", "r");
     if (f == NULL)
-        return cached;
+        return host_arch_cached;
     char line[256];
     while (fgets(line, sizeof(line), f) != NULL) {
         if (strncmp(line, "host arch", 9) != 0)
@@ -181,11 +201,11 @@ static const char *host_arch(void) {
             end++;
         *end = '\0';
         if (*value != '\0')
-            cached = arch_from_machine(value);
+            host_arch_cached = arch_from_machine(value);
         break;
     }
     fclose(f);
-    return cached;
+    return host_arch_cached;
 }
 
 // Natively-dispatched programs -- bash, zsh, and SmallCLUE's applets, all
@@ -711,11 +731,22 @@ static void term_size(int *rows, int *cols) {
 static struct termios orig_termios;
 static bool termios_saved = false;
 
+// The dispositions enable_raw_stdin displaced, so teardown_terminal can put
+// them back. ktop used to leave its own handlers installed and let process
+// exit clean them up; that is true of a program that owns its process and
+// false of one running as a native program (kernel/native.h), where the shell
+// this returns to would inherit them.
+static void (*prev_sigint)(int) = SIG_DFL;
+static void (*prev_sigterm)(int) = SIG_DFL;
+static void (*prev_sighup)(int) = SIG_DFL;
+static bool handlers_installed = false;
+
 // Undoes everything interactive mode did to the terminal: leave the
 // alternate screen (restoring whatever was on screen before ktop ran, like
-// htop), reset attributes, and restore canonical/echo mode. Runs via atexit
-// on normal quit and from the signal handler on SIGINT/SIGTERM/SIGHUP --
-// without the latter, a Ctrl-C would leave the tty raw with echo off.
+// htop), reset attributes, and restore canonical/echo mode. Reached from
+// teardown_terminal on normal quit and from the signal handler on
+// SIGINT/SIGTERM/SIGHUP -- without the latter, a Ctrl-C would leave the tty
+// raw with echo off.
 static void restore_terminal(void) {
     // write(2), not stdio: also called from a signal handler.
     static const char leave[] = "\033[0m\033[?1049l";
@@ -732,16 +763,37 @@ static void exit_signal_handler(int sig) {
     raise(sig);
 }
 
+// Everything enable_raw_stdin changed, put back: the screen and tty by
+// restore_terminal, and the three signal dispositions it displaced. Called on
+// the way out of interactive mode. Idempotent, so an exit path that is not
+// sure whether raw mode was ever entered can just call it.
+//
+// Deliberately not atexit(): a native program returns to a process that keeps
+// running, so an atexit handler would fire at the app's exit rather than this
+// program's -- writing escape bytes at a descriptor that has since become
+// something else -- and would stack up one more registration per run.
+static void teardown_terminal(void) {
+    if (termios_saved)
+        restore_terminal();
+    termios_saved = false;
+    if (handlers_installed) {
+        signal(SIGINT, prev_sigint);
+        signal(SIGTERM, prev_sigterm);
+        signal(SIGHUP, prev_sighup);
+        handlers_installed = false;
+    }
+}
+
 static void enable_raw_stdin(void) {
     if (!isatty(STDIN_FILENO))
         return;
     if (tcgetattr(STDIN_FILENO, &orig_termios) != 0)
         return;
     termios_saved = true;
-    atexit(restore_terminal);
-    signal(SIGINT, exit_signal_handler);
-    signal(SIGTERM, exit_signal_handler);
-    signal(SIGHUP, exit_signal_handler);
+    prev_sigint = signal(SIGINT, exit_signal_handler);
+    prev_sigterm = signal(SIGTERM, exit_signal_handler);
+    prev_sighup = signal(SIGHUP, exit_signal_handler);
+    handlers_installed = true;
     struct termios raw = orig_termios;
     raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO);
     raw.c_cc[VMIN] = 0;
@@ -1258,7 +1310,44 @@ static void print_batch(struct proc_sample *cur, int cur_n,
 
 // ---- main --------------------------------------------------------------------
 
+// Every file-scope static this program keeps, put back to the value the C
+// runtime would have given it.
+//
+// ktop is built two ways from this one source: as an ordinary guest binary,
+// where a fresh process makes this a no-op, and compiled into iSH-AOK as a
+// native program (kernel/native.h), where `ktop` is a C function called on a
+// guest task's thread inside a process that may have run it before. There the
+// initialisers above ran once, at app start, and every later run inherits
+// whatever the previous one left.
+//
+// Both halves of this were measured, not assumed, by running one ktop under a
+// pty and looking at what the NEXT one did:
+//
+//  - sort_mode, show_cmdline and show_cpu_summary are the view. Sort by %MEM,
+//    quit, start ktop again: without the reset the second run came up sorted
+//    by %MEM, not the %CPU the manual documents.
+//  - enable_colors is one-way and only runs when stdout is a tty. A later run
+//    whose stdout is REDIRECTED therefore never turns colour on, but still
+//    found it on: 42 SGR sequences in the output file, 0 with the reset.
+//    (Batch mode is not affected either way -- print_batch references none of
+//    the colour variables.)
+static void reset_state(void) {
+    disable_colors();
+    guest_arch_cached = NULL;
+    host_arch_cached = NULL;
+    sort_mode = SORT_CPU;
+    show_cmdline = true;
+    show_cpu_summary = false;
+    status_msg[0] = '\0';
+    header_rows_drawn = 0;
+    memset(&orig_termios, 0, sizeof(orig_termios));
+    termios_saved = false;
+    prev_sigint = prev_sigterm = prev_sighup = SIG_DFL;
+    handlers_installed = false;
+}
+
 int main(int argc, char **argv) {
+    reset_state();
     bool batch = false;
     int iterations = -1; // -1 = unbounded (interactive default)
     double delay = 3.0;
@@ -1501,8 +1590,10 @@ int main(int argc, char **argv) {
         }
     }
 done:
-    // restore_terminal (via atexit) leaves the alternate screen and restores
-    // the tty; just make sure buffered output is flushed first.
+    // Flush before teardown_terminal, so anything still buffered is written
+    // while the alternate screen is still up rather than spilling onto the
+    // restored one.
     fflush(stdout);
+    teardown_terminal();
     return 0;
 }

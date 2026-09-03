@@ -16,6 +16,16 @@ process list, sort hotkeys, and kill. Batch mode (`-b`) prints a plain
 top-style table for scripting. No ncurses, no procps -- just libc, ANSI
 escapes and `/proc`.
 
+## Already built in: /AOK/native/ktop
+
+ktop is also compiled into iSH-AOK from this same `ktop.c`, and runs as host
+code with no build step:
+
+    /AOK/native/ktop
+
+Present on every build and every guest architecture. Everything below is still
+the way to build it yourself, and nothing here has been replaced.
+
 ## Prebuilt binaries (aarch64) -- source tree only
 
 `opt/AOK/tools/ktop/prebuilt/` in the iSH-AOK source repository holds

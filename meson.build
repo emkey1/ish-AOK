@@ -513,6 +513,7 @@ src = [
     'kernel/native_syscall.c', native_syscall_nums,
     'kernel/smallclue_glue.c',
     'kernel/openssh_glue.c',
+    'kernel/ktop_glue.c',
     'kernel/exit.c',
     'kernel/time.c',
     'kernel/mmap.c',
@@ -1585,9 +1586,30 @@ libmotepad = static_library('motepad', 'kernel/native_motepad.c',
         '-include', meson.current_source_dir() / 'kernel/native_libc.h',
     ])
 
+# ktop, on the same terms as motepad and from the SAME source file the guest
+# gets at /AOK/tools/ktop/ktop.c -- compiled a second time as host code rather
+# than copied, so /AOK/native/ktop cannot drift from the source the docs tell
+# people to build. opt/AOK/tools/ktop keeps its Makefile, build.sh and prebuilt
+# binaries; nothing there is replaced.
+#
+#  - -Dmain: ktop.c is a standalone program and keeps an ordinary main(), which
+#    would collide with AOK's. kernel/ktop_glue.c supplies the native_program
+#    entry point and calls the renamed one. Same arrangement as nextvi.
+#
+# _GNU_SOURCE needs no -D here: add_project_arguments at the top of this file
+# already defines it for every C target, which is what matters -- ktop.c's own
+# #define comes after the force-include and so would be too late to be the one
+# that counts. (ktop.c guards its definition, so the two do not collide.)
+libktop = static_library('ktop', 'opt/AOK/tools/ktop/ktop.c',
+    include_directories: includes,
+    c_args: ish_c_args + [
+        '-Dmain=ktop_program_main',
+        '-include', meson.current_source_dir() / 'kernel/native_libc.h',
+    ])
+
 libish = library('ish', src,
     objects: librustnative,
-    link_whole: [libsmallclue, libnextvi, libbash, libzsh, libopenssh, libmotepad] + libopenssh_special + libcurlshim,
+    link_whole: [libsmallclue, libnextvi, libbash, libzsh, libopenssh, libmotepad, libktop] + libopenssh_special + libcurlshim,
     include_directories: includes, c_args: ish_c_args)
 ish = declare_dependency(
     link_with: [libish, libish_emu, libfakefs],

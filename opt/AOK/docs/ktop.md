@@ -20,7 +20,36 @@ for (see [below](#native-programs-and-the-arch-column)).
 sockets (that's a separate mechanism, used by `iotop`-style tools; see the
 regression test `taskstats_genl.c` if you're curious about that one).
 
-## Building and running it
+## Run it without building it
+
+`ktop` is also compiled into iSH-AOK as a [native program](native-programs.md):
+
+```sh
+/AOK/native/ktop
+```
+
+That needs no compiler, no build step and no install — it is there on every
+build, on every guest architecture, and it is host code, so the emulator never
+translates it (measured 2.7x faster per refresh than the same source built for
+an i386 guest). It is the *same* `ktop.c` compiled a second time, not a
+variant, so the two cannot disagree about behaviour.
+
+Symlink it onto `PATH` if you want to type `ktop`:
+
+```sh
+sudo ln -s /AOK/native/ktop /usr/local/bin/ktop
+```
+
+Beware if you already have one there: a symlink will not overwrite an existing
+file, and a `ktop` you built earlier keeps winning until you replace it. See
+[native-setup.md](native-setup.md) for how these symlinks are meant to be
+managed.
+
+Everything below still works and is unchanged — building from source is the
+right move if you want to modify it, read it, or run it on a system where you
+would rather not rely on the app's copy.
+
+## Building it from source
 
 `/AOK` is a read-only mount, so `ktop` can't be built in place — copy its source
 out first. The bundled `build.sh` does that for you, on every guest architecture
