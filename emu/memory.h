@@ -332,6 +332,17 @@ page_t pt_find_hole(struct mem *mem, pages_t size);
 // munmap(memory, pages * PAGE_SIZE + offset) once the last page referring to it
 // is unmapped.
 //
+// That length is in GUEST pages and is routinely not a whole number of HOST
+// pages -- on Apple silicon a one-page mapping munmaps 4096 bytes of a 16 KiB
+// host page. The host rounds the length up and releases the whole host page,
+// which is correct only because no other mapping can be living in it: the host
+// never places two mmap()s inside one host page (measured on this Mac: 4096
+// separate 4 KiB mappings, no two sharing a host page, minimum gap exactly
+// 16384). The host-page packing in emu/memory.c relies on that -- it puts
+// several guest pages of ONE struct data in one host page, never two struct
+// datas -- so a change that started sub-allocating host pages across mappings
+// would have to fix this teardown first.
+//
 // On EVERY error return, `memory` is still the caller's, and pt_map does NOT
 // munmap it -- the caller must. That split is not a stylistic choice:
 // kernel/ipc.c's shmat already unmaps the segment itself when pt_map fails, and

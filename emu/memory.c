@@ -1440,6 +1440,266 @@ static int mem_materialize_shared_data(struct data *data) {
     return err;
 }
 
+// ---- host-page packing --------------------------------------------------
+//
+// A guest page is 4 KiB. A host page on Apple silicon is 16 KiB, and the host
+// charges a whole host page for a 4 KiB mapping: 4096 separate 4 KiB mmaps land
+// with a minimum gap of exactly 16384, no two share a host page, and each costs
+// 16.3 KiB resident (measured on this Mac; docs/simulated_swap_plan.md section
+// 3.2). That is a 4.00x amplification of every guest page that gets a host
+// allocation to itself.
+//
+// Five call sites in this file used to take exactly one guest page at a time:
+// the copy-on-write break in mem_ptr and again in mem_ptr_fault, the
+// MAP_GROWSDOWN stack extension in both, and the PROT_NONE-to-accessible commit
+// in pt_set_flags. Measured before this change, on an arm64 Alpine guest that
+// touches a 256 MiB private anonymous mapping, forks, and has the child rewrite
+// every page of it: 1280 MB of untagged VM_ALLOCATE across 9500 host VM
+// regions, for 512 MiB of guest data. 1024 MB of that is the child's 65536
+// single-page mmaps at 16 KiB each; the same run with the grouping below costs
+// 512 MB across 2477 regions. It is also faster, because three faults in four
+// stop happening: on a 64 MiB version of the same test, interleaved A/B with
+// seven samples each, the child's copy-on-write break went from a median of
+// 3.03 us to 0.93 us per guest page.
+//
+// The allocation cannot be made smaller, so stop making one per guest page.
+// Each of those sites now materialises every guest page that shares the
+// faulting page's HOST page and is eligible for exactly the same treatment, in
+// one pt_map: one host page, up to four guest pages, one struct data, four
+// page-table entries at offsets 0, 4096, 8192 and 12288.
+//
+// Why a group of CONTIGUOUS guest pages, and not a slab allocator handing 4 KiB
+// chunks of a host page to unrelated guest pages -- which is the shape the swap
+// study (docs/simulated_swap_plan.md section 7, Phase 0) proposed. struct
+// data::refcount counts page-table ENTRIES, and fs/proc/pid.c reads that as a
+// sharer count: proc_smaps_region divides it by the region's page count and
+// documents the invariant it depends on, that an unshared N-page region has
+// refcount N. Four unrelated pages sharing one struct data breaks that -- a
+// one-page region would report refcount 4, i.e. an exclusively-owned page shown
+// as shared four ways with a quarter of its Pss, and the .data page a forked
+// child writes to is exactly such a region. proc_maps_dump merges neighbours
+// that share a struct data, so two adjacent unrelated pages that happened to
+// land in one slab would also print as one region where there are two. Repairing
+// either would mean changing fs/proc/pid.c. A group keeps both true by
+// construction, because a group's entries ARE one contiguous region of one
+// mapping, which is what refcount has always counted.
+//
+// The other properties this shape keeps, each of which a slab would have had to
+// re-earn: teardown is unchanged (the last entry to go drops the refcount to 0
+// and pt_unmap_always_unlocked munmaps data->data with data->size, exactly as
+// for any other multi-page mapping), fork is unchanged (pt_copy_on_write shares
+// the struct and bumps the refcount per entry), MADV_DONTNEED is unchanged (its
+// pt_map_nothing over part of a group drops those entries and leaves the host
+// page mapped for the siblings that survive -- it never hands back memory a
+// live page is still using), and there is no new allocator state and so no new
+// lock and no new lock ordering.
+
+// Guest pages per host page, or 1 when there is nothing to pack: a host page no
+// larger than a guest page (Linux x86-64) already fills exactly, and a ratio
+// that is not a power of two would break the group-start mask below.
+static pages_t mem_host_page_group(void) {
+    if (real_page_size <= PAGE_SIZE || real_page_size % PAGE_SIZE != 0)
+        return 1;
+    size_t ratio = real_page_size / PAGE_SIZE;
+    if ((ratio & (ratio - 1)) != 0)
+        return 1;
+    return (pages_t) ratio;
+}
+
+// First guest page of the host page `page` lives in.
+static page_t mem_host_page_group_start(page_t page, pages_t group) {
+    return page & ~(page_t) (group - 1);
+}
+
+static bool mem_page_packing_enabled(void) {
+    static int disabled = -1;
+    if (disabled < 0) {
+        // ISH_MEM_NO_PAGE_PACKING=1 restores one mmap per guest page at these
+        // sites, so an A/B run measures the packing and nothing else.
+        const char *v = getenv("ISH_MEM_NO_PAGE_PACKING");
+        disabled = (v != NULL && *v != '\0' && *v != '0') ? 1 : 0;
+    }
+    if (disabled == 1 || mem_host_page_group() == 1)
+        return false;
+    // ISH_MEM_QUARANTINE keeps a released page's address range and mprotects it
+    // PROT_NONE so a stale host pointer faults at the instruction that makes the
+    // write (see mem_quarantine_freed_pages). That only works while a released
+    // guest page owns its host page: a page released out of the middle of a
+    // group leaves the host page mapped for its live siblings, and mprotect
+    // cannot protect 4 KiB of a 16 KiB host page. So the debug knob wins, and
+    // with it on every one of these sites is a singleton again, exactly as
+    // before -- a quarantine run is a debugging run and nothing else.
+    return !mem_quarantine_freed_pages();
+}
+
+// May `p` join a copy-on-write group whose faulting page has flags `flags`?
+//
+// Flag EQUALITY, not a subset test, and that is what keeps the group invisible
+// to the guest: pt_map takes one flags value for the whole range, so a
+// neighbour may only join if it would have ended up with exactly those flags
+// anyway. P_COW is part of the comparison, so only pages already waiting to be
+// copied join. P_WRITE is too, so a read-only private page is never made
+// private early, and a MEM_WRITE_PTRACE poke -- which adds P_WRITE|P_COW to the
+// faulting entry alone -- always ends up a group of one, which is what a
+// debugger's poke of a single page should be.
+static bool mem_cow_group_member(struct mem *mem, page_t p, unsigned flags) {
+    struct pt_entry *e = mem_pt(mem, p);
+    if (e == NULL || e->flags != flags)
+        return false;
+    // A PROT_NONE anonymous reservation has no host backing to copy from. It
+    // cannot reach here with P_RWX-equal flags, but mem_break_cow_group's memcpy
+    // would dereference NULL if it did.
+    return e->data->data != NULL;
+}
+
+// Break copy-on-write for `page`, and for every guest page sharing its host
+// page that is eligible for the identical break. Returns 0, or a negative errno
+// with nothing changed.
+//
+// Caller holds the mem write lock and has already established that `page` is
+// mapped, P_COW, and writable for this access type. Both COW sites in this file
+// (mem_ptr's lock-upgrade path and mem_ptr_fault's) call this with those
+// preconditions met; one function rather than two, because they were two copies
+// of the same dozen lines and this would otherwise be written twice.
+static int mem_break_cow_group(struct mem *mem, page_t page) {
+    struct pt_entry *entry = mem_pt(mem, page);
+    if (entry == NULL || entry->data->data == NULL)
+        return _EFAULT;
+    unsigned flags = entry->flags;
+
+    page_t first = page, last = page;
+    // P_ANONYMOUS only, and that restriction is measured rather than cautious.
+    // Grouping anonymous pages costs nothing in the region list: proc_maps_dump
+    // already merges adjacent anonymous entries with equal permissions whether
+    // or not they share a struct data, so it is byte-identical either way
+    // (verified by diffing /proc/self/maps and smaps_rollup of a forked child
+    // that breaks COW in three shapes, packed against unpacked, on all five test
+    // roots -- the only lines that ever differ are the [stack] extent and the
+    // smaps_rollup totals that follow from it, which come from the growsdown
+    // grouping below and not from here).
+    //
+    // What that argument does NOT buy is an invariant, and the distinction
+    // matters. A group's entries are one contiguous region of one mapping AT
+    // CREATION. Afterwards mprotect or mremap can split a region away from its
+    // struct data while refcount still counts every entry, and then
+    // proc_smaps_region's refcount/region_pages sharer estimate is wrong.
+    // Measured: a forked child that writes p[0] of a 16 KiB-aligned window and
+    // then mprotect(p, 4096, PROT_READ) gets smaps `r--s` with Pss 1 kB and
+    // Shared_Dirty 4 kB, on a page it exclusively owns, while /proc/maps says
+    // `r--p` -- a maps/smaps disagreement Linux never produces.
+    //
+    // That is a PRE-EXISTING defect this widens rather than a new one: the same
+    // output already appears for a one-page mprotect split of any ordinary
+    // multi-page anonymous mapping from pt_map_nothing, with grouping off. The
+    // real repair is to make that sharer estimate count the entries of the
+    // REGION rather than the refcount of the whole struct data, in
+    // fs/proc/pid.c. TODO, and it fixes both instances at once.
+    //
+    // It is still the reason to group rather than to slab-allocate: a slab
+    // breaks the same invariant the moment the group is made, unconditionally,
+    // for pages that were never related to each other.
+    //
+    // A PRIVATE FILE mapping is the case where it would show, and what it would
+    // show is an existing defect made wider rather than a new one: AOK's COW
+    // break gives the copy a struct data with no fd and no name, so a broken
+    // page of a file mapping already prints in /proc/maps as a nameless region
+    // splitting the file's own. Grouping would take the name off up to three
+    // more pages per host page -- pages the guest never wrote. Measured on a
+    // 32-page private mapping of /bin/busybox with every fourth page written
+    // after a fork: 16 alternating named/nameless regions became 8 nameless
+    // ones. Linux prints one named region for all of it, so neither is right;
+    // the repair is to carry fd, name and file_offset across the break, and
+    // until that happens this stays out of it. The memory at stake is small --
+    // the writable file-backed segments of an executable and its libraries,
+    // tens of pages per process, against the hundreds of megabytes of anonymous
+    // COW this is for.
+    if (mem_page_packing_enabled() && (flags & P_ANONYMOUS)) {
+        pages_t group = mem_host_page_group();
+        page_t base = mem_host_page_group_start(page, group);
+        while (first > base && mem_cow_group_member(mem, first - 1, flags))
+            first--;
+        while (last + 1 < base + group && mem_cow_group_member(mem, last + 1, flags))
+            last++;
+    }
+    pages_t pages = (pages_t) (last - first + 1);
+    size_t bytes = (size_t) pages * PAGE_SIZE;
+
+    void *copy = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+    if (copy == MAP_FAILED)
+        return errno_map();
+    // Every source is read BEFORE pt_map publishes anything. pt_map unmaps the
+    // old entry of each page as it goes, and that can drop the last reference to
+    // the very struct data being copied from -- for a group whose pages all come
+    // from one parent mapping, unmapping page `first` can munmap the memory page
+    // `first + 1` still needs to be read out of.
+    for (page_t p = first; p <= last; p++) {
+        struct pt_entry *src = mem_pt(mem, p);
+        memcpy((char *) copy + ((size_t) (p - first) << PAGE_BITS),
+               (char *) src->data->data + src->offset, PAGE_SIZE);
+    }
+    int err = pt_map(mem, first, pages, copy, 0, flags & ~P_COW);
+    if (err < 0) {
+        // pt_map maps nothing when it fails, so the copy is still ours to
+        // release, and the pages it was for are all still copy-on-write.
+        munmap(copy, bytes);
+        return err;
+    }
+    return 0;
+}
+
+// Extend a MAP_GROWSDOWN region onto `page`, and onto the rest of its host page
+// where that is allowed. Caller holds the mem write lock and has already
+// checked mem_growsdown_allowed(mem, page).
+//
+// The care this needs that the COW break does not: mapping a page the guest has
+// not touched must never pre-empt a SIGSEGV it was entitled to. So a page below
+// the faulting one joins only if it satisfies mem_growsdown_allowed on its own
+// account -- which is the test that enforces mmap_min_addr, RLIMIT_STACK and
+// the stack guard gap, and is exactly what a later fault on that page would
+// have had to pass. RLIMIT_STACK in particular still bounds the stack at the
+// same guest ADDRESS it did before, because that test is on the address and not
+// on a page count.
+//
+// This is the one packed site the guest can see, and what it sees is a [stack]
+// region in /proc/maps whose low edge is up to three guest pages below the
+// deepest address actually touched, with Rss and Anonymous 12 kB higher to
+// match (measured on the glibc guest: one 4 kB step, ffffd000 -> ffffc000).
+// That is not a state Linux cannot produce -- a 16 KiB-page arm64 Linux grows
+// its stack in 16 KiB steps for the same reason -- and the alternative is
+// keeping the 4x amplification on the one mapping every process has: measured
+// on a recursion 1400 frames deep, 21 MB of host memory for the stack against
+// 5408 KB with the grouping, across 195 VM regions against 54.
+static void mem_map_growsdown_group(struct mem *mem, page_t page) {
+    page_t first = page, last = page;
+    if (mem_page_packing_enabled()) {
+        pages_t group = mem_host_page_group();
+        page_t base = mem_host_page_group_start(page, group);
+        while (first > base && mem_pt(mem, first - 1) == NULL &&
+                mem_lazy_find(mem, first - 1) == NULL &&
+                mem_growsdown_allowed(mem, first - 1))
+            first--;
+        // Upwards is the hole case: a frame with a large local skipped over a
+        // page on its way down, and the stack is already mapped above it. Those
+        // pages are closer to the stack than the faulting one, so the growsdown
+        // test they would face is the one it has already passed.
+        //
+        // page_limit is checked explicitly because mem_pt returns NULL for a
+        // page ABOVE the limit exactly as it does for an unmapped one, and
+        // walking into that would hand pt_map a range it rejects -- turning a
+        // stack growth that has already been allowed into a failed fault.
+        while (last + 1 < base + group && last + 1 < mem->page_limit &&
+                mem_pt(mem, last + 1) == NULL &&
+                mem_lazy_find(mem, last + 1) == NULL)
+            last++;
+    }
+    // A lazy reservation must never overlap a mapped page (see struct
+    // mem_lazy_map), which is why the walks above skip reserved pages rather
+    // than letting pt_map drop or materialise a reservation for the sake of
+    // three stack pages.
+    pt_map_nothing(mem, first, (pages_t) (last - first + 1), P_WRITE | P_GROWSDOWN);
+}
+
 int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
     // mprotect rewrites per-page flags, so materialise any overlapping reservation first rather than
     // teaching this path about them. Iterates reservations, never pages.
@@ -1467,15 +1727,49 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
                     return err;
                 // ...then fall through to the ordinary flag update below.
             } else {
-                void *memory = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE,
+                // Commit the whole host page's worth of pages that this same
+                // mprotect is about to give identical flags, rather than one
+                // guest page per host page -- see the host-page packing comment
+                // above. Upwards only: every page below this one in the range
+                // has already been through the loop.
+                //
+                // These pages are always P_ANONYMOUS, which is what keeps the
+                // group out of /proc/maps: a NULL data->data can only come from
+                // pt_map_nothing's PROT_NONE branch, and that is the one call
+                // in the tree that passes pt_map a NULL `memory`, always with
+                // P_ANONYMOUS forced on.
+                page_t last = page;
+                if (mem_page_packing_enabled()) {
+                    pages_t group = mem_host_page_group();
+                    page_t group_end = mem_host_page_group_start(page, group) + group;
+                    if (group_end > start + pages)
+                        group_end = start + pages;
+                    while (last + 1 < group_end) {
+                        struct pt_entry *next = mem_pt(mem, last + 1);
+                        // Equal old flags means equal new flags (new_flags is a
+                        // pure function of them and of `flags`), and it also
+                        // means not P_SHARED, since this branch only runs for a
+                        // page that is not.
+                        if (next == NULL || next->flags != (unsigned) old_flags ||
+                                next->data->data != NULL)
+                            break;
+                        last++;
+                    }
+                }
+                pages_t group_pages = (pages_t) (last - page + 1);
+                size_t bytes = (size_t) group_pages * PAGE_SIZE;
+                void *memory = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
-                int err = pt_map(mem, page, 1, memory, 0, new_flags);
+                int err = pt_map(mem, page, group_pages, memory, 0, new_flags);
                 if (err < 0) {
                     // Ownership only transfers on success -- see pt_map_nothing.
                     if (memory != MAP_FAILED)
-                        munmap(memory, PAGE_SIZE);
+                        munmap(memory, bytes);
                     return err;
                 }
+                // pt_map already wrote new_flags for every page of the group, so
+                // resume past it rather than reprocessing them.
+                page = last;
                 continue;
             }
         }
@@ -1612,7 +1906,7 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
         // another thread faulting the same growsdown page can map it first.
         // Mapping again would discard anything that thread already wrote.
         if (mem_pt(mem, page) == NULL) {
-            pt_map_nothing(mem, page, 1, P_WRITE | P_GROWSDOWN);
+            mem_map_growsdown_group(mem, page);
             task_count_minflt();
         }
         write_to_read_lock(&mem->lock);
@@ -1678,23 +1972,12 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
                 write_to_read_lock(&mem->lock);
                 goto done_write_fault;
             }
-            void *copy = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
-            void *data = (char *) entry->data->data + entry->offset;
-
-            if (copy == MAP_FAILED) {
-                if (locked_general_lock)
-                    unlock(&current->general_lock);
-                write_to_read_lock(&mem->lock);
-                return NULL;
-            }
-            memcpy(copy, data, PAGE_SIZE);
-            if (pt_map(mem, page, 1, copy, 0, entry->flags &~ P_COW) < 0) {
-                // Same answer as the mmap failure just above: the COW break did
-                // not happen, so there is no private page to hand back, and
-                // returning the still-shared one would let the guest's write
-                // land in the parent's (or a sibling's) memory. pt_map maps
-                // nothing when it fails, so the copy is still ours to release.
-                munmap(copy, PAGE_SIZE);
+            // Copies this page and, on a 16 KiB-page host, the rest of its host
+            // page: see the host-page packing comment above mem_break_cow_group.
+            if (mem_break_cow_group(mem, page) < 0) {
+                // The COW break did not happen, so there is no private page to
+                // hand back, and returning the still-shared one would let the
+                // guest's write land in the parent's (or a sibling's) memory.
                 if (locked_general_lock)
                     unlock(&current->general_lock);
                 write_to_read_lock(&mem->lock);
@@ -1733,7 +2016,7 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
             write_unlock(&mem->lock);
             return NULL;
         }
-        pt_map_nothing(mem, page, 1, P_WRITE | P_GROWSDOWN);
+        mem_map_growsdown_group(mem, page);
         entry = mem_pt(mem, page);
     }
 
@@ -1775,20 +2058,9 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
                 return NULL;
             }
             if (entry->flags & P_COW) {
-                void *copy = mmap(NULL, PAGE_SIZE, PROT_READ | PROT_WRITE,
-                                  MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
-                void *data = (char *) entry->data->data + entry->offset;
-                if (copy == MAP_FAILED) {
-                    if (locked_general_lock)
-                        unlock(&current->general_lock);
-                    write_unlock(&mem->lock);
-                    return NULL;
-                }
-                memcpy(copy, data, PAGE_SIZE);
-                if (pt_map(mem, page, 1, copy, 0, entry->flags & ~P_COW) < 0) {
-                    // See the identical path in mem_ptr: no private page means
-                    // no writable pointer, and the copy is still ours to free.
-                    munmap(copy, PAGE_SIZE);
+                // Same group break as mem_ptr's path above.
+                if (mem_break_cow_group(mem, page) < 0) {
+                    // No private page means no writable pointer.
                     if (locked_general_lock)
                         unlock(&current->general_lock);
                     write_unlock(&mem->lock);
