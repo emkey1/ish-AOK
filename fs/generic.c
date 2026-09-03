@@ -954,7 +954,8 @@ int generic_unlinkat(struct fd *at, const char *path_raw) {
     if (path_final_dot(path_raw))
         return _EISDIR;
     char path[MAX_PATH];
-    int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
+    int err = path_normalize(at, path_raw, path,
+            N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE | N_REMOVE_ENOENT_FIRST);
     if (err < 0)
         return err;
     char guest_path[MAX_PATH]; // pre-trim path for inotify; see generic_openat
@@ -1018,7 +1019,11 @@ int generic_renameat(struct fd *src_at, const char *src_raw, struct fd *dst_at, 
     // Linux requires write+exec on both the source and destination parent
     // directories for rename (removing the entry from one, adding it to the
     // other), not just the destination.
-    int err = path_normalize(src_at, src_raw, src, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
+    // ENOENT-first on the SOURCE only: a source that is not there is ENOENT
+    // even from an unwritable parent, while a destination that is not there is
+    // the ordinary case and leaves the permission error standing.
+    int err = path_normalize(src_at, src_raw, src,
+            N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE | N_REMOVE_ENOENT_FIRST);
     if (err < 0)
         return err;
     char dst[MAX_PATH];
@@ -1294,7 +1299,8 @@ int generic_rmdirat(struct fd *at, const char *path_raw) {
     if (dot == 2)
         return _ENOTEMPTY;
     // rmdir does not follow a final symlink: rmdir("symlink-to-dir") is ENOTDIR.
-    int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE);
+    int err = path_normalize(at, path_raw, path,
+            N_SYMLINK_NOFOLLOW | N_PARENT_DIR_WRITE | N_REMOVE_ENOENT_FIRST);
     if (err < 0)
         return err;
     if (contains_mount_point(path))

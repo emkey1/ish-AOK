@@ -32,6 +32,41 @@ int main(int argc, char **argv) {
     test_init(argc, argv);
     alarm(test_watchdog_secs(15));
 
+    // Can we mount at all? Settled FIRST, before either epoll exists, for two
+    // reasons. The parent commits to a 3-second blocking epoll_wait before it
+    // can learn why the child's mount failed, so an unprivileged run reported
+    // the missed edge, the child's failure AND the inner epoll's silence as
+    // three separate failures -- which reads like a nested-epoll regression and
+    // is only ever a missing capability. And probing here means the probe's own
+    // mount/umount cannot leave an edge queued on an epoll that does not exist
+    // yet, so there is nothing to drain afterwards -- draining a LEVEL-triggered
+    // outer epoll never terminates, which is its own trap.
+    //
+    // Probed by trying rather than by testing for uid 0: the CLI harness runs as
+    // root, an ssh session into the app does not, and privilege is not always
+    // spelled uid.
+    {
+        char probe[] = "/tmp/epoll_nested_probe.XXXXXX";
+        if (mkdtemp(probe) == NULL) {
+            perror("mkdtemp probe");
+            return 1;
+        }
+        int mounted = mount("tmpfs", probe, "tmpfs", 0, "") == 0;
+        int why = errno;
+        if (mounted)
+            umount(probe);
+        rmdir(probe);
+        if (!mounted) {
+            if (why == EPERM || why == EACCES) {
+                printf("epoll_nested: SKIP (needs privilege to mount: %s)\n",
+                       strerror(why));
+                return 0;
+            }
+            printf("FAIL: mount(tmpfs) probe -> %s\n", strerror(why));
+            return 1;
+        }
+    }
+
     int mi = open("/proc/self/mountinfo", O_RDONLY | O_CLOEXEC);
     if (mi < 0) {
         perror("open mountinfo");

@@ -41,6 +41,29 @@ static void ck(const char *label, long got, long want) {
     test_logf("  %-54s got=%-8ld want=%ld\n", label, got, want);
 }
 
+// Linux gates /proc/kmsg on CAP_SYSLOG and the write side of /dev/kmsg on the
+// node's 0644 mode, so an unprivileged caller legitimately gets EACCES for both
+// (measured on 6.12). That is the caller's privilege, not the kernel behaviour
+// this file is about, so report it as a skip. Anything else -- including EACCES
+// while actually root -- is still a failure.
+//
+// It matters because the suite does not always run as root: the CLI harness
+// does, an ssh session into the app does not, and an unprivileged run used to
+// report two flat failures here that looked like a kmsg regression.
+static int kmsg_open(const char *path, int flags, const char *label) {
+    int fd = open(path, flags);
+    if (fd >= 0) {
+        ck(label, 1, 1);
+        return fd;
+    }
+    if ((errno == EACCES || errno == EPERM) && geteuid() != 0) {
+        test_logf("  %-54s SKIP (unprivileged: %s)\n", label, strerror(errno));
+        return -1;
+    }
+    ck(label, 0, 1);
+    return -1;
+}
+
 // Read until the fd is caught up, then answer what the NEXT read says. On
 // Linux that is always EAGAIN; a 0 would be the spin this test exists for.
 // Bounded so a kernel that never catches up fails instead of looping.
@@ -118,8 +141,8 @@ int main(int argc, char **argv) {
     // This is the whole reason the node could not simply be created: a daemon
     // reading in a loop would have burned a core on zero-length reads.
     {
-        int fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK);
-        ck("/dev/kmsg opens O_NONBLOCK", fd >= 0, 1);
+        int fd = kmsg_open("/dev/kmsg", O_RDONLY | O_NONBLOCK,
+                           "/dev/kmsg opens O_NONBLOCK");
         if (fd >= 0) {
             ck("  drained read is EAGAIN, never 0", drain_then_read(fd), -EAGAIN);
             struct pollfd p = { .fd = fd, .events = POLLIN };
@@ -129,8 +152,8 @@ int main(int argc, char **argv) {
         }
     }
     {
-        int fd = open("/proc/kmsg", O_RDONLY | O_NONBLOCK);
-        ck("/proc/kmsg opens O_NONBLOCK", fd >= 0, 1);
+        int fd = kmsg_open("/proc/kmsg", O_RDONLY | O_NONBLOCK,
+                           "/proc/kmsg opens O_NONBLOCK");
         if (fd >= 0) {
             // The same check, and the one that caught /proc/kmsg ignoring
             // O_NONBLOCK entirely: its read path could not see the open flags,
@@ -177,8 +200,7 @@ int main(int argc, char **argv) {
     // stores it.
     {
         int rd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK);
-        int wr = open("/dev/kmsg", O_WRONLY);
-        ck("/dev/kmsg opens for writing", wr >= 0, 1);
+        int wr = kmsg_open("/dev/kmsg", O_WRONLY, "/dev/kmsg opens for writing");
         if (rd >= 0 && wr >= 0) {
             char buf[8192];
             while (read(rd, buf, sizeof buf) > 0)

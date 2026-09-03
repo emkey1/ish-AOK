@@ -40,8 +40,18 @@ int main(int argc, char **argv) {
         perror("mkdtemp");
         return 1;
     }
+    // A mount needs privilege. The CLI harness runs as root, an ssh session
+    // into the app does not, and an unprivileged run reported this as a flat
+    // failure that read like a mount regression. Skip only for the privilege
+    // errnos and only when actually unprivileged; anything else still fails.
     if (mount("tmpfs", dir, "tmpfs", 0, "") != 0) {
+        if ((errno == EPERM || errno == EACCES) && geteuid() != 0) {
+            printf("tmpfs_exec: SKIP (needs root to mount: %s)\n", strerror(errno));
+            rmdir(dir);
+            return 0;
+        }
         printf("FAIL: mount(tmpfs) -> %s\n", strerror(errno));
+        rmdir(dir);
         return 1;
     }
 

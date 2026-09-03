@@ -2433,6 +2433,16 @@ static fd_t sock_fd_create(int sock_fd, int domain, int type, int protocol) {
     if (fd == NULL)
         return _ENOMEM;
     fd->stat.mode = S_IFSOCK | 0666;
+    // A socket's inode belongs to whoever created it. adhoc_fd_create zeroes
+    // the whole statbuf, so this was uid 0 -- every socket in the system
+    // looked root-owned, and an unprivileged process could not set the times
+    // on a socket it had made itself: futimens answered EPERM where Linux
+    // succeeds (measured on 6.12, where sockfs and pipefs carry the creator's
+    // uid while the anon_inode family -- eventfd, epoll, timerfd, signalfd --
+    // really is root-owned and really does answer EPERM). fs/pipe.c has always
+    // done this; sockets were simply missed.
+    fd->stat.uid = current->uid;
+    fd->stat.gid = current->gid;
     // fd->type is set by generic_open for path-opened files; a socket() fd
     // never goes through that, so it was left 0 and every S_ISSOCK(fd->type)
     // test in the tree read false for an actual socket -- including the poll
@@ -2517,6 +2527,9 @@ int_t sys_socket(dword_t domain, dword_t type, dword_t protocol) {
         if (fd == NULL)
             return _ENOMEM;
         fd->stat.mode = S_IFSOCK | 0666;
+        // Same ownership as the socket() path above: the creator's, not root's.
+        fd->stat.uid = current->uid;
+        fd->stat.gid = current->gid;
     // fd->type is set by generic_open for path-opened files; a socket() fd
     // never goes through that, so it was left 0 and every S_ISSOCK(fd->type)
     // test in the tree read false for an actual socket -- including the poll

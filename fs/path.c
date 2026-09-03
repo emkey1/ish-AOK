@@ -323,7 +323,7 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
             return stat_err;
         int access_err = access_check(&stat, AC_W | AC_X);
         if (access_err < 0) {
-            if (flags & N_CREATE_EEXIST_FIRST) {
+            if (flags & (N_CREATE_EEXIST_FIRST | N_REMOVE_ENOENT_FIRST)) {
             // Linux looks the final component up BEFORE checking whether the
             // parent may be written: filename_create() returns -EEXIST for a
             // name that is already there, and only vfs_mkdir/vfs_link/etc.
@@ -338,6 +338,19 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
             // Nothing is granted by deferring: the caller's own existence
             // check reports EEXIST, and if the target does NOT exist the
             // permission error below still stands.
+                //
+                // The REMOVE family needs the same lookup for the opposite
+                // reason: Linux's do_unlinkat()/do_rmdir() reject a negative
+                // dentry before may_delete() ever runs, so a name that is not
+                // there is ENOENT and not EACCES. `rm -f` suppresses ENOENT
+                // and nothing else, which is why `rm -f /unwritable/gone`
+                // failed here and succeeds on Linux -- and why one such rm in
+                // a `set -e` script (tests/manual/setup-regressions.sh's cache
+                // store) killed the whole run with no diagnostic.
+                //
+                // fs->stat is an lstat (AT_SYMLINK_NOFOLLOW), so a dangling
+                // symlink still counts as a name that exists and is removable.
+                bool target_exists = false;
                 char out_copy[MAX_PATH];   // find_mount_and_trim_path mutates it
                 strcpy(out_copy, out);
                 struct mount *target_mount = find_mount_and_trim_path(out_copy);
@@ -345,12 +358,15 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
                     struct statbuf target_stat;
                     int target_err = target_mount->fs->stat(target_mount, out_copy, &target_stat);
                     mount_release(target_mount);
-                    if (target_err == 0)
-                        return 0;
+                    target_exists = target_err == 0;
                 }
+                if ((flags & N_CREATE_EEXIST_FIRST) && target_exists)
+                    return 0;           // caller's own check reports EEXIST
+                if ((flags & N_REMOVE_ENOENT_FIRST) && !target_exists)
+                    return _ENOENT;
             }
-            // Either the target does not exist, or this is not a creating
-            // call: the permission error stands.
+            // The target's existence does not rescue this caller: the
+            // permission error stands.
             return access_err;
         }
     }

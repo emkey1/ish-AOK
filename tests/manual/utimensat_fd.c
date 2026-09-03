@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <sys/wait.h>
 #include "test_common.h"
 
 static void check_futimens_ok(const char *label, int fd) {
@@ -62,8 +63,79 @@ static void check_enotdir(const char *label, int r, int err) {
     test_logf("%s: ENOTDIR as expected\n", label);
 }
 
+// A socket's inode belongs to whoever created it, and that only becomes
+// observable as a NON-ROOT caller: futimens with explicit times needs
+// ownership, so a socket wrongly recorded as uid 0 answers EPERM to the very
+// process that made it. Running as root -- which the CLI harness always does
+// -- compares 0 against 0 and cannot see the difference, which is exactly how
+// this survived: it only ever showed up in an unprivileged ssh session on the
+// device. Measured on Linux 6.12: sockfs and pipefs carry the creator's uid
+// (futimens OK), while eventfd/epoll/timerfd/signalfd are genuinely root-owned
+// and genuinely answer EPERM -- so this asserts the split, not just the socket.
+static void check_unprivileged_anon_ownership(void) {
+    if (geteuid() != 0) {
+        test_logf("anon ownership: skipped, already unprivileged\n");
+        return;
+    }
+    fflush(NULL);
+    pid_t c = fork();
+    if (c < 0) {
+        printf("FAIL: fork for unprivileged ownership check: %s\n", strerror(errno));
+        failures_total++;
+        return;
+    }
+    if (c == 0) {
+        unsigned before = failures_total;
+        failures_total = 0;
+        if (setgid(1000) != 0 || setuid(1000) != 0) {
+            printf("FAIL: could not drop privileges: %s\n", strerror(errno));
+            fflush(NULL);
+            _exit(1);
+        }
+        (void) before;
+        int sk = socket(AF_INET, SOCK_STREAM, 0);
+        if (sk < 0) {
+            printf("FAIL: unprivileged socket(): %s\n", strerror(errno));
+            failures_total++;
+        } else {
+            struct stat st;
+            if (fstat(sk, &st) != 0) {
+                printf("FAIL: unprivileged fstat(socket): %s\n", strerror(errno));
+                failures_total++;
+            } else if (st.st_uid != getuid()) {
+                printf("FAIL: socket owned by uid %u, expected %u\n",
+                       (unsigned) st.st_uid, (unsigned) getuid());
+                failures_total++;
+            }
+            check_futimens_ok("socket, unprivileged", sk);
+            close(sk);
+        }
+        int pp[2];
+        if (pipe(pp) == 0) {
+            check_futimens_ok("pipe, unprivileged", pp[0]);
+            close(pp[0]);
+            close(pp[1]);
+        }
+        fflush(NULL);
+        _exit(failures_total > 250 ? 250 : (int) failures_total);
+    }
+    int st;
+    if (waitpid(c, &st, 0) != c) {
+        failures_total++;
+        return;
+    }
+    if (WIFSIGNALED(st)) {
+        printf("FAIL: unprivileged ownership child died on signal %d\n", WTERMSIG(st));
+        failures_total++;
+    } else {
+        failures_total += (unsigned) WEXITSTATUS(st);
+    }
+}
+
 int main(int argc, char **argv) {
     test_init(argc, argv);
+
+    check_unprivileged_anon_ownership();
 
     // Socket fd: the stress-ng --sockabuse crash. futimens on a socket
     // succeeds on Linux (sets the sockfs inode times).

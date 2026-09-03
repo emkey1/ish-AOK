@@ -465,6 +465,85 @@ The lesson is the disagreement rather than either bug: **two predicates that
 answer "is a signal pending?" differently will eventually meet**, and the one
 that interrupts and the one that restarts are exactly the pair that must not.
 
+### `rm -f` on a name that is not there answered EACCES
+
+Found while running the guest suite on the device over ssh, which is the first
+time it had been run as anything other than **uid 0**. The suite died at the
+first cache miss with no diagnostic whatsoever -- 28 lines of build log and
+then nothing. `sh -x` put the last command at `rm -f` inside `cache_store`, a
+best-effort cache write into a root-owned `/AOK/fakefs/regress-cache`; under
+`set -e`, a nonzero `rm -f` ends the script.
+
+`rm -f` on a nonexistent file is not supposed to be able to fail. It failed
+because AOK checked the parent directory's write bit during path normalization,
+*ahead of* looking up the final component -- so a name that was not there came
+back EACCES, and `rm -f` suppresses ENOENT and nothing else.
+
+Linux decides this by ORDER rather than by policy. Resolution happens first, so
+`do_unlinkat()`/`do_rmdir()` reject a negative dentry before `may_delete()` is
+ever consulted. Measured on 6.12, as uid 1000 against a root-owned 0755 parent:
+
+| | Linux | AOK before |
+|---|---|---|
+| `unlink`/`rmdir`/`rename` of a MISSING name | ENOENT | EACCES |
+| `unlink`/`rmdir`/`rename` of a PRESENT name | EACCES | EACCES |
+| `mkdir`/`symlink`/`open O_CREAT` of a MISSING name | EACCES | EACCES |
+| `mkdir`/`symlink` of a PRESENT name | EEXIST | EEXIST |
+
+The create half was already right: `N_CREATE_EEXIST_FIRST` exists precisely
+because `mkdir -p` needs EEXIST to beat EACCES. The remove half is its mirror
+and was simply never written, and the flag's own comment asserted the opposite
+-- "not for unlink/rmdir/rename: there an existing target is the point of the
+call" -- which holds only when the target exists. `N_REMOVE_ENOENT_FIRST` now
+carries the other case, on unlink, rmdir and rename's SOURCE (not its
+destination, where a missing name is the ordinary case and EACCES is right).
+
+### A socket was owned by root, whoever made it
+
+The same device run reported `utimensat_fd` failing on `futimens: Operation not
+permitted` for a socket. That is not a privilege artefact: `adhoc_fd_create`
+zeroes the whole statbuf and the socket paths never set `uid`/`gid`, so every
+socket in the system was recorded as uid 0 -- and `futimens` with explicit times
+requires ownership, so an unprivileged process could not set the times on a
+socket it had created itself.
+
+`fs/pipe.c` has always assigned `current->uid`; sockets were missed. Measured on
+6.12 as uid 1000, and the split is not obvious enough to have guessed:
+
+    socket    fstat_uid=1000  futimens=OK
+    pipe      fstat_uid=1000  futimens=OK
+    eventfd   fstat_uid=0     futimens=EPERM
+    epoll     fstat_uid=0     futimens=EPERM
+    timerfd   fstat_uid=0     futimens=EPERM
+    signalfd  fstat_uid=0     futimens=EPERM
+
+sockfs and pipefs give the inode the creator's uid; the anon_inode family
+shares one root-owned inode and really does answer EPERM. So the fix is exactly
+sockets, and the test now asserts the whole split rather than the one line.
+
+### What actually hid both of these: the harness only ever runs as root
+
+Neither bug is subtle, and both had been reachable for as long as the code has
+existed. They survived because every local leg of the gate runs the CLI as
+**uid 0**, where a parent directory is always writable and an ownership check
+always passes -- the entire question is unreachable. It took an ssh session
+into the app, which lands as uid 1000, to make either observable.
+
+`tests/manual/fs_remove_enoent_order.c` and the new block in `utimensat_fd.c`
+both **drop privileges themselves** rather than relying on how they are invoked,
+so the local gate now covers this class. That is the general lesson and it is
+worth more than either fix: a permission-ordering test that runs as root tests
+nothing, and a suite that only ever runs as root will keep growing this blind
+spot.
+
+Five tests also *failed* rather than skipping when unprivileged (`kmsg_stream`,
+`mountinfo_epollet`, `epoll_nested`, `tmpfs_exec`, plus `utimensat_fd`'s real
+bug). They now skip on EPERM/EACCES and only when actually unprivileged, so a
+non-root run reports honestly instead of five false failures that read like a
+regression.
+
+---
+
 ---
 
 ## Closed in 553

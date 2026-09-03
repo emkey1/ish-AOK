@@ -23,6 +23,15 @@
 #define MAX_SYMLINKS 40
 
 #define N_CREATE_EEXIST_FIRST 16
+// The mirror image, for the operations that REMOVE a name (unlink, rmdir, and
+// rename's SOURCE). Linux looks the final component up before asking
+// may_delete() for permission, so a name that is not there reports ENOENT even
+// when the parent is unwritable -- do_unlinkat() and do_rmdir() both bail on a
+// negative dentry first. Without this, `rm -f /unwritable/nonexistent` answered
+// EACCES where Linux answers success, because rm -f suppresses ENOENT and
+// nothing else. Not for rename's DESTINATION: a missing destination is the
+// ordinary case there, and the permission error is the right answer.
+#define N_REMOVE_ENOENT_FIRST 64
 // Refuse to traverse a symlink anywhere in the path, final component
 // included, answering ELOOP instead of following it. openat2's
 // RESOLVE_NO_SYMLINKS, which exists so a caller can open a path it does not
