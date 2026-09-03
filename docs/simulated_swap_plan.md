@@ -1231,6 +1231,41 @@ the `vm_map` entry count in (f) hits a device ceiling.
 - Four-arch gate on the Mac. Regression guard: with the packer off, today's
   `fp-*.txt` figures must reproduce exactly.
 
+### Phase 1 gate -- **RUN 2026-09-03 on the M4 iPad, PASSED**
+
+Built as `/proc/ish/swap_evict` (commit `6d8a4268d`) and measured on device
+against iSH-AOK 553, 64 MiB region, guest frozen so nothing of its own could
+fault a page back:
+
+| | device |
+|---|---|
+| frames evicted / faulted back | 8214 / 8198 |
+| ledger drop | -67,469,312, and it HOLDS after the barrier releases |
+| `task_vm_info.reusable` | 81 MB |
+| corrupted pages, 3 reader threads | **0** |
+| `madvise` / `mprotect` failures | 0 / 0 |
+
+**The device settled the one thing macOS could not.** On this Mac the pair
+`MADV_FREE_REUSABLE` + `mprotect(PROT_NONE)` drops `phys_footprint` while
+leaving `reusable` at 0, which cannot distinguish a real release from merely
+hiding the pages from the ledger -- and on macOS that distinction has no
+consequence, so it cannot be resolved there at all. On iOS the same pair
+populates `reusable` AND drops the ledger. The pages are genuinely handed
+back with the PROT_NONE guard rail still in place, so the memory saving and
+the stale-pointer protection are not in tension. Since iOS derives remaining
+headroom as limit minus footprint, that drop is 67 MB of real jetsam headroom.
+
+Diagnostic knobs `ISH_SWAP_NO_MADVISE` and `ISH_SWAP_NO_MPROTECT` (host
+environment, so the Xcode scheme on a device) separate the two calls if this
+ever needs re-establishing.
+
+Hypotheses eliminated on the way to that, recorded so nobody repeats them:
+`MAP_NORESERVE`, the `fd=0` anonymous mmap, guest faults undoing the release,
+and an uninitialised `task_info` struct with an unchecked reply count. That
+last was a real bug in the measurement helper, fixed, and not the cause.
+
+The original specification of this gate follows, for the record.
+
 ### Phase 1 gate: the CLI prototype (1 week, scratch branch)
 
 `pt_swap` bytes; the `mem_ptr_nofault` test; a `swap_evict_frame`/`swap_fault`
