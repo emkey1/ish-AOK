@@ -480,7 +480,6 @@ DirectMap1G:           0 kB
     show_kb(buf, "MemAvailable:   ", usage.available);
     show_kb(buf, "Buffers:        ", 0);
     show_kb(buf, "Cached:         ", usage.cached);
-    show_kb(buf, "MemShared:      ", usage.free);
     show_kb(buf, "Active:         ", usage.active);
     show_kb(buf, "Inactive:       ", usage.inactive);
     show_kb(buf, "SwapCached:     ", 0);
@@ -494,10 +493,39 @@ DirectMap1G:           0 kB
     show_kb(buf, "AnonPages:      ", page_totals.anon_bytes);
     show_kb(buf, "Mapped:         ", page_totals.mapped_bytes);
     show_kb(buf, "Slab:           ", 0);
-    // Stuff that doesn't map elsehwere
-    show_kb(buf, "Swapins:        ", usage.swapins);
-    show_kb(buf, "Swapouts:       ", usage.swapouts);
-    show_kb(buf, "WireCount:      ", usage.wirecount);
+    // Four keys used to follow, three of them under a comment calling them
+    // "stuff that doesn't map elsewhere": MemShared, then Swapins, Swapouts and
+    // WireCount. None
+    // of them is a key /proc/meminfo has. MemShared was a 2.4-era key that
+    // Linux stopped emitting in 2.6, and the other three have never existed on
+    // any Linux; a guest asking what memory it has cannot be helped by a key it
+    // has no parser for.
+    //
+    // Worse, three of them were not this guest's numbers at all. Swapins,
+    // Swapouts and WireCount come from host_statistics64(HOST_VM_INFO64) in
+    // platform/darwin.c's get_mem_usage, so they describe the whole Mac -- and
+    // the first two are lifetime counters, not a current state. Measured in an
+    // arm64 Alpine guest on this machine: "Swapins: 2722688 kB" and "Swapouts:
+    // 10541184 kB" in a kernel whose very next lines say "SwapTotal: 0 kB" and
+    // "SwapFree: 0 kB". That pair is not merely useless, it is a machine that
+    // cannot exist: ten gigabytes paged out of a system with no swap. AOK is
+    // one app process with a jetsam budget; whole-machine figures do not belong
+    // in its guest's /proc at all, and none of them will until AOK does its own
+    // paging and can count it (docs/simulated_swap_plan.md).
+    //
+    // MemShared had a second defect on top of that one: its value was
+    // usage.free, a copy of the MemFree line four rows up rather than any
+    // shared-memory figure. The honest analog is Shmem, which is already
+    // printed above from AOK's own P_SHARED page count -- and Shmem is where
+    // busybox top's "shrd" column falls back to once MemShared is gone, which
+    // is what it reads on a real Linux. Before this change that column showed
+    // the free-memory figure.
+    //
+    // Deleting a key is safe in a way that changing one is not: every consumer
+    // checked parses the keys it finds and leaves the rest at zero -- procps-ng
+    // free(1) and busybox free/top all do, and "not reported" is a state Linux
+    // itself produces for every optional key (Shmem, KReclaimable and Percpu
+    // are all absent on kernels or configs that lack them).
     return 0;
 }
 
@@ -528,8 +556,24 @@ static int proc_show_vmstat(struct proc_entry *UNUSED(entry), struct proc_data *
             (atomic_load_explicit(&io_disk_read_bytes, memory_order_relaxed) / 1024));
     proc_printf(buf, "pgpgout %llu\n", (unsigned long long)
             (atomic_load_explicit(&io_disk_write_bytes, memory_order_relaxed) / 1024));
-    proc_printf(buf, "pswpin %"PRIu64"\n", usage.swapins / 4096);
-    proc_printf(buf, "pswpout %"PRIu64"\n", usage.swapouts / 4096);
+    // pswpin/pswpout used to be printed here as usage.swapins / 4096 and
+    // usage.swapouts / 4096. Both halves of that were wrong. The counters are
+    // XNU's whole-machine lifetime page-in/page-out totals (see the meminfo
+    // comment above and platform/darwin.c), so they describe the Mac and not
+    // the guest, and the divisor was the GUEST page size applied to a byte
+    // count derived from the HOST's 16 KiB pages, so even the unit was
+    // invented.
+    //
+    // vmstat(1) turns the delta between two reads of these into its si/so
+    // columns, which is how a guest that has never paged anything came to
+    // report paging. Measured with procps-ng vmstat in the glibc Devuan root:
+    // the first row read "si 2722752  so 10541184" -- 2.7 GB/s in and 10.5 GB/s
+    // out -- on the same screen as free(1)'s "Swap: 0 0 0". An absent key
+    // reads as 0 to procps, which parses what it finds into a hash and objects
+    // only to a wholly empty file (see the comment at the top of this
+    // function), and 0 is the honest figure for a kernel with no swap.
+    // If the pager of docs/simulated_swap_plan.md is ever built, these come
+    // back fed by AOK's own eviction counters.
     proc_printf(buf, "pgfault 0\n");
     proc_printf(buf, "pgmajfault 0\n");
     return 0;
