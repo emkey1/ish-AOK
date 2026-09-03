@@ -56,8 +56,8 @@ that. That is what swap does on a real system too.
 Effort is **13-18 engineer-weeks** to a default-on, documented feature, up from
 the 10-14 the synthesis estimated, because the three repairs, the exact-ownership
 fix, the ledger-verification rule and two shipping bugs found along the way are
-all new work. The first day is still a device probe that can kill the whole
-family, and it now has to be run without a debugger attached, because the release
+all new work. The first day was a device probe that could have killed the whole
+family, and on 2026-09-03 it PASSED (see section 7, Day 1), and it now has to be run without a debugger attached, because the release
 primitive silently does nothing while Xcode or Instruments holds a memory
 snapshot of the region.
 
@@ -913,9 +913,17 @@ app underneath, invisibly, exactly as a hypervisor would.
 
 ### 3.13 Settings
 
-`UserPreferences`: `shouldEnableSwap` (`enable_swap`, default off until the device
-week) and `swapSizeMB` (`swap_size_mb`, default min(device RAM, 25% of free disk,
-4 GiB)), with `registerDefaults` entries, friendly names in the
+**Swap ships OFF and stays off unless the user turns it on.** That is a product
+decision taken on 2026-09-03, not a staging step: paging guest memory writes to
+the device's flash and consumes container space, so it is not a thing to enable
+on someone's behalf. The size is the user's choice too, offered beside the
+toggle rather than derived silently from device RAM or free disk. Section 3.12's
+"swap disabled" column is therefore the DEFAULT state of the guest surface, not
+a fallback, and it has to stay byte-identical to today.
+
+`UserPreferences`: `shouldEnableSwap` (`enable_swap`, **default off**) and
+`swapSizeMB` (`swap_size_mb`, no silent default -- the UI asks), with
+`registerDefaults` entries, friendly names in the
 `/proc/ish/defaults` mapping, and KVO observers into kernel globals following the
 `doEnableMulticore` pattern; effective at next launch, scriptable from the guest.
 Env for CLI and Xcode runs only: `ISH_GUEST_SWAP_MB`, `ISH_GUEST_MEM_BUDGET_MB`,
@@ -1135,7 +1143,41 @@ because timer coalescing makes a 2 us sleep cost 4-6 us on XNU.
 
 Effort assumes one engineer who knows the memory core.
 
-### Day 1: the device probe (1 day; needs `ssh m4pt` and an Xcode build)
+### Day 1: the device probe -- **RUN 2026-09-03, PASSED**
+
+Built as `/proc/ish/mem_release_probe` (commit `65bda10bf`, the engine in
+`platform/darwin.c`) and run on the M4 iPad against iSH-AOK 553. **The decisive
+platform assumption of this whole document is no longer unverified.**
+
+| case | device result |
+|---|---|
+| `MADV_FREE_REUSABLE`, 4096 frames | footprint -63,537,152 -- MOVED |
+| `mmap(MAP_FIXED)` fallback | -67,141,680 -- MOVED |
+| `REUSABLE` + `mprotect(PROT_NONE)`, 2048 alternating | **-33,554,432 byte-exact** -- MOVED, and the drop held |
+| dirtied `MAP_PRIVATE` file control | no-op until `mprotect`, as designed |
+| `vm_map` entries | 2805 -> 6900 (+4095) -> 2805, fully coalesced on restore |
+| evict / restore cost | 2.53 us / 0.93 us per frame |
+| app's real jetsam ceiling | 6,442,450,944 bytes, floor 201,326,592 |
+
+Three of section 8's open risks close on that run. **Risk 1** (does the ledger
+move on a device) is answered yes for both primitives. **Risk 3** (the unknown
+iOS `vm_map` entry ceiling, which could have made the mandatory `PROT_NONE`
+companion unusable) was not hit at 4095 extra entries and they were all
+recovered. And `os_proc_available_memory()` was observed to move, which section
+4.1 recorded as never having been seen anywhere, so **risk 2**'s first half is
+answered too.
+
+One caveat that does not change the verdict: the probe reported a debugger
+attached. That state can only cause FALSE NEGATIVES -- a shadowed VM object
+makes `REUSABLE` a silent no-op -- so it cannot manufacture a MOVED. It likely
+explains why case (a) released 94.7% of its region while the `mprotect` case was
+byte-exact. Re-run detached for a clean figure.
+
+What the probe still does not answer is listed under "what it cannot answer" in
+its own output: the two-minute `st_blocks` watch, a forced jetsam to read the
+reason strings, and `limit_bytes_remaining` while backgrounded.
+
+The original specification of this probe follows, for the record.
 
 An env-gated change of about 60 lines plus a guest program. Touch 2 GiB; print
 `os_proc_available_memory()` and `phys_footprint` from a debug `/proc/ish` file;
@@ -1251,8 +1293,11 @@ background/foreground cycles during eviction; a jetsam-report audit after a
 deliberate over-commit; `make -j` of a mid-size project and a JVM with a 3 GiB heap
 on the 16 GB iPad and on a small-RAM phone. Measure cold swap-in latency, barrier
 cost at realistic thread counts, `vm_map` entry ceilings, and the entitled limit at
-launch. **[new]** Measure swap-file extent count after the soak. Flip `enable_swap`
-on by default only if the numbers hold.
+launch. **[new]** Measure swap-file extent count after the soak.
+**Do NOT flip `enable_swap` on by default** -- an earlier draft of this plan said
+to if the numbers held, and that is superseded by the decision recorded in 3.13.
+What phase 3 decides is whether the feature is fit to OFFER, not whether to
+enable it for people.
 
 ### Phase 4: multi-owner eviction (2 weeks)
 
