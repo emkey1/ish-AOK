@@ -129,6 +129,18 @@ static void mem_write_unlock_with_pokes(struct mem *mem) {
     mem_close_deferred_fds(mem);
 }
 
+// The Phase 1 gate prototype's evictor needs this barrier from emu/memory.c,
+// which cannot see a static in this file. Section 1.10 of
+// docs/simulated_swap_plan.md also wants a task-less caller supported, for the
+// kswapd the pager core will have; this prototype is driven from a /proc write
+// on a guest thread, so `current` is set and that part is not needed yet.
+void mem_write_lock_pokes_external(struct mem *mem) {
+    mem_write_lock_with_pokes(mem);
+}
+void mem_write_unlock_pokes_external(struct mem *mem) {
+    mem_write_unlock_with_pokes(mem);
+}
+
 static bool amd64_vm_failure_trace_enabled(void) {
     return current != NULL && current->abi == GUEST_ABI_AMD64;
 }

@@ -11,6 +11,9 @@
 #include "debug.h"
 #include "kernel/errno.h"
 #include "kernel/signal.h"
+#if __APPLE__
+#include <mach/mach.h>
+#endif
 #include "emu/memory.h"
 #include "fs/fd.h"
 #include "emu/tlb.h"
@@ -1855,6 +1858,18 @@ static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type) {
     struct pt_entry *entry = mem_pt(mem, PAGE(addr));
     if (entry == NULL)
         return NULL;
+    // An evicted page reads as ABSENT to everything, and this one test is what
+    // makes that true for every engine at once: the JIT and interpreters reach
+    // here through tlb_handle_miss -> mmu_translate, the syscall side through
+    // mem_ptr, and the fault handler through mem_ptr_fault. There is no second
+    // place to teach.
+    //
+    // Deliberately BEFORE the protection tests below. An evicted frame is
+    // mprotect(PROT_NONE) on the host, so a read that got past this would take
+    // a host fault in kernel C code, where the JIT's crash recovery is not
+    // armed and nothing turns it into a guest signal.
+    if (atomic_load_explicit(&entry->swap_state, memory_order_acquire) != PT_RESIDENT)
+        return NULL;
     // PROT_NONE (no access bits set) must fault on EVERY access, including
     // reads, even when the page still has live host backing -- e.g. an RW page
     // later mprotect'd to PROT_NONE keeps its data pointer but must no longer be
@@ -1871,6 +1886,17 @@ static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type) {
 }
 
 void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
+    // Bring an evicted frame back before anything else looks at the entry.
+    // Ahead of the old_ptr snapshot below deliberately: that snapshot feeds an
+    // assert at the end of this function, and taking it while the page is still
+    // evicted would compare a NULL from before the fault against a real pointer
+    // from after it.
+    {
+        struct pt_entry *swapped = mem_pt(mem, PAGE(addr));
+        if (swapped != NULL &&
+            atomic_load_explicit(&swapped->swap_state, memory_order_acquire) != PT_RESIDENT)
+            swap_fault_page(mem, PAGE(addr));   // NULL on failure is handled below
+    }
     void *old_ptr = mem_ptr_nofault(mem, addr, type); // just for an assert
 
     page_t page = PAGE(addr);
@@ -2004,6 +2030,19 @@ done_write_fault:
 
 void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
     page_t page = PAGE(addr);
+    // An evicted page must be faulted back here too, not only in mem_ptr: this
+    // is the path handle_page_fault_interrupt takes, which is how a JIT or
+    // interpreter access arrives. Done before the write lock because
+    // swap_fault_page expects a reader and upgrades; the re-check inside it
+    // covers another thread having already brought the frame back.
+    mem_read_lock_quiesce_aware(mem);
+    struct pt_entry *swapped = mem_pt(mem, page);
+    bool needs_swap_in = swapped != NULL &&
+        atomic_load_explicit(&swapped->swap_state, memory_order_acquire) != PT_RESIDENT;
+    if (needs_swap_in)
+        swap_fault_page(mem, page);
+    mem_read_unlock_quiesce_aware(mem);
+
     write_lock(&mem->lock);
 
     struct pt_entry *entry = mem_pt(mem, page);
@@ -2246,4 +2285,339 @@ int mem_ref_cnt_get(struct mem *mem) {
     if((cnt < 0) || ( cnt > 1000)) // Stupid kluge while I fix this brain damage
         cnt = 0;
     return cnt;
+}
+
+// ---- Phase 1 gate prototype: evict a guest frame and fault it back ---------
+//
+// See the header for what this is and, more importantly, what it is not. The
+// one property it exists to establish is that an evicted frame FAULTS on a
+// stale access rather than returning the bytes that used to be there. That is
+// the failure the C2 refutation of this design was about, and on Apple it is
+// completely silent without help: MADV_FREE_REUSABLE leaves the frame mapped,
+// readable and byte-identical, so a missed pointer holder reads plausible old
+// data and a write is silently reverted by the swap-in. So the release is
+// REUSABLE *followed by mprotect(PROT_NONE)*, in production and not only under
+// a debug knob, which the day-1 device probe measured as both holding the
+// footprint drop and costing 2.53 us per frame.
+
+static lock_t swap_lock = LOCK_INITIALIZER;
+static int swap_fd = -1;              // unlinked temp file; opened on first use
+static uint32_t swap_next_slot;
+static unsigned long swap_stat_evicted, swap_stat_faulted;
+static unsigned long swap_stat_out, swap_stat_in;
+static unsigned long swap_stat_adv_fail, swap_stat_prot_fail;
+static unsigned long swap_stat_ledger_refused;
+static int swap_stat_adv_errno, swap_stat_prot_errno;
+unsigned long swap_prototype_ledger_refused(void) { return swap_stat_ledger_refused; }
+void swap_prototype_failures(unsigned long *adv, unsigned long *prot, int *adv_e, int *prot_e) {
+    if (adv) *adv = swap_stat_adv_fail;
+    if (prot) *prot = swap_stat_prot_fail;
+    if (adv_e) *adv_e = swap_stat_adv_errno;
+    if (prot_e) *prot_e = swap_stat_prot_errno;
+}
+
+// A frame is one HOST page: the unit the host will actually release. On Apple
+// silicon that is 16 KiB, so four guest pages, which is why the eviction below
+// only ever considers four consecutive guest pages at a time.
+static size_t swap_frame_size(void) {
+    return real_page_size > PAGE_SIZE ? real_page_size : PAGE_SIZE;
+}
+static size_t swap_pages_per_frame(void) {
+    return swap_frame_size() / PAGE_SIZE;
+}
+
+// fs/real.h is not included at the top of this file and pulling the whole
+// filesystem header in for one prototype would be the wrong trade, so declare
+// the one thing needed. host_unlinked_tmpfd creates a file in TMPDIR and
+// unlinks it immediately, which is the shape the pager wants anyway: the swap
+// file must never be visible in the container, backed up, or reachable through
+// the File Provider (section 3.11).
+int host_unlinked_tmpfd(void);
+
+static int swap_file(void) {
+    if (swap_fd < 0) {
+        swap_fd = host_unlinked_tmpfd();
+        if (swap_fd < 0)
+            return swap_fd;
+    }
+    return swap_fd;
+}
+
+// Is this guest page the base of a frame this prototype may evict?
+//
+// The restrictions are deliberately narrow, because a gate that evicts more
+// than it can reason about proves less. Anonymous private only; the whole frame
+// must be four consecutive guest pages of ONE struct data at consecutive
+// offsets; and the mapping must be unshared, which is tested as refcount
+// equalling the mapping's own page count -- refcount counts pt_entries, so an
+// unshared N-page mapping reads N and a forked one reads 2N. Section 3.8 does
+// this properly with owner records; this is the cheap version that is correct
+// for anything that never forked, which is what the gate test is.
+static bool swap_frame_eligible(struct mem *mem, page_t base, struct data **data_out,
+                                size_t *offset_out) {
+    size_t per = swap_pages_per_frame();
+    struct data *data = NULL;
+    size_t first_offset = 0;
+    for (size_t i = 0; i < per; i++) {
+        struct pt_entry *pt = mem_pt(mem, base + i);
+        if (pt == NULL || pt->data == NULL || pt->data->data == NULL)
+            return false;
+        if (pt->data->data == vdso_data || pt->data->fd != NULL)
+            return false;
+        if (!(pt->flags & P_ANONYMOUS) || (pt->flags & P_SHARED) || (pt->flags & P_COW))
+            return false;
+        if (atomic_load_explicit(&pt->swap_state, memory_order_relaxed) != PT_RESIDENT)
+            return false;
+        if (i == 0) {
+            data = pt->data;
+            first_offset = pt->offset;
+            // The frame must sit on a host-page boundary inside the mapping, or
+            // releasing it would take bytes that belong to a neighbour.
+            if ((((uintptr_t) data->data + first_offset) & (swap_frame_size() - 1)) != 0)
+                return false;
+            if (first_offset + swap_frame_size() > data->size)
+                return false;
+            if (data->refcount != data->size / PAGE_SIZE)
+                return false;   // shared with another address space
+        } else {
+            if (pt->data != data || pt->offset != first_offset + i * PAGE_SIZE)
+                return false;
+        }
+    }
+    *data_out = data;
+    *offset_out = first_offset;
+    return true;
+}
+
+// Evict one frame. Everything happens under the caller's write lock, including
+// the write to the swap file. The shipping design (section 2.4) does the I/O
+// outside the barrier, which it can because the entries already read as absent
+// by then; doing it inside is slower and obviously correct, and correctness is
+// what the gate is measuring.
+static bool swap_evict_frame(struct mem *mem, page_t base, struct data *data, size_t offset) {
+    int fd = swap_file();
+    if (fd < 0)
+        return false;
+    size_t frame = swap_frame_size();
+    char *host = (char *) data->data + offset;
+
+    uint32_t slot;
+    lock(&swap_lock, 0);
+    slot = swap_next_slot++;
+    unlock(&swap_lock);
+
+    off_t at = (off_t) slot * (off_t) frame;
+    size_t done = 0;
+    while (done < frame) {
+        ssize_t n = pwrite(fd, host + done, frame - done, at + (off_t) done);
+        if (n <= 0)
+            return false;      // slot is simply abandoned; this is a prototype
+        done += (size_t) n;
+    }
+
+    for (size_t i = 0; i < swap_pages_per_frame(); i++) {
+        struct pt_entry *pt = mem_pt(mem, base + i);
+        pt->swap_slot = slot;
+        // Release order: publish SWAPPED last, so no reader can observe a slot
+        // it is not yet allowed to use.
+        atomic_store_explicit(&pt->swap_state, PT_SWAPPED, memory_order_release);
+    }
+    mem_changed(mem);
+
+    // Now give the host its page back, and make a stale pointer FAULT. Both
+    // calls, in this order: REUSABLE is what moves the ledger, PROT_NONE is
+    // what turns a missed pointer holder into a SIGBUS at the guilty
+    // instruction instead of silent corruption. mprotect first would be EPERM.
+    //
+    // MEASURED, and it is the reason the knobs above exist. Run with only the
+    // madvise and task_vm_info.reusable rises by exactly the region size
+    // (67108864 for a 64 MiB region). Run with both, as production does, and
+    // reusable reads 0 while phys_footprint drops by the same amount either
+    // way. So the PROT_NONE is not free: it takes the pages back out of the
+    // reusable state that madvise just put them in.
+    //
+    // That leaves a question this prototype cannot settle on macOS, where
+    // phys_footprint has no consequence: does the pair still let the kernel
+    // RECLAIM the pages, or does it only stop the ledger counting them? The
+    // two are indistinguishable here and are very much not on iOS, where that
+    // ledger is what jetsam kills on. The day-1 device probe measured the pair
+    // releasing byte-exact and returning every vm_map entry on restore, which
+    // says the pair is fine there -- but that probe restored immediately, so it
+    // never asked whether the pages stay reclaimable while held. Settle it on
+    // the device with ISH_SWAP_NO_MPROTECT=1 as the control.
+    // Diagnostic knobs: which of the two calls actually releases anything?
+    // ISH_SWAP_NO_MADVISE=1 leaves only the mprotect, ISH_SWAP_NO_MPROTECT=1
+    // leaves only the madvise. A release that only moves the ledger under
+    // PROT_NONE, with the `reusable` counter never rising, is not a release at
+    // all -- the pages are still resident and the ledger is just not counting
+    // protected ones.
+    static int no_madvise = -1, no_mprotect = -1;
+    if (no_madvise < 0) {
+        const char *a = getenv("ISH_SWAP_NO_MADVISE");
+        const char *m = getenv("ISH_SWAP_NO_MPROTECT");
+        no_madvise = (a != NULL && a[0] == '1') ? 1 : 0;
+        no_mprotect = (m != NULL && m[0] == '1') ? 1 : 0;
+    }
+    int adv = no_madvise ? 0 : madvise(host, frame, MADV_FREE_REUSABLE);
+    int adv_errno = adv == 0 ? 0 : errno;
+    int prot = no_mprotect ? 0 : mprotect(host, frame, PROT_NONE);
+    int prot_errno = prot == 0 ? 0 : errno;
+    if (adv != 0 && swap_stat_adv_fail == 0)
+        swap_stat_adv_errno = adv_errno;
+    if (prot != 0 && swap_stat_prot_fail == 0)
+        swap_stat_prot_errno = prot_errno;
+    if (adv != 0) swap_stat_adv_fail++;
+    if (prot != 0) swap_stat_prot_fail++;
+
+    swap_stat_evicted++;
+    swap_stat_out += frame;
+    return true;
+}
+
+// Prototype diagnostic: the ledger, read the same way the day-1 probe reads it.
+// Measured INSIDE the barrier and around the release loop, because measuring it
+// from outside cannot tell "the release did nothing" apart from "something
+// faulted it straight back".
+static unsigned long long swap_footprint_now(void) {
+#if __APPLE__
+    // Zeroed, and the returned count checked, both for the reason
+    // platform/darwin.c's read_host_mem() spells out: phys_footprint arrived in
+    // revision 1 of this struct, a kernel older than the SDK fills fewer fields
+    // and says so in count, and the rest is then whatever the caller left on
+    // the stack. The first version of this helper did neither and produced a
+    // measurement that disagreed with footprint(1), vmmap and ps by 5x while
+    // looking entirely plausible.
+    task_vm_info_data_t info = {};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &info, &count) != KERN_SUCCESS)
+        return 0;
+    if (count < TASK_VM_INFO_REV1_COUNT)
+        return 0;   // no phys_footprint in this reply; 0 means "did not measure"
+    return info.phys_footprint;
+#else
+    return 0;
+#endif
+}
+static unsigned long long swap_fp_before, swap_fp_after, swap_fp_post;
+unsigned long long swap_footprint_live(void) { return swap_footprint_now(); }
+// The other ledger fields, so a disagreement with an external tool can be
+// attributed to a specific one rather than argued about.
+void swap_footprint_detail(unsigned long long *internal, unsigned long long *resident,
+                           unsigned long long *reusable, unsigned long long *compressed) {
+#if __APPLE__
+    task_vm_info_data_t i = {};
+    mach_msg_type_number_t c = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &i, &c) == KERN_SUCCESS &&
+        c >= TASK_VM_INFO_REV1_COUNT) {
+        if (internal) *internal = i.internal;
+        if (resident) *resident = i.resident_size;
+        if (reusable) *reusable = i.reusable;
+        if (compressed) *compressed = i.compressed;
+        return;
+    }
+#endif
+    if (internal) *internal = 0;
+    if (resident) *resident = 0;
+    if (reusable) *reusable = 0;
+    if (compressed) *compressed = 0;
+}
+void swap_prototype_ledger(unsigned long long *before, unsigned long long *after,
+                           unsigned long long *post) {
+    if (before) *before = swap_fp_before;
+    if (after) *after = swap_fp_after;
+    if (post) *post = swap_fp_post;
+}
+
+long swap_evict_mem(struct mem *mem) {
+    if (mem == NULL)
+        return _EINVAL;
+    size_t per = swap_pages_per_frame();
+    long released = 0;
+
+    mem_write_lock_pokes_external(mem);
+    swap_fp_before = swap_footprint_now();
+    for (page_t page = 0; page + per <= mem->page_limit; ) {
+        struct data *data;
+        size_t offset;
+        if (swap_frame_eligible(mem, page, &data, &offset) &&
+            swap_evict_frame(mem, page, data, offset)) {
+            released += (long) swap_frame_size();
+            page += per;
+        } else {
+            page++;
+        }
+    }
+    swap_fp_after = swap_footprint_now();
+    // Trust the ledger, not the return codes. Both calls above can report
+    // success and release nothing -- MADV_FREE_REUSABLE does exactly that on a
+    // copy-on-write shared or shadowed VM object, which is the failure mode
+    // section 4.1 of the plan warns about and which an attached debugger
+    // induces. A release that did not move the ledger is a release that did not
+    // happen, and the caller has to be able to see that.
+    if (swap_fp_before != 0 && swap_fp_after != 0 && released > 0) {
+        long long moved = (long long) swap_fp_before - (long long) swap_fp_after;
+        // Under a tenth of what was released is not a rounding difference.
+        if (moved < released / 10)
+            swap_stat_ledger_refused++;
+    }
+    mem_write_unlock_pokes_external(mem);
+    // Third sample, after the barrier is gone. If the drop is visible at
+    // swap_fp_after but not here, the undo is something the release path does,
+    // not a guest fault -- which is a different bug entirely.
+    swap_fp_post = swap_footprint_now();
+    return released;
+}
+
+int swap_fault_page(struct mem *mem, page_t page) {
+    // Called with the read lock held. Upgrade, because bringing a frame back
+    // changes host protections and the page table, then drop back to a reader
+    // the way every other fault path here does.
+    read_to_write_lock(&mem->lock);
+    int err = 0;
+    struct pt_entry *pt = mem_pt(mem, page);
+    if (pt != NULL &&
+        atomic_load_explicit(&pt->swap_state, memory_order_acquire) == PT_SWAPPED) {
+        struct data *data = pt->data;
+        size_t frame = swap_frame_size();
+        size_t offset = pt->offset & ~(frame - 1);
+        char *host = (char *) data->data + offset;
+        uint32_t slot = pt->swap_slot;
+
+        // Reverse of the eviction, in reverse order: make it writable, tell the
+        // host we want the page back, then refill it.
+        if (mprotect(host, frame, PROT_READ | PROT_WRITE) != 0) {
+            err = _EIO;
+        } else {
+            madvise(host, frame, MADV_FREE_REUSE);
+            off_t at = (off_t) slot * (off_t) frame;
+            size_t done = 0;
+            while (done < frame) {
+                ssize_t n = pread(swap_fd, host + done, frame - done, at + (off_t) done);
+                if (n <= 0) { err = _EIO; break; }
+                done += (size_t) n;
+            }
+        }
+        if (err == 0) {
+            // Publish every page of the frame, not just the faulting one: they
+            // were evicted together and their bytes are all back.
+            page_t base = page - (page % swap_pages_per_frame());
+            for (size_t i = 0; i < swap_pages_per_frame(); i++) {
+                struct pt_entry *e = mem_pt(mem, base + i);
+                if (e != NULL && e->data == data)
+                    atomic_store_explicit(&e->swap_state, PT_RESIDENT, memory_order_release);
+            }
+            swap_stat_faulted++;
+            swap_stat_in += frame;
+        }
+    }
+    write_to_read_lock(&mem->lock);
+    return err;
+}
+
+void swap_prototype_stats(unsigned long *evicted_frames, unsigned long *faulted_frames,
+                          unsigned long *bytes_out, unsigned long *bytes_in) {
+    if (evicted_frames) *evicted_frames = swap_stat_evicted;
+    if (faulted_frames) *faulted_frames = swap_stat_faulted;
+    if (bytes_out) *bytes_out = swap_stat_out;
+    if (bytes_in) *bytes_in = swap_stat_in;
 }

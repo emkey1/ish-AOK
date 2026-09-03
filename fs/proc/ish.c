@@ -4,6 +4,10 @@
 #include "jit/jit.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
+// For the Phase 1 gate prototype's swap_evict control: pid_get_task and
+// pids_lock come from kernel/calls.h, the address space itself from emu/memory.h.
+#include "kernel/calls.h"
+#include "emu/memory.h"
 #include "platform/platform.h"
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -128,6 +132,84 @@ static int proc_ish_show_roots(struct proc_entry *UNUSED(entry), struct proc_dat
     proc_printf(buf, "%s", status);
     free(status);
     return 0;
+}
+
+// ---- Phase 1 gate prototype: drive eviction by hand ------------------------
+//
+// docs/simulated_swap_plan.md section 7 gives the gate a "/proc/ish control
+// that evicts every eligible frame of a pid", so the prototype can be measured
+// without an aging clock or a kswapd deciding for it. Writing a pid evicts;
+// reading reports what has happened. Nothing here runs on its own, which is
+// also the shipping default: swap is opt-in from Settings.
+static int proc_ish_show_swap_evict(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    unsigned long frames_out, frames_in, bytes_out, bytes_in;
+    swap_prototype_stats(&frames_out, &frames_in, &bytes_out, &bytes_in);
+    proc_printf(buf, "Phase 1 gate prototype -- docs/simulated_swap_plan.md section 7\n");
+    proc_printf(buf, "This is not the pager: no aging, no kswapd, no guest-visible swap.\n");
+    proc_printf(buf, "\n  echo <pid> > /proc/ish/swap_evict   # evict every eligible frame of that process\n\n");
+    proc_printf(buf, "frames_evicted  %lu\n", frames_out);
+    proc_printf(buf, "frames_faulted  %lu\n", frames_in);
+    proc_printf(buf, "bytes_out       %lu\n", bytes_out);
+    proc_printf(buf, "bytes_in        %lu\n", bytes_in);
+    unsigned long adv_fail, prot_fail; int adv_e, prot_e;
+    swap_prototype_failures(&adv_fail, &prot_fail, &adv_e, &prot_e);
+    proc_printf(buf, "madvise_fail    %lu (first errno %d)\n", adv_fail, adv_e);
+    proc_printf(buf, "mprotect_fail   %lu (first errno %d)\n", prot_fail, prot_e);
+    unsigned long long fp_b, fp_a, fp_p;
+    swap_prototype_ledger(&fp_b, &fp_a, &fp_p);
+    proc_printf(buf, "footprint_before %llu\n", fp_b);
+    proc_printf(buf, "footprint_after  %llu\n", fp_a);
+    proc_printf(buf, "ledger_delta     %lld  (inside the barrier)\n", (long long)(fp_a - fp_b));
+    proc_printf(buf, "ledger_post      %lld  (after the barrier released)\n", (long long)(fp_p - fp_b));
+    // Sampled NOW, at read time, not stored at eviction time: this is what says
+    // whether the drop actually persists, measured the same way both times.
+    unsigned long long live = swap_footprint_live();
+    proc_printf(buf, "footprint_live   %llu  (delta vs before %lld)\n",
+                live, (long long)(live - fp_b));
+    unsigned long long in_, res_, reu_, comp_;
+    swap_footprint_detail(&in_, &res_, &reu_, &comp_);
+    proc_printf(buf, "  internal %llu  resident %llu  reusable %llu  compressed %llu\n",
+                in_, res_, reu_, comp_);
+    proc_printf(buf, "host_pid         %d  (the process these numbers describe)\n", (int) getpid());
+    proc_printf(buf, "ledger_refused   %lu  (evictions where the ledger did not move)\n",
+                swap_prototype_ledger_refused());
+    return 0;
+}
+
+static int proc_ish_update_swap_evict(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    if (data->size == 0 || data->size > 32)
+        return _EINVAL;
+    char text[33];
+    memcpy(text, data->data, data->size);
+    text[data->size] = '\0';
+    // Same embedded-NUL rule as proc_ish_update_roots: refuse rather than act
+    // on half a value.
+    if (strlen(text) != data->size)
+        return _EINVAL;
+    char *end = NULL;
+    long want = strtol(text, &end, 10);
+    while (end != NULL && (*end == '\n' || *end == ' '))
+        end++;
+    if (end == NULL || *end != '\0' || want <= 0)
+        return _EINVAL;
+
+    // Hold the task only long enough to pin its address space. Evicting walks
+    // the whole page table under the barrier, and doing that while holding
+    // pids_lock would block every fork in the system behind it.
+    lock(&pids_lock, 0);
+    struct task *task = pid_get_task((dword_t) want);
+    struct mm *mm = NULL;
+    if (task != NULL && task->mm != NULL) {
+        mm = task->mm;
+        mm_retain(mm);
+    }
+    unlock(&pids_lock);
+    if (mm == NULL)
+        return _ESRCH;
+
+    long released = swap_evict_mem(&mm->mem);
+    mm_release(mm);
+    return released < 0 ? (int) released : 0;
 }
 
 static int proc_ish_update_roots(struct proc_entry *UNUSED(entry), struct proc_data *data) {
@@ -855,6 +937,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"ips", .show = proc_ish_show_ips},
     {"mem_release_probe", S_IFREG | 0644, .show = proc_ish_show_mem_release_probe, .update = proc_ish_update_mem_release_probe},
     {"roots", S_IFREG | 0644, .show = proc_ish_show_roots, .update = proc_ish_update_roots},
+    {"swap_evict", S_IFREG | 0644, .show = proc_ish_show_swap_evict, .update = proc_ish_update_swap_evict},
     {"workspace", S_IFREG | 0666, .show = proc_ish_show_workspace, .update = proc_ish_update_workspace},
     {"version", .show = proc_ish_show_version},
 });

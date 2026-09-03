@@ -296,10 +296,28 @@ struct data {
     guest_addr_t dest;
 #endif
 };
+// Swap state of one guest page. PROTOTYPE NOTE: docs/simulated_swap_plan.md
+// section 3.3 puts these bytes inside the vestigial blocks[] so pt_entry stays
+// 56 bytes; this gate build adds them alongside instead, which is 8 bytes per
+// guest page (about 0.2% of mapped size) and not what should ship. Folding them
+// into the union is mechanical and belongs with the pager core.
+//
+// PT_RESIDENT is 0 so a calloc'd leaf and every existing pt_map path yield a
+// resident entry with no extra work, which is what keeps swap-off byte
+// identical to today.
+#define PT_RESIDENT 0
+#define PT_SWAPPED  1
+
 struct pt_entry {
     struct data *data;
     size_t offset;
     unsigned flags;
+    // Read on the fault path by mem_ptr_nofault, written under the
+    // address-space write lock by the evictor and by swap-in. Atomic because
+    // the read happens under the READ lock, concurrently with a writer that
+    // has quiesced the other threads but not this one's inspection.
+    _Atomic uint8_t swap_state;
+    uint32_t swap_slot;   // meaningful only while swap_state == PT_SWAPPED
 #if ENGINE_JIT
     struct list blocks[2];
 #endif
@@ -402,5 +420,40 @@ extern size_t real_page_size;
 // guest page might later become must pre-grant the wider permission up front
 // when this is false, since there's no way to promote it after the fact.
 bool mem_host_page_mirroring_available(void);
+
+// ---- Phase 1 gate prototype: evict a guest frame and fault it back ---------
+//
+// docs/simulated_swap_plan.md section 7 "Phase 1 gate". This is the smallest
+// thing that can answer the gate's question -- can a frame be released, does
+// the footprint actually drop, and does a stale access FAULT rather than
+// quietly return the old bytes -- and it is deliberately not the pager. There
+// is no aging, no kswapd, no watermarks, no guest-visible surface and no
+// multi-owner eviction; section 7 puts all of those in the core phase.
+//
+// OFF unless asked: nothing here allocates, opens a file or starts a thread
+// until swap_evict_mem() is called, which only /proc/ish/swap_evict does. That
+// is the shipping default too -- swap is opt-in from Settings.
+
+// Evict every eligible frame of `mem`. Returns bytes released, or a negative
+// errno. Takes the address-space barrier itself; must be called with no mem
+// lock held.
+long swap_evict_mem(struct mem *mem);
+// The address-space barrier, from kernel/mmap.c (see its definition for why a
+// plain write_lock is not enough: it quiesces the other threads of this mem).
+void mem_write_lock_pokes_external(struct mem *mem);
+void mem_write_unlock_pokes_external(struct mem *mem);
+// Page one evicted guest page back in. Called from the fault paths with the
+// mem READ lock held; it upgrades internally. Returns 0, or a negative errno.
+int swap_fault_page(struct mem *mem, page_t page);
+// Counters for the /proc/ish report.
+unsigned long swap_prototype_ledger_refused(void);
+void swap_prototype_failures(unsigned long *adv_fail, unsigned long *prot_fail, int *adv_errno, int *prot_errno);
+unsigned long long swap_footprint_live(void);
+void swap_footprint_detail(unsigned long long *internal, unsigned long long *resident,
+                           unsigned long long *reusable, unsigned long long *compressed);
+void swap_prototype_ledger(unsigned long long *before, unsigned long long *after,
+                           unsigned long long *post);
+void swap_prototype_stats(unsigned long *evicted_frames, unsigned long *faulted_frames,
+                          unsigned long *bytes_out, unsigned long *bytes_in);
 
 #endif
