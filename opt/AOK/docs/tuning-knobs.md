@@ -1,6 +1,6 @@
 # Runtime tuning: CPU count and memory headroom
 
-A couple of environment variables let you tune how iSH-AOK presents itself
+A few environment variables let you tune how iSH-AOK presents itself
 to the guest. These apply when you can control the process environment —
 building and running the standalone CLI emulator, or launching the app
 from Xcode with a custom scheme environment — rather than something an
@@ -37,13 +37,41 @@ runaway guest cannot get the whole app jetsammed. `mmap` and `mremap` fail with
 plain heap growth stops working too. Defaults to 192 MB; set it to `0` to
 disable the guard entirely.
 
-This guard is **iOS-only**. On a macOS or Linux host there is no per-process
-jetsam budget, so it is compiled out and the variable has no effect on the
-standalone CLI — set it in the Xcode scheme environment for a run on a device:
+On iOS the budget this is measured against is the app's own jetsam limit, which
+the OS reports. A macOS or Linux host has no such per-process limit, so with
+nothing else set the guard has nothing to measure and never fires on the
+standalone CLI — set `ISH_GUEST_MEM_BUDGET_MB` below to give it one.
+
+To disable the guard on a device, set it in the Xcode scheme environment:
 
 ```
 ISH_GUEST_MEM_HEADROOM_MB = 0
 ```
+
+## `ISH_GUEST_MEM_BUDGET_MB`
+
+Tells iSH-AOK to behave as though the process had a memory limit of this many
+MB. It exists so the low-memory path above can be exercised anywhere, rather
+than only on a device that is genuinely close to being jetsammed — before this,
+the guard was unreachable on the CLI and so was almost impossible to test.
+
+The guard then refuses guest memory growth once the process is within
+`ISH_GUEST_MEM_HEADROOM_MB` of that budget, so the two compose exactly as they
+do on a device. Measured in an arm64 Alpine guest on an Apple silicon Mac, with
+a guest that maps and dirties 32 MB at a time:
+
+```sh
+./ish -f build/alpine-arm64-test /tmp/b                        # never refused, mapped 6400 MB
+ISH_GUEST_MEM_BUDGET_MB=512 ./ish -f build/alpine-arm64-test /tmp/b   # refused after 320 MB
+```
+
+320 is 512 minus the default 192 MB floor, which is the whole arithmetic. Set
+`ISH_GUEST_MEM_HEADROOM_MB=0` alongside it and the guard is off again even with
+a budget set.
+
+Leave it unset for ordinary use. On iOS it is not needed, because the real limit
+is available; setting it anyway makes the guard use whichever of the two leaves
+less room, so it can only ever make the guest more conservative, never less.
 
 ## Logging
 
