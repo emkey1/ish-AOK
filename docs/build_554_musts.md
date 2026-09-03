@@ -564,6 +564,13 @@ four concurrent creators, where its worst `pthread_create` stayed at 1 ms. Which
 of glibc's thread-startup mappings drives the jetsam traffic was not chased,
 because the fix removes the cost for both.
 
+Corroborated independently while the same stall was being chased from the
+munmap end: the trigger tracks **thread stack size**, not libc. musl forced to
+8MB stacks reproduced it exactly (6095 ms), glibc held to 128KB did not
+(0.1 ms), and the threshold sat between 512KB and 768KB -- consistent with
+"bigger stacks mean more mapping churn means two would-be writers more often",
+and a useful knob for anyone who meets this on an older build.
+
 The fix is `atomic_uint` and paired raise/lower on every path, and the timeout
 is no longer silent: `jetsam_write_lock_timed` says so once and counts the rest,
 the way `host_sleep_interruptible` reports a lost wake poke. That silence is the

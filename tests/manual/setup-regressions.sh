@@ -588,6 +588,21 @@ cache_init() {
         cache_dir=
         return
     fi
+    # Probe the CACHE DIRECTORY, not its parent. /AOK/fakefs is 1777 while
+    # regress-cache inside it is whatever the run that created it left behind
+    # -- root-owned 0755 after any root run -- so the parent probe above says
+    # "writable" and every store then fails for an unprivileged run. Falling
+    # back costs a rebuild; not falling back meant an unwritable cache, and
+    # before the unlink fix it meant the whole suite dying at the first miss.
+    if ! (: >"$cache_dir/.probe") 2>/dev/null; then
+        cache_dir=$work_dir/../ish-aok-regress-cache
+        if ! mkdir -p "$cache_dir" 2>/dev/null ||
+                ! (: >"$cache_dir/.probe") 2>/dev/null; then
+            cache_dir=
+            return
+        fi
+    fi
+    rm -f "$cache_dir/.probe" 2>/dev/null
     # Everything shared by every test: the headers they all include, the
     # compiler, and the machine. Folded in once so the per-test key is one hash.
     cache_key_base=$(

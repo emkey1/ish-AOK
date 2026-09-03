@@ -318,6 +318,17 @@ int main(int argc, char **argv) {
     test_init(argc, argv);
 
     if (pick_tmpfs_dir() != 0) {
+        // Mounting one needs privilege, and neither /dev/shm nor /tmp is
+        // guaranteed to be tmpfs already. Unprivileged with no tmpfs to hand
+        // is not a kernel failure -- it is nothing to test -- and reporting it
+        // as one gave the gate's unprivileged leg a flat FAIL that read like a
+        // tmpfs regression. tmpfs_statfs and tmpfs_nlink already skip here;
+        // this is the same case, worded the same way. Still a hard failure for
+        // a privileged run, where a tmpfs must have been mountable.
+        if (geteuid() != 0) {
+            printf("tmpfs_mmap: SKIP (no tmpfs and no privilege to mount one)\n");
+            return 0;
+        }
         printf("FAIL: no tmpfs available (mount failed and neither /dev/shm nor /tmp is tmpfs)\n");
         return 1;
     }

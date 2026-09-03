@@ -18,7 +18,20 @@
 #   tools/run-guest-gate.sh --no-e2e        # skip the end-to-end suite
 #   tools/run-guest-gate.sh --only arm64    # one root, by name
 #   tools/run-guest-gate.sh --parallel      # run the local legs at once
+#   tools/run-guest-gate.sh --unpriv        # add an UNPRIVILEGED leg (see below)
 #   tools/run-guest-gate.sh --device m4pt   # also run it on a device over ssh
+#
+# --unpriv adds one leg that runs the suite as an ordinary user instead of
+# root. Every other leg runs the CLI as uid 0, where a parent directory is
+# always writable and an ownership check always passes -- so a whole class of
+# permission-ORDERING bugs is unreachable from the gate as it stands. Two of
+# them shipped: `mkdir -p` reporting EACCES where Linux reports EEXIST (2026-08),
+# and `rm -f` on a missing name reporting EACCES where Linux reports ENOENT
+# (2026-09), the latter killing the entire suite on the first cache miss with no
+# diagnostic. Neither was subtle; both were simply invisible. The tests that
+# cover those now drop privileges in-process, which is the durable fix, and this
+# leg is the belt to that pair of braces: it also catches a test that FAILS
+# rather than skips when it cannot have privilege.
 #
 # --parallel runs the five local legs concurrently instead of one after
 # another: roughly 45 minutes rather than three hours on an 8-core Mac, and the
@@ -37,6 +50,7 @@ LOGDIR=${GATE_LOGDIR:-$REPO/build/gate-logs}
 ISH=$REPO/build/ish
 RUN_E2E=1
 PARALLEL=0
+UNPRIV=0
 ONLY=
 DEVICE=
 DEVICE_PORT=${GATE_DEVICE_PORT:-1022}
@@ -45,6 +59,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --no-e2e)  RUN_E2E=0 ;;
         --parallel|-j) PARALLEL=1 ;;
+        --unpriv|--unprivileged) UNPRIV=1 ;;
         --only)    shift; ONLY=${1:-} ;;
         --device)  shift; DEVICE=${1:-} ;;
         --port)    shift; DEVICE_PORT=${1:-1022} ;;
@@ -101,6 +116,54 @@ leg_report() {
     return 0
 }
 
+# The suite as an ordinary user. The guest CLI is always uid 0, so the drop has
+# to happen inside the guest: make a user, make /tmp writable by it (some roots
+# ship /tmp 0755), and su. `-s /bin/sh` because a freshly added user often has
+# no shell set, and a uid well clear of 1000, which is usually taken.
+#
+# Tests needing privilege SKIP here, so the pass count is legitimately lower
+# than a root leg's -- what this leg is looking for is a FAIL.
+leg_run_unpriv() {
+    "$ISH" -f "$2" /bin/sh -c '
+        if ! id -u ishtester >/dev/null 2>&1; then
+            adduser -D -u 1500 ishtester 2>/dev/null ||
+                useradd -m -u 1500 ishtester 2>/dev/null || true
+        fi
+        id -u ishtester >/dev/null 2>&1 || { echo "cannot create an unprivileged user"; exit 1; }
+        # Clear the scratch the ROOT legs left behind. /tmp is sticky, so an
+        # unprivileged user cannot unlink a root-owned file there even when the
+        # directory is 1777 -- and several tests use fixed /tmp paths and start
+        # by unlinking their own leftovers. fcntl_lock is the sharp case: its
+        # stale root-owned /tmp/fcntl_lock.done survives the unlink, the waiter
+        # sees "done" immediately and reports "expected a conflict inside the
+        # locked range", which looks like a locking regression and is a
+        # permission on a leftover file. Safe here because this leg runs after
+        # every root leg has finished.
+        rm -rf /tmp/* /tmp/.[!.]* 2>/dev/null
+        chmod 1777 /tmp
+        # Its own work and cache directories. The default ones are left behind
+        # root-owned by every other leg, and an unprivileged run cannot write
+        # either -- the work dir fails outright, and the cache silently fails
+        # every store (which is how the root-owned-cache trap was found).
+        # A cwd the user owns. Several tests create scratch files RELATIVE to
+        # cwd on purpose -- proc_pid_io wants storage I/O rather than tmpfs, so
+        # it mkdtemps in place -- and the gate would otherwise leave them
+        # standing in a root-owned "/", where they fail for want of a writable
+        # directory rather than for anything about the kernel.
+        rm -rf /tmp/unpriv-home
+        mkdir -p /tmp/unpriv-home
+        chown ishtester /tmp/unpriv-home 2>/dev/null || chown 1500 /tmp/unpriv-home
+        su -s /bin/sh ishtester -c "
+            cd /tmp/unpriv-home || exit 1
+            HOME=/tmp/unpriv-home
+            ISH_AOK_REGRESS_DIR=/tmp/ish-aok-regressions-unpriv
+            ISH_AOK_REGRESS_CACHE=/tmp/ish-aok-regress-cache-unpriv
+            export HOME ISH_AOK_REGRESS_DIR ISH_AOK_REGRESS_CACHE
+            /AOK/tests/setup-regressions.sh --run" 2>&1
+    ' > "$LOGDIR/$1.log" 2>&1
+    echo $? > "$LOGDIR/$1.rc"
+}
+
 # One leg, start to finish, the way it has always worked.
 run_leg() {
     leg_wanted "$1" "$2" || return 0
@@ -153,11 +216,27 @@ run_leg devuan-arm64 "$REPO/build/devuan-arm64-test"
 
 fi
 
+# The unprivileged leg, on the glibc root: it is the one whose /tmp and user
+# tooling match a real device session, which is where this class was found.
+if [ "$UNPRIV" -eq 1 ] && [ -z "$ONLY" ]; then
+    unpriv_root=$REPO/build/devuan-arm64-test
+    [ -d "$unpriv_root" ] || unpriv_root=$REPO/build/alpine-arm64-test
+    if [ -d "$unpriv_root" ]; then
+        printf '########## unprivileged (%s) ##########\n' "$(basename "$unpriv_root")"
+        leg_run_unpriv unpriv "$unpriv_root"
+        leg_report unpriv
+    else
+        echo "  unpriv: SKIPPED (no root to run it in)"
+    fi
+fi
+
 if [ -n "$DEVICE" ]; then
     printf '########## device: %s ##########\n' "$DEVICE"
-    # Under sudo: the suite expects to be root, as the app's own sessions are.
-    # An unprivileged run fails a batch of tests for reasons that have nothing
-    # to do with the kernel under test.
+    # Under sudo, so every test actually runs: the ones needing privilege skip
+    # otherwise. An unprivileged device run is worth doing too and is now clean
+    # (the five tests that used to FAIL rather than skip were fixed in 554, one
+    # of them a real socket-ownership bug) -- but it exercises strictly less, so
+    # the gate's device leg takes the root path.
     ssh -p "$DEVICE_PORT" "$DEVICE" \
         'sudo sh -c "/AOK/tests/setup-regressions.sh --run"' \
         > "$LOGDIR/device.log" 2>&1
