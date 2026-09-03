@@ -1,7 +1,9 @@
 /*
  * ktop -- a small, dependency-free htop-style process viewer with one extra
- * column: the guest CPU architecture (arm64 / x86_64 / x86 / riscv64) of each
- * process's binary, read straight from its ELF header via /proc/<pid>/exe.
+ * column: the CPU architecture (arm64 / x86_64 / x86 / riscv64) of each
+ * process's binary, read straight from its ELF header via /proc/<pid>/exe --
+ * or, for a natively-dispatched program, the host's architecture, since that
+ * is what it was compiled for.
  *
  * Built for iSH-AOK: a single guest can run i386, amd64, arm64 and riscv64
  * binaries side by side (e.g. a chroot into another installed root via
@@ -100,7 +102,7 @@ static void enable_colors(void) {
     C_KEYBAR = "\033[30;46m";   // key bar: label on cyan
 }
 
-// ---- ELF-header architecture detection -----------------------------------
+// ---- per-process architecture detection -----------------------------------
 
 static const char *arch_intern(const char *s) {
     // All callers pass one of these literals or "?"; returning the literal
@@ -109,33 +111,106 @@ static const char *arch_intern(const char *s) {
     return s;
 }
 
+// The vocabulary the ARCH column uses, from a machine name as uname(2) or
+// /proc/cpuinfo spells it. Shared by the guest and host lookups below: they
+// draw on different sources but have to land in the same alphabet.
+//
+// "arm64" is a prefix test rather than an equality one because
+// NXGetLocalArchInfo -- what the app build reports the host as -- says
+// "arm64e" on Apple Silicon, and the pointer-authentication ABI is not a
+// different CPU architecture as far as this column is concerned. It has to be
+// tried before the bare "arm" prefix below, which would otherwise swallow it.
+static const char *arch_from_machine(const char *machine) {
+    if (strcmp(machine, "aarch64") == 0 || strncmp(machine, "arm64", 5) == 0)
+        return arch_intern("arm64");
+    if (strcmp(machine, "x86_64") == 0 || strcmp(machine, "amd64") == 0)
+        return arch_intern("x86_64");
+    if (strcmp(machine, "riscv64") == 0)
+        return arch_intern("riscv64");
+    if (machine[0] == 'i' && strstr(machine, "86") != NULL)
+        return arch_intern("x86");
+    if (strncmp(machine, "arm", 3) == 0)
+        return arch_intern("arm");
+    return arch_intern("?");
+}
+
 // A kernel thread has no /proc/<pid>/exe -- on real Linux either -- so there is
 // no ELF header to read an architecture out of. Reporting "?" for AOK's
 // kthreadd is accurate but useless; a kernel thread belongs to the running
 // kernel, so the honest answer is the guest's own architecture. uname gives
 // that, and it is whatever the booted rootfs is.
 //
-// Mapped to the vocabulary the rest of this file uses (uname says "aarch64",
-// ktop's column says "arm64"), and cached: uname does not change under us.
+// Cached: uname does not change under us.
 static const char *guest_arch(void) {
     static const char *cached = NULL;
     if (cached != NULL)
         return cached;
     struct utsname u;
-    cached = arch_intern("?");
-    if (uname(&u) == 0) {
-        if (strcmp(u.machine, "aarch64") == 0 || strcmp(u.machine, "arm64") == 0)
-            cached = arch_intern("arm64");
-        else if (strcmp(u.machine, "x86_64") == 0 || strcmp(u.machine, "amd64") == 0)
-            cached = arch_intern("x86_64");
-        else if (strcmp(u.machine, "riscv64") == 0)
-            cached = arch_intern("riscv64");
-        else if (u.machine[0] == 'i' && strstr(u.machine, "86") != NULL)
-            cached = arch_intern("x86");
-        else if (strncmp(u.machine, "arm", 3) == 0)
-            cached = arch_intern("arm");
-    }
+    cached = uname(&u) == 0 ? arch_from_machine(u.machine) : arch_intern("?");
     return cached;
+}
+
+// The architecture of the HOST iSH-AOK is running on, which is the one native
+// programs (below) were compiled for. iSH-AOK publishes it as a "host arch"
+// line in /proc/cpuinfo, printed for every guest ABI, so it does not depend on
+// which root is booted -- native bash in an i386 root is still arm64 code.
+// Nothing outside iSH-AOK publishes that line, and nothing outside iSH-AOK has
+// native programs to ask about, so "?" there is both honest and unreachable.
+//
+// The app build appends the chip in parentheses ("arm64(Apple M4)"), so the
+// value ends at the first '(' as well as at whitespace.
+static const char *host_arch(void) {
+    static const char *cached = NULL;
+    if (cached != NULL)
+        return cached;
+    cached = arch_intern("?");
+    FILE *f = fopen("/proc/cpuinfo", "r");
+    if (f == NULL)
+        return cached;
+    char line[256];
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (strncmp(line, "host arch", 9) != 0)
+            continue;
+        char *value = strchr(line, ':');
+        if (value == NULL)
+            continue;
+        for (value++; *value == ' ' || *value == '\t'; value++)
+            ;
+        char *end = value;
+        while (*end != '\0' && *end != '(' && !isspace((unsigned char) *end))
+            end++;
+        *end = '\0';
+        if (*value != '\0')
+            cached = arch_from_machine(value);
+        break;
+    }
+    fclose(f);
+    return cached;
+}
+
+// Natively-dispatched programs -- bash, zsh, and SmallCLUE's applets, all
+// reached through /AOK/native -- are host code compiled into iSH-AOK rather
+// than guest binaries. Exec of one points /proc/<pid>/exe at the /AOK/native
+// entry, and what lives behind that path is a placeholder shell script, not an
+// ELF image (fs/aok.c), so the header read below finds nothing: every native
+// shell on the system showed "?" in the ARCH column. Recognise the path
+// instead and report the host's architecture, which is what that code actually
+// is.
+//
+// /AOK is where aokfs is mounted -- fixed by both entry points (main.c and
+// app/AppDelegate.m), regardless of the installed root -- so the prefix is a
+// reliable test. readlink rather than open: the link target is still readable
+// from inside a chroot that cannot open it (see ktop.md).
+static bool exe_is_native(pid_t pid) {
+    static const char prefix[] = "/AOK/native/";
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/exe", (int) pid);
+    char target[PATH_MAX];
+    ssize_t n = readlink(path, target, sizeof(target) - 1);
+    if (n < 0)
+        return false;
+    target[n] = '\0';
+    return strncmp(target, prefix, sizeof(prefix) - 1) == 0;
 }
 
 // `kernel_thread` comes from the caller, which has already read the state and
@@ -144,29 +219,39 @@ static const char *guest_arch(void) {
 static const char *detect_arch(pid_t pid, bool kernel_thread) {
     char path[64];
     snprintf(path, sizeof(path), "/proc/%d/exe", (int) pid);
-    int fd = open(path, O_RDONLY);
-    if (fd < 0)
-        return kernel_thread ? guest_arch() : arch_intern("?");
-
     unsigned char hdr[20];
-    ssize_t n = read(fd, hdr, sizeof(hdr));
-    close(fd);
-    if (n < 20 || memcmp(hdr, "\x7f""ELF", 4) != 0)
-        return arch_intern("?");
-
-    bool little_endian = hdr[5] != 2; // EI_DATA: 1 = LSB, 2 = MSB
-    unsigned e_machine = little_endian
-        ? (unsigned) hdr[18] | ((unsigned) hdr[19] << 8)
-        : (unsigned) hdr[19] | ((unsigned) hdr[18] << 8);
-
-    switch (e_machine) {
-        case 3:   return arch_intern("x86");    // EM_386
-        case 62:  return arch_intern("x86_64"); // EM_X86_64
-        case 183: return arch_intern("arm64");  // EM_AARCH64
-        case 40:  return arch_intern("arm");    // EM_ARM (32-bit, just in case)
-        case 243: return arch_intern("riscv64"); // EM_RISCV
-        default:  return arch_intern("?");
+    ssize_t n = -1;
+    int fd = open(path, O_RDONLY);
+    if (fd >= 0) {
+        n = read(fd, hdr, sizeof(hdr));
+        close(fd);
     }
+
+    if (n >= 20 && memcmp(hdr, "\x7f""ELF", 4) == 0) {
+        bool little_endian = hdr[5] != 2; // EI_DATA: 1 = LSB, 2 = MSB
+        unsigned e_machine = little_endian
+            ? (unsigned) hdr[18] | ((unsigned) hdr[19] << 8)
+            : (unsigned) hdr[19] | ((unsigned) hdr[18] << 8);
+
+        switch (e_machine) {
+            case 3:   return arch_intern("x86");    // EM_386
+            case 62:  return arch_intern("x86_64"); // EM_X86_64
+            case 183: return arch_intern("arm64");  // EM_AARCH64
+            case 40:  return arch_intern("arm");    // EM_ARM (32-bit, just in case)
+            case 243: return arch_intern("riscv64"); // EM_RISCV
+            default:  return arch_intern("?");
+        }
+    }
+
+    // Nothing ELF-shaped behind the exe link. A native program is the one case
+    // with a real answer; a kernel thread has no exe at all and borrows the
+    // kernel's; anything else -- an exe outside this chroot, a process that
+    // exited mid-scan -- is genuinely unknown.
+    if (exe_is_native(pid))
+        return host_arch();
+    if (fd < 0 && kernel_thread)
+        return guest_arch();
+    return arch_intern("?");
 }
 
 // ---- /proc/<pid>/stat parsing ---------------------------------------------

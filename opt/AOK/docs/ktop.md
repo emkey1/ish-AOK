@@ -12,7 +12,9 @@ one booted session — most usefully by chrooting into another installed
 root with [`mount-root.sh`](roots.md). Stock `top`/`htop` have no way to
 show that architecture mix. `ktop`'s one real differentiator versus a
 normal `top` clone is an **ARCH** column, read directly from each
-process's ELF header via `/proc/<pid>/exe`.
+process's ELF header via `/proc/<pid>/exe` — or, for a natively-dispatched
+program, from the host's own architecture, since that is what it was compiled
+for (see [below](#native-programs-and-the-arch-column)).
 
 `ktop` is purely `/proc`-based — it doesn't use taskstats or netlink
 sockets (that's a separate mechanism, used by `iotop`-style tools; see the
@@ -68,11 +70,15 @@ batch mode this applies only when stdout is a terminal: redirect or pipe
 iSH-AOK's native programs — `bash`, `zsh`, and SmallCLUE's applets (among them
 `ssh`, `scp`, `sftp`, `ssh-keygen`, `rsync` and `vi`), all dispatched through
 `/AOK/native` — are host code compiled into the app, not guest binaries, so they
-have no guest ELF image of their own. `execve` of one does not replace the
-task's memory map, so `/proc/<pid>/exe` keeps pointing at whatever guest binary
-that task loaded last: COMMAND shows the native program's real name while ARCH
-still describes the previous image. Seeing `x86` next to a native `zsh` in an
-x86 root is that, not a mislabelled process. See
+have no guest ELF image of their own. `/proc/<pid>/exe` names the `/AOK/native`
+entry that was `execve`d, and there is no ELF header behind that path to read.
+
+For those, ARCH reports the **host's** architecture — `arm64` on every Apple
+Silicon device — because that is what the code genuinely is. It comes from the
+`host arch` line of `/proc/cpuinfo`, so it does not depend on which root is
+booted: a native `zsh` in an x86 root shows `arm64` while everything around it
+shows `x86`. That is the honest label, and it doubles as the quickest way to
+see at a glance which processes are running natively. See
 [native-programs.md](native-programs.md).
 
 ### Interactive keys

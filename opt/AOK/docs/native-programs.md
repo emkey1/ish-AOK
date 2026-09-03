@@ -31,11 +31,12 @@ own thread.
 
 The task keeps its pid, its open files, its working directory, its environment
 and its signal state — from the guest's point of view nothing unusual happened,
-and `ps` shows an ordinary process. But there is no new memory image, and that
-has one visible consequence: `/proc/<pid>/exe` still points at whatever guest
-binary that task loaded last. In [ktop](ktop.md) the COMMAND column shows the
-native program's real name while ARCH describes the previous image, which is why
-you can see `x86` next to a native `zsh`.
+and `ps` shows an ordinary process. But no image is loaded, and that has one
+visible consequence: `/proc/<pid>/exe` names the `/AOK/native` entry that was
+exec'd, since there is no ELF file to name instead. In [ktop](ktop.md) the
+COMMAND column shows the native program's real name and the ARCH column reports
+the *host's* architecture, which is what that code actually is — `arm64` next
+to a native `zsh` in an `x86` root.
 
 It also explains `fork`. A native program cannot fork, because forking means
 copying an address space and it does not have one of its own. The shells solve
