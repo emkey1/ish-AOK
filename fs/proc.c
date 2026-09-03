@@ -344,8 +344,19 @@ void proc_printf(struct proc_data *buf, const char *format, ...) {
     char data[4096];
     va_list args;
     va_start(args, format);
-    size_t size = vsnprintf(data, sizeof(data), format, args);
+    int printed = vsnprintf(data, sizeof(data), format, args);
     va_end(args);
+    // vsnprintf reports what it WOULD have written, not what it did, and the
+    // result went straight to proc_buf_append as a length. Two ways that reads
+    // off the end of this stack buffer and copies the result into a file the
+    // guest then reads: output longer than the buffer (printed > sizeof data),
+    // and an encoding error (printed < 0, which as a size_t is SIZE_MAX).
+    // Clamp to what is actually in the buffer.
+    if (printed < 0)
+        return;
+    size_t size = (size_t) printed;
+    if (size >= sizeof(data))
+        size = sizeof(data) - 1;
     proc_buf_append(buf, data, size);
 }
 
