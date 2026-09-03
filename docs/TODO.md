@@ -10,6 +10,39 @@ Started 2026-08-19, after the 549 release run.
 
 ## Diagnosed, not fixed
 
+### atop's accounting daemon wedges boot, and nothing after it starts
+
+Reported from a device 2026-09-03. Symptom looks like broken networking --
+`ssh` to the guest is refused on every route -- and the console shows
+`receive NETLINK family, errno -2` on boot. Neither is the actual fault.
+
+The thread dump names it exactly. `atopacc` sits in `ppoll` with a NULL
+timeout, so it waits forever with nothing able to wake it; `S01atop` and `rc`
+are both parked in `wait4` behind it. Every init script ordered after
+`S01atop` therefore never runs, and sshd is one of them. The connection is
+refused because sshd was never started, not because networking is broken.
+
+The netlink line is the same event seen from the other end. AOK's generic
+netlink controller (fs/sock.c, around the `GENL_FAMILY_TASKSTATS_` block)
+implements exactly one family, `TASKSTATS`, because iotop is the consumer it
+was written for and iotop hard-exits without it. atop's accounting daemon
+asks for its own `netatop` family instead, correctly gets ENOENT, and then
+blocks rather than giving up.
+
+**The interesting half is why it blocks.** A real Linux without the netatop
+module returns the same ENOENT and atop copes there, so the divergence is not
+the missing family. The likely cause is that AOK's netlink socket never
+becomes readable and never reports an error after a failed family lookup, so
+a poll on it has nothing to return -- worth confirming before fixing, since
+the fix differs depending on whether the socket should report POLLERR or the
+lookup should fail the socket outright. **Unverified.**
+
+Not a regression: atop is newly added to that root's boot sequence, so this
+is the first time the path has been exercised. Removing `S01atop` restores
+boot and sshd. Implementing the `netatop` family is NOT the fix -- a guest
+that blocks forever on a family a real kernel also refuses is the bug.
+
+
 ### A FUSE daemon on a thread of its own caller deadlocked -- FIXED 2026-09-01
 
 Found by writing the test that had been missing rather than by reading code:
