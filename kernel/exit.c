@@ -459,6 +459,14 @@ noreturn void do_exit(struct task *task, int status) {
     // never come.
     bool autoreap = false;
 
+    // A child that is ALREADY a zombie when we hand it to a new parent has to
+    // be announced to that parent -- see the reparenting loop below. Collected
+    // here and sent after pids_lock is dropped, like every other signal in
+    // this function.
+    struct task *reparent_signal_parent = NULL;
+    struct siginfo_ reparent_signal_info = {};
+    int reparented_zombies = 0;
+
     complex_lockt(&pids_lock, 0);
 
     // Roll this thread's I/O counters into the group so the process totals in
@@ -510,6 +518,63 @@ noreturn void do_exit(struct task *task, int status) {
         child->parent = new_parent;
         list_remove(&child->siblings);
         list_add(&new_parent->children, &child->siblings);
+        // As Linux's reparent_leader does, and for the reason its comment
+        // gives ("we don't want people slaying init"): a child cloned with
+        // some other exit_signal must not get to send that signal to whoever
+        // inherits it.
+        //
+        // Leaders only. In AOK a thread is a child of whichever task created
+        // it, not of the group leader's parent as on Linux, so this list can
+        // hold threads too -- and a thread's exit_signal is not the process's.
+        // Nothing reads a non-leader's exit_signal today (every reader goes
+        // through leader->exit_signal), so this is precision rather than a
+        // fix, but it keeps the line saying what it means.
+        if (child->group != NULL && child->group->leader == child)
+            child->exit_signal = SIGCHLD_;
+        // Moving the child is not enough when it is already dead. Its exit was
+        // reported to US, and we are about to stop existing; unless the new
+        // parent is told, nothing ever wakes it to reap, and the zombie stays
+        // on the process table for the life of the system.
+        //
+        // That was the observed bug: with a real SysV init as pid 1 -- asleep
+        // in pselect, reaping only on SIGCHLD -- every orphaned zombie
+        // accumulated. `sudo anything` from a shell that forks-by-relaunch
+        // leaves exactly this shape, and a device had collected 16 of them.
+        // A manual `kill -CHLD 1` reaped all 16 at once, which is what named
+        // the missing piece.
+        //
+        // ONE signal, carrying the first such child's details, rather than one
+        // per child as Linux sends: SIGCHLD is a standard signal, so a second
+        // one merely coalesces into the first still-pending copy -- and it is
+        // the first one's siginfo that a Linux guest would end up seeing too.
+        // A woken reaper drains the rest with its own wait() loop, which is
+        // what every reaper has anyway for exactly this reason.
+        if (child->zombie && reparented_zombies++ == 0) {
+            int chld_code, chld_status;
+            decode_wait_status(child->exit_code, &chld_code, &chld_status);
+            reparent_signal_info = (struct siginfo_) {
+                .code = chld_code,
+                .child.pid = child->pid,
+                .child.uid = child->uid,
+                .child.status = chld_status,
+            };
+        }
+    }
+    // The condition wakes a new parent already blocked in wait4(); the signal
+    // below wakes one that is not. Both are needed, and notify() is safe to
+    // call here -- the ordinary child-exit notify a few lines down runs under
+    // this same lock.
+    //
+    // Not handled, and a narrower case than the one above: a new parent that
+    // has disclaimed SIGCHLD (SIG_IGN or SA_NOCLDWAIT) should have the zombie
+    // released outright, the way the autoreap path does for an ordinary exit.
+    // Here it keeps the zombie instead. init does not disclaim SIGCHLD, so
+    // this is not the pid-1 case, and releasing another task's struct from
+    // this side is not something to do without a reason to.
+    if (reparented_zombies > 0 && new_parent != NULL && new_parent->group != NULL) {
+        notify(&new_parent->group->child_exit);
+        task_ref_cnt_mod(new_parent, 1);
+        reparent_signal_parent = new_parent;
     }
     list_for_each_entry_safe(&task->ptracees, child, tmp, ptrace_siblings)
         ptrace_detach_from_tracer(task, child);
@@ -604,6 +669,12 @@ noreturn void do_exit(struct task *task, int status) {
     if (orphan_pgid != 0) {
         send_group_signal(orphan_pgid, SIGHUP_, SIGINFO_NIL);
         send_group_signal(orphan_pgid, SIGCONT_, SIGINFO_NIL);
+    }
+
+    if (reparent_signal_parent != NULL) {
+        send_signal_to_group(reparent_signal_parent->group, SIGCHLD_,
+                             reparent_signal_info);
+        task_ref_cnt_mod(reparent_signal_parent, -1);
     }
 
     if (signal_parent != NULL) {

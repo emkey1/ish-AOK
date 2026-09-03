@@ -179,6 +179,7 @@ signal_conventions.c
 dir_tmpfs.c
 futex_validation.c
 orphan_pgrp_wait.c
+reparent_zombie_notify.c
 dirfd_position.c
 cross_process_state.c
 concurrent_dir_futex.c
