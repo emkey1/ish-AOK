@@ -87,6 +87,40 @@ static struct tgroup *tgroup_copy(struct tgroup *old_group) {
     group->doing_group_exit = false;
     group->continued = false;
     group->children_rusage = (struct rusage_) {};
+    // Everything below is per-PROCESS state that Linux does not hand to a
+    // child: copy_signal() builds the new signal_struct from zeroed memory and
+    // copies only the few fields it names. The shallow copy above handed the
+    // child all of it, and each one is wrong in its own way.
+    //
+    // group->rusage is the rolled-up usage of threads that have ALREADY
+    // exited (kernel/exit.c), which rusage_get_group_of tops up with the live
+    // threads. Inherited, a process that had joined threads before forking
+    // gave its child a getrusage(RUSAGE_SELF) and CLOCK_PROCESS_CPUTIME_ID
+    // baseline that was the parent's -- and do_wait then reported those same
+    // inflated numbers back to the parent, both as the child's rusage and
+    // into the parent's own children_rusage (RUSAGE_CHILDREN).
+    group->rusage = (struct rusage_) {};
+    // Same shape one level down: io_dead is the exited threads' I/O totals,
+    // so an inherited copy made the child's /proc/<pid>/io open at the
+    // parent's numbers.
+    memset(&group->io_dead, 0, sizeof(group->io_dead));
+    // Group-stop state is per-process too, and stopped/group_exit_code are
+    // exactly the pair notify_if_stopped() reads. A clone racing another
+    // thread's SIGSTOP delivery copied both, so wait(WUNTRACED) reported a
+    // stop for a child that had never stopped -- and the child came up in
+    // state T, in a group nothing had stopped.
+    group->stopped = false;
+    group->group_exit_code = 0;
+    // PR_SET_CHILD_SUBREAPER is per-process and is NOT inherited by fork or
+    // clone (prctl(2): "The setting of the 'child subreaper' attribute is not
+    // inherited by children created by fork(2) and clone(2)"). Linux's
+    // copy_signal propagates only the has_child_subreaper *hint*, never
+    // is_child_subreaper itself. Inherited, every descendant of a subreaper
+    // was a subreaper, so find_new_parent() stopped its walk at the nearest
+    // ancestor instead of at the process that actually asked to be the
+    // reaper: a service manager saw the orphans of its immediate children
+    // only, and everything deeper was collected one level down.
+    group->child_subreaper = false;
     cond_init(&group->child_exit);
     cond_init(&group->stopped_cond);
     lock_init(&group->lock, "tgroup_copy\0");

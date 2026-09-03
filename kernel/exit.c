@@ -157,6 +157,16 @@ static void exit_wait_backoff(struct timespec *pause) {
 // so a service manager that had set the flag never saw its own descendants
 // die and could not reap them.
 //
+// The walk below is unconditional, which is deliberate: Linux gates its
+// equivalent (find_new_reaper) on signal->has_child_subreaper, a hint that
+// copy_signal propagates to children of a subreaper and that
+// PR_SET_CHILD_SUBREAPER back-fills over the existing descendant tree with
+// walk_process_tree(). All that buys is skipping the walk in the overwhelming
+// case where no ancestor is a subreaper at all; when the hint is set it agrees
+// with the plain walk by construction. AOK carries no such hint -- one fewer
+// inheritable per-process flag to get wrong, which is exactly the bug this
+// walk's input had -- and the walk is bounded by tree depth anyway.
+//
 // Caller holds pids_lock, which is what keeps the ancestor walk's pointers
 // alive.
 static struct task *find_new_parent(struct task *task) {

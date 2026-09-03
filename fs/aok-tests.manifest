@@ -180,6 +180,8 @@ dir_tmpfs.c
 futex_validation.c
 orphan_pgrp_wait.c
 reparent_zombie_notify.c
+subreaper_not_inherited.c
+fork_tgroup_reset.c
 dirfd_position.c
 cross_process_state.c
 concurrent_dir_futex.c

@@ -84,11 +84,11 @@ int main(int argc, char **argv) {
     }
     if (a == 0) {
         // A must NOT be a subreaper itself, or it collects B and R -- the one
-        // being tested -- never hears about it. Worth stating because it is
-        // not obvious: AOK's fork copies the whole tgroup struct, so the flag
-        // R just set is inherited here, where Linux would not have passed it
-        // on. Clearing it makes the test say what it means either way.
-        prctl(PR_SET_CHILD_SUBREAPER, 0L, 0L, 0L, 0L);
+        // being tested -- never hears about it. Nothing to do here: the flag
+        // is per-process and a fork does not carry it, which is what
+        // subreaper_not_inherited.c holds down. It used to be cleared by hand
+        // right here, because AOK's fork copied the whole tgroup struct and R's
+        // flag really did arrive in A.
         pid_t c = fork();
         if (c < 0)
             _exit(3);

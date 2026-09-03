@@ -549,13 +549,20 @@ struct tgroup {
     bool doing_group_exit;
     // PR_SET_CHILD_SUBREAPER: this process collects the orphans of its whole
     // descendant tree instead of letting them go to init. Consulted by
-    // find_new_parent (kernel/exit.c). Inherited across fork like Linux, and
-    // cleared by the child of a subreaper only if it clears it itself.
+    // find_new_parent (kernel/exit.c). Strictly per-process: NOT inherited by
+    // fork or clone (tgroup_copy clears it), because a subreaper whose
+    // children were all subreapers too would only ever be handed the orphans
+    // of its immediate children. Preserved across execve, like Linux.
     bool child_subreaper;
     // membarrier(MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED) has been called for
     // this process. Linux refuses PRIVATE_EXPEDITED with EPERM until it has,
     // and a runtime uses that EPERM to learn it must register. Lock:
-    // group->lock. Inherited across fork like the rest of the group state.
+    // group->lock. Deliberately left INHERITED by tgroup_copy, unlike the
+    // per-process flags around it: measured on Linux 6.12, a fork of a
+    // registered process gets PRIVATE_EXPEDITED honored rather than the EPERM
+    // an unregistered one gets. (Linux keeps the state in the mm, not the
+    // signal struct, which is why it comes along.) Cleared on execve, which
+    // kernel/exec.c does, matching membarrier_exec_mmap().
     bool membarrier_private_expedited;
     dword_t group_exit_code;
 
