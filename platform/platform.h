@@ -161,4 +161,42 @@ int get_cpu_count_for_affinity(void);
 // for removing it are at the bottom of platform/darwin.c.
 bool host_mem_headroom_low(void);
 
+// The day-1 host page release probe from docs/simulated_swap_plan.md section 7,
+// reached from the guest as /proc/ish/mem_release_probe (fs/proc/ish.c).
+//
+// It answers one question, and every other piece of the simulated-swap design
+// is downstream of it: does releasing a 16 KiB host page actually reduce the
+// process footprint this OS decides to kill the app on? Measured byte-exact on
+// macOS (section 4.1) and never once observed on a device, which is open risk 1
+// in section 8. The implementation is in platform/darwin.c and the long comment
+// there records why it decides on phys_footprint rather than
+// os_proc_available_memory(), why a 0 return from madvise() is not evidence of
+// anything, and why it carries a file-backed control case.
+//
+// DARWIN ONLY, and deliberately not stubbed elsewhere. The primitives it
+// measures (MADV_FREE_REUSABLE/MADV_FREE_REUSE, the phys_footprint ledger,
+// task_vm_info.region_count) are XNU's, and a Linux stub answering "not
+// supported" from here would only move the same message one file further from
+// the reader. fs/proc/ish.c prints that message itself, so nothing outside
+// platform/ has to know which hosts have a probe.
+#ifdef __APPLE__
+// A conservative default, and a cap the guest cannot argue with. Section 7
+// sketched a 2 GiB touch; this runs inside the shipping app on someone's iPad,
+// where allocating gigabytes is a way to get jetsammed mid-measurement, and
+// 16 MiB of dirtied frames measures the same ledger move as 2 GiB would. The
+// answer is qualitative -- MOVED or DID NOT MOVE -- and the size only has to be
+// large enough to stand out of the noise of an app that is still running a
+// guest underneath the probe.
+#define HOST_RELEASE_PROBE_DEFAULT_MB 16
+#define HOST_RELEASE_PROBE_MAX_MB 256
+// Runs the probe at `mb` MiB (0 means the default; anything above the cap is
+// clamped to it) and writes a human-readable report into `report`, which is
+// always left NUL-terminated and is filled even when the probe refuses to run,
+// because the refusal is the thing the operator needs to read. Returns 0 if the
+// probe ran, or a negative kernel/errno.h code if it declined to -- _ENOMEM
+// when this process is already too close to its ceiling to allocate the region
+// safely.
+int host_mem_release_probe(unsigned long mb, char *report, size_t report_size);
+#endif
+
 #endif

@@ -4,6 +4,8 @@
 #include "jit/jit.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
+#include "platform/platform.h"
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -209,6 +211,147 @@ static int proc_ish_update_workspace(struct proc_entry *UNUSED(entry), struct pr
     int err = strlen(request) == data->size ? ish_workspace_open(request) : _EINVAL;
     free(request);
     return err;
+}
+
+// /proc/ish/mem_release_probe -- the day-1 device probe of
+// docs/simulated_swap_plan.md section 7, run inside the app process because
+// that is the process whose footprint the answer is about.
+//
+//   cat /proc/ish/mem_release_probe                    # the last result
+//   echo run > /proc/ish/mem_release_probe             # run it, 16 MiB
+//   echo 'run mb=64' > /proc/ish/mem_release_probe     # run it, 64 MiB
+//   cat /proc/ish/mem_release_probe                    # and read what it found
+//
+// It answers one question -- does releasing a 16 KiB host page actually reduce
+// the footprint iOS decides to kill this app on? -- and the whole simulated-swap
+// design is downstream of the answer. The measurement itself is in
+// platform/darwin.c; this is just the trigger and the mailbox.
+//
+// A READ NEVER RUNS IT. That is the shape and not a convenience: the probe
+// allocates and dirties tens of megabytes inside a process that iOS kills for
+// using memory, and stress-ng --procfs reads every file under /proc/ish (which
+// is how /proc/ish/documents once took the whole emulator down). So reading
+// reports the last result, or the instructions if nothing has been run, and
+// only a write with the word `run` in it starts anything.
+//
+// The size is a parameter with a small default and a hard cap for the same
+// reason. Section 7 sketched a 2 GiB touch; on someone's iPad that is a way to
+// be jetsammed in the middle of the measurement, and the answer is qualitative
+// anyway. Anything above HOST_RELEASE_PROBE_MAX_MB is refused here rather than
+// silently clamped, because a probe that measured something other than what was
+// asked for is a probe whose output has to be re-read carefully.
+//
+// 0644, like `roots` next door: this is administrative, an AOK session is
+// uid 1000, and `sudo sh -c 'echo run > /proc/ish/mem_release_probe'` is the
+// spelling from a normal session.
+#ifdef __APPLE__
+#define PROC_ISH_RELEASE_PROBE_MAX 16384
+
+static lock_t proc_ish_release_probe_lock = LOCK_INITIALIZER;
+static char *proc_ish_release_probe_report;      // last result; NULL until one runs
+// Exclusion for the RUN, held across the whole measurement, which the report
+// lock is not: two concurrent probes would each allocate their region, doubling
+// the peak footprint the guard above them was told to expect.
+static atomic_bool proc_ish_release_probe_running;
+
+static const char proc_ish_release_probe_usage[] =
+    "iSH-AOK host page release probe -- docs/simulated_swap_plan.md section 7, day 1\n"
+    "Nothing has been run yet in this session. Reading this file never runs it.\n"
+    "\n"
+    "  echo run > /proc/ish/mem_release_probe             # default 16 MiB\n"
+    "  echo 'run mb=64' > /proc/ish/mem_release_probe     # 64 MiB, cap 256\n"
+    "  cat /proc/ish/mem_release_probe                    # read the result\n"
+    "\n"
+    "Run it with NO debugger and NO Instruments attached: a live mach_vm_read of\n"
+    "a region leaves its VM object copy-on-write shared, and MADV_FREE_REUSABLE on\n"
+    "a shared object returns 0 and moves no ledger, so an attached tool makes the\n"
+    "probe report the design dead when it is not.\n";
+#else
+static const char proc_ish_release_probe_unsupported[] =
+    "iSH-AOK host page release probe -- docs/simulated_swap_plan.md section 7, day 1\n"
+    "Not available on this host. The probe measures XNU primitives that exist\n"
+    "nowhere else -- MADV_FREE_REUSABLE, the phys_footprint ledger jetsam kills\n"
+    "on, and task_vm_info.region_count -- so there is nothing here for it to say.\n"
+    "Run it in the iOS app, or in the macOS build, which is the reference host.\n";
+#endif
+
+// proc_buf_append, NOT proc_printf("%s"). proc_printf formats through a 4096
+// byte stack buffer and then appends vsnprintf's RETURN value, which is the
+// length the output would have had -- so a string longer than 4096 bytes makes
+// it copy off the end of that stack buffer, and the guest reads whatever was
+// below it. A probe report is several kilobytes of text, so this entry hits
+// that at once; the first dry run on this Mac printed a page of heap garbage
+// after "d3 mp". The bug is in fs/proc.c and is worth fixing there, but nothing
+// here needs the formatting anyway.
+static int proc_ish_show_mem_release_probe(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+#ifdef __APPLE__
+    lock(&proc_ish_release_probe_lock, 0);
+    const char *text = proc_ish_release_probe_report != NULL ?
+        proc_ish_release_probe_report : proc_ish_release_probe_usage;
+    proc_buf_append(buf, text, strlen(text));
+    unlock(&proc_ish_release_probe_lock);
+#else
+    proc_buf_append(buf, proc_ish_release_probe_unsupported,
+                    strlen(proc_ish_release_probe_unsupported));
+#endif
+    return 0;
+}
+
+static int proc_ish_update_mem_release_probe(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+#ifndef __APPLE__
+    (void) data;
+    return _EOPNOTSUPP;
+#else
+    // `run` is required rather than accepting any write at all, so that a stray
+    // redirection cannot start a multi-megabyte allocation inside the app.
+    if (data->size == 0 || data->size >= 128)
+        return _EINVAL;
+    char command[128];
+    memcpy(command, data->data, data->size);
+    command[data->size] = '\0';
+    // An embedded NUL would hide the rest of the line from the parser while the
+    // writer believed it had been read -- the same reasoning as
+    // proc_ish_update_roots.
+    if (strlen(command) != data->size)
+        return _EINVAL;
+
+    char *save = NULL;
+    char *token = strtok_r(command, " \t\r\n,", &save);
+    if (token == NULL || strcmp(token, "run") != 0)
+        return _EINVAL;
+    unsigned long mb = 0;
+    while ((token = strtok_r(NULL, " \t\r\n,", &save)) != NULL) {
+        // A second mb= is refused rather than resolved: `run mb=64 mb=32` has
+        // no obvious winner, and the one thing this file must not do is
+        // allocate a size nobody asked for.
+        if (mb != 0 || strncmp(token, "mb=", 3) != 0)
+            return _EINVAL;
+        char *end = NULL;
+        long value = strtol(token + 3, &end, 10);
+        if (end == token + 3 || *end != '\0' || value <= 0 || value > HOST_RELEASE_PROBE_MAX_MB)
+            return _EINVAL;
+        mb = (unsigned long) value;
+    }
+    if (mb == 0)
+        mb = HOST_RELEASE_PROBE_DEFAULT_MB;
+
+    if (atomic_exchange(&proc_ish_release_probe_running, true))
+        return _EBUSY;
+    int err = _ENOMEM;
+    char *report = malloc(PROC_ISH_RELEASE_PROBE_MAX);
+    if (report != NULL) {
+        err = host_mem_release_probe(mb, report, PROC_ISH_RELEASE_PROBE_MAX);
+        // Published whether it ran or refused: a refusal explains itself in the
+        // report, and a write that fails with ENOMEM and leaves no explanation
+        // anywhere is exactly the shape that gets a guard blamed for a bug.
+        lock(&proc_ish_release_probe_lock, 0);
+        free(proc_ish_release_probe_report);
+        proc_ish_release_probe_report = report;
+        unlock(&proc_ish_release_probe_lock);
+    }
+    atomic_store(&proc_ish_release_probe_running, false);
+    return err;
+#endif
 }
 
 static int proc_ish_show_amd64_jit(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
@@ -710,6 +853,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"documents", .show = proc_ish_show_documents},
     {"host_info", .show = proc_ish_show_host_info},  // Add host hardware related information
     {"ips", .show = proc_ish_show_ips},
+    {"mem_release_probe", S_IFREG | 0644, .show = proc_ish_show_mem_release_probe, .update = proc_ish_update_mem_release_probe},
     {"roots", S_IFREG | 0644, .show = proc_ish_show_roots, .update = proc_ish_update_roots},
     {"workspace", S_IFREG | 0666, .show = proc_ish_show_workspace, .update = proc_ish_update_workspace},
     {"version", .show = proc_ish_show_version},

@@ -716,3 +716,675 @@ bool host_mem_headroom_low(void) {
 
     return budget.available < host_mem_headroom_floor();
 }
+
+// ===========================================================================
+// The day-1 host page release probe (docs/simulated_swap_plan.md section 7).
+//
+// One question, and everything in the pager design is downstream of it: when
+// AOK hands a 16 KiB host page back to the kernel, does the number iOS decides
+// to kill this app on actually go down by 16 KiB? It has been measured
+// byte-exact on this Mac -- section 4.1, -16,384 B per aligned host page,
+// repeatedly -- and it has never once been observed on a device. That is open
+// risk 1 in section 8, and section 7 makes settling it the first day's work
+// because a "no" kills the whole design family before any pager code is
+// written.
+//
+// Three findings from the verification round shape this probe, and each of them
+// is a way a naive version reports a green light that is not there:
+//
+// 1. IT DECIDES ON phys_footprint, NEVER ON os_proc_available_memory(). That
+//    call is API_UNAVAILABLE(macos), and its task_info twin
+//    limit_bytes_remaining reads 0 on this Mac -- measured, and the reason
+//    ISH_GUEST_MEM_BUDGET_MB exists at all -- while on iOS it clamps to 0 both
+//    when the process is over its limit and when it has none. So a probe keyed
+//    on it reads "nothing happened" on the reference host and "no memory left"
+//    on a device that is merely busy. task_info(TASK_VM_INFO).phys_footprint is
+//    the very ledger jetsam reads (section 2.4: os_proc_available_memory() is
+//    memlimit - get_task_phys_footprint(task), clamped), so a delta there IS
+//    the answer. avail is printed beside it for comparison and decides nothing.
+//
+// 2. A 0 RETURN FROM madvise() IS NOT EVIDENCE OF A RELEASE. XNU returns
+//    KERN_SUCCESS with kill_pages = -1 and moves no ledger at all whenever the
+//    range's VM object is copy-on-write shared or shadowed (section 2.4,
+//    vm_map.c:17190-17253). fork(), a dirtied MAP_PRIVATE file mapping, and
+//    mach_vm_read / mach_vm_copy above 32 KiB on arm64 all put an object into
+//    that state, and it persists after the sharer is gone until a write fault
+//    collapses the chain. AN ATTACHED DEBUGGER OR AN INSTRUMENTS MEMORY GRAPH
+//    IS A mach_vm_read. So every case here verifies that the ledger moved and
+//    prints DID NOT MOVE in as many words when it did not, the report says to
+//    run with nothing attached, and case (d) is a deliberate positive control
+//    for this exact branch: a dirtied private FILE mapping, which is EXPECTED to
+//    return 0 and release nothing. If (a) reads like (d), the region was shared
+//    or shadowed -- not iOS ignoring the primitive.
+//
+// 3. THE PROT_NONE COMPANION IS PART OF THE DESIGN NOW (section 2.1), because a
+//    REUSABLE'd frame stays mapped, readable and byte-identical, so a pointer
+//    holder the design missed writes into a released frame with no fault and no
+//    diagnostic and the swap-in silently reverts the write. Its cost is vm_map
+//    entries: 4096 scattered frames took one mapping from 2 entries to 8193 on
+//    macOS, which took it in its stride, and the iOS ceiling is unknown (open
+//    risk 3, the one thing that could make the companion unusable). So case (c)
+//    scatters the release over alternate frames and counts entries before, while
+//    N frames are out, and after restoring them.
+//
+// SAFETY, because this runs inside the app process on someone's iPad and a
+// probe that gets the app jetsammed mid-run, or that leaks its allocation,
+// leaves the machine worse than it found it:
+//   - it never runs on a read. Only a write to /proc/ish/mem_release_probe
+//     starts it (fs/proc/ish.c); reading reports the last result.
+//   - the size is a parameter with a small default and a hard cap, not the
+//     2 GiB section 7 sketched.
+//   - it refuses to start when this process is already near its ceiling, using
+//     the same fresh reading host_mem_headroom_low() decides on, and says so.
+//   - every case unmaps what it mapped on every exit path, failures included,
+//     and case (c) restores each frame's protection before writing to it.
+// ===========================================================================
+
+#include <errno.h>
+#include <inttypes.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/proc.h>
+#include <unistd.h>
+
+// One reading of everything the probe measures, out of ONE task_info trap --
+// the same reason read_host_mem() above takes both of its fields from one
+// reply. Two traps drift by whatever the rest of the app allocated in between,
+// and here that drift lands directly inside the delta being measured.
+struct release_probe_sample {
+    bool known;                 // the reply carried phys_footprint
+    uint64_t footprint;         // the ledger jetsam kills on: the decision
+    uint64_t limit_remaining;   // task_vm_info.limit_bytes_remaining, raw
+    int64_t regions;            // vm_map entries: task_vm_info.region_count
+    bool proc_avail_known;      // os_proc_available_memory() exists here
+    uint64_t proc_avail;
+};
+
+static struct release_probe_sample release_probe_take_sample(void) {
+    struct release_probe_sample sample = {};
+    task_vm_info_data_t info = {};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &info, &count) == KERN_SUCCESS) {
+        // region_count sits ahead of phys_footprint in the struct and predates
+        // revision 1, so any successful reply carries it. phys_footprint is the
+        // field that needs a revision test -- the same one read_host_mem() makes.
+        sample.regions = info.region_count;
+        if (count >= TASK_VM_INFO_REV1_COUNT) {
+            sample.footprint = info.phys_footprint;
+            sample.known = true;
+        }
+        if (count >= TASK_VM_INFO_REV4_COUNT)
+            sample.limit_remaining = info.limit_bytes_remaining;
+    }
+#if TARGET_OS_IPHONE
+    // Printed for comparison only, never acted on: 0 here means "not an app" OR
+    // "over the limit", and the call does not exist on macOS at all.
+    sample.proc_avail = os_proc_available_memory();
+    sample.proc_avail_known = true;
+#endif
+    return sample;
+}
+
+struct release_probe_report {
+    char *buf;
+    size_t size;
+    size_t len;
+    bool truncated;
+};
+
+static void release_probe_printf(struct release_probe_report *r, const char *format, ...)
+    __attribute__((format(printf, 2, 3)));
+
+static void release_probe_printf(struct release_probe_report *r, const char *format, ...) {
+    if (r->buf == NULL || r->size == 0 || r->len + 1 >= r->size) {
+        r->truncated = true;
+        return;
+    }
+    va_list ap;
+    va_start(ap, format);
+    int n = vsnprintf(r->buf + r->len, r->size - r->len, format, ap);
+    va_end(ap);
+    if (n < 0) {
+        r->truncated = true;
+        return;
+    }
+    if ((size_t) n >= r->size - r->len) {
+        r->len = r->size - 1;
+        r->truncated = true;
+        return;
+    }
+    r->len += (size_t) n;
+}
+
+static uint64_t release_probe_now_ns(void) {
+    static mach_timebase_info_data_t timebase;
+    if (timebase.denom == 0)
+        mach_timebase_info(&timebase);
+    return mach_absolute_time() * timebase.numer / timebase.denom;
+}
+
+// The one attachment that can be detected from inside the process. It is worth
+// detecting because a debugger's mach_vm_read leaves the read region's VM
+// object copy-on-write shared, and REUSABLE on a shared object returns 0 and
+// moves nothing -- so a probe run under Xcode reports the design dead when it
+// is not. An Instruments memory graph does the same thing and is NOT visible
+// here, which is why the report tells the operator to detach both by hand.
+static bool release_probe_debugger_attached(void) {
+    struct kinfo_proc info = {};
+    size_t size = sizeof(info);
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+    if (sysctl(mib, 4, &info, &size, NULL, 0) != 0 || size == 0)
+        return false;
+    return (info.kp_proc.p_flag & P_TRACED) != 0;
+}
+
+static void release_probe_print_change(struct release_probe_report *r,
+                                       const struct release_probe_sample *before,
+                                       const struct release_probe_sample *after) {
+    if (before->known && after->known)
+        release_probe_printf(r, "      phys_footprint   before %-13" PRIu64 " after %-13" PRIu64 " delta %+" PRId64 "\n",
+                             before->footprint, after->footprint,
+                             (int64_t) after->footprint - (int64_t) before->footprint);
+    else
+        release_probe_printf(r, "      phys_footprint   UNAVAILABLE -- task_info(TASK_VM_INFO) did not answer\n");
+    release_probe_printf(r, "      limit_remaining  before %-13" PRIu64 " after %-13" PRIu64 " delta %+" PRId64 "\n",
+                         before->limit_remaining, after->limit_remaining,
+                         (int64_t) after->limit_remaining - (int64_t) before->limit_remaining);
+    if (before->proc_avail_known && after->proc_avail_known)
+        release_probe_printf(r, "      os_proc_avail    before %-13" PRIu64 " after %-13" PRIu64 " delta %+" PRId64 "\n",
+                             before->proc_avail, after->proc_avail,
+                             (int64_t) after->proc_avail - (int64_t) before->proc_avail);
+    release_probe_printf(r, "      vm_map entries   before %-13" PRId64 " after %-13" PRId64 " delta %+" PRId64 "\n",
+                         before->regions, after->regions, after->regions - before->regions);
+}
+
+// The whole point of the probe. The return code of the release call is NOT
+// consulted here on purpose (see note 2 at the top of this section): the ledger
+// is the verdict and the only verdict. The one-quarter slack is for the rest of
+// the app allocating underneath us while the case runs, not for a partial
+// release -- the two states being told apart are "all of it" and "none of it",
+// and on the reference host the delta is exact to the byte.
+static bool release_probe_verdict(struct release_probe_report *r,
+                                  const struct release_probe_sample *before,
+                                  const struct release_probe_sample *after,
+                                  uint64_t expected) {
+    if (!before->known || !after->known) {
+        release_probe_printf(r, "      VERDICT: UNKNOWN -- the host would not report phys_footprint\n");
+        return false;
+    }
+    int64_t released = (int64_t) before->footprint - (int64_t) after->footprint;
+    bool moved = expected > 0 && released >= (int64_t) (expected - expected / 4);
+    release_probe_printf(r, "      VERDICT: %s -- released %" PRId64 " of %" PRIu64 " bytes expected\n",
+                         moved ? "MOVED" : "DID NOT MOVE", released, expected);
+    return moved;
+}
+
+static void release_probe_dirty(void *base, size_t bytes, size_t page, unsigned char pattern) {
+    // volatile because an optimiser is entitled to drop stores to memory
+    // nothing reads back, and dropping these would leave the region clean --
+    // the probe would then be measuring the release of memory it never charged.
+    volatile unsigned char *p = base;
+    for (size_t off = 0; off < bytes; off += page)
+        p[off] = pattern;
+}
+
+// (a) The pager's primary release primitive (section 3.4 step 6) and its
+// restore (section 3.5 step 2). This case alone decides most of the answer.
+// The REUSE half is measured separately because macOS re-charges the full
+// amount on REUSE ALONE, with no write (section 4.1, run7 A3), and a device
+// that did not would change the swap-in path.
+static void release_probe_case_reusable(struct release_probe_report *r,
+                                        size_t bytes, size_t page, bool *moved) {
+    release_probe_printf(r, "(a) madvise(MADV_FREE_REUSABLE) over %zu dirtied private anonymous frames\n",
+                         bytes / page);
+    void *base = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (base == MAP_FAILED) {
+        release_probe_printf(r, "      SKIPPED: mmap of %zu bytes failed (%s)\n", bytes, strerror(errno));
+        return;
+    }
+    release_probe_dirty(base, bytes, page, 0xa1);
+
+    struct release_probe_sample before = release_probe_take_sample();
+    uint64_t start_ns = release_probe_now_ns();
+    int rc = madvise(base, bytes, MADV_FREE_REUSABLE);
+    int rc_errno = errno;   // before the clock read, which is entitled to clobber it
+    uint64_t elapsed_ns = release_probe_now_ns() - start_ns;
+    struct release_probe_sample after = release_probe_take_sample();
+    release_probe_printf(r, "      madvise returned %d%s%s, %" PRIu64 " us for %zu frames\n",
+                         rc, rc == 0 ? "" : " errno ", rc == 0 ? "" : strerror(rc_errno),
+                         elapsed_ns / 1000, bytes / page);
+    release_probe_print_change(r, &before, &after);
+    *moved = release_probe_verdict(r, &before, &after, bytes);
+
+    // a2: REUSE with no write at all.
+    struct release_probe_sample reuse_before = release_probe_take_sample();
+    int reuse_rc = madvise(base, bytes, MADV_FREE_REUSE);
+    int reuse_errno = errno;
+    struct release_probe_sample reuse_after = release_probe_take_sample();
+    release_probe_printf(r, "    a2 madvise(MADV_FREE_REUSE), no write: returned %d%s%s\n",
+                         reuse_rc, reuse_rc == 0 ? "" : " errno ",
+                         reuse_rc == 0 ? "" : strerror(reuse_errno));
+    release_probe_print_change(r, &reuse_before, &reuse_after);
+
+    // a3: and the write on top, which is what a real swap-in does after its
+    // pread. On macOS a2 has already re-charged everything, so this is ~0.
+    struct release_probe_sample write_before = release_probe_take_sample();
+    release_probe_dirty(base, bytes, page, 0xa3);
+    struct release_probe_sample write_after = release_probe_take_sample();
+    release_probe_printf(r, "    a3 write to every frame after the REUSE\n");
+    release_probe_print_change(r, &write_before, &write_after);
+
+    munmap(base, bytes);
+}
+
+// (b) The fallback section 7 names if (a) fails: replace the range with fresh
+// anonymous memory at the same address.
+//
+// Spelled mmap(MAP_FIXED) over the LIVE mapping rather than munmap-then-mmap,
+// and that is a safety deviation from the plan's wording, not an oversight. A
+// munmap here opens a window in which any other thread of this app -- and there
+// are dozens, one per guest thread plus GCD -- can be handed that virtual
+// address by its own mmap, and the MAP_FIXED that follows would then silently
+// clobber a live mapping belonging to someone else. Section 2.2 measured
+// mmap(NULL,...) reusing a just-munmap'd VA 2000 times out of 2000, so this is
+// the likely case and not the unlucky one. MAP_FIXED over a live range replaces
+// it inside the kernel with no window, and moves the same ledger: section 4.1
+// records mmap(MAP_FIXED) at -16,384 B per frame in every state tested.
+static void release_probe_case_remap(struct release_probe_report *r,
+                                     size_t bytes, size_t page, bool *moved) {
+    release_probe_printf(r, "(b) mmap(MAP_FIXED) replacing %zu dirtied private anonymous frames\n",
+                         bytes / page);
+    void *base = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (base == MAP_FAILED) {
+        release_probe_printf(r, "      SKIPPED: mmap of %zu bytes failed (%s)\n", bytes, strerror(errno));
+        return;
+    }
+    release_probe_dirty(base, bytes, page, 0xb1);
+
+    struct release_probe_sample before = release_probe_take_sample();
+    void *again = mmap(base, bytes, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
+    int rc_errno = errno;
+    struct release_probe_sample after = release_probe_take_sample();
+    if (again == MAP_FAILED) {
+        release_probe_printf(r, "      mmap(MAP_FIXED) failed (%s); the old mapping is untouched\n",
+                             strerror(rc_errno));
+        munmap(base, bytes);
+        return;
+    }
+    release_probe_printf(r, "      mmap(MAP_FIXED) returned the same address: %s\n",
+                         again == base ? "yes" : "NO -- unexpected, both ranges are unmapped below");
+    release_probe_print_change(r, &before, &after);
+    *moved = release_probe_verdict(r, &before, &after, bytes);
+
+    struct release_probe_sample write_before = release_probe_take_sample();
+    release_probe_dirty(again, bytes, page, 0xb2);
+    struct release_probe_sample write_after = release_probe_take_sample();
+    release_probe_printf(r, "    b2 write to every frame of the replacement\n");
+    release_probe_print_change(r, &write_before, &write_after);
+
+    munmap(again, bytes);
+    if (again != base)
+        munmap(base, bytes);
+}
+
+// (c) REUSABLE followed by mprotect(PROT_NONE), which section 2.1 makes
+// mandatory in production: without it a released frame stays readable and
+// writable, and a missed pointer holder corrupts guest memory in complete
+// silence. Two things are being measured, and the second is the reason this
+// case scatters the release over alternate frames instead of covering the range
+// in one call: whether PROT_NONE keeps the footprint drop, and what it costs in
+// vm_map entries, which is open risk 3 -- macOS took 131,072 PROT_NONE holes
+// without complaint and the iOS ceiling is unknown. Alternate frames is the
+// worst case for the map, and the shape real eviction produces.
+//
+// The order is forced: REUSABLE on a range that is already PROT_NONE returns
+// EPERM (section 2.1, c2plat5 section 2).
+static void release_probe_case_protect(struct release_probe_report *r,
+                                       size_t bytes, size_t page, bool *moved,
+                                       int64_t *entries_base, int64_t *entries_out,
+                                       int64_t *entries_restored) {
+    size_t frames = bytes / page;
+    size_t targets = (frames + 1) / 2;
+    release_probe_printf(r, "(c) madvise(MADV_FREE_REUSABLE) + mprotect(PROT_NONE) on %zu of %zu frames, alternating\n",
+                         targets, frames);
+    void *base = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (base == MAP_FAILED) {
+        release_probe_printf(r, "      SKIPPED: mmap of %zu bytes failed (%s)\n", bytes, strerror(errno));
+        return;
+    }
+    release_probe_dirty(base, bytes, page, 0xc1);
+
+    struct release_probe_sample before = release_probe_take_sample();
+    size_t released = 0, protected_ok = 0, reusable_failed = 0, protect_failed = 0;
+    int first_errno = 0;
+    uint64_t start_ns = release_probe_now_ns();
+    for (size_t f = 0; f < frames; f += 2) {
+        char *frame = (char *) base + f * page;
+        if (madvise(frame, page, MADV_FREE_REUSABLE) != 0) {
+            if (first_errno == 0)
+                first_errno = errno;
+            reusable_failed++;
+            continue;
+        }
+        // Counted as released HERE, before the mprotect, and that ordering is
+        // the whole point. The madvise above has already handed the frame back
+        // and its bytes are already out of phys_footprint; if the mprotect then
+        // fails, the frame is still released and still in the delta. Counting
+        // it only on the mprotect would understate `released`, and since that
+        // is the denominator release_probe_verdict() scores the delta against,
+        // a run where every mprotect failed would compare a full delta against
+        // an expectation of zero and print MOVED -- hiding exactly the vm_map
+        // entry exhaustion this case exists to find.
+        released += page;
+        if (mprotect(frame, page, PROT_NONE) != 0) {
+            if (first_errno == 0)
+                first_errno = errno;
+            protect_failed++;
+            continue;
+        }
+        protected_ok += page;
+    }
+    uint64_t elapsed_ns = release_probe_now_ns() - start_ns;
+    struct release_probe_sample after = release_probe_take_sample();
+    // strerror() is only reached when something actually failed: strerror(0) is
+    // "Undefined error: 0", which read as a failure in the first dry run of a
+    // case where nothing had failed at all.
+    release_probe_printf(r, "      %zu frames released (%zu of them also PROT_NONE), %zu REUSABLE failures, %zu mprotect failures%s%s\n",
+                         released / page, protected_ok / page, reusable_failed, protect_failed,
+                         first_errno == 0 ? "" : "; first errno: ",
+                         first_errno == 0 ? "" : strerror(first_errno));
+    if (released > 0)
+        release_probe_printf(r, "      %.2f us per frame to evict\n",
+                             (double) elapsed_ns / 1000.0 / (double) (released / page));
+    release_probe_print_change(r, &before, &after);
+    *moved = release_probe_verdict(r, &before, &after, released);
+    *entries_base = before.regions;
+    *entries_out = after.regions;
+
+    // Restore, one frame at a time, writing ONLY to a frame whose protection
+    // came back. A write to a frame still PROT_NONE is a SIGBUS that would take
+    // the whole app down, and mprotect can fail here -- running out of vm_map
+    // entries is precisely the failure this case exists to find.
+    size_t restore_failed = 0;
+    uint64_t restore_start_ns = release_probe_now_ns();
+    for (size_t f = 0; f < frames; f += 2) {
+        char *frame = (char *) base + f * page;
+        if (mprotect(frame, page, PROT_READ | PROT_WRITE) != 0) {
+            restore_failed++;
+            continue;
+        }
+        madvise(frame, page, MADV_FREE_REUSE);
+        ((volatile unsigned char *) frame)[0] = 0xc2;
+    }
+    uint64_t restore_ns = release_probe_now_ns() - restore_start_ns;
+    struct release_probe_sample restored = release_probe_take_sample();
+    release_probe_printf(r, "    c2 restore: mprotect(RW) + MADV_FREE_REUSE + write, %zu failures, %.2f us per frame\n",
+                         restore_failed,
+                         targets > 0 ? (double) restore_ns / 1000.0 / (double) targets : 0.0);
+    release_probe_print_change(r, &after, &restored);
+    *entries_restored = restored.regions;
+
+    munmap(base, bytes);
+}
+
+// (d) The control, and the reason a DID NOT MOVE above is readable at all. A
+// dirtied MAP_PRIVATE file mapping sits on a shadowed VM object, so REUSABLE on
+// it is EXPECTED to return 0 and release nothing (section 2.4: "a dirtied 16 MiB
+// private file mapping gives ret 0 delta 0"). If (a) produced the same reading
+// as this one, the anonymous region was on a shared or shadowed object too --
+// which is what a debugger or an Instruments memory graph does to it -- rather
+// than iOS ignoring the primitive.
+//
+// It measures two more things worth having. That these pages are charged to
+// phys_footprint 1:1 in the first place, which is open risk 15: every relocated
+// .data, .got and RELRO page of every ELF the guest runs is in this class
+// (fs/real.c maps guest files MAP_PRIVATE|PROT_WRITE on Apple), and the pager
+// can never release them with REUSABLE. And that mprotect CAN release them,
+// which is the only route to that class if one is ever wanted.
+//
+// The file is sparse and unlinked immediately: ftruncate costs no disk write,
+// the dirtying happens in the shadow object rather than on NAND, and nothing is
+// left behind if this process dies in the middle.
+static void release_probe_case_private_file(struct release_probe_report *r,
+                                            size_t bytes, size_t page,
+                                            bool *reusable_moved, bool *protect_moved) {
+    release_probe_printf(r, "(d) control: %zu dirtied MAP_PRIVATE file-backed frames\n", bytes / page);
+    const char *tmpdir = getenv("TMPDIR");
+    if (tmpdir == NULL || tmpdir[0] == '\0')
+        tmpdir = "/tmp";
+    char path[1024];
+    int n = snprintf(path, sizeof(path), "%s/ish-aok-release-probe.XXXXXX", tmpdir);
+    if (n < 0 || (size_t) n >= sizeof(path)) {
+        release_probe_printf(r, "      SKIPPED: TMPDIR path too long\n");
+        return;
+    }
+    int fd = mkstemp(path);
+    if (fd < 0) {
+        release_probe_printf(r, "      SKIPPED: could not create a file under %s (%s)\n",
+                             tmpdir, strerror(errno));
+        return;
+    }
+    unlink(path);
+    if (ftruncate(fd, (off_t) bytes) != 0) {
+        release_probe_printf(r, "      SKIPPED: ftruncate to %zu bytes failed (%s)\n",
+                             bytes, strerror(errno));
+        close(fd);
+        return;
+    }
+    struct release_probe_sample map_before = release_probe_take_sample();
+    void *base = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    if (base == MAP_FAILED) {
+        release_probe_printf(r, "      SKIPPED: private file mmap of %zu bytes failed (%s)\n",
+                             bytes, strerror(errno));
+        close(fd);
+        return;
+    }
+    release_probe_dirty(base, bytes, page, 0xd1);
+    struct release_probe_sample map_after = release_probe_take_sample();
+    release_probe_printf(r, "    d1 map and dirty (this class is charged to the footprint 1:1)\n");
+    release_probe_print_change(r, &map_before, &map_after);
+
+    struct release_probe_sample before = release_probe_take_sample();
+    int rc = madvise(base, bytes, MADV_FREE_REUSABLE);
+    int rc_errno = errno;
+    struct release_probe_sample after = release_probe_take_sample();
+    release_probe_printf(r, "    d2 madvise(MADV_FREE_REUSABLE): returned %d%s%s\n",
+                         rc, rc == 0 ? "" : " errno ", rc == 0 ? "" : strerror(rc_errno));
+    release_probe_print_change(r, &before, &after);
+    *reusable_moved = release_probe_verdict(r, &before, &after, bytes);
+    release_probe_printf(r, "      (DID NOT MOVE is the EXPECTED reading here -- shadowed object)\n");
+
+    struct release_probe_sample prot_before = release_probe_take_sample();
+    int prot_rc = mprotect(base, bytes, PROT_NONE);
+    int prot_errno = errno;
+    struct release_probe_sample prot_after = release_probe_take_sample();
+    release_probe_printf(r, "    d3 mprotect(PROT_NONE) on the same range: returned %d%s%s\n",
+                         prot_rc, prot_rc == 0 ? "" : " errno ",
+                         prot_rc == 0 ? "" : strerror(prot_errno));
+    release_probe_print_change(r, &prot_before, &prot_after);
+    *protect_moved = release_probe_verdict(r, &prot_before, &prot_after, bytes);
+
+    munmap(base, bytes);
+    close(fd);
+}
+
+int host_mem_release_probe(unsigned long mb, char *report, size_t report_size) {
+    struct release_probe_report r = { .buf = report, .size = report_size };
+    if (report != NULL && report_size > 0)
+        report[0] = '\0';
+
+    // The design's frame is 16 KiB because that is the host page on Apple
+    // silicon, and the host releases, protects and re-accounts nothing smaller
+    // (section 3.2). Key everything off the real host page rather than a
+    // hard-coded 16384, so that a 4 KiB-page host measures its own page and the
+    // report says which one it measured instead of quietly rounding.
+    size_t page = (size_t) vm_page_size;
+    if (page == 0)
+        page = 16384;
+    if (mb == 0)
+        mb = HOST_RELEASE_PROBE_DEFAULT_MB;
+    if (mb > HOST_RELEASE_PROBE_MAX_MB)
+        mb = HOST_RELEASE_PROBE_MAX_MB;
+    size_t bytes = (size_t) mb * 1024 * 1024;
+    bytes -= bytes % page;
+    if (bytes < page * 2)
+        bytes = page * 2;
+    // The file case is capped harder than the anonymous ones: it is a control,
+    // it needs no size to say what it says, and it is the only case that puts a
+    // file on the device's storage even for a moment.
+    size_t file_bytes = bytes;
+    if (file_bytes > 16 * 1024 * 1024)
+        file_bytes = 16 * 1024 * 1024;
+
+    release_probe_printf(&r, "iSH-AOK host page release probe -- docs/simulated_swap_plan.md section 7, day 1\n");
+    release_probe_printf(&r, "The question: does releasing a host page reduce the footprint iOS kills on?\n");
+    release_probe_printf(&r, "RUN THIS WITH NO DEBUGGER AND NO INSTRUMENTS ATTACHED. A live mach_vm_read copy\n");
+    release_probe_printf(&r, "of a region leaves its VM object copy-on-write shared, and MADV_FREE_REUSABLE on\n");
+    release_probe_printf(&r, "a shared object returns 0 and moves no ledger -- so an attached tool makes this\n");
+    release_probe_printf(&r, "probe report the design dead when it is not.\n\n");
+
+#if TARGET_OS_SIMULATOR
+    const char *host = "iOS Simulator (NOT a device: it has the Mac's VM, and answers for the Mac)";
+#elif TARGET_OS_IPHONE
+    const char *host = "iOS / iPadOS device -- this is the reading that decides the design";
+#else
+    const char *host = "macOS -- the reference host, not the answer for iOS";
+#endif
+    release_probe_printf(&r, "host             %s\n", host);
+    release_probe_printf(&r, "host page        %zu bytes (the design's frame; 16384 on Apple silicon)\n", page);
+    release_probe_printf(&r, "region           %zu bytes = %zu frames (file case: %zu bytes)\n",
+                         bytes, bytes / page, file_bytes);
+    bool traced = release_probe_debugger_attached();
+    release_probe_printf(&r, "debugger         %s\n",
+                         traced ? "ATTACHED -- see the warning at the end; results are not trustworthy"
+                                  : "not attached (a memory-graph snapshot is invisible here; detach it by hand)");
+
+    // The guard. It reads exactly what host_mem_headroom_low() reads, freshly,
+    // because a probe that pushes a device already near its ceiling over the
+    // edge gets the app jetsammed mid-run -- and the operator would then have a
+    // dead app and no result, which is the one outcome worse than a "no".
+    // Say once, at the top, what the "for comparison only" column is and why it
+    // may be missing, so that a reader of the device report and a reader of the
+    // Mac report are not looking for the same line in vain.
+    struct release_probe_sample probe_avail = release_probe_take_sample();
+    if (probe_avail.proc_avail_known)
+        release_probe_printf(&r, "os_proc_avail    printed below for comparison ONLY: it clamps to 0 both when this process is over its limit and when it has none\n");
+    else
+        release_probe_printf(&r, "os_proc_avail    API_UNAVAILABLE(macos), so not printed below; its task_info twin limit_bytes_remaining is, and reads 0 here for the same reason\n");
+
+    struct release_probe_sample baseline = release_probe_take_sample();
+    if (baseline.known)
+        release_probe_printf(&r, "footprint        %" PRIu64 " bytes now, in %" PRId64 " vm_map entries\n",
+                             baseline.footprint, baseline.regions);
+    else
+        release_probe_printf(&r, "footprint        UNAVAILABLE -- task_info(TASK_VM_INFO) did not answer, so no case below can reach a verdict\n");
+    if (!baseline.known) {
+        // Refuse rather than run. Every verdict this probe prints is a
+        // phys_footprint delta, so with no footprint there is nothing to
+        // measure -- and this is the one state where the two guards below are
+        // also blind, because host_mem_headroom_low() and mem_budget_read()
+        // read their figures from the same trap that just refused. Allocating
+        // and dirtying up to the cap here would put real memory pressure on a
+        // device for a result that is uninterpretable by construction.
+        release_probe_printf(&r, "\n");
+        release_probe_printf(&r, "REFUSED: nothing was allocated. Every case below scores itself on a\n");
+        release_probe_printf(&r, "phys_footprint delta, and this host would not report one, so the run could\n");
+        release_probe_printf(&r, "not answer the question it exists to ask. The headroom guard reads the same\n");
+        release_probe_printf(&r, "trap, so it cannot bound the run either.\n");
+        return _ENOTSUP;
+    }
+    struct mem_budget budget = mem_budget_read(true, NULL);
+    if (budget.known)
+        release_probe_printf(&r, "budget           total %" PRIu64 ", available %s%" PRIu64 ", headroom floor %" PRIu64 "\n",
+                             budget.total, budget.available_known ? "" : "(unmeasured) ",
+                             budget.available, host_mem_headroom_floor());
+    else
+        // Not "no information about memory": the footprint above was read from
+        // the same trap. It means no per-process CEILING exists to be near, so
+        // the size cap is the only thing bounding this run. On iOS the jetsam
+        // limit supplies one; on macOS ISH_GUEST_MEM_BUDGET_MB does.
+        release_probe_printf(&r, "budget           unknown -- this host names no per-process ceiling, so the %lu MiB cap is the only bound (set ISH_GUEST_MEM_BUDGET_MB to give the guard one)\n",
+                             (unsigned long) HOST_RELEASE_PROBE_MAX_MB);
+    release_probe_printf(&r, "\n");
+
+    if (host_mem_headroom_low()) {
+        release_probe_printf(&r, "REFUSED: this process is already inside its headroom floor. Running the probe\n");
+        release_probe_printf(&r, "now would allocate %zu bytes on top of that, and being jetsammed mid-run costs\n", bytes);
+        release_probe_printf(&r, "the result as well as the app. Free some guest memory and try again.\n");
+        return _ENOMEM;
+    }
+    if (budget.known && budget.available_known) {
+        // Peak extra footprint is one region: the cases run one at a time and
+        // each unmaps before the next starts. Ask for that plus the floor the
+        // guard defends plus a margin, so the probe cannot itself be what puts
+        // the process inside the floor.
+        uint64_t need = (uint64_t) bytes + host_mem_headroom_floor() + 64 * 1024 * 1024;
+        if (budget.available < need) {
+            release_probe_printf(&r, "REFUSED: %" PRIu64 " bytes available, and this probe wants %" PRIu64 " -- the %zu byte\n",
+                                 budget.available, need, bytes);
+            release_probe_printf(&r, "region, the %" PRIu64 " byte headroom floor it must not eat into, and 64 MiB of margin.\n",
+                                 host_mem_headroom_floor());
+            release_probe_printf(&r, "Run it with a smaller mb=, or free some guest memory first.\n");
+            return _ENOMEM;
+        }
+    }
+
+    bool moved_reusable = false, moved_remap = false, moved_protect = false;
+    bool file_reusable_moved = false, file_protect_moved = false;
+    // -1 so that a case (c) which never ran (its mmap failed) prints "not
+    // measured" instead of three zeroes that read like a real census.
+    int64_t entries_base = -1, entries_out = -1, entries_restored = -1;
+
+    uint64_t started_ns = release_probe_now_ns();
+    release_probe_case_reusable(&r, bytes, page, &moved_reusable);
+    release_probe_printf(&r, "\n");
+    release_probe_case_remap(&r, bytes, page, &moved_remap);
+    release_probe_printf(&r, "\n");
+    release_probe_case_protect(&r, bytes, page, &moved_protect,
+                               &entries_base, &entries_out, &entries_restored);
+    release_probe_printf(&r, "\n");
+    release_probe_case_private_file(&r, file_bytes, page, &file_reusable_moved, &file_protect_moved);
+    uint64_t total_ms = (release_probe_now_ns() - started_ns) / 1000000;
+
+    // Open risk 3: the PROT_NONE companion the design now requires turns one
+    // mapping into thousands of vm_map entries, and the iOS ceiling for that is
+    // unknown. This line is the measurement that finds it.
+    if (entries_base >= 0)
+        release_probe_printf(&r, "\nvm_map entries   %" PRId64 " before, %" PRId64 " with %zu scattered frames released, %" PRId64 " after restoring them\n",
+                             entries_base, entries_out, (bytes / page + 1) / 2, entries_restored);
+    else
+        release_probe_printf(&r, "\nvm_map entries   not measured -- case (c) never ran\n");
+    release_probe_printf(&r, "whole probe      %" PRIu64 " ms\n\n", total_ms);
+
+    release_probe_printf(&r, "How to read this. (d) is the control: a dirtied private FILE mapping is on a\n");
+    release_probe_printf(&r, "shadowed VM object, so its REUSABLE is EXPECTED to return 0 and release nothing.\n");
+    release_probe_printf(&r, "If (a) read the same way as (d), the anonymous region was shared or shadowed too\n");
+    release_probe_printf(&r, "-- detach every debugger and memory-graph tool and run it again -- rather than\n");
+    release_probe_printf(&r, "this host ignoring the primitive. On the macOS reference (section 4.1) (a), (b)\n");
+    release_probe_printf(&r, "and (c) each release the full region to the byte, (c) costs about one vm_map\n");
+    release_probe_printf(&r, "entry per released frame and gives them all back on restore, and (d) releases\n");
+    release_probe_printf(&r, "nothing until mprotect.\n\n");
+
+    if (traced) {
+        release_probe_printf(&r, "WARNING: A DEBUGGER IS ATTACHED. Any DID NOT MOVE above is uninterpretable:\n");
+        release_probe_printf(&r, "its mach_vm_read of this process is exactly the state that makes REUSABLE a\n");
+        release_probe_printf(&r, "silent no-op, and the state outlives the read. Detach and run it again.\n\n");
+    }
+    if (r.truncated)
+        release_probe_printf(&r, "(report truncated)\n\n");
+
+    // The one line the whole probe exists to produce.
+    if (moved_reusable && moved_protect)
+        release_probe_printf(&r, "PAGER DESIGN: VIABLE on this host -- releasing a host page really does reduce the footprint this OS kills the app on, and the PROT_NONE guard rail keeps the drop.\n");
+    else if (moved_reusable)
+        release_probe_printf(&r, "PAGER DESIGN: VIABLE on this host, but the PROT_NONE companion did not hold the drop, so section 2.1's guard rail needs rethinking before the pager is built.\n");
+    else if (moved_remap || moved_protect)
+        release_probe_printf(&r, "PAGER DESIGN: VIABLE on this host only through the fallback -- MADV_FREE_REUSABLE released nothing, so eviction must use the mmap(MAP_FIXED) or mprotect path instead.\n");
+    else if (!file_protect_moved)
+        release_probe_printf(&r, "PAGER DESIGN: NO ANSWER -- not one primitive moved the footprint, not even mprotect on the control mapping, so this reading is measuring something other than the ledger and must not be believed either way.\n");
+    else
+        release_probe_printf(&r, "PAGER DESIGN: NOT VIABLE on this host -- no release primitive moved phys_footprint on ordinary anonymous memory, so there is no headroom for a pager to buy back and the design family in docs/simulated_swap_plan.md is dead here.\n");
+    return 0;
+}
