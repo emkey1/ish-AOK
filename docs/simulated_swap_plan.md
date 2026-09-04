@@ -1415,20 +1415,25 @@ growth guards; the second-chance aging clock with its TLB refresh;
 `/proc/ish/swap`; and the system-wide and per-process guest surfaces
 (`meminfo`, `vmstat`, `sysinfo(2)`, `status`, `statm`, `stat`, `smaps`).
 
-**Still open from this phase.** `kswapd` and its watermarks -- direct reclaim
-covers the critical path, so background reclaim is the remaining half; the
-thrash guard, which the write budget's comment names as what should stop a bad
-workload first; the low-latency swap-in that drops the lock across the `pread`
-(section 3.5's drop-run-retake-rewalk, still a stall of 82 us p50 / 683 us
-p99.9 on device); and the CI pointer-inventory check.
+`kswapd` and the thrash guard landed too (`2eedfeb9b`), which took the barrier's
+task-less-caller support with them -- `task_poke_shared_mem` treated a NULL
+`task` as "do nothing" rather than "no self to skip", so a task-less barrier
+poked nobody and fell through to a blocking `write_lock`.
+
+**Still open from this phase.** The low-latency swap-in that drops the lock
+across the `pread` (section 3.5's drop-run-retake-rewalk, still a stall of 82 us
+p50 / 683 us p99.9 on device); and the CI pointer-inventory check.
 
 **Corrections this phase forced on the design.** Section 2.8 (the slot belongs
 to the frame) is the largest. Beyond it: the aging clock's `accessed` byte is
 only written on a TLB FILL, so the sweep must bump `mem_changed` every pass or
 it is blind to the hottest pages in the process -- 506 of 1536 avoidable faults
-came from exactly that; and direct reclaim must be allowed to lower the age
-bar, because the clock needs two passes before anything is a candidate and a
-caller that gives up on one `ENOMEM` never gets a second.
+came from exactly that; direct reclaim must be allowed to lower the age bar,
+because the clock needs two passes before anything is a candidate and a caller
+that gives up on one `ENOMEM` never gets a second; and the thrash guard's pause
+must EXPIRE rather than wait to be cleared by evidence, because while it holds
+nothing is evicted and so there is no evidence to be had -- it latched for the
+life of the process until a cooldown was added.
 
 ### Phase 2: surfaces, contract, app (2-3 weeks, about 700 LOC)
 
