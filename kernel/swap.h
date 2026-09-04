@@ -70,9 +70,14 @@ void swap_disable(void);
 void swap_startup(void);
 
 // The Settings toggle and size field, as the app's KVO observers see them.
-// `enabled` false disables whatever is running; `enabled` true with `size_mb`
-// 0 is refused, because the UI is required to ask for a size rather than pick
-// one on the user's behalf.
+//
+// RECORDS ONLY, for the next swap_startup(). It does not allocate, reserve or
+// open anything, and it does not touch a running pager in either direction --
+// swap is sized once at launch and is deliberately not resizable in place
+// (section 3.13). The observer that calls this fires on every launch, including
+// ones that never boot a guest, and when it used to act instead of record, a
+// simulator sitting on the rootfs picker with nothing installed had half a
+// gigabyte of swap file open in its container.
 void swap_set_preference(bool enabled, unsigned size_mb);
 
 // May a guest process change the switch, through /proc/ish/swap?
@@ -122,6 +127,7 @@ struct swap_stats {
     uint64_t slot_size;        // one host frame
     uint64_t slots_total, slots_free;
     uint64_t alloc_failures;   // evictions refused because the area was full
+    uint64_t no_area;          // evictions refused because there was no area
     uint64_t io_errors;
     uint64_t bytes_written;    // since enable, for the write-budget work
     bool enabled;

@@ -236,6 +236,17 @@ static int proc_ish_show_swap_evict(struct proc_entry *UNUSED(entry), struct pro
 }
 
 static int proc_ish_update_swap_evict(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    // Gated exactly like /proc/ish/swap, and for a reason a reviewer had to
+    // point out: this forces another process's memory out to storage, so on a
+    // device with swap enabled in Settings it would let any guest root process
+    // spend the user's flash write budget on any pid it liked. It is a
+    // development control -- the shipping trigger is the pager's own -- so it
+    // belongs on the same launch-time gate rather than being reachable from an
+    // installed app.
+    if (!swap_guest_control_allowed())
+        return _EPERM;
+    if (!superuser())
+        return _EPERM;
     if (data->size == 0 || data->size > 32)
         return _EINVAL;
     char text[33];

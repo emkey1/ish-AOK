@@ -27,9 +27,12 @@ int host_unlinked_tmpfd(void);
 // ---------------------------------------------------------------------------
 //
 // One lock over the whole module. It is a LEAF: nothing else is taken under it,
-// and it is never held across I/O -- swap_slot_write and swap_slot_read do
-// their pread/pwrite outside it, which they can because a slot's owner is the
-// frame that holds it and no two frames hold the same slot.
+// and it is NEVER held across I/O. swap_slot_write and swap_slot_read do their
+// pread/pwrite outside it, which they can because a slot's owner is the frame
+// that holds it and no two frames hold the same slot; swap_enable builds and
+// reserves the area outside it and publishes the result under it; and the
+// teardown paths detach the descriptor under it and ftruncate/close outside
+// (swap_file_detach_locked and swap_file_dispose).
 //
 // The lock ordering that matters is the one this module does NOT participate
 // in. The pager calls swap_slot_alloc under the address-space barrier and
@@ -38,6 +41,19 @@ int host_unlinked_tmpfd(void);
 // or take a task lock while held. swap_disable is the exception and is written
 // to drop it before it walks anything.
 static lock_t swap_lock = LOCK_INITIALIZER;
+
+// Serialises the whole of an enable against the whole of a disable, which
+// swap_lock cannot: swap_disable has to DROP swap_lock to walk address spaces
+// (it takes task and address-space locks, which sit above it), and a
+// swap_enable arriving in that window used to create a file that the disable
+// then closed, leaving swap_on true over no file at all -- a pager reporting
+// itself on with nothing behind it.
+//
+// Strictly above swap_lock and above the address-space barrier. Nothing takes
+// it from below: its only holders are swap_enable and swap_disable, reached
+// from guest boot, the app's preferences, and a write to /proc/ish/swap, none
+// of which hold a mem lock.
+static lock_t swap_config_lock = LOCK_INITIALIZER;
 
 // Read on the eviction path without the lock, so atomic. Eviction only; the
 // fault path deliberately does not consult it (see the header).
@@ -51,6 +67,10 @@ static uint64_t *swap_free_bitmap;     // 1 = free
 static uint32_t swap_alloc_rover;      // where the last search stopped
 
 static _Atomic uint64_t swap_stat_alloc_fail;
+// Evictions refused because there was no swap area at all, as opposed to an
+// area that is full. Distinct counters because they mean different things: one
+// says the user did not ask for swap, the other says they asked for too little.
+static _Atomic uint64_t swap_stat_no_area;
 static _Atomic uint64_t swap_stat_io_errors;
 static _Atomic uint64_t swap_stat_bytes_written;
 
@@ -127,28 +147,43 @@ static int swap_reserve(int fd, uint64_t bytes) {
     return 0;
 }
 
-static void swap_file_close_locked(void) {
-    if (swap_fd >= 0) {
-        // Truncate before closing: the file is already unlinked, so this is
-        // what actually hands the blocks back rather than waiting for the
-        // process to exit. A clean exit should leave nothing behind.
-        if (ftruncate(swap_fd, 0) != 0)
-            /* nothing useful to do; the unlink still frees it at exit */;
-        close(swap_fd);
-        swap_fd = -1;
-    }
-    free(swap_free_bitmap);
+// Detach the area from the module under swap_lock and hand the descriptor and
+// bitmap back to the caller, which disposes of them with the lock DROPPED.
+//
+// The split exists because ftruncate and close are I/O, and this module's whole
+// lock story is that swap_lock is a leaf that is never held across I/O -- a
+// claim that was not actually true while the close path did both under it.
+static int swap_file_detach_locked(uint64_t **bitmap_out) {
+    int fd = swap_fd;
+    *bitmap_out = swap_free_bitmap;
+    swap_fd = -1;
     swap_free_bitmap = NULL;
     swap_slot_count = 0;
     swap_slots_used = 0;
     swap_alloc_rover = 0;
+    swap_slot_size = 0;
+    return fd;
+}
+
+static void swap_file_dispose(int fd, uint64_t *bitmap) {
+    if (fd >= 0) {
+        // Truncate before closing: the file is already unlinked, so this is
+        // what actually hands the blocks back rather than waiting for the
+        // process to exit. A clean exit should leave nothing behind.
+        if (ftruncate(fd, 0) != 0)
+            /* nothing useful to do; the unlink still frees it at exit */;
+        close(fd);
+    }
+    free(bitmap);
 }
 
 // ---------------------------------------------------------------------------
 // Enable and disable
 // ---------------------------------------------------------------------------
 
-int swap_enable(uint64_t bytes) {
+static void swap_disable_locked(void);
+
+static int swap_enable_locked(uint64_t bytes) {
     uint64_t frame = mem_frame_size();
     if (frame == 0)
         return _EINVAL;
@@ -178,8 +213,10 @@ int swap_enable(uint64_t bytes) {
             return _EBUSY;
         }
         // A different size is a disable then an enable, and the disable has to
-        // happen with the lock dropped because it walks address spaces.
-        swap_disable();
+        // happen with swap_lock dropped because it walks address spaces. The
+        // config lock is still held throughout, so nothing else can enable in
+        // the gap.
+        swap_disable_locked();
         lock(&swap_lock, 0);
         if (swap_fd >= 0) {
             unlock(&swap_lock);
@@ -187,18 +224,23 @@ int swap_enable(uint64_t bytes) {
         }
     }
 
+    unlock(&swap_lock);
+
+    // Built with swap_lock DROPPED: creating and reserving the area is
+    // mkstemp + F_PREALLOCATE + ftruncate over as much as 16 GiB, and holding
+    // a leaf lock that every fault path takes across that would stall the whole
+    // guest. Nothing else can be enabling concurrently -- swap_config_lock is
+    // held for the whole of this function -- and the state is published under
+    // swap_lock at the end.
     uint64_t total = (uint64_t) slots * frame;
     uint32_t words = (slots + SWAP_BITS_PER_WORD - 1) / SWAP_BITS_PER_WORD;
     uint64_t *bitmap = calloc(words, sizeof(*bitmap));
-    if (bitmap == NULL) {
-        unlock(&swap_lock);
+    if (bitmap == NULL)
         return _ENOMEM;
-    }
 
     int fd = host_unlinked_tmpfd();
     if (fd < 0) {
         free(bitmap);
-        unlock(&swap_lock);
         return fd;
     }
     int err = swap_reserve(fd, total);
@@ -207,10 +249,10 @@ int swap_enable(uint64_t bytes) {
     if (err != 0) {
         close(fd);
         free(bitmap);
-        unlock(&swap_lock);
         return err;                 // never a smaller area than was asked for
     }
 
+    lock(&swap_lock, 0);
     swap_fd = fd;
     swap_slot_size = frame;
     swap_slot_count = slots;
@@ -230,7 +272,7 @@ int swap_enable(uint64_t bytes) {
     return 0;
 }
 
-void swap_disable(void) {
+static void swap_disable_locked(void) {
     // Stop new eviction FIRST and outside everything else, so the walk below
     // is chasing a set that can only shrink.
     atomic_store_explicit(&swap_on, false, memory_order_release);
@@ -243,13 +285,31 @@ void swap_disable(void) {
 
     // Bring every evicted page back, one address space at a time.
     //
-    // The trylock-and-skip is the pattern collect_mem_page_stats (fs/proc/root.c)
-    // documents at length: do_exit spins in exit_wait_backoff() while holding
-    // general_lock, and the snapshot reference we hold keeps that loop alive, so
-    // a blocking lock here deadlocks. A task we cannot lock is mid-exit and its
-    // address space is about to be torn down, which frees its slots anyway.
+    // EVERY TASK, not just thread-group leaders. Summing leaders is the right
+    // shape for counting address spaces once (fs/proc/root.c's
+    // collect_mem_page_stats does exactly that), but this is not counting: an
+    // address space has to be REACHED, and a thread group whose leader called
+    // pthread_exit() has a live mm with no live leader. Missing one means
+    // swapoff never brings its pages back, so swap_slots_used never reaches
+    // zero, so the file is kept for ever and swap_enable refuses with EBUSY
+    // from then on. Leaders-only is therefore wrong in the one direction that
+    // matters, and duplicates are merely wasted work.
+    //
+    // Duplicates ARE the common case -- every thread of a group names the same
+    // mm -- so they are filtered by mm pointer rather than paid for: the walk
+    // takes the address-space barrier, which stops every thread of that
+    // process, and doing it once per thread would be quadratic in an
+    // 8-thread guest.
+    //
+    // The trylock-and-skip is the pattern collect_mem_page_stats documents at
+    // length: do_exit spins in exit_wait_backoff() while holding general_lock,
+    // and the snapshot reference we hold keeps that loop alive, so a blocking
+    // lock here deadlocks. A task we cannot lock is mid-exit and its address
+    // space is about to be torn down, which frees its slots anyway.
     struct task_snapshot snapshot = {0};
-    if (task_snapshot_collect(&snapshot, true) == 0) {
+    if (task_snapshot_collect(&snapshot, false) == 0) {
+        struct mm **seen = calloc(snapshot.count, sizeof(*seen));
+        unsigned seen_count = 0;
         for (unsigned i = 0; i < snapshot.count; i++) {
             struct task *task = snapshot.tasks[i];
             if (trylock(&task->general_lock) != 0)
@@ -260,9 +320,20 @@ void swap_disable(void) {
             unlock(&task->general_lock);
             if (mm == NULL)
                 continue;
-            swap_fault_mem_all(&mm->mem);
+            bool already = false;
+            if (seen != NULL) {
+                for (unsigned j = 0; j < seen_count && !already; j++)
+                    already = seen[j] == mm;
+                if (!already)
+                    seen[seen_count++] = mm;
+            }
+            // A failed calloc only costs repeated work, never correctness, so
+            // it does not fail the swapoff.
+            if (!already)
+                swap_fault_mem_all(&mm->mem);
             mm_release(mm);
         }
+        free(seen);
         task_snapshot_release(&snapshot);
     }
 
@@ -278,9 +349,24 @@ void swap_disable(void) {
                "open so those faults can still be answered\n", swap_slots_used);
         return;
     }
-    swap_file_close_locked();
+    uint64_t *bitmap = NULL;
+    int fd = swap_file_detach_locked(&bitmap);
     unlock(&swap_lock);
+    swap_file_dispose(fd, bitmap);
     printk("swap: disabled\n");
+}
+
+int swap_enable(uint64_t bytes) {
+    lock(&swap_config_lock, 0);
+    int err = swap_enable_locked(bytes);
+    unlock(&swap_config_lock);
+    return err;
+}
+
+void swap_disable(void) {
+    lock(&swap_config_lock, 0);
+    swap_disable_locked();
+    unlock(&swap_config_lock);
 }
 
 // ---------------------------------------------------------------------------
@@ -289,8 +375,19 @@ void swap_disable(void) {
 
 int swap_slot_alloc(uint32_t *slot_out) {
     lock(&swap_lock, 0);
-    if (swap_fd < 0 || swap_free_bitmap == NULL) {
+    // The switch is tested HERE as well as at the top of a sweep. A sweep can
+    // span a swapoff -- it walks a whole address space under the barrier, and
+    // the swapoff is walking the others -- and a slot handed out after the
+    // swapoff has already visited this address space would never be brought
+    // back by it. swap_slots_used would then never reach zero, the file would
+    // be kept for ever, and swap_enable would refuse with EBUSY from then on.
+    if (!atomic_load_explicit(&swap_on, memory_order_acquire) ||
+            swap_fd < 0 || swap_free_bitmap == NULL) {
         unlock(&swap_lock);
+        // Counted, because "there was no area to evict into" and "the area the
+        // user chose is full" are different things the /proc report should not
+        // conflate -- and the first used to be invisible in every counter.
+        atomic_fetch_add_explicit(&swap_stat_no_area, 1, memory_order_relaxed);
         return _ENOSPC;
     }
     // A rover rather than a scan from 0: reusing the slot that came free most
@@ -337,15 +434,21 @@ void swap_slot_free(uint32_t slot) {
     }
     bool drained = swap_slots_used == 0 &&
         !atomic_load_explicit(&swap_on, memory_order_relaxed) && swap_fd >= 0;
+    int fd = -1;
+    uint64_t *bitmap = NULL;
     if (drained) {
         // The last frame a stopped pager still had out has come home. Now the
         // file can go, which is what makes swap_disable's "keeping the file
         // open" state temporary rather than permanent.
-        swap_file_close_locked();
+        fd = swap_file_detach_locked(&bitmap);
     }
     unlock(&swap_lock);
-    if (drained)
+    if (drained) {
+        // Outside the lock: this is a caller on the fault path, and it must not
+        // hold a leaf lock through an ftruncate.
+        swap_file_dispose(fd, bitmap);
         printk("swap: the last outstanding slot came back; file released\n");
+    }
 }
 
 // The descriptor is read under the lock and used outside it. That is safe
@@ -405,33 +508,47 @@ int swap_slot_read(uint32_t slot, void *buf, size_t len) {
 // Preferences
 // ---------------------------------------------------------------------------
 
+// RECORDS ONLY. Nothing here allocates, reserves or opens anything; only
+// swap_startup() acts, and only on a launch that is actually going to run a
+// guest.
+//
+// That separation is not tidiness. This is a KVO observer on the app's
+// preferences, registered with NSKeyValueObservingOptionInitial, so it fires on
+// every launch whether or not a guest ever boots. MEASURED when it did act
+// here: an iPhone 17 simulator sitting on the Filesystems picker with no rootfs
+// installed -- a launch that reached RecordBootFailure(_ENOENT) and never
+// started a guest -- had a 536887296-byte swap file open in its container,
+// because the observer had already called swap_enable(). lsof named it.
+//
+// It is also what section 3.13 asks for: swap is sized once at launch and is
+// deliberately not resizable in place, so a preference changed now is a
+// preference for the NEXT launch. A running pager is left alone, in both
+// directions -- turning the switch off does not tear down an area whose frames
+// the guest is still faulting on.
 void swap_set_preference(bool enabled, unsigned size_mb) {
     atomic_store_explicit(&swap_pref_enabled, enabled, memory_order_relaxed);
     atomic_store_explicit(&swap_pref_size_mb, size_mb, memory_order_relaxed);
     atomic_store_explicit(&swap_pref_seen, true, memory_order_release);
-    if (!enabled) {
-        swap_disable();
-        return;
-    }
-    if (size_mb == 0) {
-        // Refused rather than guessed. The UI is required to ask for a size;
-        // picking one here would be AOK choosing how much of the user's flash
-        // to write to.
-        printk("swap: enable requested with no size; ignoring\n");
-        return;
-    }
-    int err = swap_enable((uint64_t) size_mb * 1024 * 1024);
-    if (err < 0)
-        printk("swap: enable failed (%d)\n", err);
 }
 
 void swap_startup(void) {
     if (atomic_load_explicit(&swap_pref_seen, memory_order_acquire)) {
-        if (atomic_load_explicit(&swap_pref_enabled, memory_order_relaxed)) {
-            unsigned mb = atomic_load_explicit(&swap_pref_size_mb, memory_order_relaxed);
-            if (mb != 0)
-                swap_enable((uint64_t) mb * 1024 * 1024);
+        if (!atomic_load_explicit(&swap_pref_enabled, memory_order_relaxed))
+            return;
+        unsigned mb = atomic_load_explicit(&swap_pref_size_mb, memory_order_relaxed);
+        if (mb == 0) {
+            // Refused rather than guessed, and said out loud. The UI is
+            // required to ask for a size; picking one here would be AOK
+            // deciding how much of the user's flash to write to. "Asked for
+            // with no size" and "asked for and could not start" have to stay
+            // distinguishable, which is why the app hands both halves across
+            // rather than folding them into one flag.
+            printk("swap: enabled in Settings but no size chosen; staying off\n");
+            return;
         }
+        int err = swap_enable((uint64_t) mb * 1024 * 1024);
+        if (err < 0)
+            printk("swap: enable failed (%d)\n", err);
         return;
     }
     // The CLI and Xcode-scheme path. Nothing on this branch is reachable from
@@ -465,11 +582,15 @@ void swap_get_stats(struct swap_stats *out) {
     out->slots_free = out->slots_total - swap_slots_used;
     out->total_bytes = out->slots_total * swap_slot_size;
     out->free_bytes = out->slots_free * swap_slot_size;
-    out->draining = swap_fd >= 0 &&
-        !atomic_load_explicit(&swap_on, memory_order_relaxed);
+    // Both read under the lock, and both from the same sample: reading
+    // `enabled` after dropping it let /proc/ish/swap print a pair that was
+    // never true at once -- "on" beside a slot count from before an enable, or
+    // "off, draining" beside the totals of an area that had just been created.
+    out->enabled = atomic_load_explicit(&swap_on, memory_order_relaxed);
+    out->draining = swap_fd >= 0 && !out->enabled;
     unlock(&swap_lock);
-    out->enabled = swap_enabled();
     out->alloc_failures = atomic_load_explicit(&swap_stat_alloc_fail, memory_order_relaxed);
+    out->no_area = atomic_load_explicit(&swap_stat_no_area, memory_order_relaxed);
     out->io_errors = atomic_load_explicit(&swap_stat_io_errors, memory_order_relaxed);
     out->bytes_written = atomic_load_explicit(&swap_stat_bytes_written, memory_order_relaxed);
 }
@@ -489,6 +610,7 @@ size_t swap_status_text(char *buf, size_t size) {
         "free_bytes       %llu\n"
         "bytes_written    %llu\n"
         "alloc_failures   %llu  (evictions refused, the area is full)\n"
+        "no_area          %llu  (evictions refused, there is no area)\n"
         "io_errors        %llu\n",
         s.enabled ? "yes" : "no",
         s.enabled ? "on" : (s.draining ? "off, draining" : "off"),
@@ -499,6 +621,7 @@ size_t swap_status_text(char *buf, size_t size) {
         (unsigned long long) s.free_bytes,
         (unsigned long long) s.bytes_written,
         (unsigned long long) s.alloc_failures,
+        (unsigned long long) s.no_area,
         (unsigned long long) s.io_errors);
     if (n < 0)
         return 0;

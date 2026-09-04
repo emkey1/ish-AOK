@@ -1766,8 +1766,47 @@ static void data_unmap_run_settle(struct data_owner_run *run, struct mem *mem) {
     if (run->pages == 0)
         return;
     struct data *data = run->data;
+    size_t offset = run->offset;
     pages_t pages = run->pages;
     data_owner_run_flush(run, mem, -1);
+
+    // Reclaim the slots of any frame this run just emptied -- BEFORE the
+    // refcount references are given up, and that ordering is the whole point.
+    //
+    // The mapping may well survive: a frame whose last page-table entry just
+    // went can never be faulted back, because there is no entry left to fault,
+    // so its slot would sit allocated until the whole struct data is freed,
+    // which for a long-lived mapping is never. The slot pool is a fixed size
+    // the user chose, so leaking into it is a pager that quietly stops being
+    // able to evict, and a partial munmap, an mremap that shrinks and
+    // MADV_DONTNEED over part of a mapping all reach it -- as glibc's
+    // malloc_trim, jemalloc's purge and Go's runtime all do routinely.
+    //
+    // Doing it AFTER the refcount drop, which is where this started, is a
+    // use-after-free: once our references are gone another address space
+    // unmapping the same struct data can take the count to zero and free it,
+    // and the frame walk then reads a freed struct. Same trap as the one
+    // data_unmap_run_settle exists to avoid, one line further down. It cost a
+    // SIGSEGV in the arm64 regression suite.
+    //
+    // The frame counts are already correct here, because data_owner_run_flush
+    // above is what decremented them. A count of zero says no address space has
+    // an entry in this frame, so no fault can be racing us for it, and the
+    // exchange makes the free happen once even if two address spaces empty
+    // different frames of the same mapping at the same moment.
+    if (data->frame_slot != NULL) {
+        size_t frame = mem_frame_size();
+        size_t last = offset + (size_t) (pages - 1) * PAGE_SIZE;
+        for (size_t f = offset / frame; f <= last / frame; f++) {
+            if (data_frame_ref_count(data, f * frame) != 0)
+                continue;
+            uint32_t slot = atomic_exchange_explicit(&data->frame_slot[f],
+                    SWAP_SLOT_NONE, memory_order_acq_rel);
+            if (slot != SWAP_SLOT_NONE)
+                swap_slot_free(slot);
+        }
+    }
+
     if (atomic_fetch_sub(&data->refcount, (unsigned) pages) == (unsigned) pages)
         data_destroy(mem, data);
 }
