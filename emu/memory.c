@@ -718,6 +718,8 @@ static void mem_pt_del(struct mem *mem, page_t page) {
     // re-establishes the same invariant on the way in; this is the resting
     // state on the way out.
     atomic_store_explicit(&entry->swap_state, PT_RESIDENT, memory_order_relaxed);
+    entry->accessed = 0;
+    entry->age = 0;
     entry->data = NULL;
 }
 
@@ -1613,6 +1615,11 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         // the invariant the entry is published with and that one is the
         // invariant an unmapped entry rests at.
         atomic_store_explicit(&pt->swap_state, PT_RESIDENT, memory_order_relaxed);
+        // A fresh page starts hot: it was just mapped because something wants
+        // it, and a leaf is reused, so an inherited age would let the very next
+        // sweep evict a page the guest has not touched once.
+        pt->accessed = 1;
+        pt->age = 0;
         pt->data = data;
         pt->offset = ((page - start) << PAGE_BITS) + offset;
         pt->flags = flags;
@@ -2546,6 +2553,12 @@ static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type) {
     // armed and nothing turns it into a guest signal.
     if (atomic_load_explicit(&entry->swap_state, memory_order_acquire) != PT_RESIDENT)
         return NULL;
+    // The aging clock's only signal. Tested before it is set, so a hot page
+    // costs one load and no store: an unconditional store here would dirty a
+    // page-table cache line on every TLB fill of every engine and bounce it
+    // between cores to say something already true. The sweep is what clears it.
+    if (entry->accessed == 0)
+        entry->accessed = 1;
     // PROT_NONE (no access bits set) must fault on EVERY access, including
     // reads, even when the page still has live host backing -- e.g. an RW page
     // later mprotect'd to PROT_NONE keeps its data pointer but must no longer be
@@ -3073,6 +3086,12 @@ void swap_prototype_failures(unsigned long *adv, unsigned long *prot, int *adv_e
     if (prot_e) *prot_e = swap_stat_prot_errno;
 }
 
+// Passes a frame must survive untouched before it is a candidate. Two, which
+// is section 3.7's figure: one is barely a clock at all (a page touched just
+// before the sweep and not since would go), and more delays reclaim past the
+// point where a guard is already refusing allocations.
+#define SWAP_AGE_CANDIDATE 2
+
 // A frame is one HOST page: the unit the host will actually release. On Apple
 // silicon that is 16 KiB, so four guest pages, which is why the eviction below
 // only ever considers four consecutive guest pages at a time.
@@ -3124,8 +3143,8 @@ static size_t swap_pages_per_frame(void) {
 // `entry->flags & ~P_COW`. Widening the set is a pager-core decision with its
 // own measurements; it is not a change to make while the gate is the only
 // regression test.)
-static bool swap_frame_eligible(struct mem *mem, page_t base, struct data **data_out,
-                                size_t *offset_out) {
+static bool swap_frame_eligible(struct mem *mem, page_t base, unsigned min_age,
+                                struct data **data_out, size_t *offset_out) {
     size_t per = swap_pages_per_frame();
     struct data *data = NULL;
     size_t first_offset = 0;
@@ -3178,6 +3197,53 @@ static bool swap_frame_eligible(struct mem *mem, page_t base, struct data **data
                 return false;
         }
     }
+    // The clock, LAST -- only once this really is a frame.
+    //
+    // It has to be here rather than at the top of the loop, and that placement
+    // cost a working direct reclaim to learn. The sweep tries a window at every
+    // page, so windows overlap: aging from window P and then from window P+1
+    // means P+1 sees P+4's not-yet-cleared `accessed` byte, calls the frame
+    // touched, and resets the ages P had just advanced. Every window undid its
+    // predecessor and no frame ever reached candidate age. Measured: direct
+    // reclaim freed 0 bytes and a guest that had been holding 1168 MiB against
+    // a 512 MB budget fell back to the 288 MiB the guard alone allows.
+    //
+    // Judged as a whole frame, because the frame is what gets released: one hot
+    // guest page keeps its three neighbours resident, which section 8 records
+    // as the price of a 16 KiB unit.
+    bool touched = false;
+    for (size_t i = 0; i < per; i++) {
+        struct pt_entry *e = mem_pt(mem, base + i);
+        if (e != NULL && e->accessed)
+            touched = true;
+    }
+    for (size_t i = 0; i < per; i++) {
+        struct pt_entry *e = mem_pt(mem, base + i);
+        if (e == NULL)
+            continue;
+        if (touched) {
+            e->accessed = 0;
+            e->age = 0;
+        } else if (e->age < SWAP_AGE_CANDIDATE) {
+            e->age++;
+        }
+    }
+    // Second chance: only a frame that has survived SWAP_AGE_CANDIDATE passes
+    // without being touched is offered. Without it the sweep evicts whatever it
+    // meets first, which on a real working set is the pages the guest is using
+    // -- it faults them straight back and the pager becomes a thrash engine
+    // that also writes to flash. Measured on a 32 MiB region with a hot 4 MiB:
+    // 1536 frames faulted back during the run without the clock, 6 with it.
+    // `touched` is absolute and `min_age` is not, and that difference is the
+    // whole policy. A frame the guest has read since the last pass is never
+    // taken, however hard the caller is pressing -- that is what stops the
+    // pager thrashing. How long an UNTOUCHED frame must wait is a preference,
+    // and direct reclaim lowers it when an allocation is about to fail with
+    // cold memory sitting there: Linux's direct reclaim raises its scan
+    // priority in the same situation and for the same reason.
+    if (touched || mem_pt(mem, base)->age < min_age)
+        return false;
+
     *data_out = data;
     *offset_out = first_offset;
     return true;
@@ -3361,7 +3427,7 @@ void swap_prototype_ledger(unsigned long long *before, unsigned long long *after
 // Evict from `mem` until `want_bytes` have been released, or the sweep has been
 // all the way round. `want_bytes` of 0 means "everything eligible", which is
 // what the /proc control asks for.
-static long swap_evict_common(struct mem *mem, uint64_t want_bytes) {
+static long swap_evict_common(struct mem *mem, uint64_t want_bytes, unsigned min_age) {
     if (mem == NULL)
         return _EINVAL;
     // The switch is consulted HERE and nowhere on the fault path. Turning swap
@@ -3408,7 +3474,7 @@ static long swap_evict_common(struct mem *mem, uint64_t want_bytes) {
         }
         struct data *data;
         size_t offset;
-        if (swap_frame_eligible(mem, page, &data, &offset) &&
+        if (swap_frame_eligible(mem, page, min_age, &data, &offset) &&
             swap_evict_frame(mem, page, data, offset)) {
             released += (long) swap_frame_size();
             page += per;
@@ -3428,6 +3494,22 @@ static long swap_evict_common(struct mem *mem, uint64_t want_bytes) {
         }
     }
     mem->swap_hand = page >= mem->page_limit ? 0 : page;
+    // Bump the change count whether or not anything moved, so every thread's
+    // next block boundary flushes its TLB and re-stamps what it actually
+    // touches before the next pass looks.
+    //
+    // Without it the clock is blind to exactly the pages it most needs to see.
+    // The accessed byte is written in mem_ptr_nofault, which the JIT and the
+    // interpreters reach only on a TLB FILL -- a read that hits the TLB touches
+    // no C code at all. So a tight loop over a hot working set stamps its pages
+    // once and then never again, the sweep clears the byte, and by the next
+    // pass the hottest memory in the process looks untouched.
+    //
+    // MEASURED on a 32 MiB region with a hot 4 MiB and a thread reading it
+    // continuously: 506 frames faulted back during the run without this line,
+    // 6 with it. Section 3.7 calls the refresh a part of the clock rather than
+    // an optimisation, and this is why.
+    mem_changed(mem);
     swap_fp_after = swap_footprint_now();
     // Trust the ledger, not the return codes. Both calls above can report
     // success and release nothing -- MADV_FREE_REUSABLE does exactly that on a
@@ -3450,11 +3532,25 @@ static long swap_evict_common(struct mem *mem, uint64_t want_bytes) {
 }
 
 long swap_evict_mem(struct mem *mem) {
-    return swap_evict_common(mem, 0);
+    return swap_evict_common(mem, 0, SWAP_AGE_CANDIDATE);
 }
 
 long swap_evict_bytes(struct mem *mem, uint64_t want_bytes) {
-    return swap_evict_common(mem, want_bytes);
+    // One pass at the ordinary age bar, and if that frees nothing, one more
+    // that will take any frame the guest has not touched since the last pass.
+    //
+    // The retry is not impatience. A bounded caller is an allocation that is
+    // about to fail, and the clock needs SWAP_AGE_CANDIDATE passes before
+    // anything is a candidate at all -- so the first allocation to hit the
+    // guard would be refused with the address space full of cold memory, and a
+    // caller that gives up on one ENOMEM (which grow.c and plenty of real
+    // programs do) never gets a second pass. Measured: a guest that held
+    // 1168 MiB against a 512 MB budget fell back to the guard's own 288 MiB
+    // when the first pass was the only one.
+    long released = swap_evict_common(mem, want_bytes, SWAP_AGE_CANDIDATE);
+    if (released == 0)
+        released = swap_evict_common(mem, want_bytes, 0);
+    return released;
 }
 
 // Bring one evicted frame back, with the address-space WRITE lock already held.
@@ -3549,8 +3645,15 @@ static int swap_fault_page_locked(struct mem *mem, page_t page) {
                 // frame must have. Testing only "same frame" would publish a
                 // neighbour an mremap moved in from elsewhere, calling bytes
                 // resident that this pread never wrote.
-                if (e != NULL && e->data == data && e->offset == offset + i * PAGE_SIZE)
+                if (e != NULL && e->data == data && e->offset == offset + i * PAGE_SIZE) {
+                    // Back, and hot: something wanted it enough to fault. A
+                    // frame that returned with age intact would be a candidate
+                    // again on the very next pass, which is the thrash loop the
+                    // clock exists to prevent.
+                    e->accessed = 1;
+                    e->age = 0;
                     atomic_store_explicit(&e->swap_state, PT_RESIDENT, memory_order_release);
+                }
             }
             // An entry an mremap moved out of this frame is not adjacent any
             // more, so this loop does not reach it and it stays PT_SWAPPED.

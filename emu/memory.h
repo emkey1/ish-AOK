@@ -453,6 +453,27 @@ struct pt_entry {
     // resident memory as absent after a fork, and swap_frame_eligible, where a
     // stale hint made a frame permanently unevictable.
     _Atomic uint8_t swap_state;
+    // ---- the aging clock (docs/simulated_swap_plan.md section 3.7) --------
+    //
+    // Both live in padding: pt_entry is 56 bytes with the JIT's blocks[2] and
+    // 24 without, and swap_state left three bytes spare in each, so aging costs
+    // no memory at all.
+    //
+    // `accessed` is stamped by mem_ptr_nofault, which every engine reaches --
+    // the JIT and interpreters through tlb_handle_miss -> mmu_translate, the
+    // syscall side through mem_ptr, the fault handler through mem_ptr_fault.
+    // It is a plain byte, written only when it reads 0, so the common case is a
+    // load and no store: writing on every access would dirty a page-table cache
+    // line on every TLB fill and bounce it between cores for nothing.
+    //
+    // `age` is the second-chance counter, advanced by the eviction sweep. A
+    // frame whose entries were accessed since the last pass has its age reset
+    // and is skipped; only a frame that has survived two passes untouched is a
+    // candidate. Neither is atomic: both are read and written under the
+    // address-space barrier by the sweep, and a lost stamp from a racing reader
+    // costs one extra pass of a frame's life, which is what "clock" means.
+    uint8_t accessed;
+    uint8_t age;
 #if ENGINE_JIT
     struct list blocks[2];
 #endif
