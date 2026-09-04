@@ -156,13 +156,23 @@ static size_t swap_last_pre_mapped_pages, swap_last_pre_resident_pages;
 // something a guest process can do to the user's flash. What the write is for
 // is testing swapoff, which nothing else in the tree can reach.
 static int proc_ish_show_swap(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
-    char text[1024];
+    // 1536, not 1024: the status text passed 890 bytes once the ledger line was
+    // added, and every count in it is a %llu that can widen (a 16 GB area, a
+    // 24h write window). snprintf would truncate in silence, which for a
+    // diagnostic file is the worst possible failure.
+    char text[1536];
     swap_status_text(text, sizeof(text));
     proc_printf(buf, "%s", text);
-    if (swap_guest_control_allowed())
+    // Braces, because there are three of them. Without them only the first
+    // line was conditional and the other two printed always -- so an installed
+    // app, where guest control is off by design, advertised two commands that
+    // could only ever answer EPERM. Caught on the M4 iPad within a minute of
+    // looking at the real file.
+    if (swap_guest_control_allowed()) {
         proc_printf(buf, "\n  echo <MB> > /proc/ish/swap       # 0 turns it off\n");
         proc_printf(buf, "  echo quiesce > /proc/ish/swap   # hold the suspension gate\n");
         proc_printf(buf, "  echo resume > /proc/ish/swap    # lift it\n");
+    }
     return 0;
 }
 
