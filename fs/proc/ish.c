@@ -160,7 +160,9 @@ static int proc_ish_show_swap(struct proc_entry *UNUSED(entry), struct proc_data
     swap_status_text(text, sizeof(text));
     proc_printf(buf, "%s", text);
     if (swap_guest_control_allowed())
-        proc_printf(buf, "\n  echo <MB> > /proc/ish/swap   # 0 turns it off\n");
+        proc_printf(buf, "\n  echo <MB> > /proc/ish/swap       # 0 turns it off\n");
+        proc_printf(buf, "  echo quiesce > /proc/ish/swap   # hold the suspension gate\n");
+        proc_printf(buf, "  echo resume > /proc/ish/swap    # lift it\n");
     return 0;
 }
 
@@ -178,6 +180,20 @@ static int proc_ish_update_swap(struct proc_entry *UNUSED(entry), struct proc_da
     // than act on half a value.
     if (strlen(text) != data->size)
         return _EINVAL;
+    // Two word commands beside the size, so the suspension gate can be driven
+    // from a test. On a device that gate is engaged by the app's
+    // background-task expiry handler, which a test cannot schedule against --
+    // the window opens on a timer and eviction finishes in milliseconds, so
+    // trying to catch one inside the other proves nothing either way.
+    char *nl = strchr(text, '\n');
+    if (nl != NULL)
+        *nl = '\0';
+    if (strcmp(text, "quiesce") == 0)
+        return swap_quiesce_begin(2000) ? 0 : _EBUSY;
+    if (strcmp(text, "resume") == 0) {
+        swap_quiesce_end();
+        return 0;
+    }
     char *end = NULL;
     long mb = strtol(text, &end, 10);
     while (end != NULL && (*end == '\n' || *end == ' '))

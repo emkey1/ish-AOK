@@ -141,6 +141,24 @@ int swap_slot_read(uint32_t slot, void *buf, size_t len);
 // for the same reason.
 long swap_direct_reclaim(struct mem *mem, uint64_t want_bytes);
 
+// ---- suspension -----------------------------------------------------------
+
+// Called beside fakefs_quiesce_begin in the app's suspension handler: stop
+// starting new eviction I/O and wait up to `timeout_ms` for anything already in
+// flight to finish. Returns true if everything drained in time.
+//
+// Raw pthread primitives, because of where it is called from: an expiring
+// background-task assertion on an arbitrary queue, with no `current` task, and
+// it must take no mem lock -- a guest thread holding one may be exactly what it
+// is waiting for.
+//
+// It stops EVICTION only. Faults are left alone: nothing is running guest code
+// while suspended, so no fault can start, and one already in flight has to be
+// allowed to finish or the frame it is restoring stays PROT_NONE with its bytes
+// only on disk.
+bool swap_quiesce_begin(int timeout_ms);
+void swap_quiesce_end(void);
+
 // ---- counters -------------------------------------------------------------
 //
 // Every guest-visible swap number will come from here, and from nothing the
@@ -166,9 +184,17 @@ struct swap_stats {
     // no clean state there really are no cached frames.
     uint64_t cached_bytes;
     uint64_t io_errors;
-    uint64_t bytes_written;    // since enable, for the write-budget work
+    uint64_t bytes_written;    // since enable
+    // The rolling 24-hour write window. Paging writes to the user's flash, and
+    // an app that writes gigabytes a day to it is one Apple's disk-writes
+    // instrumentation notices and users feel. The threshold is folklore -- 1 GB
+    // a day is the quoted figure -- so this is measured and enforced rather
+    // than trusted.
+    uint64_t write_budget_bytes, written_window_bytes;
+    uint64_t budget_refusals;  // evictions refused because the window is spent
     bool enabled;
     bool draining;             // disabled, but slots are still out
+    bool quiesced;             // suspension gate held: no new eviction I/O
 };
 void swap_get_stats(struct swap_stats *out);
 

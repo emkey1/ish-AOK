@@ -15,6 +15,7 @@
 #include "kernel/calls.h"
 #include "kernel/fs.h"
 #include "kernel/task.h"
+#include "kernel/swap.h"
 #include "xX_main_Xx.h"
 
 extern void run_at_boot(void);
@@ -308,14 +309,32 @@ static void setup_host_mounts(void) {
 static void *quiesce_test_thread(void *arg) {
     (void) arg;
     // Let the guest get going and open some transactions first.
-    usleep(300 * 1000);
+    // ISH_TEST_QUIESCE_DELAY_MS moves the window: 300 ms is enough for
+    // filesystem traffic, but a swap test has to compile and run a program
+    // before there is any eviction to interrupt, and a gate that engages before
+    // the thing it gates has started proves nothing.
+    const char *delay_env = getenv("ISH_TEST_QUIESCE_DELAY_MS");
+    long delay_ms = delay_env != NULL ? strtol(delay_env, NULL, 10) : 300;
+    if (delay_ms < 0)
+        delay_ms = 0;
+    usleep((useconds_t) delay_ms * 1000);
     unsigned straggling = 0;
     bool drained = fakefs_quiesce_begin(2000, &straggling);
-    fprintf(stderr, "[quiesce] engaged: drained=%d straggling=%u\n", drained, straggling);
+    // The pager gets the same gate, for the same reason the app applies it: it
+    // writes guest memory to a file, and being mid-write when the process is
+    // frozen is not a state to be in. Exercised here so the CLI can test it.
+    bool swap_drained = swap_quiesce_begin(2000);
+    fprintf(stderr, "[quiesce] engaged: drained=%d straggling=%u swap=%d\n",
+            drained, straggling, swap_drained);
     // Hold it briefly: guest tasks wanting a transaction must park, not spin or
     // deadlock, and must not be holding fs->lock while they wait.
-    usleep(500 * 1000);
+    const char *hold_env = getenv("ISH_TEST_QUIESCE_HOLD_MS");
+    long hold_ms = hold_env != NULL ? strtol(hold_env, NULL, 10) : 500;
+    if (hold_ms < 0)
+        hold_ms = 0;
+    usleep((useconds_t) hold_ms * 1000);
     fakefs_quiesce_end();
+    swap_quiesce_end();
     fprintf(stderr, "[quiesce] lifted\n");
     return NULL;
 }

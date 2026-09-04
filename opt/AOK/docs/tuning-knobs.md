@@ -108,6 +108,47 @@ immediately, so it is never visible in the container, never backed up, and never
 reachable through the File Provider. It is truncated and closed when swap is
 turned off.
 
+## `ISH_GUEST_SWAP_WRITE_BUDGET_MB`
+
+Caps how much simulated swap may write in a rolling 24-hour window, in MB.
+Once the window is spent, eviction is refused and reported in
+`/proc/ish/swap` as `budget_refusals`; faulting pages back keeps working,
+because refusing a read would be a SIGBUS on memory the guest mapped
+correctly.
+
+The built-in backstop is 4096 MB, and it is deliberately well above the figure
+Apple's disk-writes instrumentation is said to notice (1 GB a day is the
+number that gets quoted) rather than at it: it is there to stop a pathological
+workload writing tens of gigabytes to the user's flash, not to shape a normal
+one. `0` turns the cap off entirely.
+
+Like the other knobs here it is read only on a launch that sets
+`ISH_GUEST_SWAP_MB`, so an installed app always gets the built-in value. It
+exists to make the budget reachable in a test -- the real one would take a day
+and four gigabytes of writes to hit:
+
+```sh
+ISH_GUEST_SWAP_MB=128 ISH_GUEST_SWAP_WRITE_BUDGET_MB=16 ./ish -f build/alpine /bin/sh
+```
+
+## The suspension gate
+
+Not an environment variable, but the same file. Paging writes to a file, and
+being mid-write when iOS freezes the app is not a state to be in, so the app's
+suspension handler holds a gate that stops new eviction and waits for anything
+in flight. Faults are deliberately left alone: nothing runs guest code while
+suspended, and a fault already in flight has to finish or the frame it is
+restoring stays unreadable with its bytes only on disk.
+
+On a launch with guest control the gate can be driven by hand, which is the
+only way to test it -- on a device it is engaged by a background-task expiry
+that a test cannot schedule against:
+
+```sh
+echo quiesce > /proc/ish/swap   # hold it; eviction stops
+echo resume > /proc/ish/swap    # lift it
+```
+
 ## Logging
 
 Log channel selection (`strace` — syscall parameters and return values, the most

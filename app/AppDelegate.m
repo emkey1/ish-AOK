@@ -3780,10 +3780,18 @@ void ISHSuspendGuardEnterBackground(void) {
         } else {
             unsigned stragglers = 0;
             bool drained = fakefs_quiesce_begin(2000, &stragglers);
-            os_log(ISHSuspendLog(), "quiesced for suspension: drained=%{public}d straggling=%{public}u",
-                   drained, stragglers);
+            // The pager writes guest memory to a file, so it needs the same
+            // treatment and for the same reason: being mid-write when iOS
+            // freezes us is not a state to be in. It stops new EVICTION only --
+            // a fault already in flight has to finish, or the frame it is
+            // restoring stays PROT_NONE with its bytes only on disk. A no-op
+            // when swap is off, which is the default.
+            bool swapDrained = swap_quiesce_begin(2000);
+            os_log(ISHSuspendLog(), "quiesced for suspension: drained=%{public}d straggling=%{public}u swap=%{public}d",
+                   drained, stragglers, swapDrained);
             [ISHDiagnosticsStore recordBreadcrumb:@"application.fakefsQuiesced"
-                                          details:@{@"drained": @(drained), @"straggling": @(stragglers)}];
+                                          details:@{@"drained": @(drained), @"straggling": @(stragglers),
+                                                    @"swapDrained": @(swapDrained)}];
 
             // Never hold the gate open indefinitely.
             //
@@ -3802,6 +3810,7 @@ void ISHSuspendGuardEnterBackground(void) {
                                          (int64_t) (kISHQuiesceMaxHoldSeconds * NSEC_PER_SEC)),
                            dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
                 fakefs_quiesce_end();
+                swap_quiesce_end();
                 os_log(ISHSuspendLog(), "still running after %{public}.0fs backgrounded; gate lifted",
                        kISHQuiesceMaxHoldSeconds);
             });
@@ -3813,6 +3822,7 @@ void ISHSuspendGuardEnterBackground(void) {
 void ISHSuspendGuardEnterForeground(void) {
     // Lift the gate before anything else: guest tasks may be parked on it.
     fakefs_quiesce_end();
+    swap_quiesce_end();
     ISHEndSuspendGuard();
 }
 

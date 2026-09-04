@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
 
@@ -81,6 +82,35 @@ static _Atomic uint64_t swap_stat_direct_bytes;
 // NOT reset by swap_enable: /proc/vmstat counters never go backwards, and a
 // guest that watched pswpout fall would be seeing something Linux cannot do.
 static _Atomic uint64_t swap_stat_pswpin, swap_stat_pswpout;
+
+// ---- the 24-hour write window ----------------------------------------------
+//
+// Paging writes to the user's flash. Apple's disk-writes exception threshold is
+// folklore -- 1 GB a day is the figure that gets quoted -- so rather than trust
+// it, the pager measures what it writes and stops evicting when the window is
+// spent. Faults keep working: refusing to read a frame back would be a SIGBUS
+// on good guest memory, and reads cost no writes anyway.
+//
+// 4 GiB, which is deliberately well above the quoted threshold rather than at
+// it: this is a backstop against a pathological workload writing tens of
+// gigabytes a day, not a policy that a normal one should ever meet. The
+// thrash guard is what should stop a workload long before this does.
+#define SWAP_WRITE_WINDOW_SECONDS (24 * 60 * 60)
+static uint64_t swap_write_budget = 4ull * 1024 * 1024 * 1024;
+static uint64_t swap_written_window;
+static time_t swap_window_start;
+static _Atomic uint64_t swap_stat_budget_refusals;
+
+// ---- the suspension gate ----------------------------------------------------
+//
+// Its own mutex and condvar rather than swap_lock, and raw pthread rather than
+// the tree's lock_t, because of where it is used: an expiring background-task
+// assertion on an arbitrary queue with no `current` task. It must not be able
+// to block behind a guest thread that is itself waiting to be suspended.
+static pthread_mutex_t swap_quiesce_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t swap_quiesce_cond = PTHREAD_COND_INITIALIZER;
+static bool swap_quiesced;          // no new eviction I/O may start
+static int swap_writes_in_flight;
 
 // Set at startup when ISH_GUEST_SWAP_MB was present, which is the CLI and
 // Xcode-scheme path. See swap_guest_control_allowed().
@@ -389,6 +419,21 @@ int swap_slot_alloc(uint32_t *slot_out) {
     // swapoff has already visited this address space would never be brought
     // back by it. swap_slots_used would then never reach zero, the file would
     // be kept for ever, and swap_enable would refuse with EBUSY from then on.
+    // The 24-hour window, rolled here because this is the one place every
+    // eviction passes through. Refusing the slot stops the eviction before any
+    // I/O starts, which is what a budget should do -- checking after the write
+    // would only measure the damage.
+    time_t now = time(NULL);
+    if (swap_window_start == 0 || now - swap_window_start >= SWAP_WRITE_WINDOW_SECONDS) {
+        swap_window_start = now;
+        swap_written_window = 0;
+    }
+    bool over_budget = swap_write_budget != 0 && swap_written_window >= swap_write_budget;
+    if (over_budget) {
+        unlock(&swap_lock);
+        atomic_fetch_add_explicit(&swap_stat_budget_refusals, 1, memory_order_relaxed);
+        return _ENOSPC;
+    }
     if (!atomic_load_explicit(&swap_on, memory_order_acquire) ||
             swap_fd < 0 || swap_free_bitmap == NULL) {
         unlock(&swap_lock);
@@ -481,19 +526,70 @@ int swap_slot_write(uint32_t slot, const void *buf, size_t len) {
     int fd = swap_fd_for_slot(slot, &at, len);
     if (fd < 0)
         return _EIO;
+    // Claim a place in the suspension gate before any I/O starts. Refusing here
+    // makes the caller give the slot straight back and leave the frame alone,
+    // which is the right answer: an eviction is never urgent enough to be worth
+    // being mid-write when the app is frozen.
+    pthread_mutex_lock(&swap_quiesce_lock);
+    if (swap_quiesced) {
+        pthread_mutex_unlock(&swap_quiesce_lock);
+        return _EAGAIN;
+    }
+    swap_writes_in_flight++;
+    pthread_mutex_unlock(&swap_quiesce_lock);
+
     size_t done = 0;
     while (done < len) {
         ssize_t n = pwrite(fd, (const char *) buf + done, len - done,
                            at + (off_t) done);
         if (n <= 0) {
             atomic_fetch_add_explicit(&swap_stat_io_errors, 1, memory_order_relaxed);
-            return _EIO;
+            break;
         }
         done += (size_t) n;
     }
+    int err = done == len ? 0 : _EIO;
+
+    pthread_mutex_lock(&swap_quiesce_lock);
+    if (--swap_writes_in_flight == 0)
+        pthread_cond_broadcast(&swap_quiesce_cond);
+    pthread_mutex_unlock(&swap_quiesce_lock);
+    if (err != 0)
+        return err;
+
+    lock(&swap_lock, 0);
+    swap_written_window += len;
+    unlock(&swap_lock);
     atomic_fetch_add_explicit(&swap_stat_bytes_written, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&swap_stat_pswpout, len / PAGE_SIZE, memory_order_relaxed);
     return 0;
+}
+
+bool swap_quiesce_begin(int timeout_ms) {
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += timeout_ms / 1000;
+    deadline.tv_nsec += (long) (timeout_ms % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec++;
+        deadline.tv_nsec -= 1000000000L;
+    }
+    pthread_mutex_lock(&swap_quiesce_lock);
+    swap_quiesced = true;
+    while (swap_writes_in_flight > 0) {
+        if (pthread_cond_timedwait(&swap_quiesce_cond, &swap_quiesce_lock,
+                                   &deadline) != 0)
+            break;
+    }
+    bool drained = swap_writes_in_flight == 0;
+    pthread_mutex_unlock(&swap_quiesce_lock);
+    return drained;
+}
+
+void swap_quiesce_end(void) {
+    pthread_mutex_lock(&swap_quiesce_lock);
+    swap_quiesced = false;
+    pthread_mutex_unlock(&swap_quiesce_lock);
 }
 
 int swap_slot_read(uint32_t slot, void *buf, size_t len) {
@@ -598,6 +694,20 @@ void swap_startup(void) {
     // root. Set even when the size below turns out to be 0 or garbage: what it
     // records is that this is a CLI or Xcode run, not that swap came up.
     atomic_store_explicit(&swap_guest_control, true, memory_order_relaxed);
+    // The 24-hour write window, in MB. Only read on this branch, so an
+    // installed app always gets the built-in backstop -- the knob exists to
+    // make the budget reachable in a test, the way ISH_GUEST_MEM_BUDGET_MB
+    // makes the jetsam guard reachable, since a real one would take a day and
+    // four gigabytes of writes to hit.
+    const char *budget = getenv("ISH_GUEST_SWAP_WRITE_BUDGET_MB");
+    if (budget != NULL && budget[0] != '\0') {
+        long mb_budget = strtol(budget, NULL, 10);
+        if (mb_budget >= 0) {
+            lock(&swap_lock, 0);
+            swap_write_budget = (uint64_t) mb_budget * 1024 * 1024;
+            unlock(&swap_lock);
+        }
+    }
     long want = strtol(mb, NULL, 10);
     if (want <= 0)
         return;
@@ -626,6 +736,8 @@ void swap_get_stats(struct swap_stats *out) {
     // "off, draining" beside the totals of an area that had just been created.
     out->enabled = atomic_load_explicit(&swap_on, memory_order_relaxed);
     out->draining = swap_fd >= 0 && !out->enabled;
+    out->write_budget_bytes = swap_write_budget;
+    out->written_window_bytes = swap_written_window;
     unlock(&swap_lock);
     out->alloc_failures = atomic_load_explicit(&swap_stat_alloc_fail, memory_order_relaxed);
     out->no_area = atomic_load_explicit(&swap_stat_no_area, memory_order_relaxed);
@@ -633,6 +745,10 @@ void swap_get_stats(struct swap_stats *out) {
     out->pswpin_pages = atomic_load_explicit(&swap_stat_pswpin, memory_order_relaxed);
     out->pswpout_pages = atomic_load_explicit(&swap_stat_pswpout, memory_order_relaxed);
     out->cached_bytes = 0;      // no clean state yet; see the header
+    out->budget_refusals = atomic_load_explicit(&swap_stat_budget_refusals, memory_order_relaxed);
+    pthread_mutex_lock(&swap_quiesce_lock);
+    out->quiesced = swap_quiesced;
+    pthread_mutex_unlock(&swap_quiesce_lock);
     out->io_errors = atomic_load_explicit(&swap_stat_io_errors, memory_order_relaxed);
     out->bytes_written = atomic_load_explicit(&swap_stat_bytes_written, memory_order_relaxed);
 }
@@ -651,6 +767,9 @@ size_t swap_status_text(char *buf, size_t size) {
         "total_bytes      %llu\n"
         "free_bytes       %llu\n"
         "bytes_written    %llu\n"
+        "quiesced         %s  (suspension gate: no new eviction I/O)\n"
+        "write_window     %llu of %llu bytes used in the last 24h\n"
+        "budget_refusals  %llu  (evictions refused, the window is spent)\n"
         "direct_reclaim   %llu  (bytes freed for an allocation that would have failed)\n"
         "alloc_failures   %llu  (evictions refused, the area is full)\n"
         "no_area          %llu  (evictions refused, there is no area)\n"
@@ -663,6 +782,10 @@ size_t swap_status_text(char *buf, size_t size) {
         (unsigned long long) s.total_bytes,
         (unsigned long long) s.free_bytes,
         (unsigned long long) s.bytes_written,
+        s.quiesced ? "yes" : "no",
+        (unsigned long long) s.written_window_bytes,
+        (unsigned long long) s.write_budget_bytes,
+        (unsigned long long) s.budget_refusals,
         (unsigned long long) s.direct_reclaim_bytes,
         (unsigned long long) s.alloc_failures,
         (unsigned long long) s.no_area,
