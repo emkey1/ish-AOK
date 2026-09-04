@@ -556,6 +556,76 @@ I/O duty, which is a sane trip point at this latency.
 
 ---
 
+### 2.8 C8: the slot belongs to the frame, not to the page-table entry
+
+**Found while building the foundation, 2026-09-04. It changes 3.3 and 3.5.**
+
+Section 3.3 puts the slot number in `struct pt_entry` and has
+`pt_dup`/`pt_move`/`pt_copy_on_write` copy it. That makes N independent copies
+of one fact, and they go out of step the instant any one of them is published
+resident on its own.
+
+The reachable case is an `mremap` out of an evicted frame. `pt_move` copies
+`data` and `offset` verbatim -- only the GUEST address changes -- so the moved
+entry still describes the same host frame, and under 3.3 it also still holds
+that frame's slot. Touching any sibling brings the frame back and publishes the
+three entries that are still adjacent; the moved one is not adjacent, so it
+stays SWAPPED holding the slot. The guest then writes the three siblings, and
+the moved page's own fault re-reads the whole 16 KiB frame from the slot,
+**silently reverting all three writes to their pre-eviction values**.
+
+Measured, both directions, on `alpine-arm64-test` and `alpine-amd64-test`
+(scratch `mrem.c` drives the ordering deterministically and single-threaded):
+
+| build | result |
+|---|---|
+| slot kept after the frame returns (3.3's shape) | `MREMAP GAP REPRODUCED clobbered=3`, each page reverted to its pre-eviction value |
+| slot owned by the frame | `clobbered=0`, `frames_cancelled 1` |
+
+**The correction.** `struct data` gains `_Atomic uint32_t *frame_slot`, one
+entry per host frame, `SWAP_SLOT_NONE` meaning "the bytes are in host memory".
+That is the only place a slot is ever recorded. `pt_entry` keeps a
+`swap_state` byte and nothing else, and that byte is now explicitly a
+**conservative hint**: PT_SWAPPED over a resident frame is harmless and costs
+one trip to the slow path, while PT_RESIDENT over a released frame is a host
+fault in emulator C code and is what eviction's preconditions (exact ownership,
+plus `frame_refs[f]` equalling the entries actually found) exist to prevent.
+
+Swap-in then reads the FRAME's slot under a per-frame striped mutex, and
+**cancels with no I/O** when it finds `SWAP_SLOT_NONE`. That single test
+subsumes three of 3.5's five slot states: WRITING, CANCELLED and CACHED-on-
+return all present as "the bytes are already here". READING becomes "another
+thread holds the frame lock", which is what the mutex is for, so the condvar
+goes too. It also makes the post-fork case correct rather than merely benign --
+two address spaces holding entries into one released frame each fault under
+only their own write lock, and the loser of that race now finds the slot
+already cleared instead of pread-ing the frame a second time.
+
+**What this constrains, and it is not only a performance matter.** Because the
+per-entry byte is a hint, **it is not a swap-accounting source**. After a fork,
+the address space that did not fault a frame back keeps its entries reading
+SWAPPED over memory that is resident, so 3.12's `VmSwap` and `Rss = Size -
+Swap` must be derived from the frame's slot table and never from the entries.
+Counting entries instead would let the sum of per-process `VmSwap` exceed
+`SwapTotal - SwapFree` the moment slots are actually freed -- memory counted in
+nobody's Rss and in no slot. Linux closes that book with `SwapCached`; this
+shape has nothing to close it with until 3.6's cache lands, which makes the
+cache a correctness prerequisite for 3.12's identities rather than only the
+performance extension the next paragraph describes. Every reader of the hint
+that is not the fault path has already had to be corrected once:
+`mem_resident_page_count` reported 8 MiB of resident memory as absent after a
+fork, and `swap_frame_eligible` made a frame permanently unevictable. Both now
+ask the frame.
+
+**What this does not lose.** The swap cache of 3.6 -- a frame that is resident
+AND whose on-disk copy is still valid, which is what makes a clean frame's
+second eviction free -- is a strict extension of this shape, not a casualty of
+it: add a per-frame state byte distinguishing "resident, slot still valid" from
+"released", and keep the slot across a fault instead of clearing it. The dirty
+bit that invalidates the cached copy is the same first-write signal 3.6
+describes. What has gone is only the per-entry copy of the slot number, which
+was never a cache and only ever a second source of truth.
+
 ## 3. The recommended design
 
 Unchanged from the synthesis except where marked **[amended]**. Design B's pager
@@ -609,7 +679,6 @@ interpreter-only build has no `blocks[]` at all:
 
 ```c
 struct pt_swap {
-    uint32_t slot;         // slot index while state != PT_RESIDENT, or a held CACHED slot
     _Atomic uint8_t state; // PT_RESIDENT=0 (dirty/unknown), PT_CLEAN=1, PT_SWAPPED=2
     uint8_t age;           // clock age
     uint8_t accessed;      // stamped by mem_ptr_nofault, cleared by the clock hand
@@ -617,9 +686,19 @@ struct pt_swap {
 };
 ```
 
+**[amended -- 2.8]** No `slot` field. The slot lives on the frame
+(`struct data::frame_slot`), because a per-entry copy silently reverts writes
+after an `mremap` out of an evicted frame; the measurement is in 2.8. `state`
+here is a conservative hint, not the truth: it may say SWAPPED over a resident
+frame, and must never say RESIDENT over a released one.
+
 `state == 0` is the only state that exists today, so `calloc`'d leaves and every
-existing path yield RESIDENT entries. `pt_map` zeroes the bytes explicitly;
-`pt_dup`/`pt_move`/`pt_copy_on_write` copy them.
+existing path yield RESIDENT entries. `pt_map` zeroes the bytes explicitly, and
+so does `mem_pt_del` -- both, because a leaf is never freed, so a `pt_entry` is
+a slot that gets REUSED and a stale SWAPPED byte would make some future
+mapping's fresh page read as absent to every engine at once.
+`pt_dup`/`pt_move`/`pt_copy_on_write` copy the state, so an alias never claims
+a released frame is resident.
 
 Not `flags`: `pt_map` writes only `data`, `offset` and `flags` (emu/memory.c:1065-1067)
 and several sites derive a new page's flags from a neighbour's, so a `P_SWAPPED`
@@ -684,17 +763,29 @@ person to touch it will drop the guard.
 
 `swap_fault(M, entry)`:
 
-1. Under `swap_lock` read `slot->state`. WRITING or CANCELLED (bytes still in the
-   frame) -> CANCELLED, go to 5. CACHED -> go to 5 with `PT_CLEAN`. READING -> wait
-   on the slot condvar with no mem lock held. ON_DISK -> READING, pin `D->refcount`,
-   release `swap_lock`.
+1. **[amended -- 2.8]** Under the FRAME's striped mutex read
+   `D->frame_slot[f]`. `SWAP_SLOT_NONE` -> the bytes are already here, so
+   CANCEL: do no I/O at all and go to 5. Anything else -> the frame is out, and
+   holding the mutex is what "READING" used to mean, so there is no condvar and
+   no per-slot state machine. This subsumes 3.5's WRITING, CANCELLED and
+   CACHED-on-return states into one test.
+
+   The original text read: *"Under `swap_lock` read `slot->state`. WRITING or
+   CANCELLED (bytes still in the frame) -> CANCELLED, go to 5. CACHED -> go to
+   5 with `PT_CLEAN`. READING -> wait on the slot condvar with no mem lock
+   held. ON_DISK -> READING, pin `D->refcount`, release `swap_lock`."*
 2. **[amended]** `mprotect(frame, 16384, PROT_READ|PROT_WRITE)`, then
    `madvise(frame, 16384, MADV_FREE_REUSE)`. REUSE is mandatory: a write into a
    REUSABLE range without it is not re-charged until the pager next scans the page,
    at which point the footprint jumps up with no AOK action.
 3. `pread(fd, frame, 16384, slot<<14)`. EIO -> slot BAD, entry stays SWAPPED,
    return -EIO; the caller delivers SIGBUS.
-4. Under `swap_lock`: CACHED, broadcast, unpin.
+4. **[amended -- 2.8]** Still under the frame mutex, store `SWAP_SLOT_NONE`
+   into `D->frame_slot[f]` BEFORE releasing it and before publishing any entry,
+   so the next fault on any entry of this frame -- in this address space or a
+   forked sibling's -- cancels instead of reading the slot a second time.
+   (When 3.6's swap cache lands this becomes "mark the frame resident and keep
+   the slot", and the clearing moves to the first write.)
 5. Publish this mem's entry: release-store `PT_CLEAN`, `M->swapped_pages -= 1`,
    `task_count_majflt()`, `pgmajfault++`, `pswpin += 4` once per slot read. No
    `mem_changed` is needed, because no stale TLB entry can exist for a page whose

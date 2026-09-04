@@ -86,6 +86,10 @@ static bool amd64_jit_debug_enabled(void) {
 
 // increment the change count
 static void mem_changed(struct mem *mem);
+// Swap-in with the address-space write lock already held; defined with the rest
+// of the pager prototype at the end of this file, declared here because
+// mem_ptr_fault needs it and sits above it.
+static int swap_fault_page_locked(struct mem *mem, page_t page);
 static struct mmu_ops mem_mmu_ops;
 static _Atomic uint64_t next_mem_change_id = 1;
 #define PGDIR_ROOT_INDEX(page) ((page) >> (MEM_PTDIR_BITS + MEM_PGDIR_MID_BITS))
@@ -701,6 +705,13 @@ static void mem_pt_del(struct mem *mem, page_t page) {
     struct pt_entry *entry = mem_pt_raw(mem, page);
     if (entry == NULL)
         return;
+    // An entry with no data has no swap state either. This matters because the
+    // entry is not freed, only emptied: leaves are immortal, so this slot comes
+    // back as some future mapping's page. Leaving PT_SWAPPED behind would make
+    // that future page read as evicted to every engine at once. pt_map
+    // re-establishes the same invariant on the way in; this is the resting
+    // state on the way out.
+    atomic_store_explicit(&entry->swap_state, PT_RESIDENT, memory_order_relaxed);
     entry->data = NULL;
 }
 
@@ -738,9 +749,15 @@ void mem_next_page(struct mem *mem, page_t *page) {
 // The bitmaps are SET-ONLY: a bit says a leaf exists, never that anything in it
 // is mapped. So this can skip empty regions in bulk but still has to look at
 // every entry of every leaf it lands on, and the count it returns is unchanged.
-size_t mem_mapped_page_count(struct mem *mem) {
+//
+// `resident_only` skips entries the pager has evicted; see
+// mem_resident_page_count. One walk rather than two copies of it, because the
+// bitmap skipping is the only interesting part and it should exist once.
+static size_t mem_page_count_walk(struct mem *mem, bool resident_only) {
     if (mem == NULL)
         return 0;
+    // Hoisted: a function call per live entry of the address space otherwise.
+    const size_t frame = mem_frame_size();
 
     size_t count = 0;
     for (page_t root = mem_next_chunk_root(mem, 0); root < MEM_PGDIR_ROOT_SIZE;
@@ -766,12 +783,89 @@ size_t mem_mapped_page_count(struct mem *mem) {
             if (base + MEM_PTDIR_SIZE > mem->page_limit)
                 limit = (size_t) (mem->page_limit - base);
             for (size_t i = 0; i < limit; i++) {
-                if (entries[i].data != NULL)
-                    count++;
+                struct data *data = entries[i].data;
+                if (data == NULL)
+                    continue;
+                if (resident_only &&
+                        atomic_load_explicit(&entries[i].swap_state,
+                                memory_order_relaxed) != PT_RESIDENT) {
+                    // The entry only claims "not here", and that claim is a
+                    // conservative HINT (struct pt_entry::swap_state). Ask the
+                    // frame, which owns the slot: a sibling entry's fault --
+                    // or a FORKED SIBLING ADDRESS SPACE's -- brings the frame
+                    // back and publishes only its own entries, leaving these
+                    // saying SWAPPED over memory that is resident and holding
+                    // the right bytes.
+                    //
+                    // MEASURED: evict 8 MiB, fork, let the child read it all
+                    // back, then sample the parent -- 2048 pages reported out
+                    // while every one of those host frames was mprotect(RW)
+                    // and resident. A residency figure that wrong is not a
+                    // rounding error, it is the number /proc would print.
+                    //
+                    // A NULL frame_slot means the mapping was never evictable,
+                    // so its bytes are in host memory by definition.
+                    if (data->frame_slot != NULL &&
+                            atomic_load_explicit(
+                                &data->frame_slot[entries[i].offset / frame],
+                                memory_order_relaxed) != SWAP_SLOT_NONE)
+                        continue;   // really out
+                    // NOT written back into the entry. This walk holds no mem
+                    // lock -- proc_ish_update_swap_evict calls it after the
+                    // barrier has been released -- and the evictor may be
+                    // releasing that frame right now. PT_RESIDENT over a
+                    // released frame is the one direction that must never
+                    // happen. Reconciliation belongs where a write lock is
+                    // held.
+                }
+                count++;
             }
         }
     }
     return count;
+}
+
+size_t mem_mapped_page_count(struct mem *mem) {
+    return mem_page_count_walk(mem, false);
+}
+
+// Mapped pages minus the ones the pager has evicted.
+//
+// WHAT THIS IS. With the per-frame slot record in place, a page whose frame
+// holds a slot is definitively not in host memory, which is the first real
+// residency signal this tree has ever had. The per-entry swap_state byte is
+// NOT that signal -- it is a conservative hint, and this walk uses it only to
+// decide which entries are worth asking the frame about. Every "resident" figure AOK reports today --
+// /proc/<pid>/status VmRSS and VmHWM, statm field 2, stat field 24, smaps and
+// smaps_rollup Rss, getrusage's ru_maxrss, /proc/meminfo AnonPages and Mapped
+// -- is mem_mapped_page_count, i.e. a count of mapped ADDRESS SPACE.
+//
+// WHAT IT STILL OVER-REPORTS, and nobody should mistake this for a true
+// residency measure until it does not. AOK builds page-table entries EAGERLY at
+// mmap() time: for file mappings in host_fd_mmap, and for anonymous mappings
+// below the 64 MiB lazy threshold in pt_map_nothing. No pt_entry field records
+// whether a page was ever TOUCHED, so an untouched mapping is counted here in
+// full. Measured: an untouched 1 GiB file mapping takes VmRSS from 2124 kB to
+// 1050700 kB. Only the lazy reservations above MEM_LAZY_MIN_PAGES escape it,
+// and they escape it by having no entries at all rather than by being measured.
+//
+// WHY THAT MATTERS. docs/simulated_swap_plan.md section 11 records that
+// "MemTotal := the app's jetsam budget" was deferred precisely on this: while
+// MemTotal is the machine's RAM the over-reporting is invisible, but the moment
+// MemTotal becomes a few hundred MiB every one of those figures can exceed it,
+// which is a state Linux cannot produce. Bounding each surface against MemTotal
+// independently was tried and rejected four times, because it replaces an
+// impossible value with an inconsistent pair. Subtracting swapped pages is the
+// half of the fix that can be built now; the other half is a touched bit, and
+// until it exists this function is honestly named "resident" only relative to
+// what the pager has taken away.
+//
+// Cost is mem_mapped_page_count's, plus one relaxed byte load per live entry.
+// Relaxed is right: a page being evicted or faulted back concurrently may be
+// counted either way, and no caller of a whole-address-space page count can
+// mean anything more precise than that.
+size_t mem_resident_page_count(struct mem *mem) {
+    return mem_page_count_walk(mem, true);
 }
 
 // Return the first page >= page with no mapping, or page_limit if every page
@@ -1016,6 +1110,328 @@ bool pt_is_hole(struct mem *mem, page_t start, pages_t pages) {
     return true;
 }
 
+// ---- exact ownership of a struct data -------------------------------------
+//
+// docs/simulated_swap_plan.md section 3.8, with the two corrections section 2.5
+// made to it. The question the pager must answer before it releases a host
+// frame is "is this struct data reachable from exactly ONE address space, and
+// is that address space the one I hold the barrier on?". Everything else about
+// eviction is recoverable; getting this wrong releases a frame a sibling
+// process still believes it owns, and on Apple that failure is silent.
+//
+// `refcount` cannot answer it, and the gate prototype's approximation
+// (refcount == size / PAGE_SIZE) is only right for a mapping that never forked
+// AND never had a page unmapped out of it, because refcount counts page-table
+// ENTRIES with no record of whose they are. So each struct data carries the
+// owners itself, maintained at the FIVE and only five sites where refcount
+// changes -- pt_map, pt_unmap_always_unlocked, pt_dup, pt_move and
+// pt_copy_on_write. That the list is complete is not an assumption: section 2.5
+// re-derived it three times independently, over every write to
+// data::refcount and every assignment of a pt_entry's data field in the tree,
+// and closed the back doors (there is no structural copy of entries anywhere,
+// mm_copy's whole-struct copy is repaired by mem_init's fresh pgdir_root
+// before the child is reachable, and mem_set_page_limit only runs on an empty
+// mem). A sixth site would silently break this; there must not be one.
+//
+// TWO RULES make the two-slots-plus-overflow encoding exact rather than merely
+// conservative, and both were found by attacking the original design:
+//
+//  1. A slot is never freed while overflow_entries != 0. Without it: A in slot
+//     0, B in slot 1, C overflowed; A unmaps, slot 0 is freed, and the data
+//     reads exclusive to B while C still maps it. That is unsafe, not
+//     conservative.
+//  2. While overflow_entries != 0 a newcomer NEVER takes a free slot, it goes
+//     to the overflow. Otherwise one mem can end up counted in both a slot and
+//     the overflow, and the release side has no way to tell which to decrement.
+//
+// Together they make the encoding monotone: once anything overflows, the slots
+// freeze and every acquire goes to the overflow, until the overflow drains to
+// zero -- at which point every overflowed owner is provably gone, empty slots
+// are swept, and the record is exact again. Ordinary shell use reaches three
+// owners in under a second, so that recovery is the point: a fork-and-exec
+// family stops being unevictable milliseconds after the exec, instead of
+// staying pinned for the life of the process.
+//
+// Locking: a striped mutex, taken and released with nothing else held. It is a
+// LEAF -- see section 3.9's ordering -- and deliberately not "the mapping mem's
+// write lock", because the pure-growth mmap fast path runs pt_map under
+// pt_alloc_lock plus the mem READ lock (kernel/mmap.c). What serialises that
+// path against the swap barrier is pt_alloc_lock, which
+// mem_write_lock_with_pokes takes first; this lock only has to make each
+// record's own read-modify-write atomic. Measured cost of the whole hook (lock,
+// slot compare, two increments, unlock): 7.6 ns, which is 0.6-1.1% of a guest
+// fork.
+#define DATA_OWNER_STRIPES 64
+// Statically initialised rather than built in a constructor: PTHREAD_MUTEX_
+// INITIALIZER is not all-zero on Darwin, and a constructor would put this
+// path's correctness at the mercy of initialiser ordering.
+#define DATA_OWNER_L1 PTHREAD_MUTEX_INITIALIZER
+#define DATA_OWNER_L4 DATA_OWNER_L1, DATA_OWNER_L1, DATA_OWNER_L1, DATA_OWNER_L1
+#define DATA_OWNER_L16 DATA_OWNER_L4, DATA_OWNER_L4, DATA_OWNER_L4, DATA_OWNER_L4
+static pthread_mutex_t data_owner_locks[DATA_OWNER_STRIPES] = {
+    DATA_OWNER_L16, DATA_OWNER_L16, DATA_OWNER_L16, DATA_OWNER_L16,
+};
+#undef DATA_OWNER_L16
+#undef DATA_OWNER_L4
+#undef DATA_OWNER_L1
+
+static pthread_mutex_t *data_owner_lock_for(struct data *data) {
+    // Mix two shifts: a struct data is malloc'd, so the low bits are alignment
+    // padding and the allocator hands out runs whose next-higher bits move
+    // together. One shift alone put whole mappings' worth of neighbours on the
+    // same stripe.
+    uintptr_t key = (uintptr_t) data;
+    key = (key >> 4) ^ (key >> 12);
+    return &data_owner_locks[key % DATA_OWNER_STRIPES];
+}
+
+size_t mem_frame_size(void) {
+    return real_page_size > PAGE_SIZE ? real_page_size : PAGE_SIZE;
+}
+
+static size_t mem_frame_count(size_t size) {
+    size_t frame = mem_frame_size();
+    return (size + frame - 1) / frame;
+}
+
+// Adjust the per-frame entry counts for the `pages` entries covering data
+// offsets [offset, offset + pages * PAGE_SIZE). Caller holds the stripe lock,
+// or owns a struct data no other thread can reach yet (see data_owner_init).
+//
+// Counts saturate at 255 and, once saturated, are never changed again: the true
+// count is unrecoverable at that point, and a frame whose count is unknown must
+// read as unevictable forever rather than as evictable once by accident. 255
+// entries in one 16 KiB frame is 64 address spaces sharing it, four guest pages
+// each -- a fork family far past anything phase 1 would evict anyway, since it
+// evicts exclusively-owned data only.
+#define DATA_FRAME_REFS_SATURATED 255
+static void data_frame_refs_add_locked(struct data *data, size_t offset,
+                                       pages_t pages, int delta) {
+    if (data->frame_refs == NULL || pages == 0)
+        return;
+    size_t frame = mem_frame_size();
+    size_t frames = mem_frame_count(data->size);
+    // Walk FRAMES, not pages: a run covering a whole frame contributes the same
+    // amount to every page of it, so the four (or one) pages of a frame are one
+    // add rather than four. Offsets are always guest-page multiples -- pt_map's
+    // `offset` argument is host_fd_mmap's page-aligned `correction` (fs/real.c)
+    // and zero everywhere else -- so a frame's share of the run is just how
+    // many of the run's pages fall inside it.
+    size_t first = offset;
+    size_t last = offset + (size_t) (pages - 1) * PAGE_SIZE;   // inclusive
+    for (size_t f = first / frame; f <= last / frame; f++) {
+        if (f >= frames)
+            return;     // past the end of the mapping; nothing to count
+        size_t frame_start = f * frame;
+        size_t frame_end = frame_start + frame;               // exclusive
+        size_t lo = first > frame_start ? first : frame_start;
+        size_t hi = last + PAGE_SIZE < frame_end ? last + PAGE_SIZE : frame_end;
+        unsigned n = (unsigned) ((hi - lo) / PAGE_SIZE);
+        uint8_t *slot = &data->frame_refs[f];
+        // Saturated stays saturated: the true count is unrecoverable once it
+        // does, and a frame whose count is unknown must read as unevictable for
+        // ever rather than as evictable once by accident.
+        if (*slot == DATA_FRAME_REFS_SATURATED)
+            continue;
+        if (delta > 0) {
+            unsigned sum = *slot + n;
+            *slot = sum >= DATA_FRAME_REFS_SATURATED ?
+                    DATA_FRAME_REFS_SATURATED : (uint8_t) sum;
+        } else {
+            *slot = n >= *slot ? 0 : (uint8_t) (*slot - n);
+        }
+    }
+}
+
+// pages_t is 64-bit and an entry count is 32-bit, so clamp rather than
+// truncate. A single mapping of more than 2^32 guest pages is 16 TiB and no
+// guest ABI's page_limit reaches it, but a truncation here would be a wrap to a
+// small number -- and a wrap is the one arithmetic error that can turn "shared"
+// into "exclusive". Clamping can only ever over-count, which reads as
+// not-exclusive, which refuses to evict.
+static uint32_t data_owner_count(pages_t pages) {
+    return pages > UINT32_MAX ? UINT32_MAX : (uint32_t) pages;
+}
+
+// Seed the records for a brand-new struct data whose entire mapping is about to
+// be published into one mem. pt_map only.
+//
+// No lock, and that is safe for a reason worth stating rather than assuming:
+// `data` is a local malloc that no page-table entry names yet, so no other
+// thread has any way to reach it. The publication loop that follows is what
+// makes it reachable, and every reader of these fields either holds that mem's
+// lock or, in the evictor's case, the address-space barrier -- both of which
+// order after the publication of the first entry. Taking the stripe lock here
+// instead would hold a lock shared with 1/64 of every other mapping in the
+// process across a 262144-iteration loop for a 1 GiB mmap.
+static void data_owner_init(struct data *data, struct mem *mem, size_t offset, pages_t pages) {
+    if (pages == 0)
+        return;
+    data->owners[0].mem = mem;
+    data->owners[0].entries = data_owner_count(pages);
+    data->n_owners = 1;
+    data->overflow_entries = 0;
+    data_frame_refs_add_locked(data, offset, pages, +1);
+}
+
+// Record that `pages` more page-table entries of `mem`, covering data offsets
+// [offset, offset + pages * PAGE_SIZE), now point at `data`.
+static void data_owner_acquire(struct data *data, struct mem *mem, size_t offset, pages_t pages) {
+    if (data == NULL || pages == 0)
+        return;
+    pthread_mutex_t *stripe = data_owner_lock_for(data);
+    pthread_mutex_lock(stripe);
+    unsigned i;
+    for (i = 0; i < data->n_owners; i++) {
+        if (data->owners[i].mem == mem) {
+            data->owners[i].entries += data_owner_count(pages);
+            break;
+        }
+    }
+    if (i == data->n_owners) {
+        // Rule 2: while anything is overflowed, a newcomer goes to the
+        // overflow even when a slot is free, so no mem is ever counted in both
+        // a slot and the overflow.
+        if (data->overflow_entries != 0 || data->n_owners >= 2) {
+            data->overflow_entries += data_owner_count(pages);
+        } else {
+            data->owners[data->n_owners].mem = mem;
+            data->owners[data->n_owners].entries = data_owner_count(pages);
+            data->n_owners++;
+        }
+    }
+    data_frame_refs_add_locked(data, offset, pages, +1);
+    pthread_mutex_unlock(stripe);
+}
+
+// The inverse. `mem` may legitimately have no slot: it is then one of the
+// overflowed owners, which are counted but not named.
+static void data_owner_release(struct data *data, struct mem *mem, size_t offset, pages_t pages) {
+    if (data == NULL || pages == 0)
+        return;
+    pthread_mutex_t *stripe = data_owner_lock_for(data);
+    pthread_mutex_lock(stripe);
+    unsigned i;
+    for (i = 0; i < data->n_owners; i++)
+        if (data->owners[i].mem == mem)
+            break;
+    if (i < data->n_owners) {
+        // The clamps are defensive, not expected: a release with no matching
+        // acquire would mean a sixth refcount site exists. Saturating beats
+        // wrapping a uint32 into "billions of owners", which reads as
+        // permanently-not-exclusive and would be invisible.
+        if (data->owners[i].entries >= data_owner_count(pages))
+            data->owners[i].entries -= data_owner_count(pages);
+        else
+            data->owners[i].entries = 0;
+    } else if (data->overflow_entries >= data_owner_count(pages)) {
+        data->overflow_entries -= data_owner_count(pages);
+    } else {
+        data->overflow_entries = 0;
+    }
+    // Rule 1: empty slots are swept only once the overflow is empty, because
+    // only then is every unnamed owner provably gone. This is also what makes
+    // the record recover: the sweep is how a forked-and-exec'd mapping becomes
+    // exclusive again.
+    if (data->overflow_entries == 0) {
+        unsigned kept = 0;
+        for (unsigned j = 0; j < data->n_owners; j++)
+            if (data->owners[j].entries != 0)
+                data->owners[kept++] = data->owners[j];
+        data->n_owners = (uint8_t) kept;
+    }
+    data_frame_refs_add_locked(data, offset, pages, -1);
+    pthread_mutex_unlock(stripe);
+}
+
+bool data_is_exclusive_to(struct data *data, struct mem *mem) {
+    if (data == NULL || mem == NULL)
+        return false;
+    pthread_mutex_t *stripe = data_owner_lock_for(data);
+    pthread_mutex_lock(stripe);
+    bool exclusive = data->overflow_entries == 0 &&
+                     data->n_owners == 1 &&
+                     data->owners[0].mem == mem &&
+                     data->owners[0].entries != 0;
+    pthread_mutex_unlock(stripe);
+    return exclusive;
+}
+
+int data_frame_ref_count(struct data *data, size_t offset) {
+    if (data == NULL || data->frame_refs == NULL)
+        return -1;
+    size_t f = offset / mem_frame_size();
+    if (f >= mem_frame_count(data->size))
+        return -1;
+    pthread_mutex_t *stripe = data_owner_lock_for(data);
+    pthread_mutex_lock(stripe);
+    uint8_t count = data->frame_refs[f];
+    pthread_mutex_unlock(stripe);
+    return count == DATA_FRAME_REFS_SATURATED ? -1 : (int) count;
+}
+
+// A run of consecutive page-table entries of ONE struct data at CONSECUTIVE
+// data offsets, so the ownership record is updated once per run instead of once
+// per page.
+//
+// It exists because data_owner_acquire/release take the struct data's stripe
+// mutex, and the four sites that maintain the record are all per-page loops
+// over whole address spaces -- every munmap, every exec teardown, every process
+// exit, every fork, every mremap. One lock and one unlock per page of those is
+// a cost paid by every guest whether or not swap is ever enabled.
+//
+// MEASURED, interleaved A/B, median of 7 on a quiet machine: mmap+munmap of a
+// 512 MiB file mapping on a guest with swap off and nothing ever evicted.
+//
+//   6.2 ms  without the ownership records at all
+//   8.3 ms  with them, updated per page       (+34%, 16 ns a page -- one
+//                                              uncontended lock/unlock pair)
+//   6.5 ms  with them, updated per run        (+5%)
+//
+// The residual is the per-page run bookkeeping and two callocs per mapping, on
+// what is deliberately an extreme case: 131072 pages torn down at once.
+//
+// The offset test is not decoration. pt_move copies `offset` verbatim, so
+// guest-adjacent entries are not necessarily offset-adjacent, and
+// data_frame_refs_add_locked walks a run by stepping the offset -- a run that
+// lied about contiguity would count the wrong frames.
+//
+// Deferring the update is safe in both directions, and for different reasons.
+// A deferred RELEASE leaves the record over-counting, which reads as "shared",
+// which refuses to evict. A deferred ACQUIRE would leave it under-counting,
+// which is the dangerous direction -- but the only site that acquires across
+// address spaces is pt_copy_on_write, which runs under the SOURCE's
+// mem_write_lock_with_pokes barrier for its whole loop, and whose destination
+// is a child mm no task can reach yet. So no evictor can observe either.
+struct data_owner_run {
+    struct data *data;
+    size_t offset;
+    pages_t pages;
+};
+
+static void data_owner_run_flush(struct data_owner_run *run, struct mem *mem, int delta) {
+    if (run->pages == 0)
+        return;
+    if (delta > 0)
+        data_owner_acquire(run->data, mem, run->offset, run->pages);
+    else
+        data_owner_release(run->data, mem, run->offset, run->pages);
+    run->pages = 0;
+}
+
+static void data_owner_run_add(struct data_owner_run *run, struct mem *mem,
+                               struct data *data, size_t offset, int delta) {
+    if (run->pages != 0 &&
+            (run->data != data ||
+             offset != run->offset + (size_t) run->pages * PAGE_SIZE))
+        data_owner_run_flush(run, mem, delta);
+    if (run->pages == 0) {
+        run->data = data;
+        run->offset = offset;
+    }
+    run->pages++;
+}
+
 int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t offset, unsigned flags) {
     if (!mem_page_range_valid(mem, start, pages))
         return _ENOMEM;
@@ -1077,6 +1493,36 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         // own page tables call writable.)
         memset(data->host_page_prot, 0, host_pages);
     }
+    // One byte per host frame, counting the entries that point into it -- see
+    // struct data::frame_refs. Allocated for anything that has host memory to
+    // release; NULL for the two cases that never can (an unbacked PROT_NONE
+    // reservation, and the vdso's static array), where "unknown" is also the
+    // right answer.
+    //
+    // A failure here is NOT an mmap failure. host_page_prot above is different:
+    // its absence would silently mis-mirror protections. frame_refs' absence
+    // only makes the mapping unevictable, so failing the guest's mmap over it
+    // would trade a small feature for a large one.
+    if (memory != NULL && memory != vdso_data) {
+        size_t frames = mem_frame_count(data->size);
+        data->frame_refs = calloc(frames, 1);
+        // The frame's own record of where its bytes are. All-zero IS the
+        // correct initial state, because SWAP_SLOT_NONE is 0 and the allocator
+        // never hands out slot 0 -- so calloc alone says "every frame of this
+        // mapping is in host memory", with no loop over the frames on a path
+        // that runs whether or not swap is ever enabled.
+        data->frame_slot = calloc(frames, sizeof(*data->frame_slot));
+        // The two are used as a pair and are meaningless apart: frame_refs
+        // says a frame may be released, frame_slot says where its bytes went.
+        // Half of the pair is worse than neither, so a partial allocation
+        // drops both and the mapping is simply never evicted.
+        if (data->frame_refs == NULL || data->frame_slot == NULL) {
+            free(data->frame_refs);
+            free(data->frame_slot);
+            data->frame_refs = NULL;
+            data->frame_slot = NULL;
+        }
+    }
 
     // Allocate every page-table leaf the range needs BEFORE publishing a single
     // entry. This is what makes the loop below infallible, and it is the last
@@ -1119,10 +1565,18 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
             // ownership contract in emu/memory.h). host_page_prot in particular
             // was leaked by the old rollback, which called free(data) alone.
             free(data->host_page_prot);
+            free(data->frame_refs);
+            free(data->frame_slot);
             free(data);
             return _ENOMEM;
         }
     }
+
+    // Ownership site 1 of 5. Before the publication loop, not inside it: `data`
+    // is still a local nothing else can reach, so this needs no lock (see
+    // data_owner_init), and the loop below cannot fail -- every allocation this
+    // function can fail on is already done.
+    data_owner_init(data, mem, offset, pages);
 
     for (page_t page = start; page < start + pages; page++) {
         if (mem_pt(mem, page) != NULL)
@@ -1143,6 +1597,16 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         if (pt == NULL)
             die("pt_map: leaf vanished at page %llx after the pre-pass allocated it",
                 (unsigned long long) page);
+        // Swap state is reset EXPLICITLY, which docs/simulated_swap_plan.md
+        // section 3.3 requires and which the gate prototype did not do. A leaf
+        // is calloc'd once and never freed (nothing below mem_destroy frees
+        // one), so a pt_entry is a slot that gets REUSED: unmap a page that had
+        // been evicted, map something new at the same guest address, and the
+        // fresh page would inherit PT_SWAPPED and read as absent to every
+        // engine at once. mem_pt_del clears it too; both, because this one is
+        // the invariant the entry is published with and that one is the
+        // invariant an unmapped entry rests at.
+        atomic_store_explicit(&pt->swap_state, PT_RESIDENT, memory_order_relaxed);
         pt->data = data;
         pt->offset = ((page - start) << PAGE_BITS) + offset;
         pt->flags = flags;
@@ -1233,10 +1697,74 @@ void mem_close_deferred_fds(struct mem *mem) {
     free(fds);
 }
 
+// The last page-table entry of a mapping has gone: give the host memory back
+// and free the struct.
+static void data_destroy(struct mem *mem, struct data *data) {
+    // vdso wasn't allocated with mmap, it's just in our data segment
+    if (data->data != NULL && data->data != vdso_data) {
+        if (mem_quarantine_freed_pages()) {
+            // Debug mode: keep the range reserved and make it fault rather
+            // than handing it back. See the helper above.
+            if (mprotect(data->data, data->size, PROT_NONE) != 0)
+                die("quarantine mprotect(%p, %lu) failed: %s",
+                    data->data, data->size, strerror(errno));
+        } else {
+            int err = munmap(data->data, data->size);
+            if (err != 0)
+                die("munmap(%p, %lu) failed: %s", data->data, data->size, strerror(errno));
+        }
+    }
+    if (data->fd != NULL) {
+        // The last reference to this mapping is going away; if it was holding
+        // a memfd's write seal off, stop holding it.
+        if (data->memfd_shared_mapped)
+            memfd_mapping_released(data->fd);
+        // NOT fd_close: this runs under the address-space write lock with the
+        // other threads quiesced, and a ->close may block on one of them. See
+        // struct mem's deferred_fds.
+        mem_defer_fd_close(mem, data->fd);
+    }
+    mmap_cache_unregister(data->cache_entry);
+    free(data->host_page_prot);
+    free(data->frame_refs);
+    free(data->frame_slot);
+    free(data);
+}
+
+// Settle one run of unmapped entries: release their ownership record, then drop
+// their refcount references, and tear the mapping down if that was the last of
+// them.
+//
+// THE ORDER IS THE WHOLE POINT, and getting it wrong is a use-after-free that
+// only a shared mapping can reach. `refcount` is what keeps `data` alive, and a
+// run holds `pages` of those references until this runs -- so the record must
+// be settled BEFORE they are given up. Dropping them first leaves a window in
+// which ANOTHER address space's unmap of the same struct data takes the count
+// to zero and frees it, and this thread then reads a freed struct.
+//
+// MEASURED: with the release deferred past the decrement, the arm64 regression
+// suite died 6 times in 20 in mem_break_cow_group -> pt_map -> pt_unmap with a
+// corrupted malloc freelist; under guard malloc the same run faults directly in
+// data_owner_release on the freed struct. HEAD and the uncoalesced version are
+// 0 in 20.
+static void data_unmap_run_settle(struct data_owner_run *run, struct mem *mem) {
+    if (run->pages == 0)
+        return;
+    struct data *data = run->data;
+    pages_t pages = run->pages;
+    data_owner_run_flush(run, mem, -1);
+    if (atomic_fetch_sub(&data->refcount, (unsigned) pages) == (unsigned) pages)
+        data_destroy(mem, data);
+}
+
 static int pt_unmap_always_unlocked(struct mem *mem, page_t start, pages_t pages) {
     if (!mem_page_range_valid(mem, start, pages))
         return -1;
     page_t end = start + pages;
+    // Ownership site 2 of 5, coalesced -- see struct data_owner_run. The
+    // refcount decrements are coalesced with it, and must be: see
+    // data_unmap_run_settle.
+    struct data_owner_run run = {};
     for (page_t page = mem_next_mapped_page(mem, start);
          page != BAD_PAGE && page < end;
          page = mem_next_mapped_page(mem, page + 1)) {
@@ -1247,37 +1775,24 @@ static int pt_unmap_always_unlocked(struct mem *mem, page_t start, pages_t pages
         jit_invalidate_page(mem->mmu.jit, page);
 #endif
         struct data *data = pt->data;
+        // Read the offset before mem_pt_del: it is the frame this entry was
+        // counted against, and mem_pt_del is entitled to clear anything it
+        // likes out of the entry.
+        size_t owner_offset = pt->offset;
         mem_pt_del(mem, page);
-        if (--data->refcount == 0) {
-            // vdso wasn't allocated with mmap, it's just in our data segment
-            if (data->data != NULL && data->data != vdso_data) {
-                if (mem_quarantine_freed_pages()) {
-                    // Debug mode: keep the range reserved and make it fault
-                    // rather than handing it back. See the helper above.
-                    if (mprotect(data->data, data->size, PROT_NONE) != 0)
-                        die("quarantine mprotect(%p, %lu) failed: %s",
-                            data->data, data->size, strerror(errno));
-                } else {
-                    int err = munmap(data->data, data->size);
-                    if (err != 0)
-                        die("munmap(%p, %lu) failed: %s", data->data, data->size, strerror(errno));
-                }
-            }
-            if (data->fd != NULL) {
-                // The last reference to this mapping is going away; if it was
-                // holding a memfd's write seal off, stop holding it.
-                if (data->memfd_shared_mapped)
-                    memfd_mapping_released(data->fd);
-                // NOT fd_close: this runs under the address-space write lock
-                // with the other threads quiesced, and a ->close may block on
-                // one of them. See struct mem's deferred_fds.
-                mem_defer_fd_close(mem, data->fd);
-            }
-            mmap_cache_unregister(data->cache_entry);
-            free(data->host_page_prot);
-            free(data);
+        // A discontinuity ends the run, and ending it settles it -- the run
+        // owns those refcount references until then.
+        if (run.pages != 0 &&
+                (run.data != data ||
+                 owner_offset != run.offset + (size_t) run.pages * PAGE_SIZE))
+            data_unmap_run_settle(&run, mem);
+        if (run.pages == 0) {
+            run.data = data;
+            run.offset = owner_offset;
         }
+        run.pages++;
     }
+    data_unmap_run_settle(&run, mem);
     mem_changed(mem);
     return 0;
 }
@@ -1355,18 +1870,43 @@ int pt_dup(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) {
             return _EFAULT;
 
     pages_t mapped = 0;
+    struct data_owner_run run = {};
     for (; mapped < pages; mapped++) {
         struct pt_entry *src = mem_pt(mem, old_start + mapped);
         struct pt_entry *dst = mem_pt_new(mem, new_start + mapped);
         if (dst == NULL) {
+            // Settle the run BEFORE the unmap: pt_unmap_always releases what
+            // this loop acquired, and it cannot release a record that has not
+            // been written yet.
+            data_owner_run_flush(&run, mem, +1);
             pt_unmap_always(mem, new_start, mapped);
             return _ENOMEM;
         }
         src->data->refcount++;
+        // Ownership site 3 of 5. Same mem, so this only ever bumps the existing
+        // slot -- but it is a real second entry against the same frame, which is
+        // exactly the aliasing frame_refs exists to see. Without it, a data
+        // aliased twice inside ONE address space still reads as exclusive, and
+        // the evictor would release a frame with a live second entry pointing
+        // at it. (Today pt_dup is reached only for P_SHARED mappings, which are
+        // never evicted -- that is a coincidence of the caller in kernel/mmap.c,
+        // not a property of this function, which "will alias anything it is
+        // handed".) Coalesced -- see struct data_owner_run.
+        data_owner_run_add(&run, mem, src->data, src->offset, +1);
         dst->data = src->data;
         dst->offset = src->offset;
         dst->flags = src->flags;
+        // The alias must carry the swap state, or one of the two entries would
+        // claim a PROT_NONE frame is resident and a read through it would take
+        // a HOST fault in emulator C code, where nothing turns it into a guest
+        // signal. The SLOT is not carried, because the slot is not the entry's
+        // to carry -- it belongs to the frame both entries now describe (struct
+        // data::frame_slot).
+        atomic_store_explicit(&dst->swap_state,
+                atomic_load_explicit(&src->swap_state, memory_order_acquire),
+                memory_order_release);
     }
+    data_owner_run_flush(&run, mem, +1);
     mem_changed(mem);
     return 0;
 }
@@ -1382,18 +1922,43 @@ int pt_move(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) 
             return _EFAULT;
 
     pages_t mapped = 0;
+    struct data_owner_run run = {};
     for (; mapped < pages; mapped++) {
         struct pt_entry *src = mem_pt(mem, old_start + mapped);
         struct pt_entry *dst = mem_pt_new(mem, new_start + mapped);
         if (dst == NULL) {
+            // Settle the run BEFORE the unmap, which releases what this loop
+            // acquired and cannot release a record not yet written.
+            data_owner_run_flush(&run, mem, +1);
             pt_unmap_always(mem, new_start, mapped);
             return _ENOMEM;
         }
         src->data->refcount++;
+        // Ownership site 4 of 5. The matching release comes from the pt_unmap
+        // of the source below, or from the pt_unmap_always on the failure path.
+        // Coalesced -- see struct data_owner_run.
+        data_owner_run_add(&run, mem, src->data, src->offset, +1);
         dst->data = src->data;
         dst->offset = src->offset;
         dst->flags = src->flags;
+        // Carried for the same reason as in pt_dup: a moved entry describes the
+        // same host frame -- pt_move copies `data` and `offset` verbatim, so
+        // only the GUEST address changed -- and it must agree with the source
+        // about whether that frame is currently released.
+        //
+        // This is the case that made the slot move to the frame. When the
+        // entry carried its own copy of the slot, a page mremap'd out of an
+        // evicted frame kept that copy, its three siblings were published
+        // resident by an ordinary fault, the guest wrote them, and then the
+        // moved page's own fault re-read the whole frame from the slot and
+        // reverted those writes. Now the frame's first fault clears
+        // frame_slot, and this entry's later fault finds it already resident
+        // and does nothing but publish.
+        atomic_store_explicit(&dst->swap_state,
+                atomic_load_explicit(&src->swap_state, memory_order_acquire),
+                memory_order_release);
     }
+    data_owner_run_flush(&run, mem, +1);
 
     int err = pt_unmap(mem, old_start, pages);
     if (err < 0) {
@@ -1552,7 +2117,26 @@ static bool mem_cow_group_member(struct mem *mem, page_t p, unsigned flags) {
     // A PROT_NONE anonymous reservation has no host backing to copy from. It
     // cannot reach here with P_RWX-equal flags, but mem_break_cow_group's memcpy
     // would dereference NULL if it did.
-    return e->data->data != NULL;
+    if (e->data->data == NULL)
+        return false;
+    // Nor can an evicted page join, for the harder version of the same reason:
+    // its host frame is mprotect(PROT_NONE), and mem_break_cow_group memcpy()s
+    // straight out of `data->data + offset` with no page-table consultation, so
+    // including one is a HOST fault inside emulator C code where the JIT's
+    // crash recovery is not armed.
+    //
+    // The faulting page itself is always resident by the time the group is
+    // formed -- both callers swap it in first -- but a neighbour need not be.
+    // The group is built from GUEST page alignment (`page & ~(group-1)`) while
+    // a host frame is aligned on the DATA OFFSET, and those differ whenever a
+    // mapping's first guest page is not a multiple of four, which is the
+    // ordinary case on the amd64 test root. So the group can straddle two host
+    // frames, only one of which the fault brought back. Reachable by evicting a
+    // page and then forking, which leaves it P_COW and SWAPPED at once -- that
+    // ordering is exercised by the fork test, though this particular
+    // straddling neighbour was not isolated, so this is a guard placed by
+    // inspection rather than one a failure demanded.
+    return atomic_load_explicit(&e->swap_state, memory_order_acquire) == PT_RESIDENT;
 }
 
 // Break copy-on-write for `page`, and for every guest page sharing its host
@@ -1806,6 +2390,7 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
     // fork, on a path (systemd forking constantly during boot) hot enough
     // to shift boot timing and plausibly help surface unrelated races.
     int ret = 0;
+    struct data_owner_run run = {};
     for (page_t page = mem_next_mapped_page(src, start);
          page != BAD_PAGE && page < end;
          page = mem_next_mapped_page(src, page + 1)) {
@@ -1813,6 +2398,7 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
         if (entry == NULL)
             continue;
         if (pt_unmap_always_unlocked(dst, page, 1) < 0) {
+            data_owner_run_flush(&run, dst, +1);
             ret = -1;
             break;
         }
@@ -1824,6 +2410,11 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
         if (entry->flags & P_WIPEONFORK) {
             // The ATTRIBUTE is inherited -- Linux copies vm_flags, so a
             // grandchild is wiped too. Measured.
+            //
+            // This page is NOT shared with the parent, so it ends any run:
+            // the child gets its own fresh mapping here and the next shared
+            // page is not offset-contiguous with the last one.
+            data_owner_run_flush(&run, dst, +1);
             if (pt_map_nothing(dst, page, 1, entry->flags & ~P_COW) < 0) {
                 ret = -1;
                 break;
@@ -1833,16 +2424,42 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
         if (!(entry->flags & P_SHARED))
             entry->flags |= P_COW;
         entry->data->refcount++;
+        // Ownership site 5 of 5, and the only one that ever adds a SECOND
+        // address space to a struct data -- section 2.5 re-derived that this is
+        // the sole cross-mem entry point. Everything the pager refuses to evict
+        // because it is shared becomes shared here.
+        //
+        // Coalesced -- see struct data_owner_run, which also says why
+        // deferring an ACQUIRE is safe here specifically.
+        data_owner_run_add(&run, dst, entry->data, entry->offset, +1);
         struct pt_entry *dst_entry = mem_pt_new(dst, page);
         if (dst_entry == NULL) {
             entry->data->refcount--;
+            // This page never made it, so take it back off the run rather
+            // than acquiring and releasing separately -- nothing has been
+            // recorded for it yet.
+            run.pages--;
+            data_owner_run_flush(&run, dst, +1);
             ret = -1;
             break;
         }
         dst_entry->data = entry->data;
         dst_entry->offset = entry->offset;
         dst_entry->flags = entry->flags;
+        // The child inherits the swap state, because it inherits the frame. If
+        // it did not, the child would read a PROT_NONE frame as resident and
+        // take a host fault.
+        //
+        // Both address spaces now hold entries into one released frame, and
+        // either may fault it back. That is safe because neither holds a slot
+        // of its own to fault it back FROM: the slot is the frame's, the frame
+        // lock serialises the two faults, and whichever loses the race finds
+        // frame_slot already SWAP_SLOT_NONE and simply publishes its entry.
+        atomic_store_explicit(&dst_entry->swap_state,
+                atomic_load_explicit(&entry->swap_state, memory_order_acquire),
+                memory_order_release);
     }
+    data_owner_run_flush(&run, dst, +1);
     mem_changed(src);
     mem_changed(dst);
     return ret;
@@ -1998,6 +2615,36 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
                 write_to_read_lock(&mem->lock);
                 goto done_write_fault;
             }
+            // Residency is re-checked HERE, after the upgrade, and not only in
+            // the prologue at the top of this function. read_to_write_lock
+            // releases the reader before it waits, and the evictor takes that
+            // write lock -- so a page this function swapped in under the read
+            // lock can be gone again by the time control reaches this line.
+            // mem_break_cow_group then memcpy()s out of `data->data + offset`
+            // with no page-table consultation, which on a released frame is a
+            // HOST fault inside emulator C code, where the JIT's crash recovery
+            // is not armed and nothing turns it into a guest signal.
+            //
+            // Today's eviction filter refuses P_COW frames, so nothing can
+            // actually take this window -- which is precisely why it is worth
+            // closing now. Section 2.4 of the plan argues the pager should
+            // eventually evict COW copies of private file pages, and the day
+            // that filter widens this becomes a live host crash that looks like
+            // an emulator bug.
+            if (atomic_load_explicit(&entry->swap_state, memory_order_acquire) != PT_RESIDENT &&
+                    swap_fault_page_locked(mem, page) < 0) {
+                if (locked_general_lock)
+                    unlock(&current->general_lock);
+                write_to_read_lock(&mem->lock);
+                return NULL;
+            }
+            entry = mem_pt(mem, page);
+            if (entry == NULL) {
+                if (locked_general_lock)
+                    unlock(&current->general_lock);
+                write_to_read_lock(&mem->lock);
+                return NULL;
+            }
             // Copies this page and, on a 16 KiB-page host, the rest of its host
             // page: see the host-page packing comment above mem_break_cow_group.
             if (mem_break_cow_group(mem, page) < 0) {
@@ -2030,19 +2677,6 @@ done_write_fault:
 
 void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
     page_t page = PAGE(addr);
-    // An evicted page must be faulted back here too, not only in mem_ptr: this
-    // is the path handle_page_fault_interrupt takes, which is how a JIT or
-    // interpreter access arrives. Done before the write lock because
-    // swap_fault_page expects a reader and upgrades; the re-check inside it
-    // covers another thread having already brought the frame back.
-    mem_read_lock_quiesce_aware(mem);
-    struct pt_entry *swapped = mem_pt(mem, page);
-    bool needs_swap_in = swapped != NULL &&
-        atomic_load_explicit(&swapped->swap_state, memory_order_acquire) != PT_RESIDENT;
-    if (needs_swap_in)
-        swap_fault_page(mem, page);
-    mem_read_unlock_quiesce_aware(mem);
-
     write_lock(&mem->lock);
 
     struct pt_entry *entry = mem_pt(mem, page);
@@ -2057,6 +2691,53 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
         }
         mem_map_growsdown_group(mem, page);
         entry = mem_pt(mem, page);
+    }
+
+    // An evicted page must be faulted back here too, not only in mem_ptr: this
+    // is the path handle_page_fault_interrupt takes, which is how a JIT or
+    // interpreter access arrives.
+    //
+    // UNDER THE WRITE LOCK THIS FUNCTION ALREADY HOLDS, and that placement is
+    // the whole point. The first version did it in a read-locked prologue and
+    // then dropped the read lock to take the write lock -- and the evictor
+    // takes the write lock, so it fits exactly in that gap. The page arrived
+    // resident and was evicted again before this function looked at it, so
+    // mem_ptr_nofault at the bottom returned NULL and the guest took a SIGSEGV
+    // on a page that is perfectly well mapped.
+    //
+    // MEASURED. With the prototype's eviction scan slow enough that only one
+    // sweep ever landed, the window never opened. Making the scan skip
+    // unallocated directories (see swap_evict_mem) let a second sweep run while
+    // the guest was faulting pages back in, and the arm64 verifier died with
+    // SIGSEGV after 2064 evictions and 1656 faults. Every run since this moved
+    // has passed -- five guest roots by three test shapes, plus repeated arm64
+    // and amd64 batches. The mechanism above is an argument from the lock
+    // protocol rather than an isolated repro; the observation is that the
+    // failure appeared with the window open and has not been seen with it
+    // closed.
+    //
+    // It must also come BEFORE the copy-on-write break below: mem_break_cow_group
+    // memcpy()s straight out of `data->data + offset`, with no page-table
+    // consultation, so a released frame there is a HOST fault inside emulator C
+    // code, which nothing turns into a guest signal.
+    //
+    // The cost is that the pread runs with the address space exclusively
+    // locked, which is 82 us at p50 on device and 683 us at p99.9 -- every
+    // thread of the process stalls for it. Section 3.5 of the plan is explicit
+    // that the shipping version has to drop, run, re-take and RE-WALK instead,
+    // re-fetching mem_pt after every resume point. That is pager-core work; the
+    // prototype takes the stall and stays correct.
+    if (entry != NULL &&
+            atomic_load_explicit(&entry->swap_state, memory_order_acquire) != PT_RESIDENT) {
+        if (swap_fault_page_locked(mem, page) < 0) {
+            write_unlock(&mem->lock);
+            return NULL;    // caller turns this into a guest SIGBUS
+        }
+        entry = mem_pt(mem, page);
+        if (entry == NULL) {
+            write_unlock(&mem->lock);
+            return NULL;
+        }
     }
 
     if (entry != NULL && (type == MEM_WRITE || type == MEM_WRITE_PTRACE)) {
@@ -2301,12 +2982,46 @@ int mem_ref_cnt_get(struct mem *mem) {
 // footprint drop and costing 2.53 us per frame.
 
 static lock_t swap_lock = LOCK_INITIALIZER;
-static int swap_fd = -1;              // unlinked temp file; opened on first use
-static uint32_t swap_next_slot;
-static unsigned long swap_stat_evicted, swap_stat_faulted;
-static unsigned long swap_stat_out, swap_stat_in;
-static unsigned long swap_stat_adv_fail, swap_stat_prot_fail;
-static unsigned long swap_stat_ledger_refused;
+// The one swap file, opened on first use. ATOMIC and opened under swap_lock,
+// both, for a failure that was measured rather than imagined: two guest
+// processes evicted at once, both saw swap_fd < 0, both created a file, and the
+// second store won. Each sweep then wrote through the descriptor it had been
+// handed while slot numbers kept coming from the single counter below, so the
+// two sweeps interleaved slots across two different files -- and every swap-in
+// read from whichever descriptor won. Frames written to the loser's file came
+// back as ZEROS from a sparse hole in the winner's, with no error on any path.
+//
+// lsof caught it in the act: two ish-tmpfile descriptors on the process, the
+// second exactly 16384 bytes long, and the guest lost exactly the four pages of
+// that one frame. Every clean run had one descriptor; every corrupt run had
+// two. Priming the file with a single eviction first made the identical
+// concurrent pair clean 12 times out of 12.
+//
+// The window was always here -- swap_evict_mem takes only the TARGET address
+// space's barrier, so two evictions of two processes are simply concurrent --
+// but it needed both sweeps to reach their first eligible frame within
+// microseconds of each other, which the mem_next_page scan is what made
+// ordinary. Section 3.7's kswapd would make it routine and unattended.
+static _Atomic int swap_fd = -1;
+// Slot 0 is never handed out, because SWAP_SLOT_NONE is 0: that lets pt_map's
+// calloc of frame_slot mean "every frame is in host memory" with no
+// initialisation loop at all, which for a 512 MiB mapping is 32768 stores
+// saved on a path that runs whether or not swap is ever enabled. The 16 KiB it
+// costs in the file is not worth a smarter encoding.
+static uint32_t swap_next_slot = 1;
+// ATOMIC, all of them. Every evictor and every faulting guest thread bumps
+// these, and two evictions of two processes run concurrently -- the barrier
+// each takes is its own address space's. Plain increments here quietly
+// under-reported, which for a diagnostic whose whole job is to say whether the
+// release did anything is not a cosmetic problem.
+static _Atomic unsigned long swap_stat_evicted, swap_stat_faulted;
+static _Atomic unsigned long swap_stat_out, swap_stat_in;
+// Faults that found the frame already back and did no I/O at all. A high ratio
+// to frames evicted means either healthy sharing (a forked sibling faulted it
+// first) or that eviction is choosing frames that are not cold.
+static _Atomic unsigned long swap_stat_cancelled;
+static _Atomic unsigned long swap_stat_adv_fail, swap_stat_prot_fail;
+static _Atomic unsigned long swap_stat_ledger_refused;
 static int swap_stat_adv_errno, swap_stat_prot_errno;
 unsigned long swap_prototype_ledger_refused(void) { return swap_stat_ledger_refused; }
 void swap_prototype_failures(unsigned long *adv, unsigned long *prot, int *adv_e, int *prot_e) {
@@ -2319,8 +3034,13 @@ void swap_prototype_failures(unsigned long *adv, unsigned long *prot, int *adv_e
 // A frame is one HOST page: the unit the host will actually release. On Apple
 // silicon that is 16 KiB, so four guest pages, which is why the eviction below
 // only ever considers four consecutive guest pages at a time.
+//
+// One definition, shared with the frame_refs bookkeeping in the ownership
+// section above -- these two must never be able to disagree about which entries
+// share a frame, or the count and the release would be measuring different
+// things.
 static size_t swap_frame_size(void) {
-    return real_page_size > PAGE_SIZE ? real_page_size : PAGE_SIZE;
+    return mem_frame_size();
 }
 static size_t swap_pages_per_frame(void) {
     return swap_frame_size() / PAGE_SIZE;
@@ -2335,24 +3055,56 @@ static size_t swap_pages_per_frame(void) {
 int host_unlinked_tmpfd(void);
 
 static int swap_file(void) {
-    if (swap_fd < 0) {
-        swap_fd = host_unlinked_tmpfd();
-        if (swap_fd < 0)
-            return swap_fd;
+    int fd = atomic_load_explicit(&swap_fd, memory_order_acquire);
+    if (fd >= 0)
+        return fd;
+    lock(&swap_lock, 0);
+    fd = atomic_load_explicit(&swap_fd, memory_order_relaxed);
+    if (fd < 0) {
+        fd = host_unlinked_tmpfd();
+        if (fd >= 0)
+            atomic_store_explicit(&swap_fd, fd, memory_order_release);
     }
-    return swap_fd;
+    unlock(&swap_lock);
+    return fd;
 }
 
 // Is this guest page the base of a frame this prototype may evict?
 //
 // The restrictions are deliberately narrow, because a gate that evicts more
-// than it can reason about proves less. Anonymous private only; the whole frame
-// must be four consecutive guest pages of ONE struct data at consecutive
-// offsets; and the mapping must be unshared, which is tested as refcount
-// equalling the mapping's own page count -- refcount counts pt_entries, so an
-// unshared N-page mapping reads N and a forked one reads 2N. Section 3.8 does
-// this properly with owner records; this is the cheap version that is correct
-// for anything that never forked, which is what the gate test is.
+// than it can reason about proves less: anonymous private only, and the whole
+// frame must be four consecutive guest pages of ONE struct data at consecutive
+// offsets. What changed since the gate is the two tests that used to be
+// approximations:
+//
+//  - EXCLUSIVITY. The gate asked whether refcount equalled the mapping's own
+//    page count, which is right only for a mapping that never forked and never
+//    had a page unmapped out of it. It now asks the owner records, which answer
+//    exactly (struct data::owners). That is strictly broader as well as
+//    strictly safer: a partially-unmapped mapping used to be refused for no
+//    reason.
+//  - FRAME OCCUPANCY. The four entries found must be ALL the entries pointing
+//    into this host frame, and frame_refs is what makes that a measurement.
+//    Without it the four-consecutive-pages test is safe only by coincidence of
+//    who calls pt_dup today.
+//
+// Exclusive struct data does NOT imply an exclusive host frame, so the vdso is
+// excluded by identity and not by ownership: kernel/vdso.c's static array gets
+// its OWN struct data on every 32-bit exec (kernel/exec.c), each of which reads
+// as exclusive, while all of them share one host page -- which in build/ish
+// also holds unrelated emulator globals, including a live lock. Section 2.5
+// makes that a written-down precondition of what the ownership record means
+// rather than a filter someone may later relax.
+//
+// The remaining struct-data exclusions are section 3.4's, gating on fields
+// rather than on the guest-visible flag: a mapping with an fd, a
+// never-writable-file cache entry, a shared key or a name is not AOK's
+// anonymous memory to release. (Section 2.4 argues P_ANONYMOUS should
+// eventually go too, because it needlessly excludes COW copies of private file
+// pages, which ARE real anonymous host memory -- both COW breaks inherit
+// `entry->flags & ~P_COW`. Widening the set is a pager-core decision with its
+// own measurements; it is not a change to make while the gate is the only
+// regression test.)
 static bool swap_frame_eligible(struct mem *mem, page_t base, struct data **data_out,
                                 size_t *offset_out) {
     size_t per = swap_pages_per_frame();
@@ -2362,11 +3114,12 @@ static bool swap_frame_eligible(struct mem *mem, page_t base, struct data **data
         struct pt_entry *pt = mem_pt(mem, base + i);
         if (pt == NULL || pt->data == NULL || pt->data->data == NULL)
             return false;
-        if (pt->data->data == vdso_data || pt->data->fd != NULL)
+        if (pt->data->data == vdso_data)
+            return false;
+        if (pt->data->fd != NULL || pt->data->cache_entry != NULL ||
+                pt->data->shared_key != 0 || pt->data->name != NULL)
             return false;
         if (!(pt->flags & P_ANONYMOUS) || (pt->flags & P_SHARED) || (pt->flags & P_COW))
-            return false;
-        if (atomic_load_explicit(&pt->swap_state, memory_order_relaxed) != PT_RESIDENT)
             return false;
         if (i == 0) {
             data = pt->data;
@@ -2377,8 +3130,30 @@ static bool swap_frame_eligible(struct mem *mem, page_t base, struct data **data
                 return false;
             if (first_offset + swap_frame_size() > data->size)
                 return false;
-            if (data->refcount != data->size / PAGE_SIZE)
-                return false;   // shared with another address space
+            if (!data_is_exclusive_to(data, mem))
+                return false;   // reachable from a second address space
+            // Every entry pointing into this frame must be one of the `per`
+            // this loop is about to find. -1 is "not known", which has to read
+            // as "do not touch it".
+            if (data_frame_ref_count(data, first_offset) != (int) per)
+                return false;
+            // No frame_slot means the frame has nowhere to record where its
+            // bytes went, so it can never be brought back. Allocation failure
+            // in pt_map drops the pair together, so this and frame_refs are
+            // never separately absent -- the test is here because the swap-in
+            // path dereferences it and must not have to wonder.
+            if (data->frame_slot == NULL)
+                return false;
+            // Is the frame OUT already? Asked of the frame, not of the entries'
+            // swap_state bytes, which are a conservative hint: after a forked
+            // sibling faults a frame back, this address space's entries can
+            // stay PT_SWAPPED over memory that is resident and holding the
+            // right bytes, and a hint test here would make that frame
+            // unevictable for the life of the process -- measured as two full
+            // sweeps releasing nothing at all. The frame's slot is the truth.
+            if (atomic_load_explicit(&data->frame_slot[first_offset / swap_frame_size()],
+                        memory_order_acquire) != SWAP_SLOT_NONE)
+                return false;
         } else {
             if (pt->data != data || pt->offset != first_offset + i * PAGE_SIZE)
                 return false;
@@ -2387,6 +3162,37 @@ static bool swap_frame_eligible(struct mem *mem, page_t base, struct data **data
     *data_out = data;
     *offset_out = first_offset;
     return true;
+}
+
+// The per-frame lock, striped. It serialises the transition of ONE frame
+// between "in host memory" and "in slot N", and is held across the pread that
+// brings a frame back.
+//
+// A separate stripe set from the ownership locks, deliberately: those are taken
+// on every mmap and munmap of every mapping and must stay short, while this one
+// is held for the length of a disk read. Both are leaves -- nothing is ever
+// taken under either -- so there is no order between them to get wrong.
+//
+// It is needed because after a fork, two address spaces hold entries into one
+// released frame and each faults under only its OWN write lock. Without this
+// they would both mprotect, both madvise and both pread the same host memory,
+// and the second would overwrite whatever the first had already handed back to
+// its guest.
+#define SWAP_FRAME_STRIPES 64
+#define SWAP_FRAME_L1 PTHREAD_MUTEX_INITIALIZER
+#define SWAP_FRAME_L4 SWAP_FRAME_L1, SWAP_FRAME_L1, SWAP_FRAME_L1, SWAP_FRAME_L1
+#define SWAP_FRAME_L16 SWAP_FRAME_L4, SWAP_FRAME_L4, SWAP_FRAME_L4, SWAP_FRAME_L4
+static pthread_mutex_t swap_frame_locks[SWAP_FRAME_STRIPES] = {
+    SWAP_FRAME_L16, SWAP_FRAME_L16, SWAP_FRAME_L16, SWAP_FRAME_L16,
+};
+#undef SWAP_FRAME_L16
+#undef SWAP_FRAME_L4
+#undef SWAP_FRAME_L1
+
+static pthread_mutex_t *swap_frame_lock_for(struct data *data, size_t frame_index) {
+    uintptr_t key = (uintptr_t) data;
+    key = (key >> 4) ^ (key >> 12) ^ (frame_index * 2654435761u);
+    return &swap_frame_locks[key % SWAP_FRAME_STRIPES];
 }
 
 // Evict one frame. Everything happens under the caller's write lock, including
@@ -2415,11 +3221,21 @@ static bool swap_evict_frame(struct mem *mem, page_t base, struct data *data, si
         done += (size_t) n;
     }
 
+    // The frame records where its bytes went; the entries only record that
+    // they are not here. Order matters: the slot has to be readable before any
+    // entry says "go and read it", so it is published first and the entries
+    // second, with release ordering on each store.
+    //
+    // No frame lock is taken. Eviction runs under the address-space barrier of
+    // the ONLY address space that reaches this mapping (data_is_exclusive_to
+    // was just checked), and every reader of frame_slot is a fault in some
+    // address space that reaches it -- so there is no second party to race
+    // with. Swap-in is the asymmetric case, because a fork after eviction can
+    // create one.
+    atomic_store_explicit(&data->frame_slot[offset / frame], slot,
+            memory_order_release);
     for (size_t i = 0; i < swap_pages_per_frame(); i++) {
         struct pt_entry *pt = mem_pt(mem, base + i);
-        pt->swap_slot = slot;
-        // Release order: publish SWAPPED last, so no reader can observe a slot
-        // it is not yet allowed to use.
         atomic_store_explicit(&pt->swap_state, PT_SWAPPED, memory_order_release);
     }
     mem_changed(mem);
@@ -2536,6 +3352,19 @@ long swap_evict_mem(struct mem *mem) {
 
     mem_write_lock_pokes_external(mem);
     swap_fp_before = swap_footprint_now();
+    // The step on a miss is mem_next_page, not page + 1, and the difference is
+    // not a micro-optimisation: page_limit is 2^35 pages for a 64-bit guest and
+    // the mappings live near the top of it, so a linear probe walks tens of
+    // billions of empty pages. Measured on the arm64 test root before this
+    // change: 7.5 minutes of pure scanning to evict a 16 MiB region, which made
+    // the gate's own regression test impractical to re-run. mem_next_page
+    // bit-scans the pgdir_root and leaf bitmaps and never skips a page that has
+    // a leaf, so it cannot miss an eligible frame.
+    //
+    // The real pager does not scan at all -- section 3.7's clock hand walks
+    // allocated leaves in bounded chunks under mem_read_lock_quiesce_aware --
+    // so this stays a prototype's whole-address-space sweep, just not a
+    // pathological one.
     for (page_t page = 0; page + per <= mem->page_limit; ) {
         struct data *data;
         size_t offset;
@@ -2544,7 +3373,7 @@ long swap_evict_mem(struct mem *mem) {
             released += (long) swap_frame_size();
             page += per;
         } else {
-            page++;
+            mem_next_page(mem, &page);
         }
     }
     swap_fp_after = swap_footprint_now();
@@ -2568,11 +3397,15 @@ long swap_evict_mem(struct mem *mem) {
     return released;
 }
 
-int swap_fault_page(struct mem *mem, page_t page) {
-    // Called with the read lock held. Upgrade, because bringing a frame back
-    // changes host protections and the page table, then drop back to a reader
-    // the way every other fault path here does.
-    read_to_write_lock(&mem->lock);
+// Bring one evicted frame back, with the address-space WRITE lock already held.
+//
+// The write lock is what makes this correct rather than merely usual: the
+// evictor takes the same lock, so while it is held no frame of this mem can be
+// released, and the entry this function inspects, refills and publishes cannot
+// change underneath it. Every caller that instead drops a lock and re-takes one
+// has to re-walk and re-check afterwards, which is why mem_ptr_fault calls this
+// form directly.
+static int swap_fault_page_locked(struct mem *mem, page_t page) {
     int err = 0;
     struct pt_entry *pt = mem_pt(mem, page);
     if (pt != NULL &&
@@ -2581,55 +3414,119 @@ int swap_fault_page(struct mem *mem, page_t page) {
         size_t frame = swap_frame_size();
         size_t offset = pt->offset & ~(frame - 1);
         char *host = (char *) data->data + offset;
-        uint32_t slot = pt->swap_slot;
+        size_t f = offset / frame;
 
-        // Reverse of the eviction, in reverse order: make it writable, tell the
-        // host we want the page back, then refill it.
-        if (mprotect(host, frame, PROT_READ | PROT_WRITE) != 0) {
+        // Ask the FRAME where its bytes are, not the entry. The entry only
+        // said "not here", which may be stale -- a sibling entry's fault, or
+        // the same frame's fault in a forked sibling process, can have brought
+        // it back since. Under the frame lock so the answer cannot change
+        // while it is being acted on.
+        pthread_mutex_t *fl = swap_frame_lock_for(data, f);
+        pthread_mutex_lock(fl);
+        uint32_t slot = data->frame_slot == NULL ? SWAP_SLOT_NONE :
+                atomic_load_explicit(&data->frame_slot[f], memory_order_acquire);
+
+        if (slot == SWAP_SLOT_NONE) {
+            // CANCELLED: the frame is already in host memory, so there is
+            // nothing to read and -- this is the part that matters -- nothing
+            // to overwrite. Re-reading the slot here is exactly the silent
+            // revert that made the slot the frame's property: it would put the
+            // on-disk copy back over whatever the guest has written through a
+            // sibling entry since the frame returned.
+            swap_stat_cancelled++;
+        } else if (mprotect(host, frame, PROT_READ | PROT_WRITE) != 0) {
+            // Reverse of the eviction, in reverse order: make it writable, tell
+            // the host we want the page back, then refill it.
             err = _EIO;
         } else {
             madvise(host, frame, MADV_FREE_REUSE);
+            // Through the accessor, not the raw global: the read has to be
+            // ordered against the open rather than rely on a benign race, and
+            // a frame can only be SWAPPED if some evictor already opened the
+            // file, so this never creates one.
+            int fd = swap_file();
             off_t at = (off_t) slot * (off_t) frame;
             size_t done = 0;
-            while (done < frame) {
-                ssize_t n = pread(swap_fd, host + done, frame - done, at + (off_t) done);
+            while (fd >= 0 && done < frame) {
+                ssize_t n = pread(fd, host + done, frame - done, at + (off_t) done);
                 if (n <= 0) { err = _EIO; break; }
                 done += (size_t) n;
             }
+            if (fd < 0)
+                err = _EIO;
+            if (err == 0) {
+                // The frame is home. Clear the slot BEFORE the lock is dropped
+                // and before any entry is published, so that the next fault on
+                // any entry of this frame -- in this address space or a forked
+                // sibling's -- takes the cancelled path above instead of
+                // reading the slot a second time.
+                atomic_store_explicit(&data->frame_slot[f], SWAP_SLOT_NONE,
+                        memory_order_release);
+                swap_stat_faulted++;
+                swap_stat_in += frame;
+            }
         }
+        pthread_mutex_unlock(fl);
+
         if (err == 0) {
             // Publish every page of the frame, not just the faulting one: they
             // were evicted together and their bytes are all back.
             //
-            // The base is derived from the OFFSET INTO THE MAPPING, never from
-            // the guest page number. A frame is four guest pages of one struct
-            // data at consecutive data offsets, and where that lands in the
-            // guest address space is whatever the mapping's base happens to be
-            // -- so `page - (page % 4)` is only the right answer when the
-            // mapping starts on a multiple of four, which is a coincidence of
-            // the allocator and not a property of anything.
+            // The frame's first guest page is found from the DATA OFFSET, not
+            // from the guest page number. Section 3.2 states the rule -- "a
+            // frame (D, f) is the set of pt_entrys with entry->data == D and
+            // entry->offset >> 14 == f; membership is by data offset, not guest
+            // adjacency" -- and the gate prototype broke it with
+            // `page - (page % pages_per_frame)`, which is only the same thing
+            // when the mapping's first guest page happens to be a multiple of
+            // four.
             //
-            // It cost a deterministic SIGBUS on the amd64 root, whose region
-            // landed at guest page 0x7ffffcf59 (1 mod 4): swap-in published the
-            // four entries one short of the frame, leaving the real first page
-            // marked SWAPPED over host memory that was now readable and
-            // resident, and marking a page of the NEXT frame resident over
-            // memory still mprotect(PROT_NONE). arm64, i386 and riscv64 all
-            // passed only because their regions happened to land aligned.
-            page_t base = page - (pt->offset - offset) / PAGE_SIZE;
+            // MEASURED, and it is why this is not a theoretical tidy-up. The
+            // arm64 test root put the verifier's 16 MiB region at guest page
+            // 0x7fffbcf1c, a multiple of 4, and it passed. The amd64 root put
+            // the identical region at 0x7ffffcf59, which is 1 mod 4, so every
+            // base came out one page LOW: the swap-in marked the last page of
+            // the PREVIOUS frame resident while that frame was still released,
+            // and the next read of it took a host fault on a PROT_NONE page.
+            // Deterministic, single-threaded, and it killed the verifier with
+            // SIGBUS after three faults.
+            size_t page_in_frame = (pt->offset & (frame - 1)) / PAGE_SIZE;
+            page_t base = page - (page_t) page_in_frame;
             for (size_t i = 0; i < swap_pages_per_frame(); i++) {
                 struct pt_entry *e = mem_pt(mem, base + i);
-                // Same data AND the offset this frame slot actually expects:
-                // an mremap can move an entry out from under a frame, and
-                // publishing that entry would call bytes resident that this
-                // pread never wrote.
+                // Same mapping AND the exact offset this position in the
+                // frame must have. Testing only "same frame" would publish a
+                // neighbour an mremap moved in from elsewhere, calling bytes
+                // resident that this pread never wrote.
                 if (e != NULL && e->data == data && e->offset == offset + i * PAGE_SIZE)
                     atomic_store_explicit(&e->swap_state, PT_RESIDENT, memory_order_release);
             }
-            swap_stat_faulted++;
-            swap_stat_in += frame;
+            // An entry an mremap moved out of this frame is not adjacent any
+            // more, so this loop does not reach it and it stays PT_SWAPPED.
+            // That is now a hint that is merely stale rather than a bug: its
+            // own fault takes the cancelled path above, reads nothing, and
+            // publishes just itself. It used to be the silent-revert case,
+            // because the entry carried a copy of the slot and would refill
+            // the whole frame from it -- over three siblings the guest had
+            // written since. scratch mrem.c drives exactly that ordering.
         }
     }
+    return err;
+}
+
+int swap_fault_page(struct mem *mem, page_t page) {
+    // Called with the READ lock held. Upgrade, because bringing a frame back
+    // changes host protections and the page table, then drop back to a reader
+    // the way every other fault path here does.
+    //
+    // read_to_write_lock releases the reader before it waits (util/rw_locks.h),
+    // so the caller's view of the page table is stale on return and it MUST
+    // re-walk. mem_ptr does: its prologue runs before it resolves anything, and
+    // for the read case it holds the read lock continuously from here to
+    // mem_ptr_nofault, which the evictor cannot get past. A caller that cannot
+    // hold the lock across both should call swap_fault_page_locked instead.
+    read_to_write_lock(&mem->lock);
+    int err = swap_fault_page_locked(mem, page);
     write_to_read_lock(&mem->lock);
     return err;
 }
@@ -2641,3 +3538,5 @@ void swap_prototype_stats(unsigned long *evicted_frames, unsigned long *faulted_
     if (bytes_out) *bytes_out = swap_stat_out;
     if (bytes_in) *bytes_in = swap_stat_in;
 }
+
+unsigned long swap_prototype_cancelled(void) { return swap_stat_cancelled; }

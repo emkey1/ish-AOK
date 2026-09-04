@@ -141,6 +141,12 @@ static int proc_ish_show_roots(struct proc_entry *UNUSED(entry), struct proc_dat
 // without an aging clock or a kswapd deciding for it. Writing a pid evicts;
 // reading reports what has happened. Nothing here runs on its own, which is
 // also the shipping default: swap is opt-in from Settings.
+// Residency of the address space of the LAST pid written here. Only a
+// diagnostic, so a plain pair of longs written under no lock is enough: the
+// write handler is the only writer and it has already released the mm.
+static size_t swap_last_mapped_pages, swap_last_resident_pages;
+static size_t swap_last_pre_mapped_pages, swap_last_pre_resident_pages;
+
 static int proc_ish_show_swap_evict(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     unsigned long frames_out, frames_in, bytes_out, bytes_in;
     swap_prototype_stats(&frames_out, &frames_in, &bytes_out, &bytes_in);
@@ -149,6 +155,14 @@ static int proc_ish_show_swap_evict(struct proc_entry *UNUSED(entry), struct pro
     proc_printf(buf, "\n  echo <pid> > /proc/ish/swap_evict   # evict every eligible frame of that process\n\n");
     proc_printf(buf, "frames_evicted  %lu\n", frames_out);
     proc_printf(buf, "frames_faulted  %lu\n", frames_in);
+    proc_printf(buf, "frames_cancelled %lu  (fault found the frame already back)\n",
+                swap_prototype_cancelled());
+    proc_printf(buf, "last_target_pre  %zu mapped pages, %zu resident, %zu out\n",
+                swap_last_pre_mapped_pages, swap_last_pre_resident_pages,
+                swap_last_pre_mapped_pages - swap_last_pre_resident_pages);
+    proc_printf(buf, "last_target      %zu mapped pages, %zu resident, %zu out\n",
+                swap_last_mapped_pages, swap_last_resident_pages,
+                swap_last_mapped_pages - swap_last_resident_pages);
     proc_printf(buf, "bytes_out       %lu\n", bytes_out);
     proc_printf(buf, "bytes_in        %lu\n", bytes_in);
     unsigned long adv_fail, prot_fail; int adv_e, prot_e;
@@ -193,21 +207,67 @@ static int proc_ish_update_swap_evict(struct proc_entry *UNUSED(entry), struct p
     if (end == NULL || *end != '\0' || want <= 0)
         return _EINVAL;
 
-    // Hold the task only long enough to pin its address space. Evicting walks
-    // the whole page table under the barrier, and doing that while holding
-    // pids_lock would block every fork in the system behind it.
-    lock(&pids_lock, 0);
-    struct task *task = pid_get_task((dword_t) want);
+    // Pin the address space the way every other mm_retain site in the tree
+    // does: under the TASK's general_lock, with pids_lock not held.
+    //
+    // pids_lock does not protect task->mm and never did. do_exit does
+    // `mm_release(task->mm); task->mm = NULL;` with neither lock held
+    // (kernel/exit.c), and mm_release's refcount can reach zero and enter
+    // mem_destroy -- a full pt_unmap over the address space, then freeing
+    // every chunk and leaf -- while task->mm still points at the dying mm the
+    // whole time. Retaining it there hands this function an mm that is being
+    // torn down: mem_destroy NULLs pgdir_root and pgdir_root_bitmap, and the
+    // first mem_pt() of the eviction sweep then dereferences NULL.
+    //
+    // MEASURED, 3 for 3, with three host crash reports whose stacks are
+    // identical: mem_pgdir_chunk_get <- mem_pt_leaf_get <- mem_pt_raw <-
+    // mem_pt <- swap_frame_eligible <- swap_evict_mem <-
+    // proc_ish_update_swap_evict. A guest write to a /proc file killed the
+    // whole emulator and every guest process in it. Once the freed mm's
+    // allocation is recycled instead of still reading NULL, the sweep would
+    // pwrite from, madvise and mprotect a host address derived from garbage,
+    // which is worse than the crash.
+    //
+    // trylock, not lock, and the reason is the one fs/proc/root.c's
+    // collect_mem_page_stats gives for the same pattern: do_exit spins in
+    // exit_wait_backoff() while holding general_lock, and the reference we
+    // hold here can keep that loop alive. A task mid-exit has nothing worth
+    // evicting, so failing is the right answer. Blocking here instead would
+    // also be an ABBA inversion -- do_exit takes general_lock before
+    // pids_lock, and pid_get_task_ref takes pids_lock internally.
+    struct task *task = pid_get_task_ref((dword_t) want);
+    if (task == NULL)
+        return _ESRCH;
     struct mm *mm = NULL;
-    if (task != NULL && task->mm != NULL) {
-        mm = task->mm;
-        mm_retain(mm);
+    if (trylock(&task->general_lock) == 0) {
+        if (task->mm != NULL) {
+            mm = task->mm;
+            mm_retain(mm);
+        }
+        unlock(&task->general_lock);
     }
-    unlock(&pids_lock);
+    task_ref_cnt_mod(task, -1);
     if (mm == NULL)
         return _ESRCH;
 
+    // Sampled BOTH SIDES of the sweep, from the same walk every residency
+    // figure will come from once the pager has a guest-visible surface.
+    //
+    // The before-sample is the one that can be read on its own: writing a pid
+    // whose frames are all resident evicts them and then reports them out, so
+    // an after-sample alone can never show a process whose memory came BACK.
+    // That is exactly the state the fork case produces -- a forked sibling
+    // faults a frame in and publishes only its own entries, leaving this
+    // address space's saying SWAPPED over resident memory -- and it is what
+    // mem_resident_page_count has to get right by asking the frame rather than
+    // the entry.
+    size_t before_mapped = mem_mapped_page_count(&mm->mem);
+    size_t before_resident = mem_resident_page_count(&mm->mem);
     long released = swap_evict_mem(&mm->mem);
+    swap_last_pre_mapped_pages = before_mapped;
+    swap_last_pre_resident_pages = before_resident;
+    swap_last_mapped_pages = mem_mapped_page_count(&mm->mem);
+    swap_last_resident_pages = mem_resident_page_count(&mm->mem);
     mm_release(mm);
     return released < 0 ? (int) released : 0;
 }
