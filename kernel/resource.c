@@ -236,6 +236,45 @@ static size_t maxrss_plausible_pages(void) {
 // count and folds it into the high-water mark kept on the mm, so a later read
 // never reports less than an earlier one saw -- which is what "max" means.
 size_t task_maxrss_kb(struct task *task) {
+    // The address space is PINNED for the walk, and reading task->mm without
+    // doing so was a use-after-free that killed the emulator.
+    //
+    // do_exit does `mm_release(task->mm); task->mm = NULL;` with neither
+    // pids_lock nor anything else held, and mm_release's refcount can reach
+    // zero and enter mem_destroy -- which frees every page-table chunk and
+    // NULLs pgdir_root and pgdir_root_bitmap -- while task->mm still points at
+    // the dying mm. A sampler that read the pointer in that window walked a
+    // half-destroyed page table.
+    //
+    // MEASURED: the guest regression suite killed the whole emulator on the
+    // devuan-arm64 leg with SIGSEGV at address 0x50, stack
+    // mem_next_chunk_root <- mem_page_count_walk <- mem_mapped_page_count <-
+    // task_maxrss_kb <- rusage_fill_task_counters <- rusage_get_task <-
+    // rusage_get_group_of <- cpu_time_now_of <- itimer_vprof_sampler_notify <-
+    // timer_thread. An ITIMER_PROF sampler firing on another thread's task
+    // while that task exits.
+    //
+    // trylock, and skip the fresh sample if it fails, for the reason
+    // fs/proc/root.c's collect_mem_page_stats documents: do_exit spins in
+    // exit_wait_backoff() while holding general_lock, so blocking here can
+    // deadlock. And SKIP THE LOCK ENTIRELY if this thread already holds it,
+    // which is do_exit's own call a few lines before it releases the mm --
+    // that one is safe by construction and must not be turned into a
+    // trylock failure, or the exit-time sample that latches the final peak
+    // would be lost.
+    // The lock is held ACROSS the walk rather than used to take a reference,
+    // and that is deliberate. Retaining the mm and releasing it afterwards
+    // would make this thread the last referrer whenever the task exits in
+    // between -- and mm_release then runs mem_destroy right here, on the timer
+    // thread, which has no `current` and must never tear an address space down
+    // (a ->close waiting on a guest process would never be woken). Holding
+    // general_lock instead keeps task->mm alive without ever owning a
+    // reference to it, because do_exit holds the same lock across
+    // `mm_release(task->mm); task->mm = NULL;`.
+    bool held_by_us = current == task &&
+        pthread_equal(task->general_lock.owner, pthread_self());
+    if (!held_by_us && trylock(&task->general_lock) != 0)
+        return task->maxrss_kb;     // mid-exit; the latched value is the answer
     struct mm *mm = task->mm;
     if (mm != NULL) {
         size_t pages = mem_mapped_page_count(&mm->mem);
@@ -262,8 +301,11 @@ size_t task_maxrss_kb(struct task *task) {
         if (kb > task->maxrss_kb)
             task->maxrss_kb = kb;
     }
-    // With the address space already gone (do_exit), the latched value is all
-    // there is -- and it is the right answer.
+    if (!held_by_us)
+        unlock(&task->general_lock);
+    // With the address space already gone (do_exit), or not lockable because
+    // the task is mid-exit, the latched value is all there is -- and it is the
+    // right answer.
     return task->maxrss_kb;
 }
 
