@@ -77,6 +77,10 @@ static _Atomic uint64_t swap_stat_bytes_written;
 // otherwise have been refused. Reported separately from total eviction because
 // it is the number that says whether the feature is doing its job.
 static _Atomic uint64_t swap_stat_direct_bytes;
+// Guest pages moved, for /proc/vmstat. Monotonic since boot and deliberately
+// NOT reset by swap_enable: /proc/vmstat counters never go backwards, and a
+// guest that watched pswpout fall would be seeing something Linux cannot do.
+static _Atomic uint64_t swap_stat_pswpin, swap_stat_pswpout;
 
 // Set at startup when ISH_GUEST_SWAP_MB was present, which is the CLI and
 // Xcode-scheme path. See swap_guest_control_allowed().
@@ -488,6 +492,7 @@ int swap_slot_write(uint32_t slot, const void *buf, size_t len) {
         done += (size_t) n;
     }
     atomic_fetch_add_explicit(&swap_stat_bytes_written, len, memory_order_relaxed);
+    atomic_fetch_add_explicit(&swap_stat_pswpout, len / PAGE_SIZE, memory_order_relaxed);
     return 0;
 }
 
@@ -505,6 +510,7 @@ int swap_slot_read(uint32_t slot, void *buf, size_t len) {
         }
         done += (size_t) n;
     }
+    atomic_fetch_add_explicit(&swap_stat_pswpin, len / PAGE_SIZE, memory_order_relaxed);
     return 0;
 }
 
@@ -624,6 +630,9 @@ void swap_get_stats(struct swap_stats *out) {
     out->alloc_failures = atomic_load_explicit(&swap_stat_alloc_fail, memory_order_relaxed);
     out->no_area = atomic_load_explicit(&swap_stat_no_area, memory_order_relaxed);
     out->direct_reclaim_bytes = atomic_load_explicit(&swap_stat_direct_bytes, memory_order_relaxed);
+    out->pswpin_pages = atomic_load_explicit(&swap_stat_pswpin, memory_order_relaxed);
+    out->pswpout_pages = atomic_load_explicit(&swap_stat_pswpout, memory_order_relaxed);
+    out->cached_bytes = 0;      // no clean state yet; see the header
     out->io_errors = atomic_load_explicit(&swap_stat_io_errors, memory_order_relaxed);
     out->bytes_written = atomic_load_explicit(&swap_stat_bytes_written, memory_order_relaxed);
 }

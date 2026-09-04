@@ -8,6 +8,7 @@
 #endif
 #include "kernel/calls.h"
 #include "kernel/task.h"
+#include "kernel/swap.h"
 #include "fs/mem.h"
 #include "fs/proc.h"
 #include "fs/proc/net.h"
@@ -482,12 +483,30 @@ DirectMap1G:           0 kB
     show_kb(buf, "Cached:         ", usage.cached);
     show_kb(buf, "Active:         ", usage.active);
     show_kb(buf, "Inactive:       ", usage.inactive);
-    show_kb(buf, "SwapCached:     ", 0);
+    // The three swap keys, and the rule they encode (section 3.12): a kernel
+    // never reclaims anonymous pages without swap, so SwapTotal > 0 if and only
+    // if AOK ITSELF moves guest pages to storage -- and in every state the
+    // host's own counters must not leak into the guest. This file used to print
+    // XNU's whole-machine Swapins and Swapouts beside "SwapTotal: 0 kB", ten
+    // gigabytes paged out of a machine with no swap, which is a state no Linux
+    // can produce; see the long comment further down where those were removed.
+    //
+    // All three are 0 while swap is off -- byte-for-byte the lines this file
+    // printed before the pager existed. That is a contract, not a fallback:
+    // swap ships off (section 3.13), so the disabled column IS the default
+    // guest surface and it has to stay indistinguishable from the one every
+    // existing guest already knows.
+    //
+    // swap_get_stats reads the pager's own slot accounting and costs no walk,
+    // so this file is no more expensive than it was.
+    struct swap_stats swap;
+    swap_get_stats(&swap);
+    show_kb(buf, "SwapCached:     ", swap.cached_bytes);
     // Buffers/Dirty/Writeback/Slab have no honest analog: iSH has no Linux-style
     // unified page cache it controls, and no kernel slab allocator to account for.
     show_kb(buf, "Shmem:          ", page_totals.shmem_bytes);
-    show_kb(buf, "SwapTotal:      ", 0);
-    show_kb(buf, "SwapFree:       ", 0);
+    show_kb(buf, "SwapTotal:      ", swap.total_bytes);
+    show_kb(buf, "SwapFree:       ", swap.free_bytes);
     show_kb(buf, "Dirty:          ", 0);
     show_kb(buf, "Writeback:      ", 0);
     show_kb(buf, "AnonPages:      ", page_totals.anon_bytes);
@@ -572,9 +591,29 @@ static int proc_show_vmstat(struct proc_entry *UNUSED(entry), struct proc_data *
     // reads as 0 to procps, which parses what it finds into a hash and objects
     // only to a wholly empty file (see the comment at the top of this
     // function), and 0 is the honest figure for a kernel with no swap.
-    // If the pager of docs/simulated_swap_plan.md is ever built, these come
-    // back fed by AOK's own eviction counters.
+    //
+    // The pager of docs/simulated_swap_plan.md now exists, so the two keys come
+    // back -- fed by AOK's OWN counters, in 4 KiB guest pages, and only while
+    // swap is enabled. Leaving them out entirely with swap off is the
+    // deliberate half: section 3.13 requires that surface to stay byte-identical
+    // to the one every existing guest already knows, and an absent key reads as
+    // 0 to procps for the reason given just above. Linux prints them
+    // unconditionally; a guest tool that demands the key rather than defaulting
+    // it is the price of that choice, and no consumer checked here does.
+    struct swap_stats swap;
+    swap_get_stats(&swap);
+    if (swap.enabled) {
+        proc_printf(buf, "pswpin %llu\n", (unsigned long long) swap.pswpin_pages);
+        proc_printf(buf, "pswpout %llu\n", (unsigned long long) swap.pswpout_pages);
+    }
     proc_printf(buf, "pgfault 0\n");
+    // pgmajfault stays 0 even with swap on, and deliberately rather than being
+    // wired to pswpin: a major fault is per-TASK, and the counter that would
+    // feed it (task->majflt, beside the existing task->minflt) does not exist
+    // yet -- which is also why /proc/<pid>/stat's fault fields and getrusage's
+    // ru_majflt are still 0. Publishing a whole-machine major-fault figure here
+    // while every per-process one read 0 is exactly the internally inconsistent
+    // surface section 11 records four rejected review rounds for.
     proc_printf(buf, "pgmajfault 0\n");
     return 0;
 }
@@ -647,9 +686,24 @@ static int proc_show_modules(struct proc_entry *UNUSED(entry), struct proc_data 
     return 0;
 }
 
-// /proc/swaps. Nothing is swapped from inside the guest -- iOS manages its own
-// memory -- so the file is the header alone, which is exactly what Linux shows
-// on a system with no swap configured. swapon --show and free(1) read it.
+// /proc/swaps. The header alone, which is exactly what Linux shows on a system
+// with no swap configured. swapon --show reads it; free(1) does not, taking its
+// Swap row from /proc/meminfo.
+//
+// KNOWN GAP, recorded rather than papered over: with the pager enabled this is
+// now INCOMPLETE rather than correct. /proc/meminfo reports a real SwapTotal
+// and free(1) shows it, while swapon --show still shows nothing, and on Linux
+// those two agree by construction -- meminfo's SwapTotal is the sum of the
+// areas listed here.
+//
+// The row is not added yet because Linux never prints a /proc/swaps path that
+// does not resolve, and the one section 3.12 specifies -- /dev/aokswap0 --
+// does not exist: dev_node_spec has no device type and all three creation
+// sites (fs/tmp.c, fs/mount.c twice) hardcode S_IFCHR, so a block node means
+// changing the device-node contract. That belongs with phase 2's swapon and
+// swapoff syscalls, which are what would give the node something to name.
+// Printing a row for a path a consumer cannot stat would trade a missing fact
+// for a false one.
 static int proc_show_swaps(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     proc_printf(buf, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
     return 0;

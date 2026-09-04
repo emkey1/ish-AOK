@@ -154,6 +154,17 @@ struct swap_stats {
     uint64_t alloc_failures;   // evictions refused because the area was full
     uint64_t no_area;          // evictions refused because there was no area
     uint64_t direct_reclaim_bytes;  // freed for allocations that would have failed
+    // GUEST 4 KiB pages moved, which is what /proc/vmstat's pswpin and pswpout
+    // count -- four per host frame on Apple silicon. Monotonic since boot, like
+    // every /proc/vmstat counter, so turning swap off and on again does not
+    // reset them; bytes_written above is the per-area figure the write budget
+    // will use and is reset with the area.
+    uint64_t pswpin_pages, pswpout_pages;
+    // Frames that are resident AND still have a valid copy on disk, so a second
+    // eviction would need no write. Stays 0 until the pager has section 3.6's
+    // clean state, and 0 is then a measurement rather than a placeholder: with
+    // no clean state there really are no cached frames.
+    uint64_t cached_bytes;
     uint64_t io_errors;
     uint64_t bytes_written;    // since enable, for the write-budget work
     bool enabled;

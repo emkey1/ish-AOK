@@ -5,6 +5,7 @@
 #include "kernel/hostinfo.h"
 #include "task.h"
 #include "platform/platform.h"
+#include "kernel/swap.h"
 
 static_assert(UTS_NAME_LENGTH == UNAME_LENGTH, "UTS name length must match struct uname");
 
@@ -194,19 +195,44 @@ dword_t sys_setdomainname_guest(guest_addr_t domainname_addr, dword_t domainname
 }
 
 
+// sysinfo(2)'s totalswap/freeswap, in both ABI layouts.
+//
+// These are AOK's own pager's figures or they are 0. The host's swap never
+// reaches the guest in either branch, including the Linux one, which used to
+// copy host_info.totalswap/freeswap straight through: that is the same leak
+// fs/proc/root.c removed from /proc/meminfo and /proc/vmstat, where XNU's
+// whole-machine paging counters were printed beside "SwapTotal: 0 kB" and
+// described the Mac rather than the guest. The other fields of the Linux branch
+// are still host-derived and still wrong in that way; that is pre-existing and
+// wider than this change, and fixing it means giving platform/linux.c a
+// guest-derived get_mem_usage the way Darwin's has.
+//
+// With swap off both fields are 0, which is exactly what the Apple branch
+// returned before the pager existed, and swap_get_stats() reads the pager's own
+// slot accounting, so it costs no page-table walk in either state.
 #if __APPLE__
 static void sysinfo_specific(struct sys_info *info) {
     struct mem_usage usage = get_mem_usage();
+    struct swap_stats swap;
+    swap_get_stats(&swap);
     uint64_t total = usage.total != 0 ? usage.total : usage.available;
     uint64_t free = usage.free;
     uint64_t shared = 0;
     uint64_t buffer = usage.cached;
     uint64_t mem_unit = 1;
 
+    // The i386 layout's fields are 32 bits, so everything is expressed in
+    // mem_unit-sized units and the scale has to be chosen from the LARGEST
+    // figure in the struct. The swap figures belong in that choice: a swap area
+    // bigger than 4 GiB, which the user is free to configure, would otherwise
+    // truncate silently while every other field stayed exact -- and truncation
+    // here reads as a smaller swap area rather than as an error.
     while ((total / mem_unit) > 0xffffffffu ||
            (free / mem_unit) > 0xffffffffu ||
            (shared / mem_unit) > 0xffffffffu ||
-           (buffer / mem_unit) > 0xffffffffu) {
+           (buffer / mem_unit) > 0xffffffffu ||
+           (swap.total_bytes / mem_unit) > 0xffffffffu ||
+           (swap.free_bytes / mem_unit) > 0xffffffffu) {
         mem_unit <<= 1;
     }
 
@@ -214,8 +240,8 @@ static void sysinfo_specific(struct sys_info *info) {
     info->freeram = (dword_t)(free / mem_unit);
     info->sharedram = (dword_t)(shared / mem_unit);
     info->bufferram = (dword_t)(buffer / mem_unit);
-    info->totalswap = 0;
-    info->freeswap = 0;
+    info->totalswap = (dword_t)(swap.total_bytes / mem_unit);
+    info->freeswap = (dword_t)(swap.free_bytes / mem_unit);
     info->procs = 0;
     info->totalhigh = 0;
     info->freehigh = 0;
@@ -223,14 +249,16 @@ static void sysinfo_specific(struct sys_info *info) {
 }
 static void sysinfo_specific_amd64(struct amd64_sys_info *info) {
     struct mem_usage usage = get_mem_usage();
+    struct swap_stats swap;
+    swap_get_stats(&swap);
     // amd64 fields are 64-bit, so report raw byte counts with mem_unit == 1; no
     // need for the 32-bit mem_unit down-scaling loop the i386 path performs.
     info->totalram = usage.total != 0 ? usage.total : usage.available;
     info->freeram = usage.free;
     info->sharedram = 0;
     info->bufferram = usage.cached;
-    info->totalswap = 0;
-    info->freeswap = 0;
+    info->totalswap = swap.total_bytes;
+    info->freeswap = swap.free_bytes;
     info->procs = 0;
     info->totalhigh = 0;
     info->freehigh = 0;
@@ -240,11 +268,16 @@ static void sysinfo_specific_amd64(struct amd64_sys_info *info) {
 static void sysinfo_specific(struct sys_info *info) {
     struct sysinfo host_info;
     sysinfo(&host_info);
+    struct swap_stats swap;
+    swap_get_stats(&swap);
     info->totalram = host_info.totalram;
     info->freeram = host_info.freeram;
     info->sharedram = host_info.sharedram;
-    info->totalswap = host_info.totalswap;
-    info->freeswap = host_info.freeswap;
+    // Scaled by the host's own mem_unit, since every other field here is: the
+    // guest reads all of them through the one divisor this struct carries.
+    uint64_t unit = host_info.mem_unit != 0 ? (uint64_t) host_info.mem_unit : 1;
+    info->totalswap = (dword_t) (swap.total_bytes / unit);
+    info->freeswap = (dword_t) (swap.free_bytes / unit);
     info->procs = host_info.procs;
     info->totalhigh = host_info.totalhigh;
     info->freehigh = host_info.freehigh;
@@ -253,14 +286,17 @@ static void sysinfo_specific(struct sys_info *info) {
 static void sysinfo_specific_amd64(struct amd64_sys_info *info) {
     struct sysinfo host_info;
     sysinfo(&host_info);
+    struct swap_stats swap;
+    swap_get_stats(&swap);
     // host __kernel_ulong_t fields are 64-bit on a 64-bit Linux host; copy them
     // straight through without the truncation the 32-bit i386 path suffers.
     info->totalram = host_info.totalram;
     info->freeram = host_info.freeram;
     info->sharedram = host_info.sharedram;
     info->bufferram = host_info.bufferram;
-    info->totalswap = host_info.totalswap;
-    info->freeswap = host_info.freeswap;
+    uint64_t unit = host_info.mem_unit != 0 ? (uint64_t) host_info.mem_unit : 1;
+    info->totalswap = swap.total_bytes / unit;
+    info->freeswap = swap.free_bytes / unit;
     info->procs = host_info.procs;
     info->totalhigh = host_info.totalhigh;
     info->freehigh = host_info.freehigh;
