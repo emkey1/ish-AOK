@@ -1435,6 +1435,30 @@ must EXPIRE rather than wait to be cleared by evidence, because while it holds
 nothing is evicted and so there is no evidence to be had -- it latched for the
 life of the process until a cooldown was added.
 
+### Phase 2 as built so far (2026-09-04)
+
+**Done.** The system-wide surface (`meminfo`'s SwapTotal/SwapFree/SwapCached,
+`vmstat`'s pswpin/pswpout, `sysinfo(2)`'s totalswap/freeswap in both ABI
+layouts) and the per-process one (`status`'s VmRSS and VmSwap, `statm`, `stat`
+field 24, `smaps` and `smaps_rollup`), all from one source so they cannot
+disagree; the app's Settings switch and size, verified on a simulator; real
+`mlock`/`mlockall` with `RLIMIT_MEMLOCK`; and SIGBUS/BUS_ADRERR on a slot that
+cannot be read.
+
+**Still open.** `/proc/swaps`, which needs `/dev/aokswap0` and therefore a
+device TYPE in `dev_node_spec` -- all three creation sites hardcode `S_IFCHR`;
+`swapon`/`swapoff` across the four ABIs and their removal from the asm-generic
+ENOSYS list; `mincore`; `[kswapd0]` as a visible task; and the surface
+conformance run against a real Linux box.
+
+That last one is worth doing BEFORE phase 3 rather than as part of it. Every
+surface above was checked against a reading of what Linux does, not against
+Linux, and two conformance details were wrong in exactly that way when they were
+finally checked: `mlock` over `RLIMIT_MEMLOCK` returned EPERM where Linux has
+returned ENOMEM since 2.6.9, and a failed swap-in delivered SIGSEGV where Linux
+delivers SIGBUS. Both were single lines, and both would have been found in an
+afternoon beside a real `free`, `vmstat 1`, `top` and `swapon --show`.
+
 ### Phase 2: surfaces, contract, app (2-3 weeks, about 700 LOC)
 
 Every row of the surface table: meminfo, vmstat, `/proc/swaps`, `sysinfo` in both
