@@ -672,6 +672,23 @@ void mem_write_unlock_pokes_external(struct mem *mem);
 int swap_fault_page(struct mem *mem, page_t page);
 // Counters for the /proc/ish report.
 unsigned long swap_prototype_ledger_refused(void);
+// True when the last few sweeps released bytes without moving phys_footprint.
+// While it holds, the automatic pager stops: evicting without moving the ledger
+// spends flash and adds fault latency for no benefit jetsam can see.
+//
+// Say "did not move the ledger", NOT "the host did not take the memory back":
+// the two are not the same claim in either direction, and only the first is
+// measured here. MADV_FREE_REUSABLE on a COW-shadowed object returns 0 and
+// moves nothing, which this catches -- but mprotect(PROT_NONE) alone moves
+// phys_footprint by the full amount while freeing nothing at all, so a build
+// whose madvise is broken still reads as healthy. The ledger is the right
+// question for jetsam survival, which is what kills the app, and the wrong one
+// for whether iOS got usable memory back.
+bool swap_release_ineffective(void);
+void swap_release_ineffective_reset(void);
+// What the last judgeable sweep found: 0 none since the last reset, 1 it moved
+// the ledger, 2 it did not. "Never measured" must not be reported as "works".
+unsigned swap_release_verdict(void);
 void swap_prototype_failures(unsigned long *adv_fail, unsigned long *prot_fail, int *adv_errno, int *prot_errno);
 unsigned long long swap_footprint_live(void);
 void swap_footprint_detail(unsigned long long *internal, unsigned long long *resident,

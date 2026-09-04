@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <time.h>
 
 #define DEFAULT_CHANNEL memory
 #include "debug.h"
@@ -3207,6 +3208,160 @@ static _Atomic unsigned long swap_stat_adv_fail, swap_stat_prot_fail;
 static _Atomic unsigned long swap_stat_ledger_refused;
 static int swap_stat_adv_errno, swap_stat_prot_errno;
 unsigned long swap_prototype_ledger_refused(void) { return swap_stat_ledger_refused; }
+
+// Consecutive sweeps whose release moved the ledger by essentially nothing, and
+// the latch they raise. A release that does not move phys_footprint is not a
+// release: the pages are still charged to the process, jetsam still counts
+// them, and all the eviction bought was a disk write, a slice of the user's
+// 24h write budget, and a fault to bring the page back. Continuing to evict in
+// that state is strictly worse than not having swap at all.
+//
+// A RUN, not a single observation, because phys_footprint is process-wide.
+// Another thread -- the UI, fakefs, a second guest process -- can allocate
+// during the sweep and mask a real drop, and one masked sweep is a coincidence.
+// Three in a row is a property of the address space. At kswapd's 500 ms that is
+// 1.5 s to notice, which is fast enough to matter and slow enough not to fire
+// on one unlucky sample.
+// Three conditions, all required, because ANY ONE of them alone produces false
+// positives on a healthy system:
+//
+//   count  -- three consecutive judgeable sweeps found no ledger movement;
+//   time   -- those sweeps span at least SWAP_LEDGER_MIN_RUN_MS of wall clock;
+//   bytes  -- they released at least SWAP_LEDGER_MIN_RUN_BYTES between them.
+//
+// The time condition is the one a first version got wrong. "Three sweeps at
+// kswapd's 500 ms interval is 1.5 s of evidence" is FALSE: a single kswapd pass
+// walks every address space in its snapshot, so on a guest running a build
+// (make, cc, sh) three sweeps complete in some milliseconds inside ONE pass.
+// Without the clock, one 32 MB image decode on the app's UI thread can mask
+// three consecutive sweeps and switch reclaim off. phys_footprint is
+// process-wide and nothing here owns it.
+#define SWAP_LEDGER_INEFFECTIVE_RUN 3
+#define SWAP_LEDGER_MIN_RUN_MS 2000
+#define SWAP_LEDGER_MIN_RUN_BYTES (8u << 20)
+// How long the latch holds before it lapses on its own and the next sweep gets
+// to re-decide. A DEADLINE rather than a flag someone else must clear: an
+// earlier version could only be cleared by kswapd, so on a device where
+// pthread_create for kswapd0 had failed -- direct-reclaim-only mode, which
+// swap_enable explicitly supports -- the latch was permanent and direct reclaim
+// disabled itself for the life of the process. A deadline also means swapoff /
+// swapon cannot inherit a stale latch.
+#define SWAP_LEDGER_LATCH_MS 60000
+// ...doubling up to this on each re-latch, because the condition is usually
+// PERMANENT for the run of the process (a debugger stays attached; a shadow
+// chain is not collapsed by wishing). Re-probing is not free: re-latching costs
+// at least SWAP_LEDGER_MIN_RUN_BYTES of eviction I/O that by definition buys
+// nothing, and at a flat 60 s that is 1440 probes x 8 MiB = 11.2 GiB a day
+// against a 4 GiB budget -- the pager would spend the user's entire daily flash
+// allowance, three times over, proving repeatedly that it cannot reclaim.
+// Backing off to 30 minutes makes it ~380 MiB a day, and costs only that the
+// pager takes longer to notice a condition that has cleared. The backoff is
+// reset the moment a sweep does move the ledger.
+#define SWAP_LEDGER_LATCH_MAX_MS 1800000
+
+static _Atomic unsigned swap_ledger_refused_run;
+static _Atomic uint64_t swap_ledger_run_started_ms;
+static _Atomic uint64_t swap_ledger_run_bytes;
+static _Atomic uint64_t swap_ledger_latched_until_ms;
+static _Atomic uint64_t swap_ledger_latch_hold_ms;   // current backoff step
+// What the LAST judgeable sweep found, and nothing older. 0 = there has not
+// been one since the last reset, 1 = it moved the ledger, 2 = it did not.
+//
+// A tri-state rather than a bool because "we have not measured" and "we
+// measured and it was fine" are different claims and only one of them is
+// supported at startup, on a non-Apple build (swap_footprint_now() is
+// Apple-only and returns 0 everywhere else), and immediately after swapoff
+// clears a standing verdict. Reporting the unmeasured state as "yes" is the
+// kind of capability lie this project refuses elsewhere -- and it read exactly
+// that way in testing: swapoff cleared a latch and the file promptly claimed
+// release was working, on no evidence at all.
+#define SWAP_LEDGER_UNKNOWN 0
+#define SWAP_LEDGER_OK      1
+#define SWAP_LEDGER_REFUSED 2
+static _Atomic unsigned swap_ledger_verdict;
+
+static uint64_t swap_monotonic_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    return (uint64_t) ts.tv_sec * 1000 + (uint64_t) ts.tv_nsec / 1000000;
+}
+
+bool swap_release_ineffective(void) {
+    uint64_t until = atomic_load_explicit(&swap_ledger_latched_until_ms,
+            memory_order_relaxed);
+    if (until == 0)
+        return false;
+    return swap_monotonic_ms() < until;
+}
+
+unsigned swap_release_verdict(void) {
+    return atomic_load_explicit(&swap_ledger_verdict, memory_order_relaxed);
+}
+
+// Only for a caller that wants the latch gone NOW rather than at its deadline --
+// swapoff does, so a re-enabled pager starts from a clean slate instead of
+// inheriting up to a minute of someone else's verdict.
+void swap_release_ineffective_reset(void) {
+    atomic_store_explicit(&swap_ledger_refused_run, 0, memory_order_relaxed);
+    atomic_store_explicit(&swap_ledger_run_bytes, 0, memory_order_relaxed);
+    atomic_store_explicit(&swap_ledger_latched_until_ms, 0, memory_order_relaxed);
+    atomic_store_explicit(&swap_ledger_latch_hold_ms, 0, memory_order_relaxed);
+    atomic_store_explicit(&swap_ledger_verdict, SWAP_LEDGER_UNKNOWN, memory_order_relaxed);
+}
+
+// Judge ONE sweep's own before/after samples. Called with values local to that
+// sweep -- never the published swap_fp_* globals, which any concurrent sweep on
+// another address space overwrites (the barrier in swap_evict_common is
+// per-mem, not global), so pairing one sweep's `before` with another's `after`
+// would compute `moved` across a window neither of them owns.
+static void swap_ledger_judge(unsigned long long fp_before,
+                              unsigned long long fp_after, long released) {
+    if (fp_before == 0 || fp_after == 0 || released <= 0)
+        return;                     // not measurable, or nothing to judge
+    long long moved = (long long) fp_before - (long long) fp_after;
+    // Under a tenth of what was released is not a rounding difference.
+    if (moved >= released / 10) {
+        // A judgeable sweep that DID move the ledger ends the run. A sweep that
+        // released nothing is not evidence of health and never gets here.
+        atomic_store_explicit(&swap_ledger_verdict, SWAP_LEDGER_OK, memory_order_relaxed);
+        // Release is working, so forget how long we have been backing off. A
+        // condition that clears and later returns starts again at 60 s.
+        atomic_store_explicit(&swap_ledger_latch_hold_ms, 0, memory_order_relaxed);
+        atomic_store_explicit(&swap_ledger_refused_run, 0, memory_order_relaxed);
+        atomic_store_explicit(&swap_ledger_run_bytes, 0, memory_order_relaxed);
+        return;
+    }
+    swap_stat_ledger_refused++;
+    atomic_store_explicit(&swap_ledger_verdict, SWAP_LEDGER_REFUSED, memory_order_relaxed);
+    uint64_t now = swap_monotonic_ms();
+    unsigned run = atomic_fetch_add_explicit(&swap_ledger_refused_run, 1,
+            memory_order_relaxed) + 1;
+    uint64_t bytes = atomic_fetch_add_explicit(&swap_ledger_run_bytes,
+            (uint64_t) released, memory_order_relaxed) + (uint64_t) released;
+    if (run == 1) {
+        atomic_store_explicit(&swap_ledger_run_started_ms, now, memory_order_relaxed);
+        return;
+    }
+    uint64_t started = atomic_load_explicit(&swap_ledger_run_started_ms,
+            memory_order_relaxed);
+    if (run < SWAP_LEDGER_INEFFECTIVE_RUN)
+        return;
+    if (started == 0 || now < started + SWAP_LEDGER_MIN_RUN_MS)
+        return;                     // not enough wall clock to rule out a burst
+    if (bytes < SWAP_LEDGER_MIN_RUN_BYTES)
+        return;                     // too little released to be sure
+    uint64_t hold = atomic_load_explicit(&swap_ledger_latch_hold_ms, memory_order_relaxed);
+    if (hold == 0)
+        hold = SWAP_LEDGER_LATCH_MS;
+    atomic_store_explicit(&swap_ledger_latched_until_ms, now + hold, memory_order_relaxed);
+    uint64_t next = hold * 2;
+    atomic_store_explicit(&swap_ledger_latch_hold_ms,
+            next > SWAP_LEDGER_LATCH_MAX_MS ? SWAP_LEDGER_LATCH_MAX_MS : next,
+            memory_order_relaxed);
+    atomic_store_explicit(&swap_ledger_refused_run, 0, memory_order_relaxed);
+    atomic_store_explicit(&swap_ledger_run_bytes, 0, memory_order_relaxed);
+}
 void swap_prototype_failures(unsigned long *adv, unsigned long *prot, int *adv_e, int *prot_e) {
     if (adv) *adv = swap_stat_adv_fail;
     if (prot) *prot = swap_stat_prot_fail;
@@ -3562,7 +3717,14 @@ void swap_prototype_ledger(unsigned long long *before, unsigned long long *after
 // Evict from `mem` until `want_bytes` have been released, or the sweep has been
 // all the way round. `want_bytes` of 0 means "everything eligible", which is
 // what the /proc control asks for.
-static long swap_evict_common(struct mem *mem, uint64_t want_bytes, unsigned min_age) {
+// `judge` says whether this sweep's measurement may move the ineffectiveness
+// latch. The explicit /proc/ish/swap_evict control passes false: it is an
+// operator's unbounded whole-address-space sweep, the most masking-prone window
+// in the system, and it exists precisely to be run WHILE investigating -- it
+// must not be able to switch the automatic pager off as a side effect, nor to
+// clear a latch the automatic pager just set.
+static long swap_evict_common(struct mem *mem, uint64_t want_bytes, unsigned min_age,
+                              bool judge) {
     if (mem == NULL)
         return _EINVAL;
     // The switch is consulted HERE and nowhere on the fault path. Turning swap
@@ -3575,7 +3737,13 @@ static long swap_evict_common(struct mem *mem, uint64_t want_bytes, unsigned min
     long released = 0;
 
     mem_write_lock_pokes_external(mem);
-    swap_fp_before = swap_footprint_now();
+    // Local, because the decision below must be made from THIS sweep's pair.
+    // The globals are published alongside purely so /proc/ish/swap_evict can
+    // print the last sweep's numbers; a concurrent sweep overwriting them
+    // corrupts a diagnostic, which is survivable, and must not be allowed to
+    // corrupt a control-path decision, which is not.
+    unsigned long long fp_before = swap_footprint_now();
+    swap_fp_before = fp_before;
     // The step on a miss is mem_next_page, not page + 1, and the difference is
     // not a micro-optimisation: page_limit is 2^35 pages for a 64-bit guest and
     // the mappings live near the top of it, so a linear probe walks tens of
@@ -3645,19 +3813,16 @@ static long swap_evict_common(struct mem *mem, uint64_t want_bytes, unsigned min
     // 6 with it. Section 3.7 calls the refresh a part of the clock rather than
     // an optimisation, and this is why.
     mem_changed(mem);
-    swap_fp_after = swap_footprint_now();
+    unsigned long long fp_after = swap_footprint_now();
+    swap_fp_after = fp_after;
     // Trust the ledger, not the return codes. Both calls above can report
     // success and release nothing -- MADV_FREE_REUSABLE does exactly that on a
     // copy-on-write shared or shadowed VM object, which is the failure mode
     // section 4.1 of the plan warns about and which an attached debugger
     // induces. A release that did not move the ledger is a release that did not
     // happen, and the caller has to be able to see that.
-    if (swap_fp_before != 0 && swap_fp_after != 0 && released > 0) {
-        long long moved = (long long) swap_fp_before - (long long) swap_fp_after;
-        // Under a tenth of what was released is not a rounding difference.
-        if (moved < released / 10)
-            swap_stat_ledger_refused++;
-    }
+    if (judge)
+        swap_ledger_judge(fp_before, fp_after, released);
     mem_write_unlock_pokes_external(mem);
     // Third sample, after the barrier is gone. If the drop is visible at
     // swap_fp_after but not here, the undo is something the release path does,
@@ -3667,10 +3832,25 @@ static long swap_evict_common(struct mem *mem, uint64_t want_bytes, unsigned min
 }
 
 long swap_evict_mem(struct mem *mem) {
-    return swap_evict_common(mem, 0, SWAP_AGE_CANDIDATE);
+    return swap_evict_common(mem, 0, SWAP_AGE_CANDIDATE, false);
 }
 
 long swap_evict_bytes(struct mem *mem, uint64_t want_bytes) {
+    // Argument and state validation FIRST, so this keeps returning the errnos
+    // its contract promises. Returning 0 ("nothing to reclaim") for a NULL mem
+    // or for swap-is-off would tell a caller that branches on `released < 0`
+    // exactly the wrong thing.
+    if (mem == NULL)
+        return _EINVAL;
+    if (!swap_enabled())
+        return _ENODEV;
+    // The automatic callers -- kswapd and direct reclaim -- stop here when the
+    // host is not actually taking the pages back. The explicit control in
+    // /proc/ish/swap_evict deliberately does NOT check this: when release has
+    // stopped working, forcing a sweep and reading the ledger counters is how
+    // you find out why, so the diagnostic has to stay usable.
+    if (swap_release_ineffective())
+        return 0;
     // One pass at the ordinary age bar, and if that frees nothing, one more
     // that will take any frame the guest has not touched since the last pass.
     //
@@ -3682,9 +3862,9 @@ long swap_evict_bytes(struct mem *mem, uint64_t want_bytes) {
     // programs do) never gets a second pass. Measured: a guest that held
     // 1168 MiB against a 512 MB budget fell back to the guard's own 288 MiB
     // when the first pass was the only one.
-    long released = swap_evict_common(mem, want_bytes, SWAP_AGE_CANDIDATE);
+    long released = swap_evict_common(mem, want_bytes, SWAP_AGE_CANDIDATE, true);
     if (released == 0)
-        released = swap_evict_common(mem, want_bytes, 0);
+        released = swap_evict_common(mem, want_bytes, 0, true);
     return released;
 }
 

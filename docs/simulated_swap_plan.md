@@ -1459,6 +1459,91 @@ returned ENOMEM since 2.6.9, and a failed swap-in delivered SIGSEGV where Linux
 delivers SIGBUS. Both were single lines, and both would have been found in an
 afternoon beside a real `free`, `vmstat 1`, `top` and `swapon --show`.
 
+#### The pager now checks that its own release worked (2026-09-04)
+
+Found on a 3 GB iPhone SE, which jetsam killed while swap was enabled and
+apparently healthy. The run was invalid -- the app had been launched from Xcode,
+and an attached debugger reads the task with `mach_vm_read`, which leaves VM
+objects COW-shadowed, and `MADV_FREE_REUSABLE` on a shadowed object returns 0
+and moves the ledger by nothing (section 4.1). So the pager evicted, wrote to
+flash, spent the write budget, took the fault latency on the way back, and
+reclaimed exactly zero. Nothing anywhere said so.
+
+The measurement already existed -- `swap_evict_common` samples `phys_footprint`
+either side of the release loop -- but its counter was reported only in
+`/proc/ish/swap_evict`, the phase 1 prototype file, and **nothing acted on it**.
+Now a sweep that releases bytes without moving the ledger counts against a run,
+and the run latches `swap_release_ineffective()` -- stopping kswapd and direct
+reclaim -- only when all three of these hold:
+
+- **count**: three consecutive judgeable sweeps found no movement;
+- **time**: they span at least 2 s of wall clock;
+- **bytes**: they released at least 8 MiB between them.
+
+All three are needed because each alone false-positives. `phys_footprint` is
+process-wide, so a concurrent allocation by any other thread -- the UI, fakefs,
+another guest process -- masks a genuine drop. The first version used the count
+alone and justified it as "three sweeps at kswapd's 500 ms is 1.5 s of
+evidence"; **that reasoning was simply wrong**, because one kswapd pass sweeps
+every address space in its snapshot, so on a guest running a build three sweeps
+complete inside a single pass in milliseconds. One 32 MB image decode could
+switch reclaim off for a minute.
+
+The latch carries a **deadline** rather than waiting to be cleared, and the hold
+doubles on each re-latch from 60 s to a 30-minute cap. A deadline because an
+earlier version could only be lifted by kswapd, so on a device where
+`pthread_create` for kswapd0 had failed -- direct-reclaim-only mode, which
+`swap_enable` explicitly supports -- the latch was permanent and direct reclaim
+disabled itself for the life of the process. Backoff because the condition is
+usually permanent and re-probing is not free: re-latching costs at least 8 MiB
+of futile eviction I/O, and at a flat 60 s that is 1440 probes a day, **11.2 GiB
+against a 4 GiB budget** -- the pager would spend the user's entire daily flash
+allowance three times over proving it cannot reclaim. `swapoff` clears the latch
+outright, so a user who reads the verdict and cycles swap does not inherit it.
+
+Three states are reported, not two: `not measured yet` is distinct from `yes`.
+The ledger is Apple-only, so on the Linux CLI it is never sampled, and after a
+`swapoff` reset the last thing measured was a refusal -- reporting either as
+"release works" would be a capability lie, and it read exactly that way in
+testing before the tri-state went in.
+
+Measured with the existing `ISH_SWAP_NO_MADVISE` / `ISH_SWAP_NO_MPROTECT` knobs,
+a churning guest under a 1024 MiB `ISH_GUEST_MEM_BUDGET_MB`:
+
+| | release works | neither call runs |
+|---|---|---|
+| 64 MiB rounds the guest completed | 16 | 13 |
+| bytes written to flash | 427,819,008 | **41,943,040** |
+| kswapd reclaimed | 327,155,712 | 41,943,040 |
+| direct reclaim | 100,663,296 | 0 |
+| `release_works` | yes | **NO -- reclaim paused** |
+
+386 MiB of pointless flash writes avoided, and the condition caught after 40 MiB.
+The explicit `/proc/ish/swap_evict` control is deliberately NOT gated, and also
+does not FEED the latch: it is an operator's unbounded whole-address-space
+sweep, the most masking-prone window in the system, and it exists to be run
+while investigating -- it must not be able to switch the automatic pager off as
+a side effect, nor to clear a verdict the automatic pager just reached.
+
+Found by adversarial review (74 agents, 5 lenses, 3 refuters each) after the
+first version was already measured working: the sole surviving high-severity
+finding was that the first version judged from `swap_fp_before`/`swap_fp_after`,
+which are **process globals** written under a *per-mem* barrier. Two concurrent
+sweeps -- kswapd on one address space, direct reclaim on another -- pair one
+sweep's `before` with another's `after` and compute `moved` over a window
+neither owns. Harmless while those globals only fed a displayed number; a
+control-path defect the moment they gated reclaim. They are sweep-local now, and
+published to the globals only for the prototype's display.
+
+**What this check cannot tell you.** It verifies the ledger moved, not that any
+memory was freed -- and those differ. `mprotect(PROT_NONE)` alone drops
+`phys_footprint` and `resident_size` by the full amount while freeing nothing
+(the trap recorded above at section 4.1), so a build with only the `mprotect`
+reports `release_works yes`. That is the right answer for the question jetsam
+asks, since jetsam kills on the ledger, and the wrong answer for whether the
+host got memory back. The `MADV_FREE_REUSABLE` is what makes it a real release;
+this guard only catches the case where even the accounting does not move.
+
 ### Phase 2: surfaces, contract, app (2-3 weeks, about 700 LOC)
 
 Every row of the surface table: meminfo, vmstat, `/proc/swaps`, `sysinfo` in both

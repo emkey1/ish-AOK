@@ -323,6 +323,12 @@ static int swap_enable_locked(uint64_t bytes) {
 }
 
 static void swap_disable_locked(void) {
+    // Drop any standing "release does not work" verdict. It has its own 60 s
+    // deadline, but a user who turns swap off and straight back on -- which is
+    // exactly what someone does after READING that verdict -- must not get a
+    // pager that is still paused on the strength of the previous area's
+    // measurements.
+    swap_release_ineffective_reset();
     // Stop new eviction FIRST and outside everything else, so the walk below
     // is chasing a set that can only shrink.
     atomic_store_explicit(&swap_on, false, memory_order_release);
@@ -683,6 +689,7 @@ static _Atomic bool swap_kswapd_alive;
 static _Atomic uint64_t swap_stat_kswapd_passes;
 static _Atomic uint64_t swap_stat_kswapd_bytes;
 static _Atomic uint64_t swap_stat_thrash_backoffs;
+static _Atomic uint64_t swap_stat_ledger_backoffs;
 static _Atomic bool swap_thrashing;
 
 // Should background reclaim be running right now?
@@ -726,6 +733,31 @@ static bool swap_kswapd_should_reclaim(void) {
 #define SWAP_THRASH_COOLDOWN_PASSES 20
 static unsigned swap_thrash_cooldown;   // kswapd thread only
 
+// The latch now carries its own deadline (emu/memory.c), so nothing here has to
+// clear it. This is only the transition LOGGER: it tells the user once when
+// reclaim pauses and once when it resumes, which is the part they can act on.
+//
+// It used to own a cooldown counter, and that was a bug: the latch could then
+// only ever be lifted by kswapd, so on a device where pthread_create for
+// kswapd0 had failed -- direct-reclaim-only mode, which swap_enable explicitly
+// supports and logs -- a single transient run switched direct reclaim off for
+// the life of the process.
+static bool swap_ledger_logged;         // kswapd thread only
+
+static void swap_ledger_check(void) {
+    bool now = swap_release_ineffective();
+    if (now == swap_ledger_logged)
+        return;
+    swap_ledger_logged = now;
+    if (now) {
+        atomic_fetch_add_explicit(&swap_stat_ledger_backoffs, 1, memory_order_relaxed);
+        printk("swap: released pages are not leaving the footprint; pausing reclaim "
+               "(a debugger or memory-graph snapshot does this)\n");
+    } else {
+        printk("swap: released pages are leaving the footprint again; resuming reclaim\n");
+    }
+}
+
 static void swap_thrash_check(uint64_t in_delta, uint64_t out_delta) {
     if (swap_thrash_cooldown > 0) {
         if (--swap_thrash_cooldown == 0) {
@@ -767,10 +799,15 @@ static void *swap_kswapd_main(void *UNUSED_ARG) {
         swap_thrash_check(in_now - last_in, out_now - last_out);
         last_in = in_now;
         last_out = out_now;
+        // Ticked every pass, before the enable check, so the cooldown expires
+        // on wall-clock time rather than on how often reclaim is attempted.
+        swap_ledger_check();
 
         if (!swap_enabled())
             continue;
         if (atomic_load_explicit(&swap_thrashing, memory_order_relaxed))
+            continue;
+        if (swap_release_ineffective())
             continue;
         // Never start eviction I/O while the app is being suspended. The gate
         // would refuse the write anyway, but taking an address-space barrier
@@ -960,6 +997,10 @@ void swap_get_stats(struct swap_stats *out) {
     out->kswapd_passes = atomic_load_explicit(&swap_stat_kswapd_passes, memory_order_relaxed);
     out->kswapd_reclaimed_bytes = atomic_load_explicit(&swap_stat_kswapd_bytes, memory_order_relaxed);
     out->thrash_backoffs = atomic_load_explicit(&swap_stat_thrash_backoffs, memory_order_relaxed);
+    out->release_ineffective = swap_release_ineffective();
+    out->release_verdict = swap_release_verdict();
+    out->ledger_backoffs = atomic_load_explicit(&swap_stat_ledger_backoffs, memory_order_relaxed);
+    out->ledger_refused = swap_prototype_ledger_refused();
     pthread_mutex_lock(&swap_quiesce_lock);
     out->quiesced = swap_quiesced;
     pthread_mutex_unlock(&swap_quiesce_lock);
@@ -986,6 +1027,7 @@ size_t swap_status_text(char *buf, size_t size) {
         "budget_refusals  %llu  (evictions refused, the window is spent)\n"
         "kswapd           %s, %llu passes, %llu bytes reclaimed\n"
         "thrashing        %s  (%llu backoffs)\n"
+        "release_works    %s  (%llu sweeps moved no footprint, %llu backoffs)\n"
         "direct_reclaim   %llu  (bytes freed for an allocation that would have failed)\n"
         "alloc_failures   %llu  (evictions refused, the area is full)\n"
         "no_area          %llu  (evictions refused, there is no area)\n"
@@ -1007,6 +1049,11 @@ size_t swap_status_text(char *buf, size_t size) {
         (unsigned long long) s.kswapd_reclaimed_bytes,
         s.thrashing ? "yes" : "no",
         (unsigned long long) s.thrash_backoffs,
+        s.release_ineffective ? "NO -- reclaim paused" :
+            s.release_verdict == 0 ? "not measured yet" :
+            s.release_verdict == 2 ? "last sweep released nothing" : "yes",
+        (unsigned long long) s.ledger_refused,
+        (unsigned long long) s.ledger_backoffs,
         (unsigned long long) s.direct_reclaim_bytes,
         (unsigned long long) s.alloc_failures,
         (unsigned long long) s.no_area,

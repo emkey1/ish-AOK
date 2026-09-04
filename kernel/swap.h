@@ -227,7 +227,10 @@ struct swap_stats {
     bool quiesced;             // suspension gate held: no new eviction I/O
     bool kswapd_running;
     bool thrashing;            // background reclaim paused: pages come straight back
+    bool release_ineffective;  // reclaim paused: released pages stay in the footprint
     uint64_t kswapd_passes, kswapd_reclaimed_bytes, thrash_backoffs;
+    uint64_t ledger_backoffs, ledger_refused;
+    unsigned release_verdict;  // 0 not measured, 1 ledger moved, 2 it did not
 };
 void swap_get_stats(struct swap_stats *out);
 
