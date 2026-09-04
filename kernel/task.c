@@ -787,7 +787,20 @@ extern _Atomic long quiesce_pokes_skipped;
 extern _Atomic long quiesce_reader_naps;
 
 void task_poke_shared_mem(struct task *task, struct mem *mem) {
-    if (task == NULL || mem == NULL)
+    // A NULL `task` is a caller with no `current` -- kswapd, and anything else
+    // that takes the address-space barrier from a host thread rather than a
+    // guest one. It is NOT a reason to do nothing, and returning here made the
+    // barrier silently useless for exactly those callers: nobody is poked, the
+    // trylockw spin in mem_write_lock_with_pokes burns its 1024 attempts
+    // against siblings that never get told to yield, and it falls through to a
+    // blocking write_lock that waits for guest threads which hold the read lock
+    // for as long as they execute guest code.
+    //
+    // `task` is only ever used below to skip the caller's own thread, and
+    // `other == task` already reduces to `other == NULL` -- which the line
+    // above it excludes -- so a NULL caller correctly means "poke every thread
+    // of this mem, there is no self to skip".
+    if (mem == NULL)
         return;
 
     atomic_fetch_add_explicit(&quiesce_poke_calls, 1, memory_order_relaxed);

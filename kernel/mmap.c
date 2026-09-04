@@ -130,11 +130,16 @@ static void mem_write_unlock_with_pokes(struct mem *mem) {
     mem_close_deferred_fds(mem);
 }
 
-// The Phase 1 gate prototype's evictor needs this barrier from emu/memory.c,
-// which cannot see a static in this file. Section 1.10 of
-// docs/simulated_swap_plan.md also wants a task-less caller supported, for the
-// kswapd the pager core will have; this prototype is driven from a /proc write
-// on a guest thread, so `current` is set and that part is not needed yet.
+// The pager's evictor needs this barrier from emu/memory.c, which cannot see a
+// static in this file.
+//
+// A TASK-LESS CALLER IS SUPPORTED, which section 1.10 of
+// docs/simulated_swap_plan.md requires and kswapd relies on: task_poke_shared_
+// mem treats a NULL `task` as "no self to skip" rather than as "do nothing", so
+// the poke round still evicts the guest threads holding the read lock. Before
+// that, a barrier taken with `current == NULL` poked nobody and fell through to
+// a blocking write_lock behind threads that only release when they leave guest
+// code.
 void mem_write_lock_pokes_external(struct mem *mem) {
     mem_write_lock_with_pokes(mem);
 }

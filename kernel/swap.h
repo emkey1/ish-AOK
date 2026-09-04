@@ -141,6 +141,36 @@ int swap_slot_read(uint32_t slot, void *buf, size_t len);
 // for the same reason.
 long swap_direct_reclaim(struct mem *mem, uint64_t want_bytes);
 
+// ---- background reclaim ---------------------------------------------------
+//
+// kswapd sheds cold memory BEFORE an allocation is about to fail, which is the
+// whole point of having it: direct reclaim only runs when the guest is already
+// at the guard, and on a device the thing being avoided is jetsam, which does
+// not wait politely for an mmap. Started by swap_enable, stopped by
+// swap_disable, and non-existent while swap is off.
+//
+// It runs on a host thread with NO `current`, and two things follow that are
+// not incidental:
+//
+//  - the address-space barrier has to work for a task-less caller.
+//    task_poke_shared_mem treats a NULL task as "no self to skip" rather than
+//    "do nothing"; before that it poked nobody and the barrier fell through to
+//    a blocking write_lock behind guest threads that were still executing.
+//  - it must never run mm_release, because that can reach mem_destroy, and the
+//    bounded-teardown guard keys on current->mm_teardown -- without it a FUSE
+//    flush in an unmapped file's ->close waits for a guest process that will
+//    never run again. So kswapd never retains an mm at all: it holds a TASK
+//    reference from task_snapshot_collect, and do_exit blocks on exactly those
+//    references before it releases the mm, so task->mm stays valid for as long
+//    as the reference is held.
+
+// Passes since the last one that did any work, for /proc/ish/swap.
+struct swap_kswapd_stats {
+    uint64_t passes, reclaim_passes, bytes_reclaimed;
+    uint64_t thrash_backoffs;
+    bool running, thrashing;
+};
+
 // ---- suspension -----------------------------------------------------------
 
 // Called beside fakefs_quiesce_begin in the app's suspension handler: stop
@@ -195,6 +225,9 @@ struct swap_stats {
     bool enabled;
     bool draining;             // disabled, but slots are still out
     bool quiesced;             // suspension gate held: no new eviction I/O
+    bool kswapd_running;
+    bool thrashing;            // background reclaim paused: pages come straight back
+    uint64_t kswapd_passes, kswapd_reclaimed_bytes, thrash_backoffs;
 };
 void swap_get_stats(struct swap_stats *out);
 

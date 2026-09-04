@@ -13,6 +13,7 @@
 #include "kernel/task.h"
 #include "kernel/mm.h"
 #include "emu/memory.h"
+#include "platform/platform.h"
 #include "util/sync.h"
 #include "misc.h"
 
@@ -220,6 +221,8 @@ static void swap_file_dispose(int fd, uint64_t *bitmap) {
 // ---------------------------------------------------------------------------
 
 static void swap_disable_locked(void);
+static void swap_kswapd_start_locked(void);
+static void swap_kswapd_stop_locked(void);
 
 static int swap_enable_locked(uint64_t bytes) {
     uint64_t frame = mem_frame_size();
@@ -304,6 +307,7 @@ static int swap_enable_locked(uint64_t bytes) {
     atomic_store_explicit(&swap_stat_bytes_written, 0, memory_order_relaxed);
     atomic_store_explicit(&swap_on, true, memory_order_release);
     unlock(&swap_lock);
+    swap_kswapd_start_locked();
     printk("swap: enabled, %llu MB in %u slots of %llu bytes\n",
            (unsigned long long) (total / (1024 * 1024)),
            slots - 1, (unsigned long long) frame);
@@ -314,6 +318,9 @@ static void swap_disable_locked(void) {
     // Stop new eviction FIRST and outside everything else, so the walk below
     // is chasing a set that can only shrink.
     atomic_store_explicit(&swap_on, false, memory_order_release);
+    // And stop kswapd before the page-in walk, or it would be evicting behind
+    // the walk that is trying to bring everything back.
+    swap_kswapd_stop_locked();
 
     lock(&swap_lock, 0);
     bool anything_to_do = swap_fd >= 0;
@@ -639,6 +646,192 @@ long swap_direct_reclaim(struct mem *mem, uint64_t want_bytes) {
 }
 
 // ---------------------------------------------------------------------------
+// kswapd: background reclaim
+// ---------------------------------------------------------------------------
+
+// How often it looks, and how much it takes from one address space per pass.
+//
+// The slice is deliberately smaller than direct reclaim's: this runs while the
+// guest is working, and every slice costs that process's threads a barrier.
+// Steady and small beats occasional and large for something whose job is to
+// keep the footprint down rather than to rescue a failing allocation.
+#define SWAP_KSWAPD_INTERVAL_MS   500
+#define SWAP_KSWAPD_SLICE_BYTES   (4ull * 1024 * 1024)
+// Address spaces visited in one pass. A pass holds a task reference on every
+// task in its snapshot, and do_exit blocks on those, so an unbounded pass would
+// stall an exiting process for as long as it ran.
+#define SWAP_KSWAPD_MAX_SPACES    8
+// How much of the pressure band to try to recover in one pass.
+#define SWAP_KSWAPD_TARGET_BYTES  (16ull * 1024 * 1024)
+
+static pthread_t swap_kswapd_thread;
+static bool swap_kswapd_started;                  // swap_config_lock
+static _Atomic bool swap_kswapd_stop;
+static _Atomic bool swap_kswapd_alive;
+static _Atomic uint64_t swap_stat_kswapd_passes;
+static _Atomic uint64_t swap_stat_kswapd_bytes;
+static _Atomic uint64_t swap_stat_thrash_backoffs;
+static _Atomic bool swap_thrashing;
+
+// Should background reclaim be running right now?
+//
+// The watermark is DELIBERATELY ABOVE the one that refuses allocations. The
+// guard fires when the app is within host_mem_headroom_floor() of its ceiling,
+// and by then the guest is already being told no; a background reclaimer that
+// waited for the same point would be no earlier than direct reclaim and would
+// have no reason to exist. Two floors gives a band to work in.
+static bool swap_kswapd_should_reclaim(void) {
+    uint64_t floor = host_mem_headroom_floor();
+    if (floor == 0)
+        return false;                  // guard disabled; no watermark to have
+    struct mem_budget budget = get_mem_budget();
+    if (!budget.known || !budget.available_known)
+        return false;                  // a reading nobody could take is not pressure
+    return budget.available < floor * 2;
+}
+
+// The thrash guard. If the pages this pass evicted come straight back, evicting
+// more of them is worse than useless: it spends the write budget and the user's
+// flash to move memory that is in use.
+//
+// Compared as a RATIO of what came in to what went out over the same window,
+// not as an absolute rate, because the interesting quantity is "did we choose
+// cold pages" and that is scale-free. The aging clock is the per-frame answer
+// to the same question; this is the whole-system backstop for when the clock is
+// being fooled -- which it can be, since its signal is only stamped on a TLB
+// fill.
+// Passes to stay paused before trying again. The pause has to EXPIRE rather
+// than wait to be cleared by evidence, because while it holds there is no
+// evidence to be had: nothing is evicted, so out_delta is 0, so the ratio below
+// is unjudgeable. Clearing on "no thrashing seen" would therefore never happen
+// and the guard would latch for the life of the process -- measured, it did:
+// one thrash episode on a hot 200 MiB working set left thrashing=yes for every
+// subsequent pass, with background reclaim off for good.
+//
+// 20 passes at 500 ms is ten seconds, long enough that a genuinely hot working
+// set is not re-probed constantly and short enough that a workload which has
+// moved on gets reclaimed again promptly.
+#define SWAP_THRASH_COOLDOWN_PASSES 20
+static unsigned swap_thrash_cooldown;   // kswapd thread only
+
+static void swap_thrash_check(uint64_t in_delta, uint64_t out_delta) {
+    if (swap_thrash_cooldown > 0) {
+        if (--swap_thrash_cooldown == 0) {
+            atomic_store_explicit(&swap_thrashing, false, memory_order_relaxed);
+            printk("swap: background reclaim resuming\n");
+        }
+        return;
+    }
+    if (out_delta == 0)
+        return;                        // nothing was evicted; nothing to judge
+    // A ratio, not a rate: the question is "were those pages cold", which is
+    // scale-free. The aging clock is the per-frame answer to the same question;
+    // this is the whole-system backstop for when the clock is fooled, which it
+    // can be, since its signal is only stamped on a TLB fill.
+    if (in_delta * 2 <= out_delta)
+        return;
+    atomic_store_explicit(&swap_thrashing, true, memory_order_relaxed);
+    swap_thrash_cooldown = SWAP_THRASH_COOLDOWN_PASSES;
+    atomic_fetch_add_explicit(&swap_stat_thrash_backoffs, 1, memory_order_relaxed);
+    printk("swap: pages are coming straight back; pausing background reclaim\n");
+}
+
+static void *swap_kswapd_main(void *UNUSED_ARG) {
+    (void) UNUSED_ARG;
+    pthread_setname_np("kswapd0");
+    atomic_store_explicit(&swap_kswapd_alive, true, memory_order_release);
+    uint64_t last_in = 0, last_out = 0;
+    while (!atomic_load_explicit(&swap_kswapd_stop, memory_order_acquire)) {
+        struct timespec nap = { .tv_sec = SWAP_KSWAPD_INTERVAL_MS / 1000,
+                                .tv_nsec = (long) (SWAP_KSWAPD_INTERVAL_MS % 1000) * 1000000L };
+        nanosleep(&nap, NULL);
+        if (atomic_load_explicit(&swap_kswapd_stop, memory_order_acquire))
+            break;
+        atomic_fetch_add_explicit(&swap_stat_kswapd_passes, 1, memory_order_relaxed);
+
+        // Judge the last pass before deciding whether to do another.
+        uint64_t in_now = atomic_load_explicit(&swap_stat_pswpin, memory_order_relaxed);
+        uint64_t out_now = atomic_load_explicit(&swap_stat_pswpout, memory_order_relaxed);
+        swap_thrash_check(in_now - last_in, out_now - last_out);
+        last_in = in_now;
+        last_out = out_now;
+
+        if (!swap_enabled())
+            continue;
+        if (atomic_load_explicit(&swap_thrashing, memory_order_relaxed))
+            continue;
+        // Never start eviction I/O while the app is being suspended. The gate
+        // would refuse the write anyway, but taking an address-space barrier
+        // for something certain to be refused is pure stall.
+        pthread_mutex_lock(&swap_quiesce_lock);
+        bool gated = swap_quiesced;
+        pthread_mutex_unlock(&swap_quiesce_lock);
+        if (gated)
+            continue;
+        if (!swap_kswapd_should_reclaim())
+            continue;
+
+        // NO mm_retain ANYWHERE IN HERE. The task reference from the snapshot
+        // is what keeps task->mm alive: do_exit waits on exactly those
+        // references (exit_wait_needed) before it calls mm_release, so the mm
+        // cannot be torn down while we hold one -- and kswapd never becomes the
+        // thread that runs mem_destroy, which it must not, having no `current`.
+        struct task_snapshot snapshot = {0};
+        if (task_snapshot_collect(&snapshot, false) != 0)
+            continue;
+        struct mm *seen[SWAP_KSWAPD_MAX_SPACES];
+        unsigned seen_count = 0;
+        uint64_t got = 0;
+        for (unsigned i = 0; i < snapshot.count; i++) {
+            if (seen_count >= SWAP_KSWAPD_MAX_SPACES || got >= SWAP_KSWAPD_TARGET_BYTES)
+                break;
+            if (atomic_load_explicit(&swap_kswapd_stop, memory_order_acquire))
+                break;
+            struct mm *mm = snapshot.tasks[i]->mm;
+            if (mm == NULL)
+                continue;
+            bool already = false;
+            for (unsigned j = 0; j < seen_count && !already; j++)
+                already = seen[j] == mm;
+            if (already)
+                continue;
+            seen[seen_count++] = mm;
+            long released = swap_evict_bytes(&mm->mem, SWAP_KSWAPD_SLICE_BYTES);
+            if (released > 0)
+                got += (uint64_t) released;
+        }
+        task_snapshot_release(&snapshot);
+        if (got != 0)
+            atomic_fetch_add_explicit(&swap_stat_kswapd_bytes, got, memory_order_relaxed);
+    }
+    atomic_store_explicit(&swap_kswapd_alive, false, memory_order_release);
+    return NULL;
+}
+
+// Both called with swap_config_lock held.
+static void swap_kswapd_start_locked(void) {
+    if (swap_kswapd_started)
+        return;
+    atomic_store_explicit(&swap_kswapd_stop, false, memory_order_release);
+    if (pthread_create(&swap_kswapd_thread, NULL, swap_kswapd_main, NULL) != 0) {
+        printk("swap: could not start background reclaim; direct reclaim only\n");
+        return;
+    }
+    // Named so a thread dump says which thread this is. Darwin's
+    // pthread_setname_np takes only a name and applies to the calling thread,
+    // so kswapd names itself at the top of its own body instead -- see there.
+    swap_kswapd_started = true;
+}
+
+static void swap_kswapd_stop_locked(void) {
+    if (!swap_kswapd_started)
+        return;
+    atomic_store_explicit(&swap_kswapd_stop, true, memory_order_release);
+    pthread_join(swap_kswapd_thread, NULL);
+    swap_kswapd_started = false;
+}
+
+// ---------------------------------------------------------------------------
 // Preferences
 // ---------------------------------------------------------------------------
 
@@ -746,6 +939,11 @@ void swap_get_stats(struct swap_stats *out) {
     out->pswpout_pages = atomic_load_explicit(&swap_stat_pswpout, memory_order_relaxed);
     out->cached_bytes = 0;      // no clean state yet; see the header
     out->budget_refusals = atomic_load_explicit(&swap_stat_budget_refusals, memory_order_relaxed);
+    out->kswapd_running = atomic_load_explicit(&swap_kswapd_alive, memory_order_relaxed);
+    out->thrashing = atomic_load_explicit(&swap_thrashing, memory_order_relaxed);
+    out->kswapd_passes = atomic_load_explicit(&swap_stat_kswapd_passes, memory_order_relaxed);
+    out->kswapd_reclaimed_bytes = atomic_load_explicit(&swap_stat_kswapd_bytes, memory_order_relaxed);
+    out->thrash_backoffs = atomic_load_explicit(&swap_stat_thrash_backoffs, memory_order_relaxed);
     pthread_mutex_lock(&swap_quiesce_lock);
     out->quiesced = swap_quiesced;
     pthread_mutex_unlock(&swap_quiesce_lock);
@@ -770,6 +968,8 @@ size_t swap_status_text(char *buf, size_t size) {
         "quiesced         %s  (suspension gate: no new eviction I/O)\n"
         "write_window     %llu of %llu bytes used in the last 24h\n"
         "budget_refusals  %llu  (evictions refused, the window is spent)\n"
+        "kswapd           %s, %llu passes, %llu bytes reclaimed\n"
+        "thrashing        %s  (%llu backoffs)\n"
         "direct_reclaim   %llu  (bytes freed for an allocation that would have failed)\n"
         "alloc_failures   %llu  (evictions refused, the area is full)\n"
         "no_area          %llu  (evictions refused, there is no area)\n"
@@ -786,6 +986,11 @@ size_t swap_status_text(char *buf, size_t size) {
         (unsigned long long) s.written_window_bytes,
         (unsigned long long) s.write_budget_bytes,
         (unsigned long long) s.budget_refusals,
+        s.kswapd_running ? "running" : "stopped",
+        (unsigned long long) s.kswapd_passes,
+        (unsigned long long) s.kswapd_reclaimed_bytes,
+        s.thrashing ? "yes" : "no",
+        (unsigned long long) s.thrash_backoffs,
         (unsigned long long) s.direct_reclaim_bytes,
         (unsigned long long) s.alloc_failures,
         (unsigned long long) s.no_area,
