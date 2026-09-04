@@ -73,6 +73,41 @@ Leave it unset for ordinary use. On iOS it is not needed, because the real limit
 is available; setting it anyway makes the guard use whichever of the two leaves
 less room, so it can only ever make the guest more conservative, never less.
 
+## `ISH_GUEST_SWAP_MB`
+
+Turns simulated swap on at launch with this many MB of backing store, and is
+the only way to reach it outside the app's Settings.
+
+Swap is **off by default and stays off** unless someone asks for it: paging
+guest memory writes to the device's flash and takes container space, so it is
+opt-in, with a size the user chooses rather than one iSH-AOK picks. On iOS that
+choice lives in Settings; this variable is the equivalent for the standalone CLI
+and for an Xcode scheme.
+
+```sh
+ISH_GUEST_SWAP_MB=512 ./ish -f build/alpine /bin/sh
+cat /proc/ish/swap        # what the area looks like
+```
+
+Setting it also makes `/proc/ish/swap` writable by guest root, so a size in MB
+turns swap on and `0` turns it off:
+
+```sh
+echo 0 > /proc/ish/swap    # page everything back in and release the file
+echo 256 > /proc/ish/swap  # re-enable at a different size
+```
+
+That write is **refused on an installed app**, where the variable is never set:
+on a device, enabling swap is the user's decision in Settings, not something a
+guest process can do to their flash. It exists so that turning swap off -- which
+has to bring every evicted page back before it releases the file -- is testable
+outside the app.
+
+The backing file is created with `mkstemp` in `TMPDIR` and unlinked
+immediately, so it is never visible in the container, never backed up, and never
+reachable through the File Provider. It is truncated and closed when swap is
+turned off.
+
 ## Logging
 
 Log channel selection (`strace` — syscall parameters and return values, the most

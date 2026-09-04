@@ -20,6 +20,7 @@
 #include "jit/jit.h"
 #include "kernel/vdso.h"
 #include "kernel/task.h"
+#include "kernel/swap.h"
 #include "fs/fd.h"
 #include "fs/mmap_cache.h"
 #include "kernel/calls.h"
@@ -1725,6 +1726,20 @@ static void data_destroy(struct mem *mem, struct data *data) {
         mem_defer_fd_close(mem, data->fd);
     }
     mmap_cache_unregister(data->cache_entry);
+    // Every frame of this mapping that was still out has just lost its last
+    // page-table entry, so nothing can ever fault it back. Its slot would
+    // otherwise be leaked for the life of the process -- and the slot pool is a
+    // fixed size the user chose, so leaking there is a pager that quietly stops
+    // being able to evict.
+    if (data->frame_slot != NULL) {
+        size_t frames = mem_frame_count(data->size);
+        for (size_t f = 0; f < frames; f++) {
+            uint32_t slot = atomic_load_explicit(&data->frame_slot[f],
+                    memory_order_relaxed);
+            if (slot != SWAP_SLOT_NONE)
+                swap_slot_free(slot);
+        }
+    }
     free(data->host_page_prot);
     free(data->frame_refs);
     free(data->frame_slot);
@@ -2981,34 +2996,17 @@ int mem_ref_cnt_get(struct mem *mem) {
 // a debug knob, which the day-1 device probe measured as both holding the
 // footprint drop and costing 2.53 us per frame.
 
-static lock_t swap_lock = LOCK_INITIALIZER;
-// The one swap file, opened on first use. ATOMIC and opened under swap_lock,
-// both, for a failure that was measured rather than imagined: two guest
-// processes evicted at once, both saw swap_fd < 0, both created a file, and the
-// second store won. Each sweep then wrote through the descriptor it had been
-// handed while slot numbers kept coming from the single counter below, so the
-// two sweeps interleaved slots across two different files -- and every swap-in
-// read from whichever descriptor won. Frames written to the loser's file came
-// back as ZEROS from a sparse hole in the winner's, with no error on any path.
+// Storage -- the file, the slot bitmap and the on/off switch -- is
+// kernel/swap.c's. This file owns the page table and the frames, and the two
+// meet only at swap_slot_alloc/free/read/write.
 //
-// lsof caught it in the act: two ish-tmpfile descriptors on the process, the
-// second exactly 16384 bytes long, and the guest lost exactly the four pages of
-// that one frame. Every clean run had one descriptor; every corrupt run had
-// two. Priming the file with a single eviction first made the identical
-// concurrent pair clean 12 times out of 12.
-//
-// The window was always here -- swap_evict_mem takes only the TARGET address
-// space's barrier, so two evictions of two processes are simply concurrent --
-// but it needed both sweeps to reach their first eligible frame within
-// microseconds of each other, which the mem_next_page scan is what made
-// ordinary. Section 3.7's kswapd would make it routine and unattended.
-static _Atomic int swap_fd = -1;
-// Slot 0 is never handed out, because SWAP_SLOT_NONE is 0: that lets pt_map's
-// calloc of frame_slot mean "every frame is in host memory" with no
-// initialisation loop at all, which for a 512 MiB mapping is 32768 stores
-// saved on a path that runs whether or not swap is ever enabled. The 16 KiB it
-// costs in the file is not worth a smarter encoding.
-static uint32_t swap_next_slot = 1;
+// That line is where it is because of what happened when it was not drawn. An
+// earlier attempt put a second pager in kernel/swap.c with its own view of the
+// page table; two owners of one piece of state produced measured silent
+// corruption. And the prototype's own storage, a lazily-opened file behind an
+// unlocked `if (fd < 0)`, let two concurrent evictions create two files and
+// interleave slots across them, so the guest read ZEROS for pages it had
+// written. One owner each, and a narrow interface between them.
 // ATOMIC, all of them. Every evictor and every faulting guest thread bumps
 // these, and two evictions of two processes run concurrently -- the barrier
 // each takes is its own address space's. Plain increments here quietly
@@ -3044,29 +3042,6 @@ static size_t swap_frame_size(void) {
 }
 static size_t swap_pages_per_frame(void) {
     return swap_frame_size() / PAGE_SIZE;
-}
-
-// fs/real.h is not included at the top of this file and pulling the whole
-// filesystem header in for one prototype would be the wrong trade, so declare
-// the one thing needed. host_unlinked_tmpfd creates a file in TMPDIR and
-// unlinks it immediately, which is the shape the pager wants anyway: the swap
-// file must never be visible in the container, backed up, or reachable through
-// the File Provider (section 3.11).
-int host_unlinked_tmpfd(void);
-
-static int swap_file(void) {
-    int fd = atomic_load_explicit(&swap_fd, memory_order_acquire);
-    if (fd >= 0)
-        return fd;
-    lock(&swap_lock, 0);
-    fd = atomic_load_explicit(&swap_fd, memory_order_relaxed);
-    if (fd < 0) {
-        fd = host_unlinked_tmpfd();
-        if (fd >= 0)
-            atomic_store_explicit(&swap_fd, fd, memory_order_release);
-    }
-    unlock(&swap_lock);
-    return fd;
 }
 
 // Is this guest page the base of a frame this prototype may evict?
@@ -3199,26 +3174,21 @@ static pthread_mutex_t *swap_frame_lock_for(struct data *data, size_t frame_inde
 // the write to the swap file. The shipping design (section 2.4) does the I/O
 // outside the barrier, which it can because the entries already read as absent
 // by then; doing it inside is slower and obviously correct, and correctness is
-// what the gate is measuring.
+// what this stage is measuring.
 static bool swap_evict_frame(struct mem *mem, page_t base, struct data *data, size_t offset) {
-    int fd = swap_file();
-    if (fd < 0)
-        return false;
     size_t frame = swap_frame_size();
     char *host = (char *) data->data + offset;
 
     uint32_t slot;
-    lock(&swap_lock, 0);
-    slot = swap_next_slot++;
-    unlock(&swap_lock);
-
-    off_t at = (off_t) slot * (off_t) frame;
-    size_t done = 0;
-    while (done < frame) {
-        ssize_t n = pwrite(fd, host + done, frame - done, at + (off_t) done);
-        if (n <= 0)
-            return false;      // slot is simply abandoned; this is a prototype
-        done += (size_t) n;
+    if (swap_slot_alloc(&slot) < 0)
+        return false;   // the area the user asked for is full; keep the frame
+    if (swap_slot_write(slot, host, frame) < 0) {
+        // Nothing has been published yet, so the frame is untouched and the
+        // slot has no owner. Give it straight back rather than leaking it --
+        // the slot pool is a fixed size the user chose, and a leak there is a
+        // pager that quietly stops being able to evict.
+        swap_slot_free(slot);
+        return false;
     }
 
     // The frame records where its bytes went; the entries only record that
@@ -3347,6 +3317,12 @@ void swap_prototype_ledger(unsigned long long *before, unsigned long long *after
 long swap_evict_mem(struct mem *mem) {
     if (mem == NULL)
         return _EINVAL;
+    // The switch is consulted HERE and nowhere on the fault path. Turning swap
+    // off has to stop new eviction at once, but a frame that went out before it
+    // was turned off still has to be answerable until it is back -- refusing
+    // there would be a SIGBUS on memory the guest mapped correctly.
+    if (!swap_enabled())
+        return _ENODEV;
     size_t per = swap_pages_per_frame();
     long released = 0;
 
@@ -3440,20 +3416,7 @@ static int swap_fault_page_locked(struct mem *mem, page_t page) {
             err = _EIO;
         } else {
             madvise(host, frame, MADV_FREE_REUSE);
-            // Through the accessor, not the raw global: the read has to be
-            // ordered against the open rather than rely on a benign race, and
-            // a frame can only be SWAPPED if some evictor already opened the
-            // file, so this never creates one.
-            int fd = swap_file();
-            off_t at = (off_t) slot * (off_t) frame;
-            size_t done = 0;
-            while (fd >= 0 && done < frame) {
-                ssize_t n = pread(fd, host + done, frame - done, at + (off_t) done);
-                if (n <= 0) { err = _EIO; break; }
-                done += (size_t) n;
-            }
-            if (fd < 0)
-                err = _EIO;
+            err = swap_slot_read(slot, host, frame);
             if (err == 0) {
                 // The frame is home. Clear the slot BEFORE the lock is dropped
                 // and before any entry is published, so that the next fault on
@@ -3462,6 +3425,10 @@ static int swap_fault_page_locked(struct mem *mem, page_t page) {
                 // reading the slot a second time.
                 atomic_store_explicit(&data->frame_slot[f], SWAP_SLOT_NONE,
                         memory_order_release);
+                // Only THEN give the slot back. The other order would let
+                // another frame's eviction take this slot and overwrite it
+                // while entries here still named it.
+                swap_slot_free(slot);
                 swap_stat_faulted++;
                 swap_stat_in += frame;
             }
@@ -3540,3 +3507,35 @@ void swap_prototype_stats(unsigned long *evicted_frames, unsigned long *faulted_
 }
 
 unsigned long swap_prototype_cancelled(void) { return swap_stat_cancelled; }
+
+// Bring EVERY evicted frame of one address space back. This is what swapoff
+// means: stop using the file, and make sure nothing still needs it.
+//
+// Under the same barrier eviction takes, for the same reason -- it changes host
+// protections and page-table state for an address space whose threads are
+// running guest code, and a plain write_lock can stall behind a guest busy-loop
+// indefinitely.
+//
+// Returns the number of frames still out afterwards, which should be zero. It
+// can be non-zero honestly: a frame whose entries were all unmapped while it
+// was out has no entry left to fault, and its slot is freed by data_destroy
+// rather than here.
+long swap_fault_mem_all(struct mem *mem) {
+    if (mem == NULL)
+        return 0;
+    long still_out = 0;
+    mem_write_lock_pokes_external(mem);
+    for (page_t page = 0; page < mem->page_limit; ) {
+        struct pt_entry *pt = mem_pt(mem, page);
+        if (pt != NULL && pt->data != NULL &&
+                atomic_load_explicit(&pt->swap_state, memory_order_acquire) != PT_RESIDENT) {
+            if (swap_fault_page_locked(mem, page) < 0)
+                still_out++;
+        }
+        // mem_next_page, not page + 1: page_limit is 2^35 pages for a 64-bit
+        // guest, so a linear probe walks tens of billions of empty pages.
+        mem_next_page(mem, &page);
+    }
+    mem_write_unlock_pokes_external(mem);
+    return still_out;
+}

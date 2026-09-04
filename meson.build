@@ -517,6 +517,7 @@ src = [
     'kernel/exit.c',
     'kernel/time.c',
     'kernel/mmap.c',
+    'kernel/swap.c',
     'kernel/uname.c',
     'kernel/tls.c',
     'kernel/futex.c',

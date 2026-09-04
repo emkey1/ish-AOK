@@ -607,5 +607,9 @@ void swap_prototype_stats(unsigned long *evicted_frames, unsigned long *faulted_
                           unsigned long *bytes_out, unsigned long *bytes_in);
 // Faults that found the frame already resident and did no I/O.
 unsigned long swap_prototype_cancelled(void);
+// Bring every evicted frame of `mem` back, taking the address-space barrier
+// itself. Returns how many frames could not be brought back, which should be 0.
+// This is what kernel/swap.c's swap_disable() calls on each live address space.
+long swap_fault_mem_all(struct mem *mem);
 
 #endif

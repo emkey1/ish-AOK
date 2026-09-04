@@ -8,6 +8,7 @@
 // pids_lock come from kernel/calls.h, the address space itself from emu/memory.h.
 #include "kernel/calls.h"
 #include "emu/memory.h"
+#include "kernel/swap.h"
 #include "platform/platform.h"
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -146,6 +147,50 @@ static int proc_ish_show_roots(struct proc_entry *UNUSED(entry), struct proc_dat
 // write handler is the only writer and it has already released the mm.
 static size_t swap_last_mapped_pages, swap_last_resident_pages;
 static size_t swap_last_pre_mapped_pages, swap_last_pre_resident_pages;
+
+// /proc/ish/swap -- the backing store, from kernel/swap.c.
+//
+// Writable only on a launch that offered guest control, which means the CLI or
+// an Xcode scheme with ISH_GUEST_SWAP_MB set, and never an installed app: on a
+// device, turning swap on is a Settings decision (section 3.13) and not
+// something a guest process can do to the user's flash. What the write is for
+// is testing swapoff, which nothing else in the tree can reach.
+static int proc_ish_show_swap(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    char text[1024];
+    swap_status_text(text, sizeof(text));
+    proc_printf(buf, "%s", text);
+    if (swap_guest_control_allowed())
+        proc_printf(buf, "\n  echo <MB> > /proc/ish/swap   # 0 turns it off\n");
+    return 0;
+}
+
+static int proc_ish_update_swap(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    if (!swap_guest_control_allowed())
+        return _EPERM;
+    if (!superuser())
+        return _EPERM;
+    if (data->size == 0 || data->size > 32)
+        return _EINVAL;
+    char text[33];
+    memcpy(text, data->data, data->size);
+    text[data->size] = '\0';
+    // Same embedded-NUL rule as the other writable entries here: refuse rather
+    // than act on half a value.
+    if (strlen(text) != data->size)
+        return _EINVAL;
+    char *end = NULL;
+    long mb = strtol(text, &end, 10);
+    while (end != NULL && (*end == '\n' || *end == ' '))
+        end++;
+    if (end == NULL || *end != '\0' || mb < 0)
+        return _EINVAL;
+    if (mb == 0) {
+        swap_disable();
+        return 0;
+    }
+    int err = swap_enable((uint64_t) mb * 1024 * 1024);
+    return err < 0 ? err : 0;
+}
 
 static int proc_ish_show_swap_evict(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     unsigned long frames_out, frames_in, bytes_out, bytes_in;
@@ -997,6 +1042,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"ips", .show = proc_ish_show_ips},
     {"mem_release_probe", S_IFREG | 0644, .show = proc_ish_show_mem_release_probe, .update = proc_ish_update_mem_release_probe},
     {"roots", S_IFREG | 0644, .show = proc_ish_show_roots, .update = proc_ish_update_roots},
+    {"swap", S_IFREG | 0644, .show = proc_ish_show_swap, .update = proc_ish_update_swap},
     {"swap_evict", S_IFREG | 0644, .show = proc_ish_show_swap_evict, .update = proc_ish_update_swap_evict},
     {"workspace", S_IFREG | 0666, .show = proc_ish_show_workspace, .update = proc_ish_update_workspace},
     {"version", .show = proc_ish_show_version},
