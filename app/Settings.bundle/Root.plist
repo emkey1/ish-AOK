@@ -54,6 +54,58 @@
 				<string>session-shell</string>
 			</array>
 		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Simulated Swap</string>
+			<key>FooterText</key>
+			<string>Lets iSH-AOK move cold guest memory out to storage, so a large mostly-idle heap or a background process tree stops counting against the memory iOS allows the app. It will not make a working set that is genuinely too big run well.
+
+Off unless you turn it on: swapping writes to the device&apos;s flash, and the swap area takes up that much space in the app&apos;s container while it exists. Both settings take effect the next time iSH-AOK starts, and swap stays off until you have chosen a size as well as switched it on.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Enable Swap</string>
+			<key>Key</key>
+			<string>Enable Swap</string>
+			<key>DefaultValue</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSMultiValueSpecifier</string>
+			<key>Title</key>
+			<string>Swap Size</string>
+			<key>Key</key>
+			<string>Swap Size MB</string>
+			<key>DefaultValue</key>
+			<integer>0</integer>
+			<key>Titles</key>
+			<array>
+				<string>Not chosen (swap stays off)</string>
+				<string>256 MB</string>
+				<string>512 MB</string>
+				<string>1 GB</string>
+				<string>2 GB</string>
+				<string>4 GB</string>
+				<string>8 GB</string>
+				<string>16 GB</string>
+			</array>
+			<key>Values</key>
+			<array>
+				<integer>0</integer>
+				<integer>256</integer>
+				<integer>512</integer>
+				<integer>1024</integer>
+				<integer>2048</integer>
+				<integer>4096</integer>
+				<integer>8192</integer>
+				<integer>16384</integer>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

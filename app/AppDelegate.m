@@ -56,6 +56,7 @@
 #include "util/sync.h"
 #include "app/LocationDevice.h"
 #include "fs/fake-db.h"
+#include "kernel/swap.h"
 #import <os/log.h>
 #import <os/lock.h>
 
@@ -2354,6 +2355,49 @@ static void PopCurrentTask(struct task *previousCurrent) {
     return YES;
 }
 
+// ---- Simulated swap: publishing the user's choice to the pager -------------
+//
+// docs/simulated_swap_plan.md section 3.13. Swap ships OFF and its size is the
+// user's choice, so this is the one place those two preferences reach the
+// pager. Both halves go across verbatim: swap_startup() in kernel/swap.c is
+// where "enabled with no size" is refused, and it prints why, so this side must
+// NOT quietly fold the pair into one flag -- a size the user never chose is
+// exactly what section 3.13 forbids inventing, and an enable silently
+// downgraded to "off" here would be indistinguishable from the pager having
+// failed to start.
+//
+// swap_set_preference only RECORDS. Nothing allocates, opens a file or starts a
+// thread until swap_startup() acts on it, which -boot does once, below, for the
+// launch that is actually going to run a guest. That is the whole reason this
+// can be called freely from a KVO observer: the observer's job is to make sure
+// the record is current before the next boot reads it, not to reconfigure a
+// running pager. Section 3.13 says settings take effect at the next launch, and
+// swap_enable()'s own contract is that changing the size means paging
+// everything back in first, so a live resize is deliberately not offered.
+//
+// -boot CALLS THIS ITSELF, and that call is the one that matters. The KVO
+// observer alone would be too late: the usual launch boots from
+// -application:willFinishLaunchingWithOptions:, which reaches +ensureBooted
+// before -application:didFinishLaunchingWithOptions: has run at all, so the
+// observer that the doEnableMulticore block sits beside does not yet exist when
+// the guest starts. Multicore does not care, because it is re-read
+// continuously; a launch-time decision read once by the pager does.
+//
+// The observer still earns its place, for the boots that happen later in a
+// process's life -- the first one after choosing a root, a scene connecting to
+// an app that had none, a Shortcuts intent waking a cold app -- and it publishes
+// SYNCHRONOUSLY rather than hopping to the main queue like its neighbours, so a
+// preference changed in the same turn as a boot cannot lose the race.
+static BOOL ISHPublishSwapConfiguration(NSInteger *outSizeMB) {
+    UserPreferences *prefs = UserPreferences.shared;
+    NSInteger sizeMB = prefs.swapSizeMB; // already clamped to 0...ISHSwapMaxSizeMB
+    BOOL enabled = prefs.shouldEnableSwap;
+    swap_set_preference(enabled ? true : false, (unsigned) sizeMB);
+    if (outSizeMB != NULL)
+        *outSizeMB = sizeMB;
+    return enabled;
+}
+
 static UIViewController *CreateRootSelectionViewController(void) {
     UIViewController *rootsViewController = [[UIStoryboard storyboardWithName:@"Roots" bundle:nil] instantiateInitialViewController];
     UINavigationController *navigationController = [[UINavigationController alloc] initWithRootViewController:rootsViewController];
@@ -2399,6 +2443,13 @@ static TerminalViewController *CreateTerminalViewController(void) {
 
 - (intptr_t)boot {
     [ISHDiagnosticsStore recordLaunchStage:@"boot.begin"];
+    // Record what the user asked of the pager before anything can start it.
+    // swap_startup() reads this, further down, once the boot is committed.
+    NSInteger swapSizeMB = 0;
+    BOOL swapEnabled = ISHPublishSwapConfiguration(&swapSizeMB);
+    [ISHDiagnosticsStore recordLaunchStage:@"boot.swap.configured"
+                                   details:@{@"enabled": @(swapEnabled),
+                                             @"sizeMB": @(swapSizeMB)}];
     NSString *defaultRoot = Roots.instance.defaultRoot;
     if (defaultRoot == nil) {
         return RecordBootFailure(_ENOENT,
@@ -2936,6 +2987,25 @@ static TerminalViewController *CreateTerminalViewController(void) {
     // (real /sbin/init and the fake-init fallback). Docker-exported images ship both as
     // empty 0-byte files, which otherwise leaves the system with an empty hostname.
     ProvisionGuestHostFiles();
+    // Start the pager, if the user asked for one. This is the last point common
+    // to both init paths and the first at which the boot is committed -- every
+    // remaining failure is init's own -- which is what it wants: swap_startup()
+    // reserves the whole swap area up front, and a boot that gives up before
+    // this (no root, an unmountable filesystem, an empty boot command)
+    // should not leave a preallocated file behind it.
+    //
+    // Does nothing at all unless swap_set_preference() above said enabled with
+    // a size; that is the shipping default, and in it the guest sees byte-for-
+    // byte what it saw before any of this existed. Record what actually
+    // happened rather than what was asked for: swap_enabled() is read back
+    // AFTER the call, so an enable that failed to reserve its area shows up
+    // here as off instead of being reported as on because the preference said
+    // so (kernel/swap.c prints the errno as well).
+    swap_startup();
+    [ISHDiagnosticsStore recordLaunchStage:@"boot.swap.started"
+                                   details:@{@"requested": @(swapEnabled),
+                                             @"requestedSizeMB": @(swapSizeMB),
+                                             @"running": @(swap_enabled())}];
     if (bootUsesNativeFakeInit) {
         FakeInitPrepareGuestRoot();
         err = StartFallbackConsoleSupervisor(command, argvCommand, argv, sizeof(argv), envpData);
@@ -3508,7 +3578,17 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
             doEnableExtraLocking = UserPreferences.shared.shouldEnableExtraLocking;
         });
     }];
-    
+    // Simulated swap. Both keys go to the same place; ISHPublishSwapConfiguration
+    // above says why this observer does NOT hop to the main queue the way its
+    // neighbours do, and why -boot publishes for itself as well. A change here
+    // is recorded for the next boot and does not reach a running pager -- swap
+    // is sized once at launch and is deliberately not resizable in place
+    // (docs/simulated_swap_plan.md section 3.13).
+    [UserPreferences.shared observe:@[@"shouldEnableSwap", @"swapSizeMB"] options:NSKeyValueObservingOptionInitial
+                              owner:self usingBlock:^(typeof(self) self) {
+        ISHPublishSwapConfiguration(NULL);
+    }];
+
         // This code is IPv4 and IPv6 aware: see https://developer.apple.com/library/archive/samplecode/Reachability/Listings/ReadMe_md.html.
     struct sockaddr_in address = {
         .sin_len = sizeof(address),
