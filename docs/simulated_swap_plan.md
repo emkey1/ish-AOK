@@ -1399,6 +1399,37 @@ PROT_NONE release forced on. The inventory went stale within five commits during
 this study, when `emu/tlb.c` gained four new direct-pointer minting sites; a document
 cannot hold this invariant.
 
+### Phase 1 as built (2026-09-04)
+
+Landed on `working`, each piece gated on all five guest roots and reviewed
+adversarially. Commits in order: `69558a762`, `d26478f7e`, `57e760c9e`,
+`cf49fdac3`, `66b074d89`, `4495bcc1f`, `613742a9a`, `0cf326b8d`, `434b7bbec`.
+
+**Done.** Exact ownership records and per-frame entry counts on `struct data`;
+the frame-owned slot (section 2.8) replacing the per-entry copy; the slot
+allocator, file lifecycle and swapon/swapoff over one preallocated unlinked
+file; `swap_enabled()` off by default with the app's Settings switch and size
+wired through `swap_set_preference`/`swap_startup`; direct reclaim at all three
+growth guards; the second-chance aging clock with its TLB refresh;
+`mem_resident_page_count`; the suspension gate; the 24-hour write budget;
+`/proc/ish/swap`; and the system-wide and per-process guest surfaces
+(`meminfo`, `vmstat`, `sysinfo(2)`, `status`, `statm`, `stat`, `smaps`).
+
+**Still open from this phase.** `kswapd` and its watermarks -- direct reclaim
+covers the critical path, so background reclaim is the remaining half; the
+thrash guard, which the write budget's comment names as what should stop a bad
+workload first; the low-latency swap-in that drops the lock across the `pread`
+(section 3.5's drop-run-retake-rewalk, still a stall of 82 us p50 / 683 us
+p99.9 on device); and the CI pointer-inventory check.
+
+**Corrections this phase forced on the design.** Section 2.8 (the slot belongs
+to the frame) is the largest. Beyond it: the aging clock's `accessed` byte is
+only written on a TLB FILL, so the sweep must bump `mem_changed` every pass or
+it is blind to the hottest pages in the process -- 506 of 1536 avoidable faults
+came from exactly that; and direct reclaim must be allowed to lower the age
+bar, because the clock needs two passes before anything is a candidate and a
+caller that gives up on one `ENOMEM` never gets a second.
+
 ### Phase 2: surfaces, contract, app (2-3 weeks, about 700 LOC)
 
 Every row of the surface table: meminfo, vmstat, `/proc/swaps`, `sysinfo` in both

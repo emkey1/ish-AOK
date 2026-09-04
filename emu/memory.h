@@ -255,6 +255,11 @@ size_t mem_mapped_page_count(struct mem *mem);
 // precisely so that a frame a forked sibling faulted back is not counted as
 // absent. See the definition, and why the over-report is what blocks MemTotal.
 size_t mem_resident_page_count(struct mem *mem);
+// Is this page's data really out on storage? Asks the FRAME, which owns the
+// slot, not the entry's conservative swap_state hint -- so it agrees with
+// mem_resident_page_count by construction. For callers that walk entries
+// themselves and need the same answer.
+bool mem_page_is_swapped(const struct pt_entry *entry);
 void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type);
 // Reverse-map a faulting host address to the guest address it backs (for host
 // SIGBUS -> guest SIGBUS translation of file-backed-mmap truncation faults).

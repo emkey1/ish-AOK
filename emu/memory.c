@@ -876,6 +876,21 @@ size_t mem_resident_page_count(struct mem *mem) {
     return mem_page_count_walk(mem, true);
 }
 
+bool mem_page_is_swapped(const struct pt_entry *entry) {
+    if (entry == NULL || entry->data == NULL)
+        return false;
+    // The hint first, because it is the cheap test and a resident entry is the
+    // common case; then the frame, which owns the truth. See the walk above and
+    // struct pt_entry::swap_state for why the hint alone is not enough.
+    if (atomic_load_explicit(&entry->swap_state, memory_order_relaxed) == PT_RESIDENT)
+        return false;
+    if (entry->data->frame_slot == NULL)
+        return false;
+    size_t f = entry->offset / mem_frame_size();
+    return atomic_load_explicit(&entry->data->frame_slot[f],
+            memory_order_relaxed) != SWAP_SLOT_NONE;
+}
+
 // Return the first page >= page with no mapping, or page_limit if every page
 // up to the limit is mapped. Scans leaf entry arrays directly so walking a
 // large contiguous mapped region doesn't redo the page-table descent per page.
