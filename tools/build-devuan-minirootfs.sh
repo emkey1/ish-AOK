@@ -247,6 +247,34 @@ fi
 # so seeding it would stop a user ever setting, say, LC_TIME=en_GB.UTF-8. A
 # LANG line here also settles the question for the whole image:
 # provision-ultimate-devuan.sh writes the same file and the same value.
+# A freshly built image has no root password, and Devuan's login will not let
+# anyone in without one -- so the console is a dead end.
+#
+# /etc/shadow's root field is `*`, which is not "empty", it is "no password can
+# ever match". util-linux login plus PAM answers "Login incorrect" to every
+# attempt including an empty one, and init runs a getty on tty1, so a user who
+# boots to the console sees a `login:` prompt they cannot get past. Measured on
+# a freshly built excalibur image: `root` + empty password -> "Login incorrect",
+# repeatedly. Alpine escapes this only because busybox login admits root when
+# the field is `*`, which is why it went unnoticed for so long.
+#
+# The fix is autologin on tty1, NOT a password for root and NOT an empty one:
+#
+#   - it changes no authentication at all, it says the physical console is
+#     trusted, which is the appliance model this image is for and exactly what
+#     the app already does on its own pty (`/bin/login -f root`);
+#   - an empty root password would be a real hole the moment someone installs
+#     openssh, and these images are used with it (AOK ships an ssh client and
+#     server). PermitEmptyPasswords defaults to no, but relying on one config
+#     line to contain a passwordless root is not a trade worth making;
+#   - it leaves `passwd root` working normally for anyone who wants one, and
+#     autologin then still applies only to the console.
+#
+# tty1 alone. tty2-6 keep their ordinary getty, so a login prompt is still
+# reachable for testing authentication itself.
+AUTOLOGIN_HOOK='f="$1/etc/inittab"; [ -f "$f" ] || exit 0; grep -q -- "--autologin" "$f" || sed -i "s|^\(1:2345:respawn:/sbin/getty\)\( --noclear\)\{0,1\} |\1\2 --autologin root |" "$f"; true'
+[ "${NO_CONSOLE_AUTOLOGIN:-}" = 1 ] && AUTOLOGIN_HOOK='true'
+
 LOCALE_HOOK='mkdir -p "$1/etc/default" "$1/etc/profile.d"; printf "LANG=C.UTF-8\n" > "$1/etc/default/locale"; printf "%s\n" "# iSH-AOK: default to a UTF-8 locale when nothing else named one." "# Reaches sessions PAM never touches -- ssh (stock sshd has UsePAM no)." "[ -n \"\${LANG:-}\" ] || export LANG=C.UTF-8" > "$1/etc/profile.d/00-aok-locale.sh"; chmod 0644 "$1/etc/profile.d/00-aok-locale.sh"; true'
 
 build_one() {  # <deb-arch>
@@ -261,7 +289,7 @@ build_one() {  # <deb-arch>
     docker run --rm --privileged --platform="$platform" \
         -e SUITE="$SUITE" -e ARCH="$arch" -e MIRROR="$DEVUAN_MIRROR" \
         -e CLEAN_HOOK="$CLEAN_HOOK" -e BBOX_HOOK="$BBOX_HOOK" -e CRYPT_HOOK="$CRYPT_HOOK" \
-        -e LOCALE_HOOK="$LOCALE_HOOK" \
+        -e LOCALE_HOOK="$LOCALE_HOOK" -e AUTOLOGIN_HOOK="$AUTOLOGIN_HOOK" \
         -e INCLUDE_PKGS="$INCLUDE_PKGS" \
         -v "$WORK:/work" \
         "$BUILD_IMAGE" bash -euc '
@@ -288,6 +316,7 @@ build_one() {  # <deb-arch>
                 --customize-hook="$BBOX_HOOK" \
                 --customize-hook="$CRYPT_HOOK" \
                 --customize-hook="$LOCALE_HOOK" \
+                --customize-hook="$AUTOLOGIN_HOOK" \
                 --customize-hook="$CLEAN_HOOK" \
                 "$SUITE" "/work/rootfs-$ARCH.tar" \
                 "deb $MIRROR $SUITE main"
@@ -319,6 +348,20 @@ build_one() {  # <deb-arch>
         *UTF-8*) ;;
         *) note "  WARNING: expected LANG=C.UTF-8 (LOCALE_HOOK may not have run)" ;;
     esac
+    # Checked rather than assumed, because the cost of this hook silently not
+    # matching is an image whose console cannot be logged into at all -- the
+    # exact failure it exists to prevent, and one nobody notices until a user
+    # boots to tty1 on a fresh install and is stuck at a password prompt that
+    # no password satisfies.
+    ttyline="$(tar -xOf "$out" ./etc/inittab 2>/dev/null | grep -E '^1:2345:respawn' || true)"
+    note "  ${ttyline:-<no tty1 inittab line>}"
+    if [ "${NO_CONSOLE_AUTOLOGIN:-}" != 1 ]; then
+        case "$ttyline" in
+            *--autologin\ root*) ;;
+            *) note "  WARNING: tty1 has no --autologin (AUTOLOGIN_HOOK may not have run);"
+               note "           a fresh image's console will be an unloggable-into prompt" ;;
+        esac
+    fi
 }
 
 for a in $ARCHES; do

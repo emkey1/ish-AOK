@@ -228,7 +228,28 @@ void amd64_jit_preference_set(bool enabled) {
             kPreferenceDisableDimmingKey: @(NO),
             kPreferenceLaunchCommandKey: ISHDefaultLaunchCommand(),
             kPreferenceBootCommandKey: ISHDefaultBootCommand(),
-            kPreferenceInitialWindowKey: @"terminal",
+            // The SESSION SHELL, not the console, and that is what makes a
+            // freshly installed rootfs usable at all.
+            //
+            // "Terminal (tty1)" shows the console, where init has a getty
+            // running -- so it is a `login:` prompt, and on a fresh install
+            // root has no password to give it. On Devuan 6 that is a dead end:
+            // util-linux login plus PAM answers "Login incorrect" to every
+            // attempt, including an empty one, because /etc/shadow's root
+            // field is `*` and no password matches `*`. Alpine happens to
+            // escape it -- busybox login lets root straight in -- which is why
+            // this went unnoticed.
+            //
+            // The session shell is a pty the app starts itself with the launch
+            // command, /bin/login -f root, which authenticates nothing and so
+            // works on any rootfs. It is already running in "Terminal" mode;
+            // the app just was not showing it.
+            //
+            // This changes the default only. Anyone who has explicitly chosen
+            // "Terminal (tty1)" keeps it -- registerDefaults supplies a value
+            // only for an ABSENT key -- and tty1 itself is worth fixing
+            // separately, which tools/build-devuan-minirootfs.sh now does.
+            kPreferenceInitialWindowKey: @"session-shell",
             kPreferenceBlinkCursorKey: @(NO),
             kPreferenceCursorStyleKey: @(CursorStyleBlock),
             kPreferenceHideStatusBarKey: @(NO),
