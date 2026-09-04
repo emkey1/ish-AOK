@@ -181,6 +181,10 @@ struct task {
     // and never blocked. Written only by the owning thread; read by others
     // under pids_lock via rusage_get_task.
     unsigned long minflt;
+    // Set by the swap-in path when a slot could not be read, consumed by the
+    // page-fault handler to deliver SIGBUS instead of SIGSEGV. Per-task because
+    // the fault is; see task_note_swap_io_fault below.
+    bool swap_io_fault;
     unsigned long nvcsw;
     // Peak resident size in KB, latched here as well as on the mm: do_exit
     // releases the address space before it snapshots the task's final usage,
@@ -656,6 +660,30 @@ dword_t task_count_for_uid(uid_t_ uid);
 static inline void task_count_minflt(void) {
     if (current != NULL)
         current->minflt++;
+}
+// Note that THIS fault failed because a swap slot could not be read, so the
+// fault handler can deliver SIGBUS rather than SIGSEGV.
+//
+// Linux distinguishes the two and so must AOK: a page whose contents could not
+// be brought back from storage is BUS_ADRERR, "the address is valid but the
+// hardware could not deliver it", while SIGSEGV says the mapping was never
+// there. A program with a SIGBUS handler -- databases and JITs commonly have
+// one -- takes an entirely different branch, and reporting the wrong one sends
+// it down the wrong path with no way to tell.
+//
+// A flag rather than a return value because it has to cross emu/memory.c's
+// mem_ptr_fault, which can only answer NULL, and it is consumed by the very
+// next thing that runs on this thread. Cleared on read so a later ordinary
+// SIGSEGV cannot inherit it.
+static inline void task_note_swap_io_fault(void) {
+    if (current != NULL)
+        current->swap_io_fault = true;
+}
+static inline bool task_take_swap_io_fault(void) {
+    if (current == NULL || !current->swap_io_fault)
+        return false;
+    current->swap_io_fault = false;
+    return true;
 }
 dword_t get_count_of_alive_tasks(void);
 void get_guest_loadavg(uint64_t out[3]);

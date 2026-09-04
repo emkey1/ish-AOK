@@ -5168,6 +5168,25 @@ void handle_page_fault_interrupt(struct cpu_state *cpu) {
     void *ptr = mem_ptr_fault(current->mem, cpu->segfault_addr,
                               cpu->segfault_was_write ? MEM_WRITE : MEM_READ);
 
+    if (ptr == NULL && task_take_swap_io_fault()) {
+        // The mapping is fine; its CONTENTS could not be read back from the
+        // swap file. Linux answers that with SIGBUS/BUS_ADRERR, the same as a
+        // truncated file mapping (handle_bus_interrupt below), not with
+        // SIGSEGV -- the address is valid, the hardware could not deliver it.
+        printk("ERROR: %d(%s) [%s] SIGBUS on %#llx at %#llx (swap read failed)\n",
+               current->pid, current->comm, guest_abi_desc(current->abi).name,
+               (unsigned long long) cpu->segfault_addr,
+               (unsigned long long) current_fault_ip(cpu));
+        record_guest_fault_event("swap-io-error", cpu, cpu->segfault_addr,
+                                 cpu->segfault_was_write);
+        struct siginfo_ bus_info = {
+            .code = BUS_ADRERR_,
+            .fault.addr = cpu->segfault_addr,
+        };
+        deliver_signal(current, SIGBUS_, bus_info);
+        return;
+    }
+
     if (ptr == NULL) {
         printk("ERROR: %d(%s) [%s] page fault on %#llx at %#llx%s\n",
                current->pid, current->comm, guest_abi_desc(current->abi).name,

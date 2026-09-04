@@ -479,6 +479,15 @@ struct pt_entry {
     // costs one extra pass of a frame's life, which is what "clock" means.
     uint8_t accessed;
     uint8_t age;
+    // mlock(2). Also in the padding -- pt_entry is 56 bytes with the JIT's
+    // blocks[2] and 24 without, and these three still fit in what swap_state
+    // left spare, so locking costs no memory either.
+    //
+    // A separate byte rather than a bit in `flags`, and that is not arbitrary:
+    // mem_cow_group_member compares flags for EQUALITY, so a P_LOCKED bit would
+    // split copy-on-write groups at lock boundaries and change how pages are
+    // copied. Locking must not be observable in anything but eviction.
+    uint8_t locked;
 #if ENGINE_JIT
     struct list blocks[2];
 #endif
@@ -562,6 +571,26 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages);
 int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags);
 // Copy pages from src memory to dst memory using copy-on-write
 int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t pages);
+
+// mlock(2)/munlock(2): pin `pages` from `start` against eviction, or release
+// them. Returns the number of pages whose locked state actually CHANGED, or
+// _ENOMEM if any page of the range is unmapped -- in which case nothing is
+// changed at all, because mlock is all-or-nothing about the range existing.
+//
+// The caller charges RLIMIT_MEMLOCK BEFORE calling, by the whole request rather
+// than by this return value: a lock that had to be undone was never granted, so
+// the limit has to be decided first. That over-charges an overlapping re-lock,
+// which is the conservative direction and is what Linux does for a range it has
+// not yet examined.
+//
+// Must be called with no mem lock held; takes the READ lock itself, so it costs
+// a guest that never enables swap exactly what the old range check did.
+long pt_set_locked(struct mem *mem, page_t start, pages_t pages, bool locked);
+// Lock or unlock every mapped page, for mlockall(2)/munlockall(2). Returns the
+// number of pages now locked.
+long pt_set_locked_all(struct mem *mem, bool locked);
+// Pages currently pinned, for RLIMIT_MEMLOCK accounting and /proc.
+size_t mem_locked_page_count(struct mem *mem);
 
 // Is `data` reachable from exactly one address space, and is that `mem`?
 // Exact in both directions -- see struct data::owners. Takes the striped

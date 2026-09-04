@@ -720,6 +720,9 @@ static void mem_pt_del(struct mem *mem, page_t page) {
     atomic_store_explicit(&entry->swap_state, PT_RESIDENT, memory_order_relaxed);
     entry->accessed = 0;
     entry->age = 0;
+    // A leaf is reused, so a stale lock would silently pin some future
+    // mapping's page against eviction for ever, with no mlock to explain it.
+    entry->locked = 0;
     entry->data = NULL;
 }
 
@@ -874,6 +877,106 @@ size_t mem_mapped_page_count(struct mem *mem) {
 // mean anything more precise than that.
 size_t mem_resident_page_count(struct mem *mem) {
     return mem_page_count_walk(mem, true);
+}
+
+// ---- mlock(2) ------------------------------------------------------------
+//
+// Before the pager, locking was a range check and nothing else, and the comment
+// in kernel/mmap.c said why: "a lock is advisory against swap, which iOS
+// manages itself". That was true, and the moment AOK itself started moving
+// guest pages to storage it stopped being true -- mlock's entire purpose is
+// keeping something (a key, a passphrase, a decrypted secret) out of swap, and
+// a kernel that answers 0 and then writes the page to a file has told the
+// caller a lie about the one thing it asked for.
+//
+// So the lock is real now: swap_frame_eligible refuses a frame any of whose
+// entries is locked. It is still not a HOST pin -- AOK cannot stop iOS paging
+// its own memory, and never could -- which is a genuine limit and is documented
+// where a guest can read it. What it does guarantee is the thing mlock is for
+// here, that AOK will not be the one to write the page out.
+
+size_t mem_locked_page_count(struct mem *mem) {
+    if (mem == NULL)
+        return 0;
+    size_t count = 0;
+    mem_read_lock_quiesce_aware(mem);
+    for (page_t page = 0; page < mem->page_limit; ) {
+        struct pt_entry *pt = mem_pt(mem, page);
+        if (pt != NULL && pt->data != NULL && pt->locked)
+            count++;
+        page_t before = page;
+        mem_next_page(mem, &page);
+        if (page <= before)
+            break;
+    }
+    mem_read_unlock_quiesce_aware(mem);
+    return count;
+}
+
+long pt_set_locked(struct mem *mem, page_t start, pages_t pages, bool locked) {
+    if (mem == NULL)
+        return _EINVAL;
+    if (!mem_page_range_valid(mem, start, pages))
+        return _ENOMEM;
+    long changed = 0;
+    // The READ lock, not the barrier, and that is deliberate: mlock used to be
+    // a read-locked range check and must not get more expensive for a guest
+    // that never turns swap on.
+    //
+    // It is sufficient. The read lock is what stops the entries disappearing
+    // (pt_unmap needs the write lock), which is all the range check needs. The
+    // byte itself has exactly two readers: the evictor, which holds the
+    // address-space barrier and so cannot overlap a reader at all, and
+    // mem_locked_page_count, which is a lock-free count that is racy by nature.
+    // Two concurrent mlocks of the same page write the same value.
+    mem_read_lock_quiesce_aware(mem);
+    // Two passes. mlock is all-or-nothing about the range EXISTING -- Linux
+    // returns ENOMEM and locks nothing if any page of it is unmapped -- so the
+    // first pass only looks, and the second only acts once the answer is known.
+    for (pages_t i = 0; i < pages; i++) {
+        struct pt_entry *pt = mem_pt(mem, start + i);
+        if (pt == NULL || pt->data == NULL) {
+            mem_read_unlock_quiesce_aware(mem);
+            return _ENOMEM;
+        }
+    }
+    for (pages_t i = 0; i < pages; i++) {
+        struct pt_entry *pt = mem_pt(mem, start + i);
+        if (pt == NULL)
+            continue;
+        uint8_t want = locked ? 1 : 0;
+        if (pt->locked != want) {
+            pt->locked = want;
+            changed++;
+        }
+    }
+    mem_read_unlock_quiesce_aware(mem);
+    return changed;
+}
+
+long pt_set_locked_all(struct mem *mem, bool locked) {
+    if (mem == NULL)
+        return 0;
+    long now_locked = 0;
+    // Read lock, for the reason pt_set_locked gives. It also matters more here:
+    // this walks the WHOLE address space, and holding the barrier across that
+    // would stop every sibling thread of the process for the length of the
+    // walk.
+    mem_read_lock_quiesce_aware(mem);
+    for (page_t page = 0; page < mem->page_limit; ) {
+        struct pt_entry *pt = mem_pt(mem, page);
+        if (pt != NULL && pt->data != NULL) {
+            pt->locked = locked ? 1 : 0;
+            if (locked)
+                now_locked++;
+        }
+        page_t before = page;
+        mem_next_page(mem, &page);
+        if (page <= before)
+            break;
+    }
+    mem_read_unlock_quiesce_aware(mem);
+    return now_locked;
 }
 
 bool mem_page_is_swapped(const struct pt_entry *entry) {
@@ -1635,6 +1738,7 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         // sweep evict a page the guest has not touched once.
         pt->accessed = 1;
         pt->age = 0;
+        pt->locked = 0;
         pt->data = data;
         pt->offset = ((page - start) << PAGE_BITS) + offset;
         pt->flags = flags;
@@ -2817,8 +2921,17 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
     if (entry != NULL &&
             atomic_load_explicit(&entry->swap_state, memory_order_acquire) != PT_RESIDENT) {
         if (swap_fault_page_locked(mem, page) < 0) {
+            // The slot could not be read: the bytes of a page the guest mapped
+            // correctly are gone. Noted so handle_page_fault_interrupt delivers
+            // SIGBUS/BUS_ADRERR rather than SIGSEGV -- Linux's answer for a
+            // fault whose address is valid but whose contents could not be
+            // fetched, and a different branch entirely for a program with a
+            // SIGBUS handler. This comment used to claim the caller already did
+            // that; it did not, and every swap read error came out as a
+            // segmentation fault.
+            task_note_swap_io_fault();
             write_unlock(&mem->lock);
-            return NULL;    // caller turns this into a guest SIGBUS
+            return NULL;
         }
         entry = mem_pt(mem, page);
         if (entry == NULL) {
@@ -3173,6 +3286,13 @@ static bool swap_frame_eligible(struct mem *mem, page_t base, unsigned min_age,
                 pt->data->shared_key != 0 || pt->data->name != NULL)
             return false;
         if (!(pt->flags & P_ANONYMOUS) || (pt->flags & P_SHARED) || (pt->flags & P_COW))
+            return false;
+        // mlock(2). Refused per ENTRY rather than per frame, because one locked
+        // guest page has to keep its whole 16 KiB host frame resident -- the
+        // frame is what gets released, so releasing it would page out the
+        // locked page along with its neighbours. Section 8 records that
+        // granularity as the cost of the unit; here it is the caller's gain.
+        if (pt->locked)
             return false;
         if (i == 0) {
             data = pt->data;

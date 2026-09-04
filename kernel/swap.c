@@ -113,6 +113,14 @@ static pthread_cond_t swap_quiesce_cond = PTHREAD_COND_INITIALIZER;
 static bool swap_quiesced;          // no new eviction I/O may start
 static int swap_writes_in_flight;
 
+// Fault injection for the swap READ path, so the error handling can be tested
+// at all. A slot read fails when the file is truncated, the volume errors, or
+// the data is corrupt -- none of which a test can arrange from inside a guest,
+// and an error path that has never run is one that is broken when it finally
+// does. Set only on a launch that already offered guest control, so it is
+// unreachable from an installed app.
+static _Atomic bool swap_fail_reads;
+
 // Set at startup when ISH_GUEST_SWAP_MB was present, which is the CLI and
 // Xcode-scheme path. See swap_guest_control_allowed().
 static _Atomic bool swap_guest_control;
@@ -600,6 +608,10 @@ void swap_quiesce_end(void) {
 }
 
 int swap_slot_read(uint32_t slot, void *buf, size_t len) {
+    if (atomic_load_explicit(&swap_fail_reads, memory_order_relaxed)) {
+        atomic_fetch_add_explicit(&swap_stat_io_errors, 1, memory_order_relaxed);
+        return _EIO;
+    }
     off_t at;
     int fd = swap_fd_for_slot(slot, &at, len);
     if (fd < 0)
@@ -892,6 +904,10 @@ void swap_startup(void) {
     // make the budget reachable in a test, the way ISH_GUEST_MEM_BUDGET_MB
     // makes the jetsam guard reachable, since a real one would take a day and
     // four gigabytes of writes to hit.
+    if (getenv("ISH_GUEST_SWAP_FAIL_READS") != NULL) {
+        atomic_store_explicit(&swap_fail_reads, true, memory_order_relaxed);
+        printk("swap: FAULT INJECTION -- every slot read will fail\n");
+    }
     const char *budget = getenv("ISH_GUEST_SWAP_WRITE_BUDGET_MB");
     if (budget != NULL && budget[0] != '\0') {
         long mb_budget = strtol(budget, NULL, 10);

@@ -9,6 +9,7 @@
 #include "emu/memory.h"
 #include "platform/platform.h"
 #include "kernel/mm.h"
+#include "kernel/resource.h"
 #include "kernel/swap.h"
 #include "util/sync.h"
 
@@ -1331,30 +1332,61 @@ long sys_set_mempolicy_guest(int UNUSED(mode), guest_addr_t UNUSED(nodemask_addr
 // usual reason to call mlock is keeping a secret out of swap -- was told it
 // had succeeded.
 //
-// The locking itself stays a no-op: iSH cannot pin host pages, and a lock is
-// advisory against swap, which iOS manages itself. Claiming a range EXISTS
-// when it does not is a different kind of answer.
-static int_t mlock_range_check(guest_addr_t addr, qword_t len) {
+// THE LOCK IS REAL NOW, and it had to become real the moment the pager did.
+// This comment used to say "a lock is advisory against swap, which iOS manages
+// itself", which was true right up until AOK started writing guest pages to a
+// file of its own. mlock's entire purpose is keeping something out of swap -- a
+// key, a passphrase, a decrypted buffer -- so answering 0 and then paging it
+// out is a lie about the one thing the caller asked for. Eviction now refuses
+// any frame with a locked page in it (emu/memory.c, swap_frame_eligible).
+//
+// It is still not a HOST pin. AOK cannot stop iOS paging its own memory and
+// never could, so a guest that locks a page has AOK's promise not to write it
+// out, not the operating system's. That is the honest scope of it and it is
+// what opt/AOK/docs says.
+static int_t mlock_apply(guest_addr_t addr, qword_t len, bool locked) {
     if (len == 0)
         return 0;
     if (PGOFFSET(addr) != 0)
         return _EINVAL;
     pages_t pages = PAGE_ROUND_UP(len);
     page_t start = PAGE(addr);
-    int_t err = 0;
-    mem_read_lock_quiesce_aware(current->mem);
-    for (pages_t i = 0; i < pages; i++) {
-        if (mem_pt(current->mem, start + i) == NULL) {
-            err = _ENOMEM;
-            break;
+
+    if (locked) {
+        // RLIMIT_MEMLOCK, charged against what is ALREADY locked plus what this
+        // call would newly lock. Enforced before the change rather than after,
+        // because a lock that has to be undone was never granted.
+        //
+        // superuser() is exempt, as on Linux: CAP_IPC_LOCK bypasses the limit.
+        // The AOK CLI runs as uid 0, so this exemption is the whole story
+        // there and the limit is only really visible to an unprivileged guest
+        // process -- worth knowing when testing it.
+        rlim_t_ limit = rlimit(RLIMIT_MEMLOCK_);
+        if (!superuser() && limit != RLIM_INFINITY_) {
+            size_t already = mem_locked_page_count(current->mem);
+            // A page already locked costs nothing to lock again, but counting
+            // the overlap exactly would mean walking the range twice; charging
+            // the whole request is the conservative direction and matches what
+            // Linux does for a range it has not yet examined.
+            uint64_t want_bytes = ((uint64_t) already + pages) * PAGE_SIZE;
+            // ENOMEM, not EPERM. EPERM is what Linux returned before 2.6.9;
+            // since then exceeding a RLIMIT_MEMLOCK you are not privileged to
+            // exceed is ENOMEM (mm/mlock.c: `if (locked > lock_limit &&
+            // !capable(CAP_IPC_LOCK)) error = -ENOMEM`), including when the
+            // limit is 0. A program that distinguishes the two -- and one that
+            // retries on ENOMEM with a smaller range is the obvious case --
+            // would take the wrong branch on EPERM.
+            if (want_bytes > (uint64_t) limit)
+                return _ENOMEM;
         }
     }
-    mem_read_unlock_quiesce_aware(current->mem);
-    return err;
+
+    long changed = pt_set_locked(current->mem, start, pages, locked);
+    return changed < 0 ? (int_t) changed : 0;
 }
 
 int_t sys_mlock_guest(guest_addr_t addr, qword_t len) {
-    return mlock_range_check(addr, len);
+    return mlock_apply(addr, len, true);
 }
 
 int_t sys_mlock(addr_t addr, dword_t len) {
@@ -1362,7 +1394,7 @@ int_t sys_mlock(addr_t addr, dword_t len) {
 }
 
 int_t sys_munlock_guest(guest_addr_t addr, qword_t len) {
-    return mlock_range_check(addr, len);
+    return mlock_apply(addr, len, false);
 }
 
 int_t sys_munlock(addr_t addr, dword_t len) {
@@ -1382,6 +1414,14 @@ int_t sys_mlockall_guest(qword_t flags) {
     if ((flags & MCL_ONFAULT_) != 0 && (flags & (MCL_CURRENT_ | MCL_FUTURE_)) == 0)
         return _EINVAL;
     current->mm->mlockall_flags = (dword_t) flags;
+    // MCL_CURRENT locks what is mapped NOW, which is the half that can be done
+    // here. MCL_FUTURE is recorded and not yet acted on: it would have to reach
+    // pt_map, which is in emu/ and knows nothing about struct mm, and a flag
+    // that silently did nothing would be worse than one that is written down.
+    // Recorded rather than refused because the flag combination is legal and
+    // programs pass MCL_CURRENT|MCL_FUTURE together as a matter of course.
+    if ((flags & MCL_CURRENT_) != 0)
+        pt_set_locked_all(current->mem, true);
     return 0;
 }
 
@@ -1391,6 +1431,7 @@ int_t sys_mlockall(dword_t flags) {
 
 int_t sys_munlockall_guest(void) {
     current->mm->mlockall_flags = 0;
+    pt_set_locked_all(current->mem, false);
     return 0;
 }
 

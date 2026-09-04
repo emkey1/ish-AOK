@@ -131,6 +131,52 @@ and four gigabytes of writes to hit:
 ISH_GUEST_SWAP_MB=128 ISH_GUEST_SWAP_WRITE_BUDGET_MB=16 ./ish -f build/alpine /bin/sh
 ```
 
+## `mlock` and swap
+
+`mlock(2)`, `mlockall(2)` and their `mun*` counterparts are real once swap is
+on: iSH-AOK will not page out a locked page. Eviction refuses any 16 KiB host
+frame with a locked guest page in it, so one locked page keeps its three
+neighbours resident too.
+
+Before the pager existed these were a range check and nothing more, which was
+defensible then -- there was no swap for a lock to be advisory against. It is
+not defensible now, because keeping a secret out of swap is the whole reason
+the call exists.
+
+**The honest scope**: this is AOK's promise, not the operating system's. iOS
+manages its own memory and can page the app out regardless; iSH-AOK has no way
+to pin host pages and never has. So a locked page will not be written to the
+swap file, and that is all `mlock` can mean here.
+
+`RLIMIT_MEMLOCK` is enforced, and exceeding it returns `ENOMEM` as Linux has
+since 2.6.9. Note that the standalone CLI runs as **root**, which is exempt
+(Linux exempts `CAP_IPC_LOCK`), so testing the limit means dropping privilege
+first -- as root every `mlock` simply succeeds.
+
+`mlockall(MCL_FUTURE)` is accepted and recorded but not yet acted on: it would
+have to reach the page-table layer, which knows nothing about a process's
+flags. `MCL_CURRENT` locks everything already mapped, which is the half that
+works today.
+
+## `ISH_GUEST_SWAP_FAIL_READS`
+
+Makes every swap slot read fail, so the error path can be exercised. A real
+failure needs a truncated file, a failing volume or corrupt data -- none of
+which a test can arrange from inside a guest, and an error path that has never
+run is one that is broken when it finally does.
+
+With it set, touching an evicted page delivers **SIGBUS** with `si_code`
+`BUS_ADRERR`, which is Linux's answer for a fault whose address is valid but
+whose contents could not be fetched. Not SIGSEGV: the mapping is fine, and a
+program with a SIGBUS handler takes a different branch entirely.
+
+Read only on a launch that already set `ISH_GUEST_SWAP_MB`, so it is
+unreachable from an installed app.
+
+```sh
+ISH_GUEST_SWAP_MB=64 ISH_GUEST_SWAP_FAIL_READS=1 ./ish -f build/alpine /bin/sh
+```
+
 ## The suspension gate
 
 Not an environment variable, but the same file. Paging writes to a file, and
