@@ -182,6 +182,7 @@ orphan_pgrp_wait.c
 reparent_zombie_notify.c
 subreaper_not_inherited.c
 fork_tgroup_reset.c
+rusage_monotonic.c
 dirfd_position.c
 cross_process_state.c
 concurrent_dir_futex.c

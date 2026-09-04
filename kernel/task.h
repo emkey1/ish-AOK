@@ -320,6 +320,19 @@ struct task {
     // virtual-CPU slot -- and that contribution then vanishes once the child's
     // real thread starts, making the slot's counters go backward.
     _Atomic bool host_thread_started;
+    // Set once do_exit has rolled this thread's final usage into
+    // group->rusage. Written and read under group->lock, which is what makes
+    // the handover atomic for rusage_get_group_of: from there this thread is
+    // either still live-sampled and absent from group->rusage, or present in
+    // group->rusage and skipped -- never counted in both. It stays on
+    // group->threads for a good while after the roll-up (do_exit unlinks it in
+    // exit_tgroup, ~140 lines and a pids_lock acquisition later), and without
+    // this flag that whole window double-counted its CPU: measured as
+    // getrusage(RUSAGE_SELF) reporting a process total that later went DOWN by
+    // exactly one joined thread's worth. The io_dead half of the same handover
+    // is made atomic by moving the counters under pids_lock instead; CPU time
+    // cannot be moved, because it lives in the host thread.
+    bool exit_rusage_counted;
     // Set while this task sits in task_wait_for_mem_quiesce (no mem read lock
     // held), cleared before it can re-take one. Lets task_poke_shared_mem skip
     // the SIGUSR1 the same way it skips io_block tasks: a parked sibling holds

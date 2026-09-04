@@ -452,7 +452,38 @@ struct rusage_ rusage_get_group_of(struct tgroup *group) {
     struct rusage_ rusage = group->rusage;
     struct task *t;
     list_for_each_entry(&group->threads, t, group_links) {
-        struct rusage_ live = rusage_get_task(t);
+        // An exiting thread is on this list for a long stretch AFTER do_exit
+        // has already rolled its final usage into group->rusage above --
+        // adding a live sample on top counted the same CPU twice, and the
+        // inflated figure collapsed back as soon as exit_tgroup() unlinked it.
+        // getrusage(RUSAGE_SELF) and CLOCK_PROCESS_CPUTIME_ID therefore ran
+        // BACKWARDS across a pthread_join, by exactly the joined thread's own
+        // CPU time (measured: 2 violations in 200 join-then-fork cycles on the
+        // devuan-arm64 guest, each drop within 1% of the worker's 60ms). A
+        // guest computing a delta from two such reads gets a negative number.
+        if (t->exit_rusage_counted)
+            continue;
+        struct rusage_ live;
+        // The mirror image at the other end of a thread's life: a clone is
+        // linked into this list by copy_task() well before task_start() gives
+        // it a host thread, and until then task->thread still holds the
+        // CREATING thread's pthread (task_create_ copies the whole struct).
+        // Sampling it added the creator's entire accumulated CPU time a second
+        // time, then retracted it once the real thread started -- 141 backward
+        // steps in 300 pthread_create/join cycles, each the size of the
+        // creating thread's own balance. Same guard get_emulated_per_cpu_usage
+        // uses on the /proc/stat side; `current` is exempt because
+        // rusage_get_task reads the calling thread directly and never touches
+        // task->thread (which is how pid 1, whose host thread predates
+        // task_start, still reports its own CPU).
+        if (t == current || t->host_thread_started) {
+            live = rusage_get_task(t);
+        } else {
+            // No CPU of its own yet, but the non-CPU counters are readable
+            // and are what pid 1 contributes on the sampler-thread path.
+            memset(&live, 0, sizeof(live));
+            rusage_fill_task_counters(&live, t);
+        }
         rusage_add(&rusage, &live);
     }
     unlock(&group->lock);

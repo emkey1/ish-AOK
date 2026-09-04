@@ -444,9 +444,35 @@ noreturn void do_exit(struct task *task, int status) {
     while (exit_wait_needed(task)) { // Wait for now, task is in one or more critical sections, and/or has locks.
         exit_wait_backoff(&rusage_wait_pause);
     }
-    struct rusage_ rusage = rusage_get_current();
     lock(&task->group->lock, 0);
-    rusage_add(&task->group->rusage, &rusage);
+    // Snapshot, roll-up and flag all inside one group->lock section, because
+    // this thread stays on group->threads until exit_tgroup() far below and
+    // rusage_get_group_of() walks that list under the same lock. A reader is
+    // then on exactly one side of the handover: it live-samples this thread
+    // and finds nothing of it in group->rusage, or it finds the snapshot and
+    // skips the thread. Neither half may leak out of the section --
+    //
+    //   * without the flag, the reader did BOTH for the whole ~140 lines
+    //     until the unlink, so getrusage(RUSAGE_SELF) reported a process
+    //     total that later fell by exactly one joined thread's CPU;
+    //   * with the snapshot taken before the lock (as it was), a reader that
+    //     won the lock first sampled this thread at a LATER instant than the
+    //     snapshot froze, and the published figure was the smaller of the two
+    //     -- the same backwards step, narrowed to this function's own lock
+    //     wait, which measured up to 2ms.
+    //
+    // Cheap to hold the lock across: task->mm is already released above, so
+    // the maxrss sample inside rusage_get_current() has no page table to walk,
+    // and do_exit already owns task->general_lock, so it takes no new lock.
+    //
+    // Guarded, too, because do_exit can be re-entered for the same task (see
+    // was_already_exiting at the top); a second roll-up would leave this
+    // thread's CPU in the group total twice for good.
+    if (!task->exit_rusage_counted) {
+        struct rusage_ rusage = rusage_get_current();
+        rusage_add(&task->group->rusage, &rusage);
+        task->exit_rusage_counted = true;
+    }
     struct rusage_ group_rusage = task->group->rusage;
     unlock(&task->group->lock);
 
