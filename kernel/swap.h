@@ -5,6 +5,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Forward declaration at FILE scope. Without it the `struct mem *` in
+// swap_direct_reclaim's prototype declares a type scoped to that prototype, and
+// the definition in swap.c then has a conflicting one.
+struct mem;
+
 // ---------------------------------------------------------------------------
 // The simulated-swap backing store: the file, the slot table, and the switch.
 //
@@ -116,6 +121,26 @@ void swap_slot_free(uint32_t slot);
 int swap_slot_write(uint32_t slot, const void *buf, size_t len);
 int swap_slot_read(uint32_t slot, void *buf, size_t len);
 
+// ---- direct reclaim -------------------------------------------------------
+
+// Try to free `want_bytes` of host memory by evicting `mem`'s coldest frames.
+// Returns bytes released; 0 whenever swap is off, which is the default.
+//
+// MUST be called with NO mem lock held: it takes the address-space barrier
+// itself, and that barrier takes pt_alloc_lock, which is not recursive. At brk
+// that means hoisting the call ABOVE mem_write_lock_with_pokes rather than
+// putting it beside the guard it serves.
+//
+// Bounded by BYTES, not by time. The plan's original "about 20 ms of the
+// calling mem's oldest candidates" works out to roughly 2 MiB against a guard
+// that fires when the app is 192 MiB from its ceiling, so it could never
+// restore the headroom it was called to restore. It is also not the whole
+// deficit: at 100-200 MiB/s per process, reclaiming 192 MiB inside one mmap()
+// would stall the caller for one to two seconds. So it reclaims a bounded slice
+// and lets the allocation retry, which is the shape Linux's direct reclaim has
+// for the same reason.
+long swap_direct_reclaim(struct mem *mem, uint64_t want_bytes);
+
 // ---- counters -------------------------------------------------------------
 //
 // Every guest-visible swap number will come from here, and from nothing the
@@ -128,6 +153,7 @@ struct swap_stats {
     uint64_t slots_total, slots_free;
     uint64_t alloc_failures;   // evictions refused because the area was full
     uint64_t no_area;          // evictions refused because there was no area
+    uint64_t direct_reclaim_bytes;  // freed for allocations that would have failed
     uint64_t io_errors;
     uint64_t bytes_written;    // since enable, for the write-budget work
     bool enabled;

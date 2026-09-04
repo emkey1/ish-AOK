@@ -89,6 +89,22 @@ struct mem {
     page_t stack_top;
     _Atomic page_t stack_limit_pages;
 
+    // Where the last eviction sweep of this address space stopped, so the next
+    // bounded one carries on rather than restarting. A guest page number; it
+    // wraps to 0 at page_limit.
+    //
+    // Direct reclaim asks for a few MiB at a time, and without a cursor every
+    // call would sweep from page 0 and evict the same first frames of the same
+    // first mapping -- which the guest then faults straight back in, because
+    // those are the pages it is using. The cursor is what makes repeated
+    // bounded calls cover the address space.
+    //
+    // Read and written only under the address-space barrier, so it needs no
+    // atomicity of its own. MUST be cleared in mem_init: mm_copy does a
+    // whole-struct copy and then calls mem_init on the child, and this struct's
+    // rule is that every field inherited that way is accounted for.
+    page_t swap_hand;
+
     // Lazy anonymous reservations -- same idea as brk_reserve above (a plain
     // range, no page-table entries) but there can be several. See
     // struct mem_lazy_map's comment for the no-split invariant.
@@ -582,6 +598,10 @@ bool mem_host_page_mirroring_available(void);
 // errno. Takes the address-space barrier itself; must be called with no mem
 // lock held.
 long swap_evict_mem(struct mem *mem);
+// The same, but stopping once `want_bytes` have been released, and RESUMING
+// where the last sweep of this address space stopped rather than restarting at
+// page 0. Returns bytes released, or a negative errno.
+long swap_evict_bytes(struct mem *mem, uint64_t want_bytes);
 // The address-space barrier, from kernel/mmap.c (see its definition for why a
 // plain write_lock is not enough: it quiesces the other threads of this mem).
 void mem_write_lock_pokes_external(struct mem *mem);

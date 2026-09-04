@@ -9,6 +9,7 @@
 #include "emu/memory.h"
 #include "platform/platform.h"
 #include "kernel/mm.h"
+#include "kernel/swap.h"
 #include "util/sync.h"
 
 extern struct timespec lock_pause;
@@ -456,6 +457,16 @@ static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t pr
     // a runaway guest (e.g. a 10k-thread storm mapping a stack per thread)
     // must get clean ENOMEMs here rather than starving UIKit/libobjc into a
     // NULL-deref crash. No-op outside iOS. See host_mem_headroom_low().
+    // Before refusing, try to make room. Direct reclaim pages some of this
+    // process's cold anonymous memory out to the swap area the user asked for,
+    // which is the whole point of having one: without it the guard is the only
+    // answer and a large mostly-idle heap simply cannot exist.
+    //
+    // Here rather than beside the guard's own barrier, and before it, because
+    // reclaim takes the address-space barrier itself and pt_alloc_lock is not
+    // recursive. A no-op returning 0 when swap is off, which is the default.
+    if (host_mem_headroom_low())
+        swap_direct_reclaim(current->mem, len);
     if (host_mem_headroom_low()) {
         // This guard fires silently otherwise -- from the guest's point of
         // view every mmap() in the whole app just starts failing with a
@@ -769,9 +780,15 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
     // underflows to zero silently destroyed the mapping it meant to resize.
     if (new_pages == 0)
         return _EINVAL;
-    // Same jetsam-headroom backpressure as mmap_common_guest (grow only).
-    if (new_pages > old_pages && host_mem_headroom_low())
-        return _ENOMEM;
+    // Same jetsam-headroom backpressure as mmap_common_guest (grow only), with
+    // the same attempt to make room first. Before the barrier below, because
+    // reclaim takes it.
+    if (new_pages > old_pages && host_mem_headroom_low()) {
+        swap_direct_reclaim(current->mem,
+                (uint64_t) (new_pages - old_pages) << PAGE_BITS);
+        if (host_mem_headroom_low())
+            return _ENOMEM;
+    }
     guest_addr_t res = _ENOMEM;
 
     mem_write_lock_with_pokes(current->mem);
@@ -1511,6 +1528,20 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk) {
     STRACE("brk(%#llx)", (unsigned long long) new_brk);
     struct mm *mm = current->mm;
     bool expand_failed = false;
+
+    // HOISTED ABOVE THE BARRIER, unlike the guard it serves, and that placement
+    // is forced rather than chosen: swap_direct_reclaim takes
+    // mem_write_lock_with_pokes itself, and the pt_alloc_lock inside it is not
+    // recursive, so calling it from beside the guard below would deadlock
+    // against this very line.
+    //
+    // The cost of being early is that the brk may not actually grow -- the
+    // check below can still refuse, or new_brk may be a shrink. Reclaiming for
+    // a request that turns out not to need it is wasted I/O but never wrong,
+    // and it only happens at all when the app is already within its headroom
+    // floor of the jetsam limit. A no-op when swap is off, which is the default.
+    if (host_mem_headroom_low() && new_brk > mm->brk)
+        swap_direct_reclaim(&mm->mem, new_brk - mm->brk);
 
     mem_write_lock_with_pokes(&mm->mem);
     if (new_brk < mm->start_brk)

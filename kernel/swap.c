@@ -73,6 +73,10 @@ static _Atomic uint64_t swap_stat_alloc_fail;
 static _Atomic uint64_t swap_stat_no_area;
 static _Atomic uint64_t swap_stat_io_errors;
 static _Atomic uint64_t swap_stat_bytes_written;
+// Bytes released by direct reclaim, i.e. by a guest allocation that would
+// otherwise have been refused. Reported separately from total eviction because
+// it is the number that says whether the feature is doing its job.
+static _Atomic uint64_t swap_stat_direct_bytes;
 
 // Set at startup when ISH_GUEST_SWAP_MB was present, which is the CLI and
 // Xcode-scheme path. See swap_guest_control_allowed().
@@ -505,6 +509,34 @@ int swap_slot_read(uint32_t slot, void *buf, size_t len) {
 }
 
 // ---------------------------------------------------------------------------
+// Direct reclaim
+// ---------------------------------------------------------------------------
+
+// The slice one call will try for. Small enough that an mmap() does not stall
+// for a second (100-200 MiB/s per process, so 32 MiB is 160-320 ms at worst),
+// large enough to be worth the barrier it costs -- the barrier is scheduler
+// bound and also costs every sibling thread of the process about 109 us of its
+// own CPU, so reclaiming 64 KiB per acquisition would be nearly all overhead.
+#define SWAP_RECLAIM_MIN_BYTES (4ull * 1024 * 1024)
+#define SWAP_RECLAIM_MAX_BYTES (32ull * 1024 * 1024)
+
+long swap_direct_reclaim(struct mem *mem, uint64_t want_bytes) {
+    // Off is the default, and in it this is one relaxed atomic load on the
+    // guest's mmap path and nothing else.
+    if (!swap_enabled() || mem == NULL)
+        return 0;
+    if (want_bytes < SWAP_RECLAIM_MIN_BYTES)
+        want_bytes = SWAP_RECLAIM_MIN_BYTES;
+    if (want_bytes > SWAP_RECLAIM_MAX_BYTES)
+        want_bytes = SWAP_RECLAIM_MAX_BYTES;
+    long released = swap_evict_bytes(mem, want_bytes);
+    if (released > 0)
+        atomic_fetch_add_explicit(&swap_stat_direct_bytes, (uint64_t) released,
+                memory_order_relaxed);
+    return released > 0 ? released : 0;
+}
+
+// ---------------------------------------------------------------------------
 // Preferences
 // ---------------------------------------------------------------------------
 
@@ -591,6 +623,7 @@ void swap_get_stats(struct swap_stats *out) {
     unlock(&swap_lock);
     out->alloc_failures = atomic_load_explicit(&swap_stat_alloc_fail, memory_order_relaxed);
     out->no_area = atomic_load_explicit(&swap_stat_no_area, memory_order_relaxed);
+    out->direct_reclaim_bytes = atomic_load_explicit(&swap_stat_direct_bytes, memory_order_relaxed);
     out->io_errors = atomic_load_explicit(&swap_stat_io_errors, memory_order_relaxed);
     out->bytes_written = atomic_load_explicit(&swap_stat_bytes_written, memory_order_relaxed);
 }
@@ -609,6 +642,7 @@ size_t swap_status_text(char *buf, size_t size) {
         "total_bytes      %llu\n"
         "free_bytes       %llu\n"
         "bytes_written    %llu\n"
+        "direct_reclaim   %llu  (bytes freed for an allocation that would have failed)\n"
         "alloc_failures   %llu  (evictions refused, the area is full)\n"
         "no_area          %llu  (evictions refused, there is no area)\n"
         "io_errors        %llu\n",
@@ -620,6 +654,7 @@ size_t swap_status_text(char *buf, size_t size) {
         (unsigned long long) s.total_bytes,
         (unsigned long long) s.free_bytes,
         (unsigned long long) s.bytes_written,
+        (unsigned long long) s.direct_reclaim_bytes,
         (unsigned long long) s.alloc_failures,
         (unsigned long long) s.no_area,
         (unsigned long long) s.io_errors);

@@ -537,6 +537,11 @@ void mem_init(struct mem *mem) {
     // first.
     memset(mem->lazy, 0, sizeof(mem->lazy));
     mem->lazy_count = 0;
+    // Same mm_copy reason as mem->lazy: a child would otherwise start its first
+    // eviction sweep wherever the parent's had got to. Harmless, unlike the
+    // reservations above, but this struct's rule is that nothing is inherited
+    // by accident.
+    mem->swap_hand = 0;
     // Same reason as mem->lazy above: mm_copy copies the whole struct and then
     // calls this on the child, so an inherited pointer here would be a double
     // free of the parent's array and a double close of its descriptors.
@@ -3353,7 +3358,10 @@ void swap_prototype_ledger(unsigned long long *before, unsigned long long *after
     if (post) *post = swap_fp_post;
 }
 
-long swap_evict_mem(struct mem *mem) {
+// Evict from `mem` until `want_bytes` have been released, or the sweep has been
+// all the way round. `want_bytes` of 0 means "everything eligible", which is
+// what the /proc control asks for.
+static long swap_evict_common(struct mem *mem, uint64_t want_bytes) {
     if (mem == NULL)
         return _EINVAL;
     // The switch is consulted HERE and nowhere on the fault path. Turning swap
@@ -3380,17 +3388,46 @@ long swap_evict_mem(struct mem *mem) {
     // allocated leaves in bounded chunks under mem_read_lock_quiesce_aware --
     // so this stays a prototype's whole-address-space sweep, just not a
     // pathological one.
-    for (page_t page = 0; page + per <= mem->page_limit; ) {
+    // Start where the last sweep stopped, and stop when we get back there. A
+    // bounded caller asks for a few MiB at a time, and restarting at page 0
+    // every time would evict the same first frames of the same first mapping --
+    // exactly the pages the guest is using, which it then faults straight back
+    // in. The cursor is what turns repeated small calls into a sweep.
+    page_t start = mem->swap_hand;
+    if (start >= mem->page_limit)
+        start = 0;
+    page_t page = start;
+    bool wrapped = false;
+    while (!(wrapped && page >= start)) {
+        if (page + per > mem->page_limit) {
+            if (wrapped)
+                break;          // nothing left above; go round once
+            page = 0;
+            wrapped = true;
+            continue;
+        }
         struct data *data;
         size_t offset;
         if (swap_frame_eligible(mem, page, &data, &offset) &&
             swap_evict_frame(mem, page, data, offset)) {
             released += (long) swap_frame_size();
             page += per;
+            if (want_bytes != 0 && (uint64_t) released >= want_bytes)
+                break;
         } else {
+            page_t before = page;
             mem_next_page(mem, &page);
+            // mem_next_page stops advancing once there is nothing above; that
+            // is the end of this pass.
+            if (page <= before) {
+                if (wrapped)
+                    break;
+                page = 0;
+                wrapped = true;
+            }
         }
     }
+    mem->swap_hand = page >= mem->page_limit ? 0 : page;
     swap_fp_after = swap_footprint_now();
     // Trust the ledger, not the return codes. Both calls above can report
     // success and release nothing -- MADV_FREE_REUSABLE does exactly that on a
@@ -3410,6 +3447,14 @@ long swap_evict_mem(struct mem *mem) {
     // not a guest fault -- which is a different bug entirely.
     swap_fp_post = swap_footprint_now();
     return released;
+}
+
+long swap_evict_mem(struct mem *mem) {
+    return swap_evict_common(mem, 0);
+}
+
+long swap_evict_bytes(struct mem *mem, uint64_t want_bytes) {
+    return swap_evict_common(mem, want_bytes);
 }
 
 // Bring one evicted frame back, with the address-space WRITE lock already held.
