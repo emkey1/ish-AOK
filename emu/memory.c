@@ -2600,10 +2600,30 @@ int swap_fault_page(struct mem *mem, page_t page) {
         if (err == 0) {
             // Publish every page of the frame, not just the faulting one: they
             // were evicted together and their bytes are all back.
-            page_t base = page - (page % swap_pages_per_frame());
+            //
+            // The base is derived from the OFFSET INTO THE MAPPING, never from
+            // the guest page number. A frame is four guest pages of one struct
+            // data at consecutive data offsets, and where that lands in the
+            // guest address space is whatever the mapping's base happens to be
+            // -- so `page - (page % 4)` is only the right answer when the
+            // mapping starts on a multiple of four, which is a coincidence of
+            // the allocator and not a property of anything.
+            //
+            // It cost a deterministic SIGBUS on the amd64 root, whose region
+            // landed at guest page 0x7ffffcf59 (1 mod 4): swap-in published the
+            // four entries one short of the frame, leaving the real first page
+            // marked SWAPPED over host memory that was now readable and
+            // resident, and marking a page of the NEXT frame resident over
+            // memory still mprotect(PROT_NONE). arm64, i386 and riscv64 all
+            // passed only because their regions happened to land aligned.
+            page_t base = page - (pt->offset - offset) / PAGE_SIZE;
             for (size_t i = 0; i < swap_pages_per_frame(); i++) {
                 struct pt_entry *e = mem_pt(mem, base + i);
-                if (e != NULL && e->data == data)
+                // Same data AND the offset this frame slot actually expects:
+                // an mremap can move an entry out from under a frame, and
+                // publishing that entry would call bytes resident that this
+                // pread never wrote.
+                if (e != NULL && e->data == data && e->offset == offset + i * PAGE_SIZE)
                     atomic_store_explicit(&e->swap_state, PT_RESIDENT, memory_order_release);
             }
             swap_stat_faulted++;
