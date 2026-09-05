@@ -9,6 +9,11 @@
 #include <sys/stat.h>
 
 #include "kernel/swap.h"
+#include "fs/devices.h"
+#include "fs/dev.h"
+#include "kernel/fs.h"
+#include "fs/path.h"
+#include "kernel/calls.h"
 #include "kernel/errno.h"
 #include "kernel/task.h"
 #include "kernel/mm.h"
@@ -613,6 +618,71 @@ void swap_quiesce_end(void) {
     pthread_mutex_unlock(&swap_quiesce_lock);
 }
 
+// ---- swapon(2) / swapoff(2) ----------------------------------------------
+//
+// These were syscall_stub, i.e. ENOSYS, and that is the lie /proc/swaps was
+// just fixed to stop telling: ENOSYS says this kernel has no swap support at
+// all, while /proc/meminfo reports a SwapTotal and /proc/swaps lists an area.
+// A guest cannot reconcile those, and no Linux produces them together.
+//
+// What they may DO is narrower than Linux, and deliberately. AOK's swap area is
+// the user's decision, made in the app's Settings, and creating one spends
+// their flash and their 24h write budget. So the guest gets the same gate
+// /proc/ish/swap already uses -- swap_guest_control_allowed(), true only for a
+// CLI or Xcode launch -- and EPERM otherwise.
+//
+// EPERM is honest where ENOSYS was not. It says "you may not do this here",
+// which is true and is exactly what Linux returns to a caller without
+// CAP_SYS_ADMIN; it does not claim the feature is absent.
+static bool swap_path_is_ours(guest_addr_t path_addr) {
+    char path[MAX_PATH];
+    if (user_read_path(path_addr, path, sizeof(path)) != 0)
+        return false;
+    struct statbuf stat;
+    if (generic_statat(AT_PWD, path, &stat, true) < 0)
+        return false;
+    // By device number, not by name: a guest may reach the node through any
+    // path, a bind mount or a symlink, exactly as Linux resolves it.
+    return S_ISBLK(stat.mode) &&
+           stat.rdev == dev_make(AOKSWAP_MAJOR, DEV_AOKSWAP_MINOR);
+}
+
+dword_t sys_swapon(guest_addr_t path_addr, dword_t UNUSED(flags)) {
+    STRACE("swapon(0x%x)", path_addr);
+    if (!current_capable(CAP_SYS_ADMIN_))
+        return _EPERM;
+    // Resolve BEFORE the permission gate below, so a bad path is EINVAL for
+    // everyone rather than EPERM for some -- Linux checks the area first too,
+    // and it keeps the error from leaking whether guest control is on.
+    if (!swap_path_is_ours(path_addr))
+        return _EINVAL;             // not a swap area we know about
+    if (!swap_guest_control_allowed())
+        return _EPERM;
+    if (swap_enabled())
+        return _EBUSY;              // already swapping on it, as Linux says
+    unsigned mb = atomic_load_explicit(&swap_pref_size_mb, memory_order_relaxed);
+    if (mb == 0)
+        return _EINVAL;             // no size has ever been chosen for the area
+    // BYTES, not MB. swap_enable's argument is a byte count -- passing the
+    // megabyte figure asked for a 256-byte area and got EINVAL back, which
+    // read exactly like "swapon is not implemented".
+    return swap_enable((uint64_t) mb * 1024 * 1024) == 0 ? 0 : _EINVAL;
+}
+
+dword_t sys_swapoff(guest_addr_t path_addr) {
+    STRACE("swapoff(0x%x)", path_addr);
+    if (!current_capable(CAP_SYS_ADMIN_))
+        return _EPERM;
+    if (!swap_path_is_ours(path_addr))
+        return _EINVAL;
+    if (!swap_guest_control_allowed())
+        return _EPERM;
+    if (!swap_enabled())
+        return _EINVAL;             // not currently a swap area, as Linux says
+    swap_disable();
+    return 0;
+}
+
 // ---- /dev/aokswap0 -------------------------------------------------------
 //
 // The block device's view of the area. Everything here answers from the SAME
@@ -1080,6 +1150,12 @@ void swap_startup(void) {
         }
     }
     long want = strtol(mb, NULL, 10);
+    // Record it as the preference as well. swapon(2) restores the area at the
+    // size that was chosen for it, and on this branch the env knob IS that
+    // choice -- without this, swapoff then swapon on the CLI could not come
+    // back, which is the only place the pair can be exercised at all.
+    if (want > 0)
+        atomic_store_explicit(&swap_pref_size_mb, (unsigned) want, memory_order_relaxed);
     if (want <= 0)
         return;
     int err = swap_enable((uint64_t) want * 1024 * 1024);

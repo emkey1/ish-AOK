@@ -13,6 +13,7 @@
 #include "fs/devices.h"
 #include "fs/tty.h"
 #include "util/sync.h"
+#include "kernel/swap.h"
 
 extern bool isGlibC;
 
@@ -984,6 +985,7 @@ static syscall_t i386_syscall_table[] = {
     [81]  = (syscall_t) sys_setgroups,
     [83]  = (syscall_t) sys_symlink,
     [85]  = (syscall_t) sys_readlink,
+    [87]  = (syscall_t) sys_swapon,
     [88]  = (syscall_t) sys_reboot,
     [90]  = (syscall_t) sys_mmap,
     [91]  = (syscall_t) sys_munmap,
@@ -1003,6 +1005,7 @@ static syscall_t i386_syscall_table[] = {
     [108] = (syscall_t) sys_fstat,
     [111] = (syscall_t) syscall_success_stub, // vhangup (tty-cleanup no-op)
     [114] = (syscall_t) sys_wait4,
+    [115] = (syscall_t) sys_swapoff,
     [116] = (syscall_t) sys_sysinfo,
     [117] = (syscall_t) sys_ipc,
     [118] = (syscall_t) sys_fsync,
@@ -1538,6 +1541,8 @@ static syscall_t amd64_syscall_table[470] = {
     [164] = (syscall_t) sys_settimeofday,
     [165] = (syscall_t) sys_mount,
     [166] = (syscall_t) sys_umount2,
+    [167] = (syscall_t) sys_swapon,
+    [168] = (syscall_t) sys_swapoff,
     [169] = (syscall_t) sys_reboot,
     [170] = (syscall_t) sys_sethostname,
     [171] = (syscall_t) sys_setdomainname,
@@ -1967,8 +1972,10 @@ static syscall_t arm64_syscall_table[470] = {
     [217] = (syscall_t) syscall_stub_silent, // add_key
     [218] = (syscall_t) syscall_stub, // request_key
     [219] = (syscall_t) sys_keyctl, // keyctl -- matches i386 (288)/amd64 (250)
-    [224] = (syscall_t) syscall_stub, // swapon
-    [225] = (syscall_t) syscall_stub, // swapoff
+    // 224/225 (swapon/swapoff) are dispatched natively above with full-width
+    // args; entries kept so the NULL check passes, as munlock does.
+    [224] = (syscall_t) sys_swapon,
+    [225] = (syscall_t) sys_swapoff,
     [234] = (syscall_t) syscall_stub, // remap_file_pages
     [236] = (syscall_t) syscall_stub_silent, // get_mempolicy
     [237] = (syscall_t) syscall_stub_silent, // set_mempolicy
@@ -2664,6 +2671,12 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
         result = sys_clone_guest(raw_args[0], raw_args[1], raw_args[2], raw_args[3], raw_args[4]);
         break;
     case 221: result = (dword_t) sys_execve_guest(raw_args[0], raw_args[1], raw_args[2]); break;
+    // swapon/swapoff take a PATH, so they must be handled here with full-width
+    // args and not left to the legacy-marshalled table: a 64-bit guest pointer
+    // does not survive the dword marshal, which refuses it and delivers SIGSYS
+    // ("Bad system call"), measured.
+    case 224: result = (dword_t) sys_swapon(raw_args[0], (dword_t) raw_args[1]); break;
+    case 225: result = (dword_t) sys_swapoff(raw_args[0]); break;
     case 226: result = (dword_t) sys_mprotect_guest(raw_args[0], raw_args[1], (int_t) raw_args[2]); break;
     case 233: result = sys_madvise_guest(raw_args[0], raw_args[1], (dword_t) raw_args[2]); break;
     case 260: result = sys_wait4_guest((pid_t_) raw_args[0], raw_args[1], (dword_t) raw_args[2], raw_args[3]); break;
@@ -2842,8 +2855,12 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 128:
     case 180: case 181: case 182: case 183: case 184: case 185:
     // (186-193 are the real SysV msg/sem implementations above)
-    case 217: case 218: case 224:
-    case 225: case 234: case 238: case 239: case 241: case 262:
+    // 224/225 (swapon/swapoff) are gone from this list and implemented in
+    // arm64_syscall_table -- and the comment above is why that alone was not
+    // enough: this native list runs first and answered for them, so the table
+    // entry looked wired and did nothing.
+    case 217: case 218:
+    case 234: case 238: case 239: case 241: case 262:
     case 263: case 268: case 271: case 273:
     case 274: case 275: case 280: case 282: case 284:
     case 288: case 289: case 290: case 294:
@@ -2888,6 +2905,19 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
 static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t syscall_num,
         const qword_t raw_args[6]) {
     switch (syscall_num) {
+    // swapon/swapoff take a PATH. Like case 2 below they must be handled here
+    // with full-width args: through the legacy-marshalled table an amd64
+    // guest's 64-bit pointer is refused and the guest gets SIGSYS ("Bad system
+    // call"), measured -- while i386, whose pointers fit in a dword, worked
+    // from the table alone. Same reason arm64/riscv64 handle them in the
+    // asm-generic switch.
+    case 167:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_swapon(
+                raw_args[0], (dword_t) raw_args[1]));
+        return true;
+    case 168:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_swapoff(raw_args[0]));
+        return true;
     case 2:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_open_guest(
                 raw_args[0], (dword_t) raw_args[1], (mode_t_) raw_args[2]));

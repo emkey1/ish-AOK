@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "misc.h"
 
 // Forward declaration at FILE scope. Without it the `struct mem *` in
 // swap_direct_reclaim's prototype declares a type scoped to that prototype, and
@@ -140,6 +141,13 @@ int swap_slot_read(uint32_t slot, void *buf, size_t len);
 // and lets the allocation retry, which is the shape Linux's direct reclaim has
 // for the same reason.
 long swap_direct_reclaim(struct mem *mem, uint64_t want_bytes);
+
+// swapon(2)/swapoff(2). Narrower than Linux by design: the area is the user's
+// Settings decision, so the guest gets the same gate /proc/ish/swap uses and
+// EPERM otherwise. EPERM is honest where the previous ENOSYS was not -- ENOSYS
+// claims the kernel has no swap while meminfo reports a SwapTotal.
+dword_t sys_swapon(guest_addr_t path_addr, dword_t flags);
+dword_t sys_swapoff(guest_addr_t path_addr);
 
 // ---- /dev/aokswap0, the area as a block device ---------------------------
 // Size in bytes, 0 when there is no area. Same figure as swap_stats.total_bytes
