@@ -141,6 +141,16 @@ int swap_slot_read(uint32_t slot, void *buf, size_t len);
 // for the same reason.
 long swap_direct_reclaim(struct mem *mem, uint64_t want_bytes);
 
+// ---- /dev/aokswap0, the area as a block device ---------------------------
+// Size in bytes, 0 when there is no area. Same figure as swap_stats.total_bytes
+// and therefore as /proc/meminfo's SwapTotal, on purpose.
+uint64_t swap_area_bytes(void);
+// Raw access to the area. A read past the end (or with no area at all) returns
+// 0 = EOF, which is what an unbound Linux block device does. Negative returns
+// are kernel/errno.h codes.
+ssize_t swap_area_pread(void *buf, size_t len, off_t off);
+ssize_t swap_area_pwrite(const void *buf, size_t len, off_t off);
+
 // ---- background reclaim ---------------------------------------------------
 //
 // kswapd sheds cold memory BEFORE an allocation is about to fail, which is the

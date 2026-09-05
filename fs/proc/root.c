@@ -690,22 +690,58 @@ static int proc_show_modules(struct proc_entry *UNUSED(entry), struct proc_data 
 // with no swap configured. swapon --show reads it; free(1) does not, taking its
 // Swap row from /proc/meminfo.
 //
-// KNOWN GAP, recorded rather than papered over: with the pager enabled this is
-// now INCOMPLETE rather than correct. /proc/meminfo reports a real SwapTotal
-// and free(1) shows it, while swapon --show still shows nothing, and on Linux
-// those two agree by construction -- meminfo's SwapTotal is the sum of the
-// areas listed here.
+// /proc/swaps. On Linux this and /proc/meminfo's SwapTotal agree BY
+// CONSTRUCTION -- si_swapinfo() and swap_show() walk the same swap_info[]
+// array, so SwapTotal > 0 with no rows here is a state the kernel cannot
+// produce. It was AOK's state until /dev/aokswap0 existed to be named.
 //
-// The row is not added yet because Linux never prints a /proc/swaps path that
-// does not resolve, and the one section 3.12 specifies -- /dev/aokswap0 --
-// does not exist: dev_node_spec has no device type and all three creation
-// sites (fs/tmp.c, fs/mount.c twice) hardcode S_IFCHR, so a block node means
-// changing the device-node contract. That belongs with phase 2's swapon and
-// swapoff syscalls, which are what would give the node something to name.
-// Printing a row for a path a consumer cannot stat would trade a missing fact
-// for a false one.
+// The format is swap_show()'s, reproduced exactly (captured with `cat -A` from
+// Ubuntu 24.04, kernel 6.8, aarch64):
+//
+//   path, then (40 - len) spaces if len < 40, else exactly ONE space
+//   "partition" or "file\t"   -- partition iff the backing file is a block dev
+//   "\t", size in KiB, "\t", and a SECOND "\t" only when size < 10000000
+//   used in KiB, "\t", and a second "\t" only when used < 10000000
+//   priority, "\n"
+//
+// Those two conditional tabs are real and they matter here: the area can be up
+// to 16 GiB, and above 10000000 KiB (~9.54 GiB) Linux drops them.
+//
+// Size is K(si->pages) -- the area MINUS its one-page header. AOK matches that
+// already without doing anything: swap_area_bytes() excludes the reserved
+// slot 0, so this row, SwapTotal and the block device's capacity are all the
+// same number and cannot drift.
+//
+// Priority -2 because Linux's first auto-priority area gets -2 (`p->prio =
+// --least_priority` from an initial -1), verified with two areas: -2 then -3.
+//
+// NOT gated on "swap is enabled". The row follows the AREA, because
+// swap_disable_locked deliberately keeps the area alive while slots are still
+// out -- so gating on `enabled` would make the row vanish while swap was still
+// answering faults, which is precisely the contradiction this file exists to
+// stop telling.
 static int proc_show_swaps(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     proc_printf(buf, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");
+    struct swap_stats st;
+    swap_get_stats(&st);
+    if (st.total_bytes == 0)
+        return 0;               // no area: no rows, and SwapTotal is 0 too
+    static const char path[] = "/dev/aokswap0";
+    unsigned long long size_kb = st.total_bytes / 1024;
+    unsigned long long used_kb = (st.total_bytes - st.free_bytes) / 1024;
+    size_t len = sizeof(path) - 1;
+    proc_printf(buf, "%s", path);
+    if (len < 40)
+        for (size_t i = len; i < 40; i++)
+            proc_printf(buf, " ");
+    else
+        proc_printf(buf, " ");
+    // "partition", not "file": Linux prints that iff the swap file's inode is a
+    // block device, and ours is one.
+    proc_printf(buf, "partition\t%llu%s\t%llu%s\t%d\n",
+                size_kb, size_kb < 10000000ULL ? "\t" : "",
+                used_kb, used_kb < 10000000ULL ? "\t" : "",
+                -2);
     return 0;
 }
 
@@ -731,6 +767,7 @@ static const char *proc_dev_major_name(int major) {
         case TTY_PSEUDO_SLAVE_MAJOR: return "pts";
         case DYN_DEV_MAJOR: return "ish";
         case DEV_RTC_MAJOR: return "rtc";
+        case AOKSWAP_MAJOR: return "aokswap";
         default: return "unknown";
     }
 }
@@ -740,6 +777,12 @@ static int proc_show_devices(struct proc_entry *UNUSED(entry), struct proc_data 
     bool seen[256] = {};
     for (size_t i = 0; i < dev_standard_nodes_count; i++) {
         int major = dev_standard_nodes[i].major;
+        // Block entries belong under the other header, further down. Printing
+        // them here would have /proc/devices claim major 241 is a character
+        // device -- a lie manufactured by the very change that exists to remove
+        // one, and one that MAKEDEV/udev-style tooling reads.
+        if (dev_standard_nodes[i].is_block)
+            continue;
         if (major < 0 || major > 255 || seen[major])
             continue;
         seen[major] = true;
@@ -755,6 +798,16 @@ static int proc_show_devices(struct proc_entry *UNUSED(entry), struct proc_data 
             proc_printf(buf, "%3d %s\n", extra[i], proc_dev_major_name(extra[i]));
         }
     proc_printf(buf, "\nBlock devices:\n");
+    bool seen_block[256] = {};
+    for (size_t i = 0; i < dev_standard_nodes_count; i++) {
+        if (!dev_standard_nodes[i].is_block)
+            continue;
+        int major = dev_standard_nodes[i].major;
+        if (major < 0 || major > 255 || seen_block[major])
+            continue;
+        seen_block[major] = true;
+        proc_printf(buf, "%3d %s\n", major, proc_dev_major_name(major));
+    }
     return 0;
 }
 

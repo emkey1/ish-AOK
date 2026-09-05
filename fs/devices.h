@@ -44,6 +44,16 @@
 #define DYN_DEV_MAJOR 240
 // /dev/rtc
 #define DEV_RTC_MAJOR 252
+
+// The simulated swap area, as a BLOCK device. Block and char majors live in
+// separate 256-entry tables (fs/dev.c), so 241 colliding with a char major
+// would be harmless to dispatch -- but /proc/devices prints both sections to
+// one reader, so this is chosen unused in both. 241 is inside Linux's
+// devices.txt 240-254 "local/experimental" range, which is what this is: AOK's
+// swap area is not a Linux device and 241 is a local number, not a claim on an
+// upstream one.
+#define AOKSWAP_MAJOR 241
+#define DEV_AOKSWAP_MINOR 0
 #define DEV_RTC_MINOR 2
 
 

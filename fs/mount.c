@@ -491,9 +491,15 @@ static bool devtmpfs_target_is_populated(const char *point) {
         if (snprintf(path, sizeof(path), "%s/%s", point, dev_standard_nodes[i].name) >= (int) sizeof(path))
             continue;
         struct statbuf stat;
-        // Deliberately S_ISCHR and not mere existence: the regular file a
+        // Deliberately a TYPE test and not mere existence: the regular file a
         // tarball leaves at /dev/null is exactly what this must not accept.
-        if (generic_statat(AT_PWD, path, &stat, false) == 0 && S_ISCHR(stat.mode))
+        // Compared against the entry's own type rather than S_ISCHR, now that
+        // the table can describe a block device -- otherwise a match on
+        // /dev/aokswap0 would be ignored (harmless today, since a char entry
+        // precedes it, and wrong the moment the table is reordered).
+        mode_t_ want = dev_standard_nodes[i].is_block ? S_IFBLK : S_IFCHR;
+        if (generic_statat(AT_PWD, path, &stat, false) == 0 &&
+            (stat.mode & S_IFMT) == want)
             return true;
     }
     return false;
@@ -509,15 +515,17 @@ static void devtmpfs_repair_nodes(const char *point) {
         if (snprintf(path, sizeof(path), "%s/%s", point, dev_standard_nodes[i].name) >= (int) sizeof(path))
             continue;
         dev_t_ dev = dev_make(dev_standard_nodes[i].major, dev_standard_nodes[i].minor);
+        // The entry's own type, since the table can describe a block device.
+        mode_t_ fmt = dev_standard_nodes[i].is_block ? S_IFBLK : S_IFCHR;
         struct statbuf stat;
         int err = generic_statat(AT_PWD, path, &stat, false);
-        if (err == 0 && S_ISCHR(stat.mode) && stat.rdev == dev)
+        if (err == 0 && (stat.mode & S_IFMT) == fmt && stat.rdev == dev)
             continue;
-        if (err == 0 && !S_ISCHR(stat.mode))
+        if (err == 0 && (stat.mode & S_IFMT) != fmt)
             generic_unlinkat(AT_PWD, path); // the regular-file stand-in case
         else if (err == 0)
-            continue; // a char device with some other rdev: leave it alone
-        generic_mknodat(AT_PWD, path, S_IFCHR | dev_standard_nodes[i].mode, dev);
+            continue; // right type, some other rdev: leave it alone
+        generic_mknodat(AT_PWD, path, fmt | dev_standard_nodes[i].mode, dev);
     }
 }
 

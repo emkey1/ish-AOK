@@ -186,15 +186,24 @@ static void ignore_eexist(int err) {
 // then just accumulates real bytes on the fakefs backing store forever
 // instead of discarding them. Repair the standard set here at every boot so
 // it doesn't matter what the source tarball shipped.
-static void ensure_dev_node_mode(const char *path, int major, int minor, mode_t_ mode) {
+// `fmt` is S_IFCHR or S_IFBLK. It is a parameter rather than a constant because
+// /dev/aokswap0 is a block device, and a node of the wrong TYPE is exactly what
+// this function exists to repair -- comparing against S_ISCHR unconditionally
+// would have it recreate the block node on every boot, forever.
+static void ensure_dev_node_typed(const char *path, int major, int minor, mode_t_ mode,
+                                  mode_t_ fmt) {
     dev_t_ dev = dev_make(major, minor);
     struct statbuf stat;
     int err = generic_statat(AT_PWD, path, &stat, false);
-    if (err == 0 && S_ISCHR(stat.mode) && stat.rdev == dev)
+    if (err == 0 && (stat.mode & S_IFMT) == fmt && stat.rdev == dev)
         return;
     if (err == 0)
         generic_unlinkat(AT_PWD, path);
-    ignore_eexist(generic_mknodat(AT_PWD, path, S_IFCHR | mode, dev));
+    ignore_eexist(generic_mknodat(AT_PWD, path, fmt | mode, dev));
+}
+
+static void ensure_dev_node_mode(const char *path, int major, int minor, mode_t_ mode) {
+    ensure_dev_node_typed(path, major, minor, mode, S_IFCHR);
 }
 
 static void ensure_dev_node(const char *path, int major, int minor) {
@@ -211,6 +220,13 @@ static void setup_host_mounts(void) {
     ensure_dev_node("/dev/tty", TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR);
     ensure_dev_node("/dev/ptmx", TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR);
     ensure_dev_node("/dev/fuse", MISC_MAJOR, DEV_FUSE_MINOR);
+    // The swap area as a block device, so /proc/swaps has a real path to name.
+    // brw-rw---- like a Linux swap device, and present whether or not swap is
+    // enabled -- an unbound block node is an ordinary Linux state, and creating
+    // it from the enable path is not an option (generic_mknodat needs a valid
+    // `current` and takes filesystem locks, and swap_enable is reached from the
+    // app's preference path where `current` is not the caller you expect).
+    ensure_dev_node_typed("/dev/aokswap0", AOKSWAP_MAJOR, DEV_AOKSWAP_MINOR, 0660, S_IFBLK);
     // The kernel log, which the driver has always implemented (fs/mem.c) and
     // no root has ever had a node for: every syslog daemon starts by opening
     // it, and busybox's klogd and rsyslog's imklog both want /dev/kmsg.

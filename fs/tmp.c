@@ -322,6 +322,9 @@ static bool tmpfs_is_devtmpfs_mount(struct mount *mount) {
 
 // Device nodes are root-owned on a real devtmpfs no matter who mounted it,
 // while tmp_inode_new() inherits the caller's ids -- stamp them explicitly.
+// `mode` carries its own S_IFMT now: the caller says S_IFCHR or S_IFBLK rather
+// than this hardcoding S_IFCHR, because dev_node_spec can describe a block
+// device since /dev/aokswap0.
 static int tmpfs_add_dev_node(struct tmp_dirent *dir, const char *name, mode_t_ mode, dev_t_ dev) {
     int err = tmpfs_dir_lookup_existence(dir, name);
     if (err == _EEXIST)
@@ -329,7 +332,7 @@ static int tmpfs_add_dev_node(struct tmp_dirent *dir, const char *name, mode_t_ 
     if (err < 0)
         return err;
 
-    struct tmp_inode *inode = tmp_inode_new(S_IFCHR | mode);
+    struct tmp_inode *inode = tmp_inode_new((mode & S_IFMT) != 0 ? mode : (S_IFCHR | mode));
     if (inode == NULL)
         return _ENOMEM;
     inode->stat.rdev = dev;
@@ -390,7 +393,8 @@ static int tmpfs_add_dev_symlink(struct tmp_dirent *dir, const char *name, const
 
 static int tmpfs_populate_devtmpfs_root(struct tmp_dirent *dir) {
     for (size_t i = 0; i < dev_standard_nodes_count; i++) {
-        int err = tmpfs_add_dev_node(dir, dev_standard_nodes[i].name, dev_standard_nodes[i].mode,
+        int err = tmpfs_add_dev_node(dir, dev_standard_nodes[i].name,
+                (dev_standard_nodes[i].is_block ? S_IFBLK : S_IFCHR) | dev_standard_nodes[i].mode,
                 dev_make(dev_standard_nodes[i].major, dev_standard_nodes[i].minor));
         if (err < 0)
             return err;
@@ -398,7 +402,8 @@ static int tmpfs_populate_devtmpfs_root(struct tmp_dirent *dir) {
     for (size_t i = 0; i < dev_dynamic_nodes_count; i++) {
         if (!dyn_dev_is_registered(dev_dynamic_nodes[i].major, dev_dynamic_nodes[i].minor))
             continue;
-        int err = tmpfs_add_dev_node(dir, dev_dynamic_nodes[i].name, dev_dynamic_nodes[i].mode,
+        int err = tmpfs_add_dev_node(dir, dev_dynamic_nodes[i].name,
+                (dev_dynamic_nodes[i].is_block ? S_IFBLK : S_IFCHR) | dev_dynamic_nodes[i].mode,
                 dev_make(dev_dynamic_nodes[i].major, dev_dynamic_nodes[i].minor));
         if (err < 0)
             return err;

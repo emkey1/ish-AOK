@@ -613,6 +613,131 @@ void swap_quiesce_end(void) {
     pthread_mutex_unlock(&swap_quiesce_lock);
 }
 
+// ---- /dev/aokswap0 -------------------------------------------------------
+//
+// The block device's view of the area. Everything here answers from the SAME
+// numbers /proc/meminfo and /proc/ish/swap answer from, so the node's size,
+// SwapTotal and the /proc/swaps row cannot disagree -- a device whose capacity
+// contradicted SwapTotal would be a state Linux cannot produce.
+//
+// The descriptor is DUPPED under the lock rather than borrowed. swap_slot_read
+// and swap_slot_write may borrow it because holding a slot is what keeps the
+// file open (see swap_fd_for_slot), and a block-device reader holds no slot --
+// so without the dup, swap_disable could close the file underneath a pread and
+// the fd number could be reused by anything. The dup costs one syscall on a
+// path nothing hot uses.
+uint64_t swap_area_bytes(void) {
+    lock(&swap_lock, 0);
+    uint64_t slots = swap_slot_count > 0 ? swap_slot_count - 1 : 0;
+    uint64_t bytes = slots * (uint64_t) swap_slot_size;
+    unlock(&swap_lock);
+    return bytes;
+}
+
+// Borrow the area's fd safely, or -1. Caller closes.
+static int swap_area_fd_dup(uint64_t *size_out) {
+    lock(&swap_lock, 0);
+    int fd = swap_fd >= 0 ? dup(swap_fd) : -1;
+    uint64_t slots = swap_slot_count > 0 ? swap_slot_count - 1 : 0;
+    uint64_t bytes = slots * (uint64_t) swap_slot_size;
+    unlock(&swap_lock);
+    if (size_out != NULL)
+        *size_out = bytes;
+    return fd;
+}
+
+// Reads past the end return 0 -- EOF, not an error -- which is what a Linux
+// block device does, and what an UNBOUND one (an idle /dev/loopN, verified)
+// does for every read. That is exactly the state /dev/aokswap0 is in when the
+// user has swap turned off, so "swap off" needs no special case here.
+// Linux's swap header, in page 0, synthesised rather than stored.
+//
+// A swap device that carries no signature is one every tool refuses: `swapon
+// --show` prints "not a valid swap partition", and blkid and lsblk cannot say
+// what it is. Since /proc/swaps now calls this a partition, it has to look like
+// one, or the surface has traded a missing fact for a false one again.
+//
+// Nothing is written to the file for this. AOK's slot 0 is already reserved and
+// never allocated ("Slot 0 is not usable area and is not counted"), which is
+// exactly the space Linux puts its header in, so the two layouts already agree
+// and the header can simply be generated on read.
+//
+// Layout (include/linux/swap.h, union swap_header): 1024 bytes of bootbits,
+// then version=1, last_page, nr_badpages, and the magic "SWAPSPACE2" in the
+// last 10 bytes of the page. Page size here is the guest's 4096, which is what
+// mkswap would have used.
+#define SWAP_HEADER_PAGE 4096
+static void swap_header_page(unsigned char *page, uint64_t area_bytes) {
+    memset(page, 0, SWAP_HEADER_PAGE);
+    uint32_t version = 1;
+    // last_page is an INDEX, and counts the header page itself, so it is one
+    // less than the number of pages the device holds.
+    uint64_t pages = area_bytes / SWAP_HEADER_PAGE;
+    uint32_t last_page = pages > 0 ? (uint32_t) (pages - 1) : 0;
+    uint32_t nr_badpages = 0;
+    memcpy(page + 1024, &version, sizeof(version));
+    memcpy(page + 1024 + 4, &last_page, sizeof(last_page));
+    memcpy(page + 1024 + 8, &nr_badpages, sizeof(nr_badpages));
+    memcpy(page + SWAP_HEADER_PAGE - 10, "SWAPSPACE2", 10);
+}
+
+ssize_t swap_area_pread(void *buf, size_t len, off_t off) {
+    uint64_t size = 0;
+    int fd = swap_area_fd_dup(&size);
+    if (fd < 0)
+        return 0;               // no area: a zero-capacity device, so EOF
+    ssize_t ret = 0;
+    if (off < 0 || (uint64_t) off >= size) {
+        ret = 0;
+    } else {
+        if ((uint64_t) off + len > size)
+            len = (size_t) (size - (uint64_t) off);
+        if (off < SWAP_HEADER_PAGE) {
+            // Serve from the synthesised header, and stop at its end so the
+            // caller comes back for the rest -- a short read is ordinary for a
+            // block device and simpler than stitching two sources together.
+            unsigned char page[SWAP_HEADER_PAGE];
+            swap_header_page(page, size);
+            size_t n = len;
+            if (off + (off_t) n > SWAP_HEADER_PAGE)
+                n = (size_t) (SWAP_HEADER_PAGE - off);
+            memcpy(buf, page + off, n);
+            ret = (ssize_t) n;
+        } else {
+            ret = pread(fd, buf, len, off);
+            if (ret < 0)
+                ret = _EIO;
+        }
+    }
+    close(fd);
+    return ret;
+}
+
+// Writable, and deliberately so. A read-only node would be the tidier answer
+// and it is not an available one: Linux opens a swap device FMODE_WRITE, so a
+// swap area on a read-only block device is a state it cannot be in. Root being
+// able to scribble over its own paged-out memory through /dev/aokswap0 is the
+// same footgun Linux hands root with /dev/sda, and inventing a protection Linux
+// does not have would be the lie this whole surface exists to remove.
+ssize_t swap_area_pwrite(const void *buf, size_t len, off_t off) {
+    uint64_t size = 0;
+    int fd = swap_area_fd_dup(&size);
+    if (fd < 0)
+        return _ENOSPC;         // zero-capacity device: nothing can be written
+    ssize_t ret;
+    if (off < 0 || (uint64_t) off >= size) {
+        ret = _ENOSPC;
+    } else {
+        if ((uint64_t) off + len > size)
+            len = (size_t) (size - (uint64_t) off);
+        ret = pwrite(fd, buf, len, off);
+        if (ret < 0)
+            ret = _EIO;
+    }
+    close(fd);
+    return ret;
+}
+
 int swap_slot_read(uint32_t slot, void *buf, size_t len) {
     if (atomic_load_explicit(&swap_fail_reads, memory_order_relaxed)) {
         atomic_fetch_add_explicit(&swap_stat_io_errors, 1, memory_order_relaxed);

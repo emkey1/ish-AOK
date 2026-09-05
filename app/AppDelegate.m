@@ -1324,7 +1324,11 @@ static int EnsureCharacterDevice(const char *path, mode_t_ mode, dev_t_ device) 
         return err;
 
     mode_t_ permissions = mode & 07777;
-    bool wrongType = !S_ISCHR(stat.mode);
+    // Compare against the type the CALLER asked for, not S_IFCHR. Every caller
+    // but one passes S_IFCHR, but /dev/aokswap0 is a block device, and an
+    // unconditional S_ISCHR test would decide the block node was the wrong type
+    // and recreate it on every single boot.
+    bool wrongType = (stat.mode & S_IFMT) != (mode & S_IFMT);
     bool wrongDevice = stat.rdev != device;
     if (wrongType || wrongDevice) {
         err = EnsurePathRemoved(path, &stat);
@@ -2567,6 +2571,11 @@ static TerminalViewController *CreateTerminalViewController(void) {
     // puts a login on the console -- the condition only stat()s it; agetty
     // opens /dev/tty1. vconsole-setup stays skipped regardless (verified on
     // the CLI harness); a stray open of tty0 yields an unattached tty.
+    // The swap area as a block device, so /proc/swaps has a real path to name.
+    // The app builds /dev by hand and never reads dev_standard_nodes, so adding
+    // the row in fs/dev.c reaches the CLI and fresh devtmpfs mounts but NOT the
+    // main root the app ships -- this line is what puts it on a real device.
+    EnsureCharacterDevice("/dev/aokswap0", S_IFBLK|0660, dev_make(AOKSWAP_MAJOR, DEV_AOKSWAP_MINOR));
     EnsureCharacterDevice("/dev/tty0", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 0));
     EnsureCharacterDevice("/dev/tty1", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 1));
     EnsureCharacterDevice("/dev/tty2", S_IFCHR|0666, dev_make(TTY_CONSOLE_MAJOR, 2));

@@ -71,6 +71,13 @@ struct dev_node_spec {
     const char *name; // relative to the /dev directory, no leading slash
     mode_t_ mode;
     int major, minor;
+    // A BOOL, deliberately, and not an `int type` reusing DEV_BLOCK/DEV_CHAR
+    // above. DEV_BLOCK is 0, so a `type` field would be zero-filled in every
+    // one of the existing initializers below and silently turn /dev/null,
+    // /dev/tty, /dev/urandom and the rest into block devices. Omitted means
+    // false means character, which is exactly what every existing row means
+    // today, so only a row that opts in changes.
+    bool is_block;
 };
 // Always published: these majors are statically dispatched in fs/dev.c.
 extern const struct dev_node_spec dev_standard_nodes[];
