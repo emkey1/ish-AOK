@@ -692,13 +692,23 @@ static void format_kb(unsigned long kb, char *buf, size_t bufsize) {
 
 // Same, but always with an explicit K/M/G unit -- for meter bar text, where
 // a bare number would be ambiguous.
+//
+// Scales at 1 MiB, NOT at format_kb's six digits. That threshold exists so the
+// process table's VIRT/RES columns stay 7 wide, which meter text does not care
+// about, and inheriting it here meant anything under ~977 MB printed as raw
+// kilobytes: a 256 MB swap area read "262144K", and the Mem meter managed
+// "479629K/2098.0M" -- the same function scaling one number and not the other,
+// in one line. Reported from a device as the swap figure being wrong; the value
+// was right all along and only the unit was unreadable.
 static void format_kb_unit(unsigned long kb, char *buf, size_t bufsize) {
-    if (kb < 1000000UL)
+    if (kb < 1024UL)
         snprintf(buf, bufsize, "%luK", kb);
-    else if (kb < 10UL * 1024 * 1024)
+    else if (kb < 1024UL * 1024)
         snprintf(buf, bufsize, "%.1fM", (double) kb / 1024.0);
     else
-        snprintf(buf, bufsize, "%.1fG", (double) kb / (1024.0 * 1024.0));
+        // Two decimals at gigabyte scale: one turns a 2098 MB ceiling into a
+        // flat "2.0G" and hides the difference between devices.
+        snprintf(buf, bufsize, "%.2fG", (double) kb / (1024.0 * 1024.0));
 }
 
 // htop TIME+ format: mm:ss.cc, rolling to h:mm:ss past an hour.
