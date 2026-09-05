@@ -138,6 +138,50 @@ struct mem_usage get_mem_usage(void) {
         usage.free = usage.total;
         usage.available = usage.total;
     }
+
+    // Everything above describes the MACHINE. The guest must not be told the
+    // machine's figures: section 3.12 of docs/simulated_swap_plan.md says
+    // MemTotal is the app's budget, and the rule behind it is that the host's
+    // own counters must never leak into the guest.
+    //
+    // The cost of getting this wrong is not cosmetic. On a 3 GB iPhone SE the
+    // guest read MemTotal 2957 MB -- the DEVICE's RAM -- while AOK's actual
+    // ceiling was 2098 MB, and MemFree of ~26 MB, which is iOS holding most of
+    // RAM as it always does and says nothing about what the guest may have.
+    // So `free`, `top` and ktop inside the guest all reported the phone as
+    // ~100% full at idle: ktop's own arithmetic was correct and its inputs were
+    // somebody else's memory. A guest allocator cannot act on that.
+    //
+    // Only when a ceiling is actually latched. On macOS with no
+    // ISH_GUEST_MEM_BUDGET_MB there is no per-process ceiling to report, and
+    // the machine's figures are the honest answer -- which also leaves the CLI
+    // and the whole regression gate byte-for-byte unchanged.
+    struct mem_budget budget = get_mem_budget();
+    if (budget.known && budget.total != 0) {
+        usage.total = budget.total;
+        // Both from the same figure, and deliberately: what the guest may still
+        // have is the headroom under the ceiling, less the floor the growth
+        // guard will not let it cross. MemAvailable can never exceed MemFree
+        // plus what is reclaimable, and with the ceiling as the total there is
+        // no host page cache in the guest's world to reclaim, so the two are
+        // equal rather than invented separately.
+        uint64_t floor = host_mem_headroom_floor();
+        uint64_t usable = 0;
+        if (budget.available_known && budget.available > floor)
+            usable = budget.available - floor;
+        else if (!budget.available_known)
+            usable = budget.total;   // unmeasured reads as idle, not as dead
+        usage.free = usable;
+        usage.available = usable;
+        if (usage.free > usage.total) usage.free = usage.total;
+        if (usage.available > usage.total) usage.available = usage.total;
+        // Cached/active/inactive described the machine's page classes and have
+        // no meaning against a per-process ceiling; leaving them would have the
+        // guest's `free` print a Cached column larger than MemTotal.
+        usage.cached = 0;
+        usage.active = 0;
+        usage.inactive = 0;
+    }
     return usage;
 }
 
