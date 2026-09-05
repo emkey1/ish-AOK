@@ -199,4 +199,29 @@ bool host_mem_headroom_low(void);
 int host_mem_release_probe(unsigned long mb, char *report, size_t report_size);
 #endif
 
+// SYSTEM-WIDE memory pressure, which is a different question from
+// host_mem_headroom_low()'s per-process one and is the question that actually
+// gets an app killed.
+//
+// Measured on a 3 GB iPhone SE, 2026-09-05: AOK was jetsam-killed with
+// reason "proc-thrashing" while its OWN accounting said ~382 MB of headroom
+// remained and its swap area was 200 MB empty. The JetsamEvent report named it
+// largestProcess at 1.86 GB, and the DEVICE had 40 MB free with dozens of Apple
+// daemons being killed around it. Its per-process limit was never the binding
+// constraint; the machine was out of memory, and nothing in AOK could see that.
+//
+// 0 = normal, 1 = warn, 2 = critical. Reads a value published by a
+// DISPATCH_SOURCE_TYPE_MEMORYPRESSURE source; 0 on platforms with no such
+// source, which makes every caller a no-op there.
+enum host_mem_pressure { HOST_MEM_PRESSURE_NORMAL = 0,
+                         HOST_MEM_PRESSURE_WARN = 1,
+                         HOST_MEM_PRESSURE_CRITICAL = 2 };
+unsigned host_mem_pressure_level(void);
+// True when the throttle should engage: system pressure at WARN or above, OR
+// our own headroom low. Deliberately a lower bar than host_mem_headroom_low(),
+// which refuses growth outright and must stay reserved for CRITICAL.
+bool host_mem_should_reclaim(void);
+// Start listening. Idempotent; safe to call from anywhere, does nothing twice.
+void host_mem_pressure_start(void);
+
 #endif

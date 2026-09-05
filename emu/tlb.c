@@ -723,7 +723,7 @@ __no_instrument void *tlb_handle_miss(struct tlb *tlb, guest_addr_t addr, int ty
         tlb->headroom_probe_countdown = 0;
         // The Mach trap in here is amortised over 4 MiB of touched pages, and
         // is only paid at all because the alternative is the app being killed.
-        if (host_mem_headroom_low()) {
+        if (host_mem_should_reclaim()) {
             current->mem_throttle_wanted = true;
             cpu_poke(&current->cpu);
         }

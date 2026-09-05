@@ -1766,7 +1766,7 @@ void mem_fault_backpressure(void) {
 
     // Re-read rather than trusting the sensor: the guest has run since, and
     // kswapd may already have fixed it.
-    if (!host_mem_headroom_low()) {
+    if (!host_mem_should_reclaim()) {
         atomic_store_explicit(&mm->fault_oom_strikes, 0, memory_order_relaxed);
         return;
     }
@@ -1819,7 +1819,7 @@ void mem_fault_backpressure(void) {
     // (297 MiB/s, measured), while the same code on a phone would brake hard.
     // A backpressure mechanism whose strength is set by the host's I/O speed is
     // not a mechanism, it is an accident.
-    if (!host_mem_headroom_low()) {
+    if (!host_mem_should_reclaim()) {
         atomic_store_explicit(&mm->fault_oom_strikes, 0, memory_order_relaxed);
         return;
     }

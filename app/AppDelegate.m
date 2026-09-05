@@ -59,6 +59,7 @@
 #include "kernel/swap.h"
 #import <os/log.h>
 #import <os/lock.h>
+#include "platform/platform.h"
 
 // Visible in Console.app with subsystem app.ish.iSH-AOK, category suspend.
 static os_log_t ISHSuspendLog(void) {
@@ -3001,6 +3002,12 @@ static TerminalViewController *CreateTerminalViewController(void) {
     // AFTER the call, so an enable that failed to reserve its area shows up
     // here as off instead of being reported as on because the preference said
     // so (kernel/swap.c prints the errno as well).
+    // Start listening to the SYSTEM's memory pressure before the pager. This is
+    // the signal that actually predicts a jetsam kill on a small device -- the
+    // SE died with 382 MB of its own headroom unused while the machine had
+    // 40 MB free -- and it is also the only thing that leaves a breadcrumb in
+    // the log before the kill.
+    host_mem_pressure_start();
     swap_startup();
     [ISHDiagnosticsStore recordLaunchStage:@"boot.swap.started"
                                    details:@{@"requested": @(swapEnabled),

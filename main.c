@@ -17,6 +17,7 @@
 #include "kernel/task.h"
 #include "kernel/swap.h"
 #include "xX_main_Xx.h"
+#include "platform/platform.h"
 
 extern void run_at_boot(void);
 
@@ -340,6 +341,9 @@ static void *quiesce_test_thread(void *arg) {
 }
 
 int main(int argc, char *const argv[]) {
+    // The system's memory-pressure source, which outranks our own per-process
+    // headroom arithmetic; see host_mem_pressure_start() in platform/darwin.c.
+    host_mem_pressure_start();
     // Before any lock is taken: the lock_t and wrlock_t hooks read this flag on
     // every acquire, and a lock held from before it was armed would be dropped
     // as an unmatched release.

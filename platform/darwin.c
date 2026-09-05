@@ -1,4 +1,5 @@
 #include <mach/mach.h>
+#include <dispatch/dispatch.h>
 #include <mach/mach_time.h>
 #include <TargetConditionals.h>
 #include <stdatomic.h>
@@ -636,9 +637,115 @@ uint64_t host_mem_headroom_floor(void) {
     return (uint64_t) mem_headroom_threshold_mb() * 1024 * 1024;
 }
 
+// ===========================================================================
+// System-wide memory pressure.
+//
+// host_mem_headroom_low() answers "am I near MY limit". That is not the
+// question that gets an app killed on a small device. MEASURED on a 3 GB
+// iPhone SE, 2026-09-05: AOK was jetsam-killed with reason "proc-thrashing"
+// while its own arithmetic said ~382 MB of headroom remained and its swap area
+// was 200 MB empty. The JetsamEvent report named it largestProcess at 1.86 GB,
+// the DEVICE had 40 MB free, and dozens of Apple daemons were being killed in
+// the same cascade. Every signal AOK watched was per-process, so it watched its
+// own limit stay comfortable right up to the moment the machine died under it.
+//
+// DISPATCH_SOURCE_TYPE_MEMORYPRESSURE is the system's own answer, and section
+// 3.10 of docs/simulated_swap_plan.md has listed it as unused since the plan
+// was written -- along with the observation that jetsam kills currently have no
+// preceding breadcrumb in the log. Both are fixed here.
+static _Atomic unsigned mem_pressure_level;
+
+// ISH_GUEST_MEM_PRESSURE=warn|critical forces the level, because the real
+// source cannot be provoked without root (`memory_pressure -l critical`) and a
+// guard nobody has watched fire is worth nothing. Parsed once; unset means the
+// real source decides.
+static int mem_pressure_override(void) {
+    static int override = -2;
+    if (override == -2) {
+        const char *e = getenv("ISH_GUEST_MEM_PRESSURE");
+        if (e == NULL) override = -1;
+        else if (strcmp(e, "critical") == 0) override = HOST_MEM_PRESSURE_CRITICAL;
+        else if (strcmp(e, "warn") == 0) override = HOST_MEM_PRESSURE_WARN;
+        else if (strcmp(e, "normal") == 0) override = HOST_MEM_PRESSURE_NORMAL;
+        else override = -1;
+    }
+    return override;
+}
+
+unsigned host_mem_pressure_level(void) {
+    int forced = mem_pressure_override();
+    if (forced >= 0)
+        return (unsigned) forced;
+    return atomic_load_explicit(&mem_pressure_level, memory_order_relaxed);
+}
+
+// What the THROTTLE asks, as opposed to what the growth guard asks. Warn is
+// enough here: the right response to the system getting tight is to start
+// paying for memory sooner, not to start refusing it.
+bool host_mem_should_reclaim(void) {
+    return host_mem_pressure_level() >= HOST_MEM_PRESSURE_WARN ||
+           host_mem_headroom_low();
+}
+
+void host_mem_pressure_start(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dispatch_source_t src = dispatch_source_create(
+                DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0,
+                DISPATCH_MEMORYPRESSURE_NORMAL | DISPATCH_MEMORYPRESSURE_WARN |
+                DISPATCH_MEMORYPRESSURE_CRITICAL,
+                dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0));
+        if (src == NULL)
+            return;
+        dispatch_source_set_event_handler(src, ^{
+            unsigned long flags = dispatch_source_get_data(src);
+            unsigned level = HOST_MEM_PRESSURE_NORMAL;
+            if (flags & DISPATCH_MEMORYPRESSURE_CRITICAL)
+                level = HOST_MEM_PRESSURE_CRITICAL;
+            else if (flags & DISPATCH_MEMORYPRESSURE_WARN)
+                level = HOST_MEM_PRESSURE_WARN;
+            unsigned was = atomic_exchange_explicit(&mem_pressure_level, level,
+                    memory_order_relaxed);
+            if (was == level)
+                return;
+            // The breadcrumb the plan asks for. A jetsam kill leaves nothing in
+            // our own log to say it was coming; this is the only warning the
+            // system gives, so record it with the numbers that explain it.
+            struct host_mem_reading raw = {};
+            struct mem_budget b = mem_budget_read(true, &raw);
+            printk("MEMORY PRESSURE %s (was %s): footprint %llu MB, "
+                   "own headroom %llu MB%s\n",
+                   level == HOST_MEM_PRESSURE_CRITICAL ? "CRITICAL" :
+                       level == HOST_MEM_PRESSURE_WARN ? "WARN" : "normal",
+                   was == HOST_MEM_PRESSURE_CRITICAL ? "CRITICAL" :
+                       was == HOST_MEM_PRESSURE_WARN ? "WARN" : "normal",
+                   (unsigned long long) (raw.footprint >> 20),
+                   (unsigned long long) (b.available >> 20),
+                   b.available_known ? "" : " (unknown)");
+        });
+        dispatch_resume(src);
+        // Deliberately never cancelled or released: it lives for the life of
+        // the process, and letting it go would stop the only warning we get.
+    });
+}
+
 bool host_mem_headroom_low(void) {
     if (mem_headroom_threshold_mb() == 0)
         return false; // guard disabled
+
+    // The system's own answer outranks ours: when the DEVICE is short of memory
+    // it does not matter how much of our own limit is unused, which is exactly
+    // the state the SE died in -- 382 MB of per-process headroom, 40 MB free on
+    // the machine.
+    //
+    // CRITICAL only, NOT warn. This function REFUSES GUEST GROWTH, and iOS
+    // raises warn routinely on a small device; treating warn as a refusal makes
+    // the guest unusable rather than merely slow. Measured: forcing warn here
+    // refused every mmap the shell needed and produced no output at all.
+    // Warn instead drives the throttle (host_mem_should_reclaim), which slows
+    // the guest and pages memory out without denying it anything.
+    if (host_mem_pressure_level() >= HOST_MEM_PRESSURE_CRITICAL)
+        return true;
 
     // Fresh, not the 10 ms sample -- this is the jetsam guard, and the case for
     // paying a Mach trap here is measured out above mem_budget_read().
