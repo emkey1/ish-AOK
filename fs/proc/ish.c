@@ -1073,7 +1073,10 @@ static int proc_ish_show_mem_guard(struct proc_entry *UNUSED(entry), struct proc
     proc_printf(buf, "  free           %llu MB\n", (unsigned long long) (machine.free >> 20));
     proc_printf(buf, "  available      %llu MB%s\n",
                 (unsigned long long) (machine.available >> 20),
-                (machine.available != 0 && machine.available < floor) ? "   <-- UNDER FLOOR" : "");
+                (machine.available != 0 && machine.available < floor)
+                    ? (pressure >= 1 ? "   <-- UNDER FLOOR, and pressure is up: REFUSING"
+                                     : "   <-- under floor, but no system pressure: ignored")
+                    : "");
     proc_printf(buf, "\nthis process (the jetsam ceiling):\n");
     if (!budget.known) {
         proc_printf(buf, "  ceiling        not latched (no per-process limit known)\n");

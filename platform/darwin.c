@@ -843,9 +843,28 @@ bool host_mem_headroom_low(void) {
     // get_mem_usage() already reports the machine's figures (it is what the
     // guest's MemAvailable is built from), so this costs no new trap beyond the
     // ones it already makes.
-    struct mem_usage machine = get_mem_usage();
-    if (machine.available != 0 && machine.available < host_mem_headroom_floor())
-        return true;
+    //
+    // AND the system must actually be under pressure. That conjunction is not
+    // caution, it is a correction: on its own this test made the guest
+    // unusable. iOS keeps free memory low BY DESIGN -- `available` counts the
+    // inactive and purgeable pages it reclaims without asking anyone -- so a 3
+    // GB phone sits below any floor worth having for long stretches while
+    // nothing at all is wrong. Refusing guest growth on that alone meant every
+    // allocation failed indefinitely, and the guest could not even exec
+    // `sleep` ("libc.so.6: cannot create shared object descriptor: Cannot
+    // allocate memory"). Observed on the SE, and it is the reason this
+    // conjunction exists.
+    //
+    // The machine being short of memory only MEANS something when the system
+    // itself says so. When both are true the device really is in the state
+    // that precedes a jetsam kill -- which is exactly where this last fired
+    // usefully: pressure at WARN with 325 MB left, refusing the guest at
+    // 1248 MB where it had previously run to 1.86 GB and been killed.
+    if (host_mem_pressure_level() >= HOST_MEM_PRESSURE_WARN) {
+        struct mem_usage machine = get_mem_usage();
+        if (machine.available != 0 && machine.available < host_mem_headroom_floor())
+            return true;
+    }
 
     // Fresh, not the 10 ms sample -- this is the jetsam guard, and the case for
     // paying a Mach trap here is measured out above mem_budget_read().
