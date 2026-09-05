@@ -1459,6 +1459,77 @@ returned ENOMEM since 2.6.9, and a failed swap-in delivered SIGSEGV where Linux
 delivers SIGBUS. Both were single lines, and both would have been found in an
 afternoon beside a real `free`, `vmstat 1`, `top` and `swapon --show`.
 
+#### The growth guard does not cover the fault path (2026-09-05) -- OPEN
+
+**This is the largest gap found so far, and it defeats swap's core promise.**
+
+`host_mem_headroom_low()` and `swap_direct_reclaim()` are reached from exactly
+three places: the `mmap`, `mremap` and `brk` guards (kernel/mmap.c:474, :792,
+:1589). But AOK maps anonymous memory LAZILY -- a reservation, materialised one
+page at a time by `mem_lazy_fault()` on first touch (emu/memory.c:2719) -- and
+**that path has no headroom check and never calls direct reclaim.** A guest that
+reserves a large region while headroom is fine then commits all of it through
+page faults with nothing looking.
+
+That is not an exotic shape. It is `malloc` of a big arena, a JVM or Python
+heap, a `calloc`'d buffer -- the ordinary way a program asks for a lot of memory,
+and precisely the "large mostly-cold heap" this whole feature was justified by
+(section 1).
+
+Measured two ways. On the CLI with `ISH_GUEST_MEM_BUDGET_MB=1024`, one guest
+program, two allocation shapes, same total:
+
+| shape | result |
+|---|---|
+| 48 separate 32 MiB `mmap`s (guard runs between each) | **refused at 832 MiB** -- the guard works |
+| ONE 1536 MiB `mmap`, then filled | **1536 MiB committed, never refused** |
+
+704 MiB past the point where the guard stops the other shape. And on a 3 GB
+iPhone SE, launched from the home screen with swap enabled and healthy
+(`release_works yes`): one `mmap` of 2048 MiB accepted while 990 MB was
+available, filled to **1728 MiB through page faults without a single refusal**,
+and the app was jetsam-killed.
+
+The pager cannot cover for it, and the rates say why:
+
+| | rate |
+|---|---|
+| guest commits through the fault path (CLI) | **~240 MiB/s** |
+| kswapd reclaims (4 MiB slice / 500 ms pass) | **8 MiB/s** |
+
+Outrun 30:1. Over the whole device run kswapd managed 21.6 MiB against 1728 MiB
+committed -- **1.2%** (1.6% on the CLI). `direct_reclaim` stayed **0** in both,
+because direct reclaim is only ever called from the guards the fill never
+touches. A faster kswapd cannot close a 30x gap; timer-driven reclaim is the
+wrong instrument for a producer running at memory bandwidth.
+
+One more observation from the CLI run, worth keeping: past the budget the
+guest process could no longer `fopen("/proc/meminfo")` -- reads returned -1 --
+while its fill continued unaffected. The parts of the guest that need to
+allocate fail first, and the part doing the damage is the last to notice.
+
+**Not yet fixed, because the guest-visible behaviour is a design decision.**
+The mechanical part is clear: the lazy-fault path needs a cheap, rate-limited
+headroom check. What it should DO when headroom is gone is the open question,
+and the options differ in what a user experiences:
+
+- **Throttle** the faulting thread until reclaim catches up. Closest to what
+  Linux direct reclaim does to an allocating process, keeps the guest alive and
+  correct, and makes swap actually buy something. Costs a stall the guest cannot
+  see the reason for.
+- **OOM-kill** the faulting guest process. Faithful Linux behaviour under
+  overcommit, and it saves the app rather than letting iOS kill everything --
+  but it needs an OOM killer AOK does not have.
+- **Refuse the fault** (SIGSEGV/SIGBUS). Cheapest, and a capability lie: no
+  Linux delivers a signal for touching a page it just promised.
+
+Note the locking constraint on any of them: `mem_lazy_fault` runs under
+`mem->lock` held for write (upgraded from read inside `mem_ptr`), and
+`swap_direct_reclaim` takes the address-space barrier itself, so it **cannot**
+be called from there -- the same non-recursive `pt_alloc_lock` hazard the mmap
+guard's comment already records. The reclaim, or the stall, has to happen at a
+point where no mem lock is held.
+
 #### The pager now checks that its own release worked (2026-09-04)
 
 Found on a 3 GB iPhone SE, which jetsam killed while swap was enabled and
