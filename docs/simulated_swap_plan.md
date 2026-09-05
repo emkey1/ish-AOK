@@ -1523,12 +1523,48 @@ and the options differ in what a user experiences:
 - **Refuse the fault** (SIGSEGV/SIGBUS). Cheapest, and a capability lie: no
   Linux delivers a signal for touching a page it just promised.
 
-Note the locking constraint on any of them: `mem_lazy_fault` runs under
-`mem->lock` held for write (upgraded from read inside `mem_ptr`), and
-`swap_direct_reclaim` takes the address-space barrier itself, so it **cannot**
-be called from there -- the same non-recursive `pt_alloc_lock` hazard the mmap
-guard's comment already records. The reclaim, or the stall, has to happen at a
-point where no mem lock is held.
+**Where the hook can go is the hard part, and two candidate sites are already
+ruled out by measurement.**
+
+First, a correction to the obvious theory. This is NOT `mem_lazy_fault`.
+Instrumented, a 1536 MiB fill materialised **three** lazy reservations in total;
+the pt entries are created when the mapping is, and the 393216 pages arrive as
+ordinary TLB write misses. The physical commit is done by the HOST kernel under
+a mapping AOK already approved, so **AOK never sees an event per committed
+page at all** -- the closest thing is the TLB miss, which is a guest-side
+sighting of the same page, not a notification of the commit.
+
+- `mem_lazy_fault` (emu/memory.c): runs under `mem->lock` held for write, and
+  reaches almost nothing anyway. Ruled out twice over.
+- `handle_page_fault_interrupt` (kernel/calls.c): lock-free and safe, but only
+  reached for the same handful of lazy pages. Measured: 3 calls for 1536 MiB.
+- `tlb_handle_miss` (emu/tlb.c): the right FREQUENCY -- once per page touched,
+  from JIT and interpreters alike -- but **it deadlocks**. Its callers hold
+  `mem->lock` for READ, so `swap_direct_reclaim` taking the address-space
+  barrier blocks the thread against a lock it already holds. Measured, not
+  reasoned: the guest thread sat in `wrlock_acquire_locked` under
+  `mem_write_lock_with_pokes` while kswapd0 sat in `mem_struct_lock`, 0% CPU,
+  for ten minutes. The comment at emu/memory.c:2680 says the JIT reaches
+  `mmu_translate` "lock-free"; that describes `mem_ptr_nofault` not taking a
+  lock itself, NOT the caller holding none, and reading it the other way is what
+  produced the deadlock.
+
+So the throttle needs a point where the guest thread holds no mem lock, and a
+tight fill loop passes through none of the ones that exist: it makes no
+syscalls, and takes no page-fault interrupts. The remaining candidate is the
+mechanism the address-space barrier ALREADY uses to interrupt sibling threads --
+`mem_write_lock_with_pokes` and `task_poke_shared_mem` -- since by construction
+a thread that can be poked to quiesce for the barrier is a thread that can be
+made to wait somewhere legal. That is the direction to take next, and it is a
+design change rather than a hook.
+
+One process note, because it cost an hour here and is written down in the
+project's own book (ch36) and was still fallen for: `printk` is `ish_printk` ->
+`log_line` -> `writev(555, ...)`, and **fd 555 is open only if you opened it**,
+which zsh cannot do (`555>file` does not parse). Three separate "this code is
+never called" conclusions in this investigation were that, and two of them were
+wrong. Use `fprintf(stderr, ...)` for one-off instrumentation and prove the
+instrument fires before believing any negative.
 
 #### The pager now checks that its own release worked (2026-09-04)
 
