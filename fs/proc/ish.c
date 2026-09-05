@@ -1051,6 +1051,55 @@ static int proc_ish_show_uidevice(struct proc_entry *UNUSED(entry), struct proc_
     return 0;
 }
 
+// Every number the memory guards actually decide on, in one place.
+//
+// This exists because its absence cost a day. Three separate conclusions about
+// why a device died were wrong -- "the pressure code refused it", "the host
+// refused before we did", "the per-process test cannot have fired" -- and each
+// was an inference from the guest's MemAvailable, which is the MACHINE's figure
+// and not the one any of these guards read. There was no way to ask the guards
+// what they saw. Now there is: run the workload, read this file, and the answer
+// is arithmetic instead of argument.
+static int proc_ish_show_mem_guard(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    struct mem_usage machine = get_mem_usage();
+    struct mem_budget budget = get_mem_budget();
+    uint64_t floor = host_mem_headroom_floor();
+    unsigned pressure = host_mem_pressure_level();
+
+    proc_printf(buf, "floor            %llu MB  (ISH_GUEST_MEM_HEADROOM_MB)\n",
+                (unsigned long long) (floor >> 20));
+    proc_printf(buf, "\nthe machine (what /proc/meminfo is built from):\n");
+    proc_printf(buf, "  total          %llu MB\n", (unsigned long long) (machine.total >> 20));
+    proc_printf(buf, "  free           %llu MB\n", (unsigned long long) (machine.free >> 20));
+    proc_printf(buf, "  available      %llu MB%s\n",
+                (unsigned long long) (machine.available >> 20),
+                (machine.available != 0 && machine.available < floor) ? "   <-- UNDER FLOOR" : "");
+    proc_printf(buf, "\nthis process (the jetsam ceiling):\n");
+    if (!budget.known) {
+        proc_printf(buf, "  ceiling        not latched (no per-process limit known)\n");
+    } else {
+        proc_printf(buf, "  ceiling        %llu MB\n", (unsigned long long) (budget.total >> 20));
+        if (budget.available_known)
+            proc_printf(buf, "  headroom       %llu MB%s\n",
+                        (unsigned long long) (budget.available >> 20),
+                        budget.available < floor ? "   <-- UNDER FLOOR" : "");
+        else
+            proc_printf(buf, "  headroom       unmeasured\n");
+    }
+    proc_printf(buf, "\nsystem memory pressure  %s\n",
+                pressure >= 2 ? "CRITICAL  (growth refused)" :
+                pressure >= 1 ? "WARN      (throttle engaged, growth still allowed)" :
+                                "normal");
+    proc_printf(buf, "\ngrowth refused now      %s\n",
+                host_mem_headroom_low() ? "YES" : "no");
+    proc_printf(buf, "throttle engaged now    %s\n",
+                host_mem_should_reclaim() ? "YES" : "no");
+    proc_printf(buf, "\nA jetsam kill is predicted by the MACHINE's figures, not this\n"
+                     "process's. On a small device the ceiling is close to the size of\n"
+                     "RAM, so headroom can read healthy while the machine dies.\n");
+    return 0;
+}
+
 static int proc_ish_show_host_info(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     char *host_info = printHostInfo();
     proc_printf(buf, "%s", host_info);
@@ -1077,6 +1126,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"documents", .show = proc_ish_show_documents},
     {"host_info", .show = proc_ish_show_host_info},  // Add host hardware related information
     {"ips", .show = proc_ish_show_ips},
+    {"mem_guard", .show = proc_ish_show_mem_guard},
     {"mem_release_probe", S_IFREG | 0644, .show = proc_ish_show_mem_release_probe, .update = proc_ish_update_mem_release_probe},
     {"roots", S_IFREG | 0644, .show = proc_ish_show_roots, .update = proc_ish_update_roots},
     {"swap", S_IFREG | 0644, .show = proc_ish_show_swap, .update = proc_ish_update_swap},

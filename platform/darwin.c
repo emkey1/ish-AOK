@@ -633,8 +633,43 @@ static long mem_headroom_threshold_mb(void) {
     return threshold_mb;
 }
 
+// The floor is a FRACTION OF THE CEILING, not a constant, with the configured
+// value as its lower bound.
+//
+// MEASURED on a 3 GB iPhone SE, 2026-09-05, and the arithmetic is the whole
+// argument. Its ceiling is 2097 MB (read off two MEMORY PRESSURE breadcrumbs:
+// footprint 1076 + headroom 1021, and 119 + 1978). A flat 192 MB floor means
+// the guard refuses growth once the footprint passes 1905 MB. Jetsam killed the
+// app at a footprint of 1860 MB. The guard was 45 MB from firing and could
+// never have saved it -- the margin was not thin, it was NEGATIVE.
+//
+// How much headroom a process needs before the system gives up on it scales
+// with how large that process is allowed to become, so the floor has to scale
+// with the ceiling too. A sixth puts the SE's floor at 350 MB, refusing growth
+// around 1747 MB and leaving ~113 MB of margin against the observed kill.
+//
+// Capped at 512 MB so a device with a large ceiling does not have a gigabyte
+// reserved out from under the guest, and never below the configured value, so
+// ISH_GUEST_MEM_HEADROOM_MB still means what it says and setting it to 0 still
+// disables the guard.
+//
+// Fitted to ONE device's kill. It is a better rule than a constant that is
+// provably too small there, but the fraction itself deserves a second data
+// point before it is treated as settled.
+#define MEM_HEADROOM_CEILING_FRACTION 6
+#define MEM_HEADROOM_FRACTION_CAP (512ull * 1024 * 1024)
+
 uint64_t host_mem_headroom_floor(void) {
-    return (uint64_t) mem_headroom_threshold_mb() * 1024 * 1024;
+    uint64_t configured = (uint64_t) mem_headroom_threshold_mb() * 1024 * 1024;
+    if (configured == 0)
+        return 0;   // guard disabled; scaling nothing is still nothing
+    uint64_t ceiling = atomic_load_explicit(&mem_budget_total, memory_order_relaxed);
+    if (ceiling == 0)
+        return configured;  // no ceiling latched yet, nothing to scale against
+    uint64_t scaled = ceiling / MEM_HEADROOM_CEILING_FRACTION;
+    if (scaled > MEM_HEADROOM_FRACTION_CAP)
+        scaled = MEM_HEADROOM_FRACTION_CAP;
+    return scaled > configured ? scaled : configured;
 }
 
 // ===========================================================================
