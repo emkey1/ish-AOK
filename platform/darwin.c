@@ -382,7 +382,6 @@ static _Atomic uint64_t mem_budget_limit;        // the host's own ceiling, latc
 static _Atomic uint64_t mem_budget_total;        // what we publish: the tighter of that and the knob
 static _Atomic uint64_t mem_budget_available;
 static _Atomic bool mem_budget_available_known;
-static _Atomic bool mem_budget_remaining_refused; // see the carve-out in host_mem_headroom_low()
 
 // Note what is deliberately NOT cached here: the host's own "bytes left under
 // my ceiling" answer. host_mem_headroom_low() needs that raw figure, because
@@ -465,7 +464,6 @@ static void sample_mem_budget(struct mem_budget *out, struct host_mem_reading *r
     // this is the absence of one -- the distinction struct mem_budget's
     // available_known exists to carry.
     bool available_known = false;
-    bool remaining_refused = false;
     uint64_t available = 0;
 
     if (reading.remaining_known) {
@@ -481,12 +479,11 @@ static void sample_mem_budget(struct mem_budget *out, struct host_mem_reading *r
         // an app and the 0 means at or over the limit. With the ceiling and the
         // footprint both in hand the remainder is arithmetic, so the figure
         // published here is honest and self-consistent rather than an invented
-        // 0 wearing a "known" flag. host_mem_headroom_low() still declines to
-        // ACT on it; see the carve-out there, which is now the only place that
-        // treats this reading specially.
+        // 0 wearing a "known" flag -- and host_mem_headroom_low() now ACTS on
+        // it, which it did not before section 3.10's flip. At or over the limit
+        // the remainder is 0, which is under any floor, so the guard fires.
         available = reading.footprint < limit ? limit - reading.footprint : 0;
         available_known = true;
-        remaining_refused = true;
     }
 
     if (knob != 0 && reading.footprint_known) {
@@ -503,7 +500,6 @@ static void sample_mem_budget(struct mem_budget *out, struct host_mem_reading *r
 
     atomic_store_explicit(&mem_budget_total, total, memory_order_relaxed);
     atomic_store_explicit(&mem_budget_available, available, memory_order_relaxed);
-    atomic_store_explicit(&mem_budget_remaining_refused, remaining_refused, memory_order_relaxed);
     atomic_store_explicit(&mem_budget_available_known, available_known, memory_order_release);
 
     out->known = total != 0;
@@ -692,27 +688,32 @@ bool host_mem_headroom_low(void) {
     if (!budget.available_known)
         return false; // a reading nobody could take is not evidence of pressure
 
-#if TARGET_OS_IPHONE
-    // The one carve-out, kept deliberately and now as narrow as it can be. When
-    // the OS refuses to name the bytes remaining, this guard has always read
-    // that as "no limit information" and let the guest grow. sample_mem_budget()
-    // can now tell that 0's two meanings apart -- a latched ceiling proves the
-    // process is an app, so the 0 means at or over the limit, and it publishes
-    // the honest remainder for /proc to print. But flipping THIS line changes
-    // what a device does at the moment it is closest to being jetsammed, from
-    // "let the guest grow" to "refuse every growth", and that is a change to
-    // make with a device to test it on rather than one to smuggle in beside a
-    // refactor. docs/simulated_swap_plan.md section 3.10 specifies the flip.
+    // THERE IS NO LONGER A CARVE-OUT HERE, and that is the point of section 3.10
+    // of docs/simulated_swap_plan.md. When the OS refused to name the bytes
+    // remaining, this guard used to read that as "no limit information" and let
+    // the guest grow -- at the one moment the process is closest to being
+    // jetsammed.
     //
-    // What is no longer done here is patching around the budget: /proc now
-    // prints the arithmetic, and a guest that reads MemAvailable 0 while its
-    // mmap still succeeds is looking at ordinary Linux overcommit, not at an
-    // impossible pair of numbers. With the knob set the remainder came from a
-    // footprint we read rather than from a refused reading, so it stands.
-    if (mem_budget_knob_bytes() == 0 &&
-        atomic_load_explicit(&mem_budget_remaining_refused, memory_order_relaxed))
-        return false;
-#endif
+    // The two meanings of 0 are distinguishable, and sample_mem_budget() already
+    // distinguishes them: os_proc_available_memory() returns 0 both when there
+    // is no per-process limit to speak of (the simulator, macOS, before the
+    // ceiling is known) and when the process is AT OR OVER that limit
+    // (kern_memorystatus.c clamps it). A LATCHED CEILING proves the process is
+    // an app with a real limit, so once budget.known is true -- which is the
+    // only way execution reaches this line -- a refused remainder can only mean
+    // the second. Reading it as "no information" was reading the most dangerous
+    // state in the system as the safest.
+    //
+    // budget.available is the honest remainder computed from a footprint we
+    // read, not from the refused reading, so the comparison below stands on its
+    // own and no carve-out is needed: at or over the limit it is at or below
+    // zero, which is under any floor, and the guard fires.
+    //
+    // Safe to make now in a way it was not before, because a guest that gets
+    // ENOMEM from here is no longer the only thing standing between the app and
+    // jetsam: kernel/mmap.c's mem_fault_backpressure throttles, and ultimately
+    // OOM-kills, a guest committing memory through the fault path, which is
+    // where the app was actually dying.
 
     return budget.available < host_mem_headroom_floor();
 }
