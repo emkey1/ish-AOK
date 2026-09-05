@@ -1459,6 +1459,82 @@ returned ENOMEM since 2.6.9, and a failed swap-in delivered SIGSEGV where Linux
 delivers SIGBUS. Both were single lines, and both would have been found in an
 afternoon beside a real `free`, `vmstat 1`, `top` and `swapon --show`.
 
+#### Phase 3, first real device findings (2026-09-05) -- a 3 GB iPhone SE
+
+The 16 GB iPad has ~3 GB of headroom and never reaches the interesting states.
+A 3 GB iPhone SE reaches all of them, and what it found changes what this
+feature has to watch.
+
+**The app was jetsam-killed while every number AOK watched said it was fine.**
+JetsamEvent (bug_type 298): iSH-AOK named `largestProcess` at 122140 pages =
+**1.86 GB**, reason **`proc-thrashing`**. AOK's own arithmetic said ~382 MB of
+headroom remained and its swap area was 200 MB empty -- and it was RIGHT about
+its own limit. The DEVICE had **40 MB free**, 1.69M compressions, and dozens of
+Apple daemons were being killed in the same cascade.
+
+`os_proc_available_memory()` answers "am I near MY limit". Nothing in AOK asked
+whether the MACHINE had memory, so the growth guard and the fault-path throttle
+were both working correctly and both watching a number that stayed comfortable
+while the device died underneath them.
+
+**The ceiling is 2098 MB, and the floor could not have saved it.** Read off two
+MEMORY PRESSURE breadcrumbs (1076+1021, and 119+1978). Against a flat 192 MB
+floor the guard refuses growth at a footprint of 1905 MB. Jetsam killed at
+1860 MB. The margin was not thin, it was **negative** -- so the floor now
+scales as `ceiling/6`, capped at 512 MB, never below the configured value. On
+the SE that is 349 MB, refusing near 1748 MB.
+
+**Three signals, and what each is for.** Section 3.10 listed the memory-pressure
+source as unused; it is now wired, and the mapping matters:
+
+| signal | what it answers | what it drives |
+|---|---|---|
+| `DISPATCH_SOURCE_TYPE_MEMORYPRESSURE` | the system's own verdict | WARN throttles, CRITICAL refuses |
+| `get_mem_usage().available` | the MACHINE's free memory | refuses under the floor |
+| `budget.available` | the per-process ceiling | refuses under the floor |
+
+WARN must NOT refuse growth: iOS raises it routinely on a small device and the
+guest could not run `echo` (measured). CRITICAL never fired on the SE at all,
+so refusal cannot depend on it alone -- which is why the machine's own figure is
+tested too.
+
+**Measured with all of it in place**, the same fill that ran to 1860 MB and was
+killed now stops at 1248 MB, refused by AOK itself:
+
+```
+*** mmap REFUSED holding 1248 MB -- what the guards saw:
+      available      325 MB   <-- UNDER FLOOR
+      headroom       735 MB
+    system memory pressure  WARN
+    growth refused now      YES
+```
+
+Its own headroom was 735 MB and would never have refused. Over the session the
+pager wrote 122 MB and direct reclaim freed 102 MB, with `release_works yes` --
+the release primitive works on real hardware.
+
+**`/proc/ish/mem_guard`** prints all of the above live, with the line that is
+under the floor marked. It exists because its absence cost a day: three separate
+conclusions about why the device died were wrong, and each was an inference from
+the guest's `MemAvailable`, which is the machine's figure and not what any guard
+reads. Run the workload, read the file, stop guessing.
+
+**`/proc/meminfo` was reporting the machine, not the guest** -- the section 3.12
+divergence, found while chasing the above. The guest read `MemTotal` 2957 MB
+(the phone's RAM) against a real ceiling of 2098 MB, and a `MemFree` of ~26 MB
+that is just iOS holding RAM as it always does. So `free`, `top` and ktop inside
+the guest all showed the machine as ~100% full at idle, and a guest allocator
+could not act on any of it. Now reported from the budget when a ceiling is
+latched, and unchanged on the CLI where there is none.
+
+**Two traps for anyone repeating this work.** A jetsam kill produces **no crash
+report** -- only a JetsamEvent under Settings > Privacy > Analytics Data -- so
+"the app never crashed" is fully consistent with having been killed, and an
+unresponsive window that then closes is what a device-wide thrash cascade looks
+like from outside. And an attached debugger does NOT make eviction a no-op
+everywhere, only on the regions lldb has read; `release_works` measured `yes`
+under Xcode.
+
 #### The growth guard does not cover the fault path (2026-09-05) -- FIXED
 
 **This is the largest gap found so far, and it defeats swap's core promise.**
