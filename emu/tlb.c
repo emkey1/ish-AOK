@@ -1,5 +1,7 @@
 #include "emu/cpu.h"
 #include "emu/tlb.h"
+#include "platform/platform.h"
+#include "kernel/mm.h"
 #include "emu/interrupt.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
@@ -699,6 +701,33 @@ bool __tlb_write_cross_page(struct tlb *tlb, guest_addr_t addr, const char *valu
 }
 
 __no_instrument void *tlb_handle_miss(struct tlb *tlb, guest_addr_t addr, int type) {
+    // SENSOR ONLY. A write miss is the closest thing AOK gets to a notification
+    // that the guest is committing memory: the mmap guards approved the mapping
+    // once, the pt entries were built then, and the host commits the physical
+    // pages on touch with nothing else to see it.
+    //
+    // This must NEVER reclaim or wait. task_run_current holds
+    // read_lock(&mem->lock) across the whole of cpu_run_to_interrupt
+    // (kernel/task.c:907 to :918), so THIS THREAD already holds the read lock
+    // here; swap_direct_reclaim takes the address-space barrier and wrlock_t is
+    // neither recursive nor upgradable, so reclaiming here self-deadlocks. It
+    // was measured doing exactly that: ten minutes at 0% CPU with this thread
+    // in wrlock_acquire_locked and kswapd0 stuck behind it in mem_struct_lock.
+    //
+    // So all that happens here is a poke -- an atomic store, no lock -- which
+    // the engines turn into INT_TIMER, landing in handle_timer_interrupt()
+    // where task_run_current has already released the lock. That is the only
+    // place in the emulator a guest thread holds nothing and can afford to wait.
+    if (type == MEM_WRITE && current != NULL &&
+            ++tlb->headroom_probe_countdown >= MEM_HEADROOM_PROBE_MISSES) {
+        tlb->headroom_probe_countdown = 0;
+        // The Mach trap in here is amortised over 4 MiB of touched pages, and
+        // is only paid at all because the alternative is the app being killed.
+        if (host_mem_headroom_low()) {
+            current->mem_throttle_wanted = true;
+            cpu_poke(&current->cpu);
+        }
+    }
     char *ptr = mmu_translate(tlb->mmu, TLB_PAGE(addr), type);
     if (atomic_load_explicit(&tlb->mmu->changes, memory_order_relaxed) != tlb->mem_changes)
         tlb_flush(tlb);

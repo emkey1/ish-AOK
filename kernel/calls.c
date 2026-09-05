@@ -6466,8 +6466,12 @@ static void handle_privileged_instruction_interrupt(struct cpu_state *cpu) {
 }
 
 void handle_timer_interrupt(__attribute__((unused)) struct cpu_state *cpu) {
-    // For now we just return.
-    return;
+    // task_run_current released mem->lock at kernel/task.c:918 before calling
+    // handle_interrupt at :921, so this is the one point during guest execution
+    // where the thread holds no mem lock and may reclaim or block. A guest
+    // committing memory faster than the pager can reclaim it gets poked from
+    // tlb_handle_miss and lands here to pay for it.
+    mem_fault_backpressure();
 }
 
 void handle_interrupt(int interrupt) {

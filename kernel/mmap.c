@@ -1,4 +1,5 @@
 #include <string.h>
+#include <time.h>
 #include <sys/mman.h>
 #include "debug.h"
 #include "kernel/calls.h"
@@ -1681,4 +1682,124 @@ out:;
 
 addr_t sys_brk(addr_t new_brk) {
     return (addr_t) sys_brk_guest(new_brk);
+}
+
+// ===========================================================================
+// Backpressure for memory the growth guards never see.
+//
+// do_mmap, mremap and brk all check headroom and reclaim before letting the
+// guest grow. None of that covers how a large heap is actually committed: the
+// guest reserves the region ONCE, while headroom is fine, and the host commits
+// its physical pages as the guest touches them. Every page after the mapping is
+// invisible to those guards.
+//
+// Measured, which is why this exists. Under a 1024 MiB budget, 48 separate
+// 32 MiB mmaps are refused at 832 MiB while ONE 1536 MiB mmap then filled
+// commits the lot unrefused. On a 3 GB iPhone SE, one 2048 MiB mapping filled
+// to 1728 MiB through touches and the app was jetsam-killed with swap on and
+// verified working. kswapd cannot cover it: the guest commits at ~240 MiB/s
+// against kswapd's 8 MiB/s, so it reclaimed 1.2% of what was committed and
+// direct reclaim was never called at all.
+//
+// The sensor is in tlb_handle_miss; this is the actor. It runs from
+// handle_timer_interrupt because task_run_current releases mem->lock at
+// kernel/task.c:918 before calling handle_interrupt at :921, making this the
+// only point in guest execution where the thread holds nothing. Blocking here
+// is not novel: group_stop_wait parks a task at this same call site, and so
+// does every blocking syscall.
+//
+// The throttle IS the reclaim, not a sleep. A thread made to page 8 MiB out
+// before it may commit more is slowed by exactly the cost of the I/O it is
+// causing, which is what Linux does to a process in direct reclaim.
+
+#define FAULT_BACKPRESSURE_WANT_BYTES (8u << 20)
+// Consecutive throttles where the space was still growing, headroom was still
+// low, and reclaim could free nothing, before this is terminal. Not one:
+// reclaim legitimately returns 0 when the aging clock has not yet made anything
+// a candidate, and returns 0 immediately when the user has left swap off --
+// which is the DEFAULT, and must not by itself be a death sentence.
+#define FAULT_BACKPRESSURE_OOM_STRIKES 8
+// Brake applied when reclaim cannot help. With swap off there is no page to
+// evict, so this is the only backpressure available: it does not free memory,
+// it slows the writer so other guest processes, the guest's own allocator and
+// the host all get a chance to react -- and it turns the OOM decision from "N
+// megabytes of touches" into "N milliseconds of sustained low headroom", which
+// is what makes the kill defensible rather than trigger-happy.
+#define FAULT_BACKPRESSURE_BRAKE_MS 20
+
+void mem_fault_backpressure(void) {
+    if (current == NULL || current->mem == NULL || current->mm == NULL)
+        return;
+    if (!current->mem_throttle_wanted)
+        return;
+    current->mem_throttle_wanted = false;
+    struct mm *mm = current->mm;
+
+    // Re-read rather than trusting the sensor: the guest has run since, and
+    // kswapd may already have fixed it.
+    if (!host_mem_headroom_low()) {
+        atomic_store_explicit(&mm->fault_oom_strikes, 0, memory_order_relaxed);
+        return;
+    }
+
+    // Is this address space actually GROWING? The headroom reading is
+    // app-wide, and the sensor over-counts badly: the TLB is direct-mapped, so
+    // conflict misses and every post-flush re-miss look exactly like a fresh
+    // commit. Without this test a process merely re-walking a working set it
+    // already owns accrues strikes -- and is eventually killed for committing
+    // nothing at all -- because some OTHER part of the app is near the ceiling.
+    // Residency is the honest question: only a space whose page count is rising
+    // is the one making things worse.
+    size_t resident = mem_resident_page_count(current->mem);
+    size_t before = atomic_exchange_explicit(&mm->fault_last_resident_pages,
+            resident, memory_order_relaxed);
+    bool growing = before == 0 || resident > before;
+    if (!growing) {
+        atomic_store_explicit(&mm->fault_oom_strikes, 0, memory_order_relaxed);
+        return;
+    }
+
+    // Pay for the memory being committed, on the thread committing it. This is
+    // the throttle: a thread made to page 8 MiB out before it may commit more
+    // is slowed by exactly the cost of the I/O it is causing, which is what
+    // Linux does to a process in direct reclaim.
+    long freed = swap_direct_reclaim(current->mem, FAULT_BACKPRESSURE_WANT_BYTES);
+    if (freed > 0) {
+        atomic_store_explicit(&mm->fault_oom_strikes, 0, memory_order_relaxed);
+        return;
+    }
+
+    // Reclaim could not help -- swap is off, or nothing is a candidate yet. The
+    // brake is all that is left, and it must happen BEFORE strikes accrue, or
+    // the shipped default (swap off) degrades to OOM-kill-only: freed would be
+    // 0 every time and 8 probes of 4 MiB would kill a guest after ~32 MiB of
+    // touches, roughly 130 ms.
+    struct timespec brake = { .tv_sec = 0,
+                              .tv_nsec = FAULT_BACKPRESSURE_BRAKE_MS * 1000000L };
+    nanosleep(&brake, NULL);
+
+    if (!host_mem_headroom_low()) {
+        atomic_store_explicit(&mm->fault_oom_strikes, 0, memory_order_relaxed);
+        return;
+    }
+    unsigned strikes = atomic_fetch_add_explicit(&mm->fault_oom_strikes, 1,
+            memory_order_relaxed) + 1;
+    if (strikes < FAULT_BACKPRESSURE_OOM_STRIKES)
+        return;
+    atomic_store_explicit(&mm->fault_oom_strikes, 0, memory_order_relaxed);
+
+    // Terminal: the space is still growing, the host has nothing left, the
+    // pager can free none of it, and braking has not stopped it. Linux answers
+    // this with the OOM killer, and so do we -- one guest process dies instead
+    // of iOS killing the app, which takes every other guest process and the
+    // user's session with it.
+    //
+    // The faulting process, not a badness heuristic: it is the one asking for
+    // memory that is not there, its death certainly helps, and picking another
+    // would mean walking the task table under pids_lock at the worst moment.
+    printk("ERROR: %d(%s) out of memory: growing with no host headroom left and "
+           "nothing reclaimable; killing it\n",
+           current->pid, current->comm);
+    struct siginfo_ info = { .code = SI_KERNEL_ };
+    deliver_signal(current, SIGKILL_, info);
 }

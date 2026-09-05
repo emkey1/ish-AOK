@@ -185,6 +185,12 @@ struct task {
     // page-fault handler to deliver SIGBUS instead of SIGSEGV. Per-task because
     // the fault is; see task_note_swap_io_fault below.
     bool swap_io_fault;
+    // Set by tlb_handle_miss when the guest is committing memory and the host
+    // is low on headroom; consumed by handle_timer_interrupt, which is the
+    // first point after that where this thread holds no mem lock. Written and
+    // read only by this task's own thread.
+    bool mem_throttle_wanted;
+
     unsigned long nvcsw;
     // Peak resident size in KB, latched here as well as on the mm: do_exit
     // releases the address space before it snapshots the task's final usage,

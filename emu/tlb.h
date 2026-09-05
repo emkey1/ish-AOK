@@ -51,6 +51,9 @@ struct tlb {
     struct mmu *mmu;
     page_t dirty_page;
     uint64_t mem_changes;
+    // Write misses since the last memory-headroom probe. PER-THREAD, so no
+    // atomics on the hottest path in the emulator. See tlb_handle_miss.
+    unsigned headroom_probe_countdown;
     // this is basically one of the return values of tlb_handle_miss, tlb_{read,write}, and __tlb_{read,write}_cross_page
     // yes, this sucks
     guest_addr_t segfault_addr;
