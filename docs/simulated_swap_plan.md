@@ -1459,6 +1459,57 @@ returned ENOMEM since 2.6.9, and a failed swap-in delivered SIGSEGV where Linux
 delivers SIGBUS. Both were single lines, and both would have been found in an
 afternoon beside a real `free`, `vmstat 1`, `top` and `swapon --show`.
 
+#### The remaining phase 2 surfaces: researched, and every plan needed revising
+
+Four surfaces were planned in detail and each plan then checked against the
+code. **All four came back needs-revision**, and the defects were the kind that
+ship: implementing any of them as first written would have introduced the very
+conformance lies the work exists to remove. Recorded here so the next attempt
+starts from the corrected version.
+
+Full working notes, including the byte-exact Linux output captured from a real
+Ubuntu 24.04 aarch64 VM, are in the workflow transcript; the load-bearing points:
+
+**`/proc/swaps`.** Linux's format is exact and was measured with `cat -A`: the
+path, padded to 40 columns (or ONE space if longer), `partition` or `file\t`,
+then size/used/priority in KiB with an EXTRA tab before each of size and used
+when that figure is under 10000000. Size is `K(si->pages)` -- the area MINUS its
+one-page header, which AOK already matches since `slots_total` excludes the
+reserved slot 0. First auto-priority area is -2, the second -3.
+
+Two corrections to the plan:
+- Gating the row on `enabled && total_bytes > 0` **manufactures the lie it
+  exists to remove**: `swap_disable_locked` deliberately keeps the area alive
+  while slots are still out, so the row would vanish while swap was still
+  answering faults.
+- A read-only block node is non-conforming. Linux cannot hold an active swap
+  area on one -- `swapon` opens the bdev `FMODE_WRITE`.
+
+Worth knowing about consumers, measured rather than assumed: `free`, `top`,
+`vmstat` and `htop` never open this file at all (they read `/proc/meminfo`);
+`systemd` reads it through libmount. But with a header-only file **`swapoff -a`
+silently does nothing and returns 0**, which is the concrete cost of the gap
+today, and `swapon --show` contradicts `free`.
+
+**`swapon`/`swapoff`.** The plan missed a fourth consumer of
+`dev_standard_nodes`: `proc_show_devices` (fs/proc/root.c) walks the same table
+and would have printed a block node under "Character devices".
+
+**`mincore`.** The plan contradicted itself on the walk-then-copy order, and two
+of its Linux claims were wrong -- the wholesale `memset(vec, 1, ...)` is gated
+on `!can_do_mincore()`, the 2019 side-channel mitigation, not on `VM_IO|
+VM_PFNMAP`; and `access_ok` runs BEFORE the page count, so `len == 0` does not
+simply fall through.
+
+**`[kswapd0]`.** A hardcoded flags word that disagreed with the plan's own test
+(2228288 against a measured 2230336), and a `readdir` that never increments
+`*index` -- an infinite directory. The deeper question stands and is a design
+decision, not a coding one: AOK's kswapd is a host pthread with no `struct
+task` and no `current`, deliberately, and giving it a guest-visible identity
+means handing the scheduler, signal delivery, `wait()` and the OOM path
+something they could touch. The cosmetic benefit is that `ps` shows a bracketed
+kernel thread; the risk is real. Not obviously worth it.
+
 #### Phase 3, first real device findings (2026-09-05) -- a 3 GB iPhone SE
 
 The 16 GB iPad has ~3 GB of headroom and never reaches the interesting states.
