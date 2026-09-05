@@ -1712,7 +1712,18 @@ addr_t sys_brk(addr_t new_brk) {
 // before it may commit more is slowed by exactly the cost of the I/O it is
 // causing, which is what Linux does to a process in direct reclaim.
 
-#define FAULT_BACKPRESSURE_WANT_BYTES (8u << 20)
+// Asked for per reclaim, and it is the FLOOR swap_direct_reclaim will accept:
+// SWAP_RECLAIM_MIN_BYTES (kernel/swap.c) clamps anything smaller back up to
+// 4 MiB, because the barrier costs every sibling thread ~109 us whatever it is
+// protecting, so a tiny reclaim would be nearly all overhead. Asking for less
+// than this does not make the barrier shorter, it just makes the constant lie.
+//
+// The number that matters is therefore the DUTY CYCLE, not the size: this call
+// holds the address-space barrier, and while it runs every sibling guest thread
+// is stopped. Section 3.9 caps device swap-out near 100 MiB/s, so 4 MiB is
+// ~40 ms of frozen guest per acquisition -- and the interval below is what
+// keeps that to a small share of wall clock.
+#define FAULT_BACKPRESSURE_WANT_BYTES (4u << 20)
 // Consecutive throttles where the space was still growing, headroom was still
 // low, and reclaim could free nothing, before this is terminal. Not one:
 // reclaim legitimately returns 0 when the aging clock has not yet made anything
@@ -1726,6 +1737,24 @@ addr_t sys_brk(addr_t new_brk) {
 // megabytes of touches" into "N milliseconds of sustained low headroom", which
 // is what makes the kill defensible rather than trigger-happy.
 #define FAULT_BACKPRESSURE_BRAKE_MS 20
+// Minimum wall-clock gap between two throttles that take the address-space
+// BARRIER. Without this the throttle monopolises it: a probe fires every
+// MEM_HEADROOM_PROBE_MISSES (~4 MiB of touches), and each one that reclaims
+// holds the barrier -- quiescing every sibling guest thread -- for as long as
+// 8 MiB of eviction I/O takes. On a Mac that is invisible. On a device it is
+// tens of milliseconds of flash writes per 4 MiB committed, back to back, with
+// every other guest thread stopped; the app stops responding and iOS kills it
+// as hung. OBSERVED on a 3 GB iPhone SE: the UI froze with the window still on
+// screen and the app was then terminated -- which is not what a jetsam kill
+// looks like, and was the clue.
+//
+// 250 ms against a ~40 ms barrier is a 16% duty cycle -- the guest is running
+// 5/6 of the time -- and still permits ~16 MiB/s of reclaim, which is an order
+// of magnitude above the rate a device guest actually commits at (the SE
+// measured ~2 MiB/s filling a 2 GiB mapping). Sized from the duty cycle rather
+// than from how fast reclaim could go, because the failure this prevents is the
+// app being killed as unresponsive, not the pager being slow.
+#define FAULT_BACKPRESSURE_MIN_INTERVAL_MS 250
 
 void mem_fault_backpressure(void) {
     if (current == NULL || current->mem == NULL || current->mm == NULL)
@@ -1763,20 +1792,48 @@ void mem_fault_backpressure(void) {
     // the throttle: a thread made to page 8 MiB out before it may commit more
     // is slowed by exactly the cost of the I/O it is causing, which is what
     // Linux does to a process in direct reclaim.
-    long freed = swap_direct_reclaim(current->mem, FAULT_BACKPRESSURE_WANT_BYTES);
-    if (freed > 0) {
+    //
+    // But not more often than FAULT_BACKPRESSURE_MIN_INTERVAL_MS, because this
+    // call takes the address-space barrier and every sibling guest thread stops
+    // while it runs. Between reclaims the writer is still braked below, so
+    // backpressure is continuous even though the barrier is not.
+    static _Atomic uint64_t last_reclaim_ms;
+    struct timespec now_ts;
+    clock_gettime(CLOCK_MONOTONIC, &now_ts);
+    uint64_t now_ms = (uint64_t) now_ts.tv_sec * 1000 + now_ts.tv_nsec / 1000000;
+    uint64_t last = atomic_load_explicit(&last_reclaim_ms, memory_order_relaxed);
+    long freed = 0;
+    bool reclaimed = false;
+    if (now_ms - last >= FAULT_BACKPRESSURE_MIN_INTERVAL_MS) {
+        atomic_store_explicit(&last_reclaim_ms, now_ms, memory_order_relaxed);
+        freed = swap_direct_reclaim(current->mem, FAULT_BACKPRESSURE_WANT_BYTES);
+        reclaimed = true;
+    }
+
+    // Brake unconditionally while headroom is still low, whether or not reclaim
+    // just freed something. Making the brake conditional on reclaim FAILING was
+    // wrong in a way that only a slow device would have shown: the throttle's
+    // strength then came entirely from how long the eviction I/O took, so on
+    // this Mac -- where the swap file is page cache and 2 MiB costs
+    // microseconds -- a guest committing 1536 MiB was not slowed at all
+    // (297 MiB/s, measured), while the same code on a phone would brake hard.
+    // A backpressure mechanism whose strength is set by the host's I/O speed is
+    // not a mechanism, it is an accident.
+    if (!host_mem_headroom_low()) {
         atomic_store_explicit(&mm->fault_oom_strikes, 0, memory_order_relaxed);
         return;
     }
-
-    // Reclaim could not help -- swap is off, or nothing is a candidate yet. The
-    // brake is all that is left, and it must happen BEFORE strikes accrue, or
-    // the shipped default (swap off) degrades to OOM-kill-only: freed would be
-    // 0 every time and 8 probes of 4 MiB would kill a guest after ~32 MiB of
-    // touches, roughly 130 ms.
     struct timespec brake = { .tv_sec = 0,
                               .tv_nsec = FAULT_BACKPRESSURE_BRAKE_MS * 1000000L };
     nanosleep(&brake, NULL);
+
+    // Reclaim that FREED something means the pager is coping; the brake above
+    // is the whole cost. Only a reclaim that ran and freed nothing is evidence
+    // the pager cannot help -- swap off, or nothing a candidate yet -- and only
+    // that accrues a strike. A probe that skipped reclaim because it was too
+    // soon for the barrier proves nothing either way.
+    if (!reclaimed || freed > 0)
+        return;
 
     if (!host_mem_headroom_low()) {
         atomic_store_explicit(&mm->fault_oom_strikes, 0, memory_order_relaxed);
