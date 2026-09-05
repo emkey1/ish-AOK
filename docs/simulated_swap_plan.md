@@ -1459,7 +1459,7 @@ returned ENOMEM since 2.6.9, and a failed swap-in delivered SIGSEGV where Linux
 delivers SIGBUS. Both were single lines, and both would have been found in an
 afternoon beside a real `free`, `vmstat 1`, `top` and `swapon --show`.
 
-#### The growth guard does not cover the fault path (2026-09-05) -- OPEN
+#### The growth guard does not cover the fault path (2026-09-05) -- FIXED
 
 **This is the largest gap found so far, and it defeats swap's core promise.**
 
@@ -1557,6 +1557,53 @@ mechanism the address-space barrier ALREADY uses to interrupt sibling threads --
 a thread that can be poked to quiesce for the barrier is a thread that can be
 made to wait somewhere legal. That is the direction to take next, and it is a
 design change rather than a hook.
+
+**Fixed: sense in `tlb_handle_miss`, act in `handle_timer_interrupt`.** The
+sensor counts write misses per-thread, probes headroom once per 1024 of them,
+and does nothing but `cpu_poke` -- an atomic store, legal under the read lock.
+The engines turn that into `INT_TIMER`, which lands in `handle_timer_interrupt`
+(kernel/calls.c, an empty stub until now), reached from kernel/task.c:921 AFTER
+the `read_unlock` at :918. That is the only point in guest execution where the
+thread holds no lock, and blocking there is established: `group_stop_wait()`
+already parks tasks at the same call site.
+
+The throttle is the reclaim itself rather than a sleep -- a thread made to page
+8 MiB out before it may commit more is slowed by exactly the cost of the I/O it
+is causing. When reclaim cannot help it brakes 20 ms and only then counts a
+strike; after 8 strikes the faulting guest process is SIGKILLed.
+
+| | before | after |
+|---|---|---|
+| commit rate under pressure | 240 MiB/s, unchecked | **throttled to 40 MiB/s** |
+| direct reclaim | **0** | **460 MB** |
+| outcome | the APP is jetsam-killed | the guest process is killed, **the app survives** |
+
+Verified that the app really does survive: the filler exits 137, and the shell
+still runs commands and can allocate again afterwards. With no budget and no
+pressure, 1536 MiB fills unrefused with no kill.
+
+Three defects adversarial review found in the first version, all fixed:
+
+- **With swap OFF, the shipped default, there was no throttle at all.**
+  `swap_direct_reclaim` returns 0 immediately when swap is off, so `freed` was
+  always 0 and it went straight to counting strikes -- OOM-kill-only, after
+  ~32 MiB of touches. The brake must come first, which turns the decision from
+  "N megabytes touched" into "N milliseconds of sustained low headroom".
+- **Innocent-process kills.** `host_mem_headroom_low()` is app-wide and the
+  sensor over-counts: the TLB is direct-mapped, so conflict misses and every
+  post-flush re-miss look exactly like a fresh commit. A process merely
+  re-walking a working set it already owns could be killed because something
+  else was near the ceiling. Escalation is now gated on the address space
+  actually growing (`mem_resident_page_count` rising).
+- **Strikes were per-task, but the mm is per-process.** A four-thread filler
+  spread its probes across four counters and needed 4x the overshoot. Moved to
+  `struct mm`.
+
+Still open here: `rep_string_fast` (jit/helpers.c) has no poke check in its
+`while (ecx != 0)` loop, so one `rep stos` can commit a large run in a single
+uninterruptible call while holding the read lock. It is bounded by the mapping
+being written and did not defeat the throttle in testing, but it is the shape a
+`memset` fill takes and should get a poke check.
 
 One process note, because it cost an hour here and is written down in the
 project's own book (ch36) and was still fallen for: `printk` is `ish_printk` ->
