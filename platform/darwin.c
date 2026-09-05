@@ -747,6 +747,27 @@ bool host_mem_headroom_low(void) {
     if (host_mem_pressure_level() >= HOST_MEM_PRESSURE_CRITICAL)
         return true;
 
+    // And the DEVICE's own free memory, against the same floor. This guard was
+    // written around a per-process ceiling, which is the right instrument when
+    // the ceiling is much smaller than the machine -- and useless when it is not.
+    //
+    // MEASURED on a 3 GB iPhone SE, 2026-09-05: at the moment the guest could no
+    // longer allocate, the DEVICE had 310 MB free while this function computed
+    // ~1.6 GB of our own headroom and cheerfully allowed more. iOS's per-process
+    // limit on that phone is roughly the size of RAM, so obeying only that limit
+    // means AOK is permitted to consume the entire machine, and the earlier
+    // JetsamEvent is what that looks like: largestProcess at 1.86 GB, reason
+    // proc-thrashing, 40 MB free device-wide, Apple's own daemons dying around
+    // it. The host refused the allocation before we did, which is the wrong way
+    // round -- by then the damage is done.
+    //
+    // get_mem_usage() already reports the machine's figures (it is what the
+    // guest's MemAvailable is built from), so this costs no new trap beyond the
+    // ones it already makes.
+    struct mem_usage machine = get_mem_usage();
+    if (machine.available != 0 && machine.available < host_mem_headroom_floor())
+        return true;
+
     // Fresh, not the 10 ms sample -- this is the jetsam guard, and the case for
     // paying a Mach trap here is measured out above mem_budget_read().
     struct host_mem_reading raw = {};
