@@ -13,6 +13,17 @@
 # were all broken for glibc programs and green on every Alpine root. A fifth
 # leg on build/devuan-arm64-test costs one more suite run and closes it.
 #
+# The SIXTH leg, build/devuan-amd64-test, is the lesson of that fix being
+# half a fix. One glibc leg is one glibc leg on ONE guest architecture, and
+# libc choice interacts with the execution engine: each guest has its own JIT
+# frontend, so a glibc-only defect in the amd64 engine is invisible to a
+# devuan-arm64 leg and an amd64-only defect is invisible to every Alpine leg.
+# jit_writer_starvation was exactly that shape -- the amd64 frontend never
+# checked jit->write_wanted, so a compute-bound thread held jetsam_lock for
+# read across millions of blocks, and only glibc's pthread_create asked for
+# the write lock often enough to show it. It failed 8/8 on this leg while the
+# five-leg gate was green.
+#
 # Usage:
 #   tools/run-guest-gate.sh                 # every local root found, then e2e
 #   tools/run-guest-gate.sh --no-e2e        # skip the end-to-end suite
@@ -33,9 +44,9 @@
 # leg is the belt to that pair of braces: it also catches a test that FAILS
 # rather than skips when it cannot have privilege.
 #
-# --parallel runs the five local legs concurrently instead of one after
-# another: roughly 45 minutes rather than three hours on an 8-core Mac, and the
-# way this project has run multi-arch sweeps historically. The cost is load, and
+# --parallel runs the six local legs concurrently instead of one after
+# another: roughly 45 minutes rather than three and a half hours on an 8-core
+# Mac, and the way this project has run multi-arch sweeps historically. The cost is load, and
 # load makes the timing-sensitive tests flake -- so treat a failure under
 # --parallel as a question, not an answer, and re-run that leg on a quiet
 # machine before believing it.
@@ -175,7 +186,7 @@ run_leg() {
 echo "logs: $LOGDIR"
 echo
 
-LEG_NAMES="arm64 i386 amd64 riscv64 devuan-arm64"
+LEG_NAMES="arm64 i386 amd64 riscv64 devuan-arm64 devuan-amd64"
 leg_root() {
     case "$1" in
         arm64)        echo "$REPO/build/alpine-arm64-test" ;;
@@ -183,6 +194,7 @@ leg_root() {
         amd64)        echo "$REPO/build/alpine-amd64-test" ;;
         riscv64)      echo "$REPO/build/alpine-riscv64-test" ;;
         devuan-arm64) echo "$REPO/build/devuan-arm64-test" ;;
+        devuan-amd64) echo "$REPO/build/devuan-amd64-test" ;;
     esac
 }
 
@@ -213,6 +225,12 @@ run_leg riscv64 "$REPO/build/alpine-riscv64-test"
 #   build/ish -f build/devuan-arm64-test /bin/sh -c \
 #       'apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev'
 run_leg devuan-arm64 "$REPO/build/devuan-arm64-test"
+
+# ...and glibc on the OTHER guest architecture that has its own JIT frontend.
+# See the header: the amd64 engine's jetsam starvation was reachable only from
+# this combination, and neither the Alpine amd64 leg nor the glibc arm64 leg
+# could see it. Same toolchain requirement as the leg above.
+run_leg devuan-amd64 "$REPO/build/devuan-amd64-test"
 
 fi
 

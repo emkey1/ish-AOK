@@ -2935,6 +2935,35 @@ rearm_amd64:
         if (tlb->mmu != cpu->mmu || tlb->mem_changes != cpu->mmu->changes)
             tlb_refresh(tlb, cpu->mmu);
 
+        // Stand aside for a jetsam writer before starting another block, the
+        // same guard the i386, arm64 and riscv64 frontends have at this exact
+        // point. This engine used to check only the poke flag, so a thread
+        // burning CPU in guest code held jetsam_lock for read across up to
+        // AMD64_FRONTEND_TIMER_BLOCK_QUANTUM (1024) entries of up to
+        // chain_budget (8192) chained blocks each -- millions of blocks -- with
+        // write_wanted raised the whole time. The writer polls trywrlock every
+        // 5ms for five seconds and never once found the lock free, so
+        // jit_cleanup_jetsam_if_needed burned its entire timeout having freed
+        // nothing. A host sample of the stalled run shows it exactly: the
+        // spinner in jit_enter for 3965 of 3977 samples, five siblings burning
+        // the full timeout in jit_cleanup_jetsam_if_needed, and no writer ever
+        // getting in.
+        //
+        // That is jit_writer_starvation's 18-second pthread_create on a glibc
+        // amd64 root. Why glibc: its pthread_create maps and unmaps enough per
+        // thread to keep the jetsam list non-empty, so every sibling returning
+        // from the JIT lines up behind the same spinner. Measured with a bare
+        // create/join loop and no spinner at all, 20000 of them take 19.2s on
+        // build/devuan-amd64-test against 1.7s on build/alpine-amd64-test, and
+        // the glibc run's profile is all pt_unmap_always / jit_invalidate_range
+        // / jit_free_jetsam. musl asks for a fraction of that, which is why the
+        // same build passed on every Alpine root while failing 8/8 here.
+        if (jit_should_yield(jit, cpu)) {
+            jit_frame_sync_out(cpu, frame);
+            ret = INT_TIMER;
+            break;
+        }
+
         fallback_to_interp = false;
         ip = frame->cpu.amd64_rip;
         if (unlikely(amd64_frontend_debug_active()) && amd64_cc1_force_interp_block(ip)) {
@@ -3142,7 +3171,10 @@ rearm_amd64:
             ret = interrupt;
             break;
         }
-        if (cpu_take_poke(cpu)) {
+        // write_wanted as well as the poke flag, for the reason at the top of
+        // this loop: the block quantum below is far too coarse to be the only
+        // thing that lets a jetsam writer in.
+        if (jit_should_yield(jit, cpu)) {
             jit_frame_sync_out(cpu, frame);
             ret = INT_TIMER;
             break;
