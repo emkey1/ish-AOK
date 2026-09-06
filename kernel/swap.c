@@ -977,7 +977,11 @@ static void swap_thrash_check(uint64_t in_delta, uint64_t out_delta) {
 
 static void *swap_kswapd_main(void *UNUSED_ARG) {
     (void) UNUSED_ARG;
+#if defined(__APPLE__)
     pthread_setname_np("kswapd0");
+#elif defined(__linux__) || defined(__gnu_linux__)
+    pthread_setname_np(pthread_self(), "kswapd0");
+#endif
     atomic_store_explicit(&swap_kswapd_alive, true, memory_order_release);
     uint64_t last_in = 0, last_out = 0;
     while (!atomic_load_explicit(&swap_kswapd_stop, memory_order_acquire)) {

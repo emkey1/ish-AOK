@@ -343,6 +343,18 @@ uint64_t host_mem_headroom_floor(void) {
     return (uint64_t) mem_headroom_threshold_mb() * 1024 * 1024;
 }
 
+unsigned host_mem_pressure_level(void) {
+    return 0; // Not implemented on Linux
+}
+
+bool host_mem_should_reclaim(void) {
+    return host_mem_headroom_low();
+}
+
+void host_mem_pressure_start(void) {
+    // Not implemented on Linux
+}
+
 bool host_mem_headroom_low(void) {
     // No hard per-process memory budget on a Linux host; the OOM killer and
     // overcommit policy own this, and the guard is an iOS-jetsam concern. The

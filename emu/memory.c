@@ -3644,7 +3644,11 @@ static bool swap_evict_frame(struct mem *mem, page_t base, struct data *data, si
         no_madvise = (a != NULL && a[0] == '1') ? 1 : 0;
         no_mprotect = (m != NULL && m[0] == '1') ? 1 : 0;
     }
+    #if defined(__APPLE__)
     int adv = no_madvise ? 0 : madvise(host, frame, MADV_FREE_REUSABLE);
+#else
+    int adv = no_madvise ? 0 : madvise(host, frame, MADV_FREE);
+#endif
     int adv_errno = adv == 0 ? 0 : errno;
     int prot = no_mprotect ? 0 : mprotect(host, frame, PROT_NONE);
     int prot_errno = prot == 0 ? 0 : errno;
@@ -3910,7 +3914,9 @@ static int swap_fault_page_locked(struct mem *mem, page_t page) {
             // the host we want the page back, then refill it.
             err = _EIO;
         } else {
+            #if defined(__APPLE__)
             madvise(host, frame, MADV_FREE_REUSE);
+#endif
             err = swap_slot_read(slot, host, frame);
             if (err == 0) {
                 // The frame is home. Clear the slot BEFORE the lock is dropped
