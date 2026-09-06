@@ -179,6 +179,7 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
         pip.layer.shadowRadius = 6.0;
         pip.layer.shadowOffset = CGSizeMake(0.0, 2.0);
         pip.accessibilityLabel = @"Display menu";
+        pip.accessibilityHint = @"Opens the display menu for keyboard and input options.";
         [pip addTarget:self action:@selector(menuPipTapped:) forControlEvents:UIControlEventTouchUpInside];
         _menuPip = pip;
         [self.view addSubview:pip];

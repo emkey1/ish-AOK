@@ -519,6 +519,8 @@ static const NSInteger kMaximumTerminalFontSize = 72;
         [button setTitle:@"⚙︎" forState:UIControlStateNormal];
         button.titleLabel.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
     }
+    button.accessibilityLabel = @"Settings";
+    button.accessibilityHint = @"Opens terminal settings.";
     [button addTarget:self action:@selector(showAbout:) forControlEvents:UIControlEventPrimaryActionTriggered];
     [self.view addSubview:button];
     self.floatingSettingsButton = button;
@@ -800,6 +802,7 @@ static const CGFloat kFindBarHeight = 44;
         [button setTitle:@"TTY" forState:UIControlStateNormal];
         button.titleLabel.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
     }
+    button.accessibilityLabel = @"Terminal Switcher";
     [button addTarget:self action:@selector(showTerminalSwitcherFromButton:) forControlEvents:UIControlEventPrimaryActionTriggered];
     [self.view addSubview:button];
     self.floatingTerminalSwitcherButton = button;
