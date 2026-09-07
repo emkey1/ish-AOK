@@ -359,4 +359,15 @@ bool host_mem_headroom_low(void) {
     return budget.available < host_mem_headroom_floor();
 }
 
+unsigned host_mem_pressure_level(void) {
+    return 0; // HOST_MEM_PRESSURE_NORMAL
+}
+
+bool host_mem_should_reclaim(void) {
+    return host_mem_headroom_low();
+}
+
+void host_mem_pressure_start(void) {
+}
+
 #endif
