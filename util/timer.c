@@ -190,9 +190,33 @@ int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *ol
         sigaddset(&wake_sigs, SIGUSR1);
         sigaddset(&wake_sigs, SIGUSR2); // same reasoning, see util/sync.c
         pthread_sigmask(SIG_BLOCK, &wake_sigs, &oldmask);
-        pthread_create(&timer->thread, NULL, timer_thread, timer);
-        pthread_detach(timer->thread);
+        // pthread_create returns a POSITIVE errno and can genuinely fail --
+        // EAGAIN at the host thread limit, which a guest reaches by making
+        // enough tasks, since every one of them is a host thread too. Unchecked,
+        // the two lines after it were the bug: pthread_detach was handed an
+        // UNINITIALISED pthread_t, and thread_running had already been set to
+        // true above, so the next timer_set would pthread_kill that same
+        // garbage handle. kernel/task.c's task_start had the identical bug and
+        // says so at length; this is the same fix in the other place it lives.
+        //
+        // Build 553 crashes with SIGABRT on exactly this stack -- guest
+        // setitimer(2) -> itimer_set -> timer_set -> abort -- with no assert
+        // frame, which is what calling into libpthread with a bad handle looks
+        // like.
+        int err = pthread_create(&timer->thread, NULL, timer_thread, timer);
+        if (err == 0)
+            pthread_detach(timer->thread);
         pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
+        if (err != 0) {
+            // No thread means the timer cannot fire, so do not leave it
+            // claiming to be armed and running: a later timer_set would signal
+            // a thread that was never born, and getitimer would report a
+            // deadline nothing is watching.
+            timer->thread_running = false;
+            timer->active = false;
+            unlock(&timer->lock);
+            return _EAGAIN;
+        }
     }
     unlock(&timer->lock);
     return 0;

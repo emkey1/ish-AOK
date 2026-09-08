@@ -870,6 +870,20 @@ dword_t sys_clock_settime(dword_t clock, addr_t tp) {
     return clock_settime_common(clock, tp, false);
 }
 
+// Same call with the pointer at its real width. clock_settime_common has always
+// taken a guest_addr_t; it was the addr_t in the wrapper above that threw the
+// top half away, and the native dispatchers for the 64-bit ABIs called through
+// it. A timespec on the stack survived, because a guest stack address fits in
+// 32 bits -- one in an mmap'd page (which is where a heap allocation lands) did
+// not, and the call came back EFAULT instead of the EPERM it had earned.
+// Measured the same way on all three 64-bit guests: amd64 0x7ffffdfc7000,
+// arm64 0x7fffbdffd000, riscv64 0x3fbdf64000.
+dword_t sys_clock_settime_guest(dword_t clock, guest_addr_t tp) {
+    if (clock != CLOCK_REALTIME_ && clock != CLOCK_REALTIME_ALARM_)
+        return clock_settime_errno(clock);
+    return clock_settime_common(clock, tp, false);
+}
+
 dword_t sys_clock_settime64(dword_t clock, addr_t tp) {
     if (clock != CLOCK_REALTIME_ && clock != CLOCK_REALTIME_ALARM_)
         return clock_settime_errno(clock);

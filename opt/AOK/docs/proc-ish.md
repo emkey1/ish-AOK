@@ -101,6 +101,60 @@ cat /proc/ish/arm64_jit_fuse
 # retcache on
 ```
 
+## Memory and swap
+
+Four files describe what the emulator is doing about memory. They are read-only
+diagnostics — nothing here changes behaviour except `swap`, and then only on a
+build that offered guest control.
+
+```sh
+cat /proc/ish/swap        # the swap area: capacity, use, and why it refuses work
+cat /proc/ish/mem_guard   # the jetsam guard: what it sees and whether it is refusing
+```
+
+`swap` is the pager's whole state in one screen. The lines worth knowing:
+
+| line | what it tells you |
+|---|---|
+| `enabled` / `state` | whether there is an area at all, and why not if there isn't |
+| `slots_total` / `slots_free` | capacity in 16 KiB slots, and how much is still free |
+| `bytes_written` / `write_window` | what paging has cost so far, against the 24-hour budget |
+| `budget_refusals` | evictions declined because that budget is spent |
+| `kswapd` | the background sweeper: passes made, bytes reclaimed |
+| `thrashing` | pages coming straight back, so reclaim has paused itself |
+| `release_works` | whether releasing a page actually moves the memory the OS charges us for |
+| `direct_reclaim` | bytes freed for an allocation that would otherwise have failed |
+| `alloc_failures` / `no_area` | evictions refused because the area is full, or absent |
+| `io_errors` | failed reads or writes against the area |
+
+`mem_guard` answers the question "why did that allocation fail?". It prints the
+machine's memory, this process's own ceiling and headroom, the system pressure
+level, and then two verdicts: whether a large growth is being refused right now,
+and whether the throttle is engaged. A small growth is always allowed — see
+[swap.md](swap.md) and the note in `mem_growth_refused`.
+
+Two more exist for development and are of no use in normal running:
+`swap_evict`, which forces eviction of a named pid's address space, and
+`mem_release_probe`, which measures whether releasing pages moves the host's
+ledger at all. Both are writable only on a build that offered guest control.
+
+## When something is not waking up
+
+```sh
+cat /proc/ish/wake_signals
+```
+
+A task parked in a blocking call is woken by a signal from the thread that wants
+its attention. On Darwin that poke is occasionally swallowed in a way that
+leaves the target permanently deaf, and this file counts how often that has been
+detected and repaired — separately for a sleeping task and for one in
+`poll`/`select`/`epoll`. It also reports the cap that bounds any wait, so a lost
+wake costs at most that much latency rather than the rest of the process's life.
+
+**Zero is the expected state, and a non-zero count is not by itself a fault** — a
+repair means the mechanism worked. A number that *climbs* while guest processes
+hang is the signal worth chasing.
+
 ## Things worth knowing
 
 - **`/proc/ish` is the same in every root and every chroot.** AOK has no mount

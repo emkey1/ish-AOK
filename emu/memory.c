@@ -3644,9 +3644,13 @@ static bool swap_evict_frame(struct mem *mem, page_t base, struct data *data, si
         no_madvise = (a != NULL && a[0] == '1') ? 1 : 0;
         no_mprotect = (m != NULL && m[0] == '1') ? 1 : 0;
     }
-    #if defined(__APPLE__)
+#if defined(__APPLE__)
     int adv = no_madvise ? 0 : madvise(host, frame, MADV_FREE_REUSABLE);
 #else
+    // Darwin-only pair. Elsewhere the frame's bytes are already in its slot by
+    // this point and the next fault refills them from there, so discarding is
+    // exactly right -- and on Linux MADV_DONTNEED is what actually returns the
+    // pages, where MADV_FREE only marks them reclaimable and moves no counter.
     int adv = no_madvise ? 0 : madvise(host, frame, MADV_DONTNEED);
 #endif
     int adv_errno = adv == 0 ? 0 : errno;
@@ -3914,10 +3918,11 @@ static int swap_fault_page_locked(struct mem *mem, page_t page) {
             // the host we want the page back, then refill it.
             err = _EIO;
         } else {
-            #if defined(__APPLE__)
+#if defined(__APPLE__)
+            // Undo the REUSABLE above: tell Darwin we are taking the pages
+            // back. Nothing to undo elsewhere -- MADV_DONTNEED discarded them
+            // outright, and the read below is what puts the contents back.
             madvise(host, frame, MADV_FREE_REUSE);
-#else
-            madvise(host, frame, MADV_DONTNEED);
 #endif
             err = swap_slot_read(slot, host, frame);
             if (err == 0) {

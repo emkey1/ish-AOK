@@ -19,42 +19,27 @@ Started 2026-08-19, after the 549 release run. Closed entries from the 549 and
 
 ## Diagnosed, not fixed
 
-### A `#!` interpreter may not itself be a script
+### Under `set -T`, some bash re-launches announce a command twice
 
-Found 2026-09-07 alongside the native-interpreter fix (`kernel/exec.c`,
-`native_dispatch_exec`), and deliberately left alone there because it changes
-what ordinary `#!` handling *accepts*, which was out of that change's scope.
+The last trap divergence between a re-launched subshell and a forked one, and
+the only one left after the 2026-09-07 work on `deps/bash/aok_fork.c` (the
+special traps emitted last, emitted DEBUG-last among themselves, and `$?` moved
+out of the state script into `AOK_BASH_STATUS`).
 
-**Established, measured on the Linux oracle** (Devuan, 6.12, x86_64) with a
-chain of scripts each naming the previous one as its interpreter:
+A re-launch from `execute_simple_command` -- a pipeline element, an async simple
+command -- fires the DEBUG trap in the parent (that site runs the trap and *then*
+calls `make_child`) and again in the child, which re-parses the text it was
+handed. `set -T; trap 'echo T' DEBUG; : | cat` fires 5 times against a fork's 3.
+`( )` and `$( )` are exact, because the parent does not announce those, and
+`tests/manual/native_bash_fork_state.sh` asserts that agreement.
 
-| chain length | Linux | iSH-AOK |
-|---|---|---|
-| 1 (`#!/bin/sh`) | runs | runs |
-| 2 (interpreter is itself a `#!` script) | runs | `ENOEXEC` |
-| 3, 4 | runs | `ENOEXEC` |
-| 5 and deeper | `ELOOP` (errno 40) | `ENOEXEC` |
-
-So Linux resolves a `#!` chain up to **four** interpreters deep and answers
-`ELOOP` beyond that; AOK resolves exactly one and answers `ENOEXEC` for
-anything deeper. `shebang_exec` hands the interpreter to `format_exec`, which
-tries ELF and then `binfmt_misc` and stops -- it never re-enters
-`shebang_exec`, so the recursion Linux bounds at 4 is absent rather than
-limited.
-
-`ENOEXEC` is the errno every shell answers by silently re-running the file
-under `/bin/sh`, so the visible symptom is a script running under the wrong
-interpreter with no diagnostic -- the same silence the native-interpreter bug
-had, and the reason that one went unnoticed. One concrete case remains open
-because of it: `/AOK/native/<name>` serves a `#!/bin/sh` placeholder whose
-whole job is to say "native dispatch unavailable in this build" out loud, and
-reached as a `#!` interpreter in a build that lacks the program, that
-diagnostic is still swallowed.
-
-**Next step:** thread a depth through `shebang_exec`/`format_exec` -- Linux's
-`bprm->recursion_depth`, bounded the same way -- and return `_ELOOP` past the
-bound. `tests/manual/exec_shebang_interpreter.c` is where the cases go; the
-oracle numbers above are the expectations.
+Only reachable under `-T`, which is what a DEBUG-trap debugger sets. The obvious
+mechanism -- the child skipping a counted number of fires on a signal from the
+parent -- can *swallow* a real fire if the count is ever wrong, which is worse
+for a debugger than an extra one, so it has not been built. Anything that closes
+it has to work the other way round: the child would have to be told that the
+command it is about to parse has already been announced, which is a property of
+that one re-launch site rather than a count.
 
 ### atop's accounting daemon wedges boot, and nothing after it starts
 

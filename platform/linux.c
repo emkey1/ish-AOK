@@ -359,15 +359,34 @@ bool host_mem_headroom_low(void) {
     return budget.available < host_mem_headroom_floor();
 }
 
+// The three the Darwin build implements against a DISPATCH_SOURCE_TYPE_MEMORY-
+// PRESSURE source. Linux has no equivalent PUSH notification, so the header's
+// own contract applies -- "0 on platforms with no such source, which makes
+// every caller a no-op there" -- and these exist so that everything above the
+// platform layer can be written once.
+//
+// Their absence is what broke the Linux CI link after the swap work landed;
+// declaring an API in platform.h obliges every platform to answer it.
+//
+// The closest Linux counterpart is PSI, /proc/pressure/memory, which is a
+// pollable stall percentage rather than a level. Deliberately NOT wired up
+// here: turning avg10 into warn/critical needs thresholds measured against
+// real behaviour, and a number invented at a keyboard would drive the swap
+// throttle (host_mem_should_reclaim) on every Linux host. The arithmetic path
+// in host_mem_headroom_low() above is what governs the guard here meanwhile,
+// which is exactly what it did before the pressure API existed.
 unsigned host_mem_pressure_level(void) {
-    return 0; // HOST_MEM_PRESSURE_NORMAL
+    return HOST_MEM_PRESSURE_NORMAL;
 }
 
 bool host_mem_should_reclaim(void) {
+    // With no system-pressure signal, the disjunction in the header reduces to
+    // its second half.
     return host_mem_headroom_low();
 }
 
 void host_mem_pressure_start(void) {
+    // Nothing to subscribe to.
 }
 
 #endif

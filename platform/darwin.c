@@ -703,6 +703,13 @@ static long mem_headroom_threshold_mb(void) {
 #define MEM_HEADROOM_CEILING_FRACTION 6
 #define MEM_HEADROOM_FRACTION_CAP (512ull * 1024 * 1024)
 
+// How much more machine-wide free memory a CRITICAL pressure notification asks
+// for than a warn does, before it refuses guest growth. This is what keeps
+// CRITICAL stronger than warn now that it is weighed against a reading rather
+// than believed on its own: at 4x the floor it refuses well before warn would,
+// and still only while the machine really is short. See host_mem_headroom_low.
+#define HOST_MEM_CRITICAL_FLOOR_SCALE 4ull
+
 uint64_t host_mem_headroom_floor(void) {
     uint64_t configured = (uint64_t) mem_headroom_threshold_mb() * 1024 * 1024;
     if (configured == 0)
@@ -823,9 +830,31 @@ bool host_mem_headroom_low(void) {
     // refused every mmap the shell needed and produced no output at all.
     // Warn instead drives the throttle (host_mem_should_reclaim), which slows
     // the guest and pages memory out without denying it anything.
-    if (host_mem_pressure_level() >= HOST_MEM_PRESSURE_CRITICAL)
-        return true;
-
+    //
+    // But CRITICAL is a NOTIFICATION, not a measurement, and it used to return
+    // true here on its own. dispatch delivers it on a level CHANGE, so the value
+    // is a latch: once raised it stands until the system chooses to send
+    // something else, and if it never does then every guest mmap in the app is
+    // refused for the rest of the process's life.
+    //
+    // MEASURED on a device, 2026-09-07, and it is why this is not a
+    // refinement. `stress --vm-bytes 5.5G` raised CRITICAL, the 5 GB mapping
+    // was refused (right), and then NINE SECONDS LATER -- with stress dead and
+    // its memory returned -- a 1 MiB mapping for the shell was refused too:
+    //
+    //     MEMORY PRESSURE CRITICAL (was normal): footprint 4915 MB, own headroom 1228 MB
+    //     WARNING: 744(stress) mmap refused, low iOS memory headroom (len=0x140001000)
+    //     WARNING: 745(zsh) mmap refused, low iOS memory headroom (len=0x100000)
+    //
+    // 1228 MB of our own headroom, and no "MEMORY PRESSURE normal" line ever
+    // followed. Every later command failed the same way, so the guest was
+    // bricked until the app restarted.
+    //
+    // So the notification now has to agree with a reading taken NOW. The SE
+    // case it was written for still refuses -- there the machine had 40 MB free,
+    // which is under any floor -- while a stale latch over a machine that has
+    // recovered no longer vetoes anything. CRITICAL stays stronger than warn by
+    // being weighed against a larger floor rather than by skipping the check.
     // And the DEVICE's own free memory, against the same floor. This guard was
     // written around a per-process ceiling, which is the right instrument when
     // the ceiling is much smaller than the machine -- and useless when it is not.
@@ -860,11 +889,17 @@ bool host_mem_headroom_low(void) {
     // that precedes a jetsam kill -- which is exactly where this last fired
     // usefully: pressure at WARN with 325 MB left, refusing the guest at
     // 1248 MB where it had previously run to 1.86 GB and been killed.
-    if (host_mem_pressure_level() >= HOST_MEM_PRESSURE_WARN) {
+    unsigned pressure = host_mem_pressure_level();
+    if (pressure >= HOST_MEM_PRESSURE_WARN) {
+        uint64_t floor = host_mem_headroom_floor();
+        if (pressure >= HOST_MEM_PRESSURE_CRITICAL &&
+                floor <= UINT64_MAX / HOST_MEM_CRITICAL_FLOOR_SCALE)
+            floor *= HOST_MEM_CRITICAL_FLOOR_SCALE;
         struct mem_usage machine = get_mem_usage();
-        if (machine.available != 0 && machine.available < host_mem_headroom_floor())
+        if (machine.available != 0 && machine.available < floor)
             return true;
     }
+
 
     // Fresh, not the 10 ms sample -- this is the jetsam guard, and the case for
     // paying a Mach trap here is measured out above mem_budget_read().

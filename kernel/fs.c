@@ -3158,10 +3158,11 @@ static ssize_t copy_write_chunk(struct fd *fd, const void *buf, size_t size, off
     return res;
 }
 
-// Shared engine for sendfile() and copy_file_range(): move up to count bytes
-// from in_fd to out_fd through a host bounce buffer. in_off/out_off are host
-// copies of the caller's offsets (NULL = use the fd's current position). Returns
-// bytes copied (possibly short, e.g. at EOF or on a signal), or -errno if none.
+// Shared engine for sendfile(), splice() and copy_file_range(): move up to
+// count bytes from in_fd to out_fd through a host bounce buffer. in_off/out_off
+// are host copies of the caller's offsets (NULL = use the fd's current
+// position). Returns bytes copied -- routinely short, see may_drain below --
+// or -errno if none.
 static dword_t fd_copy_range(fd_t in_no, off_t_ *in_off, fd_t out_no, off_t_ *out_off, uint64_t count) {
     struct fd *in_fd = f_get(in_no);
     struct fd *out_fd = f_get(out_no);
@@ -3182,6 +3183,32 @@ static dword_t fd_copy_range(fd_t in_no, off_t_ *in_off, fd_t out_no, off_t_ *ou
     char *buf = malloc(bufsize);
     if (buf == NULL)
         return _ENOMEM;
+
+    // Whether this copy may be driven all the way to `count`. Only a copy
+    // between two regular files can be: every other kind of endpoint blocks.
+    // sendfile(2), splice(2) and copy_file_range(2) are all documented to
+    // return short and every caller loops, so stopping after one chunk is a
+    // legal answer -- whereas looping for bytes that are not coming is a hang.
+    //
+    // GNU cat is the case that found it. Its copy_cat() fast path makes a pipe
+    // of its own and bounces the input through it:
+    //     pipe(p); splice(0, .., p[1], .., 65536); splice(p[0], .., 1, .., 65536)
+    // The second call asks for 65536 bytes from a pipe holding three, whose one
+    // writer is cat itself and which will not write again until this call
+    // returns. Waiting for the other 65533 waits forever: `echo hi | cat`,
+    // `cat <<EOF`, `seq 1 20000 | cat` and five of bash's own regression tests
+    // (alias, builtins, comsub, comsub-eof, comsub-posix) all hung right here.
+    //
+    // An fd whose type was never filled in reads as "not regular" and so takes
+    // the safe path.
+    bool may_drain = S_ISREG(in_fd->type) && S_ISREG(out_fd->type);
+    // A short write to anything but a regular file means the far end is full,
+    // and continuing means blocking until somebody drains it. Bytes already
+    // taken out of the input can only be handed back if the input has a
+    // position to rewind, so only then is stopping mid-chunk safe.
+    bool out_may_block = !S_ISREG(out_fd->type);
+    bool in_rewindable = in_off != NULL ||
+        (S_ISREG(in_fd->type) && in_fd->ops->lseek != NULL);
 
     dword_t total = 0;
     int err = 0;
@@ -3204,6 +3231,13 @@ static dword_t fd_copy_range(fd_t in_no, off_t_ *in_off, fd_t out_no, off_t_ *ou
                 if (nw <= 0) { err = (int) nw; break; }
                 io_account_write(out_fd, nw);
                 chunk_written += nw;
+                // Full output, rewindable input: hand the rest back and return
+                // short. This is splice's own canonical idiom -- file into a
+                // pipe, pipe out to a socket, one thread doing both -- where
+                // the only reader of that pipe is the caller, waiting for this
+                // call to come back.
+                if (chunk_written < nr && out_may_block && in_rewindable)
+                    break;
             }
             total += (dword_t) chunk_written;
             if (chunk_written < nr) {
@@ -3217,6 +3251,8 @@ static dword_t fd_copy_range(fd_t in_no, off_t_ *in_off, fd_t out_no, off_t_ *ou
                 }
                 break;
             }
+            if (!may_drain)
+                break;
         }
     }
 

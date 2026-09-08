@@ -11,8 +11,11 @@
 // (offset semantics are covered by copy_file_range.c's shared engine), that a
 // file-to-pipe copy larger than the pipe capacity arrives complete and intact
 // (the engine once dropped the read-but-unwritten tail of its bounce buffer on
-// a short pipe write, so busybox cat/tar truncated any >64K pipe copy), and
-// that vhangup returns cleanly. Arch-neutral.
+// a short pipe write, so busybox cat/tar truncated any >64K pipe copy), that
+// the same copy to a SOCKET comes back short and loses nothing across the loop
+// (the engine also once drove its loop to the caller's full count, which is a
+// deadlock the moment either end can block), and that vhangup returns cleanly.
+// Arch-neutral.
 #define _GNU_SOURCE
 #include <unistd.h>
 #include <errno.h>
@@ -21,6 +24,7 @@
 #include <fcntl.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <sys/socket.h>
 #include "test_common.h"
 
 #ifndef SYS_sendfile
@@ -147,6 +151,82 @@ out:
     unlink(path);
 }
 
+// The same copy with a SOCKET on the far end, which is what sendfile exists
+// for. It matters separately from the pipe because the amount a socket will
+// take in one go is its own business: the call comes back short, and a caller
+// that believed one sendfile() moved everything it asked for would silently
+// truncate. Linux returns short here too -- on a signal, on a non-blocking
+// peer, or simply when the buffer is full -- so looping is the contract, and
+// this pins that AOK's engine both returns short and loses nothing doing it.
+static void test_sendfile_to_socket(void) {
+    enum { SIZE = 300 * 1024 };
+    const char *path = "/tmp/sf.sock.src";
+    int s = -1, sv[2] = {-1, -1};
+    pid_t child = -1;
+
+    s = open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (s < 0) { printf("FAIL: sock-copy open: %s\n", strerror(errno)); failures_total++; goto out; }
+    char block[4096];
+    for (size_t off = 0; off < SIZE; off += sizeof block) {
+        for (size_t i = 0; i < sizeof block; i++)
+            block[i] = (char) ((off + i) * 31 >> 3);
+        if (write(s, block, sizeof block) != (ssize_t) sizeof block) {
+            printf("FAIL: sock-copy fill: %s\n", strerror(errno)); failures_total++; goto out;
+        }
+    }
+    lseek(s, 0, SEEK_SET);
+
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) {
+        printf("FAIL: socketpair: %s\n", strerror(errno)); failures_total++; goto out;
+    }
+    child = fork();
+    if (child < 0) { printf("FAIL: fork: %s\n", strerror(errno)); failures_total++; goto out; }
+    if (child == 0) {
+        close(sv[1]);
+        size_t total = 0;
+        char buf[8192];
+        ssize_t n;
+        while ((n = read(sv[0], buf, sizeof buf)) > 0) {
+            for (ssize_t i = 0; i < n; i++) {
+                char want = (char) ((total + (size_t) i) * 31 >> 3);
+                if (buf[i] != want) {
+                    printf("FAIL: sock-copy corrupt at byte %zu\n", total + (size_t) i);
+                    _exit(1);
+                }
+            }
+            total += (size_t) n;
+        }
+        _exit(total == SIZE ? 0 : (printf("FAIL: sock-copy got %zu bytes, want %d\n", total, SIZE), 1));
+    }
+    close(sv[0]); sv[0] = -1;
+
+    size_t sent = 0;
+    while (sent < SIZE) {
+        long r = syscall(SYS_sendfile, sv[1], s, (void *) 0, (size_t) (SIZE - sent));
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) {
+            printf("FAIL: sock-copy sendfile: r=%ld (%s) after %zu bytes\n",
+                   r, r < 0 ? strerror(errno) : "eof", sent);
+            failures_total++; break;
+        }
+        sent += (size_t) r;
+    }
+    close(sv[1]); sv[1] = -1;
+
+    int st;
+    if (waitpid(child, &st, 0) != child || !WIFEXITED(st) || WEXITSTATUS(st) != 0) {
+        printf("FAIL: sock-copy reader status %#x\n", st); failures_total++;
+    } else if (sent == SIZE) {
+        test_logf("sendfile to socket ok (%zu bytes)\n", sent);
+    }
+    child = -1;
+out:
+    if (sv[0] >= 0) close(sv[0]);
+    if (sv[1] >= 0) close(sv[1]);
+    if (s >= 0) close(s);
+    unlink(path);
+}
+
 static void test_vhangup(void) {
     errno = 0;
     long r = syscall(SYS_vhangup);
@@ -164,6 +244,7 @@ int main(int argc, char **argv) {
     test_init(argc, argv);
     test_sendfile();
     test_sendfile_to_pipe();
+    test_sendfile_to_socket();
     test_vhangup();
     return finish_suite("sendfile_vhangup");
 }

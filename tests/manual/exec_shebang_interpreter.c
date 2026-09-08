@@ -23,6 +23,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <limits.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -45,6 +46,18 @@ static void ok(const char *label, const char *got, const char *want) {
         return;
     }
     printf("FAIL %s\n       got: %s\n  expected: %s\n", label, got, want);
+    failures_total++;
+}
+
+// strerror text for the same errno differs between musl and glibc ("Symbolic
+// link loop" vs "Too many levels of symbolic links"), so anything asserting an
+// errno compares the number and lets the text follow.
+static void ok_prefix(const char *label, const char *got, const char *want) {
+    if (strncmp(got, want, strlen(want)) == 0) {
+        test_logf("  %-52s %s\n", label, got);
+        return;
+    }
+    printf("FAIL %s\n       got: %s\n  expected prefix: %s\n", label, got, want);
     failures_total++;
 }
 
@@ -73,7 +86,7 @@ static int write_script(const char *path, const char *text) {
 // execv rather than system(): a shell hides the bug. It catches ENOEXEC and
 // re-runs the file under /bin/sh, which IS the silence being tested for. execv
 // reports the errno instead, and the child prints it into the same pipe.
-static int run_exec(const char *path, char *const args[], char *out) {
+static int run_exec(const char *path, char *const args[], char *out, int *status_out) {
     out[0] = '\0';
     int pipefd[2];
     if (pipe(pipefd) != 0)
@@ -114,9 +127,11 @@ static int run_exec(const char *path, char *const args[], char *out) {
     while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == '\r'))
         out[--n] = '\0';
 
-    int status;
+    int status = 0;
     while (waitpid(pid, &status, 0) < 0 && errno == EINTR)
         continue;
+    if (status_out != NULL)
+        *status_out = status;
     return 0;
 }
 
@@ -133,11 +148,46 @@ static void case_script(const char *label, const char *name, const char *text,
     char *const args_with[] = { script, (char *) "alpha", (char *) "beta", NULL };
     char *const args_bare[] = { script, NULL };
     char out[OUT_MAX];
-    if (run_exec(script, with_args ? args_with : args_bare, out) != 0) {
+    if (run_exec(script, with_args ? args_with : args_bare, out, NULL) != 0) {
         failf_msg(label, strerror(errno));
         return;
     }
     ok(label, out, want);
+}
+
+// A chain of scripts: s0 is `#!/bin/sh`, and each s<i> above it names s<i-1> as
+// its interpreter. Executing s<n> therefore takes n+1 interpreter rewrites to
+// reach /bin/sh, which is the thing being counted.
+//
+// s0 reports how many arguments it was given, because each rewrite PREPENDS its
+// interpreter and pushes the previous file down the vector: run s<n> with two
+// arguments and the shell sees s0 plus s1..s<n> plus those two. Getting the
+// count right is the difference between resolving a chain and merely surviving
+// one.
+static int build_chain(unsigned n) {
+    char path[sizeof base + 32];
+    snprintf(path, sizeof path, "%s/s0", base);
+    if (write_script(path, "#!/bin/sh\necho \"chain $#\"\n") != 0)
+        return -1;
+    for (unsigned i = 1; i <= n; i++) {
+        char text[sizeof base + 32];
+        snprintf(text, sizeof text, "#!%s/s%u\n", base, i - 1);
+        snprintf(path, sizeof path, "%s/s%u", base, i);
+        if (write_script(path, text) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+// Run the top of an n-deep chain with two arguments, and hand back what came
+// out. `out` gets either s0's line or the child's EXECV-FAILED errno.
+static int run_chain(unsigned n, char *out) {
+    if (build_chain(n) != 0)
+        return -1;
+    char top[sizeof base + 32];
+    snprintf(top, sizeof top, "%s/s%u", base, n);
+    char *const args[] = { top, (char *) "alpha", (char *) "beta", NULL };
+    return run_exec(top, args, out, NULL);
 }
 
 // Is /AOK/native/<name> a program this build actually carries? The path exists
@@ -151,21 +201,23 @@ static int native_available(const char *prog) {
         return 0;
     char *const args[] = { path, (char *) "-c", (char *) "echo NATIVE-READY", NULL };
     char out[OUT_MAX];
-    if (run_exec(path, args, out) != 0)
+    if (run_exec(path, args, out, NULL) != 0)
         return 0;
     return strcmp(out, "NATIVE-READY") == 0;
 }
 
 static void cleanup(void) {
-    static const char *names[] = {
-        "no-arg.sh", "with-arg.sh", "linked.sh", "plain.sh",
-        "native-bash.sh", "linked-bash.sh", "native-zsh.sh",
-        "link-interp", "mybash",
-    };
-    char path[sizeof base + 32];
-    for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
-        snprintf(path, sizeof path, "%s/%s", base, names[i]);
-        unlink(path);
+    DIR *d = opendir(base);
+    if (d != NULL) {
+        struct dirent *e;
+        char path[sizeof base + 256];
+        while ((e = readdir(d)) != NULL) {
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+                continue;
+            snprintf(path, sizeof path, "%s/%s", base, e->d_name);
+            unlink(path);
+        }
+        closedir(d);
     }
     rmdir(base);
 }
@@ -250,6 +302,55 @@ int main(int argc, char **argv) {
                     "#!/bin/sh\necho \"plain $0 $1 $2\"\n", want, 1);
     }
 
+    // --- a #! interpreter that is itself a #! script -----------------------
+    //
+    // Linux resolves a chain of these and bounds it: measured on 6.12, five
+    // rewrites resolve and the sixth is ELOOP. AOK used to resolve exactly one
+    // and answer ENOEXEC for anything deeper -- which no shell reports, because
+    // ENOEXEC is the errno they all answer by re-running the file under
+    // /bin/sh. See EXEC_MAX_DEPTH in kernel/exec.c.
+    {
+        char out[OUT_MAX];
+
+        // Two rewrites: the interpreter is a script naming /bin/sh. argv is
+        // s0 s1 alpha beta, so s0 sees three arguments.
+        if (run_chain(1, out) != 0)
+            failf_msg("shebang: an interpreter may be a #! script", strerror(errno));
+        else
+            ok("shebang: an interpreter may be a #! script", out, "chain 3");
+
+        // Five rewrites: the deepest Linux resolves. s0 sees s1..s4 plus two.
+        if (run_chain(4, out) != 0)
+            failf_msg("shebang: a chain resolves to the depth Linux allows", strerror(errno));
+        else
+            ok("shebang: a chain resolves to the depth Linux allows", out, "chain 6");
+
+        // Six: one too many, and the answer is ELOOP rather than a chain
+        // resolved halfway or an ENOEXEC nobody sees.
+        if (run_chain(5, out) != 0)
+            failf_msg("shebang: one rewrite too many is ELOOP", strerror(errno));
+        else
+            ok_prefix("shebang: one rewrite too many is ELOOP", out,
+                      "EXECV-FAILED errno=40 ");
+
+        // An interpreter that does not exist answers ENOENT however deep it is:
+        // the file is opened by the handler that named it, and only then does
+        // the depth get tested. Ordering the two the other way would report a
+        // typo in a #! line as a loop.
+        char bad[sizeof base + 32], top[sizeof base + 32], text[sizeof base + 32];
+        snprintf(bad, sizeof bad, "%s/bad", base);
+        if (write_script(bad, "#!/no/such/interpreter\n") == 0) {
+            snprintf(text, sizeof text, "#!%s/bad\n", base);
+            snprintf(top, sizeof top, "%s/badtop", base);
+            if (write_script(top, text) == 0) {
+                char *const args[] = { top, NULL };
+                if (run_exec(top, args, out, NULL) == 0)
+                    ok_prefix("shebang: a missing interpreter is ENOENT, not ELOOP",
+                              out, "EXECV-FAILED errno=2 ");
+            }
+        }
+    }
+
     // --- native interpreters, the class this test exists for ---------------
 
     if (access("/AOK/native", F_OK) != 0) {
@@ -286,6 +387,65 @@ int main(int argc, char **argv) {
         }
     } else {
         test_logf("  (native bash not in this build -- skipped)\n");
+    }
+
+    // The placeholder gets to speak. What is served at /AOK/native/<name> is a
+    // `#!/bin/sh` script whose only job is to say that native dispatch did not
+    // happen -- which it only ever does when the file has been copied somewhere
+    // the dispatcher cannot recognise, or the build lacks the program. Copying
+    // it is how that state is reachable from a test.
+    //
+    // This is the case the chain support above exists for. Reached as a #!
+    // interpreter it used to be a script interpreting a script, so it came back
+    // ENOEXEC and every shell quietly re-ran the user's script under /bin/sh --
+    // the loud diagnostic swallowed by the one path that most needed it.
+    {
+        const char *label = "shebang: the /AOK/native placeholder still says so";
+        char copy[sizeof base + 32];
+        snprintf(copy, sizeof copy, "%s/notnative", base);
+        FILE *src = fopen("/AOK/native/bash", "r");
+        if (src == NULL) {
+            test_logf("  (no /AOK/native/bash to copy -- placeholder case skipped)\n");
+        } else {
+            FILE *dst = fopen(copy, "w");
+            int copied = dst != NULL;
+            int c;
+            while (copied && (c = fgetc(src)) != EOF)
+                if (fputc(c, dst) == EOF)
+                    copied = 0;
+            fclose(src);
+            if (dst != NULL && fclose(dst) != 0)
+                copied = 0;
+            if (!copied || chmod(copy, 0755) != 0) {
+                failf_msg(label, strerror(errno));
+            } else {
+                char text[sizeof base + 64];
+                snprintf(text, sizeof text, "#!%s\necho unreachable\n", copy);
+                char script[sizeof base + 32];
+                snprintf(script, sizeof script, "%s/viaplaceholder.sh", base);
+                if (write_script(script, text) != 0) {
+                    failf_msg(label, strerror(errno));
+                } else {
+                    char *const args[] = { script, NULL };
+                    char out[OUT_MAX];
+                    int status = 0;
+                    if (run_exec(script, args, out, &status) != 0) {
+                        failf_msg(label, strerror(errno));
+                    } else {
+                        // Output and status in ONE assertion, deliberately.
+                        // The stub exits 127, and so does this test's own child
+                        // when execv fails -- so a separate status check would
+                        // pass on a kernel that never ran the stub at all.
+                        char got[OUT_MAX + 32];
+                        snprintf(got, sizeof got, "%s | exit %d", out,
+                                 WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+                        ok(label, got,
+                           "notnative: native dispatch unavailable in this build"
+                           " | exit 127");
+                    }
+                }
+            }
+        }
     }
 
     // zsh. `print -r --` is a zsh builtin dash does not have, and ZSH_VERSION

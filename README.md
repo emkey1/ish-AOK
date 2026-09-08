@@ -19,6 +19,8 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
 - **FUSE**: `/dev/fuse` and a `fuse` filesystem type (protocol 7.31), so guest `libfuse2`/`libfuse3` daemons mount and serve filesystems unmodified. No setuid `fusermount` is involved — the guest is already fake-root, so libfuse calls `mount(2)` directly. See `/AOK/docs/fuse.md`.
 - **Apple Shortcuts actions** (iOS 16+): a headless "Run Command" action that executes a command in the guest under the native zsh and returns its output to the shortcut — the app never has to come to the foreground — plus "Open iSH-AOK" destinations with Siri phrases. See `/AOK/docs/shortcuts.md`.
 - **`/dev/url`**: a character device the guest writes a URL to, handing it to iOS to open — including `shortcuts://` links, so a guest script can drive a Shortcut. See `app/URLDevice.m`.
+- **Simulated swap**: an opt-in swap area so a large, mostly idle guest working set can exist without spending real memory on it — with a 24-hour write budget, a thrash guard and a suspension gate, because it spends the device's flash. Off by default; turned on in Settings. The guest sees it through `/proc/meminfo`, `free`, `vmstat`, `/proc/swaps` and a real `/dev/aokswap0`. See `/AOK/docs/swap.md`.
+- **`binfmt_misc`**: register an interpreter for a magic number or a filename extension, as on Linux, and `execve` honours it. See `/AOK/docs/binfmt-misc.md`.
 - Optional accelerators: native replacement of hot libc routines, and crypto and pixman offload.
 - Extra diagnostics and operational changes that are specific to this fork.
 

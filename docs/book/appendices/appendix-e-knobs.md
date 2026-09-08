@@ -96,6 +96,7 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_TEST_GUEST_LINGER_MS` | `main.c` |
 | `ISH_TEST_GUEST_TIMEOUT_MS` | `main.c` |
 | `ISH_TEST_GUEST_USER` | `main.c` |
+| `ISH_TEST_LOSE_WAKE_POKES` | `kernel/signal.c` |
 | `ISH_TEST_QUIESCE` | `main.c` |
 | `ISH_TEST_QUIESCE_DELAY_MS` | `main.c` |
 | `ISH_TEST_QUIESCE_HOLD_MS` | `main.c` |

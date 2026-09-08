@@ -46,6 +46,11 @@ static inline bool poll_fd_has_host_wait(struct poll_fd *pollfd);
 static int poll_sync_host_locked(struct poll *poll, struct fd *fd);
 static void poll_fd_free(struct poll_fd *poll_fd);
 
+
+static _Atomic bool poll_stuck_logged;
+_Atomic long poll_wedged_repairs;
+_Atomic long poll_capped_waits;
+
 static bool poll_fd_needs_periodic_host_rescan(struct poll_fd *poll_fd) {
 #if defined(__APPLE__)
     if (poll_fd == NULL || poll_fd->fd == NULL)
@@ -696,6 +701,25 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
     current->poll_notify_fd = poll_->notify_pipe[1];
     unlock(&current->sighand->lock);
 
+    // Rounds of this wait that expired with a signal raised the task reads as
+    // blocked, for the stuck report in the timeout arm. It advances only on
+    // those rounds, so it measures how long THAT state has lasted rather than
+    // how long the wait has -- an idle poll is not the thing worth reporting.
+    // Outside the loop because it has to count across iterations.
+    unsigned capped_rounds = 0;
+
+    // Whether the wake signals are this function's to repair after a wait.
+    // Sampled HERE: before the wait, because asked afterwards "the signal is
+    // blocked" cannot tell a caller that deliberately blocked it from a thread
+    // that had it swallowed, and that is the whole distinction; and once per
+    // CALL rather than per loop pass, because a program spinning through an
+    // event loop on poll(fds, -1) would otherwise pay a sigprocmask per event.
+    // Only for a wait the caller gave no timeout, which is the only kind that
+    // can hang -- a poll WITH a timeout, the common case, pays nothing.
+    // Same guard, same reason, as host_sleep_interruptible's own_wake_sigs in
+    // kernel/time.c.
+    bool own_wake_sigs = timeout == NULL && signal_thread_wake_sigs_unblocked();
+
     struct timespec deadline_storage = {0};
     struct timespec *deadline = NULL;
     if (timeout != NULL) {
@@ -752,6 +776,12 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
             sockrestart_begin_listen_wait(poll_fd->fd);
         }
         int err;
+        // Whether the host wait below ended because the deadline the GUEST
+        // asked for has passed, as opposed to the cap this function imposes on
+        // itself (see POLL_WAKE_RECHECK_NS). Only the first is a timeout the
+        // guest may be told about; the second has to go round the loop again,
+        // or a `select(..., NULL)` that must block for ever would return 0.
+        bool deadline_reached = false;
         struct real_poll_event e[4];
         do {
             unlock(&poll_->lock);
@@ -779,11 +809,16 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
                         .tv_sec = 0,
                         .tv_nsec = 100 * 1000 * 1000L,
                     };
+                    struct timespec wake_recheck_timeout = {
+                        .tv_sec = POLL_WAKE_RECHECK_NS / 1000000000L,
+                        .tv_nsec = POLL_WAKE_RECHECK_NS % 1000000000L,
+                    };
                     if (deadline != NULL) {
                         if (!poll_deadline_remaining(deadline, &remaining_timeout)) {
                             pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
                             errno = 0;
                             err = 0;
+                            deadline_reached = true;
                             sigunwind_end();
                             goto poll_wait_done;
                         }
@@ -796,6 +831,45 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
                                  wait_timeout->tv_nsec > periodic_rescan_timeout.tv_nsec)) {
                             wait_timeout = &periodic_rescan_timeout;
                         }
+                    }
+                    // Never block on the host without a bound. An unbounded
+                    // kevent/epoll_wait here has exactly two ways out -- the
+                    // notify pipe and a wake signal -- and both can be missed,
+                    // in which case the wait is permanent:
+                    //
+                    //   * kernel/signal.c's deliver_signal_unlocked_locked
+                    //     skips signal_wake_task() entirely for a signal it
+                    //     reads as blocked, so neither poke is even sent if
+                    //     the sender's view of the mask differs from ours;
+                    //   * the SIGUSR1/SIGUSR2 pokes are the ones
+                    //     signal_thread_unwedge_wake_sigs() exists to repair --
+                    //     util/sync.c documents them being swallowed
+                    //     PERMANENTLY under host thread churn from concurrent
+                    //     guest fork/exec, after which the thread is deaf to
+                    //     every later poke;
+                    //   * and the notify pipe only carries fd readiness, so a
+                    //     wait with no fds at all -- which is exactly what
+                    //     zsh's `sigsuspend` becomes, pselect6(0, NULL, NULL,
+                    //     NULL, NULL, mask), waiting for SIGCHLD -- has nothing
+                    //     to write to it.
+                    //
+                    // That combination is what wedged every shell on a device
+                    // after a memory-pressure run: each one parked in that
+                    // pselect for ever, with its child already a zombie, while
+                    // the app itself stayed healthy. kernel/time.c's sleep loop
+                    // took the same medicine for the same reason, and its
+                    // comment lists every other blocking site as already
+                    // bounded -- crediting this one with "fs/poll.c has its
+                    // notify pipe", which is true only when there are fds.
+                    //
+                    // The cap costs one wakeup per capped waiter per second and
+                    // buys back nothing but latency: on expiry the loop rescans,
+                    // re-reads the pending set (which is where a lost wake is
+                    // actually noticed -- see the err == 0 arm) and waits again.
+                    if (wait_timeout == NULL) {
+                        wait_timeout = &wake_recheck_timeout;
+                        atomic_fetch_add_explicit(&poll_capped_waits, 1,
+                                memory_order_relaxed);
                     }
                     pthread_sigmask(SIG_SETMASK, &oldmask, NULL);
                     // pselect/ppoll set only the guest blocked mask (not the
@@ -865,11 +939,62 @@ poll_wait_done:
             // over a timeout, matching Linux poll()/select() semantics.
             if (res == 0) {
                 lock(&current->sighand->lock, 0);
-                bool signal_pending = !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
+                sigset_t_ raised = current->pending | current->sighand->pending;
+                sigset_t_ masked = task_wake_blocked(current);
+                bool signal_pending = !!(raised & ~masked);
+                sigset_t_ stuck = raised & masked;
                 unlock(&current->sighand->lock);
                 if (signal_pending)
                     res = signal_restart_or_eintr_nohand(_EINTR);
+                // Say what a long wait is actually stuck on, once.
+                //
+                // A task idle in poll for hours is normal and says nothing, so
+                // the trigger is not the waiting -- it is waiting a long time
+                // with a signal RAISED that this task believes is blocked. That
+                // is the state a shell wedged in `sigsuspend` looks like from
+                // the inside when the mask it was given has not taken effect,
+                // and it is indistinguishable from healthy idling in every
+                // counter the kernel keeps. Naming it costs one line per stuck
+                // wait and would have turned a day of bisecting a device into
+                // one look at dmesg.
+                else if (stuck != 0 && ++capped_rounds == POLL_STUCK_ROUNDS &&
+                         !atomic_exchange_explicit(&poll_stuck_logged, true,
+                                                   memory_order_relaxed)) {
+                    printk("WARNING: %d(%s) has waited %ds in poll with signals raised that it "
+                           "reads as blocked: raised=%#llx blocked=%#llx stuck=%#llx. "
+                           "Logged once for the life of the process.\n",
+                           current->pid, current->comm,
+                           (int) (POLL_STUCK_ROUNDS * (POLL_WAKE_RECHECK_NS / 1000000000L)),
+                           (unsigned long long) raised,
+                           (unsigned long long) masked,
+                           (unsigned long long) stuck);
+                }
             }
+            // A wait that ended at its timeout is the only way a wedged
+            // thread ever gets here -- a swallowed poke means nothing else
+            // could have woken it -- so the repair belongs on this arm and not
+            // on the wakeup path, where it would cost a sigprocmask per event.
+            // Must run on a normal call stack, never from a handler, whose
+            // sigreturn would put the wedged bit straight back. The cap is what
+            // rescued THIS wait; this is what stops the next one needing to.
+            if (own_wake_sigs && signal_thread_unwedge_wake_sigs()) {
+                long n = atomic_fetch_add_explicit(&poll_wedged_repairs, 1,
+                                                   memory_order_relaxed) + 1;
+                if (n == 1)
+                    printk("WARNING: host thread went deaf to its wake signal while polling "
+                           "(pid=%d comm=%s); repaired. Further occurrences are counted in "
+                           "/proc/ish/wake_signals, not logged.\n",
+                           current->pid, current->comm);
+            }
+            // Nothing ready, no signal, and the guest's own deadline has not
+            // passed: this expiry was the self-imposed cap (or the periodic
+            // rescan), so go round again rather than reporting a timeout the
+            // caller never asked for. Reporting one would break the very case
+            // the cap was added for -- an infinite select would return 0 every
+            // second -- and it is also what the periodic rescan has been doing
+            // to an infinite poll on the fds it applies to.
+            if (res == 0 && !deadline_reached)
+                continue;
             break;
         }
 

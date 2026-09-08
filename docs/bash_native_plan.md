@@ -431,12 +431,58 @@ their reasons; the short form:
   which shows up as every command substitution in a login shell coming back
   empty.
 - **shopt before `set -o`**, because `shopt -u extdebug` turns off `-E` and `-T`.
-- **errexit and nounset last**, after the variables the state assigns.
+- **errexit and nounset before the traps**, after the variables the state
+  assigns.
+- **DEBUG, ERR and RETURN last of all, after everything else the state
+  restores**, because they are not state, they are code: once armed they run on
+  every command that follows, and what follows them in the middle of the script
+  is the rest of the script. Armed among the `declare -x` lines, a DEBUG trap
+  fired 78 times in a re-launched subshell against a forked shell's 1, at every
+  re-launch site, which is a constant 77 of pure noise for anything built on the
+  DEBUG trap — bashdb, a `trap ... DEBUG` profiler, a script that counts
+  commands. Fixed 2026-09-07.
+- **…and DEBUG last among those three**, because `trap` is itself a command, so
+  the second special trap line fires the first one when the first one was DEBUG.
+  Emitting them by signal number put DEBUG first, so `set -TE` with both a DEBUG
+  and an ERR trap fired DEBUG once more than a fork does, and `set -T` with a
+  DEBUG and a RETURN trap did the same. Nothing fires on the DEBUG line itself.
+  Fixed 2026-09-07.
+
+`$?` is no longer in the script at all. It used to be its last line, as
+`(exit N) && :` — the `&& :` because by that point `set -e` is restored and an
+ERR trap may be armed, and a bare `(exit N)` is a command that fails, which
+killed the child in its own prologue: `set -e; false && true; ( echo hi )`
+printed nothing where a forked shell prints `hi`. That worked, and cost two
+things. `(exit N)` is a subshell, so restoring the status spawned a whole second
+native bash — `false; ( : )` measured 72ms against `true; ( : )` at ~40ms for 20
+iterations, so a failing command before a subshell nearly doubled it — and under
+`set -T` it fired the DEBUG trap once more than a fork, because the traps have
+to be armed above it (`trap` returns 0 and would overwrite the status) and so it
+trips the trap it just armed. Neither is fixable in shell: nothing in the
+language sets `$?` without being a command.
+
+So the status crosses in the environment, as `AOK_BASH_STATUS`, and is applied
+by an assignment to `last_command_exit_value` in C — which is what a fork does,
+since a fork copies the variable. That needed a point between the state and the
+command, and there was none: the two were concatenated into one `-c` string.
+They are separate now. Our own bash is handed the state in `AOK_BASH_STATE` and
+executes it from `aok_apply_relaunch_state`, called from `main` immediately
+before the `-c` command; `aok_capture_relaunch_state`, called from
+`initialize_shell_variables`, takes the carriers out of the environment first,
+so a `BASH_ENV` startup file, an external command and this shell's own state
+script for *its* children never see them. The `/bin/bash` fallback still gets
+the old self-contained script, built only if the native spawn actually fails —
+and it is verified by pointing the native path at a name that does not exist and
+running the whole suite through it. Fixed 2026-09-07: `false; ( : )` now costs
+what `true; ( : )` costs, and the DEBUG count matches a fork exactly.
 
 What must NOT cross matters as much: a forked child resets its traps
-(`reset_signal_handlers`), keeping only the ignored ones and DEBUG/ERR/RETURN,
-so sending the EXIT trap made it fire once per subshell and once per command
-substitution. `AOK_BASH_DUMP_STATE=1` prints what a child was handed, and is
+(`reset_signal_handlers`), so sending the EXIT trap made it fire once per
+subshell and once per command substitution. The three special traps are subtler
+than "they are inherited" — the tail of that same function clears `SIG_TRAPPED`
+for **DEBUG and RETURN unless `set -T`, and for ERR unless `set -E`**, so
+without those options a forked subshell runs none of them and neither may a
+re-launched one. `AOK_BASH_DUMP_STATE=1` prints what a child was handed, and is
 the first thing to reach for when one misbehaves.
 
 ### What is knowingly not the same
@@ -455,7 +501,26 @@ the first thing to reach for when one misbehaves.
   grandparent — same reason, and the same readonly obstacle.
 - **`trap -p` inside a child under-reports**: bash lists the strings of traps
   that are not armed there, and reproducing that would mean setting a trap and
-  disarming it, which an early-exiting child never reaches.
+  disarming it, which an early-exiting child never reaches. Since 2026-09-07
+  this covers DEBUG, ERR and RETURN too, which are unarmed in a child unless
+  `-T`/`-E` — they are no longer emitted in that case, so they are no longer
+  listed either. A trap that is listed but never runs is the cheap error; one
+  that runs where bash runs none was the expensive one.
+- **Under `set -T`, a re-launch from `execute_simple_command` fires the DEBUG
+  trap twice.** That site runs the trap and *then* calls `make_child`, so the
+  parent has already announced the command and the re-parsing child announces it
+  again; a forked child starts past the parse. `set -T; trap 'echo T' DEBUG;
+  : | cat` fires 5 times against a fork's 3. `( )` and `$( )` are exact — the
+  parent does not announce those. Closing it means the child skipping counted
+  DEBUG fires on a signal from the parent, and a mechanism that can *swallow* a
+  fire is worse for a debugger than one that adds one.
+- **A subshell's error messages name line 1**, where a fork names the line the
+  subshell was on: `bash -c $'echo a\necho b\n( nosuchcmd )'` says `line 3` in a
+  fork and `line 1` here. The child is handed the command as *printed* text and
+  parses it as its own `-c` string, so it has no line to count from. Before the
+  `$?` split it was worse rather than different — the command was appended to
+  the state, so the number was the state's own length: measured, `line 116` for
+  the same script.
 
 ## Many shells at once: thread-local globals (2026-08-16)
 

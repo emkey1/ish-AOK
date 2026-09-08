@@ -8,6 +8,8 @@
 #include "app/RTCDevice.h"
 #include "kernel/swap.h"
 #include "fs/poll.h"
+#include "kernel/task.h"
+#include "kernel/abi.h"
 
 // ---- /dev/aokswap0 -------------------------------------------------------
 //
@@ -25,6 +27,83 @@
 // block device does -- open succeeds, read returns 0 (EOF, not ENXIO), writes
 // fail with ENOSPC -- which is a real state Linux has (an idle /dev/loopN,
 // verified) rather than one invented for the occasion.
+// The block ioctls a swap tool asks before it will touch a device. Without
+// them the node was a block device the way a photograph of a door is a door:
+// read, write and lseek all worked, /proc/swaps named it, the swap header was
+// there to be read -- and `swapon /dev/aokswap0` still failed with "read swap
+// header failed", because busybox asks the size through an ioctl first and got
+// ENOTTY. The swapon(2) and swapoff(2) SYSCALLS worked the whole time, which is
+// why this survived a reading of the code and only fell out of running the
+// command a user would actually type.
+//
+// Values are Linux's. BLKGETSIZE64 encodes sizeof(size_t) in the _IOR size
+// field, so a 32-bit guest sends a different number from a 64-bit one and both
+// have to be answered.
+#define BLKGETSIZE_       0x1260      // _IO(0x12, 96)   unsigned long, 512b sectors
+#define BLKFLSBUF_        0x1261      // _IO(0x12, 97)   flush buffers
+#define BLKSSZGET_        0x1268      // _IO(0x12, 104)  int, logical sector size
+#define BLKGETSIZE64_32_  0x80041272  // _IOR(0x12, 114, size_t), 32-bit size_t
+#define BLKGETSIZE64_64_  0x80081272  // _IOR(0x12, 114, size_t), 64-bit size_t
+#define BLKPBSZGET_       0x127b      // _IO(0x12, 123)  int, physical block size
+
+// The sector size the size ioctls are denominated in. 512 regardless of the
+// 4096-byte swap page: that is what a block device reports and what the tools
+// divide by.
+#define AOKSWAP_SECTOR_SIZE 512
+
+// `unsigned long` is as wide as a pointer on every ABI AOK runs, so the ABI's
+// pointer size is the honest answer for BLKGETSIZE's argument. Outside a task
+// (no `current`), assume the widest rather than truncate.
+static size_t aokswap_ulong_size(void) {
+    if (current == NULL)
+        return sizeof(qword_t);
+    return guest_abi_desc(current->abi).pointer_size;
+}
+
+static ssize_t aokswap_ioctl_size(int cmd) {
+    switch (cmd) {
+        case BLKGETSIZE_:
+            return (ssize_t) aokswap_ulong_size();
+        case BLKGETSIZE64_32_: case BLKGETSIZE64_64_:
+            return sizeof(qword_t);
+        case BLKSSZGET_: case BLKPBSZGET_:
+            return sizeof(dword_t);
+        case BLKFLSBUF_:
+            return 0;
+    }
+    return -1;
+}
+
+// Everything answers from swap_area_bytes(), the same figure /proc/meminfo's
+// SwapTotal and the /proc/swaps row come from, so the device's capacity cannot
+// contradict the swap totals -- which is the whole reason this node exists.
+static int aokswap_ioctl(struct fd *UNUSED(fd), int cmd, void *arg) {
+    uint64_t bytes = swap_area_bytes();
+    switch (cmd) {
+        case BLKGETSIZE_: {
+            uint64_t sectors = bytes / AOKSWAP_SECTOR_SIZE;
+            if (aokswap_ulong_size() == sizeof(dword_t))
+                *(dword_t *) arg = (dword_t) sectors;
+            else
+                *(qword_t *) arg = sectors;
+            return 0;
+        }
+        case BLKGETSIZE64_32_:
+        case BLKGETSIZE64_64_:
+            *(qword_t *) arg = bytes;
+            return 0;
+        case BLKSSZGET_:
+        case BLKPBSZGET_:
+            *(dword_t *) arg = AOKSWAP_SECTOR_SIZE;
+            return 0;
+        case BLKFLSBUF_:
+            // Nothing of ours is cached: reads and writes go straight at the
+            // area's file descriptor. Succeeding is the honest answer.
+            return 0;
+    }
+    return _ENOTTY;
+}
+
 // A block device is always ready in both directions; fs/mem.c has an identical
 // helper but keeps it static.
 static int aokswap_poll(struct fd *UNUSED(fd)) {
@@ -73,6 +152,8 @@ struct dev_ops aokswap_dev = {
     .fd.write = aokswap_write,
     .fd.lseek = aokswap_lseek,
     .fd.poll = aokswap_poll,
+    .fd.ioctl_size = aokswap_ioctl_size,
+    .fd.ioctl = aokswap_ioctl,
 };
 
 struct dev_ops *block_devs[256] = {

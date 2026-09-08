@@ -4,7 +4,7 @@
 
 # Appendix F. The regression suite, annotated
 
-244 C programs in `tests/manual/`, of which **227 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+246 C programs in `tests/manual/`, of which **229 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
 
 A row with a directory prefix is a per-architecture or accelerator test, kept
 in a subdirectory of `tests/manual/` and registered under that same prefix.
@@ -110,6 +110,7 @@ does not say what it is for.
 | `looper.c` | — |  |
 | `madvise_lazy_reservation.c` | yes | A large anonymous mapping is MAPPED even before anything touches it. |
 | `mem_conformance.c` | yes | mem_conformance.c — self-checking regression lock for the memory-management conformance fixes found by differential testing against real Linux... |
+| `mem_guard_small_growth.c` | yes | The jetsam headroom guard must never refuse a SMALL growth. |
 | `memchurn.c` | — | memchurn — models musl mallocng's mmap/munmap churn in a multithreaded process, the workload that makes AOK's mem-quiesce barrier "horrific". |
 | `memfd_mmap.c` | yes | memfd_create + mmap: anonymous memory-backed files. |
 | `mmap_conventions.c` | yes | Memory-mapping calls that answered without looking. |
@@ -240,6 +241,7 @@ does not say what it is for.
 | `vfork_exec_stale_jit.c` | yes | vfork_exec_stale_jit.c -- a task that execs while ANOTHER task still holds the address space it is leaving must not keep executing the old... |
 | `vfork_exec_stale_jit_peer.c` | yes | vfork_exec_stale_jit_peer.c -- the program vfork_exec_stale_jit.c execs. |
 | `vfork_fatal_signal.c` | yes | vfork_fatal_signal.c — the vfork(2) parent wait: what wakes it, what does not, and the lifetime of the handoff struct it waits on. |
+| `wake_poke_lost.c` | yes | A blocking wait must end even when every wake poke to this task is lost. |
 | `wayland_scm_shm.c` | yes | Wayland substrate: SCM_RIGHTS fd-passing shape + memfd seals, the two emulator bugs found bringing up a real Wayland compositor (wlroots/cage) +... |
 | `x86/amd64_incdec.c` | yes | INC (FF /0) and DEC (FF /1) on a REGISTER operand -- the amd64 form that in long mode is the ONLY way to spell `inc`/`dec` of a register, because... |
 | `x86/amd64_regress.c` | yes |  |

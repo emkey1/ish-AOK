@@ -2568,7 +2568,10 @@ static UIViewController *ISHCreateWorkspaceToolViewController(NSString *toolIden
         return ISHCreateAboutNavigationController(NO, NO);
     }
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolDiagnosticsIdentifier])
-        return ISHCreateDiagnosticsViewController();
+        // Wrapped, like Filesystems and Settings above and for the same reason:
+        // a bare view controller's bar button items have nowhere to render, so
+        // this window had no Share button and no way to export the report.
+        return ISHCreateDiagnosticsNavigationController();
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolLauncherIdentifier])
         return [WorkspaceLauncherToolViewController new];
     if ([toolIdentifier isEqualToString:ISHWorkspaceToolAudioIdentifier])

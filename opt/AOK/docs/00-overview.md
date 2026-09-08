@@ -92,6 +92,28 @@ them from. That's what makes tools like [ktop](ktop.md) useful from outside
 a chroot: they see every process across every currently-mounted root,
 labeled by guest architecture.
 
+## What the app opens with
+
+**Settings → Startup Mode** decides what a fresh launch shows you. Five choices:
+
+| mode | what you get |
+| --- | --- |
+| Session Shell (pts/1) | a login shell on a pty, the usual terminal — the default |
+| Plain Terminal | a terminal with no login session behind it |
+| Workspace | the in-app windowed desktop ([workspace.md](workspace.md)) |
+| Wayland Display | the Wayland output, for guests running a graphical session |
+| Choose Filesystem | the root-filesystem picker ([roots.md](roots.md)) |
+
+The distinction that matters most is the first two. **Session Shell** boots the
+guest through `init`, so the services in `/etc/service` start, `sshd` comes up if
+you have it, and you land in a login shell on `pts/1` — a machine that has
+booted. **Plain Terminal** gives you a shell and nothing else, which starts
+faster and is what you want when the guest's own init is the thing you are
+debugging.
+
+Whichever you choose, the other windows are still reachable once you are in;
+Startup Mode only picks the first one.
+
 ## The rest of this documentation set
 
 Everything under `/AOK/docs`, in the order most people want it. Two thirds of
@@ -107,6 +129,7 @@ six of them were not linked from anywhere at all.
 | [networking.md](networking.md) | reaching the device from another machine, and what the guest can and cannot listen on |
 | [files-app-integration.md](files-app-integration.md) | the File Provider extension, and how iSH-AOK appears in the iOS Files app |
 | [shortcuts.md](shortcuts.md) | driving iSH-AOK from Apple's Shortcuts app |
+| [swap.md](swap.md) | the simulated swap area — turning it on, what it costs, and what it will not do |
 
 **The app around the emulator**
 
@@ -126,6 +149,7 @@ six of them were not linked from anywhere at all.
 | --- | --- |
 | [native-programs.md](native-programs.md) | what a native program is and why one is not emulated |
 | [native-setup.md](native-setup.md) | putting the native programs on your `PATH` |
+| [binfmt-misc.md](binfmt-misc.md) | teaching the kernel to run other formats through an interpreter |
 | [crypto-accel.md](crypto-accel.md) | routing OpenSSL through the host's crypto instructions |
 | [benchmarks.md](benchmarks.md) | the bundled microbenchmarks, and how to run them |
 | [tuning-knobs.md](tuning-knobs.md) | `ISH_GUEST_CPU_COUNT` and friends, for the CLI build and Xcode schemes |

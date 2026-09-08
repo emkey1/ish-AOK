@@ -19,6 +19,7 @@ dword_t sys_clock_nanosleep_time64(dword_t clock_id, int_t flags, addr_t req_add
 dword_t sys_clock_nanosleep_time64_guest(dword_t clock_id, int_t flags, guest_addr_t req_addr, guest_addr_t rem_addr);
 dword_t sys_clock_gettime64(dword_t clock, addr_t tp);
 dword_t sys_clock_gettime64_guest(dword_t clock, guest_addr_t tp);
+dword_t sys_clock_settime_guest(dword_t clock, guest_addr_t tp);
 dword_t sys_clock_settime64(dword_t clock, addr_t tp);
 dword_t sys_clock_adjtime(dword_t clock, addr_t tx);
 dword_t sys_clock_adjtime64(dword_t clock, addr_t tx);

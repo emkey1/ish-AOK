@@ -546,6 +546,17 @@ single commands cannot reach it. That mistake cost five rebuild cycles.
 
 At the time of writing the suite aborted on the first file.
 
+**A corpus run that stalls on `alias`, `builtins` or any of the `comsub` files
+is not a shell problem.** It was AOK's `splice(2)`, which drove its copy loop to
+the caller's full `count` instead of returning what it had moved -- and GNU
+coreutils 9.x `cat` bounces its input through a pipe of its own and then asks
+that pipe for 65536 bytes, so every `echo hi | cat` and `cat <<EOF` in the guest
+wedged (fixed in `fd_copy_range`, kernel/fs.c; regression in
+`tests/manual/splice_vmsplice.c`). It showed up only in roots carrying a new
+enough coreutils -- `archarm-test` and `archarm64-test` -- which is why runs in
+a Devuan or Alpine root never saw it. A wedged process burns no CPU at all, so
+`ps -o pid,time,%cpu` on the host is what tells a hang from a slow test.
+
 **Measure it against the guest's own emulated bash 5.2, not against 80.** The
 suite is being run outside a bash build tree, so a large number of its files
 fail for reasons that have nothing to do with this shell — missing locales, and

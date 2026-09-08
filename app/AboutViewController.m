@@ -131,6 +131,7 @@ UIViewController *ISHCreateDiagnosticsViewController(void) {
     return [DiagnosticsViewController new];
 }
 
+
 UIViewController *ISHCreateLLMClientViewController(void) {
     return [LLMClientViewController new];
 }
@@ -182,13 +183,26 @@ BOOL ISHLLMClientEnabled(void) {
 
 @end
 
+// How close to the end counts as "at the end", for deciding whether to follow
+// the tail. One line of the monospaced 12pt font, near enough.
+static const CGFloat kDiagnosticsBottomSlack = 16;
+
+@interface DiagnosticsViewController ()
+// Set when the workspace embeds this in its own window, which already draws a
+// title bar saying "Diagnostics". Without it the pane shows that word twice,
+// stacked.
+@property (nonatomic) BOOL embeddedInWorkspaceWindow;
+@end
+
 @implementation DiagnosticsViewController {
     UITextView *_textView;
+    BOOL _everLoaded;         // the first load starts at the top; later ones do not
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Diagnostics";
+    if (!self.embeddedInWorkspaceWindow)
+        self.title = @"Diagnostics";
     if (@available(iOS 13.0, *)) {
         self.view.backgroundColor = UIColor.systemBackgroundColor;
     } else {
@@ -219,20 +233,28 @@ BOOL ISHLLMClientEnabled(void) {
                                                       action:@selector(refreshDiagnostics:)],
     ];
 
-    [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(refreshDiagnostics:)
-                                               name:ISHDiagnosticsStoreDidUpdateNotification
-                                             object:nil];
+    // DELIBERATELY NOT observing ISHDiagnosticsStoreDidUpdateNotification.
+    //
+    // The store posts it for every breadcrumb, so an open pane would rebuild
+    // itself while it is being read -- and reassigning a text view's `.text`
+    // drops any selection the reader has made. Someone highlighting a few lines
+    // to copy them lost the highlight to the next guest process exit, which for
+    // a screen whose whole purpose is getting the log to somebody else is worse
+    // than showing figures a minute old. Refreshing is the Refresh button's job
+    // and nothing else's; the report is a snapshot, and it says when it was
+    // taken. See rebuildReport.
     [self refreshDiagnostics:nil];
-}
-
-- (void)dealloc {
-    [NSNotificationCenter.defaultCenter removeObserver:self];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    [self refreshDiagnostics:nil];
+    // No refresh here either. viewDidLoad has already taken the snapshot, and
+    // this controller is created fresh every time the screen is opened -- from
+    // the Settings row, from the workspace tool, from the launch-diagnostics
+    // preference -- so there is no path where a reappearance is showing an
+    // empty pane. What it CAN be is a reappearance while the pane is open and
+    // selected, and replacing the text there would drop the selection for no
+    // new information.
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -242,9 +264,82 @@ BOOL ISHLLMClientEnabled(void) {
     }
 }
 
+// The Refresh button. The ONLY thing that replaces the text after the first
+// load; see the comment in viewDidLoad for why nothing else may.
 - (void)refreshDiagnostics:(id)sender {
-    _textView.text = [ISHDiagnosticsStore diagnosticsReport];
-    [_textView setContentOffset:CGPointZero animated:NO];
+    [self rebuildReport];
+}
+
+// Whether the reader is looking at the end of the report, which is where the
+// interesting part is: the sections are ordered summary-first and Recent
+// Breadcrumbs last.
+- (BOOL)textViewIsAtBottom {
+    CGFloat insetBottom = 0;
+    if (@available(iOS 11.0, *))
+        insetBottom = _textView.adjustedContentInset.bottom;
+    else
+        insetBottom = _textView.contentInset.bottom;
+    CGFloat maxOffset = _textView.contentSize.height - _textView.bounds.size.height + insetBottom;
+    if (maxOffset <= 0)
+        return YES;   // it all fits; there is nowhere else to be
+    return _textView.contentOffset.y >= maxOffset - kDiagnosticsBottomSlack;
+}
+
+// Take a snapshot of the report and show it, without moving the reader.
+//
+// Only ever called for the initial load and for the Refresh button. It used to
+// run on every store update -- one per breadcrumb, i.e. per guest process exit
+// and per keystroke -- and did `setContentOffset:CGPointZero` afterwards, so the
+// pane snapped to the top faster than a finger could drag it. Reported from
+// Discord twice over: first that it could not be scrolled down at all, then that
+// the periodic rebuild was dropping copy/paste selections mid-copy. Both are the
+// same root cause, replacing the text under someone who is reading it, and the
+// answer to both is to do it only when asked.
+//
+// The offset is still preserved rather than reset, because a manual Refresh
+// means "show me the latest", not "take me back to the top".
+- (void)rebuildReport {
+    NSString *report = [ISHDiagnosticsStore diagnosticsReport] ?: @"";
+    if (_everLoaded && [report isEqualToString:_textView.text]) {
+        // Identical: re-laying it out would cost a relayout and, on a text view
+        // being read, a visible flicker, for no new information.
+        return;
+    }
+
+    BOOL follow = _everLoaded && [self textViewIsAtBottom];
+    CGPoint offset = _textView.contentOffset;
+
+    _textView.text = report;
+    [_textView layoutIfNeeded];   // so contentSize below describes the NEW text
+
+    CGFloat insetBottom = 0;
+    if (@available(iOS 11.0, *))
+        insetBottom = _textView.adjustedContentInset.bottom;
+    else
+        insetBottom = _textView.contentInset.bottom;
+    CGFloat maxOffset = _textView.contentSize.height - _textView.bounds.size.height + insetBottom;
+    if (maxOffset < 0)
+        maxOffset = 0;
+
+    if (!_everLoaded) {
+        // The first look starts at the summary, which names the app, the device
+        // and the OS -- the part someone reporting a problem is asked for.
+        offset = CGPointZero;
+        if (@available(iOS 11.0, *))
+            offset.y = -_textView.adjustedContentInset.top;
+    } else if (follow) {
+        // Reading the end when Refresh was pressed: stay on the end, which has
+        // grown. Anchoring to the old offset instead would silently slide the
+        // newest lines out from under someone who pressed Refresh precisely to
+        // see them.
+        offset.y = maxOffset;
+    } else if (offset.y > maxOffset) {
+        // The report shrank under them (the breadcrumb ring wraps at 200, the
+        // exits ring at 32), so the old offset is past the end now.
+        offset.y = maxOffset;
+    }
+    [_textView setContentOffset:offset animated:NO];
+    _everLoaded = YES;
 }
 
 - (void)exportDiagnostics:(id)sender {
@@ -265,6 +360,27 @@ BOOL ISHLLMClientEnabled(void) {
 }
 
 @end
+
+// The same screen for a workspace tool window, wrapped in its own navigation
+// controller.
+//
+// A workspace tool gets a navigation bar only if the factory hands one back --
+// the window chrome draws a title bar with a close button and (in Modern) the
+// root menu, and nothing else. Diagnostics was returned bare, so its
+// navigationItem.rightBarButtonItems -- Share and Refresh -- had nowhere to
+// render, and in Workspace mode the screen had no way to export at all.
+// Reported from Discord alongside the scrolling: the Share sheet is how people
+// get the log off the device to read it.
+//
+// Filesystems and Settings already solved this the same way, for the same
+// reason; see their comments in ISHWorkspaceViewControllerForToolIdentifier.
+// The bar's title is suppressed (see embeddedInWorkspaceWindow) because the
+// window's own title bar already says "Diagnostics".
+UIViewController *ISHCreateDiagnosticsNavigationController(void) {
+    DiagnosticsViewController *diagnostics = [DiagnosticsViewController new];
+    diagnostics.embeddedInWorkspaceWindow = YES;
+    return [[UINavigationController alloc] initWithRootViewController:diagnostics];
+}
 
 static NSURL *ISHLLMPersistDirectoryURL(void) {
     NSURL *containerURL = ContainerURL();
@@ -2289,10 +2405,7 @@ static UIFont *ISHLLMMonospaceFont(CGFloat size) {
     // Deliberately the pre-UIButtonConfiguration API: -codeCopyButtonTapped:
     // swaps the title to "Copied" with -setTitle:forState:, which a configured
     // button ignores.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     copyButton.contentEdgeInsets = UIEdgeInsetsMake(2.0, 6.0, 2.0, 6.0);
-#pragma clang diagnostic pop
     [copyButton addTarget:self action:@selector(codeCopyButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
     return copyButton;
 }
@@ -2503,10 +2616,7 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     if (@available(iOS 13.0, *))
         _activityIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     else
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         _activityIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
-#pragma clang diagnostic pop
     _activityIndicator.hidesWhenStopped = YES;
     _statusLabel = [UILabel new];
     _statusLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];

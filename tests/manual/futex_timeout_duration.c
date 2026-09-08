@@ -66,12 +66,35 @@ static void ck_slept(const char *what, double ms) {
 
 static int futex_word;
 
+// Which futex syscall can read the libc timespec this build has.
+//
+// A 32-bit guest whose libc carries a 64-bit time_t (musl 1.2+, glibc with
+// _TIME_BITS=64) has a SIXTEEN-byte struct timespec, and the legacy SYS_futex
+// cannot read it: that call takes the kernel's {long sec; long nsec}, eight
+// bytes on a 32-bit ABI. Hand it the wider struct and the low half of tv_sec
+// lands in sec while the HIGH half lands in nsec -- so a 500ms timeout arrives
+// as {0,0} and returns at once, while a whole-second one survives intact and
+// looks fine. That is a property of the CALLER, not of the kernel: real Linux
+// truncates the identical call the identical way, and iSH-AOK's timespec_ is
+// the same eight bytes Linux uses. The libc wrappers below never showed it
+// because they already pick the right call.
+//
+// So pick the same way libc does, and keep testing what the kernel does with a
+// timeout rather than what this test does with a struct.
+static long futex_call(int *word, int op, int val, const struct timespec *t, unsigned bitset) {
+#ifdef SYS_futex_time64
+    if (sizeof t->tv_sec > sizeof(long))
+        return syscall(SYS_futex_time64, word, op, val, t, NULL, bitset);
+#endif
+    return syscall(SYS_futex, word, op, val, t, NULL, bitset);
+}
+
 // Nobody ever wakes this word, so every wait below runs to its timeout.
 static double futex_wait_rel(long ms) {
     struct timespec t0, t1, rel = {0, 0};
     add_ms(&rel, ms);
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    syscall(SYS_futex, &futex_word, FUTEX_WAIT | FUTEX_PRIVATE_FLAG, 0, &rel, NULL, 0);
+    futex_call(&futex_word, FUTEX_WAIT | FUTEX_PRIVATE_FLAG, 0, &rel, 0);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     return elapsed_ms(t0, t1);
 }
@@ -84,7 +107,7 @@ static double futex_wait_abs(clockid_t clock, long ms) {
     clock_gettime(clock, &deadline);
     add_ms(&deadline, ms);
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    syscall(SYS_futex, &futex_word, op, 0, &deadline, NULL, FUTEX_BITSET_MATCH_ANY);
+    futex_call(&futex_word, op, 0, &deadline, FUTEX_BITSET_MATCH_ANY);
     clock_gettime(CLOCK_MONOTONIC, &t1);
     return elapsed_ms(t0, t1);
 }

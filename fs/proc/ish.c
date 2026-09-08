@@ -9,6 +9,8 @@
 #include "kernel/calls.h"
 #include "emu/memory.h"
 #include "kernel/swap.h"
+#include "fs/poll.h"
+#include "util/sync.h"
 #include "platform/platform.h"
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -1071,6 +1073,47 @@ static int proc_ish_show_uidevice(struct proc_entry *UNUSED(entry), struct proc_
 // and not the one any of these guards read. There was no way to ask the guards
 // what they saw. Now there is: run the workload, read this file, and the answer
 // is arithmetic instead of argument.
+// What the wake-poke machinery has had to repair.
+//
+// A task is pulled out of a host blocking call by pthread_kill(SIGUSR1/SIGUSR2)
+// (kernel/signal.c signal_wake_task). On Darwin that poke is intermittently
+// swallowed in a way that leaves the signal blocked and pending in the target
+// thread's own mask with no handler having run, and the state is PERMANENT:
+// every later poke to that thread is equally deaf. Both blocking sites that can
+// meet it repair themselves and count the repair here.
+//
+// This file exists because the counters had no reader. The first repair on each
+// path is printk'd and every one after it was only ever added to a static that
+// needed a debugger to see -- so on a device, where a debugger is exactly what
+// you do not have, "it happened once at boot" and "it has happened nine hundred
+// times since" looked identical.
+//
+// Nonzero is not by itself a fault to chase: a repair means the mechanism
+// worked. A number that CLIMBS while the guest misbehaves is the signal.
+static int proc_ish_show_wake_signals(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    long sleeps = atomic_load_explicit(&sleep_wedged_repairs, memory_order_relaxed);
+    long polls = atomic_load_explicit(&poll_wedged_repairs, memory_order_relaxed);
+    long capped = atomic_load_explicit(&poll_capped_waits, memory_order_relaxed);
+
+    proc_printf(buf, "sleep_repairs    %ld  (kernel/time.c, a task sleeping)\n", sleeps);
+    proc_printf(buf, "poll_repairs     %ld  (fs/poll.c, a task in poll/select/epoll)\n", polls);
+    proc_printf(buf, "capped_waits     %ld  (host waits bounded because the caller named no deadline)\n",
+                capped);
+    proc_printf(buf, "recheck_interval %ld ms  (the cap; a lost wake costs at most this)\n",
+                (long) (POLL_WAKE_RECHECK_NS / 1000000L));
+    proc_printf(buf, "\n");
+    if (sleeps == 0 && polls == 0) {
+        proc_printf(buf, "No wake signal has been lost. This is the expected state.\n");
+    } else {
+        proc_printf(buf, "A repaired thread had gone permanently deaf to its wake poke and\n"
+                         "would never have been woken again. Repairs rise with host thread\n"
+                         "churn -- heavy guest fork/exec, which memory pressure produces in\n"
+                         "bulk. A climbing count alongside guest processes that hang is the\n"
+                         "shape this instrument was added for.\n");
+    }
+    return 0;
+}
+
 static int proc_ish_show_mem_guard(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     struct mem_usage machine = get_mem_usage();
     struct mem_budget budget = get_mem_budget();
@@ -1101,10 +1144,11 @@ static int proc_ish_show_mem_guard(struct proc_entry *UNUSED(entry), struct proc
             proc_printf(buf, "  headroom       unmeasured\n");
     }
     proc_printf(buf, "\nsystem memory pressure  %s\n",
-                pressure >= 2 ? "CRITICAL  (growth refused)" :
+                pressure >= 2 ? "CRITICAL  (a large growth is refused while the machine is short)" :
                 pressure >= 1 ? "WARN      (throttle engaged, growth still allowed)" :
                                 "normal");
-    proc_printf(buf, "\ngrowth refused now      %s\n",
+    proc_printf(buf, "\ngrowth refused now      %s  (a LARGE growth; small ones are always allowed,\n"
+                     "                             see mem_growth_refused in kernel/mmap.c)\n",
                 host_mem_headroom_low() ? "YES" : "no");
     proc_printf(buf, "throttle engaged now    %s\n",
                 host_mem_should_reclaim() ? "YES" : "no");
@@ -1147,6 +1191,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"swap_evict", S_IFREG | 0644, .show = proc_ish_show_swap_evict, .update = proc_ish_update_swap_evict},
     {"workspace", S_IFREG | 0666, .show = proc_ish_show_workspace, .update = proc_ish_update_workspace},
     {"version", .show = proc_ish_show_version},
+    {"wake_signals", .show = proc_ish_show_wake_signals},
 });
 
 void proc_ish_init(struct proc_dir_entry *root_entry) {

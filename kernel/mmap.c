@@ -449,6 +449,58 @@ static bool mmap_is_pure_growth(dword_t flags) {
            !(flags & (MMAP_FIXED | MMAP_FIXED_NOREPLACE));
 }
 
+// Would growing the address space by `bytes` be refused right now?
+//
+// host_mem_headroom_low() answers "is the app near its ceiling", which is a
+// property of the APP. Whether to refuse is a property of the REQUEST too, and
+// the guard used to ignore that entirely -- so under pressure a 5 GB mapping
+// and a 1 MiB one got the same verdict.
+//
+// MEASURED on a device, 2026-09-07. A 5.5 GB `stress` run raised CRITICAL:
+//
+//     WARNING: 744(stress) mmap refused, low iOS memory headroom (len=0x140001000)
+//     WARNING: 745(zsh) mmap refused, low iOS memory headroom (len=0x100000)
+//
+// The first is the guard doing its job. The second is a shell being denied a
+// MEGABYTE, nine seconds later, with stress already dead and 1228 MB of our own
+// headroom free -- and it is fatal in a way the first is not, because a guest
+// that cannot get a megabyte cannot start a process, cannot exec, and cannot
+// run the command the user would fix it with. Every command after it failed.
+// The user's report was "forcing swap breaks AOK", and this is what broke.
+//
+// Refusing a small request buys almost nothing, and three things say so:
+//
+//   * Anonymous growth here is a lazy RESERVATION (mem_lazy_reserve), not
+//     committed memory. It costs the app nothing until the pages are touched.
+//   * Touching them is policed separately and better, by
+//     mem_fault_backpressure below: it throttles the thread doing the touching
+//     and ultimately OOM-kills it, on evidence of sustained growth rather than
+//     on one allocation's size.
+//   * The amount at stake is a rounding error against the floor being defended
+//     -- a few MiB against hundreds.
+//
+// So the threshold is per REQUEST, and a guest creeping upward in small steps
+// is not what it lets through: those steps still have to be touched to cost
+// anything, and that is where the throttle and the kill live.
+#define MEM_GROWTH_ALWAYS_ALLOWED_MIN (2ull * 1024 * 1024)
+#define MEM_GROWTH_ALWAYS_ALLOWED_MAX (16ull * 1024 * 1024)
+#define MEM_GROWTH_FLOOR_FRACTION 64ull
+
+static bool mem_growth_refused(uint64_t bytes) {
+    if (!host_mem_headroom_low())
+        return false;
+    // Scaled off the same floor the guard defends, so the two move together:
+    // a build or a device with a smaller ceiling gets a smaller exemption. The
+    // clamps keep it inside the range that is useful either way -- below 2 MiB
+    // a shell cannot start, above 16 MiB the exemption is no longer small.
+    uint64_t small = host_mem_headroom_floor() / MEM_GROWTH_FLOOR_FRACTION;
+    if (small < MEM_GROWTH_ALWAYS_ALLOWED_MIN)
+        small = MEM_GROWTH_ALWAYS_ALLOWED_MIN;
+    if (small > MEM_GROWTH_ALWAYS_ALLOWED_MAX)
+        small = MEM_GROWTH_ALWAYS_ALLOWED_MAX;
+    return bytes > small;
+}
+
 static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t prot, dword_t flags, fd_t fd_no, qword_t offset) {
     STRACE("mmap(%#llx, %#llx, 0x%x, 0x%x, %d, %#llx)",
            (unsigned long long) addr, (unsigned long long) len, prot, flags, fd_no,
@@ -474,7 +526,7 @@ static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t pr
     // recursive. A no-op returning 0 when swap is off, which is the default.
     if (host_mem_headroom_low())
         swap_direct_reclaim(current->mem, len);
-    if (host_mem_headroom_low()) {
+    if (mem_growth_refused(len)) {
         // This guard fires silently otherwise -- from the guest's point of
         // view every mmap() in the whole app just starts failing with a
         // clean ENOMEM, with nothing to explain why (e.g. a Wayland
@@ -793,7 +845,7 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
     if (new_pages > old_pages && host_mem_headroom_low()) {
         swap_direct_reclaim(current->mem,
                 (uint64_t) (new_pages - old_pages) << PAGE_BITS);
-        if (host_mem_headroom_low())
+        if (mem_growth_refused((uint64_t) (new_pages - old_pages) << PAGE_BITS))
             return _ENOMEM;
     }
     guest_addr_t res = _ENOMEM;
@@ -1636,8 +1688,11 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk) {
         // expand heap: map region from old_brk to new_brk
         // round up because of the definition of brk: "the first location after the end of the uninitialized data segment." (brk(2))
         // if the brk is 0x2000, page 0x2000 shouldn't be mapped, but it should be if the brk is 0x2001.
-        // Same jetsam-headroom backpressure as mmap_common_guest.
-        if (host_mem_headroom_low()) {
+        // Same jetsam-headroom backpressure as mmap_common_guest, and sized
+        // the same way: a heap creeping up by a page at a time is the throttle's
+        // business, not this guard's. Refusing it here is what stops a shell
+        // starting at all.
+        if (mem_growth_refused(new_brk - old_brk)) {
             expand_failed = true;
             goto out;
         }

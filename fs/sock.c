@@ -2108,6 +2108,16 @@ static int socket_wait_ready(struct fd *sock, short events, struct socket_io_wai
             }
             timeout = remaining_ms > INT_MAX ? INT_MAX : (int) remaining_ms;
         }
+        // No unbounded host wait, for the reason fs/poll.c spells out at its
+        // own cap: the wake poke that ends a wait like this is lost
+        // permanently often enough to matter (util/sync.c
+        // signal_thread_unwedge_wake_sigs), and a wait with no bound never
+        // recovers from that. The socket's own readiness still ends this wait
+        // the instant it arrives -- there is a real fd in the set here, unlike
+        // the no-fd case that wedged every shell on a device -- so the cap only
+        // ever costs a re-poll on a connection that is genuinely idle.
+        if (timeout < 0)
+            timeout = (int) (POLL_WAKE_RECHECK_NS / 1000000L);
         if (notify_pipe[0] < 0 && pipe(notify_pipe) == 0) {
             fcntl(notify_pipe[0], F_SETFL, O_NONBLOCK);
             fcntl(notify_pipe[1], F_SETFL, O_NONBLOCK);
@@ -2155,7 +2165,10 @@ static int socket_wait_ready(struct fd *sock, short events, struct socket_io_wai
                 err = _EAGAIN;
                 break;
             }
-            continue; // no deadline was armed, so this cannot happen; re-poll
+            // The cap above expired, not a deadline the caller asked for. Going
+            // round is what makes the cap invisible to the guest: re-poll, and
+            // the pending check below gets its chance at a wake that was lost.
+            continue;
         }
         if (wait_res < 0 && wait_errno != EINTR) {
             errno = wait_errno;
@@ -4985,6 +4998,13 @@ static int_t sys_accept4_common(fd_t sock_fd, guest_addr_t sockaddr_addr, guest_
                         break; // timeout expired: EAGAIN, matching Linux
                     poll_timeout = remaining_ms > INT_MAX ? INT_MAX : (int) remaining_ms;
                 }
+                // Bounded, like every other host wait in the tree now is -- see
+                // the cap in fs/poll.c for what an unbounded one costs when the
+                // wake poke is lost. Free here: the loop already treats every
+                // return from this poll as "go round and try the accept
+                // again", so an expiry needs no handling of its own.
+                if (poll_timeout < 0)
+                    poll_timeout = (int) (POLL_WAKE_RECHECK_NS / 1000000L);
                 if (notify_pipe[0] < 0 && pipe(notify_pipe) == 0) {
                     fcntl(notify_pipe[0], F_SETFL, O_NONBLOCK);
                     fcntl(notify_pipe[1], F_SETFL, O_NONBLOCK);

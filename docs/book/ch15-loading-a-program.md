@@ -72,9 +72,10 @@ surfaced only because somebody on a real device was running as uid 1000.
 Permission ordering is not testable as root. It has to be tested as somebody
 else.
 
-## 15.2 Two formats
+## 15.2 Three formats
 
-Once the file may be executed, there are two things it can be.
+Once the file may be executed, there are three things it can be — two built in,
+and one the guest gets to add at run time.
 
 **A `#!` script.** `shebang_exec` reads the first 128 bytes and parses
 `#![spaces]interpreter[spaces]argument[spaces]` — one optional argument, as
@@ -85,11 +86,30 @@ so a script could run an interpreter the caller was not permitted to execute.
 The permission model has to be applied at every place a program is chosen, not
 just the one the user typed.
 
-And not only the permission model. Section 15.5's question — is this a program
-compiled into iSH-AOK? — is a question about a chosen program too, and it went
-unasked here for exactly as long as it took somebody to write
-`#!/AOK/native/bash` at the top of a script. See there for what that silence
-looked like.
+And not only the permission model. *Every* question `execve` asks about a file
+is a question about a chosen program. Two of them were being asked only about
+the file the caller typed.
+
+Section 15.5's — is this a program compiled into iSH-AOK? — went unasked here
+for exactly as long as it took somebody to write `#!/AOK/native/bash` at the top
+of a script. See there for what that silence looked like.
+
+The other is "what if the interpreter is *itself* a `#!` script?" Linux hands
+the exec on again, and again, bounded: `exec_binprm` loops with `if (depth > 5)
+return -ELOOP`, which measures on a real kernel as five rewrites resolved and
+the sixth refused. AOK resolved exactly one and answered `ENOEXEC` past that —
+and `ENOEXEC`, as the previous section's story turns on, is the one exec errno
+no user ever sees. `exec_interpreter` is that loop, written as recursion, with
+Linux's constant and Linux's comparison. The depth is tested *after* the
+interpreter is opened, not before, because Linux opens it inside the handler
+that named it: a chain ending in an interpreter that does not exist answers
+`ENOENT` however deep it is, and a typo in a `#!` line should not be reported as
+a loop.
+
+That is not a hypothetical shape. It is exactly how the placeholder at
+`/AOK/native/<name>` — a `#!/bin/sh` script whose whole job is to say that
+native dispatch did not happen — gets to say it when a script names a copy of
+it as its interpreter.
 
 **An ELF image.** `elf_exec` maps the segments, and if the image names an
 interpreter — which every dynamically linked program does — maps that too and
@@ -99,6 +119,54 @@ Around the mapping sit the details that make a real userland work: the load
 bias for position-independent executables, the `brk` reservation set aside for
 heap growth on the dynamic-PIE guests (Chapter 13), a guard against a later
 `mmap` landing where the heap intends to grow, and the initial stack.
+
+**Anything the guest has registered.** `binfmt_misc` is the third answer, and
+unlike the other two it is written by the guest at run time: a rule matches a
+file by a magic string at some offset or by its filename extension, and names an
+interpreter to hand it to. It is how a Linux distribution runs Windows binaries
+through Wine, foreign architectures through `qemu-user`, and `.jar` files without
+anybody typing `java -jar`.
+
+The parsing has two details worth keeping, both from Linux's own
+`fs/binfmt_misc.c`. The line is `:name:type:offset:magic:mask:interpreter:flags`,
+but **the delimiter is whatever the first character is** — `update-binfmts`
+switches to `|` when a magic value contains a colon, so assuming `:` breaks the
+tool most likely to be writing here. And the `P` flag *inserts* an argument
+rather than replacing one, which is visible the moment you look at raw argv:
+
+```
+./t.np one     # no P    -> argvdump, ./t.np, one
+./t.wp one     # with P  -> argvdump, ./t.wp, ./t.wp, one
+```
+
+Without `P` the caller's argv[0] is gone, replaced by the path; with it the
+original is preserved ahead of the path, for interpreters that report or branch
+on their own invoked name.
+
+> **The bug that taught us this**
+>
+> This is the second implementation. The first was not an implementation at all:
+>
+> > `/proc/sys/fs/binfmt_misc` used to present `register` and `status` with
+> > nothing behind them — writes were accepted and discarded, `status` always
+> > read "enabled" — and it was removed because `update-binfmts` and
+> > `systemd-binfmt` believe the success they are handed, so a guest looked
+> > configured and then silently ran nothing. An empty directory replaced it as
+> > the truthful state.
+>
+> The rule the header states as a consequence is the general one: **a
+> registration that appears here must affect `execve`, or the empty directory was
+> the better answer.** Chapter 40 argues the same thing at book length — a
+> capability reported present and not delivered is a state no real system
+> produces, and it costs more than the absence would have. What makes this
+> instance sharp is that the fake surface was not merely useless: it was
+> *actively worse* than nothing, because the tools that write to it treat a
+> successful write as configuration accomplished and never look again.
+
+There is a mount to get past first, exactly as on Linux — the directory is empty
+until `mount -t binfmt_misc none /proc/sys/fs/binfmt_misc`, and `register` and
+`status` do not exist before that. `opt/AOK/docs/binfmt-misc.md` is the user's
+version of all this.
 
 ## 15.3 The stack the program wakes up on
 

@@ -22,6 +22,8 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 - **FUSE**: `/dev/fuse` 와 `fuse` 파일시스템 타입(프로토콜 7.31)을 제공하므로, 게스트의 `libfuse2`/`libfuse3` 데몬이 수정 없이 파일시스템을 마운트하고 제공합니다. 게스트가 이미 fake-root 이므로 setuid `fusermount` 는 쓰이지 않고, libfuse 가 `mount(2)` 를 직접 호출합니다. `/AOK/docs/fuse.md` 참고.
 - **Apple 단축어(Shortcuts) 액션** (iOS 16+): 앱을 열지 않고도 네이티브 zsh로 게스트에서 명령을 실행하고 그 출력을 단축어로 돌려주는 "Run Command" 액션과, Siri 문구가 지원되는 "Open iSH-AOK" 대상들. `/AOK/docs/shortcuts.md` 참고.
 - **`/dev/url`**: 게스트가 URL을 써 넣으면 그 URL을 iOS가 열도록 넘겨주는 문자 장치. `shortcuts://` 링크도 되므로 게스트 스크립트가 단축어를 실행할 수 있습니다. `app/URLDevice.m` 참고.
+- **시뮬레이션 스왑**: 대부분 유휴 상태인 큰 작업 집합이 실제 메모리를 쓰지 않고도 존재할 수 있도록 하는 선택적 스왑 영역 — 기기의 플래시를 소모하므로 24시간 쓰기 예산, 스래싱 가드, 일시 중단 게이트가 함께 있습니다. 기본값은 꺼짐이며 설정에서 켭니다. 게스트는 `/proc/meminfo`, `free`, `vmstat`, `/proc/swaps` 및 실제 `/dev/aokswap0`을 통해 봅니다. `/AOK/docs/swap.md` 참고.
+- **`binfmt_misc`**: 리눅스와 동일하게 매직 넘버나 파일 확장자에 인터프리터를 등록하면 `execve`가 이를 따릅니다. `/AOK/docs/binfmt-misc.md` 참고.
 - 선택적 가속기: 자주 쓰이는 libc 루틴의 네이티브 대체, 암호화 및 pixman 오프로드.
 - 이 포크 전용의 추가 진단 및 운영 관련 변경 사항.
 

@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <stdatomic.h>
 #include "util/ro_locks.h"
 #include "util/rw_locks.h"
 #include "debug.h"
@@ -150,6 +151,20 @@ bool signal_thread_wake_sigs_unblocked(void);
 // it (which delivers it right here) and return true. Must be called from a
 // normal call stack, never from a signal handler. See sync.c.
 bool signal_thread_unwedge_wake_sigs(void);
+
+// How many threads have been found deaf to their wake signal and repaired,
+// counted separately per blocking site because the two say different things: a
+// sleeper that recovers late is slow, a POLLER that recovers late was hung.
+// Both are read by /proc/ish/wake_signals, which exists because the first
+// occurrence of this is logged and every one after it was only ever counted
+// into a variable no one could reach without a debugger.
+extern _Atomic long sleep_wedged_repairs;   // kernel/time.c
+extern _Atomic long poll_wedged_repairs;    // fs/poll.c
+// Host waits that ended at the self-imposed cap in fs/poll.c rather than at a
+// deadline the guest asked for. Ordinarily ~one per capped wait per second and
+// therefore uninteresting on its own; it is here so the two counters above can
+// be read against the number of chances they had to fire.
+extern _Atomic long poll_capped_waits;      // fs/poll.c
 bool current_is_valid(void);
 
 #endif

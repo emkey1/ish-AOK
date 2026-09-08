@@ -577,9 +577,34 @@ static void signal_prepare_stop_cont(struct task *task, int sig) {
 // `task`'s whole thread group) and gets it back on return; the lock is only
 // dropped around wake_waiting_task, which must not be called while holding it
 // (see the AB-BA comment on signalfd_wakeup_task above).
+// Drop every wake poke to tasks whose comm starts with this, simulating the
+// Darwin swallowed-poke fault for a test. There is no way to provoke the real
+// thing on demand -- it needs host thread churn and it lands where it lands --
+// so without this the recovery paths that exist for it (fs/poll.c's cap and
+// unwedge, kernel/time.c's sleep slices) can only ever be reasoned about, never
+// watched working. tests/manual/wake_poke_lost.c is the reader.
+//
+// Deliberately narrow: a comm PREFIX, never all tasks. Set it to something
+// broad and the guest stops responding to signals, which is the fault, not a
+// test of it.
+static bool wake_poke_dropped_for(const struct task *task) {
+    static const char *prefix = NULL;
+    static int looked_up = 0;
+    if (!looked_up) {
+        prefix = getenv("ISH_TEST_LOSE_WAKE_POKES");
+        looked_up = 1;
+    }
+    if (prefix == NULL || *prefix == '\0' || task == NULL)
+        return false;
+    return strncmp(task->comm, prefix, strlen(prefix)) == 0;
+}
+
 static bool signal_wake_task(struct task *task, struct sighand *sighand, int sig) {
     if (task == current)
         return wake_waiting_task(task);
+
+    if (wake_poke_dropped_for(task))
+        return false;   // as if every poke below had been swallowed
 
     int wake_err = pthread_kill(task->thread, SIGUSR1);
     // Second, independent poke. The SIGUSR1 above is not reliable: on Darwin it

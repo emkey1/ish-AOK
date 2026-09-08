@@ -2749,7 +2749,7 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 107: result = (dword_t) sys_timer_create_amd64_guest( (dword_t) raw_args[0], raw_args[1], raw_args[2]); break; // timer_create
     case 108: result = (dword_t) sys_timer_gettime64_guest( (dword_t) raw_args[0], raw_args[1]); break; // timer_gettime
     case 110: result = (dword_t) sys_timer_settime64_guest( (dword_t) raw_args[0], (int_t) raw_args[1], raw_args[2], raw_args[3]); break; // timer_settime
-    case 112: result = (dword_t) sys_clock_settime( (dword_t) raw_args[0], raw_args[1]); break; // clock_settime
+    case 112: result = (dword_t) sys_clock_settime_guest( (dword_t) raw_args[0], raw_args[1]); break; // clock_settime
     case 114: result = (dword_t) sys_clock_getres_amd64_guest( (dword_t) raw_args[0], raw_args[1]); break; // clock_getres
     case 115: result = (dword_t) sys_clock_nanosleep_amd64_guest( (dword_t) raw_args[0], (int_t) raw_args[1], raw_args[2], raw_args[3]); break; // clock_nanosleep
     case 117: result = (dword_t) sys_ptrace_guest( (dword_t) raw_args[0], (dword_t) raw_args[1], raw_args[2], raw_args[3]); break; // ptrace
@@ -3387,7 +3387,7 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
         // the timespec entirely -- but it now reads and range-checks it before
         // refusing, the way Linux orders EFAULT, EINVAL and EPERM, and a
         // hardcoded 0 made every well-formed call report EFAULT.
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_clock_settime(
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_clock_settime_guest(
                 (dword_t) raw_args[0], raw_args[1]));
         return true;
     case 228:
@@ -3850,6 +3850,21 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
                 (fd_t) raw_args[0], raw_args[1], (fd_t) raw_args[2], raw_args[3],
                 raw_args[4], (uint_t) raw_args[5]));
         return true;
+    // splice(fd_in, off_in, fd_out, off_out, len, flags) -- the third member of
+    // that family and the one that was left behind. The legacy table routed it
+    // to sys_splice, the i386 entry point, whose two offset arguments are
+    // 32-bit addr_t and whose count is a 32-bit dword_t. A guest offset
+    // pointer that does not fit a dword is exactly what the marshaller refuses,
+    // so `splice(fd, &off, ...)` with `off` anywhere but the low 4 GiB
+    // SIGSYS-KILLED the caller. Measured on devuan-amd64-test: the same call
+    // with the offset on the stack (0xffffec78) returns 4, and with the offset
+    // in an mmap'd page (0x7ffffdfc7000) dies with "Bad system call". A
+    // >4 GiB count was silently truncated by the same signature.
+    case 275:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_splice_guest(
+                (fd_t) raw_args[0], raw_args[1], (fd_t) raw_args[2], raw_args[3],
+                raw_args[4], (dword_t) raw_args[5]));
+        return true;
     // preadv/pwritev(fd, iov, iovcnt, pos_l, pos_h) -- native so the 64-bit
     // iovec pointer and a >4GiB offset survive the marshaller. On a 64-bit ABI
     // pos_l already carries the whole offset (the kernel's pos_from_hilo
@@ -3972,6 +3987,14 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
         return 1;
     case 277: // sync_file_range -- success stub ignores all args
     case 152: // munlockall() -- no args at all
+    case 164: // settimeofday(tv, tz) -- an EPERM stub that dereferences
+              // NEITHER pointer (kernel/time.c). Validating them therefore
+              // decided nothing and, on a guest whose timeval is anywhere but
+              // the low 4 GiB, SIGSYS-KILLED a caller that should simply have
+              // been told EPERM. Measured with an mmap'd timeval on
+              // devuan-amd64-test: "Bad system call" before the handler ran.
+              // Named as a remaining candidate for this treatment in the
+              // comment on syscall_legacy_args_are_scalars; this is it.
         return 0;
     case 15:  // rt_sigreturn
     case 24:  // sched_yield
@@ -4070,7 +4093,6 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
     case 150: // munlock
     case 151: // mlockall(flags) -- x86-64 rsi-rbp are caller garbage here
     case 161: // chroot
-    case 164: // settimeofday
     case 166: // umount2
     case 170: // sethostname
     case 201: // time
@@ -4229,6 +4251,18 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
     case 452: // fchmodat2
     case 424: // pidfd_send_signal(pidfd, sig, info, flags) -- info is ignored
               // (UNUSED, never dereferenced), so the raw pointer arg is safe here
+    case 276: // tee(fd_in, fd_out, len, flags) -- four, not the default six.
+              // Over-counting made the marshaller validate r8/r9, which a
+              // four-argument syscall() never writes, so the verdict came from
+              // whatever the caller happened to leave in them. On glibc that is
+              // reliably a >4 GiB address, and `syscall(SYS_tee, a, b, 7, 0)`
+              // was SIGSYS-KILLED every time; on musl it usually is not, so the
+              // same source passed on Alpine and died on Devuan -- and passed
+              // or died in the suite depending on what ran before it. AOK
+              // answers tee with ENOSYS on purpose (kernel/fs.c), and a caller
+              // has to survive the call to receive it. Same bug class as
+              // tkill(200)/membarrier(324) above. arm64 is unaffected: its tee
+              // (77) is dispatched natively and never reaches this classifier.
         return 4;
     case 56:  // clone
     case 25:  // mremap

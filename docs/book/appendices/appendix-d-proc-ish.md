@@ -29,6 +29,7 @@ inventory, generated from `fs/proc/ish.c`.
 - `/proc/ish/swap` (file)
 - `/proc/ish/swap_evict` (file)
 - `/proc/ish/version` (file)
+- `/proc/ish/wake_signals` (file)
 - `/proc/ish/workspace` (file)
 
 ## The ones that do more than report

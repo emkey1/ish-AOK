@@ -21,6 +21,8 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
 - **FUSE**：提供 `/dev/fuse` 与 `fuse` 文件系统类型（协议 7.31），因此客户机的 `libfuse2`/`libfuse3` 守护进程无需修改即可挂载并提供文件系统。由于客户机本身已是 fake-root，不涉及 setuid 的 `fusermount`，libfuse 会直接调用 `mount(2)`。参见 `/AOK/docs/fuse.md`。
 - **Apple 快捷指令（Shortcuts）操作**（iOS 16+）：无需打开应用即可通过原生 zsh 在客户机中执行命令并把输出返回给快捷指令的 "Run Command" 操作，以及带有 Siri 短语的 "Open iSH-AOK" 目标页面。参见 `/AOK/docs/shortcuts.md`。
 - **`/dev/url`**：一个字符设备，客户机往里写一个 URL，就把它交给 iOS 打开——包括 `shortcuts://` 链接，因此客户机脚本可以驱动一个快捷指令。参见 `app/URLDevice.m`。
+- **模拟交换空间**：可选的交换区，让大部分处于闲置状态的大型工作集无需占用真实内存即可存在——并带有 24 小时写入预算、抖动保护和挂起门控，因为它消耗的是设备的闪存。默认关闭，在“设置”中开启。客户机通过 `/proc/meminfo`、`free`、`vmstat`、`/proc/swaps` 和真实的 `/dev/aokswap0` 看到它。参见 `/AOK/docs/swap.md`。
+- **`binfmt_misc`**：像在 Linux 上一样，为魔数或文件扩展名注册解释器，`execve` 会遵循它。参见 `/AOK/docs/binfmt-misc.md`。
 - 可选加速器：用原生代码替换热点 libc 例程，以及加密与 pixman 卸载。
 - 该分支专属的额外诊断与运维相关改动。
 

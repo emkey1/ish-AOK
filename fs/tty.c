@@ -1435,6 +1435,11 @@ static int tty_mode_ioctl(struct tty *in_tty, int cmd, void *arg) {
             tty->termios.lflags = termios2->lflags;
             tty->termios.line = termios2->line;
             memcpy(tty->termios.cc, termios2->cc, sizeof(tty->termios.cc));
+            // Same IXON release as TCSETS_ above: this is the same call, and
+            // on a glibc root it is the ONLY one tcsetattr() actually makes,
+            // so leaving it out here left a ^S stop that nothing could lift.
+            if (!(tty->termios.iflags & IXON_) && tty->stopped && !tty->tco_stopped)
+                tty_start_output_locked(tty);
             break;
         }
 
@@ -1463,6 +1468,14 @@ static int tty_mode_ioctl(struct tty *in_tty, int cmd, void *arg) {
 static bool tty_ioctl_modifies_terminal(int cmd) {
     switch (cmd) {
         case TCSETS_: case TCSETSW_: case TCSETSF_:
+        // The termios2 spellings are the same operation and Linux checks them
+        // in the same handler. Leaving them out meant a BACKGROUND process
+        // could change the terminal unchecked -- and it is not a corner case:
+        // a modern glibc issues TCSETS2 for a plain tcsetattr(), so on a glibc
+        // root every background tcsetattr silently succeeded where it should
+        // have taken SIGTTOU (or EIO, when the group is orphaned). musl still
+        // sends TCSETS, which is why the musl roots never showed it.
+        case TCSETS2_: case TCSETSW2_: case TCSETSF2_:
         case TCFLSH_: case TCSBRK_: case TCXONC_:
         case TIOCSPGRP_:
             return true;

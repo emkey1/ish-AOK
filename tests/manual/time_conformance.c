@@ -30,6 +30,8 @@
 #include <stdint.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
+#include <sys/mman.h>
+#include <string.h>
 #include <sys/timerfd.h>
 #include <sys/wait.h>
 #include "test_common.h"
@@ -44,6 +46,17 @@
 #define TFD_NONBLOCK O_NONBLOCK
 #endif
 #define EPOCH_FLOOR 1500000000LL
+
+// The raw settimeofday number, whatever this libc calls it. A 32-bit musl with
+// a 64-bit time_t renames the legacy entry points, so on i386 it is
+// SYS_settimeofday_time32 and SYS_settimeofday does not exist at all -- and a
+// test that does not compile takes its whole architecture's suite run with it,
+// since setup-regressions.sh stops at the first build failure.
+#if defined(SYS_settimeofday)
+# define RAW_SETTIMEOFDAY SYS_settimeofday
+#elif defined(SYS_settimeofday_time32)
+# define RAW_SETTIMEOFDAY SYS_settimeofday_time32
+#endif
 
 static int eq_errno(const char *label, long r, int want) {
     int e = (r < 0) ? errno : 0;
@@ -265,6 +278,49 @@ static void check_clocks(void) {
      * no-op even on a hypothetical success since MONOTONIC can't be set). */
     errno = 0;
     eq_errno("clock_settime MONOTONIC EINVAL", clock_settime(CLOCK_MONOTONIC, &mono), EINVAL);
+
+    /* The struct may live anywhere the guest can address it, including an
+     * mmap'd page -- which is simply where a heap allocation lands. Both of
+     * these took the answer from the POINTER'S ADDRESS rather than from the
+     * request:
+     *
+     *   clock_settime  the 64-bit ABIs dispatch it natively, but through a
+     *                  wrapper whose parameter was a 32-bit addr_t, so a high
+     *                  pointer was truncated and the call came back EFAULT
+     *                  instead of EPERM. All three 64-bit guests, measured.
+     *   settimeofday   an EPERM stub that dereferences neither pointer, yet
+     *                  the amd64 legacy marshaller validated the address and
+     *                  SIGSYS-KILLED the caller before the stub ever ran.
+     *
+     * A stack timespec fits in 32 bits on these guests, so every earlier case
+     * here passed while both paths were broken. Keep the mmap. */
+    {
+        void *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (page == MAP_FAILED) {
+            printf("FAIL could not mmap a page for the high-pointer cases: %s\n",
+                   strerror(errno));
+            failures_total++;
+        } else {
+            struct timespec *ts = page;
+            clock_gettime(CLOCK_REALTIME, ts);
+            errno = 0;
+            eq_errno("clock_settime REALTIME from an mmap'd timespec is EPERM",
+                     clock_settime(CLOCK_REALTIME, ts), EPERM);
+
+#ifdef RAW_SETTIMEOFDAY
+            /* The RAW syscall: glibc turns settimeofday(tv, NULL) into
+             * clock_settime, so the libc call never reaches the entry point
+             * that was broken. */
+            struct timeval *tv = (struct timeval *) ((char *) page + 512);
+            gettimeofday(tv, NULL);
+            errno = 0;
+            eq_errno("raw settimeofday from an mmap'd timeval is EPERM",
+                     syscall(RAW_SETTIMEOFDAY, tv, (void *) 0), EPERM);
+#endif
+            munmap(page, 4096);
+        }
+    }
 }
 
 int main(int argc, char **argv) {

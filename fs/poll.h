@@ -127,4 +127,25 @@ void poll_destroy(struct poll *poll);
 // for fd_close
 void poll_cleanup_fd(struct fd *fd);
 
+// The longest this file will block on the host in one go. Every host wait here
+// is capped at it, so a wake that never arrives costs a second of latency
+// instead of the rest of the process's life; see the long comment at the cap
+// itself for why a wake can fail to arrive at all.
+//
+// A second rather than kernel/time.c's 50 ms slice, because the populations are
+// different: that one bounds how late a SLEEPING task notices a signal, and a
+// sleeping task is a task that asked to be slow. This one bounds how late a
+// LOST wake is recovered from, which should never happen, and it is paid by
+// every idle daemon in the guest at once -- a booted rootfs has a dozen threads
+// parked in poll doing nothing. 50 ms there would be 240 pointless wakeups a
+// second on a phone; one second is 12, and a hang that clears within a second
+// is not a hang anyone reports.
+#define POLL_WAKE_RECHECK_NS 1000000000L
+
+// How many consecutive expiries of that cap make a wait worth reporting, when
+// -- and only when -- a signal is raised that the waiter reads as blocked. Long
+// enough that no ordinary handoff trips it; short enough that a user who says
+// "it is hung" still has it in the log.
+#define POLL_STUCK_ROUNDS 30
+
 #endif

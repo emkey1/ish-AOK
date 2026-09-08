@@ -1876,6 +1876,12 @@ static NSURL *AOKSharedFakefsDirectoryURL(void) {
     NSMutableString *report = [NSMutableString string];
     NSDictionary<NSString *, id> *summary = [self currentSummaryDictionary];
     [report appendString:@"iSH-AOK Diagnostics\n\n"];
+    // When this snapshot was taken. The pane does not refresh itself any more --
+    // it would drop the reader's selection mid-copy (see rebuildReport in
+    // AboutViewController.m) -- so "how old is this?" became a question the
+    // report has to answer for itself, both on screen and in an exported bundle
+    // that may be read days later.
+    [report appendFormat:@"Report taken: %@\n", DiagnosticsISO8601StringFromDate([NSDate date]) ?: @"unknown"];
     [report appendFormat:@"App: %@ (Build %@)\n", summary[@"appVersion"], summary[@"build"]];
     [report appendFormat:@"Device: %@ / %@ / %@\n", summary[@"deviceName"], summary[@"deviceModel"], summary[@"hostMachine"]];
     [report appendFormat:@"OS: iOS %@\n", summary[@"systemVersion"]];

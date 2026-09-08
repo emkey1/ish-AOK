@@ -1302,7 +1302,28 @@ static inline int user_memset(guest_addr_t start, byte_t val, dword_t len) {
 }
 
 static struct fd *open_exec(const char *file, struct statbuf *stat);
-static int format_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp);
+static int format_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp,
+        unsigned depth);
+static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp,
+        unsigned depth);
+
+// How many times an exec may be handed on from one file to another before it
+// is refused. `depth` is how many such rewrites it took to reach the file being
+// loaded, so the top-level file is depth 0, the interpreter a #! line names is
+// depth 1, and an interpreter THAT file names is depth 2.
+//
+// Linux runs the same thing as a loop in exec_binprm() -- "this allows 4 levels
+// of binfmt rewrites before failing hard", `if (depth > 5) return -ELOOP;` --
+// and the constant and the comparison here are that loop's. Measured on Linux
+// 6.12 against a chain of scripts each naming the previous one: five rewrites
+// resolve and run, the sixth is ELOOP.
+#define EXEC_MAX_DEPTH 5
+
+// Load one file that another file named as its interpreter, with every loader
+// in turn. Declared here because both things that can name an interpreter --
+// a #! line and a binfmt_misc registration -- are defined below it.
+static int exec_interpreter(struct fd *fd, const char *file, struct exec_args argv,
+        struct exec_args envp, unsigned depth);
 
 // Returned by native_dispatch_exec, and propagated by every loader path that
 // can reach it, when the file turned out to be a program compiled into
@@ -1329,7 +1350,7 @@ static int native_dispatch_exec(struct fd *fd, struct exec_args argv, struct exe
 //   without P: interpreter, file, original argv[1..]   -- argv[0] is DROPPED
 //   with    P: interpreter, file, original argv[0..]   -- argv[0] preserved
 static int binfmt_misc_exec(struct fd *fd, const char *file, struct exec_args argv,
-                            struct exec_args envp) {
+                            struct exec_args envp, unsigned depth) {
     if (fd->ops->lseek(fd, 0, SEEK_SET))
         return _EIO;
     char header[128];
@@ -1388,12 +1409,10 @@ static int binfmt_misc_exec(struct fd *fd, const char *file, struct exec_args ar
         free(new_argv_buf);
         return (int) PTR_ERR(interpreter_fd);
     }
-    // Same as the #! path: a registration may name a native program as its
-    // interpreter, and that has to be asked before any loader is handed the
-    // file.
-    int err = native_dispatch_exec(interpreter_fd, new_argv, envp);
-    if (err == _ENOEXEC)
-        err = format_exec(interpreter_fd, interpreter, new_argv, envp);
+    // A registration's interpreter is a program chosen by this exec, so it gets
+    // every loader -- native dispatch, ELF, another registration, a #! line --
+    // exactly as the one on a #! line does.
+    int err = exec_interpreter(interpreter_fd, interpreter, new_argv, envp, depth + 1);
     free(new_argv_buf);
     // Unconditionally, as shebang_exec does with its own: a loader that takes
     // the file retains its own reference for mm->exefile (elf_exec), so the one
@@ -1403,13 +1422,16 @@ static int binfmt_misc_exec(struct fd *fd, const char *file, struct exec_args ar
     return err;
 }
 
-static int format_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
+// depth is carried rather than used: only binfmt_misc_exec, which can hand the
+// exec on to another file, needs it.
+static int format_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp,
+        unsigned depth) {
     int err = (int)elf_exec(fd, file, argv, envp);
     if (err != _ENOEXEC)
         return err;
     // A registered binfmt_misc interpreter is consulted only after every
     // built-in format has declined, exactly as Linux orders its binfmt list.
-    err = binfmt_misc_exec(fd, file, argv, envp);
+    err = binfmt_misc_exec(fd, file, argv, envp, depth);
     if (err != _ENOEXEC)
         return err;
     return _ENOEXEC;
@@ -1482,7 +1504,8 @@ static struct fd *open_exec(const char *file, struct statbuf *stat) {
     return fd;
 }
 
-static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
+static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp,
+        unsigned depth) {
     // read the first 128 bytes to get the shebang line out of
     if (fd->ops->lseek(fd, 0, SEEK_SET))
         return _EIO;
@@ -1574,15 +1597,41 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
         free(new_argv_buf);
         return (int)PTR_ERR(interpreter_fd);
     }
-    // ...and it faces the native-program question on the same terms, before
-    // any loader sees it. Without this a `#!/AOK/native/<name>` script never
-    // reached the program it named (native_dispatch_exec).
-    int err = native_dispatch_exec(interpreter_fd, new_argv, envp);
-    if (err == _ENOEXEC)
-        err = format_exec(interpreter_fd, interpreter, new_argv, envp);
+    // ...and it faces every loader on the same terms, this one included: an
+    // interpreter may itself be a #! script, which is how the placeholder at
+    // /AOK/native/<name> gets to say out loud that this build does not carry
+    // the program (fs/aok.c). new_argv_buf has to outlive the call because
+    // new_argv points into it, so a chain holds one ARGV_MAX buffer per level;
+    // EXEC_MAX_DEPTH is what bounds that.
+    int err = exec_interpreter(interpreter_fd, interpreter, new_argv, envp, depth + 1);
     fd_close(interpreter_fd);
     free(new_argv_buf);
     return err;
+}
+
+// One file that another named as its interpreter, offered to every loader in
+// the order __do_execve offers them, and refused once the exec has been handed
+// on too many times.
+//
+// The depth test is here, after the caller has opened the file, rather than
+// before: Linux opens the interpreter inside the handler that named it and only
+// then reaches the loop's `depth > 5` check, so a chain that ends in an
+// interpreter that does not exist answers ENOENT rather than ELOOP however deep
+// it is. Keeping the order keeps that answer.
+static int exec_interpreter(struct fd *fd, const char *file, struct exec_args argv,
+        struct exec_args envp, unsigned depth) {
+    if (depth > EXEC_MAX_DEPTH)
+        return _ELOOP;
+    int err = native_dispatch_exec(fd, argv, envp);
+    if (err != _ENOEXEC)
+        return err;
+    err = format_exec(fd, file, argv, envp, depth);
+    if (err != _ENOEXEC)
+        return err;
+    // Set-id bits are not consulted anywhere down here. Linux ignores them on a
+    // #! script, and __do_execve has already cleared the staged ones for the
+    // file the caller named; an interpreter's own are not the caller's to gain.
+    return shebang_exec(fd, file, argv, envp, depth);
 }
 
 // A native program (kernel/native.h) replaces this process image exactly as an
@@ -1812,7 +1861,7 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     current->exec_auxv_euid = (stat.mode & S_ISUID) ? stat.uid : current->euid;
     current->exec_auxv_egid = (stat.mode & S_ISGID) ? stat.gid : current->egid;
 
-    err = format_exec(fd, file, argv, envp);
+    err = format_exec(fd, file, argv, envp, 0);
     if (err == _ENOEXEC) {
         // Linux ignores set-id bits on a #! script -- the interpreter runs
         // with the caller's credentials. We were applying the SCRIPT's bits in
@@ -1826,7 +1875,7 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
         current->exec_secure = false;
         current->exec_auxv_euid = current->euid;
         current->exec_auxv_egid = current->egid;
-        err = shebang_exec(fd, file, argv, envp);
+        err = shebang_exec(fd, file, argv, envp, 0);
     }
     fd_close(fd);
     if (err < 0) {
