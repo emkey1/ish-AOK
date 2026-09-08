@@ -40,3 +40,7 @@
 ## 2024-05-25 - sys_preadv and sys_pwritev performance
 **Learning:** System calls `sys_preadv` and `sys_pwritev` in `kernel/fs.c` flatten vectorized I/O requests into a single buffer. Before, they always used `malloc()` to allocate this buffer, regardless of the size. This incurs significant performance overhead for small readv/writev calls which are very common, mirroring the issue previously fixed in `sys_readv` and `sys_writev`.
 **Action:** Implemented a fast path using an explicitly aligned `256`-byte stack buffer for small `sys_preadv` and `sys_pwritev` requests, similar to existing optimizations in `sys_readv`, `sys_writev`, `sys_read`, `sys_write`, `sys_pread` and `sys_pwrite`. Only requests larger than 256 bytes will now fall back to heap allocation.
+
+## 2026-09-06 - Linux madvise for memory reclaim
+**Learning:** When swapping out or freeing memory on Linux, `MADV_DONTNEED` should be used instead of `MADV_FREE`. `MADV_FREE` only marks pages as reclaimable and doesn't immediately reflect in memory counters, whereas `MADV_DONTNEED` actively discards the pages and gives memory back immediately.
+**Action:** Prefer `MADV_DONTNEED` over `MADV_FREE` when immediately releasing page resources on Linux.

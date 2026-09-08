@@ -36,3 +36,7 @@
 ## 2026-09-01 - Added accessibilityHint to Modern Menu Pip
 **Learning:** VoiceOver screen reader users need additional context on what the "Workspace menu" button does. A label alone doesn't clarify its function.
 **Action:** Added an `accessibilityHint` explaining that the button opens the desktop menu for window management.
+
+## 2026-09-06 - Accessibility Labels vs Hints for Floating Buttons
+**Learning:** Accessibility labels should name the action a control performs (e.g., "Switch Terminal") rather than just describing the button (e.g., "Terminal Switcher"). Hints provide additional context on what tapping it does.
+**Action:** When adding accessibility strings to controls, ensure the label uses a verb phrase if it triggers an action, and use a hint to describe what that action does.
