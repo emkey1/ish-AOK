@@ -2405,7 +2405,10 @@ static UIFont *ISHLLMMonospaceFont(CGFloat size) {
     // Deliberately the pre-UIButtonConfiguration API: -codeCopyButtonTapped:
     // swaps the title to "Copied" with -setTitle:forState:, which a configured
     // button ignores.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     copyButton.contentEdgeInsets = UIEdgeInsetsMake(2.0, 6.0, 2.0, 6.0);
+#pragma clang diagnostic pop
     [copyButton addTarget:self action:@selector(codeCopyButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
     return copyButton;
 }
@@ -2615,8 +2618,12 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     // (and so a stall is obvious instead of looking like a silent hang).
     if (@available(iOS 13.0, *))
         _activityIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-    else
+    else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         _activityIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
+#pragma clang diagnostic pop
+    }
     _activityIndicator.hidesWhenStopped = YES;
     _statusLabel = [UILabel new];
     _statusLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];
