@@ -3239,7 +3239,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                 [self scheduleDnsRefresh:@"dnsnotify"];
             });
             if (err == NOTIFY_STATUS_OK) {
-                self.dnsNotifyToken = (int) token;
+                self.dnsNotifyToken = token;
                 self.dnsNotifyRegistered = YES;
             }
         }

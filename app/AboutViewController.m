@@ -2407,13 +2407,7 @@ static UIFont *ISHLLMMonospaceFont(CGFloat size) {
     // button ignores.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     copyButton.contentEdgeInsets = UIEdgeInsetsMake(2.0, 6.0, 2.0, 6.0);
-#pragma clang diagnostic pop
-#pragma clang diagnostic pop
 #pragma clang diagnostic pop
     [copyButton addTarget:self action:@selector(codeCopyButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
     return copyButton;
@@ -2627,13 +2621,7 @@ static const CGFloat kISHLLMPromptFieldMaxHeight = 120.0;
     else
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         _activityIndicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleGray];
-#pragma clang diagnostic pop
-#pragma clang diagnostic pop
 #pragma clang diagnostic pop
     _activityIndicator.hidesWhenStopped = YES;
     _statusLabel = [UILabel new];
