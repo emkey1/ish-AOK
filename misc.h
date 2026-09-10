@@ -118,6 +118,11 @@ static inline void __use(int dummy __attribute__((unused)), ...) {}
 #define array_size(arr) (sizeof(arr)/sizeof((arr)[0]))
 #endif
 
+
+static inline bool is_dot_or_dotdot(const char *name) {
+    return name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'));
+}
+
 // types
 typedef int64_t sqword_t;
 typedef uint64_t qword_t;
