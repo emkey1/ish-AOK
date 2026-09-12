@@ -32,6 +32,7 @@ jobs:
           pip3 install meson ninja
       - name: Build
         run: |
+          git submodule update --init deps/dash && cd deps/dash && ../../tools/configure-dash.sh && make && cd ../../
           meson setup build -Dengine=jit
           ninja -C build
         env:
@@ -73,6 +74,7 @@ jobs:
           python3 bin/mkdist
       - name: Build app (unsigned)
         run: |
+          git submodule update --init deps/dash && cd deps/dash && ../../tools/configure-dash.sh && make && cd ../../
           xcodebuild build \
             -project iSH-AOK.xcodeproj \
             -scheme iSH-AOK \
