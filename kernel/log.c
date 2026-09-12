@@ -202,9 +202,10 @@ size_t sys_syslog_guest(int_t type, guest_addr_t buf_addr, int_t len) {
 }
 
 static void log_buf_append(const char *msg) {
-    fifo_write(&log_buf, msg, strlen(msg), FIFO_OVERWRITE);
-    log_total_written += strlen(msg);
-    log_max_since_clear += strlen(msg);
+    size_t len = strlen(msg);
+    fifo_write(&log_buf, msg, len, FIFO_OVERWRITE);
+    log_total_written += len;
+    log_max_since_clear += len;
     if (log_max_since_clear > fifo_capacity(&log_buf))
         log_max_since_clear = fifo_capacity(&log_buf);
     // Called with log_lock held (ish_vprintk), which is what wait_for below
