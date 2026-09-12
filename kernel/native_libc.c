@@ -446,7 +446,8 @@ char *nlibc_realpath(const char *path, char *resolved) {
         return NULL;
     }
     if (canonical[0] == '\0')
-        strcpy(canonical, "/");
+        strncpy(canonical, "/", sizeof(canonical) - 1);
+        canonical[sizeof(canonical) - 1] = '\0';
 
     size_t need = strlen(canonical) + 1;
     if (resolved == NULL) {
@@ -786,7 +787,8 @@ char *nlibc_getcwd(char *buf, size_t size) {
     }
     path[sizeof(path) - 1] = '\0';
     if (path[0] == '\0')
-        strcpy(path, "/");
+        strncpy(path, "/", sizeof(path) - 1);
+        path[sizeof(path) - 1] = '\0';
     if (buf == NULL) {
         char *out = strdup(path);
         if (out == NULL)
@@ -800,7 +802,8 @@ char *nlibc_getcwd(char *buf, size_t size) {
         errno = ERANGE;
         return NULL;
     }
-    strcpy(buf, path);
+    strncpy(buf, path, MAX_PATH - 1);
+    buf[MAX_PATH - 1] = '\0';
     return buf;
 }
 
@@ -2891,7 +2894,8 @@ int nlibc_openpty(int *amaster, int *aslave, char *name,
     if (winp != NULL)
         nlibc_ioctl(slave, TIOCSWINSZ, winp);
     if (name != NULL)
-        strcpy(name, slave_path);   // openpty's contract: the caller sizes it
+        strncpy(name, slave_path, MAX_PATH - 1);
+        name[MAX_PATH - 1] = '\0';   // openpty's contract: the caller sizes it
     *amaster = master;
     *aslave = slave;
     return 0;

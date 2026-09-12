@@ -1500,7 +1500,8 @@ static int proc_ish_update_i386_no_cache_comm(struct proc_entry *UNUSED(entry), 
 }
 
 static void proc_ish_defaults_getname(struct proc_entry *entry, char *buf) {
-    strcpy(buf, entry->name);
+    strncpy(buf, entry->name, MAX_PATH - 1);
+    buf[MAX_PATH - 1] = '\0';
 }
 
 static int proc_ish_defaults_readlink(struct proc_entry *entry, char *buf) {
@@ -1699,7 +1700,8 @@ static int proc_ish_show_ips(struct proc_entry *UNUSED(entry), struct proc_data 
             if (cursor->ifa_dstaddr != NULL) {
                 get_ip_str(cursor->ifa_dstaddr, int_dstaddr, sizeof(int_dstaddr));
             } else {
-                strcpy(int_dstaddr, " ");
+                strncpy(int_dstaddr, " ", sizeof(int_dstaddr) - 1);
+                int_dstaddr[sizeof(int_dstaddr) - 1] = '\0';
             }
 
             char int_flags[250];

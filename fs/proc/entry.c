@@ -95,16 +95,21 @@ void proc_entry_getname(struct proc_entry *entry, char *buf) {
     if (entry->meta->getname)
         entry->meta->getname(entry, buf);
     else if (entry->meta->name)
-        strcpy(buf, entry->meta->name);
+        {
+        strncpy(buf, entry->meta->name, MAX_PATH - 1);
+        buf[MAX_PATH - 1] = '\0';
+    }
     else
         assert(!"missing name in proc entry");
 }
 
 static void proc_dot_getname(struct proc_entry *UNUSED(entry), char *buf) {
-    strcpy(buf, ".");
+    strncpy(buf, ".", MAX_PATH - 1);
+    buf[MAX_PATH - 1] = '\0';
 }
 static void proc_dotdot_getname(struct proc_entry *UNUSED(entry), char *buf) {
-    strcpy(buf, "..");
+    strncpy(buf, "..", MAX_PATH - 1);
+    buf[MAX_PATH - 1] = '\0';
 }
 static struct proc_dir_entry proc_dot_entry = {NULL, S_IFDIR, .getname = proc_dot_getname};
 static struct proc_dir_entry proc_dotdot_entry = {NULL, S_IFDIR, .getname = proc_dotdot_getname};
