@@ -872,7 +872,7 @@ static int proc_ish_update_snapshot(struct proc_entry *UNUSED(entry), struct pro
     // one path component and nothing clever. Without this a guest root process
     // could write a root anywhere on the host the app can reach, which is a
     // container escape rather than a snapshot.
-    if (strchr(name, '/') != NULL || strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+    if (strchr(name, '/') != NULL || is_dot_or_dotdot(name))
         return _EINVAL;
     for (const char *p = name; *p != '\0'; p++) {
         bool ok = (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||

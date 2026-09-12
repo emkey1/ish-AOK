@@ -1125,6 +1125,7 @@ static NSString *MetricKitISO8601StringFromDate(NSDate *date) {
     return [formatter stringFromDate:date];
 }
 
+static double MetricKitNowSeconds(void) __attribute__((unused));
 static double MetricKitNowSeconds(void) {
     return CFAbsoluteTimeGetCurrent();
 }
@@ -3530,7 +3531,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
             }
 #endif
             __weak typeof(self) weakSelf = self;
-            uint32_t token = NOTIFY_TOKEN_INVALID;
+            int token = NOTIFY_TOKEN_INVALID;
             int err = notify_register_dispatch(notifyKey, &token, queue, ^(int tokenValue) {
                 __strong typeof(weakSelf) self = weakSelf;
                 if (self == nil)
@@ -3540,7 +3541,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                 [self scheduleDnsRefresh:@"dnsnotify"];
             });
             if (err == NOTIFY_STATUS_OK) {
-                self.dnsNotifyToken = (int) token;
+                self.dnsNotifyToken = token;
                 self.dnsNotifyRegistered = YES;
             }
         }
@@ -3558,6 +3559,9 @@ static TerminalViewController *CreateTerminalViewController(void) {
                     return;
                 const char *status = "unknown";
                 switch (nw_path_get_status(path)) {
+                    case nw_path_status_invalid:
+                        status = "invalid";
+                        break;
                     case nw_path_status_satisfied:
                         status = "satisfied";
                         break;
@@ -3845,8 +3849,11 @@ static UINavigationController *CreateAboutNavigationController(BOOL recoveryMode
     // libiSH-AOKApp, where a __has_include would always be false. The class is
     // absent below iOS 16 or if AppIntents wasn't available at build time.
     Class appShortcutsBridge = NSClassFromString(@"ISHAppShortcutsBridge");
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wundeclared-selector"
     if ([appShortcutsBridge respondsToSelector:@selector(refreshAppShortcuts)])
         [appShortcutsBridge performSelector:@selector(refreshAppShortcuts)];
+#pragma clang diagnostic pop
     // get the network permissions popup to appear on chinese devices
     [[NSURLSession.sharedSession dataTaskWithURL:[NSURL URLWithString:@"http://captive.apple.com"]] resume];
 
