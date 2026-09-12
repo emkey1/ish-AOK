@@ -1871,7 +1871,8 @@ static int fs_try_rebase_path(struct fs_info *fs, char *path) {
 
     size_t root_len = strlen(root_path);
     if (strcmp(path, root_path) == 0) {
-        strcpy(path, "/");
+        strncpy(path, "/", sizeof(path) - 1);
+        path[sizeof(path) - 1] = '\0';
         return 1;
     }
     if (strncmp(path, root_path, root_len) == 0 && path[root_len] == '/') {

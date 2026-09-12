@@ -72,7 +72,8 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
             // passed to the next path_normalize call
             char possible_symlink[MAX_PATH];
             *o = '\0';
-            strcpy(possible_symlink, out);
+            strncpy(possible_symlink, out, sizeof(possible_symlink) - 1);
+            possible_symlink[sizeof(possible_symlink) - 1] = '\0';
             struct mount *mount = find_mount_and_trim_path(possible_symlink);
             if (mount == NULL)
                 return _ENOENT;
@@ -352,7 +353,8 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
                 // symlink still counts as a name that exists and is removable.
                 bool target_exists = false;
                 char out_copy[MAX_PATH];   // find_mount_and_trim_path mutates it
-                strcpy(out_copy, out);
+                strncpy(out_copy, out, sizeof(out_copy) - 1);
+                out_copy[sizeof(out_copy) - 1] = '\0';
                 struct mount *target_mount = find_mount_and_trim_path(out_copy);
                 if (target_mount != NULL) {
                     struct statbuf target_stat;

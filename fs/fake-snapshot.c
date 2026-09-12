@@ -271,7 +271,8 @@ int fakefs_snapshot(const char *src_data, const char *dst_root,
     char *slash = strrchr(src_db, '/');
     if (slash == NULL || strcmp(slash + 1, "data") != 0)
         return _EINVAL;
-    strcpy(slash + 1, "meta.db");
+    strncpy(slash + 1, "meta.db", (sizeof(src_db) - (slash + 1 - src_db)) - 1);
+    src_db[sizeof(src_db) - 1] = '\0';
 
     char dst_data[PATH_MAX], dst_db[PATH_MAX];
     if (snprintf(dst_data, sizeof dst_data, "%s/data", dst_root) >= (int) sizeof dst_data ||
