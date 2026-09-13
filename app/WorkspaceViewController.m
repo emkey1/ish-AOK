@@ -166,6 +166,19 @@ static NSArray<NSString *> *ISHWorkspaceOpenableToolIdentifiers(void) {
     return tools;
 }
 static NSString *const ISHWorkspaceSavedLayoutDefaultsKey = @"ISHWorkspaceSavedLayout";
+// When each scene's layout was written. A scene's persistentIdentifier does
+// NOT survive Suspend and Exit -- the session is discarded and the next launch
+// mints a fresh one -- so the layout just saved is looked up under a key that
+// no longer exists. Measured on the user's iPad: THIRTEEN orphaned scene keys,
+// the real arrangement (4 Desktops, windows on 1/2/3) filed under one of them,
+// and the resume reading a months-old "default" with everything on Desktop 0.
+// That is the missing Desktop count, the missing applets, and the applets
+// coming back on the wrong Desktops. Newest-wins is what makes a resume find
+// what the suspend just wrote.
+static NSString *const ISHWorkspaceSavedLayoutTimesDefaultsKey = @"ISHWorkspaceSavedLayoutTimes";
+// Orphans accumulate forever otherwise -- one per launch, each holding a full
+// window list.
+static const NSUInteger ISHWorkspaceSavedLayoutSceneLimit = 8;
 static NSString *const ISHWorkspacePersistentWorkspacesWindowFrameDefaultsKey = @"ISHWorkspacePersistentWorkspacesWindowFrame";
 static NSString *const ISHWorkspaceLegacyPersistentWorkspacesWindowFrameDefaultsKeyPrefix = @"ISHWorkspacePersistentWorkspacesWindowFrame";
 static NSString *const ISHWorkspacePersistentDockWindowDescriptorDefaultsKey = @"ISHWorkspacePersistentDockWindowDescriptor";
@@ -3828,7 +3841,43 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
         if (sceneIdentifier.length == 0)
             sceneIdentifier = @"default";
         layoutsByScene[sceneIdentifier] = layout;
+
+        id storedTimes = [NSUserDefaults.standardUserDefaults objectForKey:ISHWorkspaceSavedLayoutTimesDefaultsKey];
+        NSMutableDictionary<NSString *, NSNumber *> *times = [storedTimes isKindOfClass:NSDictionary.class]
+            ? [storedTimes mutableCopy]
+            : [NSMutableDictionary dictionary];
+        times[sceneIdentifier] = @([NSDate date].timeIntervalSince1970);
+
+        // Keep the newest few. A scene key that no longer has a layout is not
+        // worth a timestamp either, so the two are pruned together and stay in
+        // step -- an entry in one and not the other is what would make
+        // newest-wins pick a key with nothing behind it.
+        for (NSString *staleKey in times.allKeys) {
+            if (layoutsByScene[staleKey] == nil)
+                [times removeObjectForKey:staleKey];
+        }
+        if (layoutsByScene.count > ISHWorkspaceSavedLayoutSceneLimit) {
+            NSArray<NSString *> *oldestFirst = [layoutsByScene.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+                // No timestamp means it predates this and is the oldest thing here.
+                double ta = [times[a] doubleValue];
+                double tb = [times[b] doubleValue];
+                if (ta == tb)
+                    return [a compare:b];
+                return ta < tb ? NSOrderedAscending : NSOrderedDescending;
+            }];
+            NSUInteger excess = layoutsByScene.count - ISHWorkspaceSavedLayoutSceneLimit;
+            for (NSUInteger i = 0; i < excess; i++) {
+                NSString *drop = oldestFirst[i];
+                // Never the one just written, and never the compatibility key.
+                if ([drop isEqualToString:sceneIdentifier] || [drop isEqualToString:@"default"])
+                    continue;
+                [layoutsByScene removeObjectForKey:drop];
+                [times removeObjectForKey:drop];
+            }
+        }
+
         [NSUserDefaults.standardUserDefaults setObject:layoutsByScene forKey:ISHWorkspaceSavedLayoutDefaultsKey];
+        [NSUserDefaults.standardUserDefaults setObject:times forKey:ISHWorkspaceSavedLayoutTimesDefaultsKey];
     } else {
         [NSUserDefaults.standardUserDefaults setObject:layout forKey:ISHWorkspaceSavedLayoutDefaultsKey];
     }
@@ -5802,6 +5851,40 @@ static NSRange ISHWorkspaceLineRangeContainingIndex(NSString *text, NSUInteger i
     if ([sceneLayout isKindOfClass:NSArray.class])
         return (NSArray<NSDictionary<NSString *, id> *> *) sceneLayout;
 
+    // This scene has no layout of its own, which after a Suspend and Exit is the
+    // NORMAL case rather than an error: the session that saved was discarded on
+    // exit and this launch minted a fresh identifier. Falling straight through
+    // to "default" handed the resume whatever arrangement happened to be filed
+    // under that name -- on the reporting device, one with three Desktops and
+    // every window on the first, against a save that had four and windows on
+    // three of them.
+    //
+    // The newest layout is the one the suspend just wrote, so that is the one a
+    // fresh scene should adopt.
+    id storedTimes = [NSUserDefaults.standardUserDefaults objectForKey:ISHWorkspaceSavedLayoutTimesDefaultsKey];
+    if ([storedTimes isKindOfClass:NSDictionary.class]) {
+        NSDictionary<NSString *, id> *times = (NSDictionary<NSString *, id> *) storedTimes;
+        NSString *newestKey = nil;
+        double newest = 0;
+        for (NSString *key in times) {
+            if (![layoutsByScene[key] isKindOfClass:NSArray.class])
+                continue;   // a timestamp with nothing behind it
+            double when = [times[key] doubleValue];
+            if (when > newest) {
+                newest = when;
+                newestKey = key;
+            }
+        }
+        if (newestKey != nil) {
+            [ISHDiagnosticsStore recordBreadcrumb:@"workspace.layout.adoptedNewest"
+                                          details:@{@"scene": sceneIdentifier ?: @"",
+                                                    @"adopted": newestKey,
+                                                    @"windows": @([layoutsByScene[newestKey] count])}];
+            return (NSArray<NSDictionary<NSString *, id> *> *) layoutsByScene[newestKey];
+        }
+    }
+
+    // Nothing stamped: data written before this existed.
     id defaultLayout = layoutsByScene[@"default"];
     if ([defaultLayout isKindOfClass:NSArray.class])
         return (NSArray<NSDictionary<NSString *, id> *> *) defaultLayout;
@@ -12276,18 +12359,20 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         layoutRow.spacing = 6;
         [layoutRow addArrangedSubview:[self workspacesIconButtonWithSymbol:@"square.and.arrow.down" fallback:@"Save" action:@selector(saveLayoutFromApplet:)]];
         [layoutRow addArrangedSubview:[self workspacesIconButtonWithSymbol:@"arrow.clockwise" fallback:@"Restore" action:@selector(restoreLayoutFromApplet:)]];
-        [_contentStack addArrangedSubview:layoutRow];
-        // The SAME symbol the shell-mode terminal uses for its session control
-        // (arrow.down.doc, TerminalViewController's save button), on its own row
-        // rather than in the Layout Manager row above -- that row's "Save" means
-        // the window arrangement, and the two are not remotely the same thing.
-        // I first made this a titled button to keep them apart; the icon is what
-        // was asked for, and matching the shell is a better way to say "session"
-        // than a word that has to compete with "Save" three pixels away.
+        // In the row, as asked. The SAME symbol the shell-mode terminal uses for
+        // its session control (arrow.down.doc, TerminalViewController's save
+        // button), so the two modes say "session" the same way.
+        //
+        // I had kept it on its own row on the argument that this row's "Save"
+        // means the window arrangement while this one writes the running machine
+        // to disk, and that sitting them together would blur it. Overruled: the
+        // three are what you reach for in the same breath, and a control you
+        // have to hunt for is worse than one you might misread once.
         _sessionButton = [self workspacesIconButtonWithSymbol:@"arrow.down.doc"
                                                      fallback:@"Session"
                                                        action:@selector(sessionActionsFromApplet:)];
-        [_contentStack addArrangedSubview:_sessionButton];
+        [layoutRow addArrangedSubview:_sessionButton];
+        [_contentStack addArrangedSubview:layoutRow];
     }
     CGFloat listInset = ISHWorkspaceUsesPhoneLayout() ? 6.0 : 8.0;
     [NSLayoutConstraint activateConstraints:@[
