@@ -36,3 +36,10 @@
 ## 2026-09-01 - Added accessibilityHint to Modern Menu Pip
 **Learning:** VoiceOver screen reader users need additional context on what the "Workspace menu" button does. A label alone doesn't clarify its function.
 **Action:** Added an `accessibilityHint` explaining that the button opens the desktop menu for window management.
+## 2024-09-13 - Decoupling Accessibility Labels from Visual Fallbacks
+**Learning:** Using short fallback strings (like "Save" or "Restore") directly as `accessibilityLabel`s for icon-only buttons provides insufficient context for screen reader users when multiple similar actions exist in the UI (e.g., "Save Layout" vs "Save Session").
+**Action:** When creating icon-only buttons with factory methods, pass an explicit `accessibilityLabel` parameter instead of blindly reusing the visual fallback string, ensuring VoiceOver receives the full contextual description.
+
+## 2024-09-13 - Decoupling Accessibility Labels from Visual Fallbacks
+**Learning:** Using short fallback strings (like "Save" or "Restore") directly as `accessibilityLabel`s for icon-only buttons provides insufficient context for screen reader users when multiple similar actions exist in the UI (e.g., "Save Layout" vs "Save Session").
+**Action:** When creating icon-only buttons with factory methods, pass an explicit `accessibilityLabel` parameter instead of blindly reusing the visual fallback string, ensuring VoiceOver receives the full contextual description.

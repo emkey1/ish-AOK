@@ -12034,7 +12034,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     return button;
 }
 
-- (UIButton *)workspacesIconButtonWithSymbol:(NSString *)symbol fallback:(NSString *)fallback action:(SEL)action {
+- (UIButton *)workspacesIconButtonWithSymbol:(NSString *)symbol fallback:(NSString *)fallback action:(SEL)action accessibilityLabel:(NSString *)label {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     button.translatesAutoresizingMaskIntoConstraints = NO;
     if (@available(iOS 13.0, *)) {
@@ -12042,7 +12042,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     } else {
         [button setTitle:fallback forState:UIControlStateNormal];
     }
-    button.accessibilityLabel = fallback;
+    button.accessibilityLabel = label;
     button.layer.cornerRadius = 12;
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     [button.heightAnchor constraintEqualToConstant:ISHWorkspaceUsesPhoneLayout() ? 36.0 : 40.0].active = YES;
@@ -12500,7 +12500,8 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         [_contentStack addArrangedSubview:_closeHiddenButton];
         _sessionButton = [self workspacesIconButtonWithSymbol:@"arrow.down.doc"
                                                      fallback:@"Session"
-                                                       action:@selector(sessionActionsFromApplet:)];
+                                                       action:@selector(sessionActionsFromApplet:)
+                                           accessibilityLabel:@"Session Actions"];
         [_contentStack addArrangedSubview:_sessionButton];
     } else {
         // Modern folds the Layout Manager into this applet as two icons.
@@ -12508,8 +12509,8 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         layoutRow.axis = UILayoutConstraintAxisHorizontal;
         layoutRow.distribution = UIStackViewDistributionFillEqually;
         layoutRow.spacing = 6;
-        [layoutRow addArrangedSubview:[self workspacesIconButtonWithSymbol:@"square.and.arrow.down" fallback:@"Save" action:@selector(saveLayoutFromApplet:)]];
-        [layoutRow addArrangedSubview:[self workspacesIconButtonWithSymbol:@"arrow.clockwise" fallback:@"Restore" action:@selector(restoreLayoutFromApplet:)]];
+        [layoutRow addArrangedSubview:[self workspacesIconButtonWithSymbol:@"square.and.arrow.down" fallback:@"Save" action:@selector(saveLayoutFromApplet:) accessibilityLabel:@"Save Layout"]];
+        [layoutRow addArrangedSubview:[self workspacesIconButtonWithSymbol:@"arrow.clockwise" fallback:@"Restore" action:@selector(restoreLayoutFromApplet:) accessibilityLabel:@"Restore Layout"]];
         // In the row, as asked. The SAME symbol the shell-mode terminal uses for
         // its session control (arrow.down.doc, TerminalViewController's save
         // button), so the two modes say "session" the same way.
@@ -12521,7 +12522,8 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         // have to hunt for is worse than one you might misread once.
         _sessionButton = [self workspacesIconButtonWithSymbol:@"arrow.down.doc"
                                                      fallback:@"Session"
-                                                       action:@selector(sessionActionsFromApplet:)];
+                                                       action:@selector(sessionActionsFromApplet:)
+                                           accessibilityLabel:@"Session Actions"];
         [layoutRow addArrangedSubview:_sessionButton];
         [_contentStack addArrangedSubview:layoutRow];
     }
