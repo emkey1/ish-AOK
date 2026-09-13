@@ -725,6 +725,19 @@ static uint64_t gen_arm64_reg_slot(unsigned r) {
     return offsetof(struct cpu_state, arm64_regs) + r * 8;
 }
 
+// Fast-path LDP/STP gadget selection (jit/guest-arm64/memory.S's *_fast
+// family): offset mode (mode 2) only, both rt and rt2 != 31 (real registers),
+// with cpu_state slot offsets precomputed here instead of decoded at runtime.
+static void *gen_arm64_ldp_fast_gadget(bool sf) {
+    extern void gadget_arm64_ldp64_fast(void), gadget_arm64_ldp32_fast(void);
+    return sf ? (void *) gadget_arm64_ldp64_fast : (void *) gadget_arm64_ldp32_fast;
+}
+
+static void *gen_arm64_stp_fast_gadget(bool sf) {
+    extern void gadget_arm64_stp64_fast(void), gadget_arm64_stp32_fast(void);
+    return sf ? (void *) gadget_arm64_stp64_fast : (void *) gadget_arm64_stp32_fast;
+}
+
 // cond -> condition-evaluation gadget (jit/guest-arm64/dpextra.S's
 // cond_* family). AL and NV are both architecturally "always" for the
 // consuming instructions here (CSEL/CCMP never invert them the way
@@ -1752,6 +1765,20 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         bool sf = opc == 0b10;
         // LDPSW accesses 4-byte elements; the scaled offset uses 4 too.
         int64_t offset = (int64_t) imm7 * (sf ? 8 : 4);
+        // Fast path: offset mode (mode 2), not LDPSW, both rt and rt2 are
+        // real registers (not XZR). Covers function prologues/epilogues and
+        // -O0 stack traffic — the dominant LDP/STP form.
+        if (mode == 2 && !is_ldpsw && rt != 31 && rt2 != 31) {
+            void *gadget = is_load
+                ? gen_arm64_ldp_fast_gadget(sf)
+                : gen_arm64_stp_fast_gadget(sf);
+            gen(state, (unsigned long) gadget);
+            gen(state, gen_arm64_reg_slot(rt) | (gen_arm64_reg_slot(rt2) << 16));
+            gen(state, gen_arm64_reg_slot(rn));
+            gen(state, (uint64_t) offset);
+            gen(state, state->arm64_orig_ip);
+            return 1;
+        }
         void *gadget;
         if (is_ldpsw) {
             extern void gadget_arm64_ldpsw(void);
