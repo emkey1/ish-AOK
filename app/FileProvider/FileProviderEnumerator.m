@@ -12,6 +12,23 @@
 #import "FileProviderEnumerator.h"
 #import "FileProviderItem.h"
 #import "NSError+ISHErrno.h"
+
+#include <stdbool.h>
+
+// ⚡ Bolt: Performance Optimization
+// Replace strcmp() overhead for checking "." and ".." in tight VFS directory iteration loops.
+// Manual array access avoids O(N) traversal and function call overhead.
+static inline bool is_dot_or_dotdot(const char *name) {
+    if (name[0] == '.') {
+        if (name[1] == '\0') {
+            return true;
+        }
+        if (name[1] == '.' && name[2] == '\0') {
+            return true;
+        }
+    }
+    return false;
+}
 #include "fs/fake-db.h"
 
 static NSNumber *ISHFileProviderEnumeratorDurationMilliseconds(NSTimeInterval start) {
@@ -133,7 +150,7 @@ static NSNumber *ISHFileProviderEnumeratorDurationMilliseconds(NSTimeInterval st
     struct dirent *dirent;
     errno = 0;
     while ((dirent = readdir(dir))) {
-        if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0)
+        if (is_dot_or_dotdot(dirent->d_name))
             continue;
 
         NSString *path = _item.path;
