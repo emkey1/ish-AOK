@@ -41,6 +41,9 @@
 @property (nonatomic, strong) UIButton *modernMenuPip;
 @property (nonatomic) BOOL didEnsureDefaultWorkspaceUtilities;
 @property (nonatomic) BOOL didAskSessionResumeChoice;
+// The arrangement signature as of the last Save, for the applet's saved/unsaved
+// indicator. nil until this launch reads or writes a snapshot.
+@property (nonatomic, copy) NSString *savedDesktopsSignature;
 @property (nonatomic, strong) UIView *desktopSurfaceView;
 @property (nonatomic, strong) UIImageView *desktopWallpaperView;
 @property (nonatomic, copy) NSString *appliedWallpaperThemeIdentifier;
@@ -176,6 +179,16 @@ static NSString *const ISHWorkspaceSavedLayoutDefaultsKey = @"ISHWorkspaceSavedL
 // coming back on the wrong Desktops. Newest-wins is what makes a resume find
 // what the suspend just wrote.
 static NSString *const ISHWorkspaceSavedLayoutTimesDefaultsKey = @"ISHWorkspaceSavedLayoutTimes";
+// The Desktop arrangement the user deliberately saved, with the Save icon in the
+// Desktops applet.
+//
+// Deliberately NOT ISHWorkspaceSavedLayout. That one is rewritten automatically
+// on every suspend and every background transition, so a snapshot filed there is
+// overwritten by the next thing that happens to the app -- and it is read only
+// when a launch resumed a checkpoint, which is why pressing Save, killing the
+// app and restarting restored nothing at all. This key changes only when the
+// user presses Save, and every ordinary launch reads it.
+static NSString *const ISHWorkspaceSavedDesktopsDefaultsKey = @"ISHWorkspaceSavedDesktops";
 // Orphans accumulate forever otherwise -- one per launch, each holding a full
 // window list.
 static const NSUInteger ISHWorkspaceSavedLayoutSceneLimit = 8;
@@ -3907,6 +3920,134 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     [self applyArrangementWorkspaceLayout:layout];
 }
 
+// ---- the Desktops snapshot -------------------------------------------------
+//
+// What the Save icon in the Desktops applet writes and the Restore icon (and
+// every ordinary launch) reads: how many Desktops there are, which applet sits
+// on which, and where the windows are. No state -- an applet's contents and a
+// terminal's scrollback belong to suspend/checkpoint.
+
+- (NSArray<NSDictionary<NSString *, id> *> *)workspaceArrangementDescriptors {
+    NSMutableArray<NSDictionary<NSString *, id> *> *layout = [NSMutableArray array];
+    [layout addObject:@{@"kind": ISHWorkspaceSavedLayoutKindDesktops,
+                        @"count": @(self.desktopCount),
+                        @"active": @(self.activeDesktopIndex)}];
+    for (UIView *subview in self.desktopSurfaceView.subviews) {
+        if (![subview isKindOfClass:ISHWorkspaceContainedWindowView.class])
+            continue;
+        NSDictionary<NSString *, id> *descriptor =
+            [self savedLayoutDescriptorForWindow:(ISHWorkspaceContainedWindowView *) subview];
+        if (descriptor == nil)
+            continue;
+        // Placement only. "state" is an applet's contents and "contents" is a
+        // terminal's scrollback; carrying either would make a Save of the
+        // ARRANGEMENT quietly file a copy of the work as well.
+        NSMutableDictionary<NSString *, id> *trimmed = [descriptor mutableCopy];
+        [trimmed removeObjectForKey:@"state"];
+        [trimmed removeObjectForKey:@"contents"];
+        [layout addObject:trimmed];
+    }
+    return layout;
+}
+
+// What the indicator compares. Structure, not pixels: how many Desktops, and
+// which window is on which. Frames are saved but deliberately left out of this,
+// or nudging a window by a point would light up "unsaved" mid-drag.
+- (NSString *)workspaceArrangementSignature {
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    for (UIView *subview in self.desktopSurfaceView.subviews) {
+        if (![subview isKindOfClass:ISHWorkspaceContainedWindowView.class])
+            continue;
+        ISHWorkspaceContainedWindowView *windowView = (ISHWorkspaceContainedWindowView *) subview;
+        if (windowView == self.dashboardWindow || windowView == self.dockWindow)
+            continue;
+        NSString *name = windowView.workspaceToolIdentifier;
+        if (name.length == 0 && windowView.hostedTerminalViewController != nil)
+            name = @"terminal";
+        if (name.length == 0)
+            continue;
+        [parts addObject:[NSString stringWithFormat:@"%@@%ld", name,
+                                                    (long) windowView.workspaceDesktopIndex]];
+    }
+    [parts sortUsingSelector:@selector(compare:)];
+    return [NSString stringWithFormat:@"%ld|%@", (long) self.desktopCount,
+                                      [parts componentsJoinedByString:@","]];
+}
+
+- (NSArray<NSDictionary<NSString *, id> *> *)savedWorkspaceDesktops {
+    id stored = [NSUserDefaults.standardUserDefaults objectForKey:ISHWorkspaceSavedDesktopsDefaultsKey];
+    return [stored isKindOfClass:NSArray.class] ? stored : nil;
+}
+
+// The same signature, computed from a stored snapshot rather than the screen.
+//
+// So the indicator is right on a launch that did not apply the snapshot (a
+// checkpoint resume, say): without this, savedDesktopsSignature would still be
+// nil and a perfectly current arrangement would read as unsaved.
+- (NSString *)signatureForStoredArrangement:(NSArray<NSDictionary<NSString *, id> *> *)layout {
+    if (layout.count == 0)
+        return nil;
+    NSInteger count = 1;
+    NSMutableArray<NSString *> *parts = [NSMutableArray array];
+    for (NSDictionary<NSString *, id> *descriptor in layout) {
+        NSString *kind = descriptor[@"kind"];
+        if ([kind isEqualToString:ISHWorkspaceSavedLayoutKindDesktops]) {
+            count = MAX((NSInteger) 1, [descriptor[@"count"] integerValue]);
+            continue;
+        }
+        NSString *name = nil;
+        if ([kind isEqualToString:ISHWorkspaceSavedLayoutKindTool])
+            name = descriptor[@"toolIdentifier"];
+        else if ([kind isEqualToString:ISHWorkspaceSavedLayoutKindTerminal])
+            name = @"terminal";
+        if (name.length == 0)
+            continue;
+        [parts addObject:[NSString stringWithFormat:@"%@@%ld", name,
+                                                    (long) [descriptor[@"desktopIndex"] integerValue]]];
+    }
+    [parts sortUsingSelector:@selector(compare:)];
+    return [NSString stringWithFormat:@"%ld|%@", (long) count, [parts componentsJoinedByString:@","]];
+}
+
+- (BOOL)workspaceDesktopsArrangementIsSaved {
+    NSString *saved = self.savedDesktopsSignature;
+    if (saved == nil) {
+        saved = [self signatureForStoredArrangement:[self savedWorkspaceDesktops]];
+        self.savedDesktopsSignature = saved;
+    }
+    return saved != nil && [saved isEqualToString:[self workspaceArrangementSignature]];
+}
+
+- (void)saveWorkspaceDesktops {
+    NSArray<NSDictionary<NSString *, id> *> *layout = [self workspaceArrangementDescriptors];
+    [NSUserDefaults.standardUserDefaults setObject:layout
+                                            forKey:ISHWorkspaceSavedDesktopsDefaultsKey];
+    // Written through now rather than at the system's leisure: the next thing
+    // this is asked to survive is the app being killed.
+    [NSUserDefaults.standardUserDefaults synchronize];
+    self.savedDesktopsSignature = [self workspaceArrangementSignature];
+    [ISHDiagnosticsStore recordBreadcrumb:@"workspace.desktops.saved"
+                                  details:@{@"desktops": @(self.desktopCount),
+                                            @"windows": @(layout.count - 1)}];
+    [self postDesktopsDidChange];
+}
+
+- (void)restoreWorkspaceDesktops {
+    NSArray<NSDictionary<NSString *, id> *> *layout = [self savedWorkspaceDesktops];
+    if (layout.count == 0) {
+        UIAlertController *alert =
+            [UIAlertController alertControllerWithTitle:@"No Saved Desktops"
+                                                message:@"Press Save first, then Restore brings that arrangement back."
+                                         preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    [self applyArrangementWorkspaceLayout:layout];
+    self.savedDesktopsSignature = [self workspaceArrangementSignature];
+    [self postDesktopsDidChange];
+}
+
 // The Restore button: put the windows back where they were, and do nothing else.
 //
 // This used to call the resume path, which starts by closing every window -- and
@@ -5747,6 +5888,16 @@ static NSRange ISHWorkspaceLineRangeContainingIndex(NSString *text, NSUInteger i
                                                 @"applied": @(resumeStatus.restored && hasSavedLayout)}];
         if (resumeStatus.restored && hasSavedLayout) {
             [self applyResumeWorkspaceLayout:savedLayout];
+        } else if ([self savedWorkspaceDesktops].count > 0) {
+            // An ordinary launch with a Desktops snapshot on file.
+            //
+            // This branch did not exist, which is the whole of "Save Desktop(s)
+            // still doesn't work": the saved layout was consulted ONLY when the
+            // launch had resumed a checkpoint, so pressing Save, killing the app
+            // and restarting took the else below and opened the defaults. The
+            // snapshot had been written correctly every time and never once read.
+            [self restoreWorkspaceDesktops];
+            [self ensureDefaultLLMChatWindowOpenIfNeeded];
         } else {
         [self ensureDefaultWorkspaceUtilitiesOpen];
         // Honor a saved arrangement: don't force the LLM chat back open if it was closed before
@@ -12001,6 +12152,7 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
 
 @implementation WorkspaceWorkspacesToolViewController {
     UIButton *_sessionButton;
+    UIButton *_saveDesktopsButton;   // tinted to say whether this arrangement is saved
     UIScrollView *_scrollView;
     UIStackView *_contentStack;
     UIStackView *_rowsStack;
@@ -12051,12 +12203,30 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
 
 - (void)saveLayoutFromApplet:(id)sender {
     (void) sender;
-    [(id)self.workspaceHostViewController saveWorkspaceLayout:nil];
+    [(id)self.workspaceHostViewController saveWorkspaceDesktops];
+    [self refreshSaveDesktopsIndicator];
 }
 
 - (void)restoreLayoutFromApplet:(id)sender {
     (void) sender;
-    [(id)self.workspaceHostViewController restoreWorkspaceLayout:nil];
+    [(id)self.workspaceHostViewController restoreWorkspaceDesktops];
+    [self refreshSaveDesktopsIndicator];
+}
+
+// Green means "what is on screen is what is saved".
+//
+// Asked for because a Save that works looks exactly like a Save that does
+// nothing -- which it was. The comparison is structural (how many Desktops,
+// which applet on which), so moving a window does not flip it; adding a Desktop,
+// opening an applet, or dragging one to another Desktop does.
+- (void)refreshSaveDesktopsIndicator {
+    if (_saveDesktopsButton == nil)
+        return;
+    BOOL saved = [(id)self.workspaceHostViewController workspaceDesktopsArrangementIsSaved];
+    if (@available(iOS 13.0, *)) {
+        _saveDesktopsButton.tintColor = saved ? UIColor.systemGreenColor : nil;
+    }
+    _saveDesktopsButton.accessibilityLabel = saved ? @"Desktops saved" : @"Save Desktops";
 }
 
 // Suspend/checkpoint, reachable from Workspace mode.
@@ -12508,7 +12678,10 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
         layoutRow.axis = UILayoutConstraintAxisHorizontal;
         layoutRow.distribution = UIStackViewDistributionFillEqually;
         layoutRow.spacing = 6;
-        [layoutRow addArrangedSubview:[self workspacesIconButtonWithSymbol:@"square.and.arrow.down" fallback:@"Save" action:@selector(saveLayoutFromApplet:)]];
+        _saveDesktopsButton = [self workspacesIconButtonWithSymbol:@"square.and.arrow.down"
+                                                          fallback:@"Save"
+                                                            action:@selector(saveLayoutFromApplet:)];
+        [layoutRow addArrangedSubview:_saveDesktopsButton];
         [layoutRow addArrangedSubview:[self workspacesIconButtonWithSymbol:@"arrow.clockwise" fallback:@"Restore" action:@selector(restoreLayoutFromApplet:)]];
         // In the row, as asked. The SAME symbol the shell-mode terminal uses for
         // its session control (arrow.down.doc, TerminalViewController's save
@@ -12566,11 +12739,12 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
                                                  object:nil];
     }
     [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(rebuildSceneButtons)
+                                           selector:@selector(desktopsDidChangeNotification:)
                                                name:ISHWorkspaceDesktopsDidChangeNotification
                                              object:nil];
 
     [self refreshWorkspaceScenes];
+    [self refreshSaveDesktopsIndicator];
 }
 
 - (void)dealloc {
@@ -12585,6 +12759,11 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     _rowsStack.spacing = ISHWorkspaceDensityValue(4, 6);
+}
+
+- (void)desktopsDidChangeNotification:(__unused NSNotification *)notification {
+    [self rebuildSceneButtons];
+    [self refreshSaveDesktopsIndicator];
 }
 
 - (void)refreshWorkspaceScenesNotification:(__unused NSNotification *)notification {
