@@ -3881,6 +3881,16 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     } else {
         [NSUserDefaults.standardUserDefaults setObject:layout forKey:ISHWorkspaceSavedLayoutDefaultsKey];
     }
+
+    // The scrollback belonged to THIS save.
+    //
+    // captureTerminalContentsThen: fills this in immediately before a suspend
+    // writes its layout; leaving it set means the next Save button press files
+    // the same stale text again -- and since the newest layout now wins on a
+    // resume, that stale text is what a later resume would paint into the
+    // windows. Consumed here, so a manual Save carries geometry and nothing
+    // else, which is all it is for.
+    ISHWorkspaceCapturedTerminalContents = nil;
 }
 
 - (void)restoreWorkspaceLayout:(id)sender {
@@ -3894,7 +3904,142 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
         [self presentViewController:alert animated:YES completion:nil];
         return;
     }
-    [self applySavedWorkspaceLayout:layout];
+    [self applyArrangementWorkspaceLayout:layout];
+}
+
+// The Restore button: put the windows back where they were, and do nothing else.
+//
+// This used to call the resume path, which starts by closing every window -- and
+// a terminal window's close handler hangs up its pty, so Restore SIGHUPped every
+// shell in the workspace and then tried to rebuild the terminals from UUIDs it
+// had just killed. That is "the whole function seems to be borked", and it is
+// also why things landed on the wrong Desktop: what came back was not the window
+// that had been there, it was a new one built from a dead descriptor.
+//
+// A layout is an ARRANGEMENT: how many Desktops there are, which applet is on
+// which, and where the windows sit. Anything live -- a shell, its scrollback, an
+// applet's contents -- belongs to suspend/checkpoint and is deliberately not
+// touched here.
+- (void)applyArrangementWorkspaceLayout:(NSArray<NSDictionary<NSString *, id> *> *)layout {
+    NSDictionary<NSString *, id> *desktopsDescriptor = nil;
+    NSDictionary<NSString *, id> *dashboardDescriptor = nil;
+    NSDictionary<NSString *, id> *dockDescriptor = nil;
+    NSMutableArray<NSDictionary<NSString *, id> *> *toolDescriptors = [NSMutableArray array];
+    NSMutableArray<NSDictionary<NSString *, id> *> *terminalDescriptors = [NSMutableArray array];
+    for (NSDictionary<NSString *, id> *descriptor in layout) {
+        NSString *kind = descriptor[@"kind"];
+        if ([kind isEqualToString:ISHWorkspaceSavedLayoutKindDesktops])
+            desktopsDescriptor = descriptor;
+        else if ([kind isEqualToString:ISHWorkspaceSavedLayoutKindDashboard])
+            dashboardDescriptor = descriptor;
+        else if ([kind isEqualToString:ISHWorkspaceSavedLayoutKindDock])
+            dockDescriptor = descriptor;
+        else if ([kind isEqualToString:ISHWorkspaceSavedLayoutKindTool])
+            [toolDescriptors addObject:descriptor];
+        else if ([kind isEqualToString:ISHWorkspaceSavedLayoutKindTerminal])
+            [terminalDescriptors addObject:descriptor];
+    }
+
+    // Desktops first -- a window cannot be put on one that does not exist yet.
+    // Never shrink past a Desktop that currently holds something: removing it
+    // would orphan whatever is on it, and Restore is not a licence to throw
+    // somebody's work away.
+    NSInteger highestLiveIndex = 0;
+    for (ISHWorkspaceContainedWindowView *windowView in self.desktopWindows) {
+        if (![windowView isKindOfClass:ISHWorkspaceContainedWindowView.class])
+            continue;
+        highestLiveIndex = MAX(highestLiveIndex, windowView.workspaceDesktopIndex);
+    }
+    NSInteger savedCount = MAX((NSInteger) 1, [desktopsDescriptor[@"count"] integerValue]);
+    self.desktopCount = MAX(savedCount, highestLiveIndex + 1);
+
+    if (dashboardDescriptor != nil)
+        [self applySavedDashboardDescriptor:dashboardDescriptor];
+    if (dockDescriptor != nil)
+        [self applySavedDockDescriptor:dockDescriptor];
+
+    // The applets: open the ones that are missing, move the ones that are in the
+    // wrong place, and leave every one of them running.
+    NSMutableSet<NSString *> *wanted = [NSMutableSet set];
+    for (NSDictionary<NSString *, id> *descriptor in toolDescriptors) {
+        NSString *toolIdentifier = descriptor[@"toolIdentifier"];
+        if (toolIdentifier.length == 0 || [wanted containsObject:toolIdentifier])
+            continue;   // an older layout can name the same applet twice
+        [wanted addObject:toolIdentifier];
+        ISHWorkspaceContainedWindowView *windowView = [self desktopWindowForToolIdentifier:toolIdentifier];
+        if (windowView == nil)
+            windowView = [self openWorkspaceToolWindowWithIdentifier:toolIdentifier];
+        if (windowView == nil)
+            continue;
+        [self applySavedFrameDescriptor:descriptor[@"frame"]
+                               toWindow:windowView
+                           fallbackSize:ISHWorkspacePreferredToolContentSize(toolIdentifier)];
+        // Deliberately NOT descriptor[@"state"]: a saved arrangement says where
+        // the applet is, never what is in it.
+        [self assignRestoredWindow:windowView toDesktopFromDescriptor:descriptor];
+    }
+
+    // An applet the layout does not mention was opened after the save, so
+    // restoring the arrangement closes it. Applets only -- a terminal is never
+    // closed from here whatever the layout says, because closing one kills a
+    // shell.
+    for (ISHWorkspaceContainedWindowView *windowView in self.desktopWindows.copy) {
+        if (![windowView isKindOfClass:ISHWorkspaceContainedWindowView.class])
+            continue;
+        if (windowView == self.dashboardWindow || windowView == self.dockWindow)
+            continue;
+        if (windowView.hostedTerminalViewController != nil)
+            continue;
+        NSString *toolIdentifier = windowView.workspaceToolIdentifier;
+        if (toolIdentifier.length == 0 || [self isGlobalToolIdentifier:toolIdentifier])
+            continue;   // Desktops and Launcher belong to every Desktop
+        if ([wanted containsObject:toolIdentifier])
+            continue;
+        if (windowView.closeHandler != nil)
+            windowView.closeHandler();
+    }
+
+    // Terminals are MOVED, never made and never closed. One whose window is gone
+    // is simply not mentioned again -- bringing it back is the checkpoint's job,
+    // not this one's.
+    for (NSDictionary<NSString *, id> *descriptor in terminalDescriptors) {
+        NSString *displayString = descriptor[@"terminalUUID"];
+        NSString *sessionString = descriptor[@"sessionTerminalUUID"];
+        NSUUID *displayUUID = displayString.length > 0
+            ? [[NSUUID alloc] initWithUUIDString:displayString] : nil;
+        NSUUID *sessionUUID = sessionString.length > 0
+            ? [[NSUUID alloc] initWithUUIDString:sessionString] : nil;
+        ISHWorkspaceContainedWindowView *windowView =
+            displayUUID != nil ? [self desktopWindowDisplayingTerminalUUID:displayUUID] : nil;
+        if (windowView == nil && sessionUUID != nil)
+            windowView = [self desktopWindowHostingTerminalUUID:sessionUUID];
+        if (windowView == nil)
+            continue;
+        [self applySavedFrameDescriptor:descriptor[@"frame"]
+                               toWindow:windowView
+                           fallbackSize:ISHWorkspacePreferredTerminalContentSize()];
+        [self assignRestoredWindow:windowView toDesktopFromDescriptor:descriptor];
+    }
+
+    NSInteger active = self.activeDesktopIndex;
+    if (desktopsDescriptor != nil) {
+        NSInteger saved = [desktopsDescriptor[@"active"] integerValue];
+        if (saved >= 0 && saved < self.desktopCount)
+            active = saved;
+    }
+    [self switchToDesktopIndex:active];
+    [self applyDesktopVisibility];
+    // switchToDesktopIndex posts this itself, but only when the Desktop actually
+    // changes -- and the count almost always has, which is what the Desktops
+    // applet is listing.
+    [self postDesktopsDidChange];
+    [self refreshWorkspaceStatus];
+    [self applyCompactSizingToOpenWorkspaceToolWindows];
+    [ISHDiagnosticsStore recordBreadcrumb:@"workspace.layout.arrangementApplied"
+                                  details:@{@"desktops": @(self.desktopCount),
+                                            @"active": @(self.activeDesktopIndex),
+                                            @"applets": @(wanted.count),
+                                            @"terminalsMoved": @(terminalDescriptors.count)}];
 }
 
 // The silent core of the restore above.
@@ -3903,7 +4048,13 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
 // no "No Saved Layout" alert, because a resume is not a request -- nobody
 // asked, and an alert at launch would be an error message for something that
 // merely has nothing to put back.
-- (void)applySavedWorkspaceLayout:(NSArray<NSDictionary<NSString *, id> *> *)layout {
+// After a checkpoint restore: the guest is running but NOTHING is on screen, so
+// this rebuilds the windows -- terminals included, adopting the sessions the
+// restore published. It closes what is there first, which is safe only because
+// there is nothing there.
+//
+// NOT what the Restore button wants. See applyArrangementWorkspaceLayout:.
+- (void)applyResumeWorkspaceLayout:(NSArray<NSDictionary<NSString *, id> *> *)layout {
     NSDictionary<NSString *, id> *desktopsDescriptor = nil;
     NSDictionary<NSString *, id> *dashboardDescriptor = nil;
     NSDictionary<NSString *, id> *dockDescriptor = nil;
@@ -5579,7 +5730,7 @@ static NSRange ISHWorkspaceLineRangeContainingIndex(NSString *text, NSUInteger i
         // suspend-and-exit in Workspace mode came back with the shells alive
         // and not one terminal on screen, which reads as total data loss.
         //
-        // applySavedWorkspaceLayout ends by opening the default utilities
+        // applyResumeWorkspaceLayout ends by opening the default utilities
         // itself, so the branch below is the ordinary not-resuming launch.
         struct checkpoint_status resumeStatus;
         checkpoint_get_status(&resumeStatus);
@@ -5595,7 +5746,7 @@ static NSRange ISHWorkspaceLineRangeContainingIndex(NSString *text, NSUInteger i
                                                 @"windows": @(savedLayout.count),
                                                 @"applied": @(resumeStatus.restored && hasSavedLayout)}];
         if (resumeStatus.restored && hasSavedLayout) {
-            [self applySavedWorkspaceLayout:savedLayout];
+            [self applyResumeWorkspaceLayout:savedLayout];
         } else {
         [self ensureDefaultWorkspaceUtilitiesOpen];
         // Honor a saved arrangement: don't force the LLM chat back open if it was closed before
