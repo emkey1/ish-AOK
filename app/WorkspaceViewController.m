@@ -3269,6 +3269,11 @@ NSString *ISHWorkspaceToolIdentifierForViewController(UIViewController *viewCont
     [self.desktopSurfaceView addSubview:windowView];
     [self.desktopWindows addObject:windowView];
     windowView.workspaceDesktopIndex = self.activeDesktopIndex;
+    // Opening a window changes the arrangement, so the Desktops applet's
+    // saved/unsaved indicator has to hear about it. Only Desktop-level events
+    // posted this before, which is why opening an applet left the Save icon
+    // sitting on green.
+    [self postDesktopsDidChange];
     if (appliesInitialPlacement) {
         [self applyInitialFrameIfNeededToDesktopWindow:windowView];
         [self.desktopSurfaceView bringSubviewToFront:windowView];
@@ -3357,6 +3362,7 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
         [strongSelf.desktopWindows removeObject:strongWindowView];
         [strongWindowView removeFromSuperview];
         [strongSelf refreshDockButtons];
+        [strongSelf postDesktopsDidChange];   // closing one changes it too
         if (closingFirstResponder != nil)
             [[strongSelf frontmostDesktopTerminalWindow].hostedTerminalViewController focusTerminal];
     };
@@ -3830,7 +3836,10 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
     });
 }
 
-- (void)saveWorkspaceLayout:(id)sender {
+// The full arrangement a suspend needs: geometry, applet state and the
+// terminals' scrollback. Split out so the suspend can file a copy beside its
+// image (ISHWorkspaceCaptureLayoutForSuspend) as well as in the defaults.
+- (NSArray<NSDictionary<NSString *, id> *> *)workspaceSuspendLayoutDescriptors {
     NSMutableArray<NSDictionary<NSString *, id> *> *layout = [NSMutableArray array];
     // First, so the restore can size the Desktops before placing anything on
     // them.
@@ -3845,6 +3854,11 @@ static UIView *ISHWorkspaceFindFirstResponder(UIView *view) {
         if (descriptor != nil)
             [layout addObject:descriptor];
     }
+    return layout;
+}
+
+- (void)saveWorkspaceLayout:(id)sender {
+    NSArray<NSDictionary<NSString *, id> *> *layout = [self workspaceSuspendLayoutDescriptors];
     if (ISHWorkspaceSupportsSceneWindows()) {
         id storedValue = [NSUserDefaults.standardUserDefaults objectForKey:ISHWorkspaceSavedLayoutDefaultsKey];
         NSMutableDictionary<NSString *, id> *layoutsByScene = [storedValue isKindOfClass:NSDictionary.class]
@@ -5862,7 +5876,13 @@ static NSRange ISHWorkspaceLineRangeContainingIndex(NSString *text, NSUInteger i
     }
     if (!self.didEnsureDefaultWorkspaceUtilities) {
         self.didEnsureDefaultWorkspaceUtilities = YES;
-        NSArray<NSDictionary<NSString *, id> *> *savedLayout = [self savedWorkspaceLayoutForCurrentScene];
+        // The arrangement belonging to the image this launch actually resumed,
+        // falling back to the shared one only when that image has none (an
+        // older suspend, written before layouts were filed beside their image).
+        NSArray<NSDictionary<NSString *, id> *> *savedLayout =
+            ISHWorkspaceLayoutForSessionImage(ISHSessionRestoredImagePath());
+        if (savedLayout.count == 0)
+            savedLayout = [self savedWorkspaceLayoutForCurrentScene];
         BOOL hasSavedLayout = [savedLayout isKindOfClass:NSArray.class] && savedLayout.count > 0;
         // Did this launch resume a suspended session? Then the guest is
         // ALREADY RUNNING, and the arrangement that was showing it has to come
@@ -14695,7 +14715,48 @@ static int ISHWorkspaceOpenImpl(const char *request) {
 }
 @end
 
-void ISHWorkspaceCaptureLayoutForSuspend(void) {
+// Where an image's arrangement lives: beside the image, named after it.
+//
+// It used to live in NSUserDefaults under the scene, one blob for the whole app,
+// and the resume took the newest one it could find. With two saved sessions that
+// is simply wrong: pick the OLDER session and the newest layout is still the one
+// applied, so the windows came back painted with the NEWER session's scrollback
+// over the older session's shells. Reported as "I resumed the older of two
+// sessions and got the new session" -- the machine was right, the text on it was
+// a lie about which machine it was.
+//
+// An arrangement describes one suspended machine. It belongs with that machine.
+static NSString *ISHWorkspaceLayoutPathForSessionImage(NSString *imagePath) {
+    if (imagePath.length == 0)
+        return nil;
+    return [imagePath.stringByDeletingPathExtension stringByAppendingPathExtension:@"layout"];
+}
+
+NSArray<NSDictionary<NSString *, id> *> *ISHWorkspaceLayoutForSessionImage(NSString *imagePath) {
+    NSString *path = ISHWorkspaceLayoutPathForSessionImage(imagePath);
+    if (path == nil)
+        return nil;
+    NSArray *layout = [NSArray arrayWithContentsOfFile:path];
+    return [layout isKindOfClass:NSArray.class] && layout.count > 0 ? layout : nil;
+}
+
+void ISHWorkspaceForgetLayoutForSessionImage(NSString *imagePath) {
+    NSString *path = ISHWorkspaceLayoutPathForSessionImage(imagePath);
+    if (path != nil)
+        [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+}
+
+static void ISHWorkspaceWriteLayoutBesideImage(WorkspaceViewController *workspace, NSString *imagePath) {
+    NSString *path = ISHWorkspaceLayoutPathForSessionImage(imagePath);
+    if (path == nil || workspace == nil)
+        return;
+    NSArray<NSDictionary<NSString *, id> *> *layout = [workspace workspaceSuspendLayoutDescriptors];
+    if (layout.count == 0)
+        return;
+    [layout writeToFile:path atomically:YES];
+}
+
+void ISHWorkspaceCaptureLayoutForSuspend(NSString *imagePath) {
     WorkspaceViewController *workspace = ISHWorkspaceActiveController;
     if (workspace == nil)
         return;   // shell mode: nothing on screen to describe
@@ -14710,12 +14771,17 @@ void ISHWorkspaceCaptureLayoutForSuspend(void) {
         // Cannot collect the terminals' history from here: evaluateJavaScript
         // answers ON THIS THREAD, so waiting for it would deadlock. Geometry
         // only -- every caller that can afford to wait comes in off-main.
+        // Beside the image FIRST: saveWorkspaceLayout: consumes the captured
+        // scrollback on its way out, so building the sidecar after it would file
+        // an arrangement with every terminal blank.
+        ISHWorkspaceWriteLayoutBesideImage(workspace, imagePath);
         [workspace saveWorkspaceLayout:nil];
         return;
     }
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     dispatch_async(dispatch_get_main_queue(), ^{
         [workspace captureTerminalContentsThen:^{
+            ISHWorkspaceWriteLayoutBesideImage(workspace, imagePath);   // before the consume
             [workspace saveWorkspaceLayout:nil];
             dispatch_semaphore_signal(done);
         }];

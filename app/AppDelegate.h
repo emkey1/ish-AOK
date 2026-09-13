@@ -73,6 +73,11 @@ void ISHSuspendGuardEnterForeground(void);
 // or a guest _E* code with /proc/ish/checkpoint's last_refusal naming the
 // cause. The guest is unharmed either way -- a checkpoint is a copy.
 NSString *ISHSuspendSessionImagePath(void);
+// The image this launch resumed from, or nil for an ordinary boot. The Workspace
+// asks so it can apply THAT image's arrangement rather than the newest one on
+// file -- picking the older of two sessions used to come back wearing the newer
+// session's scrollback.
+NSString *_Nullable ISHSessionRestoredImagePath(void);
 int ISHSuspendSessionSaveNow(void);
 
 // Save the session and terminate the app, so the next launch resumes it. Does

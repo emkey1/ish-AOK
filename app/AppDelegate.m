@@ -2536,6 +2536,10 @@ NSUInteger ISHSessionSlotLimit(void) {
 // the first free number, and when they are all taken, the oldest.
 static NSString *ishSessionCurrentSlot = nil;
 
+// The image this launch was rebuilt from, for whoever needs its arrangement.
+static NSString *ishSessionRestoredImage = nil;
+NSString *ISHSessionRestoredImagePath(void) { return ishSessionRestoredImage; }
+
 NSString *ISHSuspendSessionImagePath(void) {
     NSString *dir = ISHSessionsDirectory();
     if (dir == nil)
@@ -2619,6 +2623,7 @@ void ISHSessionConsumeResumedImage(NSString *path) {
         return;
     NSError *removeError = nil;
     BOOL removed = [NSFileManager.defaultManager removeItemAtPath:path error:&removeError];
+    ISHWorkspaceForgetLayoutForSessionImage(path);
     [ISHDiagnosticsStore recordBreadcrumb:@"session.resumed.imageConsumed"
                                   details:@{@"removed": @(removed),
                                             @"error": removeError.localizedDescription ?: @""}];
@@ -2773,7 +2778,7 @@ int ISHSuspendSessionSaveNow(void) {
     // the processes but not the arrangement showing them comes back as a
     // running machine nobody can see -- which is exactly what a Workspace
     // suspend did before this: every shell alive, no terminals on screen.
-    ISHWorkspaceCaptureLayoutForSuspend();
+    ISHWorkspaceCaptureLayoutForSuspend(image);
     return checkpoint_save_external(image.fileSystemRepresentation);
 }
 
@@ -2795,7 +2800,7 @@ int ISHSuspendSessionSuspendAndExit(void) {
     NSString *image = ISHSuspendSessionImagePath();
     if (image == nil)
         return _ENOENT;
-    ISHWorkspaceCaptureLayoutForSuspend();
+    ISHWorkspaceCaptureLayoutForSuspend(image);
     int err = checkpoint_save_external(image.fileSystemRepresentation);
     if (err < 0)
         return err;
@@ -3421,6 +3426,8 @@ static TerminalViewController *CreateTerminalViewController(void) {
         checkpoint_set_session(sessionImage.fileSystemRepresentation);
         if ([NSFileManager.defaultManager fileExistsAtPath:sessionImage]) {
             int rerr = checkpoint_restore(sessionImage.fileSystemRepresentation);
+            if (rerr >= 0)
+                ishSessionRestoredImage = sessionImage;
             // Consumed here only when nobody chose to keep it.
             //
             // Restoring used to delete the image unconditionally, on the
@@ -4397,7 +4404,7 @@ void ISHSuspendGuardEnterBackground(void) {
                 // comes back from a web view ON MAIN. Called from the main
                 // thread it could not wait for its own completions, so the
                 // history would be silently skipped; from here it can.
-                ISHWorkspaceCaptureLayoutForSuspend();
+                ISHWorkspaceCaptureLayoutForSuspend(ISHSuspendSessionImagePath());
                 int cerr = checkpoint_save_external(image.fileSystemRepresentation);
                 struct checkpoint_status ck;
                 checkpoint_get_status(&ck);

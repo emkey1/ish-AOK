@@ -43,7 +43,15 @@ extern NSString *_Nullable ISHWorkspaceToolIdentifierForViewController(UIViewCon
 // have to be captured in the same act or they describe different machines. A
 // no-op when no Workspace is on screen (shell mode), which leaves any earlier
 // layout untouched rather than clearing it.
-void ISHWorkspaceCaptureLayoutForSuspend(void);
+// Capture the arrangement for a suspend. Pass the image being written and the
+// layout is filed BESIDE it, so the arrangement that comes back is the one that
+// belongs to the machine being resumed; pass nil (a background save, with no
+// particular image in hand) and it lands in the shared defaults as before.
+void ISHWorkspaceCaptureLayoutForSuspend(NSString *_Nullable imagePath);
+// The layout filed with that image, or nil if it has none.
+NSArray<NSDictionary<NSString *, id> *> *_Nullable ISHWorkspaceLayoutForSessionImage(NSString *_Nullable imagePath);
+// Remove an image's layout when the image itself goes.
+void ISHWorkspaceForgetLayoutForSessionImage(NSString *_Nullable imagePath);
 
 @protocol WorkspaceStatefulTool <NSObject>
 - (nullable NSDictionary<NSString *, id> *)workspaceToolStateForSaving;
