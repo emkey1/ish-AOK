@@ -492,6 +492,62 @@ ldpsw_gadget ldpsw
 stp_gadget stp64, 128, 8, x17, x25
 stp_gadget stp32, 64, 4, w17, w25
 
+// ---- Fast-path LDP/STP (offset mode, no writeback) ---------------------
+// Same idea as load_single_fast/store_single_fast: everything but the TLB
+// walk baked at compile time. Covers offset mode (mode 2) with both rt and
+// rt2 != 31 (real registers, not XZR) — the dominant form in function
+// prologues/epilogues (stp x29, x30, [sp, #-N]! lowered to offset after
+// frame setup) and -O0 stack traffic.
+//
+// Code stream: [gadget][rt_slot | rt2_slot<<16][rn_slot][offset][orig_ip]
+// — 4 param words, same total as the generic ldp/stp gadgets.
+//
+// rt_slot and rn_slot are precomputed cpu_state byte offsets (gen.c's
+// gen_arm64_reg_slot), so the gadget loads base from a known position and
+// stores results without runtime register decoding. The rn_slot encodes
+// SP (r=31) as CPU_sp, same as the single-register fast path.
+.macro ldp_fast name, bits, bytes, ldr_reg1, ldr_reg2
+.gadget \name
+    ldp x8, x9, [_ip]          // [rt_slot | rt2_slot<<16], [rn_slot]
+    ldr x19, [_ip, #16]        // offset
+    add _ip, _ip, #32          // 4 param words: slots1 + rn_slot + offset + orig_ip
+    ldr x10, [_cpu, x9]        // base from precomputed rn_slot
+    add x7, x10, x19
+    read_prep \bits, \name
+    \ldr_reg1, [_addr]
+    \ldr_reg2, [_addr, #\bytes]
+    and x9, x8, #0xffff        // rt_slot (low 16 bits)
+    str \ldr_reg1, [_cpu, x9]  // store to precomputed rt_slot
+    ubfx x9, x8, #16, #16     // rt2_slot (high 16 bits)
+    str \ldr_reg2, [_cpu, x9]  // store to precomputed rt2_slot
+    gret
+    read_bullshit \bits, \name
+.endm
+
+.macro stp_fast name, bits, bytes, str_reg1, str_reg2
+.gadget \name
+    ldp x8, x9, [_ip]          // [rt_slot | rt2_slot<<16], [rn_slot]
+    ldr x19, [_ip, #16]        // offset
+    add _ip, _ip, #32          // 4 param words
+    and x21, x8, #0xffff       // rt_slot (callee-saved, survives write_prep)
+    ubfx x22, x8, #16, #16    // rt2_slot (callee-saved, survives write_prep)
+    ldr \str_reg1, [_cpu, x21] // load value from rt slot
+    ldr \str_reg2, [_cpu, x22] // load value from rt2 slot
+    ldr x10, [_cpu, x9]        // base from precomputed rn_slot
+    add x7, x10, x19
+    write_prep \bits, \name
+    str \str_reg1, [_addr]
+    str \str_reg2, [_addr, #\bytes]
+    write_done \bits, \name
+    gret
+    write_bullshit \bits, \name
+.endm
+
+ldp_fast ldp64_fast, 128, 8, x17, x25
+ldp_fast ldp32_fast, 64, 4, w17, w25
+stp_fast stp64_fast, 128, 8, x17, x25
+stp_fast stp32_fast, 64, 4, w17, w25
+
 // ---- Single-register load/store ----------------------------------------
 // One generic gadget per (size, direction, extend) covering four guest
 // encoding families through a shared parameter format, so gen_step_arm64
