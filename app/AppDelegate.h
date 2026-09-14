@@ -13,7 +13,7 @@ struct task;
 
 @interface AppDelegate : UIResponder <UIApplicationDelegate>
 
-@property (strong, nonatomic) UIWindow *window;
+@property (strong, nonatomic) UIWindow * _Nullable window;
 - (void)exitApp;
 
 + (intptr_t)bootError;
@@ -39,13 +39,13 @@ struct task;
 // headlessCommandAccountName answers nil: preference off, or no such account.
 + (BOOL)headlessCommandAccountOwner:(NSInteger * _Nullable)uid gid:(NSInteger * _Nullable)gid;
 
-+ (void)maybePresentStartupMessageOnViewController:(UIViewController *)vc;
++ (void)maybePresentStartupMessageOnViewController:(UIViewController * _Nonnull)vc;
 
 - (void)refreshDnsConfiguration;
 
 @end
 
-extern NSString *const ProcessExitedNotification;
+extern NSString * _Nonnull const ProcessExitedNotification;
 
 // Suspension handling for the fakefs; implemented in AppDelegate.m.
 //
