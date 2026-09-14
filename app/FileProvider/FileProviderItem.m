@@ -15,6 +15,13 @@
 #include "fs/fake-path.h"
 #include "kernel/errno.h"
 
+static inline bool is_dot_or_dotdot(const char *name) {
+    if (name[0] != '.') return false;
+    if (name[1] == '\0') return true;
+    if (name[1] != '.') return false;
+    return name[2] == '\0';
+}
+
 static NSString *const ISHFileProviderVirtualIdentifierPrefix = @"virt_";
 // Separates the root name from the per-root inner identifier in a fully scoped
 // item identifier. '+' can't appear in a root name (RootNameIsValid restricts
@@ -379,7 +386,7 @@ static const unsigned ISHFileProviderChildItemCountCap = 2000;
     unsigned n = 0;
     struct dirent *dirent;
     while ((dirent = readdir(dir))) {
-        if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0)
+        if (is_dot_or_dotdot(dirent->d_name))
             continue;
         n++;
         if (n > ISHFileProviderChildItemCountCap) {

@@ -16,6 +16,13 @@
 #include "fs/fake-path.h"
 #include "fs/sqlutil.h"
 
+static inline bool is_dot_or_dotdot(const char *name) {
+    if (name[0] != '.') return false;
+    if (name[1] == '\0') return true;
+    if (name[1] != '.') return false;
+    return name[2] == '\0';
+}
+
 // The value of the user_version pragma is used to decide what needs migrating.
 
 // versions 4 and 5: rename host files to the escaped on-disk form
@@ -492,7 +499,7 @@ static void scan_host_dir(int root_fd, const char *host_dir, const char *name,
     }
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+        if (is_dot_or_dotdot(ent->d_name))
             continue;
         char guest[NAME_MAX * 3 + 2];
         if (strlen(ent->d_name) >= sizeof(guest) || strlen(ent->d_name) >= out_size)
@@ -1196,7 +1203,7 @@ static bool migrate_names_load(int root_fd, const char *host_dir, struct migrate
     bool ok = true;
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+        if (is_dot_or_dotdot(ent->d_name))
             continue;
         if (!migrate_names_add(list, ent->d_name, &cap)) {
             ok = false;
@@ -1476,7 +1483,7 @@ static void migrate_repair_name_aliases(struct fakefs_db *fs, int root_fd) {
         struct migrate_names alias = {0};
         size_t alias_cap = 0;
         for (size_t i = 0; i < cache.count; i++) {
-            if (strcmp(cache.names[i], ".") == 0 || strcmp(cache.names[i], "..") == 0)
+            if (is_dot_or_dotdot(cache.names[i]))
                 continue;
             if (host_name_is_canonical(cache.names[i]))
                 continue;
