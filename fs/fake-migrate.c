@@ -16,12 +16,14 @@
 #include "fs/fake-path.h"
 #include "fs/sqlutil.h"
 
+
 static inline bool is_dot_or_dotdot(const char *name) {
     if (name[0] != '.') return false;
     if (name[1] == '\0') return true;
     if (name[1] != '.') return false;
     return name[2] == '\0';
 }
+
 
 // The value of the user_version pragma is used to decide what needs migrating.
 

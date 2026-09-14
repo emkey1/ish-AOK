@@ -1,4 +1,13 @@
 #include "fs/proc.h"
+
+
+static inline bool is_dot_or_dotdot(const char *name) {
+    if (name[0] != '.') return false;
+    if (name[1] == '\0') return true;
+    if (name[1] != '.') return false;
+    return name[2] == '\0';
+}
+
 #include "fs/proc/ish.h"
 #include "fs/proc/net.h"
 #include "jit/jit.h"
@@ -16,18 +25,6 @@
 #include "fs/poll.h"
 #include "util/sync.h"
 #include "platform/platform.h"
-
-
-static inline bool is_dot_or_dotdot(const char *name) {
-    if (name[0] != '.') return false;
-    if (name[1] == '\0') return true;
-    if (name[1] != '.') return false;
-    return name[2] == '\0';
-}
-
-
-
-
 
 
 #include <stdatomic.h>
@@ -1638,8 +1635,6 @@ char *get_ip_str(const struct sockaddr *sa, char *s, socklen_t maxlen) {
 
 #include <string.h>
 #include <stdlib.h>
-
-
 #include <net/if.h>  // for the IFF_* flags
 
 #define FLAG_MAP_ENTRY(f, s) { f, s, sizeof(s) - 1 }

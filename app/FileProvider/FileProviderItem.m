@@ -15,12 +15,14 @@
 #include "fs/fake-path.h"
 #include "kernel/errno.h"
 
+
 static inline bool is_dot_or_dotdot(const char *name) {
     if (name[0] != '.') return false;
     if (name[1] == '\0') return true;
     if (name[1] != '.') return false;
     return name[2] == '\0';
 }
+
 
 static NSString *const ISHFileProviderVirtualIdentifierPrefix = @"virt_";
 // Separates the root name from the per-root inner identifier in a fully scoped

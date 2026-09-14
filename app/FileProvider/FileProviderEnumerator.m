@@ -14,12 +14,14 @@
 #import "NSError+ISHErrno.h"
 #include "fs/fake-db.h"
 
+
 static inline bool is_dot_or_dotdot(const char *name) {
     if (name[0] != '.') return false;
     if (name[1] == '\0') return true;
     if (name[1] != '.') return false;
     return name[2] == '\0';
 }
+
 
 static NSNumber *ISHFileProviderEnumeratorDurationMilliseconds(NSTimeInterval start) {
     return @((NSInteger) ((NSDate.date.timeIntervalSinceReferenceDate - start) * 1000.0));
