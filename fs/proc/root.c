@@ -2103,7 +2103,8 @@ static int sysfs_readdir(struct fd *fd, struct dir_entry *entry) {
     // to make `ls -a /sys/...` skip them entirely and left getdents with a
     // tiny buffer reporting EOF instead of EINVAL.
     if (index == 0) {
-        strcpy(entry->name, ".");
+        strncpy(entry->name, ".", sizeof(entry->name) - 1);
+        entry->name[sizeof(entry->name) - 1] = '\0';
         entry->inode = sysfs_node_inode(node);
         entry->type = dir_entry_type_for_mode(sysfs_node_mode(node));
         return 1;
@@ -2117,7 +2118,8 @@ static int sysfs_readdir(struct fd *fd, struct dir_entry *entry) {
             int idx = node.kind == sysfs_cache_index ? -1 : node.index;
             parent = sysfs_node_make(desc->parent, cpu, idx);
         }
-        strcpy(entry->name, "..");
+        strncpy(entry->name, "..", sizeof(entry->name) - 1);
+        entry->name[sizeof(entry->name) - 1] = '\0';
         entry->inode = sysfs_node_inode(parent);
         entry->type = dir_entry_type_for_mode(sysfs_node_mode(parent));
         return 1;

@@ -123,12 +123,14 @@ static dword_t inotify_name_len(const char *name) {
 static void inotify_parent_and_name(const char *path, char *parent, const char **name_out) {
     const char *slash = strrchr(path, '/');
     if (slash == NULL) {
-        strcpy(parent, "/");
+        strncpy(parent, "/", sizeof(parent) - 1);
+        parent[sizeof(parent) - 1] = '\0';
         *name_out = path;
         return;
     }
     if (slash == path) {
-        strcpy(parent, "/");
+        strncpy(parent, "/", sizeof(parent) - 1);
+        parent[sizeof(parent) - 1] = '\0';
         *name_out = slash + 1;
         return;
     }
@@ -425,7 +427,8 @@ int_t sys_inotify_add_watch_guest(fd_t fd_no, guest_addr_t pathname_addr, uint_t
     // watching / is legal and is the first thing sd-bus's watch_bind does.)
     {
         char stat_path[MAX_PATH];
-        strcpy(stat_path, path);
+        strncpy(stat_path, path, sizeof(stat_path) - 1);
+        stat_path[sizeof(stat_path) - 1] = '\0';
         struct mount *mount = find_mount_and_trim_path(stat_path);
         if (mount == NULL)
             return _ENOENT;

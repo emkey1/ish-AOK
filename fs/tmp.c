@@ -1461,7 +1461,10 @@ static void tmpfs_cgroup2_note_procs_write(struct fd *fd, const void *buf, size_
         return;
     path[plen - (sizeof(suffix) - 1)] = '\0';
     if (path[0] == '\0')
-        strcpy(path, "/");
+        {
+            strncpy(path, "/", sizeof(path) - 1);
+            path[sizeof(path) - 1] = '\0';
+        }
 
     complex_lockt(&pids_lock, 0);
     struct task *task = pid_get_task(pid);
@@ -1640,7 +1643,8 @@ static int tmpfs_readdir(struct fd *fd, struct dir_entry *entry) {
         }
         entry->inode = self->inode->stat.inode;
         entry->type = dir_entry_type_for_mode(self->inode->stat.mode);
-        strcpy(entry->name, name);
+        strncpy(entry->name, name, sizeof(entry->name) - 1);
+        entry->name[sizeof(entry->name) - 1] = '\0';
         fd->tmpfs.dots_pos++;
         res = 1;
         goto out;
