@@ -77,15 +77,6 @@ static unsigned long now_ms(void) {
 // xfs and is tried first per file; everything else is a read/write copy.
 #if defined(__linux__)
 #include <sys/ioctl.h>
-
-
-static inline bool is_dot_or_dotdot(const char *name) {
-    if (name[0] != '.') return false;
-    if (name[1] == '\0') return true;
-    if (name[1] != '.') return false;
-    return name[2] == '\0';
-}
-
 #ifndef FICLONE
 #define FICLONE _IOW(0x94, 9, int)
 #endif
@@ -151,7 +142,7 @@ static int copy_tree(const char *src, const char *dst, unsigned long *entries) {
     int err = 0;
     struct dirent *ent;
     while (err == 0 && (ent = readdir(d)) != NULL) {
-        if (is_dot_or_dotdot(ent->d_name))
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
             continue;
         (*entries)++;
         struct stat ent_st;

@@ -14,15 +14,6 @@
 #import "NSError+ISHErrno.h"
 #include "fs/fake-db.h"
 
-
-static inline bool is_dot_or_dotdot(const char *name) {
-    if (name[0] != '.') return false;
-    if (name[1] == '\0') return true;
-    if (name[1] != '.') return false;
-    return name[2] == '\0';
-}
-
-
 static NSNumber *ISHFileProviderEnumeratorDurationMilliseconds(NSTimeInterval start) {
     return @((NSInteger) ((NSDate.date.timeIntervalSinceReferenceDate - start) * 1000.0));
 }
@@ -142,7 +133,7 @@ static NSNumber *ISHFileProviderEnumeratorDurationMilliseconds(NSTimeInterval st
     struct dirent *dirent;
     errno = 0;
     while ((dirent = readdir(dir))) {
-        if (is_dot_or_dotdot(dirent->d_name))
+        if (strcmp(dirent->d_name, ".") == 0 || strcmp(dirent->d_name, "..") == 0)
             continue;
 
         NSString *path = _item.path;
