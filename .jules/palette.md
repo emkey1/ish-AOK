@@ -36,3 +36,6 @@
 ## 2026-09-01 - Added accessibilityHint to Modern Menu Pip
 **Learning:** VoiceOver screen reader users need additional context on what the "Workspace menu" button does. A label alone doesn't clarify its function.
 **Action:** Added an `accessibilityHint` explaining that the button opens the desktop menu for window management.
+## 2026-09-16 - Add accessibility label to ShellFileBrowser options menu
+**Learning:** UIBarButtonItem initialized solely with an image (like SF Symbols via initWithImage:) do not automatically inherit a descriptive label for VoiceOver, leaving screen reader users without context.
+**Action:** Always provide an explicit, descriptive accessibilityLabel when initializing icon-only UIBarButtonItems via initWithImage:.

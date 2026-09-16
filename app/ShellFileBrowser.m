@@ -402,6 +402,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     self.navigationItem.rightBarButtonItem =
         [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"ellipsis.circle"]
                                           menu:menu];
+    self.navigationItem.rightBarButtonItem.accessibilityLabel = @"More options";
 }
 
 - (void)toggleShowsHiddenFiles {
