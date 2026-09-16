@@ -128,7 +128,7 @@ static char *build_initial_envp(void) {
     p += sizeof(path_var);
     memcpy(p, home_var, sizeof(home_var));
     p += sizeof(home_var);
-    p += snprintf(p, term_size + 1, "TERM=%s", term) + 1;
+    p += snprintf(p, term_size, "TERM=%s", term) + 1;
     *p = '\0';
     return envp;
 }
