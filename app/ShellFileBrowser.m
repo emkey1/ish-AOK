@@ -401,7 +401,7 @@ NSString *ISHShellQuoteArgument(NSString *argument) {
     UIMenu *menu = [UIMenu menuWithTitle:@"" children:@[newFolder, hidden, refresh]];
     UIBarButtonItem *overflow = [[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"ellipsis.circle"]
                                                                   menu:menu];
-    overflow.accessibilityLabel = @"More options";
+    overflow.accessibilityLabel = @"More Actions";
     self.navigationItem.rightBarButtonItem = overflow;
 }
 

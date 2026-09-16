@@ -36,3 +36,6 @@
 ## 2026-09-01 - Added accessibilityHint to Modern Menu Pip
 **Learning:** VoiceOver screen reader users need additional context on what the "Workspace menu" button does. A label alone doesn't clarify its function.
 **Action:** Added an `accessibilityHint` explaining that the button opens the desktop menu for window management.
+## 2023-10-27 - [Add accessibility label to overflow menu]
+**Learning:** iOS falls back to a name taken from the SF Symbol when no accessibility label is set. For example, the iOS 26.5 runtime's table maps `ellipsis.circle` to "More". However, relying on this undocumented behavior is not ideal. Explicitly defining an `accessibilityLabel` ensures clarity and consistency across the app, especially when matching similar controls in other parts of the UI (e.g., "More Actions" in the Workspace File Manager).
+**Action:** Always provide an explicit `accessibilityLabel` for icon-only buttons, even if they use standard SF Symbols, to guarantee a predictable and consistent VoiceOver experience that aligns with the app's specific context.
