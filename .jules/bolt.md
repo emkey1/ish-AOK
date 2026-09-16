@@ -43,3 +43,7 @@
 ## 2024-05-24 - VFS directory iteration optimization
 **Learning:** In VFS directory iteration loops (e.g., `fakefs_readdir`), modern C compilers already optimize `strcmp` against small string literals (like `.` and `..`) into efficient inline integer comparisons. Replacing these `strcmp` calls with explicit manual byte-comparisons to avoid function overhead requires wrapping the logic in a `static inline bool` helper function (e.g., `is_dot_or_dotdot`) to preserve code readability and pass code review.
 **Action:** Replace empty string checks using `strcmp(str, "") == 0` or `!= 0` with direct character comparisons `str[0] == '\0'` or `!= '\0'`. Convert O(N) function calls to constant-time O(1) array accesses, which is highly beneficial in hot loops.
+
+## 2026-09-10 - Do not optimize strcmp against "." and ".." in cold paths
+**Learning:** Modern C compilers at `-O2` already optimize `strcmp(name, ".") == 0` into a single 16-bit load and compare. Replacing it with an explicit byte-at-a-time inline helper does not reduce the number of `strcmp` calls in the object file, and provides no measurable benefit on cold paths like schema migrations or snapshot updates. Furthermore, replacing it in security-sensitive checks (like path component validation) replaces a known-good standard function with a hand-rolled string predicate in exchange for zero performance gain.
+**Action:** Do not micro-optimize `strcmp` checks against small string literals (like `.` and `..`) on cold paths. Rely on the compiler's `-O2` optimization unless there is a proven bottleneck.
