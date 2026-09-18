@@ -36,3 +36,7 @@
 ## 2026-09-01 - Added accessibilityHint to Modern Menu Pip
 **Learning:** VoiceOver screen reader users need additional context on what the "Workspace menu" button does. A label alone doesn't clarify its function.
 **Action:** Added an `accessibilityHint` explaining that the button opens the desktop menu for window management.
+
+## 2024-05-29 - Missing Accessibility Hints on App Buttons
+**Learning:** Adding an `accessibilityLabel` to a UI element allows a screen reader to announce its name, but if its purpose or effect isn't clear, VoiceOver users won't know what action will result from activating it.
+**Action:** Always provide an `accessibilityHint` that concisely describes the outcome of activating the element (e.g., "Navigates back to the previous page", "Closes the current workspace window").

@@ -570,6 +570,7 @@ static CGRect ISHWorkspaceRectWithRoundedOriginPreservingSize(CGRect frame) {
     self.closeButton.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.82];
     self.closeButton.layer.cornerRadius = ISHWorkspaceWindowButtonSize * 0.5;
     self.closeButton.accessibilityLabel = @"Close Window";
+    self.closeButton.accessibilityHint = @"Closes the current workspace window.";
     [self.closeButton addTarget:self action:@selector(closePressed:) forControlEvents:UIControlEventTouchUpInside];
     [self.titleBarView addSubview:self.closeButton];
 
@@ -793,6 +794,7 @@ static CGRect ISHWorkspaceRectWithRoundedOriginPreservingSize(CGRect frame) {
     BOOL visible = title.length > 0 && handler != nil;
     [self.utilityButton setTitle:title forState:UIControlStateNormal];
     self.utilityButton.accessibilityLabel = title;
+    self.utilityButton.accessibilityHint = @"Opens the utility menu for this window.";
     self.utilityButton.hidden = !visible;
     self.utilityButton.alpha = visible ? 1.0 : 0.0;
 }
@@ -14333,8 +14335,10 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
 
     _backButton = [self browserButtonWithTitle:@"<" action:@selector(goBack:)];
     _backButton.accessibilityLabel = @"Back";
+    _backButton.accessibilityHint = @"Navigates back to the previous page.";
     _forwardButton = [self browserButtonWithTitle:@">" action:@selector(goForward:)];
     _forwardButton.accessibilityLabel = @"Forward";
+    _forwardButton.accessibilityHint = @"Navigates forward to the next page.";
     _reloadButton = [self browserButtonWithTitle:@"R" action:@selector(reloadOrStop:)];
     _reloadButton.accessibilityLabel = @"Reload";
     _reloadButton.accessibilityHint = @"Touch and hold to open the current page in Safari.";
@@ -14346,10 +14350,13 @@ static NSURL *ISHWorkspaceBrowserURLFromInput(NSString *input) {
     _bookmarkButton.accessibilityHint = @"Toggles a bookmark for the current page. Touch and hold to view bookmarks.";
     _goButton = [self browserButtonWithTitle:@"Go" action:@selector(commitAddress:)];
     _goButton.accessibilityLabel = @"Go";
+    _goButton.accessibilityHint = @"Loads the entered address.";
     _addTabButton = [self browserButtonWithTitle:@"+" action:@selector(addTab:)];
     _addTabButton.accessibilityLabel = @"Add Tab";
+    _addTabButton.accessibilityHint = @"Opens a new browser tab.";
     _closeTabButton = [self browserButtonWithTitle:@"×" action:@selector(closeCurrentTab:)];
     _closeTabButton.accessibilityLabel = @"Close Tab";
+    _closeTabButton.accessibilityHint = @"Closes the current browser tab.";
     UILongPressGestureRecognizer *homeLongPressRecognizer =
         [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleHomeButtonLongPress:)];
     homeLongPressRecognizer.minimumPressDuration = 0.35;
