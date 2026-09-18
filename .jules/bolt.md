@@ -40,8 +40,7 @@
 ## 2024-05-25 - sys_preadv and sys_pwritev performance
 **Learning:** System calls `sys_preadv` and `sys_pwritev` in `kernel/fs.c` flatten vectorized I/O requests into a single buffer. Before, they always used `malloc()` to allocate this buffer, regardless of the size. This incurs significant performance overhead for small readv/writev calls which are very common, mirroring the issue previously fixed in `sys_readv` and `sys_writev`.
 **Action:** Implemented a fast path using an explicitly aligned `256`-byte stack buffer for small `sys_preadv` and `sys_pwritev` requests, similar to existing optimizations in `sys_readv`, `sys_writev`, `sys_read`, `sys_write`, `sys_pread` and `sys_pwrite`. Only requests larger than 256 bytes will now fall back to heap allocation.
-## $(date +%Y-%m-%d) - Prevent deps/dash submodule from breaking builds when testing
-
+## 2026-09-18 - Prevent deps/dash submodule from breaking builds when testing
 **Learning:** When performing tests involving `ninja` in the iSH project, the build can inadvertently dirty the `deps/dash` git submodule. If this dirty state is committed, or if attempts to wipe and re-clone the directory directly from GitHub are executed, the build suite can break or throw authentication errors ("terminal prompts disabled").
 
 **Action:** Always verify `git status` prior to final submission. If `deps/dash` is dirtied, explicitly clean and reset it (using `cd deps/dash && git clean -fdx && git reset --hard`). Never attempt to manually clone submodules from GitHub. Instead, use standard git submodule restoration techniques (e.g. `git restore --staged deps/dash && git checkout deps/dash && git submodule update --init deps/dash`).
