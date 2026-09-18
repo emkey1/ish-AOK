@@ -142,7 +142,7 @@ static int copy_tree(const char *src, const char *dst, unsigned long *entries) {
     int err = 0;
     struct dirent *ent;
     while (err == 0 && (ent = readdir(d)) != NULL) {
-        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+        if (is_dot_or_dotdot(ent->d_name))
             continue;
         (*entries)++;
         struct stat ent_st;

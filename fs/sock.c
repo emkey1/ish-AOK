@@ -4421,7 +4421,7 @@ static void sock_host_dir_remove(const char *dir) {
     if (d != NULL) {
         struct dirent *e;
         while ((e = readdir(d)) != NULL) {
-            if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0)
+            if (!is_dot_or_dotdot(e->d_name))
                 unlinkat(dirfd(d), e->d_name, 0);
         }
         closedir(d);

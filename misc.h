@@ -74,6 +74,10 @@
 #endif
 #endif
 
+static inline bool is_dot_or_dotdot(const char *name) {
+    return name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'));
+}
+
 #if has_attribute(no_sanitize)
 #define __no_instrument_msan
 #if defined(__has_feature)
