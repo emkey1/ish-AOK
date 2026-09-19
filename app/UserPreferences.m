@@ -35,6 +35,9 @@ static NSString *const kPreferenceEnableExtraLockingKey = @"Enable Additional Lo
 static NSString *const kPreferenceEnableSwapKey = @"Enable Swap";
 static NSString *const kPreferenceSuspendToDiskKey = @"Suspend To Disk";
 static NSString *const kPreferenceSwapSizeMBKey = @"Swap Size MB";
+static NSString *const kPreferenceEnableSwapOnExternalKey = @"Enable Swap On External";
+static NSString *const kPreferenceSwapExternalBookmarkKey = @"Swap External Bookmark";
+static NSString *const kPreferenceSwapExternalPathKey = @"Swap External Path";
 static NSString *const kPreferenceEnableCompressedMemoryKey = @"Enable Compressed Memory";
 static NSString *const kPreferenceCompressedMemorySizeMBKey = @"Compressed Memory Size MB";
 static NSString *const kPreferenceEnableLLMClientKey = @"Enable LLM Client";
@@ -250,6 +253,8 @@ void amd64_jit_preference_set(bool enabled) {
             kPreferenceEnableSwapKey: @(NO),
             kPreferenceSuspendToDiskKey: @(NO),
             kPreferenceSwapSizeMBKey: @(0),
+            kPreferenceEnableSwapOnExternalKey: @(NO),
+            kPreferenceSwapExternalPathKey: @"",
             kPreferenceEnableCompressedMemoryKey: @(NO),
             // 128 MB, not 0. Swap's size registers as 0 ("no size chosen")
             // because picking one would be AOK deciding how much of the user's
@@ -349,6 +354,7 @@ void amd64_jit_preference_set(bool enabled) {
             @"enable_extralocking": kPreferenceEnableExtraLockingKey,
             @"enable_swap": kPreferenceEnableSwapKey,
             @"swap_size_mb": kPreferenceSwapSizeMBKey,
+            @"enable_swap_external": kPreferenceEnableSwapOnExternalKey,
             @"caps_lock_mapping": kPreferenceCapsLockMappingKey,
             @"option_mapping": kPreferenceOptionMappingKey,
             @"backtick_mapping_escape": kPreferenceBacktickEscapeKey,
@@ -403,6 +409,9 @@ void amd64_jit_preference_set(bool enabled) {
             kPreferenceEnableSwapKey: property(shouldEnableSwap),
             kPreferenceSuspendToDiskKey: property(shouldSuspendToDisk),
             kPreferenceSwapSizeMBKey: property(swapSizeMB),
+            kPreferenceEnableSwapOnExternalKey: property(shouldEnableSwapOnExternal),
+            kPreferenceSwapExternalBookmarkKey: property(swapExternalBookmark),
+            kPreferenceSwapExternalPathKey: property(swapExternalPath),
             kPreferenceEnableCompressedMemoryKey: property(shouldEnableCompressedMemory),
             kPreferenceCompressedMemorySizeMBKey: property(compressedMemorySizeMB),
             kPreferenceCapsLockMappingKey: property(capsLockMapping),
@@ -1081,6 +1090,38 @@ void amd64_jit_preference_set(bool enabled) {
 - (void)setSwapSizeMB:(NSInteger)swapSizeMB {
     [_defaults setInteger:MIN(MAX(swapSizeMB, (NSInteger)0), ISHSwapMaxSizeMB)
                    forKey:kPreferenceSwapSizeMBKey];
+}
+
+// MARK: shouldEnableCompressedMemory / compressedMemorySizeMB
+
+// MARK: shouldEnableSwapOnExternal / swapExternalBookmark / swapExternalPath
+
+- (BOOL)shouldEnableSwapOnExternal {
+    return [_defaults boolForKey:kPreferenceEnableSwapOnExternalKey];
+}
+
+- (void)setShouldEnableSwapOnExternal:(BOOL)shouldEnableSwapOnExternal {
+    [_defaults setBool:shouldEnableSwapOnExternal forKey:kPreferenceEnableSwapOnExternalKey];
+}
+
+- (BOOL)validateShouldEnableSwapOnExternal:(id *)value error:(NSError **)error {
+    return [*value isKindOfClass:NSNumber.class];
+}
+
+- (NSData *)swapExternalBookmark {
+    return [_defaults dataForKey:kPreferenceSwapExternalBookmarkKey];
+}
+
+- (void)setSwapExternalBookmark:(NSData *)swapExternalBookmark {
+    [_defaults setObject:swapExternalBookmark forKey:kPreferenceSwapExternalBookmarkKey];
+}
+
+- (NSString *)swapExternalPath {
+    return [_defaults stringForKey:kPreferenceSwapExternalPathKey] ?: @"";
+}
+
+- (void)setSwapExternalPath:(NSString *)swapExternalPath {
+    [_defaults setObject:swapExternalPath ?: @"" forKey:kPreferenceSwapExternalPathKey];
 }
 
 // MARK: shouldEnableCompressedMemory / compressedMemorySizeMB
