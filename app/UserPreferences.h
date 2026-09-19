@@ -107,6 +107,19 @@ extern NSString *const kThemeBackgroundColor;
 // the only writer and cannot be the only place the range is enforced.
 @property NSInteger swapSizeMB;
 
+// Swap to an external USB drive instead of the app's container. When ON,
+// swap reads/writes go to a .aok-swap file in a user-chosen directory on
+// a plugged-in USB drive, via a security-scoped bookmark. The bookmark is
+// presented through a UIDocumentPickerViewController the first time the
+// user enables this; subsequent launches restore it automatically.
+//
+// Both take effect at the next launch, like shouldEnableSwap and swapSizeMB.
+// If the bookmark is stale or the drive is not attached, swap stays off and
+// the status text says why.
+@property BOOL shouldEnableSwapOnExternal;
+@property (nonatomic) NSData *swapExternalBookmark;
+@property (nonatomic) NSString *swapExternalPath;
+
 // Compressed memory (kernel/zswap.h). A cache in FRONT of the swap area: a
 // frame that compresses is kept in RAM instead of written to flash, which costs
 // no write budget and comes back about two orders of magnitude faster than a
