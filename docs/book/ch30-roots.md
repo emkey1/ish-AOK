@@ -215,6 +215,12 @@ that gap. They are **idempotent** — safe to run repeatedly — and they set up
 generous CLI tool set, services on boot through the distribution's own init,
 a timezone, shell niceties, and a dependency-free editor configuration.
 
+`provision-ultimate-pscal.sh` is the fourth, and it is a different shape:
+a PSCAL root has no package manager, so it configures rather than installs —
+passwords (its `sudo` authenticates against root's shadow entry, and the image
+ships everything locked), your login, and an SSH identity kept in
+`/AOK/persist` so the next image update does not cost you the setup again.
+
 One line in the Alpine script is a small window onto the whole project:
 
 > chrony in iSH-aware monitoring mode (the guest clock is the host clock)

@@ -229,20 +229,37 @@ Debian no longer uses it. `cat /proc/ish/timezone` shows the device's zone.
 
 ## Provisioning scripts: turning a bare rootfs into a full terminal environment
 
-A freshly-imported root is intentionally minimal. Three scripts under
-`/AOK/tools` turn one into a comfortable, "full Linux feel" terminal
-environment in one pass — matched packages, sudo, a themed shell, tmux, and
-services that behave correctly under iSH-AOK's clock model:
+A freshly-imported root is intentionally minimal. Scripts under `/AOK/tools`
+turn one into a comfortable, "full Linux feel" terminal environment in one
+pass — matched packages, sudo, a themed shell, tmux, and services that behave
+correctly under iSH-AOK's clock model:
 
 ```sh
 sudo sh /AOK/tools/provision-ultimate-alpine.sh
 sudo sh /AOK/tools/provision-ultimate-devuan.sh
 sudo sh /AOK/tools/provision-ultimate-archlinux.sh   # experimental, like the root itself
+sh /AOK/tools/provision-ultimate-pscal.sh            # PSCAL + SmallCLUE
 ```
 
-All three are idempotent (safe to re-run) and interactively prompt for a
-timezone and a target username unless you set `TZ_NAME` / `TARGET_USER`
-(and optionally `NEW_HOSTNAME`, `SUDO_NOPASSWD`) in the environment first.
+All of them are idempotent (safe to re-run) and interactively prompt for
+their settings unless you pre-set them in the environment.
+
+The PSCAL one is the odd one out, because a PSCAL root has no package manager
+and nothing to install. It configures instead: it gives **root** a password
+(PSCAL's `sudo` authenticates against root's shadow entry, and the image
+ships every account locked, so until you do this `sudo` just says "root
+account locked"), creates your login, and keeps the SSH host keys and your
+`authorized_keys` in `/AOK/persist` so the next image update does not make
+you set it all up again. It also ships inside the PSCAL image itself, as
+`provision-ultimate-pscal.sh` on `PATH`, so it is there even on an iSH-AOK
+build older than the script. Its tunables are `TARGET_USER`, `NEW_HOSTNAME`,
+`PERSIST_SSH`, `PASSWORD_AUTH`, `NATIVE_LINKS` and `AUTHORIZED_KEY`; note
+that `/AOK/persist` is host-backed, so the stash puts private host keys
+somewhere outside the guest — `PERSIST_SSH=0` opts out.
+
+The other three are the package-installing kind, and prompt for a timezone
+and a target username unless you set `TZ_NAME` / `TARGET_USER` (and
+optionally `NEW_HOSTNAME`, `SUDO_NOPASSWD`) in the environment first.
 The timezone offered is the device's own; accept it and the root keeps
 [following the device](#the-time-zone-following-the-device), while a zone you
 type or put in `TZ_NAME` stays put. Each one:

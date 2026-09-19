@@ -35,8 +35,12 @@
 # rootfs -- but it is your call, so the prompt asks, and PERSIST_SSH=0 skips
 # it entirely (at the cost of a new host identity on every image).
 #
-# It is IDEMPOTENT: safe to run repeatedly. Run as root:
-#       sh /AOK/tools/provision-ultimate-pscal.sh
+# It is IDEMPOTENT: safe to run repeatedly. Run as root, from either copy:
+#       sh /AOK/tools/provision-ultimate-pscal.sh    # served by iSH-AOK
+#       provision-ultimate-pscal.sh                  # shipped in the image
+# The /AOK copy is whatever the installed app carries, so it is the newer of
+# the two on a current build and absent on a build older than this script;
+# the image always has one that matches the image.
 #
 # When run on a terminal it PROMPTS. Pre-set any tunable via the environment
 # to skip its prompt / run non-interactively:
@@ -53,6 +57,15 @@
 set -u
 
 PERSIST_DIR=/AOK/persist/pscal
+
+# The stash lives in iSH-AOK's own filesystem, and this script also ships
+# inside the image -- where it may be run on a build with no /AOK at all, or
+# with /AOK read-only. Decide that once, here, rather than letting every
+# later mkdir/cp fail on its own.
+PERSIST_AVAILABLE=1
+if [ ! -d /AOK/persist ] || ! (mkdir -p "$PERSIST_DIR" 2>/dev/null); then
+    PERSIST_AVAILABLE=0
+fi
 
 # ---- must be root --------------------------------------------------------
 if [ "$(id -u)" != 0 ]; then
@@ -132,10 +145,15 @@ DEF_HOSTNAME="$(cat "$PERSIST_DIR/hostname" 2>/dev/null)"
 ask TARGET_USER  "Primary login username to set up" "$DEF_USER"
 ask NEW_HOSTNAME "Hostname"                         "$DEF_HOSTNAME"
 
-if [ -d "$PERSIST_DIR" ]; then
+if [ "$PERSIST_AVAILABLE" = 0 ]; then
+    PERSIST_SSH=0
+elif [ -n "$(ls -A "$PERSIST_DIR" 2>/dev/null)" ]; then
     note "found a previous setup in $PERSIST_DIR -- it will be reused"
 fi
 ask_yn PERSIST_SSH   "Keep the SSH identity in /AOK/persist across image updates" 1
+if [ "$PERSIST_SSH" = 1 ] && [ "$PERSIST_AVAILABLE" = 0 ]; then
+    PERSIST_SSH=0
+fi
 ask_yn PASSWORD_AUTH "Allow SSH password authentication"                          1
 ask_yn NATIVE_LINKS  "Also link iSH-AOK's native programs into PATH"              0
 
@@ -239,7 +257,9 @@ fi
 log "SSH identity"
 # ===========================================================================
 mkdir -p /etc/ssh
-[ "$PERSIST_SSH" = 1 ] && mkdir -p "$PERSIST_DIR"
+if [ "$PERSIST_AVAILABLE" = 0 ]; then
+    warn "/AOK/persist is not writable here -- nothing will be kept across images"
+fi
 
 # Host keys. Restoring them is what stops the client shouting REMOTE HOST
 # IDENTIFICATION HAS CHANGED after every image update; /etc/service/sshd/run
@@ -384,6 +404,10 @@ elif [ -n "$SSHD_PID" ] && kill "$SSHD_PID" 2>/dev/null; then
 else
     note "sshd was not running; runit starts it at boot"
 fi
+
+# The image's /etc/profile prints a "set this machine up" hint to root until
+# this file exists. Written last, so a run that died half way still nags.
+: > /etc/pscal-provisioned 2>/dev/null || true
 
 # ===========================================================================
 log "Done"
