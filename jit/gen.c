@@ -1511,6 +1511,27 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
                 return 0; // the fused pair ends the block
             }
         }
+        // Fast path: rn != 31 (not SP/XZR) — opc and sf baked into gadget
+        // body, same 16-byte stream as fast_alu_imm (math.S).
+        // ANDS with rd=31 (TST) is handled by fast_ands_imm (discards
+        // result). AND/ORR/EOR with rd=31 targets SP — the fast gadget
+        // handles that too (same SP store as the generic path).
+        if (rn != 31) {
+            extern void gadget_arm64_andi_fast64(void), gadget_arm64_andi_fast32(void);
+            extern void gadget_arm64_orri_fast64(void), gadget_arm64_orri_fast32(void);
+            extern void gadget_arm64_eori_fast64(void), gadget_arm64_eori_fast32(void);
+            extern void gadget_arm64_andsi_fast64(void), gadget_arm64_andsi_fast32(void);
+            static void *const t[4][2] = { // [opc][sf]
+                {(void *) gadget_arm64_andi_fast32, (void *) gadget_arm64_andi_fast64},
+                {(void *) gadget_arm64_orri_fast32, (void *) gadget_arm64_orri_fast64},
+                {(void *) gadget_arm64_eori_fast32, (void *) gadget_arm64_eori_fast64},
+                {(void *) gadget_arm64_andsi_fast32, (void *) gadget_arm64_andsi_fast64}};
+            gen(state, (unsigned long) t[opc][sf]);
+            gen(state, rd | ((uint64_t) rn << 8));
+            gen(state, imm);
+            state->arm64_flags_live = (opc == 3);
+            return 1;
+        }
         gen(state, (unsigned long) gadget_arm64_logical_imm);
         gen(state, rd | ((uint64_t) rn << 8) | ((uint64_t) opc << 16) | ((uint64_t) sf << 24));
         gen(state, imm);

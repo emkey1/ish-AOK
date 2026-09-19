@@ -12,7 +12,19 @@
 // needed, the same reason same-architecture dispatch is fast throughout
 // this port.
 //
-// Code stream: [gadget][rd | rn<<8 | opc<<16 | sf<<24][imm (64-bit)]
+// Generic code stream: [gadget][rd | rn<<8 | opc<<16 | sf<<24][imm (64-bit)]
+//
+// ---- Fast-path logical immediate gadgets (the specialization pass) -----
+// The generic gadget above decodes rd/rn/opc/sf from packed params with
+// a branch tree at RUNTIME — ~15-20 host instructions of pure decode
+// before the single logical operation. These variants bake opc and sf
+// at compile time: gen_step_arm64 picks the exact (op, width) body and
+// only emits a fast form when rn != 31 (SP/XZR). The 64-bit decoded
+// immediate fits the same 16-byte stream as fast_alu_imm (math.S):
+// [gadget][rd | rn<<8][imm (64-bit)] — opc and sf are in the gadget body.
+// ANDS variants include store_flags and handle the TST alias (rd=31
+// discards the result). Non-ANDS variants with rd=31 (AND/ORR/EOR to SP)
+// fall back to the generic gadget, which handles the SP store.
 
 #include "gadgets.h"
 
@@ -99,5 +111,54 @@ logical_imm_store_result:
 4:  gret
 3:  str x16, [x14, x9, lsl #3]
     gret
+
+// Fast-path non-flag-setting logical immediate: AND/ORR/EOR.
+// Code stream: [gadget][rd | rn<<8][imm (64-bit)] — 16 bytes.
+// rn != 31 enforced by gen.c; rd = 31 means SP store (same as generic).
+.macro fast_logical_imm name, op, r16, r15, r11
+.gadget \name
+    ldr x8, [_ip]
+    ldr x11, [_ip, #8]         // pre-decoded bitmask immediate
+    add _ip, _ip, #16
+    and x9, x8, #0x1f          // rd
+    ubfx x10, x8, #8, #5       // rn
+    add x14, _cpu, #CPU_x0
+    ldr x15, [x14, x10, lsl #3]
+    \op \r16, \r15, \r11
+    cmp x9, #31
+    b.eq 99f
+    str x16, [x14, x9, lsl #3]
+    gret
+99: str x16, [_cpu, #CPU_sp]   // AND/ORR/EOR with rd=31 targets SP
+    gret
+.endm
+
+// Fast-path ANDS immediate: flag-setting, handles TST alias (rd=31).
+// Code stream: [gadget][rd | rn<<8][imm (64-bit)] — 16 bytes.
+.macro fast_ands_imm name, ands_op, r16, r15, r11
+.gadget \name
+    ldr x8, [_ip]
+    ldr x11, [_ip, #8]
+    add _ip, _ip, #16
+    and x9, x8, #0x1f          // rd
+    ubfx x10, x8, #8, #5       // rn
+    add x14, _cpu, #CPU_x0
+    ldr x15, [x14, x10, lsl #3]
+    \ands_op \r16, \r15, \r11
+    store_flags
+    cmp x9, #31
+    b.eq 99f                    // TST: discard result
+    str x16, [x14, x9, lsl #3]
+99: gret
+.endm
+
+fast_logical_imm andi_fast64,  and, x16, x15, x11
+fast_logical_imm andi_fast32,  and, w16, w15, w11
+fast_logical_imm orri_fast64,  orr, x16, x15, x11
+fast_logical_imm orri_fast32,  orr, w16, w15, w11
+fast_logical_imm eori_fast64,  eor, x16, x15, x11
+fast_logical_imm eori_fast32,  eor, w16, w15, w11
+fast_ands_imm    andsi_fast64, ands, x16, x15, x11
+fast_ands_imm    andsi_fast32, ands, w16, w15, w11
 
 # vim: ft=gas
