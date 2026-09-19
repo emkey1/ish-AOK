@@ -239,6 +239,45 @@ static int smallclue_real_main(int argc, char *const argv[], char *const envp[])
     return status;
 }
 
+// The setuid-root applets, each as its own /AOK/native program.
+//
+// This is the whole reason a native su/sudo/passwd can be setuid when
+// /usr/bin/smallclue cannot. SmallCLUE is a multicall binary: it picks its
+// applet from argv[0], so a setuid copy would run `sh` as root for anyone who
+// asked. Here argv[0] is OURS -- supplied at the call site, never read from
+// the caller -- so /AOK/native/sudo can only ever be sudo. Taking the name
+// from the caller would reopen exactly the hole this avoids.
+//
+// argv[0] is replaced rather than prepended: these are invoked AS the applet,
+// so the caller's own argv[0] is the name it used and carries no argument.
+static int native_suid_applet(const char *applet, int argc, char *const argv[]) {
+    if (argc < 1)
+        return 127;
+    char **v = calloc((size_t) argc + 1, sizeof(char *));
+    if (v == NULL)
+        return 127;
+    v[0] = (char *) applet;
+    for (int i = 1; i < argc; i++)
+        v[i] = argv[i];
+    int status = smallclueMain(argc, v);
+    free(v);
+    nlibc_flush_std();
+    return status;
+}
+
+static int native_sudo_main(int argc, char *const argv[], char *const envp[]) {
+    (void) envp;
+    return native_suid_applet("sudo", argc, argv);
+}
+static int native_su_main(int argc, char *const argv[], char *const envp[]) {
+    (void) envp;
+    return native_suid_applet("su", argc, argv);
+}
+static int native_passwd_main(int argc, char *const argv[], char *const envp[]) {
+    (void) envp;
+    return native_suid_applet("passwd", argc, argv);
+}
+
 // bash (kernel/bash_glue.c), which is only in the build when the deps/bash
 // submodule is populated. WEAK rather than a build-wide define: the address is
 // simply NULL when nothing defines it, so the table below says what programs
@@ -298,6 +337,11 @@ int native_ktop_main(int argc, char *const argv[], char *const envp[]);
 
 static const struct native_program native_programs[] = {
     { "smallclue", smallclue_real_main },
+    // Setuid-root, unlike the multicall entry above -- see native_suid_applet
+    // for why that is safe here and would not be there.
+    { "sudo", native_sudo_main, .setuid_root = true },
+    { "su", native_su_main, .setuid_root = true },
+    { "passwd", native_passwd_main, .setuid_root = true },
     { "motepad", native_motepad_main },
     // Same program as /AOK/tools/ktop, compiled as host code. Measured 2.7x
     // faster per refresh on an i386 guest -- worthwhile rather than dramatic,
