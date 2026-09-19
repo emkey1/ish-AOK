@@ -60,13 +60,30 @@ set -u
 
 PERSIST_DIR=/AOK/persist/pscal
 
-# The stash lives in iSH-AOK's own filesystem, and this script also ships
-# inside the image -- where it may be run on a build with no /AOK at all, or
-# with /AOK read-only. Decide that once, here, rather than letting every
-# later mkdir/cp fail on its own.
+# The stash lives in iSH-AOK's own filesystem, which is a real host-backed
+# mount the app makes at startup. Decide once, here, whether it can be written
+# to, rather than letting every later mkdir and cp fail on its own -- and KEEP
+# THE REASON, because "not writable" on a directory that ls shows as drwxrwxrwx
+# is not a diagnosis, it is the start of one.
 PERSIST_AVAILABLE=1
-if [ ! -d /AOK/persist ] || ! (mkdir -p "$PERSIST_DIR" 2>/dev/null); then
+PERSIST_WHY=""
+if [ ! -d /AOK/persist ]; then
     PERSIST_AVAILABLE=0
+    if [ -e /AOK/persist ]; then
+        PERSIST_WHY="/AOK/persist exists but is not a directory"
+    elif [ -d /AOK ]; then
+        PERSIST_WHY="/AOK/persist does not exist (an iSH-AOK that does not mount it?)"
+    else
+        PERSIST_WHY="there is no /AOK here at all"
+    fi
+else
+    PERSIST_WHY="$(mkdir -p "$PERSIST_DIR" 2>&1)"
+    if [ -d "$PERSIST_DIR" ]; then
+        PERSIST_WHY=""
+    else
+        PERSIST_AVAILABLE=0
+        [ -n "$PERSIST_WHY" ] || PERSIST_WHY="mkdir $PERSIST_DIR failed without saying why"
+    fi
 fi
 
 # ---- must be root --------------------------------------------------------
@@ -325,7 +342,8 @@ log "SSH identity"
 # ===========================================================================
 mkdir -p /etc/ssh
 if [ "$PERSIST_AVAILABLE" = 0 ]; then
-    warn "/AOK/persist is not writable here -- nothing will be kept across images"
+    warn "not using /AOK/persist -- nothing will be kept across images"
+    warn "reason: $PERSIST_WHY"
 fi
 
 # Host keys. Restoring them is what stops the client shouting REMOTE HOST
