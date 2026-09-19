@@ -217,7 +217,10 @@ if ! user_exists "$TARGET_USER"; then
     note "created login '$TARGET_USER' (uid $NEW_UID)"
 fi
 
-# sudo authorisation.
+# sudo authorisation. SUDO_ASKS records whether the rule that ended up
+# covering this login is the password-asking kind, so the summary can say so
+# and give the line that changes it.
+SUDO_ASKS=0
 #
 # Newer images ship /etc/sudoers and a wheel group; older ones predate sudo
 # reading a policy at all, and on those sudo now refuses everybody. Create what
@@ -233,7 +236,14 @@ if [ ! -f /etc/sudoers ]; then
 # #includedir, and last-match-wins. Aliases, negation and globs are NOT
 # implemented and a line using them is skipped rather than guessed at.
 #
-# You are asked for YOUR OWN password, not root's.
+# Two forms, and the difference is the whole choice:
+#
+#   someone ALL=(ALL:ALL) ALL             asks for SOMEONE'S OWN password
+#                                         (never root's -- that is su's question)
+#   someone ALL=(ALL:ALL) NOPASSWD: ALL   never asks
+#
+# There is no credential cache yet, so the first form asks EVERY time rather
+# than once per terminal the way sudo elsewhere does.
 root   ALL=(ALL:ALL) ALL
 %wheel ALL=(ALL:ALL) ALL
 
@@ -255,6 +265,7 @@ if [ -f /etc/sudoers ] && awk -F: '$1=="wheel"{f=1} END{exit !f}' /etc/group; th
             '$1=="wheel" {$4 = ($4=="" ? u : $4","u)} {print}' /etc/group \
             | rewrite_file /etc/group 644
         note "added $TARGET_USER to wheel (sudo: %wheel ALL=(ALL:ALL) ALL)"
+        SUDO_ASKS=1
     else
         note "$TARGET_USER is already in wheel"
     fi
@@ -265,6 +276,7 @@ elif [ -f /etc/sudoers ]; then
         printf '%s ALL=(ALL:ALL) ALL\n' "$TARGET_USER" > "/etc/sudoers.d/10-$TARGET_USER"
         chmod 440 "/etc/sudoers.d/10-$TARGET_USER"
         note "authorised $TARGET_USER in /etc/sudoers.d/10-$TARGET_USER"
+        SUDO_ASKS=1
     fi
 else
     warn "no /etc/sudoers on this image -- sudo will refuse everyone until one exists"
@@ -468,6 +480,11 @@ fi
 log "Done"
 # ===========================================================================
 note "login:    $TARGET_USER  (uid $USER_UID, home $USER_HOME, shell /usr/bin/exsh)"
+if [ "$SUDO_ASKS" = 1 ]; then
+    note "sudo:     asks $TARGET_USER for their OWN password, every time"
+    note "          (su asks for root's; they are different questions)"
+    note "          never ask instead:  echo '$TARGET_USER ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/20-$TARGET_USER"
+fi
 note "hostname: $(cat /etc/hostname 2>/dev/null)"
 if [ "$PERSIST_SSH" = 1 ]; then
     note "stash:    $PERSIST_DIR -- re-run this after the next image update and"
