@@ -16,6 +16,7 @@ persist-links.sh
 provision-ultimate-alpine.sh
 provision-ultimate-devuan.sh
 provision-ultimate-archlinux.sh
+provision-ultimate-pscal.sh
 mount-root.sh
 manage-roots.sh
 suspend.sh
