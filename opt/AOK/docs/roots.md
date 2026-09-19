@@ -245,12 +245,18 @@ All of them are idempotent (safe to re-run) and interactively prompt for
 their settings unless you pre-set them in the environment.
 
 The PSCAL one is the odd one out, because a PSCAL root has no package manager
-and nothing to install. It configures instead: it gives **root** a password
-(PSCAL's `sudo` authenticates against root's shadow entry, and the image
-ships every account locked, so until you do this `sudo` just says "root
-account locked"), creates your login, and keeps the SSH host keys and your
-`authorized_keys` in `/AOK/persist` so the next image update does not make
-you set it all up again. It also ships inside the PSCAL image itself, as
+and nothing to install. It configures instead: it gives root and your login
+passwords (the image ships every account locked), puts your login in `wheel`
+so the shipped `/etc/sudoers` authorises it, and keeps the SSH host keys and
+your `authorized_keys` in `/AOK/persist` so the next image update does not
+make you set it all up again.
+
+SmallCLUE's `sudo` asks for **your own** password and then consults
+`/etc/sudoers` (and `/etc/sudoers.d`), like real sudo — user and `%group`
+entries, `(runas)` specs, `NOPASSWD`, explicit command lists, `#includedir`
+and last-match-wins. Aliases, negation and globs are not implemented, and a
+line using them is skipped rather than guessed at. With no sudoers file at
+all, nobody is authorised. It also ships inside the PSCAL image itself, as
 `provision-ultimate-pscal.sh` on `PATH`, so it is there even on an iSH-AOK
 build older than the script. Its tunables are `TARGET_USER`, `NEW_HOSTNAME`,
 `PERSIST_SSH`, `PASSWORD_AUTH`, `NATIVE_LINKS` and `AUTHORIZED_KEY`; note

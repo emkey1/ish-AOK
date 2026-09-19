@@ -217,9 +217,9 @@ a timezone, shell niceties, and a dependency-free editor configuration.
 
 `provision-ultimate-pscal.sh` is the fourth, and it is a different shape:
 a PSCAL root has no package manager, so it configures rather than installs —
-passwords (its `sudo` authenticates against root's shadow entry, and the image
-ships everything locked), your login, and an SSH identity kept in
-`/AOK/persist` so the next image update does not cost you the setup again.
+passwords (the image ships every account locked), your login and its place in
+`wheel` so the shipped `/etc/sudoers` authorises it, and an SSH identity kept
+in `/AOK/persist` so the next image update does not cost you the setup again.
 
 One line in the Alpine script is a small window onto the whole project:
 

@@ -11,10 +11,12 @@
 # the three things it does are the three things that are otherwise a chore to
 # redo by hand after every image update:
 #
-#   1. Give root a password. Nothing optional about it: sudo authenticates
-#      against ROOT's shadow entry, and the image ships `root:*`, so until
-#      this runs `sudo` answers "root account locked" and `su -` refuses, no
-#      matter which build of iSH-AOK is underneath.
+#   1. Give both accounts a password. The image ships every account locked, so
+#      until this runs `su -` has nothing to check and `sudo` has nobody it can
+#      authenticate: sudo asks the INVOKING user for their OWN password, and
+#      su asks for the target's. Then authorise the login for sudo, which on
+#      this image means putting it in `wheel` (`%wheel ALL=(ALL:ALL) ALL` is in
+#      the shipped /etc/sudoers).
 #   2. Create the login you actually use, with a password and its own
 #      ~/.ssh/authorized_keys (the stock sshd_config points every user at
 #      /root/.ssh/authorized_keys, which this corrects).
@@ -215,6 +217,30 @@ if ! user_exists "$TARGET_USER"; then
     note "created login '$TARGET_USER' (uid $NEW_UID)"
 fi
 
+# sudo authorisation. The image ships `%wheel ALL=(ALL:ALL) ALL`, so the whole
+# job is putting this login in wheel -- appended to the member list rather than
+# replacing it, and only when it is not already there.
+if [ -f /etc/sudoers ] && awk -F: '$1=="wheel"{f=1} END{exit !f}' /etc/group; then
+    if ! awk -F: -v u="$TARGET_USER" '$1=="wheel" {n=split($4,m,","); for(i=1;i<=n;i++) if (m[i]==u) f=1} END{exit !f}' /etc/group; then
+        awk -F: -v OFS=: -v u="$TARGET_USER" \
+            '$1=="wheel" {$4 = ($4=="" ? u : $4","u)} {print}' /etc/group \
+            | rewrite_file /etc/group 644
+        note "added $TARGET_USER to wheel (sudo: %wheel ALL=(ALL:ALL) ALL)"
+    else
+        note "$TARGET_USER is already in wheel"
+    fi
+elif [ -f /etc/sudoers ]; then
+    # No wheel group to join, so say so in the one place sudo will look.
+    if [ ! -f "/etc/sudoers.d/10-$TARGET_USER" ]; then
+        mkdir -p /etc/sudoers.d
+        printf '%s ALL=(ALL:ALL) ALL\n' "$TARGET_USER" > "/etc/sudoers.d/10-$TARGET_USER"
+        chmod 440 "/etc/sudoers.d/10-$TARGET_USER"
+        note "authorised $TARGET_USER in /etc/sudoers.d/10-$TARGET_USER"
+    fi
+else
+    warn "no /etc/sudoers on this image -- sudo will refuse everyone until one exists"
+fi
+
 USER_UID="$(awk -F: -v u="$TARGET_USER" '$1==u {print $3}' /etc/passwd)"
 USER_GID="$(awk -F: -v u="$TARGET_USER" '$1==u {print $4}' /etc/passwd)"
 USER_HOME="$(awk -F: -v u="$TARGET_USER" '$1==u {print $6}' /etc/passwd)"
@@ -233,7 +259,7 @@ locked() { awk -F: -v u="$1" '$1==u && ($2=="*"||$2=="!"||$2=="") {y=1} END {exi
 
 if locked root; then
     if [ -t 0 ]; then
-        log "Set the ROOT password (sudo and su both authenticate against it)"
+        log "Set the ROOT password (su asks for it; sudo asks for yours)"
         passwd root || warn "root password unchanged -- sudo and su will keep refusing"
     else
         warn "root is still locked and there is no terminal to ask on; sudo and su will refuse"
@@ -244,7 +270,7 @@ fi
 
 if locked "$TARGET_USER"; then
     if [ -t 0 ]; then
-        log "Set the password for '$TARGET_USER'"
+        log "Set the password for '$TARGET_USER' (sudo will ask for THIS one)"
         passwd "$TARGET_USER" || warn "$TARGET_USER left without a password (key login still works)"
     else
         warn "$TARGET_USER is still locked and there is no terminal to ask on"
@@ -420,5 +446,6 @@ if [ "$PERSIST_SSH" = 1 ]; then
 else
     note "stash:    disabled; the next image gets a new SSH host identity"
 fi
-locked root && warn "root is STILL locked: sudo and su cannot work until it has a password"
+locked root && warn "root is STILL locked, so 'su -' cannot work until it has a password"
+locked "$TARGET_USER" && warn "$TARGET_USER has no password, so sudo cannot authenticate them"
 printf '\n'
