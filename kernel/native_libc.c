@@ -6598,7 +6598,42 @@ static __thread char nlibc_pw_line[512];
 static __thread struct passwd nlibc_pw;
 static __thread char nlibc_gr_line[512];
 static __thread struct group nlibc_gr;
-static char *nlibc_gr_members[1];
+// Thread-local like the line it points into: the member pointers are cut out of
+// nlibc_gr_line in place, so they live exactly as long as gr_name does. It was
+// a single shared NULL, which is not a lifetime problem but an ANSWER problem
+// -- see nlibc_gr_set_members.
+#define NLIBC_GR_MAX_MEMBERS 64
+static __thread char *nlibc_gr_members[NLIBC_GR_MAX_MEMBERS + 1];
+
+// Fill gr_mem from /etc/group's fourth field, the comma-separated member list.
+//
+// This used to be hardcoded empty, and an empty member list is not a missing
+// feature here, it is a WRONG ANSWER to a security question: anything asking
+// "is this user in this group?" walks gr_mem, and every such question answered
+// no. sudo's `%wheel ALL=(ALL:ALL) ALL` matched nobody, so a correctly
+// configured sudoers refused a user who was plainly in wheel.
+//
+// Split in place, which is why the array is thread-local: the pointers are into
+// nlibc_gr_line, so they share gr_name's lifetime exactly -- valid until the
+// next lookup on this thread, which is what these interfaces promise.
+static void nlibc_gr_set_members(char **f, size_t n) {
+    size_t count = 0;
+    if (n >= 4 && f[3] != NULL) {
+        char *cursor = f[3];
+        while (count < NLIBC_GR_MAX_MEMBERS && *cursor != '\0') {
+            char *comma = strchr(cursor, ',');
+            if (comma != NULL)
+                *comma = '\0';
+            if (*cursor != '\0')
+                nlibc_gr_members[count++] = cursor;
+            if (comma == NULL)
+                break;
+            cursor = comma + 1;
+        }
+    }
+    nlibc_gr_members[count] = NULL;
+    nlibc_gr.gr_mem = nlibc_gr_members;
+}
 
 static char *nlibc_next_field(char **cursor) {
     char *start = *cursor;
@@ -6840,11 +6875,10 @@ static bool nlibc_gr_match(char **f, size_t n, const void *keyv) {
     if (key->by_name ? strcmp(f[0], key->name) != 0
                      : (gid_t) strtoul(f[2], NULL, 10) != key->gid)
         return false;
-    nlibc_gr_members[0] = NULL;
     nlibc_gr.gr_name = f[0];
     nlibc_gr.gr_passwd = f[1];
     nlibc_gr.gr_gid = (gid_t) strtoul(f[2], NULL, 10);
-    nlibc_gr.gr_mem = nlibc_gr_members;
+    nlibc_gr_set_members(f, n);
     return true;
 }
 
@@ -6910,9 +6944,9 @@ const char *nlibc_group_from_gid(gid_t gid, int nogroup) {
 
 // Which groups a user belongs to, from the GUEST's /etc/group.
 //
-// nlibc_getgrent cannot answer this: its parser fills gr_mem with an empty
-// list, so a walk over it would report the base gid and nothing else. So this
-// reads the fourth field itself -- the comma-separated member list -- through
+// Written when nlibc_getgrent's parser filled gr_mem with an empty list, so a
+// walk over it would have reported the base gid and nothing else. That is fixed
+// now (nlibc_gr_set_members), but this stays: it reads the fourth field through
 // the same index-keyed scan the getgrent walker uses, which re-reads the file
 // once per group. That is O(n^2) over /etc/group and entirely fine at its size;
 // it is also what makes the answer reflect the file as it is now.
@@ -7828,11 +7862,10 @@ static bool nlibc_gr_ent_match(char **f, size_t n, const void *keyv) {
         return false;
     if (key->seen++ != key->want)
         return false;
-    nlibc_gr_members[0] = NULL;
     nlibc_gr.gr_name = f[0];
     nlibc_gr.gr_passwd = f[1];
     nlibc_gr.gr_gid = (gid_t) strtoul(f[2], NULL, 10);
-    nlibc_gr.gr_mem = nlibc_gr_members;
+    nlibc_gr_set_members(f, n);
     return true;
 }
 
