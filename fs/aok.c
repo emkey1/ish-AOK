@@ -1035,7 +1035,23 @@ static off_t_ aokfs_lseek(struct fd *fd, off_t_ off, int whence) {
     int err = aokfs_stat_common(fd->mount, node, &stat);
     if (err < 0)
         return err;
-    return generic_seek(fd, off, whence, stat.size);
+    err = generic_seek(fd, off, whence, stat.size);
+    if (err < 0)
+        return err;
+    // The RESULTING OFFSET, which is what lseek returns. generic_seek answers
+    // an error code -- 0 on success -- so returning it directly reported
+    // "position 0" for every successful seek on an /AOK file. proc, tmp and
+    // memfd all take fd->offset afterwards for this reason; this one did not.
+    //
+    // Sequential readers never noticed: cat, wc and sha256sum read to EOF
+    // without seeking and were byte-perfect. Anything that seeks did. glibc's
+    // buffered read of a file it has stat'd seeks to the block boundary below
+    // the end and fills from there, then computes ftell as "what lseek said,
+    // plus what is buffered" -- so with lseek always saying 0 it believed a
+    // 22420-byte script was 1940 bytes long and handed its reader the tail.
+    // `sh /AOK/tools/provision-ultimate-pscal.sh` failed to parse; the same
+    // bytes copied into the rootfs ran.
+    return fd->offset;
 }
 
 static int aokfs_readdir(struct fd *fd, struct dir_entry *entry) {
