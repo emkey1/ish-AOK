@@ -1847,6 +1847,28 @@ static int native_dispatch_exec(struct fd *fd, struct exec_args argv, struct exe
     // Only once the record is safely taken: everything below commits the exec,
     // and there is no undoing a closed descriptor.
     exec_apply_native_process_state(native_mm);
+
+    // The setuid transition, on the far side of the commit -- which is the
+    // only safe side. Applied any earlier, an exec that then FAILED would
+    // leave the task holding root, which is the trap the ELF path below
+    // spells out at its own set-id block. This is that same transition: uid 0
+    // because /AOK is root-owned, so the bit can only ever mean setuid-root.
+    //
+    // A native program is NOT reached through elf_exec, so there is no aux
+    // vector and AT_SECURE has nobody to tell -- the LD_PRELOAD hole that
+    // motivated exec_secure cannot exist for compiled-in host code. What DOES
+    // carry over is the caller's environment, and sanitising that is the
+    // program's own job (kernel/native.h says so where the flag is declared).
+    if (prog->setuid_root) {
+        current->euid = 0;
+        current->suid = 0;   // saved-set-uid = new euid, not old
+        current->fsuid = current->euid;
+        // Same grant the ELF path makes for setuid-root, and for the same
+        // reason: a sudo that means to drop to a target uid needs CAP_SETGID
+        // and CAP_SETUID still in hand to do it.
+        current->cap_effective[0] = current->cap_permitted[0] = CAP_FULL_LOW_;
+        current->cap_effective[1] = current->cap_permitted[1] = CAP_FULL_HIGH_;
+    }
     return EXEC_NATIVE_DISPATCHED;
 }
 

@@ -575,6 +575,7 @@ src = [
     'kernel/native_bench.c',
     'kernel/native_io.c',
     'kernel/native_libc.c',
+    'kernel/sha_crypt.c',
     'kernel/native_kqueue.c',
     'kernel/native_termcap.c',
     'kernel/native_syscall.c', native_syscall_nums,
@@ -1819,6 +1820,14 @@ if not meson.is_cross_build()
 
     # riscv64 decode.h check: RVC expansion + immediate reassembly against
     # llvm-mc-derived vectors (tests/riscv64/decode_vectors.h, checked in).
+    # SHA-crypt ($5$/$6$) against the published vectors. An implementation that
+    # is subtly wrong is indistinguishable from a correct one by inspection --
+    # see the header of the test.
+    sha_crypt_test = executable('sha_crypt_test',
+        ['kernel/sha_crypt.c', 'kernel/sha_crypt-test.c'],
+        include_directories: includes)
+    test('sha_crypt', sha_crypt_test)
+
     riscv64_decode_check = executable('riscv64_decode_check',
         ['tests/riscv64/decode_check.c'],
         include_directories: [includes, include_directories('tests/riscv64')])

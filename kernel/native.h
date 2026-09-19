@@ -1,6 +1,8 @@
 #ifndef KERNEL_NATIVE_H
 #define KERNEL_NATIVE_H
 
+#include <stdbool.h>
+
 #include <stddef.h>
 #include <stdint.h>
 #include "misc.h"
@@ -57,6 +59,23 @@ struct native_program {
     // argv[0] is the name the caller invoked, as on any multicall binary.
     // envp is NULL-terminated. The return value becomes the exit status.
     int (*main)(int argc, char *const argv[], char *const envp[]);
+
+    // Runs as root however it was invoked, the way a setuid-root binary does.
+    //
+    // ONE flag rather than a mode and an owner, because two would be two
+    // things to disagree: fs/aok.c derives the mode it reports from this, and
+    // kernel/exec.c derives the credential change from this, so a program
+    // cannot end up looking setuid to stat(2) while gaining nothing on exec,
+    // or the reverse. That mismatch is how a security feature becomes a
+    // decoration.
+    //
+    // Safe here in a way it is NOT for smallclue: these are separate programs,
+    // so a setuid one cannot be talked into being `sh`. Setting it on a
+    // multicall entry point would hand every applet root. Anything carrying
+    // this flag is security-critical host code -- it runs unsandboxed in the
+    // app process -- and inherits the caller's environment, so it must
+    // sanitise what it trusts (PATH, IFS) itself.
+    bool setuid_root;
 
     // ---- describing itself to a checkpoint (kernel/checkpoint.c) ----------
     //

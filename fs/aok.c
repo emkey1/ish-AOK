@@ -223,7 +223,17 @@ static mode_t_ aokfs_node_mode(enum aokfs_node_kind node) {
         return S_IFDIR | 0555;
     if (aokfs_node_is_symlink(node))
         return S_IFLNK | 0777;
-    if (node == aokfs_tools_setup_ish_benchmark || aokfs_node_is_native(node))
+    if (aokfs_node_is_native(node)) {
+        const struct native_program *prog = aokfs_node_native(node);
+        // Root-owned (this filesystem reports uid 0 for everything), so the
+        // set-user-ID bit here means setuid-root and nothing else. Writable by
+        // nobody: the mode is generated, and a guest cannot chmod it away or
+        // onto anything.
+        if (prog != NULL && prog->setuid_root)
+            return S_IFREG | S_ISUID | 0755;
+        return S_IFREG | 0555;
+    }
+    if (node == aokfs_tools_setup_ish_benchmark)
         return S_IFREG | 0555;
     return S_IFREG | 0444;
 }

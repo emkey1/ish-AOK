@@ -28,6 +28,7 @@
 #include <utmpx.h>
 
 #include "kernel/calls.h"
+#include "kernel/sha_crypt.h"
 #include "platform/platform.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
@@ -6940,13 +6941,22 @@ int nlibc_getgrouplist(const char *name, int basegid, int *groups, int *ngroups)
 // so NULL it is -- what glibc returns for an unsupported salt, and what
 // xcrypt's callers must already tolerate.
 //
-// Making this real means implementing the crypt algorithms over CommonCrypto's
-// SHA-2, against the guest's /etc/shadow. That belongs with the sshd work, not
-// ahead of it.
+// Implemented for $5$ and $6$ since, over CommonCrypto's SHA-2
+// (kernel/sha_crypt.c), because a native sudo and passwd cannot authenticate
+// without it. Everything else -- $1$, $2b$, and the $y$ yescrypt that Debian
+// 12 now defaults to -- is still the refusal described above, for the reason
+// described above: a confident wrong answer here is an authentication bypass.
+//
+// The buffer is thread-local rather than static. crypt(3)'s interface hands
+// back storage the caller does not own, and a native program is a function
+// call on a guest task's own thread -- one shared buffer would let two tasks
+// authenticating at once read each other's result.
 char *nlibc_crypt(const char *key, const char *salt) {
-    (void) key; (void) salt;
-    errno = ENOSYS;
-    return NULL;
+    static _Thread_local char buf[256];
+    char *out = aok_sha_crypt(key, salt, buf, sizeof(buf));
+    if (out == NULL)
+        errno = EINVAL;
+    return out;
 }
 
 // =========================================================== the rest of it
