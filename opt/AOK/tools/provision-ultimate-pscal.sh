@@ -217,9 +217,38 @@ if ! user_exists "$TARGET_USER"; then
     note "created login '$TARGET_USER' (uid $NEW_UID)"
 fi
 
-# sudo authorisation. The image ships `%wheel ALL=(ALL:ALL) ALL`, so the whole
-# job is putting this login in wheel -- appended to the member list rather than
-# replacing it, and only when it is not already there.
+# sudo authorisation.
+#
+# Newer images ship /etc/sudoers and a wheel group; older ones predate sudo
+# reading a policy at all, and on those sudo now refuses everybody. Create what
+# is missing rather than telling someone to go and write it, so re-running this
+# after an iSH-AOK update is enough on a root that is already installed.
+if [ ! -f /etc/sudoers ]; then
+    mkdir -p /etc/sudoers.d
+    chmod 750 /etc/sudoers.d
+    cat > /etc/sudoers <<'SUDOERS'
+# Who may run what, as whom. SmallCLUE's sudo implements a subset of
+# sudoers(5): user and %group entries, host lists, (runas) specs,
+# NOPASSWD/PASSWD, ALL or an explicit list of absolute command paths,
+# #includedir, and last-match-wins. Aliases, negation and globs are NOT
+# implemented and a line using them is skipped rather than guessed at.
+#
+# You are asked for YOUR OWN password, not root's.
+root   ALL=(ALL:ALL) ALL
+%wheel ALL=(ALL:ALL) ALL
+
+#includedir /etc/sudoers.d
+SUDOERS
+    chmod 440 /etc/sudoers
+    note "created /etc/sudoers (root, and anyone in wheel)"
+fi
+if ! awk -F: '$1=="wheel"{f=1} END{exit !f}' /etc/group; then
+    printf 'wheel:x:10:\n' >> /etc/group
+    note "created the wheel group"
+fi
+
+# The whole job is then putting this login in wheel -- appended to the member
+# list rather than replacing it, and only when it is not already there.
 if [ -f /etc/sudoers ] && awk -F: '$1=="wheel"{f=1} END{exit !f}' /etc/group; then
     if ! awk -F: -v u="$TARGET_USER" '$1=="wheel" {n=split($4,m,","); for(i=1;i<=n;i++) if (m[i]==u) f=1} END{exit !f}' /etc/group; then
         awk -F: -v OFS=: -v u="$TARGET_USER" \
