@@ -28,6 +28,7 @@
 #include <utmpx.h>
 
 #include "kernel/calls.h"
+#include "kernel/nlibc_shadow.h"
 #include "kernel/sha_crypt.h"
 #include "platform/platform.h"
 #include "kernel/errno.h"
@@ -6703,6 +6704,70 @@ struct passwd *nlibc_getpwnam(const char *name) {
                        nlibc_pw_match, &key))
         return NULL;
     return &nlibc_pw;
+}
+
+// /etc/shadow, on the same terms as /etc/passwd above: read from the GUEST,
+// one entry cached at a time, valid until the next call.
+//
+// Darwin has no shadow file and no getspnam, which is why SmallCLUE's su,
+// sudo and passwd were compiled only under __linux__ -- the dependency was
+// never really the OS, it was this lookup and a crypt(3) that speaks $6$
+// (kernel/sha_crypt.c, now). deps/smallclue-shim/shadow.h declares the struct
+// so those callers compile; this is what they end up calling.
+//
+// A locked account's field is "*" or "!..." -- not a hash, and no password can
+// produce it, which is exactly the property an authentication check relies on.
+// Nothing here special-cases that: the caller compares crypt() output against
+// the stored field and a locked field simply never matches.
+static __thread char nlibc_sp_line[512];
+static __thread struct spwd nlibc_sp;
+
+static bool nlibc_sp_match(char **f, size_t n, const void *keyv) {
+    const char *name = keyv;
+    if (n < 2 || strcmp(f[0], name) != 0)
+        return false;
+    memset(&nlibc_sp, 0, sizeof(nlibc_sp));
+    nlibc_sp.sp_namp = f[0];
+    nlibc_sp.sp_pwdp = f[1];
+    // The ageing fields are -1 ("unset"), which is what a shadow line with
+    // empty fields means and what every caller here treats as "no policy".
+    nlibc_sp.sp_lstchg = nlibc_sp.sp_min = nlibc_sp.sp_max = -1;
+    nlibc_sp.sp_warn = nlibc_sp.sp_inact = nlibc_sp.sp_expire = -1;
+    return true;
+}
+
+struct spwd *nlibc_getspnam(const char *name) {
+    if (name == NULL)
+        return NULL;
+    memset(&nlibc_sp, 0, sizeof(nlibc_sp));
+    if (!nlibc_scan_db("/etc/shadow", nlibc_sp_line, sizeof(nlibc_sp_line),
+                       nlibc_sp_match, name))
+        return NULL;
+    return &nlibc_sp;
+}
+
+// /etc/.pwd.lock, the advisory lock passwd takes before rewriting the shadow
+// file. A real lckpwdf holds a write lock on that file for at most 15 seconds;
+// this holds the descriptor for the life of the process, which is the same
+// guarantee for a program that locks, rewrites and exits.
+static __thread int nlibc_pwd_lock_fd = -1;
+
+int nlibc_lckpwdf(void) {
+    if (nlibc_pwd_lock_fd >= 0)
+        return -1;                 // already held: a real one returns -1 too
+    int fd = nlibc_open("/etc/.pwd.lock", O_WRONLY | O_CREAT, 0600);
+    if (fd < 0)
+        return -1;
+    nlibc_pwd_lock_fd = fd;
+    return 0;
+}
+
+int nlibc_ulckpwdf(void) {
+    if (nlibc_pwd_lock_fd < 0)
+        return -1;
+    nlibc_close(nlibc_pwd_lock_fd);
+    nlibc_pwd_lock_fd = -1;
+    return 0;
 }
 
 // The _r forms, which is what a thread-aware runtime calls -- Rust's std uses

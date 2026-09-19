@@ -882,6 +882,12 @@ smallclue_c_args = [
     # syslog(2), so say so rather than letting the #else claim dmesg is
     # unsupported on a system whose /usr/bin/dmesg works.
     '-DSMALLCLUE_HAVE_KLOGCTL',
+    # su, sudo and passwd need to read the guest's /etc/shadow and a crypt(3)
+    # that speaks $6$. Both exist for native code now (kernel/native_libc.c's
+    # getspnam, kernel/sha_crypt.c), so the gates in core.c can stop asking
+    # whether the HOST is Linux -- which it never is on an app build -- and
+    # ask whether the capability is present, which is what they meant.
+    '-DSMALLCLUE_HAVE_SHADOW_AUTH',
     # `md` with no arguments lists the documents in this directory, and
     # `md native-programs` resolves a bare name against it. The default is
     # $HOME/Docs, which an AOK guest has no reason to have -- so md looked
