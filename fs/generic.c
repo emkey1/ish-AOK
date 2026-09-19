@@ -1408,8 +1408,20 @@ int generic_mkdirat(struct fd *at, const char *path_raw, mode_t_ mode) {
     if (mount == NULL)
         return _ENOENT;
     if (mount_flags_readonly(mflags)) {
+        // EXISTENCE BEATS WRITABILITY, as on Linux: mkdir("/proc") is EEXIST
+        // and not EROFS, even though procfs is read-only. mkdir -p depends on
+        // it -- it walks the ancestors and treats "already there" as done, so
+        // an EROFS where Linux says EEXIST stops it on a component it never
+        // needed to create.
+        //
+        // That is what `mkdir -p /AOK/persist/pscal` hit: it failed on /AOK,
+        // the read-only aokfs mount, while the directory it actually wanted
+        // sits on the writable real-fs mount underneath -- so a plain
+        // `mkdir /AOK/persist/pscal` worked and the -p form did not.
+        struct statbuf existing;
+        int exists = mount->fs->stat(mount, path, &existing);
         mount_release(mount);
-        return _EROFS;
+        return exists == 0 ? _EEXIST : _EROFS;
     }
     // See the inodes_lock comment in generic_openat: serializes the
     // exists-check + real-mkdir + metadata-write against a concurrent

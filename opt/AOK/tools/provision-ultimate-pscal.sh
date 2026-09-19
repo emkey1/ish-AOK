@@ -77,7 +77,12 @@ if [ ! -d /AOK/persist ]; then
         PERSIST_WHY="there is no /AOK here at all"
     fi
 else
-    PERSIST_WHY="$(mkdir -p "$PERSIST_DIR" 2>&1)"
+    # NOT mkdir -p. /AOK itself is a read-only mount with the writable one
+    # underneath it, and an iSH-AOK that answers EROFS rather than EEXIST for
+    # an ancestor that is already there stops -p on /AOK -- a component nobody
+    # asked it to create. The parent is guaranteed by the -d test above, so the
+    # final component is the only one to make.
+    PERSIST_WHY="$(mkdir "$PERSIST_DIR" 2>&1)"
     if [ -d "$PERSIST_DIR" ]; then
         PERSIST_WHY=""
     else
