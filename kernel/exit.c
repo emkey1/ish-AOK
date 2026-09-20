@@ -3,6 +3,7 @@
 #include <string.h>
 #include "emu/cpu.h"
 #include "kernel/calls.h"
+#include "kernel/acct.h"
 #include "kernel/checkpoint.h"
 #include "kernel/resource.h"
 #include "kernel/mm.h"
@@ -886,6 +887,13 @@ noreturn void do_exit(struct task *task, int status) {
 
     bool group_dead = exit_tgroup(task);
 
+    // Process accounting is captured here, under the locks, and WRITTEN far
+    // below once they are gone: the record has to be taken while the task is
+    // certainly still alive, and the file write cannot happen while a pid or
+    // task lock is held.
+    struct acct_record acct_rec;
+    bool acct_pending = false;
+
     // A stop this task never reported is not reported now: what its tracer
     // hears about is the exit. Left set, a zombie's stale stop was reported
     // ahead of its exit, and PTRACE_CONT "resumed" a dead task.
@@ -911,6 +919,9 @@ noreturn void do_exit(struct task *task, int status) {
     }
 
     if (group_dead) {
+        // Once per PROCESS, not once per thread -- the same place Linux calls
+        // acct_process(). Costs one relaxed load when accounting is off.
+        acct_pending = acct_collect(leader, &group_rusage, status, &acct_rec);
         exit_hangup_session_tty(leader, &tty_hup);
         // With no exit_group to name one, a process's exit code is the code of
         // its last thread to exit -- Linux's synchronize_group_exit since 6.0.
@@ -967,6 +978,11 @@ noreturn void do_exit(struct task *task, int status) {
     }
     
     unlock(&pids_lock);
+
+    // The first point past the locked region, so the append cannot deadlock
+    // against anything do_exit was holding.
+    if (acct_pending)
+        acct_write(&acct_rec);
 
     if (old_sighand != NULL)
         sighand_release(old_sighand);

@@ -976,6 +976,7 @@ extern void (*halt_hook)(int status);
 #define CAP_SETGID_      6
 #define CAP_SETUID_      7
 #define CAP_SYS_CHROOT_  18
+#define CAP_SYS_PACCT_   20
 #define CAP_SYS_PTRACE_  19
 #define CAP_NET_BIND_SERVICE_ 10
 #define CAP_SYS_ADMIN_   21

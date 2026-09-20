@@ -594,6 +594,7 @@ src = [
     'kernel/smallclue_glue.c',
     'kernel/openssh_glue.c',
     'kernel/ktop_glue.c',
+    'kernel/acct.c',
     'kernel/exit.c',
     'kernel/time.c',
     'kernel/binfmt_misc.c',

@@ -5,6 +5,7 @@
 #include "app/DiagnosticsBridge.h"
 #include "jit/jit.h"
 #include "kernel/calls.h"
+#include "kernel/acct.h"
 #include "kernel/checkpoint.h"
 #include "emu/interrupt.h"
 #include "emu/memory.h"
@@ -966,6 +967,7 @@ static syscall_t i386_syscall_table[] = {
     [47]  = (syscall_t) sys_getgid,
     [49]  = (syscall_t) sys_geteuid,
     [50]  = (syscall_t) sys_getegid,
+    [51]  = (syscall_t) sys_acct,
     [52]  = (syscall_t) sys_umount2,
     [54]  = (syscall_t) sys_ioctl,
     [55]  = (syscall_t) sys_fcntl32,
@@ -1540,6 +1542,7 @@ static syscall_t amd64_syscall_table[470] = {
     [160] = (syscall_t) sys_setrlimit64,
     [161] = (syscall_t) sys_chroot,
     [162] = (syscall_t) syscall_success_stub, // sync
+    [163] = (syscall_t) sys_acct,
     [164] = (syscall_t) sys_settimeofday,
     [165] = (syscall_t) sys_mount,
     [166] = (syscall_t) sys_umount2,
@@ -1955,7 +1958,7 @@ static syscall_t arm64_syscall_table[470] = {
     // tee's ENOSYS is sys_tee's own documented decision (AOK pipes are host
     // pipes, which cannot be read without consuming), not a missing entry.
     [84] = (syscall_t) syscall_stub_silent, // sync_file_range
-    [89] = (syscall_t) syscall_stub, // acct
+    [89] = (syscall_t) sys_acct, // acct
     [104] = (syscall_t) syscall_stub, // kexec_load
     [105] = (syscall_t) syscall_stub, // init_module
     [106] = (syscall_t) syscall_stub, // delete_module
@@ -4059,6 +4062,11 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
     case 147: // sched_get_priority_min(policy)
     case 213: // epoll_create(size) -- handler ignores size
     case 306: // syncfs(fd) -- single fd arg; upper regs are garbage
+    case 163: // acct(path) -- one pointer. Without this it fell into the
+              // all-six default and the marshaller validated whatever garbage
+              // the caller had left in r8/r9: measured on devuan-amd64-test as
+              // "needs full-width args ... 0x405978b439581062" and a SIGSYS,
+              // intermittently, depending on what the last call left behind.
         return 1;
     case 277: // sync_file_range -- success stub ignores all args
     case 152: // munlockall() -- no args at all
@@ -4477,6 +4485,7 @@ static unsigned arm64_syscall_legacy_arg_count(qword_t syscall_num) {
               // over-counting would validate a real 64-bit guest address the
               // function never reads and SIGSYS login's pam_keyinit)
     case 230: // mlockall
+    case 89:  // acct(path) -- one pointer; see amd64's 163
         return 1;
     case 19:  // eventfd2
     case 28:  // inotify_rm_watch

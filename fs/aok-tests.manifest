@@ -114,6 +114,7 @@ getrusage_group.c
 proc_pid_stat_cputime.c
 pty_line_discipline.c
 proc_pid_io.c
+acct_records.c
 taskstats_genl.c
 tmpfs_mmap.c
 tmpfs_statfs.c
