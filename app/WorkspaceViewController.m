@@ -1,3 +1,4 @@
+#import <os/log.h>
 #import "WorkspaceViewController.h"
 
 #import "AboutNavigationController.h"
@@ -6407,6 +6408,20 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
         //
         // applyResumeWorkspaceLayout ends by opening the default utilities
         // itself, so the branch below is the ordinary not-resuming launch.
+        // Make the boot decision HAPPEN before asking what it was.
+        //
+        // The picker path already does this: its completion calls ensureBooted
+        // and only then runs this work, "which is why the layout work comes
+        // after it and not before". Every launch WITHOUT a picker -- nothing to
+        // ask, or already answered -- skipped straight here, read a status
+        // describing a guest that had not been restored yet, and latched on the
+        // ordinary Desktops branch. The session then came back with its shells
+        // alive and not one terminal on screen, which is exactly the case the
+        // comment below predicted and the breadcrumb was added to catch.
+        //
+        // ensureBooted happens exactly once however many callers reach it, so
+        // this is the same call the picker makes, not a second boot.
+        intptr_t launchBootError = [AppDelegate ensureBooted];
         struct checkpoint_status resumeStatus;
         checkpoint_get_status(&resumeStatus);
         // Recorded either way, because this runs ONCE per launch and latches:
@@ -6419,7 +6434,16 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
                                       details:@{@"restored": @(resumeStatus.restored),
                                                 @"hasSavedLayout": @(hasSavedLayout),
                                                 @"windows": @(savedLayout.count),
+                                                @"bootError": @(launchBootError),
                                                 @"applied": @(resumeStatus.restored && hasSavedLayout)}];
+        os_log(OS_LOG_DEFAULT,
+               "workspace launch layout: restored=%{public}d saved=%{public}d "
+               "windows=%{public}lu boot=%{public}ld -> %{public}s",
+               resumeStatus.restored, hasSavedLayout ? 1 : 0,
+               (unsigned long) savedLayout.count, (long) launchBootError,
+               (resumeStatus.restored && hasSavedLayout) ? "resume layout"
+                       : ([self savedWorkspaceDesktops].count > 0 ? "desktops snapshot"
+                                                                 : "defaults"));
         if (resumeStatus.restored && hasSavedLayout) {
             [self applyResumeWorkspaceLayout:savedLayout];
         } else if ([self savedWorkspaceDesktops].count > 0) {
