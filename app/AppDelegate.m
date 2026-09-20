@@ -129,6 +129,7 @@ static void ISHDispatchBootWork(NSString *name, void (^work)(void)) {
 @property (strong, nonatomic) dispatch_queue_t localDnsServerQueue;
 @property (strong, nonatomic) ISHMetricKitSubscriber *metricKitSubscriber;
 @property BOOL dnsRefreshQueued;
+@property NSUInteger dnsRefreshFailures;
 @property BOOL dnsRefreshRunning;
 @property BOOL waitingForInitialRootImport;
 
@@ -4291,7 +4292,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                           details:@{@"reason": reason ?: @"unknown",
                                                     @"source": dnsSource,
                                                     @"stage": @"res_ninit"}];
-            [self finishDnsRefreshAndRescheduleIfNeeded:reason];
+            [self finishDnsRefresh:reason failed:YES];
             return;
         }
 
@@ -4339,7 +4340,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                           details:@{@"reason": reason ?: @"unknown",
                                                     @"source": dnsSource,
                                                     @"stage": @"no-servers"}];
-            [self finishDnsRefreshAndRescheduleIfNeeded:reason];
+            [self finishDnsRefresh:reason failed:YES];
             return;
         }
     }
@@ -4361,7 +4362,7 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                       details:@{@"reason": reason ?: @"unknown",
                                                 @"source": dnsSource,
                                                 @"stage": @"push-init"}];
-        [self finishDnsRefreshAndRescheduleIfNeeded:reason];
+        [self finishDnsRefresh:reason failed:YES];
         return;
     }
 
@@ -4373,9 +4374,13 @@ static TerminalViewController *CreateTerminalViewController(void) {
         generic_unlinkat(AT_PWD, "/etc/resolv.conf");
         fd = generic_open("/etc/resolv.conf", O_WRONLY_ | O_CREAT_ | O_TRUNC_, 0666);
     }
+    // This arm decides the verdict: everything above it can fail, and the file
+    // is only actually on disk once this write has happened.
+    BOOL wrote = NO;
     if (!IS_ERR(fd)) {
         fd->ops->write(fd, resolvConf.UTF8String, [resolvConf lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
         fd_close(fd);
+        wrote = YES;
         [ISHDiagnosticsStore recordBreadcrumb:@"dns.refresh.wrote"
                                       details:@{@"reason": reason ?: @"unknown",
                                                 @"source": dnsSource,
@@ -4388,20 +4393,66 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                                 @"errno": @(PTR_ERR(fd))}];
     }
     PopCurrentTask(previousCurrent);
-    [self finishDnsRefreshAndRescheduleIfNeeded:reason];
+    [self finishDnsRefresh:reason failed:!wrote];
 }
 
-- (void)finishDnsRefreshAndRescheduleIfNeeded:(NSString *)reason {
+// A refresh that FAILED used to be the end of it: this only ever re-ran when
+// another refresh had been queued while one was in flight, so the four failure
+// exits in performDnsRefresh above simply stopped.
+//
+// The common failure is a race, not a verdict. The boot refresh runs from
+// configureDns while the guest is still coming up, and writing the file needs
+// an init task to be current -- lose that race and PushInitTaskAsCurrent fails,
+// nothing is written, and nothing tries again until the device happens to
+// change network. A freshly imported root therefore has NO /etc/resolv.conf at
+// all, which is what two users hit: apk reporting "DNS: transient error" on
+// Alpine i386, and the same on Devuan.
+//
+// So a failure is retried, with a backoff, a bounded number of times. The
+// delays are short at first because the race resolves in about the time the
+// guest takes to mount its root, and the cap stops a genuinely DNS-less device
+// from retrying for ever.
+static const NSUInteger ISHDnsRefreshRetryLimit = 8;
+
+- (void)finishDnsRefresh:(NSString *)reason failed:(BOOL)failed {
     BOOL shouldReschedule = NO;
+    NSUInteger attempt = 0;
     @synchronized (self) {
         shouldReschedule = self.dnsRefreshQueued;
         self.dnsRefreshQueued = NO;
         self.dnsRefreshRunning = NO;
+        if (failed)
+            self.dnsRefreshFailures += 1;
+        else
+            self.dnsRefreshFailures = 0;   // a success clears the budget
+        attempt = self.dnsRefreshFailures;
     }
     if (shouldReschedule) {
         NSString *nextReason = [NSString stringWithFormat:@"%@-coalesced", reason ?: @"dns"];
         [self scheduleDnsRefresh:nextReason];
+        return;
     }
+    if (!failed || attempt > ISHDnsRefreshRetryLimit)
+        return;
+    // 1, 2, 4, 8, 16, then 30s -- capped so this cannot become a busy loop.
+    NSTimeInterval delay = (NSTimeInterval) (1u << MIN(attempt - 1, (NSUInteger) 5));
+    if (delay > 30.0)
+        delay = 30.0;
+    [ISHDiagnosticsStore recordBreadcrumb:@"dns.refresh.retryScheduled"
+                                  details:@{@"reason": reason ?: @"unknown",
+                                            @"attempt": @(attempt),
+                                            @"delay": @(delay)}];
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t) (delay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf scheduleDnsRefresh:[NSString stringWithFormat:@"%@-retry", reason ?: @"dns"]];
+    });
+}
+
+// The old spelling, kept so nothing else has to change: a caller that does not
+// say otherwise succeeded.
+- (void)finishDnsRefreshAndRescheduleIfNeeded:(NSString *)reason {
+    [self finishDnsRefresh:reason failed:NO];
 }
 
 + (intptr_t)bootError {
