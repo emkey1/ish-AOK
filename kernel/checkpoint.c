@@ -333,6 +333,8 @@ static char ckpt_session_path[PATH_MAX];
 int checkpoint_peek(const char *host_path, struct checkpoint_image_info *out) {
     memset(out, 0, sizeof(*out));
     FILE *f = fopen(host_path, "rb");
+    if (f != NULL)
+        setvbuf(f, NULL, _IOFBF, 1 << 20);   // see checkpoint_save's note
     if (f == NULL)
         return errno_map();
     // fread directly rather than this file's rd(): peek sits above it, and a
@@ -1588,6 +1590,19 @@ int checkpoint_save(const char *host_path) {
         return _ENAMETOOLONG;
     }
     FILE *f = fopen(tmp_path, "wb");
+    if (f != NULL)
+        // One write(2) per PAGE otherwise. ckpt_emit_map calls wr() once per
+        // 4 KB page, and stdio's default buffer is the file's st_blksize --
+        // also 4 KB -- so every page went straight to the kernel as its own
+        // write: about 250,000 of them for a 1 GB image. A megabyte of buffer
+        // makes that one write per 256 pages.
+        //
+        // It costs nothing when writes are cheap (measured 610 MB/s either way
+        // on a Mac) and it matters when they are not. Under Xcode every write
+        // goes through libLogRedirect.dylib's interposer, which is what a
+        // suspend that looked hung was doing in its thread dump -- not
+        // deadlocked, just paying that toll a quarter of a million times.
+        setvbuf(f, NULL, _IOFBF, 1 << 20);
     if (f == NULL) {
         err = errno_map();
         task_snapshot_release(&snap);
@@ -2735,6 +2750,8 @@ static struct task *ckpt_new_task(struct task *parent, pid_t_ pid) {
 int checkpoint_restore(const char *host_path) {
     ckpt_restore_note[0] = '\0';
     FILE *f = fopen(host_path, "rb");
+    if (f != NULL)
+        setvbuf(f, NULL, _IOFBF, 1 << 20);   // see checkpoint_save's note
     if (f == NULL)
         return errno_map();
 
