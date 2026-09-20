@@ -3836,6 +3836,41 @@ static TerminalViewController *CreateTerminalViewController(void) {
     // fs/proc/ish.c is not; re-published on every activation below, so
     // flipping it in Settings takes effect without a relaunch.
     checkpoint_set_guest_control(UserPreferences.shared.shouldSuspendToDisk);
+    // Say what this launch decided about resuming, ALWAYS, before acting on it.
+    //
+    // Every way of not resuming was silent: the preference being off, no image
+    // path at all, and -- the one that matters -- the file not being where the
+    // restore looks for it. A launch that skipped for any of those reasons was
+    // byte-for-byte indistinguishable from one that tried and failed, and from
+    // one where nothing had been suspended in the first place. Reported three
+    // times as "no session on restore" with nothing in the log either way,
+    // because the only diagnostic covered the branch that was never reached.
+    BOOL sessionExists = sessionImage != nil &&
+            [NSFileManager.defaultManager fileExistsAtPath:sessionImage];
+    os_log(ISHSuspendLog(),
+           "session resume: pref=%{public}d decided=%{public}d image=%{public}@ exists=%{public}d",
+           UserPreferences.shared.shouldSuspendToDisk ? 1 : 0,
+           ishSessionResumeDecided ? 1 : 0,
+           sessionImage != nil ? sessionImage.lastPathComponent : @"(none)",
+           sessionExists ? 1 : 0);
+    [ISHDiagnosticsStore recordBreadcrumb:@"session.resume.decision"
+                                  details:@{@"pref": @(UserPreferences.shared.shouldSuspendToDisk),
+                                            @"decided": @(ishSessionResumeDecided),
+                                            @"image": sessionImage != nil
+                                                    ? sessionImage.lastPathComponent : @"none",
+                                            @"exists": @(sessionExists)}];
+    // What is actually on disk, when the thing we were told to resume is not.
+    // A slot mismatch -- written as one name, looked for under another -- looks
+    // exactly like "nothing was suspended" unless the directory is listed.
+    if (sessionImage != nil && !sessionExists) {
+        NSString *dir = sessionImage.stringByDeletingLastPathComponent;
+        NSArray<NSString *> *found =
+                [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil];
+        os_log_error(ISHSuspendLog(),
+                     "session resume: %{public}@ is not there; %{public}@ holds %{public}@",
+                     sessionImage.lastPathComponent, dir.lastPathComponent,
+                     found.count != 0 ? [found componentsJoinedByString:@", "] : @"nothing");
+    }
     if (UserPreferences.shared.shouldSuspendToDisk && sessionImage != nil) {
         checkpoint_set_session(sessionImage.fileSystemRepresentation);
         if ([NSFileManager.defaultManager fileExistsAtPath:sessionImage]) {
