@@ -27,6 +27,19 @@ ISH_LOGGER_macosx = dprintf
 AOK_NATIVE_HELIX = YES
 // AOK_NATIVE_HELIX = 
 
+// bash as a native program (/AOK/native/bash). NOT shipped: bash and its
+// bundled readline and GNU termcap are GPLv3, and meson folds them into
+// libish.a with link_whole, so an enabled build carries them whether or not
+// anything calls them. See meson_options.txt for why that matters for an App
+// Store binary.
+//
+// Set explicitly, like AOK_NATIVE_HELIX above and for the same reason: meson
+// caches an option in the build directory, so changing the DEFAULT in
+// meson_options.txt does not move a tree that was configured before the change
+// -- every existing DerivedData would have gone on shipping bash. Passing it
+// on every reconfigure is what actually decides it. Set to YES to build it.
+AOK_NATIVE_BASH = NO
+
 // Cargo features for the Rust native program (/AOK/native/rust-probe).
 // Empty for a normal build -- the probe's tokio test pulls in a dependency
 // tree that has no business in a shipping app. Set it to "tokio-probe" to

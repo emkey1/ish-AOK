@@ -47,11 +47,19 @@ option('no_crlf', type: 'boolean', value: false)
 # LICENSE.IOS waives enforcement for iSH's copyright holders; it cannot waive
 # anything for the FSF.
 #
-#   auto      (default) on when deps/bash is checked out -- today's behaviour
+#   auto      on when deps/bash is checked out
 #   enabled   fail configure if the submodule is missing, rather than silently
 #             producing a build without it
 #   disabled  leave bash, readline and termcap out of the binary entirely
-option('native_bash', type: 'feature', value: 'auto',
+#
+# DISABLED by default as of the 1.3 release cycle: native bash is not shipped,
+# so the binary carries no GPLv3 code. This is a release decision rather than a
+# technical one -- the port works, and `-Dnative_bash=enabled' still builds it
+# for anyone who wants it, including deps/bash being checked out already. The
+# value is `disabled' rather than `auto' precisely because `auto' would turn it
+# back on for any developer who has the submodule, which is everyone who has
+# ever run `git submodule update --init --recursive'.
+option('native_bash', type: 'feature', value: 'disabled',
        description: 'Compile bash in as a native program (adds GPLv3 code to the binary)')
 
 # zsh as a native program. It began default-disabled, for one milestone

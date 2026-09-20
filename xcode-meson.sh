@@ -206,6 +206,16 @@ EOF
     else
         meson_extra_opts="$meson_extra_opts -Dnative_helix=disabled"
     fi
+    # AOK_NATIVE_BASH, same shape, and the caching is the whole point: meson
+    # keeps an option's value in the build directory, so flipping the default
+    # in meson_options.txt leaves every already-configured tree exactly as it
+    # was. Without this line a developer's DerivedData would keep folding
+    # GPLv3 bash into the binary long after the project decided not to ship it.
+    if [[ "${AOK_NATIVE_BASH:-}" == YES ]]; then
+        meson_extra_opts="$meson_extra_opts -Dnative_bash=enabled"
+    else
+        meson_extra_opts="$meson_extra_opts -Dnative_bash=disabled"
+    fi
 
     if [[ ! -f "$crossfile" ]] || ! cmp -s "$crossfile_tmp" "$crossfile"; then
         mv "$crossfile_tmp" "$crossfile"
@@ -250,12 +260,15 @@ EOF
             current_rust_features=$(meson_option_json "$config" native_rust_features 2>/dev/null || echo MISSING)
         current_helix=$(meson_option_json "$config" native_helix 2>/dev/null || echo MISSING)
         want_helix=$([[ "${AOK_NATIVE_HELIX:-}" == YES ]] && echo '"enabled"' || echo '"disabled"')
+        current_bash=$(meson_option_json "$config" native_bash 2>/dev/null || echo MISSING)
+        want_bash=$([[ "${AOK_NATIVE_BASH:-}" == YES ]] && echo '"enabled"' || echo '"disabled"')
         }
         read_rust_opts
         if [[ "$current_cargo_home" == MISSING ]] || \
            [[ "$current_rust_target" == MISSING ]] || \
            [[ "$current_rust_features" == MISSING ]] || \
-           [[ "$current_helix" == MISSING ]]; then
+           [[ "$current_helix" == MISSING ]] || \
+           [[ "$current_bash" == MISSING ]]; then
             (set -x; meson setup --reconfigure "$meson_dir" "$SRCROOT" --cross-file "$crossfile") || exit $?
             config=$(meson introspect --buildoptions "$meson_dir")
             read_rust_opts
@@ -263,7 +276,8 @@ EOF
         if [[ "$current_cargo_home" != "\"$HOME/.cargo\"" ]] || \
            [[ "$current_rust_target" != "\"$rust_triple\"" ]] || \
            [[ "$current_rust_features" != "\"${AOK_RUST_FEATURES:-}\"" ]] || \
-           [[ "$current_helix" != "$want_helix" ]]; then
+           [[ "$current_helix" != "$want_helix" ]] || \
+           [[ "$current_bash" != "$want_bash" ]]; then
             meson_needs_setup=1
         fi
     fi
