@@ -1,4 +1,5 @@
 #include <fcntl.h>
+#include <stdlib.h>
 #include <string.h>
 #include <signal.h>
 #include <pthread.h>
@@ -124,6 +125,25 @@ unsigned sockrestart_on_suspend() {
         getsockname(sock->real_fd, (struct sockaddr *) &saved->name, &saved->name_len);
         list_add(&saved_sockets, &saved->saved);
         saved_count++;
+        // ISH_SOCKRESTART_TEST_DESTROY=1 -- do to the socket what a SUSPENSION
+        // does to it, so the rebuild can be exercised anywhere.
+        //
+        // On a Mac nothing destroys a listener, so the rebuild's bind always
+        // hits EADDRINUSE against the original, returns 0 restored, and every
+        // line after it -- the dup2, the punt -- has never run outside a real
+        // iOS suspension. Replacing the descriptor with a fresh unbound socket
+        // of the same type reproduces exactly what iOS leaves behind: the fd
+        // is still open, the port is released, and the guest's listener is
+        // dead without the guest being told.
+        if (getenv("ISH_SOCKRESTART_TEST_DESTROY") != NULL) {
+            int dead = socket(saved->name_addr.sa_family, saved->type, saved->proto);
+            if (dead >= 0) {
+                dup2(dead, sock->real_fd);
+                close(dead);
+                printk("INFO: sockrestart: test-destroyed the listener at fd %d\n",
+                       sock->real_fd);
+            }
+        }
     }
     unlock(&sockrestart_lock);
     return saved_count;

@@ -16,6 +16,7 @@
 #include "fs/stat.h"
 #include "jit/jit.h"
 #include "kernel/calls.h"
+#include "fs/sockrestart.h"
 #include "kernel/fs.h"
 #include "kernel/task.h"
 #include "kernel/swap.h"
@@ -144,6 +145,24 @@ static char *build_initial_envp(void) {
 // exercise the path the app uses, which is not a guest task either.
 double cli_checkpoint_delay;
 const char *cli_checkpoint_path;
+
+// See ISH_SOCKRESTART_AFTER below. Same idea, same reason: fs/sockrestart.c's
+// save and rebuild are reached ONLY from the app's background and foreground
+// transitions, so until now the one path that decides whether a guest's
+// listening sockets survive a suspension could not be run from here at all.
+double cli_sockrestart_delay;
+static void *cli_sockrestart_after(void *unused) {
+    (void) unused;
+    usleep((useconds_t) (cli_sockrestart_delay * 1000000));
+    unsigned saved = sockrestart_on_suspend();
+    fprintf(stderr, "sockrestart: saved %u listener(s)\n", saved);
+    // A real suspension sits between the two. Long enough that anything
+    // blocked in accept or poll is certainly blocked before the rebuild.
+    usleep(500000);
+    unsigned rebuilt = sockrestart_on_resume();
+    fprintf(stderr, "sockrestart: rebuilt %u listener(s)\n", rebuilt);
+    return NULL;
+}
 static void *cli_checkpoint_after(void *unused) {
     (void) unused;
     while (cli_checkpoint_path == NULL)
@@ -591,6 +610,20 @@ int main(int argc, char *const argv[]) {
                 cli_checkpoint_delay = delay;
                 cli_checkpoint_path = at;
             }
+        }
+    }
+    // ISH_SOCKRESTART_AFTER=<seconds> -- run the app's suspend/resume socket
+    // cycle from a host thread, without the app. iOS destroys a listening
+    // socket while the process is frozen, so fs/sockrestart.c records every
+    // listener on the way down and rebuilds it on the way up; this is the only
+    // way to exercise that from the command line.
+    {
+        const char *spec = getenv("ISH_SOCKRESTART_AFTER");
+        if (spec != NULL && *spec != '\0') {
+            cli_sockrestart_delay = atof(spec);
+            pthread_t th;
+            pthread_create(&th, NULL, cli_sockrestart_after, NULL);
+            pthread_detach(th);
         }
     }
     halt_hook = cli_halt;
