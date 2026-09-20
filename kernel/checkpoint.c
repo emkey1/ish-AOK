@@ -1544,6 +1544,20 @@ int checkpoint_save(const char *host_path) {
     ckpt_natives_restarted = 0;
     ckpt_natives_note[0] = '\0';
 
+    // WHERE THE TIME WENT. A suspend reported as taking "a minute or more" on
+    // a device could not be compared against anything, because the save said
+    // only whether it worked. The same image takes a fifth of a second on a
+    // Mac, so the minute is not the bytes -- and without a breakdown the only
+    // way to find out which phase owns it was to guess, repeatedly.
+    //
+    // Four phases, each with a different cause if it is the slow one: the
+    // FREEZE waits for every task to reach a syscall boundary; the WRITE
+    // walks each task's memory, and faults evicted pages back in through
+    // mem_ptr(MEM_READ), so a heavily swapped guest pays the pager here; the
+    // FSYNC is the storage; the rename is nothing.
+    struct timespec t_start = timespec_now(CLOCK_MONOTONIC);
+    struct timespec t_frozen = t_start, t_written = t_start, t_synced = t_start;
+
     // STOP THE MACHINE. Everything below describes tasks that are not running,
     // which is the whole difference between a checkpoint and a photograph of a
     // moving object.
@@ -1553,6 +1567,7 @@ int checkpoint_save(const char *host_path) {
         ckpt_refuse("%s", blame);
         return err;
     }
+    t_frozen = timespec_now(CLOCK_MONOTONIC);
 
     struct task_snapshot snap = {0};
     if (task_snapshot_collect(&snap, false) < 0) {
@@ -1645,6 +1660,7 @@ int checkpoint_save(const char *host_path) {
     free(ids.fds);
     task_snapshot_release(&snap);
 
+    t_written = timespec_now(CLOCK_MONOTONIC);
     // How long the image is SUPPOSED to be, taken before the seek back to
     // rewrite the header. Checked against the file once it is closed.
     off_t expect_size = -1;
@@ -1698,6 +1714,7 @@ int checkpoint_save(const char *host_path) {
         fsync(img_fd);
         close(img_fd);
     }
+    t_synced = timespec_now(CLOCK_MONOTONIC);
     if (rename(tmp_path, host_path) != 0) {
         err = errno_map();
         unlink(tmp_path);
@@ -1718,6 +1735,23 @@ int checkpoint_save(const char *host_path) {
             fsync(dir_fd);
             close(dir_fd);
         }
+    }
+
+    // One line saying where the time went. Always, not under a debug flag: a
+    // suspend is user-visible and a slow one is a bug report, and the whole
+    // reason this exists is that "it takes a minute" could not be turned into
+    // a question without it.
+    {
+        struct timespec t_end = timespec_now(CLOCK_MONOTONIC);
+        #define CKPT_MS(a, b) ((double) ((b).tv_sec - (a).tv_sec) * 1000.0 + \
+                               (double) ((b).tv_nsec - (a).tv_nsec) / 1000000.0)
+        printk("checkpoint: saved %u tasks, %llu pages, %lld bytes in %.0f ms "
+               "(freeze %.0f, write %.0f, fsync %.0f)\n",
+               h.n_tasks, (unsigned long long) pages,
+               (long long) expect_size, CKPT_MS(t_start, t_end),
+               CKPT_MS(t_start, t_frozen), CKPT_MS(t_frozen, t_written),
+               CKPT_MS(t_written, t_synced));
+        #undef CKPT_MS
     }
 
     lock(&ckpt_lock, 0);
