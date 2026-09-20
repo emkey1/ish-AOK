@@ -4,6 +4,18 @@ cc = meson.get_compiler('c')
 
 if cc.get_id() == 'clang'
     add_project_arguments('-Wimplicit-fallthrough', '-Wtautological-constant-in-range-compare', language: 'c')
+    # Errors, not warnings. Both of these fired on kernel/native.c's registry
+    # for weeks and were printed by every single build -- a positional
+    # initializer had put a function pointer into a bool and a string literal
+    # into a function pointer, so native zsh ran setuid-root and a checkpoint
+    # CALLED the string. Nothing about that is a style question, and a warning
+    # in a log nobody greps for is the same as no warning at all.
+    #
+    # clang only, deliberately: the vendored trees carry '-w' in their own
+    # c_args, which comes after these and wins, and GCC on the Linux CI is a
+    # different compiler with a different idea of what these catch.
+    add_project_arguments('-Werror=incompatible-pointer-types',
+                          '-Werror=pointer-bool-conversion', language: 'c')
 endif
 
 if get_option('b_sanitize').split(',').contains('undefined')

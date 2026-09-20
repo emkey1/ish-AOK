@@ -304,6 +304,39 @@ echo finished' 2>&1)
     [ -s "$IMG" ] || { echo "FAIL: external checkpoint wrote no image"; exit 1; }
     echo "  outside | image $(wc -c < "$IMG") bytes, guest unharmed"
 done
+
+# And the THIRD shape: a native shell blocked in a READ, owning no child.
+#
+# This is the only one that reaches ckpt_dump. checkpoint_native_park skips the
+# dump when native_standin_child is set, so the loop above -- a shell waiting
+# on /bin/sleep -- never called it, and neither did anything else in this file.
+# That is how a registry entry whose ckpt_dump was a STRING LITERAL survived:
+# written positionally, "AOK_ZSH_STATE_FD" landed in the function pointer (and
+# native_zsh_ckpt_dump landed in the setuid_root bool, so native zsh also ran
+# as root). The checkpoint then CALLED the string, and the app died every time
+# it was backgrounded with an interactive native zsh on screen -- while this
+# file passed.
+#
+# The pipe is the point: it holds stdin open with nothing on it, so zsh is
+# inside nlibc_read when the freeze lands, which is where an interactive shell
+# waiting for a keystroke also is.
+rm -f "$IMG" "$IMG.log"
+read_out=$( (sleep 5) | ISH_CHECKPOINT_AFTER=1.5:"$IMG" "$ISH" -f "$ROOT" \
+    /AOK/native/zsh -c 'read -r x; echo checkpointed-mid-read' 2>&1 )
+echo "$read_out" | while IFS= read -r l; do echo "  outside | zsh-read: $l"; done
+log=$(cat "$IMG.log" 2>/dev/null)
+case $log in
+    written*) ;;
+    *) echo "FAIL: external checkpoint of a native shell mid-read: $log"; exit 1;;
+esac
+case $read_out in
+    *checkpointed-mid-read*) ;;
+    *) echo "FAIL: native shell did not survive being checkpointed mid-read"
+       echo "  got: $read_out"; exit 1;;
+esac
+[ -s "$IMG" ] || { echo "FAIL: mid-read checkpoint wrote no image"; exit 1; }
+echo "  outside | image $(wc -c < "$IMG") bytes, ckpt_dump actually called"
+
 rm -f "$IMG.log"
 
 # ---- and the refusals ------------------------------------------------------

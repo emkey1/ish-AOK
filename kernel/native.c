@@ -375,9 +375,19 @@ static const struct native_program native_programs[] = {
     // zsh_glue.c). AOK_ZSH_STATE_FD is the channel its re-launched children
     // already read a state from, so a restored one needs nothing new taught
     // to it.
-    { "zsh", native_zsh_main, native_zsh_ckpt_dump, "AOK_ZSH_STATE_FD" },
-    { "zsh-multio", native_zsh_multio_main, native_zsh_ckpt_dump,
-      "AOK_ZSH_STATE_FD" },
+    //
+    // DESIGNATED, because the third member of this struct is `setuid_root`,
+    // not ckpt_dump. Writing these positionally put native_zsh_ckpt_dump into
+    // the bool (a pointer is always true, so native zsh ran SETUID ROOT), the
+    // "AOK_ZSH_STATE_FD" literal into ckpt_dump, and nothing into
+    // ckpt_state_var. checkpoint_native_park then CALLED that string: the
+    // crash was an instruction fetch at an unaligned address inside
+    // __cstring, every time the app was backgrounded with a native zsh
+    // running. -w hid all three diagnostics.
+    { "zsh", native_zsh_main, .ckpt_dump = native_zsh_ckpt_dump,
+      .ckpt_state_var = "AOK_ZSH_STATE_FD" },
+    { "zsh-multio", native_zsh_multio_main, .ckpt_dump = native_zsh_ckpt_dump,
+      .ckpt_state_var = "AOK_ZSH_STATE_FD" },
 #endif
 #ifdef ISH_NATIVE_DASH
     { "dash", native_dash_main },
