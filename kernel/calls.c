@@ -1177,7 +1177,7 @@ static syscall_t i386_syscall_table[] = {
     [332] = (syscall_t) sys_inotify_init1,
     [333] = (syscall_t) sys_preadv_i386,
     [334] = (syscall_t) sys_pwritev_i386,
-    [336] = (syscall_t) syscall_stub, // perf_event_open
+    [336] = (syscall_t) syscall_stub_silent, // perf_event_open -- see arm64 [241]
     [337] = (syscall_t) sys_recvmmsg,
     [340] = (syscall_t) sys_prlimit64,
     [341] = (syscall_t) syscall_eopnotsupp_stub, // name_to_handle_at
@@ -1637,6 +1637,10 @@ static syscall_t amd64_syscall_table[470] = {
     [295] = (syscall_t) sys_preadv_amd64,
     [296] = (syscall_t) sys_pwritev_amd64,
     [297] = (syscall_t) sys_rt_tgsigqueueinfo,
+    // perf_event_open. There was no entry here at all, which is not quieter:
+    // the dispatcher logs a NULL as "missing amd64 syscall 298", the same
+    // noise by another name. See arm64 [241] for why it is silent.
+    [298] = (syscall_t) syscall_stub_silent, // perf_event_open
     [299] = (syscall_t) sys_recvmmsg_amd64,
     [302] = (syscall_t) sys_prlimit64,
     [303] = (syscall_t) syscall_eopnotsupp_stub, // name_to_handle_at
@@ -2000,7 +2004,15 @@ static syscall_t arm64_syscall_table[470] = {
     [238] = (syscall_t) syscall_stub, // migrate_pages
     [239] = (syscall_t) syscall_stub, // move_pages
     [240] = (syscall_t) syscall_stub_silent, // rt_tgsigqueueinfo
-    [241] = (syscall_t) syscall_stub, // perf_event_open
+    // perf_event_open: atop opens it per sample interval for per-process PMU
+    // counters and carries on without them when it fails -- as it must on any
+    // kernel with CONFIG_PERF_EVENTS=n, perf_event_paranoid=3, or a container
+    // that blocks it. Verified on an aarch64 guest: with ENOSYS, `atop -P CPU
+    // 1 1` still produced a complete CPU record and exited 0. A benign-
+    // fallback stub like add_key and bpf above, and a noisy one, because the
+    // probe repeats for as long as atop runs: reported from a device as an
+    // ERROR line every few seconds.
+    [241] = (syscall_t) syscall_stub_silent, // perf_event_open
     [262] = (syscall_t) syscall_stub, // fanotify_init
     [263] = (syscall_t) syscall_stub, // fanotify_mark
     [264] = (syscall_t) syscall_stub_silent, // name_to_handle_at
