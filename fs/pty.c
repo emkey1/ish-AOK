@@ -153,6 +153,37 @@ int ptmx_open(struct fd *fd) {
     return tty_open(master, fd);
 }
 
+// Unlock the slave of a freshly re-opened master.
+//
+// A pty starts LOCKED -- Linux's rule, and pty_slave_open refuses a locked
+// slave with EIO -- and it is the guest's unlockpt() that clears it. A master
+// restored from a checkpoint never gets that call again: the guest issued it
+// before the image was taken. So a restored pane could not open its own
+// terminal, which came back as "could not attach restored pid 7 to
+// /dev/pts/1: -5". Unlocking here is what the guest's earlier unlockpt() meant,
+// replayed; a guest that had NOT unlocked yet simply does it again, which
+// costs nothing.
+void pty_unlock_slave_of(struct tty *master) {
+    if (master == NULL || master->pty.other == NULL)
+        return;
+    master->pty.other->pty.locked = false;
+}
+
+// Is a guest process holding the MASTER of this pty?
+//
+// The checkpoint asks so it can tell a terminal the image owns from one the UI
+// owns. A session pty made by pty_open_fake has a slave and no master -- the
+// app or the CLI holds the other side -- so it answers false, which is what
+// makes it a window to be re-created rather than a pair to be rebuilt.
+bool pty_master_is_open(int num) {
+    if (num < 0 || num >= MAX_PTYS)
+        return false;
+    lock(&ttys_lock, 0);
+    bool open = pty_master.ttys[num] != NULL;
+    unlock(&ttys_lock);
+    return open;
+}
+
 struct tty *pty_open_fake(struct tty_driver *driver) {
     int pty_num = pty_reserve_next();
     if (pty_num == MAX_PTYS)

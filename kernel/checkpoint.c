@@ -113,6 +113,19 @@ enum ckpt_fd_kind {
     CKPT_FD_PIPE,         // one end of a pipe, with whatever is still in it
     CKPT_FD_REF,          // the SAME struct fd as one already described
     CKPT_FD_SOCKET,       // a socket: rebuilt from its description, not copied
+    // A pseudo-terminal INTERNAL to the image: one guest process holds the
+    // master, another is on the slave. tmux, screen, script, expect and sshd
+    // all look like this, and none of them is the UI's terminal -- which is
+    // why they cannot go through CKPT_FD_TTY, whose whole model is "re-attach
+    // to the terminal this run is using". A tmux pane restored that way came
+    // back on a fresh window of its own while tmux's master pointed at
+    // nothing, so tmux tore the window down and the server exited.
+    //
+    // The pair travels as its pty NUMBER (in `offset`): the master re-opens
+    // /dev/ptmx, which allocates a new number, and the restore remembers
+    // old -> new so the slave can find its way to the same pty.
+    CKPT_FD_PTY_MASTER,
+    CKPT_FD_PTY_SLAVE,
 };
 
 // Which KIND of terminal a process's standard streams were on. The two are
@@ -157,6 +170,8 @@ static const char *ckpt_kind_name(uint32_t kind) {
         case CKPT_FD_REF: return "ref";
         case CKPT_FD_STDIO: return "stdio";
         case CKPT_FD_SOCKET: return "sock";
+        case CKPT_FD_PTY_MASTER: return "ptmx";
+        case CKPT_FD_PTY_SLAVE: return "pts";
         default: return "?";
     }
 }
@@ -901,6 +916,16 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
                 strcmp(fd->ops->name, "devpts") == 0) || fd_tty(fd) != NULL) {
         if (generic_getpath(fd, path) < 0 || path[0] != '/')
             path[0] = '\0';
+        // A pty whose MASTER a guest process holds is the image's own, not the
+        // terminal this run is looking at. tty->type is the driver's major.
+        struct tty *terminal = fd_tty(fd);
+        if (terminal != NULL) {
+            if (terminal->type == TTY_PSEUDO_MASTER_MAJOR)
+                return CKPT_FD_PTY_MASTER;
+            if (terminal->type == TTY_PSEUDO_SLAVE_MAJOR &&
+                    pty_master_is_open(terminal->num))
+                return CKPT_FD_PTY_SLAVE;
+        }
         return CKPT_FD_TTY;
     }
     // The standard streams as the entry point handed them over. On the CLI
@@ -1184,6 +1209,12 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
             }
             s->offset = s->kind == CKPT_FD_STDIO ? (uint64_t) s->fd->real_fd
                                                  : ckpt_fd_offset(s->fd);
+            // A pty travels as its NUMBER: that is what pairs a master with
+            // its slave across a restore, where both get new ones.
+            if (s->kind == CKPT_FD_PTY_MASTER || s->kind == CKPT_FD_PTY_SLAVE) {
+                struct tty *terminal = fd_tty(s->fd);
+                s->offset = terminal != NULL ? (uint64_t) terminal->num : 0;
+            }
             if (s->kind == CKPT_FD_PIPE) {
                 // Only the READ end carries the contents: the bytes are in the
                 // pipe once, and taking them from both ends would double them.
@@ -1707,7 +1738,42 @@ struct ckpt_restore_state {
         int leader_pid;
     } *sets;
     uint32_t set_count, set_cap;
+    // old pty number -> the number its master got when it was re-opened.
+    //
+    // A pty pair internal to the image (tmux and its pane) comes back as a
+    // NEW pair, so the slave has to be told where its master went. Populated
+    // when a CKPT_FD_PTY_MASTER is restored and read by every slave after it,
+    // which works because tasks arrive parents-first and the master holder is
+    // the pane's parent. A slave that finds no entry falls back to being given
+    // a terminal of its own -- the old behaviour, and the honest answer when
+    // the master was not in the image at all.
+    struct { int old_num, new_num; } *ptys;
+    uint32_t pty_count, pty_cap;
 };
+
+// Remember where a restored pty master ended up, and look it up again.
+static int ckpt_pty_map_put(struct ckpt_restore_state *st, int old_num, int new_num) {
+    if (st->pty_count == st->pty_cap) {
+        uint32_t cap = st->pty_cap ? st->pty_cap * 2 : 8;
+        void *n = realloc(st->ptys, cap * sizeof(*st->ptys));
+        if (n == NULL)
+            return _ENOMEM;
+        st->ptys = n;
+        st->pty_cap = cap;
+    }
+    st->ptys[st->pty_count].old_num = old_num;
+    st->ptys[st->pty_count].new_num = new_num;
+    st->pty_count++;
+    return 0;
+}
+
+static int ckpt_pty_map_get(struct ckpt_restore_state *st, int old_num) {
+    for (uint32_t i = 0; i < st->pty_count; i++)
+        if (st->ptys[i].old_num == old_num)
+            return st->ptys[i].new_num;
+    return -1;
+}
+
 
 // Record `fd` under `id`, taking a reference of the table's own.
 //
@@ -1875,6 +1941,31 @@ static struct ckpt_stdio_set *ckpt_stdio_set_for(struct ckpt_restore_state *st,
     set->sid = rec->sid;
     snprintf(set->path, sizeof(set->path), "%s", path);
 
+    // A pty the IMAGE owns -- tmux's pane, not the UI's window. Its master was
+    // restored with an earlier task, so the pair already exists and the only
+    // thing to do is point this process's standard streams at the slave. It
+    // must NOT go through checkpoint_open_session_tty: that makes a window and
+    // hands it to the UI, which is how a tmux pane came back as a terminal of
+    // its own while tmux's master pointed at nothing.
+    if (kind == CKPT_TTY_PTS) {
+        int mapped = ckpt_pty_map_get(st, (int) rec->tty_num);
+        if (mapped >= 0) {
+            snprintf(set->path, sizeof(set->path), "/dev/pts/%d", mapped);
+            set->tty_num = mapped;
+            int err = create_stdio(set->path, TTY_PSEUDO_SLAVE_MAJOR, mapped);
+            if (err < 0) {
+                ckpt_refuse("could not attach restored pid %u to %s: %d",
+                            rec->pid, set->path, err);
+                return NULL;
+            }
+            // No set->terminal and no leader_pid: there is no window here for
+            // the UI to adopt, and nothing whose exit ends one.
+            CKPT_TRACE("pid %u came back on %s (pty the image owns)\n",
+                       rec->pid, set->path);
+            st->set_count++;
+            return set;
+        }
+    }
     if (kind == CKPT_TTY_PTS) {
         struct tty *tty = checkpoint_open_session_tty();
         if (tty == NULL || IS_ERR(tty)) {
@@ -2249,6 +2340,59 @@ descriptors:
                 goto fds_done;
             fd_retain(end);   // the process's own
             if ((err = fdtable_install_at(files, (fd_t) cf.fd, end,
+                                          cf.cloexec != 0)) < 0)
+                goto fds_done;
+            continue;
+        }
+
+        // A pty pair the image owns. The master re-opens /dev/ptmx, which
+        // allocates a fresh number, and that number is recorded so the slave
+        // -- restored later, because its holder is a child of the master's --
+        // can be pointed at the same pair instead of being handed a window of
+        // its own.
+        if (cf.kind == CKPT_FD_PTY_MASTER || cf.kind == CKPT_FD_PTY_SLAVE) {
+            char pty_path[64];
+            if (cf.kind == CKPT_FD_PTY_MASTER) {
+                snprintf(pty_path, sizeof(pty_path), "/dev/ptmx");
+            } else {
+                int mapped = ckpt_pty_map_get(st, (int) cf.offset);
+                if (mapped < 0) {
+                    // The master was not in the image. Fall back to the
+                    // terminal this task was given, which is what every pts
+                    // used to get.
+                    struct fd *src = stdio[cf.fd <= 2 ? cf.fd : 0];
+                    if (src != NULL) {
+                        if ((err = ckpt_id_put(st, cf.id, src)) < 0)
+                            goto fds_done;
+                        fd_retain(src);
+                        if ((err = fdtable_install_at(files, (fd_t) cf.fd, src,
+                                                      cf.cloexec != 0)) < 0)
+                            goto fds_done;
+                    }
+                    continue;
+                }
+                snprintf(pty_path, sizeof(pty_path), "/dev/pts/%d", mapped);
+            }
+            struct fd *pty = generic_open(pty_path, (int) cf.flags, 0);
+            if (IS_ERR(pty)) {
+                err = (int) PTR_ERR(pty);
+                goto fds_done;
+            }
+            if (cf.kind == CKPT_FD_PTY_MASTER) {
+                struct tty *made = fd_tty(pty);
+                pty_unlock_slave_of(made);
+                if (made != NULL &&
+                        (err = ckpt_pty_map_put(st, (int) cf.offset, made->num)) < 0) {
+                    fd_close(pty);
+                    goto fds_done;
+                }
+                CKPT_TRACE("    pty master %llu came back as %d\n",
+                           (unsigned long long) cf.offset,
+                           made != NULL ? made->num : -1);
+            }
+            if ((err = ckpt_id_put(st, cf.id, pty)) < 0)
+                goto fds_done;
+            if ((err = fdtable_install_at(files, (fd_t) cf.fd, pty,
                                           cf.cloexec != 0)) < 0)
                 goto fds_done;
             continue;
