@@ -10367,12 +10367,32 @@ int sock_ckpt_describe(struct fd *sock, struct sock_ckpt_desc *out) {
         out->state = SOCK_CKPT_HUNGUP;
         return 0;
     }
-    // Only the internet families are rebuilt for real in this version. An
-    // AF_LOCAL bind owns a path in the guest filesystem, so putting it back
-    // means unlinking and recreating a node while the restore is still
-    // rebuilding the filesystem view -- separate work. Until then a unix
-    // socket comes back hung up, which costs that socket rather than the
-    // session.
+    // A bound AF_LOCAL socket is rebuilt from its GUEST path, not from the
+    // host address: the host path is an ishsock name allocated per run
+    // (unix_host_sun_path) and means nothing on the way back, while the guest
+    // path is the name every client knows. Stored in `addr` -- see the note on
+    // that field for why one buffer carries two different things.
+    //
+    // This used to come back hung up, on the reasoning that it cost "that
+    // socket rather than the session". For tmux the socket IS the session:
+    // its server's listener came back hung up and the server exited 1 within a
+    // dozen syscalls of resuming, taking every window with it.
+    if (sock->socket.domain == AF_LOCAL_) {
+        size_t name_len = sock->socket.unix_name_len;
+        if (name_len == 0 || name_len > sizeof(out->addr)) {
+            // Never bound (a client socket), or a name too long to be one we
+            // wrote. Nothing to put back.
+            out->state = SOCK_CKPT_HUNGUP;
+            return 0;
+        }
+        memcpy(out->addr, sock->socket.unix_name, name_len);
+        out->addr_len = (uint32_t) name_len;
+        out->state = sock->socket.listening ? SOCK_CKPT_LISTEN : SOCK_CKPT_BOUND;
+        if (out->state == SOCK_CKPT_LISTEN)
+            out->backlog = sock->sockrestart.backlog > 0
+                    ? (uint32_t) sock->sockrestart.backlog : 128;
+        return 0;
+    }
     if (sock->socket.domain != AF_INET_ && sock->socket.domain != AF_INET6_) {
         out->state = SOCK_CKPT_HUNGUP;
         return 0;
@@ -10468,6 +10488,104 @@ static void sock_ckpt_note_failure(const struct sock_ckpt_desc *desc,
              sock_ckpt_state_name(desc->state), what, host, port, strerror(host_errno));
 }
 
+// Put a bound AF_UNIX socket back where the guest left it.
+//
+// Replays bind() by GUEST path, which is the only durable name: the host side
+// is an ishsock file allocated per run, so the address getsockname gave at
+// save time names nothing now. The work the old comment called "separate" is
+// the stale node -- the image's filesystem still has the S_IFSOCK the previous
+// run created, and unix_socket_get refuses to bind over an existing name. So
+// the leftover is removed first, and only when it is a SOCKET: a path that has
+// since become a regular file belongs to something else and must not be eaten.
+static struct fd *sock_ckpt_rebuild_unix(const struct sock_ckpt_desc *desc, int *err) {
+    int real_domain = sock_family_to_real((int) desc->domain);
+    int real_type = sock_type_to_real((int) desc->type, (int) desc->protocol);
+    if (real_domain < 0 || real_type < 0 || desc->addr_len == 0 ||
+            desc->addr_len > sizeof(desc->addr))
+        return sock_ckpt_hungup_fd(desc, err);
+
+    int s = socket(real_domain, real_type, (int) desc->protocol);
+    if (s < 0) {
+        sock_ckpt_note_failure(desc, "socket", errno);
+        return sock_ckpt_hungup_fd(desc, err);
+    }
+    // Adopted BEFORE the bind, because unix_socket_get records the name and
+    // the inode on the fd -- it is the bind's bookkeeping, not an afterthought.
+    struct fd *fd = sock_fd_adopt(s, (int) desc->domain, (int) desc->type,
+                                  (int) desc->protocol);
+    if (fd == NULL) {
+        close(s);
+        *err = _ENOMEM;
+        return NULL;
+    }
+
+    char path[SOCKADDR_DATA_MAX + 1];
+    size_t path_size = desc->addr_len;
+    if (path_size > SOCKADDR_DATA_MAX)
+        path_size = SOCKADDR_DATA_MAX;
+    memcpy(path, desc->addr, path_size);
+    path[path_size] = '\0';
+
+    uint32_t socket_id;
+    int e;
+    if (path[0] != '\0') {
+        struct statbuf stale = {};
+        if (generic_statat(AT_PWD, path, &stale, 0) >= 0 &&
+                (stale.mode & S_IFMT) == S_IFSOCK)
+            generic_unlinkat(AT_PWD, path);
+        e = unix_socket_get(path, fd, &socket_id);
+    } else {
+        // An abstract name has no filesystem node to be stale; it is simply
+        // taken again.
+        e = unix_abstract_get(path + 1, fd, &socket_id);
+    }
+    if (e < 0) {
+        sock_ckpt_note_failure(desc, "name", -e);
+        printk("WARNING: checkpoint: reclaiming unix socket name failed: %d\n", e);
+        fd_close(fd);
+        return sock_ckpt_hungup_fd(desc, err);
+    }
+    fd->socket.unix_name_len = (unsigned) path_size;
+    memcpy(fd->socket.unix_name, path, path_size);
+
+    struct sockaddr_un un = {};
+    size_t host_len = 0;
+    if ((e = unix_host_sun_path(socket_id, &un, &host_len)) < 0) {
+        sock_ckpt_note_failure(desc, "hostpath", -e);
+        fd_close(fd);
+        return sock_ckpt_hungup_fd(desc, err);
+    }
+#ifdef __APPLE__
+    un.sun_len = offsetof(struct sockaddr_un, sun_path) + host_len;
+#endif
+    un.sun_family = PF_LOCAL;
+    unlink(un.sun_path);
+    if (bind(s, (const struct sockaddr *) &un,
+             (socklen_t) (offsetof(struct sockaddr_un, sun_path) + host_len)) < 0) {
+        sock_ckpt_note_failure(desc, "bind", errno);
+        printk("WARNING: checkpoint: rebinding unix socket failed: %s\n", strerror(errno));
+        fd_close(fd);
+        return sock_ckpt_hungup_fd(desc, err);
+    }
+    if (desc->state == SOCK_CKPT_LISTEN) {
+        if (listen(s, desc->backlog > 0 ? (int) desc->backlog : 128) < 0) {
+            sock_ckpt_note_failure(desc, "listen", errno);
+            printk("WARNING: checkpoint: relistening unix socket failed: %s\n", strerror(errno));
+            fd_close(fd);
+            return sock_ckpt_hungup_fd(desc, err);
+        }
+        fd->socket.listening = true;
+        fd->sockrestart.backlog = (int) desc->backlog;
+        sockrestart_begin_listen(fd);
+    }
+    if (desc->nonblock) {
+        int flags = fcntl(s, F_GETFL);
+        if (flags >= 0)
+            fcntl(s, F_SETFL, flags | O_NONBLOCK);
+    }
+    return fd;
+}
+
 struct fd *sock_ckpt_rebuild(const struct sock_ckpt_desc *desc, int *err) {
     *err = 0;
     sock_ckpt_failure[0] = '\0';
@@ -10495,6 +10613,8 @@ struct fd *sock_ckpt_rebuild(const struct sock_ckpt_desc *desc, int *err) {
     }
     if (desc->state == SOCK_CKPT_HUNGUP)
         return sock_ckpt_hungup_fd(desc, err);
+    if (desc->domain == AF_LOCAL_)
+        return sock_ckpt_rebuild_unix(desc, err);
 
     int real_domain = sock_family_to_real((int) desc->domain);
     int real_type = sock_type_to_real((int) desc->type, (int) desc->protocol);

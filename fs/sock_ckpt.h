@@ -46,9 +46,17 @@ struct sock_ckpt_desc {
     uint32_t netlink_groups;
     uint32_t nonblock;
     uint32_t addr_len;       // 0 when there is no address to put back
-    // The bound address in HOST layout, as getsockname gave it (or as bind()
-    // was told, for a bind AOK has deferred). It only ever travels back to
-    // bind(), so it is never converted.
+    // Two things, by domain, because they are never both needed:
+    //
+    //   AF_INET/AF_INET6 -- the bound address in HOST layout, as getsockname
+    //     gave it (or as bind() was told, for a bind AOK has deferred). It
+    //     only ever travels back to bind(), so it is never converted.
+    //
+    //   AF_UNIX -- the GUEST path the socket is bound to, exactly as the guest
+    //     passed it to bind(), abstract names included (leading NUL, and
+    //     addr_len is then the real length rather than a strlen). The host
+    //     path is useless on the way back: it is an ishsock name allocated
+    //     per run, so the rebuild replays the bind by guest path instead.
     uint8_t addr[SOCK_CKPT_ADDR_MAX];
 };
 
