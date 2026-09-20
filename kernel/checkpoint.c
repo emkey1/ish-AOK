@@ -2354,6 +2354,13 @@ descriptors:
             return err;
     }
 
+    // What the loop below was working on when it gave up. A restore that
+    // aborts on one descriptor used to report nothing but the errno, and the
+    // app said "session NOT restored: -2 (no reason recorded)" -- true, and
+    // useless: -2 is ENOENT, and which of a process's descriptors could not be
+    // reopened, and from what path, is the entire question.
+    uint32_t failed_fd = 0, failed_kind = 0;
+    char failed_path[MAX_PATH + 1] = {0};
     for (uint32_t i = 0; i < rec->n_fds; i++) {
         struct ckpt_fd cf;
         if ((err = rd(f, &cf, sizeof(cf))) < 0)
@@ -2363,6 +2370,9 @@ descriptors:
         if ((err = rd(f, path, cf.path_len)) < 0)
             goto fds_done;
 
+        failed_fd = cf.fd;
+        failed_kind = cf.kind;
+        snprintf(failed_path, sizeof(failed_path), "%s", path);
         CKPT_TRACE("  load fd %u %-5s id %u flags %#x off %llu %s\n",
                    cf.fd, ckpt_kind_name(cf.kind), cf.id, cf.flags,
                    (unsigned long long) cf.offset, path);
@@ -2545,8 +2555,12 @@ descriptors:
     }
     err = 0;
 fds_done:
-    if (err < 0)
+    if (err < 0) {
+        ckpt_refuse("pid %u could not restore fd %u (%s%s%s): %d",
+                    rec->pid, failed_fd, ckpt_kind_name(failed_kind),
+                    failed_path[0] != '\0' ? " " : "", failed_path, err);
         return err;
+    }
 
     // Credentials, identity and the rest of the task.
     if (rec->native)

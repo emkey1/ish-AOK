@@ -10497,6 +10497,24 @@ static void sock_ckpt_note_failure(const struct sock_ckpt_desc *desc,
 // run created, and unix_socket_get refuses to bind over an existing name. So
 // the leftover is removed first, and only when it is a SOCKET: a path that has
 // since become a regular file belongs to something else and must not be eaten.
+// mkdir -p for the directories above a restored socket's path. Best effort by
+// design: a component that already exists, or cannot be made, is not this
+// function's problem -- the bind below reports what actually matters.
+static void sock_ckpt_make_parents(const char *path) {
+    char buf[SOCKADDR_DATA_MAX + 1];
+    size_t n = strlen(path);
+    if (n == 0 || n >= sizeof(buf))
+        return;
+    memcpy(buf, path, n + 1);
+    for (char *p = buf + 1; *p != '\0'; p++) {
+        if (*p != '/')
+            continue;
+        *p = '\0';
+        generic_mkdirat(AT_PWD, buf, 0755);
+        *p = '/';
+    }
+}
+
 static struct fd *sock_ckpt_rebuild_unix(const struct sock_ckpt_desc *desc, int *err) {
     int real_domain = sock_family_to_real((int) desc->domain);
     int real_type = sock_type_to_real((int) desc->type, (int) desc->protocol);
@@ -10529,6 +10547,16 @@ static struct fd *sock_ckpt_rebuild_unix(const struct sock_ckpt_desc *desc, int 
     uint32_t socket_id;
     int e;
     if (path[0] != '\0') {
+        // The directory the socket lives in may not exist yet.
+        //
+        // Almost every unix socket on a Linux system sits under /run or /tmp,
+        // and those are TMPFS: empty on the way back, because a tmpfs is not
+        // part of the root the image was taken against. So the bind failed
+        // with ENOENT on the PARENT, not on the socket -- and on a real system
+        // the daemon that owns the socket would have made the directory itself
+        // before binding. Recreated here for the same reason, one component at
+        // a time.
+        sock_ckpt_make_parents(path);
         struct statbuf stale = {};
         if (generic_statat(AT_PWD, path, &stale, 0) >= 0 &&
                 (stale.mode & S_IFMT) == S_IFSOCK)

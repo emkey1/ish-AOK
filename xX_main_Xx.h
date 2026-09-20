@@ -143,7 +143,15 @@ static inline int xX_main_Xx(int argc, char *const argv[], const char *envp) {
         tty_drivers[TTY_CONSOLE_MAJOR] = &real_tty_driver;
         int rerr = checkpoint_restore(restore_path);
         if (rerr < 0) {
-            fprintf(stderr, "ISH_RESTORE %s: %d\n", restore_path, rerr);
+            // With the reason, not just the errno. The app already prints
+            // last_refusal; the CLI printed the number alone, so the one place
+            // this is easiest to debug was the one place that said least --
+            // "-2" where the app would have said which descriptor and path.
+            struct checkpoint_status rst;
+            checkpoint_get_status(&rst);
+            fprintf(stderr, "ISH_RESTORE %s: %d%s%s\n", restore_path, rerr,
+                    rst.last_refusal[0] != '\0' ? ": " : "",
+                    rst.last_refusal[0] != '\0' ? rst.last_refusal : "");
             return rerr;
         }
         // The image is consumed by being restored. Leaving it would resume
