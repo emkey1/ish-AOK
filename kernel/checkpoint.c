@@ -1645,7 +1645,11 @@ int checkpoint_save(const char *host_path) {
     free(ids.fds);
     task_snapshot_release(&snap);
 
+    // How long the image is SUPPOSED to be, taken before the seek back to
+    // rewrite the header. Checked against the file once it is closed.
+    off_t expect_size = -1;
     if (err == 0 && w.err == 0) {
+        expect_size = ftello(f);
         h.total_pages = pages;
         if (fseek(f, header_at, SEEK_SET) == 0)
             wr(&w, &h, sizeof(h));
@@ -1656,6 +1660,28 @@ int checkpoint_save(const char *host_path) {
         err = w.err;
     if (fclose(f) != 0 && err == 0)
         err = errno_map();
+
+    // The image is only as good as what actually reached the disk, and until
+    // now nothing confirmed that it had. Every error path above reports a
+    // failure honestly, but a save that comes back 0 was simply BELIEVED --
+    // and a believed save that is short produces an image that cannot be
+    // restored, which the next launch reports as "there was no session",
+    // blaming the restore for what the suspend did.
+    //
+    // Cheap: one stat against a length we already know. It cannot catch a
+    // corrupt image, but it catches a truncated one, which is what an
+    // interrupted or short write leaves behind.
+    if (err == 0 && expect_size >= 0) {
+        struct stat img_st;
+        if (stat(tmp_path, &img_st) != 0) {
+            err = errno_map();
+        } else if (img_st.st_size != expect_size) {
+            ckpt_refuse("the session image is %lld bytes, not the %lld written "
+                        "-- refusing to keep a truncated one",
+                        (long long) img_st.st_size, (long long) expect_size);
+            err = _EIO;
+        }
+    }
 
     ckpt_thaw_all();
 
