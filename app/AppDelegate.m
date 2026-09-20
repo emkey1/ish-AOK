@@ -3867,8 +3867,46 @@ static TerminalViewController *CreateTerminalViewController(void) {
             // Otherwise the disposition owns it -- "Resume and Delete" removes it
             // through ISHSessionConsumeResumedImage once there is a running
             // session to show for it.
-            if (!ishSessionResumeDecided || rerr < 0)
-                [NSFileManager.defaultManager removeItemAtPath:sessionImage error:nil];
+            // A restore that FAILED used to say nothing at all: no log, no
+            // breadcrumb, no alert -- and then the image was deleted, so
+            // there was nothing left to look at either. From the outside that
+            // is indistinguishable from "the suspend never happened", which
+            // is exactly how it was reported: the session simply was not
+            // there, twice, with no clue as to why.
+            if (rerr < 0) {
+                struct checkpoint_status st;
+                checkpoint_get_status(&st);
+                os_log_error(ISHSuspendLog(),
+                             "session NOT restored from %{public}@: %{public}d %{public}s",
+                             sessionImage.lastPathComponent, rerr,
+                             st.last_refusal[0] != '\0' ? st.last_refusal : "(no reason recorded)");
+                [ISHDiagnosticsStore recordBreadcrumb:@"session.restore.failed"
+                                              details:@{@"errno": @(rerr),
+                                                        @"reason": st.last_refusal[0] != '\0'
+                                                                ? @(st.last_refusal) : @"none"}];
+            }
+            if (!ishSessionResumeDecided || rerr < 0) {
+                // Kept, not destroyed, when it failed. It must not be OFFERED
+                // again -- that is what the removal was for -- but deleting
+                // the one artifact that could explain the failure makes the
+                // next report as unactionable as the last. One generation is
+                // enough; the previous casualty is replaced.
+                if (rerr < 0) {
+                    NSString *aside = [sessionImage stringByAppendingPathExtension:@"failed"];
+                    [NSFileManager.defaultManager removeItemAtPath:aside error:nil];
+                    NSError *moveErr = nil;
+                    if ([NSFileManager.defaultManager moveItemAtPath:sessionImage
+                                                              toPath:aside
+                                                               error:&moveErr]) {
+                        os_log(ISHSuspendLog(), "kept the unrestorable image at %{public}@",
+                               aside.lastPathComponent);
+                    } else {
+                        [NSFileManager.defaultManager removeItemAtPath:sessionImage error:nil];
+                    }
+                } else {
+                    [NSFileManager.defaultManager removeItemAtPath:sessionImage error:nil];
+                }
+            }
             if (rerr >= 0) {
                 // The machine services a resume needs as much as a boot does.
                 // Neither is part of the boot COMMAND -- they are the pager and
