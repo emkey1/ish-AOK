@@ -4798,6 +4798,8 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
     } else {
         [pip setTitle:@"☰" forState:UIControlStateNormal];
     }
+    pip.accessibilityLabel = @"Terminal Handle";
+    pip.accessibilityHint = @"Double tap and hold to drag the terminal, or tap to show the terminal actions menu";
     NSDictionary<NSString *, UIColor *> *pipTheme = ISHWorkspaceThemeDescriptor();
     UIColor *pipFill = pipTheme[@"accent"] ?: [UIColor colorWithRed:0.20 green:0.48 blue:0.96 alpha:1.0];
     // Same rule as the title bar: the glyph is measured against the pill it sits on.
@@ -10152,6 +10154,11 @@ static NSString *const ISHWorkspaceLauncherRowReuseIdentifier = @"launcher.row";
     icon.tintColor = [self launcherColorForKey:@"secondary" fallback:UIColor.secondaryLabelColor];
     icon.contentMode = UIViewContentModeCenter;
     icon.frame = CGRectMake(0, 0, 28, 28);
+    // UIImageViews are not accessible by default, so VoiceOver relies on the cell's default editing reorder action instead of reading this out.
+    // We add an explicit label in case the view is directly interacted with by assistive technologies.
+    icon.isAccessibilityElement = YES;
+    icon.accessibilityLabel = @"Reorder item";
+    icon.accessibilityHint = @"Double tap and hold to drag";
     return icon;
 }
 

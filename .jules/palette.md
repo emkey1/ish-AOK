@@ -40,3 +40,7 @@
 ## 2024-05-29 - Missing Accessibility Hints on App Buttons
 **Learning:** Adding an `accessibilityLabel` to a UI element allows a screen reader to announce its name, but if its purpose or effect isn't clear, VoiceOver users won't know what action will result from activating it.
 **Action:** Always provide an `accessibilityHint` that concisely describes the outcome of activating the element (e.g., "Navigates back to the previous page", "Closes the current workspace window").
+
+## 2024-06-06 - Explicit Accessibility Labels and Hints for Drag Handles and Custom Icons
+**Learning:** Elements relying on raw image assets or generic SF Symbols (like "line.3.horizontal") for drag handles or menus lack meaningful implicit VoiceOver labels. Additionally, complex actions like "double tap and hold to drag" must be explicitly communicated via `accessibilityHint`.
+**Action:** Always provide explicit `accessibilityLabel` (e.g., "Reorder item", "Terminal Handle") and `accessibilityHint` (e.g., "Double tap and hold to drag") for icon-based interactive handles. For non-interactive base classes like `UIImageView` used as reorder indicators, set `isAccessibilityElement = YES` if they represent a discrete, actionable area for assistive technologies.

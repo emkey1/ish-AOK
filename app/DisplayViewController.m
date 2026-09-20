@@ -318,6 +318,8 @@ typedef NS_ENUM(NSInteger, DisplayConnectionState) {
         UIButton *pip = [UIButton buttonWithType:UIButtonTypeSystem];
         pip.translatesAutoresizingMaskIntoConstraints = NO;
         [pip setImage:[UIImage systemImageNamed:@"line.3.horizontal"] forState:UIControlStateNormal];
+        pip.accessibilityLabel = @"Display Actions";
+        pip.accessibilityHint = @"Tap to show actions or drag to move";
         pip.tintColor = UIColor.whiteColor;
         NSDictionary<NSString *, UIColor *> *theme = [self workspaceTheme];
         pip.backgroundColor = theme[@"accent"] ?: [UIColor colorWithRed:0.20 green:0.48 blue:0.96 alpha:1.0];
