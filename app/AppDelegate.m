@@ -2880,6 +2880,32 @@ void ISHSessionSetCurrentSlot(NSString *path) {
     ishSessionCurrentSlot = path;
 }
 
+// The name an AUTOMATIC save writes to: the one taken when iOS backgrounds and
+// then kills the app, as opposed to a Save or a Suspend somebody asked for.
+//
+// Without this they pile up. ISHSuspendSessionImagePath() hands out the first
+// FREE number when nothing is pinned, which is right for a save the user meant
+// -- each one is a thing they chose to keep -- and wrong for one the system
+// took on its own. Boot, get killed, boot, get killed, and the picker fills
+// with sessions nobody asked for, pushing out the ones they did: slots are
+// finite, and the oldest is recycled once they are all taken.
+//
+// A session RESUMED from a slot still writes back to that slot, because
+// replacing where it came from does not accumulate either. Only the unpinned
+// case needs a home, and it is a fixed name, so each automatic save replaces
+// the last one rather than adding to them.
+//
+// It deliberately does not pin: a Save the user asks for LATER in the same
+// launch should take a numbered slot of its own and not land on top of this.
+NSString *ISHSuspendAutomaticSessionImagePath(void) {
+    if (ishSessionCurrentSlot != nil)
+        return ishSessionCurrentSlot;
+    NSString *dir = ISHSessionsDirectory();
+    if (dir == nil)
+        return nil;
+    return [dir stringByAppendingPathComponent:@"session-auto.img"];
+}
+
 // The choice, made once per launch and BEFORE the guest boots.
 //
 // Not a preference: it is about this launch only. `decided` is separate from
@@ -3013,6 +3039,74 @@ static void ISHSessionPresentResumeDisposition(UIViewController *host,
 // Presented BEFORE the guest boots, because the answer decides whether it boots
 // at all or is rebuilt from an image -- there is no undoing that once
 // ensureBooted has run.
+// One row's worth of description, shared by the resume picker and the delete
+// sheet so the same session reads the same way in both.
+static NSString *ISHSessionSlotTitle(NSDictionary *slot, NSDateFormatter *when) {
+    NSString *stamp = [when stringFromDate:slot[@"date"]];
+    if (![slot[@"loadable"] boolValue])
+        return [NSString stringWithFormat:@"%@ (saved by a different build)", stamp];
+    // An automatic save is named, because "which of these did I choose to keep"
+    // is the question somebody deleting them is trying to answer.
+    NSString *automatic = [slot[@"name"] isEqualToString:@"session-auto"] ? @", auto-saved" : @"";
+    return [NSString stringWithFormat:@"%@ — %@ process%@, %@%@",
+            slot[@"hostname"], slot[@"tasks"],
+            [slot[@"tasks"] unsignedLongValue] == 1 ? @"" : @"es", stamp, automatic];
+}
+
+// Remove saved sessions without resuming anything.
+//
+// The picker could only ever get rid of an image by resuming it first
+// ("Resume and Delete") or by picking one this build cannot load. There was no
+// way to say "that one is finished with" from the screen that lists them, so
+// the only way to free a slot was to start a session you did not want.
+static void ISHSessionPresentDeletePicker(UIViewController *host,
+                                          void (^completion)(NSString *_Nullable)) {
+    NSArray<NSDictionary *> *slots = ISHSessionSlots();
+    if (slots.count == 0) {   // deleted the last one; nothing left to choose from
+        ISHSessionSetResumeChoice(nil);
+        completion(nil);
+        return;
+    }
+    ISHActionSheet *sheet = [ISHActionSheet
+        alertWithTitle:@"Delete a saved session"
+               message:@"This removes the saved copy from this device. The session it "
+                       @"holds cannot be resumed afterwards."];
+    NSDateFormatter *when = [[NSDateFormatter alloc] init];
+    when.dateStyle = NSDateFormatterShortStyle;
+    when.timeStyle = NSDateFormatterShortStyle;
+
+    for (NSDictionary *slot in slots) {
+        [sheet addActionWithTitle:ISHSessionSlotTitle(slot, when)
+                            style:UIAlertActionStyleDestructive
+                          handler:^(__unused UIAlertAction *a) {
+            NSString *path = slot[@"path"];
+            NSError *removeError = nil;
+            BOOL removed = [NSFileManager.defaultManager removeItemAtPath:path error:&removeError];
+            ISHWorkspaceForgetLayoutForSessionImage(path);
+            // If the next save was aimed here, it no longer is: the name is
+            // free, and leaving it pinned would silently re-create the image
+            // the user just asked to be rid of.
+            if ([ISHSuspendSessionImagePath() isEqualToString:path])
+                ISHSessionSetCurrentSlot(nil);
+            [ISHDiagnosticsStore recordBreadcrumb:@"session.deleted"
+                                          details:@{@"removed": @(removed),
+                                                    @"error": removeError.localizedDescription ?: @""}];
+            // Back to the list, so several can go in one visit.
+            dispatch_async(dispatch_get_main_queue(), ^{
+                ISHSessionPresentDeletePicker(host, completion);
+            });
+        }];
+    }
+    [sheet addActionWithTitle:@"Back"
+                        style:UIAlertActionStyleCancel
+                      handler:^(__unused UIAlertAction *a) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            ISHSessionPresentResumePicker(host, completion);
+        });
+    }];
+    [sheet presentFromViewController:host source:nil];
+}
+
 void ISHSessionPresentResumePicker(UIViewController *host,
                                    void (^completion)(NSString *_Nullable)) {
     NSArray<NSDictionary *> *slots = ISHSessionSlots();
@@ -3047,17 +3141,7 @@ void ISHSessionPresentResumePicker(UIViewController *host,
         // choosing it would boot instead, which looks like the resume silently
         // failing.
         BOOL loadable = [slot[@"loadable"] boolValue];
-        NSString *title;
-        if (loadable) {
-            title = [NSString stringWithFormat:@"%@ — %@ process%@, %@",
-                     slot[@"hostname"], slot[@"tasks"],
-                     [slot[@"tasks"] unsignedLongValue] == 1 ? @"" : @"es",
-                     [when stringFromDate:slot[@"date"]]];
-        } else {
-            title = [NSString stringWithFormat:@"%@ (saved by a different build)",
-                     [when stringFromDate:slot[@"date"]]];
-        }
-        [sheet addActionWithTitle:title
+        [sheet addActionWithTitle:ISHSessionSlotTitle(slot, when)
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *a) {
             if (!loadable) {
@@ -3073,6 +3157,14 @@ void ISHSessionPresentResumePicker(UIViewController *host,
             });
         }];
     }
+
+    [sheet addActionWithTitle:@"Delete a Saved Session\u2026"
+                        style:UIAlertActionStyleDestructive
+                      handler:^(__unused UIAlertAction *a) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            ISHSessionPresentDeletePicker(host, completion);
+        });
+    }];
 
     [sheet addActionWithTitle:@"Start a New Session"
                         style:UIAlertActionStyleDefault
@@ -4719,7 +4811,9 @@ void ISHSuspendGuardEnterBackground(void) {
     // refuses (a native program that cannot describe itself, a descriptor with
     // no restore rule) it says so and the next launch simply boots.
     if (UserPreferences.shared.shouldSuspendToDisk && !ISHGuestHalted()) {
-        NSString *image = ISHSuspendSessionImagePath();
+        // The automatic name: this is the system taking the session, not the
+        // user saving it. See ISHSuspendAutomaticSessionImagePath.
+        NSString *image = ISHSuspendAutomaticSessionImagePath();
         if (image != nil) {
             // OFF this thread, under an assertion of its own.
             //
@@ -4757,7 +4851,12 @@ void ISHSuspendGuardEnterBackground(void) {
                 // comes back from a web view ON MAIN. Called from the main
                 // thread it could not wait for its own completions, so the
                 // history would be silently skipped; from here it can.
-                ISHWorkspaceCaptureLayoutForSuspend(ISHSuspendSessionImagePath());
+                // `image`, not another call: the layout has to be filed under the
+                // path the image is actually written to. The second call used to
+                // agree only because the first one PINNED the slot as a side
+                // effect, so a path that does not pin would have filed the
+                // arrangement against a different name and lost it on resume.
+                ISHWorkspaceCaptureLayoutForSuspend(image);
                 int cerr = checkpoint_save_external(image.fileSystemRepresentation);
                 struct checkpoint_status ck;
                 checkpoint_get_status(&ck);
