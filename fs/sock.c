@@ -416,6 +416,11 @@ struct unix_diag_msg_ {
 #define TASKSTATS_CMD_NEW_ 2
 #define TASKSTATS_CMD_ATTR_PID_ 1
 #define TASKSTATS_CMD_ATTR_TGID_ 2
+// Registering a cpumask asks the kernel to push a record for every process
+// that exits, instead of answering one query at a time. It is how atopacctd
+// (and anything else wanting exit accounting without BSD acct) listens.
+#define TASKSTATS_CMD_ATTR_REGISTER_CPUMASK_ 3
+#define TASKSTATS_CMD_ATTR_DEREGISTER_CPUMASK_ 4
 #define TASKSTATS_TYPE_PID_ 1
 #define TASKSTATS_TYPE_TGID_ 2
 #define TASKSTATS_TYPE_STATS_ 3
@@ -3460,6 +3465,22 @@ static void netlink_taskstats_from_io(struct taskstats_ *ts, struct task_io_coun
     ts->blkio_delay_total = atomic_load_explicit(&io->blkio_delay_ns, memory_order_relaxed);
 }
 
+// "0-7", "0,2-3", "4". Linux parses this with cpulist_parse and fails EINVAL
+// on anything else; we only need to agree about what is nonsense.
+static bool netlink_cpumask_is_sane(const char *data, size_t len) {
+    size_t n = len;
+    while (n > 0 && data[n - 1] == '\0')
+        n--;
+    if (n == 0)
+        return false;
+    for (size_t i = 0; i < n; i++) {
+        char c = data[i];
+        if ((c < '0' || c > '9') && c != '-' && c != ',')
+            return false;
+    }
+    return true;
+}
+
 static int netlink_taskstats_fill(pid_t_ id, bool tgid, struct taskstats_ *ts) {
     memset(ts, 0, sizeof(*ts));
     complex_lockt(&pids_lock, 0);
@@ -3522,6 +3543,98 @@ static int netlink_append_taskstats(struct fd *sock, const struct nlmsghdr_ *hdr
     return netlink_append_nlmsg(sock, GENL_FAMILY_TASKSTATS_, 0, hdr->nlmsg_seq, payload, len);
 }
 
+// ---- exit records pushed to registered listeners -------------------------
+//
+// Staged in thread-local storage between collect and broadcast, because the
+// two halves cannot run in the same place: the record has to be taken inside
+// do_exit's locked region, where the dying task's fields are still there to
+// read, and delivered outside it, because delivery ends in poll_wakeup() and
+// that must not be reached holding a pid or task lock. TLS rather than a
+// parameter so struct taskstats_ stays private to this file, and it is safe
+// because both halves run on the exiting task's own thread, in one function.
+static __thread struct taskstats_ netlink_taskstats_exit_staged;
+
+bool netlink_taskstats_exit_collect(struct task *leader, const struct rusage_ *ru,
+        dword_t status) {
+    if (leader == NULL || ru == NULL)
+        return false;
+    // Nothing listening: this is the usual answer and must cost almost nothing,
+    // because it is asked for every process that exits.
+    bool any = false;
+    lock(&netlink_notify_registry_lock, 0);
+    struct fd *sock;
+    list_for_each_entry(&netlink_notify_registry, sock, socket.netlink_notify_link) {
+        if (sock->socket.netlink_taskstats_listener) { any = true; break; }
+    }
+    unlock(&netlink_notify_registry_lock);
+    if (!any)
+        return false;
+
+    struct taskstats_ *ts = &netlink_taskstats_exit_staged;
+    memset(ts, 0, sizeof(*ts));
+    ts->version = TASKSTATS_VERSION_;
+    ts->ac_pid = leader->pid;
+    ts->ac_ppid = leader->parent != NULL ? leader->parent->tgid : 0;
+    ts->ac_uid = leader->uid;
+    ts->ac_gid = leader->gid;
+    ts->ac_exitcode = status;
+    memcpy(ts->ac_comm, leader->comm, sizeof(leader->comm));
+    // taskstats counts CPU and elapsed time in MICROseconds, unlike acct's
+    // AHZ ticks -- same two numbers, two different units, and mixing them up
+    // is the easiest mistake in this area.
+    ts->ac_utime = (uint64_t) ru->utime.sec * 1000000 + ru->utime.usec;
+    ts->ac_stime = (uint64_t) ru->stime.sec * 1000000 + ru->stime.usec;
+    uint64_t now_ticks = guest_uptime_ticks();
+    uint64_t start_ticks = leader->start_time_ticks;
+    uint64_t elapsed_ticks = now_ticks > start_ticks ? now_ticks - start_ticks : 0;
+    ts->ac_etime = elapsed_ticks * (1000000 / 100);   // 100 Hz ticks -> usec
+    struct timespec now = guest_clock_now(CLOCK_REALTIME);
+    ts->ac_btime = (uint32_t) (now.tv_sec - (long) (elapsed_ticks / 100));
+    ts->ac_minflt = ru->minflt;
+    ts->ac_majflt = ru->majflt;
+    ts->hiwater_rss = ru->maxrss;
+    struct task_io_counters io = {};
+    task_io_counters_add(&io, &leader->group->io_dead);
+    netlink_taskstats_from_io(ts, &io);
+    return true;
+}
+
+void netlink_taskstats_exit_broadcast(void) {
+    struct fd *candidates[NETLINK_NOTIFY_MAX_CANDIDATES];
+    size_t n = 0;
+    lock(&netlink_notify_registry_lock, 0);
+    struct fd *sock;
+    list_for_each_entry(&netlink_notify_registry, sock, socket.netlink_notify_link) {
+        if (!sock->socket.netlink_taskstats_listener)
+            continue;
+        struct fd *retained = fd_retain_if_live(sock);
+        if (retained == NULL)
+            continue;
+        if (n < NETLINK_NOTIFY_MAX_CANDIDATES)
+            candidates[n++] = retained;
+        else
+            fd_close(retained);
+    }
+    unlock(&netlink_notify_registry_lock);
+
+    // An unsolicited record, so there is no request to answer: sequence 0, the
+    // way the kernel's own taskstats_exit send does.
+    //
+    // AGGR_PID, not AGGR_TGID. taskstats_exit() builds the PID aggregate for
+    // every exiting task and only ADDS a TGID one when a thread group dies,
+    // so an ordinary single-threaded process -- which is what a listener sees
+    // almost all of the time -- arrives as AGGR_PID. Measured on Linux 6.12:
+    // a forked child exiting 3 came back as AGGR_PID with exitcode 768.
+    struct nlmsghdr_ synthetic = {};
+    for (size_t i = 0; i < n; i++) {
+        netlink_append_taskstats(candidates[i], &synthetic, false,
+                netlink_taskstats_exit_staged.ac_pid,
+                &netlink_taskstats_exit_staged);
+        poll_wakeup(candidates[i], POLL_READ);
+        fd_close(candidates[i]);
+    }
+}
+
 static int netlink_handle_generic_request(struct fd *sock, const struct nlmsghdr_ *hdr,
         const void *payload, size_t payload_len) {
     if (payload_len < sizeof(struct genlmsghdr_))
@@ -3553,7 +3666,10 @@ static int netlink_handle_generic_request(struct fd *sock, const struct nlmsghdr
         uint16_t family_id = GENL_FAMILY_TASKSTATS_;
         uint32_t version = TASKSTATS_GENL_VERSION_;
         uint32_t hdrsize = 0;
-        uint32_t maxattr = TASKSTATS_CMD_ATTR_TGID_;
+        // The real TASKSTATS_CMD_ATTR_MAX, which includes the two cpumask
+        // attributes. Advertising 2 said the family could not do the thing it
+        // can now do.
+        uint32_t maxattr = TASKSTATS_CMD_ATTR_DEREGISTER_CPUMASK_;
         // Attribute order matters and must match the kernel's ctrl_fill_info
         // (NAME first, then ID): iotop doesn't scan attrs by type, it grabs
         // the second attribute and expects it to be CTRL_ATTR_FAMILY_ID.
@@ -3584,6 +3700,41 @@ static int netlink_handle_generic_request(struct fd *sock, const struct nlmsghdr
             return netlink_append_error(sock, hdr->nlmsg_seq, hdr, _EPERM);
         if (genl->cmd != TASKSTATS_CMD_GET_)
             return netlink_append_error(sock, hdr->nlmsg_seq, hdr, _EOPNOTSUPP);
+
+        // Registering/deregistering as an exit listener. Checked BEFORE the
+        // pid/tgid requirement below, because these carry neither -- which is
+        // why they used to fall through to its EINVAL, and why atopacctd said
+        // "unexpected error on NETLINK: Invalid argument ... switching to
+        // polling mode" against a kernel that had the family it had just
+        // successfully resolved.
+        //
+        // The mask itself is parsed only far enough to reject nonsense. AOK
+        // has no per-CPU taskstats queues to attach to: a record is delivered
+        // to every listener, and a listener that asked for a subset would get
+        // the same records a real kernel would send it for the CPU the process
+        // happened to die on. Storing a mask we could not honour would be a
+        // decoration.
+        const struct nlattr_ *reg = netlink_attr_find(attrs, attrs_len,
+                TASKSTATS_CMD_ATTR_REGISTER_CPUMASK_);
+        const struct nlattr_ *dereg = netlink_attr_find(attrs, attrs_len,
+                TASKSTATS_CMD_ATTR_DEREGISTER_CPUMASK_);
+        if (reg != NULL || dereg != NULL) {
+            const struct nlattr_ *mask = reg != NULL ? reg : dereg;
+            if (mask->nla_len <= sizeof(*mask))
+                return netlink_append_error(sock, hdr->nlmsg_seq, hdr, _EINVAL);
+            if (!netlink_cpumask_is_sane((const char *) (mask + 1),
+                        mask->nla_len - sizeof(*mask)))
+                return netlink_append_error(sock, hdr->nlmsg_seq, hdr, _EINVAL);
+            lock(&netlink_notify_registry_lock, 0);
+            sock->socket.netlink_taskstats_listener = (reg != NULL);
+            unlock(&netlink_notify_registry_lock);
+            // Linux acknowledges only when asked to; an unsolicited reply
+            // would be read as the first exit record.
+            if (hdr->nlmsg_flags & NLM_F_ACK_)
+                return netlink_append_error(sock, hdr->nlmsg_seq, hdr, 0);
+            return 0;
+        }
+
         bool tgid = false;
         const struct nlattr_ *id_attr = netlink_attr_find(attrs, attrs_len, TASKSTATS_CMD_ATTR_PID_);
         if (id_attr == NULL) {

@@ -638,3 +638,13 @@ struct tcp_info_ {
 void netlink_link_watch_start(void);
 
 #endif
+
+// Exit records for TASKSTATS_CMD_ATTR_REGISTER_CPUMASK listeners. Collect
+// inside do_exit's locked region (the dying task is still readable there),
+// broadcast after the locks drop (delivery ends in poll_wakeup). Returns
+// false, cheaply, when nothing is listening.
+struct task;
+struct rusage_;
+bool netlink_taskstats_exit_collect(struct task *leader, const struct rusage_ *ru,
+                                    dword_t status);
+void netlink_taskstats_exit_broadcast(void);

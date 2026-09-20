@@ -4,6 +4,7 @@
 #include "emu/cpu.h"
 #include "kernel/calls.h"
 #include "kernel/acct.h"
+#include "fs/sock.h"
 #include "kernel/checkpoint.h"
 #include "kernel/resource.h"
 #include "kernel/mm.h"
@@ -893,6 +894,7 @@ noreturn void do_exit(struct task *task, int status) {
     // task lock is held.
     struct acct_record acct_rec;
     bool acct_pending = false;
+    bool taskstats_pending = false;
 
     // A stop this task never reported is not reported now: what its tracer
     // hears about is the exit. Left set, a zombie's stale stop was reported
@@ -922,6 +924,10 @@ noreturn void do_exit(struct task *task, int status) {
         // Once per PROCESS, not once per thread -- the same place Linux calls
         // acct_process(). Costs one relaxed load when accounting is off.
         acct_pending = acct_collect(leader, &group_rusage, status, &acct_rec);
+        // The same record, for anything that registered a taskstats cpumask
+        // instead of turning on BSD accounting. Also collected here and sent
+        // below, and for the same two reasons.
+        taskstats_pending = netlink_taskstats_exit_collect(leader, &group_rusage, status);
         exit_hangup_session_tty(leader, &tty_hup);
         // With no exit_group to name one, a process's exit code is the code of
         // its last thread to exit -- Linux's synchronize_group_exit since 6.0.
@@ -983,6 +989,8 @@ noreturn void do_exit(struct task *task, int status) {
     // against anything do_exit was holding.
     if (acct_pending)
         acct_write(&acct_rec);
+    if (taskstats_pending)
+        netlink_taskstats_exit_broadcast();
 
     if (old_sighand != NULL)
         sighand_release(old_sighand);

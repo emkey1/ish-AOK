@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/wait.h>
 #include <sys/socket.h>
 #include "test_common.h"
 
@@ -72,6 +73,8 @@ struct sockaddr_nl_t {
 #define CTRL_CMD_GETFAMILY_T 3
 #define CTRL_ATTR_FAMILY_ID_T 1
 #define CTRL_ATTR_FAMILY_NAME_T 2
+#define TASKSTATS_CMD_ATTR_REGISTER_CPUMASK_T 3
+#define TASKSTATS_CMD_ATTR_DEREGISTER_CPUMASK_T 4
 
 #define TASKSTATS_CMD_GET_T 1
 #define TASKSTATS_CMD_ATTR_PID_T 1
@@ -325,6 +328,91 @@ int main(int argc, char **argv) {
     if (geteuid() != 0) {
         printf("taskstats_genl: family resolved; skipping GET checks (need root)\n");
         goto done;
+    }
+
+    /* Register as an exit listener and collect a record for a child.
+     *
+     * This is how atopacctd uses taskstats -- netlink_open() ends with
+     * TASKSTATS_CMD_ATTR_REGISTER_CPUMASK -- and it carries neither PID nor
+     * TGID, so it used to fall through to the pid/tgid requirement's EINVAL.
+     * atopacctd reported that as "unexpected error on NETLINK: Invalid
+     * argument ... switching to polling mode" against a family it had just
+     * resolved successfully. */
+    {
+        char cpumask[32];
+        long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+        if (ncpu < 1) ncpu = 1;
+        snprintf(cpumask, sizeof(cpumask), "0-%ld", ncpu - 1);
+
+        if (check("taskstats.register_cpumask.send",
+                genl_send(fd, family, TASKSTATS_CMD_GET_T, 11,
+                    TASKSTATS_CMD_ATTR_REGISTER_CPUMASK_T,
+                    cpumask, (uint16_t) (strlen(cpumask) + 1)) == 0)) {
+            /* A child whose exit we must be told about. */
+            pid_t child = fork();
+            if (child == 0)
+                _exit(3);
+            int wst; waitpid(child, &wst, 0);
+
+            /* Records for OTHER processes arrive here too, so read until the
+             * child's turn up or the socket goes quiet. */
+            struct timeval tv = { .tv_sec = 5, .tv_usec = 0 };
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            int found = 0;
+            for (int tries = 0; tries < 64 && !found; tries++) {
+                char buf[4096];
+                int nl_errno = 0;
+                ssize_t r = genl_recv(fd, buf, sizeof(buf), &nl_errno);
+                if (r <= 0) {
+                    test_log_if(1, "  recv stopped: r=%zd nl_errno=%d\n", r, nl_errno);
+                    break;
+                }
+                struct nlmsghdr_t *nlh = (struct nlmsghdr_t *) buf;
+                const char *a = buf + sizeof(*nlh) + sizeof(struct genlmsghdr_t);
+                size_t alen = nlh->nlmsg_len - sizeof(*nlh) - sizeof(struct genlmsghdr_t);
+                /* Linux sends AGGR_PID for an ordinary process and adds an
+                 * AGGR_TGID only for a thread group; accept either. */
+                int is_tgid = 0;
+                const struct nlattr_t *aggr = attr_find(a, alen, TASKSTATS_TYPE_AGGR_PID_T);
+                if (aggr == NULL) {
+                    aggr = attr_find(a, alen, TASKSTATS_TYPE_AGGR_TGID_T);
+                    is_tgid = 1;
+                }
+                if (aggr == NULL)
+                    continue;
+                const char *inner = (const char *) (aggr + 1);
+                size_t inner_len = aggr->nla_len - sizeof(*aggr);
+                const struct nlattr_t *idat = attr_find(inner, inner_len,
+                        is_tgid ? TASKSTATS_TYPE_TGID_T : TASKSTATS_TYPE_PID_T);
+                const struct nlattr_t *stat = attr_find(inner, inner_len, TASKSTATS_TYPE_STATS_T);
+                if (idat == NULL || stat == NULL)
+                    continue;
+                uint32_t got; memcpy(&got, idat + 1, sizeof(got));
+                if (got != (uint32_t) child)
+                    continue;
+                found = 1;
+                struct taskstats_v8 ts;
+                size_t slen = stat->nla_len - sizeof(*stat);
+                if (slen > sizeof(ts)) slen = sizeof(ts);
+                memset(&ts, 0, sizeof(ts));
+                memcpy(&ts, stat + 1, slen);
+                test_log_if(1, "  exit record (%s): pid=%u comm=%.16s exitcode=%u etime=%llu us\n",
+                        is_tgid ? "AGGR_TGID" : "AGGR_PID",
+                        ts.ac_pid, ts.ac_comm, ts.ac_exitcode,
+                        (unsigned long long) ts.ac_etime);
+                check("taskstats.exit.pid", ts.ac_pid == (uint32_t) child);
+                /* wait-encoded, as everywhere else */
+                check("taskstats.exit.exitcode", ts.ac_exitcode == (3u << 8));
+            }
+            check("taskstats.exit.record_delivered", found);
+
+            check("taskstats.deregister_cpumask",
+                genl_send(fd, family, TASKSTATS_CMD_GET_T, 12,
+                    TASKSTATS_CMD_ATTR_DEREGISTER_CPUMASK_T,
+                    cpumask, (uint16_t) (strlen(cpumask) + 1)) == 0);
+            tv.tv_sec = 0;
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        }
     }
 
     /* generate known file I/O, then query ourselves */

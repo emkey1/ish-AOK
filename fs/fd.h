@@ -306,6 +306,11 @@ struct fd {
             // netlink_notify_registered is true.
             struct list netlink_notify_link;
             bool netlink_notify_registered;
+            // Set by TASKSTATS_CMD_ATTR_REGISTER_CPUMASK. Rides the same
+            // registry as the notify subscribers above -- registration and
+            // lifetime are already correct there, and a second list would be a
+            // second chance to leak a dead fd.
+            bool netlink_taskstats_listener;
             bool netlink_cap_ack;
             bool netlink_ext_ack;
             bool netlink_get_strict_chk;
