@@ -152,9 +152,13 @@ unsigned sockrestart_on_suspend() {
 unsigned sockrestart_on_resume() {
     lock(&sockrestart_lock, 0);
     unsigned restored = 0;
+    // Sockets we had RECORDED, as opposed to ones we managed to put back.
+    // The punt below keys on this, not on the successes: see why there.
+    unsigned processed = 0;
     struct saved_socket *saved, *tmp;
     list_for_each_entry_safe(&saved_sockets, saved, tmp, saved) {
         list_remove(&saved->saved);
+        processed++;
         int new_sock = socket(saved->name_addr.sa_family, saved->type, saved->proto);
         if (new_sock < 0) {
             printk("WARNING: restarting socket(%d, %d, %d) failed: %s\n",
@@ -195,13 +199,22 @@ unsigned sockrestart_on_resume() {
 thank_u_next:
         fd_close(saved->sock);
     }
-    // Only kick the accept()ers if a socket underneath them actually changed.
-    // This runs on EVERY foreground transition, and the overwhelming majority
-    // of those follow no suspension at all -- the app was backgrounded for a
-    // moment, iOS never froze it, and nothing was saved. Punting there would
-    // fire a SIGUSR1 at every listening task on every unlock of the phone, for
-    // a socket that was never disturbed.
-    if (restored != 0) {
+    // Kick the accept()ers whenever a suspension was RECORDED -- not only when
+    // a rebuild succeeded.
+    //
+    // The guard used to be `restored != 0`, to avoid firing a SIGUSR1 at every
+    // listening task on every unlock of the phone. That much is right and is
+    // preserved: `processed` is zero unless a backgrounding actually recorded
+    // listeners, which is the same condition by a better name.
+    //
+    // Keying on the SUCCESSES was wrong, though. A task waiting on a listener
+    // that was destroyed and could NOT be rebuilt is in exactly the state that
+    // most needs waking: its wait refers to a socket that no longer exists, and
+    // nothing else will ever disturb it. Leaving it asleep was the difference
+    // between an error it can report and a daemon that waits for ever -- and a
+    // rebuild that partly failed punted for the sockets that worked while
+    // abandoning the tasks behind the ones that did not.
+    if (processed != 0) {
         struct task *task;
         list_for_each_entry(&listen_tasks, task, sockrestart.listen) {
             task->sockrestart.punt = true;
