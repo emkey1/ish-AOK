@@ -2538,8 +2538,36 @@ descriptors:
 
         struct fd *fd = generic_open(path, (int) cf.flags, 0);
         if (IS_ERR(fd)) {
-            err = (int) PTR_ERR(fd);
-            goto fds_done;
+            // A descriptor that cannot be reopened DEGRADES. It does not take
+            // the session with it.
+            //
+            // The file it named may simply not be there any more, and for a
+            // whole class of them it never will be: /run, /tmp and /dev/shm
+            // are tmpfs, so everything a daemon put there is gone on the way
+            // back. A device reported exactly this -- "pid 601 could not
+            // restore fd 0 (file /run/pacct_source): -2", atopacctd's fifo --
+            // and the entire session was discarded over one descriptor
+            // belonging to one background daemon, which is a worse answer than
+            // any guest could have given.
+            //
+            // /dev/null is the inert stand-in: reads give EOF and writes are
+            // swallowed, which is what a process holding a vanished file
+            // should see. Recorded, not silent -- the restore note reaches
+            // /proc/ish/checkpoint and the app's Diagnostics -- so a guest
+            // that comes back missing something says which something.
+            int open_err = (int) PTR_ERR(fd);
+            char why[160];
+            snprintf(why, sizeof(why), "%s could not be reopened (%d); gave it /dev/null",
+                     path[0] != '\0' ? path : "a file", open_err);
+            ckpt_note_restore(rec->pid, cf.fd, why);
+            printk("WARNING: checkpoint: pid %u fd %u: %s\n", rec->pid, cf.fd, why);
+            fd = generic_open("/dev/null", (int) cf.flags & ~(O_CREAT_ | O_EXCL_), 0);
+            if (IS_ERR(fd)) {
+                // /dev/null itself is missing: the root is not one we can
+                // restore into at all, and that IS worth refusing.
+                err = (int) PTR_ERR(fd);
+                goto fds_done;
+            }
         }
         if (cf.kind == CKPT_FD_FILE && fd->ops->lseek != NULL)
             fd->ops->lseek(fd, (off_t_) cf.offset, LSEEK_SET);
