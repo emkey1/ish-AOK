@@ -214,10 +214,26 @@ dir_is_empty() {
 # Claim the shipped placeholder, keeping uid 1000, but ONLY while it is still
 # untouched: a locked password and an empty home. Anything else means somebody
 # is using it and it is not ours to rename.
-if [ "$TARGET_USER" != "$PLACEHOLDER_USER" ] && user_exists "$PLACEHOLDER_USER" \
-   && ! user_exists "$TARGET_USER" \
-   && dir_is_empty "/home/$PLACEHOLDER_USER" \
-   && awk -F: -v u="$PLACEHOLDER_USER" '$1==u && ($2=="*"||$2=="!") {ok=1} END {exit !ok}' /etc/shadow
+#
+# The refusal is SAID OUT LOUD. This used to be one long && chain, so a login
+# quietly landing at 1001 instead of 1000 gave no clue which of four conditions
+# had decided that -- and the four are not equally interesting: "somebody is
+# already using it" is the system working, while an empty home that reads as
+# non-empty is a bug worth chasing.
+CLAIM_BLOCKED=""
+if [ "$TARGET_USER" = "$PLACEHOLDER_USER" ]; then
+    CLAIM_BLOCKED="the chosen name IS the placeholder"
+elif ! user_exists "$PLACEHOLDER_USER"; then
+    CLAIM_BLOCKED="no '$PLACEHOLDER_USER' account to claim (already claimed?)"
+elif user_exists "$TARGET_USER"; then
+    CLAIM_BLOCKED="$TARGET_USER already exists"
+elif ! dir_is_empty "/home/$PLACEHOLDER_USER"; then
+    CLAIM_BLOCKED="/home/$PLACEHOLDER_USER is not empty: $(ls -A "/home/$PLACEHOLDER_USER" 2>&1 | tr '\n' ' ')"
+elif ! awk -F: -v u="$PLACEHOLDER_USER" '$1==u && ($2=="*"||$2=="!") {ok=1} END {exit !ok}' /etc/shadow; then
+    CLAIM_BLOCKED="$PLACEHOLDER_USER has a password set, so somebody is using it"
+fi
+
+if [ -z "$CLAIM_BLOCKED" ]
 then
     awk -F: -v OFS=: -v ph="$PLACEHOLDER_USER" -v u="$TARGET_USER" \
         '$1==ph {$1=u; $5=u",,,"; $6="/home/"u} {print}' /etc/passwd \
@@ -228,6 +244,10 @@ then
         '$1==ph {$1=u} {print}' /etc/shadow | rewrite_file /etc/shadow 600
     [ -d "/home/$PLACEHOLDER_USER" ] && rmdir "/home/$PLACEHOLDER_USER" 2>/dev/null
     note "claimed the shipped placeholder login '$PLACEHOLDER_USER' as '$TARGET_USER' (uid 1000)"
+elif user_exists "$TARGET_USER"; then
+    : # nothing to say: the login is already here, which is the normal re-run
+else
+    note "not taking uid 1000 from '$PLACEHOLDER_USER': $CLAIM_BLOCKED"
 fi
 
 if ! user_exists "$TARGET_USER"; then
