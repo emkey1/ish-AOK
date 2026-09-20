@@ -260,6 +260,45 @@ int main(int argc, char **argv) {
         }
         check("ctrl.family_id.range", family >= 0x10);
     }
+
+    /* The same lookup, with nla_len reporting the 4-BYTE-ALIGNED length.
+     *
+     * The payload is padded to a 4-byte boundary either way; the only question
+     * is whether nla_len counts the padding, and both shapes are on the wire.
+     * genl_send above reports the TRUE length, which is what iotop does -- so
+     * this file passed while atopacctd, which reports the aligned one, could
+     * not resolve the family at all. lib/nlattr.c's nla_strcmp accepts both
+     * because it strips EVERY trailing NUL; AOK stripped exactly one, so
+     * "TASKSTATS\0\0\0" was compared as eleven bytes against nine and the
+     * lookup answered ENOENT for the one family AOK does implement.
+     *
+     * Downstream that was not a warning: atop's postinst printed "receive
+     * NETLINK family, errno -2", atopacctd then hung instead of exiting, and
+     * dpkg wedged behind it -- an apt install that never returned. Checked
+     * against Linux 6.12, which resolves both shapes identically. */
+    {
+        static const char padded[12] = "TASKSTATS";   /* 9 chars + 3 NULs */
+        if (check("ctrl.getfamily.padded.send",
+                genl_send(fd, GENL_ID_CTRL_T, CTRL_CMD_GETFAMILY_T, 7,
+                        CTRL_ATTR_FAMILY_NAME_T, padded, sizeof(padded)) == 0)) {
+            char buf[2048];
+            int nl_errno = 0;
+            ssize_t r = genl_recv(fd, buf, sizeof(buf), &nl_errno);
+            if (check("ctrl.getfamily.padded.reply", r > 0)) {
+                struct nlmsghdr_t *nlh = (struct nlmsghdr_t *) buf;
+                const char *attrs = buf + sizeof(*nlh) + sizeof(struct genlmsghdr_t);
+                size_t attrs_len = nlh->nlmsg_len - sizeof(*nlh) - sizeof(struct genlmsghdr_t);
+                const struct nlattr_t *id_attr =
+                        attr_find(attrs, attrs_len, CTRL_ATTR_FAMILY_ID_T);
+                uint16_t padded_family = 0;
+                if (check("ctrl.getfamily.padded.id_attr", id_attr != NULL))
+                    memcpy(&padded_family, id_attr + 1, sizeof(padded_family));
+                check("ctrl.getfamily.padded.same_id", padded_family == family);
+            } else {
+                test_log_if(1, "  (netlink error %d: %s)\n", nl_errno, strerror(nl_errno));
+            }
+        }
+    }
     if (family == 0)
         goto done;
 

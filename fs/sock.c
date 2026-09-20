@@ -3432,7 +3432,18 @@ static bool netlink_attr_streq(const struct nlattr_ *attr, const char *str) {
     size_t data_len = attr->nla_len - sizeof(*attr);
     const char *data = (const char *) (attr + 1);
     size_t str_len = strlen(str);
-    if (data_len > 0 && data[data_len - 1] == '\0')
+    // EVERY trailing NUL, not one, which is what lib/nlattr.c's nla_strcmp
+    // does ("while (attrlen > 0 && buf[attrlen - 1] == '\0') attrlen--").
+    //
+    // A sender may put the true length in nla_len, or the 4-byte-aligned one
+    // -- the payload is padded either way and the kernel accepts both. iotop
+    // reports the true length, so stripping a single NUL was enough for it and
+    // the divergence sat here unnoticed. atopacctd reports the aligned length,
+    // so "TASKSTATS\0" arrived as "TASKSTATS\0\0\0", one strip left eleven
+    // bytes against nine, and the lookup answered ENOENT for the one family
+    // AOK does implement. atop's postinst then hung: "receive NETLINK family,
+    // errno -2", and dpkg wedged behind it.
+    while (data_len > 0 && data[data_len - 1] == '\0')
         data_len--;
     return data_len == str_len && memcmp(data, str, str_len) == 0;
 }
