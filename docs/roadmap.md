@@ -294,12 +294,22 @@ it. What exists now:
   groups, and zombies whose status a parent has not collected yet.
 - **Descriptor identity**: two processes sharing one struct fd get one back.
 - **Pipes**, with the bytes still in them.
+- **tmpfs contents**: /run, /tmp and /dev/shm are RAM with a path on them, and
+  nothing outside the image remembers them. The image carries each tmpfs mount
+  and its tree -- files with their bytes, symlinks, fifos and device nodes,
+  modes, ownership and times -- and the restore MOUNTS the tmpfs back before it
+  fills it, because filling the directory underneath would write a session's
+  pid files and lock files into the rootfs, where they would outlive the next
+  boot. Sockets are the deliberate exception: sock_ckpt_rebuild binds those
+  names itself, and a node already sitting there makes that bind EADDRINUSE.
 - **Native programs**, by the rule this section already named: zsh describes
   itself (its fork-by-relaunch already turns a live shell into a script that
   rebuilds it) and comes back with its parameters, functions and aliases. dash
   cannot -- it has no way to emit its shell functions as text -- and is refused
   by name.
-- `tests/manual/checkpoint_restore.sh` is the proof, including every refusal.
+- `tests/manual/checkpoint_restore.sh` is the proof, including every refusal,
+  and `tests/manual/checkpoint_tmpfs.sh` is the tmpfs one -- it checks a held
+  descriptor on a /run file too, and that nothing leaked into the rootfs.
 
 **What is still open**, and it is the same list this section predicted: sockets
 (sockrestart's model applies but is not wired to the image), a native program in
