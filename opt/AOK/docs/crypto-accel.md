@@ -60,7 +60,7 @@ compiled into the app, and they are built **without OpenSSL**:
 
 ```sh
 $ /AOK/native/smallclue ssh -V
-OpenSSH_10.2p1, without OpenSSL
+OpenSSH_10.5p1, without OpenSSL
 ```
 
 They use their own bundled crypto, so an OpenSSL provider installed in the guest

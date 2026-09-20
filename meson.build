@@ -910,8 +910,19 @@ endif
 # directory is a configure error.
 openssh_includes = []
 if have_openssh
+    # OpenSSH 10.5 includes <sys/tree.h>, <endian.h> and friends directly,
+    # which Darwin does not have. Upstream's configure generates forwarding or
+    # empty shims into openbsd-compat/include and puts that on CPPFLAGS; the
+    # AOK tree commits them instead, because it is built from a
+    # hand-maintained config.h rather than configured.
     openssh_includes = [include_directories(
         openssh_dir, openssh_dir / 'openbsd-compat')]
+    # ... and an OpenSSH old enough not to need them does not have the
+    # directory at all, which include_directories() treats as an error.
+    if fs_mod.is_dir(openssh_dir / 'openbsd-compat' / 'include')
+        openssh_includes += include_directories(
+            openssh_dir / 'openbsd-compat' / 'include')
+    endif
 endif
 
 libsmallclue = static_library('smallclue', smallclue_src + smallclue_extra_src,
