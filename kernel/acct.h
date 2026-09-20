@@ -18,7 +18,13 @@ struct rusage_;
 
 // acct(2). A NULL path turns accounting off; anything else opens that file for
 // append and turns it on. Needs CAP_SYS_PACCT.
+//
+// Two entry points, as open/swapon have: addr_t is a DWORD, so the table
+// version can only carry an i386 pointer. Every 64-bit ABI must reach the
+// _guest one through its native full-width route, or a path above 4 GiB (a
+// heap allocation, which is anywhere an mmap lands) is truncated or refused.
 dword_t sys_acct(addr_t path_addr);
+dword_t sys_acct_guest(guest_addr_t path_addr);
 
 // True while a file is open. One relaxed atomic load, so the exit path can ask
 // on every process without paying for the lock when accounting is off -- which

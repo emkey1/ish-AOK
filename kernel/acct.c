@@ -102,7 +102,7 @@ static uint64_t acct_timeval_to_ahz(const struct timeval_ *tv) {
            (uint64_t) tv->usec / (1000000 / ACCT_AHZ);
 }
 
-dword_t sys_acct(addr_t path_addr) {
+static dword_t acct_common(guest_addr_t path_addr) {
     if (!current_capable(CAP_SYS_PACCT_))
         return _EPERM;
 
@@ -220,6 +220,14 @@ bool acct_collect(struct task *leader, const struct rusage_ *group_rusage,
 
     memcpy(out->bytes, &rec, sizeof(rec));
     return true;
+}
+
+dword_t sys_acct(addr_t path_addr) {
+    return acct_common(path_addr);
+}
+
+dword_t sys_acct_guest(guest_addr_t path_addr) {
+    return acct_common(path_addr);
 }
 
 void acct_write(const struct acct_record *rec) {

@@ -2941,13 +2941,21 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 272: // kcmp(pid1, pid2, type, idx1, idx2)
         result = (dword_t) sys_kcmp((pid_t_) raw_args[0], (pid_t_) raw_args[1],
                       (dword_t) raw_args[2], (dword_t) raw_args[3], (dword_t) raw_args[4]); break;
+    // acct takes a PATH, so full-width here like swapon/swapoff -- and it has
+    // to be here at ALL because 89 was on the clean-ENOSYS list below. Wiring
+    // arm64_syscall_table alone changed nothing, exactly as that list's own
+    // comment warns for the io_* family and swapon: this switch runs first and
+    // answered ENOSYS, so a guest still saw "cannot switch on process
+    // accounting: Function not implemented" with the implementation present.
+    case 89:
+        result = (dword_t) sys_acct_guest(raw_args[0]); break;
     // clean ENOSYS: known syscalls with no implementation; native so
     // 64-bit pointer args never trip the legacy-marshal validation
     // (0-4 are the io_* family, implemented above -- they were on this
     // ENOSYS list, which is why wiring arm64_syscall_table alone changed
     // nothing: this native list runs first and answered for them.)
     case 18: case 41: case 42:
-    case 60: case 89: case 104: case 105: case 106:
+    case 60: case 104: case 105: case 106:
     case 128:
     case 180: case 181: case 182: case 183: case 184: case 185:
     // (186-193 are the real SysV msg/sem implementations above)
@@ -3013,6 +3021,11 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
         return true;
     case 168:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_swapoff(raw_args[0]));
+        return true;
+    // acct(path), for the same reason: a path on the heap is above 4 GiB and
+    // the legacy marshalling cannot carry it.
+    case 163:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_acct_guest(raw_args[0]));
         return true;
     case 2:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_open_guest(
@@ -4062,11 +4075,6 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
     case 147: // sched_get_priority_min(policy)
     case 213: // epoll_create(size) -- handler ignores size
     case 306: // syncfs(fd) -- single fd arg; upper regs are garbage
-    case 163: // acct(path) -- one pointer. Without this it fell into the
-              // all-six default and the marshaller validated whatever garbage
-              // the caller had left in r8/r9: measured on devuan-amd64-test as
-              // "needs full-width args ... 0x405978b439581062" and a SIGSYS,
-              // intermittently, depending on what the last call left behind.
         return 1;
     case 277: // sync_file_range -- success stub ignores all args
     case 152: // munlockall() -- no args at all
@@ -4485,7 +4493,6 @@ static unsigned arm64_syscall_legacy_arg_count(qword_t syscall_num) {
               // over-counting would validate a real 64-bit guest address the
               // function never reads and SIGSYS login's pam_keyinit)
     case 230: // mlockall
-    case 89:  // acct(path) -- one pointer; see amd64's 163
         return 1;
     case 19:  // eventfd2
     case 28:  // inotify_rm_watch

@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -71,7 +72,22 @@ static int do_acct(const char *path) {
 }
 
 int main(void) {
-    const char *path = "/tmp/aok-acct-test";
+    /* The path lives in an MMAP'd page, not in a literal or on the stack.
+     *
+     * On a 64-bit guest the stack sits just below 4 GiB and a string literal
+     * is lower still, so both survive being truncated to a dword -- which is
+     * why a whole class of pointer-argument bugs has passed hand-written tests
+     * for years. An mmap'd page is where a real allocation lands (0x7ffff...
+     * on amd64, 0x7fffb... on arm64) and is the only shape that proves acct's
+     * pointer reaches the kernel whole. */
+    char *path = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (path == MAP_FAILED) {
+        printf("acct_records: FAIL (mmap: %s)\n", strerror(errno));
+        return 1;
+    }
+    strcpy(path, "/tmp/aok-acct-test");
+    test_log_if(1, "  path buffer at %p\n", (void *) path);
     unlink(path);
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
@@ -82,8 +98,19 @@ int main(void) {
 
     errno = 0;
     if (do_acct(path) != 0) {
-        printf("acct_records: SKIP (acct on: %s)\n", strerror(errno));
-        return 0;
+        // EPERM is "you are not root", which is not this test's business.
+        // ENOSYS is "the kernel does not have it", which IS -- and skipping on
+        // it would have made this file silent about the bug it exists for: the
+        // arm64 implementation sat behind a clean-ENOSYS list that answered
+        // before the syscall table, so acct returned ENOSYS with the code
+        // present and a skip-on-any-error test reported success.
+        if (errno == EPERM || errno == EACCES) {
+            printf("acct_records: SKIP (needs root: %s)\n", strerror(errno));
+            return 0;
+        }
+        printf("FAIL acct.on (%s)\n", strerror(errno));
+        printf("acct_records: 1 FAILURES\n");
+        return 1;
     }
     test_logf("ok   acct.on\n");
 
