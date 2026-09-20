@@ -18,6 +18,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if __APPLE__
+#include <dlfcn.h>
+#include <sys/ucontext.h>
+// Leaf header: kern_return_t's value names and nothing else. Deliberately not
+// <mach/mach.h>, which drags in the headers that turn PAGE_SIZE into a runtime
+// variable (see kernel/checkpoint.c's note about what that does to a later
+// static array).
+#include <mach/kern_return.h>
+#endif
 
 extern int current_pid(struct task *task);
 
@@ -731,19 +740,95 @@ static void jit_unmapped_guest_fault(void *host_addr) {
     jit_crash_fn(); // noreturn: releases locks and unwinds
 }
 
+// A host address as something that can be looked up in a binary: the image it
+// belongs to and the offset into it, which is what `atos -o <image> -l 0` and
+// `nm`/`objdump` want. Raw runtime addresses are useless in a log, because ASLR
+// means they name nothing once the process is gone -- reconstructing the slide
+// afterwards needs a matching build and nine known frames to triangulate from,
+// which is exactly the archaeology this exists to prevent.
+static void jit_describe_host_addr(char *buf, size_t len, const void *addr) {
+#if __APPLE__
+    Dl_info info;
+    if (addr != NULL && dladdr(addr, &info) != 0 && info.dli_fname != NULL &&
+            info.dli_fbase != NULL) {
+        const char *slash = strrchr(info.dli_fname, '/');
+        snprintf(buf, len, "%s+0x%llx", slash != NULL ? slash + 1 : info.dli_fname,
+                 (unsigned long long) ((uintptr_t) addr - (uintptr_t) info.dli_fbase));
+        return;
+    }
+#else
+    (void) addr;
+#endif
+    snprintf(buf, len, "no image");
+}
+
+// What the access was DOING, which is the difference between a wild pointer and
+// a legal pointer used illegally. A write to read-only memory (a string literal,
+// a const table) reports protection failure; an unmapped address reports invalid
+// address; a page that could not be read in reports a memory error. These say
+// completely different things about the bug, and the old log said none of them.
+static const char *jit_fault_kind(long kind) {
+#if __APPLE__
+    switch (kind) {
+        case KERN_INVALID_ADDRESS:    return "unmapped";
+        case KERN_PROTECTION_FAILURE: return "protection failure (write to read-only?)";
+        case KERN_MEMORY_ERROR:       return "memory error (page-in failed)";
+        default: break;
+    }
+#endif
+    (void) kind;
+    return "unknown";
+}
+
+// The one line a real bad access gets to leave behind, from either platform's
+// handler. Both call it with the same three facts so the CLI and the app are
+// diagnosable the same way -- until now the CLI printed nothing at all here,
+// and re-faulted into a bare crash.
+static void jit_report_untranslatable(void *host_addr, const char *what,
+                                      void *fault_pc) {
+    // The raw facts FIRST, in one printk, before anything that can block.
+    // jit_describe_host_addr calls dladdr, which takes dyld's lock -- on a
+    // thread that has just faulted while holding who knows what. That is a
+    // small risk worth taking for a symbolisable address, but not at the price
+    // of losing the report altogether, so the line that matters is already out
+    // if the lookup below ever wedges.
+    printk("JIT: untranslatable bad access at host %p from pc %p: %s "
+           "(pid %d, comm %s) - crashing\n",
+           host_addr, fault_pc, what,
+           current ? current->pid : -1,
+           current ? current->comm : "none");
+    char where[256], who[256];
+    jit_describe_host_addr(where, sizeof(where), host_addr);
+    jit_describe_host_addr(who, sizeof(who), fault_pc);
+    printk("JIT:   host %p is %s, pc %p is %s\n",
+           host_addr, where, fault_pc, who);
+}
+
 // Faulting-thread entry point for the device (Mach) path. The Mach exception
 // handler (app/hook.c) runs on a dedicated server pthread where `current` is
 // NULL, so it cannot reverse-map the fault itself. Instead it redirects the
-// FAULTING thread's PC here (fault address in the first argument register), so
-// this runs with the guest thread's `current` intact. If the address backs a
-// guest page, unwind with a guest SIGBUS; if it doesn't but the fault
-// happened during guest execution, unwind with a guest SIGSEGV (see
-// jit_unmapped_guest_fault); otherwise it is a real bad access (wild
-// pointer in a helper, corrupted state) and we crash, logging the address.
-// A re-entrancy guard covers only the page-table walk: if the walk itself
-// faults it re-enters here, and we abort rather than loop.
+// FAULTING thread's PC here, so this runs with the guest thread's `current`
+// intact. If the address backs a guest page, unwind with a guest SIGBUS; if it
+// doesn't but the fault happened during guest execution, unwind with a guest
+// SIGSEGV (see jit_unmapped_guest_fault); otherwise it is a real bad access
+// (wild pointer in a helper, corrupted state) and we crash. A re-entrancy guard
+// covers only the page-table walk: if the walk itself faults it re-enters here,
+// and we abort rather than loop.
+//
+// host_addr is WHERE the access touched, kind is WHAT it was doing, and
+// fault_pc is WHICH INSTRUCTION did it: the Mach exception's code[1], code[0]
+// and the faulting thread's PC.
+//
+// The PC has to be handed over rather than read here, because reporting
+// destroys it -- the handler redirects the faulting thread's PC to this
+// function, so by the time this runs the register that named the culprit holds
+// this function's address instead. Only the fault address used to survive, and
+// one line saying "untranslatable bad access at host 0x109519661" cannot name a
+// bug: that address turned out to be a string literal in __cstring, which
+// narrows it to "a write to read-only memory or a wild read" and says nothing
+// at all about who did it.
 __attribute__((__noreturn__))
-void jit_crash_bus_fn(void *host_addr) {
+void jit_crash_bus_fn(void *host_addr, long kind, void *fault_pc) {
     static __thread bool bus_dispatch_active = false;
     if (bus_dispatch_active)
         abort(); // the reverse-map walk faulted -> genuine memory corruption
@@ -754,15 +839,29 @@ void jit_crash_bus_fn(void *host_addr) {
         jit_crash_fn(); // noreturn: releases locks and unwinds with INT_BUS
     if (jit_crash_unwind_active && current != NULL)
         jit_unmapped_guest_fault(host_addr); // noreturn: guest SIGSEGV
-    printk("JIT: untranslatable bad access at host %p (pid %d) - crashing\n",
-           host_addr, current ? current->pid : -1);
+    jit_report_untranslatable(host_addr, jit_fault_kind(kind), fault_pc);
     abort();
 }
 
 // POSIX SIGBUS handler (standalone CLI only — the device app catches these via
 // Mach before POSIX delivery). Runs on a per-thread altstack (SA_ONSTACK).
+static void *jit_uctx_pc(void *uctx) {
+    if (uctx == NULL)
+        return NULL;
+#if __APPLE__
+    ucontext_t *uc = uctx;
+    if (uc->uc_mcontext == NULL)
+        return NULL;
+#if defined(__aarch64__)
+    return (void *) (uintptr_t) uc->uc_mcontext->__ss.__pc;
+#elif defined(__x86_64__)
+    return (void *) (uintptr_t) uc->uc_mcontext->__ss.__rip;
+#endif
+#endif
+    return NULL;
+}
+
 static void jit_host_sigbus_handler(int sig, siginfo_t *info, void *uctx) {
-    (void) uctx;
     if (info != NULL && jit_translate_host_fault(info->si_addr)) {
         // Unwind out of the faulting gadget back to cpu_step_to_interrupt's
         // sigsetjmp, which returns INT_BUS. jit_crash_fn releases the jetsam
@@ -779,9 +878,16 @@ static void jit_host_sigbus_handler(int sig, siginfo_t *info, void *uctx) {
         // emulator crash. See jit_unmapped_guest_fault.
         jit_unmapped_guest_fault(info != NULL ? info->si_addr : NULL); // noreturn
     }
-    // Not a translatable guest fault: real bug. Restore the default disposition
-    // and return so the instruction re-faults into a normal crash/core dump,
-    // preserving debuggability.
+    // Not a translatable guest fault: real bug. Say so FIRST -- this used to
+    // return in silence, so the CLI's only account of a genuine host fault was
+    // whatever the re-fault left in a crash report. Then restore the default
+    // disposition and return, so the instruction re-faults into a normal
+    // crash/core dump and debuggability is preserved.
+    char what[64];
+    snprintf(what, sizeof(what), "signal %d, si_code %d", sig,
+             info != NULL ? info->si_code : 0);
+    jit_report_untranslatable(info != NULL ? info->si_addr : NULL, what,
+                              jit_uctx_pc(uctx));
     signal(sig, SIG_DFL);
 }
 
