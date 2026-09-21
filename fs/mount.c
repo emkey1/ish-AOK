@@ -432,6 +432,14 @@ int do_umount(const char *point) {
     return do_umount_flags(point, false);
 }
 
+// umount2(MNT_DETACH) for kernel callers: out of the mount table now, torn down
+// when its last reference goes. What undoing a mount wants -- the checkpoint's
+// failed-restore unwind -- because "nothing may still hold it" is exactly the
+// guarantee an unwind cannot make.
+int do_umount_lazy(const char *point) {
+    return do_umount_flags(point, true);
+}
+
 
 
 // Mount and unmount for callers outside fs/, where do_mount/do_umount's

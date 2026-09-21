@@ -1566,6 +1566,12 @@ static bool ckpt_tmpfs_mounted_at(const char *point) {
 // directory UNDERNEATH it would write the session's pid files, lock files and
 // sockets into the rootfs -- where they would survive the next boot and tell
 // every daemon it is already running. A tmpfs has to come back a tmpfs.
+// The tmpfses this restore mounted itself, so a restore that fails later can
+// take them down again (ckpt_restore_unwind). Ones that were already there are
+// not listed: they were this boot's, not the image's.
+static char *ckpt_restore_mounted[CKPT_TMPFS_MAX_MOUNTS];
+static unsigned ckpt_restore_mounted_n;
+
 static bool ckpt_tmpfs_remount(const char *point, const char *source,
         const char *info, int flags) {
     if (ckpt_tmpfs_mounted_at(point))
@@ -1601,6 +1607,8 @@ static bool ckpt_tmpfs_remount(const char *point, const char *source,
                "contents will be written to the rootfs instead\n", point, -err);
         return false;
     }
+    if (ckpt_restore_mounted_n < CKPT_TMPFS_MAX_MOUNTS)
+        ckpt_restore_mounted[ckpt_restore_mounted_n++] = strdup(point);
     return true;
 }
 
@@ -3456,8 +3464,90 @@ static struct task *ckpt_new_task(struct task *parent, pid_t_ pid) {
     return task;
 }
 
+// A restore that fails part-way must leave NOTHING behind.
+//
+// It did not. By the time it can fail it has built tasks -- frozen from birth,
+// never started, but in the pid table and holding what was rebuilt for them:
+// descriptors, ptys, a listening socket bound on the host -- mounted the
+// image's tmpfses and filled them, and rewritten pid 1 as the image's init.
+// The app then boots in the same process, and the fresh boot inherited all of
+// it. On device that was a session with no working terminal and no sshd, that
+// only an app restart cured: a ghost sshd held port 1022 and the old session's
+// pid file said sshd was running, and the new init started with the image's
+// descriptors open.
+//
+// Undone in the order it was done, backwards. Tasks were built after their
+// parents, so going back takes every child out before the task it belongs to.
+// One that never got a thread is taken apart without running a single
+// instruction (task_never_ran_destroy, fork's own unwind for a child whose
+// thread could not be made) -- starting it to kill it would first run a native
+// program's pending launch, then guest code on half-restored state. One that
+// DID start, because the failure was starting a later one, is killed the
+// ordinary way.
+static void ckpt_restore_unwind(struct task **built, unsigned nbuilt,
+        struct task *first) {
+    unsigned destroyed = 0, killed = 0;
+    for (unsigned i = nbuilt; i-- > 0; ) {
+        struct task *t = built[i];
+        if (t == NULL || t == first)
+            continue;
+        if (atomic_load_explicit(&t->host_thread_started, memory_order_acquire)) {
+            struct siginfo_ info = { .sig = SIGKILL_, .code = SI_KERNEL_ };
+            send_signal(t, SIGKILL_, info);
+            killed++;
+        } else {
+            native_exec_discard_pending(t);
+            task_never_ran_destroy(t);
+            destroyed++;
+        }
+    }
+
+    // pid 1 is the entry point's own task, and the boot that follows runs init
+    // in it. execve replaces its memory and resets its handlers, but keeps
+    // every descriptor not marked close-on-exec and the signal mask -- so the
+    // image's init's descriptors, blocked set and pending signals would all
+    // have reached the new init and everything it starts.
+    if (nbuilt > 0 && built[0] == first) {
+        lock(&first->general_lock, 0);
+        struct fdtable *dead = first->files;
+        first->files = fdtable_new(3);
+        unlock(&first->general_lock);
+        fdtable_release(dead);
+        lock(&first->sighand->lock, 0);
+        struct sigqueue *q, *qtmp;
+        list_for_each_entry_safe(&first->queue, q, qtmp, queue) {
+            list_remove(&q->queue);
+            free(q);
+        }
+        first->pending = 0;
+        first->blocked = 0;
+        unlock(&first->sighand->lock);
+        first->ckpt_restored = false;
+        first->clear_tid = 0;
+        first->robust_list = 0;
+    }
+
+    // Deepest first, the reverse of how they went up. Lazily: a descriptor the
+    // teardown above has not finished closing must not be able to keep the
+    // image's /run in front of the boot's.
+    unsigned unmounted = 0;
+    for (unsigned i = ckpt_restore_mounted_n; i-- > 0; ) {
+        int e = do_umount_lazy(ckpt_restore_mounted[i]);
+        if (e < 0)
+            printk("WARNING: checkpoint: could not unmount %s after the failed "
+                   "restore (%d)\n", ckpt_restore_mounted[i], -e);
+        else
+            unmounted++;
+        free(ckpt_restore_mounted[i]);
+    }
+    ckpt_restore_mounted_n = 0;
+    printk("checkpoint: undid the failed restore: %u processes taken apart, "
+           "%u killed, %u tmpfs unmounted\n", destroyed, killed, unmounted);
+}
+
 int checkpoint_restore(const char *host_path) {
     ckpt_restore_note[0] = '\0';
+    ckpt_restore_mounted_n = 0;
     FILE *f = fopen(host_path, "rb");
     if (f != NULL)
         setvbuf(f, NULL, _IOFBF, 1 << 20);   // see checkpoint_save's note
@@ -3570,6 +3660,18 @@ int checkpoint_restore(const char *host_path) {
                    rec.tty_kind == CKPT_TTY_CONSOLE ? "console" : "none");
         st.native_name = st.native_argv = st.native_state = st.native_env = NULL;
         st.native_standin_child = 0;
+        // ISH_CHECKPOINT_TEST_FAIL_PID=<pid>: fail the restore at that task,
+        // after every task before it is built -- the shape of the device's
+        // EACCES, which made a restore fail with a partly built machine behind
+        // it. Only a test knob: nothing but tests/manual sets it.
+        {
+            const char *fp = getenv("ISH_CHECKPOINT_TEST_FAIL_PID");
+            if (fp != NULL && fp[0] != '\0' && (uint32_t) atoi(fp) == rec.pid) {
+                ckpt_refuse("test: failing the restore at pid %u", rec.pid);
+                err = _EIO;
+                goto out;
+            }
+        }
         struct task *saved = current;
         current = task;
         err = ckpt_restore_task(f, &h, &rec, &st);
@@ -3661,6 +3763,12 @@ out:
     free(st.by_id);
     free(st.pipes);
     free(st.sets);
+    if (err < 0 && (nbuilt > 0 || ckpt_restore_mounted_n > 0))
+        ckpt_restore_unwind(built, nbuilt, current);
+    else
+        for (unsigned i = 0; i < ckpt_restore_mounted_n; i++)
+            free(ckpt_restore_mounted[i]);
+    ckpt_restore_mounted_n = 0;
     free(built);
     fclose(f);
     return err;

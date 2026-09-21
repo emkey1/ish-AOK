@@ -250,6 +250,7 @@ bool mount_exists_at_point(const char *point);
 // must hold mounts_lock while calling these, or traversing mounts
 int do_mount(const struct fs_ops *fs, const char *source, const char *point, const char *info, int flags);
 int do_umount(const char *point);
+int do_umount_lazy(const char *point);
 int mount_remove(struct mount *mount);
 extern struct list mounts;
 

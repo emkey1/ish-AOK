@@ -152,8 +152,20 @@ static inline int xX_main_Xx(int argc, char *const argv[], const char *envp) {
             fprintf(stderr, "ISH_RESTORE %s: %d%s%s\n", restore_path, rerr,
                     rst.last_refusal[0] != '\0' ? ": " : "",
                     rst.last_refusal[0] != '\0' ? rst.last_refusal : "");
-            return rerr;
+            // ISH_RESTORE_FALLBACK=1 -- boot the command line instead, in this
+            // same process, which is what the APP does when a resume fails.
+            // That boot inherits whatever the failed restore left behind, and
+            // on device it inherited enough to leave no working terminal and
+            // no sshd; this is how that is tested here
+            // (tests/manual/checkpoint_failed_restore.sh).
+            const char *fb = getenv("ISH_RESTORE_FALLBACK");
+            if (fb == NULL || fb[0] == '\0' || fb[0] == '0')
+                return rerr;
+            fprintf(stderr, "ISH_RESTORE: booting the command line instead\n");
+            restore_path = NULL;
         }
+        if (restore_path == NULL)
+            goto boot;
         // The image is consumed by being restored. Leaving it would resume
         // the SAME moment again on the launch after this one, which is a
         // stale session rather than the one the user just had -- and would
@@ -165,6 +177,7 @@ static inline int xX_main_Xx(int argc, char *const argv[], const char *envp) {
         return 0;
     }
 
+boot:;
     char argv_copy[4096];
     int i = optind;
     size_t p = 0;

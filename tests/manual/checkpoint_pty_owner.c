@@ -38,7 +38,8 @@ int main(void) {
         dup2(s, 0); dup2(s, 1); if (s > 1) close(s);
         // A grandchild inheriting the terminal, like a shell's foreground job:
         // on restore ITS parent already has uid 1000, which is the device case.
-        if (fork() == 0) {
+        pid_t gc = fork();
+        if (gc == 0) {
             // Its OWN open of the terminal, by path: a separate struct fd.
             int g = open(sn, O_RDWR); if (g < 0) { perror("gc open"); _exit(3); }
             dup2(g, 0); close(g);
@@ -54,6 +55,10 @@ int main(void) {
             }
             _exit(0); }
         for (int i = 0; i < 12; i++) sleep(1);
+        // The grandchild's witness has to be on disk before this process
+        // reports -- the parent exits once this one has, and pid 1 exiting
+        // ends the whole run, grandchild and all.
+        waitpid(gc, NULL, 0);
         int f = open("/tmp/ptyown-child", O_WRONLY | O_CREAT | O_TRUNC, 0666);
         if (f >= 0) { write(f, "child-alive\n", 12); close(f); }
         _exit(0);
