@@ -1297,6 +1297,71 @@ void cleanup_pending_deletions(void) {
     pthread_mutex_unlock(&tasks_pending_deletion_lock);
 }
 
+// ISH_TASK_DUMP_EVERY=<seconds>: every so often, print every task -- who it
+// is, what it is waiting in, and where its HOST thread actually is.
+//
+// For the hang that only happens on the device and leaves no shell to look
+// with. The case that asked for it: after a restore, every new login's shell
+// failed to start -- ssh authenticated and then hung, new terminals never
+// printed a prompt -- and every way in went through the thing that was stuck.
+// This needs no guest cooperation at all: the environment reaches the app
+// through `devicectl device process launch --environment-variables`, and the
+// output through --console. Frames come from task_host_backtrace, the
+// freezer's own instrument; see [[stuck-task-host-backtrace]] in the notes.
+static double task_dump_every;
+
+static void task_dump_one(struct task *t) {
+    const struct native_program *native = t->native_running;
+    fprintf(stderr, "taskdump: pid %d tgid %d ppid %d uid %u euid %u %s%s%s%s%s\n",
+            t->pid, t->tgid, t->parent != NULL ? t->parent->pid : 0,
+            (unsigned) t->uid, (unsigned) t->euid, t->comm,
+            t->zombie ? " ZOMBIE" : "", t->exiting ? " EXITING" : "",
+            t->io_block ? " io_block" : "",
+            native != NULL ? " native" : "");
+    if (t->zombie || !atomic_load_explicit(&t->host_thread_started,
+                                           memory_order_acquire))
+        return;
+    if (pthread_equal(t->thread, pthread_self()))
+        return;
+    uintptr_t frames[24];
+    unsigned n = task_host_backtrace(t, frames, 24);
+    for (unsigned i = 0; i < n; i++) {
+        Dl_info info;
+        if (dladdr((void *) frames[i], &info) && info.dli_sname != NULL)
+            fprintf(stderr, "taskdump:     %2u %s\n", i, info.dli_sname);
+        else
+            fprintf(stderr, "taskdump:     %2u %#lx\n", i, (unsigned long) frames[i]);
+    }
+}
+
+static void *task_dump_thread(void *unused) {
+    (void) unused;
+    for (;;) {
+        usleep((useconds_t) (task_dump_every * 1000000));
+        struct task_snapshot snap = {0};
+        if (task_snapshot_collect(&snap, false) < 0)
+            continue;
+        fprintf(stderr, "taskdump: ---- %u tasks ----\n", snap.count);
+        for (unsigned i = 0; i < snap.count; i++)
+            task_dump_one(snap.tasks[i]);
+        fprintf(stderr, "taskdump: ---- end ----\n");
+        task_snapshot_release(&snap);
+    }
+    return NULL;
+}
+
+static void task_dump_start_if_asked(void) {
+    const char *e = getenv("ISH_TASK_DUMP_EVERY");
+    if (e == NULL || e[0] == '\0')
+        return;
+    task_dump_every = atof(e);
+    if (task_dump_every < 1)
+        task_dump_every = 1;
+    pthread_t th;
+    if (pthread_create(&th, NULL, task_dump_thread, NULL) == 0)
+        pthread_detach(th);
+}
+
 void run_at_boot(void) {  // Stuff we run only once, at boot time.
     //atomic_thread_fence(__ATOMIC_SEQ_CST);
     struct uname uts;
@@ -1304,6 +1369,7 @@ void run_at_boot(void) {  // Stuff we run only once, at boot time.
     unsigned short ncpu = get_cpu_count();
     lock_init(&pids_lock, "pids");
     lock_init(&atomic_l_lock, "run_at_boot");
+    task_dump_start_if_asked();
     // No guest arch named here: this runs once at boot, and one session
     // can run i386, x86_64, and arm64 guests (per-task ABI).
     //
