@@ -78,11 +78,35 @@ struct sock_ckpt_desc {
     int32_t peer_pid;
     uint32_t peer_uid, peer_gid;
     uint32_t peer_cred_valid;
+
+    // What setsockopt put on it. A rebuilt socket is a new host socket and a
+    // new struct fd, so every option not recorded here came back at its
+    // default -- SO_PASSCRED off under a syslog daemon that asked for its
+    // senders' credentials, a buffer size a program had raised, timestamps it
+    // had turned on. The ones AOK keeps itself (passcred, timestampns, and the
+    // Linux-shaped buffer sizes getsockopt reports) are copied; the ones the
+    // host keeps (SO_TIMESTAMP, the host buffer sizes) are read off the old
+    // host socket and set on the new one.
+    uint32_t passcred, timestampns, host_timestamp;
+    uint32_t so_rcvbuf, so_sndbuf, so_rcvbuf_set, so_sndbuf_set;
+    int32_t host_rcvbuf, host_sndbuf;
+
+    // A bound AF_LOCAL socket's filesystem node: its mode, owner and group.
+    // The bind is replayed, which makes a NEW node with the restoring task's
+    // umask and root's ownership -- and a daemon that made its socket
+    // world-writable after binding it (rsyslogd's /dev/log, 0666) was left
+    // with 0755. Every sender that was not root then got EACCES, which AOK's
+    // built-in /dev/log sink turned into a silent success: logins logged
+    // nothing, and nothing said so.
+    uint32_t node_known, node_mode, node_uid, node_gid;
 };
 
 // Fill *out from a socket that is frozen. Returns 0, or a negative errno if
 // this descriptor is not a socket at all.
 int sock_ckpt_describe(struct fd *sock, struct sock_ckpt_desc *out);
+// Put a rebuilt socket's options back (the fields above). For every rebuilt
+// socket, whatever its state.
+void sock_ckpt_apply_options(struct fd *sock, const struct sock_ckpt_desc *desc);
 // SOCK_CKPT_PAIR: both ends of a connected pair, made from either end's
 // description. Each end is then given its own name, credentials and flags by
 // sock_ckpt_apply_pair_end as its own record is read.

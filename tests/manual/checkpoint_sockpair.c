@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -82,7 +83,24 @@ static int connect_to(const char *path, int type) {
     return connect(s, (struct sockaddr *) &a, sizeof(a)) == 0 ? s : -1;
 }
 
+// What a syslog daemon does with /dev/log: bind, make it world-writable, ask
+// for senders' credentials, raise the buffer.
+static int devlog_like(const char *path) {
+    int s = socket(AF_UNIX, SOCK_DGRAM, 0);
+    struct sockaddr_un a = {.sun_family = AF_UNIX};
+    strncpy(a.sun_path, path, sizeof(a.sun_path) - 1);
+    unlink(path);
+    if (bind(s, (struct sockaddr *) &a, sizeof(a)) < 0)
+        return -1;
+    chmod(path, 0666);
+    int on = 1, big = 65536;
+    setsockopt(s, SOL_SOCKET, SO_PASSCRED, &on, sizeof(on));
+    setsockopt(s, SOL_SOCKET, SO_RCVBUF, &big, sizeof(big));
+    return s;
+}
+
 int main(void) {
+    int dlog = devlog_like("/run/ckdlog");
     int ctl = listen_on("/run/ckctl", SOCK_SEQPACKET);   // udevd's control socket
     int pair[2];
     socketpair(AF_UNIX, SOCK_DGRAM, 0, pair);           // udevd's worker_watch
@@ -180,6 +198,47 @@ int main(void) {
     snprintf(d, sizeof(d), "nonblock sp0=%d sp1=%d listener=%d; empty recv=%d errno=%d",
              nb_sp0, nb_sp1, nb_ctl, er, ee);
     check("FLAGS", nb_sp0 && !nb_sp1 && !nb_ctl && er < 0 && ee == EAGAIN, d);
+
+    // A bound socket keeps its node's mode and its options: the restore
+    // replays the bind, and rsyslogd's /dev/log came back 0755 without
+    // SO_PASSCRED, so every unprivileged sender was refused.
+    struct stat dst = {0};
+    stat("/run/ckdlog", &dst);
+    int pc = 0, rb = 0;
+    socklen_t ol = sizeof(pc);
+    getsockopt(dlog, SOL_SOCKET, SO_PASSCRED, &pc, &ol);
+    ol = sizeof(rb);
+    getsockopt(dlog, SOL_SOCKET, SO_RCVBUF, &rb, &ol);
+    pid_t k = fork();
+    if (k == 0) {
+        if (setgid(1000) || setuid(1000))
+            _exit(2);
+        int c = socket(AF_UNIX, SOCK_DGRAM, 0);
+        struct sockaddr_un a = {.sun_family = AF_UNIX};
+        strncpy(a.sun_path, "/run/ckdlog", sizeof(a.sun_path) - 1);
+        if (connect(c, (struct sockaddr *) &a, sizeof(a)) < 0)
+            _exit(10 + (errno & 0x3f));
+        _exit(send(c, "unpriv", 6, 0) == 6 ? 0 : 3);
+    }
+    int kst = 0;
+    waitpid(k, &kst, 0);
+    struct pollfd dp = {.fd = dlog, .events = POLLIN};
+    char db[16] = {0};
+    union { struct cmsghdr h; char b[CMSG_SPACE(sizeof(struct ucred))]; } dctl;
+    struct iovec dio = {.iov_base = db, .iov_len = sizeof(db) - 1};
+    struct msghdr dmsg = {.msg_iov = &dio, .msg_iovlen = 1,
+                        .msg_control = &dctl, .msg_controllen = sizeof(dctl)};
+    ssize_t dn = poll(&dp, 1, 2000) > 0 ? recvmsg(dlog, &dmsg, MSG_DONTWAIT) : -1;
+    int cuid = -1;
+    for (struct cmsghdr *c = dn >= 0 ? CMSG_FIRSTHDR(&dmsg) : NULL; c; c = CMSG_NXTHDR(&dmsg, c))
+        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_CREDENTIALS)
+            cuid = (int) ((struct ucred *) CMSG_DATA(c))->uid;
+    snprintf(d, sizeof(d), "mode %#o passcred %d rcvbuf %d; uid-1000 sender exit %d, "
+             "got %zd [%s] cred uid %d", (unsigned) (dst.st_mode & 07777), pc, rb,
+             WIFEXITED(kst) ? WEXITSTATUS(kst) : -1, dn, db, cuid);
+    check("BOUND-NODE-OPTIONS", (dst.st_mode & 07777) == 0666 && pc == 1 &&
+          rb == 131072 && WIFEXITED(kst) && WEXITSTATUS(kst) == 0 && dn == 6 &&
+          strcmp(db, "unpriv") == 0 && cuid == 1000, d);
 
     // 3. The datagram pair: quiet until written to, then carries a datagram.
     struct pollfd pp = {.fd = pair[0], .events = POLLIN};

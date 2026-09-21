@@ -320,7 +320,11 @@ it. What exists now:
   credentials and what it had queued: a stream's bytes each way, datagrams one
   by one and in order. A connection whose far end is outside the image, and
   every TCP connection, comes back hung up: end-of-file and ENOTCONN, never a
-  read that waits for ever. udevd spun at most of a core after a restore until
+  read that waits for ever. Every rebuilt socket keeps its options
+  (SO_PASSCRED, timestamps, buffer sizes) and the guest's O_NONBLOCK, and a
+  bound unix socket's node keeps its mode and owner -- rsyslogd's /dev/log
+  came back 0755 instead of 0666, and every unprivileged program's log line
+  vanished into AOK's fallback sink. udevd spun at most of a core after a restore until
   its SEQPACKET control socket and its worker pair came back as themselves.
 - **tmpfs contents**: /run, /tmp and /dev/shm are RAM with a path on them, and
   nothing outside the image remembers them. The image carries each tmpfs mount

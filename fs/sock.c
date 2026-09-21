@@ -10357,6 +10357,61 @@ static bool sock_ckpt_addr_is_bound(const void *addr, socklen_t len) {
     return false;
 }
 
+// The options a rebuild would otherwise lose; see sock_ckpt_desc.
+static void sock_ckpt_capture_options(struct fd *sock, struct sock_ckpt_desc *out) {
+    out->passcred = sock->socket.unix_passcred ? 1 : 0;
+    out->timestampns = sock->socket.so_timestampns ? 1 : 0;
+    out->so_rcvbuf = sock->socket.so_rcvbuf;
+    out->so_sndbuf = sock->socket.so_sndbuf;
+    out->so_rcvbuf_set = sock->socket.so_rcvbuf_set ? 1 : 0;
+    out->so_sndbuf_set = sock->socket.so_sndbuf_set ? 1 : 0;
+    if (sock->real_fd < 0)
+        return;
+    int v = 0;
+    socklen_t len = sizeof(v);
+    if (getsockopt(sock->real_fd, SOL_SOCKET, SO_TIMESTAMP, &v, &len) == 0)
+        out->host_timestamp = v != 0;
+    len = sizeof(v);
+    if (sock->socket.so_rcvbuf_set &&
+            getsockopt(sock->real_fd, SOL_SOCKET, SO_RCVBUF, &v, &len) == 0)
+        out->host_rcvbuf = v;
+    len = sizeof(v);
+    if (sock->socket.so_sndbuf_set &&
+            getsockopt(sock->real_fd, SOL_SOCKET, SO_SNDBUF, &v, &len) == 0)
+        out->host_sndbuf = v;
+}
+
+void sock_ckpt_apply_options(struct fd *sock, const struct sock_ckpt_desc *desc) {
+    if (sock == NULL || sock->ops != &socket_fdops)
+        return;
+    sock->socket.unix_passcred = desc->passcred != 0;
+    sock->socket.so_timestampns = desc->timestampns != 0;
+    if (desc->so_rcvbuf_set) {
+        sock->socket.so_rcvbuf = desc->so_rcvbuf;
+        sock->socket.so_rcvbuf_set = true;
+    }
+    if (desc->so_sndbuf_set) {
+        sock->socket.so_sndbuf = desc->so_sndbuf;
+        sock->socket.so_sndbuf_set = true;
+    }
+    if (sock->real_fd < 0)
+        return;
+    // Best effort, as the original setsockopt was: the host's own limits are
+    // its business, and a refusal here costs an option, not the socket.
+    if (desc->host_timestamp) {
+        int on = 1;
+        (void) setsockopt(sock->real_fd, SOL_SOCKET, SO_TIMESTAMP, &on, sizeof(on));
+    }
+    if (desc->host_rcvbuf > 0) {
+        int v = desc->host_rcvbuf;
+        (void) setsockopt(sock->real_fd, SOL_SOCKET, SO_RCVBUF, &v, sizeof(v));
+    }
+    if (desc->host_sndbuf > 0) {
+        int v = desc->host_sndbuf;
+        (void) setsockopt(sock->real_fd, SOL_SOCKET, SO_SNDBUF, &v, sizeof(v));
+    }
+}
+
 int sock_ckpt_describe(struct fd *sock, struct sock_ckpt_desc *out) {
     if (sock == NULL || sock->ops != &socket_fdops)
         return _EINVAL;
@@ -10368,6 +10423,7 @@ int sock_ckpt_describe(struct fd *sock, struct sock_ckpt_desc *out) {
         int flags = fcntl(sock->real_fd, F_GETFL);
         out->nonblock = (flags >= 0 && (flags & O_NONBLOCK)) ? 1 : 0;
     }
+    sock_ckpt_capture_options(sock, out);
 
     // Netlink is emulated end to end (real_fd < 0), so there is no host object
     // to have lost and the rebuild is exact -- port id included, because that
@@ -10443,6 +10499,24 @@ int sock_ckpt_describe(struct fd *sock, struct sock_ckpt_desc *out) {
         if (out->state == SOCK_CKPT_LISTEN)
             out->backlog = sock->sockrestart.backlog > 0
                     ? (uint32_t) sock->sockrestart.backlog : 128;
+        // The node's mode and ownership, as they are now -- after whatever
+        // chmod/chown the daemon did once it had bound. Whatever socket node
+        // sits at the path is the one every client meets, and the one the
+        // rebuild's bind replaces, so it is the one described. (Not matched
+        // against unix_name_inode: sys_bind_common leaves that NULL.)
+        if (sock->socket.unix_name[0] != '\0') {
+            char path[sizeof(sock->socket.unix_name) + 1];
+            memcpy(path, sock->socket.unix_name, name_len);
+            path[name_len] = '\0';
+            struct statbuf st;
+            if (generic_statat(AT_PWD, path, &st, AT_SYMLINK_NOFOLLOW_) >= 0 &&
+                    S_ISSOCK(st.mode)) {
+                out->node_known = 1;
+                out->node_mode = st.mode & 07777;
+                out->node_uid = st.uid;
+                out->node_gid = st.gid;
+            }
+        }
         return 0;
     }
     if (sock->socket.domain != AF_INET_ && sock->socket.domain != AF_INET6_) {
@@ -10628,6 +10702,13 @@ static struct fd *sock_ckpt_rebuild_unix(const struct sock_ckpt_desc *desc, int 
     }
     fd->socket.unix_name_len = (unsigned) path_size;
     memcpy(fd->socket.unix_name, path, path_size);
+    // The node as the daemon left it, not as the replayed bind made it.
+    // Ownership first: that is the order chown(2) then chmod(2) leave it in.
+    if (path[0] != '\0' && desc->node_known) {
+        generic_setattrat(AT_PWD, path, make_attr(uid, (uid_t_) desc->node_uid), false);
+        generic_setattrat(AT_PWD, path, make_attr(gid, (uid_t_) desc->node_gid), false);
+        generic_setattrat(AT_PWD, path, make_attr(mode, (mode_t_) desc->node_mode), false);
+    }
 
     struct sockaddr_un un = {};
     size_t host_len = 0;

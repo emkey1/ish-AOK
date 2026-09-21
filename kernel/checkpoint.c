@@ -92,7 +92,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 10  // 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 11  // 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -3852,6 +3852,7 @@ descriptors:
             // dbus-daemon's sockets were blocking, its first recvmsg with
             // nothing queued never returned, and every login waited on it.
             sock->flags = (int) cf.flags;
+            sock_ckpt_apply_options(sock, &desc);
             if ((err = ckpt_id_put(st, cf.id, sock)) < 0)
                 goto fds_done;
             if ((err = fdtable_install_at(files, (fd_t) cf.fd, sock,
