@@ -1275,6 +1275,15 @@ static int tmpfs_futime(struct fd *fd, struct timespec atime, struct timespec mt
     return 0;
 }
 
+struct fifo_file *tmpfs_fd_fifo(struct fd *fd) {
+    if (fd == NULL || fd->ops != &tmpfs_fdops)
+        return NULL;
+    struct tmp_inode *inode = tmpfs_fd_inode(fd);
+    if (inode == NULL || !S_ISFIFO(inode->stat.mode))
+        return NULL;
+    return inode->fifo;
+}
+
 static ssize_t tmpfs_read(struct fd *fd, void *buf, size_t bufsize) {
     ssize_t res;
     struct tmp_inode *inode = tmpfs_fd_inode(fd);

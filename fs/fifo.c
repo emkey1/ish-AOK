@@ -250,3 +250,50 @@ int fifo_file_poll(struct fifo_file *fifo, struct fd *fd) {
     unlock(&fifo->lock);
     return types;
 }
+
+char *fifo_file_peek(struct fifo_file *fifo, size_t *len) {
+    *len = 0;
+    lock(&fifo->lock, 0);
+    size_t n = fifo->size;
+    char *out = NULL;
+    if (n > 0 && (out = malloc(n)) != NULL) {
+        size_t first = fifo->cap - fifo->start;
+        if (first > n)
+            first = n;
+        memcpy(out, fifo->buf + fifo->start, first);
+        memcpy(out + first, fifo->buf, n - first);
+        *len = n;
+    }
+    unlock(&fifo->lock);
+    return out;
+}
+
+int fifo_file_prime(struct fifo_file *fifo, const char *buf, size_t len) {
+    if (len == 0)
+        return 0;
+    lock(&fifo->lock, 0);
+    if (fifo->buf == NULL) {
+        fifo->buf = malloc(FIFO_FILE_CAPACITY);
+        if (fifo->buf == NULL) {
+            unlock(&fifo->lock);
+            return _ENOMEM;
+        }
+        fifo->cap = FIFO_FILE_CAPACITY;
+    }
+    // A saved buffer came out of one of these, so it fits one.
+    if (fifo->size + len > fifo->cap) {
+        unlock(&fifo->lock);
+        return _ENOSPC;
+    }
+    size_t end = (fifo->start + fifo->size) % fifo->cap;
+    size_t first = fifo->cap - end;
+    if (first > len)
+        first = len;
+    memcpy(fifo->buf + end, buf, first);
+    memcpy(fifo->buf, buf + first, len - first);
+    fifo->size += len;
+    notify(&fifo->cond);
+    unlock(&fifo->lock);
+    fifo_file_wake_pollers(fifo, POLL_READ);
+    return 0;
+}

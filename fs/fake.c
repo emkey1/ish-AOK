@@ -183,6 +183,10 @@ static void fakefs_trace_symlink_result(struct mount *mount, struct fakefs_db *f
             ishstat.mode, ishstat.uid, ishstat.gid, ishstat.rdev);
 }
 
+struct fifo_file *fakefs_fd_fifo(struct fd *fd) {
+    return fd != NULL && fd->ops == &initctl_fdops ? fakefs_initctl_fifo : NULL;
+}
+
 static ssize_t initctl_read(struct fd *fd, void *buf, size_t bufsize) {
     return fifo_file_read(fakefs_initctl_fifo, fd, buf, bufsize);
 }

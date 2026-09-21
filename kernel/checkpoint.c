@@ -85,6 +85,7 @@
 #include "fs/tty.h"
 #include "fs/sock_ckpt.h"
 #include "fs/real.h"
+#include "fs/fifo.h"
 #include "kernel/anonfd_ckpt.h"
 #include "fs/devices.h"
 #include "emu/memory.h"
@@ -141,6 +142,9 @@ enum ckpt_fd_kind {
     CKPT_FD_INOTIFY,
     CKPT_FD_PIDFD,
     CKPT_FD_MEMFD,
+    // A named FIFO: reopened by its path -- the node itself comes back with
+    // its filesystem -- with whatever was buffered in it following the record.
+    CKPT_FD_FIFO,
 };
 
 // Which KIND of terminal a process's standard streams were on. The two are
@@ -205,6 +209,7 @@ static const char *ckpt_kind_name(uint32_t kind) {
         case CKPT_FD_INOTIFY: return "inotf";
         case CKPT_FD_PIDFD: return "pidfd";
         case CKPT_FD_MEMFD: return "memfd";
+        case CKPT_FD_FIFO: return "fifo";
         default: return "?";
     }
 }
@@ -1031,7 +1036,16 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
     // (fs/pipe.c), so what has to travel is the pairing, the direction and
     // whatever bytes are still in flight -- not the object, which cannot
     // outlive the process that owns it.
-    if (S_ISFIFO(fd->type) && fd->real_fd >= 0 && fd->stat.inode != 0)
+    // A NAMED pipe -- a FIFO node on a filesystem, whose buffer lives with the
+    // node -- as opposed to a pipe(2) pair, which is a host pipe. This one had
+    // no rule and, with real_fd 0, reached the standard-stream rule instead:
+    // sysvinit's /run/initctl came back as /dev/null, so every telinit and
+    // shutdown request after a restore went nowhere.
+    if (S_ISFIFO(fd->type) && fd->ops != &realfs_fdops &&
+            generic_getpath(fd, path) >= 0 && path[0] == '/')
+        return CKPT_FD_FIFO;
+    if (S_ISFIFO(fd->type) && fd->ops == &realfs_fdops && fd->real_fd >= 0 &&
+            fd->stat.inode != 0)
         return CKPT_FD_PIPE;
     // A socket. The host object belongs to this process and cannot outlive it
     // -- on iOS it does not even outlive a suspension -- so what travels is a
@@ -1784,6 +1798,17 @@ static int ckpt_describe_anon(struct ckpt_saved_fd *s) {
     case CKPT_FD_INOTIFY:
         blob = inotify_ckpt_describe(s->fd, &len);
         break;
+    case CKPT_FD_FIFO: {
+        struct fifo_file *fifo = tmpfs_fd_fifo(s->fd);
+        if (fifo == NULL)
+            fifo = fakefs_fd_fifo(s->fd);
+        if (fifo == NULL)
+            return 0;
+        blob = fifo_file_peek(fifo, &len);
+        if (blob == NULL)
+            return 0;   // nothing buffered
+        break;
+    }
     case CKPT_FD_MEMFD:
         blob = memfd_ckpt_describe(s->fd, &len, CKPT_MEMFD_MAX);
         if (blob == NULL) {
@@ -2583,6 +2608,13 @@ struct ckpt_restore_state {
     // built (ckpt_restore_pidfds).
     struct { struct fd *fd; int32_t pid; } *pidfds;
     uint32_t pidfd_count, pidfd_cap;
+    // Named FIFOs: the buffers already put back (one FIFO can be open through
+    // several descriptors, each of which carried its bytes), and write-only
+    // ends opened read-write until every task exists (ckpt_restore_fifos).
+    struct fifo_file **fifos_primed;
+    uint32_t fifos_primed_count, fifos_primed_cap;
+    struct { struct fd *fd; uint32_t flags; } *fifo_writers;
+    uint32_t fifo_writer_count, fifo_writer_cap;
 };
 
 // Remember where a restored pty master ended up, and look it up again.
@@ -3029,6 +3061,98 @@ static void ckpt_restore_pidfds(struct ckpt_restore_state *st) {
     }
 }
 
+
+static struct fifo_file *ckpt_fd_fifo(struct fd *fd) {
+    struct fifo_file *fifo = tmpfs_fd_fifo(fd);
+    return fifo != NULL ? fifo : fakefs_fd_fifo(fd);
+}
+
+// A named FIFO, reopened by path. Never blocking to do it: a FIFO open waits
+// for the other end, which may be restored later or not at all, so it is
+// opened O_NONBLOCK and given its own flags back afterwards. A write-only end
+// cannot be opened that way without a reader (ENXIO), so it is attached
+// read-write for now and re-attached as it was once every task exists -- the
+// reader and writer counts, which decide EOF and EPIPE, end up exactly right.
+static struct fd *ckpt_reopen_fifo(struct ckpt_restore_state *st,
+        const struct ckpt_fd *cf, const char *path, const char *payload) {
+    int access = (int) cf->flags & (O_WRONLY_ | O_RDWR_);
+    int flags = ckpt_reopen_flags(cf->flags) | O_NONBLOCK_;
+    bool deferred = false;
+    struct fd *fd = generic_open(path, flags, 0);
+    if (IS_ERR(fd) && PTR_ERR(fd) == _ENXIO && access == O_WRONLY_) {
+        fd = generic_open(path, (flags & ~O_WRONLY_) | O_RDWR_, 0);
+        deferred = true;
+    }
+    if (IS_ERR(fd))
+        return fd;
+    struct fifo_file *fifo = ckpt_fd_fifo(fd);
+    if (fifo != NULL && cf->offset != 0) {
+        bool primed = false;
+        for (uint32_t i = 0; i < st->fifos_primed_count; i++)
+            primed |= st->fifos_primed[i] == fifo;
+        if (!primed) {
+            if (st->fifos_primed_count == st->fifos_primed_cap) {
+                uint32_t cap = st->fifos_primed_cap ? st->fifos_primed_cap * 2 : 8;
+                void *n = realloc(st->fifos_primed, cap * sizeof(*st->fifos_primed));
+                if (n == NULL) {
+                    fd_close(fd);
+                    return ERR_PTR(_ENOMEM);
+                }
+                st->fifos_primed = n;
+                st->fifos_primed_cap = cap;
+            }
+            st->fifos_primed[st->fifos_primed_count++] = fifo;
+            int err = fifo_file_prime(fifo, payload, (size_t) cf->offset);
+            if (err < 0)
+                printk("WARNING: checkpoint: %s had %llu bytes in it that could "
+                       "not be put back (%d)\n", path,
+                       (unsigned long long) cf->offset, -err);
+        }
+    }
+    if (deferred) {
+        if (st->fifo_writer_count == st->fifo_writer_cap) {
+            uint32_t cap = st->fifo_writer_cap ? st->fifo_writer_cap * 2 : 8;
+            void *n = realloc(st->fifo_writers, cap * sizeof(*st->fifo_writers));
+            if (n == NULL) {
+                fd_close(fd);
+                return ERR_PTR(_ENOMEM);
+            }
+            st->fifo_writers = n;
+            st->fifo_writer_cap = cap;
+        }
+        st->fifo_writers[st->fifo_writer_count].fd = fd;
+        st->fifo_writers[st->fifo_writer_count].flags = cf->flags;
+        st->fifo_writer_count++;
+    } else {
+        fd->flags = (int) cf->flags;
+    }
+    return fd;
+}
+
+// The write-only FIFO ends, re-attached as write-only now that their readers
+// exist. One whose FIFO has no reader in the image at all stays read-write --
+// a writer whose reader had already gone -- and is said: the one thing it
+// will not do is fail its next write with EPIPE, as it would have.
+static void ckpt_restore_fifos(struct ckpt_restore_state *st) {
+    for (uint32_t i = 0; i < st->fifo_writer_count; i++) {
+        struct fd *fd = st->fifo_writers[i].fd;
+        struct fifo_file *fifo = ckpt_fd_fifo(fd);
+        if (fifo == NULL)
+            continue;
+        int rdwr = fd->flags;
+        fifo_file_close(fifo, fd);
+        fd->flags = ((int) st->fifo_writers[i].flags & ~O_ACCMODE_) | O_WRONLY_ | O_NONBLOCK_;
+        if (fifo_file_open(fifo, fd) < 0) {
+            fd->flags = rdwr;
+            fifo_file_open(fifo, fd);
+            printk("WARNING: checkpoint: a FIFO writer came back with no reader; "
+                   "it is attached read-write\n");
+            continue;
+        }
+        fd->flags = (int) st->fifo_writers[i].flags;
+    }
+}
+
 static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
         const struct ckpt_task *rec, struct ckpt_restore_state *st) {
     int err;
@@ -3280,6 +3404,33 @@ descriptors:
             }
             fd_retain(shared);
             if ((err = fdtable_install_at(files, (fd_t) cf.fd, shared,
+                                          cf.cloexec != 0)) < 0)
+                goto fds_done;
+            continue;
+        }
+
+        if (cf.kind == CKPT_FD_FIFO) {
+            if (cf.offset > (1u << 20)) { err = _EINVAL; goto fds_done; }
+            char *payload = NULL;
+            if (cf.offset != 0) {
+                payload = malloc((size_t) cf.offset);
+                if (payload == NULL) { err = _ENOMEM; goto fds_done; }
+                if ((err = rd(f, payload, (size_t) cf.offset)) < 0) {
+                    free(payload);
+                    goto fds_done;
+                }
+            }
+            struct fd *ffd = ckpt_reopen_fifo(st, &cf, path, payload);
+            free(payload);
+            if (IS_ERR(ffd)) {
+                err = (int) PTR_ERR(ffd);
+                goto fds_done;
+            }
+            if ((err = ckpt_id_put(st, cf.id, ffd)) < 0) {
+                fd_close(ffd);
+                goto fds_done;
+            }
+            if ((err = fdtable_install_at(files, (fd_t) cf.fd, ffd,
                                           cf.cloexec != 0)) < 0)
                 goto fds_done;
             continue;
@@ -4011,6 +4162,7 @@ int checkpoint_restore(const char *host_path) {
 
     // Every descriptor in the image exists now, so the things that point at
     // descriptors elsewhere can be put back: epoll registrations, and pidfds.
+    ckpt_restore_fifos(&st);
     if ((err = ckpt_restore_epoll_regs(f, &h, &st)) < 0)
         goto out;
     ckpt_restore_pidfds(&st);
@@ -4094,6 +4246,8 @@ out:
     free(st.pipes);
     free(st.sets);
     free(st.pidfds);
+    free(st.fifos_primed);
+    free(st.fifo_writers);
     if (err < 0 && (nbuilt > 0 || ckpt_restore_mounted_n > 0))
         ckpt_restore_unwind(built, nbuilt, current);
     else

@@ -31,4 +31,15 @@ ssize_t fifo_file_read(struct fifo_file *fifo, struct fd *fd, void *buf, size_t 
 ssize_t fifo_file_write(struct fifo_file *fifo, struct fd *fd, const void *buf, size_t bufsize);
 int fifo_file_poll(struct fifo_file *fifo, struct fd *fd);
 
+// For a checkpoint: a copy of what is buffered, without consuming it (NULL with
+// *len 0 when empty), and on the far side, those bytes put back into a FIFO as
+// though written. The buffer belongs to the INODE, and a restore makes the
+// node afresh, so without these a byte written and not yet read was lost.
+char *fifo_file_peek(struct fifo_file *fifo, size_t *len);
+int fifo_file_prime(struct fifo_file *fifo, const char *buf, size_t len);
+// The FIFO buffer behind an fd, from whichever filesystem backs it; NULL
+// if the fd is not a FIFO there. (fs/tmp.c, fs/fake.c)
+struct fifo_file *tmpfs_fd_fifo(struct fd *fd);
+struct fifo_file *fakefs_fd_fifo(struct fd *fd);
+
 #endif
