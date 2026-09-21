@@ -369,6 +369,68 @@ static void test_sysfs_poll(void) {
     }
 }
 
+// And the other half of sysfs's mask: POLLPRI|POLLERR mean "this attribute
+// may have changed since you last read it", so they are there from the open
+// until the first read, and gone after it -- lseek does not bring them back,
+// pread counts as a read. A directory never has them. Measured on Linux 6.12
+// (camd) with /sys/class/tty/tty0/active, the file elogind watches: fresh,
+// events 0 gives POLLERR and IN|PRI gives IN|PRI|ERR; after a read, events 0
+// gives nothing and IN|PRI gives IN. AOK reported POLLERR for ever, and
+// elogind -- which registers that file with no events, so POLLERR alone wakes
+// it -- reread it and was woken again, at a full core, on every boot.
+static int poll_mask(int fd, short events) {
+    struct pollfd pf = {.fd = fd, .events = events};
+    return poll(&pf, 1, 0) == 1 ? pf.revents : 0;
+}
+static void test_sysfs_poll_event(void) {
+    const char *path = "/sys/class/tty/tty0/active";
+    int fd = open(path, O_RDONLY);
+    if (!check("sysfs.event_opens(tty0/active)", fd >= 0))
+        return;
+    int fresh0 = poll_mask(fd, 0);
+    int fresh_in = poll_mask(fd, POLLIN | POLLPRI);
+    int efd = epoll_create1(0);
+    struct epoll_event ev = {.events = 0}, out;
+    epoll_ctl(efd, EPOLL_CTL_ADD, fd, &ev);
+    int ep_fresh = epoll_wait(efd, &out, 1, 0);
+    uint32_t ep_fresh_ev = ep_fresh == 1 ? out.events : 0;
+    char b[64];
+    read(fd, b, sizeof(b));
+    int read0 = poll_mask(fd, 0);
+    int read_in = poll_mask(fd, POLLIN | POLLPRI);
+    int ep_read = epoll_wait(efd, &out, 1, 0);
+    lseek(fd, 0, SEEK_SET);
+    int seek0 = poll_mask(fd, 0);
+    test_logf("     fresh ev0=%#x evIN|PRI=%#x epoll=%d/%#x; read ev0=%#x evIN|PRI=%#x "
+              "epoll=%d; lseek ev0=%#x\n", fresh0, fresh_in, ep_fresh, ep_fresh_ev,
+              read0, read_in, ep_read, seek0);
+    check("sysfs.event_fresh_is_pollerr", fresh0 == POLLERR);
+    check("sysfs.event_fresh_in_pri_err", fresh_in == (POLLIN | POLLPRI | POLLERR));
+    check("sysfs.event_fresh_epoll_err", ep_fresh == 1 && ep_fresh_ev == EPOLLERR);
+    check("sysfs.event_read_quiet", read0 == 0);
+    check("sysfs.event_read_in_only", read_in == POLLIN);
+    check("sysfs.event_read_epoll_quiet", ep_read == 0);
+    check("sysfs.event_lseek_stays_quiet", seek0 == 0);
+    close(efd);
+    close(fd);
+
+    // pread counts as a read.
+    fd = open(path, O_RDONLY);
+    if (fd >= 0) {
+        pread(fd, b, sizeof(b), 0);
+        check("sysfs.event_pread_quiet", poll_mask(fd, 0) == 0);
+        close(fd);
+    }
+    // A directory is POLLIN|POLLOUT and nothing else.
+    fd = open("/sys/class/tty", O_RDONLY | O_DIRECTORY);
+    if (check("sysfs.event_dir_opens", fd >= 0)) {
+        int dm = poll_mask(fd, POLLIN | POLLOUT | POLLPRI);
+        test_logf("     dir revents=%#x\n", dm);
+        check("sysfs.event_dir_in_out", dm == (POLLIN | POLLOUT));
+        close(fd);
+    }
+}
+
 // ---- one anonymous filesystem per kind, as Linux has it -----------------
 //
 // A program cannot ask a descriptor what KIND of thing it is. What it can do
@@ -449,6 +511,7 @@ int main(int argc, char **argv) {
     alarm(test_watchdog_secs(60));
 
     test_sysfs_poll();
+    test_sysfs_poll_event();
     test_anon_devices();
     test_sys_dev_block();
     test_sys_block_attrs();

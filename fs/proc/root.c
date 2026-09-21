@@ -2142,7 +2142,7 @@ static struct fd *sysfs_open(struct mount *mount, const char *path, int UNUSED(f
     mount_retain(mount);
     fd->mount = mount;
     fd->type = sysfs_node_mode(node) & S_IFMT;
-    fd->fs_data = sysfs_encode_node(node);
+    fd->sysfs.node = sysfs_encode_node(node);
     return fd;
 }
 
@@ -2216,11 +2216,11 @@ static int sysfs_stat(struct mount *UNUSED(mount), const char *path, struct stat
 }
 
 static int sysfs_fstat(struct fd *fd, struct statbuf *stat) {
-    return sysfs_stat_common(sysfs_decode_node(fd->fs_data), stat);
+    return sysfs_stat_common(sysfs_decode_node(fd->sysfs.node), stat);
 }
 
 static int sysfs_getpath(struct fd *fd, char *buf) {
-    struct sysfs_node node = sysfs_decode_node(fd->fs_data);
+    struct sysfs_node node = sysfs_decode_node(fd->sysfs.node);
 
     // Walk up to the root collecting names, then emit them in order.
     char names[8][32];
@@ -2250,7 +2250,7 @@ static int sysfs_getpath(struct fd *fd, char *buf) {
 }
 
 static ssize_t sysfs_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {
-    struct sysfs_node node = sysfs_decode_node(fd->fs_data);
+    struct sysfs_node node = sysfs_decode_node(fd->sysfs.node);
     if (S_ISDIR(sysfs_node_mode(node)))
         return _EISDIR;
 
@@ -2259,6 +2259,7 @@ static ssize_t sysfs_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) 
     // snprintf reports what it WOULD have written; never read past the buffer.
     if (size >= sizeof(data))
         size = sizeof(data) - 1;
+    fd->sysfs.read = true;
     if (off < 0 || (size_t) off > size)
         return 0;
     size_t remaining = size - off;
@@ -2280,14 +2281,14 @@ static ssize_t sysfs_write(struct fd *UNUSED(fd), const void *UNUSED(buf), size_
 }
 
 static off_t_ sysfs_lseek(struct fd *fd, off_t_ off, int whence) {
-    struct sysfs_node node = sysfs_decode_node(fd->fs_data);
+    struct sysfs_node node = sysfs_decode_node(fd->sysfs.node);
     if (S_ISDIR(sysfs_node_mode(node)))
         return _EINVAL;
     return generic_seek(fd, off, whence, sysfs_file_size(node));
 }
 
 static int sysfs_readdir(struct fd *fd, struct dir_entry *entry) {
-    struct sysfs_node node = sysfs_decode_node(fd->fs_data);
+    struct sysfs_node node = sysfs_decode_node(fd->sysfs.node);
     if (!S_ISDIR(sysfs_node_mode(node)))
         return _ENOTDIR;
 
@@ -2358,13 +2359,22 @@ static int sysfs_close(struct fd *UNUSED(fd)) {
 // forever, at zero CPU, on the most ordinary way there is to consult a sysfs
 // file. `cat` worked, which is what made it look like the file was fine.
 //
-// The mask is sysfs's own, measured on Devuan rather than assumed: an
-// attribute reports POLLIN|POLLOUT|POLLPRI|POLLERR (0xf), where a procfs file
-// reports the plain DEFAULT_POLLMASK of POLLIN|POLLOUT (0x5). The extra two
-// are how sysfs signals "this attribute may have changed" to a poller camped
-// on it; reporting them keeps a caller that distinguishes the two kinds of
-// file seeing what it would see on Linux.
-static int sysfs_poll(struct fd *UNUSED(fd)) {
+// The mask is sysfs's own, measured on Linux rather than assumed: an attribute
+// reports POLLIN|POLLOUT|POLLPRI|POLLERR (0xf) from the moment it is opened
+// until it is first READ, and plain POLLIN|POLLOUT (0x5) after that -- until
+// the attribute changes, which is what the extra two mean: kernfs compares the
+// file's event count with the one this descriptor's last read saw. A
+// directory is 0x5 throughout. (lseek does not re-arm it; pread does count.)
+//
+// Reporting 0xf for ever spun elogind at a full core, on every boot: it
+// watches /sys/class/tty/tty0/active with no events at all, so it is woken by
+// POLLERR alone, and it rereads the file each time to learn the new console
+// -- and was woken again at once. Nothing here ever changes an attribute
+// behind a reader, so once read, an attribute stays quiet.
+static int sysfs_poll(struct fd *fd) {
+    struct sysfs_node node = sysfs_decode_node(fd->sysfs.node);
+    if (S_ISDIR(sysfs_node_mode(node)) || fd->sysfs.read)
+        return POLL_READ | POLL_WRITE;
     return POLL_READ | POLL_WRITE | POLL_PRI | POLL_ERR;
 }
 

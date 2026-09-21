@@ -371,6 +371,14 @@ struct fd {
             // readdir phase: 0 = emit ".", 1 = emit "..", 2 = children (dir_pos)
             unsigned dots_pos;
         } tmpfs;
+        struct {
+            // The node, packed by fs/proc/root.c's sysfs_encode_node.
+            void *node;
+            // Read since it was opened. An attribute says "may have changed"
+            // (POLLPRI|POLLERR) until then and not after, the way kernfs
+            // compares the file's event count with the one its last read saw.
+            bool read;
+        } sysfs;
         void *fs_data;
     };
 
