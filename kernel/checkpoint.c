@@ -1162,6 +1162,13 @@ struct ckpt_tmpfs_mount {
     uint32_t info_len;
     int32_t flags;
     uint32_t n_entries;
+    // Whether the save could actually READ this mount. Zero means it could
+    // not, and the restore must then leave the mount point alone entirely:
+    // mounting an empty tmpfs over it would HIDE whatever the rootfs has
+    // underneath, which is strictly worse than not restoring it. An empty
+    // tmpfs the guest really had is walked_ok with n_entries 0, and does get
+    // mounted, because that is the state the session was in.
+    uint32_t walked_ok;
 };
 
 struct ckpt_tmpfs_entry {
@@ -1179,6 +1186,7 @@ struct ckpt_tmpfs_ctx {
     size_t point_len;        // the mount-point prefix every path here carries
     uint32_t n_entries;
     uint64_t budget;         // content bytes left for the whole image
+    bool walked_ok;          // the mount point itself opened and listed
 };
 
 // One entry: fixed record, then the relative path, then the payload. The
@@ -1268,7 +1276,8 @@ static int ckpt_tmpfs_walk(struct ckpt_tmpfs_ctx *c, char *path, size_t len,
         // success.
         printk("WARNING: checkpoint: %s could not be read (%d); %s\n", path,
                -(int) PTR_ERR(dir), depth == 0
-               ? "that whole filesystem is missing from the image"
+               ? "that filesystem is not in the image, and a restore will "
+                 "leave its mount point alone rather than cover it"
                : "it is not in the image");
         return 0;
     }
@@ -1276,6 +1285,8 @@ static int ckpt_tmpfs_walk(struct ckpt_tmpfs_ctx *c, char *path, size_t len,
         fd_close(dir);
         return 0;
     }
+    if (depth == 0)
+        c->walked_ok = true;
     if (dir->ops->readdir_begin != NULL)
         dir->ops->readdir_begin(dir);
 
@@ -1435,6 +1446,7 @@ static int ckpt_tmpfs_save(struct ckpt_writer *w, struct task *as,
         // mount header has to come first. Same trick the image header uses.
         long end = ftell(w->f);
         mh.n_entries = c.n_entries;
+        mh.walked_ok = c.walked_ok ? 1 : 0;
         if (at < 0 || end < 0 || fseek(w->f, at, SEEK_SET) != 0)
             CKPT_TMPFS_DONE(errno_map());
         wr(w, &mh, sizeof(mh));
@@ -1561,7 +1573,13 @@ static int ckpt_tmpfs_restore(FILE *f, uint32_t n_mounts) {
         info[mh.info_len] = '\0';
         // "/" prefixed onto a relative name would give "//name".
         const char *prefix = strcmp(point, "/") == 0 ? "" : point;
-        ckpt_tmpfs_remount(point, source, info, mh.flags);
+        if (mh.walked_ok) {
+            ckpt_tmpfs_remount(point, source, info, mh.flags);
+        } else {
+            printk("WARNING: checkpoint: %s was not readable when the image "
+                   "was written; leaving the mount point as this boot made "
+                   "it\n", point);
+        }
 
         unsigned restored = 0;
         for (uint32_t i = 0; i < mh.n_entries; i++) {
@@ -1590,7 +1608,8 @@ static int ckpt_tmpfs_restore(FILE *f, uint32_t n_mounts) {
             }
             char abs[MAX_PATH + 1];
             snprintf(abs, sizeof(abs), "%s/%s", prefix, rel);
-            ckpt_tmpfs_put(abs, &e, data);
+            if (mh.walked_ok)
+                ckpt_tmpfs_put(abs, &e, data);
             free(data);
             restored++;
         }
