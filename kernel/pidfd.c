@@ -4,9 +4,14 @@
 #include "kernel/calls.h"
 #include "kernel/fs.h"
 #include "fs/poll.h"
+#include "kernel/anonfd_ckpt.h"
 
 struct pidfd_data {
-    struct task *task; // pinned via task_ref_cnt_mod
+    // Pinned via task_ref_cnt_mod. NULL for a pidfd whose process is gone and
+    // cannot be named at all: one a checkpoint restore made for a process that
+    // had already been reaped, or that did not come back. Every operation below
+    // answers for that case what Linux answers for a reaped process.
+    struct task *task;
     struct fd *fd;      // back-pointer, for poll_wakeup from pidfd_notify_exit
     struct list pidfd_link; // linked into task->pidfds, locked by pids_lock
 };
@@ -40,6 +45,10 @@ struct fd *pidfd_create(struct task *task) {
 
 static int pidfd_close(struct fd *fd) {
     struct pidfd_data *data = fd->data;
+    if (data->task == NULL) {
+        free(data);
+        return 0;
+    }
     complex_lockt(&pids_lock, 0);
     list_remove(&data->pidfd_link);
     unlock(&pids_lock);
@@ -58,7 +67,10 @@ static int pidfd_poll(struct fd *fd) {
     complex_lockt(&pids_lock, 0);
     struct task *task = data->task;
     int types = 0;
-    if (task->zombie) {
+    if (task == NULL) {
+        // Gone: readable, and hung up, as Linux reports a reaped process.
+        types = POLL_READ | POLL_HUP;
+    } else if (task->zombie) {
         // Readable once the process is done: Linux's pidfd_poll wants its
         // thread group empty, and a thread zombie its tracer has not reaped
         // yet still counts. Its group is safe to read while the task is
@@ -153,6 +165,9 @@ int_t pidfd_get_pid(fd_t f) {
     if (fd->ops != &pidfd_ops)
         return _EBADF;
     struct pidfd_data *data = fd->data;
+    // A process that is gone is nobody's child to wait for.
+    if (data->task == NULL)
+        return _ECHILD;
     complex_lockt(&pids_lock, 0);
     pid_t_ pid = data->task->pid;
     unlock(&pids_lock);
@@ -172,6 +187,9 @@ pid_t_ fd_pidfd_pid(struct fd *fd) {
     if (fd->ops != &pidfd_ops)
         return -1;
     struct pidfd_data *data = fd->data;
+    // Linux's fdinfo says "Pid: -1" once the process has been reaped.
+    if (data->task == NULL)
+        return -1;
     complex_lockt(&pids_lock, 0);
     pid_t_ pid = data->task->pid;
     unlock(&pids_lock);
@@ -218,5 +236,59 @@ int_t sys_pidfd_send_signal(fd_t pidfd, dword_t sig, addr_t UNUSED(info_addr), d
     if (fd->ops != &pidfd_ops)
         return _EINVAL;
     struct pidfd_data *data = fd->data;
+    if (data->task == NULL)
+        return _ESRCH;
     return signal_kill_task(data->task, sig, SI_USER_);
+}
+
+// ---- checkpoint (kernel/anonfd_ckpt.h) ------------------------------------
+
+bool pidfd_fd_is(struct fd *fd) {
+    return fd != NULL && fd->ops == &pidfd_ops;
+}
+
+// The pid to bind to after a restore, or 0 if the process is already gone.
+// Gone means reaped, not merely exited: a zombie is still in the image and a
+// pidfd on it is how its parent may reap it. A reaped one's NUMBER may belong
+// to a different process by now, and binding to that would be binding to the
+// wrong process.
+int32_t pidfd_ckpt_pid(struct fd *fd) {
+    struct pidfd_data *data = fd->data;
+    if (data == NULL || data->task == NULL)
+        return 0;
+    complex_lockt(&pids_lock, 0);
+    struct task *task = data->task;
+    int32_t pid = pid_get_task_zombie(task->pid) == task ? (int32_t) task->pid : 0;
+    unlock(&pids_lock);
+    return pid;
+}
+
+// A pidfd naming no process yet. The restore makes one of these where the
+// image had a pidfd, and binds it once every task exists -- it usually names
+// a child, which is restored after its parent. One never bound is the
+// "process is gone" pidfd every operation above already answers for.
+struct fd *pidfd_ckpt_new_unbound(void) {
+    struct pidfd_data *data = malloc(sizeof(struct pidfd_data));
+    if (data == NULL)
+        return ERR_PTR(_ENOMEM);
+    struct fd *fd = adhoc_fd_create(&pidfd_ops);
+    if (fd == NULL) {
+        free(data);
+        return ERR_PTR(_ENOMEM);
+    }
+    *data = (struct pidfd_data) {.task = NULL, .fd = fd};
+    list_init(&data->pidfd_link);
+    fd->data = data;
+    return fd;
+}
+
+// Takes its own reference on `task`, as pidfd_create does.
+void pidfd_ckpt_bind(struct fd *fd, struct task *task) {
+    struct pidfd_data *data = fd->data;
+    task_ref_cnt_mod(task, 1);
+    atomic_fetch_add(&task->pidfd_ref_count, 1);
+    complex_lockt(&pids_lock, 0);
+    data->task = task;
+    list_add(&task->pidfds, &data->pidfd_link);
+    unlock(&pids_lock);
 }

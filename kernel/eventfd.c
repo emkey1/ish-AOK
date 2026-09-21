@@ -1,6 +1,7 @@
 #include "kernel/calls.h"
 #include "kernel/fs.h"
 #include "fs/poll.h"
+#include "kernel/anonfd_ckpt.h"
 
 static struct fd_ops eventfd_ops;
 
@@ -98,3 +99,18 @@ static struct fd_ops eventfd_ops = {
     .write = eventfd_write,
     .poll = eventfd_poll,
 };
+
+// ---- checkpoint (kernel/anonfd_ckpt.h) ------------------------------------
+
+bool eventfd_fd_is(struct fd *fd) {
+    return fd != NULL && fd->ops == &eventfd_ops;
+}
+
+struct fd *eventfd_ckpt_new(uint64_t val, bool semaphore) {
+    struct fd *fd = adhoc_fd_create(&eventfd_ops);
+    if (fd == NULL)
+        return ERR_PTR(_ENOMEM);
+    fd->eventfd.val = val;
+    fd->eventfd.semaphore = semaphore;
+    return fd;
+}

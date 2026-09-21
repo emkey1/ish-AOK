@@ -15,6 +15,7 @@
 #include "emu/interrupt.h"
 #include "emu/memory.h"
 #include "util/sync.h"
+#include "kernel/anonfd_ckpt.h"
 
 #if is_gcc(9)
 #pragma GCC diagnostic ignored "-Waddress-of-packed-member"
@@ -3820,4 +3821,29 @@ dword_t sys_rt_tgsigqueueinfo_guest(pid_t_ tgid, pid_t_ tid, dword_t sig, guest_
 
 dword_t sys_rt_tgsigqueueinfo(pid_t_ tgid, pid_t_ tid, dword_t sig, addr_t uinfo_addr) {
     return sys_rt_tgsigqueueinfo_guest(tgid, tid, sig, uinfo_addr);
+}
+
+// ---- checkpoint (kernel/anonfd_ckpt.h) ------------------------------------
+
+bool signalfd_fd_is(struct fd *fd) {
+    return fd != NULL && fd->ops == &signalfd_ops;
+}
+
+uint64_t signalfd_ckpt_mask(struct fd *fd) {
+    struct signalfd_state *state = fd->data;
+    return state != NULL ? (uint64_t) state->mask : 0;
+}
+
+struct fd *signalfd_ckpt_new(uint64_t mask) {
+    struct fd *fd = adhoc_fd_create(&signalfd_ops);
+    if (fd == NULL)
+        return ERR_PTR(_ENOMEM);
+    struct signalfd_state *state = malloc(sizeof(*state));
+    if (state == NULL) {
+        fd_close(fd);
+        return ERR_PTR(_ENOMEM);
+    }
+    *state = (struct signalfd_state) {.mask = (sigset_t_) mask};
+    fd->data = state;
+    return fd;
 }

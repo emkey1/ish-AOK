@@ -16,6 +16,7 @@
 #include "util/timer.h"
 #include <limits.h>
 #include <sys/poll.h>
+#include "kernel/anonfd_ckpt.h"
 
 // Linux encodes a per-process or per-thread CPU clock into a NEGATIVE clockid:
 //
@@ -2223,3 +2224,53 @@ static struct fd_ops timerfd_ops = {
     .poll = timerfd_poll,
     .close = timerfd_close,
 };
+
+// ---- checkpoint (kernel/anonfd_ckpt.h) ------------------------------------
+
+bool timerfd_fd_is(struct fd *fd) {
+    return fd != NULL && fd->ops == &timerfd_ops;
+}
+
+// Read `active` itself rather than going through timerfd_current_spec: an
+// armed timer whose expiry is due but whose callback has not run yet reports
+// no time remaining there, and describing that as disarmed would bring a
+// periodic timer back stopped.
+void timerfd_ckpt_describe(struct fd *fd, struct timerfd_ckpt *out) {
+    struct timer *t = fd->timerfd.timer;
+    *out = (struct timerfd_ckpt) {0};
+    lock(&t->lock, 0);
+    out->real_clockid = (uint32_t) t->clockid;
+    out->interval_sec = t->interval.tv_sec;
+    out->interval_nsec = t->interval.tv_nsec;
+    if (t->active) {
+        struct timespec remaining = timespec_subtract(t->end, timespec_now(t->clockid));
+        if (!timespec_positive(remaining))
+            remaining = (struct timespec) {.tv_sec = 0, .tv_nsec = 1};
+        out->armed = 1;
+        out->value_sec = remaining.tv_sec;
+        out->value_nsec = remaining.tv_nsec;
+    }
+    unlock(&t->lock);
+    out->expirations = fd->timerfd.expirations;
+}
+
+struct fd *timerfd_ckpt_new(const struct timerfd_ckpt *d) {
+    struct fd *fd = adhoc_fd_create(&timerfd_ops);
+    if (fd == NULL)
+        return ERR_PTR(_ENOMEM);
+    fd->timerfd.timer = timer_new((clockid_t) d->real_clockid,
+                                  (timer_callback_t) timerfd_callback, fd);
+    if (fd->timerfd.timer == NULL) {
+        fd_close(fd);
+        return ERR_PTR(_ENOMEM);
+    }
+    fd->timerfd.expirations = d->expirations;
+    if (d->armed) {
+        struct timer_spec spec = {
+            .value = {.tv_sec = (time_t) d->value_sec, .tv_nsec = (long) d->value_nsec},
+            .interval = {.tv_sec = (time_t) d->interval_sec, .tv_nsec = (long) d->interval_nsec},
+        };
+        timer_set(fd->timerfd.timer, spec, NULL);
+    }
+    return fd;
+}

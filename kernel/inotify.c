@@ -4,6 +4,7 @@
 #include "kernel/inotify.h"
 #include "fs/path.h"
 #include "fs/poll.h"
+#include "kernel/anonfd_ckpt.h"
 
 #define IN_CLOEXEC_ O_CLOEXEC_
 #define IN_NONBLOCK_ O_NONBLOCK_
@@ -773,4 +774,171 @@ void inotify_notify_move(const char *old_path, const char *new_path, bool is_dir
         .cookie = next_cookie++,
     };
     inotify_for_each_instance(inotify_emit_move_cb, &event);
+}
+
+// A small append-only buffer and its reader, for the checkpoint blob.
+struct ckpt_blob { char *buf; size_t len, cap; bool failed; };
+static void ckpt_blob_put(struct ckpt_blob *b, const void *p, size_t n) {
+    if (b->failed || n == 0)
+        return;
+    if (b->len + n > b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 256;
+        while (cap < b->len + n)
+            cap *= 2;
+        char *nb = realloc(b->buf, cap);
+        if (nb == NULL) { b->failed = true; return; }
+        b->buf = nb; b->cap = cap;
+    }
+    memcpy(b->buf + b->len, p, n);
+    b->len += n;
+}
+struct ckpt_blob_rd { const char *p; size_t left; bool bad; };
+static void ckpt_blob_get(struct ckpt_blob_rd *r, void *out, size_t n) {
+    if (r->bad || n > r->left) { r->bad = true; memset(out, 0, n); return; }
+    memcpy(out, r->p, n);
+    r->p += n; r->left -= n;
+}
+
+// ---- checkpoint (kernel/anonfd_ckpt.h) ------------------------------------
+//
+//   int32 next_wd, uint32 overflowed, uint32 n_watches, uint32 n_events
+//   n_watches x { int32 wd, uint32 mask, uint32 path_len, path }
+//   n_events  x { int32 wd, uint32 mask, uint32 cookie, uint32 name_len, name }
+
+bool inotify_fd_is(struct fd *fd) {
+    return fd != NULL && fd->ops == &inotify_fdops;
+}
+
+char *inotify_ckpt_describe(struct fd *fd, size_t *len) {
+    struct ckpt_blob b = {0};
+    lock(&fd->lock, 0);
+    struct inotify_state *state = inotify_state_get(fd);
+    if (state == NULL) {
+        unlock(&fd->lock);
+        return NULL;
+    }
+    uint32_t nw = 0, ne = 0;
+    struct inotify_watch *w;
+    list_for_each_entry(&state->watches, w, list)
+        nw++;
+    struct inotify_event_node *ev;
+    list_for_each_entry(&state->events, ev, list)
+        ne++;
+    int32_t next_wd = state->next_wd;
+    uint32_t overflowed = state->overflowed ? 1 : 0;
+    ckpt_blob_put(&b, &next_wd, sizeof(next_wd));
+    ckpt_blob_put(&b, &overflowed, sizeof(overflowed));
+    ckpt_blob_put(&b, &nw, sizeof(nw));
+    ckpt_blob_put(&b, &ne, sizeof(ne));
+    list_for_each_entry(&state->watches, w, list) {
+        int32_t wd = w->wd;
+        uint32_t mask = w->mask, plen = (uint32_t) strlen(w->path);
+        ckpt_blob_put(&b, &wd, sizeof(wd));
+        ckpt_blob_put(&b, &mask, sizeof(mask));
+        ckpt_blob_put(&b, &plen, sizeof(plen));
+        ckpt_blob_put(&b, w->path, plen);
+    }
+    list_for_each_entry(&state->events, ev, list) {
+        int32_t wd = ev->event.wd;
+        uint32_t mask = ev->event.mask, cookie = ev->event.cookie;
+        uint32_t nlen = ev->name != NULL ? (uint32_t) strlen(ev->name) : 0;
+        ckpt_blob_put(&b, &wd, sizeof(wd));
+        ckpt_blob_put(&b, &mask, sizeof(mask));
+        ckpt_blob_put(&b, &cookie, sizeof(cookie));
+        ckpt_blob_put(&b, &nlen, sizeof(nlen));
+        ckpt_blob_put(&b, ev->name, nlen);
+    }
+    unlock(&fd->lock);
+    if (b.failed) {
+        free(b.buf);
+        return NULL;
+    }
+    *len = b.len;
+    return b.buf;
+}
+
+struct fd *inotify_ckpt_new(const char *blob, size_t len) {
+    struct ckpt_blob_rd r = {.p = blob, .left = len};
+    int32_t next_wd;
+    uint32_t overflowed, nw, ne;
+    ckpt_blob_get(&r, &next_wd, sizeof(next_wd));
+    ckpt_blob_get(&r, &overflowed, sizeof(overflowed));
+    ckpt_blob_get(&r, &nw, sizeof(nw));
+    ckpt_blob_get(&r, &ne, sizeof(ne));
+    if (r.bad)
+        return ERR_PTR(_EINVAL);
+
+    struct inotify_state *state = malloc(sizeof(struct inotify_state));
+    if (state == NULL)
+        return ERR_PTR(_ENOMEM);
+    *state = (struct inotify_state) {};
+    state->next_wd = next_wd > 0 ? next_wd : 1;
+    list_init(&state->watches);
+    list_init(&state->events);
+    list_init(&state->all);
+    struct fd *fd = adhoc_fd_create(&inotify_fdops);
+    if (fd == NULL) {
+        free(state);
+        return ERR_PTR(_ENOMEM);
+    }
+    state->fd = fd;
+    fd->data = state;
+    lock(&inotify_instances_lock, 0);
+    list_add_tail(&inotify_instances, &state->all);
+    inotify_instance_count++;
+    unlock(&inotify_instances_lock);
+
+    // The watches keep their numbers: a program keeps a map from watch
+    // descriptor to what it asked to watch, and a watch that came back under
+    // another number would deliver its events to the wrong entry.
+    lock(&fd->lock, 0);
+    for (uint32_t i = 0; i < nw && !r.bad; i++) {
+        int32_t wd;
+        uint32_t mask, plen;
+        ckpt_blob_get(&r, &wd, sizeof(wd));
+        ckpt_blob_get(&r, &mask, sizeof(mask));
+        ckpt_blob_get(&r, &plen, sizeof(plen));
+        if (r.bad || plen > r.left || plen >= MAX_PATH) {
+            r.bad = true;
+            break;
+        }
+        struct inotify_watch *w = malloc(sizeof(*w));
+        char *path = malloc(plen + 1);
+        if (w == NULL || path == NULL) {
+            free(w);
+            free(path);
+            r.bad = true;
+            break;
+        }
+        ckpt_blob_get(&r, path, plen);
+        path[plen] = '\0';
+        w->wd = wd;
+        w->mask = mask;
+        w->path = path;
+        list_add_tail(&state->watches, &w->list);
+    }
+    // Events already queued are still owed to the reader.
+    for (uint32_t i = 0; i < ne && !r.bad; i++) {
+        int32_t wd;
+        uint32_t mask, cookie, nlen;
+        ckpt_blob_get(&r, &wd, sizeof(wd));
+        ckpt_blob_get(&r, &mask, sizeof(mask));
+        ckpt_blob_get(&r, &cookie, sizeof(cookie));
+        ckpt_blob_get(&r, &nlen, sizeof(nlen));
+        if (r.bad || nlen > r.left || nlen >= MAX_PATH) {
+            r.bad = true;
+            break;
+        }
+        char name[MAX_PATH];
+        ckpt_blob_get(&r, name, nlen);
+        name[nlen] = '\0';
+        inotify_queue_event_locked(fd, wd, mask, cookie, nlen != 0 ? name : NULL);
+    }
+    state->overflowed = overflowed != 0;
+    unlock(&fd->lock);
+    if (r.bad) {
+        fd_close(fd);
+        return ERR_PTR(_EINVAL);
+    }
+    return fd;
 }

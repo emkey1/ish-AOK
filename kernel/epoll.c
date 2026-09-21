@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include "kernel/anonfd_ckpt.h"
 
 static struct fd_ops epoll_ops;
 
@@ -493,3 +494,38 @@ static struct fd_ops epoll_ops = {
     .poll = epoll_poll,
     .close = epoll_close,
 };
+
+// ---- checkpoint (kernel/anonfd_ckpt.h) ------------------------------------
+
+bool epoll_fd_is(struct fd *fd) {
+    return fd != NULL && fd->ops == &epoll_ops;
+}
+
+struct fd *epoll_ckpt_new(void) {
+    struct poll *poll = poll_create();
+    if (IS_ERR(poll))
+        return ERR_PTR(PTR_ERR(poll));
+    struct fd *fd = adhoc_fd_create(&epoll_ops);
+    if (fd == NULL) {
+        poll_destroy(poll);
+        return ERR_PTR(_ENOMEM);
+    }
+    poll->owner_fd = fd;
+    fd->epollfd.poll = poll;
+    return fd;
+}
+
+void epoll_ckpt_each(struct fd *ep, epoll_ckpt_each_fn each, void *ctx) {
+    struct poll *poll = ep->epollfd.poll;
+    lock(&poll->lock, 0);
+    struct poll_fd *pf;
+    list_for_each_entry(&poll->poll_fds, pf, fds)
+        each(ctx, pf->fd, pf->guest_fd, pf->types, pf->info.num);
+    unlock(&poll->lock);
+}
+
+int epoll_ckpt_add(struct fd *ep, struct fd *target, int32_t guest_fd,
+                   int types, uint64_t data) {
+    return poll_add_fd(ep->epollfd.poll, target, (fd_t) guest_fd, types,
+                       (union poll_fd_info) data);
+}

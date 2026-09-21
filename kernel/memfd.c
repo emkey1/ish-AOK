@@ -5,6 +5,7 @@
 #include "kernel/fs.h"
 #include "fs/poll.h"
 #include "fs/real.h"
+#include "kernel/anonfd_ckpt.h"
 
 // Note: MFD_* flag values are their own namespace, NOT O_* values.
 // MFD_CLOEXEC is 0x0001 in the Linux ABI (it was O_CLOEXEC_ here, so every
@@ -65,6 +66,9 @@ static const struct fs_ops memfd_fs = {
     .fsetattr = memfd_fsetattr,
     .getpath = memfd_getpath,
 };
+
+// Every memfd's inode number, including one a restore makes (memfd_ckpt_new).
+static _Atomic ino_t memfd_next_inode = 1;
 
 static struct mount memfd_mount = {
     .point = "",
@@ -381,7 +385,6 @@ int_t sys_memfd_create_guest(guest_addr_t name_addr, uint_t flags) {
         free(state);
         return _ENOMEM;
     }
-    static _Atomic ino_t next_inode = 1;
     mount_retain(&memfd_mount);
     fd->mount = &memfd_mount;
     fd->type = S_IFREG;
@@ -389,10 +392,159 @@ int_t sys_memfd_create_guest(guest_addr_t name_addr, uint_t flags) {
     // MFD_NOEXEC_SEAL) and nlink 0.
     fd->flags = O_RDWR_;
     fd->stat = (struct statbuf) {};
-    fd->stat.inode = next_inode++;
+    fd->stat.inode = memfd_next_inode++;
     fd->stat.mode = S_IFREG | ((flags & MFD_NOEXEC_SEAL_) ? 0666 : 0777);
     fd->stat.uid = current->euid;
     fd->stat.gid = current->egid;
     fd->fs_data = state;
     return f_install(fd, (flags & MFD_CLOEXEC_) ? O_CLOEXEC_ : 0);
+}
+
+// A small append-only buffer and its reader, for the checkpoint blob.
+struct ckpt_blob { char *buf; size_t len, cap; bool failed; };
+static void ckpt_blob_put(struct ckpt_blob *b, const void *p, size_t n) {
+    if (b->failed || n == 0)
+        return;
+    if (b->len + n > b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 256;
+        while (cap < b->len + n)
+            cap *= 2;
+        char *nb = realloc(b->buf, cap);
+        if (nb == NULL) { b->failed = true; return; }
+        b->buf = nb; b->cap = cap;
+    }
+    memcpy(b->buf + b->len, p, n);
+    b->len += n;
+}
+struct ckpt_blob_rd { const char *p; size_t left; bool bad; };
+static void ckpt_blob_get(struct ckpt_blob_rd *r, void *out, size_t n) {
+    if (r->bad || n > r->left) { r->bad = true; memset(out, 0, n); return; }
+    memcpy(out, r->p, n);
+    r->p += n; r->left -= n;
+}
+
+// ---- checkpoint (kernel/anonfd_ckpt.h) ------------------------------------
+//
+//   uint32 seals, uint32 mode, uint32 uid, uint32 gid,
+//   uint32 name_len, name, uint64 size, contents
+
+bool memfd_fd_is(struct fd *fd) {
+    return fd != NULL && fd->ops == &memfd_ops;
+}
+
+char *memfd_ckpt_describe(struct fd *fd, size_t *len, uint64_t max_contents) {
+    struct memfd_state *state = memfd_state_get(fd);
+    struct stat st;
+    if (fstat(state->host_fd, &st) != 0 || (uint64_t) st.st_size > max_contents)
+        return NULL;
+    struct ckpt_blob b = {0};
+    lock(&state->lock, 0);
+    uint32_t seals = (uint32_t) state->seals;
+    unlock(&state->lock);
+    uint32_t mode = fd->stat.mode, uid = fd->stat.uid, gid = fd->stat.gid;
+    uint32_t nlen = (uint32_t) strlen(state->name);
+    uint64_t size = (uint64_t) st.st_size;
+    ckpt_blob_put(&b, &seals, sizeof(seals));
+    ckpt_blob_put(&b, &mode, sizeof(mode));
+    ckpt_blob_put(&b, &uid, sizeof(uid));
+    ckpt_blob_put(&b, &gid, sizeof(gid));
+    ckpt_blob_put(&b, &nlen, sizeof(nlen));
+    ckpt_blob_put(&b, state->name, nlen);
+    ckpt_blob_put(&b, &size, sizeof(size));
+    size_t at = b.len;
+    // Room for the contents, then read them straight into it.
+    ckpt_blob_put(&b, "", 0);
+    if (!b.failed && size > 0) {
+        char *nb = realloc(b.buf, b.len + size);
+        if (nb == NULL) {
+            b.failed = true;
+        } else {
+            b.buf = nb;
+            b.cap = b.len + size;
+            uint64_t got = 0;
+            while (got < size) {
+                ssize_t n = pread(state->host_fd, b.buf + at + got,
+                                  (size_t) (size - got), (off_t) got);
+                if (n <= 0)
+                    break;
+                got += (uint64_t) n;
+            }
+            if (got != size)
+                b.failed = true;
+            b.len += size;
+        }
+    }
+    if (b.failed) {
+        free(b.buf);
+        return NULL;
+    }
+    *len = b.len;
+    return b.buf;
+}
+
+struct fd *memfd_ckpt_new(const char *blob, size_t len) {
+    struct ckpt_blob_rd r = {.p = blob, .left = len};
+    uint32_t seals, mode, uid, gid, nlen;
+    ckpt_blob_get(&r, &seals, sizeof(seals));
+    ckpt_blob_get(&r, &mode, sizeof(mode));
+    ckpt_blob_get(&r, &uid, sizeof(uid));
+    ckpt_blob_get(&r, &gid, sizeof(gid));
+    ckpt_blob_get(&r, &nlen, sizeof(nlen));
+    if (r.bad || nlen > MEMFD_MAX_NAME || nlen > r.left)
+        return ERR_PTR(_EINVAL);
+    char name[MEMFD_MAX_NAME + 1];
+    ckpt_blob_get(&r, name, nlen);
+    name[nlen] = '\0';
+    uint64_t size;
+    ckpt_blob_get(&r, &size, sizeof(size));
+    if (r.bad || size > r.left)
+        return ERR_PTR(_EINVAL);
+
+    struct memfd_state *state = malloc(sizeof(struct memfd_state));
+    if (state == NULL)
+        return ERR_PTR(_ENOMEM);
+    *state = (struct memfd_state) {};
+    state->name = strdup(name);
+    state->host_fd = host_unlinked_tmpfd();
+    if (state->name == NULL || state->host_fd < 0) {
+        int err = state->host_fd < 0 ? state->host_fd : _ENOMEM;
+        if (state->host_fd >= 0)
+            close(state->host_fd);
+        free(state->name);
+        free(state);
+        return ERR_PTR(err);
+    }
+    uint64_t put = 0;
+    while (put < size) {
+        ssize_t n = pwrite(state->host_fd, r.p + put, (size_t) (size - put), (off_t) put);
+        if (n <= 0)
+            break;
+        put += (uint64_t) n;
+    }
+    if (put != size) {
+        close(state->host_fd);
+        free(state->name);
+        free(state);
+        return ERR_PTR(_EIO);
+    }
+    state->seals = (int) seals;
+    lock_init(&state->lock, "memfd_state\0");
+    struct fd *fd = fd_create(&memfd_ops);
+    if (fd == NULL) {
+        close(state->host_fd);
+        free(state->name);
+        free(state);
+        return ERR_PTR(_ENOMEM);
+    }
+    mount_retain(&memfd_mount);
+    fd->mount = &memfd_mount;
+    fd->type = S_IFREG;
+    fd->flags = O_RDWR_;
+    fd->stat = (struct statbuf) {};
+    fd->stat.inode = memfd_next_inode++;
+    fd->stat.mode = mode;
+    fd->stat.uid = uid;
+    fd->stat.gid = gid;
+    fd->fs_data = state;
+    return fd;
 }

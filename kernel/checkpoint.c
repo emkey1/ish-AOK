@@ -84,12 +84,14 @@
 #include "fs/path.h"
 #include "fs/tty.h"
 #include "fs/sock_ckpt.h"
+#include "fs/real.h"
+#include "kernel/anonfd_ckpt.h"
 #include "fs/devices.h"
 #include "emu/memory.h"
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 7   // 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 8   // 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -128,6 +130,17 @@ enum ckpt_fd_kind {
     // old -> new so the slave can find its way to the same pty.
     CKPT_FD_PTY_MASTER,
     CKPT_FD_PTY_SLAVE,
+    // Descriptors with no file behind them (kernel/anonfd_ckpt.h). Each is
+    // rebuilt from a description that follows its record -- `offset` bytes of
+    // it -- except an epoll set's registrations, which follow the last task:
+    // they name descriptors that may belong to other processes.
+    CKPT_FD_EPOLL,
+    CKPT_FD_EVENTFD,
+    CKPT_FD_SIGNALFD,
+    CKPT_FD_TIMERFD,
+    CKPT_FD_INOTIFY,
+    CKPT_FD_PIDFD,
+    CKPT_FD_MEMFD,
 };
 
 // Which KIND of terminal a process's standard streams were on. The two are
@@ -185,6 +198,13 @@ static const char *ckpt_kind_name(uint32_t kind) {
         case CKPT_FD_SOCKET: return "sock";
         case CKPT_FD_PTY_MASTER: return "ptmx";
         case CKPT_FD_PTY_SLAVE: return "pts";
+        case CKPT_FD_EPOLL: return "epoll";
+        case CKPT_FD_EVENTFD: return "evfd";
+        case CKPT_FD_SIGNALFD: return "sigfd";
+        case CKPT_FD_TIMERFD: return "tmrfd";
+        case CKPT_FD_INOTIFY: return "inotf";
+        case CKPT_FD_PIDFD: return "pidfd";
+        case CKPT_FD_MEMFD: return "memfd";
         default: return "?";
     }
 }
@@ -215,6 +235,9 @@ struct ckpt_header {
     // How many tmpfs mounts are described between this header and the first
     // task record. See the tmpfs contents section below.
     uint32_t n_tmpfs;
+    // How many epoll registrations follow the last task record.
+    uint32_t n_epoll_regs;
+    uint32_t reserved2;
 };
 
 struct ckpt_task {
@@ -932,6 +955,27 @@ static uint64_t ckpt_fd_offset(struct fd *fd) {
 
 // One descriptor, classified. Returns the kind, or 0 with a refusal recorded.
 static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size) {
+    // Descriptors with no file behind them, identified by what they ARE rather
+    // than by what they look like. Before this they reached the standard-
+    // stream rule below: struct fd is zero-initialised, so every one of them
+    // had real_fd 0. A restored dbus-daemon got /dev/null where its epoll set
+    // had been, epoll_pwait failed at once for ever, and the daemon spun at a
+    // full core without serving the bus -- and every login waits on the bus.
+    if (epoll_fd_is(fd))
+        return CKPT_FD_EPOLL;
+    if (eventfd_fd_is(fd))
+        return CKPT_FD_EVENTFD;
+    if (signalfd_fd_is(fd))
+        return CKPT_FD_SIGNALFD;
+    if (timerfd_fd_is(fd))
+        return CKPT_FD_TIMERFD;
+    if (inotify_fd_is(fd))
+        return CKPT_FD_INOTIFY;
+    if (pidfd_fd_is(fd))
+        return CKPT_FD_PIDFD;
+    if (memfd_fd_is(fd))
+        return CKPT_FD_MEMFD;
+
     const char *family = fd->ops != NULL && fd->ops->name != NULL
             ? fd->ops->name : "unknown";
 
@@ -971,7 +1015,9 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
     // very first checkpoint taken from inside `while read; done < file`
     // refused on "fd 10 is a special file". It is the same stream, wherever
     // the guest is holding it.
-    if (fd->real_fd >= 0 && fd->real_fd <= 2 &&
+    // Only a descriptor that really wraps one of the host's own: real_fd 0 is
+    // also simply what a descriptor with no host fd at all holds.
+    if (fd->ops == &realfs_fdops && fd->real_fd >= 0 && fd->real_fd <= 2 &&
             !S_ISREG(fd->type) && !S_ISDIR(fd->type))
         return CKPT_FD_STDIO;
     // An ordinary character device -- /dev/null, /dev/zero, /dev/urandom.
@@ -1682,6 +1728,133 @@ static int ckpt_tmpfs_restore(FILE *f, uint32_t n_mounts) {
     return 0;
 }
 
+
+// ---- descriptors with no file behind them ---------------------------------
+//
+// See kernel/anonfd_ckpt.h. A memfd larger than this is refused by name
+// rather than carried in part.
+#define CKPT_MEMFD_MAX (64ull << 20)
+#define CKPT_ANON_MAX (CKPT_MEMFD_MAX + (1u << 20))
+
+struct ckpt_eventfd_desc { uint64_t val; uint32_t semaphore, pad; };
+
+static char *ckpt_memdup(const void *p, size_t n) {
+    char *c = malloc(n);
+    if (c != NULL)
+        memcpy(c, p, n);
+    return c;
+}
+
+// Describe s->fd into s->pipe_bytes / s->pipe_len, which the writer puts after
+// the record, and set `offset` to the length -- the same arrangement a pipe's
+// leftover bytes use. Nothing to do for any other kind, or for an epoll set,
+// whose registrations are written after the last task.
+static int ckpt_describe_anon(struct ckpt_saved_fd *s) {
+    char *blob = NULL;
+    size_t len = 0;
+    switch (s->kind) {
+    case CKPT_FD_EVENTFD: {
+        struct ckpt_eventfd_desc d = {
+            .val = s->fd->eventfd.val,
+            .semaphore = s->fd->eventfd.semaphore ? 1 : 0,
+        };
+        len = sizeof(d);
+        blob = ckpt_memdup(&d, len);
+        break;
+    }
+    case CKPT_FD_SIGNALFD: {
+        uint64_t mask = signalfd_ckpt_mask(s->fd);
+        len = sizeof(mask);
+        blob = ckpt_memdup(&mask, len);
+        break;
+    }
+    case CKPT_FD_TIMERFD: {
+        struct timerfd_ckpt d;
+        timerfd_ckpt_describe(s->fd, &d);
+        len = sizeof(d);
+        blob = ckpt_memdup(&d, len);
+        break;
+    }
+    case CKPT_FD_PIDFD: {
+        int32_t pid = pidfd_ckpt_pid(s->fd);
+        len = sizeof(pid);
+        blob = ckpt_memdup(&pid, len);
+        break;
+    }
+    case CKPT_FD_INOTIFY:
+        blob = inotify_ckpt_describe(s->fd, &len);
+        break;
+    case CKPT_FD_MEMFD:
+        blob = memfd_ckpt_describe(s->fd, &len, CKPT_MEMFD_MAX);
+        if (blob == NULL) {
+            ckpt_refuse("fd %u is a memfd that could not be carried (larger "
+                        "than %llu MB, or unreadable)", s->num,
+                        (unsigned long long) (CKPT_MEMFD_MAX >> 20));
+            return _EFBIG;
+        }
+        break;
+    default:
+        return 0;
+    }
+    if (blob == NULL)
+        return _ENOMEM;
+    s->pipe_bytes = blob;
+    s->pipe_len = len;
+    s->offset = len;
+    return 0;
+}
+
+// Every epoll registration, written after the last task: a registration names
+// a descriptor by identity, and that descriptor may belong to any process.
+struct ckpt_epoll_reg {
+    uint32_t epoll_id, target_id;
+    int32_t guest_fd;
+    uint32_t types;
+    uint64_t data;
+};
+struct ckpt_epoll_walk {
+    struct ckpt_writer *w;
+    struct ckpt_fd_ids *ids;
+    uint32_t epoll_id, written, skipped;
+};
+static void ckpt_epoll_reg_each(void *ctx, struct fd *target, int32_t guest_fd,
+                                int types, uint64_t data) {
+    struct ckpt_epoll_walk *c = ctx;
+    uint32_t tid = UINT32_MAX;
+    for (uint32_t i = 0; i < c->ids->count; i++) {
+        if (c->ids->fds[i] == target) {
+            tid = i;
+            break;
+        }
+    }
+    // Registered on a descriptor no process still holds: Linux drops a
+    // registration when its file closes, so there is nothing to bring back.
+    if (tid == UINT32_MAX) {
+        c->skipped++;
+        return;
+    }
+    struct ckpt_epoll_reg r = {
+        .epoll_id = c->epoll_id, .target_id = tid, .guest_fd = guest_fd,
+        .types = (uint32_t) types, .data = data,
+    };
+    wr(c->w, &r, sizeof(r));
+    c->written++;
+}
+static int ckpt_save_epoll_regs(struct ckpt_writer *w, struct ckpt_fd_ids *ids,
+                                uint32_t *count) {
+    struct ckpt_epoll_walk c = {.w = w, .ids = ids};
+    for (uint32_t i = 0; i < ids->count; i++) {
+        if (!epoll_fd_is(ids->fds[i]))
+            continue;
+        c.epoll_id = i;
+        epoll_ckpt_each(ids->fds[i], ckpt_epoll_reg_each, &c);
+    }
+    CKPT_TRACE("epoll: %u registrations written, %u on nothing held\n",
+               c.written, c.skipped);
+    *count = c.written;
+    return w->err;
+}
+
 static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         struct ckpt_header *h, uint64_t *pages_out, struct ckpt_fd_ids *ids) {
     struct task *saved_current = current;
@@ -1784,6 +1957,8 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
                     goto out;
                 s->offset = s->pipe_len;
             }
+            if ((ret = ckpt_describe_anon(s)) < 0)
+                goto out;
             // Asked while everything is frozen, which is the only moment the
             // answer is stable: it reads the host socket's own name and
             // whether it has a peer.
@@ -2234,6 +2409,8 @@ int checkpoint_save(const char *host_path) {
     struct ckpt_fd_ids ids = {0};
     for (unsigned i = 0; i < snap.count && err == 0; i++)
         err = ckpt_save_task(&w, snap.tasks[i], &h, &pages, &ids);
+    if (err == 0 && w.err == 0)
+        err = ckpt_save_epoll_regs(&w, &ids, &h.n_epoll_regs);
     unsigned nfds_total = ids.count;
     free(ids.fds);
     task_snapshot_release(&snap);
@@ -2402,6 +2579,10 @@ struct ckpt_restore_state {
     // the master was not in the image at all.
     struct { int old_num, new_num; } *ptys;
     uint32_t pty_count, pty_cap;
+    // pidfds made unbound, to be bound to their process once every task is
+    // built (ckpt_restore_pidfds).
+    struct { struct fd *fd; int32_t pid; } *pidfds;
+    uint32_t pidfd_count, pidfd_cap;
 };
 
 // Remember where a restored pty master ended up, and look it up again.
@@ -2733,6 +2914,121 @@ static int ckpt_pipe_for(struct ckpt_restore_state *st, uint64_t inode,
     return 0;
 }
 
+
+// Build a descriptor with no file behind it from its description (see
+// ckpt_describe_anon). A pidfd is made unbound and bound once every task
+// exists: it usually names a child, and a child is restored after its parent.
+static struct fd *ckpt_rebuild_anon(struct ckpt_restore_state *st,
+        const struct ckpt_fd *cf, const char *payload) {
+    size_t len = (size_t) cf->offset;
+    switch (cf->kind) {
+    case CKPT_FD_EPOLL:
+        return epoll_ckpt_new();
+    case CKPT_FD_EVENTFD: {
+        struct ckpt_eventfd_desc d;
+        if (len != sizeof(d))
+            return ERR_PTR(_EINVAL);
+        memcpy(&d, payload, sizeof(d));
+        return eventfd_ckpt_new(d.val, d.semaphore != 0);
+    }
+    case CKPT_FD_SIGNALFD: {
+        uint64_t mask;
+        if (len != sizeof(mask))
+            return ERR_PTR(_EINVAL);
+        memcpy(&mask, payload, sizeof(mask));
+        return signalfd_ckpt_new(mask);
+    }
+    case CKPT_FD_TIMERFD: {
+        struct timerfd_ckpt d;
+        if (len != sizeof(d))
+            return ERR_PTR(_EINVAL);
+        memcpy(&d, payload, sizeof(d));
+        return timerfd_ckpt_new(&d);
+    }
+    case CKPT_FD_INOTIFY:
+        return inotify_ckpt_new(payload, len);
+    case CKPT_FD_MEMFD:
+        return memfd_ckpt_new(payload, len);
+    case CKPT_FD_PIDFD: {
+        int32_t pid;
+        if (len != sizeof(pid))
+            return ERR_PTR(_EINVAL);
+        memcpy(&pid, payload, sizeof(pid));
+        struct fd *pidfd = pidfd_ckpt_new_unbound();
+        if (IS_ERR(pidfd) || pid <= 0)
+            return pidfd;   // pid 0: the process was already gone, and stays so
+        if (st->pidfd_count == st->pidfd_cap) {
+            uint32_t cap = st->pidfd_cap ? st->pidfd_cap * 2 : 8;
+            void *n = realloc(st->pidfds, cap * sizeof(*st->pidfds));
+            if (n == NULL) {
+                fd_close(pidfd);
+                return ERR_PTR(_ENOMEM);
+            }
+            st->pidfds = n;
+            st->pidfd_cap = cap;
+        }
+        st->pidfds[st->pidfd_count].fd = pidfd;
+        st->pidfds[st->pidfd_count].pid = pid;
+        st->pidfd_count++;
+        return pidfd;
+    }
+    default:
+        return ERR_PTR(_EINVAL);
+    }
+}
+
+static bool ckpt_kind_is_anon(uint32_t kind) {
+    return kind >= CKPT_FD_EPOLL && kind <= CKPT_FD_MEMFD;
+}
+
+// The epoll registrations, once every descriptor in the image exists. One
+// that cannot be put back is said, and stepped over: the set still works for
+// everything else it was watching.
+static int ckpt_restore_epoll_regs(FILE *f, const struct ckpt_header *h,
+                                   struct ckpt_restore_state *st) {
+    unsigned added = 0, failed = 0;
+    for (uint32_t i = 0; i < h->n_epoll_regs; i++) {
+        struct ckpt_epoll_reg r;
+        int err = rd(f, &r, sizeof(r));
+        if (err < 0)
+            return err;
+        struct fd *ep = r.epoll_id < st->id_count ? st->by_id[r.epoll_id] : NULL;
+        struct fd *target = r.target_id < st->id_count ? st->by_id[r.target_id] : NULL;
+        if (ep == NULL || target == NULL || !epoll_fd_is(ep)) {
+            failed++;
+            continue;
+        }
+        err = epoll_ckpt_add(ep, target, r.guest_fd, (int) r.types, r.data);
+        if (err < 0) {
+            printk("WARNING: checkpoint: epoll registration of fd %d could not "
+                   "be put back (%d)\n", r.guest_fd, -err);
+            failed++;
+        } else {
+            added++;
+        }
+    }
+    CKPT_TRACE("epoll: %u registrations put back, %u not\n", added, failed);
+    return 0;
+}
+
+// Every pidfd bound to the process it names, now that the process exists.
+// One whose process did not come back stays unbound, which is the answer
+// Linux gives for a process that is gone -- readable, ESRCH to signal -- and
+// the same thing its holder would have seen had the process died on its own.
+// A zombie counts as there: a pidfd on one is how its parent may reap it.
+static void ckpt_restore_pidfds(struct ckpt_restore_state *st) {
+    for (uint32_t i = 0; i < st->pidfd_count; i++) {
+        struct task *task = pid_get_task_zombie_ref((dword_t) st->pidfds[i].pid);
+        if (task == NULL) {
+            printk("checkpoint: a pidfd named pid %d, which did not come back; "
+                   "it reads as a process that has gone\n", st->pidfds[i].pid);
+            continue;
+        }
+        pidfd_ckpt_bind(st->pidfds[i].fd, task);
+        task_ref_cnt_mod(task, -1);
+    }
+}
+
 static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
         const struct ckpt_task *rec, struct ckpt_restore_state *st) {
     int err;
@@ -2984,6 +3280,34 @@ descriptors:
             }
             fd_retain(shared);
             if ((err = fdtable_install_at(files, (fd_t) cf.fd, shared,
+                                          cf.cloexec != 0)) < 0)
+                goto fds_done;
+            continue;
+        }
+
+        if (ckpt_kind_is_anon(cf.kind)) {
+            if (cf.offset > CKPT_ANON_MAX) { err = _EINVAL; goto fds_done; }
+            char *payload = NULL;
+            if (cf.offset != 0) {
+                payload = malloc((size_t) cf.offset);
+                if (payload == NULL) { err = _ENOMEM; goto fds_done; }
+                if ((err = rd(f, payload, (size_t) cf.offset)) < 0) {
+                    free(payload);
+                    goto fds_done;
+                }
+            }
+            struct fd *afd = ckpt_rebuild_anon(st, &cf, payload);
+            free(payload);
+            if (IS_ERR(afd)) {
+                err = (int) PTR_ERR(afd);
+                goto fds_done;
+            }
+            afd->flags = (int) cf.flags;
+            if ((err = ckpt_id_put(st, cf.id, afd)) < 0) {
+                fd_close(afd);
+                goto fds_done;
+            }
+            if ((err = fdtable_install_at(files, (fd_t) cf.fd, afd,
                                           cf.cloexec != 0)) < 0)
                 goto fds_done;
             continue;
@@ -3685,6 +4009,12 @@ int checkpoint_restore(const char *host_path) {
             goto out;
     }
 
+    // Every descriptor in the image exists now, so the things that point at
+    // descriptors elsewhere can be put back: epoll registrations, and pidfds.
+    if ((err = ckpt_restore_epoll_regs(f, &h, &st)) < 0)
+        goto out;
+    ckpt_restore_pidfds(&st);
+
     // Every task exists and is complete; now let them go. The freezer's own
     // parking lot does the releasing, so a restored task and a checkpointed
     // one wait in exactly the same place.
@@ -3763,6 +4093,7 @@ out:
     free(st.by_id);
     free(st.pipes);
     free(st.sets);
+    free(st.pidfds);
     if (err < 0 && (nbuilt > 0 || ckpt_restore_mounted_n > 0))
         ckpt_restore_unwind(built, nbuilt, current);
     else
