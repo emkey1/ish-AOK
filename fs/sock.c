@@ -4215,6 +4215,11 @@ static int unix_socket_get(const char *path_raw, struct fd *bind_fd, uint32_t *s
     *socket_id = inode->socket_id;
 
     mount_release(mount);
+    // A bind keeps the reference until its socket closes (release_unix_names),
+    // which is what keeps socket_id on the node while something is bound there
+    // -- and nothing longer. Once the listener is gone, the node is a stale
+    // name: a lookup finds no id, draws a fresh one with no host socket behind
+    // it, and is refused (unix_host_missing_is_refused), as on Linux.
     if (bind_fd != NULL)
         bind_fd->socket.unix_name_inode = inode;
     else
@@ -4978,9 +4983,7 @@ static int sockaddr_read_bind(guest_addr_t sockaddr_addr, void *sockaddr, uint_t
 }
 
 static int sockaddr_read(guest_addr_t sockaddr_addr, void *sockaddr, uint_t *sockaddr_len) {
-    struct inode_data *inode = NULL;
     int err = sockaddr_read_bind(sockaddr_addr, sockaddr, sockaddr_len, NULL);
-    inode_release_if_exist(inode);
     if (err < 0)
         return err;
     // As a *destination* (connect/sendto/sendmsg -- everything except bind,
@@ -5255,6 +5258,15 @@ static void release_unix_names(struct fd *fd) {
     }
 }
 
+// A failed bind leaves the socket unbound: the name it took is given back, and
+// it no longer reports -- to getsockname, or to a checkpoint -- a name it never
+// got. sys_bind_common refuses a second bind before calling this, so the name
+// dropped here is always the one this bind took.
+static void unix_bind_failed(struct fd *sock) {
+    release_unix_names(sock);
+    sock->socket.unix_name_len = 0;
+}
+
 // Linux refuses a connection to a socket that is bound but not yet listening:
 // the port is in the bound hash but not the listening one, so the SYN gets an
 // RST and the client's connect() returns ECONNREFUSED immediately. Darwin
@@ -5338,11 +5350,24 @@ static int_t sys_bind_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t so
     struct fd *sock = sock_getfd(sock_fd, &sock_err);
     if (sock == NULL)
         return sock_err;
+    // A unix socket gets one name for its life: Linux's unix_bind answers a
+    // second bind with EINVAL (u->addr is set), and an accepted socket shares
+    // its listener's address, so it counts as bound too. Asked before any name
+    // is taken, because taking one overwrites the reference that holds the
+    // first -- which then could never be released. (Linux resolves a new PATH
+    // first, so a path that exists or has no parent says EADDRINUSE or ENOENT
+    // there, measured on 6.12; only a program binding a bound socket can tell.)
+    if (sock->socket.domain == AF_LOCAL_ && sock->socket.unix_name_len != 0)
+        return _EINVAL;
     struct sockaddr_max_ sockaddr;
-    struct inode_data *inode = NULL;
+    // For AF_LOCAL this takes the name: the socket node's inode (held in
+    // socket.unix_name_inode) or the abstract entry, released when the socket
+    // closes (release_unix_names).
     int err = sockaddr_read_bind(sockaddr_addr, &sockaddr, &sockaddr_len, sock);
-    if (err < 0)
+    if (err < 0) {
+        unix_bind_failed(sock);
         return err;
+    }
 
     if (sock->socket.domain == AF_NETLINK_) {
         struct sockaddr_nl_ *addr = (struct sockaddr_nl_ *) &sockaddr;
@@ -5388,7 +5413,6 @@ static int_t sys_bind_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t so
                    ? sockaddr_len : sizeof(sock->socket.deferred_addr));
         sock->socket.deferred_addr_len = sockaddr_len;
         sock->socket.bind_deferred = true;
-        sock->socket.unix_name_inode = inode;
         return 0;
     }
 
@@ -5402,16 +5426,13 @@ static int_t sys_bind_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t so
             // to 127.0.0.1:<ephemeral>; see inet_nat_bind_fallback.
             int nat_err = inet_nat_bind_fallback(sock,
                     (struct sockaddr_in *) &sockaddr, mapped_err);
-            if (nat_err == 0) {
-                sock->socket.unix_name_inode = inode;
+            if (nat_err == 0)
                 return 0;
-            }
             mapped_err = nat_err;
         }
-        release_unix_names(sock);
+        unix_bind_failed(sock);
         return mapped_err;
     }
-    sock->socket.unix_name_inode = inode;
     return 0;
 }
 
@@ -10502,8 +10523,10 @@ int sock_ckpt_describe(struct fd *sock, struct sock_ckpt_desc *out) {
         // The node's mode and ownership, as they are now -- after whatever
         // chmod/chown the daemon did once it had bound. Whatever socket node
         // sits at the path is the one every client meets, and the one the
-        // rebuild's bind replaces, so it is the one described. (Not matched
-        // against unix_name_inode: sys_bind_common leaves that NULL.)
+        // rebuild's bind replaces, so it is the one described -- even when it
+        // is not this socket's own node (unix_name_inode), which happens only
+        // if the daemon unlinked or replaced its path while still bound. The
+        // rebuild takes the path back in that case too.
         if (sock->socket.unix_name[0] != '\0') {
             char path[sizeof(sock->socket.unix_name) + 1];
             memcpy(path, sock->socket.unix_name, name_len);
