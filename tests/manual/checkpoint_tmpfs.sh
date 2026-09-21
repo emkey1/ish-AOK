@@ -87,5 +87,33 @@ else
 fi
 
 
+# The APP's save path, which is a different one. checkpoint_save_external runs
+# on a thread that is not a guest task and sets `current` to NULL on purpose,
+# so every path the walk resolves has no root, no pwd and no credentials. That
+# wrote three tmpfs mounts as ZERO entries on device while everything above
+# passed, and reported the save as a success. Both paths, from now on.
+EXT=${TMPDIR:-/tmp}/aok-ckpt-tmpfs-ext-$$.img
+trap 'rm -f "$IMG" "$EXT"' EXIT
+EXTPROG='
+mount -t tmpfs tmpfs /run || exit 1
+mkdir -p /run/deep; echo external-save-payload > /run/deep/data.txt
+i=0; while [ $i -lt 7 ]; do sleep 1; i=$((i+1)); done
+echo "E-data=$(cat /run/deep/data.txt 2>&1)"
+'
+ISH_CHECKPOINT_AFTER="3:$EXT" "$ISH" -f "$ROOT" $SH -c "$EXTPROG" >/dev/null 2>&1 || true
+if [ ! -s "$EXT" ]; then
+    echo "  FAIL    | the external save wrote no image"
+    fail=1
+else
+    ext_out=$(ISH_RESTORE="$EXT" "$ISH" -f "$ROOT" 2>&1 || true)
+    echo "$ext_out" | sed 's/^/  ext     | /'
+    if echo "$ext_out" | grep -qxF 'E-data=external-save-payload'; then
+        echo "  ok      | the app's external save carried the tmpfs too"
+    else
+        echo "  FAIL    | the external save path lost the tmpfs"
+        fail=1
+    fi
+fi
+
 [ $fail -eq 0 ] || { echo "FAIL: /run did not come back intact"; exit 1; }
-echo "PASS: the tmpfs came back with its contents, modes and ownership"
+echo "PASS: the tmpfs came back on both save paths"

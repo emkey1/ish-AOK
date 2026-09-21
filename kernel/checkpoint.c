@@ -1256,8 +1256,22 @@ static int ckpt_tmpfs_walk(struct ckpt_tmpfs_ctx *c, char *path, size_t len,
         return 0;
     }
     struct fd *dir = generic_open(path, O_RDONLY_, 0);
-    if (IS_ERR(dir))
-        return 0;   // gone or unreadable: not worth failing the save over
+    if (IS_ERR(dir)) {
+        // A subdirectory can vanish under a walk of a live filesystem, and
+        // stepping over one is right. The MOUNT POINT not opening is a
+        // different thing -- the whole tmpfs is then missing from the image --
+        // so it is said out loud. It does NOT fail the save: a session is
+        // worth more than a /run, and the same argument that made a bad
+        // descriptor degrade to /dev/null rather than refuse the restore
+        // applies here. What is not acceptable is doing it quietly, which is
+        // how three empty mounts reached a device restore looking like a
+        // success.
+        printk("WARNING: checkpoint: %s could not be read (%d); %s\n", path,
+               -(int) PTR_ERR(dir), depth == 0
+               ? "that whole filesystem is missing from the image"
+               : "it is not in the image");
+        return 0;
+    }
     if (dir->ops->readdir == NULL) {
         fd_close(dir);
         return 0;
@@ -1326,11 +1340,25 @@ static int ckpt_tmpfs_walk(struct ckpt_tmpfs_ctx *c, char *path, size_t len,
 // Every tmpfs in the guest, written as its own mount section. Returns the
 // number of sections written, or negative on error.
 // Every exit from ckpt_tmpfs_save goes through here; the table is on the heap.
-#define CKPT_TMPFS_DONE(_err) do { int _e = (_err); free(found); return _e; } while (0)
+#define CKPT_TMPFS_DONE(_err) \
+    do { int _e = (_err); free(found); current = entered_with; return _e; } while (0)
 
-static int ckpt_tmpfs_save(struct ckpt_writer *w, uint32_t *n_mounts_out) {
+static int ckpt_tmpfs_save(struct ckpt_writer *w, struct task *as,
+        uint32_t *n_mounts_out) {
     *n_mounts_out = 0;
     uint64_t budget = CKPT_TMPFS_MAX_TOTAL;
+
+    // The walk resolves paths, and path resolution reads `current` -- its
+    // root, its pwd, its credentials. An EXTERNAL save has none: the app
+    // backgrounding is not a guest task, and checkpoint_save_external sets
+    // current to NULL on purpose so ckpt_freeze_all does not mistake a stale
+    // pointer for a task already at a boundary. Every open here then failed
+    // and every tmpfs was written as zero entries -- the empty /run this
+    // section exists to prevent, reported as a success. Borrowed for the walk
+    // only, and only after the freeze, so nothing else sees it.
+    struct task *entered_with = current;
+    if (current == NULL)
+        current = as;
 
     // Copied out under the lock rather than walked under it: the walk opens
     // files and reads them, and holding mounts_lock across that invites a
@@ -1342,8 +1370,10 @@ static int ckpt_tmpfs_save(struct ckpt_writer *w, uint32_t *n_mounts_out) {
         char info[256];
         int flags;
     } *found = calloc(CKPT_TMPFS_MAX_MOUNTS, sizeof(*found));
-    if (found == NULL)
+    if (found == NULL) {
+        current = entered_with;
         return _ENOMEM;
+    }
     unsigned n_points = 0;
     lock(&mounts_lock, 0);
     struct mount *mount;
@@ -2098,7 +2128,7 @@ int checkpoint_save(const char *host_path) {
     // Before the tasks, because their descriptors name these paths and the
     // reopen on the far side needs the tree to already be there.
     if (err == 0 && w.err == 0) {
-        int terr = ckpt_tmpfs_save(&w, &h.n_tmpfs);
+        int terr = ckpt_tmpfs_save(&w, snap.tasks[0], &h.n_tmpfs);
         if (terr < 0) {
             ckpt_refuse("could not write the tmpfs contents (%d)", -terr);
             err = terr;
