@@ -1324,6 +1324,64 @@ static void task_dump_frames(uintptr_t *frames, unsigned n) {
     }
 }
 
+// ISH_TASK_DUMP_ALL_THREADS=1: every host thread in the process too, named.
+// For a stall on a thread that is neither a task's nor the boot thread -- a
+// launch sat for minutes while the main thread idled in its run loop, so the
+// work was somewhere else. Each thread is suspended through its Mach port
+// BEFORE its pthread is looked at: a thread that exited between the listing
+// and the walk would otherwise leave a dangling pthread_t, and a suspended
+// thread cannot exit.
+static bool task_dump_all_threads;
+
+static void task_dump_every_host_thread(void) {
+#if defined(__APPLE__) && (defined(__arm64__) || defined(__aarch64__))
+    thread_act_array_t threads;
+    mach_msg_type_number_t count;
+    if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS)
+        return;
+    mach_port_t self = mach_thread_self();
+    for (mach_msg_type_number_t i = 0; i < count; i++) {
+        if (threads[i] != self && thread_suspend(threads[i]) == KERN_SUCCESS) {
+            pthread_t pt = pthread_from_mach_thread_np(threads[i]);
+            char name[64] = {0};
+            uintptr_t frames[16];
+            unsigned n = 0;
+            if (pt != NULL) {
+                pthread_getname_np(pt, name, sizeof(name));
+                uintptr_t top = (uintptr_t) pthread_get_stackaddr_np(pt);
+                uintptr_t bottom = top - pthread_get_stacksize_np(pt);
+                arm_thread_state64_t st;
+                mach_msg_type_number_t sc = ARM_THREAD_STATE64_COUNT;
+                if (thread_get_state(threads[i], ARM_THREAD_STATE64,
+                                     (thread_state_t) &st, &sc) == KERN_SUCCESS) {
+                    frames[n++] = (uintptr_t) arm_thread_state64_get_pc(st) & 0x0000ffffffffffffULL;
+                    frames[n++] = (uintptr_t) arm_thread_state64_get_lr(st) & 0x0000ffffffffffffULL;
+                    uintptr_t fp = (uintptr_t) arm_thread_state64_get_fp(st);
+                    while (n < 16 && fp >= bottom && fp + 16 <= top && (fp & 7) == 0) {
+                        const uintptr_t *rec = (const uintptr_t *) fp;
+                        uintptr_t next = rec[0];
+                        uintptr_t ret = rec[1] & 0x0000ffffffffffffULL;
+                        if (ret == 0)
+                            break;
+                        frames[n++] = ret;
+                        if (next <= fp)
+                            break;
+                        fp = next;
+                    }
+                }
+            }
+            thread_resume(threads[i]);
+            fprintf(stderr, "taskdump: host thread %u \"%s\":\n", i, name);
+            task_dump_frames(frames, n);
+        }
+        mach_port_deallocate(mach_task_self(), threads[i]);
+    }
+    mach_port_deallocate(mach_task_self(), self);
+    vm_deallocate(mach_task_self(), (vm_address_t) threads,
+                  count * sizeof(thread_act_t));
+#endif
+}
+
 static void task_dump_one(struct task *t) {
     const struct native_program *native = t->native_running;
     fprintf(stderr, "taskdump: pid %d tgid %d ppid %d uid %u euid %u %s%s%s%s%s\n",
@@ -1353,6 +1411,8 @@ static void *task_dump_thread(void *unused) {
         fprintf(stderr, "taskdump: boot thread (main):\n");
         task_dump_frames(boot_frames,
                          host_thread_backtrace(task_dump_boot_thread, boot_frames, 40));
+        if (task_dump_all_threads)
+            task_dump_every_host_thread();
         for (unsigned i = 0; i < snap.count; i++)
             task_dump_one(snap.tasks[i]);
         fprintf(stderr, "taskdump: ---- end ----\n");
@@ -1367,6 +1427,8 @@ static void task_dump_start_if_asked(void) {
         return;
     task_dump_every = atof(e);
     task_dump_boot_thread = pthread_self();
+    const char *all = getenv("ISH_TASK_DUMP_ALL_THREADS");
+    task_dump_all_threads = all != NULL && all[0] != '\0' && all[0] != '0';
     if (task_dump_every < 1)
         task_dump_every = 1;
     pthread_t th;
