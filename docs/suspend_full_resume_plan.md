@@ -44,6 +44,7 @@ native-program bug read: the session was fine, nothing showed it.
 |---|---|
 | guest processes, memory, fds, ttys | works |
 | sockets (listening rebuilt, connected hung up) | works, 2026-09-12 |
+| local socket pairs inside the image come back connected, queues and all | works, 2026-09-21 |
 | shell-mode resume onto its pty | works |
 | pid-keyed session handover (`..._for_pid`) | **added 2026-09-12** |
 | layout captured at suspend | **missing** |
@@ -65,8 +66,10 @@ RFB to it over a socket. So resuming it is two halves:
 
 - **Guest half**: labwc/wayvnc must survive the checkpoint. wayvnc's listener
   is a *listening* socket, which the socket rule now rebuilds properly; the
-  compositor's own clients are unix sockets, which currently come back hung up
-  (see fs/sock_ckpt.h) -- so the compositor may need to re-accept.
+  compositor's own clients are unix sockets inside the image, which come back
+  connected with whatever they had queued (fs/sock_ckpt.h). What cannot travel
+  is a descriptor in flight in SCM_RIGHTS at the instant of the save -- and
+  Wayland passes buffers that way, so this is the part to watch.
 - **App half**: `DisplayRFBClient` must reconnect after a resume rather than
   reporting "Wayland session ended". Its connection is a client socket and will
   come back hung up by design; reconnecting is the correct response, not

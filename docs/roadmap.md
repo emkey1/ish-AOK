@@ -293,7 +293,24 @@ it. What exists now:
 - **More than one process**, with the process tree, pids, sessions and process
   groups, and zombies whose status a parent has not collected yet.
 - **Descriptor identity**: two processes sharing one struct fd get one back.
-- **Pipes**, with the bytes still in them.
+- **Pipes**, with the bytes still in them, and **named FIFOs**, reopened by
+  path with the bytes still in them.
+- **Descriptors with no file behind them** -- epoll sets with their
+  registrations, inotify with its watch numbers and queued events, eventfd,
+  signalfd, timerfd with its time left, pidfd, memfd with its contents
+  (kernel/anonfd_ckpt.h). Before these, every one came back as /dev/null, and a
+  dbus-daemon whose epoll set was /dev/null spun at a full core and never
+  served the bus that logins wait on.
+- **Sockets**, described and built again (fs/sock_ckpt.h). A listening socket
+  comes back listening; SOCK_SEQPACKET, which iOS's sandbox refuses outright,
+  is rebuilt on a stream socket the way it is created in the first place. A
+  connected local pair with both ends in the image -- a socketpair, or a
+  connect/accept inside the guest -- comes back connected, with its peer
+  credentials and what it had queued: a stream's bytes each way, datagrams one
+  by one and in order. A connection whose far end is outside the image, and
+  every TCP connection, comes back hung up: end-of-file and ENOTCONN, never a
+  read that waits for ever. udevd spun at most of a core after a restore until
+  its SEQPACKET control socket and its worker pair came back as themselves.
 - **tmpfs contents**: /run, /tmp and /dev/shm are RAM with a path on them, and
   nothing outside the image remembers them. The image carries each tmpfs mount
   and its tree -- files with their bytes, symlinks, fifos and device nodes,
@@ -310,11 +327,13 @@ it. What exists now:
 - `tests/manual/checkpoint_restore.sh` is the proof, including every refusal,
   and `tests/manual/checkpoint_tmpfs.sh` is the tmpfs one -- it checks a held
   descriptor on a /run file too, and that nothing leaked into the rootfs.
+  `checkpoint_anonfd.sh`, `checkpoint_fifo.sh` and `checkpoint_sockpair.sh`
+  cover the rules above.
 
-**What is still open**, and it is the same list this section predicted: sockets
-(sockrestart's model applies but is not wired to the image), a native program in
-a compute loop that makes no syscalls and so never reaches a boundary, and
-dash's self-description. The measurement this section asked for on a real device
+**What is still open**: descriptors in flight in an SCM_RIGHTS message when the
+image is written (the bytes travel, the descriptors cannot, and the save says
+so), a native program in a compute loop that makes no syscalls and so never
+reaches a boundary, and dash's self-description. The measurement this section asked for on a real device
 session has not been taken.
 
 **Phase 0 was a gate, not a feature.** Two things, in

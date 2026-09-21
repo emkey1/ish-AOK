@@ -392,10 +392,9 @@ rm -f "$IMG"
 # a device 2026-09-11 and reproduced here as SIGSEGV (exit 139).
 #
 # The save must now SUCCEED. A socket is described rather than photographed
-# (fs/sock_ckpt.h): this one is a connected AF_UNIX pair, which cannot be
-# resumed, so it comes back hung up -- reads give EOF -- rather than costing the
-# whole session. Refusing preserved nothing, because iOS destroys these sockets
-# during the suspension anyway.
+# (fs/sock_ckpt.h): this one is a connected AF_UNIX pair with both ends in the
+# image, which comes back connected (checkpoint_sockpair.sh). Refusing preserved
+# nothing, because iOS destroys these sockets during the suspension anyway.
 echo "  ---- a socket on fd 0/1/2 ----"
 sock_prog='
 perl -e "use Socket; socketpair(A,B,AF_UNIX,SOCK_STREAM,PF_UNSPEC) or die; open(STDIN,q{<&},A); open(STDOUT,q{>&},A); open(STDERR,q{>&},A); sleep 40" &
@@ -426,8 +425,8 @@ echo "  socket  | saved, $(wc -c < "$IMG" | tr -d ' ') bytes"
 rm -f "$IMG"
 
 # A socket is not photographed, it is DESCRIBED and built again -- so the two
-# halves of that claim need separate proof, and the leg above only covers a
-# connected pair (which cannot be resumed and comes back hung up).
+# halves of that claim need separate proof, and the leg above only covers
+# surviving the save.
 #
 # 1. A LISTENING socket has to come back listening. This is the case the whole
 #    rule exists for: a guest running sshd could not be saved at all before.
@@ -473,23 +472,34 @@ case $lrest in
     *) echo "FAIL: the restored socket was not actually listening"; echo "  got: $lrest"; exit 1;;
 esac
 
-# 2. A CONNECTED socket cannot be resumed -- the far end is a process that will
-#    not exist -- so it comes back hung up. That has to mean end-of-file and
+# 2. A TCP connection cannot be rebuilt -- its far end is usually a process
+#    outside the image, an ssh client, and a host TCP connection has no way
+#    back -- so it comes back hung up. That has to mean end-of-file and
 #    ENOTCONN, not a descriptor that hangs: a read that blocks forever is worse
-#    than the refusal this replaced.
+#    than the refusal this replaced. (A connected LOCAL pair with both ends in
+#    the image is rebuilt instead; checkpoint_sockpair.sh.) Both ends are in
+#    this guest only so the test needs nothing outside it; close(Q) after the
+#    peer check lets the run that saved read its EOF and finish.
 echo "  ---- a connected socket comes back hung up ----"
 HIMG=${TMPDIR:-/tmp}/aok-ckpt-hungup-$$.img
+HPORT=34522
 rm -f "$HIMG"
 hungup_prog="perl -e '
 \$| = 1;
 use Socket;
-socketpair(P, Q, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or die \"socketpair: \$!\";
-syswrite(Q, \"still-here\");
+socket(L, PF_INET, SOCK_STREAM, getprotobyname(\"tcp\")) or die \"socket: \$!\";
+setsockopt(L, SOL_SOCKET, SO_REUSEADDR, pack(\"l\",1));
+bind(L, sockaddr_in($HPORT, INADDR_LOOPBACK)) or die \"bind: \$!\";
+listen(L, 1) or die \"listen: \$!\";
+socket(P, PF_INET, SOCK_STREAM, getprotobyname(\"tcp\")) or die;
+connect(P, sockaddr_in($HPORT, INADDR_LOOPBACK)) or die \"connect: \$!\";
+accept(Q, L) or die \"accept: \$!\";
 print \"A-BEFORE-SAVE\n\";
 open(C, \">\", \"/proc/ish/checkpoint\") or die; print C \"save $HIMG\n\"; close(C);
 print \"B-AFTER-SAVE\n\";
 my \$pn = getpeername(P);
 print \"C-PEER-\", (defined \$pn ? \"OK\" : \"ENOTCONN\"), \"\n\";
+close(Q);
 my \$buf = \"\"; my \$n = sysread(P, \$buf, 64);
 if (!defined \$n) { print \"D-READ-ERROR\n\"; }
 elsif (\$n == 0) { print \"D-READ-EOF\n\"; }
@@ -517,11 +527,16 @@ esac
 #    (POLLHUP|POLLERR) before the ckpt_hungup arm in sock_poll existed.
 #    docs/build_555_musts.md item 4 asks for exactly this assertion.
 PIMG=${TMPDIR:-/tmp}/aok-ckpt-poll-$$.img
+PPORT=34523
 rm -f "$PIMG"
 poll_prog="perl -e '
 \$| = 1;
 use Socket; use IO::Poll qw(POLLIN POLLHUP);
-socketpair(P, Q, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or die;
+socket(L, PF_INET, SOCK_STREAM, getprotobyname(\"tcp\")) or die;
+setsockopt(L, SOL_SOCKET, SO_REUSEADDR, pack(\"l\",1));
+bind(L, sockaddr_in($PPORT, INADDR_LOOPBACK)) or die; listen(L, 1) or die;
+socket(P, PF_INET, SOCK_STREAM, getprotobyname(\"tcp\")) or die;
+connect(P, sockaddr_in($PPORT, INADDR_LOOPBACK)) or die; accept(Q, L) or die;
 open(C, \">\", \"/proc/ish/checkpoint\") or die; print C \"save $PIMG\n\"; close(C);
 my \$p = IO::Poll->new; \$p->mask(\*P => POLLIN);
 my \$n = \$p->poll(5); my \$ev = \$p->events(\*P) || 0;

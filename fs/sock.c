@@ -2680,6 +2680,28 @@ static bool seqpacket_denied_by_host(int domain, int type, int protocol) {
         (type & SOCKET_TYPE_MASK) == SOCK_SEQPACKET_ && protocol == 0;
 }
 
+static bool unix_seqpacket_fallback_needed(int domain, int type, int protocol, int err);
+
+// socket() for a guest (domain, type, protocol), with the SEQPACKET-over-STREAM
+// fallback socket() itself uses. A checkpoint's rebuild used to call socket()
+// bare, so on iOS -- whose sandbox refuses AF_UNIX SOCK_SEQPACKET with EPERM --
+// udevd's control socket could not be made again and came back hung up.
+static int sock_host_socket(int domain, int type, int protocol,
+                            int real_domain, int real_type) {
+    int sock;
+    if (seqpacket_denied_by_host(domain, type, protocol)) {
+        sock = -1;
+        errno = EPERM;
+    } else {
+        sock = socket(real_domain, real_type, protocol);
+    }
+#if defined(__APPLE__)
+    if (sock < 0 && unix_seqpacket_fallback_needed(domain, type, protocol, errno))
+        sock = socket(real_domain, SOCK_STREAM, protocol);
+#endif
+    return sock;
+}
+
 static bool unix_seqpacket_fallback_needed(int domain, int type, int protocol, int err) {
     if (domain != AF_LOCAL_)
         return false;
@@ -10316,6 +10338,7 @@ const char *sock_ckpt_state_name(uint32_t state) {
         case SOCK_CKPT_LISTEN: return "listen";
         case SOCK_CKPT_NETLINK: return "netlink";
         case SOCK_CKPT_HUNGUP: return "hungup";
+        case SOCK_CKPT_PAIR: return "pair";
     }
     return "?";
 }
@@ -10358,6 +10381,35 @@ int sock_ckpt_describe(struct fd *sock, struct sock_ckpt_desc *out) {
     if (sock->real_fd < 0) {
         out->state = SOCK_CKPT_HUNGUP;
         return 0;
+    }
+    // Connected to another socket in this image: rebuilt as a connected pair.
+    // unix_peer is set for a socketpair and for both sides of a connect/accept
+    // (the cookie handshake), and cleared when either end closes, so a live
+    // link means the other end is held by a process in the image too.
+    if (sock->socket.domain == AF_LOCAL_) {
+        lock(&peer_lock, 0);
+        struct fd *peer = sock->socket.unix_peer;
+        if (peer != NULL) {
+            uintptr_t a = (uintptr_t) sock, b = (uintptr_t) peer;
+            out->state = SOCK_CKPT_PAIR;
+            out->pair_cookie = (uint64_t) (a < b ? a : b);
+            out->pair_end = a < b ? 0 : 1;
+            out->cred_pid = sock->socket.unix_cred.pid;
+            out->cred_uid = sock->socket.unix_cred.uid;
+            out->cred_gid = sock->socket.unix_cred.gid;
+            out->peer_pid = sock->socket.unix_peer_cred.pid;
+            out->peer_uid = sock->socket.unix_peer_cred.uid;
+            out->peer_gid = sock->socket.unix_peer_cred.gid;
+            out->peer_cred_valid = sock->socket.unix_peer_cred_valid ? 1 : 0;
+            size_t name_len = sock->socket.unix_name_len;
+            if (name_len > 0 && name_len <= sizeof(out->addr)) {
+                memcpy(out->addr, sock->socket.unix_name, name_len);
+                out->addr_len = (uint32_t) name_len;
+            }
+        }
+        unlock(&peer_lock);
+        if (peer != NULL)
+            return 0;
     }
     // Connected: the far end is a process somewhere else, which will not be
     // there on the way back.
@@ -10522,7 +10574,8 @@ static struct fd *sock_ckpt_rebuild_unix(const struct sock_ckpt_desc *desc, int 
             desc->addr_len > sizeof(desc->addr))
         return sock_ckpt_hungup_fd(desc, err);
 
-    int s = socket(real_domain, real_type, (int) desc->protocol);
+    int s = sock_host_socket((int) desc->domain, (int) desc->type,
+                             (int) desc->protocol, real_domain, real_type);
     if (s < 0) {
         sock_ckpt_note_failure(desc, "socket", errno);
         return sock_ckpt_hungup_fd(desc, err);
@@ -10614,6 +10667,247 @@ static struct fd *sock_ckpt_rebuild_unix(const struct sock_ckpt_desc *desc, int 
     return fd;
 }
 
+int sock_ckpt_rebuild_pair(const struct sock_ckpt_desc *desc,
+                           struct fd **end0, struct fd **end1) {
+    *end0 = *end1 = NULL;
+    int real_domain = sock_family_to_real((int) desc->domain);
+    int real_type = sock_type_to_real((int) desc->type, (int) desc->protocol);
+    if (real_domain < 0 || real_type < 0)
+        return _EINVAL;
+    int pair[2];
+    int e;
+    if (seqpacket_denied_by_host((int) desc->domain, (int) desc->type, 0)) {
+        e = -1;
+        errno = EPERM;
+    } else {
+        e = socketpair(real_domain, real_type, 0, pair);
+    }
+#if defined(__APPLE__)
+    if (e < 0 && unix_seqpacket_fallback_needed((int) desc->domain, (int) desc->type,
+                                                0, errno))
+        e = socketpair(real_domain, SOCK_STREAM, 0, pair);
+#endif
+    if (e < 0)
+        return errno_map();
+    struct fd *a = sock_fd_adopt(pair[0], (int) desc->domain, (int) desc->type,
+                                 (int) desc->protocol);
+    struct fd *b = a != NULL ? sock_fd_adopt(pair[1], (int) desc->domain,
+                                             (int) desc->type,
+                                             (int) desc->protocol) : NULL;
+    if (a == NULL || b == NULL) {
+        if (a != NULL)
+            fd_close(a);
+        else
+            close(pair[0]);
+        close(pair[1]);
+        return _ENOMEM;
+    }
+    lock(&peer_lock, 0);
+    a->socket.unix_peer = b;
+    b->socket.unix_peer = a;
+    unlock(&peer_lock);
+    *end0 = a;
+    *end1 = b;
+    return 0;
+}
+
+void sock_ckpt_apply_pair_end(struct fd *sock, const struct sock_ckpt_desc *desc) {
+    lock(&peer_lock, 0);
+    sock->socket.unix_cred.pid = desc->cred_pid;
+    sock->socket.unix_cred.uid = desc->cred_uid;
+    sock->socket.unix_cred.gid = desc->cred_gid;
+    sock->socket.unix_peer_cred.pid = desc->peer_pid;
+    sock->socket.unix_peer_cred.uid = desc->peer_uid;
+    sock->socket.unix_peer_cred.gid = desc->peer_gid;
+    sock->socket.unix_peer_cred_valid = desc->peer_cred_valid != 0;
+    // The name getsockname reports -- an accepted socket's is its listener's
+    // path -- restored as a label only: nothing is bound by it.
+    if (desc->addr_len > 0 && desc->addr_len <= sizeof(sock->socket.unix_name)) {
+        memcpy(sock->socket.unix_name, desc->addr, desc->addr_len);
+        sock->socket.unix_name_len = (uint8_t) desc->addr_len;
+    }
+    unlock(&peer_lock);
+    if (desc->nonblock && sock->real_fd >= 0) {
+        int fl = fcntl(sock->real_fd, F_GETFL);
+        if (fl >= 0)
+            fcntl(sock->real_fd, F_SETFL, fl | O_NONBLOCK);
+    }
+}
+
+// The host descriptor is made non-blocking for the length of a drain or a
+// requeue and put back after. MSG_DONTWAIT is not enough: Darwin's AF_UNIX
+// stream send ignores it and sleeps for room -- measured, a restore wedged in
+// __sendto for good.
+static int sock_ckpt_nonblock(int real_fd) {
+    int old = fcntl(real_fd, F_GETFL);
+    if (old >= 0 && !(old & O_NONBLOCK))
+        fcntl(real_fd, F_SETFL, old | O_NONBLOCK);
+    return old;
+}
+static void sock_ckpt_nonblock_end(int real_fd, int old) {
+    if (old >= 0 && !(old & O_NONBLOCK))
+        fcntl(real_fd, F_SETFL, old);
+}
+
+char *sock_ckpt_queued(struct fd *sock, size_t *len) {
+    *len = 0;
+    if (sock->real_fd < 0)
+        return NULL;
+    lock(&peer_lock, 0);
+    bool scm_pending = !list_empty(&sock->socket.unix_scm);
+    struct fd *peer = sock->socket.unix_peer;
+    int peer_fd = peer != NULL ? peer->real_fd : -1;
+    unlock(&peer_lock);
+    if (scm_pending)
+        printk("WARNING: checkpoint: a socket had descriptors in flight; its "
+               "bytes are carried, the descriptors cannot be\n");
+    int host_type = 0;
+    socklen_t tl = sizeof(host_type);
+    getsockopt(sock->real_fd, SOL_SOCKET, SO_TYPE, &host_type, &tl);
+
+    char *blob = NULL;
+    size_t used = 0, cap = 0;
+    bool oom = false;
+#define SOCK_CKPT_PUT(p, n) do { \
+        size_t _n = (n); \
+        if (!oom && used + _n > cap) { \
+            size_t _c = cap ? cap * 2 : 1024; \
+            while (_c < used + _n) _c *= 2; \
+            char *_b = realloc(blob, _c); \
+            if (_b == NULL) oom = true; else { blob = _b; cap = _c; } \
+        } \
+        if (!oom) { memcpy(blob + used, (p), _n); used += _n; } \
+    } while (0)
+
+    if (host_type == SOCK_STREAM) {
+        // A stream is peeked: the bytes stay where they are.
+        int avail = 0;
+        if (ioctl(sock->real_fd, FIONREAD, &avail) < 0 || avail <= 0)
+            return NULL;
+        char *buf = malloc((size_t) avail);
+        if (buf == NULL)
+            return NULL;
+        ssize_t n = recv(sock->real_fd, buf, (size_t) avail, MSG_PEEK | MSG_DONTWAIT);
+        if (n > 0) {
+            uint32_t mlen = (uint32_t) n;
+            SOCK_CKPT_PUT(&mlen, sizeof(mlen));
+            SOCK_CKPT_PUT(buf, (size_t) n);
+        }
+        free(buf);
+    } else {
+        // Datagrams cannot be peeked past the first, so the queue is drained
+        // and every message sent straight back from the peer, in order --
+        // which needs the peer. Without one, it is left alone and not carried.
+        // No FIONREAD gate: it counts bytes, and a zero-length datagram is a
+        // message too.
+        if (peer_fd < 0)
+            return NULL;
+        char *msg = malloc(65536);
+        if (msg == NULL)
+            return NULL;
+        int old_flags = sock_ckpt_nonblock(sock->real_fd);
+        for (;;) {
+            ssize_t n = recv(sock->real_fd, msg, 65536, MSG_DONTWAIT);
+            if (n < 0)
+                break;
+            // Out of memory, stop taking them: every one taken goes back,
+            // this one last, behind whatever was never taken -- reordered,
+            // but none lost.
+            size_t before = used;
+            uint32_t mlen = (uint32_t) n;
+            SOCK_CKPT_PUT(&mlen, sizeof(mlen));
+            SOCK_CKPT_PUT(msg, (size_t) n);
+            if (oom) {
+                used = before;
+                int of = sock_ckpt_nonblock(peer_fd);
+                sock_ckpt_requeue(peer, blob, used);
+                send(peer_fd, msg, (size_t) n, 0);
+                sock_ckpt_nonblock_end(peer_fd, of);
+                used = 0;
+                break;
+            }
+        }
+        free(msg);
+        sock_ckpt_nonblock_end(sock->real_fd, old_flags);
+        if (oom)
+            printk("WARNING: checkpoint: out of memory reading a socket's "
+                   "datagrams; they are not carried, and are now out of order\n");
+        else if (sock_ckpt_requeue(peer, blob, used) < 0)
+            printk("WARNING: checkpoint: could not put a socket's datagrams back "
+                   "after reading them\n");
+    }
+    if (oom) {
+        free(blob);
+        return NULL;
+    }
+#undef SOCK_CKPT_PUT
+    *len = used;
+    return blob;
+}
+
+// Never blocks: at a save the machine is frozen and nothing would ever drain
+// the other end. A queue that held these bytes once has room for them, but a
+// fresh pair's buffers are the host's defaults, so a full one is grown once
+// to the size of the whole queue before giving up.
+static bool sock_ckpt_grow_buffers(struct fd *from_peer, size_t len) {
+    int want = len + 4096 > INT_MAX ? INT_MAX : (int) (len + 4096);
+    bool grew = false;
+    int cur = 0;
+    socklen_t cl = sizeof(cur);
+    if (getsockopt(from_peer->real_fd, SOL_SOCKET, SO_SNDBUF, &cur, &cl) == 0 && cur < want &&
+            setsockopt(from_peer->real_fd, SOL_SOCKET, SO_SNDBUF, &want, sizeof(want)) == 0)
+        grew = true;
+    lock(&peer_lock, 0);
+    struct fd *to = from_peer->socket.unix_peer;
+    int to_fd = to != NULL ? to->real_fd : -1;
+    unlock(&peer_lock);
+    cl = sizeof(cur);
+    if (to_fd >= 0 && getsockopt(to_fd, SOL_SOCKET, SO_RCVBUF, &cur, &cl) == 0 && cur < want &&
+            setsockopt(to_fd, SOL_SOCKET, SO_RCVBUF, &want, sizeof(want)) == 0)
+        grew = true;
+    return grew;
+}
+
+int sock_ckpt_requeue(struct fd *from_peer, const char *blob, size_t len) {
+    if (from_peer == NULL || from_peer->real_fd < 0)
+        return _EBADF;
+    bool grown = false;
+    int err = 0;
+    int old_flags = sock_ckpt_nonblock(from_peer->real_fd);
+    size_t at = 0;
+    while (at + sizeof(uint32_t) <= len) {
+        uint32_t mlen;
+        memcpy(&mlen, blob + at, sizeof(mlen));
+        at += sizeof(mlen);
+        if (mlen > len - at) {
+            err = _EINVAL;
+            break;
+        }
+        size_t sent = 0;
+        do {
+            ssize_t n = send(from_peer->real_fd, blob + at + sent, mlen - sent,
+                             MSG_DONTWAIT);
+            if (n < 0) {
+                if (errno == EINTR)
+                    continue;
+                if ((errno == EAGAIN || errno == ENOBUFS) && !grown) {
+                    grown = true;
+                    if (sock_ckpt_grow_buffers(from_peer, len))
+                        continue;
+                }
+                err = errno_map();
+                break;
+            }
+            sent += (size_t) n;
+        } while (sent < mlen);
+        if (err < 0)
+            break;
+        at += mlen;
+    }
+    sock_ckpt_nonblock_end(from_peer->real_fd, old_flags);
+    return err;
+}
+
 struct fd *sock_ckpt_rebuild(const struct sock_ckpt_desc *desc, int *err) {
     *err = 0;
     sock_ckpt_failure[0] = '\0';
@@ -10648,7 +10942,8 @@ struct fd *sock_ckpt_rebuild(const struct sock_ckpt_desc *desc, int *err) {
     int real_type = sock_type_to_real((int) desc->type, (int) desc->protocol);
     if (real_domain < 0 || real_type < 0)
         return sock_ckpt_hungup_fd(desc, err);
-    int s = socket(real_domain, real_type, (int) desc->protocol);
+    int s = sock_host_socket((int) desc->domain, (int) desc->type,
+                             (int) desc->protocol, real_domain, real_type);
     if (s < 0) {
         int e = errno;
         sock_ckpt_note_failure(desc, "socket", e);

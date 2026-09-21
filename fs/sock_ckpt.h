@@ -34,6 +34,16 @@ enum sock_ckpt_state {
     // poll reports POLLIN|POLLHUP so a select loop wakes, reads the EOF and
     // closes -- which is what programs already do when a peer disappears.
     SOCK_CKPT_HUNGUP,
+    // An AF_LOCAL socket CONNECTED to another socket in the image -- a
+    // socketpair, or either side of a connect/accept -- rebuilt as a connected
+    // pair when both ends' records have been read. pair_cookie names the pair
+    // (the same from either end) and pair_end which end this is. Hanging these
+    // up was the rule for a peer outside the image, and it was wrong for one
+    // inside: udevd's worker socketpair came back hung up, reported
+    // EPOLLIN|EPOLLHUP for ever, and udevd spun on it. What each end had
+    // queued to read travels ahead of its record (sock_ckpt_queued) and is
+    // sent back into it from the other end (sock_ckpt_requeue).
+    SOCK_CKPT_PAIR,
 };
 
 struct sock_ckpt_desc {
@@ -58,11 +68,34 @@ struct sock_ckpt_desc {
     //     path is useless on the way back: it is an ishsock name allocated
     //     per run, so the rebuild replays the bind by guest path instead.
     uint8_t addr[SOCK_CKPT_ADDR_MAX];
+    // SOCK_CKPT_PAIR only.
+    uint64_t pair_cookie;
+    uint32_t pair_end;
+    // This end's own credentials and its peer's (SO_PEERCRED), which a pair
+    // rebuilt during a restore would otherwise take from whoever rebuilt it.
+    int32_t cred_pid;
+    uint32_t cred_uid, cred_gid;
+    int32_t peer_pid;
+    uint32_t peer_uid, peer_gid;
+    uint32_t peer_cred_valid;
 };
 
 // Fill *out from a socket that is frozen. Returns 0, or a negative errno if
 // this descriptor is not a socket at all.
 int sock_ckpt_describe(struct fd *sock, struct sock_ckpt_desc *out);
+// SOCK_CKPT_PAIR: both ends of a connected pair, made from either end's
+// description. Each end is then given its own name, credentials and flags by
+// sock_ckpt_apply_pair_end as its own record is read.
+int sock_ckpt_rebuild_pair(const struct sock_ckpt_desc *desc,
+                           struct fd **end0, struct fd **end1);
+void sock_ckpt_apply_pair_end(struct fd *sock, const struct sock_ckpt_desc *desc);
+// SOCK_CKPT_PAIR: what is queued to be READ at this end, as a sequence of
+// [uint32 length][bytes] messages -- one for a stream, one per datagram -- and
+// on the far side, those messages put back by sending them from the peer end.
+// The running original is left exactly as it was: a stream is peeked, and a
+// datagram queue is drained and sent straight back from the peer.
+char *sock_ckpt_queued(struct fd *sock, size_t *len);
+int sock_ckpt_requeue(struct fd *from_peer, const char *blob, size_t len);
 
 // Build the socket again. Returns a struct fd the caller owns and installs
 // itself -- NOT installed in any descriptor table, because the restore puts it

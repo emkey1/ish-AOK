@@ -92,7 +92,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 8   // 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 9   // 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -1990,6 +1990,17 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
             if (s->kind == CKPT_FD_SOCKET &&
                     (ret = sock_ckpt_describe(s->fd, &s->sock)) < 0)
                 goto out;
+            // A connected local pair's queue travels with it, the way a pipe's
+            // leftover bytes do: `offset` says how many follow the record.
+            if (s->kind == CKPT_FD_SOCKET) {
+                s->offset = 0;
+                if (s->sock.state == SOCK_CKPT_PAIR) {
+                    size_t qlen = 0;
+                    s->pipe_bytes = sock_ckpt_queued(s->fd, &qlen);
+                    s->pipe_len = s->pipe_bytes != NULL ? qlen : 0;
+                    s->offset = s->pipe_len;
+                }
+            }
         }
 
         // WHICH terminal this process's standard streams were on, asked of
@@ -2615,6 +2626,12 @@ struct ckpt_restore_state {
     uint32_t fifos_primed_count, fifos_primed_cap;
     struct { struct fd *fd; uint32_t flags; } *fifo_writers;
     uint32_t fifo_writer_count, fifo_writer_cap;
+    // Connected AF_LOCAL pairs, made when the first end's record is read and
+    // handed out end by end (SOCK_CKPT_PAIR). An end still here at the end of
+    // the restore had no process holding it, and is closed -- its partner then
+    // sees the peer gone, which is what it would have seen.
+    struct { uint64_t cookie; struct fd *end[2]; bool claimed[2]; } *sockpairs;
+    uint32_t sockpair_count, sockpair_cap;
 };
 
 // Remember where a restored pty master ended up, and look it up again.
@@ -3560,11 +3577,72 @@ descriptors:
         }
 
         if (cf.kind == CKPT_FD_SOCKET) {
+            // A pair's queued messages come first, then the description.
+            char *queued = NULL;
+            if (cf.offset > (16u << 20)) { err = _EINVAL; goto fds_done; }
+            if (cf.offset != 0) {
+                queued = malloc((size_t) cf.offset);
+                if (queued == NULL) { err = _ENOMEM; goto fds_done; }
+                if ((err = rd(f, queued, (size_t) cf.offset)) < 0) {
+                    free(queued);
+                    goto fds_done;
+                }
+            }
             struct sock_ckpt_desc desc;
-            if ((err = rd(f, &desc, sizeof(desc))) < 0)
+            if ((err = rd(f, &desc, sizeof(desc))) < 0) {
+                free(queued);
                 goto fds_done;
+            }
             int sock_err = 0;
-            struct fd *sock = sock_ckpt_rebuild(&desc, &sock_err);
+            struct fd *sock = NULL;
+            if (desc.state == SOCK_CKPT_PAIR) {
+                uint32_t end = desc.pair_end & 1;
+                int slot = -1;
+                for (uint32_t k = 0; k < st->sockpair_count; k++)
+                    if (st->sockpairs[k].cookie == desc.pair_cookie)
+                        slot = (int) k;
+                if (slot < 0) {
+                    if (st->sockpair_count == st->sockpair_cap) {
+                        uint32_t cap = st->sockpair_cap ? st->sockpair_cap * 2 : 8;
+                        void *n = realloc(st->sockpairs, cap * sizeof(*st->sockpairs));
+                        if (n == NULL) { free(queued); err = _ENOMEM; goto fds_done; }
+                        st->sockpairs = n;
+                        st->sockpair_cap = cap;
+                    }
+                    struct fd *e0, *e1;
+                    if ((err = sock_ckpt_rebuild_pair(&desc, &e0, &e1)) < 0) {
+                        free(queued);
+                        goto fds_done;
+                    }
+                    slot = (int) st->sockpair_count++;
+                    st->sockpairs[slot].cookie = desc.pair_cookie;
+                    st->sockpairs[slot].end[0] = e0;
+                    st->sockpairs[slot].end[1] = e1;
+                    st->sockpairs[slot].claimed[0] = false;
+                    st->sockpairs[slot].claimed[1] = false;
+                }
+                if (st->sockpairs[slot].claimed[end]) {
+                    free(queued);
+                    err = _EINVAL;
+                    goto fds_done;
+                }
+                // This process has it now; the pointer stays for the other
+                // end's queue, sent from here.
+                st->sockpairs[slot].claimed[end] = true;
+                sock = st->sockpairs[slot].end[end];
+                sock_ckpt_apply_pair_end(sock, &desc);
+                if (queued != NULL) {
+                    int qerr = sock_ckpt_requeue(st->sockpairs[slot].end[end ^ 1],
+                                                 queued, (size_t) cf.offset);
+                    if (qerr < 0)
+                        printk("WARNING: checkpoint: pid %u fd %u: %llu queued bytes "
+                               "could not be put back (%d)\n", rec->pid, cf.fd,
+                               (unsigned long long) cf.offset, -qerr);
+                }
+            } else {
+                sock = sock_ckpt_rebuild(&desc, &sock_err);
+            }
+            free(queued);
             if (sock == NULL) {
                 err = sock_err != 0 ? sock_err : _EIO;
                 goto fds_done;
@@ -4248,6 +4326,11 @@ out:
     free(st.pidfds);
     free(st.fifos_primed);
     free(st.fifo_writers);
+    for (uint32_t i = 0; i < st.sockpair_count; i++)
+        for (int e = 0; e < 2; e++)
+            if (!st.sockpairs[i].claimed[e] && st.sockpairs[i].end[e] != NULL)
+                fd_close(st.sockpairs[i].end[e]);
+    free(st.sockpairs);
     if (err < 0 && (nbuilt > 0 || ckpt_restore_mounted_n > 0))
         ckpt_restore_unwind(built, nbuilt, current);
     else
