@@ -26,7 +26,7 @@ out=$(ISH_REAL_MNT=$WORK ISH_RESTORE="$WORK/img" "$ISH" -f "$ROOT" < /dev/null 2
 sed 's/^/  saved    | /' "$WORK/save.out"
 echo "$out" | sed 's/^/  restored | /'
 fail=0
-for k in LISTENER QUEUED-DGRAM QUEUED-STREAM QUEUED-FULL QUEUED-BIG SOCKETPAIR CONNECTION; do
+for k in LISTENER QUEUED-DGRAM QUEUED-STREAM QUEUED-FULL QUEUED-BIG FLAGS SOCKETPAIR CONNECTION; do
     grep -q "^OK $k" "$WORK/save.out" || { echo "  FAIL    | $k, in the run that saved"; fail=1; }
     echo "$out" | grep -q "^OK $k" || { echo "  FAIL    | $k, restored"; fail=1; }
 done

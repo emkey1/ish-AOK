@@ -3655,6 +3655,14 @@ descriptors:
             CKPT_TRACE("    socket %s domain %u type %u proto %u backlog %u\n",
                        sock_ckpt_state_name(desc.state), desc.domain,
                        desc.type, desc.protocol, desc.backlog);
+            // The guest's own flags, O_NONBLOCK above all. A socket's host
+            // descriptor is non-blocking whatever the guest asked for (fs/
+            // sock.c's socket_force_host_nonblock), so the guest's flag lives
+            // only in fd->flags -- and nothing put it back. Invisible while
+            // every connection came back hung up; once pairs came back live,
+            // dbus-daemon's sockets were blocking, its first recvmsg with
+            // nothing queued never returned, and every login waited on it.
+            sock->flags = (int) cf.flags;
             if ((err = ckpt_id_put(st, cf.id, sock)) < 0)
                 goto fds_done;
             if ((err = fdtable_install_at(files, (fd_t) cf.fd, sock,

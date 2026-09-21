@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -91,6 +92,7 @@ int main(void) {
     socketpair(AF_UNIX, SOCK_STREAM, 0, sp);
     write(sp[1], "still-here", 10);                     // both directions
     write(sp[0], "back", 4);
+    fcntl(sp[0], F_SETFL, fcntl(sp[0], F_GETFL) | O_NONBLOCK);  // as dbus does
     int fs[2], fd2[2];
     socketpair(AF_UNIX, SOCK_STREAM, 0, fs);
     socketpair(AF_UNIX, SOCK_DGRAM, 0, fd2);
@@ -163,6 +165,21 @@ int main(void) {
     long bs_out = drain(bs[0], 0, &bm, &bo);
     snprintf(d, sizeof(d), "stream %ld of %ld%s", bs_out, bs_in, bo ? "" : " OUT-OF-ORDER");
     check("QUEUED-BIG", bs_in > fs_in && bs_out == bs_in && bo, d);
+
+    // Each end keeps the guest's own O_NONBLOCK, which is not the host's: a
+    // socket's host descriptor is non-blocking whatever the guest asked. A
+    // non-blocking end that came back blocking hung dbus-daemon in recvmsg.
+    int nb_sp0 = !!(fcntl(sp[0], F_GETFL) & O_NONBLOCK);
+    int nb_sp1 = !!(fcntl(sp[1], F_GETFL) & O_NONBLOCK);
+    int nb_ctl = !!(fcntl(ctl, F_GETFL) & O_NONBLOCK);
+    alarm(4);                                           // a hang is the failure
+    char e[4];
+    int er = (int) recv(sp[0], e, sizeof(e), 0);
+    int ee = er < 0 ? errno : 0;
+    alarm(0);
+    snprintf(d, sizeof(d), "nonblock sp0=%d sp1=%d listener=%d; empty recv=%d errno=%d",
+             nb_sp0, nb_sp1, nb_ctl, er, ee);
+    check("FLAGS", nb_sp0 && !nb_sp1 && !nb_ctl && er < 0 && ee == EAGAIN, d);
 
     // 3. The datagram pair: quiet until written to, then carries a datagram.
     struct pollfd pp = {.fd = pair[0], .events = POLLIN};
