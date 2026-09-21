@@ -319,5 +319,11 @@ struct tty *pty_open_fake(struct tty_driver *driver);
 bool pty_master_is_open(int num);
 // Replay the guest's unlockpt() on a master rebuilt by the checkpoint.
 void pty_unlock_slave_of(struct tty *master);
+// The slave's owner and mode, through its master (fs/pty.c). false when the
+// master has no slave.
+bool pty_slave_owner_of(struct tty *master, uid_t_ *uid, uid_t_ *gid,
+                        mode_t_ *perms);
+void pty_set_slave_owner_of(struct tty *master, uid_t_ uid, uid_t_ gid,
+                            mode_t_ perms);
 
 #endif

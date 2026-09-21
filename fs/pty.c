@@ -169,6 +169,32 @@ void pty_unlock_slave_of(struct tty *master) {
     master->pty.other->pty.locked = false;
 }
 
+// Who owns a pty's slave node, and its mode -- what login and sshd set with
+// fchown/fchmod once they know which user the terminal is for. A checkpoint
+// has to carry it: the pair is rebuilt by opening /dev/ptmx again, which makes
+// a slave owned by whoever did the opening, and a user's shell could then no
+// longer open its own terminal.
+bool pty_slave_owner_of(struct tty *master, uid_t_ *uid, uid_t_ *gid,
+                        mode_t_ *perms) {
+    if (master == NULL || master->pty.other == NULL)
+        return false;
+    struct tty *slave = master->pty.other;
+    *uid = slave->pty.uid;
+    *gid = slave->pty.gid;
+    *perms = slave->pty.perms;
+    return true;
+}
+
+void pty_set_slave_owner_of(struct tty *master, uid_t_ uid, uid_t_ gid,
+                            mode_t_ perms) {
+    if (master == NULL || master->pty.other == NULL)
+        return;
+    struct tty *slave = master->pty.other;
+    slave->pty.uid = uid;
+    slave->pty.gid = gid;
+    slave->pty.perms = perms & 07777;
+}
+
 // Is a guest process holding the MASTER of this pty?
 //
 // The checkpoint asks so it can tell a terminal the image owns from one the UI

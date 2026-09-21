@@ -13,6 +13,32 @@
 
 int fd_getflags(struct fd *fd);
 
+// Records the credentials an open was made under (Linux's f_cred), from
+// `current`. A descriptor can be made with no task running -- the console's
+// tty at startup, a restore before any task is current -- and then there are
+// no credentials to record; nothing is allowed to match an unknown one.
+//
+// Separate from fd_create because the checkpoint restore calls it again: it
+// reopens a process's descriptors before that process has its own
+// credentials back, and re-stamps them once it does.
+void fd_open_creds_stamp(struct fd *fd) {
+    if (current == NULL) {
+        fd->open_creds.known = false;
+        return;
+    }
+    fd->open_creds.known = true;
+    fd->open_creds.tgid = current->tgid;
+    fd->open_creds.exec_gen = current->exec_gen;
+    fd->open_creds.uid = current->uid;
+    fd->open_creds.gid = current->gid;
+    fd->open_creds.euid = current->euid;
+    fd->open_creds.egid = current->egid;
+    fd->open_creds.suid = current->suid;
+    fd->open_creds.sgid = current->sgid;
+    fd->open_creds.fsuid = current->fsuid;
+    fd->open_creds.fsgid = current->fsgid;
+}
+
 struct fd *fd_create(const struct fd_ops *ops) {
     struct fd *fd = malloc(sizeof(struct fd));
     if (fd == NULL)
@@ -25,22 +51,7 @@ struct fd *fd_create(const struct fd_ops *ops) {
     fd->mount_flags = 0;
     fd->offset = 0;
     fd->stat.ctime = (dword_t)time(NULL);
-    // A descriptor can be made with no task running -- the console's tty at
-    // startup, a restore before any task is current -- and then there are no
-    // credentials to record. Nothing is allowed to match an unknown one.
-    if (current != NULL) {
-        fd->open_creds.known = true;
-        fd->open_creds.tgid = current->tgid;
-        fd->open_creds.exec_gen = current->exec_gen;
-        fd->open_creds.uid = current->uid;
-        fd->open_creds.gid = current->gid;
-        fd->open_creds.euid = current->euid;
-        fd->open_creds.egid = current->egid;
-        fd->open_creds.suid = current->suid;
-        fd->open_creds.sgid = current->sgid;
-        fd->open_creds.fsuid = current->fsuid;
-        fd->open_creds.fsgid = current->fsgid;
-    }
+    fd_open_creds_stamp(fd);
     list_init(&fd->poll_fds);
     lock_init(&fd->poll_lock, "fd_create_poll\0");
     lock_init(&fd->lock, "fd_create\0");

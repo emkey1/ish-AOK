@@ -89,7 +89,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 6   // 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 7   // 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -161,6 +161,17 @@ static bool ckpt_debug(void) {
 #define CKPT_TRACE(...) do { \
     if (ckpt_debug()) { fprintf(stderr, "checkpoint: " __VA_ARGS__); } \
 } while (0)
+
+// The flags a descriptor is REOPENED with. fd->flags keeps everything the
+// original open() was given, and handing that back verbatim replayed the
+// open's side effects: O_TRUNC emptied the file -- `cmd > out` running across
+// a suspend came back with everything written before it replaced by NULs up
+// to the restored offset -- and O_CREAT|O_EXCL made an existing file EEXIST,
+// which the degrade then turned into /dev/null. A reopen finds what is there;
+// it never creates, truncates or makes an anonymous file.
+static int ckpt_reopen_flags(uint32_t flags) {
+    return (int) flags & ~(O_CREAT_ | O_EXCL_ | O_TRUNC_ | O_TMPFILE_);
+}
 
 static const char *ckpt_kind_name(uint32_t kind) {
     switch (kind) {
@@ -320,9 +331,22 @@ struct ckpt_fd {
     // two different processes is rebuilt as ONE host pipe; and which end this
     // is. `offset` carries the number of bytes that were still in it, which
     // follow the record for a read end.
-    uint64_t pipe_inode;
-    uint32_t pipe_write_end;
-    uint32_t reserved;
+    union {
+        struct {
+            uint64_t pipe_inode;
+            uint32_t pipe_write_end;
+            uint32_t reserved;
+        };
+        // CKPT_FD_PTY_MASTER: who owned its slave, and the slave's mode --
+        // what login or sshd set with fchown/fchmod once they knew whose
+        // terminal it was. The pair is rebuilt by opening /dev/ptmx again, and
+        // without this the slave comes back owned by root: the user's shell
+        // can no longer open its own terminal, and neither can anything it
+        // runs. pty_owner_known is 0 when the master had no slave to ask.
+        struct {
+            uint32_t pty_uid, pty_gid, pty_perms, pty_owner_known;
+        };
+    };
 };
 
 // ------------------------------------------------------------------ status
@@ -1975,6 +1999,16 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
             .pipe_write_end = s->kind == CKPT_FD_PIPE &&
                     (s->fd->flags & O_WRONLY_) ? 1 : 0,
         };
+        if (s->kind == CKPT_FD_PTY_MASTER) {
+            uid_t_ ouid, ogid;
+            mode_t_ operms;
+            if (pty_slave_owner_of(fd_tty(s->fd), &ouid, &ogid, &operms)) {
+                cf.pty_uid = ouid;
+                cf.pty_gid = ogid;
+                cf.pty_perms = operms;
+                cf.pty_owner_known = 1;
+            }
+        }
         CKPT_TRACE("  save fd %u %-5s id %u real_fd %d flags %#x off %llu %s\n",
                    cf.fd, ckpt_kind_name(cf.kind), cf.id, s->fd->real_fd,
                    cf.flags, (unsigned long long) cf.offset, s->path);
@@ -2897,6 +2931,25 @@ descriptors:
     // reopened, and from what path, is the entire question.
     uint32_t failed_fd = 0, failed_kind = 0;
     char failed_path[MAX_PATH + 1] = {0};
+
+    // Reopened with the access the process ALREADY HAD, not asked for again.
+    //
+    // Until `identity:` below this task carries its PARENT's credentials --
+    // ckpt_new_task copies them -- so a reopen was permission-checked as
+    // whoever the parent was. A shell's forked child on a pty the restore had
+    // just rebuilt owned by root was checked as the uid-1000 shell, and came
+    // back EACCES: "pid 753 could not restore fd 0 (pts /dev/pts/1): -13",
+    // which refused the whole session. The same check would refuse a daemon
+    // that opened its log as root and then dropped privilege -- a descriptor
+    // it holds and legitimately could not open again.
+    //
+    // The access was granted when the descriptor was first opened. A restore
+    // re-establishes it; it does not re-decide it. Root for the reopens, then
+    // the task's own credentials at `identity:`, where every descriptor this
+    // task opened is re-stamped with them (fd_open_creds_stamp).
+    current->uid = current->euid = current->suid = current->fsuid = 0;
+    current->gid = current->egid = current->sgid = current->fsgid = 0;
+
     for (uint32_t i = 0; i < rec->n_fds; i++) {
         struct ckpt_fd cf;
         if ((err = rd(f, &cf, sizeof(cf))) < 0)
@@ -2994,7 +3047,7 @@ descriptors:
                 }
                 snprintf(pty_path, sizeof(pty_path), "/dev/pts/%d", mapped);
             }
-            struct fd *pty = generic_open(pty_path, (int) cf.flags, 0);
+            struct fd *pty = generic_open(pty_path, ckpt_reopen_flags(cf.flags), 0);
             if (IS_ERR(pty)) {
                 err = (int) PTR_ERR(pty);
                 goto fds_done;
@@ -3002,6 +3055,10 @@ descriptors:
             if (cf.kind == CKPT_FD_PTY_MASTER) {
                 struct tty *made = fd_tty(pty);
                 pty_unlock_slave_of(made);
+                if (cf.pty_owner_known)
+                    pty_set_slave_owner_of(made, (uid_t_) cf.pty_uid,
+                                           (uid_t_) cf.pty_gid,
+                                           (mode_t_) cf.pty_perms);
                 if (made != NULL &&
                         (err = ckpt_pty_map_put(st, (int) cf.offset, made->num)) < 0) {
                     fd_close(pty);
@@ -3072,7 +3129,7 @@ descriptors:
             continue;
         }
 
-        struct fd *fd = generic_open(path, (int) cf.flags, 0);
+        struct fd *fd = generic_open(path, ckpt_reopen_flags(cf.flags), 0);
         if (IS_ERR(fd)) {
             // A descriptor that cannot be reopened DEGRADES. It does not take
             // the session with it.
@@ -3097,7 +3154,7 @@ descriptors:
                      path[0] != '\0' ? path : "a file", open_err);
             ckpt_note_restore(rec->pid, cf.fd, why);
             printk("WARNING: checkpoint: pid %u fd %u: %s\n", rec->pid, cf.fd, why);
-            fd = generic_open("/dev/null", (int) cf.flags & ~(O_CREAT_ | O_EXCL_), 0);
+            fd = generic_open("/dev/null", ckpt_reopen_flags(cf.flags), 0);
             if (IS_ERR(fd)) {
                 // /dev/null itself is missing: the root is not one we can
                 // restore into at all, and that IS worth refusing.
@@ -3134,6 +3191,20 @@ identity:
     current->euid = rec->euid; current->egid = rec->egid;
     current->suid = rec->suid; current->sgid = rec->sgid;
     current->fsuid = rec->fsuid; current->fsgid = rec->fsgid;
+    // The descriptors this task's restore opened were stamped with the root
+    // credentials they were reopened under. To the open-creds model they are
+    // opens this process made itself, so they get its credentials now. Ones
+    // another task's restore made -- shared by id -- keep that task's stamp,
+    // and are told apart by tgid, which fd_create records and which is this
+    // task's alone.
+    lock(&current->files->lock, 0);
+    for (unsigned n = 0; n < current->files->size; n++) {
+        struct fd *fd = current->files->files[n];
+        if (fd != NULL && fd->open_creds.known &&
+                fd->open_creds.tgid == current->tgid)
+            fd_open_creds_stamp(fd);
+    }
+    unlock(&current->files->lock);
     memcpy(current->comm, rec->comm, sizeof(current->comm));
     current->blocked = rec->blocked;
     current->pending = rec->pending;

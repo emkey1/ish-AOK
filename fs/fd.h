@@ -561,6 +561,9 @@ struct fdtable {
     lock_t lock;
 };
 
+// Re-record fd->open_creds from `current`. See fs/fd.c.
+void fd_open_creds_stamp(struct fd *fd);
+
 struct fdtable *fdtable_new(int size);
 struct fdtable *fdtable_retain(struct fdtable *table);
 void fdtable_release(struct fdtable *table);
