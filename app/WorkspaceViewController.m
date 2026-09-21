@@ -4882,6 +4882,12 @@ static NSString *ISHWorkspaceDesktopNamesSignature(NSArray<NSString *> *names) {
         return;
     }
     terminalViewController.freshSessionTerminalDisplayMode = ISHFreshSessionTerminalDisplayModeSessionShell;
+    // A window the user just asked for is not a restore. The restored-session
+    // queue outlives the launch that filled it, and "any session will do" --
+    // the full-screen terminal's rule -- handed a terminal opened minutes
+    // later some leftover shell instead of starting one, which shows up as a
+    // window that never prints a prompt.
+    terminalViewController.declinesRestoredSession = YES;
     ISHWorkspaceContainedWindowView *windowView =
         [self openDesktopTerminalWindowWithTitle:windowTitle terminalViewController:terminalViewController];
     [terminalViewController startNewSession];
@@ -7334,6 +7340,8 @@ static UIResponder *ISHWorkspaceFirstResponderAmongViewControllers(UIViewControl
     // untracked dock "Terminal" windows are ordinary terminals that honor the
     // default-user preference, so they're titled accordingly.
     terminalViewController.alwaysLoginAsRoot = !preferConsole && trackPrimaryRole;
+    // Opened from the dock, now, by the user: see launchTerminalWithCommand.
+    terminalViewController.declinesRestoredSession = YES;
 
     NSString *title = preferConsole ? @"System Console"
                     : trackPrimaryRole ? @"Session Shell" : @"Terminal";

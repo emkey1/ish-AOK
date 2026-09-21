@@ -6,6 +6,17 @@
 //
 
 #import "TerminalViewController.h"
+#import <os/log.h>
+
+// The same subsystem and category AppDelegate's suspend logging uses, so a
+// window's session decision reads in one stream with the resume that preceded
+// it. Console.app: subsystem app.ish.iSH-AOK, category suspend.
+static os_log_t ISHSuspendLog(void) {
+    static os_log_t log;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ log = os_log_create("app.ish.iSH-AOK", "suspend"); });
+    return log;
+}
 #import "AppDelegate.h"
 #import "UIApplication+OpenURL.h"
 #import "TerminalView.h"
@@ -1876,6 +1887,13 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
 	    // workspace host from the pid it recorded in the saved layout; 0 (the
 	    // full-screen terminal) means "any", which is the old behaviour.
 	    self.sessionWasRestored = NO;
+	    // Which way this window went, by name. A window that comes back empty
+	    // looks the same whether it claimed a restored session whose shell is
+	    // gone or started a fresh one that never printed a prompt, and those
+	    // are opposite bugs. See the decline note on the property.
+	    os_log(ISHSuspendLog(),
+	           "terminal session start: wantPid=%{public}d declines=%{public}d",
+	           self.desiredRestoredSessionPid, self.declinesRestoredSession ? 1 : 0);
 	    struct checkpoint_restored_session restored;
 	    if (!self.declinesRestoredSession &&
 	            checkpoint_take_restored_session_for_pid(self.desiredRestoredSessionPid, &restored)) {
@@ -1885,7 +1903,10 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
 	            self.sessionPid = restored.leader_pid;
 	            self.sessionStartedAt = CFAbsoluteTimeGetCurrent();
 	            self.sessionWasRestored = YES;
-	            [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.resumed"
+	            os_log(ISHSuspendLog(),
+                   "terminal session start: CLAIMED a restored session pid=%{public}d pts=%{public}d",
+                   restored.leader_pid, restored.tty_num);
+            [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.resumed"
 	                                          details:@{@"pid": @(restored.leader_pid),
 	                                                    @"pts": @(restored.tty_num)}];
 	            return 0;
