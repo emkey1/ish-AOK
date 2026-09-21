@@ -1913,6 +1913,8 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
 	        }
 	    }
 	    if ([AppDelegate bootUsesConsoleSessionFallback]) {
+	        os_log(ISHSuspendLog(),
+	               "terminal session start: console fallback, no shell started");
 	        [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.consoleFallback"
 	                                      details:@{@"reason": @"boot-init-fallback",
 	                                                @"command": commandString ?: @""}];
@@ -1936,6 +1938,9 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
 	        self.sessionFailureTitle = sessionFailureTitle;
 	        self.sessionFailureMessage = sessionFailureMessage;
 	        self.sessionFailureOverlayText = sessionFailureOverlayText;
+	        os_log_error(ISHSuspendLog(),
+	                     "terminal session start: FAILED at launchCommandFallback (%{public}d)",
+	                     _ENOENT);
 	        [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.start.failed"
 	                                      details:@{@"stage": @"launchCommandFallback",
 	                                                @"error": @(_ENOENT),
@@ -1944,6 +1949,9 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
 	    }
 	    err = become_new_init_child();
 	    if (err < 0) {
+	        os_log_error(ISHSuspendLog(),
+	                     "terminal session start: FAILED at become_new_init_child (%{public}d)",
+	                     (int) err);
 	        [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.start.failed"
                                       details:@{@"stage": @"become_new_init_child",
                                                 @"error": @(err),
@@ -1955,6 +1963,9 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
     Terminal *terminal = [Terminal createPseudoTerminal:&tty];
     if (terminal == nil) {
         NSAssert(IS_ERR(tty), @"tty should be error");
+        os_log_error(ISHSuspendLog(),
+                     "terminal session start: FAILED at createPseudoTerminal (%{public}d)",
+                     (int) PTR_ERR(tty));
         [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.start.failed"
                                       details:@{@"stage": @"createPseudoTerminal",
                                                 @"error": @((int) PTR_ERR(tty)),
@@ -1965,6 +1976,9 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
     NSString *stdioFile = [NSString stringWithFormat:@"/dev/pts/%d", tty->num];
     err = create_stdio(stdioFile.fileSystemRepresentation, TTY_PSEUDO_SLAVE_MAJOR, tty->num);
     if (err < 0) {
+        os_log_error(ISHSuspendLog(),
+                     "terminal session start: FAILED at create_stdio (%{public}d)",
+                     (int) err);
         [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.start.failed"
                                       details:@{@"stage": @"create_stdio",
                                                 @"error": @(err),
@@ -1988,6 +2002,9 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
 	        self.sessionFailureTitle = failureTitle;
 	        self.sessionFailureMessage = failureMessage;
 	        self.sessionFailureOverlayText = @"Could not start session command.";
+	        os_log_error(ISHSuspendLog(),
+	                     "terminal session start: FAILED at do_execve (%{public}d)",
+	                     (int) err);
 	        [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.start.failed"
 	                                      details:@{@"stage": @"do_execve",
 	                                                @"error": @(err),
@@ -1998,6 +2015,9 @@ static UIButton *ISHBarButtonWithAction(UIView *root, SEL action) {
     }
     self.sessionPid = current->pid;
     self.sessionStartedAt = CFAbsoluteTimeGetCurrent();
+    os_log(ISHSuspendLog(),
+           "terminal session start: execed pid=%{public}d cmd=%{public}@",
+           self.sessionPid, commandString ?: @"");
     [ISHDiagnosticsStore recordBreadcrumb:@"terminal.session.start.execed"
                                   details:@{@"pid": @(self.sessionPid),
                                             @"command": commandString ?: @"",

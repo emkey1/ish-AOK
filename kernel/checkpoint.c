@@ -1407,6 +1407,20 @@ static int ckpt_tmpfs_save(struct ckpt_writer *w, struct task *as,
     }
     unlock(&mounts_lock);
 
+    // Shallowest first. The mount list is in whatever order the guest mounted
+    // things, and /run/user/1000 came before /run -- so the restore tried to
+    // build a mount point inside a tmpfs that had not been mounted yet, let
+    // alone filled. Sorting by path length puts every parent ahead of its
+    // children, which is all this ordering has to guarantee.
+    for (unsigned i = 1; i < n_points; i++) {
+        for (unsigned j = i; j > 0 &&
+                strlen(found[j].point) < strlen(found[j - 1].point); j--) {
+            struct ckpt_tmpfs_found tmp = found[j];
+            found[j] = found[j - 1];
+            found[j - 1] = tmp;
+        }
+    }
+
     for (unsigned i = 0; i < n_points; i++) {
         char path[MAX_PATH + 1];
         size_t len = strlen(found[i].point);
@@ -1532,10 +1546,28 @@ static bool ckpt_tmpfs_remount(const char *point, const char *source,
         const char *info, int flags) {
     if (ckpt_tmpfs_mounted_at(point))
         return true;
-    // The mount point itself may be missing on a rootfs that never had it.
-    int err = generic_mkdirat(AT_PWD, point, 0755);
-    if (err < 0 && err != _EEXIST)
-        printk("WARNING: checkpoint: could not create %s (%d)\n", point, -err);
+    // The mount point itself may be missing on a rootfs that never had it --
+    // and so may its PARENTS. /run/user/1000 is the one that proved it: a
+    // resume runs no init, so nothing had made /run/user, and a single mkdir
+    // of the leaf came back ENOENT and left that tmpfs unmounted and empty.
+    int err = 0;
+    char build[MAX_PATH + 1];
+    size_t n = 0;
+    for (const char *p = point; ; p++) {
+        if (*p == '/' || *p == '\0') {
+            if (n > 1) {
+                build[n] = '\0';
+                err = generic_mkdirat(AT_PWD, build, 0755);
+                if (err < 0 && err != _EEXIST)
+                    printk("WARNING: checkpoint: could not create %s (%d)\n",
+                           build, -err);
+            }
+        }
+        if (*p == '\0')
+            break;
+        if (n < MAX_PATH)
+            build[n++] = *p;
+    }
     err = do_mount(&tmpfs, source, point, info, flags);
     if (err < 0) {
         // Fill it anyway below: an empty /run is the failure the user sees,
