@@ -1309,6 +1309,20 @@ void cleanup_pending_deletions(void) {
 // output through --console. Frames come from task_host_backtrace, the
 // freezer's own instrument; see [[stuck-task-host-backtrace]] in the notes.
 static double task_dump_every;
+// The thread run_at_boot ran on: the app's main thread, and the CLI's. Where
+// the boot itself is, when the hang is before there is any task to dump -- a
+// launch that sat for minutes before init existed is what made this worth it.
+static pthread_t task_dump_boot_thread;
+
+static void task_dump_frames(uintptr_t *frames, unsigned n) {
+    for (unsigned i = 0; i < n; i++) {
+        Dl_info info;
+        if (dladdr((void *) frames[i], &info) && info.dli_sname != NULL)
+            fprintf(stderr, "taskdump:     %2u %s\n", i, info.dli_sname);
+        else
+            fprintf(stderr, "taskdump:     %2u %#lx\n", i, (unsigned long) frames[i]);
+    }
+}
 
 static void task_dump_one(struct task *t) {
     const struct native_program *native = t->native_running;
@@ -1324,14 +1338,7 @@ static void task_dump_one(struct task *t) {
     if (pthread_equal(t->thread, pthread_self()))
         return;
     uintptr_t frames[24];
-    unsigned n = task_host_backtrace(t, frames, 24);
-    for (unsigned i = 0; i < n; i++) {
-        Dl_info info;
-        if (dladdr((void *) frames[i], &info) && info.dli_sname != NULL)
-            fprintf(stderr, "taskdump:     %2u %s\n", i, info.dli_sname);
-        else
-            fprintf(stderr, "taskdump:     %2u %#lx\n", i, (unsigned long) frames[i]);
-    }
+    task_dump_frames(frames, task_host_backtrace(t, frames, 24));
 }
 
 static void *task_dump_thread(void *unused) {
@@ -1342,6 +1349,10 @@ static void *task_dump_thread(void *unused) {
         if (task_snapshot_collect(&snap, false) < 0)
             continue;
         fprintf(stderr, "taskdump: ---- %u tasks ----\n", snap.count);
+        uintptr_t boot_frames[40];
+        fprintf(stderr, "taskdump: boot thread (main):\n");
+        task_dump_frames(boot_frames,
+                         host_thread_backtrace(task_dump_boot_thread, boot_frames, 40));
         for (unsigned i = 0; i < snap.count; i++)
             task_dump_one(snap.tasks[i]);
         fprintf(stderr, "taskdump: ---- end ----\n");
@@ -1355,6 +1366,7 @@ static void task_dump_start_if_asked(void) {
     if (e == NULL || e[0] == '\0')
         return;
     task_dump_every = atof(e);
+    task_dump_boot_thread = pthread_self();
     if (task_dump_every < 1)
         task_dump_every = 1;
     pthread_t th;
@@ -2856,19 +2868,15 @@ bool current_is_valid(void) {
 // walk instead of faulting the app. The caller symbolizes AFTER this returns and
 // the thread is running again: a suspended thread may hold the malloc or dyld
 // lock that dladdr needs, and waiting on it here would hang the caller.
-unsigned task_host_backtrace(struct task *task, uintptr_t *frames, unsigned max) {
+// The frame walk itself, for any host thread that is known to be alive. The
+// caller answers that; see task_host_backtrace for a task's.
+unsigned host_thread_backtrace(pthread_t thread, uintptr_t *frames, unsigned max) {
 #if defined(__APPLE__) && (defined(__arm64__) || defined(__aarch64__))
-    if (task == NULL || frames == NULL || max == 0)
+    if (frames == NULL || max == 0 || pthread_equal(thread, pthread_self()))
         return 0;
-    // The liveness test task_wake_for_freeze makes, for its reason: a pthread_t
-    // whose thread has exited is undefined to touch, not a no-op.
-    if (!atomic_load_explicit(&task->host_thread_started, memory_order_acquire) ||
-            task->zombie || task->exiting ||
-            atomic_load_explicit(&task->exit_finished, memory_order_acquire))
-        return 0;
-    uintptr_t stack_top = (uintptr_t) pthread_get_stackaddr_np(task->thread);
-    uintptr_t stack_bottom = stack_top - pthread_get_stacksize_np(task->thread);
-    mach_port_t th = pthread_mach_thread_np(task->thread);
+    uintptr_t stack_top = (uintptr_t) pthread_get_stackaddr_np(thread);
+    uintptr_t stack_bottom = stack_top - pthread_get_stacksize_np(thread);
+    mach_port_t th = pthread_mach_thread_np(thread);
     if (th == MACH_PORT_NULL || thread_suspend(th) != KERN_SUCCESS)
         return 0;
     unsigned n = 0;
@@ -2896,7 +2904,19 @@ unsigned task_host_backtrace(struct task *task, uintptr_t *frames, unsigned max)
     thread_resume(th);
     return n;
 #else
-    (void) task; (void) frames; (void) max;
+    (void) thread; (void) frames; (void) max;
     return 0;
 #endif
+}
+
+unsigned task_host_backtrace(struct task *task, uintptr_t *frames, unsigned max) {
+    if (task == NULL)
+        return 0;
+    // The liveness test task_wake_for_freeze makes, for its reason: a pthread_t
+    // whose thread has exited is undefined to touch, not a no-op.
+    if (!atomic_load_explicit(&task->host_thread_started, memory_order_acquire) ||
+            task->zombie || task->exiting ||
+            atomic_load_explicit(&task->exit_finished, memory_order_acquire))
+        return 0;
+    return host_thread_backtrace(task->thread, frames, max);
 }

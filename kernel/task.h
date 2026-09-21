@@ -964,6 +964,8 @@ extern void (*exit_hook)(struct task *task, int code);
 // a task that will not park actually IS. Returns how many were collected, 0 if
 // the thread cannot be read. See kernel/task.c.
 unsigned task_host_backtrace(struct task *task, uintptr_t *frames, unsigned max);
+// The same walk for any host thread the caller knows to be alive.
+unsigned host_thread_backtrace(pthread_t thread, uintptr_t *frames, unsigned max);
 
 extern void (*halt_hook)(int status);
 
