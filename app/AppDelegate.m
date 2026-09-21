@@ -3119,6 +3119,33 @@ void ISHSessionPresentResumePicker(UIViewController *host,
         completion(nil);
         return;
     }
+    // ISH_SESSION_RESUME=newest|fresh -- answer this without a tap, for
+    // driving a device from a Mac (`devicectl device process launch
+    // --environment-variables`). The sheet has no timeout, by design: it holds
+    // the boot until someone decides. With nobody at the screen that looked
+    // exactly like a launch that hung for anywhere from one minute to twenty.
+    // "newest" takes the newest image this build can load the way "Resume and
+    // Delete" does -- the ordinary suspend-and-resume cycle -- and "fresh"
+    // the way "Start a New Session" does. Unset, nothing changes.
+    const char *autoChoice = getenv("ISH_SESSION_RESUME");
+    if (autoChoice != NULL && autoChoice[0] != '\0') {
+        if (strcmp(autoChoice, "newest") == 0) {
+            for (NSDictionary *slot in slots) {   // newest first
+                if (![slot[@"loadable"] boolValue])
+                    continue;
+                os_log(ISHSuspendLog(), "session resume: ISH_SESSION_RESUME chose %{public}@",
+                       [slot[@"path"] lastPathComponent]);
+                ISHSessionSetResumeChoice(slot[@"path"]);
+                completion(slot[@"path"]);
+                return;
+            }
+        }
+        os_log(ISHSuspendLog(), "session resume: ISH_SESSION_RESUME=%{public}s, booting fresh",
+               autoChoice);
+        ISHSessionSetResumeChoice(nil);
+        completion(nil);
+        return;
+    }
     [ISHDiagnosticsStore recordBreadcrumb:@"session.resumePicker.presented"
                                   details:@{@"slots": @(slots.count),
                                             @"host": NSStringFromClass(host.class)}];
