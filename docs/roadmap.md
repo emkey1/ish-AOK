@@ -291,7 +291,18 @@ it. What exists now:
   it arrives at the loop top about to re-execute the call it was in. The image
   says "about to call read", and the restored guest calls it.
 - **More than one process**, with the process tree, pids, sessions and process
-  groups, and zombies whose status a parent has not collected yet.
+  groups, and zombies whose status a parent has not collected yet. (The
+  zombies only since 2026-09-21: the task collection the save used skipped
+  them, so every one was lost and its parent's wait() failed with ECHILD.)
+- **Threads.** A thread group comes back as one process: one address space,
+  written once, and one descriptor table, fs and set of handlers, shared the
+  way clone() shares them, with each thread's own registers, signal mask and
+  clear-tid address. The image records which earlier task owns each shared
+  object, so a vfork child sharing its parent's memory comes back sharing it
+  too. A leader that exited ahead of its threads is recorded as well: AOK keeps
+  it until the last thread goes, and the process's exit is reported as its.
+  Before this, a three-thread rsyslogd came back as three processes, each with
+  a private copy of what had been one address space.
 - **Descriptor identity**: two processes sharing one struct fd get one back.
 - **Pipes**, with the bytes still in them, and **named FIFOs**, reopened by
   path with the bytes still in them.
@@ -327,8 +338,8 @@ it. What exists now:
 - `tests/manual/checkpoint_restore.sh` is the proof, including every refusal,
   and `tests/manual/checkpoint_tmpfs.sh` is the tmpfs one -- it checks a held
   descriptor on a /run file too, and that nothing leaked into the rootfs.
-  `checkpoint_anonfd.sh`, `checkpoint_fifo.sh` and `checkpoint_sockpair.sh`
-  cover the rules above.
+  `checkpoint_anonfd.sh`, `checkpoint_fifo.sh`, `checkpoint_sockpair.sh` and
+  `checkpoint_threads.sh` cover the rules above.
 
 **What is still open**: descriptors in flight in an SCM_RIGHTS message when the
 image is written (the bytes travel, the descriptors cannot, and the save says

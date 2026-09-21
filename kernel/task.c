@@ -194,13 +194,16 @@ void task_snapshot_release(struct task_snapshot *snapshot) {
     snapshot->count = 0;
 }
 
-int task_snapshot_collect(struct task_snapshot *snapshot, bool leaders_only) {
+static int task_snapshot_collect_common(struct task_snapshot *snapshot,
+        bool leaders_only, bool with_leaving) {
     unsigned cap = 0;
     complex_lockt(&pids_lock, 0);
     struct pid *pid_entry;
     list_for_each_entry(&alive_pids_list, pid_entry, alive) {
         struct task *task = pid_entry->task;
-        if (task == NULL || task->zombie || task->exiting)
+        if (task == NULL)
+            continue;
+        if (!with_leaving && (task->zombie || task->exiting))
             continue;
         if (leaders_only && !task_is_leader(task))
             continue;
@@ -220,6 +223,20 @@ int task_snapshot_collect(struct task_snapshot *snapshot, bool leaders_only) {
     }
     unlock(&pids_lock);
     return 0;
+}
+
+int task_snapshot_collect(struct task_snapshot *snapshot, bool leaders_only) {
+    return task_snapshot_collect_common(snapshot, leaders_only, false);
+}
+
+// Zombies and tasks inside or past do_exit too. A checkpoint needs both: a
+// zombie is a status its parent has not collected, and a thread group's
+// leader that exited ahead of its threads stays in the pid table as the task
+// the group's exit is reported as (kernel/exit.c). The collection above skips
+// both -- right for everything else that walks tasks, and it is how a save
+// silently lost every zombie in the image.
+int task_snapshot_collect_all(struct task_snapshot *snapshot) {
+    return task_snapshot_collect_common(snapshot, false, true);
 }
 
 struct pid *pid_get_last_allocated(void) {

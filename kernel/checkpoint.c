@@ -92,7 +92,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 9   // 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 10  // 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -313,6 +313,28 @@ struct ckpt_task {
     // first restore attempt did.
     uint64_t page_limit, mmap_floor, mmap_ceiling;
     uint64_t stack_top, stack_limit_pages;
+    // THREADS, and anything else that shares with another task. tgid is the
+    // thread group. Each owner names the EARLIER task in the image that holds
+    // the same address space, descriptor table, fs info or signal handlers --
+    // 0 when this task's own follow in this record. A task that shares its
+    // address space writes no maps (n_maps is 0) and one that shares its table
+    // writes no descriptors (n_fds is 0): the owner's record carries them.
+    //
+    // Before these, every task was a process. A three-thread rsyslogd came
+    // back as three processes, each with a private copy of what had been one
+    // address space -- the image held it three times -- so a futex wake, a
+    // queue, anything one thread handed another, stopped crossing between
+    // them, and nothing said so.
+    uint32_t tgid;
+    uint32_t mm_owner, files_owner, fs_owner, sighand_owner;
+    // A thread group's leader that EXITED while other threads of its process
+    // run on. Linux keeps it as a zombie; AOK keeps it in the pid table, off
+    // its group's thread list and holding nothing (kernel/exit.c), because
+    // the group's exit is reported as the leader's -- to the leader's parent,
+    // with the leader's exit signal. Recorded like a zombie, with no maps and
+    // no descriptors; `zombie` is 0. Without it the image had threads whose
+    // process it did not have.
+    uint32_t departed;
 };
 
 struct ckpt_map {
@@ -1880,8 +1902,70 @@ static int ckpt_save_epoll_regs(struct ckpt_writer *w, struct ckpt_fd_ids *ids,
     return w->err;
 }
 
+// What a task shares, by the pid of the earlier task in the image that owns
+// each object. See struct ckpt_task's tgid and owners.
+struct ckpt_shares {
+    uint32_t tgid;
+    uint32_t mm, files, fs, sighand;
+};
+
+enum ckpt_share_kind { CKPT_SHARE_MM, CKPT_SHARE_FILES, CKPT_SHARE_FS, CKPT_SHARE_SIGHAND };
+
+static const void *ckpt_share_obj(struct task *t, enum ckpt_share_kind which) {
+    switch (which) {
+        case CKPT_SHARE_MM: return t->mm;
+        case CKPT_SHARE_FILES: return t->files;
+        case CKPT_SHARE_FS: return t->fs;
+        case CKPT_SHARE_SIGHAND: return t->sighand;
+    }
+    return NULL;
+}
+
+// A zombie has nothing left to share, and a native task is re-launched rather
+// than restored -- its objects are rebuilt by the program, never by the image
+// -- so neither owns anything for another record, and neither is given an
+// owner: each comes back with its own, as before.
+static bool ckpt_can_share(struct task *t) {
+    return !t->zombie && !t->exiting && native_program_running(t) == NULL;
+}
+
+// See struct ckpt_task's `departed`. Asked with the machine frozen.
+static bool ckpt_task_departed(struct task *t) {
+    return !t->zombie && t->exiting &&
+        atomic_load_explicit(&t->exit_finished, memory_order_acquire) &&
+        t->group != NULL && t->group->leader == t &&
+        !list_empty(&t->group->threads);
+}
+
+static uint32_t ckpt_owner_of(struct task **tasks, unsigned index,
+        enum ckpt_share_kind which) {
+    struct task *t = tasks[index];
+    const void *obj = ckpt_share_obj(t, which);
+    if (obj == NULL || !ckpt_can_share(t))
+        return 0;
+    for (unsigned j = 0; j < index; j++)
+        if (ckpt_can_share(tasks[j]) && ckpt_share_obj(tasks[j], which) == obj)
+            return (uint32_t) tasks[j]->pid;
+    return 0;
+}
+
+static struct ckpt_shares ckpt_shares_of(struct task **tasks, unsigned index) {
+    struct task *t = tasks[index];
+    struct ckpt_shares sh = {
+        .tgid = (uint32_t) t->tgid,
+        .mm = ckpt_owner_of(tasks, index, CKPT_SHARE_MM),
+        .files = ckpt_owner_of(tasks, index, CKPT_SHARE_FILES),
+        .fs = ckpt_owner_of(tasks, index, CKPT_SHARE_FS),
+        .sighand = ckpt_owner_of(tasks, index, CKPT_SHARE_SIGHAND),
+    };
+    if (!ckpt_can_share(t))
+        sh.tgid = (uint32_t) t->pid;
+    return sh;
+}
+
 static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
-        struct ckpt_header *h, uint64_t *pages_out, struct ckpt_fd_ids *ids) {
+        struct ckpt_header *h, uint64_t *pages_out, struct ckpt_fd_ids *ids,
+        const struct ckpt_shares *sh) {
     struct task *saved_current = current;
     current = task;
     int ret = 0;
@@ -1889,25 +1973,36 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
     const struct native_program *prog = native_program_running(task);
     struct ckpt_saved_fd *saved = NULL;
     unsigned nfds = 0;
+    // Both released at `out`, which a descriptor that cannot be described
+    // reaches before either is set: declared here, where the jump cannot
+    // skip them, so the unwind never reads them uninitialised.
+    struct mem *mem = NULL;
+    char *native_env = NULL;
 
-    if (task->zombie) {
+    bool departed = ckpt_task_departed(task);
+    if (task->zombie || departed) {
         // Nothing but the status its parent has not collected. No address
         // space, no descriptors, no register file -- a zombie has already run
         // its last instruction, and what makes it worth recording is that
-        // something is still going to wait() for it.
+        // something is still going to wait() for it. A departed leader is the
+        // same, before its process has finished.
         struct ckpt_task z = {
             .pid = task->pid,
             .ppid = task->parent != NULL ? task->parent->pid : 0,
             .pgid = task->group != NULL ? task->group->pgid : 0,
             .sid = task->group != NULL ? task->group->sid : 0,
             .abi = (uint32_t) task->abi,
-            .zombie = 1,
+            .zombie = departed ? 0 : 1,
+            .departed = departed ? 1 : 0,
             .exit_code = task->exit_code,
+            .exit_signal = task->exit_signal,
             .n_sigactions = NUM_SIGS,
+            .tgid = (uint32_t) task->tgid,
         };
         memcpy(z.comm, task->comm, sizeof(z.comm));
-        CKPT_TRACE("save pid %d (ppid %d) %s: ZOMBIE, exit code %#x\n",
-                   z.pid, z.ppid, z.comm, z.exit_code);
+        CKPT_TRACE("save pid %d (ppid %d) %s: %s, exit code %#x\n",
+                   z.pid, z.ppid, z.comm, departed ? "DEPARTED LEADER" : "ZOMBIE",
+                   z.exit_code);
         wr(w, &z, sizeof(z));
         current = saved_current;
         return w->err;
@@ -2090,15 +2185,21 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         .n_sigactions = NUM_SIGS,
         .cwd_len = (uint32_t) strlen(cwd),
         .root_len = (uint32_t) strlen(root),
+        .tgid = sh->tgid,
+        .mm_owner = sh->mm,
+        .files_owner = sh->files,
+        .fs_owner = sh->fs,
+        .sighand_owner = sh->sighand,
     };
+    // The owner's record carries the table; this one points at it.
+    if (sh->files != 0)
+        rec.n_fds = 0;
     memcpy(rec.comm, task->comm, sizeof(rec.comm));
     memcpy(rec.tty_path, tty_path, sizeof(rec.tty_path));
 
-    struct mem *mem = NULL;
     struct ckpt_count_ctx counts = {0};
     const char *native_state = NULL;
     const char *native_argv = NULL;
-    char *native_env = NULL;
     size_t native_env_len = 0;
 
     if (prog != NULL) {
@@ -2143,6 +2244,13 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         // the program's own sentinel.
         CKPT_TRACE("  state ends: %s\n", rec.native_state_len > 90
                    ? native_state + rec.native_state_len - 90 : native_state);
+    } else if (sh->mm != 0) {
+        // The owner's record carries the address space.
+        CKPT_TRACE("save pid %d (tgid %u, ppid %d) %s: shares the address space "
+                   "of pid %u%s, pc %#llx\n", rec.pid, rec.tgid, rec.ppid, rec.comm,
+                   sh->mm, sh->files != 0 ? " and its descriptors" : "",
+                   (unsigned long long) (task->abi == GUEST_ABI_ARM64
+                           ? task->cpu.arm64_pc : task->cpu.amd64_rip));
     } else {
         struct mm *mm = task->mm;
         mem = task->mem;
@@ -2193,15 +2301,17 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         wr(w, task->group->limits, sizeof(task->group->limits));
         unlock(&task->group->lock);
 
-        struct ckpt_emit_ctx emit = { .w = w, .mem = mem };
-        ckpt_for_each_map(mem, ckpt_emit_map, &emit);
-        ckpt_for_each_reservation(mem, ckpt_emit_reservation, &emit);
-        read_unlock(&mem->lock);
-        mem = NULL;
-        *pages_out += counts.pages;
+        if (mem != NULL) {
+            struct ckpt_emit_ctx emit = { .w = w, .mem = mem };
+            ckpt_for_each_map(mem, ckpt_emit_map, &emit);
+            ckpt_for_each_reservation(mem, ckpt_emit_reservation, &emit);
+            read_unlock(&mem->lock);
+            mem = NULL;
+            *pages_out += counts.pages;
+        }
     }
 
-    for (unsigned i = 0; i < nfds && w->err == 0; i++) {
+    for (unsigned i = 0; i < rec.n_fds && w->err == 0; i++) {
         struct ckpt_saved_fd *s = &saved[i];
         struct ckpt_fd cf = {
             .fd = s->num,
@@ -2261,17 +2371,40 @@ out:
 // exists, because that is the only way the parent/child lists and the wait
 // machinery come out right. A child written first would have nothing to be
 // created under.
+static bool ckpt_task_listed(struct task **tasks, unsigned count, struct task *t) {
+    for (unsigned i = 0; i < count; i++)
+        if (tasks[i] == t)
+            return true;
+    return false;
+}
+
+// And a thread after its group's leader, which the restore builds the group
+// around. The leader is usually the thread's ancestor anyway, but not always:
+// once a leader has exited, AOK hands its children to the first live thread
+// of the group (find_new_parent), which can leave a thread its OWN parent --
+// never ready by the parent rule alone, so a self-parent counts as none.
+// The tail loop below used to take such a task "anyway"; it is ordered now.
 static void ckpt_order_tasks(struct task **tasks, unsigned count) {
     unsigned placed = 0;
     while (placed < count) {
         unsigned progress = 0;
         for (unsigned i = placed; i < count; i++) {
             struct task *t = tasks[i];
-            bool parent_ready = t->parent == NULL;
+            // No usable parent -- itself, or one not in the image -- means
+            // init's child, which is what the restore makes it: ready once the
+            // first task is down. Never before it: the image's first task must
+            // be pid 1, the entry point's own.
+            bool parent_ready = t->parent == NULL ||
+                    (placed > 0 && (t->parent == t ||
+                                    !ckpt_task_listed(tasks, count, t->parent)));
             for (unsigned j = 0; j < placed && !parent_ready; j++)
                 if (tasks[j] == t->parent)
                     parent_ready = true;
-            if (!parent_ready)
+            struct task *leader = t->group != NULL ? t->group->leader : NULL;
+            bool leader_ready = leader == NULL || leader == t ||
+                    !ckpt_task_listed(tasks, count, leader) ||
+                    ckpt_task_listed(tasks, placed, leader);
+            if (!parent_ready || !leader_ready)
                 continue;
             struct task *swap = tasks[placed];
             tasks[placed] = t;
@@ -2348,23 +2481,45 @@ int checkpoint_save(const char *host_path) {
     }
     t_frozen = timespec_now(CLOCK_MONOTONIC);
 
+    // Zombies and departed leaders included: the ordinary collection skips
+    // both, and every zombie in a session used to be lost at a save.
     struct task_snapshot snap = {0};
-    if (task_snapshot_collect(&snap, false) < 0) {
+    if (task_snapshot_collect_all(&snap) < 0) {
         ckpt_thaw_all();
         ckpt_refuse("could not enumerate tasks");
         return _EAGAIN;
     }
     // A task inside do_exit has already run its last instruction and has no
     // state left worth carrying. Dropped here rather than in the writer, so
-    // the header's task count is the number actually written.
-    unsigned live = 0;
+    // the header's task count is the number actually written. Kept: a
+    // process's zombie -- not a thread's, which only a tracer waits for, and
+    // tracing is not carried -- and a departed leader.
+    //
+    // Decided under pids_lock, which a departed leader's thread list needs;
+    // the references are dropped after it, since dropping the last one can
+    // free the task.
+    bool *keep = calloc(snap.count != 0 ? snap.count : 1, sizeof(*keep));
+    if (keep == NULL) {
+        task_snapshot_release(&snap);
+        ckpt_thaw_all();
+        ckpt_refuse("could not enumerate tasks");
+        return _ENOMEM;
+    }
+    complex_lockt(&pids_lock, 0);
     for (unsigned i = 0; i < snap.count; i++) {
         struct task *t = snap.tasks[i];
-        if (t->zombie || !ckpt_task_is_leaving(t))
-            snap.tasks[live++] = t;
-        else
-            task_ref_cnt_mod(t, -1);
+        keep[i] = t->zombie ? t->group != NULL && t->group->leader == t
+                            : ckpt_task_departed(t) || !ckpt_task_is_leaving(t);
     }
+    unlock(&pids_lock);
+    unsigned live = 0;
+    for (unsigned i = 0; i < snap.count; i++) {
+        if (keep[i])
+            snap.tasks[live++] = snap.tasks[i];
+        else
+            task_ref_cnt_mod(snap.tasks[i], -1);
+    }
+    free(keep);
     snap.count = live;
     ckpt_order_tasks(snap.tasks, snap.count);
 
@@ -2443,8 +2598,10 @@ int checkpoint_save(const char *host_path) {
     // One id space for the whole image, so a descriptor two processes share is
     // described once and referenced from the other.
     struct ckpt_fd_ids ids = {0};
-    for (unsigned i = 0; i < snap.count && err == 0; i++)
-        err = ckpt_save_task(&w, snap.tasks[i], &h, &pages, &ids);
+    for (unsigned i = 0; i < snap.count && err == 0; i++) {
+        struct ckpt_shares sh = ckpt_shares_of(snap.tasks, i);
+        err = ckpt_save_task(&w, snap.tasks[i], &h, &pages, &ids, &sh);
+    }
     if (err == 0 && w.err == 0)
         err = ckpt_save_epoll_regs(&w, &ids, &h.n_epoll_regs);
     unsigned nfds_total = ids.count;
@@ -3170,9 +3327,27 @@ static void ckpt_restore_fifos(struct ckpt_restore_state *st) {
     }
 }
 
+// Everything on a terminal joins the session that owns it. A tgroup carries
+// its controlling terminal across fork (kernel/fork.c), so the shell had one
+// before the suspend; only the process that re-opened the terminal gets one
+// back on its own.
+static void ckpt_join_terminal(struct ckpt_stdio_set *set) {
+    if (set->tty == NULL)
+        return;
+    lock(&current->group->lock, 0);
+    if (current->group->tty == NULL) {
+        lock(&set->tty->lock, 0);
+        set->tty->refcount++;
+        unlock(&set->tty->lock);
+        current->group->tty = set->tty;
+    }
+    unlock(&current->group->lock);
+}
+
 static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
         const struct ckpt_task *rec, struct ckpt_restore_state *st) {
     int err;
+    bool thread = rec->tgid != 0 && rec->tgid != rec->pid;
     struct fdtable *files;
     char cwd[MAX_PATH + 1] = {0}, root[MAX_PATH + 1] = {0};
     if ((err = rd(f, cwd, rec->cwd_len)) < 0) return err;
@@ -3228,20 +3403,32 @@ static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
     rlim_t_ limits[sizeof(current->group->limits) / sizeof(current->group->limits[0])][2];
     if ((err = rd(f, limits, sizeof(limits))) < 0) return err;
 
-    // The limits first, because RLIMIT_NOFILE gates how many descriptors can
-    // be installed below and the image's value is the one that was in force.
-    lock(&current->group->lock, 0);
-    memcpy(current->group->limits, limits, sizeof(limits));
-    unlock(&current->group->lock);
-    // The session and the process group, as MEMBERSHIP and not just as two
-    // numbers -- kernel/group.c says why the fields alone were not enough.
-    tgroup_restore_ids(current, (pid_t_) rec->sid, (pid_t_) rec->pgid);
+    // A thread's group -- its limits, its session and process group -- is its
+    // leader's, restored with the leader and joined by ckpt_new_task. Only a
+    // group's first task puts them back; a second pass over the membership
+    // would link the group into its session twice.
+    if (!thread) {
+        // The limits first, because RLIMIT_NOFILE gates how many descriptors
+        // can be installed below and the image's value is the one that was in
+        // force.
+        lock(&current->group->lock, 0);
+        memcpy(current->group->limits, limits, sizeof(limits));
+        unlock(&current->group->lock);
+        // The session and the process group, as MEMBERSHIP and not just as
+        // two numbers -- kernel/group.c says why the fields alone were not
+        // enough.
+        tgroup_restore_ids(current, (pid_t_) rec->sid, (pid_t_) rec->pgid);
+    }
 
     // The guest architecture, and with it the address space's shape. A fresh
     // task's mm is built for the entry point's default; the image says what
     // this process actually was, and every mapping below depends on it. Set
     // before a single page is mapped.
     current->abi = (enum guest_abi) rec->abi;
+    // An address space shared with an earlier task was filled by that task's
+    // record, and this one has no maps.
+    if (rec->mm_owner != 0)
+        goto descriptors;
     struct mem *mem = current->mem;
     struct mm *mm = current->mm;
     mem_set_page_limit(mem, (page_t) rec->page_limit);
@@ -3315,6 +3502,21 @@ static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
     mm->auxv_start = rec->auxv_start; mm->auxv_end = rec->auxv_end;
 
 descriptors:
+    // A table shared with an earlier task was filled by that task's record:
+    // nothing to close, nothing to install, and no descriptor records follow.
+    // A process sharing it without being a thread (CLONE_FILES alone) still
+    // has a group of its own, which joins its terminal as any process does.
+    if (rec->files_owner != 0) {
+        if (!thread) {
+            struct ckpt_stdio_set *shared_set =
+                    ckpt_stdio_set_for(st, h, rec, current->files);
+            if (shared_set == NULL)
+                return _EAGAIN;
+            ckpt_join_terminal(shared_set);
+        }
+        goto identity;
+    }
+
     // The descriptors. Everything the fresh task opened for itself goes
     // first: the image is the complete truth about what this process had open.
     files = current->files;
@@ -3342,20 +3544,7 @@ descriptors:
     if (set == NULL)
         return _EAGAIN;
     struct fd **stdio = set->stdio;
-    // Everything else on this terminal joins the session that owns it. A
-    // tgroup carries its controlling terminal across fork (kernel/fork.c), so
-    // the shell had one before the suspend; only the process that re-opened
-    // the terminal gets one back on its own.
-    if (set->tty != NULL) {
-        lock(&current->group->lock, 0);
-        if (current->group->tty == NULL) {
-            lock(&set->tty->lock, 0);
-            set->tty->refcount++;
-            unlock(&set->tty->lock);
-            current->group->tty = set->tty;
-        }
-        unlock(&current->group->lock);
-    }
+    ckpt_join_terminal(set);
     // RETAINED before installing, because installing the image's fd 1 detaches
     // and CLOSES whatever was in that slot -- with a refcount of one that frees
     // it, and mirroring fd 10 from a saved pointer afterwards was then a
@@ -3766,14 +3955,18 @@ identity:
     // another task's restore made -- shared by id -- keep that task's stamp,
     // and are told apart by tgid, which fd_create records and which is this
     // task's alone.
-    lock(&current->files->lock, 0);
-    for (unsigned n = 0; n < current->files->size; n++) {
-        struct fd *fd = current->files->files[n];
-        if (fd != NULL && fd->open_creds.known &&
-                fd->open_creds.tgid == current->tgid)
-            fd_open_creds_stamp(fd);
+    // A shared table was re-stamped by its owner's restore, with the owner's
+    // credentials, which are the ones those descriptors were opened with.
+    if (rec->files_owner == 0) {
+        lock(&current->files->lock, 0);
+        for (unsigned n = 0; n < current->files->size; n++) {
+            struct fd *fd = current->files->files[n];
+            if (fd != NULL && fd->open_creds.known &&
+                    fd->open_creds.tgid == current->tgid)
+                fd_open_creds_stamp(fd);
+        }
+        unlock(&current->files->lock);
     }
-    unlock(&current->files->lock);
     memcpy(current->comm, rec->comm, sizeof(current->comm));
     current->blocked = rec->blocked;
     current->pending = rec->pending;
@@ -3787,18 +3980,21 @@ identity:
     current->robust_list = rec->robust_list;
     current->did_exec = rec->did_exec != 0;
 
-    if (!rec->native) {
+    // Shared handlers and a shared cwd/umask were put back by their owner.
+    if (!rec->native && rec->sighand_owner == 0) {
         lock(&current->sighand->lock, 0);
         memcpy(current->sighand->action, actions, sizeof(actions));
         unlock(&current->sighand->lock);
     }
-    lock(&current->fs->lock, 0);
-    current->fs->umask = rec->umask;
-    unlock(&current->fs->lock);
-    if (cwd[0] == '/') {
-        struct fd *pwd = generic_open(cwd, O_RDONLY_, 0);
-        if (!IS_ERR(pwd))
-            fs_chdir(current->fs, pwd);
+    if (rec->fs_owner == 0) {
+        lock(&current->fs->lock, 0);
+        current->fs->umask = rec->umask;
+        unlock(&current->fs->lock);
+        if (cwd[0] == '/') {
+            struct fd *pwd = generic_open(cwd, O_RDONLY_, 0);
+            if (!IS_ERR(pwd))
+                fs_chdir(current->fs, pwd);
+        }
     }
 
     if (rec->native)
@@ -3982,36 +4178,91 @@ static int ckpt_dispatch_native(struct task *task, struct ckpt_restore_state *st
 // The same shape as kernel/init.c's construct_task, and deliberately not a
 // call to it: that one allocates the next free pid and roots everything at
 // init, which is exactly the two things a restore must not do.
-static struct task *ckpt_new_task(struct task *parent, pid_t_ pid) {
+// The already-built tasks a record shares with: its thread group's leader and
+// the owner of each object (struct ckpt_task's tgid and owners). NULL for
+// whatever the task has of its own.
+struct ckpt_owners {
+    struct task *leader, *mm, *files, *fs, *sighand;
+};
+
+static struct task *ckpt_built(struct task **built, unsigned nbuilt, uint32_t pid) {
+    if (pid == 0)
+        return NULL;
+    for (unsigned i = 0; i < nbuilt; i++)
+        if (built[i] != NULL && (uint32_t) built[i]->pid == pid)
+            return built[i];
+    return NULL;
+}
+
+// Built the way clone() builds one: an object shared with an owner is that
+// owner's, retained, exactly as copy_task retains it for CLONE_VM / FILES / FS
+// / SIGHAND, and a THREAD joins its leader's group -- limits, session, process
+// group, terminal and all -- as CLONE_THREAD puts it there. Everything else is
+// new. The parent is the task's own, which for a thread is the thread that
+// created it (AOK links threads under their creator; see
+// [[threads-are-children-of-creator]]), and parents are always built first.
+static struct task *ckpt_new_task(struct task *parent, pid_t_ pid,
+        const struct ckpt_owners *own) {
     struct task *task = task_create_with_pid(parent, pid);
     if (task == NULL)
         return NULL;
     if (parent != NULL)
         uts_ns_retain(task->uts_ns);
 
-    struct tgroup *group = malloc(sizeof(struct tgroup));
-    if (group == NULL)
-        return NULL;
-    *group = (struct tgroup) {};
-    list_init(&group->threads);
-    lock_init(&group->lock, "ckpt_new_task\0");
-    cond_init(&group->child_exit);
-    cond_init(&group->stopped_cond);
-    group->leader = task;
-    group->personality = ADDR_NO_RANDOMIZE_;
-    // The defaults, before the image's own limits land further down. Without
-    // them RLIMIT_NOFILE is zero on a freshly built tgroup, and the first
-    // descriptor the restore tries to install comes back EMFILE -- a "too
-    // many open files" on a table holding none.
-    memcpy(group->limits, init_rlimits, sizeof(init_rlimits));
-    list_add(&group->threads, &task->group_links);
-    task->group = group;
-    task->tgid = task->pid;
-    task_setsid(task);
+    if (own->leader != NULL) {
+        struct tgroup *group = own->leader->group;
+        complex_lockt(&pids_lock, 0);
+        lock(&group->lock, 0);
+        task->group = group;
+        task->tgid = own->leader->pid;
+        list_add(&group->threads, &task->group_links);
+        unlock(&group->lock);
+        unlock(&pids_lock);
+    } else {
+        struct tgroup *group = malloc(sizeof(struct tgroup));
+        if (group == NULL)
+            return NULL;
+        *group = (struct tgroup) {};
+        list_init(&group->threads);
+        lock_init(&group->lock, "ckpt_new_task\0");
+        cond_init(&group->child_exit);
+        cond_init(&group->stopped_cond);
+        group->leader = task;
+        group->personality = ADDR_NO_RANDOMIZE_;
+        // The defaults, before the image's own limits land further down.
+        // Without them RLIMIT_NOFILE is zero on a freshly built tgroup, and
+        // the first descriptor the restore tries to install comes back EMFILE
+        // -- a "too many open files" on a table holding none.
+        memcpy(group->limits, init_rlimits, sizeof(init_rlimits));
+        list_add(&group->threads, &task->group_links);
+        task->group = group;
+        task->tgid = task->pid;
+        task_setsid(task);
+    }
 
-    task_set_mm(task, mm_new(task->abi));
-    task->sighand = sighand_new();
-    task->files = fdtable_new(3);
+    if (own->mm != NULL) {
+        mm_retain(own->mm->mm);
+        task_set_mm(task, own->mm->mm);
+    } else {
+        task_set_mm(task, mm_new(task->abi));
+    }
+    if (own->sighand != NULL) {
+        own->sighand->sighand->refcount++;
+        task->sighand = own->sighand->sighand;
+    } else {
+        task->sighand = sighand_new();
+    }
+    if (own->files != NULL) {
+        own->files->files->refcount++;
+        task->files = own->files->files;
+    } else {
+        task->files = fdtable_new(3);
+    }
+    if (own->fs != NULL) {
+        own->fs->fs->refcount++;
+        task->fs = own->fs->fs;
+        return task;
+    }
     task->fs = fs_info_new();
     task->fs->umask = 0022;
 
@@ -4171,7 +4422,7 @@ int checkpoint_restore(const char *host_path) {
             goto out;
 
         struct task *task;
-        if (i == 0 && rec.pid == first->pid) {
+        if (i == 0 && rec.pid == (uint32_t) first->pid) {
             // The image's first task IS this one: the entry point has already
             // made a pid 1 and it is the process the image calls pid 1.
             task = first;
@@ -4184,7 +4435,38 @@ int checkpoint_restore(const char *host_path) {
             // between the freeze and the walk. init is where it was going.
             if (parent == NULL)
                 parent = first;
-            task = ckpt_new_task(parent, (pid_t_) rec.pid);
+            // What it shares, all built already: an owner is always earlier
+            // in the image than the tasks that point at it. One that is not
+            // there is an image that does not describe itself.
+            struct ckpt_owners own = {0};
+            bool thread = rec.tgid != 0 && rec.tgid != rec.pid;
+            own.leader = thread ? ckpt_built(built, nbuilt, rec.tgid) : NULL;
+            // A leader the image does not have costs the grouping, not the
+            // session: the thread comes back as a process of its own, which is
+            // what every thread was before groups were recorded at all.
+            if (thread && own.leader == NULL) {
+                printk("WARNING: checkpoint: pid %u's thread group %u is not in "
+                       "the image; it comes back as a process of its own\n",
+                       rec.pid, rec.tgid);
+                rec.tgid = rec.pid;
+                thread = false;
+            }
+            own.mm = ckpt_built(built, nbuilt, rec.mm_owner);
+            own.files = ckpt_built(built, nbuilt, rec.files_owner);
+            own.fs = ckpt_built(built, nbuilt, rec.fs_owner);
+            own.sighand = ckpt_built(built, nbuilt, rec.sighand_owner);
+            if ((rec.mm_owner != 0 && own.mm == NULL) ||
+                    (rec.files_owner != 0 && own.files == NULL) ||
+                    (rec.fs_owner != 0 && own.fs == NULL) ||
+                    (rec.sighand_owner != 0 && own.sighand == NULL)) {
+                ckpt_refuse("pid %u shares with a task the image does not have "
+                            "(tgid %u, owners %u/%u/%u/%u)", rec.pid, rec.tgid,
+                            rec.mm_owner, rec.files_owner, rec.fs_owner,
+                            rec.sighand_owner);
+                err = _EINVAL;
+                goto out;
+            }
+            task = ckpt_new_task(parent, (pid_t_) rec.pid, &own);
             if (task == NULL) {
                 ckpt_refuse("could not recreate pid %u", rec.pid);
                 err = _EAGAIN;
@@ -4198,11 +4480,60 @@ int checkpoint_restore(const char *host_path) {
         task->ckpt_syscalls_traced = 0;
         built[nbuilt++] = task;
 
+        if (rec.departed) {
+            // As do_exit left it: exited, off its group's thread list, holding
+            // no address space, descriptors, fs or handlers, and still the
+            // task its group's exit will be reported as. Its threads, later in
+            // the image, join its group.
+            CKPT_TRACE("load pid %u (ppid %u) %s: DEPARTED LEADER, exit code %#x\n",
+                       rec.pid, rec.ppid, rec.comm, rec.exit_code);
+            memcpy(task->comm, rec.comm, sizeof(task->comm));
+            task->exit_code = rec.exit_code;
+            task->exit_signal = rec.exit_signal;
+            complex_lockt(&pids_lock, 0);
+            lock(&task->group->lock, 0);
+            list_remove(&task->group_links);
+            unlock(&task->group->lock);
+            unlock(&pids_lock);
+            lock(&task->general_lock, 0);
+            struct mm *dead_mm = task->mm;
+            struct fdtable *dead_files = task->files;
+            struct fs_info *dead_fs = task->fs;
+            struct sighand *dead_sighand = task->sighand;
+            task->mm = NULL;
+            task->mem = NULL;
+            task->cpu.mmu = NULL;
+            task->files = NULL;
+            task->fs = NULL;
+            task->sighand = NULL;
+            unlock(&task->general_lock);
+            mm_release(dead_mm);
+            fdtable_release(dead_files);
+            fs_info_release(dead_fs);
+            sighand_release(dead_sighand);
+            task->exiting = true;
+            atomic_store_explicit(&task->exit_finished, true, memory_order_release);
+            atomic_store_explicit(&task->ckpt_freeze_wanted, false,
+                                  memory_order_release);
+            continue;   // no register file, no maps, no descriptors follow
+        }
+
         if (rec.zombie) {
             CKPT_TRACE("load pid %u (ppid %u) %s: ZOMBIE, exit code %#x\n",
                        rec.pid, rec.ppid, rec.comm, rec.exit_code);
             memcpy(task->comm, rec.comm, sizeof(task->comm));
             task->exit_code = rec.exit_code;
+            task->exit_signal = rec.exit_signal;
+            // Off its group's thread list, where exit_tgroup left the real
+            // one: wait() will not reap a process that still has threads
+            // (process_has_threads_locked), so a zombie rebuilt on the list
+            // made its parent's wait block for ever. Never seen until zombies
+            // were saved at all -- the collection had been skipping them.
+            complex_lockt(&pids_lock, 0);
+            lock(&task->group->lock, 0);
+            list_remove(&task->group_links);
+            unlock(&task->group->lock);
+            unlock(&pids_lock);
             task->zombie = true;
             // No thread will ever run do_exit for it, so nothing else says it
             // is finished -- and a zombie that is not is never freed once
@@ -4213,10 +4544,11 @@ int checkpoint_restore(const char *host_path) {
             continue;   // no register file, no maps, no descriptors follow
         }
 
-        CKPT_TRACE("load pid %u (ppid %u pgid %u sid %u) %s: %u maps, %u fds, "
-                   "tty %s\n",
-                   rec.pid, rec.ppid, rec.pgid, rec.sid, rec.comm,
-                   rec.n_maps, rec.n_fds,
+        CKPT_TRACE("load pid %u (tgid %u ppid %u pgid %u sid %u) %s: %u maps, %u fds, "
+                   "shares %u/%u/%u/%u, tty %s\n",
+                   rec.pid, rec.tgid, rec.ppid, rec.pgid, rec.sid, rec.comm,
+                   rec.n_maps, rec.n_fds, rec.mm_owner, rec.files_owner,
+                   rec.fs_owner, rec.sighand_owner,
                    rec.tty_kind == CKPT_TTY_PTS ? "pts" :
                    rec.tty_kind == CKPT_TTY_CONSOLE ? "console" : "none");
         st.native_name = st.native_argv = st.native_state = st.native_env = NULL;
@@ -4259,7 +4591,7 @@ int checkpoint_restore(const char *host_path) {
     atomic_fetch_add_explicit(&ckpt_restoring, 1, memory_order_acq_rel);
     atomic_fetch_add_explicit(&ckpt_freeze_active, 1, memory_order_acq_rel);
     for (unsigned i = 1; i < nbuilt; i++) {
-        if (built[i]->zombie)
+        if (built[i]->zombie || built[i]->exiting)
             continue;   // nothing to run; it is a status waiting to be read
         CKPT_TRACE("starting restored pid %d\n", built[i]->pid);
         if (task_start(built[i]) < 0) {

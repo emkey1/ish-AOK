@@ -402,11 +402,20 @@ void task_never_ran_destroy(struct task *task) {
         task->pending = 0;
         unlock(&dead_sighand->lock);
     }
-    sighand_release(dead_sighand);
-    fs_info_release(dead_fs);
-    uts_ns_release(dead_uts);
-    fdtable_release(dead_files);
-    mm_release(dead_mm);
+    // Any of them can be gone already: a restored thread-group leader that
+    // had exited before the save is rebuilt the way do_exit left it, holding
+    // none of them (kernel/checkpoint.c), and a failed restore takes it apart
+    // here like any task that never ran.
+    if (dead_sighand != NULL)
+        sighand_release(dead_sighand);
+    if (dead_fs != NULL)
+        fs_info_release(dead_fs);
+    if (dead_uts != NULL)
+        uts_ns_release(dead_uts);
+    if (dead_files != NULL)
+        fdtable_release(dead_files);
+    if (dead_mm != NULL)
+        mm_release(dead_mm);
     task_destroy_unlinked(task, 3);
 }
 
