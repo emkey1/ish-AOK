@@ -114,7 +114,15 @@ unsigned sockrestart_on_suspend() {
         struct saved_socket *saved = malloc(sizeof(struct saved_socket));
         if (saved == NULL)
             continue; // better than a crash
-        saved->sock = fd_retain(sock);
+        // Not plain fd_retain. A socket whose last reference has just gone is
+        // still on this list: sock_close takes it off in sockrestart_end_listen,
+        // which is waiting for the lock held here. Retaining it would hand the
+        // resume a pointer to an fd that is freed as soon as we unlock.
+        saved->sock = fd_retain_if_live(sock);
+        if (saved->sock == NULL) {
+            free(saved);
+            continue;
+        }
         saved->proto = sock->socket.protocol;
         saved->backlog = sock->sockrestart.backlog;
         saved->flags = fcntl(sock->real_fd, F_GETFL);
@@ -150,6 +158,14 @@ unsigned sockrestart_on_suspend() {
 }
 
 unsigned sockrestart_on_resume() {
+    // The references the save took are dropped after the unlock, not in the
+    // loop. If the guest closed a listener while we were away, ours is the
+    // last reference, and dropping it runs sock_close -> sockrestart_end_listen,
+    // which takes sockrestart_lock. Doing that under the lock deadlocked the
+    // resuming thread on itself, and every guest socket close after it queued
+    // up behind the lock it never let go of: the whole guest hung.
+    struct list done;
+    list_init(&done);
     lock(&sockrestart_lock, 0);
     unsigned restored = 0;
     // Sockets we had RECORDED, as opposed to ones we managed to put back.
@@ -158,7 +174,13 @@ unsigned sockrestart_on_resume() {
     struct saved_socket *saved, *tmp;
     list_for_each_entry_safe(&saved_sockets, saved, tmp, saved) {
         list_remove(&saved->saved);
+        list_add(&done, &saved->saved);
         processed++;
+        // Only we still hold it: the guest has closed this listener, so there
+        // is nothing to put back, and a rebuild would only listen again at an
+        // address nobody is serving until the close below.
+        if (saved->sock->refcount == 1)
+            continue;
         int new_sock = socket(saved->name_addr.sa_family, saved->type, saved->proto);
         if (new_sock < 0) {
             printk("WARNING: restarting socket(%d, %d, %d) failed: %s\n",
@@ -197,7 +219,7 @@ unsigned sockrestart_on_resume() {
         restored++;
 
 thank_u_next:
-        fd_close(saved->sock);
+        ;
     }
     // Kick the accept()ers whenever a suspension was RECORDED -- not only when
     // a rebuild succeeded.
@@ -222,5 +244,10 @@ thank_u_next:
         }
     }
     unlock(&sockrestart_lock);
+    list_for_each_entry_safe(&done, saved, tmp, saved) {
+        list_remove(&saved->saved);
+        fd_close(saved->sock);
+        free(saved);
+    }
     return restored;
 }
