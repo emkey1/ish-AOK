@@ -1362,6 +1362,74 @@ feature -- iPad plus console cable -- but it needs specific hardware, Redpark's
 licensing terms, and it is dead code for everyone without the cable. Only worth
 it if the maintainer wants it personally.
 
+### YubiKey for ssh -- possible add, tested by the requester
+
+Asked for on Discord (2026-09-21) by a user who authenticates ssh with a
+YubiKey over NFC or USB. They had tried to build it themselves and stopped at
+the NFC entitlement, which a free Apple account cannot hold. That wall is ours,
+not theirs: the TestFlight build is signed on a paid team, so an entitlement we
+add reaches TestFlight users. It does not reach free-account sideloaders of the
+GitHub IPA, whose re-signer drops what their team cannot hold
+([[unsigned-ipa-drops-entitlements]]).
+
+**Established.**
+
+- **Shape: an ssh-agent in the app, not key passthrough.** The guest has no
+  USB, HID or PC/SC, and building any of them is far more work than the agent
+  protocol, which is small (list identities, sign) and stable. The app talks to
+  the key; the guest gets a unix socket and `SSH_AUTH_SOCK`; guest `ssh`, `git`,
+  `scp` and `rsync` work unchanged on every arch, musl and glibc.
+- **Transports.** NFC is iPhone only -- iPads and Macs have no reader CoreNFC
+  can use. USB-C (iPad, iPhone 15+, iOS 16+) goes through CryptoTokenKit and
+  reaches only the key's smart-card applets: PIV, not FIDO2, because apps get no
+  HID. Lightning (5Ci) is MFi ExternalAccessory, and App Store use needs Yubico
+  to register the app -- skip it.
+- **Key types.** PIV (slot 9a) works over NFC and USB-C. FIDO2 `ed25519-sk` /
+  `ecdsa-sk` works over NFC only, and only by speaking CTAP2 to the key
+  directly with its `ssh:` application id. Apple's AuthenticationServices
+  security-key API cannot do it: it signs only for an associated web domain, so
+  it never matches a key `ssh-keygen -t ed25519-sk` made. Existing `id_*_sk`
+  files would load through `ssh-add`; creating sk keys on the device is out of
+  scope.
+- **Socket plumbing is small.** `unix_socket_get` (fs/sock.c) already maps a
+  guest socket node to a host socket by `socket_id`, so the kernel makes the
+  node and the app owns the host listener behind it. The listener must strip
+  the 8-byte peer cookie AOK's connect sends first (the unix peer-token
+  registry, same file). AF_UNIX listeners survive suspend
+  ([[listening-sockets-die-on-suspend]]), so no resume hook should be needed --
+  confirm it on the device rather than assume.
+- **UX limits.** Signing needs AOK in the foreground (NFC sheets and PIN
+  prompts both do). Over NFC it is one tap per ssh connection, so `git` work
+  that opens many wants `ControlMaster`; USB-C has no such cost. Listing
+  identities would cost a tap of its own unless the public keys are cached by a
+  one-time "enroll key" step in Settings.
+
+**Sizing** (estimated 2026-09-22, nothing built): about 2,500 lines. Agent
+protocol and signature encoding ~700 lines of C; PIV and both transports ~600,
+or far fewer on YubiKit (ObjC, Apache-2 -- compatible with GPLv3 -- vendored
+as an emkey1 fork per [[vendor-as-fork-submodule]]), which also covers FIDO2;
+app UI ~500 (enroll, key list, PIN prompt with an optional per-session cache).
+FIDO2 sk keys over NFC are a second phase of ~500 more. Entitlements:
+`com.apple.developer.nfc.readersession.formats` (TAG), the PIV and FIDO AIDs in
+`com.apple.developer.nfc.readersession.iso7816.select-identifiers`,
+`NFCReaderUsageDescription`, and `com.apple.security.smartcard` for USB-C.
+NFC Tag Reading must be enabled on the App ID in the developer portal and the
+profiles regenerated; whether the smart-card entitlement needs the same is not
+known.
+
+**Testing without hardware.** The maintainer has no YubiKey and does not plan
+to buy one, and the simulator has neither NFC nor smart cards, so the
+transports can only be proven by the requester on TestFlight. What can be
+proven here first: the agent core and socket on the CLI build, behind a
+software key backend, with guest `ssh-add -L` and `ssh` against a guest sshd.
+Ship the hardware path behind a Settings toggle marked experimental, and log
+each APDU exchange's status word with `ish_printk` so the tester can paste
+`dmesg` back -- ssh itself only ever sees `SSH_AGENT_FAILURE`.
+
+**Next step** is a question to the requester, not code: PIV or FIDO2? Yubico's
+own guide calls FIDO2 the simplest ssh setup, and if that is what they use, a
+PIV-first phase does nothing for them and the order flips.
+
 ### x86 guests have no crypto acceleration, and it costs 18-46x
 
 **Established, measured 2026-09-18** ([docs/guest_pc_sampling_2026_09.md](guest_pc_sampling_2026_09.md)).
