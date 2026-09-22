@@ -21,6 +21,11 @@ intptr_t become_first_process(void);
 intptr_t become_new_init_child(void);
 int create_stdio(const char *file, int major, int minor);
 int create_piped_stdio(void);
+// The host's standard stream `stream` (0, 1 or 2) as create_piped_stdio wraps
+// it, but around a COPY of the host descriptor, above 2, so closing it closes
+// only the copy. Not installed anywhere. NULL if it could not be made. For a
+// checkpoint restore; see the definition.
+struct fd *open_host_stdio_copy(int stream);
 
 // Called by xX_main_Xx once the root is mounted and `current` exists, and
 // BEFORE the initial command is exec'd. NULL by default; main.c points it at

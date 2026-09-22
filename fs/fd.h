@@ -396,6 +396,15 @@ struct fd {
     // Whether the setuid/setgid strip on first write has already been done for
     // this descriptor. See file_remove_privs in kernel/fs.c.
     bool privs_checked;
+    // Which of the HOST's own standard streams this descriptor is, as the
+    // entry point handed it over (create_piped_stdio): 1 + the stream, so 1,
+    // 2 or 3, and 0 for every other descriptor. real_fd cannot say it: a
+    // checkpoint restore wraps a COPY of the host's stream, above 2, and the
+    // classifier that asked real_fd refused the resumed session's next save
+    // on its own stdin. See ckpt_classify_fd in kernel/checkpoint.c. Here, in
+    // the padding before `dir`, so no other field moves and the struct keeps
+    // its size.
+    uint8_t host_stdio;
     DIR *dir;
     struct inode_data *inode;
     ino_t fake_inode;

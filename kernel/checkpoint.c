@@ -1055,21 +1055,27 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
     }
     // The standard streams as the entry point handed them over. On the CLI
     // with output piped these are host descriptors wrapped in a struct fd
-    // (kernel/init.c's open_fd_from_actual_fd) -- a pipe or a socket whose
-    // other end is a process on the Mac. There is nothing to serialise and
-    // nothing that would mean anything on the way back, so they are
-    // re-attached like the tty.
+    // (kernel/init.c's create_piped_stdio) -- a pipe or a socket whose other
+    // end is a process on the Mac. There is nothing to serialise and nothing
+    // that would mean anything on the way back, so they are re-attached like
+    // the tty: to whatever the next run is handed.
     //
-    // Identified by the HOST descriptor they wrap, not by the guest number
-    // they sit at, and that is not pedantry: a shell moves its saved stdin to
-    // fd 10 for the duration of a redirection (dash's to_upper_fd), so the
-    // very first checkpoint taken from inside `while read; done < file`
-    // refused on "fd 10 is a special file". It is the same stream, wherever
-    // the guest is holding it.
-    // Only a descriptor that really wraps one of the host's own: real_fd 0 is
-    // also simply what a descriptor with no host fd at all holds.
-    if (fd->ops == &realfs_fdops && fd->real_fd >= 0 && fd->real_fd <= 2 &&
-            !S_ISREG(fd->type) && !S_ISDIR(fd->type))
+    // Identified by what the descriptor IS, not by the guest number it sits
+    // at, and that is not pedantry: a shell moves its saved stdin to fd 10 for
+    // the duration of a redirection (dash's to_upper_fd), so the very first
+    // checkpoint taken from inside `while read; done < file` refused on "fd 10
+    // is a special file". It is the same stream, wherever the guest is holding
+    // it.
+    //
+    // Nor by the HOST number it wraps, which was the test until a restored
+    // session had to be saved again: the restore wraps a copy of the new run's
+    // stream, above 2 (open_host_stdio_copy), so the resumed shell's stdin was
+    // "a special file on realfs with no restore rule" and every save after a
+    // resume refused. A number in 0..2 was never proof either: once the guest
+    // has closed its last reference to one of the host's streams, the next
+    // host open gets that number, and a guest pipe could pass. fd->host_stdio
+    // is set where the descriptor is made, and says which stream it is.
+    if (fd->ops == &realfs_fdops && fd->host_stdio != 0)
         return CKPT_FD_STDIO;
     // An ordinary character device -- /dev/null, /dev/zero, /dev/urandom.
     // These have a stable path and no state, so they come back by being
@@ -2085,7 +2091,8 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
                 ret = _EOPNOTSUPP;
                 goto out;
             }
-            s->offset = s->kind == CKPT_FD_STDIO ? (uint64_t) s->fd->real_fd
+            // A standard stream travels as WHICH one it is, 0, 1 or 2.
+            s->offset = s->kind == CKPT_FD_STDIO ? (uint64_t) (s->fd->host_stdio - 1)
                                                  : ckpt_fd_offset(s->fd);
             // A pty travels as its NUMBER: that is what pairs a master with
             // its slave across a restore, where both get new ones.
@@ -2790,6 +2797,9 @@ struct ckpt_restore_state {
     // by two different processes becomes ONE host pipe.
     struct { uint64_t inode; struct fd *rd, *wr; } *pipes;
     uint32_t pipe_count, pipe_cap;
+    // The host's own standard streams as THIS run was handed them, one
+    // descriptor per stream for the whole image (ckpt_host_stdio).
+    struct fd *host_stdio[3];
     // One standard-stream set per TERMINAL, made on first sight.
     //
     // Not one per image, which is what this was: six gettys on six virtual
@@ -2916,6 +2926,18 @@ static int ckpt_id_put(struct ckpt_restore_state *st, uint32_t id, struct fd *fd
         st->id_count = id + 1;
     st->by_id[id] = fd_retain(fd);
     return 0;
+}
+
+// The host's standard stream `n` (0, 1 or 2) for a CKPT_FD_STDIO record: made
+// on first mention and then shared, the way a fork shares it, by every
+// descriptor in the image that names that stream -- whichever process holds
+// it and whatever terminal that process was on. NULL if it could not be made.
+static struct fd *ckpt_host_stdio(struct ckpt_restore_state *st, uint64_t n) {
+    if (n > 2)
+        return NULL;
+    if (st->host_stdio[n] == NULL)
+        st->host_stdio[n] = open_host_stdio_copy((int) n);
+    return st->host_stdio[n];
 }
 
 // ---- restored sessions ---------------------------------------------------
@@ -3157,24 +3179,21 @@ static struct ckpt_stdio_set *ckpt_stdio_set_for(struct ckpt_restore_state *st,
                              ? (int) h->console_minor : rec->tty_num);
         CKPT_TRACE("pid %u came back on %s\n", rec->pid, set->path);
     } else {
-        // create_piped_stdio wraps the host's OWN descriptors 0, 1 and 2, and
-        // these struct fds are closed when the restore lets go of the set --
-        // which, for a process the image then gives /dev/null, is the last
-        // reference. That closed the host's stdin, stdout and stderr outright,
-        // the numbers were handed straight to the next fakefs open, and every
-        // later write to "stdout" landed on busybox or ld-musl instead: the
-        // restored session printed nothing, and its writes failed with the -1
-        // a host write() returns, which the guest reads as EPERM. Hand the
-        // restore its own copies, above 2, so closing them closes nothing else.
-        create_piped_stdio();
-        for (int i = 0; i < 3; i++) {
-            struct fd *piped = current->files->files[i];
-            if (piped == NULL || piped->real_fd != i)
-                continue;
-            int copy = fcntl(i, F_DUPFD_CLOEXEC, 3);
-            if (copy >= 0)
-                piped->real_fd = copy;
+        // No terminal: the host's own standard streams, the same descriptors
+        // every CKPT_FD_STDIO record is given. Copies above 2
+        // (open_host_stdio_copy says why), and put into no table here: the
+        // table is filled record by record in ckpt_restore_task, and before
+        // this used create_piped_stdio, which wrote into it -- the source of
+        // three descriptors a process that had closed its standard streams
+        // never had.
+        for (unsigned i = 0; i < 3; i++) {
+            set->stdio[i] = ckpt_host_stdio(st, i);
+            if (set->stdio[i] != NULL)
+                fd_retain(set->stdio[i]);   // the restore's own reference
         }
+        CKPT_TRACE("pid %u came back with no terminal\n", rec->pid);
+        st->set_count++;
+        return set;
     }
 
     lock(&files->lock, 0);
@@ -3824,18 +3843,17 @@ descriptors:
         return _EAGAIN;
     struct fd **stdio = set->stdio;
     ckpt_join_terminal(set);
-    // RETAINED before installing, because installing the image's fd 1 detaches
-    // and CLOSES whatever was in that slot -- with a refcount of one that frees
-    // it, and mirroring fd 10 from a saved pointer afterwards was then a
-    // use-after-free that surfaced as `echo: I/O error` in the restored shell
-    // rather than as a crash.
-    for (unsigned i = 0; i < 3; i++) {
-        if (stdio[i] == NULL)
-            continue;
-        fd_retain(stdio[i]);
-        if ((err = fdtable_install_at(files, (fd_t) i, stdio[i], false)) < 0)
-            return err;
-    }
+    // Nothing goes into 0, 1 or 2 except by this process's own record for it.
+    //
+    // The set's descriptors used to be installed there first, for every task,
+    // and a record replaced them -- so a process that had CLOSED its standard
+    // streams came back holding the set's. sysvinit closes all three at
+    // startup: a resumed Devuan session's init held the app's host stdio,
+    // which it could not describe either, so the session could never be saved
+    // again. A stream the image does not name was closed, and stays closed.
+    // Making a terminal's set opens it straight into 0, 1 and 2, so whatever
+    // is left in an unnamed one after the loop is closed there.
+    bool named[3] = {false, false, false};
 
     // What the loop below was working on when it gave up. A restore that
     // aborts on one descriptor used to report nothing but the errno, and the
@@ -3875,6 +3893,8 @@ descriptors:
         failed_fd = cf.fd;
         failed_kind = cf.kind;
         snprintf(failed_path, sizeof(failed_path), "%s", path);
+        if (cf.fd < 3)
+            named[cf.fd] = true;
         CKPT_TRACE("  load fd %u %-5s id %u flags %#x off %llu %s\n",
                    cf.fd, ckpt_kind_name(cf.kind), cf.id, cf.flags,
                    (unsigned long long) cf.offset, path);
@@ -4161,35 +4181,38 @@ descriptors:
         // Re-attached, not restored: the terminal or the host pipe this guest
         // was talking to went with the process that owned it. sockrestart is
         // the precedent -- record enough to REBUILD, because the original is
-        // destroyed either way. 0, 1 and 2 were set up above; anywhere else
-        // the same stream is another reference to one of those three.
+        // destroyed either way.
         if (cf.kind == CKPT_FD_TTY) {
             if ((err = ckpt_restore_tty_record(st, set, rec, &cf, path, files)) < 0)
                 goto fds_done;
             continue;
         }
 
-        // The host's own standard streams (the CLI with output piped): the
-        // set's descriptors ARE them, so there is no description to rebuild.
+        // The host's own standard streams (the CLI with output piped). There
+        // is no description to rebuild: the record says WHICH stream it was,
+        // and it comes back as that stream of this run, at whatever number
+        // the process held it.
+        //
+        // By the stream, not by the number. A record at 0, 1 or 2 used to
+        // keep the set's descriptor of the same NUMBER, so after `exec 1>&2`
+        // a resumed shell's stdout was the host's stdout again; and a process
+        // on a terminal was given its terminal's set, not the stream at all.
         if (cf.kind == CKPT_FD_STDIO) {
-            if (cf.fd <= 2) {
-                if (cf.fd < 3 && stdio[cf.fd] != NULL &&
-                        (err = ckpt_id_put(st, cf.id, stdio[cf.fd])) < 0)
-                    goto fds_done;
+            struct fd *src = ckpt_host_stdio(st, cf.offset);
+            if (src == NULL) {
+                char why[96];
+                snprintf(why, sizeof(why), "host standard stream %llu could not "
+                         "be attached; left closed", (unsigned long long) cf.offset);
+                ckpt_note_restore(rec->pid, cf.fd, why);
+                printk("WARNING: checkpoint: pid %u fd %u: %s\n", rec->pid, cf.fd, why);
                 continue;
             }
-            unsigned mirror = cf.kind == CKPT_FD_STDIO ? (unsigned) cf.offset : 0;
-            if (mirror > 2)
-                mirror = 0;
-            struct fd *src = stdio[mirror];
-            if (src != NULL) {
-                if ((err = ckpt_id_put(st, cf.id, src)) < 0)
-                    goto fds_done;
-                fd_retain(src);
-                if ((err = fdtable_install_at(files, (fd_t) cf.fd, src,
-                                              cf.cloexec != 0)) < 0)
-                    goto fds_done;
-            }
+            if ((err = ckpt_id_put(st, cf.id, src)) < 0)
+                goto fds_done;
+            fd_retain(src);   // the process's own
+            if ((err = fdtable_install_at(files, (fd_t) cf.fd, src,
+                                          cf.cloexec != 0)) < 0)
+                goto fds_done;
             continue;
         }
 
@@ -4245,6 +4268,13 @@ fds_done:
                     rec->pid, failed_fd, ckpt_kind_name(failed_kind),
                     failed_path[0] != '\0' ? " " : "", failed_path, err);
         return err;
+    }
+    // A standard stream no record named was closed when this process was
+    // saved. Anything there now came from making its terminal's set, not
+    // from the image.
+    for (unsigned i = 0; i < 3; i++) {
+        if (!named[i] && f_close((fd_t) i) == 0)
+            CKPT_TRACE("  fd %u: closed when saved, and closed again\n", i);
     }
 
     // Credentials, identity and the rest of the task.
@@ -4990,6 +5020,9 @@ out:
         for (unsigned j = 0; j < 3; j++)
             if (st.sets[i].stdio[j] != NULL)
                 fd_close(st.sets[i].stdio[j]);
+    for (unsigned j = 0; j < 3; j++)
+        if (st.host_stdio[j] != NULL)
+            fd_close(st.host_stdio[j]);
     for (uint32_t i = 0; i < st.id_count; i++)
         if (st.by_id[i] != NULL)
             fd_close(st.by_id[i]);

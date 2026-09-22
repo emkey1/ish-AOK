@@ -1118,26 +1118,6 @@ rows actually added, so the two styles cannot drift apart again -- the same
 bug will recur the next time a button is added to one branch and not the
 other.
 
-## A restored session cannot be saved again
-
-**Established** (2026-09-22, on the M4 iPad and on the CLI, and the same on
-the build before the clock change): the first save after a restore refuses
-with `fd 0 is a special file on realfs with no restore rule`. On the iPad it
-is init: after the restore its fd 0 reads back as `anon_inode:[anon_inode]`,
-the standard stream the restore re-attached (CKPT_FD_STDIO), which the next
-save no longer recognises as one. On the CLI it is the restored shell's stdin
-(the new run's host `/dev/null`). So a resumed session on the device is not
-saved when the app is next backgrounded, and the session after that is lost
-if iOS then ends the app. Repro on the CLI: two `echo suspend >
-/proc/ish/checkpoint` in one `ISH_GUEST_CHECKPOINT=1 ISH_SESSION=...` guest;
-the resumed run's second one leaves `last_refusal` set and no image.
-
-**Next step.** The save calls a descriptor a standard stream when it is
-`realfs_fdops` wrapping host fd 0-2 and not a file or directory (the CKPT_FD_STDIO
-test in kernel/checkpoint.c's classifier). Find what the restore re-attached
-in its place and why that test no longer matches it -- then a resumed
-session's own standard streams describe themselves the way the originals did.
-
 ## Timers that a checkpoint image does not carry
 
 **Established** (2026-09-22, while making the guest's clocks continue across a

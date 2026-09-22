@@ -435,7 +435,36 @@ int create_piped_stdio(void) {
     if (!(current->files->files[2] = open_fd_from_actual_fd(STDERR_FILENO))) {
         return -1;
     }
+    // Marked here and not in open_fd_from_actual_fd, which also wraps the
+    // pipes and /dev/null a captured guest command is given: those are not
+    // the host's standard streams, and a checkpoint must not re-attach them
+    // as if they were.
+    for (int i = 0; i < 3; i++)
+        current->files->files[i]->host_stdio = (uint8_t) (i + 1);
     return 0;
+}
+
+// A checkpoint restore re-attaches a saved guest's standard streams to
+// whatever THIS run was handed. It wraps a copy rather than the host's own
+// descriptor because nothing in the image decides when that may be closed:
+// the restore lets go of its references once every task is built, and when
+// that was the last one, closing the host's own 0, 1 and 2 handed their
+// numbers to the next fakefs opens -- every later write to "stdout" landed in
+// a guest file. Marked like create_piped_stdio's, so the resumed session's
+// standard streams still say what they are when it is saved again.
+struct fd *open_host_stdio_copy(int stream) {
+    if (stream < 0 || stream > 2)
+        return NULL;
+    int copy = fcntl(stream, F_DUPFD_CLOEXEC, 3);
+    if (copy < 0)
+        return NULL;
+    struct fd *fd = open_fd_from_actual_fd(copy);
+    if (fd == NULL) {
+        close(copy);
+        return NULL;
+    }
+    fd->host_stdio = (uint8_t) (stream + 1);
+    return fd;
 }
 
 static long ish_monotonic_ms_since(const struct timespec *start) {

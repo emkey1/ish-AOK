@@ -127,6 +127,112 @@ esac
 [ -e "$IMG" ] && { echo "FAIL: the session image survived being resumed"; exit 1; }
 echo "  resume  | (image consumed)"
 
+# ---- and a resumed session suspends AGAIN ---------------------------------
+#
+# Every save after a resume used to refuse: "fd 0 is a special file on realfs
+# with no restore rule". A restore re-attaches the standard streams to what the
+# NEW run was handed, wrapping a copy of each above 2, and the classifier knew
+# a standard stream by its host number being 0..2. On the device a resumed
+# session was therefore never saved at the next backgrounding, and was lost if
+# iOS then killed the app. The leg above only ever resumes a first-generation
+# image; this one takes three launches -- save, resume and save again, resume
+# again -- reading one file across all three lives, so the last also proves the
+# offset survived two restores.
+echo "  ---- a resumed session suspends again ----"
+rm -f "$IMG"
+again_prog='
+exec 3< /tmp/ckpt-lines.txt
+read -r a <&3; echo "gen-1 read $a"
+echo suspend > /proc/ish/checkpoint
+read -r b <&3; echo "gen-2 read $b"
+echo suspend > /proc/ish/checkpoint
+while read -r l; do case $l in last_refusal*) echo "gen-2 was not saved: $l";; esac; done < /proc/ish/checkpoint
+read -r c <&3; echo "gen-3 read $c"
+'
+again_1=$(ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$IMG" "$ISH" -f "$ROOT" $SH -c "$again_prog" < /dev/null 2>&1)
+echo "$again_1" | sed 's/^/  again   | /'
+[ -s "$IMG" ] || { echo "FAIL: the first suspend wrote no image"; echo "  got: $again_1"; exit 1; }
+case $again_1 in *gen-2*) echo "FAIL: the suspending guest kept running"; exit 1;; esac
+again_2=$(ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$IMG" "$ISH" -f "$ROOT" < /dev/null 2>&1)
+echo "$again_2" | sed 's/^/  again   | /'
+case $again_2 in
+    *"gen-2 read LINE-2-payload"*) ;;
+    *) echo "FAIL: the first resume did not continue"; echo "  got: $again_2"; exit 1;;
+esac
+case $again_2 in
+    *"was not saved"*|*gen-3*)
+        echo "FAIL: a resumed session could not be suspended again"; echo "  got: $again_2"; exit 1;;
+esac
+[ -s "$IMG" ] || { echo "FAIL: the second suspend wrote no image"; exit 1; }
+again_3=$(ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$IMG" "$ISH" -f "$ROOT" < /dev/null 2>&1)
+echo "$again_3" | sed 's/^/  again   | /'
+case $again_3 in
+    *"gen-3 read LINE-3-payload"*) ;;
+    *) echo "FAIL: the second resume did not continue"; echo "  got: $again_3"; exit 1;;
+esac
+[ -e "$IMG" ] && { echo "FAIL: the second image survived being resumed"; exit 1; }
+echo "  again   | saved, resumed, saved again, resumed again"
+
+# ---- standard streams that were closed stay closed ------------------------
+#
+# The same refusal from the other side. sysvinit closes 0, 1 and 2 at startup,
+# and the restore used to install its standard streams in every process before
+# reading that process's own descriptors -- so a process that had closed them
+# came back holding three, which it could not describe either. On the iPad a
+# resumed session's init held the app's host stdio at fd 0, and no resumed
+# Devuan session could be saved again.
+#
+# This shell closes 0 and 2, points 1 at the host's STDERR and keeps the host's
+# stdout at 3, then asks for each suspend from a CHILD, so it is saved holding
+# those streams where it put them -- a suspend asked through its own `>` would
+# have dash park fd 1 at 10 for the duration. Each life reports which of 0-2 it
+# holds (only 1), and writes a line on fd 1 that must reach the host's stderr:
+# a standard stream comes back as the stream it was, not as the one with its
+# number. It used to come back as the host's stdout.
+echo "  ---- closed standard streams stay closed ----"
+rm -f "$IMG"
+ERRF=${TMPDIR:-/tmp}/aok-ckpt-stderr-$$.txt
+trap 'rm -f "$IMG" "$ERRF"' EXIT
+closed_prog='
+exec 3>&1 1>&2 2>&- 4< /tmp/ckpt-lines.txt; exec 0<&-
+held() { r=; for n in 0 1 2; do [ -e /proc/$$/fd/$n ] && r="$r $n"; done; echo "$1 holds${r:- none}" >&3; }
+read -r a <&4; held life-1; echo "life-1 on stderr: $a"
+'"$SH"' -c "echo suspend > /proc/ish/checkpoint"
+read -r b <&4; held life-2; echo "life-2 on stderr: $b"
+'"$SH"' -c "echo suspend > /proc/ish/checkpoint"
+while read -r l; do case $l in last_refusal*) echo "life-2 was not saved: $l" >&3;; esac; done < /proc/ish/checkpoint
+read -r c <&4; held life-3; echo "life-3 on stderr: $c"
+'
+closed_life() {   # closed_life <n> <ish args...>: one launch, stdout and stderr apart
+    n=$1; shift
+    closed_out=$(ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$IMG" "$ISH" -f "$ROOT" "$@" < /dev/null 2> "$ERRF")
+    closed_err=$(cat "$ERRF")
+    echo "$closed_out" | sed 's/^/  closed  | /'
+    echo "$closed_err" | sed 's/^/  closed  | stderr: /'
+    case $closed_out in
+        *"life-$n holds 1"*) ;;
+        *) echo "FAIL: life $n came back holding standard streams it had closed"
+           echo "  got: $closed_out"; exit 1;;
+    esac
+    case $closed_err in
+        *"life-$n on stderr: LINE-$n-payload"*) ;;
+        *) echo "FAIL: in life $n the stream on fd 1 was not the host's stderr"
+           echo "  stdout: $closed_out"; echo "  stderr: $closed_err"; exit 1;;
+    esac
+}
+closed_life 1 $SH -c "$closed_prog"
+[ -s "$IMG" ] || { echo "FAIL: the closed-streams guest wrote no image"; exit 1; }
+closed_life 2
+case $closed_out$closed_err in
+    *"was not saved"*|*life-3*)
+        echo "FAIL: a resumed guest with closed streams could not be suspended again"; exit 1;;
+esac
+[ -s "$IMG" ] || { echo "FAIL: the second suspend of the closed-streams guest wrote no image"; exit 1; }
+closed_life 3
+[ -e "$IMG" ] && { echo "FAIL: the closed-streams image survived being resumed"; exit 1; }
+rm -f "$ERRF"
+echo "  closed  | 0 and 2 stayed closed, 1 stayed the host's stderr, three lives"
+
 # ---- more than one process ------------------------------------------------
 #
 # The interesting half, and the reason for the freezer. The parent here is
