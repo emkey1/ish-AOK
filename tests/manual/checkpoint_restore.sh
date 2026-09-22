@@ -142,6 +142,8 @@ mp_out=$(ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$IMG" "$ISH" -f "$ROOT" $SH -c '
 echo "launch1: child is $!"
 echo suspend > /proc/ish/checkpoint
 echo "launch2: back, waiting"
+# Reached only when the suspend did not happen: say why, from the kernel.
+while read -r l; do case $l in last_refusal*) echo "launch2: $l";; esac; done < /proc/ish/checkpoint
 wait
 echo "launch2: wait returned $?"
 ' 2>&1)
