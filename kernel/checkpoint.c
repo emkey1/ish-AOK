@@ -2941,6 +2941,29 @@ int checkpoint_take_restored_session(struct checkpoint_restored_session *out) {
     return got;
 }
 
+// Whose terminal this is, which group is in the FOREGROUND of it, its line
+// discipline and its size -- as the image's first process on it recorded them.
+//
+// Opening it made the first restored process to arrive its owner -- the login,
+// never the shell it forked -- and a shell outside the foreground group reads
+// EIO and exits, which is what every restored session did before this: back as
+// a zombie within a millisecond. The line discipline is guarded on a plausible
+// record rather than applied blindly: an image from before this travelled
+// carries zeroes, and a terminal with no ECHO, no ICANON and no ISIG is one
+// nothing can be typed into.
+static void ckpt_restore_terminal(struct tty *tty, const struct ckpt_task *rec) {
+    lock(&tty->lock, 0);
+    if (rec->tty_session != 0)
+        tty->session = rec->tty_session;
+    if (rec->tty_fg_group != 0)
+        tty->fg_group = rec->tty_fg_group;
+    if (rec->tty_termios.lflags != 0 || rec->tty_termios.iflags != 0)
+        tty->termios = rec->tty_termios;
+    if (rec->tty_winsize.col != 0 && rec->tty_winsize.row != 0)
+        tty->winsize = rec->tty_winsize;
+    unlock(&tty->lock);
+}
+
 // The standard streams for one restored task, made on first sight of the
 // terminal it was on and shared by everything else on that same terminal.
 //
@@ -2998,10 +3021,24 @@ static struct ckpt_stdio_set *ckpt_stdio_set_for(struct ckpt_restore_state *st,
                             rec->pid, set->path, err);
                 return NULL;
             }
+            // The terminal's state, exactly as for a window below: whose it
+            // is, which group is in its FOREGROUND, its line discipline and
+            // its size. None of it used to be put back here, and a tmux pane
+            // came back with the shell's group in front instead of the job's,
+            // in cooked mode under a program that had put it in raw mode, so
+            // `q` never reached ktop and watch lost its pane to a prompt.
+            // set->tty is what makes every other process of the session take
+            // this terminal as its controlling one (ckpt_join_terminal); here,
+            // too, only the process that opened it used to have one.
+            struct tty *tty = fd_tty(current->files->files[0]);
+            if (tty != NULL) {
+                ckpt_restore_terminal(tty, rec);
+                set->tty = tty;
+            }
             // No set->terminal and no leader_pid: there is no window here for
             // the UI to adopt, and nothing whose exit ends one.
-            CKPT_TRACE("pid %u came back on %s (pty the image owns)\n",
-                       rec->pid, set->path);
+            CKPT_TRACE("pid %u came back on %s (pty the image owns, fg group %d)\n",
+                       rec->pid, set->path, rec->tty_fg_group);
             st->set_count++;
             return set;
         }
@@ -3026,25 +3063,7 @@ static struct ckpt_stdio_set *ckpt_stdio_set_for(struct ckpt_restore_state *st,
                         rec->sid, set->path, err);
             return NULL;
         }
-        // Whose terminal this is, and which group is in the FOREGROUND of it.
-        // Opening it made the first restored process to arrive its owner --
-        // the login, never the shell it forked -- and a shell outside the
-        // foreground group reads EIO and exits, which is what every restored
-        // session did before this: back as a zombie within a millisecond.
-        lock(&tty->lock, 0);
-        if (rec->tty_session != 0)
-            tty->session = rec->tty_session;
-        if (rec->tty_fg_group != 0)
-            tty->fg_group = rec->tty_fg_group;
-        // The line discipline as the guest left it. Guarded on a plausible
-        // record rather than applied blindly: an image from before this
-        // travelled carries zeroes, and a terminal with no ECHO, no ICANON and
-        // no ISIG is one nothing can be typed into.
-        if (rec->tty_termios.lflags != 0 || rec->tty_termios.iflags != 0)
-            tty->termios = rec->tty_termios;
-        if (rec->tty_winsize.col != 0 && rec->tty_winsize.row != 0)
-            tty->winsize = rec->tty_winsize;
-        unlock(&tty->lock);
+        ckpt_restore_terminal(tty, rec);
         // The session LEADER is what the UI watches: when it exits the window
         // is finished, whatever else is still in the session. The image's
         // tasks arrive parents-first, so the first one on this terminal is it

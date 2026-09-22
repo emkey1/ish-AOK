@@ -1650,7 +1650,15 @@ int task_wait_child(dword_t pid, int *status_out, int options) {
         idtype = P_PGID_;
         id = (pid_t_) -(sdword_t) pid;
     }
-    int err = do_wait(idtype, id, &info, NULL, options | WEXITED_);
+    // Blocked, as wait4 marks it (sys_wait4_guest below). Without it a native
+    // shell waiting on its foreground command -- or a restored one waiting on
+    // its job, or an exec stand-in waiting on the program it started -- read
+    // as RUNNING: `R` in ps, and one more runnable task in the load average for
+    // every such wait. An idle iPad after a restore reported a load of 1.77.
+    int err = 0;
+    TASK_MAY_BLOCK {
+        err = do_wait(idtype, id, &info, NULL, options | WEXITED_);
+    }
     if (err < 0)
         return err;
     if (status_out != NULL)
