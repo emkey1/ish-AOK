@@ -20,6 +20,12 @@
 # job's processes have the pane as their controlling terminal, the waiting
 # shells use no CPU and are not counted as running, `q` quits ktop and hands
 # the pane back to a working shell, and ^C does the same for watch.
+#
+# And the server survives a signal. Its event loop (libevent) drains its
+# signal pipe until EAGAIN; a restored pipe came back BLOCKING, so the first
+# signal the server got after a resume left it in read() for good -- every
+# pane deaf, every later tmux command hung. Reported from the iPad as "attach
+# from the window, neither pane responds, and detaching wedges the shell".
 set -e
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 ISH=${ISH:-$REPO/build/ish}
@@ -75,6 +81,13 @@ for p in 0 1; do
   sh=$(tmux display -p -t t:0.$p '#{pane_pid}')
   echo "FINAL pane$p shell=$sh tpgid=$(awk '{print $8}' /proc/$sh/stat)"
 done
+# SIGCHLD: the server's handler only reaps, so it is harmless -- except to a
+# server whose signal pipe blocks.
+kill -CHLD "$(tmux display -p '#{pid}')"
+sleep 1
+( tmux ls > /tmp/ls.out 2>&1; echo done > /tmp/ls.done ) &
+sleep 4
+if [ -e /tmp/ls.done ]; then echo "SERVER answered"; else echo "SERVER wedged"; fi
 echo DONE
 kill -9 1
 L
@@ -88,7 +101,7 @@ n=0; while ! grep -q '^DONE' "$WORK/out2" 2>/dev/null && [ $n -lt 90 ]; do sleep
 # The CLI's terminal ends lines with \r\n.
 for o in out1 out2; do tr -d '\r' < "$WORK/$o" > "$WORK/$o.txt" && mv "$WORK/$o.txt" "$WORK/$o"; done
 grep -aE '^(BEFORE|AFTER)' "$WORK/out1" "$WORK/out2" -h | sed 's/^/  /'
-grep -aE '^(CPU|KTOP|PANE|FINAL)' "$WORK/out2" | sed 's/^/  /'
+grep -aE '^(CPU|KTOP|PANE|FINAL|SERVER)' "$WORK/out2" | sed 's/^/  /'
 grep -q '^DONE' "$WORK/out2" || { echo "FAIL: the resumed guest never finished"; exit 1; }
 
 fail=0
@@ -117,6 +130,7 @@ for p in 0 1; do
     c=$(sed -n "s/^CPU pane$p //p" "$WORK/out2")
     [ "${c:-99}" -le 1 ] || f "pane$p's waiting shell used $c ticks in 2 s"
 done
+grep -qx 'SERVER answered' "$WORK/out2" || f "the tmux server stopped answering after a signal"
 grep -qx 'KTOP-LEFT 0' "$WORK/out2" || f "q did not quit ktop"
 grep -qx 'PANE1-ECHO 1' "$WORK/out2" || f "pane1's shell did not come back after ktop"
 grep -qx 'PANE0-ECHO 1' "$WORK/out2" || f "pane0's shell did not come back after watch"

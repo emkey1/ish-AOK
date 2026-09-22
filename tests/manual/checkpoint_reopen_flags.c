@@ -9,8 +9,15 @@
 //   O_CREAT|O_EXCL -- mkstemp's flags. The file exists, so the reopen was
 //                     EEXIST, and the degrade gave the process /dev/null: every
 //                     later write to its temp file went nowhere.
+//
+// And the flags a descriptor must KEEP. A pipe is rebuilt rather than
+// reopened, and it came back blocking whatever it had been: a restored tmux
+// server, whose event loop drains its non-blocking signal pipe until EAGAIN,
+// sat in read() for good on the first signal after a resume.
 #define _GNU_SOURCE
+#include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +37,8 @@ int main(void) {
     if (t < 0 || e < 0) { perror("open"); return 1; }
     write(t, "before\n", 7);
     write(e, "before\n", 7);
+    int nb[2], blk[2];
+    if (pipe2(nb, O_NONBLOCK) < 0 || pipe(blk) < 0) { perror("pipe"); return 1; }
     // The checkpoint lands in here, and the script kills this run as soon as
     // the image exists -- the way iOS kills the app. A saving run that went
     // on to write "after" itself would make a broken restore look fine.
@@ -38,5 +47,16 @@ int main(void) {
     write(e, "after\n", 6);
     show("TRUNC", "/tmp/ckrf-trunc");
     show("EXCL", tmpl);
+    int nbr = !!(fcntl(nb[0], F_GETFL) & O_NONBLOCK);
+    int nbw = !!(fcntl(nb[1], F_GETFL) & O_NONBLOCK);
+    int bl = !!(fcntl(blk[0], F_GETFL) & O_NONBLOCK);
+    alarm(4);                       // blocking where it should not is the bug
+    char c;
+    ssize_t r = read(nb[0], &c, 1);
+    int re = r < 0 ? errno : 0;
+    alarm(0);
+    printf("PIPE=[nonblock %d/%d blocking %d empty-read %zd/%s]\n", nbr, nbw, bl, r,
+           re == EAGAIN ? "EAGAIN" : "other");
+    fflush(stdout);
     return 0;
 }

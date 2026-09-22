@@ -23,10 +23,11 @@ kill -9 $saver 2>/dev/null || true; wait $saver 2>/dev/null || true
 out=$(ISH_REAL_MNT=$WORK ISH_RESTORE="$WORK/img" "$ISH" -f "$ROOT" 2>&1 || true)
 echo "$out" | sed 's/^/  restore | /'
 fail=0
-for want in 'TRUNC=[before|after|]' 'EXCL=[before|after|]'; do
+for want in 'TRUNC=[before|after|]' 'EXCL=[before|after|]' \
+        'PIPE=[nonblock 1/1 blocking 0 empty-read -1/EAGAIN]'; do
     if echo "$out" | grep -qxF "$want"; then echo "  ok      | $want"
     else echo "  FAIL    | want $want"; fail=1; fi
 done
-[ $fail -eq 0 ] || { "$ISH" -f "$ROOT" /bin/sh -c 'rm -f /tmp/ckrf-trunc /tmp/ckrf-excl-*'; echo "FAIL: a reopen replayed its open's side effects"; exit 1; }
+[ $fail -eq 0 ] || { "$ISH" -f "$ROOT" /bin/sh -c 'rm -f /tmp/ckrf-trunc /tmp/ckrf-excl-*'; echo "FAIL: a restored descriptor lost or replayed its flags"; exit 1; }
 "$ISH" -f "$ROOT" /bin/sh -c 'rm -f /tmp/ckrf-trunc /tmp/ckrf-excl-*'
-echo "PASS: reopened descriptors kept their files intact"
+echo "PASS: reopened descriptors kept their files intact, and pipes their flags"

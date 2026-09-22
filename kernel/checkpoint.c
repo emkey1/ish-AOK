@@ -3700,6 +3700,16 @@ descriptors:
             if ((err = ckpt_pipe_for(st, cf.pipe_inode, &pipe_rd, &pipe_wr)) < 0)
                 goto fds_done;
             struct fd *end = cf.pipe_write_end ? pipe_wr : pipe_rd;
+            // The description's own flags, O_NONBLOCK above all, on the guest
+            // side and the host's alike (realfs_setflags keeps the two in
+            // step: realfs_read trusts the guest flag and reads the host fd
+            // raw). A fresh pipe is blocking, and nothing put them back: a
+            // restored tmux server wedged on the first signal it got, because
+            // libevent drains its signal pipe until EAGAIN and the second read
+            // of a now-blocking pipe never returned. Every pane went deaf and
+            // every tmux command after it hung.
+            if ((err = fd_setflags(end, (int) cf.flags)) < 0)
+                goto fds_done;
             // The bytes that were in flight, put back at the write end so the
             // reader sees them exactly where it left off. Only the read end's
             // record carries them, so this runs once per pipe.
