@@ -1150,6 +1150,26 @@ them any earlier would leave them firing into a failed restore.
   (its `thread` is the parent's, or nothing, for the app's pid 1 before
   `task_start`), which a due timer made ordinary on the resume path.
 
+**Three defects in the first version, found by an adversarial review and each
+proved on the committed binary (e28c9476) before its fix:**
+- *ITIMER_VIRTUAL/PROF were measured on the wrong thread.* `cpu_time_now_of`
+  asks the CALLING thread for whichever member is `current`, and the writer
+  sets `current` to the task it describes. With 2.5 s of CPU on the carrying
+  thread, ITIMER_PROF came back 2.6 s of CPU late. The group's CPU is now read
+  with `current` cleared (`group_cpu_now`), on both sides.
+- *An expiry being delivered during the save was lost.* The timer thread
+  decides to fire, drops its lock and only then queues the signal; a timer read
+  in that gap was a fired one-shot, and its signal was not in the queue yet.
+  `timer_read` now waits the delivery out, and ITIMER_VIRTUAL/PROF are re-read
+  if the sampler ticked meanwhile (`timer_settle`). The window is microseconds,
+  so `ISH_TEST_TIMER_FIRE_DELAY_MS` holds every delivery open: with it, the
+  committed code lost both a POSIX timer's and ITIMER_REAL's signal 3/3, and
+  the fix delivered both 3/3 (checkpoint_timers.sh's race leg).
+- *"Never" overflowed.* A timer or timerfd armed at TIME_T_MAX -- systemd's
+  clock-change watch -- and a nanosleep of TIME_T_MAX, which is what
+  `sleep infinity` asks for, came back due at once: the nanosecond arithmetic
+  wrapped. Saturated now (TIMER_CKPT_NEVER), and "never" comes back never.
+
 **Test:** `tests/manual/checkpoint_timers.sh [root]` (+ .c), both save paths, a
 3 s stop: alarm() in a child, POSIX timers on MONOTONIC, REALTIME relative
 and absolute, BOOTTIME, periodic, SIGEV_NONE, process and thread CPU clocks,
@@ -1200,6 +1220,11 @@ now also fails a sleep or poll-family case that returns late.
   would fix all of them at once.
 - **A native program's pending signals come back as bits with no queue entry**,
   as before. It is re-launched, and nothing it had pending is delivered.
+- **Found alongside, not a checkpoint bug:** `ppoll` with an INT64_MAX
+  timeout returns 0 at once (measured on the pre-change binary, no checkpoint
+  involved), where nanosleep and clock_nanosleep with the same value sleep --
+  poll_wait's deadline arithmetic overflows. A NULL timeout is the usual way to
+  say "for ever", so nothing common hits it.
 - **Found alongside, not a checkpoint bug:** a signal whose delivery runs no
   handler (SIGCHLD with SIG_DFL) ends a restartable wait with EINTR, where
   Linux restarts the call; and `deliver_signal_to_group_locked` queues such a

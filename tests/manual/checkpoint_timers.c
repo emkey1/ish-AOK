@@ -24,6 +24,8 @@
 // Pending signals are checked too, because they are how a timer delivers: a
 // signal queued but not taken when the image was written -- one of them a
 // timer's, with its overrun count -- must still be there, with its siginfo.
+// And "never" must stay never: a timer, a timerfd and a sleep set for
+// TIME_T_MAX, which overflowed the arithmetic once and came back due.
 //
 // The witness for "when did the machine stop and come back" is a spinner
 // thread reading CLOCK_REALTIME every few milliseconds: its largest gap IS the
@@ -34,6 +36,9 @@
 //     probe after     -- arms everything, then waits for an external save
 //                        (ISH_CHECKPOINT_AFTER) and a restore
 //     probe suspend   -- the same, and asks for the suspend itself, from a child
+//     probe race      -- asks for the suspend while two expiries are being
+//                        delivered; needs ISH_TEST_TIMER_FIRE_DELAY_MS in the
+//                        saving run (see race_main)
 //
 // Prints "OK <check>" / "FAIL <check>: why" lines, then TIMERS-PROBE-DONE.
 // Exit 4 means the stop did not land inside every wait under test.
@@ -51,6 +56,7 @@
 #include <sys/epoll.h>
 #include <sys/select.h>
 #include <sys/syscall.h>
+#include <sys/timerfd.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -64,6 +70,9 @@
 #endif
 #ifndef SIGEV_THREAD_ID
 #define SIGEV_THREAD_ID 4
+#endif
+#ifndef TFD_TIMER_CANCEL_ON_SET
+#define TFD_TIMER_CANCEL_ON_SET (1 << 1)
 #endif
 
 // When the external save comes (ISH_CHECKPOINT_AFTER=8 in the driver) or the
@@ -82,6 +91,11 @@
 #define D_CPU 8.0
 // How late a deadline may be met. The failure this is looking for is seconds.
 #define LATE 1.0
+// CPU the main thread burns before anything is armed. It is the task whose
+// record carries the process's timers, and the save is made on another host
+// thread: a CPU clock read through `current` there gets the saver's time for
+// this thread's, and ITIMER_PROF would come back this much late.
+#define MAIN_CPU 2.5
 
 static int failures;
 
@@ -279,6 +293,20 @@ static int sleep_available(enum sleep_kind k) {
     }
 }
 
+// A sleep asked for TIME_T_MAX, the way `sleep infinity` asks, which must still
+// be asleep after the restore rather than wake with an overflowed deadline.
+static volatile int forever_started, forever_done;
+static void *forever_sleeper(void *arg) {
+    (void) arg;
+    struct timespec ts = {INT64_MAX, 999999999};
+    forever_started = 1;
+    syscall(SYS_nanosleep, &ts, NULL);
+    forever_done = 1;
+    for (;;)
+        pause();
+    return NULL;
+}
+
 // ---- the CPU burner --------------------------------------------------------
 //
 // Burns CPU for the CPU-time timers, and keeps its own account of what it has
@@ -360,6 +388,8 @@ static double burned_proc(void) {
 #define SIG_BOOT     (SIGRTMIN + 4)   // BOOTTIME, relative: counts the stop
 #define SIG_PERIODIC (SIGRTMIN + 5)   // MONOTONIC, periodic
 #define SIG_OVERRUN  (SIGRTMIN + 6)   // MONOTONIC, fast and never taken until the end
+#define SIG_NEVER    (SIGRTMIN + 8)   // armed at TIME_T_MAX: must never come
+#define SIG_RACE     (SIGRTMIN + 9)   // the race leg's one-shot
 
 // Every arrival of every collected signal, with when it came on each clock and
 // what it carried. Graded afterwards against the witness, which is the only
@@ -426,8 +456,74 @@ static int timer_id_of(timer_t t) {
 }
 
 
+// probe race -- the save lands while two expiries are being delivered.
+//
+// The driver holds every expiry between its timer deciding to fire and the
+// signal being sent (ISH_TEST_TIMER_FIRE_DELAY_MS), a window of microseconds
+// otherwise, and this asks for the suspend inside it. What the save reads of a
+// timer there is a one-shot that has fired and a signal not yet queued, so an
+// image that took the timer's word for it had neither: the expiry was lost, and
+// a program waiting on it -- alarm() as a timeout -- waited for ever. Both
+// signals have to arrive after the restore.
+static int race_main(void) {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIG_RACE);
+    sigaddset(&set, SIGALRM);
+    sigprocmask(SIG_BLOCK, &set, NULL);
+    nanosleep(&(struct timespec) {1, 0}, NULL);
+    timer_t t = mk_timer(CLOCK_MONOTONIC, SIGEV_SIGNAL, SIG_RACE, 1009);
+    arm(t, 0, 0.3, 0);
+    struct itimerval itv = {.it_value = {0, 300000}};
+    setitimer(ITIMER_REAL, &itv, NULL);
+    // Due at 0.3 s, delivered at 0.3 s plus the hold: ask at 0.5 s.
+    nanosleep(&(struct timespec) {0, 500000000}, NULL);
+    pid_t asker = fork();
+    if (asker == 0) {
+        int fd = open("/proc/ish/checkpoint", O_WRONLY);
+        if (fd < 0 || write(fd, "suspend\n", 8) != 8)
+            _exit(2);
+        close(fd);
+        for (;;)            // see the main leg's asker
+            pause();
+    }
+    printf("RACE-START timer %d\n", timer_id_of(t));
+    for (int i = 0; !restored(); i++) {
+        if (i > 600) {
+            printf("NO-RESTORE\n");
+            _exit(3);
+        }
+        nanosleep(&(struct timespec) {0, 50000000}, NULL);
+    }
+    int got_race = 0, got_alrm = 0, race_value = 0, race_id = -1;
+    for (int i = 0; i < 2; i++) {
+        siginfo_t si;
+        struct timespec wait = {3, 0};
+        int sig = sigtimedwait(&set, &si, &wait);
+        if (sig == SIG_RACE) {
+            got_race = 1;
+            race_value = si.si_value.sival_int;
+            race_id = si.si_timerid;
+        } else if (sig == SIGALRM) {
+            got_alrm = 1;
+        }
+    }
+    check("race-posix", got_race && race_value == 1009 && race_id == timer_id_of(t),
+          "%s (value %d, timerid %d)", got_race ? "its signal came" : "its signal was lost",
+          race_value, race_id);
+    check("race-itimer", got_alrm, "ITIMER_REAL's SIGALRM %s", got_alrm ? "came" : "was lost");
+    kill(asker, SIGKILL);
+    waitpid(asker, NULL, 0);
+    printf("TIMERS-PROBE-DONE failures=%d\n", failures);
+    _exit(failures == 0 ? 0 : 1);
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "after";
+    if (strcmp(mode, "race") == 0) {
+        setvbuf(stdout, NULL, _IONBF, 0);
+        return race_main();
+    }
     int suspend = strcmp(mode, "suspend") == 0;
     // Unbuffered: a line still in stdio's buffer at the save is inside the
     // image, and the restored run would print it a second time.
@@ -439,7 +535,7 @@ int main(int argc, char **argv) {
     sigset_t all, collect;
     sigemptyset(&all);
     int sigs[] = {SIG_MONO, SIG_REAL_REL, SIG_REAL_ABS, SIG_BOOT, SIG_PERIODIC,
-                  SIG_OVERRUN, SIG_TCPU, SIGALRM, SIGPROF, SIGUSR2, SIGURG};
+                  SIG_OVERRUN, SIG_TCPU, SIG_NEVER, SIGALRM, SIGPROF, SIGUSR2, SIGURG};
     for (unsigned i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++)
         sigaddset(&all, sigs[i]);
     sigprocmask(SIG_BLOCK, &all, NULL);
@@ -453,6 +549,10 @@ int main(int argc, char **argv) {
     // Settle past the dynamic loading, so the armings are made by a process
     // that is really running.
     nanosleep(&(struct timespec) {1, 0}, NULL);
+    // See MAIN_CPU.
+    for (volatile unsigned long x = 0; now(CLOCK_THREAD_CPUTIME_ID) < MAIN_CPU; )
+        for (int i = 0; i < 100000; i++)
+            x += (unsigned long) i;
 
     pthread_t th;
     pthread_create(&th, NULL, spinner, NULL);
@@ -480,6 +580,10 @@ int main(int argc, char **argv) {
     timer_t t_overrun = mk_timer(CLOCK_MONOTONIC, SIGEV_SIGNAL, SIG_OVERRUN, 1006);
     timer_t t_none = mk_timer(CLOCK_MONOTONIC, SIGEV_NONE, 0, 0);
     timer_t t_pcpu = mk_timer(CLOCK_PROCESS_CPUTIME_ID, SIGEV_NONE, 0, 0);
+    // "Never", both ways it is asked for: a POSIX timer at TIME_T_MAX, and a
+    // timerfd armed the way systemd arms its clock-change watch.
+    timer_t t_never = mk_timer(CLOCK_MONOTONIC, SIGEV_SIGNAL, SIG_NEVER, 1008);
+    int tfd_never = timerfd_create(CLOCK_REALTIME, TFD_NONBLOCK);
     arm(t_mono, 0, D_MONO, 0);
     arm(t_real_rel, 0, D_MONO, 0);
     arm(t_real_abs, TIMER_ABSTIME, r0 + D_COUNTS_STOP, 0);
@@ -488,6 +592,15 @@ int main(int argc, char **argv) {
     arm(t_overrun, 0, OVERRUN_PERIOD, OVERRUN_PERIOD);
     arm(t_none, 0, D_MONO + 20, 3.0);
     arm(t_pcpu, 0, 1000.0, 0);
+    {
+        struct itimerspec forever = {.it_value = {INT64_MAX, 0}};
+        if (timer_settime(t_never, 0, &forever, NULL) != 0 ||
+                timerfd_settime(tfd_never, TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET,
+                                &forever, NULL) != 0) {
+            printf("SETUP arming at TIME_T_MAX failed: %s\n", strerror(errno));
+            exit(2);
+        }
+    }
 
     // ---- setitimer: ITIMER_REAL periodic, ITIMER_PROF on the burner's CPU.
     struct itimerval itv = {.it_value = {(time_t) D_MONO, 0},
@@ -514,9 +627,12 @@ int main(int argc, char **argv) {
         if (s->available)
             pthread_create(&th, NULL, sleeper_thread, s);
     }
+    pthread_create(&th, NULL, forever_sleeper, NULL);
     for (int k = 0; k < SL_COUNT; k++)
         while (sleepers[k].available && !sleepers[k].started)
             nanosleep(&(struct timespec) {0, 1000000}, NULL);
+    while (!forever_started)
+        nanosleep(&(struct timespec) {0, 1000000}, NULL);
     // Give the last sleeper time to get from its reading into its call.
     nanosleep(&(struct timespec) {0, 100000000}, NULL);
     double r_setup = now(CLOCK_REALTIME);
@@ -531,6 +647,13 @@ int main(int argc, char **argv) {
     int restored_seen = 0;
     double restored_m = 0;
     double last_probe = 0;
+    // timer_getoverrun on the timer whose signal is never taken: the count on
+    // that queued signal, sampled until the restore, then the timer stopped.
+    // The queued signal has to come back holding at least what it held at the
+    // stop; a fresh one queued after the restore would hold only a handful.
+    struct { double r; int ov; } ov_ring[64];
+    unsigned ov_n = 0;
+    double r_ov_stopped = 0;
     for (;;) {
         // The collection loop: every timer's signal, with when it came.
         siginfo_t si;
@@ -561,6 +684,9 @@ int main(int argc, char **argv) {
             }
         }
         if (!restored_seen) {
+            int ov = timer_getoverrun(t_overrun);
+            if (ov >= 0)
+                ov_ring[ov_n++ % 64] = (typeof(ov_ring[0])) {r, ov};
             if (suspend && asker < 0 && m >= SUSPEND_AT_MONO) {
                 asker = fork();
                 if (asker == 0) {
@@ -585,6 +711,9 @@ int main(int argc, char **argv) {
                 if (restored()) {
                     restored_seen = 1;
                     restored_m = m;
+                    struct itimerspec stop = {0};
+                    timer_settime(t_overrun, 0, &stop, NULL);
+                    r_ov_stopped = now(CLOCK_REALTIME);
                 }
             }
             if (m > 40) {
@@ -751,18 +880,32 @@ int main(int argc, char **argv) {
           "sigtimedwait -> %d, code %d, value %#x, pid %d", got, got > 0 ? si.si_code : 0,
           got > 0 ? si.si_value.sival_int : 0, got > 0 ? (int) si.si_pid : 0);
     // Never taken: its first expiry is queued, and every one since is an
-    // overrun counted on it -- before the save and after the restore.
+    // overrun counted on it -- before the save and after the restore, until the
+    // timer was stopped once the restore was seen.
+    int ov_before = -1;
+    for (unsigned i = 0; i < ov_n && i < 64; i++) {
+        unsigned k = (ov_n - 1 - i) % 64;
+        if (ov_ring[k].r < stopped_at) {
+            ov_before = ov_ring[k].ov;
+            break;
+        }
+    }
     sigemptyset(&one);
     sigaddset(&one, SIG_OVERRUN);
-    double since = now(CLOCK_MONOTONIC) - m0;
     got = sigtimedwait(&one, &si, &zero);
+    // At least what it held at the last reading before the stop -- more, for
+    // the periods the save itself took (a timer's thread runs on while the
+    // tasks are parked) and those before the timer was stopped. A signal that
+    // had been lost and queued afresh after the restore would hold only the
+    // handful of those last.
     check("pending-timer-overrun", got == SIG_OVERRUN && si.si_code == SI_TIMER &&
                                    si.si_timerid == timer_id_of(t_overrun) &&
-                                   si.si_value.sival_int == 1006 &&
-                                   si.si_overrun >= (int) (since / OVERRUN_PERIOD / 4),
-          "sigtimedwait -> %d, code %d, timerid %d, overrun %d (%.1f s of %.2f s periods)",
+                                   si.si_value.sival_int == 1006 && ov_before > 50 &&
+                                   si.si_overrun >= ov_before,
+          "sigtimedwait -> %d, code %d, timerid %d, overrun %d (it held %d at the stop; "
+          "the timer was stopped %.3f s after the resume)",
           got, got > 0 ? si.si_code : 0, got > 0 ? si.si_timerid : -1,
-          got > 0 ? si.si_overrun : 0, since, OVERRUN_PERIOD);
+          got > 0 ? si.si_overrun : 0, ov_before, r_ov_stopped - resumed_at);
     // SIGURG, sent with kill(): let it through. Its default is to be ignored,
     // so it goes -- and nothing is left pending that no queue holds, which
     // would end every wait at once, for ever.
@@ -813,6 +956,29 @@ int main(int argc, char **argv) {
                       "the resume)", s->rc, s->err, s->m1, due, s->r1 - resumed_at);
         }
     }
+
+    // ---- 7. "Never": a timer armed at TIME_T_MAX, a timerfd armed the way
+    //         systemd watches for a clock change, and a sleep for TIME_T_MAX.
+    //         Each is still waiting -- not woken by a deadline that overflowed
+    //         on its way through the image.
+    struct itimerspec nv = {0};
+    gt = timer_gettime(t_never, &nv);
+    check("never-posix", arrivals[SIG_NEVER].count == 0 && gt == 0 &&
+                         (long long) nv.it_value.tv_sec > 1000000000000LL,
+          "%d signal(s); timer_gettime %s, %lld s left", arrivals[SIG_NEVER].count,
+          gt == 0 ? "ok" : strerror(errno), (long long) nv.it_value.tv_sec);
+    uint64_t never_exp = 0;
+    ssize_t tr = read(tfd_never, &never_exp, sizeof(never_exp));
+    int tr_err = tr < 0 ? errno : 0;
+    struct itimerspec tfd_left = {0};
+    int tg = timerfd_gettime(tfd_never, &tfd_left);
+    check("never-timerfd", tr < 0 && tr_err == EAGAIN && tg == 0 &&
+                           (long long) tfd_left.it_value.tv_sec > 1000000000000LL,
+          "read -> %zd (%s, %llu expirations); timerfd_gettime %s, %lld s left", tr,
+          tr_err ? strerror(tr_err) : "an expiry", (unsigned long long) never_exp,
+          tg == 0 ? "ok" : strerror(errno), (long long) tfd_left.it_value.tv_sec);
+    check("never-sleep", !forever_done, "a nanosleep of TIME_T_MAX %s",
+          forever_done ? "RETURNED" : "is still asleep");
 
     if (asker > 0) {
         kill(asker, SIGKILL);

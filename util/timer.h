@@ -82,6 +82,8 @@ struct timer {
     // and thread_running are what tell "due, and not fired yet" from "fired",
     // which timer_read has to.
     bool firing;
+    // Callbacks that have returned, for timer_settle.
+    uint64_t fired;
     uint64_t generation;
     pthread_t thread;
     timer_callback_t callback;
@@ -110,7 +112,14 @@ int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *ol
 // interval, which is reported either way. For describing a timer so that it
 // can be armed again elsewhere (kernel/checkpoint.c), where "armed" has to be
 // exact: one that is due but has not fired yet reports a nanosecond left rather
-// than none, and a one-shot that has fired, or is firing now, reports disarmed.
+// than none, and one whose callback is running is waited for, so that what the
+// expiry delivers is in place -- a signal queued, a count raised -- before the
+// answer is given. The caller must hold nothing a callback takes, and the
+// timer must not be freed meanwhile.
 bool timer_read(struct timer *timer, struct timer_spec *spec);
+// Wait until no callback is running, and return how many have returned: a
+// caller that reads state a callback changes can tell, by asking before and
+// after, whether one ran in between. The same conditions as timer_read.
+uint64_t timer_settle(struct timer *timer);
 
 #endif

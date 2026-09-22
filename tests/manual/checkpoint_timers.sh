@@ -42,17 +42,18 @@ CHECKS="alarm posix-monotonic posix-realtime-relative posix-realtime-absolute
 posix-boottime posix-periodic posix-sigev-none posix-process-cpu itimer-real
 posix-thread-cpu itimer-prof pending-queued pending-timer-overrun pending-kill
 sleep-nanosleep sleep-clock_nanosleep-monotonic sleep-clock_nanosleep-realtime
-sleep-clock_nanosleep-boottime sleep-ppoll sleep-pselect6 sleep-epoll_pwait"
+sleep-clock_nanosleep-boottime sleep-ppoll sleep-pselect6 sleep-epoll_pwait
+never-posix never-timerfd never-sleep"
 fail=0
 legs=0
 
 # 0: graded. 1: failed. 4: the stop did not land inside the waits under test.
 grade() {
-    label=$1; file=$2
+    label=$1; file=$2; checks=${3:-$CHECKS}
     sed "s/^/  $label restored | /" "$file"
     grep -q '^INCONCLUSIVE' "$file" && return 4
     bad=0
-    for k in $CHECKS; do
+    for k in $checks; do
         grep -q "^OK $k:" "$file" || { echo "  FAIL    | $label: $k"; bad=1; }
     done
     grep -q '^FAIL ' "$file" && { echo "  FAIL    | $label: a check failed (above)"; bad=1; }
@@ -106,6 +107,26 @@ else
     run_guest "$WORK/suspend.out" env ISH_REAL_MNT="$WORK" ISH_SESSION="$WORK/session.img" \
         "$ISH" -f "$ROOT"
     set +e; grade suspend "$WORK/suspend.out"; rc=$?; set -e
+    [ $rc = 0 ] || fail=1
+    legs=$((legs+1))
+fi
+
+# ---- a save that lands while an expiry is being delivered -------------------
+# Every expiry held in delivery for 0.8 s in the saving run
+# (ISH_TEST_TIMER_FIRE_DELAY_MS), and the suspend asked for inside the hold:
+# reading a timer has to wait the delivery out, or the expiry is in neither the
+# timer nor the signal queue. See race_main in the probe.
+rm -f "$WORK/race.img"
+run_guest "$WORK/race-save.out" env ISH_REAL_MNT="$WORK" ISH_GUEST_CHECKPOINT=1 \
+    ISH_TEST_TIMER_FIRE_DELAY_MS=800 ISH_SESSION="$WORK/race.img" "$ISH" -f "$ROOT" \
+    /realmnt/probe race
+sed 's/^/  race saved     | /' "$WORK/race-save.out"
+if [ ! -s "$WORK/race.img" ]; then
+    echo "  FAIL    | race: no image written"; fail=1
+else
+    run_guest "$WORK/race.out" env ISH_REAL_MNT="$WORK" ISH_SESSION="$WORK/race.img" \
+        "$ISH" -f "$ROOT"
+    set +e; grade race "$WORK/race.out" "race-posix race-itimer"; rc=$?; set -e
     [ $rc = 0 ] || fail=1
     legs=$((legs+1))
 fi

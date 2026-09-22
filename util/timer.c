@@ -41,6 +41,7 @@ struct timer *timer_new(clockid_t clockid, timer_callback_t callback, void *data
     timer->active = false;
     timer->thread_running = false;
     timer->firing = false;
+    timer->fired = 0;
     timer->generation = 0;
     lock_init(&timer->lock, "timer_new\0");
     timer->dead = false;
@@ -127,9 +128,24 @@ static void *timer_thread(void *param) {
         void *data = timer->data;
         timer->firing = true;
         unlock(&timer->lock);
+        // ISH_TEST_TIMER_FIRE_DELAY_MS=<ms>: hold every expiry that long
+        // between deciding to fire and delivering, which is otherwise a window
+        // of microseconds -- so that a checkpoint can be made to land inside
+        // it (tests/manual/checkpoint_timers.sh's race leg; see timer_read).
+        static int fire_delay_ms = -1;
+        if (fire_delay_ms < 0) {
+            const char *v = getenv("ISH_TEST_TIMER_FIRE_DELAY_MS");
+            fire_delay_ms = v != NULL ? atoi(v) : 0;
+        }
+        if (fire_delay_ms > 0) {
+            struct timespec hold = {.tv_sec = fire_delay_ms / 1000,
+                                    .tv_nsec = (long) (fire_delay_ms % 1000) * 1000000};
+            nanosleep(&hold, NULL);
+        }
         callback(data);
         lock(&timer->lock, 0);
         timer->firing = false;
+        timer->fired++;
         if (timer->generation != generation)
             continue;
         if (timer->active && timespec_positive(interval)) {
@@ -231,14 +247,36 @@ int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *ol
     return 0;
 }
 
+// Wait out a callback in flight. Called, and returns, with timer->lock held.
+// The callback runs with the lock dropped and re-takes it to finish, which is
+// why this has to let go of it to wait.
+static void timer_wait_not_firing_locked(struct timer *timer) {
+    while (timer->firing) {
+        unlock(&timer->lock);
+        struct timespec nap = {.tv_sec = 0, .tv_nsec = 100000};
+        nanosleep(&nap, NULL);
+        lock(&timer->lock, 0);
+    }
+}
+
+uint64_t timer_settle(struct timer *timer) {
+    lock(&timer->lock, 0);
+    timer_wait_not_firing_locked(timer);
+    uint64_t fired = timer->fired;
+    unlock(&timer->lock);
+    return fired;
+}
+
 bool timer_read(struct timer *timer, struct timer_spec *spec) {
     lock(&timer->lock, 0);
+    // An expiry being delivered right now is neither still to come nor yet
+    // delivered: its signal is not queued, its count not raised. Described
+    // then, a one-shot came back disarmed with nothing in its place.
+    timer_wait_not_firing_locked(timer);
     *spec = (struct timer_spec) {.interval = timer->interval};
     // A one-shot is left `active` by the thread that fires it, which then
-    // exits: thread_running is what says an expiry is still to come. And one
-    // whose callback is running right now has delivered, whatever `end` says.
-    bool armed = timer->active && timer->thread_running &&
-        !(timer->firing && !timespec_positive(timer->interval));
+    // exits: thread_running is what says an expiry is still to come.
+    bool armed = timer->active && timer->thread_running;
     if (armed) {
         spec->value = timespec_subtract(timer->end, timer_now(timer));
         if (!timespec_positive(spec->value))

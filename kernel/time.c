@@ -2272,7 +2272,12 @@ static struct fd_ops timerfd_ops = {
 
 // ---- checkpoint (kernel/timer_ckpt.h, kernel/anonfd_ckpt.h) ---------------
 
+// Saturating at TIMER_CKPT_NEVER (kernel/timer_ckpt.h), a few centuries out.
 static int64_t timespec_ns(struct timespec ts) {
+    if (ts.tv_sec >= INT64_MAX / 1000000000 - 1)
+        return TIMER_CKPT_NEVER;
+    if (ts.tv_sec < 0)
+        return 0;
     return (int64_t) ts.tv_sec * 1000000000 + ts.tv_nsec;
 }
 
@@ -2327,10 +2332,15 @@ static int64_t timer_ckpt_now_ns(enum timer_ckpt_clock kind) {
 }
 
 int64_t timer_ckpt_carry(enum timer_ckpt_clock kind, int64_t left_ns) {
-    return timer_ckpt_now_ns(kind) + left_ns;
+    int64_t now = timer_ckpt_now_ns(kind);
+    if (left_ns >= TIMER_CKPT_NEVER - now)
+        return TIMER_CKPT_NEVER;
+    return now + left_ns;
 }
 
 int64_t timer_ckpt_left(enum timer_ckpt_clock kind, int64_t value_ns) {
+    if (value_ns == TIMER_CKPT_NEVER)
+        return TIMER_CKPT_NEVER;
     return value_ns - timer_ckpt_now_ns(kind);
 }
 
@@ -2350,11 +2360,15 @@ static void timer_ckpt_describe_timer(struct timer *t, enum timer_ckpt_clock kin
 }
 
 // What to arm a rebuilt timer with. A deadline the stop has already passed is
-// due at once -- a nanosecond, because a zero value would disarm it.
+// due at once -- a nanosecond, because a zero value would disarm it -- and
+// "never" is armed at TIME_T_MAX, which timer_set pins, as the original was.
 static struct timer_spec timer_ckpt_spec(const struct timer_ckpt *d) {
     int64_t left = timer_ckpt_left((enum timer_ckpt_clock) d->clock, d->value_ns);
+    struct timespec value = left == TIMER_CKPT_NEVER
+        ? (struct timespec) {.tv_sec = INT64_MAX, .tv_nsec = 0}
+        : ns_timespec(left > 0 ? left : 1);
     return (struct timer_spec) {
-        .value = ns_timespec(left > 0 ? left : 1),
+        .value = value,
         .interval = ns_timespec(d->interval_ns),
     };
 }
@@ -2374,6 +2388,23 @@ static void cpu_itimer_ckpt_describe(const struct cpu_itimer_state *state,
     }
 }
 
+// A thread group's CPU time as its own threads have run it.
+//
+// Not through `current`: cpu_time_now_of asks the CALLING thread for the CPU
+// time of whichever member is current, which is right for a syscall and wrong
+// here -- the checkpoint's writer and its restorer both set `current` to the
+// task they are working on without being its thread. Measured that way, a
+// profiler with a minute of CPU behind it was carried as though it had a minute
+// of ITIMER_PROF still to run, and a restore in the app based pid 1's deadline
+// on the app thread's own CPU time.
+static struct timespec group_cpu_now(struct tgroup *group, bool include_system) {
+    struct task *saved = current;
+    current = NULL;
+    struct timespec now = cpu_time_now_of(group, include_system);
+    current = saved;
+    return now;
+}
+
 static void cpu_itimer_ckpt_arm(struct cpu_itimer_state *state, struct timespec cpu_now,
         const struct timer_ckpt *d) {
     state->interval = ns_timespec(d->interval_ns);
@@ -2385,21 +2416,39 @@ static void cpu_itimer_ckpt_arm(struct cpu_itimer_state *state, struct timespec 
 void group_timers_ckpt_describe(struct tgroup *group, struct group_timers_ckpt *out,
         struct posix_timer_ckpt *posix) {
     *out = (struct group_timers_ckpt) {0};
-    // Before group->lock, which rusage_get_group_of takes itself.
-    struct timespec cpu_user = cpu_time_now_of(group, false);
-    struct timespec cpu_total = cpu_time_now_of(group, true);
+    lock(&group->lock, 0);
+    struct timer *sampler = group->itimer_vprof_sampler;
+    unlock(&group->lock);
 
     // The fields under the lock, the timers after it: a CPU-clock timer reads
     // its thread's clock through pid_get_task_ref, which takes pids_lock, and
     // that comes BEFORE group->lock. Nothing can change the array meanwhile --
     // every task that could is frozen -- and the timers are read under their
     // own locks.
+    //
+    // ITIMER_VIRTUAL and ITIMER_PROF are the sampler's: a tick decides under
+    // group->lock that one is due, disarms a one-shot, and only then, unlocked,
+    // sends the signal. Read in that gap, the timer is gone and its signal not
+    // yet queued. So the state is read with no tick in between -- the sampler's
+    // count of finished ticks the same before and after -- and a tick that
+    // lands in the reading means reading it again.
     struct timer *posix_timers[TIMERS_MAX];
-    lock(&group->lock, 0);
-    struct timer *real = group->itimer;
-    cpu_itimer_ckpt_describe(&group->itimer_virtual, cpu_user, &out->virt);
-    cpu_itimer_ckpt_describe(&group->itimer_prof, cpu_total, &out->prof);
     unsigned n = 0;
+    struct timer *real;
+    for (int tries = 0; ; tries++) {
+        uint64_t ticks = sampler != NULL ? timer_settle(sampler) : 0;
+        // Before group->lock, which rusage_get_group_of takes itself.
+        struct timespec cpu_user = group_cpu_now(group, false);
+        struct timespec cpu_total = group_cpu_now(group, true);
+        lock(&group->lock, 0);
+        real = group->itimer;
+        cpu_itimer_ckpt_describe(&group->itimer_virtual, cpu_user, &out->virt);
+        cpu_itimer_ckpt_describe(&group->itimer_prof, cpu_total, &out->prof);
+        unlock(&group->lock);
+        if (sampler == NULL || timer_settle(sampler) == ticks || tries >= 100)
+            break;
+    }
+    lock(&group->lock, 0);
     for (unsigned id = 0; id < TIMERS_MAX; id++) {
         struct posix_timer *pt = &group->posix_timers[id];
         if (pt->timer == NULL)
@@ -2429,10 +2478,14 @@ void group_timers_ckpt_describe(struct tgroup *group, struct group_timers_ckpt *
         timer_ckpt_describe_timer(real, TIMER_CKPT_MONOTONIC, &out->real);
     else
         out->real = (struct timer_ckpt) {.clock = TIMER_CKPT_MONOTONIC};
-    for (unsigned i = 0; i < n; i++)
+    for (unsigned i = 0; i < n; i++) {
         timer_ckpt_describe_timer(posix_timers[i],
                                   timer_ckpt_clock_for(posix[i].clock, posix[i].abstime != 0),
                                   &posix[i].t);
+        // Again, now that no expiry is in flight: the callback counts an
+        // overrun here as it counts it onto the signal still queued.
+        posix[i].last_overrun = group->posix_timers[posix[i].timer_id].last_overrun;
+    }
 }
 
 unsigned group_timers_ckpt_arm(struct tgroup *group, const struct group_timers_ckpt *d,
@@ -2453,8 +2506,8 @@ unsigned group_timers_ckpt_arm(struct tgroup *group, const struct group_timers_c
     // ITIMER_VIRTUAL and ITIMER_PROF: CPU time left, against what this group
     // has run since it was rebuilt -- its CPU clocks start again with its host
     // threads -- and the sampler that watches them, if either is armed.
-    struct timespec cpu_user = cpu_time_now_of(group, false);
-    struct timespec cpu_total = cpu_time_now_of(group, true);
+    struct timespec cpu_user = group_cpu_now(group, false);
+    struct timespec cpu_total = group_cpu_now(group, true);
     lock(&group->lock, 0);
     cpu_itimer_ckpt_arm(&group->itimer_virtual, cpu_user, &d->virt);
     cpu_itimer_ckpt_arm(&group->itimer_prof, cpu_total, &d->prof);

@@ -35,6 +35,12 @@ enum timer_ckpt_clock {
     TIMER_CKPT_CPU = 3,         // CPU time: what is left, not an instant
 };
 
+// A time too far off to count in nanoseconds: "never", as a timer armed at
+// TIME_T_MAX means it -- systemd arms a TFD_TIMER_CANCEL_ON_SET timerfd there
+// -- and as `sleep infinity` does. Plain arithmetic overflowed on one, and the
+// wrapped value came back already due: the timer fired at the resume.
+#define TIMER_CKPT_NEVER INT64_MAX
+
 struct timer_ckpt {
     uint32_t armed;
     uint32_t clock;             // enum timer_ckpt_clock
@@ -48,7 +54,8 @@ struct timer_ckpt {
 enum timer_ckpt_clock timer_ckpt_clock_for(uint_t clock, bool abstime);
 // A deadline `left_ns` from now, expressed on `kind`'s clock -- and back: how
 // long is left now until a value carried on `kind`'s clock. The second may be
-// negative, for a deadline the stop outlasted.
+// negative, for a deadline the stop outlasted. TIMER_CKPT_NEVER goes both ways
+// unchanged.
 int64_t timer_ckpt_carry(enum timer_ckpt_clock kind, int64_t left_ns);
 int64_t timer_ckpt_left(enum timer_ckpt_clock kind, int64_t value_ns);
 
@@ -86,9 +93,9 @@ struct tgroup;
 void group_timers_ckpt_describe(struct tgroup *group, struct group_timers_ckpt *out,
                                 struct posix_timer_ckpt *posix);
 // Build them again on `group`, a restored thread group whose timers are all
-// unset, and arm them. A timer that comes due at once signals a task, so every
-// task the group has must have its host thread by now. Returns how many could
-// not be made.
+// unset, and arm them. A timer that comes due at once signals a task at once,
+// so arm them once the group's tasks are started -- a signal to one that is
+// not yet only queues (signal_wake_task). Returns how many could not be made.
 unsigned group_timers_ckpt_arm(struct tgroup *group, const struct group_timers_ckpt *d,
                                const struct posix_timer_ckpt *posix);
 

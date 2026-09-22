@@ -2095,10 +2095,26 @@ static int ckpt_signals_snapshot(struct task *task, bool with_group,
 }
 
 // A deadline on the host's CLOCK_MONOTONIC, as the ns it has left: negative
-// for one the freeze outlasted.
+// for one the freeze outlasted, and TIMER_CKPT_NEVER for one too far off to
+// count -- a sleep asked for TIME_T_MAX, whose deadline the sleep itself only
+// ever compares, never reads.
 static int64_t ckpt_host_deadline_left_ns(struct timespec deadline) {
     struct timespec left = timespec_subtract(deadline, timespec_now(CLOCK_MONOTONIC));
+    if (left.tv_sec >= INT64_MAX / 1000000000 - 1)
+        return TIMER_CKPT_NEVER;
     return (int64_t) left.tv_sec * 1000000000 + left.tv_nsec;
+}
+
+// ...and back: the host deadline `left_ns` from now. "Never" stays never, far
+// enough out that the sleep re-reading it cannot overflow either.
+static struct timespec ckpt_host_deadline_after(int64_t left_ns) {
+    struct timespec left = {0};
+    if (left_ns == TIMER_CKPT_NEVER)
+        left.tv_sec = INT64_MAX / 4;
+    else if (left_ns > 0)
+        left = (struct timespec) {.tv_sec = (time_t) (left_ns / 1000000000),
+                                  .tv_nsec = (long) (left_ns % 1000000000)};
+    return timespec_add(timespec_now(CLOCK_MONOTONIC), left);
 }
 
 static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
@@ -2302,11 +2318,13 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
 
     // ---- its process's timers, then its signals --------------------------
     //
-    // In that order. A timer that fires between the two readings has queued
-    // its signal by the second, where it is found, and comes back due again --
-    // one more overrun on that signal, or a coalesced second SIGALRM. The
-    // other order loses the expiry: the signal is not yet queued when the
-    // queues are read, and the timer is past it when it is.
+    // In that order. Reading a timer waits out an expiry its thread is
+    // delivering (timer_read), so whatever a timer was found to have fired is
+    // queued by the time the queues are read; one that fires after it was
+    // read comes back due again as well -- one more overrun on the signal it
+    // queued, or a coalesced second SIGALRM. The other order loses the expiry:
+    // the signal is not yet queued when the queues are read, and the timer is
+    // past it when it is.
     struct group_timers_ckpt timers = {0};
     if (sh->group_timers) {
         posix = calloc(TIMERS_MAX, sizeof(*posix));
@@ -3925,19 +3943,15 @@ static int ckpt_restore_signals_and_timers(FILE *f, const struct ckpt_task *rec,
     // The deadline the call it was parked in had left, back on this run's
     // host clock, and whether a handler cancels that call's restart.
     if (rec->sleep_restart_valid) {
-        int64_t left = timer_ckpt_left(timer_ckpt_clock_for(rec->sleep_restart_clock, false),
-                                       rec->sleep_restart_value_ns);
-        current->sleep_restart_deadline = timespec_add(timespec_now(CLOCK_MONOTONIC),
-                (struct timespec) {.tv_sec = left > 0 ? (time_t) (left / 1000000000) : 0,
-                                   .tv_nsec = left > 0 ? (long) (left % 1000000000) : 0});
+        current->sleep_restart_deadline = ckpt_host_deadline_after(timer_ckpt_left(
+                timer_ckpt_clock_for(rec->sleep_restart_clock, false),
+                rec->sleep_restart_value_ns));
         current->sleep_restart_clock = rec->sleep_restart_clock;
         current->sleep_restart_valid = true;
     }
     if (rec->poll_restart_valid) {
-        int64_t left = timer_ckpt_left(TIMER_CKPT_MONOTONIC, rec->poll_restart_value_ns);
-        current->poll_restart_deadline = timespec_add(timespec_now(CLOCK_MONOTONIC),
-                (struct timespec) {.tv_sec = left > 0 ? (time_t) (left / 1000000000) : 0,
-                                   .tv_nsec = left > 0 ? (long) (left % 1000000000) : 0});
+        current->poll_restart_deadline = ckpt_host_deadline_after(timer_ckpt_left(
+                TIMER_CKPT_MONOTONIC, rec->poll_restart_value_ns));
         current->poll_restart_valid = true;
     }
     current->restart_nohand_pending = (rec->restart_pending & 1) != 0;
