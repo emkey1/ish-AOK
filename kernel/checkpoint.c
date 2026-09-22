@@ -406,6 +406,9 @@ static struct checkpoint_status ckpt_status;
 static char ckpt_pending_path[PATH_MAX];
 static bool ckpt_pending;
 static bool ckpt_pending_halt;
+// Who asked: the task that wrote to /proc/ish/checkpoint. See
+// checkpoint_run_pending for why it matters which task takes the request.
+static pid_t_ ckpt_pending_pid;
 static char ckpt_session_path[PATH_MAX];
 
 int checkpoint_peek(const char *host_path, struct checkpoint_image_info *out) {
@@ -4741,17 +4744,50 @@ int checkpoint_request(const char *host_path, bool and_halt) {
     snprintf(ckpt_pending_path, sizeof(ckpt_pending_path), "%s", host_path);
     ckpt_pending = true;
     ckpt_pending_halt = and_halt;
+    ckpt_pending_pid = current != NULL ? current->pid : 0;
     ckpt_status.last_err = 0;
     ckpt_status.last_refusal[0] = '\0';
     unlock(&ckpt_lock);
     return 0;
 }
 
+// Whether the task that asked for a pending checkpoint can still take it.
+static bool ckpt_asker_alive(pid_t_ asker) {
+    complex_lockt(&pids_lock, 0);
+    struct task *t = pid_get_task((dword_t) asker);
+    bool alive = t != NULL && !t->zombie && !t->exiting;
+    unlock(&pids_lock);
+    return alive;
+}
+
+// The request is taken by the task that MADE it, at its next boundary -- "one
+// pass later", with nothing of its own run in between.
+//
+// Any task used to take it, whichever reached the top of its loop first, and a
+// busy one usually won: a child starting up makes a syscall every few
+// microseconds, the shell that asked makes one only when it gets back. Taking
+// the request is not freezing the machine, though -- the taker still has to
+// get through checkpoint_save's own setup before ckpt_freeze_all stops
+// anyone -- and in that gap the asker, finding nothing pending, went on
+// running. `echo suspend > /proc/ish/checkpoint; echo after` printed "after"
+// six times out of six with a busy child, and the image held a shell that was
+// past its own suspend. checkpoint_restore.sh's two-process leg saw it about
+// one run in six. Another task still takes it once the asker is gone -- one
+// that asked and exited must not lose its suspend.
 void checkpoint_run_pending(void) {
     char path[PATH_MAX];
     bool halt_after;
     lock(&ckpt_lock, 0);
     bool want = ckpt_pending;
+    pid_t_ asker = ckpt_pending_pid;
+    unlock(&ckpt_lock);
+    if (!want)
+        return;
+    if (asker != 0 && (current == NULL || current->pid != asker) &&
+            ckpt_asker_alive(asker))
+        return;
+    lock(&ckpt_lock, 0);
+    want = ckpt_pending;
     if (want) {
         memcpy(path, ckpt_pending_path, sizeof(path));
         halt_after = ckpt_pending_halt;

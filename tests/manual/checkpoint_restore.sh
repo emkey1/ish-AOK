@@ -160,6 +160,37 @@ case $mp_back in
     *) echo "FAIL: the child did not survive the restore"; echo "  got: $mp_back"; exit 1;;
 esac
 
+# ---- the asker takes its own request ----------------------------------------
+#
+# `echo suspend > /proc/ish/checkpoint` only files a request; it is taken at a
+# task's next boundary. Any task used to take it, whichever got there first,
+# and a busy child always did -- then, in the gap before the freeze engaged,
+# the shell that asked ran on past its own suspend. The leg above failed about
+# one run in six that way. Here the child is busy on purpose, so the race is
+# lost every time unless the asker takes its own request.
+echo "  ---- the asker takes its own request ----"
+RIMG=${TMPDIR:-/tmp}/aok-ckpt-race-$$.img
+rm -f "$RIMG"
+race_out=$(ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$RIMG" "$ISH" -f "$ROOT" $SH -c '
+dd if=/dev/zero of=/dev/null bs=1 count=200000000 2>/dev/null &
+sleep 1
+echo suspend > /proc/ish/checkpoint
+echo "race: after the suspend"
+kill $! 2>/dev/null
+wait
+' < /dev/null 2>&1)
+case $race_out in
+    *"race: after the suspend"*)
+        rm -f "$RIMG"
+        echo "FAIL: the shell that asked ran past its own suspend"; echo "  got: $race_out"; exit 1;;
+esac
+[ -s "$RIMG" ] || { echo "FAIL: the race leg wrote no image"; echo "  got: $race_out"; exit 1; }
+race_back=$(ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$RIMG" "$ISH" -f "$ROOT" $SH -c 'x' < /dev/null 2>&1)
+rm -f "$RIMG"
+n_after=$(printf '%s\n' "$race_back" | grep -c 'race: after the suspend')
+[ "$n_after" = 1 ] || { echo "FAIL: the resumed shell did not continue after its suspend exactly once ($n_after)"; echo "  got: $race_back"; exit 1; }
+echo "  race    | stopped at its own request with a busy child, and continued from it"
+
 # ---- the session and the process group ------------------------------------
 #
 # A terminal belongs to a SESSION, and which process group is in the FOREGROUND
