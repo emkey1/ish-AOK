@@ -1,8 +1,22 @@
 #include <fcntl.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+// For the ISH_SOCKRESTART_TEST_DESTROY=defunct knob, which uses private calls:
+// a device build carries no trace of it.
+#if TARGET_OS_OSX || TARGET_OS_SIMULATOR
+#define SOCKRESTART_TEST_DEFUNCT 1
+#include <dlfcn.h>
+#endif
+#endif
 #include "fs/sockrestart.h"
 #include "fs/fd.h"
 #include "fs/sock.h"
@@ -17,7 +31,13 @@ void sockrestart_begin_listen(struct fd *sock) {
     if (sock->ops != &socket_fdops)
         return;
     lock(&sockrestart_lock, 0);
-    list_add(&listen_fds, &sock->sockrestart.listen);
+    // Once per socket, however many times it listens. A second listen() is
+    // legal -- it only changes the backlog -- and adding the node again linked
+    // it to itself, so the next on_suspend walked that one node for ever with
+    // the lock held: the backgrounding app hung, and so did every guest
+    // accept behind the lock.
+    if (list_null(&sock->sockrestart.listen))
+        list_add(&listen_fds, &sock->sockrestart.listen);
     unlock(&sockrestart_lock);
 }
 
@@ -92,6 +112,99 @@ struct saved_socket {
 
 static struct list saved_sockets = LIST_INITIALIZER(saved_sockets);
 
+// Whether the guest's listener still works, so that a resume replaces only the
+// dead ones.
+//
+// The resume runs whether or not the app was ever frozen -- the app calls it
+// on every return to the foreground, and from the timer that fires when a
+// backgrounded app turns out never to have been suspended -- and replacing a
+// live listener throws away every connection waiting in its queue. For TCP
+// the rebind used to double as this test: the port is only free once the
+// listener is gone. An AF_UNIX socket's name is a FILE, which outlives the
+// socket bound to it, so its rebind fails either way and a dead unix listener
+// was never replaced.
+//
+// Dead is either of:
+//   - The descriptor no longer has the name the save recorded: it has been
+//     replaced (ISH_SOCKRESTART_TEST_DESTROY's fresh unbound socket).
+//   - listen() fails. A suspension leaves the socket in place, NAME AND ALL,
+//     marked defunct, and XNU's solisten refuses a defunct socket with
+//     EINVAL. On a live listener it only restates the backlog the guest gave;
+//     its queue is untouched.
+// Not a connect probe: it would queue a connection the guest's server then
+// accepts, and a defunct AF_UNIX listener still accepts connects
+// (unp_connect never looks at SOF_DEFUNCT), so it would not tell anyway.
+static bool listener_is_dead(struct saved_socket *saved) {
+    union {
+        char name[sizeof(saved->name)];
+        struct sockaddr addr;
+    } now;
+    socklen_t now_len = sizeof(now.name);
+    if (getsockname(saved->sock->real_fd, &now.addr, &now_len) < 0 ||
+            now_len != saved->name_len || memcmp(now.name, saved->name, now_len) != 0)
+        return true;
+    return listen(saved->sock->real_fd, saved->backlog) < 0;
+}
+
+// A dead AF_UNIX listener's name is still taken by its socket file. The
+// path is this process's own ishsock name for that one guest socket (fs/sock.c
+// unix_host_sun_path), so nothing else can be using it; remove it only if it
+// is still a socket all the same.
+static void unlink_stale_unix_name(struct saved_socket *saved) {
+    struct sockaddr_un *un = (struct sockaddr_un *) &saved->name_addr;
+    size_t offset = offsetof(struct sockaddr_un, sun_path);
+    if (saved->name_len <= offset)
+        return;
+    char path[sizeof(un->sun_path) + 1];
+    size_t path_len = saved->name_len - offset;
+    if (path_len > sizeof(un->sun_path))
+        path_len = sizeof(un->sun_path);
+    memcpy(path, un->sun_path, path_len);
+    path[path_len] = '\0';
+    struct stat st;
+    if (path[0] != '\0' && lstat(path, &st) == 0 && S_ISSOCK(st.st_mode))
+        unlink(path);
+}
+
+// ISH_SOCKRESTART_TEST_DESTROY=defunct -- what iOS actually does to the
+// sockets of an app it suspends, done on a Mac. The system calls
+// pid_shutdown_sockets(pid, SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL) on the
+// process (a private libsystem_kernel call; the level is 2 in xnu's
+// sys/proc.h), which defuncts every socket that may be defuncted -- and XNU's
+// socreate marks every PF_LOCAL socket SOF_NODEFUNCT, which that call does not
+// override. So a suspension kills TCP and UDP listeners and leaves AF_UNIX
+// ones working. Measured on macOS 26: afterwards a TCP listener refuses
+// connections and fails listen() with EINVAL, and an AF_UNIX listener still
+// serves. Looked up at run time, so the app never links the private symbol.
+static void test_defunct(void) {
+#ifdef SOCKRESTART_TEST_DEFUNCT
+    int (*shutdown_sockets)(int pid, int level) =
+            (int (*)(int, int)) dlsym(RTLD_DEFAULT, "pid_shutdown_sockets");
+    if (shutdown_sockets == NULL) {
+        printk("WARNING: sockrestart: no pid_shutdown_sockets\n");
+        return;
+    }
+    if (shutdown_sockets(getpid(), 2) < 0) {
+        printk("WARNING: sockrestart: pid_shutdown_sockets failed: %s\n", strerror(errno));
+        return;
+    }
+    printk("sockrestart: test: defuncted this process's sockets\n");
+#else
+    printk("WARNING: sockrestart: ISH_SOCKRESTART_TEST_DESTROY=defunct needs a Mac\n");
+#endif
+}
+
+// Clear the socket's SOF_NODEFUNCT, so test_defunct takes it too. SO_DEFUNCTOK
+// is 0x1100 in xnu's sys/socket.h, private again; any process may set it.
+static void test_make_defunctable(int fd) {
+#ifdef SOCKRESTART_TEST_DEFUNCT
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, 0x1100, &one, sizeof(one));
+#else
+    (void) fd;
+#endif
+}
+
 // these should only be called from the main thread, but it's easiest to just lock for the whole time
 
 unsigned sockrestart_on_suspend() {
@@ -108,6 +221,12 @@ unsigned sockrestart_on_suspend() {
         unlock(&sockrestart_lock);
         return 0;
     }
+    enum { DESTROY_NONE, DESTROY_REPLACE, DESTROY_DEFUNCT, DESTROY_DEFUNCT_ALL } destroy = DESTROY_NONE;
+    const char *destroy_spec = getenv("ISH_SOCKRESTART_TEST_DESTROY");
+    if (destroy_spec != NULL)
+        destroy = strcmp(destroy_spec, "defunct") == 0 ? DESTROY_DEFUNCT :
+                  strcmp(destroy_spec, "defunct-all") == 0 ? DESTROY_DEFUNCT_ALL :
+                  DESTROY_REPLACE;
     unsigned saved_count = 0;
     struct fd *sock;
     list_for_each_entry(&listen_fds, sock, sockrestart.listen) {
@@ -133,26 +252,33 @@ unsigned sockrestart_on_suspend() {
         getsockname(sock->real_fd, (struct sockaddr *) &saved->name, &saved->name_len);
         list_add(&saved_sockets, &saved->saved);
         saved_count++;
-        // ISH_SOCKRESTART_TEST_DESTROY=1 -- do to the socket what a SUSPENSION
-        // does to it, so the rebuild can be exercised anywhere.
-        //
-        // On a Mac nothing destroys a listener, so the rebuild's bind always
-        // hits EADDRINUSE against the original, returns 0 restored, and every
-        // line after it -- the dup2, the punt -- has never run outside a real
-        // iOS suspension. Replacing the descriptor with a fresh unbound socket
-        // of the same type reproduces exactly what iOS leaves behind: the fd
-        // is still open, the port is released, and the guest's listener is
-        // dead without the guest being told.
-        if (getenv("ISH_SOCKRESTART_TEST_DESTROY") != NULL) {
+        // ISH_SOCKRESTART_TEST_DESTROY -- kill the listeners on the way down,
+        // so the rebuild can be exercised on a Mac, where nothing else does:
+        //   =defunct      what a suspension does (test_defunct). TCP and UDP
+        //                 listeners die; AF_UNIX ones are left working.
+        //   =defunct-all  the same, with the AF_UNIX listeners made eligible
+        //                 first: the real defunct state, on the one kind of
+        //                 listener iOS spares.
+        //   anything else a fresh unbound socket dup2'd over each listener. The
+        //                 fd stays open, the name is released, and the guest is
+        //                 not told. Works on any host, but it is not quite a
+        //                 defunct socket: a blocked accept() gets EINVAL from
+        //                 it before the rebuild, where a defunct listener
+        //                 would keep it waiting.
+        if (destroy == DESTROY_DEFUNCT_ALL) {
+            test_make_defunctable(sock->real_fd);
+        } else if (destroy == DESTROY_REPLACE) {
             int dead = socket(saved->name_addr.sa_family, saved->type, saved->proto);
             if (dead >= 0) {
                 dup2(dead, sock->real_fd);
                 close(dead);
-                printk("INFO: sockrestart: test-destroyed the listener at fd %d\n",
+                printk("sockrestart: test: destroyed the listener at fd %d\n",
                        sock->real_fd);
             }
         }
     }
+    if (destroy == DESTROY_DEFUNCT || destroy == DESTROY_DEFUNCT_ALL)
+        test_defunct();
     unlock(&sockrestart_lock);
     return saved_count;
 }
@@ -181,6 +307,8 @@ unsigned sockrestart_on_resume() {
         // address nobody is serving until the close below.
         if (saved->sock->refcount == 1)
             continue;
+        if (!listener_is_dead(saved))
+            continue;
         int new_sock = socket(saved->name_addr.sa_family, saved->type, saved->proto);
         if (new_sock < 0) {
             printk("WARNING: restarting socket(%d, %d, %d) failed: %s\n",
@@ -198,6 +326,8 @@ unsigned sockrestart_on_resume() {
 #ifdef SO_REUSEPORT
         setsockopt(new_sock, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));
 #endif
+        if (saved->name_addr.sa_family == AF_UNIX)
+            unlink_stale_unix_name(saved);
         if (bind(new_sock, (struct sockaddr *) &saved->name, saved->name_len) < 0) {
             printk("WARNING: rebinding socket failed: %s\n", strerror(errno));
             close(new_sock);

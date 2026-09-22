@@ -8,6 +8,8 @@
 // all the listening sockets. On resume, open new sockets, reconfigure them,
 // use dup2 to replace the original sockets, and get any thread waiting on them
 // to restart the wait.
+// (AF_UNIX listeners are spared: XNU creates them exempt from this. A resume
+// replaces only the listeners it finds dead -- see sockrestart.c.)
 // This file contains hooks into various other places to do all that.
 // https://developer.apple.com/library/archive/technotes/tn2277/_index.html
 #ifndef FS_SOCKRESTART_H
