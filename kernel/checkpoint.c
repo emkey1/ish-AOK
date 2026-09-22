@@ -92,7 +92,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 11  // 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 12  // 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -984,6 +984,13 @@ static uint64_t ckpt_fd_offset(struct fd *fd) {
 }
 
 // One descriptor, classified. Returns the kind, or 0 with a refusal recorded.
+// A terminal record's identity: its driver major and its number, as one value
+// in the record's offset field. 0 is "not known" -- a descriptor with no tty
+// behind it.
+static uint64_t ckpt_tty_identity(int type, int num) {
+    return ((uint64_t) (uint32_t) type << 32) | (uint32_t) num;
+}
+
 static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size) {
     // Descriptors with no file behind them, identified by what they ARE rather
     // than by what they look like. Before this they reached the standard-
@@ -2071,6 +2078,17 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
                 struct tty *terminal = fd_tty(s->fd);
                 s->offset = terminal != NULL ? (uint64_t) terminal->num : 0;
             }
+            // And a terminal travels as WHICH terminal it is -- driver major
+            // and number -- not merely as a path: a descriptor opened through
+            // /dev/tty records "/dev/tty", which names no terminal at all, and
+            // one held by a process not on that terminal (the tmux server
+            // holds every attached client's) has to be found again by what it
+            // is. See ckpt_restore_tty_record.
+            if (s->kind == CKPT_FD_TTY) {
+                struct tty *terminal = fd_tty(s->fd);
+                s->offset = terminal != NULL
+                        ? ckpt_tty_identity(terminal->type, terminal->num) : 0;
+            }
             if (s->kind == CKPT_FD_PIPE) {
                 // Only the READ end carries the contents: the bytes are in the
                 // pipe once, and taking them from both ends would double them.
@@ -2762,6 +2780,18 @@ struct ckpt_restore_state {
         int tty_num;
         void *terminal;     // the tty's driver data, for the UI to adopt
         int leader_pid;
+        // The terminal as the IMAGE knew it -- the kind and number its first
+        // process recorded -- which is how a record naming it by identity
+        // finds it again (kind is the recorded one, before the CLI's
+        // no-window downgrade to the console).
+        uint32_t old_kind;
+        int old_num;
+        // stdio[] is one description, and the first terminal record mapped
+        // onto it decides which one of the image's it stands for: its id, and
+        // its flags. Every other description on this terminal gets a
+        // descriptor of its own (ckpt_tty_description).
+        bool claimed;
+        uint32_t primary_id;
     } *sets;
     uint32_t set_count, set_cap;
     // old pty number -> the number its master got when it was re-opened.
@@ -2792,6 +2822,22 @@ struct ckpt_restore_state {
     // sees the peer gone, which is what it would have seen.
     struct { uint64_t cookie; struct fd *end[2]; bool claimed[2]; } *sockpairs;
     uint32_t sockpair_count, sockpair_cap;
+    // Terminal descriptors whose terminal had not been rebuilt yet when their
+    // record was read: a daemon earlier in the image than the session whose
+    // terminal it holds (the tmux server, older than a window a client later
+    // attached from). Resolved once every task exists; a CKPT_FD_REF to one of
+    // them waits with it. `head` marks the entry that carries the description.
+    struct ckpt_pending_tty {
+        uint32_t id;
+        int num;            // the pty number the image knew
+        uint32_t sid;       // the holder's session, to break a tie
+        int flags;
+        struct task *task;
+        uint32_t fd;
+        bool cloexec;
+        bool head;
+    } *pending_ttys;
+    uint32_t pending_tty_count, pending_tty_cap;
 };
 
 // Remember where a restored pty master ended up, and look it up again.
@@ -3005,6 +3051,8 @@ static struct ckpt_stdio_set *ckpt_stdio_set_for(struct ckpt_restore_state *st,
     memset(set, 0, sizeof(*set));
     set->kind = kind;
     set->sid = rec->sid;
+    set->old_kind = rec->tty_kind;
+    set->old_num = (int) rec->tty_num;
     snprintf(set->path, sizeof(set->path), "%s", path);
 
     // A pty the IMAGE owns -- tmux's pane, not the UI's window. Its master was
@@ -3349,6 +3397,189 @@ static void ckpt_restore_fifos(struct ckpt_restore_state *st) {
     }
 }
 
+// ---- terminal descriptions ------------------------------------------------
+//
+// A terminal record (CKPT_FD_TTY) is one DESCRIPTION of a terminal the image
+// does not own -- a window's pty, or the console. Each comes back as the
+// description it was: on the terminal it names, with its own flags.
+//
+// There used to be one descriptor per terminal, handed to every terminal
+// record of every process that used it, and chosen by the HOLDER's own
+// terminal rather than by the record's. Three things went wrong with that:
+//
+//   - flags were never put back, so a description a program had made
+//     non-blocking came back blocking. tmux makes the terminal of every client
+//     it serves non-blocking, and a server that blocks writing to a terminal
+//     nobody is draining stops serving every pane;
+//   - a program's separate open of its terminal (less, vi and ssh open
+//     /dev/tty) was merged into the session's shared description, flags and
+//     all;
+//   - a descriptor on a terminal that is not its holder's own -- the tmux
+//     server holds every attached client's -- was given the holder's own
+//     standard streams: another terminal, or none at all.
+
+// The set a pty record names, by the number the image knew it by. Two sets can
+// name one terminal (a process that called setsid and stayed on its parent's
+// terminal is given one of its own); the holder's own session wins the tie.
+static struct ckpt_stdio_set *ckpt_set_for_pts(struct ckpt_restore_state *st,
+        int num, uint32_t sid) {
+    struct ckpt_stdio_set *any = NULL;
+    for (uint32_t i = 0; i < st->set_count; i++) {
+        struct ckpt_stdio_set *set = &st->sets[i];
+        if (set->old_kind != CKPT_TTY_PTS || set->old_num != num)
+            continue;
+        if (set->sid == sid)
+            return set;
+        if (any == NULL)
+            any = set;
+    }
+    return any;
+}
+
+// The descriptor a terminal description comes back as, on this set's terminal:
+// the set's own if the description is the one it stands for -- the first one
+// mapped onto it claims it, and its flags are put on it -- and otherwise a
+// descriptor of its own, opened on the same terminal with its own flags.
+// O_NOCTTY: which process has the terminal as its controlling one is restored
+// separately (ckpt_join_terminal), and an open must not decide it. Returns a
+// new reference, or NULL with nothing to give.
+static struct fd *ckpt_tty_description(struct ckpt_stdio_set *set, uint32_t id,
+        int flags) {
+    struct fd *primary = set->stdio[0];
+    if (primary != NULL && fd_tty(primary) != NULL &&
+            (!set->claimed || set->primary_id == id)) {
+        if (!set->claimed) {
+            set->claimed = true;
+            set->primary_id = id;
+            fd_setflags(primary, flags);
+        }
+        return fd_retain(primary);
+    }
+    struct fd *fd = generic_open(set->path, ckpt_reopen_flags((uint32_t) flags) | O_NOCTTY_, 0);
+    if (!IS_ERR(fd))
+        return fd;
+    // Could not open it again. Share the set's own rather than lose the
+    // descriptor, which is what every terminal record used to get.
+    CKPT_TRACE("  terminal %s could not be opened again (%d); sharing its "
+               "session's descriptor\n", set->path, (int) PTR_ERR(fd));
+    return primary != NULL ? fd_retain(primary) : NULL;
+}
+
+static int ckpt_defer_tty(struct ckpt_restore_state *st, uint32_t id, int num,
+        uint32_t sid, int flags, struct task *task, uint32_t fd, bool cloexec,
+        bool head) {
+    if (st->pending_tty_count == st->pending_tty_cap) {
+        uint32_t cap = st->pending_tty_cap ? st->pending_tty_cap * 2 : 8;
+        void *n = realloc(st->pending_ttys, cap * sizeof(*st->pending_ttys));
+        if (n == NULL)
+            return _ENOMEM;
+        st->pending_ttys = n;
+        st->pending_tty_cap = cap;
+    }
+    st->pending_ttys[st->pending_tty_count++] = (struct ckpt_pending_tty) {
+        .id = id, .num = num, .sid = sid, .flags = flags, .task = task,
+        .fd = fd, .cloexec = cloexec, .head = head,
+    };
+    return 0;
+}
+
+static bool ckpt_tty_pending(struct ckpt_restore_state *st, uint32_t id) {
+    for (uint32_t i = 0; i < st->pending_tty_count; i++)
+        if (st->pending_ttys[i].head && st->pending_ttys[i].id == id)
+            return true;
+    return false;
+}
+
+// One CKPT_FD_TTY record, for the task being restored (`current`), whose own
+// terminal set is `own`. Installed now, or deferred until every task exists if
+// the terminal it names has not been rebuilt yet.
+static int ckpt_restore_tty_record(struct ckpt_restore_state *st,
+        struct ckpt_stdio_set *own, const struct ckpt_task *rec,
+        const struct ckpt_fd *cf, const char *path, struct fdtable *files) {
+    uint32_t type = (uint32_t) (cf->offset >> 32);
+    int num = (int) (uint32_t) cf->offset;
+    struct fd *fd = NULL;
+    if (cf->offset != 0 && type == TTY_PSEUDO_SLAVE_MAJOR) {
+        struct ckpt_stdio_set *target = ckpt_set_for_pts(st, num, rec->sid);
+        if (target == NULL) {
+            CKPT_TRACE("  fd %u: pts %d is not back yet; after every task\n",
+                       cf->fd, num);
+            return ckpt_defer_tty(st, cf->id, num, rec->sid, (int) cf->flags,
+                                  current, cf->fd, cf->cloexec != 0, true);
+        }
+        fd = ckpt_tty_description(target, cf->id, (int) cf->flags);
+    } else if (cf->offset != 0 && (own == NULL || own->kind != CKPT_TTY_CONSOLE) &&
+            path[0] == '/') {
+        // A console that is not this process's own terminal: its device path
+        // is the same in every run, so it is simply opened again.
+        fd = generic_open(path, ckpt_reopen_flags(cf->flags) | O_NOCTTY_, 0);
+        if (IS_ERR(fd))
+            fd = NULL;
+    }
+    if (fd == NULL && own != NULL)
+        fd = ckpt_tty_description(own, cf->id, (int) cf->flags);
+    if (fd == NULL)
+        return 0;
+    int err = ckpt_id_put(st, cf->id, fd);
+    if (err == 0)
+        err = fdtable_install_at(files, (fd_t) cf->fd, fd, cf->cloexec != 0);
+    else
+        fd_close(fd);
+    return err;
+}
+
+// See ckpt_restore_state's pending_ttys. Opened as every restored descriptor
+// is -- with the authority it was first opened with, root's here -- and then
+// stamped as its holder's own.
+static void ckpt_restore_pending_ttys(struct ckpt_restore_state *st) {
+    for (uint32_t i = 0; i < st->pending_tty_count; i++) {
+        struct ckpt_pending_tty *head = &st->pending_ttys[i];
+        if (!head->head)
+            continue;
+        struct ckpt_stdio_set *target = ckpt_set_for_pts(st, head->num, head->sid);
+        struct task *saved = current;
+        current = head->task;
+        uid_t_ uid = current->uid, euid = current->euid, suid = current->suid,
+               fsuid = current->fsuid, gid = current->gid, egid = current->egid,
+               sgid = current->sgid, fsgid = current->fsgid;
+        current->uid = current->euid = current->suid = current->fsuid = 0;
+        current->gid = current->egid = current->sgid = current->fsgid = 0;
+        struct fd *fd = target != NULL
+                ? ckpt_tty_description(target, head->id, head->flags) : NULL;
+        bool opened_here = fd != NULL && fd != target->stdio[0];
+        if (fd == NULL) {
+            // The terminal is not in the image -- its session did not come
+            // back -- so the descriptor comes back on nothing, which is what
+            // a terminal that has gone away reads as.
+            struct fd *null = generic_open("/dev/null", O_RDWR_, 0);
+            fd = IS_ERR(null) ? NULL : null;
+            opened_here = fd != NULL;
+            CKPT_TRACE("  pid %d fd %u: pts %d did not come back; /dev/null\n",
+                       head->task->pid, head->fd, head->num);
+        }
+        current->uid = uid; current->euid = euid; current->suid = suid;
+        current->fsuid = fsuid; current->gid = gid; current->egid = egid;
+        current->sgid = sgid; current->fsgid = fsgid;
+        if (opened_here)
+            fd_open_creds_stamp(fd);
+        current = saved;
+        if (fd == NULL)
+            continue;
+        ckpt_id_put(st, head->id, fd);
+        for (uint32_t j = 0; j < st->pending_tty_count; j++) {
+            struct ckpt_pending_tty *e = &st->pending_ttys[j];
+            if (e->id != head->id)
+                continue;
+            if (fdtable_install_at(e->task->files, (fd_t) e->fd, fd_retain(fd),
+                                   e->cloexec) < 0)
+                fd_close(fd);
+            CKPT_TRACE("  pid %d fd %u: back on pts %d\n", e->task->pid, e->fd,
+                       head->num);
+        }
+        fd_close(fd);
+    }
+}
+
 // Everything on a terminal joins the session that owns it. A tgroup carries
 // its controlling terminal across fork (kernel/fork.c), so the shell had one
 // before the suspend; only the process that re-opened the terminal gets one
@@ -3626,6 +3857,14 @@ descriptors:
         // shares with another, or with itself at a second number.
         if (cf.kind == CKPT_FD_REF) {
             struct fd *shared = cf.id < st->id_count ? st->by_id[cf.id] : NULL;
+            if (shared == NULL && ckpt_tty_pending(st, cf.id)) {
+                // A terminal description that is itself waiting for its
+                // terminal (ckpt_restore_pending_ttys): this one waits with it.
+                if ((err = ckpt_defer_tty(st, cf.id, 0, 0, 0, current, cf.fd,
+                                          cf.cloexec != 0, false)) < 0)
+                    goto fds_done;
+                continue;
+            }
             if (shared == NULL) {
                 err = _EINVAL;
                 goto fds_done;
@@ -3898,7 +4137,15 @@ descriptors:
         // the precedent -- record enough to REBUILD, because the original is
         // destroyed either way. 0, 1 and 2 were set up above; anywhere else
         // the same stream is another reference to one of those three.
-        if (cf.kind == CKPT_FD_STDIO || cf.kind == CKPT_FD_TTY) {
+        if (cf.kind == CKPT_FD_TTY) {
+            if ((err = ckpt_restore_tty_record(st, set, rec, &cf, path, files)) < 0)
+                goto fds_done;
+            continue;
+        }
+
+        // The host's own standard streams (the CLI with output piped): the
+        // set's descriptors ARE them, so there is no description to rebuild.
+        if (cf.kind == CKPT_FD_STDIO) {
             if (cf.fd <= 2) {
                 if (cf.fd < 3 && stdio[cf.fd] != NULL &&
                         (err = ckpt_id_put(st, cf.id, stdio[cf.fd])) < 0)
@@ -4614,6 +4861,9 @@ int checkpoint_restore(const char *host_path) {
     // Every descriptor in the image exists now, so the things that point at
     // descriptors elsewhere can be put back: epoll registrations, and pidfds.
     ckpt_restore_fifos(&st);
+    // Before the epoll registrations: an event loop may be watching the very
+    // descriptor that was waiting for its terminal (tmux's is).
+    ckpt_restore_pending_ttys(&st);
     if ((err = ckpt_restore_epoll_regs(f, &h, &st)) < 0)
         goto out;
     ckpt_restore_pidfds(&st);
@@ -4704,6 +4954,7 @@ out:
             if (!st.sockpairs[i].claimed[e] && st.sockpairs[i].end[e] != NULL)
                 fd_close(st.sockpairs[i].end[e]);
     free(st.sockpairs);
+    free(st.pending_ttys);
     if (err < 0 && (nbuilt > 0 || ckpt_restore_mounted_n > 0))
         ckpt_restore_unwind(built, nbuilt, current);
     else

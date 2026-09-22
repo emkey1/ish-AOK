@@ -14,6 +14,15 @@
 # terminal the script can type into. Asserted after the resume: the client
 # still shows the panes updating, a key typed into it reaches ktop, a detach
 # typed into it detaches it, and both servers keep answering.
+#
+# A second scenario attaches the client on a SESSION terminal instead -- the
+# CLI's pty session, the app's window -- which the image does not own. The
+# server holds that terminal too (a client hands it over), and the server is
+# older than the session, so the image names the server's descriptor before
+# the terminal exists at all. It used to come back as the server's own
+# standard streams: the server drew every pane to the wrong place. Asserted:
+# after the resume the server's descriptor is the client's own terminal, with
+# the flags it had.
 set -e
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 ISH=${ISH:-$REPO/build/ish}
@@ -78,5 +87,67 @@ set -- $(sed -n 's/^CLOCK //p' "$WORK/out2")
 grep -qx 'KTOP-LEFT 0' "$WORK/out2" || f "q typed into the attached client did not reach ktop"
 grep -qx 'INNER answered clients=0' "$WORK/out2" || f "the inner server wedged, or the client did not detach"
 grep -qx 'OUTER answered' "$WORK/out2" || f "the outer server wedged when its pane's process left"
+
+# ---- attached on a session terminal ---------------------------------------
+cat > "$WORK/launch2.sh" <<'L'
+export SHELL=/AOK/native/zsh
+export TERM=xterm-256color
+tmux -L w new-session -d -s t -x 80 -y 24 >/dev/null 2>&1
+tmux -L w send-keys -t t 'watch -n 1 date' Enter
+sleep 2
+report() {
+  srv=$(tmux -L w display -p '#{pid}')
+  cl=$(tmux -L w list-clients -F '#{client_pid}' | head -1)
+  mine=$(readlink /proc/$cl/fd/0)
+  for fd in /proc/$srv/fd/*; do
+    case $(readlink $fd) in /dev/pts/*)
+      n=${fd##*/}
+      same=0; [ "$(readlink $fd)" = "$mine" ] && same=1
+      echo "$1 SERVER-TTY fd=$n same-as-client=$same $(grep '^flags' /proc/$srv/fdinfo/$n | tr -s ' \t' ' ')";;
+    esac
+  done
+}
+(
+  sleep 4
+  report BEFORE
+  echo suspend > /proc/ish/checkpoint
+  sleep 4
+  report AFTER
+  kill -CHLD "$(tmux -L w display -p '#{pid}')"
+  sleep 1
+  echo "AFTER answered=$(tmux -L w ls 2>/dev/null | grep -c '^t:')"
+  echo WDONE
+  sleep 1
+  kill -9 1
+) &
+exec env -u TMUX tmux -L w attach -t t
+L
+rm -f "$IMG"
+ISH_CLI_PTY=1 ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$IMG" ISH_REAL_MNT="$WORK" \
+    "$ISH" -f "$ROOT" /bin/sh /realmnt/launch2.sh < /dev/null > "$WORK/w1" 2>&1 &
+wp=$!
+n=0; while kill -0 $wp 2>/dev/null && [ $n -lt 60 ]; do sleep 1; n=$((n+1)); done
+kill -9 $wp 2>/dev/null || true
+if [ ! -s "$IMG" ]; then
+    f "the session-terminal scenario wrote no image"
+else
+    ( ISH_CLI_PTY=1 ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$IMG" ISH_REAL_MNT="$WORK" \
+        "$ISH" -f "$ROOT" /bin/sh -c x < /dev/null > "$WORK/w2" 2>&1 & echo $! > "$WORK/pid" )
+    n=0; while ! grep -aq 'WDONE' "$WORK/w2" 2>/dev/null && [ $n -lt 60 ]; do sleep 1; n=$((n+1)); done
+    kill -9 "$(cat "$WORK/pid")" 2>/dev/null || true
+    # The client's display is on the same terminal as these lines: keep only them.
+    for o in w1 w2; do
+        tr -d '\r' < "$WORK/$o" | grep -ao '\(BEFORE\|AFTER\) [A-Za-z-]*[ =][^[:cntrl:]]*' > "$WORK/$o.txt" || true
+    done
+    sed 's/^/  window  | /' "$WORK/w1.txt" "$WORK/w2.txt"
+    before=$(grep -m1 '^BEFORE SERVER-TTY' "$WORK/w1.txt" | sed 's/^BEFORE //')
+    after=$(grep -m1 '^AFTER SERVER-TTY' "$WORK/w2.txt" | sed 's/^AFTER //')
+    [ -n "$before" ] || f "no client was attached on the session terminal at the save"
+    case $before in *same-as-client=1*) ;; *) f "before the save the server's terminal was not the client's ($before)";; esac
+    [ -n "$after" ] || f "after the resume the server holds no descriptor on the client's terminal"
+    [ "$after" = "$before" ] || f "the server's terminal descriptor changed across the resume: [$before] -> [$after]"
+    grep -qx 'AFTER answered=1' "$WORK/w2.txt" || f "the server stopped answering after a signal"
+fi
+
 [ $fail -eq 0 ] || { echo "FAIL"; exit 1; }
-echo "PASS: an attached tmux client came back working, and detached cleanly"
+echo "PASS: an attached tmux client came back working and detached cleanly, and a server's hold on a session terminal came back on it"
