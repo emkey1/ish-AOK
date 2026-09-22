@@ -5,10 +5,11 @@
 #
 # Configure ONLY, then build iSH-AOK. The five generated sources are committed
 # in emkey1/dash, and they carry the thread-local conversion; config.h is not,
-# which is all this step produces. Do not follow it with dash's own `make`:
-# from a clean checkout it fails (the committed build products are Mach-O, and
-# the standalone link lacks aok_fork.c), and on the way it can regenerate
-# nodes.c from nodes.c.pat without __thread. CI runs exactly this step.
+# and neither is anything else configure writes -- the fork ignores all of it,
+# so a configured tree stays clean. Do not follow it with dash's own `make`:
+# from a clean checkout it fails (the standalone link lacks aok_fork.c), and on
+# the way it can regenerate nodes.c from nodes.c.pat without __thread. CI runs
+# exactly this step.
 #
 # WHY A CONFIGURED TREE AT ALL, rather than compiling the sources straight from
 # a pristine checkout: dash generates five of the objects it links --
