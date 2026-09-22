@@ -174,7 +174,7 @@ bool acct_collect(struct task *leader, const struct rusage_ *group_rusage,
     rec.ac_etime = acct_encode_float(elapsed);
     // Wall clock through guest_clock_now, not timespec_now: this is a
     // guest-visible absolute time, and that is the rule for every one of them.
-    struct timespec now = guest_clock_now(CLOCK_REALTIME);
+    struct timespec now = guest_clock_now(CLOCK_REALTIME_, CLOCK_REALTIME);
     rec.ac_btime = (uint32_t) (now.tv_sec - (long) (elapsed / ACCT_AHZ));
 
     rec.ac_exitcode = status;

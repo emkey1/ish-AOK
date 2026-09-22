@@ -669,6 +669,11 @@ struct posix_timer {
     // For a CLOCK_THREAD_CPUTIME_ID timer: the thread whose CPU clock it
     // counts against. See posix_timer_thread_cpu_now in kernel/time.c.
     pid_t_ cpu_clock_pid;
+    // The guest clockid it was created on. timer->clockid is only the host
+    // clock under it, which on Darwin is the same for MONOTONIC and BOOTTIME;
+    // an absolute arming needs to know which one the deadline is on. (Here,
+    // in what was padding, so struct tgroup keeps its size.)
+    uint_t clock;
     struct timer *timer;
     int_t timer_id;
     struct tgroup *tgroup;
@@ -894,12 +899,19 @@ void get_guest_loadavg(uint64_t out[3]);
 // implementations report this, and so should anything that wants guest
 // uptime at a finer grain than their ticks.
 uint64_t guest_uptime_ns(void);
-// The guest's reading of a host clock, for the clocks the guest can see
-// directly. For a boot-relative one (CLOCK_MONOTONIC, CLOCK_BOOTTIME,
-// CLOCK_MONOTONIC_RAW) that is the host's reading minus the guest's origin on
-// that clock, so the guest sees time since ITS boot rather than the host's --
-// the host may have been up for weeks. For any other clock (CLOCK_REALTIME,
-// the CPU-time clocks) it is the host's reading unchanged.
+// The guest's reading of guest clock `clock` -- a guest clockid, CLOCK_*_ --
+// which the host reads as `host_clock`, clockid_to_real's answer for it. For a
+// boot-relative one (CLOCK_MONOTONIC, CLOCK_BOOTTIME, CLOCK_MONOTONIC_RAW and
+// their variants) that is the host's reading minus the guest's origin for that
+// clock, so the guest sees time since ITS boot rather than the host's -- the
+// host may have been up for weeks. For any other clock (CLOCK_REALTIME, the
+// CPU-time clocks) it is the host's reading of host_clock unchanged.
+//
+// The GUEST clockid, because it is the guest's clock that has the origin, not
+// the host clock under it: on Darwin the guest's MONOTONIC and BOOTTIME are
+// both the host's CLOCK_MONOTONIC, and after a checkpoint restore they read
+// different values (guest_clock_resume). A timer keeps the guest clockid it
+// was created with for the same reason.
 //
 // Every place a guest-visible absolute time on one of these clocks is read or
 // interpreted must go through this and not timespec_now(): clock_gettime, and
@@ -908,11 +920,37 @@ uint64_t guest_uptime_ns(void);
 // futex FUTEX_WAIT_BITSET). Everything else in the tree -- the timer thread,
 // poll, the socket and futex wait loops -- compares host readings only with
 // other host readings and must keep using timespec_now().
-struct timespec guest_clock_now(clockid_t host_clock);
-// The same rebasing applied to a reading the caller already took, for
-// clock_gettime -- which must keep reporting the host's errno rather than
-// silently substituting a fallback clock the way timespec_now does.
-struct timespec guest_clock_from_host(clockid_t host_clock, struct timespec host);
+struct timespec guest_clock_now(uint_t clock, clockid_t host_clock);
+// The same rebasing applied to a reading the caller already took of the host
+// clock under `clock`, for clock_gettime -- which must keep reporting the
+// host's errno rather than silently substituting a fallback clock the way
+// timespec_now does.
+struct timespec guest_clock_from_host(uint_t clock, struct timespec host);
+
+// The guest's boot-relative clocks read at one instant, with the host's wall
+// clock at that instant: what a checkpoint image carries so that a restored
+// machine's clocks go on from where they were instead of restarting at zero.
+// All in ns except boot_time, which is kernel/task.c's boot_time -- the whole
+// second uptime counts from.
+struct guest_clock_reading {
+    int64_t monotonic_ns;
+    int64_t boottime_ns;    // which is also uptime
+    int64_t raw_ns;
+    int64_t realtime_ns;
+    int64_t boot_time;
+};
+void guest_clock_read(struct guest_clock_reading *out);
+// Put the guest's clocks back where `saved` left them, the way a resume from
+// hibernation does on Linux: CLOCK_MONOTONIC and CLOCK_MONOTONIC_RAW go on
+// from their saved values, and CLOCK_BOOTTIME (uptime) also counts the
+// wall-clock time since `saved` was read. For a checkpoint restore, before
+// any restored task runs; see kernel/task.c for why. Returns that time, the
+// ns BOOTTIME was advanced by.
+int64_t guest_clock_resume(const struct guest_clock_reading *saved);
+// Start the guest's clocks again from `boot`, as a boot does. What a restore
+// that failed after guest_clock_resume puts back, so the fresh boot that
+// follows it does not inherit the image's clocks.
+void guest_clock_restart(time_t boot);
 // The same in 100 Hz ticks, the unit struct uptime_info carries -- for now
 // rounded to whole tenths of a second, for the /proc/uptime format reason
 // given at the definition.

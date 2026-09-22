@@ -389,35 +389,48 @@ dword_t get_count_of_alive_tasks(void) {
 // from the same `since_boot`, which keeps the Linux relation
 // MONOTONIC <= BOOTTIME: both read `since_boot` at the rebase instant and
 // thereafter advance at their own host clock's rate.
+//
+// The origins belong to the GUEST's clocks, not to the host clocks under them.
+// On Darwin, which has no CLOCK_BOOTTIME, the guest's MONOTONIC and BOOTTIME
+// both ride the host's CLOCK_MONOTONIC and used to share one origin -- right
+// until a checkpoint is restored, which has to move them apart: MONOTONIC goes
+// on from where it was, and BOOTTIME also counts the time the machine spent
+// stopped. See guest_clock_resume.
 enum guest_clock {
     GUEST_CLOCK_MONOTONIC,
-#ifdef CLOCK_BOOTTIME
     GUEST_CLOCK_BOOTTIME,
-#endif
-#ifdef CLOCK_MONOTONIC_RAW
     GUEST_CLOCK_RAW,
-#endif
     GUEST_CLOCK_COUNT,
 };
 
+// The host clock under each, which must be the one clockid_to_real in
+// kernel/time.c reads for the same guest clock.
 static const clockid_t guest_clock_host_id[GUEST_CLOCK_COUNT] = {
     [GUEST_CLOCK_MONOTONIC] = CLOCK_MONOTONIC,
-#ifdef CLOCK_BOOTTIME
-    [GUEST_CLOCK_BOOTTIME] = CLOCK_BOOTTIME,
-#endif
+    [GUEST_CLOCK_BOOTTIME] = GUEST_UPTIME_HOST_CLOCK,
 #ifdef CLOCK_MONOTONIC_RAW
     [GUEST_CLOCK_RAW] = CLOCK_MONOTONIC_RAW,
+#else
+    [GUEST_CLOCK_RAW] = CLOCK_MONOTONIC,
 #endif
 };
 
-// Which entry a host clockid names, or -1 for a clock with no boot origin --
-// CLOCK_REALTIME and the CPU-time clocks, which the guest reads straight
-// through. GUEST_UPTIME_HOST_CLOCK is always one of the entries.
-static int guest_clock_index(clockid_t host_clock) {
-    for (int i = 0; i < GUEST_CLOCK_COUNT; i++)
-        if (guest_clock_host_id[i] == host_clock)
-            return i;
-    return -1;
+// Which origin a guest clockid is measured from, or -1 for a clock with none
+// -- CLOCK_REALTIME and its variants, CLOCK_TAI and the CPU-time clocks, which
+// the guest reads straight through.
+static int guest_clock_index(uint_t clock) {
+    switch (clock) {
+        case CLOCK_MONOTONIC_:
+        case CLOCK_MONOTONIC_COARSE_:
+            return GUEST_CLOCK_MONOTONIC;
+        case CLOCK_BOOTTIME_:
+        case CLOCK_BOOTTIME_ALARM_:
+            return GUEST_CLOCK_BOOTTIME;
+        case CLOCK_MONOTONIC_RAW_:
+            return GUEST_CLOCK_RAW;
+        default:
+            return -1;
+    }
 }
 
 static pthread_mutex_t guest_clock_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -426,9 +439,11 @@ static pthread_mutex_t guest_clock_lock = PTHREAD_MUTEX_INITIALIZER;
 // in the same process), and the origins move with it. A re-boot therefore
 // restarts the guest's monotonic clocks near zero, which is what a reboot
 // means -- and in AOK it happens in become_first_process, before any guest
-// task exists to see it.
+// task exists to see it. A checkpoint restore sets both itself, under
+// guest_clock_lock, and a restore is not a boot.
 static _Atomic time_t guest_clock_boot = (time_t) -1;
-// Each host clock's reading, in ns, at which the guest's uptime was zero.
+// Each guest clock's origin: the reading of its host clock, in ns, at which
+// the guest clock read zero.
 static _Atomic int64_t guest_clock_origin_ns[GUEST_CLOCK_COUNT];
 
 static int64_t timespec_to_ns(struct timespec ts) {
@@ -463,6 +478,11 @@ static int64_t guest_clock_rebase_ns(int idx, int64_t host_ns) {
     time_t boot = boot_time;
     if (atomic_load_explicit(&guest_clock_boot, memory_order_acquire) != boot) {
         pthread_mutex_lock(&guest_clock_lock);
+        // Read again under the lock. The one taken above can be stale by now:
+        // a restore that moved the clocks while this thread waited here set
+        // boot_time too, and placing the origins for the old value would put
+        // every clock back to a fresh boot's.
+        boot = boot_time;
         if (atomic_load_explicit(&guest_clock_boot, memory_order_acquire) != boot)
             guest_clock_place_origins(boot);
         pthread_mutex_unlock(&guest_clock_lock);
@@ -472,19 +492,28 @@ static int64_t guest_clock_rebase_ns(int idx, int64_t host_ns) {
     return up > 0 ? up : 0;
 }
 
-struct timespec guest_clock_from_host(clockid_t host_clock, struct timespec host) {
-    int idx = guest_clock_index(host_clock);
-    if (idx < 0)
-        return host;                        // no boot origin: realtime, cpu clocks
-    int64_t ns = guest_clock_rebase_ns(idx, timespec_to_ns(host));
+static struct timespec ns_to_timespec(int64_t ns) {
     return (struct timespec) {
         .tv_sec = (time_t) (ns / (int64_t) NSEC_PER_SEC_U64),
         .tv_nsec = (long) (ns % (int64_t) NSEC_PER_SEC_U64),
     };
 }
 
-struct timespec guest_clock_now(clockid_t host_clock) {
-    return guest_clock_from_host(host_clock, timespec_now(host_clock));
+struct timespec guest_clock_from_host(uint_t clock, struct timespec host) {
+    int idx = guest_clock_index(clock);
+    if (idx < 0)
+        return host;                        // no boot origin: realtime, cpu clocks
+    return ns_to_timespec(guest_clock_rebase_ns(idx, timespec_to_ns(host)));
+}
+
+struct timespec guest_clock_now(uint_t clock, clockid_t host_clock) {
+    int idx = guest_clock_index(clock);
+    if (idx < 0)
+        return timespec_now(host_clock);
+    // The origin's own host clock, which is what host_clock is for every
+    // caller that got it from clockid_to_real.
+    return ns_to_timespec(guest_clock_rebase_ns(
+        idx, timespec_to_ns(timespec_now(guest_clock_host_id[idx]))));
 }
 
 uint64_t guest_uptime_ns(void) {
@@ -492,11 +521,94 @@ uint64_t guest_uptime_ns(void) {
     // through, on the same host clock, so the two are not merely close but
     // identical -- that identity is what makes "realtime minus
     // CLOCK_BOOTTIME", which is what util-linux's dmesg computes, come out as
-    // btime. Derived from GUEST_UPTIME_HOST_CLOCK rather than naming the entry
-    // under its own #ifdef, so the two cannot drift apart.
+    // btime.
     return (uint64_t) guest_clock_rebase_ns(
-        guest_clock_index(GUEST_UPTIME_HOST_CLOCK),
-        timespec_to_ns(timespec_now(GUEST_UPTIME_HOST_CLOCK)));
+        GUEST_CLOCK_BOOTTIME,
+        timespec_to_ns(timespec_now(guest_clock_host_id[GUEST_CLOCK_BOOTTIME])));
+}
+
+void guest_clock_read(struct guest_clock_reading *out) {
+    int64_t host[GUEST_CLOCK_COUNT];
+    for (int i = 0; i < GUEST_CLOCK_COUNT; i++)
+        host[i] = timespec_to_ns(timespec_now(guest_clock_host_id[i]));
+    // The wall clock LAST, for the reason guest_clock_place_origins reads it
+    // first: realtime minus uptime then comes out no earlier than the boot
+    // instant, so btime is still boot_time's second when this is resumed.
+    int64_t real = timespec_to_ns(timespec_now(CLOCK_REALTIME));
+    int64_t guest[GUEST_CLOCK_COUNT];
+    for (int i = 0; i < GUEST_CLOCK_COUNT; i++)
+        guest[i] = guest_clock_rebase_ns(i, host[i]);
+    // After the rebasing, which places the origins if nothing has yet this
+    // boot, so this is the boot they were placed for.
+    time_t boot = atomic_load_explicit(&guest_clock_boot, memory_order_acquire);
+    *out = (struct guest_clock_reading) {
+        .monotonic_ns = guest[GUEST_CLOCK_MONOTONIC],
+        .boottime_ns = guest[GUEST_CLOCK_BOOTTIME],
+        .raw_ns = guest[GUEST_CLOCK_RAW],
+        .realtime_ns = real,
+        .boot_time = (int64_t) boot,
+    };
+}
+
+// A restored machine's clocks have to go on from the image, not from zero.
+// Its programs hold ABSOLUTE deadlines on them in their own memory, which the
+// image carries verbatim: Python's time.sleep is clock_nanosleep(
+// CLOCK_MONOTONIC, TIMER_ABSTIME), and so are glibc's CLOCK_MONOTONIC
+// condition variables and every event loop's timer wheel. Restarted at zero,
+// every one of those deadlines lay "uptime at the save" in the future -- a
+// restored Python daemon on the iPad woke a minute late, and after hours of
+// uptime it would have been hours. `uptime` read "up 0 min" after every
+// restore.
+//
+// Linux's answer for a machine that stopped and came back is hibernation's,
+// and this copies it: MONOTONIC and MONOTONIC_RAW do not count the time the
+// machine was stopped, so they continue from their saved values; BOOTTIME does,
+// so it also advances by the host's wall-clock time between the save and now.
+// That keeps MONOTONIC <= BOOTTIME, keeps uptime (which IS BOOTTIME) from
+// ever going backward, and leaves btime -- realtime minus uptime -- exactly
+// where it was, as it is after a resume from hibernation. A wall clock that
+// went BACKWARD in between counts as no time at all rather than as negative
+// time. boot_time comes back too, so everything dated from it still agrees.
+//
+// The rebasing sites only ever compute "guest now" from these origins, so
+// moving them here, before any restored task runs, is all a deadline needs:
+// the task that was frozen inside clock_nanosleep re-executes it after the
+// restore, and its deadline is interpreted against the continued clock.
+int64_t guest_clock_resume(const struct guest_clock_reading *saved) {
+    int64_t value[GUEST_CLOCK_COUNT] = {
+        [GUEST_CLOCK_MONOTONIC] = saved->monotonic_ns,
+        [GUEST_CLOCK_BOOTTIME] = saved->boottime_ns,
+        [GUEST_CLOCK_RAW] = saved->raw_ns,
+    };
+    pthread_mutex_lock(&guest_clock_lock);
+    // Realtime first and the host clocks after it, which is the order that
+    // keeps btime on its second (see guest_clock_read).
+    int64_t stopped = timespec_to_ns(timespec_now(CLOCK_REALTIME)) - saved->realtime_ns;
+    if (stopped < 0)
+        stopped = 0;
+    value[GUEST_CLOCK_BOOTTIME] += stopped;
+    for (int i = 0; i < GUEST_CLOCK_COUNT; i++) {
+        if (value[i] < 0)
+            value[i] = 0;
+        int64_t host = timespec_to_ns(timespec_now(guest_clock_host_id[i]));
+        atomic_store_explicit(&guest_clock_origin_ns[i], host - value[i],
+                              memory_order_release);
+    }
+    // The key before boot_time, both after the origins: a reader that sees
+    // boot_time match the key sees these origins, and one that sees it not
+    // match takes this lock and finds them already placed.
+    atomic_store_explicit(&guest_clock_boot, (time_t) saved->boot_time,
+                          memory_order_release);
+    boot_time = (time_t) saved->boot_time;
+    pthread_mutex_unlock(&guest_clock_lock);
+    return stopped;
+}
+
+void guest_clock_restart(time_t boot) {
+    pthread_mutex_lock(&guest_clock_lock);
+    guest_clock_place_origins(boot);
+    boot_time = boot;
+    pthread_mutex_unlock(&guest_clock_lock);
 }
 
 uint64_t guest_uptime_ticks(void) {

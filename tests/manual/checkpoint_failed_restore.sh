@@ -48,9 +48,12 @@ LAST=$LSN; [ "$SLEEPER" -gt "$LAST" ] && LAST=$SLEEPER
 CHECK='echo "RUNMOUNT=$(grep -c " /run " /proc/mounts)"
 echo "PIDFILE=$(test -e /run/stale-daemon.pid && echo present || echo gone)"
 echo "GHOST=$(cat /proc/'$LSN'/comm 2>/dev/null || echo none)"
+echo "BTIME=$(grep "^btime " /proc/stat | cut -d" " -f2)"
 /realmnt/lsn probe '$PORT
+launched=$(date +%s)
 out=$(ISH_REAL_MNT=$WORK ISH_RESTORE="$WORK/img" ISH_RESTORE_FALLBACK=1 \
       ISH_CHECKPOINT_TEST_FAIL_PID=$LAST "$ISH" -f "$ROOT" /bin/sh -c "$CHECK" 2>&1 || true)
+finished=$(date +%s)
 echo "$out" | sed 's/^/  boot    | /'
 
 fail=0
@@ -64,5 +67,18 @@ expect 'RUNMOUNT=0'  "the image's tmpfs is not over /run"
 expect 'PIDFILE=gone' "no stale pid file from the old session"
 expect 'GHOST=none'  "no ghost of the daemon in the pid table"
 expect 'BIND=ok'     "its port is free for the new boot"
+# The restore puts the image's clocks back before it builds anything; one that
+# fails has to take them away again. Left in place, the boot that follows
+# would start with the image's uptime and its btime -- seconds before this
+# process even started, since the image was saved 3 s into ANOTHER boot.
+# (grep, one read: dash's `read` takes /proc/stat a byte at a time, and AOK
+# regenerates the file on every read, so a counter crossing a digit between
+# two of them tears the line -- once it printed btime 17990071649.)
+btime=$(echo "$out" | sed -n 's/^BTIME=//p')
+if [ -n "$btime" ] && [ "$btime" -ge $((launched - 1)) ] && [ "$btime" -le $((finished + 1)) ]; then
+    echo "  ok      | BTIME=$btime  (the boot's own clock, not the image's: $launched..$finished)"
+else
+    echo "  FAIL    | BTIME=$btime  (want the boot's own clock, $((launched - 1))..$((finished + 1)))"; fail=1
+fi
 [ $fail -eq 0 ] || { echo "FAIL"; exit 1; }
 echo "PASS: the failed restore was undone before the boot"

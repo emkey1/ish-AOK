@@ -3610,7 +3610,7 @@ bool netlink_taskstats_exit_collect(struct task *leader, const struct rusage_ *r
     uint64_t start_ticks = leader->start_time_ticks;
     uint64_t elapsed_ticks = now_ticks > start_ticks ? now_ticks - start_ticks : 0;
     ts->ac_etime = elapsed_ticks * (1000000 / 100);   // 100 Hz ticks -> usec
-    struct timespec now = guest_clock_now(CLOCK_REALTIME);
+    struct timespec now = guest_clock_now(CLOCK_REALTIME_, CLOCK_REALTIME);
     ts->ac_btime = (uint32_t) (now.tv_sec - (long) (elapsed_ticks / 100));
     ts->ac_minflt = ru->minflt;
     ts->ac_majflt = ru->majflt;

@@ -57,6 +57,11 @@ struct timerfd_ckpt {
     int64_t value_sec, value_nsec;          // until the next expiry
     int64_t interval_sec, interval_nsec;
     uint64_t expirations;                   // counted but not yet read
+    // The guest clockid. real_clockid cannot say it: on Darwin the guest's
+    // MONOTONIC and BOOTTIME are both CLOCK_MONOTONIC, and a restored timer
+    // armed with TFD_TIMER_ABSTIME has to rebase onto the right one.
+    uint32_t clock;
+    uint32_t reserved;
 };
 bool timerfd_fd_is(struct fd *fd);
 void timerfd_ckpt_describe(struct fd *fd, struct timerfd_ckpt *out);

@@ -82,6 +82,8 @@ struct fd {
         struct {
             struct timer *timer;
             uint64_t expirations;
+            // The guest clockid; see struct posix_timer's `clock`.
+            uint_t clock;
         } timerfd;
         // O_PATH|O_NOFOLLOW fd referring to a symlink itself (see
         // generic_openat). Owns one reference on the mount and a malloc'd

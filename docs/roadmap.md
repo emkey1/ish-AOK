@@ -334,6 +334,13 @@ it. What exists now:
   pid files and lock files into the rootfs, where they would outlive the next
   boot. Sockets are the deliberate exception: sock_ckpt_rebuild binds those
   names itself, and a node already sitting there makes that bind EADDRINUSE.
+- **The guest's clocks**, the way Linux carries them across hibernation:
+  CLOCK_MONOTONIC continues from its value at the save, CLOCK_BOOTTIME and
+  /proc/uptime also count the time the machine was stopped, btime stays put,
+  and each process keeps its start time. Before this a restore started them
+  all again near zero, and every absolute deadline in the image -- Python's
+  time.sleep, glibc's CLOCK_MONOTONIC condition variables -- waited an extra
+  "uptime at the save" (a minute, for a restored Python daemon on the iPad).
 - **Native programs**, by the rule this section already named: zsh describes
   itself (its fork-by-relaunch already turns a live shell into a script that
   rebuilds it) and comes back with its parameters, functions and aliases. dash
@@ -342,8 +349,8 @@ it. What exists now:
 - `tests/manual/checkpoint_restore.sh` is the proof, including every refusal,
   and `tests/manual/checkpoint_tmpfs.sh` is the tmpfs one -- it checks a held
   descriptor on a /run file too, and that nothing leaked into the rootfs.
-  `checkpoint_anonfd.sh`, `checkpoint_fifo.sh`, `checkpoint_sockpair.sh` and
-  `checkpoint_threads.sh` cover the rules above.
+  `checkpoint_anonfd.sh`, `checkpoint_fifo.sh`, `checkpoint_sockpair.sh`,
+  `checkpoint_threads.sh` and `checkpoint_clock.sh` cover the rules above.
 
 **What is still open**: descriptors in flight in an SCM_RIGHTS message when the
 image is written (the bytes travel, the descriptors cannot, and the save says

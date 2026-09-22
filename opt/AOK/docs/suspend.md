@@ -66,6 +66,15 @@ it. Your hostname, your background jobs and your job table are all still there.
 The system consoles are re-attached the same way, each to its own: a getty on
 `tty3` comes back on `tty3`, not alongside everything else on the console.
 
+The clocks come back the way Linux's do after hibernation. `uptime` keeps
+counting, the time the session spent saved included, and the boot time stays
+what it was; `CLOCK_MONOTONIC` carries on from where it stopped. So a program
+asleep until a deadline -- Python's `time.sleep`, a timer, a condition
+variable -- wakes when it should, not "uptime at the save" late. Two limits:
+a timer set with `alarm()`, `setitimer` or `timer_create` does not come back
+yet (a timerfd does), and a relative sleep that the save interrupted starts
+over.
+
 ## What it will not save, and how it tells you
 
 **A native program does not stop a save.** `/AOK/native/zsh` can describe

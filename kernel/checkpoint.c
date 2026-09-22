@@ -92,7 +92,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 12  // 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 13  // 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -243,6 +243,15 @@ struct ckpt_header {
     // How many epoll registrations follow the last task record.
     uint32_t n_epoll_regs;
     uint32_t reserved2;
+    // The guest's clocks at the freeze, and the host's wall clock with them
+    // (struct guest_clock_reading). Without them a restored machine's clocks
+    // restarted at zero, and every absolute CLOCK_MONOTONIC deadline in the
+    // image -- Python's time.sleep is one -- waited an extra "uptime at the
+    // save". The restore continues MONOTONIC from these and advances BOOTTIME
+    // by the wall-clock time the machine spent stopped (guest_clock_resume).
+    int64_t clock_monotonic_ns, clock_boottime_ns, clock_raw_ns;
+    int64_t clock_realtime_ns;
+    int64_t clock_boot_time;
 };
 
 struct ckpt_task {
@@ -335,6 +344,11 @@ struct ckpt_task {
     // no descriptors; `zombie` is 0. Without it the image had threads whose
     // process it did not have.
     uint32_t departed;
+    // When it started, in uptime ticks (/proc/<pid>/stat's starttime). The
+    // restored uptime goes on from the image's, so this still means what it
+    // did; the restore's own clock reading would make every process look as
+    // though it had started at the restore.
+    uint64_t start_time_ticks;
 };
 
 struct ckpt_map {
@@ -2008,6 +2022,7 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
             .exit_signal = task->exit_signal,
             .n_sigactions = NUM_SIGS,
             .tgid = (uint32_t) task->tgid,
+            .start_time_ticks = task->start_time_ticks,
         };
         memcpy(z.comm, task->comm, sizeof(z.comm));
         CKPT_TRACE("save pid %d (ppid %d) %s: %s, exit code %#x\n",
@@ -2211,6 +2226,7 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         .files_owner = sh->files,
         .fs_owner = sh->fs,
         .sighand_owner = sh->sighand,
+        .start_time_ticks = task->start_time_ticks,
     };
     // The owner's record carries the table; this one points at it.
     if (sh->files != 0)
@@ -2501,6 +2517,11 @@ int checkpoint_save(const char *host_path) {
         return err;
     }
     t_frozen = timespec_now(CLOCK_MONOTONIC);
+    // The guest's clocks at the instant the machine stopped: the moment the
+    // image describes, and the last one any guest task saw. Everything a
+    // restore counts as time spent stopped is measured from here.
+    struct guest_clock_reading clocks;
+    guest_clock_read(&clocks);
 
     // Zombies and departed leaders included: the ordinary collection skips
     // both, and every zombie in a session used to be lost at a save.
@@ -2590,6 +2611,11 @@ int checkpoint_save(const char *host_path) {
         .page_size = PAGE_SIZE,
         .build_fingerprint = ckpt_fingerprint(),
         .n_tasks = snap.count,
+        .clock_monotonic_ns = clocks.monotonic_ns,
+        .clock_boottime_ns = clocks.boottime_ns,
+        .clock_raw_ns = clocks.raw_ns,
+        .clock_realtime_ns = clocks.realtime_ns,
+        .clock_boot_time = clocks.boot_time,
     };
     memcpy(h.magic, CKPT_MAGIC, sizeof(h.magic));
     // The UTS namespace. init's, which is the one every AOK task is in unless
@@ -4650,6 +4676,11 @@ int checkpoint_restore(const char *host_path) {
     struct ckpt_header h;
     struct task **built = NULL;
     unsigned nbuilt = 0;
+    // The boot this process made before trying the image, for undoing the
+    // clocks if the image cannot be restored.
+    extern time_t boot_time;
+    time_t boot_before_restore = boot_time;
+    bool clocks_resumed = false;
     // What the restore builds as it goes: the shared standard streams, the
     // descriptor identity table, and the pipes. See ckpt_restore_task.
     struct ckpt_restore_state st = {0};
@@ -4681,6 +4712,30 @@ int checkpoint_restore(const char *host_path) {
                  "%s", h.domainname);
         unlock(&init_uts_ns.lock);
     }
+
+    // The guest's clocks, before anything is built: every restored task comes
+    // back holding deadlines on them, and a task that was frozen inside
+    // clock_nanosleep(TIMER_ABSTIME) re-executes it against whatever these
+    // say. Put back as they were, not restarted at zero -- see
+    // guest_clock_resume. Undone at `out` if the restore fails, because the
+    // fresh boot that follows a failed restore is a boot.
+    struct guest_clock_reading clocks = {
+        .monotonic_ns = h.clock_monotonic_ns,
+        .boottime_ns = h.clock_boottime_ns,
+        .raw_ns = h.clock_raw_ns,
+        .realtime_ns = h.clock_realtime_ns,
+        .boot_time = h.clock_boot_time,
+    };
+    int64_t stopped_ns = guest_clock_resume(&clocks);
+    clocks_resumed = true;
+    printk("checkpoint: clocks resumed: monotonic %lld.%03lld s, uptime %lld.%03lld s "
+           "(%lld.%03lld s stopped)\n",
+           (long long) (h.clock_monotonic_ns / 1000000000),
+           (long long) (h.clock_monotonic_ns / 1000000 % 1000),
+           (long long) ((h.clock_boottime_ns + stopped_ns) / 1000000000),
+           (long long) ((h.clock_boottime_ns + stopped_ns) / 1000000 % 1000),
+           (long long) (stopped_ns / 1000000000),
+           (long long) (stopped_ns / 1000000 % 1000));
 
     // The tmpfs trees, before anything reads a task record: a restored
     // descriptor on /run/... is reopened by path, and a socket rebuilt by
@@ -4758,6 +4813,7 @@ int checkpoint_restore(const char *host_path) {
         }
         task->ckpt_restored = true;
         task->ckpt_syscalls_traced = 0;
+        task->start_time_ticks = rec.start_time_ticks;
         built[nbuilt++] = task;
 
         if (rec.departed) {
@@ -4961,6 +5017,13 @@ out:
         for (unsigned i = 0; i < ckpt_restore_mounted_n; i++)
             free(ckpt_restore_mounted[i]);
     ckpt_restore_mounted_n = 0;
+    // A restore that failed must not leave the image's clocks behind for the
+    // fresh boot that follows it, which would start with the image's uptime.
+    if (err < 0 && clocks_resumed) {
+        guest_clock_restart(boot_before_restore);
+        if (nbuilt > 0 && built[0] == current)
+            current->start_time_ticks = 0;   // init, again: born at boot
+    }
     free(built);
     fclose(f);
     return err;

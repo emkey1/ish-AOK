@@ -931,13 +931,15 @@ dword_t sys_futex_common(guest_addr_t uaddr, dword_t op, dword_t val, guest_addr
         if (err < 0)
             return err;
         if ((op & FUTEX_CMD_MASK_) == FUTEX_WAIT_BITSET_) {
-            clockid_t clock = (op & FUTEX_CLOCK_REALTIME_) ? CLOCK_REALTIME : CLOCK_MONOTONIC;
+            bool realtime = (op & FUTEX_CLOCK_REALTIME_) != 0;
             // The guest's own now, not the host's: this deadline came from the
             // guest's clock_gettime. glibc's pthread_cond_timedwait on
             // CLOCK_MONOTONIC arrives here, so reading the host's monotonic --
             // the host's uptime, weeks on a Mac -- made every such wait see a
             // long-expired deadline and time out immediately.
-            timeout = timespec_subtract(timeout, guest_clock_now(clock));
+            timeout = timespec_subtract(timeout, realtime
+                    ? guest_clock_now(CLOCK_REALTIME_, CLOCK_REALTIME)
+                    : guest_clock_now(CLOCK_MONOTONIC_, CLOCK_MONOTONIC));
             // An already-expired deadline does NOT short-circuit to
             // ETIMEDOUT. Linux runs futex_wait_setup first, so a value that
             // does not match is EAGAIN and an unreadable address is EFAULT --
