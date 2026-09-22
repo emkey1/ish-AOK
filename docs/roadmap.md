@@ -308,7 +308,7 @@ it. What exists now:
   path with the bytes still in them.
 - **Descriptors with no file behind them** -- epoll sets with their
   registrations, inotify with its watch numbers and queued events, eventfd,
-  signalfd, timerfd with its time left, pidfd, memfd with its contents
+  signalfd, timerfd with its deadline, pidfd, memfd with its contents
   (kernel/anonfd_ckpt.h). Before these, every one came back as /dev/null, and a
   dbus-daemon whose epoll set was /dev/null spun at a full core and never
   served the bus that logins wait on.
@@ -341,6 +341,14 @@ it. What exists now:
   all again near zero, and every absolute deadline in the image -- Python's
   time.sleep, glibc's CLOCK_MONOTONIC condition variables -- waited an extra
   "uptime at the save" (a minute, for a restored Python daemon on the iPad).
+- **Timers, and the signals they deliver**: POSIX timers, the interval timers
+  and alarm() come back armed (kernel/timer_ckpt.h), each deadline on the clock
+  Linux counts it on -- MONOTONIC does not count the stop, BOOTTIME and a
+  wall-clock deadline do -- and a sleep or poll-family timeout the freeze
+  interrupted sleeps only what it had left, where it used to start over, even
+  on a save with no restore. Signals queued and not yet taken come back with
+  their siginfo; before, a pending signal came back as a bit nothing could
+  deliver, and a program using SIGALRM as a timeout waited for ever.
 - **Native programs**, by the rule this section already named: zsh describes
   itself (its fork-by-relaunch already turns a live shell into a script that
   rebuilds it) and comes back with its parameters, functions and aliases. dash
@@ -350,7 +358,8 @@ it. What exists now:
   and `tests/manual/checkpoint_tmpfs.sh` is the tmpfs one -- it checks a held
   descriptor on a /run file too, and that nothing leaked into the rootfs.
   `checkpoint_anonfd.sh`, `checkpoint_fifo.sh`, `checkpoint_sockpair.sh`,
-  `checkpoint_threads.sh` and `checkpoint_clock.sh` cover the rules above.
+  `checkpoint_threads.sh`, `checkpoint_clock.sh` and `checkpoint_timers.sh`
+  cover the rules above.
 
 **What is still open**: descriptors in flight in an SCM_RIGHTS message when the
 image is written (the bytes travel, the descriptors cannot, and the save says

@@ -532,13 +532,15 @@ struct task {
     // needs the second before it can release the old group leader.
     _Atomic bool exit_finished;
     // Linux's restart_block, in the two places AOK needs it: a timed wait
-    // restarted after a job-control stop -- poll/select/epoll_wait, or
-    // nanosleep -- must resume the deadline it already had, not start its
-    // relative timeout over. Set only when such a wait returns
-    // _ERESTART_NOHAND, and consumed by the re-executed syscall, which is
+    // restarted after a job-control stop or a checkpoint freeze --
+    // poll/select/epoll_wait, or nanosleep -- must resume the deadline it
+    // already had, not start its relative timeout over. Set only when such a
+    // wait returns _ERESTART_NOHAND, which is how both of those report
+    // themselves, and consumed by the re-executed syscall, which is
     // necessarily the very next one this task makes: _ERESTART_NOHAND
     // re-executes the same instruction, and a handler running in between
-    // cancels the restart outright (see restart_nohand_pending).
+    // cancels the restart outright (see restart_nohand_pending). Host
+    // CLOCK_MONOTONIC; a checkpoint image carries them on the guest's clocks.
     struct timespec poll_restart_deadline;
     bool poll_restart_valid;
     struct timespec sleep_restart_deadline;
@@ -604,6 +606,15 @@ struct task {
     // waiting_cond_lock. At the end for the reason given above
     // native_standin_child.
     bool waiting_interruptible;
+
+    // The guest clock the sleep behind sleep_restart_deadline was on. Within
+    // one process the deadline is simply kept, but a checkpoint image has to
+    // carry it on the clock Linux would count it on -- a relative sleep on
+    // CLOCK_BOOTTIME counts the time the machine was stopped, one on
+    // MONOTONIC or REALTIME does not (kernel/timer_ckpt.h). Set with
+    // sleep_restart_valid. At the end for the reason given above
+    // native_standin_child.
+    uint_t sleep_restart_clock;
 };
 
 // current will always give the process that is currently executing
@@ -676,6 +687,11 @@ struct posix_timer {
     uint_t clock;
     struct timer *timer;
     int_t timer_id;
+    // Armed with TIMER_ABSTIME. An absolute arming on a wall clock is an
+    // instant, which the time the machine spends stopped across a checkpoint
+    // brings nearer, where a relative one is kept on MONOTONIC and does not
+    // (kernel/timer_ckpt.h). Padding again.
+    bool abstime;
     struct tgroup *tgroup;
     pid_t_ thread_pid;
     int_t signal;

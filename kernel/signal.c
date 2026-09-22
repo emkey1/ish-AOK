@@ -681,6 +681,21 @@ static void signal_wake_task(struct task *task, struct sighand *sighand, int sig
     if (wake_poke_dropped_for(task))
         return;   // as if every poke below had been swallowed
 
+    // Nothing to break out of yet, and nobody to poke. Until task_start a
+    // task's `thread` is its PARENT's, copied by task_create_ -- or, for pid 1
+    // in the app, nothing at all until the entry point starts it -- so the
+    // pokes below would land on another thread, or hand pthread_kill a thread
+    // that is not there, which is undefined. A checkpoint restore makes this
+    // ordinary rather than rare: it re-arms a process's timers before the app
+    // has started pid 1, and one already due fires at once. The signal is
+    // queued; the task's first pass through the emulator takes it, and the
+    // poke of its own cpu_state makes that pass come at once.
+    if (!atomic_load_explicit(&task->host_thread_started, memory_order_acquire)) {
+        if (task->cpu.poked_ptr)
+            cpu_poke(&task->cpu);
+        return;
+    }
+
     int wake_err = pthread_kill(task->thread, SIGUSR1);
     // Second, independent poke. The SIGUSR1 above is not reliable: on Darwin it
     // is intermittently swallowed in a way that leaves SIGUSR1 blocked and

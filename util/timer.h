@@ -77,6 +77,11 @@ struct timer {
 
     bool active;
     bool thread_running;
+    // The thread is inside the callback for an expiry, with the lock dropped.
+    // A one-shot stays `active` after it fires -- nothing clears it -- so this
+    // and thread_running are what tell "due, and not fired yet" from "fired",
+    // which timer_read has to.
+    bool firing;
     uint64_t generation;
     pthread_t thread;
     timer_callback_t callback;
@@ -100,5 +105,12 @@ struct timer_spec {
     struct timespec interval;
 };
 int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *oldspec);
+// Whether the timer will still fire, and if so how long it has left by its own
+// clock -- a sampler installed with timer_set_clock_source included -- and its
+// interval, which is reported either way. For describing a timer so that it
+// can be armed again elsewhere (kernel/checkpoint.c), where "armed" has to be
+// exact: one that is due but has not fired yet reports a nanosecond left rather
+// than none, and a one-shot that has fired, or is firing now, reports disarmed.
+bool timer_read(struct timer *timer, struct timer_spec *spec);
 
 #endif

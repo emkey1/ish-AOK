@@ -253,8 +253,13 @@ sqword_t native_syscall_args(unsigned num, const qword_t args[6]) {
         // the very same pending signal and be cut short again -- a spin, not a
         // restart. The deferral's own contract is that the callback FAILS, so
         // stdio unwinds through its unlock and the signal is taken at the next
-        // checkpoint outside it; hand the caller the EINTR that says so.
-        if (nlibc_delivery_deferred())
+        // checkpoint outside it; hand the caller the EINTR that says so --
+        // and drop the deadline the call left for its re-issue, which is not
+        // coming: the next sleep or poll would wait it out instead of its own.
+        if (nlibc_delivery_deferred()) {
+            current->sleep_restart_valid = false;
+            current->poll_restart_valid = false;
             return _EINTR;
+        }
     }
 }

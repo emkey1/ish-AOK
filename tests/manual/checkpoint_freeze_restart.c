@@ -14,6 +14,10 @@
 //   - it returned what it would have without a freeze (errno and result), and
 //   - it did not return early: never before its own timeout or before the
 //     helper that ends it acts, and
+//   - a sleep or a poll-family wait did not return LATE either: its timeout is
+//     a deadline, which the freeze must carry across the restart rather than
+//     start again (task->sleep_restart_deadline, poll_restart_deadline). It
+//     returns by that deadline, or at the thaw if the freeze outlasted it, and
 //   - the freeze really happened inside the call. `saves` in
 //     /proc/ish/checkpoint went from N to N+1 across the call, and the call
 //     spans the longest pause a spinning witness process saw -- the freeze
@@ -48,6 +52,10 @@
 #define SOCK_TIMEOUT_MS 4000L   // SO_RCVTIMEO / SO_SNDTIMEO
 #define WAIT_MS         6000L   // sleeps, poll-family timeouts, helper deadlines
 #define EARLY_SLACK_MS  20L     // clock granularity, not a real early return
+// How late a carried deadline may be met. A wait that started its timeout
+// again is late by the whole time it had already waited when the freeze came,
+// which the save legs make at least a second.
+#define LATE_SLACK_MS   500L
 
 // Not every root carries linux-headers; these are ABI constants.
 #define AF_NETLINK_     16
@@ -68,6 +76,7 @@ struct result {
     long want_rc;
     long t0, t1;          // monotonic microseconds around the call
     long not_before;      // the call must not return before this (us)
+    int bounded;          // ...nor long after it, or after the thaw (us)
     long saves_before, saves_after;
 };
 
@@ -261,6 +270,16 @@ static pid_t lock_holder(const char *path, int use_flock) {
         finish(&r, rc, e, r.t0 + (ms) * 1000L);                                \
     } while (0)
 
+// A wait whose timeout is a deadline the freeze has to keep: see the header.
+#define TIMED_BOUNDED(name, want_err, want_rc, ms, call) do {                   \
+        struct result r;                                                       \
+        begin(&r, name, want_err, want_rc);                                    \
+        r.bounded = 1;                                                         \
+        long rc = (call);                                                      \
+        int e = errno;                                                         \
+        finish(&r, rc, e, r.t0 + (ms) * 1000L);                                \
+    } while (0)
+
 #define BY_DEADLINE(name, want_err, want_rc, call) do {                        \
         struct result r;                                                       \
         begin(&r, name, want_err, want_rc);                                    \
@@ -302,28 +321,28 @@ static void run_case(int which) {
         TIMED("sendmsg-unix", EAGAIN, 0, SOCK_TIMEOUT_MS, syscall(SYS_sendmsg, fd, &mh, 0)); break; }
     // -- sleeps and timed waits: they time out normally, and not early
     case 10:
-        TIMED("nanosleep", 0, 0, WAIT_MS, syscall(SYS_nanosleep, &wait_ts, NULL)); break;
+        TIMED_BOUNDED("nanosleep", 0, 0, WAIT_MS, syscall(SYS_nanosleep, &wait_ts, NULL)); break;
     case 11:
-        TIMED("clock_nanosleep", 0, 0, WAIT_MS,
+        TIMED_BOUNDED("clock_nanosleep", 0, 0, WAIT_MS,
               syscall(SYS_clock_nanosleep, CLOCK_MONOTONIC, 0, &wait_ts, NULL)); break;
 #ifdef SYS_select
     case 12: { struct timeval tv = {WAIT_MS / 1000, 0};
-        TIMED("select", 0, 0, WAIT_MS, syscall(SYS_select, 0, NULL, NULL, NULL, &tv)); break; }
+        TIMED_BOUNDED("select", 0, 0, WAIT_MS, syscall(SYS_select, 0, NULL, NULL, NULL, &tv)); break; }
 #endif
     case 13:
-        TIMED("pselect6", 0, 0, WAIT_MS, syscall(SYS_pselect6, 0, NULL, NULL, NULL, &wait_ts, NULL)); break;
+        TIMED_BOUNDED("pselect6", 0, 0, WAIT_MS, syscall(SYS_pselect6, 0, NULL, NULL, NULL, &wait_ts, NULL)); break;
 #ifdef SYS_poll
     case 14:
-        TIMED("poll", 0, 0, WAIT_MS, syscall(SYS_poll, NULL, 0, (int) WAIT_MS)); break;
+        TIMED_BOUNDED("poll", 0, 0, WAIT_MS, syscall(SYS_poll, NULL, 0, (int) WAIT_MS)); break;
 #endif
     case 15:
-        TIMED("ppoll", 0, 0, WAIT_MS, syscall(SYS_ppoll, NULL, 0, &wait_ts, NULL, 8)); break;
+        TIMED_BOUNDED("ppoll", 0, 0, WAIT_MS, syscall(SYS_ppoll, NULL, 0, &wait_ts, NULL, 8)); break;
 #ifdef SYS_epoll_wait
     case 16: { int ep = epoll_create1(0); struct epoll_event ev;
-        TIMED("epoll_wait", 0, 0, WAIT_MS, syscall(SYS_epoll_wait, ep, &ev, 1, (int) WAIT_MS)); break; }
+        TIMED_BOUNDED("epoll_wait", 0, 0, WAIT_MS, syscall(SYS_epoll_wait, ep, &ev, 1, (int) WAIT_MS)); break; }
 #endif
     case 17: { int ep = epoll_create1(0); struct epoll_event ev;
-        TIMED("epoll_pwait", 0, 0, WAIT_MS,
+        TIMED_BOUNDED("epoll_pwait", 0, 0, WAIT_MS,
               syscall(SYS_epoll_pwait, ep, &ev, 1, (int) WAIT_MS, NULL, 8)); break; }
     case 18: { sigset_t set; sigemptyset(&set); sigaddset(&set, SIGUSR2);
         sigprocmask(SIG_BLOCK, &set, NULL);
@@ -580,6 +599,9 @@ int main(int argc, char **argv) {
             why = "wrong result";
         else if (r->t1 + EARLY_SLACK_MS * 1000L < r->not_before)
             why = "returned early";
+        else if (r->bounded &&
+                 r->t1 > (r->not_before > w.g1 ? r->not_before : w.g1) + LATE_SLACK_MS * 1000L)
+            why = "returned late: the freeze started its timeout again";
         int in_call = r->saves_before == saves0 && r->saves_after == saves0 + 1 &&
                       r->t0 < w.g0 && r->t1 > w.g1;
         const char *verdict;

@@ -2291,11 +2291,13 @@ static bool syscall_result_should_restart(dword_t *resultp) {
     // honour; the PC is rewound and the syscall re-executes on the far side,
     // which for a restore is the far side of a reboot.
     //
-    // The one thing it costs is a timed wait's remaining time: a nanosleep
-    // interrupted this way sleeps its full span again. Linux answers that
-    // with a restart_block carrying the remainder; this does not, and a
-    // suspend across which the guest was frozen anyway is the case where it
-    // matters least.
+    // What it costs is a timed wait's remaining time, which a restart has to
+    // carry the way Linux's restart_block does. The sleeps and the poll family
+    // do: they report a freeze as the _ERESTART_NOHAND it is and keep their
+    // deadline (sleep_restart_deadline, poll_restart_deadline), which a
+    // checkpoint image carries too. Every other timed wait arrives here as a
+    // bare EINTR and starts its timeout again -- futex, sigtimedwait,
+    // semtimedop, a socket's SO_RCVTIMEO (docs/TODO.md).
     if (r == _EINTR && checkpoint_freeze_pending()) {
         if (current != NULL) {
             current->restart_nohand_pending = false;

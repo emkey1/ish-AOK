@@ -1118,25 +1118,97 @@ rows actually added, so the two styles cannot drift apart again -- the same
 bug will recur the next time a button is added to one branch and not the
 other.
 
-## Timers that a checkpoint image does not carry
+## Timers across a checkpoint
 
-**Established** (2026-09-22, while making the guest's clocks continue across a
-restore -- `tests/manual/checkpoint_clock.sh`):
-- POSIX timers (`timer_create`), interval timers (`setitimer`) and `alarm()`
-  are not in the image at all; `kernel/checkpoint.c` never mentions them. A
-  restored process that armed one before the save never gets its signal, so a
-  program using SIGALRM as a timeout waits for ever. A timerfd does travel,
-  with its time left (kernel/anonfd_ckpt.h).
-- A RELATIVE sleep frozen mid-call is re-executed with its original argument:
-  `sleep 5`, suspended 3 s in and restored after 2 s, woke 5.0 s after the
-  restore was launched, where Linux would sleep the 2 s left. Within one
-  process the freeze's restart carries the deadline in
-  `task->sleep_restart_deadline` (host monotonic), but that is not saved.
+### FIXED: timers, and the signals they queue, were not in the image
 
-**Next step.** Save each armed timer as its guest clock and time left, the way
-the timerfd record does, and re-arm it on the rebuilt tgroup. Carry the sleep
-deadline in guest CLOCK_MONOTONIC terms -- which now continues across a
-restore -- so the re-executed call sleeps only the remainder.
+**Fixed 2026-09-22.** POSIX timers (`timer_create`), the interval timers
+(`setitimer`) and `alarm()` were not in a checkpoint image at all, so a
+restored process that had armed one never got its signal: a program using
+SIGALRM as a timeout waited for ever. Now each process's timers travel with its
+first running task (struct group_timers_ckpt, kernel/timer_ckpt.h), are
+rebuilt in their own slots, and are armed only once every restored task has
+started -- `task_never_ran_destroy` does not free a group's timers, so arming
+them any earlier would leave them firing into a failed restore.
+
+- **Each deadline travels on the clock Linux counts it on**, not as "time
+  left". MONOTONIC does not count the stop, and a relative arming on
+  CLOCK_REALTIME and ITIMER_REAL live there (hrtimer_init moves them).
+  BOOTTIME, the alarm clocks and a TIMER_ABSTIME arming on the wall clock do
+  count it, and come due that much sooner. A CPU-time timer keeps the CPU time
+  it had left. `posix_timer.abstime` and `fd->timerfd.abstime` remember the
+  arming, and a timerfd now uses the same rule, where it was time left.
+- **The signal queues travel too.** Only the task's `pending` bitmask was
+  carried, and delivery takes from the queue lists while the waits ask the
+  bitmask, so a signal pending at the save came back as a bit with no signal
+  behind it: never delivered, and once unblocked, every wait returned EINTR at
+  once (measured: a 0.2 s select took 0.000 s). Both queues now come back with
+  their siginfo, overrun counts included, and the pending sets are rebuilt from
+  them. Timers are read before the queues, so a timer firing mid-save costs at
+  most an overrun, never an expiry.
+- `signal_wake_task` no longer pokes a task whose host thread has not started
+  (its `thread` is the parent's, or nothing, for the app's pid 1 before
+  `task_start`), which a due timer made ordinary on the resume path.
+
+**Test:** `tests/manual/checkpoint_timers.sh [root]` (+ .c), both save paths, a
+3 s stop: alarm() in a child, POSIX timers on MONOTONIC, REALTIME relative
+and absolute, BOOTTIME, periodic, SIGEV_NONE, process and thread CPU clocks,
+ITIMER_REAL and ITIMER_PROF, queued signals with their siginfo, and the sleeps
+below. Before the fix every check failed on both legs (24 on x86_64); after, each meets its
+deadline within ~10 ms, on devuan amd64 and arm64 (glibc) and alpine amd64
+(musl).
+
+### FIXED: a sleep the freeze interrupted started over -- even with no restore
+
+**Fixed 2026-09-22.** The earlier entry here said that within one process the
+freeze's restart carried the deadline. It did not: a freeze reached a sleep, poll or
+select as a bare EINTR, which `syscall_result_should_restart` restarted, but
+nothing had recorded the deadline, so the re-executed call waited its whole
+timeout again. Measured on the old binary with a plain save, no restore:
+nanosleep, clock_nanosleep, select, pselect6, poll, ppoll, epoll_wait and
+epoll_pwait all took 8.07 s for a 6 s timeout. Across a restore `sleep 5`,
+frozen 3 s in, slept 5 s more.
+
+Now the sleeps (`sleep_restart_or_eintr`) and `poll_wait` report a freeze as
+the `_ERESTART_NOHAND` it is and keep their deadline, as a job-control stop
+already did. The image carries it on the guest clock (MONOTONIC; BOOTTIME for a
+relative BOOTTIME sleep, which counts the stop), with the pending-rewind flags,
+so a handler that runs before the call re-executes still cancels it. epoll
+keeps a freeze's restart and drops the deadline with every other one: nothing
+consumed it, so after a SIGSTOP the NEXT poll or select to run waited out the
+stale deadline, or epoll's own 2 s cap. `tests/manual/checkpoint_freeze_restart.c`
+now also fails a sleep or poll-family case that returns late.
+
+### Timers and timed waits: what is still open
+
+- **Every other timed wait still starts its timeout over after a freeze:** a
+  relative futex FUTEX_WAIT (and so every glibc timed lock and condvar wait
+  that is relative), `rt_sigtimedwait`, `semtimedop`, a socket's
+  SO_RCVTIMEO/SO_SNDTIMEO wait, and clock_nanosleep on a CPU clock. Each needs
+  a deadline carried the way `sleep_restart_deadline` carries one (Linux's
+  restart_block). kernel/calls.c's `syscall_result_should_restart` names them.
+- **The CPU-time clocks start again from zero after a restore.** A restored
+  thread is a new host thread, so CLOCK_PROCESS_CPUTIME_ID,
+  CLOCK_THREAD_CPUTIME_ID, getrusage, times() and /proc/<pid>/stat's
+  utime/stime all go backward across one. A CPU-time timer is right -- it
+  carries the CPU time it had left -- but a reading taken before the save, or
+  an absolute CPU-clock arming made from one, is not.
+- **The clocks resume when the restore STARTS** (`guest_clock_resume`), so
+  MONOTONIC counts the restore's own duration, which Linux's does not -- it
+  continues from the thaw. Every carried deadline agrees with it, so a relative
+  and an absolute wait still agree; moving the resume to just before the thaw
+  would fix all of them at once.
+- **A native program's pending signals come back as bits with no queue entry**,
+  as before. It is re-launched, and nothing it had pending is delivered.
+- **Found alongside, not a checkpoint bug:** a signal whose delivery runs no
+  handler (SIGCHLD with SIG_DFL) ends a restartable wait with EINTR, where
+  Linux restarts the call; and `deliver_signal_to_group_locked` queues such a
+  signal whenever ANY member blocks it, where Linux asks only the target.
+  musl's fork() and pthread_exit block every signal, so a child dying while a
+  sibling thread exits EINTRs the other threads' sleeps -- measured with no
+  checkpoint, on both libcs; Linux 6.12 completes them. A chip was filed.
+  `checkpoint_timers.c` parks its threads and its asker instead of letting them
+  exit, so it does not depend on this.
 
 ## Suspend and resume across the three modes
 

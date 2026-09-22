@@ -1,4 +1,5 @@
 #include "kernel/calls.h"
+#include "kernel/checkpoint.h"
 #include "fs/poll.h"
 #include <limits.h>
 #include <stdlib.h>
@@ -329,8 +330,21 @@ static int epoll_wait_common(fd_t epoll_f, guest_addr_t events_addr, int_t max_e
     // Devuan 6 / Linux 6.12, ^Z-ing a process waiting in poll() and resuming
     // leaves the poll completing, and the same treatment of epoll_wait()
     // returns EINTR. AOK shared poll_wait() for both and so restarted both.
-    if (res == _ERESTART || res == _ERESTART_NOHAND)
-        res = _EINTR;
+    //
+    // Except for a checkpoint freeze, which the guest must never see: AOK
+    // restarts every call one interrupts. It stays the restart poll_wait
+    // reported, so the deadline poll_wait recorded for it is the one the
+    // re-executed call waits out. Every other restart becomes EINTR, and the
+    // deadline goes with it: nothing re-executes this call to consume it, so
+    // the next poll, select or epoll_wait to run would have -- the stale
+    // deadline of an epoll_wait a SIGSTOP had interrupted, or the 2 s cap
+    // above for an untimed one.
+    if (res == _ERESTART || res == _ERESTART_NOHAND) {
+        if (res != _ERESTART_NOHAND || !checkpoint_freeze_pending()) {
+            current->poll_restart_valid = false;
+            res = _EINTR;
+        }
+    }
     STRACE("%d end epoll_wait", current->pid);
     if (res >= 0) {
         for (int i = 0; i < res; i++) {

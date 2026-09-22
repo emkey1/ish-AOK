@@ -768,8 +768,8 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
         // exist to IGNORE bare pokes (a TLB shootdown), which is right for
         // those and wrong for a freeze: the freeze needs the syscall to return
         // so the dispatcher can rewind over it and the task can park. The
-        // EINTR never reaches the guest; syscall_result_should_restart turns
-        // it into a restart while the freeze is on.
+        // EINTR never reaches the guest: poll_wait leaves as a restart while
+        // the freeze is on, carrying its deadline (see its end).
         // A PTRACE_EVENT_STOP the task owes its tracer is the same kind of
         // thing, and it restarts the call the same way.
         bool signal_pending = checkpoint_freeze_pending() ||
@@ -812,8 +812,8 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
         // exist to IGNORE bare pokes (a TLB shootdown), which is right for
         // those and wrong for a freeze: the freeze needs the syscall to return
         // so the dispatcher can rewind over it and the task can park. The
-        // EINTR never reaches the guest; syscall_result_should_restart turns
-        // it into a restart while the freeze is on.
+        // EINTR never reaches the guest: poll_wait leaves as a restart while
+        // the freeze is on, carrying its deadline (see its end).
         // A PTRACE_EVENT_STOP the task owes its tracer is the same kind of
         // thing, and it restarts the call the same way.
         bool signal_pending = checkpoint_freeze_pending() ||
@@ -962,8 +962,8 @@ poll_wait_done:
         // exist to IGNORE bare pokes (a TLB shootdown), which is right for
         // those and wrong for a freeze: the freeze needs the syscall to return
         // so the dispatcher can rewind over it and the task can park. The
-        // EINTR never reaches the guest; syscall_result_should_restart turns
-        // it into a restart while the freeze is on.
+        // EINTR never reaches the guest: poll_wait leaves as a restart while
+        // the freeze is on, carrying its deadline (see its end).
         // A PTRACE_EVENT_STOP the task owes its tracer is the same kind of
         // thing, and it restarts the call the same way.
         bool signal_pending = checkpoint_freeze_pending() ||
@@ -1165,6 +1165,15 @@ poll_wait_done:
     }
 
     unlock(&poll_->lock);
+    // A checkpoint freeze is a restart too: the three exits above see it as a
+    // bare EINTR, which syscall_result_should_restart restarts anyway -- but
+    // then nothing had carried the deadline, and the re-executed call waited
+    // its whole timeout again: a plain save two seconds into a six-second
+    // poll made it take eight, and a restore started every select() timeout
+    // over. Reported as the restart it is, the deadline goes with it below,
+    // and into the image with the task (kernel/checkpoint.c).
+    if (res == _EINTR && checkpoint_freeze_pending())
+        res = _ERESTART_NOHAND;
     // Restarting after a job-control stop: hand the deadline we already
     // computed to the re-executed syscall, which cannot see the time this
     // call spent waiting (it only gets the guest's original relative

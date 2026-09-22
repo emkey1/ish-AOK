@@ -87,12 +87,13 @@
 #include "fs/real.h"
 #include "fs/fifo.h"
 #include "kernel/anonfd_ckpt.h"
+#include "kernel/timer_ckpt.h"
 #include "fs/devices.h"
 #include "emu/memory.h"
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 13  // 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 14  // 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -349,6 +350,35 @@ struct ckpt_task {
     // did; the restore's own clock reading would make every process look as
     // though it had started at the restore.
     uint64_t start_time_ticks;
+    // The syscall this task was parked in, rewound to run again, and what it
+    // had left. A sleep or a poll-family wait the freeze interrupted carries
+    // its deadline into the call that re-executes it (struct task's
+    // sleep_restart_deadline and poll_restart_deadline); here it travels on
+    // the guest clock Linux would count it on (kernel/timer_ckpt.h), because a
+    // host deadline means nothing to the next run. Without it the call started
+    // its whole timeout again after the restore: `sleep 5`, frozen 3 s in,
+    // slept 5 s more. And whether a handler that runs before the call does
+    // cancels the restart, which is Linux's answer and was lost with the task.
+    uint32_t sleep_restart_valid, sleep_restart_clock;   // the sleep's guest clockid
+    int64_t sleep_restart_value_ns;
+    uint32_t poll_restart_valid, restart_pending;        // bit 0 NOHAND, bit 1 SYS
+    int64_t poll_restart_value_ns;
+    // Signals sent and not yet taken, each a struct siginfo_ after the
+    // descriptors: this task's own, and -- in the record of the task that
+    // holds its signal handlers for the others (sighand_owner 0) -- the
+    // process's. The pending sets are rebuilt from them. `pending` alone came
+    // back before these, as a bit with no signal behind it: never delivered,
+    // since delivery takes from the queue, and ending every wait at once,
+    // since the waits ask the bit. A blocked SIGALRM was lost, and unblocked,
+    // it spun. (`pending` still carries a native program's, as before.)
+    uint32_t n_sigqueue, n_group_sigqueue;
+    // Its process's timers follow the signals: a struct group_timers_ckpt and
+    // its POSIX timers. In the record of the process's first task in the
+    // image that is running -- not a departed leader, whose group lives on in
+    // its threads -- and never a native program's, which is re-launched and
+    // arms its own.
+    uint32_t group_timers;
+    uint32_t reserved3;
 };
 
 struct ckpt_map {
@@ -1937,6 +1967,9 @@ static int ckpt_save_epoll_regs(struct ckpt_writer *w, struct ckpt_fd_ids *ids,
 struct ckpt_shares {
     uint32_t tgid;
     uint32_t mm, files, fs, sighand;
+    // This record carries its process's timers (struct ckpt_task's
+    // group_timers).
+    bool group_timers;
 };
 
 enum ckpt_share_kind { CKPT_SHARE_MM, CKPT_SHARE_FILES, CKPT_SHARE_FS, CKPT_SHARE_SIGHAND };
@@ -1979,6 +2012,23 @@ static uint32_t ckpt_owner_of(struct task **tasks, unsigned index,
     return 0;
 }
 
+// The first task of its thread group in the image that is running. The
+// group's timers go in its record, because a restore rebuilds the group with
+// its first task and the timers need a group that is there -- and one that is
+// still there while they are described: a running task is parked, so its group
+// cannot be torn down under the save, where a departed leader's could be by
+// the exit of its last thread. A native program is re-launched and arms its
+// own, as it did the first time.
+static bool ckpt_carries_group_timers(struct task **tasks, unsigned index) {
+    struct task *t = tasks[index];
+    if (!ckpt_can_share(t) || t->group == NULL)
+        return false;
+    for (unsigned j = 0; j < index; j++)
+        if (tasks[j]->group == t->group && ckpt_can_share(tasks[j]))
+            return false;
+    return true;
+}
+
 static struct ckpt_shares ckpt_shares_of(struct task **tasks, unsigned index) {
     struct task *t = tasks[index];
     struct ckpt_shares sh = {
@@ -1987,10 +2037,68 @@ static struct ckpt_shares ckpt_shares_of(struct task **tasks, unsigned index) {
         .files = ckpt_owner_of(tasks, index, CKPT_SHARE_FILES),
         .fs = ckpt_owner_of(tasks, index, CKPT_SHARE_FS),
         .sighand = ckpt_owner_of(tasks, index, CKPT_SHARE_SIGHAND),
+        .group_timers = ckpt_carries_group_timers(tasks, index),
     };
     if (!ckpt_can_share(t))
         sh.tgid = (uint32_t) t->pid;
     return sh;
+}
+
+// How many queued signals one queue may bring back: Linux's own default
+// RLIMIT_SIGPENDING is in the tens of thousands, and an image claiming more
+// than this is not one this build wrote.
+#define CKPT_SIGQUEUE_MAX 65536
+
+// A task's queued signals, and with `with_group` its process's, taken under the
+// one sighand->lock, so that a signal arriving meanwhile -- a timer's thread
+// still runs during the freeze -- is in one reading of both queues or in
+// neither. malloc'd arrays, NULL when empty.
+static int ckpt_signals_snapshot(struct task *task, bool with_group,
+        struct siginfo_ **own, uint32_t *n_own,
+        struct siginfo_ **group, uint32_t *n_group) {
+    struct sighand *sighand = task->sighand;
+    *own = *group = NULL;
+    *n_own = *n_group = 0;
+    if (sighand == NULL)
+        return 0;
+    lock(&sighand->lock, 0);
+    unsigned long own_count = list_size(&task->queue);
+    unsigned long group_count = with_group ? list_size(&sighand->queue) : 0;
+    if (own_count > CKPT_SIGQUEUE_MAX || group_count > CKPT_SIGQUEUE_MAX) {
+        unlock(&sighand->lock);
+        ckpt_refuse("pid %d has %lu signals queued, more than an image carries",
+                    task->pid, own_count > group_count ? own_count : group_count);
+        return _EOPNOTSUPP;
+    }
+    struct siginfo_ *o = own_count != 0 ? malloc(own_count * sizeof(*o)) : NULL;
+    struct siginfo_ *g = group_count != 0 ? malloc(group_count * sizeof(*g)) : NULL;
+    if ((own_count != 0 && o == NULL) || (group_count != 0 && g == NULL)) {
+        unlock(&sighand->lock);
+        free(o);
+        free(g);
+        return _ENOMEM;
+    }
+    struct sigqueue *q;
+    unsigned n = 0;
+    list_for_each_entry(&task->queue, q, queue)
+        o[n++] = q->info;
+    n = 0;
+    if (with_group)
+        list_for_each_entry(&sighand->queue, q, queue)
+            g[n++] = q->info;
+    unlock(&sighand->lock);
+    *own = o;
+    *n_own = (uint32_t) own_count;
+    *group = g;
+    *n_group = (uint32_t) group_count;
+    return 0;
+}
+
+// A deadline on the host's CLOCK_MONOTONIC, as the ns it has left: negative
+// for one the freeze outlasted.
+static int64_t ckpt_host_deadline_left_ns(struct timespec deadline) {
+    struct timespec left = timespec_subtract(deadline, timespec_now(CLOCK_MONOTONIC));
+    return (int64_t) left.tv_sec * 1000000000 + left.tv_nsec;
 }
 
 static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
@@ -2008,6 +2116,8 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
     // skip them, so the unwind never reads them uninitialised.
     struct mem *mem = NULL;
     char *native_env = NULL;
+    struct posix_timer_ckpt *posix = NULL;
+    struct siginfo_ *own_signals = NULL, *group_signals = NULL;
 
     bool departed = ckpt_task_departed(task);
     if (task->zombie || departed) {
@@ -2190,6 +2300,30 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         }
     }
 
+    // ---- its process's timers, then its signals --------------------------
+    //
+    // In that order. A timer that fires between the two readings has queued
+    // its signal by the second, where it is found, and comes back due again --
+    // one more overrun on that signal, or a coalesced second SIGALRM. The
+    // other order loses the expiry: the signal is not yet queued when the
+    // queues are read, and the timer is past it when it is.
+    struct group_timers_ckpt timers = {0};
+    if (sh->group_timers) {
+        posix = calloc(TIMERS_MAX, sizeof(*posix));
+        if (posix == NULL) {
+            ret = _ENOMEM;
+            goto out;
+        }
+        group_timers_ckpt_describe(task->group, &timers, posix);
+    }
+    uint32_t n_own_signals = 0, n_group_signals = 0;
+    // A native program is re-launched, with what it had pending as before.
+    if (prog == NULL &&
+            (ret = ckpt_signals_snapshot(task, sh->sighand == 0, &own_signals,
+                                         &n_own_signals, &group_signals,
+                                         &n_group_signals)) < 0)
+        goto out;
+
     char cwd[MAX_PATH + 1] = "/", root[MAX_PATH + 1] = "/";
     lock(&task->fs->lock, 0);
     if (task->fs->pwd != NULL)
@@ -2234,7 +2368,31 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         .fs_owner = sh->fs,
         .sighand_owner = sh->sighand,
         .start_time_ticks = task->start_time_ticks,
+        .n_sigqueue = n_own_signals,
+        .n_group_sigqueue = n_group_signals,
+        .group_timers = sh->group_timers ? 1 : 0,
     };
+    // The call the freezer rewound it over, and what that call has left. Not
+    // for a native program, whose calls are not rewound but re-issued, and
+    // which is re-launched anyway.
+    if (prog == NULL) {
+        if (task->sleep_restart_valid) {
+            rec.sleep_restart_valid = 1;
+            rec.sleep_restart_clock = task->sleep_restart_clock;
+            rec.sleep_restart_value_ns = timer_ckpt_carry(
+                    timer_ckpt_clock_for(task->sleep_restart_clock, false),
+                    ckpt_host_deadline_left_ns(task->sleep_restart_deadline));
+        }
+        // poll's timeout is MONOTONIC's, as Linux's is.
+        if (task->poll_restart_valid) {
+            rec.poll_restart_valid = 1;
+            rec.poll_restart_value_ns = timer_ckpt_carry(
+                    TIMER_CKPT_MONOTONIC,
+                    ckpt_host_deadline_left_ns(task->poll_restart_deadline));
+        }
+        rec.restart_pending = (task->restart_nohand_pending ? 1u : 0u) |
+                              (task->restart_sys_pending ? 2u : 0u);
+    }
     // The owner's record carries the table; this one points at it.
     if (sh->files != 0)
         rec.n_fds = 0;
@@ -2392,9 +2550,29 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         if (s->kind == CKPT_FD_SOCKET)
             wr(w, &s->sock, sizeof(s->sock));
     }
+
+    // After the descriptors: the signals, then the timers.
+    wr(w, own_signals, (size_t) n_own_signals * sizeof(*own_signals));
+    wr(w, group_signals, (size_t) n_group_signals * sizeof(*group_signals));
+    if (sh->group_timers) {
+        wr(w, &timers, sizeof(timers));
+        wr(w, posix, (size_t) timers.n_posix * sizeof(*posix));
+    }
+    if (n_own_signals != 0 || n_group_signals != 0 || rec.sleep_restart_valid ||
+            rec.poll_restart_valid)
+        CKPT_TRACE("  pid %d: %u signals queued, %u for the process%s%s\n",
+                   task->pid, n_own_signals, n_group_signals,
+                   rec.sleep_restart_valid ? ", a sleep's deadline" : "",
+                   rec.poll_restart_valid ? ", a poll's deadline" : "");
+    if (sh->group_timers)
+        CKPT_TRACE("  pid %d: itimer %s, %u POSIX timers\n", task->pid,
+                   timers.real.armed ? "armed" : "not armed", timers.n_posix);
     ret = w->err;
 
 out:
+    free(posix);
+    free(own_signals);
+    free(group_signals);
     free(native_env);
     if (mem != NULL)
         read_unlock(&mem->lock);
@@ -2874,6 +3052,19 @@ struct ckpt_restore_state {
         bool head;
     } *pending_ttys;
     uint32_t pending_tty_count, pending_tty_cap;
+    // Each process's timers, read with its first task and armed only once
+    // every task has started (checkpoint_restore). Armed any earlier, one that is
+    // due at once would signal a task with no thread of its own yet, and a
+    // restore failing after that would leave them firing into a process that
+    // task_never_ran_destroy had taken apart -- it does not free a group's
+    // timers, which only exit does.
+    struct ckpt_group_timers {
+        struct tgroup *group;
+        uint32_t pid;
+        struct group_timers_ckpt d;
+        struct posix_timer_ckpt *posix;
+    } *timers;
+    uint32_t timers_count, timers_cap;
 };
 
 // Remember where a restored pty master ended up, and look it up again.
@@ -3642,6 +3833,125 @@ static void ckpt_join_terminal(struct ckpt_stdio_set *set) {
     unlock(&current->group->lock);
 }
 
+// Put queued signals back on a queue, oldest first, as they were, and return
+// the pending set that goes with them: a signal is pending exactly when one of
+// its is queued, so a bit is never set with nothing behind it.
+static sigset_t_ ckpt_requeue_signals(struct list *queue, const struct siginfo_ *infos,
+        uint32_t n) {
+    sigset_t_ pending = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (infos[i].sig < 1 || infos[i].sig >= NUM_SIGS)
+            continue;
+        struct sigqueue *q = malloc(sizeof(*q));
+        if (q == NULL)
+            break;
+        q->info = infos[i];
+        list_add_tail(queue, &q->queue);
+        sigset_add(&pending, infos[i].sig);
+    }
+    return pending;
+}
+
+// What follows a task's descriptors (struct ckpt_task's n_sigqueue and on):
+// its queued signals, its process's, and its process's timers. Read onto
+// `current`, which is the task being restored.
+static int ckpt_restore_signals_and_timers(FILE *f, const struct ckpt_task *rec,
+        struct ckpt_restore_state *st) {
+    int err = 0;
+    if (rec->n_sigqueue > CKPT_SIGQUEUE_MAX || rec->n_group_sigqueue > CKPT_SIGQUEUE_MAX)
+        return _EINVAL;
+    struct siginfo_ *own = NULL, *group = NULL;
+    if (rec->n_sigqueue != 0 &&
+            (own = malloc(rec->n_sigqueue * sizeof(*own))) == NULL)
+        return _ENOMEM;
+    if (rec->n_group_sigqueue != 0 &&
+            (group = malloc(rec->n_group_sigqueue * sizeof(*group))) == NULL) {
+        free(own);
+        return _ENOMEM;
+    }
+    if ((err = rd(f, own, rec->n_sigqueue * sizeof(*own))) < 0 ||
+            (err = rd(f, group, rec->n_group_sigqueue * sizeof(*group))) < 0) {
+        free(own);
+        free(group);
+        return err;
+    }
+    // A native program's set comes back as its record gives it (identity:),
+    // there being no queue of its in the image.
+    struct sighand *sighand = current->sighand;
+    lock(&sighand->lock, 0);
+    sigset_t_ pending = ckpt_requeue_signals(&current->queue, own, rec->n_sigqueue);
+    if (!rec->native)
+        current->pending = pending;
+    // The process's belong to the handlers' owner, whose record this is; a
+    // task sharing them was given them with its owner.
+    if (rec->sighand_owner == 0 && !rec->native)
+        sighand->pending = ckpt_requeue_signals(&sighand->queue, group,
+                                                rec->n_group_sigqueue);
+    unlock(&sighand->lock);
+    free(own);
+    free(group);
+
+    if (rec->group_timers) {
+        struct group_timers_ckpt d;
+        if ((err = rd(f, &d, sizeof(d))) < 0)
+            return err;
+        if (d.n_posix > TIMERS_MAX)
+            return _EINVAL;
+        struct posix_timer_ckpt *posix = calloc(d.n_posix != 0 ? d.n_posix : 1, sizeof(*posix));
+        if (posix == NULL)
+            return _ENOMEM;
+        if ((err = rd(f, posix, d.n_posix * sizeof(*posix))) < 0) {
+            free(posix);
+            return err;
+        }
+        if (st->timers_count == st->timers_cap) {
+            uint32_t cap = st->timers_cap ? st->timers_cap * 2 : 8;
+            void *n = realloc(st->timers, cap * sizeof(*st->timers));
+            if (n == NULL) {
+                free(posix);
+                return _ENOMEM;
+            }
+            st->timers = n;
+            st->timers_cap = cap;
+        }
+        st->timers[st->timers_count++] = (struct ckpt_group_timers) {
+            .group = current->group,
+            .pid = rec->pid,
+            .d = d,
+            .posix = posix,
+        };
+    }
+
+    // The deadline the call it was parked in had left, back on this run's
+    // host clock, and whether a handler cancels that call's restart.
+    if (rec->sleep_restart_valid) {
+        int64_t left = timer_ckpt_left(timer_ckpt_clock_for(rec->sleep_restart_clock, false),
+                                       rec->sleep_restart_value_ns);
+        current->sleep_restart_deadline = timespec_add(timespec_now(CLOCK_MONOTONIC),
+                (struct timespec) {.tv_sec = left > 0 ? (time_t) (left / 1000000000) : 0,
+                                   .tv_nsec = left > 0 ? (long) (left % 1000000000) : 0});
+        current->sleep_restart_clock = rec->sleep_restart_clock;
+        current->sleep_restart_valid = true;
+    }
+    if (rec->poll_restart_valid) {
+        int64_t left = timer_ckpt_left(TIMER_CKPT_MONOTONIC, rec->poll_restart_value_ns);
+        current->poll_restart_deadline = timespec_add(timespec_now(CLOCK_MONOTONIC),
+                (struct timespec) {.tv_sec = left > 0 ? (time_t) (left / 1000000000) : 0,
+                                   .tv_nsec = left > 0 ? (long) (left % 1000000000) : 0});
+        current->poll_restart_valid = true;
+    }
+    current->restart_nohand_pending = (rec->restart_pending & 1) != 0;
+    current->restart_sys_pending = (rec->restart_pending & 2) != 0;
+    if (rec->n_sigqueue != 0 || rec->n_group_sigqueue != 0 || rec->group_timers ||
+            rec->sleep_restart_valid || rec->poll_restart_valid)
+        CKPT_TRACE("  load pid %u: %u signals queued, %u for the process%s%s%s\n",
+                   rec->pid, rec->n_sigqueue, rec->n_group_sigqueue,
+                   rec->group_timers ? ", its process's timers" : "",
+                   rec->sleep_restart_valid ? ", a sleep's deadline" : "",
+                   rec->poll_restart_valid ? ", a poll's deadline" : "");
+    return 0;
+}
+
 static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
         const struct ckpt_task *rec, struct ckpt_restore_state *st) {
     int err;
@@ -4281,6 +4591,11 @@ fds_done:
     if (rec->native)
         goto identity;
 identity:
+    if ((err = ckpt_restore_signals_and_timers(f, rec, st)) < 0) {
+        ckpt_refuse("pid %u: its queued signals or timers could not be read back: %d",
+                    rec->pid, err);
+        return err;
+    }
     current->uid = rec->uid; current->gid = rec->gid;
     current->euid = rec->euid; current->egid = rec->egid;
     current->suid = rec->suid; current->sgid = rec->sgid;
@@ -4305,7 +4620,9 @@ identity:
     }
     memcpy(current->comm, rec->comm, sizeof(current->comm));
     current->blocked = rec->blocked;
-    current->pending = rec->pending;
+    // Everything else's was rebuilt from its queue, above.
+    if (rec->native)
+        current->pending = rec->pending;
     current->altstack = rec->altstack;
     current->altstack_size = rec->altstack_size;
     current->clear_tid = rec->clear_tid;
@@ -4667,9 +4984,20 @@ static void ckpt_restore_unwind(struct task **built, unsigned nbuilt,
             list_remove(&q->queue);
             free(q);
         }
+        // And the process's, which the image's init had queued too.
+        list_for_each_entry_safe(&first->sighand->queue, q, qtmp, queue) {
+            list_remove(&q->queue);
+            free(q);
+        }
+        first->sighand->pending = 0;
         first->pending = 0;
         first->blocked = 0;
         unlock(&first->sighand->lock);
+        // The call the image's init was parked in is not the one the boot runs.
+        first->sleep_restart_valid = false;
+        first->poll_restart_valid = false;
+        first->restart_nohand_pending = false;
+        first->restart_sys_pending = false;
         first->ckpt_restored = false;
         first->clear_tid = 0;
         first->robust_list = 0;
@@ -4971,6 +5299,22 @@ int checkpoint_restore(const char *host_path) {
             goto out;
         }
     }
+    // The timers, now that nothing can fail and every task they signal has
+    // its thread -- all but the first, which a signal before its start only
+    // queues (signal_wake_task). Before the thaw, so no guest code runs with a
+    // timer of its missing.
+    for (uint32_t i = 0; i < st.timers_count; i++) {
+        struct ckpt_group_timers *t = &st.timers[i];
+        unsigned failed = group_timers_ckpt_arm(t->group, &t->d, t->posix);
+        CKPT_TRACE("armed pid %u's timers: itimer %s, %u POSIX timers, %u failed\n",
+                   t->pid, t->d.real.armed ? "armed" : "not armed", t->d.n_posix, failed);
+        if (failed != 0) {
+            char why[96];
+            snprintf(why, sizeof(why), "%u of its timers could not be armed again", failed);
+            ckpt_note_restore(t->pid, 0, why);
+            printk("WARNING: checkpoint: pid %u: %s\n", t->pid, why);
+        }
+    }
     ckpt_thaw_all();
     atomic_fetch_sub_explicit(&ckpt_restoring, 1, memory_order_acq_rel);
 
@@ -5044,6 +5388,9 @@ out:
                 fd_close(st.sockpairs[i].end[e]);
     free(st.sockpairs);
     free(st.pending_ttys);
+    for (uint32_t i = 0; i < st.timers_count; i++)
+        free(st.timers[i].posix);
+    free(st.timers);
     if (err < 0 && (nbuilt > 0 || ckpt_restore_mounted_n > 0))
         ckpt_restore_unwind(built, nbuilt, current);
     else

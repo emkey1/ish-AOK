@@ -40,6 +40,7 @@ struct timer *timer_new(clockid_t clockid, timer_callback_t callback, void *data
     timer->clock_data = NULL;
     timer->active = false;
     timer->thread_running = false;
+    timer->firing = false;
     timer->generation = 0;
     lock_init(&timer->lock, "timer_new\0");
     timer->dead = false;
@@ -124,9 +125,11 @@ static void *timer_thread(void *param) {
         // (arm/cancel raced with us) is still discarded correctly.
         timer_callback_t callback = timer->callback;
         void *data = timer->data;
+        timer->firing = true;
         unlock(&timer->lock);
         callback(data);
         lock(&timer->lock, 0);
+        timer->firing = false;
         if (timer->generation != generation)
             continue;
         if (timer->active && timespec_positive(interval)) {
@@ -226,6 +229,23 @@ int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *ol
     }
     unlock(&timer->lock);
     return 0;
+}
+
+bool timer_read(struct timer *timer, struct timer_spec *spec) {
+    lock(&timer->lock, 0);
+    *spec = (struct timer_spec) {.interval = timer->interval};
+    // A one-shot is left `active` by the thread that fires it, which then
+    // exits: thread_running is what says an expiry is still to come. And one
+    // whose callback is running right now has delivered, whatever `end` says.
+    bool armed = timer->active && timer->thread_running &&
+        !(timer->firing && !timespec_positive(timer->interval));
+    if (armed) {
+        spec->value = timespec_subtract(timer->end, timer_now(timer));
+        if (!timespec_positive(spec->value))
+            spec->value = (struct timespec) {.tv_sec = 0, .tv_nsec = 1};
+    }
+    unlock(&timer->lock);
+    return armed;
 }
 
 // Virtual counter for the arm64 guest's MRS CNTVCT_EL0 (see

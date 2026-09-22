@@ -22,6 +22,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "fs/fd.h"
+#include "kernel/timer_ckpt.h"
 
 // ---- epoll ----------------------------------------------------------------
 //
@@ -49,19 +50,20 @@ struct fd *signalfd_ckpt_new(uint64_t mask);
 
 // ---- timerfd --------------------------------------------------------------
 //
-// The time left, not the deadline: the image is restored by a process whose
-// clocks started somewhere else.
+// Its timer's deadline on the clock that counts it, like every other timer in
+// the image (kernel/timer_ckpt.h). It was the time left, which kept a timer on
+// CLOCK_BOOTTIME -- or armed TFD_TIMER_ABSTIME on the wall clock -- from
+// counting the time the machine was stopped, as Linux's does.
 struct timerfd_ckpt {
     uint32_t real_clockid;
-    uint32_t armed;
-    int64_t value_sec, value_nsec;          // until the next expiry
-    int64_t interval_sec, interval_nsec;
-    uint64_t expirations;                   // counted but not yet read
     // The guest clockid. real_clockid cannot say it: on Darwin the guest's
     // MONOTONIC and BOOTTIME are both CLOCK_MONOTONIC, and a restored timer
     // armed with TFD_TIMER_ABSTIME has to rebase onto the right one.
     uint32_t clock;
+    uint64_t expirations;                   // counted but not yet read
+    uint32_t abstime;                       // armed TFD_TIMER_ABSTIME
     uint32_t reserved;
+    struct timer_ckpt t;
 };
 bool timerfd_fd_is(struct fd *fd);
 void timerfd_ckpt_describe(struct fd *fd, struct timerfd_ckpt *out);

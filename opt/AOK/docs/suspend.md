@@ -70,10 +70,18 @@ The clocks come back the way Linux's do after hibernation. `uptime` keeps
 counting, the time the session spent saved included, and the boot time stays
 what it was; `CLOCK_MONOTONIC` carries on from where it stopped. So a program
 asleep until a deadline -- Python's `time.sleep`, a timer, a condition
-variable -- wakes when it should, not "uptime at the save" late. Two limits:
-a timer set with `alarm()`, `setitimer` or `timer_create` does not come back
-yet (a timerfd does), and a relative sleep that the save interrupted starts
-over.
+variable -- wakes when it should, not "uptime at the save" late.
+
+Timers come back too: `alarm()`, `setitimer`, `timer_create` and timerfds,
+each with the deadline it had, on the clock Linux would count it on. One on
+`CLOCK_MONOTONIC` -- which is where a relative timer and `alarm()` live --
+does not count the time the session spent saved; one on `CLOCK_BOOTTIME`, or
+set for a wall-clock time, does, and comes due that much sooner. A `sleep 5`
+or a `select()` timeout the save interrupted sleeps what it had left, and a
+signal sent but not yet taken is still waiting, with everything it carried.
+Two limits: other timed waits -- a futex or `sigtimedwait` timeout, a
+socket's receive timeout -- start their timeout over, and the CPU-time clocks
+start again from zero (a CPU-time timer still keeps the CPU time it had left).
 
 ## What it will not save, and how it tells you
 
