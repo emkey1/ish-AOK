@@ -1551,6 +1551,19 @@ static void siginfo_to_amd64_user(struct amd64_siginfo_ *out, const struct sigin
                 out->timer.overrun = info->timer.overrun;
                 out->timer.value = info->timer.value;
                 out->timer._private = info->timer._private;
+            } else if (info->code >= CLD_EXITED_ && info->code <= CLD_CONTINUED_) {
+                // A CLD_* code under some other signal: a child announcing
+                // itself with the exit signal it was cloned with. Every sender
+                // of one fills the child arm, and a 64-bit Linux copies the
+                // whole siginfo out, so a SIGUSR1 handler reads si_status 9
+                // for a child that exited 9. This handed it si_pid and si_uid
+                // alone. (The i386 layout is left alone: Linux's -m32 view on
+                // x86_64 reads si_status 0 as well.)
+                out->child.pid = info->child.pid;
+                out->child.uid = info->child.uid;
+                out->child.status = info->child.status;
+                out->child.utime = info->child.utime;
+                out->child.stime = info->child.stime;
             } else {
                 if (info->code == SI_QUEUE_) {
                     out->rt.pid = info->rt.pid;

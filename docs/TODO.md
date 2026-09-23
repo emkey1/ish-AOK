@@ -784,20 +784,6 @@ parent.
 reparented child, after pids_lock like the reparent SIGCHLD; test both the
 thread-exit and the process-exit shape against camd.
 
-### wait sees clone children it should not, and refuses __WCLONE
-
-Measured 2026-09-23, camd against alpine-amd64-test. A child cloned with
-exit_signal SIGUSR1 is invisible to a plain `waitpid` on Linux (ECHILD);
-only `__WCLONE` or `__WALL` sees it, and `__WCLONE` hides forked children
-(`eligible_child`). AOK's plain `waitpid` reaps it, and `__WCLONE` is
-EINVAL: do_wait's option mask has no such flag. Smaller, same children: the
-siginfo of a non-SIGCHLD exit signal carries `si_status` on Linux x86_64 and
-0 here.
-
-**Next step:** a `__WCLONE_` (0x80000000) accepted by wait4 and waitid, and
-the eligibility test in do_wait's child loop and P_PID branch -- not for a
-tracee, which is waited for as if `__WALL` (the ptracees loop already is).
-
 ### PI futexes are ENOSYS
 
 Measured 2026-09-01 alongside the futex argument-validation work

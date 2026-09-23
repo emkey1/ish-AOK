@@ -1345,7 +1345,9 @@ dword_t sys_exit_group(dword_t status) {
 #define WEXITED_ (1 << 2)
 #define WCONTINUED_ (1 << 3)
 #define WNOWAIT_ (1 << 24)
+#define __WNOTHREAD_ (1 << 29)
 #define __WALL_ (1 << 30)
+#define __WCLONE_ 0x80000000
 
 #define P_ALL_ 0
 #define P_PID_ 1
@@ -1363,6 +1365,12 @@ dword_t sys_exit_group(dword_t status) {
 static bool waiter_is_tracer(const struct task *task) {
     const struct task *tracer = tracer_of(task);
     return tracer != NULL && tracer->group == current->group;
+}
+
+// The same, for one wait: with __WNOTHREAD only the waiting thread's own
+// tracees count, as Linux's ptrace pass walks only that thread's list.
+static bool wait_traces(const struct task *task, bool this_thread_only) {
+    return waiter_is_tracer(task) && (!this_thread_only || tracer_of(task) == current);
 }
 
 // A process cannot be reaped while any of its threads is still around: live
@@ -1569,11 +1577,35 @@ static bool wait_interrupted_by_signal(void) {
     return pending;
 }
 
+// Whether a wait is for this child at all, by how the child announces its exit
+// -- Linux's eligible_child. A child whose exit signal is anything but SIGCHLD,
+// 0 included, is a "clone child": only __WCLONE waits for those, __WCLONE waits
+// for nothing else, and __WALL waits for both. A wait that finds only children
+// it is not for fails with ECHILD, WNOHANG or not, since they are not counted.
+//
+// AOK asked nobody's exit signal, so a plain waitpid reaped a child cloned with
+// SIGUSR1 -- on Linux, ECHILD -- and __WCLONE was EINVAL.
+//
+// `leader` is a process leader: its exit signal is the process's. Not asked for
+// a child the waiter traces, which is waited for as if with __WALL -- Linux has
+// assumed that since 4.7, and does not ask in its ptrace pass (wait_traces).
+static bool wait_eligible(const struct task *leader, int options) {
+    if (options & __WALL_)
+        return true;
+    bool clone_child = leader->exit_signal != SIGCHLD_;
+    return clone_child == ((options & __WCLONE_) != 0);
+}
+
 int do_wait(int idtype, pid_t_ id, struct siginfo_ *info, struct rusage_ *rusage, int options) {
     if (idtype != P_ALL_ && idtype != P_PID_ && idtype != P_PGID_)
         return _EINVAL;
-    if (options & ~(WNOHANG_|WUNTRACED_|WEXITED_|WCONTINUED_|WNOWAIT_|__WALL_))
+    // Linux's wait4 and waitid both take __WNOTHREAD, __WCLONE and __WALL;
+    // wait4 refuses waitid's WEXITED and WNOWAIT itself.
+    if (options & ~(WNOHANG_|WUNTRACED_|WEXITED_|WCONTINUED_|WNOWAIT_|
+            __WNOTHREAD_|__WALL_|__WCLONE_))
         return _EINVAL;
+    // __WNOTHREAD: this thread's own children and tracees, not every thread's.
+    bool this_thread_only = (options & __WNOTHREAD_) != 0;
 
     struct exit_notes notes;
     exit_notes_init(&notes);
@@ -1587,6 +1619,8 @@ retry:
             bool no_children = true;
             struct task *parent;
             list_for_each_entry(&current->group->threads, parent, group_links) {
+                if (this_thread_only && parent != current)
+                    continue;
                 struct task *task;
                 list_for_each_entry(&parent->children, task, siblings) {
                     if (!task_is_leader(task))
@@ -1598,6 +1632,13 @@ retry:
                         if (!pgid_match)
                             continue;
                     }
+                    // Before it counts as a child: one this wait is not for
+                    // leaves the answer ECHILD, not "nothing yet". Unless we
+                    // trace it: a tracee is waited for as if with __WALL, and
+                    // one that is also our child is on no ptracees list
+                    // (ptrace.c), so this is the only place it is found.
+                    if (!wait_traces(task, this_thread_only) && !wait_eligible(task, options))
+                        continue;
                     no_children = false;
                     info->child.pid = task->pid;
                     if (reap_if_needed(task, info, rusage, options, &notes))
@@ -1657,11 +1698,14 @@ retry:
         // but had not forked destroy it, so its real parent's waitpid failed.
         //
         // Linux's do_wait_pid asks the same two questions, as the parent and
-        // as the tracer.
+        // as the tracer. Only the parent is asked whether the wait is for a
+        // child of this kind: the tracer's is always.
         info->child.pid = id;
         bool as_parent = task_is_leader(task) && task->parent != NULL &&
-            task->parent->group == current->group;
-        bool as_tracer = waiter_is_tracer(task);
+            (this_thread_only ? task->parent == current
+                              : task->parent->group == current->group) &&
+            wait_eligible(task, options);
+        bool as_tracer = wait_traces(task, this_thread_only);
         if (!as_parent && !as_tracer)
             goto error;
         if (as_tracer && report_tracee(task, info, rusage, options, &notes))

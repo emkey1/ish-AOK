@@ -1102,7 +1102,15 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
     task->exit_finished = false;
     task->io_block = false;
     task->vfork = NULL;
-    task->exit_signal = 0;
+    // SIGCHLD until told otherwise. clone sets its own (copy_task) and a
+    // restore puts back the saved one; what keeps this default is a process
+    // construct_task makes for init -- every terminal session, the app's
+    // one-shot commands, the fallback console shell. Each stands for a child
+    // init forked, and was 0 here: a "clone child", which init's plain wait
+    // skips now that wait asks (wait_eligible), and whose exit a SysV init,
+    // reaping only on SIGCHLD, was never sent a signal for. Set before the
+    // task is linked to its parent below, so that no wait sees it without one.
+    task->exit_signal = SIGCHLD_;
     // A peak is the CHILD's own, not something it starts life owing to its
     // parent. Linux gives a new process a fresh ru_maxrss -- its high-water
     // mark tracks its own mm from now on -- and `*task = *parent` above had

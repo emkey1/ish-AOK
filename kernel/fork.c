@@ -211,6 +211,22 @@ static int copy_task(struct task *task, dword_t flags, guest_addr_t stack, guest
 
     complex_lockt(&pids_lock, 0);
     lock(&old_group->lock, 0);
+    // The exit signal is set before the new process becomes a leader anyone's
+    // wait can see, as Linux's copy_process sets it before the child joins the
+    // task list: wait asks it which waits the child is for (wait_eligible), and
+    // a leader still carrying task_create_'s 0 is a clone child -- a sibling
+    // thread's waitpid(-1) caught in that window got ECHILD for a fork in
+    // flight.
+    //
+    // A CLONE_PARENT child is its creator's sibling, and announces itself to
+    // the parent they share the way its creator's process does: Linux takes
+    // current->group_leader's exit signal and ignores the one in the flags.
+    // A process cloned with SIGUSR1 that made a sibling asking for SIGCHLD
+    // made a clone child all the same, and the reverse a SIGCHLD child.
+    if (new_group != NULL && (flags & CLONE_PARENT_))
+        task->exit_signal = current->group->leader->exit_signal;
+    else
+        task->exit_signal = flags & CSIGNAL_;
     if (new_group != NULL) {
         list_add(&old_group->pgroup, &new_group->pgroup);
         list_add(&old_group->session, &new_group->session);
@@ -277,7 +293,6 @@ static int copy_task(struct task *task, dword_t flags, guest_addr_t stack, guest
     }
     if (flags & CLONE_CHILD_CLEARTID_)
         task->clear_tid = ctid_addr;
-    task->exit_signal = flags & CSIGNAL_;
 
     // remember to do CLONE_SYSVSEM
     return 0;

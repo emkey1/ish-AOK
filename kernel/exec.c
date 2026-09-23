@@ -553,15 +553,22 @@ static void exec_de_thread(void) {
     struct task *leader = group->leader;
     bool taking_over = leader != NULL && leader != current;
     struct task *inherit_parent = NULL;
-    int inherit_exit_signal = 0;
+    complex_lockt(&pids_lock, 0);
+    // Every exec, threaded or not, leaves the process a child that announces
+    // its exit with SIGCHLD: Linux's de_thread ends at no_thread_group with
+    // "we have changed execution domain" and exit_signal = SIGCHLD. A child
+    // cloned with SIGUSR1, or with no exit signal, that then runs a program is
+    // an ordinary child to its parent's plain wait. AOK kept the clone's, and
+    // for a thread's exec copied the old leader's. Set here, before the leader
+    // swap below makes this thread the process, so no wait sees the swap with
+    // a thread's exit signal.
+    current->exit_signal = SIGCHLD_;
     if (taking_over) {
-        complex_lockt(&pids_lock, 0);
         inherit_parent = leader->parent;
-        inherit_exit_signal = leader->exit_signal;
         if (inherit_parent != NULL)
             task_ref_cnt_mod(inherit_parent, 1);
-        unlock(&pids_lock);
     }
+    unlock(&pids_lock);
 
     struct zap_target {
         struct task *task;
@@ -699,8 +706,6 @@ static void exec_de_thread(void) {
     if (lead_pid != NULL)
         lead_pid->task = current;
     current->pid = leader->pid;
-    // A thread has no exit signal; the process it now is does.
-    current->exit_signal = inherit_exit_signal;
     // Before the release below, so task_free_final does not mistake the old
     // leader for the current one and free the tgroup out from under us.
     group->leader = current;
