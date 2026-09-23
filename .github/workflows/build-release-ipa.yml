@@ -107,6 +107,13 @@ jobs:
           fi
 
       - name: Build unsigned .app
+        # tools/build-rust-native.sh sets this itself, so helix-term's build.rs
+        # does not clone 301 grammars AOK never uses. Set here as well for a
+        # re-spin: tags 550-555 build helix with the script from before that
+        # export, and without this they need github, gitlab, codeberg and sr.ht
+        # all up to build at all (codeberg's outage failed CI on 2026-09-23).
+        env:
+          HELIX_DISABLE_AUTO_GRAMMAR_BUILD: 1
         run: |
           xcodebuild build \
             -project iSH-AOK.xcodeproj \
