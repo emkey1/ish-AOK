@@ -1226,7 +1226,10 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
     task->wait_interrupted = false;
     task->restart_interrupted_syscall = false;
     task->restart_interrupted_syscall_nohand = false;
-    task->restart_ignored_wake = false;
+    // Nothing queued for the process has been handed to a thread that did not
+    // exist, as Linux's copy_process clears TIF_SIGPENDING.
+    task->group_sigpending = false;
+    task->group_handoff = 0;
     task->poll_restart_valid = false;
     task->sleep_restart_valid = false;
     task->restart_nohand_pending = false;
@@ -1819,7 +1822,7 @@ static void *task_thread(void *task) {
     if (current->ptrace.traced) {
         ptrace_trap_stop_if_pending();
         lock(&current->sighand->lock, 0);
-        bool pending = ((current->pending | current->sighand->pending) &
+        bool pending = ((current->pending | task_group_pending(current)) &
                 ~current->blocked) != 0;
         unlock(&current->sighand->lock);
         if (pending) {

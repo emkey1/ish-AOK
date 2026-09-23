@@ -860,7 +860,9 @@ void native_checkpoint(void) {
     // something is actually deliverable. This runs on every read and write a
     // native program makes, so the common case has to cost almost nothing.
     sigset_t_ pending = __atomic_load_n(&current->pending, __ATOMIC_ACQUIRE);
-    sigset_t_ group_pending = __atomic_load_n(&current->sighand->pending, __ATOMIC_ACQUIRE);
+    // The process's shared queue only once this task is told to take it; a
+    // told task always goes through receive_signals (see handle_interrupt).
+    bool group_told = __atomic_load_n(&current->group_sigpending, __ATOMIC_ACQUIRE);
     sigset_t_ blocked = __atomic_load_n(&current->blocked, __ATOMIC_ACQUIRE);
     bool has_saved_mask = __atomic_load_n(&current->has_saved_mask, __ATOMIC_ACQUIRE);
 
@@ -880,7 +882,8 @@ void native_checkpoint(void) {
     // as for group_stop_wait below.
     ptrace_trap_stop_if_pending();
 
-    if (has_saved_mask || ((pending | group_pending) & ~blocked) != 0) {
+    if (has_saved_mask || group_told || current->group_handoff != 0 ||
+            (pending & ~blocked) != 0) {
         // receive_signals runs the default action, which for SIGINT means
         // do_exit_group -- so this call may not return, and that is the point:
         // ^C on a native program has to end it the way it ends any other.

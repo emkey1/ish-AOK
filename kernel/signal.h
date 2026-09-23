@@ -297,6 +297,25 @@ void group_stop_wait(void);
 // syscall checkpoint. Delivery decisions keep using ->blocked directly.
 #define task_wake_blocked(task) ((task)->blocked & ~(task)->native_held)
 
+// What of the process's shared queue (sighand->pending) is `task`'s to act on:
+// all of it once the task has been told to take a signal there
+// (group_sigpending in kernel/task.h, Linux's TIF_SIGPENDING), and nothing
+// before. ORed with ->pending, it is the set a wait ends for and a syscall's
+// way out looks at. Counting the whole shared queue for every thread made a
+// signal sent to the process end every thread's wait: a SIGCHLD handler ran in
+// whichever sibling got there first, and the rest failed with EINTR, where
+// Linux interrupts only the thread it picked. Readable without sighand->lock,
+// as the fast paths that use it read ->pending.
+#define task_group_pending(task) \
+    (__atomic_load_n(&(task)->group_sigpending, __ATOMIC_ACQUIRE) ? \
+        __atomic_load_n(&(task)->sighand->pending, __ATOMIC_ACQUIRE) : (sigset_t_) 0)
+// Hand a sibling whatever current was told to take off the shared queue and
+// has since blocked (group_handoff in kernel/task.h). Call with no lock held.
+void signal_group_handoff(void);
+// The same for everything `task` was told to take, as it starts to exit; after
+// task->exiting is set, so that nothing hands it another. For do_exit.
+void signal_exit_handoff(struct task *task);
+
 // Whether `task` owes its tracer a PTRACE_EVENT_STOP (ptrace.trap_stop in
 // kernel/task.h). It is not a signal and nothing blocks it, so every wait that
 // ends for a deliverable signal has to end for it as well, and a syscall it cut
@@ -318,11 +337,14 @@ struct sighand {
     lock_t lock;
     // Process-directed signal queue, shared by every thread in the CLONE_SIGHAND
     // group (Linux's signal_struct->shared_pending). A signal landing here (as
-    // opposed to one specific task's own `pending`/`queue`) can be observed and
-    // dequeued by ANY sibling thread with it unblocked -- not just whichever
-    // task object the sender happened to address. Locked by `lock`, same as
-    // every task's own `pending`/`queue` (sighand is already shared across the
-    // group, so this is the same lock instance for every sibling).
+    // opposed to one specific task's own `pending`/`queue`) can be dequeued by
+    // ANY sibling thread with it unblocked -- not just whichever task object
+    // the sender happened to address -- and signalfd, sigwaitinfo and
+    // sigpending see it from every thread. But only a thread TOLD to take it
+    // (task->group_sigpending) is woken for it or has a wait ended by it, as
+    // on Linux. Locked by `lock`, same as every task's own `pending`/`queue`
+    // (sighand is already shared across the group, so this is the same lock
+    // instance for every sibling).
     struct list queue;
     sigset_t_ pending;
     // Serializes signal_wake_task's temporary release of `lock` (kernel/signal.c):
@@ -367,11 +389,12 @@ void deliver_signal_with_sighand(struct task *task, struct sighand *sighand, int
 struct tgroup;
 // Deliver a process-directed signal to `task`'s thread group: enqueues into
 // the shared sighand->queue (visible to any sibling thread's signalfd/
-// sigwaitinfo/receive_signals, matching Linux's shared_pending) and wakes
-// every live thread in the group so whichever one can currently accept it
-// re-checks. Use for signals conceptually addressed to "the process" (e.g.
-// SIGCHLD to a possibly-multithreaded parent) rather than to one specific
-// thread (tkill/tgkill/synchronous traps stay on send_signal/deliver_signal).
+// sigwaitinfo/receive_signals, matching Linux's shared_pending) and tells ONE
+// thread that can take it -- `task` itself when it can -- to do so, as Linux's
+// complete_signal does. Use for signals conceptually addressed to "the
+// process" (e.g. SIGCHLD to a possibly-multithreaded parent) rather than to
+// one specific thread (tkill/tgkill/synchronous traps stay on
+// send_signal/deliver_signal).
 //
 // `task` is the thread it is sent to, and only its mask decides whether a
 // signal the process ignores is queued at all, as on Linux: for a child's exit

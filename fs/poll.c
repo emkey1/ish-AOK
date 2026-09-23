@@ -774,7 +774,7 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
         // thing, and it restarts the call the same way.
         bool signal_pending = checkpoint_freeze_pending() ||
             task_trap_stop_pending(current) ||
-            !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
+            !!((current->pending | task_group_pending(current)) & ~task_wake_blocked(current));
         unlock(&current->sighand->lock);
         if (signal_pending) {
             // ERESTARTNOHAND: a running handler still gives the guest its
@@ -818,7 +818,7 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
         // thing, and it restarts the call the same way.
         bool signal_pending = checkpoint_freeze_pending() ||
             task_trap_stop_pending(current) ||
-            !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
+            !!((current->pending | task_group_pending(current)) & ~task_wake_blocked(current));
                 unlock(&current->sighand->lock);
                 if (signal_pending) {
                     sigunwind_end();
@@ -968,7 +968,7 @@ poll_wait_done:
         // thing, and it restarts the call the same way.
         bool signal_pending = checkpoint_freeze_pending() ||
             task_trap_stop_pending(current) ||
-            !!((current->pending | current->sighand->pending) & ~task_wake_blocked(current));
+            !!((current->pending | task_group_pending(current)) & ~task_wake_blocked(current));
             unlock(&current->sighand->lock);
             if (!signal_pending)
                 continue;
@@ -991,10 +991,14 @@ poll_wait_done:
             // over a timeout, matching Linux poll()/select() semantics.
             if (res == 0) {
                 lock(&current->sighand->lock, 0);
-                sigset_t_ raised = current->pending | current->sighand->pending;
+                sigset_t_ raised = current->pending | task_group_pending(current);
                 sigset_t_ masked = task_wake_blocked(current);
                 bool signal_pending = !!(raised & ~masked) ||
                     task_trap_stop_pending(current);
+                // The whole of the process's queue, told or not: a signal
+                // queued there that this thread blocks is exactly what the
+                // warning below is for.
+                raised = current->pending | current->sighand->pending;
                 sigset_t_ stuck = raised & masked;
                 unlock(&current->sighand->lock);
                 if (signal_pending)

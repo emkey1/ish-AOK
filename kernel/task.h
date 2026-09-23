@@ -616,17 +616,6 @@ struct task {
     // native_standin_child.
     uint_t sleep_restart_clock;
 
-    // A signal the process ignores, queued for the whole process, woke this
-    // task during this syscall (deliver_signal_to_group_locked). Every thread
-    // that can take it is woken and one takes it, while a wait parked in the
-    // host rather than on a cond_t records nothing -- so another's restart
-    // decision can find nothing pending and nothing recorded. This answers
-    // for it: the signal ran no handler, so the call restarts. It belongs to
-    // one syscall, like restart_interrupted_syscall
-    // (signal_restart_state_clear). At the end for the reason given above
-    // native_standin_child.
-    bool restart_ignored_wake;
-
     // Linux's restart_block for a timed FUTEX_WAIT: the deadline the parked
     // wait had (futex_restart_futex), and the relative timeout it was given,
     // so that the restarted call -- the same futex, the same timeout --
@@ -637,6 +626,25 @@ struct task {
     struct timespec futex_restart_deadline;
     struct timespec futex_restart_timeout;
     bool futex_restart_timed;
+
+    // Linux's TIF_SIGPENDING, for the process's shared queue (sighand->queue)
+    // alone: this thread has been told to take what is queued there. A signal
+    // sent to the process tells ONE thread, as Linux's complete_signal does
+    // (deliver_signal_to_group_locked), and every other thread leaves the
+    // queue alone -- it ends none of their waits and they do not go looking
+    // in it (task_group_pending in kernel/signal.h) -- so the signal
+    // interrupts the thread that takes it and nobody else. Also set when a
+    // sibling hands a signal on (group_signal_retarget) and when this thread's
+    // own mask lets a queued one through (group_pending_mask_changed_locked);
+    // cleared by the thread itself once nothing there is left for it. Set
+    // and cleared under sighand->lock, read without it too. At the end for the
+    // reason given above native_standin_child.
+    bool group_sigpending;
+    // Shared-queue signals this thread was told to take and has since
+    // blocked, which it hands on to a sibling once it holds no lock
+    // (signal_group_handoff). The thread's own. At the end for the reason
+    // given above native_standin_child.
+    sigset_t_ group_handoff;
 };
 
 // current will always give the process that is currently executing

@@ -600,6 +600,10 @@ noreturn void do_exit(struct task *task, int status) {
     task->exiting = true;
     if (!was_already_exiting)
         checkpoint_trace_exit(task->pid, task->comm, status);
+    // A signal queued for the whole process that this thread was told to take
+    // goes to a thread that is staying, or it would wait there unseen: no
+    // other thread looks at the process's queue until it is told to.
+    signal_exit_handoff(task);
 
     // Charge this task's final thread CPU time to its per-virtual-CPU
     // accounting slot (/proc/stat cpuN) while the host thread still exists
@@ -1436,7 +1440,7 @@ static bool wait_interrupted_by_signal(void) {
         return true;
     lock(&current->sighand->lock, 0);
     // See kernel/signal.h: a shim-held signal must end this wait too.
-    bool pending = !!((current->pending | current->sighand->pending) &
+    bool pending = !!((current->pending | task_group_pending(current)) &
             ~task_wake_blocked(current));
     unlock(&current->sighand->lock);
     return pending;

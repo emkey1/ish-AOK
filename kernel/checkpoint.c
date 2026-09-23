@@ -4634,6 +4634,10 @@ identity:
     }
     memcpy(current->comm, rec->comm, sizeof(current->comm));
     current->blocked = rec->blocked;
+    // Which thread was told to take what the process has queued is not in the
+    // image. Every thread looks once, at its first signal check, and stops
+    // looking if nothing there is its to take (receive_signals).
+    current->group_sigpending = true;
     // Everything else's was rebuilt from its queue, above.
     if (rec->native)
         current->pending = rec->pending;
@@ -5006,6 +5010,8 @@ static void ckpt_restore_unwind(struct task **built, unsigned nbuilt,
         first->sighand->pending = 0;
         first->pending = 0;
         first->blocked = 0;
+        first->group_sigpending = false;
+        first->group_handoff = 0;
         unlock(&first->sighand->lock);
         // The call the image's init was parked in is not the one the boot runs.
         first->sleep_restart_valid = false;

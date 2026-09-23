@@ -44,9 +44,12 @@ Per `struct sighand`, shared across the group: the `action` table — 64
 
 > Process-directed signal queue, shared by every thread in the `CLONE_SIGHAND`
 > group (Linux's `signal_struct->shared_pending`). A signal landing here (as
-> opposed to one specific task's own `pending`/`queue`) can be observed and
-> dequeued by ANY sibling thread with it unblocked — not just whichever task
-> object the sender happened to address.
+> opposed to one specific task's own `pending`/`queue`) can be dequeued by
+> ANY sibling thread with it unblocked — not just whichever task object the
+> sender happened to address — and signalfd, sigwaitinfo and sigpending see
+> it from every thread. But only a thread TOLD to take it
+> (`task->group_sigpending`) is woken for it or has a wait ended by it, as on
+> Linux.
 
 That distinction is the whole of "a signal sent to a process is delivered to
 some thread of that process", and getting it wrong is not academic: `sigqueue`
@@ -59,6 +62,24 @@ targets the group, and whichever thread has `SIGTERM` unblocked and gets there
 first handles it. Modelling that as "deliver to the leader" works until the
 leader has the signal blocked, at which point a program that carefully dedicates
 one thread to signal handling stops receiving signals.
+
+"Some thread" means exactly one. Linux's `complete_signal` tells the thread
+the signal was sent to (for a child's `SIGCHLD`, the thread that forked it) if
+that thread can take it, otherwise one other thread that can. Every other
+thread carries on as if nothing had happened. AOK used to wake every thread
+that did not block the signal, and each of them counted the shared queue as
+its own. So they raced: a `SIGCHLD` handler ran in whichever sibling got there
+first, and the losers' sleeps, polls and reads failed with `EINTR` for a
+signal they never handled. Now each thread carries Linux's `TIF_SIGPENDING`
+for the shared queue, `group_sigpending`, and until it is set that thread's
+waits and syscall exits do not look at the queue at all.
+
+That creates a duty Linux also has: nothing may be left on the queue unseen.
+A thread told to take a signal that then blocks it, or exits, hands it to one
+that can (`group_signal_retarget`, Linux's `retarget_shared_pending`). A
+thread whose mask lets a queued signal through tells itself. And a told thread
+that finds its signal already taken by a sibling restarts its syscall, as
+Linux's `get_signal` does when it finds nothing to deliver.
 
 ## 12.3 Sending, and a lock that had to be invented
 

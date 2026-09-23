@@ -107,8 +107,12 @@ static bool is_signal_pending(lock_t *lock) {
     // even though a zombie was sitting there the whole time. Matches
     // kernel/exit.c's wait_interrupted_by_signal(), which already ORs in
     // sighand->pending for the same reason on the do_wait() path.
+    //
+    // But only once this thread has been told to take it (task_group_pending):
+    // a signal sent to the process ends the wait of the one thread told, not
+    // every thread's.
     sigset_t_ pending = __atomic_load_n(&current->pending, __ATOMIC_ACQUIRE);
-    sigset_t_ shand_pending = __atomic_load_n(&current->sighand->pending, __ATOMIC_ACQUIRE);
+    sigset_t_ shand_pending = task_group_pending(current);
     // task_wake_blocked, not ->blocked: a native program's handlers are held
     // by the shim with the signal blocked, and such a wait must still end so
     // the handler can run at the next syscall checkpoint (kernel/signal.h).
@@ -118,7 +122,7 @@ static bool is_signal_pending(lock_t *lock) {
         return false;
     if (lock != &current->sighand->lock)
         lock(&current->sighand->lock, 0);
-    bool has_pending = !!((current->pending | current->sighand->pending) &
+    bool has_pending = !!((current->pending | task_group_pending(current)) &
             ~task_wake_blocked(current));
     if (lock != &current->sighand->lock)
         unlock(&current->sighand->lock);

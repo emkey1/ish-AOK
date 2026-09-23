@@ -1237,7 +1237,11 @@ now also fails a sleep or poll-family case that returns late.
   block every signal, so a child dying while a sibling thread exited EINTR'd
   the other threads' sleeps. Now only the target's mask decides, and an ignored
   signal restarts what it interrupts, even when a sibling took it first
-  (kernel/signal.c; `tests/manual/signal_ignored_restart.c`).
+  (kernel/signal.c; `tests/manual/signal_ignored_restart.c`). A HANDLED
+  process signal woke every thread too, so its handler ran in a sibling and
+  other siblings' calls failed with EINTR; since the same day ONE thread is
+  told, as Linux's complete_signal does
+  (`tests/manual/signal_process_wake_one.c`).
   `checkpoint_timers.c` still parks its threads and its asker, so it depends
   on neither.
 

@@ -730,7 +730,7 @@ static dword_t sys_clone_common_(dword_t flags, guest_addr_t stack, guest_addr_t
         lock(&vfork->lock, 0);
         while (!vfork->done) {
             lock(&current->sighand->lock, 0);
-            sigset_t_ pending = current->pending | current->sighand->pending;
+            sigset_t_ pending = current->pending | task_group_pending(current);
             pending &= ~current->blocked;
             // sigset_has() asserts 1 <= sig < NUM_SIGS (64), so this covers
             // every signal that can be represented in the mask.

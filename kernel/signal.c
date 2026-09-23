@@ -656,9 +656,10 @@ static bool signal_restart_decided_at_delivery(struct task *task, int sig);
 // An ignored signal used to count as an interruption, and it is not rare: a
 // child's SIGCHLD is queued whenever the thread that forked it blocks it, as
 // musl's fork() and pthread_exit() block every signal while they run, and the
-// queued signal wakes every other thread of the process. Each failed its wait
-// with EINTR where Linux carries on -- a nanosleep, a poll, a futex, a wait4,
-// sigsuspend.
+// queued signal wakes another thread of the process to discard it (every
+// other thread, until deliver_signal_to_group_locked told just one). Each
+// failed its wait with EINTR where Linux carries on -- a nanosleep, a poll, a
+// futex, a wait4, sigsuspend.
 //
 // Callers keep out a signal the native shim holds a handler for: its
 // disposition here is only a placeholder. Call with sighand->lock held.
@@ -950,14 +951,138 @@ static void deliver_signal_unlocked_locked(struct task *task, struct sighand *si
     signal_wake_task(task, sighand, sig);
 }
 
+// ---- which thread takes a signal sent to the whole process ------------------
+//
+// Linux queues such a signal once, for the process (shared_pending), and tells
+// ONE thread about it: complete_signal picks the thread it was sent to if that
+// one can take it and otherwise another that can, and wakes that thread alone.
+// Every other thread carries on, its syscalls uninterrupted.
+//
+// AOK woke every thread that did not block the signal, and every one of them
+// counted it as its own. They raced for it: a SIGCHLD handler ran in whichever
+// sibling got there first rather than in the thread the child's exit was sent
+// to, and the losers' waits had ended anyway and failed with EINTR. Measured
+// with a SIGCHLD handler without SA_RESTART, the forking thread in waitpid and
+// twelve siblings parked in clock_nanosleep, nanosleep, ppoll, pselect6 and
+// pipe reads: on alpine-amd64-test the handler ran in a sibling and siblings'
+// calls failed with EINTR in 20 rounds of 20. Linux 6.12 ran it in the forking
+// thread and touched no sibling, 40 rounds of 40.
+//
+// Waking one thread was not enough by itself, because the others noticed the
+// signal on their own: every wait, and every syscall's way out, asked whether
+// the shared queue held anything unblocked, and a host sleep asks that every
+// 50ms. So a thread now looks at the shared queue only once it has been told to
+// (group_sigpending, Linux's TIF_SIGPENDING; task_group_pending in
+// kernel/signal.h). And nothing can be left there unseen: a thread told to take
+// a signal that then blocks it or exits hands it to one that can
+// (group_signal_retarget), and a thread whose mask lets a queued one through
+// tells itself (group_pending_mask_changed_locked).
+
+// Whether `task` can take `sig` off the shared queue now: it does not block it,
+// or waits for it in sigtimedwait, and it is not on its way out. Linux's
+// wants_signal, less its preference for a thread with nothing else pending,
+// which only spreads the work around. Call with sighand->lock held.
+//
+// A thread that cannot take it must never be told. Telling wakes it, and the
+// wake marks its wait interrupted -- wake_waiting_task stores through
+// waiting_interrupt_flag and sets wait_interrupted -- which futex(FUTEX_WAIT*)
+// and rt_sigtimedwait turn straight into a guest-visible EINTR without asking
+// whether anything is deliverable to that thread. foot's render workers block
+// every signal and park in an unchecked sem_wait(), and one child's SIGCHLD
+// EINTR'd all of them into popping an empty work queue (SIGSEGV at 0x8). Same
+// test as deliver_signal_unlocked_locked's.
+static bool group_signal_takes_locked(struct task *task, int sig) {
+    if (task->exiting || task->zombie || task->sighand == NULL)
+        return false;
+    return !(sigset_has(task_wake_blocked(task) & ~task->waiting, sig) &&
+            signal_is_blockable(sig) && !signal_is_synchronous_trap(sig));
+}
+
+// The thread to tell about `sig`, just queued for the process: Linux's
+// complete_signal. The one it was sent to if that one can take it -- for a
+// child's exit the thread that forked it, for an interval timer the leader --
+// and otherwise the first that can. A thread held in a ptrace stop comes last,
+// as Linux passes it over: only its tracer can let it go. NULL when no thread
+// can take it now. It stays queued, and whichever thread unblocks it first
+// tells itself.
+static struct task *group_signal_pick_locked(struct task *target, int sig,
+        struct task **members, size_t count) {
+    for (int pass = 0; pass < 2; pass++) {
+        bool stopped_too = pass == 1;
+        if (group_signal_takes_locked(target, sig) &&
+                (stopped_too || !target->ptrace.stopped))
+            return target;
+        for (size_t i = 0; i < count; i++) {
+            struct task *task = members[i];
+            if (task != target && group_signal_takes_locked(task, sig) &&
+                    (stopped_too || !task->ptrace.stopped))
+                return task;
+        }
+    }
+    return NULL;
+}
+
+// A thread already told to take the shared queue that can take `sig`. A second
+// instance of a standard signal is not queued, and Linux wakes nobody for it;
+// here the thread told about the first is poked again (see already_pending
+// below), rather than a second thread being told about the same signal.
+static struct task *group_signal_told_locked(int sig, struct task **members, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        struct task *task = members[i];
+        if (__atomic_load_n(&task->group_sigpending, __ATOMIC_ACQUIRE) &&
+                group_signal_takes_locked(task, sig))
+            return task;
+    }
+    return NULL;
+}
+
+// Whether `task` taking `sig` ends the process. Linux's complete_signal then
+// starts the group exit at once and wakes every thread, so that none runs on
+// while the one it picked gets there; here every thread that can take it is
+// told, and the first to do so takes the group down (do_exit_group). Not a
+// thread that blocks it -- a sigtimedwait waiter, asking for it by name -- nor
+// a traced one, whose tracer decides.
+static bool group_signal_fatal_locked(struct sighand *sighand, struct task *task, int sig) {
+    return signal_action(sighand, sig) == SIGNAL_KILL &&
+        !sigset_has(task->blocked, sig) && !task->ptrace.traced;
+}
+
+// Tell `task` to take what is on the shared queue, and wake it for `sig`.
+// Drops and retakes sighand->lock (signal_wake_task).
+static void group_signal_tell_locked(struct task *task, struct sighand *sighand, int sig) {
+    // Before the wake, which the task answers by looking.
+    __atomic_store_n(&task->group_sigpending, true, __ATOMIC_RELEASE);
+    signal_wake_task(task, sighand, sig);
+}
+
+// current's recalc_sigpending, for the shared queue: told to take it exactly
+// when something queued there is something it can take. For a thread that has
+// just dequeued, or changed its mask. Call with sighand->lock held.
+static void group_pending_recalc_locked(void) {
+    bool takes = (current->sighand->pending & ~task_wake_blocked(current)) != 0;
+    __atomic_store_n(&current->group_sigpending, takes, __ATOMIC_RELEASE);
+}
+
+// current's mask just changed; `old` is what task_wake_blocked said before.
+// Linux's __set_task_blocked. A thread whose mask now lets a queued process
+// signal through is told to take it, which is how a thread that UNBLOCKS such a
+// signal finds it when nobody could take it as it was sent. And what the thread
+// was told to take and now blocks is set aside for signal_group_handoff to give
+// to a sibling, which a caller does once it holds no lock -- that needs
+// pids_lock. Call with sighand->lock held.
+static void group_pending_mask_changed_locked(sigset_t_ old) {
+    sigset_t_ queued = current->sighand->pending;
+    if (__atomic_load_n(&current->group_sigpending, __ATOMIC_ACQUIRE))
+        current->group_handoff |= queued & task_wake_blocked(current) & ~old;
+    group_pending_recalc_locked();
+}
+
 // Deliver a process-directed signal into the thread group's shared queue
-// (Linux's shared_pending): any sibling thread with `sig` unblocked -- not
-// just whichever task object the sender happened to address -- can observe
-// and dequeue it via receive_signals/signalfd/sigwaitinfo. Contrast
-// deliver_signal_unlocked_locked, which targets one specific task's own
-// per-thread queue. `target` is the thread the signal was sent to (Linux's
+// (Linux's shared_pending), and tell one thread that can take it to do so.
+// Contrast deliver_signal_unlocked_locked, which targets one specific task's
+// own per-thread queue. `target` is the thread the signal was sent to (Linux's
 // `p` in __send_signal_locked), and `members`/`count` is a pre-collected,
-// ref-counted snapshot of the group's live threads (see send_process_signal):
+// ref-counted snapshot of the group's live threads (group_snapshot_take):
 // walking tgroup->threads needs pids_lock, and this runs under sighand->lock,
 // so the snapshot has to happen first (pids_lock -> sighand->lock, never the
 // reverse). Caller holds `sighand->lock`.
@@ -967,7 +1092,8 @@ static void deliver_signal_to_group_locked(struct sighand *sighand, struct task 
     // sig_ignored() drops it, unless the thread it was SENT TO blocks it or
     // waits for it in sigtimedwait: a handler may be installed by the time it
     // is unblocked. SIGCHLD at SIG_DFL, sent by every child exit, is the
-    // common case, and a queued one wakes every thread that can take it.
+    // common case, and a queued one is taken, and discarded, by a thread told
+    // to take it.
     //
     // Only the target's mask counts, never the rest of the group's. For a
     // child's exit the target is the thread that forked it
@@ -1008,32 +1134,94 @@ static void deliver_signal_to_group_locked(struct sighand *sighand, struct task 
         list_add_tail(&sighand->queue, &sigqueue->queue);
     }
 
-    for (size_t i = 0; i < count; i++) {
-        struct task *task = members[i];
-        signalfd_wakeup_task(task, sig);
-        // Only a member that can TAKE the signal may be woken. The wake marks
-        // the member's wait interrupted -- wake_waiting_task stores through
-        // waiting_interrupt_flag and sets wait_interrupted -- and
-        // futex(FUTEX_WAIT*) and rt_sigtimedwait turn that mark straight
-        // into a guest-visible EINTR without asking whether anything is
-        // deliverable to that thread. Linux never picks a thread that blocks
-        // the signal (complete_signal/wants_signal), so such a thread must
-        // never see EINTR for it: foot's render workers block every signal and
-        // park in an unchecked sem_wait(), and one child's SIGCHLD EINTR'd all
-        // of them into popping an empty work queue (SIGSEGV at 0x8). Skipping
-        // them loses nothing: the signal stays in sighand->pending and is taken
-        // when some thread unblocks it, and a sigwaitinfo waiter is kept by
-        // ~waiting. Same test as deliver_signal_unlocked_locked's.
-        if (sigset_has(task_wake_blocked(task) & ~task->waiting, sig) &&
-                signal_is_blockable(sig) && !signal_is_synchronous_trap(sig))
-            continue;
-        // Before the wake, so the woken task sees it: an ignored signal runs
-        // no handler, and a wait that ends for it restarts even if a sibling
-        // has taken it by the time the restart is decided (restart_ignored_wake).
-        if (ignored)
-            __atomic_store_n(&task->restart_ignored_wake, true, __ATOMIC_RELEASE);
-        signal_wake_task(task, sighand, sig);
+    // Every signalfd watching for it, in whichever thread: Linux's
+    // signalfd_notify wakes them all, whether or not a thread takes it.
+    for (size_t i = 0; i < count; i++)
+        signalfd_wakeup_task(members[i], sig);
+
+    struct task *taker = already_pending ?
+        group_signal_told_locked(sig, members, count) : NULL;
+    if (taker == NULL)
+        taker = group_signal_pick_locked(target, sig, members, count);
+    if (taker == NULL)
+        return;
+    if (group_signal_fatal_locked(sighand, taker, sig)) {
+        for (size_t i = 0; i < count; i++) {
+            if (group_signal_takes_locked(members[i], sig))
+                group_signal_tell_locked(members[i], sighand, sig);
+        }
+        return;
     }
+    group_signal_tell_locked(taker, sighand, sig);
+}
+
+// The live threads of `group`, each with a reference, and their sighand, with
+// one. Walking group->threads needs pids_lock, and what is done with the
+// threads needs sighand->lock, which comes after it (pids_lock ->
+// sighand->lock, never the reverse), so the list is taken first. With `target`,
+// also a reference on *target, which is the group's leader if it was NULL.
+// false, holding nothing, if the list could not be allocated.
+struct group_snapshot {
+    struct task *stack[32];
+    struct task **members;
+    size_t count;
+    struct sighand *sighand;
+};
+
+static bool group_snapshot_take(struct tgroup *group, struct task **target,
+        struct group_snapshot *snap) {
+    snap->members = snap->stack;
+    snap->count = 0;
+    snap->sighand = NULL;
+    size_t cap = sizeof(snap->stack) / sizeof(snap->stack[0]);
+    struct task *task;
+
+    complex_lockt(&pids_lock, 0);
+    for (;;) {
+        size_t needed = 0;
+        list_for_each_entry(&group->threads, task, group_links)
+            needed++;
+        if (needed <= cap)
+            break;
+        unlock(&pids_lock);
+        if (snap->members != snap->stack)
+            free(snap->members);
+        snap->members = malloc(sizeof(*snap->members) * needed);
+        if (snap->members == NULL)
+            return false;
+        cap = needed;
+        complex_lockt(&pids_lock, 0);
+    }
+
+    list_for_each_entry(&group->threads, task, group_links) {
+        if (task->zombie || task->exiting || task->sighand == NULL)
+            continue;
+        if (snap->sighand == NULL) {
+            snap->sighand = task->sighand;
+            sighand_retain(snap->sighand);
+        }
+        task_ref_cnt_mod(task, 1);
+        snap->members[snap->count++] = task;
+    }
+    if (target != NULL) {
+        // A leader that has exited stays the group's leader until the last
+        // thread goes, so this is never NULL while there is a member to wake.
+        if (*target == NULL)
+            *target = group->leader;
+        if (*target != NULL)
+            task_ref_cnt_mod(*target, 1);
+    }
+    unlock(&pids_lock);
+    return true;
+}
+
+static void group_snapshot_release(struct group_snapshot *snap) {
+    if (snap->sighand != NULL)
+        sighand_release(snap->sighand);
+    for (size_t i = 0; i < snap->count; i++)
+        task_ref_cnt_mod(snap->members[i], -1);
+    if (snap->members != snap->stack)
+        free(snap->members);
 }
 
 // A process-directed signal to `group`, sent to `target`, or to the group's
@@ -1042,63 +1230,73 @@ static void send_process_signal(struct tgroup *group, struct task *target, int s
         struct siginfo_ info) {
     if (sig == 0)
         return;
-
-    struct task *stack_members[32];
-    struct task **members = stack_members;
-    size_t member_cap = sizeof(stack_members) / sizeof(stack_members[0]);
-    size_t member_count = 0;
-    struct sighand *sighand = NULL;
-    struct task *task;
-
-    complex_lockt(&pids_lock, 0);
-    for (;;) {
-        size_t needed = 0;
-        list_for_each_entry(&group->threads, task, group_links)
-            needed++;
-        if (needed <= member_cap)
-            break;
-        unlock(&pids_lock);
-        if (members != stack_members)
-            free(members);
-        members = malloc(sizeof(*members) * needed);
-        if (members == NULL)
-            return;
-        member_cap = needed;
-        complex_lockt(&pids_lock, 0);
+    struct group_snapshot snap;
+    if (!group_snapshot_take(group, &target, &snap))
+        return;
+    if (snap.sighand != NULL && target != NULL) {
+        lock(&snap.sighand->lock, 0);
+        deliver_signal_to_group_locked(snap.sighand, target, sig, info,
+                snap.members, snap.count);
+        unlock(&snap.sighand->lock);
     }
-
-    list_for_each_entry(&group->threads, task, group_links) {
-        if (task->zombie || task->exiting || task->sighand == NULL)
-            continue;
-        if (sighand == NULL) {
-            sighand = task->sighand;
-            sighand_retain(sighand);
-        }
-        task_ref_cnt_mod(task, 1);
-        members[member_count++] = task;
-    }
-    // A leader that has exited stays the group's leader until the last
-    // thread goes, so this is never NULL while there is a member to wake.
-    if (target == NULL)
-        target = group->leader;
-    if (target != NULL)
-        task_ref_cnt_mod(target, 1);
-    unlock(&pids_lock);
-
-    if (sighand != NULL && target != NULL) {
-        lock(&sighand->lock, 0);
-        deliver_signal_to_group_locked(sighand, target, sig, info, members, member_count);
-        unlock(&sighand->lock);
-    }
-    if (sighand != NULL)
-        sighand_release(sighand);
     if (target != NULL)
         task_ref_cnt_mod(target, -1);
+    group_snapshot_release(&snap);
+}
 
-    for (size_t i = 0; i < member_count; i++)
-        task_ref_cnt_mod(members[i], -1);
-    if (members != stack_members)
-        free(members);
+// Hand the queued signals in `set`, which `from` was told to take and can no
+// longer -- it has blocked them, or it is exiting -- to threads that can, as
+// Linux's retarget_shared_pending does. Left with `from` they would sit unseen,
+// since no other thread looks at the shared queue until it is told to. A thread
+// already told covers what it can take without being woken again. Call with no
+// lock held.
+static void group_signal_retarget(struct task *from, sigset_t_ set) {
+    struct group_snapshot snap;
+    if (!group_snapshot_take(from->group, NULL, &snap))
+        return;
+    struct sighand *sighand = snap.sighand;
+    if (sighand != NULL) {
+        lock(&sighand->lock, 0);
+        set &= sighand->pending;
+        for (size_t i = 0; i < snap.count && set != 0; i++) {
+            struct task *task = snap.members[i];
+            if (task == from || task->exiting || task->zombie || task->sighand == NULL)
+                continue;
+            sigset_t_ takes = set & ~(task_wake_blocked(task) & ~task->waiting);
+            if (takes == 0)
+                continue;
+            set &= ~takes;
+            if (!__atomic_load_n(&task->group_sigpending, __ATOMIC_ACQUIRE))
+                group_signal_tell_locked(task, sighand, __builtin_ctzll(takes) + 1);
+        }
+        unlock(&sighand->lock);
+    }
+    group_snapshot_release(&snap);
+}
+
+void signal_group_handoff(void) {
+    if (current == NULL || current->group_handoff == 0)
+        return;
+    sigset_t_ set = current->group_handoff;
+    current->group_handoff = 0;
+    group_signal_retarget(current, set);
+}
+
+// Linux's exit_signals. Under the lock, with task->exiting already set: a
+// delivery before this told the task and is seen here, and one after it sees
+// the task exiting and tells another (group_signal_takes_locked).
+void signal_exit_handoff(struct task *task) {
+    struct sighand *sighand = task->sighand;
+    if (sighand == NULL || task->group == NULL)
+        return;
+    lock(&sighand->lock, 0);
+    sigset_t_ set = task->group_handoff;
+    task->group_handoff = 0;
+    if (__atomic_exchange_n(&task->group_sigpending, false, __ATOMIC_ACQ_REL))
+        set |= sighand->pending & ~task_wake_blocked(task);
+    unlock(&sighand->lock);
+    if (set != 0)
+        group_signal_retarget(task, set);
 }
 
 void send_signal_to_process(struct task *task, int sig, struct siginfo_ info) {
@@ -1213,6 +1411,10 @@ static bool signal_take_next_locked(struct task *task, sigset_t_ mask, struct si
     if (best_is_group) {
         if (!signal_list_still_has_locked(&sighand->queue, sig))
             sigset_del(&sighand->pending, sig);
+        // Taken by name, or by a signalfd: whatever this thread was told to
+        // take may be gone now.
+        if (task == current)
+            group_pending_recalc_locked();
     } else if (!signal_still_pending_locked(task, sig)) {
         sigset_del(&task->pending, sig);
     }
@@ -1744,12 +1946,6 @@ static bool restart_flags_take(bool nohand_only) {
     return nohand_only ? nohand : restart;
 }
 
-// Whether an ignored signal woke this task during this syscall
-// (restart_ignored_wake). Consumed, like the record above.
-static bool restart_ignored_wake_take(void) {
-    return __atomic_exchange_n(&current->restart_ignored_wake, false, __ATOMIC_ACQ_REL);
-}
-
 // What an interruption leaves behind for a restart belongs to one syscall, and
 // both dispatchers clear it as the next syscall starts. Two things:
 //
@@ -1784,7 +1980,6 @@ void signal_restart_state_clear(void) {
         return;
     __atomic_store_n(&current->restart_interrupted_syscall, false, __ATOMIC_RELEASE);
     __atomic_store_n(&current->restart_interrupted_syscall_nohand, false, __ATOMIC_RELEASE);
-    __atomic_store_n(&current->restart_ignored_wake, false, __ATOMIC_RELEASE);
     current->restart_nohand_pending = false;
     current->restart_sys_pending = false;
 }
@@ -1837,6 +2032,10 @@ static bool signal_passed_over(struct sighand *sighand, int sig) {
 // surfaced as a guest-visible EINTR -- "echo: write error: Interrupted system
 // call" out of a native bash. For a translated guest native_held is 0 and this
 // is the blocked set exactly as before.
+//
+// The process's shared queue only for a thread told to take it
+// (task_group_pending): nothing there can have cut another thread's syscall
+// short, and that thread's way out does not go looking there.
 static struct sigqueue *signal_deciding_locked(struct sighand *sighand, bool *ignored_seen) {
     sigset_t_ blocked = task_wake_blocked(current);
     struct sigqueue *sigqueue;
@@ -1852,6 +2051,8 @@ static struct sigqueue *signal_deciding_locked(struct sighand *sighand, bool *ig
         if (best == NULL || sigqueue->info.sig < best->info.sig)
             best = sigqueue;
     }
+    if (!__atomic_load_n(&current->group_sigpending, __ATOMIC_ACQUIRE))
+        return best;
     list_for_each_entry(&sighand->queue, sigqueue, queue) {
         if (sigset_has(blocked, sigqueue->info.sig))
             continue;
@@ -1872,7 +2073,6 @@ bool signal_should_restart_syscall_nohand(void) {
     if (current == NULL)
         return false;
 
-    bool ignored_woke = restart_ignored_wake_take();
     if (restart_flags_take(true))
         return true;
 
@@ -1889,15 +2089,20 @@ bool signal_should_restart_syscall_nohand(void) {
     // A signal whose delivery decides (signal_restart_decided_at_delivery)
     // restarts too, like a stop; if a handler does run before the call
     // re-executes, receive_signal cancels the restart. With nothing to deliver
-    // but ignored signals, no handler runs (signal_restarts_nohand), and the
-    // same if the ignored signal that ended the wait has been taken by a
-    // sibling since (restart_ignored_wake). With no signal at all, what ended
-    // the wait may be a PTRACE_EVENT_STOP the task owes its tracer, and that
-    // stop runs no handler either.
+    // but ignored signals, no handler runs (signal_restarts_nohand). The same
+    // with nothing to deliver at all, which is what a task told to take the
+    // process's shared queue finds once another thread has taken what was
+    // there -- Linux's get_signal finds nothing and the call restarts -- and
+    // what a PTRACE_EVENT_STOP the task owes its tracer ends a wait with.
+    // Neither runs a handler. Measured without the first: a sigsuspend whose
+    // SIGCHLD a sibling calling sigprocmask took first returned EINTR with no
+    // handler run in its thread, where Linux goes on waiting
+    // (tests/manual/signal_process_wake_one.c, "lost the race").
     bool restart = best != NULL ?
         !signal_native_held(best->info.sig) &&
             signal_restarts_nohand(current, sighand, best->info.sig) :
-        ignored_seen || ignored_woke || task_trap_stop_pending(current);
+        ignored_seen || __atomic_load_n(&current->group_sigpending, __ATOMIC_ACQUIRE) ||
+            task_trap_stop_pending(current);
     unlock(&sighand->lock);
     return restart;
 }
@@ -1906,7 +2111,6 @@ bool signal_should_restart_syscall(void) {
     if (current == NULL)
         return false;
 
-    bool ignored_woke = restart_ignored_wake_take();
     if (restart_flags_take(false))
         return true;
 
@@ -1924,15 +2128,21 @@ bool signal_should_restart_syscall(void) {
     bool ignored_seen;
     struct sigqueue *best = signal_deciding_locked(sighand, &ignored_seen);
     if (best == NULL) {
+        bool told = __atomic_load_n(&current->group_sigpending, __ATOMIC_ACQUIRE);
         unlock(&sighand->lock);
         // Nothing to deliver but ignored signals, which run no handler and so
-        // restart the call (signal_restarts_nohand) -- or not even that, when
-        // a sibling has taken the ignored signal that ended the wait
-        // (restart_ignored_wake). Or no signal at all: a PTRACE_EVENT_STOP the
-        // task owes its tracer ends a wait without one, and restarts the call
-        // like a stop does. Linux's read() interrupted by PTRACE_INTERRUPT
-        // returns the data that arrives after PTRACE_CONT; this returned EINTR.
-        return ignored_seen || ignored_woke || task_trap_stop_pending(current);
+        // restart the call (signal_restarts_nohand). Or nothing at all, and
+        // the task was told to take the process's shared queue: another thread
+        // took what was there first -- a handled SIGCHLD, taken by a sibling on
+        // its own way out -- so nothing runs here, and the call restarts as it
+        // does on Linux, whose get_signal finds nothing. The record that
+        // signal left (restart_flags_take) is what ITS handler allows, and
+        // that handler does not run in this thread. Or no signal at all: a
+        // PTRACE_EVENT_STOP the task owes its tracer ends a wait without one,
+        // and restarts the call like a stop does. Linux's read() interrupted
+        // by PTRACE_INTERRUPT returns the data that arrives after PTRACE_CONT;
+        // this returned EINTR.
+        return ignored_seen || told || task_trap_stop_pending(current);
     }
     int sig = best->info.sig;
     // A native program's handler, which the kernel is only holding a
@@ -2791,6 +3001,9 @@ void receive_signals(void) {
 
     struct sighand *sighand = current->sighand;
     lock(&sighand->lock, 0);
+    // For the shared queue, below: the saved mask coming back and each
+    // handler's mask change what this thread can take there.
+    sigset_t_ entry_wake_blocked = task_wake_blocked(current);
 
     // A saved mask means that the last system call was a call like sigsuspend
     // that changes the mask during the call. Only ignore a signal right now if
@@ -2863,7 +3076,13 @@ void receive_signals(void) {
         }
     }
 
+    // Linux's get_signal ends with recalc_sigpending: this thread goes on
+    // looking at the shared queue only if something there is still its to
+    // take. Anything still queued that it was told to take and its mask now
+    // blocks -- the saved mask back, a handler's -- goes to a sibling.
+    group_pending_mask_changed_locked(entry_wake_blocked);
     unlock(&sighand->lock);
+    signal_group_handoff();
 
     // this got moved out of the switch case in receive_signal to fix locking problems
     if (!was_stopped) {
@@ -3151,12 +3370,20 @@ dword_t sys_sigaction(dword_t signum, addr_t action_addr, addr_t oldaction_addr)
     return sys_rt_sigaction(signum, action_addr, oldaction_addr, 1);
 }
 
+// Call with sighand->lock held, and signal_group_handoff() once it is dropped
+// -- a syscall's way out does it (handle_interrupt), and so does any caller
+// about to wait with the new mask in place.
 static void sigmask_set(sigset_t_ set) {
+    sigset_t_ old = task_wake_blocked(current);
     current->blocked = (set & ~UNBLOCKABLE_MASK);
+    group_pending_mask_changed_locked(old);
 }
 
 void sigmask_set_blocked(sigset_t_ set) {
+    lock(&current->sighand->lock, 0);
     sigmask_set(set);
+    unlock(&current->sighand->lock);
+    signal_group_handoff();
 }
 
 static void sigmask_set_temp_unlocked(sigset_t_ mask) {
@@ -3169,15 +3396,21 @@ void sigmask_set_temp(sigset_t_ mask) {
     lock(&current->sighand->lock, 0);
     sigmask_set_temp_unlocked(mask);
     unlock(&current->sighand->lock);
+    // The call is about to wait with this mask, which may block a process
+    // signal this thread was told to take.
+    signal_group_handoff();
 }
 
 void sigmask_clear_temp(void) {
     lock(&current->sighand->lock, 0);
     if (current->has_saved_mask) {
+        sigset_t_ old = task_wake_blocked(current);
         current->blocked = current->saved_mask;
         current->has_saved_mask = false;
+        group_pending_mask_changed_locked(old);
     }
     unlock(&current->sighand->lock);
+    signal_group_handoff();
 }
 
 static int do_sigprocmask(dword_t how, sigset_t_ set) {
@@ -3410,6 +3643,13 @@ int_t sys_rt_sigsuspend_guest(guest_addr_t mask_addr, uint_t size) {
     STRACE("sigsuspend(0x%llx) = ...\n", (long long) mask);
     lock(&current->sighand->lock, 0);
     sigmask_set_temp_unlocked(mask);
+    if (current->group_handoff != 0) {
+        // The mask it waits with blocks a process signal this thread was told
+        // to take: a sibling takes it instead (sigmask_set).
+        unlock(&current->sighand->lock);
+        signal_group_handoff();
+        lock(&current->sighand->lock, 0);
+    }
     TASK_MAY_BLOCK {
         while (wait_for(&current->pause, &current->sighand->lock, NULL) != _EINTR)
             continue;
@@ -3488,14 +3728,21 @@ static int_t sys_rt_sigtimedwait_common(guest_addr_t set_addr, guest_addr_t info
         } while (err == 0);
     }
     current->waiting = 0;
-    if (err == _ETIMEDOUT) {
-        unlock(&current->sighand->lock);
+
+    // Whatever ended the wait, take what is there, as Linux's
+    // do_sigtimedwait dequeues once more after its timeout. A process signal
+    // this thread was told to take as the timeout came would otherwise be
+    // left queued with a thread that blocks it. The waited-for signals are
+    // blocked again from here (Linux puts back real_blocked), so what the
+    // thread cannot take any more goes to a sibling.
+    bool found = signal_take_next_locked(current, set, &info);
+    group_pending_mask_changed_locked(task_wake_blocked(current) & ~set);
+    unlock(&current->sighand->lock);
+    signal_group_handoff();
+    if (!found && err == _ETIMEDOUT) {
         STRACE("sigtimedwait timed out\n");
         return _EAGAIN;
     }
-
-    bool found = signal_take_next_locked(current, set, &info);
-    unlock(&current->sighand->lock);
     if (!found)
         return _EINTR;
     if (info_addr != 0)

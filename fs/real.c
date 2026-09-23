@@ -79,7 +79,7 @@ static bool realfs_guest_signal_pending(void) {
     if (checkpoint_freeze_pending() || task_trap_stop_pending(current))
         return true;
     lock(&current->sighand->lock, 0);
-    sigset_t_ pending = (current->pending | current->sighand->pending) &
+    sigset_t_ pending = (current->pending | task_group_pending(current)) &
             ~task_wake_blocked(current);
     if (native_delivery_deferred())
         pending &= ~__atomic_load_n(&current->native_restart, __ATOMIC_ACQUIRE);
@@ -109,7 +109,7 @@ static void realfs_log_signal_eintr(const char *where) {
     if (!realfs_trace_signal_eintr() || current == NULL)
         return;
     lock(&current->sighand->lock, 0);
-    sigset_t_ pending = (current->pending | current->sighand->pending) & ~task_wake_blocked(current);
+    sigset_t_ pending = (current->pending | task_group_pending(current)) & ~task_wake_blocked(current);
     sigset_t_ task_pending = current->pending;
     sigset_t_ group_pending = current->sighand->pending;
     sigset_t_ blocked = current->blocked;

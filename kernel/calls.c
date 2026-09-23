@@ -6860,11 +6860,17 @@ void handle_interrupt(int interrupt) {
     // Host-side wakeups (for example thread pokes or interrupted waits) often
     // arrive with no guest-visible pending signal work. Avoid serializing all
     // runnable threads on sighand->lock in that common case.
+    //
+    // The process's shared queue is looked at only by a thread told to take
+    // it, and such a thread always goes through receive_signals, which stops
+    // it looking once nothing there is its to take. So does one with a
+    // process signal to hand on (signal_group_handoff).
     sigset_t_ pending = __atomic_load_n(&current->pending, __ATOMIC_ACQUIRE);
-    sigset_t_ group_pending = __atomic_load_n(&current->sighand->pending, __ATOMIC_ACQUIRE);
+    bool group_told = __atomic_load_n(&current->group_sigpending, __ATOMIC_ACQUIRE);
     sigset_t_ blocked = __atomic_load_n(&current->blocked, __ATOMIC_ACQUIRE);
     bool has_saved_mask = __atomic_load_n(&current->has_saved_mask, __ATOMIC_ACQUIRE);
-    if (has_saved_mask || ((pending | group_pending) & ~blocked) != 0)
+    if (has_saved_mask || group_told || current->group_handoff != 0 ||
+            (pending & ~blocked) != 0)
         receive_signals();
     // A job-control group-stop parks the task until SIGCONT (or, for a traced
     // task, until the tracer resumes it). Shared with native_checkpoint --
