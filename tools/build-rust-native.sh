@@ -53,6 +53,23 @@ CFLAGS="${CFLAGS:-} $shim_include"
 TARGET_CFLAGS="${TARGET_CFLAGS:-} $shim_include"
 export CFLAGS TARGET_CFLAGS
 
+# helix-term's build.rs clones every grammar in helix's languages.toml -- 301
+# of them, from github, gitlab, codeberg and sr.ht -- and compiles each into a
+# shared library under deps/helix/runtime/grammars. AOK uses none of them: the
+# grammars it highlights with are the tree-sitter-* crates linked in through
+# Cargo.toml (see static_grammar() in src/helix.rs), and fs/aok-libs.manifest
+# ships only runtime/queries and runtime/themes. The script emits no cargo:
+# directive beyond rerun-if-changed, so skipping it changes nothing that is
+# compiled.
+#
+# What it did cost was a build that needed all four hosts up. codeberg timing
+# out on 2026-09-23 failed CI and the dev IPA for two commits whose code was
+# fine. A warm checkout does not save it either: languages.toml pins
+# embedded-template to an annotated TAG object, `rev-parse HEAD` answers with
+# the commit, the two never compare equal, and that one is re-fetched on every
+# run -- so with every other grammar up to date, an offline build still panics.
+export HELIX_DISABLE_AUTO_GRAMMAR_BUILD=1
+
 # CARGO_TARGET_DIR is left alone deliberately: cargo's own layout is what the
 # path above assumes, and overriding it in one place and not the other is how
 # this breaks silently.
