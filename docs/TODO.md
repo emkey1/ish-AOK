@@ -746,15 +746,27 @@ measured:
 Fixed 2026-09-23 (tests/manual/notify_parent_cldstop.c): a stop, a continue
 and a ptrace stop are announced with SIGCHLD, not the exit signal, once, to
 the leader's parent or the tracer, as Linux's do_notify_parent_cldstop does;
-and a tracer's resume lifts a group-stop before the tracee wakes. Found
-alongside, by reading, not measured:
-- Zombies handed to a new parent at an exit are announced to it with one
-  SIGCHLD (do_exit's reparent loop) whatever its disposition. Linux's
-  reparent_leader goes through do_notify_parent: a new parent whose SIGCHLD
-  is SIG_IGN or SA_NOCLDWAIT has the zombie released at once, and SIG_IGN
-  sends nothing. AOK queues the SIGCHLD if it is blocked and leaves the
-  zombie for a wait that will never come. exit_notify_process_locked asks
-  both now; the reparent path is the other caller.
+and a tracer's resume lifts a group-stop before the tracee wakes.
+
+Also fixed 2026-09-23 (tests/manual/reparent_zombie_disposition.c, measured
+on Linux 6.12 64-bit and -m32 first): zombies handed to a new parent at an
+exit were announced with one SIGCHLD whatever its disposition, and left for
+a wait a parent that disclaimed SIGCHLD never makes. do_exit's reparent loop
+now goes through exit_notify_process_locked, as Linux's reparent_leader goes
+through do_notify_parent: SIG_IGN or SA_NOCLDWAIT releases the zombie at
+once, SIG_IGN sends nothing even to a new parent that blocks SIGCHLD, and
+each zombie gets its own SIGCHLD, with its CPU times.
+
+Found alongside, and measured (Linux 6.12 against alpine-amd64-test): AOK's
+children lists are newest-first, Linux's oldest-first. fork, clone, exec's
+de-thread and the reparent loop all `list_add` at the head, where Linux's
+copy_process uses list_add_tail and forget_original_parent
+list_splice_tail_init. So wait(-1) reaps the youngest zombie first (three
+children exited and waited for: Linux reaps 1 2 3, AOK 3 2 1), and of three
+zombies reparented together the SIGCHLD a blocking new parent finds names
+the youngest, not the oldest. reparent_zombie_disposition.c accepts either.
+
+Found alongside, by reading, not measured:
 - A group-stop is announced as soon as one thread takes the stop signal:
   receive_signal stops the whole process at once, and the others stop at
   their next pass through handle_interrupt -- one blocked in a syscall only

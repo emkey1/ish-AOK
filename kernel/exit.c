@@ -400,8 +400,9 @@ static void release_process_locked(struct task *leader, struct exit_notes *notes
 // Tell whoever waits for this process that it has exited: its tracer, when a
 // tracer from outside its parent's group holds it, and otherwise its parent.
 // Called once its last thread is gone and no thread zombie of it is left --
-// from do_exit, or from whoever released that last zombie. Linux's
-// do_notify_parent, reached from exit_notify or release_task.
+// from do_exit, or from whoever released that last zombie -- and again for a
+// zombie that an exiting parent hands to another process. Linux's
+// do_notify_parent, reached from exit_notify, release_task or reparent_leader.
 //
 // The signal names the process and carries the leader's own exit code, as
 // Linux's does: when the leader went first, the last thread's tid and code
@@ -928,20 +929,16 @@ noreturn void do_exit(struct task *task, int status) {
     struct sighand *old_sighand = NULL;
     bool destroy_unlinked_task = false;
     // Everyone this exit has to tell, and every task it releases -- this one
-    // included, when a parent that disclaimed SIGCHLD leaves no zombie. See
-    // "who hears about an exit".
+    // included, when a parent that disclaimed SIGCHLD leaves no zombie, and a
+    // zombie child whose new parent disclaimed it. See "who hears about an
+    // exit".
     struct exit_notes notes;
     exit_notes_init(&notes);
 
-    // A child that is ALREADY a zombie when we hand it to another process has
-    // to be announced to it -- see the reparenting loop below. Collected
-    // here and sent after pids_lock is dropped, like every other signal in
-    // this function.
-    struct task *reparent_signal_parent = NULL;
+    // Zombies handed to a sibling thread; see the reparenting loop below.
+    int reparented_zombies = 0;
     struct halt_target *halt_targets = NULL;
     size_t halt_target_count = 0;
-    struct siginfo_ reparent_signal_info = {};
-    int reparented_zombies = 0;
     // The groups of children this exit orphans; hung up after the locks.
     struct orphaned_pgrps orphaned;
     orphaned_pgrps_init(&orphaned);
@@ -1040,27 +1037,32 @@ noreturn void do_exit(struct task *task, int status) {
         // A manual `kill -CHLD 1` reaped all 16 at once, which is what named
         // the missing piece.
         //
-        // ONE signal, carrying the first such child's details, rather than one
-        // per child as Linux sends: SIGCHLD is a standard signal, so a second
-        // one merely coalesces into the first still-pending copy -- and it is
-        // the first one's siginfo that a Linux guest would end up seeing too.
-        // A woken reaper drains the rest with its own wait() loop, which is
-        // what every reaper has anyway for exactly this reason.
+        // Announced as its own exit was, by the same routine: Linux's
+        // reparent_leader calls do_notify_parent, which exit_notify_process_locked
+        // is. So a new parent whose SIGCHLD is SIG_IGN or has SA_NOCLDWAIT has
+        // the zombie released here and now, and SIG_IGN is sent nothing -- not
+        // even a SIGCHLD queued because it blocks the signal. AOK used to send
+        // one SIGCHLD whatever the disposition and leave the zombie for a
+        // wait that a parent which disclaimed SIGCHLD never makes. One signal
+        // per zombie, as Linux sends them; they coalesce into the first
+        // still-pending copy, so it is the first one's siginfo that a new
+        // parent blocking SIGCHLD sees. That is the youngest here and the
+        // oldest on Linux, whose children lists are oldest-first
+        // (docs/TODO.md).
         //
         // Only a zombie that was announced to us as a process. A thread's
         // zombie is its tracer's; a process a tracer still holds is announced
         // by the tracer when it lets go; and one whose announcement is still
         // waiting on a thread zombie goes to whoever is its parent by then.
+        // And only to another process: a sibling thread was told when the
+        // zombie died -- the SIGCHLD went to the process -- so a second one is
+        // news of nothing, and Linux does not call reparent_leader then.
         if (child->zombie && child->group->leader == child && tracer_of(child) == NULL &&
-                !child->group->exit_notify_deferred && reparented_zombies++ == 0) {
-            int chld_code, chld_status;
-            decode_wait_status(child->exit_code, &chld_code, &chld_status);
-            reparent_signal_info = (struct siginfo_) {
-                .code = chld_code,
-                .child.pid = child->pid,
-                .child.uid = child->uid,
-                .child.status = chld_status,
-            };
+                !child->group->exit_notify_deferred) {
+            if (to_another_process && new_parent->group != NULL)
+                exit_notify_process_locked(child, &notes);
+            else
+                reparented_zombies++;
         }
         // The orphaned-group rule again, for the CHILD's group: Linux's
         // reparent_leader asks it of every child handed to another process
@@ -1086,30 +1088,11 @@ noreturn void do_exit(struct task *task, int status) {
         }
     }
 
-    // The condition wakes a new parent already blocked in wait4(); the signal
-    // below wakes one that is not. Both are needed, and notify() is safe to
-    // call here -- the ordinary child-exit notify a few lines down runs under
-    // this same lock.
-    //
-    // The signal only for another process. A sibling thread was told when the
-    // zombie died -- the SIGCHLD went to the process -- so a second one is
-    // news of nothing: it ran a handler for no reason, and cut short whatever
-    // the process was doing without SA_RESTART. The condition is harmless
-    // either way; it is the one every thread of this process waits on anyway.
-    //
-    // Not handled, and a narrower case than the one above: a new parent that
-    // has disclaimed SIGCHLD (SIG_IGN or SA_NOCLDWAIT) should have the zombie
-    // released outright, the way the autoreap path does for an ordinary exit.
-    // Here it keeps the zombie instead. init does not disclaim SIGCHLD, so
-    // this is not the pid-1 case, and releasing another task's struct from
-    // this side is not something to do without a reason to.
-    if (reparented_zombies > 0 && new_parent != NULL && new_parent->group != NULL) {
+    // A zombie handed to a sibling thread is announced to nobody, but the
+    // condition is woken all the same. It is harmless: it is the one every
+    // thread of this process waits on anyway.
+    if (reparented_zombies > 0 && new_parent != NULL && new_parent->group != NULL)
         notify(&new_parent->group->child_exit);
-        if (to_another_process) {
-            task_ref_cnt_mod(new_parent, 1);
-            reparent_signal_parent = new_parent;
-        }
-    }
 
     // Does this exit orphan our own process group and leave stopped members
     // in it? Computed here, while the group still describes the pre-exit
@@ -1279,12 +1262,6 @@ noreturn void do_exit(struct task *task, int status) {
     orphaned_pgrps_hang_up(&orphaned);
     if (orphan_pgid != 0)
         orphaned_pgrp_hang_up(orphan_pgid);
-
-    if (reparent_signal_parent != NULL) {
-        send_signal_to_process(reparent_signal_parent, SIGCHLD_,
-                               reparent_signal_info);
-        task_ref_cnt_mod(reparent_signal_parent, -1);
-    }
 
     // Process-directed signals: the parent may be multithreaded, and the
     // thread that happens to be `leader->parent` (whichever one called fork())

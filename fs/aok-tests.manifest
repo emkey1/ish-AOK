@@ -236,6 +236,7 @@ pdeath_signal.c
 wait_clone_child.c
 notify_parent_cldstop.c
 subreaper_not_inherited.c
+reparent_zombie_disposition.c
 fork_tgroup_reset.c
 rusage_monotonic.c
 dirfd_position.c
