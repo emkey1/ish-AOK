@@ -1251,6 +1251,7 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
     cond_init(&task->pause);
 
     task->ptrace = (typeof(task->ptrace)) {};
+    task->ptrace_link_capable = false;
     lock_init(&task->ptrace.lock, "task_creat_ptr\0");
     cond_init(&task->ptrace.cond);
 

@@ -821,7 +821,7 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     proc_printf(buf, "CapEff:\t%08x%08x\n", task->cap_effective[1], task->cap_effective[0]);
     proc_printf(buf, "CapBnd:\t%08x%08x\n", task->cap_permitted[1], task->cap_permitted[0]);
     proc_printf(buf, "CapAmb:\t0000000000000000\n");
-    proc_printf(buf, "NoNewPrivs:\t0\n");
+    proc_printf(buf, "NoNewPrivs:\t%d\n", task->no_new_privs ? 1 : 0);
     proc_printf(buf, "Seccomp:\t0\n");
     proc_printf(buf, "Cpus_allowed:\t%x\n", allowed_mask);
     proc_printf(buf, "Cpus_allowed_list:\t0-%u\n", cpu_count > 0 ? cpu_count - 1 : 0);

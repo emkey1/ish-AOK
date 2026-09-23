@@ -93,7 +93,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 16  // 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 17  // 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -402,6 +402,11 @@ struct ckpt_task {
     uint32_t cap_effective[2], cap_permitted[2], cap_inheritable[2], cap_ambient[2];
     uint32_t keepcaps;
     uint32_t ngroups;
+    // PR_SET_NO_NEW_PRIVS (struct task's no_new_privs). A sandbox sets it and
+    // then runs what it does not trust; restored without it, the process could
+    // gain privilege from a set-id binary again, and there is no way for it
+    // to find out.
+    uint32_t no_new_privs;
 };
 
 struct ckpt_map {
@@ -2464,6 +2469,7 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         .cap_inheritable = {task->cap_inheritable[0], task->cap_inheritable[1]},
         .cap_ambient = {task->cap_ambient[0], task->cap_ambient[1]},
         .keepcaps = task->keepcaps ? 1 : 0,
+        .no_new_privs = task->no_new_privs ? 1 : 0,
         .ngroups = task->ngroups,
         .tgid = sh->tgid,
         .mm_owner = sh->mm,
@@ -4804,6 +4810,7 @@ identity:
     memcpy(current->cap_inheritable, rec->cap_inheritable, sizeof(current->cap_inheritable));
     memcpy(current->cap_ambient, rec->cap_ambient, sizeof(current->cap_ambient));
     current->keepcaps = rec->keepcaps != 0;
+    current->no_new_privs = rec->no_new_privs != 0;
     // The descriptors this task's restore opened were stamped with the root
     // credentials they were reopened under. To the open-creds model they are
     // opens this process made itself, so they get its credentials now. Ones

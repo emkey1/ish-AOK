@@ -645,6 +645,26 @@ struct task {
     // (signal_group_handoff). The thread's own. At the end for the reason
     // given above native_standin_child.
     sigset_t_ group_handoff;
+
+    // PR_SET_NO_NEW_PRIVS: no exec by this thread gains privilege, set-id bit
+    // or not (exec_setid_plan). Per thread, as on Linux, and there is no way
+    // to clear it: a fork or clone inherits it through the struct copy, and an
+    // exec keeps it. The prctl was accepted and forgotten, so a sandbox that
+    // set it before running untrusted code could still be escaped with any
+    // setuid-root binary. The thread's own. At the end for the reason given
+    // above native_standin_child.
+    bool no_new_privs;
+    // Whether whoever made this task's ptrace link could have traced anything
+    // at all -- held CAP_SYS_PTRACE -- when it made the link. Linux keeps the
+    // credentials themselves (ptracer_cred), and asks them this one question,
+    // when a traced exec would gain privilege: a tracer that could not have
+    // attached to the privileged program must not get it by attaching first.
+    // The tracee's own for PTRACE_TRACEME, the tracer's for ATTACH and SEIZE,
+    // and a traced parent's for a child it is auto-attached to. Meaningful
+    // only while ptrace.traced. Written holding both pids_lock and ptrace.lock,
+    // so either is enough to read it. At the end for the reason given above
+    // native_standin_child.
+    bool ptrace_link_capable;
 };
 
 // current will always give the process that is currently executing

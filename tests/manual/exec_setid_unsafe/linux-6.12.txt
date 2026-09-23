@@ -1,0 +1,54 @@
+# What Linux 6.12 (camd, Devuan 6, x86_64) printed for tests/manual/exec_setid_unsafe/probe.c,
+# 2026-09-23: "nosudo" and "user" as uid 1000 (supplementary group 44), "root" as root.
+# The N rows came from an earlier probe that did not yet print the pdeath field.
+N0 untraced plain                                  ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 seteuid0 Operation not permitted
+N1 untraced sgid-grp                               ids 1000/1000/1000/1000 gids 1000/44/44/44 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 44 eff 0 prm 0 nnp 0/0 seteuid0 Operation not permitted
+N2 TRACEME sgid-grp                                ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 seteuid0 Operation not permitted
+N3 parent SEIZE sgid-grp                           ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 seteuid0 Operation not permitted
+N4 parent ATTACH sgid-grp                          ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 seteuid0 Operation not permitted
+N5 parent ATTACH+DETACH sgid-grp                   ids 1000/1000/1000/1000 gids 1000/44/44/44 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 44 eff 0 prm 0 nnp 0/0 seteuid0 Operation not permitted
+N6 SEIZE+TRACEFORK, grandchild sgid-grp            ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 seteuid0 Operation not permitted
+N7 NNP sgid-grp                                    ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 1/1 seteuid0 Operation not permitted
+N8 NNP plain                                       ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 1/1 seteuid0 Operation not permitted
+N9 NNP + TRACEME sgid-grp                          ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 1/1 seteuid0 Operation not permitted
+N10 untraced sgid-grp-noxgrp                       ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 seteuid0 Operation not permitted
+N11 TRACEME sgid-grp-noxgrp                        ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 seteuid0 Operation not permitted
+N12 untraced suid-own                              ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 seteuid0 Operation not permitted
+N13 TRACEME suid-own                               ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 seteuid0 Operation not permitted
+N14 NNP suid-own                                   ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 1/1 seteuid0 Operation not permitted
+U1 untraced suid-root                              ids 1000/0/0/0 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 0 AT_GID 1000 AT_EGID 1000 eff 1ffffffffff prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+U2 TRACEME suid-root                               ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+U3 untraced sgid-root                              ids 1000/1000/1000/1000 gids 1000/0/0/0 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 0 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+U4 TRACEME sgid-root                               ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+U5 parent SEIZE suid-root                          ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+U6 parent ATTACH suid-root                         ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+U7 NNP suid-root                                   ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 1/1 pdeath 0 seteuid0 Operation not permitted
+U8 NNP sgid-root                                   ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 1/1 pdeath 0 seteuid0 Operation not permitted
+U9 TRACEME suid-nobody                             ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+U10 untraced suid-nobody                           ids 1000/65534/65534/65534 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 65534 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+U11 SEIZE+TRACEFORK, grandchild suid-root          ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+U12 ATTACH+DETACH suid-root                        ids 1000/0/0/0 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 0 AT_GID 1000 AT_EGID 1000 eff 1ffffffffff prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+U13 untraced sgid-root-noxgrp                      ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+U14 untraced suid-sgid-root                        ids 1000/0/0/0 gids 1000/0/0/0 SEC 1 AT_UID 1000 AT_EUID 0 AT_GID 1000 AT_EGID 0 eff 1ffffffffff prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+U15 TRACEME suid-sgid-root                         ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+U16 NNP suid-sgid-root                             ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 1/1 pdeath 0 seteuid0 Operation not permitted
+R0 untraced suid-1000                              ids 0/1000/1000/1000 gids 0/0/0/0 SEC 1 AT_UID 0 AT_EUID 1000 AT_GID 0 AT_EGID 0 eff 0 prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R1 TRACEME as root, drop, exec suid-root           ids 1000/0/0/0 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 0 AT_GID 1000 AT_EGID 1000 eff 1ffffffffff prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R2 drop, TRACEME, exec suid-root                   ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+R3 drop, root parent SEIZE, suid-root              ids 1000/0/0/0 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 0 AT_GID 1000 AT_EGID 1000 eff 1ffffffffff prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R4 drop, root parent ATTACH, suid-root             ids 1000/0/0/0 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 0 AT_GID 1000 AT_EGID 1000 eff 1ffffffffff prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R5 drop, root SEIZE then tracer drops              ids 1000/0/0/0 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 0 AT_GID 1000 AT_EGID 1000 eff 1ffffffffff prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R6 root -SYS_PTRACE eff, TRACEME, suid-1000        ids 0/1000/1000/1000 gids 0/0/0/0 SEC 1 AT_UID 0 AT_EUID 1000 AT_GID 0 AT_EGID 0 eff 0 prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R7 root -SYS_PTRACE-SETUID eff, TRACEME, suid-1000 ids 0/0/0/0 gids 0/0/0/0 SEC 1 AT_UID 0 AT_EUID 0 AT_GID 0 AT_EGID 0 eff 0 prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R8 root euid 1000 then NNP, exec plain             ids 0/0/0/0 gids 0/0/0/0 SEC 1 AT_UID 0 AT_EUID 0 AT_GID 0 AT_EGID 0 eff 0 prm 1ffffffffff nnp 1/1 pdeath 0 seteuid0 ok
+R9 root NNP, exec suid-1000                        ids 0/0/0/0 gids 0/0/0/0 SEC 0 AT_UID 0 AT_EUID 0 AT_GID 0 AT_EGID 0 eff 1ffffffffff prm 1ffffffffff nnp 1/1 pdeath 0 seteuid0 ok
+R10 root euid 1000, TRACEME, exec plain            ids 0/0/0/0 gids 0/0/0/0 SEC 1 AT_UID 0 AT_EUID 0 AT_GID 0 AT_EGID 0 eff 0 prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R11 root TRACEME then euid 1000, exec plain        ids 0/1000/1000/1000 gids 0/0/0/0 SEC 1 AT_UID 0 AT_EUID 1000 AT_GID 0 AT_EGID 0 eff 0 prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R12 root euid 1000 (untraced), exec plain          ids 0/1000/1000/1000 gids 0/0/0/0 SEC 1 AT_UID 0 AT_EUID 1000 AT_GID 0 AT_EGID 0 eff 0 prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R13 root TRACEME, exec suid-1000                   ids 0/1000/1000/1000 gids 0/0/0/0 SEC 1 AT_UID 0 AT_EUID 1000 AT_GID 0 AT_EGID 0 eff 0 prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R14 drop + TRACEME, sgid-root                      ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 0/0 pdeath 0 seteuid0 Operation not permitted
+R15 drop, root SEIZE+TRACEFORK, gchild suid-root   ids 1000/0/0/0 gids 1000/1000/1000/1000 SEC 1 AT_UID 1000 AT_EUID 0 AT_GID 1000 AT_EGID 1000 eff 1ffffffffff prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R16 drop + NNP, root parent SEIZE, suid-root       ids 1000/1000/1000/1000 gids 1000/1000/1000/1000 SEC 0 AT_UID 1000 AT_EUID 1000 AT_GID 1000 AT_EGID 1000 eff 0 prm 0 nnp 1/1 pdeath 0 seteuid0 Operation not permitted
+R17 root TRACEME, exec plain                       ids 0/0/0/0 gids 0/0/0/0 SEC 0 AT_UID 0 AT_EUID 0 AT_GID 0 AT_EGID 0 eff 1ffffffffff prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok
+R18 root NNP, exec suid-root                       ids 0/0/0/0 gids 0/0/0/0 SEC 0 AT_UID 0 AT_EUID 0 AT_GID 0 AT_EGID 0 eff 1ffffffffff prm 1ffffffffff nnp 1/1 pdeath 0 seteuid0 ok
+R19 root TRACEME, exec sgid-grp(own grp)           ids 0/0/0/0 gids 0/44/44/44 SEC 1 AT_UID 0 AT_EUID 0 AT_GID 0 AT_EGID 44 eff 1ffffffffff prm 1ffffffffff nnp 0/0 pdeath 0 seteuid0 ok

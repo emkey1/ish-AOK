@@ -239,13 +239,23 @@ int_t sys_prctl_guest(dword_t option, qword_t arg2, qword_t arg3, qword_t arg4, 
                 return _EFAULT;
             return 0;
         }
+        // Kept, and honoured by exec (exec_setid_plan). It was accepted and
+        // forgotten, so GET said 0 to a sandbox that had just set it, and a
+        // setuid-root binary run from inside one still made root. Linux's
+        // argument rules, measured on 6.12: SET takes exactly (1, 0, 0, 0) --
+        // a 0 is EINVAL too, there being no way to clear it -- and GET takes
+        // (0, 0, 0, 0). Per thread: one created before the SET does not have
+        // it, one created after does, and so do a fork and an exec.
         case PRCTL_SET_NO_NEW_PRIVS_:
-            if (arg2 > 1)
+            STRACE("prctl(PR_SET_NO_NEW_PRIVS, %#llx)", (unsigned long long) arg2);
+            if (arg2 != 1 || arg3 != 0 || arg4 != 0 || arg5 != 0)
                 return _EINVAL;
-            STRACE("prctl(PR_SET_NO_NEW_PRIVS, %#x)", arg2);
+            current->no_new_privs = true;
             return 0;
         case PRCTL_GET_NO_NEW_PRIVS_:
-            return 0;
+            if (arg2 != 0 || arg3 != 0 || arg4 != 0 || arg5 != 0)
+                return _EINVAL;
+            return current->no_new_privs ? 1 : 0;
         // A real ambient set (kernel/task.h cap_ambient), not a no-op:
         // ambient bits survive the root-to-nonroot uid transition into
         // permitted+effective (kernel/getset.c cap_emulate_setxuid), which

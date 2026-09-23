@@ -178,6 +178,9 @@ bool ptrace_attach_fork_child(struct task *child, struct task *tracee) {
     child->ptrace.sysgood = tracee->ptrace.sysgood;
     child->ptrace.options = tracee->ptrace.options;
     child->ptrace.tracer = tracer;
+    // The same link, so the same privilege: Linux's ptrace_init_task hands the
+    // child its parent's ptracer_cred, not the tracer's credentials of today.
+    child->ptrace_link_capable = tracee->ptrace_link_capable;
     list_add(&tracer->ptracees, &child->ptrace_siblings);
     unlock(&pids_lock);
     return true;
@@ -957,12 +960,31 @@ dword_t sys_ptrace(dword_t request, dword_t pid, addr_t addr, dword_t data) {
 
 dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_addr_t data) {
     switch (request) {
-        case PTRACE_TRACEME_:
+        case PTRACE_TRACEME_: {
             STRACE("ptrace(PTRACE_TRACEME, %d, %#llx, %#llx)", pid,
                     (unsigned long long) addr, (unsigned long long) data);
-            current->ptrace.traced = true;
-            current->ptrace.tracer = current->parent;
-            return 0;
+            // A task that is already traced keeps its tracer: EPERM, as
+            // Linux's ptrace_traceme answers. It used to re-link to the parent,
+            // which took the tracee away from a tracer that had attached to it
+            // -- and now would also replace who made the link, the thing a
+            // set-id exec asks about (ptrace_link_capable).
+            //
+            // The link is made with the TRACEE's credentials, not the
+            // parent's, as it has been on Linux since the CVE-2019-13272 fix:
+            // the tracee chose to be traced, so it is its own privilege that
+            // decides whether a set-id program it runs keeps what it grants.
+            complex_lockt(&pids_lock, 0);
+            lock(&current->ptrace.lock, 0);
+            bool already = current->ptrace.traced;
+            if (!already) {
+                current->ptrace.traced = true;
+                current->ptrace.tracer = current->parent;
+                current->ptrace_link_capable = current_capable(CAP_SYS_PTRACE_);
+            }
+            unlock(&current->ptrace.lock);
+            unlock(&pids_lock);
+            return already ? _EPERM : 0;
+        }
 
         // PTRACE_ATTACH is what gdb uses; it differs from SEIZE in two ways.
         // It takes no options, and it STOPS the tracee -- the tracer's first
@@ -1008,6 +1030,10 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             child->ptrace.traced = true;
             child->ptrace.seized = seize;
             child->ptrace.tracer = current;
+            // The tracer's privilege as it is now, at the attach: dropping it
+            // later does not make the link any less privileged (Linux's
+            // __ptrace_link records current_cred() here).
+            child->ptrace_link_capable = current_capable(CAP_SYS_PTRACE_);
             child->ptrace.options = seize ? data : 0;
             child->ptrace.sysgood = seize && !!(data & PTRACE_O_TRACESYSGOOD_);
             child->ptrace.stop_at_syscall = false;

@@ -1793,23 +1793,119 @@ static void exec_apply_native_process_state(struct mm *new_mm) {
     vfork_notify(current);
 }
 
-// AT_SECURE for the image about to be built, from the credentials staged for
-// it: Linux's secureexec, which cap_bprm_creds_from_file sets when the exec
-// leaves the effective ids other than the real ones (its is_setid) -- whether
-// a set-id bit did that or the process was already running that way. (It also
-// counts file capabilities, which AOK has none of.)
+// What an exec does to the effective ids, and to the capabilities that go with
+// them: decided before the image is loaded, because the aux vector elf_exec
+// builds has to describe it, and applied only once the exec can no longer
+// fail. Applied any earlier, a FAILED exec would leave the caller holding the
+// privilege of a program that never ran.
+struct exec_setid {
+    uid_t_ euid;
+    uid_t_ egid;
+    // AT_SECURE: Linux's secureexec, which cap_bprm_creds_from_file sets when
+    // the exec leaves the effective ids other than the real ones (its
+    // is_setid) -- whether a set-id bit did that or the process was already
+    // running that way. (It also counts file capabilities, which AOK has none
+    // of.)
+    //
+    // It used to be "the file has a set-id bit". That marked a root running a
+    // setuid-root program, or anyone running a setuid program of their own,
+    // as gaining privilege they already had. And it marked as ordinary a
+    // process whose effective uid was not its real one -- a setuid program's
+    // child, a daemon between seteuid calls -- so its loader honoured
+    // LD_PRELOAD from an environment its real user controls. Measured on
+    // Linux 6.12 (camd, root): after setresuid(-1, 1000, -1), or
+    // setresgid(-1, 1234, -1), a plain exec has AT_SECURE 1; a root exec of a
+    // setuid-root binary has 0.
+    //
+    // Decided BEFORE the downgrade below, as Linux decides it, so an exec that
+    // was refused its privilege is still a secure one: measured on 6.12, a
+    // traced exec of a set-group-ID binary runs with the real gid and
+    // AT_SECURE 1, AT_EGID showing the gid it really got.
+    bool secure;
+    // The file makes the effective uid root: the setuid-root grant of every
+    // capability, which a sudo needs to drop to its target user.
+    bool root_grant;
+    // The exec may not gain privilege (exec_gain_unsafe): that grant is cut
+    // down to the capabilities the caller already had.
+    bool limited;
+};
+
+// Whether this exec must not gain privilege: the conditions Linux's
+// check_unsafe_exec records, as cap_bprm_creds_from_file weighs them.
 //
-// It used to be "the file has a set-id bit". That marked a root running a
-// setuid-root program, or anyone running a setuid program of their own, as
-// gaining privilege they already had. And it marked as ordinary a process
-// whose effective uid was not its real one -- a setuid program's child, a
-// daemon between seteuid calls -- so its loader honoured LD_PRELOAD from an
-// environment its real user controls. Measured on Linux 6.12 (camd, root):
-// after setresuid(-1, 1000, -1), or setresgid(-1, 1234, -1), a plain exec
-// has AT_SECURE 1; a root exec of a setuid-root binary has 0.
-static bool exec_staged_is_secure(void) {
-    return current->exec_auxv_euid != current->uid ||
-           current->exec_auxv_egid != current->gid;
+// A traced process, unless whoever made the ptrace link could have traced
+// anything anyway (ptracer_capable, which asks for CAP_SYS_PTRACE). Otherwise a
+// debugger any user can run would be a way to run a setuid-root program with
+// its memory and registers in that user's hands: strace or gdb on sudo, by
+// its own unprivileged user, ran sudo as root. And no_new_privs, which is what
+// the flag is for.
+//
+// Not modelled: Linux's third condition, a filesystem context shared with a
+// process outside this one (clone with CLONE_FS but not CLONE_THREAD).
+static bool exec_gain_unsafe(void) {
+    if (current->no_new_privs)
+        return true;
+    lock(&current->ptrace.lock, 0);
+    bool unsafe = current->ptrace.traced && !current->ptrace_link_capable;
+    unlock(&current->ptrace.lock);
+    return unsafe;
+}
+
+// Linux's bprm_fill_uid and the part of cap_bprm_creds_from_file that decides
+// the effective ids, for a file whose set-id bits (already stripped for a
+// nosuid mount) are `setuid` with owner `owner` and `setgid` with group
+// `group`.
+static void exec_setid_plan(struct exec_setid *plan, bool setuid, uid_t_ owner,
+        bool setgid, uid_t_ group) {
+    *plan = (struct exec_setid) {.euid = current->euid, .egid = current->egid};
+    // no_new_privs: the set-id bits are not even looked at.
+    if (!current->no_new_privs) {
+        if (setuid) {
+            plan->euid = owner;
+            plan->root_grant = owner == 0;
+        }
+        if (setgid)
+            plan->egid = group;
+    }
+    plan->secure = plan->euid != current->uid || plan->egid != current->gid;
+
+    // The downgrade, which Linux applies to an exec that would change the
+    // effective ids or give capabilities the caller does not have (its
+    // __cap_gained). The ids go back to the real ones -- unless the caller
+    // could have set any ids it liked anyway (CAP_SETUID), which
+    // no_new_privs does not allow for -- and the capabilities stay within what
+    // the caller already had.
+    //
+    // Nothing looked at any of this, so a traced exec took everything the
+    // file offered. Measured on Linux 6.12, as uid 1000 with a setgid binary
+    // of one of its supplementary groups: untraced it runs with that egid;
+    // traced -- PTRACE_TRACEME, a parent's SEIZE or ATTACH, or a fork the
+    // tracer followed -- with egid 1000; traced and detached again before the
+    // exec, with the group's. CAP_SYS_PTRACE and CAP_SETUID are asked as
+    // current_capable asks everything, so root counts as holding both.
+    bool gains_caps = plan->root_grant &&
+            ((CAP_FULL_LOW_ & ~current->cap_permitted[0]) != 0 ||
+             (CAP_FULL_HIGH_ & ~current->cap_permitted[1]) != 0);
+    if ((plan->secure || gains_caps) && exec_gain_unsafe()) {
+        if (current->no_new_privs || !current_capable(CAP_SETUID_)) {
+            plan->euid = current->uid;
+            plan->egid = current->gid;
+        }
+        plan->limited = true;
+    }
+}
+
+// Hands the planned ids to the aux vector elf_exec is about to build. musl and
+// glibc both decide a process is secure-execution from AT_SECURE, and musl
+// additionally from AT_UID == AT_EUID && AT_GID == AT_EGID -- all four were
+// hardcoded 0, so a setuid-root binary looked like an ordinary one and
+// honoured LD_PRELOAD, giving any local user root.
+static void exec_setid_stage(const struct exec_setid *plan) {
+    current->exec_auxv_uid = current->uid;
+    current->exec_auxv_gid = current->gid;
+    current->exec_auxv_euid = plan->euid;
+    current->exec_auxv_egid = plan->egid;
+    current->exec_secure = plan->secure;
 }
 
 // What every exec does to the saved and filesystem ids, set-id or not, once
@@ -1830,19 +1926,42 @@ static void exec_reset_saved_ids(void) {
     current->sgid = current->fsgid = current->egid;
 }
 
+// The credential change exec_setid_plan decided on, made once the exec is
+// committed. The setuid-root grant is limited to the permitted set the caller
+// already had when the exec may not gain privilege -- Linux intersects the new
+// permitted set with the old -- which leaves an unprivileged caller nothing
+// (the ordinary non-root collapse below __do_execve's call then settles it at
+// the ambient set, as Linux does).
+static void exec_setid_apply(const struct exec_setid *plan) {
+    current->euid = plan->euid;
+    current->egid = plan->egid;
+    if (plan->root_grant) {
+        dword_t low = CAP_FULL_LOW_, high = CAP_FULL_HIGH_;
+        if (plan->limited) {
+            low &= current->cap_permitted[0];
+            high &= current->cap_permitted[1];
+        }
+        current->cap_effective[0] = current->cap_permitted[0] = low;
+        current->cap_effective[1] = current->cap_permitted[1] = high;
+    }
+    exec_reset_saved_ids();
+}
+
 // The parent-death signal (PR_SET_PDEATHSIG) does not outlive an exec that
 // changes who the process is. Linux forgets it twice over: begin_new_exec for
-// a secure exec ("Make sure parent cannot signal privileged process"), whose
-// test is exec_staged_is_secure's -- the effective ids left other than the
-// real ones -- and commit_creds for a change of the effective or filesystem
-// ids, the reset above included, or growth in the permitted capabilities
-// (cred_change_commit). Any other exec keeps it. Measured on Linux 6.12: a
-// set-group-ID binary of another group, a set-user-ID binary of another user,
-// and a plain exec after setfsuid or setresuid(-1, 1000, -1) forget it; a
-// root's exec of a setuid-root binary, a set-user-ID binary of the caller's
-// own, and a plain exec after setresuid(-1, -1, 1000) keep it.
-static void exec_forget_pdeath(const struct cred_change *before) {
-    if (current->euid != current->uid || current->egid != current->gid)
+// a secure exec ("Make sure parent cannot signal privileged process") --
+// struct exec_setid's `secure`, handed in here -- and commit_creds for a
+// change of the effective or filesystem ids, the reset above included, or
+// growth in the permitted capabilities (cred_change_commit). Any other exec
+// keeps it. Measured on Linux 6.12: a set-group-ID binary of another group, a
+// set-user-ID binary of another user, and a plain exec after setfsuid or
+// setresuid(-1, 1000, -1) forget it; a root's exec of a setuid-root binary, a
+// set-user-ID binary of the caller's own, and a plain exec after
+// setresuid(-1, -1, 1000) keep it. A traced exec of a set-group-ID binary of
+// another group forgets it too: it is secure although the downgrade left the
+// ids as they were.
+static void exec_forget_pdeath(const struct cred_change *before, bool secure) {
+    if (secure)
         current->pdeath_signal = 0;
     cred_change_commit(before);
 }
@@ -1927,18 +2046,19 @@ static int native_dispatch_exec(struct fd *fd, struct exec_args argv, struct exe
     // motivated exec_secure cannot exist for compiled-in host code. What DOES
     // carry over is the caller's environment, and sanitising that is the
     // program's own job (kernel/native.h says so where the flag is declared).
+    //
+    // Planned as the ELF path plans it, so the same rules refuse the
+    // privilege: a native sudo run under a tracer that could not have traced
+    // root, or with no_new_privs set, runs as its caller. It was root either
+    // way. The grant itself is the ELF path's for setuid-root, and for the
+    // same reason: a sudo that means to drop to a target uid needs CAP_SETGID
+    // and CAP_SETUID still in hand to do it.
+    struct exec_setid setid;
+    exec_setid_plan(&setid, prog->setuid_root, 0, false, 0);
     struct cred_change creds;
     cred_change_begin(&creds);
-    if (prog->setuid_root) {
-        current->euid = 0;
-        // Same grant the ELF path makes for setuid-root, and for the same
-        // reason: a sudo that means to drop to a target uid needs CAP_SETGID
-        // and CAP_SETUID still in hand to do it.
-        current->cap_effective[0] = current->cap_permitted[0] = CAP_FULL_LOW_;
-        current->cap_effective[1] = current->cap_permitted[1] = CAP_FULL_HIGH_;
-    }
-    exec_reset_saved_ids();
-    exec_forget_pdeath(&creds);
+    exec_setid_apply(&setid);
+    exec_forget_pdeath(&creds, setid.secure);
     return EXEC_NATIVE_DISPATCHED;
 }
 
@@ -1978,19 +2098,18 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
         return err == EXEC_NATIVE_DISPATCHED ? 0 : err;
     }
 
-    // Stage what the credentials will be once this exec commits, for the aux
-    // vector elf_exec is about to build. The real change stays below, after
-    // the image is loaded: doing it here would leave a FAILED exec holding
-    // elevated privilege. musl and glibc both decide a process is
-    // secure-execution from AT_SECURE, and musl additionally from
-    // AT_UID == AT_EUID && AT_GID == AT_EGID -- all four were hardcoded 0, so
-    // a setuid-root binary looked like an ordinary one and honoured
-    // LD_PRELOAD, giving any local user root.
-    current->exec_auxv_uid  = current->uid;
-    current->exec_auxv_gid  = current->gid;
-    current->exec_auxv_euid = (stat.mode & S_ISUID) ? stat.uid : current->euid;
-    current->exec_auxv_egid = (stat.mode & S_ISGID) ? stat.gid : current->egid;
-    current->exec_secure = exec_staged_is_secure();
+    // Decide what the credentials will be once this exec commits, and stage
+    // them for the aux vector elf_exec is about to build. The real change
+    // stays below, after the image is loaded.
+    //
+    // A set-group-ID bit counts only with group execute beside it: without
+    // S_IXGRP it is the old mandatory-locking marker, and Linux's bprm_fill_uid
+    // ignores it. Measured on 6.12: a mode-2745 file of another group ran
+    // with the caller's egid and AT_SECURE 0; AOK gave it the file's group.
+    struct exec_setid setid;
+    bool setgid = (stat.mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP);
+    exec_setid_plan(&setid, stat.mode & S_ISUID, stat.uid, setgid, stat.gid);
+    exec_setid_stage(&setid);
 
     err = format_exec(fd, file, argv, envp, 0);
     if (err == _ENOEXEC) {
@@ -1999,13 +2118,12 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
         // the credential change below, so a root-owned mode-4755 script with a
         // cooperative interpreter handed any local user a root shell.
         //
-        // Clear them before shebang_exec, which builds the interpreter's aux
-        // vector from the staged values above, so the interpreter is not given
-        // the script's owner as its euid, nor marked secure-execution for it.
-        stat.mode &= ~(mode_t_) (S_ISUID | S_ISGID);
-        current->exec_auxv_euid = current->euid;
-        current->exec_auxv_egid = current->egid;
-        current->exec_secure = exec_staged_is_secure();
+        // Re-planned without them before shebang_exec, which builds the
+        // interpreter's aux vector from the staged values, so the interpreter
+        // is not given the script's owner as its euid, nor marked
+        // secure-execution for it.
+        exec_setid_plan(&setid, false, 0, false, 0);
+        exec_setid_stage(&setid);
         err = shebang_exec(fd, file, argv, envp, 0);
     }
     fd_close(fd);
@@ -2020,22 +2138,12 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     if (err == EXEC_NATIVE_DISPATCHED)
         return 0;
 
-    // setuid/setgid
+    // setuid/setgid. The legacy setuid-root grant is full permitted and
+    // effective caps, so helpers like sudo can use keepcaps+setresuid to drop
+    // uid while retaining CAP_SETGID for a subsequent setresgid call.
     struct cred_change creds;
     cred_change_begin(&creds);
-    if (stat.mode & S_ISUID) {
-        current->euid = stat.uid;
-        if (stat.uid == 0) {
-            // Legacy setuid-root: grant full permitted and effective caps so
-            // helpers like sudo can use keepcaps+setresuid to drop uid while
-            // retaining CAP_SETGID for a subsequent setresgid call.
-            current->cap_effective[0] = current->cap_permitted[0] = CAP_FULL_LOW_;
-            current->cap_effective[1] = current->cap_permitted[1] = CAP_FULL_HIGH_;
-        }
-    }
-    if (stat.mode & S_ISGID)
-        current->egid = stat.gid;
-    exec_reset_saved_ids();
+    exec_setid_apply(&setid);
 
     // Capabilities do not survive an ordinary exec. Linux recomputes them from
     // the file's own capabilities and the ambient set; with no file
@@ -2051,13 +2159,23 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     // capability across an exec deliberately, and the root path is left
     // exactly as it was: Linux re-grants there too (handle_privileged_root),
     // and the setuid-root branch above depends on it.
+    //
+    // A root caller whose effective uid is not root keeps its permitted set
+    // (Linux's handle_privileged_root grants it for a real uid of 0 too) but
+    // not its effective one: that is granted only to an effective uid of 0,
+    // and otherwise it is the ambient set. Measured on 6.12: root exec'ing a
+    // set-user-ID binary of uid 1000, traced or not, ran with CapEff 0 and a
+    // full CapPrm; AOK left CapEff full as well.
     if (current->euid != 0 && current->uid != 0) {
         current->cap_permitted[0] = current->cap_ambient[0];
         current->cap_permitted[1] = current->cap_ambient[1];
         current->cap_effective[0] = current->cap_ambient[0];
         current->cap_effective[1] = current->cap_ambient[1];
+    } else if (current->euid != 0) {
+        current->cap_effective[0] = current->cap_ambient[0];
+        current->cap_effective[1] = current->cap_ambient[1];
     }
-    exec_forget_pdeath(&creds);
+    exec_forget_pdeath(&creds, setid.secure);
 
     // save current->comm
     char old_comm[sizeof(current->comm)];

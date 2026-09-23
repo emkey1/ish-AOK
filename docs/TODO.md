@@ -1204,6 +1204,32 @@ rows actually added, so the two styles cannot drift apart again -- the same
 bug will recur the next time a button is added to one branch and not the
 other.
 
+### An effective uid of 0 counts as every capability, whatever the effective set says
+
+`current_capable()` (kernel/getset.c) is `superuser() || <the bit in
+cap_effective>`, and `superuser()` is an effective uid of 0. Linux asks the
+effective set alone. The one place a test shows it is
+`tests/manual/exec_setid_unsafe.sh`, row R7. Root drops `CAP_SYS_PTRACE` and
+`CAP_SETUID` from its effective set, calls `PTRACE_TRACEME`, and execs a
+binary that is set-user-ID to uid 1000:
+
+- **Linux** refuses the new uid, since the tracer could not have attached and
+  the caller cannot set ids itself. The image runs as 0/0/0/0.
+- **AOK** runs it as 0/1000/1000/1000.
+
+That is the only one of the test's 51 rows that differs.
+
+Every privileged syscall asks the same function, so the fix is tree-wide. Each
+`current_capable()` and `superuser()` caller needs checking against what Linux
+asks there, and the capability tests need re-running as root with a reduced
+effective set, which none of them do today.
+
+Two more gaps in the same exec rules, neither with a test:
+- **Shared filesystem context:** Linux's third unsafe-exec condition, a
+  `CLONE_FS` shared with a process outside this one, is not modelled.
+- **`#!` interpreters:** Linux honours an interpreter's own set-id bits, and
+  AOK does not.
+
 ## Timers across a checkpoint
 
 ### FIXED: timers, and the signals they queue, were not in the image
