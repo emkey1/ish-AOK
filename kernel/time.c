@@ -1690,7 +1690,13 @@ static void posix_timer_callback(struct posix_timer *timer) {
             timer->last_overrun = overrun;
         } else {
             timer->last_overrun = 0;
-            send_signal(thread, timer->signal, info);
+            // SIGEV_THREAD_ID to its thread; SIGEV_SIGNAL to the process,
+            // where any thread that can take it does (Linux's
+            // send_sigqueue with PIDTYPE_TGID).
+            if (timer->thread_pid != 0)
+                send_signal(thread, timer->signal, info);
+            else
+                send_signal_to_process(thread, timer->signal, info);
         }
         task_ref_cnt_mod(thread, -1);
     }

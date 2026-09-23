@@ -281,12 +281,6 @@ int_t signal_eintr_no_restart(int_t res);
 bool signal_is_ignored_or_blocked(int sig);
 // send a signal to all processes in a group, could return ESRCH
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info);
-struct tgroup;
-// The thread of a process that takes a signal sent to the whole process --
-// chosen as kill(pid) chooses, not simply its leader, which may have exited
-// or block the signal. NULL when the process is exiting and no thread of it
-// can take anything. Caller holds pids_lock.
-struct task *tgroup_signal_target_locked(struct tgroup *tgroup, int sig);
 // check for and deliver pending signals on current
 // must be called without pids_lock, current->group->lock, or current->sighand->lock
 void receive_signals(void);
@@ -398,17 +392,23 @@ void deliver_signal_with_sighand(struct task *task, struct sighand *sighand, int
 struct tgroup;
 // Deliver a process-directed signal to `task`'s thread group: enqueues into
 // the shared sighand->queue (visible to any sibling thread's signalfd/
-// sigwaitinfo/receive_signals, matching Linux's shared_pending) and tells ONE
-// thread that can take it -- `task` itself when it can -- to do so, as Linux's
-// complete_signal does. Use for signals conceptually addressed to "the
-// process" (e.g. SIGCHLD to a possibly-multithreaded parent) rather than to
-// one specific thread (tkill/tgkill/synchronous traps stay on
-// send_signal/deliver_signal).
+// sigwaitinfo/sigpending/receive_signals, matching Linux's shared_pending) and
+// tells ONE thread that can take it -- `task` itself when it can -- to do so,
+// as Linux's complete_signal does. For every signal addressed to "the
+// process": kill() and the rest of its family, the terminal's, a child's exit,
+// stop and continue, the timers', rather than to one specific thread
+// (tkill/tgkill/synchronous traps stay on send_signal/deliver_signal). A
+// SIGCONT or stop signal cancels the other kind on every queue of the process,
+// and SIGCONT and SIGKILL lift a stop, as send_signal does for one thread.
 //
 // `task` is the thread it is sent to, and only its mask decides whether a
 // signal the process ignores is queued at all, as on Linux: for a child's exit
-// that is the thread that forked it. The caller holds a reference on `task`.
+// that is the thread that forked it. It may have exited; a task no longer in
+// the pid table was reaped with its process, and is sent nothing. The caller
+// holds a reference on `task`, and no pids_lock.
 void send_signal_to_process(struct task *task, int sig, struct siginfo_ info);
+// The same, for a caller that holds pids_lock.
+void send_signal_to_process_pids_locked(struct task *task, int sig, struct siginfo_ info);
 // The same, sent to the group's leader, which is where Linux sends an interval
 // timer's signal (it_real_fn's leader_pid).
 void send_signal_to_group(struct tgroup *group, int sig, struct siginfo_ info);
@@ -475,7 +475,8 @@ int_t sys_signalfd4(int_t fd, addr_t mask_addr, dword_t sigsetsize, int_t flags)
 int_t sys_signalfd_guest(int_t fd, guest_addr_t mask_addr, dword_t sigsetsize);
 int_t sys_signalfd4_guest(int_t fd, guest_addr_t mask_addr, dword_t sigsetsize, int_t flags);
 
-int signal_kill_task(struct task *task, dword_t sig, int si_code);
+// kill(2)'s send to the process `task` belongs to, after its permission check.
+int signal_kill_process(struct task *task, dword_t sig, int si_code);
 dword_t sys_kill(pid_t_ pid, dword_t sig);
 dword_t sys_tkill(pid_t_ tid, dword_t sig);
 dword_t sys_tgkill(pid_t_ tgid, pid_t_ tid, dword_t sig);

@@ -1673,10 +1673,11 @@ void tty_set_winsize(struct tty *tty, struct winsize_ winsize) {
     if (pid != NULL) {
         struct tgroup *tgroup;
         list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
-            // Not the leader, which may have exited or block SIGWINCH.
-            struct task *task = tgroup_signal_target_locked(tgroup, SIGWINCH_);
-            if (task != NULL)
-                send_signal(task, SIGWINCH_, SIGINFO_NIL);
+            // To the process, as Linux's kill_pgrp sends it: a thread that
+            // can take it is told, whether or not the leader has exited or
+            // blocks SIGWINCH.
+            if (tgroup->leader != NULL)
+                send_signal_to_process_pids_locked(tgroup->leader, SIGWINCH_, SIGINFO_NIL);
         }
     }
     unlock(&pids_lock);

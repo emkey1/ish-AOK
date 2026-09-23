@@ -721,30 +721,28 @@ guards rather than by review:
   now yields only anonymous, host-readable pages. See the commit; that filter is
   a safety requirement, not a preference.
 
-### A signal every thread blocks waits on one thread, not on the process
+### Signals left over from moving kill() to the process queue
 
-Measured 2026-09-23, alpine-amd64-test against Linux 6.12: a process whose
-threads all block SIGUSR1 and SIGUSR2, and whose worker takes them with
-`sigwaitinfo`, sleeping 800 ms between calls. A signal sent while the worker
-is between calls -- by `kill(pid)` or `kill(-pgid)` alike -- is taken by its
-next call on Linux, and never on AOK. Linux queues a process's signal on the
-process (`shared_pending`), where a later `sigwait`, or a thread that
-unblocks it, finds it. AOK queues it on one thread
-(`pick_process_directed_target`): one that is sigwaiting for it, else one that
-does not block it, else the leader -- whose queue a sibling's `sigwaitinfo`
-never reads. A hangup sends SIGHUP and SIGCONT back to back, so the second
-could land in that window; `tests/manual/group_signal_target.c` keeps SIGCONT
-out of its sigwait shape for that reason, though three runs with it in never
-hit it.
-
-**Next step:** when no thread waits for the signal and every one blocks it,
-queue it on the process (`sighand->queue`, the path `send_signal_to_process`
-takes) instead. kill() was kept off that path because it lacks the stop and
-continue handling `send_signal_with_sighand` has (the comment above
-`pick_process_directed_target`): `signal_prepare_stop_cont` flushes one
-thread's queue, where Linux's `prepare_signal` flushes the process's and every
-thread's. Give it that first, then run signal_restart, signal_stop_cont and
-process_conformance.
+Fixed 2026-09-23 ("signal: a thread takes its own signals first, and kill()
+queues on the process", tests/manual/signal_dequeue_order.c): a process's
+signal waits on the process's queue, and a thread takes its own queue before
+the process's, synchronous signals first. Found alongside, by reading, not
+measured:
+- A native program's handlers run in the order their signals are taken:
+  `nlibc_deliver_signals_count` calls each as it takes it. A translated
+  guest, like Linux, stacks a frame per signal, so the LAST one taken runs
+  first.
+- A stop or continue signal the kernel sends to one thread while holding
+  pids_lock (ptrace's attach SIGSTOP, a resume's signal) cancels the other
+  kind on that thread's queue and the process's, not on the other threads'
+  own queues: `send_signal` has no thread list. tkill, tgkill and
+  rt_tgsigqueueinfo do reach every thread (`signal_prepare_stop_cont_threads`).
+- kill(-1) skips only the calling thread (`kill_everything`); Linux skips
+  the caller's whole thread group, so a non-leader thread's kill(-1) also
+  signals its own process here.
+- kill()'s and tkill()'s si_pid is the sending thread's id; Linux's
+  prepare_kill_siginfo gives the sender's tgid. sigqueue() overwrites the
+  si_pid the caller filled in the same way.
 
 ### The orphaned-group test has two copies, and neither skips what Linux does
 

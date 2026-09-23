@@ -748,8 +748,10 @@ static void ptrace_stop_common(int sig, const struct siginfo_ *info, bool syscal
     unlock(&pids_lock);
 
     if (tracer != NULL) {
+        // To the tracer's process, as Linux's do_notify_parent_cldstop sends
+        // it: whichever of its threads can take it.
         if (signal_no != 0)
-            send_signal(tracer, signal_no, SIGINFO_NIL);
+            send_signal_to_process(tracer, signal_no, SIGINFO_NIL);
         task_ref_cnt_mod(tracer, -1);
     }
 

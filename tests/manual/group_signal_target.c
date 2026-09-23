@@ -86,22 +86,19 @@ static void nap(long ms) {
         continue;
 }
 
-// The signals a victim takes. In the sigwait shape SIGCONT is left at its
-// default and unblocked, which with nothing stopped discards it on both
-// kernels. Both hangup senders send it right behind SIGHUP, and the worker
-// takes one signal per sigwaitinfo call, so whether the worker is still in
-// the call when SIGCONT is sent is a race. If it has left it, every thread
-// blocks SIGCONT and none is asking for it: Linux keeps it on the process for
-// the next call, and AOK leaves it with the leader, where no later call of the
-// worker's sees it. That gap is recorded in docs/TODO.md, measured with a
-// worker that pauses between calls; here it would only make a flake.
+// The signals a victim takes, all of them in every shape. Both hangup
+// senders send SIGCONT right behind SIGHUP, and the sigwait worker takes one
+// signal per sigwaitinfo call, so SIGCONT can arrive while it is between
+// calls, every thread blocking it and none asking for it. It waits on the
+// process for the next call, as on Linux. AOK used to leave it with the
+// leader, where no later call of the worker's saw it, and this shape left
+// SIGCONT out; tests/manual/signal_dequeue_order.c has the measured case.
 static sigset_t taken_set(enum shape shape) {
+    (void) shape;
     sigset_t set;
     sigemptyset(&set);
     for (size_t i = 0; i < NVICTIM_SIGS; i++)
         sigaddset(&set, victim_sigs[i]);
-    if (shape == SIGWAIT_WORKER)
-        sigdelset(&set, SIGCONT);
     return set;
 }
 
@@ -237,10 +234,10 @@ static char proc_state(pid_t pid) {
     return thread_state(pid, pid);
 }
 
-// A sigwait worker takes a signal every thread blocks only while it is inside
-// sigwaitinfo; before that the signal has no thread to go to, and on AOK it
-// stays with the leader (see taken_set). Asleep means inside the call: its
-// report write never blocks.
+// A sigwait worker takes a signal every thread blocks while it is inside
+// sigwaitinfo, or at its next call (see taken_set). The sends wait for it to
+// be inside, so that each report follows its own send. Asleep means inside
+// the call: its report write never blocks.
 static void wait_asleep(pid_t pid, pid_t tid) {
     for (unsigned i = 0; i < test_watchdog_secs(5) * 100 && thread_state(pid, tid) != 'S'; i++)
         nap(10);
@@ -270,11 +267,10 @@ static void expect(struct victim *v, const char *what, int sig) {
     }
 }
 
-// SIGHUP, and SIGCONT unless the shape discards it, in either order.
+// SIGHUP and SIGCONT, in either order.
 static void expect_hup_cont(struct victim *v, const char *what) {
-    bool want_cont = v->shape != SIGWAIT_WORKER;
     bool hup = false, cont = false, other = false, stranger = false;
-    for (int i = 0; i < (want_cont ? 2 : 1); i++) {
+    for (int i = 0; i < 2; i++) {
         struct report r;
         if (!read_within(v->reports, &r, sizeof r, (int) wait_ms()))
             break;
@@ -290,10 +286,8 @@ static void expect_hup_cont(struct victim *v, const char *what) {
     char label[160];
     snprintf(label, sizeof label, "%s: %s: SIGHUP reaches the process", shape_names[v->shape], what);
     ck(label, hup, 1);
-    if (want_cont) {
-        snprintf(label, sizeof label, "%s: %s: SIGCONT reaches the process", shape_names[v->shape], what);
-        ck(label, cont, 1);
-    }
+    snprintf(label, sizeof label, "%s: %s: SIGCONT reaches the process", shape_names[v->shape], what);
+    ck(label, cont, 1);
     snprintf(label, sizeof label, "%s:   and nothing else arrives", shape_names[v->shape]);
     ck(label, other, 0);
     snprintf(label, sizeof label, "%s:   all taken by the worker", shape_names[v->shape]);

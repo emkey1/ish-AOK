@@ -225,6 +225,7 @@ signal_restart_record.c
 signal_ignored_restart.c
 signal_process_wake_one.c
 signal_handler_mask.c
+signal_dequeue_order.c
 dir_tmpfs.c
 futex_validation.c
 futex_timeout_duration.c

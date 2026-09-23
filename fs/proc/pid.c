@@ -788,14 +788,13 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     // Linux's render_sigset_t() prints the whole 64-bit sigset, all 16 hex
     // digits of it. sigset_t_ is 64 bits here too, so %08x both under-read the
     // argument and told consumers the mask was half the width it is.
-    proc_printf(buf, "SigPnd:\t%016llx\n", (unsigned long long)pending);
-    proc_printf(buf, "ShdPnd:\t0000000000000000\n");
-    proc_printf(buf, "SigBlk:\t%016llx\n", (unsigned long long)blocked);
-    // Hardcoded zero before, which told every reader the process ignored
-    // nothing and caught nothing -- the two fields a debugger or a supervisor
-    // reads to find out which signals will actually reach it. Built from the
-    // dispositions, the way Linux's collect_sigign_sigcatch does.
-    sigset_t_ ignored = 0, caught = 0;
+    // SigIgn and SigCgt were hardcoded zero before, which told every reader the
+    // process ignored nothing and caught nothing -- the two fields a debugger
+    // or a supervisor reads to find out which signals will actually reach it.
+    // Built from the dispositions, the way Linux's collect_sigign_sigcatch
+    // does. ShdPnd was zero too: what is pending on the process rather than on
+    // one thread, which is where kill() leaves a signal every thread blocks.
+    sigset_t_ ignored = 0, caught = 0, shared_pending = 0;
     if (task->sighand != NULL) {
         lock(&task->sighand->lock, 0);
         for (int sig = 1; sig < NUM_SIGS; sig++) {
@@ -805,8 +804,12 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
             else if (handler != SIG_DFL_)
                 caught |= (sigset_t_) 1 << (sig - 1);
         }
+        shared_pending = task->sighand->pending;
         unlock(&task->sighand->lock);
     }
+    proc_printf(buf, "SigPnd:\t%016llx\n", (unsigned long long)pending);
+    proc_printf(buf, "ShdPnd:\t%016llx\n", (unsigned long long) shared_pending);
+    proc_printf(buf, "SigBlk:\t%016llx\n", (unsigned long long)blocked);
     proc_printf(buf, "SigIgn:\t%016llx\n", (unsigned long long) ignored);
     proc_printf(buf, "SigCgt:\t%016llx\n", (unsigned long long) caught);
     proc_printf(buf, "CapInh:\t%08x%08x\n", task->cap_inheritable[1], task->cap_inheritable[0]);
