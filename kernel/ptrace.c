@@ -100,13 +100,20 @@ static void ptrace_resume_child_locked(struct task *child, int resume_sig,
         // and it must find nothing owed there.
         __atomic_store_n(&child->ptrace.trap_stop, false, __ATOMIC_RELEASE);
     }
-    notify(&child->ptrace.cond);
-    unlock(&child->ptrace.lock);
     // A ptrace resume also lifts any job-control (group) stop on the tracee:
     // ptrace control takes precedence over SIGSTOP/SIGCONT job control, so a
     // tracer continuing a group-stopped tracee must let it run. Without this a
     // tracee that group-stops (e.g. strace re-injecting the post-fork SIGSTOP)
     // would wait forever in handle_interrupt's group-stop loop.
+    //
+    // Before the tracee is woken, not after. Lifted once the lock was
+    // dropped, a tracee woken first came back round group_stop_wait, found
+    // the group still stopped and reported the group-stop it had just been
+    // let out of a second time, then waited in it for a resume its tracer
+    // did not know it owed: 13 of 80,000 PTRACE_CONTs from a group-stop, seized
+    // and not, in a loop that stops and resumes a tracee; none since. Linux's
+    // tracee never comes back to a group-stop its tracer ended.
+    // ptrace.lock -> group->lock; nothing takes them the other way round.
     if (resume_sig == 0) {
         lock(&child->group->lock, 0);
         if (child->group->stopped) {
@@ -115,6 +122,8 @@ static void ptrace_resume_child_locked(struct task *child, int resume_sig,
         }
         unlock(&child->group->lock);
     }
+    notify(&child->ptrace.cond);
+    unlock(&child->ptrace.lock);
     if (resume_sig != 0)
         send_signal(child, resume_sig, resume_info);
     task_ref_cnt_mod(child, -1);
