@@ -42,6 +42,23 @@ note_problem() { problems="$problems
 # credentials.
 git submodule update --init || note_problem "git submodule update --init failed"
 
+# --- generated sources the checkout does not carry -----------------------
+# The two steps the Actions macOS job runs between checkout and xcodebuild, and
+# which this script lacked -- the dash one was added to ci.yml on 2026-09-16,
+# after this script was written, and every cloud archive since failed on it at
+# meson.build ("-Dnative_dash=enabled but deps/dash is not a prepared dash
+# tree"), where only the ExternalBuildToolExecution failure reached the summary.
+#
+# deps/dash's config.h: the fork commits dash's generated sources but not
+# config.h. Configure only; never dash's own make (tools/configure-dash.sh says
+# why).
+(cd deps/dash && ../../tools/configure-dash.sh --quiet) \
+    || note_problem "configuring deps/dash failed"
+# hterm_all.js: the terminal's JavaScript bundle, a build artifact of libapps
+# that the app target copies in as a resource.
+(cd deps/libapps/hterm && python3 bin/mkdist) \
+    || note_problem "building hterm_all.js (deps/libapps/hterm bin/mkdist) failed"
+
 # --- Homebrew packages --------------------------------------------------
 # meson and ninja must come from brew rather than pip: both legacy targets put
 # only Homebrew's and /usr/local's bin on PATH and look nowhere else, so a pip
@@ -137,6 +154,8 @@ command -v ninja  >/dev/null 2>&1 || missing="$missing ninja"
     || [ -x /usr/local/opt/llvm/bin/llvm-objcopy ] \
     || command -v llvm-objcopy >/dev/null 2>&1 \
     || missing="$missing llvm-objcopy"
+[ -f deps/dash/config.h ] || missing="$missing deps/dash/config.h"
+[ -f deps/libapps/hterm/dist/js/hterm_all.js ] || missing="$missing hterm_all.js"
 
 if [ -n "$problems" ]; then
     echo "  steps that reported a problem:$problems"
