@@ -229,6 +229,7 @@ futex_validation.c
 futex_timeout_duration.c
 orphan_pgrp_wait.c
 reparent_zombie_notify.c
+reparent_to_sibling_thread.c
 subreaper_not_inherited.c
 fork_tgroup_reset.c
 rusage_monotonic.c

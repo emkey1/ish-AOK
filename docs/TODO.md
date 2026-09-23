@@ -721,6 +721,74 @@ guards rather than by review:
   now yields only anonymous, host-readable pages. See the commit; that filter is
   a safety requirement, not a preference.
 
+### A process whose leader has exited misses the kernel's group signals
+
+Measured 2026-09-23 (alpine-amd64-test, devuan-amd64-test) while fixing
+the orphan rule's thread-exit case. `send_group_signal` (kernel/signal.c)
+skips a process whose leader is `zombie` or `exiting`, so a process whose
+main thread left with `pthread_exit` while other threads run is not
+signalled at all. Userspace `kill(-pgid)` does reach it -- `kill_group`
+falls back to a live thread ("The leader is a corpse but the process may
+well still be alive") -- but the in-kernel senders do not: seen for the
+orphaned-group SIGHUP (the stopped member was hung up, the process beside
+it was not), and by the same code the terminal's ^C, ^Z and ^\ and its
+background SIGTTIN/SIGTTOU (fs/tty.c), a hangup's SIGHUP, and the SIGKILL
+for a timed-out app command's group (kernel/init.c capture_child_kill).
+Linux signals the zombie leader's thread group, and a live thread takes it.
+
+**Next step:** give `send_group_signal` `kill_group`'s live-thread fallback
+(one shared helper), and a test: a main thread that has called
+`pthread_exit` in a pty's foreground group, then ^C.
+
+### The orphaned-group rule misses a child's group
+
+Measured 2026-09-23, Linux 6.12 and alpine-amd64-test. POSIX has two cases
+and AOK implements one. At a process's exit Linux asks about its OWN group
+(`kill_orphaned_pgrp(tsk->group_leader, NULL)` in exit_notify -- AOK's
+`orphan_pgid` in do_exit), and `reparent_leader` asks, for each child handed
+to another process, about the CHILD's group (`kill_orphaned_pgrp(p,
+father)`). The second is the classic one: a shell in its own group, with a
+stopped job in another, exits. Linux hangs the job up and continues it (state
+R 0.1s later); AOK leaves it T for ever.
+
+**Next step:** in do_exit's reparent loop, for a leader child in another
+group of the same session, and only when `to_another_process` (Linux skips a
+threaded reparent), ask `pgrp_is_orphaned_locked` and
+`pgrp_has_stopped_member_locked` about the child's group and send SIGHUP and
+SIGCONT after the unlock, as `orphan_pgid` is. Mind the order: Linux asks
+after reparenting and never counts init as the outside parent
+(`is_global_init` in `will_become_orphaned_pgrp`); the existing check asks
+before reparenting, which is why it can do without that exception.
+
+### PR_SET_PDEATHSIG is recorded and never sent
+
+Found 2026-09-23 by reading; not measured. kernel/misc.c stores
+`pdeath_signal` and returns it for PR_GET_PDEATHSIG, the checkpoint carries
+it, and nothing ever sends it. Linux sends it from `forget_original_parent`
+to every thread of every child it reparents -- when the parent THREAD exits,
+so a threaded reparent sends it too (the known gotcha: the child of a worker
+thread gets it when that worker exits). Go's `SysProcAttr.Pdeathsig` and
+systemd's `FORK_DEATHSIG` both depend on it to take a helper down with its
+parent.
+
+**Next step:** send it from do_exit's reparent loop, for each thread of each
+reparented child, after pids_lock like the reparent SIGCHLD; test both the
+thread-exit and the process-exit shape against camd.
+
+### wait sees clone children it should not, and refuses __WCLONE
+
+Measured 2026-09-23, camd against alpine-amd64-test. A child cloned with
+exit_signal SIGUSR1 is invisible to a plain `waitpid` on Linux (ECHILD);
+only `__WCLONE` or `__WALL` sees it, and `__WCLONE` hides forked children
+(`eligible_child`). AOK's plain `waitpid` reaps it, and `__WCLONE` is
+EINVAL: do_wait's option mask has no such flag. Smaller, same children: the
+siginfo of a non-SIGCHLD exit signal carries `si_status` on Linux x86_64 and
+0 here.
+
+**Next step:** a `__WCLONE_` (0x80000000) accepted by wait4 and waitid, and
+the eligibility test in do_wait's child loop and P_PID branch -- not for a
+tracee, which is waited for as if `__WALL` (the ptracees loop already is).
+
 ### PI futexes are ENOSYS
 
 Measured 2026-09-01 alongside the futex argument-validation work

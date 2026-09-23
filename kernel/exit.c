@@ -754,8 +754,8 @@ noreturn void do_exit(struct task *task, int status) {
     struct exit_notes notes;
     exit_notes_init(&notes);
 
-    // A child that is ALREADY a zombie when we hand it to a new parent has to
-    // be announced to that parent -- see the reparenting loop below. Collected
+    // A child that is ALREADY a zombie when we hand it to another process has
+    // to be announced to it -- see the reparenting loop below. Collected
     // here and sent after pids_lock is dropped, like every other signal in
     // this function.
     struct task *reparent_signal_parent = NULL;
@@ -789,11 +789,23 @@ noreturn void do_exit(struct task *task, int status) {
     
     struct task *leader = task->group->leader;
 
+    // Whether this exit ends the process: what exit_tgroup says below, known
+    // already, because every change to the thread list is made under
+    // pids_lock and it is held from here to there.
+    bool last_thread = task->group->threads.next == &task->group_links &&
+        task->group->threads.prev == &task->group_links;
+
     // Does this exit orphan our own process group and leave stopped members
     // in it? Computed here, while the group still describes the pre-exit
     // state and pids_lock is held; the signals go out below, after the locks.
+    //
+    // Only when the process goes, as Linux asks it only when group_dead. The
+    // test below ignores the whole process, so asked at any thread's exit it
+    // answered for a process that was not leaving: a worker thread's exit
+    // sent SIGHUP and SIGCONT to its own group, and so killed the process
+    // itself along with the stopped child that made the group qualify.
     dword_t orphan_pgid = 0;
-    if (leader != NULL && leader->group != NULL) {
+    if (last_thread && leader != NULL && leader->group != NULL) {
         dword_t pgid = leader->group->pgid;
         dword_t sid = leader->group->sid;
         struct task *parent = leader->parent;
@@ -809,7 +821,15 @@ noreturn void do_exit(struct task *task, int status) {
     // reparent children
     struct task *new_parent = find_new_parent(task);
     struct task *child, *tmp;
-    
+    // Handed to another thread of this same process, a child has not changed
+    // parents in any way a program can see: wait finds it from every thread
+    // before and after, and its exit is announced to the process whichever
+    // thread created it. Linux's forget_original_parent calls reparent_leader,
+    // which resets exit_signal and announces a zombie, only when the new
+    // parent is in another thread group: "If this is a threaded reparent
+    // there is no need to notify anyone anything has happened."
+    bool to_another_process = new_parent != NULL && new_parent->group != task->group;
+
     list_for_each_entry_safe(&task->children, child, tmp, siblings) {
         ptrace_detach_from_tracer(task, child);
         child->parent = new_parent;
@@ -818,7 +838,9 @@ noreturn void do_exit(struct task *task, int status) {
         // As Linux's reparent_leader does, and for the reason its comment
         // gives ("we don't want people slaying init"): a child cloned with
         // some other exit_signal must not get to send that signal to whoever
-        // inherits it.
+        // inherits it. A sibling thread is not "whoever": a child cloned with
+        // SIGUSR1 by a worker that has since exited announces itself with
+        // SIGUSR1, as it would have while the worker lived.
         //
         // Leaders only. In AOK a thread is a child of whichever task created
         // it, not of the group leader's parent as on Linux, so this list can
@@ -826,7 +848,7 @@ noreturn void do_exit(struct task *task, int status) {
         // Nothing reads a non-leader's exit_signal today (every reader goes
         // through leader->exit_signal), so this is precision rather than a
         // fix, but it keeps the line saying what it means.
-        if (child->group != NULL && child->group->leader == child)
+        if (to_another_process && child->group != NULL && child->group->leader == child)
             child->exit_signal = SIGCHLD_;
         // Moving the child is not enough when it is already dead. Its exit was
         // reported to US, and we are about to stop existing; unless the new
@@ -868,6 +890,12 @@ noreturn void do_exit(struct task *task, int status) {
     // call here -- the ordinary child-exit notify a few lines down runs under
     // this same lock.
     //
+    // The signal only for another process. A sibling thread was told when the
+    // zombie died -- the SIGCHLD went to the process -- so a second one is
+    // news of nothing: it ran a handler for no reason, and cut short whatever
+    // the process was doing without SA_RESTART. The condition is harmless
+    // either way; it is the one every thread of this process waits on anyway.
+    //
     // Not handled, and a narrower case than the one above: a new parent that
     // has disclaimed SIGCHLD (SIG_IGN or SA_NOCLDWAIT) should have the zombie
     // released outright, the way the autoreap path does for an ordinary exit.
@@ -876,8 +904,10 @@ noreturn void do_exit(struct task *task, int status) {
     // this side is not something to do without a reason to.
     if (reparented_zombies > 0 && new_parent != NULL && new_parent->group != NULL) {
         notify(&new_parent->group->child_exit);
-        task_ref_cnt_mod(new_parent, 1);
-        reparent_signal_parent = new_parent;
+        if (to_another_process) {
+            task_ref_cnt_mod(new_parent, 1);
+            reparent_signal_parent = new_parent;
+        }
     }
     // Let go of everything this task traces. Linux's exit_ptrace: each tracee
     // is detached, and a zombie one goes where it would have gone untraced

@@ -8,6 +8,14 @@
 //   that stopped them is gone, and a ^Z'd job whose shell then exited sat in
 //   state T until the guest was rebooted.
 //
+//   It is the PROCESS's exit that counts, not a thread's. Linux applies the
+//   rule once the whole thread group is gone; AOK applied it at every thread's
+//   exit, and since the orphan test leaves the exiting process out, a worker
+//   thread's exit found its own group orphaned and sent it SIGHUP and SIGCONT
+//   -- killing the process, still running, along with its stopped child. A
+//   leader that exits before its other threads is the same case: the rule
+//   waits for the last of them.
+//
 //   A thread id is not a waitable child. Linux matches only thread-group
 //   LEADERS for a non-tracer, so waiting on a child's thread tid fails
 //   immediately with ECHILD. AOK resolved the tid to its leader, which made
@@ -20,6 +28,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <linux/futex.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +37,11 @@
 #include <unistd.h>
 
 #include "test_common.h"
+
+// musl on i386 names the 32-bit-time calls for what they take.
+#if !defined(SYS_futex) && defined(SYS_futex_time32)
+#define SYS_futex SYS_futex_time32
+#endif
 
 static void ck(const char *label, long got, long want) {
     if (got != want)
@@ -61,6 +75,67 @@ static void *report_tid(void *arg) {
     (void) w;
     for (;;)
         pause();
+    return NULL;
+}
+
+// A child in the caller's group that stops itself; returns once it has.
+static pid_t stopped_leaf(void) {
+    pid_t leaf = fork();
+    if (leaf == 0) {
+        raise(SIGSTOP);
+        _exit(42);
+    }
+    int st;
+    while (waitpid(leaf, &st, WUNTRACED) < 0 && errno == EINTR)
+        continue;
+    return leaf;
+}
+
+// The leaf's state once it has had up to 4s to stop being stopped.
+static char state_after_hangup(pid_t leaf) {
+    for (int i = 0; i < 40 && proc_state(leaf) == 'T'; i++)
+        usleep(100000);
+    return proc_state(leaf);
+}
+
+// This thread exits alone, with the raw syscall, having pointed its tid word
+// at `word`: the kernel clears it and wakes a waiter as the thread goes.
+// pthread_exit is avoided for musl's sake, whose join would never return for
+// the leader.
+static void thread_exit(volatile int *word) {
+    syscall(SYS_set_tid_address, word);
+    syscall(SYS_exit, 0);
+}
+
+// A shared wait: the kernel's wake at thread exit is a shared one. The exit
+// clears the word before it is done, so the caller gives it time to finish.
+static void wait_thread_gone(volatile int *word) {
+    int v;
+    while ((v = __atomic_load_n(word, __ATOMIC_ACQUIRE)) != 0)
+        syscall(SYS_futex, word, FUTEX_WAIT, v, NULL, NULL, 0);
+    for (unsigned i = 0; i < test_watchdog_secs(1); i++)
+        usleep(300000);
+}
+
+static volatile int worker_word = 1;
+static void *worker_exits(void *arg) {
+    (void) arg;
+    thread_exit(&worker_word);
+    return NULL;
+}
+
+static volatile int leader_word = 1;
+static struct {
+    int fd;
+    pid_t leaf;
+} survivor;
+static void *survivor_main(void *arg) {
+    (void) arg;
+    wait_thread_gone(&leader_word);
+    char state = proc_state(survivor.leaf);
+    ssize_t w = write(survivor.fd, &state, 1);
+    (void) w;
+    _exit(0);                   // the last thread: now the process goes
     return NULL;
 }
 
@@ -193,6 +268,96 @@ int main(int argc, char **argv) {
         kill(middle, SIGKILL);
         int st;
         waitpid(middle, &st, 0);
+    }
+
+    // ---- a THREAD's exit orphans nothing ----------------------------------
+    // The orphaned shape again, except that the middle process first loses a
+    // worker thread. It is still there, so the leaf stays stopped, and the
+    // middle process -- SIGHUP left at its default -- is not hung up. Then it
+    // exits for real, and the rule applies as it does to any process.
+    {
+        int pfd[2];
+        ck("pipe", pipe(pfd), 0);
+        fflush(NULL);
+        pid_t middle = fork();
+        if (middle == 0) {
+            close(pfd[0]);
+            alarm(30);
+            setpgid(0, 0);
+            pid_t leaf = stopped_leaf();
+            ssize_t w = write(pfd[1], &leaf, sizeof leaf);
+            pthread_t t;
+            if (pthread_create(&t, NULL, worker_exits, NULL) == 0)
+                wait_thread_gone(&worker_word);
+            char state = proc_state(leaf);
+            w = write(pfd[1], &state, 1);
+            (void) w;
+            _exit(0);               // now the process goes: the group is orphaned
+        }
+        close(pfd[1]);
+        pid_t leaf = 0;
+        char state = '?';
+        ssize_t got = read(pfd[0], &leaf, sizeof leaf);
+        ssize_t got_state = read(pfd[0], &state, 1);
+        close(pfd[0]);
+        int st = 0;
+        waitpid(middle, &st, 0);
+        ck("the middle process reported its leaf", got == (ssize_t) sizeof leaf ? 1 : 0, 1);
+        test_logf("  %-58s state='%c'\n", "leaf after a worker thread's exit",
+                  got_state == 1 ? state : '?');
+        ck("a worker thread's exit leaves the member stopped", got_state == 1 ? state : '?', 'T');
+        ck("  and does not hang up its own process", WIFSIGNALED(st) ? WTERMSIG(st) : 0, 0);
+        if (got == (ssize_t) sizeof leaf) {
+            state = state_after_hangup(leaf);
+            test_logf("  %-58s state='%c'\n", "leaf after the process's own exit", state);
+            ck("the process's own exit then orphans the group", state == 'T' ? 1 : 0, 0);
+            kill(leaf, SIGCONT);
+            kill(leaf, SIGKILL);
+        }
+    }
+
+    // ---- nor does the leader's, while another thread runs -----------------
+    // The leader exits first, leaving a thread behind: the process is still
+    // there. The rule applies when that last thread exits.
+    {
+        int pfd[2];
+        ck("pipe", pipe(pfd), 0);
+        fflush(NULL);
+        pid_t middle = fork();
+        if (middle == 0) {
+            close(pfd[0]);
+            alarm(30);
+            setpgid(0, 0);
+            survivor.fd = pfd[1];
+            survivor.leaf = stopped_leaf();
+            ssize_t w = write(pfd[1], &survivor.leaf, sizeof survivor.leaf);
+            (void) w;
+            pthread_t t;
+            if (pthread_create(&t, NULL, survivor_main, NULL) != 0)
+                _exit(1);
+            thread_exit(&leader_word);
+        }
+        close(pfd[1]);
+        pid_t leaf = 0;
+        char state = '?';
+        ssize_t got = read(pfd[0], &leaf, sizeof leaf);
+        ssize_t got_state = read(pfd[0], &state, 1);
+        close(pfd[0]);
+        int st = 0;
+        waitpid(middle, &st, 0);
+        ck("the middle process reported its leaf", got == (ssize_t) sizeof leaf ? 1 : 0, 1);
+        test_logf("  %-58s state='%c'\n", "leaf after the leader's exit",
+                  got_state == 1 ? state : '?');
+        ck("the leader's exit leaves the member stopped", got_state == 1 ? state : '?', 'T');
+        ck("  and does not hang up its own process", WIFSIGNALED(st) ? WTERMSIG(st) : 0, 0);
+        ck("  which exits as its last thread did", WIFEXITED(st) ? WEXITSTATUS(st) : -1, 0);
+        if (got == (ssize_t) sizeof leaf) {
+            state = state_after_hangup(leaf);
+            test_logf("  %-58s state='%c'\n", "leaf after the last thread's exit", state);
+            ck("the last thread's exit orphans the group", state == 'T' ? 1 : 0, 0);
+            kill(leaf, SIGCONT);
+            kill(leaf, SIGKILL);
+        }
     }
 
     return finish_suite("orphan_pgrp_wait");
