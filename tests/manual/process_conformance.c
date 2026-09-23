@@ -10,6 +10,9 @@
  *   - setpgid(exec'd child)       -> EACCES  (was silently OK)
  *   - waitpid(..., WEXITED)       -> EINVAL  (waitid-only flag; was OK)
  *   - wait4/waitid WCONTINUED reports a continued child (was never reported)
+ *   - a process that setpgid()s itself INTO another group gets that group's
+ *     signals, and keeps the group alive once its leader is gone (was
+ *     reached by neither kill(-pgid) nor setpgid once the leader was reaped)
  * plus baseline exit-status encoding, setsid, fork fd-sharing, and WUNTRACED.
  */
 #define _GNU_SOURCE
@@ -120,6 +123,72 @@ static void test_setpgid_after_exec(char **argv) {
     kill(pid, SIGKILL);
     waitpid(pid, NULL, 0);
     check("setpgid.afterexec.EACCES", (rc == -1 && got_errno == EACCES) ? 0 : (got_errno ? got_errno : 99), 0);
+}
+
+// Whether `pid` dies of `sig` within about 3s. One that does not is killed
+// and reaped here, so a failure costs the rest of the run nothing.
+static int died_of(pid_t pid, int sig) {
+    int st = 0;
+    for (int i = 0; i < 30; i++) {
+        pid_t r = waitpid(pid, &st, WNOHANG);
+        if (r == pid)
+            return WIFSIGNALED(st) && WTERMSIG(st) == sig;
+        if (r < 0)
+            return 0;
+        usleep(100000);
+    }
+    kill(pid, SIGKILL);
+    waitpid(pid, &st, 0);
+    return 0;
+}
+
+// A child that makes (pgid 0) or joins a process group and waits there.
+static pid_t pgrp_member(pid_t pgid) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        setpgid(0, pgid);
+        for (;;)
+            pause();
+    }
+    setpgid(pid, pgid != 0 ? pgid : pid);  // a shell's second setpgid: no race
+    return pid;
+}
+
+// A process that JOINS another process group is one of its members: a signal
+// to the group reaches it, and the group outlives its leader while it is
+// there. AOK set the joiner's pgid but filed its membership under the
+// joiner's OWN pid, and a group signal walks the group's -- so kill(-pgid)
+// reached only the members that were there from the start. That is the second
+// process of every job-controlled pipeline, which missed its ^C, ^Z and
+// hangup. Once the leader was reaped the group was gone as far as anything
+// could tell: kill(-pgid) said ESRCH and joining it said EPERM.
+static void test_setpgid_join(void) {
+    pid_t leader = pgrp_member(0);
+    pid_t joiner = pgrp_member(leader);
+    check("setpgid.join.pgid", getpgid(joiner), leader);
+    errno = 0;
+    check("setpgid.join.killpg", kill(-leader, SIGTERM) == 0 ? 0 : errno, 0);
+    check("setpgid.join.leader_signalled", died_of(leader, SIGTERM), 1);
+    check("setpgid.join.joiner_signalled", died_of(joiner, SIGTERM), 1);
+
+    // The leader goes first; its group is still there for as long as a
+    // member that joined it is.
+    leader = pgrp_member(0);
+    joiner = pgrp_member(leader);
+    kill(leader, SIGKILL);
+    int st = 0;
+    waitpid(leader, &st, 0);
+    pid_t late = fork();
+    if (late == 0) {
+        for (;;)
+            pause();
+    }
+    errno = 0;
+    check("setpgid.join.after_leader_reaped", setpgid(late, leader) == 0 ? 0 : errno, 0);
+    errno = 0;
+    check("setpgid.join.killpg_after_leader", kill(-leader, SIGTERM) == 0 ? 0 : errno, 0);
+    check("setpgid.join.joiner_outlives_leader", died_of(joiner, SIGTERM), 1);
+    check("setpgid.join.late_joiner_signalled", died_of(late, SIGTERM), 1);
 }
 
 /* waitpid with the waitid-only WEXITED flag -> EINVAL */
@@ -235,6 +304,7 @@ int main(int argc, char **argv) {
     test_setsid();
     test_setpgid_negative();
     test_setpgid_after_exec(argv);
+    test_setpgid_join();
     test_waitpid_wexited();
     test_wnohang();
     test_stop_continue();

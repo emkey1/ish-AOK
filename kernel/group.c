@@ -30,10 +30,11 @@ dword_t sys_setpgid(pid_t_ id, pid_t_ pgid) {
     group_locked = true;
 
     // you can only join a process group in the same session
+    struct pid *group_pid = pid;
     if (id != pgid) {
         // there has to be a process in pgrp that's in the same session as id
         err = _EPERM;
-        struct pid *group_pid = pid_get(pgid);
+        group_pid = pid_get(pgid);
         if (group_pid == NULL || list_empty(&group_pid->pgroup))
             goto out;
         struct tgroup *group_first_tgroup = list_first_entry(&group_pid->pgroup, struct tgroup, pgroup);
@@ -65,10 +66,19 @@ dword_t sys_setpgid(pid_t_ id, pid_t_ pgid) {
     if (tgroup_is_session_leader(tgroup))
         goto out;
 
+    // Filed under the GROUP's pid: its pgroup list is what a group signal
+    // walks (send_group_signal, kill(-pgid)), and what keeps the group -- and
+    // its number -- alive once the leader is gone. This used the caller's own
+    // pid, the same thing when a process makes a group of its own and wrong
+    // whenever it joins another one: the joiner had the right pgid and nothing
+    // sent to the group reached it, so the second process of every
+    // job-controlled pipeline missed its ^C, ^Z and hangup, and once the
+    // leader was reaped the group looked gone -- kill(-pgid) said ESRCH and
+    // joining it said EPERM.
     if (tgroup->pgid != pgid) {
         list_remove(&tgroup->pgroup);
         tgroup->pgid = pgid;
-        list_add(&pid->pgroup, &tgroup->pgroup);
+        list_add(&group_pid->pgroup, &tgroup->pgroup);
     }
 
     err = 0;
