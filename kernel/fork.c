@@ -91,6 +91,7 @@ static struct tgroup *tgroup_copy(struct tgroup *old_group) {
     group->traced_zombies = 0;
     group->exit_notify_deferred = false;
     group->continued = false;
+    group->continue_unannounced = false;
     group->children_rusage = (struct rusage_) {};
     // Everything below is per-PROCESS state that Linux does not hand to a
     // child: copy_signal() builds the new signal_struct from zeroed memory and

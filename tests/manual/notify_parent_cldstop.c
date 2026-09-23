@@ -27,7 +27,11 @@
  *     nothing;
  *   - each notice went to one thread's own queue, where a sibling waiting in
  *     sigtimedwait never saw it;
- *   - a tracer that is not the parent was not told of a continue.
+ *   - a tracer that is not the parent was not told of a continue;
+ *   - every thread coming back from a stop told the parent of the continue:
+ *     24 CLD_CONTINUED for 20 SIGCONTs to a child of four threads;
+ *   - a continue the parent never waited for outlived the next stop, and a
+ *     WCONTINUED wait reported it while the child was stopped again.
  *
  * The scenarios, each in a process of its own that blocks SIGCHLD and SIGUSR1
  * and takes them with sigtimedwait:
@@ -37,6 +41,10 @@
  *   - the stop taken by a worker thread, by tgkill and with the leader gone:
  *     the notice still names the leader and goes to its parent;
  *   - a sibling thread of the parent takes the notices;
+ *   - a child of four threads, all caught by the stop: one notice per stop
+ *     and one per continue, over ten rounds;
+ *   - stop, continue with no WCONTINUED wait, stop again: that wait now
+ *     reports nothing, and the next continue as usual;
  *   - the parent as tracer: a signal-delivery-stop (CLD_TRAPPED, the signal),
  *     with exit signal SIGUSR1 and 0; a group-stop (one CLD_STOPPED) and the
  *     continue once the tracer lets the tracee go; a syscall-stop and a
@@ -607,6 +615,88 @@ static void sibling_takes_them(void) {
     expect_nothing(label, "anything left over");
 }
 
+/* ---- one notice for the process, however many threads it has ----------------- */
+
+static void *nap_forever(void *arg) {
+    (void) arg;
+    for (;;)
+        nap_ms(1);
+    return NULL;
+}
+
+/* Four threads, all of them in and out of the kernel every millisecond, so
+ * each is caught by the stop and each is let go by the SIGCONT. The process is
+ * told of once per stop and once per continue. Every thread back from the stop
+ * told the parent of the continue, and a second notice came after the first
+ * was taken in 17 of 30 rounds. */
+static void told_once(void) {
+    const char *label = "four threads";
+    pid_t child = clone_child(SIGCHLD);
+    if (child == 0) {
+        pthread_t t;
+        for (int i = 0; i < 3; i++)
+            if (pthread_create(&t, NULL, nap_forever, NULL) != 0)
+                _exit(121);
+        nap_forever(NULL);
+    }
+    if (child < 0) {
+        check(0, "%s: clone: %s", label, strerror(errno));
+        return;
+    }
+    nap_ms(scaled_ms(100));
+    for (int round = 0; round < 10; round++) {
+        kill(child, SIGSTOP);
+        expect_notice(label, "a stop", child, CLD_STOPPED, SIGSTOP);
+        if (!expect_wait(label, "waitpid(child, WUNTRACED)", child, WUNTRACED, STOPPED(SIGSTOP)))
+            break;
+        expect_nothing(label, "anything more for a stop");
+        kill(child, SIGCONT);
+        expect_notice(label, "a continue", child, CLD_CONTINUED, SIGCONT);
+        if (!expect_wait(label, "waitpid(child, WCONTINUED)", child, WCONTINUED, CONTINUED))
+            break;
+        expect_nothing(label, "anything more for a continue");
+    }
+    kill(child, SIGKILL);
+    struct notice n = take_notice(scaled_ms(ARRIVAL_MS));
+    char buf[160];
+    check(n.sig == SIGCHLD && n.code == CLD_KILLED && n.pid == child && n.status == SIGKILL,
+          "%s: the kill sent %s; want SIGCHLD, CLD_KILLED, si_pid %d, si_status %d", label,
+          describe(n, buf, sizeof(buf)), (int) child, SIGKILL);
+    expect_wait(label, "waitpid(child, 0)", child, 0, SIGKILL);
+}
+
+/* A continue the parent never waited for is superseded by the next stop: a
+ * WCONTINUED wait then reports nothing, where AOK reported the old continue of
+ * a child that was stopped again. The next continue is reported as usual. */
+static void stop_supersedes_continue(void) {
+    const char *label = "a stop after an unwaited continue";
+    pid_t child = clone_child(SIGCHLD);
+    if (child == 0)
+        nap_forever(NULL);
+    if (child < 0) {
+        check(0, "%s: clone: %s", label, strerror(errno));
+        return;
+    }
+    kill(child, SIGSTOP);
+    expect_notice(label, "the first stop", child, CLD_STOPPED, SIGSTOP);
+    expect_wait(label, "waitpid(child, WUNTRACED)", child, WUNTRACED, STOPPED(SIGSTOP));
+    kill(child, SIGCONT);
+    expect_notice(label, "the continue", child, CLD_CONTINUED, SIGCONT);
+    kill(child, SIGSTOP);
+    expect_notice(label, "the second stop", child, CLD_STOPPED, SIGSTOP);
+    expect_wait(label, "waitpid(child, WUNTRACED) again", child, WUNTRACED, STOPPED(SIGSTOP));
+    struct waited w = wait_for(child, WCONTINUED | WNOHANG);
+    check(w.rc == 0, "%s: waitpid(child, WCONTINUED|WNOHANG) while stopped again = %d, status "
+          "%#x; want 0: the continue was superseded", label, (int) w.rc, w.status);
+    expect_nothing(label, "anything more");
+    kill(child, SIGCONT);
+    expect_notice(label, "the next continue", child, CLD_CONTINUED, SIGCONT);
+    expect_wait(label, "waitpid(child, WCONTINUED)", child, WCONTINUED, CONTINUED);
+    kill(child, SIGKILL);
+    take_notice(scaled_ms(ARRIVAL_MS));
+    expect_wait(label, "waitpid(child, 0)", child, 0, SIGKILL);
+}
+
 /* ---- the tracer is the parent --------------------------------------------------- */
 
 /* The child blocks SIGCONT: a traced child would take it as a
@@ -1007,6 +1097,8 @@ int main(int argc, char **argv) {
     scenario("a worker is sent the stop", worker_stop_tgkill);
     scenario("the leader has left", worker_stop_leader_gone);
     scenario("a sibling thread takes the notices", sibling_takes_them);
+    scenario("four threads", told_once);
+    scenario("a stop after an unwaited continue", stop_supersedes_continue);
     scenario("tracer, exit signal SIGUSR1", traced_delivery_usr1);
     scenario("tracer, no exit signal", traced_delivery_none);
     scenario("tracer, group-stop", traced_group_stop);

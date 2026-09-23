@@ -741,6 +741,29 @@ measured:
   the caller's whole thread group, so a non-leader thread's kill(-1) also
   signals its own process here.
 
+### Stop and continue notices: what is still open
+
+Fixed 2026-09-23 (tests/manual/notify_parent_cldstop.c): a stop, a continue
+and a ptrace stop are announced with SIGCHLD, not the exit signal, once, to
+the leader's parent or the tracer, as Linux's do_notify_parent_cldstop does;
+and a tracer's resume lifts a group-stop before the tracee wakes. Found
+alongside, by reading, not measured:
+- Zombies handed to a new parent at an exit are announced to it with one
+  SIGCHLD (do_exit's reparent loop) whatever its disposition. Linux's
+  reparent_leader goes through do_notify_parent: a new parent whose SIGCHLD
+  is SIG_IGN or SA_NOCLDWAIT has the zombie released at once, and SIG_IGN
+  sends nothing. AOK queues the SIGCHLD if it is blocked and leaves the
+  zombie for a wait that will never come. exit_notify_process_locked asks
+  both now; the reparent path is the other caller.
+- A group-stop is announced as soon as one thread takes the stop signal:
+  receive_signal stops the whole process at once, and the others stop at
+  their next pass through handle_interrupt -- one blocked in a syscall only
+  when that call returns. Linux stops every thread first and announces the
+  stop from the last (task_participate_group_stop), so a parent told
+  CLD_STOPPED can find threads here still in R or S where Linux shows T.
+- The notices carry si_utime and si_stime 0; Linux fills in the child's CPU
+  times.
+
 ### The orphaned-group test has two copies, and neither skips what Linux does
 
 Found 2026-09-23 by reading, while adding the orphaned-group rule's

@@ -844,6 +844,15 @@ struct tgroup {
     // the parent (or tracer) is owed to whoever releases the last of them.
     // Locked by pids_lock.
     bool exit_notify_deferred;
+    // A SIGCONT resumed this stopped process and its parent has not been told
+    // yet: Linux's SIGNAL_CLD_CONTINUED, which the first thread back from the
+    // stop takes and reports (group_stop_wait). `continued` is the other half,
+    // what a WCONTINUED wait reports, and only that wait clears it -- read in
+    // this one's place, every thread coming back from the stop told the parent
+    // again, and every stop after an unwaited continue was followed by another
+    // CLD_CONTINUED however it ended. A new stop drops it, as Linux's
+    // signal_set_stop_flags does. Lock: group->lock.
+    bool continue_unannounced;
 };
 
 // Is this thread group the leader of its session? Linux keeps this as a

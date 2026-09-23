@@ -1318,8 +1318,10 @@ static void signal_resume_group(struct tgroup *group, int sig) {
     // clears the stop but is not a continue. The parent is woken from the
     // resumed task's own context (the group-stop loop), never from here, to
     // avoid notifying across the signal-sender's locks.
-    if (sig == SIGCONT_ && group->stopped)
+    if (sig == SIGCONT_ && group->stopped) {
         group->continued = true;
+        group->continue_unannounced = true;
+    }
     group->stopped = false;
     notify(&group->stopped_cond);
     unlock(&group->lock);
@@ -2883,6 +2885,13 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
             lock(&current->group->lock,0);
             current->group->stopped = true;
             current->group->group_exit_code = sig << 8 | 0x7f;
+            // A new stop supersedes a continue nobody has heard of yet, as
+            // Linux's signal_set_stop_flags clears SIGNAL_STOP_CONTINUED and
+            // SIGNAL_CLD_CONTINUED: neither the notice nor a WCONTINUED wait
+            // reports it any more. The wait did, for a process that was by
+            // then stopped again.
+            current->group->continued = false;
+            current->group->continue_unannounced = false;
             unlock(&current->group->lock);
             return;
 
@@ -3234,10 +3243,17 @@ void group_stop_wait(void) {
 
     // We were stopped and have just been resumed. If SIGCONT flagged a
     // reportable continue, wake a parent blocked in wait4/waitid(WCONTINUED)
-    // (the flag itself is consumed by the parent's notify_if_continued).
+    // (`continued` itself is consumed by the parent's notify_if_continued)
+    // and tell it -- once, whichever of the process's threads is back first:
+    // continue_unannounced is taken here. Measured with a four-thread child,
+    // 24 CLD_CONTINUED notices for 20 SIGCONTs where Linux sends 20.
     // Done from our own context -- never the signal sender's -- so taking
     // pids_lock here respects the pids_lock -> group->lock ordering.
-    if (group->continued) {
+    lock(&group->lock, 0);
+    bool announce = group->continue_unannounced;
+    group->continue_unannounced = false;
+    unlock(&group->lock);
+    if (announce) {
         struct task *parent = NULL, *tracer = NULL;
         struct siginfo_ info = {
             .code = CLD_CONTINUED_,
