@@ -9,6 +9,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <UIKit/UIKit.h>
+#include <stdatomic.h>
 
 NSString *const ISHAudioPlayerStateDidChangeNotification = @"ISHAudioPlayerStateDidChangeNotification";
 NSString *const ISHAudioPlayerTrackDidChangeNotification = @"ISHAudioPlayerTrackDidChangeNotification";
@@ -628,9 +629,16 @@ static const double kInFlightSeconds = 6.0;
     if ([album isKindOfClass:NSString.class] && album.length > 0) track.album = album;
 }
 
+static atomic_bool ish_audio_playing = false;
+
+bool ISHAudioKeepsAppAlive(void) {
+    return atomic_load(&ish_audio_playing);
+}
+
 - (void)setState:(ISHAudioPlaybackState)state {
     if (_state == state) return;
     _state = state;
+    atomic_store(&ish_audio_playing, state == ISHAudioPlaybackStatePlaying);
     [self postNotification:ISHAudioPlayerStateDidChangeNotification];
 }
 

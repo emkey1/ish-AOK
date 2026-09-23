@@ -38,6 +38,7 @@
 #import "PasteboardDevice.h"
 #import "URLDevice.h"
 #import "LocationDevice.h"
+#import "AudioPlayerEngine.h"
 #import "NSObject+SaneKVO.h"
 #import "Roots.h"
 #import "Terminal.h"
@@ -4577,8 +4578,47 @@ static TerminalViewController *CreateTerminalViewController(void) {
                                             @"source": dnsSource,
                                             @"summary": ISHDnsBreadcrumbSummary(dnsSource, reason, resolvConf) ?: @""}];
 
-    struct task *previousCurrent;
-    if (!PushInitTaskAsCurrent(&previousCurrent)) {
+    // Under an assertion, so that iOS does not suspend us partway through.
+    // Every step from here on is a fakefs transaction, which holds a SQLite lock
+    // in the shared container, and iOS kills an app suspended while holding one
+    // (RUNNINGBOARD 0xdead10cc). This refresh runs on network changes, which
+    // cluster around backgrounding and locking the device: three of the five
+    // 554/555 kill reports caught it here, in fakefs_open or closing the file.
+    __block BOOL pushed = NO;
+    __block BOOL wrote = NO;
+    ISHRunHoldingBackgroundAssertion(@"dns-refresh", ^{
+        struct task *previousCurrent;
+        if (!PushInitTaskAsCurrent(&previousCurrent))
+            return;
+        pushed = YES;
+        struct fd *fd = generic_open("/etc/resolv.conf", O_WRONLY_ | O_CREAT_ | O_TRUNC_, 0666);
+        if (IS_ERR(fd) && PTR_ERR(fd) == _ENOENT) {
+            // Newer roots often ship /etc/resolv.conf as a symlink into /run.
+            // If that target tree does not exist in the guest, replace the
+            // symlink with a plain file so libc can still resolve names.
+            generic_unlinkat(AT_PWD, "/etc/resolv.conf");
+            fd = generic_open("/etc/resolv.conf", O_WRONLY_ | O_CREAT_ | O_TRUNC_, 0666);
+        }
+        // This arm decides the verdict: everything above it can fail, and the
+        // file is only actually on disk once this write has happened.
+        if (!IS_ERR(fd)) {
+            fd->ops->write(fd, resolvConf.UTF8String, [resolvConf lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
+            fd_close(fd);
+            wrote = YES;
+            [ISHDiagnosticsStore recordBreadcrumb:@"dns.refresh.wrote"
+                                          details:@{@"reason": reason ?: @"unknown",
+                                                    @"source": dnsSource,
+                                                    @"summary": ISHDnsBreadcrumbSummary(dnsSource, reason, resolvConf) ?: @""}];
+        } else {
+            [ISHDiagnosticsStore recordBreadcrumb:@"dns.refresh.failed"
+                                          details:@{@"reason": reason ?: @"unknown",
+                                                    @"source": dnsSource,
+                                                    @"stage": @"open-resolv-conf",
+                                                    @"errno": @(PTR_ERR(fd))}];
+        }
+        PopCurrentTask(previousCurrent);
+    });
+    if (!pushed) {
         [ISHDiagnosticsStore recordBreadcrumb:@"dns.refresh.failed"
                                       details:@{@"reason": reason ?: @"unknown",
                                                 @"source": dnsSource,
@@ -4586,34 +4626,6 @@ static TerminalViewController *CreateTerminalViewController(void) {
         [self finishDnsRefresh:reason failed:YES];
         return;
     }
-
-    struct fd *fd = generic_open("/etc/resolv.conf", O_WRONLY_ | O_CREAT_ | O_TRUNC_, 0666);
-    if (IS_ERR(fd) && PTR_ERR(fd) == _ENOENT) {
-        // Newer roots often ship /etc/resolv.conf as a symlink into /run.
-        // If that target tree does not exist in the guest, replace the symlink
-        // with a plain file so libc can still resolve names.
-        generic_unlinkat(AT_PWD, "/etc/resolv.conf");
-        fd = generic_open("/etc/resolv.conf", O_WRONLY_ | O_CREAT_ | O_TRUNC_, 0666);
-    }
-    // This arm decides the verdict: everything above it can fail, and the file
-    // is only actually on disk once this write has happened.
-    BOOL wrote = NO;
-    if (!IS_ERR(fd)) {
-        fd->ops->write(fd, resolvConf.UTF8String, [resolvConf lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
-        fd_close(fd);
-        wrote = YES;
-        [ISHDiagnosticsStore recordBreadcrumb:@"dns.refresh.wrote"
-                                      details:@{@"reason": reason ?: @"unknown",
-                                                @"source": dnsSource,
-                                                @"summary": ISHDnsBreadcrumbSummary(dnsSource, reason, resolvConf) ?: @""}];
-    } else {
-        [ISHDiagnosticsStore recordBreadcrumb:@"dns.refresh.failed"
-                                      details:@{@"reason": reason ?: @"unknown",
-                                                @"source": dnsSource,
-                                                @"stage": @"open-resolv-conf",
-                                                @"errno": @(PTR_ERR(fd))}];
-    }
-    PopCurrentTask(previousCurrent);
     [self finishDnsRefresh:reason failed:!wrote];
 }
 
@@ -5019,6 +5031,9 @@ static UIBackgroundTaskIdentifier suspendGuardTask;
 // must not freeze the filesystem under it.
 static atomic_bool ishSessionSaveInFlight;
 static bool suspendGuardHeld = false;
+// The guard's assertion ran out while the backgrounding save was still writing,
+// so the filesystem was not quiesced; the save's own end does it. Main thread.
+static bool ishQuiesceDeferredForSave = false;
 
 static void ISHEndSuspendGuard(void) {
     if (!suspendGuardHeld)
@@ -5026,6 +5041,129 @@ static void ISHEndSuspendGuard(void) {
     UIBackgroundTaskIdentifier claimed = suspendGuardTask;
     suspendGuardHeld = false;
     [UIApplication.sharedApplication endBackgroundTask:claimed];
+}
+
+// What is keeping iSH-AOK running in the background, if anything. Then it is not
+// about to be suspended, and freezing the guest's filesystem would only stall it.
+static const char *ISHBackgroundKeepAlive(void) {
+    if (ISHLocationKeepsAppAlive())
+        return "location updates";
+    if (ISHAudioKeepsAppAlive())
+        return "audio playback";
+    return NULL;
+}
+
+static void ISHBeginSuspendGuardAssertion(void);
+
+// Watch for the NEXT suspension.
+//
+// The guard's assertion is the only warning iOS gives, and it is spent once it
+// expires. An app that went on running after that -- kept alive by location
+// updates or audio, or simply given more time -- was later suspended with
+// nothing quiescing the filesystem first, in the middle of whatever transaction
+// the guest or the DNS refresh had open: RUNNINGBOARD 0xdead10cc, eight times on
+// 554 and 555 in two weeks. So for as long as we stay backgrounded, hold a fresh
+// assertion. The listening sockets are recorded again because lifting the gate
+// put them back.
+static void ISHRearmSuspendGuardIfBackgrounded(void) {
+    if (UIApplication.sharedApplication.applicationState != UIApplicationStateBackground)
+        return;
+    if (suspendGuardHeld)
+        return;
+    suspendGuardHeld = true;
+    unsigned saved = sockrestart_on_suspend();
+    os_log(ISHSuspendLog(), "still backgrounded: guard re-armed, %{public}u listening sockets recorded", saved);
+    ISHBeginSuspendGuardAssertion();
+}
+
+// Suspension looks imminent: park new fakefs transactions and drain the ones in
+// flight, and stop pager eviction.
+static void ISHQuiesceForSuspension(void) {
+    unsigned stragglers = 0;
+    bool drained = fakefs_quiesce_begin(2000, &stragglers);
+    // The pager writes guest memory to a file, so it needs the same treatment
+    // and for the same reason: being mid-write when iOS freezes us is not a
+    // state to be in. It stops new EVICTION only -- a fault already in flight
+    // has to finish, or the frame it is restoring stays PROT_NONE with its bytes
+    // only on disk. A no-op when swap is off, which is the default.
+    bool swapDrained = swap_quiesce_begin(2000);
+
+    os_log(ISHSuspendLog(), "quiesced for suspension: drained=%{public}d straggling=%{public}u swap=%{public}d",
+           drained, stragglers, swapDrained);
+    [ISHDiagnosticsStore recordBreadcrumb:@"application.fakefsQuiesced"
+                                  details:@{@"drained": @(drained), @"straggling": @(stragglers),
+                                            @"swapDrained": @(swapDrained)}];
+
+    // Never hold the gate open indefinitely.
+    //
+    // If iOS really does suspend us, this block cannot run until we resume, so
+    // the filesystem stays quiesced across the suspension -- which is the whole
+    // point, and nothing is executing meanwhile anyway. But if iOS does NOT
+    // suspend us (something else is keeping the app alive, or it simply grants
+    // more time), then waiting for -sceneWillEnterForeground: to lift the gate
+    // freezes the guest filesystem for as long as the app sits in the
+    // background. That is not a subtle degradation: an incoming ssh session
+    // gets accepted and then blocks before it can reach a shell, because fork,
+    // exec, PAM and the home directory all need a fakefs transaction, so the
+    // device silently stops serving while looking perfectly healthy.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t) (kISHQuiesceMaxHoldSeconds * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        fakefs_quiesce_end();
+        swap_quiesce_end();
+        // Rebuild the listeners here too. Not because they were damaged -- if
+        // this block runs, iOS never froze us -- but so the saved list does not
+        // stay populated across into the next backgrounding, where it would
+        // suppress a fresh save.
+        os_log(ISHSuspendLog(), "listening sockets rebuilt (never suspended): %{public}u",
+               sockrestart_on_resume());
+        os_log(ISHSuspendLog(), "still running after %{public}.0fs backgrounded; gate lifted",
+               kISHQuiesceMaxHoldSeconds);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            ISHRearmSuspendGuardIfBackgrounded();
+        });
+    });
+}
+
+// The save that the guard's expiration deferred to has finished, or run out of
+// time. Its assertion is the last one, so suspension follows once it ends.
+static void ISHQuiesceIfDeferredForSave(void) {
+    if (!ishQuiesceDeferredForSave)
+        return;
+    ishQuiesceDeferredForSave = false;
+    if (UIApplication.sharedApplication.applicationState != UIApplicationStateBackground)
+        return;
+    os_log(ISHSuspendLog(), "session save done after the guard expired; quiescing now");
+    ISHQuiesceForSuspension();
+}
+
+// The assertion itself. suspendGuardHeld is already set by the caller.
+static void ISHBeginSuspendGuardAssertion(void) {
+    suspendGuardTask = [UIApplication.sharedApplication beginBackgroundTaskWithName:@"fakefs-quiesce"
+                                                                  expirationHandler:^{
+        const char *keepAlive = ISHBackgroundKeepAlive();
+        if (atomic_load(&ishSessionSaveInFlight)) {
+            // Quiescing the filesystem under a save would stall the very work
+            // the other assertion is holding time open for. But not quiescing at
+            // all left nothing to do it later: the save finished, thawed the
+            // guest, and the app was suspended with transactions open. The save
+            // quiesces when it ends instead.
+            ishQuiesceDeferredForSave = true;
+            os_log(ISHSuspendLog(), "assertion expired while the session save is still writing; quiescing when it finishes");
+        } else if (keepAlive != NULL) {
+            // Still running, so not quiescing. Watch for the suspension that
+            // comes when this stops.
+            os_log(ISHSuspendLog(), "assertion expired, still kept alive by %{public}s; not quiescing", keepAlive);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                         (int64_t) (kISHQuiesceMaxHoldSeconds * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                ISHRearmSuspendGuardIfBackgrounded();
+            });
+        } else {
+            ISHQuiesceForSuspension();
+        }
+        ISHEndSuspendGuard();
+    }];
 }
 
 // Driven from the SCENE delegate; see the note in AppDelegate.h for why it
@@ -5110,6 +5248,7 @@ void ISHSuspendGuardEnterBackground(void) {
                 // being killed here leaves the previous session intact.
                 os_log_error(ISHSuspendLog(), "session save ran out of background time");
                 atomic_store(&ishSessionSaveInFlight, false);
+                ISHQuiesceIfDeferredForSave();
                 if (saveTask != UIBackgroundTaskInvalid) {
                     [UIApplication.sharedApplication endBackgroundTask:saveTask];
                     saveTask = UIBackgroundTaskInvalid;
@@ -5149,6 +5288,9 @@ void ISHSuspendGuardEnterBackground(void) {
                 }
                 atomic_store(&ishSessionSaveInFlight, false);
                 dispatch_async(dispatch_get_main_queue(), ^{
+                    // Before the assertion goes: once it does, nothing is
+                    // holding off the suspension.
+                    ISHQuiesceIfDeferredForSave();
                     if (saveTask != UIBackgroundTaskInvalid) {
                         [application endBackgroundTask:saveTask];
                         saveTask = UIBackgroundTaskInvalid;
@@ -5159,69 +5301,15 @@ void ISHSuspendGuardEnterBackground(void) {
     }
     [ISHDiagnosticsStore recordBreadcrumb:@"application.sockrestartSaved"
                                   details:@{@"listeners": @(savedListeners)}];
-    suspendGuardTask = [application beginBackgroundTaskWithName:@"fakefs-quiesce" expirationHandler:^{
-        // Only quiesce if nothing is keeping us alive. With background location
-        // updates running the app genuinely keeps executing and is NOT about to
-        // be suspended, so freezing guest filesystem I/O here would stall
-        // long-running background work for no reason -- and this assertion
-        // expires on its own schedule regardless of that.
-        if (atomic_load(&ishSessionSaveInFlight)) {
-            // Quiescing the filesystem under a save would stall the very work
-            // the other assertion is holding time open for. The save has its
-            // own deadline; let it finish.
-            os_log(ISHSuspendLog(), "assertion expired while the session save is still writing; not quiescing");
-        } else if (ISHLocationKeepsAppAlive()) {
-            os_log(ISHSuspendLog(), "assertion expired, still kept alive by location updates; not quiescing");
-        } else {
-            unsigned stragglers = 0;
-            bool drained = fakefs_quiesce_begin(2000, &stragglers);
-            // The pager writes guest memory to a file, so it needs the same
-            // treatment and for the same reason: being mid-write when iOS
-            // freezes us is not a state to be in. It stops new EVICTION only --
-            // a fault already in flight has to finish, or the frame it is
-            // restoring stays PROT_NONE with its bytes only on disk. A no-op
-            // when swap is off, which is the default.
-            bool swapDrained = swap_quiesce_begin(2000);
-
-            os_log(ISHSuspendLog(), "quiesced for suspension: drained=%{public}d straggling=%{public}u swap=%{public}d",
-                   drained, stragglers, swapDrained);
-            [ISHDiagnosticsStore recordBreadcrumb:@"application.fakefsQuiesced"
-                                          details:@{@"drained": @(drained), @"straggling": @(stragglers),
-                                                    @"swapDrained": @(swapDrained)}];
-
-            // Never hold the gate open indefinitely.
-            //
-            // If iOS really does suspend us, this block cannot run until we
-            // resume, so the filesystem stays quiesced across the suspension --
-            // which is the whole point, and nothing is executing meanwhile
-            // anyway. But if iOS does NOT suspend us (something else is keeping
-            // the app alive, or it simply grants more time), then waiting for
-            // -sceneWillEnterForeground: to lift the gate freezes the guest
-            // filesystem for as long as the app sits in the background. That is
-            // not a subtle degradation: an incoming ssh session gets accepted
-            // and then blocks before it can reach a shell, because fork, exec,
-            // PAM and the home directory all need a fakefs transaction, so the
-            // device silently stops serving while looking perfectly healthy.
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-                                         (int64_t) (kISHQuiesceMaxHoldSeconds * NSEC_PER_SEC)),
-                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                fakefs_quiesce_end();
-                swap_quiesce_end();
-                // Rebuild the listeners here too. Not because they were
-                // damaged -- if this block runs, iOS never froze us -- but so
-                // the saved list does not stay populated across into the next
-                // backgrounding, where it would suppress a fresh save.
-                os_log(ISHSuspendLog(), "listening sockets rebuilt (never suspended): %{public}u",
-                       sockrestart_on_resume());
-                os_log(ISHSuspendLog(), "still running after %{public}.0fs backgrounded; gate lifted",
-                       kISHQuiesceMaxHoldSeconds);
-            });
-        }
-        ISHEndSuspendGuard();
-    }];
+    // Only quiesce if nothing is keeping us alive, and not under a save; see
+    // the expiration handler.
+    ISHBeginSuspendGuardAssertion();
 }
 
 void ISHSuspendGuardEnterForeground(void) {
+    // Back before the save it was waiting for finished: there is no suspension
+    // to quiesce for.
+    ishQuiesceDeferredForSave = false;
     // Lift the gate before anything else: guest tasks may be parked on it.
     fakefs_quiesce_end();
     swap_quiesce_end();

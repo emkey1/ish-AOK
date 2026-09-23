@@ -95,4 +95,10 @@ extern NSString *const ISHAudioPlayerQueueDidChangeNotification;   // queue cont
 
 @end
 
+// True while the engine is playing, which is what keeps iSH-AOK running in the
+// background (the audio background mode). The suspension guard in AppDelegate.m
+// uses it, like ISHLocationKeepsAppAlive, to tell "still running" from "about to
+// be suspended". Callable from any thread, and does not create the engine.
+bool ISHAudioKeepsAppAlive(void);
+
 NS_ASSUME_NONNULL_END
