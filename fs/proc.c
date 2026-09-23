@@ -168,11 +168,18 @@ static int proc_fstat(struct fd *fd, struct statbuf *stat) {
     return proc_entry_stat(&fd->proc.entry, stat);
 }
 
-static int proc_refresh_data(struct fd *fd) {
+static int proc_check_regular(struct fd *fd) {
     mode_t_ mode = proc_entry_mode(&fd->proc.entry);
     if (S_ISDIR(mode))
         return _EISDIR;
     assert(S_ISREG(mode));
+    return 0;
+}
+
+static int proc_refresh_data(struct fd *fd) {
+    int err = proc_check_regular(fd);
+    if (err < 0)
+        return err;
 
     struct proc_entry *entry = &fd->proc.entry;
     // pread/pwrite-backed entries (e.g. /proc/<pid>/mem) have no buffered
@@ -189,16 +196,72 @@ static int proc_refresh_data(struct fd *fd) {
         fd->proc.data.data = malloc(fd->proc.data.capacity); // default size
     }
     fd->proc.data.size = 0;
-    int err = entry->meta->show(entry, &fd->proc.data);
+    fd->proc.data_valid = false;
+    err = entry->meta->show(entry, &fd->proc.data);
     if (err < 0)
         return err;
+    fd->proc.data_valid = true;
     return 0;
 }
 
-static off_t_ proc_seek(struct fd *fd, off_t_ off, int whence) {
-    int err = proc_refresh_data(fd);
+// Linux renders a procfs file ONCE per read pass and serves the rest of the
+// pass out of that one buffer: single_open's seq_file fills seq_file::buf at
+// the read that starts at offset 0, and every later read of the pass copies
+// from it (fs/seq_file.c, seq_read_iter). AOK used to re-run show() on every
+// read(2) AND every lseek(2), so a reader taking a /proc file in small pieces
+// spliced together as many different renderings as it made calls. That is
+// invisible while the renderings have the same shape, and corrupts the file
+// the moment a field earlier in it changes WIDTH: the tail shifts under the
+// reader, and the byte at the offset it asks for next is the one it already
+// has (a duplicate) or the one after (a loss). Observed in a Devuan guest,
+// where dash's `read` builtin reads one byte at a time:
+//
+//     while read -r k v; do [ "$k" = btime ] && echo "BTIME=$v"; done </proc/stat
+//
+// printed BTIME=17990071649 for a btime of 1790071649 -- one duplicated
+// digit, because a counter printed above btime grew a digit between two of
+// those reads.
+//
+// So hold the rendering for the pass that is reading it, and re-render
+// exactly where Linux re-renders, which is what keeps a poller that re-reads
+// the same fd seeing new data:
+//
+//   * a read that starts at offset 0. seq_read_iter resets index and count
+//     whenever ki_pos == 0, so the usual lseek(0)+read refresh loop -- and a
+//     pread at 0 -- always gets a fresh rendering.
+//   * a read that does not continue where the previous one stopped: after an
+//     lseek, or a pread at an unrelated offset. seq_read_iter calls
+//     traverse() for any position other than the one it left off at, and
+//     traverse() re-runs show() from the start of the file.
+//
+// Anything else is the same pass still reading the same file, and gets the
+// bytes that belong to the snapshot it started.
+static int proc_data_for_read(struct fd *fd, off_t off) {
+    int err = proc_check_regular(fd);
     if (err < 0)
         return err;
+    if (fd->proc.data_valid && off != 0 && off == fd->proc.data_pos)
+        return 0;
+    return proc_refresh_data(fd);
+}
+
+static off_t_ proc_seek(struct fd *fd, off_t_ off, int whence) {
+    int err = proc_check_regular(fd);
+    if (err < 0)
+        return err;
+
+    // Only LSEEK_END needs the file's length, and a procfs file has none
+    // until it has been rendered. Linux answers EINVAL for it outright
+    // (seq_lseek handles SEEK_SET and SEEK_CUR only); AOK has always answered
+    // it from the rendered size, and guests size buffers with it, so keep
+    // answering -- just don't drag a render into the seeks that need no
+    // length. The LSEEK_CUR that sys_read_buf issues after every read(2) is
+    // one of those, and re-rendering there was half of the splicing above.
+    if (whence == LSEEK_END && !fd->proc.data_valid) {
+        err = proc_refresh_data(fd);
+        if (err < 0)
+            return err;
+    }
 
     err = generic_seek(fd, off, whence, fd->proc.data.size);
     if (err < 0)
@@ -213,21 +276,31 @@ static ssize_t proc_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {
         return fd->proc.entry.meta->pread(&fd->proc.entry, &data, off, fd->flags);
     }
     
-    int err = proc_refresh_data(fd);
+    // seq_read_iter returns before it even takes the seq_file's lock when
+    // there is nothing to copy into, so an empty read renders nothing and
+    // moves nothing. Rendering here would throw away the pass's snapshot for
+    // a call that cannot consume a byte of it.
+    if (bufsize == 0)
+        return 0;
+
+    int err = proc_data_for_read(fd, off);
     if (err < 0)
         return err;
 
     const char *data = fd->proc.data.data;
     assert(data != NULL);
 
-    size_t remaining = fd->proc.data.size - off;
-    if ((size_t) off > fd->proc.data.size)
-        remaining = 0;
+    size_t remaining = 0;
+    if (off >= 0 && (size_t) off <= fd->proc.data.size)
+        remaining = fd->proc.data.size - (size_t) off;
     size_t n = bufsize;
     if (n > remaining)
         n = remaining;
 
-    memcpy(buf, data + off, n);
+    if (n > 0)
+        memcpy(buf, data + off, n);
+    // Where the next read has to start to be served from this same rendering.
+    fd->proc.data_pos = off + (off_t) n;
     return n;
 }
 
@@ -280,6 +353,11 @@ static ssize_t proc_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t
     if (err < 0)
         return err;
 
+    // The write changed what this file says, so whatever rendering a read
+    // pass on this same fd was holding is now history. Drop it rather than
+    // let the next read continue out of it: an O_RDWR sysctl fd that writes
+    // and reads back is the whole reason both ops exist on one description.
+    fd->proc.data_valid = false;
     return bufsize;
 }
 

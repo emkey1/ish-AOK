@@ -353,6 +353,15 @@ struct fd {
             // registers mountinfo in epoll with EPOLLIN|EPOLLET and relies on
             // a new edge per mount change). Null links for other proc fds.
             struct list mountinfo_link;
+            // The rendering in `data` belongs to ONE read pass, exactly as
+            // Linux's single_open seq_file buffer does (fs/proc.c,
+            // proc_data_for_read). data_valid says the buffer holds a
+            // rendering at all; data_pos is the file offset the next read has
+            // to start at to be served from it, i.e. one past the last byte
+            // handed out. Zeroed by fd_create, so a fresh fd renders on its
+            // first read.
+            bool data_valid;
+            off_t data_pos;
         } proc;
         struct {
             // Open /dev/kmsg fds, linked into the global kernel-log watch

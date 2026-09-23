@@ -146,6 +146,7 @@ blocked_wait_state.c
 proc_readdir_tgid.c
 proc_field_layout.c
 proc_cmdline_environ.c
+proc_read_snapshot.c
 sock_conn_error.c
 sock_getfd_errno.c
 sock_nosignal.c
