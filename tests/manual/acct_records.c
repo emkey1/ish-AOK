@@ -5,6 +5,8 @@
  *   - acct(path) turns accounting on, acct(NULL) turns it off
  *   - one 64-byte acct_v3 record per PROCESS exit, not per thread
  *   - ac_version is 3, ac_comm is the exec'd name, ac_pid/ac_ppid are right
+ *   - ac_ppid names the parent PROCESS for a child a non-main thread forked,
+ *     not the forking thread's tid (Linux's task_tgid_nr_ns(real_parent))
  *   - ac_exitcode is the WAIT-encoded status (exit 7 -> 0x0700), not the code
  *   - AFORK is set for a child that never exec'd and clear for one that did
  *   - ac_etime is in AHZ (centisecond) units, held as an IEEE float
@@ -15,6 +17,7 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,6 +72,21 @@ static float etime_of(const struct acct_v3_t *r) {
 
 static int do_acct(const char *path) {
     return syscall(SYS_acct, path);
+}
+
+/* A child forked by a thread that is not the main one: its parent is still
+ * this PROCESS. AOK recorded the forking thread's tid as ac_ppid. */
+static pid_t thread_child = -1;
+
+static void *fork_from_thread(void *arg) {
+    (void) arg;
+    thread_child = fork();
+    if (thread_child == 0)
+        _exit(0);
+    int st = 0;
+    if (thread_child > 0)
+        waitpid(thread_child, &st, 0);
+    return NULL;
 }
 
 int main(void) {
@@ -148,6 +166,10 @@ int main(void) {
     double wall_cs = ((t1.tv_sec - t0.tv_sec) * 1e9 +
                       (t1.tv_nsec - t0.tv_nsec)) / 1e7;   /* centiseconds */
 
+    pthread_t forker;
+    if (pthread_create(&forker, NULL, fork_from_thread, NULL) == 0)
+        pthread_join(forker, NULL);
+
     check("acct.off", do_acct(NULL) == 0);
 
     /* Read the records back. */
@@ -183,6 +205,14 @@ int main(void) {
         check("acct.fork_child.ppid", r_fork->ac_ppid == (uint32_t) getpid());
         test_log_if(1, "  fork child: comm=%.16s flag=%u exit=%u etime=%g\n",
                 r_fork->ac_comm, r_fork->ac_flag, r_fork->ac_exitcode, etime_of(r_fork));
+    }
+
+    const struct acct_v3_t *r_thread = NULL;
+    for (size_t i = 0; i < n; i++)
+        if (thread_child > 0 && recs[i].ac_pid == (uint32_t) thread_child) r_thread = &recs[i];
+    if (check("acct.thread_child.present", r_thread != NULL)) {
+        check("acct.thread_child.ppid", r_thread->ac_ppid == (uint32_t) getpid());
+        test_log_if(1, "  thread child: ppid=%u, want %d\n", r_thread->ac_ppid, (int) getpid());
     }
 
     const struct acct_v3_t *r_timed = NULL;

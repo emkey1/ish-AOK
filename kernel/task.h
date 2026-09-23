@@ -862,6 +862,20 @@ static inline bool task_is_leader(struct task *task) {
     return task->group->leader == task;
 }
 
+// The parent of `task`'s PROCESS, which is the parent every thread of it
+// reports -- getppid(), /proc/<pid>/task/<tid>/stat and status, taskstats --
+// as on Linux, where the thread group shares one real_parent. A thread's own
+// ->parent will not do: in AOK a thread is a child of the thread that created
+// it (kernel/fork.c), so for every thread but the first it is a thread of the
+// same process, which then reported itself as its own parent. The leader stays
+// its process's leader after it exits, and moves with the process when it is
+// reparented. Caller holds pids_lock.
+static inline struct task *task_process_parent(struct task *task) {
+    struct task *leader = task->group != NULL && task->group->leader != NULL ?
+        task->group->leader : task;
+    return leader->parent;
+}
+
 struct pid {
     dword_t id;
     struct task *task;

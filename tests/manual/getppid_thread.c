@@ -29,6 +29,14 @@
 // which os/exec renders as the string "signal: terminated" -- with no error
 // from the command itself, because the command never ran. Running the same
 // commands by hand always worked, since a shell forks from its only thread.
+//
+// The other half: a THREAD's own parent is its process's, however it asks --
+// getppid(2), or its /proc/<pid>/task/<tid>/stat and status. AOK makes a
+// thread a child of the thread that created it, in the same process, and all
+// three read that: every thread but the first reported its own process as its
+// parent (measured on alpine-amd64-test and devuan-amd64-test: pid 3 from a
+// worker saw getppid() == 3). Linux 6.12: the process's parent, from every
+// thread. Checked for a thread the main thread made and one a worker made.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <pthread.h>
@@ -57,9 +65,8 @@ static int is_true(const char *label, int cond) {
 
 // /proc/<pid>/stat field 4. comm (field 2) is parenthesized and may contain
 // spaces and parens, so parse after the LAST ')'.
-static pid_t proc_stat_ppid(pid_t pid) {
-    char path[64], buf[4096];
-    snprintf(path, sizeof path, "/proc/%d/stat", (int) pid);
+static pid_t proc_stat_ppid_at(const char *path) {
+    char buf[4096];
     FILE *f = fopen(path, "r");
     if (f == NULL)
         return -1;
@@ -76,9 +83,8 @@ static pid_t proc_stat_ppid(pid_t pid) {
     return (pid_t) ppid;
 }
 
-static pid_t proc_status_ppid(pid_t pid) {
-    char path[64], line[512];
-    snprintf(path, sizeof path, "/proc/%d/status", (int) pid);
+static pid_t proc_status_ppid_at(const char *path) {
+    char line[512];
     FILE *f = fopen(path, "r");
     if (f == NULL)
         return -1;
@@ -89,6 +95,18 @@ static pid_t proc_status_ppid(pid_t pid) {
     }
     fclose(f);
     return ppid;
+}
+
+static pid_t proc_stat_ppid(pid_t pid) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/stat", (int) pid);
+    return proc_stat_ppid_at(path);
+}
+
+static pid_t proc_status_ppid(pid_t pid) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/status", (int) pid);
+    return proc_status_ppid_at(path);
 }
 
 struct result {
@@ -140,6 +158,45 @@ static void fork_and_probe(struct result *out) {
 static void *thread_main(void *arg) {
     fork_and_probe((struct result *) arg);
     return NULL;
+}
+
+// What a thread says its own parent is.
+struct thread_view {
+    pid_t tid;
+    pid_t getppid;          // getppid(2), from the thread
+    pid_t stat_ppid;        // /proc/<pid>/task/<tid>/stat field 4
+    pid_t status_ppid;      // /proc/<pid>/task/<tid>/status PPid
+    struct thread_view *inner;  // a thread this one creates, or NULL
+};
+
+static void *thread_view_main(void *arg) {
+    struct thread_view *v = arg;
+    v->tid = raw_gettid();
+    v->getppid = raw_getppid();
+    char path[96];
+    snprintf(path, sizeof path, "/proc/%d/task/%d/stat", (int) the_tgid, (int) v->tid);
+    v->stat_ppid = proc_stat_ppid_at(path);
+    snprintf(path, sizeof path, "/proc/%d/task/%d/status", (int) the_tgid, (int) v->tid);
+    v->status_ppid = proc_status_ppid_at(path);
+    if (v->inner != NULL) {
+        pthread_t th;
+        if (pthread_create(&th, NULL, thread_view_main, v->inner) == 0)
+            pthread_join(th, NULL);
+    }
+    return NULL;
+}
+
+static void check_thread_view(const char *who, const struct thread_view *v, pid_t want) {
+    char label[160];
+    snprintf(label, sizeof label, "%s: getppid() %d == the process's parent %d",
+             who, (int) v->getppid, (int) want);
+    is_true(label, v->getppid == want);
+    snprintf(label, sizeof label, "%s: task/<tid>/stat ppid %d == %d",
+             who, (int) v->stat_ppid, (int) want);
+    is_true(label, v->stat_ppid == want);
+    snprintf(label, sizeof label, "%s: task/<tid>/status PPid %d == %d",
+             who, (int) v->status_ppid, (int) want);
+    is_true(label, v->status_ppid == want);
 }
 
 int main(int argc, char **argv) {
@@ -199,5 +256,16 @@ int main(int argc, char **argv) {
             !worker.pdeathsig_would_self_kill);
 
     waitpid(worker.child_pid, NULL, 0);
+
+    // A thread's own view of its parent: the process's, from any thread.
+    pid_t process_parent = raw_getppid();
+    struct thread_view inner = {0};
+    struct thread_view outer = {.inner = &inner};
+    if (pthread_create(&th, NULL, thread_view_main, &outer) != 0)
+        return is_true("pthread_create", 0), finish_suite("getppid_thread");
+    pthread_join(th, NULL);
+    is_true("the threads ran", outer.tid > 0 && inner.tid > 0);
+    check_thread_view("a thread main made", &outer, process_parent);
+    check_thread_view("a thread a thread made", &inner, process_parent);
     return finish_suite("getppid_thread");
 }

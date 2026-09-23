@@ -181,7 +181,10 @@ bool acct_collect(struct task *leader, const struct rusage_ *group_rusage,
     rec.ac_pid = leader->pid;
     // 0 rather than 1 when the parent is gone: a reparented process has no
     // honest ppid to report by the time its record is written.
-    rec.ac_ppid = leader->parent != NULL ? (uint32_t) leader->parent->pid : 0;
+    // The parent PROCESS, as Linux's task_tgid_nr_ns(real_parent): ->pid is
+    // the thread that forked it, which is not a process id at all when that
+    // was not its process's first thread.
+    rec.ac_ppid = leader->parent != NULL ? (uint32_t) leader->parent->tgid : 0;
     rec.ac_uid = leader->uid;
     rec.ac_gid = leader->gid;
 

@@ -143,10 +143,13 @@ pid_t_ sys_getppid(void) {
     // on a non-leader the check misfired and the child SIGTERMed itself before
     // reaching execve -- surfacing only as os/exec's "signal: terminated", with
     // no error from the command, because the command never ran (GH #523, yay).
-    if (current->parent != NULL)
-        ppid = current->parent->tgid;
-    else
-        ppid = 0;
+    //
+    // And the parent of the PROCESS, asked from any thread: `current->parent`
+    // of a thread is the thread that created it, in this same process, so
+    // getppid() from every thread but the first returned this process's own
+    // pid. Go asks from whichever thread the runtime is on.
+    struct task *parent = task_process_parent(current);
+    ppid = parent != NULL ? parent->tgid : 0;
     unlock(&pids_lock);
     return ppid;
 }
