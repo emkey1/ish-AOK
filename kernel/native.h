@@ -159,7 +159,12 @@ void native_exec_mark_restored(dword_t standin_child);
 // The exec stand-in's wait, entered directly: waits for `child`, forwarding
 // signals, and exits with its status word. For a stand-in coming back from a
 // checkpoint. kernel/native_libc.c.
-void nlibc_exec_standin_resume(dword_t child) __attribute__((noreturn));
+//
+// Spelled __noreturn__, not noreturn: kernel/native_libc.h includes
+// <stdnoreturn.h>, whose `#define noreturn _Noreturn` turns the plain spelling
+// into an attribute clang does not know, and it is then dropped with only a
+// warning in every file that includes that header before this one.
+void nlibc_exec_standin_resume(dword_t child) __attribute__((__noreturn__));
 
 // Poll for pending signals and group-stops, and act on them.
 //
