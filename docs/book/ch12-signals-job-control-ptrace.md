@@ -186,6 +186,27 @@ The conversion functions around them (`siginfo_to_i386_user`,
 per-ABI second copies Chapter 11 warned about, and they are exactly the case
 where a shared body is impossible: the structures genuinely differ.
 
+What the layouts do not settle is which mask each handler runs with, and that
+decides the order handlers run in. Linux sets up one handler at a time:
+`get_signal` chooses the next signal against the mask as it stands, and
+`signal_delivered` then adds the handler's `sa_mask` and, without
+`SA_NODEFER`, the signal itself. `receive_signals` works the same way
+(`signal_handler_mask_set`). A second pending signal that the first handler
+blocks waits for that handler's `sigreturn`. One it does not block gets a
+frame on top and runs first, which is why signals unblocked together run
+highest-numbered first. AOK once read the mask a single time, before
+delivering anything. A `SIGUSR2` blocked by the `SIGUSR1` handler's mask ran
+first, inside that handler, where Linux runs it afterwards.
+
+A frame keeps the mask `sigreturn` puts back. After `sigsuspend`, `pselect6`,
+`ppoll` or `epoll_pwait`, that is the mask from before the call
+(`sigmask_to_save`), while the first handler still runs with the call's
+temporary mask. A process-directed signal that a handler's mask blocks, and
+that this thread was told to take, goes to a sibling that can take it, as
+Section 12.2 describes. `SIGKILL` and `SIGSTOP` are removed from `sa_mask`
+when a handler is installed, so a handler built with `sigfillset` cannot
+hold back a `SIGKILL`.
+
 ## 12.6 Restarting what the signal interrupted
 
 A signal that arrives while a task is blocked in a syscall leaves a question:

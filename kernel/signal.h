@@ -326,7 +326,10 @@ void signal_exit_handoff(struct task *task);
 // on a task's behalf with no guest syscall to carry the set: native_spawn_opts
 // gives a spawned child the mask a forked child would have restored for itself.
 void sigmask_set_blocked(sigset_t_ set);
-// set the signal mask, restore it to what it was before on the next receive_signals call
+// Set the signal mask for the rest of a call like sigsuspend. The next
+// receive_signals chooses against it and then puts the old mask back: through
+// the first handler's frame, at that handler's sigreturn, or at once if it runs
+// no handler.
 void sigmask_set_temp(sigset_t_ mask);
 // restore a temporary signal mask immediately
 void sigmask_clear_temp(void);

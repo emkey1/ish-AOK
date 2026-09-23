@@ -50,6 +50,18 @@ struct sigaction_amd64_marshaled {
     sigset_t_ mask;
 } __attribute__((packed));
 
+// riscv64 has no SA_RESTORER, so its struct sigaction has no restorer field
+// (asm-generic's layout without __ARCH_HAS_SA_RESTORER). Read as the amd64
+// layout, sa_mask came from the word after it -- in musl's k_sigaction an
+// uninitialised pad -- and a handler ran with whatever the stack held there,
+// typically the mask of the previous sigaction call.
+struct sigaction_riscv64_marshaled {
+    qword_t handler;
+    qword_t flags;
+    sigset_t_ mask;
+} __attribute__((packed));
+static_assert(sizeof(struct sigaction_riscv64_marshaled) == 24, "riscv64 sigaction layout mismatch");
+
 struct amd64_siginfo_ {
     int_t sig;
     int_t sig_errno;
@@ -283,8 +295,18 @@ static int sigaction_from_user(struct task *task, guest_addr_t user_addr, struct
     // same {handler, flags, restorer, mask} qword layout (arm64 defines
     // SA_RESTORER, so the field is present). Routing arm64 through the
     // i386 branch here was why busybox sh's SIGCHLD handler registration
-    // read garbage before the arm64 frame support landed.
-    if (guest_abi_is_64bit(task->abi)) {
+    // read garbage before the arm64 frame support landed. riscv64 does not
+    // define it, and has a layout of its own.
+    if (task->abi == GUEST_ABI_RISCV64) {
+        struct sigaction_riscv64_marshaled user_action;
+        if (user_get(user_addr, user_action))
+            return _EFAULT;
+        *action = (struct sigaction_) {
+            .handler = user_action.handler,
+            .flags = user_action.flags,
+            .mask = user_action.mask,
+        };
+    } else if (guest_abi_is_64bit(task->abi)) {
         struct sigaction_amd64_marshaled user_action;
         if (user_get(user_addr, user_action))
             return _EFAULT;
@@ -309,7 +331,15 @@ static int sigaction_from_user(struct task *task, guest_addr_t user_addr, struct
 }
 
 static int sigaction_to_user(struct task *task, guest_addr_t user_addr, const struct sigaction_ *action) {
-    if (guest_abi_is_64bit(task->abi)) { // arm64 shares the amd64 layout, see sigaction_from_user
+    if (task->abi == GUEST_ABI_RISCV64) { // no restorer field, see sigaction_from_user
+        struct sigaction_riscv64_marshaled user_action = {
+            .handler = action->handler,
+            .flags = action->flags,
+            .mask = action->mask,
+        };
+        if (user_put(user_addr, user_action))
+            return _EFAULT;
+    } else if (guest_abi_is_64bit(task->abi)) { // arm64 shares the amd64 layout, see sigaction_from_user
         struct sigaction_amd64_marshaled user_action = {
             .handler = action->handler,
             .flags = action->flags,
@@ -2288,6 +2318,14 @@ static qword_t signal_trap_error(struct cpu_state *cpu) {
     }
 }
 
+// The mask a signal frame keeps for sigreturn to put back: Linux's
+// sigmask_to_save. The first handler after a sigsuspend-like call is set up
+// with that call's temporary mask still in force (receive_signals), and it is
+// the mask from before the call that its sigreturn restores.
+static sigset_t_ sigmask_to_save(void) {
+    return current->has_saved_mask ? current->saved_mask : current->blocked;
+}
+
 static void setup_sigcontext(struct sigcontext_ *sc, struct cpu_state *cpu, int sig) {
     sc->ax = cpu->eax;
     sc->bx = cpu->ebx;
@@ -2307,14 +2345,14 @@ static void setup_sigcontext(struct sigcontext_ *sc, struct cpu_state *cpu, int 
     else
         sc->cr2 = 0;
     // TODO more shit
-    sc->oldmask = current->blocked & 0xffffffff;
+    sc->oldmask = sigmask_to_save() & 0xffffffff;
 }
 
 static void setup_sigframe(struct siginfo_ *info, struct sigframe_ *frame) {
     frame->restorer = (addr_t) signal_restorer(&current->sighand->action[info->sig], false);
     frame->sig = info->sig;
     setup_sigcontext(&frame->sc, &current->cpu, info->sig);
-    frame->extramask = current->blocked >> 32;
+    frame->extramask = sigmask_to_save() >> 32;
 
     static const struct {
         uint16_t popmov;
@@ -2336,7 +2374,7 @@ static void setup_rt_sigframe(struct siginfo_ *info, struct rt_sigframe_ *frame)
     frame->uc.link = 0;
     altstack_to_i386_user(current, &frame->uc.stack);
     setup_sigcontext(&frame->uc.mcontext, &current->cpu, info->sig);
-    frame->uc.sigmask = current->blocked;
+    frame->uc.sigmask = sigmask_to_save();
 
     static const struct {
         uint8_t mov;
@@ -2378,7 +2416,7 @@ static void setup_amd64_mcontext(struct amd64_mcontext_ *mcontext, struct cpu_st
         ((qword_t) cpu->gs << 16);
     mcontext->gregs[AMD64_GREG_ERR] = signal_trap_error(cpu);
     mcontext->gregs[AMD64_GREG_TRAPNO] = 0;
-    mcontext->gregs[AMD64_GREG_OLDMASK] = current->blocked;
+    mcontext->gregs[AMD64_GREG_OLDMASK] = sigmask_to_save();
 }
 
 static void setup_amd64_fpstate(struct amd64_fpstate_ *fpstate, struct cpu_state *cpu) {
@@ -2415,7 +2453,7 @@ static void setup_rt_sigframe_amd64(struct siginfo_ *info, struct rt_sigframe_am
         if (current->cpu.trapno == INT_PF)
             frame->uc.mcontext.gregs[AMD64_GREG_CR2] = current->cpu.segfault_addr;
     }
-    frame->uc.sigmask = current->blocked;
+    frame->uc.sigmask = sigmask_to_save();
     siginfo_to_amd64_user(&frame->info, info);
 
     static const struct {
@@ -2441,7 +2479,7 @@ static void setup_rt_sigframe_arm64(struct siginfo_ *info, struct rt_sigframe_ar
         .flags = current_altstack_flags(current),
         .size = current->altstack_size,
     };
-    frame->uc.sigmask = current->blocked;
+    frame->uc.sigmask = sigmask_to_save();
 
     struct arm64_mcontext_ *mc = &frame->uc.mcontext;
     mc->fault_address = info->sig == SIGSEGV_ || info->sig == SIGBUS_ ? info->fault.addr : 0;
@@ -2523,7 +2561,7 @@ static void setup_rt_sigframe_riscv64(struct siginfo_ *info, struct rt_sigframe_
         .flags = current_altstack_flags(current),
         .size = current->altstack_size,
     };
-    frame->uc.sigmask = current->blocked;
+    frame->uc.sigmask = sigmask_to_save();
 
     struct riscv64_mcontext_ *mc = &frame->uc.mcontext;
     mc->pc = cpu->riscv64_pc;
@@ -2567,6 +2605,23 @@ qword_t sys_rt_sigreturn_riscv64(void) {
     sigmask_set(frame.uc.sigmask);
     unlock(&current->sighand->lock);
     return cpu->riscv64_regs[riscv64_a0];
+}
+
+// The mask a handler runs with, as Linux's signal_delivered sets it: the mask
+// in force as it is set up -- a sigsuspend-like call's temporary one, for the
+// first handler after such a call -- plus the handler's sa_mask, plus the
+// signal itself unless SA_NODEFER. Call once the frame is built: the frame
+// holds what sigreturn puts back (sigmask_to_save), so a saved mask is done
+// with here.
+//
+// receive_signals chooses each next signal against this mask, so a signal the
+// handler blocks waits for its sigreturn rather than being stacked on it.
+static void signal_handler_mask_set(const struct sigaction_ *action, int sig) {
+    current->has_saved_mask = false;
+    sigset_t_ blocked = current->blocked | action->mask;
+    if (!(action->flags & SA_NODEFER_))
+        sigset_add(&blocked, sig);
+    current->blocked = blocked & ~UNBLOCKABLE_MASK;
 }
 
 static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
@@ -2681,9 +2736,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
             restorer = sp + offsetof(struct rt_sigframe_arm64, retcode);
         current->cpu.arm64_regs[arm64_x30] = restorer;
 
-        if (!(action->flags & SA_NODEFER_))
-            sigset_add(&current->blocked, info->sig);
-        current->blocked |= action->mask;
+        signal_handler_mask_set(action, info->sig);
 
         if (user_write(sp, &frame, sizeof(frame))) {
             // See the amd64 path below: kill like Linux force_sigsegv
@@ -2717,9 +2770,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         current->cpu.riscv64_regs[riscv64_ra] =
             sp + offsetof(struct rt_sigframe_riscv64, retcode);
 
-        if (!(action->flags & SA_NODEFER_))
-            sigset_add(&current->blocked, info->sig);
-        current->blocked |= action->mask;
+        signal_handler_mask_set(action, info->sig);
 
         if (user_write(sp, &frame, sizeof(frame))) {
             printk("WARNING: failed to install riscv64 frame for %d at %#llx, killing\n",
@@ -2765,9 +2816,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         current->cpu.esi = (dword_t) current->cpu.amd64_regs[amd64_rsi];
         current->cpu.edx = (dword_t) current->cpu.amd64_regs[amd64_rdx];
 
-        if (!(action->flags & SA_NODEFER_))
-            sigset_add(&current->blocked, info->sig);
-        current->blocked |= action->mask;
+        signal_handler_mask_set(action, info->sig);
 
         if (user_write(sp, &frame, frame_size)) {
             // The handler can't run (the stack is unwritable or gone). Linux
@@ -2816,11 +2865,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
     sp = ((sp + 4) & ~0xf) - 4;
     current->cpu.esp = sp;
 
-    // Update the mask. By default the signal will be blocked while in the
-    // handler, but sigaction is allowed to customize this.
-    if (!(action->flags & SA_NODEFER_))
-        sigset_add(&current->blocked, info->sig);
-    current->blocked |= action->mask;
+    signal_handler_mask_set(action, info->sig);
 
     // these have to be filled in after the location of the frame is known
     if (need_siginfo) {
@@ -3005,25 +3050,33 @@ void receive_signals(void) {
     // handler's mask change what this thread can take there.
     sigset_t_ entry_wake_blocked = task_wake_blocked(current);
 
+    // Deliver pending unblocked signals one at a time, LOWEST-NUMBERED-FIRST
+    // as Linux's next_signal dequeues them, each chosen against the mask as it
+    // is by then: Linux's exit_to_user_mode_loop calls get_signal once per
+    // signal. Setting up a handler changes the mask (signal_handler_mask_set)
+    // -- its sa_mask, and its own signal unless SA_NODEFER -- and a signal
+    // that mask blocks waits for the handler's sigreturn, then runs after it.
+    // One it does not block gets a frame stacked on top. So when several
+    // become deliverable at once (a sigprocmask that unblocks a whole set),
+    // the handlers of those the earlier handlers do not block RUN
+    // highest-first (LIFO), each frame saving the mask the one below it left.
+    // The mask used to be read once, before this loop, and everything it let
+    // through was stacked: a SIGUSR2 the SIGUSR1 handler's sa_mask blocks ran
+    // first, on top of it, where Linux runs it after -- order 2,1 against 1,2.
+    //
     // A saved mask means that the last system call was a call like sigsuspend
-    // that changes the mask during the call. Only ignore a signal right now if
-    // it was both blocked during the call and should still be blocked after
-    // the call.
-    sigset_t_ blocked = current->blocked;
-    if (current->has_saved_mask) {
-        blocked &= current->saved_mask;
-        current->has_saved_mask = false;
-        current->blocked = current->saved_mask;
-    }
-
-    // Deliver pending unblocked signals LOWEST-NUMBERED-FIRST, matching Linux's
-    // dequeue order (next_signal). When several are deliverable at once (e.g. a
-    // sigprocmask that unblocks a whole set), each receive_signal stacks a frame
-    // on top of the previous one, so the handlers RUN highest-first (LIFO) and
-    // the per-frame saved mask is captured incrementally — bit-for-bit what real
-    // Linux does. Previously this drained the queue in FIFO insertion order, so
-    // a scrambled-order send ran the handlers in the wrong order.
+    // that changes the mask during the call. Its temporary mask stays in force
+    // here, as on Linux: it decides until a handler is set up, the handler
+    // runs with it plus its own mask, and the frame keeps the saved mask for
+    // the handler's sigreturn (sigmask_to_save). If nothing here runs a
+    // handler, the saved mask comes back once nothing more gets through, and
+    // what it lets through is delivered in turn (restore_saved_sigmask). This
+    // used to put the saved mask back first and deliver whatever EITHER mask
+    // let through, all stacked: a handler after sigsuspend ran with the old
+    // mask rather than the one sigsuspend waited with, and a signal the
+    // temporary mask blocked ran on top of the one that ended the wait.
     for (;;) {
+        sigset_t_ blocked = current->blocked;
         struct sigqueue *best = NULL;
         struct sigqueue *sigqueue;
         bool best_is_group = false;
@@ -3044,8 +3097,16 @@ void receive_signals(void) {
                 best_is_group = true;
             }
         }
-        if (best == NULL)
+        if (best == NULL) {
+            // No handler took the saved mask into its frame: put it back, and
+            // look again with it.
+            if (current->has_saved_mask) {
+                current->has_saved_mask = false;
+                current->blocked = current->saved_mask;
+                continue;
+            }
             break;
+        }
 
         int sig = best->info.sig;
         struct siginfo_ info = best->info;
@@ -3318,8 +3379,13 @@ static int do_sigaction(int sig, const struct sigaction_ *action, struct sigacti
     struct sigaction_ prev_action = sighand->action[sig];
     if (oldaction)
         *oldaction = prev_action;
-    if (action)
+    if (action) {
         sighand->action[sig] = *action;
+        // As Linux's do_sigaction does. A handler's mask is added to the
+        // blocked set while it runs, and one built with sigfillset -- common --
+        // held back a SIGKILL until the handler returned.
+        sighand->action[sig].mask &= ~UNBLOCKABLE_MASK;
+    }
     unlock(&sighand->lock);
     return 0;
 }
