@@ -626,6 +626,16 @@ static const NSTimeInterval kPendingInputTimeout = 0.075;
     // already reserved, which is why the bytes still go out through the view
     // rather than straight to the terminal.
     [self insertRawText:ISHPasteSequence(string, self.terminal.bracketedPasteEnabled, NO)];
+    // And take keyboard focus back if the paste came while the WEB VIEW had it.
+    // A long press or a drag-selection makes the web view first responder, and
+    // its edit menu's Paste, Cmd-V and the Paste key still end up here: the web
+    // view cannot paste into read-only text, so UIKit passes paste: up the
+    // responder chain to this view. The text went out and focus stayed in the
+    // web view, where typed keys reach nothing -- the pasted command sat at the
+    // prompt and Return did nothing until a click gave the terminal focus back
+    // (#603).
+    if (!self.isFirstResponder)
+        [self becomeFirstResponder];
 }
 
 - (void)copy:(id)sender {
