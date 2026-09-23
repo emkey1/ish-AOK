@@ -93,7 +93,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 15  // 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 16  // 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -388,6 +388,20 @@ struct ckpt_task {
     // arms its own.
     uint32_t group_timers;
     uint32_t reserved3;
+    // The executable behind /proc/<pid>/exe (mm->exefile), as a path after the
+    // root's, in the record that owns the address space. It came back empty:
+    // readlink /proc/self/exe failed in every restored process, and ktop, which
+    // reads the ELF header through that link, showed "?" as the architecture of
+    // all of them.
+    uint32_t exe_len;
+    // The rest of the credentials. Only the uids and gids travelled, so every
+    // restored task kept what the RESTORING task had: root's full capability
+    // set and its supplementary groups, for a uid-1000 shell as much as for
+    // init -- a restore was a privilege escalation. The groups follow the exe
+    // path, ngroups uint32s.
+    uint32_t cap_effective[2], cap_permitted[2], cap_inheritable[2], cap_ambient[2];
+    uint32_t keepcaps;
+    uint32_t ngroups;
 };
 
 struct ckpt_map {
@@ -2408,6 +2422,12 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         generic_getpath(task->fs->root, root);
     mode_t_ umask = task->fs->umask;
     unlock(&task->fs->lock);
+    // Only where the address space is recorded. A native program's counts: its
+    // mm names the /AOK/native entry it was exec'd through.
+    char exe[MAX_PATH + 1] = "";
+    if (sh->mm == 0 && task->mm != NULL && task->mm->exefile != NULL &&
+            generic_getpath(task->mm->exefile, exe) < 0)
+        exe[0] = '\0';
 
     struct ckpt_task rec = {
         .pid = task->pid,
@@ -2438,6 +2458,13 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         .n_sigactions = NUM_SIGS,
         .cwd_len = (uint32_t) strlen(cwd),
         .root_len = (uint32_t) strlen(root),
+        .exe_len = (uint32_t) strlen(exe),
+        .cap_effective = {task->cap_effective[0], task->cap_effective[1]},
+        .cap_permitted = {task->cap_permitted[0], task->cap_permitted[1]},
+        .cap_inheritable = {task->cap_inheritable[0], task->cap_inheritable[1]},
+        .cap_ambient = {task->cap_ambient[0], task->cap_ambient[1]},
+        .keepcaps = task->keepcaps ? 1 : 0,
+        .ngroups = task->ngroups,
         .tgid = sh->tgid,
         .mm_owner = sh->mm,
         .files_owner = sh->files,
@@ -2560,6 +2587,9 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
     wr(w, &rec, sizeof(rec));
     wr(w, cwd, rec.cwd_len);
     wr(w, root, rec.root_len);
+    wr(w, exe, rec.exe_len);
+    if (rec.ngroups > 0)
+        wr(w, task->groups, rec.ngroups * sizeof(*task->groups));
 
     if (prog != NULL) {
         wr(w, prog->name, rec.native_name_len);
@@ -4030,9 +4060,29 @@ static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
     int err;
     bool thread = rec->tgid != 0 && rec->tgid != rec->pid;
     struct fdtable *files;
-    char cwd[MAX_PATH + 1] = {0}, root[MAX_PATH + 1] = {0};
+    char cwd[MAX_PATH + 1] = {0}, root[MAX_PATH + 1] = {0}, exe[MAX_PATH + 1] = {0};
     if ((err = rd(f, cwd, rec->cwd_len)) < 0) return err;
     if ((err = rd(f, root, rec->root_len)) < 0) return err;
+    if ((err = rd(f, exe, rec->exe_len)) < 0) return err;
+    // The supplementary groups, installed as soon as they are read: the task
+    // owns them from here, so a restore that fails further on frees them with
+    // it. Nothing below is decided by them -- the restore reopens files as
+    // root, and root's access does not depend on its groups.
+    if (rec->ngroups > 0) {
+        uid_t_ *groups = calloc(rec->ngroups, sizeof(*groups));
+        if (groups == NULL)
+            return _ENOMEM;
+        if ((err = rd(f, groups, rec->ngroups * sizeof(*groups))) < 0) {
+            free(groups);
+            return err;
+        }
+        free(current->groups);
+        current->groups = groups;
+    } else {
+        free(current->groups);
+        current->groups = NULL;
+    }
+    current->ngroups = rec->ngroups;
 
     // A NATIVE task: the program's name, the argv it had, and the state it
     // produced about itself. No register file and no address space follow --
@@ -4181,6 +4231,22 @@ static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
     mm->argv_start = rec->argv_start; mm->argv_end = rec->argv_end;
     mm->env_start = rec->env_start; mm->env_end = rec->env_end;
     mm->auxv_start = rec->auxv_start; mm->auxv_end = rec->auxv_end;
+    // The executable, by path as the cwd is. Here, before the task's own
+    // credentials go back on, so an execute-only binary still opens. One that
+    // has since gone -- replaced by a package upgrade, say -- leaves the link
+    // empty, which is what it was for everything before this.
+    if (exe[0] == '/') {
+        struct fd *exe_fd = generic_open(exe, O_RDONLY_, 0);
+        if (!IS_ERR(exe_fd)) {
+            struct fd *old = mm->exefile;
+            mm->exefile = exe_fd;
+            if (old != NULL)
+                fd_close(old);
+        } else {
+            CKPT_TRACE("  load pid %u: executable %s did not reopen (%ld)\n",
+                       rec->pid, exe, PTR_ERR(exe_fd));
+        }
+    }
 
 descriptors:
     // A table shared with an earlier task was filled by that task's record:
@@ -4673,6 +4739,11 @@ identity:
     current->euid = rec->euid; current->egid = rec->egid;
     current->suid = rec->suid; current->sgid = rec->sgid;
     current->fsuid = rec->fsuid; current->fsgid = rec->fsgid;
+    memcpy(current->cap_effective, rec->cap_effective, sizeof(current->cap_effective));
+    memcpy(current->cap_permitted, rec->cap_permitted, sizeof(current->cap_permitted));
+    memcpy(current->cap_inheritable, rec->cap_inheritable, sizeof(current->cap_inheritable));
+    memcpy(current->cap_ambient, rec->cap_ambient, sizeof(current->cap_ambient));
+    current->keepcaps = rec->keepcaps != 0;
     // The descriptors this task's restore opened were stamped with the root
     // credentials they were reopened under. To the open-creds model they are
     // opens this process made itself, so they get its credentials now. Ones
@@ -5202,7 +5273,8 @@ int checkpoint_restore(const char *host_path) {
         if ((err = rd(f, &rec, sizeof(rec))) < 0)
             goto out;
         err = _EINVAL;
-        if (rec.cwd_len > MAX_PATH || rec.root_len > MAX_PATH ||
+        if (rec.cwd_len > MAX_PATH || rec.root_len > MAX_PATH || rec.exe_len > MAX_PATH ||
+                rec.ngroups > MAX_GROUPS ||
                 rec.n_sigactions != NUM_SIGS)
             goto out;
 
