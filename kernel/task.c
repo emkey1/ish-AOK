@@ -1293,7 +1293,13 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
     list_add(&alive_pids_list, &pid->alive);
     if (parent != NULL) {
         task->parent = parent;
-        list_add(&parent->children, &task->siblings);
+        // At the end: a children list is oldest first, as Linux's
+        // copy_process keeps it (list_add_tail), and wait walks it from the
+        // front, so of several zombies wait(-1) reaps the oldest. At the head
+        // it reaped the youngest (tests/manual/wait_child_order.c). A
+        // checkpoint restore builds each parent's children in list order
+        // through here too (ckpt_order_tasks).
+        list_add_tail(&parent->children, &task->siblings);
     }
     unlock(&pids_lock);
     // The machine now exists, so its load average starts being sampled.

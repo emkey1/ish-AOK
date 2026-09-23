@@ -757,14 +757,22 @@ through do_notify_parent: SIG_IGN or SA_NOCLDWAIT releases the zombie at
 once, SIG_IGN sends nothing even to a new parent that blocks SIGCHLD, and
 each zombie gets its own SIGCHLD, with its CPU times.
 
-Found alongside, and measured (Linux 6.12 against alpine-amd64-test): AOK's
-children lists are newest-first, Linux's oldest-first. fork, clone, exec's
-de-thread and the reparent loop all `list_add` at the head, where Linux's
-copy_process uses list_add_tail and forget_original_parent
-list_splice_tail_init. So wait(-1) reaps the youngest zombie first (three
-children exited and waited for: Linux reaps 1 2 3, AOK 3 2 1), and of three
-zombies reparented together the SIGCHLD a blocking new parent finds names
-the youngest, not the oldest. reparent_zombie_disposition.c accepts either.
+Also fixed 2026-09-23 (tests/manual/wait_child_order.c, measured on Linux
+6.12 64-bit and -m32 first): AOK's children lists were newest-first, Linux's
+oldest-first. fork, CLONE_PARENT, exec's de-thread and the reparent loop all
+linked at the head, so wait(-1) reaped the youngest zombie first (Linux 1 2
+3, AOK 3 2 1), a subreaper reaped its orphans before its own children, and of
+three zombies reparented together the SIGCHLD a blocking new parent found
+named the youngest. Now a child goes at the end, as copy_process's
+list_add_tail puts it; an exit hands its children on after the new parent's
+own, in their order, as list_splice_tail_init does; and a thread's exec
+takes the old leader's place, as de_thread's list_replace_init does.
+reparent_zombie_disposition.c now requires the oldest. A checkpoint had its
+own copy of the bug: the restore builds each parent's children in image
+order, and the save wrote siblings in whatever order its placement left
+them (four zombies came back reaped 7 4 6 5). The save now walks the tree
+for its order (checkpoint_threads.sh, mode `order`). AOK has no
+/proc/<pid>/task/<tid>/children; the test checks it where it exists.
 
 Found alongside, by reading, not measured:
 - A group-stop is announced as soon as one thread takes the stop signal:

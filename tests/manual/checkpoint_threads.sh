@@ -46,5 +46,6 @@ run pid1 "$THREADED" "" /realmnt/probe
 run child "$THREADED" 0 /bin/sh -c '/realmnt/probe; echo "PROBE-EXIT=$?"'
 run departed DEPARTED-SAME-PROCESS 3 /bin/sh -c '/realmnt/probe departed; echo "PROBE-EXIT=$?"'
 run zombie ZOMBIE-REAPED 0 /bin/sh -c '/realmnt/probe zombie; echo "PROBE-EXIT=$?"'
+run order ZOMBIE-ORDER 0 /bin/sh -c '/realmnt/probe order; echo "PROBE-EXIT=$?"'
 [ $fail -eq 0 ] || { echo "FAIL"; exit 1; }
-echo "PASS: threads came back as one process -- as pid 1, as a child, after their leader exited -- and a zombie came back to be reaped"
+echo "PASS: threads came back as one process -- as pid 1, as a child, after their leader exited -- and zombies came back to be reaped, oldest first"

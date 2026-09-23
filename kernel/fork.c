@@ -561,7 +561,8 @@ static dword_t sys_clone_common_(dword_t flags, guest_addr_t stack, guest_addr_t
         // not the grandparent's.
         complex_lockt(&pids_lock, 0);
         list_remove(&task->siblings);
-        list_add(&current->parent->children, &task->siblings);
+        // The youngest of its new siblings, so last, as for any child.
+        list_add_tail(&current->parent->children, &task->siblings);
         task->parent = current->parent;
         unlock(&pids_lock);
     }

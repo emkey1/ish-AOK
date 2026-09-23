@@ -2706,6 +2706,64 @@ static bool ckpt_task_listed(struct task **tasks, unsigned count, struct task *t
     return false;
 }
 
+// And siblings in the order their parent lists them. The restore links each
+// task at the end of its parent's children list as it builds it (task.c), so
+// the image's order IS the restored list's, and that list is what a wait
+// walks: oldest first, so a parent's wait(-1) reaps its oldest zombie first,
+// and must after a restore too. The collection comes in pid-table order,
+// newest first, and the placement below used to take a ready task wherever it
+// found one: four zombies forked 4 5 6 7 came back reaped 7 4 6 5
+// (checkpoint_threads.sh, mode order).
+//
+// So first a walk of the tree: every task with no parent in the image (init,
+// a self-parent, one reparented while this was collected), then breadth-first
+// each one's children in its list's order, then anything the walk did not
+// reach. Parents come before their children in it; the placement keeps that
+// order among the tasks it moves past, so it only ever defers a thread to
+// after its leader, and a process's children stay in their list's order.
+static void ckpt_order_by_tree(struct task **tasks, unsigned count) {
+    if (count == 0)
+        return;
+    struct task **order = malloc(sizeof(*order) * count);
+    bool *taken = calloc(count, sizeof(*taken));
+    if (order == NULL || taken == NULL) {
+        // Still a valid image: parents before children, siblings in the
+        // collection's order.
+        free(order);
+        free(taken);
+        return;
+    }
+    unsigned n = 0;
+    complex_lockt(&pids_lock, 0);
+    for (unsigned i = 0; i < count; i++) {
+        struct task *t = tasks[i];
+        if (t->parent == NULL || t->parent == t ||
+                !ckpt_task_listed(tasks, count, t->parent)) {
+            order[n++] = t;
+            taken[i] = true;
+        }
+    }
+    for (unsigned q = 0; q < n; q++) {
+        struct task *child;
+        list_for_each_entry(&order[q]->children, child, siblings) {
+            for (unsigned i = 0; i < count; i++) {
+                if (tasks[i] == child && !taken[i]) {
+                    order[n++] = child;
+                    taken[i] = true;
+                    break;
+                }
+            }
+        }
+    }
+    unlock(&pids_lock);
+    for (unsigned i = 0; i < count; i++)
+        if (!taken[i])
+            order[n++] = tasks[i];
+    memcpy(tasks, order, sizeof(*tasks) * count);
+    free(order);
+    free(taken);
+}
+
 // And a thread after its group's leader, which the restore builds the group
 // around. The leader is usually the thread's ancestor anyway, but not always:
 // once a leader has exited, AOK hands its children to the first live thread
@@ -2713,6 +2771,7 @@ static bool ckpt_task_listed(struct task **tasks, unsigned count, struct task *t
 // never ready by the parent rule alone, so a self-parent counts as none.
 // The tail loop below used to take such a task "anyway"; it is ordered now.
 static void ckpt_order_tasks(struct task **tasks, unsigned count) {
+    ckpt_order_by_tree(tasks, count);
     unsigned placed = 0;
     while (placed < count) {
         unsigned progress = 0;
@@ -2734,9 +2793,10 @@ static void ckpt_order_tasks(struct task **tasks, unsigned count) {
                     ckpt_task_listed(tasks, placed, leader);
             if (!parent_ready || !leader_ready)
                 continue;
-            struct task *swap = tasks[placed];
+            // Moved in front of the ones it passed, which keep their order:
+            // a swap sent the first of them to where this one was.
+            memmove(&tasks[placed + 1], &tasks[placed], sizeof(*tasks) * (i - placed));
             tasks[placed] = t;
-            tasks[i] = swap;
             placed++;
             progress++;
         }

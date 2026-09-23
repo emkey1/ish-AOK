@@ -365,24 +365,15 @@ static void run(const struct scenario_args *sc) {
         siginfo_t si;
         memset(&si, 0, sizeof(si));
         int sig = sigtimedwait(&set, &si, &zero);
-        int which = -1;
-        for (int i = 0; i < sc->zombies; i++) {
-            if (si.si_pid == g[i])
-                which = i;
-        }
-        /* One zombie: it is the one named. Three: one of them is, whichever
-         * the kernel handed on first, and the other two coalesced into it --
-         * the oldest on Linux, the youngest on AOK, whose children lists are
-         * newest-first (docs/TODO.md). */
-        check(sig == SIGCHLD && si.si_code == CLD_EXITED && which >= 0 &&
-              si.si_status == ZOMBIE_CODE(which),
+        /* The first zombie handed on is the one named, and the rest coalesced
+         * into it -- the other two of three, and in the direct shape M's own
+         * exit, told after them. It is the oldest: an exit hands its children
+         * on oldest first (wait_child_order.c). */
+        check(sig == SIGCHLD && si.si_code == CLD_EXITED && si.si_pid == g[0] &&
+              si.si_status == ZOMBIE_CODE(0),
               "%s: the SIGCHLD is %d, si_code %d, si_pid %d, si_status %d; want SIGCHLD, "
-              "CLD_EXITED, si_pid of a reparented grandchild (%d), its status", label, sig,
-              si.si_code, (int) si.si_pid, si.si_status, (int) g[0]);
-        if (sc->shape == DIRECT)
-            check(si.si_pid == g[0] || sc->zombies > 1,
-                  "%s: the pending SIGCHLD names %d; want the grandchild %d, told before M's "
-                  "own exit", label, (int) si.si_pid, (int) g[0]);
+              "CLD_EXITED, the oldest reparented grandchild %d, exit %d", label, sig,
+              si.si_code, (int) si.si_pid, si.si_status, (int) g[0], ZOMBIE_CODE(0));
 
         nap_ms(scaled_ms(SETTLE_MS));
         check(!sigchld_pending(), "%s: another SIGCHLD after the first was taken", label);

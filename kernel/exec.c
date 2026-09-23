@@ -718,7 +718,16 @@ static void exec_de_thread(void) {
         new_parent = pid_get_task(1);
     if (new_parent != NULL && new_parent != current) {
         list_remove(&current->siblings);
-        list_add(&new_parent->children, &current->siblings);
+        // Into the old leader's place among its siblings, as Linux's de_thread
+        // puts it there (list_replace_init): the process is as old as it was,
+        // so a wait that reaps its parent's zombies oldest first still finds
+        // it where it was. The leader is on that list until just below. When
+        // it is not -- the parent captured above has exited, and init takes
+        // this one -- at the end, as any child handed on is.
+        if (leader->parent == new_parent && !list_empty(&leader->siblings))
+            list_add_before(&leader->siblings, &current->siblings);
+        else
+            list_add_tail(&new_parent->children, &current->siblings);
         current->parent = new_parent;
     }
 

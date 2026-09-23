@@ -998,8 +998,17 @@ noreturn void do_exit(struct task *task, int status) {
     list_for_each_entry_safe(&task->children, child, tmp, siblings) {
         ptrace_detach_from_tracer(task, child);
         child->parent = new_parent;
-        list_remove(&child->siblings);
-        list_add(&new_parent->children, &child->siblings);
+        // After the new parent's own children, in the order they were in on
+        // ours: Linux's list_splice_tail_init. A subreaper's wait reaps its
+        // own zombies first and then ours, oldest first; at the head, ours
+        // came first (tests/manual/wait_child_order.c). Not when the new
+        // parent is this task -- init, taking everything with it -- where the
+        // child is on that list already, and one moved to the end of the list
+        // being walked would be walked again, for ever.
+        if (new_parent != task) {
+            list_remove(&child->siblings);
+            list_add_tail(&new_parent->children, &child->siblings);
+        }
         // The parent-death signal, for a child PROCESS, whoever takes it -- a
         // thread of this same process included, which is the one case every
         // step below skips. Not for a thread of our own process, which AOK
@@ -1046,9 +1055,8 @@ noreturn void do_exit(struct task *task, int status) {
         // wait that a parent which disclaimed SIGCHLD never makes. One signal
         // per zombie, as Linux sends them; they coalesce into the first
         // still-pending copy, so it is the first one's siginfo that a new
-        // parent blocking SIGCHLD sees. That is the youngest here and the
-        // oldest on Linux, whose children lists are oldest-first
-        // (docs/TODO.md).
+        // parent blocking SIGCHLD sees: the oldest, as on Linux, since this
+        // walks our children oldest first.
         //
         // Only a zombie that was announced to us as a process. A thread's
         // zombie is its tracer's; a process a tracer still holds is announced

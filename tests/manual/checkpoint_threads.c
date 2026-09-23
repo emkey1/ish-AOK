@@ -23,6 +23,12 @@
 //   zombie    a child that exited and was not yet reaped. The task collection
 //             the save used skipped zombies, so every one was lost and the
 //             parent's wait() failed with ECHILD after a restore.
+//   order     four children that exited, not yet reaped. wait(-1) reaps them
+//             oldest first, as Linux does (wait_child_order.c), and has to
+//             after a restore: the restore links each child at the end of its
+//             parent's list as it builds it, so the image must list siblings
+//             in their parent's order, and the save wrote them in whatever
+//             order its placement left them.
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
@@ -180,11 +186,39 @@ static int zombie(void) {
     return 0;
 }
 
+static int zombie_order(void) {
+    pid_t c[4];
+    for (int i = 0; i < 4; i++) {
+        c[i] = fork();
+        if (c[i] == 0)
+            _exit(11 + i);
+    }
+    for (int i = 0; i < 6; i++)
+        sleep(1);                                   // the checkpoint lands here
+    alarm(10);
+    pid_t got[4] = {0};
+    int ok = 1;
+    for (int i = 0; i < 4; i++) {
+        int st = 0;
+        got[i] = waitpid(-1, &st, 0);
+        ok = ok && got[i] == c[i] && WIFEXITED(st) && WEXITSTATUS(st) == 11 + i;
+    }
+    char d[160];
+    snprintf(d, sizeof(d), "wait(-1) reaps %d %d %d %d; forked %d %d %d %d",
+             (int) got[0], (int) got[1], (int) got[2], (int) got[3],
+             (int) c[0], (int) c[1], (int) c[2], (int) c[3]);
+    check("ZOMBIE-ORDER", ok, d);
+    printf("THREADS-DONE\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "departed") == 0)
         return departed();
     if (argc > 1 && strcmp(argv[1], "zombie") == 0)
         return zombie();
+    if (argc > 1 && strcmp(argv[1], "order") == 0)
+        return zombie_order();
     pthread_t a, b;
     pthread_create(&a, NULL, waiter, NULL);
     pthread_create(&b, NULL, spinner, NULL);
