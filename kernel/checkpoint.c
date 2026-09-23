@@ -93,7 +93,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 14  // 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 15  // 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -253,6 +253,15 @@ struct ckpt_header {
     int64_t clock_monotonic_ns, clock_boottime_ns, clock_raw_ns;
     int64_t clock_realtime_ns;
     int64_t clock_boot_time;
+    // The root the machine was running on (checkpoint_root_identity), and its
+    // name for the refusal. A session is its processes' view of ONE
+    // filesystem: every descriptor reopens by path, every mapping names a file
+    // in it. Resumed on another root, those paths still resolved -- in the
+    // wrong files. Saved on Devuan and resumed on Alpine, the "Devuan" shell
+    // read Alpine's /etc/os-release, and a descriptor open for writing would
+    // have written into Alpine. 0 means the root had no identity to record.
+    uint64_t root_identity;
+    char root_name[64];
 };
 
 struct ckpt_task {
@@ -455,6 +464,48 @@ static bool ckpt_pending_halt;
 static pid_t_ ckpt_pending_pid;
 static char ckpt_session_path[PATH_MAX];
 
+// A root is its data directory's host inode. Not its name: the app renames
+// roots, and a renamed root is still the same files. Not its path either,
+// which on a device carries the app container's UUID. The inode survives a
+// rename, and a COPY never has it -- an import, an exported root brought back,
+// a snapshot, a `cp -R` of the directory -- each is another filesystem that
+// merely starts out equal, and a session resumed on it would carry on writing
+// into files it never saw. fakefs tells a copied root from its original the
+// same way (meta.db's db_inode, fs/fake-db.c).
+uint64_t checkpoint_root_identity(const char *root_data_dir) {
+    struct stat st;
+    if (root_data_dir == NULL || stat(root_data_dir, &st) != 0)
+        return 0;
+    return (uint64_t) st.st_ino;
+}
+
+// The same for the root this machine is running on, read from its mount's own
+// descriptor -- that data directory, opened (realfs_mount). And a name for it:
+// the directory holding "data" for a fakefs root (roots/<name>/data), the
+// directory itself otherwise.
+static uint64_t ckpt_running_root(char *name, size_t name_size) {
+    name[0] = '\0';
+    struct mount *root = mount_find("");
+    if (root == NULL)
+        return 0;
+    uint64_t id = 0;
+    struct stat st;
+    if (root->root_fd >= 0 && fstat(root->root_fd, &st) == 0)
+        id = (uint64_t) st.st_ino;
+    const char *src = root->source != NULL ? root->source : "";
+    size_t len = strlen(src);
+    while (len > 1 && src[len - 1] == '/')
+        len--;
+    if (len > 5 && strncmp(src + len - 5, "/data", 5) == 0)
+        len -= 5;
+    const char *base = src + len;
+    while (base > src && base[-1] != '/')
+        base--;
+    snprintf(name, name_size, "%.*s", (int) (src + len - base), base);
+    mount_release(root);
+    return id;
+}
+
 int checkpoint_peek(const char *host_path, struct checkpoint_image_info *out) {
     memset(out, 0, sizeof(*out));
     FILE *f = fopen(host_path, "rb");
@@ -482,6 +533,13 @@ int checkpoint_peek(const char *host_path, struct checkpoint_image_info *out) {
     memcpy(out->hostname, h.hostname, n);
     out->hostname[n] = '\0';
     out->loadable = h.version == CKPT_VERSION && h.page_size == PAGE_SIZE;
+    // Only a header of this version has these fields where this build reads
+    // them; in any other it is whatever followed a shorter header.
+    if (h.version == CKPT_VERSION) {
+        out->root = h.root_identity;
+        h.root_name[sizeof(h.root_name) - 1] = '\0';
+        snprintf(out->root_name, sizeof(out->root_name), "%s", h.root_name);
+    }
     return 0;
 }
 
@@ -2828,6 +2886,7 @@ int checkpoint_save(const char *host_path) {
     snprintf(h.hostname, sizeof(h.hostname), "%s", init_uts_ns.hostname);
     snprintf(h.domainname, sizeof(h.domainname), "%s", init_uts_ns.domainname);
     unlock(&init_uts_ns.lock);
+    h.root_identity = ckpt_running_root(h.root_name, sizeof(h.root_name));
     // Written now and rewritten at the end: the page count and the stdio kind
     // are only known once every task has been walked, and the header has to
     // come first in the file.
@@ -5075,6 +5134,19 @@ int checkpoint_restore(const char *host_path) {
         goto out;
     if (h.n_tasks == 0 || h.n_tasks > 4096)
         goto out;
+    // The root, before anything is changed: the image is intact and belongs to
+    // another root, so this refuses rather than fails, with a code of its own
+    // so that whoever offered the image keeps it for that root. Only when both
+    // sides have an identity; 0 is "unknown", not "any".
+    h.root_name[sizeof(h.root_name) - 1] = '\0';
+    char here_name[sizeof(h.root_name)];
+    uint64_t here = ckpt_running_root(here_name, sizeof(here_name));
+    if (h.root_identity != 0 && here != 0 && h.root_identity != here) {
+        ckpt_refuse("this session was saved on the root \"%s\", not on this one (\"%s\")",
+                    h.root_name, here_name);
+        err = _EXDEV;
+        goto out;
+    }
 
     // The UTS namespace, before any task runs. Only when the image has one:
     // an empty hostname means the checkpointed guest had none set either, and

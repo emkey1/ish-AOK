@@ -74,9 +74,9 @@ void ISHSuspendGuardEnterForeground(void);
 // cause. The guest is unharmed either way -- a checkpoint is a copy.
 NSString *ISHSuspendSessionImagePath(void);
 // The name an AUTOMATIC save uses -- the system taking the session when it
-// kills the app, as opposed to a Save or Suspend the user asked for. A fixed
-// name, so those replace each other instead of filling the slots. See the
-// definition in AppDelegate.m.
+// kills the app, as opposed to a Save or Suspend the user asked for. One fixed
+// name per root, so those replace each other instead of filling the slots. See
+// the definition in AppDelegate.m.
 NSString *ISHSuspendAutomaticSessionImagePath(void);
 // The image this launch resumed from, or nil for an ordinary boot. The Workspace
 // asks so it can apply THAT image's arrangement rather than the newest one on
@@ -95,8 +95,19 @@ bool ISHGuestHalted(void);
 int ISHSuspendSessionSuspendAndExit(void);
 
 // ---- saved sessions -----------------------------------------------------
-// Each entry: path, name, date, bytes, tasks, hostname, loadable. Newest first.
+// A session belongs to the root it was saved on. These are the current root's
+// (the booted one, or before the boot the default), plus any image no root can
+// resume, offered only to delete: saved by another build (loadable NO) or on a
+// root that is gone (orphan YES). Each entry: path, name, date, bytes, tasks,
+// hostname, loadable, root, rootName, orphan. Newest first.
 NSArray<NSDictionary *> *ISHSessionSlots(void);
+// The identity sessions saved on the named root record
+// (checkpoint_root_identity). 0 if it has none.
+uint64_t ISHSessionRootIdentityNamed(NSString *_Nullable name);
+// How many sessions were saved on this root, and deleting them all -- which
+// deleting the root does, since nothing else can resume them.
+NSUInteger ISHSessionCountForRoot(uint64_t root);
+void ISHSessionsDeleteForRoot(uint64_t root);
 // How many are worth keeping on this device right now, space considered.
 NSUInteger ISHSessionSlotLimit(void);
 // Which slot the next save writes to; nil resets to "pick one".

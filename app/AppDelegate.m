@@ -2741,10 +2741,18 @@ static UIViewController *CreateRootSelectionViewController(void) {
 }
 
 // Where a suspended session lives: one file in the app group container, beside
-// the roots rather than inside one. Beside, because it describes the guest and
-// not the filesystem -- a root that is exported, copied or deleted should not
-// take a session with it, and a session that no longer matches its root is
-// refused on the way in rather than half-applied.
+// the roots rather than inside one, so that an exported or copied root does not
+// carry a session with it.
+//
+// But every session BELONGS to one root (GH #607). It is its processes' view of
+// that filesystem: descriptors reopen by path, mappings name its files. The
+// image records the root it was saved on (checkpoint_root_identity: the root's
+// data directory, which survives a rename and is never shared by a copy); the
+// picker offers only the sessions of the root about to boot; the kernel
+// refuses a resume on any other root before changing anything; and deleting a
+// root deletes its sessions. None of that existed before: one list served every
+// root, and a Devuan session resumed after switching to Alpine read and wrote
+// Alpine's files.
 // ---- session slots ------------------------------------------------------
 //
 // More than one saved session, because one is a strange number for something
@@ -2790,7 +2798,28 @@ static void ISHSessionMigrateLegacyImage(void) {
         os_log_error(ISHSuspendLog(), "could not migrate the old session image: %{public}@", err);
 }
 
-// Newest first, because the one you want is almost always the last one you made.
+// The identity a session saved on this root records. 0 if it has none.
+uint64_t ISHSessionRootIdentityNamed(NSString *_Nullable name) {
+    if (name.length == 0)
+        return 0;
+    NSURL *data = [[Roots.instance rootUrl:name] URLByAppendingPathComponent:@"data" isDirectory:YES];
+    return checkpoint_root_identity(data.fileSystemRepresentation);
+}
+
+// The root whose sessions these are: the one running, or before the boot, the
+// one about to.
+static uint64_t ISHSessionCurrentRoot(void) {
+    return ISHSessionRootIdentityNamed(Roots.instance.bootedRoot ?: Roots.instance.defaultRoot);
+}
+
+// This launch's sessions. Newest first, because the one you want is almost
+// always the last one you made.
+//
+// The current root's, and never another root's: those are still good for that
+// root, and are listed when it is the one selected. Also listed is whatever no
+// root can resume -- an image from another build, or one whose root has since
+// gone -- so that it can be deleted, and so that it takes up a slot and is
+// recycled like any other.
 NSArray<NSDictionary *> *ISHSessionSlots(void) {
     ISHSessionMigrateLegacyImage();
     NSString *dir = ISHSessionsDirectory();
@@ -2798,6 +2827,8 @@ NSArray<NSDictionary *> *ISHSessionSlots(void) {
         return @[];
     NSArray<NSString *> *names =
         [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil];
+    uint64_t current = ISHSessionCurrentRoot();
+    NSMutableSet<NSNumber *> *installed = nil;   // only when an image needs it
     NSMutableArray<NSDictionary *> *out = [NSMutableArray array];
     for (NSString *name in names) {
         if (![name.pathExtension isEqualToString:@"img"])
@@ -2807,6 +2838,17 @@ NSArray<NSDictionary *> *ISHSessionSlots(void) {
         struct checkpoint_image_info info;
         if (checkpoint_peek(path.fileSystemRepresentation, &info) < 0)
             continue;   // not an image, or truncated -- not a slot
+        BOOL orphan = NO;
+        if (info.loadable && info.root != 0 && current != 0 && info.root != current) {
+            if (installed == nil) {
+                installed = [NSMutableSet set];
+                for (NSString *root in [Roots.instance.roots.array copy])
+                    [installed addObject:@(ISHSessionRootIdentityNamed(root))];
+            }
+            if ([installed containsObject:@(info.root)])
+                continue;   // another root's
+            orphan = YES;
+        }
         [out addObject:@{
             @"path": path,
             @"name": name.stringByDeletingPathExtension,
@@ -2815,12 +2857,54 @@ NSArray<NSDictionary *> *ISHSessionSlots(void) {
             @"tasks": @(info.tasks),
             @"hostname": @(info.hostname),
             @"loadable": @(info.loadable != false),
+            @"root": @(info.root),
+            @"rootName": @(info.root_name),
+            @"orphan": @(orphan),
         }];
     }
     [out sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
         return [b[@"date"] compare:a[@"date"]];
     }];
     return out;
+}
+
+// Whether a slot can be resumed at all. The others are offered only to delete.
+static BOOL ISHSessionSlotResumable(NSDictionary *slot) {
+    return [slot[@"loadable"] boolValue] && ![slot[@"orphan"] boolValue];
+}
+
+// The sessions saved on one root, whichever root is current.
+static NSArray<NSString *> *ISHSessionPathsForRoot(uint64_t root) {
+    NSString *dir = ISHSessionsDirectory();
+    if (dir == nil || root == 0)
+        return @[];
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil]) {
+        if (![name.pathExtension isEqualToString:@"img"])
+            continue;
+        NSString *path = [dir stringByAppendingPathComponent:name];
+        struct checkpoint_image_info info;
+        if (checkpoint_peek(path.fileSystemRepresentation, &info) == 0 && info.loadable &&
+                info.root == root)
+            [out addObject:path];
+    }
+    return out;
+}
+
+NSUInteger ISHSessionCountForRoot(uint64_t root) {
+    return ISHSessionPathsForRoot(root).count;
+}
+
+// A root's sessions go with it. Nothing else could ever resume them: a root
+// imported again later is a different root, whatever it is called.
+void ISHSessionsDeleteForRoot(uint64_t root) {
+    for (NSString *path in ISHSessionPathsForRoot(root)) {
+        BOOL removed = [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+        ISHWorkspaceForgetLayoutForSessionImage(path);
+        [ISHDiagnosticsStore recordBreadcrumb:@"session.deletedWithRoot"
+                                      details:@{@"image": path.lastPathComponent,
+                                                @"removed": @(removed)}];
+    }
 }
 
 // How many slots are worth keeping, given what is left on the disk.
@@ -2898,13 +2982,20 @@ void ISHSessionSetCurrentSlot(NSString *path) {
 //
 // It deliberately does not pin: a Save the user asks for LATER in the same
 // launch should take a numbered slot of its own and not land on top of this.
+//
+// One per root: with a single name, an automatic save on one root replaced the
+// one another root had.
 NSString *ISHSuspendAutomaticSessionImagePath(void) {
     if (ishSessionCurrentSlot != nil)
         return ishSessionCurrentSlot;
     NSString *dir = ISHSessionsDirectory();
     if (dir == nil)
         return nil;
-    return [dir stringByAppendingPathComponent:@"session-auto.img"];
+    uint64_t root = ISHSessionCurrentRoot();
+    NSString *name = root != 0
+        ? [NSString stringWithFormat:@"session-auto-%llu.img", (unsigned long long) root]
+        : @"session-auto.img";
+    return [dir stringByAppendingPathComponent:name];
 }
 
 // The choice, made once per launch and BEFORE the guest boots.
@@ -3046,9 +3137,12 @@ static NSString *ISHSessionSlotTitle(NSDictionary *slot, NSDateFormatter *when) 
     NSString *stamp = [when stringFromDate:slot[@"date"]];
     if (![slot[@"loadable"] boolValue])
         return [NSString stringWithFormat:@"%@ (saved by a different build)", stamp];
+    if ([slot[@"orphan"] boolValue])
+        return [NSString stringWithFormat:@"%@ (saved on %@, which is gone)", stamp,
+                [slot[@"rootName"] length] != 0 ? slot[@"rootName"] : @"a filesystem"];
     // An automatic save is named, because "which of these did I choose to keep"
     // is the question somebody deleting them is trying to answer.
-    NSString *automatic = [slot[@"name"] isEqualToString:@"session-auto"] ? @", auto-saved" : @"";
+    NSString *automatic = [slot[@"name"] hasPrefix:@"session-auto"] ? @", auto-saved" : @"";
     return [NSString stringWithFormat:@"%@ — %@ process%@, %@%@",
             slot[@"hostname"], slot[@"tasks"],
             [slot[@"tasks"] unsignedLongValue] == 1 ? @"" : @"es", stamp, automatic];
@@ -3131,7 +3225,7 @@ void ISHSessionPresentResumePicker(UIViewController *host,
     if (autoChoice != NULL && autoChoice[0] != '\0') {
         if (strcmp(autoChoice, "newest") == 0) {
             for (NSDictionary *slot in slots) {   // newest first
-                if (![slot[@"loadable"] boolValue])
+                if (!ISHSessionSlotResumable(slot))
                     continue;
                 os_log(ISHSuspendLog(), "session resume: ISH_SESSION_RESUME chose %{public}@",
                        [slot[@"path"] lastPathComponent]);
@@ -3165,10 +3259,10 @@ void ISHSessionPresentResumePicker(UIViewController *host,
     when.timeStyle = NSDateFormatterShortStyle;
 
     for (NSDictionary *slot in slots) {
-        // An image this build cannot load is offered as nothing but a deletion:
-        // choosing it would boot instead, which looks like the resume silently
-        // failing.
-        BOOL loadable = [slot[@"loadable"] boolValue];
+        // An image this build cannot load, or whose root is gone, is offered
+        // as nothing but a deletion: choosing it would boot instead, which
+        // looks like the resume silently failing.
+        BOOL loadable = ISHSessionSlotResumable(slot);
         [sheet addActionWithTitle:ISHSessionSlotTitle(slot, when)
                             style:UIAlertActionStyleDefault
                           handler:^(__unused UIAlertAction *a) {
@@ -3846,18 +3940,32 @@ static TerminalViewController *CreateTerminalViewController(void) {
     // The slot the picker settled on, not "the" image: a launch that was asked
     // and answered "New Session" must not resume anything, and one that was
     // never asked (a Shortcut, a background entry point -- nobody is looking at
-    // a dialog there) falls back to the newest slot, which is what a single
-    // suspend.img used to mean.
-    NSString *sessionImage = nil;
+    // a dialog there) falls back to the newest slot this root can resume, which
+    // is what a single suspend.img used to mean.
+    NSString *resumeImage = nil;
     if (ishSessionResumeDecided) {
-        sessionImage = ishSessionResumeChoice;
+        resumeImage = ishSessionResumeChoice;
     } else {
-        sessionImage = ISHSessionSlots().firstObject[@"path"];
-        if (sessionImage != nil)
-            ISHSessionSetCurrentSlot(sessionImage);
+        for (NSDictionary *slot in ISHSessionSlots()) {   // newest first
+            if (ISHSessionSlotResumable(slot)) {
+                resumeImage = slot[@"path"];
+                break;
+            }
+        }
+        if (resumeImage != nil)
+            ISHSessionSetCurrentSlot(resumeImage);
     }
-    if (sessionImage == nil)
-        sessionImage = ISHSuspendSessionImagePath();
+    // Where this launch's saves go, the guest's own `suspend` included: the slot
+    // the choice pinned -- the resumed image after "Resume and Delete" or a
+    // launch nobody asked -- or a fresh one. After "Resume and Save" nothing is
+    // pinned, so the copy that was kept is not the one written over. It used to
+    // be: the save path was the resumed image whatever the answer.
+    //
+    // And never a thing to resume. With every slot taken the fresh one is the
+    // OLDEST saved session, and whatever was at the save path used to be
+    // restored -- so "Start a New Session" resumed the oldest session instead,
+    // every time on a device full enough to allow only one slot.
+    NSString *sessionImage = ISHSuspendSessionImagePath();
     // The same switch gates the guest's own control of this. Published rather
     // than read from the kernel, because UserPreferences is Objective-C and
     // fs/proc/ish.c is not; re-published on every activation below, so
@@ -3872,38 +3980,40 @@ static TerminalViewController *CreateTerminalViewController(void) {
     // one where nothing had been suspended in the first place. Reported three
     // times as "no session on restore" with nothing in the log either way,
     // because the only diagnostic covered the branch that was never reached.
-    BOOL sessionExists = sessionImage != nil &&
-            [NSFileManager.defaultManager fileExistsAtPath:sessionImage];
+    BOOL sessionExists = resumeImage != nil &&
+            [NSFileManager.defaultManager fileExistsAtPath:resumeImage];
     os_log(ISHSuspendLog(),
-           "session resume: pref=%{public}d decided=%{public}d image=%{public}@ exists=%{public}d",
+           "session resume: pref=%{public}d decided=%{public}d image=%{public}@ exists=%{public}d "
+           "saves=%{public}@",
            UserPreferences.shared.shouldSuspendToDisk ? 1 : 0,
            ishSessionResumeDecided ? 1 : 0,
-           sessionImage != nil ? sessionImage.lastPathComponent : @"(none)",
-           sessionExists ? 1 : 0);
+           resumeImage != nil ? resumeImage.lastPathComponent : @"(none)",
+           sessionExists ? 1 : 0,
+           sessionImage != nil ? sessionImage.lastPathComponent : @"(none)");
     [ISHDiagnosticsStore recordBreadcrumb:@"session.resume.decision"
                                   details:@{@"pref": @(UserPreferences.shared.shouldSuspendToDisk),
                                             @"decided": @(ishSessionResumeDecided),
-                                            @"image": sessionImage != nil
-                                                    ? sessionImage.lastPathComponent : @"none",
+                                            @"image": resumeImage != nil
+                                                    ? resumeImage.lastPathComponent : @"none",
                                             @"exists": @(sessionExists)}];
     // What is actually on disk, when the thing we were told to resume is not.
     // A slot mismatch -- written as one name, looked for under another -- looks
     // exactly like "nothing was suspended" unless the directory is listed.
-    if (sessionImage != nil && !sessionExists) {
-        NSString *dir = sessionImage.stringByDeletingLastPathComponent;
+    if (resumeImage != nil && !sessionExists) {
+        NSString *dir = resumeImage.stringByDeletingLastPathComponent;
         NSArray<NSString *> *found =
                 [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil];
         os_log_error(ISHSuspendLog(),
                      "session resume: %{public}@ is not there; %{public}@ holds %{public}@",
-                     sessionImage.lastPathComponent, dir.lastPathComponent,
+                     resumeImage.lastPathComponent, dir.lastPathComponent,
                      found.count != 0 ? [found componentsJoinedByString:@", "] : @"nothing");
     }
     if (UserPreferences.shared.shouldSuspendToDisk && sessionImage != nil) {
         checkpoint_set_session(sessionImage.fileSystemRepresentation);
-        if ([NSFileManager.defaultManager fileExistsAtPath:sessionImage]) {
-            int rerr = checkpoint_restore(sessionImage.fileSystemRepresentation);
+        if (sessionExists) {
+            int rerr = checkpoint_restore(resumeImage.fileSystemRepresentation);
             if (rerr >= 0) {
-                ishSessionRestoredImage = sessionImage;
+                ishSessionRestoredImage = resumeImage;
                 // Anything that came back degraded -- a listener that could
                 // not be rebound -- recorded where a Diagnostics export can
                 // show it. The guest's own /proc/ish/checkpoint says the same.
@@ -3940,33 +4050,44 @@ static TerminalViewController *CreateTerminalViewController(void) {
                 checkpoint_get_status(&st);
                 os_log_error(ISHSuspendLog(),
                              "session NOT restored from %{public}@: %{public}d %{public}s",
-                             sessionImage.lastPathComponent, rerr,
+                             resumeImage.lastPathComponent, rerr,
                              st.last_refusal[0] != '\0' ? st.last_refusal : "(no reason recorded)");
                 [ISHDiagnosticsStore recordBreadcrumb:@"session.restore.failed"
                                               details:@{@"errno": @(rerr),
                                                         @"reason": st.last_refusal[0] != '\0'
                                                                 ? @(st.last_refusal) : @"none"}];
             }
-            if (!ishSessionResumeDecided || rerr < 0) {
+            if (rerr == _EXDEV) {
+                // Another root's session. The kernel refused it before changing
+                // anything, and it is still good for that root, so it stays
+                // where it is -- and stops being this launch's slot, or the
+                // next save would write over it.
+                if ([sessionImage isEqualToString:resumeImage]) {
+                    ISHSessionSetCurrentSlot(nil);
+                    sessionImage = ISHSuspendSessionImagePath();
+                    if (sessionImage != nil)
+                        checkpoint_set_session(sessionImage.fileSystemRepresentation);
+                }
+            } else if (!ishSessionResumeDecided || rerr < 0) {
                 // Kept, not destroyed, when it failed. It must not be OFFERED
                 // again -- that is what the removal was for -- but deleting
                 // the one artifact that could explain the failure makes the
                 // next report as unactionable as the last. One generation is
                 // enough; the previous casualty is replaced.
                 if (rerr < 0) {
-                    NSString *aside = [sessionImage stringByAppendingPathExtension:@"failed"];
+                    NSString *aside = [resumeImage stringByAppendingPathExtension:@"failed"];
                     [NSFileManager.defaultManager removeItemAtPath:aside error:nil];
                     NSError *moveErr = nil;
-                    if ([NSFileManager.defaultManager moveItemAtPath:sessionImage
+                    if ([NSFileManager.defaultManager moveItemAtPath:resumeImage
                                                               toPath:aside
                                                                error:&moveErr]) {
                         os_log(ISHSuspendLog(), "kept the unrestorable image at %{public}@",
                                aside.lastPathComponent);
                     } else {
-                        [NSFileManager.defaultManager removeItemAtPath:sessionImage error:nil];
+                        [NSFileManager.defaultManager removeItemAtPath:resumeImage error:nil];
                     }
                 } else {
-                    [NSFileManager.defaultManager removeItemAtPath:sessionImage error:nil];
+                    [NSFileManager.defaultManager removeItemAtPath:resumeImage error:nil];
                 }
             }
             if (rerr >= 0) {

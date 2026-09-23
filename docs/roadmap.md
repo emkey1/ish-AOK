@@ -349,6 +349,12 @@ it. What exists now:
   on a save with no restore. Signals queued and not yet taken come back with
   their siginfo; before, a pending signal came back as a bit nothing could
   deliver, and a program using SIGALRM as a timeout waited for ever.
+- **The root it belongs to** (GH #607): an image names the root it was saved
+  on -- its data directory's inode, which a rename keeps and a copy never has
+  -- and a restore on any other root is refused before anything changes. The
+  app offers only the current root's sessions, and deleting a root deletes its
+  sessions. Before, a Devuan session resumed on Alpine ran against Alpine's
+  files.
 - **Native programs**, by the rule this section already named: zsh describes
   itself (its fork-by-relaunch already turns a live shell into a script that
   rebuilds it) and comes back with its parameters, functions and aliases. dash
@@ -358,8 +364,8 @@ it. What exists now:
   and `tests/manual/checkpoint_tmpfs.sh` is the tmpfs one -- it checks a held
   descriptor on a /run file too, and that nothing leaked into the rootfs.
   `checkpoint_anonfd.sh`, `checkpoint_fifo.sh`, `checkpoint_sockpair.sh`,
-  `checkpoint_threads.sh`, `checkpoint_clock.sh` and `checkpoint_timers.sh`
-  cover the rules above.
+  `checkpoint_threads.sh`, `checkpoint_clock.sh`, `checkpoint_timers.sh` and
+  `checkpoint_root_identity.sh` cover the rules above.
 
 **What is still open**: descriptors in flight in an SCM_RIGHTS message when the
 image is written (the bytes travel, the descriptors cannot, and the save says

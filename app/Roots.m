@@ -1522,12 +1522,15 @@ static BOOL RootIsInstalled(Roots *roots, NSString *name, NSError **error) {
         return NO;
     if (![self unmountExposedRootNamed:name error:error])
         return NO;
+    // Before it goes: afterwards there is no directory left to name it by.
+    uint64_t sessionRoot = ISHSessionRootIdentityNamed(name);
     if (![NSFileManager.defaultManager removeItemAtURL:[self rootUrl:name] error:error]) {
         // The store is still there, so put the guest's view of it back rather
         // than leaving a root that is installed but no longer reachable.
         [self exposeRootNamed:name];
         return NO;
     }
+    ISHSessionsDeleteForRoot(sessionRoot);
     [self removeExposedMountPointForRootNamed:name];
     [self mutateRoots:^(NSMutableOrderedSet<NSString *> *roots) {
         [roots removeObject:name];

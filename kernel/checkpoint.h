@@ -189,6 +189,7 @@ void checkpoint_get_restore_note(char *out, size_t size);
 // description that only one of those two updates is a description that lies.
 // The image is the only thing that always knows.
 #define CKPT_PEEK_HOSTNAME 65
+#define CKPT_PEEK_ROOT_NAME 64
 struct checkpoint_image_info {
     bool loadable;          // magic, version and page size match THIS build
     uint32_t version;       // what it actually is, for "saved by an older build"
@@ -196,6 +197,10 @@ struct checkpoint_image_info {
     uint32_t tasks;
     uint64_t pages;
     char hostname[CKPT_PEEK_HOSTNAME];
+    // The root it was saved on, as checkpoint_root_identity names it, and that
+    // root's name at the time. 0 when the image does not say.
+    uint64_t root;
+    char root_name[CKPT_PEEK_ROOT_NAME];
 };
 
 // 0 and fills `out`, or a guest _E* code if the file cannot be read at all.
@@ -203,5 +208,13 @@ struct checkpoint_image_info {
 // false and the rest is filled in as far as it could be, so the picker can say
 // "saved by a different build" rather than showing nothing.
 int checkpoint_peek(const char *host_path, struct checkpoint_image_info *out);
+
+// Which root a session belongs to: the identity of the root whose data
+// directory (roots/<name>/data, or a CLI root's <dir>/data) is at this path,
+// the same value a save records. It survives a rename and differs for any copy
+// of the directory. 0 if the directory cannot be read. A restore on a root
+// other than the image's is refused with _EXDEV before anything is changed,
+// so the image is still good for its own root.
+uint64_t checkpoint_root_identity(const char *root_data_dir);
 
 #endif

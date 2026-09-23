@@ -1038,8 +1038,15 @@ static UIColor *RootRowInUseAccentColor(void) {
 - (void)deleteFilesystem {
     if (self.isInUseRoot)
         return;
+    NSString *message = @"I can't be bothered to implement any undo or regret UI so this is irreversible.";
+    // Its saved sessions go with it (Roots destroyRootNamed), so say so.
+    NSUInteger sessions = ISHSessionCountForRoot(ISHSessionRootIdentityNamed(self.rootName));
+    if (sessions > 0)
+        message = [message stringByAppendingFormat:@"\n\n%@ saved session%@ from this filesystem will be deleted too.",
+                   sessions == 1 ? @"The" : [NSString stringWithFormat:@"%lu", (unsigned long) sessions],
+                   sessions == 1 ? @"" : @"s"];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Really delete?"
-                                                                   message:@"I can't be bothered to implement any undo or regret UI so this is irreversable."
+                                                                   message:message
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Delete" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
