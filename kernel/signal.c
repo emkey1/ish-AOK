@@ -2223,6 +2223,10 @@ bool signal_is_ignored_or_blocked(int sig) {
     return ignored;
 }
 
+// Signal every process in process group PGID, as Linux's kill_pgrp does, for
+// the kernel's own senders: the terminal's ^C, ^\ and ^Z and its background
+// SIGTTIN and SIGTTOU, a hangup, the orphaned group's SIGHUP and SIGCONT, and
+// the SIGKILL for a timed-out app command's group.
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info) {
     struct group_signal_target {
         struct task *task;
@@ -2233,36 +2237,43 @@ int send_group_signal(dword_t pgid, int sig, struct siginfo_ info) {
     size_t target_cap = sizeof(stack_targets) / sizeof(stack_targets[0]);
     size_t target_count = 0;
 
+    struct pid *pid;
+    struct tgroup *tgroup;
     complex_lockt(&pids_lock, 0);
-    struct pid *pid = pid_get(pgid);
+retry:
+    pid = pid_get(pgid);
     if (pid == NULL) {
         unlock(&pids_lock);
+        if (targets != stack_targets)
+            free(targets);
         return _ESRCH;
     }
 
+    // Counted again after every unlock: the group can gain members while the
+    // array is allocated, and filling a count taken before that overran it.
     size_t needed = 0;
-    struct tgroup *tgroup;
     list_for_each_entry(&pid->pgroup, tgroup, pgroup)
         needed++;
     if (needed > target_cap) {
         unlock(&pids_lock);
+        if (targets != stack_targets)
+            free(targets);
         targets = malloc(sizeof(*targets) * needed);
         if (targets == NULL)
             return _ENOMEM;
         target_cap = needed;
-
         complex_lockt(&pids_lock, 0);
-        pid = pid_get(pgid);
-        if (pid == NULL) {
-            unlock(&pids_lock);
-            free(targets);
-            return _ESRCH;
-        }
+        goto retry;
     }
 
     list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
-        struct task *task = tgroup->leader;
-        if (task == NULL || task->zombie || task->exiting || task->sighand == NULL)
+        // Through a thread that can take it, as kill(-pgid) does. This took
+        // the leader: a process whose main thread had left with pthread_exit
+        // was passed over entirely -- ^C, a hangup and the orphaned group's
+        // SIGHUP never reached it -- and one whose main thread blocked the
+        // signal kept it there while another thread would have taken it.
+        struct task *task = tgroup_signal_target_locked(tgroup, sig);
+        if (task == NULL)
             continue;
         task_ref_cnt_mod(task, 1);
         sighand_retain(task->sighand);
@@ -3933,23 +3944,14 @@ retry:
     // EPERM -- nix hits exactly that killing a finished builder's group,
     // and reported "killing process N: Operation not permitted" for every
     // channel unpack that won the race.
+    //
+    // A leader that is a corpse is not a process that is gone: its other
+    // threads may run on, and the leader stays registered until the last of
+    // them exits. The signal goes to one of those, or to a thread that does
+    // not block it if the leader does -- tgroup_signal_target_locked.
     size_t skipped = 0;
     list_for_each_entry(&pid->pgroup, tgroup, pgroup) {
-        struct task *task = tgroup->leader;
-        if (task != NULL && (task->zombie || task->exiting || task->sighand == NULL)) {
-            // The leader is a corpse but the process may well still be alive:
-            // its other threads keep running, and the leader stays registered
-            // until the last of them exits. Signalling the group must reach
-            // those threads rather than counting the whole process as gone.
-            struct task *live = NULL, *thread;
-            list_for_each_entry(&tgroup->threads, thread, group_links) {
-                if (!thread->exiting && !thread->zombie && thread->sighand != NULL) {
-                    live = thread;
-                    break;
-                }
-            }
-            task = live;
-        }
+        struct task *task = tgroup_signal_target_locked(tgroup, (int) sig);
         if (task == NULL) {
             skipped++;
             continue;
@@ -4051,15 +4053,11 @@ retry:
 // was already broken -- every target that could already receive the signal
 // still receives it, on the same task as before.
 //
+// Every other signal sent to a whole process chooses its thread here too,
+// through tgroup_signal_target_locked below.
+//
 // Caller holds pids_lock (the group thread list needs it).
 static struct task *pick_process_directed_target(struct task *task, dword_t sig) {
-    // kill(pid, 0) is the "does this process exist" probe and carries no
-    // signal at all -- sig_mask(0) is out of range and asserts. It has no
-    // target to choose, so it never gets here. (apt does this constantly; the
-    // first version of this function skipped the check and killed apt on the
-    // spot.)
-    if (sig == 0)
-        return task;
     // A task that has begun exiting cannot take anything: do_exit clears
     // sighand and sets exiting BEFORE the group is dead, and a thread-group
     // leader stays registered in the pid table until every sibling has gone.
@@ -4069,8 +4067,15 @@ static struct task *pick_process_directed_target(struct task *task, dword_t sig)
     bool addressed_usable = !task->exiting && !task->zombie && task->sighand != NULL;
     // The addressed task can take it: nothing to do. This is every
     // single-threaded case, and the common multithreaded one.
+    //
+    // kill(pid, 0) is the "does this process exist" probe and carries no
+    // signal at all, so any live thread will do for it -- and no thread may be
+    // asked whether it blocks it: sig_mask(0) is out of range and asserts.
+    // (apt does this constantly; the first version of this function asked,
+    // and killed apt on the spot.)
     if (addressed_usable &&
-            (!sigset_has(__atomic_load_n(&task->blocked, __ATOMIC_ACQUIRE), sig) ||
+            (sig == 0 ||
+             !sigset_has(__atomic_load_n(&task->blocked, __ATOMIC_ACQUIRE), sig) ||
              sigset_has(__atomic_load_n(&task->waiting, __ATOMIC_ACQUIRE), sig)))
         return task;
     if (task->group == NULL)
@@ -4084,6 +4089,8 @@ static struct task *pick_process_directed_target(struct task *task, dword_t sig)
             continue;
         if (live == NULL)
             live = thread;
+        if (sig == 0)
+            break;
         // A thread parked in sigwait() for this signal is the best target
         // there is -- it is asking for it by name.
         if (sigset_has(__atomic_load_n(&thread->waiting, __ATOMIC_ACQUIRE), sig))
@@ -4100,6 +4107,28 @@ static struct task *pick_process_directed_target(struct task *task, dword_t sig)
     // sibling will do; the signal waits on its mask instead.
     if (!addressed_usable && live != NULL)
         return live;
+    return task;
+}
+
+// The thread that takes a signal sent to process TGROUP as a whole, chosen as
+// kill(pid) chooses it, starting from the leader: for each process of a group
+// that kill(-pgid) or send_group_signal signals, a window resize's SIGWINCH,
+// and pidfd_send_signal. NULL when no thread of the process can take anything
+// -- it is on its way out, and Linux discards the signal.
+//
+// These all used to name the leader, which is no thread at all once main has
+// left with pthread_exit and the rest of the process runs on. Linux queues the
+// signal on the process and a thread that does not block it takes it
+// (complete_signal); the leader is merely where the search starts.
+//
+// Caller holds pids_lock.
+struct task *tgroup_signal_target_locked(struct tgroup *tgroup, int sig) {
+    struct task *leader = tgroup->leader;
+    if (leader == NULL)
+        return NULL;
+    struct task *task = pick_process_directed_target(leader, (dword_t) sig);
+    if (task->exiting || task->zombie || task->sighand == NULL)
+        return NULL;
     return task;
 }
 

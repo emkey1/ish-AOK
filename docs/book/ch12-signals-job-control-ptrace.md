@@ -63,6 +63,14 @@ first handles it. Modelling that as "deliver to the leader" works until the
 leader has the signal blocked, at which point a program that carefully dedicates
 one thread to signal handling stops receiving signals.
 
+Or until there is no leader to deliver to. A main thread may leave with
+`pthread_exit` while the rest of the process runs on, and the leader then stays
+in the process table as a corpse. The group senders — `kill(-pgid)`, the
+terminal's `^C`, `^Z` and hangup, the orphaned-group `SIGHUP`, a resize's
+`SIGWINCH`, `pidfd_send_signal` — kept the leader model after `kill(pid)` had
+dropped it, and the terminal's never reached such a process at all. They all
+choose the thread as `kill(pid)` does now (`tgroup_signal_target_locked`).
+
 "Some thread" means exactly one. Linux's `complete_signal` tells the thread
 the signal was sent to (for a child's `SIGCHLD`, the thread that forked it) if
 that thread can take it, otherwise one other thread that can. Every other

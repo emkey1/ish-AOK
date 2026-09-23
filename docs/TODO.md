@@ -721,24 +721,30 @@ guards rather than by review:
   now yields only anonymous, host-readable pages. See the commit; that filter is
   a safety requirement, not a preference.
 
-### A process whose leader has exited misses the kernel's group signals
+### A signal every thread blocks waits on one thread, not on the process
 
-Measured 2026-09-23 (alpine-amd64-test, devuan-amd64-test) while fixing
-the orphan rule's thread-exit case. `send_group_signal` (kernel/signal.c)
-skips a process whose leader is `zombie` or `exiting`, so a process whose
-main thread left with `pthread_exit` while other threads run is not
-signalled at all. Userspace `kill(-pgid)` does reach it -- `kill_group`
-falls back to a live thread ("The leader is a corpse but the process may
-well still be alive") -- but the in-kernel senders do not: seen for the
-orphaned-group SIGHUP (the stopped member was hung up, the process beside
-it was not), and by the same code the terminal's ^C, ^Z and ^\ and its
-background SIGTTIN/SIGTTOU (fs/tty.c), a hangup's SIGHUP, and the SIGKILL
-for a timed-out app command's group (kernel/init.c capture_child_kill).
-Linux signals the zombie leader's thread group, and a live thread takes it.
+Measured 2026-09-23, alpine-amd64-test against Linux 6.12: a process whose
+threads all block SIGUSR1 and SIGUSR2, and whose worker takes them with
+`sigwaitinfo`, sleeping 800 ms between calls. A signal sent while the worker
+is between calls -- by `kill(pid)` or `kill(-pgid)` alike -- is taken by its
+next call on Linux, and never on AOK. Linux queues a process's signal on the
+process (`shared_pending`), where a later `sigwait`, or a thread that
+unblocks it, finds it. AOK queues it on one thread
+(`pick_process_directed_target`): one that is sigwaiting for it, else one that
+does not block it, else the leader -- whose queue a sibling's `sigwaitinfo`
+never reads. A hangup sends SIGHUP and SIGCONT back to back, so the second
+could land in that window; `tests/manual/group_signal_target.c` keeps SIGCONT
+out of its sigwait shape for that reason, though three runs with it in never
+hit it.
 
-**Next step:** give `send_group_signal` `kill_group`'s live-thread fallback
-(one shared helper), and a test: a main thread that has called
-`pthread_exit` in a pty's foreground group, then ^C.
+**Next step:** when no thread waits for the signal and every one blocks it,
+queue it on the process (`sighand->queue`, the path `send_signal_to_process`
+takes) instead. kill() was kept off that path because it lacks the stop and
+continue handling `send_signal_with_sighand` has (the comment above
+`pick_process_directed_target`): `signal_prepare_stop_cont` flushes one
+thread's queue, where Linux's `prepare_signal` flushes the process's and every
+thread's. Give it that first, then run signal_restart, signal_stop_cont and
+process_conformance.
 
 ### The orphaned-group test has two copies, and neither skips what Linux does
 

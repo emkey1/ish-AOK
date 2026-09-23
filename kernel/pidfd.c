@@ -238,7 +238,22 @@ int_t sys_pidfd_send_signal(fd_t pidfd, dword_t sig, addr_t UNUSED(info_addr), d
     struct pidfd_data *data = fd->data;
     if (data->task == NULL)
         return _ESRCH;
-    return signal_kill_task(data->task, sig, SI_USER_);
+    // To the process, as kill(pid) is: the thread the pidfd names may have
+    // exited, or block the signal, while another would take it. Only while it
+    // is still in the pid table -- a reaped task's group is gone (see
+    // pidfd_poll), and a signal to it is dropped as it always was.
+    complex_lockt(&pids_lock, 0);
+    struct task *task = data->task;
+    if (pid_get_task_zombie(task->pid) == task) {
+        struct task *target = tgroup_signal_target_locked(task->group, (int) sig);
+        if (target != NULL)
+            task = target;
+    }
+    task_ref_cnt_mod(task, 1);
+    unlock(&pids_lock);
+    int err = signal_kill_task(task, sig, SI_USER_);
+    task_ref_cnt_mod(task, -1);
+    return err;
 }
 
 // ---- checkpoint (kernel/anonfd_ckpt.h) ------------------------------------

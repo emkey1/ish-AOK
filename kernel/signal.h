@@ -281,6 +281,12 @@ int_t signal_eintr_no_restart(int_t res);
 bool signal_is_ignored_or_blocked(int sig);
 // send a signal to all processes in a group, could return ESRCH
 int send_group_signal(dword_t pgid, int sig, struct siginfo_ info);
+struct tgroup;
+// The thread of a process that takes a signal sent to the whole process --
+// chosen as kill(pid) chooses, not simply its leader, which may have exited
+// or block the signal. NULL when the process is exiting and no thread of it
+// can take anything. Caller holds pids_lock.
+struct task *tgroup_signal_target_locked(struct tgroup *tgroup, int sig);
 // check for and deliver pending signals on current
 // must be called without pids_lock, current->group->lock, or current->sighand->lock
 void receive_signals(void);
