@@ -740,25 +740,28 @@ Linux signals the zombie leader's thread group, and a live thread takes it.
 (one shared helper), and a test: a main thread that has called
 `pthread_exit` in a pty's foreground group, then ^C.
 
-### The orphaned-group rule misses a child's group
+### The orphaned-group test has two copies, and neither skips what Linux does
 
-Measured 2026-09-23, Linux 6.12 and alpine-amd64-test. POSIX has two cases
-and AOK implements one. At a process's exit Linux asks about its OWN group
-(`kill_orphaned_pgrp(tsk->group_leader, NULL)` in exit_notify -- AOK's
-`orphan_pgid` in do_exit), and `reparent_leader` asks, for each child handed
-to another process, about the CHILD's group (`kill_orphaned_pgrp(p,
-father)`). The second is the classic one: a shell in its own group, with a
-stopped job in another, exits. Linux hangs the job up and continues it (state
-R 0.1s later); AOK leaves it T for ever.
+Found 2026-09-23 by reading, while adding the orphaned-group rule's
+per-child case; not measured. Linux has one test, `will_become_orphaned_pgrp`,
+for exit and for the terminal (`is_current_pgrp_orphaned`, which makes a
+background read or write EIO rather than a stop). AOK has two --
+`pgrp_is_orphaned_locked` in kernel/exit.c and `pgroup_is_orphaned` in
+kernel/group.c, which fs/tty.c's `tty_check_change_locked` calls -- and
+they differ from Linux and from each other:
+- The terminal's copy counts a zombie member, and one init has adopted, as a
+  way back into the session. Linux skips both (`exit_state &&
+  thread_group_empty`, `is_global_init`); only the exit copy skips init.
+- The exit copy skips a member whose leader thread is `exiting` even while
+  its other threads run. Linux counts that process until its whole thread
+  group is gone, so a group whose only way back is a process whose main
+  thread called `pthread_exit` is orphaned here and not there.
 
-**Next step:** in do_exit's reparent loop, for a leader child in another
-group of the same session, and only when `to_another_process` (Linux skips a
-threaded reparent), ask `pgrp_is_orphaned_locked` and
-`pgrp_has_stopped_member_locked` about the child's group and send SIGHUP and
-SIGCONT after the unlock, as `orphan_pgid` is. Mind the order: Linux asks
-after reparenting and never counts init as the outside parent
-(`is_global_init` in `will_become_orphaned_pgrp`); the existing check asks
-before reparenting, which is why it can do without that exception.
+**Next step:** one helper in kernel/group.c, walking the group's pgroup list
+(complete now that setpgid files a joiner there), with Linux's two skips,
+for both callers. Tests against camd: a background read from a group whose
+only way back is a zombie member (EIO on Linux), and the `pthread_exit`
+way back above.
 
 ### PR_SET_PDEATHSIG is recorded and never sent
 

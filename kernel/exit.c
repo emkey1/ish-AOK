@@ -483,7 +483,7 @@ static void zombie_untraced_locked(struct task *tracer, struct task *zombie,
 // Both helpers run under pids_lock. The signals are sent afterwards, from the
 // same place the controlling-terminal SIGHUP is (see do_exit), because
 // sending under pids_lock would take sighand->lock inside it.
-static bool pgrp_is_orphaned_locked(dword_t pgid, struct task *ignore, dword_t sid) {
+static bool pgrp_is_orphaned_locked(pid_t_ pgid, struct task *ignore, pid_t_ sid) {
     struct pid *entry;
     list_for_each_entry(&alive_pids_list, entry, alive) {
         struct task *t = entry->task;
@@ -496,6 +496,15 @@ static bool pgrp_is_orphaned_locked(dword_t pgid, struct task *ignore, dword_t s
         struct task *parent = t->parent;
         if (parent == NULL || parent == ignore || parent->group == NULL)
             continue;
+        // A member init has adopted is no way back, as in Linux, which skips
+        // any whose parent is_global_init: init resumes nobody's stopped
+        // jobs. Counted -- and in the CLI init shares the session with
+        // everything it starts -- it kept a group whose member had outlived
+        // its own parent from ever being orphaned. And do_exit asks both of
+        // its questions after handing its children on, usually to init, so
+        // no exit could have orphaned anything at all.
+        if (parent->tgid == 1)
+            continue;
         // Someone outside this group, but inside the session, can still
         // resume it -- so it is not orphaned.
         if (parent->group->sid == sid && parent->group->pgid != pgid)
@@ -504,7 +513,7 @@ static bool pgrp_is_orphaned_locked(dword_t pgid, struct task *ignore, dword_t s
     return true;
 }
 
-static bool pgrp_has_stopped_member_locked(dword_t pgid, dword_t sid) {
+static bool pgrp_has_stopped_member_locked(pid_t_ pgid, pid_t_ sid) {
     struct pid *entry;
     list_for_each_entry(&alive_pids_list, entry, alive) {
         struct task *t = entry->task;
@@ -514,6 +523,59 @@ static bool pgrp_has_stopped_member_locked(dword_t pgid, dword_t sid) {
             return true;
     }
     return false;
+}
+
+// The children's groups an exit leaves orphaned with a stopped member, each
+// owed SIGHUP and SIGCONT once pids_lock is dropped. A few fit inline -- a
+// shell's stopped jobs, one group each -- and past that the list grows; a
+// failed allocation costs that group its hangup, which is what every such
+// group got before the rule was here.
+struct orphaned_pgrps {
+    pid_t_ inline_pgids[4];
+    pid_t_ *pgids;
+    size_t count, cap;
+};
+
+static void orphaned_pgrps_init(struct orphaned_pgrps *orphans) {
+    orphans->pgids = orphans->inline_pgids;
+    orphans->count = 0;
+    orphans->cap = sizeof(orphans->inline_pgids) / sizeof(orphans->inline_pgids[0]);
+}
+
+static void orphaned_pgrps_add(struct orphaned_pgrps *orphans, pid_t_ pgid) {
+    for (size_t i = 0; i < orphans->count; i++) {
+        if (orphans->pgids[i] == pgid)
+            return;
+    }
+    if (orphans->count == orphans->cap) {
+        size_t cap = orphans->cap * 2;
+        pid_t_ *grown = malloc(sizeof(*grown) * cap);
+        if (grown == NULL)
+            return;
+        memcpy(grown, orphans->pgids, sizeof(*grown) * orphans->count);
+        if (orphans->pgids != orphans->inline_pgids)
+            free(orphans->pgids);
+        orphans->pgids = grown;
+        orphans->cap = cap;
+    }
+    orphans->pgids[orphans->count++] = pgid;
+}
+
+// Called without pids_lock. SIGHUP tells the stopped members the world they
+// were stopped in is gone, and SIGCONT is what lets them run far enough to
+// act on it. Order matters -- SIGCONT first would resume them into a session
+// with no one to talk to.
+static void orphaned_pgrp_hang_up(pid_t_ pgid) {
+    send_group_signal(pgid, SIGHUP_, SIGINFO_NIL);
+    send_group_signal(pgid, SIGCONT_, SIGINFO_NIL);
+}
+
+static void orphaned_pgrps_hang_up(struct orphaned_pgrps *orphans) {
+    for (size_t i = 0; i < orphans->count; i++)
+        orphaned_pgrp_hang_up(orphans->pgids[i]);
+    if (orphans->pgids != orphans->inline_pgids)
+        free(orphans->pgids);
+    orphaned_pgrps_init(orphans);
 }
 
 // A session leader's death takes the controlling terminal away from the whole
@@ -763,6 +825,9 @@ noreturn void do_exit(struct task *task, int status) {
     size_t halt_target_count = 0;
     struct siginfo_ reparent_signal_info = {};
     int reparented_zombies = 0;
+    // The groups of children this exit orphans; hung up after the locks.
+    struct orphaned_pgrps orphaned;
+    orphaned_pgrps_init(&orphaned);
 
     complex_lockt(&pids_lock, 0);
 
@@ -794,29 +859,6 @@ noreturn void do_exit(struct task *task, int status) {
     // pids_lock and it is held from here to there.
     bool last_thread = task->group->threads.next == &task->group_links &&
         task->group->threads.prev == &task->group_links;
-
-    // Does this exit orphan our own process group and leave stopped members
-    // in it? Computed here, while the group still describes the pre-exit
-    // state and pids_lock is held; the signals go out below, after the locks.
-    //
-    // Only when the process goes, as Linux asks it only when group_dead. The
-    // test below ignores the whole process, so asked at any thread's exit it
-    // answered for a process that was not leaving: a worker thread's exit
-    // sent SIGHUP and SIGCONT to its own group, and so killed the process
-    // itself along with the stopped child that made the group qualify.
-    dword_t orphan_pgid = 0;
-    if (last_thread && leader != NULL && leader->group != NULL) {
-        dword_t pgid = leader->group->pgid;
-        dword_t sid = leader->group->sid;
-        struct task *parent = leader->parent;
-        // Only if we were the one holding it together: a parent already in
-        // the group cannot have been the outside link.
-        if (parent != NULL && parent->group != NULL &&
-                parent->group->pgid != pgid && parent->group->sid == sid &&
-                pgrp_is_orphaned_locked(pgid, leader, sid) &&
-                pgrp_has_stopped_member_locked(pgid, sid))
-            orphan_pgid = pgid;
-    }
 
     // reparent children
     struct task *new_parent = find_new_parent(task);
@@ -884,7 +926,30 @@ noreturn void do_exit(struct task *task, int status) {
                 .child.status = chld_status,
             };
         }
+        // The orphaned-group rule again, for the CHILD's group: Linux's
+        // reparent_leader asks it of every child handed to another process
+        // (kill_orphaned_pgrp(p, father)), as exit_notify asks it of the
+        // exiting process's own group below. A shell puts each job in a group
+        // of its own, so a shell that exits with a job stopped orphans the
+        // JOB's group and never its own; asked only about its own, AOK left
+        // the job in state T for ever.
+        //
+        // Asked once the child has moved, as Linux asks it. Our children in
+        // that group still to be moved name us as their parent, and we are a
+        // way back into the session, so the group is found orphaned only at
+        // the last of them. A thread of this same process that takes them
+        // instead is the way back that we were, which is why Linux does not
+        // ask at all when the reparent is a threaded one.
+        if (to_another_process && child->group != NULL && child->group->leader == child) {
+            pid_t_ pgid = child->group->pgid;
+            pid_t_ sid = child->group->sid;
+            if (pgid != task->group->pgid && sid == task->group->sid &&
+                    pgrp_is_orphaned_locked(pgid, NULL, sid) &&
+                    pgrp_has_stopped_member_locked(pgid, sid))
+                orphaned_pgrps_add(&orphaned, pgid);
+        }
     }
+
     // The condition wakes a new parent already blocked in wait4(); the signal
     // below wakes one that is not. Both are needed, and notify() is safe to
     // call here -- the ordinary child-exit notify a few lines down runs under
@@ -909,6 +974,37 @@ noreturn void do_exit(struct task *task, int status) {
             reparent_signal_parent = new_parent;
         }
     }
+
+    // Does this exit orphan our own process group and leave stopped members
+    // in it? Computed here, while the group still describes the pre-exit
+    // state and pids_lock is held; the signals go out below, after the locks.
+    //
+    // Only when the process goes, as Linux asks it only when group_dead. The
+    // test below ignores the whole process, so asked at any thread's exit it
+    // answered for a process that was not leaving: a worker thread's exit
+    // sent SIGHUP and SIGCONT to its own group, and so killed the process
+    // itself along with the stopped child that made the group qualify.
+    //
+    // And only once the children have moved, as Linux's exit_notify asks it
+    // after forget_original_parent. Our children in our group name their new
+    // parent now: init, which is no way back, or a subreaper -- which is one
+    // when it is in the session and outside the group. Asked before the move,
+    // they named us and were passed over, and a group a subreaper could still
+    // resume was hung up under it.
+    pid_t_ orphan_pgid = 0;
+    if (last_thread && leader != NULL && leader->group != NULL) {
+        pid_t_ pgid = leader->group->pgid;
+        pid_t_ sid = leader->group->sid;
+        struct task *parent = leader->parent;
+        // Only if we were the one holding it together: a parent already in
+        // the group cannot have been the outside link.
+        if (parent != NULL && parent->group != NULL &&
+                parent->group->pgid != pgid && parent->group->sid == sid &&
+                pgrp_is_orphaned_locked(pgid, leader, sid) &&
+                pgrp_has_stopped_member_locked(pgid, sid))
+            orphan_pgid = pgid;
+    }
+
     // Let go of everything this task traces. Linux's exit_ptrace: each tracee
     // is detached, and a zombie one goes where it would have gone untraced
     // (__ptrace_detach). Taken from the head until the list is empty, and
@@ -1040,14 +1136,11 @@ noreturn void do_exit(struct task *task, int status) {
     if (tty_hup.fg_group != 0)
         send_group_signal(tty_hup.fg_group, SIGHUP_, SIGINFO_NIL);
 
-    // The orphaned-group rule: SIGHUP tells the stopped members the world
-    // they were stopped in is gone, and SIGCONT is what lets them run far
-    // enough to act on it. Order matters -- SIGCONT first would resume them
-    // into a session with no one to talk to.
-    if (orphan_pgid != 0) {
-        send_group_signal(orphan_pgid, SIGHUP_, SIGINFO_NIL);
-        send_group_signal(orphan_pgid, SIGCONT_, SIGINFO_NIL);
-    }
+    // The orphaned-group rule: the children's groups, then our own, in the
+    // order Linux's exit_notify reaches them.
+    orphaned_pgrps_hang_up(&orphaned);
+    if (orphan_pgid != 0)
+        orphaned_pgrp_hang_up(orphan_pgid);
 
     if (reparent_signal_parent != NULL) {
         send_signal_to_process(reparent_signal_parent, SIGCHLD_,
