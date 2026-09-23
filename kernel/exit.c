@@ -424,6 +424,11 @@ static void exit_notify_process_locked(struct task *leader, struct exit_notes *n
         struct sigaction_ *action = &parent->sighand->action[SIGCHLD_];
         if (action->handler == SIG_IGN_ || (action->flags & SA_NOCLDWAIT_))
             autoreap = true;
+        // SIG_IGN sends nothing at all, as Linux's do_notify_parent does: not
+        // even a SIGCHLD queued because the parent blocks it, which is what a
+        // parent that blocked it was given. SA_NOCLDWAIT alone still sends it.
+        if (action->handler == SIG_IGN_)
+            sig = 0;
         unlock(&parent->sighand->lock);
     }
 

@@ -416,6 +416,13 @@ void send_signal_to_process_pids_locked(struct task *task, int sig, struct sigin
 // The same, sent to the group's leader, which is where Linux sends an interval
 // timer's signal (it_real_fn's leader_pid).
 void send_signal_to_group(struct tgroup *group, int sig, struct siginfo_ info);
+// Tell `parent` that a child stopped, continued or entered a ptrace stop, as
+// Linux's do_notify_parent_cldstop does once it has picked the recipient: with
+// SIGCHLD -- never the child's exit signal -- to the recipient's process, and
+// not at all when its SIGCHLD is SIG_IGN or has SA_NOCLDSTOP. `info` carries
+// the CLD_* code and the child's pid, uid and status. The caller holds a
+// reference on `parent` and no lock.
+void notify_parent_cldstop(struct task *parent, struct siginfo_ info);
 
 dword_t sys_rt_sigaction(dword_t signum, addr_t action_addr, addr_t oldaction_addr, dword_t sigset_size);
 dword_t sys_rt_sigaction_guest(dword_t signum, guest_addr_t action_addr, guest_addr_t oldaction_addr, dword_t sigset_size);

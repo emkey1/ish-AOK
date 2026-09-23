@@ -1450,6 +1450,49 @@ static void signal_prepare_stop_cont_threads(struct task *task, int sig) {
     group_snapshot_release(&snap);
 }
 
+// Every notice of a stop, a continue or a ptrace stop comes here, as every one
+// on Linux goes through do_notify_parent_cldstop. They were sent as the
+// child's EXIT signal, from three copies of the same few lines: a child cloned
+// with SIGUSR1 announced its stops and continues as SIGUSR1 -- past a parent's
+// SA_NOCLDSTOP, which was asked only of SIGCHLD -- and one cloned with 0
+// announced none of them, and a tracer's stop notice was that signal with an
+// empty siginfo. Linux sends SIGCHLD whatever the exit signal (measured on
+// 6.12: only the exit uses it), and SIG_IGN suppresses it too, even when it is
+// blocked and would otherwise be queued. To the process, where any thread
+// that can take it does, as a child's exit is: it was put on the one thread's
+// own queue, so a sibling in sigwaitinfo never saw it.
+void notify_parent_cldstop(struct task *parent, struct siginfo_ info) {
+    struct sighand *sighand = parent->sighand;
+    if (sighand == NULL)
+        return;
+    lock(&sighand->lock, 0);
+    struct sigaction_ *action = &sighand->action[SIGCHLD_];
+    bool wanted = action->handler != SIG_IGN_ && !(action->flags & SA_NOCLDSTOP_);
+    unlock(&sighand->lock);
+    if (wanted)
+        send_signal_to_process(parent, SIGCHLD_, info);
+}
+
+// `task`'s tracer, or NULL. Caller holds pids_lock.
+static struct task *cldstop_tracer_locked(struct task *task) {
+    if (!task->ptrace.traced)
+        return NULL;
+    return task->ptrace.tracer != NULL ? task->ptrace.tracer : task->parent;
+}
+
+// The tracer of a process's leader, when it is not in the parent's process:
+// Linux tells it of a continue as well as the parent (get_signal's
+// ptrace_reparented(group_leader) case). One in the parent's own process would
+// be told the same thing twice. Caller holds pids_lock.
+static struct task *cldstop_leader_tracer_locked(struct task *leader, struct task *parent) {
+    struct task *tracer = cldstop_tracer_locked(leader);
+    if (tracer == NULL || tracer->group == leader->group)
+        return NULL;
+    if (parent != NULL && tracer->group == parent->group)
+        return NULL;
+    return tracer;
+}
+
 void deliver_signal_with_sighand(struct task *task, struct sighand *sighand, int sig, struct siginfo_ info) {
     lock(&sighand->lock, 0);
     // deliver_signal is the forced path (faults, not kill()). Match Linux
@@ -3195,14 +3238,24 @@ void group_stop_wait(void) {
     // Done from our own context -- never the signal sender's -- so taking
     // pids_lock here respects the pids_lock -> group->lock ordering.
     if (group->continued) {
-        struct task *parent = NULL;
-        int signal_no = 0;
+        struct task *parent = NULL, *tracer = NULL;
+        struct siginfo_ info = {
+            .code = CLD_CONTINUED_,
+            .child.status = SIGCONT_,
+        };
         complex_lockt(&pids_lock, 0);
-        parent = current->group->leader->parent;
+        struct task *leader = current->group->leader;
+        info.child.pid = leader->pid;
+        info.child.uid = leader->uid;
+        parent = leader->parent;
         if (parent != NULL) {
             task_ref_cnt_mod(parent, 1);
-            signal_no = current->group->leader->exit_signal;
             notify(&parent->group->child_exit);
+        }
+        tracer = cldstop_leader_tracer_locked(leader, parent);
+        if (tracer != NULL) {
+            task_ref_cnt_mod(tracer, 1);
+            notify(&tracer->group->child_exit);
         }
         unlock(&pids_lock);
         // A resume is a reportable event in its own right, and the SIGCHLD
@@ -3215,27 +3268,12 @@ void group_stop_wait(void) {
         // SA_NOCLDSTOP suppresses it, exactly as it does the stop: the flag
         // is about stop AND continue notifications, not stops alone.
         if (parent != NULL) {
-            if (signal_no == SIGCHLD_) {
-                struct sighand *psighand = parent->sighand;
-                if (psighand != NULL) {
-                    lock(&psighand->lock, 0);
-                    if (psighand->action[SIGCHLD_].flags & SA_NOCLDSTOP_)
-                        signal_no = 0;
-                    unlock(&psighand->lock);
-                }
-            }
-            if (signal_no != 0) {
-                struct siginfo_ info = {
-                    .code = CLD_CONTINUED_,
-                    .child.pid = current->group->leader->pid,
-                    .child.uid = current->uid,
-                    .child.status = SIGCONT_,
-                };
-                // To the parent's process, as a child's exit is: Linux's
-                // do_notify_parent_cldstop sends it with __group_send_sig_info.
-                send_signal_to_process(parent, signal_no, info);
-            }
+            notify_parent_cldstop(parent, info);
             task_ref_cnt_mod(parent, -1);
+        }
+        if (tracer != NULL) {
+            notify_parent_cldstop(tracer, info);
+            task_ref_cnt_mod(tracer, -1);
         }
     }
 }
@@ -3342,13 +3380,36 @@ void receive_signals(void) {
         int stop_sig = (current->group->group_exit_code >> 8) & 0xff;
         unlock(&current->group->lock);
         if (now_stopped) {
-            struct task *parent = NULL;
-            int signal_no = 0;
+            // The stop SIGCHLD must carry CLD_STOPPED + the stop signal and
+            // the child's pid/uid, not SIGINFO_NIL (which a SA_SIGINFO
+            // handler / sigwaitinfo would read as SI_KERNEL with no child).
+            struct siginfo_ info = {
+                .code = CLD_STOPPED_,
+                .child.status = stop_sig,
+            };
             complex_lockt(&pids_lock, 0);
-            parent = current->parent;
+            // To the leader's parent, naming the leader, whichever thread took
+            // the stop signal -- Linux's do_notify_parent_cldstop, which reports
+            // a group-stop for the group. This told current->parent, naming
+            // current, and a thread's parent is the thread that created it: a
+            // stop taken by a thread other than the leader (tgkill'd to it, or
+            // a process whose leader had already left) was announced to the
+            // stopped process itself, and its parent was told nothing.
+            struct task *leader = current->group->leader;
+            info.child.pid = leader->pid;
+            info.child.uid = leader->uid;
+            struct task *parent = leader->parent;
+            // A tracee's group-stop is reported to its tracer (ptrace_group_
+            // stop), and Linux's ptrace_stop tells the parent too only when the
+            // tracer is someone else. A parent tracing its child was told
+            // twice.
+            if (parent != NULL) {
+                struct task *tracer = cldstop_tracer_locked(current);
+                if (tracer != NULL && tracer->group == parent->group)
+                    parent = NULL;
+            }
             if (parent != NULL) {
                 task_ref_cnt_mod(parent, 1);
-                signal_no = current->group->leader->exit_signal;
                 notify(&parent->group->child_exit);
             }
             unlock(&pids_lock);
@@ -3357,29 +3418,8 @@ void receive_signals(void) {
             // suppressed -- the child's eventual exit still raises SIGCHLD --
             // and wait(WUNTRACED) still reports the stop, because the flag is
             // about the signal, not about waitability.
-            if (parent != NULL && signal_no == SIGCHLD_) {
-                struct sighand *psighand = parent->sighand;
-                if (psighand != NULL) {
-                    lock(&psighand->lock, 0);
-                    if (psighand->action[SIGCHLD_].flags & SA_NOCLDSTOP_)
-                        signal_no = 0;
-                    unlock(&psighand->lock);
-                }
-            }
             if (parent != NULL) {
-                // The stop SIGCHLD must carry CLD_STOPPED + the stop signal and
-                // the child's pid/uid, not SIGINFO_NIL (which a SA_SIGINFO
-                // handler / sigwaitinfo would read as SI_KERNEL with no child).
-                struct siginfo_ info = {
-                    .code = CLD_STOPPED_,
-                    .child.pid = current->pid,
-                    .child.uid = current->uid,
-                    .child.status = stop_sig,
-                };
-                // To the parent's process, like the continue in
-                // group_stop_wait.
-                if (signal_no != 0)
-                    send_signal_to_process(parent, signal_no, info);
+                notify_parent_cldstop(parent, info);
                 task_ref_cnt_mod(parent, -1);
             }
         }

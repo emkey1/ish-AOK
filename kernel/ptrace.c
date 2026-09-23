@@ -696,7 +696,6 @@ static bool ptrace_sigkill_pending(void) {
 static void ptrace_stop_common(int sig, const struct siginfo_ *info, bool syscall_stop,
         bool delivery, int event, qword_t eventmsg, bool trap_stop) {
     struct task *tracer = NULL;
-    int signal_no = 0;
 
     // wait4() publishes and consumes ptrace-stop state while holding pids_lock.
     // Publish the stop and notify child_exit under the same lock so the tracer
@@ -748,19 +747,42 @@ static void ptrace_stop_common(int sig, const struct siginfo_ *info, bool syscal
     __atomic_store_n(&current->ptrace.trap_stop, false, __ATOMIC_RELEASE);
     unlock(&current->ptrace.lock);
 
+    // What the tracer is sent: Linux's do_notify_parent_cldstop(for_ptracer),
+    // naming the stopped thread itself. This sent the stopped process's EXIT
+    // signal with an empty siginfo -- SI_KERNEL and no pid, or nothing at all
+    // for a child cloned with exit signal 0 -- and past the tracer's
+    // SA_NOCLDSTOP, which it never asked about.
+    //
+    // do_jobctl_trap is the one caller of Linux's ptrace_stop that says
+    // CLD_STOPPED: a PTRACE_EVENT_STOP, or an unseized tracee's group-stop, the
+    // one stop with no siginfo. Its si_status is the group's stop signal: the
+    // stop signal for a group-stop, and 0 for the rest, which are taken while
+    // the group is not stopped (an interrupt, a seized child's first stop, the
+    // SIGCONT that ended a listen). Every other stop is CLD_TRAPPED with the
+    // signal it reports, less TRACESYSGOOD's bit -- SIGTRAP for a syscall or
+    // event stop. Measured on Linux 6.12 for each of these but a seized
+    // child's first stop and a listen's end, which take the interrupt's path
+    // there as here.
+    struct siginfo_ notice = {
+        .code = CLD_TRAPPED_,
+        .child.pid = current->pid,
+        .child.uid = current->uid,
+        .child.status = sig & 0x7f,
+    };
+    if (event == PTRACE_EVENT_STOP_ || info == NULL) {
+        notice.code = CLD_STOPPED_;
+        if (sig == SIGTRAP_)
+            notice.child.status = 0;
+    }
     tracer = ptrace_tracer(current);
     if (tracer != NULL) {
         task_ref_cnt_mod(tracer, 1);
-        signal_no = current->group->leader->exit_signal;
         notify(&tracer->group->child_exit);
     }
     unlock(&pids_lock);
 
     if (tracer != NULL) {
-        // To the tracer's process, as Linux's do_notify_parent_cldstop sends
-        // it: whichever of its threads can take it.
-        if (signal_no != 0)
-            send_signal_to_process(tracer, signal_no, SIGINFO_NIL);
+        notify_parent_cldstop(tracer, notice);
         task_ref_cnt_mod(tracer, -1);
     }
 
