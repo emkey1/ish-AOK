@@ -4091,20 +4091,65 @@ static int signal_send_checked(struct task *task, dword_t sig, struct siginfo_ i
     return 0;
 }
 
-static int signal_kill_checked(struct task *task, dword_t sig, int si_code, bool process) {
-    // kill(2) reports SI_USER; tkill/tgkill(2) report SI_TKILL. A handler that
-    // inspects si_code (or si_pid, which is meaningless for SI_TKILL) must see
-    // the right one — glibc raise() routes through tgkill, so this is common.
-    struct siginfo_ info = {
+// What kill(2), tkill(2) and tgkill(2) send. kill reports SI_USER and the other
+// two SI_TKILL; a handler that inspects si_code must see the right one -- glibc
+// raise() routes through tgkill, so this is common.
+//
+// The sender is a PROCESS, whichever of its threads sends: Linux's
+// prepare_kill_siginfo gives si_pid task_tgid_vnr(current), for tkill and
+// tgkill too. This gave the sending thread's id, which is its process's only
+// when the main thread sends -- so a signal from any other thread named a pid
+// no process had, and a program that answers si_pid, or checks it against the
+// child it forked, answered nobody.
+static struct siginfo_ kill_siginfo(int si_code) {
+    return (struct siginfo_) {
         .code = si_code,
-        .kill.pid = current->pid,
+        .kill.pid = current->tgid,
         .kill.uid = current->uid,
     };
-    return signal_send_checked(task, sig, info, process);
 }
 
 int signal_kill_process(struct task *task, dword_t sig, int si_code) {
-    return signal_kill_checked(task, sig, si_code, true);
+    return signal_send_checked(task, sig, kill_siginfo(si_code), true);
+}
+
+// A signal to the task `pid` names -- to its process when `process`, to the
+// thread itself otherwise -- which must be in the process `tgid` when that is
+// not 0. What kill, tkill, tgkill, rt_sigqueueinfo and rt_tgsigqueueinfo do
+// once they know what to send.
+static int signal_send_to_pid(pid_t_ pid, pid_t_ tgid, dword_t sig, struct siginfo_ info,
+        bool process) {
+    complex_lockt(&pids_lock, 0);
+    struct task *task = pid_get_task_zombie(pid);
+    if (task == NULL || (tgid != 0 && task->tgid != tgid)) {
+        unlock(&pids_lock);
+        return _ESRCH;
+    }
+    // Only a pid that names something is asked about the signal, as on Linux:
+    // an invalid signal to a pid nobody has is ESRCH.
+    if (sig >= NUM_SIGS) {
+        unlock(&pids_lock);
+        return _EINVAL;
+    }
+
+    // An exited-but-unreaped (zombie) task still exists for kill() on
+    // Linux: the signal is discarded but the call returns 0, not ESRCH.
+    // stress-ng does kill(child, SIGKILL) right after the child exits,
+    // before wait4() reaps it. rt_sigqueueinfo and rt_tgsigqueueinfo say 0
+    // for one too; they said ESRCH.
+    if (task->zombie) {
+        unlock(&pids_lock);
+        return 0;
+    }
+
+    // To the process the pid names, through the thread it names -- which
+    // may have exited, the leader of a process whose main thread left with
+    // pthread_exit, and whose signal a thread still running then takes.
+    task_ref_cnt_mod(task, 1);
+    unlock(&pids_lock);
+    int err = signal_send_checked(task, sig, info, process);
+    task_ref_cnt_mod(task, -1);
+    return err;
 }
 
 struct kill_target {
@@ -4275,35 +4320,7 @@ static int do_kill_common(pid_t_ pid, dword_t sig, pid_t_ tgid, int si_code,
         complex_lockt(&pids_lock, 0);
         err = kill_group(-pid, sig, si_code);
     } else {
-        complex_lockt(&pids_lock, 0);
-        struct task *task = pid_get_task_zombie(pid);
-        if (task == NULL) {
-            unlock(&pids_lock);
-            return _ESRCH;
-        }
-
-        // If tgid is nonzero, it must be correct
-        if (tgid != 0 && task->tgid != tgid) {
-            unlock(&pids_lock);
-            return _ESRCH;
-        }
-
-        // An exited-but-unreaped (zombie) task still exists for kill() on
-        // Linux: the signal is discarded but the call returns 0, not ESRCH.
-        // stress-ng does kill(child, SIGKILL) right after the child exits,
-        // before wait4() reaps it.
-        if (task->zombie) {
-            unlock(&pids_lock);
-            return 0;
-        }
-
-        // To the process the pid names, through the thread it names -- which
-        // may have exited, the leader of a process whose main thread left with
-        // pthread_exit, and whose signal a thread still running then takes.
-        task_ref_cnt_mod(task, 1);
-        unlock(&pids_lock);
-        err = signal_kill_checked(task, sig, si_code, !thread_directed);
-        task_ref_cnt_mod(task, -1);
+        err = signal_send_to_pid(pid, tgid, sig, kill_siginfo(si_code), !thread_directed);
     }
     return err;
 }
@@ -4326,20 +4343,39 @@ dword_t sys_rt_sigqueueinfo(pid_t_ pid, dword_t sig, addr_t uinfo_addr) {
     return sys_rt_sigqueueinfo_guest(pid, sig, uinfo_addr);
 }
 
-dword_t sys_rt_sigqueueinfo_guest(pid_t_ pid, dword_t sig, guest_addr_t uinfo_addr) {
-    if (pid <= 0 || sig <= 0 || sig >= NUM_SIGS)
-        return _EINVAL;
+// rt_sigqueueinfo(2) and rt_tgsigqueueinfo(2) send the caller's own siginfo as
+// the caller wrote it, but for si_signo, which is the signal. sigqueue() fills
+// in si_pid itself, with getpid(). A code below zero is a user's own and is
+// taken on trust, sender and all. A code of zero or more says the kernel sent
+// it, and SI_TKILL says tgkill did, both of which name the sender themselves:
+// only a thread signalling itself may claim those (Linux's do_rt_sigqueueinfo
+// and do_rt_tgsigqueueinfo). Itself means its own THREAD id, which Linux
+// compares with task_pid_vnr(current), so a thread other than the main one is
+// refused even when it names its own process.
+//
+// These replaced si_code with SI_QUEUE and si_pid with the sending thread's
+// id, so sigqueue() from any thread but the main one named a pid no process
+// had, and passed kill()'s code or the kernel's on to any process at all.
+static int queueinfo_claim_checked(const struct siginfo_ *info, pid_t_ target) {
+    if ((info->code >= 0 || info->code == SI_TKILL_) && target != current->pid)
+        return _EPERM;
+    return 0;
+}
 
+dword_t sys_rt_sigqueueinfo_guest(pid_t_ pid, dword_t sig, guest_addr_t uinfo_addr) {
     struct siginfo_ info;
     int err = siginfo_from_user(current, uinfo_addr, &info);
     if (err < 0)
         return err;
-
-    info.sig = sig;
-    info.sig_errno = 0;
-    info.code = SI_QUEUE_;
-    info.rt.pid = current->pid;
-    info.rt.uid = current->uid;
+    info.sig = (int_t) sig;
+    err = queueinfo_claim_checked(&info, pid);
+    if (err < 0)
+        return err;
+    // One process, never a group: no pid is zero or less, and Linux says
+    // ESRCH. Signal 0 asks only whether the process is there and may be
+    // signalled, as it does of kill().
+    if (pid <= 0)
+        return _ESRCH;
 
     // Process-directed, exactly as kill(2) is: Linux routes rt_sigqueueinfo
     // through kill_proc_info/group_send_sig_info, so any thread of the target
@@ -4347,44 +4383,21 @@ dword_t sys_rt_sigqueueinfo_guest(pid_t_ pid, dword_t sig, guest_addr_t uinfo_ad
     // into the resolved task's private queue meant a sibling already parked in
     // sigwait()/sigtimedwait() -- the whole reason a program uses sigqueue --
     // waited out its timeout while the signal sat undeliverable beside it.
-    complex_lockt(&pids_lock, 0);
-    struct task *task = pid_get_task(pid);
-    if (task == NULL) {
-        unlock(&pids_lock);
-        return _ESRCH;
-    }
-    task_ref_cnt_mod(task, 1);
-    unlock(&pids_lock);
-
-    err = signal_send_checked(task, sig, info, true);
-    task_ref_cnt_mod(task, -1);
-    return err;
+    return signal_send_to_pid(pid, 0, sig, info, true);
 }
 
 dword_t sys_rt_tgsigqueueinfo_guest(pid_t_ tgid, pid_t_ tid, dword_t sig, guest_addr_t uinfo_addr) {
-    if (tgid <= 0 || tid <= 0 || sig <= 0 || sig >= NUM_SIGS)
-        return _EINVAL;
-
     struct siginfo_ info;
     int err = siginfo_from_user(current, uinfo_addr, &info);
     if (err < 0)
         return err;
-
-    info.sig = sig;
-    info.sig_errno = 0;
-
-    struct task *task = pid_get_task_ref(tid);
-    if (task == NULL) {
-        return _ESRCH;
-    }
-    if (task->tgid != tgid) {
-        task_ref_cnt_mod(task, -1);
-        return _ESRCH;
-    }
-
-    err = signal_send_checked(task, sig, info, false);
-    task_ref_cnt_mod(task, -1);
-    return err;
+    info.sig = (int_t) sig;
+    if (tgid <= 0 || tid <= 0)
+        return _EINVAL;
+    err = queueinfo_claim_checked(&info, tid);
+    if (err < 0)
+        return err;
+    return signal_send_to_pid(tid, tgid, sig, info, false);
 }
 
 dword_t sys_rt_tgsigqueueinfo(pid_t_ tgid, pid_t_ tid, dword_t sig, addr_t uinfo_addr) {

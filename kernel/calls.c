@@ -1179,6 +1179,7 @@ static syscall_t i386_syscall_table[] = {
     [332] = (syscall_t) sys_inotify_init1,
     [333] = (syscall_t) sys_preadv_i386,
     [334] = (syscall_t) sys_pwritev_i386,
+    [335] = (syscall_t) sys_rt_tgsigqueueinfo,
     [336] = (syscall_t) syscall_stub_silent, // perf_event_open -- see arm64 [241]
     [337] = (syscall_t) sys_recvmmsg,
     [340] = (syscall_t) sys_prlimit64,

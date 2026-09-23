@@ -740,9 +740,6 @@ measured:
 - kill(-1) skips only the calling thread (`kill_everything`); Linux skips
   the caller's whole thread group, so a non-leader thread's kill(-1) also
   signals its own process here.
-- kill()'s and tkill()'s si_pid is the sending thread's id; Linux's
-  prepare_kill_siginfo gives the sender's tgid. sigqueue() overwrites the
-  si_pid the caller filled in the same way.
 
 ### The orphaned-group test has two copies, and neither skips what Linux does
 
