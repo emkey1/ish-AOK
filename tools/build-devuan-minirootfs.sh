@@ -174,15 +174,20 @@ BUSYBOX_APPLETS="${BUSYBOX_APPLETS-top watch ps free vmstat pgrep pkill killall 
 # libpixman-1-0 is here for the gate, not for the rootfs's own sake:
 # tests/manual/pixman_accel.c dlopen()s libpixman-1.so.0 and SKIPS without it,
 # and a skipped test is an untested claim that reads like a pass. ~0.7 MB.
+# dialog: debconf asks its questions through a dialog-like program, and minbase
+# has none, so every package that asks one printed "unable to initialize
+# frontend: Dialog", then failed Readline too (Term::ReadLine is in
+# perl-modules, also absent) and fell back to Teletype: bare numbered lists
+# (GH #602). ~1.4 MB installed with libdialog15 and libncursesw6.
 if [ "$BUSYBOX" = 1 ]; then
-    INCLUDE_PKGS="ca-certificates,devuan-keyring,busybox-static,logsave,vim-tiny,libpixman-1-0"
+    INCLUDE_PKGS="ca-certificates,devuan-keyring,busybox-static,logsave,vim-tiny,libpixman-1-0,dialog"
     # Only symlink applets the target busybox actually provides (it's the same
     # arch as the build container, so it runs) -- a symlink to a non-compiled
     # applet would print "applet not found" and look broken. Never overwrite an
     # existing target file.
     BBOX_HOOK='[ -e "$1/bin/busybox" ] || exit 0; avail=$("$1/bin/busybox" --list 2>/dev/null); for ap in '"$BUSYBOX_APPLETS"'; do printf "%s\n" "$avail" | grep -qx "$ap" || { echo "    busybox: no applet $ap, skipping" >&2; continue; }; [ -e "$1/usr/bin/$ap" ] || [ -e "$1/bin/$ap" ] || ln -s /bin/busybox "$1/usr/bin/$ap"; done'
 else
-    INCLUDE_PKGS="ca-certificates,devuan-keyring,logsave,vim-tiny,libpixman-1-0"
+    INCLUDE_PKGS="ca-certificates,devuan-keyring,logsave,vim-tiny,libpixman-1-0,dialog"
     BBOX_HOOK='true'
 fi
 [ -n "${EXTRA_PKGS:-}" ] && INCLUDE_PKGS="$INCLUDE_PKGS,$EXTRA_PKGS"
