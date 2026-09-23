@@ -314,8 +314,10 @@ catches people out), pending alternate signal stacks, memory mappings including
 shared ones, and the JIT's translations, since a new address space gets a fresh
 `struct jit` (Chapter 6).
 
-**Changes:** the credentials, if the binary is setuid or setgid; `AT_SECURE`
-accordingly; and the capability sets, which are now actually recomputed rather
+**Changes:** the effective credentials, if the binary is setuid or setgid, and
+on every exec the saved and filesystem ids, which take the effective ones;
+`AT_SECURE`, whenever the effective ids end up other than the real ones, set-id
+bit or not; and the capability sets, which are now actually recomputed rather
 than inherited wholesale.
 
 That list is the security boundary. Before the work described in this chapter,

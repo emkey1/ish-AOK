@@ -242,6 +242,7 @@ concurrent_dir_futex.c
 exec_perm_rules.c
 exec_shebang_interpreter.c
 exec_empty_env_string.c
+exec_cred_ids.c
 sock_bind_refuse.c
 time_clocks_ticks.c
 futex_robust_requeue.c

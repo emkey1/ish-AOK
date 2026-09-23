@@ -1784,6 +1784,43 @@ static void exec_apply_native_process_state(struct mm *new_mm) {
     vfork_notify(current);
 }
 
+// AT_SECURE for the image about to be built, from the credentials staged for
+// it: Linux's secureexec, which cap_bprm_creds_from_file sets when the exec
+// leaves the effective ids other than the real ones (its is_setid) -- whether
+// a set-id bit did that or the process was already running that way. (It also
+// counts file capabilities, which AOK has none of.)
+//
+// It used to be "the file has a set-id bit". That marked a root running a
+// setuid-root program, or anyone running a setuid program of their own, as
+// gaining privilege they already had. And it marked as ordinary a process
+// whose effective uid was not its real one -- a setuid program's child, a
+// daemon between seteuid calls -- so its loader honoured LD_PRELOAD from an
+// environment its real user controls. Measured on Linux 6.12 (camd, root):
+// after setresuid(-1, 1000, -1), or setresgid(-1, 1234, -1), a plain exec
+// has AT_SECURE 1; a root exec of a setuid-root binary has 0.
+static bool exec_staged_is_secure(void) {
+    return current->exec_auxv_euid != current->uid ||
+           current->exec_auxv_egid != current->gid;
+}
+
+// What every exec does to the saved and filesystem ids, set-id or not, once
+// the effective ones are settled: they take the effective ones. POSIX's "the
+// effective user ID of the new process image shall be saved (as the saved
+// set-user-ID)", and Linux's cap_bprm_creds_from_file, "new->suid =
+// new->fsuid = new->euid" with the same for the gids.
+//
+// Only a set-id exec did it here. So a program that lowered its effective uid
+// and kept root as its saved one -- a setuid-root program's
+// seteuid(getuid()) before it runs a helper -- handed the saved root to what it
+// exec'd, which could take it back with setuid(0); and a filesystem id set
+// with setfsuid outlived the program that set it. Measured on Linux 6.12: a
+// plain exec after setresuid(-1, -1, 1000) leaves the saved uid 0, one after
+// setfsuid(1000) leaves the filesystem uid 0, and the same for the gids.
+static void exec_reset_saved_ids(void) {
+    current->suid = current->fsuid = current->euid;
+    current->sgid = current->fsgid = current->egid;
+}
+
 // Natively-implemented programs (/AOK/native/*, kernel/native.h) are dispatched
 // here: after the caller's existence and permission checks, so they behave like
 // any other executable, but before any ELF parsing, since there is no guest
@@ -1866,14 +1903,13 @@ static int native_dispatch_exec(struct fd *fd, struct exec_args argv, struct exe
     // program's own job (kernel/native.h says so where the flag is declared).
     if (prog->setuid_root) {
         current->euid = 0;
-        current->suid = 0;   // saved-set-uid = new euid, not old
-        current->fsuid = current->euid;
         // Same grant the ELF path makes for setuid-root, and for the same
         // reason: a sudo that means to drop to a target uid needs CAP_SETGID
         // and CAP_SETUID still in hand to do it.
         current->cap_effective[0] = current->cap_permitted[0] = CAP_FULL_LOW_;
         current->cap_effective[1] = current->cap_permitted[1] = CAP_FULL_HIGH_;
     }
+    exec_reset_saved_ids();
     return EXEC_NATIVE_DISPATCHED;
 }
 
@@ -1921,11 +1957,11 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     // AT_UID == AT_EUID && AT_GID == AT_EGID -- all four were hardcoded 0, so
     // a setuid-root binary looked like an ordinary one and honoured
     // LD_PRELOAD, giving any local user root.
-    current->exec_secure = (stat.mode & (S_ISUID | S_ISGID)) != 0;
     current->exec_auxv_uid  = current->uid;
     current->exec_auxv_gid  = current->gid;
     current->exec_auxv_euid = (stat.mode & S_ISUID) ? stat.uid : current->euid;
     current->exec_auxv_egid = (stat.mode & S_ISGID) ? stat.gid : current->egid;
+    current->exec_secure = exec_staged_is_secure();
 
     err = format_exec(fd, file, argv, envp, 0);
     if (err == _ENOEXEC) {
@@ -1935,12 +1971,12 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
         // cooperative interpreter handed any local user a root shell.
         //
         // Clear them before shebang_exec, which builds the interpreter's aux
-        // vector from the staged values above, so the interpreter is neither
-        // marked secure-execution nor given the script's owner as its euid.
+        // vector from the staged values above, so the interpreter is not given
+        // the script's owner as its euid, nor marked secure-execution for it.
         stat.mode &= ~(mode_t_) (S_ISUID | S_ISGID);
-        current->exec_secure = false;
         current->exec_auxv_euid = current->euid;
         current->exec_auxv_egid = current->egid;
+        current->exec_secure = exec_staged_is_secure();
         err = shebang_exec(fd, file, argv, envp, 0);
     }
     fd_close(fd);
@@ -1958,8 +1994,6 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     // setuid/setgid
     if (stat.mode & S_ISUID) {
         current->euid = stat.uid;
-        current->suid = stat.uid;  // saved-set-uid = new euid, not old
-        current->fsuid = current->euid;
         if (stat.uid == 0) {
             // Legacy setuid-root: grant full permitted and effective caps so
             // helpers like sudo can use keepcaps+setresuid to drop uid while
@@ -1968,11 +2002,9 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
             current->cap_effective[1] = current->cap_permitted[1] = CAP_FULL_HIGH_;
         }
     }
-    if (stat.mode & S_ISGID) {
+    if (stat.mode & S_ISGID)
         current->egid = stat.gid;
-        current->sgid = stat.gid;  // saved-set-gid = new egid, not old
-        current->fsgid = current->egid;
-    }
+    exec_reset_saved_ids();
 
     // Capabilities do not survive an ordinary exec. Linux recomputes them from
     // the file's own capabilities and the ambient set; with no file
