@@ -1821,6 +1821,23 @@ static void exec_reset_saved_ids(void) {
     current->sgid = current->fsgid = current->egid;
 }
 
+// The parent-death signal (PR_SET_PDEATHSIG) does not outlive an exec that
+// changes who the process is. Linux forgets it twice over: begin_new_exec for
+// a secure exec ("Make sure parent cannot signal privileged process"), whose
+// test is exec_staged_is_secure's -- the effective ids left other than the
+// real ones -- and commit_creds for a change of the effective or filesystem
+// ids, the reset above included, or growth in the permitted capabilities
+// (cred_change_commit). Any other exec keeps it. Measured on Linux 6.12: a
+// set-group-ID binary of another group, a set-user-ID binary of another user,
+// and a plain exec after setfsuid or setresuid(-1, 1000, -1) forget it; a
+// root's exec of a setuid-root binary, a set-user-ID binary of the caller's
+// own, and a plain exec after setresuid(-1, -1, 1000) keep it.
+static void exec_forget_pdeath(const struct cred_change *before) {
+    if (current->euid != current->uid || current->egid != current->gid)
+        current->pdeath_signal = 0;
+    cred_change_commit(before);
+}
+
 // Natively-implemented programs (/AOK/native/*, kernel/native.h) are dispatched
 // here: after the caller's existence and permission checks, so they behave like
 // any other executable, but before any ELF parsing, since there is no guest
@@ -1901,6 +1918,8 @@ static int native_dispatch_exec(struct fd *fd, struct exec_args argv, struct exe
     // motivated exec_secure cannot exist for compiled-in host code. What DOES
     // carry over is the caller's environment, and sanitising that is the
     // program's own job (kernel/native.h says so where the flag is declared).
+    struct cred_change creds;
+    cred_change_begin(&creds);
     if (prog->setuid_root) {
         current->euid = 0;
         // Same grant the ELF path makes for setuid-root, and for the same
@@ -1910,6 +1929,7 @@ static int native_dispatch_exec(struct fd *fd, struct exec_args argv, struct exe
         current->cap_effective[1] = current->cap_permitted[1] = CAP_FULL_HIGH_;
     }
     exec_reset_saved_ids();
+    exec_forget_pdeath(&creds);
     return EXEC_NATIVE_DISPATCHED;
 }
 
@@ -1992,6 +2012,8 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
         return 0;
 
     // setuid/setgid
+    struct cred_change creds;
+    cred_change_begin(&creds);
     if (stat.mode & S_ISUID) {
         current->euid = stat.uid;
         if (stat.uid == 0) {
@@ -2026,6 +2048,7 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
         current->cap_effective[0] = current->cap_ambient[0];
         current->cap_effective[1] = current->cap_ambient[1];
     }
+    exec_forget_pdeath(&creds);
 
     // save current->comm
     char old_comm[sizeof(current->comm)];

@@ -202,6 +202,10 @@ struct sigevent_ {
 // send a signal
 // you better make sure the task isn't gonna get freed under me (pids_lock or current)
 void send_signal(struct task *task, int sig, struct siginfo_ info);
+// Whether current may send `sig` to `task`: Linux's check_kill_permission,
+// credentials plus the SIGCONT-within-the-session exception. Asked by kill()
+// and its family, and by an exit sending a child its parent-death signal.
+bool may_signal_task(struct task *task, dword_t sig);
 // send a signal without regard for whether the signal is blocked or ignored
 void deliver_signal(struct task *task, int sig, struct siginfo_ info);
 // Queue a signal on a task that task_start has not started yet, waking nothing.

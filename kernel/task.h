@@ -1092,6 +1092,18 @@ extern void (*halt_hook)(int status);
 // machinery that maintains the sets.
 bool current_capable(unsigned cap);
 
+// What Linux's commit_creds compares to decide that a change of the caller's
+// own credentials forgets its parent-death signal (PR_SET_PDEATHSIG): the
+// effective and filesystem ids, and the permitted capabilities. Taken with
+// cred_change_begin before the change and handed to cred_change_commit after
+// it. Implemented in kernel/getset.c.
+struct cred_change {
+    uid_t_ euid, egid, fsuid, fsgid;
+    dword_t cap_permitted[2];
+};
+void cred_change_begin(struct cred_change *change);
+void cred_change_commit(const struct cred_change *change);
+
 // The equivalent of Linux's ptrace_may_access(PTRACE_MODE_ATTACH_FSCREDS):
 // may the caller read or write `target`'s memory? Anything that exposes one
 // task's address space to another -- /proc/<pid>/mem, process_vm_readv --

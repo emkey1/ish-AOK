@@ -69,6 +69,36 @@ bool current_may_access_task_mem(struct task *target) {
            current->egid == target->sgid;
 }
 
+void cred_change_begin(struct cred_change *change) {
+    *change = (struct cred_change) {
+        .euid = current->euid,
+        .egid = current->egid,
+        .fsuid = current->fsuid,
+        .fsgid = current->fsgid,
+        .cap_permitted = {current->cap_permitted[0], current->cap_permitted[1]},
+    };
+}
+
+// Linux's commit_creds forgets the parent-death signal when the effective or
+// filesystem ids change, or the permitted capabilities grow: the process is
+// no longer the one its parent could signal when it asked, and a parent must
+// not be able to signal a process that has become privileged. The real and
+// saved ids and the supplementary groups do not count. Measured on Linux 6.12
+// (camd, as root): setresuid(-1, 1000, -1), setfsuid(1000), the same two for
+// the gids, and setuid(1000) forget it; setresuid(1000, -1, -1),
+// setresuid(-1, -1, 1000), setgroups, dropping a capability, and setuid to
+// the uid it already has keep it. AOK kept it through all of them.
+//
+// Per thread, as the setting is: libc runs a setuid() on every thread of the
+// process, and each forgets its own.
+void cred_change_commit(const struct cred_change *change) {
+    if (current->euid != change->euid || current->egid != change->egid ||
+            current->fsuid != change->fsuid || current->fsgid != change->fsgid ||
+            (current->cap_permitted[0] & ~change->cap_permitted[0]) != 0 ||
+            (current->cap_permitted[1] & ~change->cap_permitted[1]) != 0)
+        current->pdeath_signal = 0;
+}
+
 static bool current_can_setuids(void) {
     return superuser() || current_has_cap(CAP_SETUID_);
 }
@@ -174,6 +204,8 @@ dword_t sys_geteuid(void) {
 
 int_t sys_setuid(uid_t_ uid) {
     STRACE("setuid(%d)", uid);
+    struct cred_change change;
+    cred_change_begin(&change);
     uid_t_ old_ruid = current->uid;
     uid_t_ old_euid = current->euid;
     uid_t_ old_suid = current->suid;
@@ -186,11 +218,14 @@ int_t sys_setuid(uid_t_ uid) {
     current->euid = uid;
     current->fsuid = uid;
     cap_emulate_setxuid(old_ruid, old_euid, old_suid);
+    cred_change_commit(&change);
     return 0;
 }
 
 dword_t sys_setresuid(uid_t_ ruid, uid_t_ euid, uid_t_ suid) {
     STRACE("setresuid(%d, %d, %d)", ruid, euid, suid);
+    struct cred_change change;
+    cred_change_begin(&change);
     uid_t_ old_ruid = current->uid;
     uid_t_ old_euid = current->euid;
     uid_t_ old_suid = current->suid;
@@ -212,6 +247,7 @@ dword_t sys_setresuid(uid_t_ ruid, uid_t_ euid, uid_t_ suid) {
     if (euid != (uid_t) -1)
         current->fsuid = euid;
     cap_emulate_setxuid(old_ruid, old_euid, old_suid);
+    cred_change_commit(&change);
     return 0;
 }
 
@@ -265,8 +301,12 @@ uid_t_ sys_setfsuid(uid_t_ uid) {
     STRACE("setfsuid(%d)", uid);
     if (uid == (uid_t_) -1)
         return old;
-    if (current_can_setuids() || uid == current->uid || uid == current->euid || uid == current->suid)
+    if (current_can_setuids() || uid == current->uid || uid == current->euid || uid == current->suid) {
+        struct cred_change change;
+        cred_change_begin(&change);
         current->fsuid = uid;
+        cred_change_commit(&change);
+    }
     return old;
 }
 
@@ -290,6 +330,8 @@ dword_t sys_getegid(void) {
 
 int_t sys_setgid(uid_t_ gid) {
     STRACE("setgid(%d)", gid);
+    struct cred_change change;
+    cred_change_begin(&change);
     if (current_can_setgids()) {
         current->gid = current->sgid = gid;
     } else {
@@ -298,11 +340,14 @@ int_t sys_setgid(uid_t_ gid) {
     }
     current->egid = gid;
     current->fsgid = gid;
+    cred_change_commit(&change);
     return 0;
 }
 
 dword_t sys_setresgid(uid_t_ rgid, uid_t_ egid, uid_t_ sgid) {
     STRACE("setresgid(%d, %d, %d)", rgid, egid, sgid);
+    struct cred_change change;
+    cred_change_begin(&change);
     if (!current_can_setgids()) {
         if (rgid != (uid_t) -1 && rgid != current->gid && rgid != current->egid && rgid != current->sgid)
             return _EPERM;
@@ -320,6 +365,7 @@ dword_t sys_setresgid(uid_t_ rgid, uid_t_ egid, uid_t_ sgid) {
         current->sgid = sgid;
     if (egid != (uid_t) -1)
         current->fsgid = egid;
+    cred_change_commit(&change);
     return 0;
 }
 
@@ -362,8 +408,12 @@ uid_t_ sys_setfsgid(uid_t_ gid) {
     STRACE("setfsgid(%d)", gid);
     if (gid == (uid_t_) -1)
         return old;
-    if (current_can_setgids() || gid == current->gid || gid == current->egid || gid == current->sgid)
+    if (current_can_setgids() || gid == current->gid || gid == current->egid || gid == current->sgid) {
+        struct cred_change change;
+        cred_change_begin(&change);
         current->fsgid = gid;
+        cred_change_commit(&change);
+    }
     return old;
 }
 
@@ -505,6 +555,8 @@ int_t sys_capset_guest(guest_addr_t header_addr, guest_addr_t data_addr) {
     if (!cap_words_subset(new_effective, new_permitted, count))
         return _EPERM;
 
+    struct cred_change change;
+    cred_change_begin(&change);
     current->cap_effective[0] = new_effective[0];
     current->cap_permitted[0] = new_permitted[0];
     current->cap_inheritable[0] = new_inheritable[0];
@@ -516,6 +568,7 @@ int_t sys_capset_guest(guest_addr_t header_addr, guest_addr_t data_addr) {
         current->cap_permitted[1] = new_permitted[1];
         current->cap_inheritable[1] = new_inheritable[1];
     }
+    cred_change_commit(&change);
     return 0;
 }
 

@@ -767,21 +767,6 @@ for both callers. Tests against camd: a background read from a group whose
 only way back is a zombie member (EIO on Linux), and the `pthread_exit`
 way back above.
 
-### PR_SET_PDEATHSIG is recorded and never sent
-
-Found 2026-09-23 by reading; not measured. kernel/misc.c stores
-`pdeath_signal` and returns it for PR_GET_PDEATHSIG, the checkpoint carries
-it, and nothing ever sends it. Linux sends it from `forget_original_parent`
-to every thread of every child it reparents -- when the parent THREAD exits,
-so a threaded reparent sends it too (the known gotcha: the child of a worker
-thread gets it when that worker exits). Go's `SysProcAttr.Pdeathsig` and
-systemd's `FORK_DEATHSIG` both depend on it to take a helper down with its
-parent.
-
-**Next step:** send it from do_exit's reparent loop, for each thread of each
-reparented child, after pids_lock like the reparent SIGCHLD; test both the
-thread-exit and the process-exit shape against camd.
-
 ### PI futexes are ENOSYS
 
 Measured 2026-09-01 alongside the futex argument-validation work

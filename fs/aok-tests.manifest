@@ -232,6 +232,7 @@ futex_timeout_duration.c
 orphan_pgrp_wait.c
 reparent_zombie_notify.c
 reparent_to_sibling_thread.c
+pdeath_signal.c
 wait_clone_child.c
 subreaper_not_inherited.c
 fork_tgroup_reset.c

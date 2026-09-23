@@ -578,6 +578,118 @@ static void orphaned_pgrps_hang_up(struct orphaned_pgrps *orphans) {
     orphaned_pgrps_init(orphans);
 }
 
+// ---- the parent-death signal -------------------------------------------------
+//
+// PR_SET_PDEATHSIG. Linux's forget_original_parent sends it for every thread
+// of every child process a dying THREAD hands on, to whoever takes the child:
+//
+//     for_each_thread(p, t) {
+//         ...
+//         if (t->pdeath_signal)
+//             group_send_sig_info(t->pdeath_signal, SEND_SIG_NOINFO, t, PIDTYPE_TGID);
+//     }
+//
+// So a child forked by a worker thread gets it when that worker exits, though
+// the process that forked it lives on -- the known gotcha, and a real one, since
+// Go forks from whichever thread its runtime is on. And again at each later
+// reparent: a subreaper that took the child and then exits sends it too.
+//
+// AOK stored the setting and never sent it, so a helper that asked to go with
+// the program that started it -- Go's SysProcAttr.Pdeathsig, systemd's
+// FORK_DEATHSIG -- outlived it.
+//
+// Collected in do_exit's reparenting loop, under pids_lock, and sent once that
+// is dropped, like every signal an exit sends. Kept by id rather than by
+// reference, as the orphaned groups are: nothing holds the child's process in
+// between, and one that has gone meanwhile is simply not found.
+struct pdeath_note {
+    pid_t_ tid, tgid;       // the thread that asked for it, and its process
+    int sig;
+};
+
+struct pdeath_notes {
+    struct pdeath_note inline_notes[4];
+    struct pdeath_note *notes;
+    size_t count, cap;
+};
+
+static void pdeath_notes_init(struct pdeath_notes *pd) {
+    pd->notes = pd->inline_notes;
+    pd->count = 0;
+    pd->cap = sizeof(pd->inline_notes) / sizeof(pd->inline_notes[0]);
+}
+
+// Caller holds pids_lock, and is the exiting task.
+static void pdeath_note_add_locked(struct pdeath_notes *pd, struct task *thread) {
+    int sig = (int) thread->pdeath_signal;
+    if (sig == 0 || thread->zombie)
+        return;
+    // Linux's group_send_sig_info asks check_kill_permission of the exiting
+    // thread, as kill() would: a parent that has since become a user who may
+    // not signal the child sends nothing. Asked here, while both are certainly
+    // still there.
+    if (!may_signal_task(thread, (dword_t) sig))
+        return;
+    if (pd->count == pd->cap) {
+        size_t cap = pd->cap * 2;
+        struct pdeath_note *grown = malloc(sizeof(*grown) * cap);
+        if (grown == NULL)
+            return;
+        memcpy(grown, pd->notes, sizeof(*grown) * pd->count);
+        if (pd->notes != pd->inline_notes)
+            free(pd->notes);
+        pd->notes = grown;
+        pd->cap = cap;
+    }
+    pd->notes[pd->count++] = (struct pdeath_note) {
+        .tid = thread->pid, .tgid = thread->tgid, .sig = sig,
+    };
+}
+
+// Every thread of the child process led by `leader` that asked for a signal
+// when its parent dies. Caller holds pids_lock.
+//
+// The leader is asked even once it has exited: it stays its process's leader,
+// and one of Linux's for_each_thread, until the last thread goes -- so a
+// process whose main thread asked and then left with pthread_exit still gets
+// it.
+static void pdeath_collect_locked(struct pdeath_notes *pd, struct task *leader) {
+    bool leader_listed = false;
+    struct task *thread;
+    list_for_each_entry(&leader->group->threads, thread, group_links) {
+        if (thread == leader)
+            leader_listed = true;
+        pdeath_note_add_locked(pd, thread);
+    }
+    if (!leader_listed)
+        pdeath_note_add_locked(pd, leader);
+}
+
+// Called without pids_lock. `info` names the exiting process as the sender,
+// as SEND_SIG_NOINFO does: SI_USER, its tgid and its real uid.
+static void pdeath_notes_send(struct pdeath_notes *pd, struct siginfo_ info) {
+    for (size_t i = 0; i < pd->count; i++) {
+        const struct pdeath_note *note = &pd->notes[i];
+        // Process-directed, sent to the thread that asked: it takes it if it
+        // can, as Linux's complete_signal prefers it, and another thread of its
+        // process otherwise -- the only choice once it has exited.
+        complex_lockt(&pids_lock, 0);
+        struct task *thread = pid_get_task(note->tid);
+        if (thread != NULL && thread->tgid == note->tgid)
+            task_ref_cnt_mod(thread, 1);
+        else
+            thread = NULL;
+        unlock(&pids_lock);
+        if (thread != NULL) {
+            send_signal_to_process(thread, note->sig, info);
+            task_ref_cnt_mod(thread, -1);
+        }
+    }
+    if (pd->notes != pd->inline_notes)
+        free(pd->notes);
+    pdeath_notes_init(pd);
+}
+
 // A session leader's death takes the controlling terminal away from the whole
 // session. Linux (disassociate_ctty) does this unconditionally, and does two
 // separate things that AOK had run together:
@@ -828,6 +940,15 @@ noreturn void do_exit(struct task *task, int status) {
     // The groups of children this exit orphans; hung up after the locks.
     struct orphaned_pgrps orphaned;
     orphaned_pgrps_init(&orphaned);
+    // The parent-death signals the children's threads asked for; sent after
+    // the locks too, from this process (Linux's SEND_SIG_NOINFO).
+    struct pdeath_notes pdeath;
+    pdeath_notes_init(&pdeath);
+    struct siginfo_ pdeath_info = {
+        .code = SI_USER_,
+        .kill.pid = task->tgid,
+        .kill.uid = task->uid,
+    };
 
     complex_lockt(&pids_lock, 0);
 
@@ -877,6 +998,16 @@ noreturn void do_exit(struct task *task, int status) {
         child->parent = new_parent;
         list_remove(&child->siblings);
         list_add(&new_parent->children, &child->siblings);
+        // The parent-death signal, for a child PROCESS, whoever takes it -- a
+        // thread of this same process included, which is the one case every
+        // step below skips. Not for a thread of our own process, which AOK
+        // lists here only because it makes a thread the child of the thread
+        // that created it: Linux lists no thread as anyone's child, and a
+        // thread's setting is for its process's parent, sent when that one
+        // exits. Nor when init itself is going and takes everything with it.
+        if (child->group != NULL && child->group != task->group &&
+                child->group->leader == child && new_parent != task)
+            pdeath_collect_locked(&pdeath, child);
         // As Linux's reparent_leader does, and for the reason its comment
         // gives ("we don't want people slaying init"): a child cloned with
         // some other exit_signal must not get to send that signal to whoever
@@ -1136,8 +1267,10 @@ noreturn void do_exit(struct task *task, int status) {
     if (tty_hup.fg_group != 0)
         send_group_signal(tty_hup.fg_group, SIGHUP_, SIGINFO_NIL);
 
-    // The orphaned-group rule: the children's groups, then our own, in the
-    // order Linux's exit_notify reaches them.
+    // Each child's parent-death signal, then the orphaned-group rule for the
+    // children's groups, then for our own: the order Linux's exit_notify
+    // reaches them in.
+    pdeath_notes_send(&pdeath, pdeath_info);
     orphaned_pgrps_hang_up(&orphaned);
     if (orphan_pgid != 0)
         orphaned_pgrp_hang_up(orphan_pgid);

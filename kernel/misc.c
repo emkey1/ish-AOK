@@ -66,6 +66,12 @@ static bool prctl_cap_test(const dword_t caps[2], uint_t cap) {
 int_t sys_prctl_guest(dword_t option, qword_t arg2, qword_t arg3, qword_t arg4, qword_t arg5) {
     switch (option) {
         case PRCTL_SET_PDEATHSIG_:
+            // Linux's valid_signal(): 0 clears it, 1 to 64 are signals, and
+            // anything else is EINVAL. It was stored unchecked, and do_exit
+            // now sends it -- a number past the last signal would index past
+            // every table the send reads.
+            if (arg2 >= NUM_SIGS)
+                return _EINVAL;
             current->pdeath_signal = (dword_t) arg2;
             return 0;
         case PRCTL_GET_PDEATHSIG_:

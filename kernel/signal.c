@@ -4033,7 +4033,7 @@ int_t sys_rt_sigtimedwait_time64_guest(guest_addr_t set_addr, guest_addr_t info_
 // stopped process in its own session but not under its own uid, so without it
 // `fg` could not resume anything privileged, and kill_group inherited the same
 // refusal for the whole process group.
-static bool may_signal_task(struct task *task, dword_t sig) {
+bool may_signal_task(struct task *task, dword_t sig) {
     if (superuser())
         return true;
     // A thread signalling its own process never needs a credential check.
