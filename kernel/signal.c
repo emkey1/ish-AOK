@@ -332,10 +332,12 @@ static int sigaction_to_user(struct task *task, guest_addr_t user_addr, const st
 }
 
 // What a signal interrupting a wait says about restarting the syscall the wait
-// belongs to (signal_wait_interruption), for wake_waiting_task to record.
+// belongs to (signal_wait_interruption), for wake_waiting_task to record:
+// whether an ERESTARTSYS call restarts, and whether even an ERESTARTNOHAND one
+// does, because no handler runs.
 struct wait_interruption {
     bool restart;
-    bool stops;
+    bool nohand;
 };
 
 static bool wake_waiting_task(struct task *task, const struct wait_interruption *interruption) {
@@ -375,7 +377,7 @@ static bool wake_waiting_task(struct task *task, const struct wait_interruption 
         (waiting_cond != NULL && waiting_lock != NULL && task->waiting_interruptible);
     if (records && interruption != NULL) {
         __atomic_store_n(&task->restart_interrupted_syscall, interruption->restart, __ATOMIC_RELEASE);
-        __atomic_store_n(&task->restart_interrupted_syscall_nohand, interruption->stops, __ATOMIC_RELEASE);
+        __atomic_store_n(&task->restart_interrupted_syscall_nohand, interruption->nohand, __ATOMIC_RELEASE);
         __atomic_store_n(&task->wait_interrupted, true, __ATOMIC_RELEASE);
     }
     if (waiting_interrupt_flag != NULL) {
@@ -638,36 +640,56 @@ static bool wake_poke_dropped_for(const struct task *task) {
     return strncmp(task->comm, prefix, strlen(prefix)) == 0;
 }
 
+static bool signal_restart_decided_at_delivery(struct task *task, int sig);
+
+// Whether `sig` interrupting one of `task`'s syscalls restarts it even as an
+// ERESTARTNOHAND call -- poll, select, nanosleep, sigsuspend -- which only a
+// handler running may end. That is, whether its delivery runs no handler.
+//
+// A job-control stop is not an interruption: Linux parks the task inside the
+// wait and resumes it on SIGCONT. Nor is a signal the task ignores, with
+// SIG_IGN or by default like SIGCHLD: get_signal() dequeues it, discards it
+// and finds nothing to deliver, and the call restarts. Until it is delivered,
+// the same goes for any signal a tracer sees first: see
+// signal_restart_decided_at_delivery.
+//
+// An ignored signal used to count as an interruption, and it is not rare: a
+// child's SIGCHLD is queued whenever the thread that forked it blocks it, as
+// musl's fork() and pthread_exit() block every signal while they run, and the
+// queued signal wakes every other thread of the process. Each failed its wait
+// with EINTR where Linux carries on -- a nanosleep, a poll, a futex, a wait4,
+// sigsuspend.
+//
+// Callers keep out a signal the native shim holds a handler for: its
+// disposition here is only a placeholder. Call with sighand->lock held.
+static bool signal_restarts_nohand(struct task *task, struct sighand *sighand, int sig) {
+    int action = signal_action(sighand, sig);
+    return action == SIGNAL_STOP || action == SIGNAL_IGNORE ||
+        signal_restart_decided_at_delivery(task, sig);
+}
+
 // What `sig` interrupting one of `task`'s waits says about restarting the
 // syscall the wait belongs to. Call with sighand->lock held: it reads the
 // disposition.
-static bool signal_restart_decided_at_delivery(struct task *task, int sig);
-
 static struct wait_interruption signal_wait_interruption(struct task *task,
         struct sighand *sighand, int sig) {
-    // A job-control stop is not an interruption. Linux parks the task inside
-    // the wait and resumes it on SIGCONT, so the syscall never returns EINTR
-    // to the guest -- and because no handler runs, that holds even for the
-    // interfaces SA_RESTART cannot rescue (poll, select, epoll_wait). Only a
-    // handler actually running can turn a wait into a guest-visible EINTR.
-    // Until it is delivered, the same goes for any signal a tracer sees first:
-    // see signal_restart_decided_at_delivery.
+    // Only a handler actually running can turn a wait into a guest-visible
+    // EINTR, which is why even the interfaces SA_RESTART cannot rescue (poll,
+    // select) resume when no handler runs: see signal_restarts_nohand.
     //
     // sighand->action is not the truth for a signal the native shim is holding
     // a handler for -- what sits there is the SIG_DFL placeholder
     // nlibc_set_disposition left behind, so a native program's own SIGTSTP
     // handler would read as SIGNAL_STOP here and park a poll() that Linux
     // interrupts. For those the shim's recorded flags are the answer, and a
-    // handler is always what runs, so `stops` is false by construction.
+    // handler is always what runs, so `nohand` is false by construction.
     bool held = sigset_has(__atomic_load_n(&task->native_held, __ATOMIC_ACQUIRE), sig);
-    int action = held ? SIGNAL_CALL_HANDLER : signal_action(sighand, sig);
-    bool stops = !held && (action == SIGNAL_STOP ||
-        signal_restart_decided_at_delivery(task, sig));
+    bool nohand = !held && signal_restarts_nohand(task, sighand, sig);
     bool restart = held
         ? sigset_has(__atomic_load_n(&task->native_restart, __ATOMIC_ACQUIRE), sig)
-        : (stops || (action == SIGNAL_CALL_HANDLER &&
+        : (nohand || (signal_action(sighand, sig) == SIGNAL_CALL_HANDLER &&
             !!(sighand->action[sig].flags & SA_RESTART_)));
-    return (struct wait_interruption) {.restart = restart, .stops = stops};
+    return (struct wait_interruption) {.restart = restart, .nohand = nohand};
 }
 
 static void signal_wake_task(struct task *task, struct sighand *sighand, int sig) {
@@ -933,45 +955,44 @@ static void deliver_signal_unlocked_locked(struct task *task, struct sighand *si
 // just whichever task object the sender happened to address -- can observe
 // and dequeue it via receive_signals/signalfd/sigwaitinfo. Contrast
 // deliver_signal_unlocked_locked, which targets one specific task's own
-// per-thread queue. `members`/`count` is a pre-collected, ref-counted
-// snapshot of the group's live threads (see send_signal_to_group): walking
-// tgroup->threads needs pids_lock, and this runs under sighand->lock, so the
-// snapshot has to happen first (pids_lock -> sighand->lock, never the
+// per-thread queue. `target` is the thread the signal was sent to (Linux's
+// `p` in __send_signal_locked), and `members`/`count` is a pre-collected,
+// ref-counted snapshot of the group's live threads (see send_process_signal):
+// walking tgroup->threads needs pids_lock, and this runs under sighand->lock,
+// so the snapshot has to happen first (pids_lock -> sighand->lock, never the
 // reverse). Caller holds `sighand->lock`.
-static void deliver_signal_to_group_locked(struct sighand *sighand, int sig, struct siginfo_ info,
-        struct task **members, size_t count) {
-    // Unlike send_signal_with_sighand's single-task path, this used to queue
-    // and wake unconditionally, with no check of signal_action() at all. For
-    // a group-default-ignored signal with no handler installed -- SIGCHLD is
-    // the common case, sent here by every child exit -- that let it sit in
-    // sighand->pending regardless of whether anyone was actually going to
-    // consume it. is_signal_pending()/wait_interrupted_by_signal() (used by
-    // wait_for's EINTR check for wait4/futex/poll) then see it as "pending"
-    // and report EINTR, even to a wait4() waiting on a *different*, still-
-    // running child that simply hasn't exited yet. Real Linux drops a
-    // default-ignored signal instead of queuing it (sig_ignored()) unless a
-    // consumer is synchronously waiting for it (blocked via sigprocmask for
-    // signalfd, or in sigtimedwait/rt_sigsuspend's wait set) -- mirror that
-    // here across the whole group before touching sighand->pending at all.
+static void deliver_signal_to_group_locked(struct sighand *sighand, struct task *target,
+        int sig, struct siginfo_ info, struct task **members, size_t count) {
+    // A signal whose disposition ignores it is dropped here, as Linux's
+    // sig_ignored() drops it, unless the thread it was SENT TO blocks it or
+    // waits for it in sigtimedwait: a handler may be installed by the time it
+    // is unblocked. SIGCHLD at SIG_DFL, sent by every child exit, is the
+    // common case, and a queued one wakes every thread that can take it.
+    //
+    // Only the target's mask counts, never the rest of the group's. For a
+    // child's exit the target is the thread that forked it
+    // (exit_notify_process_locked). This used to queue the signal if ANY
+    // thread blocked it, and musl blocks every signal in a thread for the
+    // whole of fork() and pthread_exit(), glibc around pthread_create's clone
+    // -- so a child dying while some sibling forked or exited had its SIGCHLD
+    // queued, and the woken threads failed their waits with EINTR. Measured,
+    // with one thread blocking SIGCHLD: a sibling's 2 s clock_nanosleep failed
+    // at 0.3 s, when a child exited, where Linux 6.12 sleeps the 2 s.
+    //
+    // The raw ->blocked, not task_wake_blocked(): a native program's handler
+    // is held by the shim with the signal blocked and the disposition left at
+    // SIG_DFL, and that blocked bit is what keeps its SIGCHLD from being
+    // dropped as ignored.
     bool ignored = signal_action(sighand, sig) == SIGNAL_IGNORE;
-    if (ignored) {
-        bool synchronously_consumed = false;
-        for (size_t i = 0; i < count; i++) {
-            if (sigset_has(members[i]->blocked | members[i]->waiting, sig)) {
-                synchronously_consumed = true;
-                break;
-            }
-        }
-        if (!synchronously_consumed)
-            return;
-    }
+    if (ignored && !sigset_has(target->blocked | target->waiting, sig))
+        return;
 
     // See the matching comment in deliver_signal_unlocked_locked: skipping the
     // requeue for an already-pending standard signal is correct (Linux
     // doesn't queue multiple instances either), but skipping the wake too --
     // as this used to do via an unconditional early return -- can strand
     // every member of the group. This is the SIGCHLD path for a burst of
-    // near-simultaneous child exits (send_signal_to_group), which is exactly
+    // near-simultaneous child exits (send_signal_to_process), which is exactly
     // where the race is easy to hit: one child's SIGCHLD sets the pending bit
     // and wakes the parent, the parent's sigsuspend()/wait4() loop reaps that
     // child and goes back to sleep, and a second child exits and delivers
@@ -1006,11 +1027,19 @@ static void deliver_signal_to_group_locked(struct sighand *sighand, int sig, str
         if (sigset_has(task_wake_blocked(task) & ~task->waiting, sig) &&
                 signal_is_blockable(sig) && !signal_is_synchronous_trap(sig))
             continue;
+        // Before the wake, so the woken task sees it: an ignored signal runs
+        // no handler, and a wait that ends for it restarts even if a sibling
+        // has taken it by the time the restart is decided (restart_ignored_wake).
+        if (ignored)
+            __atomic_store_n(&task->restart_ignored_wake, true, __ATOMIC_RELEASE);
         signal_wake_task(task, sighand, sig);
     }
 }
 
-void send_signal_to_group(struct tgroup *group, int sig, struct siginfo_ info) {
+// A process-directed signal to `group`, sent to `target`, or to the group's
+// leader when that is NULL.
+static void send_process_signal(struct tgroup *group, struct task *target, int sig,
+        struct siginfo_ info) {
     if (sig == 0)
         return;
 
@@ -1048,19 +1077,36 @@ void send_signal_to_group(struct tgroup *group, int sig, struct siginfo_ info) {
         task_ref_cnt_mod(task, 1);
         members[member_count++] = task;
     }
+    // A leader that has exited stays the group's leader until the last
+    // thread goes, so this is never NULL while there is a member to wake.
+    if (target == NULL)
+        target = group->leader;
+    if (target != NULL)
+        task_ref_cnt_mod(target, 1);
     unlock(&pids_lock);
 
-    if (sighand != NULL) {
+    if (sighand != NULL && target != NULL) {
         lock(&sighand->lock, 0);
-        deliver_signal_to_group_locked(sighand, sig, info, members, member_count);
+        deliver_signal_to_group_locked(sighand, target, sig, info, members, member_count);
         unlock(&sighand->lock);
-        sighand_release(sighand);
     }
+    if (sighand != NULL)
+        sighand_release(sighand);
+    if (target != NULL)
+        task_ref_cnt_mod(target, -1);
 
     for (size_t i = 0; i < member_count; i++)
         task_ref_cnt_mod(members[i], -1);
     if (members != stack_members)
         free(members);
+}
+
+void send_signal_to_process(struct task *task, int sig, struct siginfo_ info) {
+    send_process_signal(task->group, task, sig, info);
+}
+
+void send_signal_to_group(struct tgroup *group, int sig, struct siginfo_ info) {
+    send_process_signal(group, NULL, sig, info);
 }
 
 void deliver_signal_with_sighand(struct task *task, struct sighand *sighand, int sig, struct siginfo_ info) {
@@ -1129,7 +1175,7 @@ static bool signal_still_pending_locked(struct task *task, int sig) {
 // Scans both `task`'s own (thread-directed) queue and, if present, its
 // sighand's shared (process-directed) queue -- a signalfd/sigwaitinfo/
 // receive_signals caller must see process-directed signals (e.g. SIGCHLD to a
-// possibly-multithreaded parent, see send_signal_to_group) regardless of
+// possibly-multithreaded parent, see send_signal_to_process) regardless of
 // which sibling thread they were delivered through.
 static bool signal_take_next_locked(struct task *task, sigset_t_ mask, struct siginfo_ *info_out) {
     // POSIX/signal(7): when several signals are pending, the lowest-numbered is
@@ -1464,7 +1510,7 @@ static void signalfd_wakeup_task(struct task *task, int sig) {
 }
 
 // Is anything this signalfd watches already queued? Both queues: a
-// process-directed signal (e.g. SIGCHLD via send_signal_to_group) lives in the
+// process-directed signal (e.g. SIGCHLD via send_signal_to_process) lives in the
 // shared one, not this thread's own, and a signalfd on any sibling thread must
 // still see it. Caller must NOT hold sighand->lock.
 static bool signalfd_has_pending(sigset_t_ mask) {
@@ -1698,6 +1744,12 @@ static bool restart_flags_take(bool nohand_only) {
     return nohand_only ? nohand : restart;
 }
 
+// Whether an ignored signal woke this task during this syscall
+// (restart_ignored_wake). Consumed, like the record above.
+static bool restart_ignored_wake_take(void) {
+    return __atomic_exchange_n(&current->restart_ignored_wake, false, __ATOMIC_ACQ_REL);
+}
+
 // What an interruption leaves behind for a restart belongs to one syscall, and
 // both dispatchers clear it as the next syscall starts. Two things:
 //
@@ -1732,42 +1784,9 @@ void signal_restart_state_clear(void) {
         return;
     __atomic_store_n(&current->restart_interrupted_syscall, false, __ATOMIC_RELEASE);
     __atomic_store_n(&current->restart_interrupted_syscall_nohand, false, __ATOMIC_RELEASE);
+    __atomic_store_n(&current->restart_ignored_wake, false, __ATOMIC_RELEASE);
     current->restart_nohand_pending = false;
     current->restart_sys_pending = false;
-}
-
-// The signal that is about to be delivered, or NULL. Selection mirrors
-// signal_take_next_locked: both queues, lowest number wins, the thread's own
-// queue first on a tie. Call with sighand->lock held.
-//
-// "Deliverable" is task_wake_blocked() rather than plain ->blocked, which is
-// the same question every other pending-signal predicate in the kernel asks
-// (fs/real.c, fs/poll.c, fs/sock.c, kernel/futex.c). Using the raw blocked set
-// here made the two halves disagree for a native program: the shim blocks
-// every signal it has a handler for and runs the handler at a checkpoint
-// instead, so the wait side counted it as pending and cut the syscall short
-// while this side counted it as blocked, found nothing, and refused to
-// restart. Native SA_RESTART was dead on arrival, and the interruption
-// surfaced as a guest-visible EINTR -- "echo: write error: Interrupted system
-// call" out of a native bash. For a translated guest native_held is 0 and this
-// is the blocked set exactly as before.
-static struct sigqueue *signal_next_deliverable_locked(struct sighand *sighand) {
-    sigset_t_ blocked = task_wake_blocked(current);
-    struct sigqueue *sigqueue;
-    struct sigqueue *best = NULL;
-    list_for_each_entry(&current->queue, sigqueue, queue) {
-        if (sigset_has(blocked, sigqueue->info.sig))
-            continue;
-        if (best == NULL || sigqueue->info.sig < best->info.sig)
-            best = sigqueue;
-    }
-    list_for_each_entry(&sighand->queue, sigqueue, queue) {
-        if (sigset_has(blocked, sigqueue->info.sig))
-            continue;
-        if (best == NULL || sigqueue->info.sig < best->info.sig)
-            best = sigqueue;
-    }
-    return best;
 }
 
 // Is SIG one the shim is holding a native handler for? Its entry in
@@ -1782,6 +1801,70 @@ static bool signal_native_restarts(int sig) {
     return sigset_has(__atomic_load_n(&current->native_restart, __ATOMIC_ACQUIRE), sig);
 }
 
+// A deliverable signal that does nothing when it is delivered: one the task
+// ignores, with SIG_IGN or by default like SIGCHLD. Never a signal the shim
+// holds a handler for, which always runs one whatever the placeholder
+// disposition says, nor one a tracer sees first, which stops for the tracer.
+// Call with sighand->lock held.
+static bool signal_passed_over(struct sighand *sighand, int sig) {
+    return !signal_native_held(sig) && !signal_stops_for_tracer(current, sig) &&
+        signal_action(sighand, sig) == SIGNAL_IGNORE;
+}
+
+// The signal whose delivery decides whether an interrupted syscall restarts,
+// or NULL. Selection mirrors signal_take_next_locked: both queues, lowest
+// number wins, the thread's own queue first on a tie. Call with sighand->lock
+// held.
+//
+// Except that a signal_passed_over is passed over, as Linux's get_signal()
+// dequeues such a signal, discards it and goes on to the next: it runs no
+// handler, so it cannot be what decides. *ignored_seen says whether one was --
+// with nothing else deliverable, that is what cut the syscall short, and the
+// syscall restarts. Taking the lowest signal whatever it was let an ignored
+// SIGCHLD decide "no restart" for every thread it woke. And a handled signal
+// numbered above an ignored one must still decide for a native program, which
+// has no handler-time cancel (receive_signal) to take back a restart promised
+// on the ignored signal's word.
+//
+// "Deliverable" is task_wake_blocked() rather than plain ->blocked, which is
+// the same question every other pending-signal predicate in the kernel asks
+// (fs/real.c, fs/poll.c, fs/sock.c, kernel/futex.c). Using the raw blocked set
+// here made the two halves disagree for a native program: the shim blocks
+// every signal it has a handler for and runs the handler at a checkpoint
+// instead, so the wait side counted it as pending and cut the syscall short
+// while this side counted it as blocked, found nothing, and refused to
+// restart. Native SA_RESTART was dead on arrival, and the interruption
+// surfaced as a guest-visible EINTR -- "echo: write error: Interrupted system
+// call" out of a native bash. For a translated guest native_held is 0 and this
+// is the blocked set exactly as before.
+static struct sigqueue *signal_deciding_locked(struct sighand *sighand, bool *ignored_seen) {
+    sigset_t_ blocked = task_wake_blocked(current);
+    struct sigqueue *sigqueue;
+    struct sigqueue *best = NULL;
+    *ignored_seen = false;
+    list_for_each_entry(&current->queue, sigqueue, queue) {
+        if (sigset_has(blocked, sigqueue->info.sig))
+            continue;
+        if (signal_passed_over(sighand, sigqueue->info.sig)) {
+            *ignored_seen = true;
+            continue;
+        }
+        if (best == NULL || sigqueue->info.sig < best->info.sig)
+            best = sigqueue;
+    }
+    list_for_each_entry(&sighand->queue, sigqueue, queue) {
+        if (sigset_has(blocked, sigqueue->info.sig))
+            continue;
+        if (signal_passed_over(sighand, sigqueue->info.sig)) {
+            *ignored_seen = true;
+            continue;
+        }
+        if (best == NULL || sigqueue->info.sig < best->info.sig)
+            best = sigqueue;
+    }
+    return best;
+}
+
 // ERESTARTNOHAND: restart only if the interrupting signal ran no handler. This
 // is what poll/select/epoll_wait get -- SA_RESTART never rescues them, but a
 // job-control stop still must not surface as EINTR.
@@ -1789,12 +1872,14 @@ bool signal_should_restart_syscall_nohand(void) {
     if (current == NULL)
         return false;
 
+    bool ignored_woke = restart_ignored_wake_take();
     if (restart_flags_take(true))
         return true;
 
     struct sighand *sighand = current->sighand;
     lock(&sighand->lock, 0);
-    struct sigqueue *best = signal_next_deliverable_locked(sighand);
+    bool ignored_seen;
+    struct sigqueue *best = signal_deciding_locked(sighand, &ignored_seen);
     // A shim-held signal always runs a handler, whatever the kernel's
     // placeholder disposition claims -- and ERESTARTNOHAND is cancelled by a
     // handler running. Without this the placeholder for, say, a native
@@ -1803,22 +1888,25 @@ bool signal_should_restart_syscall_nohand(void) {
     //
     // A signal whose delivery decides (signal_restart_decided_at_delivery)
     // restarts too, like a stop; if a handler does run before the call
-    // re-executes, receive_signal cancels the restart. With no signal to
-    // deliver, what ended the wait may be a PTRACE_EVENT_STOP the task owes its
-    // tracer, and that stop runs no handler either.
-    bool stops = best != NULL ?
+    // re-executes, receive_signal cancels the restart. With nothing to deliver
+    // but ignored signals, no handler runs (signal_restarts_nohand), and the
+    // same if the ignored signal that ended the wait has been taken by a
+    // sibling since (restart_ignored_wake). With no signal at all, what ended
+    // the wait may be a PTRACE_EVENT_STOP the task owes its tracer, and that
+    // stop runs no handler either.
+    bool restart = best != NULL ?
         !signal_native_held(best->info.sig) &&
-            (signal_action(sighand, best->info.sig) == SIGNAL_STOP ||
-             signal_restart_decided_at_delivery(current, best->info.sig)) :
-        task_trap_stop_pending(current);
+            signal_restarts_nohand(current, sighand, best->info.sig) :
+        ignored_seen || ignored_woke || task_trap_stop_pending(current);
     unlock(&sighand->lock);
-    return stops;
+    return restart;
 }
 
 bool signal_should_restart_syscall(void) {
     if (current == NULL)
         return false;
 
+    bool ignored_woke = restart_ignored_wake_take();
     if (restart_flags_take(false))
         return true;
 
@@ -1828,19 +1916,23 @@ bool signal_should_restart_syscall(void) {
     // delivered) can be sitting on either queue -- current->queue for a
     // thread-targeted signal (deliver_signal_unlocked_locked, e.g. SIGWINCH
     // via send_signal) or sighand->queue for a process/group-targeted one
-    // (deliver_signal_to_group_locked, e.g. SIGCHLD via send_signal_to_group).
+    // (deliver_signal_to_group_locked, e.g. SIGCHLD via send_signal_to_process).
     // This used to only scan current->queue, so any group-directed signal
     // fell through to the "no restart" default even when its handler had
     // SA_RESTART_ set -- turning what should be a transparent kernel-level
     // restart into a real EINTR surfacing all the way into the guest.
-    struct sigqueue *best = signal_next_deliverable_locked(sighand);
+    bool ignored_seen;
+    struct sigqueue *best = signal_deciding_locked(sighand, &ignored_seen);
     if (best == NULL) {
         unlock(&sighand->lock);
-        // A PTRACE_EVENT_STOP the task owes its tracer ends a wait without any
-        // signal, and restarts the call like a stop does: no handler runs.
-        // Linux's read() interrupted by PTRACE_INTERRUPT returns the data that
-        // arrives after PTRACE_CONT; this returned EINTR.
-        return task_trap_stop_pending(current);
+        // Nothing to deliver but ignored signals, which run no handler and so
+        // restart the call (signal_restarts_nohand) -- or not even that, when
+        // a sibling has taken the ignored signal that ended the wait
+        // (restart_ignored_wake). Or no signal at all: a PTRACE_EVENT_STOP the
+        // task owes its tracer ends a wait without one, and restarts the call
+        // like a stop does. Linux's read() interrupted by PTRACE_INTERRUPT
+        // returns the data that arrives after PTRACE_CONT; this returned EINTR.
+        return ignored_seen || ignored_woke || task_trap_stop_pending(current);
     }
     int sig = best->info.sig;
     // A native program's handler, which the kernel is only holding a
@@ -1849,20 +1941,18 @@ bool signal_should_restart_syscall(void) {
         unlock(&sighand->lock);
         return signal_native_restarts(sig);
     }
-    // A signal a tracer will see before anything is delivered: restart, and
-    // let receive_signal cancel it if a handler without SA_RESTART runs first.
-    // See signal_restart_decided_at_delivery.
-    if (signal_restart_decided_at_delivery(current, sig)) {
+    // A stop, which resumes the syscall transparently, or a signal a tracer
+    // will see before anything is delivered: restart, and let receive_signal
+    // cancel it if a handler without SA_RESTART runs first. See
+    // signal_restart_decided_at_delivery.
+    if (signal_restarts_nohand(current, sighand, sig)) {
         unlock(&sighand->lock);
         return true;
     }
-    int action = signal_action(sighand, sig);
-    if (action != SIGNAL_CALL_HANDLER) {
-        // A stop resumes the syscall transparently; anything else with no
-        // handler either kills the task or should not have woken it.
-        bool stops = action == SIGNAL_STOP;
+    if (signal_action(sighand, sig) != SIGNAL_CALL_HANDLER) {
+        // No handler, and not a stop or ignored: it kills the task.
         unlock(&sighand->lock);
-        return stops;
+        return false;
     }
     bool restart = !!(sighand->action[sig].flags & SA_RESTART_);
     unlock(&sighand->lock);
@@ -2333,6 +2423,12 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         current->sleep_restart_valid = false;
         cancel_syscall_restart();
     }
+    // A timed futex wait keeps its deadline only across a restart nothing ran
+    // in front of (futex_restart_deadline). After a handler -- which Linux
+    // answers with EINTR for a timed wait, and this with a restart -- the
+    // restarted wait gets its whole timeout, and the handler's own futex calls
+    // or a longjmp out of it cannot pick up a deadline meant for another call.
+    current->futex_restart_timed = false;
 
     bool need_siginfo = action->flags & SA_SIGINFO_;
 
@@ -2725,7 +2821,7 @@ void receive_signals(void) {
                 best = sigqueue;
         }
         // Also drain the shared (process-directed) queue -- e.g. a SIGCHLD
-        // delivered via send_signal_to_group to a sibling thread of this
+        // delivered via send_signal_to_process to a sibling thread of this
         // process, see kernel/exit.c.
         list_for_each_entry(&sighand->queue, sigqueue, queue) {
             if (sigset_has(blocked, sigqueue->info.sig))

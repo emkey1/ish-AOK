@@ -269,10 +269,13 @@ static void *sleeper_thread(void *arg) {
     s->done = 1;
     // Parked, not returned. musl's pthread_exit blocks every signal while the
     // thread goes, and these all come due within milliseconds of the alarm()
-    // child's death: a sleeper exiting then makes the kernel queue that
+    // child's death: a sleeper exiting used to make the kernel queue that
     // child's SIGCHLD, which would otherwise be ignored, and the queued signal
-    // ends a sibling's wait with EINTR. That is a signal bug of its own (no
-    // handler runs, so Linux restarts the call), not one of these.
+    // ended a sibling's wait with EINTR. That was a signal bug of its own, and
+    // is fixed: only the thread a signal is sent to decides whether an ignored
+    // one is queued, and one that is queued runs no handler, so the call
+    // restarts, as on Linux (tests/manual/signal_ignored_restart.c). The
+    // sleepers still park, so this test depends on neither.
     for (;;)
         pause();
     return NULL;
@@ -698,10 +701,12 @@ int main(int argc, char **argv) {
                     // holds this process wherever it had got to -- musl's
                     // fork(), in the parent, with every signal blocked -- and an
                     // exit right after the resume queues a SIGCHLD for the
-                    // parent that would otherwise have been ignored, which ends
-                    // a sleeper's wait with EINTR. That is a signal bug of its
-                    // own (no handler runs, so Linux restarts the call), not
-                    // one of these, and not what this measures.
+                    // parent that would otherwise have been ignored. That ended
+                    // a sleeper's wait with EINTR, a signal bug of its own: no
+                    // handler runs, so the call restarts, as on Linux, and now
+                    // does here too (tests/manual/signal_ignored_restart.c).
+                    // The asker still parks, so none of it is in what this
+                    // measures.
                     for (;;)
                         pause();
                 }

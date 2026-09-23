@@ -221,6 +221,7 @@ fd_conventions.c
 proc_files.c
 signal_conventions.c
 signal_restart_record.c
+signal_ignored_restart.c
 dir_tmpfs.c
 futex_validation.c
 futex_timeout_duration.c

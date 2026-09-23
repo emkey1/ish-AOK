@@ -15,7 +15,7 @@
 // based process supervisor -- must still see the notification.
 //
 // This is a regression test for kernel/signal.c's shared `sighand->queue`/
-// `sighand->pending` (see send_signal_to_group / deliver_signal_to_group_locked)
+// `sighand->pending` (see send_signal_to_process / deliver_signal_to_group_locked)
 // and the corresponding signalfd_poll/signalfd_read/receive_signals/
 // signal_take_next_locked changes that drain it, not just the receiving
 // task's own per-thread queue.

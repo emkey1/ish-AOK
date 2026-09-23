@@ -288,7 +288,7 @@ static dword_t zombie_status(const struct task *task) {
 }
 
 // What an exit, or a reap, owes to other tasks: signals, which cannot be sent
-// under pids_lock because send_signal_to_group takes it, and released tasks,
+// under pids_lock because send_signal_to_process takes it, and released tasks,
 // which cannot be freed while the lists they were on are still being walked.
 // Collected under pids_lock and settled by exit_notes_settle after it.
 struct exit_signal_note {
@@ -343,8 +343,10 @@ static bool exit_notes_settle(struct exit_notes *notes, struct task *self) {
     for (size_t i = 0; i < notes->nsignals; i++) {
         struct exit_signal_note *note = &notes->signals[i];
         // Process-directed, as do_exit's own SIGCHLD is: whichever thread of
-        // the waiter is watching for it may take it.
-        send_signal_to_group(note->to->group, note->sig, note->info);
+        // the waiter is watching for it may take it. Sent to the waiting
+        // thread itself, whose mask alone decides whether an ignored SIGCHLD
+        // is queued.
+        send_signal_to_process(note->to, note->sig, note->info);
         task_ref_cnt_mod(note->to, -1);
     }
     if (notes->signals != notes->inline_signals)
@@ -1014,8 +1016,8 @@ noreturn void do_exit(struct task *task, int status) {
     }
 
     if (reparent_signal_parent != NULL) {
-        send_signal_to_group(reparent_signal_parent->group, SIGCHLD_,
-                             reparent_signal_info);
+        send_signal_to_process(reparent_signal_parent, SIGCHLD_,
+                               reparent_signal_info);
         task_ref_cnt_mod(reparent_signal_parent, -1);
     }
 

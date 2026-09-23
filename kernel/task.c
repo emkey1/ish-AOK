@@ -1226,6 +1226,7 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
     task->wait_interrupted = false;
     task->restart_interrupted_syscall = false;
     task->restart_interrupted_syscall_nohand = false;
+    task->restart_ignored_wake = false;
     task->poll_restart_valid = false;
     task->sleep_restart_valid = false;
     task->restart_nohand_pending = false;
@@ -1233,6 +1234,7 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
     task->futex_restart_futex = NULL;
     task->futex_restart_uaddr = 0;
     task->futex_restart_wake_seq = 0;
+    task->futex_restart_timed = false;
     task->poll_notify_fd = -1;
     lock_init(&task->waiting_cond_lock, "task_creat_wait\0");
     cond_init(&task->pause);

@@ -9,7 +9,7 @@
 // via a single early return covering both. sigset_has(pending, SIGCHLD) here
 // and the clearing of that bit in receive_signals() (when the parent actually
 // drains its queue) are not atomic with each other: if a second child exits
-// and calls send_signal_to_group(SIGCHLD) while the first occurrence's
+// and calls send_signal_to_process(SIGCHLD) while the first occurrence's
 // pending bit is still set -- because the parent hasn't gotten around to
 // receive_signals() yet, even though it was already woken once and may have
 // already gone back to sigsuspend() to wait for the *next* child -- that

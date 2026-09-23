@@ -615,6 +615,28 @@ struct task {
     // sleep_restart_valid. At the end for the reason given above
     // native_standin_child.
     uint_t sleep_restart_clock;
+
+    // A signal the process ignores, queued for the whole process, woke this
+    // task during this syscall (deliver_signal_to_group_locked). Every thread
+    // that can take it is woken and one takes it, while a wait parked in the
+    // host rather than on a cond_t records nothing -- so another's restart
+    // decision can find nothing pending and nothing recorded. This answers
+    // for it: the signal ran no handler, so the call restarts. It belongs to
+    // one syscall, like restart_interrupted_syscall
+    // (signal_restart_state_clear). At the end for the reason given above
+    // native_standin_child.
+    bool restart_ignored_wake;
+
+    // Linux's restart_block for a timed FUTEX_WAIT: the deadline the parked
+    // wait had (futex_restart_futex), and the relative timeout it was given,
+    // so that the restarted call -- the same futex, the same timeout --
+    // waits out the same deadline instead of its whole timeout again. Only
+    // for a restart nothing ran in front of: a handler clears it
+    // (receive_signal). Owned by the task itself. At the end for the reason
+    // given above native_standin_child.
+    struct timespec futex_restart_deadline;
+    struct timespec futex_restart_timeout;
+    bool futex_restart_timed;
 };
 
 // current will always give the process that is currently executing

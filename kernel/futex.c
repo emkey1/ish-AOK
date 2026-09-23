@@ -368,6 +368,7 @@ static void futex_clear_restart_park_locked(void) {
         futex_put_unlocked(current->futex_restart_futex);
         current->futex_restart_futex = NULL;
     }
+    current->futex_restart_timed = false;
 }
 void futex_release_restart_park(void) {
     if (current == NULL || current->futex_restart_futex == NULL)
@@ -393,10 +394,17 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
     // and would otherwise have been lost -- honor it now. (FUTEX_WAIT is
     // permitted to wake spuriously, so this can never fabricate a stolen wake
     // for another waiter: the wake still dequeued only truly-queued waiters.)
+    // A timed wait parks its deadline too, for the restart to keep (below).
+    bool resumed_timed = false;
+    struct timespec resumed_deadline = {}, resumed_timeout = {};
     if (current->futex_restart_futex != NULL) {
         if (current->futex_restart_futex == futex) {
             futex_put_unlocked(futex); // drop the redundant get ref; the pinned ref remains
             uint64_t parked_seq = current->futex_restart_wake_seq;
+            resumed_timed = current->futex_restart_timed;
+            resumed_deadline = current->futex_restart_deadline;
+            resumed_timeout = current->futex_restart_timeout;
+            current->futex_restart_timed = false;
             current->futex_restart_futex = NULL; // consume the park; `futex` is now our ref
             if (futex->wake_seq != parked_seq) {
                 futex_trace(FUTEX_EV_RESUME, uaddr, 1);
@@ -425,8 +433,21 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
             .tv_nsec = 50000000,
         };
         struct timespec deadline = {};
-        if (timeout != NULL)
-            deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), *timeout);
+        // The restart of a timed wait keeps the deadline it had, as Linux's
+        // futex_wait_restart does, rather than starting its relative timeout
+        // over: musl's timed waits (pthread_cond_timedwait, sem_timedwait) are
+        // FUTEX_WAIT with a relative timeout, and a 2 s one restarted 1 s in
+        // timed out at 3 s (tests/manual/signal_ignored_restart.c). Only for
+        // the call that was parked, with the same timeout. An absolute
+        // FUTEX_WAIT_BITSET deadline arrives here already converted, so its
+        // restart gets a different timeout and needs none of this.
+        if (timeout != NULL) {
+            if (resumed_timed && resumed_timeout.tv_sec == timeout->tv_sec &&
+                    resumed_timeout.tv_nsec == timeout->tv_nsec)
+                deadline = resumed_deadline;
+            else
+                deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), *timeout);
+        }
         // ISH_FUTEX_HEAP_WAIT=1: take this object off the stack. It is
         // published on a shared queue and every wake path runs
         // pthread_cond_broadcast over it, so on the stack it aliases the very
@@ -522,6 +543,11 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
             current->futex_restart_futex = futex;
             current->futex_restart_uaddr = uaddr;
             current->futex_restart_wake_seq = futex->wake_seq;
+            current->futex_restart_timed = timeout != NULL;
+            if (timeout != NULL) {
+                current->futex_restart_deadline = deadline;
+                current->futex_restart_timeout = *timeout;
+            }
             futex_trace(FUTEX_EV_PARK, uaddr, 0);
             unlock(&futex_lock); // release the lock but KEEP the pinned ref
             STRACE("%d park futex(FUTEX_WAIT) for restart", current->pid);

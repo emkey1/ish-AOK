@@ -1207,6 +1207,10 @@ now also fails a sleep or poll-family case that returns late.
   SO_RCVTIMEO/SO_SNDTIMEO wait, and clock_nanosleep on a CPU clock. Each needs
   a deadline carried the way `sleep_restart_deadline` carries one (Linux's
   restart_block). kernel/calls.c's `syscall_result_should_restart` names them.
+  A relative FUTEX_WAIT does now keep its deadline across a restart nothing
+  ran in front of -- a stop, an ignored signal (`futex_restart_deadline`,
+  parked with the wait) -- but a freeze answers "no restart" from the signal
+  side, which drops the park, so it still starts over there.
 - **The CPU-time clocks start again from zero after a restore.** A restored
   thread is a new host thread, so CLOCK_PROCESS_CPUTIME_ID,
   CLOCK_THREAD_CPUTIME_ID, getrusage, times() and /proc/<pid>/stat's
@@ -1225,15 +1229,17 @@ now also fails a sleep or poll-family case that returns late.
   involved), where nanosleep and clock_nanosleep with the same value sleep --
   poll_wait's deadline arithmetic overflows. A NULL timeout is the usual way to
   say "for ever", so nothing common hits it.
-- **Found alongside, not a checkpoint bug:** a signal whose delivery runs no
-  handler (SIGCHLD with SIG_DFL) ends a restartable wait with EINTR, where
-  Linux restarts the call; and `deliver_signal_to_group_locked` queues such a
-  signal whenever ANY member blocks it, where Linux asks only the target.
-  musl's fork() and pthread_exit block every signal, so a child dying while a
-  sibling thread exits EINTRs the other threads' sleeps -- measured with no
-  checkpoint, on both libcs; Linux 6.12 completes them. A chip was filed.
-  `checkpoint_timers.c` parks its threads and its asker instead of letting them
-  exit, so it does not depend on this.
+- **Found alongside, not a checkpoint bug -- FIXED 2026-09-23:** a signal
+  whose delivery runs no handler (SIGCHLD with SIG_DFL) ended a restartable
+  wait with EINTR, where Linux restarts the call; and
+  `deliver_signal_to_group_locked` queued such a signal whenever ANY member
+  blocked it, where Linux asks only the target. musl's fork() and pthread_exit
+  block every signal, so a child dying while a sibling thread exited EINTR'd
+  the other threads' sleeps. Now only the target's mask decides, and an ignored
+  signal restarts what it interrupts, even when a sibling took it first
+  (kernel/signal.c; `tests/manual/signal_ignored_restart.c`).
+  `checkpoint_timers.c` still parks its threads and its asker, so it depends
+  on neither.
 
 ## Suspend and resume across the three modes
 

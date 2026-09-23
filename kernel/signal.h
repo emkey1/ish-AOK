@@ -209,7 +209,9 @@ void deliver_signal(struct task *task, int sig, struct siginfo_ info);
 // PARENT's pthread, copied by task_create_. The task takes the signal before
 // its first instruction only if its start path looks for one (task_thread).
 void signal_queue_before_start(struct task *task, int sig, struct siginfo_ info);
-// true when the next unblocked pending signal would run a handler with SA_RESTART
+// true when the syscall a signal interrupted restarts: the next deliverable
+// signal runs a handler with SA_RESTART, or runs none at all (a stop, or only
+// ignored signals)
 bool signal_should_restart_syscall(void);
 // Forget what an earlier syscall's interruption left for a restart: the answer
 // a signal recorded when it interrupted a wait (restart_interrupted_syscall),
@@ -328,7 +330,7 @@ struct sighand {
     // wake_waiting_task can itself block on an unrelated lock (see its own
     // comments) and holding `lock` across that risks an ABBA deadlock against
     // code elsewhere that must take locks in the other order (e.g. pids_lock ->
-    // `lock`, never the reverse -- see send_signal_to_group). But that leaves a
+    // `lock`, never the reverse -- see send_process_signal). But that leaves a
     // real window where `lock` is genuinely, fully unlocked despite the "caller
     // holds sighand->lock" contract -- a second, concurrent deliver_signal_*
     // call for the same sighand (e.g. two children exiting at once, each
@@ -363,13 +365,20 @@ int signal_action(struct sighand *sighand, int sig);
 bool signal_stops_for_tracer(struct task *task, int sig);
 void deliver_signal_with_sighand(struct task *task, struct sighand *sighand, int sig, struct siginfo_ info);
 struct tgroup;
-// Deliver a process-directed signal to a thread group: enqueues into the
-// shared sighand->queue (visible to any sibling thread's signalfd/
+// Deliver a process-directed signal to `task`'s thread group: enqueues into
+// the shared sighand->queue (visible to any sibling thread's signalfd/
 // sigwaitinfo/receive_signals, matching Linux's shared_pending) and wakes
 // every live thread in the group so whichever one can currently accept it
 // re-checks. Use for signals conceptually addressed to "the process" (e.g.
 // SIGCHLD to a possibly-multithreaded parent) rather than to one specific
 // thread (tkill/tgkill/synchronous traps stay on send_signal/deliver_signal).
+//
+// `task` is the thread it is sent to, and only its mask decides whether a
+// signal the process ignores is queued at all, as on Linux: for a child's exit
+// that is the thread that forked it. The caller holds a reference on `task`.
+void send_signal_to_process(struct task *task, int sig, struct siginfo_ info);
+// The same, sent to the group's leader, which is where Linux sends an interval
+// timer's signal (it_real_fn's leader_pid).
 void send_signal_to_group(struct tgroup *group, int sig, struct siginfo_ info);
 
 dword_t sys_rt_sigaction(dword_t signum, addr_t action_addr, addr_t oldaction_addr, dword_t sigset_size);
