@@ -23,7 +23,7 @@ the work that has to happen around it.
 | § | item | state |
 |---|---|---|
 | 1 | i386 `lock not` / `lock neg` | **FIXED** in `e6940313` |
-| 2 | iosfs new-API mount persistence | **FIXED** in `1ea88a79`, simulator-verified; **device proof outstanding** |
+| 2 | iosfs new-API mount persistence | **FIXED** in `1ea88a79`, proven on the M4 iPad |
 | 3 | POLLHUP without POLLIN | **FIXED** in `601404a6`: it had NOT gone stale, see §3 |
 | 4 | `tty_hangup_signal` device flake | **open**: waits for the 556 device suite run |
 | 5 | Launcher applets in `top` | **DECIDED**: not processes, listed in `/proc/ish/applets` (`3c4e085e`) |
@@ -73,7 +73,14 @@ shared by every i386 atomic, so a mistake there breaks all of them.
 
 ## 2. An iosfs mount made through the new mount API does not persist
 
-**FIXED in `1ea88a79`; the device proof below is still owed.**
+**FIXED in `1ea88a79`, and PROVEN on the M4 iPad (2026-09-24)** with the
+exact steps below. On Devuan, util-linux 2.41.5 `mount -t ios` went fsopen,
+fsmount, move_mount (`LIBMOUNT_DEBUG=hook,cxt`), and the user picked iCloud
+Drive, which landed at `/mnt/icloud556`. The app was relaunched, the saved
+session deleted, and the guest booted fresh (uptime 10 s). The mount was back
+at `/mnt/icloud556` with its contents, and `/.ish-fsmount` appeared 0 times in
+`/proc/mounts` and mountinfo, before and after. It was unmounted afterwards,
+which also drops its bookmark.
 `fs_ops.relocated(mount, old_point, new_point)` is called from BOTH move
 paths, `mount_relocate` and classic `MS_MOVE`, after `mounts_lock` is
 dropped, holding a reference. iosfs keeps a staged bookmark in a
