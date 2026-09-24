@@ -1789,6 +1789,34 @@ static void ProvisionGuestHostFiles(void) {
     // keeps exactly what it has.
     EnsureRegularFileNonEmpty("/etc/environment", "LANG=C.UTF-8\n", 0644);
 
+    // /AOK/persist/bin on a login shell's PATH. BootEnvironmentForCommand puts
+    // it first, but that PATH never reaches the terminal: "/bin/login -f root"
+    // builds a fresh environment and the login shell's /etc/profile then sets
+    // PATH outright (Alpine and Devuan alike). So in the app's own terminals
+    // `ws-wayland`, `ws-clock` and every program a user dropped into
+    // /AOK/persist/bin answered "not found". Every distro's /etc/profile sources
+    // /etc/profile.d/*.sh after setting PATH, which makes this the one place that
+    // reaches app terminals, ssh logins and `su -` in every root. "10" sorts after
+    // native-links.sh's 05 snippet, so the user's own programs stay first, as in
+    // the app's PATH. Written only when missing or empty; a user who wants it gone
+    // replaces the contents with a comment. Non-login contexts (cron, init
+    // services, `ssh host cmd`) and zsh, which never reads /etc/profile.d, are
+    // what /AOK/tools/persist-links.sh is for.
+    struct statbuf profileDir;
+    if (generic_statat(AT_PWD, "/etc/profile.d", &profileDir, 0) >= 0 && S_ISDIR(profileDir.mode)) {
+        EnsureRegularFileNonEmpty("/etc/profile.d/10-aok-persist-bin.sh",
+            "# Written by iSH-AOK: puts /AOK/persist/bin (your own programs, and the\n"
+            "# ws-* Workspace launchers) first on PATH in login shells. Rewritten only\n"
+            "# when missing or empty; to turn it off, replace this with a comment.\n"
+            "if [ -d /AOK/persist/bin ]; then\n"
+            "    case \":$PATH:\" in\n"
+            "        *:/AOK/persist/bin:*) ;;\n"
+            "        *) PATH=\"/AOK/persist/bin:$PATH\"; export PATH ;;\n"
+            "    esac\n"
+            "fi\n",
+            0644);
+    }
+
     // The clock's zone, which a root ships as UTC or not at all.
     ProvisionGuestTimeZone();
 
@@ -1912,14 +1940,27 @@ static void ISHWriteWorkspaceLaunchers(NSURL *binURL) {
     // the user, so anything of theirs that happens to share a name is left
     // alone rather than silently replaced.
     static NSString *const marker = @"# iSH-AOK Workspace launcher -- generated, edits are overwritten";
-    NSArray<NSString *> *tools = @[@"motepad", @"filemanager", @"markdown", @"imageviewer",
-                                   @"videoplayer", @"audio", @"browser", @"llm",
-                                   @"filesystems", @"storage", @"monitor", @"networks",
-                                   @"status", @"settings", @"themes", @"launcher",
-                                   @"clock", @"info", @"diagnostics", @"sessions"];
-    for (NSString *tool in tools) {
+    // Launcher name -> the tool name /proc/ish/workspace takes. Mostly the
+    // same word. Three applets were renamed on screen after their tool names
+    // were fixed, and a user looks for the name they see: the Wayland applet
+    // is the tool "display", Desktops is "workspaces" and Quick Actions is
+    // "shortcuts". Each is on the bridge's list (ISHWorkspaceOpenableToolIdentifiers
+    // in WorkspaceViewController.m); a launcher for a tool that is not would
+    // only ever print EINVAL.
+    NSDictionary<NSString *, NSString *> *launchers = @{
+        @"motepad": @"motepad", @"filemanager": @"filemanager", @"markdown": @"markdown",
+        @"imageviewer": @"imageviewer", @"videoplayer": @"videoplayer", @"audio": @"audio",
+        @"browser": @"browser", @"llm": @"llm", @"filesystems": @"filesystems",
+        @"storage": @"storage", @"monitor": @"monitor", @"networks": @"networks",
+        @"status": @"status", @"settings": @"settings", @"themes": @"themes",
+        @"launcher": @"launcher", @"clock": @"clock", @"info": @"info",
+        @"diagnostics": @"diagnostics", @"sessions": @"sessions",
+        @"wayland": @"display", @"desktops": @"workspaces", @"quickactions": @"shortcuts",
+    };
+    for (NSString *name in [launchers.allKeys sortedArrayUsingSelector:@selector(compare:)]) {
+        NSString *tool = launchers[name];
         NSURL *url = [binURL URLByAppendingPathComponent:
-            [NSString stringWithFormat:@"ws-%@", tool]];
+            [NSString stringWithFormat:@"ws-%@", name]];
         NSString *existing = [NSString stringWithContentsOfURL:url
                                                       encoding:NSUTF8StringEncoding error:NULL];
         if (existing != nil && ![existing containsString:marker])
@@ -1941,11 +1982,11 @@ static void ISHWriteWorkspaceLaunchers(NSURL *binURL) {
             @"    printf 'open %@ %%s\\n' \"$p\" > /proc/ish/workspace\n"
             @"else\n"
             @"    printf 'open %@\\n' > /proc/ish/workspace\n"
-            @"fi\n", marker, tool, tool, tool];
+            @"fi\n", marker, name, tool, tool];
         NSError *writeError = nil;
         if (![script writeToURL:url atomically:YES
                        encoding:NSUTF8StringEncoding error:&writeError]) {
-            NSLog(@"Could not write Workspace launcher ws-%@: %@", tool, writeError);
+            NSLog(@"Could not write Workspace launcher ws-%@: %@", name, writeError);
             continue;
         }
         chmod(url.fileSystemRepresentation, 0755);

@@ -176,7 +176,9 @@ static NSArray<NSString *> *ISHWorkspaceOpenableToolIdentifiers(void) {
                   ISHWorkspaceToolStatusIdentifier, ISHWorkspaceToolSettingsIdentifier,
                   ISHWorkspaceToolThemesIdentifier, ISHWorkspaceToolLauncherIdentifier,
                   ISHWorkspaceToolClockIdentifier, ISHWorkspaceToolInfoIdentifier,
-                  ISHWorkspaceToolDiagnosticsIdentifier, ISHWorkspaceToolSessionsIdentifier];
+                  ISHWorkspaceToolDiagnosticsIdentifier, ISHWorkspaceToolSessionsIdentifier,
+                  ISHWorkspaceToolDisplayIdentifier, ISHWorkspaceToolWorkspacesIdentifier,
+                  ISHWorkspaceToolShortcutsIdentifier];
     });
     return tools;
 }
@@ -16039,6 +16041,15 @@ static int ISHWorkspaceOpenImpl(const char *request) {
         WorkspaceViewController *workspace = ISHWorkspaceActiveController;
         if (workspace == nil)
             return;
+        // Wayland is one desktop session, not a document window:
+        // start-wayland.sh runs one session at a time and refuses a second,
+        // so a second window would only show that refusal. It is brought
+        // forward the way the dock and the Launcher bring it forward, and a
+        // path, which it has no use for, is ignored.
+        if ([tool isEqualToString:ISHWorkspaceToolDisplayIdentifier]) {
+            [workspace openOrFocusWorkspaceToolIdentifier:tool];
+            return;
+        }
         if (path != nil)
             [workspace openWorkspaceToolWithIdentifier:tool fileGuestPath:path];
         else
