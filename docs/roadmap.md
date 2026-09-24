@@ -512,7 +512,7 @@ tracee's own syscall-stop first, so it detached leaving the trap queued. Two
 smaller bugs went with it: `waitpid(<tid>, __WALL)` on a traced non-leader hung
 (the gdb half), and `ptrace.seized` was never cleared on detach. The
 measurements, the two wrong diagnoses on the way, and what is still open are in
-[docs/build_555_musts.md](build_555_musts.md) §1;
+[docs/historical/build_555_musts.md](historical/build_555_musts.md) §1;
 [#503](https://github.com/emkey1/ish-AOK/issues/503) -- the amd64 cousin -- and
 [#541](https://github.com/emkey1/ish-AOK/issues/541) are both closed.
 

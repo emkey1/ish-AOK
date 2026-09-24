@@ -13,8 +13,9 @@ archive.
 | file | what it is | superseded by |
 | --- | --- | --- |
 | [upstream-ish-changelog.md](upstream-ish-changelog.md) | upstream iSH's own TestFlight-era release notes, builds 33–48, cited by the book as a primary source | nothing; upstream stopped updating it before this fork existed |
-| [build_553_musts.md](build_553_musts.md) | the deferred-work list written during the 552 release run, for build 553 | `docs/build_555_musts.md` |
-| [build_554_musts.md](build_554_musts.md) | the deferred-work list written during the 553 release run, for build 554 | `docs/build_555_musts.md`, which records that three of this file's ten open entries were already fixed and a fourth had a diagnosis that does not reproduce |
+| [build_553_musts.md](build_553_musts.md) | the deferred-work list written during the 552 release run, for build 553 | [build_555_musts.md](build_555_musts.md) |
+| [build_554_musts.md](build_554_musts.md) | the deferred-work list written during the 553 release run, for build 554 | [build_555_musts.md](build_555_musts.md), which records that three of this file's ten open entries were already fixed and a fourth had a diagnosis that does not reproduce |
+| [build_555_musts.md](build_555_musts.md) | the deferred-work list written during the 554 release run, for build 555 | `docs/build_556_musts.md`, which re-checked its six open entries on 2026-09-24 and found one (§4, POLLHUP) no longer diverging |
 | [todo-closed-549-550.md](todo-closed-549-550.md) | the closed entries from `docs/TODO.md`'s 549 and 550 cycles, split out on 2026-09-07 when they had grown to two thirds of that file | nothing; they are closed |
 
 ## The `build_<N>_musts.md` series

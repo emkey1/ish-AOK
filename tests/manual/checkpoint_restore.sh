@@ -664,7 +664,7 @@ esac
 #    itself, so a select-based check passes even when POLLIN is missing and
 #    every poll()-based program is left waiting. Measured at 0x18
 #    (POLLHUP|POLLERR) before the ckpt_hungup arm in sock_poll existed.
-#    docs/build_555_musts.md item 4 asks for exactly this assertion.
+#    docs/historical/build_555_musts.md item 4 asks for exactly this assertion.
 PIMG=${TMPDIR:-/tmp}/aok-ckpt-poll-$$.img
 PPORT=34523
 rm -f "$PIMG"

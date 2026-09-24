@@ -252,7 +252,7 @@ would find it**, usually in `docs/TODO.md`, usually with a measurement, often
 with the designs that were rejected and why.
 
 The 552 release added a second such file, and every release since has kept the
-habit: `docs/build_555_musts.md` carries the work deferred out of 554 with the
+habit: `docs/build_556_musts.md` carries the work deferred out of 555 with the
 diagnosis already done, so nobody has to re-derive it. Each entry says what is
 established, what the next step is, and how to prove it afterwards.
 
@@ -278,7 +278,7 @@ first.
 
 *Anchors:* [docs/TODO.md](../../docs/TODO.md) ("Diagnosed, not fixed",
 "Deferred on purpose", "Native program candidates", "Reported issues"),
-[docs/build_555_musts.md](../../docs/build_555_musts.md),
+[docs/build_556_musts.md](../../docs/build_556_musts.md),
 [emu/memory.h](../../emu/memory.h) (`P_EXEC`), [fs/real.c](../../fs/real.c)
 (`realfs_getflags`, `realfs_read`), [emu/amd64_interp.c](../../emu/amd64_interp.c),
 [jit/jit.c](../../jit/jit.c) (the `as` bypass), [fs/fuse.c](../../fs/fuse.c),

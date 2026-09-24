@@ -1,4 +1,15 @@
-# build 555 musts
+# build 555 musts (archived, not maintained)
+
+**This file is history.** It is the deferred-work list written during the 554
+release run for build 555. It is kept because 556's list records what happened
+to each entry, and the reasoning is worth being able to check. Nothing adds to
+it.
+
+The live list is `docs/build_556_musts.md`. §1 here was fixed during 555. §2–§7
+were re-checked on 2026-09-24 and carried there, and §4 no longer diverges.
+
+---
+
 
 Work carried out of 554, with the diagnosis already done so nobody has to
 re-derive it. Each entry says what is **established**, what the **next step**

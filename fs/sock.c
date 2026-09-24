@@ -9775,7 +9775,7 @@ static int sock_poll(struct fd *fd) {
     // alongside POLL_HUP. Without it a program that waits for POLLIN before
     // reading never reads the end-of-file it is being told about -- measured
     // as revents 0x18 on a restored socket, the failure
-    // docs/build_555_musts.md item 4 describes. Placed ahead of the
+    // docs/historical/build_555_musts.md item 4 describes. Placed ahead of the
     // half-close discriminator below on purpose: there is no live peer to ask
     // with a zero-length send, and no half-close to tell apart.
     if (fd->socket.ckpt_hungup)
@@ -10604,7 +10604,7 @@ static struct fd *sock_ckpt_hungup_fd(const struct sock_ckpt_desc *desc, int *er
     // wants the guest to read. Measured: with conn_dead set, poll returned
     // 0x18 (HUP|ERR) and a program waiting for POLLIN before reading never
     // read the EOF it was being told about -- the exact failure
-    // docs/build_555_musts.md item 4 describes.
+    // docs/historical/build_555_musts.md item 4 describes.
     return fd;
 }
 

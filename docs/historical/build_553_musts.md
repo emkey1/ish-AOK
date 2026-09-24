@@ -4,8 +4,9 @@
 release run for build 553, kept because 553's own list records what this one
 got wrong and the reasoning is worth being able to check. Nothing adds to it.
 
-The live list is `docs/build_555_musts.md`. Items here that are still open were
-carried forward into it; items that are closed are listed in its *Closed in 553*
+Its successor was `docs/historical/build_555_musts.md` (the live list is now
+`docs/build_556_musts.md`). Items here that were still open were carried forward
+into 555's; items that are closed are listed in its *Closed in 553*
 section — including this file's amd64-atomics entry, whose diagnosis was
 materially incomplete: it asserted that every eligibility predicate in the amd64
 JIT rejects the lock prefix. One does not, and the family it compiles was losing
