@@ -24,8 +24,8 @@ the work that has to happen around it.
 |---|---|---|
 | 1 | i386 `lock not` / `lock neg` | **FIXED** in `e6940313` |
 | 2 | iosfs new-API mount persistence | **FIXED** in `1ea88a79`, proven on the M4 iPad |
-| 3 | POLLHUP without POLLIN | **FIXED** in `601404a6`: it had NOT gone stale, see §3 |
-| 4 | `tty_hangup_signal` device flake | **open**: waits for the 556 device suite run |
+| 3 | POLLHUP without POLLIN | **FIXED** in `601404a6`: it had NOT gone stale, see §3. The dgram and own-SHUT_WR divergences found there: **FIXED** in `d3daf2ee` |
+| 4 | `tty_hangup_signal` device flake | **DONE**: PASS in the 556 device suite run (M4 iPad) |
 | 5 | Launcher applets in `top` | **DECIDED**: not processes, listed in `/proc/ish/applets` (`3c4e085e`) |
 | 6 | RLIMIT_STACK push-down | **DECIDED** "implement", **FIXED** in `05d6ae19` |
 
@@ -46,10 +46,13 @@ atomics set on alpine-i386, alpine-amd64 and devuan-amd64, and the full i386
 leg on the final tree, 269 pass and 0 fail, as is arm64 at 264 and 0. An
 earlier run under a load average of ~140 failed five clock, timer, rusage
 and watchdog tests. All five pass alone, on the new binary and on the
-baseline, in interleaved runs. **Found on the way, not fixed:** on an x86_64 HOST
-(Linux CI, never the app), `lock sbbl` ignores its carry-in, 80000 short in
-the contended test. That predates this. `setf_a`'s `orl` between the `btw`
-that loads CF and the `sbb` looks like the cause.
+baseline, in interleaved runs. **Found on the way, FIXED since in `f81591fb`:** on
+an x86_64 HOST (Linux CI, never the app), `lock adc`/`lock sbb` ran with
+carry-in 0, 80000 short in the contended test. `setf_a`'s `orl` between the
+`btw` that loaded CF and the `sbb` was the cause; CF is now snapshotted outside
+the CAS loop, as on aarch64. The same commit fixes that host's `cmpxchg` AF
+(`seta` shifted into bit 4, 976 failures in `atomic_cmpxchg32`), and the
+contended test now also runs `stc; lock adcl`, which nothing covered before.
 
 *Carried from 555 §2.* **Re-verified 2026-09-24.** The i386 `LOCK` table in
 `emu/decode.h` (the `case 0xf0:` block, ending at its `default: ... UNDEFINED`)
@@ -152,6 +155,20 @@ where Linux says OUT (0x4): the zero-length-send discriminator in `sock_poll`
 cannot tell our half-close from the peer's close. Neither is a regression, and
 neither was fixed here.
 
+**Both FIXED in `d3daf2ee`.** The dgram cause was not `sock_translate_err`
+(`conn_dead` never got set): Darwin leaves ECONNRESET in the survivor's
+`so_error`, and that read-and-clear error went to whichever observer looked
+FIRST. So "`poll(POLLIN)` agrees" above was luck of ordering: asked first, it
+said 0x1 too, and SO_ERROR said 104. Every place that takes the error off the
+host now drops it. Sends diverged as well (Linux: ECONNREFUSED once, then
+ENOTCONN, and a `sendto()` to a live address is delivered) and now match. For
+our own SHUT_WR, `sock_poll` asks the read side first with a host poll for
+POLLIN alone. `poll_shutwr_dgram` asserts all of it exactly, with a positive
+control for each, through poll and epoll, fresh and blocked, with a CPU-cost
+check on every blocked wait. Linux (camd) passes it, the old binary fails 75
+checks, and `poll_rdhup_bounds`, `poll_idle_cpu`, `sock_conn_error` and
+`sock_conformance` still pass.
+
 *Carried from 555 §4.* **Re-measured 2026-09-24 on devuan-amd64-test:** on a
 `SOCK_STREAM` unix socketpair whose peer has closed, `poll(POLLIN)` returns
 `revents=0x11` (POLLIN|POLLHUP). That is Linux 6.12's value. The `0x10` that
@@ -175,8 +192,14 @@ the CPU-cost check that the `conn_dead` arm exists to protect.
 
 ## 4. `tty_hangup_signal` failed once on device, under suite load
 
-**Open: waiting for the 556 device suite run.** Nothing to change unless it
-fails there.
+**DONE 2026-09-24: PASS in the 556 device suite run** on the M4 iPad (booted
+Devuan aarch64 root, uid 1000; kernel built 2026-09-24 11:29Z, carrying all
+five fixes above): 249 pass, 0 fail, suite
+exit 0. The first attempt was started under `nohup`, the launcher mistake 555
+had already made. With SIGHUP ignored, `tty_hangup_signal` SKIPped and
+`orphan_pgrp_wait` failed 7 checks. That was the harness, not the kernel:
+restarted with `setsid` alone, both pass. `orphan_pgrp_wait` now resets SIGHUP
+to its default itself (`ac869ac4`), so it can no longer be fooled that way.
 
 *Carried from 555 §5.* It failed in the 553 device suite run ("still alive 6s
 after the hangup"), then passed 3 of 3 standalone on the same device minutes

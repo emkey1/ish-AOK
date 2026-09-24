@@ -326,6 +326,7 @@ int main(int argc, char **argv) {
     double mono = clock_read(CLOCK_MONOTONIC);
     double raw = clock_read(CLOCK_MONOTONIC_RAW);
     double coarse = clock_read(CLOCK_MONOTONIC_COARSE);
+    double mono1 = clock_read(CLOCK_MONOTONIC);
     double up = read_uptime();
     double boot1 = clock_read(CLOCK_BOOTTIME);
     double real = clock_read(CLOCK_REALTIME);
@@ -333,8 +334,8 @@ int main(int argc, char **argv) {
     // /proc/uptime truncates to hundredths; nothing else here needs slack.
     const double eps = 0.02;
 
-    test_logf("BOOTTIME %.6f  MONOTONIC %.6f  /proc/uptime %.6f  btime %ld\n",
-              boot0, mono, up, btime);
+    test_logf("BOOTTIME %.6f  MONOTONIC %.6f  RAW %.6f (%+.6f)  /proc/uptime %.6f  btime %ld\n",
+              boot0, mono, raw, raw - mono, up, btime);
 
     if (up < 0 || btime <= 0) {
         failf("read /proc/uptime and btime", 0, 0, 0, 1, 0, 0);
@@ -359,44 +360,69 @@ int main(int argc, char **argv) {
               ms(up < boot0 ? up - boot0 : up - boot1), 0, 0, 0, 0, 0);
     }
 
-    // Every other boot-relative clock was read inside the same bracket, so
-    // none of them may read LATER than the guest's uptime. That is the
-    // direction the bug went -- all of them reported the host's uptime, which
-    // is necessarily larger -- and it is also Linux's ordering rule for
+    // CLOCK_MONOTONIC was read inside the same bracket, so it may not read
+    // LATER than the guest's uptime. That is the direction the bug went --
+    // every boot-relative clock reported the host's uptime, which is
+    // necessarily larger -- and it is also Linux's ordering rule for
     // MONOTONIC against BOOTTIME.
     //
-    // No tight lower bound on these: CLOCK_MONOTONIC is the one clock that
-    // legitimately falls BEHIND uptime, by however long the host spent
-    // suspended during the guest's life, and Linux promises only
-    // MONOTONIC <= BOOTTIME. What stops a clock stuck near zero from passing
-    // is the rate and monotonicity check below, not a floor here.
-    //
-    // CLOCK_MONOTONIC_RAW is checked separately from CLOCK_MONOTONIC on
-    // purpose: it is unslewed, and had drifted 2.04 s from CLOCK_MONOTONIC
-    // over 14.6 days of host uptime, so it needs an origin of its own rather
-    // than a share of another clock's.
-    static const char *const boot_relative_name[] = {
-        "CLOCK_MONOTONIC", "CLOCK_MONOTONIC_RAW", "CLOCK_MONOTONIC_COARSE",
-    };
-    const double boot_relative_value[] = { mono, raw, coarse };
-    for (size_t i = 0; i < sizeof(boot_relative_value) / sizeof(boot_relative_value[0]); i++) {
-        double v = boot_relative_value[i];
-        if (v < 0)
-            continue;                       // this guest has no such clock
-        if (v > boot1 + eps) {
-            test_log_if(1, "  %s %.6f is past the guest's uptime %.6f (by %.1f days)\n",
-                        boot_relative_name[i], v, boot1, (v - boot1) / 86400.0);
-            failf("a boot-relative clock is not past uptime (ms over)",
-                  ms(v - boot1), (uint64_t) i, 0, 0, 0, 0);
-        }
+    // No tight lower bound: CLOCK_MONOTONIC legitimately falls BEHIND uptime,
+    // by however long the host spent suspended during the guest's life (or a
+    // checkpoint sat on disk), and Linux promises only MONOTONIC <= BOOTTIME.
+    // What stops a clock stuck near zero from passing is the rate and
+    // monotonicity check below, not a floor here.
+    if (mono1 > boot1 + eps) {
+        test_log_if(1, "  CLOCK_MONOTONIC %.6f is past the guest's uptime %.6f (by %.1f days)\n",
+                    mono1, boot1, (mono1 - boot1) / 86400.0);
+        failf("a boot-relative clock is not past uptime (ms over)",
+              ms(mono1 - boot1), 0, 0, 0, 0, 0);
     }
-    // CLOCK_MONOTONIC_RAW and _COARSE track uptime closely within one guest's
-    // life -- only slew separates them, which is milliseconds over seconds.
-    // (Bounded against boot0, which they were read after.)
-    if (raw >= 0 && raw < boot0 - 1.0)
-        failf("CLOCK_MONOTONIC_RAW is boot-relative (ms short)", ms(boot0 - raw), 0, 0, 0, 0, 0);
-    if (coarse >= 0 && coarse < boot0 - 1.0)
-        failf("CLOCK_MONOTONIC_COARSE is boot-relative (ms short)", ms(boot0 - coarse), 0, 0, 0, 0, 0);
+
+    // CLOCK_MONOTONIC_COARSE is CLOCK_MONOTONIC as of the last tick, so it
+    // lies between the two CLOCK_MONOTONIC reads around it, less up to one
+    // tick at the bottom (10 ms at Linux's slowest HZ). Uptime does not bound
+    // it from below, for the same reason it does not bound CLOCK_MONOTONIC.
+    if (coarse >= 0 && (coarse < mono - eps || coarse > mono1 + eps)) {
+        test_log_if(1, "  CLOCK_MONOTONIC_COARSE %.6f is outside CLOCK_MONOTONIC [%.6f, %.6f]\n",
+                    coarse, mono, mono1);
+        failf("CLOCK_MONOTONIC_COARSE is CLOCK_MONOTONIC to a tick (ms off)",
+              ms(coarse < mono ? mono - coarse : coarse - mono1), 0, 0, 0, 0, 0);
+    }
+
+    // CLOCK_MONOTONIC_RAW is held to CLOCK_MONOTONIC, the clock Linux keeps
+    // it with: both start at boot and both stop across suspend, and all that
+    // separates them is that NTP steers MONOTONIC while RAW is the counter
+    // unslewed. So they drift apart, and Linux has no RAW <= BOOTTIME rule --
+    // RAW reads ahead of uptime whenever the counter runs fast. An earlier
+    // version held it to uptime + 20 ms and failed every leg of the parallel
+    // gate on 2026-09-24: RAW 142-146 ms ahead after 5750-6430 s, 22-25 ppm,
+    // on a Mac whose RAW had been running 3 ppm SLOW over its 21-day uptime.
+    // (Linux does the same: camd, with no NTP daemon at all, had RAW 67 ms
+    // behind MONOTONIC after 4 days.) The same drift is why AOK gives RAW an
+    // origin of its own: one shared with MONOTONIC's would carry the host's
+    // whole-uptime difference, 5.5 s on that Mac.
+    //
+    // The bound is the NTP discipline's own, which Linux and Darwin (whose
+    // kern_ntptime.c is FreeBSD's) share: the frequency correction is clamped
+    // to MAXFREQ, 500 ppm, and a phase correction to MAXPHASE, 0.5 s -- time
+    // daemons step a larger offset instead, which moves CLOCK_REALTIME and
+    // neither of these. It needs both terms. On the gate Mac one phase
+    // correction moved RAW against MONOTONIC 9.5 ms in its first 10 s,
+    // 950 ppm, and 23 ms in all; one a few times that size would outrun
+    // 500 ppm plus 20 ms in a guest a few seconds old. It still catches what
+    // this test is for: a clock carrying the host's uptime is days out, and
+    // one stuck at zero is out by all of the guest's once that passes half a
+    // second (before then, the rate check below has it).
+    const double maxphase = 0.5, maxfreq = 500e-6;
+    double raw_slack = maxphase + maxfreq * mono1;
+    if (raw >= 0 && (raw < mono - raw_slack || raw > mono1 + raw_slack)) {
+        double off = raw < mono ? mono - raw : raw - mono1;
+        test_log_if(1, "  CLOCK_MONOTONIC_RAW %.6f is %.3f s outside CLOCK_MONOTONIC "
+                       "[%.6f, %.6f] (%.1f days); NTP slew allows %.3f s\n",
+                    raw, off, mono, mono1, off / 86400.0, raw_slack);
+        failf("CLOCK_MONOTONIC_RAW tracks CLOCK_MONOTONIC to within NTP slew (ms off)",
+              ms(off), 0, 0, ms(raw_slack), 0, 0);
+    }
 
     // ---- what dmesg -T does ----------------------------------------------
     //
@@ -424,7 +450,8 @@ int main(int argc, char **argv) {
     check_dmesg_ctime(up);
 
     // ---- monotonic, and running at one second per second -----------------
-    double t0 = clock_read(CLOCK_MONOTONIC), r0 = clock_read(CLOCK_REALTIME);
+    double t0 = clock_read(CLOCK_MONOTONIC), raw0 = clock_read(CLOCK_MONOTONIC_RAW);
+    double r0 = clock_read(CLOCK_REALTIME);
     double prev = t0, prev_boot = clock_read(CLOCK_BOOTTIME);
     int backward = 0, boot_backward = 0, reads = 0;
     while (clock_read(CLOCK_MONOTONIC) - t0 < 0.5) {
@@ -443,6 +470,7 @@ int main(int argc, char **argv) {
         usleep(1000);
     }
     double elapsed_mono = clock_read(CLOCK_MONOTONIC) - t0;
+    double elapsed_raw = clock_read(CLOCK_MONOTONIC_RAW) - raw0;
     double elapsed_real = clock_read(CLOCK_REALTIME) - r0;
     test_logf("%d reads, %d backward, monotonic advanced %.4f s while realtime advanced %.4f s\n",
               reads, backward, elapsed_mono, elapsed_real);
@@ -456,6 +484,18 @@ int main(int argc, char **argv) {
                     elapsed_mono, elapsed_real);
         failf("CLOCK_MONOTONIC advances at the wall clock's rate (ms)",
               ms(elapsed_mono), 0, 0, ms(elapsed_real), 0, 0);
+    }
+    // CLOCK_MONOTONIC_RAW too. This is what catches a RAW stuck at zero in a
+    // guest younger than the half second of slew the origin check allows,
+    // which is how young the guest is when the runner finds this test already
+    // built. A kernel that measured RAW from MONOTONIC's origin read 0.000000
+    // there -- 5.5 s below zero, clamped -- and passed the origin check.
+    if (raw0 >= 0 && elapsed_mono > 0.05 &&
+            (elapsed_raw < elapsed_mono * 0.5 || elapsed_raw > elapsed_mono * 2.0)) {
+        test_log_if(1, "  CLOCK_MONOTONIC_RAW advanced %.4f s while "
+                       "CLOCK_MONOTONIC advanced %.4f s\n", elapsed_raw, elapsed_mono);
+        failf("CLOCK_MONOTONIC_RAW advances at CLOCK_MONOTONIC's rate (ms)",
+              ms(elapsed_raw), 0, 0, ms(elapsed_mono), 0, 0);
     }
 
     // ---- absolute deadlines on the rebased clocks ------------------------

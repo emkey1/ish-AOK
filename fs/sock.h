@@ -23,6 +23,10 @@ extern const struct fd_ops socket_fdops;
 // installing it in any descriptor table. See fs/sock.c.
 struct fd *sock_fd_adopt(int sock_fd, int domain, int type, int protocol);
 
+// Whether an error read off a host socket is one Linux never raises there,
+// and so must not reach the guest. See fs/sock.c.
+bool sock_host_error_is_peer_gone(struct fd *fd, int host_err);
+
 int_t sys_socketcall(dword_t call_num, addr_t args_addr);
 int_t sys_socketcall_guest(dword_t call_num, guest_addr_t args_addr);
 

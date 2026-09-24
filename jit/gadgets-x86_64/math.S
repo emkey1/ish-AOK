@@ -840,8 +840,22 @@
         clearf_a
         clearf_oc
     .endifin
+    # CF is an INPUT to adc/sbb, and there are two ways to lose it before the
+    # adc/sbb below executes, so snapshot it onto the host stack once, out here,
+    # and load it into the host CF right before the operation on every pass:
+    #   - setf_a's `orl` rewrites the host flags, and it runs between any load
+    #     placed up here and the operation. This macro used to `btw` CPU_cf here,
+    #     so every `lock adc`/`lock sbb` ran with carry-in 0: `stc; lock sbbl $1`
+    #     subtracted 1 instead of 2 on every one of atomic_lock_contended's
+    #     80000 ops (measured on a Linux x86_64 host: got=80000 want=0).
+    #   - setf_oc below overwrites CPU_cf with the carry the operation PRODUCES,
+    #     and a contended CAS jumps back to 1b, so reloading from CPU_cf inside
+    #     the loop would read that result as the input on a retry.
+    # pushq reads 8 bytes from CPU_cf (cf, of and what follows in cpu_state);
+    # only bit 0, cf, is ever tested. The aarch64 gadgets keep the same snapshot
+    # in w14.
     .ifin(\op, adc,sbb)
-        btw $0, CPU_cf(%_cpu)
+        pushq CPU_cf(%_cpu)
     .endifin
 
     mov\ss \arg, %r15\s
@@ -866,6 +880,10 @@
     .ifc \op,neg
         setf_a src=%r14\s, dst=DOLLAR(0), ss=\ss
     .endif
+    # Nothing between this and the adc/sbb may touch the host flags.
+    .ifin(\op, adc,sbb)
+        btw $0, (%rsp)
+    .endifin
 
     .ifin(\op, add,sub,adc,sbb,and,or,xor)
         \op\ss %tmp\s, %r14\s
@@ -903,9 +921,9 @@
     lock cmpxchg\ss %r14\s, \arg
     jnz 1b
     mov %r15, %rax
-    .ifc \op,xadd
+    .ifin(\op, xadd,adc,sbb)
         add $8, %rsp
-    .endif
+    .endifin
 
     # not changes no flags at all, so it must leave the lazy result alone too.
     .ifnc \op,not
