@@ -284,7 +284,7 @@ launch, which is instant on APFS and unmeasured on USB.
 
 ---
 
-## The 556 device leg (M4 iPad, 2026-09-24): results, and one new failure
+## The 556 device leg (M4 iPad, 2026-09-24): results, and one failure since fixed
 
 Five roots, as the release asks (logs copied to
 `~/.cache/ish-aok-device-logs/556/` on the Mac):
@@ -301,19 +301,58 @@ Five roots, as the release asks (logs copied to
 in 555's device leg. `tty_hangup_signal`, which failed on three of 555's four
 Alpine roots, passes on all four.
 
-**Undecided: `signal_process_wake_one` fails on the device after heavy use.**
-The test is new (`92c8002e`, 2026-09-23). It passed on the booted root right
-after a fresh boot. About an hour and four roots of fork/exec later, it fails
-everywhere on the device, the booted root as uid 1000 included. Child exits,
-SIGALRM and handlers arrive about 1 s or 2 s late, or not at all.
-`/proc/ish/wake_signals` rose by 73 sleep and 177 poll repairs over three runs
-of it, and stood at 9,793 poll repairs since boot. A wake poke a thread has
-gone deaf to costs up to the 1 s recheck cap, which is this test's symptom
-exactly. So this is the lost-poke mechanism, which grows with host thread
-churn, and not the chroot, root or musl: the same binary on the same root
-passed earlier in that boot. On the Mac it passes. Whether it blocks 556 is
-the maintainer's call. A task to chase why the pokes are lost has been
-suggested separately.
+**Resolved (2026-09-24): `signal_process_wake_one` on the device.** It was
+three bugs, not one, and the lost pokes were not lost.
+
+1. **Every interrupted wait blocked SIGUSR1 in every thread of the app**
+   (`c5692489`). On Darwin `sigprocmask` sets the mask of every thread in the
+   process, and `siglongjmp` from a buffer saved with its mask calls it.
+   `sigunwind_start` saved `unwind_buf` with SIGUSR1 blocked, so each poke that
+   unwound a poll, socket or pipe wait made every host thread deaf to its next
+   poke. That is the "swallowed poke" the SIGUSR2 backup, the unwedge repair
+   and the 1 s caps were built around. It grew with activity, not with thread
+   churn as such. Native dash's exceptions and SmallCLUE's exit override did
+   the same through `longjmp`. Witness: `wake_mask_isolation`, where an itimer
+   re-arm after 20 interrupted polls failed 3/3 on the unfixed Mac CLI too.
+2. **A process signal a sibling took first still ended the call with EINTR**
+   (`c558b65c`). The restart was decided before delivery; now it is promised
+   and cancelled if the handler runs in that thread, as Linux does. This was
+   the "handed on" / "lost the race" half of the failures, and it was there on
+   a fresh boot all along.
+3. **Every exiting thread leaked a Mach port** (`a2fed6f1`, since 2018).
+   `cpu_usage_self` never released `mach_thread_self()`. The first full device
+   churn with 1 and 2 fixed was killed by iOS mid-riscv64: EXC_RESOURCE
+   PORT_SPACE, 114,882 ports. `/proc/ish/host_ports` and `host_port_leak`
+   watch it.
+
+A/B on the M4 iPad, fresh boot each, 12 runs of `signal_process_wake_one`:
+
+| build | fails | repairs after the runs (sleep/poll) |
+|---|---|---|
+| before (`95573ac4`) | 8/12 | 1,054 / 153 in 4 min |
+| 1 | 5/12, all bug 2 | 0 / 0 |
+| 1+2 | 0/12 | 0 / 0 |
+
+Then the full churn on 1+2+3 (logs in `~/.cache/ish-aok-device-logs/557wake/`):
+
+| root | pass | failing tests |
+|---|---|---|
+| Devuan aarch64 (booted, uid 1000) | 248 | none |
+| Alpine i386 | 264 | `futex_timeout_duration`, `mount_bind_rbind` |
+| Alpine x86_64 | 267 | `mount_bind_rbind` |
+| Alpine arm64 | 256 | `kmsg_stream`, `kmsg_records`, `mount_bind_rbind` |
+| Alpine riscv64 | 251 | `kmsg_stream`, `kmsg_records`, `mount_bind_rbind` |
+
+Every failure there is one 555 and 556 already had. `/proc/ish/wake_signals`
+read 0 sleep and 0 poll repairs at every checkpoint, and `/proc/ish/host_ports`
+stayed at ~490 names with 0 dead. After all five roots,
+`signal_process_wake_one`, `wake_mask_isolation` and `host_port_leak` passed
+three runs out of three.
+
+`timer_conventions`' overrun check also flaked on the device, ~7% of rounds
+on every build tested, including the one before this work. That is timer
+lateness from Darwin timer coalescing, and was taken up separately
+(`663c99c6`, `6bbc77df`).
 
 ---
 
