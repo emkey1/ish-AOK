@@ -176,7 +176,8 @@ the CPU-cost check that the `conn_dead` arm exists to protect.
 ## 4. `tty_hangup_signal` failed once on device, under suite load
 
 **DONE 2026-09-24: PASS in the 556 device suite run** on the M4 iPad (booted
-Devuan aarch64 root, uid 1000, build of `99eac0f2`): 249 pass, 0 fail, suite
+Devuan aarch64 root, uid 1000; kernel built 2026-09-24 11:29Z, carrying all
+five fixes above): 249 pass, 0 fail, suite
 exit 0. The first attempt was started under `nohup`, the launcher mistake 555
 had already made. With SIGHUP ignored, `tty_hangup_signal` SKIPped and
 `orphan_pgrp_wait` failed 7 checks. That was the harness, not the kernel:
