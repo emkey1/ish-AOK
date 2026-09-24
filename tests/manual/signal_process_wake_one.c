@@ -448,6 +448,10 @@ static void *waiter_main(void *arg) {
          * comes at ARRIVAL_MS. */
         st.child2 = fork();
         if (st.child2 == 0) {
+            /* Not our own write end: the "fatal" scenario's process dies by
+             * SIGALRM before it can tell us, and then EOF is the only way out.
+             * Holding it, this child outlived every run, still in read(). */
+            close(st.child2_pipe[1]);
             char c;
             while (read(st.child2_pipe[0], &c, 1) < 0 && errno == EINTR)
                 continue;
