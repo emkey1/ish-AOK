@@ -64,18 +64,20 @@ git submodule update --init || note_problem "git submodule update --init failed"
 # only Homebrew's and /usr/local's bin on PATH and look nowhere else, so a pip
 # install into a user directory would be invisible to them.
 # llvm is for llvm-objcopy, which Xcode does not ship and meson.build probes at
-# the Homebrew keg path. lld and libarchive are parity with the Actions job and
-# are not referenced by meson.build, so they are best effort.
+# the Homebrew keg path, and for the clang vdso/meson.build compiles the i386
+# vDSO with. lld is for that vDSO's link: vdso/meson.build passes
+# -fuse-ld=lld, so clang needs ld.lld on PATH, and xcode-meson.sh puts
+# /opt/homebrew/bin there. lld is not keg-only, so it lands there.
+#
+# This script once skipped lld, on the belief that nothing referenced it. The
+# build then failed at the Meson target with "clang: error: invalid linker name
+# in argument '-fuse-ld=lld'" -- the exact error vdso/check-cc.sh gives
+# with ld.lld off PATH. libarchive stays out: the app builds deps/libarchive
+# itself, and meson.build does not ask for Homebrew's.
 if command -v brew >/dev/null 2>&1; then
-    for formula in meson ninja llvm; do
+    for formula in meson ninja llvm lld; do
         brew install "$formula" || note_problem "brew install $formula failed"
     done
-    # lld and libarchive are deliberately NOT installed. The Actions job takes
-    # them, but nothing in meson.build references either, and here they are not
-    # free: lld depends on llvm, so asking for it drags the largest formula in
-    # the set through dependency resolution a second time, and Xcode Cloud
-    # caches no Homebrew state between builds, so every one of those bytes is
-    # paid for again on every single run.
 else
     note_problem "brew is not on PATH, so no dependency could be installed"
 fi
@@ -128,7 +130,7 @@ fi
 set +x
 echo "=============== ci_post_clone toolchain report ==============="
 # cargo is found by meson at -Dcargo_home/bin, not necessarily on PATH.
-for tool in meson ninja python3 cargo rustup llvm-objcopy; do
+for tool in meson ninja python3 cargo rustup llvm-objcopy ld.lld; do
     path=$(command -v "$tool" 2>/dev/null || true)
     if [ -z "$path" ] && [ -x "$HOME/.cargo/bin/$tool" ]; then
         path="$HOME/.cargo/bin/$tool"
@@ -156,6 +158,7 @@ command -v ninja  >/dev/null 2>&1 || missing="$missing ninja"
     || [ -x /usr/local/opt/llvm/bin/llvm-objcopy ] \
     || command -v llvm-objcopy >/dev/null 2>&1 \
     || missing="$missing llvm-objcopy"
+command -v ld.lld >/dev/null 2>&1 || missing="$missing ld.lld"
 [ -f deps/dash/config.h ] || missing="$missing deps/dash/config.h"
 [ -f deps/libapps/hterm/dist/js/hterm_all.js ] || missing="$missing hterm_all.js"
 
