@@ -228,3 +228,48 @@ so the presenting is handed to the main queue and the write returns — and it h
 to, because blocking a guest write on the UI queue is how you deadlock a
 terminal that is itself being drawn by that UI. If Workspace goes away between
 your write and the main thread getting to it, the request is dropped.
+
+## `/proc/ish/applets`: what is open
+
+The applets are not processes, and `ps`, `top`, `htop` and
+[`ktop`](ktop.md) do not show them. File Manager, MotePad, LLM Chat, Music,
+Settings, the Wayland display and the rest are iOS interface running inside
+the app. They have no pid, no address space, and nothing a signal could reach.
+A guest process shows up in those tools because it *is* one. Giving an applet a
+made-up pid would put an entry in every process list that `kill -9` could not
+stop, which no real system does, and every tool would pass the lie along.
+What a guest runs *inside* a terminal window is a process, and it shows up as
+usual.
+
+To see which applets are open, read `/proc/ish/applets`:
+
+```sh
+$ cat /proc/ish/applets
+ID TOOL DESKTOP STATE AGE TITLE
+3 workspaces * shown 54 Desktops
+5 clock 1 shown 3 Clock
+6 motepad 1 shown 2 MotePad
+7 audio 1 front 1 Music
+```
+
+Switch to Desktop 2 and the three on Desktop 1 read `hidden`. The Desktops
+applet stays `shown`, because every Desktop shares it.
+
+One line per applet, in the order they were opened:
+
+- `ID` is a number no other window this run has had, so two reads can be
+  matched up. It does not survive a relaunch.
+- `TOOL` is the name `/proc/ish/workspace` uses for it.
+- `DESKTOP` is numbered as the Desktops applet numbers them, from 1. `*` marks
+  the Launcher and the Desktops applet, which every Desktop shares.
+- `STATE` is `front` for the window on top of the Desktop you are looking at,
+  `shown` for the rest of what is on screen, and `hidden` for one open on
+  another Desktop.
+- `AGE` is seconds since the window opened.
+- `TITLE` is the window's title and runs to the end of the line, because
+  titles have spaces in them. `awk '{print $2}'` gets the tools.
+
+Terminal windows are not listed, because their programs are already in `ps`.
+With nothing open, or with no Workspace at all (a plain terminal, or the
+command-line build), the file is the header alone. It is read-only. Closing an
+applet is done on screen, not with a signal.

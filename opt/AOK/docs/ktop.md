@@ -20,6 +20,11 @@ for (see [below](#native-programs-and-the-arch-column)).
 sockets (that's a separate mechanism, used by `iotop`-style tools; see the
 regression test `taskstats_genl.c` if you're curious about that one).
 
+The Workspace applets (File Manager, MotePad, Music and the rest) are not in
+the list, and never will be: they are app interface, not processes, with no pid
+to show or signal. `/proc/ish/applets` lists them instead; see
+[workspace.md](workspace.md#procishapplets-what-is-open).
+
 ## Run it without building it
 
 `ktop` is also compiled into iSH-AOK as a [native program](native-programs.md):

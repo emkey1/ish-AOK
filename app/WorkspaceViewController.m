@@ -1,3 +1,4 @@
+#import <os/lock.h>
 #import <os/log.h>
 #import "WorkspaceViewController.h"
 
@@ -490,6 +491,10 @@ static CGRect ISHWorkspaceRectWithRoundedOriginPreservingSize(CGRect frame) {
 @property (nonatomic) NSInteger workspaceDesktopIndex;
 @property (nonatomic, copy) NSString *workspaceToolIdentifier;
 @property (nonatomic, copy) NSString *workspaceTerminalRole;
+// For /proc/ish/applets: a number no other window this run has had, and when
+// the window was made (CACurrentMediaTime, so the age is monotonic).
+@property (nonatomic, readonly) NSUInteger workspaceWindowSerial;
+@property (nonatomic, readonly) CFTimeInterval workspaceOpenedAt;
 @property (nonatomic) BOOL pinnedToBottomCenter;
 - (void)bringWindowToFront;
 @property (nonatomic) BOOL resizeHandleAtTopRight;
@@ -528,6 +533,10 @@ static CGRect ISHWorkspaceRectWithRoundedOriginPreservingSize(CGRect frame) {
     self.minimumSize = CGSizeMake(280, 180);
     self.maximumSize = CGSizeZero;
     self.frameBeforeBoundsClamp = CGRectNull;
+    // Main thread only, like every other UIView init, so a plain counter.
+    static NSUInteger ISHWorkspaceNextWindowSerial = 1;
+    _workspaceWindowSerial = ISHWorkspaceNextWindowSerial++;
+    _workspaceOpenedAt = CACurrentMediaTime();
 
     self.panelView = [UIView new];
     self.panelView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -16027,6 +16036,98 @@ static int ISHWorkspaceOpenImpl(const char *request) {
     return 0;
 }
 
+#pragma mark - /proc/ish/applets bridge
+
+// The applets are app UI, not processes (fs/proc/ish.c says why they are not
+// given pids), so this is where a guest finds them. Every tool window counts.
+// Terminal windows do not: what runs in a terminal is a guest process, and ps
+// already shows it.
+//
+// Main thread only: it walks UIKit views.
+static NSString *ISHWorkspaceAppletsBody(void) {
+    WorkspaceViewController *workspace = ISHWorkspaceActiveController;
+    if (workspace == nil)
+        return @"";
+    ISHWorkspaceContainedWindowView *front = nil;
+    NSMutableArray<ISHWorkspaceContainedWindowView *> *applets = [NSMutableArray array];
+    for (UIView *view in workspace.desktopSurfaceView.subviews.reverseObjectEnumerator) {
+        if (![view isKindOfClass:ISHWorkspaceContainedWindowView.class])
+            continue;
+        ISHWorkspaceContainedWindowView *windowView = (ISHWorkspaceContainedWindowView *) view;
+        // Whatever window is on top, applet or terminal: an applet is only
+        // "front" if nothing covers it.
+        if (front == nil && !windowView.hidden && windowView != workspace.dockWindow)
+            front = windowView;
+        if (windowView.workspaceToolIdentifier.length == 0)
+            continue;
+        [applets addObject:windowView];
+    }
+    // Opening order, which stays put, rather than stacking order, which
+    // changes every time one is tapped.
+    [applets sortUsingComparator:^NSComparisonResult(ISHWorkspaceContainedWindowView *a,
+                                                     ISHWorkspaceContainedWindowView *b) {
+        if (a.workspaceWindowSerial == b.workspaceWindowSerial)
+            return NSOrderedSame;
+        return a.workspaceWindowSerial < b.workspaceWindowSerial ? NSOrderedAscending : NSOrderedDescending;
+    }];
+    CFTimeInterval now = CACurrentMediaTime();
+    NSMutableString *body = [NSMutableString string];
+    for (ISHWorkspaceContainedWindowView *windowView in applets) {
+        // Desktops are numbered as the Desktops applet numbers them. The
+        // Launcher and the Desktops applet are shared by every Desktop.
+        NSString *desktop = [workspace isGlobalToolIdentifier:windowView.workspaceToolIdentifier]
+            ? @"*" : [NSString stringWithFormat:@"%ld", (long) windowView.workspaceDesktopIndex + 1];
+        // hidden: open, but on another Desktop.
+        NSString *state = windowView == front ? @"front" : windowView.hidden ? @"hidden" : @"shown";
+        NSString *title = [[(windowView.titleLabel.text ?: @"")
+            componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]
+            componentsJoinedByString:@" "];
+        if (title.length == 0)
+            title = @"-";
+        long age = (long) MAX(0.0, now - windowView.workspaceOpenedAt);
+        [body appendFormat:@"%lu %@ %@ %@ %ld %@\n", (unsigned long) windowView.workspaceWindowSerial,
+            windowView.workspaceToolIdentifier, desktop, state, age, title];
+    }
+    return body;
+}
+
+// The last body the main thread built, for when it cannot answer in time.
+static NSString *ISHWorkspaceAppletsLastBody = @"";
+static os_unfair_lock ISHWorkspaceAppletsLastBodyLock = OS_UNFAIR_LOCK_INIT;
+
+static void ISHWorkspaceAppletsRemember(NSString *body) {
+    os_unfair_lock_lock(&ISHWorkspaceAppletsLastBodyLock);
+    ISHWorkspaceAppletsLastBody = body;
+    os_unfair_lock_unlock(&ISHWorkspaceAppletsLastBodyLock);
+}
+
+// Called from a guest read. The answer lives on the main thread, but a guest
+// thread must not block on the UI indefinitely: that is how a terminal hosted
+// by that same UI deadlocks (see ISHWorkspaceOpenImpl). So ask, wait a bounded
+// time, and if the main thread is busy, answer with the last list it built.
+static char *ISHAppletsStatusImpl(void) {
+    if (NSThread.isMainThread) {
+        NSString *body = ISHWorkspaceAppletsBody();
+        ISHWorkspaceAppletsRemember(body);
+        return strdup(body.UTF8String);
+    }
+    __block NSString *fresh = nil;
+    dispatch_semaphore_t built = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *body = ISHWorkspaceAppletsBody();
+        ISHWorkspaceAppletsRemember(body);
+        fresh = body;
+        dispatch_semaphore_signal(built);
+    });
+    if (dispatch_semaphore_wait(built, dispatch_time(DISPATCH_TIME_NOW, 500 * NSEC_PER_MSEC)) != 0) {
+        os_unfair_lock_lock(&ISHWorkspaceAppletsLastBodyLock);
+        NSString *last = ISHWorkspaceAppletsLastBody;
+        os_unfair_lock_unlock(&ISHWorkspaceAppletsLastBodyLock);
+        return strdup(last.UTF8String);
+    }
+    return strdup(fresh.UTF8String);
+}
+
 @interface ISHWorkspaceBridgeInstaller : NSObject
 @end
 @implementation ISHWorkspaceBridgeInstaller
@@ -16036,6 +16137,7 @@ static int ISHWorkspaceOpenImpl(const char *request) {
 + (void)load {
     ish_workspace_status = ISHWorkspaceStatusImpl;
     ish_workspace_open = ISHWorkspaceOpenImpl;
+    ish_applets_status = ISHAppletsStatusImpl;
 }
 @end
 

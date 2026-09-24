@@ -41,5 +41,11 @@ extern int (*ish_roots_command)(const char *command);
 extern char *(*ish_workspace_status)(void);
 extern int (*ish_workspace_open)(const char *request);
 
+// The applets open in Workspace, for /proc/ish/applets: the whole body after
+// its header line, one applet per line, malloc'd for the caller to free. NULL
+// in the command-line build, which has no Workspace. Called from a guest read,
+// so it must not wait on the UI for long; see the app's implementation.
+extern char *(*ish_applets_status)(void);
+
 bool amd64_jit_preference_get(void);
 void amd64_jit_preference_set(bool enabled);
