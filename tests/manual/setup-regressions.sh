@@ -714,6 +714,17 @@ cache_init() {
     if [ -n "$cache_dir" ]; then
         rm -f "$cache_dir/.probe" 2>/dev/null || true
     fi
+    # A cache that MOVED still counts. 555's device runs inside mount-root.sh
+    # chroots kept each root's cache beside the work dir, and 556's found
+    # /AOK/fakefs writable and looked only there. So the i386 leg rebuilt all
+    # 289 tests (two hours on the device) while 268 of them sat in the root's
+    # /tmp. When nothing else is the read source, read the old place too;
+    # cache_try copies a hit from it into the new one, so the move heals.
+    _legacy_cache=$work_dir/../ish-aok-regress-cache
+    if [ -z "$cache_ro_dir" ] && [ "$_legacy_cache" != "$cache_dir" ] &&
+            [ -d "$_legacy_cache" ]; then
+        cache_ro_dir=$_legacy_cache
+    fi
     # Everything shared by every test: the headers they all include, the
     # compiler, and the machine. Folded in once so the per-test key is one hash.
     cache_key_base=$(
@@ -765,6 +776,11 @@ cache_try() {
     [ -x "$_entry" ] || return 1
     cp "$_entry" "$work_dir/bin/$_name" 2>/dev/null || return 1
     chmod +x "$work_dir/bin/$_name" 2>/dev/null
+    # A hit from the read-only source goes into the writable cache as well,
+    # so the next run finds it there. cache_store never fails the run.
+    if [ "$_entry" != "$2" ]; then
+        cache_store "$2" "$_entry"
+    fi
     echo "  (cached)"
     return 0
 }
