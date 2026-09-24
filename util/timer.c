@@ -9,6 +9,7 @@
 #include <poll.h>
 #include <stdint.h>
 #include <sys/eventfd.h>
+#include <sys/syscall.h>
 #endif
 #include "util/timer.h"
 #include "misc.h"
@@ -159,7 +160,13 @@ static void timer_wake_wait(int fd, struct timespec nap) {
         return;
     }
     struct pollfd p = {.fd = fd, .events = POLLIN};
-    if (ppoll(&p, 1, &nap, NULL) > 0) {
+    // The system call, not ppoll(): the binary links OpenSSH's openbsd-compat
+    // ppoll (its config.h has no HAVE_PPOLL), built on a pselect that
+    // kernel/native_libc.h turns into the GUEST's pselect -- which, on a
+    // thread with no task, returned at once. The timer thread never slept,
+    // and a CPU-clock timer's spun a whole core. The kernel writes the time
+    // left back into `nap`, a copy.
+    if (syscall(SYS_ppoll, &p, 1, &nap, NULL, 0) > 0) {
         uint64_t count;
         (void) !read(fd, &count, sizeof(count));
     }
