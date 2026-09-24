@@ -103,6 +103,17 @@ PURE = {
     # reason to revisit would be a guest with a deliberately controlled RNG -- a
     # seeded rootfs for reproducible tests -- which this silently bypasses.
     "arc4random_buf",
+    # arc4random_stir, the fourth of that family and the easy one. On Darwin
+    # it is a single `ret` -- disassembled from libsystem_c, not assumed -- so
+    # there is no state behind it to observe, host or guest. Its one caller is
+    # entropy.c's reseed_prngs() after fork ("noop on recent arc4random()
+    # implementations", upstream's own comment), and the arc4random_buf on the
+    # next line is what actually notices the new pid. Routing it would mean
+    # inventing a guest meaning for a name Linux never had: glibc has no
+    # arc4random_stir, so on a Linux build config.h leaves
+    # HAVE_ARC4RANDOM_STIR undefined and openbsd-compat.h makes the call an
+    # empty macro. Only the Darwin build references the symbol at all.
+    "arc4random_stir",
     # ctype
     "isalnum", "isalpha", "isascii", "isblank", "iscntrl", "isdigit", "isgraph",
     "islower", "isprint", "ispunct", "isspace", "isupper", "isxdigit",
