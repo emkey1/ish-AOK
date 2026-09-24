@@ -192,6 +192,7 @@ fs_nofollow_trailing_slash.c
 fs_chown_no_change.c
 fs_linkat_flags.c
 fs_chown_kills_privs.c
+fs_chgrp_membership.c
 fs_at_validation.c
 sock_conformance_opts.c
 poll_rdhup_bounds.c

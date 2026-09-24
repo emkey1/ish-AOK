@@ -18,6 +18,7 @@
 #include "fs/real.h"
 #include "fs/tty.h"
 #include "fs/fifo.h"
+#include "kernel/fs.h"
 #define ISH_INTERNAL
 #include "fs/fake.h"
 #include "fs/fake-path.h"
@@ -337,6 +338,14 @@ static void fakefs_inherit_group(struct fakefs_db *fs, const char *path,
     *gid = parent_stat.gid;
     if (S_ISDIR(*mode))
         *mode |= S_ISGID;
+    // Linux's mode_strip_sgid(): a new non-directory asking for S_ISGID with
+    // group-execute keeps it only if its creator is in the group it inherits,
+    // or holds CAP_FSETID. Otherwise anyone who can write in a setgid
+    // directory could create a program that runs as the directory's group.
+    else if ((*mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP) &&
+             current != NULL && !current_in_group(parent_stat.gid) &&
+             !current_capable(CAP_FSETID_))
+        *mode &= ~S_ISGID;
 }
 
 static struct fd *fakefs_open(struct mount *mount, const char *path, int flags, int mode) {

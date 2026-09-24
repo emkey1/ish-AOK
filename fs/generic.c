@@ -1283,7 +1283,7 @@ int generic_setattrat(struct fd *at, const char *path_raw, struct attr attr, boo
     struct statbuf stat = {};
     err = mount->fs->stat(mount, path, &stat);
     if (err >= 0)
-        err = setattr_check(&stat, attr);
+        err = setattr_check(&stat, &attr);
     if (err < 0) {
         mount_release(mount);
         return err;

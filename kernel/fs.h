@@ -115,7 +115,11 @@ ssize_t generic_readlinkat(struct fd *at, const char *path, char *buf, size_t bu
 int generic_mkdirat(struct fd *at, const char *path, mode_t_ mode);
 
 int access_check(struct statbuf *stat, int check);
-int setattr_check(struct statbuf *stat, struct attr attr);
+// May change *attr: an allowed chmod can still lose its S_ISGID bit.
+int setattr_check(struct statbuf *stat, struct attr *attr);
+// Linux's in_group_p(): gid is the caller's fsgid or one of its supplementary
+// groups.
+bool current_in_group(uid_t_ gid);
 
 // Write a HOST buffer to a guest fd number. write(2) copies from guest memory
 // first; code that already holds host memory -- natively-implemented programs

@@ -1101,7 +1101,9 @@ extern void (*halt_hook)(int status);
 
 // Linux capability numbers, for the gates below. Only the ones something
 // actually checks are listed; add as needed rather than transcribing all 40.
+#define CAP_CHOWN_       0
 #define CAP_DAC_READ_SEARCH_ 2
+#define CAP_FOWNER_      3
 #define CAP_FSETID_      4
 #define CAP_SETGID_      6
 #define CAP_SETUID_      7

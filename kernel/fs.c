@@ -359,7 +359,7 @@ static void apply_umask(mode_t_ *mode) {
 // which is how group membership normally works, `usermod -aG` and friends --
 // fell through to the "other" bits and was denied. That breaks the ordinary
 // shared-group setup for both file access and directory search.
-static bool current_in_group(uid_t_ gid) {
+bool current_in_group(uid_t_ gid) {
     if (current->fsgid == gid)
         return true;
     for (unsigned i = 0; current->groups != NULL && i < current->ngroups; i++)
@@ -416,13 +416,25 @@ int access_check(struct statbuf *stat, int check) {
 // operations regardless of the file's mode bits, while a size change is an
 // ordinary write. We used to apply no check at all here, so any process could
 // chmod/chown/truncate a file it did not own.
-int setattr_check(struct statbuf *stat, struct attr attr) {
-    if (superuser())
-        return 0;
-    switch (attr.type) {
+//
+// Takes the attr by pointer because a chmod can be ALLOWED and still changed:
+// see the S_ISGID rule in the mode arm.
+int setattr_check(struct statbuf *stat, struct attr *attr) {
+    switch (attr->type) {
         case attr_mode:
-            // Only the owner may change the mode.
-            return current->fsuid == stat->uid ? 0 : _EPERM;
+            // Linux's inode_owner_or_capable(): the owner, or CAP_FOWNER.
+            if (current->fsuid != stat->uid && !current_capable(CAP_FOWNER_))
+                return _EPERM;
+            // setattr_prepare()'s "Also check the setgid bit!": a caller
+            // outside the file's group, without CAP_FSETID, cannot set
+            // S_ISGID. The bit is dropped and the chmod still succeeds --
+            // Linux does not fail it. Without this, the owner of a file that
+            // belongs to a group it is not in (root chowned it over) could
+            // make it a program that runs as that group.
+            if ((attr->mode & S_ISGID) && !current_in_group(stat->gid) &&
+                    !current_capable(CAP_FSETID_))
+                attr->mode &= ~S_ISGID;
+            return 0;
         case attr_uid:
             // -1 is "leave the owner alone", and Linux runs no ownership check
             // for it at all: an unprivileged chown(path, -1, -1) on a
@@ -430,16 +442,35 @@ int setattr_check(struct statbuf *stat, struct attr attr) {
             // without a setattr (generic_setattrat_nochange), so nothing
             // should reach here with -1 -- but if it ever does, refusing it
             // would be the wrong answer, not a safe one.
-            if (attr.uid == (uid_t_) -1)
+            if (attr->uid == (uid_t_) -1)
+                return 0;
+            // Linux's chown_ok(): CAP_CHOWN may hand a file to anyone.
+            if (current_capable(CAP_CHOWN_))
                 return 0;
             // Handing a file to another user needs privilege; "changing" it to
             // the current owner is a no-op Linux permits.
-            if (attr.uid == stat->uid)
+            if (attr->uid == stat->uid)
                 return current->fsuid == stat->uid ? 0 : _EPERM;
             return _EPERM;
         case attr_gid:
-            // The owner may change a file's group; anyone else may not.
-            return current->fsuid == stat->uid ? 0 : _EPERM;
+            if (attr->gid == (uid_t_) -1)
+                return 0;
+            // Linux's chgrp_ok(): CAP_CHOWN may give a file any group. The
+            // owner may give it only a group the owner is itself in -- its
+            // fsgid or a supplementary group -- or leave it where it is.
+            //
+            // This allowed the owner ANY group, which is a privilege
+            // escalation with one extra step: copy a program, chgrp it to
+            // shadow, chmod g+s, and it runs with egid shadow and reads
+            // /etc/shadow. Measured on Linux 6.12 as an unprivileged user:
+            // chgrp to a group it is not in is EPERM, to its own is 0.
+            if (current_capable(CAP_CHOWN_))
+                return 0;
+            if (current->fsuid != stat->uid)
+                return _EPERM;
+            if (attr->gid == stat->gid || current_in_group(attr->gid))
+                return 0;
+            return _EPERM;
         case attr_size:
             return access_check(stat, AC_W);
     }
@@ -2724,7 +2755,7 @@ static int generic_fsetattr(struct fd *fd, struct attr attr) {
         if (accmode != O_WRONLY_ && accmode != O_RDWR_)
             return _EINVAL;
     } else {
-        err = setattr_check(&stat, attr);
+        err = setattr_check(&stat, &attr);
         if (err < 0)
             return err;
     }
