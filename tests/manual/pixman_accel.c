@@ -26,8 +26,8 @@
 extern long syscall(long, ...);
 #define ISH_SYS_PIXOP 0xacc1
 
-enum { PIX_OP_FILL = 0, PIX_OP_COPY = 1, PIX_OP_OVER = 2, PIX_OP_OVER_MASK = 3 };
-enum { PIX_FLAG_SRC_OPAQUE = 1u << 0, PIX_FLAG_DST_OPAQUE = 1u << 1 };
+enum { PIX_OP_FILL = 0, PIX_OP_COPY = 1, PIX_OP_OVER = 2, PIX_OP_OVER_MASK = 3, PIX_OP_COPY_SET_ALPHA = 4 };
+enum { PIX_FLAG_SRC_OPAQUE = 1u << 0, PIX_FLAG_DST_OPAQUE = 1u << 1, PIX_FLAG_SRC_SOLID = 1u << 2 };
 
 struct ish_pix_req {
     uint32_t op, flags;
@@ -90,6 +90,8 @@ static void (*p_composite32)(pixman_op_t, pixman_image_t *, pixman_image_t *, pi
         int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t);
 static pixman_bool_t (*p_fill)(uint32_t *, int, int, int, int, int, int, uint32_t);
 static pixman_bool_t (*p_unref)(pixman_image_t *);
+typedef struct { uint16_t red, green, blue, alpha; } pixman_color_t;
+static pixman_image_t *(*p_create_solid)(const pixman_color_t *);
 
 static int load_pixman(void) {
     void *h = dlopen("libpixman-1.so.0", RTLD_NOW) ?: dlopen("libpixman-1.so", RTLD_NOW);
@@ -100,7 +102,8 @@ static int load_pixman(void) {
             int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t)) dlsym(h, "pixman_image_composite32");
     p_fill = (pixman_bool_t (*)(uint32_t *, int, int, int, int, int, int, uint32_t)) dlsym(h, "pixman_fill");
     p_unref = (pixman_bool_t (*)(pixman_image_t *)) dlsym(h, "pixman_image_unref");
-    return p_create_bits && p_composite32 && p_fill && p_unref;
+    p_create_solid = (pixman_image_t *(*)(const pixman_color_t *)) dlsym(h, "pixman_image_create_solid_fill");
+    return p_create_bits && p_composite32 && p_fill && p_unref && p_create_solid;
 }
 
 // oracle_fill: pixman_fill's stride parameter is in 32-bit WORDS, not bytes
@@ -253,7 +256,11 @@ static void test_composite(uint32_t op, int src_opaque, int dst_opaque,
     memcpy(dst_oracle.bits, dst_accel.bits, (size_t) dst_accel.stride_bytes * dst_accel.h);
 
     uint32_t flags = (src_opaque ? PIX_FLAG_SRC_OPAQUE : 0) | (dst_opaque ? PIX_FLAG_DST_OPAQUE : 0);
-    long ret = pixop(op == PIXMAN_OP_SRC ? PIX_OP_COPY : PIX_OP_OVER, flags,
+    // SRC from x8r8g8b8 into a8r8g8b8 is the one pairing where pixman does
+    // not copy the source's top byte: it writes 0xff alpha.
+    uint32_t kop = op != PIXMAN_OP_SRC ? PIX_OP_OVER :
+            (src_opaque && !dst_opaque) ? PIX_OP_COPY_SET_ALPHA : PIX_OP_COPY;
+    long ret = pixop(kop, flags,
             dst_accel.bits, dst_accel.stride_bytes, dst_x, dst_y,
             src.bits, src.stride_bytes, src_x, src_y, w, h, 0);
 
@@ -315,6 +322,69 @@ static void test_composite_mask(int src_opaque, int dst_opaque,
     free_canvas(&src);
     free_mask_canvas(&mask);
     free_canvas(&dst_oracle);
+}
+
+// A solid source (ISH_PIX_FLAG_SRC_SOLID): the kernel gets the colour as
+// pixman's color_32 -- each 16-bit channel's high byte, which is what
+// pixman_image_create_solid_fill stores and its fast paths composite -- and
+// no source image at all. The oracle composites a real solid-fill image, so
+// this checks the conversion the shim does as well as the blend. `masked`
+// adds an a8 mask (foot's glyph shape: a solid colour through a glyph).
+static uint32_t color32(const pixman_color_t *c) {
+    return ((uint32_t) (c->alpha >> 8) << 24) | ((uint32_t) (c->red >> 8) << 16) |
+           ((uint32_t) c->green & 0xff00) | ((uint32_t) c->blue >> 8);
+}
+
+static void test_solid(int masked, int dst_opaque, pixman_color_t color,
+        uint32_t canvas_w, uint32_t canvas_h, int32_t x, int32_t y, uint32_t w, uint32_t h) {
+    struct canvas dst_accel = make_canvas(canvas_w, canvas_h);
+    struct canvas dst_oracle = make_canvas(canvas_w, canvas_h);
+    struct mask_canvas mask = make_mask_canvas(canvas_w, canvas_h);
+    memcpy(dst_oracle.bits, dst_accel.bits, (size_t) dst_accel.stride_bytes * dst_accel.h);
+
+    struct ish_pix_req r = {
+        .op = masked ? PIX_OP_OVER_MASK : PIX_OP_OVER,
+        .flags = PIX_FLAG_SRC_SOLID | (dst_opaque ? PIX_FLAG_DST_OPAQUE : 0),
+        .dst = (uint64_t) (uintptr_t) dst_accel.bits, .dst_stride = dst_accel.stride_bytes,
+        .dst_x = x, .dst_y = y,
+        .mask = masked ? (uint64_t) (uintptr_t) mask.bits : 0, .mask_stride = masked ? mask.stride_bytes : 0,
+        .mask_x = x, .mask_y = y,
+        .width = w, .height = h, .fill_pixel = color32(&color),
+    };
+    long ret = syscall(ISH_SYS_PIXOP, &r);
+
+    uint32_t format = dst_opaque ? PIXMAN_x8r8g8b8 : PIXMAN_a8r8g8b8;
+    pixman_image_t *dimg = p_create_bits((int) format, (int) canvas_w, (int) canvas_h,
+            dst_oracle.bits, (int) dst_oracle.stride_bytes);
+    pixman_image_t *simg = p_create_solid(&color);
+    pixman_image_t *mimg = masked ? p_create_bits((int) PIXMAN_a8, (int) canvas_w, (int) canvas_h,
+            (uint32_t *) mask.bits, (int) mask.stride_bytes) : NULL;
+    p_composite32(PIXMAN_OP_OVER, simg, mimg, dimg, 0, 0, x, y, x, y, (int32_t) w, (int32_t) h);
+    if (mimg != NULL)
+        p_unref(mimg);
+    p_unref(simg);
+    p_unref(dimg);
+
+    char label[200];
+    snprintf(label, sizeof(label), "over_solid%s %ux%u @%d,%d (%ux%u) color=%04x,%04x,%04x,%04x dst_opaque=%d",
+            masked ? "_mask" : "", w, h, x, y, canvas_w, canvas_h,
+            color.alpha, color.red, color.green, color.blue, dst_opaque);
+    check(ret == 0, label);
+    check(memcmp(dst_accel.bits, dst_oracle.bits, (size_t) dst_accel.stride_bytes * dst_accel.h) == 0, label);
+
+    free_canvas(&dst_accel);
+    free_canvas(&dst_oracle);
+    free_mask_canvas(&mask);
+}
+
+static pixman_color_t rand_color(void) {
+    pixman_color_t c = { (uint16_t) rand(), (uint16_t) rand(), (uint16_t) rand(), (uint16_t) rand() };
+    if (rand() & 1) { // a valid premultiplied colour half the time
+        c.red = (uint16_t) ((uint32_t) c.red * c.alpha / 0xffff);
+        c.green = (uint16_t) ((uint32_t) c.green * c.alpha / 0xffff);
+        c.blue = (uint16_t) ((uint32_t) c.blue * c.alpha / 0xffff);
+    }
+    return c;
 }
 
 // Probing for ISH_SYS_PIXOP is not simply "call it and read errno": AOK
@@ -379,6 +449,15 @@ int main(int argc, char **argv) {
     test_composite(PIXMAN_OP_SRC, 0, 0, 8, 8, 0, 0, 8, 8, 0, 0, 8, 8);
     test_composite(PIXMAN_OP_SRC, 0, 0, 20, 20, 4, 3, 20, 20, 2, 5, 10, 9);
     test_composite(PIXMAN_OP_SRC, 0, 0, 1500, 400, 13, 27, 1500, 400, 5, 9, 1400, 350);
+    // Every source/destination format pairing for SRC: the canvases are random,
+    // so the x8r8g8b8 source's top byte is garbage -- copied through for three
+    // pairings, replaced by 0xff for x8r8g8b8 into a8r8g8b8.
+    for (int so = 0; so <= 1; so++)
+        for (int dop = 0; dop <= 1; dop++) {
+            test_composite(PIXMAN_OP_SRC, so, dop, 8, 8, 0, 0, 8, 8, 0, 0, 8, 8);
+            test_composite(PIXMAN_OP_SRC, so, dop, 40, 30, 5, 3, 40, 30, 2, 1, 33, 21);
+        }
+    test_composite(PIXMAN_OP_SRC, 1, 0, 1280, 720, 0, 0, 1280, 720, 0, 0, 1280, 720);
 
     // OVER: both src formats (real alpha, and forced-opaque), tight and
     // offset+padded and cross-page geometries, and a run of purely random
@@ -449,6 +528,41 @@ int main(int argc, char **argv) {
         int32_t x = (int32_t) ((unsigned) rand() % (cw - w + 1));
         int32_t y = (int32_t) ((unsigned) rand() % (ch - h + 1));
         test_composite_mask(rand() & 1, 1, cw, ch, x, y, cw, ch, x, y, cw, ch, x, y, w, h);
+    }
+
+    // Solid sources, with and without an a8 mask, onto both destination
+    // formats: opaque, transparent, half and INVALID premultiplied colours
+    // (a channel above its alpha, which the saturating add has to match),
+    // then random ones over random geometry.
+    {
+        static const pixman_color_t edge[] = {
+            { 0xffff, 0x0000, 0x0000, 0xffff }, // opaque red: pixman makes OVER a SRC
+            { 0x0000, 0x0000, 0x0000, 0x0000 }, // transparent: pixman skips it
+            { 0x8080, 0x4040, 0x2020, 0x8080 }, // half, valid
+            { 0xffff, 0xffff, 0xffff, 0x0101 }, // invalid: channels far above alpha
+            { 0x12ff, 0x3480, 0x567f, 0x7801 }, // low bytes that must be dropped, not rounded
+        };
+        for (unsigned i = 0; i < sizeof(edge) / sizeof(*edge); i++)
+            for (int masked = 0; masked <= 1; masked++)
+                for (int dst_opaque = 0; dst_opaque <= 1; dst_opaque++) {
+                    test_solid(masked, dst_opaque, edge[i], 8, 8, 0, 0, 8, 8);
+                    test_solid(masked, dst_opaque, edge[i], 40, 30, 5, 3, 29, 17);
+                }
+        test_solid(1, 1, edge[2], 1280, 720, 0, 0, 1280, 720);
+        for (int i = 0; i < 40; i++) {
+            uint32_t w = 1 + (unsigned) rand() % 200, h = 1 + (unsigned) rand() % 120;
+            uint32_t cw = w + 1 + (unsigned) rand() % 50, ch = h + 1 + (unsigned) rand() % 50;
+            int32_t x = (int32_t) ((unsigned) rand() % (cw - w + 1));
+            int32_t y = (int32_t) ((unsigned) rand() % (ch - h + 1));
+            test_solid(rand() & 1, rand() & 1, rand_color(), cw, ch, x, y, w, h);
+        }
+        // SRC_SOLID means OVER or OVER_MASK only: on COPY there is no source
+        // to copy, and a kernel must refuse rather than read src=NULL.
+        struct canvas c = make_canvas(8, 8);
+        struct ish_pix_req bad = { .op = PIX_OP_COPY, .flags = PIX_FLAG_SRC_SOLID,
+            .dst = (uint64_t) (uintptr_t) c.bits, .dst_stride = c.stride_bytes, .width = 4, .height = 4 };
+        check(syscall(ISH_SYS_PIXOP, &bad) != 0, "SRC_SOLID on COPY is declined");
+        free_canvas(&c);
     }
 
     // Mask overlapping dst must be DECLINED too (same reasoning as src/dst

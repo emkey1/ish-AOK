@@ -72,6 +72,10 @@ static bool pix_selftest_over(void) {
     ish_pix_copy_row(copysrc, copydst, 2);
     if (copydst[0] != 0xdeadbeefu || copydst[1] != 0x12345678u)
         return false;
+    // x8r8g8b8 -> a8r8g8b8: real pixman 0.44 turns 0x12345678 into ff345678
+    ish_pix_copy_row_set_alpha(copysrc, copydst, 2);
+    if (copydst[0] != 0xffadbeefu || copydst[1] != 0xff345678u)
+        return false;
     // OVER_MASK: half-alpha src through a half-alpha mask onto half-alpha
     // dst, all channels equal -- part of the same edge-case combination
     // independently verified against real pixman (300k+ cases, 0
@@ -80,6 +84,18 @@ static bool pix_selftest_over(void) {
     uint8_t mask_alpha = 0x80;
     ish_pix_over_mask_row(&mask_src, &mask_alpha, &mask_dst, 1, false);
     if (mask_dst != 0xa0a0a0a0u)
+        return false;
+    // Solid source, the same two blends, and a zero mask leaving dst alone:
+    // values checked against real pixman 0.44 on the camd oracle (see
+    // pixman_accel_plan.md, "solid sources").
+    uint32_t solid_dst[2] = {0x80808080u, 0x37123456u};
+    ish_pix_over_solid_row(0x80808080u, solid_dst, 1);
+    if (solid_dst[0] != 0xc0c0c0c0u)
+        return false;
+    uint8_t solid_mask[2] = {0x80, 0x00};
+    solid_dst[0] = 0x80808080u;
+    ish_pix_over_solid_mask_row(0x80808080u, solid_mask, solid_dst, 2);
+    if (solid_dst[0] != 0xa0a0a0a0u || solid_dst[1] != 0x37123456u)
         return false;
     return true;
 }
@@ -99,8 +115,14 @@ void ish_accel_pix_init(void) {
     (void) pix_accel_ready();
 }
 
-enum { ISH_PIX_OP_FILL = 0, ISH_PIX_OP_COPY = 1, ISH_PIX_OP_OVER = 2, ISH_PIX_OP_OVER_MASK = 3 };
-enum { ISH_PIX_FLAG_SRC_OPAQUE = 1u << 0, ISH_PIX_FLAG_DST_OPAQUE = 1u << 1 };
+// COPY_SET_ALPHA is COPY from an x8r8g8b8 source into an a8r8g8b8
+// destination (alpha forced to 0xff, as pixman does). An op of its own rather
+// than a flag on COPY, because COPY never looked at its flags: a kernel that
+// predates it refuses the unknown op, where it would have silently ignored a
+// new flag and copied the padding byte.
+enum { ISH_PIX_OP_FILL = 0, ISH_PIX_OP_COPY = 1, ISH_PIX_OP_OVER = 2, ISH_PIX_OP_OVER_MASK = 3,
+       ISH_PIX_OP_COPY_SET_ALPHA = 4 };
+enum { ISH_PIX_FLAG_SRC_OPAQUE = 1u << 0, ISH_PIX_FLAG_DST_OPAQUE = 1u << 1, ISH_PIX_FLAG_SRC_SOLID = 1u << 2 };
 
 // Guest ABI, fixed-layout (identical on arm64/riscv64): the two leading u32s,
 // then every 64-bit field together (matches struct ish_aead_req's
@@ -112,7 +134,12 @@ enum { ISH_PIX_FLAG_SRC_OPAQUE = 1u << 0, ISH_PIX_FLAG_DST_OPAQUE = 1u << 1 };
 // already validated dst-format-independent); src's format is selected by
 // ISH_PIX_FLAG_SRC_OPAQUE (unset = a8r8g8b8, set = x8r8g8b8 i.e. top byte is
 // not real alpha) and matters for OVER/OVER_MASK. mask is a8 (1 byte/pixel),
-// only used for OVER_MASK.
+// only used for OVER_MASK. ISH_PIX_FLAG_SRC_SOLID (OVER and OVER_MASK only)
+// replaces the source image with one premultiplied a8r8g8b8 value, carried
+// in fill_pixel -- a pixman solid fill's color_32; src/src_stride are then
+// ignored. A shim sends src=NULL and src_stride=0 with it, so a kernel that
+// predates the flag refuses the request (src_stride < width*4) rather than
+// reading a source that isn't there, and the shim falls back to pixman.
 struct ish_pix_req {
     uint32_t op;
     uint32_t flags;
@@ -126,7 +153,7 @@ struct ish_pix_req {
     int32_t src_x, src_y;   // ignored for FILL
     int32_t mask_x, mask_y; // ignored unless OVER_MASK
     uint32_t width, height;
-    uint32_t fill_pixel;  // FILL only
+    uint32_t fill_pixel;  // FILL, and the source colour for SRC_SOLID
 };
 
 // Bound width*height so a bogus/adversarial request can't tie up the host
@@ -146,6 +173,11 @@ static void pix_copy_span(const void *src_host, void *dst_host, uint32_t pixels,
     ish_pix_copy_row(src_host, dst_host, pixels);
 }
 
+static void pix_copy_set_alpha_span(const void *src_host, void *dst_host, uint32_t pixels, void *ctx) {
+    (void) ctx;
+    ish_pix_copy_row_set_alpha(src_host, dst_host, pixels);
+}
+
 struct pix_over_ctx { bool src_is_opaque; bool dst_is_opaque; };
 static void pix_over_span(const void *src_host, void *dst_host, uint32_t pixels, void *ctx) {
     struct pix_over_ctx *c = (struct pix_over_ctx *) ctx;
@@ -156,6 +188,22 @@ static void pix_over_mask_span(const void *src_host, const void *mask_host, void
         uint32_t pixels, void *ctx) {
     ish_pix_over_mask_row(src_host, (const uint8_t *) mask_host, dst_host, pixels,
             ((struct pix_over_ctx *) ctx)->src_is_opaque);
+}
+
+struct pix_solid_ctx { uint32_t src; };
+static void pix_over_solid_span(void *dst_host, uint32_t pixels, void *ctx) {
+    ish_pix_over_solid_row(((struct pix_solid_ctx *) ctx)->src, dst_host, pixels);
+}
+
+// Solid source through a mask: user_transform_rect_three with the mask
+// standing in for the source as well (its span pointer is ignored), which
+// keeps the one three-image walk rather than growing a mixed-bpp two-image
+// one for this.
+static void pix_over_solid_mask_span(const void *unused, const void *mask_host, void *dst_host,
+        uint32_t pixels, void *ctx) {
+    (void) unused;
+    ish_pix_over_solid_mask_row(((struct pix_solid_ctx *) ctx)->src, (const uint8_t *) mask_host,
+            dst_host, pixels);
 }
 
 // Conservative byte-range overlap check between the dst and src rectangles'
@@ -185,7 +233,8 @@ dword_t sys_ish_pixop_guest(guest_addr_t req_addr) {
         return _EFAULT;
 
     if (req.op != ISH_PIX_OP_FILL && req.op != ISH_PIX_OP_COPY &&
-            req.op != ISH_PIX_OP_OVER && req.op != ISH_PIX_OP_OVER_MASK)
+            req.op != ISH_PIX_OP_OVER && req.op != ISH_PIX_OP_OVER_MASK &&
+            req.op != ISH_PIX_OP_COPY_SET_ALPHA)
         return _EOPNOTSUPP;
     if (req.width == 0 || req.height == 0)
         return 0; // no-op, matches pixman's own empty-rect behavior
@@ -197,10 +246,14 @@ dword_t sys_ish_pixop_guest(guest_addr_t req_addr) {
     // smaller than one full row is simply invalid.
     if (req.dst_stride < req.width * 4 || (req.dst_stride % 4) != 0 || (req.dst % 4) != 0)
         return _EOPNOTSUPP;
-    if (req.op != ISH_PIX_OP_FILL &&
+    bool solid = (req.flags & ISH_PIX_FLAG_SRC_SOLID) != 0;
+    if (solid && req.op != ISH_PIX_OP_OVER && req.op != ISH_PIX_OP_OVER_MASK)
+        return _EOPNOTSUPP;
+    bool has_src = req.op != ISH_PIX_OP_FILL && !solid;
+    if (has_src &&
             (req.src_stride < req.width * 4 || (req.src_stride % 4) != 0 || (req.src % 4) != 0))
         return _EOPNOTSUPP;
-    if (req.op != ISH_PIX_OP_FILL &&
+    if (has_src &&
             pix_ranges_overlap(req.dst, req.dst_stride, req.dst_y, req.height,
                                 req.src, req.src_stride, req.src_y, req.height))
         return _EOPNOTSUPP;
@@ -225,10 +278,30 @@ dword_t sys_ish_pixop_guest(guest_addr_t req_addr) {
         return 0;
     }
 
-    if (req.op == ISH_PIX_OP_COPY) {
+    if (req.op == ISH_PIX_OP_COPY || req.op == ISH_PIX_OP_COPY_SET_ALPHA) {
         if (user_transform_rect_two(req.dst, req.dst_stride, req.dst_x, req.dst_y,
                 req.src, req.src_stride, req.src_x, req.src_y,
-                4, req.width, req.height, pix_copy_span, NULL))
+                4, req.width, req.height,
+                req.op == ISH_PIX_OP_COPY ? pix_copy_span : pix_copy_set_alpha_span, NULL))
+            return _EFAULT;
+        return 0;
+    }
+
+    if (req.op == ISH_PIX_OP_OVER_MASK && solid) {
+        struct pix_solid_ctx ctx = { .src = req.fill_pixel };
+        if (user_transform_rect_three(
+                req.dst, req.dst_stride, req.dst_x, req.dst_y, 4,
+                req.mask, req.mask_stride, req.mask_x, req.mask_y, 1,
+                req.mask, req.mask_stride, req.mask_x, req.mask_y, 1,
+                req.width, req.height, pix_over_solid_mask_span, &ctx))
+            return _EFAULT;
+        return 0;
+    }
+
+    if (req.op == ISH_PIX_OP_OVER && solid) {
+        struct pix_solid_ctx ctx = { .src = req.fill_pixel };
+        if (user_transform_rect(req.dst, req.dst_stride, 4, req.dst_x, req.dst_y,
+                req.width, req.height, MEM_WRITE, pix_over_solid_span, &ctx))
             return _EFAULT;
         return 0;
     }
