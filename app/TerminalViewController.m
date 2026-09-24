@@ -281,6 +281,9 @@ static NSArray<NSString *> *ISHSessionCommandWithFallback(NSArray<NSString *> *c
 @property BOOL ignoreKeyboardMotion;
 @property (nonatomic) BOOL hasExternalKeyboard;
 @property (nonatomic) BOOL didApplyDeferredSafeAreaUpdate;
+// See -_installWindowingControlsProbe.
+@property (strong, nonatomic) UIView *windowingControlsProbe;
+@property (nonatomic) CGFloat windowingControlsProbeTop;
 
 @end
 
@@ -508,6 +511,7 @@ static const NSInteger kMaximumTerminalFontSize = 72;
 - (void)viewDidLoad {
     [super viewDidLoad];
     [self _installTerminalStartupOverlay];
+    [self _installWindowingControlsProbe];
 
     // A saved session to choose between, and somebody here to choose: hold the
     // boot until they answer, the way the first-run root picker already does.
@@ -2344,6 +2348,56 @@ static const NSInteger kMaxConsecutiveQuickSessionExits = 3;
 
 - (void)viewSafeAreaInsetsDidChange {
     [super viewSafeAreaInsetsDidChange];
+    [self _updateSafeAreaCompensation];
+}
+
+// Where the window controls sit is part of the window's corner-adapted safe
+// area, which ISHWindowingControlsTopInset reads, and nothing here is told when
+// that alone changes. The size transition and the safe-area callback recompute
+// the top inset, but a window at the top of the screen has the status bar's
+// 32pt of plain safe area whether or not its controls have been accounted for,
+// so if the corner region settles after those have run, the inset keeps its old
+// value. Coming from full screen that is the status bar's 32pt, with the
+// controls over the first rows: missing that one recompute on the way from
+// full screen to the top half of the screen reproduced #580's 555 screenshot
+// exactly in the iPadOS 26.5 simulator.
+//
+// So pin an invisible view to this view's corner-adapted layout guide. Any
+// change to the corner region moves it, moving it lays this view out, and
+// -viewDidLayoutSubviews works the inset out again. The probe is only a
+// trigger: its position includes the inset set from it, so the inset itself
+// still comes from the window.
+- (void)_installWindowingControlsProbe {
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000
+    if (@available(iOS 26.0, *)) {
+        UIView *probe = [[UIView alloc] init];
+        probe.translatesAutoresizingMaskIntoConstraints = NO;
+        probe.hidden = YES;
+        probe.userInteractionEnabled = NO;
+        probe.accessibilityElementsHidden = YES;
+        [self.view addSubview:probe];
+        UILayoutGuide *corner = [self.view layoutGuideForLayoutRegion:[UIViewLayoutRegion safeAreaLayoutRegionWithCornerAdaptation:UIViewLayoutRegionAdaptivityAxisVertical]];
+        [NSLayoutConstraint activateConstraints:@[
+            [probe.topAnchor constraintEqualToAnchor:corner.topAnchor],
+            [probe.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+            [probe.widthAnchor constraintEqualToConstant:0],
+            [probe.heightAnchor constraintEqualToConstant:0],
+        ]];
+        self.windowingControlsProbe = probe;
+        self.windowingControlsProbeTop = -1;
+    }
+#endif
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    UIView *probe = self.windowingControlsProbe;
+    if (probe == nil || self.view.window == nil)
+        return;
+    CGFloat top = CGRectGetMinY(probe.frame);
+    if (top == self.windowingControlsProbeTop)
+        return;
+    self.windowingControlsProbeTop = top;
     [self _updateSafeAreaCompensation];
 }
 

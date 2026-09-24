@@ -123,6 +123,10 @@ void ISHSizeTableSectionTitlesOnMac(UITableView *tableView);
 // corner adaptation is the value that includes the controls, so that is what
 // this returns (#580).
 //
+// If a window's corner adaptation makes no room at all -- the value is just the
+// plain safe area, as the 555 screenshot in #580 shows for a window at the top
+// of the screen -- this assumes the clearance measured everywhere else instead.
+//
 // It is measured on the WINDOW, not on `view`, deliberately: a view
 // controller's own additionalSafeAreaInsets feed into its view's safe area, so
 // asking the view would read back the inset being computed from it.

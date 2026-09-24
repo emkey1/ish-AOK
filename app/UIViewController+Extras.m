@@ -79,6 +79,29 @@ void ISHSizeTableSectionTitlesOnMac(UITableView *tableView) {
     tableView.estimatedSectionFooterHeight = 44;
 }
 
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000
+// How far below a window's plain top safe area the vertical corner adaptation
+// puts the region when it makes room for the window controls. It was 43pt in
+// every windowed state measured, on the iPadOS 26.5 and 27.0 simulators: a
+// window anywhere on screen (plain 10pt, adapted 53pt), a window at the top of
+// the screen under the status bar (32, 75), a window at launch before the
+// status bar arrives (0, 43), and Slide Over (10, 53).
+static const CGFloat ISHWindowingControlsClearance = 43;
+
+static BOOL ISHWindowChromeIsOutsideContent(void) {
+    NSProcessInfo *info = NSProcessInfo.processInfo;
+    if (info.isiOSAppOnMac || info.isMacCatalystApp)
+        return YES;
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 260100
+    if (@available(iOS 26.1, *)) {
+        if (info.isiOSAppOnVision)
+            return YES;
+    }
+#endif
+    return NO;
+}
+#endif
+
 CGFloat ISHWindowingControlsTopInset(UIView *view) {
 #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000
     if (@available(iOS 26.0, *)) {
@@ -99,6 +122,16 @@ CGFloat ISHWindowingControlsTopInset(UIView *view) {
             return 0;
         UIViewLayoutRegion *region = [UIViewLayoutRegion safeAreaLayoutRegionWithCornerAdaptation:UIViewLayoutRegionAdaptivityAxisVertical];
         CGFloat windowTop = [window edgeInsetsForLayoutRegion:region].top;
+        CGFloat plainTop = window.safeAreaInsets.top;
+        // A window whose corner adaptation made no room for its controls. Every
+        // window has them in its top-leading corner, and every window measured
+        // had them cleared by ISHWindowingControlsClearance; content starting at
+        // the plain safe area instead is #580's 555 screenshot, a window at the
+        // top of the screen with its first rows under the controls. Clear them
+        // by the usual amount. An iOS app on a Mac or on Vision Pro has its
+        // window chrome outside the content, so there is nothing to clear.
+        if (windowTop < plainTop + 1 && !ISHWindowChromeIsOutsideContent())
+            windowTop = plainTop + ISHWindowingControlsClearance;
         CGFloat viewTop = [view convertPoint:CGPointZero toView:window].y;
         return MAX(0, windowTop - viewTop);
     }
