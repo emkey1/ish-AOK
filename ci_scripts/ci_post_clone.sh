@@ -88,38 +88,40 @@ fi
 # rustup is required even when the image already ships cargo: the iOS std has
 # to be added, only rustup can add it, and a cargo without it builds the crate
 # for the host, whose objects will not link into an iOS binary.
-rustup_bin=""
-if [ -x "$HOME/.cargo/bin/rustup" ]; then
-    rustup_bin="$HOME/.cargo/bin/rustup"
-elif command -v rustup >/dev/null 2>&1; then
-    rustup_bin=$(command -v rustup)
-fi
-
-if [ -z "$rustup_bin" ] && command -v brew >/dev/null 2>&1; then
-    # Homebrew's rustup formula is keg-only, so rustup-init is not on PATH.
-    brew install rustup || note_problem "brew install rustup failed"
-    rustup_init=""
-    for candidate in "$(brew --prefix rustup 2>/dev/null)/bin/rustup-init" "$(command -v rustup-init 2>/dev/null)"; do
-        if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-            rustup_init="$candidate"
-            break
-        fi
-    done
-    if [ -n "$rustup_init" ]; then
-        "$rustup_init" -y --no-modify-path --default-toolchain stable \
-            || note_problem "rustup-init failed"
-        [ -x "$HOME/.cargo/bin/rustup" ] && rustup_bin="$HOME/.cargo/bin/rustup"
+#
+# The toolchain goes in $HOME/.cargo, installed by rustup's own installer,
+# because that is where meson looks: find_program('cargo', <cargo_home>/bin/cargo)
+# with -Dcargo_home=$HOME/.cargo, and xcodebuild's PATH has neither ~/.cargo/bin
+# nor a Homebrew keg in it.
+#
+# This used to go through Homebrew's rustup formula, and stopped working when
+# the formula changed under it. 1.29 no longer ships rustup-init -- it installs
+# the same binary as `rustup` -- and keeps cargo and rustc as proxies in its
+# unlinked keg. That put a rustup on PATH, but installing a toolchain through it
+# never puts cargo in ~/.cargo/bin. Every cloud build ended "the build cannot
+# proceed without: cargo". Homebrew bought nothing here anyway: the toolchain
+# itself is downloaded from static.rust-lang.org whichever rustup asks for it.
+rustup_bin="$HOME/.cargo/bin/rustup"
+if [ ! -x "$rustup_bin" ]; then
+    rustup_init=$(mktemp "${TMPDIR:-/tmp}/rustup-init.XXXXXX")
+    if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$rustup_init"; then
+        sh "$rustup_init" -y --no-modify-path --profile minimal --default-toolchain stable \
+            || note_problem "the rustup installer (sh.rustup.rs) failed"
     else
-        note_problem "rustup-init not found after installing the rustup formula"
+        note_problem "could not download the rustup installer from sh.rustup.rs"
     fi
+    rm -f "$rustup_init"
 fi
 
-if [ -n "$rustup_bin" ]; then
+if [ -x "$rustup_bin" ]; then
+    # A rustup that was already here may have no toolchain of its own yet.
+    "$rustup_bin" default >/dev/null 2>&1 || "$rustup_bin" default stable \
+        || note_problem "rustup default stable failed"
     # The Archive action builds for the device only.
     "$rustup_bin" target add aarch64-apple-ios \
         || note_problem "rustup target add aarch64-apple-ios failed"
 else
-    note_problem "no rustup, so the aarch64-apple-ios std cannot be installed"
+    note_problem "no rustup in \$HOME/.cargo/bin, so there is no cargo for meson and no aarch64-apple-ios std"
 fi
 
 # --- report -------------------------------------------------------------
