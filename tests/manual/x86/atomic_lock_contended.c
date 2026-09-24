@@ -47,7 +47,7 @@ enum { THREADS = 4, LOOPS = 20000 };
 // One counter per line: false sharing would not break correctness, but it
 // makes a failure much harder to attribute to the instruction that caused it.
 struct slot { volatile uint64_t v; uint64_t pad[7]; };
-static struct slot s[24];
+static struct slot s[25];
 
 // Deliberately misaligned targets live here, at odd offsets from an aligned base.
 static volatile unsigned char arena[256] __attribute__((aligned(64)));
@@ -80,6 +80,13 @@ static void *worker(void *arg) {
         // adc/sbb with the carry pinned, so the arithmetic is still exact
         asm volatile("clc; lock adcl %1, %0" : "+m"(*(volatile uint32_t *) &s[4].v) : "r"(one32) : "cc", "memory");
         asm volatile("stc; lock sbbl %1, %0" : "+m"(*(volatile uint32_t *) &s[5].v) : "r"(one32) : "cc", "memory");
+        // The carry-in must reach the locked op itself. The clc case above
+        // cannot show that (a lost carry reads as 0, which is what it pins),
+        // so adc also runs with CF=1, and sbb once more through the imm path.
+        // The x86_64-host gadgets ran every lock adc/sbb with carry-in 0
+        // until they snapshotted CF outside their CAS loop.
+        asm volatile("stc; lock adcl %1, %0" : "+m"(*(volatile uint32_t *) &s[23].v) : "r"(one32) : "cc", "memory");
+        asm volatile("stc; lock sbbl $1, %0" : "+m"(*(volatile uint32_t *) &s[24].v) : : "cc", "memory");
 
         // --- <alu> [mem], imm  (a different decode path from the reg forms)
         asm volatile("lock addl $1, %0" : "+m"(*(volatile uint32_t *) &s[6].v) : : "cc", "memory");
@@ -180,6 +187,7 @@ int main(int argc, char **argv) {
 
     s[3].v = WANT;              // sub counts down to zero
     s[5].v = 2 * WANT;          // sbb with CF=1 takes two per pass
+    s[24].v = 2 * WANT;
     s[8].v = WANT;              // dec counts down
     s[15].v = 1;                // neg: NOT 0, which neg maps to itself -- a
                                 // counter starting there could never fail
@@ -210,6 +218,8 @@ int main(int argc, char **argv) {
     check("lock subl mem,reg", (uint32_t) s[3].v, 0);
     check("lock adcl mem,reg", (uint32_t) s[4].v, WANT);
     check("lock sbbl mem,reg", (uint32_t) s[5].v, 0);
+    check("lock adcl mem,reg CF=1", (uint32_t) s[23].v, 2 * WANT);
+    check("lock sbbl mem,imm CF=1", (uint32_t) s[24].v, 0);
     check("lock addl mem,imm", (uint32_t) s[6].v, WANT);
     check("lock incl mem", (uint32_t) s[7].v, WANT);
     check("lock decl mem", (uint32_t) s[8].v, 0);
