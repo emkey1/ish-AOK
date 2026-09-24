@@ -943,15 +943,6 @@ void task_thread_cpu_time_ns(struct task *task, uint64_t *user_ns, uint64_t *sys
 #endif
 }
 
-void task_thread_cpu_time(struct task *task, unsigned long *out_utime, unsigned long *out_stime) {
-    uint64_t user_ns, system_ns;
-    task_thread_cpu_time_ns(task, &user_ns, &system_ns);
-    // Truncated per field, exactly as the seconds * 100 + microseconds / 10000
-    // this used to compute from the same microseconds.
-    *out_utime = (unsigned long) (user_ns / NSEC_PER_TICK);
-    *out_stime = (unsigned long) (system_ns / NSEC_PER_TICK);
-}
-
 void task_bank_cpu_time(struct task *task) {
     lock(&cpu_slots_lock, 0);
     if (!task->cpu_time_banked) {

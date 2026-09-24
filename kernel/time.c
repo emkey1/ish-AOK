@@ -1663,6 +1663,22 @@ dword_t sys_adjtimex_guest(guest_addr_t tx_addr) {
 // gone reports its clock as far in the future, so an armed timer stops
 // counting down rather than firing spuriously -- Linux disarms such a timer,
 // and never firing is the same observable outcome.
+//
+// In nanoseconds, as the host keeps it. This counted in jiffies (USER_HZ 100),
+// /proc's unit, and timer_set takes "now" from here at the arming: a 5ms
+// one-shot armed at 7.3ms of CPU was anchored at 0, and due as soon as this
+// read 10ms. The timer thread samples after napping the time left on the wall
+// clock, so a thread that sleeps between bursts of work, using less CPU than
+// that, got its signal with as little as 0.2ms of the 5ms used
+// (tests/manual/timer_thread_cpu_early.c). A 1ms periodic timer saw the clock
+// move in 10ms jumps, and its expiries come ten at a time. Linux never fires a
+// thread CPU timer before the thread has used the time asked for.
+//
+// It can still be late. Darwin moves its figure for a thread that is running
+// only when that thread enters the kernel, and a guest thread in JIT code can
+// go a whole 10ms quantum without: read from the timer thread, the clock
+// stands still that long and then jumps (measured with thread_info on a
+// spinning thread). Late by up to that, as Linux is by up to a tick.
 static struct timespec posix_timer_thread_cpu_now(void *data) {
     struct posix_timer *timer = data;
     struct task *task = pid_get_task_ref(timer->cpu_clock_pid);
@@ -1670,14 +1686,13 @@ static struct timespec posix_timer_thread_cpu_now(void *data) {
         struct timespec forever = { .tv_sec = INT64_MAX / 2, .tv_nsec = 0 };
         return forever;
     }
-    unsigned long utime = 0, stime = 0;
-    task_thread_cpu_time(task, &utime, &stime);
+    uint64_t user_ns = 0, system_ns = 0;
+    task_thread_cpu_time_ns(task, &user_ns, &system_ns);
     task_ref_cnt_mod(task, -1);
-    // task_thread_cpu_time counts in jiffies at USER_HZ = 100.
-    unsigned long ticks = utime + stime;
+    uint64_t ns = user_ns + system_ns;
     struct timespec now = {
-        .tv_sec = (time_t) (ticks / 100),
-        .tv_nsec = (long) ((ticks % 100) * 10000000L),
+        .tv_sec = (time_t) (ns / 1000000000),
+        .tv_nsec = (long) (ns % 1000000000),
     };
     return now;
 }

@@ -1053,9 +1053,7 @@ void guest_cpu_usage_total(uint64_t user_ns, uint64_t system_ns, struct cpu_usag
 // Live user/system CPU time of one task's host thread. Works cross-thread.
 // Reports 0/0 if the thread is gone or the host won't say (on non-Mach hosts
 // the user/system split isn't available and the total is reported as user
-// time). The first is in jiffies (USER_HZ = 100); the second in nanoseconds,
-// to the host's own precision (microseconds on Darwin).
-void task_thread_cpu_time(struct task *task, unsigned long *out_utime, unsigned long *out_stime);
+// time). In nanoseconds, to the host's own precision (microseconds on Darwin).
 void task_thread_cpu_time_ns(struct task *task, uint64_t *user_ns, uint64_t *system_ns);
 // Charges the exiting task's final thread CPU time to its per-virtual-CPU
 // accounting slot; called once from do_exit while the host thread still
