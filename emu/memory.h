@@ -627,6 +627,9 @@ struct pt_entry {
 #define P_WIPEONFORK (1 << 8)
 
 bool pt_is_hole(struct mem *mem, page_t start, pages_t pages);
+// How many pages from `start`, at most `pages`, are mapped or reserved before
+// the first hole. mprotect changes that many; see sys_mprotect_guest.
+pages_t pt_mapped_prefix(struct mem *mem, page_t start, pages_t pages);
 page_t pt_find_hole(struct mem *mem, pages_t size);
 
 // Map memory + offset into fake memory, unmapping existing mappings.

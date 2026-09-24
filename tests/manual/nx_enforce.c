@@ -12,11 +12,19 @@
 //   - mprotect to PROT_READ|PROT_EXEC makes the same page run, and back to
 //     PROT_READ|PROT_WRITE stops it again (translated code must not outlive
 //     the permission);
+//   - mprotect over a range with a hole changes the pages before the hole
+//     and still fails with ENOMEM; a range that starts in a hole changes
+//     nothing;
+//   - mprotect with PROT_GROWSDOWN on a stack page makes the whole stack
+//     executable, down to pages it grows into later -- glibc's way of
+//     honouring a library that needs an executable stack -- and is EINVAL on
+//     a mapping that does not grow down;
 //   - personality(READ_IMPLIES_EXEC) makes a later readable mapping run;
 //   - /proc/self/maps shows the stack without x;
 //   - a signal handler still returns (64-bit guests return through a
 //     trampoline the kernel maps, no longer through the stack).
 #define _GNU_SOURCE
+#include <alloca.h>
 #include <errno.h>
 #include <setjmp.h>
 #include <signal.h>
@@ -30,6 +38,12 @@
 
 #ifndef READ_IMPLIES_EXEC
 #define READ_IMPLIES_EXEC 0x0400000
+#endif
+#ifndef PROT_GROWSDOWN
+#define PROT_GROWSDOWN 0x01000000
+#endif
+#ifndef PROT_GROWSUP
+#define PROT_GROWSUP 0x02000000
 #endif
 
 static long page_size;
@@ -125,6 +139,73 @@ static void leg_run_off_the_end(void) {
     munmap(p, 2 * page_size);
 }
 
+static void leg_mprotect_hole(void) {
+    // [A][hole][C], both halves RW with a return in them.
+    char *a = mmap(NULL, 3 * page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    char *c = a + 2 * page_size;
+    put_ret(a);
+    put_ret(c);
+    munmap(a + page_size, page_size);
+    errno = 0;
+    int r = mprotect(a, 3 * page_size, PROT_READ | PROT_EXEC);
+    check("mprotect across a hole fails", r == -1, r, -1);
+    check("...with ENOMEM", errno == ENOMEM, errno, ENOMEM);
+    expect_runs("...and the pages before the hole run", a);
+    expect_fault("...and the pages after it do not", c, SEGV_ACCERR, c);
+    errno = 0;
+    r = mprotect(a + page_size, 2 * page_size, PROT_READ | PROT_EXEC);
+    check("mprotect starting in a hole is ENOMEM", r == -1 && errno == ENOMEM, errno, ENOMEM);
+    expect_fault("...and changes nothing", c, SEGV_ACCERR, c);
+    munmap(a, page_size);
+    munmap(c, page_size);
+}
+
+// Returns into a buffer far below the caller's frame, on stack pages that did
+// not exist when the stack was made executable.
+static __attribute__((noinline)) int call_on_deep_stack(void) {
+    size_t depth = 256 * 1024;
+    volatile unsigned char *deep = alloca(depth);
+    for (size_t i = depth; i >= (size_t) page_size; i -= (size_t) page_size)
+        deep[i - 1] = 0;
+    unsigned char *code = (unsigned char *) (((uintptr_t) deep + 15) & ~(uintptr_t) 15);
+    put_ret(code);
+    return try_call(code);
+}
+
+static void leg_stack_grows_down(void) {
+    char *m = mmap(NULL, page_size, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    errno = 0;
+    int r = mprotect(m, page_size, PROT_READ | PROT_GROWSDOWN);
+    check("PROT_GROWSDOWN on a plain mapping is EINVAL", r == -1 && errno == EINVAL, errno, EINVAL);
+    errno = 0;
+    r = mprotect(m, page_size, PROT_READ | PROT_GROWSUP);
+    check("PROT_GROWSUP is EINVAL", r == -1 && errno == EINVAL, errno, EINVAL);
+    munmap(m, page_size);
+
+    // In a child: the stack stays executable for the rest of its life.
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        failures_total = 0;
+        unsigned char buf[64] __attribute__((aligned(16)));
+        put_ret(buf);
+        expect_fault("stack before PROT_GROWSDOWN", buf, SEGV_ACCERR, buf);
+        uintptr_t page = (uintptr_t) buf & ~(uintptr_t) (page_size - 1);
+        errno = 0;
+        r = mprotect((void *) page, page_size,
+                     PROT_READ | PROT_WRITE | PROT_EXEC | PROT_GROWSDOWN);
+        check("mprotect(PROT_GROWSDOWN|RWX) on the stack", r == 0, errno, 0);
+        expect_runs("...then the stack runs", buf);
+        int deep = call_on_deep_stack();
+        check("...and so does stack it grows into later", deep == 0, deep, 0);
+        fflush(stdout);
+        _exit(failures_total ? 1 : 0);
+    }
+    int st;
+    waitpid(pid, &st, 0);
+    check("PROT_GROWSDOWN child", WIFEXITED(st) && WEXITSTATUS(st) == 0, st, 0);
+}
+
 static void leg_stack(void) {
     // Aligned so the whole instruction is on one page.
     unsigned char buf[64] __attribute__((aligned(16)));
@@ -203,7 +284,9 @@ int main(int argc, char **argv) {
     leg_signal_return();
     leg_rw_page();
     leg_run_off_the_end();
+    leg_mprotect_hole();
     leg_stack();
+    leg_stack_grows_down();
     leg_heap();
     leg_read_implies_exec();
     leg_maps();

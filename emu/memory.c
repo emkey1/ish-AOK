@@ -1780,6 +1780,21 @@ bool pt_is_hole(struct mem *mem, page_t start, pages_t pages) {
     return true;
 }
 
+pages_t pt_mapped_prefix(struct mem *mem, page_t start, pages_t pages) {
+    pages_t done = 0;
+    while (done < pages && start + done < mem->page_limit) {
+        if (mem_pt(mem, start + done) != NULL) {
+            done++;
+            continue;
+        }
+        struct mem_lazy_map *l = mem_lazy_find(mem, start + done);
+        if (l == NULL)
+            break;
+        done = l->end - start;
+    }
+    return done < pages ? done : pages;
+}
+
 // ---- exact ownership of a struct data -------------------------------------
 //
 // docs/simulated_swap_plan.md section 3.8, with the two corrections section 2.5

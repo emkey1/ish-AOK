@@ -1197,54 +1197,134 @@ int_t sys_mremap(addr_t addr, dword_t old_len, dword_t new_len, dword_t flags, a
 // see that coming. mmap already refused the same thing at map time; this is
 // the door it left open.
 //
-// Caller holds the memory write lock.
-static bool mprotect_write_forbidden(struct mem *mem, page_t start, pages_t pages) {
-    for (page_t page = start; page < start + pages; page++) {
-        struct pt_entry *e = mem_pt(mem, page);
+// Returns how many pages from `start` may be made writable: the change stops
+// at the first that may not, as Linux's stops at that mapping. Caller holds the
+// memory write lock.
+static pages_t mprotect_writable_prefix(struct mem *mem, page_t start, pages_t pages) {
+    for (pages_t i = 0; i < pages; i++) {
+        struct pt_entry *e = mem_pt(mem, start + i);
         if (e == NULL || !(e->flags & P_SHARED) || e->data == NULL)
             continue;
         // Shared ANONYMOUS memory has no file behind it and is always writable.
         struct fd *fd = e->data->fd;
         if (fd != NULL && (fd->flags & O_ACCMODE_) == O_RDONLY_)
-            return true;
+            return i;
+    }
+    return pages;
+}
+
+#define PROT_GROWSDOWN_ 0x01000000
+#define PROT_GROWSUP_ 0x02000000
+
+// The flags of a page that is mapped or reserved; false for a hole.
+static bool mprotect_page_flags(struct mem *mem, page_t page, unsigned *flags) {
+    struct pt_entry *e = mem_pt(mem, page);
+    if (e != NULL) {
+        *flags = e->flags;
+        return true;
+    }
+    struct mem_lazy_map *l = mem_lazy_find(mem, page);
+    if (l != NULL) {
+        *flags = l->flags;
+        return true;
     }
     return false;
+}
+
+// PROT_GROWSDOWN: the change runs from the bottom of the grows-down mapping
+// the range starts in -- glibc's _dl_make_stack_executable names one page near
+// the top of the stack and means all of it. The first mapping in the range
+// has to be one that grows down; in AOK that is only ever the main stack.
+// Caller holds the memory write lock.
+static int_t mprotect_grows_down(struct mem *mem, page_t *start, pages_t *pages) {
+    pages_t skip = 0;
+    unsigned flags = 0;
+    while (skip < *pages && *start + skip < mem->page_limit &&
+            !mprotect_page_flags(mem, *start + skip, &flags))
+        skip++;
+    if (skip >= *pages || *start + skip >= mem->page_limit)
+        return _ENOMEM;
+    if (!(flags & P_GROWSDOWN))
+        return _EINVAL;
+    page_t bottom = *start + skip;
+    while (bottom > 0 && mprotect_page_flags(mem, bottom - 1, &flags) && (flags & P_GROWSDOWN))
+        bottom--;
+    *pages = *start + *pages - bottom;
+    *start = bottom;
+    return 0;
 }
 
 int_t sys_mprotect_guest(guest_addr_t addr, qword_t len, int_t prot) {
     STRACE("mprotect(%#llx, %#llx, 0x%x)", (unsigned long long) addr,
            (unsigned long long) len, prot);
+    // Linux's order: the grows pair, the alignment, and an empty range
+    // succeeds before prot itself is looked at.
+    int_t grows = prot & (PROT_GROWSDOWN_ | PROT_GROWSUP_);
+    prot &= ~(PROT_GROWSDOWN_ | PROT_GROWSUP_);
+    if (grows == (PROT_GROWSDOWN_ | PROT_GROWSUP_))
+        return _EINVAL;
     if (PGOFFSET(addr) != 0)
         return _EINVAL;
+    if (len == 0)
+        return 0;
     prot &= ~(int_t) PROT_SEM_;    // see mmap_common_guest
     if (prot & ~P_RWX)
         return _EINVAL;
     // READ_IMPLIES_EXEC, as mmap_common_guest.
     if ((prot & P_READ) && (current->group->personality & READ_IMPLIES_EXEC_))
         prot |= P_EXEC;
+    page_t start = PAGE(addr);
     pages_t pages = PAGE_ROUND_UP(len);
     const struct vm_limits lim = vm_limits_now();
     mem_write_lock_with_pokes(current->mem);
-    if ((prot & P_WRITE) && mprotect_write_forbidden(current->mem, PAGE(addr), pages)) {
+    int_t err = 0;
+    if (grows & PROT_GROWSDOWN_) {
+        err = mprotect_grows_down(current->mem, &start, &pages);
+    } else if (grows & PROT_GROWSUP_) {
+        // Nothing grows up on the architectures AOK runs.
+        err = pt_mapped_prefix(current->mem, start, 1) != 0 ? _EINVAL : _ENOMEM;
+    }
+    if (err < 0) {
         mem_write_unlock_with_pokes(current->mem);
-        return _EACCES;
+        return err;
+    }
+
+    // Linux changes the mappings one after another and stops at the first it
+    // cannot: those before a hole, or before a shared read-only file mapping
+    // asked to be writable, keep their new protection and the call still
+    // fails. A program that rounds its length up past the end of a mapping
+    // and ignores the ENOMEM -- as tests/manual/modify.c once did -- gets the
+    // pages it meant. A range that STARTS in a hole changes nothing.
+    pages_t todo = pt_mapped_prefix(current->mem, start, pages);
+    int_t stop = todo < pages ? _ENOMEM : 0;
+    if (prot & P_WRITE) {
+        pages_t writable = mprotect_writable_prefix(current->mem, start, todo);
+        if (writable < todo) {
+            todo = writable;
+            stop = _EACCES;
+        }
     }
     // RLIMIT_DATA: making private pages writable makes them data (Linux's
     // mprotect_fixup), so a heap reserved PROT_NONE and opened up piece by
-    // piece -- glibc's thread arenas -- is held to the limit too.
-    if ((prot & P_WRITE) && lim.data != RLIM_INFINITY_) {
+    // piece -- glibc's thread arenas -- is held to the limit too. Checked for
+    // the whole change at once, where Linux could still make the mappings
+    // before the one that crosses the limit writable.
+    if ((prot & P_WRITE) && lim.data != RLIM_INFINITY_ && todo != 0) {
         size_t in_total, in_data, in_private;
-        mem_vm_pages_range_ex(current->mem, PAGE(addr), PAGE(addr) + pages,
+        mem_vm_pages_range_ex(current->mem, start, start + todo,
                 &in_total, &in_data, &in_private);
         struct vm_limits data_only = {RLIM_INFINITY_, lim.data, lim.data_max};
         if (in_private > in_data &&
                 !vm_may_expand(current->mem, &data_only, in_private - in_data, true, 0, 0)) {
-            mem_write_unlock_with_pokes(current->mem);
-            return _ENOMEM;
+            todo = 0;
+            stop = _ENOMEM;
         }
     }
-    int err = pt_set_flags(current->mem, PAGE(addr), pages, prot);
+    if (todo != 0)
+        err = pt_set_flags(current->mem, start, todo, prot);
     mem_write_unlock_with_pokes(current->mem);
+    if (err == 0)
+        err = stop;
     if (err == _ENOMEM)
         amd64_vm_failure_trace("mprotect", err, addr, len, prot, 0, 0, 0);
     return err;
