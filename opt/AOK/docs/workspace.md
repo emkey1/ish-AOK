@@ -97,6 +97,14 @@ sh /AOK/tools/start-wayland.sh        # the applet runs this for you
 as a `WAYLAND_COMPOSITOR_CMD=sway` alternative. `start-wayland.sh` also honours
 `WAYVNC_PORT` and `ISH_DISPLAY_READY_FILE`.
 
+One Wayland desktop runs at a time. While one is open, `start-wayland.sh`
+refuses to start another and exits 1 with "a Wayland session is already
+running (pid N)", leaving the open desktop alone. The same goes for a Wayland
+applet opened in a second Workspace window: it shows that message instead of a
+desktop. The dock, the Launcher and `ws-wayland` bring the running desktop
+forward rather than starting one. A desktop that is closing is waited for, so
+closing the applet and opening it again straight away still works.
+
 The desktop gets its own session D-Bus when `dbus-daemon` is installed, which
 `setup-wayland.sh` also does. Everything started inside it finds that bus
 through `DBUS_SESSION_BUS_ADDRESS`, so programs that need one, such as waybar

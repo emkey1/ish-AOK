@@ -123,6 +123,88 @@ WAYVNC_PORT="${WAYVNC_PORT:-5901}"
 COMPOSITOR_CMD="${WAYLAND_COMPOSITOR_CMD:-labwc}"
 READY_FILE="${ISH_DISPLAY_READY_FILE:-/tmp/ish-display.ready}"
 ERROR_FILE="$READY_FILE.error"
+
+# ONE Wayland session at a time, and a second run refuses rather than takes
+# over. Every session binds the same WAYVNC_PORT and the same $READY_FILE, and
+# the stale-session sweep below kills labwc/foot/wayvnc by name, so a second
+# run used to end whatever desktop was already on screen -- a second Workspace
+# window's Wayland applet, or this script typed into the desktop's own foot,
+# silently closed the one in use. So before anything below touches a shared
+# name, look for a live session and stop if there is one.
+#
+# A live session is found in /proc, not in a lock file: /tmp and /run are
+# wiped partway through guest boot, which is exactly when the applet starts
+# the first session, and $HOME differs between a root session and an "Open
+# Everything as Default User" one.
+#
+# A session that is SHUTTING DOWN is not a live one: closing the applet and
+# opening it again hangs up the old session's pty and starts the new one at
+# once, and the old one's cleanup() runs whenever the guest scheduler gets to
+# it. cleanup() leaves /tmp/ish-display.closing.<pid> for exactly as long as it
+# runs, and this waits for such a session to finish. A brief grace covers the
+# moment between the hangup and cleanup() starting.
+aok_ppid() { sed -n 's/^PPid:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null; }
+# Is pid $1 a shell running this script? argv[0] must be a shell, so vi or
+# less looking at start-wayland.sh is not mistaken for a session.
+aok_runs_start_wayland() {
+    _wl_n=0
+    _wl_hit=1
+    while IFS= read -r _wl_arg; do
+        if [ "$_wl_n" = 0 ]; then
+            case "${_wl_arg##*/}" in sh|dash|bash|ash|busybox) ;; *) return 1 ;; esac
+        else
+            case "$_wl_arg" in *start-wayland.sh) _wl_hit=0 ;; esac
+        fi
+        _wl_n=$((_wl_n + 1))
+    done <<AOK_CMDLINE_EOF
+$(tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null)
+AOK_CMDLINE_EOF
+    return $_wl_hit
+}
+# Pids of every OTHER session. This run is excluded, and so are its ancestors
+# (the su/sh wrappers DisplayViewController starts it through) and its own
+# subshells, whose cmdline fork copies unchanged -- including the $(...) this
+# runs in.
+aok_other_wayland_sessions() {
+    _wl_mine=" "
+    _wl_p=$$
+    while [ -n "$_wl_p" ] && [ "$_wl_p" -gt 1 ]; do
+        _wl_mine="$_wl_mine$_wl_p "
+        _wl_p=$(aok_ppid "$_wl_p")
+    done
+    for _wl_file in $(grep -ls 'start-wayland\.sh' /proc/[0-9]*/cmdline 2>/dev/null); do
+        _wl_pid=${_wl_file#/proc/}
+        _wl_pid=${_wl_pid%/cmdline}
+        case "$_wl_mine" in *" $_wl_pid "*) continue ;; esac
+        aok_runs_start_wayland "$_wl_pid" || continue
+        _wl_p=$(aok_ppid "$_wl_pid")
+        _wl_own=0
+        while [ -n "$_wl_p" ] && [ "$_wl_p" -gt 1 ]; do
+            [ "$_wl_p" = "$$" ] && { _wl_own=1; break; }
+            _wl_p=$(aok_ppid "$_wl_p")
+        done
+        [ "$_wl_own" = 1 ] || printf '%s ' "$_wl_pid"
+    done
+}
+_wl_others=$(aok_other_wayland_sessions)
+_wl_waited=0
+while [ -n "$_wl_others" ]; do
+    _wl_closing=0
+    for _wl_pid in $_wl_others; do
+        [ -e "/tmp/ish-display.closing.$_wl_pid" ] && _wl_closing=1
+    done
+    # Quarter-second polls: 3 s of grace, or 20 s for one that is closing.
+    if [ "$_wl_closing" = 1 ]; then
+        [ "$_wl_waited" -lt 80 ] \
+            || die "the previous Wayland session (pid ${_wl_others% }) is still shutting down after 20 seconds -- try again in a moment"
+    elif [ "$_wl_waited" -ge 12 ]; then
+        die "a Wayland session is already running (pid ${_wl_others% }). Only one Wayland desktop can run at a time: use the one that is open, or close it first."
+    fi
+    sleep 0.25
+    _wl_waited=$((_wl_waited + 1))
+    _wl_others=$(aok_other_wayland_sessions)
+done
+
 rm -f "$READY_FILE" "$ERROR_FILE"
 
 for bin in $COMPOSITOR_CMD foot wayvnc; do
@@ -130,17 +212,15 @@ for bin in $COMPOSITOR_CMD foot wayvnc; do
         || die "'$bin' not found -- run 'sudo sh /AOK/tools/setup-wayland.sh' first"
 done
 
-# Defensively clean up any stale compositor/foot/wayvnc left over from a
-# prior session that didn't get torn down before this one started (a fast
-# Reconnect, or closing and reopening the applet, can both race ahead of the
-# old session's async guest-side cleanup -- the native side now waits for
-# confirmed exit before reconnecting, but this covers it independent of
-# that, since every session binds the same fixed WAYVNC_PORT regardless of
-# who started it). Without this, overlapping instances fight over that port
-# and pile up as unreaped zombies that drag the whole guest's scheduling
-# down until the applet looks wedged. Both compositors are killed by name
-# (not just $COMPOSITOR_CMD) in case WAYLAND_COMPOSITOR_CMD was switched
-# between sessions and a stale instance of the *other* one is still around.
+# Clean up any compositor/foot/wayvnc a dead session left behind. The
+# one-session check above has already refused, or waited out, every session
+# whose script is still alive, so whatever is killed here is an orphan: its
+# script was killed too hard to run cleanup(), and it still holds the fixed
+# WAYVNC_PORT. Without this, overlapping instances fight over that port and
+# pile up as unreaped zombies that drag the whole guest's scheduling down
+# until the applet looks wedged. Both compositors are killed by name (not
+# just $COMPOSITOR_CMD) in case WAYLAND_COMPOSITOR_CMD was switched between
+# sessions and a stale instance of the *other* one is still around.
 pkill -x sway 2>/dev/null
 pkill -x labwc 2>/dev/null
 pkill -x foot 2>/dev/null
@@ -211,6 +291,10 @@ WL_RUNTIME_BASE="$HOME/.cache/ish-display"
 # its socket path, which nothing else uses.
 pkill -f "dbus-daemon --session --fork --nopidfile --address=unix:path=$WL_RUNTIME_BASE/" 2>/dev/null
 rm -rf "$WL_RUNTIME_BASE" 2>/dev/null
+# Likewise a closing marker whose cleanup() was killed before it removed it.
+# No other session is alive by now, so none of these is current, and guest
+# pids restart at 1 every boot: a stale one would name a later live session.
+rm -f /tmp/ish-display.closing.* 2>/dev/null
 export XDG_RUNTIME_DIR="$WL_RUNTIME_BASE/$$"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR"
@@ -309,6 +393,9 @@ PANEL_PID=""
 
 cleanup() {
     trap - TERM INT HUP EXIT
+    # Tells a session starting now that this one is going, not staying, so it
+    # waits instead of refusing (see the one-session check near the top).
+    : > "/tmp/ish-display.closing.$$" 2>/dev/null
     rm -f "$READY_FILE"
     [ -n "$PANEL_PID" ] && kill "$PANEL_PID" 2>/dev/null
     [ -n "$WAYVNC_PID" ] && kill "$WAYVNC_PID" 2>/dev/null
@@ -317,6 +404,7 @@ cleanup() {
     wait 2>/dev/null
     [ -n "$DBUS_DAEMON_PID" ] && kill "$DBUS_DAEMON_PID" 2>/dev/null
     rm -rf "$XDG_RUNTIME_DIR"
+    rm -f "/tmp/ish-display.closing.$$"
     exit 0
 }
 trap cleanup TERM INT HUP EXIT
