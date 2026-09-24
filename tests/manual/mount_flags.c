@@ -171,6 +171,10 @@ int main(int argc, char **argv) {
     // MS_MOVE relocates an existing mount.
     is_ok("move", mount("dst", "moved", NULL, MS_MOVE, NULL));
     check("move.reads", file_has("moved/file", "hello"));
+    // ...and leaves no reference behind: a plain umount of it succeeds. The
+    // move tells the filesystem where it went, holding a reference meanwhile,
+    // and one not given back would make this EBUSY.
+    is_ok("move.umount", umount("moved"));
 
     // A genuinely-unknown flag is still rejected (AOK only; real Linux ignores it).
     if (access("/proc/ish", F_OK) == 0)

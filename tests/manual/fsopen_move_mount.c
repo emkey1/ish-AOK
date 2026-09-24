@@ -234,7 +234,30 @@ int main(int argc, char **argv) {
     // (checked above) is the extent of what this syscall family promises in
     // this codebase today.
 
-    umount2(target, MNT_DETACH);
+    // The move must not leave a reference behind. A plain umount is the
+    // witness, where MNT_DETACH would succeed over any number of them. First
+    // with the fsmount fd still open, which really does hold one, so EBUSY
+    // here shows the witness can see a reference at all; then without it.
+    errno = 0;
+    r = umount(target);
+    if (r == 0 || errno != EBUSY) {
+        printf("FAIL: umount with the fsmount fd open -> %d (%s), want EBUSY\n",
+               r, r == 0 ? "ok" : strerror(errno));
+        failures_total++;
+    } else {
+        test_logf("umount with the fsmount fd open -> EBUSY\n");
+    }
+    close(mfd);
+    close(fs_fd);
+    r = umount(target);
+    if (r != 0) {
+        printf("FAIL: umount after closing the fsmount fd -> %d (%s): the move kept a reference\n",
+               r, strerror(errno));
+        failures_total++;
+        umount2(target, MNT_DETACH);
+    } else {
+        test_logf("umount after closing the fsmount fd -> 0\n");
+    }
     rmdir(target);
 
     return finish_suite("fsopen_move_mount");

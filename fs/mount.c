@@ -164,6 +164,17 @@ void mount_release(struct mount *mount) {
     unlock(&mounts_lock);
 }
 
+// Tell a mount's filesystem it has moved (fs_ops.relocated). The caller has
+// just re-pointed it under mounts_lock and taken a reference there; this runs
+// after the unlock, since a filesystem may do real work in the hook (iosfs
+// hands its bookmark to the main queue), and gives the reference back.
+static void mount_notify_relocated(struct mount *mount, const char *old_point,
+        const char *new_point) {
+    if (mount->fs->relocated != NULL)
+        mount->fs->relocated(mount, old_point, new_point);
+    mount_release(mount);
+}
+
 // Mount ID as exposed in /proc/self/mountinfo and statx's stx_mnt_id:
 // 1-based position in the mounts list. The two consumers must agree --
 // systemd cross-checks statx STATX_MNT_ID against mountinfo.
@@ -811,7 +822,9 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
                 break;
         }
         list_add_before(&after->mounts, &found->mounts);
+        found->refcount++;  // for mount_notify_relocated
         unlock(&mounts_lock);
+        mount_notify_relocated(found, op_source, point);
         proc_mountinfo_notify_changed();
         return 0;
     }
@@ -1328,7 +1341,9 @@ static int mount_relocate(const char *from_point, const char *to_point) {
             break;
     }
     list_add_before(&after->mounts, &found->mounts);
+    found->refcount++;  // for mount_notify_relocated
     unlock(&mounts_lock);
+    mount_notify_relocated(found, from_point, to_point);
     return 0;
 }
 
