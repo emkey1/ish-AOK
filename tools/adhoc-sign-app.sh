@@ -64,7 +64,7 @@ bundle_id=$(echo "$settings" | awk -F' = ' '/ PRODUCT_BUNDLE_IDENTIFIER = /{prin
 : "${bundle_id:?could not resolve PRODUCT_BUNDLE_IDENTIFIER}"
 
 app_entitlements=$(entitlements_for_target iSH-AOK app/iSH.entitlements)
-appex_entitlements=$(entitlements_for_target iSH-AOK.FileProvider iSHFileProviderRelease.entitlements)
+appex_entitlements=$(entitlements_for_target iSH-AOK.FileProvider app/FileProvider/iSHFileProvider.entitlements)
 expand "$app_entitlements" "$work/app.plist"
 expand "$appex_entitlements" "$work/appex.plist"
 
