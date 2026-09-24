@@ -15,8 +15,11 @@
  * runs on a host thread the stop does not touch -- but these do:
  *
  *   thread CPU clock   a CLOCK_THREAD_CPUTIME_ID timer reads its thread's CPU
- *                      time, which AOK samples in 10ms steps: a 1ms timer saw
- *                      ten periods go by at once, and counted one.
+ *                      time from another thread, and on Darwin sees it move in
+ *                      jumps of up to 10ms (a running thread's figure moves
+ *                      when it enters the kernel; AOK also rounded it to 10ms
+ *                      steps then): a 1ms timer saw ten periods go by at
+ *                      once, and counted one.
  *   process CPU clock  a CLOCK_PROCESS_CPUTIME_ID timer, with four threads
  *                      spinning: the clock runs four times faster than the
  *                      thread sleeping on it, and three periods in four went.
@@ -369,7 +372,11 @@ static void cpu_scenario(const char *label, clockid_t clock, int sig, int spinne
     int got = sigtimedwait(&one, &si, &zero);
     int64_t after = clock_ns(clock);
     timer_delete(t);
-    while (sigtimedwait(&one, &si, &zero) > 0)
+    /* Into a siginfo of its own: an expiry between the take and the delete
+     * queues a fresh signal, and draining it into `si` counted that one's
+     * overrun, near 0, instead (1-5 of ~300 in one round in 16). */
+    siginfo_t rest;
+    while (sigtimedwait(&one, &rest, &zero) > 0)
         ;
 
     int64_t cpu = after - c0a;
@@ -388,23 +395,25 @@ static void cpu_scenario(const char *label, clockid_t clock, int sig, int spinne
         return;
     }
     /* The timer's first expiry is a period after it was armed. How far behind
-     * the clock a count may be: AOK samples a thread's CPU time in 10ms steps,
-     * and the process clock gains a period per spinner while the timer's
-     * thread sleeps one out. Short of that, it is the failure. */
+     * the clock a count may be: the timer's host thread reads this thread's
+     * CPU time from outside it, and Darwin moves a running thread's figure
+     * only when it enters the kernel -- up to a 10ms quantum behind (measured
+     * 0-9 periods short) -- and the process clock gains a period per spinner
+     * while the timer's thread sleeps one out. Short of that, it is the
+     * failure. */
     int64_t late = LATE_PERIODS + (clock == CLOCK_THREAD_CPUTIME_ID ? 10 : spinners);
     int64_t first = c0b + PERIOD_NS;
     int64_t lo = expiries_by(first, before) - late - expiries_by(first, before) / 20;
     int64_t hi = expiries_by(c0a + PERIOD_NS, after);
     /* AOK's process timer runs on the emulator's whole CPU time, of which the
-     * guest's is most: a little over. Its thread timer reads the thread's CPU
-     * time in 10ms steps, the arming included, so it may start up to a step
-     * before the clock this reads -- and run ten periods ahead of it -- and
-     * from the host's thread_info, which keeps its own count. Counting a
-     * period twice would be far over either. */
+     * guest's is most: a little over. Counting a period twice would be far
+     * over that. The thread timer gets nothing: its arming is anchored after
+     * c0a and its clock never reads ahead of this thread's own, so no expiry
+     * can be counted before its time. (It read the CPU time in 10ms steps,
+     * the arming included, and could run ten periods ahead: see
+     * timer_thread_cpu_early.c.) */
     if (clock == CLOCK_PROCESS_CPUTIME_ID)
         hi += hi / 5 + LATE_PERIODS;
-    else
-        hi += 10 + hi / 10;
     int64_t n = 1 + (int64_t) si.si_overrun;
     if (n < lo || n > hi) {
         printf("FAIL %s: %lld expiries counted, want %lld..%lld (a 1ms timer on a clock "
