@@ -31,6 +31,8 @@ ktop/README.md
 pixman/ish_pixman_shim.c
 pixman/build-shim.sh
 pixman/README.md
+pixman/pixman.h
+pixman/pixman-version.h
 crypto/install-crypto-accel.sh
 crypto/ish_provider.c
 crypto/README.md

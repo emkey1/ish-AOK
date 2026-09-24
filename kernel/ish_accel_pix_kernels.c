@@ -15,6 +15,13 @@ void ish_pix_copy_row(const void *src, void *dst, uint32_t pixels) {
     memcpy(dst, src, (size_t) pixels * 4);
 }
 
+void ish_pix_copy_row_set_alpha(const void *src, void *dst, uint32_t pixels) {
+    const uint32_t *s = (const uint32_t *) src;
+    uint32_t *d = (uint32_t *) dst;
+    for (uint32_t i = 0; i < pixels; i++)
+        d[i] = s[i] | 0xff000000u;
+}
+
 // Fast approximate divide-by-255, exact for all inputs in [0,255] -- the
 // same identity pixman itself uses internally (verified empirically: see
 // the OVER validation this kernel is derived from).
@@ -73,5 +80,33 @@ void ish_pix_over_mask_row(const void *src, const uint8_t *mask, void *dst, uint
         uint8_t og = add_sat_un8(sg, mul_un8(dg, inv));
         uint8_t ob = add_sat_un8(sb, mul_un8(db, inv));
         d[i] = ((uint32_t) oa << 24) | ((uint32_t) or_ << 16) | ((uint32_t) og << 8) | ob;
+    }
+}
+
+// One premultiplied OVER of s (already scaled by any mask) onto d, the
+// formula ish_pix_over_row and ish_pix_over_mask_row share.
+static inline uint32_t over_px(uint8_t sa, uint8_t sr, uint8_t sg, uint8_t sb, uint32_t dp) {
+    uint8_t da = (uint8_t) (dp >> 24), dr = (uint8_t) (dp >> 16), dg = (uint8_t) (dp >> 8), db = (uint8_t) dp;
+    uint8_t inv = (uint8_t) (255 - sa);
+    uint8_t oa = add_sat_un8(sa, mul_un8(da, inv));
+    uint8_t or_ = add_sat_un8(sr, mul_un8(dr, inv));
+    uint8_t og = add_sat_un8(sg, mul_un8(dg, inv));
+    uint8_t ob = add_sat_un8(sb, mul_un8(db, inv));
+    return ((uint32_t) oa << 24) | ((uint32_t) or_ << 16) | ((uint32_t) og << 8) | ob;
+}
+
+void ish_pix_over_solid_row(uint32_t src, void *dst, uint32_t pixels) {
+    uint32_t *d = (uint32_t *) dst;
+    uint8_t sa = (uint8_t) (src >> 24), sr = (uint8_t) (src >> 16), sg = (uint8_t) (src >> 8), sb = (uint8_t) src;
+    for (uint32_t i = 0; i < pixels; i++)
+        d[i] = over_px(sa, sr, sg, sb, d[i]);
+}
+
+void ish_pix_over_solid_mask_row(uint32_t src, const uint8_t *mask, void *dst, uint32_t pixels) {
+    uint32_t *d = (uint32_t *) dst;
+    uint8_t sa = (uint8_t) (src >> 24), sr = (uint8_t) (src >> 16), sg = (uint8_t) (src >> 8), sb = (uint8_t) src;
+    for (uint32_t i = 0; i < pixels; i++) {
+        uint8_t ma = mask[i];
+        d[i] = over_px(mul_un8(sa, ma), mul_un8(sr, ma), mul_un8(sg, ma), mul_un8(sb, ma), d[i]);
     }
 }

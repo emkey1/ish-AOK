@@ -24,6 +24,8 @@ calls (labwc + the app combined), consistently across repeated runs -- see
 
 ## Install
     sh build-shim.sh                # builds + installs to /usr/local/lib/ish-pixman
+Needs only a C compiler: the system's pixman-1 headers are used when
+installed, and otherwise the copy of `pixman.h` (0.44) vendored here.
 `start-wayland.sh` exports `LD_PRELOAD` automatically when it finds the
 built `.so` there -- no further steps once built.
 
@@ -43,17 +45,29 @@ it was declined -- with its call count, pixels and time. Rank the shapes by
 time to decide what to accelerate next.
 
 ## Scope / limitations
-- Accelerated: `pixman_image_composite32` (and the 16-bit
-  `pixman_image_composite`) for SRC and OVER without a mask, OVER with an a8
-  mask; `pixman_fill` at 32bpp. Source and destination a8r8g8b8 or
-  x8r8g8b8, bits images only.
-- Declines, to real pixman: solid-fill and gradient sources or masks, any
-  clip region, transform, non-NEAREST filter, repeat other than NONE, alpha
-  map, component alpha, anything out of bounds, and any other op or op+mask
-  combination.
-- `pixman_blt`, `pixman_image_fill_boxes`/`fill_rectangles`, the glyph and
-  trapezoid entry points are interposed only to TIME them; they do not
-  accelerate themselves. `fill_boxes`' own SRC path reaches `pixman_fill`,
-  which does, whenever pixman's internal call goes through the PLT.
+- Accelerated, each checked byte for byte against real pixman
+  (`tests/manual/pixman_accel.c` for the kernel, `tests/manual/pixman_shim.c`
+  for the shim):
+  - `pixman_image_composite32` / `pixman_image_composite`: SRC and OVER with
+    an a8r8g8b8/x8r8g8b8 bits source, OVER through an a8 mask, and the same
+    with a SOLID source (SRC or opaque OVER becomes a fill); onto an
+    a8r8g8b8/x8r8g8b8 destination, clamped to its bounds and cut by its clip
+    region (up to 64 rectangles), one kernel request per rectangle.
+  - `pixman_fill` at 32bpp, `pixman_blt` at 32bpp (where the guest's pixman
+    implements blt at all), and `pixman_image_fill_boxes` /
+    `pixman_image_fill_rectangles` for SRC, CLEAR and OVER, reimplemented
+    here instead of passed through (pixman's own builds a region per call).
+- Small requests stay in the guest: fills under 1024 pixels and copies under
+  512 are done by the shim itself (the same stores), because a syscall's
+  share of jit->lock costs more than it saves when several threads of one
+  process are drawing at once. OVER has no floor.
+- Declines, to real pixman: gradient sources or masks, a solid mask, a clip
+  on a source or mask, transform, non-NEAREST filter, repeat other than
+  NONE, alpha map, component alpha, a source read outside its bounds, any
+  other op, SRC through a mask, and a destination clip of more than 64
+  rectangles in the composite's rect.
+- The glyph and trapezoid entry points are interposed only to time them:
+  pixman composites glyphs through its internal fast paths, which never come
+  back through the shim.
 - Must be built per guest arch and shipped in the rootfs (a rootfs-prep
   step, same as the crypto provider).

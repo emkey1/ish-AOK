@@ -26,6 +26,12 @@ void ish_pix_fill_row(void *dst, uint32_t pixels, uint32_t value);
 // so this never needs memmove-style direction handling.
 void ish_pix_copy_row(const void *src, void *dst, uint32_t pixels);
 
+// PIXMAN_OP_SRC from an x8r8g8b8 source into an a8r8g8b8 destination: pixman
+// does NOT copy the source's padding byte, it writes 0xff alpha (its
+// src_x888_8888 fast path; checked against real pixman, which copies the
+// byte unchanged for every other a8r8g8b8/x8r8g8b8 pairing).
+void ish_pix_copy_row_set_alpha(const void *src, void *dst, uint32_t pixels);
+
 // Premultiplied-alpha OVER of `pixels` consecutive a8r8g8b8 src pixels onto
 // a8r8g8b8 dst pixels: out_c = src_c + mul_un8(dst_c, 255 - src_a), applied
 // uniformly to all 4 byte lanes (A,R,G,B, each saturating). If
@@ -55,5 +61,14 @@ void ish_pix_over_row(const void *src, void *dst, uint32_t pixels, bool src_is_o
 // meaning as ish_pix_over_row's (x8r8g8b8 src forces alpha=255 before mask
 // scaling is applied).
 void ish_pix_over_mask_row(const void *src, const uint8_t *mask, void *dst, uint32_t pixels, bool src_is_opaque);
+
+// The same two blends with a SOLID source: every source pixel is `src`, a
+// premultiplied a8r8g8b8 value (pixman's color_32 for a solid-fill image,
+// alpha real). pixman turns an OVER of an opaque solid into SRC and skips a
+// fully transparent one; both land on the same bytes as this formula, on
+// an a8r8g8b8 or an x8r8g8b8 destination alike. Validated against real
+// pixman before being written here (see pixman_accel_plan.md).
+void ish_pix_over_solid_row(uint32_t src, void *dst, uint32_t pixels);
+void ish_pix_over_solid_mask_row(uint32_t src, const uint8_t *mask, void *dst, uint32_t pixels);
 
 #endif

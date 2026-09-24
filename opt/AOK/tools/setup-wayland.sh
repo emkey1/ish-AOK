@@ -213,49 +213,24 @@ fi
 # Best-effort, not required: the pixman accelerator (kernel/ish_accel_pix.c)
 # is an off-by-default host feature the emulator may not even have compiled
 # in (ISH_PIX_ACCEL / the app toggle) -- building this shim just makes
-# start-wayland.sh able to load it WHEN it's available; if the compiler or
-# pixman-1 dev headers aren't installed, or the build fails for any other
-# reason, that's a pure perf miss, never a functional one (start-wayland.sh
-# only sets LD_PRELOAD if the .so actually got built here).
+# start-wayland.sh able to load it WHEN it's available; if there is no
+# compiler, or the build fails for any other reason, that's a pure perf miss,
+# never a functional one (start-wayland.sh only sets LD_PRELOAD if the .so
+# actually got built here). The pixman development headers are NOT needed:
+# the shim falls back to a copy of pixman.h vendored beside it.
 log "building pixman accelerator shim (best-effort)"
 if command -v cc >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1; then
-    # The shim includes <pixman.h>, which lives in the pixman-1 DEVELOPMENT
-    # package, not the runtime one. libpixman-1 itself is already here (cairo
-    # and GTK pull it in), so it is easy to assume the headers are too -- and
-    # then the build dies with "pixman.h: No such file or directory" after the
-    # compiler check has already passed. Install the headers first, and only
-    # if they are actually missing, so a rootfs that has them is untouched.
-    if ! [ -f /usr/include/pixman-1/pixman.h ]; then
-        log "installing pixman development headers for the shim"
-        if command -v apt-get >/dev/null 2>&1; then
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libpixman-1-dev \
-                || note "warning: could not install libpixman-1-dev"
-        elif command -v pacman >/dev/null 2>&1; then
-            pacman -S --needed --noconfirm pixman || note "warning: could not install pixman"
-        elif command -v apk >/dev/null 2>&1; then
-            apk add pixman-dev || note "warning: could not install pixman-dev"
-        fi
-    fi
-    if ! [ -f /usr/include/pixman-1/pixman.h ]; then
-        note "no pixman headers (pixman.h) -- skipping the accelerator shim."
-        note "  install them by hand and rerun this script to get it:"
-        note "    Devuan/Debian: apt install libpixman-1-dev"
-        note "    Arch:          pacman -S pixman"
-        note "    Alpine:        apk add pixman-dev"
-    elif sh /AOK/tools/pixman/build-shim.sh 2>&1; then
+    if sh /AOK/tools/pixman/build-shim.sh 2>&1; then
         :
     else
         note "warning: pixman shim build failed -- Wayland sessions will just run without the accelerator"
     fi
 else
-    # Same trap one step earlier: without a compiler this is skipped, and the
-    # obvious response is to install gcc and rerun -- which then fails on the
-    # headers. Name both so one pass is enough.
     note "no C compiler found -- skipping the pixman accelerator shim (Wayland sessions run without it)."
-    note "  to get it, install a compiler AND the pixman headers, then rerun this script:"
-    note "    Devuan/Debian: apt install gcc libpixman-1-dev"
-    note "    Arch:          pacman -S gcc pixman"
-    note "    Alpine:        apk add build-base pixman-dev"
+    note "  to get it, install a compiler and rerun this script:"
+    note "    Devuan/Debian: apt install gcc"
+    note "    Arch:          pacman -S gcc"
+    note "    Alpine:        apk add build-base"
 fi
 
 log "done"

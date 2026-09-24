@@ -306,7 +306,7 @@ if [ -d "$config_root" ] && { [ -z "$ONLY" ] || [ "$ONLY" = config ]; }; then
         fail_total=$((fail_total + 1))
     fi
     run_config crypto aes_gcm_accel ISH_CRYPTO_ACCEL=1
-    run_config pixman pixman_accel ISH_PIX_ACCEL=1
+    run_config pixman pixman_accel,pixman_shim ISH_PIX_ACCEL=1
 fi
 
 # The unprivileged leg, on the glibc root: it is the one whose /tmp and user
