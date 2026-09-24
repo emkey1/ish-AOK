@@ -4316,7 +4316,11 @@ static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
         // force.
         lock(&current->group->lock, 0);
         memcpy(current->group->limits, limits, sizeof(limits));
+        bool cpu_limited = current->group->limits[RLIMIT_CPU_].cur != RLIM_INFINITY_;
         unlock(&current->group->lock);
+        // Enforced by a sampler, which the memcpy does not start.
+        if (cpu_limited)
+            cpu_limit_watch(current->group);
         // The session and the process group, as MEMBERSHIP and not just as
         // two numbers -- kernel/group.c says why the fields alone were not
         // enough.

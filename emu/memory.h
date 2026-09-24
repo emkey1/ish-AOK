@@ -345,6 +345,18 @@ typedef void (*mem_page_visitor_t)(const void *page, void *ctx);
 // and the locking contract.
 void mem_walk_resident_pages(struct mem *mem, mem_page_visitor_t cb, void *ctx);
 size_t mem_mapped_page_count(struct mem *mem);
+// Linux's total_vm and data_vm, for RLIMIT_AS and RLIMIT_DATA: every page of
+// the address space the guest has mapped (reserved pages included), and those
+// of them that are private, writable and not the stack. The _range form counts
+// only [start, end). A page-table walk: callers without a finite limit should
+// not ask. Safe under the read, growth or write lock, as the page count is.
+void mem_vm_pages(struct mem *mem, size_t *total, size_t *data);
+void mem_vm_pages_range(struct mem *mem, page_t start, page_t end,
+                        size_t *total, size_t *data);
+// ...and how many of them are private and not the stack: what a change to a
+// writable protection would make data pages.
+void mem_vm_pages_range_ex(struct mem *mem, page_t start, page_t end,
+                           size_t *total, size_t *data, size_t *private_nonstack);
 // Pages with a live entry whose contents are actually in host memory right
 // now, i.e. mem_mapped_page_count minus the pages the pager has evicted.
 //

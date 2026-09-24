@@ -130,6 +130,10 @@ static struct tgroup *tgroup_copy(struct tgroup *old_group) {
     cond_init(&group->child_exit);
     cond_init(&group->stopped_cond);
     lock_init(&group->lock, "tgroup_copy\0");
+    // The CPU sampler was not copied (itimer_vprof_sampler above), but the
+    // limit it enforces was: the child's own CPU time is held to it from 0.
+    if (group->limits[RLIMIT_CPU_].cur != RLIM_INFINITY_)
+        cpu_limit_watch(group);
     return group;
 }
 

@@ -16,15 +16,40 @@
 #include "fs/dyndev.h"
 #include "util/refcount.h"
 #include "util/timer.h"
+#include "platform/platform.h"
 #include "debug.h"
 
 // ========================
 // ======== INODES ========
 // ========================
 
+// A tmpfs mount's size limit and what its files hold against it. Linux's
+// shmem_sb_info, for size= and nr_blocks=: every regular file is charged its
+// size in pages, a write that would pass the limit is cut short at it (ENOSPC
+// if nothing fits), and truncate or fallocate past it is ENOSPC. Shared by the
+// mount and every inode in it, each holding a reference; freed with the last.
+//
+// Files here are stored whole -- malloc'd, or a host file once mmapped -- so a
+// file's size is what it costs, and it is charged as such: a truncate to 1 GiB
+// on a 5 MiB mount is refused, where Linux, which would hold no pages for it
+// yet, allows the hole. The limit was ignored entirely before, so 8 MB went
+// into Devuan's 5 MiB /run/lock, and a user could fill any tmpfs -- /tmp,
+// /run, /dev/shm -- until the app itself was killed for its memory.
+struct tmpfs_sb {
+    _Atomic unsigned refs;
+    lock_t lock;
+    uint64_t max_pages;     // 0: no limit
+    uint64_t used_pages;
+    uint64_t used_inodes;
+};
+
 struct tmp_inode {
     struct refcount refcount;
     lock_t lock;
+    // The mount's accounting, or NULL for an inode no mount charges.
+    struct tmpfs_sb *sb;
+    // Pages this file is charged for; see tmpfs_charge.
+    uint64_t charged_pages;
 
     struct statbuf stat;
     union {
@@ -43,12 +68,87 @@ static bool tmpfs_is_cgroup2_mount(struct mount *mount) {
     return strcmp(mount->fs->name, "cgroup2") == 0;
 }
 
-static struct tmp_inode *tmp_inode_new(mode_t_ mode) {
+#define TMPFS_BLOCK_SIZE 4096
+
+static void tmpfs_sb_release(struct tmpfs_sb *sb) {
+    if (sb != NULL && atomic_fetch_sub(&sb->refs, 1) == 1)
+        free(sb);
+}
+
+static uint64_t tmpfs_pages_of(size_t bytes) {
+    return ((uint64_t) bytes + TMPFS_BLOCK_SIZE - 1) / TMPFS_BLOCK_SIZE;
+}
+
+// Charge a regular file for `size` bytes instead of what it is charged for
+// now. Growth past the mount's limit is ENOSPC and changes nothing; a shrink
+// always succeeds. Call with the inode's lock held.
+static int tmpfs_charge(struct tmp_inode *inode, size_t size) {
+    struct tmpfs_sb *sb = inode->sb;
+    uint64_t want = tmpfs_pages_of(size);
+    if (sb == NULL || want == inode->charged_pages)
+        return 0;
+    lock(&sb->lock, 0);
+    if (want > inode->charged_pages) {
+        uint64_t more = want - inode->charged_pages;
+        if (sb->max_pages != 0 && sb->used_pages + more > sb->max_pages) {
+            unlock(&sb->lock);
+            return _ENOSPC;
+        }
+        sb->used_pages += more;
+    } else {
+        sb->used_pages -= inode->charged_pages - want;
+    }
+    unlock(&sb->lock);
+    inode->charged_pages = want;
+    return 0;
+}
+
+// The largest size a write ending at `end` may take the file to: `end`
+// itself if it fits, otherwise as far as the pages still free reach (never
+// below the current size). Call with the inode's lock held.
+static size_t tmpfs_fit_end(struct tmp_inode *inode, size_t end) {
+    struct tmpfs_sb *sb = inode->sb;
+    if (sb == NULL || end <= inode->stat.size)
+        return end;
+    lock(&sb->lock, 0);
+    uint64_t avail = sb->max_pages == 0 ? UINT64_MAX :
+            (sb->used_pages >= sb->max_pages ? 0 : sb->max_pages - sb->used_pages);
+    unlock(&sb->lock);
+    if (avail == UINT64_MAX)
+        return end;
+    uint64_t max_pages = inode->charged_pages + avail;
+    if (max_pages > UINT64_MAX / TMPFS_BLOCK_SIZE)
+        return end;
+    uint64_t max_end = max_pages * TMPFS_BLOCK_SIZE;
+    if ((uint64_t) end <= max_end)
+        return end;
+    return max_end > inode->stat.size ? (size_t) max_end : inode->stat.size;
+}
+
+// How much of a write of `len` bytes at `off` fits, as a length: all of it,
+// part of it, or 0, which the caller turns into ENOSPC.
+static size_t tmpfs_fit_write(struct tmp_inode *inode, size_t off, size_t len) {
+    size_t end = off + len;
+    size_t fit = tmpfs_fit_end(inode, end);
+    if (fit >= end)
+        return len;
+    return fit > off ? fit - off : 0;
+}
+
+static struct tmp_inode *tmp_inode_new(mode_t_ mode, struct tmpfs_sb *sb) {
     struct tmp_inode *node = malloc(sizeof(struct tmp_inode));
     if (node == NULL)
         return NULL;
     refcount_init(node);
     lock_init(&node->lock, "tmp_inode_new\0");
+    node->sb = sb;
+    node->charged_pages = 0;
+    if (sb != NULL) {
+        atomic_fetch_add(&sb->refs, 1);
+        lock(&sb->lock, 0);
+        sb->used_inodes++;
+        unlock(&sb->lock);
+    }
 
     node->stat = (struct statbuf) {};
     static _Atomic ino_t next_inode = 1;
@@ -69,6 +169,12 @@ static struct tmp_inode *tmp_inode_new(mode_t_ mode) {
     if (S_ISREG(mode)) {
         node->file_data = malloc(0);
         if (node->file_data == NULL) {
+            if (sb != NULL) {
+                lock(&sb->lock, 0);
+                sb->used_inodes--;
+                unlock(&sb->lock);
+                tmpfs_sb_release(sb);
+            }
             free(node);
             return NULL;
         }
@@ -79,6 +185,14 @@ static struct tmp_inode *tmp_inode_new(mode_t_ mode) {
 DEFINE_REFCOUNT_STATIC(tmp_inode)
 
 static void tmp_inode_cleanup(struct tmp_inode *inode) {
+    if (inode->sb != NULL) {
+        tmpfs_charge(inode, 0);
+        lock(&inode->sb->lock, 0);
+        inode->sb->used_inodes--;
+        unlock(&inode->sb->lock);
+        tmpfs_sb_release(inode->sb);
+        inode->sb = NULL;
+    }
     // Regular files keep their contents in file_data; symlinks keep their
     // target string there too (same union slot).
     if (S_ISREG(inode->stat.mode) || S_ISLNK(inode->stat.mode)) {
@@ -251,7 +365,7 @@ static int tmpfs_add_file(struct tmp_dirent *dir, const char *name, mode_t_ mode
     if (err < 0)
         return err;
 
-    struct tmp_inode *inode = tmp_inode_new(S_IFREG | mode);
+    struct tmp_inode *inode = tmp_inode_new(S_IFREG | mode, dir->inode->sb);
     if (inode == NULL)
         return _ENOMEM;
 
@@ -332,7 +446,7 @@ static int tmpfs_add_dev_node(struct tmp_dirent *dir, const char *name, mode_t_ 
     if (err < 0)
         return err;
 
-    struct tmp_inode *inode = tmp_inode_new((mode & S_IFMT) != 0 ? mode : (S_IFCHR | mode));
+    struct tmp_inode *inode = tmp_inode_new((mode & S_IFMT) != 0 ? mode : (S_IFCHR | mode), dir->inode->sb);
     if (inode == NULL)
         return _ENOMEM;
     inode->stat.rdev = dev;
@@ -351,7 +465,7 @@ static int tmpfs_add_dev_subdir(struct tmp_dirent *dir, const char *name, mode_t
     if (err < 0)
         return err;
 
-    struct tmp_inode *inode = tmp_inode_new(S_IFDIR | mode);
+    struct tmp_inode *inode = tmp_inode_new(S_IFDIR | mode, dir->inode->sb);
     if (inode == NULL)
         return _ENOMEM;
     inode->stat.uid = 0;
@@ -371,7 +485,7 @@ static int tmpfs_add_dev_symlink(struct tmp_dirent *dir, const char *name, const
     if (err < 0)
         return err;
 
-    struct tmp_inode *inode = tmp_inode_new(S_IFLNK | 0777);
+    struct tmp_inode *inode = tmp_inode_new(S_IFLNK | 0777, dir->inode->sb);
     if (inode == NULL)
         return _ENOMEM;
     // Same storage a tmpfs symlink uses: raw target bytes in file_data.
@@ -509,11 +623,18 @@ static int tmpfs_file_resize(struct tmp_inode *file, size_t size) {
     // inode of an invalid type, where an assert aborted the whole app.
     if (!S_ISREG(file->stat.mode))
         return _EINVAL;
+    // The mount's size limit, before anything moves. See struct tmpfs_sb.
+    int charge_err = tmpfs_charge(file, size);
+    if (charge_err < 0)
+        return charge_err;
     if (file->host_fd >= 0) {
         // Host-file-backed (has been mmapped): ftruncate keeps live guest
         // mappings coherent, and the host zero-fills growth.
-        if (ftruncate(file->host_fd, size) < 0)
-            return errno_map();
+        if (ftruncate(file->host_fd, size) < 0) {
+            int err = errno_map();
+            tmpfs_charge(file, file->stat.size);
+            return err;
+        }
         file->stat.size = size;
         tmpfs_update_mtime_and_ctime(file);
         return 0;
@@ -522,8 +643,10 @@ static int tmpfs_file_resize(struct tmp_inode *file, size_t size) {
     void *new_data = realloc(file->file_data, size);
     // realloc(ptr, 0) may legitimately return NULL (it frees ptr); only treat
     // NULL as an error for a non-zero request.
-    if (new_data == NULL && size != 0)
+    if (new_data == NULL && size != 0) {
+        tmpfs_charge(file, old_size);
         return _ENOMEM;
+    }
     file->file_data = new_data;
     file->stat.size = size;
     // Only zero newly-grown bytes. When shrinking (e.g. ftruncate to a smaller
@@ -610,6 +733,60 @@ static int tmpfs_dir_unlink(struct tmp_dirent *parent, const char *name, bool re
 
 extern const struct fd_ops tmpfs_fdops;
 
+static uint64_t tmpfs_pages_of_u64(uint64_t bytes) {
+    return bytes / TMPFS_BLOCK_SIZE + (bytes % TMPFS_BLOCK_SIZE != 0);
+}
+
+// Linux's totalram_pages / 2 in tmpfs pages: what a tmpfs holds when its
+// mount says nothing. The guest's MemTotal, so a percentage means the same
+// thing here as in /proc/meminfo.
+static uint64_t tmpfs_ram_bytes(void) {
+    uint64_t total = get_mem_usage().total;
+    return total != 0 ? total : (uint64_t) 2 << 30;
+}
+
+static uint64_t tmpfs_default_pages(void) {
+    uint64_t pages = tmpfs_ram_bytes() / 2 / TMPFS_BLOCK_SIZE;
+    return pages != 0 ? pages : 1;
+}
+
+// memparse, plus size='s trailing % of RAM when `percent_ok`. False for
+// anything else, which the mount refuses with EINVAL as Linux does.
+static bool tmpfs_parse_size(const char *s, size_t len, bool percent_ok, uint64_t *out) {
+    char buf[64];
+    if (len == 0 || len >= sizeof(buf))
+        return false;
+    memcpy(buf, s, len);
+    buf[len] = '\0';
+    char *end;
+    unsigned long long v = strtoull(buf, &end, 0);
+    if (end == buf)
+        return false;
+    if (percent_ok && *end == '%' && end[1] == '\0') {
+        if (v > 100)
+            return false;
+        *out = tmpfs_ram_bytes() / 100 * v;
+        return true;
+    }
+    unsigned shift = 0;
+    switch (*end) {
+        case 'e': case 'E': shift += 10; FALLTHROUGH;
+        case 'p': case 'P': shift += 10; FALLTHROUGH;
+        case 't': case 'T': shift += 10; FALLTHROUGH;
+        case 'g': case 'G': shift += 10; FALLTHROUGH;
+        case 'm': case 'M': shift += 10; FALLTHROUGH;
+        case 'k': case 'K': shift += 10; end++; break;
+        case '\0': break;
+        default: return false;
+    }
+    if (*end != '\0')
+        return false;
+    if (shift != 0 && v > (UINT64_MAX >> shift))
+        return false;
+    *out = (uint64_t) v << shift;
+    return true;
+}
+
 static int tmpfs_mount(struct mount *mount) {
     // Linux tmpfs honors mode=/uid=/gid= mount options on its root inode
     // (mm/shmem.c shmem_parse_one). They matter beyond cosmetics:
@@ -627,6 +804,11 @@ static int tmpfs_mount(struct mount *mount) {
     mode_t_ root_mode = S_IFDIR | 01777;
     uid_t_ root_uid = 0;
     uid_t_ root_gid = 0;
+    // size= and nr_blocks=, Linux's defaults and syntax (shmem_parse_one):
+    // bytes with an optional k/m/g/t/p/e suffix or a percentage of RAM,
+    // rounded up to pages; nr_blocks= counts pages; 0 is no limit. Neither
+    // given: half of RAM, the same figure statfs has always reported.
+    uint64_t max_pages = tmpfs_default_pages();
     const char *opt = mount->info;
     while (opt != NULL && *opt != '\0') {
         const char *end = strchr(opt, ',');
@@ -637,12 +819,32 @@ static int tmpfs_mount(struct mount *mount) {
             root_uid = (uid_t_) strtoul(opt + 4, NULL, 10);
         else if (len > 4 && strncmp(opt, "gid=", 4) == 0)
             root_gid = (uid_t_) strtoul(opt + 4, NULL, 10);
+        else if (len > 5 && strncmp(opt, "size=", 5) == 0) {
+            uint64_t bytes;
+            if (!tmpfs_parse_size(opt + 5, len - 5, true, &bytes))
+                return _EINVAL;
+            max_pages = tmpfs_pages_of_u64(bytes);
+        } else if (len > 10 && strncmp(opt, "nr_blocks=", 10) == 0) {
+            uint64_t blocks;
+            if (!tmpfs_parse_size(opt + 10, len - 10, false, &blocks))
+                return _EINVAL;
+            max_pages = blocks;
+        }
         opt = end != NULL ? end + 1 : "";
     }
 
-    struct tmp_inode *root_inode = tmp_inode_new(root_mode);
-    if (root_inode == NULL)
+    struct tmpfs_sb *sb = calloc(1, sizeof(*sb));
+    if (sb == NULL)
         return _ENOMEM;
+    atomic_init(&sb->refs, 1); // the mount's; tmpfs_umount drops it
+    lock_init(&sb->lock, "tmpfs_sb\0");
+    sb->max_pages = max_pages;
+
+    struct tmp_inode *root_inode = tmp_inode_new(root_mode, sb);
+    if (root_inode == NULL) {
+        tmpfs_sb_release(sb);
+        return _ENOMEM;
+    }
     root_inode->stat.uid = root_uid;
     root_inode->stat.gid = root_gid;
 
@@ -694,8 +896,11 @@ static void tmpfs_free_tree(struct tmp_dirent *dirent) {
 static int tmpfs_umount(struct mount *mount) {
     struct tmp_dirent *root = mount->data;
     if (root != NULL) {
+        struct tmpfs_sb *sb = root->inode != NULL ? root->inode->sb : NULL;
         tmpfs_free_tree(root);
         mount->data = NULL;
+        // The mount's own reference; the inodes still alive, if any, keep it.
+        tmpfs_sb_release(sb);
     }
     return 0;
 }
@@ -724,7 +929,7 @@ static struct fd *tmpfs_open(struct mount *mount, const char *path, int flags, i
         }
 
         if (dirent == ERR_PTR(_ENOENT)) {
-            struct tmp_inode *inode = tmp_inode_new(S_IFREG | mode);
+            struct tmp_inode *inode = tmp_inode_new(S_IFREG | mode, parent->inode->sb);
             if (inode == NULL) {
                 err = _ENOMEM;
                 goto out_creat;
@@ -1065,7 +1270,7 @@ static int tmpfs_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
     if (err < 0)
         goto out;
 
-    struct tmp_inode *inode = tmp_inode_new(S_IFDIR | mode);
+    struct tmp_inode *inode = tmp_inode_new(S_IFDIR | mode, parent->inode->sb);
     err = _ENOMEM;
     if (inode == NULL)
         goto out;
@@ -1150,7 +1355,7 @@ static int tmpfs_mknod(struct mount *mount, const char *path, mode_t_ mode, dev_
     if (err < 0)
         goto out;
 
-    struct tmp_inode *inode = tmp_inode_new(mode);
+    struct tmp_inode *inode = tmp_inode_new(mode, parent->inode->sb);
     err = _ENOMEM;
     if (inode == NULL)
         goto out;
@@ -1179,7 +1384,7 @@ static int tmpfs_symlink(struct mount *mount, const char *target, const char *li
     if (err < 0)
         goto out;
 
-    struct tmp_inode *inode = tmp_inode_new(S_IFLNK | 0777);
+    struct tmp_inode *inode = tmp_inode_new(S_IFLNK | 0777, parent->inode->sb);
     err = _ENOMEM;
     if (inode == NULL)
         goto out;
@@ -1411,14 +1616,29 @@ static ssize_t tmpfs_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_
         res = _EFBIG;
         goto out;
     }
+    // The mount's size limit: a write that would pass it stops at it, and
+    // one of which nothing fits is ENOSPC (Linux's shmem write_begin).
+    if (bufsize > 0) {
+        size_t fits = tmpfs_fit_write(inode, (size_t) off, bufsize);
+        if (fits == 0) {
+            res = _ENOSPC;
+            goto out;
+        }
+        bufsize = fits;
+        end = (size_t) off + bufsize;
+    }
     if (inode->host_fd >= 0) {
+        if (end > inode->stat.size && (res = tmpfs_charge(inode, end)) < 0)
+            goto out;
         ssize_t n = pwrite(inode->host_fd, buf, bufsize, off);
         if (n < 0) {
             res = errno_map();
+            tmpfs_charge(inode, inode->stat.size);
             goto out;
         }
         if (inode->stat.size < (size_t) off + (size_t) n)
             inode->stat.size = off + n;
+        tmpfs_charge(inode, inode->stat.size);
         if (n > 0)
             tmpfs_update_mtime_and_ctime(inode);
         res = n;
@@ -1533,17 +1753,31 @@ static ssize_t tmpfs_write(struct fd *fd, const void *buf, size_t bufsize) {
         res = _EFBIG;
         goto out;
     }
+    // The mount's size limit; see tmpfs_pwrite.
+    if (bufsize > 0) {
+        size_t fits = tmpfs_fit_write(inode, off, bufsize);
+        if (fits == 0) {
+            res = _ENOSPC;
+            goto out;
+        }
+        bufsize = fits;
+        end = off + bufsize;
+    }
     if (inode->host_fd >= 0) {
         // Host-file-backed (has been mmapped): write the host file so the data
         // is visible through any MAP_SHARED guest mapping.
+        if (end > inode->stat.size && (res = tmpfs_charge(inode, end)) < 0)
+            goto out;
         ssize_t n = pwrite(inode->host_fd, buf, bufsize, off);
         if (n < 0) {
             res = errno_map();
+            tmpfs_charge(inode, inode->stat.size);
             goto out;
         }
         fd->offset = off + n;
         if (inode->stat.size < off + (size_t) n)
             inode->stat.size = off + n;
+        tmpfs_charge(inode, inode->stat.size);
         if (n > 0)
             tmpfs_update_mtime_and_ctime(inode);
         res = n;
@@ -1750,7 +1984,6 @@ static void tmpfs_seekdir(struct fd *fd, unsigned long ptr) {
     unlock(&dir->lock);
 }
 
-#define TMPFS_BLOCK_SIZE 4096
 
 static void tmpfs_count_tree(struct tmp_dirent *dir, uint64_t *pages, uint64_t *inodes) {
     struct tmp_dirent *child;
@@ -1768,23 +2001,24 @@ static void tmpfs_count_tree(struct tmp_dirent *dir, uint64_t *pages, uint64_t *
 }
 
 static int tmpfs_statfs(struct mount *mount, struct statfsbuf *stat) {
-    // Linux tmpfs reports the mount's size limit as f_blocks (default: half
-    // of RAM) and decrements f_bfree/f_bavail by pages actually stored; the
-    // inode cap defaults to the same count as the block cap. There is no
-    // size= limit enforcement here, so report the Linux default cap derived
-    // from host RAM and subtract what the mount's inodes actually hold.
-    uint64_t total_pages = 0;
-    long phys_pages = sysconf(_SC_PHYS_PAGES);
-    long host_page_size = sysconf(_SC_PAGESIZE);
-    if (phys_pages > 0 && host_page_size > 0)
-        total_pages = (uint64_t) phys_pages * host_page_size / 2 / TMPFS_BLOCK_SIZE;
-    if (total_pages == 0)
-        total_pages = 1 << 18; // 1 GiB fallback
-
+    // Linux tmpfs reports the mount's size limit as f_blocks and what its
+    // files hold as the difference to f_bfree/f_bavail; the inode cap
+    // defaults to the same count as the block cap. Both from the mount's
+    // accounting (struct tmpfs_sb), which is what the limit is enforced on.
+    uint64_t total_pages = tmpfs_default_pages();
     uint64_t used_pages = 0, used_inodes = 1; // root inode
     struct tmp_dirent *root = mount->data;
-    if (root != NULL)
+    struct tmpfs_sb *sb = root != NULL && root->inode != NULL ? root->inode->sb : NULL;
+    if (sb != NULL) {
+        lock(&sb->lock, 0);
+        if (sb->max_pages != 0)
+            total_pages = sb->max_pages;
+        used_pages = sb->used_pages;
+        used_inodes = sb->used_inodes;
+        unlock(&sb->lock);
+    } else if (root != NULL) {
         tmpfs_count_tree(root, &used_pages, &used_inodes);
+    }
 
     stat->bsize = TMPFS_BLOCK_SIZE;
     stat->frsize = TMPFS_BLOCK_SIZE;

@@ -337,7 +337,61 @@ void mm_release(struct mm *mm) {
     }
 }
 
-static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_t flags, fd_t fd_no, qword_t offset) {
+// RLIMIT_AS and RLIMIT_DATA, read BEFORE the address-space lock is taken:
+// rlimit takes group->lock, which nests outside mem->lock everywhere else (see
+// struct mem's stack_limit_pages).
+struct vm_limits {
+    rlim_t_ as, data, data_max;
+};
+
+static struct vm_limits vm_limits_now(void) {
+    struct rlimit_ as = rlimit_both(RLIMIT_AS_);
+    struct rlimit_ data = rlimit_both(RLIMIT_DATA_);
+    return (struct vm_limits) {as.cur, data.cur, data.max};
+}
+
+static bool vm_limits_finite(const struct vm_limits *l) {
+    return l->as != RLIM_INFINITY_ || l->data != RLIM_INFINITY_;
+}
+
+// Linux's may_expand_vm(): whether `pages` more pages -- data pages if
+// is_data -- fit under RLIMIT_AS and RLIMIT_DATA, counting as gone whatever
+// [replace_start, replace_end) holds now (a MAP_FIXED lands on top of it).
+// Under an address-space lock.
+//
+// Neither limit was enforced: a 128 MB allocation under a 64 MB limit
+// succeeded. Counted by walking the page table, so only a process with a
+// limit pays for it; Linux keeps running totals, AOK has no single point
+// every mapping change passes through to keep them.
+static bool vm_may_expand(struct mem *mem, const struct vm_limits *l, size_t pages,
+        bool is_data, page_t replace_start, page_t replace_end) {
+    if (!vm_limits_finite(l) || pages == 0)
+        return true;
+    size_t total, data, gone_total = 0, gone_data = 0;
+    mem_vm_pages(mem, &total, &data);
+    if (replace_start < replace_end)
+        mem_vm_pages_range(mem, replace_start, replace_end, &gone_total, &gone_data);
+    total -= gone_total;
+    data -= gone_data;
+    if (l->as != RLIM_INFINITY_ && total + pages > (l->as >> PAGE_BITS))
+        return false;
+    if (is_data && l->data != RLIM_INFINITY_ && data + pages > (l->data >> PAGE_BITS)) {
+        // Linux's exception for Valgrind: a soft limit of 0 falls back to the
+        // hard one.
+        if (!(l->data == 0 && (l->data_max == RLIM_INFINITY_ ||
+                data + pages <= (l->data_max >> PAGE_BITS))))
+            return false;
+    }
+    return true;
+}
+
+// is_data_mapping() for a set of pt flags.
+static bool vm_flags_are_data(unsigned flags) {
+    return (flags & (P_WRITE | P_SHARED | P_GROWSDOWN)) == P_WRITE;
+}
+
+static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_t flags, fd_t fd_no, qword_t offset,
+        const struct vm_limits *lim) {
     int err;
     pages_t pages = PAGE_ROUND_UP(len);
     if (!pages) return _EINVAL;
@@ -380,6 +434,12 @@ static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_
     }
     qword_t mapped_addr = (qword_t) page << PAGE_BITS;
     if (!guest_abi_range_valid(current->abi, mapped_addr, len))
+        return _ENOMEM;
+    // Private and writable is data, file-backed or not (Linux's
+    // is_data_mapping); a MAP_FIXED replaces what it lands on.
+    if (!vm_may_expand(current->mem, lim, pages,
+            (prot & P_WRITE) && !(flags & MMAP_SHARED),
+            fixed ? page : 0, fixed ? page + pages : 0))
         return _ENOMEM;
     if (flags & MMAP_SHARED)
         prot |= P_SHARED;
@@ -507,6 +567,7 @@ static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t pr
            (unsigned long long) offset);
     if (len == 0)
         return _EINVAL;
+    const struct vm_limits lim = vm_limits_now();
     // Accepted and ignored, as Linux does. See PROT_SEM_ in kernel/calls.h
     // for why it is stripped rather than passed through.
     prot &= ~(dword_t) PROT_SEM_;
@@ -557,7 +618,7 @@ static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t pr
     // structural writers and never evicts the running sibling threads.
     if (mmap_growth_fast_enabled() && mmap_is_pure_growth(flags)) {
         mem_growth_lock(current->mem);
-        guest_addr_t res = do_mmap(addr, len, prot, flags, fd_no, offset);
+        guest_addr_t res = do_mmap(addr, len, prot, flags, fd_no, offset, &lim);
         mem_growth_unlock(current->mem);
         if ((sqword_t) res == _ENOMEM)
             amd64_vm_failure_trace("mmap", res, addr, len, prot, flags, (qword_t) fd_no, offset);
@@ -588,7 +649,7 @@ static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t pr
     }
 
     mem_write_lock_with_pokes(current->mem);
-    guest_addr_t res = do_mmap(addr, len, prot, flags, fd_no, offset);
+    guest_addr_t res = do_mmap(addr, len, prot, flags, fd_no, offset, &lim);
     mem_write_unlock_with_pokes(current->mem);
     if ((sqword_t) res == _ENOMEM)
         amd64_vm_failure_trace("mmap", res, addr, len, prot, flags, (qword_t) fd_no, offset);
@@ -892,6 +953,7 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
             return _ENOMEM;
     }
     guest_addr_t res = _ENOMEM;
+    const struct vm_limits lim = vm_limits_now();
 
     mem_write_lock_with_pokes(current->mem);
 
@@ -960,6 +1022,13 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
         struct data *backing_data;
         if (!mem_range_flags(current->mem, src_page, old_pages, &pt_flags, &backing_data)) {
             res = _EFAULT;
+            goto out;
+        }
+        // RLIMIT_AS and RLIMIT_DATA for the growth; the destination's old
+        // contents are about to go.
+        if (new_pages > old_pages && !vm_may_expand(current->mem, &lim, new_pages - old_pages,
+                vm_flags_are_data(pt_flags), dest_page, dest_page + new_pages)) {
+            res = _ENOMEM;
             goto out;
         }
 
@@ -1040,6 +1109,12 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
     struct data *backing_data;
     if (!mem_range_flags(current->mem, PAGE(addr), old_pages, &pt_flags, &backing_data)) {
         res = _EFAULT;
+        goto out;
+    }
+    // RLIMIT_AS and RLIMIT_DATA for the growth (Linux's vma_to_resize).
+    if (!vm_may_expand(current->mem, &lim, new_pages - old_pages,
+            vm_flags_are_data(pt_flags), 0, 0)) {
+        res = _ENOMEM;
         goto out;
     }
     bool tail_reserved = mremap_page_reserved(current->mem, PAGE(addr) + old_pages - 1);
@@ -1141,10 +1216,25 @@ int_t sys_mprotect_guest(guest_addr_t addr, qword_t len, int_t prot) {
     if (prot & ~P_RWX)
         return _EINVAL;
     pages_t pages = PAGE_ROUND_UP(len);
+    const struct vm_limits lim = vm_limits_now();
     mem_write_lock_with_pokes(current->mem);
     if ((prot & P_WRITE) && mprotect_write_forbidden(current->mem, PAGE(addr), pages)) {
         mem_write_unlock_with_pokes(current->mem);
         return _EACCES;
+    }
+    // RLIMIT_DATA: making private pages writable makes them data (Linux's
+    // mprotect_fixup), so a heap reserved PROT_NONE and opened up piece by
+    // piece -- glibc's thread arenas -- is held to the limit too.
+    if ((prot & P_WRITE) && lim.data != RLIM_INFINITY_) {
+        size_t in_total, in_data, in_private;
+        mem_vm_pages_range_ex(current->mem, PAGE(addr), PAGE(addr) + pages,
+                &in_total, &in_data, &in_private);
+        struct vm_limits data_only = {RLIM_INFINITY_, lim.data, lim.data_max};
+        if (in_private > in_data &&
+                !vm_may_expand(current->mem, &data_only, in_private - in_data, true, 0, 0)) {
+            mem_write_unlock_with_pokes(current->mem);
+            return _ENOMEM;
+        }
     }
     int err = pt_set_flags(current->mem, PAGE(addr), pages, prot);
     mem_write_unlock_with_pokes(current->mem);
@@ -1776,6 +1866,7 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk) {
     if (host_mem_headroom_low() && new_brk > mm->brk)
         swap_direct_reclaim(&mm->mem, new_brk - mm->brk);
 
+    const struct vm_limits lim = vm_limits_now();
     mem_write_lock_with_pokes(&mm->mem);
     if (new_brk < mm->start_brk)
         goto out;
@@ -1795,6 +1886,15 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk) {
         }
         page_t start = PAGE_ROUND_UP(old_brk);
         pages_t size = PAGE_ROUND_UP(new_brk) - PAGE_ROUND_UP(old_brk);
+        // RLIMIT_DATA over the whole heap (Linux's check_data_rlimit, less
+        // the data segment, which AOK does not record), then RLIMIT_AS and
+        // RLIMIT_DATA for the pages being added. A refused brk leaves the
+        // break where it was, which is how the guest learns.
+        if ((lim.data != RLIM_INFINITY_ && new_brk - mm->start_brk > lim.data) ||
+                !vm_may_expand(&mm->mem, &lim, size, true, 0, 0)) {
+            expand_failed = true;
+            goto out;
+        }
         // brk only ever grows forward from start_brk, where the exec-time
         // reservation (kernel/exec.c) begins, so start is always at or past
         // brk_reserve_start once a reservation exists; it can never start

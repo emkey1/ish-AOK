@@ -1108,9 +1108,14 @@ static void itimer_notify(void *data, uint64_t UNUSED(expirations)) {
 // path -- only processes that actually call setitimer(VIRTUAL/PROF) pay
 // for the sampler thread, and even then only a fixed, coarse tick rate.
 #define ITIMER_VPROF_SAMPLE_MS 20
+// The same sampler when all it has to do is RLIMIT_CPU (cpu_limit_watch).
+#define CPU_LIMIT_SAMPLE_MS 50
 
 static struct timespec cpu_time_now_of(struct tgroup *group, bool include_system) {
-    struct rusage_ rusage = rusage_get_group_of(group);
+    // The CPU-only read: this is asked every tick of a process's sampler, and
+    // the full rusage also walks every thread's address space for maxrss,
+    // which none of these callers use.
+    struct rusage_ rusage = rusage_get_group_cpu_of(group);
     long usec = rusage.utime.usec + (include_system ? rusage.stime.usec : 0);
     struct timespec ts = {
         .tv_sec = rusage.utime.sec + (include_system ? rusage.stime.sec : 0),
@@ -1150,12 +1155,18 @@ static void itimer_vprof_sampler_notify(void *data, uint64_t UNUSED(expirations)
     lock(&group->lock, 0);
     bool fire_virtual = itimer_vprof_maybe_fire(&group->itimer_virtual, cpu_user);
     bool fire_prof = itimer_vprof_maybe_fire(&group->itimer_prof, cpu_total);
+    // RLIMIT_CPU, on the same clock as ITIMER_PROF: user plus system.
+    int limit_sig = rlimit_cpu_due_locked(group,
+            (uint64_t) cpu_total.tv_sec * 1000000000ull + (uint64_t) cpu_total.tv_nsec);
     unlock(&group->lock);
 
     if (fire_virtual)
         send_signal_to_group(group, SIGVTALRM_, SIGINFO_NIL);
     if (fire_prof)
         send_signal_to_group(group, SIGPROF_, SIGINFO_NIL);
+    // Process-directed with si_code SI_KERNEL, as Linux sends them.
+    if (limit_sig != 0)
+        send_signal_to_group(group, limit_sig, SIGINFO_NIL);
 }
 
 // Start the tick that drives both, if it is not running. Called with
@@ -1177,6 +1188,27 @@ static long itimer_vprof_sampler_start_locked(struct tgroup *group) {
     };
     timer_set(group->itimer_vprof_sampler, sample_spec, NULL);
     return 0;
+}
+
+void cpu_limit_watch(struct tgroup *group) {
+    lock(&group->lock, 0);
+    // Already ticking for an interval timer, or for an earlier limit: that
+    // tick asks about the limit too.
+    if (group->itimer_vprof_sampler == NULL) {
+        struct timer *sampler = timer_new(CLOCK_MONOTONIC, itimer_vprof_sampler_notify, group);
+        if (!IS_ERR(sampler)) {
+            group->itimer_vprof_sampler = sampler;
+            // Coarser than the interval timers' tick: a CPU limit is in
+            // seconds, and a `ulimit -t` session gives every process one. An
+            // interval timer armed later re-arms it at ITIMER_VPROF_SAMPLE_MS.
+            struct timer_spec spec = {
+                .value = {.tv_nsec = CPU_LIMIT_SAMPLE_MS * 1000000},
+                .interval = {.tv_nsec = CPU_LIMIT_SAMPLE_MS * 1000000},
+            };
+            timer_set(sampler, spec, NULL);
+        }
+    }
+    unlock(&group->lock);
 }
 
 // Must be called with group->lock held (matches itimer_set's caller).

@@ -925,6 +925,81 @@ size_t mem_mapped_page_count(struct mem *mem) {
     return mem_page_count_walk(mem, false);
 }
 
+// Linux's is_data_mapping(): private, writable, and not the stack.
+static bool mem_flags_are_data(unsigned flags) {
+    return (flags & (P_WRITE | P_SHARED | P_GROWSDOWN)) == P_WRITE;
+}
+
+void mem_vm_pages_range(struct mem *mem, page_t start, page_t end,
+                        size_t *total, size_t *data) {
+    mem_vm_pages_range_ex(mem, start, end, total, data, NULL);
+}
+
+void mem_vm_pages_range_ex(struct mem *mem, page_t start, page_t end,
+                           size_t *total, size_t *data, size_t *private_nonstack) {
+    size_t unused;
+    if (private_nonstack == NULL)
+        private_nonstack = &unused;
+    *total = *data = *private_nonstack = 0;
+    if (mem == NULL || start >= end)
+        return;
+    if (end > mem->page_limit)
+        end = mem->page_limit;
+    // Mapped pages. Skips empty roots and leaves through the set-only
+    // bitmaps, as mem_page_count_walk does; within a leaf every entry in
+    // range is looked at.
+    for (page_t root = mem_next_chunk_root(mem, PGDIR_ROOT_INDEX(start));
+            root < MEM_PGDIR_ROOT_SIZE; root = mem_next_chunk_root(mem, root + 1)) {
+        if (PGDIR_LEAF_BASE(root, 0) >= end)
+            break;
+        struct pt_directory_chunk *chunk =
+            atomic_load_explicit(&mem->pgdir_root[root], memory_order_acquire);
+        if (chunk == NULL)
+            continue;
+        for (page_t mid = mem_next_leaf_mid(chunk, 0); mid < MEM_PGDIR_MID_SIZE;
+                mid = mem_next_leaf_mid(chunk, mid + 1)) {
+            page_t base = PGDIR_LEAF_BASE(root, mid);
+            if (base >= end)
+                break;
+            if (base + MEM_PTDIR_SIZE <= start)
+                continue;
+            struct pt_entry *entries =
+                atomic_load_explicit(&chunk->leaves[mid], memory_order_acquire);
+            if (entries == NULL)
+                continue;
+            page_t lo = base < start ? start - base : 0;
+            page_t hi = base + MEM_PTDIR_SIZE > end ? end - base : MEM_PTDIR_SIZE;
+            for (page_t i = lo; i < hi; i++) {
+                if (entries[i].data == NULL)
+                    continue;
+                (*total)++;
+                if (mem_flags_are_data(entries[i].flags))
+                    (*data)++;
+                if (!(entries[i].flags & (P_SHARED | P_GROWSDOWN)))
+                    (*private_nonstack)++;
+            }
+        }
+    }
+    // Reserved pages are mapped as far as the guest is concerned, and never
+    // also have entries (the invariant at struct mem_lazy_map).
+    for (unsigned i = 0; i < mem->lazy_count; i++) {
+        const struct mem_lazy_map *l = &mem->lazy[i];
+        page_t s = l->start > start ? l->start : start;
+        page_t e = l->end < end ? l->end : end;
+        if (s >= e)
+            continue;
+        *total += e - s;
+        if (mem_flags_are_data(l->flags & ~MEM_LAZY_LOCKED))
+            *data += e - s;
+        if (!(l->flags & (P_SHARED | P_GROWSDOWN)))
+            *private_nonstack += e - s;
+    }
+}
+
+void mem_vm_pages(struct mem *mem, size_t *total, size_t *data) {
+    mem_vm_pages_range(mem, 0, mem != NULL ? mem->page_limit : 0, total, data);
+}
+
 // Mapped pages minus the ones the pager has evicted.
 //
 // WHAT THIS IS. With the per-frame slot record in place, a page whose frame

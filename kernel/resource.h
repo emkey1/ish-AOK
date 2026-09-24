@@ -50,6 +50,16 @@ dword_t sys_prlimit64_guest(pid_t_ pid, dword_t resource, guest_addr_t new_limit
 dword_t sys_old_getrlimit32(dword_t resource, addr_t rlim_addr);
 
 rlim_t_ rlimit(int resource);
+// Both halves of one of the caller's limits.
+struct rlimit_ rlimit_both(int resource);
+// RLIMIT_CPU: the signal due for `used_ns` of process CPU time, if any, with
+// the soft limit raised past a SIGXCPU. Call with group->lock held. See
+// kernel/resource.c.
+struct tgroup;
+int rlimit_cpu_due_locked(struct tgroup *group, uint64_t used_ns);
+// Start the process's CPU sampler (kernel/time.c) so a finite RLIMIT_CPU is
+// enforced. Takes group->lock.
+void cpu_limit_watch(struct tgroup *group);
 
 struct rusage_ {
     struct timeval_ utime;

@@ -10,6 +10,8 @@
 #endif
 
 #include <limits.h>
+#include <stdint.h>
+#include <time.h>
 #include <string.h>
 #include <pthread.h>
 #include "kernel/calls.h"
@@ -37,6 +39,10 @@ static int rlimit_set(struct task *task, int resource, struct rlimit_ limit) {
     lock(&group->lock, 0);
     group->limits[resource] = limit;
     unlock(&group->lock);
+    // A CPU limit is watched by the process's CPU sampler; see
+    // rlimit_cpu_due_locked.
+    if (resource == RLIMIT_CPU_ && limit.cur != RLIM_INFINITY_)
+        cpu_limit_watch(group);
     // The stack bound is cached in the address space, because the page-fault
     // path cannot take group->lock (see struct mem's stack_top comment), so a
     // change to RLIMIT_STACK has to be pushed there. gnulib's "working
@@ -74,6 +80,42 @@ rlim_t_ rlimit(int resource) {
     if (rlimit_get(current, resource, &limit) != 0)
         die("invalid resource %d", resource);
     return limit.cur;
+}
+
+struct rlimit_ rlimit_both(int resource) {
+    struct rlimit_ limit;
+    if (rlimit_get(current, resource, &limit) != 0)
+        die("invalid resource %d", resource);
+    return limit;
+}
+
+// RLIMIT_CPU: Linux's check_process_timers. At the hard limit the process is
+// sent SIGKILL; at the soft limit, SIGXCPU, and the soft limit goes up by a
+// second so the next SIGXCPU comes a second of CPU later -- which getrlimit
+// then reports, as it does on Linux. When soft and hard are equal (bash's
+// `ulimit -t`) the hard check comes first and SIGKILL is all there is.
+//
+// Nothing enforced it: a 1 s limit was still not reached after 4 s of CPU.
+// The process's CPU sampler (kernel/time.c, the one ITIMER_PROF uses) asks
+// this, and sends what it answers; a guest thread's own timer tick is not
+// enough, because the amd64 engine can run a tight loop that makes syscalls
+// without ever taking one. Call with group->lock held; returns the signal
+// due, or 0.
+int rlimit_cpu_due_locked(struct tgroup *group, uint64_t used_ns) {
+    rlim_t_ soft = group->limits[RLIMIT_CPU_].cur;
+    rlim_t_ hard = group->limits[RLIMIT_CPU_].max;
+    if (soft == RLIM_INFINITY_)
+        return 0;
+    // Seconds, and a limit too large to count in nanoseconds is one nothing
+    // will reach.
+    const uint64_t max_s = UINT64_MAX / 1000000000ull;
+    if (hard != RLIM_INFINITY_ && hard <= max_s && used_ns >= hard * 1000000000ull)
+        return SIGKILL_;
+    if (soft <= max_s && used_ns >= soft * 1000000000ull) {
+        group->limits[RLIMIT_CPU_].cur = soft + 1;
+        return SIGXCPU_;
+    }
+    return 0;
 }
 
 static int do_getrlimit32(int resource, struct rlimit32_ *rlimit32) {
@@ -135,7 +177,13 @@ dword_t sys_old_getrlimit32(dword_t resource, addr_t rlim_addr) {
 // another process, and the "may not raise your own hard limit" rule is about
 // the TARGET's ceiling.
 static int check_setrlimit_task(struct task *task, int resource, struct rlimit_ new_limit) {
-    if (superuser())
+    // Linux's do_prlimit, before anything else: a soft limit above the hard
+    // one is EINVAL. Accepting it let any process raise its soft limit past
+    // a hard limit an administrator had set -- and the soft limit is the one
+    // enforced, so the hard limit meant nothing.
+    if (new_limit.cur > new_limit.max)
+        return _EINVAL;
+    if (current_capable(CAP_SYS_RESOURCE_))
         return 0;
     struct rlimit_ old_limit;
     int err = rlimit_get(task, resource, &old_limit);
@@ -193,8 +241,15 @@ dword_t sys_prlimit64_guest(pid_t_ pid, dword_t resource, guest_addr_t new_limit
             return _ESRCH;
         release = true;
         // Another process's limits are readable and writable only by a
-        // matching real uid, or CAP_SYS_RESOURCE.
-        if (!current_capable(CAP_SYS_RESOURCE_) && task->uid != current->uid) {
+        // caller whose real ids are ALL of the target's -- real, effective
+        // and saved uid and gid -- or with CAP_SYS_RESOURCE: Linux's
+        // check_prlimit_permission. Comparing the real uid alone let a user
+        // change the limits of a setuid program it had started, which runs
+        // as someone else, and make it fail wherever it chose.
+        if (!current_capable(CAP_SYS_RESOURCE_) &&
+                (current->uid != task->uid || current->uid != task->euid ||
+                 current->uid != task->suid || current->gid != task->gid ||
+                 current->gid != task->egid || current->gid != task->sgid)) {
             task_ref_cnt_mod(task, -1);
             return _EPERM;
         }

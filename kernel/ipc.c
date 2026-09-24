@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include "kernel/calls.h"
+#include "kernel/resource.h"
 #include "kernel/errno.h"
 #include "kernel/mm.h"
 #include "kernel/task.h"
@@ -263,6 +264,7 @@ static guest_addr_t shm_region_attach(struct mm *mm, struct shm_segment *segment
         mem_flags |= P_WRITE;
     }
 
+
     void *mapping = mmap(NULL, segment->alloc_size, prot, MAP_SHARED, segment->fd, 0);
     if (mapping == MAP_FAILED)
         return (guest_addr_t) errno_map();
@@ -278,7 +280,20 @@ static guest_addr_t shm_region_attach(struct mm *mm, struct shm_segment *segment
         page = PAGE(attach_addr);
     }
 
+    // RLIMIT_AS, read before the address-space lock (group->lock nests
+    // outside it), as Linux's do_shmat checks may_expand_vm. A shared segment
+    // is never data, so RLIMIT_DATA does not apply.
+    rlim_t_ as_limit = rlimit(RLIMIT_AS_);
     write_lock(&mm->mem.lock);
+    if (as_limit != RLIM_INFINITY_) {
+        size_t total, data;
+        mem_vm_pages(&mm->mem, &total, &data);
+        if (total + segment->pages > (as_limit >> PAGE_BITS)) {
+            write_unlock(&mm->mem.lock);
+            munmap(mapping, segment->alloc_size);
+            return (guest_addr_t) _ENOMEM;
+        }
+    }
     if (attach_addr != 0) {
         page = PAGE(attach_addr);
         if (!pt_is_hole(&mm->mem, page, segment->pages)) {
