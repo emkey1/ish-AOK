@@ -16,6 +16,15 @@
 #include "emu/interrupt.h"
 #include "emu/arch/arm64/decode.h"
 
+// Every tlb_read in this file reads the guest's CODE -- the instruction being
+// translated, its immediates and ModRM bytes, a fusion or HLE look-ahead -- so
+// every one is an instruction fetch, and must refuse a page mapped without
+// PROT_EXEC (emu/tlb.h's tlb_fetch). Done once here, for the whole file and the
+// macros it expands (emu/modrm.h's READMODRM included), rather than at eighty
+// call sites a new one could forget. A fetch refused this way leaves
+// tlb->fetch_denied set, and the fault gadgets below report it as INT_PF_EXEC.
+#define tlb_read(tlb, addr, out, size) tlb_fetch(tlb, addr, out, size)
+
 static int gen_step32(struct gen_state *state, struct tlb *tlb);
 static int gen_step16(struct gen_state *state, struct tlb *tlb);
 static int gen_step64(struct gen_state *state, struct tlb *tlb);
@@ -1268,9 +1277,11 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         // which resolves it or delivers SIGSEGV at that address. arm64
         // instructions are 4-byte aligned, so the fetch never straddles
         // a page and the fetch address IS the faulting address.
+        // A page that is mapped but not executable is SEGV_ACCERR, and is
+        // not retried: INT_PF_EXEC (emu/interrupt.h).
         extern void gadget_arm64_interrupt(void);
         gen(state, (unsigned long) gadget_arm64_interrupt);
-        gen(state, INT_GPF);
+        gen(state, tlb->fetch_denied ? INT_PF_EXEC : INT_GPF);
         gen(state, state->arm64_orig_ip);
         gen(state, state->arm64_orig_ip); // segfault_addr = fetch address
         return 0;
@@ -5315,7 +5326,7 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
     // the following unmapped page.
     uint16_t low16;
     if (!tlb_read(tlb, state->riscv64_ip, &low16, sizeof(low16)))
-        return gen_riscv64_interrupt_at(state, INT_GPF,
+        return gen_riscv64_interrupt_at(state, tlb->fetch_denied ? INT_PF_EXEC : INT_GPF,
                 state->riscv64_orig_ip, state->riscv64_orig_ip);
     uint32_t insn;
     unsigned length = riscv64_insn_length(low16);
@@ -5329,7 +5340,7 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
     } else {
         uint16_t high16;
         if (!tlb_read(tlb, state->riscv64_ip + 2, &high16, sizeof(high16)))
-            return gen_riscv64_interrupt_at(state, INT_GPF,
+            return gen_riscv64_interrupt_at(state, tlb->fetch_denied ? INT_PF_EXEC : INT_GPF,
                     state->riscv64_orig_ip, state->riscv64_orig_ip + 2);
         insn = (uint32_t) low16 | ((uint32_t) high16 << 16);
     }
@@ -12483,7 +12494,7 @@ typedef void (*gadget_t)(void);
 #define h_read_bits(h, z, bits) do { g_addr(); ggg(helper_read##bits, state->orig_ip, h##z); } while (0)
 #define h_write_bits(h, z, bits) do { g_addr(); ggg(helper_write##bits, state->orig_ip, h##z); } while (0)
 #define UNDEFINED do { gggg(interrupt, INT_UNDEFINED, state->orig_ip, state->orig_ip); return false; } while (0)
-#define SEGFAULT do { gggg(interrupt, INT_GPF, state->orig_ip, tlb->segfault_addr); return false; } while (0)
+#define SEGFAULT do { gggg(interrupt, tlb->fetch_denied ? INT_PF_EXEC : INT_GPF, state->orig_ip, tlb->segfault_addr); return false; } while (0)
 #define SYSCALL_AMD64 do { gggg(interrupt, INT_AMD64_SYSCALL, state->ip, 0); return false; } while (0)
 
 static inline int sz(int size) {

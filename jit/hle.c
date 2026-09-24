@@ -789,7 +789,7 @@ static bool hle_try_loop_arm64(struct gen_state *state, struct tlb *tlb,
     if (!hle_loops_enabled())
         return false;
     uint32_t insn[4];
-    if (!tlb_read(tlb, ip, insn, sizeof(insn)))
+    if (!tlb_fetch(tlb, ip, insn, sizeof(insn)))
         return false;
 
     struct hle_a64_ldst ld, st;
@@ -880,7 +880,7 @@ bool hle_try_emit(struct gen_state *state, struct tlb *tlb, guest_addr_t ip,
     if (ip & (riscv64 ? 1 : 3))
         return false;
     uint8_t code[HLE_PROLOGUE_LEN];
-    if (!tlb_read(tlb, ip, code, sizeof(code)))
+    if (!tlb_fetch(tlb, ip, code, sizeof(code)))
         return false;
     enum guest_abi abi = riscv64 ? GUEST_ABI_RISCV64 : GUEST_ABI_ARM64;
     for (size_t i = hle_fingerprints_enabled() ? 0

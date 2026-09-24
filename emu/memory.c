@@ -925,6 +925,19 @@ size_t mem_mapped_page_count(struct mem *mem) {
     return mem_page_count_walk(mem, false);
 }
 
+bool mmu_page_executable(struct mmu *mmu, page_t page) {
+    struct mem *mem = container_of(mmu, struct mem, mmu);
+    if (page >= mem->page_limit)
+        return true;
+    struct pt_entry *entry = mem_pt(mem, page);
+    if (entry != NULL)
+        return (entry->flags & P_EXEC) != 0;
+    struct mem_lazy_map *lazy = mem_lazy_find(mem, page);
+    if (lazy != NULL)
+        return (lazy->flags & P_EXEC) != 0;
+    return true;
+}
+
 // Linux's is_data_mapping(): private, writable, and not the stack.
 static bool mem_flags_are_data(unsigned flags) {
     return (flags & (P_WRITE | P_SHARED | P_GROWSDOWN)) == P_WRITE;
@@ -3031,7 +3044,17 @@ static void mem_map_growsdown_group(struct mem *mem, page_t page) {
     // mem_lazy_map), which is why the walks above skip reserved pages rather
     // than letting pt_map drop or materialise a reservation for the sake of
     // three stack pages.
-    pt_map_nothing(mem, first, (pages_t) (last - first + 1), P_WRITE | P_GROWSDOWN);
+    //
+    // The new pages take the protection of the stack they extend -- read and
+    // write, and execute only if exec gave the stack that (PT_GNU_STACK). A
+    // fixed P_WRITE made every grown page non-executable, and would have made
+    // them all executable had it been anything else.
+    unsigned flags = P_READ | P_WRITE | P_GROWSDOWN;
+    page_t above = mem_next_mapped_page(mem, last + 1);
+    struct pt_entry *stack = above != BAD_PAGE ? mem_pt(mem, above) : NULL;
+    if (stack != NULL && (stack->flags & P_GROWSDOWN))
+        flags = (stack->flags & (P_READ | P_WRITE | P_EXEC)) | P_GROWSDOWN;
+    pt_map_nothing(mem, first, (pages_t) (last - first + 1), flags);
 }
 
 int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
@@ -3044,11 +3067,14 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
     for (page_t page = start; page < start + pages; page++)
         if (mem_pt(mem, page) == NULL)
             return _ENOMEM;
+    bool exec_changed = false;
     for (page_t page = start; page < start + pages; page++) {
         struct pt_entry *entry = mem_pt(mem, page);
         int old_flags = entry->flags;
         int keep_flags = old_flags & ~(P_READ | P_WRITE | P_EXEC);
         int new_flags = keep_flags | flags;
+        if ((old_flags ^ new_flags) & P_EXEC)
+            exec_changed = true;
 
         // Reserve guest PROT_NONE anonymous mappings without host backing.
         // If they later become accessible, allocate a real host page here --
@@ -3116,6 +3142,22 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
         }
     }
     mem_changed(mem);
+#if ENGINE_JIT
+    // Translated code must follow the page's exec permission both ways: code
+    // translated while a page was executable may not run once it is not, and
+    // a block that ends in a fetch fault for a page that was not executable
+    // must be translated again once it is. Such a block starts at most a page
+    // before the page it faults on (a block spans at most two), and on arm64
+    // and riscv64 it is registered on its first page only -- so the page below
+    // the range goes too. Here, after the loop: the pt_map above may take the
+    // same lock, and it is not recursive.
+    if (exec_changed) {
+        bool jit_locked = jit_invalidate_lock(mem->mmu.jit);
+        jit_invalidate_range(mem->mmu.jit, start > 0 ? start - 1 : 0, start + pages);
+        if (jit_locked)
+            jit_invalidate_unlock(mem->mmu.jit);
+    }
+#endif
     return 0;
 }
 

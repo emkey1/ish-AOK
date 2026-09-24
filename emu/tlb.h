@@ -70,6 +70,15 @@ struct tlb {
     guest_addr_t prev_write_ip;
     uint64_t prev_write_changes;
     struct tlb_entry entries[TLB_SIZE];
+    // Instruction fetch (tlb_fetch). fetch_denied: the last fetch failed
+    // because its page may not be executed, rather than because it is not
+    // mapped -- what an engine's fault gadget reports as INT_PF_EXEC.
+    // exec_ok_page (page + 1, 0 for none) is the last page found executable,
+    // valid while mmu->changes still equals exec_ok_changes. At the end so the
+    // generated offsets of everything above stay put.
+    bool fetch_denied;
+    page_t exec_ok_page;
+    uint64_t exec_ok_changes;
 };
 
 #define TLB_INDEX(addr) ((((addr >> PAGE_BITS) ^ (addr >> (PAGE_BITS + TLB_BITS)))) & (TLB_SIZE - 1))
@@ -145,6 +154,13 @@ forceinline __no_instrument void *__tlb_read_ptr(struct tlb *tlb, guest_addr_t a
     return tlb_handle_miss(tlb, addr, MEM_READ);
 }
 bool __tlb_read_cross_page(struct tlb *tlb, guest_addr_t addr, char *out, unsigned size);
+// Instruction fetch: tlb_read, but every page the bytes are on must be
+// executable. One that is mapped and not executable fails with
+// tlb->fetch_denied set and tlb->segfault_addr at its first byte; an unmapped
+// one fails as tlb_read does. Every engine reads the code it runs through
+// this, so memory mapped without PROT_EXEC does not execute (NX). Defined in
+// emu/tlb.c.
+bool tlb_fetch(struct tlb *tlb, guest_addr_t addr, void *out, unsigned size);
 forceinline __no_instrument bool tlb_read(struct tlb *tlb, guest_addr_t addr, void *out, unsigned size) {
     if (PGOFFSET(addr) > PAGE_SIZE - size)
         return __tlb_read_cross_page(tlb, addr, out, size);

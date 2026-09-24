@@ -3,6 +3,7 @@
 #include <sys/mman.h>
 #include <setjmp.h>
 #include <signal.h>
+#include <unistd.h>
 
 static char code[] = {
     0xb8, 0x01, 0x00, 0x00, 0x00, // movl $1, %eax
@@ -26,6 +27,12 @@ static void test(char *code, const char *name) {
 
 int main() {
     signal(SIGSEGV, handle_segfault);
+    // The static copy lives in .data, which is not executable -- on Linux, and
+    // in AOK since it enforces PROT_EXEC. A program that patches its own code
+    // makes the page executable first, and so does this.
+    long pg = sysconf(_SC_PAGESIZE);
+    mprotect((void *) ((unsigned long) code & ~(pg - 1)), 2 * pg,
+             PROT_READ | PROT_WRITE | PROT_EXEC);
     void *code_copy = mmap(NULL, 0x1000, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, 0, 0);
     memcpy(code_copy, code, sizeof(code));
 

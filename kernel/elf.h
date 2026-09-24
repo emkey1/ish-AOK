@@ -48,6 +48,7 @@ struct elf_header {
 #define PT_PHDR 6
 #define PT_TLS 7
 #define PT_NUM 8
+#define PT_GNU_STACK 0x6474e551
 
 struct prg_header {
     uint32_t type;

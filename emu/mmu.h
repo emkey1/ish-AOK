@@ -35,6 +35,11 @@ struct mmu {
 
 #define MEM_READ 0
 #define MEM_WRITE 1
+// Whether `page` may be executed: mapped (or reserved) with PROT_EXEC. A page
+// neither mapped nor reserved answers true -- a fetch from it is an unmapped
+// access, reported as one by the read that follows. Defined in emu/memory.c.
+struct mmu;
+bool mmu_page_executable(struct mmu *mmu, page_t page);
 #define MEM_WRITE_PTRACE 2
 
 struct mmu_ops {

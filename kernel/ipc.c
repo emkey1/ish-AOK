@@ -7,6 +7,7 @@
 
 #include "kernel/calls.h"
 #include "kernel/resource.h"
+#include "kernel/personality.h"
 #include "kernel/errno.h"
 #include "kernel/mm.h"
 #include "kernel/task.h"
@@ -37,6 +38,7 @@
 #define IPC_64_      0x100
 
 #define SHM_RDONLY_  010000
+#define SHM_EXEC_ 0100000
 #define SHM_RND_     020000
 #define SHM_DEST_    01000
 
@@ -263,7 +265,10 @@ static guest_addr_t shm_region_attach(struct mm *mm, struct shm_segment *segment
         prot |= PROT_WRITE;
         mem_flags |= P_WRITE;
     }
-
+    // Executable only when asked for (SHM_EXEC) or under READ_IMPLIES_EXEC,
+    // as Linux's do_shmat decides.
+    if ((shmflg & SHM_EXEC_) || (current->group->personality & READ_IMPLIES_EXEC_))
+        mem_flags |= P_EXEC;
 
     void *mapping = mmap(NULL, segment->alloc_size, prot, MAP_SHARED, segment->fd, 0);
     if (mapping == MAP_FAILED)

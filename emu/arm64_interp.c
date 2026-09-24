@@ -627,7 +627,8 @@ static inline int arm64_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb
         cpu->arm64_pc = insn_addr;
         cpu->segfault_addr = insn_addr;
         cpu->segfault_was_write = false;
-        return INT_PF;
+        // Mapped but not executable: SEGV_ACCERR, not a retried read.
+        return tlb->fetch_denied ? INT_PF_EXEC : INT_PF;
     }
     return arm64_execute(cpu, tlb, insn, insn_addr);
 }

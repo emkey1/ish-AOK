@@ -132,7 +132,8 @@ static inline enum arm64_insn_type arm64_classify_insn(uint32_t insn) {
 static inline bool arm64_read_insn(guest_addr_t *ip, struct tlb *tlb, uint32_t *insn) {
     if (!guest_abi_range_valid(GUEST_ABI_ARM64, *ip, sizeof(*insn)))
         return false;
-    if (!tlb_read(tlb, *ip, insn, sizeof(*insn)))
+    // A fetch: refused for a page without PROT_EXEC (emu/tlb.h).
+    if (!tlb_fetch(tlb, *ip, insn, sizeof(*insn)))
         return false;
     *ip += 4;
     return true;

@@ -2691,6 +2691,11 @@ static qword_t signal_trap_error(struct cpu_state *cpu) {
             mem_read_lock_quiesce_aware(current->mem);
             if (mem_segv_reason(current->mem, cpu->segfault_addr) == SEGV_ACCERR_)
                 err |= 0x1;
+            // An instruction fetch from a mapped page that may not be
+            // executed: X86_PF_INSTR, and the page is present.
+            if (!cpu->segfault_was_write &&
+                    !mmu_page_executable(&current->mem->mmu, PAGE(cpu->segfault_addr)))
+                err |= 0x10 | 0x1;
             mem_read_unlock_quiesce_aware(current->mem);
             return err;
         }
@@ -3115,13 +3120,16 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         current->cpu.arm64_regs[arm64_x1] = sp + offsetof(struct rt_sigframe_arm64, info);
         current->cpu.arm64_regs[arm64_x2] = sp + offsetof(struct rt_sigframe_arm64, uc);
         // 0x04000000 = SA_RESTORER (arm64 defines it; the kernel honors an
-        // explicit restorer and otherwise uses the vDSO trampoline — here,
-        // the on-stack retcode, since there's no arm64 vDSO yet). Don't
-        // read action->restorer without the flag: musl leaves the field
-        // unset on aarch64.
+        // explicit restorer and otherwise uses the vDSO trampoline -- here,
+        // the [sigpage] exec maps, kernel/exec.c map_sigpage). Don't read
+        // action->restorer without the flag: musl leaves the field unset on
+        // aarch64. The stack copy of the trampoline is only for an address
+        // space with no sigpage, one exec did not build; the stack is not
+        // executable, so returning there would fault.
         guest_addr_t restorer = action->flags & 0x04000000u ? action->restorer : 0;
         if (restorer == 0)
-            restorer = sp + offsetof(struct rt_sigframe_arm64, retcode);
+            restorer = current->mm->vdso != 0 ? current->mm->vdso
+                    : sp + offsetof(struct rt_sigframe_arm64, retcode);
         current->cpu.arm64_regs[arm64_x30] = restorer;
 
         signal_handler_mask_set(action, info->sig);
@@ -3154,9 +3162,10 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         current->cpu.riscv64_regs[riscv64_a1] = sp + offsetof(struct rt_sigframe_riscv64, info);
         current->cpu.riscv64_regs[riscv64_a2] = sp + offsetof(struct rt_sigframe_riscv64, uc);
         // riscv64 defines no SA_RESTORER (the real kernel always uses the
-        // vDSO trampoline); this port always uses the on-stack retcode.
-        current->cpu.riscv64_regs[riscv64_ra] =
-            sp + offsetof(struct rt_sigframe_riscv64, retcode);
+        // vDSO trampoline); here that is the [sigpage] exec maps, with the
+        // stack copy only for an address space that has none -- see arm64.
+        current->cpu.riscv64_regs[riscv64_ra] = current->mm->vdso != 0 ? current->mm->vdso
+                : sp + offsetof(struct rt_sigframe_riscv64, retcode);
 
         signal_handler_mask_set(action, info->sig);
 
@@ -3187,9 +3196,13 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         sp -= frame_size;
         sp = (sp & ~0xfull) - 8;
 
+        // Linux requires SA_RESTORER on x86_64, and every libc sets it. One
+        // that did not used to return to a stack copy of the trampoline; now
+        // it is the [sigpage] (kernel/exec.c), since the stack does not run.
         guest_addr_t restorer = action->restorer;
         if (restorer == 0)
-            restorer = sp + offsetof(struct rt_sigframe_amd64, retcode);
+            restorer = current->mm->vdso != 0 ? current->mm->vdso
+                    : sp + offsetof(struct rt_sigframe_amd64, retcode);
         frame.pretcode = restorer;
         frame.uc.mcontext.fpstate = sp + offsetof(struct rt_sigframe_amd64, uc.fpregs_mem);
 

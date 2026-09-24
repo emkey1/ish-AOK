@@ -94,7 +94,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 19  // 19: seccomp mode and filters, dumpable; 18: a queued signal says whether it is a POSIX timer's own; 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 20  // 20: NX -- 64-bit guests return from signals through a [sigpage], and the personality; 19: seccomp mode and filters, dumpable; 18: a queued signal says whether it is a POSIX timer's own; 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -418,6 +418,13 @@ struct ckpt_task {
     // The process is not dumpable (struct tgroup's undumpable): a restore must
     // not open it up to its user's ptrace and /proc.
     uint32_t undumpable;
+    // personality(2), the process's: READ_IMPLIES_EXEC decides whether what
+    // it maps from now on is executable, so a pre-NX program restored without
+    // it would fault on code that ran before the save. (An image from before
+    // version 20 is refused outright: its 64-bit processes have no [sigpage],
+    // and their signal handlers would return onto a stack that no longer
+    // executes.)
+    uint32_t personality;
 };
 
 struct ckpt_seccomp_prog {
@@ -2503,6 +2510,7 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         .seccomp_mode = (uint32_t) __atomic_load_n(&task->seccomp_mode, __ATOMIC_ACQUIRE),
         .seccomp_nprogs = seccomp_filter_count(task->seccomp_filter),
         .undumpable = atomic_load(&task->group->undumpable) ? 1 : 0,
+        .personality = task->group->personality,
         .ngroups = task->ngroups,
         .tgid = sh->tgid,
         .mm_owner = sh->mm,
@@ -4255,6 +4263,10 @@ static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
     __atomic_store_n(&current->seccomp_mode, (int) rec->seccomp_mode, __ATOMIC_RELEASE);
     // The whole process's, so every thread's record carries the same value.
     atomic_store(&current->group->undumpable, rec->undumpable != 0);
+    // As with undumpable, every thread's record carries the process's value.
+    lock(&current->group->lock, 0);
+    current->group->personality = rec->personality;
+    unlock(&current->group->lock);
 
     // A NATIVE task: the program's name, the argv it had, and the state it
     // produced about itself. No register file and no address space follow --

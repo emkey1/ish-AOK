@@ -6,6 +6,7 @@
 #include "kernel/errno.h"
 #include "kernel/fs.h"
 #include "kernel/task.h"
+#include "kernel/personality.h"
 #include "fs/fd.h"
 #include "emu/memory.h"
 #include "platform/platform.h"
@@ -573,6 +574,9 @@ static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t pr
     prot &= ~(dword_t) PROT_SEM_;
     if (prot & ~P_RWX)
         return _EINVAL;
+    // READ_IMPLIES_EXEC (kernel/personality.h): anything readable runs.
+    if ((prot & P_READ) && (current->group->personality & READ_IMPLIES_EXEC_))
+        prot |= P_EXEC;
     // Refuse guest memory growth when the app is close to its jetsam budget:
     // a runaway guest (e.g. a 10k-thread storm mapping a stack per thread)
     // must get clean ENOMEMs here rather than starving UIKit/libobjc into a
@@ -1215,6 +1219,9 @@ int_t sys_mprotect_guest(guest_addr_t addr, qword_t len, int_t prot) {
     prot &= ~(int_t) PROT_SEM_;    // see mmap_common_guest
     if (prot & ~P_RWX)
         return _EINVAL;
+    // READ_IMPLIES_EXEC, as mmap_common_guest.
+    if ((prot & P_READ) && (current->group->personality & READ_IMPLIES_EXEC_))
+        prot |= P_EXEC;
     pages_t pages = PAGE_ROUND_UP(len);
     const struct vm_limits lim = vm_limits_now();
     mem_write_lock_with_pokes(current->mem);
@@ -1867,6 +1874,11 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk) {
         swap_direct_reclaim(&mm->mem, new_brk - mm->brk);
 
     const struct vm_limits lim = vm_limits_now();
+    // The heap is read-write, and executable only under READ_IMPLIES_EXEC
+    // (Linux's VM_DATA_DEFAULT_FLAGS). Read before the address-space lock,
+    // like the limits.
+    const unsigned brk_flags = P_READ | P_WRITE |
+            ((current->group->personality & READ_IMPLIES_EXEC_) ? P_EXEC : 0);
     mem_write_lock_with_pokes(&mm->mem);
     if (new_brk < mm->start_brk)
         goto out;
@@ -1910,7 +1922,7 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk) {
             pages_t claim_size = size;
             if (start + size > reserve_end)
                 claim_size = reserve_end - start;
-            int err = pt_map_nothing(&mm->mem, start, claim_size, P_WRITE);
+            int err = pt_map_nothing(&mm->mem, start, claim_size, brk_flags);
             if (err < 0) {
                 expand_failed = true;
                 goto out;
@@ -1923,7 +1935,7 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk) {
                     expand_failed = true;
                     goto out;
                 }
-                int err2 = pt_map_nothing(&mm->mem, rest_start, rest_size, P_WRITE);
+                int err2 = pt_map_nothing(&mm->mem, rest_start, rest_size, brk_flags);
                 if (err2 < 0) {
                     expand_failed = true;
                     goto out;
@@ -1933,7 +1945,7 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk) {
             expand_failed = true;
             goto out;
         } else {
-            int err = pt_map_nothing(&mm->mem, start, size, P_WRITE);
+            int err = pt_map_nothing(&mm->mem, start, size, brk_flags);
             if (err < 0) {
                 expand_failed = true;
                 goto out;

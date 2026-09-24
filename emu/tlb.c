@@ -661,6 +661,27 @@ void tlb_flush(struct tlb *tlb) {
     tlb->mem_changes = atomic_load_explicit(&tlb->mmu->changes, memory_order_relaxed);
     for (unsigned i = 0; i < TLB_SIZE; i++)
         tlb->entries[i] = (struct tlb_entry) {.page = 1, .page_if_writable = 1};
+    tlb->exec_ok_page = 0;
+}
+
+bool tlb_fetch(struct tlb *tlb, guest_addr_t addr, void *out, unsigned size) {
+    tlb->fetch_denied = false;
+    if (size == 0)
+        return true;
+    uint64_t changes = atomic_load_explicit(&tlb->mmu->changes, memory_order_relaxed);
+    page_t first = PAGE(addr), last = PAGE(addr + size - 1);
+    for (page_t page = first; page <= last; page++) {
+        if (tlb->exec_ok_page == page + 1 && tlb->exec_ok_changes == changes)
+            continue;
+        if (!mmu_page_executable(tlb->mmu, page)) {
+            tlb->fetch_denied = true;
+            tlb->segfault_addr = page == first ? addr : (guest_addr_t) page << PAGE_BITS;
+            return false;
+        }
+        tlb->exec_ok_page = page + 1;
+        tlb->exec_ok_changes = changes;
+    }
+    return tlb_read(tlb, addr, out, size);
 }
 
 void tlb_free(struct tlb *tlb) {

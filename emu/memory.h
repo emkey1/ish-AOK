@@ -606,7 +606,9 @@ struct pt_entry {
 #endif
 };
 // page flags
-// P_READ and P_EXEC are ignored for now
+// A page with none of P_READ, P_WRITE, P_EXEC (PROT_NONE) cannot be read or
+// written; P_EXEC decides whether it may be executed (emu/tlb.h tlb_fetch).
+// Data reads of a write-only or exec-only page succeed, as on Linux.
 #define P_READ (1 << 0)
 #define P_WRITE (1 << 1)
 #undef P_EXEC // defined in sys/proc.h on darwin

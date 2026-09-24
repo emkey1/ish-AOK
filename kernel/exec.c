@@ -12,6 +12,7 @@
 #include "debug.h"
 #include "misc.h"
 #include "kernel/calls.h"
+#include "kernel/personality.h"
 #include "kernel/random.h"
 #include "kernel/errno.h"
 #include "fs/fd.h"
@@ -234,6 +235,44 @@ static int read_prg_headers(struct fd *fd, struct elf_info header, struct elf_pr
     return 0;
 }
 
+// The page a 64-bit guest's signal handler returns through: the kernel's
+// rt_sigreturn trampoline, read-only and executable, as Linux keeps one in
+// the vDSO (__kernel_rt_sigreturn). A handler returns to it when the program
+// gave no SA_RESTORER -- musl on aarch64 never does, and riscv64 has no such
+// flag -- and it used to return to a copy written onto the signal stack,
+// which cannot run now that the stack is not executable. The instructions
+// are the ones libgcc's unwinder looks for to recognise a signal frame.
+//
+// Recorded in mm->vdso, which a 64-bit guest otherwise leaves 0 and which a
+// checkpoint already carries (i386 keeps its real vDSO there, and no 64-bit
+// guest is ever handed it in an aux vector). Private anonymous memory, so a
+// process that mprotects and rewrites its own copy changes nobody else's.
+static int map_sigpage(struct task *task, enum guest_abi abi) {
+    page_t page = pt_find_hole(task->mem, 1);
+    if (page == BAD_PAGE)
+        return _ENOMEM;
+    int err = pt_map_nothing(task->mem, page, 1, P_READ | P_EXEC);
+    if (err < 0)
+        return err;
+    struct pt_entry *entry = mem_pt(task->mem, page);
+    if (entry == NULL || entry->data == NULL || entry->data->data == NULL)
+        return _ENOMEM;
+    uint8_t *code = (uint8_t *) entry->data->data + entry->offset;
+    static const uint32_t arm64_code[] = {0xd2801168u, 0xd4000001u};  // movz x8, #139; svc #0
+    static const uint32_t riscv64_code[] = {0x08b00893u, 0x00000073u}; // li a7, 139; ecall
+    static const uint8_t amd64_code[] = {0x48, 0xc7, 0xc0, 0x0f, 0x00, 0x00, 0x00, // mov $15, %rax
+                                         0x0f, 0x05};                            // syscall
+    switch (abi) {
+        case GUEST_ABI_ARM64: memcpy(code, arm64_code, sizeof(arm64_code)); break;
+        case GUEST_ABI_RISCV64: memcpy(code, riscv64_code, sizeof(riscv64_code)); break;
+        case GUEST_ABI_AMD64: memcpy(code, amd64_code, sizeof(amd64_code)); break;
+        default: break;
+    }
+    entry->data->name = "[sigpage]";
+    task->mm->vdso = (guest_addr_t) page << PAGE_BITS;
+    return 0;
+}
+
 static int load_entry(enum guest_abi abi, struct elf_prg_info ph, guest_addr_t bias, struct fd *fd) {
     int err;
 
@@ -251,6 +290,9 @@ static int load_entry(enum guest_abi abi, struct elf_prg_info ph, guest_addr_t b
     int flags = P_READ;
     if (ph.flags & PH_W) flags |= P_WRITE;
     if (ph.flags & PH_X) flags |= P_EXEC;
+    // Decided by elf_exec before the image is loaded; see READ_IMPLIES_EXEC_.
+    if (current->group->personality & READ_IMPLIES_EXEC_)
+        flags |= P_EXEC;
 
     guest_addr_t file_end = addr + filesize;
     guest_addr_t mem_end = addr + memsize;
@@ -823,6 +865,32 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     // same place Linux runs de_thread.
     exec_de_thread();
 
+    // Whether the new image may execute its stack, and whether it lives in
+    // the pre-NX world where anything readable is executable. PT_GNU_STACK
+    // with PF_X asks for an executable stack; an i386 binary with no
+    // PT_GNU_STACK at all predates the header and gets READ_IMPLIES_EXEC, as
+    // it does on Linux (elf_read_implies_exec); a 64-bit one never does. A
+    // set-id exec first drops what its caller could have set to weaken it.
+    // Decided here, where the exec can no longer fail back to the caller, and
+    // before the address-space lock: group->lock nests outside it.
+    bool exec_stack = false, has_gnu_stack = false;
+    for (unsigned i = 0; i < header.phent_count; i++) {
+        if (ph[i].type == PT_GNU_STACK) {
+            has_gnu_stack = true;
+            exec_stack = (ph[i].flags & PH_X) != 0;
+        }
+    }
+    lock(&save->group->lock, 0);
+    if (save->exec_secure)
+        save->group->personality &= ~PER_CLEAR_ON_SETID_;
+    if (guest_abi_is_64bit(header.abi))
+        save->group->personality &= ~READ_IMPLIES_EXEC_;
+    else if (!has_gnu_stack)
+        save->group->personality |= READ_IMPLIES_EXEC_;
+    if (save->group->personality & READ_IMPLIES_EXEC_)
+        exec_stack = true;
+    unlock(&save->group->lock);
+
     // free the process's memory.
     // from this point on, if any error occurs the process will have to be
     // killed before it even starts. please don't be too sad about it, it's
@@ -978,10 +1046,17 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         if ((err = pt_map_nothing(save->mem, vvar_page, VVAR_PAGES, 0)) < 0)
             goto beyond_hope;
         mem_pt(save->mem, vvar_page)->data->name = "[vvar]";
+    } else if ((err = map_sigpage(save, header.abi)) < 0) {
+        goto beyond_hope;
     }
 
     struct guest_vm_layout vm_layout = guest_abi_vm_layout(save->abi);
-    if ((err = pt_map_nothing(save->mem, vm_layout.stack_page, 1, P_WRITE | P_GROWSDOWN)) < 0)
+    // Readable and writable, and executable only when the binary asked for it
+    // (exec_stack above): with instruction fetch checked, a stack mapped
+    // executable by default would be the one place in memory an overflow could
+    // still put code and run it. Growth takes these flags from the page above.
+    if ((err = pt_map_nothing(save->mem, vm_layout.stack_page, 1,
+            P_READ | P_WRITE | P_GROWSDOWN | (exec_stack ? P_EXEC : 0))) < 0)
         goto beyond_hope;
     // Record where the stack starts and how far down it may grow. Linux bounds
     // stack expansion at RLIMIT_STACK measured from the stack's top; without

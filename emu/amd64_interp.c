@@ -3313,13 +3313,16 @@ static inline qword_t amd64_rotate_carry_value(struct cpu_state *cpu, qword_t va
 
 static inline bool amd64_fetch(struct cpu_state *cpu, struct tlb *tlb, void *out, unsigned size) {
     guest_addr_t addr;
+    tlb->fetch_denied = false;
     if (!amd64_guest_addr_ok(cpu->amd64_rip, size, &addr)) {
         cpu->segfault_addr = cpu->amd64_rip;
         cpu->segfault_was_write = false;
         return false;
     }
-    if (!tlb_read(tlb, addr, out, size)) {
-        cpu->segfault_addr = addr;
+    // A fetch: refused for a page without PROT_EXEC (emu/tlb.h), which the
+    // fault paths below report as INT_PF_EXEC.
+    if (!tlb_fetch(tlb, addr, out, size)) {
+        cpu->segfault_addr = tlb->fetch_denied ? tlb->segfault_addr : addr;
         cpu->segfault_was_write = false;
         return false;
     }
@@ -8702,7 +8705,23 @@ static inline int amd64_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb
 
 restart_prefix:
     if (!amd64_fetch_u8(cpu, tlb, &opcode)) {
+        guest_addr_t fetch_addr = cpu->segfault_addr;
         cpu->amd64_rip = saved_rip;
+        // A page without PROT_EXEC: SEGV_ACCERR at the byte that could not be
+        // fetched, which amd64_fetch left in segfault_addr.
+        if (tlb->fetch_denied)
+            return INT_PF_EXEC;
+        // A canonical address that is not mapped is a page fault, as on the
+        // hardware: SEGV_MAPERR at that address -- or, for a page that is only
+        // reserved (a lazy mapping) or swapped out, the page brought in and
+        // the instruction run again. It was reported as #GP, which delivers
+        // SI_KERNEL and resolves nothing. A non-canonical one stays #GP.
+        guest_addr_t canonical;
+        if (amd64_guest_addr_ok(fetch_addr, 1, &canonical)) {
+            cpu->segfault_addr = fetch_addr;
+            cpu->segfault_was_write = false;
+            return INT_PF;
+        }
         cpu->segfault_addr = saved_rip;
         return INT_GPF;
     }
@@ -12365,6 +12384,11 @@ restart_prefix:
 amd64_gpf_restore:
     cpu->amd64_rip = saved_rip;
     amd64_sync_legacy_regs(cpu);
+    // An instruction whose later bytes are on a page without PROT_EXEC. Only
+    // amd64_fetch sets the flag, and it clears it first, so a data access
+    // faulting here after the instruction was fetched reads it false.
+    if (tlb->fetch_denied)
+        return INT_PF_EXEC;
     return INT_PF;
 }
 

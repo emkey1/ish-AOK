@@ -40,3 +40,9 @@
 // syscall table yet (riscv64_guest_plan.md patch 4) — same staging as
 // INT_ARM64_SVC above.
 #define INT_RISCV64_ECALL 0x104
+// Synthetic interrupt for an instruction fetch from a page that is mapped but
+// not executable (tlb_fetch): SIGSEGV with SEGV_ACCERR at segfault_addr, never
+// retried as a read. Chosen when the fault is emitted -- for a JIT, when the
+// block is translated -- because a read of that page would succeed, and the
+// ordinary fault path's retry would only run into the same fetch again.
+#define INT_PF_EXEC 0x105

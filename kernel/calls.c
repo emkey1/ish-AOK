@@ -5556,6 +5556,30 @@ static guest_addr_t current_fault_ip(const struct cpu_state *cpu) {
     return cpu->eip;
 }
 
+// An instruction fetch from a page that is mapped but not executable
+// (emu/tlb.h tlb_fetch, INT_PF_EXEC): SIGSEGV with SEGV_ACCERR at the address
+// that could not be fetched, as Linux delivers for NX. Code in memory mapped
+// without PROT_EXEC ran before -- nothing checked -- so a heap or stack
+// overflow that got to write code could also get to run it.
+//
+// Not the page-fault path: that retries a fault it can resolve, and a page
+// that is only readable resolves for a read every time.
+static void handle_exec_fault_interrupt(struct cpu_state *cpu) {
+    cpu->trapno = INT_PF;
+    cpu->segfault_was_write = false;
+    // Executable again by now -- an mprotect(PROT_EXEC) that landed after the
+    // fault was compiled into a block. pt_set_flags threw that block away, so
+    // running the instruction again translates it afresh.
+    if (mmu_page_executable(&current->mem->mmu, PAGE(cpu->segfault_addr)))
+        return;
+    record_guest_fault_event("exec-fault", cpu, cpu->segfault_addr, false);
+    struct siginfo_ info = {
+        .code = SEGV_ACCERR_,
+        .fault.addr = cpu->segfault_addr,
+    };
+    deliver_signal(current, SIGSEGV_, info);
+}
+
 void handle_page_fault_interrupt(struct cpu_state *cpu) {
     void *ptr = mem_ptr_fault(current->mem, cpu->segfault_addr,
                               cpu->segfault_was_write ? MEM_WRITE : MEM_READ);
@@ -6895,6 +6919,9 @@ void handle_interrupt(int interrupt) {
             break;
         case INT_BUS:
             handle_bus_interrupt(cpu);
+            break;
+        case INT_PF_EXEC:
+            handle_exec_fault_interrupt(cpu);
             break;
         case INT_UNDEFINED:
             handle_illegal_instruction_interrupt(cpu);
