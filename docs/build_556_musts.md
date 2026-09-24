@@ -24,7 +24,7 @@ the work that has to happen around it.
 |---|---|---|
 | 1 | i386 `lock not` / `lock neg` | **FIXED** in `e6940313` |
 | 2 | iosfs new-API mount persistence | **FIXED** in `1ea88a79`, proven on the M4 iPad |
-| 3 | POLLHUP without POLLIN | **FIXED** in `601404a6`: it had NOT gone stale, see §3 |
+| 3 | POLLHUP without POLLIN | **FIXED** in `601404a6`: it had NOT gone stale, see §3. The dgram and own-SHUT_WR divergences found there: **FIXED** in `d3daf2ee` |
 | 4 | `tty_hangup_signal` device flake | **DONE**: PASS in the 556 device suite run (M4 iPad) |
 | 5 | Launcher applets in `top` | **DECIDED**: not processes, listed in `/proc/ish/applets` (`3c4e085e`) |
 | 6 | RLIMIT_STACK push-down | **DECIDED** "implement", **FIXED** in `05d6ae19` |
@@ -154,6 +154,20 @@ OWN `shutdown(SHUT_WR)` on a stream pair, poll says OUT|HUP|RDHUP (0x2014)
 where Linux says OUT (0x4): the zero-length-send discriminator in `sock_poll`
 cannot tell our half-close from the peer's close. Neither is a regression, and
 neither was fixed here.
+
+**Both FIXED in `d3daf2ee`.** The dgram cause was not `sock_translate_err`
+(`conn_dead` never got set): Darwin leaves ECONNRESET in the survivor's
+`so_error`, and that read-and-clear error went to whichever observer looked
+FIRST. So "`poll(POLLIN)` agrees" above was luck of ordering: asked first, it
+said 0x1 too, and SO_ERROR said 104. Every place that takes the error off the
+host now drops it. Sends diverged as well (Linux: ECONNREFUSED once, then
+ENOTCONN, and a `sendto()` to a live address is delivered) and now match. For
+our own SHUT_WR, `sock_poll` asks the read side first with a host poll for
+POLLIN alone. `poll_shutwr_dgram` asserts all of it exactly, with a positive
+control for each, through poll and epoll, fresh and blocked, with a CPU-cost
+check on every blocked wait. Linux (camd) passes it, the old binary fails 75
+checks, and `poll_rdhup_bounds`, `poll_idle_cpu`, `sock_conn_error` and
+`sock_conformance` still pass.
 
 *Carried from 555 §4.* **Re-measured 2026-09-24 on devuan-amd64-test:** on a
 `SOCK_STREAM` unix socketpair whose peer has closed, `poll(POLLIN)` returns
