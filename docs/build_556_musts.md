@@ -25,7 +25,7 @@ the work that has to happen around it.
 | 1 | i386 `lock not` / `lock neg` | **FIXED** in `e6940313` |
 | 2 | iosfs new-API mount persistence | **FIXED** in `1ea88a79`, proven on the M4 iPad |
 | 3 | POLLHUP without POLLIN | **FIXED** in `601404a6`: it had NOT gone stale, see §3 |
-| 4 | `tty_hangup_signal` device flake | **open**: waits for the 556 device suite run |
+| 4 | `tty_hangup_signal` device flake | **DONE**: PASS in the 556 device suite run (M4 iPad) |
 | 5 | Launcher applets in `top` | **DECIDED**: not processes, listed in `/proc/ish/applets` (`3c4e085e`) |
 | 6 | RLIMIT_STACK push-down | **DECIDED** "implement", **FIXED** in `05d6ae19` |
 
@@ -175,8 +175,13 @@ the CPU-cost check that the `conn_dead` arm exists to protect.
 
 ## 4. `tty_hangup_signal` failed once on device, under suite load
 
-**Open: waiting for the 556 device suite run.** Nothing to change unless it
-fails there.
+**DONE 2026-09-24: PASS in the 556 device suite run** on the M4 iPad (booted
+Devuan aarch64 root, uid 1000, build of `99eac0f2`): 249 pass, 0 fail, suite
+exit 0. The first attempt was started under `nohup`, the launcher mistake 555
+had already made. With SIGHUP ignored, `tty_hangup_signal` SKIPped and
+`orphan_pgrp_wait` failed 7 checks. That was the harness, not the kernel:
+restarted with `setsid` alone, both pass. `orphan_pgrp_wait` now resets SIGHUP
+to its default itself (`ac869ac4`), so it can no longer be fooled that way.
 
 *Carried from 555 §5.* It failed in the 553 device suite run ("still alive 6s
 after the hangup"), then passed 3 of 3 standalone on the same device minutes
