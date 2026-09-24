@@ -315,6 +315,7 @@ native_zsh_fork_state.sh
 native_bash_fork_state.sh
 native_signal_write_eintr.sh
 stack_guard_gap.c
+stack_rlimit_pushdown.c
 realfs_long_name.c
 setsid_thread_group.c
 group_signal_target.c

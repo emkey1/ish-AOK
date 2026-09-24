@@ -992,6 +992,15 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     rlim_t_ stack_limit = rlimit(RLIMIT_STACK_);
     mem_set_stack_bounds(save->mem, vm_layout.stack_page + 1,
                          stack_limit == RLIM_INFINITY_ ? 0 : (uint64_t) stack_limit);
+    // prlimit64 from another process pushes a new limit into this space
+    // (rlimit_set), and it may have landed between the read and the store
+    // above, which would leave the older value. The new space is already
+    // installed as current->mm, so any change made after this re-read is
+    // pushed into it by its setter. Reading once more closes the gap.
+    rlim_t_ stack_limit_now = rlimit(RLIMIT_STACK_);
+    if (stack_limit_now != stack_limit)
+        mem_set_stack_bounds(save->mem, 0,
+                             stack_limit_now == RLIM_INFINITY_ ? 0 : (uint64_t) stack_limit_now);
     write_unlock(&save->mem->lock);
     mem_locked = false;
 
