@@ -424,6 +424,9 @@ void sigusr1_handler(int UNUSED(sig)) {
 // EINTR, which every blocking site in the tree already handles by re-checking
 // the guest's pending set -- they have to, since a spurious SIGUSR1 can already
 // produce the same EINTR today.
+//
+// (What blocked SIGUSR1 turned out to be another thread's siglongjmp, which on
+// Darwin rewrites every thread's mask: see signal_thread_unwedge_wake_sigs.)
 void sigusr2_handler(int UNUSED(sig)) {
     if (!thread_locals_ready())
         return;
@@ -454,7 +457,10 @@ void sigusr2_handler(int UNUSED(sig)) {
 // measured entering task_thread with SIGUSR2 already unblocked in about 2% of
 // creations, and others lost it from the mask later with no handler of ours
 // having run on them -- the same Darwin wake-mask weirdness that
-// signal_thread_unwedge_wake_sigs() below exists to repair. So the handlers
+// signal_thread_unwedge_wake_sigs() below exists to repair, and since explained
+// there: another thread's siglongjmp set every thread's mask, the new one's
+// included. That source is gone, but any host sigprocmask does the same, and
+// this guard does not depend on there being none. So the handlers
 // cannot assume the mask protected them; they check thread_locals_ready()
 // instead, which is true only once the instantiation below has finished.
 //
@@ -487,6 +493,17 @@ void signal_thread_locals_init(void) {
 // observed while the thread sat in nanosleep(), across host thread churn from
 // concurrent guest fork/exec. It is permanent: the signal is masked, so it is
 // never redelivered, and every later poke to that thread is equally deaf.
+//
+// The cause, found 2026-09-24: nothing swallowed the poke. ANOTHER thread set
+// this one's mask. On Darwin sigprocmask sets the mask of every thread in the
+// process, and siglongjmp from a buffer saved with its mask calls it -- which
+// sigunwind_start's buffer was, saved with SIGUSR1 blocked, so each poke that
+// unwound a poll, socket or pipe wait blocked SIGUSR1 in every thread of the
+// app. More guest activity meant more unwinds, hence "grows with churn". Those
+// buffers no longer save a mask (util/sync.h), native programs' jumps no
+// longer restore one (kernel/native_libc.h), and
+// tests/manual/wake_mask_isolation.c watches for it coming back. This repair
+// and its counters stay, as the instrument that says whether it has.
 //
 // A thread that finds a wake signal masked when it expected it unblocked can
 // repair itself: unblocking delivers the queued signal immediately (the handler
@@ -536,17 +553,17 @@ bool signal_thread_wake_sigs_unblocked(void) {
     sigaddset(&sigusr1, SIGUSR1);
 
     if (current) {
-        if (sigsetjmp(unwind_buf, 1)) {
+        if (sigsetjmp(unwind_buf, 0)) {   // never 1: see util/sync.h
             return _EINTR;
         }
         should_unwind = true;
-        sigprocmask(SIG_BLOCK, &sigusr1, NULL);
+        pthread_sigmask(SIG_BLOCK, &sigusr1, NULL);
         if (lock != &current->sighand->lock)
             lock(&current->sighand->lock, 0);
         bool pending = !!(current->pending & ~task_wake_blocked(current));
         if (lock != &current->sighand->lock)
             unlock(&current->sighand->lock);
-        sigprocmask(SIG_UNBLOCK, &sigusr1, NULL);
+        pthread_sigmask(SIG_UNBLOCK, &sigusr1, NULL);
         if (pending) {
             should_unwind = false;
             return _EINTR;

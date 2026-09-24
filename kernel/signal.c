@@ -669,12 +669,13 @@ static void signal_prepare_stop_cont(struct sighand *sighand, struct task *task,
 // `task`'s whole thread group) and gets it back on return; the lock is only
 // dropped around wake_waiting_task, which must not be called while holding it
 // (see the AB-BA comment on signalfd_wakeup_task above).
-// Drop every wake poke to tasks whose comm starts with this, simulating the
-// Darwin swallowed-poke fault for a test. There is no way to provoke the real
-// thing on demand -- it needs host thread churn and it lands where it lands --
-// so without this the recovery paths that exist for it (fs/poll.c's cap and
-// unwedge, kernel/time.c's sleep slices) can only ever be reasoned about, never
-// watched working. tests/manual/wake_poke_lost.c is the reader.
+// Drop every wake poke to tasks whose comm starts with this, simulating a lost
+// poke for a test, so the recovery paths that exist for one (fs/poll.c's cap
+// and unwedge, kernel/time.c's sleep slices) can be watched working.
+// tests/manual/wake_poke_lost.c is the reader. The real fault this stood in
+// for -- another thread's siglongjmp blocking SIGUSR1 in every thread, see
+// util/sync.h -- is fixed, and tests/manual/wake_mask_isolation.c provokes it
+// directly.
 //
 // Deliberately narrow: a comm PREFIX, never all tasks. Set it to something
 // broad and the guest stops responding to signals, which is the fault, not a
@@ -771,11 +772,12 @@ static void signal_wake_task(struct task *task, struct sighand *sighand, int sig
     }
 
     int wake_err = pthread_kill(task->thread, SIGUSR1);
-    // Second, independent poke. The SIGUSR1 above is not reliable: on Darwin it
-    // is intermittently swallowed in a way that leaves SIGUSR1 blocked and
-    // pending in the target thread's own mask with sigusr1_handler never
-    // running, after which that thread is deaf to every later SIGUSR1 for the
-    // rest of its life. A target parked in a host syscall then finishes the
+    // Second, independent poke. The SIGUSR1 above was not reliable: on Darwin it
+    // was intermittently left blocked and pending in the target thread's own
+    // mask with sigusr1_handler never running, after which that thread was deaf
+    // to every later SIGUSR1. (The cause was another thread's siglongjmp, which
+    // on Darwin sets every thread's mask -- fixed in util/sync.h; this stays as
+    // the second way in.) A target parked in a host syscall then finishes the
     // syscall on its own schedule and never reaches the checkpoint where
     // receive_signals() would act -- which is how a `sleep 30` could ignore a
     // pending SIGKILL and exit normally 30 seconds later. SIGUSR2 is delivered

@@ -241,8 +241,13 @@ PURE = {
     # questions for the same reason; deps/zsh/Src/aok_fork.c is the caller that
     # made them show up here.
     "pthread_get_stackaddr_np", "pthread_get_stacksize_np",
-    # non-local jumps: control flow within the program
-    "setjmp", "longjmp", "sigsetjmp", "siglongjmp", "_setjmp", "_longjmp",
+    # Non-local jumps: control flow within the program -- but only the two that
+    # leave the signal mask alone. setjmp/longjmp and sigsetjmp/siglongjmp
+    # save and restore a mask, and Darwin restores it with sigprocmask, which
+    # sets the mask of EVERY host thread in the app. kernel/native_libc.h maps
+    # all four onto these; one of them showing up here means a program escaped
+    # that mapping.
+    "_setjmp", "_longjmp",
     # Reading the clock. The guest's time IS the host's, so this is not a leak.
     "clock_gettime", "gettimeofday", "time", "clock",
     # Wide characters and multibyte conversion. Every one of these transforms a

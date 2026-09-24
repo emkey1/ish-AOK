@@ -1872,11 +1872,13 @@ static int proc_ish_show_uidevice(struct proc_entry *UNUSED(entry), struct proc_
 // What the wake-poke machinery has had to repair.
 //
 // A task is pulled out of a host blocking call by pthread_kill(SIGUSR1/SIGUSR2)
-// (kernel/signal.c signal_wake_task). On Darwin that poke is intermittently
-// swallowed in a way that leaves the signal blocked and pending in the target
-// thread's own mask with no handler having run, and the state is PERMANENT:
-// every later poke to that thread is equally deaf. Both blocking sites that can
-// meet it repair themselves and count the repair here.
+// (kernel/signal.c signal_wake_task). A thread whose host mask has the signal
+// blocked stays deaf to every such poke until something unblocks it, and both
+// blocking sites that can meet that state repair themselves and count the
+// repair here. A thread never blocks its own wake signal across those waits, so
+// a repair means ANOTHER thread changed its mask -- on Darwin, sigprocmask sets
+// every thread's mask, and a mask-restoring siglongjmp calls it. That was every
+// interrupted wait's unwind until 2026-09-24 (util/sync.h sigunwind_start).
 //
 // This file exists because the counters had no reader. The first repair on each
 // path is printk'd and every one after it was only ever added to a static that
@@ -1901,11 +1903,12 @@ static int proc_ish_show_wake_signals(struct proc_entry *UNUSED(entry), struct p
     if (sleeps == 0 && polls == 0) {
         proc_printf(buf, "No wake signal has been lost. This is the expected state.\n");
     } else {
-        proc_printf(buf, "A repaired thread had gone permanently deaf to its wake poke and\n"
-                         "would never have been woken again. Repairs rise with host thread\n"
-                         "churn -- heavy guest fork/exec, which memory pressure produces in\n"
-                         "bulk. A climbing count alongside guest processes that hang is the\n"
-                         "shape this instrument was added for.\n");
+        proc_printf(buf, "A repaired thread had found its wake signal blocked by some other\n"
+                         "thread, and was deaf to its wake poke until it looked. On Darwin,\n"
+                         "sigprocmask -- and longjmp or siglongjmp restoring a saved mask --\n"
+                         "sets the mask of every thread in the app. A count that climbs means\n"
+                         "something in the process still does that: break on sigprocmask\n"
+                         "with a non-NULL set to find it.\n");
     }
     return 0;
 }
