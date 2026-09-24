@@ -87,6 +87,9 @@
 #define D_COUNTS_STOP 12.0
 #define PERIOD 0.5
 #define OVERRUN_PERIOD 0.02
+// How many of its periods pending-timer-overrun's bounds allow either way: a
+// timer's thread wakes a little after each expiry.
+#define OVERRUN_SLACK 3
 // A periodic timerfd on BOOTTIME, never read: the stop passes many of its
 // expiries, and every one must be counted.
 #define OVERDUE_PERIOD 0.1
@@ -601,7 +604,9 @@ int main(int argc, char **argv) {
     arm(t_real_abs, TIMER_ABSTIME, r0 + D_COUNTS_STOP, 0);
     arm(t_boot, 0, D_COUNTS_STOP, 0);
     arm(t_periodic, 0, D_MONO, PERIOD);
+    double ov_m0 = now(CLOCK_MONOTONIC);
     arm(t_overrun, 0, OVERRUN_PERIOD, OVERRUN_PERIOD);
+    double ov_r1 = now(CLOCK_REALTIME);
     arm(t_none, 0, D_MONO + 20, 3.0);
     arm(t_pcpu, 0, 1000.0, 0);
     double od_b0 = now(CLOCK_BOOTTIME);
@@ -675,13 +680,9 @@ int main(int argc, char **argv) {
     int restored_seen = 0;
     double restored_m = 0;
     double last_probe = 0;
-    // timer_getoverrun on the timer whose signal is never taken: the count on
-    // that queued signal, sampled until the restore, then the timer stopped.
-    // The queued signal has to come back holding at least what it held at the
-    // stop; a fresh one queued after the restore would hold only a handful.
-    struct { double r; int ov; } ov_ring[64];
-    unsigned ov_n = 0;
-    double r_ov_stopped = 0;
+    // The timer whose signal is never taken runs until the restore is seen,
+    // then is stopped: when, on MONOTONIC, bounds what its signal can hold.
+    double r_ov_stopped = 0, m_ov_stopped = 0;
     for (;;) {
         // The collection loop: every timer's signal, with when it came.
         siginfo_t si;
@@ -712,9 +713,6 @@ int main(int argc, char **argv) {
             }
         }
         if (!restored_seen) {
-            int ov = timer_getoverrun(t_overrun);
-            if (ov >= 0)
-                ov_ring[ov_n++ % 64] = (typeof(ov_ring[0])) {r, ov};
             if (suspend && asker < 0 && m >= SUSPEND_AT_MONO) {
                 asker = fork();
                 if (asker == 0) {
@@ -745,6 +743,7 @@ int main(int argc, char **argv) {
                     timer_settime(t_overrun, 0, &stop, NULL);
                     timer_settime(t_pwr, 0, &stop, NULL);
                     r_ov_stopped = now(CLOCK_REALTIME);
+                    m_ov_stopped = now(CLOCK_MONOTONIC);
                 }
             }
             if (m > 40) {
@@ -793,6 +792,24 @@ int main(int argc, char **argv) {
                    sleep_name[k], s->r1, stopped_at);
             _exit(4);
         }
+    }
+    // The overrun timer's signal, never taken, is its first expiry with every
+    // one since counted on it as an overrun (section 5). At least those before
+    // the stop: whole periods from its arming, on the wall clock, which the
+    // stop does not interrupt before it. At most those up to its own stop
+    // after the restore, on MONOTONIC, which does not count the stop -- a
+    // restored timer that counted the stop's periods too would be counting on
+    // the wrong clock. A signal lost in the image and queued afresh after the
+    // restore holds only what came after the stop: at most the difference.
+    // That tells the two apart only if more of the timer's life was before the
+    // stop than after it.
+    long ov_pre_lo = (long) ((stopped_at - ov_r1) / OVERRUN_PERIOD) - 1 - OVERRUN_SLACK;
+    long ov_total_hi = (long) ((m_ov_stopped - ov_m0) / OVERRUN_PERIOD) - 1 + OVERRUN_SLACK;
+    if (2 * ov_pre_lo <= ov_total_hi) {
+        printf("INCONCLUSIVE: the overrun timer ran %.3f s before the stop and was stopped "
+               "%.3f s after the resume: a restored signal and a fresh one would hold as much\n",
+               stopped_at - ov_r1, r_ov_stopped - resumed_at);
+        _exit(4);
     }
 
     // ---- 1. alarm() in a child, which has no handler: SIGALRM kills it at
@@ -930,31 +947,27 @@ int main(int argc, char **argv) {
           got > 0 ? si.si_value.sival_int : 0, got > 0 ? (int) si.si_pid : 0);
     // Never taken: its first expiry is queued, and every one since is an
     // overrun counted on it -- before the save and after the restore, until the
-    // timer was stopped once the restore was seen.
-    int ov_before = -1;
-    for (unsigned i = 0; i < ov_n && i < 64; i++) {
-        unsigned k = (ov_n - 1 - i) % 64;
-        if (ov_ring[k].r < stopped_at) {
-            ov_before = ov_ring[k].ov;
-            break;
-        }
-    }
+    // timer was stopped once the restore was seen. Bounded by the timer's own
+    // period and how long it ran (see the INCONCLUSIVE test above), not by
+    // timer_getoverrun: that reports the count of the signal last TAKEN, as
+    // Linux's does (6bbc77df), and is 0 while this one sits untaken. And one
+    // signal, not two: the restored one is still the timer's own, so what came
+    // after the restore was counted on it rather than queued again.
     sigemptyset(&one);
     sigaddset(&one, SIG_OVERRUN);
     got = sigtimedwait(&one, &si, &zero);
-    // At least what it held at the last reading before the stop -- more, for
-    // the periods the save itself took (a timer's thread runs on while the
-    // tasks are parked) and those before the timer was stopped. A signal that
-    // had been lost and queued afresh after the restore would hold only the
-    // handful of those last.
+    siginfo_t si2;
+    int got2 = sigtimedwait(&one, &si2, &zero);
     check("pending-timer-overrun", got == SIG_OVERRUN && si.si_code == SI_TIMER &&
                                    si.si_timerid == timer_id_of(t_overrun) &&
-                                   si.si_value.sival_int == 1006 && ov_before > 50 &&
-                                   si.si_overrun >= ov_before,
-          "sigtimedwait -> %d, code %d, timerid %d, overrun %d (it held %d at the stop; "
-          "the timer was stopped %.3f s after the resume)",
-          got, got > 0 ? si.si_code : 0, got > 0 ? si.si_timerid : -1,
-          got > 0 ? si.si_overrun : 0, ov_before, r_ov_stopped - resumed_at);
+                                   si.si_value.sival_int == 1006 &&
+                                   si.si_overrun >= ov_pre_lo && si.si_overrun <= ov_total_hi &&
+                                   got2 < 0,
+          "sigtimedwait -> %d, code %d, timerid %d, overrun %d, want %ld..%ld (it ran %.3f s "
+          "before the stop, %.3f s in all on MONOTONIC); %s", got, got > 0 ? si.si_code : 0,
+          got > 0 ? si.si_timerid : -1, got > 0 ? si.si_overrun : 0, ov_pre_lo, ov_total_hi,
+          stopped_at - ov_r1, m_ov_stopped - ov_m0,
+          got2 < 0 ? "no second" : "and a SECOND signal");
     // Both SIGPWRs, kill()'s and the timer's, and no third. The timer ran on
     // after the restore, so its signal there had to be recognised as its own
     // -- counted on, not queued again -- which the image has to say.
