@@ -1080,11 +1080,17 @@ static bool time_warning_trace_enabled(void) {
 // if that thread had it blocked, and the callback dereferenced a FREED task if
 // that thread exited while the timer was still armed. The group is safe to
 // hold: exit_tgroup frees these timers when the group dies.
+//
+// SI_KERNEL, with no sender and no timer: Linux sends every itimer's signal
+// as SEND_SIG_PRIV (measured on 6.12: alarm, ITIMER_REAL, ITIMER_VIRTUAL and
+// ITIMER_PROF all arrive with si_code 128, si_pid 0, si_uid 0). This said
+// SI_TIMER, which is what makes a signal a POSIX timer's -- and with timer id
+// 0 it was POSIX timer 0's, the timer timer_create(clock, NULL, ...) gives a
+// process its first SIGALRM from. That timer's next expiry was then counted
+// as an overrun onto a queued SIGALRM (signal_timer_count_overrun), and
+// taking one reset its timer_getoverrun to 0 (signal_timer_taken).
 static void itimer_notify(struct tgroup *group) {
-    struct siginfo_ info = {
-        .code = SI_TIMER_,
-    };
-    send_signal_to_group(group, SIGALRM_, info);
+    send_signal_to_group(group, SIGALRM_, SIGINFO_NIL);
 }
 
 // ITIMER_VIRTUAL/PROF: neither has a native CPU-time clock this codebase's
@@ -1127,8 +1133,8 @@ static bool itimer_vprof_maybe_fire(struct cpu_itimer_state *state, struct times
     return true;
 }
 
-// Same as itimer_notify: the group, not a thread. SIGVTALRM/SIGPROF are
-// process-directed too.
+// Same as itimer_notify: the group, not a thread, and SI_KERNEL. SIGVTALRM/
+// SIGPROF are process-directed too.
 static void itimer_vprof_sampler_notify(void *data) {
     struct tgroup *group = data;
 
@@ -1140,11 +1146,10 @@ static void itimer_vprof_sampler_notify(void *data) {
     bool fire_prof = itimer_vprof_maybe_fire(&group->itimer_prof, cpu_total);
     unlock(&group->lock);
 
-    struct siginfo_ info = { .code = SI_TIMER_ };
     if (fire_virtual)
-        send_signal_to_group(group, SIGVTALRM_, info);
+        send_signal_to_group(group, SIGVTALRM_, SIGINFO_NIL);
     if (fire_prof)
-        send_signal_to_group(group, SIGPROF_, info);
+        send_signal_to_group(group, SIGPROF_, SIGINFO_NIL);
 }
 
 // Start the tick that drives both, if it is not running. Called with

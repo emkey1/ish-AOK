@@ -378,6 +378,14 @@ arrive, microseconds later, as a fresh signal. The check now allows one such
 signal and no backlog. It also caught `timer_getoverrun` following the signal
 still queued. Linux latches the count of the signal that was taken.
 
+The latch had one more thing to tell apart. `alarm` and `setitimer` sent their
+signals as `SI_TIMER` with timer id 0, which is exactly what POSIX timer 0's
+signal looks like, and timer 0 is the one `timer_create` with no `sigevent`
+gives a process on SIGALRM. With both in use, timer 0's expiry was counted as an
+overrun onto a waiting itimer SIGALRM, and taking an itimer SIGALRM reset timer
+0's count to zero. Linux sends every itimer's signal as `SI_KERNEL`, with no
+sender, and so does AOK now.
+
 ## 14.8 The pattern
 
 Every subsystem in this chapter is the same two-part construction: a thing to

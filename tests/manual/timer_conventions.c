@@ -16,6 +16,12 @@
 //   count of the signal last taken, latched as it is taken; AOK's followed the
 //   signal still queued, and went to 0 as soon as the next one was.
 //
+//   An itimer's signal -- alarm, ITIMER_REAL, ITIMER_VIRTUAL, ITIMER_PROF --
+//   is SI_KERNEL, with no sender. AOK sent SI_TIMER with timer id 0, and that
+//   is exactly how it recognises POSIX timer 0's signal: timer 0's expiry was
+//   counted as an overrun onto a waiting itimer SIGALRM, and taking an itimer
+//   SIGALRM set timer 0's timer_getoverrun to 0.
+//
 //   setitimer's interval survives a disarm for ITIMER_VIRTUAL and ITIMER_PROF
 //   and does NOT for ITIMER_REAL. AOK had the two exactly the wrong way round.
 //
@@ -67,12 +73,60 @@
 #define SYS_clock_settime SYS_clock_settime64
 #endif
 
+#ifndef SI_KERNEL
+#define SI_KERNEL 0x80
+#endif
+
 static int on_ish;
 
 static void ck(const char *label, long got, long want) {
     if (got != want)
         failf(label, (uint64_t) got, 0, 0, (uint64_t) want, 0, 0);
     test_logf("  %-58s got=%-10ld want=%ld\n", label, got, want);
+}
+
+static double clock_secs(clockid_t clock) {
+    struct timespec ts;
+    clock_gettime(clock, &ts);
+    return (double) ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+static void burn_cpu(double secs) {
+    double start = clock_secs(CLOCK_PROCESS_CPUTIME_ID);
+    while (clock_secs(CLOCK_PROCESS_CPUTIME_ID) - start < secs)
+        for (volatile int k = 0; k < 100000; k++) { }
+}
+
+// Take SIG, which the caller blocks, within `secs` of wall time; -1 if it
+// never came. With `burn`, spends CPU while it waits: the CPU-time itimers
+// count only while the process runs.
+static int take_signal(int sig, int burn, siginfo_t *si, double secs) {
+    sigset_t one;
+    sigemptyset(&one);
+    sigaddset(&one, sig);
+    double start = clock_secs(CLOCK_MONOTONIC);
+    do {
+        struct timespec wait = { 0, burn ? 0 : 50000000 };
+        memset(si, 0xa5, sizeof *si);
+        if (sigtimedwait(&one, si, &wait) == sig)
+            return sig;
+        if (burn)
+            burn_cpu(0.002);
+    } while (clock_secs(CLOCK_MONOTONIC) - start < secs);
+    return -1;
+}
+
+static int wait_pending(int sig, double secs) {
+    double start = clock_secs(CLOCK_MONOTONIC);
+    do {
+        sigset_t pend;
+        sigpending(&pend);
+        if (sigismember(&pend, sig))
+            return 1;
+        struct timespec tick = { 0, 1000000 };
+        nanosleep(&tick, NULL);
+    } while (clock_secs(CLOCK_MONOTONIC) - start < secs);
+    return 0;
 }
 
 static void ck_range(const char *label, long got, long lo, long hi) {
@@ -289,6 +343,130 @@ int main(int argc, char **argv) {
         siginfo_t drop;
         while (sigtimedwait(&set, &drop, &zero) > 0) { }
         sigprocmask(SIG_SETMASK, &old, NULL);
+    }
+
+    // ---- an itimer's signal is SI_KERNEL, not a POSIX timer's -----------
+    // Linux sends them as SEND_SIG_PRIV: si_code SI_KERNEL, si_pid and si_uid
+    // 0 (which also leaves si_timerid and si_overrun, the same bytes, 0).
+    {
+        sigset_t set, old;
+        sigemptyset(&set);
+        sigaddset(&set, SIGALRM);
+        sigaddset(&set, SIGVTALRM);
+        sigaddset(&set, SIGPROF);
+        sigprocmask(SIG_BLOCK, &set, &old);
+        // alarm() and ITIMER_REAL are one timer, and it is holding the
+        // watchdog. Every wait below is bounded; it goes back at the end.
+        unsigned watchdog = alarm(0);
+        struct itimerval iv;
+        memset(&iv, 0, sizeof iv);
+        iv.it_value.tv_usec = 20000;            // one-shot, 20ms
+        siginfo_t si;
+        int got;
+
+        static const struct { int which, sig; const char *name; } kinds[] = {
+            { ITIMER_REAL, SIGALRM, "setitimer(ITIMER_REAL)" },
+            { -1, SIGALRM, "alarm(1)" },
+            { ITIMER_VIRTUAL, SIGVTALRM, "setitimer(ITIMER_VIRTUAL)" },
+            { ITIMER_PROF, SIGPROF, "setitimer(ITIMER_PROF)" },
+        };
+        for (unsigned i = 0; i < sizeof kinds / sizeof kinds[0]; i++) {
+            if (kinds[i].which < 0)
+                alarm(1);
+            else
+                setitimer(kinds[i].which, &iv, NULL);
+            got = take_signal(kinds[i].sig, kinds[i].which == ITIMER_VIRTUAL ||
+                              kinds[i].which == ITIMER_PROF, &si, 5.0);
+            char lab[80];
+            snprintf(lab, sizeof lab, "%s's signal came", kinds[i].name);
+            ck(lab, got, kinds[i].sig);
+            ck("  with si_code SI_KERNEL", got > 0 ? si.si_code : 0, SI_KERNEL);
+            ck("  si_pid 0", got > 0 ? (long) si.si_pid : -1, 0);
+            ck("  and si_uid 0", got > 0 ? (long) si.si_uid : -1, 0);
+        }
+
+        // What that code is FOR: POSIX timer 0 on SIGALRM, as timer_create
+        // with no sigevent makes it, running alongside an itimer. AOK hands
+        // out the lowest free id, and every timer above is gone, so this is
+        // timer 0 there -- the one an itimer's SI_TIMER claimed to be. Linux
+        // numbers them per process and has moved on, which changes nothing.
+        timer_t t;
+        sigset_t alrm;
+        sigemptyset(&alrm);
+        sigaddset(&alrm, SIGALRM);
+        struct timespec zero = { 0, 0 };
+        if (timer_create(CLOCK_MONOTONIC, NULL, &t) != 0) {
+            failf("timer_create(CLOCK_MONOTONIC, NULL)", (uint64_t) errno, 0, 0, 0, 0, 0);
+        } else {
+            if (on_ish)
+                ck("timer_create with no sigevent is timer 0", (long) (intptr_t) t, 0);
+            // An itimer's SIGALRM is waiting when timer 0 expires on SIGALRM.
+            // That expiry is not an overrun of the itimer's signal: AOK
+            // counted it onto it, and took the pair as timer 0's with
+            // si_overrun 1.
+            setitimer(ITIMER_REAL, &iv, NULL);
+            ck("an itimer's SIGALRM is waiting", wait_pending(SIGALRM, 5.0), 1);
+            struct itimerspec its;
+            memset(&its, 0, sizeof its);
+            its.it_value.tv_nsec = 20000000;
+            timer_settime(t, 0, &its, NULL);
+            double start = clock_secs(CLOCK_MONOTONIC);
+            do {
+                struct timespec tick = { 0, 5000000 };
+                nanosleep(&tick, NULL);
+                timer_gettime(t, &its);
+            } while ((its.it_value.tv_sec || its.it_value.tv_nsec) &&
+                     clock_secs(CLOCK_MONOTONIC) - start < 5.0);
+            ck("  then timer 0 expires", its.it_value.tv_sec || its.it_value.tv_nsec, 0);
+            struct timespec settle = { 0, 50000000 };
+            nanosleep(&settle, NULL);           // its signal, sent after that
+            got = sigtimedwait(&alrm, &si, &zero);
+            ck("  the SIGALRM taken first", got, SIGALRM);
+            ck("  is the itimer's, SI_KERNEL", got > 0 ? si.si_code : 0, SI_KERNEL);
+            // Linux queues timer 0's own signal behind it, as a POSIX timer's
+            // signal always is; whatever is there, drain it.
+            while (sigtimedwait(&alrm, &si, &zero) > 0) { }
+            ck("  and timer 0 counted no overrun", (long) timer_getoverrun(t), 0);
+            timer_delete(t);
+        }
+
+        // Timer 0 latches its overruns as its signal is taken; taking an
+        // itimer's SIGALRM afterwards must leave that alone. AOK took it for
+        // timer 0's and latched its 0. On the CPU clock so that no expiry
+        // follows while nothing runs: 10ms, then every 100ms, and 350ms spent
+        // blocked is three overruns with 60ms to spare.
+        if (timer_create(CLOCK_PROCESS_CPUTIME_ID, NULL, &t) != 0) {
+            failf("timer_create(CLOCK_PROCESS_CPUTIME_ID, NULL)", (uint64_t) errno, 0, 0, 0, 0, 0);
+        } else {
+            if (on_ish)
+                ck("timer_create with no sigevent is timer 0 again", (long) (intptr_t) t, 0);
+            struct itimerspec its;
+            memset(&its, 0, sizeof its);
+            its.it_value.tv_nsec = 10000000;
+            its.it_interval.tv_nsec = 100000000;
+            ck("arm timer 0 on the process CPU clock", timer_settime(t, 0, &its, NULL), 0);
+            burn_cpu(0.35);
+            got = sigtimedwait(&alrm, &si, &zero);
+            ck("its SIGALRM is waiting", got, SIGALRM);
+            ck("  as SI_TIMER", got > 0 ? si.si_code : 0, SI_TIMER);
+            long latched = timer_getoverrun(t);
+            ck_range("  taking it latches its overruns", latched, 1, 10);
+            setitimer(ITIMER_REAL, &iv, NULL);
+            got = take_signal(SIGALRM, 0, &si, 5.0);
+            ck("then an itimer's SIGALRM is taken", got == SIGALRM && si.si_code == SI_KERNEL, 1);
+            ck("  and timer 0's timer_getoverrun still says so",
+               (long) timer_getoverrun(t), latched);
+            timer_delete(t);
+        }
+
+        memset(&iv, 0, sizeof iv);
+        setitimer(ITIMER_REAL, &iv, NULL);
+        setitimer(ITIMER_VIRTUAL, &iv, NULL);
+        setitimer(ITIMER_PROF, &iv, NULL);
+        while (sigtimedwait(&set, &si, &zero) > 0) { }
+        sigprocmask(SIG_SETMASK, &old, NULL);
+        if (watchdog != 0)
+            alarm(watchdog);
     }
 
     // ---- setitimer's interval across a disarm ---------------------------

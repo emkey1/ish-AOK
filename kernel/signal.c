@@ -1689,9 +1689,9 @@ static struct sigqueue *signal_next_deliverable_locked(struct sighand *sighand,
 // group->lock; nothing is followed through it. What this cannot tell apart,
 // and Linux can (it checks which arming a signal came from), is a signal
 // queued before the timer was set again, or by a deleted timer whose slot has
-// been reused: taking one latches its old count, where Linux leaves 0. Nor an
-// itimer's SIGALRM, which carries SI_TIMER here as timer 0 (Linux sends
-// SI_KERNEL).
+// been reused: taking one latches its old count, where Linux leaves 0. (An
+// itimer's signal is SI_KERNEL, as on Linux, so it is never taken for timer
+// 0's; see itimer_notify.)
 static void signal_timer_taken(struct task *task, const struct siginfo_ *info) {
     if (info->code != SI_TIMER_ || task->group == NULL)
         return;
@@ -1699,7 +1699,8 @@ static void signal_timer_taken(struct task *task, const struct siginfo_ *info) {
     if (id < 0 || id >= TIMERS_MAX)
         return;
     struct posix_timer *pt = &task->group->posix_timers[id];
-    // setitimer's signals carry SI_TIMER here too, as timer 0.
+    // rt_sigqueueinfo can claim SI_TIMER and any id; it has at least to be
+    // the timer's signal.
     if (pt->timer == NULL || pt->signal != info->sig)
         return;
     __atomic_store_n(&pt->last_overrun, info->timer.overrun, __ATOMIC_RELAXED);
