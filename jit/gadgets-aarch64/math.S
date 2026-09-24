@@ -2313,6 +2313,28 @@ amd64_gen_shift_count shift_count64, 8
             setf_zsp \s, val=w8
         .endifin
 
+        # The two group-3 members LOCK is legal on. Both ignore _tmp: like
+        # inc/dec they have one operand, the memory word itself.
+        #
+        # not changes NO flags, so it must not touch the lazy-flag state
+        # either -- a flag an earlier instruction left pending has to survive
+        # it. mvn on the whole register is fine for 8/16: the sized stlxr
+        # below stores only the low bits.
+        .ifc \op,not
+            mvn w8, w8
+        .endif
+        # neg is 0 - operand with the whole sub flag rule, exactly what the
+        # unlocked NEG gets from the sub gadget: setf_a with the operand as
+        # op1 and 0 as op2, then do_add sub for CF/OF, then ZF/SF/PF from the
+        # result. w11 holds the operand; nothing on this path uses it.
+        .ifc \op,neg
+            mov w11, w8
+            mov w8, wzr
+            setf_a src=w11, dst=w8, s=\s
+            do_add sub, w8, w11, \s
+            setf_zsp \s, val=w8
+        .endif
+
     2:
         ldaxr\s w13, [_xaddr]
         cmp w12, w13
@@ -2332,7 +2354,7 @@ amd64_gen_shift_count shift_count64, 8
         b 1b
 .endm
 
-.irp op, add,sub,adc,sbb,and,or,xor,inc,dec,xadd
+.irp op, add,sub,adc,sbb,and,or,xor,inc,dec,xadd,not,neg
     .irp size, SIZE_LIST
         .ifc \op,xor
             ss \size, do_op_size_atomic, \op, eor

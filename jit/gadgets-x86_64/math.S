@@ -861,6 +861,11 @@
     .ifin(\op, inc,dec)
         setf_a src=$1, dst=%r14\s, ss=\ss
     .endifin
+    # neg is 0 - operand: the operand is op1 and 0 is op2, the same pair the
+    # unlocked NEG hands the sub gadget.
+    .ifc \op,neg
+        setf_a src=%r14\s, dst=DOLLAR(0), ss=\ss
+    .endif
 
     .ifin(\op, add,sub,adc,sbb,and,or,xor)
         \op\ss %tmp\s, %r14\s
@@ -868,7 +873,7 @@
     .ifc \op,xadd
         add\ss %tmp\s, %r14\s
     .endif
-    .ifin(\op, inc,dec)
+    .ifin(\op, inc,dec,not,neg)
         \op\ss %r14\s
     .endifin
 
@@ -888,7 +893,7 @@
     #
     # ZF/SF/PF need no such move: setf_zsp below recomputes them from the RESULT
     # VALUE in r14 rather than from live host flags.
-    .ifin(\op, add,sub,adc,sbb,xadd)
+    .ifin(\op, add,sub,adc,sbb,xadd,neg)
         setf_oc
     .endifin
     .ifin(\op, inc,dec)
@@ -902,10 +907,13 @@
         add $8, %rsp
     .endif
 
-    # setf_zsp is apparently broken in such a way that it can only use _tmp
-    xchg %r14, %r10
-    setf_zsp %tmp\s, \ss
-    xchg %r14, %r10
+    # not changes no flags at all, so it must leave the lazy result alone too.
+    .ifnc \op,not
+        # setf_zsp is apparently broken in such a way that it can only use _tmp
+        xchg %r14, %r10
+        setf_zsp %tmp\s, \ss
+        xchg %r14, %r10
+    .endif
 .endm
 .macro do_op_atomic op, size, arg
     ss \size, _do_op_atomic, \op, \arg
@@ -919,7 +927,7 @@
         gret 1
 .endm
 
-.irp op, add,sub,adc,sbb,and,or,xor,inc,dec,xadd
+.irp op, add,sub,adc,sbb,and,or,xor,inc,dec,xadd,not,neg
     .irp size, SIZE_LIST
         do_op_size_atomic \op, \size
     .endr

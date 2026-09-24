@@ -118,18 +118,15 @@ static void *worker(void *arg) {
           asm volatile("movl $0, %0" : "=m"(*(volatile uint32_t *) &s[12].v) : : "memory");
         }
 
-        // --- neg / not, applied twice so the pair is the identity.
-        //     amd64 only: the i386 engine's LOCK opcode table (emu/decode.h)
-        //     has no group-3 entry at all, so `lock notl`/`lock negl` decode
-        //     to UNDEFINED and kill the guest with SIGILL. That is a real
-        //     pre-existing i386 gap, tracked for a later build rather than
-        //     papered over -- running them here would just crash the suite.
-#if HAVE_64BIT_OPS
+        // --- neg / not, applied twice so the pair is the identity. Every
+        //     thread applies each an even number of times, so the word ends
+        //     where it started unless an update was lost. i386 ran neither
+        //     before build 556: its LOCK table had no group-3 entry, so both
+        //     decoded to UNDEFINED and killed the guest with SIGILL.
         asm volatile("lock notl %0" : "+m"(*(volatile uint32_t *) &s[14].v) : : "memory");
         asm volatile("lock notl %0" : "+m"(*(volatile uint32_t *) &s[14].v) : : "memory");
         asm volatile("lock negl %0" : "+m"(*(volatile uint32_t *) &s[15].v) : : "cc", "memory");
         asm volatile("lock negl %0" : "+m"(*(volatile uint32_t *) &s[15].v) : : "cc", "memory");
-#endif
 
         // --- the EXPLICIT lock prefix on xchg, which is redundant but legal
         //     and which the i386 table was missing entirely.
@@ -184,6 +181,8 @@ int main(int argc, char **argv) {
     s[3].v = WANT;              // sub counts down to zero
     s[5].v = 2 * WANT;          // sbb with CF=1 takes two per pass
     s[8].v = WANT;              // dec counts down
+    s[15].v = 1;                // neg: NOT 0, which neg maps to itself -- a
+                                // counter starting there could never fail
 #if HAVE_64BIT_OPS
     (void) 0;
 #endif
@@ -218,12 +217,8 @@ int main(int argc, char **argv) {
     check("lock xaddl", (uint32_t) s[10].v, WANT);
     check("lock cmpxchgl", (uint32_t) s[11].v, WANT);
     check("xchgl spinlock", s[13].v, WANT);
-#if HAVE_64BIT_OPS
     check("lock notl x2", (uint32_t) s[14].v, 0);
-    check("lock negl x2", (uint32_t) s[15].v, 0);
-#else
-    test_log_if(0, "lock notl/negl: not run (i386 decodes them UNDEFINED)\n");
-#endif
+    check("lock negl x2", (uint32_t) s[15].v, 1);
     // lock xchg only ever swaps zeros in and reads zeros back, so the only
     // way s[22] is nonzero is a torn or duplicated exchange.
     check("lock xchgl", s[21].v, 0);
