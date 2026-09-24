@@ -1215,6 +1215,16 @@ void jit_invalidate_range(struct jit *jit, page_t start, page_t end) {
                            (void *) jit, page, i, jit->num_blocks);
                     break;
                 }
+                // The bucket is shared by every page congruent to this one
+                // mod JIT_PAGE_HASH_SIZE, so it holds other pages' blocks
+                // too. Only this page's are stale: jit_insert links a block
+                // under exactly PAGE(addr) and PAGE(end_addr). Dropping the
+                // others made a write to any data page throw away every
+                // block whose code page shares its bucket -- and a write
+                // spanning 1024 pages, the whole process's translations,
+                // with every thread then stalling in the jetsam cleanup.
+                if (PAGE(i == 0 ? block->addr : block->end_addr) != page)
+                    continue;
                 jit_block_disconnect(jit, block);
                 block->is_jetsam = true;
                 list_add(&jit->jetsam, &block->jetsam);
