@@ -288,6 +288,48 @@ vs flat 2-3 us), from jit->lock taken per written page. A size floor in the
 shim, or a cheaper "does this page have code" check, is the next lever;
 tune it with the device numbers.
 
+## Phase 3 device measurement, M4 iPad Pro (2026-09-24)
+
+Same scripted session as the Mac A/B, driven from the Mac over the
+Thunderbolt link (ssh + a VNC tunnel; start-wayland.sh run by the guest's
+own user, stats in ~/pixab), with the shim built on the device by its own
+gcc. Devuan 6 aarch64 root, 1280x720 headless output, accelerator on in
+Settings; the off arm is the same shim with ISH_PIXMAN_SHIM_OFF=1. Runs
+interleaved on, off, on, off.
+
+**Build without the JIT fix** (built 12:29 BST from 565e231e -- the
+accelerator as shipped until 73b9112f):
+
+| per session | on | on | off | off |
+|---|---|---|---|---|
+| labwc: ms in pixman | 2261 | 2228 | 6086 | 6121 |
+| labwc: CPU ticks | 479 | 468 | 782 | 774 |
+| l3afpad: ms in pixman | 485 | 552 | 1005 | 1100 |
+| foot: ms in pixman | 21106 | 22080 | 10246 | 7526 |
+| foot: CPU ticks | 1630 | 1597 | 838 | 652 |
+| drag fps (foot, l3afpad windows) | 37.5, 36.1 | 37.5, 36.0 | 37.9, 36.0 | 37.7, 35.2 |
+
+- labwc: the accelerator takes its pixman time down 2.7x and its CPU by
+  39%. The biggest single shape is the full-frame SRC x8r8g8b8 copy (924
+  calls, 922k pixels each -- the capture for wayvnc): 230 ms accelerated
+  against 4500 ms in pixman, 19.5x. What is left (2.2 s) is almost all the
+  clipped shapes: SRC a8r8g8b8/x8r8g8b8 -> x8r8g8b8 with a clip (~1.4 s),
+  clipped solid clears and clipped OVERs.
+- foot: 2-3x WORSE with the accelerator, the JIT bug (73b9112f) on a 9-CPU
+  device. An accelerated 78-pixel cell fill cost 695 us against 72 us in
+  pixman, and foot's DECLINED glyph composites went from 320 us to 3.3 ms
+  each -- the whole process pays for the translations every write evicted.
+- Off, foot spends 5.1 s in fill_rectangles for 18k calls: 283 us per call,
+  of which the fill itself is 72 us. pixman's own per-call setup around a
+  one-cell fill is ~210 us on this device -- NEXT #4 (fill_rectangles/
+  fill_boxes interposition) is worth more here than on the Mac.
+- Drag frame rate did not move in any run (~36-38 updates/s): on the M4 the
+  drag is not pixman-bound. The frame-rate test needs the A10X iPad Pro the
+  plan names as the real target (`bip`), or the iPhone SE.
+
+**Build with the JIT fix:** pending (the device needs a rebuild from
+8f53d992 or later).
+
 ## NEXT
 1. **Device measurement (Phase 3's number)** on the M4 iPad: interleaved
    on/off sessions (ISH_PIXMAN_SHIM_OFF=1 as the off arm), drag frame rate
