@@ -2178,6 +2178,12 @@ int_t sys_signalfd_guest(int_t fd, guest_addr_t mask_addr, dword_t sigsetsize) {
     return sys_signalfd4_guest(fd, mask_addr, sigsetsize, 0);
 }
 
+// An overrun count plus `expirations`, saturating at INT_MAX (DELAYTIMER_MAX).
+static int_t timer_overrun_add(int_t overrun, uint64_t expirations) {
+    uint64_t sum = (uint64_t) (overrun > 0 ? overrun : 0) + expirations;
+    return sum > INT_MAX ? INT_MAX : (int_t) sum;
+}
+
 // A POSIX timer never has more than one signal outstanding. When it expires
 // again while its last signal is still queued, Linux does not queue a second
 // one -- it counts the missed expiration on the queued siginfo's si_overrun,
@@ -2189,9 +2195,13 @@ int_t sys_signalfd_guest(int_t fd, guest_addr_t mask_addr, dword_t sigsetsize) {
 // queued two hundred, and si_overrun was hardcoded 0, so a program could
 // neither find out how far behind it was nor survive catching up.
 //
+// `expirations` is how many to count: more than one when the timer's thread
+// fell behind and delivers every period it missed at once (util/timer.c).
+// The count saturates at INT_MAX, as Linux's does (DELAYTIMER_MAX).
+//
 // Returns the new overrun count if an entry for this timer was found and
 // counted, or -1 if there was none and the caller should queue a signal.
-int signal_timer_count_overrun(struct task *task, int sig, int timer_id) {
+int signal_timer_count_overrun(struct task *task, int sig, int timer_id, uint64_t expirations) {
     struct sighand *sighand = task->sighand;
     if (sighand == NULL)
         return -1;
@@ -2204,14 +2214,16 @@ int signal_timer_count_overrun(struct task *task, int sig, int timer_id) {
     list_for_each_entry(&task->queue, sigqueue, queue) {
         if (sigqueue->info.sig == sig && sigqueue->info.code == SI_TIMER_ &&
                 sigqueue->info.timer.timer == timer_id) {
-            overrun = ++sigqueue->info.timer.overrun;
+            overrun = sigqueue->info.timer.overrun =
+                timer_overrun_add(sigqueue->info.timer.overrun, expirations);
             goto out;
         }
     }
     list_for_each_entry(&sighand->queue, sigqueue, queue) {
         if (sigqueue->info.sig == sig && sigqueue->info.code == SI_TIMER_ &&
                 sigqueue->info.timer.timer == timer_id) {
-            overrun = ++sigqueue->info.timer.overrun;
+            overrun = sigqueue->info.timer.overrun =
+                timer_overrun_add(sigqueue->info.timer.overrun, expirations);
             goto out;
         }
     }

@@ -76,7 +76,12 @@ static inline struct timespec timespec_normalize(struct timespec ts) {
 // change it. Only a kqueue timer marked NOTE_CRITICAL opts out.
 int host_nanosleep_precise(struct timespec req, long slack_ns);
 
-typedef void (*timer_callback_t)(void *data);
+// Called on the timer's own thread, with timer->lock dropped, for what has
+// expired: `expirations` is 1, or for a periodic timer whose thread fell
+// behind -- the host stopped, a CPU clock that ran ahead of it -- 1 plus every
+// period missed since, counted in the one call rather than replayed. A timerfd
+// adds them all, a POSIX timer counts them as overruns.
+typedef void (*timer_callback_t)(void *data, uint64_t expirations);
 // Where a timer reads "now" from. Almost every timer just calls
 // timespec_now(clockid) on its own thread, which is right for the wall clocks
 // and for the process CPU clock (the timer thread is in the same process). It
@@ -123,7 +128,9 @@ struct timer *timer_new(clockid_t clockid, timer_callback_t callback, void *data
 // the timer is armed.
 void timer_set_clock_source(struct timer *timer, timer_clock_fn fn, void *data);
 void timer_free(struct timer *timer);
-// value is how long to wait until the next fire
+// value is how long to wait until the next fire; negative, how long ago it was
+// due (an absolute arming in the past, a timer_read of one overdue), which
+// fires at once and counts every period since (if interval is non-zero)
 // interval is how long after that to wait until the next fire (if non-zero)
 // bizzare interface is based off setitimer, because this is going to be used
 // to implement setitimer
@@ -136,11 +143,12 @@ int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *ol
 // clock -- a sampler installed with timer_set_clock_source included -- and its
 // interval, which is reported either way. For describing a timer so that it
 // can be armed again elsewhere (kernel/checkpoint.c), where "armed" has to be
-// exact: one that is due but has not fired yet reports a nanosecond left rather
-// than none, and one whose callback is running is waited for, so that what the
-// expiry delivers is in place -- a signal queued, a count raised -- before the
-// answer is given. The caller must hold nothing a callback takes, and the
-// timer must not be freed meanwhile.
+// exact: one that is due but has not fired yet reports how long ago it was due,
+// as a negative time (never zero), which timer_set takes back as it is; and one
+// whose callback is running is waited for, so that what the expiry delivers is
+// in place -- a signal queued, a count raised -- before the answer is given.
+// The caller must hold nothing a callback takes, and the timer must not be
+// freed meanwhile.
 bool timer_read(struct timer *timer, struct timer_spec *spec);
 // Wait until no callback is running, and return how many have returned: a
 // caller that reads state a callback changes can tell, by asking before and

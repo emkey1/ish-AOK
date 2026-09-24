@@ -1089,7 +1089,11 @@ static bool time_warning_trace_enabled(void) {
 // process its first SIGALRM from. That timer's next expiry was then counted
 // as an overrun onto a queued SIGALRM (signal_timer_count_overrun), and
 // taking one reset its timer_getoverrun to 0 (signal_timer_taken).
-static void itimer_notify(struct tgroup *group) {
+//
+// Missed periods (`expirations` > 1) are not counted: SIGALRM is a standard
+// signal, pending at most once, and carries no overrun.
+static void itimer_notify(void *data, uint64_t UNUSED(expirations)) {
+    struct tgroup *group = data;
     send_signal_to_group(group, SIGALRM_, SIGINFO_NIL);
 }
 
@@ -1135,7 +1139,9 @@ static bool itimer_vprof_maybe_fire(struct cpu_itimer_state *state, struct times
 
 // Same as itimer_notify: the group, not a thread, and SI_KERNEL. SIGVTALRM/
 // SIGPROF are process-directed too.
-static void itimer_vprof_sampler_notify(void *data) {
+// Only a tick: what is due is decided from the CPU clocks, not from how many
+// ticks there were.
+static void itimer_vprof_sampler_notify(void *data, uint64_t UNUSED(expirations)) {
     struct tgroup *group = data;
 
     struct timespec cpu_user = cpu_time_now_of(group, false);
@@ -1220,7 +1226,7 @@ static long itimer_set(struct tgroup *group, int which, struct timer_spec spec, 
         return _EINVAL;
 
     if (!group->itimer) {
-        struct timer *timer = timer_new(CLOCK_REALTIME, (timer_callback_t) itimer_notify, group);
+        struct timer *timer = timer_new(CLOCK_REALTIME, itimer_notify, group);
         if (IS_ERR(timer))
             return PTR_ERR(timer);
         group->itimer = timer;
@@ -1676,13 +1682,18 @@ static struct timespec posix_timer_thread_cpu_now(void *data) {
     return now;
 }
 
-static void posix_timer_callback(struct posix_timer *timer) {
+static void posix_timer_callback(void *data, uint64_t expirations) {
+    struct posix_timer *timer = data;
     if (timer->tgroup == NULL)
         return;
+    // A signal queued now stands for every expiry this call delivers: the
+    // first, and each period missed since as an overrun on it. Linux's count
+    // saturates at INT_MAX (DELAYTIMER_MAX).
+    uint64_t missed = expirations - 1;
     struct siginfo_ info = {
         .code = SI_TIMER_,
         .timer.timer = timer->timer_id,
-        .timer.overrun = 0,
+        .timer.overrun = missed > INT_MAX ? INT_MAX : (int_t) missed,
         .timer.value = timer->sig_value,
     };
     struct task *thread = NULL;
@@ -1699,11 +1710,12 @@ static void posix_timer_callback(struct posix_timer *timer) {
                thread != NULL ? thread->pid : 0, thread != NULL);
     // TODO: solve pid reuse. currently we have two ways of referring to a task: pid_t_ and struct task *. pids get reused. task struct pointers get freed on exit or reap. need a third option for cases like this, like a refcount layer.
     if (thread != NULL) {
-        // If the last signal from this timer is still queued, this expiration
-        // is an overrun, not a second signal. See
+        // If the last signal from this timer is still queued, these
+        // expirations are overruns on it, not a second signal. See
         // signal_timer_count_overrun. What timer_getoverrun reports is left
         // alone: it changes when a signal is taken (signal_timer_taken).
-        if (signal_timer_count_overrun(thread, timer->signal, timer->timer_id) < 0) {
+        if (signal_timer_count_overrun(thread, timer->signal, timer->timer_id,
+                                       expirations) < 0) {
             // SIGEV_THREAD_ID to its thread; SIGEV_SIGNAL to the process,
             // where any thread that can take it does (Linux's
             // send_sigqueue with PIDTYPE_TGID).
@@ -1848,7 +1860,7 @@ static int_t sys_timer_create_guest_abi(dword_t clock, guest_addr_t sigevent_add
     // The documented default carries the timer id as sival_int.
     if (default_sigevent)
         sigev.value.sv_ptr = timer_id;
-    timer->timer = timer_new(real_clockid, (timer_callback_t) posix_timer_callback, timer);
+    timer->timer = timer_new(real_clockid, posix_timer_callback, timer);
     timer->clock = clock;
     timer->abstime = false;
     // Not whatever the slot's last timer had latched.
@@ -2061,9 +2073,12 @@ int_t sys_timer_delete(dword_t timer_id) {
 
 static struct fd_ops timerfd_ops;
 
-static void timerfd_callback(struct fd *fd) {
+// Every expiry counts, missed periods too: a read returns them all, as Linux's
+// does (timerfd_read's hrtimer_forward_now).
+static void timerfd_callback(void *data, uint64_t expirations) {
+    struct fd *fd = data;
     lock(&fd->lock, 0);
-    fd->timerfd.expirations++;
+    fd->timerfd.expirations += expirations;
     notify(&fd->cond);
     unlock(&fd->lock);
     poll_wakeup(fd, POLL_READ);
@@ -2099,7 +2114,7 @@ fd_t sys_timerfd_create(int_t clockid, int_t flags) {
     if (fd == NULL)
         return _ENOMEM;
 
-    fd->timerfd.timer = timer_new(real_clockid, (timer_callback_t) timerfd_callback, fd);
+    fd->timerfd.timer = timer_new(real_clockid, timerfd_callback, fd);
     fd->timerfd.clock = (uint_t) clockid;
     fd->timerfd.abstime = false;
     return f_install(fd, flags);
@@ -2315,6 +2330,28 @@ static struct timespec ns_timespec(int64_t ns) {
     };
 }
 
+// The same two for a time that may be negative: how long ago a deadline that
+// is overdue was due (timer_read). Normalised as timespec_subtract leaves one,
+// the seconds negative and the nanoseconds not, which is what timer_set adds.
+static int64_t timespec_ns_signed(struct timespec ts) {
+    if (ts.tv_sec >= 0)
+        return timespec_ns(ts);
+    if (ts.tv_sec <= -(INT64_MAX / 1000000000 - 1))
+        return -(INT64_MAX / 1000000000 - 1) * 1000000000;
+    return (int64_t) ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+static struct timespec ns_timespec_signed(int64_t ns) {
+    if (ns >= 0)
+        return ns_timespec(ns);
+    struct timespec ts = {.tv_sec = (time_t) (ns / 1000000000), .tv_nsec = (long) (ns % 1000000000)};
+    if (ts.tv_nsec < 0) {
+        ts.tv_nsec += 1000000000;
+        ts.tv_sec--;
+    }
+    return ts;
+}
+
 enum timer_ckpt_clock timer_ckpt_clock_for(uint_t clock, bool abstime) {
     pid_t_ pid;
     bool perthread;
@@ -2369,7 +2406,9 @@ int64_t timer_ckpt_left(enum timer_ckpt_clock kind, int64_t value_ns) {
     return value_ns - timer_ckpt_now_ns(kind);
 }
 
-// A timer as it stands, carried on `kind`'s clock.
+// A timer as it stands, carried on `kind`'s clock. An expiry due and not yet
+// delivered is carried as the deadline it was, in the past: see
+// timer_ckpt_spec.
 static void timer_ckpt_describe_timer(struct timer *t, enum timer_ckpt_clock kind,
         struct timer_ckpt *out) {
     struct timer_spec spec;
@@ -2380,18 +2419,22 @@ static void timer_ckpt_describe_timer(struct timer *t, enum timer_ckpt_clock kin
     };
     if (armed) {
         out->armed = 1;
-        out->value_ns = timer_ckpt_carry(kind, timespec_ns(spec.value));
+        out->value_ns = timer_ckpt_carry(kind, timespec_ns_signed(spec.value));
     }
 }
 
-// What to arm a rebuilt timer with. A deadline the stop has already passed is
-// due at once -- a nanosecond, because a zero value would disarm it -- and
-// "never" is armed at TIME_T_MAX, which timer_set pins, as the original was.
+// What to arm a rebuilt timer with. A deadline already passed -- by the stop,
+// on a clock that counts it, or by the save and the restore themselves -- is
+// armed overdue by as much: it fires at once, and a periodic timer counts
+// every period since and stays on its grid (util/timer.c), as Linux's does
+// after a hibernation. Exactly now is a nanosecond, because a zero value would
+// disarm it. "Never" is armed at TIME_T_MAX, which timer_set pins, as the
+// original was.
 static struct timer_spec timer_ckpt_spec(const struct timer_ckpt *d) {
     int64_t left = timer_ckpt_left((enum timer_ckpt_clock) d->clock, d->value_ns);
     struct timespec value = left == TIMER_CKPT_NEVER
         ? (struct timespec) {.tv_sec = INT64_MAX, .tv_nsec = 0}
-        : ns_timespec(left > 0 ? left : 1);
+        : ns_timespec_signed(left != 0 ? left : 1);
     return (struct timer_spec) {
         .value = value,
         .interval = ns_timespec(d->interval_ns),
@@ -2521,7 +2564,7 @@ unsigned group_timers_ckpt_arm(struct tgroup *group, const struct group_timers_c
     if (d->real.armed) {
         lock(&group->lock, 0);
         if (group->itimer == NULL)
-            group->itimer = timer_new(CLOCK_REALTIME, (timer_callback_t) itimer_notify, group);
+            group->itimer = timer_new(CLOCK_REALTIME, itimer_notify, group);
         struct timer *real = group->itimer;
         unlock(&group->lock);
         if (real == NULL || timer_set(real, timer_ckpt_spec(&d->real), NULL) < 0)
@@ -2557,7 +2600,7 @@ unsigned group_timers_ckpt_arm(struct tgroup *group, const struct group_timers_c
             continue;
         }
         struct timer *t = timer_new((clockid_t) r->real_clockid,
-                                    (timer_callback_t) posix_timer_callback, pt);
+                                    posix_timer_callback, pt);
         if (t == NULL) {
             unlock(&group->lock);
             failed++;
@@ -2614,7 +2657,7 @@ struct fd *timerfd_ckpt_new(const struct timerfd_ckpt *d) {
     if (fd == NULL)
         return ERR_PTR(_ENOMEM);
     fd->timerfd.timer = timer_new((clockid_t) d->real_clockid,
-                                  (timer_callback_t) timerfd_callback, fd);
+                                  timerfd_callback, fd);
     if (fd->timerfd.timer == NULL) {
         fd_close(fd);
         return ERR_PTR(_ENOMEM);

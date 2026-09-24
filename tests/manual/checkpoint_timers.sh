@@ -41,6 +41,7 @@ run_guest() {
 CHECKS="alarm posix-monotonic posix-realtime-relative posix-realtime-absolute
 posix-boottime posix-periodic posix-sigev-none posix-process-cpu itimer-real
 posix-thread-cpu itimer-prof pending-queued pending-timer-overrun pending-kill
+overdue-periodic
 sleep-nanosleep sleep-clock_nanosleep-monotonic sleep-clock_nanosleep-realtime
 sleep-clock_nanosleep-boottime sleep-ppoll sleep-pselect6 sleep-epoll_pwait
 never-posix never-timerfd never-sleep"

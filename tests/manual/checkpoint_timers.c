@@ -87,6 +87,9 @@
 #define D_COUNTS_STOP 12.0
 #define PERIOD 0.5
 #define OVERRUN_PERIOD 0.02
+// A periodic timerfd on BOOTTIME, never read: the stop passes many of its
+// expiries, and every one must be counted.
+#define OVERDUE_PERIOD 0.1
 // CPU time, consumed by the burner at up to one second a second.
 #define D_CPU 8.0
 // How late a deadline may be met. The failure this is looking for is seconds.
@@ -587,6 +590,7 @@ int main(int argc, char **argv) {
     // timerfd armed the way systemd arms its clock-change watch.
     timer_t t_never = mk_timer(CLOCK_MONOTONIC, SIGEV_SIGNAL, SIG_NEVER, 1008);
     int tfd_never = timerfd_create(CLOCK_REALTIME, TFD_NONBLOCK);
+    int tfd_overdue = timerfd_create(CLOCK_BOOTTIME, TFD_NONBLOCK);
     arm(t_mono, 0, D_MONO, 0);
     arm(t_real_rel, 0, D_MONO, 0);
     arm(t_real_abs, TIMER_ABSTIME, r0 + D_COUNTS_STOP, 0);
@@ -595,6 +599,16 @@ int main(int argc, char **argv) {
     arm(t_overrun, 0, OVERRUN_PERIOD, OVERRUN_PERIOD);
     arm(t_none, 0, D_MONO + 20, 3.0);
     arm(t_pcpu, 0, 1000.0, 0);
+    double od_b0 = now(CLOCK_BOOTTIME);
+    {
+        struct itimerspec its = {.it_value = to_ts(OVERDUE_PERIOD),
+                                 .it_interval = to_ts(OVERDUE_PERIOD)};
+        if (timerfd_settime(tfd_overdue, 0, &its, NULL) != 0) {
+            printf("SETUP arming the BOOTTIME timerfd failed: %s\n", strerror(errno));
+            exit(2);
+        }
+    }
+    double od_b1 = now(CLOCK_BOOTTIME);
     {
         struct itimerspec forever = {.it_value = {INT64_MAX, 0}};
         if (timer_settime(t_never, 0, &forever, NULL) != 0 ||
@@ -931,6 +945,26 @@ int main(int argc, char **argv) {
           "returned %d (%s) after %.3f s", urg_was ? "pending" : "NOT pending",
           sigismember(&pend, SIGURG) ? "still pending" : "gone", sel,
           sel_err ? strerror(sel_err) : "ok", took);
+
+    // ---- A periodic timerfd on BOOTTIME, never read: every period since it
+    //      was armed, the stop's among them. BOOTTIME counts the stop, so the
+    //      image carries a next expiry that the stop has already passed; the
+    //      restored timer is armed that far overdue and counts every period
+    //      since (util/timer.c), as Linux's does after a hibernation. It used
+    //      to come back due once and count one, the stop's periods lost.
+    uint64_t od = 0;
+    double od_r0 = now(CLOCK_BOOTTIME);
+    ssize_t odr = read(tfd_overdue, &od, sizeof(od));
+    double od_r1 = now(CLOCK_BOOTTIME);
+    // The first expiry is a period after the arming; a few of the latest may
+    // not be in yet.
+    long od_lo = (long) ((od_r0 - od_b1 - OVERDUE_PERIOD) / OVERDUE_PERIOD) + 1 - 3;
+    long od_hi = (long) ((od_r1 - od_b0 - OVERDUE_PERIOD) / OVERDUE_PERIOD) + 1;
+    check("overdue-periodic", odr == (ssize_t) sizeof(od) && (long) od >= od_lo &&
+                              (long) od <= od_hi,
+          "read -> %zd, %llu expirations, want %ld..%ld (a %.1f s timer on BOOTTIME, "
+          "armed %.3f s before, which the %.3f s stop is part of)", odr,
+          (unsigned long long) od, od_lo, od_hi, OVERDUE_PERIOD, od_r0 - od_b1, gap);
 
     // ---- 6. The sleeps: each wakes at its deadline on the clock that counts
     //         it, not its whole duration after the resume.

@@ -44,7 +44,8 @@ enum timer_ckpt_clock {
 struct timer_ckpt {
     uint32_t armed;
     uint32_t clock;             // enum timer_ckpt_clock
-    int64_t value_ns;           // the next expiry, on `clock`; CPU time left for TIMER_CKPT_CPU
+    int64_t value_ns;           // the next expiry, on `clock` (past if it was due and not yet
+                                // delivered); CPU time left for TIMER_CKPT_CPU (negative, overdue)
     int64_t interval_ns;        // kept whether or not it is armed, as getitimer reports it
 };
 

@@ -232,6 +232,37 @@ void timer_free(struct timer *timer) {
     }
 }
 
+#define TIMER_NS 1000000000LL
+
+// How many whole periods of `interval` lie between `end` and `now`: the
+// expiries after the one at `end` that are due by `now`. 0 for a one-shot, or
+// while `now` is still inside the first period.
+static uint64_t timer_periods_past(struct timespec end, struct timespec now,
+        struct timespec interval) {
+    if (!timespec_positive(interval))
+        return 0;
+    struct timespec behind = timespec_subtract(now, end);
+    // An interval longer than that is none; which also keeps the interval
+    // below in nanoseconds from overflowing.
+    if (!timespec_positive(behind) || interval.tv_sec > behind.tv_sec)
+        return 0;
+    // A clock that jumped centuries (a wall clock set) saturates.
+    if (behind.tv_sec >= INT64_MAX / TIMER_NS - 1)
+        behind = (struct timespec) {.tv_sec = INT64_MAX / TIMER_NS - 1};
+    int64_t behind_ns = (int64_t) behind.tv_sec * TIMER_NS + behind.tv_nsec;
+    int64_t interval_ns = (int64_t) interval.tv_sec * TIMER_NS + interval.tv_nsec;
+    return (uint64_t) (behind_ns / interval_ns);
+}
+
+// `periods` times `interval`, for a count timer_periods_past returned: no
+// longer than the time it was counted over.
+static struct timespec timer_periods(uint64_t periods, struct timespec interval) {
+    if (periods == 0)
+        return (struct timespec) {0};
+    int64_t ns = (int64_t) periods * ((int64_t) interval.tv_sec * TIMER_NS + interval.tv_nsec);
+    return (struct timespec) {.tv_sec = ns / TIMER_NS, .tv_nsec = ns % TIMER_NS};
+}
+
 static void *timer_thread(void *param) {
     struct timer *timer = param;
     // Born with the wake signals (SIGUSR1, SIGUSR2) blocked, and they stay
@@ -283,8 +314,16 @@ static void *timer_thread(void *param) {
 
         // Only fire the callback for the arm we actually slept on. A later
         // arm/cancel updates the generation and should not inherit this wakeup.
-        if (timespec_positive(timespec_subtract(timer->end, timer_now(timer))))
+        struct timespec now = timer_now(timer);
+        if (timespec_positive(timespec_subtract(timer->end, now)))
             continue;
+        // Every expiry due by now, in this one call: the one at `end` and each
+        // period since, which the thread missed if it was late -- the host
+        // stopped (iOS suspending the app), or a CPU clock that ran ahead of
+        // the nap taken on it. Linux counts them the same way, and keeps the
+        // grid (hrtimer_forward): a timerfd read returns them all, a POSIX
+        // timer adds them to si_overrun. See timer_periods_past.
+        uint64_t expirations = 1 + timer_periods_past(end, now, interval);
 
         if (timer_warning_trace_enabled()) {
             printk("WARNING: timer_fire timer=%p generation=%llu interval=%lds.%09ld data=%p\n",
@@ -318,24 +357,23 @@ static void *timer_thread(void *param) {
                                     .tv_nsec = (long) (fire_delay_ms % 1000) * 1000000};
             nanosleep(&hold, NULL);
         }
-        callback(data);
+        callback(data, expirations);
         lock(&timer->lock, 0);
         timer->firing = false;
         timer->fired++;
         if (timer->generation != generation)
             continue;
         if (timer->active && timespec_positive(interval)) {
-            struct timespec now = timer_now(timer);
-            timer->start = end;
+            // On along the grid, past everything just delivered: the next
+            // expiry is the first after the `now` it was counted at. Never
+            // re-based on now, which moved the grid to wherever the thread
+            // happened to wake, and never replayed one period at a time --
+            // signal-based users like Xtigervnc became unusably slow when
+            // every missed period was a callback of its own. A callback that
+            // outlasted a period leaves this in the past, and the next pass
+            // fires at once with whatever is due by then.
+            timer->start = timespec_add(end, timer_periods(expirations - 1, interval));
             timer->end = timespec_add(timer->start, interval);
-            if (!timespec_positive(timespec_subtract(timer->end, now))) {
-                // If we fell behind, coalesce missed periods instead of
-                // replaying them in a tight burst. Signal-based users like
-                // Xtigervnc become unusably slow when we try to "catch up"
-                // every expired interval back-to-back.
-                timer->start = now;
-                timer->end = timespec_add(now, interval);
-            }
         } else {
             break;
         }
@@ -479,8 +517,12 @@ bool timer_read(struct timer *timer, struct timer_spec *spec) {
     // exits: thread_running is what says an expiry is still to come.
     bool armed = timer->active && timer->thread_running;
     if (armed) {
+        // Negative for an expiry due and not yet delivered -- the thread
+        // about to, or behind: how long ago it was due. Armed again with
+        // that, a periodic timer counts the periods since and keeps its grid.
+        // Never zero, which would disarm it.
         spec->value = timespec_subtract(timer->end, timer_now(timer));
-        if (!timespec_positive(spec->value))
+        if (timespec_is_zero(spec->value))
             spec->value = (struct timespec) {.tv_sec = 0, .tv_nsec = 1};
     }
     unlock(&timer->lock);

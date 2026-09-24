@@ -183,9 +183,10 @@ static const struct siginfo_ SIGINFO_NIL = {
     .code = SI_KERNEL_,
 };
 
-// See kernel/signal.c. Counts a repeat POSIX-timer expiration onto the
-// already-queued signal instead of queueing another; -1 if none is queued.
-int signal_timer_count_overrun(struct task *task, int sig, int timer_id);
+// See kernel/signal.c. Counts `expirations` repeat POSIX-timer expirations
+// onto the already-queued signal instead of queueing another; -1 if none is
+// queued.
+int signal_timer_count_overrun(struct task *task, int sig, int timer_id, uint64_t expirations);
 
 struct sigqueue {
     struct list queue;

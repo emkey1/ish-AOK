@@ -221,6 +221,7 @@ tty_canon_queue.c
 timer_conventions.c
 timer_lateness.c
 timer_rearm_wake.c
+timer_missed_periods.c
 mmap_conventions.c
 fd_conventions.c
 proc_files.c
