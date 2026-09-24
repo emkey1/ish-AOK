@@ -462,15 +462,51 @@ remains is pixman_composite_glyphs_no_mask in GTK (not interposable per
 glyph), a SOLID mask in GTK (265 calls), cairo's a8 IN mask building, and
 gradients.
 
+## Device measurement on the A10X iPad Pro (`bip`), step 3 build (2026-09-24)
+
+12.9" iPad Pro gen 2 (A10X, 3 emulated CPUs, 3 GB), Devuan 6, the app built
+from d0afafbb with the accelerator on; the shim built on the device by the
+app's own /AOK/tools/pixman/build-shim.sh. Same scripted session as the M4
+runs, interleaved on/off (ISH_PIXMAN_SHIM_OFF=1 for off). Driven over the
+Lightning cable: bip's sshd has AllowTcpForwarding no, so the VNC stream
+went through a socat relay in the guest bound only to the cable's
+link-local address (the relay's copying is on both arms alike).
+
+| per session | on | on | off | off |
+|---|---|---|---|---|
+| labwc: ms in pixman | 3922 | 1638 | 10243 | 12524 |
+| labwc: CPU ticks | 505 | 509 | 1216 | 1177 |
+| l3afpad: ms in pixman | 530 | 541 | 1536 | 1412 |
+| foot: ms in pixman | 1217 | 1062 | 715 | 1024 |
+| foot: fill_rectangles calls | 27003 | 31391 | 18129 | ~18k |
+| wayvnc: CPU ticks | 1928 | 2084 | 1851 | 1732 |
+| drag fps, foot / l3afpad window | 13.0 / 11.6 | 13.5 / 13.9 | 15.1 / 12.9 | 13.5 / 13.0 |
+| l3afpad page-down redraw, updates/s | 14.3 | 11.3 | 8.0 | 8.3 |
+
+- **labwc: 57% less CPU, 2.6-7.6x less time in pixman.** Its full-frame
+  capture copy for wayvnc costs 0.7-2.3 ms accelerated against 7.6 ms in
+  pixman.
+- **GTK: 2.7x less time in pixman, and paging through a document redraws
+  at 11-14 updates/s against 8.** The one interactive number the
+  accelerator moves on this device.
+- **Drag frame rate does not move: ~13 updates/s either way.** wayvnc is
+  the largest CPU consumer in every run (1700-2100 ticks, against labwc's
+  500 with the accelerator), and none of its work is pixman. On the A10X the
+  drag is wayvnc-bound; that, not more pixman coverage, is what limits
+  drag smoothness now (NEXT #3).
+- **foot is about even per call** -- accelerated glyphs 25-37 us against
+  34 in pixman, small fills in the shim 4.5-6.9 us against 9.8 -- but with
+  the accelerator on it drew 1.5-1.7x as many cells in the same session, so
+  its total pixman time is not a like-for-like comparison.
+
 ## NEXT
-1. The device number for step 3 (M4 iPad, interleaved on/off), and the
-   drag frame rate on a device that is pixman-bound: the A10X iPad Pro
-   (`bip`) or the iPhone SE. The M4 is not.
+1. wayvnc's capture/encode CPU: the drag-smoothness limiter on the A10X
+   (above), and outside pixman entirely -- neatvnc's damage refinement and
+   raw encoding of every frame.
 2. What is left in the data, smallest first: a solid MASK (constant alpha;
    GTK, 265 calls a session), then cairo's a8 IN mask building and
    gradients -- each only if a device profile says it is worth it.
-3. wayvnc's own capture/encode CPU, which is outside pixman entirely and was
-   the largest consumer in every drag measured.
+3. The step 3 build on the M4 iPad, for its before/after pair.
 4. SRC-with-mask and other op+mask combinations: the data says not yet.
 
 ## 1. Problem and evidence
