@@ -228,6 +228,7 @@ signal_restart_record.c
 signal_ignored_restart.c
 signal_process_wake_one.c
 wake_mask_isolation.c
+host_port_leak.c
 signal_handler_mask.c
 signal_dequeue_order.c
 dir_tmpfs.c

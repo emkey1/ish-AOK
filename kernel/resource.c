@@ -364,7 +364,16 @@ static struct rusage_ cpu_usage_self(void) {
 #elif __APPLE__
     thread_basic_info_data_t info;
     mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
-    if (thread_info(mach_thread_self(), THREAD_BASIC_INFO, (thread_info_t) &info, &count) != KERN_SUCCESS) {
+    // pthread_mach_thread_np, not mach_thread_self: the latter hands back a
+    // new send right every call, and this never gave it back. do_exit asks
+    // here for every thread that exits, so each guest thread ever created left
+    // one dead port name behind -- and iOS kills an app that holds too many.
+    // On the M4 iPad the regression suite's churn reached the limit about four
+    // roots in: EXC_RESOURCE, "Exceeded system-wide per-process Port Limit
+    // (114882 ports)", the app gone mid-run. /proc/ish/host_ports counts them;
+    // tests/manual/host_port_leak.c is the witness.
+    if (thread_info(pthread_mach_thread_np(pthread_self()), THREAD_BASIC_INFO,
+                (thread_info_t) &info, &count) != KERN_SUCCESS) {
         // Handle error appropriately
         printk("ERROR: thread_info failed (rusage_get_current()\n");
         return rusage;
