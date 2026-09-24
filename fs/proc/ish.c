@@ -1957,6 +1957,38 @@ static int proc_ish_show_mem_guard(struct proc_entry *UNUSED(entry), struct proc
     return 0;
 }
 
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
+// The Mach port names this process holds, and how many of them are dead names
+// -- a right to something that no longer exists, a thread that exited being the
+// usual one. iOS kills an app outright at a per-process limit (114,882 ports
+// on an M4 iPad, EXC_RESOURCE PORT_SPACE), and a leak of one right per guest
+// thread got there in about four roots of the regression suite. Read it
+// before and after a workload: a count that climbs with the number of threads
+// or processes the guest made is a leak (tests/manual/host_port_leak.c). A host
+// with no Mach ports says so, and the test skips.
+static int proc_ish_show_host_ports(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+#if defined(__APPLE__)
+    mach_port_name_array_t names = NULL;
+    mach_port_type_array_t types = NULL;
+    mach_msg_type_number_t nnames = 0, ntypes = 0;
+    if (mach_port_names(mach_task_self(), &names, &nnames, &types, &ntypes) != KERN_SUCCESS)
+        return _EIO;
+    unsigned dead = 0;
+    for (mach_msg_type_number_t i = 0; i < ntypes; i++)
+        if (types[i] & MACH_PORT_TYPE_DEAD_NAME)
+            dead++;
+    vm_deallocate(mach_task_self(), (vm_address_t) names, nnames * sizeof(*names));
+    vm_deallocate(mach_task_self(), (vm_address_t) types, ntypes * sizeof(*types));
+    proc_printf(buf, "names      %u\n", (unsigned) nnames);
+    proc_printf(buf, "dead_names %u\n", dead);
+#else
+    proc_printf(buf, "unsupported (no Mach ports on this host)\n");
+#endif
+    return 0;
+}
+
 static int proc_ish_show_host_info(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     char *host_info = printHostInfo();
     proc_printf(buf, "%s", host_info);
@@ -1983,6 +2015,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"defaults", S_IFDIR, .readdir = proc_ish_defaults_readdir},
     {"documents", .show = proc_ish_show_documents},
     {"host_info", .show = proc_ish_show_host_info},  // Add host hardware related information
+    {"host_ports", .show = proc_ish_show_host_ports},
     {"ips", .show = proc_ish_show_ips},
     {"mem_guard", .show = proc_ish_show_mem_guard},
     {"mem_release_probe", S_IFREG | 0644, .show = proc_ish_show_mem_release_probe, .update = proc_ish_update_mem_release_probe},
