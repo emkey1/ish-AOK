@@ -866,10 +866,9 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
                     //     the sender's view of the mask differs from ours;
                     //   * the SIGUSR1/SIGUSR2 pokes are the ones
                     //     signal_thread_unwedge_wake_sigs() exists to repair --
-                    //     util/sync.c documents them being swallowed
-                    //     PERMANENTLY under host thread churn from concurrent
-                    //     guest fork/exec, after which the thread is deaf to
-                    //     every later poke;
+                    //     a thread whose mask some OTHER thread set (Darwin's
+                    //     sigprocmask sets them all; util/sync.c has the cause
+                    //     that was fixed) is deaf to every later poke;
                     //   * and the notify pipe only carries fd readiness, so a
                     //     wait with no fds at all -- which is exactly what
                     //     zsh's `sigsuspend` becomes, pselect6(0, NULL, NULL,

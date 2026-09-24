@@ -96,12 +96,26 @@ extern __thread bool should_mark_wait_interrupted;
 // A helper function won't work: the compiler refuses to inline functions
 // containing sigsetjmp, so the jmp_buf would point at a dead frame.
 // Use a macro to guarantee in-place expansion at every call site.
+//
+// savemask 0, and it must stay 0. Darwin's siglongjmp restores a saved mask
+// with sigprocmask, and Darwin's sigprocmask sets the mask of EVERY thread in
+// the process, not the caller's (pthread_sigmask is the per-thread one). Every
+// guest task is a host thread of this one process, and each caller arms this
+// with SIGUSR1 blocked, so each poke that unwound a wait blocked SIGUSR1 in
+// every thread of the app: all of them deaf to their next poke. That is the
+// "swallowed poke" util/sync.c and kernel/signal.c defend against, and it grew
+// with activity because every interrupted poll, socket or pipe wait did it
+// once. On an M4 iPad an hour of the regression suite made child exits,
+// SIGALRM and handlers arrive one to two seconds late (signal_process_wake_one,
+// the wake_signals repair counters); tests/manual/wake_mask_isolation.c is the
+// witness. The unwind branch of every caller puts its own mask back with
+// pthread_sigmask(SIG_SETMASK, &oldmask) -- that is the restore, per thread.
 #define sigunwind_start() \
     ({ \
         int __sigunwind_result; \
         /* volatile: read back on the siglongjmp branch, so it must survive */ \
         volatile unsigned __sigunwind_frames = lockstats_depth; \
-        if (sigsetjmp(unwind_buf, 1)) { \
+        if (sigsetjmp(unwind_buf, 0)) { \
             should_unwind = false; \
             /* A siglongjmp abandons every lockstats frame opened since the \
                setjmp -- nothing releases those locks through the hooks, so \

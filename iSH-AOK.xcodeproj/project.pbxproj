@@ -572,7 +572,6 @@
 		56027C3DBA1338FABD4FD61A /* MotePadDocumentStore.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = MotePadDocumentStore.h; sourceTree = "<group>"; };
 		57D6250B1A93D2423FF389EB /* MarkdownRenderer.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = MarkdownRenderer.m; sourceTree = "<group>"; };
 		59516B05C7A2120D1EE19975 /* AudioPlayerEngine.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = AudioPlayerEngine.m; sourceTree = "<group>"; };
-		5D272493277C20DF0005F2A8 /* iSHFileProviderRelease.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iSHFileProviderRelease.entitlements; sourceTree = "<group>"; };
 		5D59DAD92B17996100FA995C /* ro_locks.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ro_locks.h; sourceTree = "<group>"; };
 		5D59DADA2B17999500FA995C /* rw_locks.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = rw_locks.h; sourceTree = "<group>"; };
 		5D59DADB2B179A2300FA995C /* ro_locks.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ro_locks.c; sourceTree = "<group>"; };
@@ -1061,7 +1060,6 @@
 		BB792B451F96D8E000FFB7A4 = {
 			isa = PBXGroup;
 			children = (
-				5D272493277C20DF0005F2A8 /* iSHFileProviderRelease.entitlements */,
 				BB792B521F96D90D00FFB7A4 /* app */,
 				BB9C7B88240A343400F5D4F0 /* iSH.xcconfig */,
 				BB4A53931FAA393B00A72ACE /* most of the code */,
@@ -2654,7 +2652,7 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = BB0B86D52587009D00208600 /* iOS.xcconfig */;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = iSHFileProviderRelease.entitlements;
+				CODE_SIGN_ENTITLEMENTS = app/FileProvider/iSHFileProvider.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = UYU5FM4LQ4;

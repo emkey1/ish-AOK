@@ -669,12 +669,13 @@ static void signal_prepare_stop_cont(struct sighand *sighand, struct task *task,
 // `task`'s whole thread group) and gets it back on return; the lock is only
 // dropped around wake_waiting_task, which must not be called while holding it
 // (see the AB-BA comment on signalfd_wakeup_task above).
-// Drop every wake poke to tasks whose comm starts with this, simulating the
-// Darwin swallowed-poke fault for a test. There is no way to provoke the real
-// thing on demand -- it needs host thread churn and it lands where it lands --
-// so without this the recovery paths that exist for it (fs/poll.c's cap and
-// unwedge, kernel/time.c's sleep slices) can only ever be reasoned about, never
-// watched working. tests/manual/wake_poke_lost.c is the reader.
+// Drop every wake poke to tasks whose comm starts with this, simulating a lost
+// poke for a test, so the recovery paths that exist for one (fs/poll.c's cap
+// and unwedge, kernel/time.c's sleep slices) can be watched working.
+// tests/manual/wake_poke_lost.c is the reader. The real fault this stood in
+// for -- another thread's siglongjmp blocking SIGUSR1 in every thread, see
+// util/sync.h -- is fixed, and tests/manual/wake_mask_isolation.c provokes it
+// directly.
 //
 // Deliberately narrow: a comm PREFIX, never all tasks. Set it to something
 // broad and the guest stops responding to signals, which is the fault, not a
@@ -771,11 +772,12 @@ static void signal_wake_task(struct task *task, struct sighand *sighand, int sig
     }
 
     int wake_err = pthread_kill(task->thread, SIGUSR1);
-    // Second, independent poke. The SIGUSR1 above is not reliable: on Darwin it
-    // is intermittently swallowed in a way that leaves SIGUSR1 blocked and
-    // pending in the target thread's own mask with sigusr1_handler never
-    // running, after which that thread is deaf to every later SIGUSR1 for the
-    // rest of its life. A target parked in a host syscall then finishes the
+    // Second, independent poke. The SIGUSR1 above was not reliable: on Darwin it
+    // was intermittently left blocked and pending in the target thread's own
+    // mask with sigusr1_handler never running, after which that thread was deaf
+    // to every later SIGUSR1. (The cause was another thread's siglongjmp, which
+    // on Darwin sets every thread's mask -- fixed in util/sync.h; this stays as
+    // the second way in.) A target parked in a host syscall then finishes the
     // syscall on its own schedule and never reaches the checkpoint where
     // receive_signals() would act -- which is how a `sleep 30` could ignore a
     // pending SIGKILL and exit normally 30 seconds later. SIGUSR2 is delivered
@@ -2317,13 +2319,33 @@ static bool signal_passed_over(struct sighand *sighand, int sig) {
 //
 // The process's shared queue only for a thread told to take it
 // (task_group_pending): nothing there can have cut another thread's syscall
-// short, and that thread's way out does not go looking there.
-static struct sigqueue *signal_deciding_locked(struct sighand *sighand, bool *ignored_seen) {
+// short, and that thread's way out does not go looking there. *shared says the
+// signal found is on that queue.
+static struct sigqueue *signal_deciding_locked(struct sighand *sighand, bool *ignored_seen,
+        bool *shared) {
     bool told = __atomic_load_n(&current->group_sigpending, __ATOMIC_ACQUIRE);
-    bool shared;
     *ignored_seen = false;
     return signal_next_deliverable_locked(sighand, ~task_wake_blocked(current), told,
-            ignored_seen, &shared);
+            ignored_seen, shared);
+}
+
+// Whether the deciding signal is one this thread may never deliver: it is on
+// the process's queue, where any sibling that can take it may take it first --
+// between this decision and this thread's own delivery, since the lock is
+// dropped in between. Linux decides at delivery (handle_signal turns
+// ERESTARTNOHAND or ERESTARTSYS into EINTR only when a handler is set up), and
+// so must this: promise the restart, and receive_signal cancels it if the
+// handler really runs here. Deciding "the handler will run, so EINTR" now was
+// wrong whenever the sibling won: the call failed with EINTR and no handler
+// ran in its thread. Measured on an M4 iPad with
+// tests/manual/signal_process_wake_one.c -- "handed on" and "lost the race",
+// a sigsuspend or a pipe read waking at the child's exit with EINTR, in 8 of
+// 12 runs from a fresh boot, where Linux carries on waiting.
+//
+// Not for a signal the native shim holds a handler for: a native program has
+// no handler-time cancel to take the promise back, so it keeps the prediction.
+static bool signal_decided_at_delivery_shared(struct sigqueue *best, bool shared) {
+    return shared && !signal_native_held(best->info.sig);
 }
 
 // ERESTARTNOHAND: restart only if the interrupting signal ran no handler. This
@@ -2338,8 +2360,8 @@ bool signal_should_restart_syscall_nohand(void) {
 
     struct sighand *sighand = current->sighand;
     lock(&sighand->lock, 0);
-    bool ignored_seen;
-    struct sigqueue *best = signal_deciding_locked(sighand, &ignored_seen);
+    bool ignored_seen, shared;
+    struct sigqueue *best = signal_deciding_locked(sighand, &ignored_seen, &shared);
     // A shim-held signal always runs a handler, whatever the kernel's
     // placeholder disposition claims -- and ERESTARTNOHAND is cancelled by a
     // handler running. Without this the placeholder for, say, a native
@@ -2358,9 +2380,14 @@ bool signal_should_restart_syscall_nohand(void) {
     // SIGCHLD a sibling calling sigprocmask took first returned EINTR with no
     // handler run in its thread, where Linux goes on waiting
     // (tests/manual/signal_process_wake_one.c, "lost the race").
+    //
+    // And a signal on the process's queue restarts, to be cancelled if its
+    // handler runs here: a sibling may take it first
+    // (signal_decided_at_delivery_shared).
     bool restart = best != NULL ?
         !signal_native_held(best->info.sig) &&
-            signal_restarts_nohand(current, sighand, best->info.sig) :
+            (signal_decided_at_delivery_shared(best, shared) ||
+             signal_restarts_nohand(current, sighand, best->info.sig)) :
         ignored_seen || __atomic_load_n(&current->group_sigpending, __ATOMIC_ACQUIRE) ||
             task_trap_stop_pending(current);
     unlock(&sighand->lock);
@@ -2385,8 +2412,8 @@ bool signal_should_restart_syscall(void) {
     // fell through to the "no restart" default even when its handler had
     // SA_RESTART_ set -- turning what should be a transparent kernel-level
     // restart into a real EINTR surfacing all the way into the guest.
-    bool ignored_seen;
-    struct sigqueue *best = signal_deciding_locked(sighand, &ignored_seen);
+    bool ignored_seen, shared;
+    struct sigqueue *best = signal_deciding_locked(sighand, &ignored_seen, &shared);
     if (best == NULL) {
         bool told = __atomic_load_n(&current->group_sigpending, __ATOMIC_ACQUIRE);
         unlock(&sighand->lock);
@@ -2414,8 +2441,11 @@ bool signal_should_restart_syscall(void) {
     // A stop, which resumes the syscall transparently, or a signal a tracer
     // will see before anything is delivered: restart, and let receive_signal
     // cancel it if a handler without SA_RESTART runs first. See
-    // signal_restart_decided_at_delivery.
-    if (signal_restarts_nohand(current, sighand, sig)) {
+    // signal_restart_decided_at_delivery. The same for a signal on the
+    // process's queue, which a sibling may take before this thread does
+    // (signal_decided_at_delivery_shared).
+    if (signal_restarts_nohand(current, sighand, sig) ||
+            signal_decided_at_delivery_shared(best, shared)) {
         unlock(&sighand->lock);
         return true;
     }

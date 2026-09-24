@@ -60,6 +60,7 @@
 #include <glob.h>
 #endif
 #include <poll.h>
+#include <setjmp.h>
 #include <signal.h>
 #include <syslog.h>
 #include <sys/mman.h>
@@ -1019,6 +1020,28 @@ char *nlibc_strchrnul(const char *s, int c);
 #define siggetmask               nlibc_siggetmask
 #define sigpending               nlibc_sigpending
 #define sigwait                  nlibc_sigwait
+/* Non-local jumps that leave the host signal mask alone. Darwin's longjmp, and
+ * siglongjmp from a buffer saved with a mask, put the saved mask back with
+ * sigprocmask -- which on Darwin sets the mask of EVERY thread in the process.
+ * Every guest task is a thread of this one process, so native dash raising an
+ * exception (its `exit` builtin is one), or a SmallCLUE applet returning
+ * through its exit override, rewrote the host mask of every task in the app:
+ * unblocking the wake signal where AOK holds it blocked on purpose, blocking it
+ * where a task must be woken. util/sync.h has the kernel's half of this.
+ *
+ * Nothing guest-visible is lost. The mask such a jump saved was the HOST
+ * thread's, never the program's own -- that lives in the guest task and is
+ * reached through nlibc_sigprocmask -- and Linux's setjmp does not save a mask
+ * at all. tools/check-native-libc.py keeps the mask-saving names off its
+ * allowlist, so a program that escapes these macros fails the check. */
+#if defined(__APPLE__)
+int _setjmp(jmp_buf) __attribute__((__returns_twice__));
+void _longjmp(jmp_buf, int) __attribute__((__noreturn__));
+#define setjmp(env)              _setjmp(env)
+#define longjmp(env, val)        _longjmp((env), (val))
+#define sigsetjmp(env, savemask) _setjmp(env)
+#define siglongjmp(env, val)     _longjmp((env), (val))
+#endif
 #define setsid                   nlibc_setsid
 #define setpgid                  nlibc_setpgid
 #define getpgid                  nlibc_getpgid
