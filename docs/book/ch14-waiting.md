@@ -334,7 +334,51 @@ that. Only the rule can: leave the body by falling off its end, or by `break`.
 > Started the other way round, waiter first and siblings once it is waiting,
 > the poke has nowhere to land but the wait.
 
-## 14.7 The pattern
+## 14.7 Waking on time
+
+Every wait in this chapter that has a deadline ends on a host timer, and for a
+long time nobody asked when. Darwin coalesces timers to save power: a sleep may
+end late by a quarter of the time asked for, up to 5 ms, and by twice that while
+the user is idle. On an idle device the kernel takes all of it. On an M4 iPad a
+5 ms periodic POSIX timer delivered each expiry a millisecond after its
+boundary, and a 50 ms one five milliseconds after. A 40 ms `FUTEX_WAIT` took
+45 ms, and `poll` came back a millisecond after its timeout. Linux, on an
+x86_64 box, was within 15 µs for timers and within its 50 µs of slack for
+sleeps.
+
+It was found by a test that failed one round in twelve, and only on the iPad.
+`timer_conventions` blocks a 5 ms timer's signal, sleeps exactly one second,
+takes the signal and checks that nothing is queued behind it: two hundred
+periods counted on one signal, which is what `si_overrun` is for. On the iPad a
+fresh signal sometimes followed the first by ten microseconds. The nap and the
+200th expiry were due at the same instant, and both host sleeps were late. When
+the nap came out less late, the guest took its signal before the timer thread
+had delivered the expiry that should have been counted on it.
+
+A thread's QoS does not change the leeway, and `mach_wait_until`,
+`pthread_cond_timedwait` and `select` get it too. A kqueue timer marked
+`NOTE_CRITICAL` does not, so that is now how each kind of wait keeps its
+deadline:
+
+- `host_nanosleep_precise` covers the timer thread and `nanosleep`'s slices.
+- For `poll`, `select` and `epoll_wait`, a timer is added to the same `kevent`.
+- The condition-variable waits (`FUTEX_WAIT`, `sigtimedwait`) need a service
+  thread, because a thread cannot wait on a condition and a kqueue at once.
+  Its timer broadcasts the waiter's condition at the deadline.
+
+The old coalesced timeout stays behind each one as a backstop. `timer_lateness`
+checks the signature of coalescing rather than a number: a 40 ms wait must end
+no later than a 2 ms one. Coalescing breaks that by 4 to 10 ms; load does not
+break it.
+
+The test's own assumption outlived the fix, and deserved to. Linux works out a
+timer's overruns from the clock when its signal is taken. AOK counts each expiry
+as its thread delivers it, so an expiry due at the instant of the take can still
+arrive, microseconds later, as a fresh signal. The check now allows one such
+signal and no backlog. It also caught `timer_getoverrun` following the signal
+still queued. Linux latches the count of the signal that was taken.
+
+## 14.8 The pattern
 
 Every subsystem in this chapter is the same two-part construction: a thing to
 wait on, and a thing to wake it. In every single case, the bugs were in the
@@ -360,11 +404,13 @@ spends most of its time on threads that are asleep when they should not be.
 [kernel/aio.c](../../kernel/aio.c), [kernel/sysvsem.c](../../kernel/sysvsem.c),
 [kernel/sysvmsg.c](../../kernel/sysvmsg.c), [kernel/time.c](../../kernel/time.c),
 [kernel/signal.c](../../kernel/signal.c) (`signalfd_wakeup_task`),
-[util/sync.c](../../util/sync.c) (`wait_for_blocked`),
+[util/sync.c](../../util/sync.c) (`wait_for_blocked`, `deadline_wake_arm`),
+[util/timer.c](../../util/timer.c) (`host_nanosleep_precise`),
 [kernel/task.c](../../kernel/task.c) (`task_poke_shared_mem`, `guest_count_runnable`),
 [fs/fuse.c](../../fs/fuse.c),
 `tests/manual/futex_robust_requeue.c`, `tests/manual/pidfd_epoll_deadlock.c`,
-`tests/manual/blocked_wait_state.c`,
+`tests/manual/blocked_wait_state.c`, `tests/manual/timer_lateness.c`,
+`tests/manual/timer_conventions.c`,
 [docs/TODO.md](../../docs/TODO.md).
 
 *Story:* `sudo something >/dev/null` segfaulting before `main` — because Darwin's

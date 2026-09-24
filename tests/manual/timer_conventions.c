@@ -12,7 +12,9 @@
 //   counted on si_overrun -- the whole reason that field exists. AOK queued
 //   one signal per expiration and hardcoded si_overrun to 0, so a periodic
 //   timer whose signal was blocked for a second produced two hundred signals
-//   and no way to know how far behind it was.
+//   and no way to know how far behind it was. timer_getoverrun reports the
+//   count of the signal last taken, latched as it is taken; AOK's followed the
+//   signal still queued, and went to 0 as soon as the next one was.
 //
 //   setitimer's interval survives a disarm for ITIMER_VIRTUAL and ITIMER_PROF
 //   and does NOT for ITIMER_REAL. AOK had the two exactly the wrong way round.
@@ -213,9 +215,15 @@ int main(int argc, char **argv) {
             ck("arm a 5ms periodic timer", timer_settime(t, 0, &its, NULL), 0);
             struct timespec nap = { 1, 0 };
             nanosleep(&nap, NULL);                // ~200 periods, signal blocked
+            // timer_getoverrun is the count of the signal last TAKEN, and none
+            // has been: the one waiting has ~199 on it, and AOK used to say so.
+            ck("timer_getoverrun is 0 until a signal is taken",
+               (long) timer_getoverrun(t), 0);
             siginfo_t si;
             struct timespec zero = { 0, 0 };
             int got = sigtimedwait(&set, &si, &zero);
+            struct timespec taken;
+            clock_gettime(CLOCK_MONOTONIC, &taken);
             ck("a signal is waiting", got == SIGRTMIN ? 1 : 0, 1);
             long overrun = got > 0 ? si.si_overrun : -1;
             // ~199 in a second of 5ms periods, but scheduling jitter moves it
@@ -225,13 +233,51 @@ int main(int argc, char **argv) {
             // The point of counting them: only ONE signal was queued. Two
             // hundred queued signals is what this looked like before, and it
             // is why si_overrun exists.
-            errno = 0;
-            int again = sigtimedwait(&set, &si, &zero);
-            ck("  and only one signal was queued", again < 0 && errno == EAGAIN ? 1 : 0, 1);
+            //
+            // Not "nothing more is waiting", though. Linux works the overruns
+            // out from the clock as the signal is taken and only then arms the
+            // next expiry, so nothing can queue behind it for most of a
+            // period. AOK counts each expiry as its timer thread delivers it,
+            // and the nap above ends right on the 200th boundary: that
+            // expiry can be delivered a few microseconds after the take, as a
+            // fresh signal -- the same expiry, counted there instead of in the
+            // overrun. On the M4 iPad it was, in 1 round of 12, while host
+            // timers ran a fifth of a period late (util/timer.h,
+            // host_nanosleep_precise). So: one more at most, and one for each
+            // period the draining itself spans. Never a backlog.
+            long behind = 0, latched = overrun;
+            while (behind < 1000 && sigtimedwait(&set, &si, &zero) == SIGRTMIN) {
+                behind++;
+                latched = si.si_overrun;
+            }
+            struct timespec drained;
+            clock_gettime(CLOCK_MONOTONIC, &drained);
+            long spanned = ((drained.tv_sec - taken.tv_sec) * 1000000000L +
+                            (drained.tv_nsec - taken.tv_nsec)) / 5000000;
+            ck_range("  and only one signal was queued", behind, 0, 1 + spanned);
+            // ...and the count it reports stays that signal's while the next
+            // one waits: Linux latches it as a signal is taken. A handler that
+            // runs past a period and then asks how many it missed wants its
+            // own count. AOK followed the queued signal instead -- 0 the
+            // moment the next expiry was queued, then counting up.
+            sigset_t pend;
+            int queued = 0;
+            for (int spin = 0; spin < 2000 && !queued; spin++) {
+                sigpending(&pend);
+                queued = sigismember(&pend, SIGRTMIN);
+                if (!queued) {
+                    struct timespec tick = { 0, 500000 };
+                    nanosleep(&tick, NULL);
+                }
+            }
+            ck("  the next expiry is queued behind it", queued, 1);
+            ck("  and timer_getoverrun still reports the one taken",
+               (long) timer_getoverrun(t), latched);
             // Disarm before restoring the mask, or the next expiry arrives
             // unblocked and kills the test.
             memset(&its, 0, sizeof its);
             timer_settime(t, 0, &its, NULL);
+            ck("  and setting the timer forgets it", (long) timer_getoverrun(t), 0);
             timer_delete(t);
         }
         // Drop anything that slipped through while disarming.

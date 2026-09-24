@@ -1675,6 +1675,32 @@ static struct sigqueue *signal_next_deliverable_locked(struct sighand *sighand,
     return next;
 }
 
+// A POSIX timer's signal has been taken -- run as a handler, accepted by
+// sigtimedwait, read from a signalfd. That is when Linux latches the count
+// timer_getoverrun reports (posixtimer_rearm, from dequeue_signal), and it
+// reports that count until the next one is taken or the timer is set again,
+// not the one building on the signal queued behind it. Measured on 6.12: a
+// signal taken with si_overrun 19, the next expiry queued, and
+// timer_getoverrun still said 19 -- where here it had become 0 and then
+// counted up, so a handler that outlived a period, asking how many it had
+// missed, was told about the next signal instead of its own.
+//
+// Caller holds the sighand->lock the signal came off. The slot is read without
+// group->lock: nothing is followed through it, and a timer deleted or made in
+// between costs at most a count on a slot that is about to be reset.
+static void signal_timer_taken(struct task *task, const struct siginfo_ *info) {
+    if (info->code != SI_TIMER_ || task->group == NULL)
+        return;
+    int_t id = info->timer.timer;
+    if (id < 0 || id >= TIMERS_MAX)
+        return;
+    struct posix_timer *pt = &task->group->posix_timers[id];
+    // setitimer's signals carry SI_TIMER here too, as timer 0.
+    if (pt->timer == NULL || pt->signal != info->sig)
+        return;
+    __atomic_store_n(&pt->last_overrun, info->timer.overrun, __ATOMIC_RELAXED);
+}
+
 // Take the next of the signals in `mask` off `task`'s queues, as sigtimedwait
 // and signalfd do: steps 2 and 3 above, which is Linux's dequeue_signal. Step
 // 1 is get_signal's alone. Both queues: a signalfd or sigwaitinfo caller must
@@ -1691,6 +1717,7 @@ static bool signal_take_next_locked(struct task *task, sigset_t_ mask, struct si
     if (best == NULL)
         return false;
     *info_out = best->info;
+    signal_timer_taken(task, info_out);
     int sig = best->info.sig;
     list_remove(&best->queue);
     if (best_is_group) {
@@ -3382,6 +3409,7 @@ void receive_signals(void) {
 
         int sig = best->info.sig;
         struct siginfo_ info = best->info;
+        signal_timer_taken(current, &info);
         list_remove(&best->queue);
         if (best_is_group) {
             if (!signal_list_still_has_locked(&sighand->queue, sig))

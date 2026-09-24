@@ -1687,12 +1687,9 @@ static void posix_timer_callback(struct posix_timer *timer) {
     if (thread != NULL) {
         // If the last signal from this timer is still queued, this expiration
         // is an overrun, not a second signal. See
-        // signal_timer_count_overrun.
-        int overrun = signal_timer_count_overrun(thread, timer->signal, timer->timer_id);
-        if (overrun >= 0) {
-            timer->last_overrun = overrun;
-        } else {
-            timer->last_overrun = 0;
+        // signal_timer_count_overrun. What timer_getoverrun reports is left
+        // alone: it changes when a signal is taken (signal_timer_taken).
+        if (signal_timer_count_overrun(thread, timer->signal, timer->timer_id) < 0) {
             // SIGEV_THREAD_ID to its thread; SIGEV_SIGNAL to the process,
             // where any thread that can take it does (Linux's
             // send_sigqueue with PIDTYPE_TGID).
@@ -1840,6 +1837,8 @@ static int_t sys_timer_create_guest_abi(dword_t clock, guest_addr_t sigevent_add
     timer->timer = timer_new(real_clockid, (timer_callback_t) posix_timer_callback, timer);
     timer->clock = clock;
     timer->abstime = false;
+    // Not whatever the slot's last timer had latched.
+    timer->last_overrun = 0;
     // CLOCK_THREAD_CPUTIME_ID belongs to ONE thread, and the timer runs on its
     // own -- which is asleep, so its thread clock never advances and the
     // deadline never arrives. The timer was created and armed and reported
@@ -1979,6 +1978,9 @@ static int_t sys_timer_settime_common(dword_t timer_id, int_t flags, guest_addr_
     }
     // Remembered because the arming itself is not: see posix_timer.abstime.
     timer->abstime = (flags & TIMER_ABSTIME_) != 0;
+    // Setting a timer, armed or disarmed, forgets the count timer_getoverrun
+    // latched (Linux's common_timer_set; 0 after either, measured on 6.12).
+    timer->last_overrun = 0;
     int err = timer_set(timer->timer, spec, &old_spec);
     unlock(&current->group->lock);
     if (err < 0)
@@ -2491,9 +2493,9 @@ void group_timers_ckpt_describe(struct tgroup *group, struct group_timers_ckpt *
         timer_ckpt_describe_timer(posix_timers[i],
                                   timer_ckpt_clock_for(posix[i].clock, posix[i].abstime != 0),
                                   &posix[i].t);
-        // Again, now that no expiry is in flight: the callback counts an
-        // overrun here as it counts it onto the signal still queued.
-        posix[i].last_overrun = group->posix_timers[posix[i].timer_id].last_overrun;
+        // last_overrun needs no second look after the expiries in flight: an
+        // expiry counts onto the signal still queued, which the image carries,
+        // and only a signal being taken changes it (signal_timer_taken).
     }
 }
 

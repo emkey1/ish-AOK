@@ -746,12 +746,12 @@ struct posix_timer {
     pid_t_ thread_pid;
     int_t signal;
     union sigval_ sig_value;
-    // Overruns counted onto the signal currently queued for this timer, which
-    // is what timer_getoverrun reports. Reset when a fresh signal is queued,
-    // so a handler that reads it sees the count for the expiration it was
-    // just woken for -- the call's only real use. (Linux latches the value at
-    // delivery rather than at queueing, so the two differ only for a caller
-    // that asks while its own timer signal is still blocked and pending.)
+    // What timer_getoverrun reports: the si_overrun of this timer's signal
+    // most recently TAKEN (signal_timer_taken in kernel/signal.c), 0 until one
+    // is and again after every timer_settime -- where Linux latches it. It
+    // used to follow the signal still queued, reset to 0 when a fresh one was
+    // queued, so a handler that outlived a period asked for its own count and
+    // got 0, or the count building behind it.
     int_t last_overrun;
 };
 
