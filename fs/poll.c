@@ -676,6 +676,18 @@ void poll_wakeup_trylock(struct fd *fd, int events) {
     unlock(&fd->poll_lock);
 }
 
+// Whether a host wait of `wait` (NULL: none) should be cut to `cap`. Not when
+// it is the guest's deadline and only just longer: a capped wait is not kept
+// precise (real_poll_wait) and may end a few milliseconds late, which from
+// just short of the deadline would carry the guest past it. So a deadline up
+// to 10ms beyond the cap is waited for in one, precisely.
+static bool poll_timeout_exceeds_cap(const struct timespec *wait, struct timespec cap) {
+    if (wait == NULL)
+        return true;
+    struct timespec margin = {.tv_sec = 0, .tv_nsec = 10 * 1000 * 1000L};
+    return timespec_positive(timespec_subtract(*wait, timespec_add(cap, margin)));
+}
+
 int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struct timespec *timeout) {
     lock(&poll_->lock, 0);
 
@@ -851,14 +863,9 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
                         }
                         wait_timeout = &remaining_timeout;
                     }
-                    if (needs_periodic_host_rescan) {
-                        if (wait_timeout == NULL ||
-                                wait_timeout->tv_sec > periodic_rescan_timeout.tv_sec ||
-                                (wait_timeout->tv_sec == periodic_rescan_timeout.tv_sec &&
-                                 wait_timeout->tv_nsec > periodic_rescan_timeout.tv_nsec)) {
-                            wait_timeout = &periodic_rescan_timeout;
-                        }
-                    }
+                    if (needs_periodic_host_rescan &&
+                            poll_timeout_exceeds_cap(wait_timeout, periodic_rescan_timeout))
+                        wait_timeout = &periodic_rescan_timeout;
                     // Never block on the host without a bound. An unbounded
                     // kevent/epoll_wait here has exactly two ways out -- the
                     // notify pipe and a wake signal -- and both can be missed,
@@ -907,10 +914,7 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
                     // case already pays, and the guest cannot tell: the loop
                     // recomputes the remaining deadline at the top and only
                     // reports a timeout once it has really passed.
-                    if (wait_timeout == NULL ||
-                            wait_timeout->tv_sec > wake_recheck_timeout.tv_sec ||
-                            (wait_timeout->tv_sec == wake_recheck_timeout.tv_sec &&
-                             wait_timeout->tv_nsec > wake_recheck_timeout.tv_nsec)) {
+                    if (poll_timeout_exceeds_cap(wait_timeout, wake_recheck_timeout)) {
                         wait_timeout = &wake_recheck_timeout;
                         atomic_fetch_add_explicit(&poll_capped_waits, 1,
                                 memory_order_relaxed);
@@ -1407,6 +1411,11 @@ static int real_poll_wait(struct real_poll *real, struct real_poll_event *events
         // Wait the ordinary way, or poll_wait would come straight back here.
         return kevent(real->fd, NULL, 0, (struct kevent *) events, max, timeout);
     }
+    // The wait is over, and what it returned has left the kqueue: an
+    // edge-triggered event will not be reported again. poll_wait ends the
+    // poke's unwind (sigunwind_start) once this returns, but a poke that
+    // unwound the syscall below would throw these events away, so end it now.
+    sigunwind_end();
     if (ident != 0 && !fired && !refused) {
         EV_SET(&timer, ident, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
         kevent(real->fd, &timer, 1, NULL, 0, NULL);

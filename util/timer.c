@@ -277,7 +277,18 @@ int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *ol
         // setitimer(2) -> itimer_set -> timer_set -> abort -- with no assert
         // frame, which is what calling into libpthread with a bad handle looks
         // like.
-        int err = pthread_create(&timer->thread, NULL, timer_thread, timer);
+        // Above the guest's own threads (USER_INITIATED, kernel/task.c),
+        // for the same reason as util/sync.c's deadline_wake_thread: made
+        // without attributes it runs at DEFAULT, and guest threads keeping a
+        // device busy would make every expiry late. An expiry is a signal
+        // queued or a count raised, microseconds of work.
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+#if __APPLE__
+        pthread_attr_set_qos_class_np(&attr, QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+        int err = pthread_create(&timer->thread, &attr, timer_thread, timer);
+        pthread_attr_destroy(&attr);
         if (err == 0)
             pthread_detach(timer->thread);
         pthread_sigmask(SIG_SETMASK, &oldmask, NULL);

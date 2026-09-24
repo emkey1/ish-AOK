@@ -475,6 +475,12 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
         list_add_tail(&futex->queue, &w->queue);
         for (;;) {
             struct timespec remaining = wait_slice;
+            // Whether this slice ends at the guest's deadline, or is only one
+            // of these 50ms caps -- which is what every untimed FUTEX_WAIT,
+            // a parked thread pool's for instance, is made of. A cap may end
+            // late; a precise wake twenty times a second for every idle
+            // thread would cost the device its timer coalescing for nothing.
+            bool capped = true;
             if (timeout != NULL) {
                 remaining = timespec_subtract(deadline, timespec_now(CLOCK_MONOTONIC));
                 if (!timespec_positive(remaining)) {
@@ -487,6 +493,10 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
                         futex_trace_dump(uaddr);
                     break;
                 }
+                // A cap may run late by up to 10ms, so it has to leave more
+                // than another slice before the deadline; the last 100ms are
+                // waited precisely (as kernel/time.c's sleep does).
+                capped = remaining.tv_sec > 0 || remaining.tv_nsec > 2 * wait_slice.tv_nsec;
                 if (remaining.tv_sec > wait_slice.tv_sec ||
                         (remaining.tv_sec == wait_slice.tv_sec &&
                          remaining.tv_nsec > wait_slice.tv_nsec))
@@ -497,7 +507,8 @@ static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct
                 current->waiting_interrupt_flag = &w->interrupted;
                 unlock(&current->waiting_cond_lock);
                 should_mark_wait_interrupted = true;
-                err = wait_for(&w->cond, &futex_lock, &remaining);
+                err = capped ? wait_for_capped(&w->cond, &futex_lock, &remaining)
+                    : wait_for(&w->cond, &futex_lock, &remaining);
                 should_mark_wait_interrupted = false;
             }
             if (__atomic_load_n(&w->interrupted, __ATOMIC_ACQUIRE) || futex_wait_has_pending_signal()) {

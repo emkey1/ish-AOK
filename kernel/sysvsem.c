@@ -301,6 +301,14 @@ static int_t semop_common(int_t semid, guest_addr_t sops_addr, uint_t nsops,
                 err = _ETIMEDOUT;
             } else {
                 err = wait_for_blocked(&set->cond, &sem_lock, &remaining);
+                // Out of time -- but the semaphores may have changed just
+                // before it ran out, with this waiter getting the lock back
+                // after. Linux's semop completes a sleeper's operation for it
+                // as it changes the values, so that is a success there. Go
+                // round and look once more: the check above says EAGAIN if
+                // it still cannot proceed.
+                if (err == _ETIMEDOUT)
+                    err = 0;
             }
         } else {
             err = wait_for_blocked(&set->cond, &sem_lock, NULL);

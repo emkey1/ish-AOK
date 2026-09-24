@@ -128,8 +128,16 @@ static void deadline_wake_init(void) {
     sigset_t all, old;
     sigfillset(&all);
     pthread_sigmask(SIG_BLOCK, &all, &old);
+    // Above the guest's own threads (USER_INITIATED, kernel/task.c): a
+    // thread made without attributes gets DEFAULT, below them, and a device
+    // they keep busy would hold its wakes back to the backstop's lateness.
+    // It does a broadcast per wake and nothing else.
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_set_qos_class_np(&attr, QOS_CLASS_USER_INTERACTIVE, 0);
     pthread_t thread;
-    int err = pthread_create(&thread, NULL, deadline_wake_thread, (void *) (intptr_t) kq);
+    int err = pthread_create(&thread, &attr, deadline_wake_thread, (void *) (intptr_t) kq);
+    pthread_attr_destroy(&attr);
     pthread_sigmask(SIG_SETMASK, &old, NULL);
     if (err != 0) {
         close(kq);
@@ -318,7 +326,10 @@ static bool wait_flag_leak_enabled(void) {
     return enabled == 1;
 }
 
-int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout) {
+// `guest_deadline`: the timeout is a deadline the guest asked for, and worth
+// ending on time. A caller that caps its own waits passes false for the caps.
+static int wait_for_common(cond_t *cond, lock_t *lock, struct timespec *timeout,
+        bool guest_deadline) {
     if (consume_wait_interrupted() || is_signal_pending(lock)) {
         // The caller published the address of one of its own STACK locals in
         // current->waiting_interrupt_flag just before calling (kernel/futex.c
@@ -399,15 +410,18 @@ int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout) {
     if (timeout != NULL) {
         struct timespec left = timespec_positive(*timeout) ? *timeout : (struct timespec) {0};
         deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), left);
+        // Up to a tenth over the slice is waited in one: a slice that is not
+        // the last is not kept precise, and may end 10ms late, so it has to
+        // leave more than that before the deadline.
         if (left.tv_sec < slice.tv_sec ||
-                (left.tv_sec == slice.tv_sec && left.tv_nsec <= slice.tv_nsec)) {
+                (left.tv_sec == slice.tv_sec && left.tv_nsec <= 100000000)) {
             slice = left;
             last_slice = true;
         }
     }
     // Only the last slice ends at the caller's deadline; the others are this
     // function's own caps, and nobody minds when they end.
-    int err = wait_for_internal(cond, lock, &slice, true, last_slice);
+    int err = wait_for_internal(cond, lock, &slice, true, guest_deadline && last_slice);
     if (timeout != NULL) {
         struct timespec left = timespec_subtract(deadline, timespec_now(CLOCK_MONOTONIC));
         *timeout = timespec_positive(left) ? left : (struct timespec) {0};
@@ -421,6 +435,14 @@ int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout) {
     if (checkpoint_freeze_pending())
         return _EINTR;
     return 0;
+}
+
+int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout) {
+    return wait_for_common(cond, lock, timeout, true);
+}
+
+int wait_for_capped(cond_t *cond, lock_t *lock, struct timespec *timeout) {
+    return wait_for_common(cond, lock, timeout, false);
 }
 
 static int wait_for_internal(cond_t *cond, lock_t *lock, struct timespec *timeout,

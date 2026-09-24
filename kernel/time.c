@@ -375,10 +375,19 @@ static int host_sleep_interruptible(struct timespec req, struct timespec *rem) {
         // reports having never yielded.
         if (current != NULL)
             current->nvcsw++;
-        // With Linux's slack and no more: a plain nanosleep woke a quarter of
-        // the slice late on Darwin, so every guest sleep of 20ms or more ran
-        // up to 5ms long (see host_nanosleep_precise).
-        TASK_MAY_BLOCK { res = host_nanosleep_precise(slice, HOST_TIMER_SLACK_NS); }
+        // The end of the sleep with Linux's slack and no more: a plain
+        // nanosleep woke a quarter of the slice late on Darwin, so every guest
+        // sleep of 20ms or more ran up to 5ms long (see
+        // host_nanosleep_precise). The slices before it are only there to look
+        // for signals, and may be as late as Darwin likes -- the deadline is
+        // re-read after each -- so long as the last is left to a precise one:
+        // a coalesced 50ms slice can run up to 10ms over, so the precise ones
+        // take the last 100ms.
+        bool closing = left.tv_sec == 0 && left.tv_nsec <= 2 * SLEEP_SLICE_NS;
+        TASK_MAY_BLOCK {
+            res = closing ? host_nanosleep_precise(slice, HOST_TIMER_SLACK_NS)
+                : nanosleep(&slice, NULL);
+        }
         if (res < 0 && errno != EINTR) {
             // Only EINVAL is possible (a bad slice would be our own bug), but
             // don't silently spin on it.

@@ -82,6 +82,10 @@ void cond_destroy(cond_t *cond);
 // _ETIMEDOUT if waiting stopped because the timout expired, 0 otherwise.
 // Will never return _ETIMEDOUT if timeout is NULL.
 int must_check wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout);
+// wait_for, for a timeout that is the caller's own cap on a longer or endless
+// wait rather than a deadline the guest asked for: it may end late, and it
+// costs the host nothing to let it (see deadline_wake in sync.c).
+int must_check wait_for_capped(cond_t *cond, lock_t *lock, struct timespec *timeout);
 // Same as wait_for, except it will never return _EINTR
 int wait_for_ignore_signals(cond_t *cond, lock_t *lock, struct timespec *timeout);
 // Wake up all waiters.
@@ -147,6 +151,10 @@ void cond_destroy(cond_t *cond);
 // relative and is UPDATED to the time left, so waiting again with the same
 // pointer keeps the original deadline. See sync.c for why it slices.
 int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout);
+// wait_for, for a timeout that is the caller's own cap on a longer or endless
+// wait rather than a deadline the guest asked for: it may end late, and it
+// costs the host nothing to let it (see deadline_wake in sync.c).
+int wait_for_capped(cond_t *cond, lock_t *lock, struct timespec *timeout);
 // wait_for for a syscall the guest is blocked in (msgrcv, semop, io_getevents,
 // a FUSE request): the task reads as sleeping for the wait, and a bare barrier
 // poke is a spurious wakeup (0) rather than _EINTR. See sync.c.

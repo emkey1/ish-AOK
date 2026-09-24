@@ -271,6 +271,10 @@ int main(int argc, char **argv) {
                 }
             }
             ck("  the next expiry is queued behind it", queued, 1);
+            // A few more periods, so the signal waiting has overruns of its
+            // own: the count AOK reported, and never 0 or the one taken.
+            struct timespec periods = { 0, 25000000 };
+            nanosleep(&periods, NULL);
             ck("  and timer_getoverrun still reports the one taken",
                (long) timer_getoverrun(t), latched);
             // Disarm before restoring the mask, or the next expiry arrives

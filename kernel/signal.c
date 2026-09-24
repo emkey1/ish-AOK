@@ -1686,8 +1686,12 @@ static struct sigqueue *signal_next_deliverable_locked(struct sighand *sighand,
 // missed, was told about the next signal instead of its own.
 //
 // Caller holds the sighand->lock the signal came off. The slot is read without
-// group->lock: nothing is followed through it, and a timer deleted or made in
-// between costs at most a count on a slot that is about to be reset.
+// group->lock; nothing is followed through it. What this cannot tell apart,
+// and Linux can (it checks which arming a signal came from), is a signal
+// queued before the timer was set again, or by a deleted timer whose slot has
+// been reused: taking one latches its old count, where Linux leaves 0. Nor an
+// itimer's SIGALRM, which carries SI_TIMER here as timer 0 (Linux sends
+// SI_KERNEL).
 static void signal_timer_taken(struct task *task, const struct siginfo_ *info) {
     if (info->code != SI_TIMER_ || task->group == NULL)
         return;
