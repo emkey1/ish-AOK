@@ -93,7 +93,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 17  // 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 18  // 18: a queued signal says whether it is a POSIX timer's own; 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -372,7 +372,7 @@ struct ckpt_task {
     int64_t sleep_restart_value_ns;
     uint32_t poll_restart_valid, restart_pending;        // bit 0 NOHAND, bit 1 SYS
     int64_t poll_restart_value_ns;
-    // Signals sent and not yet taken, each a struct siginfo_ after the
+    // Signals sent and not yet taken, each a struct ckpt_sigqueue after the
     // descriptors: this task's own, and -- in the record of the task that
     // holds its signal handlers for the others (sighand_owner 0) -- the
     // process's. The pending sets are rebuilt from them. `pending` alone came
@@ -2121,6 +2121,17 @@ static struct ckpt_shares ckpt_shares_of(struct task **tasks, unsigned index) {
     return sh;
 }
 
+// One queued signal in the image: its siginfo, and whether a POSIX timer's
+// expiry queued it as the timer's own (struct sigqueue's from_timer). That is
+// not in the siginfo -- si_code SI_TIMER is what rt_sigqueueinfo can claim --
+// and without it a restored timer's signal was just a signal: the timer's
+// next expiry queued a second one rather than counting an overrun on it.
+struct ckpt_sigqueue {
+    struct siginfo_ info;
+    uint32_t from_timer;
+    uint32_t reserved;
+};
+
 // How many queued signals one queue may bring back: Linux's own default
 // RLIMIT_SIGPENDING is in the tens of thousands, and an image claiming more
 // than this is not one this build wrote.
@@ -2131,8 +2142,8 @@ static struct ckpt_shares ckpt_shares_of(struct task **tasks, unsigned index) {
 // still runs during the freeze -- is in one reading of both queues or in
 // neither. malloc'd arrays, NULL when empty.
 static int ckpt_signals_snapshot(struct task *task, bool with_group,
-        struct siginfo_ **own, uint32_t *n_own,
-        struct siginfo_ **group, uint32_t *n_group) {
+        struct ckpt_sigqueue **own, uint32_t *n_own,
+        struct ckpt_sigqueue **group, uint32_t *n_group) {
     struct sighand *sighand = task->sighand;
     *own = *group = NULL;
     *n_own = *n_group = 0;
@@ -2147,8 +2158,8 @@ static int ckpt_signals_snapshot(struct task *task, bool with_group,
                     task->pid, own_count > group_count ? own_count : group_count);
         return _EOPNOTSUPP;
     }
-    struct siginfo_ *o = own_count != 0 ? malloc(own_count * sizeof(*o)) : NULL;
-    struct siginfo_ *g = group_count != 0 ? malloc(group_count * sizeof(*g)) : NULL;
+    struct ckpt_sigqueue *o = own_count != 0 ? malloc(own_count * sizeof(*o)) : NULL;
+    struct ckpt_sigqueue *g = group_count != 0 ? malloc(group_count * sizeof(*g)) : NULL;
     if ((own_count != 0 && o == NULL) || (group_count != 0 && g == NULL)) {
         unlock(&sighand->lock);
         free(o);
@@ -2158,11 +2169,11 @@ static int ckpt_signals_snapshot(struct task *task, bool with_group,
     struct sigqueue *q;
     unsigned n = 0;
     list_for_each_entry(&task->queue, q, queue)
-        o[n++] = q->info;
+        o[n++] = (struct ckpt_sigqueue) {.info = q->info, .from_timer = q->from_timer};
     n = 0;
     if (with_group)
         list_for_each_entry(&sighand->queue, q, queue)
-            g[n++] = q->info;
+            g[n++] = (struct ckpt_sigqueue) {.info = q->info, .from_timer = q->from_timer};
     unlock(&sighand->lock);
     *own = o;
     *n_own = (uint32_t) own_count;
@@ -2210,7 +2221,7 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
     struct mem *mem = NULL;
     char *native_env = NULL;
     struct posix_timer_ckpt *posix = NULL;
-    struct siginfo_ *own_signals = NULL, *group_signals = NULL;
+    struct ckpt_sigqueue *own_signals = NULL, *group_signals = NULL;
 
     bool departed = ckpt_task_departed(task);
     if (task->zombie || departed) {
@@ -4009,18 +4020,19 @@ static void ckpt_join_terminal(struct ckpt_stdio_set *set) {
 // Put queued signals back on a queue, oldest first, as they were, and return
 // the pending set that goes with them: a signal is pending exactly when one of
 // its is queued, so a bit is never set with nothing behind it.
-static sigset_t_ ckpt_requeue_signals(struct list *queue, const struct siginfo_ *infos,
+static sigset_t_ ckpt_requeue_signals(struct list *queue, const struct ckpt_sigqueue *saved,
         uint32_t n) {
     sigset_t_ pending = 0;
     for (uint32_t i = 0; i < n; i++) {
-        if (infos[i].sig < 1 || infos[i].sig >= NUM_SIGS)
+        if (saved[i].info.sig < 1 || saved[i].info.sig >= NUM_SIGS)
             continue;
         struct sigqueue *q = malloc(sizeof(*q));
         if (q == NULL)
             break;
-        q->info = infos[i];
+        q->info = saved[i].info;
+        q->from_timer = saved[i].from_timer != 0;
         list_add_tail(queue, &q->queue);
-        sigset_add(&pending, infos[i].sig);
+        sigset_add(&pending, saved[i].info.sig);
     }
     return pending;
 }
@@ -4033,7 +4045,7 @@ static int ckpt_restore_signals_and_timers(FILE *f, const struct ckpt_task *rec,
     int err = 0;
     if (rec->n_sigqueue > CKPT_SIGQUEUE_MAX || rec->n_group_sigqueue > CKPT_SIGQUEUE_MAX)
         return _EINVAL;
-    struct siginfo_ *own = NULL, *group = NULL;
+    struct ckpt_sigqueue *own = NULL, *group = NULL;
     if (rec->n_sigqueue != 0 &&
             (own = malloc(rec->n_sigqueue * sizeof(*own))) == NULL)
         return _ENOMEM;

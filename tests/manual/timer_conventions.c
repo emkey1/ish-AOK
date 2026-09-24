@@ -43,6 +43,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/signalfd.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
 #include <sys/timerfd.h>
@@ -133,6 +134,85 @@ static void ck_range(const char *label, long got, long lo, long hi) {
     if (got < lo || got > hi)
         failf(label, (uint64_t) got, 0, 0, (uint64_t) lo, (uint64_t) hi, 0);
     test_logf("  %-58s got=%-10ld want=%ld..%ld\n", label, got, lo, hi);
+}
+
+// Arm a POSIX timer once for 20ms and wait until it has expired, and its
+// signal, sent after that, has had time to arrive.
+static void expire_once(timer_t t) {
+    struct itimerspec its;
+    memset(&its, 0, sizeof its);
+    its.it_value.tv_nsec = 20000000;
+    timer_settime(t, 0, &its, NULL);
+    double start = clock_secs(CLOCK_MONOTONIC);
+    do {
+        struct timespec tick = { 0, 5000000 };
+        nanosleep(&tick, NULL);
+        timer_gettime(t, &its);
+    } while ((its.it_value.tv_sec || its.it_value.tv_nsec) &&
+             clock_secs(CLOCK_MONOTONIC) - start < 5.0);
+    struct timespec settle = { 0, 50000000 };
+    nanosleep(&settle, NULL);
+}
+
+// The same for ITIMER_REAL.
+static void itimer_expire_once(void) {
+    struct itimerval iv;
+    memset(&iv, 0, sizeof iv);
+    iv.it_value.tv_usec = 20000;
+    setitimer(ITIMER_REAL, &iv, NULL);
+    double start = clock_secs(CLOCK_MONOTONIC);
+    do {
+        struct timespec tick = { 0, 5000000 };
+        nanosleep(&tick, NULL);
+        getitimer(ITIMER_REAL, &iv);
+    } while ((iv.it_value.tv_sec || iv.it_value.tv_usec) &&
+             clock_secs(CLOCK_MONOTONIC) - start < 5.0);
+    struct timespec settle = { 0, 50000000 };
+    nanosleep(&settle, NULL);
+}
+
+// Take every pending SIGALRM, which the caller blocks: how many there were,
+// and the first two.
+static int take_alarms(siginfo_t got[2]) {
+    sigset_t alrm;
+    sigemptyset(&alrm);
+    sigaddset(&alrm, SIGALRM);
+    struct timespec zero = { 0, 0 };
+    siginfo_t si;
+    int n = 0;
+    memset(got, 0, 2 * sizeof *got);
+    while (sigtimedwait(&alrm, &si, &zero) == SIGALRM && n < 16) {
+        if (n < 2)
+            got[n] = si;
+        n++;
+    }
+    return n;
+}
+
+// A SIGALRM handler's record of what it was given, in order.
+static volatile int alarm_codes[4];
+static volatile int alarm_runs;
+
+static void record_alarm(int sig, siginfo_t *si, void *uc) {
+    (void) sig;
+    (void) uc;
+    if (alarm_runs < 4)
+        alarm_codes[alarm_runs] = si->si_code;
+    alarm_runs++;
+}
+
+// rt_sigqueueinfo(2) to this process: SIGALRM, claiming to be POSIX timer
+// `id`'s signal. Through the system call, since sigqueue() sets its own
+// si_code.
+static long forge_timer_alarm(int id) {
+    siginfo_t si;
+    memset(&si, 0, sizeof si);
+    si.si_signo = SIGALRM;
+    si.si_code = SI_TIMER;
+    si.si_timerid = id;
+    si.si_overrun = 0;
+    si.si_value.sival_int = id;
+    return syscall(SYS_rt_sigqueueinfo, getpid(), SIGALRM, &si);
 }
 
 int main(int argc, char **argv) {
@@ -423,11 +503,136 @@ int main(int argc, char **argv) {
             got = sigtimedwait(&alrm, &si, &zero);
             ck("  the SIGALRM taken first", got, SIGALRM);
             ck("  is the itimer's, SI_KERNEL", got > 0 ? si.si_code : 0, SI_KERNEL);
-            // Linux queues timer 0's own signal behind it, as a POSIX timer's
-            // signal always is; whatever is there, drain it.
-            while (sigtimedwait(&alrm, &si, &zero) > 0) { }
+            // Linux queues timer 0's own signal behind it: a POSIX timer's
+            // signal is queued whatever else of its number is pending
+            // (send_sigqueue has no legacy_queue check); only its OWN signal,
+            // still queued, takes an overrun instead. AOK dropped it, as it
+            // drops a second instance of any standard signal.
+            got = sigtimedwait(&alrm, &si, &zero);
+            ck("  the SIGALRM taken second", got, SIGALRM);
+            ck("  is timer 0's, SI_TIMER", got > 0 ? si.si_code : 0, SI_TIMER);
+            ck("  naming timer 0", got > 0 ? (long) si.si_timerid : -1, (long) (intptr_t) t);
+            ck("  with no overrun", got > 0 ? (long) si.si_overrun : -1, 0);
+            ck("  and no third", sigtimedwait(&alrm, &si, &zero), -1);
             ck("  and timer 0 counted no overrun", (long) timer_getoverrun(t), 0);
             timer_delete(t);
+        }
+
+        // The rest of that rule, SIGALRM each time, with nothing else pending.
+        // Only a POSIX timer's own signal is queued whatever is pending: any
+        // other standard signal is dropped behind one of its number
+        // (legacy_queue) -- an itimer's, and one that rt_sigqueueinfo sends
+        // CLAIMING to be a timer's (si_code SI_TIMER), which is also never
+        // mistaken for the timer's own and given its overruns.
+        timer_t t1, t2;
+        siginfo_t two[2];
+        int n;
+        if (timer_create(CLOCK_MONOTONIC, NULL, &t1) != 0 ||
+                timer_create(CLOCK_MONOTONIC, NULL, &t2) != 0) {
+            failf("timer_create(CLOCK_MONOTONIC, NULL) x2", (uint64_t) errno, 0, 0, 0, 0, 0);
+        } else {
+            long id1 = (long) (intptr_t) t1, id2 = (long) (intptr_t) t2;
+            take_alarms(two);
+
+            // A timer's, then an itimer's: the itimer's is dropped.
+            expire_once(t1);
+            itimer_expire_once();
+            n = take_alarms(two);
+            ck("a timer's SIGALRM, then an itimer's: signals", n, 1);
+            ck("  the timer's", two[0].si_code, SI_TIMER);
+
+            // kill(), then a timer's: the timer's is queued behind it.
+            kill(getpid(), SIGALRM);
+            expire_once(t1);
+            n = take_alarms(two);
+            ck("kill(SIGALRM), then a timer's: signals", n, 2);
+            ck("  kill()'s first", two[0].si_code, SI_USER);
+            ck("  then the timer's", two[1].si_code, SI_TIMER);
+            ck("  naming it", (long) two[1].si_timerid, id1);
+
+            // Two timers on SIGALRM: each queues its own.
+            expire_once(t1);
+            expire_once(t2);
+            n = take_alarms(two);
+            ck("two timers' SIGALRMs: signals", n, 2);
+            ck("  the first timer's", two[0].si_code == SI_TIMER &&
+               (long) two[0].si_timerid == id1 && two[0].si_overrun == 0, 1);
+            ck("  then the second's", two[1].si_code == SI_TIMER &&
+               (long) two[1].si_timerid == id2 && two[1].si_overrun == 0, 1);
+
+            // rt_sigqueueinfo claiming SI_TIMER, behind kill()'s: dropped.
+            kill(getpid(), SIGALRM);
+            ck("rt_sigqueueinfo(SIGALRM, SI_TIMER) behind kill()'s",
+               forge_timer_alarm((int) id1), 0);
+            n = take_alarms(two);
+            ck("  signals", n, 1);
+            ck("  kill()'s", two[0].si_code, SI_USER);
+
+            // ...and ahead of the timer it names: not its signal, so the
+            // timer's expiry is queued, not counted onto it.
+            ck("rt_sigqueueinfo(SIGALRM, SI_TIMER) naming a timer",
+               forge_timer_alarm((int) id1), 0);
+            expire_once(t1);
+            n = take_alarms(two);
+            ck("  then the timer expires: signals", n, 2);
+            ck("  the forged one, no overrun counted on it",
+               two[0].si_code == SI_TIMER && two[0].si_overrun == 0, 1);
+            ck("  then the timer's own", two[1].si_code == SI_TIMER &&
+               (long) two[1].si_timerid == id1 && two[1].si_overrun == 0, 1);
+
+            // Two of one standard signal, taken each way a signal is taken.
+            // The pending bit stays while one is left.
+            sigset_t pend;
+            itimer_expire_once();
+            expire_once(t1);
+            got = sigtimedwait(&alrm, &si, &zero);
+            ck("two queued: sigtimedwait takes the itimer's",
+               got == SIGALRM && si.si_code == SI_KERNEL, 1);
+            sigpending(&pend);
+            ck("  and SIGALRM is still pending", sigismember(&pend, SIGALRM), 1);
+            got = sigtimedwait(&alrm, &si, &zero);
+            ck("  then the timer's", got == SIGALRM && si.si_code == SI_TIMER, 1);
+            sigpending(&pend);
+            ck("  and then it is not", sigismember(&pend, SIGALRM), 0);
+
+            // A signalfd reads both, in one read.
+            int sfd = signalfd(-1, &alrm, SFD_NONBLOCK);
+            if (sfd < 0) {
+                failf("signalfd(SIGALRM)", (uint64_t) errno, 0, 0, 0, 0, 0);
+            } else {
+                itimer_expire_once();
+                expire_once(t1);
+                struct signalfd_siginfo ssi[3];
+                memset(ssi, 0, sizeof ssi);
+                ssize_t r = read(sfd, ssi, sizeof ssi);
+                ck("two queued: a signalfd read returns", r, 2 * (long) sizeof ssi[0]);
+                ck("  the itimer's, then the timer's",
+                   (int) ssi[0].ssi_code == SI_KERNEL && (int) ssi[1].ssi_code == SI_TIMER, 1);
+                sigpending(&pend);
+                ck("  and SIGALRM is no longer pending", sigismember(&pend, SIGALRM), 0);
+                close(sfd);
+            }
+
+            // A handler runs for each, when SIGALRM is let through.
+            struct sigaction sa, oldsa;
+            memset(&sa, 0, sizeof sa);
+            sa.sa_sigaction = record_alarm;
+            sa.sa_flags = SA_SIGINFO;
+            sigaction(SIGALRM, &sa, &oldsa);
+            itimer_expire_once();
+            expire_once(t1);
+            alarm_runs = 0;
+            sigprocmask(SIG_UNBLOCK, &alrm, NULL);
+            sigprocmask(SIG_BLOCK, &alrm, NULL);
+            ck("two queued: the handler runs", alarm_runs, 2);
+            ck("  for the itimer's, then the timer's",
+               alarm_codes[0] == SI_KERNEL && alarm_codes[1] == SI_TIMER, 1);
+            sigpending(&pend);
+            ck("  and SIGALRM is no longer pending", sigismember(&pend, SIGALRM), 0);
+            sigaction(SIGALRM, &oldsa, NULL);
+
+            timer_delete(t1);
+            timer_delete(t2);
         }
 
         // Timer 0 latches its overruns as its signal is taken; taking an

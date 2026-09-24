@@ -544,7 +544,8 @@ int main(int argc, char **argv) {
     sigset_t all, collect;
     sigemptyset(&all);
     int sigs[] = {SIG_MONO, SIG_REAL_REL, SIG_REAL_ABS, SIG_BOOT, SIG_PERIODIC,
-                  SIG_OVERRUN, SIG_TCPU, SIG_NEVER, SIGALRM, SIGPROF, SIGUSR2, SIGURG};
+                  SIG_OVERRUN, SIG_TCPU, SIG_NEVER, SIGALRM, SIGPROF, SIGUSR2, SIGURG,
+                  SIGPWR};
     for (unsigned i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++)
         sigaddset(&all, sigs[i]);
     sigprocmask(SIG_BLOCK, &all, NULL);
@@ -552,6 +553,7 @@ int main(int argc, char **argv) {
     // pending, to be looked for after the restore.
     collect = all;
     sigdelset(&collect, SIG_OVERRUN);
+    sigdelset(&collect, SIGPWR);
     sigdelset(&collect, SIGUSR2);
     sigdelset(&collect, SIGURG);
 
@@ -637,6 +639,12 @@ int main(int argc, char **argv) {
     union sigval v = {.sival_int = 0xC0FFEE};
     sigqueue(getpid(), SIGUSR2, v);
     kill(getpid(), SIGURG);
+    // Two of one standard signal: kill()'s SIGPWR, and a periodic POSIX
+    // timer's queued behind it -- a timer's own signal is queued whatever is
+    // pending -- every later expiry counted on the timer's.
+    kill(getpid(), SIGPWR);
+    timer_t t_pwr = mk_timer(CLOCK_MONOTONIC, SIGEV_SIGNAL, SIGPWR, 1010);
+    arm(t_pwr, 0, OVERRUN_PERIOD, OVERRUN_PERIOD);
 
     // ---- the sleeps.
     for (int k = 0; k < SL_COUNT; k++) {
@@ -735,6 +743,7 @@ int main(int argc, char **argv) {
                     restored_m = m;
                     struct itimerspec stop = {0};
                     timer_settime(t_overrun, 0, &stop, NULL);
+                    timer_settime(t_pwr, 0, &stop, NULL);
                     r_ov_stopped = now(CLOCK_REALTIME);
                 }
             }
@@ -946,6 +955,23 @@ int main(int argc, char **argv) {
           "the timer was stopped %.3f s after the resume)",
           got, got > 0 ? si.si_code : 0, got > 0 ? si.si_timerid : -1,
           got > 0 ? si.si_overrun : 0, ov_before, r_ov_stopped - resumed_at);
+    // Both SIGPWRs, kill()'s and the timer's, and no third. The timer ran on
+    // after the restore, so its signal there had to be recognised as its own
+    // -- counted on, not queued again -- which the image has to say.
+    siginfo_t pw[3];
+    int npw = 0;
+    sigemptyset(&one);
+    sigaddset(&one, SIGPWR);
+    while (npw < 3 && sigtimedwait(&one, &pw[npw], &zero) == SIGPWR)
+        npw++;
+    check("pending-two-of-one", npw == 2 && pw[0].si_code == SI_USER &&
+                                pw[0].si_pid == getpid() && pw[1].si_code == SI_TIMER &&
+                                pw[1].si_timerid == timer_id_of(t_pwr) &&
+                                pw[1].si_value.sival_int == 1010 && pw[1].si_overrun > 0,
+          "%d SIGPWR(s): %s code %d, then %s code %d timerid %d overrun %d%s", npw,
+          npw > 0 ? "first" : "no", npw > 0 ? pw[0].si_code : 0, npw > 1 ? "second" : "no",
+          npw > 1 ? pw[1].si_code : 0, npw > 1 ? pw[1].si_timerid : -1,
+          npw > 1 ? pw[1].si_overrun : 0, npw > 2 ? ", and a third" : "");
     // SIGURG, sent with kill(): let it through. Its default is to be ignored,
     // so it goes -- and nothing is left pending that no queue holds, which
     // would end every wait at once, for ever.

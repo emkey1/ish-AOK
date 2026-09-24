@@ -1716,6 +1716,9 @@ static void exec_discard_posix_timers(void) {
         pt->timer_id = 0;
         unlock(&group->lock);
         timer_free(timer);
+        // Its signal, if queued, stays -- pending signals survive an exec --
+        // but is no longer the signal of any timer the new image makes here.
+        signal_timer_disown(group, i);
         lock(&group->lock, 0);
     }
     unlock(&group->lock);

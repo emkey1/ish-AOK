@@ -1718,11 +1718,10 @@ static void posix_timer_callback(void *data, uint64_t expirations) {
                                        expirations) < 0) {
             // SIGEV_THREAD_ID to its thread; SIGEV_SIGNAL to the process,
             // where any thread that can take it does (Linux's
-            // send_sigqueue with PIDTYPE_TGID).
-            if (timer->thread_pid != 0)
-                send_signal(thread, timer->signal, info);
-            else
-                send_signal_to_process(thread, timer->signal, info);
+            // send_sigqueue with PIDTYPE_TGID). As the timer's own signal,
+            // which is queued even behind a pending one of its number that
+            // something else sent (see deliver_signal_unlocked_locked).
+            send_timer_signal(thread, timer->thread_pid != 0, timer->signal, info);
         }
         task_ref_cnt_mod(thread, -1);
     }
@@ -2068,6 +2067,7 @@ int_t sys_timer_delete(dword_t timer_id) {
     timer_free(timer->timer);
     timer->timer = NULL;
     unlock(&current->group->lock);
+    signal_timer_disown(current->group, (int) timer_id);
     return 0;
 }
 

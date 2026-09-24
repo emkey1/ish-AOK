@@ -187,10 +187,27 @@ static const struct siginfo_ SIGINFO_NIL = {
 // onto the already-queued signal instead of queueing another; -1 if none is
 // queued.
 int signal_timer_count_overrun(struct task *task, int sig, int timer_id, uint64_t expirations);
+// A POSIX timer's expiry: queue `sig` with `info` as the timer's own signal
+// (struct sigqueue's from_timer), to `task` alone with `to_thread`
+// (SIGEV_THREAD_ID), else to its process, where any thread that can takes it.
+void send_timer_signal(struct task *task, bool to_thread, int sig, struct siginfo_ info);
+struct tgroup;
+// Timer `timer_id` of `group` was deleted: its signal, if still queued, is no
+// longer its own. See kernel/signal.c.
+void signal_timer_disown(struct tgroup *group, int timer_id);
 
 struct sigqueue {
     struct list queue;
     struct siginfo_ info;
+    // Queued by a POSIX timer's expiry (send_timer_signal), not sent: Linux's
+    // preallocated sigqueue of the timer. Queued even behind a pending
+    // instance of the same standard signal, and the only entry a later expiry
+    // of that timer counts an overrun onto (signal_timer_count_overrun) or
+    // that latches timer_getoverrun as it is taken (signal_timer_taken).
+    // si_code SI_TIMER does not say so: rt_sigqueueinfo can claim it, and
+    // Linux treats such a signal like any other. Cleared when the timer is
+    // deleted (signal_timer_disown). Carried by a checkpoint.
+    bool from_timer;
 };
 
 struct sigevent_ {

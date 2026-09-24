@@ -30,7 +30,8 @@ static dword_t current_altstack_flags(struct task *task);
 static void altstack_to_i386_user(struct task *task, struct stack_t_ *user_stack);
 static void signalfd_wakeup_task(struct task *task, int sig);
 static struct fd_ops signalfd_ops;
-static void send_signal_with_sighand(struct task *task, struct sighand *sighand, int sig, struct siginfo_ info);
+static void send_signal_with_sighand(struct task *task, struct sighand *sighand, int sig, struct siginfo_ info,
+        bool from_timer);
 
 static bool should_trace_signal_task(struct task *UNUSED(task)) {
     return false;
@@ -965,7 +966,22 @@ bool signal_stops_for_tracer(struct task *task, int sig) {
     return task->ptrace.traced && sig != SIGKILL_ && sig != task->ptrace.deliver_sig;
 }
 
-static void deliver_signal_unlocked_locked(struct task *task, struct sighand *sighand, int sig, struct siginfo_ info) {
+// Put one signal on a queue, a POSIX timer's own or not (struct sigqueue).
+// Caller holds sighand->lock.
+static void signal_enqueue_locked(struct list *queue, sigset_t_ *pending, int sig,
+        struct siginfo_ info, bool from_timer) {
+    struct sigqueue *sigqueue = malloc(sizeof(struct sigqueue));
+    sigqueue->info = info;
+    sigqueue->info.sig = sig;
+    sigqueue->from_timer = from_timer;
+    list_add_tail(queue, &sigqueue->queue);
+    sigset_add(pending, sig);
+}
+
+// `from_timer`: a POSIX timer's expiry, queued whatever else of its number is
+// pending (struct sigqueue in kernel/signal.h).
+static void deliver_signal_unlocked_locked(struct task *task, struct sighand *sighand, int sig,
+        struct siginfo_ info, bool from_timer) {
     if (task->exiting)
         return;
 
@@ -980,14 +996,17 @@ static void deliver_signal_unlocked_locked(struct task *task, struct sighand *si
     // it -- a permanent hang, not just a redundant signal. Only skip the
     // requeue; always still attempt the wake below (redundant wakes of an
     // already-running thread are harmless).
+    //
+    // A POSIX timer's own signal is the exception, as on Linux: send_sigqueue
+    // queues the timer's preallocated sigqueue with no legacy_queue check,
+    // behind a SIGALRM that kill() or an itimer left pending, and a second
+    // timer on the same signal queues its own too. Measured on 6.12: an
+    // itimer's SIGALRM pending, then a POSIX timer's, and sigtimedwait takes
+    // two, si_code SI_KERNEL then SI_TIMER. Only the timer's OWN signal still
+    // queued stops it, and that is an overrun (signal_timer_count_overrun).
     bool already_pending = !signal_is_realtime(sig) && sigset_has(task->pending, sig);
-    if (!already_pending) {
-        sigset_add(&task->pending, sig);
-        struct sigqueue *sigqueue = malloc(sizeof(struct sigqueue));
-        sigqueue->info = info;
-        sigqueue->info.sig = sig;
-        list_add_tail(&task->queue, &sigqueue->queue);
-    }
+    if (!already_pending || from_timer)
+        signal_enqueue_locked(&task->queue, &task->pending, sig, info, from_timer);
     // signalfd_wakeup_task is a best-effort, idempotent poke (see its own
     // comment: a signalfd's readiness is re-checked on the next scan/timeout
     // regardless), so -- like signal_wake_task below -- it must run even when
@@ -1147,7 +1166,7 @@ static void group_pending_mask_changed_locked(sigset_t_ old) {
 // so the snapshot has to happen first (pids_lock -> sighand->lock, never the
 // reverse). Caller holds `sighand->lock`.
 static void deliver_signal_to_group_locked(struct sighand *sighand, struct task *target,
-        int sig, struct siginfo_ info, struct task **members, size_t count) {
+        int sig, struct siginfo_ info, bool from_timer, struct task **members, size_t count) {
     // A signal whose disposition ignores it is dropped here, as Linux's
     // sig_ignored() drops it, unless the thread it was SENT TO blocks it or
     // waits for it in sigtimedwait: a handler may be installed by the time it
@@ -1185,14 +1204,12 @@ static void deliver_signal_to_group_locked(struct sighand *sighand, struct task 
     // SIGCHLD while the first occurrence's pending bit hasn't been cleared by
     // receive_signals() yet -- that second, distinct occurrence must still
     // wake the parent even though it doesn't get its own queue entry.
+    //
+    // A POSIX timer's own signal is queued regardless, as in
+    // deliver_signal_unlocked_locked.
     bool already_pending = !signal_is_realtime(sig) && sigset_has(sighand->pending, sig);
-    if (!already_pending) {
-        sigset_add(&sighand->pending, sig);
-        struct sigqueue *sigqueue = malloc(sizeof(struct sigqueue));
-        sigqueue->info = info;
-        sigqueue->info.sig = sig;
-        list_add_tail(&sighand->queue, &sigqueue->queue);
-    }
+    if (!already_pending || from_timer)
+        signal_enqueue_locked(&sighand->queue, &sighand->pending, sig, info, from_timer);
 
     // Every signalfd watching for it, in whichever thread: Linux's
     // signalfd_notify wakes them all, whether or not a thread takes it.
@@ -1336,7 +1353,7 @@ static void signal_resume_group(struct tgroup *group, int sig) {
 // thread that can take it (deliver_signal_to_group_locked), and lifts a stop.
 // With `pids_locked`, the caller holds pids_lock.
 static void send_process_signal(struct tgroup *group, struct task *target, int sig,
-        struct siginfo_ info, bool pids_locked) {
+        struct siginfo_ info, bool pids_locked, bool from_timer) {
     if (sig == 0)
         return;
     struct group_snapshot snap;
@@ -1352,7 +1369,7 @@ static void send_process_signal(struct tgroup *group, struct task *target, int s
         // Before the signal can be dropped as ignored: a SIGCONT at SIG_DFL
         // still cancels a pending stop.
         signal_prepare_stop_cont(snap.sighand, NULL, sig, snap.members, snap.count);
-        deliver_signal_to_group_locked(snap.sighand, target, sig, info,
+        deliver_signal_to_group_locked(snap.sighand, target, sig, info, from_timer,
                 snap.members, snap.count);
         unlock(&snap.sighand->lock);
         signal_resume_group(group, sig);
@@ -1418,15 +1435,15 @@ void signal_exit_handoff(struct task *task) {
 }
 
 void send_signal_to_process(struct task *task, int sig, struct siginfo_ info) {
-    send_process_signal(NULL, task, sig, info, false);
+    send_process_signal(NULL, task, sig, info, false, false);
 }
 
 void send_signal_to_process_pids_locked(struct task *task, int sig, struct siginfo_ info) {
-    send_process_signal(NULL, task, sig, info, true);
+    send_process_signal(NULL, task, sig, info, true, false);
 }
 
 void send_signal_to_group(struct tgroup *group, int sig, struct siginfo_ info) {
-    send_process_signal(group, NULL, sig, info, false);
+    send_process_signal(group, NULL, sig, info, false, false);
 }
 
 // tkill, tgkill and rt_tgsigqueueinfo send a stop or continue signal to one
@@ -1519,7 +1536,7 @@ void deliver_signal_with_sighand(struct task *task, struct sighand *sighand, int
             sigset_del(&task->blocked, sig);
         }
     }
-    deliver_signal_unlocked_locked(task, sighand, sig, info);
+    deliver_signal_unlocked_locked(task, sighand, sig, info, false);
     unlock(&sighand->lock);
 }
 
@@ -1541,6 +1558,7 @@ void signal_queue_before_start(struct task *task, int sig, struct siginfo_ info)
             sigset_add(&task->pending, sig);
             sigqueue->info = info;
             sigqueue->info.sig = sig;
+            sigqueue->from_timer = false;
             list_add_tail(&task->queue, &sigqueue->queue);
         }
     }
@@ -1686,21 +1704,22 @@ static struct sigqueue *signal_next_deliverable_locked(struct sighand *sighand,
 // missed, was told about the next signal instead of its own.
 //
 // Caller holds the sighand->lock the signal came off. The slot is read without
-// group->lock; nothing is followed through it. What this cannot tell apart,
-// and Linux can (it checks which arming a signal came from), is a signal
-// queued before the timer was set again, or by a deleted timer whose slot has
-// been reused: taking one latches its old count, where Linux leaves 0. (An
-// itimer's signal is SI_KERNEL, as on Linux, so it is never taken for timer
-// 0's; see itimer_notify.)
-static void signal_timer_taken(struct task *task, const struct siginfo_ *info) {
-    if (info->code != SI_TIMER_ || task->group == NULL)
+// group->lock; nothing is followed through it. Only the timer's own signal
+// counts (struct sigqueue's from_timer), and a deleted timer's is disowned
+// (signal_timer_disown), so a timer made in its slot since is not given its
+// count. What this cannot tell apart, and Linux can (it checks which arming a
+// signal came from), is a signal queued before the timer was set again:
+// taking one latches its old count, where Linux leaves 0.
+static void signal_timer_taken(struct task *task, const struct sigqueue *taken) {
+    const struct siginfo_ *info = &taken->info;
+    // rt_sigqueueinfo can claim SI_TIMER and any id; only the timer's own
+    // signal latches a count, as only Linux's preallocated one does.
+    if (!taken->from_timer || task->group == NULL)
         return;
     int_t id = info->timer.timer;
     if (id < 0 || id >= TIMERS_MAX)
         return;
     struct posix_timer *pt = &task->group->posix_timers[id];
-    // rt_sigqueueinfo can claim SI_TIMER and any id; it has at least to be
-    // the timer's signal.
     if (pt->timer == NULL || pt->signal != info->sig)
         return;
     __atomic_store_n(&pt->last_overrun, info->timer.overrun, __ATOMIC_RELAXED);
@@ -1722,7 +1741,7 @@ static bool signal_take_next_locked(struct task *task, sigset_t_ mask, struct si
     if (best == NULL)
         return false;
     *info_out = best->info;
-    signal_timer_taken(task, info_out);
+    signal_timer_taken(task, best);
     int sig = best->info.sig;
     list_remove(&best->queue);
     if (best_is_group) {
@@ -2212,7 +2231,7 @@ int signal_timer_count_overrun(struct task *task, int sig, int timer_id, uint64_
     // a timer's signal goes to one or the other depending on how it was set
     // up, and either way there is at most one.
     list_for_each_entry(&task->queue, sigqueue, queue) {
-        if (sigqueue->info.sig == sig && sigqueue->info.code == SI_TIMER_ &&
+        if (sigqueue->from_timer && sigqueue->info.sig == sig &&
                 sigqueue->info.timer.timer == timer_id) {
             overrun = sigqueue->info.timer.overrun =
                 timer_overrun_add(sigqueue->info.timer.overrun, expirations);
@@ -2220,7 +2239,7 @@ int signal_timer_count_overrun(struct task *task, int sig, int timer_id, uint64_
         }
     }
     list_for_each_entry(&sighand->queue, sigqueue, queue) {
-        if (sigqueue->info.sig == sig && sigqueue->info.code == SI_TIMER_ &&
+        if (sigqueue->from_timer && sigqueue->info.sig == sig &&
                 sigqueue->info.timer.timer == timer_id) {
             overrun = sigqueue->info.timer.overrun =
                 timer_overrun_add(sigqueue->info.timer.overrun, expirations);
@@ -2232,14 +2251,55 @@ out:
     return overrun;
 }
 
+// A deleted POSIX timer's signal, still queued, is from now on an ordinary
+// queued signal: taken like any other, but no timer's to count an overrun
+// onto (signal_timer_count_overrun) or to latch a count from
+// (signal_timer_taken). The next timer made in its slot has the same id and
+// is not the same timer -- Linux gives each timer a sigqueue of its own.
+// Call with no lock held.
+void signal_timer_disown(struct tgroup *group, int timer_id) {
+    struct group_snapshot snap;
+    if (group == NULL || !group_snapshot_take(group, NULL, &snap))
+        return;
+    struct sighand *sighand = snap.sighand;
+    if (sighand != NULL) {
+        lock(&sighand->lock, 0);
+        struct sigqueue *sigqueue;
+        list_for_each_entry(&sighand->queue, sigqueue, queue) {
+            if (sigqueue->from_timer && sigqueue->info.timer.timer == timer_id)
+                sigqueue->from_timer = false;
+        }
+        for (size_t i = 0; i < snap.count; i++) {
+            list_for_each_entry(&snap.members[i]->queue, sigqueue, queue) {
+                if (sigqueue->from_timer && sigqueue->info.timer.timer == timer_id)
+                    sigqueue->from_timer = false;
+            }
+        }
+        unlock(&sighand->lock);
+    }
+    group_snapshot_release(&snap);
+}
+
 void send_signal(struct task *task, int sig, struct siginfo_ info) {
     struct sighand *sighand = task->sighand;
     if (sighand == NULL)
         return;
-    send_signal_with_sighand(task, sighand, sig, info);
+    send_signal_with_sighand(task, sighand, sig, info, false);
 }
 
-static void send_signal_with_sighand(struct task *task, struct sighand *sighand, int sig, struct siginfo_ info) {
+void send_timer_signal(struct task *task, bool to_thread, int sig, struct siginfo_ info) {
+    if (!to_thread) {
+        send_process_signal(NULL, task, sig, info, false, true);
+        return;
+    }
+    struct sighand *sighand = task->sighand;
+    if (sighand == NULL)
+        return;
+    send_signal_with_sighand(task, sighand, sig, info, true);
+}
+
+static void send_signal_with_sighand(struct task *task, struct sighand *sighand, int sig, struct siginfo_ info,
+        bool from_timer) {
     // signal zero is for testing whether a process exists
     if (sig == 0)
         return;
@@ -2260,7 +2320,7 @@ static void send_signal_with_sighand(struct task *task, struct sighand *sighand,
                current != NULL ? current->pid : 0, current != NULL ? current->comm : "?");
     }
     if ((!ignored || synchronously_consumed) && (task->pid <= MAX_PID)) {
-        deliver_signal_unlocked_locked(task, sighand, sig, info);
+        deliver_signal_unlocked_locked(task, sighand, sig, info, from_timer);
     }
     unlock(&sighand->lock);
     signal_resume_group(task->group, sig);
@@ -3426,7 +3486,7 @@ void receive_signals(void) {
 
         int sig = best->info.sig;
         struct siginfo_ info = best->info;
-        signal_timer_taken(current, &info);
+        signal_timer_taken(current, best);
         list_remove(&best->queue);
         if (best_is_group) {
             if (!signal_list_still_has_locked(&sighand->queue, sig))
