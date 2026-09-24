@@ -94,6 +94,9 @@
 #define D_CPU 8.0
 // How late a deadline may be met. The failure this is looking for is seconds.
 #define LATE 1.0
+// How late a periodic timer's expiries after its first may be taken, each
+// against its place on the timer's grid.
+#define GRID_LATE 0.1
 // CPU the main thread burns before anything is armed. It is the task whose
 // record carries the process's timers, and the save is made on another host
 // thread: a CPU clock read through `current` there gets the saver's time for
@@ -832,19 +835,37 @@ int main(int argc, char **argv) {
     int n_periodic = count_after(SIG_PERIODIC, stopped_at);
     int periodic_ok = a != NULL && n_periodic >= 3 && a->m >= m0 + D_MONO - 0.01 &&
                       a->m <= m0 + D_MONO + LATE;
-    double step_min = 1e9, step_max = 0;
-    for (int i = 1; i < arrivals[SIG_PERIODIC].count && i < MAX_ARRIVALS; i++) {
-        double step = arrivals[SIG_PERIODIC].a[i].m - arrivals[SIG_PERIODIC].a[i - 1].m;
-        if (step < step_min) step_min = step;
-        if (step > step_max) step_max = step;
+    // After the first, each on the grid the timer was armed on -- due at
+    // m0 + D_MONO + k * PERIOD -- and taken within GRID_LATE of it, a later
+    // expiry each time. A first one the restore made late, its deadline
+    // falling inside the restore, is followed by the next on the grid, sooner
+    // than a period after it: Linux keeps a periodic timer's grid
+    // (hrtimer_forward), and so does util/timer.c. Measuring the gaps between
+    // arrivals instead called that short gap a failure.
+    double grid0 = m0 + D_MONO, step_min = 1e9, step_max = 0, off_max = 0;
+    long last_k = -1;
+    for (int i = 0; i < arrivals[SIG_PERIODIC].count && i < MAX_ARRIVALS; i++) {
+        double m = arrivals[SIG_PERIODIC].a[i].m;
+        double since = m - grid0 + 0.01;
+        long k = since < 0 ? -1 : (long) (since / PERIOD);
+        double off = m - (grid0 + (double) k * PERIOD);
+        if (i > 0) {
+            double step = m - arrivals[SIG_PERIODIC].a[i - 1].m;
+            if (step < step_min) step_min = step;
+            if (step > step_max) step_max = step;
+            if (off > off_max) off_max = off;
+            if (k <= last_k || off > GRID_LATE)
+                periodic_ok = 0;
+        }
+        last_k = k;
     }
-    if (step_min < PERIOD - 0.1 || step_max > PERIOD + LATE)
-        periodic_ok = 0;
     check("posix-periodic", periodic_ok,
-          "%d signal(s), the first %s monotonic %.3f (due %.3f), then %.3f..%.3f s apart "
-          "(want %.1f)", n_periodic, a != NULL ? "at" : "never; looked at",
+          "%d signal(s), the first %s monotonic %.3f (due %.3f), then %.3f..%.3f s apart, "
+          "each at most %.3f s after its place on the %.1f s grid",
+          n_periodic, a != NULL ? "at" : "never; looked at",
           a != NULL ? a->m : now(CLOCK_MONOTONIC), m0 + D_MONO,
-          n_periodic > 1 ? step_min : 0.0, n_periodic > 1 ? step_max : 0.0, PERIOD);
+          n_periodic > 1 ? step_min : 0.0, n_periodic > 1 ? step_max : 0.0,
+          off_max, PERIOD);
 
     // A timer nobody is told about still counts down, and keeps its interval.
     struct itimerspec cur = {0};
