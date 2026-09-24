@@ -32,6 +32,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <pthread.h>
 #include <sys/epoll.h>
 #include <sys/resource.h>
 #include <sys/select.h>
@@ -47,7 +48,7 @@ static void ck(const char *label, long got, long want) {
     test_logf("  %-52s got=0x%-7lx want=0x%lx\n", label, got, want);
 }
 
-static int ep_events(int fd, int want) {
+static int ep_events_wait(int fd, int want, int timeout_ms) {
     int ep = epoll_create1(0);
     if (ep < 0)
         return -1;
@@ -57,14 +58,30 @@ static int ep_events(int fd, int want) {
         return -1;
     }
     struct epoll_event out;
-    int n = epoll_wait(ep, &out, 1, 300);
+    int n = epoll_wait(ep, &out, 1, timeout_ms);
     close(ep);
     return n > 0 ? (int) out.events : 0;
 }
 
-static int poll_events(int fd, int want) {
+static int ep_events(int fd, int want) {
+    return ep_events_wait(fd, want, 300);
+}
+
+static int poll_events_wait(int fd, int want, int timeout_ms) {
     struct pollfd p = { fd, want, 0 };
-    return poll(&p, 1, 300) > 0 ? p.revents : 0;
+    return poll(&p, 1, timeout_ms) > 0 ? p.revents : 0;
+}
+
+static int poll_events(int fd, int want) {
+    return poll_events_wait(fd, want, 300);
+}
+
+// Closes *arg after 200 ms, long enough that the caller is already blocked.
+static void *close_later(void *arg) {
+    struct timespec ts = { 0, 200 * 1000 * 1000 };
+    nanosleep(&ts, NULL);
+    close(*(int *) arg);
+    return NULL;
 }
 
 int main(int argc, char **argv) {
@@ -101,6 +118,84 @@ int main(int argc, char **argv) {
                ep_events(sv[0], EPOLLIN | EPOLLRDHUP) & (EPOLLIN | EPOLLRDHUP | EPOLLHUP),
                EPOLLIN | EPOLLRDHUP | EPOLLHUP);
             close(sv[0]);
+        }
+    }
+
+    // ---- ...and poll's answer to a closed peer is exactly IN|HUP ----------
+    // Exact, not masked: 555 measured 0x10 here, POLLHUP without POLLIN, and
+    // a program that waits for POLLIN before reading never reads the
+    // end-of-file it is being told about. With or without data still queued,
+    // since an empty queue is the case that dropped POLLIN. SEQPACKET takes
+    // the same path. Linux 6.12 answers 0x11 for all four, and epoll 0x11 for
+    // an EPOLLIN-only registration.
+    {
+        static const int types[] = { SOCK_STREAM, SOCK_SEQPACKET };
+        static const char *const names[] = { "stream", "seqpacket" };
+        for (int t = 0; t < 2; t++) {
+            for (int data = 0; data < 2; data++) {
+                int sv[2];
+                char label[96];
+                if (socketpair(AF_UNIX, types[t], 0, sv) != 0) {
+                    snprintf(label, sizeof label, "%s socketpair", names[t]);
+                    ck(label, -1, 0);
+                    continue;
+                }
+                if (data && write(sv[1], "x", 1) != 1)
+                    failures_total++;
+                close(sv[1]);
+                snprintf(label, sizeof label, "%s peer closed%s: poll(POLLIN) is IN|HUP",
+                         names[t], data ? ", data queued" : "");
+                ck(label, poll_events(sv[0], POLLIN), POLLIN | POLLHUP);
+                snprintf(label, sizeof label, "%s peer closed%s: epoll(EPOLLIN) is IN|HUP",
+                         names[t], data ? ", data queued" : "");
+                ck(label, ep_events(sv[0], EPOLLIN), EPOLLIN | EPOLLHUP);
+                close(sv[0]);
+            }
+        }
+    }
+
+    // ---- ...including when the poll is already waiting ---------------------
+    // The same close, but made while the poll is blocked, so the answer comes
+    // from the wakeup rather than from a fresh look at the socket. Those are
+    // two different paths, and this one still said 0x10 after the other had
+    // been fixed. A thread closes the peer 200 ms in.
+    {
+        static const int types[] = { SOCK_STREAM, SOCK_SEQPACKET };
+        static const char *const names[] = { "stream", "seqpacket" };
+        for (int t = 0; t < 2; t++) {
+            for (int use_epoll = 0; use_epoll < 2; use_epoll++) {
+                int sv[2];
+                char label[96];
+                if (socketpair(AF_UNIX, types[t], 0, sv) != 0) {
+                    snprintf(label, sizeof label, "%s socketpair", names[t]);
+                    ck(label, -1, 0);
+                    continue;
+                }
+                pthread_t th;
+                if (pthread_create(&th, NULL, close_later, &sv[1]) != 0) {
+                    ck("pthread_create", -1, 0);
+                    close(sv[0]);
+                    close(sv[1]);
+                    continue;
+                }
+                snprintf(label, sizeof label, "%s peer closed while %s waits: IN|HUP",
+                         names[t], use_epoll ? "epoll(EPOLLIN)" : "poll(POLLIN)");
+                struct timespec t0, t1;
+                clock_gettime(CLOCK_MONOTONIC, &t0);
+                int got = use_epoll ? ep_events_wait(sv[0], EPOLLIN, 5000)
+                                    : poll_events_wait(sv[0], POLLIN, 5000);
+                clock_gettime(CLOCK_MONOTONIC, &t1);
+                long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+                ck(label, got, POLLIN | POLLHUP);
+                // ...and woken BY the close, ~200 ms in. The value alone is
+                // not enough: an epoll waiter that the close failed to wake
+                // still read 0x11, from the rescan when its wait was capped
+                // at one second.
+                snprintf(label, sizeof label, "  and woke within 800 ms (took %ld)", ms);
+                ck(label, ms < 800, 1);
+                pthread_join(th, NULL);
+                close(sv[0]);
+            }
         }
     }
 
