@@ -56,6 +56,26 @@ static inline struct timespec timespec_normalize(struct timespec ts) {
     return ts;
 }
 
+// Linux's default timer slack, and what PR_GET_TIMERSLACK answers here
+// (kernel/misc.c): how late a sleeping task's wake may run there -- nanosleep,
+// and the other sleeps with a deadline. POSIX timers, itimers and timerfds get
+// none.
+#define HOST_TIMER_SLACK_NS 50000L
+
+// Sleep `req` on the host and wake within `slack_ns` of the deadline, as a
+// Linux hrtimer does. 0 once the time has passed; -1 with errno EINTR if a
+// signal handler ran first -- the wake pokes -- with nothing said about the
+// time left, which every caller recomputes from its own deadline.
+//
+// A plain nanosleep on Darwin is subject to timer coalescing: the kernel may
+// run it late by a quarter of the time asked for, up to 5ms, and an idle
+// machine takes all of it. Measured on an M4 iPad, every guest timer and
+// sleep woke that late -- a 5ms periodic timer 1.0ms after each boundary, a
+// 50ms one 5ms after -- where Linux wakes within microseconds. mach_wait_until,
+// pthread_cond_timedwait and select are no better; a thread's QoS does not
+// change it. Only a kqueue timer marked NOTE_CRITICAL opts out.
+int host_nanosleep_precise(struct timespec req, long slack_ns);
+
 typedef void (*timer_callback_t)(void *data);
 // Where a timer reads "now" from. Almost every timer just calls
 // timespec_now(clockid) on its own thread, which is right for the wall clocks

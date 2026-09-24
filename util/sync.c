@@ -15,6 +15,11 @@
 #include "debug.h"
 #include "kernel/errno.h"
 #include <string.h>
+#if __APPLE__
+#include <stdint.h>
+#include <sys/event.h>
+#include <unistd.h>
+#endif
 
 int noprintk = 0; // Used to suppress calls to printk.
 
@@ -33,7 +38,8 @@ bool wait_trace_enabled(void) {
     }
     return cached == 1;
 }
-static int wait_for_internal(cond_t *cond, lock_t *lock, struct timespec *timeout, bool interruptible);
+static int wait_for_internal(cond_t *cond, lock_t *lock, struct timespec *timeout,
+        bool interruptible, bool precise);
 #if __linux__
 static struct timespec timespec_add_local(struct timespec x, struct timespec y) {
     x.tv_sec += y.tv_sec;
@@ -46,19 +52,170 @@ static struct timespec timespec_add_local(struct timespec x, struct timespec y) 
 }
 #endif
 
-static int cond_wait_with_optional_timeout(cond_t *cond, lock_t *lock, struct timespec *timeout) {
+#if __APPLE__
+// A timed wait's deadline, kept on time.
+//
+// Darwin coalesces a condition variable's timeout like every other sleep: a
+// wait can end a quarter of its length late, up to 5ms, and twice that while
+// the user is idle (see host_nanosleep_precise in util/timer.c). So every
+// guest wait with a deadline that parks here -- FUTEX_WAIT, and with it every
+// pthread_cond_timedwait and sem_timedwait in the guest, sigtimedwait,
+// semtimedop, mq_timedreceive -- ran that late: a 40ms futex wait took up to
+// 50ms on the Mac and on an M4 iPad, where Linux takes 40.06ms.
+//
+// A condition variable cannot be told to be punctual, and a thread cannot
+// wait on one and on a kqueue at once. So the deadline is kept by a kqueue
+// timer marked NOTE_CRITICAL, on one service thread, which wakes the waiter
+// by broadcasting its condition at the deadline. The waiter's own timed wait
+// stays as it was, as the backstop: if the wake is lost -- the kqueue is
+// unavailable, or it fires before the waiter is in the wait -- the wait ends
+// as late as it always did, never later. Everyone else waiting on the same
+// condition sees one spurious wakeup, which condition variables allow and
+// every caller of wait_for already re-checks for.
+//
+// A deadline_wake is shared by the waiter and the service thread. `cond` is
+// cleared by the waiter under `lock` before it leaves the wait, so the
+// broadcast, made under the same lock, can never reach a condition whose wait
+// is over. `refs` counts the waiter and, until the timer is gone for good, the
+// kqueue.
+struct deadline_wake {
+    pthread_mutex_t lock;
+    pthread_cond_t *cond;
+    int refs;
+};
+
+// Below this a wait is late by no more than Linux's own slack would allow.
+#define DEADLINE_WAKE_MIN_NS 200000L
+
+static int deadline_kq = -1;
+static pthread_once_t deadline_once = PTHREAD_ONCE_INIT;
+
+static void deadline_wake_put(struct deadline_wake *w, int refs) {
+    pthread_mutex_lock(&w->lock);
+    w->refs -= refs;
+    bool last = w->refs == 0;
+    pthread_mutex_unlock(&w->lock);
+    if (last) {
+        pthread_mutex_destroy(&w->lock);
+        free(w);
+    }
+}
+
+static void *deadline_wake_thread(void *arg) {
+    int kq = (int) (intptr_t) arg;
+    for (;;) {
+        struct kevent64_s fired[16];
+        int n = kevent64(kq, NULL, 0, fired, 16, 0, NULL);
+        for (int i = 0; i < n; i++) {
+            if (fired[i].filter != EVFILT_TIMER)
+                continue;
+            struct deadline_wake *w = (struct deadline_wake *) (uintptr_t) fired[i].udata;
+            pthread_mutex_lock(&w->lock);
+            if (w->cond != NULL)
+                pthread_cond_broadcast(w->cond);
+            pthread_mutex_unlock(&w->lock);
+            deadline_wake_put(w, 1);
+        }
+    }
+    return NULL;
+}
+
+static void deadline_wake_init(void) {
+    int kq = kqueue();
+    if (kq < 0)
+        return;
+    // It takes no guest signals and must not be picked for a host one.
+    sigset_t all, old;
+    sigfillset(&all);
+    pthread_sigmask(SIG_BLOCK, &all, &old);
+    pthread_t thread;
+    int err = pthread_create(&thread, NULL, deadline_wake_thread, (void *) (intptr_t) kq);
+    pthread_sigmask(SIG_SETMASK, &old, NULL);
+    if (err != 0) {
+        close(kq);
+        return;
+    }
+    pthread_detach(thread);
+    deadline_kq = kq;
+}
+
+static struct deadline_wake *deadline_wake_arm(pthread_cond_t *cond, const struct timespec *timeout) {
+    if (timeout->tv_sec == 0 && timeout->tv_nsec < DEADLINE_WAKE_MIN_NS)
+        return NULL;
+    pthread_once(&deadline_once, deadline_wake_init);
+    if (deadline_kq < 0)
+        return NULL;
+    struct deadline_wake *w = malloc(sizeof(*w));
+    if (w == NULL)
+        return NULL;
+    pthread_mutex_init(&w->lock, NULL);
+    w->cond = cond;
+    w->refs = 2;
+    // wait_for hands over a slice of a second at most; bound it anyway.
+    int64_t ns = timeout->tv_sec > 86400 ? (int64_t) 86400 * 1000000000
+        : (int64_t) timeout->tv_sec * 1000000000 + timeout->tv_nsec;
+    struct kevent64_s timer;
+    EV_SET64(&timer, (uint64_t) (uintptr_t) w, EVFILT_TIMER, EV_ADD | EV_ONESHOT,
+             NOTE_NSECONDS | NOTE_CRITICAL | NOTE_LEEWAY, ns, (uint64_t) (uintptr_t) w,
+             0, HOST_TIMER_SLACK_NS);
+    if (kevent64(deadline_kq, &timer, 1, NULL, 0, 0, NULL) < 0) {
+        pthread_mutex_destroy(&w->lock);
+        free(w);
+        return NULL;
+    }
+    return w;
+}
+
+// Called by the waiter, holding the wait's mutex again, once it is out of the
+// wait for whatever reason.
+static void deadline_wake_disarm(struct deadline_wake *w) {
+    pthread_mutex_lock(&w->lock);
+    w->cond = NULL;
+    pthread_mutex_unlock(&w->lock);
+    // Deleted before it fired, the service thread will never hear of it, and
+    // its reference is the waiter's to drop too. Once it has fired, the delete
+    // fails and the service thread drops it after its (now empty) broadcast --
+    // which is also what keeps the address, the timer's name in the kqueue,
+    // from being reused while an event for it is outstanding.
+    struct kevent64_s timer;
+    EV_SET64(&timer, (uint64_t) (uintptr_t) w, EVFILT_TIMER, EV_DELETE, 0, 0, 0, 0, 0);
+    bool deleted = kevent64(deadline_kq, &timer, 1, NULL, 0, 0, NULL) == 0;
+    deadline_wake_put(w, deleted ? 2 : 1);
+}
+#endif
+
+// `precise`: the timeout is the caller's own deadline, not one of wait_for's
+// slices, so it is worth keeping on time.
+static int cond_wait_with_optional_timeout(cond_t *cond, lock_t *lock, struct timespec *timeout,
+        bool precise) {
     if (timeout == NULL) {
         lock->wait4 = true;
         return pthread_cond_wait(&cond->cond, &lock->m);
     }
 
 #if __linux__
+    (void) precise;
     struct timespec abs_timeout;
     clock_gettime(CLOCK_MONOTONIC, &abs_timeout);
     abs_timeout = timespec_add_local(abs_timeout, *timeout);
     return pthread_cond_timedwait(&cond->cond, &lock->m, &abs_timeout);
 #elif __APPLE__
-    return pthread_cond_timedwait_relative_np(&cond->cond, &lock->m, timeout);
+    struct deadline_wake *w = NULL;
+    struct timespec deadline;
+    if (precise) {
+        deadline = timespec_add(timespec_now(CLOCK_MONOTONIC), *timeout);
+        w = deadline_wake_arm(&cond->cond, timeout);
+    }
+    int rc = pthread_cond_timedwait_relative_np(&cond->cond, &lock->m, timeout);
+    if (w != NULL) {
+        deadline_wake_disarm(w);
+        // Woken by the deadline's own broadcast, most likely: say so, as the
+        // timed wait would have. A notify that raced it is found by the
+        // caller, which looks at its condition whatever this returns.
+        if (rc == 0 && !timespec_positive(timespec_subtract(deadline, timespec_now(CLOCK_MONOTONIC))))
+            rc = ETIMEDOUT;
+    }
+    return rc;
 #else
 #error Unimplemented pthread_cond_wait relative timeout.
 #endif
@@ -248,7 +405,9 @@ int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout) {
             last_slice = true;
         }
     }
-    int err = wait_for_internal(cond, lock, &slice, true);
+    // Only the last slice ends at the caller's deadline; the others are this
+    // function's own caps, and nobody minds when they end.
+    int err = wait_for_internal(cond, lock, &slice, true, last_slice);
     if (timeout != NULL) {
         struct timespec left = timespec_subtract(deadline, timespec_now(CLOCK_MONOTONIC));
         *timeout = timespec_positive(left) ? left : (struct timespec) {0};
@@ -264,7 +423,8 @@ int wait_for(cond_t *cond, lock_t *lock, struct timespec *timeout) {
     return 0;
 }
 
-static int wait_for_internal(cond_t *cond, lock_t *lock, struct timespec *timeout, bool interruptible) {
+static int wait_for_internal(cond_t *cond, lock_t *lock, struct timespec *timeout,
+        bool interruptible, bool precise) {
     if (current) {
         // A voluntary context switch, in the sense getrusage means: the task
         // gave up the CPU to wait for something rather than being preempted.
@@ -291,7 +451,7 @@ static int wait_for_internal(cond_t *cond, lock_t *lock, struct timespec *timeou
     bool old_should_mark_wait_interrupted = should_mark_wait_interrupted;
     if (interruptible)
         should_mark_wait_interrupted = true;
-    rc = cond_wait_with_optional_timeout(cond, lock, timeout);
+    rc = cond_wait_with_optional_timeout(cond, lock, timeout, precise);
     should_mark_wait_interrupted = old_should_mark_wait_interrupted;
 #if LOCK_DEBUG
 out:
@@ -315,7 +475,7 @@ out:
 }
 
 int wait_for_ignore_signals(cond_t *cond, lock_t *lock, struct timespec *timeout) {
-    return wait_for_internal(cond, lock, timeout, false);
+    return wait_for_internal(cond, lock, timeout, false, timeout != NULL);
 }
 
 // wait_for, for a wait a guest syscall is blocked in. A bare wait_for gets two

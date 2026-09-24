@@ -375,7 +375,10 @@ static int host_sleep_interruptible(struct timespec req, struct timespec *rem) {
         // reports having never yielded.
         if (current != NULL)
             current->nvcsw++;
-        TASK_MAY_BLOCK { res = nanosleep(&slice, NULL); }
+        // With Linux's slack and no more: a plain nanosleep woke a quarter of
+        // the slice late on Darwin, so every guest sleep of 20ms or more ran
+        // up to 5ms long (see host_nanosleep_precise).
+        TASK_MAY_BLOCK { res = host_nanosleep_precise(slice, HOST_TIMER_SLACK_NS); }
         if (res < 0 && errno != EINTR) {
             // Only EINVAL is possible (a bad slice would be our own bug), but
             // don't silently spin on it.

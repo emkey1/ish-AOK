@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include "misc.h"
 #include "util/list.h"
 #include "util/timer.h"
@@ -41,7 +42,10 @@ struct real_poll_event {
 };
 static void *rpe_data(struct real_poll_event *rpe);
 static int rpe_events(struct real_poll_event *rpe, struct poll_fd *pfd);
-static int real_poll_wait(struct real_poll *real, struct real_poll_event *events, int max, struct timespec *timeout);
+// `precise`: the timeout is the guest's own deadline rather than one of
+// poll_wait's caps, and is worth waking on time for.
+static int real_poll_wait(struct real_poll *real, struct real_poll_event *events, int max,
+        struct timespec *timeout, bool precise);
 static int real_poll_update(struct real_poll *real, int fd, int types, void *data);
 static inline bool poll_fd_has_host_wait(struct poll_fd *pollfd);
 static int poll_sync_host_locked(struct poll *poll, struct fd *fd);
@@ -924,7 +928,8 @@ int poll_wait(struct poll *poll_, poll_callback_t callback, void *context, struc
                                wait_timeout != NULL ? wait_timeout->tv_nsec : -1L,
                                poll_->waiters);
                     }
-                    err = real_poll_wait(&poll_->real, e, sizeof(e)/sizeof(e[0]), wait_timeout);
+                    err = real_poll_wait(&poll_->real, e, sizeof(e)/sizeof(e[0]), wait_timeout,
+                                         wait_timeout == &remaining_timeout);
                     sigunwind_end();
                 }
             }
@@ -1220,7 +1225,8 @@ static int real_poll_init(struct real_poll *real) {
     return 0;
 }
 
-static int real_poll_wait(struct real_poll *real, struct real_poll_event *events, int max, struct timespec *timeout) {
+static int real_poll_wait(struct real_poll *real, struct real_poll_event *events, int max,
+        struct timespec *timeout, bool UNUSED(precise)) {
     int timeout_millis = -1;
     if (timeout != NULL)
         timeout_millis = timeout->tv_sec * 1000 + timeout->tv_nsec / 1000000;
@@ -1347,8 +1353,66 @@ static int real_poll_update(struct real_poll *real, int fd, int types, void *dat
     return real_poll_check_receipts(e, count);
 }
 
-static int real_poll_wait(struct real_poll *real, struct real_poll_event *events, int max, struct timespec *timeout) {
-    return kevent(real->fd, NULL, 0, (struct kevent *) events, max, timeout);
+// A kevent timeout is coalesced like any other Darwin sleep (see
+// host_nanosleep_precise in util/timer.c): a guest poll, select or epoll_wait
+// with a timeout came back 1-2ms after it, on the Mac and on an M4 iPad, where
+// Linux is within its 50us of slack. So a timeout that is the guest's own
+// deadline is kept by a one-shot kqueue timer marked NOTE_CRITICAL, added to
+// the same wait; the timeout stays as the backstop, and a timer that fires
+// comes back as an event that is nobody's fd.
+//
+// An epoll instance can have more than one thread waiting on its kqueue, and
+// the timer's event can reach any of them. Each thread drops every deadline
+// event it is given, its own or not: one taken from a neighbour only costs the
+// neighbour its precision, back to the backstop. A wait a poke unwinds out of
+// (sigunwind_start) leaves its timer behind, to fire once and be dropped the
+// same way.
+static char real_poll_deadline_tag;
+#define REAL_POLL_DEADLINE_MIN_NS 200000L
+
+static int real_poll_wait(struct real_poll *real, struct real_poll_event *events, int max,
+        struct timespec *timeout, bool precise) {
+    struct kevent timer;
+    uintptr_t ident = 0;
+    if (precise && timeout != NULL &&
+            (timeout->tv_sec > 0 || timeout->tv_nsec >= REAL_POLL_DEADLINE_MIN_NS)) {
+        static _Atomic uintptr_t deadline_idents;
+        ident = atomic_fetch_add_explicit(&deadline_idents, 1, memory_order_relaxed) + 1;
+        // poll_wait's caps keep a timeout under a few seconds.
+        int64_t ns = (int64_t) timeout->tv_sec * 1000000000 + timeout->tv_nsec;
+        EV_SET(&timer, ident, EVFILT_TIMER, EV_ADD | EV_ONESHOT, NOTE_NSECONDS | NOTE_CRITICAL,
+               ns, &real_poll_deadline_tag);
+    }
+    int count = kevent(real->fd, &timer, ident != 0 ? 1 : 0, (struct kevent *) events, max, timeout);
+    int saved = errno;
+    bool fired = false, refused = false;
+    if (count > 0) {
+        int kept = 0;
+        for (int i = 0; i < count; i++) {
+            if (events[i].real.udata != &real_poll_deadline_tag) {
+                events[kept++] = events[i];
+                continue;
+            }
+            if (events[i].real.ident == ident) {
+                if (events[i].real.flags & EV_ERROR)
+                    refused = true;
+                else
+                    fired = true;
+            }
+        }
+        count = kept;
+    }
+    if (refused && count == 0) {
+        // The timer was refused, which kevent reports without waiting at all.
+        // Wait the ordinary way, or poll_wait would come straight back here.
+        return kevent(real->fd, NULL, 0, (struct kevent *) events, max, timeout);
+    }
+    if (ident != 0 && !fired && !refused) {
+        EV_SET(&timer, ident, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
+        kevent(real->fd, &timer, 1, NULL, 0, NULL);
+    }
+    errno = saved;
+    return count;
 }
 
 static void *rpe_data(struct real_poll_event *rpe) {

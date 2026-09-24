@@ -1,9 +1,53 @@
+#include <errno.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <time.h>
+#include <unistd.h>
+#if __APPLE__
+#include <sys/event.h>
+#endif
 #include "util/timer.h"
 #include "misc.h"
 #include "debug.h"
+
+#if __APPLE__
+int host_nanosleep_precise(struct timespec req, long slack_ns) {
+    if (!timespec_positive(req))
+        return 0;
+    // A kqueue of its own for each sleep: about a microsecond to make and
+    // close, less than nanosleep's own floor, and nothing to leak when the
+    // thread exits. A kqueue that cannot be had falls back to the coalesced
+    // sleep, which is late but still a sleep.
+    int kq = kqueue();
+    if (kq < 0)
+        return nanosleep(&req, NULL);
+    // Callers bound their naps (a day at most), so this cannot overflow.
+    int64_t ns = (int64_t) req.tv_sec * 1000000000 + req.tv_nsec;
+    struct kevent64_s timer, fired;
+    EV_SET64(&timer, 1, EVFILT_TIMER, EV_ADD | EV_ONESHOT,
+             NOTE_NSECONDS | NOTE_CRITICAL | (slack_ns > 0 ? NOTE_LEEWAY : 0),
+             ns, 0, 0, slack_ns > 0 ? (uint64_t) slack_ns : 0);
+    int n = kevent64(kq, &timer, 1, &fired, 1, 0, NULL);
+    int err = errno;
+    close(kq);
+    if (n < 0 && err == EINTR) {
+        errno = EINTR;
+        return -1;
+    }
+    // Refused (an EV_ERROR receipt, or the call failed outright): sleep the
+    // ordinary way rather than not at all.
+    if (n < 0 || (n == 1 && (fired.flags & EV_ERROR)))
+        return nanosleep(&req, NULL);
+    return 0;
+}
+#else
+// Linux hosts already give a sleep 50us of slack and no more.
+int host_nanosleep_precise(struct timespec req, long UNUSED(slack_ns)) {
+    if (!timespec_positive(req))
+        return 0;
+    return nanosleep(&req, NULL);
+}
+#endif
 
 static bool timer_warning_trace_enabled(void) {
     return false;
@@ -96,7 +140,12 @@ static void *timer_thread(void *param) {
                 nap.tv_sec = 86400;
                 nap.tv_nsec = 0;
             }
-            nanosleep(&nap, NULL);
+            // No slack: a POSIX timer, itimer or timerfd expires on time on
+            // Linux. A nanosleep here fired every expiry a fifth of a period
+            // late on iOS, which let a 5ms timer's expiry land just AFTER a
+            // guest that slept exactly 200 periods had taken the signal it
+            // should have been counted on (timer_conventions' overruns).
+            host_nanosleep_precise(nap, 0);
             lock(&timer->lock, 0);
             remaining = timespec_subtract(timer->end, timer_now(timer));
         }
