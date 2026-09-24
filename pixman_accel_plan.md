@@ -1,13 +1,19 @@
 # Pixman Composite Accelerator (Paravirt Provider) — Implementation Plan
 
-Status: **PHASES 0, 1, AND 2 DONE (2026-07-23), commits b2c97524 + c2f0d45a.**
-End-to-end verified: real, unmodified production Wayland clients
-(labwc + foot) genuinely accelerated through the actual start-wayland.sh
-session path. Remaining work is v2 coverage (mask/OVER_MASK_A8 is the
-biggest gap) and an app Settings toggle -- see "NEXT" at the bottom.
+Status (2026-09-24): **phases 0-2 DONE** (b2c97524, c2f0d45a); v2 mask
+compositing, OVER_MASK_A8 (db6c4d57) and x8r8g8b8 as the destination
+(2f0c587b) DONE; the app Settings toggle DONE ("Pixman Accel (Wayland
+rendering)" in Settings, UserPreferences `kPreferenceEnablePixAccelKey`,
+default off); `setup-wayland.sh` builds the shim best-effort. The first
+real-client decline breakdown is in "v2 step 1" below: foot's glyphs still
+decline (solid-fill source + clip, not the destination format), and the
+accelerator made multi-threaded clients SLOWER until a JIT invalidation bug
+was fixed (73b9112f). Device measurement (Phase 3's number) is next -- see
+"NEXT" at the bottom.
 Owner: unassigned. Companion plan: `jit_code_cache_plan.md` (cold start;
 NO-GO, unaffected by this plan). Direct precedent: the ChaCha20 crypto
-accelerator (kernel/ish_accel.c +
+accelerator (kernel/ish_accel_crypto.c + opt/AOK/crypto/ish_provider.c) —
+same architecture, same lessons apply.
 
 ## 0. Progress so far
 
@@ -174,7 +180,7 @@ standing discipline:
   don't trigger it; COPY/SRC already does a literal copy unconditionally
   and was already correct).
 
-Implementation, commit TBD: new `ISH_PIX_FLAG_DST_OPAQUE` guest-ABI flag;
+Implementation, commit 2f0c587b: new `ISH_PIX_FLAG_DST_OPAQUE` guest-ABI flag;
 `ish_pix_over_row` gained a `dst_is_opaque` parameter -- when both
 `src_is_opaque` and `dst_is_opaque` are true it short-circuits to a raw
 `memcpy` of the row instead of the per-channel blend formula, matching the
@@ -199,22 +205,103 @@ exactly the shape foot's masked glyph composites need; the real
 end-to-end confirmation that foot itself now accelerates is still
 pending (see NEXT).
 
-## NEXT (v2 candidates, ranked by ISH_PIXMAN_STATS decline frequency so far)
-1. Re-run the real start-wayland.sh + foot session with the x8r8g8b8-dst
-   fix live and confirm via ISH_PIXMAN_STATS that foot's masked glyph
-   composites now accelerate instead of declining (the actual point of the
-   x8r8g8b8-dst work -- differential-test-level validation is done, but the
-   real-client confirmation from the mask-support round hasn't been
-   repeated yet for this fix).
-2. `pixman_blt` and `pixman_image_fill_boxes`/`fill_rectangles` interposition
-   (documented v1 scope cuts in the shim's own README).
-3. SRC-with-mask and other op+mask combinations (currently declined
-   unconditionally in the shim, pending their own differential validation).
-4. Re-attempt the visual VNC sanity check with a simpler client once the
-   blank-screenshot test-environment mystery above is understood.
+## v2 step 1: real-client decline breakdown (2026-09-24)
 
-kernel/ish_accel_crypto.c + opt/AOK/crypto/ish_provider.c) — same
-architecture, same lessons apply.
+A real session through start-wayland.sh on the Mac CLI (-O2 build,
+`build/devuan-arm64-desk` clone: labwc 0.8.3, foot, waybar, l3afpad and
+galculator; glibc, like the device), accelerator on, with the instrumented
+shim (fd3997c1: every composite recorded as a shape -- op, src, mask, dst
+and the full set of decline reasons -- with calls, pixels and time). The
+workload: foot scrolling `find /usr/share/doc | head -3000`, window drags
+(foot, l3afpad, galculator), l3afpad paging through GPL-3 and typing,
+galculator clicks. Host load was 7-87 from other sessions' builds, so the
+times are noisy; the shapes and counts are not.
+
+**foot's masked glyphs still DECLINE.** Every glyph is
+`OVER src=solid mask=a8 dst=x8r8g8b8`: the source is a
+`pixman_image_create_solid_fill` colour, and foot has a clip region on its
+buffer. x8r8g8b8 as the destination is no longer a reason. The old
+"decline-format" was the solid source all along: `pixman_image_get_format`
+answers PIXMAN_null for a solid fill.
+
+Decline shapes ranked by time inside pixman (one run, ms):
+
+| process | shape | reasons | calls | ms |
+|---|---|---|---|---|
+| labwc | SRC x8r8g8b8 -> x8r8g8b8 | clip | 722 | 1362 |
+| labwc | SRC a8r8g8b8 -> x8r8g8b8 | clip | 928 | 1301 |
+| labwc | SRC solid -> x8r8g8b8 | clip+src-kind | 5001 | 1005 |
+| labwc | OVER a8r8g8b8 -> x8r8g8b8 | clip | 5601 | 463 |
+| foot | (fill_rectangles entry, fills themselves accelerated) | per-call overhead | 18915 | 2437 |
+| foot | OVER solid, a8 mask -> x8r8g8b8 (glyphs) | clip+src-kind | 4804 | 405 |
+| l3afpad | pixman_blt (not interposed) | -- | 1554 | 627 |
+| l3afpad | composite_glyphs_no_mask (not interposed) | -- | 731 | 196 |
+| galculator | IN a8 -> a8 (cairo mask building) | op+format(+transform/repeat) | 1961 | 147 |
+| l3afpad | OVER a8r8g8b8, SOLID mask -> a8r8g8b8 | mask-kind | 310 | 73 |
+| galculator | OVER solid, a8 mask -> a8r8g8b8 | src-kind | 2008 | 63 |
+
+What that says:
+- **Clip on the destination is the biggest single gap**: about 80% of
+  labwc's pixman time. wlroots clips every texture blit and every clear to
+  the damage region. Supporting it means intersecting the composite rect
+  with the dst clip's boxes (shadowed from set_clip_region32) and issuing
+  one kernel request per box, ideally one syscall per call.
+- **Solid-fill sources are second**: labwc's clears, every foot glyph, and
+  GTK's text and rectangles. Needs the colour (shadowed from
+  create_solid_fill) and a solid-source variant of FILL/OVER/OVER_MASK.
+- **fill_rectangles/fill_boxes (NEXT #2) matters for foot**: its fills
+  already reach the accelerator through pixman's internal pixman_fill
+  call, but the per-call setup around them (region code, 78-pixel cell
+  fills) costs 2.4 s. Interposing fill_rectangles/fill_boxes directly skips
+  that.
+- **pixman_blt (NEXT #2) matters for GTK**: 0.6 s in l3afpad.
+- **SRC-with-mask and other op+mask (NEXT #3) do not**: 2 calls of SRC
+  solid+a8 in the whole run, 2 of IN_REVERSE.
+- Everything from step 4 of the brief (scaled blits, repeat=NORMAL,
+  format conversion) is small: transform/repeat declines are GTK's gradient
+  buttons and a few glyph edge cases, well under 100 ms.
+- **wayvnc is the largest CPU consumer during a window drag** (1600-1950
+  ticks per scripted run against labwc's 530-820), and none of it is in
+  pixman -- it never calls pixman at all. That is neatvnc's own capture and
+  encode, a separate target (plan item "wayvnc capture copies").
+
+**The accelerator made foot SLOWER, and why.** Interleaved on/off runs of the
+same scripted session (ISH_PIXMAN_SHIM_OFF=1 for the off arm, same
+instrument): labwc's pixman time roughly halved (2.6/3.4 s on vs 5.6/6.2 s
+off) and l3afpad's dropped (0.6/0.8 s vs 1.2/1.3 s), but foot's TRIPLED
+(1.6/1.2 s vs 0.4/0.5 s). Per accelerated fill: 56 us against 9 us in
+pixman. Not the syscall itself -- a single-threaded microbenchmark
+(pixbench) shows 0.4 us per syscall and the accelerator winning at every
+size from 1x1 up, 26x for a full-frame OVER. The cost was contention: four
+threads doing small accelerated fills took 114-949 us per call. Sampling
+showed them waiting in jit_cleanup_jetsam_after_interrupt, i.e. the JIT had
+translations to free -- for a program that never writes code.
+jit_invalidate_range walked the page-hash BUCKET (page % 1024), not the
+page, so every kernel write through mem_ptr(MEM_WRITE) threw away the
+translations of every code page sharing a bucket with any page it touched,
+and every other thread then waited for the jetsam write lock. Fixed in
+73b9112f (exact-page match). With it, 4-thread fills are 19-28 us per call,
+and as a side effect OpenJDK runs a Java test program ~3x faster
+(144/153 s -> 45/53 s). Remaining: small accelerated fills still scale worse
+across threads than in-guest pixman (2.4 -> 9 -> 21 us for 1/2/4 threads
+vs flat 2-3 us), from jit->lock taken per written page. A size floor in the
+shim, or a cheaper "does this page have code" check, is the next lever;
+tune it with the device numbers.
+
+## NEXT
+1. **Device measurement (Phase 3's number)** on the M4 iPad: interleaved
+   on/off sessions (ISH_PIXMAN_SHIM_OFF=1 as the off arm), drag frame rate
+   over VNC, time in pixman per process, CPU ticks per process, with
+   73b9112f in the build.
+2. Clip-region support for the destination (labwc's biggest cost).
+3. Solid-fill sources (labwc's clears, foot's and GTK's glyphs).
+4. `pixman_image_fill_boxes`/`fill_rectangles` and `pixman_blt`
+   interposition (foot's per-cell overhead; GTK's blits).
+5. A size floor for tiny requests, set from the device numbers.
+6. SRC-with-mask and other op+mask combinations: the data says not yet.
+
+Each of 2-4 is validated against real pixman FIRST, with the differential
+harness in tests/manual/pixman_accel.c.
 
 ## 1. Problem and evidence
 
