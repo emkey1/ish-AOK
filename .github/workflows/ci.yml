@@ -22,6 +22,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      # `submodules: true` stops one level down, and two of smallclue's own
+      # submodules are part of this build: third-party/openssh (ssh, scp, sftp,
+      # ssh-keygen) and third-party/nextvi (vi). Without them meson swaps in
+      # stubs and says so only as a setup WARNING, which is how this job kept
+      # passing while a recursive clone of the same tree could not compile
+      # OpenSSH on Linux at all. Just those two: meson uses none of smallclue's
+      # other submodules (dvtm, libgit2, openrsync).
+      - name: Check out smallclue's openssh and nextvi
+        run: git -C deps/smallclue submodule update --init third-party/openssh third-party/nextvi
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
@@ -54,6 +63,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      # See build-linux. Here the missing trees cost more than coverage: the
+      # IPA workflows check out the same way, so every IPA they built shipped
+      # an ssh that says "not built into this iSH-AOK" and a stub vi.
+      - name: Check out smallclue's openssh and nextvi
+        run: git -C deps/smallclue submodule update --init third-party/openssh third-party/nextvi
       - name: Select newest available Xcode
         run: |
           LATEST_XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)

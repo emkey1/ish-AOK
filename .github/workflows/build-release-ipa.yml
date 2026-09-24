@@ -36,6 +36,11 @@ jobs:
           submodules: true
           fetch-depth: 0
 
+      # See build-dev-ipa.yml: without these two, the release IPA shipped an
+      # ssh that says "not built into this iSH-AOK" and a stub vi.
+      - name: Check out smallclue's openssh and nextvi
+        run: git -C deps/smallclue submodule update --init third-party/openssh third-party/nextvi
+
       - name: Select newest available Xcode
         run: |
           LATEST_XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
