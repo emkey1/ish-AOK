@@ -21,6 +21,7 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		BB28C8F326896C1D00BDC834 /* SwapFilePicker.m in Sources */ = {isa = PBXBuildFile; fileRef = BB28C8F126896C1D00BDC834 /* SwapFilePicker.m */; };
 		07430ECDFB3BADD4102D3854 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EDE84B56A5A0D9AC87E4DABB /* MediaPlayer.framework */; };
 		0FC2383C2991FBA6004C09EC /* mmx.c in Sources */ = {isa = PBXBuildFile; fileRef = 0FC2383B2991FB82004C09EC /* mmx.c */; };
 		1A4DC4F2374508A4B1CEC666 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = B943617711E6F6314E471864 /* manifest.json */; };
@@ -764,6 +765,8 @@
 		C0A200042F2F000100000006 /* GuestCommandRunner.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = GuestCommandRunner.m; sourceTree = "<group>"; };
 		C0A200042F2F000100000007 /* GuestCommandRunner.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GuestCommandRunner.h; sourceTree = "<group>"; };
 		C0A200042F2F000100000008 /* ShortcutActivityBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ShortcutActivityBridge.h; sourceTree = "<group>"; };
+		BB28C8F126896C1D00BDC834 /* SwapFilePicker.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SwapFilePicker.m; sourceTree = "<group>"; };
+		BB28C8F226896C1D00BDC834 /* SwapFilePicker.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SwapFilePicker.h; sourceTree = "<group>"; };
 		C100D3488E931E73E9A1AC8C /* WorkspaceImageViewer.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WorkspaceImageViewer.h; sourceTree = "<group>"; };
 		C64EFBFD4819B3516B73356F /* DisplayRFBShaders.metal */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.metal; path = DisplayRFBShaders.metal; sourceTree = "<group>"; };
 		C9934D01E356E81EDFCCD344 /* WorkspaceFileManager.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = WorkspaceFileManager.h; sourceTree = "<group>"; };
@@ -1165,6 +1168,8 @@
 				C64EFBFD4819B3516B73356F /* DisplayRFBShaders.metal */,
 				A6CA9F3287E76895B984C378 /* DisplayRFBClient.h */,
 				DEAD678A36BE975280C995BA /* DisplayRFBView.h */,
+				BB28C8F226896C1D00BDC834 /* SwapFilePicker.h */,
+				BB28C8F126896C1D00BDC834 /* SwapFilePicker.m */,
 			);
 			path = app;
 			sourceTree = "<group>";
@@ -2242,6 +2247,7 @@
 				8D457CFF8048C780CA8A5561 /* DisplayRFBView.m in Sources */,
 				A143B4E425BDFAE03A1725CD /* AOKFoundationModelsBridge.swift in Sources */,
 				C0A200042F2F000100000005 /* GuestCommandRunner.m in Sources */,
+				BB28C8F326896C1D00BDC834 /* SwapFilePicker.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

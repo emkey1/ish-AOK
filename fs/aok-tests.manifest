@@ -24,6 +24,7 @@ x86/atomic_cmpxchg32.c
 x86/atomic_cmpxchg8b.c
 x86/atomic_logic32.c
 x86/atomic_lock_contended.c
+x86/atomic_neg_not.c
 x86/cow_atomic_fault.c
 x86/x87_fpu.c
 x86/x86_loop.c
@@ -314,6 +315,7 @@ native_zsh_fork_state.sh
 native_bash_fork_state.sh
 native_signal_write_eintr.sh
 stack_guard_gap.c
+stack_rlimit_pushdown.c
 realfs_long_name.c
 setsid_thread_group.c
 group_signal_target.c

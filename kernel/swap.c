@@ -242,9 +242,11 @@ static int swap_file_detach_locked(uint64_t **bitmap_out) {
 
 static void swap_file_dispose(int fd, uint64_t *bitmap) {
     if (fd >= 0) {
-        // Truncate before closing: the file is already unlinked, so this is
-        // what actually hands the blocks back rather than waiting for the
-        // process to exit. A clean exit should leave nothing behind.
+        // Truncate before closing. The container's file is already unlinked,
+        // so this is what hands its blocks back rather than waiting for the
+        // process to exit. A file on external storage (swap_enable_fd) is not
+        // unlinked and stays where the user put it, so truncating is also what
+        // empties it of guest memory -- keys and passwords included.
         if (ftruncate(fd, 0) != 0)
             /* nothing useful to do; the unlink still frees it at exit */;
         close(fd);
@@ -260,7 +262,7 @@ static void swap_disable_locked(void);
 static void swap_kswapd_start_locked(void);
 static void swap_kswapd_stop_locked(void);
 
-static int swap_enable_locked(uint64_t bytes, bool ram_only) {
+static int swap_enable_locked(uint64_t bytes, bool ram_only, int host_fd) {
     uint64_t frame = mem_frame_size();
     if (frame == 0)
         return _EINVAL;
@@ -318,23 +320,41 @@ static int swap_enable_locked(uint64_t bytes, bool ram_only) {
     // RAM-only: no file at all. Not a zero-length one, not a sparse one -- the
     // point is that nothing is reserved and nothing can be written. Slots are
     // pure addressing here; the compressed pool is the only storage.
+    //
+    // External: host_fd >= 0 is a file the app opened on storage the user chose
+    // (a USB drive, through a security-scoped URL), used instead of an unlinked
+    // temp file in the container. Ownership passes to this module only on
+    // SUCCESS -- from then on it is closed with the area (swap_file_dispose).
+    // On failure it is still the caller's to close. The container's temp file
+    // is this module's either way, so a failure closes that one here.
     int fd = -1;
-    if (!ram_only)
-        fd = host_unlinked_tmpfd();
+    if (!ram_only) {
+        if (host_fd >= 0)
+            fd = host_fd;
+        else
+            fd = host_unlinked_tmpfd();
+    }
     if (!ram_only && fd < 0) {
         free(bitmap);
         return fd;
     }
     int err = 0;
-    if (!ram_only) {
+    // A file on external storage is not unlinked, so it can still hold a
+    // previous run's pages -- a run that was killed never reached
+    // swap_file_dispose's truncate. Empty it before the area is laid out, so
+    // this run neither reads nor leaves behind anything it did not write.
+    if (!ram_only && host_fd >= 0 && ftruncate(fd, 0) != 0)
+        err = _EIO;
+    if (!ram_only && err == 0) {
         err = swap_reserve(fd, total);
         if (err == 0 && ftruncate(fd, (off_t) total) != 0)
             err = errno == ENOSPC ? _ENOSPC : _EIO;
-        if (err != 0) {
-            close(fd);
-            free(bitmap);
-            return err;             // never a smaller area than was asked for
-        }
+    }
+    if (err != 0) {
+        if (fd >= 0 && host_fd < 0)
+            close(fd);              // ours; an external fd stays the caller's
+        free(bitmap);
+        return err;                 // never a smaller area than was asked for
     }
 
     lock(&swap_lock, 0);
@@ -469,7 +489,7 @@ static _Atomic uint64_t swap_last_enable_bytes;
 
 int swap_enable(uint64_t bytes) {
     lock(&swap_config_lock, 0);
-    int err = swap_enable_locked(bytes, false);
+    int err = swap_enable_locked(bytes, false, -1);
     atomic_store_explicit(&swap_last_enable_err, err, memory_order_relaxed);
     atomic_store_explicit(&swap_last_enable_bytes, bytes, memory_order_relaxed);
     unlock(&swap_config_lock);
@@ -483,7 +503,20 @@ int swap_enable(uint64_t bytes) {
 int swap_enable_ram_only(uint64_t bytes) {
 
     lock(&swap_config_lock, 0);
-    int err = swap_enable_locked(bytes, true);
+    int err = swap_enable_locked(bytes, true, -1);
+    atomic_store_explicit(&swap_last_enable_err, err, memory_order_relaxed);
+    atomic_store_explicit(&swap_last_enable_bytes, bytes, memory_order_relaxed);
+    unlock(&swap_config_lock);
+    return err;
+}
+
+// swap_enable with the area in a file the caller opened (swap.h has the
+// ownership rule: this module's on success, the caller's on failure).
+int swap_enable_fd(int host_fd, uint64_t bytes) {
+    if (host_fd < 0)
+        return _EINVAL;
+    lock(&swap_config_lock, 0);
+    int err = swap_enable_locked(bytes, false, host_fd);
     atomic_store_explicit(&swap_last_enable_err, err, memory_order_relaxed);
     atomic_store_explicit(&swap_last_enable_bytes, bytes, memory_order_relaxed);
     unlock(&swap_config_lock);
@@ -1404,6 +1437,21 @@ void swap_set_preference(bool enabled, unsigned size_mb) {
     atomic_store_explicit(&swap_pref_seen, true, memory_order_release);
 }
 
+// A file on external storage for swap_startup to use instead of the container,
+// opened by the app from a security-scoped bookmark. -1 means none. Recorded,
+// like the preference, before swap_startup() acts on it.
+static int swap_external_fd = -1;
+
+void swap_set_external_fd(int fd) {
+    swap_external_fd = fd;
+}
+
+int swap_take_unused_external_fd(void) {
+    int fd = swap_external_fd;
+    swap_external_fd = -1;
+    return fd;
+}
+
 // Compressed memory with no swap area behind it.
 //
 // The addressable size is derived from the pool's cap rather than asked for
@@ -1468,7 +1516,22 @@ void swap_startup(void) {
             printk("swap: enabled in Settings but no size chosen; staying off\n");
             return;
         }
-        int err = swap_enable((uint64_t) mb * 1024 * 1024);
+        // External fd: the iOS app restored a security-scoped bookmark and
+        // opened the swap file on a USB drive. Use it instead of creating an
+        // anonymous temp file in the container.
+        int ext_fd = swap_external_fd;
+        int err;
+        if (ext_fd >= 0) {
+            err = swap_enable_fd(ext_fd, (uint64_t) mb * 1024 * 1024);
+            if (err == 0) {
+                swap_external_fd = -1;  // ours now; see swap_enable_fd
+                printk("swap: enabled on external storage (fd %d)\n", ext_fd);
+            }
+            // On failure it stays recorded, and the app takes it back with
+            // swap_take_unused_external_fd() and closes it.
+        } else {
+            err = swap_enable((uint64_t) mb * 1024 * 1024);
+        }
         if (err < 0)
             printk("swap: enable failed (%d)\n", err);
         else
@@ -1530,7 +1593,22 @@ void swap_startup(void) {
     // back, which is the only place the pair can be exercised at all.
     if (want > 0)
         atomic_store_explicit(&swap_pref_size_mb, (unsigned) want, memory_order_relaxed);
-    int err = swap_enable((uint64_t) want * 1024 * 1024);
+    // ISH_GUEST_SWAP_FILE=<host path> puts the area in that file through
+    // swap_enable_fd, the path the app takes for a USB drive -- so the CLI can
+    // run it against a real exFAT or FAT32 volume (an hdiutil image) rather
+    // than only against the container's unlinked APFS temp file.
+    const char *file = getenv("ISH_GUEST_SWAP_FILE");
+    int err;
+    if (file != NULL && file[0] != '\0') {
+        int fd = open(file, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+        err = fd < 0 ? _EIO : swap_enable_fd(fd, (uint64_t) want * 1024 * 1024);
+        if (fd >= 0 && err != 0)
+            close(fd);
+        if (err == 0)
+            printk("swap: ISH_GUEST_SWAP_FILE=%s\n", file);
+    } else {
+        err = swap_enable((uint64_t) want * 1024 * 1024);
+    }
     if (err < 0)
         printk("swap: ISH_GUEST_SWAP_MB=%s refused (%d)\n", mb, err);
     else

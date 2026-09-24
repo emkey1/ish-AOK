@@ -60,6 +60,13 @@ int swap_enable(uint64_t bytes);
 // compressed tier or refused, and nothing is ever written to storage. `bytes`
 // is the addressable size, not the memory used -- see swap_ram_only in swap.c.
 int swap_enable_ram_only(uint64_t bytes);
+// swap_enable, with the area in a file the caller opened (a USB drive, through a
+// security-scoped URL) instead of an unlinked temp file in the container. The
+// file is emptied first, since it is not unlinked and may hold a killed run's
+// pages. On SUCCESS the fd belongs to this module and is truncated and closed
+// with the area; the caller must not close it. On FAILURE it is still the
+// caller's to close.
+int swap_enable_fd(int host_fd, uint64_t bytes);
 
 // Turn the pager off: stop new eviction, fault every evicted page back into its
 // address space, then release the slot table and truncate and close the file.
@@ -89,6 +96,17 @@ void swap_startup(void);
 // simulator sitting on the rootfs picker with nothing installed had half a
 // gigabyte of swap file open in its container.
 void swap_set_preference(bool enabled, unsigned size_mb);
+
+// A file on external storage for the next swap_startup() to use, through
+// swap_enable_fd(), instead of the container. Call it before swap_startup().
+// Ownership follows swap_enable_fd's rule; after swap_startup(), ask
+// swap_take_unused_external_fd() whether it is still the caller's.
+void swap_set_external_fd(int fd);
+// After swap_startup(): the fd given to swap_set_external_fd() if the startup
+// did not take it (-1 if it did, or none was given). The caller closes it.
+// Asking this rather than swap_enabled() is what makes ownership exact: a
+// startup can end with swap on without having used the file.
+int swap_take_unused_external_fd(void);
 
 // May a guest process change the switch, through /proc/ish/swap?
 //

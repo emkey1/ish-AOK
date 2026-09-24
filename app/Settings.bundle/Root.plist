@@ -130,6 +130,30 @@ Off by default, because it spends storage and is not free of limits. A session r
 		</dict>
 		<dict>
 			<key>FooterText</key>
+			<string>Swap to a USB drive instead of the app's container. Writes go to a .aok-swap file on the drive, keeping internal flash wear-free. Turn this on, return to iSH-AOK and pick a folder on the drive; it is used from the next launch. If the drive is not attached at launch, swap stays off. To use a different folder, switch this off, return to iSH-AOK, then switch it on again.
+
+The file holds guest memory unencrypted, passwords and keys included. It is emptied when swap stops, but if iSH-AOK is killed it keeps its contents until the next launch empties it.
+
+exFAT drives (most USB sticks) cannot guarantee preallocated space. If the drive fills up while swap is active, affected guest processes will crash. Use a drive with plenty of free space.
+
+Pulling the drive while swap is active crashes any process whose memory was on it. Quit iSH-AOK before removing the drive.</string>
+			<key>Title</key>
+			<string>External USB Swap</string>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+		</dict>
+		<dict>
+			<key>DefaultValue</key>
+			<false/>
+			<key>Key</key>
+			<string>Enable Swap On External</string>
+			<key>Title</key>
+			<string>Swap to External Drive</string>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+		</dict>
+		<dict>
+			<key>FooterText</key>
 			<string>Holds cold memory compressed in RAM instead of writing it to storage. Measured 2.2–2.8x on real workloads, so a 128 MB pool holds roughly 300 MB of guest memory, and a page comes back about two orders of magnitude faster than a read from flash.
 
 Works on its own — Swap is NOT required, and with Swap off nothing is ever written to storage at all. If Swap is also on, this sits in front of it and only what does not compress reaches the file.

@@ -15,7 +15,12 @@ cat /proc/ish/BAT0           # both of those plus low-power mode, one per line
 cat /proc/ish/thermal_state  # nominal / fair / serious / critical
 cat /proc/ish/timezone       # the device's time zone, e.g. Europe/London
 cat /proc/ish/UIDevice       # the UIDevice the app sees: model, OS, orientation
+cat /proc/ish/applets        # the Workspace applets that are open
 ```
+
+The Workspace applets are app interface, not processes, so `ps` and `top` do
+not show them. `applets` lists them instead: see
+[workspace.md](workspace.md#procishapplets-what-is-open).
 
 ## Battery, heat and the time zone
 

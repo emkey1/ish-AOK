@@ -1681,6 +1681,24 @@ restart:
                 case 0x87: TRACEI("lock xchg reg, modrm");
                            READMODRM_MEM; XCHG(modrm_reg, modrm_val,oz); break;
 
+#define GRP3_ATOMIC(val,z) \
+    switch (modrm.opcode) { \
+        case 2: TRACE("lock not"); ATOMIC_NOT(val,z); break; \
+        case 3: TRACE("lock neg"); ATOMIC_NEG(val,z); break; \
+        default: TRACE("undefined"); UNDEFINED; \
+    }
+
+                // LOCK NOT/NEG, the two group-3 members the prefix is legal
+                // on (test, mul, imul, div and idiv are #UD with it, as here).
+                // This entry was missing, so both fell through to UNDEFINED
+                // and killed an i386 guest with SIGILL where Linux runs them.
+                case 0xf6: TRACEI("lock grp3 modrm8\t");
+                           READMODRM_MEM; GRP3_ATOMIC(modrm_val,8); break;
+                case 0xf7: TRACEI("lock grp3 modrm\t");
+                           READMODRM_MEM; GRP3_ATOMIC(modrm_val,oz); break;
+
+#undef GRP3_ATOMIC
+
                 case 0xfe: TRACEI("lock grp5 modrm8\t");
                            READMODRM_MEM; GRP5_ATOMIC(modrm_val,8); break;
                 case 0xff: TRACEI("lock grp5 modrm\t");

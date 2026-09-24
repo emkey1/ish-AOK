@@ -1371,6 +1371,27 @@ static int rpe_events(struct real_poll_event *rpe, struct poll_fd *pfd) {
     // wrong -- the same socket was still writable -- and EPOLLHUP is what a
     // program treats as "connection over".
     bool is_socket = pfd != NULL && pfd->fd != NULL && S_ISSOCK(pfd->fd->type);
+    // On a socket, EV_EOF means the connection's state changed, and the filter
+    // that saw it only knows its own half. What Linux reports for that state
+    // needs both: a peer that closed is readable (the read returns 0, and
+    // Linux sets EPOLLIN whenever RCV_SHUTDOWN is), and it is a HUP only once
+    // both directions are down. EVFILT_READ alone cannot tell, and an EPOLLIN
+    // registration watches only EVFILT_READ. So ask sock_poll, which takes a
+    // fresh look and gives the answer a poll made after the close gets.
+    //
+    // Before this, a poll(POLLIN) already blocked when the peer closed woke
+    // with POLLHUP alone, revents 0x10 where Linux gives 0x11 (docs/
+    // build_556_musts.md item 3): EVFILT_WRITE's EOF supplied the HUP and
+    // nothing supplied the IN. A poll made after the close never came
+    // through here, which is why the case looked fixed. epoll(EPOLLIN) got
+    // 0x11 only by luck. The RDHUP its EVFILT_READ event produced matched
+    // nothing it asked for, so poll_wait went round again, and the rescan
+    // asked sock_poll. Mapping EVFILT_READ's EOF to POLL_READ instead fixed
+    // poll and broke epoll, which then woke with EPOLLIN alone (measured),
+    // because that one event cannot know the write side is down too.
+    if (is_socket && (rpe->real.flags & EV_EOF) && pfd->fd->ops->poll != NULL &&
+            (rpe->real.filter == EVFILT_READ || rpe->real.filter == EVFILT_WRITE))
+        return pfd->fd->ops->poll(pfd->fd);
     if (rpe->real.filter == EVFILT_READ) {
         int events = 0;
         if (rpe->real.data > 0)

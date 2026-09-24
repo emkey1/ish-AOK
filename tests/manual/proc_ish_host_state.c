@@ -1,5 +1,5 @@
 // proc_ish_host_state.c — the host state /proc/ish reports: the battery files,
-// thermal_state and timezone.
+// thermal_state, timezone, and the Workspace applets.
 //
 // The battery files used to come from printBatteryStatus(), which asked
 // UIDevice on the reading guest thread and returned the UTF8String of a
@@ -256,6 +256,52 @@ static void check_timezone(int cli) {
         test_logf("     %s %s\n", path, access(path, F_OK) == 0 ? "exists" : "is not in this root's tzdata");
 }
 
+// Every character of s is a decimal digit, and there is at least one.
+static int all_digits(const char *s) {
+    if (*s == '\0')
+        return 0;
+    for (; *s != '\0'; s++)
+        if (!isdigit((unsigned char) *s))
+            return 0;
+    return 1;
+}
+
+// /proc/ish/applets: the Workspace applets, which are app UI and so appear in
+// no process list. A fixed header, then "ID TOOL DESKTOP STATE AGE TITLE" per
+// applet with the title last. The command-line build has no Workspace, so the
+// header is the whole file there; on a device the rows are whatever happens to
+// be open, so each one is checked for shape rather than content.
+static void check_applets(int cli) {
+    static char buf[16384];
+    ssize_t n = slurp("/proc/ish/applets", buf, sizeof(buf));
+    if (!check("/proc/ish/applets is readable", n > 0))
+        return;
+    static const char header[] = "ID TOOL DESKTOP STATE AGE TITLE\n";
+    if (!check("applets starts with its header", strncmp(buf, header, strlen(header)) == 0))
+        return;
+    char *rows = buf + strlen(header);
+    if (cli)
+        check("applets lists nothing in the command-line build", *rows == '\0');
+    int count = 0;
+    char *save = NULL;
+    for (char *line = strtok_r(rows, "\n", &save); line != NULL; line = strtok_r(NULL, "\n", &save)) {
+        char id[32], tool[64], desktop[32], state[16], age[32];
+        int title_at = -1;
+        int ok = sscanf(line, "%31s %63s %31s %15s %31s %n", id, tool, desktop, state, age, &title_at) == 5 &&
+                 title_at > 0 && line[title_at] != '\0' &&
+                 all_digits(id) && all_digits(age) &&
+                 (all_digits(desktop) || strcmp(desktop, "*") == 0) &&
+                 (strcmp(state, "front") == 0 || strcmp(state, "shown") == 0 ||
+                  strcmp(state, "hidden") == 0);
+        test_logf("     applet: %s\n", line);
+        if (!ok)
+            printf("FAIL applets row does not parse: \"%s\"\n", line);
+        failures_total += !ok;
+        count++;
+    }
+    test_logf("     %d applet(s) open\n", count);
+}
+
 int main(int argc, char **argv) {
     test_init(argc, argv);
     alarm(test_watchdog_secs(120));
@@ -270,5 +316,6 @@ int main(int argc, char **argv) {
     check_battery_files(cli);
     check_thermal_state(cli);
     check_timezone(cli);
+    check_applets(cli);
     return finish_suite("proc_ish_host_state");
 }

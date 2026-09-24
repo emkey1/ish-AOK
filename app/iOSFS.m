@@ -124,6 +124,12 @@ static NSString *const kMountBookmarks = @"iOS Mount Bookmarks";
 #define BOOKMARK_PATH_ENCODING NSISOLatin1StringEncoding
 // To avoid locking issues, only access from the main thread
 static NSMutableDictionary<NSString *, NSData *> *ios_mount_bookmarks;
+// Bookmarks for mounts still at their staging path (see iosfs_mount), keyed by
+// that path, until move_mount puts them in place and iosfs_relocated moves the
+// bookmark into ios_mount_bookmarks. NEVER persisted: a staging path is not a
+// place to mount anything at launch. Main thread only, like the table above.
+static NSMutableDictionary<NSString *, NSData *> *ios_staged_bookmarks;
+static NSString *const kStagingPrefix = @"/.ish-fsmount/";
 static bool mount_from_bookmarks = false; // This is a hack because I am bad at parameter passing
 static void sync_bookmarks(void) {
     [NSUserDefaults.standardUserDefaults setObject:ios_mount_bookmarks forKey:kMountBookmarks];
@@ -132,13 +138,14 @@ void iosfs_init(void) {
     ios_mount_bookmarks = [NSUserDefaults.standardUserDefaults dictionaryForKey:kMountBookmarks].mutableCopy;
     if (ios_mount_bookmarks == nil)
         ios_mount_bookmarks = [NSMutableDictionary new];
+    ios_staged_bookmarks = [NSMutableDictionary new];
 
     // Drop any bookmark stored against a staging path before restoring. Older
     // builds persisted those (see the comment in the mount path below), and
     // restoring one re-creates the phantom mount on every launch -- so it
     // outlives the fix unless it is cleared here.
     for (NSString *stale in ios_mount_bookmarks.allKeys) {
-        if ([stale hasPrefix:@"/.ish-fsmount/"]) {
+        if ([stale hasPrefix:kStagingPrefix]) {
             NSLog(@"dropping stale staging-path bookmark %@", stale);
             [ios_mount_bookmarks removeObjectForKey:stale];
         }
@@ -197,29 +204,32 @@ static int iosfs_mount(struct mount *mount) {
     if (!mount_from_bookmarks) {
         NSData *bookmark = [url bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil relativeToURL:nil error:nil];
         NSString *path = [NSString stringWithCString:mount->point encoding:BOOKMARK_PATH_ENCODING];
-        // Not while the mount is still at its staging path. A mount made
-        // through the new mount API (fsopen/fsconfig/fsmount/move_mount, which
-        // util-linux 2.39's mount(8) uses) is created at "/.ish-fsmount/<n>"
-        // and only relocated later by move_mount, so mount->point here is that
-        // private path -- and nothing re-keys the bookmark afterwards. Storing
-        // it meant iosfs_init() re-mounted at "/.ish-fsmount/<n>" on every
-        // subsequent launch, forever: a real, attached, visible mount in
-        // /proc/mounts that no filtering hides, which is exactly the symptom
-        // 648421ffc set out to remove. One was found parked on the test iPad,
-        // where `busybox df` reported "df: /.ish-fsmount/11: Permission
-        // denied" because the staging directory is 0700 root.
+        // Not persisted while the mount is still at its staging path. A mount
+        // made through the new mount API (fsopen/fsconfig/fsmount/move_mount,
+        // which util-linux 2.39's mount(8) uses) is created at
+        // "/.ish-fsmount/<n>" and only moved into place later by move_mount,
+        // so mount->point here is that private path. Persisting it meant
+        // iosfs_init() re-mounted at "/.ish-fsmount/<n>" on every later
+        // launch, forever: a real, attached, visible mount in /proc/mounts
+        // that no filtering hides, which is exactly the symptom 648421ffc set
+        // out to remove. One was found parked on the test iPad, where
+        // `busybox df` reported "df: /.ish-fsmount/11: Permission denied"
+        // because the staging directory is 0700 root.
         //
-        // The cost is that such a mount does not survive a relaunch. That is
-        // strictly better than persisting a key that cannot work, and the
-        // classic mount path -- where mount->point is already the real
-        // location -- is unaffected. Re-keying at move_mount is the proper
-        // fix; see docs/historical/build_553_musts.md.
-        if ([path hasPrefix:@"/.ish-fsmount/"])
-            bookmark = nil;
+        // So it waits in ios_staged_bookmarks, which is never written out,
+        // and iosfs_relocated files it under the real path once the move
+        // happens. The URL is only in hand here, during the mount, so this is
+        // the one chance to make the bookmark at all. A staged mount that is
+        // never moved is dropped by iosfs_umount, and a relaunch forgets it.
         if (bookmark != nil) {
+            bool staged = [path hasPrefix:kStagingPrefix];
             dispatch_async(dispatch_get_main_queue(), ^{
-                ios_mount_bookmarks[path] = bookmark;
-                sync_bookmarks();
+                if (staged) {
+                    ios_staged_bookmarks[path] = bookmark;
+                } else {
+                    ios_mount_bookmarks[path] = bookmark;
+                    sync_bookmarks();
+                }
             });
         }
     }
@@ -230,6 +240,7 @@ static int iosfs_mount(struct mount *mount) {
 static int iosfs_umount(struct mount *mount) {
     NSString *path = [NSString stringWithCString:mount->point encoding:BOOKMARK_PATH_ENCODING];
     dispatch_async(dispatch_get_main_queue(), ^{
+        [ios_staged_bookmarks removeObjectForKey:path];
         [ios_mount_bookmarks removeObjectForKey:path];
         sync_bookmarks();
     });
@@ -237,6 +248,27 @@ static int iosfs_umount(struct mount *mount) {
     [url stopAccessingSecurityScopedResource];
     CFBridgingRelease(mount->data);
     return 0;
+}
+
+// The mount has moved: the new mount API's move_mount out of its staging
+// path, or a classic `mount --move`. Move its bookmark with it, so the next
+// launch mounts it where it now is. Queued behind the store iosfs_mount made,
+// on the same main queue, so the bookmark is there to move.
+static void iosfs_relocated(struct mount *UNUSED(mount), const char *old_point, const char *new_point) {
+    NSString *from = [NSString stringWithCString:old_point encoding:BOOKMARK_PATH_ENCODING];
+    NSString *to = [NSString stringWithCString:new_point encoding:BOOKMARK_PATH_ENCODING];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSData *bookmark = ios_staged_bookmarks[from] ?: ios_mount_bookmarks[from];
+        [ios_staged_bookmarks removeObjectForKey:from];
+        [ios_mount_bookmarks removeObjectForKey:from];
+        if (bookmark != nil) {
+            if ([to hasPrefix:kStagingPrefix])
+                ios_staged_bookmarks[to] = bookmark;
+            else
+                ios_mount_bookmarks[to] = bookmark;
+        }
+        sync_bookmarks();
+    });
 }
 
 static NSURL *url_for_path_in_mount(struct mount *mount, const char *path) {
@@ -592,6 +624,7 @@ const struct fs_ops iosfs = {
     .name = "ios", .magic = 0x694f5320,
     .mount = iosfs_mount,
     .umount = iosfs_umount,
+    .relocated = iosfs_relocated,
     .statfs = realfs_statfs,
 
     .open = iosfs_open,
@@ -619,6 +652,7 @@ const struct fs_ops iosfs_unsafe = {
     .name = "ios-unsafe", .magic = 0x694f5321,
     .mount = iosfs_mount,
     .umount = iosfs_umount,
+    .relocated = iosfs_relocated,
     .statfs = realfs_statfs,
 
     .open = realfs_open,

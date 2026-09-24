@@ -320,6 +320,13 @@ struct fs_ops {
 
     int (*mount)(struct mount *mount);
     int (*umount)(struct mount *mount);
+    // Optional. Called when an existing mount moves from old_point to
+    // new_point: move_mount(2), and mount(2)'s MS_MOVE. For a filesystem that
+    // keeps anything keyed by where it is mounted. A mount made through the
+    // new mount API is created at a private staging path (/.ish-fsmount/<n>)
+    // and only moved into place afterwards, so what it saw at ->mount is not
+    // where it ends up. Called without mounts_lock, holding a reference.
+    void (*relocated)(struct mount *mount, const char *old_point, const char *new_point);
     int (*statfs)(struct mount *mount, struct statfsbuf *stat);
 
     struct fd *(*open)(struct mount *mount, const char *path, int flags, int mode); // required

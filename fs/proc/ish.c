@@ -46,6 +46,7 @@ char *(*ish_roots_status)(void);
 int (*ish_roots_command)(const char *command);
 char *(*ish_workspace_status)(void);
 int (*ish_workspace_open)(const char *request);
+char *(*ish_applets_status)(void);
 
 #include "kernel/hostinfo.h"
 #include "kernel/BatteryStatus.h"
@@ -1115,6 +1116,29 @@ static int proc_ish_show_workspace(struct proc_entry *UNUSED(entry), struct proc
     return 0;
 }
 
+// The Launcher applets -- File Manager, MotePad, LLM Chat, Music, Settings,
+// the Wayland display and the rest -- are iOS UI running inside the app. They
+// have no pid, no address space and nothing a signal could reach, so they are
+// not in /proc/<pid> and ps, top and ktop do not show them. Inventing
+// processes for them would be a lie every tool would repeat: a pid that
+// accepts kill(2) and does nothing is a state no real system produces. This
+// file lists them for what they are instead.
+//
+// A header, then one line per open applet with the title last, since a title
+// has spaces in it. Nothing below the header means none are open, which is
+// also the whole answer in the command-line build and outside Workspace.
+static int proc_ish_show_applets(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "ID TOOL DESKTOP STATE AGE TITLE\n");
+    if (ish_applets_status == NULL)
+        return 0;
+    char *body = ish_applets_status();
+    if (body == NULL)
+        return 0;
+    proc_printf(buf, "%s", body);
+    free(body);
+    return 0;
+}
+
 // One verb today: `open <tool> [path]`. A verb set rather than a bare path is
 // the point -- this is a guest asking the app to put something on screen, so
 // what it may ask for has to be enumerable, and the app validates both the
@@ -1950,6 +1974,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"BAT0_capacity", .show = proc_ish_show_battery_capacity},
     {"BAT0_status", .show = proc_ish_show_battery_status},
     {"UIDevice", .show = proc_ish_show_uidevice},
+    {"applets", .show = proc_ish_show_applets},
     {"colors", .show = proc_ish_show_colors},
     {".defaults", S_IFDIR, .readdir = proc_ish_underlying_defaults_readdir},
     {"defaults", S_IFDIR, .readdir = proc_ish_defaults_readdir},

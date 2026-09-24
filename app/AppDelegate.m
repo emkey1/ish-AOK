@@ -9,6 +9,7 @@
 #include <arpa/nameser.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <ctype.h>
 #include <dlfcn.h>
@@ -39,6 +40,7 @@
 #import "URLDevice.h"
 #import "LocationDevice.h"
 #import "AudioPlayerEngine.h"
+#import "SwapFilePicker.h"
 #import "NSObject+SaneKVO.h"
 #import "Roots.h"
 #import "Terminal.h"
@@ -75,6 +77,64 @@ static os_log_t ISHSuspendLog(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ log = os_log_create("app.ish.iSH-AOK", "suspend"); });
     return log;
+}
+
+// The directory holding the swap file on external storage, while this process
+// is using it. Security-scoped access is started once, when the file is opened,
+// and stopped only if the pager did not take the file: the pager holds the file
+// until the process ends, and access that iOS grants to a running process is
+// not taken back while it is in the background.
+static NSURL *_Nullable swapExternalURL;
+
+static void ISHReleaseExternalSwapAccess(void) {
+    [swapExternalURL stopAccessingSecurityScopedResource];
+    swapExternalURL = nil;
+}
+
+// Opens `.aok-swap` in the directory the user chose for swap (Settings, then the
+// picker ISHSuspendGuardEnterForeground shows), or returns -1 and says why. A
+// stale bookmark is renewed while access is held, as Apple asks, so a drive
+// that was renamed or reformatted is followed rather than lost.
+static int ISHOpenExternalSwapFile(void) {
+    UserPreferences *prefs = UserPreferences.shared;
+    NSData *bookmark = prefs.swapExternalBookmark;
+    if (bookmark == nil) {
+        NSLog(@"swap: external storage is on but no directory has been chosen; swap stays off");
+        return -1;
+    }
+    BOOL stale = NO;
+    NSError *error = nil;
+    NSURL *url = [NSURL URLByResolvingBookmarkData:bookmark
+                                           options:0
+                                     relativeToURL:nil
+                               bookmarkDataIsStale:&stale
+                                             error:&error];
+    if (url == nil) {
+        NSLog(@"swap: the swap directory cannot be found (is the drive attached?): %@; swap stays off", error);
+        return -1;
+    }
+    // NO here is not a refusal by itself: a directory that needs no grant (one
+    // inside the app's own storage) answers NO and is still usable. Whether the
+    // open below succeeds is the real answer; `accessing` only says whether
+    // there is a grant to give back.
+    BOOL accessing = [url startAccessingSecurityScopedResource];
+    if (stale) {
+        NSData *renewed = [url bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil relativeToURL:nil error:nil];
+        if (renewed != nil)
+            prefs.swapExternalBookmark = renewed;
+    }
+    NSString *path = [url.path stringByAppendingPathComponent:@".aok-swap"];
+    int fd = open(path.fileSystemRepresentation, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        NSLog(@"swap: cannot open %@: %s; swap stays off", path, strerror(errno));
+        if (accessing)
+            [url stopAccessingSecurityScopedResource];
+        return -1;
+    }
+    if (accessing)
+        swapExternalURL = url;
+    NSLog(@"swap: using %@", path);
+    return fd;
 }
 
 // Runs `work` holding a background-task assertion, so iOS does not suspend us
@@ -4194,10 +4254,35 @@ static TerminalViewController *CreateTerminalViewController(void) {
     // 40 MB free -- and it is also the only thing that leaves a breadcrumb in
     // the log before the kill.
     host_mem_pressure_start();
+    // Swap on external storage: open the file on the drive the user chose and
+    // hand it to the pager before it starts. If the drive is not there, swap
+    // stays OFF for this launch rather than quietly moving into the container
+    // -- the user picked the drive to keep that flash out of it.
+    BOOL externalSwapWanted = swapEnabled && UserPreferences.shared.shouldEnableSwapOnExternal;
+    BOOL externalSwapReady = NO;
+    if (externalSwapWanted) {
+        int fd = ISHOpenExternalSwapFile();
+        if (fd >= 0) {
+            swap_set_external_fd(fd);
+            externalSwapReady = YES;
+        } else {
+            swap_set_preference(false, (unsigned) swapSizeMB);
+        }
+    }
     swap_startup();
+    // A file the startup did not take is still ours: close it, and let go of
+    // the drive so it can be ejected.
+    int unusedSwapFd = swap_take_unused_external_fd();
+    if (unusedSwapFd >= 0) {
+        close(unusedSwapFd);
+        ISHReleaseExternalSwapAccess();
+        externalSwapReady = NO;
+    }
     [ISHDiagnosticsStore recordLaunchStage:@"boot.swap.started"
                                    details:@{@"requested": @(swapEnabled),
                                              @"requestedSizeMB": @(swapSizeMB),
+                                             @"externalRequested": @(externalSwapWanted),
+                                             @"externalReady": @(externalSwapReady),
                                              @"running": @(swap_enabled())}];
     if (bootUsesNativeFakeInit) {
         FakeInitPrepareGuestRoot();
@@ -5343,6 +5428,51 @@ void ISHSuspendGuardEnterForeground(void) {
     // and coming back is exactly this path. Without it the guest's own control
     // of suspend would only follow the switch across a relaunch.
     checkpoint_set_guest_control(UserPreferences.shared.shouldSuspendToDisk);
+    // External swap was switched on in Settings with no directory chosen yet:
+    // ask for one now. Settings.bundle cannot run code, so coming back from the
+    // Settings app is the first chance. The picker holds itself until it
+    // answers (SwapFilePicker). Cancelling turns the switch back off, so a user
+    // who changed their mind is not asked again on every return to the app.
+    // The choice takes effect at the next launch, like the rest of swap.
+    UserPreferences *prefs = UserPreferences.shared;
+    // Switched off: forget the directory, so switching it on again asks afresh.
+    // That is the only way to move swap to a different folder or drive.
+    if (!prefs.shouldEnableSwapOnExternal && prefs.swapExternalBookmark != nil) {
+        prefs.swapExternalBookmark = nil;
+        prefs.swapExternalPath = @"";
+    }
+    static BOOL swapPickerShowing;
+    if (prefs.shouldEnableSwapOnExternal && prefs.swapExternalBookmark == nil && !swapPickerShowing) {
+        UIViewController *presenter = ISHActivePresentationViewController();
+        if (presenter != nil) {
+            swapPickerShowing = YES;
+            [[SwapFilePicker new] presentFrom:presenter completion:^(NSURL *url) {
+                swapPickerShowing = NO;
+                if (url == nil) {
+                    prefs.shouldEnableSwapOnExternal = NO;
+                    NSLog(@"swap: no directory chosen; external swap switched back off");
+                    return;
+                }
+                // A bookmark of a picked URL is made while holding its access.
+                BOOL accessing = [url startAccessingSecurityScopedResource];
+                NSError *error = nil;
+                NSData *bookmark = [url bookmarkDataWithOptions:0
+                                 includingResourceValuesForKeys:nil
+                                                  relativeToURL:nil
+                                                          error:&error];
+                if (accessing)
+                    [url stopAccessingSecurityScopedResource];
+                if (bookmark == nil) {
+                    NSLog(@"swap: cannot remember %@: %@", url.path, error);
+                    prefs.shouldEnableSwapOnExternal = NO;
+                    return;
+                }
+                prefs.swapExternalBookmark = bookmark;
+                prefs.swapExternalPath = url.path;
+                NSLog(@"swap: external swap directory chosen: %@ (used from the next launch)", url.path);
+            }];
+        }
+    }
 }
 
 @end

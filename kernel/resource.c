@@ -44,13 +44,28 @@ static int rlimit_set(struct task *task, int resource, struct rlimit_ limit) {
     // overflows on purpose -- so honouring it only at exec would miss the
     // case this exists for.
     //
-    // Only for the calling task: reading another task's ->mm here would need
-    // general_lock, and prlimit64 against a third party is rare enough that
-    // picking the change up at its next exec is the better trade. Its stack
-    // stays bounded by the guard gap meanwhile.
-    if (resource == RLIMIT_STACK_ && task == current && current->mm != NULL)
-        mem_set_stack_bounds(&current->mm->mem, 0,
-                             limit.cur == RLIM_INFINITY_ ? 0 : (uint64_t) limit.cur);
+    // Pushed for every target, not just the caller, since Linux applies it at
+    // once: it reads the rlimit at fault time. Until build 556 a third party's
+    // change waited for the target's next exec. That covered prlimit64 on
+    // another process, and also on the caller's own tgid from a non-leader
+    // thread, which resolves to the leader and so never looked like `current`.
+    if (resource == RLIMIT_STACK_) {
+        uint64_t bytes = limit.cur == RLIM_INFINITY_ ? 0 : (uint64_t) limit.cur;
+        if (task == current) {
+            if (current->mm != NULL)
+                mem_set_stack_bounds(&current->mm->mem, 0, bytes);
+        } else {
+            // general_lock keeps task->mm alive for the store: exit releases
+            // it and exec replaces it under the same lock. The store itself
+            // is one atomic, so a fault on another CPU needs nothing more.
+            // exec re-reads the limit after installing the new space (see
+            // elf_exec), so a change racing an exec is not lost either way.
+            lock(&task->general_lock, 0);
+            if (task->mm != NULL)
+                mem_set_stack_bounds(&task->mm->mem, 0, bytes);
+            unlock(&task->general_lock);
+        }
+    }
     return 0;
 }
 

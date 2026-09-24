@@ -13305,6 +13305,8 @@ void helper_rdtsc(struct cpu_state *cpu);
 #define ATOMIC_XOR(src, dst,z) atomic_op(xor, src, dst, z)
 #define ATOMIC_INC(val,z) op(atomic_inc, val, z)
 #define ATOMIC_DEC(val,z) op(atomic_dec, val, z)
+#define ATOMIC_NOT(val,z) op(atomic_not, val, z)
+#define ATOMIC_NEG(val,z) op(atomic_neg, val, z)
 #define ATOMIC_CMPXCHG(src, dst,z) atomic_op(cmpxchg, src, dst, z)
 #define ATOMIC_XADD(src, dst,z) load(src, z); op(atomic_xadd, dst, z); store(src, z)
 #define ATOMIC_BTC(bit, val,z) lo(atomic_btc, val, bit, z)
