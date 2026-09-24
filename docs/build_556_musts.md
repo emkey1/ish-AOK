@@ -314,6 +314,10 @@ three bugs, not one, and the lost pokes were not lost.
    churn as such. Native dash's exceptions and SmallCLUE's exit override did
    the same through `longjmp`. Witness: `wake_mask_isolation`, where an itimer
    re-arm after 20 interrupted polls failed 3/3 on the unfixed Mac CLI too.
+   (The timer thread no longer takes a SIGUSR1 poke, which was also lossy on
+   its own -- `timer_rearm_wake`. The witness is now a task asleep through the
+   interrupts, and the repair count in `/proc/ish/wake_signals`: 3/3 rounds
+   fail with the clobber put back.)
 2. **A process signal a sibling took first still ended the call with EINTR**
    (`c558b65c`). The restart was decided before delivery; now it is promised
    and cancelled if the handler runs in that thread, as Linux does. This was

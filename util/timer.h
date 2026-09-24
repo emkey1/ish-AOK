@@ -106,6 +106,11 @@ struct timer {
     uint64_t fired;
     uint64_t generation;
     pthread_t thread;
+    // What timer_set and timer_free raise to cut the thread's sleep short: a
+    // kqueue on Darwin, an eventfd on Linux. The thread's own, open only
+    // while thread_running, -1 otherwise and when the host had none to give.
+    // See timer_wake_open in timer.c.
+    int wake_fd;
     timer_callback_t callback;
     void *data;
     lock_t lock;

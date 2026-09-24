@@ -19,15 +19,29 @@
  * On an M4 iPad after an hour of the regression suite, signal_process_wake_one
  * saw child exits, SIGALRM and handlers arrive one to two seconds late.
  *
- * An interval timer's host thread has no second way out. setitimer re-arms a
- * running timer by poking its thread with SIGUSR1 alone (util/timer.c
- * timer_set), so a thread whose SIGUSR1 another thread had blocked slept on to
- * its OLD deadline. That is the witness here:
+ * The witness was first an interval timer's host thread, which had no second
+ * way out: setitimer re-armed a running timer by poking its thread with
+ * SIGUSR1 alone, so a thread whose SIGUSR1 another thread had blocked slept on
+ * to its OLD deadline. That poke is gone -- the timer thread now waits on a
+ * descriptor of its own (util/timer.c timer_wake_open), because a poke could
+ * also be lost in plain timing (tests/manual/timer_rearm_wake.c) -- and with
+ * it that witness. The re-arm is still checked here, but what now says whether
+ * a mask was clobbered is a guest task asleep through the interrupts:
  *
- *   1. arm ITIMER_REAL for 30s, so the timer's host thread sleeps for 30s;
- *   2. interrupt a sibling's poll() with a signal, several times -- each is a
- *      siglongjmp out of fs/poll.c's wait;
- *   3. re-arm the timer for 200ms. SIGALRM must come at ~200ms, not at 30s.
+ *   1. arm ITIMER_REAL for 30s, and put a sibling to sleep in nanosleep(1s);
+ *   2. interrupt another sibling's poll() with a signal, several times --
+ *      each is a siglongjmp out of fs/poll.c's wait;
+ *   3. re-arm the timer for 200ms. SIGALRM must come at ~200ms, not at 30s;
+ *   4. once the sleeper wakes, /proc/ish/wake_signals must count no repair.
+ *
+ * A sleeping task checks its own host mask after every slice of its sleep
+ * (kernel/time.c host_sleep_interruptible) and repairs, and counts, a wake
+ * signal it finds blocked there that was unblocked when it lay down. A clobber
+ * during the interrupts blocks the sleeper's SIGUSR1 mid-sleep, and the next
+ * slice counts it: sleep_repairs rises. The sleeper must be asleep BEFORE the
+ * first interrupt, since one that lies down with SIGUSR1 already blocked is
+ * not its own to repair and counts nothing. That file is AOK's; where it is
+ * missing (Linux) step 4 is skipped.
  *
  * A control round first does 1 and 3 without 2, so a timer that cannot be
  * re-armed at all is not mistaken for this. The sibling's EINTRs are counted,
@@ -61,11 +75,16 @@
 #define INTERRUPT_GAP_MS 10
 /* Rounds of the interrupted case: the first may be lucky. */
 #define ROUNDS 3
+/* The sleeper's one sleep, which must outlast the interrupts (200ms) and the
+ * re-arm (up to 1s), and how long it is given to lie down before them. */
+#define SLEEPER_MS 1500
+#define SLEEPER_HEAD_START_MS 60
 
 static int pipe_fds[2];
 static atomic_int poller_eintrs;
 static atomic_int poller_stop;
 static atomic_int poller_ready;
+static atomic_int sleeper_woke;
 static volatile sig_atomic_t alarm_seen;
 
 static void on_usr1(int sig) { (void) sig; }
@@ -103,6 +122,48 @@ static void *poller(void *arg) {
     return NULL;
 }
 
+/* Sleeps once, SLEEPER_MS, through the interrupts. Blocks everything a test
+ * sends, so nothing but a clobbered mask disturbs its sleep. */
+static void *sleeper(void *arg) {
+    (void) arg;
+    sigset_t all;
+    sigemptyset(&all);
+    sigaddset(&all, SIGALRM);
+    sigaddset(&all, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &all, NULL);
+    struct timespec t = {.tv_sec = SLEEPER_MS / 1000,
+                         .tv_nsec = (long) (SLEEPER_MS % 1000) * 1000000L};
+    while (nanosleep(&t, &t) < 0 && errno == EINTR)
+        ;
+    atomic_store(&sleeper_woke, 1);
+    return NULL;
+}
+
+/* sleep_repairs + poll_repairs from /proc/ish/wake_signals, or -1 where there
+ * is no such file. */
+static long wake_repairs(void) {
+    FILE *f = fopen("/proc/ish/wake_signals", "r");
+    if (f == NULL)
+        return -1;
+    long total = 0, n;
+    int found = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (sscanf(line, "sleep_repairs %ld", &n) == 1 ||
+                sscanf(line, "poll_repairs %ld", &n) == 1) {
+            total += n;
+            found++;
+        }
+    }
+    fclose(f);
+    if (found != 2) {
+        printf("FAIL /proc/ish/wake_signals: found %d of its 2 repair counters\n", found);
+        failures_total++;
+        return -1;
+    }
+    return total;
+}
+
 static void arm_ms(long ms) {
     struct itimerval it = {0};
     it.it_value.tv_sec = ms / 1000;
@@ -127,9 +188,18 @@ static double rearm_and_time(void) {
 }
 
 static void run_round(const char *label, bool interrupt, pthread_t poller_thread) {
+    long repairs_before = wake_repairs();
+    atomic_store(&sleeper_woke, 0);
+    pthread_t sleeper_thread;
+    if (pthread_create(&sleeper_thread, NULL, sleeper, NULL) != 0) {
+        printf("FAIL %s: pthread_create (sleeper)\n", label);
+        failures_total++;
+        return;
+    }
     arm_ms(LONG_ARM_S * 1000L);
-    /* Let the timer's host thread reach its 30s sleep. */
-    sleep_ms(100);
+    /* Let the timer's host thread reach its 30s sleep, and the sleeper its
+     * nanosleep. */
+    sleep_ms(SLEEPER_HEAD_START_MS);
     int eintrs_before = atomic_load(&poller_eintrs);
     if (interrupt) {
         for (int i = 0; i < INTERRUPTS; i++) {
@@ -156,6 +226,25 @@ static void run_round(const char *label, bool interrupt, pthread_t poller_thread
         failures_total++;
     } else {
         test_logf("%s: SIGALRM at %.0fms\n", label, took);
+    }
+
+    bool woke_early = atomic_load(&sleeper_woke);
+    pthread_join(sleeper_thread, NULL);
+    if (woke_early) {
+        printf("FAIL %s: the sleeper's %dms nanosleep was over before the interrupts "
+               "and the re-arm were, so it watched none of them\n", label, SLEEPER_MS);
+        failures_total++;
+    }
+    long repairs_after = wake_repairs();
+    if (repairs_before < 0 || repairs_after < 0) {
+        test_logf("%s: no /proc/ish/wake_signals, repair count not checked\n", label);
+    } else if (repairs_after != repairs_before) {
+        printf("FAIL %s: /proc/ish/wake_signals counted %ld thread(s) found with a wake "
+               "signal blocked -- a wait's unwind set other threads' masks\n",
+               label, repairs_after - repairs_before);
+        failures_total++;
+    } else {
+        test_logf("%s: no wake signal repaired (%ld before and after)\n", label, repairs_before);
     }
 }
 

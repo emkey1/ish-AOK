@@ -5,6 +5,10 @@
 #include <unistd.h>
 #if __APPLE__
 #include <sys/event.h>
+#else
+#include <poll.h>
+#include <stdint.h>
+#include <sys/eventfd.h>
 #endif
 #include "util/timer.h"
 #include "misc.h"
@@ -49,6 +53,119 @@ int host_nanosleep_precise(struct timespec req, long UNUSED(slack_ns)) {
 }
 #endif
 
+// ---- how timer_set and timer_free reach the timer's thread -----------------
+//
+// The thread sleeps until the next expiry, and an arming that moves the
+// deadline, or a timer_free, has to cut that sleep short. That used to be
+// pthread_kill(SIGUSR1), which is lossy: a poke that landed after the thread
+// dropped timer->lock but before it blocked ran its handler and was gone, and
+// the thread then slept out its OLD nap -- as long as a day. A guest that
+// re-armed a 30s itimer to 5ms, the two calls 0-60us apart, lost 4 to 10 of
+// 488 SIGALRMs on every test root (tests/manual/timer_rearm_wake.c).
+//
+// Now each thread waits on a descriptor of its own, which timer_set and
+// timer_free raise under timer->lock and which stays raised until the thread
+// has seen it. A wake raised in that same window is found as the sleep
+// starts, and the sleep ends at once. The descriptor is made with the thread
+// (timer_set, before pthread_create) and closed by the thread as it exits,
+// under the lock, so no one raises one that is gone. timer->wake_fd is -1
+// while there is no thread -- and for a thread that could not be given one,
+// the host being out of descriptors, which then sleeps in slices of
+// TIMER_UNWOKEN_NAP_NS and looks again after each: late by up to that, but
+// never on to an old deadline.
+//
+// Darwin: a kqueue holding an EVFILT_USER event with EV_CLEAR, which the sleep
+// waits on together with its critical EVFILT_TIMER (host_nanosleep_precise
+// says why only such a timer is on time). kevent64 throughout: a kqueue that
+// has been given kevent() calls as well refuses kevent64() with EINVAL.
+// Linux: an eventfd, and ppoll with the nap as its timeout.
+#define TIMER_UNWOKEN_NAP_NS 10000000L // 10ms
+
+// A thread with no wake descriptor: a slice at most, then look again.
+static void timer_unwoken_nap(struct timespec nap) {
+    if (nap.tv_sec > 0 || nap.tv_nsec > TIMER_UNWOKEN_NAP_NS)
+        nap = (struct timespec) {.tv_sec = 0, .tv_nsec = TIMER_UNWOKEN_NAP_NS};
+    host_nanosleep_precise(nap, 0);
+}
+
+#if __APPLE__
+#define TIMER_WAKE_IDENT 1
+#define TIMER_NAP_IDENT 2
+
+static int timer_wake_open(void) {
+    int kq = kqueue();
+    if (kq < 0)
+        return -1;
+    struct kevent64_s wake;
+    EV_SET64(&wake, TIMER_WAKE_IDENT, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, 0, 0, 0);
+    if (kevent64(kq, &wake, 1, NULL, 0, 0, NULL) < 0) {
+        close(kq);
+        return -1;
+    }
+    return kq;
+}
+
+static void timer_wake_raise(int kq) {
+    if (kq < 0)
+        return;
+    struct kevent64_s wake;
+    EV_SET64(&wake, TIMER_WAKE_IDENT, EVFILT_USER, 0, NOTE_TRIGGER, 0, 0, 0, 0);
+    kevent64(kq, &wake, 1, NULL, 0, 0, NULL);
+}
+
+// Sleep `nap`, or less if the wake is raised. Returns early on a signal too;
+// the caller recomputes what is left either way.
+static void timer_wake_wait(int kq, struct timespec nap) {
+    if (kq < 0) {
+        timer_unwoken_nap(nap);
+        return;
+    }
+    // The caller bounds its naps (a day at most), so this cannot overflow.
+    int64_t ns = (int64_t) nap.tv_sec * 1000000000 + nap.tv_nsec;
+    // EV_ADD on the ident a woken sleep left behind re-arms that timer rather
+    // than adding a second one.
+    struct kevent64_s timer, events[2];
+    EV_SET64(&timer, TIMER_NAP_IDENT, EVFILT_TIMER, EV_ADD | EV_ONESHOT,
+             NOTE_NSECONDS | NOTE_CRITICAL, ns, 0, 0, 0);
+    int n = kevent64(kq, &timer, 1, events, 2, 0, NULL);
+    bool refused = n < 0 && errno != EINTR;
+    for (int i = 0; i < n; i++) {
+        if ((events[i].flags & EV_ERROR) && events[i].ident == TIMER_NAP_IDENT)
+            refused = true;
+    }
+    // No critical timer to be had: wait for the wake with a plain timeout,
+    // which Darwin may run late but which still ends at the wake.
+    if (refused)
+        kevent64(kq, NULL, 0, events, 2, 0, &nap);
+}
+#else
+static int timer_wake_open(void) {
+    return eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+}
+
+static void timer_wake_raise(int fd) {
+    if (fd < 0)
+        return;
+    uint64_t one = 1;
+    ssize_t wrote;
+    do {
+        wrote = write(fd, &one, sizeof(one));
+    } while (wrote < 0 && errno == EINTR);
+}
+
+static void timer_wake_wait(int fd, struct timespec nap) {
+    if (fd < 0) {
+        timer_unwoken_nap(nap);
+        return;
+    }
+    struct pollfd p = {.fd = fd, .events = POLLIN};
+    if (ppoll(&p, 1, &nap, NULL) > 0) {
+        uint64_t count;
+        (void) !read(fd, &count, sizeof(count));
+    }
+}
+#endif
+
 static bool timer_warning_trace_enabled(void) {
     return false;
 }
@@ -87,6 +204,7 @@ struct timer *timer_new(clockid_t clockid, timer_callback_t callback, void *data
     timer->firing = false;
     timer->fired = 0;
     timer->generation = 0;
+    timer->wake_fd = -1;
     lock_init(&timer->lock, "timer_new\0");
     timer->dead = false;
     if (timer_warning_trace_enabled())
@@ -99,7 +217,7 @@ void timer_free(struct timer *timer) {
     timer->active = false;
     if (timer->thread_running) {
         timer->dead = true;
-        pthread_kill(timer->thread, SIGUSR1);
+        timer_wake_raise(timer->wake_fd);
         unlock(&timer->lock);
     } else {
         unlock(&timer->lock);
@@ -109,16 +227,13 @@ void timer_free(struct timer *timer) {
 
 static void *timer_thread(void *param) {
     struct timer *timer = param;
-    // SIGUSR1 (used by timer_set/timer_free to interrupt our nanosleep) and its
-    // backup SIGUSR2 are blocked on entry. Instantiate the thread-local storage
-    // the handlers touch on this normal call stack, then unblock them, so no
-    // handler has to malloc() a TLV block from async signal context.
+    // Born with the wake signals (SIGUSR1, SIGUSR2) blocked, and they stay
+    // blocked: nothing pokes this thread with a signal, since its wake is
+    // timer->wake_fd. Its thread-locals are instantiated all the same, so
+    // that if another thread's host sigprocmask ever unblocks them here --
+    // on Darwin that call sets every thread's mask -- a handler finds them
+    // made rather than malloc()ing them from async signal context.
     signal_thread_locals_init();
-    sigset_t wake_sigs;
-    sigemptyset(&wake_sigs);
-    sigaddset(&wake_sigs, SIGUSR1);
-    sigaddset(&wake_sigs, SIGUSR2); // the backup poke, see util/sync.c
-    pthread_sigmask(SIG_UNBLOCK, &wake_sigs, NULL);
 
     lock(&timer->lock, 1);
     while (true) {
@@ -129,6 +244,9 @@ static void *timer_thread(void *param) {
         while (timer->active &&
                 timer->generation == generation &&
                 timespec_positive(remaining)) {
+            // Read under the lock; it cannot change while this thread lives.
+            // -1 (no descriptor to be had) naps in slices instead.
+            int wake_fd = timer->wake_fd;
             unlock(&timer->lock);
             // An effectively-infinite arm (e.g. systemd's TFD_TIMER_CANCEL_ON_SET
             // sentinel at TIME_T_MAX) yields a tv_sec near INT64_MAX; Darwin's
@@ -145,7 +263,9 @@ static void *timer_thread(void *param) {
             // late on iOS, which let a 5ms timer's expiry land just AFTER a
             // guest that slept exactly 200 periods had taken the signal it
             // should have been counted on (timer_conventions' overruns).
-            host_nanosleep_precise(nap, 0);
+            // Ends early when timer_set or timer_free raise the wake, even
+            // one raised since the unlock above.
+            timer_wake_wait(wake_fd, nap);
             lock(&timer->lock, 0);
             remaining = timespec_subtract(timer->end, timer_now(timer));
         }
@@ -214,6 +334,12 @@ static void *timer_thread(void *param) {
         }
     }
     timer->thread_running = false;
+    // Under the lock, where every raise happens, and after thread_running,
+    // which is what they check: no one raises a closed descriptor, or a
+    // stranger that reused its number.
+    if (timer->wake_fd >= 0)
+        close(timer->wake_fd);
+    timer->wake_fd = -1;
     if (timer->dead)
         free(timer);
     else
@@ -252,13 +378,18 @@ int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *ol
                (long) timer->end.tv_sec, timer->end.tv_nsec);
     }
     if (timer->thread_running) {
-        pthread_kill(timer->thread, SIGUSR1);
+        timer_wake_raise(timer->wake_fd);
     } else if (timer->active) {
+        // The thread's wake, made before the thread so that it is there for
+        // the next timer_set however soon that comes. -1 if the host has no
+        // descriptor to spare, and the thread then naps in slices instead
+        // (see the comment above timer_wake_open).
+        timer->wake_fd = timer_wake_open();
         timer->thread_running = true;
-        // Born with the wake signals blocked so the timer thread cannot run
-        // sigusr1_handler (and lazily malloc() its TLV block from async signal
-        // context) before it has instantiated its thread-locals. It unblocks
-        // them itself once safe. See signal_thread_locals_init.
+        // Born with the wake signals blocked, which it keeps: see
+        // timer_thread. So the timer thread never runs sigusr1_handler, which
+        // before its thread-locals exist would malloc() them from async signal
+        // context. See signal_thread_locals_init.
         sigset_t wake_sigs, oldmask;
         sigemptyset(&wake_sigs);
         sigaddset(&wake_sigs, SIGUSR1);
@@ -299,6 +430,9 @@ int timer_set(struct timer *timer, struct timer_spec spec, struct timer_spec *ol
             // deadline nothing is watching.
             timer->thread_running = false;
             timer->active = false;
+            if (timer->wake_fd >= 0)
+                close(timer->wake_fd);
+            timer->wake_fd = -1;
             unlock(&timer->lock);
             return _EAGAIN;
         }
