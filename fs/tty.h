@@ -86,21 +86,36 @@ struct termios2_ {
 #define ONOCR_ (1 << 4)
 #define ONLRET_ (1 << 5)
 
-// c_cflag bits, from Linux's asm-generic/termbits.h. iSH's ttys have no real
+// c_cflag bits, from Linux's asm-generic/termbits.h. AOK's ttys have no real
 // line discipline hardware, so nothing here changes how a tty behaves -- but
 // guests do read these bits back, and the baud rate in particular is not
 // cosmetic: musl's and glibc's cfgetospeed() return c_cflag & CBAUD, and B0
 // means "hang up the line". A tty reporting B0 makes ssh(1) send ospeed 0 in
 // its pty-req, and a BSD sshd honours that by SIGHUPing the session leader --
 // so the remote shell died the instant it started (exit status 129).
-#define CBAUD_ 0010017
-#define B0_ 0000000
-#define B38400_ 0000017
-#define CSIZE_ 0000060
-#define CS8_ 0000060
-#define CREAD_ 0000200
-#define PARENB_ 0000400
-#define HUPCL_ 0002000
+#define CBAUD_ 0x100f
+#define B0_ 0x0
+#define B38400_ 0xf
+#define CSIZE_ 0x30
+#define CS5_ 0x0
+#define CS6_ 0x10
+#define CS7_ 0x20
+#define CS8_ 0x30
+#define CSTOPB_ 0x40
+#define CREAD_ 0x80
+#define PARENB_ 0x100
+#define PARODD_ 0x200
+#define HUPCL_ 0x400
+#define CLOCAL_ 0x800
+#define CBAUDEX_ 0x1000
+
+// Index of a CBAUD code in a table laid out like the kernel's baud_table
+// (drivers/tty/tty_baudrate.c): codes with CBAUDEX set carry on after B38400,
+// so B57600 (CBAUDEX | 1) is index 16.
+static inline dword_t tty_baud_index(dword_t cflags) {
+    dword_t code = cflags & CBAUD_;
+    return code & CBAUDEX_ ? (code & ~CBAUDEX_) + 15 : code;
+}
 
 #define TCGETS_ 0x5401
 #define TCSETS_ 0x5402

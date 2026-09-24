@@ -8,6 +8,7 @@
 
 #include "kernel/calls.h"
 #include "fs/tty.h"
+#include "fs/tty-real.h"
 #include "fs/devices.h"
 
 // Only /dev/tty1 will be connected, the rest will go to a black hole.
@@ -58,14 +59,29 @@ static void *real_tty_read_thread(void *_tty) {
     return NULL;
 }
 
+// Host speeds indexed by Linux baud code (see tty_baud_index). Only the rates
+// every host names: Darwin stops at B230400.
+static const speed_t host_speeds[] = {
+    B0, B50, B75, B110, B134, B150, B200, B300, B600, B1200, B1800,
+    B2400, B4800, B9600, B19200, B38400, B57600, B115200, B230400,
+};
+
+dword_t tty_speed_from_host(speed_t speed) {
+    for (dword_t i = 1; i < array_size(host_speeds); i++) {
+        if (host_speeds[i] == speed)
+            return i <= 15 ? i : CBAUDEX_ | (i - 15);
+    }
+    // Never B0: a guest reads it as "hang up" and ssh(1) forwards it
+    return B38400_;
+}
+
+speed_t tty_speed_to_host(dword_t cflags) {
+    dword_t i = tty_baud_index(cflags);
+    return i < array_size(host_speeds) ? host_speeds[i] : B38400;
+}
+
 static struct termios_ termios_from_real(struct termios real) {
-    // The host's c_cflag is not translated: iSH models no baud rate or
-    // character size, and BSD keeps the speed in a separate c_ospeed field
-    // rather than in the CBAUD bits of c_cflag. Seed the same nominal default
-    // tty_alloc uses, because leaving it zero reads back as B0 -- "hang up the
-    // line" -- which ssh(1) then forwards to the far end. Without this the
-    // console tty is re-zeroed here right after tty_alloc got it right.
-    struct termios_ fake = { .cflags = B38400_ | CS8_ | CREAD_ | HUPCL_ };
+    struct termios_ fake = {};
 #define FLAG(t, x) \
     if (real.c_##t##flag & x) \
         fake.t##flags |= x##_
@@ -84,7 +100,23 @@ static struct termios_ termios_from_real(struct termios real) {
     FLAG(l, ECHOK);
     FLAG(l, NOFLSH);
     FLAG(l, ECHOCTL);
+    // c_cflag too, so the speed a guest reads back (and ssh forwards) is the
+    // real terminal's. BSD keeps that speed in c_ospeed rather than in c_cflag,
+    // hence cfgetospeed().
+    FLAG(c, CSTOPB);
+    FLAG(c, CREAD);
+    FLAG(c, PARENB);
+    FLAG(c, PARODD);
+    FLAG(c, HUPCL);
+    FLAG(c, CLOCAL);
 #undef FLAG
+    switch (real.c_cflag & CSIZE) {
+        case CS5: fake.cflags |= CS5_; break;
+        case CS6: fake.cflags |= CS6_; break;
+        case CS7: fake.cflags |= CS7_; break;
+        case CS8: fake.cflags |= CS8_; break;
+    }
+    fake.cflags |= tty_speed_from_host(cfgetospeed(&real));
 
 #define CC(x) \
     fake.cc[V##x##_] = real.c_cc[V##x]

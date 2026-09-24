@@ -14,6 +14,7 @@
 //     opener never asked for and does not expect.
 //  4. A fresh tty's c_cflag was 0, which decodes as B0/CS5/no-CREAD -- see
 //     test_default_cflag() below for how that broke ssh to a BSD server.
+//  5. TCGETS2 reported 38400 whatever speed c_cflag held.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -124,6 +125,52 @@ static void test_default_cflag(void) {
     if (!cread) {
         printf("FAIL default_cflag: CREAD clear, want set\n");
         failures_total++;
+    }
+    close(master);
+    close(slave);
+}
+
+// TCGETS2's c_ispeed/c_ospeed must be the rate c_cflag's CBAUD bits encode.
+// They were fixed at 38400, which contradicted c_cflag as soon as anything set
+// another speed -- as the CLI console does, since it copies the host
+// terminal's. Laid out by hand because musl ships no struct termios2.
+struct termios2_probe {
+    unsigned int c_iflag, c_oflag, c_cflag, c_lflag;
+    unsigned char c_line;
+    unsigned char c_cc[19];
+    unsigned int c_ispeed, c_ospeed;
+};
+#define TCGETS2_PROBE _IOR('T', 0x2A, struct termios2_probe)
+
+static void test_tcgets2_speed(void) {
+    static const struct { speed_t code; unsigned rate; } cases[] = {
+        { B9600, 9600 }, { B115200, 115200 }, { B38400, 38400 },
+    };
+    int master, slave;
+    if (openpty(&master, &slave, NULL, NULL, NULL) != 0) {
+        printf("FAIL tcgets2_speed: openpty failed\n");
+        failures_total++;
+        return;
+    }
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        struct termios t;
+        struct termios2_probe t2;
+        if (tcgetattr(slave, &t) != 0 || cfsetispeed(&t, cases[i].code) != 0 ||
+            cfsetospeed(&t, cases[i].code) != 0 ||
+            tcsetattr(slave, TCSANOW, &t) != 0 ||
+            ioctl(slave, TCGETS2_PROBE, &t2) != 0) {
+            printf("FAIL tcgets2_speed: setting %u: %s\n", cases[i].rate,
+                   strerror(errno));
+            failures_total++;
+            continue;
+        }
+        test_logf("tcgets2_speed: set %u, TCGETS2 ispeed=%u ospeed=%u\n",
+                  cases[i].rate, t2.c_ispeed, t2.c_ospeed);
+        if (t2.c_ispeed != cases[i].rate || t2.c_ospeed != cases[i].rate) {
+            printf("FAIL tcgets2_speed: set %u, TCGETS2 reports ispeed=%u "
+                   "ospeed=%u\n", cases[i].rate, t2.c_ispeed, t2.c_ospeed);
+            failures_total++;
+        }
     }
     close(master);
     close(slave);
@@ -262,6 +309,7 @@ int main(int argc, char **argv) {
     test_kill_echo("kill_with_echoke", 1, "abc^H ^H^H ^H^H ^H");
     test_kill_echo("kill_without_echoke", 0, "abc^U\\r\\n");
     test_default_cflag();
+    test_tcgets2_speed();
     test_pty_pollout_backpressure();
     test_fresh_pty_packet_mode();
     return finish_suite("pty_line_discipline");

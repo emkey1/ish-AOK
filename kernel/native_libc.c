@@ -40,6 +40,7 @@
 #include "kernel/native_syscall.h"
 #include "kernel/task.h"
 #include "fs/tty.h"
+#include "fs/tty-real.h"
 #include "kernel/uts.h"
 #include "util/list.h"
 #include "fs/fd.h"
@@ -2673,6 +2674,12 @@ static const struct nlibc_flagmap nlibc_oflags[] = {
     { OPOST,  OPOST_ },  { ONLCR,   ONLCR_ },   { OCRNL,  OCRNL_ },
     { ONOCR,  ONOCR_ },  { ONLRET,  ONLRET_ },
 };
+// c_cflag's single bits. CSIZE is a field, not a flag, so it is mapped by
+// value below, and so is the speed.
+static const struct nlibc_flagmap nlibc_cflags[] = {
+    { CSTOPB, CSTOPB_ }, { CREAD,   CREAD_ },   { PARENB, PARENB_ },
+    { PARODD, PARODD_ }, { HUPCL,   HUPCL_ },   { CLOCAL, CLOCAL_ },
+};
 
 int nlibc_tcgetattr(int fd_no, struct termios *out) {
     if (out == NULL)
@@ -2715,12 +2722,16 @@ int nlibc_tcgetattr(int fd_no, struct termios *out) {
     // and a BSD sshd honours an ospeed of 0 by SIGHUPing the session leader.
     // The native path reintroduced exactly that by leaving c_cflag empty. Read
     // the guest's own speed rather than asserting one, so a tty that really
-    // does report B0 still says so.
-    out->c_cflag |= CS8;   // the guest's CS8_ is its CSIZE_, i.e. always 8 here
-    if (t.cflags & CREAD_)  out->c_cflag |= CREAD;
-    if (t.cflags & PARENB_) out->c_cflag |= PARENB;
-    if (t.cflags & HUPCL_)  out->c_cflag |= HUPCL;
-    speed_t baud = ((t.cflags & CBAUD_) == B0_) ? B0 : B38400;
+    // does report B0 still says so -- and so does anything else: the CLI
+    // console carries the host terminal's speed and character size.
+    out->c_cflag = nlibc_flags_to_host(t.cflags, nlibc_cflags, NLIBC_MAP_COUNT(nlibc_cflags));
+    switch (t.cflags & CSIZE_) {
+        case CS5_: out->c_cflag |= CS5; break;
+        case CS6_: out->c_cflag |= CS6; break;
+        case CS7_: out->c_cflag |= CS7; break;
+        case CS8_: out->c_cflag |= CS8; break;
+    }
+    speed_t baud = tty_speed_to_host(t.cflags);
     cfsetispeed(out, baud);
     cfsetospeed(out, baud);
     return 0;
