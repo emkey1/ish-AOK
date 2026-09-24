@@ -405,6 +405,9 @@ int user_transform_rect(guest_addr_t base, uint32_t stride, uint32_t bpp,
     if (!user_range_valid_mem(current, mem,
             base + (qword_t) y * stride + (qword_t) x * bpp, (size_t) height * stride))
         res = 1;
+    if (res == 0 && prot == MEM_WRITE)
+        mem_write_prepare_rect(mem, base + (qword_t) y * stride + (qword_t) x * bpp,
+                stride, (uint64_t) width * bpp, height);
     for (uint32_t row = 0; res == 0 && row < height; row++) {
         uint32_t remaining = width;
         int32_t cx = x;
@@ -421,6 +424,7 @@ int user_transform_rect(guest_addr_t base, uint32_t stride, uint32_t bpp,
             remaining -= span;
         }
     }
+    mem_write_prepared_end();
     task_mem_read_unlock(&handle);
     return res;
 }
@@ -456,6 +460,9 @@ int user_transform_rect_two(
             !user_range_valid_mem(current, mem,
                 src_base + (qword_t) src_y * src_stride + (qword_t) src_x * bpp, (size_t) height * src_stride))
         res = 1;
+    if (res == 0)
+        mem_write_prepare_rect(mem, dst_base + (qword_t) dst_y * dst_stride + (qword_t) dst_x * bpp,
+                dst_stride, (uint64_t) width * bpp, height);
     for (uint32_t row = 0; res == 0 && row < height; row++) {
         uint32_t remaining = width;
         int32_t dcx = dst_x, scx = src_x;
@@ -490,6 +497,7 @@ int user_transform_rect_two(
             remaining -= span;
         }
     }
+    mem_write_prepared_end();
     task_mem_read_unlock(&handle);
     return res;
 }
@@ -524,6 +532,9 @@ int user_transform_rect_three(
             !user_range_valid_mem(current, mem,
                 mask_base + (qword_t) mask_y * mask_stride + (qword_t) mask_x * mask_bpp, (size_t) height * mask_stride))
         res = 1;
+    if (res == 0)
+        mem_write_prepare_rect(mem, dst_base + (qword_t) dst_y * dst_stride + (qword_t) dst_x * dst_bpp,
+                dst_stride, (uint64_t) width * dst_bpp, height);
     for (uint32_t row = 0; res == 0 && row < height; row++) {
         uint32_t remaining = width;
         int32_t dcx = dst_x, scx = src_x, mcx = mask_x;
@@ -565,6 +576,7 @@ int user_transform_rect_three(
             remaining -= span;
         }
     }
+    mem_write_prepared_end();
     task_mem_read_unlock(&handle);
     return res;
 }

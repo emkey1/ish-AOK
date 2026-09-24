@@ -1191,49 +1191,52 @@ static inline size_t jit_hash_bucket(guest_addr_t addr, size_t size) {
     return (size_t) ((addr * 0x9E3779B97F4A7C15ull) >> 32) % size;
 }
 
-void jit_invalidate_range(struct jit *jit, page_t start, page_t end) {
-    lock(&jit->lock, 0);
+// Drop this page's translations. Caller holds jit->lock; returns whether
+// any block was dropped, which obliges the caller to bump cleanup_seq.
+static bool jit_invalidate_page_locked(struct jit *jit, page_t page) {
     bool invalidated = false;
     struct jit_block *block, *tmp;
-    for (page_t page = start; page < end; page++) {
-        for (int i = 0; i <= 1; i++) {
-            struct list *blocks = blocks_list(jit, page, i);
-            if (list_null(blocks))
-                continue;
-            // A single page bucket can hold at most every block on this jit, so
-            // more iterations than num_blocks means the page[i] linkage has a
-            // cycle -- observed as an unkillable 100%-CPU hang here (a store
-            // fault's SMC invalidation walking a corrupted list) after heavy
-            // guest JIT churn (node/V8 under npm). Cap the walk at that exact
-            // bound: on overrun, log loudly and stop rather than spin forever.
-            // The remaining blocks stay compiled (a bounded SMC-staleness risk,
-            // vs. an infinite hang) and the surrounding fault path proceeds.
-            size_t guard = jit->num_blocks + 1;
-            list_for_each_entry_safe(blocks, block, tmp, page[i]) {
-                if (guard-- == 0) {
-                    printk("BUG: jit_invalidate_range cyclic page list "
-                           "jit=%p page=%u i=%d num_blocks=%zu; breaking\n",
-                           (void *) jit, page, i, jit->num_blocks);
-                    break;
-                }
-                // The bucket is shared by every page congruent to this one
-                // mod page_hash_size, so it holds other pages' blocks too.
-                // Only this page's are stale: jit_insert links a block under
-                // exactly PAGE(addr) and PAGE(end_addr). Dropping the others
-                // made a write to any data page throw away every block whose
-                // code page shares its bucket -- and a write spanning 1024
-                // pages, the whole process's translations, with every thread
-                // then stalling in the jetsam cleanup. Keeping them is what
-                // makes the table's size matter: see jit_resize_page_hash.
-                if (PAGE(i == 0 ? block->addr : block->end_addr) != page)
-                    continue;
-                jit_block_disconnect(jit, block);
-                block->is_jetsam = true;
-                list_add(&jit->jetsam, &block->jetsam);
-                invalidated = true;
+    for (int i = 0; i <= 1; i++) {
+        struct list *blocks = blocks_list(jit, page, i);
+        if (list_null(blocks))
+            continue;
+        // A single page bucket can hold at most every block on this jit, so
+        // more iterations than num_blocks means the page[i] linkage has a
+        // cycle -- observed as an unkillable 100%-CPU hang here (a store
+        // fault's SMC invalidation walking a corrupted list) after heavy
+        // guest JIT churn (node/V8 under npm). Cap the walk at that exact
+        // bound: on overrun, log loudly and stop rather than spin forever.
+        // The remaining blocks stay compiled (a bounded SMC-staleness risk,
+        // vs. an infinite hang) and the surrounding fault path proceeds.
+        size_t guard = jit->num_blocks + 1;
+        list_for_each_entry_safe(blocks, block, tmp, page[i]) {
+            if (guard-- == 0) {
+                printk("BUG: jit_invalidate_range cyclic page list "
+                       "jit=%p page=%u i=%d num_blocks=%zu; breaking\n",
+                       (void *) jit, page, i, jit->num_blocks);
+                break;
             }
+            // The bucket is shared by every page congruent to this one
+            // mod page_hash_size, so it holds other pages' blocks too.
+            // Only this page's are stale: jit_insert links a block under
+            // exactly PAGE(addr) and PAGE(end_addr). Dropping the others
+            // made a write to any data page throw away every block whose
+            // code page shares its bucket -- and a write spanning 1024
+            // pages, the whole process's translations, with every thread
+            // then stalling in the jetsam cleanup. Keeping them is what
+            // makes the table's size matter: see jit_resize_page_hash.
+            if (PAGE(i == 0 ? block->addr : block->end_addr) != page)
+                continue;
+            jit_block_disconnect(jit, block);
+            block->is_jetsam = true;
+            list_add(&jit->jetsam, &block->jetsam);
+            invalidated = true;
         }
     }
+    return invalidated;
+}
+
+static void jit_invalidated(struct jit *jit) {
     // Invalidated blocks stay allocated (jetsam) until a write-locked
     // cleanup, so per-thread dispatch caches, frame->last_block, and the
     // assembly ret_cache still hold pointers to their now-STALE
@@ -1246,8 +1249,40 @@ void jit_invalidate_range(struct jit *jit, page_t start, page_t end) {
     // translation then ran the OLD function's code against the NEW
     // function's frames -> npm/node crashed ~50% of runs (LoadIC probing
     // a feedback slot of the wrong IC kind, V8 CHECK failures, SIGSEGV).
+    atomic_fetch_add_explicit(&jit->cleanup_seq, 1, memory_order_relaxed);
+}
+
+void jit_invalidate_range(struct jit *jit, page_t start, page_t end) {
+    lock(&jit->lock, 0);
+    bool invalidated = false;
+    for (page_t page = start; page < end; page++)
+        invalidated |= jit_invalidate_page_locked(jit, page);
     if (invalidated)
-        atomic_fetch_add_explicit(&jit->cleanup_seq, 1, memory_order_relaxed);
+        jit_invalidated(jit);
+    unlock(&jit->lock);
+}
+
+// Every page a rectangle of `rows` rows of `row_bytes` bytes, `stride` apart
+// from `start`, covers, under ONE jit->lock -- see mem_write_prepare_rect,
+// the reason this exists. Rows advance, so a page shared by consecutive
+// rows (stride under a page) is visited once.
+void jit_invalidate_rect(struct jit *jit, guest_addr_t start, uint64_t stride,
+        uint64_t row_bytes, uint32_t rows) {
+    if (rows == 0 || row_bytes == 0)
+        return;
+    lock(&jit->lock, 0);
+    bool invalidated = false;
+    page_t next = PAGE(start);
+    for (uint32_t r = 0; r < rows; r++) {
+        guest_addr_t row = (guest_addr_t) (start + (uint64_t) r * stride);
+        page_t first = PAGE(row), last = PAGE(row + row_bytes - 1);
+        for (page_t page = first > next ? first : next; page <= last; page++)
+            invalidated |= jit_invalidate_page_locked(jit, page);
+        if (last + 1 > next)
+            next = last + 1;
+    }
+    if (invalidated)
+        jit_invalidated(jit);
     unlock(&jit->lock);
 }
 

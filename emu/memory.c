@@ -3141,6 +3141,48 @@ static void mem_changed(struct mem *mem) {
     atomic_fetch_add_explicit(&mem->mmu.changes, 1, memory_order_relaxed);
 }
 
+// mem_write_prepare_rect's promise, for this thread only: pages in [lo, hi)
+// of `mem` have had their translations dropped, as of page-table generation
+// `changes`. Any structural change since (an mmap, a munmap, a lazy page
+// materialised by the walk itself) voids it, and mem_ptr goes back to
+// invalidating page by page -- so a page remapped under the walk can never
+// keep a translation of its new contents. The pages between the rectangle's
+// rows are inside [lo, hi) without having been invalidated; nothing writes
+// them while the promise stands, because only the rectangle's own walk
+// resolves MEM_WRITE on this thread until mem_write_prepared_end().
+static __thread struct {
+    struct mem *mem;
+    page_t lo, hi;
+    uint64_t changes;
+} write_prepared;
+
+void mem_write_prepare_rect(struct mem *mem, guest_addr_t start, uint64_t stride,
+        uint64_t row_bytes, uint32_t rows) {
+    write_prepared.mem = NULL;
+#if ENGINE_JIT
+    if (rows == 0 || row_bytes == 0 || mem->mmu.jit == NULL)
+        return;
+    uint64_t changes = atomic_load_explicit(&mem->mmu.changes, memory_order_relaxed);
+    jit_invalidate_rect(mem->mmu.jit, start, stride, row_bytes, rows);
+    write_prepared.lo = PAGE(start);
+    write_prepared.hi = PAGE(start + (uint64_t) (rows - 1) * stride + row_bytes - 1) + 1;
+    write_prepared.changes = changes;
+    write_prepared.mem = mem;
+#else
+    (void) mem; (void) start; (void) stride; (void) row_bytes; (void) rows;
+#endif
+}
+
+void mem_write_prepared_end(void) {
+    write_prepared.mem = NULL;
+}
+
+static bool write_prepared_covers(struct mem *mem, page_t page) {
+    return write_prepared.mem == mem &&
+            page >= write_prepared.lo && page < write_prepared.hi &&
+            atomic_load_explicit(&mem->mmu.changes, memory_order_relaxed) == write_prepared.changes;
+}
+
 // This version will return NULL instead of making necessary pagetable changes.
 // Used by the emulator to avoid deadlocks.
 static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type) {
@@ -3255,8 +3297,11 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
                 entry->flags |= P_COW;
         }
 #if ENGINE_JIT
-        // get rid of any compiled blocks in this page
-        jit_invalidate_page(mem->mmu.jit, page);
+        // get rid of any compiled blocks in this page -- unless
+        // mem_write_prepare_rect already did, under one lock for the whole
+        // rectangle this write belongs to
+        if (!write_prepared_covers(mem, page))
+            jit_invalidate_page(mem->mmu.jit, page);
 #endif
         
         // if page is cow, ~~milk~~ copy it

@@ -131,6 +131,8 @@ void jit_invalidate_unlock(struct jit *jit);
 // mem_changed.
 void jit_invalidate_range(struct jit *jit, page_t start, page_t end);
 void jit_invalidate_page(struct jit *jit, page_t page);
+void jit_invalidate_rect(struct jit *jit, guest_addr_t start, uint64_t stride,
+        uint64_t row_bytes, uint32_t rows);
 void jit_invalidate_all(struct jit *jit);
 
 // i386 gadget-fusion switches, readable and writable at RUNTIME via

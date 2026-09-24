@@ -714,6 +714,18 @@ size_t mem_frame_size(void);
 
 // Must call with mem read-locked.
 void *mem_ptr(struct mem *mem, guest_addr_t addr, int type);
+
+// For a syscall that is about to write a rectangle of guest memory through
+// mem_ptr(MEM_WRITE), one span at a time: drop the translations of every
+// page it covers now, under one jit->lock, and let this thread's mem_ptr
+// skip its per-page invalidation for pages inside the rectangle's span until
+// mem_write_prepared_end(). Each MEM_WRITE resolve otherwise takes jit->lock,
+// which several threads writing at once contend on. The skip lapses by
+// itself if the page table changes in between. Call with mem read-locked,
+// and end it before unlocking.
+void mem_write_prepare_rect(struct mem *mem, guest_addr_t start, uint64_t stride,
+        uint64_t row_bytes, uint32_t rows);
+void mem_write_prepared_end(void);
 int mem_segv_reason(struct mem *mem, guest_addr_t addr);
 
 // Reference counting is important
