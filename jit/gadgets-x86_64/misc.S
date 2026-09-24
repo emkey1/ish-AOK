@@ -31,49 +31,26 @@
     pop %rsi
     gret
 
-.macro cmpxchg_set_flags
+.macro cmpxchg_set_flags s, ss
+    # Entered straight after the CMPXCHG, with its host flags live and the
+    # ORIGINAL accumulator in r15. CMPXCHG sets the flags of `cmp acc, mem`
+    # (acc - mem) on both paths, and afterwards the accumulator holds the
+    # ORIGINAL memory operand on both paths (on success it already equalled it).
+    #
+    # CF and OF come off the host. ZF/SF/PF/AF are seeded LAZILY from the two
+    # compared values, exactly as a SUB seeds them and as the aarch64 host's
+    # cmpxchg does (`setf_a w8, eax`). AF cannot come off the host: x86 has no
+    # SETcc that reads it. This macro used to shift `seta` (CF==0 && ZF==0) into
+    # bit 4 instead, so AF came out SET for every unequal compare that did not
+    # borrow: `lock cmpxchgl` reported flags 0x010 where hardware gives 0x000,
+    # and tests/manual/x86 atomic_cmpxchg32 failed 976 of 2000 vectors on two
+    # independent x86_64 hosts. The data results were always right.
     setf_oc
-    # god help us
-    #
-    # ⚠️ KNOWN BUG, diagnosed but NOT fixed here: `seta` below is shifted into bit
-    # 4, which is AF -- but SETA is "above" (CF==0 && ZF==0), not the auxiliary
-    # carry. x86 has no SETcc that reads AF at all, which is presumably how this
-    # substitution happened. Consequence: AF comes out SET for every unequal
-    # compare that did not borrow, so `lock cmpxchgl` reports flags 0x010 where
-    # hardware gives 0x000. Confirmed on TWO independent x86_64 hosts (a Lima VM
-    # and bare-metal AMD Ryzen), so it is a real gadget bug and not a VM artifact:
-    # tests/manual/x86 atomic_cmpxchg32 fails 976 of 2000 vectors. The data
-    # results are correct; only AF is wrong, which is why it survived this long.
-    #
-    # The fix is NOT to find a cleverer SETcc. AF must be seeded LAZILY from the
-    # two compared values the way the aarch64 host does it
-    # (jit/gadgets-aarch64/misc.S's cmpxchg does `setf_a w8, eax`): put the
-    # original memory operand in CPU_op1 and the original accumulator in CPU_op2
-    # and leave AF_OPS set, so the guest derives AF on demand. Note two things
-    # that make it fiddlier than it looks: after CMPXCHG the accumulator holds the
-    # ORIGINAL memory value on BOTH paths (on success it already equalled it), so
-    # that operand is free -- but the original accumulator must be saved before
-    # the instruction, and every obvious scratch register is taken here (r13 is
-    # _addrq, r14 is clobbered by write_done, r10 is _tmp), so it needs the stack.
-    # Also note AF depends only on the carry out of bit 3, so op1/op2 do not need
-    # size-exact moves for AF's sake alone.
-    #
-    # Left as-is deliberately rather than half-done: a wrong edit in a locked
-    # atomic is worse than a known-wrong flag. The `andl` below must stop clearing
-    # AF_OPS when this is fixed.
-    setp %r10b
-    seta %r13b
-    setz %r14b
-    sets %r15b
-    shlb DOLLAR(2), %r10b
-    shlb DOLLAR(4), %r13b
-    shlb DOLLAR(6), %r14b
-    shlb DOLLAR(7), %r15b
-    orb %r10b, %r15b
-    orb %r13b, %r15b
-    orb %r14b, %r15b
-    andl $~(PF_RES|ZF_RES|SF_RES|AF_OPS), CPU_flags_res(%_cpu)
-    movb %r15b, CPU_eflags(%_cpu)
+    mov %rax, %r14
+    mov %r15, %tmp
+    setf_a src=%r14\s, dst=%tmp\s, ss=\ss
+    sub\ss %r14\s, %tmp\s
+    setf_zsp %tmp\s, \ss
 .endm
 
 .gadget xgetbv
@@ -107,23 +84,27 @@
     pop %rsi
     gret
 
+# The flags are recorded BEFORE write_done, which clobbers the host flags and
+# r14. That also keeps the host stack untouched here: these gadgets used to
+# bracket write_done with pushf/popf, an odd push that left crosspage_store's
+# call into C 8 bytes off the 16-byte alignment the ABI requires. r15 carries the
+# original accumulator across the CMPXCHG (tmp is its source operand, and write_prep
+# is done with r15 by now).
 .macro do_cmpxchg size, s, ss
     .gadget cmpxchg\size\()_mem
         write_prep \size, cmpxchg\size\()_mem
+        mov %rax, %r15
         cmpxchg\ss %tmp\s, (%_addrq)
-        pushf
+        cmpxchg_set_flags \s, \ss
         write_done \size, cmpxchg\size\()_mem
-        popf
-        cmpxchg_set_flags
         gret 1
 
     .gadget atomic_cmpxchg\size\()_mem
         write_prep \size, atomic_cmpxchg\size\()_mem
+        mov %rax, %r15
         lock cmpxchg\ss %tmp\s, (%_addrq)
-        pushf
+        cmpxchg_set_flags \s, \ss
         write_done \size, atomic_cmpxchg\size\()_mem
-        popf
-        cmpxchg_set_flags
         gret 1
 .endm
 

@@ -1386,6 +1386,22 @@ error_no_ctrl_tty:
     return err;
 }
 
+// The rate each CBAUD code stands for: the kernel's baud_table, indexed by
+// tty_baud_index().
+static const dword_t tty_baud_table[] = {
+    0, 50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800, 9600,
+    19200, 38400, 57600, 115200, 230400, 460800, 500000, 576000, 921600,
+    1000000, 1152000, 1500000, 2000000, 2500000, 3000000, 3500000, 4000000,
+};
+
+static dword_t tty_baud_rate(dword_t cflags) {
+    // BOTHER (CBAUDEX alone) means "the rate is in c_ospeed", which AOK does
+    // not keep. It indexes B38400's slot, the nominal rate TCGETS2 used to
+    // report for everything.
+    dword_t i = tty_baud_index(cflags);
+    return i < array_size(tty_baud_table) ? tty_baud_table[i] : 38400;
+}
+
 // These ioctls are separated out because they have to operate on the slave
 // side of a pseudoterminal pair even if the master is specified
 static int tty_mode_ioctl(struct tty *in_tty, int cmd, void *arg) {
@@ -1417,11 +1433,12 @@ static int tty_mode_ioctl(struct tty *in_tty, int cmd, void *arg) {
             break;
 
         // termios2 variants: same fields as termios_ above, plus explicit
-        // ispeed/ospeed. iSH's virtual ttys have no real baud rate, so
-        // TCGETS2 just reports the nominal speed the CBAUD bits of cflags are
-        // initialized to and the SETS2 variants ignore the incoming speed
-        // fields entirely -- musl and glibc both read cfget*speed() out of
-        // cflags anyway, so that is the field that has to stay sane.
+        // ispeed/ospeed. AOK's virtual ttys have no real baud rate, so
+        // TCGETS2 reports whatever rate the CBAUD bits of cflags encode (the
+        // CLI console copies the host terminal's) and the SETS2 variants
+        // ignore the incoming speed fields entirely -- musl and glibc both
+        // read cfget*speed() out of cflags anyway, so that is the field that
+        // has to stay sane.
         case TCGETS2_: {
             struct termios2_ *termios2 = arg;
             termios2->iflags = tty->termios.iflags;
@@ -1430,8 +1447,8 @@ static int tty_mode_ioctl(struct tty *in_tty, int cmd, void *arg) {
             termios2->lflags = tty->termios.lflags;
             termios2->line = tty->termios.line;
             memcpy(termios2->cc, tty->termios.cc, sizeof(termios2->cc));
-            termios2->ispeed = 38400;
-            termios2->ospeed = 38400;
+            termios2->ispeed = tty_baud_rate(tty->termios.cflags);
+            termios2->ospeed = termios2->ispeed;
             break;
         }
         case TCSETSF2_:

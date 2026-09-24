@@ -34,6 +34,16 @@ jobs:
           submodules: true
           fetch-depth: 0
 
+      # `submodules: true` stops one level down, and two of smallclue's own
+      # submodules ship in the app: third-party/openssh (ssh, scp, sftp,
+      # ssh-keygen) and third-party/nextvi (vi). Without them meson swaps in
+      # stubs and says so only as a setup WARNING, so every IPA built here had
+      # an ssh that says "not built into this iSH-AOK" and a stub vi. Just
+      # those two: meson uses none of smallclue's other submodules (dvtm,
+      # libgit2, openrsync).
+      - name: Check out smallclue's openssh and nextvi
+        run: git -C deps/smallclue submodule update --init third-party/openssh third-party/nextvi
+
       - name: Select newest available Xcode
         run: |
           LATEST_XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)

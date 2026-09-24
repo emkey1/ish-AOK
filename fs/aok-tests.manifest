@@ -195,6 +195,7 @@ fs_chown_kills_privs.c
 fs_at_validation.c
 sock_conformance_opts.c
 poll_rdhup_bounds.c
+poll_shutwr_dgram.c
 poll_default_mask.c
 poll_idle_cpu.c
 wake_poke_lost.c

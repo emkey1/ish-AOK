@@ -1292,8 +1292,10 @@ static int real_poll_update(struct real_poll *real, int fd, int types, void *dat
     // The write filter is registered for HUP and RDHUP as well as for WRITE:
     // it is the only thing that distinguishes a half-close from a full one.
     // kqueue sets EV_EOF on EVFILT_READ as soon as the peer stops writing, and
-    // on EVFILT_WRITE only once our own direction is down too, so the pair
-    // together says which happened. Measured on Darwin.
+    // on EVFILT_WRITE once our own direction is down -- by the peer's close,
+    // or by our own shutdown(SHUT_WR) -- so the pair together says which
+    // happened. Measured on Darwin. (A socket's EOF is answered by sock_poll,
+    // which asks each direction for itself; see rpe_events.)
     bool want_read = types & (POLL_READ | POLL_HUP | POLL_RDHUP);
     bool want_write = types & (POLL_WRITE | POLL_HUP | POLL_RDHUP);
     struct kevent e[3] = {
@@ -1401,8 +1403,11 @@ static int rpe_events(struct real_poll_event *rpe, struct poll_fd *pfd) {
         return events;
     }
     if (rpe->real.filter == EVFILT_WRITE) {
-        // EV_EOF here means our own direction is down too, so the connection
-        // really is finished: that is the HUP, and it implies the RDHUP.
+        // EV_EOF here means our own direction is down. That is not by itself
+        // the end of the connection -- our own shutdown(SHUT_WR) does it too,
+        // and Linux calls that merely writable -- which is why a socket with
+        // a poll operation was answered by it above. Only a socket without
+        // one gets this guess.
         if (is_socket && (rpe->real.flags & EV_EOF))
             return POLL_WRITE | POLL_HUP | POLL_RDHUP;
         return POLL_WRITE;
@@ -1422,6 +1427,11 @@ static int rpe_events(struct real_poll_event *rpe, struct poll_fd *pfd) {
         int so_error = 0;
         socklen_t so_error_len = sizeof(so_error);
         if (getsockopt((int) rpe->real.ident, SOL_SOCKET, SO_ERROR, &so_error, &so_error_len) < 0 || so_error == 0)
+            return 0;
+        // ...nor one only Darwin raises: an AF_UNIX datagram socket whose
+        // peer closed is idle on Linux, and poll(events=0) said POLLERR for
+        // it here. See sock_host_error_is_peer_gone.
+        if (pfd != NULL && sock_host_error_is_peer_gone(pfd->fd, so_error))
             return 0;
         // That getsockopt READ-AND-CLEARED the host's SO_ERROR, and this used
         // to throw the value away -- so the error existed only long enough for
