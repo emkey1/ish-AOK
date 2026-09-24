@@ -199,6 +199,15 @@ int main(int argc, char **argv) {
     test_init(argc, argv);
     alarm(test_watchdog_secs(120));
 
+    // A job counts as hung up here only if SIGHUP kills it, which is SIGHUP's
+    // DEFAULT action. An ignored disposition is inherited across fork and
+    // exec, so a suite started under `nohup` handed SIG_IGN to every job: the
+    // hangup arrived, the job lived, and seven checks said the kernel never
+    // sent it (the 556 device leg, 2026-09-24). tty_hangup_signal SKIPs in
+    // that case. The jobs here are this process's own children, so give them
+    // the default instead, and the verdict is about the kernel again.
+    signal(SIGHUP, SIG_DFL);
+
     // ---- waiting on a child's THREAD id -----------------------------------
     {
         ck("pipe", pipe(tidpipe), 0);
