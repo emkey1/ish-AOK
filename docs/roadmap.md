@@ -437,12 +437,17 @@ supported DE choice, a one-command setup, and a page of documentation that says
 what works. Users do not know AOK does this. That sentence is true of several
 things here and it is a product problem, not an engineering one.
 
-**Pixman v2 coverage.** `pixman_accel_plan.md` has phases 0--2 done and verified
-end-to-end against unmodified labwc and foot, with mask/`OVER_MASK_A8` named as
-the biggest remaining gap and an app Settings toggle still missing. This is
-directly the desktop's frame rate, and the measurement that justified it (~23.5%
-of an interactive redraw window inside raw pixman) was taken on exactly the
-workload 556 is about.
+**Pixman v2 coverage.** `pixman_accel_plan.md` has phases 0--2 done, plus mask
+compositing (`OVER_MASK_A8`), x8r8g8b8 destinations and the app Settings toggle
+("Pixman Accel (Wayland rendering)"). The first real-client decline breakdown
+(2026-09-24) reorders what is left: clip regions on the destination are most of
+labwc's pixman time, solid-fill sources are foot's glyphs and labwc's clears, and
+foot's per-cell `fill_rectangles` overhead and GTK's `pixman_blt` follow;
+SRC-with-mask barely occurs. The same run found a JIT bug that made the
+accelerator slow multi-threaded clients down (fixed, 73b9112f). The device
+number (Phase 3) is next. This is directly the desktop's frame rate, and the
+measurement that justified it (~23.5% of an interactive redraw window inside raw
+pixman) was taken on exactly the workload 556 is about.
 
 **Input, seriously.** Pointer, keyboard, modifiers, scroll, and what a trackpad
 gesture means to a Wayland client. #579 is the first symptom rather than the
