@@ -284,6 +284,39 @@ launch, which is instant on APFS and unmeasured on USB.
 
 ---
 
+## The 556 device leg (M4 iPad, 2026-09-24): results, and one new failure
+
+Five roots, as the release asks (logs copied to
+`~/.cache/ish-aok-device-logs/556/` on the Mac):
+
+| root | pass | failing tests |
+|---|---|---|
+| Devuan aarch64 (booted, uid 1000) | 249 | none |
+| Alpine i386 | 263 | `signal_process_wake_one`, `futex_timeout_duration`, `mount_bind_rbind` |
+| Alpine x86_64 | 266 | `signal_process_wake_one`, `mount_bind_rbind` |
+| Alpine arm64 | 257 | `signal_process_wake_one`, `kmsg_stream`, `kmsg_records`, `mount_bind_rbind` |
+| Alpine riscv64 | 250 | `signal_process_wake_one`, `kmsg_stream`, `kmsg_records`, `mount_bind_rbind` |
+
+`futex_timeout_duration`, `kmsg_*` and `mount_bind_rbind` failed the same way
+in 555's device leg. `tty_hangup_signal`, which failed on three of 555's four
+Alpine roots, passes on all four.
+
+**Undecided: `signal_process_wake_one` fails on the device after heavy use.**
+The test is new (`92c8002e`, 2026-09-23). It passed on the booted root right
+after a fresh boot. About an hour and four roots of fork/exec later, it fails
+everywhere on the device, the booted root as uid 1000 included. Child exits,
+SIGALRM and handlers arrive about 1 s or 2 s late, or not at all.
+`/proc/ish/wake_signals` rose by 73 sleep and 177 poll repairs over three runs
+of it, and stood at 9,793 poll repairs since boot. A wake poke a thread has
+gone deaf to costs up to the 1 s recheck cap, which is this test's symptom
+exactly. So this is the lost-poke mechanism, which grows with host thread
+churn, and not the chroot, root or musl: the same binary on the same root
+passed earlier in that boot. On the Mac it passes. Whether it blocks 556 is
+the maintainer's call. A task to chase why the pokes are lost has been
+suggested separately.
+
+---
+
 ## Deferred, by decision
 
 **External display ([#540](https://github.com/emkey1/ish-AOK/issues/540)):
