@@ -82,6 +82,20 @@ else
     note_problem "brew is not on PATH, so no dependency could be installed"
 fi
 
+# --- Metal toolchain ----------------------------------------------------
+# Since Xcode 26 the Metal compiler is a separately downloaded component, not
+# part of Xcode, and the Xcode Cloud image does not carry it. The app compiles
+# one shader (app/DisplayRFBShaders.metal), so without it the archive fails at
+# "Command CompileMetalFile failed with a nonzero exit code" -- which is where
+# every cloud build ended once lld was in place. GitHub's macOS runners ship it,
+# which is why the Actions job never needed this step.
+if xcodebuild -showComponent MetalToolchain 2>/dev/null | grep -q 'Status: installed'; then
+    echo "Metal toolchain already installed"
+else
+    xcodebuild -downloadComponent MetalToolchain \
+        || note_problem "xcodebuild -downloadComponent MetalToolchain failed"
+fi
+
 # --- Rust ---------------------------------------------------------------
 # app/iSH.xcconfig sets AOK_NATIVE_HELIX=YES, so meson gets
 # -Dnative_helix=enabled, which meson.build treats as a hard error without
@@ -146,6 +160,7 @@ done
 for probe in /opt/homebrew/opt/llvm/bin/llvm-objcopy /usr/local/opt/llvm/bin/llvm-objcopy; do
     [ -x "$probe" ] && echo "  llvm-objcopy (meson probe path): $probe"
 done
+echo "  Metal toolchain: $(xcodebuild -showComponent MetalToolchain 2>/dev/null | sed -n 's/^Status: //p' | head -1)"
 echo "  deps/helix: $([ -d deps/helix/.git ] || [ -f deps/helix/.git ] && echo checked-out || echo EMPTY)"
 echo "  PATH=$PATH"
 
@@ -159,6 +174,8 @@ command -v ninja  >/dev/null 2>&1 || missing="$missing ninja"
     || command -v llvm-objcopy >/dev/null 2>&1 \
     || missing="$missing llvm-objcopy"
 command -v ld.lld >/dev/null 2>&1 || missing="$missing ld.lld"
+xcodebuild -showComponent MetalToolchain 2>/dev/null | grep -q 'Status: installed' \
+    || missing="$missing MetalToolchain"
 [ -f deps/dash/config.h ] || missing="$missing deps/dash/config.h"
 [ -f deps/libapps/hterm/dist/js/hterm_all.js ] || missing="$missing hterm_all.js"
 
