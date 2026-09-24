@@ -166,6 +166,14 @@ struct fd {
             // readable -- chronyd at 106% of one core, 47496 failing recvmmsg
             // in 12 seconds. A dead connection reports itself once.
             bool conn_dead;
+            // An AF_UNIX datagram socket the guest connected (socketpair or
+            // connect), which Linux keeps pointed at its peer even after the
+            // peer closes: its next send without an address fails
+            // ECONNREFUSED, and only that send disconnects it (ENOTCONN from
+            // then on). Darwin disconnects it at the peer's close, so this is
+            // the only record left that it was connected. Set by
+            // socketpair/connect, cleared by the first send that reports it.
+            bool dgram_peer_set;
             // This socket was rebuilt by a checkpoint restore and has no peer
             // and no address -- the host object it stands for died with the
             // process that owned it. The descriptor underneath is a

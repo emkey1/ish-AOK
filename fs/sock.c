@@ -1465,6 +1465,8 @@ static uint32_t netlink_next_port_id(void);
 // recvfrom/sendto/recvmsg/sendmsg paths above them can use it too.
 static void sock_translate_err(struct fd *fd, int *err);
 static int sock_take_pending_error(struct fd *fd);
+static bool sock_io_drop_peer_gone(struct fd *fd, bool *dropped);
+static int unix_send_unconnected_err(struct fd *sock, int err);
 
 const struct fd_ops socket_fdops;
 
@@ -5690,6 +5692,10 @@ static int_t sys_connect_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t
 
     if (sock->socket.domain == AF_LOCAL_) {
         fill_cred(&sock->socket.unix_cred);
+        // Connected to a peer, or dissolved by AF_UNSPEC; see fs/fd.h.
+        if (sock->socket.type == SOCK_DGRAM_)
+            sock->socket.dgram_peer_set =
+                ((struct sockaddr_ *) &sockaddr)->family != AF_UNSPEC;
         // A real connect(2) succeeds again on an AF_UNIX SOCK_DGRAM socket
         // (reconnecting to a new peer, or dissolving the association) --
         // unlike SOCK_STREAM, where a second connect on an already-connected
@@ -6392,6 +6398,8 @@ static int_t sys_socketpair_common(dword_t domain, dword_t type, dword_t protoco
     sock2->socket.unix_peer_cred = sock1->socket.unix_cred;
     sock1->socket.unix_peer_cred_valid = true;
     sock2->socket.unix_peer_cred_valid = true;
+    sock1->socket.dgram_peer_set = sock1->socket.type == SOCK_DGRAM_;
+    sock2->socket.dgram_peer_set = sock2->socket.type == SOCK_DGRAM_;
     unlock(&peer_lock);
 
     err = _EFAULT;
@@ -6505,6 +6513,7 @@ static int_t sys_sendto_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t l
     bool send_all = socket_call_is_blocking(sock, real_flags) && socket_is_stream(sock);
     size_t sent = 0;
     struct socket_io_wait wait = {};
+    bool peer_gone_dropped = false;
     socket_force_host_nonblock(sock);
     TASK_MAY_BLOCK {
         while (1) {
@@ -6532,6 +6541,8 @@ static int_t sys_sendto_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t l
                 }
                 continue;
             }
+            if (sock_io_drop_peer_gone(sock, &peer_gone_dropped))
+                continue;
             if (socket_should_retry_io_eintr(sock, real_flags))
                 continue;
             if (socket_should_retry_io_eagain(sock, real_flags)) {
@@ -6567,12 +6578,8 @@ static int_t sys_sendto_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t l
         // MSG_NOSIGNAL: EPIPE without the guest's SIGPIPE.
         int mapped_err = unix_host_missing_is_refused(sock, errno_map_flags(flags & MSG_NOSIGNAL_));
         sock_translate_err(sock, &mapped_err);
-        // Linux returns ENOTCONN for a send() on an unconnected AF_UNIX
-        // datagram socket with no destination address; Darwin returns
-        // EDESTADDRREQ. (For AF_INET both kernels use EDESTADDRREQ.)
-        if (sock->socket.domain == AF_LOCAL_ && sockaddr_addr == 0 &&
-                mapped_err == _EDESTADDRREQ)
-            mapped_err = _ENOTCONN;
+        if (sockaddr_addr == 0)
+            mapped_err = unix_send_unconnected_err(sock, mapped_err);
         // A /dev/log or initctl path whose socket exists but has no live reader
         // (e.g. a stale socket left by a dead daemon) falls back to discarding.
         if (sendto_devlog_fallback &&
@@ -6706,6 +6713,7 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
     int host_flags = waitall ? (real_flags & ~MSG_WAITALL) : real_flags;
     size_t got = 0;
     struct socket_io_wait wait = {};
+    bool peer_gone_dropped = false;
     socket_force_host_nonblock(sock);
     TASK_MAY_BLOCK {
         while (1) {
@@ -6762,6 +6770,8 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
                 }
                 continue;
             }
+            if (sock_io_drop_peer_gone(sock, &peer_gone_dropped))
+                continue;
             if (socket_should_retry_io_eintr(sock, real_flags))
                 continue;
             if (socket_should_retry_io_eagain(sock, real_flags)) {
@@ -7833,6 +7843,8 @@ static int_t sys_getsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
             int err = getsockopt(sock->real_fd, SOL_SOCKET, SO_ERROR, &real_error, &real_error_len);
             if (err < 0)
                 return errno_map();
+            if (sock_host_error_is_peer_gone(sock, real_error))
+                real_error = 0;
             // SO_ERROR is read-and-clear at the host level: an internal
             // readiness probe (socket_tcp_connect_write_ready, run on every
             // poll/epoll scan of this fd) may have already observed and
@@ -8671,6 +8683,7 @@ static int_t sys_sendmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
     int resume_iovlen = 0;
     struct msghdr resume_msg = {};
     struct socket_io_wait wait = {};
+    bool peer_gone_dropped = false;
     socket_force_host_nonblock(sock);
     TASK_MAY_BLOCK {
         while (1) {
@@ -8714,6 +8727,8 @@ static int_t sys_sendmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
                 }
                 continue;
             }
+            if (sock_io_drop_peer_gone(sock, &peer_gone_dropped))
+                continue;
             if (socket_should_retry_io_eintr(sock, real_flags))
                 continue;
             if (socket_should_retry_io_eagain(sock, real_flags)) {
@@ -8746,6 +8761,8 @@ static int_t sys_sendmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
             goto out_free_scm;
         }
         err = unix_host_missing_is_refused(sock, errno_map_flags(flags & MSG_NOSIGNAL_));
+        if (msg.msg_name == NULL)
+            err = unix_send_unconnected_err(sock, err);
         // A /dev/log or initctl path whose socket exists but has no live reader
         // falls back to discarding rather than failing the send.
         if (sendmsg_devlog_fallback &&
@@ -9180,6 +9197,7 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
     int resume_iovlen = 0;
     struct msghdr resume_msg = {};
     struct socket_io_wait wait = {};
+    bool peer_gone_dropped = false;
     socket_force_host_nonblock(sock);
     TASK_MAY_BLOCK {
         bool use_ipv6_errqueue =
@@ -9248,6 +9266,8 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
                 }
                 continue;
             }
+            if (sock_io_drop_peer_gone(sock, &peer_gone_dropped))
+                continue;
             if (socket_should_retry_io_eintr(sock, real_flags))
                 continue;
             if (socket_should_retry_io_eagain(sock, real_flags)) {
@@ -9749,6 +9769,57 @@ static int sock_take_pending_error(struct fd *fd) {
     return err_map(err);
 }
 
+// Whether a host socket error is one Linux would never have raised: the
+// ECONNRESET Darwin leaves on an AF_UNIX datagram socket when the socket it is
+// connected to closes (xnu's unp_drop, from the closing socket's unp_detach).
+//
+// On Linux that socket is simply idle. It stays pointed at the dead peer, no
+// error is raised on it, and only its next send finds out. Measured on Linux
+// 6.12, a socketpair whose peer has closed with nothing queued: epoll(EPOLLIN)
+// reports nothing, poll(events=0) is 0, recv(MSG_DONTWAIT) is EAGAIN and
+// SO_ERROR is 0. AOK passed Darwin's error through, as EPOLLIN (the pending
+// error makes the host poll readable), as POLLERR (fs/poll.c's EVFILT_EXCEPT
+// arm) and as ECONNRESET from recv -- whichever looked first, since the error
+// is read-and-clear -- and a send took it too, failing a sendto() to a live
+// address that Linux delivers. So every place that can take it off the host
+// drops it.
+bool sock_host_error_is_peer_gone(struct fd *fd, int host_err) {
+    return host_err == ECONNRESET && fd != NULL && fd->ops == &socket_fdops &&
+        sock_is_unix_dgram(fd);
+}
+
+// For a host recv or send that just failed: whether that was the error above,
+// in which case it is gone now and the caller goes round again. Once per
+// call. The failing call cleared it itself, except for a MSG_PEEK, which
+// leaves a pending error in place -- so clear it here too, or a peek would
+// loop.
+static bool sock_io_drop_peer_gone(struct fd *fd, bool *dropped) {
+    if (*dropped || !sock_host_error_is_peer_gone(fd, errno))
+        return false;
+    int so_error;
+    socklen_t so_error_len = sizeof(so_error);
+    getsockopt(fd->real_fd, SOL_SOCKET, SO_ERROR, &so_error, &so_error_len);
+    *dropped = true;
+    return true;
+}
+
+// The error for a send with no destination on an AF_UNIX socket the host has
+// no connection for. Darwin says EDESTADDRREQ where Linux says ENOTCONN --
+// except the first time on a datagram socket whose connected peer has since
+// closed, which Linux reports as ECONNREFUSED, and only then disconnects (see
+// dgram_peer_set in fs/fd.h). Measured on Linux 6.12, for send and write
+// alike: ECONNREFUSED, then ENOTCONN. (For AF_INET both kernels use
+// EDESTADDRREQ.)
+static int unix_send_unconnected_err(struct fd *sock, int err) {
+    if (sock->socket.domain != AF_LOCAL_ || (err != _EDESTADDRREQ && err != _ENOTCONN))
+        return err;
+    if (sock->socket.type == SOCK_DGRAM_ && sock->socket.dgram_peer_set) {
+        sock->socket.dgram_peer_set = false;
+        return _ECONNREFUSED;
+    }
+    return _ENOTCONN;
+}
+
 static int sock_poll(struct fd *fd) {
     if (sock_is_devlog_sink(fd))
         return POLL_WRITE;
@@ -9791,25 +9862,56 @@ static int sock_poll(struct fd *fd) {
     if (fd->socket.conn_dead)
         return POLL_ERR | POLL_HUP;
     int types = realfs_poll(fd);
-    // Darwin's poll() answers POLLHUP the moment the peer stops writing and
-    // gives no way to tell that from a connection that is actually finished.
-    // Linux keeps them apart: EPOLLRDHUP for the peer's half, EPOLLHUP only
-    // once both directions are down. Reporting HUP for a half-close is
-    // provably wrong -- the socket is still writable, and a program treats
-    // EPOLLHUP as "connection over" and drops it.
+    // An AF_UNIX datagram socket whose peer has closed polls readable on
+    // Darwin, for the pending error Linux never raises (see
+    // sock_host_error_is_peer_gone). Take it off, and look again. Only when
+    // the host said readable, so an idle socket pays nothing; any other
+    // error is kept for the guest, as every internal SO_ERROR read keeps it.
+    if ((types & POLL_READ) && sock_is_unix_dgram(fd)) {
+        int so_error = 0;
+        socklen_t so_error_len = sizeof(so_error);
+        if (getsockopt(fd->real_fd, SOL_SOCKET, SO_ERROR, &so_error, &so_error_len) == 0 &&
+                so_error != 0) {
+            if (sock_host_error_is_peer_gone(fd, so_error))
+                types = realfs_poll(fd);
+            else if (fd->socket.host_connect_error == 0)
+                fd->socket.host_connect_error = so_error;
+        }
+    }
+    // Darwin's poll() answers POLLHUP when EITHER direction is down, and gives
+    // no way to tell which. Linux keeps them apart: EPOLLRDHUP (with EPOLLIN)
+    // once there is nothing more to read, EPOLLHUP only once both directions
+    // are down. Reporting HUP for a half-close is provably wrong -- the socket
+    // is still writable, and a program treats EPOLLHUP as "connection over"
+    // and drops it.
     //
-    // A zero-length send is the discriminator, and it is a single syscall with
-    // nothing to clean up: it transmits no segment, leaves pending inbound
+    // So ask about each direction. The read side first, with a poll for
+    // POLLIN alone: that registers only Darwin's read filter, whose EOF means
+    // the peer shut its side (or we shut our read side, which Linux also
+    // reports as RDHUP). Without it there is no RDHUP and no HUP at all, and
+    // the POLLHUP came from our OWN shutdown(SHUT_WR): Linux reports that as
+    // writable and nothing else (measured, 0x4 where AOK said OUT|HUP|RDHUP
+    // 0x2014, docs/build_556_musts.md §3). It matters because the usual reason
+    // to shut down writing is to wait for the reply, and HUP said none would
+    // come.
+    //
+    // Then the write side, with a zero-length send: a single syscall with
+    // nothing to clean up, it transmits no segment, leaves pending inbound
     // data alone, and returns EPIPE exactly when our own write direction has
     // gone. (SIGPIPE is ignored process-wide -- kernel/init.c -- so it cannot
-    // fire here.) Only for connection-oriented sockets: on a datagram socket a
-    // zero-length send would put an empty datagram on the wire.
+    // fire here.) That alone could not tell our own half-close from the
+    // peer's full close, which is why it is asked second. Only for
+    // connection-oriented sockets: on a datagram socket a zero-length send
+    // would put an empty datagram on the wire.
     if ((types & POLL_HUP) &&
             (fd->socket.type == SOCK_STREAM_ || fd->socket.type == SOCK_SEQPACKET_)) {
         types &= ~POLL_HUP;
-        types |= POLL_RDHUP;
-        if (send(fd->real_fd, "", 0, MSG_DONTWAIT) < 0 && errno == EPIPE)
-            types |= POLL_HUP;
+        struct pollfd read_side = {.fd = fd->real_fd, .events = POLLIN};
+        if (poll(&read_side, 1, 0) > 0 && (read_side.revents & POLLHUP)) {
+            types |= POLL_RDHUP;
+            if (send(fd->real_fd, "", 0, MSG_DONTWAIT) < 0 && errno == EPIPE)
+                types |= POLL_HUP;
+        }
     }
 #if defined(__APPLE__)
     if (types & POLL_WRITE)
@@ -9873,6 +9975,7 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
     struct msghdr dgram_msg = {.msg_iov = dgram_iov, .msg_iovlen = 2};
     ssize_t res = 0;
     struct socket_io_wait wait = {};
+    bool peer_gone_dropped = false;
     socket_force_host_nonblock(fd);
     TASK_MAY_BLOCK {
         while (1) {
@@ -9883,6 +9986,8 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
                 res = read(fd->real_fd, buf, size);
             if (res >= 0)
                 break;
+            if (sock_io_drop_peer_gone(fd, &peer_gone_dropped))
+                continue;
             // Before the retry check, whose pending-signal test takes a lock
             // and can clobber errno.
             bool host_eintr = errno == EINTR;
@@ -10004,6 +10109,7 @@ static ssize_t sock_write(struct fd *fd, const void *buf, size_t size) {
     bool send_all = !unix_dgram && socket_call_is_blocking(fd, 0) && socket_is_stream(fd);
     size_t sent = 0;
     struct socket_io_wait wait = {};
+    bool peer_gone_dropped = false;
     socket_force_host_nonblock(fd);
     TASK_MAY_BLOCK {
         while (1) {
@@ -10027,6 +10133,8 @@ static ssize_t sock_write(struct fd *fd, const void *buf, size_t size) {
                 }
                 continue;
             }
+            if (sock_io_drop_peer_gone(fd, &peer_gone_dropped))
+                continue;
             bool host_eintr = errno == EINTR; // see sock_read
             if (socket_should_retry_io_eintr(fd, 0))
                 continue;
@@ -10061,6 +10169,7 @@ static ssize_t sock_write(struct fd *fd, const void *buf, size_t size) {
         }
         int err = errno_map();
         sock_translate_err(fd, &err);
+        err = unix_send_unconnected_err(fd, err);
         sock_trace("write", fd, -1, err);
         if (err == _EAGAIN)
             sock_x11_event("write-eagain", fd, -1, err, size);
