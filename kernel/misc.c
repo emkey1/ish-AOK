@@ -79,10 +79,16 @@ int_t sys_prctl_guest(dword_t option, qword_t arg2, qword_t arg3, qword_t arg4, 
                 return _EFAULT;
             return 0;
         case PRCTL_GET_DUMPABLE_:
-            return 1;
+            return atomic_load(&current->group->undumpable) ? 0 : 1;
         case PRCTL_SET_DUMPABLE_:
+            // SUID_DUMP_DISABLE or SUID_DUMP_USER; SUID_DUMP_ROOT (2) is a
+            // sysctl's setting, never prctl's. It was accepted and forgotten,
+            // so ssh-agent and sshd, which set 0 to keep their keys from
+            // being read out by the user's other processes, were readable
+            // through /proc/<pid>/mem and ptrace all along.
             if (arg2 > 1)
                 return _EINVAL;
+            atomic_store(&current->group->undumpable, arg2 == 0);
             return 0;
         case PRCTL_GET_KEEPCAPS_:
             return current->keepcaps ? 1 : 0;

@@ -49,24 +49,34 @@ bool current_capable(unsigned cap) {
     return superuser() || current_has_cap(cap);
 }
 
-bool current_may_access_task_mem(struct task *target) {
+bool task_ptrace_may_access(struct task *target, unsigned mode) {
     if (current == NULL || target == NULL)
         return false;
-    if (target == current)
+    // Linux's same_thread_group: a process may always look at itself, from
+    // any of its threads.
+    if (target == current || (target->group != NULL && target->group == current->group))
         return true;
     if (current_capable(CAP_SYS_PTRACE_))
         return true;
-    // Linux requires the caller's euid to equal ALL THREE of the target's
+    uid_t_ uid = (mode & PTRACE_MODE_FSCREDS_) ? current->fsuid : current->uid;
+    uid_t_ gid = (mode & PTRACE_MODE_FSCREDS_) ? current->fsgid : current->gid;
+    // Linux requires the caller's id to equal ALL THREE of the target's
     // uids, and the same for gids. Comparing only the effective ids would let
     // a process that has temporarily dropped privilege be read by one that
     // never held any -- it could regain that privilege later, so its memory is
     // still privileged memory.
-    return current->euid == target->uid &&
-           current->euid == target->euid &&
-           current->euid == target->suid &&
-           current->egid == target->gid &&
-           current->egid == target->egid &&
-           current->egid == target->sgid;
+    if (uid != target->uid || uid != target->euid || uid != target->suid ||
+            gid != target->gid || gid != target->egid || gid != target->sgid)
+        return false;
+    // Same user, but the process asked not to be looked at, or became
+    // privileged in a way its user must not see into.
+    if (target->group != NULL && atomic_load(&target->group->undumpable))
+        return false;
+    return true;
+}
+
+bool current_may_access_task_mem(struct task *target) {
+    return task_ptrace_may_access(target, PTRACE_MODE_ATTACH_ | PTRACE_MODE_FSCREDS_);
 }
 
 void cred_change_begin(struct cred_change *change) {
@@ -95,8 +105,15 @@ void cred_change_commit(const struct cred_change *change) {
     if (current->euid != change->euid || current->egid != change->egid ||
             current->fsuid != change->fsuid || current->fsgid != change->fsgid ||
             (current->cap_permitted[0] & ~change->cap_permitted[0]) != 0 ||
-            (current->cap_permitted[1] & ~change->cap_permitted[1]) != 0)
+            (current->cap_permitted[1] & ~change->cap_permitted[1]) != 0) {
         current->pdeath_signal = 0;
+        // The same change makes the process undumpable (suid_dumpable is 0):
+        // a daemon that drops from root to a user still holds what it read
+        // as root, and that user must not be able to read it back out of
+        // its memory. For the whole process, as Linux's per-mm flag is.
+        if (current->group != NULL)
+            atomic_store(&current->group->undumpable, true);
+    }
 }
 
 static bool current_can_setuids(void) {

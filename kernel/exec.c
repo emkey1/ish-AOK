@@ -1978,6 +1978,19 @@ static void exec_forget_pdeath(const struct cred_change *before, bool secure) {
     cred_change_commit(before);
 }
 
+// Linux's begin_new_exec: the new image is dumpable -- inspectable by its own
+// user through ptrace and /proc (task_ptrace_may_access) -- unless the caller
+// was already running with euid != uid or egid != gid, or could not read the
+// file it ran (would_dump: an execute-only binary must not be read back out
+// of memory). Asked of the credentials before the exec changes them, as Linux
+// asks, and followed by cred_change_commit, which makes it undumpable as well
+// when the exec changes the effective or filesystem ids -- a setuid program.
+static void exec_set_dumpable(bool unreadable) {
+    bool undumpable = unreadable ||
+            current->euid != current->uid || current->egid != current->gid;
+    atomic_store(&current->group->undumpable, undumpable);
+}
+
 // Natively-implemented programs (/AOK/native/*, kernel/native.h) are dispatched
 // here: after the caller's existence and permission checks, so they behave like
 // any other executable, but before any ELF parsing, since there is no guest
@@ -2067,6 +2080,7 @@ static int native_dispatch_exec(struct fd *fd, struct exec_args argv, struct exe
     // and CAP_SETUID still in hand to do it.
     struct exec_setid setid;
     exec_setid_plan(&setid, prog->setuid_root, 0, false, 0);
+    exec_set_dumpable(false);
     struct cred_change creds;
     cred_change_begin(&creds);
     exec_setid_apply(&setid);
@@ -2100,6 +2114,8 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     if (IS_ERR(fd))
         return (int) PTR_ERR(fd);
     int err;
+    // would_dump(), with the caller's credentials as they are now.
+    bool unreadable = access_check(&stat, AC_R) < 0;
 
     // A native program replaces this image with compiled-in host code, so it
     // is asked about before any loader gets the file. Anything else comes back
@@ -2153,6 +2169,7 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     // setuid/setgid. The legacy setuid-root grant is full permitted and
     // effective caps, so helpers like sudo can use keepcaps+setresuid to drop
     // uid while retaining CAP_SETGID for a subsequent setresgid call.
+    exec_set_dumpable(unreadable);
     struct cred_change creds;
     cred_change_begin(&creds);
     exec_setid_apply(&setid);

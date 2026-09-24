@@ -873,6 +873,19 @@ struct tgroup {
     // CLD_CONTINUED however it ended. A new stop drops it, as Linux's
     // signal_set_stop_flags does. Lock: group->lock.
     bool continue_unannounced;
+    // Linux's dumpable flag, inverted so a zeroed group is dumpable: set, the
+    // process may not be inspected -- ptrace, /proc/<pid>/mem, maps, fd and
+    // the rest (task_ptrace_may_access) -- by anyone without CAP_SYS_PTRACE,
+    // even its own user. Set by PR_SET_DUMPABLE(0) (which ssh-agent and sshd
+    // call to keep keys out of reach), by an exec that leaves euid != uid or
+    // egid != gid or runs a binary its caller cannot read, and by a change of
+    // effective or filesystem ids (cred_change_commit). Cleared by an ordinary
+    // exec and PR_SET_DUMPABLE(1). Linux keeps it in the mm; here the process
+    // is the right owner, since a thread group shares one mm and reading
+    // group needs no lock. Inherited by fork through tgroup_copy's struct
+    // copy, as Linux's dup_mm copies it. At the end for the reason given
+    // above traced_zombies.
+    _Atomic bool undumpable;
 };
 
 // Is this thread group the leader of its session? Linux keeps this as a
@@ -1132,6 +1145,21 @@ struct cred_change {
 };
 void cred_change_begin(struct cred_change *change);
 void cred_change_commit(const struct cred_change *change);
+
+// Linux's ptrace_may_access(): may the caller inspect `target` -- trace it,
+// read its memory, or read what /proc says about its address space, open
+// files, working directory and executable? A thread of the caller's own
+// process always may. Otherwise the caller's uid and gid must equal ALL of
+// the target's real, effective and saved ids, and the target must be
+// dumpable; CAP_SYS_PTRACE overrides both. Which of the caller's ids count
+// is the mode's: FSCREDS the filesystem ids (/proc), REALCREDS the real ones
+// (ptrace attach, kcmp). READ and ATTACH differ only in LSM policy Linux may
+// add, and are both accepted for the record.
+#define PTRACE_MODE_READ_      0x01
+#define PTRACE_MODE_ATTACH_    0x02
+#define PTRACE_MODE_FSCREDS_   0x04
+#define PTRACE_MODE_REALCREDS_ 0x08
+bool task_ptrace_may_access(struct task *target, unsigned mode);
 
 // The equivalent of Linux's ptrace_may_access(PTRACE_MODE_ATTACH_FSCREDS):
 // may the caller read or write `target`'s memory? Anything that exposes one

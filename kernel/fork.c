@@ -1020,6 +1020,14 @@ dword_t sys_kcmp(pid_t_ pid1, pid_t_ pid2, dword_t type, dword_t idx1, dword_t i
         unlock(&pids_lock);
         return _ESRCH;
     }
+    // Linux: both must be processes the caller may inspect
+    // (PTRACE_MODE_READ_REALCREDS), EPERM otherwise -- what two processes
+    // share is theirs to tell.
+    if (!task_ptrace_may_access(t1, PTRACE_MODE_READ_ | PTRACE_MODE_REALCREDS_) ||
+            !task_ptrace_may_access(t2, PTRACE_MODE_READ_ | PTRACE_MODE_REALCREDS_)) {
+        unlock(&pids_lock);
+        return _EPERM;
+    }
     int res;
     switch (type) {
         case KCMP_FILE_: {

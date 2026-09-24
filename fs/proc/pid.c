@@ -305,8 +305,12 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     bool zombie = false;
     bool io_block = false;
 
+    // Linux blanks the addresses below for a reader who may not inspect the
+    // process (do_task_stat's `permitted`): with the layout randomized they
+    // are what an attacker would need to know.
+    bool permitted = task_ptrace_may_access(task, PTRACE_MODE_READ_ | PTRACE_MODE_FSCREDS_);
     lock(&task->general_lock, 0);
-    if (mm != NULL) {
+    if (mm != NULL && permitted) {
         // All six whole: a 64-bit guest's addresses do not fit addr_t.
         stack_start = mm->stack_start;
         start_brk = mm->start_brk;
@@ -1837,7 +1841,12 @@ struct fd *proc_ns_open(int pid, const char *name) {
     struct task *task = pid_get_task_ref(pid);
     if (task == NULL)
         return ERR_PTR(_ENOENT);
+    // Linux's proc_ns_get_link asks ptrace_may_access(READ_FSCREDS) before
+    // it hands out a namespace fd -- the thing setns() takes.
+    bool ok = task_ptrace_may_access(task, PTRACE_MODE_READ_ | PTRACE_MODE_FSCREDS_);
     task_ref_cnt_mod(task, -1);
+    if (!ok)
+        return ERR_PTR(_EACCES);
     return proc_ns_fd_for_index((unsigned) i);
 }
 
@@ -1889,35 +1898,46 @@ static int proc_pid_root_readlink(struct proc_entry *entry, char *buf) {
     return err;
 }
 
+// .ptrace_read marks what only a caller that may inspect the process gets to
+// see: its address space (auxv, environ, maps, mem, smaps), its open files
+// (fd, fdinfo), where it is (cwd, root, exe) and its I/O counters (io). Linux
+// gates exactly these on ptrace_may_access; status, stat and cmdline stay
+// public, with stat's addresses blanked for anyone else (proc_pid_stat_show).
+// Before this, any user could read root's memory map and list and open the
+// files of every process on the system.
 struct proc_children proc_pid_children = PROC_CHILDREN({
     // 0400 like Linux, not the 0444 default.
-    {"auxv", S_IFREG | 0400, .show = proc_pid_auxv_show},
+    {"auxv", S_IFREG | 0400, .show = proc_pid_auxv_show, .ptrace_read = true},
     {"cgroup", .show = proc_pid_cgroup_show},
     {"cmdline", .show = proc_pid_cmdline_show},
     {"comm", .show = proc_pid_comm_show},
-    {"cwd", S_IFLNK, .readlink = proc_pid_cwd_readlink},
+    {"cwd", S_IFLNK, .readlink = proc_pid_cwd_readlink, .ptrace_read = true},
     // 0400 like Linux, not the 0444 default.
-    {"environ", S_IFREG | 0400, .show = proc_pid_environ_show},
-    {"exe", S_IFLNK, .readlink = proc_pid_exe_readlink},
-    {"fd", S_IFDIR, .readdir = proc_pid_fd_readdir},
-    {"fdinfo", S_IFDIR, .readdir = proc_pid_fdinfo_readdir},
-    {"io", .show = proc_pid_io_show},
-    {"maps", .show = proc_pid_maps_show},
+    {"environ", S_IFREG | 0400, .show = proc_pid_environ_show, .ptrace_read = true},
+    {"exe", S_IFLNK, .readlink = proc_pid_exe_readlink, .ptrace_read = true},
+    // 0500 like Linux: listing and searching it is the owner's.
+    {"fd", S_IFDIR | 0500, .readdir = proc_pid_fd_readdir, .ptrace_read = true},
+    {"fdinfo", S_IFDIR, .readdir = proc_pid_fdinfo_readdir, .ptrace_read = true},
+    // 0400 like Linux, not the 0444 default.
+    {"io", S_IFREG | 0400, .show = proc_pid_io_show, .ptrace_read = true},
+    {"maps", .show = proc_pid_maps_show, .ptrace_read = true},
     // 0600 like Linux, not the 0444 default: the mode is the first gate, and
     // the credential check in the handlers is the second.
-    {"mem", S_IFREG | 0600, .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite},
+    {"mem", S_IFREG | 0600, .pread = proc_pid_mem_pread, .pwrite = proc_pid_mem_pwrite,
+        .ptrace_read = true},
     {"mountinfo", .show = proc_show_mountinfo},
     {"mounts", .show = proc_show_mounts},
-    {"ns", S_IFDIR, .readdir = proc_pid_ns_readdir},
+    // 0511 like Linux: anyone may pass through, only the owner may list.
+    {"ns", S_IFDIR | 0511, .readdir = proc_pid_ns_readdir},
     // 0644, as Linux has it: writing is how a process lowers its own OOM
     // score, and the update handler below has always worked -- only the
     // advertised mode said read-only, so anything that checked before writing
     // gave up without trying.
     {"oom_score_adj", S_IFREG | 0644, .show = proc_pid_oom_score_adj_show, .update = proc_pid_oom_score_adj_update},
-    {"root", S_IFLNK, .readlink = proc_pid_root_readlink},
+    {"root", S_IFLNK, .readlink = proc_pid_root_readlink, .ptrace_read = true},
     {"sched", .show = proc_pid_sched_show},
-    {"smaps", .show = proc_pid_smaps_show},
-    {"smaps_rollup", .show = proc_pid_smaps_rollup_show},
+    {"smaps", .show = proc_pid_smaps_show, .ptrace_read = true},
+    {"smaps_rollup", .show = proc_pid_smaps_rollup_show, .ptrace_read = true},
     {"stat", .show = proc_pid_stat_show},
     {"statm", .show = proc_pid_statm_show},
     {"status", .show = proc_pid_status_show},
@@ -1934,7 +1954,7 @@ static struct proc_dir_entry proc_pid_fdinfo_entry = {NULL, S_IFREG,
     .getname = proc_pid_fd_getname, .show = proc_pid_fdinfo_show};
 
 static struct proc_dir_entry proc_pid_ns_entry = {NULL, S_IFLNK,
-    .getname = proc_pid_ns_getname, .readlink = proc_pid_ns_readlink};
+    .getname = proc_pid_ns_getname, .readlink = proc_pid_ns_readlink, .ptrace_read = true};
 
 static struct proc_dir_entry proc_pid_task = {NULL, S_IFDIR,
     .readdir = proc_pid_task_dir_readdir, .getname = proc_pid_task_getname};

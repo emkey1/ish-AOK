@@ -1019,6 +1019,16 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
                 unlock(&pids_lock);
                 return _EPERM;
             }
+            // Linux's __ptrace_may_access(PTRACE_MODE_ATTACH_REALCREDS): the
+            // caller's real ids must be all of the target's, the target must
+            // be dumpable, or the caller must hold CAP_SYS_PTRACE. There was
+            // no check at all, so any user could attach to a root process --
+            // sshd, a setuid program mid-run -- and read and write its memory
+            // and registers: root for anyone.
+            if (!task_ptrace_may_access(child, PTRACE_MODE_ATTACH_ | PTRACE_MODE_REALCREDS_)) {
+                unlock(&pids_lock);
+                return _EPERM;
+            }
 
             lock(&child->ptrace.lock, 0);
             if (child->ptrace.traced) {

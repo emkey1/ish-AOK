@@ -62,7 +62,9 @@ static bool procfd_accmode_ok(int have, int want) {
 // Resolves path_raw down to a /proc/PID/fd/N entry, following symlinks by
 // hand rather than through path_normalize's N_SYMLINK_FOLLOW, and returns a
 // retained reference to the underlying struct fd if so. False (nothing
-// retained) when path_raw doesn't ultimately name such an entry.
+// retained) when path_raw doesn't ultimately name such an entry. True with
+// *err_out set (and nothing retained) when it does, but the caller may not
+// look at that process's files.
 //
 // A single path_normalize(..., N_SYMLINK_NOFOLLOW) call is not enough: it
 // leaves the RAW INPUT's own final component unresolved, which is exactly
@@ -78,7 +80,9 @@ static bool procfd_accmode_ok(int have, int want) {
 // Chase one hop at a time instead, re-checking the procfs-fd/N shape
 // after each, so any number of symlink hops on the way in still lands
 // correctly once they bottom out at a real fd/N entry.
-static bool procfd_resolve(struct fd *at, const char *path_raw, struct fd **fd_out) {
+static bool procfd_resolve(struct fd *at, const char *path_raw, struct fd **fd_out, int *err_out) {
+    *fd_out = NULL;
+    *err_out = 0;
     char path[MAX_PATH];
     strncpy(path, path_raw, sizeof(path) - 1);
     path[sizeof(path) - 1] = '\0';
@@ -105,6 +109,18 @@ static bool procfd_resolve(struct fd *at, const char *path_raw, struct fd **fd_o
             struct task *task = pid_get_task_ref(pid);
             if (task == NULL)
                 return false;
+            // Another process's descriptors are not the caller's to open. A
+            // reopen by path would at least face the file's own permissions,
+            // but a pipe, a socket, an unlinked or anonymous file has no path
+            // and was handed back as the very description its owner holds --
+            // a root daemon's pipe, or the deleted temp file it keeps its
+            // secrets in, to any user. Linux's proc_fd_access_allowed:
+            // ptrace_may_access(PTRACE_MODE_READ_FSCREDS), EACCES otherwise.
+            if (!task_ptrace_may_access(task, PTRACE_MODE_READ_ | PTRACE_MODE_FSCREDS_)) {
+                task_ref_cnt_mod(task, -1);
+                *err_out = _EACCES;
+                return true;
+            }
             struct fdtable *files = procfd_task_files_retain(task);
             if (files == NULL) {
                 task_ref_cnt_mod(task, -1);
@@ -153,8 +169,11 @@ static struct fd *procfd_openat(struct fd *at, const char *path_raw, int flags) 
     if (flags & (O_NOFOLLOW_ | O_PATH_))
         return NULL;
     struct fd *fd;
-    if (!procfd_resolve(at, path_raw, &fd))
+    int err;
+    if (!procfd_resolve(at, path_raw, &fd, &err))
         return NULL;
+    if (err < 0)
+        return ERR_PTR(err);
 
     // Linux procfd opens give regular files a fresh file position and the
     // CALLER's flags, which shell script loaders rely on when they execute
@@ -194,8 +213,13 @@ static struct fd *procfd_openat(struct fd *at, const char *path_raw, int flags) 
 // so the caller falls through to normal resolution.
 bool procfd_statat(struct fd *at, const char *path_raw, struct statbuf *stat, int *err_out) {
     struct fd *fd;
-    if (!procfd_resolve(at, path_raw, &fd))
+    int err;
+    if (!procfd_resolve(at, path_raw, &fd, &err))
         return false;
+    if (err < 0) {
+        *err_out = err;
+        return true;
+    }
     *err_out = generic_fstat(fd, stat);
     fd_close(fd);
     return true;

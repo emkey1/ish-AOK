@@ -47,6 +47,15 @@ static bool proc_lookup_task_dir(const char *component, struct proc_entry *next_
     return true;
 }
 
+bool proc_entry_may_read(struct proc_entry *entry) {
+    struct task *task = pid_get_task_ref(entry->pid);
+    if (task == NULL)
+        return true;
+    bool ok = task_ptrace_may_access(task, PTRACE_MODE_READ_ | PTRACE_MODE_FSCREDS_);
+    task_ref_cnt_mod(task, -1);
+    return ok;
+}
+
 static int proc_lookup(const char *path, struct proc_entry *entry) {
     entry->meta = &proc_root;
     char component[MAX_NAME + 1];
@@ -54,6 +63,13 @@ static int proc_lookup(const char *path, struct proc_entry *entry) {
     while (path_next_component(&path, component, &err)) {
         if (!S_ISDIR(proc_entry_mode(entry))) {
             err = _ENOTDIR;
+            break;
+        }
+        // Nothing inside /proc/<pid>/fd or fdinfo is anyone else's to look
+        // up: Linux's proc_fd_permission refuses the directory itself, so
+        // stat, readlink and open of /proc/<pid>/fd/N all fail EACCES.
+        if (entry->meta->ptrace_read && !proc_entry_may_read(entry)) {
+            err = _EACCES;
             break;
         }
 
@@ -101,6 +117,10 @@ static struct fd *proc_open(struct mount *UNUSED(mount), const char *path, int U
     int err = proc_lookup(path, &entry);
     if (err < 0)
         return ERR_PTR(err);
+    if (entry.meta->ptrace_read && !proc_entry_may_read(&entry)) {
+        proc_entry_cleanup(&entry);
+        return ERR_PTR(_EACCES);
+    }
     struct fd *fd = fd_create(&procfs_fdops);
     fd->proc.entry = entry;
     fd->proc.data.data = NULL;
@@ -416,6 +436,11 @@ static ssize_t proc_readlink(struct mount *UNUSED(mount), const char *path, char
     if (!S_ISLNK(proc_entry_mode(&entry))) {
         proc_entry_cleanup(&entry);
         return _EINVAL;
+    }
+    // cwd, root, exe and the ns links: Linux's proc_fd_access_allowed.
+    if (entry.meta->ptrace_read && !proc_entry_may_read(&entry)) {
+        proc_entry_cleanup(&entry);
+        return _EACCES;
     }
 
     char target[MAX_PATH + 1];

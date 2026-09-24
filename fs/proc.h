@@ -63,7 +63,20 @@ struct proc_dir_entry {
 
     struct proc_dir_entry *parent;
     int inode;
+
+    // Only a caller that may inspect the entry's task -- Linux's
+    // ptrace_may_access(PTRACE_MODE_READ_FSCREDS), task_ptrace_may_access --
+    // may open it, read it as a link, or look anything up inside it; anyone
+    // else gets EACCES. For what describes a process's address space, open
+    // files, working directory and executable: Linux gates each of these the
+    // same way (mm_access, proc_fd_access_allowed), so another user's process
+    // shows its status and cmdline but not its memory map or its files.
+    bool ptrace_read;
 };
+
+// The gate described at ptrace_read, for the task an entry names. True when
+// the task is gone: the entry's own handler reports that.
+bool proc_entry_may_read(struct proc_entry *entry);
 
 struct proc_children {
     size_t count;

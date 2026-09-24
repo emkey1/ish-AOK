@@ -46,13 +46,20 @@ int proc_entry_stat(struct proc_entry *entry, struct statbuf *stat) {
         // generic_openat() holds inodes_lock across stat/open/fstat. Never
         // block procfs stat on a task lock while that global lock is held, or
         // a task exiting with general_lock held can stall unrelated file opens.
+        // The EFFECTIVE ids, as Linux's task_dump_owner gives them: the
+        // modes below (0400 environ, 0500 fd, ...) are meant to let a process
+        // read its own entries, and it asks with its fsuid, which follows the
+        // euid. Owned by the real uid, a root daemon that had seteuid() to a
+        // user was refused its own /proc/self/environ, and a setuid program's
+        // entries belonged to the user who ran it rather than to the
+        // identity it runs as -- which is also what ps reports as its owner.
         if (trylock(&task->general_lock) == 0) {
-            stat->uid = task->uid;
-            stat->gid = task->gid;
+            stat->uid = task->euid;
+            stat->gid = task->egid;
             unlock(&task->general_lock);
         } else {
-            stat->uid = task->uid;
-            stat->gid = task->gid;
+            stat->uid = task->euid;
+            stat->gid = task->egid;
         }
         task_ref_cnt_mod(task, -1);
     } // else the memset above will have initialized memory to zero, which is the root uid/gid
