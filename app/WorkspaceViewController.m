@@ -3278,14 +3278,25 @@ NSString *ISHWorkspaceToolIdentifierForViewController(UIViewController *viewCont
     CGRect usableBounds = [self desktopUsableBounds];
     if (CGRectGetWidth(usableBounds) <= 0 || CGRectGetHeight(usableBounds) <= 0)
         return ISHWorkspaceRectWithRoundedOriginPreservingSize(frame);
-    if (CGRectGetWidth(frame) > CGRectGetWidth(usableBounds))
-        frame.size.width = CGRectGetWidth(usableBounds);
-    if (CGRectGetHeight(frame) > CGRectGetHeight(usableBounds))
-        frame.size.height = CGRectGetHeight(usableBounds);
-
-    // The SIZE was limited by the usable bounds above; the POSITION is limited
-    // only by the surface, so a window can sit against any edge of the screen.
     CGRect clampBounds = [self desktopWindowClampBounds];
+
+    // The SIZE is limited by the whole surface on an iPad, the same bounds the
+    // POSITION is limited by below, so a window can sit against any edge of the
+    // screen and also reach the opposite one. It used to be limited by the
+    // usable bounds, which leave out a band at the top: the status bar in full
+    // screen, and the window controls' ~53pt in an iPadOS window (#580). A
+    // window dragged up to the top edge could then never be resized down to the
+    // bottom one -- it stopped exactly that band short, and every re-layout
+    // pulled a taller one back. New windows are still PLACED inside the usable
+    // bounds (desktopFrameForWindowWithPreferredSize). The phone layout keeps
+    // the usable bounds: there the insets are the notch and home indicator on
+    // every side.
+    CGRect sizeBounds = ISHWorkspaceUsesPhoneLayout() ? usableBounds : clampBounds;
+    if (CGRectGetWidth(frame) > CGRectGetWidth(sizeBounds))
+        frame.size.width = CGRectGetWidth(sizeBounds);
+    if (CGRectGetHeight(frame) > CGRectGetHeight(sizeBounds))
+        frame.size.height = CGRectGetHeight(sizeBounds);
+
     CGFloat visibleWidth = MIN(CGRectGetWidth(frame), 140.0);
     CGFloat minX = CGRectGetMinX(clampBounds) - (CGRectGetWidth(frame) - visibleWidth);
     CGFloat maxX = CGRectGetMaxX(clampBounds) - visibleWidth;
