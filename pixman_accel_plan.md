@@ -8,8 +8,10 @@ default off); `setup-wayland.sh` builds the shim best-effort. The first
 real-client decline breakdown is in "v2 step 1" below: foot's glyphs still
 decline (solid-fill source + clip, not the destination format), and the
 accelerator made multi-threaded clients SLOWER until a JIT invalidation bug
-was fixed (73b9112f). Device measurement (Phase 3's number) is next -- see
-"NEXT" at the bottom.
+was fixed (73b9112f, 082d9ac1). Phase 3's device number is in: on the M4
+iPad labwc spends 3.4x less time in pixman and 56% less CPU, GTK 2.6x less
+in pixman; drag frame rate does not move on the M4, and foot is still
+slightly slower from jit->lock contention -- see "NEXT" at the bottom.
 Owner: unassigned. Companion plan: `jit_code_cache_plan.md` (cold start;
 NO-GO, unaffected by this plan). Direct precedent: the ChaCha20 crypto
 accelerator (kernel/ish_accel_crypto.c + opt/AOK/crypto/ish_provider.c) —
@@ -353,18 +355,52 @@ interleaved against the pre-fix binary: foot 240-250 ms in pixman against
 1212-1612, labwc 1351-1411 against 1661-1996, accelerated fill 7-8 us
 against 27-38, full-frame copy 159-170 us against 305-344; 4-thread small
 fills 5.9 us against 1013; OpenJDK test program 35-43 s against 132 s, node
-1.8-1.9 s against 5.3 s. Device numbers for it: pending a rebuild.
+1.8-1.9 s against 5.3 s. Landed as 082d9ac1.
+
+**Build with 082d9ac1 (growing page index) -- the Phase 3 number.** Built
+16:23 BST; six sessions, interleaved on/off:
+
+| per session | on | on | on | off | off | off |
+|---|---|---|---|---|---|---|
+| labwc: ms in pixman | 1786 | 1778 | 1744 | 6026 | 6062 | 6137 |
+| labwc: CPU ticks | 329 | 324 | 324 | 735 | 742 | 749 |
+| l3afpad: ms in pixman | 445 | 460 | 440 | 1167 | 1184 | 1215 |
+| l3afpad: CPU ticks | 339 | 346 | 340 | 380 | 391 | 396 |
+| foot: ms in pixman | 1587 | 624 | 1623 | 1241 | 1213 | 1236 |
+| foot: CPU ticks | 181 | 72 | 189 | 154 | 148 | 159 |
+| wayvnc: CPU ticks | 518 | 519 | 517 | 462 | 465 | 468 |
+| drag fps, foot / l3afpad window | 36.5 / 30.8 | 37.2 / 31.0 | 37.1 / 31.4 | 37.3 / 31.4 | 37.5 / 31.6 | 37.5 / 31.1 |
+
+- **labwc: 3.4x less time in pixman, 56% less CPU.** The compositor is
+  what the accelerator was built for, and it delivers there.
+- **l3afpad (GTK3): 2.6x less time in pixman**, 12% less CPU.
+- **Drag frame rate is unchanged**: the M4 is not pixman-bound for a
+  1280x720 drag (every run ~37 and ~31 updates/s). The frame-rate claim
+  needs the A10X iPad Pro (`bip`) or the iPhone SE.
+- **foot is still slightly WORSE** (the f3 run rendered fewer frames). Its
+  declined glyph composites now cost the same in both arms (43 us), so the
+  JIT damage is gone. What is left is its accelerated cell fills: 26-27 us
+  each against 11 us in pixman. foot fills from several render threads at
+  once, and every accelerated write takes jit->lock once per page it
+  touches (mem_ptr's jit_invalidate_page). A host sample of 4 guest threads
+  doing 64x64 fills: nearly every sample waiting on that mutex inside
+  jit_invalidate_range. Device, 4 threads: the accelerator loses at 8x17
+  (7.1 vs 0.96 us), 32x32 (12.1 vs 4.1), 64x64 (23.8 vs 13.1) and 128x128
+  (50.5 vs 44.8), and wins from 256x256 (128 vs 173). Single-threaded it
+  wins at every size. Fix: take jit->lock once per request for all the
+  pages it will write, rather than once per page (NEXT #2).
 
 ## NEXT
-1. **Device measurement (Phase 3's number)** on the M4 iPad: interleaved
-   on/off sessions (ISH_PIXMAN_SHIM_OFF=1 as the off arm), drag frame rate
-   over VNC, time in pixman per process, CPU ticks per process, with
-   73b9112f in the build.
-2. Clip-region support for the destination (labwc's biggest cost).
-3. Solid-fill sources (labwc's clears, foot's and GTK's glyphs).
-4. `pixman_image_fill_boxes`/`fill_rectangles` and `pixman_blt`
+1. Drag frame rate on a device that is pixman-bound: the A10X iPad Pro
+   (`bip`) or the iPhone SE. The M4 is not.
+2. One jit->lock per accelerated request instead of one per written page,
+   so multi-threaded clients (foot) stop contending. If that is not enough,
+   a size floor for small requests.
+3. Clip-region support for the destination (most of labwc's remaining
+   1.7 s on the device).
+4. Solid-fill sources (labwc's clears, foot's and GTK's glyphs).
+5. `pixman_image_fill_boxes`/`fill_rectangles` and `pixman_blt`
    interposition (foot's per-cell overhead; GTK's blits).
-5. A size floor for tiny requests, set from the device numbers.
 6. SRC-with-mask and other op+mask combinations: the data says not yet.
 
 Each of 2-4 is validated against real pixman FIRST, with the differential
