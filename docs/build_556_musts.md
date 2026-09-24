@@ -46,10 +46,13 @@ atomics set on alpine-i386, alpine-amd64 and devuan-amd64, and the full i386
 leg on the final tree, 269 pass and 0 fail, as is arm64 at 264 and 0. An
 earlier run under a load average of ~140 failed five clock, timer, rusage
 and watchdog tests. All five pass alone, on the new binary and on the
-baseline, in interleaved runs. **Found on the way, not fixed:** on an x86_64 HOST
-(Linux CI, never the app), `lock sbbl` ignores its carry-in, 80000 short in
-the contended test. That predates this. `setf_a`'s `orl` between the `btw`
-that loads CF and the `sbb` looks like the cause.
+baseline, in interleaved runs. **Found on the way, FIXED since in `f81591fb`:** on
+an x86_64 HOST (Linux CI, never the app), `lock adc`/`lock sbb` ran with
+carry-in 0, 80000 short in the contended test. `setf_a`'s `orl` between the
+`btw` that loaded CF and the `sbb` was the cause; CF is now snapshotted outside
+the CAS loop, as on aarch64. The same commit fixes that host's `cmpxchg` AF
+(`seta` shifted into bit 4, 976 failures in `atomic_cmpxchg32`), and the
+contended test now also runs `stc; lock adcl`, which nothing covered before.
 
 *Carried from 555 §2.* **Re-verified 2026-09-24.** The i386 `LOCK` table in
 `emu/decode.h` (the `case 0xf0:` block, ending at its `default: ... UNDEFINED`)
