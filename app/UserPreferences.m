@@ -1092,8 +1092,6 @@ void amd64_jit_preference_set(bool enabled) {
                    forKey:kPreferenceSwapSizeMBKey];
 }
 
-// MARK: shouldEnableCompressedMemory / compressedMemorySizeMB
-
 // MARK: shouldEnableSwapOnExternal / swapExternalBookmark / swapExternalPath
 
 - (BOOL)shouldEnableSwapOnExternal {
@@ -1108,12 +1106,15 @@ void amd64_jit_preference_set(bool enabled) {
     return [*value isKindOfClass:NSNumber.class];
 }
 
-- (NSData *)swapExternalBookmark {
+- (nullable NSData *)swapExternalBookmark {
     return [_defaults dataForKey:kPreferenceSwapExternalBookmarkKey];
 }
 
-- (void)setSwapExternalBookmark:(NSData *)swapExternalBookmark {
-    [_defaults setObject:swapExternalBookmark forKey:kPreferenceSwapExternalBookmarkKey];
+- (void)setSwapExternalBookmark:(nullable NSData *)swapExternalBookmark {
+    if (swapExternalBookmark == nil)
+        [_defaults removeObjectForKey:kPreferenceSwapExternalBookmarkKey];
+    else
+        [_defaults setObject:swapExternalBookmark forKey:kPreferenceSwapExternalBookmarkKey];
 }
 
 - (NSString *)swapExternalPath {

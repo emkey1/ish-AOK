@@ -21,6 +21,7 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		BB28C8F326896C1D00BDC834 /* SwapFilePicker.m in Sources */ = {isa = PBXBuildFile; fileRef = BB28C8F126896C1D00BDC834 /* SwapFilePicker.m */; };
 		07430ECDFB3BADD4102D3854 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EDE84B56A5A0D9AC87E4DABB /* MediaPlayer.framework */; };
 		0FC2383C2991FBA6004C09EC /* mmx.c in Sources */ = {isa = PBXBuildFile; fileRef = 0FC2383B2991FB82004C09EC /* mmx.c */; };
 		1A4DC4F2374508A4B1CEC666 /* manifest.json in Resources */ = {isa = PBXBuildFile; fileRef = B943617711E6F6314E471864 /* manifest.json */; };
@@ -2246,7 +2247,7 @@
 				8D457CFF8048C780CA8A5561 /* DisplayRFBView.m in Sources */,
 				A143B4E425BDFAE03A1725CD /* AOKFoundationModelsBridge.swift in Sources */,
 				C0A200042F2F000100000005 /* GuestCommandRunner.m in Sources */,
-				BB28C8F126896C1D00BDC834 /* SwapFilePicker.m in Sources */,
+				BB28C8F326896C1D00BDC834 /* SwapFilePicker.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

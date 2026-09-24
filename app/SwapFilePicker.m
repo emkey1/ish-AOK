@@ -1,14 +1,18 @@
 #import "SwapFilePicker.h"
-#import "SceneDelegate.h"
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-@implementation SwapFilePicker
+@implementation SwapFilePicker {
+    SwapFilePickerCompletion _completion;
+    // Held until the picker answers; see the header.
+    SwapFilePicker *_keepAlive;
+}
 
 - (void)presentFrom:(UIViewController *)presenter completion:(SwapFilePickerCompletion)completion {
-    _completion = completion;
-    dispatch_async(dispatch_get_main_queue(), ^(void) {
-        UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
-            initWithDocumentTypes:@[ @"public.folder" ]
-            inMode:UIDocumentPickerModeOpen];
+    _completion = [completion copy];
+    _keepAlive = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIDocumentPickerViewController *picker =
+            [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder]];
         picker.delegate = self;
         picker.allowsMultipleSelection = NO;
         picker.presentationController.delegate = self;
@@ -16,24 +20,25 @@
     });
 }
 
-- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
-    if (_completion)
-        _completion(nil, -84); // _ECANCELED
+- (void)finishWithURL:(NSURL *_Nullable)url {
+    SwapFilePickerCompletion completion = _completion;
     _completion = nil;
-}
-
-- (void)presentationControllerDidDismiss:(UIPresentationController *)presentationController {
-    [self documentPickerWasCancelled:(UIDocumentPickerViewController *)presentationController];
+    if (completion != nil)
+        completion(url);
+    _keepAlive = nil;
 }
 
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    if (_completion) {
-        if (urls.count == 0)
-            _completion(nil, -84);
-        else
-            _completion(urls.firstObject, 0);
-    }
-    _completion = nil;
+    [self finishWithURL:urls.firstObject];
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    [self finishWithURL:nil];
+}
+
+// Swiped down rather than cancelled: the same answer.
+- (void)presentationControllerDidDismiss:(UIPresentationController *)presentationController {
+    [self finishWithURL:nil];
 }
 
 @end

@@ -130,11 +130,13 @@ Off by default, because it spends storage and is not free of limits. A session r
 		</dict>
 		<dict>
 			<key>FooterText</key>
-			<string>Swap to a USB drive instead of the app's container. Writes go to a .aok-swap file on the drive, keeping internal flash wear-free. Turn this on, then pick the drive in the app the next time it launches.
+			<string>Swap to a USB drive instead of the app's container. Writes go to a .aok-swap file on the drive, keeping internal flash wear-free. Turn this on, return to iSH-AOK and pick a folder on the drive; it is used from the next launch. If the drive is not attached at launch, swap stays off. To use a different folder, switch this off, return to iSH-AOK, then switch it on again.
 
-Warning: exFAT drives (most USB sticks) cannot guarantee preallocated space. If the drive fills up while swap is active, affected guest processes will crash. Use a drive with plenty of free space, or format it as APFS if possible.
+The file holds guest memory unencrypted, passwords and keys included. It is emptied when swap stops, but if iSH-AOK is killed it keeps its contents until the next launch empties it.
 
-If the drive is pulled while swap is active, evicted pages that touch it will fail -- the guest stays running but those processes may crash. Turn this off before removing the drive.</string>
+exFAT drives (most USB sticks) cannot guarantee preallocated space. If the drive fills up while swap is active, affected guest processes will crash. Use a drive with plenty of free space.
+
+Pulling the drive while swap is active crashes any process whose memory was on it. Quit iSH-AOK before removing the drive.</string>
 			<key>Title</key>
 			<string>External USB Swap</string>
 			<key>Type</key>

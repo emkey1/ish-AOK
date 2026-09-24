@@ -149,6 +149,23 @@ where it belongs. This entry exists so the decision is made, not carried again.
 
 ---
 
+## For the 556 release notes
+
+**Swap to an external drive (#605) is untested on a real drive.** Contributed
+by @KrisButIAmAnOSDev, finished here on 2026-09-24. What was tested:
+- a code review;
+- the kernel path, through `ISH_GUEST_SWAP_FILE` on the CLI, with
+  `swap_roundtrip` passing on APFS, exFAT and FAT32 disk images;
+- a clean Xcode device build.
+
+The folder picker, security-scoped bookmarks across launches, and a real USB
+drive on iPadOS have NOT been exercised: nobody had a drive to test with. The
+notes must say so, and call the feature experimental. It is off by default.
+Watch for launch-time stalls: the whole area is reserved on the main thread at
+launch, which is instant on APFS and unmeasured on USB.
+
+---
+
 ## Deferred, by decision
 
 **External display ([#540](https://github.com/emkey1/ish-AOK/issues/540)):

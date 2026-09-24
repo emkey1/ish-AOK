@@ -117,7 +117,7 @@ extern NSString *const kThemeBackgroundColor;
 // If the bookmark is stale or the drive is not attached, swap stays off and
 // the status text says why.
 @property BOOL shouldEnableSwapOnExternal;
-@property (nonatomic) NSData *swapExternalBookmark;
+@property (nonatomic, nullable) NSData *swapExternalBookmark;
 @property (nonatomic) NSString *swapExternalPath;
 
 // Compressed memory (kernel/zswap.h). A cache in FRONT of the swap area: a
