@@ -472,6 +472,27 @@ release.
 same reasoning swap ships that way: a feature that spends the user's storage and
 can lose their session is one they opt into.
 
+**Keyboard toolbar customization -- a user request (2026-09-24).** In their
+words: "reorganizing and adding/removing custom toolbar buttons."
+
+Today the extra-keys bar above the on-screen keyboard is fixed:
+- `Terminal.storyboard` lays out most of it: the `barButtons` outlet
+  collection and the arrow key.
+- `TerminalViewController` builds six punctuation keys in code (`dotKey` through
+  `pipeKey`).
+- The only setting hides the bar while a hardware keyboard is attached.
+
+[#162](https://github.com/emkey1/ish-AOK/issues/162) delivered key *remapping*
+(Caps Lock, Option, backtick-as-Escape), not the bar's layout.
+
+The job:
+- The bar's contents become an ordered list in `UserPreferences`.
+- A Settings screen reorders, removes and adds keys. That includes custom
+  buttons that send a string or key sequence the user defines.
+- The bar is built from that list rather than from the storyboard.
+- The default list reproduces today's bar exactly, so nobody who never opens the
+  screen sees a change.
+
 ---
 
 ## Carried, not headlined
