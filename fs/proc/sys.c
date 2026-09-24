@@ -8,6 +8,7 @@
 #include "kernel/inotify.h"
 #include "kernel/random.h"
 #include "kernel/task.h"
+#include "kernel/personality.h"
 #include "kernel/hostinfo.h"
 #include "fs/proc.h"
 #include "platform/platform.h"
@@ -658,6 +659,23 @@ static int sys_show_kernel_ngroups_max(struct proc_entry *UNUSED(entry), struct 
     return 0;
 }
 
+static int sys_show_kernel_randomize_va_space(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "%d\n", aslr_randomize_va_space());
+    return 0;
+}
+
+// Root only, 0 to 2, as on Linux; it applies from the next exec.
+static int sys_update_kernel_randomize_va_space(struct proc_entry *UNUSED(entry), struct proc_data *data) {
+    if (!superuser())
+        return _EPERM;
+    long value;
+    int err = proc_sys_scalar_parse(data, 0, 2, &value);
+    if (err < 0)
+        return err;
+    aslr_set_randomize_va_space((int) value);
+    return 0;
+}
+
 struct proc_dir_entry proc_sys_kernel[] = {
     {"cap_last_cap", .show = sys_show_kernel_cap_last_cap},
     {"hostname", S_IFREG | 0644, .show = sys_show_net_unix_hostname, .update = sys_update_kernel_hostname},
@@ -665,6 +683,8 @@ struct proc_dir_entry proc_sys_kernel[] = {
     {"osrelease", .show = sys_show_kernel_osrelease},
     {"pid_max", S_IFREG | 0644, .show = sys_show_kernel_pid_max, .update = sys_update_kernel_pid_max},
     {"random", S_IFDIR, .readdir = proc_sys_kernel_random_readdir},
+    {"randomize_va_space", S_IFREG | 0644, .show = sys_show_kernel_randomize_va_space,
+        .update = sys_update_kernel_randomize_va_space},
     {"threads-max", S_IFREG | 0644, .show = sys_show_kernel_threads_max, .update = sys_update_kernel_threads_max},
     {"version", .show = sys_show_net_version},
 };

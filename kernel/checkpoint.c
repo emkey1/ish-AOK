@@ -5218,7 +5218,7 @@ static struct task *ckpt_new_task(struct task *parent, pid_t_ pid,
         cond_init(&group->child_exit);
         cond_init(&group->stopped_cond);
         group->leader = task;
-        group->personality = ADDR_NO_RANDOMIZE_;
+        group->personality = 0; // the image's, once the leader's record is read
         // The defaults, before the image's own limits land further down.
         // Without them RLIMIT_NOFILE is zero on a freshly built tgroup, and
         // the first descriptor the restore tries to install comes back EMFILE

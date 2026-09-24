@@ -197,6 +197,7 @@ proc_ptrace_access.c
 seccomp_filter.c
 rlimit_enforce.c
 nx_enforce.c
+aslr_layout.c
 fs_at_validation.c
 sock_conformance_opts.c
 poll_rdhup_bounds.c

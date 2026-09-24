@@ -278,7 +278,7 @@ static struct task *construct_task(struct task *parent) {
     cond_init(&group->stopped_cond);
     memcpy(group->limits, init_rlimits, sizeof(init_rlimits));
     group->leader = task;
-    group->personality = ADDR_NO_RANDOMIZE_;
+    group->personality = 0;
     list_add(&group->threads, &task->group_links);
     task->group = group;
     task->tgid = task->pid;

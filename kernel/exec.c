@@ -235,6 +235,83 @@ static int read_prg_headers(struct fd *fd, struct elf_info header, struct elf_pr
     return 0;
 }
 
+// ---- address space layout randomization --------------------------------------
+//
+// Every process was laid out the same way every time: the stack, the heap,
+// the program, the loader and every library at the same addresses, run after
+// run, so an exploit could use them as constants. exec now moves each by a
+// random number of pages, as Linux does (arch_mmap_rnd, randomize_stack_top,
+// arch_randomize_brk), within what the emulated address space holds:
+//
+//                    i386          amd64 / arm64       riscv64 (Sv39)
+//   mmap base        8 bits        28 bits (1 TiB)     18 bits (1 GiB)
+//   PIE base         8 bits        28 bits / mmap      mmap
+//   heap start       32 MiB        1 GiB               1 GiB
+//   stack top        8 MiB         1 GiB, below 4 GiB  1 GiB, below 4 GiB
+//   stack in-page    up to 4 KiB, 16-byte aligned, everywhere
+//
+// The mmap base moves the loader, the libraries, the vDSO or sigpage, a
+// dynamic arm64/riscv64 PIE and every mapping made without an address. The
+// 64-bit stack stays below 4 GiB where exec has always put it (see
+// guest_abi_vm_layout), so it moves less than Linux's 16 GiB.
+//
+// Off for a process with ADDR_NO_RANDOMIZE (setarch -R; gdb sets it by
+// default), which a set-id exec clears first, and per randomize_va_space.
+static _Atomic int randomize_va_space = -1;
+
+int aslr_randomize_va_space(void) {
+    int v = atomic_load(&randomize_va_space);
+    if (v < 0) {
+        const char *env = getenv("ISH_RANDOMIZE_VA_SPACE");
+        v = env != NULL && env[0] >= '0' && env[0] <= '2' && env[1] == '\0' ? env[0] - '0' : 2;
+        int expected = -1;
+        if (!atomic_compare_exchange_strong(&randomize_va_space, &expected, v))
+            v = expected;
+    }
+    return v;
+}
+
+void aslr_set_randomize_va_space(int value) {
+    atomic_store(&randomize_va_space, value);
+}
+
+// A uniformly random page count below 2^bits.
+static pages_t aslr_pages(unsigned bits) {
+    uint64_t r = 0;
+    get_random((char *) &r, sizeof(r));
+    return (pages_t) (r & (((uint64_t) 1 << bits) - 1));
+}
+
+struct exec_aslr {
+    pages_t mmap_shift;   // taken off the mmap ceiling
+    pages_t pie_shift;    // added to a fixed PIE base (i386, amd64)
+    pages_t brk_shift;    // added to the heap's start
+    pages_t brk_room;     // how far that shift can reach, for the headroom
+    pages_t stack_shift;  // taken off the stack's top
+    unsigned stack_offset; // bytes below that, 16-byte aligned, < PAGE_SIZE
+};
+
+static void exec_aslr_plan(struct exec_aslr *a, enum guest_abi abi, dword_t personality) {
+    *a = (struct exec_aslr) {};
+    int va_space = aslr_randomize_va_space();
+    if (va_space < 1 || (personality & ADDR_NO_RANDOMIZE_))
+        return;
+    bool is_64bit = guest_abi_is_64bit(abi);
+    unsigned mmap_bits = !is_64bit ? 8 : abi == GUEST_ABI_RISCV64 ? 18 : 28;
+    a->mmap_shift = aslr_pages(mmap_bits);
+    a->pie_shift = aslr_pages(mmap_bits);
+    a->stack_shift = aslr_pages(is_64bit ? 18 : 11);
+    uint32_t off = 0;
+    get_random((char *) &off, sizeof(off));
+    a->stack_offset = off & (PAGE_SIZE - 1) & ~0xfu;
+    if (va_space >= 2) {
+        a->brk_room = is_64bit ? (0x40000000 >> PAGE_BITS) : (0x2000000 >> PAGE_BITS);
+        a->brk_shift = aslr_pages(is_64bit ? 18 : 13);
+        if (a->brk_shift >= a->brk_room)
+            a->brk_shift = a->brk_room - 1;
+    }
+}
+
 // The page a 64-bit guest's signal handler returns through: the kernel's
 // rt_sigreturn trampoline, read-only and executable, as Linux keeps one in
 // the vDSO (__kernel_rt_sigreturn). A handler returns to it when the program
@@ -889,7 +966,10 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         save->group->personality |= READ_IMPLIES_EXEC_;
     if (save->group->personality & READ_IMPLIES_EXEC_)
         exec_stack = true;
+    dword_t personality = save->group->personality;
     unlock(&save->group->lock);
+    struct exec_aslr aslr;
+    exec_aslr_plan(&aslr, header.abi, personality);
 
     // free the process's memory.
     // from this point on, if any error occurs the process will have to be
@@ -907,6 +987,11 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     unlock(&save->general_lock);
     write_lock(&save->mem->lock);
     mem_locked = true;
+    // The mmap base first: everything placed below without an address -- the
+    // loader, a dynamic PIE, the vDSO or sigpage -- is placed from it.
+    if (aslr.mmap_shift != 0)
+        mem_set_mmap_window(save->mem, save->mem->mmap_floor,
+                save->mem->mmap_ceiling - aslr.mmap_shift);
 
     save->mm->exefile = fd_retain(fd);
 
@@ -924,7 +1009,7 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
 
         if (!load_addr_set && header.type == ELF_DYNAMIC) {
             if (interp_name && header.abi == GUEST_ABI_I386)
-                bias = 0x56555000;
+                bias = 0x56555000 + ((guest_addr_t) aslr.pie_shift << PAGE_BITS);
             else if (interp_name && header.abi == GUEST_ABI_AMD64)
                 // Pin the amd64 PIE main executable at the conventional low
                 // Linux base so the brk heap grows up into the large mmap
@@ -932,7 +1017,7 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
                 // (just under mmap_ceiling), which pins start_brk there and
                 // caps the heap at the ~32 MiB gap to the page limit (2^47);
                 // brk-hungry programs like git then fail to expand the heap.
-                bias = 0x555555554000;
+                bias = 0x555555554000 + ((guest_addr_t) aslr.pie_shift << PAGE_BITS);
             else {
                 // arm64/riscv64 PIE binaries fall through to here
                 // intentionally: dynamic placement, not a fixed low bias.
@@ -942,7 +1027,9 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
                 // fixed low bias.
                 // 1 GiB of brk headroom above the image (see the helper).
                 brk_headroom_pages = 0x40000000 >> PAGE_BITS;
-                bias = find_hole_for_elf(&header, ph, brk_headroom_pages);
+                // ...plus room for the heap's random start, so the full
+                // headroom is still there after it.
+                bias = find_hole_for_elf(&header, ph, brk_headroom_pages + aslr.brk_room);
             }
         }
 
@@ -967,6 +1054,15 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             save->mm->start_brk = save->mm->brk = BYTES_ROUND_UP(brk);
     }
 
+    // The heap's start, randomized (randomize_va_space 2). The pages between
+    // the image and it are left unmapped, as on Linux.
+    if (aslr.brk_shift != 0 && save->mm->start_brk != 0) {
+        guest_addr_t shifted = save->mm->start_brk + ((guest_addr_t) aslr.brk_shift << PAGE_BITS);
+        if (elf_value_fits_addr(header.abi, shifted) &&
+                pt_is_hole(save->mem, PAGE(save->mm->start_brk), aslr.brk_shift))
+            save->mm->start_brk = save->mm->brk = shifted;
+    }
+
     if (brk_headroom_pages > 0 && save->mm->start_brk != 0) {
         // find_hole_for_elf() above only computed an address gap; nothing
         // stops a later mmap() (ld.so, thread stacks, a GC's own segment
@@ -985,7 +1081,7 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         // hole to include it) just skip the reservation rather than failing
         // exec.
         page_t reserve_start = PAGE(BYTES_ROUND_UP(save->mm->start_brk));
-        page_t mmap_ceiling = guest_abi_vm_layout(header.abi).mmap_ceiling;
+        page_t mmap_ceiling = save->mem->mmap_ceiling;
         pages_t reserve_pages = brk_headroom_pages;
         if (reserve_start >= mmap_ceiling)
             reserve_pages = 0;
@@ -1055,7 +1151,9 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     // (exec_stack above): with instruction fetch checked, a stack mapped
     // executable by default would be the one place in memory an overflow could
     // still put code and run it. Growth takes these flags from the page above.
-    if ((err = pt_map_nothing(save->mem, vm_layout.stack_page, 1,
+    // The stack's top, randomized (see exec_aslr_plan).
+    page_t stack_page = vm_layout.stack_page - aslr.stack_shift;
+    if ((err = pt_map_nothing(save->mem, stack_page, 1,
             P_READ | P_WRITE | P_GROWSDOWN | (exec_stack ? P_EXEC : 0))) < 0)
         goto beyond_hope;
     // Record where the stack starts and how far down it may grow. Linux bounds
@@ -1065,7 +1163,7 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     // mem_growsdown_allowed. RLIM_INFINITY is passed through as 0, meaning
     // "no rlimit bound" -- the guard gap still applies.
     rlim_t_ stack_limit = rlimit(RLIMIT_STACK_);
-    mem_set_stack_bounds(save->mem, vm_layout.stack_page + 1,
+    mem_set_stack_bounds(save->mem, stack_page + 1,
                          stack_limit == RLIM_INFINITY_ ? 0 : (uint64_t) stack_limit);
     // prlimit64 from another process pushes a new limit into this space
     // (rlimit_set), and it may have landed between the read and the store
@@ -1079,7 +1177,8 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     write_unlock(&save->mem->lock);
     mem_locked = false;
 
-    guest_addr_t sp = vm_layout.stack_pointer;
+    guest_addr_t sp = vm_layout.stack_pointer - ((guest_addr_t) aslr.stack_shift << PAGE_BITS)
+            - aslr.stack_offset;
     sp -= guest_word_size;
 
     err = _EFAULT;

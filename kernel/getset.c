@@ -605,11 +605,11 @@ int_t sys_personality(dword_t persona) {
     if (persona == 0xffffffff)
         return previous;
 
-    // ADDR_NO_RANDOMIZE stays set whatever the caller asks for. AOK does not
-    // randomize the address space at all, so reporting the bit clear would
-    // claim a randomization that does not happen -- and a program that checks
-    // it before deciding whether to re-exec itself under setarch would then
-    // loop. Everything else is stored as given and reported back.
-    current->group->personality = persona | ADDR_NO_RANDOMIZE_;
+    // Stored as given and reported back. ADDR_NO_RANDOMIZE used to be forced
+    // on, because the address space was not randomized and a bit saying it
+    // was would have been a lie; exec randomizes the layout now
+    // (kernel/exec.c), and the bit is what turns that off -- setarch -R,
+    // and gdb's disable-randomization, which is on by default.
+    current->group->personality = persona;
     return previous;
 }

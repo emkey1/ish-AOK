@@ -13,4 +13,12 @@
 // executable heap or a predictable layout.
 #define PER_CLEAR_ON_SETID_ 0x0740000
 
+// /proc/sys/kernel/randomize_va_space: 0 lays every process out the same way
+// each time, 1 randomizes the stack, the mmap base (so the libraries, the
+// loader and every anonymous mapping), the PIE base and the vDSO, and 2 -- the
+// default, as on Linux -- the heap's start as well. ISH_RANDOMIZE_VA_SPACE in
+// the host environment sets the starting value. Defined in kernel/exec.c.
+int aslr_randomize_va_space(void);
+void aslr_set_randomize_va_space(int value);
+
 #endif /* KERNEL_PERSONALITY_H */
