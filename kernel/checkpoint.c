@@ -79,6 +79,7 @@
 #include "kernel/init.h"
 #include "kernel/native.h"
 #include "kernel/task.h"
+#include "kernel/seccomp.h"
 #include "kernel/uts.h"
 #include "fs/fd.h"
 #include "fs/path.h"
@@ -93,7 +94,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 18  // 18: a queued signal says whether it is a POSIX timer's own; 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 19  // 19: seccomp mode and filters, dumpable; 18: a queued signal says whether it is a POSIX timer's own; 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -407,7 +408,25 @@ struct ckpt_task {
     // gain privilege from a set-id binary again, and there is no way for it
     // to find out.
     uint32_t no_new_privs;
+    // seccomp (kernel/seccomp.h): the mode, and the filters as programs,
+    // oldest first. Restored without them a sandboxed process would come back
+    // unconfined, which it has no way to notice. seccomp_nprogs records follow
+    // the supplementary groups, each a struct ckpt_seccomp_prog and its
+    // instructions.
+    uint32_t seccomp_mode;
+    uint32_t seccomp_nprogs;
+    // The process is not dumpable (struct tgroup's undumpable): a restore must
+    // not open it up to its user's ptrace and /proc.
+    uint32_t undumpable;
 };
+
+struct ckpt_seccomp_prog {
+    uint32_t log;
+    uint32_t len;   // classic BPF instructions, 8 bytes each, follow
+};
+// More filters than any path could run through (each costs at least five of
+// Linux's 32768-instruction budget): a sanity bound for a damaged image.
+#define CKPT_MAX_SECCOMP_PROGS 8192
 
 struct ckpt_map {
     uint64_t start;    // guest address
@@ -2481,6 +2500,9 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         .cap_ambient = {task->cap_ambient[0], task->cap_ambient[1]},
         .keepcaps = task->keepcaps ? 1 : 0,
         .no_new_privs = task->no_new_privs ? 1 : 0,
+        .seccomp_mode = (uint32_t) __atomic_load_n(&task->seccomp_mode, __ATOMIC_ACQUIRE),
+        .seccomp_nprogs = seccomp_filter_count(task->seccomp_filter),
+        .undumpable = atomic_load(&task->group->undumpable) ? 1 : 0,
         .ngroups = task->ngroups,
         .tgid = sh->tgid,
         .mm_owner = sh->mm,
@@ -2607,6 +2629,26 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
     wr(w, exe, rec.exe_len);
     if (rec.ngroups > 0)
         wr(w, task->groups, rec.ngroups * sizeof(*task->groups));
+    if (rec.seccomp_nprogs > 0) {
+        // The task is frozen, so no sibling's TSYNC can change the chain
+        // between the count above and this.
+        struct seccomp_ckpt_prog *progs = calloc(rec.seccomp_nprogs, sizeof(*progs));
+        unsigned n = progs == NULL ? 0 :
+                seccomp_ckpt_export(task->seccomp_filter, progs, rec.seccomp_nprogs);
+        if (progs == NULL || n != rec.seccomp_nprogs) {
+            // The record already promised them; an image without them would
+            // restore the process unconfined. Refuse the whole save instead.
+            ckpt_refuse("pid %d: could not record its seccomp filters", task->pid);
+            w->err = _ENOMEM;
+        } else {
+            for (unsigned i = 0; i < n; i++) {
+                struct ckpt_seccomp_prog hdr = {progs[i].log ? 1 : 0, progs[i].len};
+                wr(w, &hdr, sizeof(hdr));
+                wr(w, progs[i].insns, (size_t) progs[i].len * 8);
+            }
+        }
+        free(progs);
+    }
 
     if (prog != NULL) {
         wr(w, prog->name, rec.native_name_len);
@@ -4162,6 +4204,58 @@ static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
     }
     current->ngroups = rec->ngroups;
 
+    // seccomp, installed as soon as it is read, as the groups are: the task
+    // owns the chain from here, and a restore that fails further on frees it
+    // with the task. Nothing below is filtered by it -- only a syscall's entry
+    // asks, and the restore makes none as this task.
+    if ((rec->seccomp_mode == SECCOMP_MODE_FILTER_) != (rec->seccomp_nprogs > 0) ||
+            rec->seccomp_mode > SECCOMP_MODE_FILTER_)
+        return _EINVAL;
+    struct seccomp_filter *seccomp = NULL;
+    if (rec->seccomp_nprogs > 0) {
+        struct seccomp_ckpt_prog *progs = calloc(rec->seccomp_nprogs, sizeof(*progs));
+        if (progs == NULL)
+            return _ENOMEM;
+        unsigned got = 0;
+        err = 0;
+        for (; got < rec->seccomp_nprogs; got++) {
+            struct ckpt_seccomp_prog hdr;
+            if ((err = rd(f, &hdr, sizeof(hdr))) < 0)
+                break;
+            // A classic BPF program is 1..4096 instructions; the import
+            // checks the rest as an installing seccomp() would.
+            if (hdr.len == 0 || hdr.len > 4096) {
+                err = _EINVAL;
+                break;
+            }
+            void *insns = malloc((size_t) hdr.len * 8);
+            if (insns == NULL) {
+                err = _ENOMEM;
+                break;
+            }
+            progs[got] = (struct seccomp_ckpt_prog) {hdr.log != 0, hdr.len, insns};
+            if ((err = rd(f, insns, (size_t) hdr.len * 8)) < 0) {
+                got++;
+                break;
+            }
+        }
+        if (err == 0) {
+            seccomp = seccomp_ckpt_import(progs, rec->seccomp_nprogs);
+            if (seccomp == NULL)
+                err = _EINVAL;
+        }
+        for (unsigned i = 0; i < got && i < rec->seccomp_nprogs; i++)
+            free((void *) progs[i].insns);
+        free(progs);
+        if (err < 0)
+            return err;
+    }
+    seccomp_filter_release(current->seccomp_filter);
+    current->seccomp_filter = seccomp;
+    __atomic_store_n(&current->seccomp_mode, (int) rec->seccomp_mode, __ATOMIC_RELEASE);
+    // The whole process's, so every thread's record carries the same value.
+    atomic_store(&current->group->undumpable, rec->undumpable != 0);
+
     // A NATIVE task: the program's name, the argv it had, and the state it
     // produced about itself. No register file and no address space follow --
     // it is not being photographed, it is being told to come back and rebuild
@@ -5354,6 +5448,7 @@ int checkpoint_restore(const char *host_path) {
         err = _EINVAL;
         if (rec.cwd_len > MAX_PATH || rec.root_len > MAX_PATH || rec.exe_len > MAX_PATH ||
                 rec.ngroups > MAX_GROUPS ||
+                rec.seccomp_nprogs > CKPT_MAX_SECCOMP_PROGS ||
                 rec.n_sigactions != NUM_SIGS)
             goto out;
 
@@ -5602,6 +5697,9 @@ int checkpoint_restore(const char *host_path) {
     err = 0;
 
 out:
+    // The seccomp filters the restore shared between tasks, which each task
+    // now holds for itself.
+    seccomp_ckpt_import_done();
     // The restore's own references; each task holds its own.
     for (uint32_t i = 0; i < st.set_count; i++)
         for (unsigned j = 0; j < 3; j++)

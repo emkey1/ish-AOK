@@ -194,6 +194,7 @@ fs_linkat_flags.c
 fs_chown_kills_privs.c
 fs_chgrp_membership.c
 proc_ptrace_access.c
+seccomp_filter.c
 fs_at_validation.c
 sock_conformance_opts.c
 poll_rdhup_bounds.c

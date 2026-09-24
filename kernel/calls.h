@@ -525,6 +525,8 @@ dword_t sys_getsid(pid_t_ pid);
 int_t sys_sched_yield(void);
 int_t sys_prctl(dword_t option, uint_t arg2, uint_t arg3, uint_t arg4, uint_t arg5);
 int_t sys_prctl_guest(dword_t option, qword_t arg2, qword_t arg3, qword_t arg4, qword_t arg5);
+// kernel/seccomp.c. The legacy-table form; 64-bit ABIs call sys_seccomp_guest.
+int_t sys_seccomp(dword_t op, dword_t flags, addr_t uargs);
 int_t sys_arch_prctl(int_t code, addr_t addr);
 int_t sys_arch_prctl_guest(int_t code, guest_addr_t addr);
 int_t sys_rseq(addr_t rseq_addr, dword_t rseq_len, dword_t flags, dword_t sig);

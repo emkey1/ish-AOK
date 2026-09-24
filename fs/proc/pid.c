@@ -15,6 +15,7 @@
 #include "kernel/vdso.h"
 #include "platform/platform.h"
 #include "kernel/swap.h"
+#include "kernel/seccomp.h"
 #include "util/sync.h"
 
 static void proc_pid_getname(struct proc_entry *entry, char *buf) {
@@ -826,7 +827,16 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     proc_printf(buf, "CapBnd:\t%08x%08x\n", task->cap_permitted[1], task->cap_permitted[0]);
     proc_printf(buf, "CapAmb:\t0000000000000000\n");
     proc_printf(buf, "NoNewPrivs:\t%d\n", task->no_new_privs ? 1 : 0);
-    proc_printf(buf, "Seccomp:\t0\n");
+    {
+        int mode = __atomic_load_n(&task->seccomp_mode, __ATOMIC_ACQUIRE);
+        proc_printf(buf, "Seccomp:\t%d\n", mode);
+        // Linux 5.9+. Counted under pids_lock, which is what keeps the chain
+        // from changing under a TSYNC while it is walked.
+        complex_lockt(&pids_lock, 0);
+        unsigned n = seccomp_filter_count(task->seccomp_filter);
+        unlock(&pids_lock);
+        proc_printf(buf, "Seccomp_filters:\t%u\n", n);
+    }
     proc_printf(buf, "Cpus_allowed:\t%x\n", allowed_mask);
     proc_printf(buf, "Cpus_allowed_list:\t0-%u\n", cpu_count > 0 ? cpu_count - 1 : 0);
     proc_printf(buf, "Mems_allowed:\t1\n");

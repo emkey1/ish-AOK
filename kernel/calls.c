@@ -5,6 +5,7 @@
 #include "app/DiagnosticsBridge.h"
 #include "jit/jit.h"
 #include "kernel/calls.h"
+#include "kernel/seccomp.h"
 #include "kernel/acct.h"
 #include "kernel/checkpoint.h"
 #include "emu/interrupt.h"
@@ -1192,7 +1193,7 @@ static syscall_t i386_syscall_table[] = {
     [349] = (syscall_t) sys_kcmp,
     [352] = (syscall_t) syscall_stub, // sched_getattr
     [353] = (syscall_t) sys_renameat2,
-    [354] = (syscall_t) syscall_eopnotsupp_stub, // seccomp
+    [354] = (syscall_t) sys_seccomp,
     [355] = (syscall_t) sys_getrandom,
     [356] = (syscall_t) sys_memfd_create,
     [358] = (syscall_t) sys_execveat,
@@ -1369,6 +1370,7 @@ static inline qword_t riscv64_syscall_number(const struct cpu_state *cpu);
 static inline void riscv64_syscall_args(const struct cpu_state *cpu, qword_t args[6]);
 static inline void riscv64_syscall_result(struct cpu_state *cpu, dword_t result);
 void handle_syscall_interrupt(struct cpu_state *cpu);
+static bool seccomp_exempt(qword_t syscall_num);
 
 struct syscall_abi_dispatch {
     enum guest_abi abi;
@@ -1620,7 +1622,7 @@ static syscall_t amd64_syscall_table[470] = {
     [276] = (syscall_t) sys_tee,
     [278] = (syscall_t) sys_vmsplice,
     [277] = (syscall_t) syscall_success_stub, // sync_file_range
-    [317] = (syscall_t) syscall_eopnotsupp_stub, // seccomp
+    [317] = (syscall_t) sys_seccomp, // really handle_amd64_native_memory_syscall
     [280] = (syscall_t) sys_utimensat_amd64,
     [281] = (syscall_t) sys_epoll_pwait,
     [282] = (syscall_t) sys_signalfd,
@@ -2030,7 +2032,7 @@ static syscall_t arm64_syscall_table[470] = {
     [273] = (syscall_t) syscall_stub, // finit_module
     [274] = (syscall_t) syscall_stub, // sched_setattr
     [275] = (syscall_t) syscall_stub, // sched_getattr
-    [277] = (syscall_t) syscall_stub_silent, // seccomp
+    [277] = (syscall_t) sys_seccomp, // really handle_asm_generic_native_syscall
     // bpf: systemd probes this at unit-start time for cgroup BPF device/IP
     // accounting programs and explicitly falls back (logging its own
     // "BPF firewalling not supported by kernel" diagnostic) on ENOSYS --
@@ -2930,8 +2932,10 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     // EOPNOTSUPP probes (amd64 parity: elogind/systemd fall back)
     case 264: // name_to_handle_at
     case 265: // open_by_handle_at
-    case 277: // seccomp
         result = _EOPNOTSUPP; break;
+    case 277: // seccomp(op, flags, args): args is a full-width pointer
+        result = (dword_t) sys_seccomp_guest((uint_t) raw_args[0], (uint_t) raw_args[1],
+                raw_args[2]); break;
     // preadv2/pwritev2: iov pointer and offset are full 64-bit values that
     // trip the legacy marshal's dword-fit check (SIGSYS). Route natively,
     // same pattern as the amd64 intercept in handle_amd64_native_memory_syscall.
@@ -3012,6 +3016,12 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
 static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t syscall_num,
         const qword_t raw_args[6]) {
     switch (syscall_num) {
+    // seccomp(op, flags, args): args is a 64-bit pointer (a sock_fprog or an
+    // action), which the legacy marshalling cannot carry.
+    case 317:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_seccomp_guest(
+                (uint_t) raw_args[0], (uint_t) raw_args[1], raw_args[2]));
+        return true;
     // swapon/swapoff take a PATH. Like case 2 below they must be handled here
     // with full-width args: through the legacy-marshalled table an amd64
     // guest's 64-bit pointer is refused and the guest gets SIGSYS ("Bad system
@@ -4111,8 +4121,9 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
     case 253: // inotify_init
     case 303: // name_to_handle_at (EOPNOTSUPP stub; args ignored, and its
     case 304: // open_by_handle_at  pointer args are 64-bit guest addresses)
-    case 317: // seccomp (EOPNOTSUPP stub; arg3 is a 64-bit sock_fprog* -- man-db's
-              // sandbox probe; classify 0-arg so the pointer doesn't SIGSYS the marshaller)
+    case 317: // seccomp: handled with full-width args by
+              // handle_amd64_native_memory_syscall before this is consulted;
+              // 0-arg here so nothing ever marshals its pointer
     case 309: // getcpu stubbed
     case 425: // io_uring_setup    (ENOSYS stub; callers use ordinary syscalls)
     case 426: // io_uring_enter
@@ -4857,6 +4868,27 @@ sqword_t syscall_dispatch_native(qword_t syscall_num, const qword_t raw_args[6])
            (unsigned long long) syscall_num);
 
     sqword_t result;
+    // seccomp holds for a native program as for any other: its calls are
+    // numbered asm-generic, which is aarch64's numbering, so that is the
+    // architecture a filter sees. There is no guest instruction pointer, and
+    // no register file for a tracer's PTRACE_EVENT_SECCOMP rewrite to reach,
+    // so after that stop the call goes ahead as asked -- if the filters still
+    // allow it.
+    if (unlikely(__atomic_load_n(&current->seccomp_mode, __ATOMIC_ACQUIRE) != SECCOMP_MODE_DISABLED_) &&
+            !seccomp_exempt(syscall_num)) {
+        enum seccomp_verdict v = seccomp_syscall_enter(GUEST_ABI_ARM64, syscall_num,
+                raw_args, 0, &result, false);
+        if (v == SECCOMP_TRACED)
+            v = seccomp_syscall_enter(GUEST_ABI_ARM64, syscall_num, raw_args, 0, &result, true);
+        if (v == SECCOMP_ANSWERED) {
+            STRACE(" = 0x%llx (seccomp)\n", (unsigned long long) result);
+            return result;
+        }
+        if (v != SECCOMP_RUN && v != SECCOMP_TRACED) {
+            STRACE(" = seccomp\n");
+            return _ENOSYS;
+        }
+    }
     native_syscall_active = true;
     native_syscall_value = (qword_t) (sqword_t) _ENOSYS;
     bool handled = handle_asm_generic_native_syscall(NULL, syscall_num, raw_args);
@@ -5034,6 +5066,64 @@ static void handle_amd64_syscall_interrupt(struct cpu_state *cpu) {
     }
 }
 
+// The iSH-private accelerator calls (ISH_SYS_AEAD, ISH_SYS_PIXOP, below) are
+// not system calls in any sense a filter is about: each is computation on the
+// caller's own memory, done on the host instead of emulated, and changes
+// nothing outside it -- what Linux does in the vDSO, which seccomp never sees
+// either. A filter could not stop the same work done in guest code, so
+// refusing it confines nothing; it would only break sandboxed programs that
+// load the crypto provider, whose default-deny filters (OpenSSH's pre-auth
+// child's among them) kill on any number they do not list.
+static bool seccomp_exempt(qword_t syscall_num) {
+    return syscall_num == 0xacc0 || syscall_num == 0xacc1;
+}
+
+// The address after the syscall instruction, which is where every ABI's pc
+// stands while the call is dispatched (prepare_syscall_restart steps back
+// from it).
+static qword_t syscall_insn_next_ip(const struct cpu_state *cpu, enum guest_abi abi) {
+    switch (abi) {
+        case GUEST_ABI_AMD64: return cpu->amd64_rip;
+        case GUEST_ABI_ARM64: return cpu->arm64_pc;
+        case GUEST_ABI_RISCV64: return cpu->riscv64_pc;
+        case GUEST_ABI_I386:
+        default: return cpu->eip;
+    }
+}
+
+// Ask seccomp about the call in the registers. An answer it gives is written
+// back as the call's result; a PTRACE_EVENT_SECCOMP stop's rewrite is read
+// back in, and *syscall_num updated to it.
+static enum seccomp_verdict seccomp_check_guest_syscall(struct cpu_state *cpu,
+        const struct syscall_abi_dispatch *dispatch, qword_t *syscall_num) {
+    qword_t args[6];
+    sqword_t result = 0;
+    dispatch->syscall_args(cpu, args);
+    qword_t ip = syscall_insn_next_ip(cpu, dispatch->abi);
+    enum seccomp_verdict v = seccomp_syscall_enter(dispatch->abi, *syscall_num, args, ip,
+            &result, false);
+    if (v == SECCOMP_TRACED) {
+        // Linux: the tracer may have changed the call, or skipped it by
+        // setting the number to -1, in which case whatever it left in the
+        // result register stands. Otherwise the filters are asked again about
+        // what it is now.
+        *syscall_num = dispatch->syscall_number(cpu);
+        if ((sdword_t) *syscall_num < 0)
+            return SECCOMP_TRACED;
+        dispatch->syscall_args(cpu, args);
+        v = seccomp_syscall_enter(dispatch->abi, *syscall_num, args, ip, &result, true);
+        if (v == SECCOMP_TRACED)
+            v = SECCOMP_RUN;
+    }
+    if (v == SECCOMP_ANSWERED) {
+        if (dispatch->abi == GUEST_ABI_AMD64)
+            amd64_syscall_result_qword(cpu, (qword_t) result);
+        else
+            dispatch->syscall_result(cpu, (dword_t) result);
+    }
+    return v;
+}
+
 void handle_syscall_interrupt(struct cpu_state *cpu) {
     // A pending restart ends here. Its cancellation (receive_signal) only means
     // anything between the rewind and the syscall instruction running again,
@@ -5069,6 +5159,25 @@ void handle_syscall_interrupt(struct cpu_state *cpu) {
     qword_t syscall_num = dispatch->syscall_number(cpu);
     if (unlikely(guestprof_on))
         guestprof_state_syscall((unsigned long) syscall_num);
+
+    // seccomp, after the ptrace entry stop as Linux has it (a tracer's rewrite
+    // is what the filters see), and before anything else looks at the number:
+    // a filter decides out-of-range numbers too.
+    if (unlikely(__atomic_load_n(&current->seccomp_mode, __ATOMIC_ACQUIRE) != SECCOMP_MODE_DISABLED_) &&
+            !seccomp_exempt(syscall_num)) {
+        switch (seccomp_check_guest_syscall(cpu, dispatch, &syscall_num)) {
+            case SECCOMP_RUN:
+                break;
+            case SECCOMP_ANSWERED:
+                if (current->ptrace.traced && current->ptrace.stop_at_syscall &&
+                        current->ptrace.syscall_stopped)
+                    ptrace_syscall_stop(cpu);
+                return;
+            case SECCOMP_SKIPPED:
+            case SECCOMP_TRACED:
+                return;
+        }
+    }
     // iSH-private syscalls live above every real syscall range (ISH_SYS_AEAD =
     // 0xacc0, ISH_SYS_PIXOP = 0xacc1), so they'd fail the range check below
     // and index the table out of bounds. Intercept them here, for EVERY guest

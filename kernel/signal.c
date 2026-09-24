@@ -1794,6 +1794,7 @@ static void siginfo_to_i386_user(struct i386_siginfo_ *out, const struct siginfo
         case SIGSYS_:
             out->sigsys.addr = (addr_t) info->sigsys.addr;
             out->sigsys.syscall = info->sigsys.syscall;
+            out->sigsys.arch = info->sigsys.arch;
             break;
         default:
             if (info->code == SI_TIMER_) {
@@ -1850,6 +1851,7 @@ static void siginfo_to_amd64_user(struct amd64_siginfo_ *out, const struct sigin
         case SIGSYS_:
             out->sigsys.call_addr = info->sigsys.addr;
             out->sigsys.syscall = info->sigsys.syscall;
+            out->sigsys.arch = info->sigsys.arch;
             break;
         default:
             if (info->code == SI_TIMER_) {
@@ -1981,6 +1983,7 @@ static void signalfd_info_from_siginfo(struct signalfd_siginfo_ *out, struct sig
     } else if (info->sig == SIGSYS_ && info->code > 0) {
         out->call_addr = info->sigsys.addr;
         out->syscall = info->sigsys.syscall;
+        out->arch = info->sigsys.arch;
     } else if (info->code > 0 &&
                (info->sig == SIGILL_ || info->sig == SIGFPE_ ||
                 info->sig == SIGSEGV_ || info->sig == SIGBUS_ ||

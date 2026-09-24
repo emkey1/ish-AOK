@@ -131,6 +131,8 @@ struct siginfo_ {
         struct {
             guest_addr_t addr;
             int_t syscall;
+            // AUDIT_ARCH_* of the call a seccomp filter trapped.
+            dword_t arch;
         } sigsys;
         struct {
             int_t timer;
@@ -168,6 +170,7 @@ struct i386_siginfo_ {
         struct {
             addr_t addr;
             int_t syscall;
+            dword_t arch;
         } sigsys;
         struct {
             int_t timer;

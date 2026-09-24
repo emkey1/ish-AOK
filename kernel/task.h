@@ -665,6 +665,17 @@ struct task {
     // so either is enough to read it. At the end for the reason given above
     // native_standin_child.
     bool ptrace_link_capable;
+    // seccomp (kernel/seccomp.h): the mode this thread is in and, in filter
+    // mode, the newest filter of its chain, one reference held. Per thread,
+    // as on Linux: a fork or clone inherits both (task_create_pid_ takes the
+    // reference) and an exec keeps them. Written by the thread itself or, for
+    // SECCOMP_FILTER_FLAG_TSYNC, by a sibling, always under pids_lock, and
+    // read at every syscall entry without it: through __atomic loads, and a
+    // filter a sibling replaced stays alive while it is read, because it is
+    // an ancestor of its replacement. At the end for the reason given above
+    // native_standin_child.
+    int seccomp_mode;
+    struct seccomp_filter *seccomp_filter;
 };
 
 // current will always give the process that is currently executing

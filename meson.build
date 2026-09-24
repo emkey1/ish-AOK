@@ -608,6 +608,7 @@ src = [
     'kernel/resource.c',
     'kernel/random.c',
     'kernel/misc.c',
+    'kernel/seccomp.c',
     'kernel/aio.c',
     'kernel/eventfd.c',
     'kernel/pidfd.c',

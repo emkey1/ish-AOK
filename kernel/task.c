@@ -6,6 +6,7 @@
 #include "kernel/calls.h"
 #include "kernel/native.h"
 #include "kernel/task.h"
+#include "kernel/seccomp.h"
 #include "kernel/checkpoint.h"
 #include "kernel/hostinfo.h"
 #include "emu/memory.h"
@@ -1294,6 +1295,9 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
         list_add_tail(&parent->children, &task->siblings);
     }
     unlock(&pids_lock);
+    // The parent's seccomp filters are the child's too; the struct copy above
+    // shares the pointer, and task_free_final drops this reference.
+    seccomp_filter_retain(task->seccomp_filter);
     // The machine now exists, so its load average starts being sampled.
     if (parent == NULL)
         guest_loadavg_start();
@@ -1370,6 +1374,8 @@ static void task_free_final(struct task *task) {
     }
     free(task->groups);
     task->groups = NULL;
+    seccomp_filter_release(task->seccomp_filter);
+    task->seccomp_filter = NULL;
     free(task);
 }
 

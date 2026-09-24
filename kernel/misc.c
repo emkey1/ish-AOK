@@ -1,5 +1,6 @@
 #include <string.h>
 #include "kernel/calls.h"
+#include "kernel/seccomp.h"
 
 #define PRCTL_SET_PDEATHSIG_ 1
 #define PRCTL_GET_PDEATHSIG_ 2
@@ -107,14 +108,13 @@ int_t sys_prctl_guest(dword_t option, qword_t arg2, qword_t arg3, qword_t arg4, 
             return 0;
         }
         case PRCTL_GET_SECCOMP_:
-            // Report "disabled" rather than erroring out during helper setup.
-            return 0;
+            return seccomp_prctl_get();
         case PRCTL_SET_SECCOMP_:
-            // Compatibility stub: userland may try to sandbox helpers.
-            // Pretend success instead of returning EINVAL, which newer apt
-            // treats as a startup failure.
-            STRACE("prctl(PR_SET_SECCOMP, %#x)", arg2);
-            return 0;
+            // Real now (kernel/seccomp.c). This used to answer 0 and do
+            // nothing, so every sandbox that asked -- OpenSSH's pre-auth
+            // child, apt's methods, man-db's helpers -- believed it was
+            // confined and was not.
+            return seccomp_prctl_set(arg2, (guest_addr_t) arg3);
         case PRCTL_SET_NAME_: {
             char name[16];
             if (user_read_string((guest_addr_t) arg2, name, sizeof(name) - 1)) {

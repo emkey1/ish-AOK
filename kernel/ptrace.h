@@ -43,6 +43,7 @@ struct task;
 #define PTRACE_EVENT_EXEC_ 4
 #define PTRACE_EVENT_VFORK_DONE_ 5
 #define PTRACE_EVENT_EXIT_ 6
+#define PTRACE_EVENT_SECCOMP_ 7
 #define PTRACE_EVENT_STOP_ 128
 
 // PTRACE_GETEVENTMSG at a syscall stop: which of the pair it is (Linux 5.3+).
@@ -56,6 +57,7 @@ struct task;
 #define PTRACE_O_TRACEEXEC_ 0x10
 #define PTRACE_O_TRACEVFORKDONE_ 0x20
 #define PTRACE_O_TRACEEXIT_ 0x40
+#define PTRACE_O_TRACESECCOMP_ 0x80
 
 struct user_regs_struct_ {
     dword_t ebx;
