@@ -327,8 +327,33 @@ accelerator as shipped until 73b9112f):
   drag is not pixman-bound. The frame-rate test needs the A10X iPad Pro the
   plan names as the real target (`bip`), or the iPhone SE.
 
-**Build with the JIT fix:** pending (the device needs a rebuild from
-8f53d992 or later).
+**Build with 73b9112f (exact-page invalidation only)**, built 15:02 BST:
+
+| per session | on | off | on | off |
+|---|---|---|---|---|
+| labwc: ms in pixman | 5612 | 9600 | 7987 | 7230 |
+| foot: ms in pixman | 2689 | 1229 | 2778 | 1458 |
+| foot: CPU ticks | 183 | 139 | 223 | 166 |
+| l3afpad: ms in pixman | 1518 | 1762 | 2788 | 1206 |
+
+foot's CPU fell ~5x in BOTH arms (650-1630 ticks -> 139-223): the old bucket
+invalidation was costing it even without the accelerator, through its own
+syscalls and munmaps. But every accelerated kernel call got slower: the
+full-frame copy 0.25 ms -> 3.6-8.7 ms, a fill 18 us -> 183 us. In isolation
+(pixbench on the same device build) the copy is 124 us, so it was not the
+kernel path. It was the fix: exact matching leaves the other pages' blocks
+in the bucket, where the old code had emptied it on first use, so every
+kernel write walked a full bucket per page touched -- dozens of blocks deep
+with 1024 buckets and a process of labwc's size. Reproduced on the Mac
+(labwc's accelerated copy 299 us pre-fix -> 3909 us with 73b9112f).
+
+Fix: the page index grows with the code (one bucket per two blocks, power
+of two, 1024 minimum), so a data page's bucket is almost always empty. Mac,
+interleaved against the pre-fix binary: foot 240-250 ms in pixman against
+1212-1612, labwc 1351-1411 against 1661-1996, accelerated fill 7-8 us
+against 27-38, full-frame copy 159-170 us against 305-344; 4-thread small
+fills 5.9 us against 1013; OpenJDK test program 35-43 s against 132 s, node
+1.8-1.9 s against 5.3 s. Device numbers for it: pending a rebuild.
 
 ## NEXT
 1. **Device measurement (Phase 3's number)** on the M4 iPad: interleaved

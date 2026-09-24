@@ -1067,7 +1067,8 @@ struct jit *jit_new(struct mmu *mmu) {
     lock(&jit->lock, 0);
     jit->mmu = mmu;
     jit_resize_hash(jit, JIT_INITIAL_HASH_SIZE);
-    jit->page_hash = calloc(JIT_PAGE_HASH_SIZE, sizeof(*jit->page_hash));
+    jit->page_hash = calloc(JIT_INITIAL_PAGE_HASH_SIZE, sizeof(*jit->page_hash));
+    jit->page_hash_size = JIT_INITIAL_PAGE_HASH_SIZE;
     list_init(&jit->jetsam);
     lock_init(&jit->lock, "jit_new\0");
     wrlock_init(&jit->jetsam_lock);
@@ -1179,7 +1180,7 @@ void jit_free(struct jit *jit) {
 
 static inline struct list *blocks_list(struct jit *jit, page_t page, int i) {
     // Page numbers are dense small integers, so plain modulo distributes fine here.
-    return &jit->page_hash[page % JIT_PAGE_HASH_SIZE].blocks[i];
+    return &jit->page_hash[page & (jit->page_hash_size - 1)].blocks[i];
 }
 
 // Block addresses are clustered (aligned entry points, dense code pages), and
@@ -1216,13 +1217,14 @@ void jit_invalidate_range(struct jit *jit, page_t start, page_t end) {
                     break;
                 }
                 // The bucket is shared by every page congruent to this one
-                // mod JIT_PAGE_HASH_SIZE, so it holds other pages' blocks
-                // too. Only this page's are stale: jit_insert links a block
-                // under exactly PAGE(addr) and PAGE(end_addr). Dropping the
-                // others made a write to any data page throw away every
-                // block whose code page shares its bucket -- and a write
-                // spanning 1024 pages, the whole process's translations,
-                // with every thread then stalling in the jetsam cleanup.
+                // mod page_hash_size, so it holds other pages' blocks too.
+                // Only this page's are stale: jit_insert links a block under
+                // exactly PAGE(addr) and PAGE(end_addr). Dropping the others
+                // made a write to any data page throw away every block whose
+                // code page shares its bucket -- and a write spanning 1024
+                // pages, the whole process's translations, with every thread
+                // then stalling in the jetsam cleanup. Keeping them is what
+                // makes the table's size matter: see jit_resize_page_hash.
                 if (PAGE(i == 0 ? block->addr : block->end_addr) != page)
                     continue;
                 jit_block_disconnect(jit, block);
@@ -1301,12 +1303,52 @@ static void jit_resize_hash(struct jit *jit, size_t new_size) {
     jit->hash_size = new_size;
 }
 
+// Every write to guest memory from the kernel (mem_ptr with MEM_WRITE) and
+// every munmap walks the page_hash bucket of each page it touches, and a
+// bucket keeps the blocks of every page congruent to that one. At a fixed
+// 1024 buckets a process with tens of thousands of blocks has all of them
+// occupied, dozens deep, so a syscall writing a 1280x720 frame (~1800 page
+// visits) spent ~4 ms walking lists that never held a block of the pages it
+// wrote -- 13x the copy itself. Growing the table with num_blocks keeps most
+// buckets empty, so a data page's walk is usually a single empty-list check.
+// Caller holds jit->lock, which every blocks_list() user does.
+static void jit_resize_page_hash(struct jit *jit, size_t new_size) {
+    __typeof__(jit->page_hash) new_hash = calloc(new_size, sizeof(*new_hash));
+    if (new_hash == NULL)
+        return; // keep the smaller table: slower, never wrong
+    __typeof__(jit->page_hash) old_hash = jit->page_hash;
+    jit->page_hash = new_hash;
+    jit->page_hash_size = new_size;
+    // Every block linked into a page list is also in the address hash, so
+    // walking the address hash finds them all; relink each exactly as
+    // jit_insert did.
+    for (size_t i = 0; i < jit->hash_size; i++) {
+        if (list_null(&jit->hash[i]))
+            continue;
+        struct jit_block *block;
+        list_for_each_entry(&jit->hash[i], block, chain) {
+            list_remove(&block->page[0]);
+            list_init_add(blocks_list(jit, PAGE(block->addr), 0), &block->page[0]);
+            if (PAGE(block->addr) != PAGE(block->end_addr)) {
+                list_remove(&block->page[1]);
+                list_init_add(blocks_list(jit, PAGE(block->end_addr), 1), &block->page[1]);
+            }
+        }
+    }
+    free(old_hash);
+}
+
 static void jit_insert(struct jit *jit, struct jit_block *block) {
     jit->mem_used += block->used;
     jit->num_blocks++;
     // target an average hash chain length of 1-2
     if (jit->num_blocks >= jit->hash_size * 2)
         jit_resize_hash(jit, jit->hash_size * 2);
+    // One page bucket per two blocks: a process's code pages then occupy
+    // a small fraction of the buckets (a code page holds many blocks), and
+    // a write to a data page usually finds its bucket empty.
+    if (jit->num_blocks >= jit->page_hash_size * 2)
+        jit_resize_page_hash(jit, jit->page_hash_size * 2);
 
     list_init_add(&jit->hash[jit_hash_bucket(block->addr, jit->hash_size)], &block->chain);
     list_init_add(blocks_list(jit, PAGE(block->addr), 0), &block->page[0]);

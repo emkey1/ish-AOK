@@ -11,7 +11,7 @@
 
 #define JIT_INITIAL_HASH_SIZE (1 << 10)
 #define JIT_CACHE_SIZE (1 << 10)
-#define JIT_PAGE_HASH_SIZE (1 << 10)
+#define JIT_INITIAL_PAGE_HASH_SIZE (1 << 10)
 
 struct jit {
     // there is one jit per address space
@@ -26,7 +26,9 @@ struct jit {
     // period, if we had such a thing)
     struct list jetsam;
 
-    // A way to look up blocks in a page
+    // A way to look up blocks in a page: page_hash_size buckets (a power of
+    // two, grown with num_blocks -- see jit_insert), each listing the blocks
+    // that start (blocks[0]) or end (blocks[1]) in a page congruent to it.
     struct {
         struct list blocks[2];
     } *page_hash;
@@ -67,6 +69,7 @@ struct jit {
     // whole timeout, several times per run. Every raise in jit.c is paired
     // with exactly one matching lower on every path out.
     atomic_uint write_wanted;
+    size_t page_hash_size;
 };
 
 // this is roughly the average number of instructions in a basic block according to anonymous sources
