@@ -472,7 +472,7 @@ release.
 same reasoning swap ships that way: a feature that spends the user's storage and
 can lose their session is one they opt into.
 
-**Keyboard toolbar customization -- a user request (2026-09-24).** In their
+**Keyboard toolbar customization, [#609](https://github.com/emkey1/ish-AOK/issues/609) -- a user request (2026-09-24).** In their
 words: "reorganizing and adding/removing custom toolbar buttons."
 
 Today the extra-keys bar above the on-screen keyboard is fixed:
