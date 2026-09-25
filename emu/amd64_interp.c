@@ -8939,6 +8939,23 @@ restart_prefix:
                 return INT_UNDEFINED;
             break;
         }
+        // 0F 0D, the prefetch group: /1 PREFETCHW (what GCC emits for
+        // __builtin_prefetch(p, 1) once PRFCHW is enabled), /0 PREFETCH, /2
+        // PREFETCHWT1, and every other /reg runs as a prefetch too. None of
+        // them can fault, whatever the address, so there is nothing to do but
+        // consume the operand. The register form and LOCK are #UD, as on
+        // hardware (camd, Zen+).
+        if (op2 == 0x0d) {
+            struct amd64_modrm modrm;
+            if (!amd64_decode_modrm(cpu, tlb, rex, &modrm)) {
+                cpu->amd64_rip = saved_rip;
+                cpu->segfault_addr = saved_rip;
+                return INT_GPF;
+            }
+            if (modrm.is_reg || lock_prefix)
+                return INT_UNDEFINED;
+            break;
+        }
         if (op2 == 0xae) {
             struct amd64_modrm modrm;
             int interrupt;

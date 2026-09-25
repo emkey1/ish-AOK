@@ -94,6 +94,9 @@ static inline bool amd64_jit_ignored_segment_prefix(byte_t byte) {
 static bool amd64_opcode_needs_modrm(const struct amd64_jit_insn *insn) {
     if (insn->two_byte_opcode) {
         switch (insn->op2) {
+        // 0x0d, the PREFETCH/PREFETCHW group, takes a ModRM byte and is
+        // claimed by the prefetch-nop arm in gen_step64.
+        case 0x0d:
         case 0x10:
         case 0x18:
         case 0x1f:
@@ -7453,6 +7456,43 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         }
         state->amd64_ip = next_ip;
         amd64_jit_debug("prefetch-nop-direct ip=%llx next=%llx",
+                (unsigned long long) insn.start_ip,
+                (unsigned long long) next_ip);
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
+    }
+
+    // 0F 0D, the other prefetch group: /1 PREFETCHW, which GCC emits for
+    // __builtin_prefetch(p, 1) whenever PRFCHW is enabled (-march=broadwell
+    // and later, every znver), /0 PREFETCH, /2 PREFETCHWT1, and /3-/7, which
+    // run as prefetches too. It raised #UD, so any binary built for a modern
+    // target died at its first write prefetch. None of them can fault,
+    // whatever the address (camd prefetches NULL and a PROT_NONE page without
+    // a signal), and 66/F2/F3/REX change nothing, so the memory form is
+    // dropped like 0F 18 above. The register form and LOCK are #UD on
+    // hardware; they raise it here the way UD2 does, so the code translated
+    // before them is kept rather than handed to the interpreter.
+    if (!insn.address_size_prefix &&
+            insn.two_byte_opcode &&
+            insn.has_modrm &&
+            insn.op2 == 0x0d) {
+        if (insn.lock_prefix || amd64_modrm_mod(insn.modrm) == 3) {
+            state->amd64_ip = state->amd64_orig_ip;
+            amd64_jit_debug("prefetch-ud ip=%llx", (unsigned long long) state->amd64_orig_ip);
+            gen_amd64_flush_reg_cache(state);
+            gen_amd64_flush_rip(state);
+            gen_amd64_helper_tlb_1_retint(state, amd64_jit_ud2,
+                    (unsigned long) state->amd64_orig_ip);
+            gen_exit(state);
+            return false;
+        }
+        if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
+            state->amd64_ip = state->amd64_orig_ip;
+            state->amd64_fallback_to_interp = true;
+            return false;
+        }
+        state->amd64_ip = next_ip;
+        amd64_jit_debug("prefetch-0d-nop ip=%llx next=%llx",
                 (unsigned long long) insn.start_ip,
                 (unsigned long long) next_ip);
         gen_amd64_defer_rip(state, next_ip);

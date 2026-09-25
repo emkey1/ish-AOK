@@ -70,6 +70,13 @@ restart:
             READINSN;
             switch (insn) {
                 case 0x18 ... 0x1f: TRACEI("nop modrm\t"); READMODRM; break;
+                // 0F 0D: /1 PREFETCHW (what GCC emits for __builtin_prefetch(p,
+                // 1) once PRFCHW is on), /0 PREFETCH, /2 PREFETCHWT1, and the
+                // other /reg values run as prefetches too. None can fault, so
+                // only the length matters. The register form is #UD on
+                // hardware (camd, Zen+), and so is LOCK, which the lock table
+                // below leaves undefined.
+                case 0x0d: TRACEI("prefetch modrm\t"); READMODRM_MEM; break;
 
                 case 0x28: TRACEI("movaps xmm:modrm, xmm");
                            READMODRM; VMOV(xmm_modrm_val, xmm_modrm_reg,128); break;
@@ -1800,6 +1807,7 @@ restart:
                                    READMODRM; READIMM8; V_OP_IMM(single_fcmp, xmm_modrm_val, xmm_modrm_reg,64); break;
 
                         case 0x18 ... 0x1f: TRACEI("rep nop modrm\t"); READMODRM; break;
+                        case 0x0d: TRACEI("rep prefetch modrm\t"); READMODRM_MEM; break;
                         default: TRACE("undefined"); UNDEFINED;
                     }
                     break;
@@ -1889,6 +1897,7 @@ restart:
                                    READMODRM_NOMEM; VMOV(mm_modrm_val, xmm_modrm_reg,64); break;
 
                         case 0x18 ... 0x1f: TRACEI("repz nop modrm\t"); READMODRM; break;
+                        case 0x0d: TRACEI("repz prefetch modrm\t"); READMODRM_MEM; break;
 
                         case 0x70: TRACEI("pshufhw xmm:modrm, xmm, imm8");
                                    READMODRM; READIMM8; V_OP_IMM(shuffle_hw, xmm_modrm_val, xmm_modrm_reg,128); break;
