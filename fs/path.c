@@ -22,6 +22,9 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
     if (path[0] == '\0')
         return _ENOENT;
 
+    // The process's root, when it is not the real one: `..` stops there.
+    size_t root_len = root_path != NULL && strcmp(root_path, "/") != 0 ? strlen(root_path) : 0;
+
     if (at_path != NULL && strcmp(at_path, "/") != 0) {
         // Bolt: Hoist strlen() and replace strcpy/strlen/strlen with memcpy
         // to avoid multiple O(N) traversals of the same string.
@@ -43,8 +46,18 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
                     p++;
                 continue;
             } else if (p[1] == '.' && (p[2] == '\0' || p[2] == '/')) {
-                // double dot path component, delete the last component
-                if (o != out) {
+                // double dot path component, delete the last component --
+                // unless the walk is standing on the process's root, where
+                // `..` is the root itself (Linux's follow_dotdot stops at
+                // nd->root). Popping it lexically let every chrooted process
+                // out: after chroot("/jail"), chdir("/"), a plain chdir("..")
+                // landed in the real /, and so did "/..", openat(root_fd,
+                // ".."), and a symlink to "../..". A cwd left outside the
+                // root by chroot-without-chdir walks `..` freely, as on
+                // Linux; only reaching the root stops it.
+                bool at_root = root_len != 0 && (size_t) (o - out) == root_len &&
+                    memcmp(out, root_path, root_len) == 0;
+                if (o != out && !at_root) {
                     do {
                         o--;
                         n++;
