@@ -33,6 +33,7 @@ x86/port_io_gpf.c
 x86/cpuid_xsave.c
 x86/cpuid_signature.c
 x86/null_deref_siginfo.c
+x86/smc_patch_race.c
 x86/fpu_state_span.c
 x86/x86_smc.c
 x86/x86_smc_alias.c

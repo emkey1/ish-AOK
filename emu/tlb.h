@@ -161,6 +161,11 @@ bool __tlb_read_cross_page(struct tlb *tlb, guest_addr_t addr, char *out, unsign
 // this, so memory mapped without PROT_EXEC does not execute (NX). Defined in
 // emu/tlb.c.
 bool tlb_fetch(struct tlb *tlb, guest_addr_t addr, void *out, unsigned size);
+// While a compile runs, tlb_fetch can serve one page of code from a copy taken
+// before it, so the compile decodes a single version of that page however the
+// guest rewrites it meanwhile. See emu/tlb.c.
+void tlb_fetch_snapshot_begin(struct tlb *tlb, guest_addr_t ip);
+void tlb_fetch_snapshot_end(void);
 forceinline __no_instrument bool tlb_read(struct tlb *tlb, guest_addr_t addr, void *out, unsigned size) {
     if (PGOFFSET(addr) > PAGE_SIZE - size)
         return __tlb_read_cross_page(tlb, addr, out, size);

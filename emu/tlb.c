@@ -668,6 +668,73 @@ void tlb_flush(struct tlb *tlb) {
     tlb->exec_ok_page = 0;
 }
 
+// ---- a compile decodes one version of its page ------------------------------
+//
+// Decoders fetch a field at a time: opcode, then ModRM, then displacement. A
+// store from another thread landing between two of those fetches gives a block
+// built from half the old instruction and half the new one, which no CPU ever
+// executes. HotSpot patches running code this way: making a method not entrant
+// writes a jmp-to-self (EB FE EB FE) over the aligned first word of its entry,
+// then the jump's fifth byte, then its first four bytes, relying on an x86
+// fetch seeing an aligned word whole. A 32-bit JVM on the i386 guest died of
+// it: the entry was `89 84 24 00 c0 ff ff`, a compile fetched the old 89 and
+// then the new ModRM, decoded `mov ebx, ebx; dec ecx`, and ran the jump's
+// displacement byte f1.
+//
+// So for a page that has been written to, jit.c takes a copy of the page
+// before compiling from it, an aligned 64-bit word at a time -- single-copy
+// atomic, so each aligned 4-byte store is in it whole or not at all, which is
+// what that patching protocol assumes of the hardware -- and every fetch the
+// compile makes from that page comes from the copy. The compile may see code
+// that is about to change; that is what a CPU fetching just before the store
+// sees, and the store is noted and drops the block (jit.c's SMC notes). What
+// it can no longer see is a mixture. Only the first page is copied: reading
+// ahead could materialize a page nothing else touches, and a block's tail on
+// the next page is fetched live, as before.
+static __thread struct {
+    bool active;
+    guest_addr_t base;
+    uint64_t words[PAGE_SIZE / 8];
+} fetch_snapshot;
+
+void tlb_fetch_snapshot_begin(struct tlb *tlb, guest_addr_t ip) {
+    fetch_snapshot.active = false;
+    guest_addr_t base = ip & ~(guest_addr_t) (PAGE_SIZE - 1);
+    const uint64_t *host = __tlb_read_ptr(tlb, base);
+    if (host == NULL)
+        return;
+    for (unsigned i = 0; i < PAGE_SIZE / 8; i++)
+        fetch_snapshot.words[i] = __atomic_load_n(&host[i], __ATOMIC_RELAXED);
+    fetch_snapshot.base = base;
+    fetch_snapshot.active = true;
+}
+
+void tlb_fetch_snapshot_end(void) {
+    fetch_snapshot.active = false;
+}
+
+// A fetch that touches the snapshot page takes those bytes from the copy, and
+// anything either side of it from memory.
+static bool tlb_fetch_snapshotted(struct tlb *tlb, guest_addr_t addr, void *out, unsigned size) {
+    guest_addr_t base = fetch_snapshot.base, end = base + PAGE_SIZE;
+    if (addr >= end || addr + size <= base)
+        return tlb_read(tlb, addr, out, size);
+    uint8_t *o = out;
+    if (addr < base) {
+        unsigned n = (unsigned) (base - addr);
+        if (!tlb_read(tlb, addr, o, n))
+            return false;
+        o += n;
+        addr += n;
+        size -= n;
+    }
+    unsigned n = (unsigned) (end - addr) < size ? (unsigned) (end - addr) : size;
+    memcpy(o, (const uint8_t *) fetch_snapshot.words + (addr - base), n);
+    if (n < size)
+        return tlb_read(tlb, addr + n, o + n, size - n);
+    return true;
+}
+
 bool tlb_fetch(struct tlb *tlb, guest_addr_t addr, void *out, unsigned size) {
     tlb->fetch_denied = false;
     if (size == 0)
@@ -685,6 +752,8 @@ bool tlb_fetch(struct tlb *tlb, guest_addr_t addr, void *out, unsigned size) {
         tlb->exec_ok_page = page + 1;
         tlb->exec_ok_changes = changes;
     }
+    if (fetch_snapshot.active)
+        return tlb_fetch_snapshotted(tlb, addr, out, size);
     return tlb_read(tlb, addr, out, size);
 }
 

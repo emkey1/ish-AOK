@@ -1695,6 +1695,50 @@ static bool jit_code_write_raced(struct jit *jit, const uint64_t *keys, int n, u
     return false;
 }
 
+// Whether ip's page has a store on record, under the key its notes use: the
+// page, or for shared memory the id every alias of it shares (see
+// jit_code_write_prepare). Only those pages pay for jit_compile_consistent's
+// snapshot; ordinary .text never does. A slot shared with another key only
+// costs a needless copy, and a shared page with no id is copied to be safe.
+static bool jit_code_written(struct jit *jit, guest_addr_t ip) {
+    if (jit->code_writes == NULL)
+        return false;
+    struct mem_shared_id id;
+    bool have_id;
+    unsigned flags = jit_code_page(jit, PAGE(ip), &id, &have_id);
+    if ((flags & P_SHARED) && !have_id)
+        return true;
+    uint64_t key = have_id ? jit_shared_id_key(&id) : PAGE(ip);
+    return jit->code_writes[jit_code_write_slot(key)].seq != 0;
+}
+
+static struct jit_block *jit_block_compile(addr_t ip, struct tlb *tlb);
+static struct jit_block *jit_block_compile_amd64(guest_addr_t ip, struct tlb *tlb,
+        bool *fallback_to_interp);
+
+// Compile with the first page's code snapshotted when it has been written to,
+// so the decoder sees one version of it: see tlb_fetch_snapshot_begin in
+// emu/tlb.c for the torn decode this prevents. Called after
+// jit_code_write_prepare, so a store after the copy is noted as usual.
+static struct jit_block *jit_compile_consistent(guest_addr_t ip, struct tlb *tlb, bool check) {
+    if (check)
+        tlb_fetch_snapshot_begin(tlb, ip);
+    struct jit_block *block = jit_block_compile((addr_t) ip, tlb);
+    if (check)
+        tlb_fetch_snapshot_end();
+    return block;
+}
+
+static struct jit_block *jit_compile_consistent_amd64(guest_addr_t ip, struct tlb *tlb,
+        bool check, bool *fallback_to_interp) {
+    if (check)
+        tlb_fetch_snapshot_begin(tlb, ip);
+    struct jit_block *block = jit_block_compile_amd64(ip, tlb, fallback_to_interp);
+    if (check)
+        tlb_fetch_snapshot_end();
+    return block;
+}
+
 // Insert a freshly compiled block, unless a store raced its compile: then it
 // goes straight to jetsam, so the caller runs it this once and the next
 // lookup compiles the page again. A block from shared memory is recorded
@@ -2392,6 +2436,7 @@ rearm_i386:
             block = jit_lookup(jit, ip);
             if (block == NULL) {
                 uint64_t code_write_seq = jit_code_write_prepare(jit, ip, tlb);
+                bool check_code = jit_code_written(jit, ip);
                 // Compile outside jetsam_lock: jit_block_compile allocates memory,
                 // and under debug malloc (guard pages + scribbling) this is very slow.
                 // Holding jetsam_lock during compilation starves jetsam write-lock
@@ -2407,7 +2452,7 @@ rearm_i386:
                     goto done_unlocked;
                 }
 
-                block = jit_block_compile(ip, tlb);
+                block = jit_compile_consistent(ip, tlb, check_code);
 
                 if (block == NULL) {
                     // OOM attempt 1: free already-invalidated (jetsam) blocks and retry.
@@ -2432,7 +2477,7 @@ rearm_i386:
                         jit_frame_sync_out(cpu, frame);
                         goto done_unlocked;
                     }
-                    block = jit_block_compile(ip, tlb);
+                    block = jit_compile_consistent(ip, tlb, check_code);
 
                     if (block == NULL) {
                         // OOM attempt 2: flush the entire JIT cache for this task.
@@ -2457,7 +2502,7 @@ rearm_i386:
                             jit_frame_sync_out(cpu, frame);
                             goto done_unlocked;
                         }
-                        block = jit_block_compile(ip, tlb);
+                        block = jit_compile_consistent(ip, tlb, check_code);
                         if (block == NULL) {
                             // Still OOM even after full flush: kill this guest task
                             printk("JIT OOM at %#x pid %d: even after full flush, killing task\n",
@@ -3789,13 +3834,14 @@ rearm_amd64:
             block = jit_lookup(jit, ip);
             if (block == NULL) {
                 uint64_t code_write_seq = jit_code_write_prepare(jit, ip, tlb);
+                bool check_code = jit_code_written(jit, ip);
                 jit_crash_track_mutex_unlock(&jit->lock);
                 jit_crash_lock = NULL;
                 frame->last_block = NULL;
                 memset(frame->ret_cache, 0, sizeof(frame->ret_cache));
                 pthread_rwlock_unlock(&jit->jetsam_lock.l);
 
-                block = jit_block_compile_amd64(ip, tlb, &fallback_to_interp);
+                block = jit_compile_consistent_amd64(ip, tlb, check_code, &fallback_to_interp);
                 if (block == NULL) {
                     amd64_jit_debug("frontend no-block ip=%llx fallback=%d",
                             (unsigned long long) ip, fallback_to_interp);

@@ -38,10 +38,15 @@ static const unsigned rm_disp32 = reg_ebp;
 #define RM(byte)  ((byte & 0b00000111) >> 0)
 
 // read modrm and maybe sib, output information into *modrm, return false for segfault
+//
+// These are instruction bytes, so they are fetched (tlb_fetch: NX, and a
+// compile's snapshot of its page). jit/gen.c's `#define tlb_read tlb_fetch`
+// comes after this header is included, so it never reached here: ModRM, SIB
+// and displacement bytes were read as data.
 static inline bool modrm_decode32(addr_t *ip, struct tlb *tlb, struct modrm *modrm) {
 #define READ(thing) \
     *ip += sizeof(thing); \
-    if (!tlb_read(tlb, *ip - sizeof(thing), &(thing), sizeof(thing))) \
+    if (!tlb_fetch(tlb, *ip - sizeof(thing), &(thing), sizeof(thing))) \
         return false
 
     byte_t modrm_byte;
