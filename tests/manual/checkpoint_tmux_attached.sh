@@ -11,9 +11,15 @@
 # an outer tmux, so its exit is SIGCHLD to that server.
 #
 # The attached client lives in a pane of a second, OUTER tmux, which gives it a
-# terminal the script can type into. Asserted after the resume: the client
-# still shows the panes updating, a key typed into it reaches ktop, a detach
-# typed into it detaches it, and both servers keep answering.
+# terminal the script can type into. Asserted after the resume: the client is
+# still attached and still shows the panes updating, a key typed into it
+# reaches ktop, a detach typed into it detaches it, and both servers keep
+# answering.
+#
+# The inner server holds the client's terminal -- the slave of a pty whose
+# master is the OUTER server's -- and it is the older server, so the image
+# builds it first. That slave came back on /dev/null while its master did not
+# exist yet: the server read EOF from it and dropped the client at once.
 #
 # A second scenario attaches the client on a SESSION terminal instead -- the
 # CLI's pty session, the app's window -- which the image does not own. The
@@ -51,6 +57,7 @@ sleep 5
 echo "BEFORE clients=$(tmux -L inner list-clients 2>/dev/null | wc -l)"
 echo suspend > /proc/ish/checkpoint
 sleep 4
+echo "AFTER clients=$(tmux -L inner list-clients 2>/dev/null | wc -l)"
 clock() { tmux -L outer capture-pane -p -t o | head -1 | grep -o '[0-9][0-9]:[0-9][0-9]:[0-9][0-9]' | head -1; }
 a=$(clock); sleep 3; b=$(clock)
 echo "CLOCK $a $b"
@@ -76,12 +83,16 @@ ISH_CLI_PTY=1 ISH_GUEST_CHECKPOINT=1 ISH_SESSION="$IMG" ISH_REAL_MNT="$WORK" \
     "$ISH" -f "$ROOT" /bin/sh -c x > "$WORK/out2" 2>&1 & echo $! > "$WORK/pid" )
 n=0; while ! grep -q '^DONE' "$WORK/out2" 2>/dev/null && [ $n -lt 90 ]; do sleep 1; n=$((n+1)); done
 for o in out1 out2; do tr -d '\r' < "$WORK/$o" > "$WORK/$o.txt" && mv "$WORK/$o.txt" "$WORK/$o"; done
-grep -aE '^(BEFORE|CLOCK|KTOP|INNER|OUTER)' "$WORK/out1" "$WORK/out2" -h | sed 's/^/  /'
+grep -aE '^(BEFORE|AFTER|CLOCK|KTOP|INNER|OUTER)' "$WORK/out1" "$WORK/out2" -h | sed 's/^/  /'
 grep -q '^DONE' "$WORK/out2" || { echo "FAIL: the resumed guest never finished -- something wedged"; exit 1; }
 
 fail=0
 f() { echo "  FAIL    | $*"; fail=1; }
 grep -qx 'BEFORE clients=1' "$WORK/out1" || f "no client was attached when the image was saved"
+# Before the checks below, which a client that died at the resume would pass:
+# it is not a client to list, and its exit empties the outer server as a
+# detach does.
+grep -qx 'AFTER clients=1' "$WORK/out2" || f "the attached client did not survive the resume"
 set -- $(sed -n 's/^CLOCK //p' "$WORK/out2")
 [ -n "$1" ] && [ -n "$2" ] && [ "$1" != "$2" ] || f "watch did not update through the attached client ($1 -> $2)"
 grep -qx 'KTOP-LEFT 0' "$WORK/out2" || f "q typed into the attached client did not reach ktop"

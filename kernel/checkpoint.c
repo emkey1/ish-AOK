@@ -3246,11 +3246,13 @@ struct ckpt_restore_state {
     //
     // A pty pair internal to the image (tmux and its pane) comes back as a
     // NEW pair, so the slave has to be told where its master went. Populated
-    // when a CKPT_FD_PTY_MASTER is restored and read by every slave after it,
-    // which works because tasks arrive parents-first and the master holder is
-    // the pane's parent. A slave that finds no entry falls back to being given
-    // a terminal of its own -- the old behaviour, and the honest answer when
-    // the master was not in the image at all.
+    // when a CKPT_FD_PTY_MASTER is restored and read by every slave after it.
+    // A pane's own processes come after it, because tasks arrive parents-first
+    // and the master holder is the pane's parent. A slave held by anyone else
+    // may come first -- another tmux server, handed a client's terminal -- and
+    // waits in pending_ttys until every task exists. One that still finds no
+    // entry then falls back to the terminal its holder was given -- the old
+    // behaviour, and the honest answer when the master was not in the image.
     struct { int old_num, new_num; } *ptys;
     uint32_t pty_count, pty_cap;
     // pidfds made unbound, to be bound to their process once every task is
@@ -3275,6 +3277,11 @@ struct ckpt_restore_state {
     // terminal it holds (the tmux server, older than a window a client later
     // attached from). Resolved once every task exists; a CKPT_FD_REF to one of
     // them waits with it. `head` marks the entry that carries the description.
+    //
+    // A pty SLAVE whose master had not been rebuilt yet waits here too
+    // (`pty_slave`), for the same reason: the tmux server holds the slave of a
+    // pane in ANOTHER tmux server when a client attached from that pane, and
+    // the server holding it is often the older of the two.
     struct ckpt_pending_tty {
         uint32_t id;
         int num;            // the pty number the image knew
@@ -3284,6 +3291,8 @@ struct ckpt_restore_state {
         uint32_t fd;
         bool cloexec;
         bool head;
+        bool pty_slave;     // a CKPT_FD_PTY_SLAVE, not a terminal record
+        uint32_t set;       // pty_slave: the holder's stdio set, the fallback
     } *pending_ttys;
     uint32_t pending_tty_count, pending_tty_cap;
     // Each process's timers, read with its first task and armed only once
@@ -3953,6 +3962,17 @@ static int ckpt_defer_tty(struct ckpt_restore_state *st, uint32_t id, int num,
     return 0;
 }
 
+// Whether `fd` in `task` will be filled once every task exists: empty now,
+// but not free.
+static bool ckpt_fd_pending(struct ckpt_restore_state *st, struct task *task,
+        fd_t fd) {
+    for (uint32_t i = 0; i < st->pending_tty_count; i++)
+        if (st->pending_ttys[i].task == task &&
+                st->pending_ttys[i].fd == (uint32_t) fd)
+            return true;
+    return false;
+}
+
 static bool ckpt_tty_pending(struct ckpt_restore_state *st, uint32_t id) {
     for (uint32_t i = 0; i < st->pending_tty_count; i++)
         if (st->pending_ttys[i].head && st->pending_ttys[i].id == id)
@@ -3998,6 +4018,83 @@ static int ckpt_restore_tty_record(struct ckpt_restore_state *st,
     return err;
 }
 
+// The ids a pending descriptor is reopened under: root's, as every restored
+// descriptor is (see ckpt_restore_task), and then its holder's own again.
+struct ckpt_ids { uid_t_ uid, euid, suid, fsuid, gid, egid, sgid, fsgid; };
+
+static struct ckpt_ids ckpt_ids_become_root(void) {
+    struct ckpt_ids ids = {
+        current->uid, current->euid, current->suid, current->fsuid,
+        current->gid, current->egid, current->sgid, current->fsgid,
+    };
+    current->uid = current->euid = current->suid = current->fsuid = 0;
+    current->gid = current->egid = current->sgid = current->fsgid = 0;
+    return ids;
+}
+
+static void ckpt_ids_restore(struct ckpt_ids ids) {
+    current->uid = ids.uid; current->euid = ids.euid;
+    current->suid = ids.suid; current->fsuid = ids.fsuid;
+    current->gid = ids.gid; current->egid = ids.egid;
+    current->sgid = ids.sgid; current->fsgid = ids.fsgid;
+}
+
+// `fd` into every descriptor that waited for head's description: the head's
+// own, and each CKPT_FD_REF to it. The caller's reference is given up.
+static void ckpt_install_pending(struct ckpt_restore_state *st,
+        const struct ckpt_pending_tty *head, struct fd *fd, const char *what) {
+    ckpt_id_put(st, head->id, fd);
+    for (uint32_t j = 0; j < st->pending_tty_count; j++) {
+        struct ckpt_pending_tty *e = &st->pending_ttys[j];
+        if (e->id != head->id)
+            continue;
+        // Takes the reference whether it succeeds or not.
+        fdtable_install_at(e->task->files, (fd_t) e->fd, fd_retain(fd),
+                           e->cloexec);
+        CKPT_TRACE("  pid %d fd %u: back on %s\n", e->task->pid, e->fd, what);
+    }
+    fd_close(fd);
+}
+
+// A pty slave whose master was not back when its record was read. Every
+// master in the image is back now, so one with no entry in the map was not in
+// the image, and the slave falls back to its holder's terminal as it always
+// did.
+static void ckpt_restore_pending_pty_slave(struct ckpt_restore_state *st,
+        const struct ckpt_pending_tty *head) {
+    char path[64] = "its holder's terminal";
+    struct fd *fd = NULL;
+    int mapped = ckpt_pty_map_get(st, head->num);
+    if (mapped >= 0) {
+        char pts[32];
+        snprintf(pts, sizeof(pts), "/dev/pts/%d", mapped);
+        struct task *saved = current;
+        current = head->task;
+        struct ckpt_ids ids = ckpt_ids_become_root();
+        // O_NOCTTY: every session has its terminal by now (ckpt_join_terminal),
+        // and a descriptor coming back must not make this one the holder's.
+        fd = generic_open(pts, ckpt_reopen_flags((uint32_t) head->flags) | O_NOCTTY_, 0);
+        ckpt_ids_restore(ids);
+        if (IS_ERR(fd)) {
+            CKPT_TRACE("  pid %d fd %u: %s could not be opened again (%d)\n",
+                       head->task->pid, head->fd, pts, (int) PTR_ERR(fd));
+            fd = NULL;
+        } else {
+            fd_open_creds_stamp(fd);
+            snprintf(path, sizeof(path), "%s", pts);
+        }
+        current = saved;
+    }
+    if (fd == NULL) {
+        struct ckpt_stdio_set *set = head->set < st->set_count ? &st->sets[head->set] : NULL;
+        fd = set != NULL ? set->stdio[head->fd <= 2 ? head->fd : 0] : NULL;
+        if (fd == NULL)
+            return;
+        fd_retain(fd);
+    }
+    ckpt_install_pending(st, head, fd, path);
+}
+
 // See ckpt_restore_state's pending_ttys. Opened as every restored descriptor
 // is -- with the authority it was first opened with, root's here -- and then
 // stamped as its holder's own.
@@ -4006,14 +4103,14 @@ static void ckpt_restore_pending_ttys(struct ckpt_restore_state *st) {
         struct ckpt_pending_tty *head = &st->pending_ttys[i];
         if (!head->head)
             continue;
+        if (head->pty_slave) {
+            ckpt_restore_pending_pty_slave(st, head);
+            continue;
+        }
         struct ckpt_stdio_set *target = ckpt_set_for_pts(st, head->num, head->sid);
         struct task *saved = current;
         current = head->task;
-        uid_t_ uid = current->uid, euid = current->euid, suid = current->suid,
-               fsuid = current->fsuid, gid = current->gid, egid = current->egid,
-               sgid = current->sgid, fsgid = current->fsgid;
-        current->uid = current->euid = current->suid = current->fsuid = 0;
-        current->gid = current->egid = current->sgid = current->fsgid = 0;
+        struct ckpt_ids ids = ckpt_ids_become_root();
         struct fd *fd = target != NULL
                 ? ckpt_tty_description(target, head->id, head->flags) : NULL;
         bool opened_here = fd != NULL && fd != target->stdio[0];
@@ -4027,26 +4124,15 @@ static void ckpt_restore_pending_ttys(struct ckpt_restore_state *st) {
             CKPT_TRACE("  pid %d fd %u: pts %d did not come back; /dev/null\n",
                        head->task->pid, head->fd, head->num);
         }
-        current->uid = uid; current->euid = euid; current->suid = suid;
-        current->fsuid = fsuid; current->gid = gid; current->egid = egid;
-        current->sgid = sgid; current->fsgid = fsgid;
+        ckpt_ids_restore(ids);
         if (opened_here)
             fd_open_creds_stamp(fd);
         current = saved;
         if (fd == NULL)
             continue;
-        ckpt_id_put(st, head->id, fd);
-        for (uint32_t j = 0; j < st->pending_tty_count; j++) {
-            struct ckpt_pending_tty *e = &st->pending_ttys[j];
-            if (e->id != head->id)
-                continue;
-            if (fdtable_install_at(e->task->files, (fd_t) e->fd, fd_retain(fd),
-                                   e->cloexec) < 0)
-                fd_close(fd);
-            CKPT_TRACE("  pid %d fd %u: back on pts %d\n", e->task->pid, e->fd,
-                       head->num);
-        }
-        fd_close(fd);
+        char what[32];
+        snprintf(what, sizeof(what), "pts %d", head->num);
+        ckpt_install_pending(st, head, fd, what);
     }
 }
 
@@ -4478,7 +4564,6 @@ descriptors:
     struct ckpt_stdio_set *set = ckpt_stdio_set_for(st, h, rec, files);
     if (set == NULL)
         return _EAGAIN;
-    struct fd **stdio = set->stdio;
     ckpt_join_terminal(set);
     // Nothing goes into 0, 1 or 2 except by this process's own record for it.
     //
@@ -4674,18 +4759,25 @@ descriptors:
             } else {
                 int mapped = ckpt_pty_map_get(st, (int) cf.offset);
                 if (mapped < 0) {
-                    // The master was not in the image. Fall back to the
-                    // terminal this task was given, which is what every pts
-                    // used to get.
-                    struct fd *src = stdio[cf.fd <= 2 ? cf.fd : 0];
-                    if (src != NULL) {
-                        if ((err = ckpt_id_put(st, cf.id, src)) < 0)
-                            goto fds_done;
-                        fd_retain(src);
-                        if ((err = fdtable_install_at(files, (fd_t) cf.fd, src,
-                                                      cf.cloexec != 0)) < 0)
-                            goto fds_done;
-                    }
+                    // The master is not back YET, or not in the image at all,
+                    // and only the end of the restore can tell which
+                    // (ckpt_restore_pending_ttys). Deciding here gave an
+                    // attached tmux client's terminal, held by an inner server
+                    // older than the outer one whose pane it is, this task's
+                    // /dev/null: the server read EOF from it at once, dropped
+                    // the client, and the pane's shell -- sharing the
+                    // description -- was left on /dev/null too.
+                    if ((err = ckpt_defer_tty(st, cf.id, (int) cf.offset,
+                                              rec->sid, (int) cf.flags, current,
+                                              cf.fd, cf.cloexec != 0, true)) < 0)
+                        goto fds_done;
+                    struct ckpt_pending_tty *p =
+                            &st->pending_ttys[st->pending_tty_count - 1];
+                    p->pty_slave = true;
+                    p->set = (uint32_t) (set - st->sets);
+                    CKPT_TRACE("  fd %u: the master of pts %llu is not back yet; "
+                               "after every task\n", cf.fd,
+                               (unsigned long long) cf.offset);
                     continue;
                 }
                 snprintf(pty_path, sizeof(pty_path), "/dev/pts/%d", mapped);
@@ -5086,13 +5178,16 @@ static int ckpt_dispatch_native(struct task *task, struct ckpt_restore_state *st
             return _E2BIG;
         }
         // At a number nothing in the image used. The image's descriptors are
-        // already installed, so the first free slot above them is free for
-        // good -- and the program unsets the variable naming it at startup, so
-        // nothing it runs inherits either.
+        // already installed, or waiting for their terminal (pending_ttys) at
+        // a number that is empty only until the end of the restore, so the
+        // first slot above them that is neither is free for good -- and the
+        // program unsets the variable naming it at startup, so nothing it runs
+        // inherits either.
         struct fdtable *files = task->files;
         fd_t at = 0;
         lock(&files->lock, 0);
-        for (at = 3; (unsigned) at < files->size && files->files[at] != NULL; at++)
+        for (at = 3; ((unsigned) at < files->size && files->files[at] != NULL) ||
+                     ckpt_fd_pending(st, task, at); at++)
             ;
         unlock(&files->lock);
         if ((err = fdtable_install_at(files, at, state_rd, false)) < 0) {
