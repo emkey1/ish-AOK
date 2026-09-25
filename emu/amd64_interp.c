@@ -3802,6 +3802,18 @@ static inline int amd64_grp3_muldiv(struct cpu_state *cpu, struct tlb *tlb,
     }
 }
 
+// The EFLAGS bits a user-mode POPF may change: the arithmetic flags, DF, and
+// AC and ID above them. TF, IF and IOPL are left alone, as before. AC and ID
+// are what a CPU probe toggles to tell a 386 and a 486 from a CPUID-capable
+// part -- HotSpot does exactly that before it will read CPUID, and with both
+// masked off it decided it was on a 386 and refused to start ("Unknown x64
+// processor: SSE2 not supported"). A 16-bit POPF only reaches the low word.
+static inline void amd64_popf_apply(struct cpu_state *cpu, qword_t value, unsigned pop_size) {
+    dword_t writable = 0xcd5u | (pop_size == 16 ? 0 : (1u << 18) | (1u << 21));
+    cpu->eflags = (cpu->eflags & ~writable) | ((dword_t) value & writable);
+    expand_flags(cpu);
+}
+
 static inline bool amd64_pop_size(struct cpu_state *cpu, struct tlb *tlb, unsigned size, qword_t *value) {
     qword_t rsp = cpu->amd64_regs[amd64_rsp];
     switch (size) {
@@ -11307,8 +11319,7 @@ restart_prefix:
         qword_t value;
         if (!amd64_pop_size(cpu, tlb, pop_size, &value))
             goto amd64_gpf_restore;
-        cpu->eflags = (cpu->eflags & ~0xcd5u) | ((dword_t) value & 0xcd5u);
-        expand_flags(cpu);
+        amd64_popf_apply(cpu, value, pop_size);
         break;
     }
     case 0x9e: { // sahf: SF,ZF,AF,PF,CF <- AH; OF and the rest preserved.
@@ -12549,8 +12560,7 @@ int amd64_jit_pop_flags(struct cpu_state *cpu, struct tlb *tlb,
         amd64_sync_legacy_regs(cpu);
         return INT_PF;
     }
-    cpu->eflags = (cpu->eflags & ~0xcd5u) | ((dword_t) value & 0xcd5u);
-    expand_flags(cpu);
+    amd64_popf_apply(cpu, value, pop_size);
     cpu->amd64_rip = (qword_t) next_ip;
     amd64_sync_legacy_regs(cpu);
     return INT_NONE;
