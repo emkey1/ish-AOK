@@ -18,6 +18,7 @@
 #include <sys/poll.h>
 #include "kernel/anonfd_ckpt.h"
 #include "kernel/timer_ckpt.h"
+#include "platform/platform.h"
 
 // Linux encodes a per-process or per-thread CPU clock into a NEGATIVE clockid:
 //
@@ -1099,23 +1100,33 @@ static void itimer_notify(void *data, uint64_t UNUSED(expirations)) {
 
 // ITIMER_VIRTUAL/PROF: neither has a native CPU-time clock this codebase's
 // timer subsystem can wait on (util/timer.h's struct timer only supports
-// CLOCK_MONOTONIC/CLOCK_REALTIME), so a CLOCK_MONOTONIC sampler ticks at a
-// fixed period, comparing accumulated CPU time (via rusage_get_group_of,
-// summed across the whole thread group like real Linux's VIRTUAL/PROF
-// clocks) against a deadline, firing SIGVTALRM/SIGPROF and rearming from
-// the interval like a real CPU-time timer would. This trades exact
-// delivery timing for zero added cost on the syscall/context-switch hot
-// path -- only processes that actually call setitimer(VIRTUAL/PROF) pay
-// for the sampler thread, and even then only a fixed, coarse tick rate.
+// CLOCK_MONOTONIC/CLOCK_REALTIME), so a CLOCK_MONOTONIC sampler ticks,
+// comparing accumulated CPU time (via rusage_get_group_cpu_of, summed across
+// the whole thread group like real Linux's VIRTUAL/PROF clocks) against a
+// deadline, firing SIGVTALRM/SIGPROF and rearming from the interval like a
+// real CPU-time timer would. This trades exact delivery timing for zero added
+// cost on the syscall/context-switch hot path -- only processes that
+// actually call setitimer(VIRTUAL/PROF) pay for the sampler.
+//
+// The tick has to keep up with the timer, and it did not. It was a fixed
+// 20 ms, a tick fires a timer at most once (the signal does not queue), and a
+// fire re-armed from the moment it was seen rather than from the deadline --
+// so a 10 ms interval fired every 20 ms of wall time at best: half the rate
+// asked for with one busy thread, a quarter with two (their CPU time runs at
+// twice wall time), a fifth at 4 ms. A sampling profiler scaled every figure
+// it printed by that much. Now the deadline advances by one interval per
+// fire, so a timer that fell behind catches up rather than losing the
+// difference -- which also absorbs the 10 ms steps a spinning thread's Darwin
+// CPU clock moves in -- and while a periodic timer is armed the tick is its
+// interval divided by the CPU count, since that many busy threads owe that
+// many signals. Linux looks on every scheduler tick (camd: HZ 250) and
+// delivers 0.99-1.00 of them (tests/manual/itimer_prof_rate).
 #define ITIMER_VPROF_SAMPLE_MS 20
+#define ITIMER_VPROF_MIN_TICK_NS 1000000L
 // The same sampler when all it has to do is RLIMIT_CPU (cpu_limit_watch).
 #define CPU_LIMIT_SAMPLE_MS 50
 
-static struct timespec cpu_time_now_of(struct tgroup *group, bool include_system) {
-    // The CPU-only read: this is asked every tick of a process's sampler, and
-    // the full rusage also walks every thread's address space for maxrss,
-    // which none of these callers use.
-    struct rusage_ rusage = rusage_get_group_cpu_of(group);
+static struct timespec cpu_time_of(struct rusage_ rusage, bool include_system) {
     long usec = rusage.utime.usec + (include_system ? rusage.stime.usec : 0);
     struct timespec ts = {
         .tv_sec = rusage.utime.sec + (include_system ? rusage.stime.sec : 0),
@@ -1128,6 +1139,13 @@ static struct timespec cpu_time_now_of(struct tgroup *group, bool include_system
     return ts;
 }
 
+static struct timespec cpu_time_now_of(struct tgroup *group, bool include_system) {
+    // The CPU-only read: this is asked every tick of a process's sampler, and
+    // the full rusage also walks every thread's address space for maxrss,
+    // which none of these callers use.
+    return cpu_time_of(rusage_get_group_cpu_of(group), include_system);
+}
+
 // Must be called with group->lock held.
 static bool itimer_vprof_maybe_fire(struct cpu_itimer_state *state, struct timespec cpu_now) {
     if (!state->armed)
@@ -1135,11 +1153,32 @@ static bool itimer_vprof_maybe_fire(struct cpu_itimer_state *state, struct times
     struct timespec remaining = timespec_subtract(state->deadline, cpu_now);
     if (timespec_positive(remaining))
         return false;
+    // From the deadline, not from now: see the comment above.
     if (timespec_positive(state->interval))
-        state->deadline = timespec_add(cpu_now, state->interval);
+        state->deadline = timespec_add(state->deadline, state->interval);
     else
         state->armed = false;
     return true;
+}
+
+// The sampler's period for what is armed now. Called with group->lock held.
+static long itimer_vprof_tick_ns(struct tgroup *group) {
+    long long tick = ITIMER_VPROF_SAMPLE_MS * 1000000LL;
+    long long ncpu = get_cpu_count();
+    if (ncpu < 1)
+        ncpu = 1;
+    const struct cpu_itimer_state *armed[] = {&group->itimer_virtual, &group->itimer_prof};
+    for (unsigned i = 0; i < 2; i++) {
+        if (!armed[i]->armed || !timespec_positive(armed[i]->interval))
+            continue;
+        long long interval = (long long) armed[i]->interval.tv_sec * 1000000000LL +
+                             armed[i]->interval.tv_nsec;
+        if (interval / ncpu < tick)
+            tick = interval / ncpu;
+    }
+    if (tick < ITIMER_VPROF_MIN_TICK_NS)
+        tick = ITIMER_VPROF_MIN_TICK_NS;
+    return (long) tick;
 }
 
 // Same as itimer_notify: the group, not a thread, and SI_KERNEL. SIGVTALRM/
@@ -1149,8 +1188,10 @@ static bool itimer_vprof_maybe_fire(struct cpu_itimer_state *state, struct times
 static void itimer_vprof_sampler_notify(void *data, uint64_t UNUSED(expirations)) {
     struct tgroup *group = data;
 
-    struct timespec cpu_user = cpu_time_now_of(group, false);
-    struct timespec cpu_total = cpu_time_now_of(group, true);
+    // One reading for both clocks: each walks every thread of the group.
+    struct rusage_ usage = rusage_get_group_cpu_of(group);
+    struct timespec cpu_user = cpu_time_of(usage, false);
+    struct timespec cpu_total = cpu_time_of(usage, true);
 
     lock(&group->lock, 0);
     bool fire_virtual = itimer_vprof_maybe_fire(&group->itimer_virtual, cpu_user);
@@ -1181,10 +1222,13 @@ static long itimer_vprof_sampler_start_locked(struct tgroup *group) {
     // (Re-)arm the sampler's own recurring tick; harmless if already
     // running. Left running for the group's lifetime once started rather
     // than paused when both VIRTUAL and PROF are disarmed -- see the
-    // struct field comment on itimer_vprof_sampler in kernel/task.h.
+    // struct field comment on itimer_vprof_sampler in kernel/task.h -- but
+    // at the relaxed period again then, so a profiler that has stopped does
+    // not leave a millisecond tick behind.
+    long tick = itimer_vprof_tick_ns(group);
     struct timer_spec sample_spec = {
-        .value = {.tv_nsec = ITIMER_VPROF_SAMPLE_MS * 1000000},
-        .interval = {.tv_nsec = ITIMER_VPROF_SAMPLE_MS * 1000000},
+        .value = {.tv_nsec = tick},
+        .interval = {.tv_nsec = tick},
     };
     timer_set(group->itimer_vprof_sampler, sample_spec, NULL);
     return 0;
@@ -1243,6 +1287,9 @@ static long itimer_vprof_set(struct tgroup *group, int which, struct timer_spec 
     state->interval = spec.interval;
     if (timespec_is_zero(spec.value)) {
         state->armed = false;
+        // Back to the relaxed tick, if the sampler was ticking for this one.
+        if (group->itimer_vprof_sampler != NULL)
+            return itimer_vprof_sampler_start_locked(group);
         return 0;
     }
 
