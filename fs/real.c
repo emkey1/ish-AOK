@@ -613,7 +613,43 @@ int realfs_fstat(struct fd *fd, struct statbuf *fake_stat) {
     return 0;
 }
 
+// A description realfs_reopen made (fd->realfs_own_offset) reads, writes and
+// seeks by its own position, and answers for its own access mode: its host
+// descriptor is a duplicate of another description's, whose host position it
+// must not move and whose access may be more than its own.
+static ssize_t realfs_read_own(struct fd *fd, void *buf, size_t bufsize) {
+    if ((fd->flags & O_ACCMODE_) == O_WRONLY_)
+        return _EBADF;
+    off_t off = (off_t) fd->offset;
+    ssize_t res = pread(fd->real_fd, buf, bufsize, off);
+    if (res < 0)
+        return errno_map();
+    fd->offset = (unsigned long) (off + res);
+    realfs_count_read(res);
+    return res;
+}
+
+static ssize_t realfs_write_own(struct fd *fd, const void *buf, size_t bufsize) {
+    if ((fd->flags & O_ACCMODE_) == O_RDONLY_)
+        return _EBADF;
+    off_t off = (off_t) fd->offset;
+    if (fd->flags & O_APPEND_) {
+        struct stat real_stat;
+        if (fstat(fd->real_fd, &real_stat) < 0)
+            return errno_map();
+        off = real_stat.st_size;
+    }
+    ssize_t res = pwrite(fd->real_fd, buf, bufsize, off);
+    if (res < 0)
+        return errno_map();
+    fd->offset = (unsigned long) (off + res);
+    realfs_count_write(res);
+    return res;
+}
+
 ssize_t realfs_read(struct fd *fd, void *buf, size_t bufsize) {
+    if (fd->realfs_own_offset)
+        return realfs_read_own(fd, buf, bufsize);
     if (bufsize == 0)
         return 0;
     size_t read_size = bufsize;
@@ -678,6 +714,8 @@ ssize_t realfs_read(struct fd *fd, void *buf, size_t bufsize) {
 }
 
 ssize_t realfs_write(struct fd *fd, const void *buf, size_t bufsize) {
+    if (fd->realfs_own_offset)
+        return realfs_write_own(fd, buf, bufsize);
     if (bufsize == 0)
         return 0;
 
@@ -739,6 +777,8 @@ ssize_t realfs_write(struct fd *fd, const void *buf, size_t bufsize) {
 }
 
 ssize_t realfs_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {
+    if (fd->realfs_own_offset && (fd->flags & O_ACCMODE_) == O_WRONLY_)
+        return _EBADF;
     ssize_t res = pread(fd->real_fd, buf, bufsize, off);
     if (res < 0)
         return errno_map();
@@ -761,6 +801,8 @@ ssize_t realfs_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t off)
     // match; the lost atomicity only affects concurrent pwrites to one
     // O_APPEND description, which is an exotic combination of an already
     // exotic quirk.
+    if (fd->realfs_own_offset && (fd->flags & O_ACCMODE_) == O_RDONLY_)
+        return _EBADF;
     if (fd->flags & O_APPEND_) {
         struct stat real_stat;
         if (fstat(fd->real_fd, &real_stat) < 0)
@@ -883,7 +925,31 @@ off_t realfs_lseek(struct fd *fd, off_t offset, int whence) {
             return _EINVAL;
         if (offset >= st.st_size)
             return _ENXIO;
-        return whence == LSEEK_DATA ? offset : st.st_size;
+        off_t res = whence == LSEEK_DATA ? offset : st.st_size;
+        // And it is a seek: the position moves there, as it does on Linux.
+        if (fd->realfs_own_offset)
+            fd->offset = (unsigned long) res;
+        else if (lseek(fd->real_fd, res, SEEK_SET) < 0)
+            return errno_map();
+        return res;
+    }
+    if (fd->realfs_own_offset) {
+        off_t base = 0;
+        if (whence == LSEEK_CUR) {
+            base = (off_t) fd->offset;
+        } else if (whence == LSEEK_END) {
+            struct stat st;
+            if (fstat(fd->real_fd, &st) < 0)
+                return errno_map();
+            base = st.st_size;
+        } else if (whence != LSEEK_SET) {
+            return _EINVAL;
+        }
+        off_t res;
+        if (__builtin_add_overflow(base, offset, &res) || res < 0)
+            return _EINVAL;
+        fd->offset = (unsigned long) res;
+        return res;
     }
     if (whence == LSEEK_SET)
         whence = SEEK_SET;
@@ -1108,6 +1174,16 @@ int host_fd_mmap(int host_fd, struct mem *mem, page_t start, pages_t pages, off_
 int realfs_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off_t offset, int prot, int flags) {
     enum { AMD64_REALFS_MMAP_TRACE_BUDGET = 32 };
     static unsigned amd64_realfs_mmap_trace_count;
+    // The host asks mmap's access questions of the host descriptor, which for
+    // a description realfs_reopen made may allow more than it does: readable
+    // for any mapping, writable too for a writable shared one.
+    if (fd->realfs_own_offset) {
+        int accmode = fd->flags & O_ACCMODE_;
+        if (accmode == O_WRONLY_)
+            return _EACCES;
+        if ((flags & MMAP_SHARED) && (prot & P_WRITE) && accmode != O_RDWR_)
+            return _EACCES;
+    }
     int err = host_fd_mmap(fd->real_fd, mem, start, pages, offset, prot, flags);
     if (err < 0 && current != NULL && current->abi == GUEST_ABI_AMD64 &&
             amd64_realfs_mmap_trace_count < AMD64_REALFS_MMAP_TRACE_BUDGET) {
@@ -1368,6 +1444,9 @@ int realfs_fsync(struct fd *fd) {
 }
 
 int realfs_getflags(struct fd *fd) {
+    // Not the host's, which are the description it duplicates.
+    if (fd->realfs_own_offset)
+        return fd->flags & (O_ACCMODE_ | O_APPEND_ | O_NONBLOCK_);
     int flags = fcntl(fd->real_fd, F_GETFL);
     if (flags < 0)
         return errno_map();
@@ -1375,6 +1454,13 @@ int realfs_getflags(struct fd *fd) {
 }
 
 int realfs_setflags(struct fd *fd, dword_t flags) {
+    // Its own alone: the host's belong to the description it duplicates, and
+    // reads and writes by position look at neither O_APPEND nor O_NONBLOCK
+    // there.
+    if (fd->realfs_own_offset) {
+        fd->flags = (fd->flags & ~(O_APPEND_ | O_NONBLOCK_)) | (flags & (O_APPEND_ | O_NONBLOCK_));
+        return 0;
+    }
     int ret = fcntl(fd->real_fd, F_SETFL, open_flags_real_from_fake(flags));
     if (ret < 0)
         return errno_map();
@@ -1393,6 +1479,15 @@ int realfs_ioctl(struct fd *fd, int cmd, void *arg) {
     size_t nread;
     switch (cmd) {
         case FIONREAD_:
+            if (fd->realfs_own_offset) {
+                // What is left past its own position, not the host's.
+                struct stat real_stat;
+                if (fstat(fd->real_fd, &real_stat) < 0)
+                    return errno_map();
+                off_t left = real_stat.st_size - (off_t) fd->offset;
+                *(dword_t *) arg = left > 0 ? (dword_t) left : 0;
+                return 0;
+            }
             err = ioctl(fd->real_fd, FIONREAD, &nread);
             if (err < 0)
                 return errno_map();
@@ -1400,6 +1495,42 @@ int realfs_ioctl(struct fd *fd, int cmd, void *arg) {
             return 0;
     }
     return _ENOTTY;
+}
+
+// See fd_ops->reopen. Darwin cannot open a file with no path afresh: /dev/fd/N
+// duplicates the descriptor, and opening by file ID (openbyid_np) takes an
+// entitlement no app is given. So the new description's host descriptor is a
+// duplicate of this one's, which shares that one's host position and status
+// flags, and it keeps its own instead (fd->realfs_own_offset). What cannot be
+// had that way is access the host descriptor lacks: a file held O_RDONLY
+// cannot be opened for writing (EACCES), where Linux, which opens the inode,
+// allows whatever the file's permissions do. fakefs shares these fd_ops, and
+// its metadata for an unlinked file is the snapshot in the struct fd, so that
+// comes along.
+static struct fd *realfs_reopen(struct fd *fd, int flags) {
+    int host = fcntl(fd->real_fd, F_GETFL);
+    if (host < 0)
+        return ERR_PTR(errno_map());
+    host &= O_ACCMODE;
+    int want = flags & O_ACCMODE_;
+    bool reads = want != O_WRONLY_;
+    bool writes = want != O_RDONLY_ || (flags & O_TRUNC_);
+    if ((reads && host == O_WRONLY) || (writes && host == O_RDONLY))
+        return ERR_PTR(_EACCES);
+    int real_fd = dup(fd->real_fd);
+    if (real_fd < 0)
+        return ERR_PTR(errno_map());
+    struct fd *reopened = fd_create(fd->ops);
+    if (reopened == NULL) {
+        close(real_fd);
+        return ERR_PTR(_ENOMEM);
+    }
+    reopened->real_fd = real_fd;
+    reopened->dir = NULL;
+    reopened->realfs_own_offset = true;
+    reopened->fake_inode = fd->fake_inode;
+    reopened->stat = fd->stat;
+    return reopened;
 }
 
 const struct fs_ops realfs = {
@@ -1447,4 +1578,5 @@ const struct fd_ops realfs_fdops = {
     .close = realfs_close,
     .getflags = realfs_getflags,
     .setflags = realfs_setflags,
+    .reopen = realfs_reopen,
 };

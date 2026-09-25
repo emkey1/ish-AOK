@@ -27,16 +27,23 @@
 //     the memfd's "/memfd:<name> (deleted)", and comm the descriptor number
 //     (Linux <= 6.13) or the file's own name (6.14+, which AOK does), never
 //     a "(deleted)" suffix.
+//   - open("/proc/self/exe") in the new image reaches the file it runs --
+//     the same inode as the caller's descriptor, not whatever took the name
+//     since -- and F_GET_SEALS through it gives the memfd's seals. runc's
+//     is_self_cloned() is exactly that open and that question. AOK walked
+//     the link's text, which names nothing for a file with no path: ENOENT.
+//   - the #! interpreter reads the script through a description of its own:
+//     the caller's offset, 12, is still 12 afterwards. AOK handed the
+//     interpreter the caller's own description, rewound to 0.
 //
-// Not asserted, both because AOK cannot yet give a file with no path a second
-// description of its own:
-//   - open("/proc/self/exe") in the image a pathless file started. Linux opens
-//     the file through the magic link (runc's is_self_cloned() does, and asks
-//     F_GET_SEALS); AOK walks the link's text, which names nothing.
-//   - the caller's offset after the #! interpreter has read the script. On
-//     Linux /dev/fd/<n> opens a new description; AOK's /proc/self/fd reopen of
-//     a pathless file hands out the caller's own, rewound (fs/generic.c
-//     procfd_openat), so the interpreter's reads move it.
+// And /proc/self/fd/<n> of a file with no path, opened directly: a new
+// description at offset 0 whose reads leave the caller's where it was, the
+// same inode, the access mode asked for. As Linux opens the inode afresh, an
+// O_RDWR open of an O_RDONLY descriptor is allowed wherever the file's
+// permissions allow it; that is asserted for memfds and in a tmpfs. In /tmp
+// it is not: AOK's /tmp is a host file, and Darwin has no way to open an
+// unlinked file afresh, so AOK's new description is a duplicate of the
+// caller's host one and can have no access that one lacks (EACCES).
 //
 // Run in /tmp, and as root also in a tmpfs mounted for the run.
 //
@@ -54,7 +61,9 @@
 #include <sys/auxv.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -112,7 +121,12 @@
 #endif
 #endif
 
+#ifndef TMPFS_MAGIC
+#define TMPFS_MAGIC 0x01021994
+#endif
+
 #define RUNC_SEALS (F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE)
+#define NO_SEALS_CHECK (-1000)
 
 extern char **environ;
 
@@ -138,14 +152,30 @@ static int memfd(const char *name, unsigned flags) {
     return (int) syscall(SYS_memfd_create, name, flags);
 }
 
-// The exec'd copy of this program: what the kernel told it about itself.
+// The exec'd copy of this program: what the kernel told it about itself, and
+// what open("/proc/self/exe") reaches -- runc's is_self_cloned() opens it and
+// asks F_GET_SEALS.
 static int report(int out) {
     char exe[PATH_MAX], comm[32] = "";
     ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     exe[n > 0 ? n : 0] = '\0';
     prctl(PR_GET_NAME, comm);
     const char *execfn = (const char *) getauxval(AT_EXECFN);
-    dprintf(out, "R\n%s\n%s\n%s\n", execfn != NULL ? execfn : "(none)", exe, comm);
+    int open_err = 0, seals = 0;
+    struct stat st = {0};
+    int self = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+    if (self < 0) {
+        open_err = errno;
+    } else {
+        if (fstat(self, &st) != 0)
+            open_err = errno;
+        seals = fcntl(self, F_GET_SEALS);
+        if (seals < 0)
+            seals = -errno;
+        close(self);
+    }
+    dprintf(out, "R\n%s\n%s\n%s\n%d\n%llu\n%llu\n%d\n", execfn != NULL ? execfn : "(none)", exe,
+            comm, open_err, (unsigned long long) st.st_dev, (unsigned long long) st.st_ino, seals);
     return 42;
 }
 
@@ -154,6 +184,9 @@ struct outcome {
     int status;     // the child's wait status
     bool ran;       // this program ran and reported
     char execfn[PATH_MAX], exe[PATH_MAX], comm[32];
+    int exe_open_err;                           // open("/proc/self/exe")
+    unsigned long long exe_dev, exe_ino;        // ...and what it reached
+    int exe_seals;                              // F_GET_SEALS, or -errno
 };
 
 // fexecve(fd) in a child, the way glibc and musl both do it.
@@ -191,8 +224,8 @@ static void run_fexecve(int fd, struct outcome *o) {
         char *e = strtok_r(NULL, "\n", &save);
         o->err = e != NULL ? atoi(e) : -1;
     } else if (kind != NULL && strcmp(kind, "R") == 0) {
-        const char *fields[3] = {"", "", ""};
-        for (int i = 0; i < 3; i++) {
+        const char *fields[7] = {"", "", "", "-1", "0", "0", "0"};
+        for (int i = 0; i < 7; i++) {
             char *f = strtok_r(NULL, "\n", &save);
             if (f != NULL)
                 fields[i] = f;
@@ -201,6 +234,10 @@ static void run_fexecve(int fd, struct outcome *o) {
         snprintf(o->execfn, sizeof(o->execfn), "%s", fields[0]);
         snprintf(o->exe, sizeof(o->exe), "%s", fields[1]);
         snprintf(o->comm, sizeof(o->comm), "%s", fields[2]);
+        o->exe_open_err = atoi(fields[3]);
+        o->exe_dev = strtoull(fields[4], NULL, 10);
+        o->exe_ino = strtoull(fields[5], NULL, 10);
+        o->exe_seals = atoi(fields[6]);
     }
 }
 
@@ -217,9 +254,13 @@ static const char *describe(const struct outcome *o, char *buf, size_t n) {
 }
 
 // It runs this program, told it is /dev/fd/<fd>. comm is the descriptor
-// number up to Linux 6.13 and `name` -- the file's own -- from 6.14.
-static bool expect_runs(const char *how, int fd, const char *name, struct outcome *o) {
+// number up to Linux 6.13 and `name` -- the file's own -- from 6.14. And its
+// /proc/self/exe opens to the very file `fd` holds, with `seals` (unless
+// NO_SEALS_CHECK) as its F_GET_SEALS answer.
+static bool expect_runs(const char *how, int fd, const char *name, int seals, struct outcome *o) {
     char got[4 * PATH_MAX], execfn[32], fdnum[16];
+    struct stat held;
+    check(fstat(fd, &held) == 0, "%s: fstat the descriptor (%s)", how, strerror(errno));
     run_fexecve(fd, o);
     describe(o, got, sizeof(got));
     snprintf(execfn, sizeof(execfn), "/dev/fd/%d", fd);
@@ -232,6 +273,17 @@ static bool expect_runs(const char *how, int fd, const char *name, struct outcom
     snprintf(own, sizeof(own), "%s", name);   // comm is at most 15 characters
     check(strcmp(o->comm, fdnum) == 0 || strcmp(o->comm, own) == 0, "%s: comm is %s or %s (got %s)",
           how, fdnum, own, o->comm);
+    check(o->exe_open_err == 0, "%s: open(/proc/self/exe) in the new image (%s)", how,
+          o->exe_open_err != 0 ? strerror(o->exe_open_err) : "ok");
+    if (o->exe_open_err == 0)
+        check(o->exe_dev == (unsigned long long) held.st_dev &&
+                  o->exe_ino == (unsigned long long) held.st_ino,
+              "%s: /proc/self/exe opens the file it runs, dev %llu ino %llu (got dev %llu ino %llu)",
+              how, (unsigned long long) held.st_dev, (unsigned long long) held.st_ino, o->exe_dev,
+              o->exe_ino);
+    if (o->exe_open_err == 0 && seals != NO_SEALS_CHECK)
+        check(o->exe_seals == seals, "%s: F_GET_SEALS through /proc/self/exe is %#x (got %d)", how,
+              seals, o->exe_seals);
     return true;
 }
 
@@ -312,6 +364,76 @@ static int unlinked_copy(const char *dir, const char *name, int flags) {
     return fd;
 }
 
+#define REOPEN_DATA "0123456789abcdefghij"
+
+// /proc/self/fd/<fd> of a file with no path, opened directly. `fd` is
+// O_RDONLY, and the file holds REOPEN_DATA. The open is a new description:
+// offset 0, the access mode asked for, and reads that leave the caller's
+// offset alone. `upgrade`: also O_RDWR, which Linux grants by the file's
+// permissions whatever the caller's descriptor allows.
+static void expect_reopen(const char *how, int fd, bool upgrade) {
+    char proc[64], got[8];
+    struct stat held, st;
+    snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
+    check(fstat(fd, &held) == 0, "%s: fstat the descriptor (%s)", how, strerror(errno));
+    check(lseek(fd, 7, SEEK_SET) == 7, "%s: seek the descriptor to 7 (%s)", how, strerror(errno));
+
+    int r = open(proc, O_RDONLY | O_CLOEXEC);
+    check(r >= 0, "%s: open %s O_RDONLY (%s)", how, proc, strerror(errno));
+    if (r >= 0) {
+        check(fstat(r, &st) == 0 && st.st_dev == held.st_dev && st.st_ino == held.st_ino,
+              "%s: O_RDONLY: the same file", how);
+        check(lseek(r, 0, SEEK_CUR) == 0, "%s: O_RDONLY: starts at offset 0 (got %lld)", how,
+              (long long) lseek(r, 0, SEEK_CUR));
+        check(read(r, got, 4) == 4 && memcmp(got, REOPEN_DATA, 4) == 0,
+              "%s: O_RDONLY: reads the file from its start", how);
+        off_t mine = lseek(r, 0, SEEK_CUR), theirs = lseek(fd, 0, SEEK_CUR);
+        check(mine == 4 && theirs == 7, "%s: O_RDONLY: its offset is 4 and the caller's 7 (got %lld "
+              "and %lld)", how, (long long) mine, (long long) theirs);
+        check(lseek(fd, 15, SEEK_SET) == 15 && lseek(r, 0, SEEK_CUR) == 4,
+              "%s: O_RDONLY: the caller's seek leaves it at 4", how);
+        int acc = fcntl(r, F_GETFL) & O_ACCMODE;
+        check(acc == O_RDONLY, "%s: O_RDONLY: F_GETFL says O_RDONLY (got %#x)", how, acc);
+        errno = 0;
+        check(write(r, "x", 1) < 0 && errno == EBADF, "%s: O_RDONLY: write is EBADF (%s)", how,
+              strerror(errno));
+        close(r);
+    }
+
+    if (upgrade) {
+        int w = open(proc, O_RDWR | O_CLOEXEC);
+        check(w >= 0, "%s: open %s O_RDWR (%s)", how, proc, strerror(errno));
+        if (w >= 0) {
+            int acc = fcntl(w, F_GETFL) & O_ACCMODE;
+            check(acc == O_RDWR, "%s: O_RDWR: F_GETFL says O_RDWR (got %#x)", how, acc);
+            check(pwrite(w, "XY", 2, 1) == 2, "%s: O_RDWR: write (%s)", how, strerror(errno));
+            check(pread(fd, got, 3, 0) == 3 && memcmp(got, "0XY", 3) == 0,
+                  "%s: O_RDWR: the write is in the caller's file", how);
+            close(w);
+        }
+    }
+}
+
+// A file holding REOPEN_DATA at dir/name, opened O_RDONLY and unlinked.
+static void unlinked_reopen(const char *dir) {
+    char path[PATH_MAX], how[PATH_MAX + 64];
+    snprintf(path, sizeof(path), "%s/data", dir);
+    put(path, REOPEN_DATA, 0644);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    check(fd >= 0, "open %s (%s)", path, strerror(errno));
+    check(unlink(path) == 0, "unlink %s (%s)", path, strerror(errno));
+    if (fd < 0)
+        return;
+    // Something else at the name now: the reopen must not reach it.
+    put(path, "not the file\n", 0644);
+    struct statfs sfs;
+    bool tmpfs = statfs(dir, &sfs) == 0 && (unsigned long) sfs.f_type == TMPFS_MAGIC;
+    snprintf(how, sizeof(how), "reopen of unlinked %s", path);
+    expect_reopen(how, fd, tmpfs);
+    close(fd);
+    unlink(path);
+}
+
 static void unlinked_files(const char *dir) {
     char how[PATH_MAX + 64], path[PATH_MAX];
     struct outcome o;
@@ -319,7 +441,7 @@ static void unlinked_files(const char *dir) {
     // An ELF file, close-on-exec, the way fexecve is usually handed one.
     int fd = unlinked_copy(dir, "prog", O_RDONLY | O_CLOEXEC);
     snprintf(how, sizeof(how), "fexecve of unlinked %s/prog", dir);
-    if (fd >= 0 && expect_runs(how, fd, "prog", &o)) {
+    if (fd >= 0 && expect_runs(how, fd, "prog", NO_SEALS_CHECK, &o)) {
         snprintf(path, sizeof(path), "%s/prog (deleted)", dir);
         // AOK names an unlinked file by the name it had, without Linux's
         // " (deleted)"; that is /proc's to fix, not exec's.
@@ -336,7 +458,7 @@ static void unlinked_files(const char *dir) {
     put(path, "#!/bin/sh\nexit 7\n", 0755);
     snprintf(how, sizeof(how), "fexecve of unlinked %s/gone, with a script there now", dir);
     if (fd >= 0) {
-        expect_runs(how, fd, "gone", &o);
+        expect_runs(how, fd, "gone", NO_SEALS_CHECK, &o);
         close(fd);
     }
     unlink(path);
@@ -347,7 +469,7 @@ static void unlinked_files(const char *dir) {
     fd = unlinked_copy(dir, "pos", O_RDONLY);
     snprintf(how, sizeof(how), "fexecve of unlinked %s/pos at offset 1234", dir);
     if (fd >= 0 && lseek(fd, 1234, SEEK_SET) == 1234) {
-        expect_runs(how, fd, "pos", &o);
+        expect_runs(how, fd, "pos", NO_SEALS_CHECK, &o);
         off_t at = lseek(fd, 0, SEEK_CUR);
         check(at == 1234, "%s: the offset is still 1234 (got %lld)", how, (long long) at);
     }
@@ -358,13 +480,14 @@ static void unlinked_files(const char *dir) {
     fd = unlinked_copy(dir, "opath", O_PATH | O_CLOEXEC);
     snprintf(how, sizeof(how), "fexecve of an O_PATH descriptor of unlinked %s/opath", dir);
     if (fd >= 0) {
-        expect_runs(how, fd, "opath", &o);
+        expect_runs(how, fd, "opath", NO_SEALS_CHECK, &o);
         close(fd);
     }
 
     // A #! script. Through a descriptor left open the interpreter opens
     // /dev/fd/<n> and reads the script from its start -- the caller's
-    // offset is past the #! line. Close-on-exec, it cannot.
+    // offset is past the #! line -- through a description of its own, so
+    // the caller's offset is where it was. Close-on-exec, it cannot.
     snprintf(path, sizeof(path), "%s/scr", dir);
     put(path, "#!/bin/sh\nexit 5\n", 0755);
     fd = open(path, O_RDONLY);
@@ -373,6 +496,8 @@ static void unlinked_files(const char *dir) {
     snprintf(how, sizeof(how), "fexecve of unlinked script %s/scr", dir);
     if (fd >= 0 && lseek(fd, 12, SEEK_SET) == 12) {
         expect_exit(how, fd, 5);
+        off_t at = lseek(fd, 0, SEEK_CUR);
+        check(at == 12, "%s: the offset is still 12 (got %lld)", how, (long long) at);
         int ce = fcntl(fd, F_DUPFD_CLOEXEC, 0);
         snprintf(how, sizeof(how), "fexecve of unlinked script %s/scr, close-on-exec", dir);
         expect_err(how, ce, ENOENT);
@@ -380,6 +505,58 @@ static void unlinked_files(const char *dir) {
     }
     if (fd >= 0)
         close(fd);
+
+    unlinked_reopen(dir);
+}
+
+// A memfd's /proc/self/fd reopened O_RDONLY is a read-only description of
+// the memfd: it cannot be written, write-mapped shared, truncated or sealed
+// (Linux's memfd_add_seals wants FMODE_WRITE), and it reads the seals.
+static void memfd_reopen(void) {
+    int fd = memfd("reopen", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    check(fd >= 0, "memfd_create (%s)", strerror(errno));
+    if (fd < 0 || !put_fd(fd, "memfd", REOPEN_DATA, strlen(REOPEN_DATA))) {
+        if (fd >= 0)
+            close(fd);
+        return;
+    }
+    check(fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK) == 0, "seal the memfd (%s)", strerror(errno));
+    char proc[64];
+    snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
+    int ro = open(proc, O_RDONLY | O_CLOEXEC);
+    check(ro >= 0, "memfd: open %s O_RDONLY (%s)", proc, strerror(errno));
+    close(fd);   // the read-only description is all that holds it now
+    if (ro < 0)
+        return;
+
+    char link[PATH_MAX];
+    snprintf(proc, sizeof(proc), "/proc/self/fd/%d", ro);
+    ssize_t n = readlink(proc, link, sizeof(link) - 1);
+    link[n > 0 ? n : 0] = '\0';
+    check(strcmp(link, "/memfd:reopen (deleted)") == 0,
+          "memfd reopen: the link is /memfd:reopen (deleted) (got %s)", link);
+    int seals = fcntl(ro, F_GET_SEALS);
+    check(seals == F_SEAL_SHRINK, "memfd reopen: F_GET_SEALS is F_SEAL_SHRINK (got %d)", seals);
+    errno = 0;
+    check(fcntl(ro, F_ADD_SEALS, F_SEAL_GROW) < 0 && errno == EPERM,
+          "memfd reopen: F_ADD_SEALS through a read-only description is EPERM (%s)", strerror(errno));
+    errno = 0;
+    check(ftruncate(ro, 100) < 0 && errno == EINVAL,
+          "memfd reopen: ftruncate through a read-only description is EINVAL (%s)", strerror(errno));
+    void *map = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, ro, 0);
+    check(map == MAP_FAILED && errno == EACCES,
+          "memfd reopen: a writable shared mapping of a read-only description is EACCES (%s)",
+          map == MAP_FAILED ? strerror(errno) : "mapped");
+    if (map != MAP_FAILED)
+        munmap(map, 4096);
+    map = mmap(NULL, 4096, PROT_READ, MAP_SHARED, ro, 0);
+    check(map != MAP_FAILED && memcmp(map, REOPEN_DATA, 4) == 0,
+          "memfd reopen: a read-only shared mapping reads the memfd (%s)",
+          map == MAP_FAILED ? strerror(errno) : "mapped");
+    if (map != MAP_FAILED)
+        munmap(map, 4096);
+    expect_reopen("reopen of a memfd's read-only description", ro, true);
+    close(ro);
 }
 
 static void memfds(void) {
@@ -397,7 +574,7 @@ static void memfds(void) {
     if (copy_self_to(fd, "memfd")) {
         check(fcntl(fd, F_ADD_SEALS, RUNC_SEALS) == 0, "seal the memfd (%s)", strerror(errno));
         off_t end = lseek(fd, 0, SEEK_CUR);
-        if (expect_runs("fexecve of a sealed memfd", fd, "memfd:runc_clon", &o))
+        if (expect_runs("fexecve of a sealed memfd", fd, "memfd:runc_clon", RUNC_SEALS, &o))
             check(strcmp(o.exe, "/memfd:runc_cloned (deleted)") == 0,
                   "memfd: /proc/self/exe is /memfd:runc_cloned (deleted) (got %s)", o.exe);
         check(lseek(fd, 0, SEEK_CUR) == end, "memfd: the offset is still at the end");
@@ -408,15 +585,18 @@ static void memfds(void) {
     fd = memfd("py", MFD_CLOEXEC);
     check(fd >= 0, "memfd_create (%s)", strerror(errno));
     if (fd >= 0 && copy_self_to(fd, "memfd"))
-        expect_runs("fexecve of a memfd", fd, "memfd:py", &o);
+        expect_runs("fexecve of a memfd", fd, "memfd:py", F_SEAL_SEAL, &o);
     if (fd >= 0)
         close(fd);
 
     // A #! script in a memfd: the interpreter opens /dev/fd/<n>.
     fd = memfd("scr", 0);
     check(fd >= 0, "memfd_create (%s)", strerror(errno));
-    if (fd >= 0 && put_fd(fd, "memfd", "#!/bin/sh\nexit 6\n", 17)) {
+    if (fd >= 0 && put_fd(fd, "memfd", "#!/bin/sh\nexit 6\n", 17) &&
+            lseek(fd, 12, SEEK_SET) == 12) {
         expect_exit("fexecve of a #! memfd", fd, 6);
+        off_t at = lseek(fd, 0, SEEK_CUR);
+        check(at == 12, "fexecve of a #! memfd: the offset is still 12 (got %lld)", (long long) at);
         int ce = fcntl(fd, F_DUPFD_CLOEXEC, 0);
         expect_err("fexecve of a #! memfd, close-on-exec", ce, ENOENT);
         close(ce);
@@ -435,6 +615,8 @@ static void memfds(void) {
         if (fd >= 0)
             close(fd);
     }
+
+    memfd_reopen();
 }
 
 int main(int argc, char **argv) {

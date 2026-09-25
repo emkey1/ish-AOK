@@ -97,7 +97,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 21  // 21: the capability bounding set; 20: NX -- 64-bit guests return from signals through a [sigpage], and the personality; 19: seccomp mode and filters, dumpable; 18: a queued signal says whether it is a POSIX timer's own; 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 22  // 22: a memfd's identity and position; 21: the capability bounding set; 20: NX -- 64-bit guests return from signals through a [sigpage], and the personality; 19: seccomp mode and filters, dumpable; 18: a queued signal says whether it is a POSIX timer's own; 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -3394,6 +3394,11 @@ struct ckpt_restore_state {
     // built (ckpt_restore_pidfds).
     struct { struct fd *fd; int32_t pid; } *pidfds;
     uint32_t pidfd_count, pidfd_cap;
+    // memfd identity -> the first description restored of it, referenced, so
+    // every later description of the same memfd is made one of it rather than
+    // a copy (memfd_ckpt_new).
+    struct { uint64_t ident; struct fd *fd; } *memfds;
+    uint32_t memfd_count, memfd_cap;
     // Named FIFOs: the buffers already put back (one FIFO can be open through
     // several descriptors, each of which carried its bytes), and write-only
     // ends opened read-write until every task exists (ckpt_restore_fifos).
@@ -3837,8 +3842,31 @@ static struct fd *ckpt_rebuild_anon(struct ckpt_restore_state *st,
     }
     case CKPT_FD_INOTIFY:
         return inotify_ckpt_new(payload, len);
-    case CKPT_FD_MEMFD:
-        return memfd_ckpt_new(payload, len);
+    case CKPT_FD_MEMFD: {
+        uint64_t ident;
+        if (!memfd_ckpt_ident(payload, len, &ident))
+            return ERR_PTR(_EINVAL);
+        for (uint32_t i = 0; i < st->memfd_count; i++)
+            if (st->memfds[i].ident == ident)
+                return memfd_ckpt_new(payload, len, st->memfds[i].fd);
+        struct fd *memfd = memfd_ckpt_new(payload, len, NULL);
+        if (IS_ERR(memfd))
+            return memfd;
+        if (st->memfd_count == st->memfd_cap) {
+            uint32_t cap = st->memfd_cap ? st->memfd_cap * 2 : 8;
+            void *n = realloc(st->memfds, cap * sizeof(*st->memfds));
+            if (n == NULL) {
+                fd_close(memfd);
+                return ERR_PTR(_ENOMEM);
+            }
+            st->memfds = n;
+            st->memfd_cap = cap;
+        }
+        st->memfds[st->memfd_count].ident = ident;
+        st->memfds[st->memfd_count].fd = fd_retain(memfd);
+        st->memfd_count++;
+        return memfd;
+    }
     case CKPT_FD_PIDFD: {
         int32_t pid;
         if (len != sizeof(pid))
@@ -5972,6 +6000,9 @@ out:
         fd_close(st.pipes[i].rd);
         fd_close(st.pipes[i].wr);
     }
+    for (uint32_t i = 0; i < st.memfd_count; i++)
+        fd_close(st.memfds[i].fd);
+    free(st.memfds);
     free(st.by_id);
     free(st.pipes);
     free(st.sets);

@@ -135,3 +135,45 @@ Oracle-check every expectation on camd first (gcc and gcc -m32), add a regressio
 ```
 
 </details>
+
+## O_PATH opens of /proc magic links to a pathless file
+
+While giving memfds and unlinked files descriptions of their own, I found `open("/proc/self/fd/N" or "/proc/self/exe", O_PATH)` still walks the link's text (procfd_openat leaves O_PATH to path resolution): ENOENT for a memfd, the stale name's file for an unlinked one. This session would give O_PATH the same inode Linux does, measured on camd.
+
+<details><summary>Original chip prompt</summary>
+
+```text
+In iSH-AOK (/Users/mke/git/ish-AOK, branch `working`; follow the project memory: diff peer worktrees before starting, oracle on camd, positive controls, register tests in all places, stage explicit paths, push to origin/working and fast-forward the main checkout), make an O_PATH open (without O_NOFOLLOW) of /proc/<pid>/fd/N, /proc/<pid>/exe and their task/<tid> forms reach the file the magic link holds, as Linux does.
+
+Found 2026-09-25 with the pathless-reopen work (fs/generic.c: procfd_parse, procfd_resolve, procfd_openat, generic_reopen_pathless; fd_ops->reopen). procfd_openat returns NULL for O_PATH so that O_PATH|O_NOFOLLOW opens the link itself; plain O_PATH then falls to generic_openat_path, which walks the readlink text. For a memfd ("/memfd:x (deleted)") that is ENOENT; for an unlinked file it is whatever took the name since (see memory descriptor-path-is-a-stale-name). Measure on camd first (fstat of the O_PATH fd is the memfd's inode; fexecve and *at(fd, "", AT_EMPTY_PATH) work through it), then build an O_PATH description for the held file -- generic_reopen_pathless with the filesystem's reopen is one route, or the opath pseudo-fd -- and add cases to tests/manual/exec_fd_pathless.c. Verify on the five roots.
+```
+
+</details>
+
+## Keep /proc/<pid>/exe of a memfd image across a checkpoint
+
+An image started from a memfd saves its exe as the path "/memfd:name (deleted)", which restore cannot open, so the link is empty afterwards. This session would carry it by the memfd's checkpoint identity when that memfd is in the image.
+
+<details><summary>Original chip prompt</summary>
+
+```text
+In iSH-AOK (/Users/mke/git/ish-AOK, branch `working`; follow the project memory: diff peer worktrees before starting, oracle on camd, positive controls, register tests in all places, stage explicit paths, push to origin/working and fast-forward the main checkout), keep mm->exefile for an image exec'd from a memfd across a checkpoint save and restore.
+
+kernel/checkpoint.c records the exe as generic_getpath_backing(mm->exefile) and restore reopens it by path; for a memfd that path is "/memfd:name (deleted)", so the restored process has no exe (readlink /proc/self/exe fails, and open of it too). Since 2026-09-25 (CKPT_VERSION 22) a memfd description carries its identity (the state's inode number, memfd_ckpt_ident) and restore keeps st->memfds; if any descriptor in the image holds the same memfd, the exe can be recorded by that identity and restored with memfd_ckpt_new(..., same). Decide what to do when the memfd is held only as the exe (runc closes its copy after exec): carrying its contents costs up to CKPT_MEMFD_MAX. Test with tests/manual/checkpoint_anonfd.sh.
+```
+
+</details>
+
+## Make checkpoint_anonfd.sh wait for the guest
+
+It checkpoints 2 s after start; on build/alpine-arm64-test that is before the probe runs ("refused: there is no guest running"), before and after today's changes. This session would have the probe signal readiness and the harness wait for it.
+
+<details><summary>Original chip prompt</summary>
+
+```text
+In iSH-AOK (/Users/mke/git/ish-AOK, branch `working`; follow the project memory: diff peer worktrees before starting, oracle on camd, positive controls, register tests in all places, stage explicit paths, push to origin/working and fast-forward the main checkout), make tests/manual/checkpoint_anonfd.sh reliable on any root.
+
+It runs the probe with ISH_CHECKPOINT_AFTER="2:$WORK/img" and waits 10 s for the image. On build/alpine-arm64-test (and devuan-arm64-test under load) the fakefs root takes longer than 2 s to come up, so the save thread finds no task ("refused (-3) there is no guest running" in img.log) and the harness reports "FAIL: no image written"; the probe then runs to completion un-checkpointed. Seen 2026-09-25 with both the old and new binaries; with "3.5:" on devuan-arm64-test it worked. Have the probe write a ready marker to /realmnt once its descriptors are set up and before its sleep, have the script start the checkpoint only after that (a delay counted from the marker, or a longer probe sleep with the delay derived from it), and keep the kill-on-image behaviour.
+```
+
+</details>

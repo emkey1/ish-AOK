@@ -71,6 +71,13 @@ struct fd *generic_open_realroot(const char *path, int flags, int mode);
 // name now belongs to another file, or the path would not open. What such a
 // descriptor gets instead is the caller's to decide. See fs/generic.c.
 struct fd *generic_reopen_by_path(struct fd *fd, int flags);
+// A new description of the regular file `fd` holds, opened with `flags`,
+// without a path: through the filesystem's fd_ops->reopen, for the files
+// generic_reopen_by_path cannot reach. `check_access`: face the file's
+// permissions and the mount's read-only flag as an open(2) would; exec, which
+// has already asked its own question, does not. NULL when the filesystem has
+// no way to (the caller decides what then), an ERR_PTR when it refuses.
+struct fd *generic_reopen_pathless(struct fd *fd, int flags, bool check_access);
 // Is `path` -- a descriptor's own, from generic_getpath -- still a name of the
 // file the descriptor holds? Not once the file is unlinked: the path is then
 // the name it had, which another file may have taken. See fs/generic.c.

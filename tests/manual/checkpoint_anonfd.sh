@@ -24,7 +24,7 @@ kill -9 $saver 2>/dev/null || true; wait $saver 2>/dev/null || true
 out=$(ISH_REAL_MNT=$WORK ISH_RESTORE="$WORK/img" "$ISH" -f "$ROOT" < /dev/null 2>&1 || true)
 echo "$out" | sed 's/^/  /'
 fail=0
-for k in epoll eventfd signalfd timerfd inotify memfd pidfd pidfd-gone; do
+for k in epoll eventfd signalfd timerfd inotify memfd memfd-shared pidfd pidfd-gone; do
     echo "$out" | grep -q "^OK $k" || { echo "  FAIL    | $k did not work after the restore"; fail=1; }
 done
 [ $fail -eq 0 ] || { echo "FAIL"; exit 1; }

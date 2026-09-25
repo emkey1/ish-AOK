@@ -1285,6 +1285,20 @@ static int tmpfs_utime(struct mount *mount, const char *path, struct timespec at
     return 0;
 }
 
+// See fd_ops->reopen. Another description of the same file: its entry, which
+// keeps the inode, retained. The entry of an unlinked file is out of its
+// directory but alive while anything holds it.
+static struct fd *tmpfs_reopen(struct fd *fd, int UNUSED(flags)) {
+    struct fd *reopened = fd_create(&tmpfs_fdops);
+    if (reopened == NULL)
+        return ERR_PTR(_ENOMEM);
+    tmp_dirent_retain(fd->tmpfs.dirent);
+    reopened->tmpfs.dirent = fd->tmpfs.dirent;
+    reopened->tmpfs.dir_pos = NULL;
+    reopened->tmpfs.dots_pos = 0;
+    return reopened;
+}
+
 static int tmpfs_close(struct fd *fd) {
     // shouldn't need locking as this is the last reference to the fd
     struct tmp_inode *inode = fd->tmpfs.dirent->inode;
@@ -1525,11 +1539,26 @@ struct fifo_file *tmpfs_fd_fifo(struct fd *fd) {
     return inode->fifo;
 }
 
+// Linux's FMODE_READ and FMODE_WRITE: a description reads and writes only as
+// it was opened to, EBADF otherwise, before anything else is asked. realfs gets
+// this from the host descriptor, which is opened with the same access mode.
+// tmpfs never asked, so any file a user could open for reading was theirs to
+// write -- open(O_RDONLY) checks read permission, and a write through that
+// descriptor went straight into the file.
+static bool tmpfs_fd_readable(struct fd *fd) {
+    return (fd->flags & O_ACCMODE_) != O_WRONLY_;
+}
+static bool tmpfs_fd_writable(struct fd *fd) {
+    return (fd->flags & O_ACCMODE_) != O_RDONLY_;
+}
+
 static ssize_t tmpfs_read(struct fd *fd, void *buf, size_t bufsize) {
     ssize_t res;
     struct tmp_inode *inode = tmpfs_fd_inode(fd);
     if (S_ISFIFO(inode->stat.mode))
         return fifo_file_read(inode->fifo, fd, buf, bufsize);
+    if (!tmpfs_fd_readable(fd))
+        return _EBADF;
     lock(&inode->lock, 0);
     res = _EISDIR;
     if (S_ISDIR(inode->stat.mode))
@@ -1590,6 +1619,8 @@ static ssize_t tmpfs_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) 
     struct tmp_inode *inode = tmpfs_fd_inode(fd);
     if (S_ISFIFO(inode->stat.mode))
         return _ESPIPE;
+    if (!tmpfs_fd_readable(fd))
+        return _EBADF;
     if (off < 0)
         return _EINVAL;
     lock(&inode->lock, 0);
@@ -1627,6 +1658,8 @@ static ssize_t tmpfs_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_
     struct tmp_inode *inode = tmpfs_fd_inode(fd);
     if (S_ISFIFO(inode->stat.mode))
         return _ESPIPE;
+    if (!tmpfs_fd_writable(fd))
+        return _EBADF;
     if (off < 0)
         return _EINVAL;
     lock(&inode->lock, 0);
@@ -1749,6 +1782,8 @@ static ssize_t tmpfs_write(struct fd *fd, const void *buf, size_t bufsize) {
     struct tmp_inode *inode = tmpfs_fd_inode(fd);
     if (S_ISFIFO(inode->stat.mode))
         return fifo_file_write(inode->fifo, fd, buf, bufsize);
+    if (!tmpfs_fd_writable(fd))
+        return _EBADF;
     lock(&inode->lock, 0);
     res = _EISDIR;
     if (S_ISDIR(inode->stat.mode))
@@ -2451,4 +2486,5 @@ const struct fd_ops tmpfs_fdops = {
     .readdir = tmpfs_readdir,
     .telldir = tmpfs_telldir,
     .seekdir = tmpfs_seekdir,
+    .reopen = tmpfs_reopen,
 };

@@ -10,6 +10,13 @@
 // Each check exercises the descriptor, not just its presence: the epoll set
 // has to report the pipe that became readable, with the data it was given; the
 // inotify watch has to report under the number it was added with.
+//
+// memfd-shared: a second description of the same memfd, opened read-only
+// through /proc/self/fd, comes back as a description of the SAME memfd -- a
+// write through the first is read through the second -- each at its own
+// position, the second still read-only, and the memfd's size its contents'.
+// Each description used to come back as a memfd of its own, and every
+// restored memfd said it was empty and was read from its start.
 #define _GNU_SOURCE
 #include <fcntl.h>
 #include <signal.h>
@@ -64,6 +71,11 @@ int main(void) {
 
     int mfd = memfd_create("ckanon-memfd", 0);
     write(mfd, "memfd-payload", 13);
+    char mpath[64];
+    snprintf(mpath, sizeof(mpath), "/proc/self/fd/%d", mfd);
+    int mro = open(mpath, O_RDONLY);
+    char skip[5];
+    read(mro, skip, 5);                                  // mro at 5, mfd at 13
 
     pid_t child = fork();
     if (child == 0) {
@@ -146,6 +158,24 @@ int main(void) {
     snprintf(d, sizeof(d), "contents=%s link=%s", mb, lp);
     check("memfd", r == 13 && strcmp(mb, "memfd-payload") == 0 &&
                    strstr(lp, "ckanon-memfd") != NULL, d);
+
+    // The read-only second description: the same memfd, its own position.
+    struct stat mst = {0};
+    fstat(mfd, &mst);
+    off_t at_mfd = lseek(mfd, 0, SEEK_CUR), at_mro = lseek(mro, 0, SEEK_CUR);
+    int ro_mode = fcntl(mro, F_GETFL) & O_ACCMODE;
+    pwrite(mfd, "M", 1, 0);
+    char seen = 0;
+    ssize_t sr = pread(mro, &seen, 1, 0);
+    errno = 0;
+    int ro_write = (int) write(mro, "x", 1);
+    int ro_errno = errno;
+    snprintf(d, sizeof(d), "size=%lld offsets=%lld,%lld mode=%#x shared=%c/%zd write=%d/%d",
+             (long long) mst.st_size, (long long) at_mfd, (long long) at_mro, ro_mode,
+             seen ? seen : '?', sr, ro_write, ro_errno);
+    check("memfd-shared", mro >= 0 && mst.st_size == 13 && at_mfd == 13 && at_mro == 5 &&
+                          ro_mode == O_RDONLY && sr == 1 && seen == 'M' &&
+                          ro_write < 0 && ro_errno == EBADF, d);
 
     // pidfd: it names the child, which still exists, and becomes readable
     // when the child exits.

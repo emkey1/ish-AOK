@@ -153,6 +153,7 @@ taskstats_genl.c
 tmpfs_mmap.c
 tmpfs_statfs.c
 tmpfs_append.c
+tmpfs_accmode.c
 memfd_mmap.c
 mount_stdev.c
 mount_cross_dev.c

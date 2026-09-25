@@ -1775,15 +1775,20 @@ static int format_exec(struct fd *fd, const char *file, struct exec_args argv, s
 // and Python's os.fexecve is this call. And the name an unlinked file had can
 // belong to another file by now, which is what this used to run.
 //
-// So such a file runs from the caller's description itself. The loaders read
-// it only at offsets of their own (exec_read_at), so the caller's position is
-// where it left it, as it is on Linux. One thing about the sharing shows: a
-// flock or OFD lock taken through the caller's description is held for as
-// long as the new image runs, where Linux's own description would let it go
-// with the caller's last descriptor. An O_PATH description is readable underneath -- the guest
-// may not read it, the kernel may -- but a write-only one is not, and that one
-// Linux refuses anyway: a file open for writing is never executed, and this
-// one is, by this very descriptor.
+// So such a file gets a description from its filesystem instead
+// (generic_reopen_pathless: a memfd's state, a tmpfs file's entry, a host
+// file's descriptor duplicated), with no access question asked -- exec has
+// asked its own. Its position is its own, so /proc/self/exe opened from it
+// reads the file from the start, and nothing the caller holds -- a flock or
+// OFD lock taken through its description -- is held for the new image. A
+// write-only descriptor is not readable underneath, and Linux refuses that one
+// anyway: a file open for writing is never executed, and this one is, by this
+// very descriptor.
+//
+// A filesystem with no such description to give runs the file from the
+// caller's description itself. The loaders read it only at offsets of their
+// own (exec_read_at), so the caller's position is where it left it; /proc's
+// exe link never hands this one out.
 static struct fd *open_exec_descriptor(struct fd *at, int open_flags) {
     struct fd *fd = generic_reopen_by_path(at, open_flags);
     if (fd != NULL)
@@ -1792,6 +1797,9 @@ static struct fd *open_exec_descriptor(struct fd *at, int open_flags) {
         return ERR_PTR(_ENOENT);
     if ((fd_getflags(at) & O_ACCMODE_) == O_WRONLY_)
         return ERR_PTR(_ETXTBSY);
+    fd = generic_reopen_pathless(at, open_flags, false);
+    if (fd != NULL)
+        return fd;
     return fd_retain(at);
 }
 

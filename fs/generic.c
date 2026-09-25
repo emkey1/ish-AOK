@@ -51,12 +51,58 @@ static bool procfd_accmode_ok(int have, int want) {
     return have == want || have == O_RDWR_;
 }
 
-// Resolves path_raw down to a /proc/PID/fd/N entry, following symlinks by
-// hand rather than through path_normalize's N_SYMLINK_FOLLOW, and returns a
-// retained reference to the underlying struct fd if so. False (nothing
-// retained) when path_raw doesn't ultimately name such an entry. True with
-// *err_out set (and nothing retained) when it does, but the caller may not
-// look at that process's files.
+// A procfs-relative path naming a magic link that holds a file: "/PID/fd/N"
+// or "/PID/exe", each also under "/PID/task/TID" (where /proc/thread-self
+// leads), which is the thread's own. *pid is the task to ask: TID when there
+// is one.
+static bool procfd_parse(const char *path, int *pid, int *fd_no, bool *exe) {
+    int n = 0, tid = 0;
+    if (sscanf(path, "/%d%n", pid, &n) != 1 || n == 0)
+        return false;
+    path += n;
+    n = 0;
+    if (sscanf(path, "/task/%d%n", &tid, &n) == 1 && n > 0) {
+        *pid = tid;
+        path += n;
+    }
+    n = 0;
+    if (sscanf(path, "/fd/%d%n", fd_no, &n) == 1 && n > 0 && path[n] == '\0') {
+        *exe = false;
+        return true;
+    }
+    if (strcmp(path, "/exe") == 0) {
+        *exe = true;
+        return true;
+    }
+    return false;
+}
+
+// The executable a process is running (mm->exefile), retained; NULL if none.
+static struct fd *procfd_task_exe_retain(struct task *task) {
+    struct fd *exe = NULL;
+    if (!task_lock_unless_exiting(task))
+        return NULL;
+    if (!task->exiting && task->mm != NULL && task->mm->exefile != NULL)
+        exe = fd_retain(task->mm->exefile);
+    unlock(&task->general_lock);
+    return exe;
+}
+
+// Resolves path_raw down to a /proc/PID/fd/N entry, or to /proc/PID/exe,
+// following symlinks by hand rather than through path_normalize's
+// N_SYMLINK_FOLLOW, and returns a retained reference to the underlying struct
+// fd if so -- for exe, the process's mm->exefile. False (nothing retained)
+// when path_raw doesn't ultimately name such an entry. True with *err_out set
+// (and nothing retained) when it does, but the caller may not look at that
+// process's files. *is_exe, when non-NULL, says which of the two it was.
+//
+// exe is here for the same reason fd/N is: it is a magic link, and walking its
+// text reaches the file only while that text still names it. It does not for
+// an image started from a memfd ("/memfd:name (deleted)" names nothing) or an
+// unlinked file (whose name another file may have taken since), and runc
+// opens /proc/self/exe of exactly such an image to ask F_GET_SEALS
+// (is_self_cloned). Linux's proc_exe_link is gated like fd/N:
+// ptrace_may_access(PTRACE_MODE_READ_FSCREDS).
 //
 // A single path_normalize(..., N_SYMLINK_NOFOLLOW) call is not enough: it
 // leaves the RAW INPUT's own final component unresolved, which is exactly
@@ -72,9 +118,12 @@ static bool procfd_accmode_ok(int have, int want) {
 // Chase one hop at a time instead, re-checking the procfs-fd/N shape
 // after each, so any number of symlink hops on the way in still lands
 // correctly once they bottom out at a real fd/N entry.
-static bool procfd_resolve(struct fd *at, const char *path_raw, struct fd **fd_out, int *err_out) {
+static bool procfd_resolve(struct fd *at, const char *path_raw, struct fd **fd_out, int *err_out,
+                           bool *is_exe) {
     *fd_out = NULL;
     *err_out = 0;
+    if (is_exe != NULL)
+        *is_exe = false;
     char path[MAX_PATH];
     strncpy(path, path_raw, sizeof(path) - 1);
     path[sizeof(path) - 1] = '\0';
@@ -92,11 +141,9 @@ static bool procfd_resolve(struct fd *at, const char *path_raw, struct fd **fd_o
         struct mount *mount = find_mount_and_trim_path(normalized);
         if (mount == NULL)
             return false;
-        bool is_procfs = mount->fs == &procfs;
-        int pid = 0, fd_no = 0, n = 0;
-        bool matched = is_procfs &&
-            sscanf(normalized, "/%d/fd/%d%n", &pid, &fd_no, &n) == 2 && normalized[n] == '\0';
-        if (matched) {
+        int pid = 0, fd_no = 0;
+        bool exe = false;
+        if (mount->fs == &procfs && procfd_parse(normalized, &pid, &fd_no, &exe)) {
             mount_release(mount);
             struct task *task = pid_get_task_ref(pid);
             if (task == NULL)
@@ -111,6 +158,16 @@ static bool procfd_resolve(struct fd *at, const char *path_raw, struct fd **fd_o
             if (!task_ptrace_may_access(task, PTRACE_MODE_READ_ | PTRACE_MODE_FSCREDS_)) {
                 task_ref_cnt_mod(task, -1);
                 *err_out = _EACCES;
+                return true;
+            }
+            if (exe) {
+                struct fd *exefile = procfd_task_exe_retain(task);
+                task_ref_cnt_mod(task, -1);
+                if (exefile == NULL)
+                    return false;
+                if (is_exe != NULL)
+                    *is_exe = true;
+                *fd_out = exefile;
                 return true;
             }
             struct fdtable *files = procfd_task_files_retain(task);
@@ -162,7 +219,8 @@ static struct fd *procfd_openat(struct fd *at, const char *path_raw, int flags) 
         return NULL;
     struct fd *fd;
     int err;
-    if (!procfd_resolve(at, path_raw, &fd, &err))
+    bool exe;
+    if (!procfd_resolve(at, path_raw, &fd, &err, &exe))
         return NULL;
     if (err < 0)
         return ERR_PTR(err);
@@ -170,19 +228,30 @@ static struct fd *procfd_openat(struct fd *at, const char *path_raw, int flags) 
     // Linux procfd opens give regular files a fresh file position and the
     // CALLER's flags, which shell script loaders rely on when they execute
     // /proc/self/fd/N after the parent has already inspected the script FD.
-    // Prefer a reopen for normal file-backed descriptors.
+    // Prefer a reopen for normal file-backed descriptors: by path while the
+    // path still names the file, and otherwise -- a memfd, an unlinked file --
+    // through the filesystem, which makes a description of its own for it.
     struct fd *reopened = procfd_reopen_regular(fd, flags);
+    if (reopened == NULL && fd->mount != NULL && fd->mount->fs != &procfs)
+        reopened = generic_reopen_pathless(fd, flags, true);
     if (reopened != NULL) {
         fd_close(fd);
         return reopened;
     }
-    // Deleted or anonymous regular files may not have a stable path we can
-    // reopen. We cannot cheaply create a distinct open-file description here,
-    // but resetting the retained descriptor keeps shell interpreters from
-    // starting mid-script after apk has read the shebang. Never hand back a
-    // descriptor WEAKER than the caller asked for, though -- a silently
-    // read-only "O_RDWR" fd fails much later and much more confusingly than
-    // an up-front error (see procfd_reopen_regular's machine-id war story).
+    // A running image is never handed out: the description behind exe can be
+    // the very one the process that exec'd it still holds (exec shares it
+    // when nothing else can be had; kernel/exec.c open_exec_descriptor).
+    if (exe) {
+        fd_close(fd);
+        return ERR_PTR(_ENOENT);
+    }
+    // What is left has no description of its own to give: not a regular file,
+    // or one on a filesystem that cannot make one. Resetting the retained
+    // descriptor keeps shell interpreters from starting mid-script after apk
+    // has read the shebang. Never hand back a descriptor WEAKER than the
+    // caller asked for, though -- a silently read-only "O_RDWR" fd fails much
+    // later and much more confusingly than an up-front error (see
+    // procfd_reopen_regular's machine-id war story).
     if (!procfd_accmode_ok(fd_getflags(fd), flags)) {
         fd_close(fd);
         return ERR_PTR(_EACCES);
@@ -206,7 +275,7 @@ static struct fd *procfd_openat(struct fd *at, const char *path_raw, int flags) 
 bool procfd_statat(struct fd *at, const char *path_raw, struct statbuf *stat, int *err_out) {
     struct fd *fd;
     int err;
-    if (!procfd_resolve(at, path_raw, &fd, &err))
+    if (!procfd_resolve(at, path_raw, &fd, &err, NULL))
         return false;
     if (err < 0) {
         *err_out = err;
@@ -231,7 +300,7 @@ int generic_xattr_lookup(struct fd *at, const char *path_raw, bool follow,
     if (follow) {
         struct fd *fd;
         int err;
-        if (procfd_resolve(at, path_raw, &fd, &err)) {
+        if (procfd_resolve(at, path_raw, &fd, &err, NULL)) {
             if (err < 0)
                 return err;
             err = generic_fstat(fd, stat);
@@ -1002,6 +1071,71 @@ struct fd *generic_reopen_by_path(struct fd *fd, int flags) {
     if (generic_fstat(reopened, &got) < 0 || !same_file(&got, &held)) {
         fd_close(reopened);
         return NULL;
+    }
+    return reopened;
+}
+
+// See kernel/fs.h. What generic_openat_path does for a file it has found by
+// name, done for one it has in hand: the open's questions first -- the
+// file's permissions for the access asked (write too for O_TRUNC, which
+// empties it), a read-only mount -- then the filesystem's new description of
+// it, given the mount, inode and flags every description has, then O_TRUNC.
+//
+// Linux gets this by opening the inode behind a /proc/<pid>/fd/N or exe magic
+// link. Without it the only description a file with no path had was the one
+// it was reached through: /proc/self/fd/N handed out the caller's own,
+// rewound, so whoever opened it moved the caller's offset, and could not open
+// it for any access the caller's lacked; /proc/self/exe of an image started
+// from a memfd or an unlinked file did not open at all.
+struct fd *generic_reopen_pathless(struct fd *fd, int flags, bool check_access) {
+    if (fd->ops == NULL || fd->ops->reopen == NULL || fd->mount == NULL || !S_ISREG(fd->type))
+        return NULL;
+    flags &= ~(O_CREAT_ | O_EXCL_ | O_NOFOLLOW_ | O_CLOEXEC_);
+    if (flags & O_DIRECTORY_)
+        return ERR_PTR(_ENOTDIR);
+    if (check_access) {
+        struct statbuf stat;
+        int err = generic_fstat(fd, &stat);
+        if (err < 0)
+            return ERR_PTR(err);
+        bool writes = (flags & (O_WRONLY_ | O_RDWR_ | O_TRUNC_)) != 0;
+        if (writes && mount_flags_readonly(fd->mount_flags))
+            return ERR_PTR(_EROFS);
+        int accmode = AC_R;
+        if (flags & O_RDWR_)
+            accmode = AC_R | AC_W;
+        else if (flags & O_WRONLY_)
+            accmode = AC_W;
+        if (flags & O_TRUNC_)
+            accmode |= AC_W;
+        err = access_check(&stat, accmode);
+        if (err < 0)
+            return ERR_PTR(err);
+    }
+
+    struct fd *reopened = fd->ops->reopen(fd, flags);
+    if (IS_ERR(reopened))
+        return reopened;
+    mount_retain(fd->mount);
+    reopened->mount = fd->mount;
+    reopened->mount_flags = fd->mount_flags;
+    reopened->mnt_id = fd->mnt_id;
+    reopened->mnt_root = fd->mnt_root;
+    if (fd->bind_mount != NULL)
+        mount_retain(fd->bind_mount);
+    reopened->bind_mount = fd->bind_mount;
+    if (fd->inode != NULL)
+        inode_retain(fd->inode);
+    reopened->inode = fd->inode;
+    reopened->type = fd->type;
+    reopened->flags = flags & ~O_TRUNC_;
+
+    if ((flags & O_TRUNC_) && reopened->mount->fs->fsetattr != NULL) {
+        int err = reopened->mount->fs->fsetattr(reopened, make_attr(size, 0));
+        if (err < 0) {
+            fd_close(reopened);
+            return ERR_PTR(err);
+        }
     }
     return reopened;
 }

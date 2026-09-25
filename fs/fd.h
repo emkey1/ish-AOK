@@ -477,6 +477,15 @@ struct fd {
     // O_PATH pseudo-descriptors too. At the end, for the same reason as
     // mnt_id.
     struct mount *bind_mount;
+
+    // realfs/fakefs: this description's file position is `offset`, not the
+    // host descriptor's, and its access mode and status flags are `flags`,
+    // not the host's. Set on a description realfs_reopen made of a file no
+    // path reaches: Darwin cannot open an unlinked file afresh, so its host
+    // descriptor is a dup of the one it was made from, sharing that one's
+    // position and flags, and every read, write and seek goes by position
+    // instead. At the end, for the same reason as mnt_id.
+    bool realfs_own_offset;
 };
 
 typedef sdword_t fd_t;
@@ -623,6 +632,15 @@ struct fd_ops {
     // restarts one with SO_RCVTIMEO/SO_SNDTIMEO armed, and only the op knows
     // whether the wait that was interrupted had a timeout.
     bool decides_restart;
+
+    // A new description of the regular file `fd` holds, for a file no path
+    // reaches -- a memfd, an unlinked file -- where Linux opens the inode
+    // afresh and AOK has no name to open it by. Only the filesystem's own
+    // state is set up here, from `fd`'s; the rest is generic_reopen_pathless's
+    // (fs/generic.c), which calls this. `flags` is the open's: the access mode
+    // is all an implementation needs to look at, to refuse one it cannot give
+    // (EACCES). Optional; NULL means such a file has no second description.
+    struct fd *(*reopen)(struct fd *fd, int flags);
 };
 
 struct fdtable {

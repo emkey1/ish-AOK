@@ -90,11 +90,18 @@ void pidfd_ckpt_bind(struct fd *fd, struct task *task);
 
 // ---- memfd ----------------------------------------------------------------
 //
-// Name, seals and contents. A memfd whose contents are larger than
-// `max_contents` is not described (NULL): the caller says so rather than
-// carrying half of it.
+// Name, seals and contents, and the description's own position. A memfd
+// whose contents are larger than `max_contents` is not described (NULL): the
+// caller says so rather than carrying half of it.
+//
+// Several descriptions can be of one memfd (a /proc/<pid>/fd reopen makes
+// another), and each is described with the whole memfd, under an identity
+// they share: memfd_ckpt_ident. The first one restored builds the memfd; each
+// later one is given as `same`, and is made a description of that one's memfd,
+// whose contents are already back.
 bool memfd_fd_is(struct fd *fd);
 char *memfd_ckpt_describe(struct fd *fd, size_t *len, uint64_t max_contents);
-struct fd *memfd_ckpt_new(const char *blob, size_t len);
+bool memfd_ckpt_ident(const char *blob, size_t len, uint64_t *ident);
+struct fd *memfd_ckpt_new(const char *blob, size_t len, struct fd *same);
 
 #endif

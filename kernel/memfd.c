@@ -32,11 +32,21 @@
 // are host mmaps of that file (host_fd_mmap, same machinery as realfs/tmpfs),
 // so the host kernel provides MAP_SHARED write-back, mmap<->read/write
 // coherence, MAP_PRIVATE COW, and ftruncate interaction. File I/O goes through
-// pread/pwrite/ftruncate on the same fd. The logical size is fd->stat.size,
-// kept in sync with the host file's size (guarded by lock).
+// pread/pwrite/ftruncate on the same fd. The logical size is stat.size, kept
+// in sync with the host file's size (guarded by lock).
+//
+// This is the memfd's inode: every description of it shares one, and it goes
+// with the last. memfd_create makes the first description; opening
+// /proc/<pid>/fd/N of it, or exec of it, makes more (memfd_reopen), each with
+// its own position and access mode, as Linux's are separate files on one
+// shmem inode. The stat lived in the struct fd, which is per description, so
+// a second one could not have shared it.
 struct memfd_state {
+    atomic_uint refcount;
     char *name;
     int host_fd;
+    // The inode's attributes: mode, owner, size. Guarded by lock.
+    struct statbuf stat;
     int seals; // F_SEAL_*, guarded by lock; F_SEAL_SEAL_ set = sealing forbidden
     // How many live SHARED mappings of this memfd exist. F_SEAL_WRITE is
     // refused with EBUSY while it is nonzero -- sealing against writes while
@@ -80,19 +90,39 @@ static struct memfd_state *memfd_state_get(struct fd *fd) {
     return fd->fs_data;
 }
 
+static void memfd_state_release(struct memfd_state *state) {
+    if (--state->refcount != 0)
+        return;
+    close(state->host_fd);
+    free(state->name);
+    free(state);
+}
+
+// Linux's FMODE_READ/FMODE_WRITE: a description reads and writes only as it
+// was opened to. memfd_create's is O_RDWR; one opened through /proc is what
+// its open asked for.
+static bool memfd_readable(struct fd *fd) {
+    return (fd->flags & O_ACCMODE_) != O_WRONLY_;
+}
+static bool memfd_writable(struct fd *fd) {
+    return (fd->flags & O_ACCMODE_) != O_RDONLY_;
+}
+
 static int memfd_resize_locked(struct fd *fd, size_t new_size) {
     struct memfd_state *state = memfd_state_get(fd);
     // ftruncate keeps live guest mappings coherent, and the host zero-fills
     // growth.
     if (ftruncate(state->host_fd, new_size) < 0)
         return errno_map();
-    fd->stat.size = new_size;
+    state->stat.size = new_size;
     return 0;
 }
 
 static ssize_t memfd_pread(struct fd *fd, void *buf, size_t bufsize, off_t off) {
     struct memfd_state *state = memfd_state_get(fd);
-    // The host file's size always matches fd->stat.size, so the host clamps
+    if (!memfd_readable(fd))
+        return _EBADF;
+    // The host file's size always matches stat.size, so the host clamps
     // reads at EOF (and returns 0 past it) exactly like the guest expects.
     ssize_t n = pread(state->host_fd, buf, bufsize, off);
     if (n < 0)
@@ -109,9 +139,11 @@ static ssize_t memfd_read(struct fd *fd, void *buf, size_t bufsize) {
 
 static ssize_t memfd_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_t off) {
     struct memfd_state *state = memfd_state_get(fd);
+    if (!memfd_writable(fd))
+        return _EBADF;
     lock(&state->lock, 0);
     if (fd->flags & O_APPEND_)
-        off = fd->stat.size;
+        off = state->stat.size;
     if (off < 0) {
         unlock(&state->lock);
         return _EINVAL;
@@ -126,7 +158,7 @@ static ssize_t memfd_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_
         unlock(&state->lock);
         return _EPERM;
     }
-    if ((state->seals & F_SEAL_GROW_) && (qword_t) off + bufsize > fd->stat.size) {
+    if ((state->seals & F_SEAL_GROW_) && (qword_t) off + bufsize > state->stat.size) {
         unlock(&state->lock);
         return _EPERM;
     }
@@ -135,8 +167,8 @@ static ssize_t memfd_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_
         unlock(&state->lock);
         return errno_map();
     }
-    if (fd->stat.size < (qword_t) off + n)
-        fd->stat.size = off + n;
+    if (state->stat.size < (qword_t) off + n)
+        state->stat.size = off + n;
     unlock(&state->lock);
     return n;
 }
@@ -147,7 +179,7 @@ static ssize_t memfd_write(struct fd *fd, const void *buf, size_t bufsize) {
         struct memfd_state *state = memfd_state_get(fd);
         lock(&state->lock, 0);
         if (fd->flags & O_APPEND_)
-            fd->offset = fd->stat.size;
+            fd->offset = state->stat.size;
         else
             fd->offset += res;
         unlock(&state->lock);
@@ -158,7 +190,7 @@ static ssize_t memfd_write(struct fd *fd, const void *buf, size_t bufsize) {
 static off_t_ memfd_lseek(struct fd *fd, off_t_ off, int whence) {
     struct memfd_state *state = memfd_state_get(fd);
     lock(&state->lock, 0);
-    qword_t size = fd->stat.size;
+    qword_t size = state->stat.size;
     unlock(&state->lock);
     int err = generic_seek(fd, off, whence, size);
     if (err < 0)
@@ -168,10 +200,18 @@ static off_t_ memfd_lseek(struct fd *fd, off_t_ off, int whence) {
 
 static int memfd_mmap(struct fd *fd, struct mem *mem, page_t start, pages_t pages, off_t offset, int prot, int flags) {
     struct memfd_state *state = memfd_state_get(fd);
-    // No access-mode checks: a memfd is always O_RDWR (Linux: F_GETFL reports
-    // O_RDWR), so every prot/flags combination is permitted. Linux (verified)
-    // even allows mapping past EOF (e.g. a zero-size memfd) — access faults,
-    // but the mmap itself succeeds — which the host mmap matches.
+    // Linux's mmap access checks: the description must be readable for any
+    // mapping, and writable too for a writable shared one. memfd_create's is
+    // O_RDWR (F_GETFL says so), so they refuse nothing there; one opened
+    // read-only through /proc/<pid>/fd is another matter. The host file is
+    // always O_RDWR underneath, so this is the only place they can be asked.
+    // Linux (verified) even allows mapping past EOF (e.g. a zero-size memfd)
+    // — access faults, but the mmap itself succeeds — which the host mmap
+    // matches.
+    if (!memfd_readable(fd))
+        return _EACCES;
+    if ((flags & MMAP_SHARED) && (prot & P_WRITE) && !memfd_writable(fd))
+        return _EACCES;
     // Linux (verified): a file offset that isn't page-aligned is EINVAL.
     if (offset % PAGE_SIZE != 0)
         return _EINVAL;
@@ -217,12 +257,22 @@ static int memfd_poll(struct fd *UNUSED(fd)) {
 }
 
 static int memfd_close(struct fd *fd) {
-    struct memfd_state *state = memfd_state_get(fd);
-    close(state->host_fd);
-    free(state->name);
-    free(state);
+    memfd_state_release(memfd_state_get(fd));
     fd->fs_data = NULL;
     return 0;
+}
+
+// See fd_ops->reopen. Another description of the same memfd: shared state,
+// its own position; generic_reopen_pathless gives it the access mode asked
+// for, which the file's mode allows as any open's does (0777, or 0666).
+static struct fd *memfd_reopen(struct fd *fd, int UNUSED(flags)) {
+    struct memfd_state *state = memfd_state_get(fd);
+    struct fd *reopened = fd_create(&memfd_ops);
+    if (reopened == NULL)
+        return ERR_PTR(_ENOMEM);
+    state->refcount++;
+    reopened->fs_data = state;
+    return reopened;
 }
 
 static int memfd_fsync(struct fd *UNUSED(fd)) {
@@ -232,7 +282,7 @@ static int memfd_fsync(struct fd *UNUSED(fd)) {
 static int memfd_fstat(struct fd *fd, struct statbuf *stat) {
     struct memfd_state *state = memfd_state_get(fd);
     lock(&state->lock, 0);
-    *stat = fd->stat;
+    *stat = state->stat;
     unlock(&state->lock);
     return 0;
 }
@@ -243,22 +293,22 @@ static int memfd_fsetattr(struct fd *fd, struct attr attr) {
     int err = 0;
     switch (attr.type) {
         case attr_uid:
-            fd->stat.uid = attr.uid;
+            state->stat.uid = attr.uid;
             break;
         case attr_gid:
-            fd->stat.gid = attr.gid;
+            state->stat.gid = attr.gid;
             break;
         case attr_mode:
-            fd->stat.mode = (fd->stat.mode & S_IFMT) | (attr.mode & ~S_IFMT);
+            state->stat.mode = (state->stat.mode & S_IFMT) | (attr.mode & ~S_IFMT);
             break;
         case attr_size:
             if (attr.size < 0)
                 err = _EINVAL;
             // Linux: ftruncate on a sealed memfd is EPERM in the offending
             // direction (shrink under F_SEAL_SHRINK, grow under F_SEAL_GROW).
-            else if ((qword_t) attr.size < fd->stat.size && (state->seals & F_SEAL_SHRINK_))
+            else if ((qword_t) attr.size < state->stat.size && (state->seals & F_SEAL_SHRINK_))
                 err = _EPERM;
-            else if ((qword_t) attr.size > fd->stat.size && (state->seals & F_SEAL_GROW_))
+            else if ((qword_t) attr.size > state->stat.size && (state->seals & F_SEAL_GROW_))
                 err = _EPERM;
             else
                 err = memfd_resize_locked(fd, attr.size);
@@ -288,6 +338,7 @@ static struct fd_ops memfd_ops = {
     .poll = memfd_poll,
     .fsync = memfd_fsync,
     .close = memfd_close,
+    .reopen = memfd_reopen,
 };
 
 // fcntl(F_ADD_SEALS/F_GET_SEALS), dispatched from sys_fcntl. Only memfds
@@ -295,6 +346,10 @@ static struct fd_ops memfd_ops = {
 int_t memfd_add_seals(struct fd *fd, uint_t arg) {
     if (fd->ops != &memfd_ops)
         return _EINVAL;
+    // Linux's memfd_add_seals: only through a description open for writing,
+    // and that is asked before the seals are.
+    if (!memfd_writable(fd))
+        return _EPERM;
     if (arg & ~MEMFD_ALL_SEALS_)
         return _EINVAL;
     struct memfd_state *state = memfd_state_get(fd);
@@ -377,6 +432,12 @@ int_t sys_memfd_create_guest(guest_addr_t name_addr, uint_t flags) {
     else if (!(flags & MFD_ALLOW_SEALING_))
         state->seals = F_SEAL_SEAL_;
     lock_init(&state->lock, "memfd_state\0");
+    state->refcount = 1;
+    // Linux (verified): mode 0777 (0666 under MFD_NOEXEC_SEAL) and nlink 0.
+    state->stat.inode = memfd_next_inode++;
+    state->stat.mode = S_IFREG | ((flags & MFD_NOEXEC_SEAL_) ? 0666 : 0777);
+    state->stat.uid = current->euid;
+    state->stat.gid = current->egid;
 
     struct fd *fd = fd_create(&memfd_ops);
     if (fd == NULL) {
@@ -388,14 +449,8 @@ int_t sys_memfd_create_guest(guest_addr_t name_addr, uint_t flags) {
     mount_retain(&memfd_mount);
     fd->mount = &memfd_mount;
     fd->type = S_IFREG;
-    // Linux (verified): a memfd is O_RDWR (F_GETFL) with mode 0777 (0666 under
-    // MFD_NOEXEC_SEAL) and nlink 0.
+    // Linux (verified): memfd_create's description is O_RDWR (F_GETFL).
     fd->flags = O_RDWR_;
-    fd->stat = (struct statbuf) {};
-    fd->stat.inode = memfd_next_inode++;
-    fd->stat.mode = S_IFREG | ((flags & MFD_NOEXEC_SEAL_) ? 0666 : 0777);
-    fd->stat.uid = current->euid;
-    fd->stat.gid = current->egid;
     fd->fs_data = state;
     return f_install(fd, (flags & MFD_CLOEXEC_) ? O_CLOEXEC_ : 0);
 }
@@ -425,8 +480,13 @@ static void ckpt_blob_get(struct ckpt_blob_rd *r, void *out, size_t n) {
 
 // ---- checkpoint (kernel/anonfd_ckpt.h) ------------------------------------
 //
+//   uint64 ident, uint64 offset,
 //   uint32 seals, uint32 mode, uint32 uid, uint32 gid,
 //   uint32 name_len, name, uint64 size, contents
+//
+// ident is the memfd's inode number, which every description of it shares and
+// no other memfd in the image has. offset is this description's position: it
+// was not carried, so a restored memfd was read and written from its start.
 
 bool memfd_fd_is(struct fd *fd) {
     return fd != NULL && fd->ops == &memfd_ops;
@@ -440,10 +500,14 @@ char *memfd_ckpt_describe(struct fd *fd, size_t *len, uint64_t max_contents) {
     struct ckpt_blob b = {0};
     lock(&state->lock, 0);
     uint32_t seals = (uint32_t) state->seals;
+    uint32_t mode = state->stat.mode, uid = state->stat.uid, gid = state->stat.gid;
+    uint64_t ident = state->stat.inode;
     unlock(&state->lock);
-    uint32_t mode = fd->stat.mode, uid = fd->stat.uid, gid = fd->stat.gid;
+    uint64_t offset = fd->offset;
     uint32_t nlen = (uint32_t) strlen(state->name);
     uint64_t size = (uint64_t) st.st_size;
+    ckpt_blob_put(&b, &ident, sizeof(ident));
+    ckpt_blob_put(&b, &offset, sizeof(offset));
     ckpt_blob_put(&b, &seals, sizeof(seals));
     ckpt_blob_put(&b, &mode, sizeof(mode));
     ckpt_blob_put(&b, &uid, sizeof(uid));
@@ -482,9 +546,33 @@ char *memfd_ckpt_describe(struct fd *fd, size_t *len, uint64_t max_contents) {
     return b.buf;
 }
 
-struct fd *memfd_ckpt_new(const char *blob, size_t len) {
+bool memfd_ckpt_ident(const char *blob, size_t len, uint64_t *ident) {
     struct ckpt_blob_rd r = {.p = blob, .left = len};
+    ckpt_blob_get(&r, ident, sizeof(*ident));
+    return !r.bad;
+}
+
+struct fd *memfd_ckpt_new(const char *blob, size_t len, struct fd *same) {
+    struct ckpt_blob_rd r = {.p = blob, .left = len};
+    uint64_t ident, offset;
     uint32_t seals, mode, uid, gid, nlen;
+    ckpt_blob_get(&r, &ident, sizeof(ident));
+    ckpt_blob_get(&r, &offset, sizeof(offset));
+    if (r.bad)
+        return ERR_PTR(_EINVAL);
+    if (same != NULL) {
+        if (!memfd_fd_is(same))
+            return ERR_PTR(_EINVAL);
+        struct fd *fd = memfd_reopen(same, O_RDWR_);
+        if (IS_ERR(fd))
+            return fd;
+        mount_retain(&memfd_mount);
+        fd->mount = &memfd_mount;
+        fd->type = S_IFREG;
+        fd->flags = O_RDWR_;
+        fd->offset = offset;
+        return fd;
+    }
     ckpt_blob_get(&r, &seals, sizeof(seals));
     ckpt_blob_get(&r, &mode, sizeof(mode));
     ckpt_blob_get(&r, &uid, sizeof(uid));
@@ -529,6 +617,14 @@ struct fd *memfd_ckpt_new(const char *blob, size_t len) {
     }
     state->seals = (int) seals;
     lock_init(&state->lock, "memfd_state\0");
+    state->refcount = 1;
+    state->stat.inode = memfd_next_inode++;
+    state->stat.mode = mode;
+    state->stat.uid = uid;
+    state->stat.gid = gid;
+    // The size the contents just gave the host file. It was left 0, so a
+    // restored memfd's fstat said it was empty and SEEK_END went to 0.
+    state->stat.size = size;
     struct fd *fd = fd_create(&memfd_ops);
     if (fd == NULL) {
         close(state->host_fd);
@@ -540,11 +636,7 @@ struct fd *memfd_ckpt_new(const char *blob, size_t len) {
     fd->mount = &memfd_mount;
     fd->type = S_IFREG;
     fd->flags = O_RDWR_;
-    fd->stat = (struct statbuf) {};
-    fd->stat.inode = memfd_next_inode++;
-    fd->stat.mode = mode;
-    fd->stat.uid = uid;
-    fd->stat.gid = gid;
+    fd->offset = offset;
     fd->fs_data = state;
     return fd;
 }
