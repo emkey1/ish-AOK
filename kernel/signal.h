@@ -90,6 +90,7 @@ struct sigaction_ {
 #define TRAP_BRKPT_ 1
 #define TRAP_TRACE_ 2
 #define ILL_ILLOPC_ 1
+#define ILL_ILLOPN_ 2
 #define FPE_INTDIV_ 1
 #define SEGV_MAPERR_ 1
 #define SEGV_ACCERR_ 2

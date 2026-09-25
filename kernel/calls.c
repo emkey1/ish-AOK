@@ -6950,8 +6950,12 @@ void handle_illegal_instruction_interrupt(struct cpu_state *cpu) {
     }
     record_guest_fault_event("illegal-instruction", cpu, current_fault_ip(cpu), false);
     dump_stack(8);
+    // x86 Linux reports #UD as ILL_ILLOPN (handle_invalid_op), for 32- and
+    // 64-bit tasks alike; arm64 and riscv64 report an undefined instruction as
+    // ILL_ILLOPC.
     struct siginfo_ info = {
-        .code = ILL_ILLOPC_,
+        .code = current->abi == GUEST_ABI_AMD64 || current->abi == GUEST_ABI_I386 ?
+            ILL_ILLOPN_ : ILL_ILLOPC_,
         .fault.addr = current_fault_ip(cpu),
     };
     deliver_signal(current, SIGILL_, info);

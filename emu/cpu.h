@@ -74,6 +74,8 @@ int amd64_jit_sse3_haddsub(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long op2, unsigned long next_ip);
 int amd64_jit_0f38(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_ip);
 int amd64_jit_popcnt(struct cpu_state *cpu, struct tlb *tlb, unsigned long next_ip);
+int amd64_jit_sreg(struct cpu_state *cpu, struct tlb *tlb, unsigned long next_ip);
+int amd64_jit_iret(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_ip);
 int amd64_jit_ud2(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_ip);
 int amd64_jit_vex(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long lead, unsigned long start_ip);
@@ -454,7 +456,25 @@ struct cpu_state {
     // EVEX opmask registers k0-k7. k0 architecturally means "no masking" and
     // is never written by a masked instruction, but is stored like any other.
     uint64_t avx512_k[8];
+
+    // amd64 segment selectors, indexed by the ModRM Sreg encoding
+    // (AMD64_SREG_*): what `mov Sreg, r/m` and `pop fs/gs` last loaded into
+    // ES, DS, FS and GS. Zero from exec, as Linux's start_thread leaves them,
+    // and carried across fork and signal delivery, as Linux carries them. The
+    // CS and SS slots are unused: a 64-bit user task's CS is always 0x33, and
+    // 0x2b is the only selector its SS can be loaded with. See
+    // amd64_sreg_op in emu/amd64_interp.c.
+    word_t amd64_sreg[6];
 };
+
+#define AMD64_SREG_ES 0
+#define AMD64_SREG_CS 1
+#define AMD64_SREG_SS 2
+#define AMD64_SREG_DS 3
+#define AMD64_SREG_FS 4
+#define AMD64_SREG_GS 5
+#define AMD64_SEL_USER_CS 0x33
+#define AMD64_SEL_USER_DS 0x2b
 
 #define CPU_OFFSET(field) offsetof(struct cpu_state, field)
 

@@ -141,7 +141,6 @@ enum amd64_greg_index {
 };
 
 enum {
-    AMD64_USER_CS = 0x33,
     AMD64_UC_FP_XSTATE = 0x1,
     AMD64_UC_SIGCONTEXT_SS = 0x2,
     AMD64_UC_STRICT_RESTORE_SS = 0x4,
@@ -2939,10 +2938,13 @@ static void setup_amd64_mcontext(struct amd64_mcontext_ *mcontext, struct cpu_st
     mcontext->gregs[AMD64_GREG_RIP] = cpu->amd64_rip;
     collapse_flags(cpu);
     mcontext->gregs[AMD64_GREG_EFL] = cpu->eflags;
-    // Linux x86_64 REG_CSGSFS packs CS, GS, FS, and a zero pad word.
+    // Linux x86_64 REG_CSGSFS packs CS, GS, FS and SS, a word each. The GS
+    // and FS words are always 0 (x64 setup_sigcontext writes 0, whatever
+    // selectors are loaded), and SS is there because the frame says
+    // UC_SIGCONTEXT_SS.
     mcontext->gregs[AMD64_GREG_CSGSFS] =
-        AMD64_USER_CS |
-        ((qword_t) cpu->gs << 16);
+        AMD64_SEL_USER_CS |
+        ((qword_t) AMD64_SEL_USER_DS << 48);
     mcontext->gregs[AMD64_GREG_ERR] = signal_trap_error(cpu);
     mcontext->gregs[AMD64_GREG_TRAPNO] = 0;
     mcontext->gregs[AMD64_GREG_OLDMASK] = sigmask_to_save();
@@ -2971,7 +2973,9 @@ static void setup_amd64_fpstate(struct amd64_fpstate_ *fpstate, struct cpu_state
 
 static void setup_rt_sigframe_amd64(struct siginfo_ *info, struct rt_sigframe_amd64 *frame) {
     memset(frame, 0, sizeof(*frame));
-    frame->uc.flags = AMD64_UC_FP_XSTATE;
+    // All three, as Linux sets them for a 64-bit frame.
+    frame->uc.flags = AMD64_UC_FP_XSTATE | AMD64_UC_SIGCONTEXT_SS |
+        AMD64_UC_STRICT_RESTORE_SS;
     frame->uc.link = 0;
     frame->uc.stack = (struct amd64_stack_t_marshaled) {
         .stack = current->altstack,

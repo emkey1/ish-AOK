@@ -317,7 +317,10 @@ int_t sys_arch_prctl_guest(int_t code, guest_addr_t addr) {
 
     switch (code) {
         case ARCH_SET_FS_:
+            // Linux writes the base and leaves the FS selector 0, whatever
+            // `mov Sreg, r/m` had loaded.
             current->cpu.tls_ptr = addr;
+            current->cpu.amd64_sreg[AMD64_SREG_FS] = 0;
             return 0;
         case ARCH_GET_FS_: {
             qword_t fs_base = current->cpu.tls_ptr;

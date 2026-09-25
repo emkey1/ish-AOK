@@ -8740,6 +8740,192 @@ static int amd64_0f38_op(struct cpu_state *cpu, struct tlb *tlb,
         return INT_NONE;
 }
 
+// ---- Segment registers: MOV r/m, Sreg (8C), MOV Sreg, r/m (8E), and PUSH /
+// POP FS and GS (0F A0, A1, A8, A9) ----
+//
+// Neither amd64 engine had any of them, so each raised SIGILL. .NET found it:
+// the PAL's CONTEXT_CaptureContext stores CS and SS into a CONTEXT
+// (`mov %cs, 0x38(%rdi)`) on every managed exception, so `dotnet new console`
+// died with rc 132 while `dotnet --info`, which throws nothing, ran.
+//
+// What a 64-bit Linux task sees, measured on x86_64 (Zen+, Linux 6.12):
+//
+// - CS reads 0x33 and SS 0x2b. ES, DS, FS and GS read 0 from exec on, then
+//   whatever was last loaded; that survives signal delivery and fork.
+// - A memory destination takes two bytes, whatever the operand size, REX.W
+//   included. A register destination takes the operand size: 32 bits
+//   zero-extends to 64 like any 32-bit write, REX.W zero-extends, and 66
+//   writes the low word and keeps the rest.
+// - REX.R does not extend the Sreg field. Encodings 6 and 7 are #UD, with a
+//   memory operand too, and so is CS as a destination.
+// - A load reads two bytes of memory, or the low word of a register. PUSH
+//   FS/GS moves eight bytes, zero-extended (two with 66), and POP eight,
+//   keeping the low word.
+// - Which selectors load is decided by the GDT Linux installs (asm/segment.h):
+//   null, __USER32_CS (entry 4), __USER_DS (5), __USER_CS (6) and the CPUNODE
+//   entry (15) go into ES, DS, FS or GS with any RPL; SS takes 0x2b and
+//   nothing else, null included. Everything else is #GP -- the kernel entries,
+//   the TSS and LDT descriptors, the TLS slots a 64-bit task has not filled,
+//   anything past the GDT and every LDT selector (no amd64 task here has an
+//   LDT). #GP arrives as SIGSEGV with si_code SI_KERNEL, and the stack
+//   pointer of a POP that faults is left where it was.
+// - Every one of those loadable descriptors has base 0, so a load into FS
+//   sets the FS base to 0. So does a null selector, on the Intel CPU this
+//   emulator reports (Linux's detect_null_seg_behavior: AMD keeps the base,
+//   Intel clears it). GS has no base here to change.
+static word_t amd64_sreg_read(const struct cpu_state *cpu, unsigned sreg) {
+    if (sreg == AMD64_SREG_CS)
+        return AMD64_SEL_USER_CS;
+    if (sreg == AMD64_SREG_SS)
+        return AMD64_SEL_USER_DS;
+    return cpu->amd64_sreg[sreg];
+}
+
+static bool amd64_sreg_loadable(unsigned sreg, word_t sel) {
+    if (sreg == AMD64_SREG_SS)
+        return sel == AMD64_SEL_USER_DS;
+    if (sel & 4)
+        return false;
+    switch (sel >> 3) {
+    case 0:
+    case 4:
+    case 5:
+    case 6:
+    case 15:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void amd64_sreg_load(struct cpu_state *cpu, unsigned sreg, word_t sel) {
+    if (sreg == AMD64_SREG_SS)
+        return;
+    cpu->amd64_sreg[sreg] = sel;
+    if (sreg == AMD64_SREG_FS)
+        cpu->tls_ptr = 0;
+}
+
+// Shared by the interpreter's arms and by the JIT bridge amd64_jit_sreg. The
+// prefixes are consumed; for 8C/8E the ModRM is not. `opcode` is the one-byte
+// opcode, or the second byte when two_byte. Returns INT_NONE with rip past the
+// instruction, or the interrupt with rip back at saved_rip.
+static int amd64_sreg_op(struct cpu_state *cpu, struct tlb *tlb, byte_t opcode,
+        bool two_byte, struct amd64_rex_prefix rex, bool operand_size_prefix,
+        bool fs_prefix, bool lock_prefix, qword_t saved_rip) {
+    struct amd64_modrm modrm;
+    unsigned sreg;
+    qword_t value;
+
+    if (lock_prefix)
+        goto undefined;
+    if (two_byte) {
+        if (opcode != 0xa0 && opcode != 0xa1 && opcode != 0xa8 && opcode != 0xa9)
+            goto undefined;
+        sreg = opcode & 0x08 ? AMD64_SREG_GS : AMD64_SREG_FS;
+        unsigned size = operand_size_prefix && !rex.w ? 16 : 64;
+        if (!(opcode & 1)) {
+            if (!amd64_push_size(cpu, tlb, size, amd64_sreg_read(cpu, sreg)))
+                goto fault;
+            return INT_NONE;
+        }
+        qword_t rsp_before_pop = cpu->amd64_regs[amd64_rsp];
+        if (!amd64_pop_size(cpu, tlb, size, &value))
+            goto fault;
+        if (!amd64_sreg_loadable(sreg, (word_t) value)) {
+            cpu->amd64_regs[amd64_rsp] = rsp_before_pop;
+            goto gpf;
+        }
+        amd64_sreg_load(cpu, sreg, (word_t) value);
+        return INT_NONE;
+    }
+    if (opcode != 0x8c && opcode != 0x8e)
+        goto undefined;
+    if (!amd64_decode_modrm(cpu, tlb, rex, &modrm))
+        goto fault;
+    sreg = modrm.reg & 7;
+    if (sreg > AMD64_SREG_GS)
+        goto undefined;
+    if (opcode == 0x8c) {
+        unsigned size = !modrm.is_reg ? 16 :
+                rex.w ? 64 : operand_size_prefix ? 16 : 32;
+        if (!amd64_write_rm(cpu, tlb, &modrm, fs_prefix, size, amd64_sreg_read(cpu, sreg)))
+            goto fault;
+        return INT_NONE;
+    }
+    if (sreg == AMD64_SREG_CS)
+        goto undefined;
+    if (!amd64_read_rm(cpu, tlb, &modrm, fs_prefix, 16, &value))
+        goto fault;
+    if (!amd64_sreg_loadable(sreg, (word_t) value))
+        goto gpf;
+    amd64_sreg_load(cpu, sreg, (word_t) value);
+    return INT_NONE;
+
+undefined:
+    cpu->amd64_rip = saved_rip;
+    return INT_UNDEFINED;
+gpf:
+    cpu->amd64_rip = saved_rip;
+    return INT_GPF;
+fault:
+    cpu->amd64_rip = saved_rip;
+    if (tlb->fetch_denied)
+        return INT_PF_EXEC;
+    return INT_PF;
+}
+
+// IRET (CF): IRETQ with REX.W, IRETD without, IRETW with 66. .NET's
+// RtlRestoreContext ends in IRETQ -- it is how the PAL resumes a CONTEXT, so
+// every managed exception reaches it, right after the 8C stores above
+// captured the CS and SS it pops. Neither engine had it: SIGILL.
+//
+// From user mode it is a same-privilege return, and it pops five slots of the
+// operand size -- RIP, CS, RFLAGS, RSP, SS -- zero-extending each. Measured on
+// x86_64 Linux (camd):
+//
+// - CS must be 0x33 and SS 0x2b; only the low word of either slot counts.
+//   Anything else is #GP (SIGSEGV SI_KERNEL) at the IRET with RSP untouched:
+//   null, RPL 0, the data selector as CS, the code selector as SS. CS 0x23
+//   would switch to 32-bit compatibility mode on Linux; there is no 32-bit
+//   code in a 64-bit task here, so it is #GP as well.
+// - RFLAGS takes the bits user mode may change and nothing else: IF and IOPL
+//   stay, VM/VIF/VIP stay, the high 32 bits are ignored. That is POPF's rule,
+//   so amd64_popf_apply applies it (TF and NT, which IRET would also take on
+//   hardware, are left alone here as POPF leaves them).
+// - A non-canonical RIP is #GP at the IRET (Intel, which this CPU reports).
+static int amd64_iret_op(struct cpu_state *cpu, struct tlb *tlb,
+        struct amd64_rex_prefix rex, bool operand_size_prefix, bool lock_prefix,
+        qword_t saved_rip) {
+    unsigned size = rex.w ? 64 : operand_size_prefix ? 16 : 32;
+    unsigned bytes = size / 8;
+    qword_t rsp = cpu->amd64_regs[amd64_rsp];
+    qword_t slot[5];
+    guest_addr_t checked_rip;
+
+    if (lock_prefix) {
+        cpu->amd64_rip = saved_rip;
+        return INT_UNDEFINED;
+    }
+    for (unsigned i = 0; i < 5; i++) {
+        qword_t value = 0;
+        if (!amd64_mem_read(cpu, tlb, rsp + i * bytes, &value, bytes)) {
+            cpu->amd64_rip = saved_rip;
+            return INT_PF;
+        }
+        slot[i] = value;
+    }
+    if ((word_t) slot[1] != AMD64_SEL_USER_CS || (word_t) slot[4] != AMD64_SEL_USER_DS ||
+            !amd64_guest_addr_ok(slot[0], 1, &checked_rip)) {
+        cpu->amd64_rip = saved_rip;
+        return INT_GPF;
+    }
+    amd64_popf_apply(cpu, slot[2], size);
+    cpu->amd64_regs[amd64_rsp] = slot[3];
+    cpu->amd64_rip = slot[0];
+    return INT_NONE;
+}
+
 static inline int amd64_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     qword_t saved_rip = cpu->amd64_rip;
     cpu->amd64_current_insn_rip = saved_rip;
@@ -8926,6 +9112,13 @@ restart_prefix:
             cpu->ebx = ebx;
             cpu->ecx = ecx;
             cpu->edx = edx;
+            break;
+        }
+        if (op2 == 0xa0 || op2 == 0xa1 || op2 == 0xa8 || op2 == 0xa9) {
+            int intr = amd64_sreg_op(cpu, tlb, op2, true, rex, operand_size_prefix,
+                    fs_prefix, lock_prefix, saved_rip);
+            if (intr != INT_NONE)
+                return intr;
             break;
         }
         if (op2 == 0x18) {
@@ -11415,6 +11608,21 @@ restart_prefix:
         byte_t ah = (SF << 7) | (ZF << 6) | (AF << 4) | (PF << 2) | (1 << 1) | (CF << 0);
         cpu->amd64_regs[amd64_rax] =
             (cpu->amd64_regs[amd64_rax] & ~0xff00ULL) | ((qword_t) ah << 8);
+        break;
+    }
+    case 0x8c:
+    case 0x8e: {
+        int intr = amd64_sreg_op(cpu, tlb, opcode, false, rex, operand_size_prefix,
+                fs_prefix, lock_prefix, saved_rip);
+        if (intr != INT_NONE)
+            return intr;
+        break;
+    }
+    case 0xcf: {
+        int intr = amd64_iret_op(cpu, tlb, rex, operand_size_prefix, lock_prefix,
+                saved_rip);
+        if (intr != INT_NONE)
+            return intr;
         break;
     }
     case 0x8f: {
@@ -16649,6 +16857,103 @@ int amd64_jit_popcnt(struct cpu_state *cpu, struct tlb *tlb,
     return INT_NONE;
 
 amd64_jit_popcnt_pf:
+    cpu->amd64_rip = saved_rip;
+    amd64_sync_legacy_regs(cpu);
+    return INT_PF;
+}
+
+// The JIT's bridge for 8C, 8E and 0F A0/A1/A8/A9; see amd64_sreg_op. Rare
+// enough (once per .NET exception) that a gadget would buy nothing, and a
+// bridge keeps the block around it compiled. Continues the block.
+int amd64_jit_sreg(struct cpu_state *cpu, struct tlb *tlb,
+        unsigned long next_ip) {
+    qword_t saved_rip = cpu->amd64_rip;
+    guest_addr_t checked_next_ip;
+    struct amd64_rex_prefix rex = {0};
+    bool fs_prefix = false;
+    bool operand_size_prefix = false;
+    bool lock_prefix = false;
+    bool two_byte = false;
+    byte_t byte;
+    int interrupt;
+
+    if (!amd64_guest_addr_ok((qword_t) next_ip, 1, &checked_next_ip))
+        return INT_GPF;
+
+    cpu->amd64_address_size_prefix = false;
+    for (;;) {
+        if (!amd64_fetch_u8(cpu, tlb, &byte))
+            goto amd64_jit_sreg_pf;
+        if (amd64_ignored_segment_prefix(byte) || byte == 0xf2 || byte == 0xf3)
+            continue;
+        if (byte == 0x64) { fs_prefix = true; continue; }
+        if (byte == 0x66) { operand_size_prefix = true; continue; }
+        if (byte == 0xf0) { lock_prefix = true; continue; }
+        if (byte >= 0x40 && byte <= 0x4f) {
+            rex.present = true;
+            rex.w = (byte & 8) != 0;
+            rex.r = (byte & 4) != 0;
+            rex.x = (byte & 2) != 0;
+            rex.b = (byte & 1) != 0;
+            continue;
+        }
+        break;
+    }
+    if (byte == 0x0f) {
+        two_byte = true;
+        if (!amd64_fetch_u8(cpu, tlb, &byte))
+            goto amd64_jit_sreg_pf;
+    }
+    interrupt = amd64_sreg_op(cpu, tlb, byte, two_byte, rex, operand_size_prefix,
+            fs_prefix, lock_prefix, saved_rip);
+    if (interrupt == INT_NONE)
+        cpu->amd64_rip = (qword_t) next_ip;
+    amd64_sync_legacy_regs(cpu);
+    return interrupt;
+
+amd64_jit_sreg_pf:
+    cpu->amd64_rip = saved_rip;
+    amd64_sync_legacy_regs(cpu);
+    return INT_PF;
+}
+
+// The JIT's bridge for IRET; see amd64_iret_op. Ends the block: rip is
+// whatever the frame held.
+int amd64_jit_iret(struct cpu_state *cpu, struct tlb *tlb, unsigned long start_ip) {
+    qword_t saved_rip = (qword_t) start_ip;
+    struct amd64_rex_prefix rex = {0};
+    bool operand_size_prefix = false;
+    bool lock_prefix = false;
+    byte_t byte;
+    int interrupt;
+
+    cpu->amd64_rip = saved_rip;
+    cpu->amd64_address_size_prefix = false;
+    for (;;) {
+        if (!amd64_fetch_u8(cpu, tlb, &byte))
+            goto amd64_jit_iret_pf;
+        if (amd64_ignored_segment_prefix(byte) || byte == 0x64 || byte == 0x67 ||
+                byte == 0xf2 || byte == 0xf3)
+            continue;
+        if (byte == 0x66) { operand_size_prefix = true; continue; }
+        if (byte == 0xf0) { lock_prefix = true; continue; }
+        if (byte >= 0x40 && byte <= 0x4f) {
+            rex.present = true;
+            rex.w = (byte & 8) != 0;
+            continue;
+        }
+        break;
+    }
+    if (byte != 0xcf) {
+        cpu->amd64_rip = saved_rip;
+        amd64_sync_legacy_regs(cpu);
+        return INT_UNDEFINED;
+    }
+    interrupt = amd64_iret_op(cpu, tlb, rex, operand_size_prefix, lock_prefix, saved_rip);
+    amd64_sync_legacy_regs(cpu);
+    return interrupt;
+
+amd64_jit_iret_pf:
     cpu->amd64_rip = saved_rip;
     amd64_sync_legacy_regs(cpu);
     return INT_PF;

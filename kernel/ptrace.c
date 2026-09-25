@@ -230,8 +230,20 @@ static void get_user_regs_amd64(struct task *task, struct user_regs_struct_amd64
     user_regs_->rsp = cpu->amd64_regs[amd64_rsp];
     user_regs_->ss = 0x2b;
     user_regs_->fs_base = cpu->tls_ptr;
+    user_regs_->ds = cpu->amd64_sreg[AMD64_SREG_DS];
+    user_regs_->es = cpu->amd64_sreg[AMD64_SREG_ES];
+    user_regs_->fs = cpu->amd64_sreg[AMD64_SREG_FS];
+    user_regs_->gs = cpu->amd64_sreg[AMD64_SREG_GS];
     if (ptrace_in_syscall_entry_stop(task))
         user_regs_->rax = (qword_t) (sqword_t) _ENOSYS;
+}
+
+// Linux's set_segment_reg truncates to 16 bits, takes the selector only if it
+// is null or has RPL 3 (anything else is EIO), and leaves the base alone.
+static void set_user_sreg_amd64(struct cpu_state *cpu, unsigned sreg, qword_t value) {
+    word_t sel = (word_t) value;
+    if (sel == 0 || (sel & 3) == 3)
+        cpu->amd64_sreg[sreg] = sel;
 }
 
 static void set_user_regs_amd64(struct task *task, const struct user_regs_struct_amd64_ *user_regs_) {
@@ -257,6 +269,10 @@ static void set_user_regs_amd64(struct task *task, const struct user_regs_struct
     cpu->df_offset = cpu->df ? -1 : 1;
     cpu->amd64_regs[amd64_rsp] = user_regs_->rsp;
     cpu->tls_ptr = user_regs_->fs_base;
+    set_user_sreg_amd64(cpu, AMD64_SREG_DS, user_regs_->ds);
+    set_user_sreg_amd64(cpu, AMD64_SREG_ES, user_regs_->es);
+    set_user_sreg_amd64(cpu, AMD64_SREG_FS, user_regs_->fs);
+    set_user_sreg_amd64(cpu, AMD64_SREG_GS, user_regs_->gs);
     task->ptrace.syscall = (int) user_regs_->orig_rax;
     if (ptrace_in_syscall_entry_stop(task))
         cpu->amd64_regs[amd64_rax] = user_regs_->orig_rax;

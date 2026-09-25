@@ -299,7 +299,10 @@ static bool amd64_opcode_needs_modrm(const struct amd64_jit_insn *insn) {
     case 0x89:
     case 0x8a:
     case 0x8b:
+    // 8C/8E (MOV to and from a segment register): amd64_jit_sreg's arm.
+    case 0x8c:
     case 0x8d:
+    case 0x8e:
     case 0x8f:
     case 0xc0:
     case 0xc1:
@@ -6404,6 +6407,46 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 (unsigned long) next_ip);
         gen_amd64_defer_rip(state, next_ip);
         return true;
+    }
+
+    // MOV r/m, Sreg (8C), MOV Sreg, r/m (8E), PUSH/POP FS and GS (0F A0, A1,
+    // A8, A9). Bridged to amd64_jit_sreg, which shares amd64_sreg_op with the
+    // interpreter. None of them had an arm, and 8C/8E had no ModRM entry, so
+    // each was a SIGILL -- .NET stores CS and SS with 8C on every managed
+    // exception. The helper raises #UD for LOCK and the invalid Sreg fields,
+    // and #GP for a selector Linux would not load. Continues the block.
+    if (!insn.address_size_prefix &&
+            ((!insn.two_byte_opcode && insn.has_modrm &&
+              (insn.opcode == 0x8c || insn.opcode == 0x8e)) ||
+             (insn.two_byte_opcode &&
+              (insn.op2 == 0xa0 || insn.op2 == 0xa1 ||
+               insn.op2 == 0xa8 || insn.op2 == 0xa9)))) {
+        if (insn.two_byte_opcode) {
+            next_ip = insn.end_ip;
+        } else if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
+            state->amd64_ip = state->amd64_orig_ip;
+            state->amd64_fallback_to_interp = true;
+            return false;
+        }
+        state->amd64_ip = next_ip;
+        amd64_jit_debug("sreg-helper ip=%llx next=%llx",
+                (unsigned long long) insn.start_ip, (unsigned long long) next_ip);
+        gen_amd64_helper_tlb_1_retint(state, amd64_jit_sreg,
+                (unsigned long) next_ip);
+        gen_amd64_defer_rip(state, next_ip);
+        return true;
+    }
+
+    // IRET (CF), which .NET's RtlRestoreContext ends in. Bridged to
+    // amd64_jit_iret, which shares amd64_iret_op with the interpreter; the
+    // frame decides where execution goes, so the block ends here.
+    if (!insn.two_byte_opcode && insn.opcode == 0xcf) {
+        state->amd64_ip = insn.end_ip;
+        amd64_jit_debug("iret-helper ip=%llx", (unsigned long long) insn.start_ip);
+        gen_amd64_helper_tlb_1_retint(state, amd64_jit_iret,
+                (unsigned long) insn.start_ip);
+        gen_exit(state);
+        return false;
     }
 
     // UD2 (0F 0B): raise #UD from a bridge instead of discarding the block.

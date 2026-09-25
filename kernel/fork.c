@@ -259,8 +259,10 @@ static int copy_task(struct task *task, dword_t flags, guest_addr_t stack, guest
 
     if (flags & CLONE_SETTLS_) {
         if (task->abi == GUEST_ABI_AMD64) {
-            // On amd64, CLONE_SETTLS passes the new thread's FS base directly.
+            // On amd64, CLONE_SETTLS passes the new thread's FS base directly,
+            // and like ARCH_SET_FS leaves the FS selector 0.
             task->cpu.tls_ptr = tls_addr;
+            task->cpu.amd64_sreg[AMD64_SREG_FS] = 0;
         } else if (task->abi == GUEST_ABI_ARM64) {
             // On arm64, CLONE_SETTLS passes the new thread's TPIDR_EL0
             // directly, same shape as amd64's FS base — NOT an i386

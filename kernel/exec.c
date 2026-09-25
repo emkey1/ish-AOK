@@ -1479,6 +1479,8 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     save->cpu.mxcsr = 0x1f80;
 
     memset(save->cpu.amd64_regs, 0, sizeof(save->cpu.amd64_regs));
+    // Linux's start_thread loads 0 into ES, DS, FS and GS.
+    memset(save->cpu.amd64_sreg, 0, sizeof(save->cpu.amd64_sreg));
     save->cpu.amd64_rip = entry;
     save->cpu.amd64_regs[amd64_rsp] = sp;
     memset(save->cpu.amd64_store_trace, 0, sizeof(save->cpu.amd64_store_trace));
