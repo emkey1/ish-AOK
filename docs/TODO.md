@@ -1822,6 +1822,45 @@ runs, and the applets' flag coverage would need to be checked against GNU
 gzip's first). The arm64 win is smaller because what is left there is tar's own
 file creation through fakefs, not the codec.
 
+### smallclue's `git`, `rsync` and `dvtm` are compiled as stubs
+
+**Wanted, and deferred on 2026-09-25: not before 556.** smallclue carries all
+three, and the applets are in AOK's binary, but each one only refuses:
+
+| applet | what it says today | why |
+|---|---|---|
+| `git` | "libgit2 support is not enabled in this build" | built without `PSCAL_HAS_LIBGIT2` |
+| `dvtm` | "applet is disabled in this build" | built without `SMALLCLUE_WITH_DVTM` |
+| `rsync` | "openrsync: not built into this iSH-AOK" | AOK's own stub, `kernel/smallclue_glue.c` |
+
+meson.build takes only openssh and nextvi from deps/smallclue/third-party. So
+AOK has never checked out the dvtm, libgit2 and openrsync submodules, not even
+in the main checkout. Each one is a port, not a flag:
+
+- **libgit2** (`git`). It has to be built for iOS inside meson, with every
+  source file going through kernel/native_libc.h like the rest of smallclue.
+  - It needs a TLS and HTTPS transport, and AOK links no OpenSSL. The
+    NSURLSession-backed curl shim in deps/smallclue-shim is the likely route,
+    through a custom smart-HTTP transport.
+  - ssh remotes need an ssh transport; running the native `ssh` is one option.
+  - Licence: GPLv2 with the linking exception. Check it against the
+    Licensing summary in meson.build before shipping. Nothing else in the
+    binary is GPL unless `-Dnative_bash` is on.
+- **dvtm**. It starts a shell on each pty, and a native program cannot
+  `fork()`. That needs AOK's native spawn with a pty.
+  deps/smallclue/src/dvtm_runtime_hooks.h is smallclue's iOS hook point.
+- **openrsync** (`rsync`). Its remote side runs over an ssh child. That needs
+  native spawn plus pipes, and deps/smallclue/src/openrsync_ios_shim.h and
+  openrsync_hooks.h are the starting points.
+- **Submodules.** Initialise them in the main checkout only, never from a
+  worktree, because worktrees share the submodule git dir. A worktree made
+  now gets only the two submodules the build uses, and git then marks
+  deps/smallclue as modified for the three missing folders. Creating the
+  folders silences it.
+
+Until then, the guest's packages do the job: `apk add git rsync dvtm`, or
+`apt install` on Devuan. They are slower, being translated rather than native.
+
 ### Library-level native interposition: measured, and the answer is no
 
 **Established 2026-09-18.** The idea of running a host libz/libcrypto/libc in
