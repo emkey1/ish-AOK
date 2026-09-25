@@ -721,6 +721,9 @@ static int tmpfs_dir_unlink(struct tmp_dirent *parent, const char *name, bool re
     } else {
         dirent->inode->stat.nlink--;
     }
+    // The inode changed too -- it lost a name -- which a process holding it
+    // open, or another link to it, sees in its ctime (Linux's shmem_unlink).
+    tmpfs_update_ctime(dirent->inode);
     tmpfs_update_mtime_and_ctime(parent->inode);
     tmp_dirent_release(dirent); // drop tree reference
     tmp_dirent_release(dirent); // drop lookup reference
@@ -1153,6 +1156,7 @@ static int tmpfs_rename(struct mount *mount, const char *src, const char *dst) {
         } else {
             dst_dirent->inode->stat.nlink--;
         }
+        tmpfs_update_ctime(dst_dirent->inode);
         tmp_dirent_release(dst_dirent);
     }
 
@@ -1178,6 +1182,9 @@ static int tmpfs_rename(struct mount *mount, const char *src, const char *dst) {
     src_dirent->index = dst_parent->next_index++;
     list_add_tail(&dst_parent->children, &src_dirent->dir);
 
+    // The renamed inode's ctime moves as well as both directories' (Linux's
+    // shmem_rename2); tar and rsync read a rename as a change to the file.
+    tmpfs_update_ctime(src_dirent->inode);
     tmpfs_update_mtime_and_ctime(src_parent->inode);
     tmpfs_update_mtime_and_ctime(dst_parent->inode);
 
@@ -1650,6 +1657,11 @@ static ssize_t tmpfs_pwrite(struct fd *fd, const void *buf, size_t bufsize, off_
             goto out;
     }
     memcpy((char *) inode->file_data + off, buf, bufsize);
+    // Every write that stores something is a modification, not only one that
+    // grows the file: tmpfs_file_resize stamped the times, so an overwrite in
+    // place left mtime and ctime where they were.
+    if (bufsize > 0)
+        tmpfs_update_mtime_and_ctime(inode);
     res = (ssize_t) bufsize;
 out:
     unlock(&inode->lock);
@@ -1789,6 +1801,9 @@ static ssize_t tmpfs_write(struct fd *fd, const void *buf, size_t bufsize) {
             goto out;
     }
     memcpy((char *) inode->file_data + off, buf, bufsize);
+    // See tmpfs_pwrite: an overwrite in place is a modification too.
+    if (bufsize > 0)
+        tmpfs_update_mtime_and_ctime(inode);
     fd->offset = off + bufsize;
     res = bufsize;
 

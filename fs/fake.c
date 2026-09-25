@@ -726,6 +726,28 @@ static void fake_stat_setattr(struct ish_stat *ishstat, struct attr attr) {
     }
 }
 
+// A file's ctime is its HOST file's (fakefs_stat takes the times from the host
+// stat), but a chmod or chown here changes only the database, so the host file
+// never learned of it and ctime stayed put -- the one timestamp nothing can set
+// and backup tools trust for exactly that reason. Re-applying the host file's
+// own mode is a change the host counts, moving its ctime on APFS and on Linux
+// alike, that alters nothing else about it. (A chown to -1, -1 or a utimensat
+// of UTIME_OMIT twice would be as harmless, and APFS moves no ctime for either.)
+// Best effort: the change has already been made, and a host that refuses this
+// costs only the timestamp.
+static void fakefs_touch_ctime(struct mount *mount, const char *host_path) {
+    struct stat st;
+    const char *p = fix_path(host_path);
+    if (fstatat(mount->root_fd, p, &st, AT_SYMLINK_NOFOLLOW) == 0)
+        (void) fchmodat(mount->root_fd, p, st.st_mode & 07777, AT_SYMLINK_NOFOLLOW);
+}
+
+static void fakefs_touch_ctime_fd(struct fd *fd) {
+    struct stat st;
+    if (fd->real_fd >= 0 && fstat(fd->real_fd, &st) == 0)
+        (void) fchmod(fd->real_fd, st.st_mode & 07777);
+}
+
 static int fakefs_setattr(struct mount *mount, const char *path, struct attr attr) {
     struct fakefs_db *fs = fakefs_db_thread(&mount->fakefs);
     if (attr.type == attr_size) {
@@ -745,6 +767,9 @@ static int fakefs_setattr(struct mount *mount, const char *path, struct attr att
     fake_stat_setattr(&ishstat, attr);
     inode_write_stat(fs, inode, &ishstat);
     db_commit(fs);
+    host_path_t host_path;
+    if (fakefs_host_path(path, host_path) == 0)
+        fakefs_touch_ctime(mount, host_path);
     return 0;
 }
 
@@ -774,6 +799,7 @@ static int fakefs_fsetattr(struct fd *fd, struct attr attr) {
     fake_stat_setattr(&ishstat, attr);
     inode_write_stat(fs, fd->fake_inode, &ishstat);
     db_commit(fs);
+    fakefs_touch_ctime_fd(fd);
     return 0;
 }
 

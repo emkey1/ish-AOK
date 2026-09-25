@@ -1234,7 +1234,11 @@ int realfs_setattr(struct mount *mount, const char *path, struct attr attr) {
             err = fchownat(root, path, attr.uid, -1, 0);
             break;
         case attr_gid:
-            err = fchownat(root, path, attr.gid, -1, 0);
+            // The group is chown's THIRD argument. This passed it as the
+            // owner, so every chgrp on a realfs mount was a chown to the uid
+            // with the group's number -- EPERM for an ordinary host user,
+            // and the wrong owner for a privileged one.
+            err = fchownat(root, path, -1, attr.gid, 0);
             break;
         case attr_mode:
             err = fchmodat(root, path, attr.mode, 0);
@@ -1257,7 +1261,7 @@ int realfs_fsetattr(struct fd *fd, struct attr attr) {
             err = fchown(real_fd, attr.uid, -1);
             break;
         case attr_gid:
-            err = fchown(real_fd, attr.gid, -1);
+            err = fchown(real_fd, -1, attr.gid); // the group, not the owner: see realfs_setattr
             break;
         case attr_mode:
             err = fchmod(real_fd, attr.mode);

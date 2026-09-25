@@ -197,6 +197,7 @@ fs_chown_no_change.c
 fs_linkat_flags.c
 fs_chown_kills_privs.c
 fs_chgrp_membership.c
+fs_ctime_updates.c
 proc_ptrace_access.c
 seccomp_filter.c
 rlimit_enforce.c
