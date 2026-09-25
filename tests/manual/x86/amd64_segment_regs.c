@@ -44,12 +44,13 @@
 //    still at the frame. RFLAGS takes the arithmetic flags, DF, AC and ID; IF,
 //    IOPL, VM, VIF, VIP and the high half stay as they were.
 //
-// Not asserted: si_addr of a #GP (Linux reports NULL), the #GP error code in
-// REG_ERR (Linux reports the selector), TF and NT through IRETQ, IRETD/IRETW
-// (their 32- and 16-bit RIP and RSP would need code and stack below 4 GiB), and
-// IRETQ to CS 0x23, which Linux turns into a switch to 32-bit code. The 67-prefixed forms are here
-// because the JIT leaves an address-size prefix to the interpreter, so they
-// are what exercises the interpreter's copy of these instructions.
+// Not asserted here: si_addr of a #GP (NULL) and its error code in REG_ERR
+// (the selector), which x86/gpf_siginfo checks; TF and NT through IRETQ;
+// IRETD/IRETW (their 32- and 16-bit RIP and RSP would need code and stack
+// below 4 GiB); and IRETQ to CS 0x23, which Linux turns into a switch to
+// 32-bit code. The 67-prefixed forms are here because the JIT leaves an
+// address-size prefix to the interpreter, so they are what exercises the
+// interpreter's copy of these instructions.
 //
 // x86_64 only; the i386 frontend is a different decoder.
 #define _GNU_SOURCE

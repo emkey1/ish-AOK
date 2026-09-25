@@ -8866,8 +8866,11 @@ undefined:
     cpu->amd64_rip = saved_rip;
     return INT_UNDEFINED;
 gpf:
+    // value is the selector that would not load. The #GP's error code is its
+    // index and TI bit: 0x13 gives 0x10, the LDT's 0x07 0x04, a null SS 0
+    // (camd, Linux 6.12).
     cpu->amd64_rip = saved_rip;
-    return INT_GPF;
+    return INT_GPF_CODE((word_t) value & 0xfffc);
 fault:
     cpu->amd64_rip = saved_rip;
     if (tlb->fetch_denied)
@@ -8894,6 +8897,11 @@ fault:
 //   so amd64_popf_apply applies it (TF and NT, which IRET would also take on
 //   hardware, are left alone here as POPF leaves them).
 // - A non-canonical RIP is #GP at the IRET (Intel, which this CPU reports).
+// - The #GP's error code is the bad selector's index and TI bit -- CS's if CS
+//   is bad, else SS's, so 0 for a null SS -- and 0 for a non-canonical RIP.
+//   CS 0x23 is #GP(0): Linux takes the IRET and faults on a RIP past 4 GiB,
+//   the 32-bit code segment's limit, and a 64-bit task's code is up there.
+#define AMD64_SEL_USER32_CS 0x23
 static int amd64_iret_op(struct cpu_state *cpu, struct tlb *tlb,
         struct amd64_rex_prefix rex, bool operand_size_prefix, bool lock_prefix,
         qword_t saved_rip) {
@@ -8915,9 +8923,15 @@ static int amd64_iret_op(struct cpu_state *cpu, struct tlb *tlb,
         }
         slot[i] = value;
     }
-    if ((word_t) slot[1] != AMD64_SEL_USER_CS || (word_t) slot[4] != AMD64_SEL_USER_DS ||
+    word_t cs = (word_t) slot[1];
+    word_t ss = (word_t) slot[4];
+    if (cs != AMD64_SEL_USER_CS || ss != AMD64_SEL_USER_DS ||
             !amd64_guest_addr_ok(slot[0], 1, &checked_rip)) {
         cpu->amd64_rip = saved_rip;
+        if (cs != AMD64_SEL_USER_CS)
+            return INT_GPF_CODE(cs == AMD64_SEL_USER32_CS ? 0 : cs & 0xfffc);
+        if (ss != AMD64_SEL_USER_DS)
+            return INT_GPF_CODE(ss & 0xfffc);
         return INT_GPF;
     }
     amd64_popf_apply(cpu, slot[2], size);

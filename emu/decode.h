@@ -1353,7 +1353,7 @@ restart:
         case 0xcc: TRACEI("int3");
                    INT(INT_BREAKPOINT); break;
         case 0xcd: TRACEI("int imm8\t");
-                   READIMM8; INT(imm); break;
+                   READIMM8; SOFT_INT((uint8_t) imm); break;
 
         case 0xc6: TRACEI("mov imm8, modrm8");
                    READMODRM; READIMM8; MOV(imm, modrm_val,8); break;
@@ -1961,7 +1961,7 @@ restart:
             break;
 
         case 0xf4: TRACEI("hlt");
-                   return INT_PRIV;
+                   PRIV(); break;
 
 #define GRP3(val,z) \
     switch (modrm.opcode) { \
@@ -1994,9 +1994,9 @@ restart:
         case 0xf8: TRACEI("clc"); CLC; break;
         case 0xf9: TRACEI("stc"); STC; break;
         case 0xfa: TRACEI("cli");
-                   return INT_PRIV;
+                   PRIV(); break;
         case 0xfb: TRACEI("sti");
-                   return INT_PRIV;
+                   PRIV(); break;
         case 0xfc: TRACEI("cld"); CLD; break;
         case 0xfd: TRACEI("std"); STD; break;
 

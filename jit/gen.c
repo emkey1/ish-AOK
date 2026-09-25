@@ -13630,6 +13630,26 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
 // i386 GPF fixups only decode load/store opcodes, so they decline it and it
 // reaches the SIGSEGV/SI_KERNEL delivery the same way INT_PRIV does.
 #define PORT_IO() gggg(interrupt, INT_GPF, state->orig_ip, 0); end_block = true
+// HLT, CLI and STI are ring-0 too: #GP(0) at the instruction, like PORT_IO
+// (camd: SIGSEGV SI_KERNEL, REG_TRAPNO 13, REG_ERR 0, -m32 and -m64). decode.h
+// used to `return INT_PRIV` from the decoder, which emitted nothing and, being
+// nonzero, told gen_step to carry on -- so all three ran as no-ops.
+#define PRIV() gggg(interrupt, INT_GPF, state->orig_ip, 0); end_block = true
+// int imm8 (CD). User mode may use three gates, each a trap reported after
+// the instruction: 3 (SIGTRAP, as int3), 4 (#OF: SIGSEGV SI_KERNEL,
+// REG_TRAPNO 4) and 0x80, the syscall. Every other vector's gate has DPL 0,
+// so the INT itself is #GP with error code vector * 8 + 2 (the IDT bit), at
+// the instruction (camd, -m32 and -m64). It used to raise the vector as it
+// stood: int $0 was SIGFPE, int $0x0e a page fault, int $0x20 a timer tick,
+// and a vector with no case exited the process with the vector as status.
+#define SOFT_INT(vector) do { \
+    if ((vector) == INT_BREAKPOINT || (vector) == INT_OVERFLOW || (vector) == INT_SYSCALL) { \
+        INT(vector); \
+    } else { \
+        gggg(interrupt, INT_GPF_CODE((vector) * 8 + 2), state->orig_ip, 0); \
+        end_block = true; \
+    } \
+} while (0)
 
 #define SET(cc, dst) ga(set, cond_##cc); store(dst, 8)
 #define SETN(cc, dst) ga(setn, cond_##cc); store(dst, 8)

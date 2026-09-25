@@ -22,6 +22,7 @@
 extern bool isGlibC;
 
 static guest_addr_t current_fault_ip(const struct cpu_state *cpu);
+static void handle_general_protection_interrupt(struct cpu_state *cpu, word_t error_code);
 
 dword_t syscall_stub(void) {
     STRACE("syscall_stub()");
@@ -5683,7 +5684,22 @@ static void handle_exec_fault_interrupt(struct cpu_state *cpu) {
     deliver_signal(current, SIGSEGV_, info);
 }
 
+// A canonical amd64 address has bits 63-47 all equal: 48-bit linear
+// addresses, as the CPUID and /proc/cpuinfo this emulator reports give.
+static bool amd64_addr_canonical(guest_addr_t addr) {
+    return (guest_addr_t) ((int64_t) ((uint64_t) addr << 16) >> 16) == addr;
+}
+
 void handle_page_fault_interrupt(struct cpu_state *cpu) {
+    // A data access to a non-canonical address is not a page fault on the
+    // hardware but #GP(0), before any translation: SIGSEGV with si_code
+    // SI_KERNEL and no address, REG_TRAPNO 13 (camd, Linux 6.12, a load and a
+    // store at 0x8000000000001000 and at 0x0000900000001000). It came out as
+    // SEGV_MAPERR at the address.
+    if (current->abi == GUEST_ABI_AMD64 && !amd64_addr_canonical(cpu->segfault_addr)) {
+        handle_general_protection_interrupt(cpu, 0);
+        return;
+    }
     void *ptr = mem_ptr_fault(current->mem, cpu->segfault_addr,
                               cpu->segfault_was_write ? MEM_WRITE : MEM_READ);
 
@@ -5798,7 +5814,9 @@ static void dump_fault_pt_state(guest_addr_t addr) {
     read_unlock(&current->mem->lock);
 }
 
-static void handle_general_protection_interrupt(struct cpu_state *cpu) {
+// error_code is the #GP's: a selector, an `int n` gate, or 0 (see
+// INT_GPF_CODE in emu/interrupt.h).
+static void handle_general_protection_interrupt(struct cpu_state *cpu, word_t error_code) {
     // Consumed here whatever happens next, so a stale one cannot turn a later
     // fault that reported nothing into a page fault at 0.
     bool reported = cpu->segfault_reported;
@@ -5815,8 +5833,9 @@ static void handle_general_protection_interrupt(struct cpu_state *cpu) {
     guest_addr_t ip = current_fault_ip(cpu);
     uint8_t first_opcode = 0;
     bool have_first_opcode = user_get(ip, first_opcode) == 0;
-    printk("ERROR: %d(%s) [%s] general protection fault at %#llx: ",
-           current->pid, current->comm, guest_abi_desc(current->abi).name, (unsigned long long) ip);
+    printk("ERROR: %d(%s) [%s] general protection fault(%#x) at %#llx: ",
+           current->pid, current->comm, guest_abi_desc(current->abi).name, error_code,
+           (unsigned long long) ip);
     for (int i = 0; i < 8; i++) {
         uint8_t b;
         if (user_get(ip + i, b))
@@ -5842,11 +5861,23 @@ static void handle_general_protection_interrupt(struct cpu_state *cpu) {
     record_guest_fault_event("general-protection-fault", cpu, cpu->segfault_addr, cpu->segfault_was_write);
     dump_stack(8);
     cpu->trapno = INT_GPF;
+    cpu->gp_error_code = error_code;
     cpu->segfault_addr = 0;
     cpu->segfault_was_write = false;
+    // x86 Linux delivers a user-mode #GP with force_sig(SIGSEGV)
+    // (gp_user_force_sig_segv): si_code SI_KERNEL and no address, so si_addr
+    // reads NULL. Where it happened is the frame's REG_RIP/REG_EIP -- the
+    // instruction itself -- and what happened is REG_TRAPNO 13 and REG_ERR,
+    // the error code. Measured on camd (Linux 6.12, -m64 and -m32) for port
+    // I/O, HLT, CLI, STI, `int n`, bad selectors in MOV and POP Sreg, IRET and
+    // sigreturn, and non-canonical addresses. si_addr used to be the
+    // instruction here, which a handler reading it as the faulting data
+    // address took for a wild pointer. arm64 and riscv64 have no #GP; what
+    // reaches this for them keeps the PC.
+    bool x86 = current->abi == GUEST_ABI_I386 || current->abi == GUEST_ABI_AMD64;
     struct siginfo_ info = {
         .code = SI_KERNEL_,
-        .fault.addr = current_fault_ip(cpu),
+        .fault.addr = x86 ? 0 : current_fault_ip(cpu),
     };
     deliver_signal(current, SIGSEGV_, info);
 }
@@ -6994,7 +7025,19 @@ static void handle_arithmetic_interrupt(struct cpu_state *cpu) {
 
 static void handle_privileged_instruction_interrupt(struct cpu_state *cpu) {
     cpu->trapno = INT_GPF;
-    handle_general_protection_interrupt(cpu);
+    handle_general_protection_interrupt(cpu, 0);
+}
+
+// `int $4` (CD 04), whose gate user mode may use: #OF, a trap. Linux sends
+// SIGSEGV with force_sig -- si_code SI_KERNEL, no address -- REG_TRAPNO 4
+// and REG_ERR 0, reported after the instruction (camd, -m32 and -m64). It
+// used to reach the unhandled-interrupt exit.
+static void handle_overflow_interrupt(struct cpu_state *cpu) {
+    cpu->trapno = INT_OVERFLOW;
+    deliver_signal(current, SIGSEGV_, (struct siginfo_) {
+        .sig = SIGSEGV_,
+        .code = SI_KERNEL_,
+    });
 }
 
 void handle_timer_interrupt(__attribute__((unused)) struct cpu_state *cpu) {
@@ -7014,6 +7057,14 @@ void handle_interrupt(int interrupt) {
     if (unlikely(guestprof_on))
         guestprof_maps_checkpoint();
 
+    // A #GP whose error code is not 0 (emu/interrupt.h): keep the code for
+    // the signal frame; the rest is the same #GP.
+    word_t gp_error_code = 0;
+    if (INT_IS_GPF_CODE(interrupt)) {
+        gp_error_code = (word_t) interrupt;
+        interrupt = INT_GPF;
+    }
+
     switch (interrupt) {
         case INT_SYSCALL:
             handle_syscall_interrupt(cpu);
@@ -7031,7 +7082,10 @@ void handle_interrupt(int interrupt) {
             handle_page_fault_interrupt(cpu);
             break;
         case INT_GPF:
-            handle_general_protection_interrupt(cpu);
+            handle_general_protection_interrupt(cpu, gp_error_code);
+            break;
+        case INT_OVERFLOW:
+            handle_overflow_interrupt(cpu);
             break;
         case INT_BUS:
             handle_bus_interrupt(cpu);

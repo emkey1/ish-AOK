@@ -45,10 +45,10 @@
 //    selector whose RPL is not 3 (EIO), and PTRACE_GET_THREAD_AREA and
 //    SET_THREAD_AREA read and write a TLS entry of the tracee.
 //
-// Not asserted: si_addr of a #GP (Linux reports NULL), the error code in
-// REG_ERR, and memory access through a null FS or GS, or through DS, ES or SS
-// holding a TLS selector -- the base is applied for FS and GS only, so those
-// are flat here where Linux faults or adds the TLS base.
+// Not asserted here: si_addr of a #GP (NULL) and its error code in REG_ERR
+// (x86/gpf_siginfo checks both), and memory access through a null FS or GS,
+// or through DS, ES or SS holding a TLS selector -- the base is applied for FS
+// and GS only, so those are flat here where Linux faults or adds the TLS base.
 //
 // i386 only; amd64 has its own test (amd64_segment_regs), and the two
 // engines share nothing here.

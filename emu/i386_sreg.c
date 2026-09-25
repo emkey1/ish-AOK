@@ -118,12 +118,22 @@ void i386_sreg_sigreturn(struct cpu_state *cpu, unsigned sreg, word_t frame_sel)
 // sigreturn takes CS and SS from the frame with RPL 3; the IRET to them #GPs
 // unless CS is the 32-bit code segment and SS a stack segment. (CS 0x33 would
 // switch Linux to 64-bit code, which a 32-bit task here cannot do.)
-bool i386_sreg_sigreturn_cs_ss(struct cpu_state *cpu, word_t frame_cs, word_t frame_ss) {
+//
+// The #GP's error code, measured on camd (-m32, and -m64 alike): CS's
+// selector if CS is bad, else SS's (index and TI; 0 for a null one) -- but 0
+// whenever SS names the LDT, whatever CS holds, because Linux returns to such
+// an SS through its espfix stack and the fault there reports no selector.
+int i386_sreg_sigreturn_cs_ss(struct cpu_state *cpu, word_t frame_cs, word_t frame_ss) {
+    word_t cs = frame_cs | 3;
     word_t ss = frame_ss | 3;
-    if ((word_t) (frame_cs | 3) != I386_SEL_USER_CS || !i386_sreg_loadable(cpu, AMD64_SREG_SS, ss))
-        return false;
-    i386_sreg_load(cpu, AMD64_SREG_SS, ss);
-    return true;
+    bool cs_ok = cs == I386_SEL_USER_CS;
+    if (cs_ok && i386_sreg_loadable(cpu, AMD64_SREG_SS, ss)) {
+        i386_sreg_load(cpu, AMD64_SREG_SS, ss);
+        return -1;
+    }
+    if (ss & 4)
+        return 0;
+    return (cs_ok ? ss : cs) & 0xfffc;
 }
 
 // ---- TLS entries (arch/x86/kernel/tls.c) ----
@@ -202,12 +212,14 @@ static int mem_fault(struct cpu_state *cpu, struct tlb *tlb, bool write) {
     return INT_GPF;
 }
 
-// #GP: nothing reported, so the kernel delivers SIGSEGV with SI_KERNEL.
-static int gpf(struct cpu_state *cpu) {
+// #GP: nothing reported, so the kernel delivers SIGSEGV with SI_KERNEL. The
+// error code is the selector's index and TI bit, whatever made it fail --
+// 0x13 gives 0x10, the LDT's 0x07 gives 0x04, a null SS 0 (camd, -m32).
+static int gpf(struct cpu_state *cpu, word_t sel) {
     cpu->segfault_addr = 0;
     cpu->segfault_was_write = false;
     cpu->segfault_reported = false;
-    return INT_GPF;
+    return INT_GPF_CODE(sel & 0xfffc);
 }
 
 // The selector to load: two bytes of memory, or the low word of a register.
@@ -242,7 +254,7 @@ int i386_jit_sreg(struct cpu_state *cpu, struct tlb *tlb, unsigned long op,
             sel = (word_t) cpu->regs[I386_SREG_OP_RM(op)];
         }
         if (!i386_sreg_loadable(cpu, sreg, sel))
-            return gpf(cpu);
+            return gpf(cpu, sel);
         i386_sreg_load(cpu, sreg, sel);
         return -1;
 
@@ -262,10 +274,10 @@ int i386_jit_sreg(struct cpu_state *cpu, struct tlb *tlb, unsigned long op,
         sel = (word_t) value;
         // A POP that #GPs leaves ESP where it was.
         if (!i386_sreg_loadable(cpu, sreg, sel))
-            return gpf(cpu);
+            return gpf(cpu, sel);
         cpu->esp = esp + bytes;
         i386_sreg_load(cpu, sreg, sel);
         return -1;
     }
-    return gpf(cpu);
+    return gpf(cpu, 0);
 }

@@ -4201,6 +4201,12 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     fpenv_enter(cpu, abi);
     int interrupt = cpu_run_engine_to_interrupt(cpu, tlb);
     fpenv_exit(cpu, abi);
+    // REG_TRAPNO, as the i386 engine records it. On amd64 only the
+    // interpreter's loop did, so a page fault, #UD or #DE the JIT raised went
+    // out in a frame holding whatever trap came before -- 13 after a #GP, 0
+    // in a new process -- and with it no CR2 and no page-fault error code.
+    if (abi == GUEST_ABI_AMD64)
+        cpu->trapno = interrupt;
     return interrupt;
 }
 

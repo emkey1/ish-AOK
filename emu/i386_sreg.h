@@ -39,8 +39,9 @@ void i386_sreg_exec_reset(struct cpu_state *cpu);
 void i386_sreg_signal_enter(struct cpu_state *cpu);
 // sigreturn's reload of GS, FS, DS or ES from the frame.
 void i386_sreg_sigreturn(struct cpu_state *cpu, unsigned sreg, word_t frame_sel);
-// Whether sigreturn can resume with this CS and SS; if so, SS is loaded.
-bool i386_sreg_sigreturn_cs_ss(struct cpu_state *cpu, word_t frame_cs, word_t frame_ss);
+// -1 if sigreturn can resume with this CS and SS, and SS is loaded;
+// otherwise the error code of the #GP the return takes.
+int i386_sreg_sigreturn_cs_ss(struct cpu_state *cpu, word_t frame_cs, word_t frame_ss);
 
 // set_thread_area and get_thread_area on a TLS entry (12-14), as struct
 // user_desc words. i386_tls_set takes a descriptor i386_tls_desc_okay

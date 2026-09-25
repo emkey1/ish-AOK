@@ -17,15 +17,23 @@
 // meant the primary consumer of /sys/devices/system/cpu's topology and cache
 // attributes could not run at all.
 //
-// A fault, unlike a trap, reports the address of the instruction that caused
-// it rather than the one after it. That is checked here without any label
-// arithmetic (which would need different spellings for i386 PIC and x86_64
-// RIP-relative): read the byte AT si_addr out of the process's own text and
-// require it to be the opcode that faulted. If si_addr had been advanced past
-// the instruction it would point at the next one's first byte instead. For
-// the 66-prefixed form the instruction starts at the prefix, so 0x66 is the
-// byte to expect -- which also pins down that the fault is reported at the
-// prefix and not at the opcode.
+// What Linux delivers, measured on camd (Linux 6.12, gcc -m64 and -m32): #GP
+// goes out through force_sig(SIGSEGV), so si_code is SI_KERNEL and si_addr is
+// NULL -- a bare signal carries no address -- and the frame says the rest:
+// REG_TRAPNO 13 and REG_ERR 0, the #GP's error code for anything but a bad
+// selector. This test used to require si_addr to be the instruction, which
+// was AOK's behaviour and not Linux's: on camd it failed nine times, once per
+// form.
+//
+// A fault, unlike a trap, reports the instruction that caused it rather than
+// the one after it, and that is the frame's REG_RIP/REG_EIP. It is checked
+// without label arithmetic (which would need different spellings for i386 PIC
+// and x86_64 RIP-relative): read the byte AT the saved IP out of the process's
+// own text and require it to be the opcode that faulted. Had the IP been
+// advanced past the instruction it would point at the next one's first byte.
+// For the 66-prefixed form the instruction starts at the prefix, so 0x66 is
+// the byte to expect -- which also pins down that the fault is reported at
+// the prefix and not at the opcode.
 //
 // x86 only. Builds for both i386 and x86_64 guests; both frontends had the
 // same gap, and the amd64 one is where lscpu found it.
@@ -35,6 +43,7 @@
 #include <setjmp.h>
 #include <string.h>
 #include <stdint.h>
+#include <ucontext.h>
 #include <unistd.h>
 #include <sys/utsname.h>
 #include "../test_common.h"
@@ -43,18 +52,26 @@
 #define SI_KERNEL 0x80
 #endif
 
-static int on_ish;
-
 static sigjmp_buf fault_env;
 static volatile int fault_signo;
 static volatile int fault_code;
 static volatile uintptr_t fault_addr;
+static volatile uintptr_t fault_ip;
+static volatile unsigned long fault_trapno;
+static volatile unsigned long fault_err;
 
-static void fault_handler(int sig, siginfo_t *info, void *uc) {
-    (void) uc;
+static void fault_handler(int sig, siginfo_t *info, void *ucv) {
+    ucontext_t *uc = ucv;
     fault_signo = sig;
     fault_code = info->si_code;
     fault_addr = (uintptr_t) info->si_addr;
+#ifdef __x86_64__
+    fault_ip = (uintptr_t) uc->uc_mcontext.gregs[REG_RIP];
+#else
+    fault_ip = (uintptr_t) uc->uc_mcontext.gregs[REG_EIP];
+#endif
+    fault_trapno = (unsigned long) uc->uc_mcontext.gregs[REG_TRAPNO];
+    fault_err = (unsigned long) uc->uc_mcontext.gregs[REG_ERR];
     siglongjmp(fault_env, 1);
 }
 
@@ -62,7 +79,7 @@ static void fault_handler(int sig, siginfo_t *info, void *uc) {
 // a build that still raises SIGILL is reported as a wrong signal rather than
 // killing the test process with no diagnosis.
 //
-// want_byte is the instruction's first byte, checked at si_addr; 0 skips it.
+// want_byte is the instruction's first byte, checked at the saved IP.
 static void probe(const char *what, void (*run)(void), unsigned want_byte) {
     struct sigaction sa, old_segv, old_ill;
     memset(&sa, 0, sizeof sa);
@@ -75,6 +92,9 @@ static void probe(const char *what, void (*run)(void), unsigned want_byte) {
     fault_signo = 0;
     fault_code = 0;
     fault_addr = 0;
+    fault_ip = 0;
+    fault_trapno = 0;
+    fault_err = 0;
     if (sigsetjmp(fault_env, 1) == 0)
         run();
 
@@ -87,31 +107,35 @@ static void probe(const char *what, void (*run)(void), unsigned want_byte) {
         failures_total++;
         return;
     }
-    test_logf("  ok   %s -> SIGSEGV si_code=%d si_addr=%p\n",
-              what, fault_code, (void *) fault_addr);
+    test_logf("  ok   %s -> SIGSEGV si_code=%d si_addr=%p trapno=%lu err=%#lx\n",
+              what, fault_code, (void *) fault_addr, fault_trapno, fault_err);
 
-    // si_code: Linux reports SI_KERNEL for a #GP that is not a memory fault.
-    // Asserted only under AOK -- it is the emulator's own classification, and
-    // a real kernel is entitled to describe the same #GP differently.
-    if (on_ish && fault_code != SI_KERNEL) {
+    if (fault_code != SI_KERNEL) {
         printf("FAIL: %s si_code=%d, want SI_KERNEL(%d)\n",
                what, fault_code, SI_KERNEL);
         failures_total++;
     }
+    if (fault_addr != 0) {
+        printf("FAIL: %s si_addr=%p, want NULL (a #GP carries no address)\n",
+               what, (void *) fault_addr);
+        failures_total++;
+    }
+    if (fault_trapno != 13 || fault_err != 0) {
+        printf("FAIL: %s REG_TRAPNO=%lu REG_ERR=%#lx, want 13 and 0\n",
+               what, fault_trapno, fault_err);
+        failures_total++;
+    }
 
-    if (want_byte != 0) {
-        if (fault_addr == 0) {
-            printf("FAIL: %s si_addr is NULL, want the faulting instruction\n",
-                   what);
+    if (fault_ip == 0) {
+        printf("FAIL: %s saved IP is 0, want the faulting instruction\n", what);
+        failures_total++;
+    } else {
+        unsigned got = *(const unsigned char *) fault_ip;
+        if (got != want_byte) {
+            printf("FAIL: %s saved IP %p holds %02x, want %02x "
+                   "(the fault is at the instruction, not past it)\n",
+                   what, (void *) fault_ip, got, want_byte);
             failures_total++;
-        } else {
-            unsigned got = *(const unsigned char *) fault_addr;
-            if (got != want_byte) {
-                printf("FAIL: %s si_addr=%p holds %02x, want %02x "
-                       "(si_addr must be the instruction, not past it)\n",
-                       what, (void *) fault_addr, got, want_byte);
-                failures_total++;
-            }
         }
     }
 }
@@ -203,9 +227,8 @@ int main(int argc, char **argv) {
     test_init(argc, argv);
     alarm(test_watchdog_secs(60));
 
-    if (uname(&uts) == 0 && strstr(uts.release, "ish") != NULL)
-        on_ish = 1;
-    test_logf("running on %s (AOK=%d)\n", uts.release, on_ish);
+    if (uname(&uts) == 0)
+        test_logf("running on %s\n", uts.release);
 
     probe("in eax, dx (ed)",    run_in_dx_32,   0xed);
     probe("in al, dx (ec)",     run_in_dx_8,    0xec);

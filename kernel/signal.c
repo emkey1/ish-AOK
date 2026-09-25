@@ -2782,6 +2782,9 @@ static qword_t signal_trap_error(struct cpu_state *cpu) {
             mem_read_unlock_quiesce_aware(current->mem);
             return err;
         }
+        // The #GP's error code: a selector, an `int n` gate, or 0.
+        case INT_GPF:
+            return cpu->gp_error_code;
         default:
             return 0;
     }
@@ -3785,10 +3788,11 @@ void receive_signals(void) {
     }
 }
 
-// *resumable is false when the frame's CS or SS cannot be returned to: Linux
-// takes them, and the IRET to them faults.
+// *gp_error is -1 when the frame's CS and SS can be returned to, and otherwise
+// the error code of the #GP the IRET to them takes: Linux takes them, and the
+// IRET faults.
 static int restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cpu,
-        bool *resumable) {
+        int *gp_error) {
     if (context->fpstate != 0) {
         struct fpstate_ fpstate;
         if (user_get(context->fpstate, fpstate))
@@ -3817,14 +3821,16 @@ static int restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cpu
     i386_sreg_sigreturn(cpu, AMD64_SREG_FS, context->fs);
     i386_sreg_sigreturn(cpu, AMD64_SREG_DS, context->ds);
     i386_sreg_sigreturn(cpu, AMD64_SREG_ES, context->es);
-    *resumable = i386_sreg_sigreturn_cs_ss(cpu, context->cs, context->ss);
+    *gp_error = i386_sreg_sigreturn_cs_ss(cpu, context->cs, context->ss);
     return 0;
 }
 
 // The IRET to a frame's bad CS or SS is a #GP at the task's restored state:
-// SIGSEGV, si_code SI_KERNEL, reported where it would have resumed.
-static void i386_sigreturn_gpf(struct cpu_state *cpu) {
+// SIGSEGV, si_code SI_KERNEL, reported where it would have resumed, with
+// REG_ERR the error code i386_sreg_sigreturn_cs_ss worked out.
+static void i386_sigreturn_gpf(struct cpu_state *cpu, word_t error_code) {
     cpu->trapno = INT_GPF;
+    cpu->gp_error_code = error_code;
     cpu->segfault_addr = 0;
     cpu->segfault_was_write = false;
     struct siginfo_ info = {.code = SI_KERNEL_};
@@ -3898,13 +3904,13 @@ dword_t sys_rt_sigreturn(void) {
         return (dword_t) sys_rt_sigreturn_amd64();
 
     struct rt_sigframe_ frame;
-    bool resumable;
+    int gp_error;
     // esp points past the first field of the frame
     if (user_get(cpu->esp - offsetof(struct rt_sigframe_, sig), frame)) {
         deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
         return _EFAULT;
     }
-    if (restore_sigcontext(&frame.uc.mcontext, cpu, &resumable)) {
+    if (restore_sigcontext(&frame.uc.mcontext, cpu, &gp_error)) {
         deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
         return _EFAULT;
     }
@@ -3913,8 +3919,8 @@ dword_t sys_rt_sigreturn(void) {
     restore_altstack(cpu->esp, frame.uc.stack.stack, frame.uc.stack.size, frame.uc.stack.flags);
     sigmask_set(frame.uc.sigmask);
     unlock(&current->sighand->lock);
-    if (!resumable)
-        i386_sigreturn_gpf(cpu);
+    if (gp_error >= 0)
+        i386_sigreturn_gpf(cpu, (word_t) gp_error);
     return cpu->eax;
 }
 
@@ -3948,13 +3954,13 @@ qword_t sys_rt_sigreturn_amd64(void) {
 dword_t sys_sigreturn(void) {
     struct cpu_state *cpu = &current->cpu;
     struct sigframe_ frame;
-    bool resumable;
+    int gp_error;
     // esp points past the first two fields of the frame
     if (user_get(cpu->esp - offsetof(struct sigframe_, sc), frame)) {
         deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
         return _EFAULT;
     }
-    if (restore_sigcontext(&frame.sc, cpu, &resumable)) {
+    if (restore_sigcontext(&frame.sc, cpu, &gp_error)) {
         deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
         return _EFAULT;
     }
@@ -3963,8 +3969,8 @@ dword_t sys_sigreturn(void) {
     sigset_t_ oldmask = ((sigset_t_) frame.extramask << 32) | frame.sc.oldmask;
     sigmask_set(oldmask);
     unlock(&current->sighand->lock);
-    if (!resumable)
-        i386_sigreturn_gpf(cpu);
+    if (gp_error >= 0)
+        i386_sigreturn_gpf(cpu, (word_t) gp_error);
     return cpu->eax;
 }
 

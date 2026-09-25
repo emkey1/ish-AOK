@@ -491,6 +491,12 @@ struct cpu_state {
     // tls_ptr above.
     word_t i386_sreg[6];
     struct i386_tls_desc i386_tls[3];
+
+    // The error code of the last #GP delivered, for REG_ERR in its signal
+    // frame (signal_trap_error in kernel/signal.c). Written only by the
+    // kernel as it delivers the SIGSEGV; the engines hand the code over in
+    // the interrupt number (INT_GPF_CODE in emu/interrupt.h).
+    word_t gp_error_code;
 };
 
 #define AMD64_SREG_ES 0
