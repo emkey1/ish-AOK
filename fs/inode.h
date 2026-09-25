@@ -20,6 +20,10 @@ struct inode_data {
     cond_t flock_unlock;
 
     uint32_t socket_id;
+    // The guest type (SOCK_STREAM_, ...) of the socket bound here, while one
+    // is: connect() refuses a different type with EPROTOTYPE, as Linux's
+    // unix_find_other does. 0 when nothing is bound.
+    int socket_type;
 
     lock_t lock;
 };

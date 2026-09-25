@@ -251,6 +251,20 @@ struct fd {
             // what a caller checks after setting it.
             char so_bindtodevice[16];
 
+            // AF_UNIX SOCK_SEQPACKET carried as framed messages on a host
+            // stream, because the host has no SEQPACKET (fs/sock.c, struct
+            // unix_seqpacket_hdr). The send lock keeps one frame's write whole
+            // against another sender's, and the receive lock one frame's
+            // read against another reader's; seqpacket_lowat is the
+            // SO_SNDLOWAT last set on the host, so an unchanged frame size
+            // costs no syscall; seqpacket_host_buf is the host send buffer,
+            // which bounds the largest frame that can go out whole.
+            bool seqpacket_framed;
+            lock_t seqpacket_send_lock;
+            lock_t seqpacket_recv_lock;
+            int seqpacket_lowat;
+            int seqpacket_host_buf;
+
             // A TCP bind() that has NOT been handed to the host yet. Linux
             // refuses connections to a bound-but-not-listening socket (RST);
             // Darwin silently drops the SYN, so the client hangs for ~8s

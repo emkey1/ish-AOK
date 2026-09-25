@@ -30,6 +30,7 @@ struct inode_data *inode_get_unlocked(struct mount *mount, ino_t ino) {
         mount_retain(mount);
         inode->mount = mount;
         inode->socket_id = 0;
+        inode->socket_type = 0;
         cond_init(&inode->posix_unlock);
         cond_init(&inode->flock_unlock);
         list_init(&inode->posix_locks);

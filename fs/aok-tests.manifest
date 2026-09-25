@@ -295,6 +295,7 @@ scm_credentials_rules.c
 unix_scm_before_accept.c
 epoll_nested.c
 epoll_edge_triggered.c
+unix_seqpacket_msgs.c
 tmpfs_exec.c
 kcmp.c
 file_perms.c

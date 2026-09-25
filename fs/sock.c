@@ -2611,6 +2611,8 @@ static int unix_socket_finish_peer(struct fd *sock);
 // Split out of sock_fd_create so a checkpoint restore can build one and put
 // it at a particular number in a particular process (fdtable_install_at)
 // rather than at the next free number in the current one.
+static void unix_seqpacket_host_init(struct fd *sock);
+
 struct fd *sock_fd_adopt(int sock_fd, int domain, int type, int protocol) {
     struct fd *fd = adhoc_fd_create(&socket_fdops);
     if (fd == NULL)
@@ -2658,6 +2660,7 @@ struct fd *sock_fd_adopt(int sock_fd, int domain, int type, int protocol) {
     if (domain == AF_LOCAL_) {
         cond_init(&fd->socket.unix_got_peer);
         list_init(&fd->socket.unix_scm);
+        unix_seqpacket_host_init(fd);
     }
     sock_debug_event("fd-create", fd, 0, 0);
     return fd;
@@ -2671,8 +2674,10 @@ static fd_t sock_fd_create(int sock_fd, int domain, int type, int protocol) {
 }
 
 // Test hook: pretend the host denied AF_UNIX SOCK_SEQPACKET the way the iOS
-// app sandbox does (EPERM), so the STREAM-fallback path can be exercised on
-// the CLI where the native type otherwise succeeds. Set
+// app sandbox does (EPERM), so that refusal's path through the STREAM
+// fallback can be exercised on the CLI. (macOS itself refuses the type with
+// EPROTONOSUPPORT -- measured -- so the fallback runs there regardless; this
+// only changes which errno it falls back from.) Set
 // ISH_FORCE_SEQPACKET_EPERM=1 in the environment to enable.
 static bool seqpacket_denied_by_host(int domain, int type, int protocol) {
     static int forced = -1;
@@ -2716,12 +2721,14 @@ static bool unix_seqpacket_fallback_needed(int domain, int type, int protocol, i
         case EPROTOTYPE:
         case ESOCKTNOSUPPORT:
         case EOPNOTSUPP:
-        // iOS's app sandbox (unlike an unsandboxed macOS process) denies
-        // AF_UNIX SOCK_SEQPACKET creation outright with EPERM, even though
-        // the Darwin kernel itself supports the socket type -- seen as
+        // iOS's app sandbox denies AF_UNIX SOCK_SEQPACKET creation outright
+        // with EPERM, where macOS answers EPROTONOSUPPORT -- seen as
         // systemd-udevd fatally failing to create /run/udev/control on
         // device ("Failed to create socket: Operation not permitted"),
         // never hitting this fallback since EPERM wasn't in the allowlist.
+        // Either way the socket is a host stream, and the message
+        // boundaries SEQPACKET promises are ours to keep: see
+        // struct unix_seqpacket_hdr.
         case EPERM:
             return true;
         default:
@@ -3150,7 +3157,16 @@ uid_t_ sock_uid(const struct fd *sock) {
     return sock->stat.uid;
 }
 
+static bool sock_is_unix_seqpacket(struct fd *sock);
+static int unix_seqpacket_queued_bytes(struct fd *sock);
+
 int sock_recv_queue(struct fd *sock) {
+    // Message bytes, as Linux counts them (unix_inq_len), not the frames
+    // they travel in on the host (see struct unix_seqpacket_hdr).
+    if (sock_is_unix_seqpacket(sock)) {
+        int queued = unix_seqpacket_queued_bytes(sock);
+        return queued > 0 ? queued : 0;
+    }
     int bytes = 0;
     if (sock->real_fd >= 0 && ioctl(sock->real_fd, FIONREAD, &bytes) == 0 && bytes > 0)
         return bytes;
@@ -4191,7 +4207,10 @@ static int netlink_sockaddr_write(guest_addr_t sockaddr_addr, const void *sockad
     return 0;
 }
 
-static int unix_socket_get(const char *path_raw, struct fd *bind_fd, uint32_t *socket_id) {
+// *bound_type (when asked for) gets the guest type of the socket bound at the
+// name, 0 when none is -- see inode_data.socket_type.
+static int unix_socket_get(const char *path_raw, struct fd *bind_fd, uint32_t *socket_id,
+                           int *bound_type) {
     char path[MAX_PATH];
     // A bind CREATES the name, and Linux resolves it exactly as mknod does
     // (unix_bind_bsd: kern_path_create, then vfs_mknod), so it gets
@@ -4288,6 +4307,10 @@ static int unix_socket_get(const char *path_raw, struct fd *bind_fd, uint32_t *s
     lock(&inode->lock, 0);
     if (inode->socket_id == 0)
         inode->socket_id = unix_socket_next_id();
+    if (bind_fd != NULL)
+        inode->socket_type = bind_fd->socket.type;
+    if (bound_type != NULL)
+        *bound_type = inode->socket_type;
     unlock(&inode->lock);
     *socket_id = inode->socket_id;
 
@@ -4655,13 +4678,15 @@ struct unix_abstract {
     size_t name_len;
     char *name;
     uint32_t socket_id;
+    int socket_type; // of the socket bound here; see inode_data.socket_type
     struct list links;
 };
 #define ABSTRACT_HASH_SIZE 1024
 static struct list abstract_hash[ABSTRACT_HASH_SIZE];
 static lock_t unix_abstract_lock = LOCK_INITIALIZER;
 
-static int unix_abstract_get(const char *name, struct fd *bind_fd, uint32_t *socket_id) {
+static int unix_abstract_get(const char *name, struct fd *bind_fd, uint32_t *socket_id,
+                             int *bound_type) {
     uint32_t hash = str_hash(name);
     size_t name_len = strlen(name);
     lock(&unix_abstract_lock, 0);
@@ -4706,6 +4731,7 @@ static int unix_abstract_get(const char *name, struct fd *bind_fd, uint32_t *soc
         sock->hash = hash;
         sock->name_len = name_len;
         sock->socket_id = unix_socket_next_id();
+        sock->socket_type = 0;
         list_add(bucket, &sock->links);
     }
 
@@ -4718,8 +4744,11 @@ static int unix_abstract_get(const char *name, struct fd *bind_fd, uint32_t *soc
     *socket_id = sock->socket_id;
     if (bind_fd != NULL) {
         sock->refcount++;
+        sock->socket_type = bind_fd->socket.type;
         bind_fd->socket.unix_name_abstract = sock;
     }
+    if (bound_type != NULL)
+        *bound_type = sock->socket_type;
     unlock(&unix_abstract_lock);
     return 0;
 }
@@ -4930,7 +4959,12 @@ static int unix_host_missing_is_refused(struct fd *sock, int err) {
     return err;
 }
 
-static int sockaddr_read_bind(guest_addr_t sockaddr_addr, void *sockaddr, uint_t *sockaddr_len, struct fd *bind_fd) {
+// *peer_type, when asked for: the guest type of the AF_UNIX socket bound at
+// the address, or 0 (nothing bound there, or not AF_UNIX).
+static int sockaddr_read_bind_type(guest_addr_t sockaddr_addr, void *sockaddr, uint_t *sockaddr_len,
+                                   struct fd *bind_fd, int *peer_type) {
+    if (peer_type != NULL)
+        *peer_type = 0;
     // Make sure we can read things without overflowing buffers
     if (*sockaddr_len < 2)
         return _EINVAL;
@@ -5010,14 +5044,14 @@ static int sockaddr_read_bind(guest_addr_t sockaddr_addr, void *sockaddr, uint_t
                 return sock_host_dir_errno;
             if (path[0] != '\0') {
                 STRACE(" unix socket %s", path);
-                err = unix_socket_get(path, bind_fd, &socket_id);
+                err = unix_socket_get(path, bind_fd, &socket_id, peer_type);
             } else {
                 STRACE(" unix abstract socket %s", path + 1);
-                err = unix_abstract_get(path + 1, bind_fd, &socket_id);
+                err = unix_abstract_get(path + 1, bind_fd, &socket_id, peer_type);
                 if (err == _ENOENT && bind_fd == NULL &&
                         unix_socket_should_fallback_x11_path(path + 1)) {
                     STRACE(" unix abstract fallback to path %s", path + 1);
-                    err = unix_socket_get(path + 1, bind_fd, &socket_id);
+                    err = unix_socket_get(path + 1, bind_fd, &socket_id, peer_type);
                 }
                 // An abstract name nobody holds is refused, never missing:
                 // unix_find_abstract() is ECONNREFUSED for connect, sendto and
@@ -5059,8 +5093,15 @@ static int sockaddr_read_bind(guest_addr_t sockaddr_addr, void *sockaddr, uint_t
     return 0;
 }
 
-static int sockaddr_read(guest_addr_t sockaddr_addr, void *sockaddr, uint_t *sockaddr_len) {
-    int err = sockaddr_read_bind(sockaddr_addr, sockaddr, sockaddr_len, NULL);
+static int sockaddr_read_bind(guest_addr_t sockaddr_addr, void *sockaddr, uint_t *sockaddr_len,
+                              struct fd *bind_fd) {
+    return sockaddr_read_bind_type(sockaddr_addr, sockaddr, sockaddr_len, bind_fd, NULL);
+}
+
+// A destination address; *peer_type as for sockaddr_read_bind_type, or NULL.
+static int sockaddr_read_type(guest_addr_t sockaddr_addr, void *sockaddr, uint_t *sockaddr_len,
+                              int *peer_type) {
+    int err = sockaddr_read_bind_type(sockaddr_addr, sockaddr, sockaddr_len, NULL, peer_type);
     if (err < 0)
         return err;
     // As a *destination* (connect/sendto/sendmsg -- everything except bind,
@@ -5080,6 +5121,10 @@ static int sockaddr_read(guest_addr_t sockaddr_addr, void *sockaddr, uint_t *soc
             sin6->sin6_addr = in6addr_loopback;
     }
     return err;
+}
+
+static int sockaddr_read(guest_addr_t sockaddr_addr, void *sockaddr, uint_t *sockaddr_len) {
+    return sockaddr_read_type(sockaddr_addr, sockaddr, sockaddr_len, NULL);
 }
 
 static int ipv6_recverr_fd_get(struct fd *sock);
@@ -5327,6 +5372,13 @@ static void inet_nat_remove_owner(struct fd *fd) {
 // holds and clears both fields, so a later re-release (e.g. a failed rebind
 // followed by fd close) can't double-release the same name.
 static void release_unix_names(struct fd *fd) {
+    // The name no longer has this socket behind it, so it no longer has a
+    // type to refuse a connect for (unix_socket_get).
+    if (fd->socket.unix_name_inode != NULL) {
+        lock(&fd->socket.unix_name_inode->lock, 0);
+        fd->socket.unix_name_inode->socket_type = 0;
+        unlock(&fd->socket.unix_name_inode->lock);
+    }
     inode_release_if_exist(fd->socket.unix_name_inode);
     fd->socket.unix_name_inode = NULL;
     if (fd->socket.unix_name_abstract != NULL) {
@@ -5597,6 +5649,349 @@ static void unix_dgram_cred_hdr_fill(struct unix_dgram_cred_hdr *hdr) {
     hdr->scm_cookie = 0;
 }
 
+// AF_UNIX SOCK_SEQPACKET, which the host does not have: macOS answers
+// EPROTONOSUPPORT for it from socket() and socketpair() alike (measured), and
+// the iOS sandbox EPERM, so it rides on a host SOCK_STREAM
+// (unix_seqpacket_fallback_needed). A stream has no message boundaries, and
+// SEQPACKET is boundaries: one receive is one message, a short buffer
+// truncates it (MSG_TRUNC) and the rest of it is gone, and a send is all of a
+// message or none of it. Carried as bytes, three sends of 1, 2 and 4 bytes
+// came back as one 7-byte read, and a program then waiting for the second
+// message waited for ever.
+//
+// So every message travels as a frame: this header, then the payload. Both
+// ends are guest sockets in this emulator -- a host process cannot make one
+// to talk to -- so the wire format is ours, as it is for
+// unix_dgram_cred_hdr, whose credentials and in-band SCM_RIGHTS cookie this
+// carries the same way.
+struct unix_seqpacket_hdr {
+    uint32_t magic;
+    uint32_t len;           // payload bytes after the header
+    uint64_t scm_cookie;    // SCM_RIGHTS parcel (unix_dgram_scm registry), or 0
+    struct ucred_ cred;     // the sender's, for SO_PASSCRED
+    uint32_t pad;
+};
+#define UNIX_SEQPACKET_MAGIC 0x5E9AC4E7
+// Linux's net.core.wmem_default and rmem_default: what SO_SNDBUF and
+// SO_RCVBUF read on a new socket, and less 32 the largest message a send
+// takes (unix_dgram_sendmsg).
+#define UNIX_SEQPACKET_LINUX_BUF 212992
+// The host buffers under a framed socket. A frame goes out whole only while it
+// fits the host send buffer (the low-water mark that keeps it whole is clamped
+// to that, and a larger frame goes out in pieces -- measured), so they must
+// hold the largest frame a guest may send. Darwin's default for a unix stream
+// is 8192.
+#define UNIX_SEQPACKET_HOST_BUF 262144
+
+static bool sock_is_unix_seqpacket(struct fd *sock) {
+    return sock->socket.domain == AF_LOCAL_ && sock->socket.seqpacket_framed &&
+        sock->real_fd >= 0;
+}
+
+static void unix_seqpacket_host_buffers(struct fd *sock, int size) {
+    (void) setsockopt(sock->real_fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
+    (void) setsockopt(sock->real_fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
+    int got = 0;
+    socklen_t len = sizeof(got);
+    if (getsockopt(sock->real_fd, SOL_SOCKET, SO_SNDBUF, &got, &len) == 0)
+        sock->socket.seqpacket_host_buf = got;
+}
+
+// Every guest SEQPACKET socket whose host socket turned out to be a stream:
+// socket(), socketpair(), accept() and a checkpoint's rebuild all come
+// through sock_fd_adopt. A host that has SEQPACKET of its own keeps it.
+static void unix_seqpacket_host_init(struct fd *sock) {
+    if (sock->socket.domain != AF_LOCAL_ || sock->socket.type != SOCK_SEQPACKET_ ||
+            sock->real_fd < 0)
+        return;
+    int host_type = 0;
+    socklen_t len = sizeof(host_type);
+    if (getsockopt(sock->real_fd, SOL_SOCKET, SO_TYPE, &host_type, &len) < 0 ||
+            host_type != SOCK_STREAM)
+        return;
+    sock->socket.seqpacket_framed = true;
+    lock_init(&sock->socket.seqpacket_send_lock, "seqpacket_send\0");
+    lock_init(&sock->socket.seqpacket_recv_lock, "seqpacket_recv\0");
+    sock->socket.seqpacket_lowat = 0;
+    unix_seqpacket_host_buffers(sock, UNIX_SEQPACKET_HOST_BUF);
+    // Linux's numbers, not the host's, as a Linux socket reports them.
+    sock->socket.so_sndbuf = UNIX_SEQPACKET_LINUX_BUF;
+    sock->socket.so_rcvbuf = UNIX_SEQPACKET_LINUX_BUF;
+    sock->socket.so_sndbuf_set = true;
+    sock->socket.so_rcvbuf_set = true;
+}
+
+// The largest message a send takes whole: Linux's limit, and the host's.
+static size_t unix_seqpacket_max_msg(struct fd *sock) {
+    size_t linux_max = sock->socket.so_sndbuf > 32 ? sock->socket.so_sndbuf - 32 : 0;
+    size_t host_buf = sock->socket.seqpacket_host_buf > 0 ?
+        (size_t) sock->socket.seqpacket_host_buf : 0;
+    size_t host_max = host_buf > sizeof(struct unix_seqpacket_hdr) ?
+        host_buf - sizeof(struct unix_seqpacket_hdr) : 0;
+    return linux_max < host_max ? linux_max : host_max;
+}
+
+// Send one message as one frame: all of it or nothing, as a host sendmsg on a
+// datagram socket would. What keeps the host stream's write whole is
+// SO_SNDLOWAT at the frame's size: Darwin's sosend neither writes nor waits
+// while the free space is below the low-water mark, so with the mark at the
+// frame size nothing goes until all of it fits (measured: never a partial
+// write, and a reader never sees part of a frame). The host descriptor is
+// nonblocking, so "until it fits" is EAGAIN, which the callers wait out as
+// for any other send. `scm_cookie` rides in the header. Returns the payload
+// length, or -1 with errno set.
+static ssize_t unix_seqpacket_sendmsg(struct fd *sock, const struct msghdr *msg, int flags,
+                                      uint64_t scm_cookie) {
+    size_t len = sock_iov_requested(msg->msg_iov, msg->msg_iovlen);
+    if (len > unix_seqpacket_max_msg(sock)) {
+        errno = EMSGSIZE;
+        return -1;
+    }
+    struct unix_seqpacket_hdr hdr = {
+        .magic = UNIX_SEQPACKET_MAGIC,
+        .len = (uint32_t) len,
+        .scm_cookie = scm_cookie,
+    };
+    fill_cred(&hdr.cred);
+    struct iovec stack_iov[9];
+    struct iovec *iov = stack_iov;
+    size_t iovlen = (size_t) msg->msg_iovlen + 1;
+    if (iovlen > sizeof(stack_iov) / sizeof(stack_iov[0])) {
+        iov = malloc(iovlen * sizeof(*iov));
+        if (iov == NULL) {
+            errno = ENOMEM;
+            return -1;
+        }
+    }
+    iov[0] = (struct iovec) {.iov_base = &hdr, .iov_len = sizeof(hdr)};
+    if (msg->msg_iovlen > 0)
+        memcpy(&iov[1], msg->msg_iov, (size_t) msg->msg_iovlen * sizeof(*iov));
+    struct msghdr host = {.msg_iov = iov, .msg_iovlen = (int) iovlen};
+    int frame = (int) (sizeof(hdr) + len);
+
+    // The lock keeps the mark and the write together: another sender's
+    // frame size set in between could let this one go out in pieces. It is
+    // never held across a wait -- the write below cannot block.
+    lock(&sock->socket.seqpacket_send_lock, 0);
+    if (sock->socket.seqpacket_lowat != frame &&
+            setsockopt(sock->real_fd, SOL_SOCKET, SO_SNDLOWAT, &frame, sizeof(frame)) == 0)
+        sock->socket.seqpacket_lowat = frame;
+    ssize_t sent = sendmsg(sock->real_fd, &host, flags | MSG_DONTWAIT);
+    int saved = errno;
+    // Part of a frame would derail every message after it, so it has to be
+    // finished, whatever that costs this one caller. The mark makes it
+    // unreachable; this is the belt to that brace.
+    while (sent > 0 && sent < frame) {
+        static _Atomic bool warned;
+        if (!atomic_exchange(&warned, true))
+            printk("WARNING: a SEQPACKET frame went out in pieces (%zd of %d); finishing it\n",
+                   sent, frame);
+        size_t done = (size_t) sent;
+        struct iovec rest[sizeof(stack_iov) / sizeof(stack_iov[0])];
+        struct iovec *rest_iov = iovlen <= sizeof(rest) / sizeof(rest[0]) ? rest :
+            malloc(iovlen * sizeof(*rest_iov));
+        if (rest_iov == NULL)
+            break;
+        memcpy(rest_iov, iov, iovlen * sizeof(*rest_iov));
+        int rest_len = (int) iovlen;
+        socket_iov_advance(rest_iov, &rest_len, done);
+        struct msghdr more = {.msg_iov = rest_iov, .msg_iovlen = rest_len};
+        struct pollfd out = {.fd = sock->real_fd, .events = POLLOUT};
+        poll(&out, 1, 100);
+        ssize_t n = sendmsg(sock->real_fd, &more, flags | MSG_DONTWAIT);
+        if (rest_iov != rest)
+            free(rest_iov);
+        if (n < 0 && errno != EAGAIN && errno != EINTR)
+            break;
+        if (n > 0)
+            sent += n;
+    }
+    unlock(&sock->socket.seqpacket_send_lock);
+    if (iov != stack_iov)
+        free(iov);
+    if (sent < 0) {
+        errno = saved;
+        return -1;
+    }
+    return (ssize_t) len;
+}
+
+// A whole frame waiting? Frames are written whole, so a header with part of
+// its frame behind it is one a checkpoint's requeue is still writing, and the
+// rest is a moment away.
+static bool unix_seqpacket_frame_ready(struct fd *sock, const struct unix_seqpacket_hdr *hdr) {
+    int avail = 0;
+    if (ioctl(sock->real_fd, FIONREAD, &avail) < 0)
+        return true; // let the read below find out
+    return avail >= 0 && (size_t) avail >= sizeof(*hdr) + hdr->len;
+}
+
+// Take one message off the host stream, as a host recvmsg takes one datagram:
+// the payload lands in msg's iovs, as much as they hold, and the rest of the
+// message is discarded with it -- MSG_TRUNC in msg_flags says so -- unless
+// the read is a MSG_PEEK, which takes nothing. *hdr gets the frame's header:
+// the payload's full length, the sender's credentials and its SCM parcel's
+// cookie. Returns the bytes delivered, 0 at end of file, or -1 with errno --
+// EAGAIN while no whole message is waiting (the host descriptor is always
+// nonblocking; the callers wait for POLLIN).
+static ssize_t unix_seqpacket_recvmsg_locked(struct fd *sock, struct msghdr *msg, int flags,
+                                             struct unix_seqpacket_hdr *hdr) {
+    memset(hdr, 0, sizeof(*hdr));
+    msg->msg_flags = 0;
+    msg->msg_controllen = 0;
+    msg->msg_namelen = 0;
+    ssize_t n = recv(sock->real_fd, hdr, sizeof(*hdr), MSG_PEEK | MSG_DONTWAIT);
+    if (n <= 0)
+        return n;
+    if (hdr->magic != UNIX_SEQPACKET_MAGIC) {
+        // Bytes that are not a frame. Nothing in the emulator writes those
+        // to a framed socket, so this is a bug somewhere -- but a reader
+        // wedged behind it for good would be worse than the bytes as they
+        // are, which is what it gets.
+        static _Atomic bool warned;
+        if (!atomic_exchange(&warned, true))
+            printk("WARNING: a SEQPACKET socket received bytes that are not a frame "
+                   "(first word %#x); delivering them unframed\n", hdr->magic);
+        memset(hdr, 0, sizeof(*hdr));
+        return recvmsg(sock->real_fd, msg, (flags & MSG_PEEK) | MSG_DONTWAIT);
+    }
+    if ((size_t) n < sizeof(*hdr) || !unix_seqpacket_frame_ready(sock, hdr)) {
+        errno = EINPROGRESS; // unix_seqpacket_recvmsg: not yet, but soon
+        return -1;
+    }
+
+    size_t cap = sock_iov_requested(msg->msg_iov, msg->msg_iovlen);
+    size_t take = hdr->len < cap ? hdr->len : cap;
+    // The header into scratch, then the caller's iovs cut down to `take`.
+    struct unix_seqpacket_hdr scratch;
+    struct iovec stack_iov[9];
+    struct iovec *iov = stack_iov;
+    size_t iovlen = (size_t) msg->msg_iovlen + 1;
+    if (iovlen > sizeof(stack_iov) / sizeof(stack_iov[0])) {
+        iov = malloc(iovlen * sizeof(*iov));
+        if (iov == NULL) {
+            errno = ENOMEM;
+            return -1;
+        }
+    }
+    iov[0] = (struct iovec) {.iov_base = &scratch, .iov_len = sizeof(scratch)};
+    size_t used = 1, left = take;
+    for (size_t i = 0; i < (size_t) msg->msg_iovlen && left > 0; i++) {
+        size_t chunk = msg->msg_iov[i].iov_len < left ? msg->msg_iov[i].iov_len : left;
+        iov[used++] = (struct iovec) {.iov_base = msg->msg_iov[i].iov_base, .iov_len = chunk};
+        left -= chunk;
+    }
+    struct msghdr host = {.msg_iov = iov, .msg_iovlen = (int) used};
+    n = recvmsg(sock->real_fd, &host, (flags & MSG_PEEK) | MSG_DONTWAIT);
+    int saved = errno;
+    if (iov != stack_iov)
+        free(iov);
+    if (n < 0) {
+        errno = saved;
+        return -1;
+    }
+    size_t got = (size_t) n > sizeof(scratch) ? (size_t) n - sizeof(scratch) : 0;
+    if (!(flags & MSG_PEEK)) {
+        // What did not fit goes with the message. It is all there already
+        // (unix_seqpacket_frame_ready), so this never waits.
+        size_t discard = hdr->len - take;
+        char sink[4096];
+        while (discard > 0) {
+            ssize_t d = recv(sock->real_fd, sink, discard < sizeof(sink) ? discard : sizeof(sink),
+                             MSG_DONTWAIT);
+            if (d < 0 && errno == EINTR)
+                continue;
+            if (d <= 0)
+                break;
+            discard -= (size_t) d;
+        }
+    }
+    if (hdr->len > take)
+        msg->msg_flags |= MSG_TRUNC;
+    return (ssize_t) (got < take ? got : take);
+}
+
+// The lock makes the look at the header and the read of its frame one step:
+// two readers of one socket otherwise saw the same header, and the second read
+// the NEXT frame's bytes by the first one's length, and every message after
+// that was garbage. Nothing under it waits; a frame still arriving is waited
+// for outside it.
+static ssize_t unix_seqpacket_recvmsg(struct fd *sock, struct msghdr *msg, int flags,
+                                      struct unix_seqpacket_hdr *hdr) {
+    lock(&sock->socket.seqpacket_recv_lock, 0);
+    ssize_t n = unix_seqpacket_recvmsg_locked(sock, msg, flags, hdr);
+    int saved = errno;
+    unlock(&sock->socket.seqpacket_recv_lock);
+    if (n < 0 && saved == EINPROGRESS) {
+        usleep(1000);
+        saved = EAGAIN;
+    }
+    errno = saved;
+    return n;
+}
+
+// SIOCINQ for SEQPACKET: Linux counts the payload of every queued message
+// (unix_inq_len); the host counts frame headers too.
+static int unix_seqpacket_queued_bytes(struct fd *sock) {
+    // Under the receive lock, so the queue starts at a frame, not in the
+    // middle of one a reader is taking.
+    lock(&sock->socket.seqpacket_recv_lock, 0);
+    int avail = 0;
+    if (ioctl(sock->real_fd, FIONREAD, &avail) < 0) {
+        unlock(&sock->socket.seqpacket_recv_lock);
+        return -1;
+    }
+    if (avail <= 0) {
+        unlock(&sock->socket.seqpacket_recv_lock);
+        return 0;
+    }
+    char *buf = malloc((size_t) avail);
+    if (buf == NULL) {
+        unlock(&sock->socket.seqpacket_recv_lock);
+        errno = ENOMEM;
+        return -1;
+    }
+    ssize_t n = recv(sock->real_fd, buf, (size_t) avail, MSG_PEEK | MSG_DONTWAIT);
+    unlock(&sock->socket.seqpacket_recv_lock);
+    int total = 0;
+    size_t off = 0;
+    while (n > 0 && off + sizeof(struct unix_seqpacket_hdr) <= (size_t) n) {
+        struct unix_seqpacket_hdr hdr;
+        memcpy(&hdr, buf + off, sizeof(hdr));
+        if (hdr.magic != UNIX_SEQPACKET_MAGIC)
+            break;
+        total += (int) hdr.len;
+        off += sizeof(hdr) + hdr.len;
+    }
+    free(buf);
+    return total;
+}
+
+// A socket closing with messages still queued: whatever descriptors rode in
+// with them are released, as Linux releases them with the queue. Their
+// parcels wait in the registry for the reader, with no expiry (see
+// unix_dgram_scm_register), so nothing else would.
+static void unix_seqpacket_discard_queue(struct fd *sock) {
+    // What is queued now, and no more: a peer still sending must not keep
+    // the close going.
+    int budget = 0;
+    if (ioctl(sock->real_fd, FIONREAD, &budget) < 0)
+        return;
+    while (budget > 0) {
+        struct unix_seqpacket_hdr hdr;
+        struct msghdr none = {0};
+        ssize_t n = unix_seqpacket_recvmsg(sock, &none, 0, &hdr);
+        if (n < 0 || hdr.magic != UNIX_SEQPACKET_MAGIC)
+            break;
+        budget -= (int) (sizeof(hdr) + hdr.len);
+        if (hdr.scm_cookie != 0) {
+            struct scm *dropped = unix_dgram_scm_take(hdr.scm_cookie);
+            if (dropped != NULL)
+                scm_free(dropped);
+        }
+    }
+}
+
 // /dev/log and /run|/dev/initctl have a built-in fallback sink so guests can
 // log (or send initctl messages) even when no daemon is running. But if a real
 // daemon (e.g. syslog-ng) has bound the socket, we must connect to it for real
@@ -5644,7 +6039,8 @@ static int_t sys_connect_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t
         return deferred_err;
 
     struct sockaddr_max_ sockaddr;
-    int err = sockaddr_read(sockaddr_addr, &sockaddr, &sockaddr_len);
+    int peer_type = 0;
+    int err = sockaddr_read_type(sockaddr_addr, &sockaddr, &sockaddr_len, &peer_type);
     if (err < 0) {
         // No real socket is bound at /dev/log or initctl: fall back to the
         // built-in sink so logging/initctl still succeed without a daemon.
@@ -5669,6 +6065,14 @@ static int_t sys_connect_common(fd_t sock_fd, guest_addr_t sockaddr_addr, uint_t
         sock_debug_event("connect-netlink", sock, 0, 0);
         return 0;
     }
+
+    // A unix connection joins two sockets of one type; anything else is
+    // EPROTOTYPE (Linux's unix_find_other). The host told stream from datagram
+    // itself, but a SEQPACKET socket here IS a host stream (see
+    // unix_seqpacket_hdr), so a SEQPACKET client reached a STREAM listener,
+    // and the other way round, and each side then misread the other's bytes.
+    if (sock->socket.domain == AF_LOCAL_ && peer_type != 0 && peer_type != sock->socket.type)
+        return _EPROTOTYPE;
 
     if (sock->socket.domain == AF_INET_) {
         struct sockaddr_in guest_dest = *(struct sockaddr_in *) &sockaddr;
@@ -6531,6 +6935,10 @@ static int_t sys_sendto_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t l
     bool sendto_devlog_fallback = sock->socket.domain == AF_LOCAL_ &&
         (guest_sockaddr_is_devlog(sockaddr_addr, sockaddr_len) ||
          guest_sockaddr_is_initctl(sockaddr_addr, sockaddr_len));
+    // A SEQPACKET send ignores an address, as sendmsg does.
+    bool unix_seqpacket = sock_is_unix_seqpacket(sock);
+    if (unix_seqpacket)
+        sockaddr_addr = 0;
     struct sockaddr_max_ sockaddr;
     if (sockaddr_addr) {
         err = sockaddr_read(sockaddr_addr, &sockaddr, &sockaddr_len);
@@ -6593,6 +7001,10 @@ static int_t sys_sendto_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t l
             errno = 0;
             if (unix_dgram) {
                 res = sendmsg(sock->real_fd, &dgram_msg, real_flags);
+            } else if (unix_seqpacket) {
+                struct iovec whole = {.iov_base = buffer, .iov_len = len};
+                struct msghdr one = {.msg_iov = &whole, .msg_iovlen = 1};
+                res = unix_seqpacket_sendmsg(sock, &one, real_flags, 0);
             } else if (sockaddr_addr == 0) {
                 res = send(sock->real_fd, buffer + sent, len - sent, real_flags);
             } else {
@@ -6712,7 +7124,10 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
     // receiving into a buffer large enough to hold the whole datagram and then
     // copy back only what the caller asked for. (Netlink has its own MSG_TRUNC
     // path.)
-    bool dgram_trunc = (flags & MSG_TRUNC_) &&
+    // A SEQPACKET frame says its length itself.
+    bool unix_seqpacket = sock_is_unix_seqpacket(sock);
+    struct unix_seqpacket_hdr seq_hdr = {};
+    bool dgram_trunc = (flags & MSG_TRUNC_) && !unix_seqpacket &&
         sock->socket.type != SOCK_STREAM_ && sock->socket.domain != AF_NETLINK_;
     size_t recv_cap = len;
     if (dgram_trunc && recv_cap < 65536)
@@ -6791,7 +7206,12 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
     TASK_MAY_BLOCK {
         while (1) {
             sigset_t oldmask;
-            if (!socket_blocking_syscall_begin(&oldmask)) {
+            // Not for a SEQPACKET socket: its read takes a lock, and a poke
+            // that unwound it from in there would leave the lock held for
+            // good -- every other reader of the socket then hangs on it, and
+            // so does the thread's own exit, which waits for its locks. The
+            // read never blocks, so it needs no unwinding out of.
+            if (!unix_seqpacket && !socket_blocking_syscall_begin(&oldmask)) {
                 // A failed begin may be nothing but an unwound host SIGUSR1
                 // poke, with no guest signal behind it -- the case fs/real.c's
                 // two sigunwind branches retry and socket_wait_ready ignores.
@@ -6809,14 +7229,22 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
                 break;
             }
             errno = 0;
-            if (sockaddr_addr == 0 && sockaddr_len_addr == 0) {
+            if (unix_seqpacket) {
+                struct iovec room = {.iov_base = buffer, .iov_len = recv_cap};
+                struct msghdr one = {.msg_iov = &room, .msg_iovlen = 1};
+                res = unix_seqpacket_recvmsg(sock, &one, host_flags, &seq_hdr);
+                // The sender, as Linux names an unbound one: the family alone.
+                if (sockaddr_len >= sizeof(sa_family_t))
+                    ((struct sockaddr *) sockaddr)->sa_family = AF_UNIX;
+            } else if (sockaddr_addr == 0 && sockaddr_len_addr == 0) {
                 res = recv(sock->real_fd, buffer + got, recv_cap - got, host_flags);
             } else {
                 res = recvfrom(sock->real_fd, buffer + got, recv_cap - got, host_flags,
                                sockaddr_addr != 0 ? (void *) sockaddr : NULL,
                                sockaddr_len_addr != 0 ? &sockaddr_len : NULL);
             }
-            socket_blocking_syscall_end();
+            if (!unix_seqpacket)
+                socket_blocking_syscall_end();
             if (res >= 0) {
                 if (!waitall)
                     break;
@@ -6905,6 +7333,18 @@ static int_t sys_recvfrom_common(fd_t sock_fd, guest_addr_t buffer_addr, dword_t
         return mapped_err;
     }
 
+    if (unix_seqpacket && res >= 0 && seq_hdr.magic == UNIX_SEQPACKET_MAGIC) {
+        // MSG_TRUNC asks for the message's own length, which may be more
+        // than was copied. And a message taken without a msghdr takes its
+        // descriptors nowhere: they are closed, as on Linux.
+        if (flags & MSG_TRUNC_)
+            res = (ssize_t) seq_hdr.len;
+        if (seq_hdr.scm_cookie != 0 && !(real_flags & MSG_PEEK)) {
+            struct scm *dropped = unix_dgram_scm_take(seq_hdr.scm_cookie);
+            if (dropped != NULL)
+                scm_free(dropped);
+        }
+    }
     // Strip the in-band cred header off AF_LOCAL datagrams (this bare
     // recvfrom/recv surface has nowhere to deliver creds; recvmsg does).
     if (unix_dgram && res >= (ssize_t) sizeof(struct unix_dgram_cred_hdr)) {
@@ -7333,9 +7773,21 @@ static int_t sys_setsockopt_guest_abi(fd_t sock_fd, dword_t level, dword_t optio
             doubled = floor;
         // Best-effort on the host; its own clamps are its business, and a
         // rejection must not fail a call Linux always accepts.
-        int host_val = (int) (v == 0 ? floor / 2 : v);
-        (void) setsockopt(sock->real_fd, SOL_SOCKET,
-                          rcv ? SO_RCVBUF : SO_SNDBUF, &host_val, sizeof(host_val));
+        //
+        // Except under a SEQPACKET socket, whose host buffers must hold the
+        // largest message the guest may send, for that message to go out
+        // whole (unix_seqpacket_sendmsg): they grow with the guest's number
+        // and never shrink below their start, and the guest's number is
+        // what limits a message (unix_seqpacket_max_msg).
+        if (sock_is_unix_seqpacket(sock)) {
+            int want = (int) doubled + (int) sizeof(struct unix_seqpacket_hdr);
+            if (want > sock->socket.seqpacket_host_buf)
+                unix_seqpacket_host_buffers(sock, want);
+        } else {
+            int host_val = (int) (v == 0 ? floor / 2 : v);
+            (void) setsockopt(sock->real_fd, SOL_SOCKET,
+                              rcv ? SO_RCVBUF : SO_SNDBUF, &host_val, sizeof(host_val));
+        }
         if (rcv) {
             sock->socket.so_rcvbuf = doubled;
             sock->socket.so_rcvbuf_set = true;
@@ -8125,6 +8577,11 @@ struct unix_dgram_scm {
     uint64_t cookie;
     struct scm *scm;
     time_t added;
+    // A SEQPACKET message's parcel: it waits as long as its message does,
+    // which on a connection nobody is reading yet can be any time at all, so
+    // it never expires. The receiving socket's close releases it instead
+    // (unix_seqpacket_discard_queue).
+    bool keep;
     struct list list;
 };
 #define UNIX_DGRAM_SCM_TTL_SECS 60
@@ -8135,7 +8592,7 @@ static void unix_dgram_scm_gc_locked(void) {
     time_t now = time(NULL);
     struct unix_dgram_scm *entry, *tmp;
     list_for_each_entry_safe(&unix_dgram_scms, entry, tmp, list) {
-        if (now - entry->added < UNIX_DGRAM_SCM_TTL_SECS)
+        if (entry->keep || now - entry->added < UNIX_DGRAM_SCM_TTL_SECS)
             continue;
         list_remove(&entry->list);
         scm_free(entry->scm);
@@ -8144,8 +8601,8 @@ static void unix_dgram_scm_gc_locked(void) {
 }
 
 // Takes ownership of `scm` on success; returns its cookie (never 0), or 0
-// on allocation failure (caller keeps ownership).
-static uint64_t unix_dgram_scm_register(struct scm *scm) {
+// on allocation failure (caller keeps ownership). `keep`: see the field.
+static uint64_t unix_dgram_scm_register(struct scm *scm, bool keep) {
     struct unix_dgram_scm *entry = malloc(sizeof(*entry));
     if (entry == NULL)
         return 0;
@@ -8156,6 +8613,7 @@ static uint64_t unix_dgram_scm_register(struct scm *scm) {
     } while (entry->cookie == 0);
     entry->scm = scm;
     entry->added = time(NULL);
+    entry->keep = keep;
     list_add_tail(&unix_dgram_scms, &entry->list);
     uint64_t cookie = entry->cookie;
     unlock(&unix_dgram_scm_lock);
@@ -8503,9 +8961,10 @@ static int_t sys_sendmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
     if (err < 0)
         return err;
 
-    // msg_name
+    // msg_name. A SEQPACKET send ignores one, as Linux's does: the socket
+    // is connected, and the message goes to its peer.
     struct sockaddr_max_ msg_name;
-    if (msg_fake.msg_name != 0) {
+    if (msg_fake.msg_name != 0 && !sock_is_unix_seqpacket(sock)) {
         int err = sockaddr_read(msg_fake.msg_name, &msg_name, &msg_fake.msg_namelen);
         if (err < 0)
             return err;
@@ -8625,9 +9084,9 @@ static int_t sys_sendmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
         if (num_fds > 0) {
             // The dgram transport carries the parcel by cookie in the
             // in-band header instead (registered below, after the fds are
-            // collected); only the stream transport uses the sentinel-fd +
-            // peer-queue scheme.
-            if (!sock_is_unix_dgram(sock)) {
+            // collected), and so does SEQPACKET's framing; only the stream
+            // transport uses the sentinel-fd + peer-queue scheme.
+            if (!sock_is_unix_dgram(sock) && !sock_is_unix_seqpacket(sock)) {
             // send one (1) real fd and put the rest in a struct scm
             static int real_fd = -1;
             if (real_fd == -1) {
@@ -8665,13 +9124,14 @@ static int_t sys_sendmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
                     scm->fds[fd_i++] = fd_retain(f_get(fds[i]));
                 }
             }
-            if (sock_is_unix_dgram(sock)) {
+            if (sock_is_unix_dgram(sock) || sock_is_unix_seqpacket(sock)) {
                 // Datagram transport: park the parcel in the registry and
                 // ship its cookie in the in-band header (filled below).
                 // There may legitimately be no unix_peer (sendmsg with
                 // msg_name, many-senders-one-receiver sockets like
-                // /run/systemd/notify).
-                dgram_scm_cookie = unix_dgram_scm_register(scm);
+                // /run/systemd/notify). A SEQPACKET frame carries it the
+                // same way, so the fds arrive with their own message.
+                dgram_scm_cookie = unix_dgram_scm_register(scm, sock_is_unix_seqpacket(sock));
                 if (dgram_scm_cookie == 0) {
                     err = _ENOMEM;
                     goto out_free_scm;
@@ -8730,6 +9190,7 @@ static int_t sys_sendmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
     // unix_dgram_cred_hdr). Use a shadow msghdr with a prepended header iov
     // so the original msg (and its cleanup paths) stay untouched.
     bool unix_dgram_send = sock_is_unix_dgram(sock);
+    bool unix_seqpacket_send = sock_is_unix_seqpacket(sock);
     struct unix_dgram_cred_hdr dgram_hdr;
     struct iovec *dgram_iov = NULL;
     struct msghdr host_send_msg = msg;
@@ -8764,7 +9225,10 @@ static int_t sys_sendmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
             struct msghdr *host_msg = unix_dgram_send ? &host_send_msg : &msg;
             if (resume_iov != NULL)
                 host_msg = &resume_msg;
-            send_res = sendmsg(sock->real_fd, host_msg, real_flags);
+            if (unix_seqpacket_send)
+                send_res = unix_seqpacket_sendmsg(sock, &msg, real_flags, dgram_scm_cookie);
+            else
+                send_res = sendmsg(sock->real_fd, host_msg, real_flags);
             if (send_res >= 0) {
                 if (!send_all)
                     break;
@@ -9257,6 +9721,10 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
         host_recv_msg.msg_iovlen = msg.msg_iovlen + 1;
     }
     struct msghdr *host_msg = unix_dgram ? &host_recv_msg : &msg;
+    // A SEQPACKET frame's header goes to scratch the same way (see
+    // unix_seqpacket_recvmsg).
+    bool unix_seqpacket = sock_is_unix_seqpacket(sock);
+    struct unix_seqpacket_hdr seq_hdr = {};
     ssize_t res = 0;
     // See the recvfrom path for why MSG_WAITALL cannot reach a nonblocking
     // host socket. Same emulation, over the iovec array instead of a buffer.
@@ -9280,7 +9748,8 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
             sock->socket.ipv6_recverr;
         while (1) {
             sigset_t oldmask;
-            if (!socket_blocking_syscall_begin(&oldmask)) {
+            // Not around a SEQPACKET read; see sys_recvfrom_common.
+            if (!unix_seqpacket && !socket_blocking_syscall_begin(&oldmask)) {
                 // A stray poke is not an interruption; see sys_recvfrom_common.
                 if (!socket_guest_signal_pending())
                     continue;
@@ -9290,11 +9759,20 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
             }
             errno = 0;
             struct msghdr *attempt = resume_iov != NULL ? &resume_msg : host_msg;
-            if (use_ipv6_errqueue)
+            if (use_ipv6_errqueue) {
                 res = recvmsg_ipv6_errqueue(sock, attempt, host_flags);
-            else
+            } else if (unix_seqpacket) {
+                res = unix_seqpacket_recvmsg(sock, attempt, host_flags, &seq_hdr);
+                // The sender, as Linux names an unbound one: the family alone.
+                if (res >= 0 && attempt->msg_name != NULL) {
+                    ((struct sockaddr *) attempt->msg_name)->sa_family = AF_UNIX;
+                    attempt->msg_namelen = sizeof(sa_family_t);
+                }
+            } else {
                 res = recvmsg(sock->real_fd, attempt, host_flags);
-            socket_blocking_syscall_end();
+            }
+            if (!unix_seqpacket)
+                socket_blocking_syscall_end();
             if (res >= 0) {
                 if (!waitall)
                     break;
@@ -9395,6 +9873,18 @@ static int_t sys_recvmsg_guest_abi(fd_t sock_fd, guest_addr_t msghdr_addr, int_t
             else
                 msg.msg_flags &= ~MSG_TRUNC;
         }
+    }
+    if (unix_seqpacket && res >= 0 && seq_hdr.magic == UNIX_SEQPACKET_MAGIC) {
+        // The frame carried what a datagram's header carries: the sender's
+        // credentials, and its descriptors, taken only by a real read (see
+        // the datagram case above). MSG_TRUNC asks for the message's own
+        // length, which may be more than was copied.
+        dgram_hdr.cred = seq_hdr.cred;
+        have_dgram_cred = true;
+        if (seq_hdr.scm_cookie != 0 && !(flags & MSG_PEEK_))
+            dgram_scm = unix_dgram_scm_take(seq_hdr.scm_cookie);
+        if (flags & MSG_TRUNC_)
+            res = (ssize_t) seq_hdr.len;
     }
     size_t requested = sock_iov_requested(msg.msg_iov, msg.msg_iovlen);
     err = 0;
@@ -10046,6 +10536,8 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
         {.iov_base = buf, .iov_len = size},
     };
     struct msghdr dgram_msg = {.msg_iov = dgram_iov, .msg_iovlen = 2};
+    bool unix_seqpacket = sock_is_unix_seqpacket(fd);
+    struct unix_seqpacket_hdr seq_hdr = {};
     ssize_t res = 0;
     struct socket_io_wait wait = {};
     bool peer_gone_dropped = false;
@@ -10053,10 +10545,15 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
     TASK_MAY_BLOCK {
         while (1) {
             errno = 0;
-            if (unix_dgram)
+            if (unix_dgram) {
                 res = recvmsg(fd->real_fd, &dgram_msg, 0);
-            else
+            } else if (unix_seqpacket) {
+                struct iovec room = {.iov_base = buf, .iov_len = size};
+                struct msghdr one = {.msg_iov = &room, .msg_iovlen = 1};
+                res = unix_seqpacket_recvmsg(fd, &one, 0, &seq_hdr);
+            } else {
                 res = read(fd->real_fd, buf, size);
+            }
             if (res >= 0)
                 break;
             if (sock_io_drop_peer_gone(fd, &peer_gone_dropped))
@@ -10122,6 +10619,12 @@ static ssize_t sock_read(struct fd *fd, void *buf, size_t size) {
             sock_x11_event("read-err", fd, -1, err, size);
         return err;
     }
+    // See the recvfrom path: plain read() discards the parcel.
+    if (unix_seqpacket && res >= 0 && seq_hdr.scm_cookie != 0) {
+        struct scm *dropped = unix_dgram_scm_take(seq_hdr.scm_cookie);
+        if (dropped != NULL)
+            scm_free(dropped);
+    }
     if (unix_dgram && res >= (ssize_t) sizeof(dgram_hdr) &&
             dgram_hdr.magic == UNIX_DGRAM_CRED_MAGIC) {
         res -= sizeof(dgram_hdr);
@@ -10184,13 +10687,19 @@ static ssize_t sock_write(struct fd *fd, const void *buf, size_t size) {
     struct socket_io_wait wait = {};
     bool peer_gone_dropped = false;
     socket_force_host_nonblock(fd);
+    bool unix_seqpacket = sock_is_unix_seqpacket(fd);
     TASK_MAY_BLOCK {
         while (1) {
             errno = 0;
-            if (unix_dgram)
+            if (unix_dgram) {
                 res = sendmsg(fd->real_fd, &dgram_msg, 0);
-            else
+            } else if (unix_seqpacket) {
+                struct iovec whole = {.iov_base = (void *) buf, .iov_len = size};
+                struct msghdr one = {.msg_iov = &whole, .msg_iovlen = 1};
+                res = unix_seqpacket_sendmsg(fd, &one, 0, 0);
+            } else {
                 res = write(fd->real_fd, (const char *) buf + sent, size - sent);
+            }
             if (res >= 0) {
                 if (!send_all)
                     break;
@@ -10343,6 +10852,13 @@ static int sock_ioctl(struct fd *fd, int cmd, void *arg) {
 #endif
         return 0;
     }
+    if (cmd == FIONREAD_ && sock_is_unix_seqpacket(fd)) {
+        int queued = unix_seqpacket_queued_bytes(fd);
+        if (queued < 0)
+            return errno_map();
+        *(dword_t *) arg = (dword_t) queued;
+        return 0;
+    }
     return realfs_ioctl(fd, cmd, arg);
 }
 
@@ -10436,6 +10952,8 @@ static int sock_close(struct fd *fd) {
     }
     if (fd->real_fd < 0)
         return 0;
+    if (sock_is_unix_seqpacket(fd))
+        unix_seqpacket_discard_queue(fd);
     return realfs_close(fd);
 }
 
@@ -10895,11 +11413,11 @@ static struct fd *sock_ckpt_rebuild_unix(const struct sock_ckpt_desc *desc, int 
         if (generic_statat(AT_PWD, path, &stale, 0) >= 0 &&
                 (stale.mode & S_IFMT) == S_IFSOCK)
             generic_unlinkat(AT_PWD, path);
-        e = unix_socket_get(path, fd, &socket_id);
+        e = unix_socket_get(path, fd, &socket_id, NULL);
     } else {
         // An abstract name has no filesystem node to be stale; it is simply
         // taken again.
-        e = unix_abstract_get(path + 1, fd, &socket_id);
+        e = unix_abstract_get(path + 1, fd, &socket_id, NULL);
     }
     if (e < 0) {
         sock_ckpt_note_failure(desc, "name", -e);

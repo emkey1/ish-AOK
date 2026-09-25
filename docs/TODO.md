@@ -37,6 +37,32 @@ Reproduce on a current build first; if it still happens, the freezer's host
 backtrace (ISH_CHECKPOINT_DEBUG, [[stuck-task-host-backtrace]]) will say where
 it actually is rather than leaving it a mystery.
 
+### EPOLLET and SOCK_SEQPACKET: what the 2026-09-25 fixes left
+
+The edge-triggered epoll fix (fs/poll.c `poll_drain_host_locked`) and the
+SEQPACKET framing (fs/sock.c `struct unix_seqpacket_hdr`) left three measured
+divergences, each judged not worth its cost yet.
+
+**Established**:
+- A read that leaves data behind in a host pipe or FIFO re-arms the host's read
+  event (Darwin's `pipe_read` and its fifofs both do it; measured with a bare
+  kqueue, sockets do not), so an `EPOLLET` reader that does a partial read is
+  told `EPOLLIN` once more with no new data. Linux says nothing. Harmless to a
+  reader that reads until `EAGAIN`, which an `EPOLLET` reader must;
+  `epoll_edge_triggered` checks partial reads on sockets and ptys only.
+  Filtering it means telling the re-arm from a real write, which needs a byte
+  count kept across every guest read of the pipe -- and getting that count wrong
+  loses a real edge, which hangs, where the re-arm only costs a wake.
+- dup'd fds registered in one epoll, one `EPOLLET` and one not, share a host
+  watch that has to be level-triggered for the level one, so the edge-triggered
+  one behaves level-triggered (`poll_fd.host_edges` stays false for both).
+- A SEQPACKET `MSG_PEEK` does not deliver the message's `SCM_RIGHTS`; the real
+  read does. Linux clones the descriptors for a peek. AOK's unix datagrams
+  behave the same way, on purpose (see the peek comment in
+  `sys_recvmsg_guest_abi`).
+
+**Next step**: none until a program is seen to need one of them.
+
 ### The app's UI thread impersonates a guest process
 
 `current` is per-thread, and on the app's main thread it is whatever the last
