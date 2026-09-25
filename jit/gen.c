@@ -13273,6 +13273,152 @@ static inline bool gen_pop_reg_fused(struct gen_state *state, enum arg thing,
 #endif
 }
 
+// ---- The stack through ordinary memory operands ----------------------------
+//
+// The 16-bit (0x66) PUSH and POP, PUSHA and POPA at both sizes, and the 16-bit
+// CALL and RET are spelled as loads and stores at [esp+off] followed by one
+// esp_add, rather than through the push/pop gadgets, which only move 4 bytes.
+// Every 0x66 form used to reach those and moved ESP by 4 (`66 6a 23` too).
+//
+// The shape does more than pick a width: ESP moves only after every access has
+// succeeded, so a fault anywhere leaves ESP where the instruction found it,
+// with EIP on the instruction, and the retry after a stack-growth fault runs
+// it whole from the same place. As eight pushes, a PUSHA that faulted on its
+// fifth slot had already moved ESP by four, and the retry pushed on from
+// there; and its ESP slot held ESP after the first four pushes, not before.
+// A POP to memory needs no "undo ESP on segfault" marker (orig_ip_extra bit
+// 62, which the 32-bit form still uses): the store happens before esp_add.
+//
+// Measured on camd (Linux 6.12, gcc -m32): tests/manual/x86/i386_push16.c.
+static bool gen_stack_access(struct gen_state *state, gadget_t *gadgets,
+        int32_t off, int size) {
+    struct modrm slot = {
+        .type = modrm_mem, .base = reg_esp, .offset = off, .index = reg_none,
+    };
+    uint64_t unused = 0;
+    // No segment: an override applies to the explicit operand, never to the
+    // stack.
+    return gen_op(state, gadgets, arg_modrm_val, &slot, &unused, size, false, 0);
+}
+#define gen_stack_load(off, size) do { \
+    extern gadget_t load_gadgets[]; \
+    if (!gen_stack_access(state, load_gadgets, off, size)) return false; \
+} while (0)
+#define gen_stack_store(off, size) do { \
+    extern gadget_t store_gadgets[]; \
+    if (!gen_stack_access(state, store_gadgets, off, size)) return false; \
+} while (0)
+// ESP += delta, leaving _tmp and the flags alone.
+#define gen_esp_add(delta) gg(esp_add, (uint32_t) (int32_t) (delta))
+
+// POPW: the word at [esp] into dst, then ESP += 2.
+static bool gen_pop16(struct gen_state *state, enum arg dst, struct modrm *modrm,
+        bool seg_tls) {
+    extern gadget_t store_gadgets[];
+    uint64_t unused = 0;
+    gen_stack_load(0, 16);
+    if (gen_reg_arg(dst, modrm) != arg_invalid) {
+        // Nothing after the load can fault. ESP moves first, so POP SP writes
+        // the popped word over the incremented SP, as x86 specifies.
+        gen_esp_add(2);
+        return gen_op(state, store_gadgets, dst, modrm, &unused, 16, seg_tls, 0);
+    }
+    // A memory destination based on ESP is addressed through the incremented
+    // ESP. The store goes first, so bias the displacement instead.
+    struct modrm dst_mem = *modrm;
+    if (dst_mem.base == reg_esp)
+        dst_mem.offset += 2;
+    if (!gen_op(state, store_gadgets, dst, &dst_mem, &unused, 16, seg_tls, 0))
+        return false;
+    gen_esp_add(2);
+    return true;
+}
+
+// PUSHA: AX CX DX BX SP BP SI DI, the order of enum arg's registers, each
+// stored below ESP. The SP loaded is the one from before the instruction.
+static bool gen_pusha(struct gen_state *state, int size) {
+    extern gadget_t load_gadgets[];
+    int bytes = size / 8;
+    uint64_t unused = 0;
+    struct modrm unused_modrm = {0};
+    for (int i = 0; i < 8; i++) {
+        if (!gen_op(state, load_gadgets, arg_reg_a + i, &unused_modrm, &unused,
+                size, false, 0))
+            return false;
+        gen_stack_store(-(i + 1) * bytes, size);
+    }
+    gen_esp_add(-8 * bytes);
+    return true;
+}
+
+// POPA: the reverse, skipping the SP slot. Loaded lowest address first, as
+// camd's CPU does: a POPA that faults partway (on its BX word, say) has
+// already loaded DI, SI and BP there, and ESP is unmoved either way.
+static bool gen_popa(struct gen_state *state, int size) {
+    extern gadget_t store_gadgets[];
+    int bytes = size / 8;
+    uint64_t unused = 0;
+    struct modrm unused_modrm = {0};
+    for (int i = 7; i >= 0; i--) {
+        if (arg_reg_a + i == arg_reg_sp)
+            continue;
+        gen_stack_load((7 - i) * bytes, size);
+        if (!gen_op(state, store_gadgets, arg_reg_a + i, &unused_modrm, &unused,
+                size, false, 0))
+            return false;
+    }
+    gen_esp_add(8 * bytes);
+    return true;
+}
+
+// CALLW: push the low word of the return address and jump to the target's
+// low word. EIP is then below 64 KiB, where Linux maps nothing, so on camd
+// this is always SIGSEGV SEGV_MAPERR at the truncated target, with the word
+// pushed. `loc` is arg_imm for rel16 (the target is `target`) or the r/m16
+// operand of FF /2, which is read before anything is written, as x86 does.
+static bool gen_call16(struct gen_state *state, enum arg loc, struct modrm *modrm,
+        uint32_t target, bool seg_tls) {
+    extern gadget_t load_gadgets[], xchg_gadgets[];
+    uint64_t imm = state->ip & 0xffff;
+    if (loc == arg_imm) {
+        if (!gen_op(state, load_gadgets, arg_imm, modrm, &imm, 16, false, 0))
+            return false;
+        gen_stack_store(-2, 16);
+        imm = target & 0xffff;
+        if (!gen_op(state, load_gadgets, arg_imm, modrm, &imm, 32, false, 0))
+            return false;
+    } else {
+        // The target goes through the return address's slot, since _tmp is
+        // the only value register: park it there, load the return address,
+        // and swap. A target operand in memory at [esp-2] is read before the
+        // slot is written, as it must be.
+        if (!gen_op(state, load_gadgets, loc, modrm, &imm, 16, seg_tls, 0))
+            return false;
+        gen_stack_store(-2, 16);
+        imm = state->ip & 0xffff;
+        if (!gen_op(state, load_gadgets, arg_imm, modrm, &imm, 16, false, 0))
+            return false;
+        if (!gen_stack_access(state, xchg_gadgets, -2, 16))
+            return false;
+        // A 16-bit load or xchg leaves _tmp's high half as it was on the
+        // x86_64 gadgets (aarch64's zero-extend); the target must not keep it.
+        gz(zero_extend, 16);
+    }
+    gen_esp_add(-2);
+    g(jmp_indir);
+    return true;
+}
+
+// RETW [imm16]: pop a word, zero-extended, into EIP, and release imm16 more
+// bytes. SIGSEGV at that word, as for CALLW.
+static bool gen_ret16(struct gen_state *state, uint32_t release) {
+    gen_stack_load(0, 16);
+    gz(zero_extend, 16);  // as in gen_call16
+    gen_esp_add(2 + release);
+    g(jmp_indir);
+    return true;
+}
+
 #define op(type, thing, z) do { \
     extern gadget_t type##_gadgets[]; \
     if (!gen_op(state, type##_gadgets, arg_##thing, &modrm, &imm, z, seg_tls, addr_offset)) return false; \
@@ -13355,18 +13501,25 @@ static void gen_sreg(struct gen_state *state, struct modrm *modrm, unsigned kind
 #define NOT(val,z) load(val,z); gz(not, z); store(val,z)
 #define NEG(val,z) imm = 0; load(imm,z); op(sub, val,z); store(val,z)
 
+// 16-bit: see gen_stack_access.
 #define POP(thing,z) do { \
-    if (!gen_pop_reg_fused(state, arg_##thing, &modrm, z)) { \
+    if ((z) == 16) { \
+        if (!gen_pop16(state, arg_##thing, &modrm, seg_tls)) return false; \
+    } else if (!gen_pop_reg_fused(state, arg_##thing, &modrm, z)) { \
         gg(pop, state->orig_ip); \
         state->orig_ip_extra = 1ul << 62; /* marks that on segfault the stack pointer should be adjusted */\
         store(thing, z); \
     } \
 } while (0)
 #define PUSH(thing,z) do { \
-    if (!gen_push_reg_fused(state, arg_##thing, &modrm, z)) { \
+    if ((z) == 16) { \
+        load(thing, 16); gen_stack_store(-2, 16); gen_esp_add(-2); \
+    } else if (!gen_push_reg_fused(state, arg_##thing, &modrm, z)) { \
         load(thing, z); gg(push, state->orig_ip); \
     } \
 } while (0)
+#define PUSHA(z) do { if (!gen_pusha(state, z)) return false; } while (0)
+#define POPA(z) do { if (!gen_popa(state, z)) return false; } while (0)
 
 #define INC(val,z) load(val, z); gz(inc, z); store(val, z)
 #define DEC(val,z) load(val, z); gz(dec, z); store(val, z)
@@ -13377,7 +13530,14 @@ static void gen_sreg(struct gen_state *state, struct modrm *modrm, unsigned kind
     state->jump_ip[0] = state->size + off1; \
     if (off2 != 0) \
         state->jump_ip[1] = state->size + off2
-#define JMP(loc) load(loc, OP_SIZE); g(jmp_indir); end_block = true
+// JMPW r/m16 (66 FF /4) jumps to the word zero-extended: see gen_call16 for
+// why the load alone does not do that on every host.
+#define JMP(loc) do { \
+    load(loc, OP_SIZE); \
+    if (OP_SIZE == 16) gz(zero_extend, 16); \
+    g(jmp_indir); \
+    end_block = true; \
+} while (0)
 #define JMP_REL(off) gg(jmp, fake_ip + off); jump_ips(-1, 0); end_block = true
 #define JCXZ_REL(off) ggg(jcxz, fake_ip + off, fake_ip); jump_ips(-2, -1); end_block = true
 
@@ -13420,22 +13580,40 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
 // -1: will be patched to block address in gen_end();
 // fake_ip: the first one is the return address, used for saving to stack and verifying the cached ip in return cache is correct;
 // fake_ip: the second one is the return target, patchable by return chaining.
+//
+// The 16-bit forms (0x66) are gen_call16 and gen_ret16: no return cache and no
+// chaining, since their target is always below 64 KiB.
 #define CALL(loc) do { \
-    load(loc, OP_SIZE); \
-    ggggg(call_indir, state->orig_ip, -1, fake_ip, fake_ip); \
-    state->block_patch_ip = state->size - 3; \
-    jump_ips(-1, 0); \
+    if (OP_SIZE == 16) { \
+        if (!gen_call16(state, arg_##loc, &modrm, 0, seg_tls)) return false; \
+    } else { \
+        load(loc, OP_SIZE); \
+        ggggg(call_indir, state->orig_ip, -1, fake_ip, fake_ip); \
+        state->block_patch_ip = state->size - 3; \
+        jump_ips(-1, 0); \
+    } \
     end_block = true; \
 } while (0)
 // the first four arguments are the same with CALL,
 // the last one is the call target, patchable by return chaining.
 #define CALL_REL(off) do { \
-    gggggg(call, state->orig_ip, -1, fake_ip, fake_ip, fake_ip + off); \
-    state->block_patch_ip = state->size - 4; \
-    jump_ips(-2, -1); \
+    if (OP_SIZE == 16) { \
+        if (!gen_call16(state, arg_imm, &modrm, state->ip + (off), false)) return false; \
+    } else { \
+        gggggg(call, state->orig_ip, -1, fake_ip, fake_ip, fake_ip + off); \
+        state->block_patch_ip = state->size - 4; \
+        jump_ips(-2, -1); \
+    } \
     end_block = true; \
 } while (0)
-#define RET_NEAR(imm) ggg(ret, state->orig_ip, 4 + imm); end_block = true
+#define RET_NEAR(imm) do { \
+    if (OP_SIZE == 16) { \
+        if (!gen_ret16(state, imm)) return false; \
+    } else { \
+        ggg(ret, state->orig_ip, 4 + imm); \
+    } \
+    end_block = true; \
+} while (0)
 #define INT(code) gggg(interrupt, (uint8_t) code, state->ip, 0); end_block = true
 
 // in/out (decode.h's 0xe4-0xe7, 0xec-0xef). Port I/O is ring-0, so from user

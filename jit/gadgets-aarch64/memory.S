@@ -17,6 +17,15 @@
     gret 1
     read_bullshit 32, pop
 
+# [esp_add][delta]: ESP += delta (32 bits, so a negative delta wraps). _tmp and
+# the flags are untouched. The stack instructions jit/gen.c spells as loads and
+# stores at [esp+off] (16-bit PUSH/POP, PUSHA/POPA, CALLW/RETW) move ESP with
+# this once every access has succeeded; see gen_stack_access.
+.gadget esp_add
+    ldr w8, [_ip]
+    add esp, esp, w8
+    gret 1
+
 # ---- `push <reg>` / `pop <reg>` in ONE gadget ----
 #
 # The two gadgets above move their value through _tmp, so gen.c has to stage it

@@ -435,15 +435,14 @@ POP32(pop_ds, ds, ".byte 0x1f", 0x2bu)
 POP32(pop_ss, ss, ".byte 0x17", 0x2bu)
 POP32(pop_fs, fs, ".byte 0x0f, 0xa1", 0x7bu)
 POP32(pop_gs, gs, ".byte 0x0f, 0xa9", (uint32_t) SEL_TLS)
-// With 66: two bytes, ESP moves two. The word is staged by hand rather than
-// with pushw, so that this tests the POP alone.
+// With 66: two bytes, ESP moves two. The word goes on with pushw, which
+// moves two bytes as well (tests/manual/x86/i386_push16.c).
 #define POP16(name, seg, bytes, value)                                         \
     static void name(void) {                                                   \
         uint32_t got, old, sp0, sp1;                                           \
         __asm__ volatile("mov %%" #seg ", %[o]\n\t"                            \
                          "mov %%esp, %[a]\n\t"                                 \
-                         "sub $2, %%esp\n\t"                                   \
-                         "movw $" #value ", (%%esp)\n\t"                       \
+                         "pushw $" #value "\n\t"                               \
                          bytes "\n\t"                                          \
                          "mov %%esp, %[b]\n\t"                                 \
                          "mov %%" #seg ", %[g]\n\t"                            \

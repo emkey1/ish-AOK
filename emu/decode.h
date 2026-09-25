@@ -1052,19 +1052,9 @@ restart:
 
         case 0x65: TRACE("segment gs\n"); SEG_GS(); goto restart;
 
-        case 0x60: TRACE("pusha");
-                   PUSH(reg_a,oz); PUSH(reg_c,oz);
-                   PUSH(reg_d,oz); PUSH(reg_b,oz);
-                   PUSH(reg_sp,oz); PUSH(reg_bp,oz); // TODO this is the wrong sp
-                   PUSH(reg_si,oz); PUSH(reg_di,oz);
-                   break;
-        case 0x61: TRACE("popa");
-                   POP(reg_di,oz); POP(reg_si,oz);
-                   // pop reg_sp into reg_b as an easy way to ignore it
-                   POP(reg_bp,oz); POP(reg_b,oz);
-                   POP(reg_b,oz); POP(reg_d,oz);
-                   POP(reg_c,oz); POP(reg_a,oz);
-                   break;
+        // One instruction each, ESP moving once at the end: see gen_pusha.
+        case 0x60: TRACE("pusha"); PUSHA(oz); break;
+        case 0x61: TRACE("popa"); POPA(oz); break;
 
         case 0x66:
 #if OP_SIZE == 32
@@ -1355,8 +1345,10 @@ restart:
         case 0xc3: TRACEI("ret near");
                    RET_NEAR(0); break;
 
+        // ESP = EBP whole at either operand size: the stack is 32-bit, and
+        // the 0x66 prefix narrows only the pop into BP.
         case 0xc9: TRACEI("leave");
-                   MOV(reg_bp, reg_sp,oz); POP(reg_bp,oz); break;
+                   MOV(reg_bp, reg_sp,32); POP(reg_bp,oz); break;
 
         case 0xcc: TRACEI("int3");
                    INT(INT_BREAKPOINT); break;
@@ -2025,8 +2017,11 @@ restart:
         case 7: TRACE("undefined"); UNDEFINED; \
     }
 
+        // FE is INC and DEC r/m8 only; its other fields are #UD (camd:
+        // SIGILL ILL_ILLOPN), where GRP5 would call, jump or push.
         case 0xfe: TRACEI("grp5 modrm8\t");
-                   READMODRM; GRP5(modrm_val,8); break;
+                   READMODRM; if (modrm.opcode > 1) UNDEFINED;
+                   GRP5(modrm_val,8); break;
         case 0xff: TRACEI("grp5 modrm\t");
                    READMODRM; GRP5(modrm_val,oz); break;
 

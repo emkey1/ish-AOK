@@ -15,6 +15,13 @@
     add $4, %_esp
     gret 1
 
+# [esp_add][delta]: ESP += delta. See the aarch64 twin in
+# jit/gadgets-aarch64/memory.S. The host flags hold no guest state between
+# gadgets here (pop's `add` clobbers them too).
+.gadget esp_add
+    addl (%_ip), %_esp
+    gret 1
+
 .macro x name, reg
     .gadget addr_\name
         movl %\reg, %_addr
