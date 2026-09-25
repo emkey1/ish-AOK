@@ -15,10 +15,15 @@
 //   accept       the server sits in a blocking accept() across the cycle, and
 //                a child connects after it
 //   poll         the server sits in poll() across the cycle
+//   epollet      the server has been told of one connection through an
+//                EPOLLIN|EPOLLET epoll, then sits in epoll_wait() across the
+//                cycle: the rebuilt listener's host watch has to be put back,
+//                because an edge-triggered registration hears of a connection
+//                only from the host (fs/poll.c poll_rearm_host_fd)
 //   relisten     the guest calls listen() twice on the one socket
 //   mixed        a unix and a TCP listener at once, both serving afterwards
-//   tcp, tcp-pending, tcp-accept
-//                survive, pending and accept over 127.0.0.1
+//   tcp, tcp-pending, tcp-accept, tcp-epollet
+//                survive, pending, accept and epollet over 127.0.0.1
 //
 // Prints "PASS <mode>" or "FAIL <mode>: ..." and exits 0 or 1.
 #include <errno.h>
@@ -28,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -154,6 +160,32 @@ int main(int argc, char **argv) {
             if (poll(&p, 1, 15000) != 1)
                 fail("poll");
         }
+        serve(s, 'c');
+        int status;
+        waitpid(pid, &status, 0);
+    } else if (is("epollet") || is("tcp-epollet")) {
+        int ep = epoll_create1(0);
+        struct epoll_event ev = {.events = EPOLLIN | EPOLLET, .data.fd = s};
+        if (ep < 0 || epoll_ctl(ep, EPOLL_CTL_ADD, s, &ev) < 0)
+            fail("epoll");
+        int early = client('e');
+        if (epoll_wait(ep, &ev, 1, 5000) != 1)
+            fail("epoll_wait before the cycle");
+        serve(s, 'e');
+        close(early);
+        pid_t pid = fork();
+        if (pid < 0)
+            fail("fork");
+        if (pid == 0) {
+            sleep(3);
+            int c = client('c');
+            sleep(1);
+            close(c);
+            _exit(0);
+        }
+        errno = 0;
+        if (epoll_wait(ep, &ev, 1, 15000) != 1)
+            fail("epoll_wait across the cycle");
         serve(s, 'c');
         int status;
         waitpid(pid, &status, 0);

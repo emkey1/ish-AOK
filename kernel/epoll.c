@@ -473,23 +473,29 @@ static int epoll_close(struct fd *fd) {
 // and systemd's mount units "protocol"-failed on most boots (tmp.mount)
 // because the rescan a mountinfo event triggers never ran.
 //
-// Evaluate members the same way poll_scan_ready_locked would: virtual fds
-// via ops->poll masked by the registration's interest + ET suppression.
-// Host-backed members (real sockets/files) have no ops->poll; their events
-// arrive through the host backend of whichever poll holds the watch and do
-// not cascade here -- a nested epoll of purely host fds still needs a
-// waiter on the inner epoll (none of the known nested-epoll users do this;
-// revisit if one appears).
+// Evaluate members the same way poll_scan_ready_locked would: ops->poll masked
+// by the registration's interest + ET suppression, and an edge-triggered host
+// socket, pipe or FIFO only with an event collected from the host -- which is
+// why the inner poll's host queue is collected here first. A host event does
+// not WAKE an outer waiter, though: it lands in the inner poll's own host
+// queue, which only a waiter on the inner epoll, or a scan like this one,
+// looks at. None of the known nested-epoll users nest host fds; revisit if
+// one appears.
 static int epoll_poll(struct fd *fd) {
     struct poll *poll = fd->epollfd.poll;
     int res = 0;
     lock(&poll->lock, 0);
+    // A member whose host events are all there is to know (poll_fd.host_edges)
+    // is ready only with one collected; see fs/poll.c poll_scan_ready_locked.
+    poll_drain_host_locked(poll);
     struct poll_fd *poll_fd;
     list_for_each_entry(&poll->poll_fds, poll_fd, fds) {
         struct fd *member = poll_fd->fd;
-        if (member == NULL || member->ops->poll == NULL)
+        if (member == NULL || member->ops->poll == NULL || poll_fd->disarmed)
             continue;
-        int types = member->ops->poll(member);
+        if (poll_fd->host_edges && poll_fd->host_events == 0)
+            continue;
+        int types = member->ops->poll(member) | poll_fd->host_events;
         types &= poll_fd->types | POLL_HUP | POLL_ERR | POLL_NVAL;
         if (poll_fd->types & POLL_EDGETRIGGERED)
             types &= ~poll_fd->triggered_types;

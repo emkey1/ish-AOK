@@ -19,6 +19,7 @@
 #endif
 #include "fs/sockrestart.h"
 #include "fs/fd.h"
+#include "fs/poll.h"
 #include "fs/sock.h"
 #include "kernel/task.h"
 #include "util/list.h"
@@ -107,6 +108,7 @@ struct saved_socket {
         struct sockaddr name_addr;
     };
     socklen_t name_len;
+    bool rebuilt;
     struct list saved;
 };
 
@@ -242,6 +244,7 @@ unsigned sockrestart_on_suspend() {
             free(saved);
             continue;
         }
+        saved->rebuilt = false;
         saved->proto = sock->socket.protocol;
         saved->backlog = sock->sockrestart.backlog;
         saved->flags = fcntl(sock->real_fd, F_GETFL);
@@ -346,6 +349,7 @@ unsigned sockrestart_on_resume() {
             goto thank_u_next;
         }
         close(new_sock);
+        saved->rebuilt = true;
         restored++;
 
 thank_u_next:
@@ -376,8 +380,15 @@ thank_u_next:
     unlock(&sockrestart_lock);
     list_for_each_entry_safe(&done, saved, tmp, saved) {
         list_remove(&saved->saved);
+        // Outside sockrestart_lock: a poll waiting on a listener takes it
+        // under the poll's own lock (sockrestart_begin_listen_wait), and
+        // this takes the poll's.
+        if (saved->rebuilt)
+            poll_rearm_host_fd(saved->sock);
         fd_close(saved->sock);
         free(saved);
     }
+    // And any socket the suspension may have killed without a word.
+    poll_note_host_resume();
     return restored;
 }

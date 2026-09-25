@@ -47,12 +47,17 @@ static int rpe_events(struct real_poll_event *rpe, struct poll_fd *pfd);
 static int real_poll_wait(struct real_poll *real, struct real_poll_event *events, int max,
         struct timespec *timeout, bool precise);
 static int real_poll_update(struct real_poll *real, int fd, int types, void *data);
+// Whatever the host has queued, without waiting; *more when there may be more.
+static int real_poll_collect(struct real_poll *real, struct real_poll_event *events, int max,
+        bool *more);
 static inline bool poll_fd_has_host_wait(struct poll_fd *pollfd);
 static int poll_sync_host_locked(struct poll *poll, struct fd *fd);
 static void poll_fd_free(struct poll_fd *poll_fd);
 
 
 static _Atomic bool poll_stuck_logged;
+// Bumped by every return to the foreground; see poll_note_host_resume.
+static _Atomic unsigned poll_host_resume_gen;
 _Atomic long poll_wedged_repairs;
 _Atomic long poll_capped_waits;
 
@@ -218,13 +223,39 @@ static void poll_drop_unknown_event(struct poll *poll_, struct real_poll_event *
 #endif
 }
 
+// An event on the file a registration watches: its own wakeup
+// (poll_wakeup), or one the host reported for it. Linux's ep_poll_callback
+// queues a registration for any event its mask names -- EPOLLERR and EPOLLHUP
+// always count -- and ignores the rest, and the wait that then reports it
+// polls the file and reports everything ready, not only what changed. So an
+// event makes an edge-triggered registration forget ALL it has reported, not
+// just the bits the event names: an EPOLLIN|EPOLLOUT registration that was
+// told EPOLLOUT and then gets data is told EPOLLIN|EPOLLOUT, as on Linux, where
+// forgetting only EPOLLIN told it EPOLLIN alone.
+static void poll_fd_note_event_locked(struct poll_fd *poll_fd, int events) {
+    int interest = poll_fd->types & ~(POLL_EDGETRIGGERED | POLL_ONESHOT | POLL_EXCLUSIVE);
+    if ((poll_fd->types & POLL_EDGETRIGGERED) && (events & (interest | POLL_HUP | POLL_ERR)))
+        poll_fd->triggered_types = 0;
+}
+
+// *refused (when asked): the caller had no room for a report that was due.
 static int poll_deliver_ready_locked(struct poll *poll_, struct poll_fd *poll_fd,
                                      int poll_types, poll_callback_t callback,
-                                     void *context, const char *phase) {
+                                     void *context, const char *phase, bool *refused) {
     struct fd *fd = poll_fd->fd;
+    if (refused != NULL)
+        *refused = false;
 
-    if (poll_fd->types & POLL_EDGETRIGGERED)
-        poll_types &= ~poll_fd->triggered_types;
+    // A oneshot registration that has reported says nothing more until it is
+    // re-armed -- not even a hangup, which Linux's disarm (the mask cleared to
+    // its private bits, EPOLLHUP and EPOLLERR with the rest) silences too.
+    if (poll_fd->disarmed)
+        return 0;
+    // Edge-triggered: nothing to report unless something is ready that has
+    // not been reported since the last event, and then report all that is
+    // ready (see poll_fd_note_event_locked).
+    if ((poll_fd->types & POLL_EDGETRIGGERED) && !(poll_types & ~poll_fd->triggered_types))
+        return 0;
     if (!poll_types)
         return 0;
 
@@ -242,6 +273,17 @@ static int poll_deliver_ready_locked(struct poll *poll_, struct poll_fd *poll_fd
     // makes select return 2, and the same fd in three pollfd entries makes
     // poll return 3). Clamping to 1 here undercounted both.
     int res = handled > 0 ? handled : 0;
+    // Not taken: the caller had no room left (epoll_wait's maxevents). Nothing
+    // was reported, so the next wait must still report it -- leave the
+    // registration as it was. Marking it reported here lost the event for
+    // good on an edge-triggered or oneshot registration, which reports again
+    // only after a new event: two ready and maxevents 1, and the second one
+    // was never heard of again.
+    if (res == 0) {
+        if (refused != NULL)
+            *refused = true;
+        return 0;
+    }
 
     // The real poll does not actually get the FDs set as oneshot.
     // But this loop is done while holding the lock, so only one
@@ -260,6 +302,7 @@ static int poll_deliver_ready_locked(struct poll *poll_, struct poll_fd *poll_fd
         // re-arm. For host-backed fds, drop the host-side watch but keep the
         // poll_fd registered.
         poll_fd->types &= ~(POLL_READ | POLL_WRITE);
+        poll_fd->disarmed = true;
         if (poll_fd_has_host_wait(poll_fd))
             poll_sync_host_locked(poll_, fd);
         return res;
@@ -271,17 +314,26 @@ static int poll_deliver_ready_locked(struct poll *poll_, struct poll_fd *poll_fd
 }
 
 static int poll_scan_ready_locked(struct poll *poll_, poll_callback_t callback, void *context) {
+    poll_drain_host_locked(poll_);
     int res = 0;
     struct poll_fd *poll_fd, *tmp;
     list_for_each_entry_safe(&poll_->poll_fds, poll_fd, tmp, fds) {
         struct fd *fd = poll_fd->fd;
-        int raw_poll_types = 0;
+        if (poll_fd->disarmed) {
+            poll_fd->host_events = 0;
+            continue;
+        }
+        // Nothing collected from the host, so nothing has happened -- whatever
+        // the file looks like now. Looking anyway is how the same data got
+        // reported twice: data that arrived after the collection was reported
+        // by this look, and then its event, still queued, by the next wait.
+        if (poll_fd->host_edges && poll_fd->host_events == 0)
+            continue;
+        int raw_poll_types = poll_fd->host_events;
         if (fd->ops->poll)
-            raw_poll_types = fd->ops->poll(fd);
+            raw_poll_types |= fd->ops->poll(fd);
         int poll_types = raw_poll_types;
         poll_types &= poll_fd->types | POLL_HUP | POLL_ERR | POLL_NVAL;
-        if (poll_fd->types & POLL_EDGETRIGGERED)
-            poll_types &= ~poll_fd->triggered_types;
         if (poll_wait_trace_enabled()) {
             char path[MAX_PATH];
             path[0] = '\0';
@@ -302,11 +354,17 @@ static int poll_scan_ready_locked(struct poll *poll_, poll_callback_t callback, 
                    current->pid, current->comm, fd->real_fd,
                    raw_poll_types, poll_types, poll_fd->types, path, fd->ops);
         }
-        if (!poll_types)
+        if (!poll_types) {
+            poll_fd->host_events = 0;
             continue;
+        }
 
+        bool refused;
         res += poll_deliver_ready_locked(poll_, poll_fd, poll_types,
-                                         callback, context, "callback");
+                                         callback, context, "callback", &refused);
+        // Collected events stay until a report that has room takes them.
+        if (!refused)
+            poll_fd->host_events = 0;
     }
     return res;
 }
@@ -327,14 +385,25 @@ struct poll *poll_create(void) {
     list_init(&poll->poll_fds);
     list_init(&poll->pollfd_freelist);
     poll->owner_fd = NULL;
+    poll->host_resume_seen = atomic_load_explicit(&poll_host_resume_gen, memory_order_relaxed);
     lock_init(&poll->lock, "poll_create\0");
     return poll;
 }
 
 static inline bool poll_fd_has_host_wait(struct poll_fd *pollfd) {
-    if (pollfd->fd == NULL || pollfd->fd->real_fd < 0)
+    struct fd *fd = pollfd->fd;
+    if (fd == NULL || fd->real_fd < 0)
         return false;
-    return pollfd->fd->ops == &realfs_fdops || pollfd->fd->ops == &socket_fdops;
+    if (fd->ops == &realfs_fdops || fd->ops == &socket_fdops)
+        return true;
+    // A named FIFO on the root filesystem is a host FIFO too, opened through
+    // fakefs's copy of the realfs operations -- which the test above did not
+    // recognise, so nothing ever watched one. Its readiness then came only
+    // from rescans: a wait already blocked on it slept out the whole of
+    // POLL_WAKE_RECHECK_NS before seeing a write, and an edge-triggered
+    // registration, told once, was never told again, because only a host
+    // event could say anything new had arrived.
+    return fd->ops->poll == realfs_poll && S_ISFIFO(fd->stat.mode);
 }
 
 // does not do its own locking
@@ -373,6 +442,17 @@ static int poll_sync_host_locked(struct poll *poll, struct fd *fd) {
     // level-triggered sibling must keep seeing repeat notifications.
     if (all_edge_triggered)
         types |= POLL_EDGETRIGGERED;
+    // An edge-triggered watch of a socket, pipe or FIFO is one whose events
+    // can be trusted to be all there is to know (see poll_fd.host_edges).
+    // Anything else -- a device, a mix of level- and edge-triggered
+    // registrations, whose host watch is level-triggered -- keeps the scan's
+    // look at the file.
+    bool host_edges = all_edge_triggered &&
+        (S_ISSOCK(fd->stat.mode) || S_ISFIFO(fd->stat.mode));
+    list_for_each_entry(&poll->poll_fds, poll_fd, fds) {
+        if (poll_fd->fd == fd && poll_fd_has_host_wait(poll_fd))
+            poll_fd->host_edges = host_edges;
+    }
     return real_poll_update(&poll->real, fd->real_fd, types, canonical);
 }
 
@@ -398,6 +478,123 @@ static struct poll_fd *poll_find_ptr(struct poll *poll, struct poll_fd *candidat
             return poll_fd;
     }
     return NULL;
+}
+
+// Every registration of the file a host event is for hears of it; see
+// poll_fd_note_event_locked. The host bits are kept for the next readiness
+// scan as well, which adds them to what the file's own poll reports -- the
+// host can know of an end of file a fresh look does not show (see the
+// delivery after the host wait in poll_wait).
+static void poll_note_host_event_locked(struct poll *poll_, struct real_poll_event *event) {
+    struct poll_fd *candidate = rpe_data(event);
+    struct poll_fd *owner = poll_find_ptr(poll_, candidate);
+    // The notify pipe (no udata), and a watch of a registration since removed.
+    if (owner == NULL || owner->poll != poll_)
+        return;
+    int host_events = rpe_events(event, candidate);
+    struct poll_fd *poll_fd;
+    list_for_each_entry(&poll_->poll_fds, poll_fd, fds) {
+        if (poll_fd->fd != owner->fd)
+            continue;
+        poll_fd_note_event_locked(poll_fd, host_events);
+        poll_fd->host_events |= host_events;
+    }
+}
+
+// Take whatever the host has queued for this poll, without waiting, before a
+// readiness scan.
+//
+// An edge-triggered registration of a host socket, pipe or FIFO is watched
+// EV_CLEAR (EPOLLET on a Linux host): the host keeps one event queued per
+// change until a wait retrieves it, and those events are the only way to
+// know anything new happened. The scan used to report such a registration
+// from its own look at the file, which retrieved nothing: the event stayed
+// queued, the next wait took it for a new one, and the same data was
+// reported again, and again for every event nobody had retrieved. That is
+// epoll_wait acting level-triggered for EPOLLET -- a second wait with no new
+// data reporting the same file -- which is a spin for an event loop that
+// trusts the edge, as Go's and tokio's do. Now such a registration reports
+// only events collected here or by the host wait, each of them once.
+//
+// Only a poll with such a watch needs it; every other poll, and every
+// poll(2) and select(2), pays nothing.
+static void poll_fd_recheck_locked(struct poll_fd *poll_fd);
+
+void poll_drain_host_locked(struct poll *poll_) {
+    bool edge_watched = false;
+    struct poll_fd *poll_fd;
+    list_for_each_entry(&poll_->poll_fds, poll_fd, fds) {
+        if (poll_fd->host_edges) {
+            edge_watched = true;
+            break;
+        }
+    }
+    if (!edge_watched)
+        return;
+    // Back from a suspension: look once at every host-edge registration,
+    // since the host may have changed a socket there without an event -- see
+    // poll_note_host_resume.
+    unsigned gen = atomic_load_explicit(&poll_host_resume_gen, memory_order_relaxed);
+    if (poll_->host_resume_seen != gen) {
+        poll_->host_resume_seen = gen;
+        list_for_each_entry(&poll_->poll_fds, poll_fd, fds) {
+            if (poll_fd->host_edges && !poll_fd->disarmed)
+                poll_fd_recheck_locked(poll_fd);
+        }
+    }
+    // A level-triggered watch in the same poll is returned by every
+    // collection for as long as it stays ready, so "until the host has
+    // nothing" is not a way to stop: bound the rounds instead.
+    for (int round = 0; round < 8; round++) {
+        struct real_poll_event e[32];
+        bool more = false;
+        int n = real_poll_collect(&poll_->real, e, sizeof(e) / sizeof(e[0]), &more);
+        for (int i = 0; i < n; i++)
+            poll_note_host_event_locked(poll_, &e[i]);
+        if (!more)
+            break;
+    }
+}
+
+// Arming an edge-triggered registration (ADD, or MOD, which re-arms it) is an
+// event when the file is ready at that moment: Linux's ep_insert and
+// ep_modify queue a ready registration, and that is how a program asks to hear
+// again about data it left unread. For a host-edge registration the host
+// queues one for most such states as the watch is programmed -- collected
+// here, with anything else waiting -- but not for all: a FIFO whose writer has
+// already gone is at end of file, and Darwin says nothing about it (measured).
+// So what the file reports now counts too. Both land in the same collected
+// bits, so the arm is reported once.
+static void poll_arm_host_edges_locked(struct poll *poll_, struct poll_fd *poll_fd) {
+    if (!poll_fd->host_edges)
+        return;
+    poll_drain_host_locked(poll_);
+    poll_fd_recheck_locked(poll_fd);
+}
+
+// What the file reports now, taken for an event: for a host-edge registration
+// at a moment the host may have said nothing (the callers above and below).
+static void poll_fd_recheck_locked(struct poll_fd *poll_fd) {
+    struct fd *fd = poll_fd->fd;
+    int ready = fd->ops->poll != NULL ? fd->ops->poll(fd) : 0;
+    ready &= poll_fd->types | POLL_HUP | POLL_ERR;
+    if (ready) {
+        poll_fd_note_event_locked(poll_fd, ready);
+        poll_fd->host_events |= ready;
+    }
+}
+
+// The app is back in the foreground (fs/sockrestart.c's resume runs on every
+// return). A suspension is when iOS makes sockets defunct, and nothing says a
+// defunct socket queues a host event -- the listeners sockrestart rebuilds
+// lost their watches outright (poll_rearm_host_fd) -- so an edge-triggered
+// registration, which hears only what the host says, could sit on a dead
+// connection for good. The next scan of every poll with such a registration
+// looks once at each of them (poll_drain_host_locked): a wait already blocked
+// gets there within POLL_WAKE_RECHECK_NS. What it finds ready is reported
+// once; for a live connection that costs one spare wake.
+void poll_note_host_resume(void) {
+    atomic_fetch_add_explicit(&poll_host_resume_gen, 1, memory_order_relaxed);
 }
 
 bool poll_has_fd(struct poll *poll, struct fd *fd, fd_t guest_fd) {
@@ -469,6 +666,9 @@ int poll_add_fd(struct poll *poll, struct fd *fd, fd_t guest_fd, int types, unio
     poll_fd->types = types;
     poll_fd->info = info;
     poll_fd->triggered_types = 0;
+    poll_fd->host_events = 0;
+    poll_fd->host_edges = false;
+    poll_fd->disarmed = false;
 
     list_add(&fd->poll_fds, &poll_fd->polls);
     list_add(&poll->poll_fds, &poll_fd->fds);
@@ -485,6 +685,7 @@ int poll_add_fd(struct poll *poll, struct fd *fd, fd_t guest_fd, int types, unio
             err = errno_map();
             goto out;
         }
+        poll_arm_host_edges_locked(poll, poll_fd);
     }
 
     // An emulated fd added while ready can't surface through the host kevent;
@@ -552,7 +753,18 @@ int poll_mod_fd(struct poll *poll, struct fd *fd, fd_t guest_fd, int types, unio
         }
     }
 
-    poll_fd->triggered_types &= types;
+    // MOD re-arms: Linux's ep_modify polls the file and queues the
+    // registration if it is ready, edge-triggered or not, and that is how a
+    // program asks to be told again about data it left unread. Keeping what
+    // had been reported (the old `&= types`) made a same-mask MOD a no-op for
+    // every emulated fd. A host fd happened to work, because re-programming
+    // the host watch queues a fresh event when the fd is ready (measured on
+    // Darwin); that event is still what a scan now collects first, so the MOD
+    // reports once, not twice.
+    poll_fd->triggered_types = 0;
+    poll_fd->disarmed = false;
+    if (poll_fd_has_host_wait(poll_fd))
+        poll_arm_host_edges_locked(poll, poll_fd);
 
     // Arming an already-ready emulated fd via MOD must wake a blocked poll_wait;
     // it won't get a host event or a poll_wakeup otherwise, so it would sleep
@@ -595,8 +807,7 @@ void poll_wakeup(struct fd *fd, int events) {
     list_for_each_entry(&fd->poll_fds, poll_fd, polls) {
         struct poll *poll = poll_fd->poll;
         lock(&poll->lock,0);
-        if (poll_fd->types & POLL_EDGETRIGGERED)
-            poll_fd->triggered_types &= ~events;
+        poll_fd_note_event_locked(poll_fd, events);
         if (poll->notify_pipe[1] != -1) {
             ssize_t wrote;
             do {
@@ -629,6 +840,29 @@ void poll_wakeup(struct fd *fd, int events) {
     unlock(&fd->poll_lock);
 }
 
+// The host object under `fd` has been replaced -- fs/sockrestart.c rebuilds a
+// listener iOS killed and dup2()s the new socket over the old descriptor
+// number. Closing the old one took every host watch of it with it, in every
+// poll, so nothing would ever report the new one: an edge-triggered
+// registration hears of a connection only from the host, and a Go or tokio
+// server stopped accepting after the phone woke. Put each watch back and
+// treat it as armed afresh, as a MOD would, and wake whoever is waiting.
+void poll_rearm_host_fd(struct fd *fd) {
+    struct poll_fd *poll_fd;
+    lock(&fd->poll_lock, 0);
+    list_for_each_entry(&fd->poll_fds, poll_fd, polls) {
+        struct poll *poll = poll_fd->poll;
+        lock(&poll->lock, 0);
+        if (poll_fd_has_host_wait(poll_fd) && poll_sync_host_locked(poll, fd) == 0) {
+            poll_fd->triggered_types = 0;
+            poll_arm_host_edges_locked(poll, poll_fd);
+        }
+        poll_poke_notify_locked(poll);
+        unlock(&poll->lock);
+    }
+    unlock(&fd->poll_lock);
+}
+
 // Non-blocking counterpart to poll_wakeup(), for a caller that cannot honor
 // the "don't call while holding a lock your poll operation acquires"
 // contract above. signalfd_wakeup_task (kernel/signal.c) is called with
@@ -653,8 +887,7 @@ void poll_wakeup_trylock(struct fd *fd, int events) {
         struct poll *poll = poll_fd->poll;
         if (trylock(&poll->lock) != 0)
             continue;
-        if (poll_fd->types & POLL_EDGETRIGGERED)
-            poll_fd->triggered_types &= ~events;
+        poll_fd_note_event_locked(poll_fd, events);
         if (poll->notify_pipe[1] != -1) {
             ssize_t wrote;
             do {
@@ -1063,10 +1296,12 @@ poll_wait_done:
             break;
         }
 
-        // Deliver host readiness notifications directly. fd->ops->poll() is
-        // still the preferred readiness source, but Darwin can report EOF/HUP
-        // through kqueue when a follow-up zero-time probe returns no bits. If
-        // we only rescan, that host event can wake us forever without ever
+        // What the host woke us for goes to its registrations, and the scan
+        // reports it: fd->ops->poll() is still the preferred readiness source,
+        // but Darwin can report EOF/HUP through kqueue when a follow-up
+        // zero-time probe returns no bits, so the scan adds the host's own
+        // bits to what it sees (poll_note_host_event_locked). If we only
+        // rescanned, that host event could wake us forever without ever
         // reaching the guest.
         //
         // A single fd is registered across up to three independent kqueue
@@ -1083,62 +1318,35 @@ poll_wait_done:
         // per-entry error handler unconditionally) tore down perfectly good
         // connections -- this is what made rtorrent/libtorrent's peer
         // connections die within a second of a normal read/write exchange.
-        // Coalesce by underlying fd before delivering so each fd gets at most
-        // one combined event mask per batch, matching real epoll semantics.
-        // The host watch carries a single udata (see poll_sync_host_locked),
-        // but dup'd guest fds may hold several registrations of that fd on
-        // this poll, so delivery fans each host event out to every
-        // registration, masked by that registration's own interest.
-        struct fd *batch_fds[4] = {0};
-        int batch_types[4] = {0};
-        int batch_count = 0;
+        // Noting each entry against its registration and reporting from the
+        // scan gives every registration one combined mask. The host watch
+        // carries a single udata (see poll_sync_host_locked), but dup'd guest
+        // fds may hold several registrations of that fd on this poll, so the
+        // note fans each host event out to every one of them.
+        //
+        // And an edge-triggered registration reports everything that is ready
+        // when its event comes, not only the filter that fired (see
+        // poll_fd_note_event_locked), which is the scan's look at the file.
         for (int i = 0; i < err; i++) {
-            struct poll_fd *candidate = rpe_data(&e[i]);
-            struct poll_fd *triggered_poll_fd = poll_find_ptr(poll_, candidate);
-            if (triggered_poll_fd == NULL || triggered_poll_fd->poll != poll_)
-                continue;
-            int host_events = rpe_events(&e[i], candidate);
             if (poll_epoll_trace_enabled()) {
-                struct fd *fd = triggered_poll_fd->fd;
-                char path[MAX_PATH];
-                path[0] = '\0';
-                if (fd != NULL)
-                    generic_getpath(fd, path);
-                printk("epoll-trace: host pid=%d comm=%s real=%d host=%#x req=%#x path=%s ops=%p\n",
-                       current->pid, current->comm,
-                       fd != NULL ? fd->real_fd : -1, host_events,
-                       triggered_poll_fd->types, path,
-                       fd != NULL ? (void *) fd->ops : NULL);
-            }
-            int slot = -1;
-            for (int j = 0; j < batch_count; j++) {
-                if (batch_fds[j] == triggered_poll_fd->fd) {
-                    slot = j;
-                    break;
+                struct poll_fd *candidate = rpe_data(&e[i]);
+                struct poll_fd *owner = poll_find_ptr(poll_, candidate);
+                if (owner != NULL && owner->poll == poll_) {
+                    struct fd *fd = owner->fd;
+                    char path[MAX_PATH];
+                    path[0] = '\0';
+                    if (fd != NULL)
+                        generic_getpath(fd, path);
+                    printk("epoll-trace: host pid=%d comm=%s real=%d host=%#x req=%#x path=%s ops=%p\n",
+                           current->pid, current->comm,
+                           fd != NULL ? fd->real_fd : -1, rpe_events(&e[i], candidate),
+                           owner->types, path,
+                           fd != NULL ? (void *) fd->ops : NULL);
                 }
             }
-            if (slot < 0) {
-                slot = batch_count++;
-                batch_fds[slot] = triggered_poll_fd->fd;
-                batch_types[slot] = 0;
-            }
-            batch_types[slot] |= host_events;
+            poll_note_host_event_locked(poll_, &e[i]);
         }
-        for (int i = 0; i < batch_count; i++) {
-            struct poll_fd *fan_poll_fd, *fan_tmp;
-            list_for_each_entry_safe(&poll_->poll_fds, fan_poll_fd, fan_tmp, fds) {
-                if (fan_poll_fd->fd != batch_fds[i])
-                    continue;
-                int host_events = batch_types[i];
-                if (fan_poll_fd->types & POLL_EDGETRIGGERED)
-                    fan_poll_fd->triggered_types &= ~host_events;
-                int poll_types = host_events & (fan_poll_fd->types | POLL_HUP | POLL_ERR | POLL_NVAL);
-                if (!poll_types)
-                    continue;
-                res += poll_deliver_ready_locked(poll_, fan_poll_fd, poll_types,
-                                                 callback, context, "host-callback");
-            }
-        }
+        res += poll_scan_ready_locked(poll_, callback, context);
 
         while (poll_->notify_pipe[0] != -1) {
             char byte;
@@ -1246,6 +1454,16 @@ static int real_poll_update(struct real_poll *real, int fd, int types, void *dat
     if (err < 0 && errno == ENOENT)
         err = epoll_ctl(real->fd, EPOLL_CTL_ADD, fd, &epevent);
     return err;
+}
+
+static int real_poll_collect(struct real_poll *real, struct real_poll_event *events, int max,
+        bool *more) {
+    int count;
+    do {
+        count = epoll_wait(real->fd, (struct epoll_event *) events, max, 0);
+    } while (count < 0 && errno == EINTR);
+    *more = count == max;
+    return count < 0 ? 0 : count;
 }
 
 static void *rpe_data(struct real_poll_event *rpe) {
@@ -1422,6 +1640,24 @@ static int real_poll_wait(struct real_poll *real, struct real_poll_event *events
     }
     errno = saved;
     return count;
+}
+
+static int real_poll_collect(struct real_poll *real, struct real_poll_event *events, int max,
+        bool *more) {
+    struct timespec zero = {0, 0};
+    int count;
+    do {
+        count = kevent(real->fd, NULL, 0, (struct kevent *) events, max, &zero);
+    } while (count < 0 && errno == EINTR);
+    *more = count == max;
+    // A deadline timer a poked wait left behind (real_poll_wait) is nobody's
+    // event.
+    int kept = 0;
+    for (int i = 0; i < count; i++) {
+        if (events[i].real.udata != &real_poll_deadline_tag)
+            events[kept++] = events[i];
+    }
+    return kept;
 }
 
 static void *rpe_data(struct real_poll_event *rpe) {

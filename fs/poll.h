@@ -28,6 +28,10 @@ struct poll {
     // instead move them to a freelist where they can be reused.
     struct list pollfd_freelist;
 
+    // poll_host_resume_gen (fs/poll.c) as of this poll's last look at its
+    // host-edge registrations after a suspension.
+    unsigned host_resume_seen;
+
     // When this poll belongs to an epoll FD (kernel/epoll.c), the owning
     // struct fd -- so a wakeup on a member can cascade to whoever is
     // polling the epoll fd itself (epoll-inside-epoll, e.g. systemd's
@@ -57,10 +61,24 @@ struct poll_fd {
         int fd;
         uint64_t num;
     } info;
-    // Used to implement edge-triggered notifications. When an event is
-    // returned its bits are set here, and those bits are ignored on the next
-    // call to poll_wait. The bits are cleared by poll_wakeup.
+    // Used to implement edge-triggered notifications: what this registration
+    // has reported since the file's last event. A wait reports it again only
+    // once something not in here is ready, which after an event is anything
+    // (see poll_fd_note_event_locked, which empties it).
     int triggered_types;
+    // Host events collected for this registration and not yet reported
+    // (poll_note_host_event_locked). The scan adds them to what it finds and
+    // clears them once they are reported.
+    int host_events;
+    // The host reports this file's events edge-triggered (EV_CLEAR, which
+    // every registration of it here being EPOLLET arms) and reliably -- a
+    // socket, a pipe or a FIFO. Such a registration reports only an event
+    // collected from the host, never a readiness a scan happens to see:
+    // see poll_drain_host_locked. Kept by poll_sync_host_locked.
+    bool host_edges;
+    // An EPOLLONESHOT registration that has reported, waiting for
+    // EPOLL_CTL_MOD. It reports nothing until then, a hangup included.
+    bool disarmed;
 
     // locked by containing struct fd
     struct poll *poll;
@@ -112,6 +130,12 @@ int poll_del_fd(struct poll *poll, struct fd *fd, fd_t guest_fd);
 // generate a new edge-triggered notification.
 // please do not call this while holding any locks you would acquire in your poll operation
 void poll_wakeup(struct fd *fd, int events);
+// The host object behind fd changed under it (fs/sockrestart.c): re-program
+// every poll's host watch of it, and wake their waiters.
+void poll_rearm_host_fd(struct fd *fd);
+// Back from a suspension (fs/sockrestart.c): every poll takes one fresh look
+// at its edge-triggered host registrations.
+void poll_note_host_resume(void);
 // Same, but never blocks: skips fds/polls it can't immediately lock instead
 // of waiting. Use this instead of poll_wakeup() when the lock-ordering rule
 // above can't be honored (see the comment on the definition in poll.c).
@@ -120,6 +144,10 @@ void poll_wakeup_trylock(struct fd *fd, int events);
 // Returns the number of times the callback returned 1, or negative for error.
 typedef int (*poll_callback_t)(void *context, int types, union poll_fd_info info);
 int poll_wait(struct poll *poll, poll_callback_t callback, void *context, struct timespec *timeout);
+// Collects what the host has queued for this poll's edge-triggered host
+// watches, noting each event against its registrations (fs/poll.c). Caller
+// holds poll->lock.
+void poll_drain_host_locked(struct poll *poll);
 // does not lock the poll because lock ordering, you must ensure no other
 // thread will add or remove fds from this poll
 void poll_destroy(struct poll *poll);

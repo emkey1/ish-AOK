@@ -87,17 +87,21 @@ done <<EOF
 - pending 0
 - accept 0
 - poll 0
+- epollet 0
 - relisten 0
 - mixed 0
 - tcp 0
 - tcp-pending 0
 - tcp-accept 0
+- tcp-epollet 0
 1 survive 1
 1 abstract 1
 1 poll 1
+1 epollet 1
 1 relisten 1
 1 mixed 2
 1 tcp 1
+1 tcp-epollet 1
 EOF
 
 if [ "$(uname -s)" = Darwin ]; then
@@ -108,10 +112,12 @@ defunct pending 0
 defunct accept 0
 defunct mixed 1
 defunct tcp-accept 1
+defunct tcp-epollet 1
 defunct-all survive 1
 defunct-all abstract 1
 defunct-all accept 1
 defunct-all poll 1
+defunct-all epollet 1
 defunct-all relisten 1
 defunct-all mixed 2
 EOF
