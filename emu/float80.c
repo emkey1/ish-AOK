@@ -717,6 +717,37 @@ float80 f80_div(float80 a, float80 b) {
     return f;
 }
 
+// An instruction computed from several float80 steps runs them at 64 bits and
+// round-to-nearest, whatever precision control and the rounding mode say, and
+// the steps' own flags are not the instruction's: f80_full_precision_end puts
+// back the flags from before, adding only PE if the caller says so.
+struct f80_mode_save_ {
+    enum f80_rounding_mode rounding;
+    int precision, exceptions, inexact, rounded_up;
+};
+static struct f80_mode_save_ f80_full_precision_begin(void) {
+    struct f80_mode_save_ saved = {f80_rounding_mode, f80_precision,
+                                   f80_exceptions, f80_inexact, f80_rounded_up};
+    f80_rounding_mode = round_to_nearest;
+    f80_precision = 64;
+    return saved;
+}
+static void f80_full_precision_end(struct f80_mode_save_ saved, bool inexact) {
+    f80_rounding_mode = saved.rounding;
+    f80_precision = saved.precision;
+    f80_exceptions = saved.exceptions;
+    f80_inexact = saved.inexact || inexact;
+    f80_rounded_up = saved.rounded_up;
+}
+
+// The exponent of x's leading 1, for a finite nonzero x: a denormal's is below
+// the smallest normal's, by the zeros above its first set bit.
+static int f80_exponent(float80 x) {
+    if (x.exp == EXP_DENORMAL)
+        return unbias(EXP_MIN) - __builtin_clzll(x.signif);
+    return unbias(x.exp);
+}
+
 // FPREM / FPREM1 share one EXACT remainder.
 //
 // The old f80_mod computed x - trunc(x/y)*y, which is the right formula and the
@@ -738,7 +769,12 @@ float80 f80_div(float80 a, float80 b) {
 static float80 f80_remainder_common(float80 x, float80 y, bool ieee) {
     // Invalid operations -- a zero divisor, or an infinite dividend -- give the
     // x87 real indefinite, which is the NEGATIVE quiet NaN. A propagated NaN
-    // operand is returned as-is rather than replaced.
+    // operand is returned as-is rather than replaced -- unless the other one
+    // is unsupported, which is invalid even beside a quiet NaN.
+    if (!f80_is_supported(x) || !f80_is_supported(y)) {
+        f80_exceptions |= F80_EXC_INVALID;
+        return F80_INDEFINITE;
+    }
     if (f80_issnan(x) || f80_issnan(y))
         f80_exceptions |= F80_EXC_INVALID;
     if (f80_isnan(x)) {
@@ -749,24 +785,26 @@ static float80 f80_remainder_common(float80 x, float80 y, bool ieee) {
         y.signif |= 1ull << 62;
         return y;
     }
-    if (!f80_is_supported(x) || !f80_is_supported(y) ||
-            f80_isinf(x) || f80_iszero(y)) {
+    if (f80_isinf(x) || f80_iszero(y)) {
         f80_exceptions |= F80_EXC_INVALID;
         return F80_INDEFINITE;
     }
+    if (f80_isdenormal(x) || f80_isdenormal(y))
+        f80_exceptions |= F80_EXC_DENORMAL;
     if (f80_iszero(x) || f80_isinf(y))
         return x;
 
+    // Every step is exact, but f80_lt subtracts to compare, a difference of
+    // far-apart values is not, and FPREM1 doubles the remainder, which can
+    // overflow: without this, FPREM reported PE, FPREM1 near the top OE, and
+    // precision control rounded the steps (10 mod 3.0000000001 was 1.0).
+    struct f80_mode_save_ saved = f80_full_precision_begin();
     float80 r = f80_abs(x);
     float80 d = f80_abs(y);
     int quotient_odd = 0;
 
     if (!f80_lt(r, d)) {
-        int rexp = 0, dexp = 0;
-        float80 ignored;
-        f80_xtract(r, &rexp, &ignored);
-        f80_xtract(d, &dexp, &ignored);
-        for (int i = rexp - dexp; i >= 0; i--) {
+        for (int i = f80_exponent(r) - f80_exponent(d); i >= 0; i--) {
             float80 t = f80_scale(d, i);
             if (f80_lt(r, t))
                 continue;
@@ -789,6 +827,7 @@ static float80 f80_remainder_common(float80 x, float80 y, bool ieee) {
         }
     }
 
+    f80_full_precision_end(saved, false);
     r.sign = flip ? !x.sign : x.sign;
     return r;
 }
@@ -858,8 +897,7 @@ static float80 f80_ln_atanh(float80 num, float80 den) {
             break;
         sum = next;
     }
-    // Doubled by adding, which is exact; f80_scale is off by a factor of two
-    // on a denormal, which is what a tiny FYL2XP1 operand gives here.
+    // Doubled by adding, which is exact.
     return f80_add(sum, sum);
 }
 
@@ -869,29 +907,12 @@ static const float80 f80_sqrt2_ = {.signif = 0xb504f333f9de6484, .signExp = 0x3f
 
 // FYL2X and FYL2XP1 are transcendental instructions, which the x87 computes at
 // full precision whatever the precision-control field says, so the series runs
-// at 64 bits and round-to-nearest. Its own steps' flags are not the
-// instruction's either -- a tiny term underflows without the result doing so
-// -- so they are put back as they were, and the caller is told only whether
-// the result is inexact. The x87 reports PE for every FYL2X operand but 1,
-// powers of two included (checked on camd), so that is what it says.
-struct f80_mode_save_ {
-    enum f80_rounding_mode rounding;
-    int precision, exceptions, inexact, rounded_up;
-};
-static struct f80_mode_save_ f80_full_precision_begin(void) {
-    struct f80_mode_save_ saved = {f80_rounding_mode, f80_precision,
-                                   f80_exceptions, f80_inexact, f80_rounded_up};
-    f80_rounding_mode = round_to_nearest;
-    f80_precision = 64;
-    return saved;
-}
-static void f80_full_precision_end(struct f80_mode_save_ saved, bool inexact) {
-    f80_rounding_mode = saved.rounding;
-    f80_precision = saved.precision;
-    f80_exceptions = saved.exceptions;
-    f80_inexact = saved.inexact || inexact;
-    f80_rounded_up = saved.rounded_up;
-}
+// at 64 bits and round-to-nearest (f80_full_precision_begin). Its own steps'
+// flags are not the instruction's either -- a tiny term underflows without the
+// result doing so -- so they are put back as they were, and the caller is told
+// only whether the result is inexact. The x87 reports PE for every FYL2X
+// operand but 1, powers of two included (checked on camd), so that is what it
+// says.
 
 // log2(x) = e + log2(m), x = m * 2^e with m in [sqrt(1/2), sqrt(2)).
 //
@@ -1072,21 +1093,91 @@ float80 f80_sqrt(float80 x) {
     return u128_normalize_round(signif, half + 63, 0);
 }
 
+// x * 2^scale, rounded once in the current rounding mode -- and always to 64
+// bits, since precision control does not apply to FSCALE (checked on camd: a
+// 64-bit significand scaled under PC=24 keeps every bit).
 float80 f80_scale(float80 x, int scale) {
     if (!f80_is_supported(x) || f80_isnan(x))
         return F80_NAN;
     if (f80_isinf(x) || f80_iszero(x))
         return x;
-    return u128_normalize_round((uint128_t) x.signif << 64, unbias(x.exp) + scale, x.sign);
+    // 2^16 takes any finite value out of range either way; clamping there
+    // keeps the exponent sum below from overflowing an int.
+    if (scale > 0x10000)
+        scale = 0x10000;
+    if (scale < -0x10000)
+        scale = -0x10000;
+    int precision = f80_precision;
+    f80_precision = 64;
+    // A denormal's exponent field of 0 means the same scale as 1: unbias(0)
+    // is one short of it, which halved every denormal FSCALE touched.
+    float80 r = u128_normalize_round((uint128_t) x.signif << 64,
+            unbias_denormal(x.exp) + scale, x.sign);
+    f80_precision = precision;
+    return r;
 }
 
-void f80_xtract(float80 f, int *exp, float80 *signif) {
-    *exp = unbias(f.exp);
-    *signif = f;
-    // FXTRACT of zero yields zero, not 1.0. Forcing the exponent field
-    // unconditionally turned a zero significand into 1.0 -- measured against
-    // hardware, which returns zero with the original sign.
-    if (f80_iszero(f))
+// FSCALE: x * 2^trunc(y). The truncation raises nothing; the scaling raises
+// what any rounding does. The infinite scales are exact, except the two with
+// no value, 0 * 2^+inf and inf * 2^-inf.
+float80 f80_fscale(float80 x, float80 y) {
+    handle_nans(x, y);
+    if (f80_isdenormal(x) || f80_isdenormal(y))
+        f80_exceptions |= F80_EXC_DENORMAL;
+    if (f80_isinf(y)) {
+        if (y.sign ? f80_isinf(x) : f80_iszero(x)) {
+            f80_exceptions |= F80_EXC_INVALID;
+            return F80_INDEFINITE;
+        }
+        if (f80_iszero(x) || f80_isinf(x))
+            return x;
+        float80 r = y.sign ? (float80) {0} : F80_INF;
+        r.sign = x.sign;
+        return r;
+    }
+    int scale;
+    if (y.exp >= bias(16))
+        scale = 0x10000; // f80_scale's clamp
+    else if (y.exp < bias(0))
+        scale = 0; // including zero and the denormals
+    else
+        scale = (int) (y.signif >> (63 - unbias(y.exp)));
+    if (y.sign)
+        scale = -scale;
+    return f80_scale(x, scale);
+}
+
+// FXTRACT: x = signif * 2^exp with signif in [1, 2) and x's sign -- a denormal
+// is normalized first, its exponent below the smallest normal's. Zero has no
+// exponent: -infinity, and divide-by-zero. An infinity's is +infinity.
+void f80_xtract(float80 x, float80 *exp, float80 *signif) {
+    if (!f80_is_supported(x)) {
+        f80_exceptions |= F80_EXC_INVALID;
+        *exp = *signif = F80_INDEFINITE;
         return;
+    }
+    if (f80_isnan(x)) {
+        if (f80_issnan(x)) {
+            f80_exceptions |= F80_EXC_INVALID;
+            x.signif |= 1ull << 62;
+        }
+        *exp = *signif = x;
+        return;
+    }
+    *signif = x;
+    if (f80_isinf(x)) {
+        *exp = F80_INF;
+        return;
+    }
+    if (f80_iszero(x)) {
+        f80_exceptions |= F80_EXC_DIVZERO;
+        *exp = F80_INF;
+        exp->sign = 1;
+        return;
+    }
+    if (f80_isdenormal(x))
+        f80_exceptions |= F80_EXC_DENORMAL;
+    *exp = f80_from_int(f80_exponent(x));
+    signif->signif = x.signif << __builtin_clzll(x.signif);
     signif->exp = bias(0);
 }

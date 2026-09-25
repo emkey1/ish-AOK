@@ -238,13 +238,11 @@ void fpu_prem1(struct cpu_state *cpu) {
     cpu->c2 = 0; // complete reduction, as fpu_prem also reports
 }
 
+// ST(1) is truncated inside f80_fscale. Converting it to a C int here made a
+// scale of 2^32, an infinity and a NaN all 0.
 void fpu_scale(struct cpu_state *cpu) {
-    enum f80_rounding_mode old_mode = f80_rounding_mode;
-    f80_rounding_mode = round_chop;
-    int scale = f80_to_int(ST(1));
-    f80_rounding_mode = old_mode;
     FPU_BEGIN();
-    ST(0) = f80_scale(ST(0), scale);
+    ST(0) = f80_fscale(ST(0), ST(1));
     FPU_END();
 }
 
@@ -575,10 +573,11 @@ void fpu_sincos(struct cpu_state *cpu) {
 }
 
 void fpu_xtract(struct cpu_state *cpu) {
-    int exp;
-    float80 signif;
+    float80 exp, signif;
+    FPU_BEGIN();
     f80_xtract(ST(0), &exp, &signif);
-    ST(0) = f80_from_int(exp);
+    FPU_END();
+    ST(0) = exp;
     fpush(signif);
 }
 

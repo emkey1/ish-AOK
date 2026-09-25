@@ -49,9 +49,10 @@ float80 f80_log2p1(float80 x);
 float80 f80_sqrt(float80 x);
 
 float80 f80_scale(float80 x, int scale);
+float80 f80_fscale(float80 x, float80 y);
 
-// Used to implement fxtract
-void f80_xtract(float80 f, int *exp, float80 *signif);
+// FXTRACT: the exponent and the significand, both as values
+void f80_xtract(float80 x, float80 *exp, float80 *signif);
 
 enum f80_rounding_mode {
     round_to_nearest = 0,
