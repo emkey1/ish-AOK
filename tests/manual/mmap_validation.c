@@ -27,6 +27,12 @@
 //   and nonzero flags returned success, and PRIVATE_EXPEDITED worked without
 //   the registration whose EPERM is how a runtime learns to register.
 //
+//   mmap took a file offset that was not page-aligned, where Linux answers
+//   EINVAL before it looks at anything else, the descriptor included. The
+//   mapping it made put the file from part way into a page at a page of guest
+//   memory, which nothing downstream expects. musl and glibc refuse such an
+//   offset themselves, so those checks go to the kernel directly.
+//
 // Measured against x86_64 glibc on Linux 6.12. The one deliberate difference
 // is the QUERY mask itself: Linux reports 0x3ff, AOK reports the subset it
 // actually implements, so the mask is not asserted equal here.
@@ -111,6 +117,24 @@ static int child_byte(char *p) {
     if (waitpid(c, &st, 0) != c)
         return -1;
     return WIFEXITED(st) ? WEXITSTATUS(st) : -1;
+}
+
+// A raw mmap of one page, with nothing in front of the kernel's own argument
+// checks; its errno, or 0 once what it mapped is unmapped again. i386's mmap
+// takes its arguments in a block (old_mmap); mmap2 counts the offset in
+// pages and cannot express an unaligned one.
+static long raw_mmap_errno(int prot, int flags, int fd, long off) {
+    errno = 0;
+#if defined(__i386__)
+    uint32_t args[6] = { 0, 4096, (uint32_t) prot, (uint32_t) flags, (uint32_t) fd, (uint32_t) off };
+    long r = syscall(SYS_mmap, args);
+#else
+    long r = syscall(SYS_mmap, 0L, 4096L, (long) prot, (long) flags, (long) fd, off);
+#endif
+    if (r == -1)
+        return errno;
+    munmap((void *) r, 4096);
+    return 0;
 }
 
 static long mb(int cmd, int flags) {
@@ -477,6 +501,38 @@ int main(int argc, char **argv) {
             close(fd);
             unlink(path);
         }
+    }
+
+    // ---- a file offset that is not page-aligned is EINVAL -----------------
+    {
+        char path[128];
+        snprintf(path, sizeof path, "/tmp/mmap-offset-%d.bin", (int) getpid());
+        unlink(path);
+        int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0 || ftruncate(fd, 4 * 4096) != 0) {
+            printf("FAIL offset: setup: %s\n", strerror(errno));
+            failures_total++;
+        } else {
+            int bad = dup(fd);
+            close(bad);
+            ck("mmap of a file at offset 100 is EINVAL",
+               raw_mmap_errno(PROT_READ, MAP_SHARED, fd, 100), EINVAL);
+            ck("  at offset 2048 too",
+               raw_mmap_errno(PROT_READ, MAP_SHARED, fd, 2048), EINVAL);
+            ck("  MAP_PRIVATE too",
+               raw_mmap_errno(PROT_READ, MAP_PRIVATE, fd, 2048), EINVAL);
+            ck("  MAP_ANONYMOUS too",
+               raw_mmap_errno(PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 2048), EINVAL);
+            ck("  and before a closed descriptor is noticed",
+               raw_mmap_errno(PROT_READ, MAP_SHARED, bad, 2048), EINVAL);
+            ck("  (which at offset 4096 is EBADF)",
+               raw_mmap_errno(PROT_READ, MAP_SHARED, bad, 4096), EBADF);
+            ck("mmap of a file at offset 4096 maps",
+               raw_mmap_errno(PROT_READ, MAP_SHARED, fd, 4096), 0);
+        }
+        if (fd >= 0)
+            close(fd);
+        unlink(path);
     }
 
     return finish_suite("mmap_validation");

@@ -566,6 +566,18 @@ static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t pr
     STRACE("mmap(%#llx, %#llx, 0x%x, 0x%x, %d, %#llx)",
            (unsigned long long) addr, (unsigned long long) len, prot, flags, fd_no,
            (unsigned long long) offset);
+    // A file offset that is not page-aligned is EINVAL, and before anything
+    // else is looked at -- even a bad descriptor, even MAP_ANONYMOUS -- as at
+    // every Linux mmap entry (x86_64, arm64 and riscv64 mmap, i386's old
+    // mmap; mmap2's offset counts pages). Accepted, it made a mapping Linux
+    // never has: the file from part way into a page, at a page boundary of
+    // guest memory, where /proc/<pid>/maps and mem_shared_page_id -- the
+    // JIT's alias index, a shared futex's key -- take every page of a file
+    // mapping to start at a page of the file. musl and glibc refuse such an
+    // offset themselves, so it arrived only from raw callers, Go's
+    // syscall.Mmap for one.
+    if (PGOFFSET(offset) != 0)
+        return _EINVAL;
     if (len == 0)
         return _EINVAL;
     const struct vm_limits lim = vm_limits_now();
