@@ -42,3 +42,24 @@ vdso = custom_target('vdso', input: ['vdso.S', 'vdso.c', 'vdso.lds'], output: 'l
     command: vdso_compiler + ['-o', '@OUTPUT@', '@INPUT0@', '@INPUT1@',
         '-nostdlib', '-Wl,-T,@INPUT2@', '-Wl,--hash-style,sysv', '-shared', '-fPIC']
         + get_option('vdso_c_args').split())
+
+# The 64-bit guests' vDSOs (arm64/vdso.S says what they are for), built by the
+# same clang. SysV hash only, as Linux builds its own: musl's lookup reads
+# DT_HASH and nothing else. linux-vdso.so.1 is the name glibc and ldd give it.
+vdso64_link_args = ['-nostdlib', '-shared', '-fPIC', '-Wl,--hash-style=sysv',
+    '-Wl,-soname=linux-vdso.so.1', '-Wl,-z,max-page-size=4096', '-Wl,-z,noexecstack',
+    '-Wl,--eh-frame-hdr', '-Wl,--no-undefined', '-Wl,--build-id=none']
+vdso_arm64 = custom_target('vdso-arm64', input: ['arm64/vdso.S', 'arm64/vdso.lds'],
+    output: 'libvdso-arm64.so.elf',
+    command: [clang, '-target', 'aarch64-linux', '-fuse-ld=lld', '-o', '@OUTPUT@', '@INPUT0@',
+        '-Wl,-T,@INPUT1@'] + vdso64_link_args)
+vdso_amd64 = custom_target('vdso-amd64', input: ['amd64/vdso.S', 'amd64/vdso.lds'],
+    output: 'libvdso-amd64.so.elf',
+    command: [clang, '-target', 'x86_64-linux', '-fuse-ld=lld', '-o', '@OUTPUT@', '@INPUT0@',
+        '-Wl,-T,@INPUT1@'] + vdso64_link_args)
+# The double-float ABI the riscv64 roots are built for (lp64d), and only the
+# ISA the JIT runs (rv64imafdc).
+vdso_riscv64 = custom_target('vdso-riscv64', input: ['riscv64/vdso.S', 'riscv64/vdso.lds'],
+    output: 'libvdso-riscv64.so.elf',
+    command: [clang, '-target', 'riscv64-linux', '-march=rv64imafdc', '-mabi=lp64d',
+        '-fuse-ld=lld', '-o', '@OUTPUT@', '@INPUT0@', '-Wl,-T,@INPUT1@'] + vdso64_link_args)

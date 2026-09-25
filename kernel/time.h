@@ -49,6 +49,12 @@ dword_t sys_clock_gettime(dword_t clock, addr_t tp);
 dword_t sys_clock_gettime_guest(dword_t clock, guest_addr_t tp);
 dword_t sys_clock_gettime_amd64(dword_t clock, addr_t tp);
 dword_t sys_clock_gettime_amd64_guest(dword_t clock, guest_addr_t tp);
+// What the vDSO's clock read returns (AOK_VCLOCK in vdso/<arch>/vdso.S): the
+// reading clock_gettime(2) would give for `clock` right now, in nanoseconds,
+// or -1 for a clock the vDSO has to leave to the system call -- a CPU-time
+// clock, an id Linux does not have, a reading before the epoch. Called from
+// the JIT, on the guest's own thread, with nothing locked.
+int64_t vdso_clock_ns(uint32_t clock);
 dword_t sys_clock_settime(dword_t clock, addr_t tp);
 dword_t sys_clock_getres(dword_t clock, addr_t res_addr);
 dword_t sys_clock_getres_guest(dword_t clock, guest_addr_t res_addr);

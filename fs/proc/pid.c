@@ -1003,6 +1003,22 @@ static void emit_pending_maps(struct proc_data *buf, struct mem_lazy_map *pendin
     }
 }
 
+// Whether `pt` belongs to the region `start` began, by the rule Linux merges
+// VMAs by: the same mapping, or plain anonymous memory on both sides. A NAMED
+// one -- [vdso], [vvar], [sigpage] -- is a special mapping, which Linux never
+// merges with a neighbour; a 64-bit process's vDSO lands right below its
+// [sigpage], and merged, both printed as one two-page [vdso]. It is one region
+// with itself, though, even after a page of it went private and got a struct
+// data of its own (a debugger's breakpoint; mem_break_cow_group keeps the
+// name). (The caller has already required the same protection.)
+static bool maps_same_region(struct pt_entry *start, struct pt_entry *pt) {
+    if (pt->data == start->data)
+        return true;
+    if (pt->data->name != NULL || start->data->name != NULL)
+        return pt->data->name == start->data->name;
+    return (pt->flags & P_ANONYMOUS) && (start->flags & P_ANONYMOUS);
+}
+
 void proc_maps_dump(struct task *task, struct proc_data *buf) {
     struct mm *mm = proc_task_mm_retain(task);
     struct mem *mem = mm ? &mm->mem : NULL;
@@ -1035,8 +1051,7 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
                 break;
             if ((pt->flags & P_RWX) != (start_pt->flags & P_RWX))
                 break;
-            // region continues if data is the same or both are anonymous
-            if (!(pt->data == data || (pt->flags & P_ANONYMOUS && start_pt->flags & P_ANONYMOUS)))
+            if (!maps_same_region(start_pt, pt))
                 break;
             page_t prev = page;
             mem_next_page(mem, &page);
@@ -1306,7 +1321,7 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
                 break;
             if ((pt->flags & P_RWX) != (start_pt->flags & P_RWX))
                 break;
-            if (!(pt->data == data || (pt->flags & P_ANONYMOUS && start_pt->flags & P_ANONYMOUS)))
+            if (!maps_same_region(start_pt, pt))
                 break;
             // Counted here, after the three tests that decide the page is part
             // of this region and before the step that can end it, so each page

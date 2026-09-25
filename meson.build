@@ -576,7 +576,7 @@ src = [
     'kernel/ish_accel_pix.c',
     'kernel/ish_accel_pix_kernels.c',
     'kernel/user.c',
-    'kernel/vdso.c', vdso,
+    'kernel/vdso.c', vdso, vdso_amd64, vdso_arm64, vdso_riscv64,
     'kernel/task.c',
     'kernel/guestprof.c',
     'kernel/group.c',

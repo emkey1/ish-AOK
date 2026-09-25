@@ -616,6 +616,31 @@ dp3_store:
     str x20, [x10, x19, lsl #3]
 1:  gret
 
+// MRS Xt, S3_3_C15_C0_0: AOK_VCLOCK, which only the vDSO reads (vdso/arm64/
+// vdso.S). Wt names a clock -- XZR names clock 0 and discards the result --
+// and Xt is replaced by kernel/time.c's vdso_clock_ns of it: the reading
+// clock_gettime(2) would give, in ns, or -1 for "make the system call".
+// [gadget][rt]
+.gadget mrs_vclock
+    ldr x8, [_ip]
+    add _ip, _ip, #8
+    and x19, x8, #0x1f         // rt, callee-saved across the C call
+    mov w0, #0
+    cmp x19, #31
+    b.eq 1f
+    add x10, _cpu, #CPU_x0
+    add x10, x10, x19, lsl #3
+    ldr w0, [x10]              // the clock: Wt, the slot's low half
+1:  save_c                     // stores x0, and leaves it as the argument
+    bl NAME(vdso_clock_ns)
+    mov x20, x0                // result; x0 itself is restored by restore_c
+    restore_c
+    cmp x19, #31
+    b.eq 2f
+    add x10, _cpu, #CPU_x0
+    str x20, [x10, x19, lsl #3]
+2:  gret
+
 // CRC32{B,H,W,X} / CRC32C{B,H,W,X}: Wd = crc(Wn, Rm<sz>). FEAT_CRC32 is
 // optional in v8.0 and Apple only added it with A10 — gen.c hands this
 // native gadget out only when the host has it (crc32_soft below covers

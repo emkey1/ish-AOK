@@ -19,7 +19,6 @@
 #include "fs/fd.h"
 #include "emu/tlb.h"
 #include "jit/jit.h"
-#include "kernel/vdso.h"
 #include "kernel/task.h"
 #include "kernel/swap.h"
 #include "fs/fd.h"
@@ -2256,7 +2255,7 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         mem_lazy_materialize_range(mem, start, start + pages);
 
     // If this fails, the munmap in pt_unmap would probably fail.
-    assert(memory == NULL || (uintptr_t) memory % real_page_size == 0 || memory == vdso_data);
+    assert(memory == NULL || (uintptr_t) memory % real_page_size == 0);
 
     struct data *data = malloc(sizeof(struct data));
     if (data == NULL)
@@ -2272,7 +2271,7 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         .dest = start << PAGE_BITS,
 #endif
     };
-    if (mem_uses_host_page_mirroring() && memory != NULL && memory != vdso_data) {
+    if (mem_uses_host_page_mirroring() && memory != NULL) {
         size_t host_pages = (data->size + real_page_size - 1) / real_page_size;
         data->host_page_prot = malloc(host_pages);
         if (data->host_page_prot == NULL) {
@@ -2293,15 +2292,14 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
     }
     // One byte per host frame, counting the entries that point into it -- see
     // struct data::frame_refs. Allocated for anything that has host memory to
-    // release; NULL for the two cases that never can (an unbacked PROT_NONE
-    // reservation, and the vdso's static array), where "unknown" is also the
-    // right answer.
+    // release; NULL for an unbacked PROT_NONE reservation, which never can, and
+    // where "unknown" is also the right answer.
     //
     // A failure here is NOT an mmap failure. host_page_prot above is different:
     // its absence would silently mis-mirror protections. frame_refs' absence
     // only makes the mapping unevictable, so failing the guest's mmap over it
     // would trade a small feature for a large one.
-    if (memory != NULL && memory != vdso_data) {
+    if (memory != NULL) {
         size_t frames = mem_frame_count(data->size);
         data->frame_refs = calloc(frames, 1);
         // The frame's own record of where its bytes are. All-zero IS the
@@ -2507,8 +2505,7 @@ void mem_close_deferred_fds(struct mem *mem) {
 // The last page-table entry of a mapping has gone: give the host memory back
 // and free the struct.
 static void data_destroy(struct mem *mem, struct data *data) {
-    // vdso wasn't allocated with mmap, it's just in our data segment
-    if (data->data != NULL && data->data != vdso_data) {
+    if (data->data != NULL) {
         if (mem_quarantine_freed_pages()) {
             // Debug mode: keep the range reserved and make it fault rather
             // than handing it back. See the helper above.
@@ -3134,13 +3131,22 @@ static int mem_break_cow_group(struct mem *mem, page_t page) {
     // entries start outside it, and a neighbour that was in it before its
     // host page was copied is in it still. (At most one host page of guest
     // pages, so a 64-bit mask holds them.)
+    //
+    // So is the name, which a special mapping keeps when a page of it goes
+    // private, as its Linux VMA does: a debugger's breakpoint in the vDSO used
+    // to leave that page a nameless region, and /proc/<pid>/maps no longer
+    // showed the vDSO whole. Only when every page shares it -- names are
+    // static strings, compared by identity.
     uint64_t resident = 0;
+    const char *name = mem_pt(mem, first)->data->name;
     for (page_t p = first; p <= last; p++) {
         struct pt_entry *src = mem_pt(mem, p);
         memcpy((char *) copy + ((size_t) (p - first) << PAGE_BITS),
                (char *) src->data->data + src->offset, PAGE_SIZE);
         if (p - first < 64 && mem_page_is_touched(src))
             resident |= (uint64_t) 1 << (p - first);
+        if (src->data->name != name)
+            name = NULL;
     }
     int err = pt_map(mem, first, pages, copy, 0, flags & ~P_COW);
     if (err < 0) {
@@ -3149,6 +3155,7 @@ static int mem_break_cow_group(struct mem *mem, page_t page) {
         munmap(copy, bytes);
         return err;
     }
+    mem_pt(mem, first)->data->name = name;
     for (page_t p = first; p <= last && p - first < 64; p++)
         if (resident & ((uint64_t) 1 << (p - first)))
             mem_pt_touch(mem, mem_pt(mem, p));
@@ -4234,13 +4241,11 @@ static size_t swap_pages_per_frame(void) {
 //    Without it the four-consecutive-pages test is safe only by coincidence of
 //    who calls pt_dup today.
 //
-// Exclusive struct data does NOT imply an exclusive host frame, so the vdso is
-// excluded by identity and not by ownership: kernel/vdso.c's static array gets
-// its OWN struct data on every 32-bit exec (kernel/exec.c), each of which reads
-// as exclusive, while all of them share one host page -- which in build/ish
-// also holds unrelated emulator globals, including a live lock. Section 2.5
-// makes that a written-down precondition of what the ownership record means
-// rather than a filter someone may later relax.
+// Exclusive struct data implies an exclusive host frame only because nothing
+// hands pt_map memory that another struct data maps too (Section 2.5 makes it
+// a written-down precondition of what the ownership record means). The i386
+// vDSO's static array was the exception, excluded here by identity, until
+// each process got its own copy (kernel/exec.c).
 //
 // The remaining struct-data exclusions are section 3.4's, gating on fields
 // rather than on the guest-visible flag: a mapping with an fd, a
@@ -4259,8 +4264,6 @@ static bool swap_frame_eligible(struct mem *mem, page_t base, unsigned min_age,
     for (size_t i = 0; i < per; i++) {
         struct pt_entry *pt = mem_pt(mem, base + i);
         if (pt == NULL || pt->data == NULL || pt->data->data == NULL)
-            return false;
-        if (pt->data->data == vdso_data)
             return false;
         if (pt->data->fd != NULL || pt->data->cache_entry != NULL ||
                 pt->data->shared_key != 0 || pt->data->name != NULL)

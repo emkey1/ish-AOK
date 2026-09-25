@@ -40,6 +40,8 @@ int amd64_jit_cpuid(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long next_ip);
 int amd64_jit_xgetbv(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long next_ip);
+int amd64_jit_vmcall(struct cpu_state *cpu, struct tlb *tlb,
+        unsigned long next_ip);
 int amd64_jit_port_io(struct cpu_state *cpu, struct tlb *tlb,
         unsigned long insn_ip);
 int amd64_jit_moffs_accum(struct cpu_state *cpu, struct tlb *tlb,

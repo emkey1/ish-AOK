@@ -710,6 +710,36 @@ dword_t sys_clock_gettime(dword_t clock, addr_t tp) {
     return sys_clock_gettime_guest(clock, tp);
 }
 
+// clock_gettime(2) for every clock but the CPU-time ones: the host's reading
+// of the clock under it, moved onto the guest's origin for a boot-relative
+// clock -- on those the host's own reading is the HOST's uptime, which on a
+// Mac up for weeks is weeks (kernel/task.h). The one computation behind both
+// system call bodies below and the vDSO's clock register, so the three cannot
+// come to disagree.
+static int clock_gettime_host_backed(uint_t clock, struct timespec *ts) {
+    clockid_t clock_id;
+    if (clockid_to_real(clock, &clock_id))
+        return _EINVAL;
+    if (clock_gettime(clock_id, ts) < 0)
+        return errno_map();
+    *ts = guest_clock_from_host(clock, *ts);
+    return 0;
+}
+
+int64_t vdso_clock_ns(uint32_t clock) {
+    // The CPU-time clocks are the system call's, as Linux's vDSO leaves them
+    // to its kernel: usage is the kernel's bookkeeping. (The dynamic ids
+    // glibc builds for them fail clockid_to_real and land there too.)
+    if (clock == CLOCK_PROCESS_CPUTIME_ID_ || clock == CLOCK_THREAD_CPUTIME_ID_)
+        return -1;
+    struct timespec ts;
+    if (clock_gettime_host_backed(clock, &ts) < 0)
+        return -1;
+    if (ts.tv_sec < 0 || ts.tv_sec >= INT64_MAX / 1000000000)
+        return -1;
+    return (int64_t) ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
 static dword_t sys_clock_gettime_guest_abi(dword_t clock, guest_addr_t tp, enum guest_abi abi) {
     STRACE("clock_gettime(%d, 0x%x)", clock, tp);
 
@@ -729,14 +759,9 @@ static dword_t sys_clock_gettime_guest_abi(dword_t clock, guest_addr_t tp, enum 
         ts.tv_sec = usec / 1000000;
         ts.tv_nsec = (usec % 1000000) * 1000;
     } else {
-        clockid_t clock_id;
-        if (clockid_to_real(clock, &clock_id)) return _EINVAL;
-        int err = clock_gettime(clock_id, &ts);
+        int err = clock_gettime_host_backed(clock, &ts);
         if (err < 0)
-            return errno_map();
-        // Rebase: on a boot-relative clock the host's reading is the HOST's
-        // uptime, which on a Mac up for weeks is weeks. See kernel/task.h.
-        ts = guest_clock_from_host(clock, ts);
+            return err;
     }
     if (write_guest_timespec_abi(abi, tp, &ts))
         return _EFAULT;
@@ -778,14 +803,9 @@ dword_t sys_clock_gettime64_guest(dword_t clock, guest_addr_t tp) {
         ts.tv_sec = usec / 1000000;
         ts.tv_nsec = (usec % 1000000) * 1000;
     } else {
-        clockid_t clock_id;
-        if (clockid_to_real(clock, &clock_id)) return _EINVAL;
-        int err = clock_gettime(clock_id, &ts);
+        int err = clock_gettime_host_backed(clock, &ts);
         if (err < 0)
-            return errno_map();
-        // Rebase: on a boot-relative clock the host's reading is the HOST's
-        // uptime, which on a Mac up for weeks is weeks. See kernel/task.h.
-        ts = guest_clock_from_host(clock, ts);
+            return err;
     }
     struct timespec64_ t = timespec_to_guest64(ts);
     

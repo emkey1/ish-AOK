@@ -4829,6 +4829,17 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
     if ((insn & 0xffffffe0) == 0xd51b4220)
         return 1; // emit nothing; fall through to the next instruction
 
+    // MRS Xt, S3_3_C15_C0_0: AOK_VCLOCK, the clock register only AOK's vDSO
+    // reads (vdso/arm64/vdso.S). Unlike any architected MRS it reads Xt too:
+    // Wt names a clock, and Xt comes back as that clock's reading in ns, or
+    // with bit 63 set when the vDSO has to make the system call instead.
+    if ((insn & 0xffffffe0) == 0xd53bf000) {
+        extern void gadget_arm64_mrs_vclock(void);
+        gen(state, (unsigned long) gadget_arm64_mrs_vclock);
+        gen(state, insn & 0x1f);
+        return 1;
+    }
+
     // MRS Xt, CNTVCT_EL0 (virtual counter) / CNTFRQ_EL0 (frequency):
     // runtime monotonic nanoseconds + constant 1 GHz.
     if ((insn & 0xffffffe0) == 0xd53be040) {
@@ -5120,9 +5131,19 @@ static int gen_riscv64_branch_to(struct gen_state *state, guest_addr_t target) {
 // to `csrrs rd, time, x0`) only needs *a* monotonically increasing value.
 // Write attempts to these never reach here (rejected as illegal
 // instructions at decode time, see gen_step_riscv64's RISCV64_OP_SYSTEM).
+int64_t vdso_clock_ns(uint32_t clock); // kernel/time.c; see kernel/time.h
 void riscv64_csr_helper(struct cpu_state *cpu, unsigned long arg) {
     unsigned rd = arg & 31, rs1 = (arg >> 5) & 31;
     unsigned funct3 = (arg >> 10) & 7, csr = (unsigned) (arg >> 13);
+    // AOK_VCLOCK (csrrs rd, 0xcc0, rs1): the clock rs1 names, read the way
+    // clock_gettime(2) reads it, or bit 63 set for "make the system call".
+    // Only the vDSO issues it (vdso/riscv64/vdso.S).
+    if (csr == 0xcc0) {
+        qword_t ns = (qword_t) vdso_clock_ns((uint32_t) cpu->riscv64_regs[rs1]);
+        if (rd != 0)
+            cpu->riscv64_regs[rd] = ns;
+        return;
+    }
     if (csr == 0xc00 || csr == 0xc01 || csr == 0xc02) {
         struct timespec now;
         clock_gettime(CLOCK_MONOTONIC, &now);
@@ -5909,7 +5930,10 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             // write, which is illegal for these read-only counters and
             // falls through to gen_riscv64_undefined below.
             bool counter_read_only = is_counter && (funct3 & 3) != 1 && rs1 == 0;
-            if ((csr >= 1 && csr <= 3) || counter_read_only) { // fflags/frm/fcsr, or cycle/time/instret
+            // 0xcc0, csrrs only: AOK_VCLOCK, the clock only AOK's vDSO reads
+            // (vdso/riscv64/vdso.S). rs1 names the clock, rd gets its reading.
+            bool vclock = csr == 0xcc0 && funct3 == 2;
+            if ((csr >= 1 && csr <= 3) || counter_read_only || vclock) { // fflags/frm/fcsr, cycle/time/instret, vclock
                 extern void gadget_riscv64_call_helper(void);
                 extern void riscv64_csr_helper(struct cpu_state *cpu, unsigned long arg);
                 gen(state, (unsigned long) gadget_riscv64_call_helper);
@@ -6750,12 +6774,13 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         return false;
     }
 
-    // XGETBV (0f 01 d0). 0f 01's other register forms are ring-0, so only this
-    // exact ModRM is accepted and everything else falls through to the normal
-    // undefined-opcode path. Handled here rather than in the interpreter
-    // because the interpreter is being retired: implementing it there would
-    // make the instruction work today only via the interpreter fallback and
-    // then disappear with it.
+    // XGETBV (0f 01 d0), and VMCALL (0f 01 c1) below. 0f 01's other register
+    // forms are ring-0, so only these exact ModRMs are accepted and everything
+    // else falls through to the normal undefined-opcode path. XGETBV is handled
+    // here rather than in the interpreter because the interpreter is being
+    // retired: implementing it there would make the instruction work today
+    // only via the interpreter fallback and then disappear with it. VMCALL is
+    // in both on purpose -- see amd64_vmcall.
     if (amd64_jit_plain_prefixes(&insn) && insn.two_byte_opcode && insn.op2 == 0x01) {
         byte_t modrm;
         if (!tlb_read(tlb, state->amd64_ip, &modrm, sizeof(modrm))) {
@@ -6770,6 +6795,19 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                     (unsigned long long) insn.start_ip,
                     (unsigned long long) next_ip);
             gen_amd64_helper_tlb_1_retint(state, amd64_jit_xgetbv,
+                    (unsigned long) next_ip);
+            gen_exit(state);
+            return false;
+        }
+        // VMCALL (0f 01 c1): AOK_VCLOCK, the clock read AOK's vDSO makes
+        // (vdso/amd64/vdso.S) -- see amd64_vmcall.
+        if (modrm == 0xc1) {
+            next_ip = state->amd64_ip + sizeof(modrm);
+            state->amd64_ip = next_ip;
+            amd64_jit_debug("vmcall ip=%llx next=%llx",
+                    (unsigned long long) insn.start_ip,
+                    (unsigned long long) next_ip);
+            gen_amd64_helper_tlb_1_retint(state, amd64_jit_vmcall,
                     (unsigned long) next_ip);
             gen_exit(state);
             return false;

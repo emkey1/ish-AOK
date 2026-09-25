@@ -2218,6 +2218,25 @@ static inline qword_t amd64_trunc(qword_t value, unsigned size) {
     return value & amd64_mask(size);
 }
 
+int64_t vdso_clock_ns(uint32_t clock); // kernel/time.c; see kernel/time.h
+
+// VMCALL (0f 01 c1) is AOK_VCLOCK, the clock read AOK's vDSO makes
+// (vdso/amd64/vdso.S): RAX names a clock and comes back as its reading in
+// nanoseconds, or with bit 63 set for "make the system call" -- kernel/time.c
+// vdso_clock_ns, what clock_gettime(2) computes. A user-mode VMCALL raises #UD
+// on real hardware, and still does here when RAX's upper half is not zero,
+// which is kept for any other call AOK's vDSO might one day make. Flags and
+// every other register are left alone. Both engines run it -- the JIT through
+// amd64_jit_vmcall, the interpreter directly -- so a JIT-off run keeps a
+// working clock_gettime.
+static int amd64_vmcall(struct cpu_state *cpu) {
+    qword_t rax = cpu->amd64_regs[amd64_rax];
+    if (rax >> 32 != 0)
+        return INT_UNDEFINED;
+    cpu->amd64_regs[amd64_rax] = (qword_t) vdso_clock_ns((uint32_t) rax);
+    return INT_NONE;
+}
+
 static inline qword_t amd64_rdtsc_value(void) {
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
@@ -8864,6 +8883,20 @@ restart_prefix:
         }
         if (op2 == 0x05)
             return INT_AMD64_SYSCALL;
+        if (op2 == 0x01) {
+            // VMCALL; every other 0f 01 form goes on to the handling below.
+            qword_t after_op2 = cpu->amd64_rip;
+            byte_t modrm;
+            if (amd64_fetch_u8(cpu, tlb, &modrm) && modrm == 0xc1) {
+                int intr = amd64_vmcall(cpu);
+                if (intr != INT_NONE) {
+                    cpu->amd64_rip = saved_rip;
+                    return intr;
+                }
+                break;
+            }
+            cpu->amd64_rip = after_op2;
+        }
         if (op2 == 0x31) {
             qword_t tsc = amd64_rdtsc_value();
             amd64_reg_set(cpu, amd64_rax, 32, (dword_t) tsc);
@@ -12736,6 +12769,20 @@ int amd64_jit_xgetbv(struct cpu_state *cpu, struct tlb *tlb,
     cpu->amd64_rip = (qword_t) next_ip;
     amd64_sync_legacy_regs(cpu);
     return INT_NONE;
+}
+
+// VMCALL (0f 01 c1), the JIT's way into amd64_vmcall. Plain prefixes only, so
+// the instruction is exactly three bytes and a fault reports next_ip - 3.
+int amd64_jit_vmcall(struct cpu_state *cpu, struct tlb *tlb,
+        unsigned long next_ip) {
+    guest_addr_t checked_next_ip;
+    (void) tlb;
+    if (!amd64_guest_addr_ok((qword_t) next_ip, 1, &checked_next_ip))
+        return INT_GPF;
+    int intr = amd64_vmcall(cpu);
+    cpu->amd64_rip = (qword_t) (intr == INT_NONE ? next_ip : next_ip - 3);
+    amd64_sync_legacy_regs(cpu);
+    return intr;
 }
 
 // Port I/O: IN/OUT (e4/e5 imm8, e6/e7 imm8, ec/ed dx, ee/ef dx). These are
