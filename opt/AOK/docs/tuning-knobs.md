@@ -148,18 +148,33 @@ manages its own memory and can page the app out regardless; iSH-AOK has no way
 to pin host pages and never has. So a locked page will not be written to the
 swap file, and that is all `mlock` can mean here.
 
-`RLIMIT_MEMLOCK` is enforced, and exceeding it returns `ENOMEM` as Linux has
-since 2.6.9. Note that the standalone CLI runs as **root**, which is exempt
-(Linux exempts `CAP_IPC_LOCK`), so testing the limit means dropping privilege
-first -- as root every `mlock` simply succeeds.
+The lock is visible where Linux shows it: `VmLck` in `/proc/<pid>/status`,
+`Locked` and the `lo` flag in `smaps`, and a separate `maps` line wherever a
+lock starts or ends. It belongs to the mapping, so it stays with a page that is
+copied after a `fork` or a debugger's write, and with a mapping that grows or
+moves -- the stack of a locked process, an `mremap` -- while a `fork`'s child
+starts with no locks at all.
 
-`mlockall(MCL_FUTURE)` is accepted and recorded but not yet acted on: it would
-have to reach the page-table layer, which knows nothing about a process's
-flags. `MCL_CURRENT` locks everything already mapped, which is the half that
-works today. That includes large mappings nothing has touched yet: as on Linux,
-their readable or writable parts are populated and locked at once, and
-`PROT_NONE` ones, or every one under `MCL_ONFAULT`, have each page locked when
-it is first touched. `mlock` populates the range it locks, as on Linux.
+`mlockall(MCL_CURRENT)` locks everything already mapped; `MCL_FUTURE`, and the
+`MAP_LOCKED` flag to `mmap`, lock new mappings too -- `mmap`, `brk` and
+`shmat` alike. As on Linux, what is locked is populated, readable or writable
+parts of large untouched mappings included; `PROT_NONE` mappings, and everything
+under `MCL_ONFAULT`, have each page locked when it is first touched.
+
+`RLIMIT_MEMLOCK` is enforced the way Linux enforces it: with a limit of 0,
+`mlock`, `mlockall` and `MAP_LOCKED` fail with `EPERM`; past the limit `mlock`
+and `mlockall(MCL_CURRENT)` fail with `ENOMEM`, a locked `mmap` or `mremap` with
+`EAGAIN`, and a locked stack that would grow past it gets `SIGSEGV`. The
+standalone CLI runs as **root**, which is exempt (Linux exempts
+`CAP_IPC_LOCK`), so testing the limit means dropping privilege first -- as root
+every `mlock` simply succeeds.
+
+Not there yet: `mlock2(2)` (`MLOCK_ONFAULT`) is not implemented, `smaps` shows
+no `lf` flag for an on-fault lock, and a process restored after iOS suspended
+the app comes back holding no locks. And locking does not copy a page the
+process still shares copy-on-write with its parent or child after a `fork`, as
+Linux does: `smaps` counts such a page at half in `Pss` and `Locked` until one
+of them writes to it.
 
 ## `ISH_GUEST_SWAP_FAIL_READS`
 

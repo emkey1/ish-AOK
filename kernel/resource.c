@@ -55,6 +55,21 @@ static int rlimit_set(struct task *task, int resource, struct rlimit_ limit) {
     // change waited for the target's next exec. That covered prlimit64 on
     // another process, and also on the caller's own tgid from a non-leader
     // thread, which resolves to the leader and so never looked like `current`.
+    //
+    // RLIMIT_MEMLOCK is cached there as well, and for the same reason: a
+    // locked stack may not grow past it (struct mem's memlock_limit_pages).
+    if (resource == RLIMIT_MEMLOCK_) {
+        bool unlimited = limit.cur == RLIM_INFINITY_;
+        if (task == current) {
+            if (current->mm != NULL)
+                mem_set_memlock_limit(&current->mm->mem, (uint64_t) limit.cur, unlimited);
+        } else if (task_lock_unless_exiting(task)) {
+            // As for RLIMIT_STACK below.
+            if (task->mm != NULL)
+                mem_set_memlock_limit(&task->mm->mem, (uint64_t) limit.cur, unlimited);
+            unlock(&task->general_lock);
+        }
+    }
     if (resource == RLIMIT_STACK_) {
         uint64_t bytes = limit.cur == RLIM_INFINITY_ ? 0 : (uint64_t) limit.cur;
         if (task == current) {

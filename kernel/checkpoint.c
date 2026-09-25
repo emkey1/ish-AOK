@@ -4575,6 +4575,10 @@ static int ckpt_restore_task(FILE *f, const struct ckpt_header *h,
     mem_set_mmap_window(mem, (page_t) rec->mmap_floor, (page_t) rec->mmap_ceiling);
     mem_set_stack_bounds(mem, (page_t) rec->stack_top,
                          (uint64_t) rec->stack_limit_pages << PAGE_BITS);
+    // Not in the image, and not needed there: the group's limits are back
+    // already (above, or by the thread's leader), and this is their cache.
+    rlim_t_ memlock_limit = rlimit(RLIMIT_MEMLOCK_);
+    mem_set_memlock_limit(mem, (uint64_t) memlock_limit, memlock_limit == RLIM_INFINITY_);
 
     for (uint32_t i = 0; i < rec->n_maps; i++) {
         struct ckpt_map m;

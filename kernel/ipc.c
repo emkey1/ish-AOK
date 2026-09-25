@@ -297,6 +297,16 @@ static guest_addr_t shm_region_attach(struct mm *mm, struct shm_segment *segment
     // outside it), as Linux's do_shmat checks may_expand_vm. A shared segment
     // is never data, so RLIMIT_DATA does not apply.
     rlim_t_ as_limit = rlimit(RLIMIT_AS_);
+    // Under mlockall(MCL_FUTURE) an attach is locked and populated like any
+    // other new mapping, and has to fit RLIMIT_MEMLOCK (Linux's do_shmat goes
+    // through do_mmap and so def_flags; MEASURED on 6.12: VmLck and VmRSS rise
+    // by the segment, and shmdt takes it back out).
+    bool locked, populate;
+    int lock_err = mm_future_lock_check(mm, segment->pages, &locked, &populate);
+    if (lock_err < 0) {
+        munmap(mapping, segment->alloc_size);
+        return (guest_addr_t) lock_err;
+    }
     write_lock(&mm->mem.lock);
     if (as_limit != RLIM_INFINITY_) {
         size_t total, data;
@@ -333,6 +343,8 @@ static guest_addr_t shm_region_attach(struct mm *mm, struct shm_segment *segment
     struct pt_entry *entry = mem_pt(&mm->mem, page);
     if (entry != NULL && entry->data != NULL)
         entry->data->shared_key = (uintptr_t) segment;
+    if (locked)
+        mem_lock_new_range(&mm->mem, page, segment->pages, populate);
 
     struct shm_region *region = malloc(sizeof(*region));
     if (region == NULL) {

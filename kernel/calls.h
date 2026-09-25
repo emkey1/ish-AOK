@@ -94,6 +94,8 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk);
 #define PROT_SEM_ 0x8
 #define MMAP_FIXED 0x10
 #define MMAP_ANONYMOUS 0x20
+// The same value on every guest architecture (asm-generic, which x86 shares).
+#define MMAP_LOCKED 0x2000
 #define MMAP_FIXED_NOREPLACE 0x100000
 addr_t sys_mmap(addr_t args_addr);
 addr_t sys_mmap_amd64(addr_t addr, dword_t len, dword_t prot, dword_t flags, fd_t fd_no, dword_t offset);

@@ -1259,6 +1259,11 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     if (stack_limit_now != stack_limit)
         mem_set_stack_bounds(save->mem, 0,
                              stack_limit_now == RLIM_INFINITY_ ? 0 : (uint64_t) stack_limit_now);
+    // RLIMIT_MEMLOCK too, which a locked stack may not grow past (struct mem's
+    // memlock_limit_pages), read after the space is installed for the same
+    // reason as the re-read above.
+    rlim_t_ memlock_limit = rlimit(RLIMIT_MEMLOCK_);
+    mem_set_memlock_limit(save->mem, (uint64_t) memlock_limit, memlock_limit == RLIM_INFINITY_);
     write_unlock(&save->mem->lock);
     mem_locked = false;
 

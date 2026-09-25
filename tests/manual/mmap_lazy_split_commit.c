@@ -864,8 +864,8 @@ static void mlock_reservations(void) {
     munmap(m + 80 * MB, 432 * MB);
 
     // A PROT_NONE remainder is locked but not populated. Linux cannot populate
-    // it and says ENOMEM, having locked it anyway; AOK says 0, as it does for a
-    // small PROT_NONE mapping.
+    // it and says ENOMEM, having locked it anyway, and so does AOK, as for a
+    // small PROT_NONE mapping (tests/manual/mlock_accounting).
     char *h = reserve(512 * MB);
     if (h != NULL) {
         check(commit(h + 256 * MB, 4096, PROT_READ | PROT_WRITE), "mlock: commit one page");

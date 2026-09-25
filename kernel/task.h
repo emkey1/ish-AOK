@@ -1193,6 +1193,7 @@ extern void (*halt_hook)(int status);
 #define CAP_SETUID_      7
 #define CAP_SETPCAP_     8
 #define CAP_NET_RAW_     13
+#define CAP_IPC_LOCK_    14
 #define CAP_SYS_CHROOT_  18
 #define CAP_SYS_PACCT_   20
 #define CAP_SYS_PTRACE_  19

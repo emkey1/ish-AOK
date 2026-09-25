@@ -190,7 +190,7 @@ static int proc_pid_copy_environ(struct task *task, struct mem *mem, guest_addr_
 // on: the pages whose frames the pager has taken, which is the entries minus
 // the entries whose frames are in memory.
 struct proc_mem_usage {
-    size_t vm, vm_peak, rss, rss_peak, swap;
+    size_t vm, vm_peak, locked, rss, rss_peak, swap;
 };
 
 static struct proc_mem_usage proc_mem_usage(struct mem *mem) {
@@ -199,6 +199,10 @@ static struct proc_mem_usage proc_mem_usage(struct mem *mem) {
         return u;
     u.vm = mem_vm_pages_now(mem);
     u.vm_peak = mem_vm_pages_peak(mem);
+    // VmLck: the pages of locked mappings, Linux's locked_vm -- mapped, not
+    // necessarily resident, and never a special mapping. A counter, like the
+    // two above; it was printed as 0 whatever the process had locked.
+    u.locked = mem_locked_page_count(mem);
     u.rss = mem_rss_pages_now(mem);
     u.rss_peak = mem_rss_pages_peak(mem);
     if (swap_enabled()) {
@@ -786,7 +790,7 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     proc_printf(buf, "\n");
     proc_printf(buf, "VmPeak:\t%lu kB\n", (unsigned long) usage.vm_peak * page_kb);
     proc_printf(buf, "VmSize:\t%lu kB\n", (unsigned long) usage.vm * page_kb);
-    proc_printf(buf, "VmLck:\t0 kB\n");
+    proc_printf(buf, "VmLck:\t%lu kB\n", (unsigned long) usage.locked * page_kb);
     proc_printf(buf, "VmPin:\t0 kB\n");
     proc_printf(buf, "VmHWM:\t%lu kB\n", (unsigned long) usage.rss_peak * page_kb);
     proc_printf(buf, "VmRSS:\t%lu kB\n", (unsigned long) usage.rss * page_kb);
@@ -1017,14 +1021,18 @@ static void emit_pending_maps(struct proc_data *buf, struct mem_lazy_map *pendin
 // into; or pages of one special mapping, a name with no file ([vdso]). All
 // with one protection, sharing and growsdown.
 //
-// NOT split where mlock changes, though Linux splits a VMA there: the locked
-// byte does not follow a mapping everywhere its VM_LOCKED would -- a stack
-// grown after mlockall, an mremap, pt_move -- and splitting on it would print
-// a locked process's [stack] as two lines.
+// And one lock: mlock of the middle page of a mapping makes three VMAs of it on
+// Linux, a file's at their own offsets, and munlock merges them back (MEASURED
+// on 6.12; an anonymous mapping rejoins or not by Linux's VMA merge rules, and
+// here always does). The locked byte follows a mapping everywhere its
+// VM_LOCKED does -- stack growth, mremap, a copy-on-write copy -- so a locked
+// process's [stack] stays one line.
 static bool maps_region_continues(const struct pt_entry *start_pt,
                                   const struct pt_entry *pt, page_t pages) {
     const unsigned kind = P_RWX | P_SHARED | P_GROWSDOWN | P_ANONYMOUS;
     if ((pt->flags & kind) != (start_pt->flags & kind))
+        return false;
+    if ((pt->locked != 0) != (start_pt->locked != 0))
         return false;
     const struct data *data = start_pt->data;
     if (pt->data == data)
@@ -1195,6 +1203,7 @@ struct smaps_totals {
     uint64_t private_clean_kb, private_dirty_kb;
     uint64_t anonymous_kb;
     uint64_t swap_kb;
+    uint64_t locked_kb;
 };
 
 // The sharer estimate for one run of a region: see the comment above.
@@ -1260,6 +1269,12 @@ static void proc_smaps_region(struct proc_data *buf, struct mem *mem, page_t sta
         }
     }
     bool shared = shared_header;
+    // Linux's Locked is the Pss of the region's resident pages when the region
+    // is locked, and a region is all locked or none (maps_region_continues):
+    // a locked mapping's pages that are not resident count in VmLck and not
+    // here (MEASURED on 6.12: a locked PROT_NONE mapping is "lo" with Locked
+    // 0 kB, and 16 kB once made writable, which populates it).
+    uint64_t locked_kb = start_pt->locked ? pss_kb : 0;
 
     if (print_header) {
         proc_printf(buf, "%08llx-%08llx %c%c%c%c %08lx 00:00 %-10d %s\n",
@@ -1282,17 +1297,15 @@ static void proc_smaps_region(struct proc_data *buf, struct mem *mem, page_t sta
         proc_printf(buf, "Anonymous:      %8"PRIu64" kB\n", anonymous_kb);
         proc_printf(buf, "AnonHugePages:  %8d kB\n", 0);
         proc_printf(buf, "Swap:           %8"PRIu64" kB\n", swap_kb);
-        // Locked stays 0: mlock/mlockall are still range checks with no pin
-        // behind them (kernel/mmap.c), so no page in this region is actually
-        // pinned and 0 is the true count, not a placeholder. Section 3.12 pairs
-        // real pins with this field; both belong to the same change and neither
-        // is in this layer.
-        proc_printf(buf, "Locked:         %8d kB\n", 0);
-        proc_printf(buf, "VmFlags:%s%s%s%s\n",
+        proc_printf(buf, "Locked:         %8"PRIu64" kB\n", locked_kb);
+        // "lo" is VM_LOCKED, in the place Linux's flag order puts it after the
+        // ones printed here.
+        proc_printf(buf, "VmFlags:%s%s%s%s%s\n",
                 start_pt->flags & P_READ ? " rd" : "",
                 start_pt->flags & P_WRITE ? " wr" : "",
                 start_pt->flags & P_EXEC ? " ex" : "",
-                shared ? " sh" : "");
+                shared ? " sh" : "",
+                start_pt->locked ? " lo" : "");
     }
 
     if (totals != NULL) {
@@ -1304,6 +1317,7 @@ static void proc_smaps_region(struct proc_data *buf, struct mem *mem, page_t sta
         totals->private_dirty_kb += private_dirty_kb;
         totals->anonymous_kb += anonymous_kb;
         totals->swap_kb += swap_kb;
+        totals->locked_kb += locked_kb;
     }
 }
 
@@ -1336,11 +1350,13 @@ static void proc_smaps_reservation(struct proc_data *buf, const struct mem_lazy_
     };
     for (size_t i = 0; i < sizeof(zero_rows) / sizeof(zero_rows[0]); i++)
         proc_printf(buf, "%s%8d kB\n", zero_rows[i], 0);
-    proc_printf(buf, "VmFlags:%s%s%s%s\n",
+    // Locked, but with nothing resident, so Locked above is 0 all the same.
+    proc_printf(buf, "VmFlags:%s%s%s%s%s\n",
             l->flags & P_READ ? " rd" : "",
             l->flags & P_WRITE ? " wr" : "",
             l->flags & P_EXEC ? " ex" : "",
-            shared ? " sh" : "");
+            shared ? " sh" : "",
+            l->flags & MEM_LAZY_LOCKED ? " lo" : "");
 }
 
 static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollup) {
@@ -1481,7 +1497,7 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
         proc_printf(buf, "Referenced:     %8"PRIu64" kB\n", totals.rss_kb);
         proc_printf(buf, "Anonymous:      %8"PRIu64" kB\n", totals.anonymous_kb);
         proc_printf(buf, "Swap:           %8"PRIu64" kB\n", totals.swap_kb);
-        proc_printf(buf, "Locked:         %8d kB\n", 0);
+        proc_printf(buf, "Locked:         %8"PRIu64" kB\n", totals.locked_kb);
     }
 
     mm_release(mm);
