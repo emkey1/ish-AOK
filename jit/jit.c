@@ -7,6 +7,7 @@
 #include "emu/cpu.h"
 #include "emu/memory.h"
 #include "emu/interrupt.h"
+#include "emu/fpenv.h"
 #include "kernel/task.h"
 #include "util/list.h"
 #include "util/sync.h"
@@ -3782,7 +3783,7 @@ static int cpu_single_step_amd64(struct cpu_state *cpu, struct tlb *tlb) {
     return interrupt;
 }
 
-int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
+static int cpu_run_engine_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     // JIT gadget path (jit/guest-arm64/), per aarch64_guest_plan.md's
     // direction change — no interpreter fallback, matching i386's own
     // precedent. cpu_run_to_interrupt_arm64 (emu/arm64_interp.c) still
@@ -3871,6 +3872,19 @@ int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     }
     cpu->trapno = interrupt;
 
+    return interrupt;
+}
+
+// The guest's rounding mode is on the host FPU for exactly as long as its code
+// runs, and the flags that code raised are back in cpu_state before anything
+// -- a syscall, signal delivery, fork, ptrace, a checkpoint -- looks at it.
+// Every engine and every way out of one (crash unwinds included) passes here.
+// See emu/fpenv.c.
+int cpu_run_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
+    int abi = current != NULL ? current->abi : GUEST_ABI_I386;
+    fpenv_enter(cpu, abi);
+    int interrupt = cpu_run_engine_to_interrupt(cpu, tlb);
+    fpenv_exit(cpu, abi);
     return interrupt;
 }
 

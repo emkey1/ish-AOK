@@ -12,6 +12,7 @@
 #include "debug.h"
 #include "misc.h"
 #include "kernel/calls.h"
+#include "emu/cpuid.h"
 #include "kernel/personality.h"
 #include "kernel/random.h"
 #include "kernel/errno.h"
@@ -1246,7 +1247,12 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         struct aux_ent aux[] = {
             {AX_SYSINFO, vdso_entry},
             {AX_SYSINFO_EHDR, save->mm->vdso},
-            {AX_HWCAP, 0},
+            // Linux's i386 AT_HWCAP is CPUID leaf 1's EDX, and musl's i386
+            // fenv code reads it: without the SSE bit, fesetround never
+            // wrote MXCSR and fetestexcept never read it, so the SSE2 double
+            // arithmetic Alpine's i386 gcc emits ignored the rounding mode
+            // and raised no flags anyone could see.
+            {AX_HWCAP, cpuid_leaf1_edx_features()},
             {AX_PAGESZ, PAGE_SIZE},
             {AX_CLKTCK, 0x64},
             {AX_PHDR, load_addr + header.prghead_off},

@@ -20,11 +20,9 @@
 // No gadget here calls anything, so scratch registers are unconstrained;
 // x8-x16 for integers, v29-v31 for FP values.
 //
-// FPCR is not applied to the host (guest rounding-mode changes via
-// MSR FPCR are stored but not installed) — musl/awk-class code runs in
-// round-to-nearest, which is both the guest default and the host state.
-// A real fesetround user would need FPCR swapping around FP gadgets;
-// deferred until something hits it.
+// The guest's FPCR is the host's while guest code runs, and the flags these
+// instructions raise are gathered into the guest's FPSR: emu/fpenv.c, via
+// the MRS/MSR gadgets in dpextra.S and cpu_run_to_interrupt.
 
 #include "gadgets.h"
 
@@ -110,9 +108,9 @@ fp1src fcvt_dh,  fcvt,  h30, d30   // double -> half
 fp1src fcvt_hd,  fcvt,  d30, h30   // half -> double
 
 // ---- FCMP/FCMPE (incl. the compare-with-zero forms) ----------------------
-// Code stream: [gadget][rn | rm<<8 | cmp0<<16]. FCMPE's signaling-NaN
-// exception semantics aren't modeled (no FP exception delivery at all);
-// both lower to the quiet host compare, which produces identical NZCV.
+// Code stream: [gadget][rn | rm<<8 | cmp0<<16 | e<<17]. FCMPE is the
+// signalling compare -- IOC for a quiet NaN too -- so it runs as fcmpe; the
+// NZCV result is the same either way.
 .macro fcmp_gadget name, reg1, reg2, zero
 .gadget \name
     ldr x8, [_ip]
@@ -120,14 +118,21 @@ fp1src fcvt_hd,  fcvt,  d30, h30   // half -> double
     and x9, x8, #0x1f
     ubfx x10, x8, #8, #5
     ubfx x11, x8, #16, #1
+    ubfx x13, x8, #17, #1
     vslot x12, x9
     ldr \reg1, [x12]
     cbnz x11, 1f
     vslot x12, x10
     ldr \reg2, [x12]
+    cbnz x13, 3f
     fcmp \reg1, \reg2
     b 2f
-1:  fcmp \reg1, \zero
+3:  fcmpe \reg1, \reg2
+    b 2f
+1:  cbnz x13, 4f
+    fcmp \reg1, \zero
+    b 2f
+4:  fcmpe \reg1, \zero
 2:  store_flags
     gret
 .endm
@@ -161,7 +166,8 @@ fcmp_gadget fcmp_d, d30, d31, #0.0
     gret
 
 // ---- FCCMP (consumer): cond true -> flags from the compare, else nzcv ----
-// Code stream: [cond gadget][gadget][rn | rm<<8 | is_d<<16 | nzcv<<17]
+// Code stream: [cond gadget][gadget][rn | rm<<8 | is_d<<16 | nzcv<<17 | e<<21]
+// e: FCCMPE, the signalling form (see FCMPE above).
 .gadget fccmp
     ldr x8, [_ip]
     add _ip, _ip, #8
@@ -169,6 +175,7 @@ fcmp_gadget fcmp_d, d30, d31, #0.0
     ubfx x11, x8, #8, #5
     ubfx x13, x8, #16, #1
     ubfx x14, x8, #17, #4
+    ubfx x15, x8, #21, #1
     cbnz w10, 1f
     lsl w14, w14, #28
     str w14, [_cpu, #CPU_nzcv]
@@ -178,9 +185,15 @@ fcmp_gadget fcmp_d, d30, d31, #0.0
     vslot x12, x11
     ldr q31, [x12]
     cbnz x13, 2f
+    cbnz x15, 4f
     fcmp s30, s31
     b 3f
-2:  fcmp d30, d31
+4:  fcmpe s30, s31
+    b 3f
+2:  cbnz x15, 5f
+    fcmp d30, d31
+    b 3f
+5:  fcmpe d30, d31
 3:  store_flags
     gret
 

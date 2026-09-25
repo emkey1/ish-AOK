@@ -1,6 +1,7 @@
 #include <math.h>
 
 #include "emu/avx.h"
+#include "emu/fpenv.h"
 
 // Elementwise binary ops. AVX defines wide integer ops as independent
 // per-128-bit-lane operations, but for a purely elementwise op (lane width
@@ -357,13 +358,16 @@ static bool avx_fp_nan_result32(enum avx_fp_op op, uint32_t a, uint32_t b,
     if (op == AVX_FMIN || op == AVX_FMAX) {
         bool zeros = (a & 0x7fffffffu) == 0 && (b & 0x7fffffffu) == 0;
         if (avx_f32_is_nan(a) || avx_f32_is_nan(b) || zeros) {
+            // MIN/MAX are invalid on any NaN, quiet or not.
+            if (!zeros || avx_f32_is_nan(a) || avx_f32_is_nan(b))
+                fpenv_raise_invalid();
             *out = b;
             return true;
         }
         return false;
     }
-    if (avx_f32_is_snan(a)) { *out = a | 0x00400000u; return true; }
-    if (avx_f32_is_snan(b)) { *out = b | 0x00400000u; return true; }
+    if (avx_f32_is_snan(a)) { fpenv_raise_invalid(); *out = a | 0x00400000u; return true; }
+    if (avx_f32_is_snan(b)) { fpenv_raise_invalid(); *out = b | 0x00400000u; return true; }
     if (avx_f32_is_nan(a))  { *out = a; return true; }
     if (avx_f32_is_nan(b))  { *out = b; return true; }
     // Invalid-operation cases with no NaN operand. x86 answers all of them with
@@ -380,7 +384,7 @@ static bool avx_fp_nan_result32(enum avx_fp_op op, uint32_t a, uint32_t b,
             (op == AVX_FMUL && ((az && bi) || (ai && bz))) ||
             (op == AVX_FADD && ai && bi && ((a ^ b) & 0x80000000u) != 0) ||
             (op == AVX_FSUB && ai && bi && ((a ^ b) & 0x80000000u) == 0);
-        if (invalid) { *out = 0xffc00000u; return true; }
+        if (invalid) { fpenv_raise_invalid(); *out = 0xffc00000u; return true; }
     }
     return false;
 }
@@ -391,13 +395,15 @@ static bool avx_fp_nan_result64(enum avx_fp_op op, uint64_t a, uint64_t b,
         bool zeros = (a & 0x7fffffffffffffffull) == 0 &&
                      (b & 0x7fffffffffffffffull) == 0;
         if (avx_f64_is_nan(a) || avx_f64_is_nan(b) || zeros) {
+            if (!zeros || avx_f64_is_nan(a) || avx_f64_is_nan(b))
+                fpenv_raise_invalid();
             *out = b;
             return true;
         }
         return false;
     }
-    if (avx_f64_is_snan(a)) { *out = a | 0x0008000000000000ull; return true; }
-    if (avx_f64_is_snan(b)) { *out = b | 0x0008000000000000ull; return true; }
+    if (avx_f64_is_snan(a)) { fpenv_raise_invalid(); *out = a | 0x0008000000000000ull; return true; }
+    if (avx_f64_is_snan(b)) { fpenv_raise_invalid(); *out = b | 0x0008000000000000ull; return true; }
     if (avx_f64_is_nan(a))  { *out = a; return true; }
     if (avx_f64_is_nan(b))  { *out = b; return true; }
     {
@@ -412,7 +418,7 @@ static bool avx_fp_nan_result64(enum avx_fp_op op, uint64_t a, uint64_t b,
                 ((a ^ b) & 0x8000000000000000ull) != 0) ||
             (op == AVX_FSUB && ai && bi &&
                 ((a ^ b) & 0x8000000000000000ull) == 0);
-        if (invalid) { *out = 0xfff8000000000000ull; return true; }
+        if (invalid) { fpenv_raise_invalid(); *out = 0xfff8000000000000ull; return true; }
     }
     return false;
 }
@@ -423,6 +429,7 @@ static bool avx_fp_nan_result64(enum avx_fp_op op, uint64_t a, uint64_t b,
 // and -0.0 is not < 0 so sqrt(-0) = -0 as required.
 float avx_sqrt_f32(float x) {
     if (x < 0.0f) {
+        fpenv_raise_invalid();
         uint32_t bits = 0xffc00000u;
         float r;
         memcpy(&r, &bits, sizeof(r));
@@ -433,6 +440,7 @@ float avx_sqrt_f32(float x) {
 
 double avx_sqrt_f64(double x) {
     if (x < 0.0) {
+        fpenv_raise_invalid();
         uint64_t bits = 0xfff8000000000000ull;
         double r;
         memcpy(&r, &bits, sizeof(r));

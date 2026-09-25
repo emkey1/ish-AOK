@@ -7107,7 +7107,10 @@ amd64_v_nbody pmaddwd, amd64_vb_pmaddwd
     bic  w16, w16, (ZF_RES | SF_RES | PF_RES | AF_OPS)
     strb w16, [_cpu, CPU_flags_res]
 .endm
-.macro amd64_v_gen_comis name, vbytes
+# COMIS is a signalling compare -- any NaN raises IE -- and UCOMIS a quiet
+# one, IE for a signalling NaN only: fcmpe and fcmp, whose host flags
+# emu/fpenv.c folds into MXCSR. The EFLAGS result is the same either way.
+.macro amd64_v_gen_comis name, vbytes, cmp
     .gadget amd64_v_\name\()_reg
         ldr  x8, [_ip]
         and  x9, x8, 0xf
@@ -7118,11 +7121,11 @@ amd64_v_nbody pmaddwd, amd64_vb_pmaddwd
     .if \vbytes == 4
         ldr  s0, [x10]
         ldr  s1, [x9]
-        fcmp s0, s1
+        \cmp s0, s1
     .else
         ldr  d0, [x10]
         ldr  d1, [x9]
-        fcmp d0, d1
+        \cmp d0, d1
     .endif
         amd64_v_comis_flags
         gret 1
@@ -7137,18 +7140,20 @@ amd64_v_nbody pmaddwd, amd64_vb_pmaddwd
     .if \vbytes == 4
         ldr  s1, [x9]
         ldr  s0, [x14]
-        fcmp s0, s1
+        \cmp s0, s1
     .else
         ldr  d1, [x9]
         ldr  d0, [x14]
-        fcmp d0, d1
+        \cmp d0, d1
     .endif
         amd64_v_comis_flags
         gret 3
         amd64_vread_bullshit \vbytes, \name\()_mem
 .endm
-amd64_v_gen_comis comiss, 4
-amd64_v_gen_comis comisd, 8
+amd64_v_gen_comis comiss, 4, fcmpe
+amd64_v_gen_comis comisd, 8, fcmpe
+amd64_v_gen_comis ucomiss, 4, fcmp
+amd64_v_gen_comis ucomisd, 8, fcmp
 
 # movhlps (0F 12, mod==3): dst.low = src.high. movlhps (0F 16, mod==3):
 # dst.high = src.low. packed = src(0-3) | dst(4-7). gret 1.
@@ -7360,9 +7365,10 @@ amd64_v_gen_comis comisd, 8
 # saturate. fcvtzs already yields 0x80000000 for anything below the range, so
 # only the high side and NaN need the substitute: after `fcmp src, 2^N` the
 # condition PL (N clear) is exactly "src >= 2^N or unordered". The rounding
-# forms (0F 2D) go through frintn first -- nearest-even, the x86 power-on
-# MXCSR.RC, which iSH does not model -- so the range check sees the ROUNDED
-# value: 2147483647.6 rounds to 2^31 and must be indefinite. cvtsi2sd/ss
+# forms (0F 2D) go through frintx first -- the host FPCR's rounding mode,
+# which is MXCSR.RC while guest code runs (emu/fpenv.c), raising inexact as
+# CVTSD2SI does -- so the range check sees the ROUNDED value: 2147483647.6
+# rounds to 2^31 and must be indefinite. cvtsi2sd/ss
 # write only the low lane (a d/s-sized store), the other lanes survive.
 #
 # Reg forms: packed = src(0-3) | dst(4-7) | REX.W(8), gret 1. Mem forms:
@@ -7376,7 +7382,7 @@ amd64_v_gen_comis comisd, 8
 .macro amd64_v_f2i_convert vbytes, round
     .if \vbytes == 4
         .if \round
-            frintn s0, s0
+            frintx s0, s0
         .endif
         tbnz x12, 0, 1f
         fcvtzs w13, s0
@@ -7395,7 +7401,7 @@ amd64_v_gen_comis comisd, 8
 2:
     .else
         .if \round
-            frintn d0, d0
+            frintx d0, d0
         .endif
         tbnz x12, 0, 1f
         fcvtzs w13, d0

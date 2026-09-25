@@ -497,6 +497,7 @@ native_syscall_nums = custom_target('native_syscall_nums',
 emu_src = [
     'emu/tlb.c',
     'emu/fpu.c',
+    'emu/fpenv.c',
     'emu/vec.c',
     'emu/avx.c', # arch-independent AVX/VEX semantics, shared by the amd64 and i386 front-ends
     'emu/mmx.c',

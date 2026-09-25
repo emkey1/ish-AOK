@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "emu/vec.h"
+#include "emu/fpenv.h"
 #include "emu/cpu.h"
 
 union vec {
@@ -378,6 +379,21 @@ void vec_single_ucomi64(struct cpu_state *cpu, const double *src, const double *
     vec_set_ucomi_flags(cpu, unordered, *src == *dst, *dst < *src);
 }
 
+// COMISS/COMISD: the same flags, but a signalling compare -- a quiet NaN is an
+// invalid operation too. The quiet host compares above already raise it for a
+// signalling one; emu/fpenv.c carries it into MXCSR.
+void vec_single_comi32(struct cpu_state *cpu, const float *src, const float *dst) {
+    if (isnan(*src) || isnan(*dst))
+        fpenv_raise_invalid();
+    vec_single_ucomi32(cpu, src, dst);
+}
+
+void vec_single_comi64(struct cpu_state *cpu, const double *src, const double *dst) {
+    if (isnan(*src) || isnan(*dst))
+        fpenv_raise_invalid();
+    vec_single_ucomi64(cpu, src, dst);
+}
+
 #define VEC_PACKED_OP(name, op, field, size, n) \
     void vec_##name##size(NO_CPU, union xmm_reg *src, union xmm_reg *dst) { \
         for (int i = 0; i < n; ++i) { \
@@ -468,14 +484,18 @@ void vec_fcmp_p64(NO_CPU, const union xmm_reg *src, union xmm_reg *dst, uint8_t 
 // (e.g. (int32_t)1e30 -> 0x7fffffff), whereas x86 yields 0x80000000 for overflow
 // in BOTH directions. Range-check explicitly, matching amd64_cvtt_scalar_to_int
 // (emu/amd64_interp.c). Every user of this macro has an int32_t destination.
+// The indefinite is an invalid operation, which no host instruction ran to
+// raise, so it is raised here; an inexact truncation raises its own flag.
 #define VEC_TRUNC_INT(src, dst, src_t, dst_t, n) \
     do { \
         for (int i = 0; i < n; ++i) { \
             src_t _v = ((src_t *)src)[i]; \
-            if (isnan(_v) || _v >= 2147483648.0 || _v < -2147483648.0) \
+            if (isnan(_v) || _v >= 2147483648.0 || _v < -2147483648.0) { \
                 ((dst_t *)dst)[i] = INT32_MIN; \
-            else \
+                fpenv_raise_invalid(); \
+            } else { \
                 ((dst_t *)dst)[i] = (dst_t) _v; \
+            } \
         } \
     } while (0)
 
@@ -496,8 +516,20 @@ void vec_fcmp_p64(NO_CPU, const union xmm_reg *src, union xmm_reg *dst, uint8_t 
         memset(dst->dst_field + n, 0, sizeof(*dst) - n * sizeof(*dst->dst_field)); \
     }
 
+// cvtsd2si/cvtss2si: rounded by MXCSR.RC, which is the host's mode while
+// guest code runs (emu/fpenv.c) -- rint rounds in it and raises inexact --
+// then the same indefinite rule as the truncating forms. They were missing
+// from the i386 decoder altogether, so both raised SIGILL.
+#define VEC_CVTR(name, src_t, dst_t) \
+    void vec_cvt##name(NO_CPU, const src_t *src, dst_t *dst) { \
+        src_t r = (src_t) rint(*src); \
+        VEC_TRUNC_INT(&r, dst, src_t, dst_t, 1); \
+    }
+
 VEC_CVT(si2sd32, int32_t, double)
 VEC_CVTT(tsd2si64, double, int32_t)
+VEC_CVTR(sd2si64, double, int32_t)
+VEC_CVTR(ss2si32, float, int32_t)
 VEC_CVT(sd2ss64, double, float)
 VEC_CVT(si2ss32, int32_t, float)
 VEC_CVTT(tss2si32, float, int32_t)

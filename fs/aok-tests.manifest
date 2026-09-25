@@ -33,7 +33,9 @@ x86/port_io_gpf.c
 x86/cpuid_xsave.c
 x86/fpu_state_span.c
 x86/x86_smc.c
+x86/x86_fp_env.c
 signal_core.c
+fp_env.c
 signal_restart.c
 signal_realtime.c
 signal_altstack.c
@@ -334,6 +336,7 @@ arm64/atomics64.c
 arm64/arm64_regress.c
 arm64/vector_smoke.c
 arm64/smc_stale_block.c
+arm64/arm64_fp_env.c
 arm64/stlr_ldar_publish.c
 arm64/ptrace_singlestep.c
 arm64/ands_bcond_fusion.c
@@ -342,6 +345,7 @@ arm64/dc_zva.c
 riscv64/ptrace_regset.c
 riscv64/riscv64_singlestep.c
 riscv64/jalr_retcache.c
+riscv64/riscv64_fp_env.c
 arm64/ret_retcache.c
 jit_fuse_ab.sh
 jit_bench.c

@@ -8,6 +8,7 @@
 #include <time.h>
 #include <dlfcn.h>
 #include "jit/gen.h"
+#include "emu/fpenv.h"
 #include "emu/modrm.h"
 #include "emu/cpuid.h"
 #include "emu/fpu.h"
@@ -2502,8 +2503,8 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         return 1;
     }
 
-    // FCMP/FCMPE (register and #0.0 forms). FCMPE lowers to the quiet
-    // compare — identical NZCV, no FP exception modeling (see fp.S).
+    // FCMP/FCMPE (register and #0.0 forms). FCMPE is the signalling compare
+    // (see fp.S).
     if ((insn & 0xff203c00) == 0x1e202000) {
         extern void gadget_arm64_fcmp_s(void), gadget_arm64_fcmp_d(void);
         unsigned type = (insn >> 22) & 0x3;
@@ -2514,8 +2515,10 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         if (type > 1 || (opcode2 & 0x7) != 0) {
             return gen_arm64_undefined(state);
         }
+        bool signalling = (opcode2 & 0x10) != 0;
         gen(state, (unsigned long) (type ? gadget_arm64_fcmp_d : gadget_arm64_fcmp_s));
-        gen(state, rn | ((uint64_t) rm << 8) | ((uint64_t) cmp0 << 16));
+        gen(state, rn | ((uint64_t) rm << 8) | ((uint64_t) cmp0 << 16) |
+                ((uint64_t) signalling << 17));
         return 1;
     }
 
@@ -2532,7 +2535,9 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         }
         gen(state, (unsigned long) gen_arm64_cond_gadget(cond));
         gen(state, (unsigned long) gadget_arm64_fccmp);
-        gen(state, rn | ((uint64_t) rm << 8) | ((uint64_t) type << 16) | ((uint64_t) nzcv << 17));
+        bool signalling = (insn >> 4) & 1; // FCCMPE
+        gen(state, rn | ((uint64_t) rm << 8) | ((uint64_t) type << 16) | ((uint64_t) nzcv << 17) |
+                ((uint64_t) signalling << 21));
         return 1;
     }
 
@@ -4750,8 +4755,7 @@ int gen_step_arm64(struct gen_state *state, struct tlb *tlb) {
         return 1;
     }
 
-    // MRS/MSR FPCR and FPSR — stored in cpu_state, not installed on the
-    // host (see fp.S's rounding-mode note).
+    // MRS/MSR FPCR and FPSR, through emu/fpenv.c (see dpextra.S).
     if ((insn & 0xffffffe0) == 0xd53b4400) {
         extern void gadget_arm64_mrs_fpcr(void);
         gen(state, (unsigned long) gadget_arm64_mrs_fpcr);
@@ -4966,6 +4970,29 @@ static int gen_riscv64_undefined(struct gen_state *state, uint32_t insn) {
             state->riscv64_orig_ip, state->riscv64_orig_ip);
 }
 
+// A rounding-sensitive instruction's rm field. DYN (7) runs in frm, which is
+// the host's mode already (emu/fpenv.c); a static mode is switched in around
+// the one instruction and frm's put back after (guest-riscv64/fp.S rm_set).
+// 5 and 6 are reserved: false, and the caller raises illegal instruction.
+static bool gen_riscv64_rm_begin(struct gen_state *state, unsigned rm) {
+    extern void gadget_riscv64_rm_set(void);
+    // FPCR.RMode for RNE, RTZ, RDN, RUP, RMM (none: RNE)
+    static const uint8_t rmode[5] = {0, 3, 2, 1, 0};
+    if (rm == 7)
+        return true;
+    if (rm > 4)
+        return false;
+    gen(state, (unsigned long) gadget_riscv64_rm_set);
+    gen(state, rmode[rm]);
+    return true;
+}
+
+static void gen_riscv64_rm_end(struct gen_state *state, unsigned rm) {
+    extern void gadget_riscv64_rm_restore(void);
+    if (rm != 7)
+        gen(state, (unsigned long) gadget_riscv64_rm_restore);
+}
+
 static void gen_riscv64_mov_const(struct gen_state *state, unsigned rd, uint64_t value) {
     extern void gadget_riscv64_mov_const(void);
     gen(state, (unsigned long) gadget_riscv64_mov_const);
@@ -5084,9 +5111,9 @@ static int gen_riscv64_branch_to(struct gen_state *state, guest_addr_t target) {
 
 // CSR access helper, called through gadget_riscv64_call_helper (fp.S).
 // Only the FP CSRs exist in this port: fflags (0x001) = fcsr[4:0],
-// frm (0x002) = fcsr[7:5], fcsr (0x003) = fcsr[7:0]. Exception flags are
-// whatever the guest last wrote — host FP status is not synced back
-// (deviation; musl/printf only ever set the rounding mode).
+// frm (0x002) = fcsr[7:5], fcsr (0x003) = fcsr[7:0]. The flags the host FPU
+// raised are gathered in before fflags is read, and a write goes onto the
+// host FPU at once: emu/fpenv.c.
 // Also handles the read-only Zicntr counters (cycle/time/instret, 0xc00-2):
 // there's no real cycle or instruction count to report, so all three alias
 // a host monotonic nanosecond counter -- Go's runtime.nanotime() (compiled
@@ -5103,6 +5130,8 @@ void riscv64_csr_helper(struct cpu_state *cpu, unsigned long arg) {
             cpu->riscv64_regs[rd] = (uint64_t) now.tv_sec * 1000000000ull + (uint64_t) now.tv_nsec;
         return;
     }
+    if (csr != 2)
+        fpenv_riscv64_sync_fflags(cpu);
     dword_t fcsr = cpu->riscv64_fcsr;
     qword_t old = csr == 1 ? (fcsr & 0x1f)
                 : csr == 2 ? ((fcsr >> 5) & 7)
@@ -5122,6 +5151,7 @@ void riscv64_csr_helper(struct cpu_state *cpu, unsigned long arg) {
         else
             fcsr = nv & 0xff;
         cpu->riscv64_fcsr = fcsr;
+        fpenv_riscv64_load_fcsr(cpu, csr != 2);
     }
     if (rd != 0)
         cpu->riscv64_regs[rd] = old;
@@ -5275,6 +5305,40 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
     extern void gadget_riscv64_fcvtz_lu_s(void);
     extern void gadget_riscv64_fcvt_d_s(void);
     extern void gadget_riscv64_fcvt_s_d(void);
+    extern void gadget_riscv64_fcvtm_w_s(void);
+    extern void gadget_riscv64_fcvtm_w_d(void);
+    extern void gadget_riscv64_fcvtm_wu_s(void);
+    extern void gadget_riscv64_fcvtm_wu_d(void);
+    extern void gadget_riscv64_fcvtm_l_s(void);
+    extern void gadget_riscv64_fcvtm_l_d(void);
+    extern void gadget_riscv64_fcvtm_lu_s(void);
+    extern void gadget_riscv64_fcvtm_lu_d(void);
+    extern void gadget_riscv64_fcvtp_w_s(void);
+    extern void gadget_riscv64_fcvtp_w_d(void);
+    extern void gadget_riscv64_fcvtp_wu_s(void);
+    extern void gadget_riscv64_fcvtp_wu_d(void);
+    extern void gadget_riscv64_fcvtp_l_s(void);
+    extern void gadget_riscv64_fcvtp_l_d(void);
+    extern void gadget_riscv64_fcvtp_lu_s(void);
+    extern void gadget_riscv64_fcvtp_lu_d(void);
+    extern void gadget_riscv64_fcvta_w_s(void);
+    extern void gadget_riscv64_fcvta_w_d(void);
+    extern void gadget_riscv64_fcvta_wu_s(void);
+    extern void gadget_riscv64_fcvta_wu_d(void);
+    extern void gadget_riscv64_fcvta_l_s(void);
+    extern void gadget_riscv64_fcvta_l_d(void);
+    extern void gadget_riscv64_fcvta_lu_s(void);
+    extern void gadget_riscv64_fcvta_lu_d(void);
+    extern void gadget_riscv64_fcvtx_w_s(void);
+    extern void gadget_riscv64_fcvtx_w_d(void);
+    extern void gadget_riscv64_fcvtx_wu_s(void);
+    extern void gadget_riscv64_fcvtx_wu_d(void);
+    extern void gadget_riscv64_fcvtx_l_s(void);
+    extern void gadget_riscv64_fcvtx_l_d(void);
+    extern void gadget_riscv64_fcvtx_lu_s(void);
+    extern void gadget_riscv64_fcvtx_lu_d(void);
+    extern void gadget_riscv64_rm_set(void);
+    extern void gadget_riscv64_rm_restore(void);
     extern void gadget_riscv64_fmv_x_w(void);
     extern void gadget_riscv64_fmv_w_x(void);
     extern void gadget_riscv64_flw(void);
@@ -5669,11 +5733,14 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             { gadget_riscv64_fnmadd_s, gadget_riscv64_fnmadd_d },
         };
         unsigned op = (riscv64_opcode(insn) - RISCV64_OP_MADD) >> 2;
+        if (!gen_riscv64_rm_begin(state, funct3))
+            return gen_riscv64_undefined(state, insn);
         gen(state, (unsigned long) fma[op][fmt]);
         gen(state, offsetof(struct cpu_state, riscv64_f) + rd * sizeof(qword_t));
         gen(state, offsetof(struct cpu_state, riscv64_f) + rs1 * sizeof(qword_t));
         gen(state, offsetof(struct cpu_state, riscv64_f) + riscv64_rs2(insn) * sizeof(qword_t));
         gen(state, offsetof(struct cpu_state, riscv64_f) + rs3 * sizeof(qword_t));
+        gen_riscv64_rm_end(state, funct3);
         return 1;
     }
 
@@ -5686,12 +5753,15 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         unsigned long f2 = offsetof(struct cpu_state, riscv64_f) + rs2 * sizeof(qword_t);
         void (*gadget)(void) = NULL;
         unsigned long a = fd, b = f1, c = f2; // default: all-FP operands
+        // Whether funct3 is this instruction's rounding mode, and the result
+        // can depend on it: arithmetic, and conversions that can round.
+        bool rounds = false;
         switch (funct7 & ~1u) {
-        case 0x00: gadget = is_d ? gadget_riscv64_fadd_d : gadget_riscv64_fadd_s; break;
-        case 0x04: gadget = is_d ? gadget_riscv64_fsub_d : gadget_riscv64_fsub_s; break;
-        case 0x08: gadget = is_d ? gadget_riscv64_fmul_d : gadget_riscv64_fmul_s; break;
-        case 0x0c: gadget = is_d ? gadget_riscv64_fdiv_d : gadget_riscv64_fdiv_s; break;
-        case 0x2c: gadget = is_d ? gadget_riscv64_fsqrt_d : gadget_riscv64_fsqrt_s; break;
+        case 0x00: gadget = is_d ? gadget_riscv64_fadd_d : gadget_riscv64_fadd_s; rounds = true; break;
+        case 0x04: gadget = is_d ? gadget_riscv64_fsub_d : gadget_riscv64_fsub_s; rounds = true; break;
+        case 0x08: gadget = is_d ? gadget_riscv64_fmul_d : gadget_riscv64_fmul_s; rounds = true; break;
+        case 0x0c: gadget = is_d ? gadget_riscv64_fdiv_d : gadget_riscv64_fdiv_s; rounds = true; break;
+        case 0x2c: gadget = is_d ? gadget_riscv64_fsqrt_d : gadget_riscv64_fsqrt_s; rounds = true; break;
         case 0x10:
             switch (funct3) {
             case 0: gadget = is_d ? gadget_riscv64_fsgnj_d : gadget_riscv64_fsgnj_s; break;
@@ -5711,25 +5781,28 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
             case 2: gadget = is_d ? gadget_riscv64_feq_d : gadget_riscv64_feq_s; break;
             }
             break;
-        case 0x60: { // fcvt.{w,wu,l,lu}.{s,d}; rm=1 (RTZ, C casts) vs RNE
+        case 0x60: { // fcvt.{w,wu,l,lu}.{s,d}: one variant per rounding mode
             a = riscv64_rd_off(rd);
-            bool rtz = funct3 == 1;
-            static void (*const f2i[2][2][4])(void) = {
-                { { gadget_riscv64_fcvtn_w_s, gadget_riscv64_fcvtn_wu_s,
-                    gadget_riscv64_fcvtn_l_s, gadget_riscv64_fcvtn_lu_s },
-                  { gadget_riscv64_fcvtz_w_s, gadget_riscv64_fcvtz_wu_s,
-                    gadget_riscv64_fcvtz_l_s, gadget_riscv64_fcvtz_lu_s } },
-                { { gadget_riscv64_fcvtn_w_d, gadget_riscv64_fcvtn_wu_d,
-                    gadget_riscv64_fcvtn_l_d, gadget_riscv64_fcvtn_lu_d },
-                  { gadget_riscv64_fcvtz_w_d, gadget_riscv64_fcvtz_wu_d,
-                    gadget_riscv64_fcvtz_l_d, gadget_riscv64_fcvtz_lu_d } },
+            // RNE, RTZ, RDN, RUP, RMM, then DYN (funct3 7), which follows frm.
+            // RDN, RUP and RMM used to convert as RNE, so floor(2.7) -- glibc
+            // uses fcvt.l.d rdn -- came out 3.
+#define F2I(m) \
+            { { gadget_riscv64_fcvt##m##_w_s, gadget_riscv64_fcvt##m##_wu_s, \
+                gadget_riscv64_fcvt##m##_l_s, gadget_riscv64_fcvt##m##_lu_s }, \
+              { gadget_riscv64_fcvt##m##_w_d, gadget_riscv64_fcvt##m##_wu_d, \
+                gadget_riscv64_fcvt##m##_l_d, gadget_riscv64_fcvt##m##_lu_d } }
+            static void (*const f2i[6][2][4])(void) = {
+                F2I(n), F2I(z), F2I(m), F2I(p), F2I(a), F2I(x),
             };
-            if (rs2 < 4)
-                gadget = f2i[is_d][rtz][rs2];
+#undef F2I
+            unsigned mode = funct3 < 5 ? funct3 : funct3 == 7 ? 5 : 6;
+            if (rs2 < 4 && mode < 6)
+                gadget = f2i[mode][is_d][rs2];
             break;
         }
         case 0x68: { // fcvt.{s,d}.{w,wu,l,lu}
             b = riscv64_rs_off(rs1);
+            rounds = true;
             static void (*const i2f[2][4])(void) = {
                 { gadget_riscv64_fcvt_s_w, gadget_riscv64_fcvt_s_wu,
                   gadget_riscv64_fcvt_s_l, gadget_riscv64_fcvt_s_lu },
@@ -5740,8 +5813,8 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
                 gadget = i2f[is_d][rs2];
             break;
         }
-        case 0x20: // fcvt.s.d (0x20, rs2=1) / fcvt.d.s (0x21, rs2=0)
-            if (!is_d && rs2 == 1) gadget = gadget_riscv64_fcvt_s_d;
+        case 0x20: // fcvt.s.d (0x20, rs2=1) / fcvt.d.s (0x21, rs2=0, exact)
+            if (!is_d && rs2 == 1) { gadget = gadget_riscv64_fcvt_s_d; rounds = true; }
             else if (is_d && rs2 == 0) gadget = gadget_riscv64_fcvt_d_s;
             break;
         case 0x70: // fmv.x.w/.d (rm=0) or fclass (rm=1)
@@ -5784,10 +5857,14 @@ int gen_step_riscv64(struct gen_state *state, struct tlb *tlb) {
         }
         if (gadget == NULL)
             return gen_riscv64_undefined(state, insn);
+        if (rounds && !gen_riscv64_rm_begin(state, funct3))
+            return gen_riscv64_undefined(state, insn);
         gen(state, (unsigned long) gadget);
         gen(state, a);
         gen(state, b);
         gen(state, c);
+        if (rounds)
+            gen_riscv64_rm_end(state, funct3);
         return 1;
     }
 
@@ -8308,7 +8385,11 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         unsigned reg_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
         unsigned rm_id = amd64_modrm_rm(insn.modrm) | (insn.rex.b ? 8 : 0);
         extern void gadget_amd64_v_comiss_reg(void), gadget_amd64_v_comiss_mem(void),
-                gadget_amd64_v_comisd_reg(void), gadget_amd64_v_comisd_mem(void);
+                gadget_amd64_v_comisd_reg(void), gadget_amd64_v_comisd_mem(void),
+                gadget_amd64_v_ucomiss_reg(void), gadget_amd64_v_ucomiss_mem(void),
+                gadget_amd64_v_ucomisd_reg(void), gadget_amd64_v_ucomisd_mem(void);
+        // 2F COMIS signals on any NaN, 2E UCOMIS only on a signalling one.
+        bool quiet = insn.op2 == 0x2e;
         if (is_mem) {
             unsigned long meta, disp;
             if (!gen_amd64_decode_mem_meta(state, tlb, &insn, dbl ? 64 : 32, &meta, &disp, &next_ip)) {
@@ -8321,7 +8402,9 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                     (unsigned long long) insn.start_ip, (unsigned long long) next_ip);
             gen_amd64_flush_reg_cache(state);
             gen_amd64_flush_rip(state);
-            gen(state, (unsigned long) (dbl ? gadget_amd64_v_comisd_mem : gadget_amd64_v_comiss_mem));
+            gen(state, (unsigned long) (quiet
+                    ? (dbl ? gadget_amd64_v_ucomisd_mem : gadget_amd64_v_ucomiss_mem)
+                    : (dbl ? gadget_amd64_v_comisd_mem : gadget_amd64_v_comiss_mem)));
             gen(state, meta);
             gen(state, disp);
             gen(state, (unsigned long) next_ip);
@@ -8337,7 +8420,9 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             state->amd64_ip = next_ip;
             amd64_jit_debug("v-comis-reg op2=%02x dbl=%d ip=%llx src=%u dst=%u next=%llx", insn.op2, dbl,
                     (unsigned long long) insn.start_ip, rm_id, reg_id, (unsigned long long) next_ip);
-            gen(state, (unsigned long) (dbl ? gadget_amd64_v_comisd_reg : gadget_amd64_v_comiss_reg));
+            gen(state, (unsigned long) (quiet
+                    ? (dbl ? gadget_amd64_v_ucomisd_reg : gadget_amd64_v_ucomiss_reg)
+                    : (dbl ? gadget_amd64_v_comisd_reg : gadget_amd64_v_comiss_reg)));
             gen(state, (unsigned long) (rm_id | (reg_id << 4)));
             gen_amd64_defer_rip(state, next_ip);
             return true;

@@ -77,8 +77,8 @@ void fpu_icom16(struct cpu_state *cpu, int16_t *i);
 void fpu_icom32(struct cpu_state *cpu, int32_t *i);
 void fpu_comi(struct cpu_state *cpu, int i);
 void fpu_tst(struct cpu_state *cpu);
-#define fpu_ucom fpu_com
-#define fpu_ucomi fpu_comi
+void fpu_ucom(struct cpu_state *cpu, int i);
+void fpu_ucomi(struct cpu_state *cpu, int i);
 
 void fpu_add(struct cpu_state *cpu, int srci, int dsti);
 void fpu_sub(struct cpu_state *cpu, int srci, int dsti);
@@ -121,6 +121,7 @@ void fpu_xtract(struct cpu_state *cpu);
 void fpu_stcw16(struct cpu_state *cpu, uint16_t *i);
 void fpu_stsw16(struct cpu_state *cpu, uint16_t *i);
 void fpu_ldcw16(struct cpu_state *cpu, uint16_t *i);
+void fpu_sync_control(struct cpu_state *cpu);
 void fpu_stenv32(struct cpu_state *cpu, struct fpu_env32 *env);
 void fpu_ldenv32(struct cpu_state *cpu, struct fpu_env32 *env);
 void fpu_save32(struct cpu_state *cpu, struct fpu_state32 *state);

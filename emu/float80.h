@@ -18,6 +18,10 @@ float80 f80_from_int(int64_t i);
 int64_t f80_to_int(float80 f);
 float80 f80_from_double(double d);
 double f80_to_double(float80 f);
+// The single-precision pair, bit for bit. Going through a host double instead
+// rounds twice, and runs the host FPU under the guest's SSE mode.
+float80 f80_from_float(float f);
+float f80_to_float(float80 f);
 float80 f80_round(float80 f);
 
 bool f80_isnan(float80 f);
@@ -70,6 +74,20 @@ extern __thread int f80_precision;
 // them before an operation and read them after.
 extern __thread int f80_inexact;
 extern __thread int f80_rounded_up;
+
+// The other exceptions an operation raised, in the x87 status word's own bit
+// order, so the x87 layer can OR them straight in. Cleared by the caller
+// before an operation, like f80_inexact, which stays the record of PE.
+#define F80_EXC_INVALID   (1 << 0)
+#define F80_EXC_DENORMAL  (1 << 1)
+#define F80_EXC_DIVZERO   (1 << 2)
+#define F80_EXC_OVERFLOW  (1 << 3)
+#define F80_EXC_UNDERFLOW (1 << 4)
+extern __thread int f80_exceptions;
+
+// A NaN whose quiet bit (bit 62 of the significand) is clear. Using one as an
+// operand is an invalid operation, and the NaN that comes out is quieted.
+bool f80_issnan(float80 f);
 
 #define F80_NAN ((float80) {.signif = 0xc000000000000000, .exp = 0x7fff, .sign = 0})
 // The x87 "real indefinite": the QNaN an invalid operation produces, and its
