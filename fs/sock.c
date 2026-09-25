@@ -3074,18 +3074,13 @@ static int sock_snapshot_push(struct sock_snapshot *snapshot, struct fd *fd) {
 // on the lock of a task that has started to exit waits forever, and so does
 // the task. c0ccaed3 found that with four `ktop -b` against fork churn and
 // fixed /proc/net's copy of this walk; ss(8)'s sock_diag and bind()'s conflict
-// scan went on blocking here. do_exit() sets ->exiting before it takes the
-// lock, so a lock held on an exiting task is that case: skip the task, which
-// is about to close everything it has open. Any other holder is an ordinary
-// critical section and is waited out rather than skipped, so a live process's
-// sockets do not drop out of a listing, or out of the conflict scan, merely
-// because it was busy.
+// scan went on blocking here. task_lock_unless_exiting skips a task whose exit
+// holds the lock -- it is about to close everything it has open -- and waits
+// out any other holder, so a live process's sockets do not drop out of a
+// listing, or out of the conflict scan, merely because it was busy.
 static struct fdtable *sock_task_files_retain(struct task *task) {
-    while (trylock(&task->general_lock) != 0) {
-        if (task->exiting)
-            return NULL;
-        nanosleep(&lock_pause, NULL);
-    }
+    if (!task_lock_unless_exiting(task))
+        return NULL;
     struct fdtable *files = NULL;
     if (task->files != NULL)
         files = fdtable_retain(task->files);

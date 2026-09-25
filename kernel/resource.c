@@ -66,10 +66,14 @@ static int rlimit_set(struct task *task, int resource, struct rlimit_ limit) {
             // is one atomic, so a fault on another CPU needs nothing more.
             // exec re-reads the limit after installing the new space (see
             // elf_exec), so a change racing an exec is not lost either way.
-            lock(&task->general_lock, 0);
-            if (task->mm != NULL)
-                mem_set_stack_bounds(&task->mm->mem, 0, bytes);
-            unlock(&task->general_lock);
+            // Not a plain lock: prlimit64 holds a reference on the target,
+            // which an exiting target waits for with this lock held
+            // (task_lock_unless_exiting, kernel/task.c).
+            if (task_lock_unless_exiting(task)) {
+                if (task->mm != NULL)
+                    mem_set_stack_bounds(&task->mm->mem, 0, bytes);
+                unlock(&task->general_lock);
+            }
         }
     }
     return 0;

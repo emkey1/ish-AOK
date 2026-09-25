@@ -81,7 +81,12 @@ static struct mem *task_mem_read_lock(struct task *task, struct task_mem_read_ha
         }
         return mem;
     }
-    lock(&task->general_lock, 0);
+    // Another process, reached through a reference its caller holds -- ptrace,
+    // process_vm_readv, /proc/<pid>/mem -- so not a plain lock: an exiting
+    // task waits for that reference with this lock held
+    // (task_lock_unless_exiting, kernel/task.c). Its memory is going anyway.
+    if (!task_lock_unless_exiting(task))
+        return NULL;
     if (task->mm != NULL) {
         handle->mm = task->mm;
         mm_retain(handle->mm);

@@ -965,6 +965,10 @@ struct task *pid_get_task_zombie_ref(dword_t id); // ...and take a reference, li
 int task_snapshot_collect(struct task_snapshot *snapshot, bool leaders_only);
 int task_snapshot_collect_all(struct task_snapshot *snapshot);
 void task_snapshot_release(struct task_snapshot *snapshot);
+// Take ANOTHER task's general_lock while holding a reference on it (a /proc
+// handler, a snapshot walk, a peer's memory access). Returns false, without the
+// lock, when that task is in do_exit's teardown; see kernel/task.c.
+bool task_lock_unless_exiting(struct task *task);
 
 dword_t get_count_of_blocked_tasks(void);
 // Live processes (thread group leaders) owned by one real uid, for

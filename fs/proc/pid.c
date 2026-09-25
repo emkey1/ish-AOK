@@ -43,9 +43,15 @@ static void proc_put_task(struct task *task) {
         task_ref_cnt_mod(task, -1);
 }
 
+// Every handler below holds a reference on its task (proc_get_task), so none
+// of them may block on the task's general_lock: do_exit holds it while it waits
+// for those references to go. task_lock_unless_exiting() waits out any other
+// holder and gives up only on the exit itself, which the handlers report as
+// the process having gone. See kernel/task.c.
 static struct mm *proc_task_mm_retain(struct task *task) {
     struct mm *mm = NULL;
-    lock(&task->general_lock, 0);
+    if (!task_lock_unless_exiting(task))
+        return NULL;
     if (task->mm != NULL) {
         mm = task->mm;
         mm_retain(mm);
@@ -56,7 +62,8 @@ static struct mm *proc_task_mm_retain(struct task *task) {
 
 static struct fdtable *proc_task_files_retain(struct task *task) {
     struct fdtable *files = NULL;
-    lock(&task->general_lock, 0);
+    if (!task_lock_unless_exiting(task))
+        return NULL;
     if (task->files != NULL)
         files = fdtable_retain(task->files);
     unlock(&task->general_lock);
@@ -65,7 +72,8 @@ static struct fdtable *proc_task_files_retain(struct task *task) {
 
 static struct fs_info *proc_task_fs_retain(struct task *task) {
     struct fs_info *fs = NULL;
-    lock(&task->general_lock, 0);
+    if (!task_lock_unless_exiting(task))
+        return NULL;
     if (task->fs != NULL)
         fs = fs_info_retain(task->fs);
     unlock(&task->general_lock);
@@ -310,7 +318,12 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     // process (do_task_stat's `permitted`): with the layout randomized they
     // are what an attacker would need to know.
     bool permitted = task_ptrace_may_access(task, PTRACE_MODE_READ_ | PTRACE_MODE_FSCREDS_);
-    lock(&task->general_lock, 0);
+    if (!task_lock_unless_exiting(task)) {
+        if (mm != NULL)
+            mm_release(mm);
+        proc_put_task(task);
+        return _ESRCH;
+    }
     if (mm != NULL && permitted) {
         // All six whole: a 64-bit guest's addresses do not fit addr_t.
         stack_start = mm->stack_start;
@@ -534,7 +547,10 @@ static int proc_pid_auxv_show(struct proc_entry *entry, struct proc_data *buf) {
     struct mm *mm = NULL;
     addr_t start = 0;
     size_t size = 0;
-    lock(&task->general_lock, 0);
+    if (!task_lock_unless_exiting(task)) {
+        proc_put_task(task);
+        return 0;
+    }
     if (task->mm == NULL)
         goto out_free_task;
 
@@ -577,7 +593,10 @@ static int proc_pid_cmdline_show(struct proc_entry *entry, struct proc_data *buf
     guest_addr_t arg_end = 0;
     guest_addr_t env_start = 0;
     guest_addr_t env_end = 0;
-    lock(&task->general_lock, 0);
+    if (!task_lock_unless_exiting(task)) {
+        proc_put_task(task);
+        return 0;
+    }
 
     if (task->mm != NULL) {
         arg_start = task->mm->argv_start;
@@ -638,7 +657,10 @@ static int proc_pid_comm_show(struct proc_entry *entry, struct proc_data *buf) {
     }
 
     char name[sizeof(task->comm) + 1];
-    lock(&task->general_lock, 0);
+    if (!task_lock_unless_exiting(task)) {
+        proc_put_task(task);
+        return _ESRCH;
+    }
     strncpy(name, task->comm, sizeof(task->comm));
     name[sizeof(task->comm)] = '\0';
     unlock(&task->general_lock);
@@ -674,7 +696,10 @@ static int proc_pid_environ_show(struct proc_entry *entry, struct proc_data *buf
     struct mm *mm = NULL;
     guest_addr_t env_start = 0;
     guest_addr_t env_end = 0;
-    lock(&task->general_lock, 0);
+    if (!task_lock_unless_exiting(task)) {
+        proc_put_task(task);
+        return 0;
+    }
     if (task->mm == NULL)
         goto out_free_task;
 
@@ -711,6 +736,7 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     sigset_t_ pending = 0;
     sigset_t_ blocked = 0;
     unsigned long thread_count = 0;
+    unsigned seccomp_filters = 0;
     complex_lockt(&pids_lock, 0);
     // PPid is the parent PROCESS (task_tgid_nr(real_parent)), see sys_getppid()
     // and task_process_parent.
@@ -722,6 +748,13 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     pending = task->pending;
     blocked = task->blocked;
     thread_count = list_size(&task->group->threads);
+    // Seccomp_filters (Linux 5.9+). pids_lock is what keeps the chain from
+    // changing under a TSYNC while it is walked -- and it is counted HERE, not
+    // beside the Seccomp line below, because pids_lock ranks above
+    // group->lock: do_exit_group takes pids_lock and then group->lock, so a
+    // reader taking them the other way round froze the whole guest the
+    // moment a process exited while its status was being read.
+    seccomp_filters = seccomp_filter_count(task->seccomp_filter);
     unlock(&pids_lock);
 
     struct mm *mm = proc_task_mm_retain(task);
@@ -741,7 +774,10 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     unsigned long rss_kb = (unsigned long)(resident_pages * (PAGE_SIZE / 1024));
     unsigned long swap_kb = vm_kb - rss_kb;
 
-    lock(&task->general_lock, 0);
+    if (!task_lock_unless_exiting(task)) {
+        proc_put_task(task);
+        return _ESRCH;
+    }
     lock(&task->group->lock, 0);
     bool stopped = task->group->stopped;
 
@@ -830,12 +866,7 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     {
         int mode = __atomic_load_n(&task->seccomp_mode, __ATOMIC_ACQUIRE);
         proc_printf(buf, "Seccomp:\t%d\n", mode);
-        // Linux 5.9+. Counted under pids_lock, which is what keeps the chain
-        // from changing under a TSYNC while it is walked.
-        complex_lockt(&pids_lock, 0);
-        unsigned n = seccomp_filter_count(task->seccomp_filter);
-        unlock(&pids_lock);
-        proc_printf(buf, "Seccomp_filters:\t%u\n", n);
+        proc_printf(buf, "Seccomp_filters:\t%u\n", seccomp_filters);
     }
     proc_printf(buf, "Cpus_allowed:\t%x\n", allowed_mask);
     proc_printf(buf, "Cpus_allowed_list:\t0-%u\n", cpu_count > 0 ? cpu_count - 1 : 0);
@@ -1576,7 +1607,10 @@ static int proc_pid_exe_readlink(struct proc_entry *entry, char *buf) {
         proc_put_task(task);
         return _ESRCH;
     }
-    lock(&task->general_lock, 0);
+    if (!task_lock_unless_exiting(task)) {
+        proc_put_task(task);
+        return _ESRCH;
+    }
     struct fd *fd = NULL;
     if (task->mm != NULL && task->mm->exefile != NULL)
         fd = fd_retain(task->mm->exefile);

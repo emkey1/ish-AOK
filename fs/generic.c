@@ -14,9 +14,12 @@
 #include "kernel/task.h"
 #include "kernel/errno.h"
 
+// The caller holds a reference on the task, so never a plain lock: see
+// task_lock_unless_exiting in kernel/task.c.
 static struct fdtable *procfd_task_files_retain(struct task *task) {
     struct fdtable *files = NULL;
-    lock(&task->general_lock, 0);
+    if (!task_lock_unless_exiting(task))
+        return NULL;
     if (!task->exiting && task->files != NULL)
         files = fdtable_retain(task->files);
     unlock(&task->general_lock);

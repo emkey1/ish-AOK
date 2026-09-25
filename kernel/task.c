@@ -187,6 +187,41 @@ struct task *pid_get_task_zombie_ref(dword_t id) {
     return task;
 }
 
+// do_exit() takes the exiting task's general_lock and, still holding it, waits
+// in exit_wait_needed() for every other reference on the task to go. So a
+// caller that holds a reference -- which is every caller reaching another task
+// through a pid -- and then blocks on that lock waits for the exit while the
+// exit waits for it, and both stop for good: the reader, the exiting process,
+// and whoever waits for that process. c0ccaed3 found it in /proc/meminfo and
+// /proc/net, fs/sock.c in the socket walks, and /proc/<pid>/* had a dozen more
+// copies, one per handler.
+//
+// Any other holder is an ordinary critical section and is waited out -- a busy
+// process must not drop out of a listing, and a zombie, whose lock do_exit
+// released, must stay readable even while another reader holds it. Only the
+// exiting task holding its OWN lock is the teardown, and then the answer is
+// false: whatever the caller wanted (mm, fd table, fs, credentials) is being
+// released, and the caller treats it as the process having gone.
+static bool task_lock_held_by_its_exit(struct task *task) {
+    if (!task->exiting)
+        return false;
+    // The CLI's first task runs on the main thread and never had task->thread
+    // pointed at it, so there is nothing to compare the owner with.
+    if (!task->host_thread_started)
+        return true;
+    return pthread_equal(__atomic_load_n(&task->general_lock.owner, __ATOMIC_RELAXED),
+                         task->thread);
+}
+
+bool task_lock_unless_exiting(struct task *task) {
+    while (trylock(&task->general_lock) != 0) {
+        if (task_lock_held_by_its_exit(task))
+            return false;
+        nanosleep(&lock_pause, NULL);
+    }
+    return true;
+}
+
 void task_snapshot_release(struct task_snapshot *snapshot) {
     for (unsigned i = 0; i < snapshot->count; i++)
         task_ref_cnt_mod(snapshot->tasks[i], -1);
