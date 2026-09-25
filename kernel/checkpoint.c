@@ -49,7 +49,9 @@
 // page that has been written is already a private copy, and one that has not
 // is identical to the file) and wrong only for /proc/<pid>/maps, which will
 // call the text segment anonymous. A MAP_SHARED file mapping is not exact and
-// is refused.
+// is refused. A page past the end of its file is not exact either: the guest
+// could not read it (SIGBUS), and a restore brings it back as zeroes -- see
+// ckpt_host_page_readable for why the save cannot read it either.
 //
 // THE FORMAT is a header, then one task record, then its mappings, then its
 // descriptors. No compression: kernel/zswap.c already compresses guest frames
@@ -937,6 +939,12 @@ static void ckpt_thaw_all(void) {
 struct ckpt_writer {
     FILE *f;
     int err;
+    // A pipe for asking the kernel whether the host can read a page at all
+    // (ckpt_host_page_readable): made at the first page that needs asking,
+    // closed with the image. A flag rather than -1 descriptors, so a writer
+    // initialised with zeroes is one with no pipe, not one on fds 0 and 1.
+    bool probe_open;
+    int probe[2];
 };
 
 static void wr(struct ckpt_writer *w, const void *p, size_t n) {
@@ -944,6 +952,71 @@ static void wr(struct ckpt_writer *w, const void *p, size_t n) {
         return;
     if (fwrite(p, 1, n, w->f) != n)
         w->err = errno_map();
+}
+
+// Can the host read the page at `p`, which belongs to a mapping that is not
+// anonymous memory?
+//
+// Not always, and finding out by reading it kills the app. A host mapping of
+// a file is only as long as the file: a host page wholly past its end cannot
+// be paged in, and a load from it raises SIGBUS. When the GUEST touches one,
+// the JIT turns that into a guest SIGBUS (handle_bus_interrupt), which is
+// what Linux delivers too. This walk is C code on a host thread, though, and
+// it took EXC_BAD_ACCESS / KERN_MEMORY_ERROR in _platform_memmove.
+//
+// Guests map such pages as a matter of course. musl's dynamic linker maps a
+// library's whole span from its file, then maps the later segments over it,
+// so the gap between text and data -- up to 64 KiB on arm64, where segments
+// are 64 KiB aligned -- stays a mapping of file offsets the file does not
+// have. Nothing reads the gap, so nothing faults, until a save reads every
+// page. Python 3.14's math module on the arm64 Alpine root is 69,672 bytes
+// mapped 132 KiB long, and saving any Python that had imported it was a
+// crash, every time. A file truncated under a live mapping leaves the same
+// kind of page.
+//
+// So the kernel is asked instead: write() one byte of the page into a pipe.
+// The kernel's copy fails with EFAULT where a load would fault, on Darwin and
+// Linux alike, and no signal is sent. A host page with any byte of the file
+// in it reads (the rest of it as zeroes); only one wholly past the end does
+// not. One question per host page, a few microseconds each (3-12 us on a
+// loaded M-series Mac). vm_read_overwrite answers the same question for no
+// less (4-22 us per 4 KiB page, same machine, same load), but only on Darwin;
+// the pipe is one mechanism for both hosts.
+//
+// 1 readable, 0 not, or an error, which has to fail the save rather than
+// guess: a page of library text written out as zeroes is a restored process
+// that crashes.
+static int ckpt_host_page_readable(struct ckpt_writer *w, const void *p) {
+    if (!w->probe_open) {
+        if (pipe(w->probe) != 0)
+            return errno_map();
+        // Non-blocking, so that a probe can fail but never wait: the whole
+        // machine is stopped while this runs.
+        for (int i = 0; i < 2; i++) {
+            fcntl(w->probe[i], F_SETFD, FD_CLOEXEC);
+            fcntl(w->probe[i], F_SETFL, O_NONBLOCK);
+        }
+        w->probe_open = true;
+    }
+    ssize_t n;
+    do
+        n = write(w->probe[1], p, 1);
+    while (n < 0 && errno == EINTR);
+    if (n < 0)
+        return errno == EFAULT ? 0 : errno_map();
+    char byte;
+    do
+        n = read(w->probe[0], &byte, 1);
+    while (n < 0 && errno == EINTR);
+    return n == 1 ? 1 : _EIO;
+}
+
+static void ckpt_writer_close_probe(struct ckpt_writer *w) {
+    if (!w->probe_open)
+        return;
+    close(w->probe[0]);
+    close(w->probe[1]);
+    w->probe_open = false;
 }
 
 static int rd(FILE *f, void *p, size_t n) {
@@ -1341,7 +1414,14 @@ static int ckpt_count_reservation(void *vctx, page_t UNUSED(start), pages_t UNUS
     return 0;
 }
 
-struct ckpt_emit_ctx { struct ckpt_writer *w; struct mem *mem; };
+struct ckpt_emit_ctx {
+    struct ckpt_writer *w;
+    struct mem *mem;
+    // The host page last asked about, and the answer, for the guest pages
+    // that share it (ckpt_host_page_readable). 0 before the first question.
+    uintptr_t probed_page;
+    bool probed_readable;
+};
 
 static int ckpt_emit_reservation(void *vctx, page_t start, pages_t pages, unsigned flags) {
     struct ckpt_emit_ctx *c = vctx;
@@ -1366,6 +1446,7 @@ static int ckpt_emit_map(void *vctx, page_t start, pages_t pages, unsigned flags
         .kind = CKPT_MAP_PAGES,
     };
     wr(c->w, &m, sizeof(m));
+    pages_t past_eof = 0;
     for (pages_t i = 0; i < pages && c->w->err == 0; i++) {
         guest_addr_t addr = ((guest_addr_t) (start + i)) << PAGE_BITS;
         // MEM_READ, so a page the pager has evicted is faulted back in rather
@@ -1373,17 +1454,51 @@ static int ckpt_emit_map(void *vctx, page_t start, pages_t pages, unsigned flags
         // checkpoint through the ordinary read path: swap is not a second
         // place the image has to look.
         const char *p = mem_ptr(c->mem, addr, MEM_READ);
+        // And a page of a FILE mapping may have no file behind it at all,
+        // which only the kernel can say without faulting. Anonymous memory
+        // always has host memory behind it, so it is not asked about -- which
+        // keeps the question off the heap and the stacks, the bulk of any
+        // image.
+        if (p != NULL && !(flags & P_ANONYMOUS)) {
+            uintptr_t host_page = (uintptr_t) p & ~(uintptr_t) (mem_frame_size() - 1);
+            if (host_page != c->probed_page) {
+                int readable = ckpt_host_page_readable(c->w, p);
+                if (readable < 0) {
+                    ckpt_refuse("pid %d: could not tell whether the page at %#llx "
+                                "can be read (%d)", current->pid,
+                                (unsigned long long) addr, readable);
+                    c->w->err = readable;
+                    break;
+                }
+                c->probed_page = host_page;
+                c->probed_readable = readable;
+            }
+            if (!c->probed_readable) {
+                p = NULL;
+                past_eof++;
+            }
+        }
         if (p == NULL) {
             // A PROT_NONE guard page is mapped and unreadable, and that is
             // normal rather than an error -- a stack guard, or the gap
             // pthreads leaves. Write zeroes; the flags travel separately and
             // put the protection back.
+            //
+            // So is a file page with no file behind it. The guest cannot read
+            // it either (it would take SIGBUS), and a restored mapping is
+            // anonymous memory, so it comes back as zeroes -- which is what
+            // Linux writes for such a page in a core dump.
             static const char zero[PAGE_SIZE];
             wr(c->w, zero, PAGE_SIZE);
         } else {
             wr(c->w, p, PAGE_SIZE);
         }
     }
+    if (past_eof != 0)
+        CKPT_TRACE("  map %#llx +%llu pages flags %#x: %llu past the end of "
+                   "its file, saved as zeroes\n", (unsigned long long) m.start,
+                   (unsigned long long) pages, flags,
+                   (unsigned long long) past_eof);
     return c->w->err;
 }
 
@@ -3103,6 +3218,7 @@ int checkpoint_save(const char *host_path) {
         err = w.err;
     if (fclose(f) != 0 && err == 0)
         err = errno_map();
+    ckpt_writer_close_probe(&w);
 
     // The image is only as good as what actually reached the disk, and until
     // now nothing confirmed that it had. Every error path above reports a
