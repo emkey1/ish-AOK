@@ -781,9 +781,8 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     lock(&task->group->lock, 0);
     bool stopped = task->group->stopped;
 
-    // Cpus_allowed reflects the affinity mask, so use the scheduler-visible
-    // count (matches sched_getaffinity), not the full /proc/cpuinfo topology.
-    unsigned cpu_count = get_cpu_count_for_affinity();
+    // Cpus_allowed is the affinity mask: every guest CPU (sched_getaffinity).
+    unsigned cpu_count = get_cpu_count();
     unsigned allowed_mask = cpu_count >= 31 ? 0x7fffffffU : ((1U << cpu_count) - 1U);
 
     proc_printf(buf, "Name:\t%s\n", task->comm);

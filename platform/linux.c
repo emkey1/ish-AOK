@@ -131,13 +131,12 @@ struct uptime_info get_uptime(void) {
     return uptime;
 }
 
+// The guest's CPU count, which every view of it reports; see platform/darwin.c.
+// No UI to protect on a Linux host, so it is the host's.
 int get_cpu_count(void) {
-    return get_nprocs();
-}
-
-int get_cpu_count_for_affinity(void) {
-    // No UI to protect on the Linux/CLI build; report the real count.
-    return get_cpu_count();
+    const char *override = getenv("ISH_GUEST_CPU_COUNT");
+    long forced = override != NULL && override[0] != '\0' ? strtol(override, NULL, 10) : 0;
+    return forced > 0 ? (int) forced : get_nprocs();
 }
 
 // ISH_GUEST_MEM_BUDGET_MB: treat this process as though it had that many MiB.

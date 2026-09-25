@@ -129,11 +129,11 @@ struct uptime_info {
 };
 struct uptime_info get_uptime(void);
 
+// How many CPUs the guest has: one number that sched_getaffinity, sysconf,
+// /proc/cpuinfo, /proc/stat and /sys/devices/system/cpu all report. On iOS it
+// is fewer than the host has, keeping cores back for the UI; see
+// platform/darwin.c.
 int get_cpu_count(void);
-// CPU count to advertise to guest scheduler-sizing queries (sched_getaffinity /
-// nproc), which may be smaller than get_cpu_count() to reserve host cores for
-// the UI. /proc/cpuinfo and /proc/stat still use the true get_cpu_count().
-int get_cpu_count_for_affinity(void);
 
 // True when the host process is close enough to its memory ceiling that guest
 // memory growth should be refused (guest mmap/brk/mremap return ENOMEM) so the

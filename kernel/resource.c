@@ -711,10 +711,10 @@ int_t sys_sched_getaffinity_guest(pid_t_ pid, dword_t cpusetsize, guest_addr_t c
         task_ref_cnt_mod(task, -1);
     }
 
-    // Report the scheduler-visible CPU count (may reserve host cores for the
-    // UI), not the raw host core count or the /proc/cpuinfo topology. The Go
-    // runtime sizes GOMAXPROCS from this, and nproc reports it.
-    long cpus = get_cpu_count_for_affinity();
+    // Every guest CPU, the same count /proc/cpuinfo and /sys report (on iOS
+    // fewer than the host has; see get_cpu_count). The Go runtime sizes
+    // GOMAXPROCS from this, and nproc reports it.
+    long cpus = get_cpu_count();
 
     // The real kernel returns a cpumask whose length is a multiple of the
     // guest's sizeof(long): 8 bytes on amd64, 4 on i386. Returning a

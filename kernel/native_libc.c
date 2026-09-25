@@ -2416,9 +2416,8 @@ int nlibc_sysctl(int *name, unsigned namelen, void *old, size_t *oldlen,
 //
 //   available_parallelism() asks hw.ncpu to size a thread pool. AOK
 //   deliberately reports fewer CPUs than the host has, reserving cores so the
-//   emulator does not starve the UI (get_cpu_count_for_affinity,
-//   kernel/resource.c). A program that went around that would size itself for
-//   the whole machine.
+//   emulator does not starve the UI (get_cpu_count, platform/darwin.c). A
+//   program that went around that would size itself for the whole machine.
 //
 //   std_detect asks hw.optional.arm.FEAT_* to decide which instructions it may
 //   emit. A native program IS host arm64 code, so the host's answer is the only
@@ -2468,7 +2467,7 @@ int nlibc_sysctlbyname(const char *name, void *old, size_t *oldlen,
         return -1;
     }
 
-    long value = get_cpu_count_for_affinity();
+    long value = get_cpu_count();
     if (old == NULL) {
         if (oldlen != NULL)
             *oldlen = sizeof(int);
@@ -3020,10 +3019,10 @@ long nlibc_sysconf(int name) {
             // Found because Rust's available_parallelism() reported 1 while
             // nproc in the same guest said 4. nproc goes through
             // sched_getaffinity, which was right all along, so the two ways of
-            // asking disagreed. get_cpu_count_for_affinity is what
-            // sched_getaffinity uses (kernel/resource.c) and is the one source
-            // of truth for how many CPUs AOK is prepared to hand out.
-            return get_cpu_count_for_affinity();
+            // asking disagreed. get_cpu_count is what sched_getaffinity uses
+            // (kernel/resource.c) and is the one source of truth for how many
+            // CPUs AOK is prepared to hand out.
+            return get_cpu_count();
         case _SC_PHYS_PAGES: {
             unsigned procs = 0;
             uint64_t ram = 0;

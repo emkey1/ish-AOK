@@ -222,52 +222,50 @@ struct uptime_info get_uptime(void) {
     return uptime;
 }
 
+// How many CPUs the guest has. ONE number, and every view of it reports it:
+// sched_getaffinity (nproc, Go's GOMAXPROCS, Rust's available_parallelism),
+// sysconf's _SC_NPROCESSORS_* (glibc reads /sys, musl the affinity mask),
+// /proc/cpuinfo, /proc/stat's cpuN lines, /proc/self/status's Cpus_allowed
+// and /sys/devices/system/cpu -- as they all agree on a Linux machine.
+//
+// On iOS that is fewer than the host has. Multi-threaded guest programs start
+// one thread per CPU they are told about, and under emulation that many busy
+// threads saturates every core, starving the app's UI and drowning the guest
+// in lock, futex and TLB-shootdown overhead (Go compiles faster with fewer).
+// So a third of the cores (at least one) are kept back. That used to apply to
+// sched_getaffinity alone, while /proc/cpuinfo, /proc/stat and /sys went on
+// reporting every core: nproc said 6 on a 9-core device whose cpuinfo listed
+// 9, top drew CPUs the scheduler said nothing could run on, and a program that
+// counted CPUs any other way than the affinity mask -- glibc's sysconf, Node's
+// os.cpus() -- sized itself to the whole machine anyway.
+//
+// ISH_GUEST_CPU_COUNT=N overrides all of it. ISH_GUEST_CPU_RESERVE=1 applies
+// the iOS reservation on the Mac as well, so the CLI reaches the count a
+// device reports (tests/manual/cpu_count_agree).
 int get_cpu_count(void) {
-     int ncpu = 1;
-     size_t size = sizeof(int);
-     sysctlbyname("hw.ncpu", &ncpu, &size, NULL, 0);
-     const char *override = getenv("ISH_GUEST_CPU_COUNT");
-     if (override != NULL && override[0] != '\0') {
-         long forced = strtol(override, NULL, 10);
-         if (forced > 0)
-             ncpu = (int) forced;
-     }
- #if TARGET_OS_OSX && defined(__aarch64__)
-     // Standalone CLI / macOS dev harness: default to 4 emulated CPUs so local
-     // and fakefs repro runs reproduce the concurrency -- and the TLB/COW/futex/
-     // heap races -- of a multi-core device, instead of the old 2-core cap that
-     // hid that whole class of bug. 4 exposes real parallelism without
-     // oversubscribing a big host (this branch is macOS-only; the iOS app is not
-     // TARGET_OS_OSX and keeps the true hw.ncpu). Override with
-     // ISH_GUEST_CPU_COUNT=N (e.g. =6 to match a device, =1 to force serial).
-     else
-         ncpu = 4;
- #endif
-     if (ncpu < 1)
-         ncpu = 1;
-     return ncpu;
-}
-
-// The number of CPUs to advertise to guest scheduler-sizing queries
-// (sched_getaffinity / nproc), as opposed to the true core count reported by
-// /proc/cpuinfo and /proc/stat. Multi-threaded guest workloads spawn one OS
-// thread per "available" CPU -- e.g. the Go runtime sets GOMAXPROCS from
-// sched_getaffinity, and `make -j$(nproc)` from nproc -- and under emulation
-// running hw.ncpu such threads saturates every core, both starving the app UI
-// and drowning the guest in lock/futex/TLB-shootdown overhead (Go actually
-// compiles *faster* with fewer threads). On iOS we reserve roughly a third of
-// the cores (at least one) so those programs leave headroom; /proc/cpuinfo
-// still reports the true count, so htop and friends show all CPUs.
-int get_cpu_count_for_affinity(void) {
-    int ncpu = get_cpu_count();
-#if TARGET_OS_IPHONE
-    if (getenv("ISH_GUEST_CPU_COUNT") == NULL && ncpu > 2) {
+    int ncpu = 1;
+    size_t size = sizeof(int);
+    sysctlbyname("hw.ncpu", &ncpu, &size, NULL, 0);
+    const char *override = getenv("ISH_GUEST_CPU_COUNT");
+    long forced = override != NULL && override[0] != '\0' ? strtol(override, NULL, 10) : 0;
+    if (forced > 0)
+        return (int) forced;
+#if TARGET_OS_OSX && defined(__aarch64__)
+    // Standalone CLI / macOS dev harness: default to 4 emulated CPUs so local
+    // and fakefs repro runs reproduce the concurrency -- and the TLB/COW/futex/
+    // heap races -- of a multi-core device, instead of the old 2-core cap that
+    // hid that whole class of bug. 4 exposes real parallelism without
+    // oversubscribing a big host (this branch is macOS-only; the iOS app is not
+    // TARGET_OS_OSX and keeps the true hw.ncpu). Override with
+    // ISH_GUEST_CPU_COUNT=N (e.g. =6 to match a device, =1 to force serial).
+    ncpu = 4;
+#endif
+    if ((TARGET_OS_IPHONE || getenv("ISH_GUEST_CPU_RESERVE") != NULL) && ncpu > 2) {
         int reserve = ncpu / 3;
         if (reserve < 1)
             reserve = 1;
         ncpu -= reserve;
     }
-#endif
     if (ncpu < 1)
         ncpu = 1;
     return ncpu;
