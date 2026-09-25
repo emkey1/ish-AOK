@@ -336,6 +336,7 @@ syscall_wiring.c
 sysfs_cpu_topology.c
 cpu_count_agree.c
 sysfs_power_supply.c
+proc_ish_arch.c
 proc_ish_host_state.c
 x86/amd64_regress.c
 x86/amd64_incdec.c

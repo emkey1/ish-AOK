@@ -2,10 +2,13 @@
 
 A small, dependency-free `htop`-style process viewer with one extra column:
 **ARCH**, the CPU architecture (`arm64` / `x86_64` / `x86` / `riscv64`) of
-each process's binary, read from its ELF header via `/proc/<pid>/exe`.
-Natively-dispatched programs (`/AOK/native/*`) have no ELF image of their own,
-so for those it reports the host's architecture -- which is what that code
-really is, and makes the native processes stand out at a glance.
+each process. iSH-AOK publishes it for every process in `/proc/ish/arch`,
+which anyone may read. Where that file is missing -- an older iSH-AOK, or real
+Linux -- ktop reads the ELF header behind `/proc/<pid>/exe` instead, which only
+works for your own processes (or everyone's, as root). Natively-dispatched
+programs (`/AOK/native/*`) have no ELF image of their own, so for those it
+reports the host's architecture -- which is what that code really is, and
+makes the native processes stand out at a glance.
 
 iSH-AOK can run i386, amd64, arm64 and riscv64 binaries side by side in the
 same booted guest -- most usefully via `chroot`ing into another installed

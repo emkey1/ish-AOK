@@ -1989,6 +1989,47 @@ static int proc_ish_show_host_ports(struct proc_entry *UNUSED(entry), struct pro
     return 0;
 }
 
+// /proc/ish/arch -- which architecture every process runs, readable by anyone.
+//
+// ktop's ARCH column read the ELF header behind /proc/<pid>/exe. Since 02c057cb
+// another user's exe is off limits, as on Linux (ptrace_may_access), so to a
+// normal user every root-owned process showed "?". Linux publishes nothing like
+// this because it runs one architecture; iSH-AOK runs four plus host code, and
+// which one a process runs is no secret -- its name in /proc/<pid>/stat, which
+// anyone may read, usually says as much. It lives here, in iSH-AOK's own
+// directory, rather than as a line added to a file Linux defines.
+//
+// One line per process (thread-group leader): the pid, then the machine name
+// uname(2) reports inside it (aarch64, x86_64, i686, riscv64), or "native" for
+// a program compiled into iSH-AOK and running as host code (/AOK/native), or
+// "-" for a task caught without an address space. A zombie is not listed: the
+// snapshot takes live processes only.
+static int proc_ish_show_arch(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
+    proc_printf(buf, "PID ARCH\n");
+    struct task_snapshot snapshot = {0};
+    if (task_snapshot_collect(&snapshot, true) < 0)
+        return 0;
+    for (unsigned i = 0; i < snapshot.count; i++) {
+        struct task *task = snapshot.tasks[i];
+        // task->mm is general_lock's; a task already in do_exit is left out
+        // rather than waited for (see task_lock_unless_exiting).
+        if (!task_lock_unless_exiting(task))
+            continue;
+        const char *arch;
+        if (task->native_running != NULL)
+            arch = "native";
+        else if (task->mm == NULL)
+            arch = "-";
+        else
+            arch = guest_abi_desc(task->abi).uname_machine;
+        dword_t pid = task->pid;
+        unlock(&task->general_lock);
+        proc_printf(buf, "%u %s\n", pid, arch);
+    }
+    task_snapshot_release(&snapshot);
+    return 0;
+}
+
 static int proc_ish_show_host_info(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
     char *host_info = printHostInfo();
     proc_printf(buf, "%s", host_info);
@@ -2010,6 +2051,7 @@ struct proc_children proc_ish_children = PROC_CHILDREN({
     {"BAT0_status", .show = proc_ish_show_battery_status},
     {"UIDevice", .show = proc_ish_show_uidevice},
     {"applets", .show = proc_ish_show_applets},
+    {"arch", .show = proc_ish_show_arch},
     {"colors", .show = proc_ish_show_colors},
     {".defaults", S_IFDIR, .readdir = proc_ish_underlying_defaults_readdir},
     {"defaults", S_IFDIR, .readdir = proc_ish_defaults_readdir},

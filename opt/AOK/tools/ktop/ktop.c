@@ -233,10 +233,83 @@ static bool exe_is_native(pid_t pid) {
     return strncmp(target, prefix, sizeof(prefix) - 1) == 0;
 }
 
+// iSH-AOK's own answer, /proc/ish/arch: "PID ARCH" and then one "<pid>
+// <machine>" line per process, where machine is what uname(2) says inside it,
+// "native" for a program running as host code, or "-" for one with no address
+// space. Read once per refresh, before the /proc walk.
+//
+// It comes FIRST because the ELF header below cannot answer for another user's
+// process: /proc/<pid>/exe is gated by ptrace_may_access, on Linux and on
+// iSH-AOK since the 2026-09-24 hardening, so a normal user saw "?" beside every
+// root process -- init, login, sshd, udevd. The table is readable by anyone,
+// and one file per refresh is also cheaper than an open per process. The exe
+// read stays as the fallback for an iSH-AOK without the table, a process that
+// started after it was read, and a real Linux kernel.
+struct arch_entry {
+    pid_t pid;
+    const char *arch;   // NULL: listed with no address space
+};
+static struct arch_entry *arch_table = NULL;
+static int arch_table_len = 0;
+static int arch_table_cap = 0;
+
+static void load_arch_table(void) {
+    arch_table_len = 0;
+    FILE *f = fopen("/proc/ish/arch", "r");
+    if (f == NULL)
+        return;
+    char line[128];
+    if (fgets(line, sizeof(line), f) == NULL || strncmp(line, "PID ARCH", 8) != 0) {
+        fclose(f);   // not a format this ktop knows; the exe read still works
+        return;
+    }
+    while (fgets(line, sizeof(line), f) != NULL) {
+        long pid;
+        char machine[32];
+        if (sscanf(line, "%ld %31s", &pid, machine) != 2)
+            continue;
+        if (arch_table_len == arch_table_cap) {
+            int cap = arch_table_cap != 0 ? arch_table_cap * 2 : 256;
+            struct arch_entry *grown = realloc(arch_table, (size_t) cap * sizeof(*grown));
+            if (grown == NULL)
+                break;
+            arch_table = grown;
+            arch_table_cap = cap;
+        }
+        const char *arch;
+        if (strcmp(machine, "native") == 0)
+            arch = host_arch();
+        else if (strcmp(machine, "-") == 0)
+            arch = NULL;
+        else
+            arch = arch_from_machine(machine);
+        arch_table[arch_table_len++] = (struct arch_entry) {(pid_t) pid, arch};
+    }
+    fclose(f);
+}
+
+// Whether the table lists `pid`, and if so what it says.
+static bool arch_table_lookup(pid_t pid, const char **arch) {
+    for (int i = 0; i < arch_table_len; i++) {
+        if (arch_table[i].pid == pid) {
+            *arch = arch_table[i].arch;
+            return true;
+        }
+    }
+    return false;
+}
+
 // `kernel_thread` comes from the caller, which has already read the state and
 // the command line: an empty /proc/<pid>/cmdline is how ps decides to bracket a
 // name, and excluding zombies keeps a reaped process from borrowing the label.
 static const char *detect_arch(pid_t pid, bool kernel_thread) {
+    const char *listed;
+    if (arch_table_lookup(pid, &listed)) {
+        if (listed != NULL)
+            return listed;
+        return kernel_thread ? guest_arch() : arch_intern("?");
+    }
+
     char path[64];
     snprintf(path, sizeof(path), "/proc/%d/exe", (int) pid);
     unsigned char hdr[20];
@@ -623,6 +696,7 @@ static int collect(struct proc_sample *procs, int max) {
         perror("ktop: opendir /proc");
         return 0;
     }
+    load_arch_table();
     int count = 0;
     struct dirent *de;
     while (count < max && (de = readdir(d)) != NULL) {
