@@ -17,6 +17,19 @@ Started 2026-08-19, after the 549 release run. Closed entries from the 549 and
 
 ---
 
+## Queued for a future release
+
+Filed as task chips and not started before the 556 freeze (2026-09-25). The
+full chip text of each is in [future-release-queue.md](future-release-queue.md).
+
+- **Implement ENTER and 16-bit branch EIP truncation on i386 JIT.** While fixing 16-bit PUSH/POP on the i386 JIT, I found ENTER (C8) is SIGILL there, and 0x66 near JMP rel/Jcc/LOOP/JCXZ keep the full target where x86 truncates EIP to 16 bits. This session would measure both on camd and fix them with a test.
+- **Fix x86_fp_env failures on the x86_64-host gadgets.** Running the x86 guest tests under a GCC/x86_64-host build on camd, x86_fp_env fails two SSE checks (ucomisd qnan, divsd FTZ), with or without today's changes; aarch64 builds pass. This session would find and fix the x86_64-backend cause.
+- **Make meminfo Shmem/AnonPages/Mapped Linux-shaped.** While making /proc/meminfo cheap, a side-by-side run against Linux 6.12 showed AOK's Shmem, AnonPages and Mapped mean something different: mapped entries per process from mmap, not resident pages once each. A new session would change the accounting to Linux's meaning and update the test.
+- **Raise #GP for privileged and misaligned x86 instructions.** While fixing how iSH-AOK reports a #GP, the camd oracle showed several instructions Linux faults with #GP that iSH-AOK either answers with SIGILL or runs silently. This session would decode them and raise #GP(0) on both x86 engines, with tests measured against camd.
+- **amd64: int n, sigreturn CS/SS, non-canonical jumps.** The #GP oracle work found three amd64 gaps: every `int n` (CD) is SIGILL, rt_sigreturn ignores a broken CS or SS, and a jump to a non-canonical address is reported at the target instead of the jump. This session would fix all three against measured camd behaviour.
+- **Match Linux's x86 page-fault REG_ERR and CR2.** The #GP oracle runs also showed the page-fault frame's error-code bits differ from Linux (a plain read of a PROT_NONE page claims to be an instruction fetch), and CR2 is not kept across frames. This session would make REG_ERR and REG_CR2 match camd on both x86 ABIs.
+- **Add PTRACE_POKEUSER and base checks to ptrace.** While adding the amd64 GS base, I found iSH-AOK has no PTRACE_POKEUSER at all (any ABI), and SETREGS accepts any fs_base/gs_base where Linux says EIO. The new session implements POKEUSER for amd64 and i386 and the base validation, oracle-checked on camd.
+
 ## Diagnosed, not fixed
 
 ### A native bash ignored SIGKILL (unconfirmed, seen once)
