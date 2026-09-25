@@ -852,10 +852,14 @@ static dword_t sys_linkat_empty_path(fd_t src_at_f, struct fd *src_at, struct fd
     if (!path_is_normalized(src))
         return _EXDEV;
     // generic_getpath's answer already carries any chroot prefix, so it has to
-    // be re-anchored at the REAL root -- see generic_open_realroot. NOFOLLOW
-    // because the descriptor already IS the object it names: an
-    // O_PATH|O_NOFOLLOW descriptor on a symlink links the symlink itself.
-    return generic_linkat(AT_PWD, src, dst_at, dst, N_SYMLINK_NOFOLLOW | N_REALROOT);
+    // be re-anchored at the REAL root -- see generic_open_realroot -- and for
+    // a file in a mount `umount -l` detached it is a staging point, which the
+    // walk may enter because it is this descriptor's own path
+    // (N_DETACHED_OK). Without that it was ENOENT. NOFOLLOW because the
+    // descriptor already IS the object it names: an O_PATH|O_NOFOLLOW
+    // descriptor on a symlink links the symlink itself.
+    return generic_linkat(AT_PWD, src, dst_at, dst,
+            N_SYMLINK_NOFOLLOW | N_REALROOT | N_DETACHED_OK);
 }
 
 static dword_t sys_linkat_common(fd_t src_at_f, guest_addr_t src_addr, fd_t dst_at_f, guest_addr_t dst_addr, int_t flags) {

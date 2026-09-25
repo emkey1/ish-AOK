@@ -93,10 +93,12 @@ struct statbuf;
 // detached mounts are parked. No path the guest spells may: on Linux nothing
 // reaches a detached mount by name, only through a descriptor already in it.
 // So this is for walks that ARE that descriptor -- fsmount() opening the
-// mount it made, and a /proc/<pid>/{cwd,root,fd/N} link being followed, which
-// Linux jumps through to the file itself -- and fs/path.c sets it for itself
-// on a relative symlink inside a detached mount, whose target is re-walked
-// from the top.
+// mount it made, a /proc/<pid>/{cwd,root,fd/N} link being followed, which
+// Linux jumps through to the file itself, and a descriptor's own path opened
+// again (generic_open_realroot: a /proc/self/fd/N reopen, execveat(fd, "",
+// AT_EMPTY_PATH)) or linked (linkat(fd, "", ..., AT_EMPTY_PATH)) -- and
+// fs/path.c sets it for itself on a relative symlink inside a detached mount,
+// whose target is re-walked from the top.
 #define N_DETACHED_OK 2048
 
 // Normalizes the path specified and writes the result into the out buffer.

@@ -62,7 +62,8 @@ struct fd *generic_openat(struct fd *at, const char *path, int flags, int mode);
 // RESOLVE_* constraints ride in here.
 struct fd *generic_openat_norm(struct fd *at, const char *path, int flags, int mode, int extra_norm);
 // For stored, already-normalized paths (chroot prefix included): anchors at
-// the real root instead of the caller's chroot. See fs/generic.c.
+// the real root instead of the caller's chroot, and may enter a detached
+// mount's staging point. See fs/generic.c.
 struct fd *generic_open_realroot(const char *path, int flags, int mode);
 // The descriptor's full path, through the mount it was opened on: for one
 // opened through a bind, the bind's path, as Linux's d_path gives it. This is
@@ -84,9 +85,10 @@ int fs_rebase_path_to_root(struct fs_info *fs, char *path);
 int fs_rebase_readlink_path(struct fs_info *fs, char *path);
 // src_norm are the fs/path.h N_* flags the SOURCE is resolved with: which of
 // N_SYMLINK_FOLLOW/N_SYMLINK_NOFOLLOW linkat's AT_SYMLINK_FOLLOW asked for,
-// plus N_REALROOT when the source is a stored path rather than a guest one
-// (the AT_EMPTY_PATH case, whose source is generic_getpath's answer). The
-// DESTINATION's resolution is fixed and not the caller's business.
+// plus N_REALROOT | N_DETACHED_OK when the source is a stored path rather
+// than a guest one (the AT_EMPTY_PATH case, whose source is generic_getpath's
+// answer). The DESTINATION's resolution is fixed and not the caller's
+// business.
 int generic_linkat(struct fd *src_at, const char *src_raw, struct fd *dst_at, const char *dst_raw, int src_norm);
 int generic_unlinkat(struct fd *at, const char *path);
 int generic_rmdirat(struct fd *at, const char *path);

@@ -1617,11 +1617,17 @@ static inline int user_memset(guest_addr_t start, byte_t val, dword_t len) {
     return 0;
 }
 
-static struct fd *open_exec(const char *file, struct statbuf *stat);
+static struct fd *open_exec(struct fd *at, const char *name, int flags, struct statbuf *stat);
+// path_inaccessible: `file` names the program through a close-on-exec
+// descriptor -- "/dev/fd/<n>" -- so nothing the exec starts could open it,
+// and an interpreter handed it would fail. Linux's
+// BINPRM_FLAGS_PATH_INACCESSIBLE: a #! script or a binfmt_misc format is
+// refused with ENOENT instead, once it is recognised. Only the file the
+// caller named can be that; an interpreter is always named by path.
 static int format_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp,
-        unsigned depth);
+        unsigned depth, bool path_inaccessible);
 static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp,
-        unsigned depth);
+        unsigned depth, bool path_inaccessible);
 
 // How many times an exec may be handed on from one file to another before it
 // is refused. `depth` is how many such rewrites it took to reach the file being
@@ -1666,7 +1672,7 @@ static int native_dispatch_exec(struct fd *fd, struct exec_args argv, struct exe
 //   without P: interpreter, file, original argv[1..]   -- argv[0] is DROPPED
 //   with    P: interpreter, file, original argv[0..]   -- argv[0] preserved
 static int binfmt_misc_exec(struct fd *fd, const char *file, struct exec_args argv,
-                            struct exec_args envp, unsigned depth) {
+                            struct exec_args envp, unsigned depth, bool path_inaccessible) {
     if (fd->ops->lseek(fd, 0, SEEK_SET))
         return _EIO;
     char header[128];
@@ -1679,6 +1685,9 @@ static int binfmt_misc_exec(struct fd *fd, const char *file, struct exec_args ar
     if (!binfmt_misc_match(file, header, (size_t) size, interpreter,
                            sizeof(interpreter), &preserve_argv0))
         return _ENOEXEC;
+    // load_misc_binary: "Need to be able to load the file after exec".
+    if (path_inaccessible)
+        return _ENOENT;
 
     // Everything after argv[0]. With P the original argv[0] is kept as well,
     // so the interpreter can see how the program was invoked.
@@ -1720,7 +1729,7 @@ static int binfmt_misc_exec(struct fd *fd, const char *file, struct exec_args ar
     // The interpreter is executed, so it faces the same rules as any other
     // program -- execute permission, ordinary file, a mount that allows exec.
     struct statbuf interpreter_stat;
-    struct fd *interpreter_fd = open_exec(interpreter, &interpreter_stat);
+    struct fd *interpreter_fd = open_exec(AT_PWD, interpreter, 0, &interpreter_stat);
     if (IS_ERR(interpreter_fd)) {
         free(new_argv_buf);
         return (int) PTR_ERR(interpreter_fd);
@@ -1741,13 +1750,13 @@ static int binfmt_misc_exec(struct fd *fd, const char *file, struct exec_args ar
 // depth is carried rather than used: only binfmt_misc_exec, which can hand the
 // exec on to another file, needs it.
 static int format_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp,
-        unsigned depth) {
+        unsigned depth, bool path_inaccessible) {
     int err = (int)elf_exec(fd, file, argv, envp);
     if (err != _ENOEXEC)
         return err;
     // A registered binfmt_misc interpreter is consulted only after every
     // built-in format has declined, exactly as Linux orders its binfmt list.
-    err = binfmt_misc_exec(fd, file, argv, envp, depth);
+    err = binfmt_misc_exec(fd, file, argv, envp, depth, path_inaccessible);
     if (err != _ENOEXEC)
         return err;
     return _ENOEXEC;
@@ -1773,11 +1782,26 @@ static int format_exec(struct fd *fd, const char *file, struct exec_args argv, s
 // The extra stat costs one path resolution per exec. That is the honest price
 // of asking the questions in the right order; exec is not a hot path next to
 // open and stat.
-static struct fd *open_exec(const char *file, struct statbuf *stat) {
-    int err = generic_statat(AT_PWD, file, stat, 0);
+//
+// `at`, `name` and `flags` are execveat's (AT_EMPTY_PATH_, AT_SYMLINK_NOFOLLOW_),
+// as Linux's do_open_execat takes them; execve is AT_PWD and no flags. The
+// name is resolved from the descriptor, and with AT_EMPTY_PATH the file is
+// the descriptor's own. That used to be done by taking the descriptor's PATH
+// and resolving it again from the root, which is not the same file: in a
+// chroot the path carries the chroot's prefix, which the root put on a second
+// time, and in a mount `umount -l` has detached it is a staging point no walk
+// from the root may enter (N_DETACHED_OK, fs/path.h). Both were ENOENT, and
+// AT_SYMLINK_NOFOLLOW was dropped on the way.
+static struct fd *open_exec(struct fd *at, const char *name, int flags, struct statbuf *stat) {
+    int err = generic_statat(at, name, stat, flags);
     if (err < 0)
         return ERR_PTR(err);
 
+    // may_open() refuses a symlink with ELOOP. Only a lookup that did not
+    // follow one sees it: a final component under AT_SYMLINK_NOFOLLOW, or an
+    // O_PATH|O_NOFOLLOW descriptor of a symlink under AT_EMPTY_PATH.
+    if (S_ISLNK(stat->mode))
+        return ERR_PTR(_ELOOP);
     // Only a regular file is ever executable. Linux reports EACCES for a
     // directory, a fifo or a device alike.
     if (!S_ISREG(stat->mode))
@@ -1793,7 +1817,28 @@ static struct fd *open_exec(const char *file, struct statbuf *stat) {
     // O_NOACCESS_CHECK_ because the execute check above is the one that
     // governs: an execute-only file has to load despite being unreadable,
     // which is why Linux opens it with FMODE_EXEC rather than for reading.
-    struct fd *fd = generic_open(file, O_RDONLY | O_NOACCESS_CHECK_, 0);
+    //
+    // A new open even of the descriptor's own file: the loader reads it and
+    // keeps it as mm->exefile, and the caller's description -- its offset,
+    // or an O_PATH one that cannot be read at all -- is the caller's. Opened
+    // by the descriptor's path, which generic_open_realroot anchors where the
+    // path was made (the real root, and into a detached mount's staging
+    // point). O_NOFOLLOW because that path names what the descriptor holds,
+    // never something a symlink there points to. A descriptor whose file has
+    // no path -- unlinked, or a memfd -- stays ENOENT here; Linux runs it.
+    int open_flags = O_RDONLY_ | O_NOACCESS_CHECK_;
+    struct fd *fd;
+    if (name[0] == '\0' && at != AT_PWD) {
+        char path[MAX_PATH];
+        err = generic_getpath(at, path);
+        if (err < 0)
+            return ERR_PTR(err);
+        fd = generic_open_realroot(path, open_flags | O_NOFOLLOW_, 0);
+    } else {
+        if (flags & AT_SYMLINK_NOFOLLOW_)
+            open_flags |= O_NOFOLLOW_;
+        fd = generic_openat(at, name, open_flags, 0);
+    }
     if (IS_ERR(fd))
         return fd;
 
@@ -1821,7 +1866,7 @@ static struct fd *open_exec(const char *file, struct statbuf *stat) {
 }
 
 static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp,
-        unsigned depth) {
+        unsigned depth, bool path_inaccessible) {
     // read the first 128 bytes to get the shebang line out of
     if (fd->ops->lseek(fd, 0, SEEK_SET))
         return _EIO;
@@ -1863,6 +1908,11 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
         *p-- = '\0';
     if (*argument == '\0')
         argument = NULL;
+
+    // Where load_script asks it: after the #! line has been parsed, before
+    // the interpreter is looked at.
+    if (path_inaccessible)
+        return _ENOENT;
 
     struct exec_args argv_rest = {
         .count = argv.count - 1,
@@ -1908,7 +1958,7 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     // O_RDONLY open, so a script could run an interpreter the caller was not
     // allowed to execute -- Linux answers EACCES.
     struct statbuf interpreter_stat;
-    struct fd *interpreter_fd = open_exec(interpreter, &interpreter_stat);
+    struct fd *interpreter_fd = open_exec(AT_PWD, interpreter, 0, &interpreter_stat);
     if (IS_ERR(interpreter_fd)) {
         free(new_argv_buf);
         return (int)PTR_ERR(interpreter_fd);
@@ -1945,10 +1995,10 @@ static int exec_interpreter(struct fd *fd, const struct statbuf *stat, const cha
     int err = native_dispatch_exec(fd, argv, envp);
     if (err != _ENOEXEC)
         return err;
-    err = format_exec(fd, file, argv, envp, depth);
+    err = format_exec(fd, file, argv, envp, depth, false);
     if (err != _ENOEXEC)
         return err;
-    return shebang_exec(fd, file, argv, envp, depth);
+    return shebang_exec(fd, file, argv, envp, depth, false);
 }
 
 // A native program (kernel/native.h) replaces this process image exactly as an
@@ -2471,7 +2521,29 @@ static void exec_report_to_tracer(pid_t_ old_pid) {
         send_signal(current, SIGTRAP_, info);
 }
 
-int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) {
+// What an exec runs: the file, found the way open_exec says, and the name the
+// new image is given for it -- Linux's bprm->filename, which is AT_EXECFN and
+// the name a #! or binfmt_misc interpreter is handed to open.
+struct exec_file {
+    struct fd *at;          // AT_PWD, or execveat's descriptor
+    const char *name;       // as spelled; "" under AT_EMPTY_PATH
+    int flags;              // AT_EMPTY_PATH_, AT_SYMLINK_NOFOLLOW_
+    const char *filename;
+    // The name is made up -- "/dev/fd/<n>" or "/dev/fd/<n>/<name>" -- because
+    // the file was named through a descriptor; see sys_execveat.
+    bool fdpath;
+    // ...and that descriptor is close-on-exec. See format_exec.
+    bool path_inaccessible;
+};
+
+// execve: a name, resolved from the cwd and root, and the same name given to
+// the new image.
+static struct exec_file exec_file_named(const char *file) {
+    return (struct exec_file) {.at = AT_PWD, .name = file, .filename = file};
+}
+
+static int __do_execve(const struct exec_file *exe, struct exec_args argv, struct exec_args envp) {
+    const char *file = exe->filename;
     // PTRACE_EVENT_EXEC's message is the pid this task had BEFORE the exec. A
     // thread that is not the leader takes the leader's pid in exec_de_thread,
     // and the tracer needs the old one to tell which of its tasks is gone.
@@ -2493,10 +2565,19 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     // to open first and then ask only whether ANY execute bit was set, so a
     // root-owned 0744 binary was executable by every user on the system.
     struct statbuf stat;
-    struct fd *fd = open_exec(file, &stat);
+    struct fd *fd = open_exec(exe->at, exe->name, exe->flags, &stat);
     if (IS_ERR(fd))
         return (int) PTR_ERR(fd);
     int err;
+
+    // comm is the last component of bprm->filename. For a made-up
+    // "/dev/fd/<n>" that is a number, which Linux 6.14 stopped using
+    // ("exec: fix up /proc/pid/comm in the execveat(AT_EMPTY_PATH) case") in
+    // favour of the name of the file itself; so does this.
+    char comm_path[MAX_PATH];
+    const char *comm_from = file;
+    if (exe->fdpath && generic_getpath(fd, comm_path) == 0)
+        comm_from = comm_path;
     // would_dump(), with the caller's credentials as they are now.
     bool unreadable = access_check(&stat, AC_R) < 0;
 
@@ -2528,9 +2609,9 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     exec_setid_plan_file(&setid, fd, &stat);
     exec_plan_current = &setid;
 
-    err = format_exec(fd, file, argv, envp, 0);
+    err = format_exec(fd, file, argv, envp, 0, exe->path_inaccessible);
     if (err == _ENOEXEC)
-        err = shebang_exec(fd, file, argv, envp, 0);
+        err = shebang_exec(fd, file, argv, envp, 0, exe->path_inaccessible);
     exec_plan_current = NULL;
     exec_plan_error = 0;
     fd_close(fd);
@@ -2566,9 +2647,9 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     lock(&current->general_lock, 0);
     strncpy(old_comm, current->comm, sizeof(old_comm));
     old_comm[sizeof(old_comm) - 1] = '\0';
-    const char *basename = strrchr(file, '/');
+    const char *basename = strrchr(comm_from, '/');
     if (basename == NULL)
-        basename = file;
+        basename = comm_from;
     else
         basename++;
     strncpy(current->comm, basename, sizeof(current->comm));
@@ -2696,11 +2777,11 @@ static char *exec_fixup_term(struct exec_args envp) {
 // block format ("s1\0s2\0...\0\0") cannot say how many strings it holds when one
 // of them is empty, so the count travels beside it -- which is why argc has
 // always been a parameter, and why envc has to be one too.
-static int do_execve_args(const char *file, struct exec_args argv, struct exec_args envp) {
+static int do_execve_args(const struct exec_file *exe, struct exec_args argv, struct exec_args envp) {
     char *fixed_env = exec_fixup_term(envp);
     if (fixed_env != NULL)
         envp.args = fixed_env;
-    int err = __do_execve(file, argv, envp);
+    int err = __do_execve(exe, argv, envp);
     free(fixed_env); // NULL-safe: no-op when no rewrite happened
     return err;
 }
@@ -2716,7 +2797,8 @@ int do_execve(const char *file, size_t argc, const char *argv_p, const char *env
     struct exec_args envp = {.args = envp_p};
     for (const char *e = envp_p; *e != '\0'; e += strlen(e) + 1)
         envp.count++;
-    return do_execve_args(file, (struct exec_args) {.count = argc, .args = argv_p}, envp);
+    struct exec_file exe = exec_file_named(file);
+    return do_execve_args(&exe, (struct exec_args) {.count = argc, .args = argv_p}, envp);
 }
 
 static ssize_t user_read_string_array(guest_addr_t addr, char *buf, size_t max) {
@@ -2792,7 +2874,8 @@ ssize_t sys_execve(addr_t filename_addr, addr_t argv_addr, addr_t envp_addr) {
     STRACE("})");
 
     amd64_trace_exec_attempt(filename, argv);
-    err = do_execve_args(filename, (struct exec_args) {.count = (size_t) argc, .args = argv},
+    struct exec_file exe = exec_file_named(filename);
+    err = do_execve_args(&exe, (struct exec_args) {.count = (size_t) argc, .args = argv},
             (struct exec_args) {.count = (size_t) envc, .args = envp});
 
     free(envp);
@@ -2828,7 +2911,8 @@ ssize_t sys_execve_guest(guest_addr_t filename_addr, guest_addr_t argv_addr, gue
     STRACE("})");
 
     amd64_trace_exec_attempt(filename, argv);
-    err = do_execve_args(filename, (struct exec_args) {.count = (size_t) argc, .args = argv},
+    struct exec_file exe = exec_file_named(filename);
+    err = do_execve_args(&exe, (struct exec_args) {.count = (size_t) argc, .args = argv},
             (struct exec_args) {.count = (size_t) envc, .args = envp});
 
     free(envp);
@@ -2837,6 +2921,52 @@ ssize_t sys_execve_guest(guest_addr_t filename_addr, guest_addr_t argv_addr, gue
     // does not return (kernel/native.h).
     native_exec_run_pending();
     return err;
+}
+
+// execveat's file, and its name for it, as Linux's alloc_bprm chooses: the
+// name itself for AT_FDCWD or an absolute name, and otherwise "/dev/fd/<n>"
+// or "/dev/fd/<n>/<name>". That made-up name is what AT_EXECFN says and what
+// a #! interpreter is handed to open, and it reaches the file for as long as
+// the descriptor is open -- a path of the descriptor would not, from a
+// chroot, where it carries the chroot's prefix, or from anywhere when the
+// file is in a mount `umount -l` detached, where it is a staging point no
+// process may walk into or be shown. A close-on-exec descriptor is gone by
+// the time an interpreter would open it: path_inaccessible.
+//
+// Holds a reference to the descriptor, dropped by exec_file_release, so a
+// sibling thread's close cannot free it under the exec.
+static int exec_file_at(struct exec_file *exe, fd_t dirfd, const char *name, int flags,
+        char *fdpath, size_t fdpath_size) {
+    // getname_flags(): an empty name is ENOENT unless AT_EMPTY_PATH says it
+    // means the descriptor.
+    if (name[0] == '\0' && !(flags & AT_EMPTY_PATH_))
+        return _ENOENT;
+    *exe = (struct exec_file) {.at = AT_PWD, .name = name, .flags = flags, .filename = name};
+    if (dirfd == AT_FDCWD_ || name[0] == '/')
+        return 0;
+    struct fdtable *table = current->files;
+    lock(&table->lock, 0);
+    struct fd *at = fdtable_get(table, dirfd);
+    if (at != NULL) {
+        fd_retain(at);
+        exe->path_inaccessible = bit_test(dirfd, table->cloexec);
+    }
+    unlock(&table->lock);
+    if (at == NULL)
+        return _EBADF;
+    exe->at = at;
+    exe->fdpath = true;
+    if (name[0] == '\0')
+        snprintf(fdpath, fdpath_size, "/dev/fd/%d", dirfd);
+    else
+        snprintf(fdpath, fdpath_size, "/dev/fd/%d/%s", dirfd, name);
+    exe->filename = fdpath;
+    return 0;
+}
+
+static void exec_file_release(struct exec_file *exe) {
+    if (exe->at != AT_PWD)
+        fd_close(exe->at);
 }
 
 ssize_t sys_execveat(fd_t dirfd, addr_t filename_addr, addr_t argv_addr, addr_t envp_addr, int_t flags) {
@@ -2862,38 +2992,17 @@ ssize_t sys_execveat(fd_t dirfd, addr_t filename_addr, addr_t argv_addr, addr_t 
     if (err < 0)
         return err;
 
-    char resolved[MAX_PATH];
-    if (filename[0] == '\0') {
-        if (!(flags & AT_EMPTY_PATH_)) {
-            err = _ENOENT;
-            goto out_free_args;
-        }
-        struct fd *fd = (dirfd == AT_FDCWD_) ? AT_PWD : f_get(dirfd);
-        if (fd == NULL) {
-            err = _EBADF;
-            goto out_free_args;
-        }
-        err = generic_getpath(fd, resolved);
-        if (err < 0)
-            goto out_free_args;
-    } else if (filename[0] == '/') {
-        strcpy(resolved, filename);
-    } else {
-        struct fd *at = (dirfd == AT_FDCWD_) ? AT_PWD : f_get(dirfd);
-        if (at == NULL) {
-            err = _EBADF;
-            goto out_free_args;
-        }
-        err = path_normalize(at, filename, resolved,
-                (flags & AT_SYMLINK_NOFOLLOW_) ? N_SYMLINK_NOFOLLOW : N_SYMLINK_FOLLOW);
-        if (err < 0)
-            goto out_free_args;
-    }
+    char fdpath[MAX_PATH + 32];
+    struct exec_file exe;
+    err = exec_file_at(&exe, dirfd, filename, flags, fdpath, sizeof(fdpath));
+    if (err < 0)
+        goto out_free_args;
 
     STRACE("execveat(%d, \"%s\", ..., %#x)", dirfd, filename, flags);
-    amd64_trace_exec_attempt(resolved, argv);
-    err = do_execve_args(resolved, (struct exec_args) {.count = (size_t) argc, .args = argv},
+    amd64_trace_exec_attempt(exe.filename, argv);
+    err = do_execve_args(&exe, (struct exec_args) {.count = (size_t) argc, .args = argv},
             (struct exec_args) {.count = (size_t) envc, .args = envp});
+    exec_file_release(&exe);
 
 out_free_args:
     free(envp);
@@ -2927,35 +3036,13 @@ ssize_t sys_execveat_guest(fd_t dirfd, guest_addr_t filename_addr, guest_addr_t 
     if (err < 0)
         return err;
 
-    char resolved[MAX_PATH];
-    if (filename[0] == '\0') {
-        if (!(flags & AT_EMPTY_PATH_)) {
-            err = _ENOENT;
-            goto out_free_args;
-        }
-        struct fd *fd = (dirfd == AT_FDCWD_) ? AT_PWD : f_get(dirfd);
-        if (fd == NULL) {
-            err = _EBADF;
-            goto out_free_args;
-        }
-        err = generic_getpath(fd, resolved);
-        if (err < 0)
-            goto out_free_args;
-    } else if (filename[0] == '/') {
-        strcpy(resolved, filename);
-    } else {
-        struct fd *at = (dirfd == AT_FDCWD_) ? AT_PWD : f_get(dirfd);
-        if (at == NULL) {
-            err = _EBADF;
-            goto out_free_args;
-        }
-        err = path_normalize(at, filename, resolved,
-                (flags & AT_SYMLINK_NOFOLLOW_) ? N_SYMLINK_NOFOLLOW : N_SYMLINK_FOLLOW);
-        if (err < 0)
-            goto out_free_args;
-    }
+    char fdpath[MAX_PATH + 32];
+    struct exec_file exe;
+    err = exec_file_at(&exe, dirfd, filename, flags, fdpath, sizeof(fdpath));
+    if (err < 0)
+        goto out_free_args;
 
-    STRACE("execveat(%d, \"%.1000s\", {", dirfd, resolved);
+    STRACE("execveat(%d, \"%.1000s\", {", dirfd, filename);
     const char *args = argv;
     for (ssize_t i = 0; i < argc; i++, args += strlen(args) + 1)
         STRACE("\"%.1000s\", ", args);
@@ -2965,9 +3052,10 @@ ssize_t sys_execveat_guest(fd_t dirfd, guest_addr_t filename_addr, guest_addr_t 
         STRACE("\"%.1000s\", ", args);
     STRACE("}, %d)", flags);
 
-    amd64_trace_exec_attempt(resolved, argv);
-    err = do_execve_args(resolved, (struct exec_args) {.count = (size_t) argc, .args = argv},
+    amd64_trace_exec_attempt(exe.filename, argv);
+    err = do_execve_args(&exe, (struct exec_args) {.count = (size_t) argc, .args = argv},
             (struct exec_args) {.count = (size_t) envc, .args = envp});
+    exec_file_release(&exe);
 
 out_free_args:
     free(envp);

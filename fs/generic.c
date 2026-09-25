@@ -959,8 +959,15 @@ struct fd *generic_open(const char *path, int flags, int mode) {
 // path already contains any chroot prefix, so it must anchor at the REAL
 // root -- re-resolving it through the caller's chroot double-applied the
 // prefix and broke procfd reopen and fsmount inside chroots.
+//
+// And it may enter a detached mount's staging point (N_DETACHED_OK): a path
+// that starts there is the path of a descriptor in that mount, since nothing
+// else can produce one. Without it a /proc/self/fd/N reopen of such a file
+// fell back to handing out the caller's own description, and refused a mode
+// that description did not have -- an O_RDWR reopen of an O_RDONLY
+// descriptor was EACCES where Linux opens the file afresh.
 struct fd *generic_open_realroot(const char *path, int flags, int mode) {
-    return generic_openat_norm(AT_PWD, path, flags, mode, N_REALROOT);
+    return generic_openat_norm(AT_PWD, path, flags, mode, N_REALROOT | N_DETACHED_OK);
 }
 
 // A descriptor opened through a bind mount has the bind's ORIGIN as its mount
