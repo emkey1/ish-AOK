@@ -143,6 +143,21 @@ static int p_cmov(void) {
     return 0;
 }
 
+// CLFLUSH (0f ae /7) has no visible effect to check -- there is nothing for an
+// emulator to write back, and a real CPU's flush is invisible to the program
+// too -- so the witness is the instruction LENGTH instead. The disp32 form
+// (modrm 0xbf, then four displacement bytes) is followed by a MOV whose result
+// is checked: a decoder that sized CLFLUSH wrongly would run the displacement
+// as code and land somewhere other than that MOV.
+static int p_clflush(void) {
+    static char line[128] __attribute__((aligned(64)));
+    unsigned long out = 0;
+    __asm__ volatile(".byte 0x0f, 0xae, 0xbf\n\t.long 0x40\n\t"
+                     "mov $0x5a5a, %0"
+                     : "=r"(out) : "D"(line) : "memory");
+    return out == 0x5a5a ? 0 : 1;
+}
+
 static int p_mmx(void) {
     __asm__ volatile("pxor %%mm0,%%mm0\n\temms" : : : "memory");
     return 0;
@@ -380,6 +395,7 @@ static const struct feature features[] = {
     { "tsc",                1, 0, 'd',  4, p_tsc,        0 },
     { "cx8",                1, 0, 'd',  8, p_cx8,        0 },
     { "cmov",               1, 0, 'd', 15, p_cmov,       0 },
+    { "clflush",            1, 0, 'd', 19, p_clflush,    0 },
     { "mmx",                1, 0, 'd', 23, p_mmx,        0 },
     { "fxsr",               1, 0, 'd', 24, p_fxsr,       0 },
     { "sse",                1, 0, 'd', 25, p_sse,        0 },

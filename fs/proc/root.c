@@ -129,9 +129,9 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
     enum guest_abi abi = current != NULL ? current->abi : GUEST_ABI_I386;
     struct guest_abi_desc abi_desc = guest_abi_desc(abi);
     dword_t eax = 0;
-    dword_t ebx;
-    dword_t ecx;
-    dword_t edx;
+    dword_t ebx = 0;
+    dword_t ecx = 0; // a subleaf on the way in
+    dword_t edx = 0;
 
     // arm64 guests get the aarch64 cpuinfo format (implementer/part/
     // Features), not the x86 one — tools parse "Features" for the same
@@ -207,7 +207,19 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
     dword_t cpuid_level = eax;
 
     eax = 1;
+    ecx = 0;
     do_cpuid(&eax, &ebx, &ecx, &edx);
+    // Family, model and stepping come from the signature, decoded the way
+    // Linux's x86_family()/x86_model() do it, so this file and CPUID cannot
+    // disagree. They used to be written out here by hand, and said family 6
+    // model 85 while CPUID said family 0.
+    unsigned cpu_family = (eax >> 8) & 0xf;
+    unsigned cpu_model = (eax >> 4) & 0xf;
+    if (cpu_family == 0xf)
+        cpu_family += (eax >> 20) & 0xff;
+    if (cpu_family >= 6)
+        cpu_model |= ((eax >> 16) & 0xf) << 4;
+    unsigned cpu_stepping = eax & 0xf;
 
     char cpu_flags[512] = { 0 };
     format_cpuid_flags(cpu_flags, sizeof(cpu_flags));
@@ -225,11 +237,11 @@ static int proc_show_cpuinfo(struct proc_entry *UNUSED(entry), struct proc_data 
     for( i=0; i<cpu_count ; i++ ) {
         proc_printf(buf, "processor       : %d\n",i);
         proc_printf(buf, "vendor_id       : %s\n", vendor_id);
-        proc_printf(buf, "cpu family      : %d\n", guest_abi_is_64bit(abi) ? 6 : 1);
-        proc_printf(buf, "model           : %d\n", guest_abi_is_64bit(abi) ? 85 : 1);
+        proc_printf(buf, "cpu family      : %u\n", cpu_family);
+        proc_printf(buf, "model           : %u\n", cpu_model);
         proc_printf(buf, "model name      : iSH Virtual %s-compatible CPU @ 1.066GHz\n",
                     abi_desc.uname_machine);
-        proc_printf(buf, "stepping        : %d\n",1);
+        proc_printf(buf, "stepping        : %u\n", cpu_stepping);
         proc_printf(buf, "CPU MHz         : 1066.00\n");
         proc_printf(buf, "cache size      : %d kb\n",0);
         proc_printf(buf, "physical id     : %d\n",0);

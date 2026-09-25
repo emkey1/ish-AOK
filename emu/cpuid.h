@@ -144,10 +144,67 @@ static inline dword_t cpuid_leaf1_edx_features(void) {
         | (1 << 4)    // tsc
         | (1 << 8)    // cx8
         | (1 << 15)   // cmov
+        // CLFLUSH (0F AE /7 mem) is a no-op in both engines -- the amd64 one in
+        // amd64_fxsave_op, which the JIT reaches through its 0f-rm bridge, and
+        // the i386 one in emu/decode.h's 0f ae group -- and a no-op is the
+        // correct emulation: there is one coherent view of guest memory, so
+        // there is no cache line to write back. HotSpot's x86_64 build refuses
+        // to start without this bit and the line size in leaf 1 EBX.
+        | (1 << 19)   // clflush
         | (1 << 23)   // mmx
         | (1 << 24)   // fxsr
         | (1 << 25)   // sse
         | (1 << 26);  // sse2
+}
+
+// Leaf 1 EAX, the processor signature: family 6, model 0, stepping 0.
+//
+// This was 0, and family 0 is not a harmless "unknown". Software treats a
+// family of 4 or below as a 486 or older, and HotSpot is the one that matters:
+// VM_Version::get_processor_features reads the feature bits only when
+// cpu_family() > 4, so every JVM saw no SSE2 at all and the x86_64 build
+// refused to start.
+//
+// Family 6 because every Intel core since the Pentium Pro is family 6. Model
+// 0 because no family-6 part uses it, and that is the point: software that
+// keys tuning on the model number finds nothing to key on and falls back to
+// the feature bits, exactly as it did at family 0. So the only thing that
+// moves is the "family > 4" kind of test. A real model is not neutral:
+//   - glibc 2.41 marks model 0x55 (Skylake-SP, which /proc/cpuinfo used to
+//     claim) Avoid_Non_Temporal_Memset, and that moves memset's ifunc from
+//     __memset_sse2_unaligned_erms to __memset_sse2_unaligned. Nehalem and
+//     Westmere models turn on Fast_Unaligned_Copy and friends, which move
+//     memmove and the strcpy family. The Atom models move more.
+//     `ld.so --list-diagnostics` in an amd64 glibc root shows the difference:
+//     at model 0 the only lines that change are the family and the raw
+//     leaf-1 words (and CLFSH, now set).
+//   - HotSpot pads every jump in generated code on the JCC-erratum models
+//     (compute_has_intel_jcc_erratum), and keys other choices on Skylake.
+//   - gcc's -march=native names a microarchitecture from a known model and
+//     guesses one from the feature bits otherwise. At model 0 gcc 14 passes
+//     the same -m/-mno- list as it did at family 0, and names it nehalem
+//     rather than core2.
+// Both guest ABIs get it: a 32-bit HotSpot has the same family > 4 test and
+// otherwise runs with no SSE at all.
+#define CPUID_SIGNATURE_FAMILY_   6u
+#define CPUID_SIGNATURE_MODEL_    0u
+#define CPUID_SIGNATURE_STEPPING_ 0u
+
+static inline dword_t cpuid_leaf1_eax_signature(void) {
+    // Family 6 keeps the model's high nibble in the extended-model field,
+    // bits 19:16; the extended family (27:20) is used only for family 15.
+    return ((CPUID_SIGNATURE_MODEL_ >> 4) << 16)
+        | (CPUID_SIGNATURE_FAMILY_ << 8)
+        | ((CPUID_SIGNATURE_MODEL_ & 0xf) << 4)
+        | CPUID_SIGNATURE_STEPPING_;
+}
+
+// Leaf 1 EBX: APIC ID 0 in 31:24, no logical-processor count in 23:16 (HTT is
+// not advertised, so it would mean nothing), and the CLFLUSH line size in
+// 15:8, counted in 8-byte units: 8 = 64 bytes, which is what every x86_64
+// part reports and the only value HotSpot accepts.
+static inline dword_t cpuid_leaf1_ebx(void) {
+    return 8u << 8;
 }
 
 // Leaf 7 subleaf 0: the structured extended feature flags. Everything here is
@@ -255,8 +312,8 @@ static inline void do_cpuid(dword_t *eax, dword_t *ebx, dword_t *ecx, dword_t *e
             *ecx = 0x6c65746e; // ntel
             break;
         case 1:
-            *eax = 0x0; // say nothing about cpu model number
-            *ebx = 0x0; // processor number 0, flushes 0 bytes on clflush
+            *eax = cpuid_leaf1_eax_signature();
+            *ebx = cpuid_leaf1_ebx();
             *ecx = cpuid_leaf1_ecx_features();
             *edx = cpuid_leaf1_edx_features();
             break;
