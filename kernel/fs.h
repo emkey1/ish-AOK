@@ -63,7 +63,13 @@ struct fd *generic_openat_norm(struct fd *at, const char *path, int flags, int m
 // For stored, already-normalized paths (chroot prefix included): anchors at
 // the real root instead of the caller's chroot. See fs/generic.c.
 struct fd *generic_open_realroot(const char *path, int flags, int mode);
+// The descriptor's full path, through the mount it was opened on: for one
+// opened through a bind, the bind's path, as Linux's d_path gives it.
 int generic_getpath(struct fd *fd, char *buf);
+// The same file's path on the mount that backs it, ignoring any bind it was
+// opened through. For a path that has to outlive the guest's binds: a
+// checkpoint restore reopens by path in a boot that never made them.
+int generic_getpath_backing(struct fd *fd, char *buf);
 int fs_rebase_path_to_root(struct fs_info *fs, char *path);
 int fs_rebase_readlink_path(struct fs_info *fs, char *path);
 // src_norm are the fs/path.h N_* flags the SOURCE is resolved with: which of
@@ -243,6 +249,10 @@ struct mount_info {
 int mount_snapshot(struct mount_info **out, size_t *count_out);
 // A mount's ID, as mountinfo and statx report it; see fs/mount.c.
 int mount_id(struct mount *mount);
+// Rewrite an origin-relative path to its full path through a bind mount of
+// that origin, found by ID; false if that bind no longer shows it. Takes
+// mounts_lock. See fs/mount.c.
+bool mount_path_through_bind(int bind_id, const struct mount *origin, char *path);
 // The st_dev files on this mount report, i.e. mountinfo's device field; asks
 // the filesystem rather than assuming, since only backing-less filesystems use
 // mount->fake_dev. Follows a bind to its origin. See fs/mount.c.

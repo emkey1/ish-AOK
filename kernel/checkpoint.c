@@ -1134,7 +1134,6 @@ static uint64_t ckpt_fd_offset(struct fd *fd) {
     return fd->offset;
 }
 
-// One descriptor, classified. Returns the kind, or 0 with a refusal recorded.
 // A terminal record's identity: its driver major and its number, as one value
 // in the record's offset field. 0 is "not known" -- a descriptor with no tty
 // behind it.
@@ -1142,6 +1141,15 @@ static uint64_t ckpt_tty_identity(int type, int num) {
     return ((uint64_t) (uint32_t) type << 32) | (uint32_t) num;
 }
 
+// One descriptor, classified. Returns the kind, or 0 with a refusal recorded.
+//
+// Every path this file records -- descriptors, cwd, root, exe -- is
+// generic_getpath_backing's, not generic_getpath's. The restore reopens by
+// path in a fresh boot, and the only mounts it puts back are the boot's own
+// and the tmpfses in the image; a bind the guest made is not among them. So a
+// descriptor opened through /tmp/bp-dst has to be recorded as the /tmp/bp-src
+// that holds it, which the restore can reach, not as the bind path Linux
+// would print for it, which on restore is an empty mount-point directory.
 static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size) {
     // Descriptors with no file behind them, identified by what they ARE rather
     // than by what they look like. Before this they reached the standard-
@@ -1176,7 +1184,7 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
     // talking to a terminal nobody is looking at.
     if ((fd->ops != NULL && fd->ops->name != NULL &&
                 strcmp(fd->ops->name, "devpts") == 0) || fd_tty(fd) != NULL) {
-        if (generic_getpath(fd, path) < 0 || path[0] != '/')
+        if (generic_getpath_backing(fd, path) < 0 || path[0] != '/')
             path[0] = '\0';
         // A pty whose MASTER a guest process holds is the image's own, not the
         // terminal this run is looking at. tty->type is the driver's major.
@@ -1219,7 +1227,7 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
     // opened again, and they are NOT the terminal case above: treating
     // /dev/null as a console gave a backgrounded `sleep &` a tty for stdin,
     // which is the opposite of what putting it on /dev/null was for.
-    if (S_ISCHR(fd->type) && generic_getpath(fd, path) >= 0 && path[0] == '/')
+    if (S_ISCHR(fd->type) && generic_getpath_backing(fd, path) >= 0 && path[0] == '/')
         return CKPT_FD_CHR;
     // A pipe. AOK's pipes are HOST pipes with a struct fd over each end
     // (fs/pipe.c), so what has to travel is the pairing, the direction and
@@ -1231,7 +1239,7 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
     // sysvinit's /run/initctl came back as /dev/null, so every telinit and
     // shutdown request after a restore went nowhere.
     if (S_ISFIFO(fd->type) && fd->ops != &realfs_fdops &&
-            generic_getpath(fd, path) >= 0 && path[0] == '/')
+            generic_getpath_backing(fd, path) >= 0 && path[0] == '/')
         return CKPT_FD_FIFO;
     if (S_ISFIFO(fd->type) && fd->ops == &realfs_fdops && fd->real_fd >= 0 &&
             fd->stat.inode != 0)
@@ -1251,7 +1259,7 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
                     family);
         return 0;
     }
-    int err = generic_getpath(fd, path);
+    int err = generic_getpath_backing(fd, path);
     if (err < 0 || path[0] != '/') {
         ckpt_refuse("fd %d on %s has no path to re-open", num, family);
         return 0;
@@ -2416,7 +2424,7 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
                 tty_winsize = fd_terminal->winsize;
                 unlock(&fd_terminal->lock);
                 char p[MAX_PATH + 1];
-                if (generic_getpath(s->fd, p) >= 0 && p[0] == '/')
+                if (generic_getpath_backing(s->fd, p) >= 0 && p[0] == '/')
                     snprintf(tty_path, sizeof(tty_path), "%s", p);
                 else
                     tty_path[0] = '\0';
@@ -2463,16 +2471,16 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
     char cwd[MAX_PATH + 1] = "/", root[MAX_PATH + 1] = "/";
     lock(&task->fs->lock, 0);
     if (task->fs->pwd != NULL)
-        generic_getpath(task->fs->pwd, cwd);
+        generic_getpath_backing(task->fs->pwd, cwd);
     if (task->fs->root != NULL)
-        generic_getpath(task->fs->root, root);
+        generic_getpath_backing(task->fs->root, root);
     mode_t_ umask = task->fs->umask;
     unlock(&task->fs->lock);
     // Only where the address space is recorded. A native program's counts: its
     // mm names the /AOK/native entry it was exec'd through.
     char exe[MAX_PATH + 1] = "";
     if (sh->mm == 0 && task->mm != NULL && task->mm->exefile != NULL &&
-            generic_getpath(task->mm->exefile, exe) < 0)
+            generic_getpath_backing(task->mm->exefile, exe) < 0)
         exe[0] = '\0';
 
     struct ckpt_task rec = {

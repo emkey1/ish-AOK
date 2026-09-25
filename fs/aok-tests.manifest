@@ -80,6 +80,7 @@ keyctl_link.c
 mountinfo_epollet.c
 mountinfo_tree.c
 mount_bind_id.c
+mount_bind_getpath.c
 chroot_dotdot.c
 proc_net_socket_ids.c
 tmpfs_nlink.c

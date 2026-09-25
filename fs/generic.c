@@ -932,35 +932,58 @@ struct fd *generic_open_realroot(const char *path, int flags, int mode) {
     return generic_openat_norm(AT_PWD, path, flags, mode, N_REALROOT);
 }
 
-int generic_getpath(struct fd *fd, char *buf) {
+// A descriptor opened through a bind mount has the bind's ORIGIN as its mount
+// (find_mount_and_trim_path_seen redirects to it for storage), so the path its
+// filesystem reports is relative to the origin, and joining it to the
+// origin's point named the bind's source: after `mount --bind /tmp/bp-src
+// /tmp/bp-dst; cd /tmp/bp-dst`, getcwd and /proc/self/cwd said /tmp/bp-src
+// where Linux says /tmp/bp-dst. fd->mnt_id still names the bind, so the path
+// is re-expressed through it. That matters beyond what gets printed: every
+// relative lookup starts from this path (fs/path.c path_normalize), and
+// starting from the source's put it on the source's mount -- a read-only bind
+// was writable from a cwd inside it, a mount inside the bind was hidden from
+// relative names, and a bind of an outside directory into a chroot left a cwd
+// in it outside the jail, where `..` walked on out. `through_bind` false is
+// generic_getpath_backing.
+static int getpath_common(struct fd *fd, char *buf, bool through_bind) {
+    struct mount *mount;
     if (fd_is_opath_link(fd)) {
-        struct mount *mount = fd->opath_link.mount;
-        size_t point_len = mount->point_len;
+        mount = fd->opath_link.mount;
         size_t path_len = strlen(fd->opath_link.path);
-        if (point_len + path_len >= MAX_PATH)
+        if (mount->point_len + path_len >= MAX_PATH)
             return _ENAMETOOLONG;
-        memcpy(buf, mount->point, point_len);
-        memcpy(buf + point_len, fd->opath_link.path, path_len + 1);
-        if (buf[0] == '\0')
-            memcpy(buf, "/", 2);
-        return 0;
-    }
-    if(fd->ops != NULL) {
-        int err = fd->mount->fs->getpath(fd, buf);
+        memcpy(buf, fd->opath_link.path, path_len + 1);
+    } else if (fd->ops != NULL) {
+        mount = fd->mount;
+        int err = mount->fs->getpath(fd, buf);
         if (err < 0)
             return err;
-        size_t point_len = fd->mount->point_len;
+    } else {
+        return _EBADF;
+    }
+    // Once the bind is gone -- unmounted, which a descriptor inside it does
+    // not prevent here -- this falls back to the path on the origin, which
+    // still names the file.
+    bool on_bind = through_bind && fd->mnt_id != 0 && fd->mnt_id != mount_id(mount);
+    if (!on_bind || !mount_path_through_bind(fd->mnt_id, mount, buf)) {
+        size_t point_len = mount->point_len;
         size_t buf_len = strlen(buf);
         if (buf_len + point_len >= MAX_PATH)
             return _ENAMETOOLONG;
         memmove(buf + point_len, buf, buf_len + 1);
-        memcpy(buf, fd->mount->point, point_len);
-        if (buf[0] == '\0')
-            memcpy(buf, "/", 2);
-        return 0;
-    } else {
-        return -EBADF;
+        memcpy(buf, mount->point, point_len);
     }
+    if (buf[0] == '\0')
+        memcpy(buf, "/", 2);
+    return 0;
+}
+
+int generic_getpath(struct fd *fd, char *buf) {
+    return getpath_common(fd, buf, true);
+}
+
+int generic_getpath_backing(struct fd *fd, char *buf) {
+    return getpath_common(fd, buf, false);
 }
 
 int generic_accessat(struct fd *dirfd, const char *path_raw, int mode) {

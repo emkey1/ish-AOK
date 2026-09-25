@@ -208,6 +208,42 @@ int mount_id(struct mount *mount) {
     return mount->id > 0 ? mount->id : MOUNT_ID_HIDDEN;
 }
 
+// Re-express `path`, relative to `origin`, as it is seen through the bind
+// mount with ID `bind_id`: the bind's point, then what follows the bind's
+// source in `path`. In place; `path` is a MAX_PATH buffer. False, leaving
+// `path` alone, when there is no such bind any more (unmounted, lazily or
+// not: a descriptor holds its origin, not the bind), when it is not a bind of
+// `origin`, or when `path` is no longer under its source because the file was
+// renamed out from under it.
+//
+// By ID under mounts_lock rather than by a pointer the descriptor keeps,
+// since a descriptor holds no reference on the bind, and IDs are never
+// reused. The lock also covers bind->point, which MS_MOVE replaces.
+bool mount_path_through_bind(int bind_id, const struct mount *origin, char *path) {
+    bool done = false;
+    lock(&mounts_lock, 0);
+    struct mount *mount;
+    list_for_each_entry(&mounts, mount, mounts) {
+        if (mount->id != bind_id)
+            continue;
+        if (mount->bind_origin != origin)
+            break;
+        size_t prefix_len = strlen(mount->bind_prefix);
+        if (strncmp(path, mount->bind_prefix, prefix_len) != 0 ||
+                (path[prefix_len] != '\0' && path[prefix_len] != '/'))
+            break;
+        size_t rest_len = strlen(path + prefix_len);
+        if (mount->point_len + rest_len >= MAX_PATH)
+            break;
+        memmove(path + mount->point_len, path + prefix_len, rest_len + 1);
+        memcpy(path, mount->point, mount->point_len);
+        done = true;
+        break;
+    }
+    unlock(&mounts_lock);
+    return done;
+}
+
 static int mount_compare_id(const void *a, const void *b) {
     int x = (*(struct mount *const *) a)->id;
     int y = (*(struct mount *const *) b)->id;
