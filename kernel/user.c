@@ -116,7 +116,12 @@ static bool user_range_valid_mem(struct task *task, struct mem *mem, guest_addr_
     return PAGE(last) < mem->page_limit;
 }
 
-static int __user_read_task_mem(struct task *task, struct mem *mem, guest_addr_t addr, void *buf, size_t count) {
+// `ptrace`: a debugger's forced read (PTRACE_PEEK*, /proc/<pid>/mem), which a
+// PROT_NONE page does not refuse -- see MEM_READ_PTRACE. A debugger reads
+// wherever it is pointed, a file page past the end of its file included, so its
+// copies go through mem_host_copy: that page is EIO, as on Linux, where a plain
+// memcpy took a host SIGBUS that killed the app.
+static int __user_read_task_mem(struct task *task, struct mem *mem, guest_addr_t addr, void *buf, size_t count, bool ptrace) {
     if (!user_range_valid_mem(task, mem, addr, count))
         return 1;
     char *cbuf = (char *) buf;
@@ -127,11 +132,14 @@ static int __user_read_task_mem(struct task *task, struct mem *mem, guest_addr_t
         if (chunk_end > end)
             chunk_end = end;
   
-        const char *ptr = mem_ptr(mem, p, MEM_READ);
+        const char *ptr = mem_ptr(mem, p, ptrace ? MEM_READ_PTRACE : MEM_READ);
         
         if (ptr == NULL)
             return 1;
-        memcpy(&cbuf[p - addr], ptr, chunk_end - p);
+        if (!ptrace)
+            memcpy(&cbuf[p - addr], ptr, chunk_end - p);
+        else if (!mem_host_copy(&cbuf[p - addr], ptr, chunk_end - p))
+            return 1;
         p = (guest_addr_t) chunk_end;
     }
     return 0;
@@ -158,29 +166,52 @@ static int __user_write_task_mem(struct task *task, struct mem *mem, guest_addr_
             if (ptr == NULL)
                 return 1;
         }
-        memcpy(ptr, &cbuf[p - addr], chunk_end - p);
+        // A forced write can land in place in a writable file page past the
+        // end of its file, like the read above.
+        if (!ptrace)
+            memcpy(ptr, &cbuf[p - addr], chunk_end - p);
+        else if (!mem_host_copy(ptr, &cbuf[p - addr], chunk_end - p))
+            return 1;
         p = (guest_addr_t) chunk_end;
     }
     return 0;
 }
 
-int user_read_task(struct task *task, guest_addr_t addr, void *buf, size_t count) {
+static int user_read_task_internal(struct task *task, guest_addr_t addr, void *buf, size_t count,
+                                   bool ptrace) {
     struct task_mem_read_handle handle;
     struct mem *mem = task_mem_read_lock(task, &handle);
     if (mem == NULL)
         return 1;
-    int res = __user_read_task_mem(task, mem, addr, buf, count);
+    int res = __user_read_task_mem(task, mem, addr, buf, count, ptrace);
     task_mem_read_unlock(&handle);
     return res;
 }
 
-int user_read_task_mem(struct task *task, struct mem *mem, guest_addr_t addr, void *buf, size_t count) {
+int user_read_task(struct task *task, guest_addr_t addr, void *buf, size_t count) {
+    return user_read_task_internal(task, addr, buf, count, false);
+}
+
+int user_read_task_ptrace(struct task *task, guest_addr_t addr, void *buf, size_t count) {
+    return user_read_task_internal(task, addr, buf, count, true);
+}
+
+static int user_read_task_mem_internal(struct task *task, struct mem *mem, guest_addr_t addr,
+                                       void *buf, size_t count, bool ptrace) {
     if (mem == NULL)
         return 1;
     mem_read_lock_quiesce_aware(mem);
-    int res = __user_read_task_mem(task, mem, addr, buf, count);
+    int res = __user_read_task_mem(task, mem, addr, buf, count, ptrace);
     mem_read_unlock_quiesce_aware(mem);
     return res;
+}
+
+int user_read_task_mem(struct task *task, struct mem *mem, guest_addr_t addr, void *buf, size_t count) {
+    return user_read_task_mem_internal(task, mem, addr, buf, count, false);
+}
+
+int user_read_task_ptrace_mem(struct task *task, struct mem *mem, guest_addr_t addr, void *buf, size_t count) {
+    return user_read_task_mem_internal(task, mem, addr, buf, count, true);
 }
 
 int user_read(guest_addr_t addr, void *buf, size_t count) {
@@ -617,7 +648,7 @@ int user_read_string(guest_addr_t addr, char *buf, size_t max) {
             task_mem_read_unlock(&handle);
             return 1;
         }
-        if (__user_read_task_mem(current, mem, addr + i, &buf[i], sizeof(buf[i]))) {
+        if (__user_read_task_mem(current, mem, addr + i, &buf[i], sizeof(buf[i]), false)) {
             task_mem_read_unlock(&handle);
             return 1;
         }
@@ -652,7 +683,7 @@ int user_read_path(guest_addr_t addr, char *buf, size_t max) {
             task_mem_read_unlock(&handle);
             return _EFAULT;
         }
-        if (__user_read_task_mem(current, mem, addr + i, &buf[i], sizeof(buf[i]))) {
+        if (__user_read_task_mem(current, mem, addr + i, &buf[i], sizeof(buf[i]), false)) {
             task_mem_read_unlock(&handle);
             return _EFAULT;
         }

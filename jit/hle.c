@@ -572,7 +572,11 @@ static bool hle_module_and_bias(guest_addr_t ip, enum guest_abi abi,
     if (pt == NULL || pt->data == NULL)
         return false;
     struct data *data = pt->data;
-    if (data->fd == NULL)
+    // Not a page copied off the file (struct data::copied): a debugger's
+    // breakpoint at a libc function's entry lives in exactly such a copy, and
+    // attaching by the file's symbol table would run the function straight
+    // past it.
+    if (data->fd == NULL || data->copied)
         return false;
     struct hle_module *m = hle_mapping_module(data, abi);
     if (m == NULL)
@@ -580,9 +584,9 @@ static bool hle_module_and_bias(guest_addr_t ip, enum guest_abi abi,
     // Bias from the live mapping: this page's guest address minus the vaddr
     // its file offset corresponds to.
     uint64_t page_guest = (uint64_t) PAGE(ip) << PAGE_BITS;
-    // pt->offset is the byte offset of this page within data's allocation;
-    // data->file_offset is the file offset the allocation starts at.
-    uint64_t page_file_off = (uint64_t) data->file_offset + pt->offset;
+    // pt->offset is the byte offset of this page within data's allocation,
+    // which starts map_offset bytes before the mapping's first page.
+    uint64_t page_file_off = (uint64_t) data_file_offset(data, pt->offset);
     uint64_t page_vaddr = ~0ull;
     for (unsigned i = 0; i < m->nloads; i++) {
         const struct hle_load *l = &m->loads[i];

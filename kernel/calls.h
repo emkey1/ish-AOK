@@ -29,6 +29,12 @@ int must_check user_read(guest_addr_t addr, void *buf, size_t count);
 int must_check user_write(guest_addr_t addr, const void *buf, size_t count);
 int must_check user_read_task(struct task *task, guest_addr_t addr, void *buf, size_t count);
 int must_check user_read_task_mem(struct task *task, struct mem *mem, guest_addr_t addr, void *buf, size_t count);
+// A debugger's forced reads and writes (PTRACE_PEEK*/POKE*, /proc/<pid>/mem):
+// through the tracee's page protections for that one access, as Linux's
+// FOLL_FORCE. A forced write copies a private page it may not write and leaves
+// it exactly as protected as it was (MEM_WRITE_PTRACE, emu/memory.c).
+int must_check user_read_task_ptrace(struct task *task, guest_addr_t addr, void *buf, size_t count);
+int must_check user_read_task_ptrace_mem(struct task *task, struct mem *mem, guest_addr_t addr, void *buf, size_t count);
 int must_check user_write_task_mem(struct task *task, struct mem *mem, guest_addr_t addr, const void *buf, size_t count);
 int must_check user_write_task(struct task *task, guest_addr_t addr, const void *buf, size_t count);
 int must_check user_write_task_ptrace(struct task *task, guest_addr_t addr, const void *buf, size_t count);

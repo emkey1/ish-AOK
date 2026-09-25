@@ -860,6 +860,18 @@ int_t sys_munmap(addr_t addr, uint_t len) {
 #define MREMAP_MAYMOVE_ 1
 #define MREMAP_FIXED_ 2
 
+// The file offset of the page just past [start, start + pages), a file mapping
+// whose first page's struct data is `data`: counted from that page's own
+// offset, which is not the mapping's first page's once an mprotect or munmap
+// has split the mapping.
+static qword_t mremap_tail_file_offset(struct mem *mem, page_t start, pages_t pages,
+        struct data *data) {
+    struct pt_entry *pt = mem_pt(mem, start);
+    if (data == NULL || pt == NULL || pt->data != data)
+        return 0;
+    return (qword_t) data_file_offset(data, pt->offset) + ((qword_t) pages << PAGE_BITS);
+}
+
 // Map the freshly-grown tail of a file-backed mapping during an mremap grow. The extra
 // pages continue the same file at file_offset; the existing pages are left untouched (the
 // caller pt_moves them when relocating), which preserves both MAP_SHARED contents and any
@@ -1056,8 +1068,8 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
                 res = _EFAULT;
                 goto out;
             }
-            qword_t extra_file_offset = backing_data != NULL
-                    ? backing_data->file_offset + ((qword_t) old_pages << PAGE_BITS) : 0;
+            qword_t extra_file_offset = mremap_tail_file_offset(current->mem, src_page,
+                    old_pages, backing_data);
             pages_t extra_pages = new_pages - old_pages;
             err = is_file
                     ? mremap_map_file_extra(current->mem, dest_page + old_pages, extra_pages, backing_fd, extra_file_offset, pt_flags)
@@ -1126,8 +1138,8 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
     // mappings whose fd we retained (data->fd) are growable this way.
     bool is_file = !(pt_flags & P_ANONYMOUS);
     struct fd *backing_fd = is_file && backing_data != NULL ? backing_data->fd : NULL;
-    qword_t extra_file_offset = backing_data != NULL
-            ? backing_data->file_offset + ((qword_t) old_pages << PAGE_BITS) : 0;
+    qword_t extra_file_offset = mremap_tail_file_offset(current->mem, PAGE(addr), old_pages,
+            backing_data);
     if (is_file && (backing_fd == NULL || backing_fd->ops->mmap == NULL)) {
         FIXME("mremap grow on a mapping with no growable backing fd");
         res = _EFAULT;

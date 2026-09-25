@@ -1005,6 +1005,13 @@ so does the write direction: a `read()` INTO such a page of a writable private
 mapping ends the app the same way, where Linux returns EFAULT. kernel/futex.c
 reads the futex word through a bare `mem_ptr` too (not measured).
 
+Closed since for a debugger's forced access and for copy-on-write breaks (commit
+"mem: a debugger's write leaves the page as protected as it was"): a read or
+write through `/proc/<pid>/mem`, `PTRACE_PEEK*`/`POKE*`, and the copy a store
+after fork makes of such a page go through `mem_host_copy` (emu/memory.c), and
+answer EIO, EIO and SIGBUS as on Linux. `write()`, `read()` into it,
+`process_vm_readv` and futex are still open.
+
 What is known about detecting it: `write()` of one byte of the page into a
 pipe fails with EFAULT and sends no signal, on Darwin and Linux alike, at 3.8 us
 per 16 KiB host page; the save uses exactly that. It does not cover stores: on

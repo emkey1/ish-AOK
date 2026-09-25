@@ -1003,20 +1003,47 @@ static void emit_pending_maps(struct proc_data *buf, struct mem_lazy_map *pendin
     }
 }
 
-// Whether `pt` belongs to the region `start` began, by the rule Linux merges
-// VMAs by: the same mapping, or plain anonymous memory on both sides. A NAMED
-// one -- [vdso], [vvar], [sigpage] -- is a special mapping, which Linux never
-// merges with a neighbour; a 64-bit process's vDSO lands right below its
-// [sigpage], and merged, both printed as one two-page [vdso]. It is one region
-// with itself, though, even after a page of it went private and got a struct
-// data of its own (a debugger's breakpoint; mem_break_cow_group keeps the
-// name). (The caller has already required the same protection.)
-static bool maps_same_region(struct pt_entry *start, struct pt_entry *pt) {
-    if (pt->data == start->data)
+// Does the page `pt` continue the region that starts at `start_pt`, `pages`
+// pages before it? AOK keeps no VMAs, so maps and smaps rebuild each region
+// from its pages, and a region is what Linux's would be: one struct data; or
+// anonymous pages under one name; or pages of one file (one struct fd, as a
+// VMA has one struct file) at consecutive offsets -- which is what a
+// copy-on-write break leaves, the copy keeping its file (emu/memory.c,
+// mem_break_cow_group), and what Linux merges adjacent mappings of one file
+// into; or pages of one special mapping, a name with no file ([vdso]). All
+// with one protection, sharing and growsdown.
+//
+// NOT split where mlock changes, though Linux splits a VMA there: the locked
+// byte does not follow a mapping everywhere its VM_LOCKED would -- a stack
+// grown after mlockall, an mremap, pt_move -- and splitting on it would print
+// a locked process's [stack] as two lines.
+static bool maps_region_continues(const struct pt_entry *start_pt,
+                                  const struct pt_entry *pt, page_t pages) {
+    const unsigned kind = P_RWX | P_SHARED | P_GROWSDOWN | P_ANONYMOUS;
+    if ((pt->flags & kind) != (start_pt->flags & kind))
+        return false;
+    const struct data *data = start_pt->data;
+    if (pt->data == data)
         return true;
-    if (pt->data->name != NULL || start->data->name != NULL)
-        return pt->data->name == start->data->name;
-    return (pt->flags & P_ANONYMOUS) && (start->flags & P_ANONYMOUS);
+    if (pt->data->name != data->name)
+        return false;
+    if (pt->flags & P_ANONYMOUS)
+        return true;
+    if (data->fd != NULL)
+        return pt->data->fd == data->fd &&
+                data_file_offset(pt->data, pt->offset) ==
+                data_file_offset(data, start_pt->offset) + ((size_t) pages << PAGE_BITS);
+    return data->name != NULL;
+}
+
+// The file offset maps and smaps print for a region starting at `start_pt`:
+// its own page's, which is not the mapping's first page's when an mprotect or
+// munmap has split the mapping. 0 for memory with no file, as on Linux.
+static unsigned long maps_region_offset(const struct pt_entry *start_pt) {
+    const struct data *data = start_pt->data;
+    if (data->fd == NULL)
+        return (unsigned long) data->file_offset;
+    return (unsigned long) data_file_offset(data, start_pt->offset);
 }
 
 void proc_maps_dump(struct task *task, struct proc_data *buf) {
@@ -1047,11 +1074,7 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
         // find the end of said region
         while (page < mem->page_limit) {
             struct pt_entry *pt = mem_pt(mem, page);
-            if (pt == NULL)
-                break;
-            if ((pt->flags & P_RWX) != (start_pt->flags & P_RWX))
-                break;
-            if (!maps_same_region(start_pt, pt))
+            if (pt == NULL || !maps_region_continues(start_pt, pt, page - start))
                 break;
             page_t prev = page;
             mem_next_page(mem, &page);
@@ -1099,7 +1122,7 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
                 start_pt->flags & P_WRITE ? 'w' : '-',
                 start_pt->flags & P_EXEC ? 'x' : '-',
                 start_pt->flags & P_SHARED ? '-' : 'p',
-                (unsigned long) data->file_offset, // offset
+                maps_region_offset(start_pt),
                 0, // inode
                 path);
     }
@@ -1146,6 +1169,22 @@ static int proc_pid_maps_show(struct proc_entry *entry, struct proc_data *buf) {
 // each cache entry to track its members' own intra-lineage counts to avoid
 // double-counting, which isn't worth the complexity for a best-effort
 // estimate.
+//
+// Per struct data, not per region. A region is not one struct data any more:
+// a copy-on-write break's copy stays in its file's region (maps_region_
+// continues), so a forked child's .data region can start with a page only it
+// has, and judging the region by that page called all of it private -- Pss
+// 16K where it was 10K. Each run of pages under one struct data is judged on
+// its own, and the intra-lineage count is refcount over THIS mem's entries in
+// the data (data_owner_entries), which stays right when an mprotect splits a
+// mapping into several regions -- refcount / region pages called an
+// exclusive page shared there (see mem_break_cow_group). A copy is anonymous
+// memory, dirty, even in a file's region, as Linux counts it.
+struct smaps_run {
+    struct data *data;
+    uint64_t pages, resident, swapped;
+};
+
 struct smaps_totals {
     uint64_t rss_kb, pss_kb;
     uint64_t shared_clean_kb, shared_dirty_kb;
@@ -1154,50 +1193,69 @@ struct smaps_totals {
     uint64_t swap_kb;
 };
 
-static void proc_smaps_region(struct proc_data *buf, page_t start, page_t end,
-                               struct pt_entry *start_pt, struct data *data,
-                               const char *path, bool print_header,
-                               uint64_t swapped_pages, uint64_t resident_pages,
+// The sharer estimate for one run of a region: see the comment above.
+static uint64_t smaps_run_sharers(struct mem *mem, const struct smaps_run *run) {
+    struct data *data = run->data;
+    unsigned refcount = atomic_load_explicit(&data->refcount, memory_order_relaxed);
+    if (refcount == 0)
+        refcount = 1;
+    uint32_t mine = data_owner_entries(data, mem);
+    uint64_t intra_lineage_sharers = refcount / (mine != 0 ? mine : run->pages);
+    if (intra_lineage_sharers == 0)
+        intra_lineage_sharers = 1;
+    unsigned cross_process_sharers = mmap_cache_count(data->cache_entry);
+    return intra_lineage_sharers > cross_process_sharers ?
+        intra_lineage_sharers : cross_process_sharers;
+}
+
+static void proc_smaps_region(struct proc_data *buf, struct mem *mem, page_t start, page_t end,
+                               struct pt_entry *start_pt, const struct smaps_run *runs,
+                               size_t nruns, const char *path, bool print_header,
                                struct smaps_totals *totals) {
     uint64_t region_pages = (uint64_t)(end - start);
     uint64_t size_kb = region_pages * (PAGE_SIZE / 1024);
-    uint64_t swap_kb = swapped_pages * (PAGE_SIZE / 1024);
-    if (swap_kb > size_kb)
-        swap_kb = size_kb;
     // Rss is the region's pages in the resident set -- used since they were
     // mapped, and not swapped out (mem_page_is_touched) -- counted the way
     // VmRSS is, so the regions add up to it. Everything derived from rss_kb
     // below -- Pss, the Shared/Private split, Referenced, Anonymous -- follows
     // it. It was Size - Swap, which counted a page that was never used.
-    uint64_t rss_kb = resident_pages * (PAGE_SIZE / 1024);
-    if (rss_kb > size_kb - swap_kb)
-        rss_kb = size_kb - swap_kb;
-    unsigned refcount = data != NULL ?
-        atomic_load_explicit(&data->refcount, memory_order_relaxed) : 1;
-    if (refcount == 0)
-        refcount = 1;
-    uint64_t intra_lineage_sharers = region_pages != 0 ? refcount / region_pages : refcount;
-    if (intra_lineage_sharers == 0)
-        intra_lineage_sharers = 1;
-    unsigned cross_process_sharers = mmap_cache_count(data != NULL ? data->cache_entry : NULL);
-    uint64_t sharers = intra_lineage_sharers > cross_process_sharers ?
-        intra_lineage_sharers : cross_process_sharers;
-    bool shared = (start_pt->flags & P_SHARED) || sharers > 1;
-    bool anon = (start_pt->flags & P_ANONYMOUS) != 0;
-    uint64_t pss_kb = shared ? rss_kb / sharers : rss_kb;
-
+    uint64_t swap_kb = 0, rss_kb = 0, pss_kb = 0, anonymous_kb = 0;
     uint64_t shared_clean_kb = 0, shared_dirty_kb = 0;
     uint64_t private_clean_kb = 0, private_dirty_kb = 0;
-    if (shared) {
+    // The header's letter and VmFlags' "sh" go by the first run, as they went
+    // by the region's one struct data.
+    bool shared_header = (start_pt->flags & P_SHARED) != 0;
+    for (size_t i = 0; i < nruns; i++) {
+        const struct smaps_run *run = &runs[i];
+        uint64_t run_size_kb = run->pages * (PAGE_SIZE / 1024);
+        uint64_t run_swap_kb = run->swapped * (PAGE_SIZE / 1024);
+        if (run_swap_kb > run_size_kb)
+            run_swap_kb = run_size_kb;
+        uint64_t run_rss_kb = run->resident * (PAGE_SIZE / 1024);
+        if (run_rss_kb > run_size_kb - run_swap_kb)
+            run_rss_kb = run_size_kb - run_swap_kb;
+        uint64_t sharers = smaps_run_sharers(mem, run);
+        bool shared = (start_pt->flags & P_SHARED) || sharers > 1;
+        bool anon = (start_pt->flags & P_ANONYMOUS) || run->data->copied;
+        if (i == 0 && shared)
+            shared_header = true;
+        swap_kb += run_swap_kb;
+        rss_kb += run_rss_kb;
+        pss_kb += shared ? run_rss_kb / sharers : run_rss_kb;
         if (anon)
-            shared_dirty_kb = rss_kb;
-        else
-            shared_clean_kb = rss_kb;
-    } else if (anon) {
-        private_dirty_kb = rss_kb;
-    } else {
-        private_clean_kb = rss_kb;
+            anonymous_kb += run_rss_kb;
+        if (shared) {
+            if (anon)
+                shared_dirty_kb += run_rss_kb;
+            else
+                shared_clean_kb += run_rss_kb;
+        } else if (anon) {
+            private_dirty_kb += run_rss_kb;
+        } else {
+            private_clean_kb += run_rss_kb;
+        }
     }
+    bool shared = shared_header;
 
     if (print_header) {
         proc_printf(buf, "%08llx-%08llx %c%c%c%c %08lx 00:00 %-10d %s\n",
@@ -1206,7 +1264,7 @@ static void proc_smaps_region(struct proc_data *buf, page_t start, page_t end,
                 start_pt->flags & P_WRITE ? 'w' : '-',
                 start_pt->flags & P_EXEC ? 'x' : '-',
                 shared ? 's' : 'p',
-                (unsigned long) data->file_offset, 0, path);
+                maps_region_offset(start_pt), 0, path);
         proc_printf(buf, "Size:           %8"PRIu64" kB\n", size_kb);
         proc_printf(buf, "KernelPageSize: %8u kB\n", PAGE_SIZE / 1024);
         proc_printf(buf, "MMUPageSize:    %8u kB\n", PAGE_SIZE / 1024);
@@ -1217,7 +1275,7 @@ static void proc_smaps_region(struct proc_data *buf, page_t start, page_t end,
         proc_printf(buf, "Private_Clean:  %8"PRIu64" kB\n", private_clean_kb);
         proc_printf(buf, "Private_Dirty:  %8"PRIu64" kB\n", private_dirty_kb);
         proc_printf(buf, "Referenced:     %8"PRIu64" kB\n", rss_kb);
-        proc_printf(buf, "Anonymous:      %8"PRIu64" kB\n", anon ? rss_kb : 0);
+        proc_printf(buf, "Anonymous:      %8"PRIu64" kB\n", anonymous_kb);
         proc_printf(buf, "AnonHugePages:  %8d kB\n", 0);
         proc_printf(buf, "Swap:           %8"PRIu64" kB\n", swap_kb);
         // Locked stays 0: mlock/mlockall are still range checks with no pin
@@ -1240,7 +1298,7 @@ static void proc_smaps_region(struct proc_data *buf, page_t start, page_t end,
         totals->shared_dirty_kb += shared_dirty_kb;
         totals->private_clean_kb += private_clean_kb;
         totals->private_dirty_kb += private_dirty_kb;
-        totals->anonymous_kb += anon ? rss_kb : 0;
+        totals->anonymous_kb += anonymous_kb;
         totals->swap_kb += swap_kb;
     }
 }
@@ -1288,6 +1346,8 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
         return;
 
     struct smaps_totals totals = {0};
+    struct smaps_run *runs = NULL;
+    size_t runs_cap = 0;
     page_t rollup_start = 0;
     page_t rollup_end = 0;
     bool any_region = false;
@@ -1312,17 +1372,28 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
         page_t start = page;
         struct pt_entry *start_pt = mem_pt(mem, start);
         struct data *data = start_pt->data;
-        uint64_t swapped_pages = 0;
-        uint64_t resident_pages = 0;
+        size_t nruns = 0;
 
         while (page < mem->page_limit) {
             struct pt_entry *pt = mem_pt(mem, page);
-            if (pt == NULL)
+            if (pt == NULL || !maps_region_continues(start_pt, pt, page - start))
                 break;
-            if ((pt->flags & P_RWX) != (start_pt->flags & P_RWX))
-                break;
-            if (!maps_same_region(start_pt, pt))
-                break;
+            // A new run where the struct data changes. Out of memory for the
+            // array, the page joins the run before it: a worse estimate, not a
+            // wrong region.
+            if (nruns == 0 || runs[nruns - 1].data != pt->data) {
+                if (nruns == runs_cap) {
+                    size_t cap = runs_cap == 0 ? 16 : runs_cap * 2;
+                    struct smaps_run *grown = realloc(runs, cap * sizeof(*runs));
+                    if (grown != NULL) {
+                        runs = grown;
+                        runs_cap = cap;
+                    }
+                }
+                if (nruns < runs_cap)
+                    runs[nruns++] = (struct smaps_run) {.data = pt->data};
+            }
+            struct smaps_run *run = nruns != 0 ? &runs[nruns - 1] : NULL;
             // Counted here, after the three tests that decide the page is part
             // of this region and before the step that can end it, so each page
             // of the region is counted exactly once -- including the page that
@@ -1339,10 +1410,13 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
             // does ask the frame -- two figures for one fact, differing, which
             // is exactly what deriving them from one source is meant to
             // prevent.
-            if (count_swapped && mem_page_is_swapped(pt))
-                swapped_pages++;
-            if (mem_page_is_touched(pt))
-                resident_pages++;
+            if (run != NULL) {
+                run->pages++;
+                if (count_swapped && mem_page_is_swapped(pt))
+                    run->swapped++;
+                if (mem_page_is_touched(pt))
+                    run->resident++;
+            }
             page_t prev = page;
             mem_next_page(mem, &page);
             // Same sparse-walk trap as proc_maps_dump; see the comment there.
@@ -1378,8 +1452,8 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
             generic_getpath_shown(data->fd, path, &unreachable);
         }
 
-        proc_smaps_region(buf, start, end, start_pt, data, path, !rollup, swapped_pages,
-                          resident_pages, &totals);
+        proc_smaps_region(buf, mem, start, end, start_pt, runs, nruns, path, !rollup,
+                          &totals);
     }
     for (; pending_i < pending_n; pending_i++) {
         if (!any_region)
@@ -1389,6 +1463,7 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
         proc_smaps_reservation(buf, &pending[pending_i], !rollup);
     }
     mem_read_unlock_quiesce_aware(mem);
+    free(runs);
 
     if (rollup && any_region) {
         proc_printf(buf, "%08llx-%08llx ---p 00000000 00:00 0                          [rollup]\n",
@@ -1446,7 +1521,7 @@ static ssize_t proc_pid_mem_pread(struct proc_entry *entry, struct proc_data *bu
         proc_put_task(task);
         return _ESRCH;
     }
-    int result = user_read_task_mem(task, &mm->mem, (guest_addr_t)offset, buf->data, buf->size);
+    int result = user_read_task_ptrace_mem(task, &mm->mem, (guest_addr_t)offset, buf->data, buf->size);
     mm_release(mm);
     proc_put_task(task);
     // An address the target has not mapped is an I/O error, not a permission

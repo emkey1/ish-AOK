@@ -236,9 +236,11 @@ struct task {
     // and never blocked. Written only by the owning thread; read by others
     // under pids_lock via rusage_get_task.
     unsigned long minflt;
-    // Set by the swap-in path when a slot could not be read, consumed by the
-    // page-fault handler to deliver SIGBUS instead of SIGSEGV. Per-task because
-    // the fault is; see task_note_swap_io_fault below.
+    // Set by the swap-in path when a slot could not be read, and by a
+    // copy-on-write break that could not read the page it was to copy (a file
+    // page past the end of its file); consumed by the page-fault handler to
+    // deliver SIGBUS instead of SIGSEGV. Per-task because the fault is; see
+    // task_note_swap_io_fault below.
     bool swap_io_fault;
     // Set by tlb_handle_miss when the guest is committing memory and the host
     // is low on headroom; consumed by handle_timer_interrupt, which is the

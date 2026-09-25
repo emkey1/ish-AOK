@@ -538,8 +538,25 @@ struct data {
 
     // for display in /proc/pid/maps
     struct fd *fd;
+    // The file offset of the mapping's first page, which pt_map put at data
+    // offset `map_offset` (its `offset` argument: the slack in front of a file
+    // mapping that starts part way into a host page). So the page at data
+    // offset `o` is at file offset file_offset - map_offset + o. Ask
+    // data_file_offset() rather than adding a page's offset to file_offset,
+    // which is off by map_offset.
     size_t file_offset;
+    size_t map_offset;
     const char *name;
+    // This mapping's memory is a private copy made by a copy-on-write break
+    // or a debugger's forced write (mem_break_cow_group): anonymous memory AOK
+    // allocated, this process's alone while its entries are not P_COW, so a
+    // later forced write goes in in place. A copy of a file's pages keeps fd,
+    // file_offset and name, so /proc/<pid>/maps shows it as part of its file
+    // as Linux does -- but it may no longer hold what the file does, and
+    // anything that trusts the FILE for what is in these pages (jit/hle.c's
+    // symbol-table attach, which would run libc's memcpy straight past a
+    // breakpoint planted at its entry) has to ask this first.
+    bool copied;
 
     // jit/hle.c memoizes here whether this mapping is a libc it can attach
     // to, and which parsed module it is. Resolving that costs a path lookup
@@ -553,6 +570,11 @@ struct data {
     guest_addr_t dest;
 #endif
 };
+// The file offset of the page at data offset `offset` (a pt_entry's `offset`)
+// of a file mapping: what /proc/<pid>/maps prints for a region starting there.
+static inline size_t data_file_offset(const struct data *data, size_t offset) {
+    return data->file_offset - data->map_offset + offset;
+}
 // Swap state of one guest page. PROTOTYPE NOTE: docs/simulated_swap_plan.md
 // section 3.3 puts these bytes inside the vestigial blocks[] so pt_entry stays
 // 56 bytes; this gate build adds them alongside instead, which is 8 bytes per
@@ -768,6 +790,10 @@ size_t mem_locked_page_count(struct mem *mem);
 // ownership lock, which is a leaf: nothing else may be taken under it, and it
 // may be taken with or without any mem lock held.
 bool data_is_exclusive_to(struct data *data, struct mem *mem);
+// How many of `mem`'s page-table entries point into `data`: exact, from the
+// same record. 0 when `mem` has none, or is one of the overflowed owners that
+// are counted but not named. Same leaf lock.
+uint32_t data_owner_entries(struct data *data, struct mem *mem);
 // How many page-table entries, across every address space, point into the
 // host frame containing `offset`. -1 when that is not known (no frame_refs
 // array, or the count saturated), which every caller must read as "do not
@@ -780,6 +806,11 @@ size_t mem_frame_size(void);
 
 // Must call with mem read-locked.
 void *mem_ptr(struct mem *mem, guest_addr_t addr, int type);
+// memcpy between host pointers into guest memory that answers false, rather
+// than killing the emulator, when either side cannot be touched -- a page of a
+// file mapping past the end of its file raises SIGBUS on the host. A system
+// call per copy: for the copies that can meet such a page and are not hot.
+bool mem_host_copy(void *dst, const void *src, size_t size);
 
 // What a MAP_SHARED page is, whichever mapping reaches it. One memfd mapped
 // read-write and read-execute, a file opened twice and mapped through each

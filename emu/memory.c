@@ -14,6 +14,9 @@
 #include "kernel/signal.h"
 #if __APPLE__
 #include <mach/mach.h>
+#elif defined(__linux__)
+#include <sys/syscall.h>
+#include <sys/uio.h>
 #endif
 #include "emu/memory.h"
 #include "fs/fd.h"
@@ -2192,6 +2195,19 @@ bool data_is_exclusive_to(struct data *data, struct mem *mem) {
     return exclusive;
 }
 
+uint32_t data_owner_entries(struct data *data, struct mem *mem) {
+    if (data == NULL || mem == NULL)
+        return 0;
+    pthread_mutex_t *stripe = data_owner_lock_for(data);
+    pthread_mutex_lock(stripe);
+    uint32_t entries = 0;
+    for (unsigned i = 0; i < data->n_owners; i++)
+        if (data->owners[i].mem == mem)
+            entries = data->owners[i].entries;
+    pthread_mutex_unlock(stripe);
+    return entries;
+}
+
 int data_frame_ref_count(struct data *data, size_t offset) {
     if (data == NULL || data->frame_refs == NULL)
         return -1;
@@ -2299,6 +2315,9 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         .size = pages * PAGE_SIZE + offset,
         .shared_key = 0,
         .cache_entry = NULL,
+        // Where the first page is, for data_file_offset: the caller that makes
+        // this a file mapping sets file_offset to that page's file offset.
+        .map_offset = offset,
 
 #if LEAK_DEBUG
         .pid = current ? current->pid : 0,
@@ -3047,9 +3066,9 @@ static bool mem_page_packing_enabled(void) {
 // neighbour may only join if it would have ended up with exactly those flags
 // anyway. P_COW is part of the comparison, so only pages already waiting to be
 // copied join. P_WRITE is too, so a read-only private page is never made
-// private early, and a MEM_WRITE_PTRACE poke -- which adds P_WRITE|P_COW to the
-// faulting entry alone -- always ends up a group of one, which is what a
-// debugger's poke of a single page should be.
+// private early. A debugger's forced write to a page the process may not
+// write is never grouped at all (mem_break_cow_group's `forced`): one page,
+// which is what a debugger's poke of a single page should be.
 static bool mem_cow_group_member(struct mem *mem, page_t p, unsigned flags) {
     struct pt_entry *e = mem_pt(mem, p);
     if (e == NULL || e->flags != flags)
@@ -3079,18 +3098,68 @@ static bool mem_cow_group_member(struct mem *mem, page_t p, unsigned flags) {
     return atomic_load_explicit(&e->swap_state, memory_order_acquire) == PT_RESIDENT;
 }
 
+// memcpy, except that a host fault on either side is an answer rather than
+// the end of the emulator. The fault that matters is a page of a FILE mapping
+// past the end of its file: the host raises SIGBUS for it, and in kernel C
+// code -- a syscall, a copy-on-write break -- nothing turns that into a guest
+// signal, so it killed the app, where Linux answers EFAULT, EIO or SIGBUS. The
+// host kernel does the copy and reports the fault instead (vm_read_overwrite,
+// process_vm_readv). A system call per copy, so only for the copies that can
+// meet such a page and are not hot: a debugger's forced access, and the
+// copy-on-write break of a page that is not anonymous.
+bool mem_host_copy(void *dst, const void *src, size_t size) {
+    if (size == 0)
+        return true;
+#if __APPLE__
+    vm_size_t copied = 0;
+    kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t) (uintptr_t) src,
+            (vm_size_t) size, (vm_address_t) (uintptr_t) dst, &copied);
+    return kr == KERN_SUCCESS && copied == size;
+#elif defined(__linux__)
+    // Through syscall(): a libc name on a Linux host can be interposed by a
+    // native program's shim. Where the host refuses the call itself -- a
+    // seccomp filter that blocks it, a kernel without it -- this copies the
+    // way it always did rather than failing every copy it is asked for.
+    static _Atomic bool refused;
+    if (!atomic_load_explicit(&refused, memory_order_relaxed)) {
+        struct iovec local = {dst, size}, remote = {(void *) src, size};
+        long n = syscall(SYS_process_vm_readv, (long) getpid(), &local, 1L, &remote, 1L, 0L);
+        if (n == (long) size)
+            return true;
+        if (n >= 0 || (errno != EPERM && errno != ENOSYS && errno != EACCES))
+            return false;
+        atomic_store_explicit(&refused, true, memory_order_relaxed);
+    }
+    memcpy(dst, src, size);
+    return true;
+#else
+    memcpy(dst, src, size);
+    return true;
+#endif
+}
+
 // Break copy-on-write for `page`, and for every guest page sharing its host
 // page that is eligible for the identical break. Returns 0, or a negative errno
-// with nothing changed.
+// with nothing changed: _EIO when a page to copy cannot be read, which is a
+// file page past the end of its file.
 //
 // Caller holds the mem write lock and has already established that `page` is
 // mapped, P_COW, and writable for this access type. Both COW sites in this file
 // (mem_ptr's lock-upgrade path and mem_ptr_fault's) call this with those
 // preconditions met; one function rather than two, because they were two copies
 // of the same dozen lines and this would otherwise be written twice.
-static int mem_break_cow_group(struct mem *mem, page_t page) {
+//
+// `forced` is the other caller: a debugger's write (MEM_WRITE_PTRACE) to a
+// private page the process may not write, which Linux's FOLL_FORCE lets
+// through by copying the page and writing the copy -- whether or not it was
+// copy-on-write, since the page is not the process's own to write until it
+// is copied (a text page is the file's, as mapped). The copy keeps the entry's
+// flags, so the page stays exactly as writable as it was: the check is
+// bypassed for the one access, not relaxed. It is always a group of one, and
+// a PROT_NONE page with no memory behind it yet is copied from zeroes.
+static int mem_break_cow_group(struct mem *mem, page_t page, bool forced) {
     struct pt_entry *entry = mem_pt(mem, page);
-    if (entry == NULL || entry->data->data == NULL)
+    if (entry == NULL || (entry->data->data == NULL && !forced))
         return _EFAULT;
     unsigned flags = entry->flags;
 
@@ -3126,21 +3195,16 @@ static int mem_break_cow_group(struct mem *mem, page_t page) {
     // breaks the same invariant the moment the group is made, unconditionally,
     // for pages that were never related to each other.
     //
-    // A PRIVATE FILE mapping is the case where it would show, and what it would
-    // show is an existing defect made wider rather than a new one: AOK's COW
-    // break gives the copy a struct data with no fd and no name, so a broken
-    // page of a file mapping already prints in /proc/maps as a nameless region
-    // splitting the file's own. Grouping would take the name off up to three
-    // more pages per host page -- pages the guest never wrote. Measured on a
-    // 32-page private mapping of /bin/busybox with every fourth page written
-    // after a fork: 16 alternating named/nameless regions became 8 nameless
-    // ones. Linux prints one named region for all of it, so neither is right;
-    // the repair is to carry fd, name and file_offset across the break, and
-    // until that happens this stays out of it. The memory at stake is small --
-    // the writable file-backed segments of an executable and its libraries,
-    // tens of pages per process, against the hundreds of megabytes of anonymous
-    // COW this is for.
-    if (mem_page_packing_enabled() && (flags & P_ANONYMOUS)) {
+    // A PRIVATE FILE mapping stays out of it. The copy carries the file's fd,
+    // offset and name now (below), so /proc/maps shows a broken page as part
+    // of its file's region -- it used to print a nameless region splitting
+    // the file's own, and grouping would have taken the name off up to three
+    // more pages per host page. But a group copies pages the guest never
+    // wrote, and for a file those are pages that stop being the file's for
+    // nothing: the memory at stake is small -- the writable file-backed
+    // segments of an executable and its libraries, tens of pages per process,
+    // against the hundreds of megabytes of anonymous COW this is for.
+    if (!forced && mem_page_packing_enabled() && (flags & P_ANONYMOUS)) {
         pages_t group = mem_host_page_group();
         page_t base = mem_host_page_group_start(page, group);
         while (first > base && mem_cow_group_member(mem, first - 1, flags))
@@ -3164,35 +3228,72 @@ static int mem_break_cow_group(struct mem *mem, page_t page) {
     // Which of them are in the resident set is read here too: the fresh
     // entries start outside it, and a neighbour that was in it before its
     // host page was copied is in it still. (At most one host page of guest
-    // pages, so a 64-bit mask holds them.)
+    // pages, so a 64-bit mask holds them.) So is which are mlocked: that is
+    // the mapping's, and a fresh entry is unlocked -- a locked page lost its
+    // lock the first time it was written after a fork.
     //
-    // So is the name, which a special mapping keeps when a page of it goes
-    // private, as its Linux VMA does: a debugger's breakpoint in the vDSO used
-    // to leave that page a nameless region, and /proc/<pid>/maps no longer
-    // showed the vDSO whole. Only when every page shares it -- names are
-    // static strings, compared by identity.
-    uint64_t resident = 0;
-    const char *name = mem_pt(mem, first)->data->name;
+    // And what the copy is a copy OF, which is the mapping's too: a Linux COW
+    // break replaces the page and leaves the VMA -- its file, offset and name
+    // -- as it was, so /proc/<pid>/maps prints the same line before and after.
+    // Kept only when every page of the group agrees: one fd at consecutive
+    // file offsets, one name (names are static strings, compared by
+    // identity). A group is anonymous pages, so the fd case is a single page.
+    uint64_t resident = 0, locked = 0;
+    struct pt_entry *first_pt = mem_pt(mem, first);
+    struct fd *fd = first_pt->data->fd;
+    const char *name = first_pt->data->name;
+    size_t file_offset = fd != NULL ? data_file_offset(first_pt->data, first_pt->offset) : 0;
     for (page_t p = first; p <= last; p++) {
         struct pt_entry *src = mem_pt(mem, p);
-        memcpy((char *) copy + ((size_t) (p - first) << PAGE_BITS),
-               (char *) src->data->data + src->offset, PAGE_SIZE);
+        char *to = (char *) copy + ((size_t) (p - first) << PAGE_BITS);
+        char *from = src->data->data == NULL ? NULL :
+                (char *) src->data->data + src->offset;
+        // A file page past the end of its file cannot be read: Linux answers
+        // SIGBUS to the store that wanted the copy (mem_ptr_fault notes it),
+        // EFAULT to a system call, EIO to a debugger. An anonymous group is
+        // plain memory, and the hot case, so it keeps memcpy.
+        if (from != NULL && (flags & P_ANONYMOUS))
+            memcpy(to, from, PAGE_SIZE);
+        else if (from != NULL && !mem_host_copy(to, from, PAGE_SIZE)) {
+            munmap(copy, bytes);
+            return _EIO;
+        }
         if (p - first < 64 && mem_page_is_touched(src))
             resident |= (uint64_t) 1 << (p - first);
+        if (p - first < 64 && src->locked)
+            locked |= (uint64_t) 1 << (p - first);
         if (src->data->name != name)
             name = NULL;
+        if (fd != NULL && (src->data->fd != fd || data_file_offset(src->data, src->offset) !=
+                    file_offset + ((size_t) (p - first) << PAGE_BITS)))
+            fd = NULL;
     }
+    // Retained before pt_map, which can drop the last reference the old
+    // mapping held on it.
+    if (fd != NULL)
+        fd_retain(fd);
     int err = pt_map(mem, first, pages, copy, 0, flags & ~P_COW);
     if (err < 0) {
         // pt_map maps nothing when it fails, so the copy is still ours to
         // release, and the pages it was for are all still copy-on-write.
         munmap(copy, bytes);
+        if (fd != NULL)
+            mem_defer_fd_close(mem, fd);
         return err;
     }
-    mem_pt(mem, first)->data->name = name;
-    for (page_t p = first; p <= last && p - first < 64; p++)
+    struct data *copied = mem_pt(mem, first)->data;
+    copied->copied = true;
+    copied->name = name;
+    if (fd != NULL) {
+        copied->fd = fd;
+        copied->file_offset = file_offset;
+    }
+    for (page_t p = first; p <= last && p - first < 64; p++) {
         if (resident & ((uint64_t) 1 << (p - first)))
             mem_pt_touch(mem, mem_pt(mem, p));
+        if (locked & ((uint64_t) 1 << (p - first)))
+            mem_pt(mem, p)->locked = 1;
+    }
     return 0;
 }
 
@@ -3511,6 +3612,59 @@ static bool write_prepared_covers(struct mem *mem, page_t page) {
             atomic_load_explicit(&mem->mmu.changes, memory_order_relaxed) == write_prepared.changes;
 }
 
+// What a write of `type` has to do before it can store to `entry`'s page.
+//
+// MEM_WRITE_PTRACE is a debugger's write -- PTRACE_POKETEXT, /proc/<pid>/mem --
+// and is Linux's FOLL_FORCE: the protection check is bypassed for that one
+// access and nothing is granted. A private page the process may not write is
+// copied, and the byte goes in the copy, which keeps the page's protection:
+// the tracee's own store to it still faults, and /proc/<pid>/maps shows the
+// line it showed before. (This used to add P_WRITE|P_COW to the entry, and the
+// copy-on-write break then mapped the copy writable, so one gdb breakpoint
+// made the tracee's code writable to the tracee with no mprotect.) A
+// read-only SHARED page is refused -- Linux's check_vma_flags lets a forced
+// write through only where it can copy -- because the byte would reach the
+// file and every other process mapping it. A writable page is written as any
+// write would write it: in place, or copied if it is copy-on-write. MEASURED
+// on Linux 6.12 by tests/manual/ptrace_poke_text.c.
+enum mem_write_way {
+    MEM_WRITE_REFUSED,      // NULL to the caller
+    MEM_WRITE_IN_PLACE,     // the page is the process's to write, as it is
+    MEM_WRITE_COPY,         // copy-on-write: copy it, and write the copy
+    MEM_WRITE_FORCED,       // copy it WITHOUT granting write (mem_break_cow_group)
+    MEM_WRITE_FORCED_IN_PLACE, // write it where it is WITHOUT granting write
+};
+
+// A special mapping with no memory behind it -- the i386 [vvar] -- is out of
+// a debugger's reach altogether: Linux maps [vvar] VM_IO|VM_PFNMAP, and a
+// forced read or write of it is EIO. MEASURED on 6.12, x86_64 and i386.
+static bool mem_entry_is_special_io(const struct pt_entry *entry) {
+    return entry->data->data == NULL && entry->data->name != NULL;
+}
+
+static enum mem_write_way mem_write_way(const struct pt_entry *entry, int type) {
+    if (entry->flags & P_WRITE)
+        return (entry->flags & P_COW) ? MEM_WRITE_COPY : MEM_WRITE_IN_PLACE;
+    if (type != MEM_WRITE_PTRACE || (entry->flags & P_SHARED) ||
+            mem_entry_is_special_io(entry))
+        return MEM_WRITE_REFUSED;
+    // Memory AOK made for this process alone -- anonymous, or the copy an
+    // earlier break made -- is written where it is, as Linux writes an
+    // exclusive anonymous page: gdb takes its breakpoints out and puts them
+    // back at every stop, and copying the page each time cost a copy, a TLB
+    // flush in every thread and a parked descriptor per poke (Linux: 0 minor
+    // faults for 50 pokes after the first). A file's page, and a page a fork
+    // still shares, is copied first.
+    if (!(entry->flags & P_COW) && entry->data->data != NULL &&
+            ((entry->flags & P_ANONYMOUS) || entry->data->copied))
+        return MEM_WRITE_FORCED_IN_PLACE;
+    return MEM_WRITE_FORCED;
+}
+
+// What a forced read of a PROT_NONE page nothing has written sees: it has no
+// memory behind it yet (pt_map_nothing), and reads as zeroes.
+static const char mem_zero_page[PAGE_SIZE];
+
 // This version will return NULL instead of making necessary pagetable changes.
 // Used by the emulator to avoid deadlocks.
 static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type) {
@@ -3542,13 +3696,26 @@ static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type) {
     // later mprotect'd to PROT_NONE keeps its data pointer but must no longer be
     // readable. Without this, guard pages (stack guards, sanitizer/JIT/runtime
     // PROT_NONE regions) silently allowed reads where real Linux faults.
-    // MEM_WRITE_PTRACE intentionally bypasses guest protections (debugger poke).
-    if (type != MEM_WRITE_PTRACE && (entry->flags & P_RWX) == 0)
+    // A debugger's forced access (MEM_WRITE_PTRACE, MEM_READ_PTRACE) bypasses
+    // guest protections, for that one access -- as Linux's FOLL_FORCE does.
+    bool forced = type == MEM_WRITE_PTRACE || type == MEM_READ_PTRACE;
+    if (!forced && (entry->flags & P_RWX) == 0)
         return NULL;
     if (type == MEM_WRITE && !P_WRITABLE(entry->flags))
         return NULL;
-    if (entry->data->data == NULL)
+    // A forced write only ever lands in memory this process may have written
+    // in place: mem_ptr copies anything else first (mem_write_way), and
+    // refuses a read-only shared page.
+    if (type == MEM_WRITE_PTRACE) {
+        enum mem_write_way way = mem_write_way(entry, type);
+        if (way != MEM_WRITE_IN_PLACE && way != MEM_WRITE_FORCED_IN_PLACE)
+            return NULL;
+    }
+    if (entry->data->data == NULL) {
+        if (type == MEM_READ_PTRACE && !mem_entry_is_special_io(entry))
+            return (void *) (mem_zero_page + PGOFFSET(addr));
         return NULL;
+    }
     // Only a successful access puts the page in the resident set: one refused
     // above -- PROT_NONE, a write to a read-only or COW page -- used nothing,
     // and the COW break that follows it maps a fresh entry that comes back
@@ -3613,24 +3780,11 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
     }
 
     if (entry != NULL && (type == MEM_WRITE || type == MEM_WRITE_PTRACE)) {
-        // if page is unwritable, well tough luck
-        if (type != MEM_WRITE_PTRACE && !(entry->flags & P_WRITE))
+        // if page is unwritable, well tough luck -- unless a debugger is
+        // writing it, and then it is copied (mem_write_way)
+        enum mem_write_way way = mem_write_way(entry, type);
+        if (way == MEM_WRITE_REFUSED)
             return NULL;
-        
-        if (type == MEM_WRITE_PTRACE) {
-            // A debugger's poke has to be able to write a page the tracee has
-            // marked read-only, hence P_WRITE.
-            //
-            // P_COW, though, only for a PRIVATE page. Copying a SHARED one
-            // gives this process a private duplicate and quietly severs it
-            // from everybody else: the poke never reached the file, and every
-            // store the TRACEE itself made afterwards was lost too, with no
-            // error anywhere. On Linux the poke lands in the shared page and
-            // the mapping keeps its file. Measured.
-            entry->flags |= P_WRITE;
-            if (!(entry->flags & P_SHARED))
-                entry->flags |= P_COW;
-        }
 #if ENGINE_JIT
         // get rid of any compiled blocks in this page -- unless
         // mem_write_prepare_rect already did, under one lock for the whole
@@ -3640,10 +3794,10 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
         if (entry->flags & P_SHARED)
             jit_note_shared_write(mem->mmu.jit, entry);
 #endif
-        
+
         // if page is cow, ~~milk~~ copy it
-        
-        if (entry->flags & P_COW) {
+
+        if (way == MEM_WRITE_COPY || way == MEM_WRITE_FORCED) {
             // Breaking a copy-on-write page is a minor fault, and after a fork
             // it is most of the process's fault count.
             task_count_minflt();
@@ -3663,13 +3817,16 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
                 write_to_read_lock(&mem->lock);
                 return NULL;
             }
-            if (type != MEM_WRITE_PTRACE && !(entry->flags & P_WRITE)) {
+            // Asked again: the upgrade let other writers in first -- an
+            // mprotect, a fork, a sibling's break of this very page.
+            way = mem_write_way(entry, type);
+            if (way == MEM_WRITE_REFUSED) {
                 if (locked_general_lock)
                     unlock(&current->general_lock);
                 write_to_read_lock(&mem->lock);
                 return NULL;
             }
-            if (!(entry->flags & P_COW)) {
+            if (way == MEM_WRITE_IN_PLACE || way == MEM_WRITE_FORCED_IN_PLACE) {
                 if (locked_general_lock)
                     unlock(&current->general_lock);
                 write_to_read_lock(&mem->lock);
@@ -3707,7 +3864,7 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
             }
             // Copies this page and, on a 16 KiB-page host, the rest of its host
             // page: see the host-page packing comment above mem_break_cow_group.
-            if (mem_break_cow_group(mem, page) < 0) {
+            if (mem_break_cow_group(mem, page, way == MEM_WRITE_FORCED) < 0) {
                 // The COW break did not happen, so there is no private page to
                 // hand back, and returning the still-shared one would let the
                 // guest's write land in the parent's (or a sibling's) memory.
@@ -3725,7 +3882,12 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
     }
 
 done_write_fault:
-    if (entry != NULL && type != MEM_WRITE_PTRACE && (entry->flags & P_WRITE)) {
+    // The host page must take the store: a writable page's, whoever writes
+    // it -- P_WRITE is the process's own now, never a debugger's -- and one a
+    // forced write goes into in place. (Harmless for the second: the guest
+    // page tables, not the host protection, decide what the guest may do.)
+    if (entry != NULL && ((entry->flags & P_WRITE) || (type == MEM_WRITE_PTRACE &&
+            mem_write_way(entry, type) == MEM_WRITE_FORCED_IN_PLACE))) {
         int host_err = mem_ensure_host_writable(entry);
         if (host_err < 0)
             return NULL;
@@ -3810,23 +3972,19 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
     }
 
     if (entry != NULL && (type == MEM_WRITE || type == MEM_WRITE_PTRACE)) {
-        if (type != MEM_WRITE_PTRACE && !(entry->flags & P_WRITE)) {
+        // The same decision as mem_ptr's write path, and under the write lock
+        // all the way to the break, so it cannot go stale on the way.
+        enum mem_write_way way = mem_write_way(entry, type);
+        if (way == MEM_WRITE_REFUSED) {
             write_unlock(&mem->lock);
             return NULL;
-        }
-        if (type == MEM_WRITE_PTRACE) {
-            // Same as the other write-fault path above: never COW a shared
-            // page, or the poke detaches the tracee from its own mapping.
-            entry->flags |= P_WRITE;
-            if (!(entry->flags & P_SHARED))
-                entry->flags |= P_COW;
         }
 #if ENGINE_JIT
         jit_invalidate_page(mem->mmu.jit, page);
         if (entry->flags & P_SHARED)
             jit_note_shared_write(mem->mmu.jit, entry);
 #endif
-        if (entry->flags & P_COW) {
+        if (way == MEM_WRITE_COPY || way == MEM_WRITE_FORCED) {
             // Breaking a copy-on-write page is a minor fault, and after a fork
             // it is most of the process's fault count.
             task_count_minflt();
@@ -3835,36 +3993,28 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
                 lock(&current->general_lock, 0);
                 locked_general_lock = true;
             }
+            // Same group break as mem_ptr's path above.
+            int break_err = mem_break_cow_group(mem, page, way == MEM_WRITE_FORCED);
+            if (break_err < 0) {
+                // No private page means no writable pointer. A page that could
+                // not be read to copy it -- a file page past the end of its
+                // file -- is SIGBUS on Linux, not SIGSEGV: the address is
+                // valid, its contents could not be had.
+                if (break_err == _EIO)
+                    task_note_swap_io_fault();
+                if (locked_general_lock)
+                    unlock(&current->general_lock);
+                write_unlock(&mem->lock);
+                return NULL;
+            }
             entry = mem_pt(mem, page);
-            if (entry == NULL) {
-                if (locked_general_lock)
-                    unlock(&current->general_lock);
-                write_unlock(&mem->lock);
-                return NULL;
-            }
-            if (type != MEM_WRITE_PTRACE && !(entry->flags & P_WRITE)) {
-                if (locked_general_lock)
-                    unlock(&current->general_lock);
-                write_unlock(&mem->lock);
-                return NULL;
-            }
-            if (entry->flags & P_COW) {
-                // Same group break as mem_ptr's path above.
-                if (mem_break_cow_group(mem, page) < 0) {
-                    // No private page means no writable pointer.
-                    if (locked_general_lock)
-                        unlock(&current->general_lock);
-                    write_unlock(&mem->lock);
-                    return NULL;
-                }
-                entry = mem_pt(mem, page);
-            }
             if (locked_general_lock)
                 unlock(&current->general_lock);
         }
     }
 
-    if (entry != NULL && type != MEM_WRITE_PTRACE && (entry->flags & P_WRITE)) {
+    if (entry != NULL && ((entry->flags & P_WRITE) || (type == MEM_WRITE_PTRACE &&
+            mem_write_way(entry, type) == MEM_WRITE_FORCED_IN_PLACE))) {
         int host_err = mem_ensure_host_writable(entry);
         if (host_err < 0) {
             write_unlock(&mem->lock);

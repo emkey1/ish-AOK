@@ -1439,22 +1439,27 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             struct task *child = find_child(pid);
             if (!child) return _ESRCH;
 
+            // A read the tracee's memory refuses is EIO, as Linux's
+            // generic_ptrace_peekdata answers any short ptrace_access_vm;
+            // EFAULT is only for the tracer's own buffer. It was EFAULT for
+            // both.
+            int err = 0;
             if (guest_abi_is_64bit(child->abi)) {
                 qword_t peek;
-                if (user_get_task(child, addr, peek) || user_put(data, peek)) {
-                    unlock(&child->ptrace.lock);
-                    return _EFAULT;
-                }
+                if (user_read_task_ptrace(child, addr, &peek, sizeof(peek)))
+                    err = _EIO;
+                else if (user_put(data, peek))
+                    err = _EFAULT;
             } else {
                 dword_t peek;
-                if (user_get_task(child, addr, peek) || user_put(data, peek)) {
-                    unlock(&child->ptrace.lock);
-                    return _EFAULT;
-                }
+                if (user_read_task_ptrace(child, addr, &peek, sizeof(peek)))
+                    err = _EIO;
+                else if (user_put(data, peek))
+                    err = _EFAULT;
             }
             unlock(&child->ptrace.lock);
 
-            return 0;
+            return err;
         }
 
         case PTRACE_PEEKUSER_: {
@@ -1541,9 +1546,10 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             struct task *child = find_child(pid);
             if (!child) return _ESRCH;
 
+            // EIO, as generic_ptrace_pokedata answers a short write, not EFAULT.
             if (user_write_task_ptrace(child, addr, &data, ptrace_word_size(child))) {
                 unlock(&child->ptrace.lock);
-                return _EFAULT;
+                return _EIO;
             }
             unlock(&child->ptrace.lock);
 

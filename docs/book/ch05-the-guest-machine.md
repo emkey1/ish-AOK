@@ -320,6 +320,18 @@ file. Worse, every store the *tracee itself* made afterwards was lost too, and
 nothing returned an error anywhere. `P_COW` now means what the write fault
 always meant by it: this page is private.
 
+**A poke also left the page writable** (fixed September 2026). The same code
+added `P_WRITE` to get the poke past the protection check, and the
+copy-on-write break mapped the copy with it. After one gdb breakpoint the
+tracee could store to its own code with no `mprotect`, `/proc/<pid>/maps` said
+`rwxp`, and the copy, a new descriptor with no file, printed nameless and split
+its file's line. A read-only *shared* page was written straight through to the
+file. Linux's `FOLL_FORCE` bypasses the check for that one access and grants
+nothing: it copies a private page and writes the copy, which keeps its
+protection, and it refuses a read-only shared page. `mem_write_way` makes that
+decision now, and every copy-on-write break keeps its page's file, offset, name
+and `mlock`. `tests/manual/ptrace_poke_text.c` holds it to Linux 6.12.
+
 **The first `mprotect` ended the sharing.** A `PROT_NONE` `MAP_SHARED`
 anonymous region is reserved with no host backing and one descriptor that every
 mapper's page-table entry points at. The first process to `mprotect` it
