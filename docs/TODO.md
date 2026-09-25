@@ -850,6 +850,14 @@ LOCK_PI sets FUTEX_WAITERS and blocks, UNLOCK_PI checks ownership and hands
 off. That needs an owner field per futex and interacts with the robust-list
 FUTEX_OWNER_DIED path already implemented here.
 
+FUTEX_CMP_REQUEUE_PI is not ENOSYS but is no more right (seen 2026-09-25,
+while keying shared futexes by memory): it compares `*uaddr1` against `val`,
+the wake count, where Linux compares `val3`, and it wakes no one where Linux
+takes the PI lock for one waiter. Its only real callers wait with
+WAIT_REQUEUE_PI, which is ENOSYS, so it is unreachable in practice; rewrite it
+with the locking half. Its waiters do now keep their futex's reference when
+moved (`futex_requeue_waiters`).
+
 The INHERITANCE half is not implementable and would not be even if it were
 written: iSH has no scheduler priority to donate -- realtime scheduling
 classes are already refused with EPERM (kernel/resource.c). So the honest

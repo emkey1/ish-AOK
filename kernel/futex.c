@@ -58,11 +58,22 @@
                      FUTEX_PRIVATE_FLAG_)
 //#define FUTEX_CMD_MASK_ ~(FUTEX_PRIVATE_FLAG_)
 
+// What a futex IS: a wait and a wake meet exactly when their keys are equal.
+// A private futex is an address in one address space. A shared one is a word
+// of the memory itself, however each process reaches it: the kind and object
+// of the page's mem_shared_page_id (emu/memory.c) -- a file's host device and
+// inode, a SysV segment, or anonymous shared memory's struct data -- and the
+// word's byte offset in that object.
+#define FUTEX_KEY_PRIVATE 0 // below every MEM_SHARED_* kind
+struct futex_key {
+    uint64_t kind;
+    uint64_t object[2]; // private: the struct mem
+    uint64_t offset;    // private: the address
+};
+
 struct futex {
     atomic_uint refcount;
-    struct mem *mem;
-    guest_addr_t addr;
-    uintptr_t shared_key;
+    struct futex_key key;
     struct list queue;
     struct list chain; // locked by futex_hash_lock
     // Monotonic wake counter, bumped by every FUTEX_WAKE-like op on this futex
@@ -120,21 +131,30 @@ static void __attribute__((constructor)) init_futex_hash(void) {
         list_init(&futex_hash[i]);
 }
 
-// What a futex in shared memory is keyed by, with the word's offset in the
-// page's struct data: a SysV segment's key, a file mapping's struct fd, or for
-// anonymous shared memory the struct data itself. fork and an mremap alias
-// share the struct data, and nothing replaces it while the page is mapped, so a
-// wait and a wake through two mappings of the page, or from two processes, name
-// the same futex.
+// The key of a word in a MAP_SHARED page, or false for any other page: a
+// shared futex op on private memory is keyed by the address space, as Linux
+// keys one on an anonymous page. The id says what the memory is, not how this
+// process reached it, so a wait and a wake meet through two mappings, two
+// descriptors or two processes.
 //
-// Anonymous shared memory was keyed by the address space instead, with the
-// offset in the struct data. A process waiting in a MAP_SHARED|MAP_ANONYMOUS
-// page never saw its forked child's wake. And offsets repeat across struct
-// datas: a large mapping materialises in 2 MiB chunks, one struct data each,
-// so two words 2 MiB apart were one futex, and a wake for one could go to a
-// waiter on the other and leave its own waiter asleep.
-static uintptr_t futex_shared_identity(guest_addr_t addr, guest_addr_t *shared_addr) {
-    uintptr_t identity = 0;
+// A page's shared futex was keyed by its SysV segment, else the struct fd its
+// mapping came through, else its struct data, with the word's offset in the
+// HOST mapping. Two open()s of one file are two struct fds, and a mapping from
+// part way into a file puts the word at another offset of its host mapping
+// than one from 0 (off by map_offset; see data_file_offset). So a
+// process-shared mutex, condvar or semaphore in a file that two processes had
+// each opened and mapped -- POSIX shm and sem_open's semaphores among them --
+// was two futexes, and the waiter slept to its deadline. The same keying made
+// two MAP_SHARED mappings of /dev/zero through one descriptor, two different
+// memories, one futex. tests/manual/futex_shared_mapping.c.
+//
+// Before that, anonymous shared memory was keyed by the address space, with
+// the offset in the struct data. A process waiting in a MAP_SHARED|
+// MAP_ANONYMOUS page never saw its forked child's wake. And offsets repeat
+// across struct datas: a large mapping materialises in 2 MiB chunks, one
+// struct data each, so two words 2 MiB apart were one futex, and a wake for
+// one could go to a waiter on the other and leave its own waiter asleep.
+static bool futex_shared_key(guest_addr_t addr, struct futex_key *key) {
     struct mem *mem = current->mem;
     mem_read_lock_quiesce_aware(mem);
     struct pt_entry *entry = mem_pt(mem, PAGE(addr));
@@ -152,57 +172,72 @@ static uintptr_t futex_shared_identity(guest_addr_t addr, guest_addr_t *shared_a
             entry = mem_pt(mem, PAGE(addr));
         }
     }
-    if (entry != NULL && (entry->flags & P_SHARED)) {
-        identity = entry->data->shared_key;
-        if (identity == 0 && entry->data->fd != NULL)
-            identity = (uintptr_t) entry->data->fd;
-        if (identity == 0)
-            identity = (uintptr_t) entry->data;
-        if (shared_addr != NULL)
-            *shared_addr = entry->offset + PGOFFSET(addr);
-    }
+    struct mem_shared_id id;
+    bool shared = mem_shared_page_id(entry, &id);
     mem_read_unlock_quiesce_aware(mem);
-    return identity;
+    if (shared) {
+        // A MAP_SHARED page is at a page offset of its object: a file mapping
+        // starts at a page-aligned file offset, and its host mapping at a
+        // host page, which is a whole number of guest pages.
+        *key = (struct futex_key) {
+            id.kind, {id.object[0], id.object[1]},
+            (id.index << PAGE_BITS) | PGOFFSET(addr),
+        };
+    }
+    return shared;
 }
 
-static struct futex *futex_get_unlocked(guest_addr_t addr, dword_t op) {
-    guest_addr_t key_addr = addr;
-    uintptr_t shared_key = 0;
-    if (!(op & FUTEX_PRIVATE_FLAG_))
-        shared_key = futex_shared_identity(addr, &key_addr);
+// The key of the futex word at addr for op, which says private or shared.
+// Taken before futex_lock, as Linux takes the key before the hash bucket: it
+// can wait on this address space's lock, and nothing about the word has to
+// hold still between the two.
+static void futex_key_of(guest_addr_t addr, dword_t op, struct futex_key *key) {
+    if ((op & FUTEX_PRIVATE_FLAG_) || !futex_shared_key(addr, key))
+        *key = (struct futex_key) {FUTEX_KEY_PRIVATE, {(uintptr_t) current->mem, 0}, addr};
+}
 
-    int hash = (int) (((unsigned long) key_addr ^
-            (shared_key != 0 ? shared_key : (uintptr_t) current->mem)) % FUTEX_HASH_SIZE);
-    struct list *bucket = &futex_hash[hash];
+static bool futex_key_equal(const struct futex_key *a, const struct futex_key *b) {
+    return a->kind == b->kind && a->object[0] == b->object[0] &&
+            a->object[1] == b->object[1] && a->offset == b->offset;
+}
+
+static unsigned futex_key_hash(const struct futex_key *key) {
+    const uint64_t mix = 0x9e3779b97f4a7c15ull;
+    uint64_t h = (key->offset ^ key->kind) * mix;
+    h = (h ^ key->object[0]) * mix;
+    h = (h ^ key->object[1]) * mix;
+    return (unsigned) (h >> (64 - FUTEX_HASH_BITS));
+}
+
+// The futex for key, with a reference; NULL if one could not be made. Call
+// with futex_lock held, which this leaves held either way. The variant for
+// getting a second futex under the lock the first one took.
+static struct futex *futex_get_unlocked(const struct futex_key *key) {
+    struct list *bucket = &futex_hash[futex_key_hash(key)];
     struct futex *futex;
     list_for_each_entry(bucket, futex, chain) {
-        if (futex->addr == key_addr && futex->shared_key == shared_key &&
-                futex->mem == (shared_key != 0 ? NULL : current->mem)) {
+        if (futex_key_equal(&futex->key, key)) {
             futex->refcount++;
             return futex;
         }
     }
 
     futex = malloc(sizeof(struct futex));
-    if (futex == NULL) {
-        unlock(&futex_lock);
+    if (futex == NULL)
         return NULL;
-    }
     futex->refcount = 1;
-    futex->mem = shared_key != 0 ? NULL : current->mem;
-    futex->addr = key_addr;
-    futex->shared_key = shared_key;
+    futex->key = *key;
     futex->wake_seq = 0;
     list_init(&futex->queue);
     list_add(bucket, &futex->chain);
     return futex;
 }
 
-// Returns the futex for the current process at the given addr, and locks it
-// Unlocked variant is available for times when you need to get two futexes at once
-static struct futex *futex_get(guest_addr_t addr, dword_t op) {
+// Takes futex_lock and returns the futex for key, with the lock still held; or
+// NULL, with it released.
+static struct futex *futex_get(const struct futex_key *key) {
     lock(&futex_lock, 0);
-    struct futex *futex = futex_get_unlocked(addr, op);
+    struct futex *futex = futex_get_unlocked(key);
     if (futex == NULL)
         unlock(&futex_lock);
     return futex;
@@ -405,7 +440,9 @@ void futex_release_restart_park(void) {
 }
 
 static int futex_wait_masked(guest_addr_t uaddr, dword_t op, dword_t val, struct timespec *timeout, dword_t bitset) {
-    struct futex *futex = futex_get(uaddr, op);
+    struct futex_key key;
+    futex_key_of(uaddr, op, &key);
+    struct futex *futex = futex_get(&key);
     if (futex == NULL)
         return _ENOMEM; // futex_get already released futex_lock on alloc failure
     int err = 0;
@@ -648,11 +685,64 @@ static bool futex_wait_is_live(struct futex_wait *wait, const char *where) {
     return false;
 }
 
+// Move up to `max` of futex's waiters, from the front of its queue, onto
+// target's; returns how many. Call with futex_lock held.
+//
+// A queued waiter holds a reference on the futex it is queued on, and puts
+// that futex when it leaves the wait (futex_wait_masked), so the reference
+// moves with the waiter. FUTEX_CMP_REQUEUE moved the waiter and not the
+// reference, so a target the call had made itself was freed with the waiter
+// still on its queue, and the assert in futex_put_unlocked -- which every
+// build keeps (xcode-meson.sh) -- aborted the app the first time a
+// CMP_REQUEUE moved anyone: a pthread_cond_broadcast with two waiters, in a
+// glibc from before 2.25. musl requeues with FUTEX_REQUEUE, which did move
+// the reference, and a current glibc does not requeue a condvar at all.
+//
+// A futex requeued onto itself -- two words that are one futex, as the same
+// file word through two mappings now is -- moves nothing, and counts the
+// waiters it would have moved, as Linux does. Moving each to the back of its
+// own queue went round that queue until `max`: for an INT_MAX, over 90 s
+// holding futex_lock. tests/manual/futex_robust_requeue.c.
+static unsigned futex_requeue_waiters(struct futex *futex, struct futex *target, dword_t max) {
+    struct futex_wait *wait, *tmp;
+    unsigned requeued = 0;
+    list_for_each_entry_safe(&futex->queue, wait, tmp, queue) {
+        if (requeued >= max)
+            break;
+        if (!futex_wait_is_live(wait, "requeue")) {
+            list_remove(&wait->queue);
+            continue;
+        }
+        if (target != futex) {
+            list_remove(&wait->queue);
+            list_add_tail(&target->queue, &wait->queue);
+            assert(futex->refcount > 1); // the caller's own reference stays
+            futex->refcount--;
+            target->refcount++;
+            wait->futex = target;
+        }
+        requeued++;
+    }
+    return requeued;
+}
+
 static int futex_wakelike(int op, guest_addr_t uaddr, dword_t wake_max, dword_t requeue_max,
         guest_addr_t requeue_addr, dword_t wake_mask) {
-    struct futex *futex = futex_get(uaddr, op);
+    bool requeue = (op & FUTEX_CMD_MASK_) == FUTEX_REQUEUE_;
+    struct futex_key key, key2;
+    futex_key_of(uaddr, op, &key);
+    if (requeue)
+        futex_key_of(requeue_addr, op, &key2);
+    struct futex *futex = futex_get(&key);
     if (futex == NULL)
         return 0; // alloc failure: no futex exists, so nothing is queued to wake
+    // The requeue target, got before anything is woken, so that failing to
+    // make it changes nothing.
+    struct futex *futex2 = NULL;
+    if (requeue && (futex2 = futex_get_unlocked(&key2)) == NULL) {
+        futex_put(futex);
+        return _ENOMEM;
+    }
 
     // Advance the wake counter (under futex_lock) BEFORE walking the queue, so
     // a waiter that dequeued for an SA_RESTART restart and is momentarily
@@ -677,23 +767,9 @@ static int futex_wakelike(int op, guest_addr_t uaddr, dword_t wake_max, dword_t 
         woken++;
     }
 
-    if ((op & FUTEX_CMD_MASK_) == FUTEX_REQUEUE_) {
-        struct futex *futex2 = futex_get_unlocked(requeue_addr, op);
-        unsigned requeued = 0;
-        list_for_each_entry_safe(&futex->queue, wait, tmp, queue) {
-            if (requeued >= requeue_max)
-                break;
-            // sketchy as hell
-            list_remove(&wait->queue);
-            list_add_tail(&futex2->queue, &wait->queue);
-            assert(futex->refcount > 1); // should be true because this function keeps a reference
-            futex->refcount--;
-            futex2->refcount++;
-            wait->futex = futex2;
-            requeued++;
-        }
+    if (requeue) {
+        woken += futex_requeue_waiters(futex, futex2, requeue_max);
         futex_put_unlocked(futex2);
-        woken += requeued;
     }
 
     futex_trace(FUTEX_EV_WAKE, uaddr, (int) woken);
@@ -778,7 +854,13 @@ static void futex_apply_word_op(void *arg) {
 // futex_get_unlocked (reusing that same lock) -- so the read-modify-write
 // below is already serialized against every other futex op, matching how
 // futex_load provides atomicity for plain FUTEX_WAIT.
-static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2,
+//
+// Both words are keyed by the caller's op, FUTEX_PRIVATE_FLAG and all, as
+// Linux keys them. They were keyed as shared whatever the op said, so a
+// FUTEX_WAKE_OP_PRIVATE on a MAP_SHARED page -- a process-private condvar in
+// shared memory, signalled by a glibc from before 2.25 -- missed the
+// FUTEX_WAIT_PRIVATE waiter it was for.
+static int futex_wake_op(guest_addr_t uaddr, dword_t op_flags, dword_t wake_max, dword_t wake_max2,
         guest_addr_t uaddr2, dword_t encoded_op) {
     unsigned raw_op = (encoded_op >> 28) & 0xf;
     unsigned cmp = (encoded_op >> 24) & 0xf;
@@ -799,8 +881,17 @@ static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2
         oparg = 1 << (oparg & 31);
     }
 
-    struct futex *futex1 = futex_get(uaddr, FUTEX_WAKE_OP_);
-    struct futex *futex2 = futex_get_unlocked(uaddr2, FUTEX_WAKE_OP_);
+    struct futex_key key1, key2;
+    futex_key_of(uaddr, op_flags, &key1);
+    futex_key_of(uaddr2, op_flags, &key2);
+    struct futex *futex1 = futex_get(&key1);
+    if (futex1 == NULL)
+        return _ENOMEM;
+    struct futex *futex2 = futex_get_unlocked(&key2);
+    if (futex2 == NULL) {
+        futex_put(futex1);
+        return _ENOMEM;
+    }
 
     mem_read_lock_quiesce_aware(current->mem);
     bool may_fault;
@@ -888,8 +979,17 @@ static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2
 // through futex_wakelike -- which is why it took a probe to find.
 static int futex_cmp_requeue(guest_addr_t uaddr1, dword_t op, dword_t val, guest_addr_t uaddr2, dword_t val2,
         dword_t val3) {
-    struct futex *futex1 = futex_get(uaddr1, op);
-    struct futex *futex2 = futex_get_unlocked(uaddr2, op);
+    struct futex_key key1, key2;
+    futex_key_of(uaddr1, op, &key1);
+    futex_key_of(uaddr2, op, &key2);
+    struct futex *futex1 = futex_get(&key1);
+    if (futex1 == NULL)
+        return _ENOMEM;
+    struct futex *futex2 = futex_get_unlocked(&key2);
+    if (futex2 == NULL) {
+        futex_put(futex1);
+        return _ENOMEM;
+    }
     int err = 0;
     dword_t tmp;
 
@@ -900,30 +1000,23 @@ static int futex_cmp_requeue(guest_addr_t uaddr1, dword_t op, dword_t val, guest
     } else {
         struct futex_wait *wait, *tmp_wait;
         dword_t woken = 0;
-        dword_t requeued = 0;
         list_for_each_entry_safe(&futex1->queue, wait, tmp_wait, queue) {
+            if (woken >= val)
+                break;
             if (!futex_wait_is_live(wait, "cmp_requeue")) {
                 list_remove(&wait->queue);
                 continue;
             }
-            if (woken < val) {
-                notify(&wait->cond);
-                list_remove(&wait->queue);
-                woken++;
-                continue;
-            }
-            if (requeued >= val2)
-                break;
+            notify(&wait->cond);
             list_remove(&wait->queue);
-            list_add_tail(&futex2->queue, &wait->queue);
-            wait->futex = futex2;
-            requeued++;
+            woken++;
         }
-        err = (int) (woken + requeued);
+        err = (int) (woken + futex_requeue_waiters(futex1, futex2, val2));
     }
 
-    futex_put(futex1);
+    // futex2 first: futex_put releases futex_lock, which the other put needs.
     futex_put_unlocked(futex2);
+    futex_put(futex1);
     return err;
 }
 
@@ -946,8 +1039,17 @@ void set_thread_priority(pthread_t thread, int priority) {
 
 static int futex_cmp_requeue_pi(guest_addr_t uaddr1, dword_t op, dword_t val, guest_addr_t uaddr2, dword_t val2,
         dword_t UNUSED(val3)) {
-    struct futex *futex1 = futex_get(uaddr1, op);
-    struct futex *futex2 = futex_get_unlocked(uaddr2, op);
+    struct futex_key key1, key2;
+    futex_key_of(uaddr1, op, &key1);
+    futex_key_of(uaddr2, op, &key2);
+    struct futex *futex1 = futex_get(&key1);
+    if (futex1 == NULL)
+        return _ENOMEM;
+    struct futex *futex2 = futex_get_unlocked(&key2);
+    if (futex2 == NULL) {
+        futex_put(futex1);
+        return _ENOMEM;
+    }
     int err = 0;
     dword_t tmp;
 
@@ -957,7 +1059,6 @@ static int futex_cmp_requeue_pi(guest_addr_t uaddr1, dword_t op, dword_t val, gu
         err = _EAGAIN;
     } else {
         struct futex_wait *wait, *tmp_wait;
-        int requeued = 0;
         int current_priority = get_thread_priority(pthread_self());
         int highest_waiting_priority = current_priority;
 
@@ -974,24 +1075,15 @@ static int futex_cmp_requeue_pi(guest_addr_t uaddr1, dword_t op, dword_t val, gu
             set_thread_priority(pthread_self(), highest_waiting_priority);
         }
 
-        list_for_each_entry_safe(&futex1->queue, wait, tmp_wait, queue) {
-            if ((dword_t) requeued >= val2) {
-                break;
-            }
-
-            list_remove(&wait->queue);
-            list_add_tail(&futex2->queue, &wait->queue);
-            wait->futex = futex2;
-            requeued++;
-        }
+        err = (int) futex_requeue_waiters(futex1, futex2, val2);
 
         // Restore original priority
         set_thread_priority(pthread_self(), current_priority);
-        err = requeued;
     }
 
-    futex_put(futex1);
+    // futex2 first: futex_put releases futex_lock, which the other put needs.
     futex_put_unlocked(futex2);
+    futex_put(futex1);
     return err;
 }
 
@@ -1069,7 +1161,7 @@ dword_t sys_futex_common(guest_addr_t uaddr, dword_t op, dword_t val, guest_addr
             return futex_cmp_requeue(uaddr, op, val, uaddr2, timeout_or_val2, val3);
         case FUTEX_WAKE_OP_:
             STRACE("futex(FUTEX_WAKE_OP, %#x, %d, %d, %#x, %#x)", uaddr, val, timeout_or_val2, uaddr2, val3);
-            return futex_wake_op(uaddr, val, timeout_or_val2, uaddr2, val3);
+            return futex_wake_op(uaddr, op, val, timeout_or_val2, uaddr2, val3);
         case FUTEX_LOCK_PI_:
             STRACE("Unimplemented futex(FUTEX_LOCK_PI, %#x, %d, %#x)", uaddr, val, uaddr2);
             FIXME("Unsupported futex FUTEX_LOCK_PI(%#x, %d, %d, timeout=%#x, %#x, %d) (FUTEX_LOCK_PI) from %s[%d]", uaddr, op, val, timeout_or_val2, uaddr2, val3, current->comm, current->pid);

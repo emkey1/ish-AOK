@@ -21,6 +21,17 @@
 //   Linux returns woken + requeued. Current musl is unaffected (it uses plain
 //   FUTEX_REQUEUE), which is why this needed a probe rather than showing up.
 //
+//   Two more in the same call, found once a requeue between processes could
+//   find its waiter (futex_shared_mapping). A waiter it moved left its
+//   reference behind, so the futex it was moved to -- made by the call itself
+//   when nobody else waited there -- was freed with the waiter on its queue:
+//   the assert in futex_put_unlocked aborted the whole emulator the first time
+//   a CMP_REQUEUE moved anyone, which the check above never does (it wakes
+//   one and moves none). That is the pre-2.25 glibc broadcast. And requeueing
+//   a word onto itself moved each waiter to the back of its own queue, over and
+//   over until the requeue count ran out: INT_MAX, over 90 seconds under the
+//   global futex lock. Linux counts them and moves nothing.
+//
 // The raw-protocol half matters: it tests the kernel directly rather than
 // through whatever the C library decided to support, which is what made the
 // original finding trustworthy.
@@ -28,6 +39,7 @@
 // Measured against x86_64 glibc on Linux 6.12.
 #define _GNU_SOURCE
 #include <errno.h>
+#include <limits.h>
 #include <pthread.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
@@ -38,6 +50,7 @@
 // Not in the musl sysroot; stable kernel ABI.
 #ifndef FUTEX_WAIT
 #define FUTEX_WAIT 0
+#define FUTEX_WAKE 1
 #define FUTEX_CMP_REQUEUE 4
 #endif
 #define OWNER_DIED 0x40000000u
@@ -61,6 +74,17 @@ static void *waiter(void *arg) {
     errno = 0;
     waiter_ret = fx(&word1, FUTEX_WAIT, 1, &to, NULL, 0);
     waiter_errno = errno;
+    return NULL;
+}
+
+static volatile int pair_ret[2], pair_ready;
+static void *pair_waiter(void *arg) {
+    int i = (int) (long) arg;
+    __atomic_add_fetch(&pair_ready, 1, __ATOMIC_SEQ_CST);
+    struct timespec to = { 2, 0 };
+    errno = 0;
+    int r = fx(&word1, FUTEX_WAIT, 1, &to, NULL, 0);
+    pair_ret[i] = r == 0 ? 0 : errno;
     return NULL;
 }
 
@@ -128,6 +152,50 @@ int main(int argc, char **argv) {
         ck("  one waiter is woken (rc counts it)", r, 1);
         ck("  and it returns success, not a timeout", waiter_ret, 0);
         ck("  promptly", ms < 1500, 1);
+    }
+
+    test_logf("[89] and a waiter it MOVES is woken at the target\n");
+    {
+        word1 = 1;
+        waiter_ready = 0; waiter_ret = -99;
+        pthread_t t;
+        pthread_create(&t, NULL, waiter, NULL);
+        while (!waiter_ready) usleep(1000);
+        usleep(200000);                       // let it reach the wait
+        errno = 0;
+        // Wake none and move one, to a word nobody else waits on.
+        int r = fx(&word1, FUTEX_CMP_REQUEUE, 0, (void *)(long) 1, &word2, 1);
+        ck("  it is moved (rc counts it)", r, 1);
+        int w = fx(&word2, FUTEX_WAKE, 1, NULL, NULL, 0);
+        pthread_join(t, NULL);
+        ck("  a wake at the target finds it", w, 1);
+        ck("  and it returns success, not a timeout", waiter_ret, 0);
+    }
+
+    test_logf("[89] requeueing a word onto itself counts, and moves nothing\n");
+    {
+        word1 = 1;
+        pair_ready = 0;
+        pair_ret[0] = pair_ret[1] = -99;
+        pthread_t t[2];
+        for (long i = 0; i < 2; i++)
+            pthread_create(&t[i], NULL, pair_waiter, (void *) i);
+        while (pair_ready < 2) usleep(1000);
+        usleep(200000);
+        struct timespec a, b;
+        clock_gettime(CLOCK_MONOTONIC, &a);
+        int r = fx(&word1, FUTEX_CMP_REQUEUE, 0, (void *)(long) INT_MAX, &word1, 1);
+        clock_gettime(CLOCK_MONOTONIC, &b);
+        double ms = (b.tv_sec-a.tv_sec)*1000.0 + (b.tv_nsec-a.tv_nsec)/1e6;
+        test_logf("    requeue rc=%d after %.0fms\n", r, ms);
+        ck("  both waiters are counted", r, 2);
+        ck("  promptly", ms < 500, 1);
+        int w = fx(&word1, FUTEX_WAKE, INT_MAX, NULL, NULL, 0);
+        for (int i = 0; i < 2; i++)
+            pthread_join(t[i], NULL);
+        ck("  and a wake still finds both", w, 2);
+        ck("  the first returns success", pair_ret[0], 0);
+        ck("  the second returns success", pair_ret[1], 0);
     }
 
     test_logf("[88] musl/glibc can create a robust mutex\n");

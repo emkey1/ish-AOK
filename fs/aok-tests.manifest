@@ -295,6 +295,7 @@ exec_cred_ids.c
 sock_bind_refuse.c
 time_clocks_ticks.c
 futex_robust_requeue.c
+futex_shared_mapping.c
 inotify_mask_queue.c
 inotify_close_race.c
 statx_mnt_id_timerfd.c

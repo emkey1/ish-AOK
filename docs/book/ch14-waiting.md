@@ -21,11 +21,17 @@ is why every threaded program on Linux is, underneath, a futex program: pthread
 mutexes, condition variables, semaphores, Go's scheduler, Rust's `std::sync`,
 Java's monitors.
 
-AOK implements the operation set on a hash table of wait queues keyed by guest
-address. A futex in anonymous shared memory is keyed instead by the page's
-`struct data` and the word's offset in it, which every mapping of the page
-shares, so a wait and a wake meet through an `mremap` alias or from two
-processes after `fork`. The interesting parts are all in the corners.
+AOK implements the operation set on a hash table of wait queues. A private
+futex is keyed by its address in one address space. A shared one is keyed by
+what the memory is, not by how a process reached it — a file's host device,
+inode and page, a SysV segment and page, or anonymous shared memory's own
+`struct data` and page (`mem_shared_page_id`) — plus the word's offset in the
+page. So a wait and a wake meet through an `mremap` alias, from two processes
+after `fork`, and between two processes that each opened and mapped the file
+themselves, which is what POSIX shm and `sem_open` are. Keyed by the
+`struct fd` the mapping came through, and by the word's offset in the host
+mapping rather than the file, every process-shared lock in such a file slept to
+its deadline. The interesting parts are all in the corners.
 
 > **The bug that taught us this**
 >
@@ -49,6 +55,14 @@ processes after `fork`. The interesting parts are all in the corners.
 > path, so nothing failed, no report was filed, and the only way this was ever
 > going to be found was somebody deliberately writing a probe for an operation
 > nothing currently calls. Some bugs cannot be found by using the system.
+>
+> It had a fourth fault, and that one was worse. A queued waiter holds a
+> reference on its futex, and the requeue moved the waiter without it, so the
+> futex it had just made to move the waiter onto was freed underneath it — an
+> assert every build keeps, and so an abort of the whole app, the first time a
+> `FUTEX_CMP_REQUEUE` moved anyone. The probe never did: it woke one and moved
+> none. The requeue between two processes that finally did was only possible
+> once shared futexes were keyed by the memory rather than the mapping.
 
 Robust futexes tell an even better story, because there the bug was hidden
 behind another bug.
@@ -416,7 +430,8 @@ spends most of its time on threads that are asleep when they should not be.
 [util/timer.c](../../util/timer.c) (`host_nanosleep_precise`),
 [kernel/task.c](../../kernel/task.c) (`task_poke_shared_mem`, `guest_count_runnable`),
 [fs/fuse.c](../../fs/fuse.c),
-`tests/manual/futex_robust_requeue.c`, `tests/manual/pidfd_epoll_deadlock.c`,
+`tests/manual/futex_robust_requeue.c`, `tests/manual/futex_shared_mapping.c`,
+`tests/manual/pidfd_epoll_deadlock.c`,
 `tests/manual/blocked_wait_state.c`, `tests/manual/timer_lateness.c`,
 `tests/manual/timer_conventions.c`,
 [docs/TODO.md](../../docs/TODO.md).
