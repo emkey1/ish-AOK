@@ -96,6 +96,7 @@ static int nlibc_host_errno(int guest_err) {
         case 38: return ENOSYS;   // Linux 38 is macOS 78; this is the one that bit
         case 39: return ENOTEMPTY;
         case 40: return ELOOP;
+        case 61: return ENODATA;
 
         // The socket errnos. Every one of these used to land on the default
         // and come out as EINVAL, which is how a perfectly ordinary
@@ -7125,111 +7126,193 @@ int nlibc_syncfs(int fd_no) {
 void nlibc_sync(void) {
 }
 
-// The extended-attribute family, all eight of Darwin's spellings.
+// The extended-attribute family. These reach the guest's calls (kernel/xattr.c)
+// like every other path call here, through native_syscall with the strings and
+// buffers marshalled into guest memory -- so zsh's zsh/attr module and any
+// native tool see exactly what a guest program sees, on the guest's files.
 //
-// The guest's answer is again a constant, and again read out of the table
-// rather than guessed: kernel/calls.c's arm64 entry is
-// `[5 ... 16] = (syscall_t) sys_xattr_stub` -- twelve numbers, the whole
-// get/set/list/remove x plain/l/f matrix -- and kernel/fs.c:2763 makes
-// sys_xattr_stub `return _ENOTSUP;` unconditionally, for any path. AOK's fakefs
-// stores no xattrs, so "this filesystem does not support them" is the true
-// answer and not a refusal to answer.
+// Before AOK had extended attributes they answered ENOTSUP outright, and before
+// THAT they were unrouted: `zmodload zsh/attr; zlistattr /Users` reached the
+// Mac's own filesystem from a guest prompt. The routing is the point; the
+// answers are whatever the kernel's are.
 //
-// These are absent from the generated header for a different reason than sync
-// above: the numbers arrive as a RANGE initialiser and the generator's regex
-// only matches single-index entries. Worth knowing before assuming a missing
-// NATIVE_SYS_* means a missing syscall.
-//
-// What this replaces is the sharpest result the triage turned up, and it is
-// worth keeping: `zmodload zsh/attr` (one line in a .zshrc) plus
-// `zlistattr /Users` returned SUCCESS in a guest where /Users does not exist,
-// while `zlistattr /etc/debian_version` failed on a file the guest could list.
-// The module was resolving guest paths against the Mac's root -- a read and
-// write primitive aimed at the device, two words from any prompt.
-//
-// If AOK ever implements xattrs, these move to native_syscall together with the
-// kernel change; the l-forms are Darwin's XATTR_NOFOLLOW option rather than
-// separate entry points, which is why there are eight names here and twelve in
-// the table.
+// Darwin's calls take a position (resource forks only; anything else must pass
+// 0) and an options word where Linux has separate l-forms and different flag
+// values, and report "no such attribute" as ENOATTR rather than ENODATA.
+
+#if !defined(__linux__)
+#ifndef XATTR_NOFOLLOW
+#define XATTR_NOFOLLOW 0x0001
+#define XATTR_CREATE 0x0002
+#define XATTR_REPLACE 0x0004
+#endif
+#ifndef ENOATTR
+#define ENOATTR 93
+#endif
+#endif
+
+static long nlibc_xattr_ret(sqword_t res) {
+#if !defined(__linux__)
+    if (res == _ENODATA) {
+        errno = ENOATTR;
+        return -1;
+    }
+#endif
+    return nlibc_ret(res);
+}
+
+static ssize_t nlibc_xattr_get(int nr, sqword_t target, const char *name, void *value, size_t size) {
+    NLIBC_PATH(guest_name, name);
+    guest_addr_t guest_value = 0;
+    if (size != 0) {
+        if (size > 65536)
+            size = 65536;
+        guest_value = native_scratch_alloc(size);
+        if (guest_value == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    sqword_t res = native_syscall(nr, target, guest_name, guest_value, size);
+    if (res > 0 && size != 0 && native_scratch_get(value, guest_value, (size_t) res) < 0)
+        return nlibc_fail(_EFAULT);
+    return nlibc_xattr_ret(res);
+}
+
+static int nlibc_xattr_set(int nr, sqword_t target, const char *name, const void *value,
+        size_t size, int guest_flags) {
+    NLIBC_PATH(guest_name, name);
+    guest_addr_t guest_value = 0;
+    if (size != 0 && size <= 65536) {
+        if (value == NULL)
+            return nlibc_fail(_EFAULT);
+        guest_value = native_scratch_put(value, size);
+        if (guest_value == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    return (int) nlibc_xattr_ret(native_syscall(nr, target, guest_name, guest_value, size,
+            guest_flags));
+}
+
+static ssize_t nlibc_xattr_list(int nr, sqword_t target, char *names, size_t size) {
+    guest_addr_t guest_list = 0;
+    if (size != 0) {
+        if (size > 65536)
+            size = 65536;
+        guest_list = native_scratch_alloc(size);
+        if (guest_list == 0)
+            return nlibc_fail(_ENOMEM);
+    }
+    sqword_t res = native_syscall(nr, target, guest_list, size);
+    if (res > 0 && size != 0 && native_scratch_get(names, guest_list, (size_t) res) < 0)
+        return nlibc_fail(_EFAULT);
+    return nlibc_xattr_ret(res);
+}
+
+static int nlibc_xattr_remove(int nr, sqword_t target, const char *name) {
+    NLIBC_PATH(guest_name, name);
+    return (int) nlibc_xattr_ret(native_syscall(nr, target, guest_name));
+}
+
 #if defined(__linux__)
-// Linux's xattr calls take neither a position nor an options word, and split
-// "do not follow symlinks" into separate l-prefixed entry points. Every one of
-// these fails with ENOTSUP exactly as the Darwin set does -- see the note in
-// native_libc.h -- so this is the same answer in the platform's own shape.
 ssize_t nlibc_getxattr(const char *path, const char *name, void *value, size_t size) {
-    (void) path; (void) name; (void) value; (void) size;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_path, path);
+    return nlibc_xattr_get(NATIVE_SYS_getxattr, guest_path, name, value, size);
 }
 ssize_t nlibc_fgetxattr(int fd_no, const char *name, void *value, size_t size) {
-    (void) fd_no; (void) name; (void) value; (void) size;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    return nlibc_xattr_get(NATIVE_SYS_fgetxattr, fd_no, name, value, size);
 }
 int nlibc_setxattr(const char *path, const char *name, const void *value,
         size_t size, int flags) {
-    (void) path; (void) name; (void) value; (void) size; (void) flags;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_path, path);
+    return nlibc_xattr_set(NATIVE_SYS_setxattr, guest_path, name, value, size, flags);
 }
 int nlibc_fsetxattr(int fd_no, const char *name, const void *value,
         size_t size, int flags) {
-    (void) fd_no; (void) name; (void) value; (void) size; (void) flags;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    return nlibc_xattr_set(NATIVE_SYS_fsetxattr, fd_no, name, value, size, flags);
 }
 ssize_t nlibc_listxattr(const char *path, char *names, size_t size) {
-    (void) path; (void) names; (void) size;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_path, path);
+    return nlibc_xattr_list(NATIVE_SYS_listxattr, guest_path, names, size);
 }
 ssize_t nlibc_flistxattr(int fd_no, char *names, size_t size) {
-    (void) fd_no; (void) names; (void) size;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    return nlibc_xattr_list(NATIVE_SYS_flistxattr, fd_no, names, size);
 }
 int nlibc_removexattr(const char *path, const char *name) {
-    (void) path; (void) name;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_path, path);
+    return nlibc_xattr_remove(NATIVE_SYS_removexattr, guest_path, name);
 }
 int nlibc_fremovexattr(int fd_no, const char *name) {
-    (void) fd_no; (void) name;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    return nlibc_xattr_remove(NATIVE_SYS_fremovexattr, fd_no, name);
 }
 #else
+// Darwin's options: XATTR_NOFOLLOW 1, XATTR_CREATE 2, XATTR_REPLACE 4. The
+// others (NOSECURITY, NODEFAULT, SHOWCOMPRESSION) ask about things a Linux
+// filesystem does not have, and are ignored.
+static int nlibc_xattr_flags(int options) {
+    return ((options & XATTR_CREATE) ? 1 : 0) | ((options & XATTR_REPLACE) ? 2 : 0);
+}
 ssize_t nlibc_getxattr(const char *path, const char *name, void *value,
         size_t size, uint32_t position, int options) {
-    (void) path; (void) name; (void) value; (void) size;
-    (void) position; (void) options;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    if (position != 0)
+        return nlibc_fail(_EINVAL);
+    NLIBC_PATH(guest_path, path);
+    return nlibc_xattr_get((options & XATTR_NOFOLLOW) ? NATIVE_SYS_lgetxattr : NATIVE_SYS_getxattr,
+            guest_path, name, value, size);
 }
 ssize_t nlibc_fgetxattr(int fd_no, const char *name, void *value,
         size_t size, uint32_t position, int options) {
-    (void) fd_no; (void) name; (void) value; (void) size;
-    (void) position; (void) options;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    (void) options;
+    if (position != 0)
+        return nlibc_fail(_EINVAL);
+    return nlibc_xattr_get(NATIVE_SYS_fgetxattr, fd_no, name, value, size);
 }
 int nlibc_setxattr(const char *path, const char *name, const void *value,
         size_t size, uint32_t position, int options) {
-    (void) path; (void) name; (void) value; (void) size;
-    (void) position; (void) options;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    if (position != 0)
+        return nlibc_fail(_EINVAL);
+    NLIBC_PATH(guest_path, path);
+    return nlibc_xattr_set((options & XATTR_NOFOLLOW) ? NATIVE_SYS_lsetxattr : NATIVE_SYS_setxattr,
+            guest_path, name, value, size, nlibc_xattr_flags(options));
 }
 int nlibc_fsetxattr(int fd_no, const char *name, const void *value,
         size_t size, uint32_t position, int options) {
-    (void) fd_no; (void) name; (void) value; (void) size;
-    (void) position; (void) options;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    if (position != 0)
+        return nlibc_fail(_EINVAL);
+    return nlibc_xattr_set(NATIVE_SYS_fsetxattr, fd_no, name, value, size,
+            nlibc_xattr_flags(options));
 }
 ssize_t nlibc_listxattr(const char *path, char *names, size_t size, int options) {
-    (void) path; (void) names; (void) size; (void) options;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_path, path);
+    return nlibc_xattr_list((options & XATTR_NOFOLLOW) ? NATIVE_SYS_llistxattr : NATIVE_SYS_listxattr,
+            guest_path, names, size);
 }
 ssize_t nlibc_flistxattr(int fd_no, char *names, size_t size, int options) {
-    (void) fd_no; (void) names; (void) size; (void) options;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    (void) options;
+    return nlibc_xattr_list(NATIVE_SYS_flistxattr, fd_no, names, size);
 }
 int nlibc_removexattr(const char *path, const char *name, int options) {
-    (void) path; (void) name; (void) options;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    NLIBC_PATH(guest_path, path);
+    return nlibc_xattr_remove((options & XATTR_NOFOLLOW) ? NATIVE_SYS_lremovexattr : NATIVE_SYS_removexattr,
+            guest_path, name);
 }
 int nlibc_fremovexattr(int fd_no, const char *name, int options) {
-    (void) fd_no; (void) name; (void) options;
-    return nlibc_fail(_ENOTSUP);
+    NATIVE_FRAME;
+    (void) options;
+    return nlibc_xattr_remove(NATIVE_SYS_fremovexattr, fd_no, name);
 }
 #endif
 

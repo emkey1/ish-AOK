@@ -427,14 +427,31 @@ fd_t sys_fsmount_guest(fd_t f, dword_t flags, dword_t attr_flags);
 dword_t sys_move_mount(fd_t from_dfd, addr_t from_path_addr, fd_t to_dfd, addr_t to_path_addr, dword_t flags);
 dword_t sys_move_mount_guest(fd_t from_dfd, guest_addr_t from_path_addr, fd_t to_dfd, guest_addr_t to_path_addr, dword_t flags);
 
-dword_t sys_xattr_stub(addr_t path_addr, addr_t name_addr, addr_t value_addr, dword_t size, dword_t flags);
-dword_t sys_setxattr_guest(guest_addr_t path_addr, guest_addr_t name_addr, guest_addr_t value_addr, dword_t size, dword_t flags);
-dword_t sys_fsetxattr_guest(fd_t fd, guest_addr_t name_addr, guest_addr_t value_addr, dword_t size, dword_t flags);
-dword_t sys_getxattr_guest(guest_addr_t path_addr, guest_addr_t name_addr, guest_addr_t value_addr, dword_t size);
-dword_t sys_fgetxattr_guest(fd_t fd, guest_addr_t name_addr, guest_addr_t value_addr, dword_t size);
-dword_t sys_listxattr_guest(guest_addr_t path_addr, guest_addr_t list_addr, dword_t size);
-dword_t sys_flistxattr_guest(fd_t fd, guest_addr_t list_addr, dword_t size);
+// kernel/xattr.c. The i386 table's forms take its 32-bit words; the _guest
+// forms are what the 64-bit dispatchers call, with the size at full width.
+dword_t sys_setxattr(addr_t path, addr_t name, addr_t value, dword_t size, dword_t flags);
+dword_t sys_lsetxattr(addr_t path, addr_t name, addr_t value, dword_t size, dword_t flags);
+dword_t sys_fsetxattr(fd_t fd, addr_t name, addr_t value, dword_t size, dword_t flags);
+dword_t sys_getxattr(addr_t path, addr_t name, addr_t value, dword_t size);
+dword_t sys_lgetxattr(addr_t path, addr_t name, addr_t value, dword_t size);
+dword_t sys_fgetxattr(fd_t fd, addr_t name, addr_t value, dword_t size);
+dword_t sys_listxattr(addr_t path, addr_t list, dword_t size);
+dword_t sys_llistxattr(addr_t path, addr_t list, dword_t size);
+dword_t sys_flistxattr(fd_t fd, addr_t list, dword_t size);
+dword_t sys_removexattr(addr_t path, addr_t name);
+dword_t sys_lremovexattr(addr_t path, addr_t name);
+dword_t sys_fremovexattr(fd_t fd, addr_t name);
+dword_t sys_setxattr_guest(guest_addr_t path_addr, guest_addr_t name_addr, guest_addr_t value_addr, qword_t size, dword_t flags);
+dword_t sys_lsetxattr_guest(guest_addr_t path_addr, guest_addr_t name_addr, guest_addr_t value_addr, qword_t size, dword_t flags);
+dword_t sys_fsetxattr_guest(fd_t fd, guest_addr_t name_addr, guest_addr_t value_addr, qword_t size, dword_t flags);
+dword_t sys_getxattr_guest(guest_addr_t path_addr, guest_addr_t name_addr, guest_addr_t value_addr, qword_t size);
+dword_t sys_lgetxattr_guest(guest_addr_t path_addr, guest_addr_t name_addr, guest_addr_t value_addr, qword_t size);
+dword_t sys_fgetxattr_guest(fd_t fd, guest_addr_t name_addr, guest_addr_t value_addr, qword_t size);
+dword_t sys_listxattr_guest(guest_addr_t path_addr, guest_addr_t list_addr, qword_t size);
+dword_t sys_llistxattr_guest(guest_addr_t path_addr, guest_addr_t list_addr, qword_t size);
+dword_t sys_flistxattr_guest(fd_t fd, guest_addr_t list_addr, qword_t size);
 dword_t sys_removexattr_guest(guest_addr_t path_addr, guest_addr_t name_addr);
+dword_t sys_lremovexattr_guest(guest_addr_t path_addr, guest_addr_t name_addr);
 dword_t sys_fremovexattr_guest(fd_t fd, guest_addr_t name_addr);
 
 // process information
@@ -530,6 +547,32 @@ int_t sys_seccomp(dword_t op, dword_t flags, addr_t uargs);
 int_t sys_arch_prctl(int_t code, addr_t addr);
 int_t sys_arch_prctl_guest(int_t code, guest_addr_t addr);
 int_t sys_rseq(addr_t rseq_addr, dword_t rseq_len, dword_t flags, dword_t sig);
+dword_t sys_getcpu(addr_t cpu_addr, addr_t node_addr, addr_t tcache);
+int_t sys_pidfd_getfd(fd_t pidfd, fd_t targetfd, dword_t flags);
+// kernel/mqueue.c
+fd_t sys_mq_open(addr_t name_addr, dword_t oflag, mode_t_ mode, addr_t attr_addr);
+fd_t sys_mq_open_guest(guest_addr_t name_addr, dword_t oflag, mode_t_ mode, guest_addr_t attr_addr);
+dword_t sys_mq_unlink(addr_t name_addr);
+dword_t sys_mq_unlink_guest(guest_addr_t name_addr);
+dword_t sys_mq_timedsend(fd_t mqd, addr_t msg_addr, dword_t len, dword_t prio, addr_t timeout_addr);
+dword_t sys_mq_timedsend_time64(fd_t mqd, addr_t msg_addr, dword_t len, dword_t prio, addr_t timeout_addr);
+dword_t sys_mq_timedsend_guest(fd_t mqd, guest_addr_t msg_addr, qword_t len, dword_t prio, guest_addr_t timeout_addr);
+dword_t sys_mq_timedreceive(fd_t mqd, addr_t msg_addr, dword_t len, addr_t prio_addr, addr_t timeout_addr);
+dword_t sys_mq_timedreceive_time64(fd_t mqd, addr_t msg_addr, dword_t len, addr_t prio_addr, addr_t timeout_addr);
+dword_t sys_mq_timedreceive_guest(fd_t mqd, guest_addr_t msg_addr, qword_t len, guest_addr_t prio_addr, guest_addr_t timeout_addr);
+dword_t sys_mq_notify(fd_t mqd, addr_t sev_addr);
+dword_t sys_mq_notify_guest(fd_t mqd, guest_addr_t sev_addr);
+dword_t sys_mq_getsetattr(fd_t mqd, addr_t new_addr, addr_t old_addr);
+dword_t sys_mq_getsetattr_guest(fd_t mqd, guest_addr_t new_addr, guest_addr_t old_addr);
+// /proc/sys/fs/mqueue/<name> of the calling task's IPC namespace, or NULL.
+unsigned *mqueue_sysctl(const char *name);
+// The process a pidfd names, with a reference the caller drops
+// (task_ref_cnt_mod): NULL with *err EBADF for a descriptor that is not a
+// pidfd, ESRCH once the process has been reaped. kernel/pidfd.c.
+struct task *pidfd_task_ref(fd_t pidfd, int *err);
+dword_t sys_process_madvise_guest(fd_t pidfd, guest_addr_t vec, qword_t vlen, dword_t advice, dword_t flags);
+dword_t sys_process_madvise(fd_t pidfd, addr_t vec, dword_t vlen, dword_t advice, dword_t flags);
+dword_t sys_getcpu_guest(guest_addr_t cpu_addr, guest_addr_t node_addr, guest_addr_t tcache);
 int_t sys_rseq_guest(guest_addr_t rseq_addr, dword_t rseq_len, dword_t flags, dword_t sig);
 int_t sys_reboot(int_t magic, int_t magic2, int_t cmd);
 
@@ -634,7 +677,8 @@ int_t sys_semtimedop_guest(int_t semid, guest_addr_t sops, uint_t nsops, guest_a
 int_t sys_semctl(int_t semid, int_t semnum, int_t cmd, addr_t arg);
 int_t sys_semctl_guest(int_t semid, int_t semnum, int_t cmd, guest_addr_t arg);
 struct tgroup;
-void sysv_sem_exit(struct tgroup *group);
+struct ipc_namespace;
+void sysv_sem_exit(struct ipc_namespace *ns, struct tgroup *group);
 
 // Syscall dispatch is selected from current->abi. The i386 path is live today;
 // amd64 keeps a separate bring-up path because it needs different syscall

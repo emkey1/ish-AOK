@@ -43,6 +43,7 @@
 #define SHM_DEST_    01000
 
 #include "kernel/sysvipc.h"
+#include "kernel/ipc_ns.h"
 
 bool ipc_access_ok(uid_t_ uid, uid_t_ gid, uid_t_ cuid, uid_t_ cgid,
                    mode_t_ mode, int want) {
@@ -105,6 +106,9 @@ static_assert(sizeof(struct shmid_ds_amd64_) == 112, "amd64 shmid_ds size");
 
 struct shm_segment {
     struct list shm_segments;
+    // The IPC namespace it belongs to, held (kernel/ipc_ns.h): a detach, or
+    // a fork copying an attachment, finds the segment's lock through it.
+    struct ipc_namespace *ns;
     dword_t key;
     int id;
     size_t size;
@@ -132,9 +136,8 @@ struct shm_region {
     pages_t pages;
 };
 
-static struct list shm_segments = LIST_INITIALIZER(shm_segments);
-static lock_t shm_lock = LOCK_INITIALIZER;
-static int shm_next_id = 1;
+// The segments, their lock and the next id are the IPC namespace's
+// (ipc_ns->shm_*): every task sees the segments of its own namespace.
 
 static bool ipc_trace_enabled(void) {
     return false;
@@ -144,26 +147,28 @@ static time_t_ ipc_now(void) {
     return (time_t_) sys_time(0);
 }
 
+// Caller holds segment->ns->shm_lock.
 static void shm_segment_maybe_destroy(struct shm_segment *segment) {
     if (segment == NULL || !segment->removed || segment->nattch != 0)
         return;
     list_remove(&segment->shm_segments);
     close(segment->fd);
+    ipc_ns_unhold(segment->ns);
     free(segment);
 }
 
-static struct shm_segment *shm_segment_find_by_key(dword_t key) {
+static struct shm_segment *shm_segment_find_by_key(struct ipc_namespace *ns, dword_t key) {
     struct shm_segment *segment;
-    list_for_each_entry(&shm_segments, segment, shm_segments) {
+    list_for_each_entry(&ns->shm_segments, segment, shm_segments) {
         if (!segment->removed && segment->key == key)
             return segment;
     }
     return NULL;
 }
 
-static struct shm_segment *shm_segment_find_by_id(int id) {
+static struct shm_segment *shm_segment_find_by_id(struct ipc_namespace *ns, int id) {
     struct shm_segment *segment;
-    list_for_each_entry(&shm_segments, segment, shm_segments) {
+    list_for_each_entry(&ns->shm_segments, segment, shm_segments) {
         if (segment->id == id)
             return segment;
     }
@@ -196,27 +201,28 @@ out:
 }
 
 static int shmget_internal(dword_t key, size_t size, int flags) {
-    lock(&shm_lock, 0);
-    struct shm_segment *segment = key == IPC_PRIVATE_ ? NULL : shm_segment_find_by_key(key);
+    struct ipc_namespace *ns = ipc_ns_current();
+    lock(&ns->shm_lock, 0);
+    struct shm_segment *segment = key == IPC_PRIVATE_ ? NULL : shm_segment_find_by_key(ns, key);
     if (segment != NULL) {
         if ((flags & IPC_CREAT_) && (flags & IPC_EXCL_)) {
-            unlock(&shm_lock);
+            unlock(&ns->shm_lock);
             return _EEXIST;
         }
         if (size != 0 && size > segment->size) {
-            unlock(&shm_lock);
+            unlock(&ns->shm_lock);
             return _EINVAL;
         }
         int id = segment->id;
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return id;
     }
     if (!(flags & IPC_CREAT_) && key != IPC_PRIVATE_) {
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return _ENOENT;
     }
     if (size == 0) {
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return _EINVAL;
     }
 
@@ -225,19 +231,20 @@ static int shmget_internal(dword_t key, size_t size, int flags) {
     int fd = shm_backing_create(rounded);
     if (fd < 0) {
         int err = errno_map();
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return err;
     }
 
     segment = calloc(1, sizeof(*segment));
     if (segment == NULL) {
         close(fd);
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return _ENOMEM;
     }
     *segment = (struct shm_segment) {
         .key = key,
-        .id = shm_next_id++,
+        .ns = ns,
+        .id = ns->shm_next_id++,
         .size = size,
         .alloc_size = rounded,
         .pages = pages,
@@ -252,9 +259,10 @@ static int shmget_internal(dword_t key, size_t size, int flags) {
         .ctime = ipc_now(),
     };
     list_init(&segment->shm_segments);
-    list_add_tail(&shm_segments, &segment->shm_segments);
+    list_add_tail(&ns->shm_segments, &segment->shm_segments);
+    ipc_ns_hold(ns);
     int id = segment->id;
-    unlock(&shm_lock);
+    unlock(&ns->shm_lock);
     return id;
 }
 
@@ -341,17 +349,18 @@ static guest_addr_t shm_region_attach(struct mm *mm, struct shm_segment *segment
     list_add_tail(&mm->shm_regions, &region->mm_regions);
     write_unlock(&mm->mem.lock);
 
-    lock(&shm_lock, 0);
+    lock(&segment->ns->shm_lock, 0);
     segment->nattch++;
     segment->lpid = current->pid;
     segment->atime = ipc_now();
-    unlock(&shm_lock);
+    unlock(&segment->ns->shm_lock);
 
     return attach_addr;
 }
 
 static guest_addr_t shmat_internal(int id, guest_addr_t shmaddr, int shmflg) {
-    lock(&shm_lock, 0);
+    struct ipc_namespace *ns = ipc_ns_current();
+    lock(&ns->shm_lock, 0);
     // A segment marked IPC_RMID can still be attached for as long as it
     // exists, i.e. until its last detach destroys it and takes it off the
     // list. That is Linux's rule -- shmctl(2) documents it as Linux-specific --
@@ -359,9 +368,9 @@ static guest_addr_t shmat_internal(int id, guest_addr_t shmaddr, int shmflg) {
     // it, marks it IPC_RMID so that a crash cannot leak it, and only then asks
     // the X server to attach it by id. Refusing it here failed the server's
     // shmat, which the X server reports as BadAccess on X_ShmAttach.
-    struct shm_segment *segment = shm_segment_find_by_id(id);
+    struct shm_segment *segment = shm_segment_find_by_id(ns, id);
     if (segment == NULL) {
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return (guest_addr_t) _EINVAL;
     }
     // Attaching needs read, and write too unless SHM_RDONLY was asked for.
@@ -371,7 +380,7 @@ static guest_addr_t shmat_internal(int id, guest_addr_t shmaddr, int shmflg) {
         want |= 2;
     if (!ipc_access_ok(segment->uid, segment->gid, segment->cuid, segment->cgid,
                        segment->mode, want)) {
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return (guest_addr_t) _EACCES;
     }
     // Count the attach before dropping the lock, as Linux's do_shmat does.
@@ -379,16 +388,16 @@ static guest_addr_t shmat_internal(int id, guest_addr_t shmaddr, int shmflg) {
     // attached, the last shmdt of one -- could destroy the segment, closing its
     // fd and freeing it, between here and the mapping.
     segment->nattch++;
-    unlock(&shm_lock);
+    unlock(&ns->shm_lock);
 
     guest_addr_t addr = shm_region_attach(current->mm, segment, shmaddr, shmflg);
 
     // A successful attach has counted itself; drop the placeholder. On failure
     // this may be what destroys a segment removed in the meantime.
-    lock(&shm_lock, 0);
+    lock(&ns->shm_lock, 0);
     segment->nattch--;
     shm_segment_maybe_destroy(segment);
-    unlock(&shm_lock);
+    unlock(&ns->shm_lock);
     return addr;
 }
 
@@ -404,13 +413,20 @@ static int shmdt_internal(struct mm *mm, guest_addr_t addr, pid_t_ lpid, bool fr
         free(region);
         write_unlock(&mm->mem.lock);
 
-        lock(&shm_lock, 0);
+        // The last detach of a removed segment frees it, so its namespace is
+        // unlocked through a pointer of our own -- and held, because the
+        // segment's hold may have been all that kept a namespace that has
+        // already gone allocated.
+        struct ipc_namespace *ns = segment->ns;
+        ipc_ns_hold(ns);
+        lock(&ns->shm_lock, 0);
         if (segment->nattch != 0)
             segment->nattch--;
         segment->lpid = lpid;
         segment->dtime = ipc_now();
         shm_segment_maybe_destroy(segment);
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
+        ipc_ns_unhold(ns);
         return 0;
     }
     write_unlock(&mm->mem.lock);
@@ -453,46 +469,47 @@ static void shmctl_fill_ipc_perm_amd64(struct ipc_perm_amd64_ *perm, struct shm_
 }
 
 static int shmctl_internal_i386(int id, int cmd, addr_t ptr) {
+    struct ipc_namespace *ns = ipc_ns_current();
     int cmd_base = cmd & ~IPC_64_;
-    lock(&shm_lock, 0);
-    struct shm_segment *segment = shm_segment_find_by_id(id);
+    lock(&ns->shm_lock, 0);
+    struct shm_segment *segment = shm_segment_find_by_id(ns, id);
     if (segment == NULL) {
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return _EINVAL;
     }
 
     if (cmd_base == IPC_RMID_) {
         // Destroying is the owner's or creator's privilege, not everyone's.
         if (!ipc_owner_ok(segment->uid, segment->cuid)) {
-            unlock(&shm_lock);
+            unlock(&ns->shm_lock);
             return _EPERM;
         }
         segment->removed = true;
         shm_segment_maybe_destroy(segment);
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return 0;
     }
 
     if (cmd_base == IPC_SET_) {
         // Changing ownership or mode: owner or creator only.
         if (!ipc_owner_ok(segment->uid, segment->cuid)) {
-            unlock(&shm_lock);
+            unlock(&ns->shm_lock);
             return _EPERM;
         }
         struct kernel_shmid64_ds_i386_ info;
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         if (ptr == 0)
             return _EFAULT;
         if (user_read(ptr, &info, sizeof(info)))
             return _EFAULT;
-        lock(&shm_lock, 0);
-        segment = shm_segment_find_by_id(id);
+        lock(&ns->shm_lock, 0);
+        segment = shm_segment_find_by_id(ns, id);
         if (segment == NULL) {
-            unlock(&shm_lock);
+            unlock(&ns->shm_lock);
             return _EINVAL;
         }
         shmctl_ipc_set(segment, info.shm_perm.uid, info.shm_perm.gid, (mode_t_) info.shm_perm.mode);
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return 0;
     }
 
@@ -507,7 +524,7 @@ static int shmctl_internal_i386(int id, int cmd, addr_t ptr) {
             .shm_nattch = segment->nattch,
         };
         shmctl_fill_ipc_perm_i386(&info.shm_perm, segment);
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         if (ptr == 0)
             return _EFAULT;
         if (user_write(ptr, &info, sizeof(info)))
@@ -515,51 +532,52 @@ static int shmctl_internal_i386(int id, int cmd, addr_t ptr) {
         return 0;
     }
 
-    unlock(&shm_lock);
+    unlock(&ns->shm_lock);
     return _EINVAL;
 }
 
 static int shmctl_internal_amd64(int id, int cmd, guest_addr_t ptr) {
+    struct ipc_namespace *ns = ipc_ns_current();
     int cmd_base = cmd & ~IPC_64_;
-    lock(&shm_lock, 0);
-    struct shm_segment *segment = shm_segment_find_by_id(id);
+    lock(&ns->shm_lock, 0);
+    struct shm_segment *segment = shm_segment_find_by_id(ns, id);
     if (segment == NULL) {
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return _EINVAL;
     }
 
     if (cmd_base == IPC_RMID_) {
         // Destroying is the owner's or creator's privilege, not everyone's.
         if (!ipc_owner_ok(segment->uid, segment->cuid)) {
-            unlock(&shm_lock);
+            unlock(&ns->shm_lock);
             return _EPERM;
         }
         segment->removed = true;
         shm_segment_maybe_destroy(segment);
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return 0;
     }
 
     if (cmd_base == IPC_SET_) {
         // Changing ownership or mode: owner or creator only.
         if (!ipc_owner_ok(segment->uid, segment->cuid)) {
-            unlock(&shm_lock);
+            unlock(&ns->shm_lock);
             return _EPERM;
         }
         struct shmid_ds_amd64_ info;
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         if (ptr == 0)
             return _EFAULT;
         if (user_read(ptr, &info, sizeof(info)))
             return _EFAULT;
-        lock(&shm_lock, 0);
-        segment = shm_segment_find_by_id(id);
+        lock(&ns->shm_lock, 0);
+        segment = shm_segment_find_by_id(ns, id);
         if (segment == NULL) {
-            unlock(&shm_lock);
+            unlock(&ns->shm_lock);
             return _EINVAL;
         }
         shmctl_ipc_set(segment, info.shm_perm.uid, info.shm_perm.gid, info.shm_perm.mode);
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         return 0;
     }
 
@@ -574,7 +592,7 @@ static int shmctl_internal_amd64(int id, int cmd, guest_addr_t ptr) {
             .shm_nattch = segment->nattch,
         };
         shmctl_fill_ipc_perm_amd64(&info.shm_perm, segment);
-        unlock(&shm_lock);
+        unlock(&ns->shm_lock);
         if (ptr == 0)
             return _EFAULT;
         if (user_write(ptr, &info, sizeof(info)))
@@ -582,8 +600,21 @@ static int shmctl_internal_amd64(int id, int cmd, guest_addr_t ptr) {
         return 0;
     }
 
-    unlock(&shm_lock);
+    unlock(&ns->shm_lock);
     return _EINVAL;
+}
+
+// The namespace is going: every segment in it is removed, as IPC_RMID would
+// remove it -- destroyed now if nothing has it attached, and on its last
+// detach otherwise (Linux's shm_exit_ns).
+void shm_ns_teardown(struct ipc_namespace *ns) {
+    lock(&ns->shm_lock, 0);
+    struct shm_segment *segment, *tmp;
+    list_for_each_entry_safe(&ns->shm_segments, segment, tmp, shm_segments) {
+        segment->removed = true;
+        shm_segment_maybe_destroy(segment);
+    }
+    unlock(&ns->shm_lock);
 }
 
 void ipc_mm_init(struct mm *mm) {
@@ -604,9 +635,9 @@ void ipc_mm_copy(struct mm *dst, struct mm *src) {
         list_init(&copy->mm_regions);
         list_add_tail(&dst->shm_regions, &copy->mm_regions);
 
-        lock(&shm_lock, 0);
+        lock(&copy->segment->ns->shm_lock, 0);
         copy->segment->nattch++;
-        unlock(&shm_lock);
+        unlock(&copy->segment->ns->shm_lock);
     }
 }
 

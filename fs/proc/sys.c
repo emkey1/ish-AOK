@@ -372,9 +372,66 @@ static bool proc_sys_fs_inotify_readdir(struct proc_entry *UNUSED(entry), unsign
     return false;
 }
 
+// fs.mqueue.*: the POSIX message queue limits kernel/mqueue.c enforces, each
+// IPC namespace's own, so a reader sees its namespace's values. The bounds are
+// Linux's (ipc/mq_sysctl.c, measured on 6.12): the message counts 1..65536
+// (HARD_MSGMAX), the message sizes 128..16 MiB (HARD_MSGSIZEMAX), and
+// queues_max any int at all -- a negative one, stored unsigned, is no limit.
+static const struct {
+    const char *name;
+    long min, max;
+} proc_sys_fs_mqueue_bounds[] = {
+    {"msg_default", 1, 65536},
+    {"msg_max", 1, 65536},
+    {"msgsize_default", 128, 16 * 1024 * 1024},
+    {"msgsize_max", 128, 16 * 1024 * 1024},
+    {"queues_max", INT32_MIN, INT32_MAX},
+};
+#define PROC_SYS_FS_MQUEUE_LEN \
+    (sizeof(proc_sys_fs_mqueue_bounds) / sizeof(proc_sys_fs_mqueue_bounds[0]))
+
+static struct proc_dir_entry proc_sys_fs_mqueue_entry;
+
+static void proc_sys_fs_mqueue_getname(struct proc_entry *entry, char *buf) {
+    snprintf(buf, 256, "%s", proc_sys_fs_mqueue_bounds[entry->fd].name);
+}
+static int proc_sys_fs_mqueue_show(struct proc_entry *entry, struct proc_data *buf) {
+    unsigned *value = mqueue_sysctl(proc_sys_fs_mqueue_bounds[entry->fd].name);
+    if (value == NULL)
+        return _ENOENT;
+    proc_printf(buf, "%d\n", (int) *value);
+    return 0;
+}
+static int proc_sys_fs_mqueue_update(struct proc_entry *entry, struct proc_data *data) {
+    if (!superuser())
+        return _EPERM;
+    long value;
+    int err = proc_sys_scalar_parse(data, proc_sys_fs_mqueue_bounds[entry->fd].min,
+            proc_sys_fs_mqueue_bounds[entry->fd].max, &value);
+    if (err < 0)
+        return err;
+    unsigned *slot = mqueue_sysctl(proc_sys_fs_mqueue_bounds[entry->fd].name);
+    if (slot == NULL)
+        return _ENOENT;
+    *slot = (unsigned) (int) value;
+    return 0;
+}
+static bool proc_sys_fs_mqueue_readdir(struct proc_entry *UNUSED(entry), unsigned long *index,
+        struct proc_entry *next_entry) {
+    if (*index >= PROC_SYS_FS_MQUEUE_LEN)
+        return false;
+    *next_entry = (struct proc_entry) {&proc_sys_fs_mqueue_entry, .fd = (sdword_t) *index};
+    (*index)++;
+    return true;
+}
+static struct proc_dir_entry proc_sys_fs_mqueue_entry = {NULL, S_IFREG | 0644,
+    .getname = proc_sys_fs_mqueue_getname, .show = proc_sys_fs_mqueue_show,
+    .update = proc_sys_fs_mqueue_update};
+
 static struct proc_dir_entry proc_sys_fs_entries[] = {
     {"binfmt_misc", S_IFDIR, .readdir = proc_binfmt_misc_readdir},
     {"inotify", S_IFDIR, .readdir = proc_sys_fs_inotify_readdir},
+    {"mqueue", S_IFDIR, .readdir = proc_sys_fs_mqueue_readdir},
     {"file-max", S_IFREG | 0644, .show = sys_show_fs_file_max, .update = sys_update_fs_file_max},
     {"nr_open", S_IFREG | 0644, .show = sys_show_fs_nr_open, .update = sys_update_fs_nr_open},
 };
@@ -754,8 +811,11 @@ void proc_sys_init(struct proc_dir_entry *root_entry) {
         proc_set_entries_parent(proc_sys_debug, PROC_SYS_DEBUG_LEN, debug_dir);
 
     fs_dir = proc_children_find(&proc_sys_children, "fs");
-    if (fs_dir != NULL)
+    if (fs_dir != NULL) {
         proc_set_entries_parent(proc_sys_fs_entries, PROC_SYS_FS_LEN, fs_dir);
+        proc_sys_fs_mqueue_entry.parent =
+                proc_find_entry(proc_sys_fs_entries, PROC_SYS_FS_LEN, "mqueue");
+    }
 
     kernel_dir = proc_children_find(&proc_sys_children, "kernel");
     if (kernel_dir != NULL) {

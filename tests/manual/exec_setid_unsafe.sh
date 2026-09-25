@@ -11,8 +11,10 @@
 # works.
 #
 # Two differences are not behaviour and are normalised: AOK's full
-# capability mask is 38 bits (3fffffffff) where 6.12's is 41 (1ffffffffff),
-# and the N rows were recorded before the probe printed its pdeath field.
+# capability mask was 38 bits (3fffffffff) where 6.12's is 41 (1ffffffffff) --
+# it is 41 bits too since AOK reports 5.10, which has CAP_CHECKPOINT_RESTORE,
+# so that one is now a no-op kept for older builds -- and the N rows were
+# recorded before the probe printed its pdeath field.
 #
 # One is a known gap and does not fail the run: R7. AOK's current_capable()
 # counts an effective uid of 0 as holding every capability, whatever the

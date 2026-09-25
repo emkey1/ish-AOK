@@ -3,6 +3,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include "kernel/ipc_ns.h"
 #include "kernel/calls.h"
 #include "kernel/native.h"
 #include "kernel/task.h"
@@ -1054,17 +1055,21 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
 
     *task = (struct task) {};
     if (parent != NULL)
-        *task = *parent; // uts_ns is only aliased here; copy_task retains or copies it
+        *task = *parent; // uts_ns and ipc_ns are only aliased here; copy_task retains or copies them
     else {
         task->uts_ns = uts_ns_retain(&init_uts_ns);
-        // Treat init/root as starting with the full Linux capability set so
-        // guest helpers such as setpriv can drop or reshuffle capabilities
-        // without tripping over uninitialized state.
+        task->ipc_ns = ipc_ns_retain(&init_ipc_ns);
+        // init starts as Linux's does: every capability permitted, effective
+        // and in the bounding set, and nothing inheritable or ambient
+        // (/proc/1/status on 6.12: CapInh 0, CapPrm/CapEff/CapBnd full). The
+        // inheritable set used to be full too, which would hand anything a
+        // file lists as inheritable (+i) to every process descended from init.
         task->abi = GUEST_ABI_I386;
         task->cap_effective[0] = task->cap_permitted[0] =
-            task->cap_inheritable[0] = CAP_FULL_LOW_;
+            task->cap_bounding[0] = CAP_FULL_LOW_;
         task->cap_effective[1] = task->cap_permitted[1] =
-            task->cap_inheritable[1] = CAP_FULL_HIGH_;
+            task->cap_bounding[1] = CAP_FULL_HIGH_;
+        task->cap_inheritable[0] = task->cap_inheritable[1] = 0;
     }
     // NOT inherited: which native program is running, and what it said about
     // itself.

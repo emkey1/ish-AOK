@@ -1,5 +1,6 @@
 #include <sys/utsname.h>
 #include <string.h>
+#include "kernel/ipc_ns.h"
 #include "kernel/calls.h"
 #include "kernel/uts.h"
 #include "kernel/hostinfo.h"
@@ -15,9 +16,34 @@ static_assert(UTS_NAME_LENGTH == UNAME_LENGTH, "UTS name length must match struc
 
 const char *uname_version = "iSH-AOK";
 
+// The kernel release AOK reports: uname -r, /proc/sys/kernel/osrelease and
+// /proc/version.
+//
+// It said 5.20.66, a release that never existed -- 5.19 was followed by 6.0 --
+// and one past features AOK did not have, so software that decides by version
+// was promised rseq, io_uring and the rest. A real release now, and the one
+// whose feature set AOK's matches: everything 5.10 always has is here,
+//
+//   pidfd_open, pidfd_send_signal, pidfd_getfd, clone3 (5.1-5.6)
+//   openat2, faccessat2, close_range (5.6-5.9), process_madvise (5.10)
+//   rseq (4.18), POSIX message queues, extended attributes
+//
+// and CAP_CHECKPOINT_RESTORE (5.9) makes cap_last_cap 40 (kernel/task.h).
+// What 5.10 can be built without answers as such a build does: io_uring is
+// ENOSYS (CONFIG_IO_URING=n), and so are the namespaces AOK does not model. A
+// few later calls exist as well -- epoll_pwait2 (5.11), fchmodat2 (6.6) -- which
+// no program is harmed to find, since callers probe for them. The next release
+// up would promise mount_setattr (5.12) and futex_waitv (5.16), which are not.
+//
+// 5.10.0 rather than a later 5.10.y, as Debian's 5.10 kernels spell it; libuv
+// turns io_uring on from 5.10.186, and should not go probing for it here.
+#define ISH_KERNEL_RELEASE "5.10.0-ish_aok"
+
 struct uts_namespace init_uts_ns = {
     .lock = LOCK_INITIALIZER,
     .refcount = 1,
+    // Linux's PROC_UTS_INIT_INO.
+    .inode = 4026531838ul,
 };
 
 struct uts_namespace *uts_ns_retain(struct uts_namespace *ns) {
@@ -48,6 +74,7 @@ struct uts_namespace *uts_ns_copy(struct uts_namespace *ns) {
     *new_ns = (struct uts_namespace) {};
     lock_init(&new_ns->lock, "uts_ns\0");
     new_ns->refcount = 1;
+    new_ns->inode = ns_alloc_inum();
     lock(&ns->lock, 0);
     memcpy(new_ns->hostname, ns->hostname, sizeof(new_ns->hostname));
     memcpy(new_ns->domainname, ns->domainname, sizeof(new_ns->domainname));
@@ -125,7 +152,7 @@ void do_uname(struct uname *uts) {
     else
         strncpy(uts->domain, "(none)", sizeof(uts->domain));
     unlock(&ns->lock);
-    strncpy(uts->release, "5.20.66-ish_aok", sizeof(uts->release));
+    strncpy(uts->release, ISH_KERNEL_RELEASE, sizeof(uts->release));
     strncpy(uts->system, "Linux", sizeof(uts->system));
     snprintf(uts->hostname, sizeof(uts->hostname), "%s", hostname);
     snprintf(uts->version, sizeof(uts->version), "%s %s%s%s", uname_version, build_version,

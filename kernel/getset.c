@@ -571,6 +571,15 @@ int_t sys_capset_guest(guest_addr_t header_addr, guest_addr_t data_addr) {
 
     if (!cap_words_subset(new_effective, new_permitted, count))
         return _EPERM;
+    // Nobody -- root included -- puts a capability back into the inheritable
+    // set once the bounding set has dropped it (Linux's "no new pI
+    // capabilities outside bounding set").
+    dword_t inheritable_ceiling[2] = {
+        current->cap_inheritable[0] | current->cap_bounding[0],
+        current->cap_inheritable[1] | current->cap_bounding[1],
+    };
+    if (!cap_words_subset(new_inheritable, inheritable_ceiling, count))
+        return _EPERM;
 
     struct cred_change change;
     cred_change_begin(&change);
@@ -585,6 +594,10 @@ int_t sys_capset_guest(guest_addr_t header_addr, guest_addr_t data_addr) {
         current->cap_permitted[1] = new_permitted[1];
         current->cap_inheritable[1] = new_inheritable[1];
     }
+    // The ambient set only ever holds what is both permitted and inheritable,
+    // so a capability dropped from either leaves it too (Linux's cap_capset).
+    for (int i = 0; i < 2; i++)
+        current->cap_ambient[i] &= current->cap_permitted[i] & current->cap_inheritable[i];
     cred_change_commit(&change);
     return 0;
 }

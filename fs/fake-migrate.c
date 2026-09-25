@@ -1580,6 +1580,10 @@ static struct migration {
     {
         NULL, migrate_repair_name_aliases
     },
+    // version 9: extended attributes (setxattr(2)), which AOK did not keep
+    {
+        FAKEFS_XATTRS_SCHEMA
+    },
 };
 
 int fakefs_migrate(struct fakefs_db *fs, int root_fd) {

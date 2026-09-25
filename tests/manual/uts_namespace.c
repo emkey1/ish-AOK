@@ -152,10 +152,12 @@ static void check_ns_probe(void) {
 //   unshare: unshare failed: Invalid argument
 //
 // Reported from a device, and the -T is what decided the message.
+//
+// CLONE_NEWIPC left this list when IPC namespaces became real (kernel/ipc_ns.h)
+// -- as root it now succeeds here, as the UTS namespace does.
 #define UNSHARE_NEWTIME 0x00000080
 #define UNSHARE_NEWNS 0x00020000
 #define UNSHARE_NEWCGROUP 0x02000000
-#define UNSHARE_NEWIPC 0x08000000
 #define UNSHARE_NEWUSER 0x10000000
 #define UNSHARE_NEWPID 0x20000000
 #define UNSHARE_NEWNET 0x40000000
@@ -185,7 +187,6 @@ static void check_unshare_consistency(void) {
     } ns[] = {
         {"CLONE_NEWNS", UNSHARE_NEWNS},
         {"CLONE_NEWCGROUP", UNSHARE_NEWCGROUP},
-        {"CLONE_NEWIPC", UNSHARE_NEWIPC},
         {"CLONE_NEWUSER", UNSHARE_NEWUSER},
         {"CLONE_NEWPID", UNSHARE_NEWPID},
         {"CLONE_NEWNET", UNSHARE_NEWNET},

@@ -2,6 +2,8 @@
 #include <signal.h>
 #include <string.h>
 #include "emu/cpu.h"
+#include "kernel/rseq.h"
+#include "kernel/ipc_ns.h"
 #include "kernel/calls.h"
 #include "kernel/acct.h"
 #include "fs/sock.h"
@@ -79,7 +81,7 @@ static bool exit_tgroup(struct task *task) {
     if (group_dead) {
         // Apply this process's SysV SEM_UNDO adjustments (threads share one
         // undo list via CLONE_SYSVSEM, so it applies at group death).
-        sysv_sem_exit(group);
+        sysv_sem_exit(task->ipc_ns, group);
         // don't need to lock the group since the only pointers to it come from:
         // - other threads' current->group, but there are none left thanks to that list_empty call
         // - locking pids_lock first, which do_exit did
@@ -856,6 +858,7 @@ noreturn void do_exit(struct task *task, int status) {
     // Last chance to read the address space: the exit-time usage snapshot
     // below runs after this, and a peak RSS read from a released mm is 0.
     task_maxrss_kb(task);
+    rseq_exit(task);
     mm_release(task->mm);
     task->mm = NULL;
     task->mem = NULL;
@@ -874,8 +877,11 @@ noreturn void do_exit(struct task *task, int status) {
     }
     fs_info_release(task->fs);
     task->fs = NULL;
-    uts_ns_release(task->uts_ns);
+    // general_lock, held since above, is what a /proc/<pid>/ns reader takes
+    // to look at the namespace.
+    struct uts_namespace *dead_uts = task->uts_ns;
     task->uts_ns = NULL;
+    uts_ns_release(dead_uts);
     // sighand must be released below so it can be protected by pids_lock
     // since it can be accessed by other threads
 
@@ -1250,6 +1256,15 @@ noreturn void do_exit(struct task *task, int status) {
         acct_write(&acct_rec);
     if (taskstats_pending)
         netlink_taskstats_exit_broadcast();
+
+    // The IPC namespace goes after exit_tgroup, which applied the process's
+    // SEM_UNDO adjustments in it, and outside every lock: the last reference
+    // destroys the namespace's objects.
+    lock(&task->general_lock, 0);
+    struct ipc_namespace *dead_ipc = task->ipc_ns;
+    task->ipc_ns = NULL;
+    unlock(&task->general_lock);
+    ipc_ns_release(dead_ipc);
 
     if (old_sighand != NULL)
         sighand_release(old_sighand);

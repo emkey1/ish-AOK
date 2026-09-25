@@ -41,12 +41,19 @@ int fakefs_rebuild(struct fakefs_db *fs, int root_fd) {
     EXEC_RET("create table stats_old (inode integer primary key, stat blob)");
     EXEC_RET("insert into paths_old select * from paths");
     EXEC_RET("insert into stats_old select * from stats");
+    // Attributes are keyed by the inode numbers this renumbers, so they move
+    // with them: each old inode's rows go to its new number below.
+    EXEC_RET("create table xattrs_old (inode integer, name blob, value blob)");
+    EXEC_RET("insert into xattrs_old select inode, name, value from xattrs");
+    EXEC_RET("delete from xattrs");
     EXEC_RET("delete from paths");
     EXEC_RET("delete from stats");
     sqlite3_stmt *get_paths = PREPARE_RET("select path, inode from paths_old");
     sqlite3_stmt *read_stat = PREPARE_RET("select stat from stats_old where inode = ?");
     sqlite3_stmt *write_path = PREPARE_RET("insert into paths (path, inode) values (?, ?)");
     sqlite3_stmt *write_stat = PREPARE_RET("replace into stats (inode, stat) values (?, ?)");
+    sqlite3_stmt *move_xattrs = PREPARE_RET("insert or replace into xattrs (inode, name, value) "
+            "select ?, name, value from xattrs_old where inode = ?");
     inode_t next_inode = 1;
 
     struct list hashtable[2000];
@@ -93,6 +100,10 @@ int fakefs_rebuild(struct fakefs_db *fs, int root_fd) {
             entry->path = strdup(path);
             list_add(bucket, &entry->chain);
             compact_inode = entry->compact_inode;
+            err = sqlite3_bind_int64(move_xattrs, 1, compact_inode); CHECK_ERR_RET();
+            err = sqlite3_bind_int64(move_xattrs, 2, inode); CHECK_ERR_RET();
+            STEP_RET(move_xattrs);
+            RESET_RET(move_xattrs);
         }
 
         // extract the stat so we can copy it
@@ -128,10 +139,12 @@ int fakefs_rebuild(struct fakefs_db *fs, int root_fd) {
 
     EXEC_RET("drop table paths_old");
     EXEC_RET("drop table stats_old");
+    EXEC_RET("drop table xattrs_old");
     EXEC_RET("commit");
     FINALIZE_RET(get_paths);
     FINALIZE_RET(read_stat);
     FINALIZE_RET(write_path);
     FINALIZE_RET(write_stat);
+    FINALIZE_RET(move_xattrs);
     return 0;
 }

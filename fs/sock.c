@@ -2910,9 +2910,16 @@ static void netlink_reply_reset_locked(struct fd *sock) {
 // was nothing left to return and the read blocked for ever. It only became a
 // hang in 555: before netlink's blocking receive was implemented that read
 // failed at once with EAGAIN, so the module gave up and printed nothing.
-static int netlink_reply_seal_locked(struct fd *sock) {
+//
+// A boundary with NETLINK_BOUND_RAW set closes a datagram that is not netlink
+// messages at all but bytes from the kernel itself (netlink_deliver_datagram),
+// which a receive hands over as they are.
+#define NETLINK_BOUND_RAW ((size_t) 1 << (sizeof(size_t) * 8 - 1))
+
+static int netlink_reply_seal_as_locked(struct fd *sock, size_t raw) {
     size_t sealed = sock->socket.netlink_reply_nbounds == 0 ? 0 :
-        sock->socket.netlink_reply_bounds[sock->socket.netlink_reply_nbounds - 1];
+        sock->socket.netlink_reply_bounds[sock->socket.netlink_reply_nbounds - 1] &
+        ~NETLINK_BOUND_RAW;
     if (sock->socket.netlink_reply_len == sealed)
         return 0;
     if (sock->socket.netlink_reply_nbounds == sock->socket.netlink_reply_bounds_cap) {
@@ -2925,17 +2932,32 @@ static int netlink_reply_seal_locked(struct fd *sock) {
         sock->socket.netlink_reply_bounds_cap = cap;
     }
     sock->socket.netlink_reply_bounds[sock->socket.netlink_reply_nbounds++] =
-        sock->socket.netlink_reply_len;
+        sock->socket.netlink_reply_len | raw;
     return 0;
+}
+
+static int netlink_reply_seal_locked(struct fd *sock) {
+    return netlink_reply_seal_as_locked(sock, 0);
 }
 
 // Where the datagram the reader is positioned in ends: the first boundary past
 // netlink_reply_off, or the end of the buffer when the tail is still open.
-static size_t netlink_reply_datagram_end_locked(struct fd *sock) {
-    for (size_t i = 0; i < sock->socket.netlink_reply_nbounds; i++)
-        if (sock->socket.netlink_reply_bounds[i] > sock->socket.netlink_reply_off)
-            return sock->socket.netlink_reply_bounds[i];
+// *raw says whether that datagram is kernel bytes rather than messages.
+static size_t netlink_reply_datagram_end_raw_locked(struct fd *sock, bool *raw) {
+    *raw = false;
+    for (size_t i = 0; i < sock->socket.netlink_reply_nbounds; i++) {
+        size_t bound = sock->socket.netlink_reply_bounds[i];
+        if ((bound & ~NETLINK_BOUND_RAW) > sock->socket.netlink_reply_off) {
+            *raw = (bound & NETLINK_BOUND_RAW) != 0;
+            return bound & ~NETLINK_BOUND_RAW;
+        }
+    }
     return sock->socket.netlink_reply_len;
+}
+
+static size_t netlink_reply_datagram_end_locked(struct fd *sock) {
+    bool raw;
+    return netlink_reply_datagram_end_raw_locked(sock, &raw);
 }
 
 static void netlink_reply_reset(struct fd *sock) {
@@ -3026,6 +3048,38 @@ static int netlink_append_error(struct fd *sock, uint32_t seq,
         .msg = req ? *req : (struct nlmsghdr_) {},
     };
     return netlink_append_nlmsg(sock, NLMSG_ERROR_, 0, seq, &err, sizeof(err));
+}
+
+// Whether `fd` is a netlink socket: ENOTSOCK for anything that is not a
+// socket, EINVAL for a socket of another family (Linux's
+// netlink_getsockbyfilp, which mq_notify asks through).
+int netlink_fd_check(struct fd *fd) {
+    if (fd->ops != &socket_fdops)
+        return _ENOTSOCK;
+    if (fd->socket.domain != AF_NETLINK_)
+        return _EINVAL;
+    return 0;
+}
+
+// A datagram from the kernel itself to a netlink socket: mq_notify's
+// SIGEV_THREAD cookie (kernel/mqueue.c), which glibc and musl both wait for on
+// a netlink socket of their own. Queued as one datagram of its own, and the
+// socket's readers and pollers woken.
+int netlink_deliver_datagram(struct fd *sock, const void *data, size_t len) {
+    if (netlink_fd_check(sock) < 0)
+        return _EINVAL;
+    lock(&sock->socket.netlink_reply_lock, 0);
+    int err = netlink_reply_seal_locked(sock);
+    if (err == 0)
+        err = netlink_reply_append_locked(sock, data, len);
+    if (err == 0)
+        err = netlink_reply_seal_as_locked(sock, NETLINK_BOUND_RAW);
+    if (err == 0)
+        notify(&sock->socket.netlink_reply_cond);
+    unlock(&sock->socket.netlink_reply_lock);
+    if (err == 0)
+        poll_wakeup(sock, POLL_READ);
+    return err;
 }
 
 static int netlink_append_done(struct fd *sock, uint32_t seq) {
@@ -4104,7 +4158,8 @@ static int netlink_handle_recvmsg(struct fd *sock, struct msghdr *msg, int fake_
         if (ret < 0)
             goto out;
     }
-    size_t datagram_end = netlink_reply_datagram_end_locked(sock);
+    bool raw = false;
+    size_t datagram_end = netlink_reply_datagram_end_raw_locked(sock, &raw);
     available = datagram_end - sock->socket.netlink_reply_off;
     // No capacity==0 early-out here: a zero-length read must still fall
     // through to the loop below, which truncate-AND-CONSUMES the first
@@ -4120,9 +4175,31 @@ static int netlink_handle_recvmsg(struct fd *sock, struct msghdr *msg, int fake_
 
     size_t copied = 0;
     size_t reply_off = sock->socket.netlink_reply_off;
-    while (reply_off + sizeof(struct nlmsghdr_) <= datagram_end) {
+    while (reply_off < datagram_end) {
+        size_t left = datagram_end - reply_off;
         struct nlmsghdr_ *hdr = (struct nlmsghdr_ *)
             (sock->socket.netlink_reply + reply_off);
+        // Not netlink messages: the kernel's own raw datagrams -- mq_notify's
+        // SIGEV_THREAD cookie (kernel/mqueue.c) -- carry no header at all, and
+        // Linux hands every datagram over as bytes. The cookie's zero length
+        // field used to spin this loop for ever, copying nothing each time
+        // round. What fits is copied as it is, and so is anything whose
+        // header does not describe a message inside the datagram.
+        if (raw || left < sizeof(struct nlmsghdr_) || hdr->nlmsg_len < sizeof(struct nlmsghdr_) ||
+                hdr->nlmsg_len > left) {
+            size_t n = left;
+            if (copied + n > capacity)
+                n = capacity - copied;
+            int err = diag_copy_to_iov(msg->msg_iov, msg->msg_iovlen, copied,
+                    sock->socket.netlink_reply + reply_off, n);
+            if (err < 0) {
+                ret = err;
+                goto out;
+            }
+            copied += n;
+            reply_off += n;
+            break;
+        }
         size_t msg_len = NLMSG_ALIGN(hdr->nlmsg_len);
         if (copied != 0 && copied + msg_len > capacity)
             break;

@@ -8,7 +8,8 @@ int get_random(char *buf, size_t len);
 // Emulated entropy pool size in bits, reported by the /dev/{u,}random ioctls
 // and /proc/sys/kernel/random/{poolsize,entropy_avail}. iSH draws randomness
 // from the host CSPRNG, so the pool is always treated as full. 4096 matches the
-// input-pool size of the ~4.20 kernel iSH advertises.
+// input-pool size of the 5.10 kernel AOK advertises (kernel/uname.c); 5.18
+// shrank it to 256.
 #define RANDOM_POOL_BITS 4096
 
 // ioctls on /dev/random and /dev/urandom (linux/random.h). Standard asm-generic

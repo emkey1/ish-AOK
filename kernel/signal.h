@@ -72,6 +72,9 @@ struct sigaction_ {
 #define SI_USER_ 0
 #define SI_QUEUE_ -1
 #define SI_TIMER_ -2
+#define SI_MESGQ_ -3
+#define SI_ASYNCIO_ -4
+#define SI_SIGIO_ -5
 #define SI_TKILL_ -6
 #define SI_KERNEL_ 128
 

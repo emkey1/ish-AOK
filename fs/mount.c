@@ -10,7 +10,7 @@
 // Sized for the static set below plus the two the iOS app registers at
 // startup (iosfs and iosfs_unsafe) with room to spare -- overflowing this
 // asserts at boot rather than failing gracefully, so don't run it to the rim.
-#define MAX_FILESYSTEMS 14
+#define MAX_FILESYSTEMS 16
 static const struct fs_ops *filesystems[MAX_FILESYSTEMS] = {
     &realfs,
     &procfs,
@@ -23,6 +23,7 @@ static const struct fs_ops *filesystems[MAX_FILESYSTEMS] = {
     &cgroup2fs,
     &fakefs,
     &fusefs,
+    &mqueuefs,
 };
 
 static bool mount_trace_elogind(void) {

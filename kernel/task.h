@@ -17,8 +17,12 @@
 #include "util/sync.h"
 #include "kernel/guestprof.h"
 
+struct ipc_namespace;
+
 // The highest capability number this kernel defines. /proc/sys/kernel/cap_last_cap
-// reports it, and it is chosen to match the 4.20 release AOK advertises.
+// reports it, and it is chosen to match the 5.10 release AOK advertises
+// (kernel/uname.c): CAP_CHECKPOINT_RESTORE, 40, arrived in 5.9, after
+// CAP_PERFMON (38) and CAP_BPF (39) in 5.8.
 //
 // The "full" set is bits 0..CAP_LAST_CAP_ and deliberately NOT all ones. Linux
 // never reports a mask wider than the capabilities it actually has -- a 6.12 box
@@ -32,8 +36,9 @@
 // sys-kernel-tracing.mount, every boot, in an openSUSE guest.
 //
 // Nothing gains or loses a capability by this: every capability AOK checks is
-// well below 37, so the bits being dropped name capabilities that do not exist.
-#define CAP_LAST_CAP_ 37
+// well below 38, so the three newest are held and dropped like any other but
+// never asked about.
+#define CAP_LAST_CAP_ 40
 #define CAP_FULL_LOW_ 0xffffffffu
 #define CAP_FULL_HIGH_ ((1u << (CAP_LAST_CAP_ - 31)) - 1)
 
@@ -676,6 +681,30 @@ struct task {
     // native_standin_child.
     int seccomp_mode;
     struct seccomp_filter *seccomp_filter;
+    // The capability bounding set (Linux's cap_bset): the most an exec may
+    // take from a file's permitted capabilities (and all root gets from one),
+    // and the ceiling on what capset may add to the inheritable set. A fork
+    // inherits it and an exec keeps it; PR_CAPBSET_DROP shrinks it and nothing
+    // grows it. It used to be the permitted set under another name, so a
+    // capability dropped from it came back at the next exec. The thread's
+    // own. At the end for the reason given above native_standin_child.
+    dword_t cap_bounding[2];
+    // rseq(2) (kernel/rseq.c): the registered area, 0 when there is none, with
+    // the length and signature it was registered with; and the CPU number the
+    // thread reports (mm->rseq_cpu_users). A fork keeps them and a thread does
+    // not (rseq_fork); an exec and an exit drop them. The thread's own. At the
+    // end for the reason given above native_standin_child.
+    guest_addr_t rseq_area;
+    dword_t rseq_len;
+    dword_t rseq_sig;
+    int rseq_cpu;
+    // The IPC namespace (kernel/ipc_ns.h): whose System V objects and POSIX
+    // message queues this task sees. Shared with the parent, one reference
+    // each, unless CLONE_NEWIPC or unshare(CLONE_NEWIPC) gave it a new one.
+    // Never NULL on a live task; general_lock guards the pointer against a
+    // /proc reader. At the end for the reason given above
+    // native_standin_child.
+    struct ipc_namespace *ipc_ns;
 };
 
 // current will always give the process that is currently executing
@@ -1133,6 +1162,8 @@ extern void (*halt_hook)(int status);
 #define CAP_FSETID_      4
 #define CAP_SETGID_      6
 #define CAP_SETUID_      7
+#define CAP_SETPCAP_     8
+#define CAP_NET_RAW_     13
 #define CAP_SYS_CHROOT_  18
 #define CAP_SYS_PACCT_   20
 #define CAP_SYS_PTRACE_  19
@@ -1140,6 +1171,7 @@ extern void (*halt_hook)(int status);
 #define CAP_SYS_ADMIN_   21
 #define CAP_SYS_NICE_    23
 #define CAP_SYS_RESOURCE_ 24
+#define CAP_SETFCAP_     31
 #define CAP_WAKE_ALARM_  35
 
 // The equivalent of Linux's capable(): true if the caller holds `cap` in its

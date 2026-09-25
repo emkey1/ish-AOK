@@ -108,6 +108,11 @@ native_stdio_lock.c
 devtmpfs_mount.c
 clone_error_cleanup.c
 uts_namespace.c
+xattr_ops.c
+file_caps_exec.c
+rseq_register.c
+mqueue_ops.c
+ipc_namespace.c
 posix_timer_fork.c
 vfork_fatal_signal.c
 vfork_exec_stale_jit.c

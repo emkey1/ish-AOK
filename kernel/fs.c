@@ -10,6 +10,7 @@
 #include "kernel/fs.h"
 #include "kernel/inotify.h"
 #include "kernel/random.h"
+#include "kernel/xattr.h"
 #include "fs/fd.h"
 #include "fs/inode.h"
 #include "fs/real.h"
@@ -606,6 +607,8 @@ dword_t sys_faccessat(fd_t at_f, addr_t path_addr, mode_t_ mode, dword_t flags) 
 }
 
 static fd_t sys_openat_norm(fd_t at_f, guest_addr_t path_addr, dword_t flags, mode_t_ mode, int extra_norm);
+static void file_remove_privs(struct fd *fd);
+static void path_remove_privs(struct fd *at, const char *path);
 
 fd_t sys_openat_guest(fd_t at_f, guest_addr_t path_addr, dword_t flags, mode_t_ mode) {
     return sys_openat_norm(at_f, path_addr, flags, mode, 0);
@@ -634,6 +637,11 @@ static fd_t sys_openat_norm(fd_t at_f, guest_addr_t path_addr, dword_t flags, mo
         fd = ERR_PTR(_ERESTART);
     if (IS_ERR(fd))
         goto out;
+    // open(O_TRUNC) truncates, and so drops what a truncate drops -- measured
+    // on 6.12, a 4755 file opened O_TRUNC by uid 1000 is 0755 before anything
+    // is written. Harmless on a file this open just created.
+    if ((flags & O_TRUNC_) && S_ISREG(fd->type))
+        file_remove_privs(fd);
     fd_t installed = f_install(fd, flags);
     amd64_as_source_trace_open(installed, path, flags);
     http_resolver_trace_path_result("openat", at_f, path, installed, flags);
@@ -1212,10 +1220,14 @@ static void file_remove_privs(struct fd *fd) {
     fd->privs_checked = true;
     if (!S_ISREG(fd->type))
         return;
+    if (fd->mount == NULL || fd->mount->fs == NULL || fd->mount->fs->fstat == NULL)
+        return;
+    // The file's capabilities go whoever writes, root included: Linux's
+    // killpriv asks for no capability at all (measured on 6.12). So this is
+    // ahead of the CAP_FSETID exemption, which is for the set-id bits only.
+    xattr_kill_caps_fd(fd);
     // CAP_FSETID is the whole exemption: root writing a setuid file keeps it.
     if (current_capable(CAP_FSETID_))
-        return;
-    if (fd->mount == NULL || fd->mount->fs == NULL || fd->mount->fs->fstat == NULL)
         return;
     struct statbuf stat;
     if (fd->mount->fs->fstat(fd, &stat) < 0)
@@ -1225,9 +1237,32 @@ static void file_remove_privs(struct fd *fd) {
         strip |= S_ISUID;
     if ((stat.mode & S_ISGID) && (stat.mode & S_IXGRP))
         strip |= S_ISGID;
-    if (strip == 0)
+    if (strip == 0 || fd->mount->fs->fsetattr == NULL)
         return;
-    generic_fsetattr(fd, make_attr(mode, stat.mode & ~strip & ~S_IFMT));
+    // Straight to the filesystem, not through generic_fsetattr: that is a
+    // chmod, and asks whether the caller owns the file. Anyone who may write
+    // a file makes it lose its set-id bits -- that is the point -- so a
+    // write to someone else's world-writable setuid file has to strip it too.
+    fd->mount->fs->fsetattr(fd, make_attr(mode, stat.mode & ~strip & ~S_IFMT));
+}
+
+// file_remove_privs for truncate(2), which names a path and holds no
+// descriptor. Linux strips inside the setattr that changes the size, so the
+// file this looks at is the one just truncated.
+static void path_remove_privs(struct fd *at, const char *path) {
+    struct statbuf stat;
+    if (generic_statat(at, path, &stat, 0) < 0 || !S_ISREG(stat.mode))
+        return;
+    xattr_kill_caps_at(at, path, true);
+    if (current_capable(CAP_FSETID_))
+        return;
+    mode_t_ strip = 0;
+    if (stat.mode & S_ISUID)
+        strip |= S_ISUID;
+    if ((stat.mode & S_ISGID) && (stat.mode & S_IXGRP))
+        strip |= S_ISGID;
+    if (strip != 0)
+        generic_setattrat_force(at, path, make_attr(mode, stat.mode & ~strip & ~S_IFMT), true);
 }
 
 static int fsize_limit_check(struct fd *fd, size_t *size) {
@@ -2920,6 +2955,10 @@ static dword_t sys_fchown_common(fd_t f, uid_t_ owner, uid_t_ group) {
         if (err < 0)
             return err;
     }
+    // chown_common's ATTR_KILL_PRIV: a non-directory loses its capabilities
+    // on any chown that is allowed, even one to the owner it already has.
+    if (!S_ISDIR(pre.mode))
+        xattr_kill_caps_fd(fd);
     if (drop != 0)
         return generic_fsetattr(fd, make_attr(mode, pre.mode & ~drop & ~S_IFMT));
     return 0;
@@ -2978,6 +3017,9 @@ static dword_t sys_fchownat_common(fd_t at_f, guest_addr_t path_addr, dword_t ow
             if (err < 0)
                 return err;
         }
+        // See sys_fchown_common. AT_FDCWD names a directory, which keeps them.
+        if (at_f != AT_FDCWD_ && pre_err >= 0 && !S_ISDIR(pre.mode))
+            xattr_kill_caps_fd(at);
         if (drop != 0) {
             struct attr attr = make_attr(mode, pre.mode & ~drop & ~S_IFMT);
             return at_f == AT_FDCWD_ ? generic_setattrat(AT_PWD, ".", attr, true)
@@ -3009,7 +3051,13 @@ static dword_t sys_fchownat_common(fd_t at_f, guest_addr_t path_addr, dword_t ow
     // EPERM the strip would raise on the same file.
     if (owner == (uid_t) -1 && group == (uid_t) -1) {
         err = generic_setattrat_nochange(at, path, follow_links);
-        if (err < 0 || drop == 0)
+        if (err < 0)
+            return err;
+        // Even chown(f, -1, -1) takes the capabilities away (measured on
+        // 6.12): the kill does not depend on the ids either.
+        if (pre_err >= 0 && !S_ISDIR(pre.mode))
+            xattr_kill_caps_at(at, path, follow_links);
+        if (drop == 0)
             return err;
         return generic_setattrat(at, path, strip, follow_links);
     }
@@ -3024,6 +3072,8 @@ static dword_t sys_fchownat_common(fd_t at_f, guest_addr_t path_addr, dword_t ow
         if (err < 0)
             return err;
     }
+    if (pre_err >= 0 && !S_ISDIR(pre.mode))
+        xattr_kill_caps_at(at, path, follow_links);
     if (drop != 0)
         return generic_setattrat(at, path, strip, follow_links);
     return 0;
@@ -3073,7 +3123,14 @@ dword_t sys_truncate64_guest(guest_addr_t path_addr, dword_t size_low, dword_t s
     // dirfd as "bad/closed dirfd" and returning EBADF, passing NULL here made
     // every truncate(2) fail with EBADF on all ABIs. truncate takes no dirfd,
     // so a relative path resolves against the cwd.
-    return generic_setattrat(AT_PWD, path, make_attr(size, size), true);
+    int err = generic_setattrat(AT_PWD, path, make_attr(size, size), true);
+    if (err < 0)
+        return err;
+    // Linux's do_truncate drops what a write drops: the capabilities always,
+    // the set-id bits for a caller without CAP_FSETID. Measured on 6.12 as
+    // uid 1000: truncate() of a 4755 file leaves it 0755. Only ftruncate did.
+    path_remove_privs(AT_PWD, path);
+    return 0;
 }
 dword_t sys_truncate64(addr_t path_addr, dword_t size_low, dword_t size_high) {
     return sys_truncate64_guest(path_addr, size_low, size_high);
@@ -3103,6 +3160,8 @@ dword_t sys_ftruncate(fd_t f, dword_t size) {
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
+    // As ftruncate64 does: a truncation is a write, and drops what one drops.
+    file_remove_privs(fd);
     return generic_fsetattr(fd, make_attr(size, size));
 }
 
@@ -3831,48 +3890,3 @@ dword_t sys_copy_file_range_guest(fd_t in_fd, guest_addr_t in_off, fd_t out_fd, 
     return do_copy_file_range(in_fd, in_off, out_fd, out_off, len, flags);
 }
 
-dword_t sys_xattr_stub(addr_t UNUSED(path_addr), addr_t UNUSED(name_addr),
-        addr_t UNUSED(value_addr), dword_t UNUSED(size), dword_t UNUSED(flags)) {
-    return _ENOTSUP;
-}
-
-static dword_t sys_xattr_stub_guest_impl(guest_addr_t UNUSED(path_addr), guest_addr_t UNUSED(name_addr),
-        guest_addr_t UNUSED(value_addr), dword_t UNUSED(size), dword_t UNUSED(flags)) {
-    return _ENOTSUP;
-}
-
-dword_t sys_setxattr_guest(guest_addr_t path_addr, guest_addr_t name_addr,
-        guest_addr_t value_addr, dword_t size, dword_t flags) {
-    return sys_xattr_stub_guest_impl(path_addr, name_addr, value_addr, size, flags);
-}
-
-dword_t sys_fsetxattr_guest(fd_t UNUSED(fd), guest_addr_t name_addr,
-        guest_addr_t value_addr, dword_t size, dword_t flags) {
-    return sys_xattr_stub_guest_impl(0, name_addr, value_addr, size, flags);
-}
-
-dword_t sys_getxattr_guest(guest_addr_t path_addr, guest_addr_t name_addr,
-        guest_addr_t value_addr, dword_t size) {
-    return sys_xattr_stub_guest_impl(path_addr, name_addr, value_addr, size, 0);
-}
-
-dword_t sys_fgetxattr_guest(fd_t UNUSED(fd), guest_addr_t name_addr,
-        guest_addr_t value_addr, dword_t size) {
-    return sys_xattr_stub_guest_impl(0, name_addr, value_addr, size, 0);
-}
-
-dword_t sys_listxattr_guest(guest_addr_t path_addr, guest_addr_t list_addr, dword_t size) {
-    return sys_xattr_stub_guest_impl(path_addr, 0, list_addr, size, 0);
-}
-
-dword_t sys_flistxattr_guest(fd_t UNUSED(fd), guest_addr_t list_addr, dword_t size) {
-    return sys_xattr_stub_guest_impl(0, 0, list_addr, size, 0);
-}
-
-dword_t sys_removexattr_guest(guest_addr_t path_addr, guest_addr_t name_addr) {
-    return sys_xattr_stub_guest_impl(path_addr, name_addr, 0, 0, 0);
-}
-
-dword_t sys_fremovexattr_guest(fd_t UNUSED(fd), guest_addr_t name_addr) {
-    return sys_xattr_stub_guest_impl(0, name_addr, 0, 0, 0);
-}

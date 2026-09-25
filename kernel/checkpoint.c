@@ -68,6 +68,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "kernel/ipc_ns.h"
 #include "kernel/calls.h"
 #include "kernel/checkpoint.h"
 #include "kernel/errno.h"
@@ -94,7 +95,7 @@
 #include "util/sync.h"
 
 #define CKPT_MAGIC "AOKCKPT"
-#define CKPT_VERSION 20  // 20: NX -- 64-bit guests return from signals through a [sigpage], and the personality; 19: seccomp mode and filters, dumpable; 18: a queued signal says whether it is a POSIX timer's own; 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
+#define CKPT_VERSION 21  // 21: the capability bounding set; 20: NX -- 64-bit guests return from signals through a [sigpage], and the personality; 19: seccomp mode and filters, dumpable; 18: a queued signal says whether it is a POSIX timer's own; 17: no_new_privs; 16: the executable behind /proc/<pid>/exe, capabilities, supplementary groups; 15: the root it was saved from; 14: timers, queued signals, the deadline a frozen wait carries; timerfd as a deadline; 13: the guest's clocks, task start times, timerfd guest clock; 12: a terminal record names its terminal; 11: socket options and unix node attributes; 10: threads and shared objects; 9: socket pairs; 8: anon fds + epoll section; 7: pty slave owner; 6: tmpfs contents; 4: ckpt_task.native_standin_child
                          // 5: ckpt_map.kind, reservations saved as reservations
 // How long the freezer waits for a task to reach a syscall boundary.
 //
@@ -401,6 +402,9 @@ struct ckpt_task {
     // init -- a restore was a privilege escalation. The groups follow the exe
     // path, ngroups uint32s.
     uint32_t cap_effective[2], cap_permitted[2], cap_inheritable[2], cap_ambient[2];
+    // A capability dropped from it stays dropped: restored with the restoring
+    // task's full set instead, it would come back at the next exec.
+    uint32_t cap_bounding[2];
     uint32_t keepcaps;
     uint32_t ngroups;
     // PR_SET_NO_NEW_PRIVS (struct task's no_new_privs). A sandbox sets it and
@@ -2505,6 +2509,7 @@ static int ckpt_save_task(struct ckpt_writer *w, struct task *task,
         .cap_permitted = {task->cap_permitted[0], task->cap_permitted[1]},
         .cap_inheritable = {task->cap_inheritable[0], task->cap_inheritable[1]},
         .cap_ambient = {task->cap_ambient[0], task->cap_ambient[1]},
+        .cap_bounding = {task->cap_bounding[0], task->cap_bounding[1]},
         .keepcaps = task->keepcaps ? 1 : 0,
         .no_new_privs = task->no_new_privs ? 1 : 0,
         .seccomp_mode = (uint32_t) __atomic_load_n(&task->seccomp_mode, __ATOMIC_ACQUIRE),
@@ -5023,6 +5028,7 @@ identity:
     memcpy(current->cap_permitted, rec->cap_permitted, sizeof(current->cap_permitted));
     memcpy(current->cap_inheritable, rec->cap_inheritable, sizeof(current->cap_inheritable));
     memcpy(current->cap_ambient, rec->cap_ambient, sizeof(current->cap_ambient));
+    memcpy(current->cap_bounding, rec->cap_bounding, sizeof(current->cap_bounding));
     current->keepcaps = rec->keepcaps != 0;
     current->no_new_privs = rec->no_new_privs != 0;
     // The descriptors this task's restore opened were stamped with the root
@@ -5291,8 +5297,12 @@ static struct task *ckpt_new_task(struct task *parent, pid_t_ pid,
     struct task *task = task_create_with_pid(parent, pid);
     if (task == NULL)
         return NULL;
-    if (parent != NULL)
+    // task_create_ aliases the parent's namespaces; the child's references
+    // are taken here, as construct_task takes them (kernel/init.c).
+    if (parent != NULL) {
         uts_ns_retain(task->uts_ns);
+        ipc_ns_retain(task->ipc_ns);
+    }
 
     if (own->leader != NULL) {
         struct tgroup *group = own->leader->group;

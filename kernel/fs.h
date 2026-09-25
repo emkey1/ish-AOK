@@ -106,6 +106,10 @@ bool procfd_statat(struct fd *at, const char *path, struct statbuf *stat, int *e
 // for the whole unit.
 bool procns_statat(struct fd *at, const char *path, struct statbuf *stat, int *err_out);
 int generic_setattrat(struct fd *at, const char *path, struct attr attr, bool follow_links);
+// The same change without the caller's permission to make it: for what the
+// kernel does on its own account -- a truncate stripping the set-id bits of a
+// file its caller may write but does not own. EROFS still applies.
+int generic_setattrat_force(struct fd *at, const char *path, struct attr attr, bool follow_links);
 // chown(path, -1, -1) asks for no change at all. Linux still resolves the path
 // and reports everything the resolution finds, so this runs exactly the lookup
 // generic_setattrat runs and then changes nothing. See sys_fchownat_common.
@@ -385,6 +389,44 @@ struct fs_ops {
     void (*inode_orphaned)(struct mount *mount, ino_t inode);
 };
 
+// Extended attributes (kernel/xattr.c). Kept out of struct fs_ops on purpose:
+// app/iOSFS.m defines fs_ops tables of its own, and a field appended there
+// would be read past the end of any stale object the Xcode build did not
+// recompile. Which filesystems keep attributes is xattr_ops_for_mount's list.
+//
+// These only store. Every check Linux makes above the filesystem -- the name
+// and size limits, permission, the namespace rules, security.capability's
+// shape -- has already been made when they are called. The object is `fd`
+// when it is not NULL (the f* calls, and a /proc/PID/fd link) and `path` on
+// `mount` otherwise; `fd` must work on an unlinked file. get and list follow
+// getxattr(2)'s size rules: with `size` 0 the answer is the size needed, and a
+// nonzero size too small for it is ERANGE. set takes XATTR_CREATE and
+// XATTR_REPLACE, which it must decide atomically with the write.
+struct xattr_ops {
+    ssize_t (*get)(struct mount *mount, const char *path, struct fd *fd,
+            const char *name, void *value, size_t size);
+    int (*set)(struct mount *mount, const char *path, struct fd *fd,
+            const char *name, const void *value, size_t size, int flags);
+    ssize_t (*list)(struct mount *mount, const char *path, struct fd *fd,
+            char *list, size_t size);
+    int (*remove)(struct mount *mount, const char *path, struct fd *fd,
+            const char *name);
+};
+extern const struct xattr_ops fakefs_xattr_ops;
+extern const struct xattr_ops tmpfs_xattr_ops;
+// NULL for a filesystem without extended attributes (and for no mount at
+// all: a pipe, a socket, an anonymous descriptor).
+const struct xattr_ops *xattr_ops_for_mount(struct mount *mount);
+// The object an xattr call names by path (kernel/xattr.c): resolved as stat
+// resolves it -- a /proc/PID/fd/N link that is followed reaches the open file
+// it names, as on Linux -- into either that file (*fd_out, retained) or a mount
+// (*mount_out, retained) with the mount-relative path and its mount flags.
+// guest_path_out gets the full path for inotify, or "" for the fd case. Both
+// path buffers are MAX_PATH. *stat is what the permission checks look at.
+int generic_xattr_lookup(struct fd *at, const char *path_raw, bool follow,
+        struct fd **fd_out, struct mount **mount_out, char *path_out,
+        int *mount_flags_out, char *guest_path_out, struct statbuf *stat);
+
 struct mount *find_mount_and_trim_path(char *path);
 // Same, but also reports the mount flags governing the path. For a bind these
 // are NOT the returned mount's own -- see fs/generic.c. Pass NULL to ignore.
@@ -426,6 +468,7 @@ extern const struct fs_ops sysfs;
 extern const struct fs_ops cgroupfs;
 extern const struct fs_ops cgroup2fs;
 extern const struct fs_ops fusefs;
+extern const struct fs_ops mqueuefs;
 void fs_register(const struct fs_ops *fs);
 const struct fs_ops *fs_lookup(const char *name); // by registered name, NULL if unknown
 char* get_filesystems(void); // For /proc/filesystems

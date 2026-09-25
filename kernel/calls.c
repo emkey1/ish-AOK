@@ -1098,7 +1098,18 @@ static syscall_t i386_syscall_table[] = {
     [221] = (syscall_t) sys_fcntl,
     [224] = (syscall_t) sys_gettid,
     [225] = (syscall_t) syscall_success_stub, // readahead
-    [226 ... 237] = (syscall_t) sys_xattr_stub,
+    [226] = (syscall_t) sys_setxattr,
+    [227] = (syscall_t) sys_lsetxattr,
+    [228] = (syscall_t) sys_fsetxattr,
+    [229] = (syscall_t) sys_getxattr,
+    [230] = (syscall_t) sys_lgetxattr,
+    [231] = (syscall_t) sys_fgetxattr,
+    [232] = (syscall_t) sys_listxattr,
+    [233] = (syscall_t) sys_llistxattr,
+    [234] = (syscall_t) sys_flistxattr,
+    [235] = (syscall_t) sys_removexattr,
+    [236] = (syscall_t) sys_lremovexattr,
+    [237] = (syscall_t) sys_fremovexattr,
     [238] = (syscall_t) sys_tkill,
     [239] = (syscall_t) sys_sendfile64,
     [240] = (syscall_t) sys_futex,
@@ -1135,6 +1146,12 @@ static syscall_t i386_syscall_table[] = {
     [274] = (syscall_t) sys_mbind,
     [275] = (syscall_t) sys_get_mempolicy,
     [276] = (syscall_t) sys_set_mempolicy,
+    [277] = (syscall_t) sys_mq_open,
+    [278] = (syscall_t) sys_mq_unlink,
+    [279] = (syscall_t) sys_mq_timedsend,
+    [280] = (syscall_t) sys_mq_timedreceive,
+    [281] = (syscall_t) sys_mq_notify,
+    [282] = (syscall_t) sys_mq_getsetattr,
     [284] = (syscall_t) sys_waitid,
     [288] = (syscall_t) sys_keyctl,
     [289] = (syscall_t) sys_ioprio_set,
@@ -1163,7 +1180,7 @@ static syscall_t i386_syscall_table[] = {
     [315] = (syscall_t) sys_tee,
     [316] = (syscall_t) sys_vmsplice,
     [314] = (syscall_t) syscall_success_stub, // sync_file_range
-    [318] = (syscall_t) syscall_success_stub, // getcpu
+    [318] = (syscall_t) sys_getcpu,
     [319] = (syscall_t) sys_epoll_pwait,
     [320] = (syscall_t) sys_utimensat,
     [321] = (syscall_t) sys_signalfd,
@@ -1249,6 +1266,8 @@ static syscall_t i386_syscall_table[] = {
     [413] = (syscall_t) sys_pselect_time64, // pselect6_time64
     [414] = (syscall_t) sys_ppoll_time64,
     [417] = (syscall_t) sys_recvmmsg_time64, // recvmmsg_time64
+    [418] = (syscall_t) sys_mq_timedsend_time64,
+    [419] = (syscall_t) sys_mq_timedreceive_time64,
     [421] = (syscall_t) sys_rt_sigtimedwait_time64, // rt_sigtimedwait_time64
     [422] = (syscall_t) sys_futex_time64, // futex_time64
     [424] = (syscall_t) sys_pidfd_send_signal,
@@ -1265,9 +1284,9 @@ static syscall_t i386_syscall_table[] = {
     [435] = (syscall_t) sys_clone3, // clone3
     [436] = (syscall_t) sys_close_range,
     [437] = (syscall_t) sys_openat2,
-    [438] = (syscall_t) syscall_stub_silent, // pidfd_getfd
+    [438] = (syscall_t) sys_pidfd_getfd,
     [439] = (syscall_t) sys_faccessat, // faccessat2
-    [440] = (syscall_t) syscall_stub_silent, // process_madvise
+    [440] = (syscall_t) sys_process_madvise, // 64-bit ABIs dispatch it natively
     [441] = (syscall_t) sys_epoll_pwait2, // epoll_pwait2
     // 442-448, 450, 451, 453: same post-5.x-syscall gap as the arm64 table
     // (identical syscall numbers on i386 -- Linux assigns these consistently
@@ -1301,7 +1320,7 @@ static syscall_t i386_syscall_table[] = {
     [462] = (syscall_t) syscall_stub_silent, // mseal
     // 463-469: xattrat family (6.13), open_tree_attr (6.15),
     // file_getattr/file_setattr (6.17). Same silent-ENOSYS treatment as
-    // 442-462 -- any pre-6.13 kernel (uname advertises 5.20) returns ENOSYS
+    // 442-462 -- any pre-6.13 kernel (uname advertises 5.10) returns ENOSYS
     // for all of these, and callers fall back to the classic xattr path
     // (which reports ENOTSUP like a no-xattr filesystem). Observed: Arch
     // aarch64 useradd -m probing getxattrat/464 during the /etc/skel copy
@@ -1556,7 +1575,18 @@ static syscall_t amd64_syscall_table[470] = {
     [171] = (syscall_t) sys_setdomainname,
     [186] = (syscall_t) sys_gettid,
     [187] = (syscall_t) syscall_success_stub, // readahead
-    [188 ... 199] = (syscall_t) sys_xattr_stub,
+    [188] = (syscall_t) sys_setxattr,
+    [189] = (syscall_t) sys_lsetxattr,
+    [190] = (syscall_t) sys_fsetxattr,
+    [191] = (syscall_t) sys_getxattr,
+    [192] = (syscall_t) sys_lgetxattr,
+    [193] = (syscall_t) sys_fgetxattr,
+    [194] = (syscall_t) sys_listxattr,
+    [195] = (syscall_t) sys_llistxattr,
+    [196] = (syscall_t) sys_flistxattr,
+    [197] = (syscall_t) sys_removexattr,
+    [198] = (syscall_t) sys_lremovexattr,
+    [199] = (syscall_t) sys_fremovexattr,
     [200] = (syscall_t) sys_tkill,
     [201] = (syscall_t) sys_time_amd64,
     [202] = (syscall_t) sys_futex_amd64_guest,
@@ -1593,6 +1623,14 @@ static syscall_t amd64_syscall_table[470] = {
     [237] = (syscall_t) sys_mbind,
     [238] = (syscall_t) sys_set_mempolicy,
     [239] = (syscall_t) sys_get_mempolicy,
+    // mq_* (240-245): dispatched natively (full-width pointers); these pass
+    // the NULL check.
+    [240] = (syscall_t) sys_mq_open,
+    [241] = (syscall_t) sys_mq_unlink,
+    [242] = (syscall_t) sys_mq_timedsend,
+    [243] = (syscall_t) sys_mq_timedreceive,
+    [244] = (syscall_t) sys_mq_notify,
+    [245] = (syscall_t) sys_mq_getsetattr,
     [247] = (syscall_t) sys_waitid,
     [250] = (syscall_t) sys_keyctl,
     [251] = (syscall_t) sys_ioprio_set,
@@ -1654,7 +1692,7 @@ static syscall_t amd64_syscall_table[470] = {
     [305] = (syscall_t) sys_clock_adjtime_amd64, // clock_adjtime (EPERM; full-width read-state TODO)
     [306] = (syscall_t) sys_syncfs,
     [307] = (syscall_t) sys_sendmmsg_amd64,
-    [309] = (syscall_t) syscall_success_stub, // getcpu
+    [309] = (syscall_t) sys_getcpu, // dispatched natively (full-width pointers)
     [310] = (syscall_t) sys_process_vm_readv,
     [312] = (syscall_t) sys_kcmp,
     [316] = (syscall_t) sys_renameat2,
@@ -1695,9 +1733,9 @@ static syscall_t amd64_syscall_table[470] = {
     [435] = (syscall_t) sys_clone3,
     [436] = (syscall_t) sys_close_range,
     [437] = (syscall_t) sys_openat2,
-    [438] = (syscall_t) syscall_stub_silent, // pidfd_getfd
+    [438] = (syscall_t) sys_pidfd_getfd,
     [439] = (syscall_t) sys_faccessat,
-    [440] = (syscall_t) syscall_stub_silent, // process_madvise
+    [440] = (syscall_t) sys_process_madvise, // 64-bit ABIs dispatch it natively
     [441] = (syscall_t) sys_epoll_pwait2,
     // 442-448, 450, 451, 453: same post-5.x-syscall gap as the arm64 table
     // (identical syscall numbers on amd64). Unlike i386, these DO need
@@ -1772,7 +1810,18 @@ static dword_t sys_riscv_flush_icache(void) {
 static syscall_t arm64_syscall_table[470] = {
     // I/O
     [2] = (syscall_t) sys_io_submit,
-    [5 ... 16] = (syscall_t) sys_xattr_stub,
+    [5] = (syscall_t) sys_setxattr,
+    [6] = (syscall_t) sys_lsetxattr,
+    [7] = (syscall_t) sys_fsetxattr,
+    [8] = (syscall_t) sys_getxattr,
+    [9] = (syscall_t) sys_lgetxattr,
+    [10] = (syscall_t) sys_fgetxattr,
+    [11] = (syscall_t) sys_listxattr,
+    [12] = (syscall_t) sys_llistxattr,
+    [13] = (syscall_t) sys_flistxattr,
+    [14] = (syscall_t) sys_removexattr,
+    [15] = (syscall_t) sys_lremovexattr,
+    [16] = (syscall_t) sys_fremovexattr,
     [17]  = (syscall_t) sys_getcwd,
     [19]  = (syscall_t) sys_eventfd2,
     [20]  = (syscall_t) sys_epoll_create,
@@ -1969,14 +2018,16 @@ static syscall_t arm64_syscall_table[470] = {
     [127] = (syscall_t) sys_sched_rr_get_interval, // sched_rr_get_interval
     [128] = (syscall_t) syscall_stub, // restart_syscall
     [162] = (syscall_t) sys_setdomainname, // setdomainname
-    [168] = (syscall_t) syscall_stub_silent, // getcpu
+    [168] = (syscall_t) sys_getcpu, // dispatched natively (full-width pointers)
     [171] = (syscall_t) sys_adjtimex, // adjtimex
-    [180] = (syscall_t) syscall_stub, // mq_open
-    [181] = (syscall_t) syscall_stub, // mq_unlink
-    [182] = (syscall_t) syscall_stub, // mq_timedsend
-    [183] = (syscall_t) syscall_stub, // mq_timedreceive
-    [184] = (syscall_t) syscall_stub, // mq_notify
-    [185] = (syscall_t) syscall_stub, // mq_getsetattr
+    // mq_* (180-185): dispatched natively (full-width pointers); these pass
+    // the NULL check.
+    [180] = (syscall_t) sys_mq_open,
+    [181] = (syscall_t) sys_mq_unlink,
+    [182] = (syscall_t) sys_mq_timedsend,
+    [183] = (syscall_t) sys_mq_timedreceive,
+    [184] = (syscall_t) sys_mq_notify,
+    [185] = (syscall_t) sys_mq_getsetattr,
     // SysV message queues (fakeroot's faked<->libfakeroot IPC, so every
     // makepkg/dpkg-buildpackage package() stage). Dispatch natively
     // (full-width) like shm above; entries pass the NULL check.
@@ -2069,8 +2120,8 @@ static syscall_t arm64_syscall_table[470] = {
     [432] = (syscall_t) sys_fsmount,
     [433] = (syscall_t) syscall_stub_silent, // fspick
     [434] = (syscall_t) sys_pidfd_open,
-    [438] = (syscall_t) syscall_stub_silent, // pidfd_getfd
-    [440] = (syscall_t) syscall_stub_silent, // process_madvise
+    [438] = (syscall_t) sys_pidfd_getfd,
+    [440] = (syscall_t) sys_process_madvise, // 64-bit ABIs dispatch it natively
     [452] = (syscall_t) syscall_stub_silent, // fchmodat2
     [198] = (syscall_t) sys_socket,
     [199] = (syscall_t) sys_socketpair,
@@ -2704,21 +2755,22 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 116: result = (dword_t) sys_syslog_guest((int_t) raw_args[0], raw_args[1], (int_t) raw_args[2]); break;
     case 53: result = sys_fchmodat_guest((fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2]); break;
     case 54: result = sys_fchownat_guest((fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2], (dword_t) raw_args[3], (int) raw_args[4]); break;
-    // xattr family (5-16): the legacy table's sys_xattr_stub entries are
-    // unreachable from here — the 64-bit path/name/value pointers trip the
-    // legacy marshal's full-width check, SIGSYS-killing the caller (cp -p,
-    // rsync, tar --xattrs). Dispatch natively through the same *_guest
-    // wrappers the amd64 cases (188-199) use; l-variants share the plain
-    // wrappers exactly as the amd64 dispatch does (all funnel to the
-    // ENOTSUP stub today, but full-width so nothing dies on the way).
-    case 5: case 6: result = (dword_t) sys_setxattr_guest( raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3], (dword_t) raw_args[4]); break; // setxattr/lsetxattr
-    case 7: result = (dword_t) sys_fsetxattr_guest( (fd_t) raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3], (dword_t) raw_args[4]); break; // fsetxattr
-    case 8: case 9: result = (dword_t) sys_getxattr_guest( raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3]); break; // getxattr/lgetxattr
-    case 10: result = (dword_t) sys_fgetxattr_guest( (fd_t) raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3]); break; // fgetxattr
-    case 11: case 12: result = (dword_t) sys_listxattr_guest( raw_args[0], raw_args[1], (dword_t) raw_args[2]); break; // listxattr/llistxattr
-    case 13: result = (dword_t) sys_flistxattr_guest( (fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2]); break; // flistxattr
-    case 14: case 15: result = (dword_t) sys_removexattr_guest( raw_args[0], raw_args[1]); break; // removexattr/lremovexattr
-    case 16: result = (dword_t) sys_fremovexattr_guest( (fd_t) raw_args[0], raw_args[1]); break; // fremovexattr
+    // xattr family (5-16), dispatched here rather than through the legacy
+    // table: its 32-bit marshal would SIGSYS-kill a caller passing 64-bit
+    // path/name/value pointers (cp -p, rsync, tar --xattrs). Sizes are full
+    // width -- a size past 4 GiB is E2BIG, not whatever its low half says.
+    case 5: result = sys_setxattr_guest(raw_args[0], raw_args[1], raw_args[2], raw_args[3], (dword_t) raw_args[4]); break;
+    case 6: result = sys_lsetxattr_guest(raw_args[0], raw_args[1], raw_args[2], raw_args[3], (dword_t) raw_args[4]); break;
+    case 7: result = sys_fsetxattr_guest((fd_t) raw_args[0], raw_args[1], raw_args[2], raw_args[3], (dword_t) raw_args[4]); break;
+    case 8: result = sys_getxattr_guest(raw_args[0], raw_args[1], raw_args[2], raw_args[3]); break;
+    case 9: result = sys_lgetxattr_guest(raw_args[0], raw_args[1], raw_args[2], raw_args[3]); break;
+    case 10: result = sys_fgetxattr_guest((fd_t) raw_args[0], raw_args[1], raw_args[2], raw_args[3]); break;
+    case 11: result = sys_listxattr_guest(raw_args[0], raw_args[1], raw_args[2]); break;
+    case 12: result = sys_llistxattr_guest(raw_args[0], raw_args[1], raw_args[2]); break;
+    case 13: result = sys_flistxattr_guest((fd_t) raw_args[0], raw_args[1], raw_args[2]); break;
+    case 14: result = sys_removexattr_guest(raw_args[0], raw_args[1]); break;
+    case 15: result = sys_lremovexattr_guest(raw_args[0], raw_args[1]); break;
+    case 16: result = sys_fremovexattr_guest((fd_t) raw_args[0], raw_args[1]); break;
     // truncate/ftruncate/fallocate carry 64-bit sizes in SINGLE registers
     // on aarch64; the legacy table routed them to the *_amd64 shims, which
     // expect the amd64 marshal's SPLIT low/high convention — so size_high
@@ -2926,9 +2978,13 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
               // regression caught it)
     case 81:  // sync
     case 84:  // sync_file_range
-    case 168: // getcpu
     case 213: // readahead
         result = 0; break;
+    // Not in the no-op group above: it writes through its pointers, and the
+    // group's calls, falling into it, would have had theirs taken for
+    // pointers -- vhangup came back EFAULT on riscv64, and sync handed
+    // getcpu whatever its argument registers held.
+    case 168: result = sys_getcpu_guest(raw_args[0], raw_args[1], raw_args[2]); break; // getcpu
     // EOPNOTSUPP probes (amd64 parity: elogind/systemd fall back)
     case 264: // name_to_handle_at
     case 265: // open_by_handle_at
@@ -2964,7 +3020,6 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 18: case 41: case 42:
     case 60: case 104: case 105: case 106:
     case 128:
-    case 180: case 181: case 182: case 183: case 184: case 185:
     // (186-193 are the real SysV msg/sem implementations above)
     // 224/225 (swapon/swapoff) are gone from this list and implemented in
     // arm64_syscall_table -- and the comment above is why that alone was not
@@ -2975,9 +3030,18 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 263: case 268: case 271: case 273:
     case 274: case 275: case 280: case 282: case 284:
     case 288: case 289: case 290: case 294:
-    case 425: case 426: case 427: case 438: case 440:
+    case 425: case 426: case 427:
     case 449: // futex_waitv
         result = _ENOSYS; break;
+    case 438: result = (dword_t) sys_pidfd_getfd((fd_t) raw_args[0], (fd_t) raw_args[1], (dword_t) raw_args[2]); break; // pidfd_getfd
+    // POSIX message queues (kernel/mqueue.c).
+    case 180: result = (dword_t) sys_mq_open_guest(raw_args[0], (dword_t) raw_args[1], (mode_t_) raw_args[2], raw_args[3]); break;
+    case 181: result = sys_mq_unlink_guest(raw_args[0]); break;
+    case 182: result = sys_mq_timedsend_guest((fd_t) raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3], raw_args[4]); break;
+    case 183: result = sys_mq_timedreceive_guest((fd_t) raw_args[0], raw_args[1], raw_args[2], raw_args[3], raw_args[4]); break;
+    case 184: result = sys_mq_notify_guest((fd_t) raw_args[0], raw_args[1]); break;
+    case 185: result = sys_mq_getsetattr_guest((fd_t) raw_args[0], raw_args[1], raw_args[2]); break;
+    case 440: result = sys_process_madvise_guest((fd_t) raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3], (dword_t) raw_args[4]); break; // process_madvise
     case 0xacc0: // iSH crypto accelerator: AEAD seal/open (ISH_SYS_AEAD)
         result = sys_ish_aead_guest(raw_args[0]); break;
     case 0xacc1: // iSH pixman accelerator: FILL/COPY/OVER (ISH_SYS_PIXOP)
@@ -3669,41 +3733,80 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_prlimit64_guest(
                 (pid_t_) raw_args[0], (dword_t) raw_args[1], raw_args[2], raw_args[3]));
         return true;
-    case 188:
-    case 189:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_setxattr_guest(
-                raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3], (dword_t) raw_args[4]));
+    case 188: // setxattr
+    case 189: // lsetxattr
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) (syscall_num == 188
+                ? sys_setxattr_guest : sys_lsetxattr_guest)(
+                raw_args[0], raw_args[1], raw_args[2], raw_args[3], (dword_t) raw_args[4]));
         return true;
     case 190:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_fsetxattr_guest(
-                (fd_t) raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3], (dword_t) raw_args[4]));
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) sys_fsetxattr_guest(
+                (fd_t) raw_args[0], raw_args[1], raw_args[2], raw_args[3], (dword_t) raw_args[4]));
         return true;
-    case 191:
-    case 192:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_getxattr_guest(
-                raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3]));
+    case 191: // getxattr
+    case 192: // lgetxattr
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) (syscall_num == 191
+                ? sys_getxattr_guest : sys_lgetxattr_guest)(
+                raw_args[0], raw_args[1], raw_args[2], raw_args[3]));
         return true;
     case 193:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_fgetxattr_guest(
-                (fd_t) raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3]));
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) sys_fgetxattr_guest(
+                (fd_t) raw_args[0], raw_args[1], raw_args[2], raw_args[3]));
         return true;
-    case 194:
-    case 195:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_listxattr_guest(
-                raw_args[0], raw_args[1], (dword_t) raw_args[2]));
+    case 194: // listxattr
+    case 195: // llistxattr
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) (syscall_num == 194
+                ? sys_listxattr_guest : sys_llistxattr_guest)(
+                raw_args[0], raw_args[1], raw_args[2]));
         return true;
     case 196:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_flistxattr_guest(
-                (fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2]));
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) sys_flistxattr_guest(
+                (fd_t) raw_args[0], raw_args[1], raw_args[2]));
         return true;
-    case 197:
-    case 198:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_removexattr_guest(
+    case 197: // removexattr
+    case 198: // lremovexattr
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) (syscall_num == 197
+                ? sys_removexattr_guest : sys_lremovexattr_guest)(
                 raw_args[0], raw_args[1]));
         return true;
     case 199:
-        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_fremovexattr_guest(
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) sys_fremovexattr_guest(
                 (fd_t) raw_args[0], raw_args[1]));
+        return true;
+    case 309: // getcpu
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) sys_getcpu_guest(
+                raw_args[0], raw_args[1], raw_args[2]));
+        return true;
+    case 240: // mq_open
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_mq_open_guest(
+                raw_args[0], (dword_t) raw_args[1], (mode_t_) raw_args[2], raw_args[3]));
+        return true;
+    case 241: // mq_unlink
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) sys_mq_unlink_guest(raw_args[0]));
+        return true;
+    case 242: // mq_timedsend
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) sys_mq_timedsend_guest(
+                (fd_t) raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3], raw_args[4]));
+        return true;
+    case 243: // mq_timedreceive
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) sys_mq_timedreceive_guest(
+                (fd_t) raw_args[0], raw_args[1], raw_args[2], raw_args[3], raw_args[4]));
+        return true;
+    case 244: // mq_notify
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) sys_mq_notify_guest(
+                (fd_t) raw_args[0], raw_args[1]));
+        return true;
+    case 245: // mq_getsetattr
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) sys_mq_getsetattr_guest(
+                (fd_t) raw_args[0], raw_args[1], raw_args[2]));
+        return true;
+    case 438: // pidfd_getfd
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_pidfd_getfd(
+                (fd_t) raw_args[0], (fd_t) raw_args[1], (dword_t) raw_args[2]));
+        return true;
+    case 440: // process_madvise
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) (sdword_t) sys_process_madvise_guest(
+                (fd_t) raw_args[0], raw_args[1], raw_args[2], (dword_t) raw_args[3], (dword_t) raw_args[4]));
         return true;
     case 307:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_sendmmsg_amd64_guest(
@@ -4124,7 +4227,8 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
     case 317: // seccomp: handled with full-width args by
               // handle_amd64_native_memory_syscall before this is consulted;
               // 0-arg here so nothing ever marshals its pointer
-    case 309: // getcpu stubbed
+    case 309: // getcpu: handled with full-width args by
+              // handle_amd64_native_memory_syscall before this is consulted
     case 425: // io_uring_setup    (ENOSYS stub; callers use ordinary syscalls)
     case 426: // io_uring_enter
     case 427: // io_uring_register
@@ -4133,8 +4237,6 @@ static unsigned amd64_syscall_legacy_arg_count(qword_t syscall_num) {
     // (fs/mount.c) taking genuine pointer args -- removed from this 0-arg
     // group so the default full-width classification below validates them.
     case 433: // fspick
-    case 438: // pidfd_getfd
-    case 440: // process_madvise
     // Same reasoning: silent ENOSYS stubs whose args are never read, several
     // of which take real 64-bit guest pointers (mount_setattr's uattr,
     // landlock's ruleset/rule attr, cachestat's range/result structs) that

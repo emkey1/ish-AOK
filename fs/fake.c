@@ -19,6 +19,7 @@
 #include "fs/tty.h"
 #include "fs/fifo.h"
 #include "kernel/fs.h"
+#include "kernel/xattr.h"
 #define ISH_INTERNAL
 #include "fs/fake.h"
 #include "fs/fake-path.h"
@@ -995,8 +996,117 @@ static void fakefs_inode_orphaned(struct mount *mount, ino_t inode) {
     db_begin_write(fs);
     sqlite3_bind_int64(fs->stmt.try_cleanup_inode, 1, inode);
     db_exec_reset(fs, fs->stmt.try_cleanup_inode);
+    // The attributes go with the stat: this is the last reference to a file
+    // with no name left, so nothing can reach them again.
+    sqlite3_bind_int64(fs->stmt.try_cleanup_xattrs, 1, inode);
+    db_exec_reset(fs, fs->stmt.try_cleanup_xattrs);
     db_commit(fs);
 }
+
+// ---------------------------------------------------- extended attributes
+//
+// Kept in the metadata database beside the stat, keyed by inode
+// (fs/fake-db.h's xattrs table): hard links share them, a rename keeps them,
+// and an unlinked file keeps them until its last descriptor goes and
+// fakefs_inode_orphaned sweeps both. kernel/xattr.c has made every permission
+// and name check before any of these runs.
+
+// The inode an xattr call is about. A descriptor carries its own -- which is
+// what makes the f* calls work on an unlinked file -- and a path is looked up
+// inside the caller's transaction.
+static inode_t fakefs_xattr_inode(struct fakefs_db *fs, const char *path, struct fd *fd) {
+    if (fd != NULL)
+        return fd->fake_inode;
+    return path_get_inode(fs, path);
+}
+
+// Setting or removing an attribute is a change to the inode, and moves its
+// ctime as on Linux (measured on 6.12, ext4 and tmpfs alike). The attributes
+// live in the database, so the host file is told the way a chmod tells it.
+static void fakefs_xattr_touch_ctime(struct mount *mount, const char *path, struct fd *fd) {
+    if (fd != NULL) {
+        fakefs_touch_ctime_fd(fd);
+        return;
+    }
+    host_path_t host_path;
+    if (fakefs_host_path(path, host_path) == 0)
+        fakefs_touch_ctime(mount, host_path);
+}
+
+static ssize_t fakefs_getxattr(struct mount *mount, const char *path, struct fd *fd,
+        const char *name, void *value, size_t size) {
+    struct fakefs_db *fs = fakefs_db_thread(&mount->fakefs);
+    // Asked of every file's first write (the capability kill), so the answer
+    // for a mount that has never held one is given without a lookup.
+    if (strcmp(name, "security.capability") == 0 &&
+            !atomic_load(&fakefs_db_shared(fs)->xattr_caps_seen))
+        return _ENODATA;
+    db_begin_read(fs);
+    inode_t inode = fakefs_xattr_inode(fs, path, fd);
+    ssize_t res = inode == 0 ? _ENOENT : inode_xattr_get(fs, inode, name, value, size);
+    db_commit(fs);
+    return res;
+}
+
+static int fakefs_setxattr(struct mount *mount, const char *path, struct fd *fd,
+        const char *name, const void *value, size_t size, int flags) {
+    struct fakefs_db *fs = fakefs_db_thread(&mount->fakefs);
+    db_begin_write(fs);
+    inode_t inode = fakefs_xattr_inode(fs, path, fd);
+    int err = 0;
+    if (inode == 0)
+        err = _ENOENT;
+    if (err == 0 && (flags & (XATTR_CREATE_ | XATTR_REPLACE_))) {
+        // In the same transaction as the write, so CREATE really is
+        // exclusive and REPLACE really replaces.
+        bool exists = inode_xattr_get(fs, inode, name, NULL, 0) >= 0;
+        if ((flags & XATTR_CREATE_) && exists)
+            err = _EEXIST;
+        else if ((flags & XATTR_REPLACE_) && !exists)
+            err = _ENODATA;
+    }
+    if (err == 0)
+        err = inode_xattr_put(fs, inode, name, value, size);
+    if (err < 0)
+        db_rollback(fs);
+    else
+        db_commit(fs);
+    if (err == 0)
+        fakefs_xattr_touch_ctime(mount, path, fd);
+    return err;
+}
+
+static ssize_t fakefs_listxattr(struct mount *mount, const char *path, struct fd *fd,
+        char *list, size_t size) {
+    struct fakefs_db *fs = fakefs_db_thread(&mount->fakefs);
+    db_begin_read(fs);
+    inode_t inode = fakefs_xattr_inode(fs, path, fd);
+    ssize_t res = inode == 0 ? _ENOENT : inode_xattr_list(fs, inode, list, size);
+    db_commit(fs);
+    return res;
+}
+
+static int fakefs_removexattr(struct mount *mount, const char *path, struct fd *fd,
+        const char *name) {
+    struct fakefs_db *fs = fakefs_db_thread(&mount->fakefs);
+    db_begin_write(fs);
+    inode_t inode = fakefs_xattr_inode(fs, path, fd);
+    int err = inode == 0 ? _ENOENT : inode_xattr_remove(fs, inode, name);
+    if (err < 0)
+        db_rollback(fs);
+    else
+        db_commit(fs);
+    if (err == 0)
+        fakefs_xattr_touch_ctime(mount, path, fd);
+    return err;
+}
+
+const struct xattr_ops fakefs_xattr_ops = {
+    .get = fakefs_getxattr,
+    .set = fakefs_setxattr,
+    .list = fakefs_listxattr,
+    .remove = fakefs_removexattr,
+};
 
 const struct fs_ops fakefs = {
     .name = "fake", .magic = 0x66616b65,

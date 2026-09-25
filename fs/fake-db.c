@@ -247,7 +247,94 @@ inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *sta
     bind_path(fs->stmt.path_create_path, 1, path);
     sqlite3_bind_int64(fs->stmt.path_create_path, 2, inode);
     db_exec_reset(fs, fs->stmt.path_create_path);
+    // A new file has no attributes. Any row still keyed to this number
+    // belonged to a file that is gone -- orphans are swept at mount, but a
+    // number can come round again before then -- and must not be inherited.
+    sqlite3_bind_int64(fs->stmt.xattr_drop_inode, 1, inode);
+    db_exec_reset(fs, fs->stmt.xattr_drop_inode);
     return inode;
+}
+
+ssize_t inode_xattr_get(struct fakefs_db *fs, inode_t inode, const char *name, void *value, size_t size) {
+    // select value from xattrs where inode = ? and name = ?
+    sqlite3_stmt *stmt = fs->stmt.xattr_get;
+    sqlite3_bind_int64(stmt, 1, inode);
+    sqlite3_bind_blob(stmt, 2, name, strlen(name), SQLITE_TRANSIENT);
+    ssize_t res;
+    if (!db_exec(fs, stmt)) {
+        res = _ENODATA;
+    } else {
+        const void *blob = sqlite3_column_blob(stmt, 0);
+        int len = sqlite3_column_bytes(stmt, 0);
+        if (size == 0) {
+            res = len;
+        } else if ((size_t) len > size) {
+            res = _ERANGE;
+        } else {
+            // A zero-length blob comes back as NULL.
+            if (len > 0)
+                memcpy(value, blob, (size_t) len);
+            res = len;
+        }
+    }
+    db_reset(fs, stmt);
+    return res;
+}
+
+int inode_xattr_put(struct fakefs_db *fs, inode_t inode, const char *name, const void *value, size_t size) {
+    // insert or replace into xattrs (inode, name, value) values (?, ?, ?)
+    sqlite3_stmt *stmt = fs->stmt.xattr_put;
+    sqlite3_bind_int64(stmt, 1, inode);
+    sqlite3_bind_blob(stmt, 2, name, strlen(name), SQLITE_TRANSIENT);
+    // An empty value is still a value: bind a zero-length blob, not the SQL
+    // NULL that a NULL pointer would bind (and the column refuses).
+    if (size == 0)
+        sqlite3_bind_zeroblob(stmt, 3, 0);
+    else
+        sqlite3_bind_blob(stmt, 3, value, (int) size, SQLITE_TRANSIENT);
+    int err = sqlite3_step(stmt);
+    sqlite3_reset(stmt);
+    if (err != SQLITE_DONE) {
+        db_check_error(fs);
+        return _EIO;
+    }
+    if (strcmp(name, "security.capability") == 0)
+        atomic_store(&fakefs_db_shared(fs)->xattr_caps_seen, true);
+    return 0;
+}
+
+ssize_t inode_xattr_list(struct fakefs_db *fs, inode_t inode, char *list, size_t size) {
+    // select name from xattrs where inode = ? order by name
+    sqlite3_stmt *stmt = fs->stmt.xattr_list;
+    sqlite3_bind_int64(stmt, 1, inode);
+    size_t total = 0;
+    ssize_t res = 0;
+    while (db_exec(fs, stmt)) {
+        const void *blob = sqlite3_column_blob(stmt, 0);
+        int len = sqlite3_column_bytes(stmt, 0);
+        if (len <= 0)
+            continue;
+        if (size != 0) {
+            if (total + (size_t) len + 1 > size) {
+                res = _ERANGE;
+                break;
+            }
+            memcpy(list + total, blob, (size_t) len);
+            list[total + (size_t) len] = '\0';
+        }
+        total += (size_t) len + 1;
+    }
+    db_reset(fs, stmt);
+    return res < 0 ? res : (ssize_t) total;
+}
+
+int inode_xattr_remove(struct fakefs_db *fs, inode_t inode, const char *name) {
+    // delete from xattrs where inode = ? and name = ?
+    sqlite3_stmt *stmt = fs->stmt.xattr_remove;
+    sqlite3_bind_int64(stmt, 1, inode);
+    sqlite3_bind_blob(stmt, 2, name, strlen(name), SQLITE_TRANSIENT);
+    db_exec_reset(fs, stmt);
+    return sqlite3_changes(fs->db) > 0 ? 0 : _ENODATA;
 }
 
 bool inode_exists(struct fakefs_db *fs, inode_t inode) {
@@ -384,12 +471,14 @@ int fake_db_create_schema(const char *db_path) {
              "create table stats (inode integer primary key, stat blob);"
              "create table paths (path blob primary key, inode integer references stats(inode));"
              "create index inode_to_path on paths (inode, path);"
+             FAKEFS_XATTRS_SCHEMA
              // v6 repairs what the v4/v5 rename passes stranded, v7 the inode
              // aliasing that concurrent allocators left, and v8 the two host
              // entries those rename passes could leave for one guest name; a
              // root created here never had unescaped names and has no history
-             // to alias, so there is nothing for any of them to find.
-             "pragma user_version=8;");
+             // to alias, so there is nothing for any of them to find. v9 is
+             // the xattrs table, made just above.
+             "pragma user_version=9;");
     EXEC_RET("commit");
     sqlite3_close(db);
     return 0;
@@ -413,6 +502,12 @@ static void db_prepare_statements(struct fakefs_db *fs) {
             "where (path >= ? and path < ?) or path = ?");
     fs->stmt.path_from_inode = db_prepare(fs, "select path from paths where inode = ?");
     fs->stmt.try_cleanup_inode = db_prepare(fs, "delete from stats where inode = ? and not exists (select 1 from paths where inode = stats.inode)");
+    fs->stmt.xattr_get = db_prepare(fs, "select value from xattrs where inode = ? and name = ?");
+    fs->stmt.xattr_put = db_prepare(fs, "insert or replace into xattrs (inode, name, value) values (?, ?, ?)");
+    fs->stmt.xattr_list = db_prepare(fs, "select name from xattrs where inode = ? order by name");
+    fs->stmt.xattr_remove = db_prepare(fs, "delete from xattrs where inode = ? and name = ?");
+    fs->stmt.xattr_drop_inode = db_prepare(fs, "delete from xattrs where inode = ?");
+    fs->stmt.try_cleanup_xattrs = db_prepare(fs, "delete from xattrs where inode = ?1 and not exists (select 1 from paths where inode = ?1)");
 }
 
 // Session pragmas. journal_mode is a property of the database file, not of the
@@ -532,6 +627,18 @@ int fake_db_init(struct fakefs_db *fs, const char *db_path, int root_fd) {
     db_check_error(fs);
     sqlite3_finalize(statement);
 
+    // ...and the attributes of the files they described
+    statement = db_prepare(fs, "delete from xattrs where not exists (select 1 from paths where inode = xattrs.inode)");
+    db_check_error(fs);
+    sqlite3_step(statement);
+    db_check_error(fs);
+    sqlite3_finalize(statement);
+
+    statement = db_prepare(fs, "select 1 from xattrs where name = cast('security.capability' as blob) limit 1");
+    db_check_error(fs);
+    atomic_store(&fs->xattr_caps_seen, sqlite3_step(statement) == SQLITE_ROW);
+    sqlite3_finalize(statement);
+
     fs->next_inode = fakefs_next_inode_init(fs);
     fs->lock = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST);
     db_prepare_statements(fs);
@@ -557,6 +664,12 @@ void fake_db_finalize_statements(struct fakefs_db *fs) {
     sqlite3_finalize(fs->stmt.path_rename);
     sqlite3_finalize(fs->stmt.path_from_inode);
     sqlite3_finalize(fs->stmt.try_cleanup_inode);
+    sqlite3_finalize(fs->stmt.xattr_get);
+    sqlite3_finalize(fs->stmt.xattr_put);
+    sqlite3_finalize(fs->stmt.xattr_list);
+    sqlite3_finalize(fs->stmt.xattr_remove);
+    sqlite3_finalize(fs->stmt.xattr_drop_inode);
+    sqlite3_finalize(fs->stmt.try_cleanup_xattrs);
     memset(&fs->stmt, 0, sizeof(fs->stmt));
 }
 

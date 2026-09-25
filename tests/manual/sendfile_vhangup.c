@@ -14,7 +14,8 @@
 // a short pipe write, so busybox cat/tar truncated any >64K pipe copy), that
 // the same copy to a SOCKET comes back short and loses nothing across the loop
 // (the engine also once drove its loop to the caller's full count, which is a
-// deadlock the moment either end can block), and that vhangup returns cleanly.
+// deadlock the moment either end can block), and that vhangup and sync return
+// cleanly whatever their unused argument registers hold.
 // Arch-neutral.
 #define _GNU_SOURCE
 #include <unistd.h>
@@ -227,15 +228,28 @@ out:
     unlink(path);
 }
 
+// vhangup and sync take no arguments, so whatever is in the argument
+// registers must not matter. Junk in them is deliberate: on arm64 and riscv64
+// both once fell through a switch into getcpu, which took the registers for
+// pointers -- EFAULT with junk there, and with zeros (what a plain call left
+// on arm64) a silent pass.
 static void test_vhangup(void) {
     errno = 0;
-    long r = syscall(SYS_vhangup);
+    long r = syscall(SYS_vhangup, 0x10L, 0x20L, 0x30L);
     if (r == 0)
         test_logf("vhangup -> 0 ok\n");
     else if (errno == EPERM)
         test_logf("vhangup -> -1 EPERM (acceptable)\n");
     else {
         printf("FAIL: vhangup -> %ld %s (want 0)\n", r, r < 0 ? strerror(errno) : "");
+        failures_total++;
+    }
+    errno = 0;
+    r = syscall(SYS_sync, 0x10L, 0x20L, 0x30L);
+    if (r == 0)
+        test_logf("sync -> 0 ok\n");
+    else {
+        printf("FAIL: sync -> %ld %s (want 0)\n", r, r < 0 ? strerror(errno) : "");
         failures_total++;
     }
 }

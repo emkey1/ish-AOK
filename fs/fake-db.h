@@ -2,11 +2,19 @@
 #define FS_FAKEFS_API_H
 
 #include <sqlite3.h>
+#include <stdatomic.h>
 #include "fs/fake-lockstats.h"
 #include "fs/fix_path.h"
 #include "misc.h"
 
 typedef uint64_t inode_t;
+
+// Extended attributes, keyed by inode so hard links share them and renames
+// keep them. Names and values are blobs; a value may be empty. Schema version
+// 9 (fs/fake-migrate.c), and part of every fresh root's schema.
+#define FAKEFS_XATTRS_SCHEMA \
+    "create table xattrs (inode integer not null, name blob not null, " \
+    "value blob not null, primary key (inode, name)) without rowid;"
 
 struct fakefs_db {
     sqlite3 *db;
@@ -27,7 +35,21 @@ struct fakefs_db {
         sqlite3_stmt *path_rename;
         sqlite3_stmt *path_from_inode;
         sqlite3_stmt *try_cleanup_inode;
+        // Extended attributes (fs/fake.c's fakefs_xattr_ops), in the xattrs
+        // table: (inode, name) -> value.
+        sqlite3_stmt *xattr_get;
+        sqlite3_stmt *xattr_put;
+        sqlite3_stmt *xattr_list;
+        sqlite3_stmt *xattr_remove;
+        sqlite3_stmt *xattr_drop_inode;
+        sqlite3_stmt *try_cleanup_xattrs;
     } stmt;
+    // Whether this mount may hold a security.capability anywhere. Nearly no
+    // root has one, and every file's first write asks (the killpriv in
+    // kernel/fs.c's file_remove_privs), so a lookup that can only miss is
+    // skipped. Set at mount from the table and whenever one is written; never
+    // cleared. On the primary; see fakefs_db_shared.
+    _Atomic bool xattr_caps_seen;
     // Serializes writers. Every pooled connection carries the same mutex
     // pointer as the mount's primary, so the write path is unchanged.
     sqlite3_mutex *lock;
@@ -163,6 +185,15 @@ inode_t path_create(struct fakefs_db *fs, const char *path, struct ish_stat *sta
 bool inode_exists(struct fakefs_db *fs, inode_t inode);
 bool inode_read_stat(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat);
 void inode_write_stat(struct fakefs_db *fs, inode_t inode, struct ish_stat *stat);
+
+// Extended attributes of an inode. get and list follow getxattr(2)'s size
+// rules (size 0 asks how much; too small is ERANGE). put returns 0 or a guest
+// errno; the XATTR_CREATE/XATTR_REPLACE decisions are the caller's, made in
+// the same transaction. remove is _ENODATA for a name that is not there.
+ssize_t inode_xattr_get(struct fakefs_db *fs, inode_t inode, const char *name, void *value, size_t size);
+int inode_xattr_put(struct fakefs_db *fs, inode_t inode, const char *name, const void *value, size_t size);
+ssize_t inode_xattr_list(struct fakefs_db *fs, inode_t inode, char *list, size_t size);
+int inode_xattr_remove(struct fakefs_db *fs, inode_t inode, const char *name);
 
 void path_link(struct fakefs_db *fs, const char *src, const char *dst);
 inode_t path_unlink(struct fakefs_db *fs, const char *path);

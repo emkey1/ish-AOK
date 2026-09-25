@@ -228,6 +228,58 @@ bool procfd_statat(struct fd *at, const char *path_raw, struct statbuf *stat, in
     return true;
 }
 
+// See kernel/fs.h. The same resolution generic_statat_full makes, including
+// the /proc/PID/fd/N case: getxattr("/proc/self/fd/3", ...) reaches the file
+// descriptor 3 has open -- unlinked or not -- rather than chasing the link's
+// descriptive text as a path.
+int generic_xattr_lookup(struct fd *at, const char *path_raw, bool follow,
+        struct fd **fd_out, struct mount **mount_out, char *path_out,
+        int *mount_flags_out, char *guest_path_out, struct statbuf *stat) {
+    *fd_out = NULL;
+    *mount_out = NULL;
+    *mount_flags_out = 0;
+    guest_path_out[0] = '\0';
+    if (follow) {
+        struct fd *fd;
+        int err;
+        if (procfd_resolve(at, path_raw, &fd, &err)) {
+            if (err < 0)
+                return err;
+            err = generic_fstat(fd, stat);
+            if (err < 0) {
+                fd_close(fd);
+                return err;
+            }
+            *fd_out = fd;
+            *mount_flags_out = fd->mount_flags;
+            return 0;
+        }
+    }
+    char path[MAX_PATH];
+    int err = path_normalize(at, path_raw, path, follow ? N_SYMLINK_FOLLOW : N_SYMLINK_NOFOLLOW);
+    if (err < 0)
+        return err;
+    strcpy(guest_path_out, path);
+    struct mount *mount = find_mount_and_trim_path_flags(path, mount_flags_out);
+    if (mount == NULL)
+        return _ENOENT;
+    memset(stat, 0, sizeof(*stat));
+    // Under inodes_lock, as generic_statat_full takes the stat: fakefs's is
+    // two unlocked reads that a concurrent create could otherwise tear.
+    if (!mount->fs->may_block)
+        lock(&inodes_lock, 0);
+    err = mount->fs->stat(mount, path, stat);
+    if (!mount->fs->may_block)
+        unlock(&inodes_lock);
+    if (err < 0) {
+        mount_release(mount);
+        return err;
+    }
+    strcpy(path_out, path);
+    *mount_out = mount;
+    return 0;
+}
+
 // The mount flags in force for `path`, which are NOT always the returned
 // mount's own: see find_mount_and_trim_path_flags.
 struct mount *find_mount_and_trim_path(char *path) {
@@ -1316,7 +1368,20 @@ int generic_mknodat(struct fd *at, const char *path_raw, mode_t_ mode, dev_t_ de
     return err;
 }
 
+static int generic_setattrat_checked(struct fd *at, const char *path_raw, struct attr attr,
+        bool follow_links, bool check);
+
 int generic_setattrat(struct fd *at, const char *path_raw, struct attr attr, bool follow_links) {
+    return generic_setattrat_checked(at, path_raw, attr, follow_links, true);
+}
+
+// See kernel/fs.h: for a change the kernel makes on its own account.
+int generic_setattrat_force(struct fd *at, const char *path_raw, struct attr attr, bool follow_links) {
+    return generic_setattrat_checked(at, path_raw, attr, follow_links, false);
+}
+
+static int generic_setattrat_checked(struct fd *at, const char *path_raw, struct attr attr,
+        bool follow_links, bool check) {
     char path[MAX_PATH];
     int err = path_normalize(at, path_raw, path, follow_links ? N_SYMLINK_FOLLOW : N_SYMLINK_NOFOLLOW);
     if (err < 0)
@@ -1333,7 +1398,7 @@ int generic_setattrat(struct fd *at, const char *path_raw, struct attr attr, boo
     }
     struct statbuf stat = {};
     err = mount->fs->stat(mount, path, &stat);
-    if (err >= 0)
+    if (err >= 0 && check)
         err = setattr_check(&stat, &attr);
     if (err < 0) {
         mount_release(mount);

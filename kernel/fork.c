@@ -5,6 +5,8 @@
 #include "kernel/calls.h"
 #include "kernel/mm.h"
 #include "kernel/ptrace.h"
+#include "kernel/rseq.h"
+#include "kernel/ipc_ns.h"
 #include "util/sync.h"
 #include <string.h>
 
@@ -45,15 +47,16 @@
 // stress-ng's clone stressor outright, not just noisy logging.
 #define IMPLEMENTED_FLAGS (CLONE_VM_|CLONE_FILES_|CLONE_FS_|CLONE_SIGHAND_|CLONE_SYSVSEM_|CLONE_VFORK_|CLONE_THREAD_|\
         CLONE_SETTLS_|CLONE_CHILD_SETTID_|CLONE_PARENT_SETTID_|CLONE_CHILD_CLEARTID_|CLONE_DETACHED_|CLONE_PARENT_|\
-        CLONE_PIDFD_|CLONE_IO_|CLONE_NEWUTS_)
+        CLONE_PIDFD_|CLONE_IO_|CLONE_NEWUTS_|CLONE_NEWIPC_)
 // The remaining namespace flags are recognized but never implemented (no
-// mount/user/pid/ipc/cgroup/net namespaces; UTS is real, see kernel/uts.h).
+// mount/user/pid/cgroup/net namespaces; UTS and IPC are real, see kernel/uts.h
+// and kernel/ipc_ns.h).
 // Handled separately from IMPLEMENTED_FLAGS below so they get the errno real
 // Linux gives an unprivileged caller (EPERM: creating a new namespace needs
 // CAP_SYS_ADMIN/CAP_SYS_USER_NS) instead of the generic "unrecognized flag"
 // EINVAL -- callers that already fall back when they lack namespace privilege
 // need to see that, not a malformed-argument error.
-#define CLONE_NEW_FLAGS_ (CLONE_NEWNS_|CLONE_NEWCGROUP_|CLONE_NEWIPC_|CLONE_NEWUSER_|CLONE_NEWPID_|CLONE_NEWNET_)
+#define CLONE_NEW_FLAGS_ (CLONE_NEWNS_|CLONE_NEWCGROUP_|CLONE_NEWUSER_|CLONE_NEWPID_|CLONE_NEWNET_)
 
 static struct tgroup *tgroup_copy(struct tgroup *old_group) {
     struct tgroup *group = malloc(sizeof(struct tgroup));
@@ -162,6 +165,7 @@ static int copy_task(struct task *task, dword_t flags, guest_addr_t stack, guest
             return _ENOMEM;
         task_set_mm(task, new_mm);
     }
+    rseq_fork(task, (flags & CLONE_VM_) != 0);
 
     if (flags & CLONE_FILES_) {
         task->files->refcount++;
@@ -190,12 +194,22 @@ static int copy_task(struct task *task, dword_t flags, guest_addr_t stack, guest
         uts_ns_retain(task->uts_ns);
     }
 
+    // A new IPC namespace starts empty; otherwise the child sees its parent's
+    // objects.
+    if (flags & CLONE_NEWIPC_) {
+        task->ipc_ns = ipc_ns_new();
+        if (task->ipc_ns == NULL)
+            goto fail_free_uts;
+    } else {
+        ipc_ns_retain(task->ipc_ns);
+    }
+
     if (flags & CLONE_SIGHAND_) {
         task->sighand->refcount++;
     } else {
         task->sighand = sighand_copy(task->sighand);
         if (task->sighand == NULL)
-            goto fail_free_uts;
+            goto fail_free_ipc;
     }
 
     struct tgroup *old_group = task->group;
@@ -339,6 +353,12 @@ fail_free_sighand:
     task->sighand = NULL;
     unlock(&pids_lock);
     sighand_release(dead_sighand);
+fail_free_ipc:
+    lock(&task->general_lock, 0);
+    struct ipc_namespace *dead_ipc_early = task->ipc_ns;
+    task->ipc_ns = NULL;
+    unlock(&task->general_lock);
+    ipc_ns_release(dead_ipc_early);
 fail_free_uts:
     lock(&task->general_lock, 0);
     struct uts_namespace *dead_uts = task->uts_ns;
@@ -402,6 +422,8 @@ void task_never_ran_destroy(struct task *task) {
     task->fs = NULL;
     struct uts_namespace *dead_uts = task->uts_ns;
     task->uts_ns = NULL;
+    struct ipc_namespace *dead_ipc = task->ipc_ns;
+    task->ipc_ns = NULL;
     struct fdtable *dead_files = task->files;
     task->files = NULL;
     struct mm *dead_mm = task->mm;
@@ -432,6 +454,8 @@ void task_never_ran_destroy(struct task *task) {
         fs_info_release(dead_fs);
     if (dead_uts != NULL)
         uts_ns_release(dead_uts);
+    if (dead_ipc != NULL)
+        ipc_ns_release(dead_ipc);
     if (dead_files != NULL)
         fdtable_release(dead_files);
     if (dead_mm != NULL)
@@ -503,8 +527,12 @@ static dword_t sys_clone_common_(dword_t flags, guest_addr_t stack, guest_addr_t
     if (flags & CLONE_NEW_FLAGS_)
         return _EPERM;
     // Creating any namespace needs CAP_SYS_ADMIN in real Linux.
-    if ((flags & CLONE_NEWUTS_) && !superuser())
+    if ((flags & (CLONE_NEWUTS_ | CLONE_NEWIPC_)) && !current_capable(CAP_SYS_ADMIN_))
         return _EPERM;
+    // CLONE_SYSVSEM shares the parent's SEM_UNDO list, whose semaphores a new
+    // IPC namespace cannot reach, so Linux refuses the pair (copy_namespaces).
+    if ((flags & (CLONE_NEWIPC_ | CLONE_SYSVSEM_)) == (CLONE_NEWIPC_ | CLONE_SYSVSEM_))
+        return _EINVAL;
     // The low byte of flags (or clone3's separate exit_signal field, folded in
     // by sys_clone3_guest) becomes task->exit_signal and is later handed to
     // send_signal() uninspected when the child exits. Out-of-range values
@@ -934,10 +962,51 @@ dword_t sys_clone3(addr_t uargs_addr, dword_t size) {
     return sys_clone3_guest(uargs_addr, size);
 }
 
+// Whether the caller already has what unshare(2) was asked to split off its
+// thread group, signal handlers or address space to itself. None of the three
+// can be split off a running process, and Linux does not try either
+// (check_unshare_flags): it succeeds when there is nothing to split and
+// refuses with EINVAL when there is.
+static int unshare_check_shared(dword_t flags) {
+    if (!(flags & (CLONE_THREAD_ | CLONE_SIGHAND_ | CLONE_VM_)))
+        return 0;
+    int err = 0;
+    complex_lockt(&pids_lock, 0);
+    struct list *threads = &current->group->threads;
+    if (threads->next != threads->prev)
+        err = _EINVAL;
+    else if ((flags & (CLONE_SIGHAND_ | CLONE_VM_)) && current->sighand->refcount > 1)
+        err = _EINVAL;
+    else if ((flags & CLONE_VM_) && current->mm->refcount > 1) {
+        // The count also includes a /proc reader holding the mm for a moment,
+        // so look for another task actually running in it, as Linux's
+        // current_is_single_threaded does: a CLONE_VM child that is not a
+        // thread, or a vfork child that has not yet exec'd.
+        struct pid *entry;
+        list_for_each_entry(&alive_pids_list, entry, alive) {
+            struct task *task = entry->task;
+            if (task != NULL && task != current && task->mm == current->mm) {
+                err = _EINVAL;
+                break;
+            }
+        }
+    }
+    unlock(&pids_lock);
+    return err;
+}
+
 dword_t sys_unshare(dword_t flags) {
     STRACE("unshare(%#x)", flags);
 
-    const dword_t supported = CLONE_FILES_ | CLONE_FS_ | CLONE_SYSVSEM_ | CLONE_NEWUTS_;
+    // Linux widens the request before it looks at it: an address space takes
+    // the signal handlers with it, and those take the thread group.
+    if (flags & CLONE_VM_)
+        flags |= CLONE_SIGHAND_;
+    if (flags & CLONE_SIGHAND_)
+        flags |= CLONE_THREAD_;
+
+    const dword_t supported = CLONE_THREAD_ | CLONE_SIGHAND_ | CLONE_VM_ |
+        CLONE_FILES_ | CLONE_FS_ | CLONE_SYSVSEM_ | CLONE_NEWUTS_ | CLONE_NEWIPC_;
     // Recognized, and not provided. The distinction from the ~known case
     // below is the whole point: a flag listed here is a real thing this
     // kernel does not have (ENOSYS), while one that is not listed at all is a
@@ -951,44 +1020,95 @@ dword_t sys_unshare(dword_t flags) {
     //   unshare: unshare failed: Invalid argument
     //
     // Six of those eight namespaces already answered ENOSYS; the odd one out
-    // decided the message.
-    const dword_t known_unsupported = CLONE_VM_ | CLONE_SIGHAND_ | CLONE_THREAD_ |
-        CLONE_NEWNS_ | CLONE_NEWCGROUP_ | CLONE_NEWIPC_ | CLONE_NEWTIME_ |
-        CLONE_NEWUSER_ | CLONE_NEWPID_ | CLONE_NEWNET_ | CLONE_IO_;
+    // decided the message. (CLONE_IO is not a namespace, and Linux's unshare
+    // refuses it as malformed, so it is not listed here.)
+    const dword_t known_unsupported = CLONE_NEWNS_ | CLONE_NEWCGROUP_ | CLONE_NEWTIME_ |
+        CLONE_NEWUSER_ | CLONE_NEWPID_ | CLONE_NEWNET_;
     const dword_t known = supported | known_unsupported;
 
     if (flags & ~known)
         return _EINVAL;
+    int err = unshare_check_shared(flags);
+    if (err < 0)
+        return err;
     if (flags & known_unsupported)
         return _ENOSYS;
-    if ((flags & CLONE_NEWUTS_) && !superuser())
+    if ((flags & (CLONE_NEWUTS_ | CLONE_NEWIPC_)) && !current_capable(CAP_SYS_ADMIN_))
         return _EPERM;
 
+    // Everything that can fail to allocate is allocated before anything
+    // changes, so a failure leaves the caller as it was.
+    struct uts_namespace *new_uts = NULL;
     if (flags & CLONE_NEWUTS_) {
-        struct uts_namespace *new_uts = uts_ns_copy(current->uts_ns);
+        new_uts = uts_ns_copy(current->uts_ns);
         if (new_uts == NULL)
             return _ENOMEM;
-        struct uts_namespace *old_uts = current->uts_ns;
-        current->uts_ns = new_uts;
-        uts_ns_release(old_uts);
+    }
+    struct ipc_namespace *new_ipc = NULL;
+    if (flags & CLONE_NEWIPC_) {
+        new_ipc = ipc_ns_new();
+        if (new_ipc == NULL) {
+            if (new_uts != NULL)
+                uts_ns_release(new_uts);
+            return _ENOMEM;
+        }
     }
 
     if (flags & CLONE_FILES_) {
-        int err = fdtable_unshare_current();
-        if (err < 0)
+        err = fdtable_unshare_current();
+        if (err < 0) {
+            if (new_uts != NULL)
+                uts_ns_release(new_uts);
+            ipc_ns_release(new_ipc);
             return err;
+        }
     }
 
     if ((flags & CLONE_FS_) && current->fs->refcount != 1) {
         struct fs_info *old_fs = current->fs;
         struct fs_info *new_fs = fs_info_copy(old_fs);
-        if (new_fs == NULL)
+        if (new_fs == NULL) {
+            if (new_uts != NULL)
+                uts_ns_release(new_uts);
+            ipc_ns_release(new_ipc);
             return _ENOMEM;
+        }
+        lock(&current->general_lock, 0);
         current->fs = new_fs;
+        unlock(&current->general_lock);
         fs_info_release(old_fs);
     }
 
-    // SysV semaphore undo lists are not modeled separately, so treat this as a no-op.
+    // Leaving the SEM_UNDO list is what exit does to it (Linux: "CLONE_SYSVSEM
+    // is equivalent to sys_exit()"), and a new IPC namespace leaves it too,
+    // because its semaphores are out of reach from there. The list here
+    // belongs to the whole process, so it is applied now only when the caller
+    // is the process's only thread; with others left sharing it Linux merely
+    // detaches the caller, and the others keep it -- which AOK's per-process
+    // list already amounts to.
+    if (flags & (CLONE_SYSVSEM_ | CLONE_NEWIPC_)) {
+        complex_lockt(&pids_lock, 0);
+        struct list *threads = &current->group->threads;
+        bool alone = threads->next == threads->prev;
+        unlock(&pids_lock);
+        if (alone)
+            sysv_sem_exit(current->ipc_ns, current->group);
+    }
+
+    if (new_uts != NULL) {
+        lock(&current->general_lock, 0);
+        struct uts_namespace *old_uts = current->uts_ns;
+        current->uts_ns = new_uts;
+        unlock(&current->general_lock);
+        uts_ns_release(old_uts);
+    }
+    if (new_ipc != NULL) {
+        lock(&current->general_lock, 0);
+        struct ipc_namespace *old_ipc = current->ipc_ns;
+        current->ipc_ns = new_ipc;
+        unlock(&current->general_lock);
+        ipc_ns_release(old_ipc);
+    }
     return 0;
 }
 

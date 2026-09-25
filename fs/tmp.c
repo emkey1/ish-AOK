@@ -7,6 +7,7 @@
 #include "kernel/task.h"
 #include "kernel/errno.h"
 #include "kernel/fs.h"
+#include "kernel/xattr.h"
 #include "fs/path.h"
 #include "fs/fifo.h"
 #include "fs/poll.h"
@@ -62,6 +63,15 @@ struct tmp_inode {
     // guest mappings can be host mmaps of it (see tmpfs_inode_host_backing).
     // -1 while still malloc-backed.
     int host_fd;
+    // Extended attributes (tmpfs_xattr_ops), in name order. Locked by `lock`.
+    struct tmp_xattr *xattrs;
+};
+
+struct tmp_xattr {
+    struct tmp_xattr *next;
+    char *name;
+    size_t size;
+    char value[];
 };
 
 static bool tmpfs_is_cgroup2_mount(struct mount *mount) {
@@ -166,6 +176,7 @@ static struct tmp_inode *tmp_inode_new(mode_t_ mode, struct tmpfs_sb *sb) {
     node->stat.gid = current->egid;
     node->file_data = NULL; // also clears the ->fifo union slot for S_IFIFO
     node->host_fd = -1;
+    node->xattrs = NULL;
     if (S_ISREG(mode)) {
         node->file_data = malloc(0);
         if (node->file_data == NULL) {
@@ -201,6 +212,12 @@ static void tmp_inode_cleanup(struct tmp_inode *inode) {
             close(inode->host_fd);
     } else if (S_ISFIFO(inode->stat.mode)) {
         fifo_file_free(inode->fifo);
+    }
+    while (inode->xattrs != NULL) {
+        struct tmp_xattr *x = inode->xattrs;
+        inode->xattrs = x->next;
+        free(x->name);
+        free(x);
     }
     free(inode);
 }
@@ -2053,6 +2070,163 @@ static int cgroupfs_statfs(struct mount *UNUSED(mount), struct statfsbuf *stat) 
     stat->namelen = 255;
     return 0;
 }
+
+// ---------------------------------------------------- extended attributes
+//
+// On the inode, so hard links share them and they last exactly as long as the
+// file. kernel/xattr.c has made every permission and name check already. No
+// limit beyond the per-value one it enforces: measured on 6.12, a tmpfs took
+// two hundred 64 KiB values on one file.
+
+static struct tmp_inode *tmpfs_xattr_inode(struct mount *mount, const char *path, struct fd *fd,
+        struct tmp_dirent **dirent_out) {
+    *dirent_out = NULL;
+    if (fd != NULL)
+        return tmpfs_fd_inode(fd);
+    struct tmp_dirent *dirent = tmpfs_lookup(mount, path);
+    if (IS_ERR(dirent))
+        return ERR_PTR(PTR_ERR(dirent));
+    *dirent_out = dirent;
+    return dirent->inode;
+}
+
+static struct tmp_xattr **tmpfs_xattr_find(struct tmp_inode *inode, const char *name) {
+    struct tmp_xattr **link = &inode->xattrs;
+    while (*link != NULL && strcmp((*link)->name, name) < 0)
+        link = &(*link)->next;
+    return link;
+}
+
+static ssize_t tmpfs_getxattr(struct mount *mount, const char *path, struct fd *fd,
+        const char *name, void *value, size_t size) {
+    struct tmp_dirent *dirent;
+    struct tmp_inode *inode = tmpfs_xattr_inode(mount, path, fd, &dirent);
+    if (IS_ERR(inode))
+        return PTR_ERR(inode);
+    lock(&inode->lock, 0);
+    struct tmp_xattr *x = *tmpfs_xattr_find(inode, name);
+    ssize_t res;
+    if (x == NULL || strcmp(x->name, name) != 0)
+        res = _ENODATA;
+    else if (size == 0)
+        res = (ssize_t) x->size;
+    else if (x->size > size)
+        res = _ERANGE;
+    else {
+        memcpy(value, x->value, x->size);
+        res = (ssize_t) x->size;
+    }
+    unlock(&inode->lock);
+    if (dirent != NULL)
+        tmp_dirent_release(dirent);
+    return res;
+}
+
+static int tmpfs_setxattr(struct mount *mount, const char *path, struct fd *fd,
+        const char *name, const void *value, size_t size, int flags) {
+    struct tmp_dirent *dirent;
+    struct tmp_inode *inode = tmpfs_xattr_inode(mount, path, fd, &dirent);
+    if (IS_ERR(inode))
+        return PTR_ERR(inode);
+    // Built before the lock is taken; nothing can fail once it is.
+    struct tmp_xattr *fresh = malloc(sizeof(struct tmp_xattr) + size);
+    char *fresh_name = strdup(name);
+    int err = 0;
+    if (fresh == NULL || fresh_name == NULL) {
+        free(fresh);
+        free(fresh_name);
+        err = _ENOMEM;
+    } else {
+        fresh->name = fresh_name;
+        fresh->size = size;
+        if (size != 0)
+            memcpy(fresh->value, value, size);
+        lock(&inode->lock, 0);
+        struct tmp_xattr **link = tmpfs_xattr_find(inode, name);
+        bool exists = *link != NULL && strcmp((*link)->name, name) == 0;
+        if ((flags & XATTR_CREATE_) && exists)
+            err = _EEXIST;
+        else if ((flags & XATTR_REPLACE_) && !exists)
+            err = _ENODATA;
+        if (err == 0) {
+            if (exists) {
+                struct tmp_xattr *old = *link;
+                fresh->next = old->next;
+                *link = fresh;
+                free(old->name);
+                free(old);
+            } else {
+                fresh->next = *link;
+                *link = fresh;
+            }
+            tmpfs_update_ctime(inode);
+        }
+        unlock(&inode->lock);
+        if (err < 0) {
+            free(fresh->name);
+            free(fresh);
+        }
+    }
+    if (dirent != NULL)
+        tmp_dirent_release(dirent);
+    return err;
+}
+
+static ssize_t tmpfs_listxattr(struct mount *mount, const char *path, struct fd *fd,
+        char *list, size_t size) {
+    struct tmp_dirent *dirent;
+    struct tmp_inode *inode = tmpfs_xattr_inode(mount, path, fd, &dirent);
+    if (IS_ERR(inode))
+        return PTR_ERR(inode);
+    lock(&inode->lock, 0);
+    size_t total = 0;
+    ssize_t res = 0;
+    for (struct tmp_xattr *x = inode->xattrs; x != NULL; x = x->next) {
+        size_t n = strlen(x->name) + 1;
+        if (size != 0) {
+            if (total + n > size) {
+                res = _ERANGE;
+                break;
+            }
+            memcpy(list + total, x->name, n);
+        }
+        total += n;
+    }
+    unlock(&inode->lock);
+    if (dirent != NULL)
+        tmp_dirent_release(dirent);
+    return res < 0 ? res : (ssize_t) total;
+}
+
+static int tmpfs_removexattr(struct mount *mount, const char *path, struct fd *fd,
+        const char *name) {
+    struct tmp_dirent *dirent;
+    struct tmp_inode *inode = tmpfs_xattr_inode(mount, path, fd, &dirent);
+    if (IS_ERR(inode))
+        return PTR_ERR(inode);
+    lock(&inode->lock, 0);
+    struct tmp_xattr **link = tmpfs_xattr_find(inode, name);
+    int err = _ENODATA;
+    if (*link != NULL && strcmp((*link)->name, name) == 0) {
+        struct tmp_xattr *old = *link;
+        *link = old->next;
+        free(old->name);
+        free(old);
+        tmpfs_update_ctime(inode);
+        err = 0;
+    }
+    unlock(&inode->lock);
+    if (dirent != NULL)
+        tmp_dirent_release(dirent);
+    return err;
+}
+
+const struct xattr_ops tmpfs_xattr_ops = {
+    .get = tmpfs_getxattr,
+    .set = tmpfs_setxattr,
+    .list = tmpfs_listxattr,
+    .remove = tmpfs_removexattr,
+};
 
 const struct fs_ops tmpfs = {
     .name = "tmpfs", .magic = 0x01021994,

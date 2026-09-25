@@ -12,6 +12,7 @@
 #include "fs/path.h"
 #include "fs/real.h"
 #include "fs/tty.h"
+#include "kernel/ipc_ns.h"
 #include "kernel/calls.h"
 #include "kernel/init.h"
 #include "kernel/personality.h"
@@ -258,8 +259,11 @@ static struct task *construct_task(struct task *parent) {
     // a static: "pointer being freed was not allocated", SIGABRT out of
     // do_exit. Sharing the parent's UTS namespace is the right semantic (Linux
     // only gives a new one for CLONE_NEWUTS), so take the reference for it.
-    if (parent != NULL)
+    // The IPC namespace is aliased the same way and needs the same.
+    if (parent != NULL) {
         uts_ns_retain(task->uts_ns);
+        ipc_ns_retain(task->ipc_ns);
+    }
 
     //atomic_thread_fence(__ATOMIC_SEQ_CST);
     

@@ -621,6 +621,10 @@ src = [
 
     'kernel/fs.c',
     'kernel/fs_info.c',
+    'kernel/xattr.c',
+    'kernel/rseq.c',
+    'kernel/ipc_ns.c',
+    'kernel/mqueue.c',
     'fs/aok.c', aok_generated_libs, aok_generated_tests, aok_generated_tools, aok_generated_docs,
     aok_generated_book,
     'fs/mount.c',

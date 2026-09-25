@@ -20,6 +20,8 @@
 struct uts_namespace {
     lock_t lock;
     unsigned refcount; // guarded by lock
+    // Its identity in /proc/<pid>/ns/uts. Immutable.
+    unsigned long inode;
     char hostname[UTS_NAME_LENGTH];
     char domainname[UTS_NAME_LENGTH];
 };

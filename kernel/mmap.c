@@ -1541,6 +1541,108 @@ dword_t sys_madvise(addr_t addr, dword_t len, dword_t advice) {
     return sys_madvise_guest(addr, len, advice);
 }
 
+// process_madvise(2) (5.10): madvise on a process's address space, named by a
+// pidfd. It takes only hints -- WILLNEED, COLD, PAGEOUT and COLLAPSE -- and AOK
+// keeps no page ages or huge pages for any of them to act on, so what it does
+// is Linux's checking, in Linux's order: flags, the vector, the pidfd, the
+// advice, then PTRACE_MODE_READ on the target (EACCES, which is what
+// mm_access answers) and CAP_SYS_NICE for anyone else's (EPERM). Each range
+// must start on a page (EINVAL) and be mapped (ENOMEM). The answer is the bytes
+// advised; a failure after some ranges were done reports those instead.
+static int process_madvise_range(struct mem *mem, guest_addr_t start, size_t len) {
+    if (PGOFFSET(start) != 0)
+        return _EINVAL;
+    pages_t pages = PAGE_ROUND_UP(len);
+    if (len != 0 && pages == 0)
+        return _EINVAL;
+    page_t first = PAGE(start);
+    if (first + pages < first)
+        return _EINVAL;
+    for (page_t pg = first; pg < first + pages; pg++) {
+        if (pg >= mem->page_limit)
+            return _ENOMEM;
+        if (mem_pt(mem, pg) == NULL && mem_lazy_find(mem, pg) == NULL)
+            return _ENOMEM;
+    }
+    return 0;
+}
+
+dword_t sys_process_madvise_guest(fd_t pidfd, guest_addr_t vec, qword_t vlen, dword_t advice,
+        dword_t flags) {
+    STRACE("process_madvise(%d, %#llx, %llu, %d, %#x)", pidfd, (unsigned long long) vec,
+           (unsigned long long) vlen, advice, flags);
+    if (flags != 0)
+        return _EINVAL;
+    if (vlen > IOV_MAX)
+        return _EINVAL;
+    struct guest_iovec_ *iov = NULL;
+    if (vlen != 0) {
+        iov = user_read_iovecs_abi(current, current->abi, vec, (dword_t) vlen);
+        if (IS_ERR(iov))
+            return PTR_ERR(iov);
+    }
+    int err;
+    struct task *task = pidfd_task_ref(pidfd, &err);
+    if (task == NULL) {
+        free(iov);
+        return err;
+    }
+    switch (advice) {
+        case 3:  // MADV_WILLNEED
+        case 20: // MADV_COLD
+        case 21: // MADV_PAGEOUT
+        case 25: // MADV_COLLAPSE
+            break;
+        default:
+            err = _EINVAL;
+            goto out;
+    }
+
+    // The target's address space, pinned so it cannot go away under us. Not
+    // a plain lock -- we hold a reference on the task, and see
+    // task_lock_unless_exiting for why that and its general_lock do not mix.
+    struct mm *mm = NULL;
+    if (task_lock_unless_exiting(task)) {
+        mm = task->mm;
+        if (mm != NULL)
+            mm_retain(mm);
+        unlock(&task->general_lock);
+    }
+    if (mm == NULL) {
+        err = _ESRCH;
+        goto out;
+    }
+    bool remote = mm != current->mm;
+    if (remote && !task_ptrace_may_access(task, PTRACE_MODE_READ_ | PTRACE_MODE_FSCREDS_))
+        err = _EACCES;
+    else if (remote && !current_capable(CAP_SYS_NICE_))
+        err = _EPERM;
+    if (err == 0) {
+        size_t done = 0;
+        mem_read_lock_quiesce_aware(&mm->mem);
+        for (qword_t i = 0; i < vlen; i++) {
+            if (iov[i].len == 0)
+                continue;
+            err = process_madvise_range(&mm->mem, iov[i].base, iov[i].len);
+            if (err < 0)
+                break;
+            done += iov[i].len;
+        }
+        mem_read_unlock_quiesce_aware(&mm->mem);
+        if (done != 0)
+            err = (int) (done > INT32_MAX ? INT32_MAX : done);
+    }
+    mm_release(mm);
+out:
+    task_ref_cnt_mod(task, -1);
+    free(iov);
+    return err;
+}
+
+dword_t sys_process_madvise(fd_t pidfd, addr_t vec, dword_t vlen, dword_t advice, dword_t flags) {
+    return sys_process_madvise_guest(pidfd, vec, vlen, advice, flags);
+}
+
 dword_t sys_mincore_guest(guest_addr_t addr, qword_t len, guest_addr_t vec_addr) {
     STRACE("mincore(%#llx, %#llx, %#llx)",
            (unsigned long long) addr,

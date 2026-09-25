@@ -48,6 +48,10 @@ struct mm {
     _Atomic unsigned fault_oom_strikes;
     _Atomic size_t fault_last_resident_pages;
     struct fd *exefile;
+    // How many of the address space's rseq-registered threads report each
+    // CPU number (kernel/rseq.c): a thread takes the least used, so none
+    // shares one while there are CPUs enough to go round.
+    _Atomic uint16_t rseq_cpu_users[64];
 };
 
 // Create a new address space

@@ -27,6 +27,8 @@
 #include "tools/ptraceomatic-config.h"
 #include "util/sync.h"
 #include "kernel/binfmt_misc.h"
+#include "kernel/xattr.h"
+#include "kernel/rseq.h"
 
 #define ARGV_MAX 32 * PAGE_SIZE
 
@@ -863,6 +865,18 @@ static void exec_de_thread(void) {
     task_destroy_unlinked(leader, 2);
 }
 
+// The credentials the exec in progress on this thread will commit (struct
+// exec_setid, below). Planned for the file the caller named, and planned
+// again for each interpreter a #! line or binfmt_misc hands the exec to,
+// because the one Linux applies is the file it finally loads
+// (bprm_creds_from_file on bprm->file). exec_plan_error is that plan's refusal,
+// which the loader that takes the file raises before anything is committed.
+struct exec_setid;
+static _Thread_local struct exec_setid *exec_plan_current;
+static _Thread_local int exec_plan_error;
+static void exec_setid_plan_file(struct exec_setid *plan, struct fd *fd,
+        const struct statbuf *stat);
+
 static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp) {
     intptr_t err = 0;
     struct task *save = current;
@@ -931,6 +945,16 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         }
     }
 
+    // The credentials this exec planned may refuse it: the file's effective
+    // capability bit asks for one the exec cannot give (EPERM), or its
+    // capability attribute is no valid one (EINVAL). Linux's begin_new_exec
+    // asks that first, before anything is torn down, so the caller gets the
+    // error and carries on.
+    if (exec_plan_error < 0) {
+        err = exec_plan_error;
+        goto out_free_interp;
+    }
+
     new_mm = mm_new(header.abi);
     if (new_mm == NULL) {
         err = _ENOMEM;
@@ -979,6 +1003,8 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     // general_lock protects current->mm. otherwise procfs might read the
     // pointer before it's released and then try to lock it after it's
     // released.
+    // The rseq registration belongs to the image being replaced.
+    rseq_exec(save);
     lock(&save->general_lock, 0);
     mm_release(save->mm);
     save->abi = header.abi;
@@ -1541,8 +1567,8 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
 // Load one file that another file named as its interpreter, with every loader
 // in turn. Declared here because both things that can name an interpreter --
 // a #! line and a binfmt_misc registration -- are defined below it.
-static int exec_interpreter(struct fd *fd, const char *file, struct exec_args argv,
-        struct exec_args envp, unsigned depth);
+static int exec_interpreter(struct fd *fd, const struct statbuf *stat, const char *file,
+        struct exec_args argv, struct exec_args envp, unsigned depth);
 
 // Returned by native_dispatch_exec, and propagated by every loader path that
 // can reach it, when the file turned out to be a program compiled into
@@ -1631,7 +1657,7 @@ static int binfmt_misc_exec(struct fd *fd, const char *file, struct exec_args ar
     // A registration's interpreter is a program chosen by this exec, so it gets
     // every loader -- native dispatch, ELF, another registration, a #! line --
     // exactly as the one on a #! line does.
-    int err = exec_interpreter(interpreter_fd, interpreter, new_argv, envp, depth + 1);
+    int err = exec_interpreter(interpreter_fd, &interpreter_stat, interpreter, new_argv, envp, depth + 1);
     free(new_argv_buf);
     // Unconditionally, as shebang_exec does with its own: a loader that takes
     // the file retains its own reference for mm->exefile (elf_exec), so the one
@@ -1822,7 +1848,7 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
     // the program (fs/aok.c). new_argv_buf has to outlive the call because
     // new_argv points into it, so a chain holds one ARGV_MAX buffer per level;
     // EXEC_MAX_DEPTH is what bounds that.
-    int err = exec_interpreter(interpreter_fd, interpreter, new_argv, envp, depth + 1);
+    int err = exec_interpreter(interpreter_fd, &interpreter_stat, interpreter, new_argv, envp, depth + 1);
     fd_close(interpreter_fd);
     free(new_argv_buf);
     return err;
@@ -1837,19 +1863,20 @@ static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, 
 // then reaches the loop's `depth > 5` check, so a chain that ends in an
 // interpreter that does not exist answers ENOENT rather than ELOOP however deep
 // it is. Keeping the order keeps that answer.
-static int exec_interpreter(struct fd *fd, const char *file, struct exec_args argv,
-        struct exec_args envp, unsigned depth) {
+static int exec_interpreter(struct fd *fd, const struct statbuf *stat, const char *file,
+        struct exec_args argv, struct exec_args envp, unsigned depth) {
     if (depth > EXEC_MAX_DEPTH)
         return _ELOOP;
+    // This file is what the exec now loads, so its credentials are the ones
+    // it commits -- its set-id bits and capabilities, not the script's.
+    if (exec_plan_current != NULL)
+        exec_setid_plan_file(exec_plan_current, fd, stat);
     int err = native_dispatch_exec(fd, argv, envp);
     if (err != _ENOEXEC)
         return err;
     err = format_exec(fd, file, argv, envp, depth);
     if (err != _ENOEXEC)
         return err;
-    // Set-id bits are not consulted anywhere down here. Linux ignores them on a
-    // #! script, and __do_execve has already cleared the staged ones for the
-    // file the caller named; an interpreter's own are not the caller's to gain.
     return shebang_exec(fd, file, argv, envp, depth);
 }
 
@@ -1932,6 +1959,7 @@ static void exec_apply_native_process_state(struct mm *new_mm) {
     // This thread's own scratch goes back to the OLD space first, while it is
     // still the space that address means something in.
     native_arena_release();
+    rseq_exec(current);
     // general_lock protects current->mm against a concurrent procfs read, the
     // same way elf_exec's swap does.
     lock(&current->general_lock, 0);
@@ -1984,14 +2012,30 @@ static void exec_apply_native_process_state(struct mm *new_mm) {
 // builds has to describe it, and applied only once the exec can no longer
 // fail. Applied any earlier, a FAILED exec would leave the caller holding the
 // privilege of a program that never ran.
+//
+// The capability half is Linux's cap_bprm_creds_from_file, whole:
+//
+//   pP' = (fP & bounding) | (fI & pI) | pA'     pA' = 0 if the file is set-id
+//   pE' = fE ? pP' : pA'                              or has capabilities
+//
+// where fP, fI and fE are the file's capabilities (security.capability) --
+// with root's shortcut on top: an exec that leaves the real or the effective
+// uid 0 gets pP' = bounding | pI, and pE' = pP' when the effective one is 0
+// (handle_privileged_root). The only exception is a setuid-root file that has
+// capabilities of its own run by someone else: it gets only those, as Linux
+// does (with its "has both setuid-root and effective capabilities" warning).
+// Before file capabilities existed here this was a special case -- the
+// setuid-root grant of everything, and a collapse to the ambient set for
+// everyone else -- which the formula above reduces to when a file has none.
 struct exec_setid {
     uid_t_ euid;
     uid_t_ egid;
-    // AT_SECURE: Linux's secureexec, which cap_bprm_creds_from_file sets when
-    // the exec leaves the effective ids other than the real ones (its
-    // is_setid) -- whether a set-id bit did that or the process was already
-    // running that way. (It also counts file capabilities, which AOK has none
-    // of.)
+    // AT_SECURE: Linux's secureexec. Set when the exec leaves the effective
+    // ids other than the real ones (its is_setid) -- whether a set-id bit did
+    // that or the process was already running that way -- and, for a caller
+    // whose real uid is not root, when the file's effective bit is set or the
+    // permitted set comes out wider than the ambient one: the exec gained
+    // capabilities.
     //
     // It used to be "the file has a set-id bit". That marked a root running a
     // setuid-root program, or anyone running a setuid program of their own,
@@ -2006,14 +2050,19 @@ struct exec_setid {
     // Decided BEFORE the downgrade below, as Linux decides it, so an exec that
     // was refused its privilege is still a secure one: measured on 6.12, a
     // traced exec of a set-group-ID binary runs with the real gid and
-    // AT_SECURE 1, AT_EGID showing the gid it really got.
+    // AT_SECURE 1, AT_EGID showing the gid it really got. Likewise an exec of
+    // a file with capabilities under no_new_privs: nothing is gained, and it
+    // is still secure (tests/manual/file_caps_exec.c).
     bool secure;
-    // The file makes the effective uid root: the setuid-root grant of every
-    // capability, which a sudo needs to drop to its target user.
-    bool root_grant;
-    // The exec may not gain privilege (exec_gain_unsafe): that grant is cut
-    // down to the capabilities the caller already had.
-    bool limited;
+    // The permitted, effective and ambient sets the new image starts with.
+    // The inheritable and bounding sets pass through unchanged.
+    dword_t prm[2], eff[2], amb[2];
+    // A refusal: the file's effective bit asks for a capability this exec
+    // cannot grant -- one outside the bounding set -- which is EPERM rather
+    // than a program run without it; or its capability attribute is not a
+    // valid one of any revision (EINVAL). Raised by the loader that takes the
+    // file (elf_exec), so a #! script's own attribute never refuses anything.
+    int error;
 };
 
 // Whether this exec must not gain privilege: the conditions Linux's
@@ -2037,23 +2086,53 @@ static bool exec_gain_unsafe(void) {
     return unsafe;
 }
 
-// Linux's bprm_fill_uid and the part of cap_bprm_creds_from_file that decides
-// the effective ids, for a file whose set-id bits (already stripped for a
-// nosuid mount) are `setuid` with owner `owner` and `setgid` with group
-// `group`.
+// Linux's bprm_fill_uid and cap_bprm_creds_from_file, for a file whose set-id
+// bits (already stripped for a nosuid mount) are `setuid` with owner `owner`
+// and `setgid` with group `group`, and whose capabilities are `caps` -- NULL
+// for none. `caps_error` is a refusal from reading them (EINVAL for a
+// malformed attribute), which this plan then carries.
 static void exec_setid_plan(struct exec_setid *plan, bool setuid, uid_t_ owner,
-        bool setgid, uid_t_ group) {
-    *plan = (struct exec_setid) {.euid = current->euid, .egid = current->egid};
+        bool setgid, uid_t_ group, const struct file_caps *caps, int caps_error) {
+    *plan = (struct exec_setid) {.euid = current->euid, .egid = current->egid,
+            .error = caps_error};
     // no_new_privs: the set-id bits are not even looked at.
     if (!current->no_new_privs) {
-        if (setuid) {
+        if (setuid)
             plan->euid = owner;
-            plan->root_grant = owner == 0;
-        }
         if (setgid)
             plan->egid = group;
     }
-    plan->secure = plan->euid != current->uid || plan->egid != current->gid;
+    // Against the REAL ids: Linux's __is_setuid compares the new effective
+    // uid with the old real one.
+    bool is_setid = plan->euid != current->uid || plan->egid != current->gid;
+
+    // pP' = (fP & bounding) | (fI & pI), for the file's capabilities.
+    dword_t prm[2] = {0, 0};
+    bool effective = false;
+    if (caps != NULL) {
+        effective = caps->effective;
+        for (int i = 0; i < 2; i++)
+            prm[i] = (caps->permitted[i] & current->cap_bounding[i]) |
+                    (caps->inheritable[i] & current->cap_inheritable[i]);
+        // A program that says it needs these to run (fE) is refused rather
+        // than started without them. Measured on 6.12: CAP_NET_BIND_SERVICE
+        // dropped from the bounding set, a +ep file of it fails with EPERM,
+        // and a +p one runs without it.
+        if (effective && ((caps->permitted[0] & ~prm[0]) || (caps->permitted[1] & ~prm[1])))
+            plan->error = _EPERM;
+    }
+
+    // Root's capabilities, whatever the file says -- except for a setuid-root
+    // file with capabilities of its own, run by someone else, which gets only
+    // those (Linux's handle_privileged_root).
+    if (!(caps != NULL && current->uid != 0 && plan->euid == 0)) {
+        if (plan->euid == 0 || current->uid == 0) {
+            prm[0] = current->cap_bounding[0] | current->cap_inheritable[0];
+            prm[1] = current->cap_bounding[1] | current->cap_inheritable[1];
+        }
+        if (plan->euid == 0)
+            effective = true;
+    }
 
     // The downgrade, which Linux applies to an exec that would change the
     // effective ids or give capabilities the caller does not have (its
@@ -2069,16 +2148,31 @@ static void exec_setid_plan(struct exec_setid *plan, bool setuid, uid_t_ owner,
     // tracer followed -- with egid 1000; traced and detached again before the
     // exec, with the group's. CAP_SYS_PTRACE and CAP_SETUID are asked as
     // current_capable asks everything, so root counts as holding both.
-    bool gains_caps = plan->root_grant &&
-            ((CAP_FULL_LOW_ & ~current->cap_permitted[0]) != 0 ||
-             (CAP_FULL_HIGH_ & ~current->cap_permitted[1]) != 0);
-    if ((plan->secure || gains_caps) && exec_gain_unsafe()) {
+    //
+    // "Gained" is against the caller's own permitted set: under no_new_privs a
+    // caller already holding a file's capabilities keeps them (measured).
+    bool gains_caps = (prm[0] & ~current->cap_permitted[0]) != 0 ||
+            (prm[1] & ~current->cap_permitted[1]) != 0;
+    if ((is_setid || gains_caps) && exec_gain_unsafe()) {
         if (current->no_new_privs || !current_capable(CAP_SETUID_)) {
             plan->euid = current->uid;
             plan->egid = current->gid;
         }
-        plan->limited = true;
+        prm[0] &= current->cap_permitted[0];
+        prm[1] &= current->cap_permitted[1];
     }
+
+    // The ambient set survives an ordinary exec -- that is what it is for --
+    // but not one that is set-id or brings capabilities of its own.
+    for (int i = 0; i < 2; i++) {
+        plan->amb[i] = (caps != NULL || is_setid) ? 0 : current->cap_ambient[i];
+        plan->prm[i] = prm[i] | plan->amb[i];
+        plan->eff[i] = effective ? plan->prm[i] : plan->amb[i];
+    }
+
+    plan->secure = is_setid || (current->uid != 0 &&
+            (effective || (plan->prm[0] & ~plan->amb[0]) != 0 ||
+             (plan->prm[1] & ~plan->amb[1]) != 0));
 }
 
 // Hands the planned ids to the aux vector elf_exec is about to build. musl and
@@ -2092,6 +2186,26 @@ static void exec_setid_stage(const struct exec_setid *plan) {
     current->exec_auxv_euid = plan->euid;
     current->exec_auxv_egid = plan->egid;
     current->exec_secure = plan->secure;
+    exec_plan_error = plan->error;
+}
+
+// Plan for the file an exec is about to load, from its stat and its
+// capabilities -- which a nosuid mount's files do not have, as they have no
+// set-id bits (open_exec strips those from the stat already).
+static void exec_setid_plan_file(struct exec_setid *plan, struct fd *fd,
+        const struct statbuf *stat) {
+    struct file_caps caps;
+    int caps_err = _ENODATA;
+    if (!(fd->mount_flags & MS_NOSUID_))
+        caps_err = xattr_exec_file_caps(fd, &caps);
+    // A set-group-ID bit counts only with group execute beside it: without
+    // S_IXGRP it is the old mandatory-locking marker, and Linux's bprm_fill_uid
+    // ignores it. Measured on 6.12: a mode-2745 file of another group ran
+    // with the caller's egid and AT_SECURE 0; AOK gave it the file's group.
+    bool setgid = (stat->mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP);
+    exec_setid_plan(plan, stat->mode & S_ISUID, stat->uid, setgid, stat->gid,
+            caps_err == 0 ? &caps : NULL, caps_err == _ENODATA || caps_err == 0 ? 0 : caps_err);
+    exec_setid_stage(plan);
 }
 
 // What every exec does to the saved and filesystem ids, set-id or not, once
@@ -2113,22 +2227,14 @@ static void exec_reset_saved_ids(void) {
 }
 
 // The credential change exec_setid_plan decided on, made once the exec is
-// committed. The setuid-root grant is limited to the permitted set the caller
-// already had when the exec may not gain privilege -- Linux intersects the new
-// permitted set with the old -- which leaves an unprivileged caller nothing
-// (the ordinary non-root collapse below __do_execve's call then settles it at
-// the ambient set, as Linux does).
+// committed.
 static void exec_setid_apply(const struct exec_setid *plan) {
     current->euid = plan->euid;
     current->egid = plan->egid;
-    if (plan->root_grant) {
-        dword_t low = CAP_FULL_LOW_, high = CAP_FULL_HIGH_;
-        if (plan->limited) {
-            low &= current->cap_permitted[0];
-            high &= current->cap_permitted[1];
-        }
-        current->cap_effective[0] = current->cap_permitted[0] = low;
-        current->cap_effective[1] = current->cap_permitted[1] = high;
+    for (int i = 0; i < 2; i++) {
+        current->cap_permitted[i] = plan->prm[i];
+        current->cap_effective[i] = plan->eff[i];
+        current->cap_ambient[i] = plan->amb[i];
     }
     exec_reset_saved_ids();
 }
@@ -2253,7 +2359,7 @@ static int native_dispatch_exec(struct fd *fd, struct exec_args argv, struct exe
     // same reason: a sudo that means to drop to a target uid needs CAP_SETGID
     // and CAP_SETUID still in hand to do it.
     struct exec_setid setid;
-    exec_setid_plan(&setid, prog->setuid_root, 0, false, 0);
+    exec_setid_plan(&setid, prog->setuid_root, 0, false, 0, NULL, 0);
     exec_set_dumpable(false);
     struct cred_change creds;
     cred_change_begin(&creds);
@@ -2304,30 +2410,23 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     // them for the aux vector elf_exec is about to build. The real change
     // stays below, after the image is loaded.
     //
-    // A set-group-ID bit counts only with group execute beside it: without
-    // S_IXGRP it is the old mandatory-locking marker, and Linux's bprm_fill_uid
-    // ignores it. Measured on 6.12: a mode-2745 file of another group ran
-    // with the caller's egid and AT_SECURE 0; AOK gave it the file's group.
+    // For THIS file. If it turns out to be a #! script (or a binfmt_misc
+    // format), exec_interpreter plans again for the interpreter, because the
+    // credentials Linux applies are the ones of the file it finally loads: a
+    // script's own set-id bits and capabilities count for nothing -- we were
+    // applying the SCRIPT's bits once, so a root-owned mode-4755 script with a
+    // cooperative interpreter handed any local user a root shell -- and its
+    // interpreter's count in full (measured: an interpreter with
+    // cap_net_bind_service+ep gives it to every script it runs).
     struct exec_setid setid;
-    bool setgid = (stat.mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP);
-    exec_setid_plan(&setid, stat.mode & S_ISUID, stat.uid, setgid, stat.gid);
-    exec_setid_stage(&setid);
+    exec_setid_plan_file(&setid, fd, &stat);
+    exec_plan_current = &setid;
 
     err = format_exec(fd, file, argv, envp, 0);
-    if (err == _ENOEXEC) {
-        // Linux ignores set-id bits on a #! script -- the interpreter runs
-        // with the caller's credentials. We were applying the SCRIPT's bits in
-        // the credential change below, so a root-owned mode-4755 script with a
-        // cooperative interpreter handed any local user a root shell.
-        //
-        // Re-planned without them before shebang_exec, which builds the
-        // interpreter's aux vector from the staged values, so the interpreter
-        // is not given the script's owner as its euid, nor marked
-        // secure-execution for it.
-        exec_setid_plan(&setid, false, 0, false, 0);
-        exec_setid_stage(&setid);
+    if (err == _ENOEXEC)
         err = shebang_exec(fd, file, argv, envp, 0);
-    }
+    exec_plan_current = NULL;
+    exec_plan_error = 0;
     fd_close(fd);
     if (err < 0) {
         amd64_trace_exec_loader_failure("do-execve", file, current->abi, NULL, 0, NULL, err, NULL);
@@ -2340,44 +2439,17 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     if (err == EXEC_NATIVE_DISPATCHED)
         return 0;
 
-    // setuid/setgid. The legacy setuid-root grant is full permitted and
-    // effective caps, so helpers like sudo can use keepcaps+setresuid to drop
-    // uid while retaining CAP_SETGID for a subsequent setresgid call.
+    // The credentials, as planned: the ids, and the capabilities recomputed
+    // from the file's own and the ambient set (exec_setid_plan). Nothing
+    // survives an ordinary exec but the ambient set -- a process that had
+    // lowered its uid while holding capabilities, which is exactly what
+    // prctl(PR_SET_KEEPCAPS) plus setresuid is for, does not hand them to
+    // whatever it runs next. Measured on 6.12: root exec'ing a set-user-ID
+    // binary of uid 1000, traced or not, ran with CapEff 0 and a full CapPrm.
     exec_set_dumpable(unreadable);
     struct cred_change creds;
     cred_change_begin(&creds);
     exec_setid_apply(&setid);
-
-    // Capabilities do not survive an ordinary exec. Linux recomputes them from
-    // the file's own capabilities and the ambient set; with no file
-    // capabilities and a caller that is not root, permitted and effective
-    // collapse to the ambient set, which is normally empty.
-    //
-    // Nothing dropped them here, so a process that had lowered its uid while
-    // holding capabilities -- exactly what prctl(PR_SET_KEEPCAPS) plus
-    // setresuid is for -- handed the full set to whatever it exec'd next. That
-    // is the escalation the recomputation exists to prevent.
-    //
-    // The AMBIENT set is preserved, which is the supported way to carry a
-    // capability across an exec deliberately, and the root path is left
-    // exactly as it was: Linux re-grants there too (handle_privileged_root),
-    // and the setuid-root branch above depends on it.
-    //
-    // A root caller whose effective uid is not root keeps its permitted set
-    // (Linux's handle_privileged_root grants it for a real uid of 0 too) but
-    // not its effective one: that is granted only to an effective uid of 0,
-    // and otherwise it is the ambient set. Measured on 6.12: root exec'ing a
-    // set-user-ID binary of uid 1000, traced or not, ran with CapEff 0 and a
-    // full CapPrm; AOK left CapEff full as well.
-    if (current->euid != 0 && current->uid != 0) {
-        current->cap_permitted[0] = current->cap_ambient[0];
-        current->cap_permitted[1] = current->cap_ambient[1];
-        current->cap_effective[0] = current->cap_ambient[0];
-        current->cap_effective[1] = current->cap_ambient[1];
-    } else if (current->euid != 0) {
-        current->cap_effective[0] = current->cap_ambient[0];
-        current->cap_effective[1] = current->cap_ambient[1];
-    }
     exec_forget_pdeath(&creds, setid.secure);
 
     // save current->comm

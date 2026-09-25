@@ -6,6 +6,9 @@
 #include <mach/mach.h>
 #endif
 #include "emu/memory.h"
+#include "kernel/ipc_ns.h"
+#include "kernel/uts.h"
+#include "kernel/rseq.h"
 #include "kernel/calls.h"
 #include "fs/proc.h"
 #include "fs/fd.h"
@@ -440,7 +443,7 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     proc_printf(buf, "%lu ", 0l); // nswap
     proc_printf(buf, "%lu ", 0l); // cnswap
     proc_printf(buf, "%d ", exit_signal);
-    proc_printf(buf, "%d ", 0); // processor
+    proc_printf(buf, "%d ", task_current_cpu(task)); // processor
 
     // htop and similar procfs consumers expect the modern trailing fields too.
     // We don't track most of these yet, but the record still needs to be
@@ -859,8 +862,8 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     proc_printf(buf, "CapInh:\t%08x%08x\n", task->cap_inheritable[1], task->cap_inheritable[0]);
     proc_printf(buf, "CapPrm:\t%08x%08x\n", task->cap_permitted[1], task->cap_permitted[0]);
     proc_printf(buf, "CapEff:\t%08x%08x\n", task->cap_effective[1], task->cap_effective[0]);
-    proc_printf(buf, "CapBnd:\t%08x%08x\n", task->cap_permitted[1], task->cap_permitted[0]);
-    proc_printf(buf, "CapAmb:\t0000000000000000\n");
+    proc_printf(buf, "CapBnd:\t%08x%08x\n", task->cap_bounding[1], task->cap_bounding[0]);
+    proc_printf(buf, "CapAmb:\t%08x%08x\n", task->cap_ambient[1], task->cap_ambient[0]);
     proc_printf(buf, "NoNewPrivs:\t%d\n", task->no_new_privs ? 1 : 0);
     {
         int mode = __atomic_load_n(&task->seccomp_mode, __ATOMIC_ACQUIRE);
@@ -1750,14 +1753,37 @@ static void proc_pid_ns_getname(struct proc_entry *entry, char *buf) {
     snprintf(buf, 256, "%s", proc_ns_types[entry->fd].name);
 }
 
+// The inode number of `task`'s namespace of the kind at `index`. UTS and IPC
+// namespaces are real, and each has its own; for every other kind there is
+// only the initial one, and Linux's number for it. 0 when the task is in
+// do_exit's teardown, which is releasing its namespaces.
+static unsigned long proc_ns_inode(struct task *task, unsigned index) {
+    unsigned long inode = proc_ns_types[index].inode;
+    unsigned nstype = proc_ns_types[index].nstype;
+    if (nstype != CLONE_NEWUTS_ && nstype != CLONE_NEWIPC_)
+        return inode;
+    // Not a plain lock: see task_lock_unless_exiting.
+    if (!task_lock_unless_exiting(task))
+        return 0;
+    if (nstype == CLONE_NEWUTS_)
+        inode = task->uts_ns != NULL ? task->uts_ns->inode : 0;
+    if (nstype == CLONE_NEWIPC_)
+        inode = task->ipc_ns != NULL ? task->ipc_ns->inode : 0;
+    unlock(&task->general_lock);
+    return inode;
+}
+
 static int proc_pid_ns_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
     if ((task == NULL) || (task->exiting == true)) {
         proc_put_task(task);
         return _ESRCH;
     }
+    unsigned long inode = proc_ns_inode(task, (unsigned) entry->fd);
     proc_put_task(task);
-    snprintf(buf, MAX_PATH, "%s:[%lu]", proc_ns_types[entry->fd].name, proc_ns_types[entry->fd].inode);
+    if (inode == 0)
+        return _ESRCH;
+    snprintf(buf, MAX_PATH, "%s:[%lu]", proc_ns_types[entry->fd].name, inode);
     return 0;
 }
 
@@ -1805,7 +1831,7 @@ static ssize_t proc_ns_ioctl_size(int cmd) {
     return 0;
 }
 
-static struct fd *proc_ns_fd_for_index(unsigned index);
+static struct fd *proc_ns_fd_for_index(unsigned index, unsigned long inode);
 
 static int proc_ns_ioctl(struct fd *fd, int cmd, void *arg) {
     unsigned index = fd->nsfs.type_index;
@@ -1844,7 +1870,7 @@ static int proc_ns_ioctl(struct fd *fd, int cmd, void *arg) {
                     break;
             if (user_index == PROC_NS_TYPES_LEN)
                 return _EINVAL;
-            struct fd *userns = proc_ns_fd_for_index(user_index);
+            struct fd *userns = proc_ns_fd_for_index(user_index, proc_ns_types[user_index].inode);
             if (IS_ERR(userns))
                 return PTR_ERR(userns);
             // A namespace fd handed out by an ioctl is close-on-exec on
@@ -1862,15 +1888,17 @@ static const struct fd_ops proc_ns_fdops = {
     .anon_inode_class = "nsfs",
 };
 
-// One namespace fd, for the kind at `index`. The fd carries nothing but which
-// kind it is: there is exactly one namespace of each, so the kind IS the
-// identity, and its inode number is the one Linux gives the initial namespace.
-static struct fd *proc_ns_fd_for_index(unsigned index) {
+// One namespace fd, for the kind at `index`, whose namespace is numbered
+// `inode`. The fd carries nothing else: the number is what tells two
+// namespaces of a kind apart (stat's st_ino), and the kind is all the nsfs
+// ioctls ask about. It does not hold the namespace, which only setns() would
+// need, and AOK has no setns.
+static struct fd *proc_ns_fd_for_index(unsigned index, unsigned long inode) {
     struct fd *fd = adhoc_fd_create(&proc_ns_fdops);
     if (fd == NULL)
         return ERR_PTR(_ENOMEM);
     fd->stat.mode = S_IFREG | 0444;
-    fd->stat.inode = proc_ns_types[index].inode;
+    fd->stat.inode = inode;
     fd->nsfs.type_index = index;
     return fd;
 }
@@ -1894,10 +1922,15 @@ struct fd *proc_ns_open(int pid, const char *name) {
     // Linux's proc_ns_get_link asks ptrace_may_access(READ_FSCREDS) before
     // it hands out a namespace fd -- the thing setns() takes.
     bool ok = task_ptrace_may_access(task, PTRACE_MODE_READ_ | PTRACE_MODE_FSCREDS_);
+    unsigned long inode = proc_ns_inode(task, (unsigned) i);
     task_ref_cnt_mod(task, -1);
     if (!ok)
         return ERR_PTR(_EACCES);
-    return proc_ns_fd_for_index((unsigned) i);
+    // Linux's ns_get_path: a task whose namespaces are already gone has none
+    // to hand out.
+    if (inode == 0)
+        return ERR_PTR(_ENOENT);
+    return proc_ns_fd_for_index((unsigned) i, inode);
 }
 
 static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {

@@ -26,6 +26,9 @@ struct fd *sock_fd_adopt(int sock_fd, int domain, int type, int protocol);
 // Whether an error read off a host socket is one Linux never raises there,
 // and so must not reach the guest. See fs/sock.c.
 bool sock_host_error_is_peer_gone(struct fd *fd, int host_err);
+// Netlink, for the kernel's own messages (kernel/mqueue.c's SIGEV_THREAD).
+int netlink_fd_check(struct fd *fd);
+int netlink_deliver_datagram(struct fd *sock, const void *data, size_t len);
 
 // Every open socket of one domain, across every process, each retained once
 // however many descriptors share it: what /proc/net/{tcp,tcp6,udp,udp6,unix}

@@ -253,6 +253,63 @@ int_t sys_pidfd_send_signal(fd_t pidfd, dword_t sig, addr_t UNUSED(info_addr), d
     return err;
 }
 
+struct task *pidfd_task_ref(fd_t pidfd, int *err) {
+    struct fd *fd = f_get(pidfd);
+    if (fd == NULL || fd->ops != &pidfd_ops) {
+        *err = _EBADF;
+        return NULL;
+    }
+    struct pidfd_data *data = fd->data;
+    complex_lockt(&pids_lock, 0);
+    struct task *task = data->task;
+    if (task == NULL || pid_get_task_zombie(task->pid) != task) {
+        unlock(&pids_lock);
+        *err = _ESRCH;
+        return NULL;
+    }
+    task_ref_cnt_mod(task, 1);
+    unlock(&pids_lock);
+    return task;
+}
+
+// pidfd_getfd(2) (5.6): a duplicate of another process's descriptor, for a
+// caller that may attach to it with ptrace. Linux's order: flags, the pidfd
+// (EBADF for one that is not), the process (ESRCH once reaped), permission
+// (EPERM), and then the descriptor (EBADF). The duplicate is close-on-exec.
+int_t sys_pidfd_getfd(fd_t pidfd, fd_t targetfd, dword_t flags) {
+    STRACE("pidfd_getfd(%d, %d, %#x)", pidfd, targetfd, flags);
+    if (flags != 0)
+        return _EINVAL;
+    int err;
+    struct task *task = pidfd_task_ref(pidfd, &err);
+    if (task == NULL)
+        return err;
+    if (!task_ptrace_may_access(task, PTRACE_MODE_ATTACH_ | PTRACE_MODE_REALCREDS_)) {
+        err = _EPERM;
+    } else {
+        // Not a plain lock: see task_lock_unless_exiting. A task already in
+        // its exit has no descriptors left to take (EBADF, below).
+        struct fdtable *files = NULL;
+        if (task_lock_unless_exiting(task)) {
+            if (!task->exiting && task->files != NULL)
+                files = fdtable_retain(task->files);
+            unlock(&task->general_lock);
+        }
+        struct fd *theirs = NULL;
+        if (files != NULL) {
+            lock(&files->lock, 0);
+            theirs = fdtable_get(files, targetfd);
+            if (theirs != NULL)
+                theirs = fd_retain(theirs);
+            unlock(&files->lock);
+            fdtable_release(files);
+        }
+        err = theirs == NULL ? _EBADF : f_install(theirs, O_CLOEXEC_);
+    }
+    task_ref_cnt_mod(task, -1);
+    return err;
+}
+
 // ---- checkpoint (kernel/anonfd_ckpt.h) ------------------------------------
 
 bool pidfd_fd_is(struct fd *fd) {

@@ -40,7 +40,6 @@
 // vm.mmap_min_addr, as fs/proc/sys.c reports it and emu/memory.c enforces it.
 #define PRCTL_MMAP_MIN_ADDR_ 65536
 
-#define PRCTL_CAP_LAST_CAP_ 63
 #define PRCTL_DEFAULT_TIMERSLACK_NS_ 50000
 
 #define KEYCTL_GET_KEYRING_ID_ 0
@@ -54,8 +53,12 @@
 #define ARCH_GET_FS_ 0x1003
 #define ARCH_GET_GS_ 0x1004
 
+// Linux's cap_valid: a capability this kernel has, which is what
+// /proc/sys/kernel/cap_last_cap says. libcap finds the number by probing
+// PR_CAPBSET_READ upward until EINVAL when it cannot read that file, so the two
+// must agree -- answering 0 for every bit up to 63 claimed 64 capabilities.
 static bool prctl_cap_valid(uint_t cap) {
-    return cap <= PRCTL_CAP_LAST_CAP_;
+    return cap <= CAP_LAST_CAP_;
 }
 
 static bool prctl_cap_test(const dword_t caps[2], uint_t cap) {
@@ -138,22 +141,21 @@ int_t sys_prctl_guest(dword_t option, qword_t arg2, qword_t arg3, qword_t arg4, 
         case PRCTL_CAPBSET_READ_:
             if (!prctl_cap_valid(arg2))
                 return _EINVAL;
-            // We do not model a separate bounding set. Use the permitted set so
-            // capability probes see a coherent answer instead of EINVAL.
-            return prctl_cap_test(current->cap_permitted, arg2) ? 1 : 0;
+            return prctl_cap_test(current->cap_bounding, arg2) ? 1 : 0;
         case PRCTL_CAPBSET_DROP_:
-            // As above, we don't model a separate bounding set to shrink --
-            // just validate the capability number and accept. Every
-            // process's exec_context capability-dropping sequence
-            // (CapabilityBoundingSet=, systemd's exec_context_apply, PAM's
-            // pam_cap, etc.) calls this once per capability it wants gone
-            // before ever calling capset(); rejecting it outright with
-            // EINVAL aborted the whole spawn ("Failed to drop capabilities")
-            // before the exec'd program ever ran, which blocked every
-            // service using CapabilityBoundingSet= (systemd-logind among
-            // them) during Arch aarch64 boot.
+            // A real bounding set now (struct task's cap_bounding), which exec
+            // consults: a capability dropped here cannot come back from a
+            // file's capabilities, or from root's re-grant at exec -- which is
+            // what systemd's CapabilityBoundingSet=, pam_cap and capsh --drop
+            // mean by it. Accepted-and-forgotten used to be the least bad
+            // answer, because EINVAL aborted every such spawn ("Failed to drop
+            // capabilities" for systemd-logind); now it does what it says.
+            // CAP_SETPCAP first, then the number: Linux's cap_prctl_drop.
+            if (!current_capable(CAP_SETPCAP_))
+                return _EPERM;
             if (!prctl_cap_valid(arg2))
                 return _EINVAL;
+            current->cap_bounding[arg2 / 32] &= ~(1u << (arg2 % 32));
             return 0;
         // Model exactly the SECBIT_KEEP_CAPS bit (1 << 4), mapping it onto
         // the same task->keepcaps flag PR_SET_KEEPCAPS uses -- on Linux the
@@ -335,17 +337,6 @@ int_t sys_arch_prctl_guest(int_t code, guest_addr_t addr) {
 
 int_t sys_arch_prctl(int_t code, addr_t addr) {
     return sys_arch_prctl_guest(code, addr);
-}
-
-int_t sys_rseq(addr_t rseq_addr, dword_t rseq_len, dword_t flags, dword_t sig) {
-    return sys_rseq_guest(rseq_addr, rseq_len, flags, sig);
-}
-
-int_t sys_rseq_guest(guest_addr_t rseq_addr, dword_t rseq_len, dword_t flags, dword_t sig) {
-    STRACE("rseq(%#llx, %u, %#x, %#x)", (unsigned long long) rseq_addr, rseq_len, flags, sig);
-    // Deliberately report rseq as unsupported. Modern glibc falls back cleanly
-    // on ENOSYS, but a fake success here would expose an ABI we do not emulate.
-    return _ENOSYS;
 }
 
 int_t sys_keyctl(dword_t cmd, dword_t arg2, dword_t arg3, dword_t arg4, dword_t arg5) {

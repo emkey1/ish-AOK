@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include "fs/poll.h"
+#include "kernel/rseq.h"
 #include "kernel/calls.h"
 #include "kernel/futex.h"
 #include <stdio.h>
@@ -1758,11 +1759,27 @@ static bool signal_take_next_locked(struct task *task, sigset_t_ mask, struct si
     return true;
 }
 
+// Linux's siginfo_layout for a negative si_code: the sender's pid, uid and
+// queued value (SIL_RT), for every one of them -- SI_QUEUE, SI_MESGQ,
+// SI_ASYNCIO, SI_TKILL and the rest -- but SI_TIMER and SI_SIGIO, which have
+// layouts of their own, and whatever the signal is: a sigqueue'd SIGSEGV or
+// SIGCHLD carries its value too. Only SI_QUEUE's value used to be copied out,
+// so an mq_notify signal (SI_MESGQ) arrived with si_value 0.
+static bool siginfo_code_is_rt(int_t code) {
+    return code < 0 && code != SI_TIMER_ && code != SI_SIGIO_;
+}
+
 static void siginfo_to_i386_user(struct i386_siginfo_ *out, const struct siginfo_ *info) {
     memset(out, 0, sizeof(*out));
     out->sig = info->sig;
     out->sig_errno = info->sig_errno;
     out->code = info->code;
+    if (siginfo_code_is_rt(info->code)) {
+        out->rt.pid = info->rt.pid;
+        out->rt.uid = info->rt.uid;
+        memcpy(&out->rt.value, &info->rt.value, sizeof(out->rt.value));
+        return;
+    }
     switch (info->sig) {
         case SIGCHLD_:
             out->child.pid = info->child.pid;
@@ -1803,14 +1820,8 @@ static void siginfo_to_i386_user(struct i386_siginfo_ *out, const struct siginfo
                 memcpy(&out->timer.value, &info->timer.value, sizeof(out->timer.value));
                 out->timer._private = info->timer._private;
             } else {
-                if (info->code == SI_QUEUE_) {
-                    out->rt.pid = info->rt.pid;
-                    out->rt.uid = info->rt.uid;
-                    memcpy(&out->rt.value, &info->rt.value, sizeof(out->rt.value));
-                } else {
-                    out->kill.pid = info->kill.pid;
-                    out->kill.uid = info->kill.uid;
-                }
+                out->kill.pid = info->kill.pid;
+                out->kill.uid = info->kill.uid;
             }
             break;
     }
@@ -1821,6 +1832,12 @@ static void siginfo_to_amd64_user(struct amd64_siginfo_ *out, const struct sigin
     out->sig = info->sig;
     out->sig_errno = info->sig_errno;
     out->code = info->code;
+    if (siginfo_code_is_rt(info->code)) {
+        out->rt.pid = info->rt.pid;
+        out->rt.uid = info->rt.uid;
+        out->rt.value = info->rt.value;
+        return;
+    }
     switch (info->sig) {
         case SIGCHLD_:
             out->child.pid = info->child.pid;
@@ -1873,14 +1890,8 @@ static void siginfo_to_amd64_user(struct amd64_siginfo_ *out, const struct sigin
                 out->child.utime = info->child.utime;
                 out->child.stime = info->child.stime;
             } else {
-                if (info->code == SI_QUEUE_) {
-                    out->rt.pid = info->rt.pid;
-                    out->rt.uid = info->rt.uid;
-                    out->rt.value = info->rt.value;
-                } else {
-                    out->kill.pid = info->kill.pid;
-                    out->kill.uid = info->kill.uid;
-                }
+                out->kill.pid = info->kill.pid;
+                out->kill.uid = info->kill.uid;
             }
             break;
     }
@@ -1902,7 +1913,7 @@ static int siginfo_from_user(struct task *task, guest_addr_t user_addr, struct s
             info->timer.overrun = user_info.timer.overrun;
             info->timer.value = user_info.timer.value;
             info->timer._private = user_info.timer._private;
-        } else if (info->code == SI_QUEUE_) {
+        } else if (siginfo_code_is_rt(info->code)) {
             info->rt.pid = user_info.rt.pid;
             info->rt.uid = user_info.rt.uid;
             info->rt.value = user_info.rt.value;
@@ -1922,7 +1933,7 @@ static int siginfo_from_user(struct task *task, guest_addr_t user_addr, struct s
             info->timer.overrun = user_info.timer.overrun;
             memcpy(&info->timer.value, &user_info.timer.value, sizeof(info->timer.value));
             info->timer._private = user_info.timer._private;
-        } else if (info->code == SI_QUEUE_) {
+        } else if (siginfo_code_is_rt(info->code)) {
             info->rt.pid = user_info.rt.pid;
             info->rt.uid = user_info.rt.uid;
             memcpy(&info->rt.value, &user_info.rt.value, sizeof(info->rt.value));
@@ -1964,10 +1975,10 @@ static void signalfd_info_from_siginfo(struct signalfd_siginfo_ *out, struct sig
     out->sig_errno = info->sig_errno;
     out->code = info->code;
 
-    // A negative code below SI_TKILL_ is one of the kernel's own queued
-    // sources (SI_ASYNCIO, SI_MESGQ, ...); Linux gives them the same RT layout
-    // as SI_QUEUE.
-    bool rt_layout = info->code == SI_QUEUE_ || info->code <= SI_TKILL_;
+    // Every negative code but SI_TIMER and SI_SIGIO: see siginfo_code_is_rt.
+    // (This asked for SI_QUEUE and the codes below SI_TKILL, which missed
+    // SI_MESGQ and SI_ASYNCIO -- both lie between the two.)
+    bool rt_layout = siginfo_code_is_rt(info->code);
 
     if (info->code == SI_TIMER_) {
         out->tid = info->timer.timer;
@@ -3087,6 +3098,16 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
     // restarted wait gets its whole timeout, and the handler's own futex calls
     // or a longjmp out of it cannot pick up a deadline meant for another call.
     current->futex_restart_timed = false;
+
+    // A thread inside its rseq critical section takes the signal from the
+    // section's abort handler, so that is where its handler returns to; a
+    // descriptor that is not a valid one is SIGSEGV (Linux's force_sigsegv).
+    if (!rseq_signal_deliver()) {
+        printk("WARNING: pid %d: invalid rseq critical section at signal delivery, killing\n",
+               current->pid);
+        unlock(&sighand->lock);
+        do_exit_group(SIGSEGV_);
+    }
 
     bool need_siginfo = action->flags & SA_SIGINFO_;
 
