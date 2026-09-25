@@ -787,7 +787,7 @@ static dword_t sys_readlinkat_common(fd_t at_f, guest_addr_t path_addr, guest_ad
     if (path[0] == '\0' && fd_is_opath_link(at))
         size = opath_link_readlink(at, buf, bufsize);
     else
-        size = generic_readlinkat(at, path, buf, bufsize);
+        size = generic_readlinkat_shown(at, path, buf, bufsize);
     if (size >= 0) {
         STRACE(" \"%.*s\"", size, buf);
         if (user_write(buf_addr, buf, size))
@@ -2088,10 +2088,16 @@ static dword_t sys_getcwd_common(guest_addr_t buf_addr, dword_t size) {
     lock(&current->fs->lock, 0);
     struct fd *wd = current->fs->pwd;
     char pwd[MAX_PATH + 1];
-    int err = generic_getpath(wd, pwd);
+    bool unreachable;
+    int err = generic_getpath_shown(wd, pwd, &unreachable);
     unlock(&current->fs->lock);
     if (err < 0)
         return err;
+    // A cwd in a lazily unmounted bind is under no root at all. Linux hands
+    // back "(unreachable)/..." and glibc and musl both turn that into ENOENT,
+    // the answer a cwd outside the chroot already gets below.
+    if (unreachable)
+        return _ENOENT;
 
     int rebase_err = fs_rebase_path_to_root(current->fs, pwd);
     if (rebase_err < 0)

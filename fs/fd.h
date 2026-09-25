@@ -466,6 +466,17 @@ struct fd {
     // At the end, so app code built against an older fd.h keeps its offsets.
     int mnt_id;
     bool mnt_root;
+
+    // The bind mount this descriptor was opened through, or NULL. A
+    // reference, dropped by fd_close: `mount` is the bind's ORIGIN and holds
+    // only that, so without this nothing held the bind itself, and umount of
+    // a bind with files open and cwds in it succeeded where Linux says EBUSY.
+    // It also keeps a lazily unmounted bind (mount_remove_lazy) alive for as
+    // long as it is used, which is what lets generic_getpath_shown name paths
+    // from its root the way Linux does. Set by generic_openat_norm, for the
+    // O_PATH pseudo-descriptors too. At the end, for the same reason as
+    // mnt_id.
+    struct mount *bind_mount;
 };
 
 typedef sdword_t fd_t;

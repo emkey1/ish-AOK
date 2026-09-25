@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "emu/fpenv.h"
 #include "kernel/errno.h"
 
 #include "kernel/calls.h"
@@ -742,6 +743,9 @@ static void native_exec_run_one(struct native_exec_pending *pending) {
     struct native_landing *outer = native_landing;
     bool replaced = false;
     int status = 0;
+    // A new image starts in the default floating-point environment, and the
+    // guest image this replaced left its own on the host FPU (emu/fpenv.c).
+    fpenv_host_default();
     if (sigsetjmp(landing.env, 0) == 0) {
         native_landing = &landing;
         status = prog->main(argc, main_argv != NULL ? main_argv : argv,

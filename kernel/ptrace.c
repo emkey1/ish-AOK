@@ -268,7 +268,9 @@ static void get_user_fpregs_amd64(struct task *task, struct user_fpregs_struct_a
     memset(user_fpregs_, 0, sizeof(*user_fpregs_));
     user_fpregs_->cwd = cpu->fcw;
     user_fpregs_->swd = cpu->fsw;
-    user_fpregs_->mxcsr = 0x1f80;
+    // A stopped tracee's flags are all in cpu_state already: they are folded
+    // in whenever it leaves guest code (emu/fpenv.c).
+    user_fpregs_->mxcsr = cpu->mxcsr;
 
     for (int i = 0; i < 8; i++) {
         const float80 value = cpu->fp[i];
@@ -285,6 +287,7 @@ static void get_user_fpregs_amd64(struct task *task, struct user_fpregs_struct_a
 static void set_user_fpregs_amd64(struct cpu_state *cpu, const struct user_fpregs_struct_amd64_ *user_fpregs_) {
     cpu->fcw = user_fpregs_->cwd;
     cpu->fsw = user_fpregs_->swd;
+    cpu->mxcsr = user_fpregs_->mxcsr & 0xffff;
 
     for (int i = 0; i < 8; i++) {
         uint64_t significand = 0;

@@ -984,6 +984,37 @@ no obstacle: every page-table entry already carries its own `data` and
 `offset`, and a large shared anonymous mapping that is still reserved can be
 materialised first, as `mprotect` does. What is missing is the syscall itself.
 
+### A syscall that copies from a file page past EOF kills the app
+
+Measured 2026-09-25, beside the checkpoint save's instance of the same fault
+(fixed there: `ckpt_host_page_readable`, kernel/checkpoint.c). A host page of a
+file mapping that holds no byte of the file cannot be paged in, and a load from
+it is SIGBUS. The guest's own accesses become a guest SIGBUS
+(`handle_bus_interrupt`), but kernel C code that copies guest memory
+`memcpy()`s from `mem_ptr` with no recovery -- `__user_read_task_mem` and
+`__user_write_task_mem` in kernel/user.c -- so the fault ends the whole app.
+
+A 5000-byte file mapped 256 KiB long, read at +128 KiB: `write()` from there,
+a read of `/proc/self/mem` there, and `process_vm_readv` each end the app with
+exit 138 on alpine-arm64-test, where Linux 6.12 returns EFAULT, EIO and EFAULT.
+Any unprivileged guest process can do it on purpose, and a debugger can do it
+by accident: musl's dynamic linker leaves such pages in the text/data gap of
+every arm64 library whose file is shorter than its span (Python 3.14's math
+module has 11). `ptrace(PEEKDATA)` takes the same path (`user_get_task`), and
+so does the write direction: a `read()` INTO such a page of a writable private
+mapping ends the app the same way, where Linux returns EFAULT. kernel/futex.c
+reads the futex word through a bare `mem_ptr` too (not measured).
+
+What is known about detecting it: `write()` of one byte of the page into a
+pipe fails with EFAULT and sends no signal, on Darwin and Linux alike, at 3.8 us
+per 16 KiB host page; the save uses exactly that. It does not cover stores: on
+APFS a copy-on-write fault on a host page that STRADDLES EOF fails too
+(kernel/exec.c, the split_tail comment), so a store can fault where a load
+does not. The general fix is Linux's own shape, an exception table: a recovery
+point armed around the copy in kernel/user.c, and the host fault handlers the
+JIT already has (Mach on device, POSIX on the CLI) resuming there so the call
+returns EFAULT, at no cost to the anonymous-memory path.
+
 ### PROT_EXEC is never enforced -- no NX for guest pages
 
 `emu/memory.h` says "P_READ and P_EXEC are ignored for now", and P_EXEC really

@@ -99,8 +99,12 @@ int native_getcwd(char *buf) {
         return _EINVAL;
     lock(&current->fs->lock, 0);
     struct fd *pwd = current->fs->pwd;
-    int err = pwd != NULL ? generic_getpath(pwd, buf) : _ENOENT;
+    bool unreachable = false;
+    int err = pwd != NULL ? generic_getpath_shown(pwd, buf, &unreachable) : _ENOENT;
     unlock(&current->fs->lock);
+    // In a lazily unmounted bind: what sys_getcwd says, for the same reason.
+    if (err >= 0 && unreachable)
+        err = _ENOENT;
     return err;
 }
 

@@ -616,6 +616,31 @@ dp3_store:
     str x20, [x10, x19, lsl #3]
 1:  gret
 
+// MRS Xt, S3_3_C15_C0_0: AOK_VCLOCK, which only the vDSO reads (vdso/arm64/
+// vdso.S). Wt names a clock -- XZR names clock 0 and discards the result --
+// and Xt is replaced by kernel/time.c's vdso_clock_ns of it: the reading
+// clock_gettime(2) would give, in ns, or -1 for "make the system call".
+// [gadget][rt]
+.gadget mrs_vclock
+    ldr x8, [_ip]
+    add _ip, _ip, #8
+    and x19, x8, #0x1f         // rt, callee-saved across the C call
+    mov w0, #0
+    cmp x19, #31
+    b.eq 1f
+    add x10, _cpu, #CPU_x0
+    add x10, x10, x19, lsl #3
+    ldr w0, [x10]              // the clock: Wt, the slot's low half
+1:  save_c                     // stores x0, and leaves it as the argument
+    bl NAME(vdso_clock_ns)
+    mov x20, x0                // result; x0 itself is restored by restore_c
+    restore_c
+    cmp x19, #31
+    b.eq 2f
+    add x10, _cpu, #CPU_x0
+    str x20, [x10, x19, lsl #3]
+2:  gret
+
 // CRC32{B,H,W,X} / CRC32C{B,H,W,X}: Wd = crc(Wn, Rm<sz>). FEAT_CRC32 is
 // optional in v8.0 and Apple only added it with A10 — gen.c hands this
 // native gadget out only when the host has it (crc32_soft below covers
@@ -711,37 +736,42 @@ crc32_st:
 
 # vim: ft=gas
 
-// MRS/MSR FPCR and FPSR: stored in cpu_state (arm64_fpcr/arm64_fpsr) but
-// NOT installed on the host — see fp.S's header on rounding modes. The
-// guest reads back exactly what it wrote, which satisfies musl's
-// save/restore-around-conversion pattern.
+// MRS/MSR FPCR and FPSR, through emu/fpenv.c: a written FPCR goes onto the
+// host FPU at once, so the guest's rounding mode, FZ and DN govern the very
+// next instruction; a read of FPSR gathers the flags the host FPU has raised
+// since (IOC..IXC, IDC, and QC from the saturating ops). They were plain
+// cpu_state loads and stores, which no FP operation ever looked at.
 // Code stream: [gadget][rt]
-.macro fpsysreg_gadgets name, field
-.gadget mrs_\name
+.macro fpsysreg_gadget name, op, is_read
+.gadget \name
     ldr x8, [_ip]
     add _ip, _ip, #8
-    and x8, x8, #0x1f
-    cmp x8, #31
+    save_c
+    and x19, x8, #0x1f          // rt, callee-saved across the C call
+    mov x2, #0
+.if !\is_read
+    cmp x19, #31
     b.eq 1f
-    ldr w9, [_cpu, #\field]
-    add x10, _cpu, #CPU_x0
-    add x10, x10, x8, lsl #3
-    str x9, [x10]
-1:  gret
-
-.gadget msr_\name
-    ldr x8, [_ip]
-    add _ip, _ip, #8
-    and x8, x8, #0x1f
-    mov x9, #0
-    cmp x8, #31
-    b.eq 1f
-    add x10, _cpu, #CPU_x0
-    add x10, x10, x8, lsl #3
-    ldr x9, [x10]
-1:  str w9, [_cpu, #\field]
+    add x9, _cpu, #CPU_x0
+    ldr x2, [x9, x19, lsl #3]   // Xt (XZR writes 0)
+1:
+.endif
+    mov x0, _cpu                // _cpu IS x1: read it before x1 is loaded
+    mov x1, #\op
+    bl NAME(fpenv_arm64_sysreg)
+    mov x20, x0
+    restore_c
+.if \is_read
+    cmp x19, #31
+    b.eq 2f
+    add x9, _cpu, #CPU_x0
+    str x20, [x9, x19, lsl #3]
+2:
+.endif
     gret
 .endm
 
-fpsysreg_gadgets fpcr, CPU_fpcr
-fpsysreg_gadgets fpsr, CPU_fpsr
+fpsysreg_gadget mrs_fpcr, 0, 1
+fpsysreg_gadget msr_fpcr, 1, 0
+fpsysreg_gadget mrs_fpsr, 2, 1
+fpsysreg_gadget msr_fpsr, 3, 0

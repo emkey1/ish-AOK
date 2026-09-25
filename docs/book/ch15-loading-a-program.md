@@ -176,8 +176,8 @@ above them the auxiliary vector — a list of key/value pairs the kernel uses to
 tell libc things it cannot otherwise discover.
 
 Most `AT_*` entries are bookkeeping: where the program headers are, how large a
-page is, what the entry point was, who the process is. Two are more interesting
-here.
+page is, what the entry point was, who the process is. Three are more
+interesting here.
 
 **`AT_HWCAP`** advertises the processor's features, and on aarch64 AOK
 advertises *exactly the ISA features the JIT implements*. That is not a
@@ -234,6 +234,36 @@ fails. So the day `poll` started answering `POLLNVAL` for host device nodes,
 every setuid binary in the guest died with `SIGSEGV` before `main`. Two
 independent pieces of correctness, each defensible alone, intersecting in a
 crash that named neither.
+
+**`AT_SYSINFO_EHDR`** is the address of the vDSO, a small shared object the
+kernel maps into every process so that the C library can read the clock without
+making a system call. Under AOK the system call is the expensive part of reading
+the clock: leaving the JIT, dispatching, checking seccomp, ptrace and pending
+signals, and coming back cost about 700 ns on an arm64 guest — the price of
+`getppid` — where the host reads its own clock in 30. Every guest has one: i386
+always did, and amd64, arm64 and riscv64 (`vdso/<arch>/vdso.S`) now do, under
+the names and versions their C libraries look up.
+
+Linux's vDSO computes the time itself, from a hardware counter and numbers the
+kernel publishes on a `[vvar]` page. AOK's cannot, because the numbers under a
+guest clock are not the kernel's to publish once: a checkpoint restore moves the
+guest clocks' origins, and the host stepping its wall clock moves the gap
+between realtime and monotonic without telling anyone. A copy on a page would
+be stale until something noticed, and in that window the guest could read a time
+earlier than a file the kernel had just stamped. So the vDSO asks the JIT
+instead, through one private instruction per architecture — an `mrs` of an
+implementation-defined system register on arm64, a custom CSR on riscv64,
+`vmcall` on x86_64 — which runs `vdso_clock_ns` in `kernel/time.c`, the same
+computation `clock_gettime` runs. The two cannot drift apart because they are
+one computation, and `tests/manual/vdso_clock.c` holds them to it by bracketing
+every vDSO read between two system calls. What changes for the guest is what a
+vDSO changes on Linux: these reads are no longer system calls, so neither
+seccomp nor `strace` sees them. (musl's riscv64 port never looks the vDSO up, so
+there only glibc and Go use it.)
+
+Each process gets its own copy, as it does of the `[sigpage]`. The i386 vDSO
+used to be one array mapped into every process, which any of them could
+`mprotect` writable and rewrite for all the others, root's included.
 
 ## 15.4 Exec against the thread group
 

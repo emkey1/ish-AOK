@@ -64,8 +64,17 @@ struct fd *generic_openat_norm(struct fd *at, const char *path, int flags, int m
 // the real root instead of the caller's chroot. See fs/generic.c.
 struct fd *generic_open_realroot(const char *path, int flags, int mode);
 // The descriptor's full path, through the mount it was opened on: for one
-// opened through a bind, the bind's path, as Linux's d_path gives it.
+// opened through a bind, the bind's path, as Linux's d_path gives it. This is
+// the path a lookup starts from (a cwd, a dirfd), so it is always one that
+// reaches the file: in a bind that has been lazily unmounted, where no path
+// names the bind any more, it is the path through the bind's source.
 int generic_getpath(struct fd *fd, char *buf);
+// The path as a reader is shown it -- getcwd, readlink of the /proc/<pid>
+// links, /proc/<pid>/maps. The same as generic_getpath, except in a lazily
+// unmounted bind: there it is the path from the bind's own root, as Linux
+// prints it, and *unreachable is set, since no root reaches it. Never walk
+// it. `unreachable` must not be NULL.
+int generic_getpath_shown(struct fd *fd, char *buf, bool *unreachable);
 // The same file's path on the mount that backs it, ignoring any bind it was
 // opened through. For a path that has to outlive the guest's binds: a
 // checkpoint restore reopens by path in a boot that never made them.
@@ -122,6 +131,10 @@ int generic_setattrat_force(struct fd *at, const char *path, struct attr attr, b
 int generic_setattrat_nochange(struct fd *at, const char *path, bool follow_links);
 int generic_utime(struct fd *at, const char *path, struct timespec atime, struct timespec mtime, bool follow_links);
 ssize_t generic_readlinkat(struct fd *at, const char *path, char *buf, size_t bufsize);
+// readlink(2)'s answer, which for a /proc/<pid>/{fd/N,cwd,root,exe} link is
+// generic_getpath_shown's rather than the walkable one generic_readlinkat
+// gives the path walk. See proc_readlink_shown in fs/proc.c.
+ssize_t generic_readlinkat_shown(struct fd *at, const char *path, char *buf, size_t bufsize);
 int generic_mkdirat(struct fd *at, const char *path, mode_t_ mode);
 
 int access_check(struct statbuf *stat, int check);
@@ -249,10 +262,16 @@ struct mount_info {
 int mount_snapshot(struct mount_info **out, size_t *count_out);
 // A mount's ID, as mountinfo and statx report it; see fs/mount.c.
 int mount_id(struct mount *mount);
-// Rewrite an origin-relative path to its full path through a bind mount of
-// that origin, found by ID; false if that bind no longer shows it. Takes
-// mounts_lock. See fs/mount.c.
-bool mount_path_through_bind(int bind_id, const struct mount *origin, char *path);
+// Rewrite an origin-relative path to its full path through `bind`, a bind
+// mount of `origin` the caller holds a reference on. A lazily unmounted bind
+// has no path: with `detached` NULL that is false, and otherwise the path is
+// from the bind's root and *detached says so. Takes mounts_lock. See
+// fs/mount.c.
+bool mount_path_through_bind(struct mount *bind, const struct mount *origin, char *path,
+                             bool *detached);
+// Put the point of the mount with ID `id` in front of `path`, a path on it;
+// false if there is no such mount any more. Takes mounts_lock. See fs/mount.c.
+bool mount_path_by_id(int id, char *path);
 // The st_dev files on this mount report, i.e. mountinfo's device field; asks
 // the filesystem rather than assuming, since only backing-less filesystems use
 // mount->fake_dev. Follows a bind to its origin. See fs/mount.c.
@@ -292,6 +311,10 @@ extern struct list mounts;
 // change themselves, so call them WITHOUT the lock held. See fs/mount.c.
 int mount_attach(const struct fs_ops *fs, const char *source, const char *point, const char *info, int flags);
 int mount_detach(const char *point);
+// mount_detach of `point` and, lazily, of everything mounted below it; EBUSY
+// without touching anything while `point` itself is in use. For the app's
+// root rename and delete. See fs/mount.c.
+int mount_detach_tree(const char *point);
 
 bool mount_param_flag(const char *info, const char *flag);
 
@@ -444,9 +467,11 @@ struct mount *find_mount_and_trim_path_flags(char *path, int *mount_flags);
 // Same again, and also which mount the path is ON as mountinfo lists it: for a
 // bind, the bind itself, where the returned mount is the origin backing it.
 // `seen_id` receives its mount ID and `seen_root` whether the path is that
-// mount's root. Any of the three may be NULL.
+// mount's root. `seen_bind`, for a path on a bind, receives the bind with a
+// reference the caller must release, and NULL otherwise. Any of the four may
+// be NULL.
 struct mount *find_mount_and_trim_path_seen(char *path, int *mount_flags, int *seen_id,
-                                            bool *seen_root);
+                                            bool *seen_root, struct mount **seen_bind);
 
 // adhoc fs
 struct fd *adhoc_fd_create(const struct fd_ops *ops);

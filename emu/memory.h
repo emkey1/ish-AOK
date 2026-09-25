@@ -469,12 +469,12 @@ struct data {
     // the stripe lock these fields live under.
     //
     // NOTE, and it is a precondition rather than something these records can
-    // express: an exclusive struct data is not the same thing as an exclusive
-    // host frame. The vdso is one static array (kernel/vdso.c) that every
-    // 32-bit exec pt_map()s into its own struct data, so N of them read as
-    // exclusive while sharing one host page -- which in build/ish also holds
-    // unrelated emulator globals, including a live lock. Eviction excludes it
-    // by identity, separately from these records.
+    // express: an exclusive struct data is an exclusive host frame only
+    // because nothing hands pt_map memory another struct data also maps --
+    // pt_map asserts it is host-page aligned. The one thing that did was the
+    // i386 vDSO, one static array (kernel/vdso.c) that every 32-bit exec
+    // mapped, sharing a host page with emulator globals, a live lock among
+    // them; each process gets its own copy of it now (kernel/exec.c).
     struct data_owner owners[2];
     uint32_t overflow_entries;
     uint8_t n_owners;
@@ -711,9 +711,9 @@ page_t pt_find_hole(struct mem *mem, pages_t size);
 // pt_map for the full argument.
 //
 // Two caveats on that ownership split. `memory` may legitimately be NULL (the
-// PROT_NONE branch of pt_map_nothing) or vdso_data (kernel/exec.c), and neither
-// is ever munmapped: pt_unmap_always_unlocked skips both, so a caller passing
-// one has nothing to release on an error return either.
+// PROT_NONE branch of pt_map_nothing), which is never munmapped:
+// pt_unmap_always_unlocked skips it, so a caller passing it has nothing to
+// release on an error return either.
 //
 // And on any path that gets past the two validation checks at the top, an error
 // return does not undo one thing: a lazy anonymous reservation overlapping the

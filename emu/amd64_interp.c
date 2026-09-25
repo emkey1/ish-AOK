@@ -9,6 +9,7 @@
 #include "emu/cpu.h"
 #include "emu/fpu.h"
 #include "emu/fxsave.h"
+#include "emu/fpenv.h"
 #include "emu/memory.h"
 #include "emu/tlb.h"
 #include "emu/avx.h"
@@ -2215,6 +2216,25 @@ static inline qword_t amd64_sign_bit(unsigned size) {
 
 static inline qword_t amd64_trunc(qword_t value, unsigned size) {
     return value & amd64_mask(size);
+}
+
+int64_t vdso_clock_ns(uint32_t clock); // kernel/time.c; see kernel/time.h
+
+// VMCALL (0f 01 c1) is AOK_VCLOCK, the clock read AOK's vDSO makes
+// (vdso/amd64/vdso.S): RAX names a clock and comes back as its reading in
+// nanoseconds, or with bit 63 set for "make the system call" -- kernel/time.c
+// vdso_clock_ns, what clock_gettime(2) computes. A user-mode VMCALL raises #UD
+// on real hardware, and still does here when RAX's upper half is not zero,
+// which is kept for any other call AOK's vDSO might one day make. Flags and
+// every other register are left alone. Both engines run it -- the JIT through
+// amd64_jit_vmcall, the interpreter directly -- so a JIT-off run keeps a
+// working clock_gettime.
+static int amd64_vmcall(struct cpu_state *cpu) {
+    qword_t rax = cpu->amd64_regs[amd64_rax];
+    if (rax >> 32 != 0)
+        return INT_UNDEFINED;
+    cpu->amd64_regs[amd64_rax] = (qword_t) vdso_clock_ns((uint32_t) rax);
+    return INT_NONE;
 }
 
 static inline qword_t amd64_rdtsc_value(void) {
@@ -7263,9 +7283,8 @@ static inline int amd64_fxsave_op(struct cpu_state *cpu, struct tlb *tlb,
     addr = amd64_effective_addr(cpu, modrm, fs_prefix);
 
     // /2 LDMXCSR, /3 STMXCSR: 32-bit MXCSR, no alignment requirement. The
-    // emulator runs SSE round-to-nearest with all exceptions masked and does not
-    // honor MXCSR's rounding/exception bits, but stores/loads the value so a
-    // control-word read-modify-write round-trips.
+    // rounding mode goes onto the host FPU as it is written, and the flags the
+    // host raised are gathered into it as it is read (emu/fpenv.c).
     if (modrm->reg == 2 || modrm->reg == 3) {
         dword_t mxcsr;
         if (modrm->reg == 2) {
@@ -7274,7 +7293,9 @@ static inline int amd64_fxsave_op(struct cpu_state *cpu, struct tlb *tlb,
                 return INT_PF;
             }
             cpu->mxcsr = mxcsr & 0xffff;
+            fpenv_x86_load_mxcsr(cpu);
         } else {
+            fpenv_x86_sync_mxcsr(cpu);
             mxcsr = cpu->mxcsr;
             if (!amd64_mem_write(cpu, tlb, addr, &mxcsr, sizeof(mxcsr))) {
                 cpu->amd64_rip = saved_rip;
@@ -7303,6 +7324,7 @@ static inline int amd64_fxsave_op(struct cpu_state *cpu, struct tlb *tlb,
     }
 
     if (modrm->reg == 0) {
+        fpenv_x86_sync_mxcsr(cpu);
         amd64_fill_fxsave_area(cpu, &area);
         if (!amd64_mem_write(cpu, tlb, addr, &area, sizeof(area))) {
             cpu->amd64_rip = saved_rip;
@@ -7314,6 +7336,8 @@ static inline int amd64_fxsave_op(struct cpu_state *cpu, struct tlb *tlb,
             return INT_PF;
         }
         amd64_restore_fxsave_area(cpu, &area);
+        cpu->mxcsr &= 0xffff;
+        fpenv_x86_load_mxcsr(cpu);
     }
 
     return INT_NONE;
@@ -7491,28 +7515,28 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
         case 0xd80: {
             float value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_addm32(cpu, &value);
             break;
         }
         case 0xd81: {
             float value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_mulm32(cpu, &value);
             break;
         }
         case 0xd82: {
             float value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_comm32(cpu, &value);
             break;
         }
         case 0xd83: {
             float value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_comm32(cpu, &value);
             fpu_pop(cpu);
             break;
@@ -7520,35 +7544,35 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
         case 0xd84: {
             float value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_subm32(cpu, &value);
             break;
         }
         case 0xd85: {
             float value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_subrm32(cpu, &value);
             break;
         }
         case 0xd86: {
             float value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_divm32(cpu, &value);
             break;
         }
         case 0xd87: {
             float value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_divrm32(cpu, &value);
             break;
         }
         case 0xd90: {
             float value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_ldm32(cpu, &value);
             break;
         }
@@ -7556,28 +7580,28 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
             float value;
             fpu_stm32(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             break;
         }
         case 0xd93: {
             float value;
             fpu_stm32(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_pop(cpu);
             break;
         }
         case 0xd94: {
             struct fpu_env32 env;
             if (!amd64_mem_read(cpu, tlb, addr, &env, sizeof(env)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_ldenv32(cpu, &env);
             break;
         }
         case 0xd95: {
             uint16_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_ldcw16(cpu, &value);
             break;
         }
@@ -7585,41 +7609,41 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
             struct fpu_env32 env;
             fpu_stenv32(cpu, &env);
             if (!amd64_mem_write(cpu, tlb, addr, &env, sizeof(env)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             break;
         }
         case 0xd97: {
             uint16_t value;
             fpu_stcw16(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             break;
         }
         case 0xda0: {
             int32_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_iadd32(cpu, &value);
             break;
         }
         case 0xda1: {
             int32_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_imul32(cpu, &value);
             break;
         }
         case 0xda2: {
             int32_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_icom32(cpu, &value);
             break;
         }
         case 0xda3: {
             int32_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_icom32(cpu, &value);
             fpu_pop(cpu);
             break;
@@ -7627,35 +7651,35 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
         case 0xda4: {
             int32_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_isub32(cpu, &value);
             break;
         }
         case 0xda5: {
             int32_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_isubr32(cpu, &value);
             break;
         }
         case 0xda6: {
             int32_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_idiv32(cpu, &value);
             break;
         }
         case 0xda7: {
             int32_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_idivr32(cpu, &value);
             break;
         }
         case 0xdb0: {
             int32_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_ild32(cpu, &value);
             break;
         }
@@ -7663,7 +7687,7 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
             int32_t value;
             fpu_istt32(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_pop(cpu);
             break;
         }
@@ -7671,21 +7695,21 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
             int32_t value;
             fpu_ist32(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             break;
         }
         case 0xdb3: {
             int32_t value;
             fpu_ist32(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_pop(cpu);
             break;
         }
         case 0xdb5: {
             float80 value = {};
             if (!amd64_mem_read(cpu, tlb, addr, &value, 10))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_ldm80(cpu, &value);
             break;
         }
@@ -7693,35 +7717,35 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
             float80 value;
             fpu_stm80(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, 10))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_pop(cpu);
             break;
         }
         case 0xdc0: {
             double value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_addm64(cpu, &value);
             break;
         }
         case 0xdc1: {
             double value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_mulm64(cpu, &value);
             break;
         }
         case 0xdc2: {
             double value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_comm64(cpu, &value);
             break;
         }
         case 0xdc3: {
             double value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_comm64(cpu, &value);
             fpu_pop(cpu);
             break;
@@ -7729,35 +7753,35 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
         case 0xdc4: {
             double value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_subm64(cpu, &value);
             break;
         }
         case 0xdc5: {
             double value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_subrm64(cpu, &value);
             break;
         }
         case 0xdc6: {
             double value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_divm64(cpu, &value);
             break;
         }
         case 0xdc7: {
             double value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_divrm64(cpu, &value);
             break;
         }
         case 0xdd0: {
             double value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_ldm64(cpu, &value);
             break;
         }
@@ -7765,7 +7789,7 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
             int64_t value;
             fpu_istt64(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_pop(cpu);
             break;
         }
@@ -7773,21 +7797,21 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
             double value;
             fpu_stm64(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             break;
         }
         case 0xdd3: {
             double value;
             fpu_stm64(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_pop(cpu);
             break;
         }
         case 0xdd4: {
             struct fpu_state32 state;
             if (!amd64_mem_read(cpu, tlb, addr, &state, sizeof(state)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_restore32(cpu, &state);
             break;
         }
@@ -7795,41 +7819,41 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
             struct fpu_state32 state;
             fpu_save32(cpu, &state);
             if (!amd64_mem_write(cpu, tlb, addr, &state, sizeof(state)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             break;
         }
         case 0xdd7: {
             uint16_t value;
             fpu_stsw16(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             break;
         }
         case 0xde0: {
             int16_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_iadd16(cpu, &value);
             break;
         }
         case 0xde1: {
             int16_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_imul16(cpu, &value);
             break;
         }
         case 0xde2: {
             int16_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_icom16(cpu, &value);
             break;
         }
         case 0xde3: {
             int16_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_icom16(cpu, &value);
             fpu_pop(cpu);
             break;
@@ -7837,35 +7861,35 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
         case 0xde4: {
             int16_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_isub16(cpu, &value);
             break;
         }
         case 0xde5: {
             int16_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_isubr16(cpu, &value);
             break;
         }
         case 0xde6: {
             int16_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_idiv16(cpu, &value);
             break;
         }
         case 0xde7: {
             int16_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_idivr16(cpu, &value);
             break;
         }
         case 0xdf0: {
             int16_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_ild16(cpu, &value);
             break;
         }
@@ -7873,7 +7897,7 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
             int16_t value;
             fpu_istt16(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_pop(cpu);
             break;
         }
@@ -7881,21 +7905,21 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
             int16_t value;
             fpu_ist16(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             break;
         }
         case 0xdf3: {
             int16_t value;
             fpu_ist16(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_pop(cpu);
             break;
         }
         case 0xdf5: {
             int64_t value;
             if (!amd64_mem_read(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_ild64(cpu, &value);
             break;
         }
@@ -7903,7 +7927,7 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
             int64_t value;
             fpu_ist64(cpu, &value);
             if (!amd64_mem_write(cpu, tlb, addr, &value, sizeof(value)))
-                goto amd64_fpu_gpf_restore;
+                goto amd64_fpu_pf_restore;
             fpu_pop(cpu);
             break;
         }
@@ -8132,6 +8156,11 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
         fpu_pop(cpu);
         fpu_pop(cpu);
         return INT_NONE;
+    case 0xda51: // FUCOMPP: FCOMPP's quiet twin. It raised SIGILL.
+        fpu_ucom(cpu, 1);
+        fpu_pop(cpu);
+        fpu_pop(cpu);
+        return INT_NONE;
     case 0xdf40:
         amd64_reg_set(cpu, amd64_rax, 16, cpu->fsw);
         return INT_NONE;
@@ -8143,6 +8172,16 @@ amd64_fpu_gpf_restore:
     cpu->amd64_rip = saved_rip;
     cpu->segfault_addr = saved_rip;
     return INT_GPF;
+
+// A memory operand that could not be reached: a page fault, with the address
+// and direction amd64_mem_read/write recorded, so the kernel can fault the
+// page in -- or break copy-on-write -- and the instruction runs again. These
+// all used to report a GPF at the instruction instead, which killed a forked
+// child with SIGSEGV the first time an x87 store (a long double global, a
+// saved control word) touched a page it still shared with its parent.
+amd64_fpu_pf_restore:
+    cpu->amd64_rip = saved_rip;
+    return INT_PF;
 }
 
 static inline void amd64_trace_qword_store(struct cpu_state *cpu, qword_t rip,
@@ -8844,6 +8883,20 @@ restart_prefix:
         }
         if (op2 == 0x05)
             return INT_AMD64_SYSCALL;
+        if (op2 == 0x01) {
+            // VMCALL; every other 0f 01 form goes on to the handling below.
+            qword_t after_op2 = cpu->amd64_rip;
+            byte_t modrm;
+            if (amd64_fetch_u8(cpu, tlb, &modrm) && modrm == 0xc1) {
+                int intr = amd64_vmcall(cpu);
+                if (intr != INT_NONE) {
+                    cpu->amd64_rip = saved_rip;
+                    return intr;
+                }
+                break;
+            }
+            cpu->amd64_rip = after_op2;
+        }
         if (op2 == 0x31) {
             qword_t tsc = amd64_rdtsc_value();
             amd64_reg_set(cpu, amd64_rax, 32, (dword_t) tsc);
@@ -12718,6 +12771,20 @@ int amd64_jit_xgetbv(struct cpu_state *cpu, struct tlb *tlb,
     return INT_NONE;
 }
 
+// VMCALL (0f 01 c1), the JIT's way into amd64_vmcall. Plain prefixes only, so
+// the instruction is exactly three bytes and a fault reports next_ip - 3.
+int amd64_jit_vmcall(struct cpu_state *cpu, struct tlb *tlb,
+        unsigned long next_ip) {
+    guest_addr_t checked_next_ip;
+    (void) tlb;
+    if (!amd64_guest_addr_ok((qword_t) next_ip, 1, &checked_next_ip))
+        return INT_GPF;
+    int intr = amd64_vmcall(cpu);
+    cpu->amd64_rip = (qword_t) (intr == INT_NONE ? next_ip : next_ip - 3);
+    amd64_sync_legacy_regs(cpu);
+    return intr;
+}
+
 // Port I/O: IN/OUT (e4/e5 imm8, e6/e7 imm8, ec/ed dx, ee/ef dx). These are
 // ring-0 instructions -- a user-mode process needs IOPL(3) or an ioperm bitmap
 // bit, neither of which iSH grants -- so the only correct outcome is the same
@@ -14552,6 +14619,7 @@ static void amd64_jit_note_vec_bridge(unsigned long op2) {
 // both fall through to the host, which already matches x86.
 static inline float amd64_sse_sqrt_f32(float x) {
     if (x < 0.0f) {
+        fpenv_raise_invalid();
         uint32_t bits = 0xffc00000u;
         float r;
         memcpy(&r, &bits, sizeof(r));
@@ -14561,6 +14629,7 @@ static inline float amd64_sse_sqrt_f32(float x) {
 }
 static inline double amd64_sse_sqrt_f64(double x) {
     if (x < 0.0) {
+        fpenv_raise_invalid();
         uint64_t bits = 0xfff8000000000000ull;
         double r;
         memcpy(&r, &bits, sizeof(r));

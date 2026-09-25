@@ -14,6 +14,9 @@ struct proc_entry {
     pid_t_ pid;
     sdword_t fd; // typedef might not have been read yet
     struct proc_dir_entry *parent;
+    // Set for a .readlink that readlink(2) itself asked for, clear for one the
+    // path walk follows: see proc_readlink_shown.
+    bool shown;
 };
 
 struct proc_data {
@@ -102,6 +105,10 @@ int proc_show_mountinfo(struct proc_entry *entry, struct proc_data *buf);
 // mounts_lock NOT held. libmount's kernel mount monitor (systemd) depends
 // on an edge per change; see the comment at the definition.
 void proc_mountinfo_notify_changed(void);
+// procfs's readlink for readlink(2), as against for the path walk (the fs
+// op). The /proc/<pid>/{fd/N,cwd,root,exe} links answer these differently in
+// one case, a lazily unmounted bind: see generic_getpath_shown.
+ssize_t proc_readlink_shown(const char *path, char *buf, size_t bufsize);
 int proc_show_mounts(struct proc_entry *entry, struct proc_data *buf);
 
 mode_t_ proc_entry_mode(struct proc_entry *entry);

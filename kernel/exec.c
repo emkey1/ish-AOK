@@ -12,6 +12,7 @@
 #include "debug.h"
 #include "misc.h"
 #include "kernel/calls.h"
+#include "emu/cpuid.h"
 #include "kernel/personality.h"
 #include "kernel/random.h"
 #include "kernel/errno.h"
@@ -349,6 +350,61 @@ static int map_sigpage(struct task *task, enum guest_abi abi) {
     }
     entry->data->name = "[sigpage]";
     task->mm->vdso = (guest_addr_t) page << PAGE_BITS;
+    return 0;
+}
+
+// Map a private copy of a vDSO image at [page, page + pages), read and
+// executable, and name it [vdso].
+//
+// A COPY, per process, like the [sigpage]: a debugger planting a breakpoint in
+// clock_gettime, or a program that mprotects the page and patches it, changes
+// its own clock and nobody else's. The i386 vDSO used to be the one static
+// array in kernel/vdso.c mapped straight into every 32-bit process, so any of
+// them could mprotect it writable and rewrite the clock_gettime every other
+// one ran -- root's included. tests/manual/vdso_clock.c has both routes.
+static int map_vdso_copy(struct task *task, const void *image, size_t size,
+                         page_t page, pages_t pages) {
+    int err = pt_map_nothing(task->mem, page, pages, P_READ | P_EXEC);
+    if (err < 0)
+        return err;
+    struct pt_entry *entry = mem_pt(task->mem, page);
+    if (entry == NULL || entry->data == NULL || entry->data->data == NULL)
+        return _ENOMEM;
+    memcpy((char *) entry->data->data + entry->offset, image, size);
+    entry->data->name = "[vdso]";
+    return 0;
+}
+
+// The vDSO a 64-bit guest's C library reads the clock through, from
+// vdso/amd64, arm64 or riscv64/vdso.S (the arm64 one says what it is for).
+// Its address lives only in the aux vector, which is where the C library and
+// gdb look for it; a checkpoint carries the pages and the aux vector like any
+// others.
+//
+// ISH_VDSO=0 in the host environment leaves it out -- *base stays 0, no
+// AT_SYSINFO_EHDR goes in the aux vector, and the C library makes the system
+// calls the vDSO replaces -- to A/B a problem against them.
+static int map_vdso64(struct task *task, enum guest_abi abi, guest_addr_t *base) {
+    *base = 0;
+    const char *image, *end;
+    switch (abi) {
+        case GUEST_ABI_AMD64: image = vdso_amd64_image; end = vdso_amd64_image_end; break;
+        case GUEST_ABI_ARM64: image = vdso_arm64_image; end = vdso_arm64_image_end; break;
+        case GUEST_ABI_RISCV64: image = vdso_riscv64_image; end = vdso_riscv64_image_end; break;
+        default: return 0;
+    }
+    const char *knob = getenv("ISH_VDSO");
+    if (knob != NULL && strcmp(knob, "0") == 0)
+        return 0;
+    size_t size = (size_t) (end - image);
+    pages_t pages = (pages_t) ((size + PAGE_SIZE - 1) >> PAGE_BITS);
+    page_t page = pt_find_hole(task->mem, pages);
+    if (page == BAD_PAGE)
+        return _ENOMEM;
+    int err = map_vdso_copy(task, image, size, page, pages);
+    if (err < 0)
+        return err;
+    *base = (guest_addr_t) page << PAGE_BITS;
     return 0;
 }
 
@@ -1144,6 +1200,7 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     }
 
     guest_addr_t vdso_entry = 0;
+    guest_addr_t vdso64_base = 0;
     if (!is_64bit) {
         err = _ENOMEM;
         pages_t vdso_pages = sizeof(vdso_data) >> PAGE_BITS;
@@ -1156,9 +1213,8 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         // r-xp on real Linux. It was mapped with no permission bits, which only
         // worked while reads went unchecked; mem_ptr_nofault now faults a
         // PROT_NONE page on read, as Linux does.
-        if ((err = pt_map(save->mem, vdso_page, vdso_pages, (void *) vdso_data, 0, P_READ | P_EXEC)) < 0)
+        if ((err = map_vdso_copy(save, vdso_data, sizeof(vdso_data), vdso_page, vdso_pages)) < 0)
             goto beyond_hope;
-        mem_pt(save->mem, vdso_page)->data->name = "[vdso]";
         save->mm->vdso = vdso_page << PAGE_BITS;
         vdso_entry = save->mm->vdso + ((struct elf_header *) vdso_data)->entry_point;
 
@@ -1168,8 +1224,11 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         if ((err = pt_map_nothing(save->mem, vvar_page, VVAR_PAGES, 0)) < 0)
             goto beyond_hope;
         mem_pt(save->mem, vvar_page)->data->name = "[vvar]";
-    } else if ((err = map_sigpage(save, header.abi)) < 0) {
-        goto beyond_hope;
+    } else {
+        if ((err = map_sigpage(save, header.abi)) < 0)
+            goto beyond_hope;
+        if ((err = map_vdso64(save, header.abi, &vdso64_base)) < 0)
+            goto beyond_hope;
     }
 
     struct guest_vm_layout vm_layout = guest_abi_vm_layout(save->abi);
@@ -1246,7 +1305,12 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         struct aux_ent aux[] = {
             {AX_SYSINFO, vdso_entry},
             {AX_SYSINFO_EHDR, save->mm->vdso},
-            {AX_HWCAP, 0},
+            // Linux's i386 AT_HWCAP is CPUID leaf 1's EDX, and musl's i386
+            // fenv code reads it: without the SSE bit, fesetround never
+            // wrote MXCSR and fetestexcept never read it, so the SSE2 double
+            // arithmetic Alpine's i386 gcc emits ignored the rounding mode
+            // and raised no flags anyone could see.
+            {AX_HWCAP, cpuid_leaf1_edx_features()},
             {AX_PAGESZ, PAGE_SIZE},
             {AX_CLKTCK, 0x64},
             {AX_PHDR, load_addr + header.prghead_off},
@@ -1336,6 +1400,9 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
                     (1u << ('a' - 'a')) | (1u << ('f' - 'a')) |
                     (1u << ('d' - 'a')) | (1u << ('c' - 'a'));
         struct aux64_ent aux[] = {
+            // First, where Linux's ARCH_DLINFO puts it, and left out entirely
+            // when there is no vDSO rather than handed over as 0.
+            {AX_SYSINFO_EHDR, vdso64_base},
             {AX_HWCAP, hwcap},
             {AX_PAGESZ, PAGE_SIZE},
             {AX_CLKTCK, 0x64},
@@ -1356,8 +1423,10 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             {AX_PLATFORM, platform_addr},
             {0, 0}
         };
+        const struct aux64_ent *aux_from = vdso64_base != 0 ? aux : aux + 1;
+        size_t aux_size = sizeof(aux) - (size_t) (aux_from - aux) * sizeof(aux[0]);
         sp -= vector_bytes;
-        sp -= sizeof(aux);
+        sp -= aux_size;
         sp = align_stack(sp);
 
         guest_addr_t p = sp;
@@ -1398,9 +1467,9 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
         p += guest_word_size;
 
         save->mm->auxv_start = p;
-        if (user_put(p, aux))
+        if (user_write(p, aux_from, aux_size))
             goto beyond_hope;
-        p += sizeof(aux);
+        p += aux_size;
         save->mm->auxv_end = p;
     }
 

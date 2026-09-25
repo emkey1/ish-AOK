@@ -208,36 +208,64 @@ int mount_id(struct mount *mount) {
     return mount->id > 0 ? mount->id : MOUNT_ID_HIDDEN;
 }
 
-// Re-express `path`, relative to `origin`, as it is seen through the bind
-// mount with ID `bind_id`: the bind's point, then what follows the bind's
-// source in `path`. In place; `path` is a MAX_PATH buffer. False, leaving
-// `path` alone, when there is no such bind any more (unmounted, lazily or
-// not: a descriptor holds its origin, not the bind), when it is not a bind of
-// `origin`, or when `path` is no longer under its source because the file was
-// renamed out from under it.
+// Re-express `path`, relative to `origin`, as it is seen through `bind`, a
+// bind of `origin` that the caller holds a reference on (a descriptor's
+// bind_mount): the bind's point, then what follows the bind's source in
+// `path`. In place; `path` is a MAX_PATH buffer. False, leaving `path` alone,
+// when `path` is no longer under the source because the file was renamed out
+// from under it.
 //
-// By ID under mounts_lock rather than by a pointer the descriptor keeps,
-// since a descriptor holds no reference on the bind, and IDs are never
-// reused. The lock also covers bind->point, which MS_MOVE replaces.
-bool mount_path_through_bind(int bind_id, const struct mount *origin, char *path) {
+// A bind that has been lazily unmounted is out of the mount table, so no path
+// reaches it. With `detached` NULL that is false too, and the caller keeps
+// the path on the origin, which still does. Otherwise the path is from the
+// bind's own root -- what Linux prints for a file in a detached mount -- and
+// *detached is set.
+//
+// Under mounts_lock: MS_MOVE replaces bind->point, and umount -l marks the
+// bind. bind_prefix is fixed for the bind's life.
+bool mount_path_through_bind(struct mount *bind, const struct mount *origin, char *path,
+                             bool *detached) {
+    if (bind->bind_origin != origin)
+        return false;
+    size_t prefix_len = strlen(bind->bind_prefix);
+    if (strncmp(path, bind->bind_prefix, prefix_len) != 0 ||
+            (path[prefix_len] != '\0' && path[prefix_len] != '/'))
+        return false;
+    bool done = false;
+    lock(&mounts_lock, 0);
+    bool gone = bind->lazy_umount;
+    if (!gone || detached != NULL) {
+        size_t point_len = gone ? 0 : bind->point_len;
+        size_t rest_len = strlen(path + prefix_len);
+        if (point_len + rest_len < MAX_PATH) {
+            memmove(path + point_len, path + prefix_len, rest_len + 1);
+            memcpy(path, bind->point, point_len);
+            if (detached != NULL)
+                *detached = gone;
+            done = true;
+        }
+    }
+    unlock(&mounts_lock);
+    return done;
+}
+
+// Put the point of the mount with ID `id` in front of `path`, a path on that
+// mount, in place; `path` is a MAX_PATH buffer. False, leaving `path` alone,
+// when no mount in the table has that ID any more or the result would not
+// fit. Takes mounts_lock.
+bool mount_path_by_id(int id, char *path) {
     bool done = false;
     lock(&mounts_lock, 0);
     struct mount *mount;
     list_for_each_entry(&mounts, mount, mounts) {
-        if (mount->id != bind_id)
+        if (mount->id != id)
             continue;
-        if (mount->bind_origin != origin)
-            break;
-        size_t prefix_len = strlen(mount->bind_prefix);
-        if (strncmp(path, mount->bind_prefix, prefix_len) != 0 ||
-                (path[prefix_len] != '\0' && path[prefix_len] != '/'))
-            break;
-        size_t rest_len = strlen(path + prefix_len);
-        if (mount->point_len + rest_len >= MAX_PATH)
-            break;
-        memmove(path + mount->point_len, path + prefix_len, rest_len + 1);
-        memcpy(path, mount->point, mount->point_len);
-        done = true;
+        size_t len = strlen(path);
+        if (mount->point_len + len < MAX_PATH) {
+            memmove(path + mount->point_len, path, len + 1);
+            memcpy(path, mount->point, mount->point_len);
+            done = true;
+        }
         break;
     }
     unlock(&mounts_lock);
@@ -456,11 +484,12 @@ int mount_set_display_source(const char *point, const char *display_source) {
 // holds mounts_lock; list_remove on an already-removed, re-initialised node is
 // a no-op, so this is safe for both entry points below.
 static void mount_destroy(struct mount *mount) {
-    if (mount->bind_origin != NULL) {
+    struct mount *origin = mount->bind_origin;
+    if (origin != NULL) {
         // A bind owns one reference on its origin. We hold mounts_lock here
         // (do_umount / exit unmount), so drop it directly rather than via
         // mount_release, which would re-acquire the same non-recursive lock.
-        mount->bind_origin->refcount--;
+        origin->refcount--;
         free((void *) mount->bind_prefix);
     } else if (mount->fs->umount) {
         mount->fs->umount(mount);
@@ -471,6 +500,11 @@ static void mount_destroy(struct mount *mount) {
     free((void *) mount->display_source);
     free((void *) mount->point);
     free(mount);
+    // ...and if that was the last use of a lazily unmounted origin, finish
+    // its unmount, as mount_release would have. A bind now lives as long as
+    // anything is open in it, so it can be the last user.
+    if (origin != NULL && origin->lazy_umount && origin->refcount == 0)
+        mount_destroy(origin);
 }
 
 int mount_remove(struct mount *mount) {
@@ -554,6 +588,54 @@ int mount_detach(const char *point) {
     int err = do_umount(point);
     unlock(&mounts_lock);
     if (err >= 0)
+        proc_mountinfo_notify_changed();
+    return err;
+}
+
+// The app, before it renames or deletes the root exposed at `point`: unmount
+// it and everything mounted inside it, which is mount-root.sh's binds of
+// /proc, /sys, /dev, /dev/pts, /run and /AOK/{tools,tests,fakefs} and
+// whatever else the guest put there. EBUSY, touching nothing, while the root
+// itself is in use -- a chroot into it, a cwd or a descriptor in it -- so a
+// session still running in there keeps all of them.
+//
+// What is mounted inside goes lazily (umount -l). A bind is busy while
+// anything is open in it, and one that is only in use from outside the root
+// has nothing to do with the root's own files; it leaves the table now and
+// goes with its last user. The app used to unmount a fixed list of binds one
+// by one, first: a busy one stayed behind under a root that had gone, the
+// two the list had fallen behind on stayed behind every time, and a session
+// in the root lost the ones that did go before the root was found busy.
+//
+// All under one hold of mounts_lock, so nothing new can start using the root
+// between the check and the unmount. EINVAL when nothing is mounted at
+// `point`, after still detaching what is mounted below it.
+int mount_detach_tree(const char *point) {
+    size_t len = strlen(point);
+    lock(&mounts_lock, 0);
+    struct mount *mount, *tmp, *root = NULL;
+    list_for_each_entry(&mounts, mount, mounts) {
+        if (strcmp(mount->point, point) == 0) {
+            root = mount;
+            break;
+        }
+    }
+    if (root != NULL && root->refcount != 0) {
+        unlock(&mounts_lock);
+        return _EBUSY;
+    }
+    bool changed = false;
+    list_for_each_entry_safe(&mounts, mount, tmp, mounts) {
+        if (strncmp(mount->point, point, len) == 0 && mount->point[len] == '/') {
+            mount_remove_lazy(mount);
+            changed = true;
+        }
+    }
+    // Still unused: a bind of something in the root would have held it (its
+    // origin) and made it busy above, and the lock has kept everyone else out.
+    int err = root != NULL ? mount_remove(root) : _EINVAL;
+    unlock(&mounts_lock);
+    if (changed || err >= 0)
         proc_mountinfo_notify_changed();
     return err;
 }

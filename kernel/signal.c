@@ -15,6 +15,7 @@
 #include "kernel/vdso.h"
 #include "emu/interrupt.h"
 #include "emu/memory.h"
+#include "emu/fxsave.h"
 #include "util/sync.h"
 #include "kernel/anonfd_ckpt.h"
 
@@ -2794,6 +2795,66 @@ static sigset_t_ sigmask_to_save(void) {
     return current->has_saved_mask ? current->saved_mask : current->blocked;
 }
 
+// Linux x86 starts a signal handler with the FPU in its initial state
+// (fpu__clear_user_states): x87 control word 0x37f, an empty stack, SSE
+// round-to-nearest with every exception masked, and no flags. The state the
+// handler interrupted is in the frame, and sigreturn puts it back. arm64 and
+// riscv64 hand the handler FPCR/FPSR and fcsr as they were, so this is x86's.
+static void x86_signal_handler_fpu_init(struct cpu_state *cpu) {
+    cpu->fcw = 0x037f;
+    cpu->fsw = 0;
+    cpu->mxcsr = 0x1f80;
+}
+
+// The i386 signal frame's FPU state, laid out as Linux does it: the legacy
+// FNSAVE-style header, then an FXSAVE image, placed ABOVE the frame with the
+// FXSAVE half 64-byte aligned (fpu__alloc_mathframe), sigcontext.fpstate
+// pointing at the header, and magic 0 to say the FXSAVE part follows. There
+// was none at all before, so a handler that used floating point -- or just
+// changed the rounding mode -- left that behind for the code it interrupted.
+#define I386_FPSTATE_LEGACY_SIZE offsetof(struct fpstate_, _fxsr_env)
+static_assert(sizeof(struct fpstate_) - I386_FPSTATE_LEGACY_SIZE == sizeof(struct fxsave_area),
+        "i386 fpstate FXSAVE part");
+
+static void setup_i386_fpstate(struct fpstate_ *fpstate, struct cpu_state *cpu) {
+    memset(fpstate, 0, sizeof(*fpstate));
+    fpstate->cw = 0xffff0000u | cpu->fcw;
+    fpstate->sw = 0xffff0000u | cpu->fsw;
+    fpstate->tag = 0xffff0000u;
+    for (int i = 0; i < 8; i++) {
+        float80 value = cpu->fp[(cpu->top + i) % 8];
+        for (int j = 0; j < 4; j++)
+            fpstate->st[i].significand[j] = (word_t) (value.signif >> (j * 16));
+        fpstate->st[i].exponent = value.signExp;
+    }
+    fpstate->status = cpu->fsw;
+    fpstate->magic = 0;
+    struct fxsave_area fx;
+    fxsave_fill(cpu, &fx, 8);
+    memcpy(fpstate->_fxsr_env, &fx, sizeof(fx));
+}
+
+static void restore_i386_fpstate(struct fpstate_ *fpstate, struct cpu_state *cpu) {
+    if (fpstate->magic == 0xffff) {
+        // Legacy state only, as a non-FXSR kernel would have written it.
+        word_t cw = (word_t) fpstate->cw;
+        fpu_ldcw16(cpu, &cw);
+        cpu->fsw = (word_t) fpstate->sw;
+        for (int i = 0; i < 8; i++) {
+            float80 value = {0};
+            for (int j = 0; j < 4; j++)
+                value.signif |= (uint64_t) fpstate->st[i].significand[j] << (j * 16);
+            value.signExp = fpstate->st[i].exponent;
+            cpu->fp[(cpu->top + i) % 8] = value;
+        }
+        return;
+    }
+    struct fxsave_area fx;
+    memcpy(&fx, fpstate->_fxsr_env, sizeof(fx));
+    fxsave_restore(cpu, &fx, 8);
+    cpu->mxcsr &= 0xffff;
+}
+
 static void setup_sigcontext(struct sigcontext_ *sc, struct cpu_state *cpu, int sig) {
     sc->ax = cpu->eax;
     sc->bx = cpu->ebx;
@@ -2891,7 +2952,10 @@ static void setup_amd64_fpstate(struct amd64_fpstate_ *fpstate, struct cpu_state
     memset(fpstate, 0, sizeof(*fpstate));
     fpstate->cwd = cpu->fcw;
     fpstate->swd = cpu->fsw;
-    fpstate->mxcsr = 0x1f80;
+    // The real MXCSR -- rounding mode and flags -- not the power-on value this
+    // used to write, which sigreturn then did not restore either.
+    fpstate->mxcsr = cpu->mxcsr;
+    fpstate->mxcr_mask = 0xffff;
 
     for (int i = 0; i < 8; i++) {
         const float80 value = cpu->fp[i];
@@ -3321,6 +3385,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
             unlock(&sighand->lock);
             do_exit_group(SIGSEGV_);
         }
+        x86_signal_handler_fpu_init(&current->cpu);
 
         if (action->flags & SA_RESETHAND_)
             *action = (struct sigaction_) {.handler = SIG_DFL_};
@@ -3352,7 +3417,18 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
         sp -= xsave_extra;
         sp &=~ 0x3f;
         sp -= fxsave_extra;
+    } else {
+        sp -= sizeof(struct fpstate_) - I386_FPSTATE_LEGACY_SIZE;
+        sp &= ~0x3f;
+        sp -= I386_FPSTATE_LEGACY_SIZE;
     }
+    addr_t fpstate_addr = sp;
+    struct fpstate_ fpstate;
+    setup_i386_fpstate(&fpstate, &current->cpu);
+    if (need_siginfo)
+        frame.rt_sigframe.uc.mcontext.fpstate = fpstate_addr;
+    else
+        frame.sigframe.sc.fpstate = fpstate_addr;
     sp -= frame_size;
     // align sp + 4 on a 16-byte boundary because that's what the abi says
     sp = ((sp + 4) & ~0xf) - 4;
@@ -3369,13 +3445,15 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
     }
 
     // install frame
-    if (user_write(sp, &frame, frame_size)) {
+    if (user_write(sp, &frame, frame_size) ||
+            user_write(fpstate_addr, &fpstate, sizeof(fpstate))) {
         // See the amd64 path above: kill like Linux force_sigsegv instead of
         // re-taking sighand->lock via deliver_signal and self-deadlocking.
         printk("WARNING: failed to install frame for %d at %#x, killing\n", info->sig, sp);
         unlock(&sighand->lock);
         do_exit_group(SIGSEGV_);
     }
+    x86_signal_handler_fpu_init(&current->cpu);
 
     if (action->flags & SA_RESETHAND_)
         *action = (struct sigaction_) {.handler = SIG_DFL_};
@@ -3696,7 +3774,13 @@ void receive_signals(void) {
     }
 }
 
-static void restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cpu) {
+static int restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cpu) {
+    if (context->fpstate != 0) {
+        struct fpstate_ fpstate;
+        if (user_get(context->fpstate, fpstate))
+            return _EFAULT;
+        restore_i386_fpstate(&fpstate, cpu);
+    }
     cpu->eax = context->ax;
     cpu->ebx = context->bx;
     cpu->ecx = context->cx;
@@ -3713,6 +3797,7 @@ static void restore_sigcontext(struct sigcontext_ *context, struct cpu_state *cp
     cpu->eflags = (context->flags & USE_FLAGS) | (cpu->eflags & ~USE_FLAGS);
     expand_flags(cpu);
     cpu->df_offset = cpu->df ? -1 : 1;
+    return 0;
 }
 
 static void sync_i386_shadows_from_amd64(struct cpu_state *cpu) {
@@ -3730,6 +3815,8 @@ static void sync_i386_shadows_from_amd64(struct cpu_state *cpu) {
 static void restore_amd64_fpstate(struct amd64_fpstate_ *fpstate, struct cpu_state *cpu) {
     cpu->fcw = fpstate->cwd;
     cpu->fsw = fpstate->swd;
+    // Linux clears the bits no CPU implements rather than failing.
+    cpu->mxcsr = fpstate->mxcsr & 0xffff;
 
     for (int i = 0; i < 8; i++) {
         uint64_t significand = 0;
@@ -3785,7 +3872,10 @@ dword_t sys_rt_sigreturn(void) {
         deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
         return _EFAULT;
     }
-    restore_sigcontext(&frame.uc.mcontext, cpu);
+    if (restore_sigcontext(&frame.uc.mcontext, cpu)) {
+        deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
+        return _EFAULT;
+    }
 
     lock(&current->sighand->lock, 0);
     restore_altstack(cpu->esp, frame.uc.stack.stack, frame.uc.stack.size, frame.uc.stack.flags);
@@ -3829,7 +3919,10 @@ dword_t sys_sigreturn(void) {
         deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
         return _EFAULT;
     }
-    restore_sigcontext(&frame.sc, cpu);
+    if (restore_sigcontext(&frame.sc, cpu)) {
+        deliver_signal(current, SIGSEGV_, SIGINFO_NIL);
+        return _EFAULT;
+    }
 
     lock(&current->sighand->lock, 0);
     sigset_t_ oldmask = ((sigset_t_) frame.extramask << 32) | frame.sc.oldmask;

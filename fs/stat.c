@@ -359,7 +359,7 @@ int generic_statat_full(struct fd *at, const char *path_raw, struct statbuf *sta
     // origin that `mount` resolves to: see find_mount_and_trim_path_seen.
     int seen_id;
     bool seen_root;
-    struct mount *mount = find_mount_and_trim_path_seen(path, NULL, &seen_id, &seen_root);
+    struct mount *mount = find_mount_and_trim_path_seen(path, NULL, &seen_id, &seen_root, NULL);
     if (mount == NULL)
         return _ENOENT;
     if (is_mount_root)

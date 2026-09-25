@@ -428,11 +428,12 @@ const struct fd_ops procfs_fdops = {
     .close = proc_close,
 };
 
-static ssize_t proc_readlink(struct mount *UNUSED(mount), const char *path, char *buf, size_t bufsize) {
+static ssize_t proc_readlink_common(const char *path, char *buf, size_t bufsize, bool shown) {
     struct proc_entry entry = {0};
     int err = proc_lookup(path, &entry);
     if (err < 0)
         return err;
+    entry.shown = shown;
     if (!S_ISLNK(proc_entry_mode(&entry))) {
         proc_entry_cleanup(&entry);
         return _EINVAL;
@@ -454,6 +455,15 @@ static ssize_t proc_readlink(struct mount *UNUSED(mount), const char *path, char
         bufsize = target_len;
     memcpy(buf, target, bufsize);
     return bufsize;
+}
+
+// The fs op, which fs/path.c calls to follow a link during a walk.
+static ssize_t proc_readlink(struct mount *UNUSED(mount), const char *path, char *buf, size_t bufsize) {
+    return proc_readlink_common(path, buf, bufsize, false);
+}
+
+ssize_t proc_readlink_shown(const char *path, char *buf, size_t bufsize) {
+    return proc_readlink_common(path, buf, bufsize, true);
 }
 
 static int proc_unlink(struct mount *UNUSED(mount), const char *path) {
