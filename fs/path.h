@@ -89,6 +89,15 @@ struct statbuf;
 // its own answer again -- do_unlinkat()'s `slashes:` label: EISDIR for a
 // directory, ENOENT for a name that is not there, ENOTDIR for anything else.
 #define N_SLASH_UNLINK 1024
+// N_DETACHED_OK: the walk may enter MOUNT_STAGING_DIR (kernel/fs.h), where
+// detached mounts are parked. No path the guest spells may: on Linux nothing
+// reaches a detached mount by name, only through a descriptor already in it.
+// So this is for walks that ARE that descriptor -- fsmount() opening the
+// mount it made, and a /proc/<pid>/{cwd,root,fd/N} link being followed, which
+// Linux jumps through to the file itself -- and fs/path.c sets it for itself
+// on a relative symlink inside a detached mount, whose target is re-walked
+// from the top.
+#define N_DETACHED_OK 2048
 
 // Normalizes the path specified and writes the result into the out buffer.
 //

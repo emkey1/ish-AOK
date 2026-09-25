@@ -90,6 +90,7 @@ inotify_bind_alias.c
 mount_bind_busy.c
 chroot_dotdot.c
 proc_net_socket_ids.c
+mount_lazy_detached.c
 tmpfs_nlink.c
 unix_dgram_cred.c
 unix_abstract_release.c

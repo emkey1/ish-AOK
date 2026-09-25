@@ -9,6 +9,7 @@
 #include "fs/fix_path.h"
 #include "emu/memory.h"
 #include <dirent.h>
+#include <string.h>
 #include <sqlite3.h>
 
 struct fs_info {
@@ -188,6 +189,8 @@ struct mount {
     // and mountinfo. df then tried to statfs a 0700 staging directory it could
     // not enter and printed "Permission denied" for a mount Linux never would
     // have shown. Listed again the moment move_mount gives it a real point.
+    // umount -l parks a mount that is still in use the same way, for good
+    // (mount_remove_lazy): see MOUNT_STAGING_DIR below.
     bool detached;
     // umount2(MNT_DETACH): taken out of the mount table immediately so no new
     // lookup can reach it, but not torn down until the last reference on it
@@ -226,8 +229,38 @@ struct mount {
     // reused (fs/mount.c). 0 for the static internal mounts no listing shows
     // (sockets and pipes, memfd); mount_id reports those as MOUNT_ID_HIDDEN.
     int id;
+
+    // Where a busy mount was attached before umount -l parked it at a
+    // staging point (mount_remove_lazy, fs/mount.c), and NULL otherwise. Its
+    // filesystem's umount hook is shown this point again when the last user
+    // lets go: iosfs keys a mount's bookmark by it.
+    const char *attached_point;
 };
 extern lock_t mounts_lock;
+
+// Where detached mounts are parked, at "/.ish-fsmount/<n>": a mount fsmount()
+// has made and move_mount() not yet placed, and a mount umount -l took out of
+// the tree while something was still using it. The string model of paths
+// needs SOME path to a mount -- a descriptor's path is its mount's point plus
+// the path inside it, and every relative lookup starts there -- so a
+// detached mount keeps one, at a point no other path can collide with. It is
+// not a directory on any filesystem, the guest cannot walk into it
+// (N_DETACHED_OK, fs/path.h), `..` at a staging point stays there, and a
+// path shown to the guest is from the mount's own root, as Linux shows it.
+#define MOUNT_STAGING_DIR "/.ish-fsmount"
+
+// If the first `len` bytes of the real-root path `path` start with a staging
+// point -- MOUNT_STAGING_DIR, a slash, and one more component -- the length
+// of that point, else 0.
+static inline size_t mount_staging_point_len(const char *path, size_t len) {
+    const size_t dir_len = sizeof(MOUNT_STAGING_DIR) - 1;
+    if (len <= dir_len + 1 || memcmp(path, MOUNT_STAGING_DIR "/", dir_len + 1) != 0)
+        return 0;
+    size_t end = dir_len + 1;
+    while (end < len && path[end] != '/')
+        end++;
+    return end > dir_len + 1 ? end : 0;
+}
 
 // The ID of a mount no mountinfo lists: on Linux, the rootfs that the root
 // mount itself is mounted on. It lies outside every process's root, so the
@@ -270,7 +303,8 @@ int mount_id(struct mount *mount);
 bool mount_path_through_bind(struct mount *bind, const struct mount *origin, char *path,
                              bool *detached);
 // Put the point of the mount with ID `id` in front of `path`, a path on it;
-// false if there is no such mount any more. Takes mounts_lock. See fs/mount.c.
+// false if there is no such mount any more, or it is detached. Takes
+// mounts_lock. See fs/mount.c.
 bool mount_path_by_id(int id, char *path);
 // The st_dev files on this mount report, i.e. mountinfo's device field; asks
 // the filesystem rather than assuming, since only backing-less filesystems use

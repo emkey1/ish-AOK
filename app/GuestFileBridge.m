@@ -1934,9 +1934,12 @@ static NSString *ISHForegroundDirectoryForTTY(int type, int number) {
 
     char buf[MAX_PATH + 1];
     memset(buf, 0, sizeof(buf));
-    int err = generic_getpath(pwd, buf);
+    // No directory to show for a cwd in a lazily unmounted mount: no path
+    // reaches it, as getcwd there says.
+    bool unreachable = false;
+    int err = generic_getpath_shown(pwd, buf, &unreachable);
     fd_close(pwd);
-    if (err < 0)
+    if (err < 0 || unreachable)
         return nil;
     // An unlinked cwd resolves to "" (the root fd itself also yields ""), and
     // both mean "/" to a browser that only ever shows absolute paths.

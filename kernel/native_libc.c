@@ -443,8 +443,15 @@ char *nlibc_realpath(const char *path, char *resolved) {
         return NULL;
     }
     char canonical[MAX_PATH];
-    err = generic_getpath(fd, canonical);
+    // The path a reader is shown. In a lazily unmounted mount no path names
+    // the file -- the lookup path is a private staging point (kernel/fs.h) --
+    // so this fails as getcwd there does, which is where a Linux realpath(3)
+    // of a relative name fails too.
+    bool unreachable = false;
+    err = generic_getpath_shown(fd, canonical, &unreachable);
     native_close(fd);
+    if (err >= 0 && unreachable)
+        err = _ENOENT;
     if (err < 0) {
         nlibc_fail(err);
         return NULL;
