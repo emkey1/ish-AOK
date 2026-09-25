@@ -1394,10 +1394,10 @@ static int ckpt_for_each_reservation(struct mem *mem,
         struct mem_lazy_map l = mem->lazy[i];
         if (l.start >= l.end)
             continue;
-        // Without mlockall's mark: the image does not carry an entry's lock
+        // Without the lock marks: the image does not carry an entry's lock
         // either, so a restored process holds no locks at all rather than
         // locks on only the pages that were still reserved.
-        int err = emit(ctx, l.start, l.end - l.start, l.flags & ~MEM_LAZY_LOCKED);
+        int err = emit(ctx, l.start, l.end - l.start, l.flags & ~MEM_LAZY_LOCK_MARKS);
         if (err < 0)
             return err;
     }

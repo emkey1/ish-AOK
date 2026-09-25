@@ -1026,13 +1026,16 @@ static void emit_pending_maps(struct proc_data *buf, struct mem_lazy_map *pendin
 // on 6.12; an anonymous mapping rejoins or not by Linux's VMA merge rules, and
 // here always does). The locked byte follows a mapping everywhere its
 // VM_LOCKED does -- stack growth, mremap, a copy-on-write copy -- so a locked
-// process's [stack] stays one line.
+// process's [stack] stays one line. The whole byte: an on-fault lock is a VMA
+// flag of its own (mlock2(MLOCK_ONFAULT) of the middle page of a locked file
+// mapping is three lines, and mlock of it one again).
 static bool maps_region_continues(const struct pt_entry *start_pt,
                                   const struct pt_entry *pt, page_t pages) {
     const unsigned kind = P_RWX | P_SHARED | P_GROWSDOWN | P_ANONYMOUS;
     if ((pt->flags & kind) != (start_pt->flags & kind))
         return false;
-    if ((pt->locked != 0) != (start_pt->locked != 0))
+    if (__atomic_load_n(&pt->locked, __ATOMIC_RELAXED) !=
+            __atomic_load_n(&start_pt->locked, __ATOMIC_RELAXED))
         return false;
     const struct data *data = start_pt->data;
     if (pt->data == data)
@@ -1298,14 +1301,16 @@ static void proc_smaps_region(struct proc_data *buf, struct mem *mem, page_t sta
         proc_printf(buf, "AnonHugePages:  %8d kB\n", 0);
         proc_printf(buf, "Swap:           %8"PRIu64" kB\n", swap_kb);
         proc_printf(buf, "Locked:         %8"PRIu64" kB\n", locked_kb);
-        // "lo" is VM_LOCKED, in the place Linux's flag order puts it after the
-        // ones printed here.
-        proc_printf(buf, "VmFlags:%s%s%s%s%s\n",
+        // "lo" is VM_LOCKED and "lf" VM_LOCKONFAULT, in the places Linux's
+        // flag order puts them after the ones printed here: " lo lf" when both
+        // (MEASURED on 6.12, "rd wr mr mw me lo lf ac sd").
+        proc_printf(buf, "VmFlags:%s%s%s%s%s%s\n",
                 start_pt->flags & P_READ ? " rd" : "",
                 start_pt->flags & P_WRITE ? " wr" : "",
                 start_pt->flags & P_EXEC ? " ex" : "",
                 shared ? " sh" : "",
-                start_pt->locked ? " lo" : "");
+                start_pt->locked ? " lo" : "",
+                start_pt->locked & PT_LOCKONFAULT ? " lf" : "");
     }
 
     if (totals != NULL) {
@@ -1351,12 +1356,13 @@ static void proc_smaps_reservation(struct proc_data *buf, const struct mem_lazy_
     for (size_t i = 0; i < sizeof(zero_rows) / sizeof(zero_rows[0]); i++)
         proc_printf(buf, "%s%8d kB\n", zero_rows[i], 0);
     // Locked, but with nothing resident, so Locked above is 0 all the same.
-    proc_printf(buf, "VmFlags:%s%s%s%s%s\n",
+    proc_printf(buf, "VmFlags:%s%s%s%s%s%s\n",
             l->flags & P_READ ? " rd" : "",
             l->flags & P_WRITE ? " wr" : "",
             l->flags & P_EXEC ? " ex" : "",
             shared ? " sh" : "",
-            l->flags & MEM_LAZY_LOCKED ? " lo" : "");
+            l->flags & MEM_LAZY_LOCKED ? " lo" : "",
+            l->flags & MEM_LAZY_LOCKONFAULT ? " lf" : "");
 }
 
 static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollup) {

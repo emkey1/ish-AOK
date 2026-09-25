@@ -300,9 +300,10 @@ static guest_addr_t shm_region_attach(struct mm *mm, struct shm_segment *segment
     // Under mlockall(MCL_FUTURE) an attach is locked and populated like any
     // other new mapping, and has to fit RLIMIT_MEMLOCK (Linux's do_shmat goes
     // through do_mmap and so def_flags; MEASURED on 6.12: VmLck and VmRSS rise
-    // by the segment, and shmdt takes it back out).
-    bool locked, populate;
-    int lock_err = mm_future_lock_check(mm, segment->pages, &locked, &populate);
+    // by the segment, and shmdt takes it back out) -- under MCL_ONFAULT too,
+    // "lo lf" and not populated.
+    uint8_t lock;
+    int lock_err = mm_future_lock_check(mm, segment->pages, &lock);
     if (lock_err < 0) {
         munmap(mapping, segment->alloc_size);
         return (guest_addr_t) lock_err;
@@ -343,8 +344,8 @@ static guest_addr_t shm_region_attach(struct mm *mm, struct shm_segment *segment
     struct pt_entry *entry = mem_pt(&mm->mem, page);
     if (entry != NULL && entry->data != NULL)
         entry->data->shared_key = (uintptr_t) segment;
-    if (locked)
-        mem_lock_new_range(&mm->mem, page, segment->pages, populate);
+    if (lock != 0)
+        mem_lock_new_range(&mm->mem, page, segment->pages, lock, true);
 
     struct shm_region *region = malloc(sizeof(*region));
     if (region == NULL) {

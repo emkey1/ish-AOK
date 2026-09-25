@@ -40,6 +40,27 @@
 //    limit mlock is ENOMEM (but re-locking locked pages is free), mlockall
 //    (MCL_CURRENT) ENOMEM, and mmap, mremap growth or an alias of a locked
 //    mapping EAGAIN, a brk a failure; a locked stack growing past it SIGSEGV.
+//
+// And mlock2(2), which AOK answered ENOSYS, with the on-fault lock Linux keeps
+// as VM_LOCKONFAULT beside VM_LOCKED ("lo lf" in smaps), also MEASURED on 6.12:
+//  - any flag but MLOCK_ONFAULT is EINVAL, before a hole's ENOMEM or the
+//    limit's EPERM; the flags are an int, so bits above 31 are ignored;
+//    mlock2(0) is mlock;
+//  - MLOCK_ONFAULT locks without populating: VmLck rises, Rss and Locked do
+//    not, until a page is touched; a PROT_NONE page is no ENOMEM, a hole is;
+//  - mlock over it makes it plain and populates it, MLOCK_ONFAULT over a plain
+//    lock keeps what is resident, and neither moves VmLck; the lf flag splits
+//    maps lines where it changes, and mremap across that is EFAULT;
+//  - the growth of an on-fault mapping by mremap (in place, moved or an
+//    alias, anonymous or file) is locked "lo lf" and not populated, nor is one
+//    made writable by mprotect; madvise refuses it; a fork's child has neither;
+//  - mlockall(MCL_CURRENT|MCL_ONFAULT) makes every mapping "lo lf", a
+//    populated one staying resident, populates nothing, and a grown stack,
+//    mremap growth or mprotect grant stays unpopulated; MCL_CURRENT after it
+//    makes them plain and populates them; MCL_ONFAULT alone is EINVAL;
+//  - under MCL_FUTURE|MCL_ONFAULT a new anonymous, MAP_LOCKED, file or
+//    PROT_NONE mapping, a brk and a shmat are "lo lf" and not resident, and a
+//    later MCL_FUTURE alone leaves them so.
 #define _GNU_SOURCE
 #define _FILE_OFFSET_BITS 64
 
@@ -66,6 +87,18 @@ _Static_assert(sizeof(off_t) == 8, "the /proc/self/mem offsets need a 64-bit off
 // Older headers (the i386 root's musl 1.1.24) predate these.
 #ifndef MCL_ONFAULT
 #define MCL_ONFAULT 4
+#endif
+#ifndef MLOCK_ONFAULT
+#define MLOCK_ONFAULT 1
+#endif
+#ifndef SYS_mlock2
+#if defined(__x86_64__)
+#define SYS_mlock2 325
+#elif defined(__i386__)
+#define SYS_mlock2 376
+#else
+#define SYS_mlock2 284      // aarch64 and riscv64, asm-generic
+#endif
 #endif
 #ifndef MADV_COLD
 #define MADV_COLD 20
@@ -164,7 +197,8 @@ struct region {
     int found;
     unsigned long start, end, offset;
     long rss, pss, locked, size;
-    int lo;
+    int lo, lf;
+    int lolf;       // " lo lf", in that order, as Linux prints the two
     char name[48];
 };
 
@@ -180,10 +214,18 @@ static void region_field(struct region *r, const char *line) {
     else if (strncmp(line, "VmFlags:", 8) == 0) {
         const char *nl = strchr(line, '\n');
         size_t len = nl != NULL ? (size_t) (nl - line) : strlen(line);
-        for (size_t i = 8; i + 2 <= len; i++)
-            if (line[i - 1] == ' ' && line[i] == 'l' && line[i + 1] == 'o' &&
-                    (i + 2 == len || line[i + 2] == ' '))
+        for (size_t i = 8; i + 2 <= len; i++) {
+            if (line[i - 1] != ' ' || line[i] != 'l' || (i + 2 < len && line[i + 2] != ' '))
+                continue;
+            if (line[i + 1] == 'o') {
                 r->lo = 1;
+                if (i + 5 <= len && line[i + 3] == 'l' && line[i + 4] == 'f' &&
+                        (i + 5 == len || line[i + 5] == ' '))
+                    r->lolf = 1;
+            } else if (line[i + 1] == 'f') {
+                r->lf = 1;
+            }
+        }
     }
 }
 
@@ -776,17 +818,386 @@ static void map_locked_flag(int fd) {
     check("MAP_LOCKED: munmapped, back", vmlck() == l0);
 }
 
+// ---- mlock2(2) and the on-fault lock ------------------------------------------
+//
+// Through syscall(2): a C library's mlock2 may map flags 0 onto mlock, and the
+// flag checks here are the kernel's.
+
+static long mlock2_raw(const void *addr, size_t len, unsigned long flags) {
+    return syscall(SYS_mlock2, addr, len, flags);
+}
+
+static void mlock2_flags(void) {
+    char label[200];
+    char *p = guarded(2, PROT_READ | PROT_WRITE);
+    char *h = guarded(3, PROT_READ | PROT_WRITE);
+    check("mlock2: set up", p != NULL && h != NULL && munmap(h + PG, PG) == 0);
+    if (p == NULL || h == NULL)
+        return;
+    long l0 = vmlck();
+    static const unsigned long bad[] = {2, 3, 4, 0x80000000ul, (unsigned long) -1};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        errno = 0;
+        long r = mlock2_raw(p, PG, bad[i]);
+        int err = errno;
+        snprintf(label, sizeof label, "mlock2: flags %#lx is EINVAL and locks nothing "
+                 "(r %ld errno %d VmLck %+ld)", bad[i], r, err, vmlck() - l0);
+        check(label, r == -1 && err == EINVAL && vmlck() == l0);
+    }
+    errno = 0;
+    long r = mlock2_raw(h + PG, PG, 2);
+    int err = errno;
+    snprintf(label, sizeof label, "mlock2: a bad flag is EINVAL before a hole's ENOMEM "
+             "(r %ld errno %d)", r, err);
+    check(label, r == -1 && err == EINVAL);
+    errno = 0;
+    r = mlock2_raw(h + PG, PG, MLOCK_ONFAULT);
+    err = errno;
+    snprintf(label, sizeof label, "mlock2: MLOCK_ONFAULT of a hole is ENOMEM (r %ld errno %d)", r, err);
+    check(label, r == -1 && err == ENOMEM && vmlck() == l0);
+    check("mlock2: of 0 bytes is 0", mlock2_raw(p, 0, MLOCK_ONFAULT) == 0 && vmlck() == l0);
+    // Flags 0 is mlock: locked and populated.
+    r = mlock2_raw(p, 2 * PG, 0);
+    struct region reg = smaps_region(p);
+    snprintf(label, sizeof label, "mlock2: flags 0 locks and populates, as mlock does "
+             "(r %ld VmLck %+ld lo %d lf %d Rss %ld)", r, vmlck() - l0, reg.lo, reg.lf, reg.rss);
+    check(label, r == 0 && vmlck() - l0 == 8 && reg.lo && !reg.lf && reg.rss == 8);
+    munlock(p, 2 * PG);
+    if (sizeof(long) == 8) {
+        // The flags are an int: the upper half of the register is not read.
+        unsigned long high = (unsigned long) 1 << (sizeof(long) == 8 ? 32 : 0);
+        r = mlock2_raw(p, PG, high | MLOCK_ONFAULT);
+        reg = smaps_region(p);
+        snprintf(label, sizeof label, "mlock2: flags (1 << 32) | MLOCK_ONFAULT is MLOCK_ONFAULT "
+                 "(r %ld lo %d lf %d)", r, reg.lo, reg.lf);
+        check(label, r == 0 && reg.lolf);
+        munlock(p, PG);
+        r = mlock2_raw(p, PG, high);
+        reg = smaps_region(p);
+        snprintf(label, sizeof label, "mlock2: flags 1 << 32 is flags 0 (r %ld lo %d lf %d)",
+                 r, reg.lo, reg.lf);
+        check(label, r == 0 && reg.lo && !reg.lf);
+        munlock(p, PG);
+        errno = 0;
+        r = mlock2_raw((void *) (uintptr_t) -PG, 2 * PG, MLOCK_ONFAULT);
+        err = errno;
+        snprintf(label, sizeof label, "mlock2: a range that wraps is EINVAL (r %ld errno %d)", r, err);
+        check(label, r == -1 && err == EINVAL);
+    }
+    check("mlock2: nothing left locked", vmlck() == l0);
+    unguard(p, 2);
+    munmap(h - PG, 5 * PG);
+}
+
+static void onfault_lock(int fd) {
+    char label[240];
+    long l0 = vmlck();
+    char *a = guarded(4, PROT_READ | PROT_WRITE);
+    check("onfault: 4 pages", a != NULL);
+    if (a == NULL)
+        return;
+    long r = mlock2_raw(a, 4 * PG, MLOCK_ONFAULT);
+    struct region reg = smaps_region(a);
+    int n = maps_lines(a, 4 * PG, NULL, 0);
+    snprintf(label, sizeof label, "onfault: MLOCK_ONFAULT locks, populates nothing, and is \"lo lf\" "
+             "(r %ld VmLck %+ld Rss %ld Locked %ld lo %d lf %d lines %d)", r, vmlck() - l0, reg.rss,
+             reg.locked, reg.lo, reg.lf, n);
+    check(label, r == 0 && vmlck() - l0 == 16 && reg.rss == 0 && reg.locked == 0 && reg.lolf &&
+          n == 1);
+    a[0] = 1;
+    a[2 * PG] = 1;
+    reg = smaps_region(a);
+    snprintf(label, sizeof label, "onfault: the pages written come in, locked "
+             "(Rss %ld Locked %ld VmLck %+ld lf %d)", reg.rss, reg.locked, vmlck() - l0, reg.lf);
+    check(label, reg.rss == 8 && reg.locked == 8 && vmlck() - l0 == 16 && reg.lolf);
+    r = mlock(a, 4 * PG);
+    reg = smaps_region(a);
+    snprintf(label, sizeof label, "onfault: mlock makes it a plain lock and populates it "
+             "(r %ld VmLck %+ld Rss %ld Locked %ld lo %d lf %d)", r, vmlck() - l0, reg.rss,
+             reg.locked, reg.lo, reg.lf);
+    check(label, r == 0 && vmlck() - l0 == 16 && reg.rss == 16 && reg.locked == 16 && reg.lo &&
+          !reg.lf);
+    r = mlock2_raw(a, 4 * PG, MLOCK_ONFAULT);
+    reg = smaps_region(a);
+    snprintf(label, sizeof label, "onfault: MLOCK_ONFAULT over a plain lock keeps what is resident "
+             "(r %ld VmLck %+ld Rss %ld lf %d)", r, vmlck() - l0, reg.rss, reg.lf);
+    check(label, r == 0 && vmlck() - l0 == 16 && reg.rss == 16 && reg.lolf);
+    r = mlock2_raw(a + PG, PG, 0);
+    n = maps_lines(a, 4 * PG, NULL, 0);
+    struct region second = smaps_region(a + PG);
+    snprintf(label, sizeof label, "onfault: a plain lock of the second page is a region of its own "
+             "(r %ld lines %d VmLck %+ld lo %d lf %d)", r, n, vmlck() - l0, second.lo, second.lf);
+    check(label, r == 0 && n == 3 && vmlck() - l0 == 16 && second.lo && !second.lf &&
+          smaps_region(a).lolf && smaps_region(a + 2 * PG).lolf);
+    r = munlock(a, 4 * PG);
+    reg = smaps_region(a);
+    snprintf(label, sizeof label, "onfault: munlock takes both off (r %ld VmLck %+ld lo %d lf %d)",
+             r, vmlck() - l0, reg.lo, reg.lf);
+    check(label, r == 0 && vmlck() == l0 && !reg.lo && !reg.lf && !smaps_region(a + PG).lo &&
+          !smaps_region(a + 2 * PG).lf);
+    unguard(a, 4);
+
+    // A file mapping: an on-fault lock is a boundary of its own.
+    char *m = mmap(NULL, 3 * PG, PROT_READ, MAP_PRIVATE, fd, 0);
+    check("onfault: 3 file pages", m != MAP_FAILED);
+    if (m != MAP_FAILED) {
+        unsigned long offs[4] = {0};
+        mlock(m, 3 * PG);
+        r = mlock2_raw(m + PG, PG, MLOCK_ONFAULT);
+        n = maps_lines(m, 3 * PG, offs, 4);
+        snprintf(label, sizeof label, "onfault: MLOCK_ONFAULT of the middle of a locked file mapping "
+                 "is 3 lines at 0 0x1000 0x2000, the middle \"lo lf\" (r %ld lines %d %#lx %#lx %#lx)",
+                 r, n, offs[0], offs[1], offs[2]);
+        check(label, r == 0 && n == 3 && offs[0] == 0 && offs[1] == PG && offs[2] == 2 * PG &&
+              smaps_region(m).lo && !smaps_region(m).lf && smaps_region(m + PG).lolf &&
+              smaps_region(m + 2 * PG).lo && !smaps_region(m + 2 * PG).lf && vmlck() - l0 == 12);
+        r = mlock(m + PG, PG);
+        n = maps_lines(m, 3 * PG, NULL, 0);
+        snprintf(label, sizeof label, "onfault: mlock of the middle joins them again (r %ld lines %d)",
+                 r, n);
+        check(label, r == 0 && n == 1 && !smaps_region(m).lf);
+        munmap(m, 3 * PG);
+        m = mmap(NULL, 3 * PG, PROT_READ, MAP_PRIVATE, fd, 0);
+        r = m == MAP_FAILED ? -1 : mlock2_raw(m, 3 * PG, MLOCK_ONFAULT);
+        reg = m == MAP_FAILED ? (struct region) {0} : smaps_region(m);
+        snprintf(label, sizeof label, "onfault: a fresh file mapping is locked and not read in "
+                 "(r %ld VmLck %+ld Rss %ld lf %d)", r, vmlck() - l0, reg.rss, reg.lf);
+        check(label, r == 0 && vmlck() - l0 == 12 && reg.rss == 0 && reg.lolf);
+        if (m != MAP_FAILED)
+            munmap(m, 3 * PG);
+    }
+    check("onfault: the file mappings gone, VmLck back", vmlck() == l0);
+
+    // Nothing is populated, so a PROT_NONE page stops nothing.
+    char *g = guarded(3, PROT_NONE);
+    check("onfault: [rw, none, rw]", g != NULL &&
+          mprotect(g, PG, PROT_READ | PROT_WRITE) == 0 &&
+          mprotect(g + 2 * PG, PG, PROT_READ | PROT_WRITE) == 0);
+    if (g != NULL) {
+        errno = 0;
+        r = mlock2_raw(g, 3 * PG, MLOCK_ONFAULT);
+        int err = errno;
+        struct region first = smaps_region(g), third = smaps_region(g + 2 * PG);
+        snprintf(label, sizeof label, "onfault: MLOCK_ONFAULT of [rw, none, rw] is 0, all three "
+                 "locked, none resident (r %ld errno %d VmLck %+ld Rss %ld %ld)", r, err,
+                 vmlck() - l0, first.rss, third.rss);
+        check(label, r == 0 && vmlck() - l0 == 12 && first.rss == 0 && third.rss == 0 &&
+              first.lolf && smaps_region(g + PG).lolf && third.lolf);
+        errno = 0;
+        r = mlock(g, 3 * PG);
+        err = errno;
+        first = smaps_region(g);
+        third = smaps_region(g + 2 * PG);
+        struct region middle = smaps_region(g + PG);
+        snprintf(label, sizeof label, "onfault: mlock of it is ENOMEM, all three plain, the first "
+                 "populated (r %ld errno %d Rss %ld %ld lf %d %d %d)", r, err, first.rss, third.rss,
+                 first.lf, middle.lf, third.lf);
+        check(label, r == -1 && err == ENOMEM && vmlck() - l0 == 12 && first.rss == 4 &&
+              third.rss == 0 && first.lo && middle.lo && third.lo && !first.lf && !middle.lf &&
+              !third.lf);
+        munlock(g, 3 * PG);
+        unguard(g, 3);
+    }
+
+    // Nor does making it writable populate it.
+    char *nn = guarded(2, PROT_NONE);
+    if (nn != NULL) {
+        r = mlock2_raw(nn, 2 * PG, MLOCK_ONFAULT);
+        snprintf(label, sizeof label, "onfault: MLOCK_ONFAULT of PROT_NONE is 0 (r %ld VmLck %+ld)",
+                 r, vmlck() - l0);
+        check(label, r == 0 && vmlck() - l0 == 8 && smaps_region(nn).lolf);
+        mprotect(nn, 2 * PG, PROT_READ);
+        int w = mprotect(nn, 2 * PG, PROT_READ | PROT_WRITE);
+        reg = smaps_region(nn);
+        snprintf(label, sizeof label, "onfault: made readable, then writable, it stays unpopulated "
+                 "(mprotect %d Rss %ld Locked %ld lo %d lf %d)", w, reg.rss, reg.locked, reg.lo,
+                 reg.lf);
+        check(label, w == 0 && reg.rss == 0 && reg.locked == 0 && reg.lolf && vmlck() - l0 == 8);
+        nn[0] = 1;
+        reg = smaps_region(nn);
+        snprintf(label, sizeof label, "onfault: a write brings in its page (Rss %ld Locked %ld)",
+                 reg.rss, reg.locked);
+        check(label, nn[0] == 1 && reg.rss == 4 && reg.locked == 4 && reg.lolf);
+        munlock(nn, 2 * PG);
+        unguard(nn, 2);
+    }
+
+    // A hole: the pages before it are locked, on fault.
+    char *h = guarded(3, PROT_READ | PROT_WRITE);
+    if (h != NULL && munmap(h + PG, PG) == 0) {
+        errno = 0;
+        r = mlock2_raw(h, 3 * PG, MLOCK_ONFAULT);
+        int err = errno;
+        snprintf(label, sizeof label, "onfault: over a hole it is ENOMEM, the page before it locked "
+                 "(r %ld errno %d VmLck %+ld)", r, err, vmlck() - l0);
+        check(label, r == -1 && err == ENOMEM && vmlck() - l0 == 4 && smaps_region(h).lolf &&
+              !smaps_region(h + 2 * PG).lo);
+        munlock(h, PG);
+        munmap(h - PG, 5 * PG);
+    }
+
+    // madvise refuses it, and a fork's child has no lock of either kind.
+    char *d = guarded(2, PROT_READ | PROT_WRITE);
+    if (d != NULL) {
+        d[0] = 5;
+        mlock2_raw(d, 2 * PG, MLOCK_ONFAULT);
+        errno = 0;
+        r = madvise(d, 2 * PG, MADV_DONTNEED);
+        int err = errno;
+        snprintf(label, sizeof label, "onfault: MADV_DONTNEED on it is EINVAL, and the page keeps its "
+                 "byte (r %ld errno %d byte %d)", r, err, d[0]);
+        check(label, r == -1 && err == EINVAL && d[0] == 5);
+        int pipefd[2];
+        if (pipe(pipefd) == 0) {
+            fflush(NULL);
+            pid_t pid = fork();
+            if (pid == 0) {
+                struct region cr = smaps_region(d);
+                char ok = vmlck() == 0 && !cr.lo && !cr.lf;
+                if (write(pipefd[1], &ok, 1) != 1)
+                    _exit(2);
+                _exit(0);
+            }
+            close(pipefd[1]);
+            char ok = 0;
+            ssize_t got = read(pipefd[0], &ok, 1);
+            close(pipefd[0]);
+            waitpid(pid, NULL, 0);
+            check("onfault: a fork's child holds no lock, and no \"lf\"", got == 1 && ok);
+        }
+        munlock(d, 2 * PG);
+        unguard(d, 2);
+    }
+    check("onfault: back where it was", vmlck() == l0);
+}
+
+// The growth of an on-fault mapping is locked the same way and populated not
+// at all, where a plain lock's growth is populated.
+static void onfault_mremap(int fd) {
+    char label[240];
+    long l0 = vmlck();
+    char *room = mmap(NULL, 8 * PG, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    check("onfault mremap: reserve room", room != MAP_FAILED);
+    if (room == MAP_FAILED)
+        return;
+    munmap(room, 8 * PG);
+    char *m = mmap(room, 2 * PG, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    long r = m == room ? mlock2_raw(m, 2 * PG, MLOCK_ONFAULT) : -1;
+    check("onfault mremap: 2 pages locked on fault", r == 0 && vmlck() - l0 == 8);
+    if (r != 0)
+        return;
+    m[0] = 1;
+    char *g = mremap(m, 2 * PG, 4 * PG, 0);
+    struct region reg = g == MAP_FAILED ? (struct region) {0} : smaps_region(g);
+    snprintf(label, sizeof label, "onfault mremap: grown in place 2 -> 4, locked, only the written "
+             "page resident (VmLck %+ld lo %d lf %d Rss %ld Locked %ld size %ld)", vmlck() - l0,
+             reg.lo, reg.lf, reg.rss, reg.locked, reg.size);
+    check(label, g == m && vmlck() - l0 == 16 && reg.lolf && reg.rss == 4 && reg.locked == 4 &&
+          reg.end - reg.start == 4 * PG);
+    if (g == MAP_FAILED)
+        return;
+    char *blocker = mmap(g + 4 * PG, PG, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    char *moved = mremap(g, 4 * PG, 6 * PG, MREMAP_MAYMOVE);
+    reg = moved == MAP_FAILED ? (struct region) {0} : smaps_region(moved);
+    snprintf(label, sizeof label, "onfault mremap: moved and grown 4 -> 6, the same "
+             "(VmLck %+ld lo %d lf %d Rss %ld size %ld)", vmlck() - l0, reg.lo, reg.lf, reg.rss,
+             reg.size);
+    check(label, moved != MAP_FAILED && moved != g && vmlck() - l0 == 24 && reg.lolf &&
+          reg.rss == 4 && reg.end - reg.start == 6 * PG);
+    if (blocker != MAP_FAILED)
+        munmap(blocker, PG);
+    if (moved == MAP_FAILED)
+        return;
+    char *dst = guarded(10, PROT_NONE);
+    char *fixed = dst == NULL ? MAP_FAILED :
+            mremap(moved, 6 * PG, 10 * PG, MREMAP_MAYMOVE | MREMAP_FIXED, dst);
+    reg = fixed == MAP_FAILED ? (struct region) {0} : smaps_region(fixed);
+    snprintf(label, sizeof label, "onfault mremap: MREMAP_FIXED and grown 6 -> 10, the same "
+             "(VmLck %+ld lo %d lf %d Rss %ld size %ld)", vmlck() - l0, reg.lo, reg.lf, reg.rss,
+             reg.size);
+    check(label, fixed == dst && vmlck() - l0 == 40 && reg.lolf && reg.rss == 4 &&
+          reg.start == (unsigned long) (uintptr_t) dst && reg.end - reg.start == 10 * PG);
+    if (fixed != MAP_FAILED)
+        unguard(fixed, 10);
+    check("onfault mremap: unmapped, VmLck back", vmlck() == l0);
+
+    // Across the boundary between a plain lock and an on-fault one it is two
+    // of Linux's VMAs: EFAULT.
+    char *a = guarded(3, PROT_READ | PROT_WRITE);
+    if (a != NULL) {
+        mlock(a, 3 * PG);
+        mlock2_raw(a + PG, 2 * PG, MLOCK_ONFAULT);
+        errno = 0;
+        char *x = mremap(a, 3 * PG, 5 * PG, MREMAP_MAYMOVE);
+        int err = errno;
+        snprintf(label, sizeof label, "onfault mremap: across a plain lock's boundary with an "
+                 "on-fault one is EFAULT (%s errno %d)", x == MAP_FAILED ? "failed" : "moved", err);
+        check(label, x == MAP_FAILED && err == EFAULT);
+        if (x != MAP_FAILED) {
+            munmap(x, 5 * PG);
+        } else {
+            munlock(a, 3 * PG);
+            unguard(a, 3);
+        }
+    }
+
+    // An alias of a shared one is on-fault locked too.
+    char *s = mmap(NULL, 2 * PG, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (s != MAP_FAILED && mlock2_raw(s, 2 * PG, MLOCK_ONFAULT) == 0) {
+        long l1 = vmlck();
+        char *alias = mremap(s, 0, 2 * PG, MREMAP_MAYMOVE);
+        reg = alias == MAP_FAILED ? (struct region) {0} : smaps_region(alias);
+        snprintf(label, sizeof label, "onfault mremap: an alias of a shared one is \"lo lf\", and "
+                 "counted (VmLck %+ld lo %d lf %d Rss %ld)", vmlck() - l1, reg.lo, reg.lf, reg.rss);
+        check(label, alias != MAP_FAILED && vmlck() - l1 == 8 && reg.lolf && reg.rss == 0);
+        if (alias != MAP_FAILED)
+            munmap(alias, 2 * PG);
+    } else {
+        check("onfault mremap: 2 shared pages locked on fault", 0);
+    }
+    if (s != MAP_FAILED)
+        munmap(s, 2 * PG);
+
+    // A file mapping's growth: read in for a plain lock, not for this one.
+    char *f = mmap(NULL, 2 * PG, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (f != MAP_FAILED && mlock2_raw(f, 2 * PG, MLOCK_ONFAULT) == 0) {
+        char *fg = mremap(f, 2 * PG, 6 * PG, MREMAP_MAYMOVE);
+        reg = fg == MAP_FAILED ? (struct region) {0} : smaps_region(fg);
+        snprintf(label, sizeof label, "onfault mremap: a file mapping grown 2 -> 6 is locked, "
+                 "nothing read in (VmLck %+ld lo %d lf %d Rss %ld size %ld)", vmlck() - l0, reg.lo,
+                 reg.lf, reg.rss, reg.size);
+        check(label, fg != MAP_FAILED && vmlck() - l0 == 24 && reg.lolf && reg.rss == 0 &&
+              reg.end - reg.start == 6 * PG);
+        munmap(fg == MAP_FAILED ? f : fg, fg == MAP_FAILED ? 2 * PG : 6 * PG);
+    } else {
+        check("onfault mremap: 2 file pages locked on fault", 0);
+    }
+    f = mmap(NULL, 2 * PG, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (f != MAP_FAILED && mlock(f, 2 * PG) == 0) {
+        char *fg = mremap(f, 2 * PG, 6 * PG, MREMAP_MAYMOVE);
+        reg = fg == MAP_FAILED ? (struct region) {0} : smaps_region(fg);
+        snprintf(label, sizeof label, "onfault mremap: grown with a plain lock, it is all read in "
+                 "(VmLck %+ld lo %d lf %d Rss %ld)", vmlck() - l0, reg.lo, reg.lf, reg.rss);
+        check(label, fg != MAP_FAILED && vmlck() - l0 == 24 && reg.lo && !reg.lf && reg.rss == 24);
+        munmap(fg == MAP_FAILED ? f : fg, fg == MAP_FAILED ? 2 * PG : 6 * PG);
+    } else {
+        check("onfault mremap: 2 file pages locked", 0);
+    }
+    check("onfault mremap: all gone again", vmlck() == l0);
+}
+
 // ---- mlockall ----------------------------------------------------------------
 
 // VmLck is the sum of the "lo" regions, and every region but a special one is
-// "lo" after mlockall(MCL_CURRENT).
-static void check_all_locked(const char *when) {
+// "lo" after mlockall(MCL_CURRENT) -- and "lf" as well exactly when `onfault`,
+// after mlockall(MCL_CURRENT|MCL_ONFAULT).
+static void check_all_locked(const char *when, int onfault) {
     char label[240];
     long lck = vmlck();
     read_proc("/proc/self/smaps");
     long sum = 0;
-    int unlocked = 0, special_locked = 0;
-    char first_unlocked[64] = "";
+    int unlocked = 0, special_locked = 0, wrong_lf = 0;
+    char first_unlocked[64] = "", first_wrong_lf[64] = "";
     struct region r = {0};
     int have = 0;
     int droppable = 0;
@@ -798,10 +1209,13 @@ static void check_all_locked(const char *when) {
             if (r.lo)
                 sum += (long) ((r.end - r.start) / 1024);
             if (special_name(r.name))
-                special_locked += r.lo;
+                special_locked += r.lo || r.lf;
             else if (!r.lo && !droppable) {
                 if (unlocked++ == 0)
                     snprintf(first_unlocked, sizeof first_unlocked, "%#lx %s", r.start, r.name);
+            } else if (r.lo && (onfault ? !r.lolf : r.lf)) {
+                if (wrong_lf++ == 0)
+                    snprintf(first_wrong_lf, sizeof first_wrong_lf, "%#lx %s", r.start, r.name);
             }
             have = 0;
         }
@@ -825,6 +1239,9 @@ static void check_all_locked(const char *when) {
     snprintf(label, sizeof label, "%s: every region but the special ones is \"lo\" "
              "(%d not, first %s)", when, unlocked, first_unlocked);
     check(label, unlocked == 0);
+    snprintf(label, sizeof label, "%s: every one of them is %s (%d not, first %s)", when,
+             onfault ? "\"lo lf\"" : "without \"lf\"", wrong_lf, first_wrong_lf);
+    check(label, wrong_lf == 0);
     snprintf(label, sizeof label, "%s: no special mapping is \"lo\" (%d are)", when, special_locked);
     check(label, special_locked == 0);
     snprintf(label, sizeof label, "%s: VmLck is the sum of the \"lo\" regions (%ld kB, sum %ld kB)",
@@ -850,7 +1267,7 @@ static void mlockall_current_child(void) {
     check(label, r == 0);
     if (r != 0)
         return;
-    check_all_locked("mlockall");
+    check_all_locked("mlockall", 0);
     struct region st0 = {0};
     read_proc("/proc/self/maps");
     long l0 = vmlck(), v0 = status_kb("VmSize");
@@ -879,10 +1296,128 @@ static void mlockall_current_child(void) {
     // writable page, which copies it; AOK's leaves it shared.
     check(label, l1 - l0 >= 400 && l1 - l0 == v1 - v0 && lines == 1 && st.lo &&
           st.locked > 0 && st.locked <= st.rss);
-    check_all_locked("mlockall, after stack growth");
+    check_all_locked("mlockall, after stack growth", 0);
     check("munlockall", munlockall() == 0);
     snprintf(label, sizeof label, "munlockall: VmLck 0 (%ld)", vmlck());
     check(label, vmlck() == 0);
+}
+
+// Would mlockall(MCL_CURRENT) fit RLIMIT_MEMLOCK now? It is ENOMEM otherwise.
+static int mlockall_current_fits(void) {
+    struct rlimit rl;
+    getrlimit(RLIMIT_MEMLOCK, &rl);
+    return privileged() || rl.rlim_cur == RLIM_INFINITY ||
+           (unsigned long) status_kb("VmSize") * 1024 <= rl.rlim_cur;
+}
+
+// The one [stack] region, or found == 0 if maps has more or fewer.
+static struct region stack_region(int *lines) {
+    unsigned long start = 0;
+    *lines = 0;
+    read_proc("/proc/self/maps");
+    for (char *line = procbuf; line != NULL && *line != '\0'; ) {
+        unsigned long s, e, off;
+        const char *name;
+        if (parse_header(line, &s, &e, &off, &name) && strncmp(name, "[stack]", 7) == 0) {
+            (*lines)++;
+            start = s;
+        }
+        line = strchr(line, '\n');
+        if (line != NULL)
+            line++;
+    }
+    return *lines == 1 ? smaps_region((void *) (uintptr_t) start) : (struct region) {0};
+}
+
+// mlockall(MCL_CURRENT|MCL_ONFAULT): every mapping locked on fault, nothing
+// brought in, and nothing brought in when a mapping grows or opens up either,
+// until a plain MCL_CURRENT makes every lock plain and populates.
+static void mlockall_onfault_child(void) {
+    char label[240];
+    char *fresh = guarded(8, PROT_READ | PROT_WRITE);
+    char *pre = guarded(4, PROT_READ | PROT_WRITE);
+    char *none = guarded(2, PROT_NONE);
+    if (fresh == NULL || pre == NULL || none == NULL || mlock(pre, 4 * PG) != 0) {
+        check("current|onfault: set up", 0);
+        return;
+    }
+    int fits = mlockall_current_fits();
+    long size = status_kb("VmSize");
+    errno = 0;
+    int r = mlockall(MCL_CURRENT | MCL_ONFAULT);
+    int err = errno;
+    if (!fits) {
+        snprintf(label, sizeof label, "current|onfault: VmSize %ld kB over RLIMIT_MEMLOCK is ENOMEM "
+                 "(r %d errno %d)", size, r, err);
+        check(label, r == -1 && err == ENOMEM);
+        return;
+    }
+    snprintf(label, sizeof label, "mlockall(MCL_CURRENT|MCL_ONFAULT) (r %d errno %d)", r, err);
+    check(label, r == 0);
+    if (r != 0)
+        return;
+    check_all_locked("current|onfault", 1);
+    struct region f = smaps_region(fresh), p = smaps_region(pre), n = smaps_region(none);
+    snprintf(label, sizeof label, "current|onfault: an untouched mapping stays out (Rss %ld lf %d), "
+             "one mlock populated stays in (Rss %ld Locked %ld lf %d), PROT_NONE the same (lf %d)",
+             f.rss, f.lf, p.rss, p.locked, p.lf, n.lf);
+    check(label, f.lolf && f.rss == 0 && p.lolf && p.rss == 16 && p.locked == 16 && n.lolf);
+    // MCL_CURRENT alone: what is mapped after it is not locked.
+    char *later = guarded(4, PROT_READ | PROT_WRITE);
+    struct region lr = later == NULL ? (struct region) {0} : smaps_region(later);
+    check("current|onfault: a mapping made after it is not locked", later != NULL && !lr.lo && !lr.lf);
+    // Growth brings nothing in, nor does a write grant.
+    long l0 = vmlck();
+    char *dst = guarded(16, PROT_NONE);
+    char *grown = dst == NULL ? MAP_FAILED :
+            mremap(fresh, 8 * PG, 16 * PG, MREMAP_MAYMOVE | MREMAP_FIXED, dst);
+    struct region g = grown == MAP_FAILED ? (struct region) {0} : smaps_region(grown);
+    snprintf(label, sizeof label, "current|onfault: mremap grows a mapping locked, populating "
+             "nothing (VmLck %+ld lo %d lf %d Rss %ld size %ld)", vmlck() - l0, g.lo, g.lf, g.rss,
+             g.size);
+    check(label, grown == dst && vmlck() - l0 == 32 && g.lolf && g.rss == 0 &&
+          g.end - g.start == 16 * PG);
+    int w = mprotect(none, 2 * PG, PROT_READ | PROT_WRITE);
+    n = smaps_region(none);
+    snprintf(label, sizeof label, "current|onfault: PROT_NONE made writable is not populated "
+             "(mprotect %d lo %d lf %d Rss %ld)", w, n.lo, n.lf, n.rss);
+    check(label, w == 0 && n.lolf && n.rss == 0);
+    // The stack grows locked on fault, and stays one region.
+    long l1 = vmlck(), v1 = status_kb("VmSize");
+    int d = deep(200);
+    long l2 = vmlck(), v2 = status_kb("VmSize");
+    int lines;
+    struct region st = stack_region(&lines);
+    snprintf(label, sizeof label, "current|onfault: the stack grows locked on fault (deep %d, "
+             "VmLck %+ld, VmSize %+ld, %d [stack] lines, lo %d lf %d)", d, l2 - l1, v2 - v1, lines,
+             st.lo, st.lf);
+    check(label, l2 - l1 >= 400 && l2 - l1 == v2 - v1 && lines == 1 && st.lolf);
+    // A plain MCL_CURRENT makes every lock plain and populates.
+    if (!mlockall_current_fits())
+        return;
+    r = mlockall(MCL_CURRENT);
+    snprintf(label, sizeof label, "current|onfault: then mlockall(MCL_CURRENT) (r %d)", r);
+    check(label, r == 0);
+    check_all_locked("current after current|onfault", 0);
+    g = smaps_region(grown);
+    n = smaps_region(none);
+    snprintf(label, sizeof label, "current after current|onfault: the grown mapping and the one made "
+             "writable are populated now (Rss %ld of %ld, %ld of %ld)", g.rss,
+             (long) ((g.end - g.start) / 1024), n.rss, (long) ((n.end - n.start) / 1024));
+    check(label, g.lo && !g.lf && g.rss == 64 && n.lo && !n.lf && n.rss == 8);
+    r = mlockall(MCL_CURRENT | MCL_ONFAULT);
+    g = smaps_region(grown);
+    snprintf(label, sizeof label, "current|onfault again: \"lo lf\" once more, and what is resident "
+             "stays so (r %d lf %d Rss %ld)", r, g.lf, g.rss);
+    check(label, r == 0 && g.lolf && g.rss == 64);
+    check("current|onfault: munlockall", munlockall() == 0 && vmlck() == 0);
+    g = smaps_region(grown);
+    check("current|onfault: munlockall takes \"lo\" and \"lf\" off", !g.lo && !g.lf);
+    errno = 0;
+    r = mlockall(MCL_ONFAULT);
+    err = errno;
+    snprintf(label, sizeof label, "mlockall(MCL_ONFAULT) alone is EINVAL (r %d errno %d)", r, err);
+    check(label, r == -1 && err == EINVAL);
 }
 
 static void mlockall_future_child(void) {
@@ -974,9 +1509,11 @@ static void mlockall_future_child(void) {
     long r0 = status_kb("VmRSS");
     char *o = mmap(NULL, 4 * PG, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     r = o == MAP_FAILED ? (struct region) {0} : smaps_region(o);
-    snprintf(label, sizeof label, "future|onfault: locked, not populated (VmLck %ld VmRSS %+ld lo %d)",
-             vmlck(), status_kb("VmRSS") - r0, r.lo);
-    check(label, o != MAP_FAILED && vmlck() == 16 && status_kb("VmRSS") - r0 < 16 && r.lo);
+    snprintf(label, sizeof label, "future|onfault: locked on fault, not populated "
+             "(VmLck %ld VmRSS %+ld lo %d lf %d Rss %ld)", vmlck(), status_kb("VmRSS") - r0, r.lo,
+             r.lf, r.rss);
+    check(label, o != MAP_FAILED && vmlck() == 16 && status_kb("VmRSS") - r0 < 16 && r.lolf &&
+          r.rss == 0);
     struct rlimit rl;
     getrlimit(RLIMIT_MEMLOCK, &rl);
     int unlimited = privileged() || rl.rlim_cur == RLIM_INFINITY;
@@ -986,15 +1523,16 @@ static void mlockall_future_child(void) {
     int err = errno;
     if (unlimited) {
         long l10 = vmlck();
-        snprintf(label, sizeof label, "future|onfault: 64M is locked whole, not populated "
+        snprintf(label, sizeof label, "future|onfault: 64M is locked whole, on fault, not populated "
                  "(VmLck %+ld VmRSS %+ld)", l10 - l9, status_kb("VmRSS") - r0);
-        check(label, big != MAP_FAILED && l10 - l9 == 65536 && status_kb("VmRSS") - r0 < 4096);
+        check(label, big != MAP_FAILED && l10 - l9 == 65536 && status_kb("VmRSS") - r0 < 4096 &&
+              smaps_region(big).lolf);
         if (big != MAP_FAILED) {
             big[32 * MB] = 1;
-            snprintf(label, sizeof label, "future|onfault: a touch inside it leaves VmLck alone "
-                     "(VmLck %+ld)", vmlck() - l9);
-            check(label, vmlck() - l9 == 65536 && smaps_region(big + 32 * MB).lo &&
-                  smaps_region(big + 64 * MB - 1).lo);
+            snprintf(label, sizeof label, "future|onfault: a touch inside it leaves VmLck alone, "
+                     "all of it \"lo lf\" (VmLck %+ld)", vmlck() - l9);
+            check(label, vmlck() - l9 == 65536 && smaps_region(big).lolf &&
+                  smaps_region(big + 32 * MB).lolf && smaps_region(big + 64 * MB - 1).lolf);
             munmap(big, 64 * MB);
             check("future|onfault: munmap gives it back", vmlck() == l9);
         }
@@ -1002,6 +1540,78 @@ static void mlockall_future_child(void) {
         snprintf(label, sizeof label, "future|onfault: 64M over RLIMIT_MEMLOCK is EAGAIN (%s errno %d)",
                  big == MAP_FAILED ? "failed" : "mapped", err);
         check(label, big == MAP_FAILED && err == EAGAIN);
+    }
+
+    // Every kind of new mapping is locked on fault, MAP_LOCKED's too, and none
+    // is brought in.
+    char *ml = mmap(NULL, 2 * PG, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_LOCKED,
+                    -1, 0);
+    r = ml == MAP_FAILED ? (struct region) {0} : smaps_region(ml);
+    snprintf(label, sizeof label, "future|onfault: MAP_LOCKED is \"lo lf\" (lo %d lf %d Rss %ld)",
+             r.lo, r.lf, r.rss);
+    check(label, ml != MAP_FAILED && r.lolf && r.rss == 0);
+    char *of = fd < 0 ? MAP_FAILED : mmap(NULL, 2 * PG, PROT_READ, MAP_PRIVATE, fd, 0);
+    r = of == MAP_FAILED ? (struct region) {0} : smaps_region(of);
+    snprintf(label, sizeof label, "future|onfault: a file mapping (lo %d lf %d Rss %ld)",
+             r.lo, r.lf, r.rss);
+    check(label, of != MAP_FAILED && r.lolf && r.rss == 0);
+    char *on = mmap(NULL, 2 * PG, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    r = on == MAP_FAILED ? (struct region) {0} : smaps_region(on);
+    snprintf(label, sizeof label, "future|onfault: a PROT_NONE mapping (lo %d lf %d)", r.lo, r.lf);
+    check(label, on != MAP_FAILED && r.lolf);
+    long ob0 = syscall(SYS_brk, 0);
+    long owant = ((ob0 + (long) PG - 1) & ~(long) (PG - 1)) + 4 * (long) PG;
+    long ob1 = syscall(SYS_brk, owant);
+    r = ob1 == owant ? smaps_region((void *) (uintptr_t) (ob1 - (long) PG)) : (struct region) {0};
+    snprintf(label, sizeof label, "future|onfault: a brk (brk %#lx -> %#lx, lo %d lf %d Rss %ld)",
+             ob0, ob1, r.lo, r.lf, r.rss);
+    check(label, ob1 == owant && r.lolf && r.rss == 0);
+    syscall(SYS_brk, ob0);
+    int oshmid = shmget(IPC_PRIVATE, 2 * PG, IPC_CREAT | 0600);
+    char *oshm = oshmid < 0 ? (void *) -1 : shmat(oshmid, NULL, 0);
+    r = oshm == (void *) -1 ? (struct region) {0} : smaps_region(oshm);
+    snprintf(label, sizeof label, "future|onfault: a shmat (lo %d lf %d Rss %ld)", r.lo, r.lf, r.rss);
+    check(label, oshm != (void *) -1 && r.lolf && r.rss == 0);
+    if (oshm != (void *) -1)
+        shmdt(oshm);
+    if (oshmid >= 0)
+        shmctl(oshmid, IPC_RMID, NULL);
+    // mlock makes one a plain lock and populates it; the growth of another
+    // stays on fault.
+    int lr = o == MAP_FAILED ? -1 : mlock(o, 4 * PG);
+    r = o == MAP_FAILED ? (struct region) {0} : smaps_region(o);
+    snprintf(label, sizeof label, "future|onfault: mlock of one makes it plain and populated "
+             "(r %d lo %d lf %d Rss %ld)", lr, r.lo, r.lf, r.rss);
+    check(label, lr == 0 && r.lo && !r.lf && r.rss == 16);
+    char *og = ml == MAP_FAILED ? MAP_FAILED : mremap(ml, 2 * PG, 6 * PG, MREMAP_MAYMOVE);
+    r = og == MAP_FAILED ? (struct region) {0} : smaps_region(og);
+    snprintf(label, sizeof label, "future|onfault: mremap growth of one is \"lo lf\", not populated "
+             "(lo %d lf %d Rss %ld)", r.lo, r.lf, r.rss);
+    check(label, og != MAP_FAILED && r.lolf && r.rss == 0);
+    // MCL_FUTURE alone makes new mappings plain again, and leaves the on-fault
+    // ones as they are.
+    check("future|onfault: then mlockall(MCL_FUTURE)", mlockall(MCL_FUTURE) == 0);
+    char *pf = guarded(4, PROT_READ | PROT_WRITE);
+    r = pf == NULL ? (struct region) {0} : smaps_region(pf);
+    struct region ogr = og == MAP_FAILED ? (struct region) {0} : smaps_region(og);
+    snprintf(label, sizeof label, "future|onfault: a mapping after MCL_FUTURE alone is plain and "
+             "populated, the older one still on fault (lo %d lf %d Rss %ld; lf %d Rss %ld)",
+             r.lo, r.lf, r.rss, ogr.lf, ogr.rss);
+    check(label, pf != NULL && r.lo && !r.lf && r.rss == 16 && ogr.lolf && ogr.rss == 0);
+    // MCL_CURRENT|MCL_FUTURE|MCL_ONFAULT: what is mapped goes on fault, what is
+    // resident stays so, and a new mapping is on fault too.
+    struct rlimit orl;
+    getrlimit(RLIMIT_MEMLOCK, &orl);
+    if (privileged() || orl.rlim_cur == RLIM_INFINITY ||
+            (unsigned long) status_kb("VmSize") * 1024 <= orl.rlim_cur) {
+        int ar = mlockall(MCL_CURRENT | MCL_FUTURE | MCL_ONFAULT);
+        r = pf == NULL ? (struct region) {0} : smaps_region(pf);
+        char *nf = guarded(4, PROT_READ | PROT_WRITE);
+        struct region nr = nf == NULL ? (struct region) {0} : smaps_region(nf);
+        snprintf(label, sizeof label, "future|onfault: MCL_CURRENT|MCL_FUTURE|MCL_ONFAULT puts a "
+                 "populated mapping on fault, resident, and a new one on fault, not (r %d lf %d "
+                 "Rss %ld; lf %d Rss %ld)", ar, r.lf, r.rss, nr.lf, nr.rss);
+        check(label, ar == 0 && r.lolf && r.rss == 16 && nf != NULL && nr.lolf && nr.rss == 0);
     }
 
     // A later mlockall(MCL_CURRENT) ends MCL_FUTURE, and so does munlockall.
@@ -1067,8 +1677,10 @@ static void swap_witness_child(void) {
     const size_t pages = 256;
     char *ctl = guarded(pages, PROT_READ | PROT_WRITE);
     char *grow = guarded(pages / 2, PROT_READ | PROT_WRITE);
-    if (ctl == NULL || grow == NULL || mlock(grow, pages / 2 * PG) != 0) {
-        check("swap: set up the control and a locked mapping", 0);
+    char *onf = guarded(pages, PROT_READ | PROT_WRITE);
+    if (ctl == NULL || grow == NULL || mlock(grow, pages / 2 * PG) != 0 || onf == NULL ||
+            mlock2_raw(onf, pages * PG, MLOCK_ONFAULT) != 0) {
+        check("swap: set up the control and the locked mappings", 0);
         return;
     }
     char *grown = mremap(grow, pages / 2 * PG, pages * PG, MREMAP_MAYMOVE);
@@ -1083,6 +1695,7 @@ static void swap_witness_child(void) {
         ctl[i * PG] = (char) (i + 1);
         grown[i * PG] = (char) (i + 2);
         fut[i * PG] = (char) (i + 3);
+        onf[i * PG] = (char) (i + 4);
     }
     long ctl_swap = 0;
     for (int sweep = 0; sweep < 3 && ctl_swap == 0; sweep++) {
@@ -1096,15 +1709,16 @@ static void swap_witness_child(void) {
         return;
     }
     long grown_swap = swap_kb(grown, pages * PG), fut_swap = swap_kb(fut, pages * PG);
-    snprintf(label, sizeof label, "swap: an mremap-grown locked mapping and an MCL_FUTURE one stay "
-             "out of swap (Swap %ld and %ld kB, unlocked control %ld kB)", grown_swap, fut_swap,
-             ctl_swap);
-    check(label, grown_swap == 0 && fut_swap == 0);
+    long onf_swap = swap_kb(onf, pages * PG);
+    snprintf(label, sizeof label, "swap: an mremap-grown locked mapping, an MCL_FUTURE one and an "
+             "MLOCK_ONFAULT one stay out of swap (Swap %ld, %ld and %ld kB, unlocked control %ld kB)",
+             grown_swap, fut_swap, onf_swap, ctl_swap);
+    check(label, grown_swap == 0 && fut_swap == 0 && onf_swap == 0);
     int same = 1;
     for (size_t i = 0; i < pages; i++)
         same &= ctl[i * PG] == (char) (i + 1) && grown[i * PG] == (char) (i + 2) &&
-                fut[i * PG] == (char) (i + 3);
-    check("swap: all three read back what was written", same);
+                fut[i * PG] == (char) (i + 3) && onf[i * PG] == (char) (i + 4);
+    check("swap: all four read back what was written", same);
 }
 
 // ---- RLIMIT_MEMLOCK ----------------------------------------------------------
@@ -1156,6 +1770,32 @@ static void memlock_limits_child(void) {
     snprintf(label, sizeof label, "limits: at 0, MAP_LOCKED is EPERM (%s errno %d)",
              ml == MAP_FAILED ? "failed" : "mapped", err);
     check(label, ml == MAP_FAILED && err == EPERM);
+    // mlock2 checks its flags first, and then is mlock -- EPERM even for
+    // nothing at all.
+    errno = 0;
+    long l2 = mlock2_raw(p, PG, 2);
+    err = errno;
+    snprintf(label, sizeof label, "limits: at 0, mlock2 with a bad flag is EINVAL (r %ld errno %d)",
+             l2, err);
+    check(label, l2 == -1 && err == EINVAL);
+    errno = 0;
+    l2 = mlock2_raw(p, PG, MLOCK_ONFAULT);
+    err = errno;
+    snprintf(label, sizeof label, "limits: at 0, mlock2(MLOCK_ONFAULT) is EPERM (r %ld errno %d)",
+             l2, err);
+    check(label, l2 == -1 && err == EPERM);
+    errno = 0;
+    l2 = mlock2_raw(p, 0, MLOCK_ONFAULT);
+    err = errno;
+    snprintf(label, sizeof label, "limits: at 0, mlock2 of 0 bytes is EPERM too (r %ld errno %d)",
+             l2, err);
+    check(label, l2 == -1 && err == EPERM);
+    errno = 0;
+    r = mlockall(MCL_CURRENT | MCL_ONFAULT);
+    err = errno;
+    snprintf(label, sizeof label, "limits: at 0, mlockall(MCL_CURRENT|MCL_ONFAULT) is EPERM "
+             "(r %d errno %d)", r, err);
+    check(label, r == -1 && err == EPERM);
     check("limits: at 0, munlockall is 0", munlockall() == 0);
 
     if (!set_memlock(4 * PG)) {
@@ -1237,6 +1877,33 @@ static void memlock_limits_child(void) {
     }
     munlockall();
 
+    // An on-fault lock is charged as mlock's is, overlap forgiven, though it
+    // populates nothing.
+    char *q = guarded(5, PROT_READ | PROT_WRITE);
+    if (q != NULL) {
+        errno = 0;
+        l2 = mlock2_raw(q, 5 * PG, MLOCK_ONFAULT);
+        err = errno;
+        snprintf(label, sizeof label, "limits: MLOCK_ONFAULT of 5 pages past 4 is ENOMEM "
+                 "(r %ld errno %d VmLck %ld)", l2, err, vmlck());
+        check(label, l2 == -1 && err == ENOMEM && vmlck() == 0);
+        check("limits: MLOCK_ONFAULT of 3", mlock2_raw(q, 3 * PG, MLOCK_ONFAULT) == 0 &&
+              vmlck() == 12);
+        errno = 0;
+        l2 = mlock2_raw(q + 2 * PG, 3 * PG, MLOCK_ONFAULT);
+        err = errno;
+        snprintf(label, sizeof label, "limits: 3 more, 1 of them locked already, is ENOMEM "
+                 "(r %ld errno %d VmLck %ld)", l2, err, vmlck());
+        check(label, l2 == -1 && err == ENOMEM && vmlck() == 12);
+        l2 = mlock2_raw(q + 2 * PG, 2 * PG, 0);
+        snprintf(label, sizeof label, "limits: 2 more, 1 of them locked already, reaches it "
+                 "(r %ld VmLck %ld)", l2, vmlck());
+        check(label, l2 == 0 && vmlck() == 16);
+    } else {
+        check("limits: map 5 pages", 0);
+    }
+    munlockall();
+
     if (!set_memlock(3 * PG)) {
         check("limits: RLIMIT_MEMLOCK 3 pages", 0);
         return;
@@ -1306,7 +1973,11 @@ int main(int argc, char **argv) {
     mremap_carries_lock();
     mprotect_populates_locked();
     map_locked_flag(fd);
+    mlock2_flags();
+    onfault_lock(fd);
+    onfault_mremap(fd);
     in_child("mlockall(MCL_CURRENT)", mlockall_current_child);
+    in_child("mlockall(MCL_CURRENT|MCL_ONFAULT)", mlockall_onfault_child);
     in_child("mlockall(MCL_FUTURE)", mlockall_future_child);
     in_child("RLIMIT_MEMLOCK", memlock_limits_child);
     in_child("swap", swap_witness_child);

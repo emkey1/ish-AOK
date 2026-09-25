@@ -158,8 +158,17 @@ starts with no locks at all.
 `mlockall(MCL_CURRENT)` locks everything already mapped; `MCL_FUTURE`, and the
 `MAP_LOCKED` flag to `mmap`, lock new mappings too -- `mmap`, `brk` and
 `shmat` alike. As on Linux, what is locked is populated, readable or writable
-parts of large untouched mappings included; `PROT_NONE` mappings, and everything
-under `MCL_ONFAULT`, have each page locked when it is first touched.
+parts of large untouched mappings included; `PROT_NONE` mappings have each page
+locked when it is first touched.
+
+`mlock2(2)` is `mlock` with flags, and its one flag, `MLOCK_ONFAULT`, is the
+on-fault lock that `MCL_ONFAULT` gives `mlockall`: the mapping is locked and
+counted in `VmLck` at once, but nothing is brought in until it is touched --
+not by the call, and not later when `mremap` grows the mapping or `mprotect`
+makes it writable, both of which populate an ordinary locked mapping. `smaps`
+shows such a mapping as `lo lf`, and `maps` starts a new line where the `lf`
+starts or ends. A later plain `mlock` (or `mlockall(MCL_CURRENT)`) turns it
+back into an ordinary lock and populates it.
 
 `RLIMIT_MEMLOCK` is enforced the way Linux enforces it: with a limit of 0,
 `mlock`, `mlockall` and `MAP_LOCKED` fail with `EPERM`; past the limit `mlock`
@@ -169,12 +178,11 @@ standalone CLI runs as **root**, which is exempt (Linux exempts
 `CAP_IPC_LOCK`), so testing the limit means dropping privilege first -- as root
 every `mlock` simply succeeds.
 
-Not there yet: `mlock2(2)` (`MLOCK_ONFAULT`) is not implemented, `smaps` shows
-no `lf` flag for an on-fault lock, and a process restored after iOS suspended
-the app comes back holding no locks. And locking does not copy a page the
-process still shares copy-on-write with its parent or child after a `fork`, as
-Linux does: `smaps` counts such a page at half in `Pss` and `Locked` until one
-of them writes to it.
+Not there yet: a process restored after iOS suspended the app comes back
+holding no locks. And locking does not copy a page the process still shares
+copy-on-write with its parent or child after a `fork`, as Linux does: `smaps`
+counts such a page at half in `Pss` and `Locked` until one of them writes to
+it.
 
 ## `ISH_GUEST_SWAP_FAIL_READS`
 

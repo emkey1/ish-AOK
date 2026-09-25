@@ -1094,16 +1094,19 @@ bool mem_class_pages_verify(struct mem *mem, size_t walked[MEM_PAGE_CLASSES],
 // Every change to the byte of an entry that has data goes through here, which
 // is what lets VmLck be a counter. An exchange, not a store: mlock runs under
 // the READ lock, and two threads locking one page at once must count it once.
-// Returns whether the state changed.
-static bool mem_pt_set_lock(struct mem *mem, struct pt_entry *entry, bool locked) {
-    uint8_t want = locked ? 1 : 0;
-    if (__atomic_load_n(&entry->locked, __ATOMIC_RELAXED) == want)
+// The counter moves only when the page goes from unlocked to locked or back:
+// an on-fault lock is a lock, so mlock2(MLOCK_ONFAULT) over a plain one, or
+// mlock over an on-fault one, leaves VmLck alone (MEASURED on 6.12). Returns
+// whether the byte changed.
+static bool mem_pt_set_lock(struct mem *mem, struct pt_entry *entry, uint8_t lock) {
+    if (__atomic_load_n(&entry->locked, __ATOMIC_RELAXED) == lock)
         return false;
-    if (__atomic_exchange_n(&entry->locked, want, __ATOMIC_RELAXED) == want)
+    uint8_t was = __atomic_exchange_n(&entry->locked, lock, __ATOMIC_RELAXED);
+    if (was == lock)
         return false;   // another thread made the same change first
-    if (locked)
+    if (was == 0)
         atomic_fetch_add_explicit(&mem->locked_pages, 1, memory_order_relaxed);
-    else
+    else if (lock == 0)
         atomic_fetch_sub_explicit(&mem->locked_pages, 1, memory_order_relaxed);
     return true;
 }
@@ -1118,7 +1121,7 @@ static void mem_pt_del(struct mem *mem, page_t page) {
         // Out of VmLck with the page. A leaf is reused, so a stale lock would
         // also silently pin some future mapping's page against eviction for
         // ever, with no mlock to explain it.
-        mem_pt_set_lock(mem, entry, false);
+        mem_pt_set_lock(mem, entry, 0);
     }
     // An entry with no data has no swap state either. This matters because the
     // entry is not freed, only emptied: leaves are immortal, so this slot comes
@@ -1456,7 +1459,7 @@ void mem_vm_pages_range_ex(struct mem *mem, page_t start, page_t end,
         if (s >= e)
             continue;
         *total += e - s;
-        if (mem_flags_are_data(l->flags & ~MEM_LAZY_LOCKED))
+        if (mem_flags_are_data(l->flags & ~MEM_LAZY_LOCK_MARKS))
             *data += e - s;
         if (!(l->flags & (P_SHARED | P_GROWSDOWN)))
             *private_nonstack += e - s;
@@ -1598,7 +1601,7 @@ size_t mem_locked_page_count_range(struct mem *mem, page_t start, pages_t pages)
     return count;
 }
 
-long pt_set_locked(struct mem *mem, page_t start, pages_t pages, bool locked, bool populate) {
+long pt_set_locked(struct mem *mem, page_t start, pages_t pages, uint8_t lock, bool populate) {
     if (mem == NULL)
         return _EINVAL;
     if (!mem_page_range_valid(mem, start, pages))
@@ -1649,7 +1652,12 @@ long pt_set_locked(struct mem *mem, page_t start, pages_t pages, bool locked, bo
     // if it is shared copy-on-write with a fork's other process; AOK leaves it
     // shared until one of them writes it, so until then smaps counts it at half
     // in Pss, and so in Locked.
-    bool populating = locked && populate && mapped == pages;
+    //
+    // An on-fault lock skips the step whole, before it looks at protections:
+    // populate_vma_page_range returns at VM_LOCKONFAULT first, so no page comes
+    // in and a PROT_NONE one is no failure (MEASURED: mlock2(MLOCK_ONFAULT) of
+    // [rw, none, rw] is 0, all three locked, none resident).
+    bool populating = lock == PT_LOCKED && populate && mapped == pages;
     bool unpopulated = false;
     for (pages_t i = 0; i < mapped; ) {
         struct pt_entry *pt = mem_pt(mem, start + i);
@@ -1667,7 +1675,7 @@ long pt_set_locked(struct mem *mem, page_t start, pages_t pages, bool locked, bo
         i++;
         if (mem_entry_is_special(pt))
             continue;
-        if (mem_pt_set_lock(mem, pt, locked))
+        if (mem_pt_set_lock(mem, pt, lock))
             changed++;
         if (populating && !(pt->flags & P_RWX)) {
             populating = false;
@@ -1682,10 +1690,14 @@ long pt_set_locked(struct mem *mem, page_t start, pages_t pages, bool locked, bo
     return changed;
 }
 
-long pt_set_locked_all(struct mem *mem, bool locked, bool populate) {
+long pt_set_locked_all(struct mem *mem, uint8_t lock, bool populate) {
     if (mem == NULL)
         return 0;
     long now_locked = 0;
+    // An on-fault lock populates nothing, as in pt_set_locked; MCL_ONFAULT
+    // leaves the pages that were resident resident, and brings in no others
+    // (MEASURED on 6.12, a mapping mlock had populated included).
+    bool populating = lock == PT_LOCKED && populate;
     // Read lock, for the reason pt_set_locked gives. It also matters more here:
     // this walks the WHOLE address space, and holding the barrier across that
     // would stop every sibling thread of the process for the length of the
@@ -1694,10 +1706,10 @@ long pt_set_locked_all(struct mem *mem, bool locked, bool populate) {
     for (page_t page = 0; page < mem->page_limit; ) {
         struct pt_entry *pt = mem_pt(mem, page);
         if (pt != NULL && !mem_entry_is_special(pt)) {
-            mem_pt_set_lock(mem, pt, locked);
-            if (locked)
+            mem_pt_set_lock(mem, pt, lock);
+            if (lock)
                 now_locked++;
-            if (locked && populate)
+            if (populating)
                 mem_pt_populated(mem, pt);
         }
         page_t before = page;
@@ -1709,9 +1721,15 @@ long pt_set_locked_all(struct mem *mem, bool locked, bool populate) {
     return now_locked;
 }
 
-void mem_lock_new_range(struct mem *mem, page_t start, pages_t pages, bool populate) {
+void mem_lock_new_range(struct mem *mem, page_t start, pages_t pages, uint8_t lock,
+                        bool populate) {
     if (mem == NULL || !mem_page_range_valid(mem, start, pages))
         return;
+    // Nothing brings an on-fault mapping in, its growth included (MEASURED on
+    // 6.12: an mremap that grows one, anonymous or file, in place or moving
+    // it, leaves the growth out of Rss).
+    if (lock & PT_LOCKONFAULT)
+        populate = false;
     page_t end = start + pages;
     for (page_t page = start; page < end; ) {
         struct pt_entry *pt = mem_pt(mem, page);
@@ -1725,7 +1743,7 @@ void mem_lock_new_range(struct mem *mem, page_t start, pages_t pages, bool popul
         page++;
         if (mem_entry_is_special(pt))
             continue;
-        mem_pt_set_lock(mem, pt, true);
+        mem_pt_set_lock(mem, pt, lock);
         if (populate)
             mem_pt_populated(mem, pt);
     }
@@ -1758,7 +1776,7 @@ bool mem_page_is_swapped(const struct pt_entry *entry) {
 // give them entries.
 //
 // Every entry made from a reservation is made by mem_lazy_map_pages, which
-// carries mlockall's MEM_LAZY_LOCKED onto the entries.
+// carries the lock marks (MEM_LAZY_LOCK_MARKS) onto the entries.
 
 static bool lazy_trace(void) {
     static int on = -1;
@@ -1900,15 +1918,16 @@ bool mem_lazy_drop(struct mem *mem, page_t start, page_t end) {
 }
 
 // Entries for [start, start + pages) of a reservation whose flags were
-// `lazy_flags`: the pt flags without the mark, and locked entries when
-// mlockall marked it.
+// `lazy_flags`: the pt flags without the marks, and entries with the lock the
+// marks stand for.
 static int mem_lazy_map_pages(struct mem *mem, page_t start, pages_t pages, unsigned lazy_flags) {
-    int err = pt_map_nothing(mem, start, pages, lazy_flags & ~MEM_LAZY_LOCKED);
-    if (err == 0 && (lazy_flags & MEM_LAZY_LOCKED)) {
+    int err = pt_map_nothing(mem, start, pages, lazy_flags & ~MEM_LAZY_LOCK_MARKS);
+    uint8_t lock = mem_lazy_lock(lazy_flags);
+    if (err == 0 && lock != 0) {
         for (pages_t i = 0; i < pages; i++) {
             struct pt_entry *pt = mem_pt(mem, start + i);
             if (pt != NULL)
-                mem_pt_set_lock(mem, pt, true);
+                mem_pt_set_lock(mem, pt, lock);
         }
     }
     return err;
@@ -2026,14 +2045,15 @@ void mem_lazy_populate(struct mem *mem, page_t start, page_t end) {
     mem_lazy_materialize_only(mem, start, end);
 }
 
-bool mem_lazy_lock_range_needed(struct mem *mem, page_t start, page_t end, bool locked,
+bool mem_lazy_lock_range_needed(struct mem *mem, page_t start, page_t end, uint8_t lock,
                                 bool populate) {
+    unsigned want = mem_lazy_lock_marks(lock);
+    bool populating = lock == PT_LOCKED && populate;
     for (unsigned i = 0; i < mem->lazy_count; i++) {
         struct mem_lazy_map *l = &mem->lazy[i];
         if (l->start >= l->end || end <= l->start || l->end <= start)
             continue;
-        bool marked = (l->flags & MEM_LAZY_LOCKED) != 0;
-        if (locked ? (populate && (l->flags & P_RWX) != 0) || !marked : marked)
+        if ((l->flags & MEM_LAZY_LOCK_MARKS) != want || (populating && (l->flags & P_RWX) != 0))
             return true;
     }
     return false;
@@ -2060,18 +2080,19 @@ static page_t mem_first_unpopulatable(struct mem *mem, page_t start, page_t end)
     return end;
 }
 
-// Give the part of reservation l inside [start, end) the mark `mark`, which l
-// does not have. Splitting l at the range's edges adds a slot per edge inside
-// it, held to MEM_LAZY_SPLIT_LIMIT like any split; past it that part is
-// populated instead (all of l, when the part is strictly inside it), for
-// pt_set_locked to lock or unlock. Any piece this adds lies outside the range or
-// already has the mark, so a walk of the table can go on past it.
+// Give the part of reservation l inside [start, end) the lock marks `marks`
+// (MEM_LAZY_LOCK_MARKS bits), which l does not have. Splitting l at the range's
+// edges adds a slot per edge inside it, held to MEM_LAZY_SPLIT_LIMIT like any
+// split; past it that part is populated instead (all of l, when the part is
+// strictly inside it), for pt_set_locked to lock or unlock. Any piece this adds
+// lies outside the range or already has the marks, so a walk of the table can
+// go on past it.
 static void mem_lazy_mark(struct mem *mem, struct mem_lazy_map *l, page_t start, page_t end,
-                          bool mark) {
+                          unsigned marks) {
     page_t s = start > l->start ? start : l->start;
     page_t e = end < l->end ? end : l->end;
     unsigned flags = l->flags;
-    unsigned want = mark ? flags | MEM_LAZY_LOCKED : flags & ~MEM_LAZY_LOCKED;
+    unsigned want = (flags & ~MEM_LAZY_LOCK_MARKS) | marks;
     if (s == l->start && e == l->end) {
         l->flags = want;
         return;
@@ -2079,14 +2100,14 @@ static void mem_lazy_mark(struct mem *mem, struct mem_lazy_map *l, page_t start,
     unsigned in_use = mem_lazy_in_use(mem);
     unsigned added = (s > l->start) + (e < l->end);
     if (in_use + added > MEM_LAZY_SPLIT_LIMIT) {
-        LAZY_TRACE("%s [%llx,%llx) of [%llx,%llx) refused, %u slots in use\n",
-                   mark ? "lock" : "unlock", (unsigned long long) s, (unsigned long long) e,
+        LAZY_TRACE("mark %#x [%llx,%llx) of [%llx,%llx) refused, %u slots in use\n",
+                   marks, (unsigned long long) s, (unsigned long long) e,
                    (unsigned long long) l->start, (unsigned long long) l->end, in_use);
         mem_lazy_populate(mem, s, e);
         return;
     }
-    LAZY_TRACE("%s [%llx,%llx) of [%llx,%llx), %u slots in use\n",
-               mark ? "lock" : "unlock", (unsigned long long) s, (unsigned long long) e,
+    LAZY_TRACE("mark %#x [%llx,%llx) of [%llx,%llx), %u slots in use\n",
+               marks, (unsigned long long) s, (unsigned long long) e,
                (unsigned long long) l->start, (unsigned long long) l->end, in_use + added);
     // Cannot fail: in_use + added is within MEM_LAZY_SPLIT_LIMIT, which is
     // below MEM_LAZY_MAX.
@@ -2102,28 +2123,20 @@ static void mem_lazy_mark(struct mem *mem, struct mem_lazy_map *l, page_t start,
         mem_lazy_add(mem, e, old_end, flags);
 }
 
-bool mem_lazy_lock_range(struct mem *mem, page_t start, page_t end, bool locked, bool populate) {
+bool mem_lazy_lock_range(struct mem *mem, page_t start, page_t end, uint8_t lock, bool populate) {
     if (start >= end || !mem_range_is_mapped(mem, start, end - start))
         return false;
-    if (!locked) {
-        // An unlock populates nothing and clears the mark. Marking only adds
-        // pieces outside the range or already marked as asked, so the walk
-        // can go on past them.
-        for (unsigned i = 0; i < mem->lazy_count; i++) {
-            struct mem_lazy_map *l = &mem->lazy[i];
-            if (l->start < l->end && start < l->end && l->start < end &&
-                    (l->flags & MEM_LAZY_LOCKED))
-                mem_lazy_mark(mem, l, start, end, false);
-        }
-        return true;
-    }
     // Linux populates what mlock locks, in address order, up to the first
     // mapping it cannot populate, which a PROT_NONE one is; that one and what
     // follows stay locked for when they are made accessible. So a lock
     // populates the part of an accessible reservation below that point, and
     // marks everything of the range still reserved after that. Populating only
     // changes the reservation at i and adds pieces outside [start, stop).
-    page_t stop = populate ? mem_first_unpopulatable(mem, start, end) : start;
+    //
+    // An unlock, and an on-fault lock, populate nothing: they only change the
+    // marks, an on-fault lock's to both.
+    page_t stop = lock == PT_LOCKED && populate ? mem_first_unpopulatable(mem, start, end)
+                                                : start;
     for (unsigned i = 0; i < mem->lazy_count; i++) {
         struct mem_lazy_map *l = &mem->lazy[i];
         if (l->start >= l->end || stop <= l->start || l->end <= start || !(l->flags & P_RWX))
@@ -2131,26 +2144,27 @@ bool mem_lazy_lock_range(struct mem *mem, page_t start, page_t end, bool locked,
         mem_lazy_populate(mem, start > l->start ? start : l->start,
                           stop < l->end ? stop : l->end);
     }
+    // Marking only adds pieces outside the range or already marked as asked,
+    // so the walk can go on past them.
+    unsigned marks = mem_lazy_lock_marks(lock);
     for (unsigned i = 0; i < mem->lazy_count; i++) {
         struct mem_lazy_map *l = &mem->lazy[i];
         if (l->start < l->end && start < l->end && l->start < end &&
-                !(l->flags & MEM_LAZY_LOCKED))
-            mem_lazy_mark(mem, l, start, end, true);
+                (l->flags & MEM_LAZY_LOCK_MARKS) != marks)
+            mem_lazy_mark(mem, l, start, end, marks);
     }
     return true;
 }
 
-void mem_lazy_lock_all(struct mem *mem, bool locked, bool populate) {
+void mem_lazy_lock_all(struct mem *mem, uint8_t lock, bool populate) {
+    unsigned marks = mem_lazy_lock_marks(lock);
     for (unsigned i = 0; i < mem->lazy_count; i++) {
         struct mem_lazy_map *l = &mem->lazy[i];
         if (l->start >= l->end)
             continue;
-        if (locked)
-            l->flags |= MEM_LAZY_LOCKED;
-        else
-            l->flags &= ~MEM_LAZY_LOCKED;
+        l->flags = (l->flags & ~MEM_LAZY_LOCK_MARKS) | marks;
     }
-    if (!locked || !populate)
+    if (lock != PT_LOCKED || !populate)
         return;
     // Linux populates every mapping it can read, write or execute, and leaves
     // PROT_NONE ones alone, still locked. So does this, with the mark standing
@@ -2169,10 +2183,10 @@ void mem_lazy_lock_all(struct mem *mem, bool locked, bool populate) {
 }
 
 bool mem_range_flags(struct mem *mem, page_t start, pages_t pages,
-                     unsigned *flags_out, struct data **data_out, bool *locked_out) {
+                     unsigned *flags_out, struct data **data_out, uint8_t *lock_out) {
     bool have = false;
     unsigned want = 0;
-    bool want_locked = false;
+    uint8_t want_lock = 0;
     struct data *first_data = NULL;
     page_t end = start + pages;
     if (end < start)
@@ -2180,11 +2194,11 @@ bool mem_range_flags(struct mem *mem, page_t start, pages_t pages,
     for (page_t page = start; page < end; ) {
         struct pt_entry *entry = mem_pt(mem, page);
         unsigned flags;
-        bool locked;
+        uint8_t lock;
         page_t next;
         if (entry != NULL) {
             flags = entry->flags;
-            locked = entry->locked != 0;
+            lock = __atomic_load_n(&entry->locked, __ATOMIC_RELAXED);
             next = page + 1;
             if (!have)
                 first_data = entry->data;
@@ -2193,17 +2207,17 @@ bool mem_range_flags(struct mem *mem, page_t start, pages_t pages,
             if (l == NULL)
                 return false;
             // What materialising it would give: pt_map_nothing adds P_ANONYMOUS,
-            // and the lock mark goes on the entry's locked byte, not its flags.
-            flags = (l->flags & ~MEM_LAZY_LOCKED) | P_ANONYMOUS;
-            locked = (l->flags & MEM_LAZY_LOCKED) != 0;
+            // and the lock marks go on the entry's locked byte, not its flags.
+            flags = (l->flags & ~MEM_LAZY_LOCK_MARKS) | P_ANONYMOUS;
+            lock = mem_lazy_lock(l->flags);
             next = l->end;
         }
         flags &= ~P_COW;
         if (!have) {
             want = flags;
-            want_locked = locked;
+            want_lock = lock;
             have = true;
-        } else if (flags != want || locked != want_locked) {
+        } else if (flags != want || lock != want_lock) {
             return false;
         }
         page = next;
@@ -2214,8 +2228,8 @@ bool mem_range_flags(struct mem *mem, page_t start, pages_t pages,
         *flags_out = want;
     if (data_out != NULL)
         *data_out = first_data;
-    if (locked_out != NULL)
-        *locked_out = want_locked;
+    if (lock_out != NULL)
+        *lock_out = want_lock;
     return true;
 }
 
@@ -3282,9 +3296,10 @@ int pt_dup(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) {
         mem_pt_occupy(mem, new_start + mapped);
         // ...but a locked one if the pages were: mremap's alias is a copy of
         // the VMA, VM_LOCKED and all, and VmLck counts it a second time
-        // (MEASURED on 6.12: +8 kB for a 2-page alias of a locked mapping).
+        // (MEASURED on 6.12: +8 kB for a 2-page alias of a locked mapping, and
+        // an alias of an on-fault one is "lo lf" too).
         if (src->locked)
-            mem_pt_set_lock(mem, dst, true);
+            mem_pt_set_lock(mem, dst, src->locked);
     }
     data_owner_run_flush(&run, mem, +1);
     mem_note_vm_peak(mem);
@@ -3374,7 +3389,7 @@ int pt_move(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) 
             atomic_fetch_add_explicit(&mem->rss_pages, 1, memory_order_relaxed);
         }
         if (src->locked)
-            mem_pt_set_lock(mem, dst, true);
+            mem_pt_set_lock(mem, dst, src->locked);
         mapped++;
     }
     data_owner_run_flush(&run, mem, +1);
@@ -3679,9 +3694,10 @@ static int mem_break_cow_group(struct mem *mem, page_t page, bool forced) {
     // Which of them are in the resident set is read here too: the fresh
     // entries start outside it, and a neighbour that was in it before its
     // host page was copied is in it still. (At most one host page of guest
-    // pages, so a 64-bit mask holds them.) So is which are mlocked: that is
-    // the mapping's, and a fresh entry is unlocked -- a locked page lost its
-    // lock the first time it was written after a fork.
+    // pages, so a 64-bit mask holds them.) So is which are mlocked, and which
+    // of those on fault: that is the mapping's, and a fresh entry is unlocked
+    // -- a locked page lost its lock the first time it was written after a
+    // fork.
     //
     // And what the copy is a copy OF, which is the mapping's too: a Linux COW
     // break replaces the page and leaves the VMA -- its file, offset and name
@@ -3689,7 +3705,7 @@ static int mem_break_cow_group(struct mem *mem, page_t page, bool forced) {
     // Kept only when every page of the group agrees: one fd at consecutive
     // file offsets, one name (names are static strings, compared by
     // identity). A group is anonymous pages, so the fd case is a single page.
-    uint64_t resident = 0, locked = 0;
+    uint64_t resident = 0, locked = 0, onfault = 0;
     struct pt_entry *first_pt = mem_pt(mem, first);
     struct fd *fd = first_pt->data->fd;
     const char *name = first_pt->data->name;
@@ -3713,6 +3729,8 @@ static int mem_break_cow_group(struct mem *mem, page_t page, bool forced) {
             resident |= (uint64_t) 1 << (p - first);
         if (p - first < 64 && src->locked)
             locked |= (uint64_t) 1 << (p - first);
+        if (p - first < 64 && (src->locked & PT_LOCKONFAULT))
+            onfault |= (uint64_t) 1 << (p - first);
         if (src->data->name != name)
             name = NULL;
         if (fd != NULL && (src->data->fd != fd || data_file_offset(src->data, src->offset) !=
@@ -3743,7 +3761,8 @@ static int mem_break_cow_group(struct mem *mem, page_t page, bool forced) {
         if (resident & ((uint64_t) 1 << (p - first)))
             mem_pt_touch(mem, mem_pt(mem, p));
         if (locked & ((uint64_t) 1 << (p - first)))
-            mem_pt_set_lock(mem, mem_pt(mem, p), true);
+            mem_pt_set_lock(mem, mem_pt(mem, p), PT_LOCKED |
+                    ((onfault & ((uint64_t) 1 << (p - first))) ? PT_LOCKONFAULT : 0));
     }
     return 0;
 }
@@ -3808,25 +3827,29 @@ static void mem_map_growsdown_group(struct mem *mem, page_t page) {
     // after mlockall, a 400 kB recursion raised VmLck by the same amount and
     // [stack] stayed one "lo" region). A new unlocked page here would split
     // [stack] in two in /proc/<pid>/maps and leave the pager free to take it.
+    // An on-fault lock the same (after mlockall(MCL_CURRENT|MCL_ONFAULT) the
+    // grown [stack] is one "lo lf" region).
     unsigned flags = P_READ | P_WRITE | P_GROWSDOWN;
-    bool locked = false;
+    uint8_t lock = 0;
     page_t above = mem_next_mapped_page(mem, last + 1);
     struct pt_entry *stack = above != BAD_PAGE ? mem_pt(mem, above) : NULL;
     if (stack != NULL && (stack->flags & P_GROWSDOWN)) {
         flags = (stack->flags & (P_READ | P_WRITE | P_EXEC)) | P_GROWSDOWN;
-        locked = stack->locked != 0;
+        lock = __atomic_load_n(&stack->locked, __ATOMIC_RELAXED);
     }
     pages_t pages = (pages_t) (last - first + 1);
-    if (pt_map_nothing(mem, first, pages, flags) == 0 && locked)
-        mem_lock_new_range(mem, first, pages, false);
+    if (pt_map_nothing(mem, first, pages, flags) == 0 && lock != 0)
+        mem_lock_new_range(mem, first, pages, lock, false);
 }
 
 // Linux's mprotect populates a locked private mapping it makes writable:
 // mprotect_fixup's (oldflags & (VM_WRITE | VM_SHARED | VM_LOCKED)) ==
 // VM_LOCKED with VM_WRITE in newflags. MEASURED on 6.12: a locked PROT_NONE
-// mapping made readable is not resident; made writable after that, it is.
-static bool mem_mprotect_populates(unsigned old_flags, unsigned new_flags) {
-    return !(old_flags & (P_WRITE | P_SHARED)) && (new_flags & P_WRITE);
+// mapping made readable is not resident; made writable after that, it is --
+// unless the lock is an on-fault one, which populate_vma_page_range leaves
+// alone (made writable, it stays out of Rss). `lock` is the page's.
+static bool mem_mprotect_populates(uint8_t lock, unsigned old_flags, unsigned new_flags) {
+    return lock == PT_LOCKED && !(old_flags & (P_WRITE | P_SHARED)) && (new_flags & P_WRITE);
 }
 
 int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
@@ -3890,15 +3913,20 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
                 }
                 pages_t group_pages = (pages_t) (last - page + 1);
                 size_t bytes = (size_t) group_pages * PAGE_SIZE;
-                // Which of them are locked, read before pt_map replaces them:
-                // the lock is the mapping's, and the entries pt_map makes are
-                // unlocked -- a locked PROT_NONE mapping would lose its lock the
-                // moment it was made usable. (A group is one host page of guest
-                // pages, so a 64-bit mask holds it.)
-                uint64_t locked = 0;
-                for (page_t p = page; p <= last && p - page < 64; p++)
-                    if (mem_pt(mem, p)->locked)
+                // Which of them are locked, and which of those on fault, read
+                // before pt_map replaces them: the lock is the mapping's, and
+                // the entries pt_map makes are unlocked -- a locked PROT_NONE
+                // mapping would lose its lock the moment it was made usable.
+                // (A group is one host page of guest pages, so a 64-bit mask
+                // holds it.)
+                uint64_t locked = 0, onfault = 0;
+                for (page_t p = page; p <= last && p - page < 64; p++) {
+                    uint8_t lock = mem_pt(mem, p)->locked;
+                    if (lock)
                         locked |= (uint64_t) 1 << (p - page);
+                    if (lock & PT_LOCKONFAULT)
+                        onfault |= (uint64_t) 1 << (p - page);
+                }
                 void *memory = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
                 int err = pt_map(mem, page, group_pages, memory, 0, new_flags);
@@ -3912,8 +3940,10 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
                     if (!(locked & ((uint64_t) 1 << (p - page))))
                         continue;
                     struct pt_entry *pt = mem_pt(mem, p);
-                    mem_pt_set_lock(mem, pt, true);
-                    if (mem_mprotect_populates((unsigned) old_flags, (unsigned) new_flags))
+                    uint8_t lock = PT_LOCKED |
+                            ((onfault & ((uint64_t) 1 << (p - page))) ? PT_LOCKONFAULT : 0);
+                    mem_pt_set_lock(mem, pt, lock);
+                    if (mem_mprotect_populates(lock, (unsigned) old_flags, (unsigned) new_flags))
                         mem_pt_populated(mem, pt);
                 }
                 // pt_map already wrote new_flags for every page of the group, so
@@ -3929,7 +3959,7 @@ int pt_set_flags(struct mem *mem, page_t start, pages_t pages, int flags) {
             if (err < 0)
                 return err;
         }
-        if (entry->locked && mem_mprotect_populates((unsigned) old_flags, (unsigned) new_flags))
+        if (mem_mprotect_populates(entry->locked, (unsigned) old_flags, (unsigned) new_flags))
             mem_pt_populated(mem, entry);
     }
     mem_changed(mem);

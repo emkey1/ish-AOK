@@ -407,6 +407,7 @@ static bool vm_flags_are_data(unsigned flags) {
 #define MCL_CURRENT_ 0x1
 #define MCL_FUTURE_ 0x2
 #define MCL_ONFAULT_ 0x4
+#define MLOCK_ONFAULT_ 0x1
 
 // RLIMIT_MEMLOCK the way Linux's mlock paths read it, before the address-space
 // lock like the limits above. CAP_IPC_LOCK lifts it; without that a limit of 0
@@ -448,19 +449,25 @@ static bool memlock_room_replacing(struct mem *mem, const struct memlock_limit *
 }
 
 // Does a new mapping start locked -- MAP_LOCKED, or mlockall(MCL_FUTURE) --
-// and should it be populated? Linux gives it VM_LOCKED from mm->def_flags or
-// the mmap flag, and populates it unless MCL_ONFAULT put VM_LOCKONFAULT in
-// def_flags too (MEASURED: under MCL_FUTURE a new anonymous, file or PROT_NONE
-// mapping, a brk and a shmat all raise VmLck by their size, and all but the
-// PROT_NONE one become resident; under MCL_FUTURE|MCL_ONFAULT none does).
-static bool mmap_locks_new(struct mm *mm, bool map_locked, bool *populate) {
+// and how? The lock it gets (emu/memory.h, pt_entry::locked), 0 for none.
+// Linux gives it VM_LOCKED from mm->def_flags or the mmap flag, and
+// VM_LOCKONFAULT from def_flags when MCL_ONFAULT put it there -- a MAP_LOCKED
+// mapping's too -- and populates it unless it is VM_LOCKONFAULT (MEASURED:
+// under MCL_FUTURE a new anonymous, file or PROT_NONE mapping, a brk and a
+// shmat all raise VmLck by their size, and all but the PROT_NONE one become
+// resident; under MCL_FUTURE|MCL_ONFAULT each of them, MAP_LOCKED or not, is
+// "lo lf" and none does).
+static uint8_t mmap_locks_new(struct mm *mm, bool map_locked) {
     dword_t mcl = mm->mlockall_flags;
-    *populate = !(mcl & MCL_FUTURE_) || !(mcl & MCL_ONFAULT_);
-    return map_locked || (mcl & MCL_FUTURE_);
+    if (!map_locked && !(mcl & MCL_FUTURE_))
+        return 0;
+    if ((mcl & MCL_FUTURE_) && (mcl & MCL_ONFAULT_))
+        return PT_LOCKED | PT_LOCKONFAULT;
+    return PT_LOCKED;
 }
 
-int mm_future_lock_check(struct mm *mm, pages_t pages, bool *lock, bool *populate) {
-    *lock = mmap_locks_new(mm, false, populate);
+int mm_future_lock_check(struct mm *mm, pages_t pages, uint8_t *lock) {
+    *lock = mmap_locks_new(mm, false);
     if (!*lock)
         return 0;
     struct memlock_limit limit = memlock_limit_now();
@@ -468,10 +475,10 @@ int mm_future_lock_check(struct mm *mm, pages_t pages, bool *lock, bool *populat
 }
 
 // How a mapping made locked is made: see mmap_locks_new. NULL for an ordinary
-// one.
+// one. A plain lock populates it, an on-fault one does not.
 struct mmap_lock {
     struct memlock_limit limit;
-    bool populate;
+    uint8_t lock;
 };
 
 static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_t flags, fd_t fd_no, qword_t offset,
@@ -543,10 +550,10 @@ static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_
         // A locked one Linux would populate gets its entries now, to be
         // locked and populated below, as mlockall populates a reservation;
         // one it would not (PROT_NONE, MCL_ONFAULT) may stay reserved, with
-        // the mark that locks whatever it materialises.
-        bool eager = lock != NULL && lock->populate && (prot & P_RWX);
+        // the marks that lock whatever it materialises.
+        bool eager = lock != NULL && lock->lock == PT_LOCKED && (prot & P_RWX);
         if (eager || !mem_lazy_reserve(current->mem, page, pages,
-                                       prot | (lock != NULL ? MEM_LAZY_LOCKED : 0))) {
+                                       prot | (lock != NULL ? mem_lazy_lock_marks(lock->lock) : 0))) {
             if ((err = pt_map_nothing(current->mem, page, pages, prot)) < 0)
                 return err;
         }
@@ -580,7 +587,7 @@ static guest_addr_t do_mmap(guest_addr_t addr, qword_t len, dword_t prot, dword_
         }
     }
     if (lock != NULL)
-        mem_lock_new_range(current->mem, page, pages, lock->populate);
+        mem_lock_new_range(current->mem, page, pages, lock->lock, true);
     return mapped_addr;
 }
 
@@ -730,7 +737,8 @@ static guest_addr_t mmap_common_guest(guest_addr_t addr, qword_t len, dword_t pr
     // evictable, and in no VmLck. RLIMIT_MEMLOCK is read here, before any lock,
     // and only for a mapping that will be locked.
     struct mmap_lock lock_buf, *lock = NULL;
-    if (mmap_locks_new(current->mm, (flags & MMAP_LOCKED) != 0, &lock_buf.populate)) {
+    lock_buf.lock = mmap_locks_new(current->mm, (flags & MMAP_LOCKED) != 0);
+    if (lock_buf.lock != 0) {
         lock_buf.limit = memlock_limit_now();
         if ((flags & MMAP_LOCKED) && !lock_buf.limit.may_lock)
             return _EPERM;
@@ -999,9 +1007,12 @@ static qword_t mremap_tail_file_offset(struct mem *mem, page_t start, pages_t pa
 //
 // A locked mapping grows locked, and Linux populates what it adds (MEASURED on
 // 6.12: an mremap that grows a locked mapping, in place or moving it, raises
-// VmLck by the growth, and the whole mapping is one resident "lo" region).
+// VmLck by the growth, and the whole mapping is one resident "lo" region) --
+// unless the lock is an on-fault one, whose growth is locked the same way and
+// not populated (the whole mapping one "lo lf" region, only what was touched
+// resident). `lock` is the mapping's.
 static int mremap_map_file_extra(struct mem *mem, page_t start, pages_t pages,
-        struct fd *fd, qword_t file_offset, unsigned pt_flags, bool locked) {
+        struct fd *fd, qword_t file_offset, unsigned pt_flags, uint8_t lock) {
     if (fd == NULL || fd->ops->mmap == NULL)
         return _EFAULT;
     int prot = pt_flags & (P_READ | P_WRITE | P_EXEC | P_SHARED);
@@ -1014,8 +1025,8 @@ static int mremap_map_file_extra(struct mem *mem, page_t start, pages_t pages,
         e->data->fd = fd_retain(fd);
         e->data->file_offset = file_offset;
     }
-    if (locked)
-        mem_lock_new_range(mem, start, pages, true);
+    if (lock != 0)
+        mem_lock_new_range(mem, start, pages, lock, true);
     return 0;
 }
 
@@ -1033,23 +1044,27 @@ static int mremap_map_file_extra(struct mem *mem, page_t start, pages_t pages,
 // P_WIPEONFORK) keeps the eager map it always had.
 //
 // A locked mapping grows locked, as mremap_map_file_extra says, and populated
-// -- so an accessible tail gets entries to lock and populate, as a locked mmap
-// does, unless the mapping's own end is reserved: a locked reservation is one
-// Linux left unpopulated (MCL_ONFAULT), and its tail joins it, marked.
+// when the lock is a plain one -- so an accessible tail gets entries to lock
+// and populate, as a locked mmap does. Linux populates the growth alone, so it
+// does that whether or not the mapping's own end is reserved: a reserved end
+// that is locked plainly is one mlock's populate stopped short of, at a
+// PROT_NONE page before it. A tail nothing populates -- an on-fault lock's, a
+// PROT_NONE one, an unlocked one -- is reserved like any other, with the lock's
+// marks.
 static int mremap_map_anon_extra(struct mem *mem, page_t start, pages_t pages,
-        unsigned pt_flags, bool tail_reserved, bool locked) {
+        unsigned pt_flags, bool tail_reserved, uint8_t lock) {
     unsigned flags = pt_flags & ~P_COW;
     if ((flags & ~(P_RWX | P_SHARED | P_ANONYMOUS)) == 0 &&
-            (!locked || tail_reserved || !(flags & P_RWX))) {
-        unsigned lazy_flags = (flags & ~P_ANONYMOUS) | (locked ? MEM_LAZY_LOCKED : 0);
+            (lock != PT_LOCKED || !(flags & P_RWX))) {
+        unsigned lazy_flags = (flags & ~P_ANONYMOUS) | mem_lazy_lock_marks(lock);
         if (tail_reserved
                 ? mem_lazy_reserve_any_size(mem, start, pages, lazy_flags)
                 : mem_lazy_reserve(mem, start, pages, lazy_flags))
             return 0;
     }
     int err = pt_map_nothing(mem, start, pages, flags);
-    if (err == 0 && locked)
-        mem_lock_new_range(mem, start, pages, !tail_reserved);
+    if (err == 0 && lock != 0)
+        mem_lock_new_range(mem, start, pages, lock, true);
     return err;
 }
 
@@ -1184,9 +1199,9 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
         // split or a partial fault leaves one mapping in both states.
         unsigned pt_flags;
         struct data *backing_data;
-        bool locked;
+        uint8_t lock;
         if (!mem_range_flags(current->mem, src_page, old_pages, &pt_flags, &backing_data,
-                             &locked)) {
+                             &lock)) {
             res = _EFAULT;
             goto out;
         }
@@ -1195,7 +1210,7 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
         // destination's old contents as gone: Linux unmaps them first. It
         // unmaps them even when a limit then refuses the call; this keeps
         // them, as it does for the ENOMEM it has always checked here.
-        if (new_pages > old_pages && locked &&
+        if (new_pages > old_pages && lock != 0 &&
                 !memlock_room_replacing(current->mem, &memlock, new_pages - old_pages,
                         mem_locked_page_count_range(current->mem, dest_page, new_pages))) {
             res = _EAGAIN;
@@ -1231,8 +1246,8 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
                     old_pages, backing_data);
             pages_t extra_pages = new_pages - old_pages;
             err = is_file
-                    ? mremap_map_file_extra(current->mem, dest_page + old_pages, extra_pages, backing_fd, extra_file_offset, pt_flags, locked)
-                    : mremap_map_anon_extra(current->mem, dest_page + old_pages, extra_pages, pt_flags, tail_reserved, locked);
+                    ? mremap_map_file_extra(current->mem, dest_page + old_pages, extra_pages, backing_fd, extra_file_offset, pt_flags, lock)
+                    : mremap_map_anon_extra(current->mem, dest_page + old_pages, extra_pages, pt_flags, tail_reserved, lock);
             if (err < 0) {
                 res = err;
                 goto out;
@@ -1282,15 +1297,15 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
     // that is partly touched, or a remainder a split left, is still one mapping.
     unsigned pt_flags;
     struct data *backing_data;
-    bool locked;
+    uint8_t lock;
     if (!mem_range_flags(current->mem, PAGE(addr), old_pages, &pt_flags, &backing_data,
-                         &locked)) {
+                         &lock)) {
         res = _EFAULT;
         goto out;
     }
     // RLIMIT_MEMLOCK when the mapping is locked, then RLIMIT_AS and
     // RLIMIT_DATA, for the growth, in Linux's order (vma_to_resize).
-    if (locked && !memlock_room(current->mem, &memlock, new_pages - old_pages)) {
+    if (lock != 0 && !memlock_room(current->mem, &memlock, new_pages - old_pages)) {
         res = _EAGAIN;
         goto out;
     }
@@ -1317,8 +1332,8 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
     bool extra_is_hole = pt_is_hole(current->mem, extra_start, extra_pages);
     if (extra_is_hole) {
         int err = is_file
-                ? mremap_map_file_extra(current->mem, extra_start, extra_pages, backing_fd, extra_file_offset, pt_flags, locked)
-                : mremap_map_anon_extra(current->mem, extra_start, extra_pages, pt_flags, tail_reserved, locked);
+                ? mremap_map_file_extra(current->mem, extra_start, extra_pages, backing_fd, extra_file_offset, pt_flags, lock)
+                : mremap_map_anon_extra(current->mem, extra_start, extra_pages, pt_flags, tail_reserved, lock);
         if (err == 0 && !is_file)
             mremap_join_anon_extra(current->mem, extra_start, extra_pages);
         res = err < 0 ? err : addr;
@@ -1338,8 +1353,8 @@ guest_addr_t sys_mremap_guest(guest_addr_t addr, qword_t old_len, qword_t new_le
         goto out;
     }
     int err = is_file
-            ? mremap_map_file_extra(current->mem, new_page + old_pages, extra_pages, backing_fd, extra_file_offset, pt_flags, locked)
-            : mremap_map_anon_extra(current->mem, new_page + old_pages, extra_pages, pt_flags, tail_reserved, locked);
+            ? mremap_map_file_extra(current->mem, new_page + old_pages, extra_pages, backing_fd, extra_file_offset, pt_flags, lock)
+            : mremap_map_anon_extra(current->mem, new_page + old_pages, extra_pages, pt_flags, tail_reserved, lock);
     if (err == 0) {
         err = pt_move(current->mem, PAGE(addr), new_page, old_pages);
         if (err < 0)
@@ -1969,10 +1984,24 @@ long sys_set_mempolicy_guest(int UNUSED(mode), guest_addr_t UNUSED(nodemask_addr
 //      pages before it locked; AOK locked nothing then.
 //   6. With no hole, mlock populates up to the first PROT_NONE page, which
 //      makes it ENOMEM with the whole range locked; AOK said 0.
-// `populate` is false for munlock.
-static int_t mlock_apply(guest_addr_t addr, qword_t len, bool locked, bool populate) {
+//
+// mlock2(2) is the same call with flags, and it was ENOSYS: a toolchain whose
+// glibc assumes the syscall issues it directly, so mlock2(MLOCK_ONFAULT) and
+// even mlock2(0) failed. Its one flag makes the lock an on-fault one
+// (pt_entry::locked in emu/memory.h), which takes every step above but the
+// sixth: it populates nothing, so a PROT_NONE page is no failure either. Any
+// other flag is EINVAL before step 1 (MEASURED: ahead of the limit's EPERM and
+// a hole's ENOMEM). mlock over an on-fault lock makes it a plain one again and
+// populates it, and mlock2(MLOCK_ONFAULT) over a plain one leaves resident what
+// was; VmLck moves for neither.
+//
+// `lock` is what the range's lock becomes: 0 for munlock, PT_LOCKED for mlock
+// and mlock2(0), and with PT_LOCKONFAULT for mlock2(MLOCK_ONFAULT). Only a
+// plain lock populates.
+static int_t mlock_apply(guest_addr_t addr, qword_t len, uint8_t lock) {
+    bool populate = lock == PT_LOCKED;
     struct memlock_limit limit = {.unlimited = true, .may_lock = true};
-    if (locked) {
+    if (lock != 0) {
         limit = memlock_limit_now();
         if (!limit.may_lock)
             return _EPERM;
@@ -1989,7 +2018,7 @@ static int_t mlock_apply(guest_addr_t addr, qword_t len, bool locked, bool popul
     page_t start = PAGE(base);
     struct mem *mem = current->mem;
 
-    if (locked && !limit.unlimited) {
+    if (lock != 0 && !limit.unlimited) {
         size_t want = mem_locked_page_count(mem) + pages;
         if (want > limit.pages) {
             mem_read_lock_quiesce_aware(mem);
@@ -2010,7 +2039,7 @@ static int_t mlock_apply(guest_addr_t addr, qword_t len, bool locked, bool popul
     //
     // A reservation has no entry to carry the lock. mem_lazy_lock_range
     // populates it, as Linux populates what it locks, or marks it; munlock
-    // clears the mark. That changes the reservation table, so it takes the
+    // clears the marks. That changes the reservation table, so it takes the
     // barrier, and only when the read-locked question says a reservation needs
     // it: an mlock of anything else costs what it always did. Linux populates
     // nothing when there is a hole, and neither does this.
@@ -2018,26 +2047,26 @@ static int_t mlock_apply(guest_addr_t addr, qword_t len, bool locked, bool popul
     pages_t mapped = pt_mapped_prefix(mem, start, pages);
     bool populating = populate && mapped == pages;
     bool needed = mapped != 0 &&
-            mem_lazy_lock_range_needed(mem, start, start + mapped, locked, populating);
+            mem_lazy_lock_range_needed(mem, start, start + mapped, lock, populating);
     mem_read_unlock_quiesce_aware(mem);
     if (mapped == 0)
         return _ENOMEM;
     if (needed) {
         mem_write_lock_with_pokes(mem);
-        bool ok = mem_lazy_lock_range(mem, start, start + mapped, locked, populating);
+        bool ok = mem_lazy_lock_range(mem, start, start + mapped, lock, populating);
         mem_write_unlock_with_pokes(mem);
         if (!ok)
             return _ENOMEM;     // a sibling unmapped part of it meanwhile
     }
 
-    long changed = pt_set_locked(mem, start, mapped, locked, populating);
+    long changed = pt_set_locked(mem, start, mapped, lock, populating);
     if (changed < 0)
         return (int_t) changed;
     return mapped < pages ? _ENOMEM : 0;
 }
 
 // mlockall's and munlockall's part for reservations; see mem_lazy_lock_all.
-static void mlock_reservations(bool locked, bool populate) {
+static void mlock_reservations(uint8_t lock, bool populate) {
     struct mem *mem = current->mem;
     mem_read_lock_quiesce_aware(mem);
     bool any = mem_lazy_overlaps(mem, 0, mem->page_limit);
@@ -2045,20 +2074,35 @@ static void mlock_reservations(bool locked, bool populate) {
     if (!any)
         return;
     mem_write_lock_with_pokes(mem);
-    mem_lazy_lock_all(mem, locked, populate);
+    mem_lazy_lock_all(mem, lock, populate);
     mem_write_unlock_with_pokes(mem);
 }
 
 int_t sys_mlock_guest(guest_addr_t addr, qword_t len) {
-    return mlock_apply(addr, len, true, true);
+    return mlock_apply(addr, len, PT_LOCKED);
 }
 
 int_t sys_mlock(addr_t addr, dword_t len) {
     return sys_mlock_guest(addr, len);
 }
 
+// The flags are an int to Linux, so the upper half of a 64-bit caller's
+// register is never looked at (MEASURED on x86_64: (1 << 32) | MLOCK_ONFAULT
+// is an on-fault lock and 1 << 32 a plain one); the dispatch passes the low
+// half.
+int_t sys_mlock2_guest(guest_addr_t addr, qword_t len, dword_t flags) {
+    if (flags & ~(dword_t) MLOCK_ONFAULT_)
+        return _EINVAL;
+    return mlock_apply(addr, len, (flags & MLOCK_ONFAULT_) ? PT_LOCKED | PT_LOCKONFAULT
+                                                           : PT_LOCKED);
+}
+
+int_t sys_mlock2(addr_t addr, dword_t len, dword_t flags) {
+    return sys_mlock2_guest(addr, len, flags);
+}
+
 int_t sys_munlock_guest(guest_addr_t addr, qword_t len) {
-    return mlock_apply(addr, len, false, false);
+    return mlock_apply(addr, len, 0);
 }
 
 int_t sys_munlock(addr_t addr, dword_t len) {
@@ -2091,13 +2135,20 @@ int_t sys_mlockall_guest(qword_t flags) {
     // A reservation is part of what is mapped now. Without MCL_ONFAULT Linux
     // populates every mapping it can access, so the accessible reservations are
     // materialised and locked with the rest. A PROT_NONE one is not populated
-    // there either, and under MCL_ONFAULT nothing is: those keep a mark that
-    // locks each entry they materialise later, as a page faulted into a locked
+    // there either, and under MCL_ONFAULT nothing is: those keep marks that
+    // lock each entry they materialise later, as a page faulted into a locked
     // mapping is locked on Linux. Reservations first: a page a sibling thread
     // materialises before the entry walk below is then locked either way.
+    //
+    // Every mapping's lock is replaced, as mlock's is: MCL_CURRENT|MCL_ONFAULT
+    // makes each one "lo lf", those mlock had locked and populated included,
+    // and leaves what was resident resident; a later MCL_CURRENT makes them
+    // plain again and populates them (MEASURED on 6.12).
     if ((flags & MCL_CURRENT_) != 0) {
-        mlock_reservations(true, (flags & MCL_ONFAULT_) == 0);
-        pt_set_locked_all(current->mem, true, (flags & MCL_ONFAULT_) == 0);
+        bool onfault = (flags & MCL_ONFAULT_) != 0;
+        uint8_t lock = onfault ? PT_LOCKED | PT_LOCKONFAULT : PT_LOCKED;
+        mlock_reservations(lock, !onfault);
+        pt_set_locked_all(current->mem, lock, !onfault);
     }
     return 0;
 }
@@ -2108,8 +2159,8 @@ int_t sys_mlockall(dword_t flags) {
 
 int_t sys_munlockall_guest(void) {
     current->mm->mlockall_flags = 0;
-    mlock_reservations(false, false);
-    pt_set_locked_all(current->mem, false, false);
+    mlock_reservations(0, false);
+    pt_set_locked_all(current->mem, 0, false);
     return 0;
 }
 
@@ -2285,8 +2336,10 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk) {
     // Under mlockall(MCL_FUTURE) the heap grows locked, and within
     // RLIMIT_MEMLOCK or not at all (Linux's check_brk_limits; MEASURED on
     // 6.12: sbrk past the limit fails, and VmLck follows the break both ways).
+    // Under MCL_ONFAULT too it grows on-fault locked, unpopulated.
     struct mmap_lock lock_buf, *lock = NULL;
-    if (new_brk > mm->brk && mmap_locks_new(mm, false, &lock_buf.populate)) {
+    lock_buf.lock = new_brk > mm->brk ? mmap_locks_new(mm, false) : 0;
+    if (lock_buf.lock != 0) {
         lock_buf.limit = memlock_limit_now();
         lock = &lock_buf;
     }
@@ -2364,7 +2417,7 @@ guest_addr_t sys_brk_guest(guest_addr_t new_brk) {
             }
         }
         if (lock != NULL)
-            mem_lock_new_range(&mm->mem, start, size, lock->populate);
+            mem_lock_new_range(&mm->mem, start, size, lock->lock, true);
     } else if (new_brk < old_brk) {
         // shrink heap: unmap region from new_brk to old_brk
         // first page to unmap is PAGE(new_brk)

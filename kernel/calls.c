@@ -1232,6 +1232,7 @@ static syscall_t i386_syscall_table[] = {
     [372] = (syscall_t) sys_recvmsg,
     [373] = (syscall_t) sys_shutdown,
     [375] = (syscall_t) sys_membarrier, // membarrier
+    [376] = (syscall_t) sys_mlock2,
     [377] = (syscall_t) sys_copy_file_range,
     [378] = (syscall_t) sys_preadv2_i386,
     [379] = (syscall_t) sys_pwritev2_i386,
@@ -1702,6 +1703,7 @@ static syscall_t amd64_syscall_table[470] = {
     [319] = (syscall_t) sys_memfd_create,
     [322] = (syscall_t) sys_execveat,
     [324] = (syscall_t) sys_membarrier,
+    [325] = (syscall_t) sys_mlock2, // dispatched natively (full-width); entry needed to pass the NULL check
     [326] = (syscall_t) sys_copy_file_range,
     [327] = (syscall_t) sys_preadv2_amd64,
     [328] = (syscall_t) sys_pwritev2_amd64,
@@ -2093,7 +2095,7 @@ static syscall_t arm64_syscall_table[470] = {
     // spamming "ERROR: arm64 stub syscall 280" 8x in a row during boot.
     [280] = (syscall_t) syscall_stub_silent, // bpf
     [282] = (syscall_t) syscall_stub, // userfaultfd
-    [284] = (syscall_t) syscall_stub, // mlock2
+    [284] = (syscall_t) sys_mlock2, // dispatched natively (full-width); entry needed to pass the NULL check
     [286] = (syscall_t) sys_preadv2_guest, // preadv2
     [287] = (syscall_t) sys_pwritev2_guest, // pwritev2
     [288] = (syscall_t) syscall_stub, // pkey_mprotect
@@ -2913,6 +2915,9 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 227: result = (dword_t) sys_msync_guest(raw_args[0], raw_args[1], (int_t) raw_args[2]); break; // msync
     case 228: result = (dword_t) sys_mlock_guest(raw_args[0], raw_args[1]); break; // mlock
     case 229: result = (dword_t) sys_munlock_guest(raw_args[0], raw_args[1]); break; // munlock
+    // mlock2(addr, len, flags): as mlock, and flags is an int, so the low half
+    // of its register is all Linux reads. It was on the clean-ENOSYS list below.
+    case 284: result = (dword_t) sys_mlock2_guest(raw_args[0], raw_args[1], (dword_t) raw_args[2]); break; // mlock2
     case 232: result = (dword_t) sys_mincore_guest(raw_args[0], raw_args[1], raw_args[2]); break; // mincore
     case 235: result = (dword_t) sys_mbind_guest( raw_args[0], raw_args[1], (int_t) raw_args[2], raw_args[3], raw_args[4], (uint_t) raw_args[5]); break; // mbind
     case 243: result = (dword_t) sys_recvmmsg_amd64_guest( (fd_t) raw_args[0], raw_args[1], (uint_t) raw_args[2], (int_t) raw_args[3], raw_args[4]); break; // recvmmsg
@@ -3030,7 +3035,7 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     case 217: case 218:
     case 234: case 238: case 239: case 241: case 262:
     case 263: case 268: case 271: case 273:
-    case 274: case 275: case 280: case 282: case 284:
+    case 274: case 275: case 280: case 282:
     case 288: case 289: case 290: case 294:
     case 425: case 426: case 427:
     case 449: // futex_waitv
@@ -3448,6 +3453,12 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
     case 150:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_munlock_guest(raw_args[0],
                 raw_args[1]));
+        return true;
+    // mlock2(addr, len, flags): mlock's full-width range, and an int of flags,
+    // whose register's upper half Linux never reads.
+    case 325:
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_mlock2_guest(raw_args[0],
+                raw_args[1], (dword_t) raw_args[2]));
         return true;
     case 158:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_arch_prctl_guest(

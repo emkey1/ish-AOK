@@ -51,14 +51,14 @@ struct data;
 // materialises just the range it moves. A checkpoint saves reservations as
 // reservations, and /proc/pid/maps and smaps list them. mlock and mlockall
 // populate what they lock, as Linux does, so the pages have entries to carry
-// the lock; what Linux leaves unpopulated (PROT_NONE, MCL_ONFAULT) is marked
-// MEM_LAZY_LOCKED instead, so the entries it materialises later are locked as
-// they are made. A shared futex key names the page's struct data, so the futex
-// code materialises a shared reserved page before it keys it.
+// the lock; what Linux leaves unpopulated (PROT_NONE, an on-fault lock) is
+// marked MEM_LAZY_LOCKED instead, so the entries it materialises later are
+// locked as they are made. A shared futex key names the page's struct data, so
+// the futex code materialises a shared reserved page before it keys it.
 struct mem_lazy_map {
     page_t start, end;   // empty iff start >= end
     unsigned flags;      // pt flags the pages get when materialised, and
-                         // MEM_LAZY_LOCKED
+                         // MEM_LAZY_LOCK_MARKS
 };
 // Not a pt flag. A reservation mlock or mlockall locked without populating it,
 // or one made locked and left unpopulated (a PROT_NONE mmap under MCL_FUTURE,
@@ -67,6 +67,13 @@ struct mem_lazy_map {
 // Materialising strips it from the entries' flags, and a split or move keeps it
 // on each piece. munlock and munlockall clear it. Its pages count in VmLck.
 #define MEM_LAZY_LOCKED (1u << 31)
+// Not a pt flag either, and only ever beside MEM_LAZY_LOCKED: the lock is an
+// on-fault one (PT_LOCKONFAULT), so what the reservation materialises gets that
+// lock -- MLOCK_ONFAULT, MCL_ONFAULT, or the growth of such a mapping. It
+// changes, splits and moves with MEM_LAZY_LOCKED, and like it tells the
+// reservation apart from its neighbours: an mlock that clears it is a new VMA.
+#define MEM_LAZY_LOCKONFAULT (1u << 30)
+#define MEM_LAZY_LOCK_MARKS (MEM_LAZY_LOCKED | MEM_LAZY_LOCKONFAULT)
 // A new reservation may take any free slot; a split, a move that leaves more
 // reservations than it found, or an mlock or munlock that marks or unmarks part
 // of a reservation, only while that keeps the count within
@@ -347,10 +354,11 @@ void mem_lazy_join(struct mem *mem, page_t page);
 // reading a reserved page as the entry it would materialise to. False when a
 // page is neither mapped nor reserved, or the flags or the lock differ -- a
 // range over a lock boundary spans two of Linux's VMAs, which mremap refuses
-// with EFAULT (MEASURED on 6.12). *data is the first page's struct data, NULL
-// when that page is reserved; *locked is the range's lock.
+// with EFAULT (MEASURED on 6.12, an on-fault lock's boundary included). *data
+// is the first page's struct data, NULL when that page is reserved; *lock is
+// the range's lock (see pt_entry::locked).
 bool mem_range_flags(struct mem *mem, page_t start, pages_t pages,
-                     unsigned *flags, struct data **data, bool *locked);
+                     unsigned *flags, struct data **data, uint8_t *lock);
 // Materialise every reservation overlapping [start, end), IN FULL. Maps, so it
 // must not be called with the JIT invalidate lock held.
 void mem_lazy_materialize_range(struct mem *mem, page_t start, page_t end);
@@ -360,26 +368,27 @@ void mem_lazy_materialize_range(struct mem *mem, page_t start, page_t end);
 // the same locking rule as mem_lazy_materialize_range.
 void mem_lazy_populate(struct mem *mem, page_t start, page_t end);
 // mlock and munlock of [start, end), for reserved pages; pt_set_locked does the
-// entries. A lock with `populate` populates the part of the range in an
-// accessible reservation, as Linux populates what it locks, and marks the part
-// in a PROT_NONE one, which Linux cannot populate; without `populate` it marks
-// both. An unlock clears the mark and populates nothing. Marking part of a
-// reservation splits it at the range's edges; when MEM_LAZY_SPLIT_LIMIT refuses
-// that, the part in range is populated instead, for pt_set_locked to lock or
-// unlock. Changes nothing and returns false when a page of the range is neither
-// mapped nor reserved: the caller passes the mapped prefix of its range, which
-// is all Linux changes. Needs the write lock, and may map.
+// entries. `lock` is what the range gets (see pt_entry::locked). A plain lock
+// with `populate` populates the part of the range in an accessible reservation,
+// as Linux populates what it locks, and marks the part in a PROT_NONE one,
+// which Linux cannot populate; without `populate`, or for an on-fault lock, it
+// marks both. An unlock clears the marks and populates nothing. Marking part of
+// a reservation splits it at the range's edges; when MEM_LAZY_SPLIT_LIMIT
+// refuses that, the part in range is populated instead, for pt_set_locked to
+// lock or unlock. Changes nothing and returns false when a page of the range is
+// neither mapped nor reserved: the caller passes the mapped prefix of its range,
+// which is all Linux changes. Needs the write lock, and may map.
 // mem_lazy_lock_range_needed says, under the read lock, whether a call would do
 // anything, so the caller takes the barrier only then.
-bool mem_lazy_lock_range(struct mem *mem, page_t start, page_t end, bool locked, bool populate);
-bool mem_lazy_lock_range_needed(struct mem *mem, page_t start, page_t end, bool locked,
+bool mem_lazy_lock_range(struct mem *mem, page_t start, page_t end, uint8_t lock, bool populate);
+bool mem_lazy_lock_range_needed(struct mem *mem, page_t start, page_t end, uint8_t lock,
                                 bool populate);
 // mlockall(MCL_CURRENT) and munlockall, for reservations; pt_set_locked_all
-// does the entries. A lock marks every reservation MEM_LAZY_LOCKED and, with
-// `populate` (no MCL_ONFAULT), materialises every one that is not PROT_NONE,
-// as Linux populates the mappings it can. An unlock clears the marks. Needs
-// the write lock, and maps when populating.
-void mem_lazy_lock_all(struct mem *mem, bool locked, bool populate);
+// does the entries. A lock marks every reservation with it and, when it is a
+// plain one with `populate` (no MCL_ONFAULT), materialises every one that is
+// not PROT_NONE, as Linux populates the mappings it can. An unlock clears the
+// marks. Needs the write lock, and maps when populating.
+void mem_lazy_lock_all(struct mem *mem, uint8_t lock, bool populate);
 // Drop reservation coverage of [start, end) without mapping, splitting a
 // reservation that strictly contains it. False, with nothing changed, when that
 // split is refused (MEM_LAZY_SPLIT_LIMIT).
@@ -730,6 +739,16 @@ struct pt_entry {
     // and maps (a region ends where it changes) all report it. Written only
     // through mem_pt_set_lock on a live entry, which keeps mem->locked_pages;
     // an empty entry's is always 0.
+    //
+    // Two bits since mlock2(2): PT_LOCKED is VM_LOCKED, and PT_LOCKONFAULT is
+    // VM_LOCKONFAULT, which Linux keeps beside it and never sets alone
+    // (MLOCK_ONFAULT, MCL_ONFAULT). An on-fault lock is a lock -- counted in
+    // VmLck, refused by madvise, kept out of swap -- that nothing populates:
+    // not the call that locks it, and not the growth of its mapping by mremap
+    // or an mprotect that makes it writable, all of which populate a plain one
+    // (populate_vma_page_range returns at VM_LOCKONFAULT). smaps prints "lf"
+    // for it, and maps ends a region where it changes, as for the lock. So
+    // whatever carries the lock carries the whole byte.
     uint8_t locked;
 #if ENGINE_JIT
     struct list blocks[2];
@@ -769,6 +788,22 @@ static inline enum mem_page_class mem_page_class(unsigned flags) {
 // report residency per region (smaps), so they add up to mem_rss_pages_now.
 static inline bool mem_page_is_touched(const struct pt_entry *entry) {
     return (__atomic_load_n(&entry->accessed, __ATOMIC_RELAXED) & PT_TOUCHED) != 0;
+}
+
+// pt_entry::locked values, and what every function below that takes a `lock`
+// takes: 0, PT_LOCKED, or PT_LOCKED | PT_LOCKONFAULT. See the comment there.
+#define PT_LOCKED 0x1
+#define PT_LOCKONFAULT 0x2
+// The lock a reservation's marks give the entries it materialises, and the
+// marks that stand for a lock on a reservation.
+static inline uint8_t mem_lazy_lock(unsigned lazy_flags) {
+    if (!(lazy_flags & MEM_LAZY_LOCKED))
+        return 0;
+    return PT_LOCKED | ((lazy_flags & MEM_LAZY_LOCKONFAULT) ? PT_LOCKONFAULT : 0);
+}
+static inline unsigned mem_lazy_lock_marks(uint8_t lock) {
+    return ((lock & PT_LOCKED) ? MEM_LAZY_LOCKED : 0) |
+            ((lock & PT_LOCKONFAULT) ? MEM_LAZY_LOCKONFAULT : 0);
 }
 
 bool pt_is_hole(struct mem *mem, page_t start, pages_t pages);
@@ -848,15 +883,18 @@ static inline bool mem_entry_is_special(const struct pt_entry *entry) {
     return entry->data->name != NULL;
 }
 
-// mlock(2)/munlock(2) of [start, start + pages): pin the pages against
-// eviction, or release them. Linux's apply_vma_lock_flags, then for a lock its
+// mlock(2)/mlock2(2)/munlock(2) of [start, start + pages): pin the pages
+// against eviction, or release them; `lock` is what each page's lock becomes
+// (see pt_entry::locked). Linux's apply_vma_lock_flags, then for a lock its
 // __mm_populate, all MEASURED on 6.12:
 //   - Page by page up to the first page that is neither mapped nor reserved:
 //     the pages before a hole are locked (unlocked) and the result is _ENOMEM,
 //     as Linux leaves the VMAs before a gap changed. Nothing is populated then.
-//   - Otherwise, with `populate`, the accessible pages come into the resident
-//     set up to the first PROT_NONE page, entry or reservation, which Linux
-//     cannot populate: that is _ENOMEM too, with the whole range locked.
+//   - Otherwise, a plain lock with `populate` brings the accessible pages into
+//     the resident set up to the first PROT_NONE page, entry or reservation,
+//     which Linux cannot populate: that is _ENOMEM too, with the whole range
+//     locked. An on-fault lock populates nothing and so is never refused for
+//     PROT_NONE (MLOCK_ONFAULT of [rw, none, rw] is 0, nothing resident).
 //   - Special mappings are stepped over.
 // Returns the number of entries whose state changed, or the _ENOMEM. A reserved
 // page has no entry: the caller runs mem_lazy_lock_range on the range first.
@@ -864,21 +902,24 @@ static inline bool mem_entry_is_special(const struct pt_entry *entry) {
 // The caller charges RLIMIT_MEMLOCK first (kernel/mmap.c, mlock_apply). Must be
 // called with no mem lock held; takes the READ lock itself, so it costs a guest
 // that never enables swap what the old range check did.
-long pt_set_locked(struct mem *mem, page_t start, pages_t pages, bool locked, bool populate);
+long pt_set_locked(struct mem *mem, page_t start, pages_t pages, uint8_t lock, bool populate);
 // Lock or unlock every mapped page but the special ones, for mlockall(2) and
 // munlockall(2). Returns the number of pages now locked. Entries only;
-// mem_lazy_lock_all does reservations. `populate` is MCL_CURRENT without
-// MCL_ONFAULT: the pages it can reach come into the resident set, as
-// pt_set_locked's do.
-long pt_set_locked_all(struct mem *mem, bool locked, bool populate);
+// mem_lazy_lock_all does reservations. `populate` with a plain lock is
+// MCL_CURRENT without MCL_ONFAULT: the pages it can reach come into the resident
+// set, as pt_set_locked's do.
+long pt_set_locked_all(struct mem *mem, uint8_t lock, bool populate);
 // Lock the entries of [start, start + pages), a mapping just made that Linux
 // would give VM_LOCKED: MCL_FUTURE or MAP_LOCKED at mmap, brk and shmat, and
-// the tail an mremap grows onto a locked mapping. `populate` brings the
-// accessible ones into the resident set. Special mappings are skipped, and a
-// reservation in the range must have been made with MEM_LAZY_LOCKED. Call with
-// the mem lock held, in any mode: it only sets bytes of entries nothing else
-// can have locked yet.
-void mem_lock_new_range(struct mem *mem, page_t start, pages_t pages, bool populate);
+// the tail an mremap grows onto a locked mapping. `lock` is PT_LOCKED, or with
+// PT_LOCKONFAULT as well under MCL_FUTURE|MCL_ONFAULT or for the growth of an
+// on-fault mapping. `populate` brings the accessible ones into the resident
+// set, and is ignored for an on-fault lock. Special mappings are skipped, and a
+// reservation in the range must have been made with the lock's marks
+// (mem_lazy_lock_marks). Call with the mem lock held, in any mode: it only sets
+// bytes of entries nothing else can have locked yet.
+void mem_lock_new_range(struct mem *mem, page_t start, pages_t pages, uint8_t lock,
+                        bool populate);
 // VmLck: the pages of locked mappings, the reservations mlock marked included --
 // Linux's locked_vm, and what RLIMIT_MEMLOCK is charged against. A counter plus
 // the reservation table (MEM_LAZY_MAX slots); no lock and no walk of the page

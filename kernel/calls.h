@@ -121,6 +121,8 @@ long sys_set_mempolicy_guest(int mode, guest_addr_t nodemask_addr, qword_t maxno
 
 int_t sys_mlock(addr_t addr, dword_t len);
 int_t sys_mlock_guest(guest_addr_t addr, qword_t len);
+int_t sys_mlock2(addr_t addr, dword_t len, dword_t flags);
+int_t sys_mlock2_guest(guest_addr_t addr, qword_t len, dword_t flags);
 int_t sys_munlock(addr_t addr, dword_t len);
 int_t sys_munlock_guest(guest_addr_t addr, qword_t len);
 int_t sys_mlockall(dword_t flags);

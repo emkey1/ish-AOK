@@ -284,9 +284,10 @@ so locking a remainder, or the tail `mremap` grew, returned `ENOMEM` where it
 had worked, and `mlockall` locked only the entries it found. Linux populates
 what `mlock` and `mlockall` lock where it can, so AOK materializes those
 reservations too, and for `mlock` only the range, splitting a reservation around
-it. What Linux leaves unpopulated, a `PROT_NONE` mapping or anything under
-`MCL_ONFAULT`, stays reserved with a mark, so the entries it materializes later
-are locked when they are made. The futex table keyed a shared futex through the
+it. What Linux leaves unpopulated, a `PROT_NONE` mapping or anything locked on
+fault (`MCL_ONFAULT`, or `mlock2`'s `MLOCK_ONFAULT`), stays reserved with a
+mark, so the entries it materializes later are locked, on fault too where the
+lock was, when they are made. The futex table keyed a shared futex through the
 page-table entry, which a reserved page does not have yet: a thread waiting on
 an untouched page of a shared remainder was keyed one way, and the wake that
 came after the page was written was keyed another, so the waiter slept on. A
