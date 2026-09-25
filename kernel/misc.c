@@ -52,6 +52,9 @@
 #define ARCH_SET_FS_ 0x1002
 #define ARCH_GET_FS_ 0x1003
 #define ARCH_GET_GS_ 0x1004
+// Linux's TASK_SIZE_MAX under 4-level paging: the 47-bit user half less its
+// top page. ARCH_SET_FS and ARCH_SET_GS refuse a base at or above it (EPERM).
+#define AMD64_TASK_SIZE_MAX_ ((((qword_t) 1) << 47) - PAGE_SIZE)
 
 // Linux's cap_valid: a capability this kernel has, which is what
 // /proc/sys/kernel/cap_last_cap says. libcap finds the number by probing
@@ -319,6 +322,8 @@ int_t sys_arch_prctl_guest(int_t code, guest_addr_t addr) {
         case ARCH_SET_FS_:
             // Linux writes the base and leaves the FS selector 0, whatever
             // `mov Sreg, r/m` had loaded.
+            if (addr >= AMD64_TASK_SIZE_MAX_)
+                return _EPERM;
             current->cpu.tls_ptr = addr;
             current->cpu.amd64_sreg[AMD64_SREG_FS] = 0;
             return 0;
@@ -329,10 +334,18 @@ int_t sys_arch_prctl_guest(int_t code, guest_addr_t addr) {
             return 0;
         }
         case ARCH_SET_GS_:
-        case ARCH_GET_GS_:
-            // The current long-mode bring-up only has one TLS base, used for
-            // amd64 FS-relative accesses.
-            return _EINVAL;
+            // The same for GS, whose base a 65 prefix adds.
+            if (addr >= AMD64_TASK_SIZE_MAX_)
+                return _EPERM;
+            current->cpu.amd64_gs_base = addr;
+            current->cpu.amd64_sreg[AMD64_SREG_GS] = 0;
+            return 0;
+        case ARCH_GET_GS_: {
+            qword_t gs_base = current->cpu.amd64_gs_base;
+            if (user_put(addr, gs_base))
+                return _EFAULT;
+            return 0;
+        }
         default:
             return _EINVAL;
     }

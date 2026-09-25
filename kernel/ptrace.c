@@ -231,6 +231,7 @@ static void get_user_regs_amd64(struct task *task, struct user_regs_struct_amd64
     user_regs_->rsp = cpu->amd64_regs[amd64_rsp];
     user_regs_->ss = 0x2b;
     user_regs_->fs_base = cpu->tls_ptr;
+    user_regs_->gs_base = cpu->amd64_gs_base;
     user_regs_->ds = cpu->amd64_sreg[AMD64_SREG_DS];
     user_regs_->es = cpu->amd64_sreg[AMD64_SREG_ES];
     user_regs_->fs = cpu->amd64_sreg[AMD64_SREG_FS];
@@ -270,6 +271,7 @@ static void set_user_regs_amd64(struct task *task, const struct user_regs_struct
     cpu->df_offset = cpu->df ? -1 : 1;
     cpu->amd64_regs[amd64_rsp] = user_regs_->rsp;
     cpu->tls_ptr = user_regs_->fs_base;
+    cpu->amd64_gs_base = user_regs_->gs_base;
     set_user_sreg_amd64(cpu, AMD64_SREG_DS, user_regs_->ds);
     set_user_sreg_amd64(cpu, AMD64_SREG_ES, user_regs_->es);
     set_user_sreg_amd64(cpu, AMD64_SREG_FS, user_regs_->fs);

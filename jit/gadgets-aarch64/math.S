@@ -3007,6 +3007,12 @@ amd64_vmem_segfault_read:
     ldr  x14, [_cpu, CPU_tls_ptr]
     add  x9, x9, x14
 7004:
+    /* AMD64_JIT_MEM_GS (bit 36): the same for a %gs-relative address, whose
+       base ARCH_SET_GS sets. */
+    tbz  x8, 36, 7005f
+    ldr  x14, [_cpu, CPU_amd64_gs_base]
+    add  x9, x9, x14
+7005:
 .endm
 
 # movaps/movups xmm, m128 (0F 28 / 0F 10): cpu->xmm[reg] = [addr]

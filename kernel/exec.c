@@ -1483,6 +1483,9 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
     // and flush_thread empties the TLS entries. This clears tls_ptr too,
     // which is amd64's FS base as well as i386's GS base.
     i386_sreg_exec_reset(&save->cpu);
+    // start_thread clears the amd64 GS base with FS's (loading __USER_DS
+    // first on a CPU whose null selector would keep a base).
+    save->cpu.amd64_gs_base = 0;
     save->cpu.amd64_rip = entry;
     save->cpu.amd64_regs[amd64_rsp] = sp;
     memset(save->cpu.amd64_store_trace, 0, sizeof(save->cpu.amd64_store_trace));

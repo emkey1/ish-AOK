@@ -347,6 +347,7 @@ x86/amd64_incdec.c
 x86/popf_ac_id.c
 x86/amd64_singlestep.c
 x86/amd64_segment_regs.c
+x86/amd64_gs_base.c
 x86/avx_regress.c
 x86/avx32_smoke.c
 x86/i386_segment_regs.c

@@ -6753,7 +6753,7 @@ static bool amd64_trap_decode_modrm(guest_addr_t *ip, struct amd64_trap_rex_pref
     return true;
 }
 
-static qword_t amd64_trap_effective_addr(struct cpu_state *cpu, const struct amd64_trap_modrm *modrm, bool fs_prefix, guest_addr_t rip_after_modrm) {
+static qword_t amd64_trap_effective_addr(struct cpu_state *cpu, const struct amd64_trap_modrm *modrm, enum amd64_seg seg_prefix, guest_addr_t rip_after_modrm) {
     qword_t addr = (qword_t) (sqword_t) modrm->disp;
     if (modrm->rip_relative)
         addr += rip_after_modrm;
@@ -6761,28 +6761,27 @@ static qword_t amd64_trap_effective_addr(struct cpu_state *cpu, const struct amd
         addr += cpu->amd64_regs[modrm->base];
     if (modrm->has_index)
         addr += cpu->amd64_regs[modrm->index] << modrm->scale;
-    if (fs_prefix)
-        addr += cpu->tls_ptr;
+    addr += amd64_seg_base(cpu, seg_prefix);
     return addr;
 }
 
-static bool amd64_trap_read_rm(struct cpu_state *cpu, const struct amd64_trap_modrm *modrm, bool fs_prefix, guest_addr_t rip_after_modrm, unsigned size, qword_t *value) {
+static bool amd64_trap_read_rm(struct cpu_state *cpu, const struct amd64_trap_modrm *modrm, enum amd64_seg seg_prefix, guest_addr_t rip_after_modrm, unsigned size, qword_t *value) {
     if (modrm->is_reg) {
         *value = amd64_trap_reg_get(cpu, modrm->rm, size);
         return true;
     }
-    return amd64_trap_mem_read(amd64_trap_effective_addr(cpu, modrm, fs_prefix, rip_after_modrm), size, value);
+    return amd64_trap_mem_read(amd64_trap_effective_addr(cpu, modrm, seg_prefix, rip_after_modrm), size, value);
 }
 
-static bool amd64_trap_write_rm(struct cpu_state *cpu, const struct amd64_trap_modrm *modrm, bool fs_prefix, guest_addr_t rip_after_modrm, unsigned size, qword_t value) {
+static bool amd64_trap_write_rm(struct cpu_state *cpu, const struct amd64_trap_modrm *modrm, enum amd64_seg seg_prefix, guest_addr_t rip_after_modrm, unsigned size, qword_t value) {
     if (modrm->is_reg) {
         amd64_trap_reg_set(cpu, modrm->rm, size, value);
         return true;
     }
-    return amd64_trap_mem_write(amd64_trap_effective_addr(cpu, modrm, fs_prefix, rip_after_modrm), size, value);
+    return amd64_trap_mem_write(amd64_trap_effective_addr(cpu, modrm, seg_prefix, rip_after_modrm), size, value);
 }
 
-static bool amd64_trap_read_xmm_rm(struct cpu_state *cpu, const struct amd64_trap_modrm *modrm, bool fs_prefix,
+static bool amd64_trap_read_xmm_rm(struct cpu_state *cpu, const struct amd64_trap_modrm *modrm, enum amd64_seg seg_prefix,
         guest_addr_t rip_after_modrm, union xmm_reg *value) {
     if (modrm->is_reg) {
         *value = cpu->xmm[modrm->rm & 0xf];
@@ -6790,7 +6789,7 @@ static bool amd64_trap_read_xmm_rm(struct cpu_state *cpu, const struct amd64_tra
     }
 
     guest_addr_t addr;
-    if (!amd64_trap_guest_addr_ok(amd64_trap_effective_addr(cpu, modrm, fs_prefix, rip_after_modrm), sizeof(*value), &addr))
+    if (!amd64_trap_guest_addr_ok(amd64_trap_effective_addr(cpu, modrm, seg_prefix, rip_after_modrm), sizeof(*value), &addr))
         return false;
     return user_read(addr, value, sizeof(*value)) == 0;
 }
@@ -6798,7 +6797,7 @@ static bool amd64_trap_read_xmm_rm(struct cpu_state *cpu, const struct amd64_tra
 static bool amd64_try_emulate_sse2_packed_integer(guest_addr_t ip, struct cpu_state *cpu) {
     struct amd64_trap_rex_prefix rex = {};
     bool operand_size_prefix = false;
-    bool fs_prefix = false;
+    enum amd64_seg seg_prefix = AMD64_SEG_NONE;
     byte_t opcode;
     guest_addr_t decode_ip = ip;
 
@@ -6816,7 +6815,11 @@ static bool amd64_try_emulate_sse2_packed_integer(guest_addr_t ip, struct cpu_st
             continue;
         }
         if (opcode == 0x64) {
-            fs_prefix = true;
+            seg_prefix = AMD64_SEG_FS;
+            continue;
+        }
+        if (opcode == 0x65) {
+            seg_prefix = AMD64_SEG_GS;
             continue;
         }
         if (opcode >= 0x40 && opcode <= 0x4f) {
@@ -6849,7 +6852,7 @@ static bool amd64_try_emulate_sse2_packed_integer(guest_addr_t ip, struct cpu_st
         if (!amd64_trap_decode_modrm(&decode_ip, rex, &modrm))
             return false;
         union xmm_reg src;
-        if (!amd64_trap_read_xmm_rm(cpu, &modrm, fs_prefix, decode_ip, &src))
+        if (!amd64_trap_read_xmm_rm(cpu, &modrm, seg_prefix, decode_ip, &src))
             return false;
         union xmm_reg *dst = &cpu->xmm[modrm.reg & 0xf];
         switch (opcode) {
@@ -6877,7 +6880,7 @@ static bool amd64_try_emulate_sse2_packed_integer(guest_addr_t ip, struct cpu_st
             src_mm = cpu->mm[modrm.rm & 7];
         } else {
             qword_t v;
-            if (!amd64_trap_read_rm(cpu, &modrm, fs_prefix, decode_ip, 64, &v))
+            if (!amd64_trap_read_rm(cpu, &modrm, seg_prefix, decode_ip, 64, &v))
                 return false;
             src_mm.qw = v;
         }
@@ -6892,7 +6895,7 @@ static bool amd64_try_emulate_sse2_packed_integer(guest_addr_t ip, struct cpu_st
 static bool amd64_try_emulate_add(guest_addr_t ip, struct cpu_state *cpu) {
     struct amd64_trap_rex_prefix rex = {};
     bool operand_size_prefix = false;
-    bool fs_prefix = false;
+    enum amd64_seg seg_prefix = AMD64_SEG_NONE;
     byte_t opcode;
     guest_addr_t decode_ip = ip;
 
@@ -6910,7 +6913,11 @@ static bool amd64_try_emulate_add(guest_addr_t ip, struct cpu_state *cpu) {
             continue;
         }
         if (opcode == 0x64) {
-            fs_prefix = true;
+            seg_prefix = AMD64_SEG_FS;
+            continue;
+        }
+        if (opcode == 0x65) {
+            seg_prefix = AMD64_SEG_GS;
             continue;
         }
         if (opcode >= 0x40 && opcode <= 0x4f) {
@@ -6933,11 +6940,11 @@ static bool amd64_try_emulate_add(guest_addr_t ip, struct cpu_state *cpu) {
         return false;
 
     qword_t lhs, rhs, result;
-    if (!amd64_trap_read_rm(cpu, &modrm, fs_prefix, decode_ip, op_size, &lhs))
+    if (!amd64_trap_read_rm(cpu, &modrm, seg_prefix, decode_ip, op_size, &lhs))
         return false;
     rhs = amd64_trap_reg_get(cpu, modrm.reg, op_size);
     result = amd64_trap_trunc(lhs + rhs, op_size);
-    if (!amd64_trap_write_rm(cpu, &modrm, fs_prefix, decode_ip, op_size, result))
+    if (!amd64_trap_write_rm(cpu, &modrm, seg_prefix, decode_ip, op_size, result))
         return false;
 
     amd64_trap_set_add_flags(cpu, lhs, rhs, result, op_size);

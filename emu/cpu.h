@@ -497,6 +497,14 @@ struct cpu_state {
     // kernel as it delivers the SIGSEGV; the engines hand the code over in
     // the interrupt number (INT_GPF_CODE in emu/interrupt.h).
     word_t gp_error_code;
+
+    // The amd64 GS base, which a 65-prefixed memory operand adds the way a
+    // 64-prefixed one adds tls_ptr, the FS base. Linux keeps it per thread:
+    // ARCH_SET_GS and PTRACE_SETREGS set it, loading a selector into GS
+    // clears it (amd64_sreg_load), exec zeroes it, fork and clone copy it,
+    // and signal delivery leaves it alone. Appended for the gadget offset
+    // range; see the AVX note above.
+    guest_addr_t amd64_gs_base;
 };
 
 #define AMD64_SREG_ES 0
@@ -507,6 +515,24 @@ struct cpu_state {
 #define AMD64_SREG_GS 5
 #define AMD64_SEL_USER_CS 0x33
 #define AMD64_SEL_USER_DS 0x2b
+
+// A segment override on an amd64 memory operand, prefix 64 or 65. In long
+// mode only FS and GS have a base; the ES, CS, SS and DS overrides are
+// accepted and ignored. NONE is 0, so the value still tests true exactly
+// when an operand has a base to add.
+enum amd64_seg {
+    AMD64_SEG_NONE = 0,
+    AMD64_SEG_FS,
+    AMD64_SEG_GS,
+};
+
+static inline guest_addr_t amd64_seg_base(const struct cpu_state *cpu, enum amd64_seg seg) {
+    if (seg == AMD64_SEG_FS)
+        return cpu->tls_ptr;
+    if (seg == AMD64_SEG_GS)
+        return cpu->amd64_gs_base;
+    return 0;
+}
 
 #define CPU_OFFSET(field) offsetof(struct cpu_state, field)
 

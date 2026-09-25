@@ -55,7 +55,7 @@ struct amd64_jit_insn {
     bool has_modrm;
     bool operand_size_prefix;
     bool address_size_prefix;
-    bool fs_prefix;
+    enum amd64_seg seg_prefix;
     bool lock_prefix;
     enum amd64_jit_rep_mode rep_mode;
     struct amd64_jit_rex_prefix rex;
@@ -74,6 +74,7 @@ enum amd64_jit_mem_meta {
     AMD64_JIT_MEM_FS = 1ul << 33,
     AMD64_JIT_MEM_REX_PRESENT = 1ul << 34,
     AMD64_JIT_MEM_LOCK = 1ul << 35,
+    AMD64_JIT_MEM_GS = 1ul << 36,
 };
 
 static inline byte_t amd64_modrm_mod(byte_t modrm) {
@@ -5999,7 +6000,7 @@ static bool gen_decode_amd64(struct gen_state *state, struct tlb *tlb,
     insn->has_modrm = false;
     insn->operand_size_prefix = false;
     insn->address_size_prefix = false;
-    insn->fs_prefix = false;
+    insn->seg_prefix = AMD64_SEG_NONE;
     insn->lock_prefix = false;
     insn->rep_mode = amd64_jit_rep_none;
     insn->rex = (struct amd64_jit_rex_prefix) {0};
@@ -6019,7 +6020,11 @@ static bool gen_decode_amd64(struct gen_state *state, struct tlb *tlb,
             continue;
         }
         if (byte == 0x64) {
-            insn->fs_prefix = true;
+            insn->seg_prefix = AMD64_SEG_FS;
+            continue;
+        }
+        if (byte == 0x65) {
+            insn->seg_prefix = AMD64_SEG_GS;
             continue;
         }
         if (byte == 0xf0) {
@@ -6063,7 +6068,7 @@ static bool gen_decode_amd64(struct gen_state *state, struct tlb *tlb,
 static bool amd64_jit_plain_prefixes(const struct amd64_jit_insn *insn) {
     return !insn->operand_size_prefix &&
         !insn->address_size_prefix &&
-        !insn->fs_prefix &&
+        !insn->seg_prefix &&
         !insn->lock_prefix &&
         insn->rep_mode == amd64_jit_rep_none;
 }
@@ -6072,7 +6077,7 @@ static bool amd64_jit_one_byte_plain_prefixes(const struct amd64_jit_insn *insn)
     return !insn->two_byte_opcode &&
         !insn->operand_size_prefix &&
         !insn->address_size_prefix &&
-        !insn->fs_prefix &&
+        !insn->seg_prefix &&
         !insn->lock_prefix &&
         insn->rep_mode == amd64_jit_rep_none;
 }
@@ -6080,7 +6085,7 @@ static bool amd64_jit_one_byte_plain_prefixes(const struct amd64_jit_insn *insn)
 static bool amd64_jit_branch_prefixes(const struct amd64_jit_insn *insn) {
     return !insn->operand_size_prefix &&
         !insn->address_size_prefix &&
-        !insn->fs_prefix &&
+        !insn->seg_prefix &&
         !insn->lock_prefix &&
         insn->rep_mode == amd64_jit_rep_none;
 }
@@ -6101,7 +6106,7 @@ static bool amd64_jit_one_byte_rel_call_prefixes(const struct amd64_jit_insn *in
     // the prefix, so accepting it makes the JIT emit what the interpreter
     // already runs.
     return !insn->two_byte_opcode &&
-        !insn->fs_prefix &&
+        !insn->seg_prefix &&
         !insn->lock_prefix &&
         insn->rep_mode == amd64_jit_rep_none;
 }
@@ -6200,8 +6205,10 @@ static bool gen_amd64_decode_mem_meta(struct gen_state *state, struct tlb *tlb,
         *meta_out |= AMD64_JIT_MEM_HAS_INDEX;
     if (rip_relative)
         *meta_out |= AMD64_JIT_MEM_RIP_REL;
-    if (insn->fs_prefix)
+    if (insn->seg_prefix == AMD64_SEG_FS)
         *meta_out |= AMD64_JIT_MEM_FS;
+    else if (insn->seg_prefix == AMD64_SEG_GS)
+        *meta_out |= AMD64_JIT_MEM_GS;
     if (insn->rex.present)
         *meta_out |= AMD64_JIT_MEM_REX_PRESENT;
     *disp_out = (unsigned long) (qword_t) (sqword_t) disp;
@@ -6328,7 +6335,8 @@ static void amd64_bridge_note(void *helper, unsigned long arg0) {
 static void gen_amd64_helper_tlb_2_retint(struct gen_state *state, void *helper,
         unsigned long arg0, unsigned long arg1) {
     extern void gadget_helper_tlb_2_retint(void);
-    amd64_bridge_note(helper, (arg0 & 0xff) | ((arg0 & AMD64_JIT_MEM_FS) ? 0x100 : 0));
+    amd64_bridge_note(helper, (arg0 & 0xff) | ((arg0 & AMD64_JIT_MEM_FS) ? 0x100 : 0) |
+            ((arg0 & AMD64_JIT_MEM_GS) ? 0x200 : 0));
     gen_amd64_flush_reg_cache(state);
     gen_amd64_flush_rip(state);
     gen(state, (unsigned long) gadget_helper_tlb_2_retint);
@@ -6340,7 +6348,8 @@ static void gen_amd64_helper_tlb_2_retint(struct gen_state *state, void *helper,
 static void gen_amd64_helper_tlb_3_retint(struct gen_state *state, void *helper,
         unsigned long arg0, unsigned long arg1, unsigned long arg2) {
     extern void gadget_helper_tlb_3_retint(void);
-    amd64_bridge_note(helper, (arg0 & 0xff) | ((arg0 & AMD64_JIT_MEM_FS) ? 0x100 : 0));
+    amd64_bridge_note(helper, (arg0 & 0xff) | ((arg0 & AMD64_JIT_MEM_FS) ? 0x100 : 0) |
+            ((arg0 & AMD64_JIT_MEM_GS) ? 0x200 : 0));
     gen_amd64_flush_reg_cache(state);
     gen_amd64_flush_rip(state);
     gen(state, (unsigned long) gadget_helper_tlb_3_retint);
@@ -6387,7 +6396,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         (insn.rex.w ? 0x04 : 0) |
         (insn.operand_size_prefix ? 0x08 : 0) |
         (insn.address_size_prefix ? 0x10 : 0) |
-        (insn.fs_prefix ? 0x20 : 0) |
+        (insn.seg_prefix ? 0x20 : 0) |
         (insn.rep_mode != amd64_jit_rep_none ? 0x40 : 0);
 
     // POPCNT (F3 0F B8). Bridged; the semantics were factored out of the
@@ -6735,7 +6744,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // blanket 0x67 refusal in gen_amd64_decode_mem_meta exists for consumers
     // that compute an address.
     if (insn.address_size_prefix && !insn.two_byte_opcode && !insn.lock_prefix &&
-            !insn.fs_prefix && insn.rep_mode == amd64_jit_rep_none &&
+            !insn.seg_prefix && insn.rep_mode == amd64_jit_rep_none &&
             insn.opcode >= 0xe0 && insn.opcode <= 0xe3) {
         if (!tlb_read(tlb, state->amd64_ip, &rel8, sizeof(rel8))) {
             state->amd64_ip = state->amd64_orig_ip;
@@ -6863,7 +6872,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         }
     }
 
-    if (!insn.address_size_prefix && !insn.fs_prefix && !insn.lock_prefix &&
+    if (!insn.address_size_prefix && !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_repz && insn.two_byte_opcode &&
             insn.op2 == 0x1e) {
         byte_t op3;
@@ -6900,7 +6909,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         }
     }
 
-    if (!insn.address_size_prefix && !insn.fs_prefix && !insn.lock_prefix &&
+    if (!insn.address_size_prefix && !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode &&
             insn.op2 >= 0xc8 && insn.op2 <= 0xcf) {
         unsigned size = insn.rex.w ? 64 : 32;
@@ -6923,7 +6932,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             (insn.opcode == 0x98 || insn.opcode == 0x99)) {
         unsigned size = insn.rex.w ? 64 : (insn.operand_size_prefix ? 16 : 32);
@@ -7008,7 +7017,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             : sizeof(int8_t);
 #if defined(__aarch64__)
         // imul reg, rm, imm (reg form): native multiply with overflow flags.
-        if (!insn.fs_prefix && !insn.lock_prefix &&
+        if (!insn.seg_prefix && !insn.lock_prefix &&
                 amd64_modrm_mod(insn.modrm) == 3) {
             unsigned size = insn.operand_size_prefix ? 16 : (insn.rex.w ? 64 : 32);
             unsigned reg_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
@@ -7113,7 +7122,9 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         return false;
     }
 
-    if (!insn.two_byte_opcode && !insn.fs_prefix &&
+    // An FS or GS override is taken: amd64_jit_string_op decodes it and moves
+    // the DS:RSI operand by its base, as the interpreter does.
+    if (!insn.two_byte_opcode &&
             !insn.lock_prefix &&
             ((insn.opcode >= 0xa4 && insn.opcode <= 0xa7) ||
              (insn.opcode >= 0xaa && insn.opcode <= 0xaf))) {
@@ -7146,7 +7157,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // respect to each other. Byte/16-bit forms and the FS-prefixed form keep
     // bridging for now.
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.operand_size_prefix &&
+            !insn.seg_prefix && !insn.operand_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) != 3 && insn.opcode == 0x87) {
         unsigned size = insn.rex.w ? 64 : 32;
@@ -7388,7 +7399,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
     if (!insn.operand_size_prefix && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode &&
             insn.has_modrm && amd64_modrm_mod(insn.modrm) == 3 &&
             (insn.op2 == 0xb6 || insn.op2 == 0xb7 ||
@@ -7424,7 +7435,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // keep bridging to amd64_jit_movx below. is_signed -> meta bit 40, REX.W -> meta bit
     // 41 (free high bits; decode_mem_meta uses only 0-34).
     if (!insn.operand_size_prefix && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode &&
             insn.has_modrm && amd64_modrm_mod(insn.modrm) != 3 &&
             (insn.op2 == 0xb6 || insn.op2 == 0xb7 ||
@@ -7572,7 +7583,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // 0F 7F store fix. Strict prefixes: bare 0F 77 only; any 66/F2/F3 variant
     // falls through to the interpreter, which also treats it as a nop.
     if (!insn.operand_size_prefix && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode &&
             insn.op2 == 0x77) {
         next_ip = insn.end_ip;
@@ -7599,7 +7610,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // it. Marking the cache dirty (as the imm form already does) is the fix; proven
     // by toggling that one call against the repro.
     if (!insn.operand_size_prefix && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode &&
             insn.op2 == 0xaf && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) == 3) {
@@ -7709,7 +7720,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // condition is false (see the gadget), which is what emu/amd64_interp.c had
     // wrong until it was fixed alongside this.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             amd64_modrm_mod(insn.modrm) == 3 &&
             insn.op2 >= 0x40 && insn.op2 <= 0x4f) {
@@ -7764,7 +7775,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // is the jcc table with a set/setn pair per entry. The memory form (mod!=3)
     // keeps bridging for now.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.op2 >= 0x90 && insn.op2 <= 0x9f) {
         extern void gadget_amd64_set_o(void), gadget_amd64_set_c(void),
@@ -7909,7 +7920,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // movaps/movups (0F 28/29, 0F 10/11) and movapd/movupd (66 ...) register-register:
     // a whole-xmm copy either way, gadget_amd64_v_mov128_reg. 28/10 read rm into
     // reg; 29/11 the other way round. F3/F2 forms are movss/movsd (partial), not here.
-    if (!insn.address_size_prefix && !insn.lock_prefix && !insn.fs_prefix &&
+    if (!insn.address_size_prefix && !insn.lock_prefix && !insn.seg_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) == 3 &&
             (insn.op2 == 0x28 || insn.op2 == 0x29 || insn.op2 == 0x10 || insn.op2 == 0x11)) {
@@ -7937,7 +7948,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // lfence / mfence / sfence (0F AE /5,/6,/7, mod==3): ordering only, which the
     // guest's single-threaded-per-cpu view already has; no gadget, just advance.
     if (!insn.address_size_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
-            !insn.fs_prefix && insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode &&
+            !insn.seg_prefix && insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode &&
             insn.has_modrm && insn.op2 == 0xae && amd64_modrm_mod(insn.modrm) == 3 &&
             amd64_modrm_reg(insn.modrm) >= 5) {
         if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
@@ -7957,7 +7968,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             (insn.rep_mode == amd64_jit_rep_none || insn.rep_mode == amd64_jit_repz) &&
             insn.two_byte_opcode && insn.has_modrm &&
             (insn.op2 == 0xbc || insn.op2 == 0xbd) &&
-            (amd64_modrm_mod(insn.modrm) != 3 || !insn.fs_prefix)) {
+            (amd64_modrm_mod(insn.modrm) != 3 || !insn.seg_prefix)) {
         unsigned size = insn.rex.w ? 64 : 32;
         unsigned dst_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
         unsigned long is_bsr = insn.op2 == 0xbd ? (1ul << 16) : 0ul;
@@ -8043,7 +8054,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             insn.rep_mode == amd64_jit_rep_none && insn.two_byte_opcode && insn.has_modrm &&
             ((insn.op2 == 0xba && amd64_modrm_reg(insn.modrm) >= 4) ||
              insn.op2 == 0xa3 || insn.op2 == 0xab || insn.op2 == 0xb3 || insn.op2 == 0xbb) &&
-            (amd64_modrm_mod(insn.modrm) != 3 || !insn.fs_prefix)) {
+            (amd64_modrm_mod(insn.modrm) != 3 || !insn.seg_prefix)) {
         unsigned size = insn.rex.w ? 64 : 32;
         bool idx_is_imm = insn.op2 == 0xba;
         unsigned bop = idx_is_imm ? amd64_modrm_reg(insn.modrm) - 4
@@ -8173,7 +8184,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // falls through to the bridge below. The gadgets touch only cpu->xmm[], so
     // the GPR reg cache is left intact (no flush) and the rip is deferred.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             amd64_modrm_mod(insn.modrm) == 3 &&
             insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             (insn.op2 == 0x6f || insn.op2 == 0xd4 || insn.op2 == 0xfb ||
@@ -8331,7 +8342,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         const void *hit_reg = NULL, *hit_mem = NULL;
         for (unsigned i = 0; i < sizeof v_tab / sizeof v_tab[0]; i++)
             if (v_tab[i].op2 == insn.op2) { hit_reg = (const void *) v_tab[i].reg; hit_mem = (const void *) v_tab[i].mem; break; }
-        if (hit_reg != NULL && amd64_modrm_mod(insn.modrm) == 3 && !insn.fs_prefix) {
+        if (hit_reg != NULL && amd64_modrm_mod(insn.modrm) == 3 && !insn.seg_prefix) {
             unsigned reg_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
             unsigned rm_id = amd64_modrm_rm(insn.modrm) | (insn.rex.b ? 8 : 0);
             if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
@@ -8392,7 +8403,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 state->amd64_fallback_to_interp = true;
                 return false;
             }
-        } else if (insn.fs_prefix) {
+        } else if (insn.seg_prefix) {
             goto amd64_bridge_step;
         } else if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
             state->amd64_ip = state->amd64_orig_ip;
@@ -8460,7 +8471,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
                 state->amd64_fallback_to_interp = true;
                 return false;
             }
-        } else if (insn.fs_prefix) {
+        } else if (insn.seg_prefix) {
             goto amd64_bridge_step;
         } else if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
             state->amd64_ip = state->amd64_orig_ip;
@@ -8535,7 +8546,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             gen_amd64_defer_rip(state, next_ip);
             return true;
         }
-        if (!insn.fs_prefix) {
+        if (!insn.seg_prefix) {
             if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
                 state->amd64_ip = state->amd64_orig_ip;
                 state->amd64_fallback_to_interp = true;
@@ -8555,7 +8566,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
 
     // ---- movhlps (0F 12, mod==3): dst.low = src.high; movlhps (0F 16, mod==3): dst.high = src.low.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.lock_prefix && !insn.fs_prefix && !insn.operand_size_prefix &&
+            !insn.lock_prefix && !insn.seg_prefix && !insn.operand_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && amd64_modrm_mod(insn.modrm) == 3 &&
             (insn.op2 == 0x12 || insn.op2 == 0x16)) {
         unsigned reg_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
@@ -8636,7 +8647,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             gen_amd64_defer_rip(state, next_ip);
             return true;
         }
-        if (!insn.fs_prefix) {
+        if (!insn.seg_prefix) {
             if (!gen_amd64_decode_rm_extent(state, tlb, &insn, &next_ip)) {
                 state->amd64_ip = state->amd64_orig_ip;
                 state->amd64_fallback_to_interp = true;
@@ -8657,7 +8668,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // no operand-size-prefix gating (unlike the SSE2 integer ops above). A rep
     // prefix is #UD — left to the bridge.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             amd64_modrm_mod(insn.modrm) == 3 &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.op2 == 0x57) {
@@ -8686,7 +8697,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // loop is MADE of; every one previously round-tripped through the
     // interpreter bridge (a double matmul spent its whole runtime there).
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.op2 >= 0x58 && insn.op2 <= 0x5f && insn.op2 != 0x5a && insn.op2 != 0x5b &&
             !(insn.operand_size_prefix && insn.rep_mode != amd64_jit_rep_none)) {
         extern void gadget_amd64_v_addps_reg(void), gadget_amd64_v_addps_mem(void);
@@ -8785,7 +8796,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // 128-bit movups branch above deliberately skips. Load forms ZERO the
     // rest of the register; reg-reg forms merge into the low lane only.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
             (insn.rep_mode == amd64_jit_repnz || insn.rep_mode == amd64_jit_repz) &&
             (insn.op2 == 0x10 || insn.op2 == 0x11)) {
         extern void gadget_amd64_v_movsd_load(void), gadget_amd64_v_movsd_store(void);
@@ -8837,7 +8848,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // unpcklpd/unpckhpd (66 0F 14/15) and unpcklps/unpckhps (0F 14/15):
     // NEON zip1/zip2. Both reg and m128 forms.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             (insn.op2 == 0x14 || insn.op2 == 0x15)) {
         extern void gadget_amd64_v_unpcklpd_reg(void), gadget_amd64_v_unpcklpd_mem(void);
@@ -8887,7 +8898,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // mod!=3 only: 8-byte moves into/out of one lane, other lane preserved.
     // mod==3 (movlhps/movhlps) keeps bridging.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             insn.op2 >= 0x12 && insn.op2 <= 0x17 && insn.op2 != 0x14 && insn.op2 != 0x15) {
@@ -8919,7 +8930,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // REX.W) GPR into xmm[reg], zeroing the rest. Reads a GPR -> flush the reg cache
     // (like cvtsi2sd). No F2/F3. (The mem form keeps bridging.)
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             amd64_modrm_mod(insn.modrm) == 3 &&
             insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             insn.op2 == 0x6e) {
@@ -8952,7 +8963,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // op3=00, mod=3, 66-prefixed. The memory form is wired up anyway so the
     // opcode is closed rather than nearly closed.
     if (!insn.address_size_prefix && insn.two_byte_opcode &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             insn.op2 == 0x38) {
         byte_t op3_38 = 0, modrm_38 = 0;
@@ -9020,7 +9031,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // right after the escape byte: has_modrm is false and amd64_ip points AT
     // op3. Layout from there is <op3> <modrm> [sib] [disp] <imm8>.
     if (!insn.address_size_prefix && insn.two_byte_opcode &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             insn.op2 == 0x3a) {
         byte_t op3 = 0, str3a_modrm = 0;
@@ -9104,7 +9115,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // 16-bit mask in GPR[reg] (zero-extended). Writes a GPR -> flush the reg cache.
     // This + pcmpeqb is the core of glibc's SSE2 strlen/memchr. (No mem form exists.)
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             amd64_modrm_mod(insn.modrm) == 3 &&
             insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             insn.op2 == 0xd7) {
@@ -9132,7 +9143,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // modrm.reg and #UDs reg>=8, so REX.R cases are left to the bridge to match.
     // Only the qword shifts (/2,/6) go native; the byte shifts /3,/7 bridge.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix && !insn.rex.r &&
+            !insn.seg_prefix && !insn.lock_prefix && !insn.rex.r &&
             amd64_modrm_mod(insn.modrm) == 3 &&
             insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             insn.op2 == 0x73 &&
@@ -9171,7 +9182,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // is exactly the shifted-in zero fill) and reuses the generic tbl gadget.
     // Same REX.R exclusion as the qword shifts above.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix && !insn.rex.r &&
+            !insn.seg_prefix && !insn.lock_prefix && !insn.rex.r &&
             amd64_modrm_mod(insn.modrm) == 3 &&
             insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             insn.op2 == 0x73 &&
@@ -9215,7 +9226,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // zeroing the high lane. The reg-reg form is a low-lane copy; the mem form
     // reads through the 64-bit vread fast path. (66 F3 combos keep bridging.)
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             !insn.operand_size_prefix && insn.rep_mode == amd64_jit_repz &&
             insn.op2 == 0x7e) {
         unsigned reg_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
@@ -9261,7 +9272,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // bits of xmm[reg]. mod==3 writes a GPR (flush-style, like pmovmskb); the
     // mem form goes through the vwrite fast path.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             insn.op2 == 0x7e) {
         unsigned reg_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
@@ -9311,7 +9322,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // 66 0F 6E movd/movq xmm, m32/m64 (mem form; the reg form is native above):
     // load through the vread fast path, zero the rest of the xmm.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             insn.op2 == 0x6e) {
@@ -9346,7 +9357,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // dst=rm, src=reg); the mem form goes through the vwrite fast path. F3 0F D6
     // (movq2dq, MMX source) and F2 (movdq2q) keep bridging.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             insn.op2 == 0xd6) {
         unsigned reg_id = amd64_modrm_reg(insn.modrm) | (insn.rex.r ? 8 : 0);
@@ -9394,7 +9405,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // and pshufhw shuffle one 64-bit half and copy the other through (identity
     // indices). MMX pshufw (no prefix) keeps bridging.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.op2 == 0x70 &&
             (insn.operand_size_prefix
                  ? insn.rep_mode == amd64_jit_rep_none
@@ -9482,7 +9493,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // reg-reg clause above (paddw, psubusw, por, punpckl*, pcmpeqb, plus the
     // ones whose reg forms landed earlier).
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             insn.operand_size_prefix && insn.rep_mode == amd64_jit_rep_none &&
             (insn.op2 == 0xfd || insn.op2 == 0xd9 || insn.op2 == 0xeb ||
@@ -9533,7 +9544,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // (movsd/movss scalar) and fs/address-size forms keep bridging. The reg cache
     // and rip are flushed so a page fault re-executes this instruction correctly.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             insn.rep_mode == amd64_jit_rep_none &&
             (insn.op2 == 0x28 || insn.op2 == 0x10)) {
@@ -9563,7 +9574,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // writable + cross-page staging). Same caveats as the load: alignment not
     // enforced, F2/F3 scalar + fs/address-size forms bridge, cache+rip flushed.
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             insn.rep_mode == amd64_jit_rep_none &&
             (insn.op2 == 0x29 || insn.op2 == 0x11)) {
@@ -9593,7 +9604,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // load128/store128 gadgets. NO-prefix 0F 6F/7F is MMX movq (64-bit mm regs)
     // and is excluded; F2 is not a valid movdq prefix. (Go's memmove path.)
     if (!insn.address_size_prefix && insn.two_byte_opcode && insn.has_modrm &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             insn.rep_mode != amd64_jit_repnz &&
             (insn.operand_size_prefix || insn.rep_mode == amd64_jit_repz) &&
@@ -9752,7 +9763,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // (testb $imm,mem). AND for flags, no store, 8-bit logic flag rule. Placed before
     // the grp3-test clause so it intercepts the memory case (which otherwise bridges).
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             insn.opcode == 0xf6 && amd64_modrm_reg(insn.modrm) == 0) {
@@ -9804,7 +9815,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
             ? sizeof(uint8_t)
             : (insn.operand_size_prefix ? sizeof(uint16_t) : sizeof(uint32_t));
         next_ip += imm_size;
-        if (!insn.fs_prefix && !insn.lock_prefix &&
+        if (!insn.seg_prefix && !insn.lock_prefix &&
                 amd64_modrm_mod(insn.modrm) == 3) {
             unsigned rm_raw = amd64_modrm_rm(insn.modrm);
             unsigned rm_id = rm_raw | (insn.rex.b ? 8 : 0);
@@ -9985,7 +9996,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         if (!insn.lock_prefix) {
         // Native byte NOT (0xf6 /2) / NEG (0xf6 /3), mod==3. Cache-aware; handles AH-BH
         // and r8-r15 byte. NOT writes ~src (no flags); NEG sets sub flags (0 - src).
-        if (insn.opcode == 0xf6 && !insn.fs_prefix &&
+        if (insn.opcode == 0xf6 && !insn.seg_prefix &&
                 amd64_modrm_mod(insn.modrm) == 3 &&
                 (amd64_modrm_reg(insn.modrm) == 2 || amd64_modrm_reg(insn.modrm) == 3)) {
             unsigned raw_rm = amd64_modrm_rm(insn.modrm);
@@ -10009,7 +10020,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         }
         // Native 32/64-bit NOT (0xf7 /2) / NEG (0xf7 /3), mod==3 -- the wider siblings of
         // byte_grp3. Bridged before (ending the JIT block). 16-bit + memory keep bridging.
-        if (insn.opcode == 0xf7 && !insn.fs_prefix &&
+        if (insn.opcode == 0xf7 && !insn.seg_prefix &&
                 amd64_modrm_mod(insn.modrm) == 3 &&
                 (amd64_modrm_reg(insn.modrm) == 2 || amd64_modrm_reg(insn.modrm) == 3)) {
             unsigned size = insn.rex.w ? 64 : (insn.operand_size_prefix ? 16 : 32);
@@ -10038,7 +10049,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         // amd64_jit_grp3_muldiv in C for the rest (128-bit dividends, #DE), whose
         // interrupt the gadget delivers through jit_exit. Byte/16-bit and memory
         // operands keep bridging.
-        if (insn.opcode == 0xf7 && !insn.fs_prefix && !insn.operand_size_prefix &&
+        if (insn.opcode == 0xf7 && !insn.seg_prefix && !insn.operand_size_prefix &&
                 amd64_modrm_mod(insn.modrm) == 3 && amd64_modrm_reg(insn.modrm) >= 4) {
             unsigned size = insn.rex.w ? 64 : 32;
             unsigned rm_id = amd64_modrm_rm(insn.modrm) | (insn.rex.b ? 8 : 0);
@@ -10109,7 +10120,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         // FS-prefix and address-size forms keep bridging (the amd64_vmem_addr gadget
         // handles neither). rip is flushed so a #PF on the load/push re-executes.
         if ((group == 2 || group == 4) && amd64_modrm_mod(insn.modrm) != 3 &&
-                !insn.lock_prefix && !insn.operand_size_prefix && !insn.fs_prefix) {
+                !insn.lock_prefix && !insn.operand_size_prefix && !insn.seg_prefix) {
             unsigned long meta, disp;
             if (!gen_amd64_decode_mem_meta(state, tlb, &insn, 64, &meta, &disp, &next_ip)) {
                 state->amd64_ip = state->amd64_orig_ip;
@@ -10146,7 +10157,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         // advance because decode_mem_meta needs amd64_ip at the opcode.
         if ((group == 0 || group == 1) && amd64_modrm_mod(insn.modrm) != 3 &&
                 !insn.lock_prefix && !insn.operand_size_prefix &&
-                !insn.fs_prefix && !insn.rex.r) {
+                !insn.seg_prefix && !insn.rex.r) {
             unsigned size = insn.rex.w ? 64 : 32;
             unsigned long meta, disp;
             if (!gen_amd64_decode_mem_meta(state, tlb, &insn, size, &meta, &disp, &next_ip)) {
@@ -10225,7 +10236,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
         // than reasoned about. Gated by /proc/ish/amd64_jit_fuse incdec_reg.
         if (group <= 1 && amd64_modrm_mod(insn.modrm) == 3 &&
                 !insn.lock_prefix && !insn.operand_size_prefix &&
-                !insn.fs_prefix && !insn.rex.r &&
+                !insn.seg_prefix && !insn.rex.r &&
                 (amd64_jit_fuse_mask() & JIT_FUSE_AMD64_INCDEC_REG)) {
             unsigned long rm = amd64_modrm_rm(insn.modrm);
             if (insn.rex.b)
@@ -10310,7 +10321,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.opcode >= 0xb8 && insn.opcode <= 0xbf) {
         uint64_t value;
@@ -10555,7 +10566,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
     if (!insn.two_byte_opcode && !insn.operand_size_prefix &&
-            !insn.address_size_prefix && !insn.fs_prefix &&
+            !insn.address_size_prefix && !insn.seg_prefix &&
             !insn.lock_prefix && !insn.rex.present &&
             insn.rep_mode == amd64_jit_repz && insn.opcode == 0x90) {
         next_ip = insn.end_ip;
@@ -10568,7 +10579,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix && !insn.rex.present &&
+            !insn.seg_prefix && !insn.lock_prefix && !insn.rex.present &&
             insn.rep_mode == amd64_jit_rep_none && insn.opcode == 0x90) {
         next_ip = insn.end_ip;
         state->amd64_ip = next_ip;
@@ -10580,7 +10591,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.opcode >= 0x90 && insn.opcode <= 0x97) {
         unsigned size = insn.rex.w ? 64 : (insn.operand_size_prefix ? 16 : 32);
@@ -10612,7 +10623,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // actually differ, and that form is left to the bridge.
     if (!insn.two_byte_opcode &&
             (!insn.address_size_prefix || !insn.rex.w) &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.has_modrm && amd64_modrm_mod(insn.modrm) != 3 &&
             insn.opcode == 0x8d) {
@@ -10655,7 +10666,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.has_modrm && amd64_modrm_mod(insn.modrm) != 3 &&
             (insn.opcode == 0xd0 || insn.opcode == 0xd1 ||
@@ -10677,7 +10688,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.has_modrm && amd64_modrm_mod(insn.modrm) == 3 &&
             (insn.opcode == 0xd0 || insn.opcode == 0xd1 ||
@@ -10799,7 +10810,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.has_modrm && amd64_modrm_mod(insn.modrm) == 3 &&
             (insn.opcode == 0x88 || insn.opcode == 0x8a) &&
@@ -10865,7 +10876,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // Only the REX.W form goes direct: the movsxd gadgets implement 64-bit
     // semantics only. 16/32-bit movsxd falls through to the reg-reg helper.
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.rex.w &&
             insn.has_modrm && amd64_modrm_mod(insn.modrm) == 3 &&
             insn.opcode == 0x63) {
@@ -10889,7 +10900,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.has_modrm && amd64_modrm_mod(insn.modrm) == 3 &&
             (insn.opcode == 0x89 || insn.opcode == 0x8b)) {
@@ -10944,7 +10955,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
 
     if (!insn.two_byte_opcode &&
             !insn.address_size_prefix &&
-            !insn.fs_prefix &&
+            !insn.seg_prefix &&
             !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.has_modrm &&
@@ -11309,7 +11320,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
 
     if (!insn.two_byte_opcode &&
             !insn.address_size_prefix &&
-            !insn.fs_prefix &&
+            !insn.seg_prefix &&
             !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none &&
             insn.has_modrm &&
@@ -11624,8 +11635,8 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // CPU_amd64_regs and the destination reg is written there too. Per-size gadget
     // keeps the vread/vwrite size literal (correct cross-page staging). The byte
     // gadgets handle the AH/CH/DH/BH high-byte aliasing (modrm.reg 4-7 without REX)
-    // via meta's REX_PRESENT bit. The FS prefix is now handled natively --
-    // amd64_vmem_addr adds cpu->tls_ptr for it -- which matters more than it
+    // via meta's REX_PRESENT bit. The FS and GS prefixes are handled natively --
+    // amd64_vmem_addr adds the base for either -- and FS matters more than it
     // sounds: %fs:0x28 is the stack-protector canary and every __thread
     // variable is FS-relative, so this was 12.3% of all interpreter bridges for
     // opcode 8b alone. Address-size forms still bridge.
@@ -11678,7 +11689,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // byte forms 0x02/2a/3a keep bridging; 16-bit bridges). Same flush+#PF-reexec
     // discipline as MOV; FS-prefix and address-size forms bridge.
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             (insn.opcode == 0x03 || insn.opcode == 0x2b || insn.opcode == 0x3b)) {
@@ -11709,7 +11720,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // mod!=3, 32/64-bit (no 0x66). Same as load-op arith but the logic flag rule
     // (CF=OF=0, ZF/SF/PF from result). Byte forms (0x0a/22/32), TEST, 16-bit bridge.
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             (insn.opcode == 0x0b || insn.opcode == 0x23 || insn.opcode == 0x33)) {
@@ -11742,7 +11753,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // store). Byte forms (0x00/28/38), ADC/SBB, 16-bit, and locked forms keep
     // bridging. Same flush + #PF-reexec discipline (a fault on the store re-reads).
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             (insn.opcode == 0x01 || insn.opcode == 0x29 || insn.opcode == 0x39)) {
@@ -11774,7 +11785,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // no store), mod!=3, 32/64-bit (no 0x66). Logic flags. Byte forms (0x08/20/30/84),
     // 16-bit, and locked forms keep bridging.
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             (insn.opcode == 0x09 || insn.opcode == 0x21 ||
@@ -11806,7 +11817,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // 32-bit memory operand into a 64-bit register, no flags. Only the REX.W form is
     // routed here (the rare non-W 0x63 32-bit form, and FS/address-size, keep bridging).
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             insn.opcode == 0x63 && insn.rex.w) {
@@ -11838,7 +11849,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // amd64_cached_set_addsub_flags from the original rhs. Byte (0x10/12/18/1a), 16-bit, and
     // locked forms keep bridging.
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix && !insn.operand_size_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             (insn.opcode == 0x13 || insn.opcode == 0x1b ||
@@ -12106,7 +12117,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // crypt hot-loop bottleneck (it block-bridged); its flags use the same
     // amd64_cached_set_addsub_flags as native CMP 0x3b/0x39 so they are bit-exact.
     // adc/sbb-imm (/2,/3), byte (0x80) and 16-bit keep bridging.
-    // fs_prefix is accepted: amd64_vmem_addr adds cpu->tls_ptr for the FS bit,
+    // seg_prefix is accepted: amd64_vmem_addr adds the FS or GS base for its bit,
     // and `cmpq $0, %fs:...` / `addl $1, %fs:...` are how TLS flags and counters
     // get touched -- opcode 83 was 5.4% of the remaining bridges.
     // lock_prefix and operand_size_prefix are accepted here and sorted out
@@ -12217,7 +12228,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     // Native CMP byte [mem], imm8 (0x80 /7), mod!=3 -- the byte sibling of the imm-cmp
     // above and the other crypt hot-loop block-bridge. Flags only, 8-bit.
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
-            !insn.fs_prefix && !insn.lock_prefix &&
+            !insn.seg_prefix && !insn.lock_prefix &&
             insn.rep_mode == amd64_jit_rep_none && insn.has_modrm &&
             amd64_modrm_mod(insn.modrm) != 3 &&
             insn.opcode == 0x80 && amd64_modrm_reg(insn.modrm) == 7) {
@@ -12253,8 +12264,8 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
 
 #if defined(__aarch64__)
     // Native op byte [mem], imm8 (0x80 /0,/1,/4,/5,/6 = ADD/OR/AND/SUB/XOR), mod!=3 RMW.
-    // CMP (/7) is the imm_cmp8 clause above; ADC/SBB (/2,/3) bridge. fs_prefix is
-    // accepted: amd64_vmem_addr adds cpu->tls_ptr for the FS bit in meta, the same
+    // CMP (/7) is the imm_cmp8 clause above; ADC/SBB (/2,/3) bridge. seg_prefix is
+    // accepted: amd64_vmem_addr adds the FS or GS base for its bit in meta, the same
     // way the 32/64 imm-to-mem arm takes it (`orb $1, %fs:...` is a TLS flag set).
     if (!insn.two_byte_opcode && !insn.address_size_prefix &&
             !insn.lock_prefix &&
@@ -12442,7 +12453,7 @@ static int gen_step64(struct gen_state *state, struct tlb *tlb) {
     }
 
 amd64_bridge_step:
-    amd64_jit_debug("helper-step ip=%llx opcode=%02x two_byte=%d op2=%02x rex=%d%d%d%d%d opsz=%d addrsz=%d fs=%d lock=%d rep=%d has_modrm=%d modrm=%02x",
+    amd64_jit_debug("helper-step ip=%llx opcode=%02x two_byte=%d op2=%02x rex=%d%d%d%d%d opsz=%d addrsz=%d seg=%d lock=%d rep=%d has_modrm=%d modrm=%02x",
             (unsigned long long) insn.start_ip,
             insn.opcode,
             insn.two_byte_opcode,
@@ -12454,7 +12465,7 @@ amd64_bridge_step:
             insn.rex.b,
             insn.operand_size_prefix,
             insn.address_size_prefix,
-            insn.fs_prefix,
+            insn.seg_prefix,
             insn.lock_prefix,
             insn.rep_mode,
             insn.has_modrm,
