@@ -253,6 +253,9 @@ int mount_id(struct mount *mount);
 // that origin, found by ID; false if that bind no longer shows it. Takes
 // mounts_lock. See fs/mount.c.
 bool mount_path_through_bind(int bind_id, const struct mount *origin, char *path);
+// Put the point of the mount with ID `id` in front of `path`, a path on it;
+// false if there is no such mount any more. Takes mounts_lock. See fs/mount.c.
+bool mount_path_by_id(int id, char *path);
 // The st_dev files on this mount report, i.e. mountinfo's device field; asks
 // the filesystem rather than assuming, since only backing-less filesystems use
 // mount->fake_dev. Follows a bind to its origin. See fs/mount.c.

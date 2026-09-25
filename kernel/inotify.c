@@ -33,9 +33,12 @@
 // number rather than a second copy of it.
 #define IN_ISDIR_ 0x40000000
 
+// What a watch is on: the file at `path` on the mount whose ID is `mnt`. See
+// inotify_resolve.
 struct inotify_watch {
     int_t wd;
     uint_t mask;
+    int mnt;
     char *path;
     struct list list;
 };
@@ -88,10 +91,48 @@ static int inotify_lookup_fd(fd_t fd_no, struct fd **fd_out) {
     return 0;
 }
 
-static struct inotify_watch *inotify_find_watch(struct inotify_state *state, const char *path) {
+// Linux keeps a watch on the inode, so every name a file has reaches the same
+// watches. A bind mount gives a directory another name: after `mount --bind
+// /tmp/src /tmp/dst`, /tmp/dst/x IS /tmp/src/x. Watches used to be kept by the
+// path string they were added with, and each event carried the one name it
+// was made through, so a file made through /tmp/dst reached no watch on
+// /tmp/src, and the other way round.
+//
+// So a watch, and every event, is keyed by what its path resolves to: the
+// mount whose storage holds the file -- a bind resolves to the mount it shows
+// (find_mount_and_trim_path) -- and the path on that mount. That is as near to
+// the inode as a path gets here, and it behaves like one where names and
+// files part company, as checked against Linux 6.12:
+//   - a second add through another name finds the same watch and returns its
+//     wd, so one instance watching both names is told each event once;
+//   - a watch placed through a bind stays on the source after the umount;
+//   - a watch on a directory that a mount then covers keeps watching the
+//     covered directory, which nothing reaches any more.
+// Rewriting an event onto every other name for the directory instead would
+// have got the last two wrong. Hard links are still separate files here: a
+// path does not say which names share an inode.
+//
+// A mount's ID is never reused, so a watch on a mount that is gone matches
+// nothing again. `path` is a MAX_PATH buffer; takes mounts_lock.
+static bool inotify_resolve(const char *guest_path, int *mnt, char *path) {
+    if (strlen(guest_path) >= MAX_PATH || !path_is_normalized(guest_path))
+        return false;
+    strcpy(path, guest_path);
+    struct mount *mount = find_mount_and_trim_path(path);
+    if (mount == NULL)
+        return false;
+    *mnt = mount->id;
+    mount_release(mount);
+    // generic_getpath spells the root "/", which is "" on its mount.
+    if (strcmp(path, "/") == 0)
+        path[0] = '\0';
+    return true;
+}
+
+static struct inotify_watch *inotify_find_watch(struct inotify_state *state, int mnt, const char *path) {
     struct inotify_watch *watch;
     list_for_each_entry(&state->watches, watch, list) {
-        if (strcmp(watch->path, path) == 0)
+        if (watch->mnt == mnt && strcmp(watch->path, path) == 0)
             return watch;
     }
     return NULL;
@@ -121,22 +162,21 @@ static dword_t inotify_name_len(const char *name) {
     return (len + align - 1) & ~(align - 1);
 }
 
-static void inotify_parent_and_name(const char *path, char *parent, const char **name_out) {
+// The directory holding the file at `path` on its mount, and its name there.
+// False for the mount's root (""), which Linux does not report to a parent
+// either: a filesystem's root has none. A bind's root is not one of these --
+// it resolves to the source directory, whose parent is told, as on Linux.
+// The root of the root mount used to come out as "/" here, where a watch on
+// / is "", so a watch on / never heard of anything in it.
+static bool inotify_parent_and_name(const char *path, char *parent, const char **name_out) {
     const char *slash = strrchr(path, '/');
-    if (slash == NULL) {
-        strcpy(parent, "/");
-        *name_out = path;
-        return;
-    }
-    if (slash == path) {
-        strcpy(parent, "/");
-        *name_out = slash + 1;
-        return;
-    }
+    if (slash == NULL)
+        return false;
     size_t parent_len = slash - path;
     memcpy(parent, path, parent_len);
     parent[parent_len] = '\0';
     *name_out = slash + 1;
+    return true;
 }
 
 static int inotify_queue_event_locked(struct fd *fd, int_t wd, dword_t mask, dword_t cookie, const char *name) {
@@ -201,8 +241,9 @@ static bool inotify_deliver_locked(struct inotify_state *state, struct inotify_w
     return ok;
 }
 
-static bool inotify_notify_exact_locked(struct inotify_state *state, const char *path, dword_t mask, dword_t cookie) {
-    struct inotify_watch *watch = inotify_find_watch(state, path);
+static bool inotify_notify_exact_locked(struct inotify_state *state, int mnt, const char *path,
+        dword_t mask, dword_t cookie) {
+    struct inotify_watch *watch = inotify_find_watch(state, mnt, path);
     if (watch == NULL)
         return false;
     if ((watch->mask & mask) == 0)
@@ -210,11 +251,13 @@ static bool inotify_notify_exact_locked(struct inotify_state *state, const char 
     return inotify_deliver_locked(state, watch, mask, cookie, NULL);
 }
 
-static bool inotify_notify_parent_locked(struct inotify_state *state, const char *path, dword_t mask, dword_t cookie) {
+static bool inotify_notify_parent_locked(struct inotify_state *state, int mnt, const char *path,
+        dword_t mask, dword_t cookie) {
     char parent[MAX_PATH];
     const char *name;
-    inotify_parent_and_name(path, parent, &name);
-    struct inotify_watch *watch = inotify_find_watch(state, parent);
+    if (!inotify_parent_and_name(path, parent, &name))
+        return false;
+    struct inotify_watch *watch = inotify_find_watch(state, mnt, parent);
     if (watch == NULL)
         return false;
     if ((watch->mask & mask) == 0)
@@ -277,19 +320,21 @@ static void inotify_for_each_instance(bool (*cb)(struct inotify_state *, void *)
     free(fds);
 }
 
+// An event on the file at `path` on the mount whose ID is `mnt`.
 struct inotify_path_event {
+    int mnt;
     const char *path;
     dword_t mask;
 };
 
 static bool inotify_emit_exact_cb(struct inotify_state *state, void *ctx) {
     struct inotify_path_event *event = ctx;
-    return inotify_notify_exact_locked(state, event->path, event->mask, 0);
+    return inotify_notify_exact_locked(state, event->mnt, event->path, event->mask, 0);
 }
 
 static bool inotify_emit_parent_cb(struct inotify_state *state, void *ctx) {
     struct inotify_path_event *event = ctx;
-    return inotify_notify_parent_locked(state, event->path, event->mask, 0);
+    return inotify_notify_parent_locked(state, event->mnt, event->path, event->mask, 0);
 }
 
 // Linux delivers IN_OPEN/IN_MODIFY/IN_ATTRIB both to a watch on the file
@@ -299,12 +344,14 @@ static bool inotify_emit_parent_cb(struct inotify_state *state, void *ctx) {
 // watching a spool/config directory for content changes missed everything.
 static bool inotify_emit_exact_and_parent_cb(struct inotify_state *state, void *ctx) {
     struct inotify_path_event *event = ctx;
-    bool wake = inotify_notify_exact_locked(state, event->path, event->mask, 0);
-    wake |= inotify_notify_parent_locked(state, event->path, event->mask, 0);
+    bool wake = inotify_notify_exact_locked(state, event->mnt, event->path, event->mask, 0);
+    wake |= inotify_notify_parent_locked(state, event->mnt, event->path, event->mask, 0);
     return wake;
 }
 
+// A rename never crosses mounts (EXDEV), so both names are on `mnt`.
 struct inotify_move_event {
+    int mnt;
     const char *old_path;
     const char *new_path;
     dword_t old_mask;
@@ -313,8 +360,8 @@ struct inotify_move_event {
     dword_t cookie;
 };
 
-// Watches are keyed by path here, where Linux keys them by inode. Renaming
-// the watched file itself is handled below by rewriting its path -- but a
+// Watches are keyed by path on a mount here, where Linux keys them by inode.
+// Renaming the watched file itself is handled below by rewriting its path -- but a
 // rename of an ANCESTOR directory moves the inode just as surely, and left
 // every watch underneath naming a path that no longer exists, silently deaf
 // from then on. Editors and build tools rename directories routinely.
@@ -322,14 +369,14 @@ struct inotify_move_event {
 // So carry the subtree: rewrite the prefix of every watch living under the
 // renamed directory. No event is emitted for them, matching Linux, where those
 // inodes have not changed -- only the path by which they are reached has.
-static void inotify_move_subtree_locked(struct inotify_state *state,
+static void inotify_move_subtree_locked(struct inotify_state *state, int mnt,
         const char *old_path, const char *new_path) {
     size_t old_len = strlen(old_path);
     if (old_len == 0)
         return;
     struct inotify_watch *watch;
     list_for_each_entry(&state->watches, watch, list) {
-        if (watch->path == NULL)
+        if (watch->path == NULL || watch->mnt != mnt)
             continue;
         if (strncmp(watch->path, old_path, old_len) != 0 || watch->path[old_len] != '/')
             continue;
@@ -348,19 +395,23 @@ static void inotify_move_subtree_locked(struct inotify_state *state,
 static bool inotify_emit_move_cb(struct inotify_state *state, void *ctx) {
     struct inotify_move_event *event = ctx;
     bool wake = false;
-    wake |= inotify_notify_parent_locked(state, event->old_path, event->old_mask, event->cookie);
-    wake |= inotify_notify_parent_locked(state, event->new_path, event->new_mask, event->cookie);
-    inotify_move_subtree_locked(state, event->old_path, event->new_path);
-    struct inotify_watch *watch = inotify_find_watch(state, event->old_path);
+    wake |= inotify_notify_parent_locked(state, event->mnt, event->old_path, event->old_mask,
+            event->cookie);
+    wake |= inotify_notify_parent_locked(state, event->mnt, event->new_path, event->new_mask,
+            event->cookie);
+    inotify_move_subtree_locked(state, event->mnt, event->old_path, event->new_path);
+    struct inotify_watch *watch = inotify_find_watch(state, event->mnt, event->old_path);
     if (watch == NULL)
         return wake;
-    if ((watch->mask & event->self_mask) == 0)
-        return wake;
+    // The watch follows the file whether or not it asked to be told: it was
+    // left on the old name unless it wanted IN_MOVE_SELF, deaf from then on.
     char *new_path = strdup(event->new_path);
     if (new_path == NULL)
         return wake;
     free(watch->path);
     watch->path = new_path;
+    if ((watch->mask & event->self_mask) == 0)
+        return wake;
     // Cookie 0: the cookie exists to pair IN_MOVED_FROM with IN_MOVED_TO, and
     // inotify(7) gives IN_MOVE_SELF none. Verified against Linux 6.12, which
     // reports 0 here where AOK was passing the rename's cookie through.
@@ -424,13 +475,15 @@ int_t sys_inotify_add_watch_guest(fd_t fd_no, guest_addr_t pathname_addr, uint_t
     // mount table directly instead. (This also inherently handles the ""
     // spelling of the filesystem root that path_normalize produces --
     // watching / is legal and is the first thing sd-bus's watch_bind does.)
+    // That leaves `path` as the path on the mount holding the file, which,
+    // with the mount's ID, is what the watch is kept by; see inotify_resolve.
+    int mnt;
     {
-        char stat_path[MAX_PATH];
-        strcpy(stat_path, path);
-        struct mount *mount = find_mount_and_trim_path(stat_path);
+        struct mount *mount = find_mount_and_trim_path(path);
         if (mount == NULL)
             return _ENOENT;
-        err = mount->fs->stat(mount, stat_path, &stat);
+        err = mount->fs->stat(mount, path, &stat);
+        mnt = mount->id;
         mount_release(mount);
         if (err < 0)
             return err;
@@ -456,7 +509,10 @@ int_t sys_inotify_add_watch_guest(fd_t fd_no, guest_addr_t pathname_addr, uint_t
         unlock(&fd->lock);
         return _EBADF;
     }
-    struct inotify_watch *watch = inotify_find_watch(state, path);
+    // Found through any name of the file, bind or source: Linux returns the
+    // same wd for a second add of one inode, so an instance watching both
+    // names is told each event once.
+    struct inotify_watch *watch = inotify_find_watch(state, mnt, path);
     if (watch != NULL) {
         // IN_MASK_ADD ORs into the existing mask rather than replacing it,
         // which is the whole reason the flag exists -- it was ignored, so the
@@ -484,6 +540,7 @@ int_t sys_inotify_add_watch_guest(fd_t fd_no, guest_addr_t pathname_addr, uint_t
     }
     watch->wd = state->next_wd++;
     watch->mask = mask;
+    watch->mnt = mnt;
     list_add_tail(&state->watches, &watch->list);
     err = watch->wd;
     unlock(&fd->lock);
@@ -670,35 +727,37 @@ bool inotify_has_instances(void) {
     return atomic_load_explicit(&inotify_instance_count, memory_order_relaxed) != 0;
 }
 
+// Resolve an event's path for delivery (inotify_resolve), into `buf`. Only
+// when someone could be told: most callers do not check, and this is a walk
+// of the mount table under mounts_lock.
+static bool inotify_event_path(const char *path, int *mnt, char *buf) {
+    if (path == NULL || path[0] != '/' || !inotify_has_instances())
+        return false;
+    return inotify_resolve(path, mnt, buf);
+}
+
+static void inotify_emit(const char *path, dword_t mask,
+        bool (*cb)(struct inotify_state *, void *)) {
+    char buf[MAX_PATH];
+    struct inotify_path_event event = {.path = buf, .mask = mask};
+    if (inotify_event_path(path, &event.mnt, buf))
+        inotify_for_each_instance(cb, &event);
+}
+
 void inotify_notify_open(const char *path) {
-    if (path == NULL || path[0] != '/')
-        return;
-    struct inotify_path_event event = {.path = path, .mask = IN_OPEN_};
-    inotify_for_each_instance(inotify_emit_exact_and_parent_cb, &event);
+    inotify_emit(path, IN_OPEN_, inotify_emit_exact_and_parent_cb);
 }
 
 void inotify_notify_modify(const char *path) {
-    if (path == NULL || path[0] != '/')
-        return;
-    struct inotify_path_event event = {.path = path, .mask = IN_MODIFY_};
-    inotify_for_each_instance(inotify_emit_exact_and_parent_cb, &event);
+    inotify_emit(path, IN_MODIFY_, inotify_emit_exact_and_parent_cb);
 }
 
 void inotify_notify_attrib(const char *path) {
-    if (path == NULL || path[0] != '/')
-        return;
-    struct inotify_path_event event = {.path = path, .mask = IN_ATTRIB_};
-    inotify_for_each_instance(inotify_emit_exact_and_parent_cb, &event);
+    inotify_emit(path, IN_ATTRIB_, inotify_emit_exact_and_parent_cb);
 }
 
 void inotify_notify_create(const char *path, bool is_dir) {
-    if (path == NULL || path[0] != '/')
-        return;
-    struct inotify_path_event event = {
-        .path = path,
-        .mask = IN_CREATE_ | (is_dir ? IN_ISDIR_ : 0),
-    };
-    inotify_for_each_instance(inotify_emit_parent_cb, &event);
+    inotify_emit(path, IN_CREATE_ | (is_dir ? IN_ISDIR_ : 0), inotify_emit_parent_cb);
 }
 
 // A watch on a file that has just been deleted is dead: Linux reports
@@ -709,7 +768,7 @@ void inotify_notify_create(const char *path, bool is_dir) {
 // watcher went deaf" shape.
 static bool inotify_emit_ignored_cb(struct inotify_state *state, void *ctx) {
     struct inotify_path_event *event = ctx;
-    struct inotify_watch *watch = inotify_find_watch(state, event->path);
+    struct inotify_watch *watch = inotify_find_watch(state, event->mnt, event->path);
     if (watch == NULL)
         return false;
     int_t wd = watch->wd;
@@ -721,18 +780,18 @@ static bool inotify_emit_ignored_cb(struct inotify_state *state, void *ctx) {
 }
 
 void inotify_notify_delete(const char *path, bool is_dir) {
-    if (path == NULL || path[0] != '/')
+    char buf[MAX_PATH];
+    int mnt;
+    if (!inotify_event_path(path, &mnt, buf))
         return;
     struct inotify_path_event parent = {
-        .path = path,
+        .mnt = mnt,
+        .path = buf,
         .mask = IN_DELETE_ | (is_dir ? IN_ISDIR_ : 0),
     };
-    struct inotify_path_event attrib = { .path = path, .mask = IN_ATTRIB_ };
-    struct inotify_path_event exact = {
-        .path = path,
-        .mask = IN_DELETE_SELF_,
-    };
-    struct inotify_path_event ignored = { .path = path, .mask = IN_IGNORED_ };
+    struct inotify_path_event attrib = {.mnt = mnt, .path = buf, .mask = IN_ATTRIB_};
+    struct inotify_path_event exact = {.mnt = mnt, .path = buf, .mask = IN_DELETE_SELF_};
+    struct inotify_path_event ignored = {.mnt = mnt, .path = buf, .mask = IN_IGNORED_};
     inotify_for_each_instance(inotify_emit_parent_cb, &parent);
     inotify_for_each_instance(inotify_emit_exact_cb, &attrib);
     inotify_for_each_instance(inotify_emit_exact_cb, &exact);
@@ -745,29 +804,26 @@ void inotify_notify_delete(const char *path, bool is_dir) {
 // on it to mean "the writer finished, the file is now consistent" -- and AOK
 // emitted neither, so those tools simply never fired.
 void inotify_notify_close(const char *path, bool was_writable) {
-    if (path == NULL || path[0] != '/')
-        return;
-    struct inotify_path_event event = {
-        .path = path,
-        .mask = was_writable ? IN_CLOSE_WRITE_ : IN_CLOSE_NOWRITE_,
-    };
-    inotify_for_each_instance(inotify_emit_exact_and_parent_cb, &event);
+    inotify_emit(path, was_writable ? IN_CLOSE_WRITE_ : IN_CLOSE_NOWRITE_,
+            inotify_emit_exact_and_parent_cb);
 }
 
 void inotify_notify_access(const char *path) {
-    if (path == NULL || path[0] != '/')
-        return;
-    struct inotify_path_event event = {.path = path, .mask = IN_ACCESS_};
-    inotify_for_each_instance(inotify_emit_exact_and_parent_cb, &event);
+    inotify_emit(path, IN_ACCESS_, inotify_emit_exact_and_parent_cb);
 }
 
 void inotify_notify_move(const char *old_path, const char *new_path, bool is_dir) {
-    if (old_path == NULL || new_path == NULL || old_path[0] != '/' || new_path[0] != '/')
+    char old_buf[MAX_PATH], new_buf[MAX_PATH];
+    int old_mnt, new_mnt;
+    if (new_path == NULL || new_path[0] != '/' ||
+            !inotify_event_path(old_path, &old_mnt, old_buf) ||
+            !inotify_resolve(new_path, &new_mnt, new_buf) || old_mnt != new_mnt)
         return;
     static _Atomic dword_t next_cookie = 1;
     struct inotify_move_event event = {
-        .old_path = old_path,
-        .new_path = new_path,
+        .mnt = old_mnt,
+        .old_path = old_buf,
+        .new_path = new_buf,
         .old_mask = IN_MOVED_FROM_ | (is_dir ? IN_ISDIR_ : 0),
         .new_mask = IN_MOVED_TO_ | (is_dir ? IN_ISDIR_ : 0),
         .self_mask = IN_MOVE_SELF_,
@@ -817,10 +873,35 @@ char *inotify_ckpt_describe(struct fd *fd, size_t *len) {
         unlock(&fd->lock);
         return NULL;
     }
-    uint32_t nw = 0, ne = 0;
+    // A watch is saved as a guest path, since mount IDs are this boot's: its
+    // path on its mount, under that mount's point. For a watch placed through
+    // a bind that is the source's path, which suits a restore that brings
+    // back tmpfs mounts but not binds. A watch whose mount is gone watches
+    // nothing and is left out. mount_path_by_id takes mounts_lock under this
+    // instance's lock, which is safe because no inotify lock is ever taken
+    // under mounts_lock: an event resolves its path before visiting anyone.
+    uint32_t nw = 0, ne = 0, kept = 0;
     struct inotify_watch *w;
     list_for_each_entry(&state->watches, w, list)
         nw++;
+    char **paths = calloc(nw != 0 ? nw : 1, sizeof(*paths));
+    if (paths == NULL) {
+        unlock(&fd->lock);
+        return NULL;
+    }
+    uint32_t i = 0;
+    list_for_each_entry(&state->watches, w, list) {
+        char guest[MAX_PATH];
+        strcpy(guest, w->path);
+        if (mount_path_by_id(w->mnt, guest)) {
+            paths[i] = strdup(guest);
+            if (paths[i] == NULL)
+                b.failed = true;
+            else
+                kept++;
+        }
+        i++;
+    }
     struct inotify_event_node *ev;
     list_for_each_entry(&state->events, ev, list)
         ne++;
@@ -828,16 +909,22 @@ char *inotify_ckpt_describe(struct fd *fd, size_t *len) {
     uint32_t overflowed = state->overflowed ? 1 : 0;
     ckpt_blob_put(&b, &next_wd, sizeof(next_wd));
     ckpt_blob_put(&b, &overflowed, sizeof(overflowed));
-    ckpt_blob_put(&b, &nw, sizeof(nw));
+    ckpt_blob_put(&b, &kept, sizeof(kept));
     ckpt_blob_put(&b, &ne, sizeof(ne));
+    i = 0;
     list_for_each_entry(&state->watches, w, list) {
+        char *path = paths[i++];
+        if (path == NULL)
+            continue;
         int32_t wd = w->wd;
-        uint32_t mask = w->mask, plen = (uint32_t) strlen(w->path);
+        uint32_t mask = w->mask, plen = (uint32_t) strlen(path);
         ckpt_blob_put(&b, &wd, sizeof(wd));
         ckpt_blob_put(&b, &mask, sizeof(mask));
         ckpt_blob_put(&b, &plen, sizeof(plen));
-        ckpt_blob_put(&b, w->path, plen);
+        ckpt_blob_put(&b, path, plen);
+        free(path);
     }
+    free(paths);
     list_for_each_entry(&state->events, ev, list) {
         int32_t wd = ev->event.wd;
         uint32_t mask = ev->event.mask, cookie = ev->event.cookie;
@@ -912,8 +999,23 @@ struct fd *inotify_ckpt_new(const char *blob, size_t len) {
         }
         ckpt_blob_get(&r, path, plen);
         path[plen] = '\0';
+        // Kept by what the path resolves to now, as when it was added. One
+        // that resolves to nothing keeps its wd and matches no event: no path
+        // resolves to mount ID 0.
+        char key[MAX_PATH];
+        int mnt = 0;
+        if (!r.bad && inotify_resolve(path, &mnt, key)) {
+            char *resolved = strdup(key);
+            if (resolved != NULL) {
+                free(path);
+                path = resolved;
+            } else {
+                mnt = 0;
+            }
+        }
         w->wd = wd;
         w->mask = mask;
+        w->mnt = mnt;
         w->path = path;
         list_add_tail(&state->watches, &w->list);
     }

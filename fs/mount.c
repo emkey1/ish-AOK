@@ -244,6 +244,29 @@ bool mount_path_through_bind(int bind_id, const struct mount *origin, char *path
     return done;
 }
 
+// Put the point of the mount with ID `id` in front of `path`, a path on that
+// mount, in place; `path` is a MAX_PATH buffer. False, leaving `path` alone,
+// when no mount in the table has that ID any more or the result would not
+// fit. Takes mounts_lock.
+bool mount_path_by_id(int id, char *path) {
+    bool done = false;
+    lock(&mounts_lock, 0);
+    struct mount *mount;
+    list_for_each_entry(&mounts, mount, mounts) {
+        if (mount->id != id)
+            continue;
+        size_t len = strlen(path);
+        if (mount->point_len + len < MAX_PATH) {
+            memmove(path + mount->point_len, path, len + 1);
+            memcpy(path, mount->point, mount->point_len);
+            done = true;
+        }
+        break;
+    }
+    unlock(&mounts_lock);
+    return done;
+}
+
 static int mount_compare_id(const void *a, const void *b) {
     int x = (*(struct mount *const *) a)->id;
     int y = (*(struct mount *const *) b)->id;
