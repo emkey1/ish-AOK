@@ -247,6 +247,18 @@ struct mount *find_mount_and_trim_path(char *path) {
 // them: a bind can be more restrictive than what it aliases, never less. A
 // bind of a read-only filesystem stays read-only.
 struct mount *find_mount_and_trim_path_flags(char *path, int *mount_flags) {
+    return find_mount_and_trim_path_seen(path, mount_flags, NULL, NULL);
+}
+
+// The bind's own identity has to be read here, before the redirect below
+// replaces it with the origin's: the path is on the bind, so statx's
+// STATX_MNT_ID and fdinfo's mnt_id name the bind, and the bind's point is a
+// mount root however deep in the origin its source sits. Reporting the
+// origin's made a bind point look like an ordinary directory of its parent's
+// mount to systemd's path_is_mount_point() and to mountpoint(1), which compare
+// a path's mount ID with its parent's and read STATX_ATTR_MOUNT_ROOT.
+struct mount *find_mount_and_trim_path_seen(char *path, int *mount_flags, int *seen_id,
+                                            bool *seen_root) {
     if (mount_flags != NULL)
         *mount_flags = 0;
     struct mount *mount = mount_find(path);
@@ -259,6 +271,10 @@ struct mount *find_mount_and_trim_path_flags(char *path, int *mount_flags) {
     while (*src != '\0')
         *dst++ = *src++;
     *dst = '\0';
+    if (seen_id != NULL)
+        *seen_id = mount_id(mount);
+    if (seen_root != NULL)
+        *seen_root = path[0] == '\0';
 
     // Bind mount: it has no backing of its own, so redirect to the origin mount.
     // Rewrite the (now mount-relative) path to bind_prefix + path and return the
@@ -535,7 +551,9 @@ struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, i
     char guest_path[MAX_PATH];
     strcpy(guest_path, path);
     int mflags;
-    struct mount *mount = find_mount_and_trim_path_flags(path, &mflags);
+    int seen_id;
+    bool seen_root;
+    struct mount *mount = find_mount_and_trim_path_seen(path, &mflags, &seen_id, &seen_root);
     if (mount == NULL)
         return ERR_PTR(_ENOENT);
     // Refusing the write-mode open is what Linux does for a read-only mount,
@@ -669,6 +687,8 @@ struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, i
                 }
                 // opath_link_fd_create took over the mount reference.
                 lfd->flags = flags;
+                lfd->mnt_id = seen_id;
+                lfd->mnt_root = seen_root;
                 return lfd;
             }
             mount_release(mount);
@@ -730,6 +750,8 @@ struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, i
             // opath_link_fd_create took over the mount reference.
             pfd->type = stat.mode & S_IFMT;
             pfd->flags = flags;
+            pfd->mnt_id = seen_id;
+            pfd->mnt_root = seen_root;
             return pfd;
         }
 
@@ -778,6 +800,8 @@ struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, i
     }
     fd->mount = mount;
     fd->mount_flags = mflags;
+    fd->mnt_id = seen_id;
+    fd->mnt_root = seen_root;
 
     err = fd->mount->fs->fstat(fd, &stat);
     if (err < 0) {

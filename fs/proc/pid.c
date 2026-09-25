@@ -1588,7 +1588,10 @@ static int proc_pid_fdinfo_show(struct proc_entry *entry, struct proc_data *buf)
     // This was a constant 1, which named whatever mount happened to be first
     // in the list. Sockets, pipes and the other anonymous inodes are on no
     // listed mount, as Linux's sockfs and pipefs are not.
-    proc_printf(buf, "mnt_id:\t%d\n", fd->mount != NULL ? mount_id(fd->mount) : MOUNT_ID_HIDDEN);
+    // fd->mnt_id first: for a file opened through a bind, fd->mount is the
+    // origin the bind aliases, not the mount it was opened on.
+    proc_printf(buf, "mnt_id:\t%d\n", fd->mnt_id != 0 ? fd->mnt_id
+                                   : fd->mount != NULL ? mount_id(fd->mount) : MOUNT_ID_HIDDEN);
     // Real Linux appends a "Pid:" line for pidfds (fs/proc/fd.c's
     // pidfd_show_fdinfo); glibc's pidfd_get_pid() reads exactly this as its
     // fallback when the PIDFD_GET_INFO ioctl isn't supported, and treats a

@@ -389,6 +389,12 @@ struct mount *find_mount_and_trim_path(char *path);
 // Same, but also reports the mount flags governing the path. For a bind these
 // are NOT the returned mount's own -- see fs/generic.c. Pass NULL to ignore.
 struct mount *find_mount_and_trim_path_flags(char *path, int *mount_flags);
+// Same again, and also which mount the path is ON as mountinfo lists it: for a
+// bind, the bind itself, where the returned mount is the origin backing it.
+// `seen_id` receives its mount ID and `seen_root` whether the path is that
+// mount's root. Any of the three may be NULL.
+struct mount *find_mount_and_trim_path_seen(char *path, int *mount_flags, int *seen_id,
+                                            bool *seen_root);
 
 // adhoc fs
 struct fd *adhoc_fd_create(const struct fd_ops *ops);

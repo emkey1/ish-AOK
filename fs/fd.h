@@ -457,6 +457,15 @@ struct fd {
     // Separate from `lock` above because tmpfs_readdir takes that one itself
     // to guard its own dir_pos, and this has to wrap the readdir call.
     lock_t dir_pos_lock;
+
+    // The mount this fd was opened through, as mountinfo, statx and fdinfo
+    // name it, and whether it was opened at that mount's root. Not `mount`'s:
+    // for a bind, `mount` is the ORIGIN the bind aliases, while the bind is a
+    // mount of its own with its own ID. 0 for a descriptor not opened by path,
+    // which reports mount_id(mount). See find_mount_and_trim_path_seen.
+    // At the end, so app code built against an older fd.h keeps its offsets.
+    int mnt_id;
+    bool mnt_root;
 };
 
 typedef sdword_t fd_t;

@@ -326,9 +326,13 @@ int generic_statat_full(struct fd *at, const char *path_raw, struct statbuf *sta
     if (empty_path && (path_raw[0] == '\0') && at != AT_PWD) {
         if (mnt_id) {
             struct mount *at_mount = fd_is_opath_link(at) ? opath_link_get_mount(at) : at->mount;
-            if (at_mount != NULL)
+            if (at->mnt_id != 0)
+                *mnt_id = at->mnt_id;
+            else if (at_mount != NULL)
                 *mnt_id = mount_id(at_mount);
         }
+        if (is_mount_root)
+            *is_mount_root = at->mnt_root;
         return generic_fstat(at, stat);
     } else {
         const char *resolve_path =
@@ -351,13 +355,15 @@ int generic_statat_full(struct fd *at, const char *path_raw, struct statbuf *sta
             return err;
     }
 
-    struct mount *mount = find_mount_and_trim_path(path);
+    // The mount the path is ON, which for a bind is the bind and not the
+    // origin that `mount` resolves to: see find_mount_and_trim_path_seen.
+    int seen_id;
+    bool seen_root;
+    struct mount *mount = find_mount_and_trim_path_seen(path, NULL, &seen_id, &seen_root);
     if (mount == NULL)
         return _ENOENT;
-    // find_mount_and_trim_path trims the mount point prefix off path in
-    // place; an empty remainder means path was exactly the mount's root.
     if (is_mount_root)
-        *is_mount_root = path[0] == '\0';
+        *is_mount_root = seen_root;
     memset(stat, 0, sizeof(*stat));
     // fakefs_stat reads its SQLite ish_stat metadata and the real host stat()
     // as two separate, unlocked steps; without inodes_lock here, a concurrent
@@ -379,7 +385,7 @@ int generic_statat_full(struct fd *at, const char *path_raw, struct statbuf *sta
     if (err >= 0)
         stat_stamp_fake_dev(mount, stat);
     if (mnt_id)
-        *mnt_id = mount_id(mount);
+        *mnt_id = seen_id;
     mount_release(mount);
     return err;
 }

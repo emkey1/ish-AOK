@@ -1018,7 +1018,15 @@ int proc_show_mountinfo(struct proc_entry *UNUSED(entry), struct proc_data *buf)
         // it comes from the same place that number does (fs/mount.c) rather
         // than being made up here; the two must not contradict each other.
         dev_t_ dev = mount_dev(mount);
-        proc_printf(buf, "%d %d %d:%d / ", id, parent_id, dev_major(dev), dev_minor(dev));
+        proc_printf(buf, "%d %d %d:%d ", id, parent_id, dev_major(dev), dev_minor(dev));
+        // Field 4, the directory of its filesystem the mount shows: "/" for an
+        // ordinary mount, and for a bind the source's path within the origin
+        // -- bind_prefix, which do_bind_mount already resolved through any
+        // bind the source was itself reached by, so a bind of a bind names
+        // the same directory. Linux: "229 39 254:3 /bp-src /tmp/bp-dst".
+        const char *root = mount->bind_origin != NULL ? mount->bind_prefix : "/";
+        proc_print_escaped(buf, root[0] == '\0' ? "/" : root);
+        proc_printf(buf, " ");
         proc_print_escaped(buf, point);
         proc_printf(buf, " %s", mount->flags & MS_READONLY_ ? "ro" : "rw");
         if (mount->flags & MS_NOSUID_)
