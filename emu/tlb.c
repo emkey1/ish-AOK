@@ -659,7 +659,10 @@ void tlb_refresh(struct tlb *tlb, struct mmu *mmu) {
 }
 
 void tlb_flush(struct tlb *tlb) {
-    tlb->mem_changes = atomic_load_explicit(&tlb->mmu->changes, memory_order_relaxed);
+    // Acquire: every entry installed from here on is valid under this value,
+    // and whatever was published before the bump that produced it -- the JIT's
+    // code-write tracking flags, see tlb_handle_miss -- must be seen by then.
+    tlb->mem_changes = atomic_load_explicit(&tlb->mmu->changes, memory_order_acquire);
     for (unsigned i = 0; i < TLB_SIZE; i++)
         tlb->entries[i] = (struct tlb_entry) {.page = 1, .page_if_writable = 1};
     tlb->exec_ok_page = 0;
@@ -770,14 +773,24 @@ __no_instrument void *tlb_handle_miss(struct tlb *tlb, guest_addr_t addr, int ty
 #if ENGINE_JIT
     // x86 code can be rewritten by a plain store. Once this entry is writable
     // no store to the page reaches mmu_translate again, so an executable page
-    // is noted -- after the install, see jit_note_code_write -- and the next
-    // compile from it revokes the entry.
+    // -- or a shared one, which another mapping may execute -- is noted, after
+    // the install (see jit_note_code_write), and the next compile from it
+    // revokes the entry.
+    //
+    // jit_code_write_prepare sets the tracking flags and then bumps
+    // mmu->changes. This entry is valid under tlb->mem_changes, which
+    // tlb_flush read with acquire; if that was the bump or anything after it,
+    // the flags read here are set, so no entry valid after the bump goes
+    // unnoted.
     struct jit *jit = tlb->mmu->jit;
     if (type == MEM_WRITE && jit != NULL &&
-            atomic_load_explicit(&jit->track_code_writes, memory_order_relaxed) &&
-            mmu_page_executable(tlb->mmu, PAGE(addr)) &&
-            !jit_note_code_write(jit, PAGE(addr), tlb))
-        tlb_ent->page_if_writable = TLB_PAGE_EMPTY;
+            atomic_load_explicit(&jit->track_code_writes, memory_order_relaxed)) {
+        unsigned flags = mmu_page_code_flags(tlb->mmu, PAGE(addr));
+        if (((flags & P_EXEC) || ((flags & P_SHARED) &&
+                atomic_load_explicit(&jit->track_shared_code, memory_order_relaxed))) &&
+                !jit_note_code_write(jit, PAGE(addr), tlb))
+            tlb_ent->page_if_writable = TLB_PAGE_EMPTY;
+    }
 #endif
     return (void *) (tlb_ent->data_minus_addr + addr);
 }

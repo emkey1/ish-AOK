@@ -1050,6 +1050,40 @@ bool mmu_page_executable(struct mmu *mmu, page_t page) {
     return true;
 }
 
+unsigned mmu_page_code_flags(struct mmu *mmu, page_t page) {
+    struct mem *mem = container_of(mmu, struct mem, mmu);
+    if (page >= mem->page_limit)
+        return P_EXEC;
+    struct pt_entry *entry = mem_pt(mem, page);
+    if (entry != NULL)
+        return entry->flags & (P_EXEC | P_SHARED);
+    struct mem_lazy_map *lazy = mem_lazy_find(mem, page);
+    if (lazy != NULL)
+        return lazy->flags & (P_EXEC | P_SHARED);
+    return P_EXEC;
+}
+
+bool mem_shared_page_id(const struct pt_entry *entry, struct mem_shared_id *id) {
+    if (entry == NULL || !(entry->flags & P_SHARED) || entry->data == NULL)
+        return false;
+    const struct data *data = entry->data;
+    if (data->host_file_known) {
+        *id = (struct mem_shared_id) {
+            MEM_SHARED_FILE, {data->host_dev, data->host_ino},
+            (data->host_offset + entry->offset) >> PAGE_BITS,
+        };
+    } else if (data->shared_key != 0) {
+        *id = (struct mem_shared_id) {
+            MEM_SHARED_SYSV, {data->shared_key, 0}, entry->offset >> PAGE_BITS,
+        };
+    } else {
+        *id = (struct mem_shared_id) {
+            MEM_SHARED_ANON, {(uintptr_t) data, 0}, entry->offset >> PAGE_BITS,
+        };
+    }
+    return true;
+}
+
 // Linux's is_data_mapping(): private, writable, and not the stack.
 static bool mem_flags_are_data(unsigned flags) {
     return (flags & (P_WRITE | P_SHARED | P_GROWSDOWN)) == P_WRITE;
@@ -3593,9 +3627,11 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
 #if ENGINE_JIT
         // get rid of any compiled blocks in this page -- unless
         // mem_write_prepare_rect already did, under one lock for the whole
-        // rectangle this write belongs to
+        // rectangle this write belongs to -- and in every other mapping of it
         if (!write_prepared_covers(mem, page))
             jit_invalidate_page(mem->mmu.jit, page);
+        if (entry->flags & P_SHARED)
+            jit_note_shared_write(mem->mmu.jit, entry);
 #endif
         
         // if page is cow, ~~milk~~ copy it
@@ -3780,6 +3816,8 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
         }
 #if ENGINE_JIT
         jit_invalidate_page(mem->mmu.jit, page);
+        if (entry->flags & P_SHARED)
+            jit_note_shared_write(mem->mmu.jit, entry);
 #endif
         if (entry->flags & P_COW) {
             // Breaking a copy-on-write page is a minor fault, and after a fork

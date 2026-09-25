@@ -518,6 +518,13 @@ struct data {
     _Atomic uint32_t *frame_slot;
 
     uintptr_t shared_key;
+    // The host file a MAP_SHARED file mapping maps, and the file offset
+    // `data` starts at. Set by host_fd_mmap, which makes every such mapping
+    // (realfs, fakefs, tmpfs, memfd, FUSE). Two mappings of one file are two
+    // host mappings and two struct datas, through one descriptor or two, and
+    // this is what says they are the same memory: see mem_shared_page_id.
+    bool host_file_known;
+    uint64_t host_dev, host_ino, host_offset;
     uint8_t *host_page_prot; // cached mirrored host protections, one per host page
     // Set only for never-writable file-backed mappings (fs/mmap_cache.h) --
     // lets /proc/<pid>/smaps see cross-process sharing this refcount can't.
@@ -773,6 +780,30 @@ size_t mem_frame_size(void);
 
 // Must call with mem read-locked.
 void *mem_ptr(struct mem *mem, guest_addr_t addr, int type);
+
+// What a MAP_SHARED page is, whichever mapping reaches it. One memfd mapped
+// read-write and read-execute, a file opened twice and mapped through each
+// descriptor, an mremap(old_size = 0) alias: each pair is two pages with one
+// id. A file page is its host file and page index (struct data::host_dev..);
+// a SysV segment's, its segment and index; anonymous shared memory's, its
+// struct data and index -- fork and mremap aliases share that struct.
+enum {
+    MEM_SHARED_ANON = 1,
+    MEM_SHARED_SYSV,
+    MEM_SHARED_FILE,
+};
+struct mem_shared_id {
+    uint64_t kind;
+    uint64_t object[2];
+    uint64_t index;
+};
+static inline bool mem_shared_id_equal(const struct mem_shared_id *a, const struct mem_shared_id *b) {
+    return a->kind == b->kind && a->object[0] == b->object[0] &&
+            a->object[1] == b->object[1] && a->index == b->index;
+}
+// Fills *id and returns true for a P_SHARED entry; false for a private page.
+// Call with mem locked, as for any entry.
+bool mem_shared_page_id(const struct pt_entry *entry, struct mem_shared_id *id);
 
 // For a syscall that is about to write a rectangle of guest memory through
 // mem_ptr(MEM_WRITE), one span at a time: drop the translations of every

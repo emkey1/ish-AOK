@@ -650,6 +650,8 @@ static void jit_block_free(struct jit *jit, struct jit_block *block);
 static void jit_insert(struct jit *jit, struct jit_block *block);
 static void jit_free_jetsam(struct jit *jit);
 static void jit_resize_hash(struct jit *jit, size_t new_size);
+static void jit_shared_forget_page(struct jit *jit, page_t page);
+static void jit_shared_free(struct jit *jit);
 
 // Called by hook.c's Mach exception handler when a JIT thread faults while
 // executing translated code. The handler redirects the faulting thread's PC
@@ -1176,6 +1178,7 @@ void jit_free(struct jit *jit) {
     free(jit->page_hash);
     free(jit->hash);
     free(jit->code_writes);
+    jit_shared_free(jit);
     unlock(&jit->lock);
     free(jit);
 }
@@ -1235,6 +1238,8 @@ static bool jit_invalidate_page_locked(struct jit *jit, page_t page) {
             invalidated = true;
         }
     }
+    // No block touches the page now; a store to shared memory need not find it.
+    jit_shared_forget_page(jit, page);
     return invalidated;
 }
 
@@ -1314,7 +1319,8 @@ void jit_invalidate_page(struct jit *jit, page_t page) {
 // The protocol, all of it under jit->lock:
 //  - jit_note_code_write, from tlb_handle_miss AFTER the writable entry is
 //    installed: drop the page's blocks, and record the store in the page's
-//    slot (seq, the mmu->changes the entry is valid under, and which TLB).
+//    slot (seq, the mmu->changes the entry is valid under, which TLB, and
+//    which page that TLB's entry is for).
 //  - jit_code_write_prepare, BEFORE a compile reads any bytes: if a slot for
 //    either page the block can span records a writable entry that is still
 //    valid, take it away -- from the compiling thread's own TLB if that is the
@@ -1336,21 +1342,229 @@ void jit_invalidate_page(struct jit *jit, page_t page) {
 // cross-modifying code, which the SDM (8.1.3) leaves undefined. Stores within
 // the block being executed are not seen until it exits, either.
 //
-// Slots are a small direct-mapped table keyed by page: two pages sharing a
-// slot cost at worst a needless bump or a needless run-once, never a miss.
+// Slots are a small direct-mapped table keyed by page -- or, for a MAP_SHARED
+// page, by what it maps (below): two keys sharing a slot cost at worst a
+// needless bump or a needless run-once, never a miss.
 #define JIT_CODE_WRITE_SLOT_BITS 9
 #define JIT_CODE_WRITE_SLOTS (1 << JIT_CODE_WRITE_SLOT_BITS)
 struct jit_code_write {
     uint64_t seq;
     uint64_t changes;
     // The one TLB that made a page here writable while mmu->changes ==
-    // changes, or NULL once a second one has. Only ever compared with the
-    // compiling thread's own TLB, so a dead thread's stale pointer is safe.
+    // changes, or NULL once a second one has -- or the same one, for a second
+    // page. Only ever compared with the compiling thread's own TLB, so a dead
+    // thread's stale pointer is safe.
     const struct tlb *writer;
+    // The page writer's entry is for: the page itself, or for a shared page,
+    // the mapping of it that was stored through.
+    page_t page;
 };
 
-static inline size_t jit_code_write_slot(page_t page) {
-    return (size_t) (((uint64_t) page * 0x9E3779B97F4A7C15ull) >> (64 - JIT_CODE_WRITE_SLOT_BITS));
+static inline size_t jit_code_write_slot(uint64_t key) {
+    return (size_t) ((key * 0x9E3779B97F4A7C15ull) >> (64 - JIT_CODE_WRITE_SLOT_BITS));
+}
+
+// ---- code reached through a second mapping --------------------------------
+//
+// Blocks are keyed by guest virtual page. A W^X "dual mapping" JIT -- .NET 7
+// and later by default, libffi when RWX mmap is refused -- maps one memfd or
+// file twice, MAP_SHARED: read-write, where it writes code, and read-execute,
+// where it runs it. The store reaches only the RW page, which has no blocks;
+// the RX page's run on. Each guest mmap of a shared file is its own host
+// mapping and its own struct data, so nothing short of the host file says the
+// two pages are one.
+//
+// So a page holding blocks compiled from shared memory is also recorded under
+// what it maps (mem_shared_page_id: host file and page, SysV segment, or the
+// struct data of anonymous shared memory), and the protocol above runs on that
+// id in place of the page, for every shared page: a note drops the blocks of
+// every page recorded under the id and fills the id's slot, naming the page
+// actually stored through; prepare revokes that page's entry; insert records
+// the block's pages under their ids before the raced check, so a note either
+// comes after and finds them, or before and makes the block run once.
+//
+// Nothing is noted for shared pages until the first block is compiled from
+// one (jit->track_shared_code), and that compile bumps mmu->changes, since
+// stores made before it left writable entries no slot records. A process that
+// never executes shared memory pays nothing for any of this.
+//
+// Within one address space only. A store from ANOTHER address space -- a
+// forked child writing its inherited RW mapping, an unrelated process
+// mapping the same file, write(2) to the file -- reaches neither this table
+// nor this mm's TLBs, and the RX alias runs stale code, as it always has.
+// Nor is a MAP_PRIVATE mapping of the file tracked, which Linux keeps in step
+// with the file until the page is first written; no JIT maps code that way.
+struct jit_shared_page {
+    struct list by_page;
+    struct list by_id;
+    page_t page;
+    struct mem_shared_id id;
+};
+
+struct jit_shared_code {
+    // Two views of the same nodes, one node per guest page: by page, to
+    // forget a page whose blocks are gone; by id, to find every page a store
+    // has to reach. `size` buckets each, a power of two, grown with count.
+    struct list *by_page;
+    struct list *by_id;
+    size_t size;
+    size_t count;
+};
+
+static uint64_t jit_shared_id_key(const struct mem_shared_id *id) {
+    uint64_t h = id->kind;
+    h = (h ^ id->object[0]) * 0x9E3779B97F4A7C15ull;
+    h = (h ^ id->object[1]) * 0x9E3779B97F4A7C15ull;
+    h = (h ^ id->index) * 0x9E3779B97F4A7C15ull;
+    return h ^ (h >> 31);
+}
+
+static inline size_t jit_shared_bucket(uint64_t key, size_t size) {
+    return (size_t) ((key * 0x9E3779B97F4A7C15ull) >> 32) & (size - 1);
+}
+
+static bool jit_shared_resize(struct jit_shared_code *sc, size_t new_size) {
+    struct list *by_page = calloc(new_size, sizeof(struct list));
+    struct list *by_id = calloc(new_size, sizeof(struct list));
+    if (by_page == NULL || by_id == NULL) {
+        free(by_page);
+        free(by_id);
+        return false;
+    }
+    for (size_t i = 0; i < sc->size; i++) {
+        if (list_null(&sc->by_page[i]))
+            continue;
+        struct jit_shared_page *sp, *tmp;
+        list_for_each_entry_safe(&sc->by_page[i], sp, tmp, by_page) {
+            list_remove(&sp->by_page);
+            list_remove(&sp->by_id);
+            list_init_add(&by_page[jit_shared_bucket(sp->page, new_size)], &sp->by_page);
+            list_init_add(&by_id[jit_shared_bucket(jit_shared_id_key(&sp->id), new_size)], &sp->by_id);
+        }
+    }
+    free(sc->by_page);
+    free(sc->by_id);
+    sc->by_page = by_page;
+    sc->by_id = by_id;
+    sc->size = new_size;
+    return true;
+}
+
+static struct jit_shared_page *jit_shared_find_page(struct jit_shared_code *sc, page_t page) {
+    struct list *bucket = &sc->by_page[jit_shared_bucket(page, sc->size)];
+    if (list_null(bucket))
+        return NULL;
+    struct jit_shared_page *sp;
+    list_for_each_entry(bucket, sp, by_page) {
+        if (sp->page == page)
+            return sp;
+    }
+    return NULL;
+}
+
+// `page` holds blocks compiled from the shared memory `id`. Caller holds
+// jit->lock. False if that could not be recorded, and then the block must
+// not be cached: a store through another mapping would never find it.
+static bool jit_shared_add(struct jit *jit, page_t page, const struct mem_shared_id *id) {
+    struct jit_shared_code *sc = jit->shared_code;
+    if (sc == NULL) {
+        sc = calloc(1, sizeof(*sc));
+        if (sc == NULL || !jit_shared_resize(sc, 64)) {
+            free(sc);
+            return false;
+        }
+        jit->shared_code = sc;
+    }
+    struct jit_shared_page *sp = jit_shared_find_page(sc, page);
+    if (sp != NULL) {
+        if (mem_shared_id_equal(&sp->id, id))
+            return true;
+        list_remove(&sp->by_id);
+    } else {
+        if (sc->count >= sc->size * 2)
+            jit_shared_resize(sc, sc->size * 2); // kept smaller on failure: slower, never wrong
+        sp = malloc(sizeof(*sp));
+        if (sp == NULL)
+            return false;
+        sp->page = page;
+        list_init_add(&sc->by_page[jit_shared_bucket(page, sc->size)], &sp->by_page);
+        sc->count++;
+    }
+    sp->id = *id;
+    list_init_add(&sc->by_id[jit_shared_bucket(jit_shared_id_key(id), sc->size)], &sp->by_id);
+    return true;
+}
+
+// jit_invalidate_page_locked has dropped every block touching `page`.
+static void jit_shared_forget_page(struct jit *jit, page_t page) {
+    struct jit_shared_code *sc = jit->shared_code;
+    if (sc == NULL || sc->count == 0)
+        return;
+    struct jit_shared_page *sp = jit_shared_find_page(sc, page);
+    if (sp == NULL)
+        return;
+    list_remove(&sp->by_page);
+    list_remove(&sp->by_id);
+    free(sp);
+    sc->count--;
+}
+
+static void jit_shared_free(struct jit *jit) {
+    struct jit_shared_code *sc = jit->shared_code;
+    if (sc == NULL)
+        return;
+    for (size_t i = 0; i < sc->size; i++) {
+        if (list_null(&sc->by_page[i]))
+            continue;
+        struct jit_shared_page *sp, *tmp;
+        list_for_each_entry_safe(&sc->by_page[i], sp, tmp, by_page)
+            free(sp);
+    }
+    free(sc->by_page);
+    free(sc->by_id);
+    free(sc);
+    jit->shared_code = NULL;
+}
+
+// Drop the blocks of every page recorded under `id`. Caller holds jit->lock;
+// returns whether any block was dropped, which obliges the caller to bump
+// cleanup_seq.
+static bool jit_shared_invalidate(struct jit *jit, const struct mem_shared_id *id) {
+    struct jit_shared_code *sc = jit->shared_code;
+    if (sc == NULL || sc->count == 0)
+        return false;
+    struct list *bucket = &sc->by_id[jit_shared_bucket(jit_shared_id_key(id), sc->size)];
+    if (list_null(bucket))
+        return false;
+    bool invalidated = false;
+    struct jit_shared_page *sp, *tmp;
+    list_for_each_entry_safe(bucket, sp, tmp, by_id) {
+        // Forgets sp, and only sp: one node per page.
+        if (mem_shared_id_equal(&sp->id, id))
+            invalidated |= jit_invalidate_page_locked(jit, sp->page);
+    }
+    return invalidated;
+}
+
+// What the code-write protocol needs to know about a page: its P_EXEC and
+// P_SHARED bits (P_EXEC where mmu_page_executable would say so without an
+// entry), and whether *id was filled -- a shared page with an entry. A shared
+// page still only reserved has no id, and needs none: until it is touched no
+// mapping of it exists but that reservation, and no TLB holds it.
+static unsigned jit_code_page(struct jit *jit, page_t page, struct mem_shared_id *id, bool *have_id) {
+    struct mem *mem = container_of(jit->mmu, struct mem, mmu);
+    *have_id = false;
+    if (page >= mem->page_limit)
+        return P_EXEC;
+    struct pt_entry *entry = mem_pt(mem, page);
+    if (entry != NULL) {
+        *have_id = mem_shared_page_id(entry, id);
+        return entry->flags & (P_EXEC | P_SHARED);
+    }
+    struct mem_lazy_map *lazy = mem_lazy_find(mem, page);
+    if (lazy != NULL)
+        return lazy->flags & (P_EXEC | P_SHARED);
+    return P_EXEC;
 }
 
 // Takes writability away from every TLB of this address space: each one's
@@ -1360,25 +1574,38 @@ static void jit_revoke_writable(struct jit *jit) {
 }
 
 bool jit_note_code_write(struct jit *jit, page_t page, const struct tlb *tlb) {
+    struct mem_shared_id id;
+    bool shared;
+    unsigned flags = jit_code_page(jit, page, &id, &shared);
+    shared = shared && atomic_load_explicit(&jit->track_shared_code, memory_order_relaxed);
+    if (!(flags & P_EXEC) && !shared)
+        return true;
     lock(&jit->lock, 0);
     if (jit->code_writes == NULL)
         jit->code_writes = calloc(JIT_CODE_WRITE_SLOTS, sizeof(*jit->code_writes));
     // Again, although mem_ptr did it before installing: a compile may have
-    // inserted a block from this page in between.
-    if (jit_invalidate_page_locked(jit, page))
+    // inserted a block from this page in between. For a shared page, also
+    // every other mapping's blocks, which nothing has dropped yet.
+    bool invalidated = jit_invalidate_page_locked(jit, page);
+    if (shared)
+        invalidated |= jit_shared_invalidate(jit, &id);
+    if (invalidated)
         jit_invalidated(jit);
     bool noted = jit->code_writes != NULL;
     if (noted) {
-        struct jit_code_write *slot = &jit->code_writes[jit_code_write_slot(page)];
+        struct jit_code_write *slot = &jit->code_writes[
+                jit_code_write_slot(shared ? jit_shared_id_key(&id) : page)];
         slot->seq = ++jit->code_write_seq;
         // A TLB behind mmu->changes is already doomed, and must not overwrite
         // a slot that still describes a live entry.
         uint64_t changes = atomic_load_explicit(&jit->mmu->changes, memory_order_seq_cst);
         if (tlb->mem_changes == changes) {
-            if (slot->changes != changes)
+            if (slot->changes != changes) {
                 slot->writer = tlb;
-            else if (slot->writer != tlb)
+                slot->page = page;
+            } else if (slot->writer != tlb || slot->page != page) {
                 slot->writer = NULL;
+            }
             slot->changes = changes;
         }
     }
@@ -1386,27 +1613,67 @@ bool jit_note_code_write(struct jit *jit, page_t page, const struct tlb *tlb) {
     return noted;
 }
 
+void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry) {
+    struct mem_shared_id id;
+    if (jit == NULL || !atomic_load_explicit(&jit->track_shared_code, memory_order_relaxed) ||
+            !mem_shared_page_id(entry, &id))
+        return;
+    lock(&jit->lock, 0);
+    if (jit_shared_invalidate(jit, &id))
+        jit_invalidated(jit);
+    // No TLB entry to record, but a compile in flight may already have read
+    // the bytes: make it run once (jit_code_write_raced).
+    if (jit->code_writes != NULL)
+        jit->code_writes[jit_code_write_slot(jit_shared_id_key(&id))].seq = ++jit->code_write_seq;
+    unlock(&jit->lock);
+}
+
 // Before compiling a block at ip on the thread that owns tlb. Returns the seq
 // jit_code_write_raced checks.
 static uint64_t jit_code_write_prepare(struct jit *jit, guest_addr_t ip, struct tlb *tlb) {
+    // A block holds at most a page of code, so it ends on this page or the
+    // next.
+    struct {
+        page_t page;
+        unsigned flags;
+        bool have_id;
+        struct mem_shared_id id;
+    } pages[2];
+    bool shared = false;
+    for (int i = 0; i < 2; i++) {
+        pages[i].page = PAGE(ip) + i;
+        pages[i].flags = jit_code_page(jit, pages[i].page, &pages[i].id, &pages[i].have_id);
+        shared |= (pages[i].flags & P_SHARED) != 0;
+    }
+    // Stores made before this, by an engine that noted nothing -- or to
+    // shared pages, which were not noted before code came from one -- may
+    // have left writable entries behind. Both flags are set before the bump,
+    // so a store whose entry is valid after it sees them (tlb_handle_miss).
+    bool first = false;
     if (!atomic_load_explicit(&jit->track_code_writes, memory_order_relaxed)) {
-        // Stores made before this, by an engine that noted nothing, may have
-        // left writable entries behind.
         atomic_store_explicit(&jit->track_code_writes, true, memory_order_relaxed);
+        first = true;
+    }
+    if (shared && !atomic_load_explicit(&jit->track_shared_code, memory_order_relaxed)) {
+        atomic_store_explicit(&jit->track_shared_code, true, memory_order_relaxed);
+        first = true;
+    }
+    if (first) {
         jit_revoke_writable(jit);
     } else if (jit->code_writes != NULL) {
         uint64_t changes = atomic_load_explicit(&jit->mmu->changes, memory_order_seq_cst);
-        // A block holds at most a page of code, so it ends on this page or
-        // the next.
-        for (page_t page = PAGE(ip); page <= PAGE(ip) + 1; page++) {
-            const struct jit_code_write *slot = &jit->code_writes[jit_code_write_slot(page)];
+        for (int i = 0; i < 2; i++) {
+            if ((pages[i].flags & P_SHARED) && !pages[i].have_id)
+                continue;
+            const struct jit_code_write *slot = &jit->code_writes[jit_code_write_slot(
+                    pages[i].have_id ? jit_shared_id_key(&pages[i].id) : pages[i].page)];
             if (slot->changes != changes)
                 continue;
             if (slot->writer != tlb) {
                 jit_revoke_writable(jit);
                 break;
             }
-            guest_addr_t addr = (guest_addr_t) page << PAGE_BITS;
+            guest_addr_t addr = (guest_addr_t) slot->page << PAGE_BITS;
             struct tlb_entry *entry = &tlb->entries[TLB_INDEX(addr)];
             if (entry->page_if_writable == TLB_PAGE(addr))
                 entry->page_if_writable = TLB_PAGE_EMPTY;
@@ -1415,19 +1682,43 @@ static uint64_t jit_code_write_prepare(struct jit *jit, guest_addr_t ip, struct 
     return jit->code_write_seq;
 }
 
-static bool jit_code_write_raced(struct jit *jit, struct jit_block *block, uint64_t seq) {
+// Has a note for any of the block's pages, by their slot keys, come since
+// prepare returned seq?
+static bool jit_code_write_raced(struct jit *jit, const uint64_t *keys, int n, uint64_t seq) {
     if (jit->code_write_seq == seq || jit->code_writes == NULL)
         return false;
-    return jit->code_writes[jit_code_write_slot(PAGE(block->addr))].seq > seq ||
-            jit->code_writes[jit_code_write_slot(PAGE(block->end_addr))].seq > seq;
+    for (int i = 0; i < n; i++) {
+        if (jit->code_writes[jit_code_write_slot(keys[i])].seq > seq)
+            return true;
+    }
+    return false;
 }
 
 // Insert a freshly compiled block, unless a store raced its compile: then it
 // goes straight to jetsam, so the caller runs it this once and the next
-// lookup compiles the page again.
+// lookup compiles the page again. A block from shared memory is recorded
+// under what it maps first, so a store through any mapping finds it; if that
+// cannot be recorded, it is not cached either.
 static void jit_insert_checked(struct jit *jit, struct jit_block *block, uint64_t seq) {
     jit_insert(jit, block);
-    if (jit_code_write_raced(jit, block, seq)) {
+    bool keep = true;
+    page_t pages[2] = {PAGE(block->addr), PAGE(block->end_addr)};
+    uint64_t keys[2];
+    int n = pages[1] == pages[0] ? 1 : 2;
+    for (int i = 0; i < n; i++) {
+        struct mem_shared_id id;
+        bool have_id;
+        unsigned flags = jit_code_page(jit, pages[i], &id, &have_id);
+        if (have_id) {
+            keep &= jit_shared_add(jit, pages[i], &id);
+            keys[i] = jit_shared_id_key(&id);
+        } else {
+            // A shared page the compile read has an entry by now.
+            keep &= !(flags & P_SHARED);
+            keys[i] = pages[i];
+        }
+    }
+    if (!keep || jit_code_write_raced(jit, keys, n, seq)) {
         jit_block_disconnect(jit, block);
         block->is_jetsam = true;
         list_add(&jit->jetsam, &block->jetsam);

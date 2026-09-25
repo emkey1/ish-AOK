@@ -40,6 +40,9 @@ struct mmu {
 // access, reported as one by the read that follows. Defined in emu/memory.c.
 struct mmu;
 bool mmu_page_executable(struct mmu *mmu, page_t page);
+// The same answer as a P_EXEC bit, with the page's P_SHARED bit beside it:
+// what tlb_handle_miss needs to decide whether a store is a code write.
+unsigned mmu_page_code_flags(struct mmu *mmu, page_t page);
 #define MEM_WRITE_PTRACE 2
 
 struct mmu_ops {

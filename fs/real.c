@@ -1076,6 +1076,12 @@ int host_fd_mmap(int host_fd, struct mem *mem, page_t start, pages_t pages, off_
             munmap(memory, map_len);
         return err;
     }
+    struct pt_entry *pt = mem_pt(mem, start);
+    struct stat real_stat;
+    if (err != 0 || pt == NULL || pt->data == NULL ||
+            ((prot & P_WRITE) && !(mmap_flags & MAP_SHARED)) ||
+            fstat(host_fd, &real_stat) != 0)
+        return err;
     // Never-writable file-backed mappings can't be COW-broken or otherwise
     // mutated by the guest (write faults check P_WRITE before touching
     // anything), so it's always safe to register them: the underlying host
@@ -1084,15 +1090,17 @@ int host_fd_mmap(int host_fd, struct mem *mem, page_t start, pages_t pages, off_
     // fs/mmap_cache.h. Registering MAP_SHARED alongside MAP_PRIVATE here is
     // fine for the same reason: no P_WRITE means neither can ever be
     // dirtied by the guest.
-    if (err == 0 && !(prot & P_WRITE)) {
-        struct stat real_stat;
-        if (fstat(host_fd, &real_stat) == 0) {
-            struct pt_entry *pt = mem_pt(mem, start);
-            if (pt != NULL && pt->data != NULL) {
-                pt->data->cache_entry = mmap_cache_register(
-                        real_stat.st_dev, real_stat.st_ino, real_offset, pt->data->size);
-            }
-        }
+    if (!(prot & P_WRITE))
+        pt->data->cache_entry = mmap_cache_register(
+                real_stat.st_dev, real_stat.st_ino, real_offset, pt->data->size);
+    // What this mapping IS, so another mapping of the same file can be found
+    // from it: a W^X JIT writes code through one and runs it through the other
+    // (jit_note_code_write).
+    if (mmap_flags & MAP_SHARED) {
+        pt->data->host_file_known = true;
+        pt->data->host_dev = (uint64_t) real_stat.st_dev;
+        pt->data->host_ino = (uint64_t) real_stat.st_ino;
+        pt->data->host_offset = (uint64_t) real_offset;
     }
     return err;
 }

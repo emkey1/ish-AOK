@@ -79,6 +79,13 @@ struct jit {
     uint64_t code_write_seq;
     // JIT_CODE_WRITE_SLOTS entries, allocated by the first noted store.
     struct jit_code_write *code_writes;
+    // Code reached through more than one mapping. See jit_shared_code in
+    // jit.c. Set by the first compile from a MAP_SHARED page; stores to shared
+    // pages are noted from then on, by what they map.
+    atomic_bool track_shared_code;
+    // The guest pages holding blocks compiled from shared memory, findable by
+    // what they map. NULL until the first.
+    struct jit_shared_code *shared_code;
 };
 
 // this is roughly the average number of instructions in a basic block according to anonymous sources
@@ -145,13 +152,21 @@ void jit_invalidate_rect(struct jit *jit, guest_addr_t start, uint64_t stride,
 void jit_invalidate_all(struct jit *jit);
 
 // A guest store has just made `page` writable in `tlb`. Called by
-// tlb_handle_miss, after the entry is installed, for an executable page of an
-// x86 guest. Drops the page's blocks and records the store, so the next compile
-// from the page takes the writable entry away again. Returns false if the
-// store could not be recorded, and then the caller must not leave the entry
-// writable.
+// tlb_handle_miss, after the entry is installed, while jit->track_code_writes
+// is set (an x86 guest). For an executable page, or a MAP_SHARED one once code
+// has been compiled from shared memory, drops the blocks compiled from the
+// page -- through every mapping of it -- and records the store, so the next
+// compile from the page takes the writable entry away again. Returns false if
+// the store could not be recorded, and then the caller must not leave the
+// entry writable.
 struct tlb;
 bool jit_note_code_write(struct jit *jit, page_t page, const struct tlb *tlb);
+
+// A write through mem_ptr (a syscall, a ptrace poke) to a MAP_SHARED page:
+// drop the blocks compiled from any mapping of it. A no-op until code has been
+// compiled from shared memory. Call with mem locked.
+struct pt_entry;
+void jit_note_shared_write(struct jit *jit, const struct pt_entry *entry);
 
 // i386 gadget-fusion switches, readable and writable at RUNTIME via
 // /proc/ish/i386_jit_fuse. Each bit enables one fused gadget family in
