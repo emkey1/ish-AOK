@@ -70,6 +70,15 @@ struct jit {
     // with exactly one matching lower on every path out.
     atomic_uint write_wanted;
     size_t page_hash_size;
+
+    // x86 self-modifying code. See jit_note_code_write in jit.c. Set by the
+    // first x86 compile; stores to executable pages are noted from then on.
+    atomic_bool track_code_writes;
+    // Bumped under lock by each noted store; a compile that finds it moved
+    // for one of its pages ran against bytes that were being rewritten.
+    uint64_t code_write_seq;
+    // JIT_CODE_WRITE_SLOTS entries, allocated by the first noted store.
+    struct jit_code_write *code_writes;
 };
 
 // this is roughly the average number of instructions in a basic block according to anonymous sources
@@ -134,6 +143,15 @@ void jit_invalidate_page(struct jit *jit, page_t page);
 void jit_invalidate_rect(struct jit *jit, guest_addr_t start, uint64_t stride,
         uint64_t row_bytes, uint32_t rows);
 void jit_invalidate_all(struct jit *jit);
+
+// A guest store has just made `page` writable in `tlb`. Called by
+// tlb_handle_miss, after the entry is installed, for an executable page of an
+// x86 guest. Drops the page's blocks and records the store, so the next compile
+// from the page takes the writable entry away again. Returns false if the
+// store could not be recorded, and then the caller must not leave the entry
+// writable.
+struct tlb;
+bool jit_note_code_write(struct jit *jit, page_t page, const struct tlb *tlb);
 
 // i386 gadget-fusion switches, readable and writable at RUNTIME via
 // /proc/ish/i386_jit_fuse. Each bit enables one fused gadget family in

@@ -5,6 +5,7 @@
 #include "emu/interrupt.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
+#include "jit/jit.h"
 
 static void arm64_watch_scan_value(guest_addr_t addr, const void *value, unsigned size);
 
@@ -766,6 +767,18 @@ __no_instrument void *tlb_handle_miss(struct tlb *tlb, guest_addr_t addr, int ty
         // 1 is not a valid page so this won't look like a hit
         tlb_ent->page_if_writable = TLB_PAGE_EMPTY;
     tlb_ent->data_minus_addr = (uintptr_t) ptr - TLB_PAGE(addr);
+#if ENGINE_JIT
+    // x86 code can be rewritten by a plain store. Once this entry is writable
+    // no store to the page reaches mmu_translate again, so an executable page
+    // is noted -- after the install, see jit_note_code_write -- and the next
+    // compile from it revokes the entry.
+    struct jit *jit = tlb->mmu->jit;
+    if (type == MEM_WRITE && jit != NULL &&
+            atomic_load_explicit(&jit->track_code_writes, memory_order_relaxed) &&
+            mmu_page_executable(tlb->mmu, PAGE(addr)) &&
+            !jit_note_code_write(jit, PAGE(addr), tlb))
+        tlb_ent->page_if_writable = TLB_PAGE_EMPTY;
+#endif
     return (void *) (tlb_ent->data_minus_addr + addr);
 }
 

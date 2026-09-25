@@ -647,6 +647,7 @@ static inline void jit_crash_track_mutex_unlock(lock_t *mutex) {
 
 static void jit_block_disconnect(struct jit *jit, struct jit_block *block);
 static void jit_block_free(struct jit *jit, struct jit_block *block);
+static void jit_insert(struct jit *jit, struct jit_block *block);
 static void jit_free_jetsam(struct jit *jit);
 static void jit_resize_hash(struct jit *jit, size_t new_size);
 
@@ -1174,6 +1175,7 @@ void jit_free(struct jit *jit) {
     jit_free_jetsam(jit);
     free(jit->page_hash);
     free(jit->hash);
+    free(jit->code_writes);
     unlock(&jit->lock);
     free(jit);
 }
@@ -1288,6 +1290,149 @@ void jit_invalidate_rect(struct jit *jit, guest_addr_t start, uint64_t stride,
 
 void jit_invalidate_page(struct jit *jit, page_t page) {
     jit_invalidate_range(jit, page, page + 1);
+}
+
+// ---- x86 self-modifying code ----------------------------------------------
+//
+// x86 has no instruction-cache maintenance: a store to code is seen by the
+// next fetch, and programs rely on it (tests/manual/modify.c). arm64 and
+// riscv64 guests have to say so (arm64_ic_ivau, riscv64_fence_i below).
+//
+// A store drops a page's blocks only on the TLB write MISS path (mmu_translate
+// -> mem_ptr -> jit_invalidate_page). Once a TLB entry is writable, later
+// stores hit it and reach nothing. So when a block is compiled from a page,
+// no TLB may keep that page writable: its next store has to miss again.
+//
+// Taking a page's writability away from every thread's TLB is a bump of
+// mmu->changes, which each thread's write fast path compares before every
+// store. That flushes whole TLBs, so it is done only when some TLB may hold
+// the page writable -- which is what the notes below record. A page nobody
+// has stored to since the last bump (all ordinary .text) costs nothing, and a
+// page only the compiling thread has stored to (code patching itself, the
+// common case) costs one entry of that thread's own TLB.
+//
+// The protocol, all of it under jit->lock:
+//  - jit_note_code_write, from tlb_handle_miss AFTER the writable entry is
+//    installed: drop the page's blocks, and record the store in the page's
+//    slot (seq, the mmu->changes the entry is valid under, and which TLB).
+//  - jit_code_write_prepare, BEFORE a compile reads any bytes: if a slot for
+//    either page the block can span records a writable entry that is still
+//    valid, take it away -- from the compiling thread's own TLB if that is the
+//    only one the slot names, else by bumping mmu->changes. Every store after
+//    this misses and is noted.
+//  - jit_code_write_raced, at insert: a note for the block's pages since
+//    prepare means a store may have landed after the compile read the bytes.
+//    The block then runs once and is dropped, never cached -- the one outcome
+//    that cannot leave stale code behind, and it cannot livelock against a
+//    thread that keeps storing.
+//
+// Noting after the install is what closes the race with a compile on another
+// thread: noted before it, a prepare could slip between the note and the
+// install and leave a writable entry behind that no slot records.
+//
+// Left open, as in every emulator that translates: a store whose TLB check
+// passed on one thread just before another thread's bump, and which lands
+// just after that thread's compile read the bytes. That is unsynchronized
+// cross-modifying code, which the SDM (8.1.3) leaves undefined. Stores within
+// the block being executed are not seen until it exits, either.
+//
+// Slots are a small direct-mapped table keyed by page: two pages sharing a
+// slot cost at worst a needless bump or a needless run-once, never a miss.
+#define JIT_CODE_WRITE_SLOT_BITS 9
+#define JIT_CODE_WRITE_SLOTS (1 << JIT_CODE_WRITE_SLOT_BITS)
+struct jit_code_write {
+    uint64_t seq;
+    uint64_t changes;
+    // The one TLB that made a page here writable while mmu->changes ==
+    // changes, or NULL once a second one has. Only ever compared with the
+    // compiling thread's own TLB, so a dead thread's stale pointer is safe.
+    const struct tlb *writer;
+};
+
+static inline size_t jit_code_write_slot(page_t page) {
+    return (size_t) (((uint64_t) page * 0x9E3779B97F4A7C15ull) >> (64 - JIT_CODE_WRITE_SLOT_BITS));
+}
+
+// Takes writability away from every TLB of this address space: each one's
+// next store sees mmu->changes move and goes back through tlb_handle_miss.
+static void jit_revoke_writable(struct jit *jit) {
+    atomic_fetch_add_explicit(&jit->mmu->changes, 1, memory_order_seq_cst);
+}
+
+bool jit_note_code_write(struct jit *jit, page_t page, const struct tlb *tlb) {
+    lock(&jit->lock, 0);
+    if (jit->code_writes == NULL)
+        jit->code_writes = calloc(JIT_CODE_WRITE_SLOTS, sizeof(*jit->code_writes));
+    // Again, although mem_ptr did it before installing: a compile may have
+    // inserted a block from this page in between.
+    if (jit_invalidate_page_locked(jit, page))
+        jit_invalidated(jit);
+    bool noted = jit->code_writes != NULL;
+    if (noted) {
+        struct jit_code_write *slot = &jit->code_writes[jit_code_write_slot(page)];
+        slot->seq = ++jit->code_write_seq;
+        // A TLB behind mmu->changes is already doomed, and must not overwrite
+        // a slot that still describes a live entry.
+        uint64_t changes = atomic_load_explicit(&jit->mmu->changes, memory_order_seq_cst);
+        if (tlb->mem_changes == changes) {
+            if (slot->changes != changes)
+                slot->writer = tlb;
+            else if (slot->writer != tlb)
+                slot->writer = NULL;
+            slot->changes = changes;
+        }
+    }
+    unlock(&jit->lock);
+    return noted;
+}
+
+// Before compiling a block at ip on the thread that owns tlb. Returns the seq
+// jit_code_write_raced checks.
+static uint64_t jit_code_write_prepare(struct jit *jit, guest_addr_t ip, struct tlb *tlb) {
+    if (!atomic_load_explicit(&jit->track_code_writes, memory_order_relaxed)) {
+        // Stores made before this, by an engine that noted nothing, may have
+        // left writable entries behind.
+        atomic_store_explicit(&jit->track_code_writes, true, memory_order_relaxed);
+        jit_revoke_writable(jit);
+    } else if (jit->code_writes != NULL) {
+        uint64_t changes = atomic_load_explicit(&jit->mmu->changes, memory_order_seq_cst);
+        // A block holds at most a page of code, so it ends on this page or
+        // the next.
+        for (page_t page = PAGE(ip); page <= PAGE(ip) + 1; page++) {
+            const struct jit_code_write *slot = &jit->code_writes[jit_code_write_slot(page)];
+            if (slot->changes != changes)
+                continue;
+            if (slot->writer != tlb) {
+                jit_revoke_writable(jit);
+                break;
+            }
+            guest_addr_t addr = (guest_addr_t) page << PAGE_BITS;
+            struct tlb_entry *entry = &tlb->entries[TLB_INDEX(addr)];
+            if (entry->page_if_writable == TLB_PAGE(addr))
+                entry->page_if_writable = TLB_PAGE_EMPTY;
+        }
+    }
+    return jit->code_write_seq;
+}
+
+static bool jit_code_write_raced(struct jit *jit, struct jit_block *block, uint64_t seq) {
+    if (jit->code_write_seq == seq || jit->code_writes == NULL)
+        return false;
+    return jit->code_writes[jit_code_write_slot(PAGE(block->addr))].seq > seq ||
+            jit->code_writes[jit_code_write_slot(PAGE(block->end_addr))].seq > seq;
+}
+
+// Insert a freshly compiled block, unless a store raced its compile: then it
+// goes straight to jetsam, so the caller runs it this once and the next
+// lookup compiles the page again.
+static void jit_insert_checked(struct jit *jit, struct jit_block *block, uint64_t seq) {
+    jit_insert(jit, block);
+    if (jit_code_write_raced(jit, block, seq)) {
+        jit_block_disconnect(jit, block);
+        block->is_jetsam = true;
+        list_add(&jit->jetsam, &block->jetsam);
+        jit_invalidated(jit);
+    }
 }
 
 // IC IVAU from the arm64 guest (memory.S's ic_ivau gadget): drop translated
@@ -1953,6 +2098,7 @@ rearm_i386:
             lock(&jit->lock, 0);
             block = jit_lookup(jit, ip);
             if (block == NULL) {
+                uint64_t code_write_seq = jit_code_write_prepare(jit, ip, tlb);
                 // Compile outside jetsam_lock: jit_block_compile allocates memory,
                 // and under debug malloc (guard pages + scribbling) this is very slow.
                 // Holding jetsam_lock during compilation starves jetsam write-lock
@@ -2053,7 +2199,7 @@ rearm_i386:
                     jit_block_free(NULL, block);
                     block = existing;
                 } else {
-                    jit_insert(jit, block);
+                    jit_insert_checked(jit, block, code_write_seq);
                 }
             } else {
                 TRACE("%d %08x --- missed cache\n", current_pid(current), ip);
@@ -3344,6 +3490,7 @@ rearm_amd64:
             jit_crash_track_mutex_lock(&jit->lock);
             block = jit_lookup(jit, ip);
             if (block == NULL) {
+                uint64_t code_write_seq = jit_code_write_prepare(jit, ip, tlb);
                 jit_crash_track_mutex_unlock(&jit->lock);
                 jit_crash_lock = NULL;
                 frame->last_block = NULL;
@@ -3371,7 +3518,7 @@ rearm_amd64:
                     jit_block_free(NULL, block);
                     block = existing;
                 } else {
-                    jit_insert(jit, block);
+                    jit_insert_checked(jit, block, code_write_seq);
                 }
             }
             cache[cache_index] = block;
