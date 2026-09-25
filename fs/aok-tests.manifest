@@ -93,6 +93,7 @@ fs_conformance.c
 process_conformance.c
 time_conformance.c
 mem_conformance.c
+mem_vsz_rss_peaks.c
 sock_conformance.c
 getpeername_smallbuf.c
 netlink_route.c

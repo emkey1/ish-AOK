@@ -543,6 +543,12 @@ void mem_init(struct mem *mem) {
     // reservations above, but this struct's rule is that nothing is inherited
     // by accident.
     mem->swap_hand = 0;
+    // And the usage counters: a fork's copy counts the entries it gives the
+    // child, and the child's peaks start from there, as Linux's do.
+    atomic_init(&mem->vm_entries, 0);
+    atomic_init(&mem->rss_pages, 0);
+    atomic_init(&mem->vm_hwm, 0);
+    atomic_init(&mem->rss_hwm, 0);
     // Same reason as mem->lazy above: mm_copy copies the whole struct and then
     // calls this on the child, so an inherited pointer here would be a double
     // free of the parent's array and a double close of its descriptors.
@@ -708,10 +714,116 @@ bool mem_host_addr_to_guest(struct mem *mem, void *host_addr, guest_addr_t *gues
     return false;
 }
 
+// ---- usage counters --------------------------------------------------------
+//
+// VmSize, VmRSS and their peaks, as counts rather than walks. They were walks:
+// VmSize and VmRSS both counted page-table entries, so VmSize missed every
+// lazy reservation (the anonymous mappings of 64 MiB and more, which have no
+// entries until touched), and VmRSS counted every entry whether or not its
+// page had ever been used -- PROT_NONE guard regions and untouched mappings
+// included -- which made it equal VmSize, so `ps` showed VSZ = RSS. The peaks
+// were the same figure printed again, so they fell as soon as memory was
+// freed. Nothing kept a high-water mark because nothing could afford to walk
+// the page table at every change.
+//
+// vm_entries moves where entries are published (pt_map, pt_dup, pt_move, the
+// fork copy) and where they are cleared (mem_pt_del, which every unmap goes
+// through); reservations are summed from lazy[] on demand, at most
+// MEM_LAZY_MAX slots. rss_pages moves where PT_TOUCHED is set -- the first
+// access to a page through mem_ptr_nofault, which every engine and the
+// syscall side reach -- and where it goes: mem_pt_del, and eviction to swap. A
+// move carries it with the page, and a fork copies it, as Linux's fork copies
+// the present entries. This is Linux's resident set: a page mapped and never
+// used is not in it, however it was mapped.
+//
+// The peaks are raised only where the totals are consistent: vm_hwm at the end
+// of each primitive that grows the address space (a pt_move publishes the
+// destination before it drops the source, and a peak read mid-move would count
+// the region twice -- Linux's move_vma restores hiwater_vm for the same
+// reason), and rss_hwm when a page is first touched, the only thing that makes
+// the resident set grow.
+static size_t mem_reserved_pages(struct mem *mem) {
+    size_t n = 0;
+    for (unsigned i = 0; i < mem->lazy_count && i < MEM_LAZY_MAX; i++)
+        if (mem->lazy[i].start < mem->lazy[i].end)
+            n += (size_t) (mem->lazy[i].end - mem->lazy[i].start);
+    return n;
+}
+
+static void mem_hwm_raise(_Atomic size_t *hwm, size_t value) {
+    size_t seen = atomic_load_explicit(hwm, memory_order_relaxed);
+    while (value > seen &&
+           !atomic_compare_exchange_weak_explicit(hwm, &seen, value,
+                   memory_order_relaxed, memory_order_relaxed))
+        ;
+}
+
+static void mem_note_vm_peak(struct mem *mem) {
+    mem_hwm_raise(&mem->vm_hwm, mem_vm_pages_now(mem));
+}
+
+// The first access to a mapped page since it was mapped: into the resident set.
+static inline void mem_pt_touch(struct mem *mem, struct pt_entry *entry) {
+    if (entry->accessed & PT_TOUCHED)
+        return;
+    if (__atomic_fetch_or(&entry->accessed, PT_TOUCHED, __ATOMIC_RELAXED) & PT_TOUCHED)
+        return;     // another thread got here first and counted it
+    size_t rss = atomic_fetch_add_explicit(&mem->rss_pages, 1, memory_order_relaxed) + 1;
+    mem_hwm_raise(&mem->rss_hwm, rss);
+}
+
+// ...and out of it: unmapped, or its bytes sent to swap.
+static inline void mem_pt_untouch(struct mem *mem, struct pt_entry *entry) {
+    if ((entry->accessed & PT_TOUCHED) &&
+            (__atomic_fetch_and(&entry->accessed, (uint8_t) ~PT_TOUCHED, __ATOMIC_RELAXED) &
+             PT_TOUCHED))
+        atomic_fetch_sub_explicit(&mem->rss_pages, 1, memory_order_relaxed);
+}
+
+// Brought into memory without the guest touching it: mlock and mlockall
+// populate what they lock, and Linux counts a populated page as resident --
+// except one the process may not access, which neither populates.
+static void mem_pt_populated(struct mem *mem, struct pt_entry *entry) {
+    if ((entry->flags & P_RWX) != 0 && entry->data != NULL && entry->data->data != NULL)
+        mem_pt_touch(mem, entry);
+}
+
+size_t mem_vm_pages_now(struct mem *mem) {
+    if (mem == NULL)
+        return 0;
+    return atomic_load_explicit(&mem->vm_entries, memory_order_relaxed) + mem_reserved_pages(mem);
+}
+
+size_t mem_vm_pages_peak(struct mem *mem) {
+    if (mem == NULL)
+        return 0;
+    size_t now = mem_vm_pages_now(mem);
+    size_t hwm = atomic_load_explicit(&mem->vm_hwm, memory_order_relaxed);
+    return hwm > now ? hwm : now;
+}
+
+size_t mem_rss_pages_now(struct mem *mem) {
+    if (mem == NULL)
+        return 0;
+    return atomic_load_explicit(&mem->rss_pages, memory_order_relaxed);
+}
+
+size_t mem_rss_pages_peak(struct mem *mem) {
+    if (mem == NULL)
+        return 0;
+    size_t now = mem_rss_pages_now(mem);
+    size_t hwm = atomic_load_explicit(&mem->rss_hwm, memory_order_relaxed);
+    return hwm > now ? hwm : now;
+}
+
 static void mem_pt_del(struct mem *mem, page_t page) {
     struct pt_entry *entry = mem_pt_raw(mem, page);
     if (entry == NULL)
         return;
+    if (entry->data != NULL) {
+        atomic_fetch_sub_explicit(&mem->vm_entries, 1, memory_order_relaxed);
+        mem_pt_untouch(mem, entry);
+    }
     // An entry with no data has no swap state either. This matters because the
     // entry is not freed, only emptied: leaves are immortal, so this slot comes
     // back as some future mapping's page. Leaving PT_SWAPPED behind would make
@@ -1139,12 +1251,14 @@ long pt_set_locked(struct mem *mem, page_t start, pages_t pages, bool locked) {
             pt->locked = want;
             changed++;
         }
+        if (locked)
+            mem_pt_populated(mem, pt);
     }
     mem_read_unlock_quiesce_aware(mem);
     return changed;
 }
 
-long pt_set_locked_all(struct mem *mem, bool locked) {
+long pt_set_locked_all(struct mem *mem, bool locked, bool populate) {
     if (mem == NULL)
         return 0;
     long now_locked = 0;
@@ -1159,6 +1273,8 @@ long pt_set_locked_all(struct mem *mem, bool locked) {
             pt->locked = locked ? 1 : 0;
             if (locked)
                 now_locked++;
+            if (locked && populate)
+                mem_pt_populated(mem, pt);
         }
         page_t before = page;
         mem_next_page(mem, &page);
@@ -1301,6 +1417,7 @@ bool mem_lazy_reserve_any_size(struct mem *mem, page_t start, pages_t pages, uns
         return false;   // table full: caller maps eagerly, i.e. today's behaviour
     LAZY_TRACE("reserve [%llx,%llx) flags=%#x\n",
                (unsigned long long) start, (unsigned long long) end, flags);
+    mem_note_vm_peak(mem);
     return true;
 }
 
@@ -2291,13 +2408,17 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         // A fresh page starts hot: it was just mapped because something wants
         // it, and a leaf is reused, so an inherited age would let the very next
         // sweep evict a page the guest has not touched once.
-        pt->accessed = 1;
+        // Hot for the clock, but not in the resident set: mapped is not used.
+        pt->accessed = PT_ACCESSED;
         pt->age = 0;
         pt->locked = 0;
         pt->data = data;
         pt->offset = ((page - start) << PAGE_BITS) + offset;
         pt->flags = flags;
     }
+    // Every entry in the range was empty: the loop unmapped any that was not.
+    atomic_fetch_add_explicit(&mem->vm_entries, pages, memory_order_relaxed);
+    mem_note_vm_peak(mem);
     mem_changed(mem);
     return 0;
 }
@@ -2642,8 +2763,13 @@ int pt_dup(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) {
         atomic_store_explicit(&dst->swap_state,
                 atomic_load_explicit(&src->swap_state, memory_order_acquire),
                 memory_order_release);
+        // A new mapping of the pages, which on Linux has none of them present
+        // until it is used: not in the resident set yet (dst's accessed byte
+        // is whatever mem_pt_del left, which is 0).
+        atomic_fetch_add_explicit(&mem->vm_entries, 1, memory_order_relaxed);
     }
     data_owner_run_flush(&run, mem, +1);
+    mem_note_vm_peak(mem);
     mem_changed(mem);
     return 0;
 }
@@ -2718,6 +2844,13 @@ int pt_move(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) 
         atomic_store_explicit(&dst->swap_state,
                 atomic_load_explicit(&src->swap_state, memory_order_acquire),
                 memory_order_release);
+        // The page moves and stays what it was: counted in once here, and out
+        // once when pt_unmap below clears the source.
+        atomic_fetch_add_explicit(&mem->vm_entries, 1, memory_order_relaxed);
+        if (src->accessed & PT_TOUCHED) {
+            __atomic_fetch_or(&dst->accessed, PT_TOUCHED, __ATOMIC_RELAXED);
+            atomic_fetch_add_explicit(&mem->rss_pages, 1, memory_order_relaxed);
+        }
         mapped++;
     }
     data_owner_run_flush(&run, mem, +1);
@@ -2740,6 +2873,7 @@ int pt_move(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) 
         if (!mem_lazy_reserve_any_size(mem, s, n, moving[i].flags))
             mem_lazy_map_pages(mem, s, n, moving[i].flags);
     }
+    mem_note_vm_peak(mem);
     mem_changed(mem);
     return 0;
 }
@@ -2995,10 +3129,18 @@ static int mem_break_cow_group(struct mem *mem, page_t page) {
     // the very struct data being copied from -- for a group whose pages all come
     // from one parent mapping, unmapping page `first` can munmap the memory page
     // `first + 1` still needs to be read out of.
+    //
+    // Which of them are in the resident set is read here too: the fresh
+    // entries start outside it, and a neighbour that was in it before its
+    // host page was copied is in it still. (At most one host page of guest
+    // pages, so a 64-bit mask holds them.)
+    uint64_t resident = 0;
     for (page_t p = first; p <= last; p++) {
         struct pt_entry *src = mem_pt(mem, p);
         memcpy((char *) copy + ((size_t) (p - first) << PAGE_BITS),
                (char *) src->data->data + src->offset, PAGE_SIZE);
+        if (p - first < 64 && mem_page_is_touched(src))
+            resident |= (uint64_t) 1 << (p - first);
     }
     int err = pt_map(mem, first, pages, copy, 0, flags & ~P_COW);
     if (err < 0) {
@@ -3007,6 +3149,9 @@ static int mem_break_cow_group(struct mem *mem, page_t page) {
         munmap(copy, bytes);
         return err;
     }
+    for (page_t p = first; p <= last && p - first < 64; p++)
+        if (resident & ((uint64_t) 1 << (p - first)))
+            mem_pt_touch(mem, mem_pt(mem, p));
     return 0;
 }
 
@@ -3250,6 +3395,13 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
         dst_entry->data = entry->data;
         dst_entry->offset = entry->offset;
         dst_entry->flags = entry->flags;
+        // The child starts with the parent's present pages in its resident set,
+        // as a Linux fork copies the present entries.
+        atomic_fetch_add_explicit(&dst->vm_entries, 1, memory_order_relaxed);
+        if (entry->accessed & PT_TOUCHED) {
+            __atomic_fetch_or(&dst_entry->accessed, PT_TOUCHED, __ATOMIC_RELAXED);
+            atomic_fetch_add_explicit(&dst->rss_pages, 1, memory_order_relaxed);
+        }
         // The child inherits the swap state, because it inherits the frame. If
         // it did not, the child would read a PROT_NONE frame as resident and
         // take a host fault.
@@ -3264,6 +3416,9 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
                 memory_order_release);
     }
     data_owner_run_flush(&run, dst, +1);
+    // The child's peaks start at what it was given, not at the parent's.
+    mem_note_vm_peak(dst);
+    mem_hwm_raise(&dst->rss_hwm, mem_rss_pages_now(dst));
     mem_changed(src);
     mem_changed(dst);
     return ret;
@@ -3337,8 +3492,10 @@ static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type) {
     // costs one load and no store: an unconditional store here would dirty a
     // page-table cache line on every TLB fill of every engine and bounce it
     // between cores to say something already true. The sweep is what clears it.
-    if (entry->accessed == 0)
-        entry->accessed = 1;
+    // An OR, not a store: the byte also holds PT_TOUCHED, which a store would
+    // erase.
+    if (!(entry->accessed & PT_ACCESSED))
+        __atomic_fetch_or(&entry->accessed, PT_ACCESSED, __ATOMIC_RELAXED);
     // PROT_NONE (no access bits set) must fault on EVERY access, including
     // reads, even when the page still has live host backing -- e.g. an RW page
     // later mprotect'd to PROT_NONE keeps its data pointer but must no longer be
@@ -3351,6 +3508,11 @@ static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type) {
         return NULL;
     if (entry->data->data == NULL)
         return NULL;
+    // Only a successful access puts the page in the resident set: one refused
+    // above -- PROT_NONE, a write to a read-only or COW page -- used nothing,
+    // and the COW break that follows it maps a fresh entry that comes back
+    // through here.
+    mem_pt_touch(mem, entry);
     return entry->data->data + entry->offset + PGOFFSET(addr);
 }
 
@@ -4167,7 +4329,7 @@ static bool swap_frame_eligible(struct mem *mem, page_t base, unsigned min_age,
     bool touched = false;
     for (size_t i = 0; i < per; i++) {
         struct pt_entry *e = mem_pt(mem, base + i);
-        if (e != NULL && e->accessed)
+        if (e != NULL && (e->accessed & PT_ACCESSED))
             touched = true;
     }
     for (size_t i = 0; i < per; i++) {
@@ -4175,7 +4337,8 @@ static bool swap_frame_eligible(struct mem *mem, page_t base, unsigned min_age,
         if (e == NULL)
             continue;
         if (touched) {
-            e->accessed = 0;
+            // The clock's bit only: PT_TOUCHED is the resident set's.
+            __atomic_fetch_and(&e->accessed, (uint8_t) ~PT_ACCESSED, __ATOMIC_RELAXED);
             e->age = 0;
         } else if (e->age < SWAP_AGE_CANDIDATE) {
             e->age++;
@@ -4270,6 +4433,9 @@ static bool swap_evict_frame(struct mem *mem, page_t base, struct data *data, si
     for (size_t i = 0; i < swap_pages_per_frame(); i++) {
         struct pt_entry *pt = mem_pt(mem, base + i);
         atomic_store_explicit(&pt->swap_state, PT_SWAPPED, memory_order_release);
+        // Out on storage is out of the resident set, as a swapped-out page is
+        // out of Linux's RSS. It comes back into it when next used.
+        mem_pt_untouch(mem, pt);
     }
     mem_changed(mem);
 
@@ -4641,7 +4807,7 @@ static int swap_fault_page_locked(struct mem *mem, page_t page) {
                     // frame that returned with age intact would be a candidate
                     // again on the very next pass, which is the thrash loop the
                     // clock exists to prevent.
-                    e->accessed = 1;
+                    __atomic_fetch_or(&e->accessed, PT_ACCESSED, __ATOMIC_RELAXED);
                     e->age = 0;
                     atomic_store_explicit(&e->swap_state, PT_RESIDENT, memory_order_release);
                 }

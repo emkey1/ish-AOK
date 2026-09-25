@@ -204,6 +204,15 @@ struct mem {
     // no reader eviction (no stale TLB entry) and no rwlock (entry publication is
     // atomic), just mutual exclusion against a concurrent unmap freeing chunks.
     pthread_mutex_t pt_alloc_lock;
+
+    // Usage counters (emu/memory.c). Atomic because the growth mmap path
+    // above publishes entries under pt_alloc_lock alone, while sibling threads
+    // touch pages under the read lock. Cleared by mem_init, which mm_copy's
+    // whole-struct copy relies on, as it does for `lazy`.
+    _Atomic size_t vm_entries;   // pages with a page-table entry
+    _Atomic size_t rss_pages;    // of those, the ones with PT_TOUCHED
+    _Atomic size_t vm_hwm;       // most vm_entries + reserved pages seen
+    _Atomic size_t rss_hwm;      // most rss_pages seen
 };
 
 extern _Atomic long quiesce_reader_naps;
@@ -345,6 +354,20 @@ typedef void (*mem_page_visitor_t)(const void *page, void *ctx);
 // and the locking contract.
 void mem_walk_resident_pages(struct mem *mem, mem_page_visitor_t cb, void *ctx);
 size_t mem_mapped_page_count(struct mem *mem);
+// The address space's size and resident set, as /proc/<pid>/status, stat and
+// statm report them, all without walking anything (see "usage counters" in
+// emu/memory.c):
+//   mem_vm_pages_now     every page of the address space -- page-table entries
+//                        and lazy reservations, PROT_NONE included: VmSize.
+//   mem_vm_pages_peak    the most it has been since the mm was made: VmPeak.
+//   mem_rss_pages_now    pages this address space has used and still holds in
+//                        memory (mapped, touched, not swapped out): VmRSS.
+//   mem_rss_pages_peak   the most that has ever been: VmHWM and ru_maxrss.
+// A NULL mem is 0 for each.
+size_t mem_vm_pages_now(struct mem *mem);
+size_t mem_vm_pages_peak(struct mem *mem);
+size_t mem_rss_pages_now(struct mem *mem);
+size_t mem_rss_pages_peak(struct mem *mem);
 // Linux's total_vm and data_vm, for RLIMIT_AS and RLIMIT_DATA: every page of
 // the address space the guest has mapped (reserved pages included), and those
 // of them that are private, writable and not the stack. The _range form counts
@@ -590,6 +613,13 @@ struct pt_entry {
     // candidate. Neither is atomic: both are read and written under the
     // address-space barrier by the sweep, and a lost stamp from a racing reader
     // costs one extra pass of a frame's life, which is what "clock" means.
+    //
+    // Two bits since the clock got a neighbour: PT_ACCESSED is the clock's, and
+    // PT_TOUCHED says this address space has used the page since it was mapped
+    // -- the page is in its resident set, and mem->rss_pages counts it. The
+    // clock clears its bit every pass; PT_TOUCHED goes only when the page does
+    // (unmapped, or evicted to swap). Both bits are set with an atomic OR on
+    // the rare path, so neither writer can erase the other's.
     uint8_t accessed;
     uint8_t age;
     // mlock(2). Also in the padding -- pt_entry is 56 bytes with the JIT's
@@ -625,6 +655,15 @@ struct pt_entry {
 // madvise(MADV_WIPEONFORK): a child of fork() gets fresh zero pages here
 // instead of inheriting the parent's data. Cleared by MADV_KEEPONFORK.
 #define P_WIPEONFORK (1 << 8)
+
+// pt_entry::accessed bits; see the comment there.
+#define PT_ACCESSED 0x1
+#define PT_TOUCHED 0x2
+// Is this entry's page in its address space's resident set? For walkers that
+// report residency per region (smaps), so they add up to mem_rss_pages_now.
+static inline bool mem_page_is_touched(const struct pt_entry *entry) {
+    return (__atomic_load_n(&entry->accessed, __ATOMIC_RELAXED) & PT_TOUCHED) != 0;
+}
 
 bool pt_is_hole(struct mem *mem, page_t start, pages_t pages);
 // How many pages from `start`, at most `pages`, are mapped or reserved before
@@ -697,7 +736,8 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
 // _ENOMEM if any page of the range is unmapped -- in which case nothing is
 // changed at all, because mlock is all-or-nothing about the range existing.
 // A reserved page is mapped, and has no entry to change: the caller runs
-// mem_lazy_lock_range first.
+// mem_lazy_lock_range first. A lock populates, as Linux's does, so the pages it
+// locks that the process may access join the resident set (VmRSS).
 //
 // The caller charges RLIMIT_MEMLOCK BEFORE calling, by the whole request rather
 // than by this return value: a lock that had to be undone was never granted, so
@@ -710,7 +750,9 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
 long pt_set_locked(struct mem *mem, page_t start, pages_t pages, bool locked);
 // Lock or unlock every mapped page, for mlockall(2)/munlockall(2). Returns the
 // number of pages now locked. Entries only; mem_lazy_lock_all does reservations.
-long pt_set_locked_all(struct mem *mem, bool locked);
+// `populate` is MCL_CURRENT without MCL_ONFAULT: the pages it can reach come
+// into the resident set, as pt_set_locked's do.
+long pt_set_locked_all(struct mem *mem, bool locked, bool populate);
 // Pages currently pinned, for RLIMIT_MEMLOCK accounting and /proc.
 size_t mem_locked_page_count(struct mem *mem);
 

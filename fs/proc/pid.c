@@ -179,45 +179,36 @@ static int proc_pid_copy_environ(struct task *task, struct mem *mem, guest_addr_
     return 0;
 }
 
-// Count the number of mapped pages in a mem.
-// Intentionally lock-free: the count is only used for /proc reporting, so a
-// slightly stale snapshot is acceptable.
-static size_t proc_mem_count_pages(struct mem *mem) {
-    return mem_mapped_page_count(mem);
-}
+// An address space's size and resident set as status, stat and statm report
+// them -- one source, so the three files cannot disagree, as Linux derives
+// them all from mm's counters. See "usage counters" in emu/memory.c: VmSize
+// is every page of the address space, reservations and PROT_NONE included;
+// VmRSS the pages used and still in memory; the peaks are high-water marks.
+//
+// All four are reads of counters, so top and htop reading this once per
+// process per refresh cost nothing. Only VmSwap still walks, and only with swap
+// on: the pages whose frames the pager has taken, which is the entries minus
+// the entries whose frames are in memory.
+struct proc_mem_usage {
+    size_t vm, vm_peak, rss, rss_peak, swap;
+};
 
-// Of those mapped pages, the ones that are actually in host memory: mapped
-// minus what the pager has evicted. This is what VmRSS, statm's second field,
-// stat's field 24 and smaps' Rss all report, and they take it from here so that
-// they cannot disagree with each other -- Linux derives all four from one
-// counter, and section 11 of docs/simulated_swap_plan.md records that bounding
-// them independently was tried and rejected four times because it replaces an
-// impossible value with an inconsistent pair.
-//
-// With swap DISABLED this returns the caller's mapped count without walking
-// anything. That is not an optimisation for its own sake: no entry can be
-// non-resident when nothing evicts, so the value is identical, and skipping the
-// walk keeps the cost of /proc/<pid>/status identical too -- top and htop read
-// it once per process per refresh, and quietly doubling that walk for a figure
-// that cannot have changed would be a real regression for every guest that
-// never turns swap on.
-//
-// It is still not a true residency measure, and the comment on
-// mem_resident_page_count in emu/memory.c says exactly why: AOK builds
-// page-table entries eagerly at mmap() time and no pt_entry field records
-// whether a page was ever touched, so an untouched mapping is counted here in
-// full. What it does know is that a SWAPPED page is definitively absent.
-static size_t proc_mem_count_resident_pages(struct mem *mem, size_t mapped_pages) {
-    if (mem == NULL || !swap_enabled())
-        return mapped_pages;
-    size_t resident = mem_resident_page_count(mem);
-    // The two counts are two separate lock-free walks at two different
-    // instants, so a mapping created between them makes resident look larger
-    // than mapped. Every caller subtracts one from the other (VmSize - VmRSS is
-    // VmSwap), and an unsigned subtraction that wraps would print a process
-    // with sixteen exabytes swapped. Clamping can only under-report the swapped
-    // figure by whatever was mapped in that window.
-    return resident > mapped_pages ? mapped_pages : resident;
+static struct proc_mem_usage proc_mem_usage(struct mem *mem) {
+    struct proc_mem_usage u = {0};
+    if (mem == NULL)
+        return u;
+    u.vm = mem_vm_pages_now(mem);
+    u.vm_peak = mem_vm_pages_peak(mem);
+    u.rss = mem_rss_pages_now(mem);
+    u.rss_peak = mem_rss_pages_peak(mem);
+    if (swap_enabled()) {
+        // Two lock-free walks at two instants; a mapping made between them
+        // must not wrap the difference into sixteen exabytes of swap.
+        size_t mapped = mem_mapped_page_count(mem);
+        size_t resident = mem_resident_page_count(mem);
+        u.swap = resident < mapped ? mapped - resident : 0;
+    }
+    return u;
 }
 
 // A synthetic kernel thread has no task behind it (kernel/task.c explains
@@ -294,8 +285,7 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     unsigned long long cutime_ticks = 0, cstime_ticks = 0;
 
     struct mm *mm = proc_task_mm_retain(task);
-    size_t page_count = proc_mem_count_pages(mm ? &mm->mem : NULL);
-    size_t resident_pages = proc_mem_count_resident_pages(mm ? &mm->mem : NULL, page_count);
+    struct proc_mem_usage usage = proc_mem_usage(mm ? &mm->mem : NULL);
     pid_t_ pid = 0;
     char comm[sizeof(task->comm) + 1];
     char proc_state = 'R';
@@ -409,12 +399,9 @@ static int proc_pid_stat_show(struct proc_entry *entry, struct proc_data *buf) {
     proc_printf(buf, "%ld ", 0l); // itimer value (deprecated, always 0)
     proc_printf(buf, "%llu ", (unsigned long long) start_time_ticks); // starttime
 
-    proc_printf(buf, "%lu ", (unsigned long)(page_count * PAGE_SIZE)); // vsize in bytes
-    // Field 24, rss: pages in memory, so mapped MINUS what the pager has taken
-    // away -- the same figure VmRSS, statm's second field and smaps' Rss report.
-    // vsize above stays the whole mapped address space, which is what swapping
-    // does not change.
-    proc_printf(buf, "%ld ", (long)resident_pages); // rss in pages
+    // Fields 23 and 24: VmSize in bytes and VmRSS in pages (proc_mem_usage).
+    proc_printf(buf, "%lu ", (unsigned long)(usage.vm * PAGE_SIZE)); // vsize in bytes
+    proc_printf(buf, "%ld ", (long)usage.rss); // rss in pages
     proc_printf(buf, "%lu ", (unsigned long)-1); // rss limit (RLIM_INFINITY)
 
     // bunch of shit that can only be accessed by a debugger
@@ -515,15 +502,13 @@ static int proc_pid_statm_show(struct proc_entry *entry, struct proc_data *buf) 
         return _ESRCH;
     }
     struct mm *mm = proc_task_mm_retain(task);
-    size_t page_count = proc_mem_count_pages(mm ? &mm->mem : NULL);
-    size_t resident_pages = proc_mem_count_resident_pages(mm ? &mm->mem : NULL, page_count);
+    struct proc_mem_usage usage = proc_mem_usage(mm ? &mm->mem : NULL);
     if (mm != NULL)
         mm_release(mm);
     proc_put_task(task);
-    proc_printf(buf, "%lu ", (unsigned long)page_count); // size (total pages)
-    // Resident: no longer "the same, no swap" -- mapped minus what the pager
-    // has evicted, from the same source as VmRSS and stat's field 24.
-    proc_printf(buf, "%lu ", (unsigned long)resident_pages); // resident
+    // VmSize and VmRSS in pages (proc_mem_usage).
+    proc_printf(buf, "%lu ", (unsigned long)usage.vm); // size (total pages)
+    proc_printf(buf, "%lu ", (unsigned long)usage.rss); // resident
     proc_printf(buf, "%lu ", 0l); // shared
     proc_printf(buf, "%lu ", 0l); // text
     proc_printf(buf, "%lu ", 0l); // lib (unused since Linux 2.6)
@@ -761,8 +746,7 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     unlock(&pids_lock);
 
     struct mm *mm = proc_task_mm_retain(task);
-    size_t page_count = proc_mem_count_pages(mm ? &mm->mem : NULL);
-    size_t resident_pages = proc_mem_count_resident_pages(mm ? &mm->mem : NULL, page_count);
+    struct proc_mem_usage usage = proc_mem_usage(mm ? &mm->mem : NULL);
     if (mm != NULL)
         mm_release(mm);
     struct fdtable *files = proc_task_files_retain(task);
@@ -773,9 +757,7 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
         unlock(&files->lock);
         fdtable_release(files);
     }
-    unsigned long vm_kb = (unsigned long)(page_count * (PAGE_SIZE / 1024));
-    unsigned long rss_kb = (unsigned long)(resident_pages * (PAGE_SIZE / 1024));
-    unsigned long swap_kb = vm_kb - rss_kb;
+    const unsigned long page_kb = PAGE_SIZE / 1024;
 
     if (!task_lock_unless_exiting(task)) {
         proc_put_task(task);
@@ -802,24 +784,19 @@ static int proc_pid_status_show(struct proc_entry *entry, struct proc_data *buf)
     for (unsigned i = 0; i < task->ngroups; i++)
         proc_printf(buf, "%s%u", i == 0 ? "" : " ", task->groups[i]);
     proc_printf(buf, "\n");
-    proc_printf(buf, "VmPeak:\t%lu kB\n", vm_kb);
-    proc_printf(buf, "VmSize:\t%lu kB\n", vm_kb);
+    proc_printf(buf, "VmPeak:\t%lu kB\n", (unsigned long) usage.vm_peak * page_kb);
+    proc_printf(buf, "VmSize:\t%lu kB\n", (unsigned long) usage.vm * page_kb);
     proc_printf(buf, "VmLck:\t0 kB\n");
     proc_printf(buf, "VmPin:\t0 kB\n");
-    // VmHWM is a peak, so it stays the whole mapped figure: it is by
-    // construction >= VmRSS, and lowering it to the current resident count
-    // would be reporting a high-water mark that goes DOWN. It is still not a
-    // real peak -- there is no rss high-water mark on struct mm that this layer
-    // can read -- which is unchanged by swap and pre-existing.
-    proc_printf(buf, "VmHWM:\t%lu kB\n", vm_kb);
-    proc_printf(buf, "VmRSS:\t%lu kB\n", rss_kb);
+    proc_printf(buf, "VmHWM:\t%lu kB\n", (unsigned long) usage.rss_peak * page_kb);
+    proc_printf(buf, "VmRSS:\t%lu kB\n", (unsigned long) usage.rss * page_kb);
     // VmSwap appears only when swap is on, because with it off this file has to
     // be byte-for-byte what it was before the pager existed and there was no
     // VmSwap line here at all. Linux prints it unconditionally; the comment on
     // swap_enabled() in kernel/swap.h says why the disabled column wins that
-    // argument. Its value is exactly VmSize - VmRSS, so the three lines close.
+    // argument.
     if (swap_enabled())
-        proc_printf(buf, "VmSwap:\t%lu kB\n", swap_kb);
+        proc_printf(buf, "VmSwap:\t%lu kB\n", (unsigned long) usage.swap * page_kb);
     proc_printf(buf, "Threads:\t%lu\n", thread_count);
     // Linux prints Umask between Name and State; it was missing entirely, and
     // it is the only place a process's umask is observable from outside.
@@ -1164,20 +1141,21 @@ struct smaps_totals {
 static void proc_smaps_region(struct proc_data *buf, page_t start, page_t end,
                                struct pt_entry *start_pt, struct data *data,
                                const char *path, bool print_header,
-                               uint64_t swapped_pages,
+                               uint64_t swapped_pages, uint64_t resident_pages,
                                struct smaps_totals *totals) {
     uint64_t region_pages = (uint64_t)(end - start);
     uint64_t size_kb = region_pages * (PAGE_SIZE / 1024);
-    // Rss = Size - Swap, which is section 3.12's rule for this row and the same
-    // arithmetic /proc/<pid>/status uses for VmRSS. Everything derived from
-    // rss_kb below -- Pss, the Shared/Private split, Referenced, Anonymous --
-    // follows it, so a region with pages out does not report them twice.
-    // swapped_pages is 0 whenever swap is off, so this is size_kb and every
-    // figure in this block is exactly what it was.
     uint64_t swap_kb = swapped_pages * (PAGE_SIZE / 1024);
     if (swap_kb > size_kb)
         swap_kb = size_kb;
-    uint64_t rss_kb = size_kb - swap_kb;
+    // Rss is the region's pages in the resident set -- used since they were
+    // mapped, and not swapped out (mem_page_is_touched) -- counted the way
+    // VmRSS is, so the regions add up to it. Everything derived from rss_kb
+    // below -- Pss, the Shared/Private split, Referenced, Anonymous -- follows
+    // it. It was Size - Swap, which counted a page that was never used.
+    uint64_t rss_kb = resident_pages * (PAGE_SIZE / 1024);
+    if (rss_kb > size_kb - swap_kb)
+        rss_kb = size_kb - swap_kb;
     unsigned refcount = data != NULL ?
         atomic_load_explicit(&data->refcount, memory_order_relaxed) : 1;
     if (refcount == 0)
@@ -1319,6 +1297,7 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
         struct pt_entry *start_pt = mem_pt(mem, start);
         struct data *data = start_pt->data;
         uint64_t swapped_pages = 0;
+        uint64_t resident_pages = 0;
 
         while (page < mem->page_limit) {
             struct pt_entry *pt = mem_pt(mem, page);
@@ -1346,6 +1325,8 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
             // prevent.
             if (count_swapped && mem_page_is_swapped(pt))
                 swapped_pages++;
+            if (mem_page_is_touched(pt))
+                resident_pages++;
             page_t prev = page;
             mem_next_page(mem, &page);
             // Same sparse-walk trap as proc_maps_dump; see the comment there.
@@ -1380,7 +1361,8 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
             generic_getpath(data->fd, path);
         }
 
-        proc_smaps_region(buf, start, end, start_pt, data, path, !rollup, swapped_pages, &totals);
+        proc_smaps_region(buf, start, end, start_pt, data, path, !rollup, swapped_pages,
+                          resident_pages, &totals);
     }
     for (; pending_i < pending_n; pending_i++) {
         if (!any_region)

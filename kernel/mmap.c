@@ -1876,7 +1876,7 @@ int_t sys_mlockall_guest(qword_t flags) {
     // materialises before the entry walk below is then locked either way.
     if ((flags & MCL_CURRENT_) != 0) {
         mlock_reservations(true, (flags & MCL_ONFAULT_) == 0);
-        pt_set_locked_all(current->mem, true);
+        pt_set_locked_all(current->mem, true, (flags & MCL_ONFAULT_) == 0);
     }
     return 0;
 }
@@ -1888,7 +1888,7 @@ int_t sys_mlockall(dword_t flags) {
 int_t sys_munlockall_guest(void) {
     current->mm->mlockall_flags = 0;
     mlock_reservations(false, false);
-    pt_set_locked_all(current->mem, false);
+    pt_set_locked_all(current->mem, false, false);
     return 0;
 }
 

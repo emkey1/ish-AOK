@@ -306,9 +306,12 @@ static size_t maxrss_plausible_pages(void) {
     return cached;
 }
 
-// Peak resident size in KB. Samples the address space's current mapped-page
-// count and folds it into the high-water mark kept on the mm, so a later read
-// never reports less than an earlier one saw -- which is what "max" means.
+// Peak resident size in KB: the address space's own high-water mark (VmHWM,
+// mem_rss_pages_peak), folded into the one kept on the mm and the task, so a
+// later read never reports less than an earlier one saw -- which is what "max"
+// means -- and an exec, which replaces the mm, does not forget the old one. It
+// was the mapped-page count at whenever someone asked, which counted pages the
+// process never used and missed any peak nobody sampled.
 size_t task_maxrss_kb(struct task *task) {
     // The address space is PINNED for the walk, and reading task->mm without
     // doing so was a use-after-free that killed the emulator.
@@ -351,13 +354,13 @@ size_t task_maxrss_kb(struct task *task) {
         return task->maxrss_kb;     // mid-exit; the latched value is the answer
     struct mm *mm = task->mm;
     if (mm != NULL) {
-        size_t pages = mem_mapped_page_count(&mm->mem);
-        // That walk is deliberately lock-free (see proc_mem_count_pages): a
-        // stale count is fine for /proc. It is NOT fine here, because this is
-        // a high-water mark -- a latch. One torn read of a page table another
-        // thread is mutating becomes the permanent answer for the life of the
-        // address space, and then, because a forked child used to inherit it,
-        // for every descendant too.
+        size_t pages = mem_rss_pages_peak(&mm->mem);
+        // This used to be a lock-free page-table walk, and it is a high-water
+        // mark -- a latch. One torn read of a page table another thread was
+        // mutating became the permanent answer for the life of the address
+        // space, and then, because a forked child used to inherit it, for
+        // every descendant too. The counter cannot tear that way, but the
+        // bound below costs nothing and stays.
         //
         // Seen on device: ru_maxrss reporting 2,819,362,696 KB -- 2.7 TB --
         // from a process whose real peak was about 4 MB, reproducibly for
