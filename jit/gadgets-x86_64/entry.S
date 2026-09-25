@@ -77,6 +77,7 @@ jit_exit:
     movq %r14, CPU_segfault_addr(%_cpu)
     movl 8(%_ip), %_eip
     movb $0, CPU_segfault_was_write(%_cpu)
+    movb $0, CPU_segfault_reported(%_cpu)
     jmp jit_exit
 
 .gadget exit

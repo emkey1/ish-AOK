@@ -449,6 +449,8 @@ segfault_\type:
         mov w0, 1
     .endif
     strb w0, [_cpu, CPU_segfault_was_write]
+    mov w0, 1
+    strb w0, [_cpu, CPU_segfault_reported]
     ldr x0, [_ip]
     mov eip, w0
     sub w8, esp, 4

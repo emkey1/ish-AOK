@@ -92,6 +92,7 @@ segfault_\type:
     .else
         movb $1, CPU_segfault_was_write(%_cpu)
     .endif
+    movb $1, CPU_segfault_reported(%_cpu)
     movq (%_ip), %_ip
     leal -4(%_esp), %r14d
     btq $62, %_ip

@@ -72,6 +72,7 @@ jit_exit:
     str x8, [_cpu, CPU_segfault_addr]
     ldr eip, [_ip, 8]
     strb wzr, [_cpu, CPU_segfault_was_write]
+    strb wzr, [_cpu, CPU_segfault_reported]
     b jit_exit
 
 .gadget exit

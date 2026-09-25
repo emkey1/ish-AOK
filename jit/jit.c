@@ -2327,6 +2327,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         jit_crash_unmapped = false;
         cpu->segfault_addr = jit_crash_addr;
         cpu->segfault_was_write = false;
+        cpu->segfault_reported = false;
         jit_crash_unwind_active = false;
         jit_crash_mutex_lock = NULL;
         jit_crash_frame = NULL;
@@ -2774,6 +2775,7 @@ static int cpu_step_to_interrupt_arm64(struct cpu_state *cpu, struct tlb *tlb) {
         jit_crash_unmapped = false;
         cpu->segfault_addr = jit_crash_addr;
         cpu->segfault_was_write = false;
+        cpu->segfault_reported = false;
         jit_crash_unwind_active = false;
         jit_crash_mutex_lock = NULL;
         jit_crash_frame = NULL;
@@ -3088,6 +3090,7 @@ static int cpu_single_step_arm64(struct cpu_state *cpu, struct tlb *tlb) {
             *jit_crash_cpu = jit_crash_frame->cpu;
         cpu->segfault_addr = jit_crash_addr;
         cpu->segfault_was_write = false;
+        cpu->segfault_reported = false;
         jit_crash_unwind_active = false;
         jit_crash_mutex_lock = NULL;
         jit_crash_frame = NULL;
@@ -3195,6 +3198,7 @@ static int cpu_single_step_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
             *jit_crash_cpu = jit_crash_frame->cpu;
         cpu->segfault_addr = jit_crash_addr;
         cpu->segfault_was_write = false;
+        cpu->segfault_reported = false;
         jit_crash_unwind_active = false;
         jit_crash_mutex_lock = NULL;
         jit_crash_frame = NULL;
@@ -3303,6 +3307,7 @@ static int cpu_step_to_interrupt_riscv64(struct cpu_state *cpu, struct tlb *tlb)
         jit_crash_unmapped = false;
         cpu->segfault_addr = jit_crash_addr;
         cpu->segfault_was_write = false;
+        cpu->segfault_reported = false;
         jit_crash_unwind_active = false;
         jit_crash_mutex_lock = NULL;
         jit_crash_frame = NULL;
@@ -3664,6 +3669,7 @@ static int cpu_step_to_interrupt_amd64_frontend(struct cpu_state *cpu, struct tl
         }
         cpu->segfault_addr = jit_crash_addr;
         cpu->segfault_was_write = false;
+        cpu->segfault_reported = false;
         jit_crash_unwind_active = false;
         jit_crash_frame = NULL;
         jit_crash_cpu = NULL;
@@ -4044,6 +4050,7 @@ static int cpu_single_step_amd64(struct cpu_state *cpu, struct tlb *tlb) {
             *jit_crash_cpu = jit_crash_frame->cpu;
         cpu->segfault_addr = jit_crash_addr;
         cpu->segfault_was_write = false;
+        cpu->segfault_reported = false;
         jit_crash_unwind_active = false;
         jit_crash_mutex_lock = NULL;
         jit_crash_frame = NULL;

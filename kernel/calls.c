@@ -5504,8 +5504,8 @@ static void dump_amd64_loader_state(const struct cpu_state *cpu);
 static void dump_amd64_store_trace(const struct cpu_state *cpu);
 static void dump_fault_pt_state(guest_addr_t addr);
 static bool amd64_verbose_fault_trace_enabled(void);
-static bool handle_i386_read_fault_gpf(struct cpu_state *cpu);
-static bool handle_i386_write_fault_gpf(struct cpu_state *cpu);
+static bool handle_i386_read_fault_gpf(struct cpu_state *cpu, bool reported);
+static bool handle_i386_write_fault_gpf(struct cpu_state *cpu, bool reported);
 static bool handle_i386_call_stack_gpf(struct cpu_state *cpu);
 static bool handle_i386_stack_store_gpf(struct cpu_state *cpu);
 
@@ -5797,9 +5797,13 @@ static void dump_fault_pt_state(guest_addr_t addr) {
 }
 
 static void handle_general_protection_interrupt(struct cpu_state *cpu) {
-    if (handle_i386_read_fault_gpf(cpu))
+    // Consumed here whatever happens next, so a stale one cannot turn a later
+    // fault that reported nothing into a page fault at 0.
+    bool reported = cpu->segfault_reported;
+    cpu->segfault_reported = false;
+    if (handle_i386_read_fault_gpf(cpu, reported))
         return;
-    if (handle_i386_write_fault_gpf(cpu))
+    if (handle_i386_write_fault_gpf(cpu, reported))
         return;
     if (handle_i386_call_stack_gpf(cpu))
         return;
@@ -6013,17 +6017,21 @@ static bool i386_gpf_addr_needs_page_fault(guest_addr_t fault_addr, int type) {
     return needs_page_fault;
 }
 
-static bool handle_i386_read_fault_gpf(struct cpu_state *cpu) {
+static bool handle_i386_read_fault_gpf(struct cpu_state *cpu, bool reported) {
     if (current->abi == GUEST_ABI_AMD64)
         return false;
 
     guest_addr_t fault_addr = 0;
-    if (cpu->segfault_addr != 0 && !cpu->segfault_was_write) {
+    if ((reported || cpu->segfault_addr != 0) && !cpu->segfault_was_write) {
         // Read gadget explicitly reported the fault address: route it through
         // the page-fault path unconditionally (same reasoning as the write
         // helper -- a lock-free re-check races a sibling thread resolving the
         // page and would fall through to a spurious SIGSEGV). mem_ptr_fault
         // is a no-op if the page is already readable; the load re-executes.
+        // A reported address of 0 is a NULL dereference, and counts: see
+        // segfault_reported in emu/cpu.h. A non-zero address counts without
+        // the flag, as before: the interrupt gadget clears the flag, and it
+        // also carries gen.c's SEGFAULT, an instruction fetch that faulted.
         cpu->trapno = INT_PF;
         cpu->segfault_was_write = false;
         handle_page_fault_interrupt(cpu);
@@ -6041,12 +6049,12 @@ static bool handle_i386_read_fault_gpf(struct cpu_state *cpu) {
     return true;
 }
 
-static bool handle_i386_write_fault_gpf(struct cpu_state *cpu) {
+static bool handle_i386_write_fault_gpf(struct cpu_state *cpu, bool reported) {
     if (current->abi == GUEST_ABI_AMD64)
         return false;
 
     guest_addr_t fault_addr = 0;
-    if (cpu->segfault_was_write && cpu->segfault_addr != 0) {
+    if (cpu->segfault_was_write && (reported || cpu->segfault_addr != 0)) {
         // The write gadget explicitly reported a translation failure at this
         // exact address (segfault_write in gadgets-*/memory.S set segfault_addr
         // + segfault_was_write before raising INT_GPF). Route it straight into

@@ -412,6 +412,15 @@ struct cpu_state {
     // for the page fault handler
     guest_addr_t segfault_addr;
     bool segfault_was_write;
+    // The i386 JIT's memory-fault exits (segfault_read/segfault_write) set
+    // this and its interrupt gadget clears it: segfault_addr then came from
+    // a failed access, and is an address even when it is 0. The GPF handler
+    // used to read 0 as "no address reported", so a NULL dereference fell
+    // through to its opcode decoder, and anything the decoder does not know
+    // (`cmp eax, [ecx]`, HotSpot's implicit null check) became SIGSEGV
+    // SI_KERNEL at the PC instead of SEGV_MAPERR at 0. It sits in what was
+    // padding before trapno, so no offset moves.
+    bool segfault_reported;
 
     dword_t trapno;
     // access atomically
