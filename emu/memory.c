@@ -14,9 +14,6 @@
 #include "kernel/signal.h"
 #if __APPLE__
 #include <mach/mach.h>
-#elif defined(__linux__)
-#include <sys/syscall.h>
-#include <sys/uio.h>
 #endif
 #include "emu/memory.h"
 #include "fs/fd.h"
@@ -28,6 +25,7 @@
 #include "fs/mmap_cache.h"
 #include "kernel/calls.h"
 #include "util/sync.h"
+#include "emu/host_fault.h"
 #include <dlfcn.h>
 
 // Time to wait between non blocking lock attempts
@@ -3101,41 +3099,17 @@ static bool mem_cow_group_member(struct mem *mem, page_t p, unsigned flags) {
 // memcpy, except that a host fault on either side is an answer rather than
 // the end of the emulator. The fault that matters is a page of a FILE mapping
 // past the end of its file: the host raises SIGBUS for it, and in kernel C
-// code -- a syscall, a copy-on-write break -- nothing turns that into a guest
-// signal, so it killed the app, where Linux answers EFAULT, EIO or SIGBUS. The
-// host kernel does the copy and reports the fault instead (vm_read_overwrite,
-// process_vm_readv). A system call per copy, so only for the copies that can
-// meet such a page and are not hot: a debugger's forced access, and the
-// copy-on-write break of a page that is not anonymous.
+// code -- a syscall, a copy-on-write break -- nothing turned that into a guest
+// signal, so it killed the app, where Linux answers EFAULT, EIO or SIGBUS. So
+// the copy is guarded (emu/host_fault.h): a fault on either side resumes in
+// host_copy_guarded, which returns false with dst partly written. It is a
+// sigsetjmp rather than a system call per copy, so the copy-on-write break of a
+// file page after a fork costs a memcpy again, where vm_read_overwrite cost
+// 4-22 us a page. The recovery point is inside host_copy_guarded, so a caller
+// holding the address-space lock -- mem_break_cow_group -- still holds it when
+// this returns.
 bool mem_host_copy(void *dst, const void *src, size_t size) {
-    if (size == 0)
-        return true;
-#if __APPLE__
-    vm_size_t copied = 0;
-    kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t) (uintptr_t) src,
-            (vm_size_t) size, (vm_address_t) (uintptr_t) dst, &copied);
-    return kr == KERN_SUCCESS && copied == size;
-#elif defined(__linux__)
-    // Through syscall(): a libc name on a Linux host can be interposed by a
-    // native program's shim. Where the host refuses the call itself -- a
-    // seccomp filter that blocks it, a kernel without it -- this copies the
-    // way it always did rather than failing every copy it is asked for.
-    static _Atomic bool refused;
-    if (!atomic_load_explicit(&refused, memory_order_relaxed)) {
-        struct iovec local = {dst, size}, remote = {(void *) src, size};
-        long n = syscall(SYS_process_vm_readv, (long) getpid(), &local, 1L, &remote, 1L, 0L);
-        if (n == (long) size)
-            return true;
-        if (n >= 0 || (errno != EPERM && errno != ENOSYS && errno != EACCES))
-            return false;
-        atomic_store_explicit(&refused, true, memory_order_relaxed);
-    }
-    memcpy(dst, src, size);
-    return true;
-#else
-    memcpy(dst, src, size);
-    return true;
-#endif
+    return host_copy_guarded(dst, src, size);
 }
 
 // Break copy-on-write for `page`, and for every guest page sharing its host
@@ -3665,9 +3639,19 @@ static enum mem_write_way mem_write_way(const struct pt_entry *entry, int type) 
 // memory behind it yet (pt_map_nothing), and reads as zeroes.
 static const char mem_zero_page[PAGE_SIZE];
 
+// Can C code touching this page's host memory take a host fault? Anonymous
+// memory cannot: a P_ANONYMOUS page, or the private copy a copy-on-write break
+// made (data->copied). Any other page is a host mapping of a file, which is
+// only as long as the file, and a host page of it past the end raises SIGBUS
+// (emu/host_fault.h).
+static inline bool mem_entry_may_fault(const struct pt_entry *entry) {
+    return !(entry->flags & P_ANONYMOUS) && !entry->data->copied;
+}
+
 // This version will return NULL instead of making necessary pagetable changes.
-// Used by the emulator to avoid deadlocks.
-static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type) {
+// Used by the emulator to avoid deadlocks. `may_fault`, when not NULL, is set
+// on success to mem_entry_may_fault of the page.
+static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type, bool *may_fault) {
     struct pt_entry *entry = mem_pt(mem, PAGE(addr));
     if (entry == NULL)
         return NULL;
@@ -3712,8 +3696,11 @@ static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type) {
             return NULL;
     }
     if (entry->data->data == NULL) {
-        if (type == MEM_READ_PTRACE && !mem_entry_is_special_io(entry))
+        if (type == MEM_READ_PTRACE && !mem_entry_is_special_io(entry)) {
+            if (may_fault != NULL)
+                *may_fault = false; // mem_zero_page is ours
             return (void *) (mem_zero_page + PGOFFSET(addr));
+        }
         return NULL;
     }
     // Only a successful access puts the page in the resident set: one refused
@@ -3721,10 +3708,12 @@ static void *mem_ptr_nofault(struct mem *mem, guest_addr_t addr, int type) {
     // and the COW break that follows it maps a fresh entry that comes back
     // through here.
     mem_pt_touch(mem, entry);
+    if (may_fault != NULL)
+        *may_fault = mem_entry_may_fault(entry);
     return entry->data->data + entry->offset + PGOFFSET(addr);
 }
 
-void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
+void *mem_ptr_may_fault(struct mem *mem, guest_addr_t addr, int type, bool *may_fault) {
     // Bring an evicted frame back before anything else looks at the entry.
     // Ahead of the old_ptr snapshot below deliberately: that snapshot feeds an
     // assert at the end of this function, and taking it while the page is still
@@ -3736,7 +3725,7 @@ void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
             atomic_load_explicit(&swapped->swap_state, memory_order_acquire) != PT_RESIDENT)
             swap_fault_page(mem, PAGE(addr));   // NULL on failure is handled below
     }
-    void *old_ptr = mem_ptr_nofault(mem, addr, type); // just for an assert
+    void *old_ptr = mem_ptr_nofault(mem, addr, type, NULL); // just for an assert
 
     page_t page = PAGE(addr);
     struct pt_entry *entry = mem_pt(mem, page);
@@ -3892,9 +3881,13 @@ done_write_fault:
         if (host_err < 0)
             return NULL;
     }
-    void *ptr = mem_ptr_nofault(mem, addr, type);
+    void *ptr = mem_ptr_nofault(mem, addr, type, may_fault);
     assert(old_ptr == NULL || old_ptr == ptr || type == MEM_WRITE_PTRACE);
     return ptr;
+}
+
+void *mem_ptr(struct mem *mem, guest_addr_t addr, int type) {
+    return mem_ptr_may_fault(mem, addr, type, NULL);
 }
 
 void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
@@ -4022,14 +4015,14 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type) {
         }
     }
 
-    void *ptr = mem_ptr_nofault(mem, addr, type);
+    void *ptr = mem_ptr_nofault(mem, addr, type, NULL);
     write_unlock(&mem->lock);
     return ptr;
 }
 
 static void *mem_mmu_translate(struct mmu *mmu, guest_addr_t addr, int type) {
     struct mem *mem = container_of(mmu, struct mem, mmu);
-    void *ptr = mem_ptr_nofault(mem, addr, type);
+    void *ptr = mem_ptr_nofault(mem, addr, type, NULL);
     if (ptr == NULL && type == MEM_READ && current != NULL &&
             current->abi == GUEST_ABI_AMD64 && amd64_jit_debug_enabled()) {
         enum { AMD64_JIT_TRANSLATE_TRACE_BUDGET = 64 };

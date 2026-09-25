@@ -6,6 +6,7 @@
 #include "kernel/time.h"
 #include "util/timer.h"
 #include "util/sync.h"
+#include "emu/host_fault.h"
 // Apple doesn't implement futex, so we have to fake it
 #define FUTEX_WAIT_ 0
 #define FUTEX_WAKE_ 1
@@ -222,6 +223,18 @@ static void futex_put(struct futex *futex) {
     unlock(&futex_lock);
 }
 
+// The futex word, loaded under a guard: the word can be in a file mapping, and
+// a page of one past the end of its file faults on the host (emu/host_fault.h).
+struct futex_word_load {
+    const dword_t *word;
+    dword_t value;
+};
+
+static void futex_load_word(void *arg) {
+    struct futex_word_load *load = arg;
+    load->value = __atomic_load_n(load->word, __ATOMIC_RELAXED);
+}
+
 static int futex_load(guest_addr_t addr, dword_t *out) {
     // Quiesce-aware, NOT the raw read_lock: this runs while HOLDING the
     // futex bucket lock (futex_wait's atomicity protocol). The raw lock
@@ -262,11 +275,24 @@ static int futex_load(guest_addr_t addr, dword_t *out) {
     // device jit_crash_bus_fn reaches its abort(), and the CLI installs no
     // SIGSEGV handler at all. That half is loud, but the report names this
     // load rather than the sibling unmap that made it stale.
+    //
+    // And a word in a FILE mapping may be past the end of its file, which is
+    // a host fault too, and loud in the same way: that load is guarded, and
+    // is EFAULT, as it is on Linux. An anonymous word is the hot case and
+    // stays a plain load.
     mem_read_lock_quiesce_aware(current->mem);
-    dword_t *ptr = mem_ptr(current->mem, addr, MEM_READ);
+    bool may_fault;
+    dword_t *ptr = mem_ptr_may_fault(current->mem, addr, MEM_READ, &may_fault);
     bool fault = ptr == NULL;
-    if (!fault)
-        *out = *ptr;
+    if (!fault) {
+        if (!may_fault) {
+            *out = *ptr;
+        } else {
+            struct futex_word_load load = {ptr, 0};
+            fault = !host_call_guarded(futex_load_word, &load, ptr, sizeof(*ptr), NULL, 0, NULL, 0);
+            *out = load.value;
+        }
+    }
     mem_read_unlock_quiesce_aware(current->mem);
     return fault;
 }
@@ -686,6 +712,63 @@ static int32_t futex_op_sign_extend12(uint32_t v) {
     return (int32_t) v;
 }
 
+// FUTEX_WAKE_OP's read-modify-write of *uaddr2, leaving the value the word
+// held in oldval.
+//
+// It has to be ATOMIC against the guest's own atomic instructions -- Linux
+// does it with an arch cmpxchg loop (futex_atomic_op_inuser), and the whole
+// point of WAKE_OP is to combine that update with a wake without a window in
+// between. A plain load, compute, store lost updates to any guest thread
+// touching the same word: measured 594 lost out of 40000 with one thread
+// doing atomic adds and another doing WAKE_OP adds, where Linux loses none.
+//
+// A host compare-exchange interlocks with the guest only where the
+// emulator implements guest atomics with host atomics on the same word.
+// Until 553 the amd64 path did not -- it serialised locked instructions
+// on the global atomic_l_lock -- so this function had to take that lock
+// too, agreeing with the weaker mechanism rather than relying on the
+// stronger one (1107 of 40000 updates lost without it). Every aligned
+// locked instruction on both x86 guests is now a real host atomic
+// (x86_atomic_rmw, emu/tlb.c), so the CAS below is sufficient on its own
+// and the global lock is gone.
+//
+// What that rests on: a futex word is rejected unless it is 4-byte
+// aligned (sys_futex_common), and an aligned access is exactly the case
+// the emulator does with a host atomic. The residual is a guest doing a
+// MISALIGNED locked access that happens to overlap a futex word -- that
+// one still falls back to atomic_l_lock and would not interlock. No real
+// program does it, and Linux on real hardware is atomic there because the
+// CPU is, so it is a gap in the emulation rather than in this function.
+struct futex_word_op {
+    _Atomic int32_t *word;
+    unsigned op;
+    int32_t oparg;
+    int32_t oldval;
+};
+
+static void futex_apply_word_op(void *arg) {
+    struct futex_word_op *c = arg;
+    _Atomic int32_t *aptr = c->word;
+    int32_t oldval = atomic_load_explicit(aptr, memory_order_relaxed);
+    int32_t newval;
+    if (c->op == FUTEX_OP_SET_) {
+        oldval = atomic_exchange_explicit(aptr, c->oparg, memory_order_acq_rel);
+    } else {
+        do {
+            switch (c->op) {
+                case FUTEX_OP_ADD_:  newval = oldval + c->oparg; break;
+                case FUTEX_OP_OR_:   newval = oldval | c->oparg; break;
+                case FUTEX_OP_ANDN_: newval = oldval & ~c->oparg; break;
+                default: /* FUTEX_OP_XOR_, the only value left after the check above */
+                                     newval = oldval ^ c->oparg; break;
+            }
+        } while (!atomic_compare_exchange_weak_explicit(aptr, &oldval, newval,
+                                                        memory_order_acq_rel,
+                                                        memory_order_relaxed));
+    }
+    c->oldval = oldval;
+}
+
 // FUTEX_WAKE_OP: atomically apply an op to *uaddr2 (remembering the value it
 // held before), wake up to wake_max waiters on uaddr, then -- only if the old
 // value at uaddr2 satisfies the encoded comparison -- also wake up to
@@ -720,59 +803,29 @@ static int futex_wake_op(guest_addr_t uaddr, dword_t wake_max, dword_t wake_max2
     struct futex *futex2 = futex_get_unlocked(uaddr2, FUTEX_WAKE_OP_);
 
     mem_read_lock_quiesce_aware(current->mem);
-    dword_t *ptr = mem_ptr(current->mem, uaddr2, MEM_WRITE);
+    bool may_fault;
+    dword_t *ptr = mem_ptr_may_fault(current->mem, uaddr2, MEM_WRITE, &may_fault);
     if (ptr == NULL) {
         mem_read_unlock_quiesce_aware(current->mem);
         futex_put_unlocked(futex2);
         futex_put(futex1);
         return _EFAULT;
     }
-    // The operation on *uaddr2 is a read-modify-write and it has to be ATOMIC
-    // against the guest's own atomic instructions -- Linux does it with an
-    // arch cmpxchg loop (futex_atomic_op_inuser), and the whole point of
-    // WAKE_OP is to combine that update with a wake without a window in
-    // between. A plain load, compute, store lost updates to any guest thread
-    // touching the same word: measured 594 lost out of 40000 with one thread
-    // doing atomic adds and another doing WAKE_OP adds, where Linux loses
-    // none.
-    //
-    // A host compare-exchange interlocks with the guest only where the
-    // emulator implements guest atomics with host atomics on the same word.
-    // Until 553 the amd64 path did not -- it serialised locked instructions
-    // on the global atomic_l_lock -- so this function had to take that lock
-    // too, agreeing with the weaker mechanism rather than relying on the
-    // stronger one (1107 of 40000 updates lost without it). Every aligned
-    // locked instruction on both x86 guests is now a real host atomic
-    // (x86_atomic_rmw, emu/tlb.c), so the CAS below is sufficient on its own
-    // and the global lock is gone.
-    //
-    // What that rests on: a futex word is rejected unless it is 4-byte
-    // aligned (sys_futex_common), and an aligned access is exactly the case
-    // the emulator does with a host atomic. The residual is a guest doing a
-    // MISALIGNED locked access that happens to overlap a futex word -- that
-    // one still falls back to atomic_l_lock and would not interlock. No real
-    // program does it, and Linux on real hardware is atomic there because the
-    // CPU is, so it is a gap in the emulation rather than in this function.
-    _Atomic int32_t *aptr = (_Atomic int32_t *) ptr;
-    int32_t oldval = atomic_load_explicit(aptr, memory_order_relaxed);
-    int32_t newval;
-    if (op == FUTEX_OP_SET_) {
-        oldval = atomic_exchange_explicit(aptr, oparg, memory_order_acq_rel);
-        newval = oparg;
-    } else {
-        do {
-            switch (op) {
-                case FUTEX_OP_ADD_:  newval = oldval + oparg; break;
-                case FUTEX_OP_OR_:   newval = oldval | oparg; break;
-                case FUTEX_OP_ANDN_: newval = oldval & ~oparg; break;
-                default: /* FUTEX_OP_XOR_, the only value left after the check above */
-                                     newval = oldval ^ oparg; break;
-            }
-        } while (!atomic_compare_exchange_weak_explicit(aptr, &oldval, newval,
-                                                        memory_order_acq_rel,
-                                                        memory_order_relaxed));
-    }
+    // A word in a file mapping is operated on under a guard, as futex_load
+    // loads one: past the end of its file, the operation is EFAULT.
+    struct futex_word_op word_op = {(_Atomic int32_t *) ptr, op, oparg, 0};
+    bool fault = false;
+    if (!may_fault)
+        futex_apply_word_op(&word_op);
+    else
+        fault = !host_call_guarded(futex_apply_word_op, &word_op, ptr, sizeof(*ptr), NULL, 0, NULL, 0);
     mem_read_unlock_quiesce_aware(current->mem);
+    if (fault) {
+        futex_put_unlocked(futex2);
+        futex_put(futex1);
+        return _EFAULT;
+    }
+    int32_t oldval = word_op.oldval;
 
     unsigned woken = 0;
     struct futex_wait *wait, *tmp;

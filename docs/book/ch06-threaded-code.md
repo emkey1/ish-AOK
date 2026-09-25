@@ -602,6 +602,19 @@ so a genuine repeat cannot spin. A transient race heals invisibly, and a
 genuinely bad guest address refaults through the normal translation path as a
 clean guest `SIGSEGV` with a real address.
 
+The same two handlers also catch faults the kernel takes, not the guest. A
+syscall that copies to or from guest memory does it from C, and for a file
+mapping that memory is a host mapping of the file, which is only as long as
+the file: a host page wholly past the end cannot be paged in. musl's loader
+leaves such pages in every arm64 library, and `write(2)` from one used to end
+the app. So a copy from a page that is not anonymous runs under a guard
+(`emu/host_fault.h`): a `sigsetjmp`, savemask 0 again, named by a thread-local
+pointer while the copy runs. Both handlers look at that pointer first, and a
+fault inside the range the guard covers resumes at the guard, so the syscall
+fails with `EFAULT` as Linux's `copy_from_user` would. It is Linux's exception
+table, with `sigsetjmp` standing in for the table. Anonymous pages cannot fault
+this way and are nearly every copy, so they keep a plain `memcpy`.
+
 ## 6.15 Fusion, and why the switches are readable at run time
 
 Dispatch costs about 6.8 nanoseconds, and it costs that whether the gadget

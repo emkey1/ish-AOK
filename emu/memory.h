@@ -401,6 +401,13 @@ void *mem_ptr_fault(struct mem *mem, guest_addr_t addr, int type);
 // SIGBUS -> guest SIGBUS translation of file-backed-mmap truncation faults).
 // Lockless / signal-handler-safe. Returns true and fills *guest_out on a hit.
 bool mem_host_addr_to_guest(struct mem *mem, void *host_addr, guest_addr_t *guest_out);
+// mem_ptr, and whether C code touching the page it resolved can take a host
+// fault that mem_ptr cannot rule out: true for a page whose host memory is a
+// mapping of a file, where a host page past the file's end raises SIGBUS. Such
+// a touch goes under a guard (emu/host_fault.h); anonymous memory, the hot
+// case, does not need one. *may_fault is left alone when the result is NULL.
+// Same locking as mem_ptr.
+void *mem_ptr_may_fault(struct mem *mem, guest_addr_t addr, int type, bool *may_fault);
 
 #define BYTES_ROUND_DOWN(bytes) (PAGE(bytes) << PAGE_BITS)
 #define BYTES_ROUND_UP(bytes) (PAGE_ROUND_UP(bytes) << PAGE_BITS)
@@ -808,8 +815,8 @@ size_t mem_frame_size(void);
 void *mem_ptr(struct mem *mem, guest_addr_t addr, int type);
 // memcpy between host pointers into guest memory that answers false, rather
 // than killing the emulator, when either side cannot be touched -- a page of a
-// file mapping past the end of its file raises SIGBUS on the host. A system
-// call per copy: for the copies that can meet such a page and are not hot.
+// file mapping past the end of its file raises SIGBUS on the host. Guarded on
+// both sides (emu/host_fault.h), so the cost is a sigsetjmp, not a syscall.
 bool mem_host_copy(void *dst, const void *src, size_t size);
 
 // What a MAP_SHARED page is, whichever mapping reaches it. One memfd mapped

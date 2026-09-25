@@ -368,5 +368,6 @@ realfs_long_name.c
 setsid_thread_group.c
 group_signal_target.c
 signal_sender_tgid.c
+syscall_page_past_eof.c
 x86/rep_interruptible.c
 aokgfx_protocol.c

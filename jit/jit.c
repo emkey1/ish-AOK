@@ -28,6 +28,7 @@
 // static array).
 #include <mach/kern_return.h>
 #endif
+#include "emu/host_fault.h"
 
 extern int current_pid(struct task *task);
 
@@ -833,6 +834,10 @@ static void jit_report_untranslatable(void *host_addr, const char *what,
 // at all about who did it.
 __attribute__((__noreturn__))
 void jit_crash_bus_fn(void *host_addr, long kind, void *fault_pc) {
+    // The kernel's own guarded access to guest memory, a syscall copying a
+    // file page past EOF (emu/host_fault.h): it resumes at its guard and the
+    // syscall fails. First, because it is not the guest that faulted.
+    host_fault_guard_recover(host_addr);
     static __thread bool bus_dispatch_active = false;
     if (bus_dispatch_active)
         abort(); // the reverse-map walk faulted -> genuine memory corruption
@@ -866,6 +871,11 @@ static void *jit_uctx_pc(void *uctx) {
 }
 
 static void jit_host_sigbus_handler(int sig, siginfo_t *info, void *uctx) {
+    // A guarded kernel access (emu/host_fault.h), as in jit_crash_bus_fn: out
+    // of the handler to the guard, which, like the unwind below, was armed
+    // with savemask 0 -- SA_NODEFER is what leaves SIGBUS unblocked after it.
+    if (info != NULL)
+        host_fault_guard_recover(info->si_addr);
     if (info != NULL && jit_translate_host_fault(info->si_addr)) {
         // Unwind out of the faulting gadget back to cpu_step_to_interrupt's
         // sigsetjmp, which returns INT_BUS. jit_crash_fn releases the jetsam
@@ -918,6 +928,22 @@ static void jit_install_host_fault_signal_handler(void) {
 
     static pthread_once_t once = PTHREAD_ONCE_INIT;
     pthread_once(&once, jit_install_host_fault_sigaction);
+}
+
+// Both handlers for the calling thread, once: every engine's entry calls this,
+// and so does a guarded kernel access (emu/host_fault.h), which can run on a
+// thread that has never entered the JIT. The Mach port is per thread (the
+// device); when it is not active (the standalone CLI), a host SIGBUS on a
+// truncated file-backed guest mmap would otherwise kill the process, so the
+// POSIX handler translates it into a guest SIGBUS instead.
+void jit_host_fault_thread_init(void) {
+    static __thread bool installed = false;
+    if (installed)
+        return;
+    jit_install_thread_exception_handler();
+    if (!jit_host_fault_mach_active())
+        jit_install_host_fault_signal_handler();
+    installed = true;
 }
 
 // Acquire jetsam write lock with a short timeout. Uses non-blocking
@@ -2290,16 +2316,7 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
     // Thread-level exception ports are scoped to only this pthread; no other
     // thread in the process is affected.  Cost is one Mach call per OS thread
     // lifetime (guarded by a thread-local flag), not per jit_enter call.
-    static __thread bool exception_handler_installed = false;
-    if (!exception_handler_installed) {
-        jit_install_thread_exception_handler();
-        // When the Mach handler isn't active (standalone CLI), a host SIGBUS on
-        // a truncated file-backed guest mmap would otherwise kill the process.
-        // Install a POSIX handler that translates it into a guest SIGBUS.
-        if (!jit_host_fault_mach_active())
-            jit_install_host_fault_signal_handler();
-        exception_handler_installed = true;
-    }
+    jit_host_fault_thread_init();
 
     // Keep the hot path off malloc/free. With iOS debug malloc enabled
     // (guard pages + scribbling), even these small short-lived allocations
@@ -2739,16 +2756,7 @@ done_unlocked:
 static int cpu_step_to_interrupt_arm64(struct cpu_state *cpu, struct tlb *tlb) {
     struct jit *jit = cpu->mmu->jit;
 
-    static __thread bool exception_handler_installed = false;
-    if (!exception_handler_installed) {
-        jit_install_thread_exception_handler();
-        // When the Mach handler isn't active (standalone CLI), a host SIGBUS on
-        // a truncated file-backed guest mmap would otherwise kill the process.
-        // Install a POSIX handler that translates it into a guest SIGBUS.
-        if (!jit_host_fault_mach_active())
-            jit_install_host_fault_signal_handler();
-        exception_handler_installed = true;
-    }
+    jit_host_fault_thread_init();
 
     // Per-thread persistent scratch instead of ~40 KB of stack zeroed on every
     // entry -- i.e. on every guest syscall. See jit_entry_scratch_get(). The
@@ -3071,13 +3079,7 @@ done_unlocked_arm64:
 static int cpu_single_step_arm64(struct cpu_state *cpu, struct tlb *tlb) {
     struct jit *jit = cpu->mmu->jit;
 
-    static __thread bool exception_handler_installed = false;
-    if (!exception_handler_installed) {
-        jit_install_thread_exception_handler();
-        if (!jit_host_fault_mach_active())
-            jit_install_host_fault_signal_handler();
-        exception_handler_installed = true;
-    }
+    jit_host_fault_thread_init();
 
     // Same rule as cpu_step_to_interrupt_arm64: this frontend has no entry
     // refresh, so the first call after execve can still see the TLB bound to
@@ -3179,13 +3181,7 @@ static int cpu_single_step_arm64(struct cpu_state *cpu, struct tlb *tlb) {
 static int cpu_single_step_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
     struct jit *jit = cpu->mmu->jit;
 
-    static __thread bool exception_handler_installed = false;
-    if (!exception_handler_installed) {
-        jit_install_thread_exception_handler();
-        if (!jit_host_fault_mach_active())
-            jit_install_host_fault_signal_handler();
-        exception_handler_installed = true;
-    }
+    jit_host_fault_thread_init();
 
     // Same rule as cpu_step_to_interrupt_riscv64: this frontend has no entry
     // refresh, so the first call after execve can still see the TLB bound to
@@ -3277,16 +3273,7 @@ static int cpu_single_step_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
 static int cpu_step_to_interrupt_riscv64(struct cpu_state *cpu, struct tlb *tlb) {
     struct jit *jit = cpu->mmu->jit;
 
-    static __thread bool exception_handler_installed = false;
-    if (!exception_handler_installed) {
-        jit_install_thread_exception_handler();
-        // When the Mach handler isn't active (standalone CLI), a host SIGBUS on
-        // a truncated file-backed guest mmap would otherwise kill the process.
-        // Install a POSIX handler that translates it into a guest SIGBUS.
-        if (!jit_host_fault_mach_active())
-            jit_install_host_fault_signal_handler();
-        exception_handler_installed = true;
-    }
+    jit_host_fault_thread_init();
 
     // Per-thread persistent scratch instead of ~40 KB of stack zeroed on every
     // entry -- i.e. on every guest syscall. See jit_entry_scratch_get(). The
@@ -3659,16 +3646,7 @@ static int cpu_step_to_interrupt_amd64_frontend(struct cpu_state *cpu, struct tl
     if (cpu_take_poke(cpu))
         return INT_TIMER;
 
-    static __thread bool exception_handler_installed = false;
-    if (!exception_handler_installed) {
-        jit_install_thread_exception_handler();
-        // When the Mach handler isn't active (standalone CLI), a host SIGBUS on
-        // a truncated file-backed guest mmap would otherwise kill the process.
-        // Install a POSIX handler that translates it into a guest SIGBUS.
-        if (!jit_host_fault_mach_active())
-            jit_install_host_fault_signal_handler();
-        exception_handler_installed = true;
-    }
+    jit_host_fault_thread_init();
 
     jit_crash_frame = frame;
     jit_crash_cpu = cpu;
@@ -4040,13 +4018,7 @@ rearm_amd64:
 static int cpu_single_step_amd64(struct cpu_state *cpu, struct tlb *tlb) {
     struct jit *jit = cpu->mmu->jit;
 
-    static __thread bool exception_handler_installed = false;
-    if (!exception_handler_installed) {
-        jit_install_thread_exception_handler();
-        if (!jit_host_fault_mach_active())
-            jit_install_host_fault_signal_handler();
-        exception_handler_installed = true;
-    }
+    jit_host_fault_thread_init();
 
     cpu->poked_ptr = &cpu->_poked;
 

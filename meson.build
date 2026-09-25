@@ -677,6 +677,7 @@ src = [
     'util/fifo.c',
 
     'emu/memory.c',
+    'emu/host_fault.c',
     'platform/standalone.c',
 
     'platform/' + host_machine.system() + '.c',

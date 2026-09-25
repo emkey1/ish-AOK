@@ -971,11 +971,18 @@ needs the page's ORIGIN to still be reachable after the copy-on-write, and a
 `struct pt_entry` that has been written keeps only the private copy. Doing it
 properly means remembering the file-backed `struct data` per COW page.
 
-**A load or store wholly past EOF in a file mapping does not SIGBUS.** Linux
-faults both; AOK reads zeroes and lets stores land, and they become file
-content if the file later grows. The fault handler would have to know the
-backing file's current size at fault time, which means carrying the file
-identity into the page fault path rather than just the host memory.
+**A load or store past EOF does not SIGBUS if its host page holds any of the
+file.** Linux faults at guest-page granularity; the host pages a file in at its
+own, 16 KiB on Apple silicon. So a guest page past EOF that shares a host page
+with the file's last bytes reads zeroes and takes stores, which become file
+content if the file later grows: guest pages 2 and 3 of a 5000-byte file read
+as zeroes on alpine-arm64-test, and `write(2)` from one returns 16, where Linux
+6.12 gives SIGBUS and EFAULT (measured 2026-09-25). A host page WHOLLY past
+EOF does fault -- a guest SIGBUS from the JIT, and a failed syscall from the
+kernel (next section) -- and a host whose page is the guest's has no gap. The
+fault handler would have to know the backing file's current size at fault
+time, which means carrying the file identity into the page fault path rather
+than just the host memory.
 
 **`remap_file_pages` is ENOSYS.** Linux has emulated it over mmap since 3.16
 and a linear remap returns 0. Linux's emulation is a `MAP_FIXED` shared mapping
@@ -984,43 +991,38 @@ no obstacle: every page-table entry already carries its own `data` and
 `offset`, and a large shared anonymous mapping that is still reserved can be
 materialised first, as `mprotect` does. What is missing is the syscall itself.
 
-### A syscall that copies from a file page past EOF kills the app
+### File pages past EOF: what the guarded copies leave
 
-Measured 2026-09-25, beside the checkpoint save's instance of the same fault
-(fixed there: `ckpt_host_page_readable`, kernel/checkpoint.c). A host page of a
-file mapping that holds no byte of the file cannot be paged in, and a load from
-it is SIGBUS. The guest's own accesses become a guest SIGBUS
-(`handle_bus_interrupt`), but kernel C code that copies guest memory
-`memcpy()`s from `mem_ptr` with no recovery -- `__user_read_task_mem` and
-`__user_write_task_mem` in kernel/user.c -- so the fault ends the whole app.
+Fixed 2026-09-25: kernel C code that touched a host page of a file mapping
+holding no byte of the file -- `write()` from it, `read()` into it,
+`/proc/<pid>/mem`, `process_vm_readv`, `ptrace(PEEK/POKE)`, a futex word, the
+copy-on-write break after a fork -- took a host SIGBUS that ended the whole app
+(exit 138). Every such access to a page that is not anonymous now runs under a
+fault guard (emu/host_fault.h) that both host fault handlers resume at, so the
+syscall fails as Linux 6.12's does: EFAULT, or EIO from `/proc/<pid>/mem` and
+`ptrace`, and a store after a fork is a guest SIGBUS. (The forced accesses and
+the copy-on-write break were closed first, by "mem: a debugger's write leaves
+the page as protected as it was", through `mem_host_copy`, which now makes the
+same guarded copy.) `tests/manual/syscall_page_past_eof.c` takes every route,
+each beside a control inside the file. What is left:
 
-A 5000-byte file mapped 256 KiB long, read at +128 KiB: `write()` from there,
-a read of `/proc/self/mem` there, and `process_vm_readv` each end the app with
-exit 138 on alpine-arm64-test, where Linux 6.12 returns EFAULT, EIO and EFAULT.
-Any unprivileged guest process can do it on purpose, and a debugger can do it
-by accident: musl's dynamic linker leaves such pages in the text/data gap of
-every arm64 library whose file is shorter than its span (Python 3.14's math
-module has 11). `ptrace(PEEKDATA)` takes the same path (`user_get_task`), and
-so does the write direction: a `read()` INTO such a page of a writable private
-mapping ends the app the same way, where Linux returns EFAULT. kernel/futex.c
-reads the futex word through a bare `mem_ptr` too (not measured).
+**A `read(2)` that faults has already consumed its data.** AOK reads into a
+kernel buffer and then copies it out, so when the copy faults the bytes are
+already gone -- from a pipe, or past a file's offset. Linux copies first and
+consumes only what it copied: after `read(pipe, bad, 16)` fails EFAULT, the next
+read on Linux returns the 16 bytes, and on AOK it returns EAGAIN (measured on
+camd and alpine-arm64-test). Any bad buffer does it, not only a page past EOF.
 
-Closed since for a debugger's forced access and for copy-on-write breaks (commit
-"mem: a debugger's write leaves the page as protected as it was"): a read or
-write through `/proc/<pid>/mem`, `PTRACE_PEEK*`/`POKE*`, and the copy a store
-after fork makes of such a page go through `mem_host_copy` (emu/memory.c), and
-answer EIO, EIO and SIGBUS as on Linux. `write()`, `read()` into it,
-`process_vm_readv` and futex are still open.
+**On device, a store into the host page that holds EOF.** kernel/exec.c's
+split_tail comment records APFS failing the copy-on-write page-in of a host page
+that straddles EOF, on iOS. A syscall's copy into such a page is guarded like
+any other (EFAULT) and the guest's own store is a guest SIGBUS, where Linux lets
+a store into the guest page holding EOF succeed. Not reproduced on macOS 26,
+where that store succeeds (host probe, 2026-09-25); unmeasured on a device.
 
-What is known about detecting it: `write()` of one byte of the page into a
-pipe fails with EFAULT and sends no signal, on Darwin and Linux alike, at 3.8 us
-per 16 KiB host page; the save uses exactly that. It does not cover stores: on
-APFS a copy-on-write fault on a host page that STRADDLES EOF fails too
-(kernel/exec.c, the split_tail comment), so a store can fault where a load
-does not. The general fix is Linux's own shape, an exception table: a recovery
-point armed around the copy in kernel/user.c, and the host fault handlers the
-JIT already has (Mach on device, POSIX on the CLI) resuming there so the call
-returns EFAULT, at no cost to the anonymous-memory path.
+**Debug-only readers are unguarded.** emu/amd64_interp.c's trace functions and
+kernel/user.c's htop trace `memcpy` from `mem_ptr` directly; each runs only
+behind its own `ISH_*` trace knob.
 
 ### PROT_EXEC is never enforced -- no NX for guest pages
 

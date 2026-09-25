@@ -3,6 +3,7 @@
 #include <limits.h>
 #include "kernel/calls.h"
 #include "kernel/mm.h"
+#include "emu/host_fault.h"
 
 #ifndef IOV_MAX
 #define IOV_MAX 1024 // glibc only exposes IOV_MAX under _XOPEN_SOURCE
@@ -116,11 +117,33 @@ static bool user_range_valid_mem(struct task *task, struct mem *mem, guest_addr_
     return PAGE(last) < mem->page_limit;
 }
 
+// One page's worth of a copy between the kernel and guest memory. An
+// anonymous page is plain host memory, and the hot case, so it is a memcpy.
+// Any other page is a host mapping of a file, and a host page of it that lies
+// past the file's end raises SIGBUS when touched. In a syscall that killed the
+// app -- write(2) from such a page, read(2) into one, process_vm_readv --
+// where Linux fails the copy, so that copy is guarded and fails instead
+// (emu/host_fault.h).
+static inline bool user_copy_from_page(void *dst, const void *page, size_t n, bool may_fault) {
+    if (!may_fault) {
+        memcpy(dst, page, n);
+        return true;
+    }
+    return host_copy_from_guest(dst, page, n);
+}
+
+static inline bool user_copy_to_page(void *page, const void *src, size_t n, bool may_fault) {
+    if (!may_fault) {
+        memcpy(page, src, n);
+        return true;
+    }
+    return host_copy_to_guest(page, src, n);
+}
+
 // `ptrace`: a debugger's forced read (PTRACE_PEEK*, /proc/<pid>/mem), which a
 // PROT_NONE page does not refuse -- see MEM_READ_PTRACE. A debugger reads
-// wherever it is pointed, a file page past the end of its file included, so its
-// copies go through mem_host_copy: that page is EIO, as on Linux, where a plain
-// memcpy took a host SIGBUS that killed the app.
+// wherever it is pointed, a file page past the end of its file included, and
+// that copy is guarded like any other: EIO, as on Linux, from its callers.
 static int __user_read_task_mem(struct task *task, struct mem *mem, guest_addr_t addr, void *buf, size_t count, bool ptrace) {
     if (!user_range_valid_mem(task, mem, addr, count))
         return 1;
@@ -131,14 +154,11 @@ static int __user_read_task_mem(struct task *task, struct mem *mem, guest_addr_t
         qword_t chunk_end = ((qword_t) PAGE(p) + 1) << PAGE_BITS;
         if (chunk_end > end)
             chunk_end = end;
-  
-        const char *ptr = mem_ptr(mem, p, ptrace ? MEM_READ_PTRACE : MEM_READ);
-        
+        bool may_fault;
+        const char *ptr = mem_ptr_may_fault(mem, p, ptrace ? MEM_READ_PTRACE : MEM_READ, &may_fault);
         if (ptr == NULL)
             return 1;
-        if (!ptrace)
-            memcpy(&cbuf[p - addr], ptr, chunk_end - p);
-        else if (!mem_host_copy(&cbuf[p - addr], ptr, chunk_end - p))
+        if (!user_copy_from_page(&cbuf[p - addr], ptr, chunk_end - p, may_fault))
             return 1;
         p = (guest_addr_t) chunk_end;
     }
@@ -155,22 +175,21 @@ static int __user_write_task_mem(struct task *task, struct mem *mem, guest_addr_
         qword_t chunk_end = ((qword_t) PAGE(p) + 1) << PAGE_BITS;
         if (chunk_end > end)
             chunk_end = end;
-        char *ptr = mem_ptr(mem, p, ptrace ? MEM_WRITE_PTRACE : MEM_WRITE);
+        bool may_fault;
+        char *ptr = mem_ptr_may_fault(mem, p, ptrace ? MEM_WRITE_PTRACE : MEM_WRITE, &may_fault);
         if (ptr == NULL)
             return 1;
         if (trace_htop_user_write(task, mem, p, &cbuf[p - addr], chunk_end - p, ptrace)) {
             // The tracer resolved a pointer of its own, so ptr may have been
             // freed while the read lock was briefly dropped. Re-mint it before
             // the memcpy rather than trusting the pre-trace value.
-            ptr = mem_ptr(mem, p, ptrace ? MEM_WRITE_PTRACE : MEM_WRITE);
+            ptr = mem_ptr_may_fault(mem, p, ptrace ? MEM_WRITE_PTRACE : MEM_WRITE, &may_fault);
             if (ptr == NULL)
                 return 1;
         }
         // A forced write can land in place in a writable file page past the
-        // end of its file, like the read above.
-        if (!ptrace)
-            memcpy(ptr, &cbuf[p - addr], chunk_end - p);
-        else if (!mem_host_copy(ptr, &cbuf[p - addr], chunk_end - p))
+        // end of its file, like the read above: the same guarded copy.
+        if (!user_copy_to_page(ptr, &cbuf[p - addr], chunk_end - p, may_fault))
             return 1;
         p = (guest_addr_t) chunk_end;
     }
@@ -261,13 +280,88 @@ int user_zero(guest_addr_t addr, size_t count) {
     while (res == 0 && (qword_t) p < end) {
         qword_t page_end = ((qword_t) PAGE(p) + 1) << PAGE_BITS;
         if (page_end > end) page_end = end;
-        void *host = mem_ptr(mem, p, MEM_WRITE);
+        bool may_fault;
+        void *host = mem_ptr_may_fault(mem, p, MEM_WRITE, &may_fault);
         if (host == NULL) { res = 1; break; }
-        memset(host, 0, page_end - p);
+        if (!may_fault)
+            memset(host, 0, page_end - p);
+        else if (!host_zero_guest(host, page_end - p)) { res = 1; break; }
         p = (guest_addr_t) page_end;
     }
     task_mem_read_unlock(&handle);
     return res;
+}
+
+// The direct-pointer walks below hand guest pages straight to a callback: the
+// crypto and pixel accelerators run over guest buffers in place. A callback
+// over a page that is not anonymous may touch host memory past a file's end,
+// the same fault a copy can take (user_copy_from_page), so it runs under a
+// guard covering those pages, and a fault ends the walk as a fault -- which
+// the accelerators already answer with EFAULT, as for a torn copy. Each
+// callback shape carries its arguments through host_call_guarded in one of
+// these.
+struct user_walk_read_call {
+    void (*fn)(const void *host, size_t span, void *ctx);
+    const void *host;
+    size_t span;
+    void *ctx;
+};
+static void user_walk_read_thunk(void *arg) {
+    struct user_walk_read_call *c = arg;
+    c->fn(c->host, c->span, c->ctx);
+}
+
+struct user_walk_two_call {
+    void (*fn)(const void *in_host, void *out_host, size_t span, void *ctx);
+    const void *in_host;
+    void *out_host;
+    size_t span;
+    void *ctx;
+};
+static void user_walk_two_thunk(void *arg) {
+    struct user_walk_two_call *c = arg;
+    c->fn(c->in_host, c->out_host, c->span, c->ctx);
+}
+
+struct user_walk_rect_call {
+    void (*fn)(void *host, uint32_t pixels, void *ctx);
+    void *host;
+    uint32_t pixels;
+    void *ctx;
+};
+static void user_walk_rect_thunk(void *arg) {
+    struct user_walk_rect_call *c = arg;
+    c->fn(c->host, c->pixels, c->ctx);
+}
+
+struct user_walk_rect_two_call {
+    void (*fn)(const void *src_host, void *dst_host, uint32_t pixels, void *ctx);
+    const void *src_host;
+    void *dst_host;
+    uint32_t pixels;
+    void *ctx;
+};
+static void user_walk_rect_two_thunk(void *arg) {
+    struct user_walk_rect_two_call *c = arg;
+    c->fn(c->src_host, c->dst_host, c->pixels, c->ctx);
+}
+
+struct user_walk_rect_three_call {
+    void (*fn)(const void *src_host, const void *mask_host, void *dst_host, uint32_t pixels, void *ctx);
+    const void *src_host;
+    const void *mask_host;
+    void *dst_host;
+    uint32_t pixels;
+    void *ctx;
+};
+static void user_walk_rect_three_thunk(void *arg) {
+    struct user_walk_rect_three_call *c = arg;
+    c->fn(c->src_host, c->mask_host, c->dst_host, c->pixels, c->ctx);
+}
+
+// How much of a span to guard: none of a page that cannot fault.
+static inline size_t user_walk_guard_len(bool may_fault, size_t len) {
+    return may_fault ? len : 0;
 }
 
 // Read-only direct-pointer walk over one guest buffer: calls fn(host, span,
@@ -288,9 +382,19 @@ int user_read_walk(guest_addr_t addr, size_t count,
     while (res == 0 && (qword_t) p < end) {
         qword_t page_end = ((qword_t) PAGE(p) + 1) << PAGE_BITS;
         if (page_end > end) page_end = end;
-        const void *host = mem_ptr(mem, p, MEM_READ);
+        bool may_fault;
+        const void *host = mem_ptr_may_fault(mem, p, MEM_READ, &may_fault);
         if (host == NULL) { res = 1; break; }
-        fn(host, page_end - p, ctx);
+        size_t guard = user_walk_guard_len(may_fault, page_end - p);
+        if (guard == 0) {
+            fn(host, page_end - p, ctx);
+        } else {
+            struct user_walk_read_call call = {fn, host, page_end - p, ctx};
+            if (!host_call_guarded(user_walk_read_thunk, &call, host, guard, NULL, 0, NULL, 0)) {
+                res = 1;
+                break;
+            }
+        }
         p = (guest_addr_t) page_end;
     }
     task_mem_read_unlock(&handle);
@@ -389,22 +493,34 @@ int user_transform_two(guest_addr_t in, guest_addr_t out, size_t count,
         if (span > out_page_end - op)  span = out_page_end - op;
         void *out_host = NULL;
         const void *in_host = NULL;
+        bool out_may_fault = true, in_may_fault = true;
         for (;;) {
             in_host = NULL;
-            out_host = mem_ptr(mem, op, MEM_WRITE); // resolve write first (COW ordering)
+            out_host = mem_ptr_may_fault(mem, op, MEM_WRITE, &out_may_fault); // resolve write first (COW ordering)
             if (out_host == NULL)
                 break;
             // out_host is live from here on, so any lock drop inside the
             // resolve below can invalidate it.
             uint64_t gen = mem_change_id(mem);
-            in_host = mem_ptr(mem, ip, MEM_READ);
+            in_host = mem_ptr_may_fault(mem, ip, MEM_READ, &in_may_fault);
             if (in_host == NULL)
                 break;
             if (mem_change_id(mem) == gen)
                 break; // nothing moved while both pointers were live
         }
         if (out_host == NULL || in_host == NULL) { res = 1; break; }
-        fn(in_host, out_host, span, ctx);
+        size_t in_guard = user_walk_guard_len(in_may_fault, span);
+        size_t out_guard = user_walk_guard_len(out_may_fault, span);
+        if (in_guard == 0 && out_guard == 0) {
+            fn(in_host, out_host, span, ctx);
+        } else {
+            struct user_walk_two_call call = {fn, in_host, out_host, span, ctx};
+            if (!host_call_guarded(user_walk_two_thunk, &call,
+                    in_host, in_guard, out_host, out_guard, NULL, 0)) {
+                res = 1;
+                break;
+            }
+        }
         ip += span; op += span; left -= span;
     }
     task_mem_read_unlock(&handle);
@@ -453,9 +569,19 @@ int user_transform_rect(guest_addr_t base, uint32_t stride, uint32_t bpp,
             uint32_t max_pixels = (uint32_t) ((page_end - addr) / bpp);
             uint32_t span = remaining < max_pixels ? remaining : max_pixels;
             if (span == 0) { res = 1; break; }
-            void *host = mem_ptr(mem, addr, prot);
+            bool may_fault;
+            void *host = mem_ptr_may_fault(mem, addr, prot, &may_fault);
             if (host == NULL) { res = 1; break; }
-            fn(host, span, ctx);
+            size_t guard = user_walk_guard_len(may_fault, (size_t) span * bpp);
+            if (guard == 0) {
+                fn(host, span, ctx);
+            } else {
+                struct user_walk_rect_call call = {fn, host, span, ctx};
+                if (!host_call_guarded(user_walk_rect_thunk, &call, host, guard, NULL, 0, NULL, 0)) {
+                    res = 1;
+                    break;
+                }
+            }
             cx += (int32_t) span;
             remaining -= span;
         }
@@ -515,20 +641,32 @@ int user_transform_rect_two(
             if (span == 0) { res = 1; break; }
             void *dst_host = NULL;
             const void *src_host = NULL;
+            bool dst_may_fault = true, src_may_fault = true;
             for (;;) {
                 src_host = NULL;
-                dst_host = mem_ptr(mem, daddr, MEM_WRITE); // resolve write first (COW ordering)
+                dst_host = mem_ptr_may_fault(mem, daddr, MEM_WRITE, &dst_may_fault); // resolve write first (COW ordering)
                 if (dst_host == NULL)
                     break;
                 uint64_t gen = mem_change_id(mem); // dst_host is live from here on
-                src_host = mem_ptr(mem, saddr, MEM_READ);
+                src_host = mem_ptr_may_fault(mem, saddr, MEM_READ, &src_may_fault);
                 if (src_host == NULL)
                     break;
                 if (mem_change_id(mem) == gen)
                     break; // nothing moved while both pointers were live
             }
             if (dst_host == NULL || src_host == NULL) { res = 1; break; }
-            fn(src_host, dst_host, span, ctx);
+            size_t src_guard = user_walk_guard_len(src_may_fault, (size_t) span * bpp);
+            size_t dst_guard = user_walk_guard_len(dst_may_fault, (size_t) span * bpp);
+            if (src_guard == 0 && dst_guard == 0) {
+                fn(src_host, dst_host, span, ctx);
+            } else {
+                struct user_walk_rect_two_call call = {fn, src_host, dst_host, span, ctx};
+                if (!host_call_guarded(user_walk_rect_two_thunk, &call,
+                        src_host, src_guard, dst_host, dst_guard, NULL, 0)) {
+                    res = 1;
+                    break;
+                }
+            }
             dcx += (int32_t) span; scx += (int32_t) span;
             remaining -= span;
         }
@@ -591,23 +729,36 @@ int user_transform_rect_three(
             if (span == 0) { res = 1; break; }
             void *dst_host = NULL;
             const void *src_host = NULL, *mask_host = NULL;
+            bool dst_may_fault = true, src_may_fault = true, mask_may_fault = true;
             for (;;) {
                 src_host = mask_host = NULL;
-                dst_host = mem_ptr(mem, daddr, MEM_WRITE); // resolve write first (COW ordering)
+                dst_host = mem_ptr_may_fault(mem, daddr, MEM_WRITE, &dst_may_fault); // resolve write first (COW ordering)
                 if (dst_host == NULL)
                     break;
                 uint64_t gen = mem_change_id(mem); // dst_host is live from here on
-                src_host = mem_ptr(mem, saddr, MEM_READ);
+                src_host = mem_ptr_may_fault(mem, saddr, MEM_READ, &src_may_fault);
                 if (src_host == NULL)
                     break;
-                mask_host = mem_ptr(mem, maddr, MEM_READ);
+                mask_host = mem_ptr_may_fault(mem, maddr, MEM_READ, &mask_may_fault);
                 if (mask_host == NULL)
                     break;
                 if (mem_change_id(mem) == gen)
                     break; // nothing moved while all three pointers were live
             }
             if (dst_host == NULL || src_host == NULL || mask_host == NULL) { res = 1; break; }
-            fn(src_host, mask_host, dst_host, span, ctx);
+            size_t src_guard = user_walk_guard_len(src_may_fault, (size_t) span * src_bpp);
+            size_t mask_guard = user_walk_guard_len(mask_may_fault, (size_t) span * mask_bpp);
+            size_t dst_guard = user_walk_guard_len(dst_may_fault, (size_t) span * dst_bpp);
+            if (src_guard == 0 && mask_guard == 0 && dst_guard == 0) {
+                fn(src_host, mask_host, dst_host, span, ctx);
+            } else {
+                struct user_walk_rect_three_call call = {fn, src_host, mask_host, dst_host, span, ctx};
+                if (!host_call_guarded(user_walk_rect_three_thunk, &call,
+                        src_host, src_guard, mask_host, mask_guard, dst_host, dst_guard)) {
+                    res = 1;
+                    break;
+                }
+            }
             dcx += (int32_t) span; scx += (int32_t) span; mcx += (int32_t) span;
             remaining -= span;
         }
@@ -631,6 +782,60 @@ int user_write(guest_addr_t addr, const void *buf, size_t count) {
     return user_write_task(current, addr, buf, count);
 }
 
+// A guest string, copied up to and including its NUL from one page's worth of
+// bytes: memchr finds the NUL, then one memcpy. Run under a guard when the page
+// can fault (user_copy_from_page) -- a path literal lives in a program's
+// .rodata, which is a file mapping.
+struct user_string_copy {
+    char *dst;
+    const char *src;
+    size_t max;
+    size_t copied;
+};
+
+static void user_string_copy_run(void *arg) {
+    struct user_string_copy *c = arg;
+    const char *nul = memchr(c->src, '\0', c->max);
+    c->copied = nul != NULL ? (size_t) (nul - c->src) + 1 : c->max;
+    memcpy(c->dst, c->src, c->copied);
+}
+
+// Copy the NUL-terminated string at addr into buf, at most max bytes counting
+// the NUL. 0 when the NUL was copied, 1 on a fault, 2 when max bytes held no
+// NUL. A page at a time: this was a byte at a time, with a page-table resolve
+// and a range check per byte, which cost about 70 ns a byte at -O2 before the
+// copy was ever guarded, and about 100 with a guard per byte on a file page.
+// Bytes past the NUL are never copied, and a page past the NUL is never
+// touched, so a string ending just before an unmapped page reads as it did.
+// The ABI address limits are page-aligned, so a range check per page is the
+// same answer as one per byte.
+static int user_read_cstring(struct task *task, struct mem *mem, guest_addr_t addr,
+        char *buf, size_t max) {
+    size_t i = 0;
+    while (i < max) {
+        guest_addr_t p = addr + i;
+        qword_t page_end = ((qword_t) PAGE(p) + 1) << PAGE_BITS;
+        size_t chunk = (size_t) (page_end - p);
+        if (chunk > max - i)
+            chunk = max - i;
+        if (!user_range_valid_mem(task, mem, p, chunk))
+            return 1;
+        bool may_fault;
+        const char *ptr = mem_ptr_may_fault(mem, p, MEM_READ, &may_fault);
+        if (ptr == NULL)
+            return 1;
+        struct user_string_copy copy = {&buf[i], ptr, chunk, 0};
+        if (!may_fault)
+            user_string_copy_run(&copy);
+        else if (!host_call_guarded(user_string_copy_run, &copy, ptr, chunk, NULL, 0, NULL, 0))
+            return 1;
+        i += copy.copied;
+        if (buf[i - 1] == '\0')
+            return 0;
+    }
+    return 2;
+}
+
 int user_read_string(guest_addr_t addr, char *buf, size_t max) {
     if (addr == 0)
         return 1;
@@ -642,24 +847,9 @@ int user_read_string(guest_addr_t addr, char *buf, size_t max) {
     struct mem *mem = task_mem_read_lock(current, &handle);
     if (mem == NULL)
         return 1;
-    size_t i = 0;
-    while (i < max) {
-        if (!guest_abi_range_valid(current->abi, (qword_t) addr + i, 1)) {
-            task_mem_read_unlock(&handle);
-            return 1;
-        }
-        if (__user_read_task_mem(current, mem, addr + i, &buf[i], sizeof(buf[i]), false)) {
-            task_mem_read_unlock(&handle);
-            return 1;
-        }
-        if (buf[i] == '\0')
-            break;
-        i++;
-    }
+    int res = user_read_cstring(current, mem, addr, buf, max);
     task_mem_read_unlock(&handle);
-    if (i == max || buf[i] != '\0')
-        return 1;
-    return 0;
+    return res == 0 ? 0 : 1;
 }
 
 // Like user_read_string, but for pathnames: distinguishes a real memory fault
@@ -677,51 +867,25 @@ int user_read_path(guest_addr_t addr, char *buf, size_t max) {
     struct mem *mem = task_mem_read_lock(current, &handle);
     if (mem == NULL)
         return _EFAULT;
-    size_t i = 0;
-    while (i < max) {
-        if (!guest_abi_range_valid(current->abi, (qword_t) addr + i, 1)) {
-            task_mem_read_unlock(&handle);
-            return _EFAULT;
-        }
-        if (__user_read_task_mem(current, mem, addr + i, &buf[i], sizeof(buf[i]), false)) {
-            task_mem_read_unlock(&handle);
-            return _EFAULT;
-        }
-        if (buf[i] == '\0')
-            break;
-        i++;
-    }
+    int res = user_read_cstring(current, mem, addr, buf, max);
     task_mem_read_unlock(&handle);
+    if (res == 1)
+        return _EFAULT;
     // Buffer filled before a terminating NUL: the path is too long.
-    if (i == max)
+    if (res == 2)
         return _ENAMETOOLONG;
     return 0;
 }
 
+// The string and its NUL in one copy, which goes a page at a time (it was a
+// byte at a time, like the readers above).
 int user_write_string(guest_addr_t addr, const char *buf) {
     if (addr == 0) {
         return 1;
     }
     if (!guest_abi_addr_valid(current->abi, addr))
         return 1;
-    struct task_mem_read_handle handle;
-    struct mem *mem = task_mem_read_lock(current, &handle);
-    if (mem == NULL)
-        return 1;
-    size_t i = 0;
-    do {
-        if (!guest_abi_range_valid(current->abi, (qword_t) addr + i, 1)) {
-            task_mem_read_unlock(&handle);
-            return 1;
-        }
-        if (__user_write_task_mem(current, mem, addr + i, &buf[i], sizeof(buf[i]), false)) {
-            task_mem_read_unlock(&handle);
-            return 1;
-        }
-        i++;
-    } while (buf[i - 1] != '\0');
-    task_mem_read_unlock(&handle);
-    return 0;
+    return user_write(addr, buf, strlen(buf) + 1);
 }
 
 struct guest_iovec_ *user_read_iovecs_abi(struct task *task, enum guest_abi abi, guest_addr_t iov_addr, dword_t iov_count) {
@@ -850,14 +1014,14 @@ dword_t sys_process_vm_readv_guest(pid_t_ pid, guest_addr_t local_iov_addr, dwor
             size_t step = chunk - done;
             if (step > sizeof(buf))
                 step = sizeof(buf);
-            if (user_read_task(task, remote_iov[remote_index].base + remote_off + done, buf, step)) {
+            // A fault ends the call with what was copied before it. The
+            // reference goes too: kept, it would hold the target's exit in
+            // do_exit's wait for other references, for good.
+            if (user_read_task(task, remote_iov[remote_index].base + remote_off + done, buf, step) ||
+                    user_write(local_iov[local_index].base + local_off + done, buf, step)) {
                 free(local_iov);
                 free(remote_iov);
-                return total ? total : _EFAULT;
-            }
-            if (user_write(local_iov[local_index].base + local_off + done, buf, step)) {
-                free(local_iov);
-                free(remote_iov);
+                task_ref_cnt_mod(task, -1);
                 return total ? total : _EFAULT;
             }
             done += step;
