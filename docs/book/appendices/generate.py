@@ -230,8 +230,21 @@ def first_comment(text):
     """The test's own one-line description, from its leading comment block."""
     lines = text.split("\n")
     buf = []
+    in_block = False
     for line in lines[:40]:
         s = line.strip()
+        if in_block:
+            # Inside a /* ... */ header: " * text" lines, up to the first
+            # blank " *" line (the end of the first paragraph) or the "*/".
+            closed = "*/" in s
+            body = s.split("*/")[0].strip().lstrip("*").strip()
+            if not body and buf:
+                break
+            if body:
+                buf.append(body)
+            if closed:
+                break
+            continue
         if s.startswith("//"):
             body = s[2:].strip()
             if not body and buf:
@@ -239,9 +252,13 @@ def first_comment(text):
             if body:
                 buf.append(body)
         elif s.startswith("/*"):
-            body = s[2:].strip(" *")
+            closed = "*/" in s[2:]
+            body = s[2:].split("*/")[0].strip(" *")
             if body:
                 buf.append(body)
+            if closed and buf:
+                break
+            in_block = not closed
         elif buf:
             break
         elif s.startswith("#include") or s.startswith("#define"):

@@ -13,9 +13,9 @@ so a NULL check passes — editing it changes nothing.
 
 | table | entries | implemented | native dispatch | stubs |
 |---|--:|--:|--:|--:|
-| i386 | 354 | 317 | 0 | 37 |
-| amd64 | 327 | 292 | 1 | 34 |
-| arm64 / riscv64 | 312 | 227 | 2 | 83 |
+| i386 | 379 | 344 | 0 | 35 |
+| amd64 | 349 | 313 | 3 | 33 |
+| arm64 / riscv64 | 324 | 250 | 4 | 70 |
 
 riscv64 shares arm64's table: both are asm-generic ABIs with identical
 numbering (Chapter 7).
@@ -63,6 +63,7 @@ numbering (Chapter 7).
 | 47 | `sys_getgid` | implemented |  |
 | 49 | `sys_geteuid` | implemented |  |
 | 50 | `sys_getegid` | implemented |  |
+| 51 | `sys_acct` | implemented |  |
 | 52 | `sys_umount2` | implemented |  |
 | 54 | `sys_ioctl` | implemented |  |
 | 55 | `sys_fcntl32` | implemented |  |
@@ -190,12 +191,25 @@ numbering (Chapter 7).
 | 221 | `sys_fcntl` | implemented |  |
 | 224 | `sys_gettid` | implemented |  |
 | 225 | `syscall_success_stub` | implemented | readahead |
+| 226 | `sys_setxattr` | implemented |  |
+| 227 | `sys_lsetxattr` | implemented |  |
+| 228 | `sys_fsetxattr` | implemented |  |
+| 229 | `sys_getxattr` | implemented |  |
+| 230 | `sys_lgetxattr` | implemented |  |
+| 231 | `sys_fgetxattr` | implemented |  |
+| 232 | `sys_listxattr` | implemented |  |
+| 233 | `sys_llistxattr` | implemented |  |
+| 234 | `sys_flistxattr` | implemented |  |
+| 235 | `sys_removexattr` | implemented |  |
+| 236 | `sys_lremovexattr` | implemented |  |
+| 237 | `sys_fremovexattr` | implemented |  |
 | 238 | `sys_tkill` | implemented |  |
 | 239 | `sys_sendfile64` | implemented |  |
 | 240 | `sys_futex` | implemented |  |
 | 241 | `sys_sched_setaffinity` | implemented |  |
 | 242 | `sys_sched_getaffinity` | implemented |  |
 | 243 | `sys_set_thread_area` | implemented |  |
+| 244 | `sys_get_thread_area` | implemented |  |
 | 245 | `sys_io_setup` | implemented |  |
 | 246 | `sys_io_destroy` | implemented |  |
 | 247 | `sys_io_getevents` | implemented |  |
@@ -223,6 +237,12 @@ numbering (Chapter 7).
 | 274 | `sys_mbind` | implemented |  |
 | 275 | `sys_get_mempolicy` | implemented |  |
 | 276 | `sys_set_mempolicy` | implemented |  |
+| 277 | `sys_mq_open` | implemented |  |
+| 278 | `sys_mq_unlink` | implemented |  |
+| 279 | `sys_mq_timedsend` | implemented |  |
+| 280 | `sys_mq_timedreceive` | implemented |  |
+| 281 | `sys_mq_notify` | implemented |  |
+| 282 | `sys_mq_getsetattr` | implemented |  |
 | 284 | `sys_waitid` | implemented |  |
 | 288 | `sys_keyctl` | implemented |  |
 | 289 | `sys_ioprio_set` | implemented |  |
@@ -251,7 +271,7 @@ numbering (Chapter 7).
 | 314 | `syscall_success_stub` | implemented | sync_file_range |
 | 315 | `sys_tee` | implemented |  |
 | 316 | `sys_vmsplice` | implemented |  |
-| 318 | `syscall_success_stub` | implemented | getcpu |
+| 318 | `sys_getcpu` | implemented |  |
 | 319 | `sys_epoll_pwait` | implemented |  |
 | 320 | `sys_utimensat` | implemented |  |
 | 321 | `sys_signalfd` | implemented |  |
@@ -268,7 +288,8 @@ numbering (Chapter 7).
 | 332 | `sys_inotify_init1` | implemented |  |
 | 333 | `sys_preadv_i386` | implemented |  |
 | 334 | `sys_pwritev_i386` | implemented |  |
-| 336 | `syscall_stub` | stub | returns ENOSYS, logged |
+| 335 | `sys_rt_tgsigqueueinfo` | implemented |  |
+| 336 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
 | 337 | `sys_recvmmsg` | implemented |  |
 | 340 | `sys_prlimit64` | implemented |  |
 | 341 | `syscall_eopnotsupp_stub` | implemented | name_to_handle_at |
@@ -276,11 +297,12 @@ numbering (Chapter 7).
 | 343 | `sys_clock_adjtime` | implemented | clock_adjtime (EPERM: iSH can't slew the iOS clock) |
 | 344 | `sys_syncfs` | implemented |  |
 | 345 | `sys_sendmmsg` | implemented |  |
+| 346 | `sys_setns` | implemented |  |
 | 347 | `sys_process_vm_readv` | implemented |  |
 | 349 | `sys_kcmp` | implemented |  |
 | 352 | `syscall_stub` | stub | returns ENOSYS, logged |
 | 353 | `sys_renameat2` | implemented |  |
-| 354 | `syscall_eopnotsupp_stub` | implemented | seccomp |
+| 354 | `sys_seccomp` | implemented |  |
 | 355 | `sys_getrandom` | implemented |  |
 | 356 | `sys_memfd_create` | implemented |  |
 | 358 | `sys_execveat` | implemented |  |
@@ -300,6 +322,7 @@ numbering (Chapter 7).
 | 372 | `sys_recvmsg` | implemented |  |
 | 373 | `sys_shutdown` | implemented |  |
 | 375 | `sys_membarrier` | implemented | membarrier |
+| 376 | `sys_mlock2` | implemented |  |
 | 377 | `sys_copy_file_range` | implemented |  |
 | 378 | `sys_preadv2_i386` | implemented |  |
 | 379 | `sys_pwritev2_i386` | implemented |  |
@@ -330,6 +353,8 @@ numbering (Chapter 7).
 | 413 | `sys_pselect_time64` | implemented | pselect6_time64 |
 | 414 | `sys_ppoll_time64` | implemented |  |
 | 417 | `sys_recvmmsg_time64` | implemented | recvmmsg_time64 |
+| 418 | `sys_mq_timedsend_time64` | implemented |  |
+| 419 | `sys_mq_timedreceive_time64` | implemented |  |
 | 421 | `sys_rt_sigtimedwait_time64` | implemented | rt_sigtimedwait_time64 |
 | 422 | `sys_futex_time64` | implemented | futex_time64 |
 | 424 | `sys_pidfd_send_signal` | implemented |  |
@@ -346,9 +371,9 @@ numbering (Chapter 7).
 | 435 | `sys_clone3` | implemented | clone3 |
 | 436 | `sys_close_range` | implemented |  |
 | 437 | `sys_openat2` | implemented |  |
-| 438 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
+| 438 | `sys_pidfd_getfd` | implemented |  |
 | 439 | `sys_faccessat` | implemented | faccessat2 |
-| 440 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
+| 440 | `sys_process_madvise` | implemented | 64-bit ABIs dispatch it natively |
 | 441 | `sys_epoll_pwait2` | implemented | epoll_pwait2 |
 | 442 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
 | 443 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
@@ -540,6 +565,7 @@ numbering (Chapter 7).
 | 160 | `sys_setrlimit64` | implemented |  |
 | 161 | `sys_chroot` | implemented |  |
 | 162 | `syscall_success_stub` | implemented | sync |
+| 163 | `sys_acct` | implemented |  |
 | 164 | `sys_settimeofday` | implemented |  |
 | 165 | `sys_mount` | implemented |  |
 | 166 | `sys_umount2` | implemented |  |
@@ -550,6 +576,18 @@ numbering (Chapter 7).
 | 171 | `sys_setdomainname` | implemented |  |
 | 186 | `sys_gettid` | implemented |  |
 | 187 | `syscall_success_stub` | implemented | readahead |
+| 188 | `sys_setxattr` | implemented |  |
+| 189 | `sys_lsetxattr` | implemented |  |
+| 190 | `sys_fsetxattr` | implemented |  |
+| 191 | `sys_getxattr` | implemented |  |
+| 192 | `sys_lgetxattr` | implemented |  |
+| 193 | `sys_fgetxattr` | implemented |  |
+| 194 | `sys_listxattr` | implemented |  |
+| 195 | `sys_llistxattr` | implemented |  |
+| 196 | `sys_flistxattr` | implemented |  |
+| 197 | `sys_removexattr` | implemented |  |
+| 198 | `sys_lremovexattr` | implemented |  |
+| 199 | `sys_fremovexattr` | implemented |  |
 | 200 | `sys_tkill` | implemented |  |
 | 201 | `sys_time_amd64` | implemented |  |
 | 202 | `sys_futex_amd64_guest` | implemented |  |
@@ -582,6 +620,12 @@ numbering (Chapter 7).
 | 237 | `sys_mbind` | implemented |  |
 | 238 | `sys_set_mempolicy` | implemented |  |
 | 239 | `sys_get_mempolicy` | implemented |  |
+| 240 | `sys_mq_open` | implemented |  |
+| 241 | `sys_mq_unlink` | implemented |  |
+| 242 | `sys_mq_timedsend` | implemented |  |
+| 243 | `sys_mq_timedreceive` | implemented |  |
+| 244 | `sys_mq_notify` | implemented |  |
+| 245 | `sys_mq_getsetattr` | implemented |  |
 | 247 | `sys_waitid` | implemented |  |
 | 250 | `sys_keyctl` | implemented |  |
 | 251 | `sys_ioprio_set` | implemented |  |
@@ -629,6 +673,7 @@ numbering (Chapter 7).
 | 295 | `sys_preadv_amd64` | implemented |  |
 | 296 | `sys_pwritev_amd64` | implemented |  |
 | 297 | `sys_rt_tgsigqueueinfo` | implemented |  |
+| 298 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
 | 299 | `sys_recvmmsg_amd64` | implemented |  |
 | 302 | `sys_prlimit64` | implemented |  |
 | 303 | `syscall_eopnotsupp_stub` | implemented | name_to_handle_at |
@@ -636,15 +681,17 @@ numbering (Chapter 7).
 | 305 | `sys_clock_adjtime_amd64` | native dispatch | clock_adjtime (EPERM; full-width read-state TODO) |
 | 306 | `sys_syncfs` | implemented |  |
 | 307 | `sys_sendmmsg_amd64` | implemented |  |
-| 309 | `syscall_success_stub` | implemented | getcpu |
+| 308 | `sys_setns` | implemented |  |
+| 309 | `sys_getcpu` | native dispatch | dispatched natively (full-width pointers) |
 | 310 | `sys_process_vm_readv` | implemented |  |
 | 312 | `sys_kcmp` | implemented |  |
 | 316 | `sys_renameat2` | implemented |  |
-| 317 | `syscall_eopnotsupp_stub` | implemented | seccomp |
+| 317 | `sys_seccomp` | implemented | really handle_amd64_native_memory_syscall |
 | 318 | `sys_getrandom` | implemented |  |
 | 319 | `sys_memfd_create` | implemented |  |
 | 322 | `sys_execveat` | implemented |  |
 | 324 | `sys_membarrier` | implemented |  |
+| 325 | `sys_mlock2` | native dispatch | dispatched natively (full-width); entry needed to pass the NULL check |
 | 326 | `sys_copy_file_range` | implemented |  |
 | 327 | `sys_preadv2_amd64` | implemented |  |
 | 328 | `sys_pwritev2_amd64` | implemented |  |
@@ -678,9 +725,9 @@ numbering (Chapter 7).
 | 435 | `sys_clone3` | implemented |  |
 | 436 | `sys_close_range` | implemented |  |
 | 437 | `sys_openat2` | implemented |  |
-| 438 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
+| 438 | `sys_pidfd_getfd` | implemented |  |
 | 439 | `sys_faccessat` | implemented |  |
-| 440 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
+| 440 | `sys_process_madvise` | implemented | 64-bit ABIs dispatch it natively |
 | 441 | `sys_epoll_pwait2` | implemented |  |
 | 442 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
 | 443 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
@@ -720,6 +767,18 @@ numbering (Chapter 7).
 | 2 | `sys_io_submit` | implemented |  |
 | 3 | `sys_io_cancel` | implemented |  |
 | 4 | `sys_io_getevents` | implemented |  |
+| 5 | `sys_setxattr` | implemented |  |
+| 6 | `sys_lsetxattr` | implemented |  |
+| 7 | `sys_fsetxattr` | implemented |  |
+| 8 | `sys_getxattr` | implemented |  |
+| 9 | `sys_lgetxattr` | implemented |  |
+| 10 | `sys_fgetxattr` | implemented |  |
+| 11 | `sys_listxattr` | implemented |  |
+| 12 | `sys_llistxattr` | implemented |  |
+| 13 | `sys_flistxattr` | implemented |  |
+| 14 | `sys_removexattr` | implemented |  |
+| 15 | `sys_lremovexattr` | implemented |  |
+| 16 | `sys_fremovexattr` | implemented |  |
 | 17 | `sys_getcwd` | implemented |  |
 | 18 | `syscall_stub` | stub | returns ENOSYS, logged |
 | 19 | `sys_eventfd2` | implemented |  |
@@ -792,7 +851,7 @@ numbering (Chapter 7).
 | 86 | `sys_timerfd_settime` | implemented |  |
 | 87 | `sys_timerfd_gettime` | implemented |  |
 | 88 | `sys_utimensat` | implemented |  |
-| 89 | `syscall_stub` | stub | returns ENOSYS, logged |
+| 89 | `sys_acct` | implemented | acct |
 | 90 | `sys_capget` | implemented |  |
 | 91 | `sys_capset` | implemented |  |
 | 92 | `sys_personality` | implemented |  |
@@ -871,7 +930,7 @@ numbering (Chapter 7).
 | 165 | `sys_getrusage` | implemented |  |
 | 166 | `sys_umask` | implemented |  |
 | 167 | `sys_prctl` | implemented |  |
-| 168 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
+| 168 | `sys_getcpu` | native dispatch | dispatched natively (full-width pointers) |
 | 169 | `sys_gettimeofday_amd64` | implemented |  |
 | 170 | `sys_settimeofday` | implemented |  |
 | 171 | `sys_adjtimex` | implemented | adjtimex |
@@ -883,12 +942,12 @@ numbering (Chapter 7).
 | 177 | `sys_getegid32` | implemented |  |
 | 178 | `sys_gettid` | implemented |  |
 | 179 | `sys_sysinfo` | implemented |  |
-| 180 | `syscall_stub` | stub | returns ENOSYS, logged |
-| 181 | `syscall_stub` | stub | returns ENOSYS, logged |
-| 182 | `syscall_stub` | stub | returns ENOSYS, logged |
-| 183 | `syscall_stub` | stub | returns ENOSYS, logged |
-| 184 | `syscall_stub` | stub | returns ENOSYS, logged |
-| 185 | `syscall_stub` | stub | returns ENOSYS, logged |
+| 180 | `sys_mq_open` | implemented |  |
+| 181 | `sys_mq_unlink` | implemented |  |
+| 182 | `sys_mq_timedsend` | implemented |  |
+| 183 | `sys_mq_timedreceive` | implemented |  |
+| 184 | `sys_mq_notify` | implemented |  |
+| 185 | `sys_mq_getsetattr` | implemented |  |
 | 186 | `sys_msgget` | implemented |  |
 | 187 | `sys_msgctl` | implemented |  |
 | 188 | `sys_msgrcv` | implemented |  |
@@ -944,7 +1003,7 @@ numbering (Chapter 7).
 | 238 | `syscall_stub` | stub | returns ENOSYS, logged |
 | 239 | `syscall_stub` | stub | returns ENOSYS, logged |
 | 240 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
-| 241 | `syscall_stub` | stub | returns ENOSYS, logged |
+| 241 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
 | 242 | `sys_accept4` | implemented |  |
 | 243 | `sys_recvmmsg_amd64` | implemented |  |
 | 258 | `sys_riscv_hwprobe` | implemented | ENOSYS: glibc/apk fall back |
@@ -957,7 +1016,7 @@ numbering (Chapter 7).
 | 265 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
 | 266 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
 | 267 | `sys_syncfs` | implemented |  |
-| 268 | `syscall_stub` | stub | returns ENOSYS, logged |
+| 268 | `sys_setns` | implemented |  |
 | 269 | `sys_sendmmsg_amd64` | implemented |  |
 | 270 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
 | 271 | `syscall_stub` | stub | returns ENOSYS, logged |
@@ -966,14 +1025,14 @@ numbering (Chapter 7).
 | 274 | `syscall_stub` | stub | returns ENOSYS, logged |
 | 275 | `syscall_stub` | stub | returns ENOSYS, logged |
 | 276 | `sys_renameat2` | implemented |  |
-| 277 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
+| 277 | `sys_seccomp` | implemented | really handle_asm_generic_native_syscall |
 | 278 | `sys_getrandom` | implemented |  |
 | 279 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
 | 280 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
 | 281 | `sys_execveat` | implemented |  |
 | 282 | `syscall_stub` | stub | returns ENOSYS, logged |
 | 283 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
-| 284 | `syscall_stub` | stub | returns ENOSYS, logged |
+| 284 | `sys_mlock2` | native dispatch | dispatched natively (full-width); entry needed to pass the NULL check |
 | 285 | `sys_copy_file_range` | implemented |  |
 | 286 | `sys_preadv2_guest` | implemented | preadv2 |
 | 287 | `sys_pwritev2_guest` | implemented | pwritev2 |
@@ -995,9 +1054,9 @@ numbering (Chapter 7).
 | 435 | `sys_clone3` | implemented |  |
 | 436 | `sys_close_range` | implemented |  |
 | 437 | `sys_openat2` | implemented |  |
-| 438 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
+| 438 | `sys_pidfd_getfd` | implemented |  |
 | 439 | `sys_faccessat` | implemented | faccessat2 reuses sys_faccessat, matches i386/amd64 tables |
-| 440 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
+| 440 | `sys_process_madvise` | implemented | 64-bit ABIs dispatch it natively |
 | 441 | `sys_epoll_pwait2` | implemented |  |
 | 442 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |
 | 443 | `syscall_stub_silent` | stub (silent) | returns ENOSYS, not logged |

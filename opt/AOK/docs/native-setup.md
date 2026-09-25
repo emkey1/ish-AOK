@@ -14,7 +14,7 @@ Nothing here is required. `/AOK/native` is always present, and you can always
 run a native program by its full path without setting anything up at all:
 
 ```sh
-/AOK/native/bash --version
+/AOK/native/zsh --version
 /AOK/native/smallclue wc -l /etc/passwd
 ```
 
@@ -36,8 +36,15 @@ a native one. On a current build it links about 110 applets and skips a couple
 of dozen it knows do not work.
 
 It links the **standalone** native programs too, not only SmallCLUE's applets —
-`zsh`, `dash`, `sh`, `bash`, [`motepad`](motepad.md), `hx` and the `bmm`/`bmt`
-benchmarks each get a link pointing at their own file.
+`zsh`, `dash`, `sh`, [`motepad`](motepad.md), `su`, `sudo`, `passwd` and the
+`bmm`/`bmt` benchmarks each get a link pointing at their own file. `hx` joins
+them in the shipped app build, which enables it by default, but not in a plain
+CLI/meson build unless you pass `-Dnative_helix=enabled`. `bash` is **not** in
+the default build either way, as of 556 (`-Dnative_bash=enabled` builds it in),
+so a stock install has neither `/AOK/native/bash` nor a `bash` link. `su`,
+`sudo` and `passwd` are the **setuid-root** ones — see
+[native-programs.md](native-programs.md#su-sudo-and-passwd-the-only-setuid-root-native-programs)
+— and linking them means a bare `sudo` reaches AOK's rather than your distro's.
 
 **`sh` is worth singling out.** Because this directory goes first on your
 `PATH`, that link is what makes a bare `sh`, and any script you run as
@@ -66,6 +73,9 @@ would link 110 applet(s) and 6 program(s), leave 0 in place, skip 20 excluded, 0
   would make zsh read it too, via /etc/zprofile
   nu already uses /AOK/native/bash
 ```
+
+(captured on a build with `-Dnative_bash=enabled`; the default 556 build has no
+`/AOK/native/bash`, so that last line and the "program(s)" count will differ.)
 
 **Do this once per root.** The links live in the root's own `/usr/local`, and
 the PATH snippet in its `/etc/profile.d`, so a second root — or one you install

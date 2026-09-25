@@ -35,6 +35,11 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_BRIDGE_LANE_LOG` | `app/GuestFileBridge.m` |
 | `ISH_BRIDGE_LANE_SELFTEST` | `app/GuestFileBridge.m` |
 | `ISH_BRIDGE_SINGLE_LANE` | `app/GuestFileBridge.m` |
+| `ISH_CHECKPOINT_AFTER` | `main.c` |
+| `ISH_CHECKPOINT_DEBUG` | `kernel/checkpoint.c` |
+| `ISH_CHECKPOINT_LOSE_WAKES` | `kernel/signal.c` |
+| `ISH_CHECKPOINT_TEST_FAIL_PID` | `kernel/checkpoint.c` |
+| `ISH_CLI_PTY` | `main.c` |
 | `ISH_CRYPTO_ACCEL` | `main.c` |
 | `ISH_DEBUG_CLONE_FAIL_DELAY_US` | `kernel/fork.c` |
 | `ISH_DEBUG_MIRROR_TTY1_OUTPUT` | `app/Terminal.m` |
@@ -45,16 +50,24 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_FAKEFS_LOCKSTATS` | `main.c`, `util/lockstats.c` |
 | `ISH_FAKEFS_PARALLEL_READS` | `fs/fake-conn.c` |
 | `ISH_FAKE_MNT2` | `main.c` |
+| `ISH_FORCE_MAC_SHEETS` | `app/UIViewController+Extras.m` |
 | `ISH_FORCE_SEQPACKET_EPERM` | `fs/sock.c` |
 | `ISH_FORCE_WRITE_REVALIDATE` | `emu/memory.c` |
 | `ISH_FUTEX_HEAP_WAIT` | `kernel/futex.c` |
-| `ISH_GUEST_CPU_COUNT` | `platform/darwin.c` |
+| `ISH_GUEST_CHECKPOINT` | `fs/proc/ish.c` |
+| `ISH_GUEST_CPU_COUNT` | `platform/darwin.c`, `platform/linux.c` |
+| `ISH_GUEST_CPU_RESERVE` | `platform/darwin.c` |
 | `ISH_GUEST_MEM_BUDGET_MB` | `platform/darwin.c`, `platform/linux.c` |
 | `ISH_GUEST_MEM_HEADROOM_MB` | `platform/darwin.c`, `platform/linux.c` |
 | `ISH_GUEST_MEM_PRESSURE` | `platform/darwin.c` |
+| `ISH_GUEST_PROFILE` | `kernel/guestprof.c` |
+| `ISH_GUEST_PROFILE_OUT` | `kernel/guestprof.c` |
+| `ISH_GUEST_SNAPSHOT` | `fs/proc/ish.c` |
 | `ISH_GUEST_SWAP_FAIL_READS` | `kernel/swap.c` |
+| `ISH_GUEST_SWAP_FILE` | `kernel/swap.c` |
 | `ISH_GUEST_SWAP_MB` | `kernel/swap.c` |
 | `ISH_GUEST_SWAP_WRITE_BUDGET_MB` | `kernel/swap.c` |
+| `ISH_GUEST_ZSWAP_MB` | `kernel/swap.c` |
 | `ISH_HLE` | `main.c` |
 | `ISH_HLE_FP` | `jit/hle.c` |
 | `ISH_HLE_LOOPS` | `jit/hle.c` |
@@ -69,6 +82,7 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_JIT_TIMING` | `jit/jit.c`, `main.c` |
 | `ISH_LAZY_TRACE` | `emu/memory.c` |
 | `ISH_LOCKSTATS` | `main.c`, `util/lockstats.c` |
+| `ISH_MEM_CLASS_CHECK` | `fs/proc/root.c` |
 | `ISH_MEM_NO_PAGE_PACKING` | `emu/memory.c` |
 | `ISH_MEM_QUARANTINE` | `emu/memory.c` |
 | `ISH_MIRROR_NO_MPROTECT` | `emu/memory.c` |
@@ -79,28 +93,42 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_NO_MMAP_GROWTH_FAST` | `kernel/mmap.c` |
 | `ISH_NO_MOVMR_FUSE` | `jit/gen.c` |
 | `ISH_NO_PUSHPOP_FUSE` | `jit/gen.c` |
+| `ISH_PIXMAN_SHIM_OFF` | `opt/AOK/tools/pixman/ish_pixman_shim.c` |
 | `ISH_PIXMAN_STATS` | `opt/AOK/tools/pixman/ish_pixman_shim.c` |
 | `ISH_PIX_ACCEL` | `main.c` |
 | `ISH_PTHREAD_CANARY` | `kernel/task.c` |
 | `ISH_PTHREAD_WATCH` | `kernel/task.c` |
 | `ISH_PTHREAD_WATCH_SELFTEST` | `kernel/task.c` |
+| `ISH_PT_OCCUPANCY_CHECK` | `emu/memory.c` |
 | `ISH_QUIESCE_STATS` | `main.c` |
+| `ISH_RANDOMIZE_VA_SPACE` | `kernel/exec.c` |
 | `ISH_REAL_MNT` | `main.c` |
+| `ISH_RESTORE` | `xX_main_Xx.h` |
+| `ISH_RESTORE_FALLBACK` | `xX_main_Xx.h` |
 | `ISH_RISCV64_NO_FUSE` | `jit/gen.c` |
 | `ISH_RISCV64_VENDOR_EXT` | `jit/riscv64_vendor_ext.c` |
+| `ISH_SESSION` | `xX_main_Xx.h` |
+| `ISH_SESSION_RESUME` | `app/AppDelegate.m` |
+| `ISH_SOCKRESTART_AFTER` | `main.c` |
+| `ISH_SOCKRESTART_TEST_DESTROY` | `fs/sockrestart.c` |
 | `ISH_STALE_JIT_PEER` | `tests/manual/vfork_exec_stale_jit.c` |
 | `ISH_SWAP_NO_MADVISE` | `emu/memory.c` |
 | `ISH_SWAP_NO_MPROTECT` | `emu/memory.c` |
+| `ISH_TASK_DUMP_ALL_THREADS` | `kernel/task.c` |
+| `ISH_TASK_DUMP_EVERY` | `kernel/task.c` |
 | `ISH_TEST_FAIL_TASK_START_AFTER` | `kernel/task.c` |
 | `ISH_TEST_GUEST_CMD` | `main.c` |
 | `ISH_TEST_GUEST_LINGER_MS` | `main.c` |
 | `ISH_TEST_GUEST_TIMEOUT_MS` | `main.c` |
 | `ISH_TEST_GUEST_USER` | `main.c` |
 | `ISH_TEST_LOSE_WAKE_POKES` | `kernel/signal.c` |
+| `ISH_TEST_POKE_BLOCKED_TASKS` | `kernel/task.c` |
 | `ISH_TEST_QUIESCE` | `main.c` |
 | `ISH_TEST_QUIESCE_DELAY_MS` | `main.c` |
 | `ISH_TEST_QUIESCE_HOLD_MS` | `main.c` |
+| `ISH_TEST_REALFS_HOST_DIR` | `tests/manual/realfs_long_name.c` |
 | `ISH_TEST_SECOND_MOUNT` | `tests/manual/mount_cross_dev.c` |
+| `ISH_TEST_TIMER_FIRE_DELAY_MS` | `util/timer.c` |
 | `ISH_TEST_WATCHDOG_SCALE` | `tests/manual/test_common.h` |
 | `ISH_TRACE_AMD64_AS` | `emu/amd64_interp.c` |
 | `ISH_TRACE_AMD64_AS_ALU` | `emu/amd64_interp.c` |
@@ -135,6 +163,7 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `ISH_TRACE_SOCK_DEBUG` | `fs/sock.c` |
 | `ISH_TRACE_TERMINAL_LIFECYCLE` | `app/Terminal.m`, `app/TerminalView.m` |
 | `ISH_TRACE_WAITS` | `util/sync.c` |
+| `ISH_VDSO` | `kernel/exec.c` |
 | `ISH_WAITFLAG_LEAK` | `util/sync.c` |
 | `ISH_WAITFLAG_TRACE` | `util/sync.c` |
 
@@ -156,8 +185,9 @@ by the app; several have app-side equivalents under `/proc/ish/defaults`
 | `arm64_gret` | combo | 'dmb' |
 | `vdso_c_args` | string | '' |
 | `no_crlf` | boolean | false |
-| `native_bash` | feature | 'auto' |
+| `native_bash` | feature | 'disabled' |
 | `native_zsh` | feature | 'enabled' |
+| `native_dash` | feature | 'enabled' |
 
 ---
 

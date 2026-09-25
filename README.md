@@ -12,7 +12,7 @@ This fork is not just a rebrand. It carries fork-specific behavior, bundled root
   - product name `iSH-AOK`
   - bundle root `app.ish.iSH-AOK`
 - **Four guest architectures**, all JIT: `i386`, `amd64` (x86_64), `arm64` (aarch64), and `riscv64`.
-- **Native programs**: bash, zsh and SmallCLUE's busybox-style toolbox — which carries OpenSSH (`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`) and the Nextvi editor — are compiled into the app as host code and dispatched from guest `execve` through `/AOK/native/<name>`. They are host functions on a guest task's thread, not guest binaries, so they run at full speed instead of being translated instruction by instruction.
+- **Native programs**: zsh and SmallCLUE's busybox-style toolbox — which carries OpenSSH (`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`) and the Nextvi editor — are compiled into the app as host code and dispatched from guest `execve` through `/AOK/native/<name>`. They are host functions on a guest task's thread, not guest binaries, so they run at full speed instead of being translated instruction by instruction. bash has the same native implementation, but build 556 does not ship it — see [Native bash and licensing](#native-bash-and-licensing).
 - `/AOK`, a read-only in-app filesystem (`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`) embedded at build time from `opt/AOK/` via `fs/aok-*.manifest` and `tools/gen-aokfs.py`.
 - Bundled root filesystems in the app build (Alpine 3.23.3 and Devuan 6, `aarch64` only), plus downloadable images for `i386`, `x86_64` and `riscv64`.
 - File Provider support for exposing guest files through iOS.
@@ -235,23 +235,29 @@ build.
 
 ## Native bash and licensing
 
-> **Native bash is being removed in build 556.** bash is GPLv3 and an App Store
-> submission cannot contain it, so the shell that stays is zsh — which is
+> **Native bash is not shipped, as of build 556.** bash is GPLv3 and an App Store
+> submission cannot contain it, so the shell that ships is zsh — which is
 > permissive, and whose native implementation is the more complete of the two
-> anyway. Native bash will not gain checkpoint support: it cannot write its own
-> state down, so a suspend re-launches it from its command line and says that it
-> did, rather than bringing it back where it was. zsh is the one native program
-> that comes back with your session still in it.
+> anyway. The port itself is untouched and stays in the tree: `-Dnative_bash=enabled`
+> (or `AOK_NATIVE_BASH=YES` for the Xcode build) still compiles it in for anyone
+> who wants it, including a checkout that already has `deps/bash`. Native bash
+> never gained checkpoint support: it cannot write its own state down, so a
+> suspend re-launches it from its command line and says that it did, rather than
+> bringing it back where it was. zsh is the one native program that comes back
+> with your session still in it.
 > Login shells naming `/AOK/native/bash` are converted to the guest's own bash
-> automatically by `native-links.sh`, so nobody is locked out by the upgrade.
+> automatically by `native-links.sh`, so nobody already using it was locked out
+> by the change.
 > See [docs/shell_transition_plan.md](docs/shell_transition_plan.md).
 
-bash is compiled into the app as a native program. The win is interpretation,
-not forking: an arithmetic loop runs roughly 16x faster than under the emulated
-shell, while subshells and command substitutions land near parity, because a
-native program cannot `fork` and re-launches itself instead. Numbers and method
-are in [docs/bash_native_plan.md](docs/bash_native_plan.md). It also puts GPLv3
-code in the binary: bash itself, its bundled readline, and GNU termcap.
+bash can be compiled into the app as a native program (`-Dnative_bash=enabled`),
+though build 556 does not ship it by default. The win, when it is built in, is
+interpretation, not forking: an arithmetic loop runs roughly 16x faster than
+under the emulated shell, while subshells and command substitutions land near
+parity, because a native program cannot `fork` and re-launches itself instead.
+Numbers and method are in [docs/bash_native_plan.md](docs/bash_native_plan.md).
+It also puts GPLv3 code in the binary: bash itself, its bundled readline, and
+GNU termcap.
 
 That matters for App Store distribution. iSH-AOK is GPLv3 too, but
 [LICENSE.IOS](LICENSE.IOS) is a promise from *this project's* copyright holders
@@ -268,8 +274,8 @@ The FSF states that analysis applies to all GPL versions, not only v3.
 So it is a build option:
 
 ```bash
-meson setup build .                          # auto: on if deps/bash is present
-meson setup build . -Dnative_bash=disabled   # no third-party GPL in the binary
+meson setup build .                          # disabled by default -- no third-party GPL in the binary
+meson setup build . -Dnative_bash=disabled   # same thing, spelled out
 meson setup build . -Dnative_bash=enabled    # fail if deps/bash is missing
 ```
 

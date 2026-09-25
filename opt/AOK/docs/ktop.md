@@ -99,21 +99,29 @@ cut always falls on a UTF-8 character boundary rather than mid-character. In
 batch mode this applies only when stdout is a terminal: redirect or pipe
 `ktop -bn1` and the full command is recorded uncut.
 
-### Native programs and the ARCH column
+### Where the ARCH column actually comes from
 
-iSH-AOK's native programs — `bash`, `zsh`, and SmallCLUE's applets (among them
-`ssh`, `scp`, `sftp`, `ssh-keygen`, `rsync` and `vi`), all dispatched through
-`/AOK/native` — are host code compiled into the app, not guest binaries, so they
-have no guest ELF image of their own. `/proc/<pid>/exe` names the `/AOK/native`
-entry that was `execve`d, and there is no ELF header behind that path to read.
+`ktop` reads [`/proc/ish/arch`](proc-ish.md#every-processs-architecture-and-who-may-ask)
+once per refresh, before it walks `/proc`: one `<pid> <machine>` line for
+every live process, with no ptrace check involved, because it comes from the
+task's own record rather than from opening another process's `/proc/<pid>/exe`
+— reading that path for a process that is not yours is gated since AOK's
+`ptrace`/`/proc` hardening, and a normal user would otherwise see `?` next to
+every root-owned process (`init`, `sshd`, `login`, ...). Falling back to an
+ELF-header read of `/proc/<pid>/exe` only happens for a pid the table does not
+have — a process that started after this refresh's table was read, or a real
+Linux host, or an iSH-AOK build old enough not to have the file.
 
-For those, ARCH reports the **host's** architecture — `arm64` on every Apple
-Silicon device — because that is what the code genuinely is. It comes from the
-`host arch` line of `/proc/cpuinfo`, so it does not depend on which root is
-booted: a native `zsh` in an x86 root shows `arm64` while everything around it
-shows `x86`. That is the honest label, and it doubles as the quickest way to
-see at a glance which processes are running natively. See
-[native-programs.md](native-programs.md).
+iSH-AOK's native programs — `zsh`, and SmallCLUE's applets (among them
+`ssh`, `scp`, `sftp`, `ssh-keygen` and `vi`), all dispatched through
+`/AOK/native` — are host code compiled into the app, not guest binaries, so
+they have no guest ELF image of their own. `/proc/ish/arch` already says
+`native` for these, which `ktop` turns into the **host's** architecture —
+`arm64` on every Apple Silicon device — because that is what the code
+genuinely is. It does not depend on which root is booted: a native `zsh` in an
+x86 root shows `arm64` while everything around it shows `x86`. That is the
+honest label, and it doubles as the quickest way to see at a glance which
+processes are running natively. See [native-programs.md](native-programs.md).
 
 ### Interactive keys
 
@@ -132,20 +140,21 @@ see at a glance which processes are running natively. See
 Cursor selection follows the highlighted process across refreshes and
 re-sorts, the same way it does in `htop`.
 
-## Run it from the outer root, not from inside a chroot
+## Running it from inside a chroot
 
 Because there's only one real kernel underneath every root and chroot,
 running `ktop -bn1` from your **outer, booted** root shows every process
 system-wide, correctly labeled by architecture, including anything running
 inside a `mount-root.sh` chroot.
 
-The reverse doesn't fully work: run `ktop` *from inside* a chroot, and it
-can only resolve the architecture of processes reachable from that
-chroot's own root. Anything outside the chroot — including the outer
-root's own processes — shows `?` in the ARCH column. This is because
-`/proc/<pid>/exe` resolves to a symlink-target string that can't be
-`open()`ed from outside the calling process's chroot (unlike real Linux,
-where `readlink` on the same path still works fine, and does here too —
-it's specifically `open()` that's restricted). If you want full
-system-wide architecture labeling, run `ktop` from the root you originally
-booted into.
+Running it *from inside* a chroot now works too, as long as `/proc` is
+mounted there — which [`mount-root.sh`](roots.md) does for you — because
+`/proc/ish/arch` is one global table, not something scoped to the reading
+process's chroot. Before `/proc/ish/arch` existed, `ktop` resolved every
+process's architecture from `/proc/<pid>/exe`'s ELF header, and that path
+genuinely could not be `open()`ed from outside the calling process's own
+chroot (unlike real Linux, where it can), so everything outside the chroot
+showed `?`. That limitation is now only the fallback path's: it can still show
+`?` for a process that `exec`'d after the current refresh's table was read, or
+in a chroot with no `/proc` mounted in it at all — narrow cases, not the
+common one.

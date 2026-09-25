@@ -56,7 +56,6 @@ it reads standard input instead of listing.
   [native-setup.md](native-setup.md).
 - **It does its own paging**, so it needs no external pager. (SmallCLUE's
   `less` and `more` were held off PATH for a while over a bug that turned out
-  not to be theirs; they are linked again as of this release. See
-  [native-setup.md](native-setup.md).)
+  not to be theirs; they are linked again. See [native-setup.md](native-setup.md).)
 - **A URL is fetched through the app**, using the same networking as `curl` and
   `wget` here — see [networking.md](networking.md).

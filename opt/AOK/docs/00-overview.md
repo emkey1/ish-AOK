@@ -153,7 +153,7 @@ six of them were not linked from anywhere at all.
 | [binfmt-misc.md](binfmt-misc.md) | teaching the kernel to run other formats through an interpreter |
 | [crypto-accel.md](crypto-accel.md) | routing OpenSSL through the host's crypto instructions |
 | [benchmarks.md](benchmarks.md) | the bundled microbenchmarks, and how to run them |
-| [tuning-knobs.md](tuning-knobs.md) | `ISH_GUEST_CPU_COUNT` and friends, for the CLI build and Xcode schemes |
+| [tuning-knobs.md](tuning-knobs.md) | `ISH_GUEST_CPU_COUNT` and friends, for the CLI build and Xcode schemes — plus the resource limits and hardening enforced unconditionally |
 
 **The book**
 

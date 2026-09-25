@@ -5,7 +5,7 @@ the host device, your settings, the JIT's state. It is AOK's own addition to
 procfs; nothing on real Linux has it.
 
 ```sh
-cat /proc/ish/version        # iSH-AOK 1.3 (553)
+cat /proc/ish/version        # iSH-AOK 1.3 (556)
 cat /proc/ish/host_info      # the Mac or iPad underneath: OS, release, hardware
 cat /proc/ish/ips            # this device's network interfaces
 cat /proc/ish/colors         # the 16 ANSI colours, drawn -- a quick theme check
@@ -16,11 +16,54 @@ cat /proc/ish/thermal_state  # nominal / fair / serious / critical
 cat /proc/ish/timezone       # the device's time zone, e.g. Europe/London
 cat /proc/ish/UIDevice       # the UIDevice the app sees: model, OS, orientation
 cat /proc/ish/applets        # the Workspace applets that are open
+cat /proc/ish/arch           # every live process's guest architecture, one line each
+cat /proc/ish/host_ports     # Mach port usage -- a leak diagnostic
 ```
 
 The Workspace applets are app interface, not processes, so `ps` and `top` do
 not show them. `applets` lists them instead: see
 [workspace.md](workspace.md#procishapplets-what-is-open).
+
+## Every process's architecture, and who may ask
+
+AOK runs four guest architectures plus native host code at once, and `arch`
+says which is which:
+
+```sh
+$ cat /proc/ish/arch
+PID ARCH
+1 aarch64
+842 native
+917 x86_64
+```
+
+One line per live process (the thread-group leader): the machine name
+`uname` reports inside it, `native` for a program compiled into iSH-AOK and
+running as host code (see [native-programs.md](native-programs.md)), or `-`
+for a task caught without an address space. Zombies are not listed. This
+exists because [ktop](ktop.md)'s ARCH column used to read the ELF header
+behind `/proc/<pid>/exe`, and since another user's process became off-limits
+to inspect (below), that returned "?" for anything not your own — real Linux
+has no equivalent because it runs one architecture, so there was nowhere to
+borrow the idea from.
+
+**Another user's process is not yours to inspect**, the same way it is not on
+Linux: `ptrace_may_access()` gates `/proc/<pid>/maps`, `smaps`, `mem`,
+`environ`, `auxv`, `cwd`, `root`, `exe`, `fd`, `fdinfo` and `io`, and
+`PTRACE_ATTACH`/`PTRACE_SEIZE`, on the caller's ids matching the target's real,
+effective and saved ids, the target being dumpable, or the caller holding
+`CAP_SYS_PTRACE` — a thread of your own process may always look. `status`,
+`stat`, `cmdline` and `comm` stay public, which is what `arch` relies on. A
+process that calls `PR_SET_DUMPABLE(0)` (as `ssh-agent` and `sshd` do, to keep
+its memory away from the user's other processes) or that ran a set-id exec is
+undumpable and gated even for its own uid.
+
+`host_ports` is a different kind of diagnostic, for developers rather than
+day-to-day use: the number of Mach ports this process holds and how many are
+dead names (a right to something that no longer exists — a thread that already
+exited, typically). iOS kills the app outright at a per-process port limit;
+this file is how you catch a leak before that happens rather than after. A
+host with no Mach ports (the Linux CLI build) says so.
 
 ## Battery, heat and the time zone
 

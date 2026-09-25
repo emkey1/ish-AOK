@@ -4,7 +4,7 @@
 
 # Appendix F. The regression suite, annotated
 
-249 C programs in `tests/manual/`, of which **232 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
+403 C programs in `tests/manual/`, of which **366 are listed in `fs/aok-tests.manifest`** and therefore reach the device at `/AOK/tests`.
 
 A row with a directory prefix is a per-architecture or accelerator test, kept
 in a subdirectory of `tests/manual/` and registered under that same prefix.
@@ -16,13 +16,17 @@ does not say what it is for.
 
 | test | ships | what it is for |
 |---|:-:|---|
+| `accept_herd_single_winner.c` | yes | One connection, several accepters: exactly one of them gets it, and the one it gets is OURS. |
 | `accept_kill.c` | yes | A task blocked in accept(2) on a listening socket with no incoming connection must die promptly on a fatal signal. Under AOK it could survive kill... |
 | `accept_rcvtimeo.c` | yes | Linux accept(2) honors the listening socket's SO_RCVTIMEO: a blocking accept4() on a listener with a receive timeout returns EAGAIN when the... |
+| `acct_records.c` | yes | acct_records.c -- BSD process accounting: acct(2) and the records it writes. |
 | `aes_gcm_accel.c` | yes | AES-256-GCM through the iSH-AOK crypto accelerator syscall (ISH_SYS_AEAD, alg 2 -- kernel/ish_accel.c + kernel/ish_accel_aes.c). |
 | `aio_basic.c` | yes | Linux native AIO (the io_* family), which iSH-AOK stubbed to ENOSYS until MariaDB dereferenced the nullptr that came back and crash-looped on install. |
 | `aio_threads.c` | yes | AIO under concurrency, which is the way MariaDB uses it: many threads sharing one context, and a teardown that can land while they are still... |
 | `ambient_caps.c` | yes | Ambient capabilities + SECBIT_KEEP_CAPS across a root-to-nonroot uid transition -- the exact sequence systemd's executor runs for every service... |
+| `aokgfx_protocol.c` | yes | /dev/aokgfx speaks its wire format, and refuses the things it should. |
 | `arm64/ands_bcond_fusion.c` | yes | Regression coverage for jit/guest-arm64/control.S's ANDS+B.cond gadget fusion (fused_andsi/fused_andsr, wired in gen.c's opc==3 peek-ahead in... |
+| `arm64/arm64_fp_env.c` | yes | arm64_fp_env.c -- FPCR and FPSR at the instruction level. |
 | `arm64/arm64_regress.c` | yes | arm64 guest regressions: one check per real bug class found while bringing up the AArch64 JIT (the counterpart of x86/amd64_regress.c). |
 | `arm64/atomics64.c` | yes | arm64 atomics umbrella: the AArch64 counterpart of x86/atomics32.c. |
 | `arm64/dc_zva.c` | yes | dc_zva.c — DC ZVA (data cache zero by VA) on an arm64 guest. |
@@ -32,15 +36,35 @@ does not say what it is for.
 | `arm64/smc_stale_block.c` | yes | smc_stale_block.c — stale JIT translation surviving code invalidation. |
 | `arm64/stlr_ldar_publish.c` | yes | stlr_ldar_publish.c — LDAR/STLR cross-thread publication ordering. |
 | `arm64/vector_smoke.c` | yes | arm64 NEON smoke: compare compiler-generated vector instructions against scalar reference loops computed on the same inputs. The scalar side is... |
+| `aslr_layout.c` | yes | exec randomizes the address space layout (ASLR). |
 | `at_absolute_path.c` | yes | "If the pathname given in pathname is absolute, then dirfd is ignored." -- openat(2), and POSIX says the same for the whole *at() family. The... |
 | `at_empty_path.c` | yes | AT_EMPTY_PATH support for the *at metadata syscalls (fchownat/fchmodat). |
+| `blocked_wait_state.c` | yes | blocked_wait_state -- a task blocked in epoll_wait, msgrcv, msgsnd, semop, semtimedop, io_getevents or a FUSE request is asleep, as Linux says it is. |
 | `cat.c` | — |  |
 | `cgroup2_rmdir.c` | yes | An empty cgroup must be removable with rmdir(2). |
+| `checkpoint_anonfd.c` | — | checkpoint_anonfd.c -- descriptors with no file behind them, across a checkpoint. Driven by checkpoint_anonfd.sh. |
+| `checkpoint_clock.c` | — | checkpoint_clock.c -- the guest's clocks across a checkpoint. Driven by checkpoint_clock.sh. |
+| `checkpoint_failed_restore.c` | — | checkpoint_failed_restore.c -- helper for checkpoint_failed_restore.sh. lsn listen PORT bind 127.0.0.1:PORT, listen, and sleep (a daemon) lsn... |
+| `checkpoint_fifo.c` | — | checkpoint_fifo.c -- named FIFOs across a checkpoint. Driven by checkpoint_fifo.sh, which runs it with a tmpfs on /run, as on device. |
+| `checkpoint_fpenv/witness.c` | — | checkpoint_fpenv/witness.c -- see tests/manual/checkpoint_fpenv.sh. Sets a rounding mode and raises a flag, reports them, sleeps through the save,... |
+| `checkpoint_freeze_restart.c` | — | checkpoint_freeze_restart.c -- a checkpoint freeze must be invisible to a task blocked in a syscall. Driven by checkpoint_freeze_restart.sh, which... |
+| `checkpoint_lazy_reservation.c` | yes | checkpoint_lazy_reservation.c -- reserved address space across a checkpoint. |
+| `checkpoint_past_eof.c` | — | checkpoint_past_eof.c -- a file mapping longer than its file, across a checkpoint. Driven by checkpoint_past_eof.sh: it needs... |
+| `checkpoint_pty_owner.c` | — | checkpoint_pty_owner.c -- a pty the guest made, owned by a user, across a checkpoint. Driven by checkpoint_pty_owner.sh. |
+| `checkpoint_reopen_flags.c` | — | checkpoint_reopen_flags.c -- a restore reopens descriptors; it must not replay the side effects of the open that made them. Driven by... |
+| `checkpoint_seccomp/witness.c` | — | The process checkpoint_seccomp.sh saves and restores: sandboxed with a seccomp filter (getppid -> EPERM) that a second thread shares, and... |
+| `checkpoint_sockpair.c` | — | checkpoint_sockpair.c -- local sockets across a checkpoint, the way udevd and dbus-daemon hold them. Driven by checkpoint_sockpair.sh, which sets... |
+| `checkpoint_threads.c` | — | checkpoint_threads.c -- a multi-threaded process across a checkpoint. Driven by checkpoint_threads.sh. |
+| `checkpoint_timers.c` | — | checkpoint_timers.c -- timers, pending signals and interrupted sleeps across a checkpoint. Driven by checkpoint_timers.sh. |
+| `checkpoint_tty_descriptions.c` | — | checkpoint_tty_descriptions.c -- descriptors on a terminal, across a checkpoint. Driven by checkpoint_tty_descriptions.sh. |
+| `chroot_dotdot.c` | yes | `..` at a process's root is the root: no walk leaves a chroot upward. |
 | `chroot_getcwd.c` | yes | chroot() rebases getcwd() to the process root (Linux semantics). |
+| `clock_boot_origin.c` | yes | clock_boot_origin -- the guest's boot-relative clocks measure time since the GUEST booted, and absolute deadlines on them still mean what they say. |
 | `clone_error_cleanup.c` | yes | clone_error_cleanup.c — regression for the clone() error-path session/pgroup corruption (issue #423 Tier 2). |
 | `concurrent_dir_futex.c` | yes | Two read-modify-writes that were not atomic against other threads. |
 | `concurrent_exec_tlb.c` | yes | concurrent_exec_tlb.c — regression for the stale-TLB use-after-free on execve (issue #469: arm64 cargo/rustc SIGILL at pc 0, host SIGSEGV). |
 | `copy_file_range.c` | yes | copy_file_range(): real data-copy behavior, including offset semantics. |
+| `cpu_count_agree.c` | yes | Every way of asking how many CPUs there are gives the same answer. |
 | `create_eexist_first.c` | yes | Creating a name that already exists, in a directory you cannot write. |
 | `creds_groups_access.c` | yes | Supplementary groups past the old 32 cap, and the one execute rule root does not get to bypass. |
 | `cross_process_state.c` | yes | Four things that cross a process boundary, and were all found correct. |
@@ -52,6 +76,7 @@ does not say what it is for.
 | `dirfd_position.c` | yes | A directory's position is a cookie, and lseek has to report it. |
 | `epoll_data_layout.c` | yes | epoll_event guest-ABI layout: epoll_data must round-trip epoll_ctl -> epoll_wait bit-exact (kernel/epoll.c). Linux packs struct epoll_event (12... |
 | `epoll_dup_add.c` | yes | epoll_dup_add: Linux keys epoll membership by the (fd number, open file description) pair, so dup'd fds -- stdout and stderr are typically dups of... |
+| `epoll_edge_triggered.c` | yes | epoll_edge_triggered: EPOLLET reports a readiness once, and again only when something new happens. |
 | `epoll_eloop.c` | yes | epoll_ctl(EPOLL_CTL_ADD) nesting-cycle detection. |
 | `epoll_exclusive.c` | yes | EPOLLEXCLUSIVE (bit 28, 1<<28) EINVAL validation. |
 | `epoll_mod_spurious_wake.c` | yes | epoll_mod_spurious_wake: EPOLL_CTL_MOD on an emulated fd (eventfd) that is NOT currently ready must NOT wake a thread blocked in epoll_wait() on... |
@@ -59,9 +84,15 @@ does not say what it is for.
 | `epoll_nested.c` | yes | Epoll-inside-epoll readiness, the exact topology systemd boots with: sd-event's epoll registers libmount's mount-monitor epoll fd (level-triggered... |
 | `epoll_oneshot_rearm.c` | yes | epoll_oneshot_rearm: after an EPOLLONESHOT event is delivered, the fd must stay REGISTERED in the epoll so EPOLL_CTL_MOD can re-arm it (Linux... |
 | `eventfd_interrupt.c` | yes |  |
+| `exec_cred_ids.c` | yes | exec_cred_ids.c -- what an exec leaves in the saved and filesystem ids, and in AT_SECURE, set-id file or not. |
 | `exec_de_thread.c` | yes | execve from a non-leader thread (Linux's de_thread). |
+| `exec_empty_env_string.c` | yes | execve() hands the new program the environment it was given, entry for entry. An empty string is an ordinary entry: putenv("") is rejected by... |
+| `exec_fd_pathless.c` | yes | fexecve -- execveat(fd, "", AT_EMPTY_PATH) -- of a file that has no path: a memfd, or a file unlinked after it was opened. |
 | `exec_i386_fault_addr.c` | yes | exec_i386_fault_addr.c -- an i386 image must report its own page faults with a clean high half, even when the task it was exec'd into descends... |
+| `exec_link_by_fd.c` | yes | execveat() and linkat(AT_EMPTY_PATH) through a descriptor: in a mount that `umount -l` has detached, and from inside a chroot. |
 | `exec_perm_rules.c` | yes | What execve accepts, and what a program keeps across one. |
+| `exec_setid_unsafe/probe.c` | — | Probe: what a traced / no_new_privs exec of a set-id binary runs with. |
+| `exec_setid_unsafe/runas.c` | — | runas UID GID GROUP prog args...: become an ordinary user, as camd's uid 1000 (supplementary group GROUP) ran the probe. |
 | `exec_shebang_interpreter.c` | yes | What a #! line names, and what actually runs. |
 | `fakefs_casefold.c` | yes | Regression test for fakefs case sensitivity on case-insensitive hosts. |
 | `fakefs_inode_alias.c` | yes | Regression test for fakefs inode aliasing, and for the unremovable entry it used to leave behind. |
@@ -74,69 +105,108 @@ does not say what it is for.
 | `fd_conventions.c` | yes | Four interfaces that reported the wrong shape or the wrong reason. |
 | `fibbonaci.c` | — |  |
 | `fifo_open_creat_deadlock.c` | yes | Regression test: open(O_WRONLY\|O_CREAT) of an EXISTING FIFO racing the reader's open(O_RDONLY) must not deadlock the whole filesystem. |
+| `file_caps_exec.c` | yes | file_caps_exec.c -- file capabilities (security.capability) take effect at exec, the way Linux's cap_bprm_creds_from_file applies them. |
 | `file_perms.c` | yes | Ownership and sticky-bit enforcement on metadata changes and deletions. |
 | `fork_tgroup_reset.c` | yes | A forked child's process-wide resource ledger starts at zero. |
 | `forkexec.c` | — |  |
+| `fp_env.c` | yes | fp_env.c -- the floating-point environment: rounding modes and exception flags, and their survival across a thread, fork and a signal handler. |
 | `fs_at_validation.c` | yes | Argument validation across the *at() family, copy_file_range and sendfile. Seven things AOK accepted that Linux rejects, and one that hung. |
+| `fs_chgrp_membership.c` | yes | An unprivileged owner may give a file only a group it is itself in. AOK let the owner pick ANY group, and honoured the setgid bit on the result --... |
+| `fs_chown_kills_privs.c` | yes | A successful chown drops the file's setuid bit, and usually its setgid bit with it. AOK dropped nothing, at either privilege, for either id form. |
+| `fs_chown_no_change.c` | yes | chown(path, -1, -1) -- "change neither the owner nor the group". |
 | `fs_conformance.c` | yes | fs_conformance.c — self-checking regression lock for the filesystem/VFS conformance fixes found by differential testing against real Linux (mint).... |
+| `fs_create_trailing_slash.c` | yes | Creating a NON-directory through a name spelled with a trailing slash. |
+| `fs_ctime_updates.c` | yes | Every change to an inode moves its ctime. |
+| `fs_final_dot_order.c` | yes | A final "." or ".." names no entry that can be created or removed -- and WHEN that is answered decides which error the caller sees. |
+| `fs_linkat_flags.c` | yes | linkat()'s flags argument, which AOK did not have. |
+| `fs_nofollow_trailing_slash.c` | yes | A trailing slash on a name whose FINAL component the caller resolves WITHOUT following a symlink there -- lstat, readlink, open(O_NOFOLLOW),... |
+| `fs_open_creat_isdir.c` | yes | open(O_CREAT) on a name that is already a DIRECTORY. |
 | `fs_permission_rules.c` | yes | Five permission and path-resolution rules AOK got wrong, two of them security-relevant and two of them plainly visible at a shell prompt. |
 | `fs_remove_enoent_order.c` | yes | Which wins when the parent directory is unwritable: the permission check, or the fact that the final component is not there? |
+| `fs_symlink_trailing_slash.c` | yes | A trailing slash on a name whose FINAL component is a symlink. |
 | `fsopen_move_mount.c` | yes | The "new mount API" (fsopen/fsconfig/fsmount/move_mount, kernel 5.2+): before this fix all four were silent ENOSYS stubs, so systemd >= 254's... |
 | `ftruncate_fd_mode.c` | yes | ftruncate(2) takes its permission from the DESCRIPTOR, not from the inode's mode bits. Linux's do_sys_ftruncate checks only FMODE_WRITE, and... |
 | `fuse_basic.c` | yes | fuse_basic.c — self-checking regression lock for iSH-AOK's FUSE support (fs/fuse.c): the /dev/fuse device, the "fuse" filesystem type, and the... |
 | `fuse_threaded_daemon.c` | yes | fuse_threaded_daemon.c — the FUSE daemon is a THREAD of the process using the mount, rather than a separate process. |
 | `futex_core.c` | yes |  |
 | `futex_robust_requeue.c` | yes | Three futex defects, one of which disabled an entire POSIX feature. |
+| `futex_shared_mapping.c` | yes | futex_shared_mapping: a futex in shared memory is one futex, whichever mapping, descriptor or process reaches the word. |
 | `futex_timeout_duration.c` | yes | A futex timeout has to last as long as it was asked to last. |
 | `futex_validation.c` | yes | Three things futex(2) got wrong about its own arguments. |
 | `getdents.c` | — |  |
 | `getpeername_smallbuf.c` | yes | getpeername()/getsockname() with a small or zero-length caller buffer. |
 | `getppid_thread.c` | yes | getppid_thread.c — the parent reported to a child must be the parent PROCESS, not the parent THREAD. |
 | `getrusage_group.c` | yes | Covers: getrusage(RUSAGE_SELF) and clock_gettime(CLOCK_PROCESS_CPUTIME_ID) must sum usage across every thread in the process, not just report the... |
+| `group_signal_target.c` | yes | A signal sent to a process group reaches each process in it through a thread that can take it. |
+| `guestprof/ctl_blocked.c` | — | POSITIVE CONTROL 3: time parked in a wait must land in the BLOCKED bucket, not in "kernel" -- that split is what keeps a network-bound workload... |
+| `guestprof/ctl_inflate.c` | — | POSITIVE CONTROL 1 for the guest profiler: burn essentially all of the guest's time inside libz's inflate, so a profiler that is working must... |
+| `guestprof/ctl_syscall.c` | — | POSITIVE CONTROL 2: a tight loop in a syscall that cannot be served from userspace, so the profiler must put the samples OUTSIDE guest code.... |
 | `hello-clib.c` | — |  |
 | `hello.c` | — | compile with cc -m32 -nostdlib |
+| `host_port_leak.c` | yes | host_port_leak.c -- a guest thread that exits leaves no Mach port behind. |
 | `inaddr_any_iface.c` | yes | inaddr_any_iface: a listener bound to the wildcard address (0.0.0.0) must be reachable at EVERY IPv4 address the host currently has, and must stay... |
 | `inet_nat_bind.c` | yes | Duplicate binds on a NAT'd loopback alias. |
+| `inotify_bind_alias.c` | yes | An inotify watch is on a file, not on the name it was placed through, so a change made through one name of a directory reaches a watch placed... |
 | `inotify_close_race.c` | yes | Regression test for a use-after-free in kernel/inotify.c's global instance registry. |
 | `inotify_events.c` | yes | The inotify event set file watchers actually key on. |
+| `inotify_fionread.c` | yes | FIONREAD on an inotify descriptor. |
 | `inotify_mask_queue.c` | yes | inotify flags that were accepted and ignored, and a queue with no limit. |
-| `inotify_mount_paths.c` | yes |  |
+| `inotify_mount_paths.c` | yes | inotify_mount_paths.c — regression lock for inotify event delivery on NON-ROOT mounts, and for bind() of a unix socket raising IN_CREATE. |
 | `iovec_abi_marshal.c` | yes | iovec ABI marshaling: readv/writev/preadv/pwritev/process_vm_readv all funnel through kernel/user.c's user_read_iovecs_abi() to decode the guest's... |
+| `ipc_namespace.c` | yes | ipc_namespace.c -- IPC namespaces (unshare and clone with CLONE_NEWIPC), and the rest of unshare(2)'s flag rules. |
+| `itimer_prof_rate.c` | yes | ITIMER_PROF and ITIMER_VIRTUAL fire once per interval of the process's CPU time -- at the rate asked for, not a fraction of it. |
 | `jit_bench.c` | yes | jit_bench.c -- the two compute workloads jit_fuse_ab.sh drives, in the two shapes the JIT's control-flow machinery is actually sensitive to. |
 | `jit_writer_starvation.c` | yes | A compute-bound thread must not stall its siblings for seconds. |
 | `kcmp.c` | yes | kcmp(2): compare whether two processes share a kernel resource. systemd uses KCMP_FILE heavily (fd-store dedup, serialization across re-exec); AOK... |
 | `keyctl_link.c` | yes | keyctl(KEYCTL_LINK, ...) must not ENOSYS: systemd-executor's setup_keyring() runs this for every service with the default KeyringMode=shared (link... |
+| `kmsg_records.c` | yes | /dev/kmsg hands back RECORDS, not the log's raw bytes. |
 | `kmsg_stream.c` | yes | The kernel log, as the two files every syslog daemon opens. |
 | `looper.c` | — |  |
 | `madvise_lazy_reservation.c` | yes | A large anonymous mapping is MAPPED even before anything touches it. |
 | `mem_conformance.c` | yes | mem_conformance.c — self-checking regression lock for the memory-management conformance fixes found by differential testing against real Linux... |
 | `mem_guard_small_growth.c` | yes | The jetsam headroom guard must never refuse a SMALL growth. |
+| `mem_vsz_rss_peaks.c` | yes | VmSize counts the whole address space, VmRSS what is actually in memory, and VmPeak and VmHWM are high-water marks of each. |
 | `memchurn.c` | — | memchurn — models musl mallocng's mmap/munmap churn in a multithreaded process, the workload that makes AOK's mem-quiesce barrier "horrific". |
 | `memfd_mmap.c` | yes | memfd_create + mmap: anonymous memory-backed files. |
+| `meminfo_scaling.c` | yes | Reading /proc/meminfo must not cost more because something big is mapped, and its Shmem, AnonPages and Mapped lines must come back to where they... |
+| `mlock_accounting.c` | yes | mlock(2) as the process can see it: VmLck in /proc/self/status, Locked and "lo" in smaps, and the region boundaries in maps -- and the lock... |
 | `mmap_conventions.c` | yes | Memory-mapping calls that answered without looking. |
+| `mmap_hole_scaling.c` | yes | Placing a mapping must not cost more because something big is, or was, mapped. |
+| `mmap_lazy_split_commit.c` | yes | A MAP_FIXED commit into the middle of a large PROT_NONE reservation must give the guest pages it can use. |
 | `mmap_shared_integrity.c` | yes | Three ways a MAP_SHARED mapping quietly stopped being shared. |
 | `mmap_truncate_sigbus.c` | yes | mmap-then-truncate-then-access => guest SIGBUS (not emulator crash). |
 | `mmap_validation.c` | yes | mmap/mremap/membarrier argument handling, and three things AOK got wrong in ways a caller could not detect. |
 | `modify.c` | — |  |
+| `mount_bind_busy.c` | yes | A bind mount is busy while anything is using it, and a lazily unmounted one keeps working for whoever is still inside it. |
+| `mount_bind_getpath.c` | yes | A path read back from a descriptor opened through a bind mount names the bind, not the directory the bind shows. |
+| `mount_bind_id.c` | yes | A bind mount is a mount of its own: statx, /proc/self/fdinfo and /proc/self/mountinfo must all name it by its own ID, and mountinfo must say which... |
 | `mount_bind_rbind.c` | yes | mount_bind_rbind.c — self-checking regression lock for non-directory bind mounts and recursive binds (MS_REC), the two bind behaviors... |
 | `mount_cross_dev.c` | yes | (st_dev, st_ino) must uniquely identify a file ACROSS mounts, not just within one. |
+| `mount_fake_long_source.c` | yes | mount_fake_long_source.c — a guest-reachable buffer overflow in fakefs_mount. |
 | `mount_flag_perms.c` | yes | What the per-mount flags MEAN, and lazy unmount. |
 | `mount_flags.c` | yes | mount_flags.c — self-checking regression lock for the mount(2) flag work. Asserts the behavior AOK now implements: |
+| `mount_lazy_detached.c` | yes | A lazily unmounted mount is still what a cwd or a dirfd inside it reaches. |
 | `mount_stdev.c` | yes | st_dev semantics for virtual filesystem mounts (tmpfs, proc, binds). |
 | `mountinfo_epollet.c` | yes | /proc/self/mountinfo must generate an epoll EPOLLIN\|EPOLLET edge on every mount-table change -- the exact contract libmount's kernel mount monitor... |
+| `mountinfo_tree.c` | yes | /proc/self/mountinfo's mount IDs and parent IDs must form a tree. |
 | `mounts_list_race.c` | yes | Reading the mount table while the mount table changes. |
+| `mqueue_ops.c` | yes | mqueue_ops.c -- POSIX message queues: mq_open, mq_unlink, mq_timedsend, mq_timedreceive, mq_notify and mq_getsetattr, and the mqueue filesystem. |
 | `name_to_handle_at.c` | yes | name_to_handle_at / open_by_handle_at must return a clean errno on amd64. |
 | `native_exec_cloexec.c` | yes | An exec closes every descriptor marked close-on-exec. iSH-AOK's native dispatch (kernel/native.h) did not: it runs the program in place of the... |
 | `native_ptrace_group_stop.c` | yes | A NATIVE program that group-stops must report the stop to its tracer, the same way a translated one does. |
 | `native_stdio_lock.c` | yes | native_stdio_lock.c — regression lock for the orphaned-stdio-lock wedge (second instance of the 1d8eaae0d class, found 2026-08-27 as "terminal... |
-| `netlink_audit.c` | yes |  |
-| `netlink_route.c` | yes |  |
+| `netlink_audit.c` | yes | netlink_audit.c — regression lock for minimal NETLINK_AUDIT support. |
+| `netlink_blocking_recv.c` | yes | netlink_blocking_recv.c -- a BLOCKING receive on an AF_NETLINK socket with nothing queued must wait, the way Linux's skb_recv_datagram does,... |
+| `netlink_route.c` | yes | netlink_route.c — self-checking regression lock for AF_NETLINK rtnetlink dumps issued through the bare read()/write() (and readv()/writev()) path. |
+| `notify_parent_cldstop.c` | yes | notify_parent_cldstop.c -- a child's stop and continue, and a tracee's ptrace stops, are announced with SIGCHLD, whatever signal the child was... |
 | `null_page_fault.c` | yes | A dereference of an unmapped low address must fault, and must NOT be quietly turned into a fresh zero page by the stack's MAP_GROWSDOWN region. |
+| `nx_enforce.c` | yes | Memory mapped without PROT_EXEC does not execute (NX). |
 | `oom_score_adj.c` | yes | /proc/<pid>/oom_score_adj was entirely unimplemented (missing from proc_pid_children) -- every systemd-executor-spawned service opened... |
 | `opath_symlink_pidfd_wait.c` | yes | O_PATH symlink fds + waitid(P_PIDFD): the systemd >= 260 boot layer after statx_mnt_id_timerfd. |
 | `open_tmpfile.c` | yes | O_TMPFILE: create an unnamed file on the filesystem holding a directory. |
 | `openat2_resolve.c` | yes | openat2's RESOLVE_* constraints. |
 | `orphan_pgrp_wait.c` | yes | Two things about who can be waited for, and who resumes a stopped job. |
+| `pdeath_signal.c` | yes | pdeath_signal.c -- PR_SET_PDEATHSIG: the signal a process asked for when its parent dies is sent when Linux sends it, and forgotten when Linux... |
 | `pidfd_clone.c` | yes | pidfd functional behavior (issue #423 Tier 1b): CLONE_PIDFD, pidfd_open, and pidfd_send_signal (kernel/pidfd.c, kernel/fork.c). Complements... |
 | `pidfd_epoll_deadlock.c` | yes | AB-BA deadlock between an epoll_wait scan over a pidfd and a task exiting. |
 | `pidfd_fdinfo_pid.c` | yes | /proc/<pid>/fdinfo/<fd> for a pidfd must include a "Pid:\t<pid>\n" line, matching real Linux's pidfd_show_fdinfo (fs/proc/fd.c). glibc's... |
@@ -144,53 +214,95 @@ does not say what it is for.
 | `pidfd_self_exit_deadlock.c` | yes | A task that opens a pidfd on ITSELF and never closes it before exiting must not deadlock. Two related bugs found booting Arch Linux ARM's aarch64... |
 | `pidfd_zombie.c` | yes | pidfd_open(2) on a task that has exited but not been reaped. |
 | `pixman_accel.c` | yes | Differential test for the AOK pixman accelerator (ISH_SYS_PIXOP syscall, kernel/ish_accel_pix.c): every FILL/COPY/OVER result the accelerator... |
+| `pixman_shim.c` | yes | Differential test for the pixman accelerator's guest shim (opt/AOK/tools/pixman/ish_pixman_shim.c), the layer pixman_accel.c does not reach: which... |
 | `poll_default_mask.c` | yes | What poll and select say about files that have no poll operation, and how many results they count. |
 | `poll_idle_cpu.c` | yes | A blocking poll() on a quiet socket must not burn CPU. |
 | `poll_rdhup_bounds.c` | yes | What poll and epoll report, and what they will accept being asked. |
+| `poll_shutwr_dgram.c` | yes | What a socket reports when the host says "hung up" and Linux does not. |
 | `posix_timer_exec.c` | yes | POSIX timers (timer_create) do not survive execve. |
 | `posix_timer_fork.c` | yes | posix_timer_fork.c — POSIX timers (timer_create) must NOT be inherited across fork(). AOK's tgroup_copy shallow-copied the parent's posix_timers[]... |
 | `prctl_capbset_drop.c` | yes | prctl(PR_CAPBSET_DROP) was entirely unimplemented -- fell through to the default EINVAL case. Real-world trigger: systemd's per-unit... |
 | `pread_stack_thread_race.c` | — | pread_stack_thread_race.c — stress repro attempt for a device crash: nvim's libuv worker thread (a CLONE_VM sibling of the main thread) SIGABRT'd... |
 | `privs_syscall_misc.c` | yes | Four unrelated findings that share one shape: answering with something the caller cannot act on. |
+| `proc_cmdline_environ.c` | yes | /proc/<pid>/cmdline and /proc/<pid>/environ: each string followed by exactly one NUL, and nothing after the last one. |
 | `proc_conformance.c` | yes | /proc facts that ordinary tools read. |
-| `proc_field_layout.c` | yes |  |
+| `proc_field_layout.c` | yes | proc_field_layout -- procfs files whose COLUMN POSITIONS carry the meaning. |
 | `proc_files.c` | yes | procfs files that tools read, and two fields inside /proc/<pid>/status. |
+| `proc_ish_arch.c` | yes | /proc/ish/arch: which architecture every process runs, readable by anyone. |
+| `proc_ish_host_state.c` | yes | proc_ish_host_state.c — the host state /proc/ish reports: the battery files, thermal_state, timezone, and the Workspace applets. |
+| `proc_loadavg_rises.c` | yes | proc_loadavg_rises -- a busy task lifts the load average, and the average does not depend on anyone reading it. |
+| `proc_net_socket_ids.c` | yes | /proc/net/{tcp,tcp6,udp,udp6,unix} and NETLINK_SOCK_DIAG (what ss reads) must describe a socket by the numbers the rest of the system uses for it. |
+| `proc_pid_exit_race.c` | yes | Readers of /proc/<pid>/* must not deadlock against the process exiting. |
 | `proc_pid_io.c` | yes | proc_pid_io.c — self-checking regression lock for per-task I/O accounting (/proc/<pid>/io) and the /proc/vmstat pgpgin/pgpgout totals that feed... |
-| `proc_stat_monotonic.c` | yes |  |
-| `process_conformance.c` | yes |  |
+| `proc_pid_stat_cputime.c` | yes | proc_pid_stat_cputime -- a process's CPU time is the time of all its threads, including threads that have already exited; a thread's is its own;... |
+| `proc_ptrace_access.c` | yes | What one process may learn about another: Linux's ptrace_may_access(). |
+| `proc_read_snapshot.c` | yes | proc_read_snapshot -- a procfs file read in pieces must come from ONE rendering, not from a fresh one per read(2). |
+| `proc_readdir_tgid.c` | yes | proc_readdir_tgid -- /proc lists processes, not threads. |
+| `proc_stat_monotonic.c` | yes | proc_stat_monotonic -- /proc/stat's CPU counters must never go backward, and must add up to the time that passed. |
+| `proc_uptime_clock.c` | yes | proc_uptime_clock -- /proc/uptime runs on a monotonic clock with sub-second resolution, and agrees with btime and sysinfo(2). |
+| `process_conformance.c` | yes | process_conformance.c — self-checking regression lock for process/thread lifecycle Linux-conformance fixes found by the differential harness... |
 | `process_lifecycle.c` | yes |  |
 | `procfd_reopen.c` | yes | /proc/<pid>/fd/N "magic link" opens must honor the CALLER's open flags, like Linux: opening /proc/self/fd/N is a fresh open of the target file... |
 | `pthread_sync.c` | yes |  |
 | `ptrace_attach.c` | yes | PTRACE_ATTACH -- what gdb uses to attach to an already-running process. |
+| `ptrace_detach_survives.c` | yes | A clean PTRACE_DETACH must leave the tracee running. |
+| `ptrace_eventmsg.c` | yes | ptrace_eventmsg: PTRACE_GETEVENTMSG must return the message of the stop the tracee is in -- above all, the new task's pid at a clone, fork or... |
 | `ptrace_exit_kill.c` | yes | ptrace_exit_kill: a traced task with PTRACE_O_TRACEEXIT that receives SIGKILL while stopped in its PTRACE_EVENT_EXIT report must die cleanly. The... |
 | `ptrace_group_stop.c` | yes | ptrace_group_stop: a SEIZE'd tracee that enters a job-control group-stop must report it to the tracer (as PTRACE_EVENT_STOP) and be resumable to... |
+| `ptrace_group_stop_report.c` | yes | How a job-control group-stop is REPORTED to a tracer, for both kinds of tracee. tests/manual/ptrace_group_stop.c already covers that the stop is... |
+| `ptrace_poke_text.c` | yes | A forced write -- what a debugger does to plant a breakpoint, through PTRACE_POKETEXT or /proc/<pid>/mem -- into a page the process may not write. |
+| `ptrace_seize_trap_stop.c` | yes | ptrace_seize_trap_stop: the stops a seized tracee owes its tracer that are not signals -- Linux's JOBCTL_TRAP_STOP, reported as PTRACE_EVENT_STOP. |
+| `ptrace_spinning_thread.c` | yes | ptrace_spinning_thread: attaching to a NON-LEADER thread that spins in user space with every signal blocked and makes no syscalls at all. |
+| `ptrace_startup_with_shell.c` | yes | ptrace_startup_with_shell: ptrace driven the way gdb starts a program. |
+| `ptrace_stop_races.c` | yes | ptrace_stop_races: which task sees a ptrace-stop, and whether it is the one stop Linux would report. |
+| `ptrace_stop_restart.c` | yes | ptrace_stop_restart: a blocking call carries on across a ptrace stop that runs no handler. |
+| `ptrace_strace_startup.c` | yes | ptrace_strace_startup: ptrace driven the way strace 6 drives it, one step at a time. Every expectation here was measured on Linux 6.12 (x86_64,... |
 | `ptrace_thread_follow.c` | yes | ptrace_thread_follow: a tracer using PTRACE_O_TRACECLONE + wait4(__WALL) must be able to follow a CLONE_THREAD worker of its tracee. This is the... |
+| `ptrace_tracee_exit.c` | yes | ptrace_tracee_exit: a traced task's exit goes to its tracer first. |
 | `ptrace_trap_siginfo.c` | yes | The siginfo a SIGTRAP carries, and it is architecture-dependent. |
 | `pty_line_discipline.c` | yes | Covers a set of related pty/tty line-discipline gaps (the first three from issue #423 Tier 3): 1. ECHOKE vs plain ECHOK on VKILL -- and the fact... |
-| `random_seed.c` | yes |  |
+| `random_seed.c` | yes | random_seed.c — self-checking regression lock for the /dev/{u,}random seeding ioctls and the /proc/sys/kernel/random pool files. |
+| `realfs_long_name.c` | yes | A host directory entry whose name is longer than 255 bytes must be listed whole, exactly once, and be usable by the name it was listed under. |
+| `reparent_to_sibling_thread.c` | yes | reparent_to_sibling_thread.c -- a child handed to another thread of the same process has not changed parents, so nobody is told that it did. |
+| `reparent_zombie_disposition.c` | yes | reparent_zombie_disposition.c -- a zombie handed to a new parent is announced to it as its own exit would have been: a new parent whose SIGCHLD is... |
 | `reparent_zombie_notify.c` | yes | A zombie handed to a new parent has to be announced to that new parent. |
 | `resource_limits_sched.c` | yes | Resource limits, scheduling policy, nice, and the half of getrusage that is not CPU time. |
 | `riscv64/jalr_retcache.c` | yes | jalr_retcache.c -- the riscv64 JIT's jalr target/return cache. |
 | `riscv64/ptrace_regset.c` | yes | ptrace_regset (riscv64-only): PTRACE_GETREGSET/SETREGSET(NT_PRSTATUS) must report and accept the real riscv64 register file. iSH-AOK's riscv64... |
+| `riscv64/riscv64_fp_env.c` | yes | riscv64_fp_env.c -- frm, fflags and the per-instruction rounding mode. |
 | `riscv64/riscv64_singlestep.c` | yes | riscv64_singlestep: PTRACE_SINGLESTEP must execute exactly one guest instruction and stop, not run the tracee to completion. |
-| `rusage_monotonic.c` | yes |  |
-| `scm_rights_pidfd.c` | yes |  |
+| `rlimit_enforce.c` | yes | Resource limits are enforced, not just stored. |
+| `rseq_register.c` | yes | rseq_register.c -- restartable sequences (rseq(2)). |
+| `rusage_monotonic.c` | yes | rusage_monotonic -- a process's own CPU total must never go backward. |
+| `scm_credentials_rules.c` | yes | scm_credentials_rules.c -- who may send SCM_CREDENTIALS on a unix socket, and which pid a unix socket credential reports. |
+| `scm_rights_pidfd.c` | yes | scm_rights_pidfd.c — regression lock for passing host-backed-less fds (pidfd, and adhoc fds generally) over unix sockets via SCM_RIGHTS, on... |
 | `scm_rights_stress.c` | yes | AF_UNIX SCM_RIGHTS fd-passing must never desync AOK's two-channel bookkeeping (a host "sentinel" fd carrying the message + an internal struct-scm... |
+| `seccomp_filter.c` | yes | seccomp: strict mode and BPF filters actually confine. |
 | `sendfile_vhangup.c` | yes | amd64 sendfile real copy (+ no SIGSYS on 64-bit count), and vhangup wired. |
+| `setns_join.c` | yes | setns_join.c -- setns(2) joins the namespace a /proc/<pid>/ns/* fd names, or those of a pidfd's process, with Linux's errors. |
+| `setsid_thread_group.c` | yes | A group signal must reach a process whose session was created by a NON-LEADER THREAD. |
 | `sgid_inherit.c` | yes | A setgid directory hands its group to everything created inside it. |
+| `shm_rmid_attach.c` | yes | SysV shm: a segment marked IPC_RMID stays attachable for as long as it exists. |
 | `sigchld_disposition.c` | yes | What a parent's SIGCHLD disposition changes about its children. |
 | `signal.c` | — |  |
 | `signal_altstack.c` | yes |  |
 | `signal_child_burst.c` | yes | Burst of near-simultaneous child exits must never strand a shell's sigsuspend()/wait4() reaper loop -- the standard "wait" builtin / job control... |
 | `signal_conventions.c` | yes | Signal and wait behaviours that reported the wrong thing, or nothing. |
 | `signal_core.c` | yes |  |
+| `signal_dequeue_order.c` | yes | signal_dequeue_order.c -- which pending signal is taken first, and where a signal sent to a process waits. |
 | `signal_forced_trap.c` | yes | signal_forced_trap: synchronous fault signals that arrive blocked (or ignored) must force-default and KILL, exactly like Linux's... |
+| `signal_group_blocked_eintr.c` | yes | A process-directed signal must not interrupt a thread that blocks it. |
+| `signal_handler_mask.c` | yes | signal_handler_mask.c -- a handler's mask is in force for the rest of the delivery pass that started it. |
+| `signal_ignored_restart.c` | yes | signal_ignored_restart.c -- a signal whose delivery does nothing (SIGCHLD left at SIG_DFL) never fails another thread's restartable syscall with... |
 | `signal_poll.c` | yes |  |
 | `signal_process_target.c` | yes | Where a signal aimed at a PROCESS actually lands, and what a shared pending queue must preserve. |
+| `signal_process_wake_one.c` | yes | signal_process_wake_one.c -- a signal sent to a PROCESS interrupts the one thread that takes it, and no other. |
 | `signal_realtime.c` | yes |  |
 | `signal_restart.c` | yes |  |
 | `signal_restart_coverage.c` | yes | SA_RESTART across the whole restartable surface, both directions. |
+| `signal_restart_record.c` | yes | signal_restart_record.c -- whether a syscall cut short by a signal restarts is decided by that signal, never by an earlier syscall's interruption;... |
 | `signal_routing_perms.c` | yes | Where a queued signal goes, who is allowed to send one, and what signalfd says about it. |
+| `signal_sender_tgid.c` | yes | signal_sender_tgid.c -- a signal names the PROCESS that sent it, whichever of its threads did the sending; and rt_sigqueueinfo sends what its... |
 | `signal_stop_cont.c` | yes | SIGSTOP/SIGCONT mutual-cancellation (Linux prepare_signal semantics). |
 | `signal_stop_restart.c` | yes | A job-control stop is not an interruption. |
 | `signalfd_epoll_deadlock.c` | yes | signalfd_epoll_deadlock: an exiting child delivering SIGCHLD to its parent (send_signal_with_sighand -> deliver_signal_unlocked_locked ->... |
@@ -198,33 +310,46 @@ does not say what it is for.
 | `sigwait_kill.c` | yes | kill() is PROCESS-directed: it must be deliverable to any thread in the group that is not blocking the signal -- including one parked in sigwait()... |
 | `siocoutq.c` | yes | Linux SIOCOUTQ (== TIOCOUTQ, 0x5411) on a socket reports the number of bytes still queued in the send buffer. AOK's sock_ioctl had no handler for... |
 | `sock_bind_refuse.c` | yes | A TCP port that is bound but not yet listening must REFUSE connections. |
-| `sock_conformance.c` | yes |  |
+| `sock_conformance.c` | yes | sock_conformance.c — self-checking regression lock for the socket/IPC Linux-conformance fixes found by the differential harness... |
 | `sock_conformance_opts.c` | yes | Socket option and socket() argument conformance: ten things AOK reported differently from Linux, and one that could not be read back at all. |
-| `sock_conn_error.c` | yes |  |
+| `sock_conn_error.c` | yes | sock_conn_error -- a dead connection reports itself ONCE, then stops. |
 | `sock_getfd_errno.c` | yes | fs/sock.c's sock_getfd() collapsed two distinct failure modes into one: a socket fd that doesn't exist, and an fd that exists and is open but... |
+| `sock_ifconf_sizing.c` | yes | SIOCGIFCONF sizing, the way OpenJDK calls it (#572). |
 | `sock_nosignal.c` | yes | MSG_NOSIGNAL: send()/sendmsg() on a broken connection must return -1/EPIPE WITHOUT raising SIGPIPE in the caller, while the same call without the... |
 | `sock_options.c` | yes | Socket option values as Linux reports them. |
 | `sock_optlen.c` | yes | getsockopt's length contract, and the errno for an option that does not exist. |
+| `sock_timeo_eintr.c` | yes | sock_timeo_eintr.c -- a socket wait with SO_RCVTIMEO or SO_SNDTIMEO armed is never restarted, not even for an SA_RESTART handler, and that holds... |
 | `socket_kill.c` | yes | A task blocked in recv(2) or send(2) must die promptly on a fatal signal. Under AOK it could survive kill -9 forever, the same defect... |
 | `sockopt_conventions.c` | yes | Socket options whose ANSWER is the contract, not just their acceptance. |
+| `sockrestart_listeners.c` | — | Guest half of sockrestart_listeners.sh: listeners across the app's suspend/resume socket cycle (fs/sockrestart.c). |
 | `splice_vmsplice.c` | yes | splice(2) and vmsplice(2), and what tee(2) says when it cannot be done. |
 | `stack_guard_gap.c` | yes | stack_guard_gap.c — regression for the stack growing into its neighbours (issue #521). |
+| `stack_rlimit_pushdown.c` | yes | stack_rlimit_pushdown.c -- RLIMIT_STACK lowered by someone else applies now. |
 | `stat.c` | — |  |
 | `statx_mnt_id_timerfd.c` | yes | systemd >= 260 boot prerequisites: statx STATX_MNT_ID and timerfd TFD_TIMER_CANCEL_ON_SET. |
 | `subreaper_not_inherited.c` | yes | PR_SET_CHILD_SUBREAPER is per-process and does not survive fork. |
 | `swap_roundtrip.c` | yes | A page that goes out to swap must come back byte-for-byte. |
+| `syscall_page_past_eof.c` | yes | A syscall that touches a file page past EOF fails the syscall; it does not take the host down. |
 | `syscall_wiring.c` | yes | Syscalls that were implemented but not reachable, because the per-ABI table entry was missing. The implementation existing is not the same as the... |
 | `sysctl_write_rules.c` | yes | What /proc/sys accepts, what it refuses, and what it admits to not having. |
 | `sysfs_cpu_topology.c` | yes | /sys/devices/system/cpu: per-CPU topology and cache attributes. |
 | `sysfs_dev_ns.c` | yes | sysfs_dev_ns.c — the sysfs and nsfs surfaces three util-linux tools need. |
+| `sysfs_power_supply.c` | yes | sysfs_power_supply.c — /sys/class/power_supply, the directory waybar's battery module has to be able to watch. |
+| `syslog_read_blocks.c` | yes | syslog(2) SYSLOG_ACTION_READ waits for something unread instead of answering 0. |
+| `syslog_read_clear.c` | yes | syslog(2) SYSLOG_ACTION_READ_CLEAR returns the byte count, not 0. |
 | `sysv_ipc.c` | yes | SysV message queues + semaphores (fakeroot's IPC substrate). |
-| `taskstats_genl.c` | yes |  |
+| `taskstats_genl.c` | yes | taskstats_genl.c — self-checking regression lock for generic netlink (NETLINK_GENERIC) and the TASKSTATS family, iotop's only per-pid data source... |
 | `thread.c` | — |  |
 | `time_clocks_ticks.c` | yes | Six things the time syscalls got wrong, several of which silently produced a plausible-looking wrong answer rather than an error. |
 | `time_conformance.c` | yes | time_conformance.c — self-checking regression lock for the time/clock/timer conformance fixes found by differential testing against real Linux... |
 | `timeout_and_cpu_timer.c` | yes | Two calls that were given a deadline and ignored it. |
 | `timer_conventions.c` | yes | Sleeps and timers: what they write, what they count, what they refuse. |
+| `timer_lateness.c` | yes | How late timers and sleeps wake, against how long they were. |
+| `timer_missed_periods.c` | yes | timer_missed_periods.c -- a periodic timer that falls behind counts every period it missed, and stays on its grid. |
+| `timer_rearm_wake.c` | yes | timer_rearm_wake.c -- a timer re-armed from a long deadline to a short one must fire at the short one, however soon after the first arming the... |
+| `timer_thread_cpu_early.c` | yes | timer_thread_cpu_early.c -- a CLOCK_THREAD_CPUTIME_ID timer must not fire before its thread has used the CPU time it was armed for. |
 | `timerfd_settime_readiness.c` | yes | timerfd_settime must reset the expiration counter -- and therefore poll/ epoll readiness -- on EVERY call, including a disarm (it_value = {0,0}).... |
+| `tmpfs_accmode.c` | yes | A tmpfs file reads and writes only as its descriptor was opened to: write, pwrite and writev through an O_RDONLY descriptor are EBADF, and so are... |
 | `tmpfs_append.c` | yes | O_APPEND on tmpfs mounts (/tmp, /run, /dev/shm) -- and the same asserts on a non-tmpfs filesystem and on a memfd as controls. |
 | `tmpfs_exec.c` | yes | execve of a binary that lives on tmpfs, plus positional I/O on tmpfs. |
 | `tmpfs_mmap.c` | yes | tmpfs mmap: file-backed mappings on tmpfs mounts (/tmp, /run, /dev/shm). |
@@ -237,34 +362,63 @@ does not say what it is for.
 | `tty_job_control.c` | yes | Job control and XON/XOFF flow control: four things AOK's terminals did not do. |
 | `tty_line_discipline.c` | yes | Line-discipline editing and the non-canonical read timer. |
 | `uid_drop_regress.c` | — |  |
+| `unix_abstract_release.c` | yes | An abstract AF_UNIX name belongs to the socket bound to it, and is free again the moment that socket is closed. |
+| `unix_bind_dir_perms.c` | yes | bind() of a filesystem AF_UNIX socket creates a name, and must be allowed to. |
 | `unix_dgram_cred.c` | yes | Per-datagram SCM_CREDENTIALS on AF_UNIX SOCK_DGRAM sockets. Linux attaches the SENDER's credentials to every unix datagram; a receiver with... |
+| `unix_path_name_release.c` | yes | A unix socket bound to a PATH holds its filesystem node while it is bound, and lets go of it when it closes. |
+| `unix_scm_before_accept.c` | yes | Linux lets an AF_UNIX SOCK_STREAM client pass file descriptors with SCM_RIGHTS as soon as connect(2) returns. The transport connection exists at... |
+| `unix_seqpacket_msgs.c` | yes | unix_seqpacket_msgs: AF_UNIX SOCK_SEQPACKET delivers messages, not bytes. |
+| `unix_sock_host_isolation.c` | yes | Guest unix sockets, as the host backs them. |
 | `utimensat_fd.c` | yes | utimensat(fd, NULL, ...) -- the futimens() form -- must operate on the open fd directly with NO path resolution, like Linux's do_utimes_fd(). |
 | `utimensat_omit.c` | yes | utimensat's two tv_nsec sentinels, and the validation around them. |
 | `uts_namespace.c` | yes | uts_namespace.c — regression for UTS namespace support (issue #527). |
+| `vdso_clock.c` | yes | The vDSO's clock functions, called directly and through the C library, against the system calls they stand in for. |
 | `vfork_exec_stale_jit.c` | yes | vfork_exec_stale_jit.c -- a task that execs while ANOTHER task still holds the address space it is leaving must not keep executing the old... |
 | `vfork_exec_stale_jit_peer.c` | yes | vfork_exec_stale_jit_peer.c -- the program vfork_exec_stale_jit.c execs. |
 | `vfork_fatal_signal.c` | yes | vfork_fatal_signal.c — the vfork(2) parent wait: what wakes it, what does not, and the lifetime of the handoff struct it waits on. |
+| `wait_child_order.c` | yes | wait_child_order.c -- wait(-1) finds a process's children oldest first, and children handed to a new parent join the end of its list, in their order. |
+| `wait_clone_child.c` | yes | wait_clone_child.c -- which children a wait is for: a child that announces its exit with anything but SIGCHLD is a "clone child", and only... |
+| `wake_mask_isolation.c` | yes | wake_mask_isolation.c -- one thread's interrupted wait must not change what any OTHER thread can be woken by. |
 | `wake_poke_lost.c` | yes | A blocking wait must end even when every wake poke to this task is lost. |
 | `wayland_scm_shm.c` | yes | Wayland substrate: SCM_RIGHTS fd-passing shape + memfd seals, the two emulator bugs found bringing up a real Wayland compositor (wlroots/cage) +... |
+| `x86/amd64_gs_base.c` | yes | amd64 GS segment base: the 65 prefix, ARCH_SET_GS and ARCH_GET_GS. |
 | `x86/amd64_incdec.c` | yes | INC (FF /0) and DEC (FF /1) on a REGISTER operand -- the amd64 form that in long mode is the ONLY way to spell `inc`/`dec` of a register, because... |
 | `x86/amd64_regress.c` | yes |  |
+| `x86/amd64_segment_regs.c` | yes | amd64 segment registers: MOV r/m, Sreg (8C), MOV Sreg, r/m (8E), and PUSH / POP FS and GS (0F A0, A1, A8, A9). |
 | `x86/amd64_singlestep.c` | yes | amd64 PTRACE_SINGLESTEP: one guest instruction per stop, on the JIT. |
 | `x86/atomic_cmpxchg32.c` | yes |  |
 | `x86/atomic_cmpxchg8b.c` | yes |  |
 | `x86/atomic_lock_contended.c` | yes | Do LOCK-prefixed instructions actually interlock? |
 | `x86/atomic_logic32.c` | yes |  |
+| `x86/atomic_neg_not.c` | yes | LOCK NOT and LOCK NEG: value and flags, at every width. |
 | `x86/atomic_xadd32.c` | yes |  |
 | `x86/atomics32.c` | yes |  |
-| `x86/avx32_smoke.c` | yes |  |
-| `x86/avx_regress.c` | yes |  |
+| `x86/avx32_smoke.c` | yes | avx32_smoke -- AVX/VEX coverage for the *i386* guest (GH #525). |
+| `x86/avx_regress.c` | yes | avx_regress -- AVX/AVX2 (VEX-encoded) instruction coverage for the amd64 guest (GH #525). |
 | `x86/bcd_adjust.c` | yes | The packed/unpacked BCD adjust instructions: aaa (0x37), aas (0x3f), daa (0x27), das (0x2f), aam (0xd4 ib) and aad (0xd5 ib). |
 | `x86/cow_atomic_fault.c` | yes | cow_atomic_fault (i386/amd64): a LOCK-prefixed atomic on a page that is P_COW at fault time but resolved (COW-broken by a sibling thread) before... |
+| `x86/cpuid_signature.c` | yes | cpuid_signature -- CPUID leaf 1's signature and CLFLUSH line size are ones real software accepts, and /proc/cpuinfo says the same thing CPUID does. |
 | `x86/cpuid_xsave.c` | yes | cpuid_xsave -- every CPUID feature bit AOK advertises must name an instruction the guest can actually execute. |
 | `x86/fpu_state_span.c` | yes | fpu_state_span -- the x87/SSE state-area instructions must validate EVERY byte of their memory operand, not just the first four. |
+| `x86/gpf_siginfo.c` | yes | gpf_siginfo -- what an x86 task is told about a general protection fault (#GP), and about the traps beside it. |
+| `x86/i386_push16.c` | yes | i386_push16 -- the 0x66 operand-size prefix makes the stack instructions move two bytes: PUSH and POP of a register, an immediate or memory,... |
+| `x86/i386_segment_regs.c` | yes | i386 segment registers: MOV r/m, Sreg (8C), MOV Sreg, r/m (8E), PUSH and POP of ES, CS, SS, DS (06 07 0E 16 17 1E 1F) and of FS and GS (0F A0 A1... |
+| `x86/null_deref_siginfo.c` | yes | null_deref_siginfo -- a load or store at (or just above) address 0 is SIGSEGV with si_code SEGV_MAPERR and si_addr the address touched, whatever... |
+| `x86/popf_ac_id.c` | yes | popf_ac_id.c -- what a user-mode PUSHF/POPF may change, in both operand sizes, on both x86 guests. |
 | `x86/port_io_gpf.c` | yes | IN/OUT: the port-I/O opcodes e4/e5 (in al/eax, imm8), e6/e7 (out imm8, al/eax), ec/ed (in al/eax, dx) and ee/ef (out dx, al/eax). |
 | `x86/rep_interruptible.c` | yes | rep_interruptible.c -- a long REP string op must be interruptible, and must still be correct after being interrupted. |
+| `x86/smc_patch_race.c` | yes | smc_patch_race -- code patched by another thread, the way HotSpot patches it, never runs as a mixture of old and new instruction bytes. |
+| `x86/x86_fp_env.c` | yes | x86_fp_env.c -- the x87 control and status words and MXCSR, at the instruction level, where fp_env.c only sees what libc makes of them. |
 | `x86/x86_loop.c` | yes | LOOP (0xe2), LOOPE/LOOPZ (0xe1) and LOOPNE/LOOPNZ (0xe0). |
+| `x86/x86_prefetch.c` | yes | x86_prefetch -- the 0F 0D prefetch group runs as a no-op on both x86 guests, at any address, and its register form is #UD. |
+| `x86/x86_smc.c` | yes | x86_smc.c -- x86 code rewritten by an ordinary store runs as rewritten. |
+| `x86/x86_smc_alias.c` | yes | x86_smc_alias.c -- x86 code rewritten through a SECOND mapping of the same memory runs as rewritten. |
+| `x86/x86_ud_siginfo.c` | yes | x86_ud_siginfo -- an x86 invalid-opcode fault (#UD) is SIGILL with si_code ILL_ILLOPN and si_addr the address of the instruction. |
 | `x86/x87_fpu.c` | yes | x87 semantics that emulation got wrong in ways ordinary arithmetic tests miss: control-word precision, the status-word C2 bit, the memory form of... |
+| `xattr_ops.c` | yes | xattr_ops.c -- the extended-attribute calls: setxattr, getxattr, listxattr and removexattr, with their l* and f* forms. |
+| `zram_idle_reclaim.c` | yes | Compressed memory must fill its pool WITHOUT waiting for memory pressure. |
+| `zswap_fork_cow.c` | yes | A compressed frame shared by a fork must stay private to each side. |
+| `zswap_roundtrip.c` | yes | A frame that goes out through the COMPRESSED tier must come back byte-for-byte, and the test must fail if it never went through it. |
 
 ---
 

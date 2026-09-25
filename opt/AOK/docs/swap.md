@@ -45,6 +45,40 @@ From the command-line build there is no Settings app, so use the environment
 variable instead — see `ISH_GUEST_SWAP_MB` in
 [tuning-knobs.md](tuning-knobs.md).
 
+## External (USB) swap — experimental
+
+**Off by default, and untested on a real drive as of 556.** Instead of the
+area living in the app's own container, it can live in a `.aok-swap` file on
+an attached USB drive, so paging never wears the device's own flash and the
+area can be far bigger than internal storage would allow.
+
+Turn it on in **Settings → iSH-AOK → External USB Swap → Swap to External
+Drive**, then return to iSH-AOK: it asks you to pick a folder on the drive,
+and the area is used there from the next launch. If the drive is not
+attached at launch, **swap stays off for that launch** rather than silently
+falling back to the container. To use a different folder, switch it off,
+return to the app, then switch it on again — there is no way to change the
+folder while it is on.
+
+Worth knowing before you rely on it:
+
+- **The file is unencrypted guest memory**, passwords and keys included. It
+  is emptied when swap stops, but a kill leaves its contents on the drive
+  until the next launch empties it.
+- **Quit the app before pulling the drive.** Removing it while swap is active
+  fails the pages that were on it, and any guest process whose memory that
+  was crashes; the guest itself keeps running.
+- **exFAT — most USB sticks — cannot guarantee preallocated space.** If the
+  drive fills up while swap is active, the affected process crashes rather
+  than the write silently failing.
+- `swapoff` then `swapon` from inside the guest (where guest control of swap
+  is allowed at all) re-enables it in the app's own container, not back on
+  the drive, because the drive's file handle was already closed.
+
+The command-line build has an equivalent for testing: `ISH_GUEST_SWAP_FILE=path`
+alongside `ISH_GUEST_SWAP_MB` puts the area at that path instead of a
+container temp file.
+
 ## Compressed memory
 
 Compression is the other half of this, and it is worth turning on *before* swap

@@ -13,12 +13,16 @@ You reach them through `/AOK/native`:
 
 ```sh
 ls /AOK/native
-# bash  bmm  bmt  dash  ktop  motepad  rust-probe  sh  smallclue  zsh  zsh-multio
+# bmm  bmt  dash  ktop  motepad  passwd  rust-probe  sh  smallclue  su  sudo  zsh  zsh-multio
 ```
 
 What is actually there depends on how the build was configured, so read the
-directory rather than this page — `hx` and its `libs` appear only in a build
-with helix enabled, which is not the default.
+directory rather than this page. The shipped app build enables `hx` (helix,
+`AOK_NATIVE_HELIX=YES` in `app/iSH.xcconfig`) but not `bash`
+(`AOK_NATIVE_BASH=NO`, as of 556 — see "Native bash and licensing" in the
+project `README.md`); a plain CLI/meson build defaults both `native_helix` and
+`native_bash` to `disabled` unless you pass `-Dnative_helix=enabled` /
+`-Dnative_bash=enabled`.
 
 Everything else — `ssh`, `wc`, `vi` — is a symlink to
 `/AOK/native/smallclue`, which picks its applet from the name it was invoked
@@ -121,6 +125,7 @@ diagnostic rather than a program.
 | `/AOK/native/hx` | [helix](https://helix-editor.com), a modal editor with syntax highlighting and multiple selections. MPL-2.0, so like bash it has a build switch; registered as `hx`, which is what helix calls itself. Its grammars and themes are served from `/AOK/native/libs` |
 | `/AOK/native/rust-probe` | a probe that exercises the Rust-on-the-shim path, not a tool you have a use for. Present because the Rust support it checks is what `hx` is built on |
 | `/AOK/native/bmm`, `/AOK/native/bmt` | the CPU and thread microbenchmarks, so the same workload can be timed with and without emulation — see [benchmarks.md](benchmarks.md) |
+| `/AOK/native/su`, `/AOK/native/sudo`, `/AOK/native/passwd` | SmallCLUE's su, sudo and passwd, each shipped as its own **setuid-root** program rather than an applet of the multicall binary — see below |
 
 SmallCLUE's applets are *smaller* implementations, not drop-in replacements for
 the distro's. They cover the common cases and diverge on individual flags — the
@@ -128,6 +133,29 @@ kind of difference no audit of the sources finds, because the command is present
 and works, just not with that one option. That is worth knowing before you put
 them ahead of your distro's tools on `PATH`; see
 [native-setup.md](native-setup.md), which is also where the escape hatches are.
+
+## `su`, `sudo` and `passwd`: the only setuid-root native programs
+
+`ls -l /AOK/native/sudo` shows `-rwsr-xr-x`; every other native program is
+`-r-xr-xr-x`. That bit means a real gain of the host euid to root
+(`fs/aok.c`), which is exactly why `/AOK/native/smallclue` itself can never
+carry it: SmallCLUE is a multicall binary that picks its applet from `argv[0]`,
+so a setuid copy of it would hand `smallclue sh` a root shell to anyone who
+asked. `su`, `sudo` and `passwd` are three separate programs that supply their
+own `argv[0]` at the call site and never take it from the caller
+(`kernel/native.c`), so `/AOK/native/sudo` can only ever be `sudo`.
+
+They authenticate against the **booted root's own** `/etc/shadow`, read
+through the same shim every other guest-facing lookup uses, and check the
+password with a real `$5$`/`$6$` SHA-crypt implementation
+(`kernel/sha_crypt.c`) built on CommonCrypto, checked against Drepper's
+published test vectors — Darwin's own `crypt()` is DES-only and cannot read a
+modern shadow line at all, so this had to be built rather than borrowed. A
+locked account (`*` or `!...`) is not a hash any password produces, so it
+never authenticates by accident. `sudo` still consults `/etc/sudoers` the same
+way the applet always did; the difference is that it can now actually reach
+root when a rule allows it. `$1$`, `$2b$` and Debian 12's default `$y$`
+(yescrypt) are not implemented and are refused rather than guessed at.
 
 ## Where this is not the fast path
 

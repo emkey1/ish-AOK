@@ -31,6 +31,23 @@ That writes the session and stops the machine, so the next launch resumes it.
 There is also `--save FILE`, which takes a copy and lets the session carry on,
 and `--status`, which reports what the last attempt did.
 
+## Automatic saves, and deleting one you do not want
+
+iOS backgrounding the app triggers an **automatic** save, and that one always
+writes to the same slot, replacing whatever automatic save was there before
+— so being killed over and over while you are not looking never fills the
+start-screen picker with sessions you never asked to keep. A save you asked
+for, with **Save Session**, the ⤓ button, or `suspend.sh`, takes its own
+numbered slot instead (there are five), and resuming from one writes back to
+that same slot rather than to a new one. The picker's row for an automatic
+save says so, since "which of these did I actually choose to keep" is the
+question you are answering when you delete some.
+
+**Delete a Saved Session…**, on the same start screen, lists every saved
+session and removes the one you pick, without resuming it — previously the
+only way to free a slot was to resume a session you did not want ("Resume and
+Delete") or one this build could no longer load at all.
+
 The control underneath is a `/proc` file, like every other AOK knob:
 
     echo suspend             > /proc/ish/checkpoint
@@ -152,6 +169,15 @@ destroys it during the suspension regardless.
 An image from a **different build** is refused on the way back in. The register
 file travels as bytes, and reinterpreting one from another build would be worse
 than declining it — so after an update, the first launch boots normally.
+
+**A session saved on build 555 will not restore on 556.** The image carries a
+format version number, which went from 5 in 555 to 22 in 556 as the image
+learned to carry seccomp filters, capabilities, timers and a memfd's
+identity; a save whose version does not match this build's is refused the
+same as one from a different build entirely. This happens most releases that
+change what a checkpoint needs to carry, not only this one — check
+`/proc/ish/checkpoint` after an update if a saved session you expected to see
+does not resume.
 
 ## What it is not
 

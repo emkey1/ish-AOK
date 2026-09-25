@@ -15,7 +15,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
   - 제품명 `iSH-AOK`
   - 번들 루트 `app.ish.iSH-AOK`
 - **네 가지 게스트 아키텍처**, 모두 JIT 기반: `i386`, `amd64`(x86_64), `arm64`(aarch64), `riscv64`.
-- **네이티브 프로그램**: bash, zsh, 그리고 OpenSSH(`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`)와 Nextvi 편집기를 품고 있는 SmallCLUE 의 busybox 스타일 도구 모음이 호스트 코드로 앱에 컴파일되어 들어가며, 게스트의 `execve` 에서 `/AOK/native/<이름>` 을 통해 디스패치됩니다. 이들은 게스트 바이너리가 아니라 게스트 태스크 스레드 위에서 도는 호스트 함수이므로, 명령어 단위로 변환되지 않고 전속력으로 실행됩니다.
+- **네이티브 프로그램**: zsh, 그리고 OpenSSH(`ssh`, `scp`, `sftp`, `ssh-keygen`, `ssh-copy-id`)와 Nextvi 편집기를 품고 있는 SmallCLUE 의 busybox 스타일 도구 모음이 호스트 코드로 앱에 컴파일되어 들어가며, 게스트의 `execve` 에서 `/AOK/native/<이름>` 을 통해 디스패치됩니다. 이들은 게스트 바이너리가 아니라 게스트 태스크 스레드 위에서 도는 호스트 함수이므로, 명령어 단위로 변환되지 않고 전속력으로 실행됩니다. bash 도 동일한 네이티브 구현이 있지만, 빌드 556 은 이를 포함하지 않습니다 — [네이티브 bash와 라이선스](#네이티브-bash와-라이선스) 참고.
 - `/AOK`, 읽기 전용 인앱 파일시스템(`/AOK/docs`, `/AOK/tools`, `/AOK/tests`, `/AOK/native`). `fs/aok-*.manifest` 와 `tools/gen-aokfs.py` 를 통해 빌드 시점에 `opt/AOK/` 에서 만들어 넣습니다.
 - 앱 빌드에 번들된 루트 파일시스템(Alpine 3.23.3과 Devuan 6, `aarch64` 전용), 그리고 `i386`, `x86_64`, `riscv64` 용 다운로드 이미지.
 - iOS를 통해 게스트 파일을 노출하는 File Provider 지원.
@@ -239,21 +239,26 @@ ninja -C build
 > [Native bash and licensing](README.md#native-bash-and-licensing) 이 정본입니다.
 > 아래는 이해를 돕기 위한 번역입니다.
 
-> **네이티브 bash 는 빌드 556 에서 제거됩니다.** bash 는 GPLv3 이고 App Store
-> 제출물에 포함될 수 없으므로, 남는 셸은 zsh 입니다 — 라이선스가 허용적이고,
-> 네이티브 구현도 둘 중 더 완성도가 높습니다. 네이티브 bash 에는 체크포인트
-> 지원이 추가되지 않습니다: 자기 상태를 기록할 수 없으므로, 서스펜드는 bash 를
-> 원래 있던 자리로 되돌리는 대신 명령줄에서 다시 실행하고 그렇게 했다고
-> 보고합니다. 세션을 그대로 담은 채 돌아오는 네이티브 프로그램은 zsh
-> 하나뿐입니다. `/AOK/native/bash` 를
+> **네이티브 bash 는 빌드 556 기준으로 포함되지 않습니다.** bash 는 GPLv3 이고
+> App Store 제출물에 포함될 수 없으므로, 출시되는 셸은 zsh 입니다 — 라이선스가
+> 허용적이고, 네이티브 구현도 둘 중 더 완성도가 높습니다. 포트 자체는 손대지
+> 않은 채 트리에 남아 있습니다: `-Dnative_bash=enabled`(Xcode 빌드는
+> `AOK_NATIVE_BASH=YES`)를 주면 이미 `deps/bash` 를 받아 둔 체크아웃을
+> 포함해 원하는 사람은 여전히 컴파일해 넣을 수 있습니다. 네이티브 bash 는
+> 끝내 체크포인트 지원을 갖추지 못했습니다: 자기 상태를 기록할 수 없으므로,
+> 서스펜드는 bash 를 원래 있던 자리로 되돌리는 대신 명령줄에서 다시 실행하고
+> 그렇게 했다고 보고합니다. 세션을 그대로 담은 채 돌아오는 네이티브 프로그램은
+> zsh 하나뿐입니다. `/AOK/native/bash` 를
 > 가리키는 로그인 셸은 `native-links.sh` 가 게스트 자체의 bash 로 자동
-> 변환하므로, 업그레이드 때문에 로그인하지 못하게 되는 사람은 없습니다.
+> 변환하므로, 이미 그것을 쓰던 사람이 이번 변경으로 로그인하지 못하게 되는
+> 일은 없습니다.
 > [docs/shell_transition_plan.md](docs/shell_transition_plan.md) 을 참고하십시오.
 
-bash 는 네이티브 프로그램으로 앱에 컴파일되어 들어갑니다. 이득은 fork 가 아니라
-해석(interpretation)에 있습니다. 산술 루프는 에뮬레이트되는 셸보다 약 16배 빠르고,
-서브셸과 명령 치환은 거의 같은 수준입니다. 네이티브 프로그램은 `fork` 를 할 수
-없어 자기 자신을 다시 띄우기 때문입니다. 수치와 측정 방법은
+bash 는 네이티브 프로그램으로 앱에 컴파일해 넣을 수 있지만(`-Dnative_bash=enabled`),
+빌드 556 은 기본적으로 이를 포함하지 않습니다. 컴파일해 넣었을 때의 이득은 fork 가
+아니라 해석(interpretation)에 있습니다. 산술 루프는 에뮬레이트되는 셸보다 약 16배
+빠르고, 서브셸과 명령 치환은 거의 같은 수준입니다. 네이티브 프로그램은 `fork` 를 할
+수 없어 자기 자신을 다시 띄우기 때문입니다. 수치와 측정 방법은
 [docs/bash_native_plan.md](docs/bash_native_plan.md) 에 있습니다. 동시에 이는
 바이너리에 GPLv3 코드를 넣는 일이기도 합니다. bash 자체, 함께 들어가는 readline,
 그리고 GNU termcap 입니다.
@@ -272,8 +277,8 @@ Go](https://www.theregister.com/2010/05/27/gnu_go_fsf_apple_itunes/) 와 2011년
 그래서 빌드 옵션입니다:
 
 ```bash
-meson setup build .                          # auto: deps/bash 가 있으면 켜짐
-meson setup build . -Dnative_bash=disabled   # 바이너리에 서드파티 GPL 없음
+meson setup build .                          # 기본값이 disabled -- 바이너리에 서드파티 GPL 없음
+meson setup build . -Dnative_bash=disabled   # 위와 동일, 명시적으로 지정
 meson setup build . -Dnative_bash=enabled    # deps/bash 가 없으면 실패
 ```
 

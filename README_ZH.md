@@ -14,7 +14,7 @@ Testflight: https://testflight.apple.com/join/X1flyiqE
   - 产品名 `iSH-AOK`
   - Bundle root `app.ish.iSH-AOK`
 - **四种客户机架构**，全部基于 JIT：`i386`、`amd64`（x86_64）、`arm64`（aarch64）和 `riscv64`。
-- **原生程序**：bash、zsh，以及携带 OpenSSH（`ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id`）和 Nextvi 编辑器的 SmallCLUE busybox 风格工具箱，都作为宿主代码编译进应用，并由客户机的 `execve` 经 `/AOK/native/<名称>` 分发。它们是运行在客户机任务线程上的宿主函数，而不是客户机二进制，因此以全速运行，无需逐条指令翻译。
+- **原生程序**：zsh，以及携带 OpenSSH（`ssh`、`scp`、`sftp`、`ssh-keygen`、`ssh-copy-id`）和 Nextvi 编辑器的 SmallCLUE busybox 风格工具箱，都作为宿主代码编译进应用，并由客户机的 `execve` 经 `/AOK/native/<名称>` 分发。它们是运行在客户机任务线程上的宿主函数，而不是客户机二进制，因此以全速运行，无需逐条指令翻译。bash 拥有同样的原生实现，但构建 556 默认不包含它——参见[原生 bash 与许可证](#原生-bash-与许可证)。
 - `/AOK`，一个只读的应用内文件系统（`/AOK/docs`、`/AOK/tools`、`/AOK/tests`、`/AOK/native`），在构建时通过 `fs/aok-*.manifest` 和 `tools/gen-aokfs.py` 从 `opt/AOK/` 嵌入。
 - 内置在应用中的根文件系统（Alpine 3.23.3 与 Devuan 6，仅 `aarch64`），以及面向 `i386`、`x86_64` 和 `riscv64` 的可下载镜像。
 - 通过 iOS 系统 API 暴露客户机文件的 File Provider 支持。
@@ -228,16 +228,19 @@ libc 符号。它是特意手动运行的，没有接进构建流程。
 > [Native bash and licensing](README.md#native-bash-and-licensing) 为准，
 > 下文为便于理解的译文。
 
-> **原生 bash 将在构建 556 中移除。** bash 采用 GPLv3，App Store 提交物不能包含
-> 它，因此保留下来的 shell 是 zsh —— 它的许可证是宽松的，而且其原生实现本来就是
-> 两者中更完整的一个。原生 bash 不会获得检查点支持：它无法写下自己的状态，
-> 因此挂起不会把它恢复到原来的位置，而是从命令行重新启动它并如实报告这一点。
-> zsh 是唯一一个能带着你的会话原样回来的原生程序。指向
-> `/AOK/native/bash` 的登录 shell 会由 `native-links.sh` 自动转换为客户机自带的
-> bash，因此不会有人因为升级而被挡在登录之外。
+> **截至构建 556，原生 bash 不再随应用发布。** bash 采用 GPLv3，App Store 提交物
+> 不能包含它，因此发布的 shell 是 zsh —— 它的许可证是宽松的，而且其原生实现本来
+> 就是两者中更完整的一个。该移植本身未被触动，仍留在代码树中：
+> `-Dnative_bash=enabled`（Xcode 构建则是 `AOK_NATIVE_BASH=YES`）仍可为想要它的人
+> 编译进去，即便检出已经带有 `deps/bash` 也一样。原生 bash 始终没有获得检查点
+> 支持：它无法写下自己的状态，因此挂起不会把它恢复到原来的位置，而是从命令行
+> 重新启动它并如实报告这一点。zsh 是唯一一个能带着你的会话原样回来的原生程序。
+> 指向 `/AOK/native/bash` 的登录 shell 会由 `native-links.sh` 自动转换为客户机自带的
+> bash，因此已经在用它的人不会因为这次变更而被挡在登录之外。
 > 参见 [docs/shell_transition_plan.md](docs/shell_transition_plan.md)。
 
-bash 作为原生程序编译进应用。收益在于解释执行而非 fork：算术循环比模拟执行的 shell
+bash 可以作为原生程序编译进应用（`-Dnative_bash=enabled`），但构建 556 默认不会
+这样做。编译进去之后，收益在于解释执行而非 fork：算术循环比模拟执行的 shell
 快约 16 倍，而子 shell 和命令替换则接近持平，因为原生程序无法 `fork`，只能重新启动
 自身。数据与测量方法见 [docs/bash_native_plan.md](docs/bash_native_plan.md)。这同时
 也意味着二进制里带上了 GPLv3 代码：bash 本身、随附的 readline，以及 GNU termcap。
@@ -254,8 +257,8 @@ Go](https://www.theregister.com/2010/05/27/gnu_go_fsf_apple_itunes/) 和 2011 �
 因此它是一个构建选项：
 
 ```bash
-meson setup build .                          # auto：存在 deps/bash 时开启
-meson setup build . -Dnative_bash=disabled   # 二进制中不含第三方 GPL
+meson setup build .                          # 默认即 disabled -- 二进制中不含第三方 GPL
+meson setup build . -Dnative_bash=disabled   # 同上，显式写出
 meson setup build . -Dnative_bash=enabled    # 缺少 deps/bash 时构建失败
 ```
 

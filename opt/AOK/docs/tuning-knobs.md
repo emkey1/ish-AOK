@@ -1,10 +1,14 @@
-# Runtime tuning: CPU count and memory headroom
+# Runtime tuning, resource limits, and hardening
 
 A few environment variables let you tune how iSH-AOK presents itself
 to the guest. These apply when you can control the process environment —
 building and running the standalone CLI emulator, or launching the app
 from Xcode with a custom scheme environment — rather than something an
 App Store install lets you change day to day.
+
+The rest of this page is not variables: it is what the emulator enforces
+unconditionally — resource limits, and security hardening a guest program
+can rely on the same way it would on Linux.
 
 ## `ISH_GUEST_CPU_COUNT`
 
@@ -26,6 +30,61 @@ ISH_GUEST_CPU_COUNT=1 ./ish -f build/alpine /bin/sh   # force a serial (single-c
 
 Forcing `=1` is particularly useful when debugging a concurrency bug: it
 rules out cross-core races as the cause by construction.
+
+The reservation above is itself driven by an environment variable,
+`ISH_GUEST_CPU_RESERVE`: set it (to anything) on a non-iOS host to get the
+same "leave the app some headroom" behavior the app applies automatically on
+a device with more than two cores. It exists so a test can exercise the
+reservation logic without an iPhone.
+
+## `ISH_RANDOMIZE_VA_SPACE`
+
+Controls ASLR on `exec`, the same way `/proc/sys/kernel/randomize_va_space`
+does on Linux: `0` disables it, `1` randomizes the mmap base, PIE base and
+heap start, `2` (the default, whether or not the variable is set) is the
+same plus a randomized stack top. An invalid value falls back to `2`. It
+moves where the loader, shared libraries, the vDSO/sigpage, a dynamic
+`arm64`/`riscv64` PIE, and any mapping made without an address land — not
+just the stack.
+
+ASLR is off regardless for a process exec'd with `ADDR_NO_RANDOMIZE`
+(`setarch -R`; this is gdb's default, so a debugged program's addresses are
+reproducible), and a set-id exec clears that flag first so a privileged
+program cannot inherit a debugger's disabled-ASLR setting.
+
+```sh
+ISH_RANDOMIZE_VA_SPACE=0 ./ish -f build/alpine /bin/sh   # reproducible layouts, for A/B testing
+```
+
+## `ISH_VDSO`
+
+64-bit guests (`amd64`, `arm64`, `riscv64`) read the clock through a vDSO
+mapped into every process — `vdso/amd64`, `arm64` or `riscv64/vdso.S` — rather
+than making a system call for `clock_gettime` and friends. `ISH_VDSO=0` in
+the host environment leaves it out entirely: no page is mapped, no
+`AT_SYSINFO_EHDR` goes in the aux vector, and the C library falls back to the
+real system calls the vDSO replaces. It exists to A/B a problem against a
+build with the vDSO in the picture — with it set, `strace` sees
+`clock_gettime` calls again, which a vDSO read never generates.
+
+## `ISH_GUEST_PROFILE`
+
+A guest-PC sampling profiler, host-side and with no guest cooperation needed:
+it answers where a workload's wall time actually goes, split across the
+shared objects (libraries) it has mapped, plus how much of that time is
+kernel work or blocked rather than guest code at all. It exists to settle
+whether a native stand-in for a hot library function — the same idea behind
+`ISH_HLE` and the [crypto accelerator](crypto-accel.md) — would actually pay
+for a given workload, rather than guessing.
+
+```sh
+ISH_GUEST_PROFILE=1 ./ish -f build/alpine /bin/sh          # sample every 1000 us (the default)
+ISH_GUEST_PROFILE=200 ./ish -f build/alpine /bin/sh        # sample every 200 us
+ISH_GUEST_PROFILE_OUT=/tmp/prof.txt ./ish -f build/alpine /bin/sh   # write the report there instead of stderr
+```
+
+The report is written at process exit. It is a no-op unless set, so it costs
+nothing in ordinary use.
 
 ## `ISH_GUEST_MEM_HEADROOM_MB`
 
@@ -220,6 +279,78 @@ that a test cannot schedule against:
 echo quiesce > /proc/ish/swap   # hold it; eviction stops
 echo resume > /proc/ish/swap    # lift it
 ```
+
+## Resource limits
+
+Not an environment variable — an ordinary `setrlimit`/`ulimit`, enforced the
+way Linux enforces it:
+
+- **`RLIMIT_CPU`**: `SIGXCPU` at the soft limit and each further second of
+  CPU time, with the soft limit raised a second at a time (so `getrlimit`
+  shows the new value); `SIGKILL` at the hard limit; nothing else when soft
+  and hard are equal (`bash`'s `ulimit -t`).
+- **`RLIMIT_AS`** and **`RLIMIT_DATA`**: checked the way Linux's `mmap`,
+  `mremap`, `brk` and `shmat` check them, from a page-table walk of the
+  process. `mprotect` making private pages writable counts against
+  `RLIMIT_DATA` too, because that is how glibc's thread arenas grow.
+- A soft limit above the hard one is refused (`EINVAL`); raising a hard limit
+  needs `CAP_SYS_RESOURCE`; changing another process's limits needs your
+  real, effective and saved ids to all match its.
+
+```sh
+sh -c 'ulimit -t 1; while :; do :; done'   # SIGXCPU after 1s of CPU, not wall time
+```
+
+**`tmpfs`'s `size=`/`nr_blocks=`** mount options are enforced too (bytes with
+`k`/`m`/`g`/`t`/`p`/`e` suffixes, or a percentage of `MemTotal`; `0` is
+unlimited; half of `MemTotal` when neither is given, as Linux defaults).
+Each file is charged its size in pages; a write, `truncate` or `fallocate`
+that would pass the limit is cut short and fails with `ENOSPC`. `statfs`
+reports the limit and the current charge, so `df` on a tmpfs mount is no
+longer fiction.
+
+## BSD process accounting
+
+`acct(2)` works now, so a guest can turn on BSD-style process accounting the
+normal way:
+
+```sh
+touch /var/log/pacct
+accton /var/log/pacct   # start writing a record for every process that exits
+accton off              # or: accton with no file
+```
+
+Debian's `acct_v3` record format is produced (64 bytes, what `atopacctd` and
+`sa`/`lastcomm` expect), written once per process from the same place Linux
+writes it. Two fields are worth knowing if you read the records by hand
+rather than through a tool: `ac_etime` is elapsed time in centisecond ticks,
+not seconds, and `ac_exitcode` is the wait-encoded status (so `false` records
+256, not 1). `ac_mem` is peak RSS rather than Linux's virtual size at exit —
+the same units, without walking the address space on every process exit for
+an advisory field. Off — which is every system that has never called
+`acct(2)` — costs one atomic read on process exit and nothing else.
+
+## Other hardening worth knowing about
+
+Not configurable, and not previously enforced at all:
+
+- **`seccomp(2)`** works: strict mode kills a thread that calls anything but
+  `read`, `write`, `exit` and `sigreturn`; classic-BPF filter mode is checked
+  and run the way Linux runs it, actions and all
+  (`SECCOMP_RET_KILL_PROCESS`/`KILL_THREAD`/`TRAP`/`ERRNO`/`TRACE`/`LOG`/`ALLOW`).
+  A sandbox built on it — OpenSSH's pre-authentication child, `systemd`'s
+  `SystemCallFilter=`, `apt` and `man-db`'s helpers — is now actually confined
+  rather than merely believing it is.
+- **`PROT_EXEC` is enforced.** Code in a page mapped without it — the stack,
+  the heap, an overflowed buffer — faults with `SIGSEGV`/`SEGV_ACCERR` instead
+  of running.
+- **Another user's process is not yours to inspect.** See
+  [proc-ish.md](proc-ish.md#every-processs-architecture-and-who-may-ask) for
+  the `ptrace`/`/proc` access gate.
+- **`chgrp` is restricted to a group you are in.** An owner may move a file to
+  their own `fsgid` or a supplementary group, or leave it where it is;
+  anything else needs `CAP_CHOWN` — closing a path to running a program as an
+  arbitrary group via `chgrp` + `chmod g+s`.
 
 ## Logging
 

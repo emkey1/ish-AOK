@@ -84,3 +84,25 @@ process can no longer join a root daemon's group and take its connections.
 So a service you only talk to from inside the guest can use port 80 or 22
 quite happily, as long as it runs as root. The port ≥ 1024 rule only matters
 when you want the outside world to reach it.
+
+## Letting the guest own `/etc/resolv.conf`
+
+By default iSH-AOK rewrites the guest's `/etc/resolv.conf` on every DNS
+refresh, which fires whenever the device's network path changes — on
+cellular, that can be constantly. A guest resolver that polls the file's
+modification time (some do) sees it change again and again, even though the
+content is identical each time.
+
+If that is causing trouble — a resolver logging repeated reopens, or you
+simply want to manage `/etc/resolv.conf` yourself, by hand or with a guest
+service like `dhclient` or `resolvconf` — **Settings → Custom DNS Servers**
+has a **Don't Manage** choice, alongside the usual field for a list of
+nameserver IPs. Choosing it shows "Off (guest manages)" and the periodic
+refresh returns without touching the file at all from then on; it also stops
+holding `127.0.0.1:53`, which the app otherwise binds on the host so the
+guest's own resolver can use it. Setting a custom server list and choosing
+Don't Manage are mutually exclusive — saving one clears the other.
+
+Both are also reachable from inside the guest through
+[`/proc/ish/defaults`](proc-ish.md#your-settings-from-the-guest), as
+`custom_dns_servers` and `disable_resolv_conf_rewrite`.
