@@ -215,6 +215,7 @@ tty_job_control.c
 mmap_validation.c
 madvise_lazy_reservation.c
 mmap_lazy_split_commit.c
+mmap_hole_scaling.c
 checkpoint_lazy_reservation.c
 mmap_shared_integrity.c
 fs_permission_rules.c

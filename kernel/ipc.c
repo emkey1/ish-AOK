@@ -309,8 +309,8 @@ static guest_addr_t shm_region_attach(struct mm *mm, struct shm_segment *segment
     }
     write_lock(&mm->mem.lock);
     if (as_limit != RLIM_INFINITY_) {
-        size_t total, data;
-        mem_vm_pages(&mm->mem, &total, &data);
+        // A running count (VmSize's), not a walk of every mapped page.
+        size_t total = mem_vm_pages_now(&mm->mem);
         if (total + segment->pages > (as_limit >> PAGE_BITS)) {
             write_unlock(&mm->mem.lock);
             munmap(mapping, segment->alloc_size);

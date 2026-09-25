@@ -99,14 +99,100 @@ static _Atomic uint64_t next_mem_change_id = 1;
 #define PGDIR_LEAF_INDEX(page) ((page) & (MEM_PTDIR_SIZE - 1))
 #define PGDIR_LEAF_BASE(root, mid) ((((page_t) (root) << MEM_PGDIR_MID_BITS) | (page_t) (mid)) << MEM_PTDIR_BITS)
 
+// ---- occupancy bitmaps -----------------------------------------------------
+//
+// Which pages have an entry (pt_entry.data != NULL), kept as bits so that the
+// walks that look for the next mapped or the next unmapped page -- the hole
+// finder above all, which every mmap without MAP_FIXED runs over the whole
+// address space -- cost a few words per region instead of an entry per page.
+//
+// They did cost an entry per page. pt_entry is 56 bytes with the JIT's block
+// lists, so finding the end of a 2 GiB mapping read 28 MB; and leaves are
+// immortal, so finding the start of the next mapping read every entry of every
+// leaf a process had EVER used, empty or not. Measured on an amd64 guest, one
+// mmap(NULL, 4096) cost 0.02 ms alone, 11.8 ms beside a 2 GiB PROT_NONE
+// MAP_SHARED memfd mapping, and 10.4 ms after that mapping was unmapped again.
+// .NET maps its code heap exactly that way, and `dotnet --info` spent most of
+// an hour in the walk. tests/manual/mmap_hole_scaling.
+//
+// Three levels, each exact:
+//   pt_leaf.mapped       one bit per entry of the leaf
+//   chunk->leaf_used     one bit per leaf: some entry of it is mapped
+//   chunk->leaf_full     one bit per leaf: every entry of it is mapped
+// A walk skips a chunk's empty leaves 64 at a time on leaf_used, its full ones
+// 64 at a time on leaf_full, and lands in a leaf only to find the edge of a
+// region in it, a ctz away. Unlike leaf_bitmap (which leaves EXIST, set-only),
+// these are cleared as well as set.
+//
+// Maintained where pt_entry.data goes NULL <-> non-NULL, which is exactly where
+// vm_entries moves: pt_map, pt_dup, pt_move and the fork copy set bits, and
+// mem_pt_del clears them. A new site that publishes or clears an entry must
+// call mem_pt_occupy / mem_pt_vacate too, or the hole finder will map over its
+// page or never find a hole beside it. ISH_PT_OCCUPANCY_CHECK=1 compares every
+// bit with its entry after each structural change, and dies on a mismatch.
+//
+// Every structural writer is serialised against every other (the write lock,
+// or pt_alloc_lock for the growth path, which holds the read lock and so
+// excludes the write-locked ones -- kernel/mmap.c mem_growth_lock), so there is
+// only ever one writer of these words, and the summaries can be derived from
+// the leaf without a race among writers. Readers that hold no lock -- /proc,
+// the host-fault reverse map -- can see a page mid-change either way, as they
+// can see its entry mid-change; the bits are atomic so that each word they read
+// is one a writer wrote.
+#define PT_LEAF_WORDS (MEM_PTDIR_SIZE / 64)
+#define PGDIR_MID_WORDS (MEM_PGDIR_MID_SIZE / 64)
+
+// A leaf is its entries followed by their bitmap. chunk->leaves[] keeps
+// pointing at the entries, which are the first member, so every existing user
+// of a leaf pointer is unchanged and pt_leaf_of recovers the rest.
+struct pt_leaf {
+    struct pt_entry entries[MEM_PTDIR_SIZE];
+    _Atomic uint64_t mapped[PT_LEAF_WORDS];
+};
+
+static inline struct pt_leaf *pt_leaf_of(struct pt_entry *entries) {
+    return (struct pt_leaf *) entries;
+}
+
 struct pt_directory_chunk {
     _Atomic(struct pt_entry *) leaves[MEM_PGDIR_MID_SIZE];
     // Set-only bitmap of which leaves[] slots are populated, scanned the same way
     // as the root bitmap: the mid directory is the second sparse level (8192
     // slots/chunk), and a high mapping (e.g. an amd64 PIE at mid ~5461) would
-    // otherwise make mem_next_allocated_leaf_base probe thousands of empty slots.
-    _Atomic uint64_t leaf_bitmap[MEM_PGDIR_MID_SIZE / 64];
+    // otherwise make a walk probe thousands of empty slots.
+    _Atomic uint64_t leaf_bitmap[PGDIR_MID_WORDS];
+    // Occupancy summaries of each leaf; see "occupancy bitmaps" above.
+    _Atomic uint64_t leaf_used[PGDIR_MID_WORDS];
+    _Atomic uint64_t leaf_full[PGDIR_MID_WORDS];
 };
+
+// Lowest index >= `from` of an `n`-bit atomic bitmap whose bit equals `want`,
+// or `n` if there is none. `n` is a multiple of 64.
+static inline page_t bitmap_next(_Atomic uint64_t *map, page_t n, page_t from, bool want) {
+    if (from >= n)
+        return n;
+    page_t w = from / 64;
+    uint64_t flip = want ? 0 : ~(uint64_t) 0;
+    uint64_t bits = (atomic_load_explicit(&map[w], memory_order_acquire) ^ flip)
+            & (~(uint64_t) 0 << (from % 64));
+    while (bits == 0) {
+        if (++w >= n / 64)
+            return n;
+        bits = atomic_load_explicit(&map[w], memory_order_acquire) ^ flip;
+    }
+    return w * 64 + (page_t) __builtin_ctzll(bits);
+}
+
+static inline bool bitmap_test(_Atomic uint64_t *map, page_t i) {
+    return (atomic_load_explicit(&map[i / 64], memory_order_acquire) >> (i % 64)) & 1;
+}
+
+static bool pt_leaf_all(struct pt_leaf *leaf, uint64_t word) {
+    for (unsigned w = 0; w < PT_LEAF_WORDS; w++)
+        if (atomic_load_explicit(&leaf->mapped[w], memory_order_relaxed) != word)
+            return false;
+    return true;
+}
 
 static struct pt_directory_chunk *mem_pgdir_chunk_get(struct mem *mem, page_t page) {
     if (page >= mem->page_limit)
@@ -148,9 +234,12 @@ static struct pt_entry *mem_pt_leaf_new(struct mem *mem, page_t page) {
     if (entries != NULL)
         return entries;
 
-    entries = calloc(MEM_PTDIR_SIZE, sizeof(*entries));
-    if (entries == NULL)
+    // A whole struct pt_leaf, bitmap included (all clear: nothing mapped yet).
+    // mem_destroy frees it through the entries pointer, which is its address.
+    struct pt_leaf *leaf = calloc(1, sizeof(*leaf));
+    if (leaf == NULL)
         return NULL;
+    entries = leaf->entries;
     page_t mid = PGDIR_MID_INDEX(page);
     atomic_store_explicit(slot, entries, memory_order_release);
     atomic_fetch_or_explicit(&chunk->leaf_bitmap[mid / 64],
@@ -165,6 +254,135 @@ static struct pt_entry *mem_pt_raw(struct mem *mem, page_t page) {
     if (entries == NULL)
         return NULL;
     return &entries[PGDIR_LEAF_INDEX(page)];
+}
+
+// The occupancy bitmaps' two writers. `page` has just had its entry's data set
+// (occupy) or cleared (vacate); its leaf exists, since the caller has just
+// written the entry.
+static void mem_pt_occupy(struct mem *mem, page_t page) {
+    struct pt_directory_chunk *chunk = mem_pgdir_chunk_get(mem, page);
+    page_t mid = PGDIR_MID_INDEX(page);
+    struct pt_leaf *leaf = pt_leaf_of(
+            atomic_load_explicit(&chunk->leaves[mid], memory_order_acquire));
+    page_t i = PGDIR_LEAF_INDEX(page);
+    uint64_t bit = (uint64_t) 1 << (i % 64);
+    uint64_t old = atomic_fetch_or_explicit(&leaf->mapped[i / 64], bit, memory_order_release);
+    if (old & bit)
+        return;
+    uint64_t mid_bit = (uint64_t) 1 << (mid % 64);
+    // A word that was already non-zero means the leaf was already used. A zero
+    // one may be the leaf's first entry or not; setting the bit again is free.
+    if (old == 0)
+        atomic_fetch_or_explicit(&chunk->leaf_used[mid / 64], mid_bit, memory_order_release);
+    // The leaf can only have become full if this word just did.
+    if ((old | bit) == ~(uint64_t) 0 && pt_leaf_all(leaf, ~(uint64_t) 0))
+        atomic_fetch_or_explicit(&chunk->leaf_full[mid / 64], mid_bit, memory_order_release);
+}
+
+static void mem_pt_vacate(struct mem *mem, page_t page) {
+    struct pt_directory_chunk *chunk = mem_pgdir_chunk_get(mem, page);
+    page_t mid = PGDIR_MID_INDEX(page);
+    struct pt_leaf *leaf = pt_leaf_of(
+            atomic_load_explicit(&chunk->leaves[mid], memory_order_acquire));
+    page_t i = PGDIR_LEAF_INDEX(page);
+    uint64_t bit = (uint64_t) 1 << (i % 64);
+    uint64_t old = atomic_fetch_and_explicit(&leaf->mapped[i / 64], ~bit, memory_order_release);
+    if (!(old & bit))
+        return;
+    uint64_t mid_bit = (uint64_t) 1 << (mid % 64);
+    // Only a leaf whose word was full can have been a full leaf.
+    if (old == ~(uint64_t) 0)
+        atomic_fetch_and_explicit(&chunk->leaf_full[mid / 64], ~mid_bit, memory_order_release);
+    // ...and only one whose word just emptied can have become empty.
+    if ((old & ~bit) == 0 && pt_leaf_all(leaf, 0))
+        atomic_fetch_and_explicit(&chunk->leaf_used[mid / 64], ~mid_bit, memory_order_release);
+}
+
+// mem_pt_occupy for every page of [start, start + pages), a word at a time: the
+// whole of a pt_map, which can be 512K pages.
+static void mem_pt_occupy_range(struct mem *mem, page_t start, pages_t pages) {
+    if (pages == 0)
+        return;     // and must not mark start's leaf used
+    page_t end = start + pages;
+    for (page_t base = start - PGDIR_LEAF_INDEX(start); base < end; base += MEM_PTDIR_SIZE) {
+        struct pt_directory_chunk *chunk = mem_pgdir_chunk_get(mem, base);
+        page_t mid = PGDIR_MID_INDEX(base);
+        struct pt_leaf *leaf = pt_leaf_of(
+                atomic_load_explicit(&chunk->leaves[mid], memory_order_acquire));
+        page_t lo = start > base ? start - base : 0;
+        page_t hi = end < base + MEM_PTDIR_SIZE ? end - base : MEM_PTDIR_SIZE;
+        for (page_t w = lo / 64; w * 64 < hi; w++) {
+            page_t a = lo > w * 64 ? lo : w * 64;
+            page_t b = hi < w * 64 + 64 ? hi : w * 64 + 64;
+            uint64_t mask = b - a == 64 ? ~(uint64_t) 0
+                : (((uint64_t) 1 << (b - a)) - 1) << (a % 64);
+            atomic_fetch_or_explicit(&leaf->mapped[w], mask, memory_order_release);
+        }
+        uint64_t mid_bit = (uint64_t) 1 << (mid % 64);
+        atomic_fetch_or_explicit(&chunk->leaf_used[mid / 64], mid_bit, memory_order_release);
+        if (pt_leaf_all(leaf, ~(uint64_t) 0))
+            atomic_fetch_or_explicit(&chunk->leaf_full[mid / 64], mid_bit, memory_order_release);
+    }
+}
+
+// ISH_PT_OCCUPANCY_CHECK=1: after each structural primitive, compare every bit
+// of the occupancy bitmaps with the entries they describe, and die naming the
+// first page that disagrees. Costs a pass over every allocated leaf per mmap,
+// munmap, mprotect and fork, so it is for a test run, not for use. It exists
+// because a site that forgot to maintain the bits would not fail loudly: the
+// hole finder would quietly map over a live page, or never find a hole.
+static bool mem_pt_occupancy_check_enabled(void) {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *v = getenv("ISH_PT_OCCUPANCY_CHECK");
+        enabled = (v != NULL && *v != '\0' && *v != '0') ? 1 : 0;
+    }
+    return enabled == 1;
+}
+
+static void mem_pt_occupancy_verify(struct mem *mem) {
+    if (!mem_pt_occupancy_check_enabled())
+        return;
+    // The entry counter moves at exactly the sites the bits do, and RLIMIT_AS
+    // and VmSize are read from it, so it is checked here too.
+    size_t entries_seen = 0;
+    for (page_t root = 0; root < MEM_PGDIR_ROOT_SIZE; root++) {
+        struct pt_directory_chunk *chunk =
+            atomic_load_explicit(&mem->pgdir_root[root], memory_order_acquire);
+        if (chunk == NULL)
+            continue;
+        for (page_t mid = 0; mid < MEM_PGDIR_MID_SIZE; mid++) {
+            struct pt_entry *entries =
+                atomic_load_explicit(&chunk->leaves[mid], memory_order_acquire);
+            bool used = bitmap_test(chunk->leaf_used, mid);
+            bool full = bitmap_test(chunk->leaf_full, mid);
+            page_t base = PGDIR_LEAF_BASE(root, mid);
+            if (entries == NULL) {
+                if (used || full)
+                    die("pt occupancy: leaf at page %llx does not exist but reads %s",
+                        (unsigned long long) base, used ? "used" : "full");
+                continue;
+            }
+            struct pt_leaf *leaf = pt_leaf_of(entries);
+            unsigned n = 0;
+            for (page_t i = 0; i < MEM_PTDIR_SIZE; i++) {
+                bool has = entries[i].data != NULL;
+                if (has != bitmap_test(leaf->mapped, i))
+                    die("pt occupancy: page %llx has %s entry but its bit is %s",
+                        (unsigned long long) (base + i), has ? "an" : "no",
+                        has ? "clear" : "set");
+                n += has;
+            }
+            if (used != (n != 0) || full != (n == MEM_PTDIR_SIZE))
+                die("pt occupancy: leaf at page %llx has %u entries but reads used=%d full=%d",
+                    (unsigned long long) base, n, used, full);
+            entries_seen += n;
+        }
+    }
+    size_t counted = atomic_load_explicit(&mem->vm_entries, memory_order_relaxed);
+    if (counted != entries_seen)
+        die("pt occupancy: %zu entries in the page table but vm_entries is %zu",
+            entries_seen, counted);
 }
 
 static bool mem_page_range_valid(struct mem *mem, page_t start, pages_t pages) {
@@ -287,34 +505,17 @@ static page_t mem_next_chunk_root(struct mem *mem, page_t from) {
     return w * 64 + (page_t) __builtin_ctzll(bits);
 }
 
-// Lowest mid index >= `from` whose leaves[] slot is populated, per the chunk's
-// leaf bitmap (same bulk-skip as mem_next_chunk_root). MEM_PGDIR_MID_SIZE if none.
-static page_t mem_next_leaf_mid(struct pt_directory_chunk *chunk, page_t from) {
-    if (from >= MEM_PGDIR_MID_SIZE)
-        return MEM_PGDIR_MID_SIZE;
-    page_t w = from / 64;
-    uint64_t bits = atomic_load_explicit(&chunk->leaf_bitmap[w], memory_order_acquire)
-            & ~(((uint64_t) 1 << (from % 64)) - 1);
-    while (bits == 0) {
-        if (++w >= MEM_PGDIR_MID_SIZE / 64)
-            return MEM_PGDIR_MID_SIZE;
-        bits = atomic_load_explicit(&chunk->leaf_bitmap[w], memory_order_acquire);
-    }
-    return w * 64 + (page_t) __builtin_ctzll(bits);
-}
-
-static page_t mem_next_allocated_leaf_base(struct mem *mem, page_t page) {
+// First mapped page >= `page`, or BAD_PAGE. Chunks come from the root bitmap,
+// leaves with anything mapped in them from leaf_used, and the page from the
+// leaf's own bitmap: empty space costs a word per 64 leaves, and an empty leaf
+// -- leaves are immortal, so a process holds one for every 4 MiB it has ever
+// mapped -- nothing at all.
+static page_t mem_next_mapped_page(struct mem *mem, page_t page) {
     if (page >= mem->page_limit)
         return BAD_PAGE;
-
-    // Jump straight to the next root that actually has a chunk. `mid` only keeps
-    // the page's offset when we land on the page's own root; any root we skip to
-    // is searched from its first leaf.
     page_t want_root = PGDIR_ROOT_INDEX(page);
-    page_t root = mem_next_chunk_root(mem, want_root);
-    page_t mid = (root == want_root) ? PGDIR_MID_INDEX(page) : 0;
-    for (; root < MEM_PGDIR_ROOT_SIZE;
-            root = mem_next_chunk_root(mem, root + 1), mid = 0) {
+    for (page_t root = mem_next_chunk_root(mem, want_root); root < MEM_PGDIR_ROOT_SIZE;
+            root = mem_next_chunk_root(mem, root + 1)) {
         // Nothing at or beyond page_limit is mapped (a 32-bit address space only
         // populates root 0), so stop rather than walk the high directory.
         if (PGDIR_LEAF_BASE(root, 0) >= mem->page_limit)
@@ -323,8 +524,10 @@ static page_t mem_next_allocated_leaf_base(struct mem *mem, page_t page) {
             atomic_load_explicit(&mem->pgdir_root[root], memory_order_acquire);
         if (chunk == NULL)
             continue; // defensive: mem_pgdir_chunk_new publishes the chunk before setting the bit
-        for (mid = mem_next_leaf_mid(chunk, mid); mid < MEM_PGDIR_MID_SIZE;
-                mid = mem_next_leaf_mid(chunk, mid + 1)) {
+        page_t mid = root == want_root ? PGDIR_MID_INDEX(page) : 0;
+        for (mid = bitmap_next(chunk->leaf_used, MEM_PGDIR_MID_SIZE, mid, true);
+                mid < MEM_PGDIR_MID_SIZE;
+                mid = bitmap_next(chunk->leaf_used, MEM_PGDIR_MID_SIZE, mid + 1, true)) {
             page_t base = PGDIR_LEAF_BASE(root, mid);
             if (base >= mem->page_limit)
                 return BAD_PAGE;
@@ -332,48 +535,48 @@ static page_t mem_next_allocated_leaf_base(struct mem *mem, page_t page) {
                 atomic_load_explicit(&chunk->leaves[mid], memory_order_acquire);
             if (entries == NULL)
                 continue;
-            return base;
+            // Only the page's own leaf starts part-way in; base > page elsewhere.
+            page_t i = bitmap_next(pt_leaf_of(entries)->mapped, MEM_PTDIR_SIZE,
+                    page > base ? page - base : 0, true);
+            if (i < MEM_PTDIR_SIZE)
+                return base + i < mem->page_limit ? base + i : BAD_PAGE;
         }
     }
     return BAD_PAGE;
 }
 
-static page_t mem_next_mapped_page(struct mem *mem, page_t page) {
-    if (page >= mem->page_limit)
-        return BAD_PAGE;
-
-    page_t leaf_base = page - PGDIR_LEAF_INDEX(page);
-    while (leaf_base < mem->page_limit) {
-        struct pt_entry *entries = mem_pt_leaf_get(mem, leaf_base);
-        if (entries == NULL) {
-            leaf_base = mem_next_allocated_leaf_base(mem, page);
-            if (leaf_base == BAD_PAGE)
-                return BAD_PAGE;
-            entries = mem_pt_leaf_get(mem, leaf_base);
-            if (entries == NULL) {
-                page = leaf_base + MEM_PTDIR_SIZE;
-                leaf_base = page;
-                continue;
-            }
+// First page >= `page` with no entry, or page_limit if every page up to the
+// limit is mapped. A run of full leaves is skipped on leaf_full, 64 leaves (256
+// MiB) a word, so the end of a large mapping is found without looking at it.
+static page_t mem_next_unmapped_page(struct mem *mem, page_t page) {
+    while (page < mem->page_limit) {
+        struct pt_directory_chunk *chunk = mem_pgdir_chunk_get(mem, page);
+        if (chunk == NULL)
+            return page;
+        page_t root = PGDIR_ROOT_INDEX(page);
+        page_t mid = bitmap_next(chunk->leaf_full, MEM_PGDIR_MID_SIZE,
+                PGDIR_MID_INDEX(page), false);
+        if (mid == MEM_PGDIR_MID_SIZE) {
+            // Full to the end of the chunk; the next root starts where it ends.
+            page = PGDIR_LEAF_BASE(root + 1, 0);
+            continue;
         }
-
-        int start_index = leaf_base == page - PGDIR_LEAF_INDEX(page) ?
-            (int) PGDIR_LEAF_INDEX(page) : 0;
-        for (int i = start_index; i < MEM_PTDIR_SIZE; i++) {
-            if (entries[i].data == NULL)
-                continue;
-            page_t mapped = leaf_base + (page_t) i;
-            return mapped < mem->page_limit ? mapped : BAD_PAGE;
+        page_t base = PGDIR_LEAF_BASE(root, mid);
+        if (base > page)
+            page = base;            // skipped a run of full leaves
+        struct pt_entry *entries =
+            atomic_load_explicit(&chunk->leaves[mid], memory_order_acquire);
+        if (entries == NULL)
+            break;                  // no leaf, nothing mapped: `page` is free
+        page_t i = bitmap_next(pt_leaf_of(entries)->mapped, MEM_PTDIR_SIZE,
+                page - base, false);
+        if (i < MEM_PTDIR_SIZE) {
+            page = base + i;
+            break;
         }
-
-        page = leaf_base + MEM_PTDIR_SIZE;
-        if (page >= mem->page_limit)
-            break;
-        leaf_base = mem_next_allocated_leaf_base(mem, page);
-        if (leaf_base == BAD_PAGE)
-            break;
+        page = base + MEM_PTDIR_SIZE;   // the rest of this leaf is mapped
     }
-    return BAD_PAGE;
+    return page < mem->page_limit ? page : mem->page_limit;
 }
 
 // mmap_min_addr: Linux refuses to map anything under this (and advertises the
@@ -927,30 +1130,29 @@ static void mem_pt_del(struct mem *mem, page_t page) {
     entry->accessed = 0;
     entry->age = 0;
     entry->data = NULL;
+    mem_pt_vacate(mem, page);
 }
 
+// The next MAPPED page after *page, or page_limit. It used to stop at every
+// page of every allocated leaf, mapped or not, and leaves are immortal -- so
+// every caller, all of which skip pages without an entry, paid for each page
+// of each 4 MiB the process had ever touched.
 void mem_next_page(struct mem *mem, page_t *page) {
     (*page)++;
     if (*page >= mem->page_limit) {
         *page = mem->page_limit;
         return;
     }
-    if (mem_pt_leaf_get(mem, *page) != NULL)
-        return;
-    page_t next = mem_next_allocated_leaf_base(mem, *page);
-    if (next == BAD_PAGE) {
-        *page = mem->page_limit;
-        return;
-    }
-    *page = next;
+    page_t next = mem_next_mapped_page(mem, *page);
+    *page = next == BAD_PAGE ? mem->page_limit : next;
 }
 
 // Count the pages with a live entry. Guest-visible through /proc/<pid>/stat,
 // statm and status, and through ru_maxrss, so top/htop/ps pay this every
 // refresh.
 //
-// The walk is driven by pgdir_root_bitmap and leaf_bitmap rather than by a
-// linear probe of every slot, which is what it used to do. Page-table chunks
+// The walk is driven by pgdir_root_bitmap and the chunk bitmaps rather than by
+// a linear probe of every slot, which is what it used to do. Page-table chunks
 // and leaves are immortal (nothing below mem_destroy ever frees one), so the
 // linear version's cost was set by the process's HIGH-WATER footprint and never
 // came back down: measured at 4.9-11.6 ms per pass for a 4 GiB address space
@@ -960,9 +1162,9 @@ void mem_next_page(struct mem *mem, page_t *page) {
 // ones. Reading 1 KiB of bitmap per chunk instead brings that to roughly 38 us
 // per allocated chunk.
 //
-// The bitmaps are SET-ONLY: a bit says a leaf exists, never that anything in it
-// is mapped. So this can skip empty regions in bulk but still has to look at
-// every entry of every leaf it lands on, and the count it returns is unchanged.
+// The occupancy bitmaps (see the top of this file) finish the job: an empty
+// leaf is skipped on leaf_used without being entered, and within a leaf only
+// the mapped entries are visited. A plain count is a popcount per word.
 //
 // `resident_only` skips entries the pager has evicted; see
 // mem_resident_page_count. One walk rather than two copies of it, because the
@@ -984,8 +1186,9 @@ static size_t mem_page_count_walk(struct mem *mem, bool resident_only) {
             atomic_load_explicit(&mem->pgdir_root[root], memory_order_acquire);
         if (chunk == NULL)
             continue; // defensive: mem_pgdir_chunk_new publishes the chunk before setting the bit
-        for (page_t mid = mem_next_leaf_mid(chunk, 0); mid < MEM_PGDIR_MID_SIZE;
-                mid = mem_next_leaf_mid(chunk, mid + 1)) {
+        for (page_t mid = bitmap_next(chunk->leaf_used, MEM_PGDIR_MID_SIZE, 0, true);
+                mid < MEM_PGDIR_MID_SIZE;
+                mid = bitmap_next(chunk->leaf_used, MEM_PGDIR_MID_SIZE, mid + 1, true)) {
             struct pt_entry *entries =
                 atomic_load_explicit(&chunk->leaves[mid], memory_order_acquire);
             if (entries == NULL)
@@ -996,10 +1199,18 @@ static size_t mem_page_count_walk(struct mem *mem, bool resident_only) {
             size_t limit = MEM_PTDIR_SIZE;
             if (base + MEM_PTDIR_SIZE > mem->page_limit)
                 limit = (size_t) (mem->page_limit - base);
-            for (size_t i = 0; i < limit; i++) {
+            struct pt_leaf *leaf = pt_leaf_of(entries);
+            if (!resident_only && limit == MEM_PTDIR_SIZE) {
+                for (unsigned w = 0; w < PT_LEAF_WORDS; w++)
+                    count += (size_t) __builtin_popcountll(
+                            atomic_load_explicit(&leaf->mapped[w], memory_order_relaxed));
+                continue;
+            }
+            for (size_t i = bitmap_next(leaf->mapped, MEM_PTDIR_SIZE, 0, true); i < limit;
+                    i = bitmap_next(leaf->mapped, MEM_PTDIR_SIZE, i + 1, true)) {
                 struct data *data = entries[i].data;
                 if (data == NULL)
-                    continue;
+                    continue;   // a lockless walk can meet a page mid-unmap
                 if (resident_only &&
                         atomic_load_explicit(&entries[i].swap_state,
                                 memory_order_relaxed) != PT_RESIDENT) {
@@ -1069,8 +1280,9 @@ void mem_walk_resident_pages(struct mem *mem, mem_page_visitor_t cb, void *ctx) 
             atomic_load_explicit(&mem->pgdir_root[root], memory_order_acquire);
         if (chunk == NULL)
             continue;
-        for (page_t mid = mem_next_leaf_mid(chunk, 0); mid < MEM_PGDIR_MID_SIZE;
-                mid = mem_next_leaf_mid(chunk, mid + 1)) {
+        for (page_t mid = bitmap_next(chunk->leaf_used, MEM_PGDIR_MID_SIZE, 0, true);
+                mid < MEM_PGDIR_MID_SIZE;
+                mid = bitmap_next(chunk->leaf_used, MEM_PGDIR_MID_SIZE, mid + 1, true)) {
             struct pt_entry *entries =
                 atomic_load_explicit(&chunk->leaves[mid], memory_order_acquire);
             if (entries == NULL)
@@ -1081,7 +1293,9 @@ void mem_walk_resident_pages(struct mem *mem, mem_page_visitor_t cb, void *ctx) 
             size_t limit = MEM_PTDIR_SIZE;
             if (base + MEM_PTDIR_SIZE > mem->page_limit)
                 limit = (size_t) (mem->page_limit - base);
-            for (size_t i = 0; i < limit; i++) {
+            struct pt_leaf *leaf = pt_leaf_of(entries);
+            for (size_t i = bitmap_next(leaf->mapped, MEM_PTDIR_SIZE, 0, true); i < limit;
+                    i = bitmap_next(leaf->mapped, MEM_PTDIR_SIZE, i + 1, true)) {
                 struct data *data = entries[i].data;
                 if (data == NULL)
                     continue;
@@ -1194,10 +1408,10 @@ void mem_vm_pages_range_ex(struct mem *mem, page_t start, page_t end,
         return;
     if (end > mem->page_limit)
         end = mem->page_limit;
-    // Mapped pages. Skips empty roots and leaves through the set-only
-    // bitmaps, as mem_page_count_walk does; within a leaf every entry in
-    // range is looked at.
-    for (page_t root = mem_next_chunk_root(mem, PGDIR_ROOT_INDEX(start));
+    // Mapped pages. Skips empty roots and leaves through the bitmaps, as
+    // mem_page_count_walk does, and within a leaf visits only mapped entries.
+    page_t start_root = PGDIR_ROOT_INDEX(start);
+    for (page_t root = mem_next_chunk_root(mem, start_root);
             root < MEM_PGDIR_ROOT_SIZE; root = mem_next_chunk_root(mem, root + 1)) {
         if (PGDIR_LEAF_BASE(root, 0) >= end)
             break;
@@ -1205,8 +1419,10 @@ void mem_vm_pages_range_ex(struct mem *mem, page_t start, page_t end,
             atomic_load_explicit(&mem->pgdir_root[root], memory_order_acquire);
         if (chunk == NULL)
             continue;
-        for (page_t mid = mem_next_leaf_mid(chunk, 0); mid < MEM_PGDIR_MID_SIZE;
-                mid = mem_next_leaf_mid(chunk, mid + 1)) {
+        page_t first_mid = root == start_root ? PGDIR_MID_INDEX(start) : 0;
+        for (page_t mid = bitmap_next(chunk->leaf_used, MEM_PGDIR_MID_SIZE, first_mid, true);
+                mid < MEM_PGDIR_MID_SIZE;
+                mid = bitmap_next(chunk->leaf_used, MEM_PGDIR_MID_SIZE, mid + 1, true)) {
             page_t base = PGDIR_LEAF_BASE(root, mid);
             if (base >= end)
                 break;
@@ -1218,7 +1434,9 @@ void mem_vm_pages_range_ex(struct mem *mem, page_t start, page_t end,
                 continue;
             page_t lo = base < start ? start - base : 0;
             page_t hi = base + MEM_PTDIR_SIZE > end ? end - base : MEM_PTDIR_SIZE;
-            for (page_t i = lo; i < hi; i++) {
+            struct pt_leaf *leaf = pt_leaf_of(entries);
+            for (page_t i = bitmap_next(leaf->mapped, MEM_PTDIR_SIZE, lo, true); i < hi;
+                    i = bitmap_next(leaf->mapped, MEM_PTDIR_SIZE, i + 1, true)) {
                 if (entries[i].data == NULL)
                     continue;
                 (*total)++;
@@ -1528,26 +1746,6 @@ bool mem_page_is_swapped(const struct pt_entry *entry) {
             memory_order_relaxed) != SWAP_SLOT_NONE;
 }
 
-// Return the first page >= page with no mapping, or page_limit if every page
-// up to the limit is mapped. Scans leaf entry arrays directly so walking a
-// large contiguous mapped region doesn't redo the page-table descent per page.
-static page_t mem_next_unmapped_page(struct mem *mem, page_t page) {
-    while (page < mem->page_limit) {
-        page_t leaf_base = page - PGDIR_LEAF_INDEX(page);
-        struct pt_entry *entries = mem_pt_leaf_get(mem, leaf_base);
-        if (entries == NULL)
-            return page;
-        for (int i = (int) PGDIR_LEAF_INDEX(page); i < MEM_PTDIR_SIZE; i++) {
-            if (entries[i].data == NULL) {
-                page_t unmapped = leaf_base + (page_t) i;
-                return unmapped < mem->page_limit ? unmapped : mem->page_limit;
-            }
-        }
-        page = leaf_base + MEM_PTDIR_SIZE;
-    }
-    return mem->page_limit;
-}
-
 // ---- lazy anonymous reservations ---------------------------------------
 // See struct mem_lazy_map in emu/memory.h for the contract. The rule that
 // makes this safe: a page inside a reservation has NO page-table entry, so
@@ -1792,10 +1990,10 @@ void mem_lazy_join(struct mem *mem, page_t page) {
 static bool mem_range_is_mapped(struct mem *mem, page_t start, pages_t pages) {
     page_t end = start + pages;
     for (page_t page = start; page < end; ) {
-        if (mem_pt(mem, page) != NULL) {
-            page++;
-            continue;
-        }
+        // Steps over a run of entries in one go too, on the occupancy bitmaps.
+        page = mem_next_unmapped_page(mem, page);
+        if (page >= end)
+            break;
         struct mem_lazy_map *l = mem_lazy_find(mem, page);
         if (l == NULL)
             return false;
@@ -2119,16 +2317,25 @@ static page_t next_mapped_page_with_reservation(struct mem *mem, page_t page) {
     return real;
 }
 
+// First page >= `page` that has no entry AND is not reserved. Iterates to a
+// fixed point: reservations are in no particular order in lazy[], and the end
+// of one run can be the start of the next -- entries, then a reservation, then
+// entries again.
 static page_t next_unmapped_page_with_reservation(struct mem *mem, page_t page) {
-    for (unsigned i = 0; i < mem->lazy_count; i++) {
-        struct mem_lazy_map *l = &mem->lazy[i];
-        if (l->start < l->end && page >= l->start && page < l->end)
-            page = l->end;
+    for (;;) {
+        page_t before = page;
+        for (unsigned i = 0; i < mem->lazy_count; i++) {
+            struct mem_lazy_map *l = &mem->lazy[i];
+            if (l->start < l->end && page >= l->start && page < l->end)
+                page = l->end;
+        }
+        if (mem->brk_reserve_start < mem->brk_reserve_end &&
+                page >= mem->brk_reserve_start && page < mem->brk_reserve_end)
+            page = mem->brk_reserve_end;
+        page = mem_next_unmapped_page(mem, page);
+        if (page == before || page >= mem->page_limit)
+            return page;
     }
-    if (mem->brk_reserve_start < mem->brk_reserve_end &&
-            page >= mem->brk_reserve_start && page < mem->brk_reserve_end)
-        page = mem->brk_reserve_end;
-    return mem_next_unmapped_page(mem, page);
 }
 
 page_t pt_find_hole(struct mem *mem, pages_t size) {
@@ -2163,18 +2370,16 @@ bool pt_is_hole(struct mem *mem, page_t start, pages_t pages) {
         return false;
     if (overlaps_brk_reservation(mem, start, start + pages))
         return false;
-    for (page_t page = start; page < start + pages; page++) {
-        if (mem_pt(mem, page) != NULL)
-            return false;
-    }
-    return true;
+    page_t mapped = mem_next_mapped_page(mem, start);
+    return mapped == BAD_PAGE || mapped >= start + pages;
 }
 
 pages_t pt_mapped_prefix(struct mem *mem, page_t start, pages_t pages) {
     pages_t done = 0;
     while (done < pages && start + done < mem->page_limit) {
-        if (mem_pt(mem, start + done) != NULL) {
-            done++;
+        page_t next = mem_next_unmapped_page(mem, start + done);
+        if (next > start + done) {
+            done = next - start;
             continue;
         }
         struct mem_lazy_map *l = mem_lazy_find(mem, start + done);
@@ -2664,9 +2869,17 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
     // function can fail on is already done.
     data_owner_init(data, mem, offset, pages);
 
+    // The pages published so far, [pending, page), are counted and given their
+    // occupancy bits in bulk: after the loop, and before a nested unmap, which
+    // reads the bitmaps and must find them exact.
+    page_t pending = start;
     for (page_t page = start; page < start + pages; page++) {
-        if (mem_pt(mem, page) != NULL)
+        if (mem_pt(mem, page) != NULL) {
+            mem_entries_published(mem, flags, page - pending);
+            mem_pt_occupy_range(mem, pending, page - pending);
+            pending = page;
             pt_unmap(mem, page, 1);
+        }
         data->refcount++;
         // Cannot be NULL: both of mem_pt_new's failure conditions are already
         // excluded. The page is below page_limit, because mem_page_range_valid
@@ -2713,9 +2926,12 @@ int pt_map(struct mem *mem, page_t start, pages_t pages, void *memory, size_t of
         pt->flags = flags;
     }
     // Every entry in the range was empty: the loop unmapped any that was not.
-    mem_entries_published(mem, flags, pages);
+    // So every one of them is newly mapped, for the counters and the bitmaps.
+    mem_entries_published(mem, flags, start + pages - pending);
+    mem_pt_occupy_range(mem, pending, start + pages - pending);
     mem_note_vm_peak(mem);
     mem_changed(mem);
+    mem_pt_occupancy_verify(mem);
     return 0;
 }
 
@@ -2971,6 +3187,7 @@ int pt_unmap_always(struct mem *mem, page_t start, pages_t pages) {
     if (jit_locked)
         jit_invalidate_unlock(mem->mmu.jit);
 #endif
+    mem_pt_occupancy_verify(mem);
     return ret;
 }
 
@@ -3062,6 +3279,7 @@ int pt_dup(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) {
         // until it is used: not in the resident set yet (dst's accessed byte
         // is whatever mem_pt_del left, which is 0).
         mem_entries_published(mem, dst->flags, 1);
+        mem_pt_occupy(mem, new_start + mapped);
         // ...but a locked one if the pages were: mremap's alias is a copy of
         // the VMA, VM_LOCKED and all, and VmLck counts it a second time
         // (MEASURED on 6.12: +8 kB for a 2-page alias of a locked mapping).
@@ -3071,6 +3289,7 @@ int pt_dup(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) {
     data_owner_run_flush(&run, mem, +1);
     mem_note_vm_peak(mem);
     mem_changed(mem);
+    mem_pt_occupancy_verify(mem);
     return 0;
 }
 
@@ -3149,6 +3368,7 @@ int pt_move(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) 
         // VMA keeps VM_LOCKED (MEASURED: VmLck unchanged across mremap to a
         // new address, and the destination "lo").
         mem_entries_published(mem, dst->flags, 1);
+        mem_pt_occupy(mem, new_start + mapped);
         if (src->accessed & PT_TOUCHED) {
             __atomic_fetch_or(&dst->accessed, PT_TOUCHED, __ATOMIC_RELAXED);
             atomic_fetch_add_explicit(&mem->rss_pages, 1, memory_order_relaxed);
@@ -3179,6 +3399,7 @@ int pt_move(struct mem *mem, page_t old_start, page_t new_start, pages_t pages) 
     }
     mem_note_vm_peak(mem);
     mem_changed(mem);
+    mem_pt_occupancy_verify(mem);
     return 0;
 }
 
@@ -3811,6 +4032,7 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
         // The child starts with the parent's present pages in its resident set,
         // as a Linux fork copies the present entries.
         mem_entries_published(dst, dst_entry->flags, 1);
+        mem_pt_occupy(dst, page);
         if (entry->accessed & PT_TOUCHED) {
             __atomic_fetch_or(&dst_entry->accessed, PT_TOUCHED, __ATOMIC_RELAXED);
             atomic_fetch_add_explicit(&dst->rss_pages, 1, memory_order_relaxed);
@@ -3834,6 +4056,8 @@ int pt_copy_on_write(struct mem *src, struct mem *dst, page_t start, page_t page
     mem_hwm_raise(&dst->rss_hwm, mem_rss_pages_now(dst));
     mem_changed(src);
     mem_changed(dst);
+    mem_pt_occupancy_verify(src);
+    mem_pt_occupancy_verify(dst);
     return ret;
 }
 

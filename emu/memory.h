@@ -120,9 +120,11 @@ struct mem {
     _Atomic(struct pt_directory_chunk *) *pgdir_root;
     // Set-only bitmap (one bit per pgdir_root entry) of which roots have a
     // chunk. Page-table chunks are never freed until mem_destroy, so this only
-    // ever gains bits. mem_next_allocated_leaf_base() bit-scans it to skip empty
-    // roots in bulk instead of linearly probing the (32 KiB) pgdir_root array --
+    // ever gains bits. The page-table walks bit-scan it to skip empty roots in
+    // bulk instead of linearly probing the (32 KiB) pgdir_root array -- once
     // the dominant pt_find_hole cost on a large/sparse amd64 address space.
+    // Below it, each chunk and leaf carries occupancy bitmaps of its own (the
+    // "occupancy bitmaps" comment in emu/memory.c).
     _Atomic uint64_t *pgdir_root_bitmap;
     page_t page_limit;
     page_t mmap_floor;
@@ -382,8 +384,9 @@ void mem_lazy_lock_all(struct mem *mem, bool locked, bool populate);
 // reservation that strictly contains it. False, with nothing changed, when that
 // split is refused (MEM_LAZY_SPLIT_LIMIT).
 bool mem_lazy_drop(struct mem *mem, page_t start, page_t end);
-// Increment *page, skipping over unallocated page directories. Intended to be
-// used as the incremenent in a for loop to traverse mappings.
+// Advance *page to the next page with a page-table entry, or to page_limit if
+// there is none. Intended to be used as the increment in a for loop to traverse
+// mappings; a reserved page has no entry and is skipped like a hole.
 void mem_next_page(struct mem *mem, page_t *page);
 // Pages of this address space with a live page-table entry. NOT a residency
 // measure -- see the definition, and mem_resident_page_count below.

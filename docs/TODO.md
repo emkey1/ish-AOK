@@ -915,6 +915,36 @@ separately before changing anything: the audit files this as two findings (a
 quadratic telldir and an unindexed tmpfs directory scan) and the evidence so
 far does not clearly implicate either.
 
+### Address-space walks: what still costs per page or per region
+
+**Established (2026-09-25).** The hole finder, and every walk built on "next
+mapped page" / "next unmapped page", used to read the 56-byte entry of every
+page it passed -- and leaves are immortal, so also every entry of every leaf a
+process had ever used. One mmap(NULL, 4096) cost 11.8 ms beside a 2 GiB
+MAP_SHARED memfd mapping and 10.4 ms after it was unmapped, against 0.02 ms
+alone, and `dotnet --info` spent most of an hour there. Per-leaf occupancy
+bitmaps with per-chunk used/full summaries (emu/memory.c, "occupancy bitmaps")
+made both 0.012-0.014 ms; `tests/manual/mmap_hole_scaling` guards it, and
+`ISH_PT_OCCUPANCY_CHECK=1` verifies every bit and `vm_entries` after each
+structural change. Fault backpressure reads the resident-set counter instead of
+walking, and RLIMIT_AS reads VmSize's counter.
+
+**Still open, none of them measured as a problem yet:**
+- `pt_find_hole` is O(occupied runs between mmap_floor and mmap_ceiling), each
+  a few words. Linux is O(log n) with a gap-augmented VMA tree. An address
+  space fragmented into thousands of separate runs would still pay per run.
+- RLIMIT_DATA, when finite and the mapping is data, walks every mapped page's
+  flags per mmap/brk/mremap (`vm_may_expand`). A data-page counter would need
+  maintaining at every flags change, not just every entry change.
+- `/proc/<pid>/maps` and `smaps` compare flags page by page, and
+  `mem_resident_page_count` (VmSwap, `/proc/ish/swap_evict`) asks each mapped
+  entry's frame. Both skip unmapped pages and empty leaves now, but are still
+  linear in mapped pages.
+- fork copies entries one page at a time; that is the page-table design, not a
+  walk.
+
+**Next step:** only if a workload shows one of these in a `sample`.
+
 ### What is still missing from procfs
 
 Added 2026-09-01 alongside the procfs work in `tests/manual/proc_files.c`,

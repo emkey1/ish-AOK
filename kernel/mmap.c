@@ -367,15 +367,22 @@ static bool vm_limits_finite(const struct vm_limits *l) {
 // Under an address-space lock.
 //
 // Neither limit was enforced: a 128 MB allocation under a 64 MB limit
-// succeeded. Counted by walking the page table, so only a process with a
-// limit pays for it; Linux keeps running totals, AOK has no single point
-// every mapping change passes through to keep them.
+// succeeded. The address-space total is a running count now, as Linux's
+// total_vm is -- mem_vm_pages_now, the same figure VmSize prints -- so
+// RLIMIT_AS costs nothing per mmap. It was a walk of every mapped page, which
+// under `ulimit -v` made each mmap cost what the hole finder used to (see
+// tests/manual/mmap_hole_scaling). The data total is still counted by walking
+// the page table, and only when RLIMIT_DATA is finite and the new pages are
+// data: whether a page is data depends on its flags, which change at more
+// sites than the entry counter's, and a wrong running count here would refuse
+// or permit mappings silently.
 static bool vm_may_expand(struct mem *mem, const struct vm_limits *l, size_t pages,
         bool is_data, page_t replace_start, page_t replace_end) {
     if (!vm_limits_finite(l) || pages == 0)
         return true;
-    size_t total, data, gone_total = 0, gone_data = 0;
-    mem_vm_pages(mem, &total, &data);
+    size_t total = mem_vm_pages_now(mem), data = 0, gone_total = 0, gone_data = 0;
+    if (is_data && l->data != RLIM_INFINITY_)
+        mem_vm_pages(mem, &total, &data);
     if (replace_start < replace_end)
         mem_vm_pages_range(mem, replace_start, replace_end, &gone_total, &gone_data);
     total -= gone_total;
@@ -2487,7 +2494,16 @@ void mem_fault_backpressure(void) {
     // nothing at all -- because some OTHER part of the app is near the ceiling.
     // Residency is the honest question: only a space whose page count is rising
     // is the one making things worse.
-    size_t resident = mem_resident_page_count(current->mem);
+    //
+    // The resident-set COUNTER, not a walk. This used to be
+    // mem_resident_page_count, which visits every mapped entry -- and it runs
+    // on every poke while the host is under pressure, which on a Mac is any
+    // time the machine is busy. Sampling `dotnet --info` found its main thread
+    // sitting in that walk. The counter is also the better answer: it moves
+    // when a page is first touched and when one is evicted, which is exactly
+    // "committing memory", where the walk counted mapped entries whether or
+    // not anything had ever used them.
+    size_t resident = mem_rss_pages_now(current->mem);
     size_t before = atomic_exchange_explicit(&mm->fault_last_resident_pages,
             resident, memory_order_relaxed);
     bool growing = before == 0 || resident > before;

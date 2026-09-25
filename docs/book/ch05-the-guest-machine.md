@@ -124,6 +124,17 @@ set-only bitmap saying which roots have chunks at all — added because
 probing 32 KiB of mostly-empty root pointers, and a bit-scan skips the empty
 regions in bulk.
 
+The same lesson applied one level down, later. Each leaf of 1024 entries ends in
+a bitmap of which of them are mapped, and each chunk summarises its leaves as
+*some mapped* and *all mapped*. Before that, the hole finder that every
+`mmap(NULL, ...)` runs found the end of a region by reading the entry of every
+page in it, and entries are 56 bytes: one 2 GiB file mapping made each later
+mmap read 28 MB and take 12 ms instead of 0.02. Leaves are never freed while
+the address space lives, so the cost even outlived the mapping. .NET maps its
+code heap exactly that way, and `dotnet --info` spent most of an hour in the
+walk. Now a region costs a few words however large it is, and an empty leaf
+costs nothing.
+
 ## 5.4 The TLB, and an optimization that was measured and rejected
 
 Every guest load and store goes through a software TLB. It is per-thread, it
