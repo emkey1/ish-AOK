@@ -2085,15 +2085,18 @@ int fs_rebase_readlink_path(struct fs_info *fs, char *path) {
 
 static dword_t sys_getcwd_common(guest_addr_t buf_addr, dword_t size) {
     STRACE("getcwd(%#x, %#x)", buf_addr, size);
+    // Held, not locked across the call: the path of a cwd in a detached mount
+    // asks for the root, under this same lock.
     lock(&current->fs->lock, 0);
-    struct fd *wd = current->fs->pwd;
+    struct fd *wd = fd_retain(current->fs->pwd);
+    unlock(&current->fs->lock);
     char pwd[MAX_PATH + 1];
     bool unreachable;
     int err = generic_getpath_shown(wd, pwd, &unreachable);
-    unlock(&current->fs->lock);
+    fd_close(wd);
     if (err < 0)
         return err;
-    // A cwd in a lazily unmounted bind is under no root at all. Linux hands
+    // A cwd in a lazily unmounted mount is under no root at all. Linux hands
     // back "(unreachable)/..." and glibc and musl both turn that into ENOENT,
     // the answer a cwd outside the chroot already gets below.
     if (unreachable)

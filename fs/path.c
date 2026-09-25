@@ -57,6 +57,13 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
                 // Linux; only reaching the root stops it.
                 bool at_root = root_len != 0 && (size_t) (o - out) == root_len &&
                     memcmp(out, root_path, root_len) == 0;
+                // Nor above the root of a detached mount, which has no parent
+                // to climb to: Linux's follow_dotdot finds nothing mounted
+                // above it and stays. The walk is standing on one exactly when
+                // what it has so far is a staging point (kernel/fs.h).
+                size_t staging = mount_staging_point_len(out, (size_t) (o - out));
+                if (staging != 0 && staging == (size_t) (o - out))
+                    at_root = true;
                 if (o != out && !at_root) {
                     do {
                         o--;
@@ -82,6 +89,26 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
 
         if (n == 0)
             return _ENAMETOOLONG;
+
+        // MOUNT_STAGING_DIR, at the top of the real root, is where detached
+        // mounts are parked (kernel/fs.h). A walk that starts in one never
+        // spells it -- its at_path is copied in above, not walked -- so this
+        // is a walk trying to get IN, and only N_DETACHED_OK's may. For them
+        // the directory itself is not looked up: it exists on no filesystem.
+        // For everyone else anything below it is not there, so no name the
+        // guest spells reaches a mount Linux would give no name at all.
+        // Inside a chroot the same spelling is an ordinary name: `out` then
+        // starts with the chroot's path.
+        const size_t staging_dir_len = sizeof(MOUNT_STAGING_DIR) - 1;
+        if (c == out + 1 && (size_t) (o - c) == staging_dir_len - 1 &&
+                memcmp(c, &MOUNT_STAGING_DIR[1], staging_dir_len - 1) == 0) {
+            if ((flags & N_DETACHED_OK) && *p != '\0')
+                continue;
+        } else if (c == out + staging_dir_len + 1 &&
+                memcmp(out, MOUNT_STAGING_DIR "/", staging_dir_len + 1) == 0) {
+            if (!(flags & N_DETACHED_OK))
+                return _ENOENT;
+        }
 
         // N_SLASH_EISDIR: open(O_CREAT) on a name spelled with a trailing
         // slash. Linux answers EISDIR from open_last_lookups() --
@@ -131,6 +158,13 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
             if (mount == NULL)
                 return _ENOENT;
             assert(path_is_normalized(possible_symlink));
+            // Asked before the link's text lands on top of this component:
+            // is the directory holding it inside a detached mount? And is it
+            // a procfs link, which Linux follows by jumping to the file it
+            // names (nd_jump_link) rather than by walking its text?
+            size_t parent_len = (size_t) (c - 1 - out);
+            bool in_staging = mount_staging_point_len(out, parent_len) != 0;
+            bool magic = mount->fs == &procfs;
             int res = _EINVAL;
             if (mount->fs->readlink)
                 res = mount->fs->readlink(mount, possible_symlink, c, MAX_PATH - (c - out));
@@ -203,7 +237,17 @@ static int __path_normalize(const char *root_path, const char *at_path, const ch
                     expanded_path[out_len + 1] = '\0';
                 }
                 const char *next_at_path = absolute_target ? root_path : NULL;
-                return __path_normalize(root_path, next_at_path, expanded_path, out, flags, levels + 1);
+                // The target is walked again from the top, through
+                // MOUNT_STAGING_DIR when it is in a detached mount (see the
+                // entry rule above). A relative target in one is: `..` cannot
+                // leave the mount, so it stays there. An absolute one starts
+                // from the process's root, like any other, and may not get
+                // back in -- except through a procfs link, whose text is the
+                // path of a descriptor the reader was allowed to see.
+                int next_flags = flags & ~N_DETACHED_OK;
+                if (magic || (!absolute_target && in_staging))
+                    next_flags |= N_DETACHED_OK;
+                return __path_normalize(root_path, next_at_path, expanded_path, out, next_flags, levels + 1);
             }
 
             // A slash after this component means it must be a directory. It
@@ -489,6 +533,9 @@ int path_normalize(struct fd *at, const char *path, char *out, int flags) {
         // any operation that creates or removes a directory entry.
         char parent[MAX_PATH];
         size_t len = strlen(out);
+        // The root of a detached mount is a root too: `.` from a cwd there.
+        if (len != 0 && mount_staging_point_len(out, len) == len)
+            return 0;
         if (len == 0) {
             // out == "" means the target itself is the root directory, e.g.
             // mkdir("/") or rmdir("/"). There is no parent to check write

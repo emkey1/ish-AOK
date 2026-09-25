@@ -251,8 +251,8 @@ bool mount_path_through_bind(struct mount *bind, const struct mount *origin, cha
 
 // Put the point of the mount with ID `id` in front of `path`, a path on that
 // mount, in place; `path` is a MAX_PATH buffer. False, leaving `path` alone,
-// when no mount in the table has that ID any more or the result would not
-// fit. Takes mounts_lock.
+// when no mount in the table has that ID any more, when it is detached, or
+// when the result would not fit. Takes mounts_lock.
 bool mount_path_by_id(int id, char *path) {
     bool done = false;
     lock(&mounts_lock, 0);
@@ -260,6 +260,9 @@ bool mount_path_by_id(int id, char *path) {
     list_for_each_entry(&mounts, mount, mounts) {
         if (mount->id != id)
             continue;
+        // Detached: its point is a staging point no restore will have.
+        if (mount->detached)
+            break;
         size_t len = strlen(path);
         if (mount->point_len + len < MAX_PATH) {
             memmove(path + mount->point_len, path, len + 1);
@@ -484,6 +487,14 @@ int mount_set_display_source(const char *point, const char *display_source) {
 // holds mounts_lock; list_remove on an already-removed, re-initialised node is
 // a no-op, so this is safe for both entry points below.
 static void mount_destroy(struct mount *mount) {
+    // A mount umount -l parked at a staging point goes as the mount it was:
+    // its filesystem is told the point it was attached at.
+    if (mount->attached_point != NULL) {
+        free((void *) mount->point);
+        mount->point = mount->attached_point;
+        mount->point_len = strlen(mount->point);
+        mount->attached_point = NULL;
+    }
     struct mount *origin = mount->bind_origin;
     if (origin != NULL) {
         // A bind owns one reference on its origin. We hold mounts_lock here
@@ -514,22 +525,118 @@ int mount_remove(struct mount *mount) {
     return 0;
 }
 
+// One counter for every staging point, fsmount()'s and umount -l's, so no two
+// detached mounts are ever parked at the same one.
+static _Atomic unsigned next_staging_id = 0;
+
+static void mount_staging_point(char *buf, size_t size) {
+    snprintf(buf, size, MOUNT_STAGING_DIR "/%u", next_staging_id++);
+}
+
+// Put `mount` into `mounts` where it belongs: the list is kept longest point
+// first, so mount_find's first match is the deepest mount. Caller holds
+// mounts_lock.
+static void mount_list_insert(struct mount *mount) {
+    struct mount *after;
+    list_for_each_entry(&mounts, after, mounts) {
+        if (after->point_len <= mount->point_len)
+            break;
+    }
+    list_add_before(&after->mounts, &mount->mounts);
+}
+
+// Take one mount out of the tree for umount -l, as the last step of
+// mount_remove_lazy. Caller holds mounts_lock.
+static void mount_detach_one(struct mount *mount) {
+    if (mount->refcount == 0) {
+        mount_destroy(mount);
+        return;
+    }
+    mount->lazy_umount = true;
+    // Already parked: fsmount() made it and nothing placed it.
+    if (mount->detached)
+        return;
+    // A bind has no storage of its own, and a descriptor opened through it
+    // holds its origin, which is still where it was: out of the table is
+    // enough. Re-initialising the node keeps the later list_remove in
+    // mount_destroy harmless. So is any mount the staging point cannot be
+    // allocated for -- it is still out of every lookup, only no longer
+    // reachable from inside itself either, as before there was a staging
+    // point at all.
+    char staging[MAX_PATH];
+    mount_staging_point(staging, sizeof(staging));
+    char *point = mount->bind_origin == NULL ? strdup(staging) : NULL;
+    if (point == NULL) {
+        list_remove(&mount->mounts);
+        list_init(&mount->mounts);
+        return;
+    }
+    // Anything else is still where descriptors, cwds and roots inside it
+    // start their lookups from -- their path is its point plus the path
+    // inside it -- so it moves to a staging point, which reaches it and
+    // nothing else. It keeps its old point to go with: see mount_destroy.
+    mount->attached_point = mount->point;
+    mount->point = point;
+    mount->point_len = strlen(point);
+    mount->detached = true;
+    list_remove(&mount->mounts);
+    mount_list_insert(mount);
+}
+
+// Detach every mount below `point`, each on its own (mount_detach_one), and
+// say whether there was any. Not one already detached: a staging point is
+// under no other point, except under the root's "". Caller holds mounts_lock.
+static bool mount_detach_below(const char *point) {
+    size_t len = strlen(point);
+    bool any = false;
+    // Restart after each one: detaching a mount re-sorts or frees entries of
+    // the list being walked, even ones other than itself (the last user of a
+    // bind's origin takes the origin with it). Each pass takes one match out
+    // of the running, so this ends.
+    bool again = true;
+    while (again) {
+        again = false;
+        struct mount *below;
+        list_for_each_entry(&mounts, below, mounts) {
+            if (below->detached || below->point_len <= len ||
+                    strncmp(below->point, point, len) != 0 || below->point[len] != '/')
+                continue;
+            mount_detach_one(below);
+            any = again = true;
+            break;
+        }
+    }
+    return any;
+}
+
 // umount2(MNT_DETACH) -- `umount -l`. The point of a lazy unmount is that it
 // works on a BUSY mount: it comes out of the tree at once so nothing new can
 // reach it, and the filesystem is released when whoever is still holding it
 // lets go. Without it a busy mount can only be unmounted by finding and
 // stopping every user, which is exactly the situation `umount -l` exists for
 // -- and the flag was ignored, so it answered EBUSY like a plain umount.
+//
+// Whoever is still holding it is still IN it: a cwd there lists it, creates
+// files on it, and finds `..` at its root is its root. That is why a busy
+// one is parked at a staging point rather than dropped from the table; see
+// mount_detach_one. Dropping it left every lookup from inside it resolving
+// the same string on the mount underneath, so `ls` in a cwd there listed
+// the directory it had covered and writes landed on the wrong filesystem.
+//
+// Everything mounted below it goes too, as Linux's umount_tree takes the
+// whole subtree -- and each one DISCONNECTED from the mount it sat on
+// (disconnect_mount): from the detached mount's root, a name that was a
+// submount's point is the directory it covered, and a cwd in a submount finds
+// `..` at the submount's own root. So each is detached on its own, the same
+// way: destroyed if unused, parked if not. The subtree goes first, while the
+// mount above it still has the point that names it. Caller holds mounts_lock.
 int mount_remove_lazy(struct mount *mount) {
-    if (mount->refcount == 0) {
-        mount_destroy(mount);
-        return 0;
+    char point[MAX_PATH];
+    if (mount->point_len < sizeof(point)) {
+        memcpy(point, mount->point, mount->point_len + 1);
+        mount_detach_below(point);
     }
-    // Out of the namespace now; re-initialising the node keeps the later
-    // list_remove in mount_destroy harmless.
-    list_remove(&mount->mounts);
-    list_init(&mount->mounts);
-    mount->lazy_umount = true;
+    mount_detach_one(mount);
     return 0;
 }
 
@@ -537,7 +644,10 @@ static int do_umount_flags(const char *point, bool lazy) {
     struct mount *mount;
     bool found = false;
     list_for_each_entry(&mounts, mount, mounts) {
-        if (strcmp(point, mount->point) == 0) {
+        // A detached mount is mounted nowhere, so no umount names it -- Linux
+        // answers EINVAL for one outside the caller's namespace. A cwd in
+        // one can still spell its staging point as ".".
+        if (!mount->detached && strcmp(point, mount->point) == 0) {
             found = true;
             break;
         }
@@ -611,11 +721,10 @@ int mount_detach(const char *point) {
 // between the check and the unmount. EINVAL when nothing is mounted at
 // `point`, after still detaching what is mounted below it.
 int mount_detach_tree(const char *point) {
-    size_t len = strlen(point);
     lock(&mounts_lock, 0);
-    struct mount *mount, *tmp, *root = NULL;
+    struct mount *mount, *root = NULL;
     list_for_each_entry(&mounts, mount, mounts) {
-        if (strcmp(mount->point, point) == 0) {
+        if (!mount->detached && strcmp(mount->point, point) == 0) {
             root = mount;
             break;
         }
@@ -624,13 +733,7 @@ int mount_detach_tree(const char *point) {
         unlock(&mounts_lock);
         return _EBUSY;
     }
-    bool changed = false;
-    list_for_each_entry_safe(&mounts, mount, tmp, mounts) {
-        if (strncmp(mount->point, point, len) == 0 && mount->point[len] == '/') {
-            mount_remove_lazy(mount);
-            changed = true;
-        }
-    }
+    bool changed = mount_detach_below(point);
     // Still unused: a bind of something in the root would have held it (its
     // origin) and made it busy above, and the lock has kept everyone else out.
     int err = root != NULL ? mount_remove(root) : _EINVAL;
@@ -903,6 +1006,11 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
     err = path_normalize(AT_PWD, point_raw, point, N_SYMLINK_FOLLOW);
     if (err < 0)
         return err;
+    // A point inside a detached mount -- reachable only from a cwd or dirfd
+    // already in it -- is in no mount tree for a mount to join or be changed
+    // in. Linux's check_mnt() refuses it with EINVAL for every operation.
+    if (mount_staging_point_len(point, strlen(point)) != 0)
+        return _EINVAL;
 
     // MS_MOVE and MS_BIND name an existing path as their "source"; resolve it
     // before taking mounts_lock (path_normalize / find_mount_and_trim_path
@@ -916,6 +1024,9 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
         err = path_normalize(AT_PWD, source, op_source, N_SYMLINK_FOLLOW);
         if (err < 0)
             return err;
+        // Nor is anything bound or moved out of one.
+        if ((flags & MS_BIND_) && mount_staging_point_len(op_source, strlen(op_source)) != 0)
+            return _EINVAL;
     }
 
     // A bind shares the source mount's backing; do_bind_mount resolves the source
@@ -957,7 +1068,8 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
     if (flags & MS_MOVE_) {
         struct mount *mount, *found = NULL;
         list_for_each_entry(&mounts, mount, mounts) {
-            if (strcmp(mount->point, op_source) == 0) {
+            // Not one umount -l has detached: see do_umount_flags.
+            if (!mount->lazy_umount && strcmp(mount->point, op_source) == 0) {
                 found = mount;
                 break;
             }
@@ -1329,12 +1441,7 @@ dword_t sys_fsconfig_guest(fd_t f, dword_t cmd, guest_addr_t key_addr, guest_add
         case FSCONFIG_CMD_CREATE_: {
             if (data->created)
                 return _EBUSY;
-            static _Atomic unsigned next_fscontext_id = 0;
-            snprintf(data->point, sizeof(data->point), "/.ish-fsmount/%u",
-                    next_fscontext_id++);
-            // generic_mkdirat resolves its path via mount_find, which takes
-            // mounts_lock itself -- must run before we take the lock below,
-            // or this self-deadlocks (mounts_lock isn't recursive).
+            mount_staging_point(data->point, sizeof(data->point));
             if (data->binfmt_misc) {
                 // Nothing to stage. This is where Linux's fs_context creates
                 // the superblock, and for binfmt_misc creating it IS the whole
@@ -1345,9 +1452,9 @@ dword_t sys_fsconfig_guest(fd_t f, dword_t cmd, guest_addr_t key_addr, guest_add
                 data->created = true;
                 return 0;
             }
-            int mkerr = generic_mkdirat(AT_PWD, "/.ish-fsmount", 0700);
-            if (mkerr < 0 && mkerr != _EEXIST)
-                return mkerr;
+            // No directory to make: MOUNT_STAGING_DIR is on no filesystem
+            // (kernel/fs.h). This used to mkdir a 0700 /.ish-fsmount in the
+            // guest's root, which failed on a read-only one.
             lock(&mounts_lock, 0);
             int err = do_mount(data->fs, "", data->point, "",
                     data->readonly ? MS_READONLY_ : 0);
@@ -1422,9 +1529,11 @@ fd_t sys_fsmount_guest(fd_t f, dword_t flags, dword_t attr_flags) {
 
     // data->point is a real-root staging path (/.ish-fsmount/<n>) that is
     // not visible inside a chroot; open it against the real root, or
-    // util-linux mount(8)'s new-API path fails ENOENT in every chroot.
-    struct fd *dirfd = generic_open_realroot(data->point,
-            O_RDONLY_ | O_DIRECTORY_ | O_CLOEXEC_, 0);
+    // util-linux mount(8)'s new-API path fails ENOENT in every chroot. And
+    // as the one walk that may enter it (N_DETACHED_OK): this descriptor is
+    // how the caller reaches the mount at all.
+    struct fd *dirfd = generic_openat_norm(AT_PWD, data->point,
+            O_RDONLY_ | O_DIRECTORY_ | O_CLOEXEC_, 0, N_REALROOT | N_DETACHED_OK);
     if (IS_ERR(dirfd))
         return PTR_ERR(dirfd);
     return f_install(dirfd, O_CLOEXEC_);
@@ -1477,7 +1586,9 @@ static int mount_relocate(const char *from_point, const char *to_point) {
     lock(&mounts_lock, 0);
     struct mount *mount, *found = NULL;
     list_for_each_entry(&mounts, mount, mounts) {
-        if (strcmp(mount->point, from_point) == 0) {
+        // An fsmount()'s mount, not one umount -l detached: that is gone
+        // from every tree, and Linux's move_mount refuses it with EINVAL.
+        if (!mount->lazy_umount && strcmp(mount->point, from_point) == 0) {
             found = mount;
             break;
         }
@@ -1569,19 +1680,16 @@ dword_t sys_move_mount_guest(fd_t from_dfd, guest_addr_t from_path_addr, fd_t to
     // a way around it: a devtmpfs must not be moved on top of a /dev that is
     // already populated. Leave the mount detached and repair in place instead.
     //
-    // The umount is best-effort and normally fails: a caller doing this for
-    // real still holds the fsmount fd (that is how the API works), and that fd
-    // holds a reference, so mount_remove returns EBUSY. Forcing it would leave
-    // the caller's fd pointing at freed memory, so the mount stays parked at
-    // its private staging path and shows up in /proc/mounts there. That is
-    // cosmetic -- it never reaches the target, which is the guarantee that
-    // matters -- and removing it properly needs lazy-detach (Linux's
-    // MNT_DETACH: unlink from the namespace now, free on last reference),
-    // which is a mount-lifetime change worth doing on its own rather than as
-    // a rider here.
+    // A caller doing this for real still holds the fsmount fd (that is how
+    // the API works), and that fd holds a reference, so the staged mount goes
+    // lazily: it stays where it is parked until the fd is closed, and then
+    // it is torn down, where a plain umount could only have answered EBUSY
+    // and left it there for good.
     if (mount_fs_at(from_point) == &devtmpfs && devtmpfs_target_is_populated(to_point)) {
         lock(&mounts_lock, 0);
-        do_umount(from_point);
+        struct mount *staged = mount_at_point_locked(from_point);
+        if (staged != NULL && staged->detached)
+            mount_remove_lazy(staged);
         unlock(&mounts_lock);
         devtmpfs_repair_nodes(to_point);
         proc_mountinfo_notify_changed();

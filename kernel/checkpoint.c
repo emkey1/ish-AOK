@@ -1337,6 +1337,12 @@ static int ckpt_classify_fd(int num, struct fd *fd, char *path, size_t path_size
         ckpt_refuse("fd %d on %s has no path to re-open", num, family);
         return 0;
     }
+    // In a mount umount -l has detached: its path is a staging point
+    // (kernel/fs.h), which a fresh boot does not have.
+    if (mount_staging_point_len(path, strlen(path)) != 0) {
+        ckpt_refuse("fd %d on %s is in a detached mount", num, family);
+        return 0;
+    }
     (void) path_size;
     return S_ISDIR(fd->type) ? CKPT_FD_DIR : CKPT_FD_FILE;
 }

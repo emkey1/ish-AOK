@@ -984,11 +984,39 @@ struct fd *generic_open_realroot(const char *path, int flags, int mode) {
 // from a cwd there has to go through the bind's source, which still reaches
 // the file. So GETPATH_LOOKUP falls back to the path on the origin, and only
 // GETPATH_SHOWN, which is never walked, takes Linux's answer.
+//
+// An ordinary mount that umount -l detached while it was busy has no source
+// to fall back to. It is parked at a staging point instead (kernel/fs.h), so
+// its point is still the start of a path that reaches it and only it, and
+// GETPATH_LOOKUP is that path. GETPATH_SHOWN is the path from the mount's own
+// root, "/f" for $B/f after `cd $B; umount -l $B`, as Linux shows it, unless
+// the caller's root is in the same detached mount (a chroot into it): then
+// the path is under the root like any other, and the caller's rebase against
+// the root makes it the ordinary answer.
 enum getpath_how {
     GETPATH_BACKING, // the origin's path, ignoring any bind
     GETPATH_LOOKUP,  // through the bind while it is mounted
     GETPATH_SHOWN,   // through the bind, mounted or lazily unmounted
 };
+
+// Is the calling process's root inside the detached mount parked at the first
+// `staging` bytes of `path`? Only asked for a path in one, so the extra lookup
+// is paid only there.
+static bool root_in_detached(const char *path, size_t staging) {
+    if (current == NULL || current->fs == NULL)
+        return false;
+    lock(&current->fs->lock, 0);
+    struct fd *root = current->fs->root != NULL ? fd_retain(current->fs->root) : NULL;
+    unlock(&current->fs->lock);
+    if (root == NULL)
+        return false;
+    char root_path[MAX_PATH];
+    bool in = generic_getpath(root, root_path) >= 0 &&
+        strncmp(root_path, path, staging) == 0 &&
+        (root_path[staging] == '\0' || root_path[staging] == '/');
+    fd_close(root);
+    return in;
+}
 
 static int getpath_common(struct fd *fd, char *buf, enum getpath_how how, bool *unreachable) {
     struct mount *mount;
@@ -1011,15 +1039,30 @@ static int getpath_common(struct fd *fd, char *buf, enum getpath_how how, bool *
     bool on_bind = how != GETPATH_BACKING && fd->bind_mount != NULL;
     if (!on_bind || !mount_path_through_bind(fd->bind_mount, mount, buf,
                                              how == GETPATH_SHOWN ? unreachable : NULL)) {
+        // Under mounts_lock: umount -l and MS_MOVE replace the point.
+        lock(&mounts_lock, 0);
         size_t point_len = mount->point_len;
         size_t buf_len = strlen(buf);
-        if (buf_len + point_len >= MAX_PATH)
+        if (buf_len + point_len >= MAX_PATH) {
+            unlock(&mounts_lock);
             return _ENAMETOOLONG;
+        }
         memmove(buf + point_len, buf, buf_len + 1);
         memcpy(buf, mount->point, point_len);
+        unlock(&mounts_lock);
     }
     if (buf[0] == '\0')
         memcpy(buf, "/", 2);
+    if (how == GETPATH_SHOWN && !*unreachable) {
+        size_t len = strlen(buf);
+        size_t staging = mount_staging_point_len(buf, len);
+        if (staging != 0 && !root_in_detached(buf, staging)) {
+            memmove(buf, buf + staging, len - staging + 1);
+            if (buf[0] == '\0')
+                memcpy(buf, "/", 2);
+            *unreachable = true;
+        }
+    }
     return 0;
 }
 
