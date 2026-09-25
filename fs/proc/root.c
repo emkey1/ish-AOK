@@ -904,17 +904,22 @@ static void proc_print_escaped(struct proc_data *buf, const char *str) {
 } while (0)
 
 int proc_show_mounts(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
-    struct mount *mount;
     // The mounts list is mutated under mounts_lock (fs/mount.c) and was walked
     // here without it, so a concurrent mount or umount could free the entry
     // this loop was standing on -- a use-after-free reachable from an ordinary
     // `cat /proc/mounts`, and systemd reads mountinfo on every mount change.
     lock(&mounts_lock, 0);
-    list_for_each_entry(&mounts, mount, mounts) {
-        // A detached fsmount() has no mountpoint on Linux and appears in no
-        // listing until move_mount places it. See struct mount.
-        if (mount->detached)
-            continue;
+    // In mount-ID order, without a detached fsmount() -- which has no
+    // mountpoint on Linux and appears in no listing until move_mount places
+    // it. See mounts_listed_locked.
+    size_t count = 0;
+    struct mount **listed = mounts_listed_locked(&count);
+    if (listed == NULL) {
+        unlock(&mounts_lock);
+        return _ENOMEM;
+    }
+    for (size_t i = 0; i < count; i++) {
+        struct mount *mount = listed[i];
         const char *point = mount->point;
         if (point[0] == '\0')
             point = "/";
@@ -941,54 +946,72 @@ int proc_show_mounts(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
         if (mount->info && mount->info[0] != '\0') // Ensure it's not NULL and not empty.
             proc_printf_comma(buf, &at_start, "%s", mount->info);
         proc_printf(buf, " 0 0\n");
-    };
+    }
     unlock(&mounts_lock);
+    free(listed);
     return 0;
 }
 
-// Caller holds mounts_lock, like proc_mountinfo_parent_id below.
-static int proc_mountinfo_id(struct mount *target) {
-    return mount_id_locked(target);
-}
-
-// Caller holds mounts_lock: this walks the same list its caller is iterating,
-// so it must not take the lock again.
+// The mount `target` is mounted on -- Linux's mnt_parent -- as mountinfo's
+// second field. Caller holds mounts_lock: this walks the same list its caller
+// is iterating, so it must not take the lock again.
+//
+// These must form a tree, because readers walk them as one. libmount climbs
+// from the smallest parent ID until the parent is missing from the table, and
+// findmnt recurses from there through each mount's children; a loop in either
+// direction never ends (see the comment on mount_id in fs/mount.c for the loop
+// there was). What guarantees it: every parent chosen below comes strictly
+// earlier in one fixed order -- a shorter point, or the same point mounted
+// earlier -- so following parents only ever goes down that order and must stop.
+// It stops at the bottom mount on the root, whose parent is MOUNT_ID_HIDDEN,
+// an ID the table never contains: what Linux shows for the root, whose parent
+// is the rootfs outside every process's root.
 static int proc_mountinfo_parent_id(struct mount *target) {
-    const char *point = target->point;
-    if (point[0] == '\0')
-        return 1;
-
     struct mount *mount;
-    list_for_each_entry(&mounts, mount, mounts) {
-        if (mount == target)
-            continue;
-        size_t n = mount->point_len;
-        if (n >= target->point_len)
-            continue;
-        if (strncmp(point, mount->point, n) != 0)
-            continue;
-        if (point[n] != '/' && point[n] != '\0')
-            continue;
-        return proc_mountinfo_id(mount);
+    // Mounted on top of another mount at the very same point -- a second
+    // mount on /mnt, or on / -- it sits on that one, as on Linux. The list
+    // keeps equal points newest first, so the mount directly beneath is the
+    // next entry after this one with the same point; entries of one length
+    // are contiguous, so the search ends where the length changes.
+    for (struct list *item = target->mounts.next; item != &mounts; item = item->next) {
+        mount = list_entry(item, struct mount, mounts);
+        if (mount->point_len != target->point_len)
+            break;
+        if (!mount->detached && strcmp(mount->point, target->point) == 0)
+            return mount_id(mount);
     }
-    return 1;
+    // Otherwise it sits in the tree of the mount with the longest point that
+    // is a proper prefix of its own, ending at a '/'. The first such entry is
+    // that point's topmost mount: the one a path resolves through. The root's
+    // point is "", a prefix of every other point.
+    list_for_each_entry(&mounts, mount, mounts) {
+        size_t n = mount->point_len;
+        if (mount->detached || n >= target->point_len)
+            continue;
+        if (strncmp(target->point, mount->point, n) == 0 && target->point[n] == '/')
+            return mount_id(mount);
+    }
+    return MOUNT_ID_HIDDEN;
 }
 
 int proc_show_mountinfo(struct proc_entry *UNUSED(entry), struct proc_data *buf) {
-    struct mount *mount;
-    // See proc_show_mounts. Held across proc_mountinfo_parent_id's own walk of
-    // the list, which is why that one must not lock.
+    // See proc_show_mounts, for the lock and the order. Held across
+    // proc_mountinfo_parent_id's own walk of the list, which is why that one
+    // must not lock.
     lock(&mounts_lock, 0);
-    list_for_each_entry(&mounts, mount, mounts) {
-        // Same as proc_show_mounts: a detached fsmount() is not in any mount
-        // listing until move_mount gives it a point.
-        if (mount->detached)
-            continue;
+    size_t count = 0;
+    struct mount **listed = mounts_listed_locked(&count);
+    if (listed == NULL) {
+        unlock(&mounts_lock);
+        return _ENOMEM;
+    }
+    for (size_t i = 0; i < count; i++) {
+        struct mount *mount = listed[i];
         const char *point = mount->point;
         if (point[0] == '\0')
             point = "/";
 
-        int id = proc_mountinfo_id(mount);
+        int id = mount_id(mount);
         int parent_id = proc_mountinfo_parent_id(mount);
 
         // Field 3 is the device files on this mount report through st_dev, so
@@ -1013,6 +1036,7 @@ int proc_show_mountinfo(struct proc_entry *UNUSED(entry), struct proc_data *buf)
         proc_printf(buf, "\n");
     }
     unlock(&mounts_lock);
+    free(listed);
     return 0;
 }
 

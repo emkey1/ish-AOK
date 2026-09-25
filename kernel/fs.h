@@ -197,10 +197,24 @@ struct mount {
     // and resolves it against bind_origin. NULL for ordinary mounts.
     struct mount *bind_origin;
     const char *bind_prefix;
+
+    // This mount's ID in /proc/self/mountinfo and statx's stx_mnt_id: handed
+    // out when the mount is made, then fixed for its whole life and never
+    // reused (fs/mount.c). 0 for the static internal mounts no listing shows
+    // (sockets and pipes, memfd); mount_id reports those as MOUNT_ID_HIDDEN.
+    int id;
 };
 extern lock_t mounts_lock;
-// mount_id with mounts_lock already held by the caller.
-int mount_id_locked(struct mount *target);
+
+// The ID of a mount no mountinfo lists: on Linux, the rootfs that the root
+// mount itself is mounted on. It lies outside every process's root, so the
+// root mount names it as its parent and nothing names it as its own ID (camd:
+// "29 1 254:0 / / rw ..."). Never handed to a real mount.
+#define MOUNT_ID_HIDDEN 1
+
+// The mounts a listing shows, in the order it shows them; see fs/mount.c.
+// Caller holds mounts_lock and frees the array.
+struct mount **mounts_listed_locked(size_t *count_out);
 
 // returns a reference, which must be released
 struct mount *mount_find(char *path);
@@ -223,7 +237,7 @@ struct mount_info {
     struct mount *mount; // for identity only; do not deref without the lock
 };
 int mount_snapshot(struct mount_info **out, size_t *count_out);
-// mountinfo/statx mount ID (1-based list position); see fs/mount.c
+// A mount's ID, as mountinfo and statx report it; see fs/mount.c.
 int mount_id(struct mount *mount);
 // The st_dev files on this mount report, i.e. mountinfo's device field; asks
 // the filesystem rather than assuming, since only backing-less filesystems use

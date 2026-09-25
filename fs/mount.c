@@ -175,27 +175,69 @@ static void mount_notify_relocated(struct mount *mount, const char *old_point,
     mount_release(mount);
 }
 
-// Mount ID as exposed in /proc/self/mountinfo and statx's stx_mnt_id:
-// 1-based position in the mounts list. The two consumers must agree --
-// systemd cross-checks statx STATX_MNT_ID against mountinfo.
-// Caller holds mounts_lock. /proc/self/mountinfo asks for every entry's id
-// from inside its own walk of the list, so it cannot take the lock again.
-int mount_id_locked(struct mount *target) {
-    int id = 1;
-    struct mount *mount;
-    list_for_each_entry(&mounts, mount, mounts) {
-        if (mount == target)
-            return id;
-        id++;
-    }
-    return 1;
+// Mount IDs, as /proc/self/mountinfo and statx's stx_mnt_id report them. The
+// two must agree -- systemd cross-checks STATX_MNT_ID against mountinfo --
+// which they do by both calling mount_id.
+//
+// An ID used to be the mount's 1-based position in `mounts`. That list is
+// kept longest point first, so the root, with the shortest point of all, was
+// numbered LAST, and every mount or umount renumbered whatever sat after it
+// in the list. mountinfo's parent column turned that into a loop: the root
+// said its parent was 1, and 1 was the deepest mount on the list, whose own
+// parent was the root (`5 1 ... / /` beside `1 5 ... / /dev/pts`). libmount
+// finds the root of the tree by walking parent IDs up until one is missing
+// from the table (mnt_table_get_root_fs), so plain `findmnt` spun at 100% CPU
+// forever; only `findmnt -l`, which never builds the tree, worked.
+//
+// Linux numbers a mount when it is made and keeps the number until the mount
+// is gone, and so does this, from a counter. MOUNT_ID_HIDDEN is never handed
+// out; see its definition in kernel/fs.h. Numbers are not reused: a caller
+// holding an ID across an umount then learns the mount is gone rather than
+// finding someone else's.
+static _Atomic int next_mount_id = MOUNT_ID_HIDDEN + 1;
+
+static int mount_new_id(void) {
+    return next_mount_id++;
 }
 
-int mount_id(struct mount *target) {
-    lock(&mounts_lock, 0);
-    int id = mount_id_locked(target);
-    unlock(&mounts_lock);
-    return id;
+// No lock: a mount's ID is set before it is published in the list and never
+// changes after, and /proc/self/mountinfo asks for IDs from inside its own
+// walk of the list, under mounts_lock.
+int mount_id(struct mount *mount) {
+    return mount->id > 0 ? mount->id : MOUNT_ID_HIDDEN;
+}
+
+static int mount_compare_id(const void *a, const void *b) {
+    int x = (*(struct mount *const *) a)->id;
+    int y = (*(struct mount *const *) b)->id;
+    return (x > y) - (x < y);
+}
+
+// Every listed mount -- all but a detached fsmount() -- in the order Linux
+// lists a namespace's: by mount ID (6.8 keeps a namespace's mounts in an
+// rbtree on the ID, and /proc/self/mountinfo walks it), which here is the
+// order they were made in. `mounts` itself is longest point first and newest
+// first among equal points, and was printed as it stood, root last. A reader
+// takes the LAST entry for a point as the mount on top -- libmount keeps
+// "later mounted filesystems" (mnt_table_uniq_fs), df keeps the last -- so
+// for a point with two mounts on it, that named the one underneath.
+// Caller holds mounts_lock; free() the result. NULL only when out of memory.
+struct mount **mounts_listed_locked(size_t *count_out) {
+    size_t count = 0;
+    struct mount *mount;
+    list_for_each_entry(&mounts, mount, mounts)
+        if (!mount->detached)
+            count++;
+    struct mount **listed = malloc((count > 0 ? count : 1) * sizeof(*listed));
+    if (listed == NULL)
+        return NULL;
+    size_t i = 0;
+    list_for_each_entry(&mounts, mount, mounts)
+        if (!mount->detached)
+            listed[i++] = mount;
+    qsort(listed, count, sizeof(*listed), mount_compare_id);
+    *count_out = count;
+    return listed;
 }
 
 // The device files on this mount report through stat(2)'s st_dev, which is
@@ -272,6 +314,7 @@ int do_mount(const struct fs_ops *fs, const char *source, const char *point, con
             return err;
         }
     }
+    new_mount->id = mount_new_id();
 
     // the list must stay in descending order of mount point length
     struct mount *mount;
@@ -300,28 +343,24 @@ int mount_snapshot(struct mount_info **out, size_t *count_out) {
     *count_out = 0;
 
     lock(&mounts_lock, 0);
-    size_t count = 0;
-    struct mount *mount;
     // Detached fsmount()s are not part of any mount listing until move_mount
     // places them -- the same rule /proc/mounts and mountinfo follow. This is
     // the list a native `df` walks (kernel/native_libc.c's getmntinfo), and
     // it was showing the private 0700 staging path: df then tried to statfs a
     // directory an unprivileged guest cannot enter and printed
     // "df: /.ish-fsmount/N: Permission denied" for a mount Linux never lists.
-    list_for_each_entry(&mounts, mount, mounts)
-        if (!mount->detached)
-            count++;
-    struct mount_info *info = calloc(count > 0 ? count : 1, sizeof(*info));
+    // In the same order as those two files, too.
+    size_t count = 0;
+    struct mount **listed = mounts_listed_locked(&count);
+    struct mount_info *info = listed != NULL ? calloc(count > 0 ? count : 1, sizeof(*info)) : NULL;
     if (info == NULL) {
         unlock(&mounts_lock);
+        free(listed);
         return _ENOMEM;
     }
     size_t i = 0;
-    list_for_each_entry(&mounts, mount, mounts) {
-        if (i >= count)
-            break;
-        if (mount->detached)
-            continue;
+    for (; i < count; i++) {
+        struct mount *mount = listed[i];
         const char *from = mount->display_source != NULL ? mount->display_source
                                                          : mount->source;
         snprintf(info[i].source, sizeof(info[i].source), "%s",
@@ -331,9 +370,9 @@ int mount_snapshot(struct mount_info **out, size_t *count_out) {
         snprintf(info[i].type, sizeof(info[i].type), "%s",
                  mount->fs != NULL && mount->fs->name != NULL ? mount->fs->name : "none");
         info[i].mount = mount;
-        i++;
     }
     unlock(&mounts_lock);
+    free(listed);
 
     // Lock dropped: mount_statfs reaches into the filesystem and must not run
     // under mounts_lock.
@@ -624,6 +663,8 @@ static int do_bind_mount(const char *norm_source, const char *point, const char 
     bind->data = NULL;
     bind->fake_dev = origin->fake_dev; // a bind shares the origin's superblock
     bind->bind_origin = origin; // keeps the reference returned above
+    // A mount of its own, so an ID of its own, as a Linux bind has.
+    bind->id = mount_new_id();
 
     lock(&mounts_lock, 0);
     // keep the mounts list ordered by descending mount-point length

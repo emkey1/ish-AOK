@@ -1553,7 +1553,11 @@ static int proc_pid_fdinfo_show(struct proc_entry *entry, struct proc_data *buf)
     fdtable_release(files);
     proc_printf(buf, "pos:\t%lu\n", fd->offset);
     proc_printf(buf, "flags:\t0%o\n", fd_getflags(fd));
-    proc_printf(buf, "mnt_id:\t1\n");
+    // The mount the file is on, by the same ID mountinfo and statx give it.
+    // This was a constant 1, which named whatever mount happened to be first
+    // in the list. Sockets, pipes and the other anonymous inodes are on no
+    // listed mount, as Linux's sockfs and pipefs are not.
+    proc_printf(buf, "mnt_id:\t%d\n", fd->mount != NULL ? mount_id(fd->mount) : MOUNT_ID_HIDDEN);
     // Real Linux appends a "Pid:" line for pidfds (fs/proc/fd.c's
     // pidfd_show_fdinfo); glibc's pidfd_get_pid() reads exactly this as its
     // fallback when the PIDFD_GET_INFO ioctl isn't supported, and treats a
