@@ -1,6 +1,7 @@
 // Dispatch and registry for natively-implemented programs. See kernel/native.h
 // for the execution model; this file is the table and the plumbing.
 
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,7 @@
 #include "kernel/task.h"
 #include "fs/tty.h"
 #include "debug.h"
+#include "util/lockstats.h"
 
 // Everything a native program prints has to go through iSH's fd layer, not the
 // host's stdio -- see the libc warning in kernel/native.h.
@@ -459,6 +461,25 @@ static void native_free_vector(char **vec) {
     free(vec);
 }
 
+// The array alone, the strings still `vec`'s: what a program is handed as its
+// argv and envp when it may be abandoned mid-run (native_exec_run_one). A
+// program owns the array it is given, and zsh rewrites every argv slot on the
+// way in -- metafy, into zsh's own heap -- so freeing the kernel's copy through
+// the program's array hands free() pointers malloc never gave out. A program
+// that returns from main never showed it: zsh exits instead. One that execs
+// in place comes back through the free, and killed the whole app with "BUG IN
+// CLIENT OF LIBMALLOC: invalid address". NULL if there is no memory, and the
+// caller hands over the kernel's copy as it always did.
+static char **native_shallow_vector(char *const vec[]) {
+    size_t count = 0;
+    while (vec[count] != NULL)
+        count++;
+    char **copy = malloc((count + 1) * sizeof(*copy));
+    if (copy != NULL)
+        memcpy(copy, vec, (count + 1) * sizeof(*copy));
+    return copy;
+}
+
 struct native_exec_pending {
     const struct native_program *prog;
     int argc;
@@ -612,11 +633,45 @@ void native_cmdline_discard(struct task *task) {
     free(old);
 }
 
-void native_exec_run_pending(void) {
-    struct native_exec_pending *pending = current != NULL ? current->native_exec : NULL;
-    if (pending == NULL)
-        return;
+// Where native_exec_in_place comes back to: the frame of
+// native_exec_run_pending that called the program's main. One per thread, and
+// only while a main it called is running; `task` is the task that main runs
+// for, which a thread impersonating another (native_spawn_opts) is not.
+struct native_landing {
+    sigjmp_buf env;
+    struct task *task;
+    unsigned lockstats_depth;
+};
+static __thread struct native_landing *native_landing;
 
+bool native_exec_landing_available(void) {
+    return current != NULL && native_landing != NULL && native_landing->task == current;
+}
+
+bool native_exec_in_place_wanted(void) {
+    return current != NULL && current->ptrace.traced &&
+        native_exec_landing_available() &&
+        !native_frames_live() &&
+        __atomic_load_n(&current->native_helper_threads, __ATOMIC_ACQUIRE) == 0 &&
+        !nlibc_in_stdio();
+}
+
+// The exec has committed and the native program is gone: leave its C stack
+// for good and resume in native_exec_run_pending as though main had returned.
+// Nothing below here may be left holding a lock or a shim frame, which is
+// what native_exec_in_place checks before it commits.
+//
+// savemask 0: Darwin's siglongjmp would restore the mask with sigprocmask,
+// which sets every thread's (see sigunwind_start in util/sync.h).
+void native_exec_land(void) {
+    struct native_landing *landing = native_landing;
+    siglongjmp(landing->env, 1);
+}
+
+// Runs the program `pending` records, and ends the task with its status. It
+// returns only when the program exec'd in place instead (native_exec_in_place),
+// and the task runs on as whatever that exec loaded.
+static void native_exec_run_one(struct native_exec_pending *pending) {
     const struct native_program *prog = pending->prog;
     int argc = pending->argc;
     char **argv = pending->argv;
@@ -664,13 +719,66 @@ void native_exec_run_pending(void) {
     if (restored)
         native_restored_wait_for_foreground_job();
 
-    int status = prog->main(argc, argv, envp);
+    // A traced exec leaves its tracer a SIGTRAP to take before the new image
+    // runs an instruction (exec_report_to_tracer). A native program yields
+    // only at a checkpoint, and waiting for its first syscall would let it run
+    // -- or exit -- before its tracer had seen the exec at all.
+    if (current->ptrace.traced)
+        native_checkpoint();
+
+    // An in-place exec (native_exec_in_place) comes back here instead of
+    // returning from main. Nothing assigned between the sigsetjmp and the
+    // siglongjmp is read afterwards but `landing`, which lives in this frame.
+    //
+    // The program gets arrays of its own, so that the kernel's copy of argv
+    // and envp is still the kernel's when the program is abandoned
+    // (native_shallow_vector). Only for a traced task: nothing else can exec
+    // in place, and a program that finishes exits before the free below.
+    char **main_argv = current->ptrace.traced ? native_shallow_vector(argv) : NULL;
+    char **main_envp = current->ptrace.traced ? native_shallow_vector(envp) : NULL;
+    if (main_argv != NULL)
+        current->native_argv = main_argv;
+    struct native_landing landing = { .task = current, .lockstats_depth = lockstats_depth };
+    struct native_landing *outer = native_landing;
+    bool replaced = false;
+    int status = 0;
+    if (sigsetjmp(landing.env, 0) == 0) {
+        native_landing = &landing;
+        status = prog->main(argc, main_argv != NULL ? main_argv : argv,
+                main_envp != NULL ? main_envp : envp);
+    } else {
+        // Abandoned frames opened no lockstats frame that is still open --
+        // native_exec_in_place holds no lock -- but put the depth back as
+        // sigunwind_start does, so that stays true by construction.
+        lockstats_depth = landing.lockstats_depth;
+        replaced = true;
+    }
+    native_landing = outer;
 
     current->native_running = NULL;
     current->native_argv = NULL;
     current->native_argc = 0;
-    native_free_vector(argv);
-    native_free_vector(envp);
+    free(main_argv);
+    free(main_envp);
+    // Through the program's own array only when it was handed the kernel's:
+    // abandoned, it may have left anything in a slot, so without a copy of
+    // its own the strings are left to leak with the rest of its heap.
+    if (!replaced || main_argv != NULL)
+        native_free_vector(argv);
+    if (!replaced || main_envp != NULL)
+        native_free_vector(envp);
+
+    // The program exec'd in place. Its image is gone and the task runs on: a
+    // native program recorded by that exec is run by the next pass, and an
+    // ELF one is what this returns to -- the execve syscall that started the
+    // first program, which hands its 0 to the new image, or
+    // task_run_current, which starts it.
+    if (replaced) {
+        native_env_discard(current);
+        native_cmdline_discard(current);
+        nlibc_program_state_reset();
+        return;
+    }
 
     // The syscall marshalling arena this thread has been using lives in the
     // guest address space, and nothing below needs it. Handing it back here
@@ -690,6 +798,17 @@ void native_exec_run_pending(void) {
     // Same encoding sys_exit_group uses: the wait status carries the exit code
     // in its high byte.
     do_exit_group((status & 0xff) << 8);
+}
+
+void native_exec_run_pending(void) {
+    // More than one pass only when a program exec'd in place into another
+    // native program, which the exec recorded like any other.
+    for (;;) {
+        struct native_exec_pending *pending = current != NULL ? current->native_exec : NULL;
+        if (pending == NULL)
+            return;
+        native_exec_run_one(pending);
+    }
 }
 
 // -------------------------------------------------------------- environment

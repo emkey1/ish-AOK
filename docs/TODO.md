@@ -1256,6 +1256,27 @@ Two more gaps in the same exec rules, neither with a test:
 - **`#!` interpreters:** Linux honours an interpreter's own set-id bits, and
   AOK does not.
 
+### Tracing a native program: what a tracer still cannot see
+
+Found 2026-09-25 while fixing gdb's `startup-with-shell` under
+`SHELL=/AOK/native/zsh` (tests/manual/ptrace_startup_with_shell.c). A traced
+native program now reports its exec, and its own exec replaces it in place,
+keeping its pid (native_exec_in_place_wanted, kernel/native.h) -- which is all
+gdb's start-up needs. Three things a tracer sees on Linux it still does not:
+
+- **No syscall stops.** A native program's calls go through
+  syscall_dispatch_native, which has no ptrace hooks, and there is no guest
+  register file to report them from. `strace` shows the exec and the exit and
+  nothing between; a PTRACE_SYSCALL tracer sees one execve entry, the native
+  program's exec events, and one exit.
+- **Children are not followed.** A native shell starts a command with
+  native_spawn, not clone, so `strace -f` and gdb's `follow-fork-mode` never
+  attach to it.
+- **An untraced exec still stands in.** Only a traced program's exec goes in
+  place, since abandoning the program leaks its heap. Anything that attaches
+  AFTER a native program has exec'd finds the stand-in's wait, not the program
+  (its pid is the child's).
+
 ## Timers across a checkpoint
 
 ### FIXED: timers, and the signals they queue, were not in the image

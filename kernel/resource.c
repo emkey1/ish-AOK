@@ -549,8 +549,11 @@ void rusage_add(struct rusage_ *dst, struct rusage_ *src) {
 // maxrss sample in rusage_fill_task_counters trylocks each thread and walks
 // its address space's page table, and ps, top and htop read that file for
 // every process on every refresh.
-static struct rusage_ group_usage(struct tgroup *group, bool counters) {
-    complex_lockt(&pids_lock, 0);
+//
+// `children` adds what the process's reaped descendants used, which is
+// Linux's RUSAGE_BOTH. The caller holds pids_lock (group_usage takes it).
+static struct rusage_ group_usage_pids_locked(struct tgroup *group, bool counters,
+        bool children) {
     lock(&group->lock, 0);
     struct rusage_ rusage;
     memset(&rusage, 0, sizeof(rusage));
@@ -599,9 +602,21 @@ static struct rusage_ group_usage(struct tgroup *group, bool counters) {
         }
         rusage_add(&rusage, &live);
     }
+    if (children)
+        rusage_add(&rusage, &group->children_rusage);
     unlock(&group->lock);
+    return rusage;
+}
+
+static struct rusage_ group_usage(struct tgroup *group, bool counters) {
+    complex_lockt(&pids_lock, 0);
+    struct rusage_ rusage = group_usage_pids_locked(group, counters, false);
     unlock(&pids_lock);
     return rusage;
+}
+
+struct rusage_ rusage_get_group_both_pids_locked(struct tgroup *group) {
+    return group_usage_pids_locked(group, true, true);
 }
 
 struct rusage_ rusage_get_group_of(struct tgroup *group) {

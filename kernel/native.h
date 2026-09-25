@@ -166,6 +166,40 @@ void native_exec_mark_restored(dword_t standin_child);
 // warning in every file that includes that header before this one.
 void nlibc_exec_standin_resume(dword_t child) __attribute__((__noreturn__));
 
+// exec from a native program, done for real. A native program cannot become
+// a guest image in the middle of a C function, so its exec is spawn-then-wait
+// (nlibc_exec_standin): the program runs as a CHILD, and the pid changes. For
+// a traced task that is not an exec at all to the one watching it. gdb starts
+// a program as `$SHELL -c 'exec prog'` under PTRACE_TRACEME and counts one trap
+// per exec; with $SHELL /AOK/native/zsh, the default login shell a release
+// asks people to use, the traced task never became `prog` -- an untraced child
+// ran it -- and gdb reported "During startup program exited normally" for
+// every program, while `set startup-with-shell off` worked.
+//
+// So a traced task's exec replaces its image in place, keeping its pid: the
+// exec commits (native_exec_in_place, kernel/native_io.c), and the program's
+// C stack is abandoned with a siglongjmp back to the native_exec_run_pending
+// that called its main, which returns into the new image -- or runs the next
+// program, if the exec was of a native one. What the program had allocated is
+// left behind, which is the price and why an untraced exec still stands in.
+//
+// Wanted when the task is traced and the unwind is safe: this thread is the
+// one native_exec_run_pending runs the program on, no shim call below is
+// mid-flight, the program has no threads of its own, and no host stdio lock is
+// held. Anything else keeps the stand-in.
+bool native_exec_in_place_wanted(void);
+// Whether this thread has a native_exec_run_pending to come back to, for the
+// task it is running.
+bool native_exec_landing_available(void);
+// The unwind itself; for native_exec_in_place, once the exec has committed.
+void native_exec_land(void) __attribute__((__noreturn__));
+// The shim's per-thread, per-program state, back to how a thread starts: once
+// a program has exec'd in place, the thread runs whatever comes next.
+// kernel/native_libc.c.
+void nlibc_program_state_reset(void);
+// Whether the calling thread is inside a host stdio callback. native_libc.c.
+bool nlibc_in_stdio(void);
+
 // Poll for pending signals and group-stops, and act on them.
 //
 // A native program runs as host code on the guest task's thread, so nothing

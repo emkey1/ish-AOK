@@ -11,6 +11,7 @@
 #include "kernel/fs.h"
 #include "kernel/native.h"
 #include "kernel/native_io.h"
+#include "kernel/native_syscall.h"
 #include "kernel/task.h"
 #include "fs/fd.h"
 #include "fs/path.h"
@@ -324,6 +325,43 @@ int native_spawn_opts(const char *path, char *const argv[], char *const envp[],
     if (pid_out != NULL)
         *pid_out = pid;
     return 0;
+}
+
+int native_exec_in_place(const char *path, char *const argv[], char *const envp[],
+        bool set_mask, sigset_t_ mask) {
+    if (path == NULL || argv == NULL)
+        return _EFAULT;
+    size_t argc = 0, envc = 0;
+    char *argv_packed = native_pack_args(argv, &argc);
+    char *envp_packed = native_pack_args(envp, &envc);
+    if (argv_packed == NULL || envp_packed == NULL) {
+        free(argv_packed);
+        free(envp_packed);
+        return _ENOMEM;
+    }
+
+    // The mask the image starts with is the one it inherits, as for any
+    // exec; the shim's holds are the shim's, not the program's.
+    sigset_t_ held_mask = current->blocked;
+    if (set_mask)
+        sigmask_set_blocked(mask);
+    // This thread's syscall arena is a mapping in the address space the exec
+    // is about to replace. Given back while that space is still current --
+    // native_exec_in_place_wanted has made sure no shim frame holds a mark in
+    // it -- or it is a megabyte left in a space a vfork parent goes on using.
+    native_arena_release();
+
+    int err = do_execve(path, argc, argv_packed, envp_packed);
+    free(argv_packed);
+    free(envp_packed);
+    if (err < 0) {
+        // Nothing was committed: the program runs on, as after any failed
+        // execve, with the mask it had.
+        if (set_mask)
+            sigmask_set_blocked(held_mask);
+        return err;
+    }
+    native_exec_land();
 }
 
 int native_waitpid(dword_t pid, int *status_out, int options) {

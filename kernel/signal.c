@@ -967,6 +967,18 @@ bool signal_stops_for_tracer(struct task *task, int sig) {
     return task->ptrace.traced && sig != SIGKILL_ && sig != task->ptrace.deliver_sig;
 }
 
+// Linux's sig_ignored: "Tracers may want to know about even ignored signal
+// unless it is SIGKILL". A signal a traced task ignores -- SIG_IGN, or by
+// default like SIGCHLD, SIGCONT, SIGWINCH and SIGURG -- is queued all the same,
+// the tracer is shown it at a signal-delivery-stop, and it is discarded only if
+// the tracer then delivers it. AOK dropped it as it was sent, so a tracer never
+// heard of one: `strace -f sh -c 'ls'` printed no "--- SIGCHLD ---" line, and
+// strace's own start-up, which sends the SIGCONT that lifts its tracee's stop,
+// saw no SIGCONT where Linux 6.12 stops for it (status 0x127f) every time.
+static bool signal_traced_not_ignored(struct task *task, int sig) {
+    return task->ptrace.traced && sig != SIGKILL_;
+}
+
 // Put one signal on a queue, a POSIX timer's own or not (struct sigqueue).
 // Caller holds sighand->lock.
 static void signal_enqueue_locked(struct list *queue, sigset_t_ *pending, int sig,
@@ -1189,7 +1201,8 @@ static void deliver_signal_to_group_locked(struct sighand *sighand, struct task 
     // is held by the shim with the signal blocked and the disposition left at
     // SIG_DFL, and that blocked bit is what keeps its SIGCHLD from being
     // dropped as ignored.
-    bool ignored = signal_action(sighand, sig) == SIGNAL_IGNORE;
+    bool ignored = signal_action(sighand, sig) == SIGNAL_IGNORE &&
+        !signal_traced_not_ignored(target, sig);
     if (ignored && !sigset_has(target->blocked | target->waiting, sig))
         return;
 
@@ -1347,6 +1360,49 @@ static void signal_resume_group(struct tgroup *group, int sig) {
     unlock(&group->lock);
 }
 
+// Linux's ptrace_trap_notify, for a SIGCONT: every SEIZED tracee among the
+// process's threads is told, whether or not the process was stopped, and owes
+// its tracer a PTRACE_EVENT_STOP for it (ptrace_trap_notify, kernel/task.h),
+// taken before the SIGCONT itself is. Measured on 6.12: a seized tracee in
+// nanosleep reports 0x80057f and then the SIGCONT; one at a syscall stop
+// reports its next stop, then 0x80057f, then the SIGCONT; one whose group-stop
+// the tracer has been shown but not yet LISTENed to reports 0x80057f as soon
+// as it is.
+//
+// Marked BEFORE the SIGCONT is queued, as prepare_signal marks it: a tracee
+// woken by the signal must find the flag already there, or it takes the
+// SIGCONT's delivery-stop first. Marked after, it did, in 2 of 15 runs of
+// tests/manual/ptrace_strace_startup.c. Call with no lock held.
+static void signal_cont_mark_tracees(struct task **members, size_t count) {
+    for (size_t i = 0; i < count; i++) {
+        struct task *task = members[i];
+        lock(&task->ptrace.lock, 0);
+        if (task->ptrace.traced && task->ptrace.seized)
+            __atomic_store_n(&task->ptrace_trap_notify, true, __ATOMIC_RELEASE);
+        unlock(&task->ptrace.lock);
+    }
+}
+
+// ...and woken to take it, as signal_wake_up wakes an interruptible sleeper:
+// the SIGCONT wakes only the thread that takes it. Not out of a ptrace stop,
+// which Linux leaves alone unless the tracee is listening; that one takes it
+// once resumed, and a PTRACE_LISTEN finds it owed and re-traps at once. Nor a
+// tracee that has taken it already. Call with no lock held.
+static void signal_cont_wake_tracees(struct task **members, size_t count,
+        struct sighand *sighand) {
+    if (sighand == NULL)
+        return;
+    for (size_t i = 0; i < count; i++) {
+        struct task *task = members[i];
+        lock(&task->ptrace.lock, 0);
+        bool wake = task->ptrace.traced && task->ptrace.seized && !task->ptrace.stopped &&
+            __atomic_load_n(&task->ptrace_trap_notify, __ATOMIC_ACQUIRE);
+        unlock(&task->ptrace.lock);
+        if (wake)
+            task_wake_for_ptrace_trap(task, sighand);
+    }
+}
+
 // A process-directed signal to `group`, sent to `target`, or to the group's
 // leader when that is NULL: what send_signal does for one thread, for the
 // process's queue. Cancels a pending stop or continue on every queue of the
@@ -1366,6 +1422,8 @@ static void send_process_signal(struct tgroup *group, struct task *target, int s
     if (!taken)
         return;
     if (snap.sighand != NULL && target != NULL) {
+        if (sig == SIGCONT_)
+            signal_cont_mark_tracees(snap.members, snap.count);
         lock(&snap.sighand->lock, 0);
         // Before the signal can be dropped as ignored: a SIGCONT at SIG_DFL
         // still cancels a pending stop.
@@ -1374,6 +1432,8 @@ static void send_process_signal(struct tgroup *group, struct task *target, int s
                 snap.members, snap.count);
         unlock(&snap.sighand->lock);
         signal_resume_group(group, sig);
+        if (sig == SIGCONT_)
+            signal_cont_wake_tracees(snap.members, snap.count, snap.sighand);
     }
     if (target != NULL)
         task_ref_cnt_mod(target, -1);
@@ -1467,6 +1527,14 @@ static void signal_prepare_stop_cont_threads(struct task *task, int sig) {
         lock(&snap.sighand->lock, 0);
         signal_prepare_stop_cont(snap.sighand, NULL, sig, snap.members, snap.count);
         unlock(&snap.sighand->lock);
+        // A SIGCONT sent to one thread notifies every seized thread of its
+        // process, as one sent to the process does: Linux's prepare_signal
+        // walks the whole thread group either way. The caller queues it after
+        // this returns.
+        if (sig == SIGCONT_) {
+            signal_cont_mark_tracees(snap.members, snap.count);
+            signal_cont_wake_tracees(snap.members, snap.count, snap.sighand);
+        }
     }
     task_ref_cnt_mod(target, -1);
     group_snapshot_release(&snap);
@@ -2325,7 +2393,10 @@ static void send_signal_with_sighand(struct task *task, struct sighand *sighand,
     // it still runs for a default-disposition SIGCONT, which skips the deliver
     // path below but must still flush any queued stop signal.
     signal_prepare_stop_cont(sighand, task, sig, NULL, 0);
-    bool ignored = signal_action(sighand, sig) == SIGNAL_IGNORE;
+    // A traced task ignores nothing but SIGKILL: its tracer is shown the
+    // signal at delivery and decides (signal_traced_not_ignored).
+    bool ignored = signal_action(sighand, sig) == SIGNAL_IGNORE &&
+        !signal_traced_not_ignored(task, sig);
     bool synchronously_consumed = sigset_has(task->blocked | task->waiting, sig);
     if (should_trace_signal_task(task)) {
         printk("tracked signal send: target=%d tgid=%d comm=%s sig=%d ignored=%d sync=%d blocked=%#x waiting=%#x pending=%#x sender=%d/%s\n",
@@ -3504,6 +3575,17 @@ void receive_signals(void) {
     // mask rather than the one sigsuspend waited with, and a signal the
     // temporary mask blocked ran on top of the one that ended the wait.
     for (;;) {
+        // A PTRACE_EVENT_STOP owed to a tracer comes before any signal, and is
+        // asked about again before EACH one, as Linux's get_signal loop asks
+        // for JOBCTL_TRAP_MASK: a SIGCONT's notice can arrive while this loop
+        // is already running, and the SIGCONT it announces is queued after
+        // it. Taken with no lock held, as a signal-delivery-stop is.
+        if (current->ptrace.traced && task_trap_stop_pending(current) &&
+                !current->group->stopped) {
+            unlock(&sighand->lock);
+            ptrace_trap_stop_if_pending();
+            lock(&sighand->lock, 0);
+        }
         // The shared (process-directed) queue too, once the thread's own has
         // nothing -- e.g. a SIGCHLD sent via send_signal_to_process to a
         // sibling thread of this process, see kernel/exit.c.

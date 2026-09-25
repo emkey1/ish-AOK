@@ -344,11 +344,14 @@ void signal_group_handoff(void);
 // task->exiting is set, so that nothing hands it another. For do_exit.
 void signal_exit_handoff(struct task *task);
 
-// Whether `task` owes its tracer a PTRACE_EVENT_STOP (ptrace.trap_stop in
-// kernel/task.h). It is not a signal and nothing blocks it, so every wait that
-// ends for a deliverable signal has to end for it as well, and a syscall it cut
-// short restarts: the stop runs no handler.
-#define task_trap_stop_pending(task) __atomic_load_n(&(task)->ptrace.trap_stop, __ATOMIC_ACQUIRE)
+// Whether `task` owes its tracer a PTRACE_EVENT_STOP (ptrace.trap_stop, or the
+// ptrace_trap_notify a SIGCONT leaves a seized tracee, in kernel/task.h). It is
+// not a signal and nothing blocks it, so every wait that ends for a deliverable
+// signal has to end for it as well, and a syscall it cut short restarts: the
+// stop runs no handler.
+#define task_trap_stop_pending(task) \
+    (__atomic_load_n(&(task)->ptrace.trap_stop, __ATOMIC_ACQUIRE) || \
+     __atomic_load_n(&(task)->ptrace_trap_notify, __ATOMIC_ACQUIRE))
 
 // Replace the blocked mask outright, the way SIG_SETMASK does, for code acting
 // on a task's behalf with no guest syscall to carry the set: native_spawn_opts

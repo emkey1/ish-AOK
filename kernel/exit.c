@@ -225,6 +225,7 @@ static void ptrace_detach_from_tracer(struct task *tracer, struct task *tracee) 
         // a tracer that dies between interrupting a tracee and seeing the stop
         // must not leave it one to take with nobody to report it to.
         __atomic_store_n(&tracee->ptrace.trap_stop, false, __ATOMIC_RELEASE);
+        __atomic_store_n(&tracee->ptrace_trap_notify, false, __ATOMIC_RELEASE);
         if (tracee->ptrace.stopped) {
             tracee->ptrace.stopped = false;
             notify(&tracee->ptrace.cond);
@@ -1651,17 +1652,40 @@ static bool notify_if_ptrace_stopped(struct task *task, struct siginfo_ *info_ou
     return false;
 }
 
+// What wait4 reports for a child it finds stopped, continued or in a ptrace
+// stop rather than exited: the child's own usage and its reaped descendants',
+// as it is now -- Linux's wait_task_stopped and wait_task_continued both call
+// getrusage(p, RUSAGE_BOTH). Nothing was written, and sys_wait4 copied its
+// uninitialised struct out to the guest: host stack bytes, read by every
+// tracer that asks wait4 for usage. strace -c takes its "seconds" column from
+// the ru_stime of every stop, and printed 134 seconds, and 1808599711, for a
+// program that ran for a millisecond. Caller holds pids_lock.
+static void report_live_rusage(struct task *task, struct rusage_ *rusage_out) {
+    if (rusage_out != NULL)
+        *rusage_out = rusage_get_group_both_pids_locked(task->group);
+}
+
 static bool reap_if_needed(struct task *task, struct siginfo_ *info_out, struct rusage_ *rusage_out,
         int options, struct exit_notes *notes) {
     assert(task_is_leader(task));
-    if ((options & WUNTRACED_ && notify_if_stopped(task, info_out)) ||
-        (options & WEXITED_ && reap_if_zombie(task, info_out, rusage_out, options, notes)) ||
-        (options & WCONTINUED_ && notify_if_continued(task, info_out))) {
+    if (options & WUNTRACED_ && notify_if_stopped(task, info_out)) {
+        report_live_rusage(task, rusage_out);
         info_out->sig = SIGCHLD_;
         return true;
     }
-    if (notify_if_ptrace_stopped(task, info_out))
+    if (options & WEXITED_ && reap_if_zombie(task, info_out, rusage_out, options, notes)) {
+        info_out->sig = SIGCHLD_;
         return true;
+    }
+    if (options & WCONTINUED_ && notify_if_continued(task, info_out)) {
+        report_live_rusage(task, rusage_out);
+        info_out->sig = SIGCHLD_;
+        return true;
+    }
+    if (notify_if_ptrace_stopped(task, info_out)) {
+        report_live_rusage(task, rusage_out);
+        return true;
+    }
     return false;
 }
 
@@ -1669,8 +1693,12 @@ static bool reap_if_needed(struct task *task, struct siginfo_ *info_out, struct 
 // exit. Tracee is an ordinary child here or not.
 static bool report_tracee(struct task *task, struct siginfo_ *info_out, struct rusage_ *rusage_out,
         int options, struct exit_notes *notes) {
-    if (notify_if_ptrace_stopped(task, info_out) ||
-            ((options & WEXITED_) && reap_traced_zombie(task, info_out, rusage_out, options, notes))) {
+    if (notify_if_ptrace_stopped(task, info_out)) {
+        report_live_rusage(task, rusage_out);
+        info_out->sig = SIGCHLD_;
+        return true;
+    }
+    if ((options & WEXITED_) && reap_traced_zombie(task, info_out, rusage_out, options, notes)) {
         info_out->sig = SIGCHLD_;
         return true;
     }
@@ -2006,7 +2034,9 @@ dword_t sys_wait4_guest(pid_t_ id, guest_addr_t status_addr, dword_t options, gu
     }
 
     struct siginfo_ info = {.child.pid = 0xbaba};
-    struct rusage_ rusage;
+    // Zeroed, so that a report that fills nothing in can never hand the guest
+    // what was on this stack (report_live_rusage).
+    struct rusage_ rusage = {};
     int_t res = 0;
     TASK_MAY_BLOCK {
         res = do_wait(idtype, id, &info, &rusage, options | WEXITED_);

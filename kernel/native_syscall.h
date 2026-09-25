@@ -1,6 +1,7 @@
 #ifndef KERNEL_NATIVE_SYSCALL_H
 #define KERNEL_NATIVE_SYSCALL_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include "misc.h"
 
@@ -119,6 +120,12 @@ int native_scratch_get(void *dst, guest_addr_t src, size_t size);
 // Safe on a thread that never had an arena, and safe after the space it was
 // mapped in has gone: it unmaps only when the task is still in that same space.
 void native_arena_release(void);
+
+// Whether a shim call on this thread has a frame open in the arena: something
+// below the caller is in the middle of marshalling a syscall. An exec that
+// abandons the program's stack (native_exec_in_place) must not happen then --
+// the frame lives on that stack.
+bool native_frames_live(void);
 
 // ------------------------------------------------------------------- numbers
 //

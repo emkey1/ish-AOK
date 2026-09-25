@@ -103,6 +103,10 @@ struct tgroup;
 struct rusage_ rusage_get_current(void);
 struct rusage_ rusage_get_group(void);
 struct rusage_ rusage_get_group_of(struct tgroup *group);
+// A live process's usage and its reaped children's -- Linux's RUSAGE_BOTH,
+// which wait4 reports for a child it finds stopped or continued. The caller
+// holds pids_lock; takes group->lock.
+struct rusage_ rusage_get_group_both_pids_locked(struct tgroup *group);
 // The same process-wide sum, utime and stime only (nothing else is filled):
 // /proc/<pid>/stat. Takes pids_lock and group->lock.
 struct rusage_ rusage_get_group_cpu_of(struct tgroup *group);

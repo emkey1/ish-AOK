@@ -705,6 +705,33 @@ struct task {
     // /proc reader. At the end for the reason given above
     // native_standin_child.
     struct ipc_namespace *ipc_ns;
+    // Linux's JOBCTL_TRAP_NOTIFY: a SIGCONT has reached this SEIZED tracee's
+    // process since it last reported a PTRACE_EVENT_STOP, and it owes its
+    // tracer one saying so -- status 0x80057f, or the stop signal's if its
+    // group is job-control stopped again by the time it is taken. Every SIGCONT
+    // sets it, stopped or not (Linux's prepare_signal, ptrace_trap_notify).
+    // Taken wherever ptrace.trap_stop is, and task_trap_stop_pending answers
+    // for both, so every wait that ends for the one ends for the other. Only a
+    // PTRACE_EVENT_STOP clears it -- "any trap clears pending STOP trap, STOP
+    // trap clears NOTIFY" -- and a detach drops it.
+    //
+    // What it is for: strace starts its program stopped, seizes it, and sends
+    // the SIGCONT itself, then answers the group-stop it is shown with
+    // PTRACE_LISTEN. By then the SIGCONT has lifted the stop, and Linux
+    // re-traps at once because of this flag. AOK had no flag, so the tracee
+    // ran on from the LISTEN with no syscall stops at all, straight through
+    // its execve: strace said "Stray PTRACE_EVENT_EXEC", hid everything it
+    // traced until an execve it never saw, and `strace -c` printed no summary.
+    // Written under ptrace.lock, read without it. At the end for the reason
+    // given above native_standin_child.
+    bool ptrace_trap_notify;
+    // Threads a native program running on this task has started with
+    // pthread_create and that have not finished (nlibc_pthread_create). They
+    // run native code against this task, so while there are any its exec
+    // cannot replace the image in place (native_exec_in_place_wanted). Atomic;
+    // not inherited. At the end for the reason given above
+    // native_standin_child.
+    int native_helper_threads;
 };
 
 // current will always give the process that is currently executing

@@ -99,6 +99,7 @@ static void ptrace_resume_child_locked(struct task *child, int resume_sig,
         // is parked holding: once released it is free to reach a checkpoint,
         // and it must find nothing owed there.
         __atomic_store_n(&child->ptrace.trap_stop, false, __ATOMIC_RELEASE);
+        __atomic_store_n(&child->ptrace_trap_notify, false, __ATOMIC_RELEASE);
     }
     // A ptrace resume also lifts any job-control (group) stop on the tracee:
     // ptrace control takes precedence over SIGSTOP/SIGCONT job control, so a
@@ -463,16 +464,72 @@ static int ptrace_getregset_write(struct task *tracer, guest_addr_t iov_addr,
     return ptrace_iovec_put(tracer, iov_addr, &iov);
 }
 
+// `buf` holds the registers as they are, and as much of it as the tracer
+// supplied is overwritten: Linux's ptrace_regset copies min(iov_len, the set's
+// size), so a tracer may set only the first few. A short vector was EIO here.
+// The length taken is reported back, as for a GETREGSET.
 static int ptrace_setregset_read(struct task *tracer, guest_addr_t iov_addr,
         void *buf, size_t buf_size) {
     struct ptrace_iovec_ iov;
     int err = ptrace_iovec_get(tracer, iov_addr, &iov);
     if (err < 0)
         return err;
-    if (iov.len < buf_size)
-        return _EIO;
-    if (user_read(iov.base, buf, buf_size))
+    size_t copy_len = iov.len < buf_size ? (size_t) iov.len : buf_size;
+    if (copy_len != 0 && user_read(iov.base, buf, copy_len))
         return _EFAULT;
+    iov.len = copy_len;
+    return ptrace_iovec_put(tracer, iov_addr, &iov);
+}
+
+// The size of one slot of a register set, which a request's length must be a
+// whole number of -- Linux's regset->size, and ptrace_regset's EINVAL for any
+// other length -- or 0 for a set this tracee's architecture does not have.
+//
+// Debuggers probe with that EINVAL. gdb on riscv64 finds the width of the
+// floating-point registers by asking for NT_PRFPREG in 4-byte slots first and
+// taking EINVAL to mean "not those"; answered instead, it concluded the
+// registers were 4 bytes wide, printed "bfd requires flen 8, but target has
+// flen 4", and could not insert a single breakpoint.
+static size_t ptrace_regset_slot(const struct task *child, qword_t note_type) {
+    switch (child->abi) {
+        case GUEST_ABI_AMD64:
+            switch (note_type) {
+                case NT_PRSTATUS_: case NT_PRFPREG_: case NT_X86_XSTATE_: return 8;
+            }
+            return 0;
+        case GUEST_ABI_ARM64:
+            switch (note_type) {
+                case NT_PRSTATUS_: case NT_ARM_TLS_: return 8;
+                case NT_PRFPREG_: case NT_ARM_HW_BREAK_: case NT_ARM_HW_WATCH_:
+                case NT_ARM_SYSTEM_CALL_: return 4;
+            }
+            return 0;
+        case GUEST_ABI_RISCV64:
+            switch (note_type) {
+                case NT_PRSTATUS_: case NT_PRFPREG_: return 8;
+            }
+            return 0;
+        case GUEST_ABI_I386:
+        default:
+            switch (note_type) {
+                case NT_PRSTATUS_: case NT_PRFPREG_: return 4;
+                case NT_X86_XSTATE_: return 8;
+            }
+            return 0;
+    }
+}
+
+static int ptrace_regset_check(struct task *tracer, struct task *child, guest_addr_t iov_addr,
+        qword_t note_type) {
+    size_t slot = ptrace_regset_slot(child, note_type);
+    if (slot == 0)
+        return _EINVAL;
+    struct ptrace_iovec_ iov;
+    int err = ptrace_iovec_get(tracer, iov_addr, &iov);
+    if (err < 0)
+        return err;
+    if (iov.len % slot != 0)
+        return _EINVAL;
     return 0;
 }
 
@@ -534,6 +591,9 @@ static void set_user_regs(struct task *task, struct user_regs_struct_ *user_regs
 
 static int ptrace_getregset(struct task *tracer, struct task *child, guest_addr_t iov_addr,
         qword_t note_type) {
+    int check = ptrace_regset_check(tracer, child, iov_addr, note_type);
+    if (check < 0)
+        return check;
     switch (note_type) {
         case NT_PRSTATUS_: {
             if (child->abi == GUEST_ABI_ARM64) {
@@ -584,35 +644,87 @@ static int ptrace_getregset(struct task *tracer, struct task *child, guest_addr_
             int syscall_no = child->ptrace.syscall;
             return ptrace_getregset_write(tracer, iov_addr, &syscall_no, sizeof(syscall_no));
         }
+        // TPIDR_EL0, the thread pointer, then TPIDR2_EL0, which is zero
+        // without SME -- Linux 6.12's tls_get, 16 bytes. How a debugger finds
+        // a thread's TLS, and so its thread: gdb's ps_get_thread_area reads
+        // it here for libthread_db, and without it every gdb session on an
+        // arm64 guest said "Cannot find user-level thread for LWP" and ran
+        // with "thread debugging will not be available".
+        case NT_ARM_TLS_: {
+            if (child->abi != GUEST_ABI_ARM64)
+                return _EINVAL;
+            qword_t tls[2] = { child->cpu.arm64_tpidr, 0 };
+            return ptrace_getregset_write(tracer, iov_addr, tls, sizeof(tls));
+        }
+        // The hardware breakpoint and watchpoint registers. There are none --
+        // nothing in AOK arms one -- and that is the answer: an ARMv8 debug
+        // architecture with no slots, which a debugger reads as "use software
+        // ones", as x86's debug registers read as zero (PEEKUSER below). gdb
+        // asks both at every start and, refused, printed "Unable to determine
+        // the number of hardware watchpoints available" and the same for
+        // breakpoints on every run.
+        case NT_ARM_HW_BREAK_:
+        case NT_ARM_HW_WATCH_: {
+            if (child->abi != GUEST_ABI_ARM64)
+                return _EINVAL;
+            struct user_hwdebug_state_arm64_ state = {
+                .dbg_info = 0x6 << 8,   // ID_AA64DFR0_EL1.DebugVer: ARMv8
+            };
+            return ptrace_getregset_write(tracer, iov_addr, &state, sizeof(state));
+        }
         default:
             return _EINVAL;
     }
 }
 
+// SETREGSET of the debug registers: with no slots there is nothing to arm, so
+// a write that enables one is refused and anything else -- a debugger clearing
+// what it thinks is there -- succeeds. However short the vector: a tracer that
+// knows the count writes only that many entries, here none.
+static int ptrace_set_hwdebug(struct task *tracer, guest_addr_t iov_addr) {
+    struct user_hwdebug_state_arm64_ state = {
+        .dbg_info = 0x6 << 8,
+    };
+    int err = ptrace_setregset_read(tracer, iov_addr, &state, sizeof(state));
+    if (err < 0)
+        return err;
+    for (int i = 0; i < 16; i++)
+        if (state.dbg_regs[i].ctrl & 1)
+            return _ENOSPC;
+    return 0;
+}
+
 static int ptrace_setregset(struct task *tracer, struct task *child, guest_addr_t iov_addr,
         qword_t note_type) {
+    int check = ptrace_regset_check(tracer, child, iov_addr, note_type);
+    if (check < 0)
+        return check;
     switch (note_type) {
         case NT_PRSTATUS_: {
             if (child->abi == GUEST_ABI_ARM64) {
                 struct user_pt_regs_arm64_ user_regs_arm64;
+                get_user_regs_arm64(child, &user_regs_arm64);
                 int err = ptrace_setregset_read(tracer, iov_addr, &user_regs_arm64, sizeof(user_regs_arm64));
                 if (err < 0)
                     return err;
                 set_user_regs_arm64(child, &user_regs_arm64);
             } else if (child->abi == GUEST_ABI_RISCV64) {
                 struct user_regs_struct_riscv64_ user_regs_riscv64;
+                get_user_regs_riscv64(child, &user_regs_riscv64);
                 int err = ptrace_setregset_read(tracer, iov_addr, &user_regs_riscv64, sizeof(user_regs_riscv64));
                 if (err < 0)
                     return err;
                 set_user_regs_riscv64(child, &user_regs_riscv64);
             } else if (child->abi == GUEST_ABI_AMD64) {
                 struct user_regs_struct_amd64_ user_regs_amd64;
+                get_user_regs_amd64(child, &user_regs_amd64);
                 int err = ptrace_setregset_read(tracer, iov_addr, &user_regs_amd64, sizeof(user_regs_amd64));
                 if (err < 0)
                     return err;
                 set_user_regs_amd64(child, &user_regs_amd64);
             } else {
-                struct user_regs_struct_ user_regs_;
+                struct user_regs_struct_ user_regs_ = {};
+                get_user_regs_and_syscall(child, &user_regs_);
                 int err = ptrace_setregset_read(tracer, iov_addr, &user_regs_, sizeof(user_regs_));
                 if (err < 0)
                     return err;
@@ -626,6 +738,7 @@ static int ptrace_setregset(struct task *tracer, struct task *child, guest_addr_
                 if (note_type != NT_PRFPREG_)
                     return _EINVAL;
                 struct user_fpsimd_state_arm64_ user_fpregs_arm64;
+                get_user_fpregs_arm64(child, &user_fpregs_arm64);
                 int err = ptrace_setregset_read(tracer, iov_addr, &user_fpregs_arm64, sizeof(user_fpregs_arm64));
                 if (err < 0)
                     return err;
@@ -634,18 +747,20 @@ static int ptrace_setregset(struct task *tracer, struct task *child, guest_addr_
                 if (note_type != NT_PRFPREG_)
                     return _EINVAL;
                 struct user_fpregs_struct_riscv64_ user_fpregs_riscv64;
+                get_user_fpregs_riscv64(child, &user_fpregs_riscv64);
                 int err = ptrace_setregset_read(tracer, iov_addr, &user_fpregs_riscv64, sizeof(user_fpregs_riscv64));
                 if (err < 0)
                     return err;
                 set_user_fpregs_riscv64(&child->cpu, &user_fpregs_riscv64);
             } else if (child->abi == GUEST_ABI_AMD64) {
                 struct user_fpregs_struct_amd64_ user_fpregs_amd64;
+                get_user_fpregs_amd64(child, &user_fpregs_amd64);
                 int err = ptrace_setregset_read(tracer, iov_addr, &user_fpregs_amd64, sizeof(user_fpregs_amd64));
                 if (err < 0)
                     return err;
                 set_user_fpregs_amd64(&child->cpu, &user_fpregs_amd64);
             } else {
-                struct user_fpregs_struct_ user_fpregs_;
+                struct user_fpregs_struct_ user_fpregs_ = {};
                 int err = ptrace_setregset_read(tracer, iov_addr, &user_fpregs_, sizeof(user_fpregs_));
                 if (err < 0)
                     return err;
@@ -654,10 +769,27 @@ static int ptrace_setregset(struct task *tracer, struct task *child, guest_addr_
             }
             return 0;
         }
+        case NT_ARM_HW_BREAK_:
+        case NT_ARM_HW_WATCH_:
+            if (child->abi != GUEST_ABI_ARM64)
+                return _EINVAL;
+            return ptrace_set_hwdebug(tracer, iov_addr);
+        case NT_ARM_TLS_: {
+            if (child->abi != GUEST_ABI_ARM64)
+                return _EINVAL;
+            // TPIDR_EL0 first, as Linux's tls_set takes it; TPIDR2_EL0 has
+            // nowhere to go without SME.
+            qword_t tls[2] = { child->cpu.arm64_tpidr, 0 };
+            int err = ptrace_setregset_read(tracer, iov_addr, tls, sizeof(tls));
+            if (err < 0)
+                return err;
+            child->cpu.arm64_tpidr = tls[0];
+            return 0;
+        }
         case NT_ARM_SYSTEM_CALL_: {
             if (child->abi != GUEST_ABI_ARM64)
                 return _EINVAL;
-            int syscall_no;
+            int syscall_no = child->ptrace.syscall;
             int err = ptrace_setregset_read(tracer, iov_addr, &syscall_no, sizeof(syscall_no));
             if (err < 0)
                 return err;
@@ -671,6 +803,155 @@ static int ptrace_setregset(struct task *tracer, struct task *child, guest_addr_
         default:
             return _EINVAL;
     }
+}
+
+// PTRACE_GET_SYSCALL_INFO: what the stopped tracee's syscall is, read the way
+// Linux's ptrace_get_syscall_info reads it. strace 6 asks this at every syscall
+// stop once a self-test at startup finds it working, and falls back to reading
+// the register set when it does not: the request was missing, so every guest
+// strace took the fallback, and the default arm answered EPERM for it.
+//
+// Which stop decides the op, as on Linux: a syscall stop only with
+// TRACESYSGOOD (its si_code is SIGTRAP|0x80 -- a plain SIGTRAP one is NONE),
+// told entry from exit by its message; a PTRACE_EVENT_SECCOMP stop is SECCOMP;
+// anything else is NONE, which still carries the architecture and the two
+// pointers. The return is the size of what the op fills in -- 24, 80, 33 or 84
+// -- and only as much of it as the tracer's buffer holds is copied.
+static dword_t ptrace_audit_arch(const struct task *task) {
+    switch (task->abi) {
+        case GUEST_ABI_AMD64: return 0xc000003e;    // AUDIT_ARCH_X86_64
+        case GUEST_ABI_ARM64: return 0xc00000b7;    // AUDIT_ARCH_AARCH64
+        case GUEST_ABI_RISCV64: return 0xc00000f3;  // AUDIT_ARCH_RISCV64
+        case GUEST_ABI_I386:
+        default: return 0x40000003;                 // AUDIT_ARCH_I386
+    }
+}
+
+// Linux's syscall_get_arguments: the six argument registers of each ABI. At a
+// syscall-entry or seccomp stop none of them has been overwritten yet, arm64's
+// x0 and riscv64's a0 included.
+static void ptrace_syscall_args(const struct task *task, qword_t args[6]) {
+    const struct cpu_state *cpu = &task->cpu;
+    switch (task->abi) {
+        case GUEST_ABI_AMD64:
+            args[0] = cpu->amd64_regs[amd64_rdi];
+            args[1] = cpu->amd64_regs[amd64_rsi];
+            args[2] = cpu->amd64_regs[amd64_rdx];
+            args[3] = cpu->amd64_regs[amd64_r10];
+            args[4] = cpu->amd64_regs[amd64_r8];
+            args[5] = cpu->amd64_regs[amd64_r9];
+            break;
+        case GUEST_ABI_ARM64:
+            for (int i = 0; i < 6; i++)
+                args[i] = cpu->arm64_regs[arm64_x0 + i];
+            break;
+        case GUEST_ABI_RISCV64:
+            for (int i = 0; i < 6; i++)
+                args[i] = cpu->riscv64_regs[riscv64_a0 + i];
+            break;
+        case GUEST_ABI_I386:
+        default:
+            args[0] = cpu->ebx;
+            args[1] = cpu->ecx;
+            args[2] = cpu->edx;
+            args[3] = cpu->esi;
+            args[4] = cpu->edi;
+            args[5] = cpu->ebp;
+            break;
+    }
+}
+
+// The number in the register the ABI passes it in -- what a seccomp stop,
+// which comes before any syscall stop would have recorded ptrace.syscall, has
+// to go on.
+static qword_t ptrace_syscall_nr_reg(const struct task *task) {
+    const struct cpu_state *cpu = &task->cpu;
+    switch (task->abi) {
+        case GUEST_ABI_AMD64: return cpu->amd64_regs[amd64_rax];
+        case GUEST_ABI_ARM64: return cpu->arm64_regs[arm64_x8];
+        case GUEST_ABI_RISCV64: return cpu->riscv64_regs[riscv64_a7];
+        case GUEST_ABI_I386:
+        default: return cpu->eax;
+    }
+}
+
+// The result register, sign-extended from the ABI's width (a 32-bit guest's
+// -ENOENT is -2, not 0xfffffffe).
+static sqword_t ptrace_syscall_rval(const struct task *task) {
+    const struct cpu_state *cpu = &task->cpu;
+    switch (task->abi) {
+        case GUEST_ABI_AMD64: return (sqword_t) cpu->amd64_regs[amd64_rax];
+        case GUEST_ABI_ARM64: return (sqword_t) cpu->arm64_regs[arm64_x0];
+        case GUEST_ABI_RISCV64: return (sqword_t) cpu->riscv64_regs[riscv64_a0];
+        case GUEST_ABI_I386:
+        default: return (sqword_t) (sdword_t) cpu->eax;
+    }
+}
+
+static void ptrace_syscall_pointers(const struct task *task, qword_t *ip, qword_t *sp) {
+    const struct cpu_state *cpu = &task->cpu;
+    switch (task->abi) {
+        case GUEST_ABI_AMD64:
+            *ip = cpu->amd64_rip;
+            *sp = cpu->amd64_regs[amd64_rsp];
+            break;
+        case GUEST_ABI_ARM64:
+            *ip = cpu->arm64_pc;
+            *sp = cpu->arm64_sp;
+            break;
+        case GUEST_ABI_RISCV64:
+            *ip = cpu->riscv64_pc;
+            *sp = cpu->riscv64_regs[riscv64_sp];
+            break;
+        case GUEST_ABI_I386:
+        default:
+            *ip = cpu->eip;
+            *sp = cpu->esp;
+            break;
+    }
+}
+
+// Call with the tracee stopped and its ptrace lock held (find_child).
+static int_t ptrace_get_syscall_info(struct task *child, qword_t user_size, guest_addr_t data) {
+    struct ptrace_syscall_info_ info;
+    memset(&info, 0, sizeof(info));
+    info.op = PTRACE_SYSCALL_INFO_NONE_;
+    info.arch = ptrace_audit_arch(child);
+    ptrace_syscall_pointers(child, &info.instruction_pointer, &info.stack_pointer);
+    size_t actual = offsetof(struct ptrace_syscall_info_, entry);
+
+    int code = child->ptrace.has_siginfo ? child->ptrace.info.code : 0;
+    if (code == (SIGTRAP_ | 0x80)) {
+        if (child->ptrace.eventmsg == PTRACE_EVENTMSG_SYSCALL_ENTRY_) {
+            info.op = PTRACE_SYSCALL_INFO_ENTRY_;
+            // The canonical number, as the register set reports it here: a
+            // tracer's rewrite at this stop is what will run.
+            info.entry.nr = (qword_t) (sqword_t) child->ptrace.syscall;
+            ptrace_syscall_args(child, info.entry.args);
+            actual = offsetof(struct ptrace_syscall_info_, entry.args) + sizeof(info.entry.args);
+        } else if (child->ptrace.eventmsg == PTRACE_EVENTMSG_SYSCALL_EXIT_) {
+            // Linux's syscall_get_error: an error is -4095..-1, and then rval
+            // is that errno; anything else is the plain return value.
+            sqword_t rval = ptrace_syscall_rval(child);
+            info.op = PTRACE_SYSCALL_INFO_EXIT_;
+            info.exit.rval = rval;
+            info.exit.is_error = rval < 0 && rval >= -4095;
+            actual = offsetof(struct ptrace_syscall_info_, exit.is_error) + sizeof(info.exit.is_error);
+        }
+    } else if (code == ((PTRACE_EVENT_SECCOMP_ << 8) | SIGTRAP_)) {
+        info.op = PTRACE_SYSCALL_INFO_SECCOMP_;
+        info.seccomp.nr = ptrace_syscall_nr_reg(child);
+        if (child->abi == GUEST_ABI_I386)
+            info.seccomp.nr = (dword_t) info.seccomp.nr;
+        ptrace_syscall_args(child, info.seccomp.args);
+        info.seccomp.ret_data = (dword_t) child->ptrace.eventmsg;
+        actual = offsetof(struct ptrace_syscall_info_, seccomp.ret_data) + sizeof(info.seccomp.ret_data);
+    }
+
+    size_t write = user_size < actual ? (size_t) user_size : actual;
+    if (write != 0 && user_write(data, &info, write))
+        return _EFAULT;
+    return (int_t) actual;
 }
 
 static bool ptrace_sigkill_pending(void) {
@@ -748,6 +1029,14 @@ static void ptrace_stop_common(int sig, const struct siginfo_ *info, bool syscal
     // re-injected it, and strace -f killed the program it had started in 23 of
     // 50 runs.
     __atomic_store_n(&current->ptrace.trap_stop, false, __ATOMIC_RELEASE);
+    // A SIGCONT's notice is answered only by a PTRACE_EVENT_STOP, as Linux's
+    // ptrace_stop clears JOBCTL_TRAP_NOTIFY for a stop whose si_code says
+    // PTRACE_EVENT_STOP and for no other: a tracee that reaches a syscall stop
+    // first still owes the event-stop once it is resumed. Measured on 6.12: a
+    // SIGCONT landing at a syscall-entry stop gives the exit stop, then
+    // 0x80057f, then the SIGCONT's own signal-delivery-stop.
+    if (event == PTRACE_EVENT_STOP_)
+        __atomic_store_n(&current->ptrace_trap_notify, false, __ATOMIC_RELEASE);
     unlock(&current->ptrace.lock);
 
     // What the tracer is sent: Linux's do_notify_parent_cldstop(for_ptracer),
@@ -837,6 +1126,14 @@ void ptrace_event_stop(int sig, struct siginfo_ *info, int event, qword_t eventm
 void ptrace_trap_stop_if_pending(void) {
     if (current == NULL || !task_trap_stop_pending(current))
         return;
+    // A process that is job-control stopped reports the STOP SIGNAL instead
+    // (do_jobctl_trap: SIGTRAP only when no group-stop is in force), and
+    // reporting it is group_stop_wait's, which every caller of this reaches
+    // next: ptrace_group_stop is a PTRACE_EVENT_STOP for a seized tracee, so it
+    // answers the flag. A SIGCONT's notice followed by a new SIGSTOP is the
+    // case: Linux reports one stop, 0x80137f, and this took two.
+    if (current->ptrace.traced && current->group->stopped)
+        return;
     struct siginfo_ info = {
         .sig = SIGTRAP_,
         .code = (PTRACE_EVENT_STOP_ << 8) | SIGTRAP_,
@@ -847,9 +1144,14 @@ void ptrace_trap_stop_if_pending(void) {
 }
 
 void ptrace_syscall_stop(struct cpu_state *cpu) {
+    // The stopped task's own id and uid, as Linux's ptrace_do_notify fills in
+    // for every ptrace_notify stop. Measured on 6.12: a syscall stop's
+    // PTRACE_GETSIGINFO names the tracee. This said pid 0.
     struct siginfo_ info = {
         .sig = SIGTRAP_,
         .code = current->ptrace.sysgood ? (SIGTRAP_ | 0x80) : SIGTRAP_,
+        .kill.pid = current->pid,
+        .kill.uid = current->uid,
     };
 
     lock(&current->ptrace.lock, 0);
@@ -1050,6 +1352,15 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             child->ptrace.syscall_stopped = false;
             child->ptrace.trap_event = 0;
             child->ptrace.eventmsg = 0;
+            // A seizing tracer is owed the group-stop of a tracee that is
+            // already job-control stopped: Linux's ptrace_attach sets
+            // JOBCTL_TRAP_STOP for a stopped task and waits below until it has
+            // trapped. The flag is what still gets a stop reported if a
+            // SIGCONT lifts the group-stop before the tracee has come round to
+            // report it -- then as 0x80057f, as do_jobctl_trap would.
+            bool attach_stopped = child->group->stopped;
+            if (seize && attach_stopped)
+                __atomic_store_n(&child->ptrace.trap_stop, true, __ATOMIC_RELEASE);
             // A process we are the parent of is found through our children;
             // everything else we trace, threads included, only through this
             // list. A thread's parent here is whichever task created it (or
@@ -1084,7 +1395,37 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             // rather than just entering an ordinary job-control stop.
             if (!seize)
                 send_signal(child, SIGSTOP_, SIGINFO_NIL);
+            // Linux's JOBCTL_TRAPPING: an attach to a task that is already
+            // stopped returns only once the task has re-entered the stop as a
+            // TRACED one, so the tracer's next wait is that stop's and nothing
+            // it does after the attach can come first. strace depends on it:
+            // it starts its program stopped, seizes it, and then sends the
+            // SIGCONT that lifts the stop itself. AOK returned at once, and in
+            // 26 of 40 runs the SIGCONT got there before the tracee had
+            // reported anything -- its group-stop was never shown to the tracer
+            // at all, where Linux shows it every time (0x80137f).
+            //
+            // ptrace_stop_common publishes the stop and wakes this tracer's
+            // child_exit under pids_lock, which this holds between waits. A
+            // cap, and not an endless wait, because an attach must never hang
+            // on a tracee that cannot get there; a signal for the tracer ends
+            // it too. Either way the stop is still owed and still reported --
+            // this only decides what comes first.
+            if (!attach_stopped) {
+                unlock(&pids_lock);
+                return 0;
+            }
+            // The reference is dropped only once pids_lock is, as everywhere
+            // else in this file.
+            task_ref_cnt_mod(child, 1);
+            struct timespec left = {.tv_sec = 2};
+            while (child->ptrace.traced && child->ptrace.tracer == current &&
+                    !child->ptrace.stopped && !child->zombie && !child->exiting) {
+                if (wait_for_capped(&current->group->child_exit, &pids_lock, &left) != 0)
+                    break;
+            }
             unlock(&pids_lock);
+            task_ref_cnt_mod(child, -1);
             return 0;
         }
 
@@ -1613,9 +1954,28 @@ dword_t sys_ptrace_guest(dword_t request, dword_t pid, guest_addr_t addr, guest_
             return err < 0 ? err : 0;
         }
 
-        default:
+        case PTRACE_GET_SYSCALL_INFO_: {
+            STRACE("ptrace(PTRACE_GET_SYSCALL_INFO, %d, %#llx, %#llx)", pid,
+                    (unsigned long long) addr, (unsigned long long) data);
+            struct task *child = find_child(pid);
+            if (!child) return _ESRCH;
+            int_t res = ptrace_get_syscall_info(child, addr, data);
+            unlock(&child->ptrace.lock);
+            return res;
+        }
+
+        // A request this kernel does not know: EIO, as Linux's ptrace_request
+        // answers one -- once the target has passed ptrace_check_attach, which
+        // is ESRCH for anything that is not our stopped tracee. EPERM told a
+        // tracer probing a feature (strace asks for PTRACE_SET_SYSCALL_INFO,
+        // which only 6.16 has) that it lacked the privilege, not the request.
+        default: {
             STRACE("ptrace(%d, %d, %#llx, %#llx)", request, pid,
                     (unsigned long long) addr, (unsigned long long) data);
-            return _EPERM;
+            struct task *child = find_child(pid);
+            if (!child) return _ESRCH;
+            unlock(&child->ptrace.lock);
+            return _EIO;
+        }
     }
 }

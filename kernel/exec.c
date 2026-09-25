@@ -2368,6 +2368,38 @@ static int native_dispatch_exec(struct fd *fd, struct exec_args argv, struct exe
     return EXEC_NATIVE_DISPATCHED;
 }
 
+// What a traced exec tells its tracer once it has committed: a
+// PTRACE_EVENT_EXEC stop if the tracer asked for them, and otherwise, for a
+// tracer that did not seize, a SIGTRAP (Linux's ptrace_event). `old_pid` is the
+// event's message.
+//
+// The SIGTRAP is QUEUED, as Linux's send_sig queues it, and not a stop taken
+// here: it is delivered on the way out of execve like any other signal, so a
+// PTRACE_SYSCALL tracer sees the syscall-exit stop first and the SIGTRAP's
+// signal-delivery-stop after it. This used to stop at once, inside the call --
+// between execve's entry and exit stops, where no Linux tracer sees it.
+// Measured on 6.12: entry, exit, then 0x57f with si_code SI_USER and the
+// tracee's own pid, which is what gdb counts one exec by.
+//
+// A native program is an exec too, and the tracer is told the same thing. It
+// was told nothing, so gdb -- which starts a program as `$SHELL -c exec prog`
+// and counts one trap per exec -- never saw the shell's when $SHELL was
+// /AOK/native/zsh, and gave up with "During startup program exited".
+static void exec_report_to_tracer(pid_t_ old_pid) {
+    if (!current->ptrace.traced)
+        return;
+    struct siginfo_ info = {
+        .sig = SIGTRAP_,
+        .code = SI_USER_,
+        .kill.pid = current->pid,
+        .kill.uid = current->uid,
+    };
+    if (current->ptrace.options & PTRACE_O_TRACEEXEC_)
+        ptrace_event_stop(SIGTRAP_, &info, PTRACE_EVENT_EXEC_, old_pid);
+    else if (!current->ptrace.seized)
+        send_signal(current, SIGTRAP_, info);
+}
+
 int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) {
     // PTRACE_EVENT_EXEC's message is the pid this task had BEFORE the exec. A
     // thread that is not the leader takes the leader's pid in exec_de_thread,
@@ -2403,7 +2435,10 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     err = native_dispatch_exec(fd, argv, envp);
     if (err != _ENOEXEC) {
         fd_close(fd);
-        return err == EXEC_NATIVE_DISPATCHED ? 0 : err;
+        if (err != EXEC_NATIVE_DISPATCHED)
+            return err;
+        exec_report_to_tracer(old_pid);
+        return 0;
     }
 
     // Decide what the credentials will be once this exec commits, and stage
@@ -2435,9 +2470,12 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     // The interpreter was a native program, so the exec is already committed
     // and everything below has already happened once
     // (exec_apply_native_process_state). Returning here is what the direct
-    // native path does a hundred lines up, and this is the same exec.
-    if (err == EXEC_NATIVE_DISPATCHED)
+    // native path does a hundred lines up, and this is the same exec -- the
+    // tracer's report included.
+    if (err == EXEC_NATIVE_DISPATCHED) {
+        exec_report_to_tracer(old_pid);
         return 0;
+    }
 
     // The credentials, as planned: the ids, and the capabilities recomputed
     // from the file's own and the ambient set (exec_setid_plan). Nothing
@@ -2531,20 +2569,11 @@ int __do_execve(const char *file, struct exec_args argv, struct exec_args envp) 
     if (current->ptrace.traced) {
         current->ptrace.syscall = current->cpu.eax;
         current->cpu.eax = 0;
-        struct siginfo_ info = {
-            .sig = SIGTRAP_,
-            .code = SI_USER_,
-            .kill.pid = current->pid,
-            .kill.uid = current->uid,
-        };
         // Without PTRACE_O_TRACEEXEC, the legacy post-exec SIGTRAP goes only
         // to a tracee that was not seized (Linux's ptrace_event). A seized one
         // got it too, and a tracer that injects what it does not expect
         // killed the program it had just spawned.
-        if (current->ptrace.options & PTRACE_O_TRACEEXEC_)
-            ptrace_event_stop(SIGTRAP_, &info, PTRACE_EVENT_EXEC_, old_pid);
-        else if (!current->ptrace.seized)
-            ptrace_signal_stop(SIGTRAP_, &info);
+        exec_report_to_tracer(old_pid);
     }
 
     return 0;

@@ -31,10 +31,14 @@ struct task;
 #define PTRACE_SEIZE_ 0x4206
 #define PTRACE_INTERRUPT_ 0x4207
 #define PTRACE_LISTEN_ 0x4208
+#define PTRACE_GET_SYSCALL_INFO_ 0x420e
 
 #define NT_PRSTATUS_ 1
 #define NT_PRFPREG_ 2
 #define NT_X86_XSTATE_ 0x202
+#define NT_ARM_TLS_ 0x401
+#define NT_ARM_HW_BREAK_ 0x402
+#define NT_ARM_HW_WATCH_ 0x403
 #define NT_ARM_SYSTEM_CALL_ 0x404
 
 #define PTRACE_EVENT_FORK_ 1
@@ -49,6 +53,40 @@ struct task;
 // PTRACE_GETEVENTMSG at a syscall stop: which of the pair it is (Linux 5.3+).
 #define PTRACE_EVENTMSG_SYSCALL_ENTRY_ 1
 #define PTRACE_EVENTMSG_SYSCALL_EXIT_ 2
+
+// PTRACE_GET_SYSCALL_INFO's op: what kind of stop the tracee is in.
+#define PTRACE_SYSCALL_INFO_NONE_ 0
+#define PTRACE_SYSCALL_INFO_ENTRY_ 1
+#define PTRACE_SYSCALL_INFO_EXIT_ 2
+#define PTRACE_SYSCALL_INFO_SECCOMP_ 3
+
+// struct ptrace_syscall_info (linux/ptrace.h). The same layout for every
+// tracer, 32-bit ones included: every field is fixed-width.
+struct ptrace_syscall_info_ {
+    byte_t op;
+    byte_t reserved;
+    word_t flags;
+    dword_t arch;
+    qword_t instruction_pointer;
+    qword_t stack_pointer;
+    union {
+        struct {
+            qword_t nr;
+            qword_t args[6];
+        } entry;
+        struct {
+            sqword_t rval;
+            byte_t is_error;
+        } exit;
+        struct {
+            qword_t nr;
+            qword_t args[6];
+            dword_t ret_data;
+        } seccomp;
+    };
+};
+
+static_assert(sizeof(struct ptrace_syscall_info_) == 88, "ptrace_syscall_info layout mismatch");
 
 #define PTRACE_O_TRACESYSGOOD_ 1
 #define PTRACE_O_TRACEFORK_ 2
@@ -192,6 +230,21 @@ struct user_fpregs_struct_riscv64_ {
 };
 
 static_assert(sizeof(struct user_fpregs_struct_riscv64_) == 264, "riscv64 ptrace fpregs layout mismatch");
+
+// arm64 NT_ARM_HW_BREAK / NT_ARM_HW_WATCH payload (struct user_hwdebug_state):
+// dbg_info is (debug architecture << 8) | number of slots, then one entry per
+// slot the architecture allows -- sixteen, whatever the hardware has.
+struct user_hwdebug_state_arm64_ {
+    dword_t dbg_info;
+    dword_t pad;
+    struct {
+        qword_t addr;
+        dword_t ctrl;
+        dword_t pad;
+    } dbg_regs[16];
+};
+
+static_assert(sizeof(struct user_hwdebug_state_arm64_) == 264, "arm64 hwdebug layout mismatch");
 
 struct user_ {
     struct user_regs_struct_ user_regs;

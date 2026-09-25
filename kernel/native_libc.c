@@ -1402,6 +1402,19 @@ void nlibc_exec_standin_resume(dword_t child) {
     nlibc_exec_standin(child);
 }
 
+// A traced task's exec, done for real (native_exec_in_place_wanted,
+// kernel/native.h). The program's streams are flushed first, as its exit would
+// have flushed them, and the image is handed the program's own mask without the
+// shim's holds, as the stand-in's child is (nlibc_spawn_default_sigmask).
+// Returns only if the exec failed.
+static int nlibc_exec_in_place(const char *path, char *const argv[], char *const envp[]) {
+    struct native_spawn_opts mask = { .pgid = NATIVE_SPAWN_PGID_INHERIT };
+    nlibc_spawn_default_sigmask(&mask);
+    nlibc_flush_std();
+    nlibc_flush_thread_streams();
+    return native_exec_in_place(path, argv, envp, mask.set_sigmask, mask.sigmask);
+}
+
 // Wait for a child this shim started on the program's behalf, and do not let a
 // signal be mistaken for the answer.
 //
@@ -1448,6 +1461,9 @@ static int nlibc_exec_common(const char *path, char *const argv[], int search_pa
             return nlibc_fail(_ENOENT);
         path = resolved;
     }
+
+    if (native_exec_in_place_wanted())
+        return nlibc_fail(nlibc_exec_in_place(path, argv, native_env_vector()));
 
     // Through native_spawn_opts rather than native_spawn, for the signal mask:
     // this is the program saying "become that program", and the shim's own
@@ -3142,10 +3158,15 @@ static void *nlibc_thread_trampoline(void *opaque) {
     signal_thread_locals_init();
     current = start->task;   // inherit, so the shim has a task to work against
     nlibc_invocation_token_v = start->token;   // same run, same token
+    struct task *task = start->task;
     void *(*fn)(void *) = start->fn;
     void *arg = start->arg;
     free(start);
     void *result = fn(arg);
+    // Counted out only here: a thread that leaves by pthread_exit stays
+    // counted, which only ever keeps an exec from going in place.
+    if (task != NULL)
+        __atomic_sub_fetch(&task->native_helper_threads, 1, __ATOMIC_ACQ_REL);
     // This thread's syscall marshalling arena is a megabyte of the guest
     // address space, and the program that created the thread is still running
     // in that space. Left behind, a program that starts and finishes threads
@@ -3167,9 +3188,17 @@ int nlibc_pthread_create(pthread_t *thread, const pthread_attr_t *attr,
     start->arg = arg;
     start->task = current;
     start->token = nlibc_invocation_token_v;
+    // A program with threads of its own cannot exec in place: they would run
+    // on in native code against a task whose image had been replaced
+    // (native_exec_in_place_wanted).
+    if (current != NULL)
+        __atomic_add_fetch(&current->native_helper_threads, 1, __ATOMIC_ACQ_REL);
     int err = pthread_create(thread, attr, nlibc_thread_trampoline, start);
-    if (err != 0)
+    if (err != 0) {
+        if (current != NULL)
+            __atomic_sub_fetch(&current->native_helper_threads, 1, __ATOMIC_ACQ_REL);
         free(start);
+    }
     return err;
 }
 
@@ -5710,13 +5739,16 @@ void nlibc_deliver_signals(void) {
 // arrived while you were waiting" is exactly the thing sigsuspend reports, and
 // a caller that goes straight back to sleep without being told would never see
 // the state the handler changed.
+// A handler makes syscalls of its own, each of which checkpoints again.
+// __thread because two native programs can be live at once: a process-wide
+// flag meant one shell delivering suppressed the other's delivery entirely.
+// At file scope so that nlibc_program_state_reset can clear it: a handler may
+// exec, and one that execs in place never returns to clear it itself.
+static __thread bool nlibc_delivering;
+
 int nlibc_deliver_signals_count(void) {
-    // A handler makes syscalls of its own, each of which checkpoints again.
-    // __thread because two native programs can be live at once: a process-wide
-    // flag meant one shell delivering suppressed the other's delivery entirely.
-    static __thread bool delivering;
     int ran = 0;
-    if (delivering)
+    if (nlibc_delivering)
         return 0;
 
     // Which of ours are pending. Cheap enough not to matter next to the
@@ -5733,7 +5765,7 @@ int nlibc_deliver_signals_count(void) {
     if (ours == 0)
         return 0;
 
-    delivering = true;
+    nlibc_delivering = true;
     for (;;) {
         struct nlibc_taken_signal taken;
         int guest_sig = nlibc_sigtake_info(ours, false, &taken);
@@ -5807,7 +5839,7 @@ int nlibc_deliver_signals_count(void) {
             ran++;
         }
     }
-    delivering = false;
+    nlibc_delivering = false;
     return ran;
 }
 
@@ -8223,6 +8255,9 @@ int nlibc_getlogin_r(char *buf, size_t len) {
 int nlibc_execve(const char *path, char *const argv[], char *const envp[]) {
     if (path == NULL || argv == NULL)
         return nlibc_fail(_EFAULT);
+    if (native_exec_in_place_wanted())
+        return nlibc_fail(nlibc_exec_in_place(path, argv,
+                envp != NULL ? envp : native_env_vector()));
     // native_spawn_opts, not native_spawn, and ONLY for the signal mask -- the
     // same reason nlibc_exec_common does it, and this function was the one
     // place that did not. Measured in the guest before the fix:
@@ -9477,4 +9512,65 @@ int nlibc_fsetattrlist(int fd_no, void *attrs, void *buf, size_t size, unsigned 
     (void) fd_no; (void) attrs; (void) buf; (void) size; (void) options;
     errno = ENOTSUP;
     return -1;
+}
+
+// --------------------------------------------------------- in-place exec
+//
+// See native_exec_in_place_wanted in kernel/native.h. The shim keeps some state
+// per THREAD rather than per program, on the ground that a native program is
+// the one thing its thread ever runs: its thread ended with it. An exec in
+// place ends the program and keeps the thread, so what follows is everything a
+// program leaves on its thread that the next one must not start with.
+
+bool nlibc_in_stdio(void) {
+    return nlibc_stdio_depth > 0;
+}
+
+// Take this thread's streams out of the registry. They were flushed before the
+// exec (nlibc_exec_in_place); left registered, the next program on this thread
+// would find them in its own fflush(NULL) walk and in fileno(), still naming
+// descriptor numbers that the exec gave new meanings to. The FILEs themselves
+// are abandoned with the program that made them, as its heap is.
+static void nlibc_streams_forget_mine(void) {
+    if (pthread_mutex_trylock(&nlibc_stream_lock) != 0)
+        return;
+    pthread_t self = pthread_self();
+    struct nlibc_stream **link = &nlibc_streams;
+    while (*link != NULL) {
+        struct nlibc_stream *s = *link;
+        if (pthread_equal(s->owner, self)) {
+            *link = s->next;
+            free(s);
+        } else {
+            link = &s->next;
+        }
+    }
+    pthread_mutex_unlock(&nlibc_stream_lock);
+}
+
+void nlibc_program_state_reset(void) {
+    nlibc_streams_forget_mine();
+    for (int i = 0; i < 3; i++)
+        nlibc_std[i] = NULL;
+    nlibc_stdio_depth = 0;
+    nlibc_stdio_deferred = 0;
+    nlibc_delivering = false;
+    // getopt as a new thread has it. BSD getopt keeps its scanning pointer in
+    // a static only optreset can reach, and optreset set is how a caller asks
+    // for exactly this.
+    nlibc_optarg_v = NULL;
+    nlibc_optind_v = 1;
+    nlibc_opterr_v = 1;
+    nlibc_optopt_v = '?';
+    nlibc_optreset_v = 1;
+    nl_place = NL_EMSG;
+    nl_nonopt_start = -1;
+    nl_nonopt_end = -1;
+    nl_dash_prefix = NL_NO_PREFIX;
+    // openlog's connection is a guest descriptor, and the exec has decided
+    // what that number is now.
+    nlibc_log_ident[0] = '\0';
+    nlibc_log_facility = LOG_USER;
+    nlibc_log_option = 0;
+    nlibc_log_fd = -1;
 }

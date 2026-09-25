@@ -61,6 +61,8 @@ epoll_eloop.c
 epoll_exclusive.c
 ptrace_exit_kill.c
 ptrace_tracee_exit.c
+ptrace_strace_startup.c
+ptrace_startup_with_shell.c
 fcntl_lock.c
 fcntl_ofd.c
 fcntl_setown.c

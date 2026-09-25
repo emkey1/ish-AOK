@@ -110,6 +110,10 @@ void native_arena_release(void) {
     native_syscall(NATIVE_SYS_munmap, base, size);
 }
 
+bool native_frames_live(void) {
+    return frame_top != NULL;
+}
+
 void native_frame_push(struct native_frame *frame) {
     frame->prev = frame_top;
     frame->mark = arena.used;

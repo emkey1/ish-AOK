@@ -133,6 +133,17 @@ struct native_spawn_opts {
 int native_spawn_opts(const char *path, char *const argv[], char *const envp[],
         const struct native_spawn_opts *opts, dword_t *pid_out);
 
+// exec for real: replace the calling task's image with `path`, keeping its pid,
+// rather than spawn-then-wait (nlibc_exec_standin in kernel/native_libc.c).
+// Only where native_exec_in_place_wanted() says so (kernel/native.h). With
+// `set_mask`, the image starts with `mask` blocked -- the program's own mask,
+// without the shim's holds -- as a forked child would. Returns only if the exec
+// failed, with its negative errno, the calling program still running; on
+// success the program's stack is abandoned (native_exec_land) and the task
+// runs on as the new image.
+int native_exec_in_place(const char *path, char *const argv[], char *const envp[],
+        bool set_mask, sigset_t_ mask);
+
 // Wait for a child, blocking where the guest's own wait4 blocks. Returns the
 // reaped pid, or a negative errno.
 int native_waitpid(dword_t pid, int *status_out, int options);

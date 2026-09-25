@@ -1284,6 +1284,8 @@ static struct task *task_create_pid_(struct task *parent, pid_t_ want_pid) {
 
     task->ptrace = (typeof(task->ptrace)) {};
     task->ptrace_link_capable = false;
+    task->ptrace_trap_notify = false;
+    task->native_helper_threads = 0;
     lock_init(&task->ptrace.lock, "task_creat_ptr\0");
     cond_init(&task->ptrace.cond);
 
@@ -1877,10 +1879,13 @@ static void *task_thread(void *task) {
         bool pending = ((current->pending | task_group_pending(current)) &
                 ~current->blocked) != 0;
         unlock(&current->sighand->lock);
-        if (pending) {
+        if (pending)
             receive_signals();
-            group_stop_wait();
-        }
+        // Whether or not a signal stopped it: a process already job-control
+        // stopped reports that as its first stop, and the trap looked for above
+        // is left to it (ptrace_trap_stop_if_pending).
+        group_stop_wait();
+        ptrace_trap_stop_if_pending();
     }
 
     task_run_current();

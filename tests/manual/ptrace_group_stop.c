@@ -90,10 +90,20 @@ static void test_group_stop_reported(void) {
 }
 
 // Drive a seized tracee from wherever it is now through to exit, expecting
-// exactly one PTRACE_EVENT_STOP group-stop report along the way. Shared by
+// exactly one PTRACE_EVENT_STOP group-stop report along the way, and then
+// exactly one PTRACE_EVENT_STOP carrying SIGTRAP: the notice a SIGCONT leaves a
+// seized tracee (Linux's JOBCTL_TRAP_NOTIFY), which the SIGCONT sent below
+// earns because it lands while the tracee sits in its group-stop. Shared by
 // both attach orders.
+//
+// This loop used to send a SIGCONT at EVERY event-stop and require every one
+// to carry SIGSTOP. That never held on Linux: measured on 6.12, the second
+// event-stop is 0x80057f, and answering it with another SIGCONT earns another,
+// for as long as the loop runs -- the file failed 100 times over there. AOK
+// passed only because it had no notice at all, which is the bug that made
+// strace's start-up lose its first execve (tests/manual/ptrace_strace_startup.c).
 static void drive_tracee(pid_t child, int want_exit, const char *label) {
-    int saw_group_stop = 0;
+    int saw_group_stop = 0, saw_notice = 0;
     for (int iterations = 0; iterations < 100; iterations++) {
         int status;
         pid_t w = waitpid(child, &status, 0);
@@ -107,9 +117,12 @@ static void drive_tracee(pid_t child, int want_exit, const char *label) {
 
         if (WIFEXITED(status)) {
             int code = WEXITSTATUS(status);
-            test_logf("child exited %d (saw_group_stop=%d)\n", code, saw_group_stop);
-            if (!saw_group_stop)
-                failf(label, 0, 0, 0, 1, 0, 0);
+            test_logf("child exited %d (saw_group_stop=%d saw_notice=%d)\n", code,
+                      saw_group_stop, saw_notice);
+            if (saw_group_stop != 1)
+                failf(label, (uint64_t) saw_group_stop, 0, 0, 1, 0, 0);
+            if (saw_notice != 1)
+                failf(label, (uint64_t) saw_notice, 0, 0, 1, 0, 0);
             if (code != want_exit)
                 failf(label, (uint64_t) code, 0, 0, (uint64_t) want_exit, 0, 0);
             return;
@@ -127,7 +140,7 @@ static void drive_tracee(pid_t child, int want_exit, const char *label) {
         int event = (status >> 16) & 0xff;
         test_logf("stop: sig=%d event=%d status=%#x\n", sig, event, status);
 
-        if (event == PTRACE_EVENT_STOP) {
+        if (event == PTRACE_EVENT_STOP && saw_group_stop == 0) {
             // The group-stop report, which carries the STOP SIGNAL -- the whole
             // point of a seized report, and what strace switches on to
             // recognise it. tests/manual/ptrace_group_stop_report.c covers the
@@ -138,10 +151,21 @@ static void drive_tracee(pid_t child, int want_exit, const char *label) {
                       (PTRACE_EVENT_STOP << 16) | (SIGSTOP << 8) | 0x7f, 0, 0);
             // Lift job control and continue. A tracer that wanted the stop to
             // HOLD would say PTRACE_LISTEN here instead.
-            saw_group_stop = 1;
+            saw_group_stop++;
             kill(child, SIGCONT);
             if (ptrace(PTRACE_CONT, child, 0, 0) != 0) {
                 perror("PTRACE_CONT after event-stop");
+                failf(label, (uint64_t) errno, 0, 0, 0, 0, 0);
+                return;
+            }
+        } else if (event == PTRACE_EVENT_STOP) {
+            // The SIGCONT's notice: the stop is over, so it carries SIGTRAP.
+            if (status != (int) ((PTRACE_EVENT_STOP << 16) | (SIGTRAP << 8) | 0x7f))
+                failf(label, (uint64_t) status, 0, 0,
+                      (PTRACE_EVENT_STOP << 16) | (SIGTRAP << 8) | 0x7f, 0, 0);
+            saw_notice++;
+            if (ptrace(PTRACE_CONT, child, 0, 0) != 0) {
+                perror("PTRACE_CONT after the notice");
                 failf(label, (uint64_t) errno, 0, 0, 0, 0, 0);
                 return;
             }
