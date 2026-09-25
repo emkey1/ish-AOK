@@ -13353,8 +13353,14 @@ void helper_aad(struct cpu_state *cpu, uint32_t base);
     state->block->code[start - 1] = (state->size - start) * sizeof(long); \
 } while (0)
 
-#define PUSHF() g(pushf)
-#define POPF() g(popf)
+// Sized by the operand-size prefix: PUSHFW/POPFW move two bytes and reach
+// only the low word of EFLAGS. glue() so `oz` expands to 16 or 32 first.
+#define PUSHF(z) glue(PUSHF_, z)()
+#define POPF(z) glue(POPF_, z)()
+#define PUSHF_32() gg(pushf32, state->orig_ip)
+#define PUSHF_16() gg(pushf16, state->orig_ip)
+#define POPF_32() gg(popf32, state->orig_ip)
+#define POPF_16() gg(popf16, state->orig_ip)
 #define SAHF g(sahf)
 #define LAHF g(lahf)
 #define CMC g(cmc)

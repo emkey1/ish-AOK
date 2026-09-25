@@ -221,32 +221,49 @@
 .gadget_list skip, COND_LIST
 .gadget_list skipn, COND_LIST
 
-.gadget pushf
-    save_c
-    movq %_cpu, %rdi
-    call NAME(helper_collapse_flags)
-    restore_c
+# PUSHF/POPF in both operand sizes, [gadget][orig_ip]. See the aarch64 twin in
+# jit/gadgets-aarch64/control.S for why: the 0x66 prefix never reached the old
+# 32-bit-only pair, POPF stored every popped bit, and a fault took EIP from
+# the next word in the block. The writable mask (CF PF AF ZF SF TF DF OF NT AC
+# ID, 0x244dd5; the low word of it for POPFW) must match that file.
+.macro do_pushf size, ss, reg
+    .gadget pushf\size
+        save_c
+        movq %_cpu, %rdi
+        call NAME(helper_collapse_flags)
+        restore_c
 
-    sub $4, %_esp
-    movl %_esp, %_addr
-    write_prep 32, pushf
-    movl CPU_eflags(%_cpu), %tmpd
-    movl %tmpd, (%_addrq)
-    write_done 32, pushf
-    gret
+        leal -\size/8(%_esp), %_addr
+        write_prep \size, pushf\size
+        movl CPU_eflags(%_cpu), %tmpd
+        mov\ss %\reg, (%_addrq)
+        write_done \size, pushf\size
+        sub $(\size/8), %_esp
+        gret 1
+.endm
+do_pushf 32, l, r10d
+do_pushf 16, w, r10w
+.purgem do_pushf
 
-.gadget popf
-    movl %_esp, %_addr
-    read_prep 32, popf
-    movl (%_addrq), %tmpd
-    movl %tmpd, CPU_eflags(%_cpu)
-    add $4, %_esp
+.macro do_popf size, load, mask
+    .gadget popf\size
+        movl %_esp, %_addr
+        read_prep \size, popf\size
+        \load (%_addrq), %tmpd
+        andl $\mask, %tmpd
+        andl $~\mask, CPU_eflags(%_cpu)
+        orl %tmpd, CPU_eflags(%_cpu)
+        add $(\size/8), %_esp
 
-    save_c
-    movq %_cpu, %rdi
-    call NAME(helper_expand_flags)
-    restore_c
-    gret
+        save_c
+        movq %_cpu, %rdi
+        call NAME(helper_expand_flags)
+        restore_c
+        gret 1
+.endm
+do_popf 32, movl, 0x244dd5
+do_popf 16, movzwl, 0x4dd5
+.purgem do_popf
 
 .gadget sahf
     xchgb %ah, %al

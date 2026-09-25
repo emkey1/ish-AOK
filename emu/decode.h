@@ -1244,8 +1244,8 @@ restart:
 
         case 0x9b: TRACEI("fwait (ignored)"); break;
 
-        case 0x9c: TRACEI("pushf"); PUSHF(); break;
-        case 0x9d: TRACEI("popf"); POPF(); break;
+        case 0x9c: TRACEI("pushf"); PUSHF(oz); break;
+        case 0x9d: TRACEI("popf"); POPF(oz); break;
         case 0x9e: TRACEI("sahf\t\t"); SAHF; break;
         case 0x9f: TRACEI("lahf\t\t"); LAHF; break;
 

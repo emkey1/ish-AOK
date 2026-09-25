@@ -503,34 +503,65 @@ amd64_gen_loop loopne, ne
     ldr _ip, [_ip]                          /* RCX == 0 -> taken */
     b amd64_branch_dispatch
 
-.gadget pushf
-    save_c
-    mov x0, _cpu
-    bl NAME(helper_collapse_flags)
-    restore_c
+# PUSHF/POPF, in both operand sizes. [gadget][orig_ip]: a fault reports the
+# instruction, so the stack-growth retry re-runs it.
+#
+# These used to be one 32-bit pair that the 0x66 prefix never reached, so
+# PUSHFW/POPFW moved ESP by 4, and POPF stored all 32 popped bits into EFLAGS.
+# Linux lets a user-mode POPF change only CF PF AF ZF SF TF DF OF NT AC ID;
+# IF, IOPL, VM, RF and the reserved bits stay put, so they read back as they
+# were. POPFW changes only the ones in the low word. TF stays writable, as it
+# always was here and is on Linux, where setting it single-steps the process.
+# The mask is the same number jit/gadgets-x86_64/control.S uses.
+#
+# The push computes its address before moving ESP (as `push` does) because
+# the fault path leaves ESP where it finds it, and the old gadget had already
+# moved it; nor did it carry an orig_ip, so a fault took EIP from whatever
+# word followed it in the block.
+.macro do_pushf size, s
+    .gadget pushf\size
+        save_c
+        mov x0, _cpu
+        bl NAME(helper_collapse_flags)
+        restore_c
 
-    sub esp, esp, 4
-    mov _addr, esp
-    write_prep 32, pushf
-    ldr w8, [_cpu, CPU_eflags]
-    str w8, [_xaddr]
-    write_done 32, pushf
-    gret
-    write_bullshit 32, pushf
+        sub _addr, esp, (\size/8)
+        write_prep \size, pushf\size
+        ldr w8, [_cpu, CPU_eflags]
+        str\s w8, [_xaddr]
+        write_done \size, pushf\size
+        sub esp, esp, (\size/8)
+        gret 1
+        write_bullshit \size, pushf\size
+.endm
+do_pushf 32
+do_pushf 16, h
+.purgem do_pushf
 
-.gadget popf
-    mov _addr, esp
-    read_prep 32, popf
-    ldr w8, [_xaddr]
-    str w8, [_cpu, CPU_eflags]
-    add esp, esp, 4
+.macro do_popf size, s, mask_hi
+    .gadget popf\size
+        mov _addr, esp
+        read_prep \size, popf\size
+        ldr\s w8, [_xaddr]
+        movz w9, 0x4dd5
+        movk w9, \mask_hi, lsl 16
+        and w8, w8, w9
+        ldr w10, [_cpu, CPU_eflags]
+        bic w10, w10, w9
+        orr w10, w10, w8
+        str w10, [_cpu, CPU_eflags]
+        add esp, esp, (\size/8)
 
-    save_c
-    mov x0, _cpu
-    bl NAME(helper_expand_flags)
-    restore_c
-    gret
-    read_bullshit 32, popf
+        save_c
+        mov x0, _cpu
+        bl NAME(helper_expand_flags)
+        restore_c
+        gret 1
+        read_bullshit \size, popf\size
+.endm
+do_popf 32, , 0x24
+do_popf 16, h, 0
+.purgem do_popf
 
 .gadget sahf
     ubfx w8, eax, 8, 8
