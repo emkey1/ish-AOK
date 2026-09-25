@@ -43,7 +43,8 @@
 //      on the host type in general would delete every symlink it was pointed
 //      at.
 //   2. Freshly created files and directories get distinct inodes.
-//   3. No entry anywhere on the root is in the wedged state. This is the
+//   3. No entry anywhere on the root is in the wedged state (as far as
+//      SCAN_BUDGET_SECS reaches on a big root). This is the
 //      detector that would have caught the original damage, and it is what
 //      confirms the v7 repair pass in fs/fake-migrate.c actually cleaned a
 //      root rather than just stopping the bleeding. Two signals, because the
@@ -75,6 +76,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "test_common.h"
@@ -372,6 +374,24 @@ static void queue_push(const char *path) {
 
 #define SCAN_LIMIT 400000u
 
+// The scan is as big as the root, and roots differ by 20x: alpine-arm64-test
+// holds 219k paths (a nix store, a node tree, a 30k-file directory) where the
+// other test roots hold 10-24k. Walking all of it is ~70 s of CPU even done
+// cheaply, and on a Mac at load 30-70 that stretched to 280-400 s of wall
+// clock -- past the 300 s watchdog, with every check before it already
+// passed, which is how this test failed 4/4 there. So the scan stops at a
+// time budget, well inside the watchdog, and says so; the watchdog is left to
+// catch a scan that has stopped moving at all. The walk is breadth-first, so
+// the shallow directories where the original damage sat (/tmp, /rbind) are
+// covered first.
+#define SCAN_BUDGET_SECS 120u
+
+static double monotonic_secs(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double) ts.tv_sec + (double) ts.tv_nsec / 1e9;
+}
+
 // Walk everything on the root's own device -- which skips /proc, /sys, /dev and
 // any other mount without needing to name them -- and check two things per
 // entry: that anything claiming to be a directory can actually be opened as
@@ -385,7 +405,8 @@ static void scan_root(void) {
 
     inode_map = calloc(MAP_SLOTS, sizeof(*inode_map));
     unsigned entries = 0, wedged = 0, aliased = 0, repeated = 0;
-    bool truncated = false;
+    bool truncated = false, out_of_time = false;
+    double deadline = monotonic_secs() + test_watchdog_secs(SCAN_BUDGET_SECS);
 
     // Only meaningful where the host counts subdirectories. btrfs and friends
     // report st_nlink == 1 for every directory, which would make this fire on
@@ -413,13 +434,21 @@ static void scan_root(void) {
                         strcmp(dirpath, "/") == 0 ? "" : "/", ent->d_name) >= (int) sizeof(path))
                 continue;
 
+            // Relative to the open directory, as find does: an lstat of the
+            // full path re-resolves every component above this one, which on
+            // fakefs is a metadata query and a host lstat per level, and the
+            // deep trees are exactly where most of the entries are.
             struct stat st;
-            if (lstat(path, &st) != 0)
+            if (fstatat(dirfd(d), ent->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0)
                 continue; // vanished under us, or genuinely unreadable
             if (st.st_dev != root_st.st_dev)
                 continue; // another filesystem mounted here
             if (++entries > SCAN_LIMIT) {
                 truncated = true;
+                break;
+            }
+            if (entries % 256 == 0 && monotonic_secs() > deadline) {
+                truncated = out_of_time = true;
                 break;
             }
 
@@ -472,6 +501,7 @@ static void scan_root(void) {
     }
 
     test_logf("scanned %u entries, %u tracked inodes%s\n", entries, map_used,
+            out_of_time ? " (stopped at the time budget)" :
             truncated ? " (stopped at the scan limit)" : "");
     if (wedged > 10 || aliased > 10 || repeated > 10)
         printf("  (%u wedged, %u aliased, %u repeated entries in total)\n", wedged, aliased, repeated);

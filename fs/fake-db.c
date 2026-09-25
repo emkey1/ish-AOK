@@ -513,11 +513,28 @@ static void db_prepare_statements(struct fakefs_db *fs) {
 // Session pragmas. journal_mode is a property of the database file, not of the
 // connection, so it is set once at mount; these are per-connection and have to
 // be repeated on every extra handle.
+//
+// mmap_size is there because of Apple's libsqlite3, not sqlite. Its
+// sqlite3VdbeReset calls sqlite3_db_release_memory on EVERY statement reset,
+// which marks the whole page cache purgeable (mach_vm_purgable_control), and
+// under memory pressure the kernel takes it. Every lookup then re-reads its
+// b-tree path from the file with pread, so a stat costs one read per tree
+// level and the price grows with the database: on a 219k-path root, under
+// pressure level WARN, an indexed path lookup measured 91 us on the host
+// against 40 us on a 24k-path root, and a guest whole-root scan ran at ~500 us
+// an entry. Mapped pages are the OS's own file cache and survive that; the same
+// lookup measured 25 us. Pages still in the WAL go through the page cache as
+// before, and sqlite keeps the mapping coherent across connections and
+// processes itself (the File Provider extension opens this file too). iOS's
+// libsqlite3 clamps the size to 20 MiB (the pragma answers 20971520 in the
+// simulator runtime), which maps all of a ~25k-path root's database and the
+// first 20 MiB of a bigger one; macOS takes the full 256 MiB.
 static void db_set_session_pragmas(struct fakefs_db *fs) {
     static const char *const pragmas[] = {
         "pragma synchronous=NORMAL",
         "pragma journal_size_limit=1048576",
         "pragma foreign_keys=true",
+        "pragma mmap_size=268435456",
     };
     for (size_t i = 0; i < sizeof(pragmas) / sizeof(pragmas[0]); i++) {
         sqlite3_stmt *statement = db_prepare(fs, pragmas[i]);
