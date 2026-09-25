@@ -30,6 +30,7 @@ static const float80 fpu_consts[] = {
 void fpu_pop(struct cpu_state *cpu);
 void fpu_xch(struct cpu_state *cpu, int i);
 void fpu_incstp(struct cpu_state *cpu);
+void fpu_decstp(struct cpu_state *cpu);
 
 void fpu_st(struct cpu_state *cpu, int i);
 void fpu_ist16(struct cpu_state *cpu, int16_t *i);
@@ -68,6 +69,7 @@ void fpu_abs(struct cpu_state *cpu);
 void fpu_chs(struct cpu_state *cpu);
 void fpu_sqrt(struct cpu_state *cpu);
 void fpu_yl2x(struct cpu_state *cpu);
+void fpu_yl2xp1(struct cpu_state *cpu);
 void fpu_2xm1(struct cpu_state *cpu);
 
 void fpu_com(struct cpu_state *cpu, int i);
@@ -115,6 +117,7 @@ void fpu_patan(struct cpu_state *cpu);
 void fpu_sin(struct cpu_state *cpu);
 void fpu_cos(struct cpu_state *cpu);
 void fpu_sincos(struct cpu_state *cpu);
+void fpu_ptan(struct cpu_state *cpu);
 void fpu_xam(struct cpu_state *cpu);
 void fpu_xtract(struct cpu_state *cpu);
 

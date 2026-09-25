@@ -76,6 +76,12 @@ void fpu_incstp(struct cpu_state *cpu) {
     cpu->top++;
 }
 
+// FDECSTP (D9 F6), fincstp's mirror: TOP moves down one and nothing else
+// happens. Missing, like FPTAN and FYL2XP1 below, so it raised SIGILL.
+void fpu_decstp(struct cpu_state *cpu) {
+    cpu->top--;
+}
+
 // loads
 
 void fpu_ld(struct cpu_state *cpu, int i) {
@@ -259,6 +265,16 @@ void fpu_sqrt(struct cpu_state *cpu) {
 void fpu_yl2x(struct cpu_state *cpu) {
     FPU_BEGIN();
     ST(1) = f80_mul(ST(1), f80_log2(ST(0)));
+    FPU_END();
+    fpu_pop(cpu);
+}
+
+// FYL2XP1 (D9 F9): ST(1) = ST(1) * log2(ST(0) + 1), then pop. It exists for
+// accuracy when ST(0) is tiny, where forming 1 + ST(0) first throws the
+// answer away; f80_log2p1 never forms it.
+void fpu_yl2xp1(struct cpu_state *cpu) {
+    FPU_BEGIN();
+    ST(1) = f80_mul(ST(1), f80_log2p1(ST(0)));
     FPU_END();
     fpu_pop(cpu);
 }
@@ -532,6 +548,18 @@ void fpu_cos(struct cpu_state *cpu) {
         return;
     ST(0) = f80_from_double(host_libm1(cos, arg));
     fpu_transcendental_inexact(cpu, ST(0));
+}
+// FPTAN (D9 F2): ST(0) = tan(ST(0)), then push 1.0 -- an 8087 leftover, so
+// that an FDIVR after it gives the cotangent. Everything that uses it pops the
+// 1.0 straight off again (32-bit HotSpot's Math.tan does exactly that). An
+// operand out of range sets C2 and leaves the stack alone, as for fsin.
+void fpu_ptan(struct cpu_state *cpu) {
+    double arg = f80_to_double(ST(0));
+    if (fpu_trig_out_of_range(cpu, arg))
+        return;
+    ST(0) = f80_from_double(host_libm1(tan, arg));
+    fpu_transcendental_inexact(cpu, ST(0));
+    fpush(fpu_consts[fconst_one]);
 }
 void fpu_sincos(struct cpu_state *cpu) {
     // ST(0) is replaced by sin, then cos is pushed, so on exit ST(0) is cos

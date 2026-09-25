@@ -36,6 +36,10 @@
 //    wrong arm and returned a negated result: exactly the right magnitude,
 //    wrong sign. That is why it looked like an argument-reduction bug.
 //
+//  * fptan (D9 F2), fdecstp (D9 F6) and fyl2xp1 (D9 F9) were missing from
+//    both engines' decode tables and raised SIGILL. 32-bit HotSpot's Math.tan
+//    is fptan, so a Java program on the i386 guest died there.
+//
 // x86 only (i386 and x86_64 guests). Needs no privileges.
 #define _GNU_SOURCE
 #include <math.h>
@@ -365,6 +369,85 @@ static void test_fninit(void) {
     check_d("FPU usable after fninit", out, 2.5);
 }
 
+// ----------------------------------------------- fptan, fyl2xp1, fdecstp
+
+static void test_fptan(void) {
+    static const double xs[] = {0.0, 0.5, 1.0, -1.0, 1.4};
+    for (volatile unsigned i = 0; i < sizeof xs / sizeof xs[0]; i++) {
+        double x = xs[i], t = 0, one = 0;
+        unsigned short sw = 0;
+        if (sigsetjmp(ill_jmp, 1) != 0) {
+            printf("FAIL: fptan(%g) raised signal %d\n", x, (int) ill_signo);
+            failures_total++;
+            continue;
+        }
+        // fptan replaces ST(0) with its tangent and pushes 1.0.
+        __asm__ volatile("fldl %3\n\tfptan\n\tfnstsw %2\n\tfstpl %1\n\tfstpl %0"
+                         : "=m"(t), "=m"(one), "=m"(sw) : "m"(x) : "memory");
+        char label[64];
+        snprintf(label, sizeof label, "fptan(%g)", x);
+        check_d(label, t, tan(x));
+        snprintf(label, sizeof label, "fptan(%g) pushed 1.0", x);
+        check_d(label, one, 1.0);
+        snprintf(label, sizeof label, "fptan(%g) C2", x);
+        check(label, (sw >> 10) & 1, 0);
+    }
+    // Out of range: C2 set, the operand left in place, nothing pushed.
+    if (sigsetjmp(ill_jmp, 1) == 0) {
+        double x = 1e30, out = 0;
+        unsigned short sw = 0;
+        __asm__ volatile("fldl %2\n\tfptan\n\tfnstsw %1\n\tfstpl %0"
+                         : "=m"(out), "=m"(sw) : "m"(x) : "memory");
+        check("fptan(1e30) C2", (sw >> 10) & 1, 1);
+        check_d("fptan(1e30) operand preserved", out, 1e30);
+    } else {
+        printf("FAIL: fptan(1e30) raised signal %d\n", (int) ill_signo);
+        failures_total++;
+    }
+}
+
+static void test_fyl2xp1(void) {
+    // ST(1) * log2(1 + ST(0)). Checked relative to the answer: at x = 1e-10
+    // the absolute error of forming 1 + x first is invisible next to 1e-12,
+    // and relative accuracy there is the instruction's reason to exist.
+    static const double xs[] = {1e-10, 0.25, -0.25};
+    static const double ys[] = {1.0, 3.0};
+    for (volatile unsigned i = 0; i < sizeof xs / sizeof xs[0]; i++) {
+        for (volatile unsigned j = 0; j < sizeof ys / sizeof ys[0]; j++) {
+            double x = xs[i], y = ys[j], out = 0;
+            if (sigsetjmp(ill_jmp, 1) != 0) {
+                printf("FAIL: fyl2xp1(%g, %g) raised signal %d\n", y, x, (int) ill_signo);
+                failures_total++;
+                continue;
+            }
+            __asm__ volatile("fldl %1\n\tfldl %2\n\tfyl2xp1\n\tfstpl %0"
+                             : "=m"(out) : "m"(y), "m"(x) : "memory");
+            double want = y * log1p(x) / log(2.0);
+            double rel = fabs(out - want) / fabs(want);
+            char label[80];
+            snprintf(label, sizeof label, "fyl2xp1(y=%g, x=%g) = %.17g, relative error <= 1e-12",
+                     y, x, out);
+            check(label, rel <= 1e-12, 1);
+        }
+    }
+}
+
+static void test_fdecstp(void) {
+    // TOP is bits 13:11 of the status word. fdecstp moves it down one, fincstp
+    // back up; the registers themselves do not move.
+    unsigned short before = 0, after = 0, back = 0;
+    if (sigsetjmp(ill_jmp, 1) != 0) {
+        printf("FAIL: fdecstp raised signal %d\n", (int) ill_signo);
+        failures_total++;
+        return;
+    }
+    __asm__ volatile("fnstsw %0\n\tfdecstp\n\tfnstsw %1\n\tfincstp\n\tfnstsw %2"
+                     : "=m"(before), "=m"(after), "=m"(back) : : "memory");
+    unsigned top0 = (before >> 11) & 7, top1 = (after >> 11) & 7, top2 = (back >> 11) & 7;
+    check("fdecstp moved TOP down one", top1, (top0 + 7) & 7);
+    check("fincstp moved it back", top2, top0);
+}
+
 // -------------------------------------------------------------- fabs/fchs
 
 static void test_abs_chs(void) {
@@ -397,6 +480,9 @@ int main(int argc, char **argv) {
     test_pe_c1();
     test_fninit();
     test_abs_chs();
+    test_fptan();
+    test_fyl2xp1();
+    test_fdecstp();
 
     if (failures_total != 0) {
         printf("x87_fpu: FAIL failures=%u\n", failures_total);

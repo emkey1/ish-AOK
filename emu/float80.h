@@ -45,6 +45,7 @@ float80 f80_neg(float80 f);
 float80 f80_abs(float80 f);
 
 float80 f80_log2(float80 x);
+float80 f80_log2p1(float80 x);
 float80 f80_sqrt(float80 x);
 
 float80 f80_scale(float80 x, int scale);

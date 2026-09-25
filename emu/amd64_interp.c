@@ -8112,11 +8112,17 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
     case 0xd961:
         fpu_yl2x(cpu);
         return INT_NONE;
+    case 0xd962:
+        fpu_ptan(cpu);
+        return INT_NONE;
     case 0xd963:
         fpu_patan(cpu);
         return INT_NONE;
     case 0xd964:
         fpu_xtract(cpu);
+        return INT_NONE;
+    case 0xd966:
+        fpu_decstp(cpu);
         return INT_NONE;
     case 0xd967:
         fpu_incstp(cpu);
@@ -8126,6 +8132,9 @@ static inline int amd64_handle_x87(struct cpu_state *cpu, struct tlb *tlb,
         return INT_NONE;
     case 0xd970:
         fpu_prem(cpu);
+        return INT_NONE;
+    case 0xd971:
+        fpu_yl2xp1(cpu);
         return INT_NONE;
     case 0xd973:
         fpu_sincos(cpu);

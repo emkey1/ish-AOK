@@ -839,10 +839,70 @@ bool f80_gt(float80 a, float80 b) {
     return !f80_lte(a, b);
 }
 
+// ln((den + num) / (den - num)) as 2 atanh(num / den):
+//     2 (t + t^3/3 + t^5/5 + ...),  t = num / den.
+// Both callers keep |t| at or below 3 - 2 sqrt(2) = 0.172, so each term is at
+// least 33 times smaller than the one before and a 64-bit sum needs about 13.
+// The ratio form is the point: num is formed exactly (m - 1 for m near 1 is
+// exact, and FYL2XP1 is handed its x directly), so a result near zero keeps
+// its full relative precision.
+static float80 f80_ln_atanh(float80 num, float80 den) {
+    float80 t = f80_div(num, den);
+    float80 t2 = f80_mul(t, t);
+    float80 sum = t;
+    float80 power = t;
+    for (int k = 3; k < 400; k += 2) {
+        power = f80_mul(power, t2);
+        float80 next = f80_add(sum, f80_div(power, f80_from_int(k)));
+        if (f80_eq(next, sum))
+            break;
+        sum = next;
+    }
+    // Doubled by adding, which is exact; f80_scale is off by a factor of two
+    // on a denormal, which is what a tiny FYL2XP1 operand gives here.
+    return f80_add(sum, sum);
+}
+
+// log2(e) and sqrt(2), rounded to 64 bits.
+static const float80 f80_log2e_ = {.signif = 0xb8aa3b295c17f0bc, .signExp = 0x3fff};
+static const float80 f80_sqrt2_ = {.signif = 0xb504f333f9de6484, .signExp = 0x3fff};
+
+// FYL2X and FYL2XP1 are transcendental instructions, which the x87 computes at
+// full precision whatever the precision-control field says, so the series runs
+// at 64 bits and round-to-nearest. Its own steps' flags are not the
+// instruction's either -- a tiny term underflows without the result doing so
+// -- so they are put back as they were, and the caller is told only whether
+// the result is inexact. The x87 reports PE for every FYL2X operand but 1,
+// powers of two included (checked on camd), so that is what it says.
+struct f80_mode_save_ {
+    enum f80_rounding_mode rounding;
+    int precision, exceptions, inexact, rounded_up;
+};
+static struct f80_mode_save_ f80_full_precision_begin(void) {
+    struct f80_mode_save_ saved = {f80_rounding_mode, f80_precision,
+                                   f80_exceptions, f80_inexact, f80_rounded_up};
+    f80_rounding_mode = round_to_nearest;
+    f80_precision = 64;
+    return saved;
+}
+static void f80_full_precision_end(struct f80_mode_save_ saved, bool inexact) {
+    f80_rounding_mode = saved.rounding;
+    f80_precision = saved.precision;
+    f80_exceptions = saved.exceptions;
+    f80_inexact = saved.inexact || inexact;
+    f80_rounded_up = saved.rounded_up;
+}
+
+// log2(x) = e + log2(m), x = m * 2^e with m in [sqrt(1/2), sqrt(2)).
+//
+// This was a bit-at-a-time loop that squared x once per result bit. Each
+// squaring doubles the relative error already in x, so the low bits of the
+// answer were noise, and near x = 1, where the answer is small, that noise was
+// most of a double: Java's Math.log(1.001) on the i386 guest was 125 ulp out,
+// and musl's i386 log() is the same FYL2X. It also looped forever on +inf.
 float80 f80_log2(float80 x) {
     float80 zero = f80_from_int(0);
     float80 one = f80_from_int(1);
-    float80 two = f80_from_int(2);
     // FYL2X's special operands. log2(0) is -infinity and a division by zero
     // -- musl's i386 log() is FYL2X, and log(0.0) came back NaN -- a negative
     // operand is invalid, and infinity and 1 are exact.
@@ -870,29 +930,76 @@ float80 f80_log2(float80 x) {
     if (f80_eq(x, one))
         return zero;
 
-    int ipart = 0;
-    while (f80_lt(x, one)) {
-        ipart--;
-        x = f80_mul(x, two);
+    if (f80_isdenormal(x))
+        f80_exceptions |= F80_EXC_DENORMAL;
+    struct f80_mode_save_ saved = f80_full_precision_begin();
+    int e;
+    float80 m = x;
+    if (f80_isdenormal(x)) {
+        int shift = __builtin_clzll(x.signif);
+        m.signif = x.signif << shift;
+        e = unbias(EXP_MIN) - shift;
+    } else {
+        e = unbias(x.exp);
     }
-    while (f80_gt(x, two)) {
-        ipart++;
-        x = f80_div(x, two);
+    m.exp = bias(0);
+    if (f80_gt(m, f80_sqrt2_)) {
+        m.exp = bias(-1);
+        e++;
     }
-    float80 res = f80_from_int(ipart);
+    float80 ln_m = f80_ln_atanh(f80_sub(m, one), f80_add(m, one));
+    float80 res = f80_add(f80_from_int(e), f80_mul(ln_m, f80_log2e_));
+    f80_full_precision_end(saved, true);
+    return res;
+}
 
-    float80 bit = one;
-    while (f80_gt(bit, zero)) {
-        while (f80_lte(x, two) && f80_gt(bit, zero)) {
-            x = f80_mul(x, x);
-            bit = f80_div(bit, two);
-        }
-        float80 oldres = res;
-        res = f80_add(res, bit);
-        if (oldres.signif == res.signif && oldres.exp == res.exp && oldres.sign == res.sign)
-            break;
-        x = f80_div(x, two);
+// log2(1 + x) for FYL2XP1, as 2 atanh(x / (2 + x)) * log2(e): x is never added
+// to 1, which is what would throw a tiny x away. The instruction is defined
+// for |x| < 1 - sqrt(2)/2, where |t| stays under 0.172; beyond that the
+// series still converges, more slowly, for any x > -1. At and below -1 the
+// hardware's answer is undefined (a real x87 returned -1 and -2 for -1 and
+// -2), so this gives the logarithm's own: -inf and ZE, or invalid.
+float80 f80_log2p1(float80 x) {
+    // The special operands as for f80_log2, at x + 1: log2(0) at x = -1.
+    if (!f80_is_supported(x)) {
+        f80_exceptions |= F80_EXC_INVALID;
+        return F80_INDEFINITE;
     }
+    if (f80_isnan(x)) {
+        if (f80_issnan(x)) {
+            f80_exceptions |= F80_EXC_INVALID;
+            x.signif |= 1ull << 62;
+        }
+        return x;
+    }
+    float80 minus_one = f80_from_int(-1);
+    if (f80_eq(x, minus_one)) {
+        f80_exceptions |= F80_EXC_DIVZERO;
+        return f80_neg(F80_INF);
+    }
+    if (f80_lt(x, minus_one)) {
+        f80_exceptions |= F80_EXC_INVALID;
+        return F80_INDEFINITE;
+    }
+    if (f80_isinf(x) || f80_iszero(x))
+        return x;
+    if (f80_isdenormal(x))
+        f80_exceptions |= F80_EXC_DENORMAL;
+    struct f80_mode_save_ saved = f80_full_precision_begin();
+    float80 res;
+    if (x.exp < bias(-64)) {
+        // log2(1 + x) = x log2(e) (1 - x/2 + ...), and below 2^-64 the
+        // correction is under half an ulp: one rounding, where the series
+        // would round a denormal t and then its product again.
+        res = f80_mul(x, f80_log2e_);
+    } else {
+        float80 ln = f80_ln_atanh(x, f80_add(f80_from_int(2), x));
+        res = f80_mul(ln, f80_log2e_);
+    }
+    f80_full_precision_end(saved, true);
+    // A tiny operand gives a denormal result, which is an underflow.
+    if (f80_isdenormal(res))
+        f80_exceptions |= F80_EXC_UNDERFLOW;
     return res;
 }
 

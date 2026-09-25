@@ -1480,11 +1480,14 @@ restart:
                     case 0xd956: TRACE("fldz"); FLDC(zero); break;
                     case 0xd960: TRACE("f2xm1"); F2XM1(); break;
                     case 0xd961: TRACE("fyl2x"); FYL2X(); break;
+                    case 0xd962: TRACE("fptan"); FPTAN(); break;
                     case 0xd963: TRACE("fpatan"); FPATAN(); break;
                     case 0xd964: TRACE("fxtract"); FXTRACT(); break;
+                    case 0xd966: TRACE("fdecstp"); FDECSTP(); break;
                     case 0xd967: TRACE("fincstp"); FINCSTP(); break;
                     case 0xd965: TRACE("fprem1"); FPREM1(); break;
                     case 0xd970: TRACE("fprem"); FPREM(); break;
+                    case 0xd971: TRACE("fyl2xp1"); FYL2XP1(); break;
                     case 0xd972: TRACE("fsqrt"); FSQRT(); break;
                     case 0xd974: TRACE("frndint"); FRNDINT(); break;
                     case 0xd975: TRACE("fscale"); FSCALE(); break;
