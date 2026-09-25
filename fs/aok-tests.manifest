@@ -84,6 +84,7 @@ mountinfo_tree.c
 mount_bind_id.c
 mount_bind_getpath.c
 inotify_bind_alias.c
+mount_bind_busy.c
 chroot_dotdot.c
 proc_net_socket_ids.c
 tmpfs_nlink.c

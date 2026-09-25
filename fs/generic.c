@@ -299,7 +299,7 @@ struct mount *find_mount_and_trim_path(char *path) {
 // them: a bind can be more restrictive than what it aliases, never less. A
 // bind of a read-only filesystem stays read-only.
 struct mount *find_mount_and_trim_path_flags(char *path, int *mount_flags) {
-    return find_mount_and_trim_path_seen(path, mount_flags, NULL, NULL);
+    return find_mount_and_trim_path_seen(path, mount_flags, NULL, NULL, NULL);
 }
 
 // The bind's own identity has to be read here, before the redirect below
@@ -309,10 +309,15 @@ struct mount *find_mount_and_trim_path_flags(char *path, int *mount_flags) {
 // origin's made a bind point look like an ordinary directory of its parent's
 // mount to systemd's path_is_mount_point() and to mountpoint(1), which compare
 // a path's mount ID with its parent's and read STATX_ATTR_MOUNT_ROOT.
+//
+// `seen_bind` hands back the bind itself, still referenced, for a descriptor
+// to hold: see fd->bind_mount.
 struct mount *find_mount_and_trim_path_seen(char *path, int *mount_flags, int *seen_id,
-                                            bool *seen_root) {
+                                            bool *seen_root, struct mount **seen_bind) {
     if (mount_flags != NULL)
         *mount_flags = 0;
+    if (seen_bind != NULL)
+        *seen_bind = NULL;
     struct mount *mount = mount_find(path);
     if (mount == NULL)
         return NULL;
@@ -345,7 +350,10 @@ struct mount *find_mount_and_trim_path_seen(char *path, int *mount_flags, int *s
         }
         strcpy(path, redirected);
         mount_retain(origin);
-        mount_release(mount);
+        if (seen_bind != NULL)
+            *seen_bind = mount; // mount_find's reference goes with it
+        else
+            mount_release(mount);
         if (mount_flags != NULL)
             *mount_flags |= origin->flags;
         return origin;
@@ -444,8 +452,12 @@ struct mount *opath_link_get_mount(struct fd *fd) {
 }
 
 // readlinkat(fd, "", ...) on an O_PATH symlink fd (Linux allows exactly this).
+// That is readlink(2), so a /proc/<pid> link answers as it does to a reader;
+// see generic_readlinkat_shown.
 ssize_t opath_link_readlink(struct fd *fd, char *buf, size_t bufsize) {
     struct mount *mount = fd->opath_link.mount;
+    if (mount->fs == &procfs)
+        return proc_readlink_shown(fd->opath_link.path, buf, bufsize);
     return mount->fs->readlink(mount, fd->opath_link.path, buf, bufsize);
 }
 
@@ -549,20 +561,12 @@ static struct fd *generic_open_tmpfile(struct fd *at, const char *path_raw, int 
     return ERR_PTR(_EOPNOTSUPP);
 }
 
-struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, int mode, int extra_norm) {
-    if (flags & O_RDWR_ && flags & O_WRONLY_)
-        return ERR_PTR(_EINVAL);
-    if (flags & O_TMPFILE_)
-        return generic_open_tmpfile(at, path_raw, flags);
-
-    struct fd *procfd = procfd_openat(at, path_raw, flags);
-    if (procfd != NULL)
-        return procfd;
-
-    struct fd *nsfd = procns_openat(at, path_raw, flags);
-    if (nsfd != NULL)
-        return nsfd;
-
+// The open by path, from generic_openat_norm below. `*bind` receives the bind
+// mount the path is on, referenced, or NULL; generic_openat_norm gives it to
+// the descriptor, or drops it if the open failed. It is not handed over in
+// here because every failure below would then have to drop it too.
+static struct fd *generic_openat_path(struct fd *at, const char *path_raw, int flags, int mode,
+                                      int extra_norm, struct mount **bind) {
     // TODO really, really, seriously reconsider what I'm doing with the strings
     char path[MAX_PATH];
     // O_NOFOLLOW: do not resolve a *final* symlink component (intermediate
@@ -605,7 +609,7 @@ struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, i
     int mflags;
     int seen_id;
     bool seen_root;
-    struct mount *mount = find_mount_and_trim_path_seen(path, &mflags, &seen_id, &seen_root);
+    struct mount *mount = find_mount_and_trim_path_seen(path, &mflags, &seen_id, &seen_root, bind);
     if (mount == NULL)
         return ERR_PTR(_ENOENT);
     // Refusing the write-mode open is what Linux does for a read-only mount,
@@ -915,6 +919,33 @@ error:
     return ERR_PTR(err);
 }
 
+struct fd *generic_openat_norm(struct fd *at, const char *path_raw, int flags, int mode, int extra_norm) {
+    if (flags & O_RDWR_ && flags & O_WRONLY_)
+        return ERR_PTR(_EINVAL);
+    if (flags & O_TMPFILE_)
+        return generic_open_tmpfile(at, path_raw, flags);
+
+    struct fd *procfd = procfd_openat(at, path_raw, flags);
+    if (procfd != NULL)
+        return procfd;
+
+    struct fd *nsfd = procns_openat(at, path_raw, flags);
+    if (nsfd != NULL)
+        return nsfd;
+
+    // A descriptor opened through a bind holds the bind as well as the origin
+    // behind it, so the bind is busy while it is open: see fd->bind_mount.
+    struct mount *bind = NULL;
+    struct fd *fd = generic_openat_path(at, path_raw, flags, mode, extra_norm, &bind);
+    if (IS_ERR(fd)) {
+        if (bind != NULL)
+            mount_release(bind);
+        return fd;
+    }
+    fd->bind_mount = bind;
+    return fd;
+}
+
 struct fd *generic_openat(struct fd *at, const char *path_raw, int flags, int mode) {
     return generic_openat_norm(at, path_raw, flags, mode, 0);
 }
@@ -937,15 +968,29 @@ struct fd *generic_open_realroot(const char *path, int flags, int mode) {
 // filesystem reports is relative to the origin, and joining it to the
 // origin's point named the bind's source: after `mount --bind /tmp/bp-src
 // /tmp/bp-dst; cd /tmp/bp-dst`, getcwd and /proc/self/cwd said /tmp/bp-src
-// where Linux says /tmp/bp-dst. fd->mnt_id still names the bind, so the path
-// is re-expressed through it. That matters beyond what gets printed: every
+// where Linux says /tmp/bp-dst. fd->bind_mount is the bind, so the path is
+// re-expressed through it. That matters beyond what gets printed: every
 // relative lookup starts from this path (fs/path.c path_normalize), and
 // starting from the source's put it on the source's mount -- a read-only bind
 // was writable from a cwd inside it, a mount inside the bind was hidden from
 // relative names, and a bind of an outside directory into a chroot left a cwd
-// in it outside the jail, where `..` walked on out. `through_bind` false is
-// generic_getpath_backing.
-static int getpath_common(struct fd *fd, char *buf, bool through_bind) {
+// in it outside the jail, where `..` walked on out.
+//
+// A bind that has been lazily unmounted is still held by the descriptor but
+// has left the mount table, and there the two uses part. Linux names the file
+// from the detached bind's root -- "/f" for $B/dst/f after `umount -l $B/dst`
+// -- which is what a reader is SHOWN. But no path reaches a detached mount
+// here, and "/f" walked from the real root is somebody else's file: a lookup
+// from a cwd there has to go through the bind's source, which still reaches
+// the file. So GETPATH_LOOKUP falls back to the path on the origin, and only
+// GETPATH_SHOWN, which is never walked, takes Linux's answer.
+enum getpath_how {
+    GETPATH_BACKING, // the origin's path, ignoring any bind
+    GETPATH_LOOKUP,  // through the bind while it is mounted
+    GETPATH_SHOWN,   // through the bind, mounted or lazily unmounted
+};
+
+static int getpath_common(struct fd *fd, char *buf, enum getpath_how how, bool *unreachable) {
     struct mount *mount;
     if (fd_is_opath_link(fd)) {
         mount = fd->opath_link.mount;
@@ -961,11 +1006,11 @@ static int getpath_common(struct fd *fd, char *buf, bool through_bind) {
     } else {
         return _EBADF;
     }
-    // Once the bind is gone -- unmounted, which a descriptor inside it does
-    // not prevent here -- this falls back to the path on the origin, which
-    // still names the file.
-    bool on_bind = through_bind && fd->mnt_id != 0 && fd->mnt_id != mount_id(mount);
-    if (!on_bind || !mount_path_through_bind(fd->mnt_id, mount, buf)) {
+    // Also the origin's path once the file has been renamed out from under
+    // the bind's source, where no path through the bind names it.
+    bool on_bind = how != GETPATH_BACKING && fd->bind_mount != NULL;
+    if (!on_bind || !mount_path_through_bind(fd->bind_mount, mount, buf,
+                                             how == GETPATH_SHOWN ? unreachable : NULL)) {
         size_t point_len = mount->point_len;
         size_t buf_len = strlen(buf);
         if (buf_len + point_len >= MAX_PATH)
@@ -979,11 +1024,16 @@ static int getpath_common(struct fd *fd, char *buf, bool through_bind) {
 }
 
 int generic_getpath(struct fd *fd, char *buf) {
-    return getpath_common(fd, buf, true);
+    return getpath_common(fd, buf, GETPATH_LOOKUP, NULL);
+}
+
+int generic_getpath_shown(struct fd *fd, char *buf, bool *unreachable) {
+    *unreachable = false;
+    return getpath_common(fd, buf, GETPATH_SHOWN, unreachable);
 }
 
 int generic_getpath_backing(struct fd *fd, char *buf) {
-    return getpath_common(fd, buf, false);
+    return getpath_common(fd, buf, GETPATH_BACKING, NULL);
 }
 
 int generic_accessat(struct fd *dirfd, const char *path_raw, int mode) {
@@ -1512,7 +1562,8 @@ int generic_utime(struct fd *at, const char *path_raw, struct timespec atime, st
     return err;
 }
 
-ssize_t generic_readlinkat(struct fd *at, const char *path_raw, char *buf, size_t bufsize) {
+static ssize_t readlinkat_common(struct fd *at, const char *path_raw, char *buf, size_t bufsize,
+                                 bool shown) {
     char path[MAX_PATH];
     int err = path_normalize(at, path_raw, path, N_SYMLINK_NOFOLLOW);
     if (err < 0)
@@ -1522,10 +1573,20 @@ ssize_t generic_readlinkat(struct fd *at, const char *path_raw, char *buf, size_
     if (mount == NULL)
         return _ENOENT;
     err = _EINVAL;
-    if (mount->fs->readlink)
+    if (shown && mount->fs == &procfs)
+        err = proc_readlink_shown(path, buf, bufsize);
+    else if (mount->fs->readlink)
         err = mount->fs->readlink(mount, path, buf, bufsize);
     mount_release(mount);
     return err;
+}
+
+ssize_t generic_readlinkat(struct fd *at, const char *path_raw, char *buf, size_t bufsize) {
+    return readlinkat_common(at, path_raw, buf, bufsize, false);
+}
+
+ssize_t generic_readlinkat_shown(struct fd *at, const char *path_raw, char *buf, size_t bufsize) {
+    return readlinkat_common(at, path_raw, buf, bufsize, true);
 }
 
 int generic_mkdirat(struct fd *at, const char *path_raw, mode_t_ mode) {

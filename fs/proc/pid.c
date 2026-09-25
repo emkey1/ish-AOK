@@ -1075,7 +1075,8 @@ void proc_maps_dump(struct task *task, struct proc_data *buf) {
             strncpy(path, data->name, sizeof(path) - 1);
             path[sizeof(path) - 1] = '\0';
         } else if (data->fd != NULL) {
-            generic_getpath(start_pt->data->fd, path);
+            bool unreachable;
+            generic_getpath_shown(start_pt->data->fd, path, &unreachable);
         }
         proc_printf(buf, "%08llx-%08llx %c%c%c%c %08lx 00:00 %-10d %s\n",
                 (unsigned long long) (start << PAGE_BITS), (unsigned long long) (end << PAGE_BITS),
@@ -1358,7 +1359,8 @@ static void proc_smaps_walk(struct task *task, struct proc_data *buf, bool rollu
             strncpy(path, data->name, sizeof(path) - 1);
             path[sizeof(path) - 1] = '\0';
         } else if (data->fd != NULL) {
-            generic_getpath(data->fd, path);
+            bool unreachable;
+            generic_getpath_shown(data->fd, path, &unreachable);
         }
 
         proc_smaps_region(buf, start, end, start_pt, data, path, !rollup, swapped_pages,
@@ -1518,6 +1520,27 @@ static bool proc_pid_fdinfo_readdir(struct proc_entry *entry, unsigned long *ind
     return any_left;
 }
 
+// The text of a /proc/<pid>/{fd/N,cwd,root,exe} link for `fd`. readlink(2)
+// is shown what Linux prints (generic_getpath_shown). A path walk through the
+// link -- open("/proc/self/cwd/f") -- follows this text, where Linux jumps
+// straight to the file (nd_jump_link), so it gets a path that reaches the
+// file (generic_getpath). The two differ only in a lazily unmounted bind,
+// where the shown path is from the bind's own root and walking it would land
+// on whatever that name means in the real root.
+//
+// Then rebased against the CALLING process's chroot root, not the target
+// task's -- readlink of these links is d_path() against current's root on
+// real Linux (see fs_rebase_readlink_path) -- except for a path from a
+// detached bind's root, which no root contains and Linux prints as it is.
+static int proc_pid_link_path(struct proc_entry *entry, struct fd *fd, char *buf) {
+    bool unreachable = false;
+    int err = entry->shown ? generic_getpath_shown(fd, buf, &unreachable)
+                           : generic_getpath(fd, buf);
+    if (err >= 0 && !unreachable)
+        err = fs_rebase_readlink_path(current->fs, buf);
+    return err;
+}
+
 static int proc_pid_fd_readlink(struct proc_entry *entry, char *buf) {
     struct task *task = proc_get_task(entry);
     if ((task == NULL) || (task->exiting == true)) {
@@ -1535,12 +1558,10 @@ static int proc_pid_fd_readlink(struct proc_entry *entry, char *buf) {
         fd = fd_retain(fd);
     unlock(&files->lock);
     fdtable_release(files);
-    int err = fd == NULL ? _ENOENT : generic_getpath(fd, buf);
+    int err = fd == NULL ? _ENOENT : proc_pid_link_path(entry, fd, buf);
     if (fd != NULL)
         fd_close(fd);
     proc_put_task(task);
-    if (err >= 0)
-        err = fs_rebase_readlink_path(current->fs, buf);
     return err;
 }
 
@@ -1606,14 +1627,9 @@ static int proc_pid_exe_readlink(struct proc_entry *entry, char *buf) {
         proc_put_task(task);
         return _ESRCH;
     }
-    int err = generic_getpath(fd, buf);
+    int err = proc_pid_link_path(entry, fd, buf);
     fd_close(fd);
     proc_put_task(task);
-    // Rebase against the CALLING process's chroot root, not the target
-    // task's -- readlink of /proc/*/{exe,cwd,root,fd/N} is d_path() against
-    // current's root on real Linux (see fs_rebase_readlink_path).
-    if (err >= 0)
-        err = fs_rebase_readlink_path(current->fs, buf);
     return err;
 }
 
@@ -1930,12 +1946,10 @@ static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {
     struct fd *pwd = fs->pwd ? fd_retain(fs->pwd) : NULL;
     unlock(&fs->lock);
     fs_info_release(fs);
-    int err = pwd == NULL ? _ESRCH : generic_getpath(pwd, buf);
+    int err = pwd == NULL ? _ESRCH : proc_pid_link_path(entry, pwd, buf);
     if (pwd != NULL)
         fd_close(pwd);
     proc_put_task(task);
-    if (err >= 0)
-        err = fs_rebase_readlink_path(current->fs, buf);
     return err;
 }
 
@@ -1954,12 +1968,10 @@ static int proc_pid_root_readlink(struct proc_entry *entry, char *buf) {
     struct fd *root = fs->root ? fd_retain(fs->root) : NULL;
     unlock(&fs->lock);
     fs_info_release(fs);
-    int err = root == NULL ? _ESRCH : generic_getpath(root, buf);
+    int err = root == NULL ? _ESRCH : proc_pid_link_path(entry, root, buf);
     if (root != NULL)
         fd_close(root);
     proc_put_task(task);
-    if (err >= 0)
-        err = fs_rebase_readlink_path(current->fs, buf);
     return err;
 }
 

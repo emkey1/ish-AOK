@@ -1375,18 +1375,19 @@ void root_progress_callback(void *cookie, double progress, const char *message, 
 // history is kept because the failure it caused is not obvious from the code.
 //
 // Returns NO with *error set only if the root is genuinely busy (something
-// still has an open fd/cwd/root inside it, e.g. an active chroot session --
-// mount_detach reports this as EBUSY). Any other outcome (most commonly
-// EINVAL: this root was never touched via mount-root.sh, so there's nothing
-// mounted at all) is harmless and silently ignored -- mount_detach is safe to
-// call unconditionally on a path that isn't currently mounted.
+// still has an open fd/cwd/root inside it, e.g. an active chroot session),
+// and then nothing has been unmounted. Everything mounted inside the root --
+// mount-root.sh's binds, whatever else the guest put there -- goes with it,
+// lazily: see mount_detach_tree in fs/mount.c. That used to be a fixed list
+// of binds unmounted one by one before the root was checked. A session in the
+// root lost them before the root was found busy, a bind in use stayed behind
+// once binds became busy while used, and AOK/tests and AOK/fakefs, which the
+// list had fallen behind on, stayed behind every time. Any other outcome
+// (most commonly EINVAL: the root was never exposed) is harmless and silently
+// ignored, so this is safe to call unconditionally.
 - (BOOL)unmountExposedRootNamed:(NSString *)name error:(NSError **)error {
     NSString *base = ExposedRootPoint(name);
-    NSArray<NSString *> *binds = @[@"AOK/tools", @"run", @"dev/pts", @"dev", @"sys", @"proc"];
-    for (NSString *bind in binds)
-        mount_detach([base stringByAppendingPathComponent:bind].UTF8String);
-
-    if (mount_detach(base.UTF8String) == _EBUSY) {
+    if (mount_detach_tree(base.UTF8String) == _EBUSY) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:@"iSH" code:0 userInfo:@{NSLocalizedDescriptionKey:
                 @"This filesystem is currently mounted or in use (e.g. via mount-root.sh) -- exit any active session into it first"}];

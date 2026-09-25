@@ -127,6 +127,8 @@ int fd_close(struct fd *fd) {
             inode_release(fd->inode);
         if (fd->mount)
             mount_release(fd->mount);
+        if (fd->bind_mount)
+            mount_release(fd->bind_mount);
         free(fd);
 //        fd = NULL; // KLUGE?
     }
