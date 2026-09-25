@@ -807,6 +807,27 @@ static bool tmpfs_parse_size(const char *s, size_t len, bool percent_ok, uint64_
     return true;
 }
 
+// One option of a mount's string, if it is size= or nr_blocks=: 1 with the
+// page limit it sets in *max_pages, 0 for any other option, _EINVAL for one
+// of these two that does not parse.
+static int tmpfs_limit_option(const char *opt, size_t len, uint64_t *max_pages) {
+    if (len > 5 && strncmp(opt, "size=", 5) == 0) {
+        uint64_t bytes;
+        if (!tmpfs_parse_size(opt + 5, len - 5, true, &bytes))
+            return _EINVAL;
+        *max_pages = tmpfs_pages_of_u64(bytes);
+        return 1;
+    }
+    if (len > 10 && strncmp(opt, "nr_blocks=", 10) == 0) {
+        uint64_t blocks;
+        if (!tmpfs_parse_size(opt + 10, len - 10, false, &blocks))
+            return _EINVAL;
+        *max_pages = blocks;
+        return 1;
+    }
+    return 0;
+}
+
 static int tmpfs_mount(struct mount *mount) {
     // Linux tmpfs honors mode=/uid=/gid= mount options on its root inode
     // (mm/shmem.c shmem_parse_one). They matter beyond cosmetics:
@@ -839,17 +860,8 @@ static int tmpfs_mount(struct mount *mount) {
             root_uid = (uid_t_) strtoul(opt + 4, NULL, 10);
         else if (len > 4 && strncmp(opt, "gid=", 4) == 0)
             root_gid = (uid_t_) strtoul(opt + 4, NULL, 10);
-        else if (len > 5 && strncmp(opt, "size=", 5) == 0) {
-            uint64_t bytes;
-            if (!tmpfs_parse_size(opt + 5, len - 5, true, &bytes))
-                return _EINVAL;
-            max_pages = tmpfs_pages_of_u64(bytes);
-        } else if (len > 10 && strncmp(opt, "nr_blocks=", 10) == 0) {
-            uint64_t blocks;
-            if (!tmpfs_parse_size(opt + 10, len - 10, false, &blocks))
-                return _EINVAL;
-            max_pages = blocks;
-        }
+        else if (tmpfs_limit_option(opt, len, &max_pages) < 0)
+            return _EINVAL;
         opt = end != NULL ? end + 1 : "";
     }
 
@@ -2032,6 +2044,73 @@ static void tmpfs_count_tree(struct tmp_dirent *dir, uint64_t *pages, uint64_t *
     unlock(&dir->lock);
 }
 
+// mount -o remount,size=... (Linux's shmem_reconfigure): a new size= or
+// nr_blocks= applies at once, and /proc/mounts shows it. As on Linux it is
+// EINVAL below what the files already hold, and a mount made without any
+// limit (size=0) cannot be given one. Other options are left as they were.
+static int tmpfs_remount(struct mount *mount, const char *info) {
+    uint64_t max_pages = 0;
+    const char *limit = NULL;
+    size_t limit_len = 0;
+    for (const char *opt = info; opt != NULL && *opt != '\0';) {
+        const char *end = strchr(opt, ',');
+        size_t len = end != NULL ? (size_t) (end - opt) : strlen(opt);
+        int kind = tmpfs_limit_option(opt, len, &max_pages);
+        if (kind < 0)
+            return kind;
+        if (kind > 0) {
+            limit = opt;
+            limit_len = len;
+        }
+        opt = end != NULL ? end + 1 : "";
+    }
+    if (limit == NULL)
+        return 0;
+    struct tmp_dirent *root = mount->data;
+    struct tmpfs_sb *sb = root != NULL && root->inode != NULL ? root->inode->sb : NULL;
+    if (sb == NULL)
+        return 0;
+
+    // The mount's option string, with its size= and nr_blocks= replaced by
+    // the new one, built before anything changes so a failure changes nothing.
+    const char *old_info = mount->info != NULL ? mount->info : "";
+    char *new_info = malloc(strlen(old_info) + limit_len + 2);
+    if (new_info == NULL)
+        return _ENOMEM;
+    size_t at = 0;
+    for (const char *opt = old_info; *opt != '\0';) {
+        const char *end = strchr(opt, ',');
+        size_t len = end != NULL ? (size_t) (end - opt) : strlen(opt);
+        uint64_t ignored;
+        if (len != 0 && tmpfs_limit_option(opt, len, &ignored) == 0) {
+            memcpy(new_info + at, opt, len);
+            at += len;
+            new_info[at++] = ',';
+        }
+        opt = end != NULL ? end + 1 : "";
+    }
+    memcpy(new_info + at, limit, limit_len);
+    new_info[at + limit_len] = '\0';
+
+    int err = 0;
+    lock(&sb->lock, 0);
+    if (max_pages != 0 && sb->max_pages == 0)
+        err = _EINVAL;  // "Cannot retroactively limit size"
+    else if (max_pages != 0 && sb->used_pages > max_pages)
+        err = _EINVAL;  // "Too small a size for current use"
+    else
+        sb->max_pages = max_pages;
+    unlock(&sb->lock);
+    if (err < 0) {
+        free(new_info);
+        return err;
+    }
+    // Every reader of mount->info holds mounts_lock, as the caller does.
+    free((void *) mount->info);
+    mount->info = new_info;
+    return 0;
+}
+
 static int tmpfs_statfs(struct mount *mount, struct statfsbuf *stat) {
     // Linux tmpfs reports the mount's size limit as f_blocks and what its
     // files hold as the difference to f_bfree/f_bavail; the inode cap
@@ -2232,6 +2311,7 @@ const struct fs_ops tmpfs = {
     .name = "tmpfs", .magic = 0x01021994,
     .mount = tmpfs_mount,
     .umount = tmpfs_umount,
+    .remount = tmpfs_remount,
     .statfs = tmpfs_statfs,
     .open = tmpfs_open,
     .close = tmpfs_close,
@@ -2259,6 +2339,7 @@ const struct fs_ops devtmpfs = {
     .name = "devtmpfs", .magic = 0x01021994,
     .mount = tmpfs_mount,
     .umount = tmpfs_umount,
+    .remount = tmpfs_remount,
     .statfs = tmpfs_statfs,
     .open = tmpfs_open,
     .close = tmpfs_close,

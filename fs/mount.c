@@ -1107,6 +1107,16 @@ dword_t sys_mount_guest(guest_addr_t source_addr, guest_addr_t point_addr, guest
         list_for_each_entry(&mounts, mount, mounts) {
             bool is_root_remount = strcmp(point, "/") == 0 && mount->point[0] == '\0';
             if (strcmp(point, mount->point) == 0 || is_root_remount) {
+                // The filesystem's own options (tmpfs's size=) first, so a
+                // refusal changes nothing. MS_REMOUNT|MS_BIND changes the
+                // mount's flags alone, as on Linux.
+                if (mount->fs->remount != NULL && !(flags & MS_BIND_)) {
+                    int err = mount->fs->remount(mount, data);
+                    if (err < 0) {
+                        unlock(&mounts_lock);
+                        return err;
+                    }
+                }
                 mount->flags = (mount->flags & ~MS_FLAGS) | (flags & MS_FLAGS);
                 found = true;
                 break;
@@ -1238,6 +1248,15 @@ struct fscontext_data {
     // path below was dead for every caller that used the tool.
     bool binfmt_misc;
     char point[MAX_PATH];
+    // What fsconfig set, as mount(2)'s option string: "size=5m,mode=1777".
+    // Until FSCONFIG_CMD_CREATE these are the new filesystem's options; after
+    // it, what the next FSCONFIG_CMD_RECONFIGURE applies.
+    char options[1024];
+    // The "source" parameter, the first column of /proc/mounts.
+    char source[256];
+    // The mount CREATE made, by its ID: move_mount changes its point, and
+    // a reconfigure still has to find it.
+    int mount_id;
 };
 
 static int fscontext_close(struct fd *fd) {
@@ -1302,6 +1321,19 @@ fd_t sys_fsopen(addr_t fsname_addr, dword_t flags) {
 #define FSCONFIG_SET_FD_ 5
 #define FSCONFIG_CMD_CREATE_ 6
 #define FSCONFIG_CMD_RECONFIGURE_ 7
+#define FSCONFIG_CMD_CREATE_EXCL_ 8
+
+// Append one option to the context's string; EINVAL when it will not fit.
+static int fscontext_add_option(struct fscontext_data *data, const char *key, const char *value) {
+    size_t at = strlen(data->options);
+    int n = snprintf(data->options + at, sizeof(data->options) - at, "%s%s%s%s",
+            at != 0 ? "," : "", key, value != NULL ? "=" : "", value != NULL ? value : "");
+    if (n < 0 || (size_t) n >= sizeof(data->options) - at) {
+        data->options[at] = '\0';
+        return _EINVAL;
+    }
+    return 0;
+}
 
 // Option-name vocabularies for fsconfig().
 //
@@ -1413,19 +1445,34 @@ dword_t sys_fsconfig_guest(fd_t f, dword_t cmd, guest_addr_t key_addr, guest_add
 
     switch (cmd) {
         case FSCONFIG_SET_FLAG_:
-        case FSCONFIG_SET_STRING_:
+        case FSCONFIG_SET_STRING_: {
             // A name this filesystem would not parse is refused, the way Linux
-            // refuses it; see fscontext_option_known. We still only ACT on the
-            // one option this codebase's mount model has an equivalent for
-            // ("ro") -- size=, mode=, SELinux context= and the rest are
-            // accepted and ignored, the existing "don't model X" precedent for
-            // mount options AOK has no backing concept for (see do_mount's
-            // MS_IGNORED).
+            // refuses it; see fscontext_option_known.
             if (!fscontext_option_known(data, key))
                 return _EINVAL;
-            if (strcmp(key, "ro") == 0)
-                data->readonly = true;
-            return 0;
+            char value[256] = "";
+            if (cmd == FSCONFIG_SET_STRING_) {
+                if (value_addr == 0)
+                    return _EINVAL;
+                if (user_read_string(value_addr, value, sizeof(value)))
+                    return _EFAULT;
+            }
+            if (strcmp(key, "ro") == 0 || strcmp(key, "rw") == 0) {
+                data->readonly = key[1] == 'o';
+                return 0;
+            }
+            if (strcmp(key, "source") == 0) {
+                snprintf(data->source, sizeof(data->source), "%s", value);
+                return 0;
+            }
+            // Everything else reaches the filesystem the way mount(2)'s option
+            // string does, at FSCONFIG_CMD_CREATE or _RECONFIGURE. These were
+            // accepted and dropped: `mount -t tmpfs -o size=5m` -- which
+            // util-linux does through this API unless a flag like noexec sends
+            // it back to mount(2) -- made a tmpfs with no size limit at all.
+            return fscontext_add_option(data, key,
+                    cmd == FSCONFIG_SET_STRING_ ? value : NULL);
+        }
         case FSCONFIG_SET_BINARY_:
         case FSCONFIG_SET_PATH_:
         case FSCONFIG_SET_PATH_EMPTY_:
@@ -1438,7 +1485,9 @@ dword_t sys_fsconfig_guest(fd_t f, dword_t cmd, guest_addr_t key_addr, guest_add
             // EINVAL here to conclude the filesystem is converted to the new
             // mount API and its later answers can be believed.
             return _EINVAL;
-        case FSCONFIG_CMD_CREATE_: {
+        case FSCONFIG_CMD_CREATE_:
+        case FSCONFIG_CMD_CREATE_EXCL_: {
+            // Every superblock here is new, so the exclusive form is the same.
             if (data->created)
                 return _EBUSY;
             mount_staging_point(data->point, sizeof(data->point));
@@ -1456,18 +1505,23 @@ dword_t sys_fsconfig_guest(fd_t f, dword_t cmd, guest_addr_t key_addr, guest_add
             // (kernel/fs.h). This used to mkdir a 0700 /.ish-fsmount in the
             // guest's root, which failed on a read-only one.
             lock(&mounts_lock, 0);
-            int err = do_mount(data->fs, "", data->point, "",
-                    data->readonly ? MS_READONLY_ : 0);
+            // With no "source", Linux's /proc/mounts says "none".
+            int err = do_mount(data->fs, data->source[0] != '\0' ? data->source : "none",
+                    data->point, data->options, data->readonly ? MS_READONLY_ : 0);
             if (err >= 0) {
                 // Detached until move_mount places it; see struct mount.
                 struct mount *staged = mount_at_point_locked(data->point);
-                if (staged != NULL)
+                if (staged != NULL) {
                     staged->detached = true;
+                    data->mount_id = staged->id;
+                }
             }
             unlock(&mounts_lock);
             if (err < 0)
                 return err;
             data->created = true;
+            // Consumed: what is set from here on is for a reconfigure.
+            data->options[0] = '\0';
             proc_mountinfo_notify_changed();
             return 0;
         }
@@ -1477,15 +1531,22 @@ dword_t sys_fsconfig_guest(fd_t f, dword_t cmd, guest_addr_t key_addr, guest_add
             lock(&mounts_lock, 0);
             struct mount *mount;
             bool found = false;
+            int err = 0;
             list_for_each_entry(&mounts, mount, mounts) {
-                if (strcmp(mount->point, data->point) == 0) {
-                    mount->flags = (mount->flags & ~MS_READONLY_) |
-                        (data->readonly ? MS_READONLY_ : 0);
+                if (mount->id == data->mount_id) {
+                    if (mount->fs->remount != NULL && data->options[0] != '\0')
+                        err = mount->fs->remount(mount, data->options);
+                    if (err == 0)
+                        mount->flags = (mount->flags & ~MS_READONLY_) |
+                            (data->readonly ? MS_READONLY_ : 0);
                     found = true;
                     break;
                 }
             }
             unlock(&mounts_lock);
+            if (err < 0)
+                return err;
+            data->options[0] = '\0';
             if (found)
                 proc_mountinfo_notify_changed();
             return found ? 0 : _EINVAL;
@@ -1499,6 +1560,43 @@ dword_t sys_fsconfig(fd_t f, dword_t cmd, addr_t key_addr, addr_t value_addr, in
     return sys_fsconfig_guest(f, cmd, key_addr, value_addr, aux);
 }
 
+#define FSMOUNT_CLOEXEC_ 0x1
+#define MOUNT_ATTR_RDONLY_ 0x1
+#define MOUNT_ATTR_NOSUID_ 0x2
+#define MOUNT_ATTR_NODEV_ 0x4
+#define MOUNT_ATTR_NOEXEC_ 0x8
+#define MOUNT_ATTR__ATIME_ 0x70
+#define MOUNT_ATTR_RELATIME_ 0x0
+#define MOUNT_ATTR_NOATIME_ 0x10
+#define MOUNT_ATTR_STRICTATIME_ 0x20
+#define MOUNT_ATTR_NODIRATIME_ 0x80
+#define MOUNT_ATTR_NOSYMFOLLOW_ 0x200000
+
+// fsmount's attr_flags as the mount's MS_ flags, or -1 for a value Linux
+// refuses: an unknown bit, two atime modes at once, or MOUNT_ATTR_IDMAP, which
+// needs a user namespace only mount_setattr can name.
+static int fsmount_attr_flags(dword_t attr) {
+    const dword_t known = MOUNT_ATTR_RDONLY_ | MOUNT_ATTR_NOSUID_ | MOUNT_ATTR_NODEV_ |
+            MOUNT_ATTR_NOEXEC_ | MOUNT_ATTR__ATIME_ | MOUNT_ATTR_NODIRATIME_ |
+            MOUNT_ATTR_NOSYMFOLLOW_;
+    if (attr & ~known)
+        return -1;
+    int flags = 0;
+    switch (attr & MOUNT_ATTR__ATIME_) {
+        case MOUNT_ATTR_RELATIME_: break;   // the default, as mount(2)'s
+        case MOUNT_ATTR_NOATIME_: flags |= MS_NOATIME_; break;
+        case MOUNT_ATTR_STRICTATIME_: flags |= MS_STRICTATIME_; break;
+        default: return -1;
+    }
+    if (attr & MOUNT_ATTR_RDONLY_) flags |= MS_READONLY_;
+    if (attr & MOUNT_ATTR_NOSUID_) flags |= MS_NOSUID_;
+    if (attr & MOUNT_ATTR_NODEV_) flags |= MS_NODEV_;
+    if (attr & MOUNT_ATTR_NOEXEC_) flags |= MS_NOEXEC_;
+    if (attr & MOUNT_ATTR_NODIRATIME_) flags |= MS_NODIRATIME_;
+    if (attr & MOUNT_ATTR_NOSYMFOLLOW_) flags |= MS_NOSYMFOLLOW_;
+    return flags;
+}
+
 fd_t sys_fsmount_guest(fd_t f, dword_t flags, dword_t attr_flags) {
     // Linux requires CAP_SYS_ADMIN for every door into the mount table.
     // The app's own boot-time mounts go through do_mount() directly and are
@@ -1506,6 +1604,11 @@ fd_t sys_fsmount_guest(fd_t f, dword_t flags, dword_t attr_flags) {
     if (!current_capable(CAP_SYS_ADMIN_))
         return _EPERM;
     STRACE("fsmount(%d, %#x, %#x)", f, flags, attr_flags);
+    if (flags & ~FSMOUNT_CLOEXEC_)
+        return _EINVAL;
+    int mount_flags = fsmount_attr_flags(attr_flags);
+    if (mount_flags < 0)
+        return _EINVAL;
     struct fd *fd = f_get(f);
     if (fd == NULL)
         return _EBADF;
@@ -1526,6 +1629,15 @@ fd_t sys_fsmount_guest(fd_t f, dword_t flags, dword_t attr_flags) {
             return PTR_ERR(dirfd);
         return f_install(dirfd, O_CLOEXEC_);
     }
+
+    // The attributes go on before anything can be opened through the mount:
+    // an fd takes its mount's flags when it is opened. They were ignored, so
+    // noexec, nosuid and nodev asked of fsmount did nothing.
+    lock(&mounts_lock, 0);
+    struct mount *staged = mount_at_point_locked(data->point);
+    if (staged != NULL)
+        staged->flags |= mount_flags;
+    unlock(&mounts_lock);
 
     // data->point is a real-root staging path (/.ish-fsmount/<n>) that is
     // not visible inside a chroot; open it against the real root, or

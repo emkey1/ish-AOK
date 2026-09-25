@@ -416,6 +416,11 @@ struct fs_ops {
     // and only moved into place afterwards, so what it saw at ->mount is not
     // where it ends up. Called without mounts_lock, holding a reference.
     void (*relocated)(struct mount *mount, const char *old_point, const char *new_point);
+    // Optional. The option string of mount(2)'s MS_REMOUNT, or what fsconfig
+    // set before FSCONFIG_CMD_RECONFIGURE, for a filesystem with parameters a
+    // live mount can change (tmpfs's size=). Called with mounts_lock held; an
+    // error leaves the mount as it was.
+    int (*remount)(struct mount *mount, const char *info);
     int (*statfs)(struct mount *mount, struct statfsbuf *stat);
 
     struct fd *(*open)(struct mount *mount, const char *path, int flags, int mode); // required

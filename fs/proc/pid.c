@@ -903,6 +903,9 @@ static int proc_pid_cgroup_show(struct proc_entry *entry, struct proc_data *buf)
     char seen[512] = "|";
     size_t seen_len = 1; // Length of seen
     struct mount *mount;
+    // Under mounts_lock, as /proc/mounts walks it: a mount or umount frees
+    // entries, and a tmpfs remount replaces mount->info.
+    lock(&mounts_lock, 0);
     list_for_each_entry(&mounts, mount, mounts) {
         if (strcmp(mount->fs->name, "cgroup") != 0)
             continue;
@@ -927,6 +930,7 @@ static int proc_pid_cgroup_show(struct proc_entry *entry, struct proc_data *buf)
         }
         proc_printf(buf, "%d:%s:/\n", next_id++, controller);
     }
+    unlock(&mounts_lock);
     char v2_path[MAX_PATH] = "/";
     struct task *task = proc_get_task(entry);
     if (task != NULL) {
