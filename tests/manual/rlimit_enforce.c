@@ -44,12 +44,14 @@ static void check(const char *label, int ok, long got, long want) {
     test_logf("  %-56s %s (got %ld, want %ld)\n", label, ok ? "ok" : "FAIL", got, want);
 }
 
-static int in_child(void (*fn)(void)) {
+// Run one leg in a child, with a watchdog of `secs` of wall time for a leg
+// that hangs.
+static int in_child_for(void (*fn)(void), unsigned secs) {
     fflush(stdout);
     pid_t pid = fork();
     if (pid == 0) {
         failures_total = 0;
-        alarm(test_watchdog_secs(30));
+        alarm(test_watchdog_secs(secs));
         fn();
         fflush(stdout);
         _exit(failures_total ? 1 : 0);
@@ -57,6 +59,19 @@ static int in_child(void (*fn)(void)) {
     int st = 0;
     waitpid(pid, &st, 0);
     return st;
+}
+
+static int in_child(void (*fn)(void)) {
+    return in_child_for(fn, 30);
+}
+
+// The CPU legs spin to 3 s of CPU. On a host shared with other guests a spin
+// gets a small share of a core -- the five-root gate ran at load 70 to 170 on
+// 10 cores -- and a 30 s wall-clock watchdog then fired before the CPU limit
+// it was waiting for. Whether they die is decided in CPU time (each spins to
+// 10 s of it and reports surviving); the watchdog only catches a hang.
+static int in_cpu_child(void (*fn)(void)) {
+    return in_child_for(fn, 600);
 }
 
 static double cpu_seconds(void) {
@@ -263,13 +278,13 @@ int main(int argc, char **argv) {
     test_init(argc, argv);
     int st;
 
-    st = in_child(leg_cpu_soft_then_hard);
+    st = in_cpu_child(leg_cpu_soft_then_hard);
     check("soft then hard: killed by SIGKILL", WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL,
           WIFSIGNALED(st) ? WTERMSIG(st) : -st, SIGKILL);
-    st = in_child(leg_cpu_equal);
+    st = in_cpu_child(leg_cpu_equal);
     check("soft == hard: killed by SIGKILL", WIFSIGNALED(st) && WTERMSIG(st) == SIGKILL,
           WIFSIGNALED(st) ? WTERMSIG(st) : -st, SIGKILL);
-    st = in_child(leg_cpu_default_action);
+    st = in_cpu_child(leg_cpu_default_action);
     check("SIGXCPU's default action kills", WIFSIGNALED(st) && WTERMSIG(st) == SIGXCPU,
           WIFSIGNALED(st) ? WTERMSIG(st) : -st, SIGXCPU);
 
