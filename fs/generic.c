@@ -30,11 +30,6 @@ static struct fd *procfd_reopen_regular(struct fd *fd, int flags) {
     if (fd->mount == NULL || fd->mount->fs == &procfs || !S_ISREG(fd->type))
         return NULL;
 
-    char path[MAX_PATH];
-    int err = generic_getpath(fd, path);
-    if (err < 0)
-        return NULL;
-
     // Linux reopens a /proc/<pid>/fd/N magic link's target with the CALLER's
     // flags -- that is exactly how systemd's fd_reopen() upgrades an O_PATH
     // fd to O_RDWR (xopenat_full with path=NULL). This used to reopen with
@@ -45,13 +40,7 @@ static struct fd *procfd_reopen_regular(struct fd *fd, int flags) {
     // whole boot. O_CREAT/O_EXCL are dropped: the target exists (we hold an
     // fd to it), and if its path was meanwhile unlinked, creating a NEW file
     // at the stale path would be wrong.
-    // The stored target path is fully normalized (chroot prefix included);
-    // open it against the real root or a chrooted caller re-prefixes it.
-    struct fd *reopened = generic_open_realroot(path,
-            flags & ~(O_CLOEXEC_ | O_NOFOLLOW_ | O_CREAT_ | O_EXCL_), 0);
-    if (IS_ERR(reopened))
-        return NULL;
-    return reopened;
+    return generic_reopen_by_path(fd, flags & ~(O_CLOEXEC_ | O_NOFOLLOW_ | O_CREAT_ | O_EXCL_));
 }
 
 // True when an fd opened with `have` flags can stand in for a description
@@ -968,6 +957,53 @@ struct fd *generic_open(const char *path, int flags, int mode) {
 // descriptor was EACCES where Linux opens the file afresh.
 struct fd *generic_open_realroot(const char *path, int flags, int mode) {
     return generic_openat_norm(AT_PWD, path, flags, mode, N_REALROOT | N_DETACHED_OK);
+}
+
+static bool same_file(const struct statbuf *a, const struct statbuf *b) {
+    return a->dev == b->dev && a->inode == b->inode;
+}
+
+// Linux reaches a descriptor's file by its inode; AOK has
+// paths, so it takes the descriptor's -- and a path is a name, which can
+// outlive the file or be taken by another. The one an unlinked file's
+// descriptor reports is the name it HAD, and when something has been created
+// there since, the path is that: `cat /proc/self/fd/N` of a deleted file
+// printed the new file's contents (and an O_TRUNC reopen emptied it), fexecve
+// ran the new file, and linkat(fd, "", AT_EMPTY_PATH) gave it a second name.
+static bool path_names_file(const char *path, const struct statbuf *held) {
+    struct statbuf named;
+    return path_is_normalized(path) && generic_lstat_realroot(path, &named) >= 0 &&
+        same_file(&named, held);
+}
+
+// See kernel/fs.h.
+bool generic_path_names_fd(const char *path, struct fd *fd) {
+    struct statbuf held;
+    return generic_fstat(fd, &held) >= 0 && path_names_file(path, &held);
+}
+
+// See kernel/fs.h. The name is looked at before it is opened, and what opened
+// is checked after. Looked at first, with a stat, because an open can act on
+// what it finds: O_TRUNC empties it, a FIFO blocks the opener until a writer
+// comes, a terminal can become the caller's controlling tty. Checked after,
+// because the name can change hands in between. O_NOFOLLOW because the path
+// names the file the descriptor holds; a symlink there now is not it. The
+// stored path is fully normalized (chroot prefix included), so it is opened
+// against the real root, or a chrooted caller would re-prefix it.
+struct fd *generic_reopen_by_path(struct fd *fd, int flags) {
+    char path[MAX_PATH];
+    struct statbuf held, got;
+    if (generic_getpath(fd, path) < 0 || generic_fstat(fd, &held) < 0 ||
+            !path_names_file(path, &held))
+        return NULL;
+    struct fd *reopened = generic_open_realroot(path, flags | O_NOFOLLOW_, 0);
+    if (IS_ERR(reopened))
+        return NULL;
+    if (generic_fstat(reopened, &got) < 0 || !same_file(&got, &held)) {
+        fd_close(reopened);
+        return NULL;
+    }
+    return reopened;
 }
 
 // A descriptor opened through a bind mount has the bind's ORIGIN as its mount

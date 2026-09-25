@@ -99,6 +99,7 @@ chroot_dotdot.c
 proc_net_socket_ids.c
 mount_lazy_detached.c
 exec_link_by_fd.c
+exec_fd_pathless.c
 tmpfs_nlink.c
 unix_dgram_cred.c
 unix_abstract_release.c

@@ -65,6 +65,19 @@ struct fd *generic_openat_norm(struct fd *at, const char *path, int flags, int m
 // the real root instead of the caller's chroot, and may enter a detached
 // mount's staging point. See fs/generic.c.
 struct fd *generic_open_realroot(const char *path, int flags, int mode);
+// A new description of the file `fd` holds, opened with `flags` by the path
+// the descriptor reports -- only while that path still names that file. NULL
+// when it does not: the file was unlinked or never had a path (a memfd), the
+// name now belongs to another file, or the path would not open. What such a
+// descriptor gets instead is the caller's to decide. See fs/generic.c.
+struct fd *generic_reopen_by_path(struct fd *fd, int flags);
+// Is `path` -- a descriptor's own, from generic_getpath -- still a name of the
+// file the descriptor holds? Not once the file is unlinked: the path is then
+// the name it had, which another file may have taken. See fs/generic.c.
+bool generic_path_names_fd(const char *path, struct fd *fd);
+// lstat of a stored, already-normalized path, anchored as generic_open_realroot
+// anchors one.
+int generic_lstat_realroot(const char *path, struct statbuf *stat);
 // The descriptor's full path, through the mount it was opened on: for one
 // opened through a bind, the bind's path, as Linux's d_path gives it. This is
 // the path a lookup starts from (a cwd, a dirfd), so it is always one that

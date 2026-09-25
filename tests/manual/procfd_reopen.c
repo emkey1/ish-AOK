@@ -18,8 +18,10 @@
 // this; older test images had a committed machine-id and hid it.
 //
 // Also covered: fresh file position on procfd reopen (script-loader
-// behavior), O_NOFOLLOW -> ELOOP on the magic link, O_TRUNC honored, and
-// the deleted-file fallback (same accmode) still works. Deviation not
+// behavior), O_NOFOLLOW -> ELOOP on the magic link, O_TRUNC honored, the
+// deleted-file fallback (same accmode) still works, and a deleted file whose
+// name has been taken since reopens as itself -- AOK reopened by that name,
+// which read the new file and let O_TRUNC empty it. Deviation not
 // asserted: reopening a DELETED file with a WIDER accmode than the original
 // fd succeeds on Linux (inode reopen) but fails EACCES under AOK (no stable
 // path to reopen; a loud error beats a silently read-only fd).
@@ -125,6 +127,35 @@ int main(int argc, char **argv) {
               "deleted-file reopen reads content (n=%zd)", n);
         close(del);
     }
+    close(fd);
+
+    // 6. a deleted file whose name has been taken since: the reopen is the
+    // deleted file, and an O_TRUNC reopen leaves the new one alone. AOK
+    // reopened by the name the deleted file had, so it read the new file --
+    // and emptied it.
+    fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
+    check(fd >= 0 && write(fd, "old", 3) == 3, "create the file to delete (%s)", strerror(errno));
+    unlink(path);
+    int newer = open(path, O_RDWR | O_CREAT | O_EXCL, 0644);
+    check(newer >= 0 && write(newer, "newer", 5) == 5, "create a new file at its name (%s)",
+          strerror(errno));
+    del = procfd_open(fd, O_RDONLY);
+    check(del >= 0, "reopen of the deleted file (%s)", strerror(errno));
+    if (del >= 0) {
+        n = pread(del, buf, sizeof(buf), 0);
+        check(n == 3 && memcmp(buf, "old", 3) == 0,
+              "the reopen is the deleted file, not the new one (read \"%.*s\")",
+              n > 0 ? (int) n : 0, buf);
+        close(del);
+    }
+    tr = procfd_open(fd, O_RDWR | O_TRUNC);
+    check(tr >= 0, "O_TRUNC reopen of the deleted file (%s)", strerror(errno));
+    if (tr >= 0)
+        close(tr);
+    check(fstat(newer, &st) == 0 && st.st_size == 5,
+          "the new file keeps its contents (size %lld)", (long long) st.st_size);
+    if (newer >= 0)
+        close(newer);
     close(fd);
 
     unlink(path);

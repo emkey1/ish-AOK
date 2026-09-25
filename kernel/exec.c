@@ -30,6 +30,7 @@
 #include "kernel/binfmt_misc.h"
 #include "kernel/xattr.h"
 #include "kernel/rseq.h"
+#include "kernel/anonfd_ckpt.h"
 
 #define ARGV_MAX 32 * PAGE_SIZE
 
@@ -107,6 +108,26 @@ static bool elf_value_fits_addr(enum guest_abi abi, qword_t value) {
     return guest_abi_addr_valid(abi, value);
 }
 
+// Read the file being executed at `off`, leaving the description's position
+// alone. The description can be the caller's own: open_exec shares it when no
+// path reaches the file (a memfd, an unlinked file), and exec must leave the
+// caller's offset where the caller put it. Every loader reads through here.
+//
+// Only a description of exec's own can lack pread (open_exec never shares one
+// that does), so the lseek+read fallback moves nobody else's position. It is
+// still needed: jumping through a NULL pread was a host EXC_BAD_ACCESS abort
+// when execing a binary that lived on tmpfs, before tmpfs had one.
+static ssize_t exec_read_at(struct fd *fd, void *buf, size_t size, off_t_ off) {
+    if (fd->ops->pread != NULL)
+        return fd->ops->pread(fd, buf, size, (off_t) off);
+    if (fd->ops->lseek == NULL || fd->ops->read == NULL)
+        return _EINVAL;
+    off_t_ at = fd->ops->lseek(fd, off, LSEEK_SET);
+    if (at < 0)
+        return at;
+    return fd->ops->read(fd, buf, size);
+}
+
 static int read_header(struct fd *fd, struct elf_info *header) {
     union {
         struct elf_header elf32;
@@ -114,9 +135,7 @@ static int read_header(struct fd *fd, struct elf_info *header) {
     } raw;
 
     ssize_t err;
-    if (fd->ops->lseek(fd, 0, SEEK_SET))
-        return _EIO;
-    if ((err = fd->ops->read(fd, &raw, sizeof(raw))) < (ssize_t) sizeof(struct elf_header)) {
+    if ((err = exec_read_at(fd, &raw, sizeof(raw), 0)) < (ssize_t) sizeof(struct elf_header)) {
         if (err < 0)
             return _EIO;
         return _ENOEXEC;
@@ -168,10 +187,10 @@ static int read_prg_headers(struct fd *fd, struct elf_info header, struct elf_pr
         return _ENOMEM;
 
     memset(ph, 0, ph_size);
-    if (fd->ops->lseek(fd, header.prghead_off, SEEK_SET) < 0) {
-        free(ph);
-        return _EIO;
-    }
+    // Each entry at its own offset (exec_read_at). A table the file is too
+    // short to hold is EIO, as Linux's elf_read makes any short read; this
+    // used to consult errno, which a short read does not set, so the answer
+    // was whatever an earlier host call had left there.
 
     if (header.bitness == ELF_32BIT) {
         if (header.phent_size < sizeof(struct prg_header)) {
@@ -180,14 +199,8 @@ static int read_prg_headers(struct fd *fd, struct elf_info header, struct elf_pr
         }
         for (uint16_t i = 0; i < header.phent_count; i++) {
             struct prg_header raw;
-            if (fd->ops->read(fd, &raw, sizeof(raw)) != sizeof(raw)) {
-                free(ph);
-                if (errno != 0)
-                    return _EIO;
-                return _ENOEXEC;
-            }
-            if (header.phent_size > sizeof(raw) &&
-                    fd->ops->lseek(fd, header.phent_size - sizeof(raw), SEEK_CUR) < 0) {
+            off_t_ at = (off_t_) (header.prghead_off + (qword_t) i * header.phent_size);
+            if (exec_read_at(fd, &raw, sizeof(raw), at) != sizeof(raw)) {
                 free(ph);
                 return _EIO;
             }
@@ -208,14 +221,8 @@ static int read_prg_headers(struct fd *fd, struct elf_info header, struct elf_pr
         }
         for (uint16_t i = 0; i < header.phent_count; i++) {
             struct prg_header64 raw;
-            if (fd->ops->read(fd, &raw, sizeof(raw)) != sizeof(raw)) {
-                free(ph);
-                if (errno != 0)
-                    return _EIO;
-                return _ENOEXEC;
-            }
-            if (header.phent_size > sizeof(raw) &&
-                    fd->ops->lseek(fd, header.phent_size - sizeof(raw), SEEK_CUR) < 0) {
+            off_t_ at = (off_t_) (header.prghead_off + (qword_t) i * header.phent_size);
+            if (exec_read_at(fd, &raw, sizeof(raw), at) != sizeof(raw)) {
                 free(ph);
                 return _EIO;
             }
@@ -572,20 +579,7 @@ static int load_entry(enum guest_abi abi, struct elf_prg_info ph, guest_addr_t b
             char *buf = malloc(copy_len);
             if (buf == NULL)
                 return _ENOMEM;
-            // Not every fs implements pread (jumping through a NULL pointer
-            // here was a host EXC_BAD_ACCESS abort when execing a binary that
-            // lived on tmpfs). Fall back to lseek+read: this fd is exec's own
-            // private open, and every later loader read seeks first.
-            ssize_t got;
-            if (fd->ops->pread != NULL) {
-                got = fd->ops->pread(fd, buf, copy_len, (off_t) residual_file_start);
-            } else if (fd->ops->lseek != NULL) {
-                got = fd->ops->lseek(fd, (off_t_) residual_file_start, LSEEK_SET);
-                if (got >= 0)
-                    got = fd->ops->read(fd, buf, copy_len);
-            } else {
-                got = _EINVAL;
-            }
+            ssize_t got = exec_read_at(fd, buf, copy_len, (off_t_) residual_file_start);
             if (got < 0) {
                 free(buf);
                 amd64_trace_exec_loader_failure("segment-tail-read", NULL, abi, &ph, bias, fd, _EIO, NULL);
@@ -974,10 +968,8 @@ static intptr_t elf_exec(struct fd *fd, const char *file, struct exec_args argv,
             goto out_free_ph;
 
         err = _EIO;
-        if (fd->ops->lseek(fd, ph[i].offset, SEEK_SET) < 0)
-            goto out_free_interp;
         size_t interp_size = ph[i].filesize;
-        if (fd->ops->read(fd, interp_name, interp_size) != (ssize_t) interp_size)
+        if (exec_read_at(fd, interp_name, interp_size, (off_t_) ph[i].offset) != (ssize_t) interp_size)
             goto out_free_interp;
 
         interp_fd = generic_open(interp_name, O_RDONLY, 0);
@@ -1678,10 +1670,8 @@ static int native_dispatch_exec(struct fd *fd, struct exec_args argv, struct exe
 //   with    P: interpreter, file, original argv[0..]   -- argv[0] preserved
 static int binfmt_misc_exec(struct fd *fd, const char *file, struct exec_args argv,
                             struct exec_args envp, unsigned depth, bool path_inaccessible) {
-    if (fd->ops->lseek(fd, 0, SEEK_SET))
-        return _EIO;
     char header[128];
-    ssize_t size = fd->ops->read(fd, header, sizeof(header));
+    ssize_t size = exec_read_at(fd, header, sizeof(header), 0);
     if (size < 0)
         return _EIO;
 
@@ -1767,6 +1757,39 @@ static int format_exec(struct fd *fd, const char *file, struct exec_args argv, s
     return _ENOEXEC;
 }
 
+// execveat(fd, "", AT_EMPTY_PATH) -- fexecve -- runs the descriptor's own
+// file. Linux opens a new description of it by its inode, and so does this
+// where it can, by the descriptor's path (generic_reopen_by_path, which checks
+// the path still names the file): the loaders keep it as mm->exefile, and
+// the caller's description -- its flags, its locks, an O_PATH one that the
+// guest cannot read -- is the caller's.
+//
+// A file no path reaches has nothing to open by: a memfd never had one, and
+// an unlinked file's is the name it used to have. Both were ENOENT, where
+// Linux runs them -- runc re-executes a sealed memfd copy of itself this way,
+// and Python's os.fexecve is this call. And the name an unlinked file had can
+// belong to another file by now, which is what this used to run.
+//
+// So such a file runs from the caller's description itself. The loaders read
+// it only at offsets of their own (exec_read_at), so the caller's position is
+// where it left it, as it is on Linux. One thing about the sharing shows: a
+// flock or OFD lock taken through the caller's description is held for as
+// long as the new image runs, where Linux's own description would let it go
+// with the caller's last descriptor. An O_PATH description is readable underneath -- the guest
+// may not read it, the kernel may -- but a write-only one is not, and that one
+// Linux refuses anyway: a file open for writing is never executed, and this
+// one is, by this very descriptor.
+static struct fd *open_exec_descriptor(struct fd *at, int open_flags) {
+    struct fd *fd = generic_reopen_by_path(at, open_flags);
+    if (fd != NULL)
+        return fd;
+    if (at->ops == NULL || at->ops->pread == NULL)
+        return ERR_PTR(_ENOENT);
+    if ((fd_getflags(at) & O_ACCMODE_) == O_WRONLY_)
+        return ERR_PTR(_ETXTBSY);
+    return fd_retain(at);
+}
+
 // Open a file for execution, the way Linux's open_exec does: resolve the
 // caller's execute permission BEFORE opening, and refuse anything that is not
 // an ordinary file on a mount that allows execution. Fills *stat with the file
@@ -1822,23 +1845,10 @@ static struct fd *open_exec(struct fd *at, const char *name, int flags, struct s
     // O_NOACCESS_CHECK_ because the execute check above is the one that
     // governs: an execute-only file has to load despite being unreadable,
     // which is why Linux opens it with FMODE_EXEC rather than for reading.
-    //
-    // A new open even of the descriptor's own file: the loader reads it and
-    // keeps it as mm->exefile, and the caller's description -- its offset,
-    // or an O_PATH one that cannot be read at all -- is the caller's. Opened
-    // by the descriptor's path, which generic_open_realroot anchors where the
-    // path was made (the real root, and into a detached mount's staging
-    // point). O_NOFOLLOW because that path names what the descriptor holds,
-    // never something a symlink there points to. A descriptor whose file has
-    // no path -- unlinked, or a memfd -- stays ENOENT here; Linux runs it.
     int open_flags = O_RDONLY_ | O_NOACCESS_CHECK_;
     struct fd *fd;
     if (name[0] == '\0' && at != AT_PWD) {
-        char path[MAX_PATH];
-        err = generic_getpath(at, path);
-        if (err < 0)
-            return ERR_PTR(err);
-        fd = generic_open_realroot(path, open_flags | O_NOFOLLOW_, 0);
+        fd = open_exec_descriptor(at, open_flags);
     } else {
         if (flags & AT_SYMLINK_NOFOLLOW_)
             open_flags |= O_NOFOLLOW_;
@@ -1873,10 +1883,8 @@ static struct fd *open_exec(struct fd *at, const char *name, int flags, struct s
 static int shebang_exec(struct fd *fd, const char *file, struct exec_args argv, struct exec_args envp,
         unsigned depth, bool path_inaccessible) {
     // read the first 128 bytes to get the shebang line out of
-    if (fd->ops->lseek(fd, 0, SEEK_SET))
-        return _EIO;
     char header[128];
-    ssize_t size = fd->ops->read(fd, header, sizeof(header) - 1);
+    ssize_t size = exec_read_at(fd, header, sizeof(header) - 1, 0);
     if (size < 0)
         return _EIO;
     header[size] = '\0';
@@ -2581,8 +2589,16 @@ static int __do_execve(const struct exec_file *exe, struct exec_args argv, struc
     // favour of the name of the file itself; so does this.
     char comm_path[MAX_PATH];
     const char *comm_from = file;
-    if (exe->fdpath && generic_getpath(fd, comm_path) == 0)
+    if (exe->fdpath && generic_getpath(fd, comm_path) == 0) {
+        // A memfd's path is the way /proc shows it, "/memfd:<name> (deleted)",
+        // and the file's own name is "memfd:<name>".
+        static const char deleted[] = " (deleted)";
+        size_t len = strlen(comm_path);
+        if (memfd_fd_is(fd) && len >= sizeof(deleted) - 1 &&
+                strcmp(comm_path + len - (sizeof(deleted) - 1), deleted) == 0)
+            comm_path[len - (sizeof(deleted) - 1)] = '\0';
         comm_from = comm_path;
+    }
     // would_dump(), with the caller's credentials as they are now.
     bool unreadable = access_check(&stat, AC_R) < 0;
 

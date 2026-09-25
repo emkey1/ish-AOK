@@ -333,6 +333,25 @@ int main(int argc, char **argv) {
     }
     ck("AT_EMPTY_PATH with AT_FDCWD means the current directory, so EPERM",
        late(AT_FDCWD, "", AT_FDCWD, Q("ep-7"), AT_EMPTY_PATH), EPERM);
+    {
+        // A file unlinked since the descriptor was opened, whose name a new
+        // file has taken. Linux gives no name to an inode with no links left
+        // (ENOENT); AOK linked by the name the file had, so it linked the new
+        // file.
+        int fd = open(P("reused"), O_RDWR | O_CREAT, 0644);
+        ck("a descriptor on a file about to be unlinked", fd >= 0, 1);
+        ck("  ...unlinked", unlink(P("reused")), 0);
+        int nf = open(P("reused"), O_RDWR | O_CREAT | O_EXCL, 0644);
+        ck("  ...and a new file at its name", nf >= 0, 1);
+        ck("AT_EMPTY_PATH on an unlinked file whose name is reused is ENOENT",
+           late(fd, "", AT_FDCWD, Q("ep-reused"), AT_EMPTY_PATH), ENOENT);
+        ck("  ...and the new file got no second name", kind_of(P("ep-reused")), -ENOENT);
+        if (nf >= 0)
+            close(nf);
+        if (fd >= 0)
+            close(fd);
+        unlink(P("reused"));
+    }
 
     // A descriptor with no filesystem object behind it: its inode is on
     // pipefs/sockfs, never on the filesystem the new name would go on.

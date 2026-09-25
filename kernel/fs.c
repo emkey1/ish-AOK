@@ -851,6 +851,11 @@ static dword_t sys_linkat_empty_path(fd_t src_at_f, struct fd *src_at, struct fd
     // cross-filesystem link; measured EXDEV for all three on Linux 6.12.
     if (!path_is_normalized(src))
         return _EXDEV;
+    // The path of an unlinked file is the name it had, so it may be another
+    // file's now; linking by it linked that one. Linux will not name an inode
+    // that has no links left at all (vfs_link), which is ENOENT.
+    if (!generic_path_names_fd(src, src_at))
+        return _ENOENT;
     // generic_getpath's answer already carries any chroot prefix, so it has to
     // be re-anchored at the REAL root -- see generic_open_realroot -- and for
     // a file in a mount `umount -l` detached it is a staging point, which the

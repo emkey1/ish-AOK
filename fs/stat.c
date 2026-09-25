@@ -301,6 +301,8 @@ int generic_fstat(struct fd *fd, struct statbuf *stat) {
     return err;
 }
 
+static int stat_normalized(char *path, struct statbuf *stat, bool *is_mount_root, int *mnt_id);
+
 int generic_statat_full(struct fd *at, const char *path_raw, struct statbuf *stat, int flags,
         bool *is_mount_root, int *mnt_id) {
     int err;
@@ -354,7 +356,12 @@ int generic_statat_full(struct fd *at, const char *path_raw, struct statbuf *sta
         if (err < 0)
             return err;
     }
+    return stat_normalized(path, stat, is_mount_root, mnt_id);
+}
 
+// The stat of a path path_normalize has already resolved.
+static int stat_normalized(char *path, struct statbuf *stat, bool *is_mount_root, int *mnt_id) {
+    int err;
     // The mount the path is ON, which for a bind is the bind and not the
     // origin that `mount` resolves to: see find_mount_and_trim_path_seen.
     int seen_id;
@@ -388,6 +395,15 @@ int generic_statat_full(struct fd *at, const char *path_raw, struct statbuf *sta
         *mnt_id = seen_id;
     mount_release(mount);
     return err;
+}
+
+// See kernel/fs.h.
+int generic_lstat_realroot(const char *path_raw, struct statbuf *stat) {
+    char path[MAX_PATH];
+    int err = path_normalize(AT_PWD, path_raw, path, N_SYMLINK_NOFOLLOW | N_REALROOT | N_DETACHED_OK);
+    if (err < 0)
+        return err;
+    return stat_normalized(path, stat, NULL, NULL);
 }
 
 int generic_statat_ext(struct fd *at, const char *path_raw, struct statbuf *stat, int flags, bool *is_mount_root) {
