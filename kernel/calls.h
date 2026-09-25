@@ -53,6 +53,7 @@ dword_t sys_clone_guest(qword_t flags, guest_addr_t stack, guest_addr_t ptid, gu
 dword_t sys_clone3(addr_t uargs_addr, dword_t size);
 dword_t sys_clone3_guest(guest_addr_t uargs_addr, dword_t size);
 dword_t sys_unshare(dword_t flags);
+dword_t sys_setns(fd_t fd, dword_t flags);
 dword_t sys_kcmp(pid_t_ pid1, pid_t_ pid2, dword_t type, dword_t idx1, dword_t idx2);
 dword_t sys_fork(void);
 dword_t sys_vfork(void);

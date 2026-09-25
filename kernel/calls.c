@@ -1208,6 +1208,7 @@ static syscall_t i386_syscall_table[] = {
     [343] = (syscall_t) sys_clock_adjtime, // clock_adjtime (EPERM: iSH can't slew the iOS clock)
     [344] = (syscall_t) sys_syncfs,
     [345] = (syscall_t) sys_sendmmsg,
+    [346] = (syscall_t) sys_setns,
     [347] = (syscall_t) sys_process_vm_readv,
     [349] = (syscall_t) sys_kcmp,
     [352] = (syscall_t) syscall_stub, // sched_getattr
@@ -1695,6 +1696,7 @@ static syscall_t amd64_syscall_table[470] = {
     [305] = (syscall_t) sys_clock_adjtime_amd64, // clock_adjtime (EPERM; full-width read-state TODO)
     [306] = (syscall_t) sys_syncfs,
     [307] = (syscall_t) sys_sendmmsg_amd64,
+    [308] = (syscall_t) sys_setns,
     [309] = (syscall_t) sys_getcpu, // dispatched natively (full-width pointers)
     [310] = (syscall_t) sys_process_vm_readv,
     [312] = (syscall_t) sys_kcmp,
@@ -2080,7 +2082,7 @@ static syscall_t arm64_syscall_table[470] = {
     [265] = (syscall_t) syscall_stub_silent, // open_by_handle_at
     [266] = (syscall_t) syscall_stub_silent, // clock_adjtime
     [267] = (syscall_t) sys_syncfs,
-    [268] = (syscall_t) syscall_stub, // setns
+    [268] = (syscall_t) sys_setns,
     [270] = (syscall_t) syscall_stub_silent, // process_vm_readv
     [271] = (syscall_t) syscall_stub, // process_vm_writev
     [272] = (syscall_t) sys_kcmp,
@@ -3034,12 +3036,13 @@ static bool handle_asm_generic_native_syscall(struct cpu_state *cpu, qword_t sys
     // entry looked wired and did nothing.
     case 217: case 218:
     case 234: case 238: case 239: case 241: case 262:
-    case 263: case 268: case 271: case 273:
+    case 263: case 271: case 273:
     case 274: case 275: case 280: case 282:
     case 288: case 289: case 290: case 294:
     case 425: case 426: case 427:
     case 449: // futex_waitv
         result = _ENOSYS; break;
+    case 268: result = (dword_t) sys_setns((fd_t) raw_args[0], (dword_t) raw_args[1]); break; // setns
     case 438: result = (dword_t) sys_pidfd_getfd((fd_t) raw_args[0], (fd_t) raw_args[1], (dword_t) raw_args[2]); break; // pidfd_getfd
     // POSIX message queues (kernel/mqueue.c).
     case 180: result = (dword_t) sys_mq_open_guest(raw_args[0], (dword_t) raw_args[1], (mode_t_) raw_args[2], raw_args[3]); break;
@@ -3673,6 +3676,10 @@ static bool handle_amd64_native_memory_syscall(struct cpu_state *cpu, qword_t sy
     case 268:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_fchmodat_guest(
                 (fd_t) raw_args[0], raw_args[1], (dword_t) raw_args[2]));
+        return true;
+    case 308: // setns(fd, nstype): two ints; the unused argument registers hold garbage
+        amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_setns(
+                (fd_t) raw_args[0], (dword_t) raw_args[1]));
         return true;
     case 269:
         amd64_syscall_result_qword(cpu, (qword_t) (sqword_t) sys_faccessat_guest(

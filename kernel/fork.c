@@ -7,6 +7,8 @@
 #include "kernel/ptrace.h"
 #include "kernel/rseq.h"
 #include "kernel/ipc_ns.h"
+#include "kernel/uts.h"
+#include "fs/proc.h"
 #include "util/sync.h"
 #include <string.h>
 
@@ -1001,6 +1003,24 @@ static int unshare_check_shared(dword_t flags) {
     return err;
 }
 
+static bool current_is_only_thread(void) {
+    complex_lockt(&pids_lock, 0);
+    struct list *threads = &current->group->threads;
+    bool alone = threads->next == threads->prev;
+    unlock(&pids_lock);
+    return alone;
+}
+
+// Leaving the SEM_UNDO list is what exit does to it (Linux: "CLONE_SYSVSEM is
+// equivalent to sys_exit()"). The list here belongs to the whole process, so
+// it is applied now only when the caller is the process's only thread; with
+// others left sharing it Linux merely detaches the caller, and the others
+// keep it -- which AOK's per-process list already amounts to.
+static void sysv_undo_leave(void) {
+    if (current_is_only_thread())
+        sysv_sem_exit(current->ipc_ns, current->group);
+}
+
 dword_t sys_unshare(dword_t flags) {
     STRACE("unshare(%#x)", flags);
 
@@ -1085,21 +1105,10 @@ dword_t sys_unshare(dword_t flags) {
         fs_info_release(old_fs);
     }
 
-    // Leaving the SEM_UNDO list is what exit does to it (Linux: "CLONE_SYSVSEM
-    // is equivalent to sys_exit()"), and a new IPC namespace leaves it too,
-    // because its semaphores are out of reach from there. The list here
-    // belongs to the whole process, so it is applied now only when the caller
-    // is the process's only thread; with others left sharing it Linux merely
-    // detaches the caller, and the others keep it -- which AOK's per-process
-    // list already amounts to.
-    if (flags & (CLONE_SYSVSEM_ | CLONE_NEWIPC_)) {
-        complex_lockt(&pids_lock, 0);
-        struct list *threads = &current->group->threads;
-        bool alone = threads->next == threads->prev;
-        unlock(&pids_lock);
-        if (alone)
-            sysv_sem_exit(current->ipc_ns, current->group);
-    }
+    // A new IPC namespace leaves the SEM_UNDO list, because its semaphores
+    // are out of reach from there.
+    if (flags & (CLONE_SYSVSEM_ | CLONE_NEWIPC_))
+        sysv_undo_leave();
 
     if (new_uts != NULL) {
         lock(&current->general_lock, 0);
@@ -1227,4 +1236,134 @@ void vfork_notify(struct task *task) {
     unlock(&vfork->lock);
 
     vfork_info_release(vfork);
+}
+
+// setns(2). `fd` is either a /proc/<pid>/ns/* descriptor, naming one
+// namespace (a nonzero `flags` must be its type), or a pidfd, whose process's
+// namespaces of every kind `flags` lists are joined together -- all of them
+// or, if any check fails, none.
+//
+// UTS and IPC namespaces are real, and are switched. Every other kind has
+// only its initial namespace, which the caller is already in, so joining it
+// changes nothing except where Linux's does: a mount namespace resets the
+// root and cwd to its root (a way out of a chroot, which is why it also needs
+// CAP_SYS_CHROOT), and the user namespace one is already in may not be
+// entered again (EINVAL), or it would hand its owner's capabilities back.
+//
+// The checks run in Linux's order (kernel/nsproxy.c and each kind's
+// install): the descriptor, the flags, the target process, and then per kind
+// -- user, mnt, uts, ipc, pid, cgroup, net, time. atop joins pid 1's UTS
+// namespace to read the host name, and got ENOSYS from a stub here.
+dword_t sys_setns(fd_t fd_no, dword_t flags) {
+    STRACE("setns(%d, %#x)", fd_no, flags);
+    const dword_t all_kinds = CLONE_NEWNS_ | CLONE_NEWCGROUP_ | CLONE_NEWUTS_ | CLONE_NEWIPC_ |
+        CLONE_NEWUSER_ | CLONE_NEWPID_ | CLONE_NEWNET_ | CLONE_NEWTIME_;
+    struct fd *fd = f_get(fd_no);
+    if (fd == NULL)
+        return _EBADF;
+
+    struct uts_namespace *uts = NULL;
+    struct ipc_namespace *ipc = NULL;
+    unsigned nstype;
+    void *ns;
+    int err = 0;
+    if (proc_ns_fd_info(fd, &nstype, &ns)) {
+        if (flags != 0 && flags != nstype)
+            return _EINVAL;
+        flags = nstype;
+        if (nstype == CLONE_NEWUTS_ && ns != NULL)
+            uts = uts_ns_retain(ns);
+        if (nstype == CLONE_NEWIPC_ && ns != NULL)
+            ipc = ipc_ns_retain(ns);
+    } else {
+        // Anything that is neither a namespace fd nor a pidfd is EINVAL too.
+        if (flags == 0 || (flags & ~all_kinds))
+            return _EINVAL;
+        struct task *task = pidfd_task_ref(fd_no, &err);
+        if (task == NULL)
+            return err == _EBADF ? _EINVAL : err;
+        if (!task_ptrace_may_access(task, PTRACE_MODE_READ_ | PTRACE_MODE_REALCREDS_)) {
+            task_ref_cnt_mod(task, -1);
+            return _EPERM;
+        }
+        // One snapshot of the target's namespaces. A process already in its
+        // exit (or a zombie) has released them, and has none to join.
+        bool gone = true;
+        // Not a plain lock: see task_lock_unless_exiting.
+        if (task_lock_unless_exiting(task)) {
+            if (!task->exiting && task->uts_ns != NULL && task->ipc_ns != NULL) {
+                gone = false;
+                if (flags & CLONE_NEWUTS_)
+                    uts = uts_ns_retain(task->uts_ns);
+                if (flags & CLONE_NEWIPC_)
+                    ipc = ipc_ns_retain(task->ipc_ns);
+            }
+            unlock(&task->general_lock);
+        }
+        task_ref_cnt_mod(task, -1);
+        if (gone)
+            return _ESRCH;
+    }
+
+    bool admin = current_capable(CAP_SYS_ADMIN_);
+    if (flags & CLONE_NEWUSER_)
+        err = _EINVAL;
+    else if ((flags & CLONE_NEWNS_) && (!admin || !current_capable(CAP_SYS_CHROOT_)))
+        err = _EPERM;
+    // Only for a mount namespace alone: given other kinds as well, Linux
+    // works on a private copy of the fs_struct, which nobody shares.
+    else if (flags == CLONE_NEWNS_ && current->fs->refcount != 1)
+        err = _EINVAL;
+    else if ((flags & (CLONE_NEWUTS_ | CLONE_NEWIPC_ | CLONE_NEWPID_ | CLONE_NEWCGROUP_ | CLONE_NEWNET_)) && !admin)
+        err = _EPERM;
+    else if ((flags & CLONE_NEWTIME_) && !current_is_only_thread())
+        err = _EUSERS;
+    else if ((flags & CLONE_NEWTIME_) && !admin)
+        err = _EPERM;
+
+    // A mount namespace's root, found before anything changes.
+    struct fd *root = NULL;
+    if (err == 0 && (flags & CLONE_NEWNS_)) {
+        root = generic_open_realroot("/", O_RDONLY_ | O_DIRECTORY_ | O_NOACCESS_CHECK_, 0);
+        if (IS_ERR(root)) {
+            err = PTR_ERR(root);
+            root = NULL;
+        }
+    }
+    if (err < 0) {
+        if (uts != NULL)
+            uts_ns_release(uts);
+        if (ipc != NULL)
+            ipc_ns_release(ipc);
+        return err;
+    }
+
+    if (root != NULL) {
+        struct fd *pwd = fd_retain(root);
+        lock(&current->fs->lock, 0);
+        struct fd *old_root = current->fs->root;
+        current->fs->root = root;
+        unlock(&current->fs->lock);
+        fd_close(old_root);
+        fs_chdir(current->fs, pwd);
+    }
+    // Linux leaves the SEM_UNDO list on any IPC setns, even into the
+    // namespace the caller is already in.
+    if (flags & CLONE_NEWIPC_)
+        sysv_undo_leave();
+    if (uts != NULL) {
+        lock(&current->general_lock, 0);
+        struct uts_namespace *old_uts = current->uts_ns;
+        current->uts_ns = uts;
+        unlock(&current->general_lock);
+        uts_ns_release(old_uts);
+    }
+    if (ipc != NULL) {
+        lock(&current->general_lock, 0);
+        struct ipc_namespace *old_ipc = current->ipc_ns;
+        current->ipc_ns = ipc;
+        unlock(&current->general_lock);
+        ipc_ns_release(old_ipc);
+    }
+    return 0;
 }

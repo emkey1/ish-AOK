@@ -65,12 +65,15 @@ struct fd {
         struct {
             struct poll *poll;
         } epollfd;
-        // /proc/<pid>/ns/<type>. Only an index into fs/proc/pid.c's
-        // proc_ns_types, because AOK has exactly one namespace of each type
-        // and the fd's whole identity is which type it names. Read by the
-        // nsfs ioctls (NS_GET_NSTYPE and friends).
+        // /proc/<pid>/ns/<type>. An index into fs/proc/pid.c's
+        // proc_ns_types, read by the nsfs ioctls (NS_GET_NSTYPE and
+        // friends). UTS and IPC namespaces are real, so for those two the fd
+        // also holds a reference to the one it names (a struct uts_namespace
+        // or struct ipc_namespace), which is what setns() installs; every
+        // other kind has only its initial namespace, and `ns` is NULL.
         struct {
             unsigned type_index;
+            void *ns;
         } nsfs;
         struct {
             uint64_t val;

@@ -91,6 +91,10 @@ struct proc_children {
 // open(2) on a /proc/pid/ns/* magic link: returns a namespace fd (NULL if
 // name is not a namespace entry -- caller falls back to path resolution).
 struct fd *proc_ns_open(int pid, const char *name);
+// For setns(2): false if `fd` is not a namespace fd; otherwise its CLONE_NEW*
+// type, and the UTS or IPC namespace it holds (NULL for the other kinds, of
+// which there is only the initial one). `ns` is borrowed from the fd.
+bool proc_ns_fd_info(struct fd *fd, unsigned *nstype, void **ns);
 
 extern struct proc_dir_entry proc_root;
 extern struct proc_dir_entry proc_pid;

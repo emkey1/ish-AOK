@@ -1870,21 +1870,45 @@ static void proc_pid_ns_getname(struct proc_entry *entry, char *buf) {
 // The inode number of `task`'s namespace of the kind at `index`. UTS and IPC
 // namespaces are real, and each has its own; for every other kind there is
 // only the initial one, and Linux's number for it. 0 when the task is in
-// do_exit's teardown, which is releasing its namespaces.
-static unsigned long proc_ns_inode(struct task *task, unsigned index) {
+// do_exit's teardown, which is releasing its namespaces. With `ns_out`, a
+// real namespace is also retained and returned through it (NULL for the
+// other kinds), taken under the same lock as its number so the two agree.
+static unsigned long proc_ns_inode_retain(struct task *task, unsigned index, void **ns_out) {
     unsigned long inode = proc_ns_types[index].inode;
     unsigned nstype = proc_ns_types[index].nstype;
+    if (ns_out != NULL)
+        *ns_out = NULL;
     if (nstype != CLONE_NEWUTS_ && nstype != CLONE_NEWIPC_)
         return inode;
     // Not a plain lock: see task_lock_unless_exiting.
     if (!task_lock_unless_exiting(task))
         return 0;
-    if (nstype == CLONE_NEWUTS_)
-        inode = task->uts_ns != NULL ? task->uts_ns->inode : 0;
-    if (nstype == CLONE_NEWIPC_)
-        inode = task->ipc_ns != NULL ? task->ipc_ns->inode : 0;
+    inode = 0;
+    if (nstype == CLONE_NEWUTS_ && task->uts_ns != NULL) {
+        inode = task->uts_ns->inode;
+        if (ns_out != NULL)
+            *ns_out = uts_ns_retain(task->uts_ns);
+    }
+    if (nstype == CLONE_NEWIPC_ && task->ipc_ns != NULL) {
+        inode = task->ipc_ns->inode;
+        if (ns_out != NULL)
+            *ns_out = ipc_ns_retain(task->ipc_ns);
+    }
     unlock(&task->general_lock);
     return inode;
+}
+
+static unsigned long proc_ns_inode(struct task *task, unsigned index) {
+    return proc_ns_inode_retain(task, index, NULL);
+}
+
+static void proc_ns_release(unsigned index, void *ns) {
+    if (ns == NULL)
+        return;
+    if (proc_ns_types[index].nstype == CLONE_NEWUTS_)
+        uts_ns_release(ns);
+    else if (proc_ns_types[index].nstype == CLONE_NEWIPC_)
+        ipc_ns_release(ns);
 }
 
 static int proc_pid_ns_readlink(struct proc_entry *entry, char *buf) {
@@ -1901,9 +1925,8 @@ static int proc_pid_ns_readlink(struct proc_entry *entry, char *buf) {
     return 0;
 }
 
-// A namespace fd does no I/O of its own; it exists to be handed to setns().
-// (Our setns is an ENOSYS stub, which savers like nix tolerate at restore
-// time -- it's the failure to OPEN the fd that they treat as fatal.)
+// A namespace fd does no I/O of its own; it exists to be handed to setns()
+// (kernel/fork.c). Savers like nix treat a failure to OPEN one as fatal.
 // Linux fails reads on an nsfs fd with EINVAL (no read op in nsfs), not
 // EBADF, even though the fd was opened readable.
 static ssize_t proc_ns_read(struct fd *UNUSED(fd), void *UNUSED(buf), size_t UNUSED(bufsize)) {
@@ -1945,7 +1968,7 @@ static ssize_t proc_ns_ioctl_size(int cmd) {
     return 0;
 }
 
-static struct fd *proc_ns_fd_for_index(unsigned index, unsigned long inode);
+static struct fd *proc_ns_fd_for_index(unsigned index, unsigned long inode, void *ns);
 
 static int proc_ns_ioctl(struct fd *fd, int cmd, void *arg) {
     unsigned index = fd->nsfs.type_index;
@@ -1984,7 +2007,7 @@ static int proc_ns_ioctl(struct fd *fd, int cmd, void *arg) {
                     break;
             if (user_index == PROC_NS_TYPES_LEN)
                 return _EINVAL;
-            struct fd *userns = proc_ns_fd_for_index(user_index, proc_ns_types[user_index].inode);
+            struct fd *userns = proc_ns_fd_for_index(user_index, proc_ns_types[user_index].inode, NULL);
             if (IS_ERR(userns))
                 return PTR_ERR(userns);
             // A namespace fd handed out by an ioctl is close-on-exec on
@@ -1995,8 +2018,15 @@ static int proc_ns_ioctl(struct fd *fd, int cmd, void *arg) {
     return _ENOTTY;
 }
 
+static int proc_ns_close(struct fd *fd) {
+    proc_ns_release(fd->nsfs.type_index, fd->nsfs.ns);
+    fd->nsfs.ns = NULL;
+    return 0;
+}
+
 static const struct fd_ops proc_ns_fdops = {
     .read = proc_ns_read,
+    .close = proc_ns_close,
     .ioctl_size = proc_ns_ioctl_size,
     .ioctl = proc_ns_ioctl,
     .anon_inode_class = "nsfs",
@@ -2005,16 +2035,28 @@ static const struct fd_ops proc_ns_fdops = {
 // One namespace fd, for the kind at `index`, whose namespace is numbered
 // `inode`. The fd carries nothing else: the number is what tells two
 // namespaces of a kind apart (stat's st_ino), and the kind is all the nsfs
-// ioctls ask about. It does not hold the namespace, which only setns() would
-// need, and AOK has no setns.
-static struct fd *proc_ns_fd_for_index(unsigned index, unsigned long inode) {
+// ioctls ask about. `ns` is the reference to a real (UTS or IPC) namespace
+// that setns() installs; the fd takes it over, and it is released even when
+// the fd cannot be made.
+static struct fd *proc_ns_fd_for_index(unsigned index, unsigned long inode, void *ns) {
     struct fd *fd = adhoc_fd_create(&proc_ns_fdops);
-    if (fd == NULL)
+    if (fd == NULL) {
+        proc_ns_release(index, ns);
         return ERR_PTR(_ENOMEM);
+    }
     fd->stat.mode = S_IFREG | 0444;
     fd->stat.inode = inode;
     fd->nsfs.type_index = index;
+    fd->nsfs.ns = ns;
     return fd;
+}
+
+bool proc_ns_fd_info(struct fd *fd, unsigned *nstype, void **ns) {
+    if (fd->ops != &proc_ns_fdops || fd->nsfs.type_index >= PROC_NS_TYPES_LEN)
+        return false;
+    *nstype = proc_ns_types[fd->nsfs.type_index].nstype;
+    *ns = fd->nsfs.ns;
+    return true;
 }
 
 // On Linux the /proc/pid/ns/* entries are nsfs magic links: following them
@@ -2036,7 +2078,8 @@ struct fd *proc_ns_open(int pid, const char *name) {
     // Linux's proc_ns_get_link asks ptrace_may_access(READ_FSCREDS) before
     // it hands out a namespace fd -- the thing setns() takes.
     bool ok = task_ptrace_may_access(task, PTRACE_MODE_READ_ | PTRACE_MODE_FSCREDS_);
-    unsigned long inode = proc_ns_inode(task, (unsigned) i);
+    void *ns = NULL;
+    unsigned long inode = ok ? proc_ns_inode_retain(task, (unsigned) i, &ns) : 0;
     task_ref_cnt_mod(task, -1);
     if (!ok)
         return ERR_PTR(_EACCES);
@@ -2044,7 +2087,7 @@ struct fd *proc_ns_open(int pid, const char *name) {
     // to hand out.
     if (inode == 0)
         return ERR_PTR(_ENOENT);
-    return proc_ns_fd_for_index((unsigned) i, inode);
+    return proc_ns_fd_for_index((unsigned) i, inode, ns);
 }
 
 static int proc_pid_cwd_readlink(struct proc_entry *entry, char *buf) {

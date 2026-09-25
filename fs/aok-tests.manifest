@@ -131,6 +131,7 @@ native_stdio_lock.c
 devtmpfs_mount.c
 clone_error_cleanup.c
 uts_namespace.c
+setns_join.c
 xattr_ops.c
 file_caps_exec.c
 rseq_register.c
